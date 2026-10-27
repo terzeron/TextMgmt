@@ -102,3 +102,17 @@ fn hard_timeout_collects_large_output_without_deadlocking() {
     let out = run_with_hard_timeout(cmd, 5.0).unwrap();
     assert_eq!(out.stdout.len(), 300_000);
 }
+
+#[test]
+fn hard_timeout_bounds_pipe_drain_when_a_grandchild_inherits_output_pipes() {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let marker = std::env::temp_dir().join(format!("parser-timeout-grandchild-{nonce}"));
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", "(sleep 0.4; touch \"$1\") & exit 0", "sh", marker.to_str().unwrap()]);
+    let start = Instant::now();
+    let error = run_with_hard_timeout(cmd, 0.2).unwrap_err();
+    assert!(error.message.contains("처리 시간 초과"));
+    assert!(start.elapsed() < Duration::from_millis(500), "reader waited for the grandchild pipe");
+    thread::sleep(Duration::from_millis(450));
+    assert!(!marker.exists(), "timed-out process group must not leave a grandchild running");
+}

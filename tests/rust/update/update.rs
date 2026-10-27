@@ -90,15 +90,23 @@ fn a_failed_delete_is_reported_after_the_delete_was_attempted() {
 }
 
 #[test]
-fn without_the_run_command_nothing_touches_the_index() {
+fn no_arguments_runs_the_default_test_document_update_get_delete() {
     let es = Dummy::new(true, true);
     let (code, out) = go(&[], &es);
     assert_eq!(code, 0);
-    for needle in ["update", "사용법:", "run", "--doc-id", "3384", "TM_ES_URL", "삭제"] {
-        assert!(out.contains(needle), "{needle} 없음: {out}");
+    assert_eq!(es.updated.borrow()[0].0, 3384);
+    assert_eq!(*es.deleted.borrow(), [3384]);
+    assert!(out.contains("{'book_id': 3384, 'title': 'book'}"), "{out}");
+}
+
+#[test]
+fn explicit_help_does_not_touch_the_index() {
+    let es = Dummy::new(true, true);
+    for arg in ["--help", "-h"] {
+        let (code, out) = go(&[arg], &es);
+        assert_eq!(code, 0);
+        assert!(out.contains("사용법:") && out.contains("run"), "{out}");
     }
-    assert_eq!(go(&["--help"], &es).1, out);
-    assert_eq!(go(&["-h"], &es).1, out);
     assert!(es.updated.borrow().is_empty() && es.deleted.borrow().is_empty());
 }
 

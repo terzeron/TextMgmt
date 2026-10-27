@@ -1,8 +1,7 @@
 //! 원본: tests/test_refresh_token_store.py
 //!
-//! refresh token 저장소(SQLite/MySQL) 회전·재사용 탐지·세션 집계 테스트.
-//! SQLite 쪽은 임시 파일로 실제 DB를 쓴다. MySQL 쪽은 Python이 `monkeypatch.setattr("pymysql.connect", ...)`로 드라이버를
-//! 가짜로 바꾸므로 `ConnectionProvider`(`with_connector`/`with_connection_provider`)로 가짜 `DbConnection`을 주입한다. 실제 MySQL 컨테이너 테스트 3건은 Docker가 없으면 건너뛴다(Python `pytest.skip`).
+//! refresh token 저장소 MySQL 회전·재사용 탐지·세션 집계 테스트.
+//! 빠른 동작 테스트는 메모리 MySQL 대역을 쓰고, 운영 SQL 검증은 Docker MySQL 통합 테스트로 확인한다.
 //!
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.4, 3.9, 3.10):
 //! - `backend::db`: `DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`From<&str>`, `From<i64>`, `Clone + PartialEq + Debug`),
@@ -11,7 +10,7 @@
 //!   `trait DbConnection { cursor(&mut self) -> Box<dyn DbCursor>; commit(&mut self) -> Result<(), DbError>; rollback(&mut self) -> Result<(), DbError>; close(&mut self) }`,
 //!   `type ConnectionProvider = Arc<dyn Fn() -> Result<Box<dyn DbConnection>, DbError> + Send + Sync>`
 //! - `backend::refresh_token_store`
-//!   - `trait RefreshTokenStoreApi` (SQLite/MySQL 공통)
+//!   - `trait RefreshTokenStoreApi`
 //!     - `store_issued(&self, token_id: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64, client_ip: Option<&str>, user_agent: Option<&str>) -> Result<(), StoreError>`
 //!     - `rotate(&self, current_token_id: &str, new_token_id: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64, client_ip: Option<&str>, user_agent: Option<&str>) -> Result<String, StoreError>`
 //!     - `revoke_family(&self, family_id: &str, reason: &str) -> Result<(), StoreError>`
@@ -20,12 +19,11 @@
 //!     - `_session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError>`
 //!   - `struct SessionQuery { status: String, current_family_id: Option<String>, page: u32, page_size: u32, email: Option<String> }`
 //!     (`Default`: status "active", page 1, page_size 50. Python 키워드 인자의 기본값에 대응한다)
-//!   - SQLite `RefreshTokenStore`는 구현하지 않았다(rusqlite 미승인, 운영은 mysql). `with_max_session_groups(self, usize) -> Self` ( Python 모듈 전역 `MAX_SESSION_GROUPS` 대체. 설정 값은 소비형 `with_*`)
 //!   - `MySQLRefreshTokenStore::{new() -> Result<Self, StoreError> (TM_MYSQL_* 환경 변수), with_connector(ConnectionProvider) -> Result<Self, StoreError> (_init_db 실행),
 //!     with_connection_provider(ConnectionProvider) -> Self (_init_db 생략, Python `__new__` + `_connect` 대입),
 //!     _connect(&self) -> Result<Box<dyn DbConnection>, DbError>}` (`set_connection_provider`는 없다)
-//!   - `enum AnyRefreshTokenStore { Sqlite(RefreshTokenStore), MySql(MySQLRefreshTokenStore) }`,
-//!     `create_refresh_token_store() -> Result<AnyRefreshTokenStore, StoreError>` (TM_REFRESH_TOKEN_BACKEND/TM_REFRESH_TOKEN_DB),
+//!   - `enum AnyRefreshTokenStore { MySql(MySQLRefreshTokenStore) }`,
+//!     `create_refresh_token_store() -> Result<AnyRefreshTokenStore, StoreError>` (TM_REFRESH_TOKEN_BACKEND),
 //!     `create_refresh_token_store_with(ConnectionProvider) -> Result<AnyRefreshTokenStore, StoreError>`
 //!   - `DEFAULT_ROTATION_GRACE_SECONDS: i64`, `_rotation_grace_seconds() -> i64`, `MAX_USER_AGENT_LENGTH: usize`
 //!   - `summarize_user_agent(&str) -> String`, `_parse_browser_name_version_with(ua: &str, patterns: &[(regex::Regex, &str)]) -> Option<String>` (`_UA_BROWSER_PATTERNS` 대체)
@@ -37,19 +35,16 @@ use std::collections::{BTreeSet, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-mod common;
-#[path = "common/mysql_fixture.rs"]
-mod mysql_fixture;
+use crate::{common, mysql_fixture};
 
 use backend::db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
 use backend::refresh_token_store::{
-    _rotation_grace_seconds, AnyRefreshTokenStore, DEFAULT_ROTATION_GRACE_SECONDS, MAX_USER_AGENT_LENGTH, MySQLRefreshTokenStore, RefreshTokenStoreApi, SessionQuery, create_refresh_token_store_with,
-    summarize_user_agent,
+    _rotation_grace_seconds, AnyRefreshTokenStore, DEFAULT_ROTATION_GRACE_SECONDS, MAX_USER_AGENT_LENGTH, MySQLRefreshTokenStore, RefreshTokenStoreApi, SessionQuery, create_refresh_token_store,
+    create_refresh_token_store_with, summarize_user_agent,
 };
 use common::env::EnvGuard;
 use common::log_capture::LogCapture;
 use serde_json::{Value, json};
-use tempfile::TempDir;
 
 // ---- 시간 / 저장소 헬퍼 ----
 
@@ -61,8 +56,8 @@ fn fam(c: char) -> String {
     c.to_string().repeat(32)
 }
 
-/// SQLite 저장소는 옮기지 않았다(운영은 mysql). 같은 단언을 메모리 MySQL 대역(`MemDb`)에 붙인 `MySQLRefreshTokenStore`로 검증한다.
-fn new_store(_dir: &TempDir, _name: &str) -> MySQLRefreshTokenStore {
+/// 상태를 공유하지 않는 메모리 MySQL 저장소를 만든다.
+fn memory_mysql_store() -> MySQLRefreshTokenStore {
     mem_store().0
 }
 
@@ -288,7 +283,7 @@ fn mysql_session_row(now: i64) -> Row {
     ])
 }
 
-// ---- 메모리 MySQL 대역 (SQLite 저장소 테스트를 MySQL 저장소로 옮기기 위한 상태 있는 가짜) ----
+// ---- 메모리 MySQL 대역 (MySQL 저장소 동작을 재현하는 상태 있는 대역) ----
 
 #[derive(Clone)]
 struct Tok {
@@ -506,8 +501,7 @@ impl DbConnection for MemConn {
 
 #[test]
 fn test_rotate_success() {
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "refresh_tokens.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue(&store, "token-1", "family-1", "admin@example.com", now, now + 1000);
 
@@ -520,8 +514,7 @@ fn test_rotate_success() {
 fn test_concurrent_reuse_within_grace_reissues_without_revoking_family() {
     // 방금 회전된 토큰이 grace window 내에 다시 제출되면(멀티탭 동시 refresh) 재사용
     // 공격이 아닌 정상 동시 요청으로 보고, 패밀리를 폐기하지 않고 후속 토큰을 재발급한다.
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "refresh_tokens.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue(&store, "token-1", "family-1", "admin@example.com", now, now + 1000);
     assert_eq!(rot(&store, "token-1", "token-2", "family-1", "admin@example.com", now + 1, now + 1001), "ok");
@@ -538,8 +531,7 @@ fn test_concurrent_reuse_within_grace_reissues_without_revoking_family() {
 fn test_reuse_detection_revokes_family_after_grace() {
     // grace window 를 벗어난 뒤 회전 완료된 토큰이 재제출되면 실제 재사용 공격으로
     // 간주하고 패밀리 전체를 폐기한다.
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "refresh_tokens.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue(&store, "token-1", "family-1", "admin@example.com", now - 1000, now + 1000);
     // 회전이 grace window 보다 한참 전에 발생(revoked_at = now-500)
@@ -553,8 +545,7 @@ fn test_reuse_detection_revokes_family_after_grace() {
 
 #[test]
 fn test_revoke_family_blocks_rotation() {
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "refresh_tokens.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue(&store, "token-1", "family-1", "admin@example.com", now, now + 1000);
 
@@ -567,8 +558,7 @@ fn test_revoke_family_blocks_rotation() {
 
 #[test]
 fn test_rotate_missing_token() {
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "refresh_tokens.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     let result = rot(&store, "missing-token", "token-2", "family-1", "admin@example.com", now, now + 1000);
     assert_eq!(result, "missing");
@@ -576,8 +566,7 @@ fn test_rotate_missing_token() {
 
 #[test]
 fn test_rotate_rejects_family_or_email_mismatch() {
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "refresh_tokens.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue(&store, "token-1", "family-1", "admin@example.com", now, now + 1000);
 
@@ -603,10 +592,52 @@ fn test_rotate_rejects_expired_token_without_creating_replacement() {
 // --- N3: MySQL 공유 백엔드 (replica 간 일관성) ---
 
 #[test]
-#[ignore = "SQLite 저장소 미구현: rusqlite 미승인. 운영은 mysql"]
-fn test_factory_defaults_to_sqlite() {
-    // Python: TM_REFRESH_TOKEN_BACKEND 가 없으면 TM_REFRESH_TOKEN_DB 의 SQLite 저장소를 만든다.
-    unimplemented!("SQLite 저장소 미구현");
+fn test_factory_rejects_sqlite_and_unknown_backends() {
+    let mut env = EnvGuard::new();
+    for value in ["sqlite", "unknown"] {
+        env.set("TM_REFRESH_TOKEN_BACKEND", value);
+        let error = match create_refresh_token_store() {
+            Err(error) => error,
+            Ok(_) => panic!("backend={value}인데 저장소가 생성됐다"),
+        };
+        assert!(error.to_string().contains("TM_REFRESH_TOKEN_BACKEND=mysql"), "{error}");
+    }
+}
+
+#[test]
+fn test_mysql_rotation_observation_session_listing_and_revoke() {
+    let (store, _) = mem_store();
+    let issued_at = now();
+    issue_from(&store, "old", &fam('s'), "reader@example.com", issued_at, issued_at + 3600, "203.0.113.8", "Mozilla/5.0 Chrome/120.0 Safari/537.36");
+
+    assert_eq!(store.rotate("old", "new", &fam('s'), "reader@example.com", issued_at + 1, issued_at + 3601, Some("203.0.113.8"), Some("Mozilla/5.0 Chrome/120.0 Safari/537.36")).unwrap(), "ok");
+    let observation = store.get_token_observation("old").unwrap().unwrap();
+    assert_eq!(observation["replaced_by_present"], true);
+    assert_eq!(observation["revoke_reason"], "rotated");
+    let page = store.list_sessions(&all()).unwrap();
+    assert_eq!(page["summary"]["active"], 1);
+    assert_eq!(page["items"][0]["token_count"], 2);
+    assert_eq!(page["items"][0]["client_ip"], "203.0.113.8");
+
+    let revoked = store.revoke_session(&fam('s')).unwrap();
+    assert_eq!(revoked["found"], true);
+    assert_eq!(revoked["revoked"], true);
+    assert_eq!(revoked["session"]["status"], "revoked");
+}
+
+#[test]
+fn test_mysql_rotation_reuse_after_grace_revokes_the_family() {
+    let (store, _) = mem_store();
+    let mut env = EnvGuard::new();
+    env.set("TM_REFRESH_ROTATION_GRACE_SECONDS", "0");
+    let issued_at = now();
+    issue(&store, "old", &fam('r'), "reader@example.com", issued_at - 100, issued_at + 3600);
+
+    assert_eq!(rot(&store, "old", "new", &fam('r'), "reader@example.com", issued_at - 100, issued_at + 3600), "ok");
+    assert_eq!(rot(&store, "old", "replay", &fam('r'), "reader@example.com", issued_at, issued_at + 3600), "reused");
+    let page = store.list_sessions(&all()).unwrap();
+    assert_eq!(page["summary"]["revoked"], 1);
+    assert_eq!(page["items"][0]["revoke_reason"], "reuse-detected");
 }
 
 #[test]
@@ -800,8 +831,7 @@ fn test_mysql_revoke_family_exception_rolls_back_and_raises() {
 #[test]
 fn test_get_token_observation_reports_rotation_state() {
     // 회전 전에는 replaced_by_present=False, 회전 후에는 True 를 보고한다.
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "refresh_tokens.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue(&store, "token-1", "family-1", "admin@example.com", now, now + 1000);
 
@@ -819,16 +849,14 @@ fn test_get_token_observation_reports_rotation_state() {
 
 #[test]
 fn test_get_token_observation_returns_none_for_unknown_token() {
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "refresh_tokens.sqlite3");
+    let store = memory_mysql_store();
     assert!(store.get_token_observation("no-such-token").unwrap().is_none());
 }
 
 #[test]
 fn test_get_token_observation_does_not_mutate_state() {
     // 관측 조회는 읽기 전용이므로 이후 회전 결과에 영향을 주지 않는다.
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "refresh_tokens.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue(&store, "token-1", "family-1", "admin@example.com", now, now + 1000);
 
@@ -862,10 +890,9 @@ fn test_mysql_get_token_observation_returns_none_for_unknown_token() {
 
 // ========== Admin 세션 관리: 집계/폐기 ==========
 
-/// 활성/폐기/만료 family 를 각각 하나씩 만든 store 를 돌려준다. TempDir은 store보다 오래 살아야 한다.
-fn session_fixture() -> (TempDir, MySQLRefreshTokenStore, i64) {
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "sessions.sqlite3");
+/// 활성/폐기/만료 family를 각각 하나씩 만든 메모리 MySQL store를 돌려준다.
+fn session_fixture() -> (MySQLRefreshTokenStore, i64) {
+    let store = memory_mysql_store();
     let now = now();
     // 활성 family: 두 번 회전해 토큰 row 3개
     issue(&store, "a1", &fam('a'), "admin@example.com", now - 100, now + 1000);
@@ -876,12 +903,12 @@ fn session_fixture() -> (TempDir, MySQLRefreshTokenStore, i64) {
     store.revoke_family(&fam('b'), "logout").unwrap();
     // 자연 만료된 family
     issue(&store, "c1", &fam('c'), "viewer@example.com", now - 9999, now - 10);
-    (dir, store, now)
+    (store, now)
 }
 
 #[test]
 fn test_list_sessions_groups_by_family_and_derives_status() {
-    let (_dir, store, now) = session_fixture();
+    let (store, now) = session_fixture();
 
     let page = store.list_sessions(&all()).unwrap();
 
@@ -904,7 +931,7 @@ fn test_list_sessions_groups_by_family_and_derives_status() {
 
 #[test]
 fn test_list_sessions_reports_revoke_reason_only_for_revoked() {
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
 
     let items = items_of(&store.list_sessions(&all()).unwrap());
     let by_status = |s: &str| items.iter().find(|i| i["status"] == s).unwrap().clone();
@@ -917,7 +944,7 @@ fn test_list_sessions_reports_revoke_reason_only_for_revoked() {
 
 #[test]
 fn test_list_sessions_active_filter_and_default() {
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
 
     let default_page = store.list_sessions(&SessionQuery::default()).unwrap();
     let statuses: Vec<Value> = items_of(&default_page).iter().map(|i| i["status"].clone()).collect();
@@ -929,7 +956,7 @@ fn test_list_sessions_active_filter_and_default() {
 
 #[test]
 fn test_list_sessions_does_not_expose_token_internals() {
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
 
     let item = items_of(&store.list_sessions(&all()).unwrap()).remove(0);
 
@@ -971,8 +998,7 @@ fn chrome_ua(version: &str) -> String {
 #[test]
 fn test_list_sessions_merges_adjacent_browser_version_upgrade() {
     // 같은 계정·IP·OS 에서 브라우저 버전만 1 올라간 두 family 는 한 행으로 합친다.
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "sessions.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue_from(&store, "old1", &fam('d'), "admin@example.com", now - 500, now + 500, "1.2.3.4", &chrome_ua("130"));
     issue_from(&store, "new1", &fam('e'), "admin@example.com", now - 10, now + 1000, "1.2.3.4", &chrome_ua("131"));
@@ -994,8 +1020,7 @@ fn test_list_sessions_merges_adjacent_browser_version_upgrade() {
 
 #[test]
 fn test_list_sessions_does_not_merge_across_different_ip() {
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "sessions.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue_from(&store, "f1", &fam('f'), "admin@example.com", now - 500, now + 500, "1.2.3.4", &chrome_ua("130"));
     issue_from(&store, "g1", &fam('0'), "admin@example.com", now - 10, now + 1000, "9.9.9.9", &chrome_ua("131"));
@@ -1007,8 +1032,7 @@ fn test_list_sessions_does_not_merge_across_different_ip() {
 
 #[test]
 fn test_list_sessions_does_not_merge_when_version_gap_exceeds_tolerance() {
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "sessions.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue_from(&store, "h1", &fam('1'), "admin@example.com", now - 500, now + 500, "1.2.3.4", &chrome_ua("125"));
     issue_from(&store, "i1", &fam('2'), "admin@example.com", now - 10, now + 1000, "1.2.3.4", &chrome_ua("131"));
@@ -1021,8 +1045,7 @@ fn test_list_sessions_does_not_merge_when_version_gap_exceeds_tolerance() {
 #[test]
 fn test_list_sessions_never_merges_revoked_sessions() {
     // 관리자가 명시적으로 폐기한 세션은 최신 활성 세션과 절대 합치지 않는다.
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "sessions.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue_from(&store, "j1", &fam('3'), "admin@example.com", now - 500, now + 500, "1.2.3.4", &chrome_ua("130"));
     store.revoke_family(&fam('3'), "admin-revoked").unwrap();
@@ -1037,7 +1060,7 @@ fn test_list_sessions_never_merges_revoked_sessions() {
 
 #[test]
 fn test_list_sessions_marks_current_session() {
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
 
     let page = store.list_sessions(&SessionQuery { current_family_id: Some(fam('b')), ..all() }).unwrap();
 
@@ -1048,7 +1071,7 @@ fn test_list_sessions_marks_current_session() {
 
 #[test]
 fn test_list_sessions_paginates_newest_activity_first() {
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
 
     let first = store.list_sessions(&SessionQuery { page: 1, page_size: 2, ..all() }).unwrap();
     let second = store.list_sessions(&SessionQuery { page: 2, page_size: 2, ..all() }).unwrap();
@@ -1069,14 +1092,14 @@ fn test_list_sessions_paginates_newest_activity_first() {
 
 #[test]
 fn test_list_sessions_page_beyond_end_is_empty() {
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
     let page = store.list_sessions(&SessionQuery { page: 99, page_size: 50, ..all() }).unwrap();
     assert!(items_of(&page).is_empty());
 }
 
 #[test]
 fn test_list_sessions_filters_by_email() {
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
 
     let page = store.list_sessions(&SessionQuery { email: Some("viewer@example.com".to_string()), ..all() }).unwrap();
 
@@ -1087,8 +1110,7 @@ fn test_list_sessions_filters_by_email() {
 
 #[test]
 fn test_list_sessions_empty_store() {
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "empty.sqlite3");
+    let store = memory_mysql_store();
 
     let page = store.list_sessions(&all()).unwrap();
 
@@ -1099,7 +1121,7 @@ fn test_list_sessions_empty_store() {
 
 #[test]
 fn test_revoke_session_revokes_whole_family() {
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
 
     let result = store.revoke_session(&fam('a')).unwrap();
 
@@ -1114,7 +1136,7 @@ fn test_revoke_session_revokes_whole_family() {
 
 #[test]
 fn test_revoke_session_is_idempotent_for_inactive_family() {
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
     store.revoke_session(&fam('a')).unwrap();
 
     let again = store.revoke_session(&fam('a')).unwrap();
@@ -1127,7 +1149,7 @@ fn test_revoke_session_is_idempotent_for_inactive_family() {
 
 #[test]
 fn test_revoke_session_keeps_existing_terminal_reason() {
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
 
     let result = store.revoke_session(&fam('b')).unwrap();
 
@@ -1139,7 +1161,7 @@ fn test_revoke_session_keeps_existing_terminal_reason() {
 
 #[test]
 fn test_revoke_session_unknown_family() {
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
 
     let result = store.revoke_session(&fam('d')).unwrap();
 
@@ -1148,7 +1170,7 @@ fn test_revoke_session_unknown_family() {
 
 #[test]
 fn test_revoke_session_does_not_touch_other_families() {
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
 
     store.revoke_session(&fam('a')).unwrap();
 
@@ -1160,7 +1182,7 @@ fn test_revoke_session_does_not_touch_other_families() {
 
 #[test]
 fn test_mysql_list_sessions_uses_same_derivation() {
-    // MySQL store 도 SQLite 와 동일한 집계 결과 형태를 돌려준다.
+    // MySQL store 가 aggregate 결과를 안정된 형태로 반환한다.
     let now = now();
     let (provider, _conns) = install_fresh_conns(Some(mysql_session_row(now)));
     let store = MySQLRefreshTokenStore::with_connector(provider).unwrap();
@@ -1205,8 +1227,7 @@ const SAFARI_IOS_UA: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS
 #[test]
 fn test_list_sessions_reports_latest_client_info() {
     // 세션의 IP/UA 는 family 안에서 가장 최근 발급된 토큰 값을 보여준다.
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "client_info.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue_from(&store, "t1", &fam('a'), "admin@example.com", now - 100, now + 1000, "203.0.113.7", CHROME_MAC_UA);
     // 같은 세션이 다른 회선에서 갱신되면 최신 값으로 덮인다
@@ -1222,7 +1243,7 @@ fn test_list_sessions_reports_latest_client_info() {
 #[test]
 fn test_list_sessions_returns_empty_client_info_for_legacy_rows() {
     // 컬럼 추가 이전에 쌓인 세션은 빈 문자열로 나온다(None 이 화면까지 새지 않는다).
-    let (_dir, store, _) = session_fixture();
+    let (store, _) = session_fixture();
 
     for item in items_of(&store.list_sessions(&all()).unwrap()) {
         assert_eq!(item["client_ip"], json!(""));
@@ -1234,21 +1255,13 @@ fn test_list_sessions_returns_empty_client_info_for_legacy_rows() {
 #[test]
 fn test_store_truncates_oversized_client_info() {
     // UA 는 상한이 없으므로 컬럼 폭에 맞게 잘라 저장한다.
-    let dir = TempDir::new().unwrap();
-    let store = new_store(&dir, "truncate.sqlite3");
+    let store = memory_mysql_store();
     let now = now();
     issue_from(&store, "t1", &fam('a'), "admin@example.com", now, now + 1000, "203.0.113.7", &"U".repeat(MAX_USER_AGENT_LENGTH * 2));
 
     let item = items_of(&store.list_sessions(&all()).unwrap()).remove(0);
 
     assert_eq!(item["user_agent"].as_str().unwrap().chars().count(), MAX_USER_AGENT_LENGTH);
-}
-
-#[test]
-#[ignore = "SQLite 저장소 미구현: rusqlite 미승인. 운영은 mysql"]
-fn test_sqlite_migration_adds_client_columns() {
-    // Python: 컬럼 추가 이전 스키마의 SQLite 파일을 열어도 ALTER 로 client_ip/user_agent 가 붙고 조회가 동작한다.
-    unimplemented!("SQLite 저장소 미구현");
 }
 
 #[test]
@@ -1304,7 +1317,6 @@ fn mysql_store() -> (MutexGuard<'static, ()>, MySQLRefreshTokenStore) {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_mysql_aggregate_sql_runs_and_reports_latest_client_info() {
     // 윈도우 함수 기반 집계가 MySQL 8 에서 실제로 실행되고 최신 IP/UA 를 돌려준다.
     let (_guard, store) = mysql_store();
@@ -1324,7 +1336,6 @@ fn test_mysql_aggregate_sql_runs_and_reports_latest_client_info() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_mysql_aggregate_sql_filters_by_email() {
     // {where} 가 서브쿼리로 들어가도 파라미터 순서(now, now, email)가 맞는지 본다.
     let (_guard, store) = mysql_store();
@@ -1340,7 +1351,6 @@ fn test_mysql_aggregate_sql_filters_by_email() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_mysql_migration_adds_columns_to_legacy_table() {
     // 컬럼 없는 기존 테이블을 열어도 ALTER 로 보정되고 기존 row 는 NULL 로 남는다.
     mysql_fixture::mysql_container();
@@ -1386,8 +1396,8 @@ fn test_parse_browser_name_version_returns_none_when_pattern_has_no_version() {
 }
 
 #[test]
-fn test_sqlite_session_rows_warns_when_limit_is_reached() {
-    let (_dir, store, _) = session_fixture();
+fn test_mysql_session_rows_warns_and_limits_in_memory_store() {
+    let (store, _) = session_fixture();
     let store = store.with_max_session_groups(1);
     let logs = LogCapture::start(log::Level::Warn);
     let rows = store._session_rows(None, None).unwrap();

@@ -20,6 +20,10 @@ fn non_empty(doc: Option<Value>) -> Option<Value> {
 const SIMILAR_SUMMARY_CHARS: usize = 3500;
 
 impl BookManager {
+    fn books_from_hits(&self, hits: &[(i64, Value, f64)], keep_score: bool) -> Result<Vec<Book>, String> {
+        hits.iter().map(|(id, doc, score)| self.try_make_book(*id, doc, if keep_score { *score } else { 0.0 })).collect()
+    }
+
     /// 동기 ES 호출을 워커 스레드로 넘겨 이벤트 루프를 막지 않는다(동기 클라이언트를 루프에서 부르면 같은 워커의 다른 요청이 멈춘다).
     pub(crate) async fn blocking<T: Send + 'static>(&self, f: impl FnOnce(Arc<dyn EsManagerApi>) -> T + Send + 'static) -> T {
         let es = self.es.clone();
@@ -60,7 +64,10 @@ impl BookManager {
         if hits.is_empty() {
             return (Vec::new(), Some(format!("No books found in '{category}'")));
         }
-        (hits.iter().map(|(id, doc, _)| self.make_book(*id, doc, 0.0)).collect(), None)
+        match self.books_from_hits(&hits, false) {
+            Ok(books) => (books, None),
+            Err(error) => (Vec::new(), Some(error)),
+        }
     }
 
     /// 카테고리 내 책을 커서 기반으로 한 페이지 조회한다. 반환: (책 목록, 전체 수, 다음 커서, 오류).
@@ -74,7 +81,10 @@ impl BookManager {
         let category_owned = category.to_string();
         match self.blocking(move |es| es.search_by_category_paged(&category_owned, size, search_after.as_deref())).await {
             Ok((hits, total, next)) => {
-                let books = hits.iter().map(|(id, doc, _)| self.make_book(*id, doc, 0.0)).collect();
+                let books = match self.books_from_hits(&hits, false) {
+                    Ok(books) => books,
+                    Err(error) => return (Vec::new(), 0, None, Some(error)),
+                };
                 let next_cursor = next.filter(|n| !n.is_empty()).map(|n| encode_category_cursor(&n));
                 (books, total, next_cursor, None)
             }
@@ -85,7 +95,10 @@ impl BookManager {
     pub async fn get_book(&self, book_id: i64) -> (Option<Book>, Option<String>) {
         log::debug!("# get_book(book_id={book_id})");
         match self.find_doc_async(book_id).await {
-            Ok(Some(doc)) => (Some(self.make_book(book_id, &doc, 0.0)), None),
+            Ok(Some(doc)) => match self.try_make_book(book_id, &doc, 0.0) {
+                Ok(book) => (Some(book), None),
+                Err(e) => (None, Some(e)),
+            },
             Ok(None) => (None, Some(format!("No book found by '{book_id}'"))),
             Err(e) => (None, Some(e)),
         }
@@ -94,8 +107,15 @@ impl BookManager {
     /// 책 파일을 돌려준다. 문서나 파일이 없으면 빈 문자열이다.
     pub async fn get_book_content(&self, book_id: i64) -> BookContent {
         log::debug!("# get_book_content(book_id={book_id})");
-        let Ok(Some(doc)) = self.find_doc_async(book_id).await else { return BookContent::Text(String::new()) };
-        let book = self.make_book(book_id, &doc, 0.0);
+        let doc = match self.find_doc_async(book_id).await {
+            Ok(Some(doc)) => doc,
+            Ok(None) => return BookContent::Text(String::new()),
+            Err(error) => return BookContent::Error(error),
+        };
+        let book = match self.try_make_book(book_id, &doc, 0.0) {
+            Ok(book) => book,
+            Err(error) => return BookContent::Error(error),
+        };
         if self.fs.is_file(&book.file_path).unwrap_or(false) {
             return BookContent::File(book.file_path);
         }
@@ -106,7 +126,10 @@ impl BookManager {
         log::debug!("# search_by_keyword(keyword='{keyword}')");
         let keyword_owned = keyword.to_string();
         match self.blocking(move |es| es.search_by_keyword(&keyword_owned, max_result_count)).await {
-            Ok(hits) if !hits.is_empty() => (hits.iter().map(|(id, doc, _)| self.make_book(*id, doc, 0.0)).collect(), None),
+            Ok(hits) if !hits.is_empty() => match self.books_from_hits(&hits, false) {
+                Ok(books) => (books, None),
+                Err(error) => (Vec::new(), Some(error)),
+            },
             Ok(_) => (Vec::new(), Some("No books found".to_string())),
             Err(e) => (Vec::new(), Some(e.to_string())),
         }
@@ -116,7 +139,10 @@ impl BookManager {
         log::debug!("# search_by_keyword_paged(keyword='{keyword}', size={size}, offset={offset}, exclude_categories={exclude_categories:?}, category={category:?})");
         let args = json!({"keyword": keyword, "size": size, "offset": offset, "exclude_categories": exclude_categories, "category": category.filter(|c| !c.is_empty())});
         match self.blocking(move |es| es.search_by_keyword_paged(&args)).await {
-            Ok((hits, total)) => (hits.iter().map(|(id, doc, _)| self.make_book(*id, doc, 0.0)).collect(), total, None),
+            Ok((hits, total)) => match self.books_from_hits(&hits, false) {
+                Ok(books) => (books, total, None),
+                Err(error) => (Vec::new(), 0, Some(error)),
+            },
             Err(e) => (Vec::new(), 0, Some(e.to_string())),
         }
     }
@@ -141,7 +167,10 @@ impl BookManager {
         let mut args = Self::similar_args(book_id, &doc);
         args["max_result_count"] = json!(max_result_count);
         match self.blocking(move |es| es.search_similar_docs(&args)).await {
-            Ok(hits) if !hits.is_empty() => (hits.iter().map(|(id, similar, _)| self.make_book(*id, similar, 0.0)).collect(), None),
+            Ok(hits) if !hits.is_empty() => match self.books_from_hits(&hits, false) {
+                Ok(books) => (books, None),
+                Err(error) => (Vec::new(), Some(error)),
+            },
             Ok(_) => (Vec::new(), Some("No similar books found".to_string())),
             Err(e) => (Vec::new(), Some(e.to_string())),
         }
@@ -158,7 +187,10 @@ impl BookManager {
         args["size"] = json!(size);
         args["offset"] = json!(offset);
         match self.blocking(move |es| es.search_similar_docs_paged(&args)).await {
-            Ok((hits, total)) if !hits.is_empty() => (hits.iter().map(|(id, similar, score)| self.make_book(*id, similar, *score)).collect(), total, None),
+            Ok((hits, total)) if !hits.is_empty() => match self.books_from_hits(&hits, true) {
+                Ok(books) => (books, total, None),
+                Err(error) => (Vec::new(), 0, Some(error)),
+            },
             Ok((_, total)) => (Vec::new(), total, Some("No similar books found".to_string())),
             Err(e) => (Vec::new(), 0, Some(e.to_string())),
         }
@@ -169,7 +201,10 @@ impl BookManager {
         log::debug!("# get_latest_books(size={size}, exclude_categories={exclude_categories:?})");
         let size = size.clamp(1, MAX_LATEST_BOOK_COUNT);
         match self.blocking(move |es| es.search_latest_docs(size, exclude_categories.as_deref())).await {
-            Ok((hits, total)) => (hits.iter().map(|(id, doc, _)| self.make_book(*id, doc, 0.0)).collect(), total, None),
+            Ok((hits, total)) => match self.books_from_hits(&hits, false) {
+                Ok(books) => (books, total, None),
+                Err(error) => (Vec::new(), 0, Some(error)),
+            },
             Err(e) => (Vec::new(), 0, Some(e.to_string())),
         }
     }

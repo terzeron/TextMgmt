@@ -1,4 +1,3 @@
-// TODO(seams): common::{image,fsx,epub,zipx,pdf,raster,edits,es_fake,clock}로 이전 중. 이전 후 삭제
 //! PDF/EPUB 편집 테스트 공용 fixture. Python `tests/test_pdf_delete_pages.py`의 헬퍼와 fixture에 대응한다.
 //!
 //! 사용법: 테스트 파일에서 `mod common;` 다음에 아래처럼 가져온다. (`common/mod.rs`는 수정하지 않으므로 `#[path]`를 쓴다.)
@@ -7,94 +6,38 @@
 //! mod fx;
 //! ```
 //!
-//! 가정한 API (아직 구현 전이다):
-//! - `backend::book_manager::BookManagerDeps::new(es: Arc<dyn EsManagerApi>, path_prefix: PathBuf) -> Self`
-//!   - `.with_add_book(Arc<dyn AddBook>)`, `.with_read_file(Arc<dyn ReadFile>)`, `.with_fetch_url_image(Arc<dyn FetchUrlImage>)`
-//!   - `.with_book(file_path: PathBuf, file_type: &str)`: `get_book`이 돌려줄 책
-//!   - `.with_remove_pdf_pages_with_backup_failure(SaveFailure)`, `.with_normalize_uploaded_image_failure(String)`
-//! - `backend::book_manager::BookManager::with_deps(BookManagerDeps) -> BookManager`
-//! - `BookManager::delete_pdf_pages(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> (Option<Value>, Option<String>)`
-//! - `trait backend::es_manager::EsManagerApi: Send + Sync { fn create_index(&self); fn search_by_id(&self, id: i64) -> Option<Value>; fn delete(&self, id: i64) -> bool; fn update(&self, id: i64, fields: &Value) -> bool; }`
-//! - `trait backend::book_manager::AddBook: Send + Sync { fn add_book(&self, items: &BTreeMap<i64, Value>) -> (Option<i64>, Option<String>); }`
-//! - `trait backend::book_manager::ReadFile: Send + Sync { fn read_file(&self, path: &Path) -> loader::record::ReadOutcome; }`
-//! - `trait backend::direct_cover_url::FetchUrlImage: Send + Sync { fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError>; }`
-//!   `enum FetchError { Value(String), Os(String), Other(String) }` (Python ValueError / OSError / 그 밖의 예외)
-//! - `trait backend::main::BookManagerApi` (async_trait): `preview_insert_image`, `preview_insert_upload`, `delete_pdf_pages`, `edit_epub_images`
-//! - `backend::main::app_with_overrides(Arc<dyn BookManagerApi>, admin: Option<Value>) -> axum::Router`
-//!   (`proxy._instance` 교체와 `dependency_overrides[require_admin]`에 대응한다)
+//! `BookManagerDeps`에 `FileReader`, `ImageFetcher`, `FsOps`를 주입하고 `FakeEsManager`로 색인 호출을 확인한다.
+//! 구 fixture의 seam 가정은 제거했다. 저장·미리보기·재색인 검증은 현재 trait 계약을 사용한다.
 //!
 //! 이 파일을 쓰는 테스트 크레이트는 루트에 `mod common;`이 있어야 한다.
 
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use backend::book_manager::{AddBook, BookManager, BookManagerDeps, ReadFile, SaveFailure};
-use backend::direct_cover_url::{FetchError, FetchUrlImage};
-use backend::es_manager::EsManagerApi;
+use backend::book_manager::{BookManager, BookManagerDeps, FileReader};
+use backend::direct_cover_url::{FetchError, ImageFetcher};
+use backend::es_manager::Docs;
 use base64::Engine;
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
-use loader::record::ReadOutcome;
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream, StringFormat, dictionary};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-// ── mock 대역: ES, add_book, read_file, fetch_url_image ──
+// ── mock 대역: ES, file reader, image fetcher ──
 
-pub struct FakeEs {
-    pub doc: Mutex<Option<Value>>,
-    pub delete_result: Mutex<bool>,
-    pub deleted: Mutex<Vec<i64>>,
-    pub updates: Mutex<Vec<(i64, Value)>>,
-}
-
-impl FakeEs {
-    pub fn new(doc: Option<Value>) -> Arc<Self> {
-        Arc::new(Self { doc: Mutex::new(doc), delete_result: Mutex::new(true), deleted: Mutex::new(Vec::new()), updates: Mutex::new(Vec::new()) })
-    }
-}
-
-impl EsManagerApi for FakeEs {
-    fn create_index(&self) {}
-
-    fn search_by_id(&self, _id: i64) -> Option<Value> {
-        self.doc.lock().unwrap().clone()
-    }
-
-    fn delete(&self, id: i64) -> bool {
-        self.deleted.lock().unwrap().push(id);
-        *self.delete_result.lock().unwrap()
-    }
-
-    fn update(&self, id: i64, fields: &Value) -> bool {
-        self.updates.lock().unwrap().push((id, fields.clone()));
-        true
-    }
-}
-
-pub struct FakeAddBook {
-    pub calls: Mutex<Vec<BTreeMap<i64, Value>>>,
-    pub result: Mutex<(Option<i64>, Option<String>)>,
-}
-
-impl AddBook for FakeAddBook {
-    fn add_book(&self, items: &BTreeMap<i64, Value>) -> (Option<i64>, Option<String>) {
-        self.calls.lock().unwrap().push(items.clone());
-        self.result.lock().unwrap().clone()
-    }
-}
+pub type FakeEs = crate::common::es_fake::FakeEsManager;
 
 /// `Loader.read_file`에 대응한다. `ReadOutcome::item`이 Python의 `{id: 문서}`다.
 pub struct FakeReadFile {
-    pub outcome: Mutex<ReadOutcome>,
+    pub docs: Mutex<Docs>,
 }
 
-impl ReadFile for FakeReadFile {
-    fn read_file(&self, _path: &Path) -> ReadOutcome {
-        self.outcome.lock().unwrap().clone()
+impl FileReader for FakeReadFile {
+    fn read_file(&self, _path: &Path, _path_prefix: Option<&Path>) -> Docs {
+        self.docs.lock().unwrap().clone()
     }
 }
 
@@ -109,7 +52,7 @@ pub struct FakeFetch {
     pub calls: Mutex<Vec<String>>,
 }
 
-impl FetchUrlImage for FakeFetch {
+impl ImageFetcher for FakeFetch {
     fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError> {
         self.calls.lock().unwrap().push(url.to_string());
         match self.behavior.lock().unwrap().clone() {
@@ -132,8 +75,6 @@ impl FakeFetch {
 pub struct Opts {
     pub loader: bool,
     pub fetch: bool,
-    pub save_failure: Option<SaveFailure>,
-    pub normalize_failure: Option<String>,
 }
 
 impl Opts {
@@ -142,22 +83,21 @@ impl Opts {
     }
 
     pub fn loader() -> Self {
-        Self { loader: true, ..Self::default() }
+        Self { loader: true, fetch: false }
     }
 
     pub fn fetch() -> Self {
-        Self { fetch: true, ..Self::default() }
+        Self { loader: false, fetch: true }
     }
 
     pub fn loader_fetch() -> Self {
-        Self { loader: true, fetch: true, ..Self::default() }
+        Self { loader: true, fetch: true }
     }
 }
 
 pub struct Env {
     pub bm: BookManager,
     pub es: Arc<FakeEs>,
-    pub add_book: Arc<FakeAddBook>,
     pub reader: Arc<FakeReadFile>,
     pub fetch: Arc<FakeFetch>,
     pub pdf: PathBuf,
@@ -198,7 +138,7 @@ impl Env {
         assert_eq!(std::fs::read(&self.pdf).unwrap(), original, "PDF 바이트가 바뀌었다");
         assert!(!self.root.join("0_trash").exists(), "0_trash가 생겼다");
         assert!(self.part_files().is_empty(), "임시 .part 파일이 남았다");
-        assert!(self.es.deleted.lock().unwrap().is_empty(), "ES delete가 불렸다");
+        assert!(self.es.deleted().is_empty(), "ES delete가 불렸다");
     }
 }
 
@@ -217,26 +157,19 @@ pub fn env(opts: Opts) -> Env {
         "category": "cat", "title": "T", "author": "A", "file_path": "cat/book.pdf", "file_type": "pdf",
         "file_size": std::fs::metadata(&pdf).unwrap().len(), "page_count": 5, "updated_time": "2024-01-01T00:00:00.000000"
     });
-    let es = FakeEs::new(Some(doc));
-    let add_book = Arc::new(FakeAddBook { calls: Mutex::new(Vec::new()), result: Mutex::new((Some(1), None)) });
+    let es = FakeEs::with_doc(doc);
     let reindexed = json!({"category": "x", "title": "x", "author": "x", "file_path": "x", "file_type": "pdf", "file_size": 1, "page_count": 3});
-    let reader = Arc::new(FakeReadFile { outcome: Mutex::new(ReadOutcome { item: Some((1, reindexed)), messages: Vec::new() }) });
+    let reader = Arc::new(FakeReadFile { docs: Mutex::new(Docs::from([(1, reindexed)])) });
     let fetch = Arc::new(FakeFetch { behavior: Mutex::new(FetchBehavior::Ok(png_halves(200, 300))), calls: Mutex::new(Vec::new()) });
 
-    let mut deps = BookManagerDeps::new(es.clone(), root.clone()).with_add_book(add_book.clone());
+    let mut deps = BookManagerDeps::new(root.clone(), es.clone());
     if opts.loader {
-        deps = deps.with_read_file(reader.clone());
+        deps = deps.with_file_reader(reader.clone());
     }
     if opts.fetch {
-        deps = deps.with_fetch_url_image(fetch.clone());
+        deps = deps.with_image_fetcher(fetch.clone());
     }
-    if let Some(failure) = opts.save_failure {
-        deps = deps.with_remove_pdf_pages_with_backup_failure(failure);
-    }
-    if let Some(message) = opts.normalize_failure {
-        deps = deps.with_normalize_uploaded_image_failure(message);
-    }
-    Env { bm: BookManager::with_deps(deps), es, add_book, reader, fetch, pdf, root, _tmp: tmp }
+    Env { bm: BookManager::with_deps(deps), es, reader, fetch, pdf, root, _tmp: tmp }
 }
 
 /// `image_env` fixture: 이미지 쪽 3장과 글 쪽 1장.

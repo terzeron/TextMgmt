@@ -7,8 +7,11 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
 
 use isbn::*;
 use stat::Stat;
@@ -51,6 +54,13 @@ fn validate_isbn_dispatches_on_length() {
     assert!(validate_isbn("0306406152"));
     assert!(!validate_isbn("1234"));
     assert!(!validate_isbn("1234567890123"));
+}
+
+#[test]
+fn validators_accept_unicode_decimal_digits_like_python() {
+    assert!(validate_isbn13("9788٩94492032"));
+    assert!(validate_isbn10("030640615٢"));
+    assert_eq!(search_in_content("9788994٩42032"), ["9788994٩42032"]);
 }
 
 // ---- 본문 검색 ----
@@ -276,7 +286,7 @@ type Primary = Arc<dyn Fn(&Path) -> Result<(String, usize), String> + Send + Syn
 type Fallback = Arc<dyn Fn(&Path) -> Result<String, String> + Send + Sync>;
 
 fn backends(stat: &Arc<Stat>, primary: Primary, fallback: Fallback) -> Backends {
-    Backends { pdf_primary: primary, pdf_fallback: fallback, runner: Rc::new(SystemRunner), stat: Arc::clone(stat), pdf_timeout: 5.0 }
+    Backends { pdf_primary: primary, pdf_fallback: fallback, runner: Rc::new(SystemRunner), stat: Arc::clone(stat), pdf_timeout: 5.0, pdf_worker_executable: None }
 }
 
 fn never_fallback() -> Fallback {
@@ -362,6 +372,54 @@ fn pdf_primary_timeout_gives_up_without_the_fallback() {
     b.pdf_timeout = 0.05;
     assert!(extract(Path::new("hang.pdf"), None, &b).is_empty());
     assert!(stage_line(&stat, "isbn_pdfium").contains("timeout=1"));
+}
+
+#[cfg(unix)]
+#[test]
+fn production_pdf_worker_is_killed_after_the_isbn_timeout() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let worker = dir.path().join("stuck-isbn-worker");
+    fs::write(&worker, "#!/bin/sh\nwhile :; do :; done\n").unwrap();
+    fs::set_permissions(&worker, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let stat = Arc::new(Stat::new());
+    let completed = Arc::new(AtomicBool::new(false));
+    let completed_in_worker = Arc::clone(&completed);
+    let primary = Arc::new(move |_path: &Path| {
+        std::thread::sleep(Duration::from_millis(300));
+        completed_in_worker.store(true, Ordering::SeqCst);
+        Ok(("ISBN 9788994492032".into(), 1))
+    });
+    let mut b = backends(&stat, primary, never_fallback());
+    b.pdf_worker_executable = Some(worker);
+    b.pdf_timeout = 0.05;
+
+    let start = Instant::now();
+    assert!(extract(Path::new("stuck.pdf"), None, &b).is_empty());
+    assert!(start.elapsed() < Duration::from_secs(2));
+    std::thread::sleep(Duration::from_millis(350));
+    assert!(!completed.load(Ordering::SeqCst), "timed-out PDF work must not continue in a background thread");
+    assert!(stage_line(&stat, "isbn_pdfium").contains("timeout=1"));
+}
+
+#[cfg(unix)]
+#[test]
+fn production_pdf_worker_returns_text_and_page_count() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let worker = dir.path().join("isbn-worker");
+    fs::write(&worker, "#!/bin/sh\nprintf '1\\nISBN 9788994492032\\n'\n").unwrap();
+    fs::set_permissions(&worker, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let stat = Arc::new(Stat::new());
+    let mut b = backends(&stat, Arc::new(|_: &Path| panic!("worker executable should handle PDFium")), never_fallback());
+    b.pdf_worker_executable = Some(worker);
+
+    assert_eq!(extract(Path::new("book.pdf"), None, &b), ["9788994492032"]);
+    assert!(stage_line(&stat, "isbn_pdfium").contains("ok=1"));
 }
 
 #[test]

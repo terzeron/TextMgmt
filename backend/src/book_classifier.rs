@@ -20,7 +20,7 @@ use sysdeps::{FsOps, RealFs};
 use crate::bookstore::{AladinBookstore, BookstoreSearch, KyoboBookstore, Yes24Bookstore};
 use crate::bookstore_cache::BookstoreResponseCache;
 use crate::classifier::bookstore_policy::map_bookstore_candidates;
-use crate::classifier::model::{CategoryModelApi, Prediction};
+use crate::classifier::model::{CategoryModelApi, Prediction, get_default_model};
 use crate::classifier::softmax::fixed;
 use crate::classifier::tokenize::{is_py_space, is_py_word};
 use crate::classifier::{BookCategoryClassifier, BookClassifierApi, ClassifierOptions, Classify, resolve_lenient};
@@ -84,10 +84,92 @@ impl PartialEq<Value> for EpubMetadata {
     }
 }
 
+/// 잘린 태그를 닫고 lxml 복구처럼 서로 맞지 않는 종료 태그를 앞선 열린 태그에 맞춘다.
+fn recover_xml_structure(xml: &str) -> String {
+    let mut output = String::with_capacity(xml.len() + 64);
+    let mut open = Vec::<String>::new();
+    let mut cursor = 0;
+    while cursor < xml.len() {
+        let Some(relative) = xml[cursor..].find('<') else { break };
+        let start = cursor + relative;
+        output.push_str(&xml[cursor..start]);
+
+        let special_end = if xml[start..].starts_with("<!--") {
+            Some(("-->", 4))
+        } else if xml[start..].starts_with("<![CDATA[") {
+            Some(("]]>", 9))
+        } else if xml[start..].starts_with("<?") {
+            Some(("?>", 2))
+        } else {
+            None
+        };
+        if let Some((terminator, prefix_len)) = special_end {
+            if let Some(end) = xml[start + prefix_len..].find(terminator) {
+                let end = start + prefix_len + end + terminator.len();
+                output.push_str(&xml[start..end]);
+                cursor = end;
+                continue;
+            }
+            cursor = xml.len();
+            break;
+        }
+
+        let bytes = xml.as_bytes();
+        let mut quote = None;
+        let mut end = None;
+        for (index, byte) in bytes.iter().enumerate().skip(start + 1) {
+            match (*byte, quote) {
+                (b'\'' | b'"', None) => quote = Some(*byte),
+                (b'\'' | b'"', Some(current)) if *byte == current => quote = None,
+                (b'>', None) => {
+                    end = Some(index);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(end) = end else {
+            cursor = xml.len();
+            break;
+        };
+        let token = &xml[start..=end];
+        let body = token[1..token.len() - 1].trim();
+        if let Some(closing) = body.strip_prefix('/') {
+            let name = closing.split_whitespace().next().unwrap_or("");
+            if let Some(position) = open.iter().rposition(|tag| tag == name) {
+                while open.len() > position + 1 {
+                    if let Some(tag) = open.pop() {
+                        output.push_str(&format!("</{tag}>"));
+                    }
+                }
+                open.pop();
+                output.push_str(token);
+            }
+        } else if body.starts_with('!') {
+            // DTD는 읽지 않는다. 호출자가 제거하지 못한 선언도 파서로 넘기지 않는다.
+        } else {
+            output.push_str(token);
+            if !body.ends_with('/') {
+                let name = body.split(|c: char| c.is_whitespace() || c == '/').next().unwrap_or("");
+                if !name.is_empty() {
+                    open.push(name.to_owned());
+                }
+            }
+        }
+        cursor = end + 1;
+    }
+    output.push_str(&xml[cursor..]);
+    while let Some(tag) = open.pop() {
+        output.push_str(&format!("</{tag}>"));
+    }
+    output
+}
+
 fn parse_opf(xml: &str, meta: &mut EpubMetadata) -> bool {
     // DTD 는 읽지 않는다. 엔티티 폭탄(CWE-776)과 외부 엔티티(CWE-611)를 둘 다 이 한 줄로 막는다.
     let strict = roxmltree::Document::parse(xml);
     let cleaned;
+    let recovered;
     let doc = match strict {
         Ok(d) => d,
         Err(_) => {
@@ -95,10 +177,17 @@ fn parse_opf(xml: &str, meta: &mut EpubMetadata) -> bool {
             let doctype = rx!(r"(?s)<!DOCTYPE[^>\[]*(\[.*?\])?\s*>");
             let entity = rx!(r"&[A-Za-z_][\w.-]*;");
             let no_doctype = doctype.replace_all(xml, "");
-            cleaned = entity.replace_all(&no_doctype, |m: &regex::Captures| if matches!(&m[0], "&amp;" | "&lt;" | "&gt;" | "&quot;" | "&apos;") { m[0].to_string() } else { String::new() }).into_owned();
+            cleaned =
+                entity.replace_all(&no_doctype, |m: &regex::Captures| if matches!(&m[0], "&amp;" | "&lt;" | "&gt;" | "&quot;" | "&apos;") { m[0].to_string() } else { String::new() }).into_owned();
             match roxmltree::Document::parse(&cleaned) {
                 Ok(d) => d,
-                Err(_) => return false,
+                Err(_) => {
+                    recovered = recover_xml_structure(&cleaned);
+                    match roxmltree::Document::parse(&recovered) {
+                        Ok(d) => d,
+                        Err(_) => return false,
+                    }
+                }
             }
         }
     };
@@ -397,7 +486,12 @@ pub fn clean_filename_to_author_title(filename: &str) -> (String, String, String
     t = sub(rx!(r"\s+\d+\s+(?:완|完|외전|특외|에필|후기|미완|완결|완외포|완외|붙음).*"), &t);
     t = sub(rx!(r"\s+\d+(?:화|권|부|완|完|외|외전|특외|에필|후기|미완|완결|완외포)\b.*"), &t);
     t = sub(rx!(r"\s+\d{1,4}\s+\d{1,4}.*"), &t);
-    t = sub(rx!(r"[\s,]+(?:1[-~]\d+|\d+[-~]\d+.*|\d+[-~]\d+권.*|\d+화.*|\d+권.*|\d+부.*|\b完\b.*|\b완\b.*|\b외전\b.*|\b특외\b.*|\b에필\b.*|\b후기\b.*|\b완외포\b.*|\b완외\b.*|\b완결\b.*|\b단권\b.*|\b미완\b.*)$"), &t);
+    t = sub(
+        rx!(
+            r"[\s,]+(?:1[-~]\d+|\d+[-~]\d+.*|\d+[-~]\d+권.*|\d+화.*|\d+권.*|\d+부.*|\b完\b.*|\b완\b.*|\b외전\b.*|\b특외\b.*|\b에필\b.*|\b후기\b.*|\b완외포\b.*|\b완외\b.*|\b완결\b.*|\b단권\b.*|\b미완\b.*)$"
+        ),
+        &t,
+    );
     t = sub(rx!(r"(?i)\s*\b(?:issue|vol|v)\.?\s*\d+\b.*"), &t);
     t = sub(rx!(r"\s*\b\d{1,3}\b$"), &t); // 끝의 1, 2, 01, 02 등
     t = strip(&sub(rx!(r"\s*\([^)]*\)"), &t)).to_string();
@@ -447,12 +541,12 @@ pub fn clean_empty_parent_dirs_with(parent_dir: &Path, stop_dir: &Path, fs: &dyn
         Err(_) => None,
     };
     let (Some(mut curr), Some(stop)) = (resolve(parent_dir), resolve(stop_dir)) else { return };
-    while curr != stop && curr.starts_with(&stop) && curr.is_dir() {
+    while curr != stop && curr.starts_with(&stop) && fs.metadata(&curr).is_ok_and(|metadata| metadata.is_dir()) {
         match fs.read_dir(&curr) {
             Ok(entries) if entries.is_empty() => {}
             _ => break,
         }
-        if std::fs::remove_dir(&curr).is_err() {
+        if fs.remove_dir(&curr).is_err() {
             break;
         }
         let Some(parent) = curr.parent() else { break };
@@ -552,7 +646,7 @@ impl BookClassifierService {
     /// 서점 규칙 파일(`bookstore_policy.json`)이 없으면 예전 동작(모델 우선)이다.
     pub fn new(library_root: &Path, cache_file: Option<&Path>, classifier: Option<Arc<dyn Classify>>) -> Self {
         let classifier = classifier.unwrap_or_else(|| {
-            let model = crate::classifier::model::CategoryModel::load(None).map(|m| Arc::new(m) as Arc<dyn CategoryModelApi>);
+            let model = get_default_model().map(|model| model as Arc<dyn CategoryModelApi>);
             Arc::new(BookCategoryClassifier::new(model, ClassifierOptions { library_root: Some(library_root.to_path_buf()), ..Default::default() }))
         });
         let cache_file = cache_file.map(Path::to_path_buf).unwrap_or_else(|| library_root.join("classification_cache.json"));
@@ -822,9 +916,7 @@ impl BookClassifierService {
     pub fn _decide(&self, fpath: Option<&Path>, effective_fname: &str, entry: &mut Value, opts: DecideOptions) -> Decision {
         let (model_cat, model_reason, confidence) = self._decide_by_model(fpath, effective_fname, Some(entry));
         let mut store: Option<StoreVote> = None;
-        let mut bookstore = |entry: &mut Value| -> StoreVote {
-            store.get_or_insert_with(|| self.vote(entry, opts.trust_single_match)).clone()
-        };
+        let mut bookstore = |entry: &mut Value| -> StoreVote { store.get_or_insert_with(|| self.vote(entry, opts.trust_single_match)).clone() };
         let decided = |category: String, method: String, reason: String| Decision { category: Some(category), method, reason, model_category: model_cat.clone(), confidence: Some(confidence) };
 
         if self.bookstore_policy.prefers_bookstore(confidence) {
@@ -954,6 +1046,10 @@ impl BookClassifierService {
         );
         let mut result = json!({"file": fpath.to_string_lossy(), "target_category": target_cat, "method": method, "reason": reason, "action": "none"});
         let Some(target_cat) = target_cat else { return result };
+        if source_dir == self.library_root.join(&target_cat) {
+            result["action"] = json!("skipped_same_category");
+            return result;
+        }
         // 목적지는 라이브러리 바로 아래 디렉토리 하나여야 한다. `..` 나 경로 구분자가 든 값은 거부한다.
         if !is_single_component(&target_cat) {
             result["action"] = json!("none");
@@ -971,6 +1067,10 @@ impl BookClassifierService {
         };
 
         if dest_path.exists() {
+            if same_file(fpath, &dest_path) {
+                result["action"] = json!("skipped_same_file");
+                return result;
+            }
             if opts.clean_existing {
                 if !opts.dry_run {
                     let _ = fs::remove_file(fpath);
@@ -1007,6 +1107,22 @@ fn truthy(v: &Value) -> bool {
     }
 }
 
+fn same_file(left: &Path, right: &Path) -> bool {
+    let (Ok(left_metadata), Ok(right_metadata)) = (fs::metadata(left), fs::metadata(right)) else { return false };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        left_metadata.dev() == right_metadata.dev() && left_metadata.ino() == right_metadata.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        match (fs::canonicalize(left), fs::canonicalize(right)) {
+            (Ok(left), Ok(right)) => left == right,
+            _ => false,
+        }
+    }
+}
+
 /// 구분자와 `.`/`..` 가 없는 이름 하나인가.
 fn is_single_component(name: &str) -> bool {
     let mut comps = Path::new(name).components();
@@ -1036,7 +1152,13 @@ pub struct SharedBookClassifier {
 
 impl SharedBookClassifier {
     pub fn new(service: BookClassifierService) -> Self {
-        Self { override_below: service.bookstore_policy.override_below, policy: service.bookstore_policy.clone(), classifier: service.classifier.clone(), min_confidence: service.classifier.as_ref().and_then(|c| c.min_confidence()), inner: Mutex::new(service) }
+        Self {
+            override_below: service.bookstore_policy.override_below,
+            policy: service.bookstore_policy.clone(),
+            classifier: service.classifier.clone(),
+            min_confidence: service.classifier.as_ref().and_then(|c| c.min_confidence()),
+            inner: Mutex::new(service),
+        }
     }
 }
 
@@ -1053,7 +1175,11 @@ impl SharedBookClassifier {
 
     /// 요청 하나의 호출 조건(원본 디렉토리, 서점·본문 사용 여부)을 묶어 `BookClassifierApi` 로 내놓는다.
     pub fn call(&self, source_dir: &Path, use_bookstore: bool, use_content_meta: bool) -> ServiceCall<'_> {
-        ServiceCall { shared: self, source_dir: source_dir.to_path_buf(), opts: ClassifyOptions { use_bookstore, use_content_meta, ..Default::default() } }
+        self.call_with_delay(source_dir, use_bookstore, use_content_meta, None)
+    }
+
+    pub fn call_with_delay(&self, source_dir: &Path, use_bookstore: bool, use_content_meta: bool, delay: Option<f64>) -> ServiceCall<'_> {
+        ServiceCall { shared: self, source_dir: source_dir.to_path_buf(), opts: ClassifyOptions { use_bookstore, use_content_meta, ..Default::default() }, delay }
     }
 }
 
@@ -1062,12 +1188,18 @@ pub struct ServiceCall<'a> {
     shared: &'a SharedBookClassifier,
     source_dir: PathBuf,
     opts: ClassifyOptions,
+    delay: Option<f64>,
 }
 
 impl BookClassifierApi for ServiceCall<'_> {
     fn classify_file(&self, path: &Path) -> (Option<String>, String, String, Value) {
         let mut svc = self.shared.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let original_delay = svc.delay;
+        if let Some(delay) = self.delay {
+            svc.delay = delay.max(0.0);
+        }
         let (cat, method, reason, entry) = svc.classify_file(path, &self.source_dir, self.opts);
+        svc.delay = original_delay;
         (cat, method, reason, entry.unwrap_or_else(|| json!({})))
     }
 

@@ -1,8 +1,8 @@
 //! 호출을 골라서 실패시키는 `FsOps` 대역. 설계: docs/rust-test-seams.md 3.5.
-//! book_manager_1의 `FaultyFs`(훅 9개)를 `sysdeps::FsOps` 13개 메서드로 넓혀 모든 테스트 파일이 공유한다.
+//! book_manager_1의 `FaultyFs`(훅 9개)를 `sysdeps::FsOps`에 맞춰 모든 테스트 파일이 공유한다.
 //! book_manager_2의 전역 가드 `fs_*_override`는 `manager.with_fs(Arc::new(faulty))`로 바뀐다.
 //!
-//! 가정한 API (아직 구현 전이다): `sysdeps::{FsOps, RealFs}` (문서 3.1의 13개 메서드, `RealFs`는 단위 구조체)
+//! 가정한 API (아직 구현 전이다): `sysdeps::{FsOps, RealFs}` (`RealFs`는 단위 구조체)
 //!
 //! 사용: `let fs = FaultyFs::new(); fs.set_rename(fail_on_nth_call(2, "rollback fail")); deps.with_fs(fs.clone())`
 //! 훅이 `Some(err)`를 돌려주면 그 오류를 내고, `None`이면 안쪽 `FsOps`(기본 `RealFs`)에 맡긴다.
@@ -28,6 +28,7 @@ struct Hooks {
     is_file: Option<PathHook>,
     rename: Option<PairHook>,
     remove_file: Option<PathHook>,
+    remove_dir: Option<PathHook>,
     remove_dir_all: Option<PathHook>,
     canonicalize: Option<PathHook>,
     same_file: Option<PairHook>,
@@ -74,6 +75,7 @@ impl FaultyFs {
         set_metadata => metadata: PathHook,
         set_is_file => is_file: PathHook,
         set_remove_file => remove_file: PathHook,
+        set_remove_dir => remove_dir: PathHook,
         set_remove_dir_all => remove_dir_all: PathHook,
         set_canonicalize => canonicalize: PathHook,
         set_open => open: PathHook,
@@ -191,6 +193,11 @@ impl FsOps for FaultyFs {
         self.inner.remove_file(p)
     }
 
+    fn remove_dir(&self, p: &Path) -> io::Result<()> {
+        self.fault1("remove_dir", p, |h| h.remove_dir.clone())?;
+        self.inner.remove_dir(p)
+    }
+
     fn remove_dir_all(&self, p: &Path) -> io::Result<()> {
         self.fault1("remove_dir_all", p, |h| h.remove_dir_all.clone())?;
         self.inner.remove_dir_all(p)
@@ -257,11 +264,7 @@ pub fn fail_on_nth_call(n: usize, msg: &'static str) -> impl Fn(&Path, &Path) ->
     move |_from, _to| {
         let mut c = calls.lock().unwrap();
         *c += 1;
-        if *c == n {
-            Some(io::Error::other(msg))
-        } else {
-            None
-        }
+        if *c == n { Some(io::Error::other(msg)) } else { None }
     }
 }
 
@@ -271,11 +274,7 @@ pub fn fail_on_nth_path(n: usize, msg: &'static str) -> impl Fn(&Path) -> Option
     move |_path| {
         let mut c = calls.lock().unwrap();
         *c += 1;
-        if *c == n {
-            Some(io::Error::other(msg))
-        } else {
-            None
-        }
+        if *c == n { Some(io::Error::other(msg)) } else { None }
     }
 }
 

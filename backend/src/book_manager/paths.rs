@@ -177,22 +177,6 @@ impl BookManager {
 
     /// `clean_empty_parent_dirs`: 비어 있는 상위 디렉터리를 `stop_dir` 직전까지 지운다. `stop_dir` 자신과 바깥은 지우지 않는다.
     pub(crate) fn clean_empty_parent_dirs(&self, parent_dir: &Path, stop_dir: &Path) {
-        let (Ok(mut current), Ok(stop)) = (self.resolve_path(parent_dir), self.resolve_path(stop_dir)) else { return };
-        while current != stop && current.starts_with(&stop) && current.is_dir() {
-            match std::fs::read_dir(&current) {
-                Ok(mut it) => {
-                    if it.next().is_some() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-            if std::fs::remove_dir(&current).is_err() {
-                break;
-            }
-            if !current.pop() {
-                break;
-            }
-        }
+        crate::book_classifier::clean_empty_parent_dirs_with(parent_dir, stop_dir, self.fs.as_ref());
     }
 }

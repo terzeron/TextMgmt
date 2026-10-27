@@ -19,6 +19,7 @@ pub mod config;
 pub mod corpus;
 pub mod export_format;
 pub mod features;
+pub mod joblib_import;
 pub mod model;
 pub mod pyjson;
 pub mod pyunicode_table;
@@ -51,8 +52,7 @@ pub trait Classify: Send + Sync {
 /// 분류기 서비스 facade. `BookManager`가 제안을 만들 때 쓰는 능력이다(구 `ClassifierService`, `FileClassifier`).
 /// 설계: docs/rust-test-seams.md 3.12. 모든 메서드에 기본 구현이 있고 기본값은 "근거 없음"이다.
 ///
-/// TODO(classifier): 서점 조회, 정책 경계(`override_below`), 보정 곡선을 가진 실제 서비스(`BookClassifierService`)는
-/// 분류기 구현 에이전트가 만든다. 여기는 trait와, `Classify` 모델 하나만 감싼 `ModelOnlyClassifier`뿐이다.
+/// 실제 파일명·메타데이터·서점·cache 통합은 `book_classifier::BookClassifierService`가 맡는다.
 pub trait BookClassifierApi: Send + Sync {
     /// 파일 하나를 분류한다. 반환: (목적지, 방법, 사유, 항목). 항목은 `model_category`, `confidence`,
     /// `bookstore_candidates`, `model_candidates`를 담을 수 있다. 방법은 `model`, `bookstore_majority`, `bookstore_single`, `conflict`, `not_found`다.

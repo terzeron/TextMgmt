@@ -1,7 +1,7 @@
 //! refresh token 저장소. Python `backend/refresh_token_store.py`의 Rust 대응이다.
 //!
-//! MySQL 저장소(replica 공유)가 `RefreshTokenStoreApi`를 구현한다.
-//! SQLite 저장소는 옮기지 않았다(운영은 mysql). 회전·재사용 탐지 판정(`plan_rotation`)과 세션 집계(`build_session_page`)는 순수 함수다.
+//! 운영 factory와 저장소 API는 MySQL replica 공유 저장소만 사용한다.
+//! 회전·재사용 탐지 판정(`plan_rotation`)과 세션 집계(`build_session_page`)는 저장소 구현이 공유한다.
 //! 로그에는 토큰·family·이메일 원문을 남기지 않는다. 설계: docs/rust-test-seams.md 3.4, 3.10
 
 use std::collections::HashMap;
@@ -43,7 +43,7 @@ const TABLE_COLUMNS: &str = "jti, family_id, email, issued_at, expires_at, repla
 #[derive(Debug)]
 pub enum StoreError {
     Db(DbError),
-    /// 지원하지 않는 설정 (예: SQLite 저장소 요청).
+    /// 지원하지 않는 저장소 설정.
     Unsupported(String),
 }
 
@@ -306,7 +306,7 @@ impl Session {
     }
 }
 
-/// family 집계 row 를 관리자 화면용 세션으로 바꾼다. 상태 판정은 SQLite/MySQL 이 같아야 하므로 SQL 이 아니라 여기서 한다.
+/// family 집계 row를 관리자 화면용 세션으로 바꾼다. 상태 판정은 SQL dialect와 분리해 처리한다.
 /// - active: 아직 살아 있는 토큰이 하나라도 있다.
 /// - revoked: 살아 있는 토큰이 없고 종료 사유('rotated' 이외)가 있다.
 /// - expired: 살아 있는 토큰이 없고 종료 사유도 없다(자연 만료).
@@ -539,7 +539,7 @@ fn plan_rotation(row: Option<&TokenRow>, family_id: &str, email: &str, now: i64)
 // 공통 trait
 // ---------------------------------------------------------------------------
 
-/// SQLite/MySQL 저장소 공통 인터페이스.
+/// refresh token 저장소 인터페이스.
 #[allow(clippy::too_many_arguments)]
 pub trait RefreshTokenStoreApi: Send + Sync {
     fn store_issued(&self, token_id: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64, client_ip: Option<&str>, user_agent: Option<&str>) -> Result<(), StoreError>;
@@ -602,8 +602,7 @@ fn warn_if_truncated(row_count: usize, max_session_groups: usize) {
 
 /// MySQL 백엔드 refresh token 저장소.
 ///
-/// 여러 replica/worker 가 같은 테이블을 공유하므로 SQLite(/tmp, pod 별) 방식과 달리 토큰 회전·재사용 탐지가
-/// 전 인스턴스에서 일관되게 동작한다. 회전은 InnoDB 트랜잭션 + `SELECT ... FOR UPDATE` 행 잠금으로 원자성을 보장한다.
+/// 여러 replica/worker가 같은 테이블을 공유한다. 회전은 InnoDB 트랜잭션과 `SELECT ... FOR UPDATE` 행 잠금으로 원자성을 보장한다.
 pub struct MySQLRefreshTokenStore {
     provider: ConnectionProvider,
     max_session_groups: usize,
@@ -828,7 +827,7 @@ impl RefreshTokenStoreApi for MySQLRefreshTokenStore {
 // ---------------------------------------------------------------------------
 // 팩토리
 // ---------------------------------------------------------------------------
-/// 팩토리가 고른 저장소. Rust 백엔드는 MySQL 저장소만 지원한다.
+/// 팩토리가 고른 저장소.
 pub enum AnyRefreshTokenStore {
     MySql(MySQLRefreshTokenStore),
 }
@@ -874,16 +873,16 @@ impl RefreshTokenStoreApi for AnyRefreshTokenStore {
     }
 }
 
-/// `TM_REFRESH_TOKEN_BACKEND`가 "mysql"(Rust 기본값)이면 true. "sqlite"(Python 기본값)나 알 수 없는 값은 오류다.
+/// 테스트용 MySQL connector factory에서 backend 환경 변수를 확인한다.
 fn require_mysql_backend() -> Result<(), StoreError> {
     let backend = env_var("TM_REFRESH_TOKEN_BACKEND").unwrap_or_else(|| "mysql".to_string()).to_lowercase();
     if backend == "mysql" {
         return Ok(());
     }
-    Err(StoreError::Unsupported(format!("SQLite 저장소는 Rust 백엔드에서 지원하지 않는다. TM_REFRESH_TOKEN_BACKEND=mysql을 설정하라 (현재 값: {backend:?})")))
+    Err(StoreError::Unsupported(format!("Rust backend는 TM_REFRESH_TOKEN_BACKEND=mysql만 지원한다 (현재 값: {backend:?})")))
 }
 
-/// `TM_REFRESH_TOKEN_BACKEND`(기본 "mysql")에 따라 토큰 저장소를 만든다. MySQL 외의 값은 오류다.
+/// Rust backend는 replica 간 공유를 위해 MySQL 저장소만 사용한다.
 pub fn create_refresh_token_store() -> Result<AnyRefreshTokenStore, StoreError> {
     require_mysql_backend()?;
     MySQLRefreshTokenStore::new().map(AnyRefreshTokenStore::MySql)

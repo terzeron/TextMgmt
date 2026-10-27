@@ -1,7 +1,7 @@
 //! ES 색인에 테스트 문서를 쓰고, 읽고, 지워 보는 점검 도구. 원본: `utils/update.py`.
 //!
-//! 운영 색인(`TM_ES_BOOK_INDEX`)에 실제로 쓰고 지우므로, 원본과 달리 `run`을 명시해야 동작한다.
-//! 인자 없이 실행하면 사용법만 보인다.
+//! 운영 색인(`TM_ES_BOOK_INDEX`)에 실제로 쓰고 지우므로 주의한다. 인자 없이 실행하면 기본 문서로 점검한다.
+//! 원본 동작과 호환하려면 `run`을 생략할 수 있다.
 
 use std::io::Write;
 
@@ -18,13 +18,13 @@ pub fn print_usage(program: &str, out: &mut dyn Write) {
         "{program} - ES 색인에 테스트 문서를 쓰고 읽고 지워 보는 점검 도구.
 
 문서 하나를 갱신하고(`_update`), 다시 읽어 출력하고, 삭제한다. 운영 색인에 실제로 쓰고 지우므로
-문서 번호가 기존 문서와 겹치지 않는지 확인한 뒤 실행한다. 인자 없이 실행하면 아무것도 하지 않는다.
+문서 번호가 기존 문서와 겹치지 않는지 확인한 뒤 실행한다. 인자 없이 실행하면 기본 문서 번호로 점검한다.
 
 사용법:
-  {program} run [--doc-id N]
+  {program} [run] [--doc-id N]
 
 명령:
-  run   점검을 실행한다. 갱신 → 조회(출력) → 삭제 순서이고, 갱신이 실패하면 삭제하지 않는다.
+  run   점검을 실행한다. 생략해도 실행한다. 갱신 → 조회(출력) → 삭제 순서이고, 갱신이 실패하면 삭제하지 않는다.
 
 옵션:
   --doc-id N   점검에 쓸 문서 번호 (기본 {DEFAULT_DOC_ID})
@@ -54,20 +54,24 @@ fn parse_doc_id(args: &[String]) -> Result<i64, String> {
     Ok(doc_id)
 }
 
-/// 진입점. 종료 코드를 돌려준다. `connect`는 ES 접속을 만든다. `run`이 아니면 접속하지 않는다.
+/// 진입점. 종료 코드를 돌려준다. 인자가 없으면 Python 스크립트처럼 기본 점검을 실행한다.
+/// `connect`는 ES 접속을 만든다.
 pub fn run<'a>(program: &str, args: &[String], out: &mut dyn Write, connect: &dyn Fn() -> Result<&'a dyn BookStore, EsError>) -> i32 {
-    match args.first().map(String::as_str) {
-        None | Some("-h" | "--help") => {
+    let command_offset = match args.first().map(String::as_str) {
+        None => 0,
+        Some("-h" | "--help") => {
             print_usage(program, out);
             return 0;
         }
-        Some("run") => {}
+        Some("run") => 1,
+        Some("--doc-id") => 0,
+        Some(arg) if arg.starts_with("--doc-id=") => 0,
         Some(other) => {
             eprintln!("{program}: error: argument command: invalid choice: '{other}' (choose from 'run')");
             return 2;
         }
-    }
-    let doc_id = match parse_doc_id(&args[1..]) {
+    };
+    let doc_id = match parse_doc_id(&args[command_offset..]) {
         Ok(id) => id,
         Err(msg) => {
             eprintln!("{program}: error: {msg}");

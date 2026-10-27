@@ -840,6 +840,22 @@ class TestCategoryMismatchAdmin:
         asyncio.run(_run_apply_job([], set(), False, None))
         assert mock_cat.classify_status_store["book"]["status"] == "failed"
 
+    def test_classify_proposal_job_stores_manager_error(self, mock_bm, mock_cat, tmp_path):
+        """예외가 아닌 manager 오류 결과도 제안 상태에 기록한다."""
+        import asyncio
+
+        mock_bm.path_prefix = tmp_path
+        mock_cat.get_all_mappings.return_value = {}
+        mock_bm.propose_category_changes.return_value = ({"items": [], "total_count": 0}, "mapping unavailable")
+        router = main_module.create_item_router(mock_bm, content_type="book")
+        endpoint = next(r.endpoint for r in router.routes if getattr(r, "path", None) == "/categories/classify-proposal")
+        freevars = dict(zip(endpoint.__code__.co_freevars, [c.cell_contents for c in endpoint.__closure__]))
+
+        asyncio.run(freevars["_run_classify_proposal_job"]("0_inbox", True, True, 1.2))
+
+        assert mock_cat.classify_status_store["book"]["status"] == "failed"
+        assert mock_cat.classify_status_store["book"]["error"] == "mapping unavailable"
+
     def test_classify_proposal_applying_second_request_is_refused_while_claimed(self, mock_bm, mock_cat, tmp_path):
         """두 번째 apply 요청이 첫 번째가 실제로 끝나기 전에 상태를 가로채지 못한다.
 

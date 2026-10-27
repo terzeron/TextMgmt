@@ -25,30 +25,35 @@ mod cors;
 mod deps;
 mod errors;
 mod extract;
+mod google;
 mod log_routes;
 mod routes;
 mod routes_books;
-mod routes_mapping;
+mod routes_bookstore;
 mod routes_epub_cover;
+mod routes_health;
+mod routes_mapping;
 mod routes_pdf;
 mod routes_view_history;
 mod traits;
 
 pub use crate::auth::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RoleResolver, observation_hash};
+pub use crate::bookstore::BookstoreSearch;
 pub use crate::view_history_store::MAX_RECENT_VIEWS;
 pub use client_info::{_client_ip, _request_ip_prefix, _request_user_agent, ClientInfo};
 pub use cookies::{_clear_auth_cookies, _get_cookie_settings, _set_auth_cookies, CustomJSONResponse, ResponseHeaders, custom_jsonable_encoder, is_local_frontend_origin};
-pub use deps::{AppDeps, AuthMode, AuthSlots, RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS, Slot};
+pub use deps::{AppDeps, AuthMode, AuthSlots, BookstoreFactory, RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS, Slot};
 pub use errors::{
     ApiError, ApiResult, GENERIC_SERVER_ERROR_DETAIL, RequestValidationError, SERVICE_UNAVAILABLE_DETAIL, VALIDATION_ERROR_DETAIL, general_exception_handler, http_exception_handler, json_response,
     summarize_request_body, validation_exception_handler,
 };
 pub use extract::{ApiJson, ApiQuery, OptionalAuth, RequireAdmin, RequireAuth};
+pub use google::{GoogleIdTokenVerifier, GoogleJwksFetcher};
 pub use log_routes::{CLIENT_ERROR_FIELD_LIMITS, ClientErrorLogModel};
 pub use routes::{RouteInfo, Routes};
 pub use traits::{
-    BookAccess, BookContent, BookManagerApi, BookResponse, BookStub, CategoryMappingApi, GoogleVerifier, InlineRunner, MappingError, TaskHandle, TaskRunner, ThreadRunner, UnavailableBookAccess,
-    UnavailableBookManager, UnavailableGoogleVerifier, ViewHistoryApi,
+    ApplyCategoryChanges, BookAccess, BookContent, BookManagerApi, BookResponse, BookStub, CategoryMappingApi, GoogleVerifier, InlineRunner, MappingError, ProposeCategoryChanges, ReloadProgress,
+    TaskHandle, TaskRunner, ThreadRunner, UnavailableBookAccess, UnavailableBookManager, UnavailableGoogleVerifier, ViewHistoryApi,
 };
 
 /// Python 쪽 이름. `view_history_api` 테스트가 쓴다.
@@ -63,6 +68,8 @@ fn all_routes() -> Routes {
         .merge(routes_epub_cover::routes())
         .merge(routes_pdf::routes())
         .merge(routes_books::routes())
+        .merge(routes_bookstore::routes())
+        .merge(routes_health::routes())
         .merge(routes_mapping::routes())
         .merge(crate::cover_management::routes::routes())
 }
@@ -94,6 +101,33 @@ pub fn route_dependencies(path: &str) -> Vec<&'static str> {
         }
     }
     found
+}
+
+/// 분류 적용 백그라운드 작업의 실패 상태를 저장한다.
+pub async fn run_classify_apply_job(
+    book_manager: &dyn BookManagerApi,
+    category_mapping: &dyn CategoryMappingApi,
+    content_type: &str,
+    items: Vec<serde_json::Value>,
+    allowed: std::collections::HashSet<String>,
+    clean_existing: bool,
+    _apply_token: &str,
+) {
+    let (_result, error) = book_manager.apply_category_changes(&items, &allowed, clean_existing).await;
+    if let Some(error) = error {
+        let mut state = match category_mapping.get_classify_proposal_status(content_type, 300) {
+            Ok(state) => state,
+            Err(error) => {
+                log::error!("분류 적용 실패 상태 조회 실패: {error}");
+                return;
+            }
+        };
+        state["status"] = serde_json::json!("failed");
+        state["error"] = serde_json::json!(error);
+        if let Err(save_error) = category_mapping.set_classify_proposal_status(state, content_type) {
+            log::error!("분류 적용 실패 상태 저장 실패: {save_error}");
+        }
+    }
 }
 
 #[cfg(test)]

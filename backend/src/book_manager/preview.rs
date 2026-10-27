@@ -1,8 +1,8 @@
 //! 미리보기와 PDF 쪽 추출. Python `get_book_preview`, `get_pdf_pages`에 대응한다.
 //!
 //! 지원: PDF(앞 N쪽), EPUB(앞 N챕터 또는 전체), DOC/HWP(LibreOffice → HTML). 지원하지 않는 형식은 400이다.
-//! TODO(preview): `.html` 미리보기(`_sanitize_html_for_viewer`)와 `get_html_resource`는 아직 없다. HWP3 네이티브 폴백도 없다.
-//! TODO(pdf): PDF 리더 캐시(`PdfReaderCache`)와 쪽수 캐시는 아직 없다. 쪽수는 매번 `PdfPageOps::page_count`로 읽는다.
+//! HTML 미리보기와 리소스 경로는 `html.rs`에서 처리한다. HWP3은 LibreOffice 변환이 비면 네이티브 파서로 폴백한다.
+//! PDF reader와 쪽수는 경로·수정 시각 cache를 공유한다.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write;
@@ -141,7 +141,10 @@ impl BookManager {
             }
             Err(e) => return text_response(500, format!("Book lookup failed: {e}")),
         };
-        let book = self.make_book(book_id, &doc, 0.0);
+        let book = match self.try_make_book(book_id, &doc, 0.0) {
+            Ok(book) => book,
+            Err(e) => return text_response(500, format!("Book conversion failed: {e}")),
+        };
         if !self.fs.is_file(&book.file_path).unwrap_or(false) {
             log::warn!("get_book_preview: file not found: '{}' (book_id={book_id})", book.file_path.display());
             return text_response(404, format!("File not found: {}", book.file_path.display()));
@@ -170,9 +173,9 @@ impl BookManager {
             return self.file_response(&cache_file, "application/pdf", no_transform_headers());
         }
         let generate = || -> Result<Vec<u8>, String> {
-            let total = self.pdf_pages.page_count(file_path).map_err(|e| e.to_string())?;
-            let take = total.min(pages as usize);
-            let bytes = self.pdf_pages.extract_pages(file_path, 0, take).map_err(|e| e.to_string())?;
+            let (reader, total) = self.try_get_cached_pdf_reader(file_path).map_err(|e| e.to_string())?;
+            let take = (total as usize).min(pages as usize);
+            let bytes = self.pdf_pages.extract_pages_from_reader(&reader, 0, take).map_err(|e| e.to_string())?;
             self.fs.write(&cache_file, &bytes).map_err(|e| e.to_string())?;
             log::debug!("Preview generated for book_id={book_id} (PDF, {take} pages)");
             Ok(bytes)
@@ -603,7 +606,10 @@ impl BookManager {
             Ok(None) => return text_response(404, format!("Book not found: {book_id}")),
             Err(e) => return text_response(500, format!("PDF pages extraction failed (RuntimeError): {e}")),
         };
-        let book = self.make_book(book_id, &doc, 0.0);
+        let book = match self.try_make_book(book_id, &doc, 0.0) {
+            Ok(book) => book,
+            Err(e) => return text_response(500, format!("Book conversion failed: {e}")),
+        };
         // stat() 자체가 실패할 수 있다(예: 스토리지 마운트가 끊겨 EIO). 잡지 않으면 CORS 헤더 없는 500이 나가 브라우저에는 "Failed to fetch"로만 보인다.
         match self.fs.is_file(&book.file_path) {
             Err(e) => {
@@ -618,8 +624,8 @@ impl BookManager {
         }
 
         // 페이지 수만 먼저 구한다. 디스크 캐시 히트면 페이지 추출이 필요 없으므로 리더를 만들 필요가 없다.
-        let total_pages = match self.try_get_cached_page_count(&book.file_path) {
-            Ok((total, _reader)) => total,
+        let (total_pages, reader) = match self.try_get_cached_page_count(&book.file_path) {
+            Ok(result) => result,
             Err(e) => return self.pdf_pages_failure(book_id, &book.file_path, &e),
         };
         // 범위 검증
@@ -651,7 +657,14 @@ impl BookManager {
         }
 
         // 쪽 추출. Python `range(start - 1, end)`와 같다.
-        let pdf_bytes = match self.pdf_pages.extract_pages(&book.file_path, (start - 1) as usize, end.max(0) as usize) {
+        let reader = match reader {
+            Some(reader) => reader,
+            None => match self.try_get_cached_pdf_reader(&book.file_path) {
+                Ok((reader, _)) => reader,
+                Err(e) => return self.pdf_pages_failure(book_id, &book.file_path, &e),
+            },
+        };
+        let pdf_bytes = match self.pdf_pages.extract_pages_from_reader(&reader, (start - 1) as usize, end.max(0) as usize) {
             Ok(bytes) => bytes,
             Err(e) => return self.pdf_pages_failure(book_id, &book.file_path, &e),
         };
@@ -681,3 +694,7 @@ fn filter_ncx(raw: &[u8], zp: &str, files_to_include: &BTreeSet<String>) -> Opti
     }
     Some(format!("{XML_DECLARATION}{}", apply_edits(&text, doc.root_element().range(), edits)).into_bytes())
 }
+
+#[cfg(test)]
+#[path = "../../../tests/rust/backend/book_manager_preview_unit.rs"]
+mod tests;

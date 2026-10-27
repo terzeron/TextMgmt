@@ -23,6 +23,20 @@ struct EditResult {
     inserted: usize,
 }
 
+async fn run_upload_preview<F>(data: Vec<u8>, max_image_pixels: usize, normalize: F) -> (Option<Vec<u8>>, Option<String>)
+where
+    F: FnOnce(&[u8], usize) -> Result<Vec<u8>, String> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(move || normalize(&data, max_image_pixels)).await {
+        Ok(Ok(jpeg)) => (Some(jpeg), None),
+        Ok(Err(error)) => (None, Some(error)),
+        Err(error) => {
+            log::error!("preview_insert_upload: {error}");
+            (None, Some("이미지를 읽지 못했습니다".into()))
+        }
+    }
+}
+
 impl BookManager {
     pub async fn preview_insert_image(&self, url: &str) -> (Option<Vec<u8>>, Option<String>) {
         let url = url.trim().to_string();
@@ -30,7 +44,8 @@ impl BookManager {
             return (None, Some("이미지 URL이 비어 있습니다".into()));
         }
         let (_, fetcher) = self.pdf_edit_settings();
-        match tokio::task::spawn_blocking(move || images::download_image(fetcher.as_ref(), &url)).await {
+        let max_image_pixels = self.image_pixel_limit();
+        match tokio::task::spawn_blocking(move || images::download_image(fetcher.as_ref(), &url, max_image_pixels)).await {
             Ok(Ok(jpeg)) => (Some(jpeg), None),
             Ok(Err(error)) => (None, Some(error)),
             Err(error) => {
@@ -42,14 +57,8 @@ impl BookManager {
 
     pub async fn preview_insert_upload(&self, data: &[u8]) -> (Option<Vec<u8>>, Option<String>) {
         let data = data.to_vec();
-        match tokio::task::spawn_blocking(move || images::normalize_upload(&data)).await {
-            Ok(Ok(jpeg)) => (Some(jpeg), None),
-            Ok(Err(error)) => (None, Some(error)),
-            Err(error) => {
-                log::error!("preview_insert_upload: {error}");
-                (None, Some("이미지를 읽지 못했습니다".into()))
-            }
-        }
+        let max_image_pixels = self.image_pixel_limit();
+        run_upload_preview(data, max_image_pixels, images::normalize_upload_with_limit).await
     }
 
     /// Python `delete_pdf_pages`. 페이지 번호와 순서는 편집 전 문서를 기준으로 한다.
@@ -71,7 +80,7 @@ impl BookManager {
     async fn edit_pdf(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String> {
         let edits = Edits::parse(pages, crops, splits, inserts, order)?;
         let old = self.find_doc_async(book_id).await?.ok_or_else(|| format!("Book not found: {book_id}"))?;
-        let path = self.make_book(book_id, &old, 0.0).file_path;
+        let path = self.try_make_book(book_id, &old, 0.0).map_err(|error| format!("Book conversion failed: {error}"))?.file_path;
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         if !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("pdf")) {
             return Err(format!("Not a PDF file: {name}"));
@@ -80,8 +89,11 @@ impl BookManager {
             return Err(format!("File not found: {name}"));
         }
         let (trash_name, fetcher) = self.pdf_edit_settings();
+        let max_image_pixels = self.image_pixel_limit();
         let (fs, source, trash) = (self.fs.clone(), path.clone(), self.path_prefix.join(trash_name));
-        let result = tokio::task::spawn_blocking(move || edit_file(fs, &source, &trash, &edits, fetcher.as_ref())).await.map_err(|e| e.to_string())??;
+        let result = tokio::task::spawn_blocking(move || edit_file(fs, &source, &trash, &edits, fetcher.as_ref(), max_image_pixels))
+            .await
+            .map_err(|error| if error.is_panic() { "PDF 페이지 삭제 실패 (RuntimeError)".to_string() } else { error.to_string() })??;
 
         // 파일 교체가 끝나면 색인 실패와 무관하게 이전 미리보기를 폐기한다.
         self.pdf_cache().clear();
@@ -152,12 +164,12 @@ impl Drop for Parts {
     }
 }
 
-fn edit_file(fs: Arc<dyn FsOps>, path: &Path, trash: &Path, edits: &Edits, fetcher: &dyn crate::direct_cover_url::ImageFetcher) -> Result<EditResult, String> {
+fn edit_file(fs: Arc<dyn FsOps>, path: &Path, trash: &Path, edits: &Edits, fetcher: &dyn crate::direct_cover_url::ImageFetcher, max_image_pixels: usize) -> Result<EditResult, String> {
     let mut pdf = Document::load(path).map_err(|e| format!("PDF 페이지 삭제 실패: {e}"))?;
     let original = pdf.get_pages();
     edits.validate(original.len())?;
     flatten_pages(&mut pdf, &original.values().copied().collect::<Vec<_>>()).map_err(|e| format!("PDF 페이지 삭제 실패: {e}"))?;
-    let selected = edits.apply(&mut pdf, fetcher)?;
+    let selected = edits.apply(&mut pdf, fetcher, max_image_pixels)?;
     flatten_pages(&mut pdf, &selected).map_err(|e| format!("PDF 페이지 삭제 실패: {e}"))?;
     pdf.prune_objects();
     let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -221,4 +233,15 @@ fn flatten_pages(pdf: &mut Document, selected: &[ObjectId]) -> lopdf::Result<()>
     let kids: Vec<Object> = selected.iter().copied().map(Object::Reference).collect();
     pdf.objects.insert(root, dictionary! {"Type"=>"Pages", "Count"=> selected.len() as i64, "Kids"=>kids}.into());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn upload_preview_masks_worker_panics() {
+        let result = run_upload_preview(Vec::new(), 1, |_, _| panic!("secret detail")).await;
+        assert_eq!(result, (None, Some("이미지를 읽지 못했습니다".into())));
+    }
 }

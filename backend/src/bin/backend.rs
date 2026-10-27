@@ -14,9 +14,31 @@ fn print_usage() {
     println!("종료 코드: 0 정상, 2 잘못된 사용, 255 실행 오류");
 }
 
+fn validate_frontend_url(frontend_url: Option<&str>) -> Result<(), &'static str> {
+    frontend_url.ok_or("The environment variable TM_FRONTEND_URL is not set.").map(|_| ())
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some(loader::cli::PDF_STAGE_COMMAND) {
+        let mut out = std::io::stdout().lock();
+        let code = loader::cli::run_pdf_stage_command(&args[1..], &mut out);
+        let _ = std::io::Write::flush(&mut out);
+        return ExitCode::from(code as u8);
+    }
+    if args.first().map(String::as_str) == Some(loader::cli::ISBN_PDF_STAGE_COMMAND) {
+        let mut out = std::io::stdout().lock();
+        let code = loader::cli::run_isbn_pdf_stage_command(&args[1..], &mut out);
+        let _ = std::io::Write::flush(&mut out);
+        return ExitCode::from(code as u8);
+    }
+    if args.first().map(String::as_str) == Some(loader::cli::READ_FILE_COMMAND) {
+        let mut out = std::io::stdout().lock();
+        let code = loader::cli::run_read_file_command(&args[1..], &mut out);
+        let _ = std::io::Write::flush(&mut out);
+        return ExitCode::from(code as u8);
+    }
     if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
         print_usage();
         return ExitCode::SUCCESS;
@@ -32,6 +54,10 @@ async fn main() -> ExitCode {
     if !address.rsplit_once(':').is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok()) {
         eprintln!("잘못된 수신 주소: {address}");
         return ExitCode::from(2);
+    }
+    if let Err(error) = validate_frontend_url(std::env::var("TM_FRONTEND_URL").ok().as_deref()) {
+        eprintln!("{error}");
+        return ExitCode::from(255);
     }
     match serve(address).await {
         Ok(()) => ExitCode::SUCCESS,
@@ -62,4 +88,15 @@ async fn serve(address: &str) -> Result<(), String> {
     let app = backend::main::app();
     println!("Listening on {address}");
     axum::serve(listener, app).with_graceful_shutdown(shutdown).await.map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_frontend_url;
+
+    #[test]
+    fn frontend_url_is_required_for_server_startup() {
+        assert!(validate_frontend_url(Some("https://frontend.example")).is_ok());
+        assert_eq!(validate_frontend_url(None), Err("The environment variable TM_FRONTEND_URL is not set."));
+    }
 }

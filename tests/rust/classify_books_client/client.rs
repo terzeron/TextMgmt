@@ -49,6 +49,18 @@ fn quiet() -> impl Fn(&str, &str) + Sync {
 }
 
 #[test]
+fn no_arguments_runs_with_the_default_options_and_an_injected_library_root() {
+    let root = std::env::temp_dir().join(format!("classify-books-client-default-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(root.join("0_telegram")).unwrap();
+    let defaults = Options { library_root: root.clone(), dry_run: true, no_bookstore: true, ..Options::default() };
+    let mut out = Vec::new();
+
+    assert_eq!(classify_books_client::run_with_defaults("classify_books_client", &[], None, &mut out, defaults), 0);
+    assert!(!String::from_utf8(out).unwrap().contains("사용법"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn polls_until_done_and_sends_the_payload_with_the_bearer_token() {
     let (url, server) = mock_api(vec![
         (200, r#"{"status": "success"}"#),
@@ -115,18 +127,52 @@ fn a_rejected_start_request_exits_one() {
 }
 
 #[test]
-fn status_errors_are_retried_but_not_forever() {
+fn status_errors_are_retried_until_the_job_finishes() {
     let (url, server) = mock_api(vec![(200, r#"{"status": "success"}"#), (503, "{}"), (200, r#"{"result": {"status": "done"}}"#)]);
     assert_eq!(run_api_client(&options(&url), &quiet()), 0);
     server.join().unwrap();
 
     let mut responses = vec![(200, r#"{"status": "success"}"#)];
-    responses.extend(std::iter::repeat_n((500, "{}"), 3));
+    responses.extend(std::iter::repeat_n((503, "{}"), 31));
+    responses.push((200, r#"{"result": {"status": "done"}}"#));
     let (url, server) = mock_api(responses);
-    let mut opts = options(&url);
-    opts.max_status_failures = 3;
-    assert_eq!(run_api_client(&opts, &quiet()), 1);
-    server.join().unwrap();
+    let code = run_api_client(&options(&url), &quiet());
+    if code == 0 {
+        server.join().unwrap();
+    }
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn malformed_null_status_result_exits_one_instead_of_polling_forever() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        for (status, body) in [(200, r#"{"status": "success"}"#), (200, r#"{"result": null}"#)] {
+            let (mut stream, _) = listener.accept().unwrap();
+            seen.push(read_request(&mut stream));
+            let reply = format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            stream.write_all(reply.as_bytes()).unwrap();
+        }
+        listener.set_nonblocking(true).unwrap();
+        for _ in 0..20 {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    seen.push(read_request(&mut stream));
+                    let body = r#"{"result": {"status": "done"}}"#;
+                    let reply = format!("HTTP/1.1 200 X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    stream.write_all(reply.as_bytes()).unwrap();
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(5)),
+                Err(error) => panic!("unexpected listener error: {error}"),
+            }
+        }
+        seen
+    });
+    assert_eq!(run_api_client(&options(&url), &quiet()), 1);
+    assert_eq!(server.join().unwrap().len(), 2, "the malformed result must stop polling immediately");
 }
 
 #[test]
@@ -153,21 +199,67 @@ fn parse_options_reads_every_flag_and_the_token_environment_fallback() {
     let o = parse_options(&["--api-url=http://h:1".to_string(), "--token=cli".to_string()], Some("env-tok".into())).unwrap();
     assert_eq!(o.token.as_deref(), Some("cli"), "명령행이 환경변수보다 앞선다");
 
-    assert!(parse_options(&[], None).unwrap_err().contains("--api-url"));
+    assert!(parse_options(&[], None).is_ok());
     assert!(parse_options(&["--api-url".into()], None).unwrap_err().contains("expected one argument"));
     assert!(parse_options(&["--api-url=h".into(), "--delay=x".into()], None).unwrap_err().contains("--delay"));
     assert!(parse_options(&["--api-url=h".into(), "--delay=-1".into()], None).unwrap_err().contains("--delay"));
-    assert!(parse_options(&["--api-url=h".into(), "--limit".into(), "5".into()], None).unwrap_err().contains("직접 모드"));
     assert!(parse_options(&["--api-url=h".into(), "--bogus".into()], None).unwrap_err().contains("unrecognized"));
 }
 
 #[test]
-fn run_prints_usage_without_arguments_and_rejects_bad_ones() {
+fn run_prints_usage_for_help_and_rejects_bad_arguments() {
     let mut out = Vec::new();
-    assert_eq!(run("cbc", &[], None, &mut out), 0);
+    assert_eq!(run("cbc", &["--help".into()], None, &mut out), 0);
     let text = String::from_utf8(out).unwrap();
     assert!(text.contains("사용법") && text.contains("--api-url"));
-    assert_eq!(run("cbc", &["--help".into()], None, &mut Vec::new()), 0);
     assert_eq!(run("cbc", &["--bogus".into()], None, &mut Vec::new()), 2);
-    assert_eq!(run("cbc", &["--limit".into(), "5".into()], None, &mut Vec::new()), 2);
+    assert_eq!(run("cbc", &["--limit".into(), "bad".into()], None, &mut Vec::new()), 2);
+}
+
+#[test]
+fn direct_mode_accepts_library_options_without_api_url() {
+    let parsed = parse_options(
+        &[
+            "--library-root".into(),
+            "/tmp/books".into(),
+            "--category".into(),
+            "_root".into(),
+            "--limit".into(),
+            "0".into(),
+            "--offset".into(),
+            "3".into(),
+            "--uncached-only".into(),
+            "--re-evaluate".into(),
+        ],
+        None,
+    );
+    assert!(parsed.is_ok(), "direct mode options should be accepted: {parsed:?}");
+}
+
+#[test]
+fn api_mode_ignores_direct_only_options_like_python_cli() {
+    let parsed = parse_options(&["--api-url=http://localhost:8000".into(), "--limit=5".into(), "--offset=2".into(), "--uncached-only".into(), "--re-evaluate".into()], None);
+    assert!(parsed.is_ok(), "Python argparse accepts API mode with ignored direct options: {parsed:?}");
+}
+
+#[test]
+fn direct_mode_processes_a_book_in_dry_run_without_mutating_files() {
+    let root = std::env::temp_dir().join(format!("classify-books-client-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let source = root.join("0_telegram");
+    std::fs::create_dir_all(&source).unwrap();
+    let book = source.join("(무협) 제목.txt");
+    std::fs::write(&book, "본문").unwrap();
+
+    let code = run(
+        "classify_books_client",
+        &["--library-root".into(), root.to_string_lossy().into_owned(), "--category".into(), "0_telegram".into(), "--no-bookstore".into(), "--no-content-meta".into(), "--dry-run".into()],
+        None,
+        &mut Vec::new(),
+    );
+
+    assert_eq!(code, 0);
+    assert!(book.is_file());
+    assert!(!root.join("3_무협").exists());
+    assert!(!root.join("classification_cache.json").exists());
+    std::fs::remove_dir_all(root).unwrap();
 }

@@ -22,11 +22,30 @@ pub(crate) fn execute(args: &Args, io: &mut CliIo<'_>, deps: &Deps) -> Result<i3
         "train" => train::run(args, io, deps),
         "collect" => collect(args, io, deps),
         "info" => info(args, io),
+        "import-joblib" => import_joblib(args, io),
         "evaluate" | "score-calibration" => evaluate(args, io),
         "classify" | "reclassify" => classify(args, io, deps),
         "bookstore-policy" => policy::run(args, io, deps),
         _ => unreachable!("파서가 명령을 검증한다"),
     }
+}
+
+fn import_joblib(args: &Args, io: &mut CliIo<'_>) -> Result<i32, String> {
+    let input = args.get("--model").ok_or("import-joblib: --model FILE이 필요하다")?;
+    let output = args.get("--out").ok_or("import-joblib: --out DIR이 필요하다")?;
+    let mut summary = backend::classifier::joblib_import::import_joblib(Path::new(input), Path::new(output))?;
+    let golden = args.get("--golden").unwrap_or("0").parse::<i64>().map_err(|_| "--golden: 정수가 필요하다")?;
+    if golden > 0 {
+        let seed = args.get("--seed").unwrap_or("0").parse::<i64>().map_err(|_| "--seed: 정수가 필요하다")?;
+        let model = data::model(Path::new(output))?;
+        let cases = crate::golden::write_golden(&model, Path::new(output), golden as usize, seed)?;
+        summary["golden_cases"] = json!(cases);
+        if let (Some(files), Ok(metadata)) = (summary.get_mut("files").and_then(Value::as_object_mut), fs::metadata(Path::new(output).join("golden.json"))) {
+            files.insert("golden.json".into(), json!(metadata.len()));
+        }
+    }
+    writeln!(io.out, "{}", serde_json::to_string_pretty(&summary).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+    Ok(0)
 }
 
 fn collect(args: &Args, io: &mut CliIo<'_>, deps: &Deps) -> Result<i32, String> {
@@ -38,28 +57,16 @@ fn collect(args: &Args, io: &mut CliIo<'_>, deps: &Deps) -> Result<i32, String> 
         .cloned()
         .unwrap_or_else(|| cfg["corpus"]["excluded_prefixes"].as_array().map(|v| v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default());
     let start = Instant::now();
-    let pattern = regex::Regex::new(cfg["corpus"]["label_pattern"].as_str().unwrap_or(corpus::DEFAULT_LABEL_PATTERN)).map_err(|e| e.to_string())?;
-    let prefixes: Vec<&str> = prefixes.iter().map(String::as_str).collect();
-    let mut docs = Vec::new();
-    let mut skipped = 0;
-    let mut counts = serde_json::Map::new();
-    let opts = corpus::ScanOptions { index: args.get("--index").map(str::to_owned), ..Default::default() };
-    corpus::scan_each(deps.transport(args.get("--index"))?.as_ref(), &opts, &mut |hit| {
-        let doc = corpus::document(&hit);
-        if corpus::is_trainable_with(&doc, args.number("--min-chars", 200.0) as usize, &prefixes, &pattern) {
-            let cat = doc["cat"].as_str().unwrap_or("").to_string();
-            let n = counts.get(&cat).and_then(Value::as_u64).unwrap_or(0);
-            counts.insert(cat, json!(n + 1));
-            docs.push(doc);
-        } else {
-            skipped += 1;
-        }
-    })
+    let pattern = cfg["corpus"]["label_pattern"].as_str().unwrap_or(corpus::DEFAULT_LABEL_PATTERN);
+    let stats = corpus::collect_with_pattern(
+        deps.transport(args.get("--index"))?.as_ref(),
+        &path,
+        corpus::CollectOptions { min_chars: args.number("--min-chars", 200.0) as usize, excluded_prefixes: prefixes, index: args.get("--index").map(str::to_owned) },
+        pattern,
+    )
     .map_err(|e| e.to_string())?;
-    corpus::write_jsonl(&docs, &path).map_err(|e| e.to_string())?;
-    let mut cats: Vec<_> = counts.into_iter().collect();
+    let mut cats: Vec<_> = stats["per_category"].as_object().into_iter().flat_map(|map| map.iter().map(|(cat, count)| (cat.clone(), count.clone()))).collect();
     cats.sort_by_key(|(_, n)| std::cmp::Reverse(n.as_u64().unwrap_or(0)));
-    let stats = json!({"kept":docs.len(),"skipped":skipped,"categories":cats.len(),"per_category":cats.into_iter().collect::<serde_json::Map<_,_>>()});
     writeln!(
         io.out,
         "수집 {}건 / 제외 {}건 / 카테고리 {}개  ({:.0}초)",
@@ -70,23 +77,19 @@ fn collect(args: &Args, io: &mut CliIo<'_>, deps: &Deps) -> Result<i32, String> 
     )
     .map_err(|e| e.to_string())?;
     if args.flag("--with-publisher") {
-        let mut docs = corpus::read_jsonl(&path).map_err(|e| e.to_string())?;
         let cache = path.with_file_name(format!("{}.publisher.json", path.file_name().unwrap().to_string_lossy()));
         let root = args.path("--library-root", cfg["corpus"]["library_root"].as_str().unwrap_or("/mnt/data/text"));
-        let stats = corpus::attach_publishers(&mut docs, &cache, &root, args.number("--publisher-workers", 2.0) as usize);
-        corpus::write_jsonl(&docs, &path).map_err(|e| e.to_string())?;
+        let stats = corpus::attach_publishers_jsonl(&path, &cache, &root, args.number("--publisher-workers", 2.0) as usize).map_err(|error| error.to_string())?;
         writeln!(io.out, "publisher: 새로 읽음 {}건, 값이 있는 문서 {}건", stats["read"], stats["with_publisher"]).map_err(|e| e.to_string())?;
     }
     writeln!(io.out, "\n  상위 10개 카테고리").map_err(|e| e.to_string())?;
-    if let Some(cats) = stats["per_category"].as_object() {
-        for (cat, n) in cats.iter().take(10) {
+    for (cat, n) in cats.iter().take(10) {
+        writeln!(io.out, "  {n:>8}  {cat}").map_err(|e| e.to_string())?;
+    }
+    if cats.len() > 10 {
+        writeln!(io.out, "  ... 하위 10개").map_err(|e| e.to_string())?;
+        for (cat, n) in cats.iter().skip(cats.len() - 10) {
             writeln!(io.out, "  {n:>8}  {cat}").map_err(|e| e.to_string())?;
-        }
-        if cats.len() > 10 {
-            writeln!(io.out, "  ... 하위 10개").map_err(|e| e.to_string())?;
-            for (cat, n) in cats.iter().skip(cats.len() - 10) {
-                writeln!(io.out, "  {n:>8}  {cat}").map_err(|e| e.to_string())?;
-            }
         }
     }
     writeln!(io.out, "\n저장: {}", path.display()).map_err(|e| e.to_string())?;
@@ -129,21 +132,29 @@ fn info(args: &Args, io: &mut CliIo<'_>) -> Result<i32, String> {
 fn evaluate(args: &Args, io: &mut CliIo<'_>) -> Result<i32, String> {
     let path = args.model();
     let mut model = data::model(&path)?;
-    let docs = data::corpus(&args.path("--corpus", "tmp/classifier/corpus.jsonl"))?;
-    let hold = data::holdout(&docs, &model, &path, io.err)?;
+    let corpus_path = args.path("--corpus", "tmp/classifier/corpus.jsonl");
+    let mut docs = data::indexed_corpus(&corpus_path)?;
+    let indices = data::indexed_holdout_indices(
+        &docs,
+        &data::holdout_manifest_path(&path),
+        model.config["corpus"]["min_per_category"].as_u64().unwrap_or(30) as usize,
+        model.config["holdout"].as_f64().unwrap_or(0.2),
+        model.config["seed"].as_u64().unwrap_or(42),
+        io.err,
+    )?;
+    log::info!("평가 corpus index 준비 완료: {}건 {}", docs.len(), training::rss_note());
     if args.command.as_deref() == Some("evaluate") {
-        let report = training::evaluate(&model, &hold, Some(&config::series_to_parent()));
+        let (report, _) = training::evaluate_indexed(&model, &mut docs, &indices, Some(&config::series_to_parent())).map_err(|error| error.to_string())?;
         writeln!(io.out, "{}", training::format_report(&report)).map_err(|e| e.to_string())?;
         return Ok(0);
     }
-    let preds = model.predict_top_k(&hold, Some(0.0), 1);
-    let correct: Vec<bool> = preds.iter().zip(&hold).map(|(p, d)| config::resolve_parent(p.category.as_deref()) == config::resolve_parent(d["cat"].as_str())).collect();
-    let confidences: Vec<f64> = preds.iter().map(|p| p.confidence).collect();
-    writeln!(io.out, "홀드아웃 {}건으로 눈금을 잰다", data::count(hold.len())).map_err(|e| e.to_string())?;
-    let Some(cal) = calibration::fit_expected_accuracy(&confidences, &correct).map_err(|e| e.to_string())? else {
+    let (_, calibration) = training::evaluate_indexed(&model, &mut docs, &indices, Some(&config::series_to_parent())).map_err(|error| error.to_string())?;
+    writeln!(io.out, "홀드아웃 {}건으로 눈금을 잰다", data::count(indices.len())).map_err(|e| e.to_string())?;
+    if calibration.is_null() {
         writeln!(io.out, "표본이 모자라 눈금을 만들지 못했다").map_err(|e| e.to_string())?;
         return Ok(1);
-    };
+    }
+    let cal = calibration;
     writeln!(io.out, "  계단 {}칸, 표본 {}건\n  확신도   예상 정답률", cal["x"].as_array().unwrap().len(), cal["n"]).map_err(|e| e.to_string())?;
     for point in [0.02, 0.04, 0.056, 0.076, 0.10, 0.13] {
         writeln!(io.out, "  {point:>6.3}   {:.3}", calibration::expected_accuracy(Some(&cal), Some(point)).unwrap_or(0.0)).map_err(|e| e.to_string())?;
@@ -297,5 +308,6 @@ fn reclassify(args: &Args, io: &mut CliIo<'_>, root: &Path, clf: &BookCategoryCl
     if !apply {
         writeln!(io.out, "\n실제로 옮기려면 --apply 를 붙일 것.").map_err(|e| e.to_string())?;
     }
-    Ok(if failed > 0 { 1 } else { 0 })
+    // Python reports each failed move but keeps the command's success exit code.
+    Ok(0)
 }

@@ -189,9 +189,11 @@ pub struct ConnectOptions {
     /// 초 단위 요청 제한 시간.
     pub request_timeout: f64,
     pub retry_on_timeout: bool,
-    /// https일 때만 `Some(false)`다(자체서명 인증서). http면 `None`이다.
+    /// HTTPS 서버 인증서 검증 여부. Rust transport는 검증을 끄지 않는다.
     pub verify_certs: Option<bool>,
     pub ssl_show_warn: Option<bool>,
+    /// ECK 같은 사설 CA 인증서 PEM 경로.
+    pub ca_cert_path: Option<PathBuf>,
     /// 사용할 색인 이름. Python은 `ESManager.index_name`으로 따로 들고 있었다.
     pub index: String,
 }
@@ -207,7 +209,14 @@ pub struct RealEsConnector;
 impl EsConnector for RealEsConnector {
     fn connect(&self, options: &ConnectOptions) -> Arc<dyn EsTransport> {
         let host = options.hosts.first().map(String::as_str).unwrap_or("");
-        Arc::new(HttpTransport::new(host, &options.basic_auth.0, &options.basic_auth.1, &options.index, Duration::from_secs_f64(options.request_timeout.max(0.001))))
+        Arc::new(HttpTransport::new_with_ca(
+            host,
+            &options.basic_auth.0,
+            &options.basic_auth.1,
+            &options.index,
+            Duration::from_secs_f64(options.request_timeout.max(0.001)),
+            options.ca_cert_path.as_deref(),
+        ))
     }
 }
 
@@ -532,14 +541,15 @@ impl ESManager {
         let url = get("TM_ES_URL");
         let https = url.to_lowercase().starts_with("https");
         let index = if index_name.is_empty() { get("TM_ES_BOOK_INDEX") } else { index_name.to_string() };
-        // ECK 자체서명 인증서: https면 인증서 검증을 생략한다고 알린다.
+        // HTTPS는 검증을 유지한다. 사설 CA가 있으면 전송기에 전달한다.
         let options = ConnectOptions {
             hosts: vec![url],
             basic_auth: (get("TM_ES_USER"), get("TM_ES_PASSWORD")),
             request_timeout: 10.0,
             retry_on_timeout: true,
-            verify_certs: https.then_some(false),
-            ssl_show_warn: https.then_some(false),
+            verify_certs: https.then_some(true),
+            ssl_show_warn: None,
+            ca_cert_path: env("TM_ES_CA_CERT").map(PathBuf::from),
             index,
         };
         let es = connector.connect(&options);
@@ -1182,16 +1192,10 @@ impl ESManager {
         }
     }
 
-    /// 문서 하나의 `_source`. 없으면 `{}`다. ES 오류는 로그만 남기고 `{}`로 돌려준다(Python은 예외를 던진다).
-    pub fn search_by_id(&self, doc_id: i64) -> Value {
+    /// 문서 하나의 `_source`. 없으면 `{}`를 반환하고, 그 밖의 ES 오류는 전달한다.
+    pub fn search_by_id(&self, doc_id: i64) -> Result<Value, EsError> {
         log::debug!("search_by_id(doc_id={doc_id})");
-        match self.get_source(&doc_id.to_string()) {
-            Ok(source) => source.unwrap_or_else(|| json!({})),
-            Err(e) => {
-                log::error!("search_by_id({doc_id}) error: {e}");
-                json!({})
-            }
-        }
+        self.get_source(&doc_id.to_string()).map(|source| source.unwrap_or_else(|| json!({})))
     }
 
     pub fn search_and_aggregate_by_category(&self) -> Result<Value, EsError> {
@@ -1784,7 +1788,10 @@ impl EsManagerApi for ESManager {
     fn aggregate_cover_categories(&self) -> Result<HashMap<String, (usize, f64, f64)>, EsError> {
         // 시각이 없는 카테고리는 ES 정렬값과 같은 `i64::MIN`으로 채운다(가장 뒤).
         let missing = i64::MIN as f64;
-        Ok(ESManager::aggregate_cover_categories(self).into_iter().map(|(category, (count, updated, created))| (category, (count.max(0) as usize, updated.unwrap_or(missing), created.unwrap_or(missing)))).collect())
+        Ok(ESManager::aggregate_cover_categories(self)
+            .into_iter()
+            .map(|(category, (count, updated, created))| (category, (count.max(0) as usize, updated.unwrap_or(missing), created.unwrap_or(missing))))
+            .collect())
     }
 
     fn search_cover_files_paged(&self, categories: &[String], size: i64, search_after: Option<(i64, i64, String)>, exclude: &[String]) -> Result<CoverFileHits, EsError> {

@@ -56,10 +56,8 @@ pub fn _load_from_db_with(get_all_mappings: &dyn Fn(&str) -> Value) -> Value {
 /// DB 에서 키워드 맵을 읽는다. 연결이나 질의가 실패하면 오류 문자열이다.
 pub fn _load_from_db() -> Result<Value, String> {
     let mapping = crate::category_mapping::CategoryMapping::new().map_err(|e| e.to_string())?;
-    Ok(_load_from_db_with(&|content_type| {
-        let all = mapping.get_all_mappings(content_type);
-        Value::Object(all.into_iter().map(|(k, v)| (k, Value::Array(v.into_iter().map(Value::String).collect()))).collect())
-    }))
+    let all = mapping.get_all_mappings("book").map_err(|e| e.to_string())?;
+    Ok(_load_from_db_with(&|_| Value::Object(all.iter().map(|(k, v)| (k.clone(), Value::Array(v.iter().cloned().map(Value::String).collect()))).collect())))
 }
 
 /// DB 키워드 맵. 5분간 캐시한다. DB 를 못 읽으면 빈 맵을 준다(하드코딩 규칙으로 넘어간다).

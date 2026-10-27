@@ -75,6 +75,18 @@ describe("measureCurrentImage", () => {
     expect(measureCurrentImage(renditionOf([view()]), null, "s1")).toBeNull();
     expect(measureCurrentImage({ manager: { views: {} } }, container, "s1")).toBeNull();
   });
+
+  it("querySelectorAll 과 images 속성이 모두 없으면 빈 이미지 목록을 쓴다", () => {
+    const viewWithoutImageApi = {
+      section: { idref: "s1" },
+      contents: { document: { body: { textContent: "" } } },
+    };
+    expect(measureCurrentImage(renditionOf([viewWithoutImageApi]), container, "s1")).toMatchObject({
+      count: 0,
+      imageOnly: false,
+      images: [],
+    });
+  });
 });
 
 describe("measureCurrentImage: <svg><image>", () => {

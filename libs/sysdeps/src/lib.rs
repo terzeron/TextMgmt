@@ -78,6 +78,9 @@ pub trait FsOps: Send + Sync {
     fn remove_file(&self, _p: &Path) -> io::Result<()> {
         Err(unimplemented_io("remove_file"))
     }
+    fn remove_dir(&self, _p: &Path) -> io::Result<()> {
+        Err(unimplemented_io("remove_dir"))
+    }
     fn remove_dir_all(&self, _p: &Path) -> io::Result<()> {
         Err(unimplemented_io("remove_dir_all"))
     }
@@ -131,6 +134,10 @@ impl FsOps for RealFs {
 
     fn remove_file(&self, p: &Path) -> io::Result<()> {
         fs::remove_file(p)
+    }
+
+    fn remove_dir(&self, p: &Path) -> io::Result<()> {
+        fs::remove_dir(p)
     }
 
     fn remove_dir_all(&self, p: &Path) -> io::Result<()> {
@@ -231,13 +238,13 @@ fn drain<R: Read + Send + 'static>(mut r: R) -> thread::JoinHandle<Vec<u8>> {
 impl CommandRunner for SystemRunner {
     fn run(&self, argv: &[String], timeout: Option<Duration>) -> Result<CommandOutput, CommandError> {
         let (program, args) = argv.split_first().ok_or_else(|| CommandError::Failed("빈 argv".into()))?;
-        let mut child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| {
-            if e.kind() == io::ErrorKind::NotFound {
-                CommandError::NotFound
-            } else {
-                CommandError::Failed(e.to_string())
-            }
-        })?;
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| if e.kind() == io::ErrorKind::NotFound { CommandError::NotFound } else { CommandError::Failed(e.to_string()) })?;
         // 파이프가 가득 차서 자식이 멈추지 않게 별도 스레드에서 비운다.
         let out = drain(child.stdout.take().expect("stdout 파이프"));
         let err = drain(child.stderr.take().expect("stderr 파이프"));
@@ -401,6 +408,24 @@ impl fmt::Debug for HttpResponse {
     }
 }
 
+/// Per-request network timeouts. `read` bounds response-header and per-read body inactivity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HttpTimeout {
+    pub connect: Duration,
+    pub read: Duration,
+}
+
+impl HttpTimeout {
+    pub const fn from_secs(connect: u64, read: u64) -> Self {
+        Self { connect: Duration::from_secs(connect), read: Duration::from_secs(read) }
+    }
+}
+
 pub trait HttpSession: Send + Sync {
     fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError>;
+
+    /// Request with explicit timeouts. Implementors may keep the existing `get` behavior.
+    fn get_with_timeout(&self, url: &str, params: &[(String, String)], _timeout: HttpTimeout) -> Result<HttpResponse, HttpError> {
+        self.get(url, params)
+    }
 }

@@ -52,7 +52,7 @@ impl std::error::Error for StatError {}
 
 #[derive(Default)]
 struct Inner {
-    values: HashMap<&'static str, f64>,
+    values: HashMap<String, f64>,
     stage_count: BTreeMap<String, u64>,
     stage_total_time: BTreeMap<String, f64>,
     stage_outcome_count: BTreeMap<(String, String), u64>,
@@ -93,20 +93,27 @@ impl Stat {
     }
 
     pub fn add(&self, name: &str, value: f64) -> Result<(), StatError> {
-        let key = field(name)?;
-        *self.lock().values.entry(key).or_insert(0.0) += value;
+        let mut inner = self.lock();
+        if let Ok(key) = field(name) {
+            *inner.values.entry(key.to_owned()).or_insert(0.0) += value;
+            return Ok(());
+        }
+        let Some(current) = inner.values.get_mut(name) else { return Err(StatError::UnknownField(name.to_owned())) };
+        *current += value;
         Ok(())
     }
 
     pub fn set_value(&self, name: &str, value: f64) -> Result<(), StatError> {
-        let key = field(name)?;
-        self.lock().values.insert(key, value);
+        self.lock().values.insert(name.to_owned(), value);
         Ok(())
     }
 
     pub fn get(&self, name: &str) -> Result<f64, StatError> {
-        let key = field(name)?;
-        Ok(self.lock().values.get(key).copied().unwrap_or(0.0))
+        let inner = self.lock();
+        if let Ok(key) = field(name) {
+            return Ok(inner.values.get(key).copied().unwrap_or(0.0));
+        }
+        inner.values.get(name).copied().ok_or_else(|| StatError::UnknownField(name.to_owned()))
     }
 
     pub fn record_pdf_stage(&self, stage: &str, elapsed: f64, outcome: &str) {
@@ -114,6 +121,18 @@ impl Stat {
         *g.stage_count.entry(stage.to_owned()).or_insert(0) += 1;
         *g.stage_total_time.entry(stage.to_owned()).or_insert(0.0) += elapsed;
         *g.stage_outcome_count.entry((stage.to_owned(), outcome.to_owned())).or_insert(0) += 1;
+    }
+
+    pub fn pdf_stage_count(&self, stage: &str) -> u64 {
+        self.lock().stage_count.get(stage).copied().unwrap_or(0)
+    }
+
+    pub fn pdf_stage_total_time(&self, stage: &str) -> f64 {
+        self.lock().stage_total_time.get(stage).copied().unwrap_or(0.0)
+    }
+
+    pub fn pdf_stage_outcome_count(&self, stage: &str, outcome: &str) -> u64 {
+        self.lock().stage_outcome_count.get(&(stage.to_owned(), outcome.to_owned())).copied().unwrap_or(0)
     }
 
     /// 요약을 쓴다. 형식은 Python `print()`와 같다: 건수는 7자리 0 채움, 평균 시간은 소수 4자리.

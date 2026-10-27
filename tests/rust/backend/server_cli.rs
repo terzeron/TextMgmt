@@ -6,7 +6,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 fn command() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_backend"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_backend"));
+    command.env("TM_FRONTEND_URL", "http://localhost:3000");
+    command
 }
 
 #[test]

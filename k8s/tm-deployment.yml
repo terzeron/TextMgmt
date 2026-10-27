@@ -6,6 +6,7 @@ metadata:
   namespace: textmanager
 spec:
   replicas: 2
+  revisionHistoryLimit: 2
   selector:
     matchLabels:
       app: tm-backend-app
@@ -77,16 +78,18 @@ spec:
               value: "8020"
             - name: TM_ES_URL
               value: https://elasticsearch-es-http:9200
+            - name: TM_ES_CA_CERT
+              value: /etc/tm-es/ca.crt
             - name: TM_ES_USER
               valueFrom: { secretKeyRef: { name: tm-es-cred, key: username } }
             - name: TM_ES_PASSWORD
               valueFrom: { secretKeyRef: { name: tm-es-cred, key: password } }
             - name: TM_ES_BOOK_INDEX
               value: book
-            # books-pv 가 호스트의 /mnt/data/text 를 /books 로 마운트한다.
-            # 학습 머신이 쓴 모델을 pod 가 그대로 읽는다. 이미지를 다시 굽지 않는다.
-            - name: TM_CLASSIFIER_MODEL
-              value: /books/.classifier/model.joblib
+            # joblib 원본을 Rust export 디렉터리로 변환해 books-pv에 둔다.
+            # model.joblib은 학습 기준 파일이며 Rust runtime은 이 디렉터리를 읽는다.
+            - name: TM_CLASSIFIER_MODEL_DIR
+              value: /books/.classifier/rust-export
             - name: TM_ES_COMICS_INDEX
               value: comics
             - name: TM_BACKFILL_CREATED_TIME_ON_STARTUP
@@ -153,6 +156,9 @@ spec:
             - name: comics-pvc
               mountPath: /comics
               mountPropagation: HostToContainer
+            - name: elasticsearch-ca
+              mountPath: /etc/tm-es
+              readOnly: true
             - name: tmp
               mountPath: /tmp
       volumes:
@@ -162,6 +168,9 @@ spec:
         - name: comics-pvc
           persistentVolumeClaim:
             claimName: comics-pvc
+        - name: elasticsearch-ca
+          configMap:
+            name: elasticsearch-es-ca
         - name: tmp
           emptyDir: {}
 
@@ -173,6 +182,7 @@ metadata:
   namespace: textmanager
 spec:
   replicas: 2
+  revisionHistoryLimit: 2
   selector:
     matchLabels:
       app: tm-frontend-app

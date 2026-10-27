@@ -6,8 +6,8 @@
 //! - Yes24·알라딘·교보문고의 URL 조립과 HTML 파싱은 `libs/bookstore` crate(`bookstore_lib`)를 재사용한다.
 //! - 리디북스·네이버쇼핑·네이버시리즈·문피아는 `scraper`로 새로 포팅했다.
 //! - 조아라·웹툰 5종은 JSON API를 직접 부른다. HTML 훅은 쓰지 않는다.
-//! - HTTP는 `sysdeps::HttpSession`, 파일 쓰기는 `sysdeps::FsOps`로 주입한다. 실제 HTTP 구현은 아직 없어서
-//!   기본 세션([`UnavailableSession`])은 연결 실패를 돌려주는 자리표시자다. `with_session`으로 갈아 끼운다.
+//! - HTTP는 `sysdeps::HttpSession`, 파일 쓰기는 `sysdeps::FsOps`로 주입한다. 기본 HTTP는 `ureq`를 쓰며
+//!   테스트는 `with_session`으로 대역을 주입한다.
 //! - 조아라 API 키는 소스에 두지 않는다. 환경 변수 `TM_JOARA_API_KEY`에서 읽고, 없으면 빈 문자열이다.
 //!   로그와 오류 문장에는 키 값을 남기지 않는다.
 //!
@@ -23,7 +23,9 @@ use std::fmt::Write as _;
 use std::hash::{BuildHasher, Hasher};
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock};
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -31,7 +33,7 @@ use bookstore_lib::{BookInfo, Store};
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
 use serde_json::{Value, json};
-use sysdeps::{FsOps, HttpError, HttpResponse, HttpSession, RealFs};
+use sysdeps::{FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout, RealFs};
 
 /// `(title, author, category, detail_url, search_url, isbn)`
 pub type SearchRow = (String, String, String, String, String, String);
@@ -117,10 +119,7 @@ fn find_by_class_prefix<'a>(doc: &'a Html, tag: &'static Selector, prefix: &str)
 fn title_string(doc: &Html) -> Option<String> {
     let title = doc.select(sel!("title")).next()?;
     let mut children = title.children();
-    let (only, none) = (children.next()?, children.next());
-    if none.is_some() {
-        return None;
-    }
+    let only = children.next()?;
     only.value().as_text().map(|t| t.to_string()).filter(|t| !t.is_empty())
 }
 
@@ -293,13 +292,125 @@ fn random_hex32() -> String {
 // 기본 세션, soup 대역 trait
 // ---------------------------------------------------------------------------
 
-/// 실제 HTTP 구현이 `sysdeps`에 생기기 전까지 쓰는 자리표시자. 모든 요청이 연결 실패다.
-/// 서비스에서는 `with_session`으로 실제 세션을 넣는다.
+/// HTTP를 사용할 수 없는 테스트 경로에서 쓴다.
 pub struct UnavailableSession;
 
 impl HttpSession for UnavailableSession {
     fn get(&self, _url: &str, _params: &[(String, String)]) -> Result<HttpResponse, HttpError> {
         Err(HttpError::Connection("기본 HTTP 세션이 아직 없다. with_session으로 세션을 주입해야 한다".to_owned()))
+    }
+}
+
+/// `ureq` 기반 동기 HTTP GET 세션. 응답 상태와 본문을 보존해 서점별 오류 규칙에 맡긴다.
+pub struct UreqHttpSession {
+    config: ureq::config::Config,
+    agents: Mutex<Vec<ureq::Agent>>,
+    headers: Vec<(String, String)>,
+}
+
+impl UreqHttpSession {
+    pub fn new() -> Self {
+        Self::with_redirect_limit(10)
+    }
+
+    fn with_redirect_limit(max_redirects: u32) -> Self {
+        let config = ureq::Agent::config_builder().max_redirects(max_redirects).http_status_as_error(false).build();
+        Self {
+            agents: Mutex::new(vec![ureq::Agent::new_with_config(config.clone())]),
+            config,
+            headers: vec![("User-Agent".to_string(), "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/142.0.0.0 Safari/537.36".to_string())],
+        }
+    }
+
+    pub fn for_store(store: &str) -> Self {
+        // cover_sources는 각 redirect target을 검사하므로 ureq의 자동 follow를 막는다.
+        let mut session = Self::with_redirect_limit(0);
+        if store == "ridi" {
+            session.headers.extend([
+                ("Referer".to_string(), "https://ridibooks.com/".to_string()),
+                ("Accept".to_string(), "application/json,text/html".to_string()),
+                ("Accept-Language".to_string(), "ko-KR,ko;q=0.9".to_string()),
+            ]);
+        }
+        session
+    }
+}
+
+impl Default for UreqHttpSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn map_ureq_error(error: ureq::Error) -> HttpError {
+    match &error {
+        ureq::Error::Timeout(_) => HttpError::Timeout,
+        ureq::Error::Io(io) if io.kind() == std::io::ErrorKind::TimedOut => HttpError::Timeout,
+        _ => HttpError::Connection(error.to_string()),
+    }
+}
+
+fn read_body_chunks(mut body: ureq::BodyReader<'static>, sender: SyncSender<std::io::Result<Vec<u8>>>) {
+    loop {
+        let mut chunk = vec![0; 8192];
+        match body.read(&mut chunk) {
+            Ok(0) => return,
+            Ok(size) => {
+                chunk.truncate(size);
+                if sender.send(Ok(chunk)).is_err() {
+                    return;
+                }
+            }
+            Err(error) => {
+                let _ = sender.send(Err(error));
+                return;
+            }
+        }
+    }
+}
+
+fn read_body_with_idle_timeout(body: ureq::BodyReader<'static>, agent: ureq::Agent, timeout: std::time::Duration) -> Result<(Vec<u8>, ureq::Agent), HttpError> {
+    let (sender, receiver) = sync_channel(1);
+    std::thread::spawn(move || read_body_chunks(body, sender));
+    let mut output = Vec::new();
+    loop {
+        match receiver.recv_timeout(timeout) {
+            Ok(Ok(chunk)) => output.extend(chunk),
+            Ok(Err(error)) => {
+                return if error.kind() == std::io::ErrorKind::TimedOut { Err(HttpError::Timeout) } else { Err(HttpError::Connection(error.to_string())) };
+            }
+            Err(RecvTimeoutError::Disconnected) => return Ok((output, agent)),
+            Err(RecvTimeoutError::Timeout) => {
+                agent.shutdown();
+                return Err(HttpError::Timeout);
+            }
+        }
+    }
+}
+
+impl HttpSession for UreqHttpSession {
+    fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError> {
+        self.get_with_timeout(url, params, HttpTimeout::from_secs(10, 10))
+    }
+
+    fn get_with_timeout(&self, url: &str, params: &[(String, String)], timeout: HttpTimeout) -> Result<HttpResponse, HttpError> {
+        // Lease a separate pool so an idle-body timeout can cancel its reader without closing concurrent requests.
+        let agent = self.agents.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop().unwrap_or_else(|| ureq::Agent::new_with_config(self.config.clone()));
+        let mut request = agent.get(url);
+        for (name, value) in &self.headers {
+            request = request.header(name, value);
+        }
+        for (key, value) in params {
+            request = request.query(key, value);
+        }
+        let request = request.config().timeout_connect(Some(timeout.connect)).timeout_recv_response(Some(timeout.read)).timeout_recv_body(None).build();
+        let response = request.call().map_err(map_ureq_error)?;
+        let status = response.status().as_u16();
+        let headers = response.headers().iter().map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string())).collect();
+        let (_, body) = response.into_parts();
+        let (body, agent) = read_body_with_idle_timeout(body.into_reader(), agent, timeout.read)?;
+        self.agents.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(agent);
+        Ok(HttpResponse::from_chunks(status, headers, vec![body], Arc::new(AtomicBool::new(false))))
     }
 }
 
@@ -462,7 +573,7 @@ pub fn default_search<S: AbstractBookstore + ?Sized>(store: &S, isbn: &str, titl
 
 /// `AbstractBookstore._fetch_search_results`의 본문.
 pub fn default_fetch_search_results<S: AbstractBookstore + ?Sized>(store: &S, url: &str) -> Vec<SearchRow> {
-    let html = match store.session().get(url, &[]) {
+    let html = match store.session().get_with_timeout(url, &[], HttpTimeout::from_secs(10, 10)) {
         Ok(resp) => resp.text(),
         Err(e) => {
             log::error!("검색 페이지 요청 실패: {e}");
@@ -500,7 +611,7 @@ fn fetch_detail<S: AbstractBookstore + ?Sized>(store: &S, detail_url: &str) -> O
     if let Some(html) = store._load_html_from_tmp(detail_url) {
         return Some(html);
     }
-    match store.session().get(detail_url, &[]) {
+    match store.session().get_with_timeout(detail_url, &[], HttpTimeout::from_secs(10, 10)) {
         Ok(resp) => {
             let html = resp.text();
             store._save_html_to_tmp(&html, detail_url);
@@ -533,12 +644,41 @@ pub fn abstract_extract_book_info(_store: &dyn AbstractBookstore, _soup: &str) -
 pub trait BookstoreSearch: Send + Sync {
     /// `(결과, 실제 검색어, 방식)`. 결과는 `(제목, 저자, 카테고리, 상세 URL, 검색 URL, ISBN)`이다.
     fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String);
+
+    fn api_search_url(&self, _keyword: &str) -> String {
+        String::new()
+    }
 }
 
 impl<T: AbstractBookstore + Send> BookstoreSearch for T {
     fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String) {
         AbstractBookstore::search(self, isbn, title, author)
     }
+
+    fn api_search_url(&self, keyword: &str) -> String {
+        AbstractBookstore::build_search_url(self, keyword)
+    }
+}
+
+/// API가 요청한 이름에 맞는 서점 구현을 만든다.
+pub fn create_bookstore_search(name: &str) -> Option<Box<dyn BookstoreSearch>> {
+    let store: Box<dyn BookstoreSearch> = match name.to_ascii_lowercase().as_str() {
+        "yes24" => Box::new(Yes24Bookstore::new(false)),
+        "aladin" => Box::new(AladinBookstore::new(false)),
+        "kyobo" => Box::new(KyoboBookstore::new(false)),
+        "ridi" => Box::new(RidibooksBookstore::new(false)),
+        "naver" => Box::new(NaverShoppingBookstore::new(false)),
+        "naverseries" => Box::new(NaverSeriesBookstore::new(false)),
+        "munpia" => Box::new(MunpiaBookstore::new(false)),
+        "joara" => Box::new(JoaraBookstore::new(false)),
+        "naverwebtoon" => Box::new(NaverWebtoonBookstore::new(false)),
+        "kakaowebtoon" => Box::new(KakaoWebtoonBookstore::new(false)),
+        "bomtoon" => Box::new(BomtoonBookstore::new(false)),
+        "lezhin" => Box::new(LezhinBookstore::new(false)),
+        "toptoon" => Box::new(ToptoonBookstore::new(false)),
+        _ => return None,
+    };
+    Some(store)
 }
 
 // ---------------------------------------------------------------------------
@@ -567,7 +707,7 @@ macro_rules! bookstore_struct {
                     verbose,
                     max_results: MAX_RESULTS,
                     supports_isbn_search: $isbn,
-                    session: Arc::new(UnavailableSession),
+                    session: Arc::new(UreqHttpSession::new()),
                     fs: Arc::new(RealFs),
                     tmp_dir: None,
                     fetch_hook: None,
@@ -959,7 +1099,7 @@ impl RidibooksBookstore {
 
     fn search_api(&self, keyword: &str) -> Vec<SearchRow> {
         let search_url = self.build_search_url(keyword);
-        let resp = match self.session.get(RIDI_API_URL, &params(&[("keyword", keyword)])) {
+        let resp = match self.session.get_with_timeout(RIDI_API_URL, &params(&[("keyword", keyword)]), HttpTimeout::from_secs(10, 10)) {
             Ok(r) => r,
             Err(e) => {
                 if self.verbose {
@@ -1382,7 +1522,7 @@ impl JoaraBookstore {
             ("orderby", "score"),
         ]);
 
-        let resp = match self.session.get(JOARA_API_URL, &query) {
+        let resp = match self.session.get_with_timeout(JOARA_API_URL, &query, HttpTimeout::from_secs(10, 10)) {
             Ok(r) => r,
             Err(e) => {
                 if self.verbose {
@@ -1458,7 +1598,7 @@ const NAVER_WEBTOON_API_URL: &str = "https://comic.naver.com/api/search/webtoon"
 impl NaverWebtoonBookstore {
     fn search_api(&self, keyword: &str) -> Vec<SearchRow> {
         let search_url = self.build_search_url(keyword);
-        let resp = match self.session.get(NAVER_WEBTOON_API_URL, &params(&[("keyword", keyword), ("page", "1")])) {
+        let resp = match self.session.get_with_timeout(NAVER_WEBTOON_API_URL, &params(&[("keyword", keyword), ("page", "1")]), HttpTimeout::from_secs(10, 10)) {
             Ok(r) => r,
             Err(e) => {
                 if self.verbose {
@@ -1531,7 +1671,7 @@ impl KakaoWebtoonBookstore {
     fn search_api(&self, keyword: &str) -> Vec<SearchRow> {
         let search_url = self.build_search_url(keyword);
         let limit = self.max_results.to_string();
-        let resp = match self.session.get(KAKAO_WEBTOON_API_URL, &params(&[("word", keyword), ("offset", "0"), ("limit", &limit)])) {
+        let resp = match self.session.get_with_timeout(KAKAO_WEBTOON_API_URL, &params(&[("word", keyword), ("offset", "0"), ("limit", &limit)]), HttpTimeout::from_secs(10, 10)) {
             Ok(r) => r,
             Err(e) => {
                 if self.verbose {
@@ -1559,11 +1699,7 @@ impl KakaoWebtoonBookstore {
         for content in contents.iter().take(self.max_results) {
             let content_id = content.get("id");
             let title = str_field(content, "title");
-            let names = array_field(content, "authors")
-                .iter()
-                .filter(|a| KAKAO_AUTHOR_TYPES.contains(&str_field(a, "type").as_str()))
-                .map(|a| str_field(a, "name"))
-                .filter(|n| !n.is_empty());
+            let names = array_field(content, "authors").iter().filter(|a| KAKAO_AUTHOR_TYPES.contains(&str_field(a, "type").as_str())).map(|a| str_field(a, "name")).filter(|n| !n.is_empty());
             // 글·그림이 같은 사람이면 한 번만 쓴다
             let author = join_unique(names, ", ");
             let seo_id = str_field(content, "seoId");
@@ -1622,7 +1758,7 @@ impl BomtoonBookstore {
             ("isSearchTool", "true"),
             ("sortType", "ACCURACY"),
         ]);
-        let resp = match self.session.get(BOMTOON_API_URL, &query) {
+        let resp = match self.session.get_with_timeout(BOMTOON_API_URL, &query, HttpTimeout::from_secs(10, 10)) {
             Ok(r) => r,
             Err(e) => {
                 if self.verbose {
@@ -1696,7 +1832,7 @@ impl LezhinBookstore {
         let search_url = self.build_search_url(keyword);
         let limit = self.max_results.to_string();
         let query = params(&[("q", keyword), ("t", "all"), ("order", "popular"), ("offset", "0"), ("limit", &limit)]);
-        let resp = match self.session.get(LEZHIN_API_URL, &query) {
+        let resp = match self.session.get_with_timeout(LEZHIN_API_URL, &query, HttpTimeout::from_secs(10, 10)) {
             Ok(r) => r,
             Err(e) => {
                 if self.verbose {
@@ -1761,7 +1897,7 @@ const TOPTOON_BASE_URL: &str = "https://toptoon.com";
 impl ToptoonBookstore {
     /// 공백을 없애고 소문자로 바꿔 제목 포함 여부를 비교한다.
     fn normalize(text: &str) -> String {
-        text.split_whitespace().collect::<String>().to_lowercase()
+        pyfmt::py_lowercase(&text.split_whitespace().collect::<String>())
     }
 
     fn search_api(&self, keyword: &str) -> Vec<SearchRow> {
@@ -1777,7 +1913,7 @@ impl ToptoonBookstore {
             Vec::new()
         };
 
-        let page = match self.session.get(&search_url, &[]) {
+        let page = match self.session.get_with_timeout(&search_url, &[], HttpTimeout::from_secs(10, 10)) {
             Ok(r) => r,
             Err(e) => return fail(e),
         };
@@ -1795,7 +1931,7 @@ impl ToptoonBookstore {
             return Vec::new();
         };
 
-        let catalog_resp = match self.session.get(found.as_str(), &[]) {
+        let catalog_resp = match self.session.get_with_timeout(found.as_str(), &[], HttpTimeout::from_secs(20, 20)) {
             Ok(r) => r,
             Err(e) => return fail(e),
         };
@@ -1851,4 +1987,52 @@ impl AbstractBookstore for ToptoonBookstore {
 
     title_only_search!();
     unused_html_hooks!();
+}
+
+#[cfg(test)]
+mod utility_tests {
+    use super::*;
+
+    #[test]
+    fn truthy_matches_python_scalar_and_container_values() {
+        assert!(!truthy(None));
+        assert!(!truthy(Some(&Value::Null)));
+        assert!(!truthy(Some(&json!(false))));
+        assert!(truthy(Some(&json!(true))));
+        assert!(!truthy(Some(&json!(0))));
+        assert!(truthy(Some(&json!(-1))));
+        assert!(!truthy(Some(&json!(""))));
+        assert!(truthy(Some(&json!("x"))));
+        assert!(!truthy(Some(&json!([]))));
+        assert!(truthy(Some(&json!([1]))));
+        assert!(!truthy(Some(&json!({}))));
+        assert!(truthy(Some(&json!({"x": 1}))));
+    }
+
+    #[test]
+    fn default_ureq_session_uses_standard_configuration() {
+        let session = UreqHttpSession::default();
+
+        assert_eq!(session.headers.len(), 1);
+        assert_eq!(session.headers[0].0, "User-Agent");
+    }
+
+    #[test]
+    fn urljoin_handles_absolute_protocol_relative_root_and_relative_paths() {
+        let base = "https://example.com/books/list";
+        assert_eq!(urljoin(base, "https://cdn.example.com/book"), "https://cdn.example.com/book");
+        assert_eq!(urljoin(base, "//cdn.example.com/book"), "https://cdn.example.com/book");
+        assert_eq!(urljoin(base, "/book"), "https://example.com/book");
+        assert_eq!(urljoin(base, "book"), "https://example.com/book");
+        assert_eq!(urljoin("example.com", "/book"), "example.com/book");
+    }
+
+    #[test]
+    fn title_string_returns_raw_text_and_rejects_absent_or_empty_titles() {
+        assert_eq!(title_string(&Html::parse_document("<html></html>")), None);
+        assert_eq!(title_string(&Html::parse_document("<title></title>")), None);
+        assert_eq!(title_string(&Html::parse_document("<title> Book </title>")), Some(" Book ".into()));
+        assert_eq!(title_string(&Html::parse_document("<title><b>Book</b></title>")), Some("<b>Book</b>".into()));
+        assert_eq!(title_string(&Html::parse_document("<title>one<!-- split -->two</title>")), Some("one<!-- split -->two".into()));
+    }
 }

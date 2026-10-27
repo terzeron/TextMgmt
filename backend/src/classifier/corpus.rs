@@ -4,13 +4,15 @@
 //! 신뢰할 수 없는 입력처럼 다룬다: 상대 경로의 `..` 거부, 심볼릭 링크로 라이브러리 밖을 가리키면 건너뜀,
 //! 줄·파일·캐시 크기 상한. 로그에는 제목·저자·본문을 남기지 않는다.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use regex::Regex;
+use fancy_regex::Regex;
 use serde_json::{Map, Value, json};
 
 use super::pyjson;
@@ -70,7 +72,7 @@ pub fn is_trainable(doc: &Value, min_chars: usize, excluded_prefixes: &[&str]) -
 /// `is_trainable` 의 사용자 지정 레이블 패턴 판. 패턴은 문자열 시작에 고정해 검사한다(`re.match`).
 pub fn is_trainable_with(doc: &Value, min_chars: usize, excluded_prefixes: &[&str], label_pattern: &Regex) -> bool {
     let cat = doc.get("cat").and_then(Value::as_str).unwrap_or("");
-    if cat.is_empty() || label_pattern.find(cat).is_none_or(|m| m.start() != 0) || excluded_prefixes.iter().any(|p| cat.starts_with(p)) {
+    if cat.is_empty() || label_pattern.find(cat).ok().flatten().is_none_or(|m| m.start() != 0) || excluded_prefixes.iter().any(|p| cat.starts_with(p)) {
         return false;
     }
     doc.get("text").and_then(Value::as_str).unwrap_or("").chars().count() >= min_chars
@@ -122,6 +124,23 @@ pub fn scan_documents_with(es: &dyn EsTransport, opts: ScanOptions, scan: &dyn F
 
 /// scroll 로 인덱스 전체를 훑으며 히트마다 `each` 를 부른다. 메모리에 다 올리지 않는다. 오류는 호출한 쪽에 돌려준다.
 pub fn scan_each(es: &dyn EsTransport, opts: &ScanOptions, each: &mut dyn FnMut(Value)) -> Result<(), crate::es_manager::EsError> {
+    scan_each_with_page(
+        es,
+        opts,
+        &mut |hit| {
+            each(hit);
+            Ok(())
+        },
+        &mut || Ok(()),
+    )
+}
+
+fn scan_each_with_page(
+    es: &dyn EsTransport,
+    opts: &ScanOptions,
+    each: &mut dyn FnMut(Value) -> Result<(), crate::es_manager::EsError>,
+    after_page: &mut dyn FnMut() -> Result<(), crate::es_manager::EsError>,
+) -> Result<(), crate::es_manager::EsError> {
     let index = opts.index.clone().unwrap_or_else(|| es.index_name().to_string());
     let mut response = es.call("search", &json!({"index": index, "query": {"match_all": {}}, "_source": SOURCE_FIELDS, "size": opts.batch, "scroll": "10m"}))?;
     let mut scroll_id = response["_scroll_id"].as_str().map(str::to_string);
@@ -130,7 +149,10 @@ pub fn scan_each(es: &dyn EsTransport, opts: &ScanOptions, each: &mut dyn FnMut(
         if hits.is_empty() {
             return Ok(());
         }
-        hits.into_iter().for_each(&mut *each);
+        for hit in hits {
+            each(hit)?;
+        }
+        after_page()?;
         let Some(id) = scroll_id.clone() else { return Ok(()) };
         response = es.call("scroll", &json!({"scroll_id": id, "scroll": "10m"}))?;
         if let Some(next) = response["_scroll_id"].as_str() {
@@ -223,64 +245,177 @@ pub fn read_jsonl(path: &Path) -> io::Result<Vec<Value>> {
     }
 }
 
+struct JsonlRecordIndex {
+    offset: u64,
+    length: usize,
+    category: String,
+    document_key: String,
+}
+
+/// JSONL 학습 corpus의 메타데이터와 줄 위치만 보유한다. 본문은 `read_document` 호출 때만 해석한다.
+pub struct IndexedJsonl {
+    reader: BufReader<fs::File>,
+    records: Vec<JsonlRecordIndex>,
+    has_publisher: bool,
+}
+
+impl IndexedJsonl {
+    pub fn open(path: &Path) -> io::Result<Self> {
+        let file = fs::File::open(path)?;
+        let len = file.metadata()?.len();
+        if len > MAX_JSONL_BYTES {
+            return Err(invalid(format!("JSONL 이 너무 크다 ({len}바이트 > {MAX_JSONL_BYTES})")));
+        }
+        let mut reader = BufReader::new(file);
+        let mut records = Vec::new();
+        let mut has_publisher = false;
+        let mut buf = Vec::new();
+        let mut line_number = 0usize;
+        loop {
+            let offset = reader.stream_position()?;
+            buf.clear();
+            let read = (&mut reader).take(MAX_JSONL_LINE_BYTES + 1).read_until(b'\n', &mut buf)?;
+            if read == 0 {
+                break;
+            }
+            line_number += 1;
+            if buf.len() as u64 > MAX_JSONL_LINE_BYTES {
+                return Err(invalid(format!("JSONL {line_number}번째 줄이 너무 길다")));
+            }
+            if buf.iter().all(|byte| byte.is_ascii_whitespace()) {
+                continue;
+            }
+            let doc: Value = serde_json::from_slice(&buf).map_err(|error| invalid(format!("JSONL 해석 실패: {error}")))?;
+            has_publisher |= json_truthy(doc.get("publisher"));
+            let document_key = ["id", "path", "name"].iter().filter_map(|key| doc.get(*key).and_then(Value::as_str)).find(|value| !value.is_empty()).unwrap_or("").to_owned();
+            records.push(JsonlRecordIndex { offset, length: buf.len(), category: doc.get("cat").and_then(Value::as_str).unwrap_or("").to_owned(), document_key });
+        }
+        Ok(Self { reader, records, has_publisher })
+    }
+
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    pub fn category(&self, index: usize) -> Option<&str> {
+        self.records.get(index).map(|record| record.category.as_str())
+    }
+
+    pub fn document_key(&self, index: usize) -> Option<&str> {
+        self.records.get(index).map(|record| record.document_key.as_str())
+    }
+
+    pub fn has_publisher(&self) -> bool {
+        self.has_publisher
+    }
+
+    pub fn read_document(&mut self, index: usize) -> io::Result<Value> {
+        let record = self.records.get(index).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "JSONL 문서 인덱스가 범위를 벗어났다"))?;
+        self.reader.seek(SeekFrom::Start(record.offset))?;
+        let mut bytes = vec![0; record.length];
+        self.reader.read_exact(&mut bytes)?;
+        serde_json::from_slice(&bytes).map_err(|error| invalid(format!("JSONL 해석 실패: {error}")))
+    }
+}
+
+fn json_truthy(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(Value::Number(value)) => value.as_f64().is_some_and(|number| number != 0.0),
+        Some(Value::String(value)) => !value.is_empty(),
+        Some(Value::Array(value)) => !value.is_empty(),
+        Some(Value::Object(value)) => !value.is_empty(),
+    }
+}
+
 /// 수집 옵션. `excluded_prefixes` 로 시작하는 카테고리는 뺀다.
 #[derive(Debug, Clone, Default)]
 pub struct CollectOptions {
     pub min_chars: usize,
     pub excluded_prefixes: Vec<String>,
+    pub index: Option<String>,
 }
 
-fn collect_stats(docs: Vec<Value>, skipped: usize) -> (Vec<Value>, Value) {
-    let mut order: Vec<String> = Vec::new();
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for d in &docs {
-        let cat = d["cat"].as_str().unwrap_or("").to_string();
-        if !counts.contains_key(&cat) {
-            order.push(cat.clone());
+struct CorpusWriter {
+    out: io::BufWriter<fs::File>,
+    kept: usize,
+    skipped: usize,
+    order: Vec<String>,
+    counts: HashMap<String, usize>,
+}
+
+impl CorpusWriter {
+    fn create(path: &Path) -> io::Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
         }
-        *counts.entry(cat).or_insert(0) += 1;
+        Ok(Self { out: io::BufWriter::new(fs::File::create(path)?), kept: 0, skipped: 0, order: Vec::new(), counts: HashMap::new() })
     }
-    // Counter.most_common: 개수 내림차순, 같으면 처음 나온 순서(안정 정렬).
-    order.sort_by_key(|c| std::cmp::Reverse(counts[c]));
-    let per_category: Map<String, Value> = order.iter().map(|c| (c.clone(), json!(counts[c]))).collect();
-    let stats = json!({"kept": docs.len(), "skipped": skipped, "categories": order.len(), "per_category": per_category});
-    (docs, stats)
+
+    fn push(&mut self, doc: Value, min_chars: usize, prefixes: &[&str], label_pattern: &Regex) -> io::Result<()> {
+        if !is_trainable_with(&doc, min_chars, prefixes, label_pattern) {
+            self.skipped += 1;
+            return Ok(());
+        }
+        let cat = doc["cat"].as_str().unwrap_or("").to_string();
+        if !self.counts.contains_key(&cat) {
+            self.order.push(cat.clone());
+        }
+        *self.counts.entry(cat).or_default() += 1;
+        self.out.write_all(pyjson::dumps(&doc, false).as_bytes())?;
+        self.out.write_all(b"\n")?;
+        self.kept += 1;
+        Ok(())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.out.flush()
+    }
+
+    fn finish(mut self) -> io::Result<Value> {
+        self.flush()?;
+        // Counter.most_common: 개수 내림차순, 같으면 처음 나온 순서(안정 정렬).
+        self.order.sort_by_key(|cat| std::cmp::Reverse(self.counts[cat]));
+        let per_category: Map<String, Value> = self.order.iter().map(|cat| (cat.clone(), json!(self.counts[cat]))).collect();
+        Ok(json!({"kept": self.kept, "skipped": self.skipped, "categories": self.order.len(), "per_category": per_category}))
+    }
 }
 
 /// ES 를 훑어 학습용 JSONL 을 만든다. 돌려주는 값은 요약 통계다. `scan` 이 `helpers.scan` 자리다.
 pub fn collect_with(es: &dyn EsTransport, out_path: &Path, opts: CollectOptions, scan: &dyn Fn(&Value) -> Vec<Value>) -> io::Result<Value> {
     let prefixes: Vec<&str> = opts.excluded_prefixes.iter().map(String::as_str).collect();
-    let mut kept = Vec::new();
-    let mut skipped = 0;
-    for doc in scan_documents_with(es, ScanOptions::default(), scan) {
-        if is_trainable(&doc, opts.min_chars, &prefixes) {
-            kept.push(doc);
-        } else {
-            skipped += 1;
-        }
+    let pattern = Regex::new(DEFAULT_LABEL_PATTERN).expect("기본 레이블 정규식은 유효하다");
+    let kwargs = scan_kwargs(es, &ScanOptions { index: opts.index.clone(), ..Default::default() });
+    let mut writer = CorpusWriter::create(out_path)?;
+    for hit in scan(&kwargs) {
+        writer.push(document(&hit), opts.min_chars, &prefixes, &pattern)?;
     }
-    let (docs, stats) = collect_stats(kept, skipped);
-    write_jsonl(&docs, out_path)?;
-    Ok(stats)
+    writer.finish()
 }
 
 /// `collect_with` 의 실제 ES(scroll) 판.
 pub fn collect(es: &dyn EsTransport, out_path: &Path, opts: CollectOptions) -> io::Result<Value> {
+    collect_with_pattern(es, out_path, opts, DEFAULT_LABEL_PATTERN)
+}
+
+/// 설정에 지정된 레이블 정규식을 사용해 ES(scroll) 결과를 JSONL로 스트리밍한다.
+pub fn collect_with_pattern(es: &dyn EsTransport, out_path: &Path, opts: CollectOptions, label_pattern: &str) -> io::Result<Value> {
     let prefixes: Vec<&str> = opts.excluded_prefixes.iter().map(String::as_str).collect();
-    let mut kept = Vec::new();
-    let mut skipped = 0;
-    scan_each(es, &ScanOptions::default(), &mut |hit| {
-        let doc = document(&hit);
-        if is_trainable(&doc, opts.min_chars, &prefixes) {
-            kept.push(doc);
-        } else {
-            skipped += 1;
-        }
-    })
+    let pattern = Regex::new(label_pattern).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let writer = RefCell::new(CorpusWriter::create(out_path)?);
+    scan_each_with_page(
+        es,
+        &ScanOptions { index: opts.index.clone(), ..Default::default() },
+        &mut |hit| writer.borrow_mut().push(document(&hit), opts.min_chars, &prefixes, &pattern).map_err(|e| crate::es_manager::EsError::Other(e.to_string())),
+        &mut || writer.borrow_mut().flush().map_err(|e| crate::es_manager::EsError::Other(e.to_string())),
+    )
     .map_err(|e| io::Error::other(e.to_string()))?;
-    let (docs, stats) = collect_stats(kept, skipped);
-    write_jsonl(&docs, out_path)?;
-    Ok(stats)
+    writer.into_inner().finish()
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +454,8 @@ pub struct AttachStats {
     pub with_publisher: usize,
 }
 
+static PUBLISHER_JSONL_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 fn load_cache(path: &Path) -> Map<String, Value> {
     let read = || -> Result<Map<String, Value>, String> {
         let file = fs::File::open(path).map_err(|e| e.to_string())?;
@@ -351,8 +488,7 @@ fn stays_in_root(path: &Path, root: &Path) -> bool {
 }
 
 /// ES 에 publisher 가 없는 EPUB 만 파일에서 읽어 메운다. 캐시에 있는 것은 다시 안 읽는다.
-pub fn attach_publishers_with(docs: &mut [Value], cache_path: &Path, library_root: &Path, opts: AttachOptions<'_>, publisher_of: &(dyn Fn(&Path) -> String + Sync)) -> AttachStats {
-    let mut cache = load_cache(cache_path);
+fn attach_publishers_batch(docs: &mut [Value], cache: &mut Map<String, Value>, library_root: &Path, opts: AttachOptions<'_>, publisher_of: &(dyn Fn(&Path) -> String + Sync)) -> AttachStats {
     let root = library_root.to_string_lossy().into_owned();
     let id_of = |d: &Value| d.get("id").and_then(Value::as_str).unwrap_or("").to_string();
 
@@ -386,12 +522,6 @@ pub fn attach_publishers_with(docs: &mut [Value], cache_path: &Path, library_roo
                 report(&format!("  publisher {done}/{}", todo.len()));
             }
         }
-        if let Some(parent) = cache_path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        if let Err(e) = fs::write(cache_path, pyjson::dumps(&Value::Object(cache.clone()), false)) {
-            log::warn!("publisher 캐시를 쓰지 못했다: {e}");
-        }
     }
 
     let mut found = 0;
@@ -406,6 +536,106 @@ pub fn attach_publishers_with(docs: &mut [Value], cache_path: &Path, library_roo
         }
     }
     AttachStats { read: todo.len(), cached: cache.len(), with_publisher: found }
+}
+
+fn save_publisher_cache(cache: &Map<String, Value>, cache_path: &Path) {
+    if let Some(parent) = cache_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Err(error) = fs::write(cache_path, pyjson::dumps(&Value::Object(cache.clone()), false)) {
+        log::warn!("publisher 캐시를 쓰지 못했다: {error}");
+    }
+}
+
+pub fn attach_publishers_with(docs: &mut [Value], cache_path: &Path, library_root: &Path, opts: AttachOptions<'_>, publisher_of: &(dyn Fn(&Path) -> String + Sync)) -> AttachStats {
+    let mut cache = load_cache(cache_path);
+    let stats = attach_publishers_batch(docs, &mut cache, library_root, opts, publisher_of);
+    if stats.read > 0 {
+        save_publisher_cache(&cache, cache_path);
+    }
+    stats
+}
+
+/// JSONL publisher 보강. 문서 본문은 작은 batch만 메모리에 두고 성공 시 원본 파일을 교체한다.
+pub fn attach_publishers_jsonl_with(path: &Path, cache_path: &Path, library_root: &Path, workers: usize, publisher_of: &(dyn Fn(&Path) -> String + Sync)) -> io::Result<Value> {
+    const BATCH_SIZE: usize = 256;
+    let input = fs::File::open(path)?;
+    let metadata = input.metadata()?;
+    if !metadata.is_file() || metadata.len() > MAX_JSONL_BYTES {
+        return Err(invalid(format!("JSONL 이 일반 파일이 아니거나 너무 크다 ({}바이트)", metadata.len())));
+    }
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let (temporary_path, temporary_file) = (0..100)
+        .find_map(|_| {
+            let sequence = PUBLISHER_JSONL_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let candidate = parent.join(format!(".{name}.publisher-{}-{sequence}.tmp", std::process::id()));
+            match fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+                Ok(file) => Some(Ok((candidate, file))),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .unwrap_or_else(|| Err(io::Error::new(io::ErrorKind::AlreadyExists, "publisher JSONL 임시 파일 이름을 확보하지 못했다")))?;
+
+    let result = (|| {
+        let mut reader = BufReader::new(input);
+        let mut writer = io::BufWriter::new(temporary_file);
+        let mut cache = load_cache(cache_path);
+        let mut batch = Vec::with_capacity(BATCH_SIZE);
+        let mut buffer = Vec::new();
+        let mut bytes_read = 0u64;
+        let mut total_read = 0usize;
+        let mut total_with_publisher = 0usize;
+        let silent_log = |_message: &str| {};
+        let flush = |batch: &mut Vec<Value>, writer: &mut io::BufWriter<fs::File>, cache: &mut Map<String, Value>, total_read: &mut usize, total_with_publisher: &mut usize| -> io::Result<()> {
+            if batch.is_empty() {
+                return Ok(());
+            }
+            let stats = attach_publishers_batch(batch, cache, library_root, AttachOptions { workers, progress_every: 0, log: Some(&silent_log) }, publisher_of);
+            *total_read += stats.read;
+            *total_with_publisher += stats.with_publisher;
+            for document in batch.iter() {
+                writer.write_all(pyjson::dumps(document, false).as_bytes())?;
+                writer.write_all(b"\n")?;
+            }
+            batch.clear();
+            Ok(())
+        };
+        loop {
+            buffer.clear();
+            let read = (&mut reader).take(MAX_JSONL_LINE_BYTES + 1).read_until(b'\n', &mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            bytes_read = bytes_read.saturating_add(read as u64);
+            if bytes_read > MAX_JSONL_BYTES {
+                return Err(invalid(format!("JSONL 이 너무 크다 ({bytes_read}바이트 > {MAX_JSONL_BYTES})")));
+            }
+            if buffer.len() as u64 > MAX_JSONL_LINE_BYTES {
+                return Err(invalid("JSONL 줄이 너무 길다".into()));
+            }
+            if buffer.iter().all(u8::is_ascii_whitespace) {
+                continue;
+            }
+            batch.push(serde_json::from_slice(&buffer).map_err(|error| invalid(format!("JSONL 해석 실패: {error}")))?);
+            if batch.len() == BATCH_SIZE {
+                flush(&mut batch, &mut writer, &mut cache, &mut total_read, &mut total_with_publisher)?;
+            }
+        }
+        flush(&mut batch, &mut writer, &mut cache, &mut total_read, &mut total_with_publisher)?;
+        writer.flush()?;
+        writer.get_ref().sync_all()?;
+        if total_read > 0 {
+            save_publisher_cache(&cache, cache_path);
+        }
+        fs::rename(&temporary_path, path)?;
+        Ok(json!({"read":total_read,"cached":cache.len(),"with_publisher":total_with_publisher}))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    result
 }
 
 fn run_workers(todo: &[(usize, PathBuf)], workers: usize, publisher_of: &(dyn Fn(&Path) -> String + Sync)) -> Vec<String> {
@@ -432,4 +662,9 @@ fn run_workers(todo: &[(usize, PathBuf)], workers: usize, publisher_of: &(dyn Fn
 pub fn attach_publishers(docs: &mut [Value], cache_path: &Path, library_root: &Path, workers: usize) -> Value {
     let stats = attach_publishers_with(docs, cache_path, library_root, AttachOptions { workers, ..Default::default() }, &publisher_of);
     json!({"read": stats.read, "cached": stats.cached, "with_publisher": stats.with_publisher})
+}
+
+/// JSONL 파일의 실제 EPUB publisher 를 보강한다.
+pub fn attach_publishers_jsonl(path: &Path, cache_path: &Path, library_root: &Path, workers: usize) -> io::Result<Value> {
+    attach_publishers_jsonl_with(path, cache_path, library_root, workers, &publisher_of)
 }

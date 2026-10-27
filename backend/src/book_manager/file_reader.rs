@@ -7,9 +7,15 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{Local, NaiveDateTime};
+use doc_reader::pdf::InProcess;
+use loader::config::Config;
+use loader::record;
 use serde_json::{Value, json};
+use stat::Stat;
 use sysdeps::FsOps;
 
 use super::paths::{declared_type, is_indexable_type};
@@ -78,6 +84,53 @@ fn local_naive(time: std::time::SystemTime) -> NaiveDateTime {
 /// 기본 `FileReader`. 설명은 모듈 머리말을 본다.
 pub struct DefaultFileReader {
     path_prefix: PathBuf,
+}
+
+/// `loader` 구현을 사용해 파일 본문과 페이지·행수 metadata까지 만드는 reader.
+pub struct LoaderFileReader {
+    config: Config,
+    worker_executable: PathBuf,
+}
+
+impl LoaderFileReader {
+    pub fn new(book_prefix: PathBuf, comics_prefix: PathBuf) -> Self {
+        Self { config: Config::new(book_prefix, comics_prefix), worker_executable: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("backend")) }
+    }
+
+    pub fn with_worker_executable(mut self, executable: PathBuf) -> Self {
+        self.worker_executable = executable;
+        self
+    }
+
+    fn read(&self, path: &Path, path_prefix: Option<&Path>, skip_text: bool) -> Docs {
+        let runner = InProcess;
+        let outcome = record::read_file(&self.config, path, None, skip_text, path_prefix, &runner, Stat::global());
+        for message in outcome.messages {
+            log::warn!("loader failed to read '{}': {message}", path.display());
+        }
+        outcome.item.into_iter().collect()
+    }
+}
+
+impl FileReader for LoaderFileReader {
+    fn read_file(&self, path: &Path, path_prefix: Option<&Path>) -> Docs {
+        self.read(path, path_prefix, false)
+    }
+
+    fn read_file_with_options(&self, path: &Path, path_prefix: Option<&Path>, skip_text: bool) -> Docs {
+        self.read(path, path_prefix, skip_text)
+    }
+
+    fn try_read_file_with_timeout(self: Arc<Self>, path: PathBuf, path_prefix: Option<PathBuf>, skip_text: bool, timeout: Duration) -> Result<Docs, super::ReadFileError> {
+        let outcome = loader::cli::read_file_in_child(&self.worker_executable, &self.config, &path, path_prefix.as_deref(), skip_text, timeout).map_err(|error| match error {
+            loader::cli::ChildReadError::Timeout(error) => super::ReadFileError::Timeout(error.to_string()),
+            loader::cli::ChildReadError::Other(error) => super::ReadFileError::Other(error),
+        })?;
+        for message in outcome.messages {
+            log::warn!("loader failed to read '{}': {message}", path.display());
+        }
+        Ok(outcome.item.into_iter().collect())
+    }
 }
 
 impl DefaultFileReader {

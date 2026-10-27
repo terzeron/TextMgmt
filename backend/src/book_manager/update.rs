@@ -88,7 +88,10 @@ impl BookManager {
             Ok(None) => return ("Error".to_string(), Some(format!("can't update book information of '{book_id}' in ElasticSearch, no such a book"))),
             Err(e) => return ("Error".to_string(), Some(e)),
         };
-        let book = self.make_book(book_id, &doc, 0.0);
+        let book = match self.try_make_book(book_id, &doc, 0.0) {
+            Ok(book) => book,
+            Err(error) => return ("Error".to_string(), Some(error)),
+        };
         let file_path = book.file_path;
         let new_full_path = new_path;
 
@@ -182,7 +185,10 @@ impl BookManager {
         let mut warning_message = None;
 
         // 파일 삭제
-        let file_path = self.make_book(book_id, &doc, 0.0).file_path;
+        let file_path = match self.try_make_book(book_id, &doc, 0.0) {
+            Ok(book) => book.file_path,
+            Err(error) => return ("Error".to_string(), Some(error)),
+        };
         match self.fs.remove_file(&file_path) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => {

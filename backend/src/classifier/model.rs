@@ -1,12 +1,13 @@
 //! 모델 판정 결과와, 내보낸 파일에서 읽는 추론 모델. Python `backend/classifier/model.py` 대응.
 //!
-//! 학습은 Python 이 하고 이 모델은 추론만 한다. 문서 본문은 로그에 남기지 않는다.
+//! Python 호환 모델의 점수 계산과 저장·불러오기를 맡는다. 학습은 `training.rs`에서 수행한다.
+//! 문서 본문은 로그에 남기지 않는다.
 //!
-//! 모델 파일은 pickle(joblib)이 아니라 `backend.classifier.export` 가 쓴 디렉토리다. Rust 는 환경변수
-//! `TM_CLASSIFIER_MODEL_DIR` 로 그 디렉토리를 찾는다. Python 이 joblib 파일 경로로 쓰는 `TM_CLASSIFIER_MODEL` 은 읽지 않는다.
+//! 모델 파일은 pickle(joblib)이 아니라 export 디렉터리다. Rust 는 `TM_CLASSIFIER_MODEL_DIR` 로
+//! 그 디렉터리를 찾는다. Python joblib 경로 `TM_CLASSIFIER_MODEL` 은 읽지 않는다.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use serde_json::Value;
 
@@ -38,8 +39,8 @@ pub const DEFAULT_TOP_K: usize = 3;
 /// 내보내기 디렉토리를 담는 환경변수. `books-pv` 가 호스트의 /mnt/data/text 를 pod 의 /books 로 마운트하므로 같은 파일을 본다.
 /// Python 의 `TM_CLASSIFIER_MODEL`(joblib 파일 경로)과 다른 변수다.
 pub const MODEL_DIR_ENV: &str = "TM_CLASSIFIER_MODEL_DIR";
-/// 환경변수가 없을 때의 기본 경로. Python 의 `backend/classifier/model.joblib` 자리다.
-pub const DEFAULT_MODEL_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/classifier/model.joblib");
+/// 환경변수가 없을 때의 Rust export 디렉터리.
+pub const DEFAULT_MODEL_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/classifier/export");
 
 /// 설정된 모델 경로.
 pub fn model_path() -> PathBuf {
@@ -47,6 +48,30 @@ pub fn model_path() -> PathBuf {
         Ok(p) if !p.is_empty() => PathBuf::from(p),
         _ => PathBuf::from(DEFAULT_MODEL_PATH),
     }
+}
+
+#[derive(Default)]
+struct DefaultModelCache {
+    path: Option<PathBuf>,
+    model: Option<Arc<CategoryModel>>,
+}
+
+static DEFAULT_MODEL_CACHE: LazyLock<Mutex<DefaultModelCache>> = LazyLock::new(|| Mutex::new(DefaultModelCache::default()));
+
+/// Load the configured model once, including a missing-model result, like Python `get_default_model()`.
+pub fn get_default_model() -> Option<Arc<CategoryModel>> {
+    let mut cache = DEFAULT_MODEL_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let path = model_path();
+    if cache.path.as_deref() != Some(path.as_path()) {
+        cache.model = CategoryModel::load(Some(&path)).map(Arc::new);
+        cache.path = Some(path);
+    }
+    cache.model.clone()
+}
+
+/// Clear the process-wide model cache so the next lookup reads the model directory again.
+pub fn reset_default_model() {
+    *DEFAULT_MODEL_CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = DefaultModelCache::default();
 }
 
 /// 결정값을 확률로 바꾼다(문서마다 한 행). 온도가 크면 평탄해져 확신도가 내려간다.
@@ -95,6 +120,18 @@ pub struct CategoryModel {
 }
 
 impl CategoryModel {
+    /// Rust 학습 결과로 추론 모델을 만든다. 계수 레이아웃은 `[feature, class]` 다.
+    pub fn from_training(classes: Vec<String>, config: Value, meta: Value, fields: Vec<FieldVectorizer>, coef: Vec<f32>, intercept: Vec<f64>) -> Result<Self, ModelError> {
+        let n_features: usize = fields.iter().map(FieldVectorizer::vocab_size).sum();
+        if classes.is_empty() || coef.len() != n_features.saturating_mul(classes.len()) || intercept.len() != classes.len() {
+            return Err(ModelError::Invalid("학습 계수 크기가 모델 차원과 맞지 않는다".into()));
+        }
+        if coef.iter().any(|value| !value.is_finite()) || intercept.iter().any(|value| !value.is_finite()) {
+            return Err(ModelError::Invalid("학습 계수에 NaN 또는 Inf가 있다".into()));
+        }
+        Ok(Self { classes, config, meta, weights: Arc::new(Weights { fields, coef, intercept }) })
+    }
+
     /// `backend.classifier.export` 가 쓴 디렉토리를 읽는다. sha256, 길이, 열 수 합계, 어휘 중복을 검증한다.
     pub fn load_dir(path: &Path) -> Result<Self, ModelError> {
         let loaded = export_format::load_dir(path)?;
@@ -154,15 +191,11 @@ impl CategoryModel {
 
     /// 판정 임계값. 설정에 숫자가 있으면 그것, 없으면 `meta.calibrated_threshold`, 그것도 없으면 1.0.
     pub fn min_confidence(&self) -> f64 {
-        self.config
-            .pointer("/decision/min_confidence")
-            .and_then(Value::as_f64)
-            .or_else(|| self.meta.get("calibrated_threshold").and_then(Value::as_f64))
-            .unwrap_or_else(|| {
-                // 홀드아웃 기록이 없는 모델. 아무것도 판정하지 않는 편이 오분류보다 낫다.
-                log::warn!("임계값을 못 정했다. 설정에 min_confidence 를 넣거나 다시 학습할 것");
-                1.0
-            })
+        self.config.pointer("/decision/min_confidence").and_then(Value::as_f64).or_else(|| self.meta.get("calibrated_threshold").and_then(Value::as_f64)).unwrap_or_else(|| {
+            // 홀드아웃 기록이 없는 모델. 아무것도 판정하지 않는 편이 오분류보다 낫다.
+            log::warn!("임계값을 못 정했다. 설정에 min_confidence 를 넣거나 다시 학습할 것");
+            1.0
+        })
     }
 
     /// 표시용 눈금. 학습이 넣어 둔 것을 먼저 쓰고, 없으면 홀드아웃 곡선에서 만든다.

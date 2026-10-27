@@ -9,4 +9,4 @@ pub mod cli;
 pub mod names;
 pub mod plan;
 
-pub use cli::{print_usage, run, run_with_searcher};
+pub use cli::{print_usage, run, run_with_searcher, run_with_searcher_and_defaults};

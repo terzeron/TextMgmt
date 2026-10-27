@@ -27,6 +27,11 @@ fn parse_filename_matches_python() {
 }
 
 #[test]
+fn parse_filename_rejects_standalone_combining_marks_like_python() {
+    assert_eq!(parse_filename(Path::new("\u{0301}.pdf")), None);
+}
+
+#[test]
 fn directory_title_and_author_match_python() {
     let c = cases();
     for case in c["directory_title"].as_array().unwrap() {
@@ -68,6 +73,12 @@ fn title_keys_bases_variants_and_safe_names_match_python() {
     for case in c["matches"].as_array().unwrap() {
         assert_eq!(bookstore_title_matches(s(&case[0]), s(&case[1])), case[2].as_bool().unwrap(), "{} {}", case[0], case[1]);
     }
+}
+
+#[test]
+fn title_key_uses_python_full_casefold_after_nfkc() {
+    assert_eq!(title_key("Straße"), "strasse");
+    assert_eq!(title_key("ﬃ Σς"), "ffiσσ");
 }
 
 fn make_dir(root: &Path, name: &str, entries: &[Value]) -> std::path::PathBuf {

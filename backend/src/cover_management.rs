@@ -251,7 +251,13 @@ pub fn filename_title(path: &Path) -> String {
 fn norm_rel(relative: &str) -> String {
     let parts: Vec<&str> = relative.split('/').filter(|p| !p.is_empty() && *p != ".").collect();
     let joined = parts.join("/");
-    if relative.starts_with('/') { format!("/{joined}") } else if joined.is_empty() { ".".to_string() } else { joined }
+    if relative.starts_with('/') {
+        format!("/{joined}")
+    } else if joined.is_empty() {
+        ".".to_string()
+    } else {
+        joined
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -424,7 +430,7 @@ impl CoverManagement {
             }
             children.push(json!({"id": self.relative_of(&entry.path()), "label": name, "fileType": "folder", "children": []}));
         }
-        children.sort_by_key(|item| (str_field(item, "label").to_lowercase(), str_field(item, "label").to_string()));
+        children.sort_by_key(|item| (pyfmt::py_casefold(str_field(item, "label")), str_field(item, "label").to_string()));
         Ok(children)
     }
 
@@ -445,7 +451,7 @@ impl CoverManagement {
                 files.push((name, path));
             }
         }
-        files.sort_by_key(|(name, _)| (name.to_lowercase(), name.clone()));
+        files.sort_by_key(|(name, _)| (pyfmt::py_casefold(name), name.clone()));
         let total = files.len();
         let mut items: Vec<Value> = Vec::new();
         for (_, path) in files.iter().skip(offset).take(limit) {
@@ -893,7 +899,15 @@ impl CoverManagement {
     }
 
     /// `before_idref` 페이지 앞에 URL 또는 올린 이미지(base64)를 삽화로 넣는다. 표지 저장과 같은 잠금·백업·캐시 무효화를 쓴다.
-    pub fn insert_illustration_backup(&self, relative: &str, expected_revision: &str, before_idref: &str, url: Option<&str>, image_data: Option<&str>, backup: Backup<'_>) -> Result<Value, CoverError> {
+    pub fn insert_illustration_backup(
+        &self,
+        relative: &str,
+        expected_revision: &str,
+        before_idref: &str,
+        url: Option<&str>,
+        image_data: Option<&str>,
+        backup: Backup<'_>,
+    ) -> Result<Value, CoverError> {
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let decoded = match image_data.filter(|d| !d.is_empty()) {

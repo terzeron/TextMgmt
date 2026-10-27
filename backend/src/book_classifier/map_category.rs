@@ -51,7 +51,7 @@ pub fn map_category(cat_str: &str, raw_title: &str, raw_author: &str) -> Option<
     }
     if any(raw_title, &["손자병법", "육도, 삼략", "육도삼략", "한비자", "장자", "채근담", "논어", "맹자"]) {
         return Some("1_동양고전".to_string());
-    // 2. 카테고리 매핑 규칙
+        // 2. 카테고리 매핑 규칙
     }
     if any(cat, &["라이트노벨", "라이트 노벨", "라노벨"]) {
         return Some("3_라이트노벨".to_string());
@@ -91,7 +91,8 @@ pub fn map_category(cat_str: &str, raw_title: &str, raw_author: &str) -> Option<
     if any(cat, &["중국소설", "중국문학", "대만소설"]) {
         return Some("2_소설중국".to_string());
     }
-    if any(cat, &["영미소설", "영국소설", "미국소설", "프랑스소설", "독일소설", "러시아소설", "유럽소설", "스페인소설", "남미소설", "외국소설", "세계의 소설", "각국소설", "북유럽소설", "고전문학"]) {
+    if any(cat, &["영미소설", "영국소설", "미국소설", "프랑스소설", "독일소설", "러시아소설", "유럽소설", "스페인소설", "남미소설", "외국소설", "세계의 소설", "각국소설", "북유럽소설", "고전문학"])
+    {
         return Some("2_소설외국".to_string());
     }
     if any(cat, &["역사소설", "대하역사소설", "대하소설"]) {
@@ -117,7 +118,8 @@ pub fn map_category(cat_str: &str, raw_title: &str, raw_author: &str) -> Option<
     if any(cat, &["투자", "재테크", "주식", "증권", "부동산", "경매", "가상화폐", "비트코인", "자산관리", "금융상품", "펀드", "연금", "환테크", "청약"]) {
         return Some("6_재테크".to_string());
     }
-    if any(leaf_cat, &["경제학", "경제일반", "경제전망", "경제사", "각국 경제", "금융/화폐", "국제경제", "화폐", "거시경제", "미시경제", "행동경제학", "경제"]) {
+    if any(leaf_cat, &["경제학", "경제일반", "경제전망", "경제사", "각국 경제", "금융/화폐", "국제경제", "화폐", "거시경제", "미시경제", "행동경제학", "경제"])
+    {
         return Some("4_경제".to_string());
     }
     if any(cat, &["경제학", "경제사", "각국 경제", "거시경제", "미시경제", "행동경제학"]) {
@@ -129,7 +131,8 @@ pub fn map_category(cat_str: &str, raw_title: &str, raw_author: &str) -> Option<
     if any(leaf_cat, &["경영"]) {
         return Some("4_경영마케팅".to_string());
     }
-    if any(cat, &["자기계발", "성공/처세", "처세술", "인간관계", "화술", "대화법", "시간관리", "습관", "동기부여", "창의성", "성공학", "마인드셋", "리더십"]) {
+    if any(cat, &["자기계발", "성공/처세", "처세술", "인간관계", "화술", "대화법", "시간관리", "습관", "동기부여", "창의성", "성공학", "마인드셋", "리더십"])
+    {
         return Some("6_처세술리더십창의성".to_string());
     }
     if any(cat, &["심리", "심리학", "정신분석", "뇌과학", "상담심리", "임상심리", "인지심리"]) {
@@ -158,8 +161,8 @@ pub fn map_category(cat_str: &str, raw_title: &str, raw_author: &str) -> Option<
     }
     if any(cat, &["수학", "물리학", "화학", "생물학", "생명과학", "지구과학", "천문학", "자연과학", "교양과학", "기초과학", "과학"]) {
         return Some("5_수학과학일반".to_string());
-    // 구체적인 복합 카테고리를 먼저 판정한다. 아래의 broad keyword(회화/국어/교육/의학/영어)
-    // 보다 늦게 검사하면 substring match 때문에 다른 분야로 오분류된다.
+        // 구체적인 복합 카테고리를 먼저 판정한다. 아래의 broad keyword(회화/국어/교육/의학/영어)
+        // 보다 늦게 검사하면 substring match 때문에 다른 분야로 오분류된다.
     }
     if any(cat, &["영어원서", "영문원서", "영한대역"]) {
         return Some("7_영문일반".to_string());

@@ -43,7 +43,6 @@ static FILE_TAG: LazyLock<Regex> = LazyLock::new(|| re(r"^\[([^\]]+)\]\s*(.+)$")
 static DIR_TAG: LazyLock<Regex> = LazyLock::new(|| re(r"^\[([^\]]+)\]\s*"));
 static LEADING_TAG: LazyLock<Regex> = LazyLock::new(|| re(r"^\[[^\]]+\]\s*"));
 static TAG_HAS_LETTER: LazyLock<Regex> = LazyLock::new(|| re(r"[A-Za-z가-힣]"));
-static WORD_CHAR: LazyLock<Regex> = LazyLock::new(|| re(r"\w"));
 static HANGUL: LazyLock<Regex> = LazyLock::new(|| re(r"[가-힣]"));
 static TRAILING_BRACKET: LazyLock<Regex> = LazyLock::new(|| re(r"\s*\[[^\]]*\]\s*$"));
 static TRAILING_PAREN: LazyLock<Regex> = LazyLock::new(|| re(r"\s*\([^)]*(?:\d|완|미완|연재|권|화|부)[^)]*\)\s*$"));
@@ -58,7 +57,56 @@ static TRAILING_SEPARATORS: LazyLock<Regex> = LazyLock::new(|| re(r"\s*[,/&·]+\
 static WHITESPACE_RUN: LazyLock<Regex> = LazyLock::new(|| re(r"\s+"));
 
 fn nfkc(value: &str) -> String {
-    value.nfkc().collect()
+    let mut normalized = String::with_capacity(value.len());
+    let mut assigned = String::new();
+    for character in value.chars() {
+        if pyfmt::py_is_assigned(character) {
+            assigned.push(character);
+        } else {
+            normalized.extend(assigned.nfkc());
+            assigned.clear();
+            normalized.push(character);
+        }
+    }
+    normalized.extend(assigned.nfkc());
+    normalized
+}
+
+#[cfg(test)]
+mod nfkc_oracle_tests {
+    use std::collections::HashMap;
+
+    use super::nfkc;
+
+    #[test]
+    fn nfkc_matches_python_313_unicode_151_for_every_single_codepoint() {
+        let mappings: HashMap<u32, String> = include_str!("../../../tests/fixtures/python_nfkc_mappings_15_1.txt")
+            .lines()
+            .map(|line| {
+                let (codepoint, normalized) = line.split_once(';').unwrap();
+                let chars = normalized.split(',').map(|cp| char::from_u32(u32::from_str_radix(cp, 16).unwrap()).unwrap()).collect();
+                (u32::from_str_radix(codepoint, 16).unwrap(), chars)
+            })
+            .collect();
+        for codepoint in 0..=0x10ffff {
+            let Some(character) = char::from_u32(codepoint) else { continue };
+            let input = character.to_string();
+            let expected = mappings.get(&codepoint).map_or(input.as_str(), String::as_str);
+            assert_eq!(nfkc(&input), expected, "U+{codepoint:04X}");
+        }
+    }
+
+    #[test]
+    fn unicode_151_unassigned_codepoints_are_normalization_boundaries() {
+        for codepoint in 0..=0x10ffff {
+            let Some(character) = char::from_u32(codepoint) else { continue };
+            if pyfmt::py_is_assigned(character) {
+                continue;
+            }
+            let input = format!("A{character}\u{030A}");
+            assert_eq!(nfkc(&input), input, "U+{codepoint:04X}");
+        }
+    }
 }
 
 fn strip_set(value: &str) -> &str {
@@ -96,7 +144,7 @@ pub fn parse_filename(path: &Path) -> Option<(String, Option<String>)> {
     if stem == before_volume {
         stem = strip_set(&TRAILING_SEQUENCE_NUMBER.replace_all(&stem, "")).to_owned();
     }
-    if !WORD_CHAR.is_match(&stem).unwrap_or(false) {
+    if !stem.chars().any(|c| c == '_' || pyfmt::py_isalnum(c)) {
         return None;
     }
     Some((stem, author))
@@ -104,7 +152,7 @@ pub fn parse_filename(path: &Path) -> Option<(String, Option<String>)> {
 
 /// 비교용 키: NFKC로 풀고 소문자로 바꾼 뒤 글자·숫자만 남긴다.
 pub fn title_key(value: &str) -> String {
-    nfkc(value).to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
+    pyfmt::py_casefold(&nfkc(value)).chars().filter(|c| pyfmt::py_isalnum(*c)).collect()
 }
 
 /// 디렉토리 이름 앞의 `[저자]` 태그.

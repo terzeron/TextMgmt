@@ -1,6 +1,5 @@
 //! 표지가 없는 책을 제한된 시간·페이지 수 안에서 조회한다.
 use std::future::Future;
-use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -51,9 +50,9 @@ impl BookManagerDeps {
     }
 }
 
-fn flags(root: &Path, books: &[Book]) -> Vec<bool> {
+fn flags(books: &[Book]) -> Vec<bool> {
     static LOCK: Mutex<()> = Mutex::new(());
-    let cache = CoverStatusCache::new(&root.join(".cover_cache/cover_status.sqlite3"));
+    let cache = CoverStatusCache::new();
     books
         .iter()
         .map(|book| match cache.get_or_compute(&book.file_path, &|| has_official_cover(&book.file_path, &book.file_type, &LOCK)) {
@@ -70,7 +69,7 @@ impl BookManager {
     pub const UNCOVERED_MAX_CONCURRENT_SCANS: usize = 2;
 
     pub fn uncovered_flags(&self, books: &[Book]) -> Vec<bool> {
-        flags(&self.path_prefix, books)
+        flags(books)
     }
 
     pub async fn get_uncovered_books_paged(&self, mut opts: CoverPageOpts) -> UncoveredPage {
@@ -90,8 +89,7 @@ impl BookManager {
                 return (Vec::new(), None, None, error);
             }
             let books: Vec<Book> = page.iter().map(|(book, _)| book.clone()).collect();
-            let root = self.path_prefix.clone();
-            let uncovered = match tokio::task::spawn_blocking(move || flags(&root, &books)).await {
+            let uncovered = match tokio::task::spawn_blocking(move || flags(&books)).await {
                 Ok(result) => result,
                 Err(error) => return (Vec::new(), None, None, Some(format!("표지 판정 실패: {error}"))),
             };

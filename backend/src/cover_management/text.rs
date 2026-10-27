@@ -55,11 +55,7 @@ fn is_punctuation_or_symbol(c: char) -> bool {
 pub fn clean_title(stem: &str) -> String {
     let replaced: String = compose_hangul(stem).chars().map(|c| if is_punctuation_or_symbol(c) { ' ' } else { c }).collect();
     let title = replaced.split_whitespace().collect::<Vec<_>>().join(" ");
-    if title.is_empty() {
-        "제목 없음".to_string()
-    } else {
-        title
-    }
+    if title.is_empty() { "제목 없음".to_string() } else { title }
 }
 
 #[cfg(test)]

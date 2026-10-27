@@ -7,16 +7,20 @@ fn bin() -> Command {
 }
 
 #[test]
-fn no_arguments_print_the_usage_and_exit_zero_without_connecting() {
-    let out = bin().env_remove("TM_ES_URL").output().unwrap();
-    assert_eq!(out.status.code(), Some(0));
-    let text = String::from_utf8(out.stdout).unwrap();
-    assert!(text.contains("사용법") && text.contains("update run"), "{text}");
+fn no_arguments_runs_update_get_delete_against_a_mock_server() {
+    let (url, server) = mock_es(4);
+    let out = bin().env("TM_ES_URL", &url).env("TM_ES_USER", "u").env("TM_ES_PASSWORD", "p").env("TM_ES_BOOK_INDEX", "books").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8(out.stdout).unwrap().contains("{'book_id': 3384, 'title': 'test title2'}"));
+    let seen = server.join().unwrap();
+    assert_eq!(seen[1], "POST /books/_update/3384?refresh=true HTTP/1.1");
+    assert_eq!(seen[2], "GET /books/_doc/3384 HTTP/1.1");
+    assert_eq!(seen[3], "DELETE /books/_doc/3384?refresh=true HTTP/1.1");
 }
 
 #[test]
-fn run_without_the_environment_exits_255_before_touching_anything() {
-    let out = bin().arg("run").env_remove("TM_ES_URL").env_remove("TM_ES_USER").env_remove("TM_ES_PASSWORD").env_remove("TM_ES_BOOK_INDEX").output().unwrap();
+fn no_arguments_without_the_environment_exits_255_before_connecting() {
+    let out = bin().env_remove("TM_ES_URL").env_remove("TM_ES_USER").env_remove("TM_ES_PASSWORD").env_remove("TM_ES_BOOK_INDEX").output().unwrap();
     assert_eq!(out.status.code(), Some(255));
     assert!(String::from_utf8(out.stderr).unwrap().contains("TM_ES_BOOK_INDEX"));
 }

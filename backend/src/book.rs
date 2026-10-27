@@ -2,10 +2,10 @@
 
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use chrono::{NaiveDate, NaiveDateTime, Timelike};
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, Timelike};
 use serde::Serialize;
 use serde_json::ser::{Formatter, Serializer};
 use serde_json::{Value, json};
@@ -50,6 +50,22 @@ fn optional_int(info: &Value, key: &str) -> i64 {
 
 /// `datetime.fromisoformat`이 받는 흔한 꼴(날짜만, 'T' 또는 공백 구분, 소수 초)을 읽는다.
 fn parse_iso(text: &str) -> NaiveDateTime {
+    // Python datetime.fromisoformat은 소수 초 구분자로 쉼표도 허용한다.
+    let normalized;
+    let text = if text.contains(',') {
+        normalized = text.replacen(',', ".", 1);
+        normalized.as_str()
+    } else {
+        text
+    };
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(text) {
+        return parsed.naive_local();
+    }
+    for fmt in ["%Y-%m-%dT%H:%M:%S%.f%z", "%Y-%m-%d %H:%M:%S%.f%z", "%Y-%m-%dT%H:%M:%S%.f%:z", "%Y-%m-%d %H:%M:%S%.f%:z"] {
+        if let Ok(parsed) = DateTime::<FixedOffset>::parse_from_str(text, fmt) {
+            return parsed.naive_local();
+        }
+    }
     for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"] {
         if let Ok(parsed) = NaiveDateTime::parse_from_str(text, fmt) {
             return parsed;
@@ -90,8 +106,12 @@ impl Book {
     }
 
     pub fn dict(&self) -> Value {
-        let prefix = Self::path_prefix();
-        let relative = self.file_path.strip_prefix(&prefix).unwrap_or(&self.file_path);
+        self.dict_with_prefix(&Self::path_prefix())
+    }
+
+    /// `dict`와 같으나 manager가 정한 책 루트를 기준으로 경로를 상대화한다.
+    pub(crate) fn dict_with_prefix(&self, prefix: &Path) -> Value {
+        let relative = self.file_path.strip_prefix(prefix).expect("file_path is not under TM_BOOK_DIR");
         json!({
             "book_id": self.book_id,
             "category": self.category,

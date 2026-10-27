@@ -113,7 +113,22 @@ fn mock_bm() -> Arc<MockBm> {
 }
 
 fn book(path: &Path, book_id: i64) -> Book {
-    Book { book_id, category: "cat".into(), author: "author".into(), file_type: "txt".into(), file_path: path.to_path_buf(), ..Default::default() }
+    Book {
+        book_id,
+        category: "cat".into(),
+        title: "title".into(),
+        author: "author".into(),
+        file_path: path.to_path_buf(),
+        file_type: "txt".into(),
+        file_size: 0,
+        line_count: 0,
+        page_count: 0,
+        isbn: String::new(),
+        summary: String::new(),
+        created_time: chrono::NaiveDateTime::default(),
+        updated_time: chrono::NaiveDateTime::default(),
+        score: 0.0,
+    }
 }
 
 /// paths를 한 카테고리의 책으로 돌려주는 manager. update_book은 파일을 옮기지 않는다.
@@ -169,6 +184,23 @@ async fn test_invalid_regex() {
     let resp = client(&bm).post_json(URL, &json!({"category": "cat", "pattern": "(", "replacement": "b"})).await;
     let body = resp.json();
     assert!(body["status"] == "failure" && body["error"].as_str().unwrap().starts_with("정규표현식 오류"), "{body}");
+}
+
+#[tokio::test]
+async fn test_regex_backtracking_error_is_reported_without_updates() {
+    let tmp = TempDir::new().unwrap();
+    let bm = mock_bm();
+    let name = "abab".repeat(20);
+    let paths = touch(tmp.path(), &[name.as_str()]);
+    setup(&bm, &paths);
+
+    let response = client(&bm).post_json(URL, &json!({"category": "cat", "pattern": "(?i)(a|b|ab)*(?=c)", "replacement": "b"})).await;
+    let body = response.json();
+
+    assert_eq!(body["status"], "failure", "{body}");
+    assert_eq!(body["changed_count"], 0, "{body}");
+    assert!(body["error"].as_str().unwrap().starts_with("정규표현식 오류"), "{body}");
+    assert!(bm.updates.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -247,6 +279,22 @@ async fn test_update_failure_is_reported() {
 }
 
 #[tokio::test]
+async fn test_refresh_failure_does_not_undo_successful_renames() {
+    let tmp = TempDir::new().unwrap();
+    let bm = mock_bm();
+    let paths = touch(tmp.path(), &["old.txt"]);
+    setup(&bm, &paths);
+    bm.es.fail("refresh", "ES unavailable");
+
+    let response = client(&bm).post_json(URL, &json!({"category": "cat", "pattern": "old", "replacement": "new"})).await;
+
+    assert_eq!(response.json()["result"]["changed_count"], 1);
+    assert_eq!(response.json()["result"]["failed_count"], 0);
+    assert_eq!(bm.target_names(), ["new.txt"]);
+    assert_eq!(bm.es.call_count("refresh"), 1);
+}
+
+#[tokio::test]
 async fn test_existing_target_gets_next_serial() {
     let tmp = TempDir::new().unwrap();
     let bm = mock_bm();
@@ -279,6 +327,19 @@ async fn test_same_new_name_in_one_batch_gets_serials() {
     let resp = client(&bm).post_json(URL, &json!({"category": "cat", "pattern": r"a\d", "replacement": "ax"})).await;
     assert_eq!(resp.json()["result"]["changed_count"], 3);
     assert_eq!(bm.target_names(), ["ax.txt", "ax (1).txt", "ax (2).txt"]);
+}
+
+#[tokio::test]
+async fn test_plan_order_matches_python_full_casefold() {
+    let tmp = TempDir::new().unwrap();
+    let bm = mock_bm();
+    let paths = touch(tmp.path(), &["z.txt", "ß.txt"]);
+    setup(&bm, &paths);
+
+    let resp = client(&bm).post_json(URL, &json!({"category": "cat", "pattern": "^(.*)$", "replacement": "Q$1"})).await;
+
+    assert_eq!(resp.json()["result"]["changed_count"], 2);
+    assert_eq!(bm.target_names(), ["Qß.txt", "Qz.txt"]);
 }
 
 #[tokio::test]

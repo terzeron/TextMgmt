@@ -112,6 +112,16 @@ fn test_empty_answers_are_not_cached() {
     assert_eq!(cache.get("", "없는책", "누구"), None);
 }
 
+#[test]
+fn test_truthy_non_string_category_is_cached_like_python() {
+    let tmp = TempDir::new().unwrap();
+    let mut cache = cache(&tmp);
+    let answers = json!({"yes24": {"cat": 1, "isbn": "9788900000000"}, "aladin": {}, "kyobo": {}});
+    cache.put(&answers, "달빛조각사", "남희성", "");
+
+    assert_eq!(cache.get("9788900000000", "", ""), Some(answers));
+}
+
 /// 제안 생성은 매번 서비스를 새로 만든다. 파일에 남지 않으면 캐시가 아니다.
 #[test]
 fn test_entries_survive_a_new_instance() {
@@ -120,6 +130,46 @@ fn test_entries_survive_a_new_instance() {
     BookstoreResponseCache::new(&path).put(&stores(), "달빛조각사", "남희성", "");
 
     assert_eq!(BookstoreResponseCache::new(&path).get("", "달빛조각사", "남희성"), Some(stores()));
+}
+
+#[test]
+fn test_load_converts_truthy_numeric_identifiers_to_strings() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("bookstore_cache.jsonl");
+    fs::write(
+        &path,
+        json!({
+            "keys": ["isbn:123"],
+            "isbn": 123,
+            "author": 456,
+            "stores": {"yes24": {"cat": "소설"}},
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+
+    assert_eq!(BookstoreResponseCache::new(path).get("123", "", "456"), Some(json!({"yes24": {"cat": "소설"}})));
+}
+
+#[test]
+fn test_load_stringifies_truthy_list_and_dict_identifiers() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("bookstore_cache.jsonl");
+    fs::write(
+        &path,
+        json!({
+            "keys": ["isbn:['123']"],
+            "isbn": ["123"],
+            "author": {"name": "홍길동"},
+            "stores": {"yes24": {"cat": "소설"}},
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+
+    assert_eq!(BookstoreResponseCache::new(path).get("['123']", "", "{'name': '홍길동'}"), Some(json!({"yes24": {"cat": "소설"}})));
 }
 
 #[test]

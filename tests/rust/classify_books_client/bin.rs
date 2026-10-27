@@ -5,18 +5,21 @@ fn bin() -> Command {
 }
 
 #[test]
-fn no_arguments_print_the_usage_and_exit_zero() {
-    let out = bin().output().unwrap();
+fn help_option_prints_the_usage_and_exits_zero() {
+    let out = bin().arg("--help").output().unwrap();
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8(out.stdout).unwrap();
     assert!(text.contains("사용법") && text.contains("classify_books_client --api-url"), "{text}");
 }
 
 #[test]
-fn direct_mode_options_exit_two_with_a_pointer_to_the_python_tool() {
-    let out = bin().args(["--limit", "10"]).output().unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    assert!(String::from_utf8(out.stderr).unwrap().contains("classify_books_client.py"));
+fn direct_mode_runs_against_the_given_library_root() {
+    let root = std::env::temp_dir().join(format!("classify-books-client-bin-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(&root).unwrap();
+    let out = bin().args(["--library-root", root.to_str().unwrap(), "--category", "_root", "--limit", "10", "--dry-run"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!String::from_utf8(out.stderr).unwrap().contains("classify_books_client.py"));
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

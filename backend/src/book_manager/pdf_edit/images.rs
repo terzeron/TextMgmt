@@ -25,7 +25,11 @@ pub(super) enum Source {
 
 fn rect(value: &Value) -> Result<Rect, String> {
     let number = |key| value.get(key).and_then(Value::as_f64).ok_or_else(|| "크롭 영역이 쪽 밖이거나 비어 있음".to_string());
-    Ok((number("x0")?, number("y0")?, number("x1")?, number("y1")?, value.get("angle").and_then(Value::as_f64).unwrap_or(0.0)))
+    let angle = match value.get("angle") {
+        None => 0.0,
+        Some(value) => value.as_f64().ok_or_else(|| "회전 각도가 올바르지 않습니다".to_string())?,
+    };
+    Ok((number("x0")?, number("y0")?, number("x1")?, number("y1")?, angle))
 }
 
 impl Edits {
@@ -87,7 +91,7 @@ impl Edits {
         Ok(())
     }
 
-    pub fn apply(&self, pdf: &mut Document, fetcher: &dyn ImageFetcher) -> Result<Vec<ObjectId>, String> {
+    pub fn apply(&self, pdf: &mut Document, fetcher: &dyn ImageFetcher, max_image_pixels: usize) -> Result<Vec<ObjectId>, String> {
         let original = pdf.get_pages();
         let mut groups = BTreeMap::new();
         for (&n, &id) in &original {
@@ -95,8 +99,8 @@ impl Edits {
             let mut group = Vec::new();
             if let Some(source) = self.inserts.get(&n) {
                 let jpeg = match source {
-                    Source::Upload(data) => normalize_upload(data),
-                    Source::Url(url) => download_image(fetcher, url),
+                    Source::Upload(data) => normalize_upload_with_limit(data, max_image_pixels),
+                    Source::Url(url) => download_image(fetcher, url, max_image_pixels),
                 }
                 .map_err(|e| format!("{n}쪽 앞에 넣을 이미지를 가져올 수 없습니다: {e}"))?;
                 let bounds = page_box(pdf, id)?;
@@ -121,7 +125,7 @@ impl Edits {
     }
 }
 
-pub(super) fn download_image(fetcher: &dyn ImageFetcher, url: &str) -> Result<Vec<u8>, String> {
+pub(super) fn download_image(fetcher: &dyn ImageFetcher, url: &str, max_image_pixels: usize) -> Result<Vec<u8>, String> {
     use crate::direct_cover_url::FetchError;
     let bytes = fetcher.fetch_url_image(url).map_err(|error| match error {
         FetchError::Value(message) => message,
@@ -131,10 +135,10 @@ pub(super) fn download_image(fetcher: &dyn ImageFetcher, url: &str) -> Result<Ve
             "이미지를 가져오지 못했습니다".into()
         }
     })?;
-    normalize_upload(&bytes)
+    normalize_upload_with_limit(&bytes, max_image_pixels)
 }
 
-pub(super) fn normalize_upload(data: &[u8]) -> Result<Vec<u8>, String> {
+pub(super) fn normalize_upload_with_limit(data: &[u8], max_image_pixels: usize) -> Result<Vec<u8>, String> {
     if data.is_empty() || data.len() > MAX_IMAGE_BYTES {
         return Err("이미지가 비어 있거나 너무 큽니다".into());
     }
@@ -143,7 +147,7 @@ pub(super) fn normalize_upload(data: &[u8]) -> Result<Vec<u8>, String> {
     let format = reader.format();
     let mut decoder = reader.into_decoder().map_err(unreadable)?;
     let (w, h) = decoder.dimensions();
-    if u64::from(w) * u64::from(h) > MAX_IMAGE_PIXELS as u64 {
+    if u64::from(w) * u64::from(h) > max_image_pixels as u64 {
         return Err("이미지 해상도가 너무 큽니다".into());
     }
     let orientation = decoder.orientation().map_err(unreadable)?;
@@ -199,8 +203,14 @@ fn crop_page(pdf: &mut Document, id: ObjectId, n: i64, rect: Rect) -> Result<(),
     }
     let bytes = pdf.get_page_content_with_limit(id, 4096).map_err(|_| fail("이미지 한 장으로 된 쪽이 아님"))?;
     let ops = lopdf::content::Content::decode(&bytes).map_err(|_| fail("이미지 배치 행렬을 읽을 수 없음"))?.operations;
-    if ops.len() != 4 || ops[0].operator != "q" || ops[1].operator != "cm" || ops[2].operator != "Do" || ops[3].operator != "Q" || ops[1].operands.len() != 6 || ops[2].operands.len() != 1 {
+    if ops.len() == 5 && ops[0].operator == "q" && ops[2].operator == "cm" && ops[3].operator == "Do" && ops[4].operator == "Q" {
+        return Err(fail("이미지 배치 행렬을 읽을 수 없음"));
+    }
+    if ops.len() != 4 || ops[0].operator != "q" || ops[1].operator != "cm" || ops[2].operator != "Do" || ops[3].operator != "Q" || ops[2].operands.len() != 1 {
         return Err(fail("이미지 한 장으로 된 쪽이 아님"));
+    }
+    if ops[1].operands.len() != 6 {
+        return Err(fail("이미지 배치 행렬을 읽을 수 없음"));
     }
     let m: Vec<f64> = ops[1].operands.iter().map(|v| v.as_float().map(f64::from)).collect::<lopdf::Result<_>>().map_err(|_| fail("이미지 배치 행렬을 읽을 수 없음"))?;
     let bounds = page_box(pdf, id)?;
@@ -241,7 +251,9 @@ fn crop_page(pdf: &mut Document, id: ObjectId, n: i64, rect: Rect) -> Result<(),
         }
         pixels = packed;
     }
-    if is_jpeg { pixels = super::jpeg::encode_crop(&stream.content, &cropped).map_err(|reason| fail(&reason))?; }
+    if is_jpeg {
+        pixels = super::jpeg::encode_crop(&stream.content, &cropped).map_err(|reason| fail(&reason))?;
+    }
     let mut new_image = Stream::new(
         dictionary! {"Type"=>"XObject","Subtype"=>"Image","Width"=>ow as i64,"Height"=>oh as i64,"BitsPerComponent"=>if one_bit {1} else {8},"ColorSpace"=>if grayscale {"DeviceGray"} else {"DeviceRGB"}},
         pixels,
@@ -251,7 +263,9 @@ fn crop_page(pdf: &mut Document, id: ObjectId, n: i64, rect: Rect) -> Result<(),
     {
         new_image.dict.set("ColorSpace", space);
     }
-    if is_jpeg { new_image.dict.set("Filter", "DCTDecode"); }
+    if is_jpeg {
+        new_image.dict.set("Filter", "DCTDecode");
+    }
     new_image.compress().map_err(|e| fail(&e.to_string()))?;
     let image = pdf.add_object(new_image);
     xobjects.set(name, image);
@@ -304,15 +318,10 @@ fn decode_pixels(pdf: &Document, stream: &Stream) -> Result<DynamicImage, String
         return Err("이미지 해상도가 너무 큽니다".into());
     }
     let (_, space) = pdf.dereference(d.get(b"ColorSpace").map_err(|_| err())?).map_err(|_| err())?;
-    let indexed = space.as_array().ok().filter(|v| v.len() == 4 && v[0].as_name().ok() == Some(b"Indexed"));
-    let channels = if indexed.is_some() { 1 } else { color_components(pdf, space).ok_or_else(|| "지원하지 않는 이미지 색상 구성".to_string())? };
     let bits = d.get(b"BitsPerComponent").and_then(Object::as_i64).unwrap_or(8);
-    if ![1, 2, 4, 8].contains(&bits) || channels != 1 && bits != 8 {
-        return Err("지원하지 않는 이미지 색상 구성".into());
-    }
     let filters = if d.has(b"Filter") { stream.filters().map_err(|_| "지원하지 않는 이미지 형식".to_string())? } else { Vec::new() };
     if filters == [b"DCTDecode".as_slice()] {
-        if bits != 8 || space.as_name().is_err() {
+        if bits != 8 || !matches!(space.as_name().ok(), Some(b"DeviceRGB" | b"DeviceGray")) {
             return Err("지원하지 않는 이미지 색상 구성".into());
         }
         let reader = image::ImageReader::with_format(Cursor::new(&stream.content), ImageFormat::Jpeg);
@@ -322,12 +331,23 @@ fn decode_pixels(pdf: &Document, stream: &Stream) -> Result<DynamicImage, String
         }
         return image::load_from_memory_with_format(&stream.content, ImageFormat::Jpeg).map_err(|_| err());
     }
+    if space.as_name().ok() == Some(b"DeviceCMYK") {
+        return Err("지원하지 않는 색상 모드 CMYK".into());
+    }
+    let indexed = space.as_array().ok().filter(|v| v.len() == 4 && v[0].as_name().ok() == Some(b"Indexed"));
+    let channels = if indexed.is_some() { 1 } else { color_components(pdf, space).ok_or_else(|| "지원하지 않는 이미지 색상 구성".to_string())? };
+    if ![1, 2, 4, 8].contains(&bits) || channels != 1 && bits != 8 {
+        return Err("지원하지 않는 이미지 색상 구성".into());
+    }
     if filters.len() > 1 || filters.iter().any(|f| ![b"FlateDecode".as_slice(), b"LZWDecode", b"RunLengthDecode"].contains(f)) {
         return Err("지원하지 않는 이미지 형식".into());
     }
     let row_bytes = (w as usize * channels * bits as usize).div_ceil(8);
     let expected = row_bytes * h as usize;
     let mut data = stream.get_plain_content_with_limit(expected + h as usize).map_err(|_| err())?;
+    if data.is_empty() {
+        return Err(err());
+    }
     if data.len() != expected {
         return Err("이미지 크기 불일치".into());
     }

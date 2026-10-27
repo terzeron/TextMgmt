@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
@@ -30,23 +29,9 @@ fn progress_payload(base: Option<&Value>, indexed: i64, deleted: Option<i64>) ->
 }
 
 impl BookManager {
-    /// 파일 하나를 파싱한다. 파싱은 별도 스레드에서 돌리고 `HARD_PARSE_TIMEOUT_SECONDS`를 넘기면 포기한다
-    /// (파서가 멈춰도 재적재 전체가 서지 않게 한다. 스레드는 죽일 수 없어 끝날 때까지 남는다).
+    /// 파일 하나를 파싱하고 시간 상한을 적용한다.
     fn read_with_hard_timeout(&self, abs_path: PathBuf) -> Result<Docs, ReadFileError> {
-        let reader = self.reader();
-        let (tx, rx) = mpsc::channel();
-        let spawned = std::thread::Builder::new().name("book-parse".to_string()).spawn(move || {
-            let _ = tx.send(reader.try_read_file(&abs_path, None, false));
-        });
-        if spawned.is_err() {
-            return Err(ReadFileError::Other("파서 스레드를 시작하지 못했다".to_string()));
-        }
-        match rx.recv_timeout(Duration::from_secs(HARD_PARSE_TIMEOUT_SECONDS)) {
-            Ok(result) => result,
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(ReadFileError::Timeout("파싱 시간 상한을 넘었다".to_string())),
-            // 파서가 panic했다. 읽지 못한 파일로 본다.
-            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(Docs::new()),
-        }
+        self.reader().try_read_file_with_timeout(abs_path, None, false, Duration::from_secs(HARD_PARSE_TIMEOUT_SECONDS))
     }
 
     /// 여러 파일을 배치로 파싱해 ES에 한 번에 색인한다. 반환: (file_path -> 새 book_id, 실패 목록).

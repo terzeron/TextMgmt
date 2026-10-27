@@ -81,14 +81,10 @@ async fn browse(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
     if let Some(error) = error {
         return Ok(Json(json!({"status":"failure","error":error})));
     }
-    let root = manager.path_prefix();
     let books: Vec<Value> = items
         .into_iter()
         .map(|(book, title)| {
-            let mut value = book.dict();
-            if let Ok(relative) = book.file_path.strip_prefix(&root) {
-                value["file_path"] = json!(relative);
-            }
+            let mut value = super::catalog::book_json(&book, manager.as_ref());
             value["display_title"] = json!(title);
             value
         })

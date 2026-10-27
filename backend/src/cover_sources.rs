@@ -16,7 +16,7 @@ use std::sync::{Arc, LazyLock};
 
 use regex::Regex;
 use serde_json::{Map, Value, json};
-use sysdeps::{Clock, FsOps, HttpError, HttpResponse, HttpSession, RealFs, SystemClock};
+use sysdeps::{Clock, FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout, RealFs, SystemClock};
 
 use self::soup::Soup;
 use self::urlx::{Netloc, quote, urlencode, urljoin, urlsplit};
@@ -389,7 +389,7 @@ fn fetch_bytes_cancellable(store: &str, url: &str, session: &dyn HttpSession, ma
             return Err(SearchError::Cancelled);
         }
         validate(store, &url)?;
-        let mut response: HttpResponse = session.get(&url, &[])?;
+        let mut response: HttpResponse = session.get_with_timeout(&url, &[], HttpTimeout::from_secs(5, 15))?;
         if response.is_redirect() {
             url = urljoin(&url, response.location().unwrap_or(""));
             continue;
@@ -732,15 +732,6 @@ pub type SessionFactory = Arc<dyn Fn(&str) -> Arc<dyn HttpSession> + Send + Sync
 type ClientFactory = Arc<dyn Fn() -> Box<dyn StoreClient> + Send + Sync>;
 type ValidateHook = Arc<dyn Fn(&str, &str) -> Result<String, ValueError> + Send + Sync>;
 
-/// 실제 HTTP 구현이 연결되기 전의 기본 세션. 모든 요청이 연결 실패다.
-struct UnavailableSession;
-
-impl HttpSession for UnavailableSession {
-    fn get(&self, _url: &str, _params: &[(String, String)]) -> Result<HttpResponse, HttpError> {
-        Err(HttpError::Connection("실제 HttpSession 구현이 연결되지 않았습니다".to_string()))
-    }
-}
-
 /// 검색이 쓰는 바깥 의존성(세션, 클라이언트, 취소, URL 검증). 기본값은 실제 구현이다.
 #[derive(Clone)]
 pub struct SearchHooks {
@@ -753,7 +744,7 @@ pub struct SearchHooks {
 impl Default for SearchHooks {
     fn default() -> Self {
         SearchHooks {
-            session_factory: Arc::new(|_store| Arc::new(UnavailableSession) as Arc<dyn HttpSession>),
+            session_factory: Arc::new(|store| Arc::new(crate::bookstore::UreqHttpSession::for_store(store)) as Arc<dyn HttpSession>),
             client_factories: BTreeMap::new(),
             cancel: Arc::new(|| false),
             validate: Arc::new(validate_url),
@@ -922,4 +913,83 @@ pub fn search_candidates_with(store: &str, metadata: &Value, hooks: &SearchHooks
 /// 서점의 검색 화면 URL(Python `STORES[store](verbose=False).build_search_url(keyword)`). 모르는 서점이면 빈 문자열이다.
 pub fn build_search_url(store: &str, keyword: &str) -> String {
     default_client(store).map(|client| client.build_search_url(keyword)).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DefaultClient, GateError, SearchError, StoreBlocked, StoreClient, StoreLockError, ValueError, base_for, build_search_url, store_hosts};
+
+    #[test]
+    fn default_client_builds_search_urls_for_non_bookstore_sites() {
+        assert_eq!(build_search_url("ridi", "달빛 산책"), "https://ridibooks.com/search?q=%EB%8B%AC%EB%B9%9B%20%EC%82%B0%EC%B1%85&adult_exclude=n");
+        assert_eq!(
+            build_search_url("naver", "달빛 산책"),
+            "https://search.shopping.naver.com/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&query=%EB%8B%AC%EB%B9%9B%20%EC%82%B0%EC%B1%85&sort=REL"
+        );
+        assert_eq!(build_search_url("munpia", "달빛 산책"), "https://novel.munpia.com/page/hd.platinum/view/search/keyword/%EB%8B%AC%EB%B9%9B%20%EC%82%B0%EC%B1%85/order/search_result");
+        assert_eq!(build_search_url("naverseries", "책"), "https://series.naver.com/search/search.series?t=all&q=%EC%B1%85");
+        assert_eq!(build_search_url("joara", "책"), "https://www.joara.com/search?target=subject&word=%EC%B1%85&search=");
+        assert_eq!(build_search_url("unsupported", "책"), "");
+        assert_eq!(base_for("unsupported"), "");
+        assert_eq!(base_for("yes24"), "https://www.yes24.com");
+        assert_eq!(base_for("aladin"), "https://www.aladin.co.kr");
+        assert_eq!(base_for("kyobo"), "https://search.kyobobook.co.kr");
+        assert!(["yes24", "aladin", "kyobo", "naver", "ridi", "munpia", "naverseries", "joara"].iter().all(|store| !store_hosts(store).is_empty()));
+        assert!(store_hosts("unsupported").is_empty());
+    }
+
+    #[test]
+    fn ridi_info_uses_metadata_then_author_list_or_author_link() {
+        let info = DefaultClient::ridi_info(r#"<meta property="og:title" content="  책 제목  "><li>홍길동외2명 저자</li>"#);
+        assert_eq!(info["title"], "책 제목");
+        assert_eq!(info["author"], "홍길동 외 2명");
+
+        let fallback = DefaultClient::ridi_info("<h1>본문 제목</h1><a href='/author/42'>작가 이름</a>");
+        assert_eq!(fallback["title"], "본문 제목");
+        assert_eq!(fallback["author"], "작가 이름");
+        assert_eq!(DefaultClient::ridi_info("<p>내용</p>")["title"], "");
+    }
+
+    #[test]
+    fn naverseries_info_uses_structured_author_then_description_fallbacks() {
+        let structured = DefaultClient::naverseries_info("<title>작품</title><div id='_otherProductByPerson'><strong>작품</strong><strong>홍길동</strong></div>");
+        assert_eq!(structured["title"], "작품");
+        assert_eq!(structured["author"], "홍길동");
+
+        let description = DefaultClient::naverseries_info("<title>작품</title><meta name='description' content='작가: 김작가, 소개'>");
+        assert_eq!(description["author"], "김작가");
+        let og_description = DefaultClient::naverseries_info("<meta property='og:description' content='작가： 이작가」 소개'>");
+        assert_eq!(og_description["author"], "이작가");
+        assert_eq!(DefaultClient::naverseries_info("<p>내용</p>")["author"], "");
+    }
+
+    #[test]
+    fn naverseries_links_keep_only_list_entries_and_deduplicate() {
+        let html = r#"<ul class="lst_list"><li><a class="N=a:book,r:1" href="/book/1">첫째</a></li><li><a class="N=a:book,r:2" href="/book/1">중복</a></li></ul><a class="N=a:book,r:3" href="/book/3">목록 밖</a><ul><li><a class="N=a:book,r:4" href="/book/4">클래스 없는 목록</a></li></ul>"#;
+        assert_eq!(DefaultClient::naverseries_links(html), ["https://series.naver.com/book/1"]);
+    }
+
+    #[test]
+    fn default_client_reports_isbn_support_only_for_bookstore_backends() {
+        assert!(DefaultClient { store: "yes24".into() }.supports_isbn_search());
+        assert!(DefaultClient { store: "aladin".into() }.supports_isbn_search());
+        assert!(!DefaultClient { store: "ridi".into() }.supports_isbn_search());
+        assert!(!DefaultClient { store: "unsupported".into() }.supports_isbn_search());
+    }
+
+    #[test]
+    fn public_error_types_have_stable_display_messages() {
+        assert_eq!(ValueError("invalid".into()).to_string(), "invalid");
+        assert_eq!(SearchError::Value("bad input".into()).to_string(), "bad input");
+        assert_eq!(SearchError::Http { status: 503 }.to_string(), "서점 응답 오류: HTTP 503");
+        assert_eq!(SearchError::Cancelled.to_string(), "서점 요청이 취소되었습니다");
+        assert_eq!(SearchError::Transport("offline".into()).to_string(), "offline");
+        assert_eq!(StoreLockError::UnknownStore("x".into()).to_string(), "지원하지 않는 서점입니다");
+        assert_eq!(StoreLockError::Cancelled.to_string(), "서점 요청이 취소되었습니다");
+        assert_eq!(StoreLockError::Timeout.to_string(), "서점 요청이 밀려 있습니다. 다시 시도하세요");
+        assert_eq!(StoreLockError::Io("denied".into()).to_string(), "잠금 파일 오류: denied");
+        assert_eq!(StoreBlocked { retry_after: 12.5 }.to_string(), "store blocked for 12.5s");
+        assert_eq!(GateError::Blocked(StoreBlocked { retry_after: 3.0 }).to_string(), "store blocked for 3s");
+        assert_eq!(GateError::Cancelled.to_string(), "서점 요청이 취소되었습니다");
+    }
 }

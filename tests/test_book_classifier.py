@@ -808,3 +808,42 @@ def test_decide_keeps_a_confident_model_without_consulting_bookstores(tmp_path):
 
     assert (cat, method) == ("3_판타지", "model")
     assert "bookstore_candidates" not in entry
+
+
+def test_inspect_txt_content_ignores_cp949_retry_failure(monkeypatch, tmp_path):
+    import builtins
+    import io
+
+    original_open = builtins.open
+
+    def open_without_legacy_encoding(path, *args, **kwargs):
+        if kwargs.get("encoding") == "cp949":
+            raise OSError("legacy encoding unavailable")
+        if str(path).endswith("retry.txt"):
+            return io.StringIO("English only\n")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", open_without_legacy_encoding)
+    result = inspect_txt_content(tmp_path / "retry.txt")
+
+    assert result["snippet"] == "English only"
+    assert result["hashtags"] == []
+
+
+def test_inspect_txt_content_retries_cp949_when_utf8_has_no_hangul(monkeypatch, tmp_path):
+    import builtins
+    import io
+
+    original_open = builtins.open
+
+    def open_with_legacy_content(path, *args, **kwargs):
+        if str(path).endswith("retry-content.txt") and kwargs.get("encoding") == "cp949":
+            return io.StringIO("Legacy content\n")
+        if str(path).endswith("retry-content.txt"):
+            return io.StringIO("English only\n")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", open_with_legacy_content)
+    result = inspect_txt_content(tmp_path / "retry-content.txt")
+
+    assert result["snippet"] == "Legacy content"

@@ -26,10 +26,10 @@ use backend::auth::create_jwt_token;
 use backend::cover_management::{CoverHooks, CoverManagement};
 use backend::es_manager::{EsError, EsManagerApi};
 use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
-use sysdeps::Clock;
 use image::{ImageFormat, Rgb, RgbImage};
 use lopdf::{Document, Object, Stream, dictionary};
 use serde_json::{Value, json};
+use sysdeps::Clock;
 use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
 
@@ -411,12 +411,7 @@ impl GateClient {
 
 impl MockManager {
     pub fn new(root: &Path) -> Arc<Self> {
-        Arc::new(Self {
-            root: root.to_path_buf(),
-            search: Mutex::new(Ok(Some(json!({"title": "책"})))),
-            update_result: Mutex::new(Ok(true)),
-            update_calls: Mutex::new(Vec::new()),
-        })
+        Arc::new(Self { root: root.to_path_buf(), search: Mutex::new(Ok(Some(json!({"title": "책"})))), update_result: Mutex::new(Ok(true)), update_calls: Mutex::new(Vec::new()) })
     }
 
     /// `search_by_id.return_value = value`

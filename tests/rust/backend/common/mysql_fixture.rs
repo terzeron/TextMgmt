@@ -53,6 +53,8 @@ pub fn mysql_container() -> bool {
                 let port = container.get_host_port_ipv4(3306).expect("컨테이너 포트");
                 // SAFETY: OnceLock 초기화 안에서 한 번만 설정한다.
                 unsafe {
+                    // `common::setup_env()` 가 나중에 돌아도 컨테이너 값을 지우지 않게 표식을 남긴다(common::MYSQL_FROM_FIXTURE).
+                    std::env::set_var("TM_TEST_MYSQL_FROM_FIXTURE", "1");
                     std::env::set_var("TM_MYSQL_HOST", host);
                     std::env::set_var("TM_MYSQL_PORT", port.to_string());
                     std::env::set_var("TM_MYSQL_DATABASE", MYSQL_DATABASE);

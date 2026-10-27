@@ -12,14 +12,63 @@ use serde_json::{Value, json};
 use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
 use crate::book::Book;
 use crate::es_manager::EsManagerApi;
+use crate::main::{ApplyCategoryChanges, ProposeCategoryChanges, ReloadProgress};
 
 /// 라우트가 쪽 크기를 정하지 않을 때 쓰는 카테고리 목록 쪽 크기. Python `size: int = 500`.
 const DEFAULT_CATEGORY_PAGE_SIZE: i64 = 500;
 
 #[async_trait]
 impl BookManagerApi for BookManager {
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> (Value, Option<String>) {
+        BookManager::propose_category_changes(
+            self,
+            request.category,
+            Some(request.mappings),
+            super::ProposeOptions {
+                content_type: Some(request.content_type),
+                delay: Some(request.delay),
+                use_bookstore: Some(request.use_bookstore),
+                use_content_meta: Some(request.use_content_meta),
+                on_progress: request.on_progress,
+            },
+        )
+        .await
+    }
+    async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &std::collections::HashSet<String>, clean_existing: bool) -> (Value, Option<String>) {
+        BookManager::apply_category_changes_with(self, items, allowed_file_paths, super::ApplyOptions { clean_existing, ..Default::default() }).await
+    }
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> (Value, Option<String>) {
+        BookManager::apply_category_changes_with(
+            self,
+            request.items,
+            request.allowed_file_paths,
+            super::ApplyOptions {
+                content_type: Some(request.content_type),
+                clean_existing: request.clean_existing,
+                on_progress: request.on_progress,
+                on_item_done: request.on_item_done,
+                should_continue: request.should_continue,
+            },
+        )
+        .await
+    }
     async fn delete_book(&self, id: i64) -> (String, Option<String>) {
         BookManager::delete_book(self, id).await
+    }
+    async fn index_single_file(&self, file_path: &str) -> (Option<i64>, Option<String>) {
+        BookManager::index_single_file(self, file_path).await
+    }
+    async fn delete_file(&self, file_path: &str) -> (String, Option<String>) {
+        BookManager::delete_file(self, file_path).await
+    }
+    async fn reload_category(&self, category: &str, content_type: &str) -> (Value, Option<String>) {
+        BookManager::reload_category(self, category, Some(content_type)).await
+    }
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+        BookManager::reload_category_mismatch_files_for(self, category, content_type, on_progress.as_deref()).await
+    }
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+        BookManager::reload_category_mismatches_for(self, content_type, on_progress.as_deref()).await
     }
     async fn rename_category(&self, old: &str, new: &str) -> (Value, Option<String>) {
         BookManager::rename_category(self, old, new).await
@@ -128,6 +177,10 @@ impl BookManagerApi for BookManager {
 
     fn get_category_mismatches(&self, force_refresh: bool) -> Result<Value, String> {
         self.try_get_category_mismatches(force_refresh)
+    }
+
+    fn get_category_mismatch_details(&self, category: &str) -> Result<Value, String> {
+        self.try_get_category_mismatch_details(category)
     }
 
     async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, Option<i64>, Option<String>, Option<String>) {

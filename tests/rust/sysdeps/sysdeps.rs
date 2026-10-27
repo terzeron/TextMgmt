@@ -3,8 +3,8 @@
 
 use std::io::ErrorKind;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use sysdeps::{Clock, CommandError, CommandRunner, FsOps, HttpResponse, RealFs, SystemClock, SystemRunner};
@@ -49,6 +49,38 @@ mod clock {
 mod fs {
     use super::*;
 
+    struct EmptyFs;
+
+    impl FsOps for EmptyFs {}
+
+    #[test]
+    fn default_fs_operations_return_unsupported() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"x").unwrap();
+        let opened = std::fs::File::open(&file).unwrap();
+        let fs = EmptyFs;
+
+        let errors = [
+            fs.read_dir(dir.path()).unwrap_err(),
+            fs.metadata(&file).unwrap_err(),
+            fs.is_file(&file).unwrap_err(),
+            fs.rename(&file, &dir.path().join("other")).unwrap_err(),
+            fs.remove_file(&file).unwrap_err(),
+            fs.remove_dir(dir.path()).unwrap_err(),
+            fs.remove_dir_all(dir.path()).unwrap_err(),
+            fs.canonicalize(&file).unwrap_err(),
+            fs.same_file(&file, &file).unwrap_err(),
+            fs.open(&file).unwrap_err(),
+            fs.write(&file, b"x").unwrap_err(),
+            fs.disk_free(dir.path()).unwrap_err(),
+            fs.sync_file(&opened).unwrap_err(),
+            fs.lock_exclusive(&opened, false).unwrap_err(),
+        ];
+
+        assert!(errors.iter().all(|err| err.kind() == ErrorKind::Unsupported));
+    }
+
     #[test]
     fn read_dir_lists_entries_as_full_paths() {
         let dir = tempfile::tempdir().unwrap();
@@ -83,6 +115,12 @@ mod fs {
         assert!(!RealFs.is_file(dir.path()).unwrap());
         // Python Path.is_file()은 없는 경로에서 예외 없이 False다.
         assert!(!RealFs.is_file(&dir.path().join("missing")).unwrap());
+    }
+
+    #[test]
+    fn is_file_propagates_invalid_path_errors() {
+        let err = RealFs.is_file(Path::new("bad\0path")).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
     }
 
     #[test]
@@ -147,6 +185,18 @@ mod fs {
     fn disk_free_is_positive_for_an_existing_dir() {
         let dir = tempfile::tempdir().unwrap();
         assert!(RealFs.disk_free(dir.path()).unwrap() > 0);
+    }
+
+    #[test]
+    fn disk_free_rejects_paths_containing_nul() {
+        let err = RealFs.disk_free(Path::new("bad\0path")).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn disk_free_reports_missing_directories() {
+        let err = RealFs.disk_free(Path::new("/definitely/missing/directory")).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::NotFound);
     }
 
     #[test]
@@ -215,6 +265,23 @@ mod runner {
         assert!(found.is_absolute() && Path::new(&found).exists());
         assert!(SystemRunner.which("definitely-not-a-real-program-xyz").is_none());
     }
+
+    #[test]
+    fn which_accepts_an_explicit_executable_path() {
+        let found = SystemRunner.which("/bin/sh").unwrap();
+        assert_eq!(found, Path::new("/bin/sh"));
+        assert!(SystemRunner.which("/definitely/missing/program").is_none());
+    }
+
+    #[test]
+    fn errors_have_python_compatible_display_text() {
+        assert_eq!(CommandError::Timeout.to_string(), "명령이 시간 상한을 넘었다");
+        assert_eq!(CommandError::NotFound.to_string(), "명령을 찾을 수 없다");
+        assert_eq!(CommandError::Failed("broken".into()).to_string(), "명령 실행 실패: broken");
+        assert_eq!(sysdeps::HttpError::Timeout.to_string(), "HTTP 요청 시간 초과");
+        assert_eq!(sysdeps::HttpError::Connection("closed".into()).to_string(), "HTTP 연결 실패: closed");
+        assert_eq!(sysdeps::HttpError::Other("bad status".into()).to_string(), "HTTP 오류: bad status");
+    }
 }
 
 mod http {
@@ -226,6 +293,14 @@ mod http {
         assert_eq!(r.status_code, 200);
         assert_eq!(r.json()["a"], 1);
         assert_eq!(HttpResponse::from_text(200, "한글").text(), "한글");
+    }
+
+    #[test]
+    fn debug_output_contains_response_metadata() {
+        let r = HttpResponse::from_text(204, "");
+        let debug = format!("{r:?}");
+        assert!(debug.contains("status_code: 204"));
+        assert!(debug.contains("headers: []"));
     }
 
     #[test]

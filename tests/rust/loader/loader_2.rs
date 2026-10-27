@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 //! 원본: tests/test_loader.py (후반부)
 //!
 //! loader 후반부: PDF 경량 쪽수 헬퍼, `main()` 분기, HWP, 재인코딩, PDF 단계 테스트. 외부 서비스 없이 실행한다.
@@ -13,12 +15,13 @@
 //! - `doc_reader::pdf::{read_from_obj_stream(&mut File, u64, i64) -> Option<Vec<u8>>,
 //!   parse_one_xref_stream(&mut File, u64) -> Option<(Vec<u8>, [usize; 3], Vec<i64>, Option<i64>)>,
 //!   find_xref_offset(&[u8], i64) -> Option<i64>}` (현재 비공개 함수를 공개)
+//!
 //! 설계: docs/rust-test-seams.md 3.12, 3.13, 4.2. loader_1.rs와 같은 Hooks 이름·필드를 쓴다. 훅은 모두 `Option<&dyn Fn(..)>` 필드이고 `Default` 구현이 있다.
 //! - `doc_reader::pdf::{FastCountHooks, fast_page_count_with(&Path, &FastCountHooks) -> Option<usize>}`:
 //!   `find_xref_offset`, `parse_one_xref_stream`, `xref_stream_find_entry`, `read_from_obj_stream` 대체 훅(`Option<&dyn Fn>`), `Default` 구현
 //! - `doc_reader::pdf::{PlumberDocument, pdf_text_by_plumber_with(&Path, &dyn PlumberDocument) -> Result<(String, usize), String>,
 //!   PdftotextHooks, pdf_text_by_pdftotext_with(&Path, &PdftotextHooks) -> (String, usize)}`
-//!   `PdftotextHooks { which: Fn() -> Option<PathBuf>, run: Fn(&Path, &Path) -> Option<(i32, Vec<u8>)> }`
+//!   `PdftotextHooks { which: Fn() -> Option<PathBuf>, run: Fn(&[String]) -> Option<(i32, Vec<u8>)>, path_cache: OnceLock }`
 //! - `doc_reader::text::{TextHooks, Candidate, read_from_text_with(&Path, &TextHooks) -> (TextRead, Option<String>),
 //!   reencode_text_file_to_utf8_with(&Path, bool, Option<&Path>, &Path, &TextHooks) -> Reencode}`
 //!   `TextHooks { detect, encodings, read_bytes, read_replace, write_backup }` (loader_1.rs는 detect, read_bytes, write_backup을 쓴다)
@@ -37,22 +40,22 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, UNIX_EPOCH};
 
-use doc_reader::mojibake::{count_mojibake_runs, count_mojibake_runs_with, PDF_MOJIBAKE_RUN_LIMIT};
-use doc_reader::office::{convert_with_libreoffice, find_libreoffice, read_from_hwp_with};
-use doc_reader::pdf::{
-    fast_page_count, fast_page_count_with, find_xref_offset, parse_one_xref_stream, pdf_text_by_pdftotext_with, pdf_text_by_plumber_with, read_from_obj_stream, read_from_pdf, run_stage,
-    FastCountHooks, InProcess, PdftotextHooks, PlumberDocument, Stage, StageError, StageRunner,
-};
-use doc_reader::text::{read_from_text_with, reencode_text_file_to_utf8_with, Candidate, Enc, TextHooks};
 use doc_reader::TEXT_SIZE;
-use es_client::indexing::IndexStore;
+use doc_reader::mojibake::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, count_mojibake_runs_with};
+use doc_reader::office::{convert_with_libreoffice, find_libreoffice, read_from_hwp_with_fallback};
+use doc_reader::pdf::{
+    FastCountHooks, InProcess, PdftotextHooks, PlumberDocument, Stage, StageError, StageRunner, fast_page_count, fast_page_count_with, find_xref_offset, parse_one_xref_stream,
+    pdf_text_by_pdftotext_with, pdf_text_by_plumber_with, read_from_obj_stream, read_from_pdf, run_stage,
+};
+use doc_reader::text::{Candidate, Enc, TextHooks, read_from_text_with, reencode_text_file_to_utf8_with};
 use es_client::EsError;
-use loader::cli::{parse_options, run, run_with_hooks, RunHooks, World};
+use es_client::indexing::IndexStore;
+use loader::cli::{RunHooks, World, parse_options, run, run_with_hooks};
 use loader::config::Config;
-use loader::flow::report_problems;
-use loader::record::{read_file, read_file_with_hooks, zip_container_type, ReadHooks, ReadOutcome};
+use loader::flow::{recursive_files, report_problems, sample_files};
+use loader::record::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, zip_container_type};
 use parser_timeout::ParserTimeout;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use stat::Stat;
 use tempfile::TempDir;
 
@@ -204,11 +207,7 @@ impl IndexStore for FakeStore {
         &self.name
     }
     fn ping(&self) -> Result<(), EsError> {
-        if self.ping_ok {
-            Ok(())
-        } else {
-            Err(EsError::Transport("ping 실패".to_owned()))
-        }
+        if self.ping_ok { Ok(()) } else { Err(EsError::Transport("ping 실패".to_owned())) }
     }
     fn index_exists(&self) -> Result<bool, EsError> {
         let s = self.state.lock().unwrap();
@@ -266,13 +265,7 @@ fn run_main(args: &[&str], env: &HashMap<String, String>, store: &FakeStore) -> 
 fn run_main_with(args: &[&str], env: &HashMap<String, String>, store: &FakeStore, runner: &(dyn StageRunner + Sync)) -> (i32, String) {
     let args = to_args(args);
     let get = |k: &str| env.get(k).cloned();
-    let connect = |_index: &str| -> Result<Box<dyn IndexStore>, String> {
-        if store.ping_ok {
-            Ok(Box::new(store.clone()))
-        } else {
-            Err("ES ping 실패".to_owned())
-        }
-    };
+    let connect = |_index: &str| -> Result<Box<dyn IndexStore>, String> { if store.ping_ok { Ok(Box::new(store.clone())) } else { Err("ES ping 실패".to_owned()) } };
     let world = World { env: &get, connect: &connect, runner };
     let mut out = Vec::new();
     let code = run("loader", &args, &world, &mut out);
@@ -295,7 +288,7 @@ fn hwp_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/books/_hwp")
 }
 
-/// 샘플 파일이 없으면 panic한다. 이 파일을 쓰는 테스트는 `#[ignore]`이다.
+/// 샘플 파일이 없으면 panic한다.
 fn hwp_fixture(name: &str) -> PathBuf {
     let f = hwp_dir().join(name);
     assert!(f.exists(), "HWP 샘플 파일 필요: tests/books/_hwp/{name}가 없다");
@@ -577,11 +570,11 @@ mod test_loader_main {
 
     #[test]
     fn test_main_no_args() {
-        // Lines 886-888: no args. 원본은 1, Rust는 인자 없음을 도움말 요청으로 보고 0.
+        // Lines 886-888: no args. Python usage error와 같은 코드 1을 반환한다.
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let (code, out) = run_main(&[], &env, &FakeStore::new());
-        assert_eq!(code, 0);
+        assert_eq!(code, 1);
         assert!(!out.is_empty());
     }
 
@@ -743,11 +736,12 @@ mod test_loader_main {
 
     #[test]
     fn test_main_getopt_error() {
-        // Lines 876-878: invalid option. 원본은 1, Rust는 2.
+        // Python getopt 오류는 print_usage()의 SystemExit(0)으로 끝난다.
         let dir = tmp();
         let env = setup_loader_env(dir.path());
-        let (code, _) = run_main(&["--invalid-option", "book"], &env, &FakeStore::new());
-        assert_eq!(code, 2);
+        let (code, out) = run_main(&["--invalid-option", "book"], &env, &FakeStore::new());
+        assert_eq!(code, 0);
+        assert!(out.contains("사용법"));
     }
 }
 
@@ -757,28 +751,24 @@ mod test_hwp_version_detection {
     // HWP 파일 헤더 기반 버전 감지 테스트
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_detect_v1_20() {
         let f = hwp_fixture("v1.20_부하의약혼녀.hwp");
         assert_eq!(detect_hwp_version(&f), "1.20");
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_detect_v2_00() {
         let f = hwp_fixture("v2.00_박노해_참된시작.hwp");
         assert_eq!(detect_hwp_version(&f), "2.00");
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_detect_v2_10() {
         let f = hwp_fixture("v2.10_KYOKA.hwp");
         assert_eq!(detect_hwp_version(&f), "2.10");
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_detect_v3_00() {
         let f = hwp_fixture("v3.00_현대시사전.hwp");
         assert_eq!(detect_hwp_version(&f), "3.00");
@@ -828,37 +818,31 @@ mod test_read_from_hwp_real_files {
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_v1_20_no_crash() {
         assert_no_crash("v1.20_부하의약혼녀.hwp");
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_v2_00_no_crash() {
         assert_no_crash("v2.00_박노해_참된시작.hwp");
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_v2_10_no_crash() {
         assert_no_crash("v2.10_KYOKA.hwp");
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_v3_00_no_crash() {
         assert_no_crash("v3.00_현대시사전.hwp");
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_v3_00_noname22_no_crash() {
         assert_no_crash("v3.00_noname22.hwp");
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_all_versions_return_tuple() {
         // 모든 버전 파일에 대해 3-tuple 반환 확인
         let files = hwp_files();
@@ -877,7 +861,6 @@ mod test_read_from_hwp_with_mocked_libreoffice {
     // LibreOffice 변환 결과를 시뮬레이션하여 버전별 동작 검증
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_v1_20_libreoffice_returns_empty() {
         // V1.20 파일: LibreOffice가 빈 결과를 반환하는 경우
         let f = hwp_fixture("v1.20_부하의약혼녀.hwp");
@@ -889,7 +872,6 @@ mod test_read_from_hwp_with_mocked_libreoffice {
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_v2_10_libreoffice_returns_text() {
         // V2.10 파일: LibreOffice가 텍스트를 반환하는 경우
         let f = hwp_fixture("v2.10_KYOKA.hwp");
@@ -901,7 +883,6 @@ mod test_read_from_hwp_with_mocked_libreoffice {
     }
 
     #[test]
-    #[ignore = "mock.patch: Loader._convert_with_libreoffice가 RuntimeError를 던지게 함; DI 설계 후 활성화"]
     fn test_v3_00_libreoffice_raises() {
         // V3.00 파일: LibreOffice 변환 시 예외 발생. 변환기 실패(종료 코드 3)는 Rust에서 HWP3 fallback으로 이어지므로 예외 주입 seam이 필요하다.
         let f = hwp_fixture("v3.00_현대시사전.hwp");
@@ -913,7 +894,6 @@ mod test_read_from_hwp_with_mocked_libreoffice {
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_special_chars_cleaned() {
         // 변환 결과의 특수문자가 정리되는지 확인
         let f = hwp_fixture("v2.10_PAGER.hwp");
@@ -932,7 +912,6 @@ mod test_hwp3_fallback_integration {
     // LibreOffice 실패 시 hwp3 파서 fallback 테스트
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_fallback_when_libreoffice_returns_empty() {
         // LibreOffice가 빈 문자열 -> hwp3 파서로 텍스트 추출
         let f = hwp_fixture("v2.10_KYOKA.hwp");
@@ -944,7 +923,6 @@ mod test_hwp3_fallback_integration {
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_fallback_when_libreoffice_returns_whitespace() {
         // LibreOffice가 공백만 반환 -> hwp3 파서로 fallback
         let f = hwp_fixture("v3.00_현대시사전.hwp");
@@ -955,7 +933,6 @@ mod test_hwp3_fallback_integration {
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_no_fallback_when_libreoffice_succeeds() {
         // LibreOffice가 텍스트 반환 -> fallback 사용 안 함
         let f = hwp_fixture("v2.10_KYOKA.hwp");
@@ -976,20 +953,19 @@ mod test_loader_hwp3_fallback_edge_cases {
     }
 
     #[test]
-    #[ignore = "mock.patch: hwp3_parser.extract_text_from_hwp3가 RuntimeError를 던지게 함; DI 설계 후 활성화"]
     fn test_fallback_exception_in_hwp3_parser() {
         // hwp3 파서에서 예외 발생해도 전체가 크래시하지 않음
         let f = hwp_fixture("v2.10_KYOKA.hwp");
         let dir = tmp();
         let office = empty_office(dir.path());
         let hwp3_raises = |_: &Path| -> Result<String, String> { Err("파서 에러".to_owned()) };
-        let (summary, _line_count, _errors) = read_from_hwp_with(&f, &office, &hwp3_raises);
+        let convert_empty = |_: &Path| -> Result<String, String> { Ok(String::new()) };
+        let (summary, _line_count, _errors) = read_from_hwp_with_fallback(&f, &office, &convert_empty, &hwp3_raises);
         assert_eq!(summary, "");
         // page_count == 0: read_from_hwp_with는 쪽 수를 돌려주지 않는다(항상 0).
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_fallback_text_truncated_to_text_size() {
         // fallback 결과가 TEXT_SIZE로 잘리는지 확인
         let f = hwp_fixture("v2.10_PAGER.hwp");
@@ -999,7 +975,6 @@ mod test_loader_hwp3_fallback_edge_cases {
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_fallback_special_chars_cleaned() {
         // fallback 결과에도 특수문자 정리가 적용되는지 확인
         let f = hwp_fixture("v2.10_KYOKA.hwp");
@@ -1011,7 +986,6 @@ mod test_loader_hwp3_fallback_edge_cases {
     }
 
     #[test]
-    #[ignore = "HWP 샘플 파일 필요: tests/books/_hwp"]
     fn test_fallback_line_count_correct() {
         // fallback 결과의 line_count가 정확한지 확인
         let f = hwp_fixture("v2.10_KYOKA.hwp");
@@ -1067,7 +1041,6 @@ mod test_read_file_comics_pdf {
     use super::*;
 
     #[test]
-    #[ignore = "mock.patch: Loader._fast_pdf_page_count가 None을 돌려주게 함; DI 설계 후 활성화"]
     fn test_comics_pdf_fast_count_none_falls_back_to_pypdf() {
         // _fast_pdf_page_count 가 None 을 반환하면 pypdf.PdfReader 로 페이지 수를 구한다 (lines 726-729).
         // comics_path_prefix 를 tmp_path 로 설정
@@ -1117,7 +1090,6 @@ mod test_fast_pdf_page_count_branches {
     }
 
     #[test]
-    #[ignore = "mock.patch: Loader._parse_one_xref_stream이 RuntimeError를 던지게 함; DI 설계 후 활성화"]
     fn test_xref_stream_parse_raises_is_swallowed() {
         // parse 중 예외 발생 -> except로 흡수 후 None(658-660).
         let dir = tmp();
@@ -1131,7 +1103,6 @@ mod test_fast_pdf_page_count_branches {
     }
 
     #[test]
-    #[ignore = "mock.patch: Loader._find_xref_offset, _parse_one_xref_stream, _xref_stream_find_entry, _read_from_obj_stream; DI 설계 후 활성화"]
     fn test_mixed_traditional_and_stream_lookups_type2() {
         // traditional + stream lookup 혼재 시 type-2 조회 루프에서 비-stream은 continue(634).
         let dir = tmp();
@@ -1142,13 +1113,7 @@ mod test_fast_pdf_page_count_branches {
         fs::write(&pdf, data).unwrap();
 
         // traditional lookup: obj 1만 offset 100, 나머지는 None
-        let find_offset = |_xd: &[u8], obj: i64| -> Option<i64> {
-            if obj == 1 {
-                Some(100)
-            } else {
-                None
-            }
-        };
+        let find_offset = |_xd: &[u8], obj: i64| -> Option<i64> { if obj == 1 { Some(100) } else { None } };
         // 단일 stream xref (prev 없음)
         let parse = |_: &mut File, _: u64| -> Option<XrefStream> { Some((b"d".to_vec(), [1, 2, 1], vec![0, 3], None)) };
         let find_entry = |_d: &[u8], _w: [usize; 3], _ir: &[i64], obj_num: i64| -> Option<(i64, i64, i64)> {
@@ -1159,19 +1124,43 @@ mod test_fast_pdf_page_count_branches {
             }
         };
         let obj_stream_read = |_: &mut File, _: u64, _: i64| -> Option<Vec<u8>> { Some(b"<< /Count 4 >>".to_vec()) };
-        let hooks = FastCountHooks {
-            find_xref_offset: Some(&find_offset),
-            parse_one_xref_stream: Some(&parse),
-            xref_stream_find_entry: Some(&find_entry),
-            read_from_obj_stream: Some(&obj_stream_read),
-            ..Default::default()
-        };
+        let hooks =
+            FastCountHooks { find_xref_offset: Some(&find_offset), parse_one_xref_stream: Some(&parse), xref_stream_find_entry: Some(&find_entry), read_from_obj_stream: Some(&obj_stream_read) };
         assert_eq!(fast_page_count_with(&pdf, &hooks), Some(4));
     }
 }
 
 mod test_loader_main_branches {
     use super::*;
+
+    #[test]
+    fn test_recursive_files_includes_file_symlinks_but_skips_directory_symlinks() {
+        let dir = tmp();
+        let real_file = dir.path().join("real.txt");
+        fs::write(&real_file, "file").unwrap();
+        let real_dir = dir.path().join("real_dir");
+        fs::create_dir(&real_dir).unwrap();
+        let nested_file = real_dir.join("nested.txt");
+        fs::write(&nested_file, "nested").unwrap();
+        std::os::unix::fs::symlink(&real_file, dir.path().join("file-link.txt")).unwrap();
+        std::os::unix::fs::symlink(&real_dir, dir.path().join("dir-link")).unwrap();
+
+        let mut expected = vec![real_file, dir.path().join("file-link.txt"), nested_file];
+        expected.sort();
+        assert_eq!(recursive_files(dir.path()), expected);
+    }
+
+    #[test]
+    fn test_sample_files_skips_directory_symlinks() {
+        let dir = tmp();
+        let real_dir = dir.path().join("real_dir");
+        fs::create_dir(&real_dir).unwrap();
+        let first_file = real_dir.join("book.txt");
+        fs::write(&first_file, "book").unwrap();
+        std::os::unix::fs::symlink(&real_dir, dir.path().join("alias_dir")).unwrap();
+
+        assert_eq!(sample_files(dir.path()), vec![("real_dir".to_string(), Some(first_file))]);
+    }
 
     /// 정해진 inode의 `{updated_time}`을 ES가 돌려주는 상태로 `--reload`를 돌리고, 적재된 문서를 돌려준다.
     fn run_reload_with_stored_updated_time(stored_updated_time: &str, mtime_ts: u64) -> Value {
@@ -1203,7 +1192,6 @@ mod test_loader_main_branches {
     }
 
     #[test]
-    #[ignore = "mock.patch: Loader.get_stat가 OSError를 던지게 함; DI 설계 후 활성화"]
     fn test_single_file_stat_oserror() {
         // get_stat가 OSError -> continue(917-918), 적재 실패 메시지(994).
         let dir = tmp();
@@ -1362,7 +1350,6 @@ mod test_loader_main_branches {
     }
 
     #[test]
-    #[ignore = "mock.patch: Loader.read_file을 교체해 worker thread 동시 실행을 관찰함; DI 설계 후 활성화"]
     fn test_main_parses_batch_with_two_worker_threads() {
         // 한 배치의 일반 파일 파싱은 worker thread 2개에서 동시에 실행한다.
         let dir = tmp();
@@ -1430,11 +1417,11 @@ mod test_loader_main_branches {
 #[test]
 fn test_loader_module_executed_as_main() {
     // if __name__ == '__main__' 가드 실행 (loader.py:1055).
-    // 인자 없이 실행 -> main()이 print_usage()로 종료 코드 0. ES 접속 없이 인자 검증 단계에서 끝난다.
+    // 인자 없이 실행 -> Python main()처럼 사용법을 보이고 오류 코드로 끝난다.
     let dir = tmp();
     let env = setup_loader_env(dir.path());
     let (code, out) = run_main(&[], &env, &FakeStore::new());
-    assert_eq!(code, 0);
+    assert_eq!(code, 1);
     assert!(!out.is_empty());
 }
 
@@ -1505,10 +1492,7 @@ mod test_report_problems {
 }
 
 mod test_loader_module_import_guards {
-    use super::*;
-
     #[test]
-    #[ignore = "mock.patch: pypdf.errors.PdfReadWarning 속성 제거(Python import guard); Rust 대응 없음, DI 설계 후 활성화"]
     fn test_pypdf_read_warning_filter_failure_is_ignored() {
         // pypdf가 PdfReadWarning을 더 이상 노출하지 않아도 import는 살아 있어야 한다 (55-56).
         // Rust에는 import 시점 경고 필터가 없으므로 crate 공개 상수에 접근되는지만 확인한다.
@@ -1522,7 +1506,6 @@ mod test_reencode_candidate_rejection {
     // 후보 인코딩을 버리는 조건들.
 
     #[test]
-    #[ignore = "mock.patch: chardet.detect, Loader.TEXT_ENCODINGS, 인코딩 불가 코덱 등록; DI 설계 후 활성화"]
     fn test_candidate_that_cannot_be_reencoded_is_skipped() {
         // 왕복 인코딩 자체가 실패하는 후보는 조용히 버린다 (256-257).
         // 디코딩은 되지만 인코딩은 실패하는 코덱(latin-1 디코딩, 인코딩 항상 실패)을 후보로 넣는다.
@@ -1545,7 +1528,6 @@ mod test_reencode_candidate_rejection {
     }
 
     #[test]
-    #[ignore = "mock.patch: chardet.detect가 감지 결과 없음을 돌려주게 함; DI 설계 후 활성화"]
     fn test_mojibake_candidate_is_skipped() {
         // 왕복은 통과해도 mojibake 구간이 많으면 그 후보를 채택하지 않는다 (264).
         // 상위바이트가 대부분 고립되어 cp1252가 후보로 올라가지만, 그 안에 섞인 EUC-KR 2바이트 쌍이 한글로 되살아나므로 cp1252 해석은 틀린 것이다.
@@ -1570,7 +1552,6 @@ mod test_reencode_candidate_rejection {
     }
 
     #[test]
-    #[ignore = "mock.patch: Path.read_bytes가 두 번째 호출부터 OSError를 던지게 함; DI 설계 후 활성화"]
     fn test_readback_failure_is_reported() {
         // 저장 직후 재읽기가 실패하면 성공으로 보고하지 않는다 (320-321).
         let dir = tmp();
@@ -1599,7 +1580,6 @@ mod test_read_from_text_replace_fallback {
     // 엄격 디코딩이 전부 실패했을 때의 errors='replace' 폴백 루프.
 
     #[test]
-    #[ignore = "mock.patch: chardet.detect, Loader.TEXT_ENCODINGS; DI 설계 후 활성화"]
     fn test_replace_candidate_without_letters_is_skipped() {
         // 글자가 하나도 없는 폴백 결과는 채택하지 않고 빈 본문으로 끝낸다 (372-373, 379-382).
         let dir = tmp();
@@ -1619,7 +1599,6 @@ mod test_read_from_text_replace_fallback {
     }
 
     #[test]
-    #[ignore = "mock.patch: chardet.detect, Loader.TEXT_ENCODINGS, Path.open(errors='replace'); DI 설계 후 활성화"]
     fn test_replace_read_error_is_swallowed() {
         // 폴백 읽기 자체가 I/O 오류로 죽어도 적재 루프를 세우지 않는다 (377-378).
         let dir = tmp();
@@ -1643,7 +1622,6 @@ mod test_count_mojibake_runs_guard {
     use super::*;
 
     #[test]
-    #[ignore = "mock.patch: loader.PDF_LATIN1_RUN_RE를 한글 구간 정규식으로 교체; DI 설계 후 활성화"]
     fn test_unencodable_run_is_not_counted() {
         // latin-1로 되돌릴 수 없는 구간은 mojibake 판정에서 제외한다 (519-520).
         // 기본 정규식은 latin-1 범위만 잡으므로, 범위 밖 구간을 잡도록 바꿔 가드를 검증한다.
@@ -1713,7 +1691,6 @@ mod test_pdfplumber_text_size_limit {
     }
 
     #[test]
-    #[ignore = "mock.patch: pdfplumber.open이 가짜 문서를 돌려주게 함; DI 설계 후 활성화"]
     fn test_page_loop_stops_at_text_size() {
         // TEXT_SIZE를 채우면 남은 페이지를 읽지 않는다 (648).
         let dir = tmp();
@@ -1732,7 +1709,6 @@ mod test_pdftotext_failure_modes {
     use super::*;
 
     #[test]
-    #[ignore = "mock.patch: shutil.which가 None을 돌려주게 함, pdftotext 경로 캐시 초기화; Rust에는 pdftotext 단계 없음, DI 설계 후 활성화"]
     fn test_missing_binary_returns_empty() {
         // pdftotext가 설치되어 있지 않으면 빈 결과로 넘어간다 (658).
         let dir = tmp();
@@ -1740,13 +1716,13 @@ mod test_pdftotext_failure_modes {
         fs::write(&pdf, b"%PDF-1.4 mock").unwrap();
 
         let which = || -> Option<PathBuf> { None };
-        let run_unused = |_: &Path, _: &Path| -> Option<(i32, Vec<u8>)> { None };
-        let hooks = PdftotextHooks { which: Some(&which), run: Some(&run_unused) };
+        let run_unused = |_: &[String]| -> Option<(i32, Vec<u8>)> { None };
+        let path_cache = std::sync::OnceLock::new();
+        let hooks = PdftotextHooks { which: Some(&which), run: Some(&run_unused), path_cache: &path_cache };
         assert_eq!(pdf_text_by_pdftotext_with(&pdf, &hooks), (String::new(), 0));
     }
 
     #[test]
-    #[ignore = "mock.patch: shutil.which, subprocess.run이 종료 코드 1을 돌려주게 함; Rust에는 pdftotext 단계 없음, DI 설계 후 활성화"]
     fn test_nonzero_returncode_returns_empty() {
         // pdftotext가 실패 코드로 끝나면 stdout을 신뢰하지 않는다 (663).
         let dir = tmp();
@@ -1754,8 +1730,9 @@ mod test_pdftotext_failure_modes {
         fs::write(&pdf, b"%PDF-1.4 mock").unwrap();
 
         let which = || -> Option<PathBuf> { Some(PathBuf::from("/usr/bin/pdftotext")) };
-        let run_fails = |_: &Path, _: &Path| -> Option<(i32, Vec<u8>)> { Some((1, b"partial garbage".to_vec())) };
-        let hooks = PdftotextHooks { which: Some(&which), run: Some(&run_fails) };
+        let run_fails = |_: &[String]| -> Option<(i32, Vec<u8>)> { Some((1, b"partial garbage".to_vec())) };
+        let path_cache = std::sync::OnceLock::new();
+        let hooks = PdftotextHooks { which: Some(&which), run: Some(&run_fails), path_cache: &path_cache };
         assert_eq!(pdf_text_by_pdftotext_with(&pdf, &hooks), (String::new(), 0));
     }
 }
@@ -1824,7 +1801,6 @@ mod test_read_file_page_count_timeout {
     }
 
     #[test]
-    #[ignore = "mock.patch: Loader._fast_pdf_page_count가 None을, pypdf.PdfReader가 ParserTimeout을 던지게 함; DI 설계 후 활성화"]
     fn test_skip_text_pdf_page_count_timeout() {
         // skip_text 경로의 pypdf 타임아웃 (1267-1268).
         let dir = tmp();
@@ -1842,7 +1818,6 @@ mod test_read_file_page_count_timeout {
     }
 
     #[test]
-    #[ignore = "mock.patch: Loader._fast_pdf_page_count가 None을, pypdf.PdfReader가 ParserTimeout을 던지게 함; DI 설계 후 활성화"]
     fn test_comics_pdf_page_count_timeout() {
         // comics 경로의 pypdf 타임아웃 (1312-1313).
         let dir = tmp();
@@ -1928,7 +1903,6 @@ mod test_loader_main_reencode_options {
     }
 
     #[test]
-    #[ignore = "mock.patch: utils.loader.ThreadPoolExecutor를 생성 횟수를 세는 클래스로 교체; DI 설계 후 활성화"]
     fn test_pdf_only_batch_runs_without_worker_pool() {
         // PDF는 워커 스레드에 올리지 않으므로 스레드풀 없이 처리된다 (1591-1593).
         let dir = tmp();

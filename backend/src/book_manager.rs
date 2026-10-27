@@ -42,8 +42,8 @@ mod backfill;
 mod catalog;
 mod category;
 mod classify;
-mod cover_list;
 mod cover;
+mod cover_list;
 mod epub;
 mod file_reader;
 mod html;
@@ -54,19 +54,19 @@ mod pdf_edit;
 mod preview;
 mod reload;
 mod seams;
-mod update;
 mod uncovered;
+mod update;
 mod util;
 mod validate;
 mod xml_safe;
 
-pub use cover_list::CoverPageOpts;
-pub use uncovered::{CoverBooksPager, CoverPage};
 pub use classify::{ApplyOptions, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, ProposeOptions};
 pub use cover::{BookLookup, BookRef, Thumbnailer};
-pub use file_reader::DefaultFileReader;
+pub use cover_list::CoverPageOpts;
+pub use file_reader::{DefaultFileReader, LoaderFileReader};
 pub use seams::{BackfillThread, BookAdder, BookManagerError, CategoryNameCheck, PathIsRelativeTo, PreviewEpubValidator};
-pub use xml_safe::{SafeXmlParser, XmlElement, _declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, decode_category_cursor, encode_category_cursor};
+pub use uncovered::{CoverBooksPager, CoverPage};
+pub use xml_safe::{_declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, SafeXmlParser, XmlElement, decode_category_cursor, encode_category_cursor};
 
 /// 카테고리 단위 ES 조회 상한. ES `max_result_window`(기본 10000)와 같다.
 pub const MAX_CATEGORY_RESULT_COUNT: i64 = 10000;
@@ -101,7 +101,7 @@ pub enum ReadFileError {
     Other(String),
 }
 
-pub trait FileReader: Send + Sync {
+pub trait FileReader: Send + Sync + 'static {
     /// 파일이 아니거나 지원하지 않는 형식이면 빈 묶음이다.
     fn read_file(&self, path: &Path, path_prefix: Option<&Path>) -> Docs;
 
@@ -114,6 +114,22 @@ pub trait FileReader: Send + Sync {
     /// 실패 사유를 구분해 읽는다. 기본 구현은 실패를 빈 묶음으로 표현하는 `read_file_with_options`에 맡긴다.
     fn try_read_file(&self, path: &Path, path_prefix: Option<&Path>, skip_text: bool) -> Result<Docs, ReadFileError> {
         Ok(self.read_file_with_options(path, path_prefix, skip_text))
+    }
+
+    /// 시간 상한을 두고 읽는다. 기본 구현은 별도 스레드에서 실행한다.
+    fn try_read_file_with_timeout(self: Arc<Self>, path: PathBuf, path_prefix: Option<PathBuf>, skip_text: bool, timeout: Duration) -> Result<Docs, ReadFileError> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("book-parse".to_string())
+            .spawn(move || {
+                let _ = tx.send(self.try_read_file(&path, path_prefix.as_deref(), skip_text));
+            })
+            .map_err(|_| ReadFileError::Other("파서 스레드를 시작하지 못했다".to_string()))?;
+        match rx.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(ReadFileError::Timeout("파싱 시간 상한을 넘었다".to_string())),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Ok(Docs::new()),
+        }
     }
 }
 
@@ -398,6 +414,24 @@ impl BookManager {
         Ok(manager)
     }
 
+    /// 이미 연결한 ES manager로 운영 인스턴스를 만든다.
+    pub fn from_env_with_es(env: EnvFn, es: Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<BookManager, RuntimeError> {
+        let Some(dir) = env("TM_BOOK_DIR") else {
+            return Err(RuntimeError("The environment variable TM_BOOK_DIR is not set.".to_string()));
+        };
+        let path_prefix = PathBuf::from(dir);
+        log::debug!("{}", path_prefix.display());
+        let index_name = env("TM_ES_BOOK_INDEX").unwrap_or_default();
+        es.create_index().map_err(|e| RuntimeError(format!("create_index failed: {e}")))?;
+        let mut deps = BookManagerDeps::new(path_prefix, es);
+        if let Some(program) = env("TM_LOADER_BIN").filter(|p| !p.is_empty()) {
+            deps = deps.with_loader_program(&program);
+        }
+        let manager = BookManager::with_deps(customize(deps));
+        manager.start_created_time_backfill(matches!(env(CREATED_TIME_BACKFILL_ENV).unwrap_or_default().trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"), &index_name);
+        Ok(manager)
+    }
+
     pub fn path_prefix(&self) -> PathBuf {
         self.path_prefix.clone()
     }
@@ -432,8 +466,7 @@ impl BookManager {
         }
     }
 
-    /// ES 문서에서 `Book`을 만든다. 전역 `Book::path_prefix`를 쓰지 않고 이 매니저의 루트를 쓴다.
-    fn make_book(&self, book_id: i64, info: &Value, score: f64) -> Book {
-        util::book_from_doc(&self.path_prefix, book_id, info, score)
+    fn try_make_book(&self, book_id: i64, info: &Value, score: f64) -> Result<Book, String> {
+        util::try_book_from_doc(&self.path_prefix, book_id, info, score)
     }
 }

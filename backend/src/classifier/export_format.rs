@@ -30,16 +30,32 @@ const COEF_CHUNK_BYTES: usize = 4 << 20;
 #[derive(Debug)]
 pub enum ModelError {
     /// 파일을 열거나 읽지 못했다(없는 파일 포함).
-    Io { file: String, source: std::io::Error },
+    Io {
+        file: String,
+        source: std::io::Error,
+    },
     /// JSON 으로 해석하지 못했다.
-    Json { file: String, message: String },
+    Json {
+        file: String,
+        message: String,
+    },
     UnsupportedVersion(u64),
     /// 파일 이름이 디렉토리 밖을 가리킬 수 있다.
     UnsafePath(String),
-    LengthMismatch { file: String, expected: u64, actual: u64 },
-    Sha256Mismatch { file: String },
-    NotFinite { file: String },
-    DuplicateTerm { field: String },
+    LengthMismatch {
+        file: String,
+        expected: u64,
+        actual: u64,
+    },
+    Sha256Mismatch {
+        file: String,
+    },
+    NotFinite {
+        file: String,
+    },
+    DuplicateTerm {
+        field: String,
+    },
     /// 그 밖의 구조 불일치(열 수 합계, 필드 옵션 등).
     Invalid(String),
 }
@@ -121,6 +137,22 @@ pub struct LoadedModel {
 
 fn io_err(file: &str, source: std::io::Error) -> ModelError {
     ModelError::Io { file: file.to_string(), source }
+}
+
+fn check_export_feature_count(n_features: usize) -> Result<(), ModelError> {
+    if n_features > u32::MAX as usize { invalid("n_features 가 u32 범위를 넘는다") } else { Ok(()) }
+}
+
+fn check_finite_manifest_weight(weight: f64) -> Result<(), ModelError> {
+    if !weight.is_finite() { Err(ModelError::NotFinite { file: "model.json".into() }) } else { Ok(()) }
+}
+
+fn verify_no_trailing_data(reader: &mut impl Read, file: &str, expected: u64) -> Result<(), ModelError> {
+    let mut probe = [0u8; 1];
+    if reader.read(&mut probe).map_err(|e| io_err(file, e))? != 0 {
+        return Err(ModelError::LengthMismatch { file: file.to_string(), expected, actual: expected + 1 });
+    }
+    Ok(())
 }
 
 /// 디렉토리 안의 이름 하나만 허용한다. `/`, `\`, `..`, 절대 경로, 숨김 파일, NUL 은 거부한다.
@@ -215,10 +247,7 @@ fn read_coef(dir: &Path, name: &str, expected_sha: &str, n_values: u64) -> Resul
         at += take;
     }
     // 읽는 동안 파일이 자랐다면 거부한다.
-    let mut probe = [0u8; 1];
-    if file.read(&mut probe).map_err(|e| io_err(name, e))? != 0 {
-        return Err(ModelError::LengthMismatch { file: name.to_string(), expected: bytes, actual: bytes + 1 });
-    }
+    verify_no_trailing_data(&mut file, name, bytes)?;
     check_sha(name, expected_sha, &hex(&hasher.finalize()))?;
     if coef.iter().any(|v| !v.is_finite()) {
         return Err(ModelError::NotFinite { file: name.to_string() });
@@ -317,17 +346,34 @@ fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), ModelError> 
 pub fn write_dir(dir: &Path, classes: &[String], fields: &[FieldVectorizer], coef: &[f32], intercept: &[f64], config: &Value, meta: &Value) -> Result<(), ModelError> {
     use super::tokenize::AnalyzerKind;
     std::fs::create_dir_all(dir).map_err(|e| io_err("model.json", e))?;
+    if fields.is_empty() {
+        return invalid("벡터라이저가 하나도 없다");
+    }
     let n_features: usize = fields.iter().map(FieldVectorizer::vocab_size).sum();
     if coef.len() != n_features * classes.len() || intercept.len() != classes.len() {
         return invalid("계수 개수가 n_features x n_classes 와 다르다");
     }
+    let mut expected_offset = 0usize;
+    for f in fields {
+        if usize::try_from(f.offset).ok() != Some(expected_offset) {
+            return invalid(format!("필드 '{}': offset 이 앞 필드들의 크기 합과 다르다", f.name));
+        }
+        expected_offset = expected_offset.checked_add(f.vocab_size()).ok_or_else(|| ModelError::Invalid("열 수 합계가 넘친다".into()))?;
+    }
+    check_export_feature_count(n_features)?;
     let mut field_json = Vec::new();
     for f in fields {
         if f.name.is_empty() || !f.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return invalid(format!("필드 이름 '{}' 은 파일 이름으로 쓸 수 없다", f.name));
         }
+        if !f.weight.is_finite() {
+            return Err(ModelError::NotFinite { file: "model.json".into() });
+        }
         let (vocab_file, idf_file) = (format!("vocab.{}.json", f.name), format!("idf.{}.f32", f.name));
         let vocab_bytes = serde_json::to_vec(&f.vocab_terms()).map_err(|e| ModelError::Json { file: vocab_file.clone(), message: e.to_string() })?;
+        if f.idf().iter().any(|v| !v.is_finite()) {
+            return Err(ModelError::NotFinite { file: idf_file });
+        }
         let idf_bytes: Vec<u8> = f.idf().iter().flat_map(|v| v.to_le_bytes()).collect();
         write_atomic(dir, &vocab_file, &vocab_bytes)?;
         write_atomic(dir, &idf_file, &idf_bytes)?;
@@ -336,19 +382,41 @@ pub fn write_dir(dir: &Path, classes: &[String], fields: &[FieldVectorizer], coe
             AnalyzerKind::Char => "char",
             AnalyzerKind::CharWb => "char_wb",
         };
+        let manifest_weight = match config.get("fields").and_then(|fields| fields.get(&f.name)) {
+            Some(spec) => match spec.get("weight") {
+                Some(value) => value.as_f64().ok_or_else(|| ModelError::Invalid(format!("필드 '{}': weight 가 숫자가 아니다", f.name)))?,
+                None => 1.0,
+            },
+            None => f64::from(f.weight),
+        };
+        check_finite_manifest_weight(manifest_weight)?;
         field_json.push(serde_json::json!({
-            "name": f.name, "source": f.source, "weight": f64::from(f.weight), "max_chars": f.max_chars, "analyzer": kind,
+            "name": f.name, "source": f.source, "weight": manifest_weight, "max_chars": f.max_chars, "analyzer": kind,
             "ngram_range": [f.spec.ngram_lo, f.spec.ngram_hi], "lowercase": f.spec.lowercase, "sublinear_tf": f.sublinear_tf, "norm": "l2",
             "token_pattern": WORD_TOKEN_PATTERN, "offset": f.offset, "size": f.vocab_size(), "vocab_file": vocab_file, "idf_file": idf_file,
             "idf_sha256": sha256_hex(&idf_bytes), "vocab_sha256": sha256_hex(&vocab_bytes),
         }));
     }
+    if coef.iter().any(|v| !v.is_finite()) {
+        return Err(ModelError::NotFinite { file: "coef.f32".into() });
+    }
+    if intercept.iter().any(|v| !v.is_finite()) {
+        return Err(ModelError::NotFinite { file: "model.json".into() });
+    }
     let coef_bytes: Vec<u8> = coef.iter().flat_map(|v| v.to_le_bytes()).collect();
     write_atomic(dir, "coef.f32", &coef_bytes)?;
+    let mut exported_meta = meta.clone();
+    if let Some(fields) = exported_meta.as_object_mut() {
+        fields.retain(|name, _| !name.starts_with('_'));
+    }
     let manifest = serde_json::json!({
-        "format_version": SUPPORTED_FORMAT_VERSION, "classes": classes, "config": config, "meta": meta, "n_features": n_features, "n_classes": classes.len(),
+        "format_version": SUPPORTED_FORMAT_VERSION, "classes": classes, "config": config, "meta": exported_meta, "n_features": n_features, "n_classes": classes.len(),
         "fields": field_json, "coef_file": "coef.f32", "coef_sha256": sha256_hex(&coef_bytes), "intercept": intercept,
     });
     let bytes = serde_json::to_vec(&manifest).map_err(|e| ModelError::Json { file: "model.json".into(), message: e.to_string() })?;
     write_atomic(dir, "model.json", &bytes)
 }
+
+#[cfg(test)]
+#[path = "../../../tests/rust/backend/export_format_unit.rs"]
+mod tests;

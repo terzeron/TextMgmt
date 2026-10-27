@@ -22,6 +22,7 @@ path = "../../tests/rust/normalize_comic_directories/plan.rs"
 bookstore = { path = "../../libs/bookstore" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 fancy-regex = "0.14"
+pyfmt = { path = "../../libs/pyfmt" }
 serde_json = { workspace = true, features = ["preserve_order"] }
 unicode-normalization = "0.1.26"
 

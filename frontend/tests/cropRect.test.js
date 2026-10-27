@@ -120,6 +120,15 @@ describe("boxCorners / insidePage", () => {
 });
 
 describe("resizeBox (회전한 박스)", () => {
+  it("angle 이 생략되면 0도로 취급한다", () => {
+    const rect = { x0: 0.2, y0: 0.2, x1: 0.8, y1: 0.8 };
+    const next = resizeBox(rect, "e", 10, 0, 100, 100);
+    expect(next.x0).toBeCloseTo(0.2);
+    expect(next.x1).toBeCloseTo(0.9);
+    expect(next.y0).toBeCloseTo(0.2);
+    expect(next.y1).toBeCloseTo(0.8);
+  });
+
   it("각도 0 이면 resizeRect 와 같다(픽셀 이동량을 비율로 바꾼다)", () => {
     const rect = { x0: 0.2, y0: 0.2, x1: 0.8, y1: 0.8, angle: 0 };
     expect(resizeBox(rect, "e", 10, 0, 100, 100)).toEqual(resizeRect(rect, "e", 0.1, 0));

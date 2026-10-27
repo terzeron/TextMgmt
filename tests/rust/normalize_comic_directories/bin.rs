@@ -5,11 +5,11 @@ fn bin() -> Command {
 }
 
 #[test]
-fn no_arguments_print_the_usage_and_exit_zero() {
-    let out = bin().output().unwrap();
+fn help_prints_the_usage_without_scanning_the_default_root() {
+    let out = bin().arg("--help").output().unwrap();
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8(out.stdout).unwrap();
-    assert!(text.contains("사용법") && text.contains("normalize_comic_directories run"), "{text}");
+    assert!(text.contains("사용법") && text.contains("normalize_comic_directories [run]"), "{text}");
 }
 
 #[test]

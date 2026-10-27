@@ -16,10 +16,11 @@ use super::routes::Routes;
 use crate::view_history_store::MAX_RECENT_VIEWS;
 
 pub(super) fn routes() -> Routes {
-    Routes::new()
-        .post("/books/view-history/{book_id}", &["require_auth"], record_book_view)
-        .post("/comics/view-history/{book_id}", &["require_auth"], record_comic_view)
-        .get("/view-history", &["require_admin"], list_view_history)
+    Routes::new().post("/books/view-history/{book_id}", &["require_auth"], record_book_view).post("/comics/view-history/{book_id}", &["require_auth"], record_comic_view).get(
+        "/view-history",
+        &["require_admin"],
+        list_view_history,
+    )
 }
 
 /// FastAPI의 `book_id: int` 검증. 정수가 아니면 422다.
@@ -28,18 +29,18 @@ fn parse_book_id(raw: &str) -> Result<i64, ApiError> {
 }
 
 async fn record_book_view(State(deps): State<Arc<AppDeps>>, RequireAuth(payload): RequireAuth, Path(book_id): Path<String>) -> ApiResult<Json<Value>> {
-    record_view(&deps, &payload, parse_book_id(&book_id)?, "book")
+    record_view(&deps, &payload, parse_book_id(&book_id)?, "book").await
 }
 
 async fn record_comic_view(State(deps): State<Arc<AppDeps>>, RequireAuth(payload): RequireAuth, Path(book_id): Path<String>) -> ApiResult<Json<Value>> {
-    record_view(&deps, &payload, parse_book_id(&book_id)?, "comic")
+    record_view(&deps, &payload, parse_book_id(&book_id)?, "comic").await
 }
 
 /// 열람 뷰어 진입을 1건 기록한다. 제목·카테고리는 클라이언트를 믿지 않고 서버 레코드에서 뜬다.
 /// 접근 검사를 먼저 하므로 viewer가 볼 수 없는 책을 기록하거나 존재 확인 수단으로 쓰는 것도 막힌다.
-fn record_view(deps: &AppDeps, payload: &Value, book_id: i64, content_type: &str) -> ApiResult<Json<Value>> {
+async fn record_view(deps: &AppDeps, payload: &Value, book_id: i64, content_type: &str) -> ApiResult<Json<Value>> {
     log::debug!("# record_book_view(book_id={book_id})");
-    let (book, error) = deps.book_access().get_book_and_ensure_viewer_access(book_id, payload, content_type)?;
+    let (book, error) = deps.book_access().get_book_and_ensure_viewer_access(book_id, payload, content_type).await?;
     let book = match (book, error) {
         (Some(book), None) => book,
         (_, error) => return Err(ApiError::http(404, &error.unwrap_or_else(|| "Book not found".to_string()))),

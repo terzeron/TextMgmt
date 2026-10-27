@@ -5,12 +5,12 @@ use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
 use super::stage::{stage_cover, stage_cover_removal, stage_illustration};
-use super::{inspect_archive, normalize_image_with, read_dimensions, CoverError, EpubCoverHooks, FResult, Fail, CHANGED, SAVING};
+use super::{CHANGED, CoverError, EpubCoverHooks, FResult, Fail, SAVING, inspect_archive, normalize_image_with, read_dimensions};
 
 type Precheck<'a> = &'a dyn Fn(&mut ZipArchive<&File>) -> FResult<()>;
 type Stage<'a> = &'a mut dyn FnMut(&File, &Path) -> FResult<()>;
@@ -187,7 +187,7 @@ pub fn remove_cover_with(path: &Path, expected_revision: &str, backup_dir: &Path
 /// EPUB 표지를 뺀다. 표지가 없거나 본문과 공유하면 원본과 백업을 건드리지 않는다.
 pub fn remove_cover_backup_with(path: &Path, expected_revision: &str, backup_dir: &Path, backup_name: Option<&str>, hooks: &EpubCoverHooks) -> Result<Value, CoverError> {
     use super::stage::{detach_publisher_cover, remove_tool_covers, sections};
-    use super::{read_package_with, OPF_NS};
+    use super::{OPF_NS, read_package_with};
     let require_cover = |archive: &mut ZipArchive<&File>| -> FResult<()> {
         let (opf_path, mut package) = read_package_with(archive, hooks)?;
         {

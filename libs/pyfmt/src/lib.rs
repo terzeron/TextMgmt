@@ -6,6 +6,16 @@
 
 use serde_json::Value;
 
+mod alnum_table;
+mod decimal_table;
+mod unicode151;
+
+mod casefold;
+pub use casefold::py_casefold;
+mod lowercase;
+pub use lowercase::py_lowercase;
+pub use unicode151::py_is_assigned;
+
 /// Python `repr(str)`: 작은따옴표를 기본으로 쓰되 `'`만 있으면 큰따옴표로 감싼다.
 fn py_str_repr(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
@@ -72,4 +82,20 @@ pub fn py_float(v: f64) -> String {
 /// 이진 값을 정확히 십진 전개해 짝수 쪽으로 맞추는 Rust 포맷터를 거쳐 되읽는다.
 pub fn py_round(x: f64, ndigits: usize) -> f64 {
     format!("{x:.ndigits$}").parse().unwrap_or(x)
+}
+
+/// Python `str.isalnum()`: 글자(Lu, Ll, Lt, Lm, Lo)나 숫자(Nd, Nl, No)다.
+/// Rust `char::is_alphanumeric`은 결합 모음 기호(Indic 등)까지 글자로 보므로 다르다.
+pub fn py_isalnum(c: char) -> bool {
+    let codepoint = c as u32;
+    let index = alnum_table::PY_ALNUM_RANGES.partition_point(|(_, end)| *end < codepoint);
+    alnum_table::PY_ALNUM_RANGES.get(index).is_some_and(|(start, end)| codepoint >= *start && codepoint <= *end)
+}
+
+/// Python 3.13 `int(str)`가 받는 Unicode 15.1 decimal digit의 값.
+pub fn py_decimal_digit(c: char) -> Option<u8> {
+    let codepoint = c as u32;
+    let index = decimal_table::PY_DECIMAL_RANGES.partition_point(|(_, end)| *end < codepoint);
+    let (start, end) = decimal_table::PY_DECIMAL_RANGES.get(index)?;
+    if codepoint >= *start && codepoint <= *end { Some(((codepoint - start) % 10) as u8) } else { None }
 }

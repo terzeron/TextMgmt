@@ -1,12 +1,11 @@
-//! 정식 표지 판정과 Python `cover_status.sqlite3` 호환 캐시.
+//! 정식 표지 판정과 공유 MySQL cache.
 use std::collections::BTreeSet;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
-use std::time::Duration;
 
+use crate::db::{ConnectionProvider, DbValue, MysqlConfig, mysql_provider};
 use lopdf::{Document, Object};
-use rusqlite::{Connection, OptionalExtension, params};
 
 pub const STANDARD_COVER_SIZES: &[(u32, u32)] = &[(480, 623), (750, 824), (202, 164)];
 
@@ -69,26 +68,30 @@ pub fn has_official_cover(path: &Path, file_type: &str, lock: &Mutex<()>) -> Res
 }
 
 pub struct CoverStatusCache {
-    db_path: PathBuf,
+    provider: ConnectionProvider,
     ready: Mutex<bool>,
 }
 
 impl CoverStatusCache {
-    pub fn new(path: &Path) -> Self {
-        Self { db_path: path.to_path_buf(), ready: Mutex::new(false) }
+    pub fn new() -> Self {
+        Self::with_connection_provider(mysql_provider(MysqlConfig::from_env(&|key| std::env::var(key).ok(), "textmanager")))
     }
 
-    fn connect(&self) -> Result<Connection, String> {
+    pub fn with_connection_provider(provider: ConnectionProvider) -> Self {
+        Self { provider, ready: Mutex::new(false) }
+    }
+
+    fn connect(&self) -> Result<Box<dyn crate::db::DbConnection>, String> {
         let mut ready = self.ready.lock().map_err(|e| e.to_string())?;
-        if !*ready && let Some(parent) = self.db_path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        let connection = Connection::open(&self.db_path).map_err(|e| e.to_string())?;
-        connection.busy_timeout(Duration::from_secs(10)).map_err(|e| e.to_string())?;
+        let mut connection = (self.provider)().map_err(|e| e.to_string())?;
         if !*ready {
             connection
-                .execute("CREATE TABLE IF NOT EXISTS cover_status (file_path TEXT PRIMARY KEY, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL, has_cover INTEGER NOT NULL)", [])
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS cover_status (file_path_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY, file_path TEXT NOT NULL, mtime_ns BIGINT NOT NULL, size BIGINT UNSIGNED NOT NULL, has_cover BOOLEAN NOT NULL) ENGINE=InnoDB",
+                    &[],
+                )
                 .map_err(|e| e.to_string())?;
+            connection.commit().map_err(|e| e.to_string())?;
             *ready = true;
         }
         Ok(connection)
@@ -99,19 +102,30 @@ impl CoverStatusCache {
         let key = path.to_str().ok_or("파일 경로가 UTF-8이 아닙니다")?;
         let modified = metadata.mtime().checked_mul(1_000_000_000).and_then(|n| n.checked_add(metadata.mtime_nsec())).ok_or("파일 시각이 범위를 벗어났습니다")?;
         let size = i64::try_from(metadata.len()).map_err(|e| e.to_string())?;
-        let connection = self.connect()?;
-        let cached: Option<(i64, i64, bool)> = connection
-            .query_row("SELECT mtime_ns,size,has_cover FROM cover_status WHERE file_path=?1", [key], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .optional()
-            .map_err(|e| e.to_string())?;
-        if let Some((mtime, bytes, covered)) = cached
+        let mut connection = self.connect()?;
+        let row = connection.fetch_one("SELECT mtime_ns,size,has_cover FROM cover_status WHERE file_path_hash=SHA2(%s,256)", &[DbValue::from(key)]).map_err(|e| e.to_string())?;
+        if let Some(row) = row
+            && let (Some(mtime), Some(bytes), Some(covered)) =
+                (row.get("mtime_ns").and_then(DbValue::as_i64), row.get("size").and_then(DbValue::as_i64), row.get("has_cover").and_then(DbValue::as_i64))
             && mtime == modified
             && bytes == size
         {
-            return Ok(covered);
+            return Ok(covered != 0);
         }
         let covered = compute()?;
-        connection.execute("INSERT OR REPLACE INTO cover_status (file_path,mtime_ns,size,has_cover) VALUES (?1,?2,?3,?4)", params![key, modified, size, covered]).map_err(|e| e.to_string())?;
+        connection
+            .execute(
+                "INSERT INTO cover_status (file_path_hash,file_path,mtime_ns,size,has_cover) VALUES (SHA2(%s,256),%s,%s,%s,%s) ON DUPLICATE KEY UPDATE file_path=VALUES(file_path),mtime_ns=VALUES(mtime_ns),size=VALUES(size),has_cover=VALUES(has_cover)",
+                &[DbValue::from(key), DbValue::from(key), DbValue::from(modified), DbValue::from(size), DbValue::from(i64::from(covered))],
+            )
+            .map_err(|e| e.to_string())?;
+        connection.commit().map_err(|e| e.to_string())?;
         Ok(covered)
+    }
+}
+
+impl Default for CoverStatusCache {
+    fn default() -> Self {
+        Self::new()
     }
 }

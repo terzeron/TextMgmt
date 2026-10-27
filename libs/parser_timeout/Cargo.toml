@@ -11,3 +11,4 @@ name = "timeout"
 path = "../../tests/rust/parser_timeout/timeout.rs"
 
 [dependencies]
+libc = "0.2"

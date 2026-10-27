@@ -4,7 +4,7 @@
 //! - `backend::book_classifier::{BookClassifierService, clean_empty_parent_dirs_with, inspect_epub_metadata, is_title_match_reliable}`
 //!   - `BookClassifierService::new(library_root: &Path, cache_file: Option<&Path>, classifier: Option<Arc<dyn Classify>>) -> Self` (구 `Option<BookCategoryClassifier>`)
 //!   - `BookClassifierService::_decide_by_bookstore(&self, entry: &mut Value) -> (String, String)` (Python은 튜플, 둘째 값이 판정 사유 코드; Rust 이름은 `decide_by_bookstore`)
-//!   - `clean_empty_parent_dirs_with(child: &Path, root: &Path, fs: &dyn sysdeps::FsOps)` (경로 해석은 `FsOps::canonicalize`. 구 전역 `set_resolve_hook` 대체. 문서에 없는 가정이라 해당 테스트는 `#[ignore]` 유지)
+//!   - `clean_empty_parent_dirs_with(child: &Path, root: &Path, fs: &dyn sysdeps::FsOps)` (`FsOps`에서 경로 정보와 삭제 작업을 받는다.)
 //!   - `inspect_epub_metadata(path: &Path) -> Value`
 //!   - `is_title_match_reliable(a: &str, b: &str) -> bool`
 //! - `backend::classifier::{BookCategoryClassifier, ClassifierOptions}`: `BookCategoryClassifier::new(model: Option<Arc<dyn CategoryModelApi>>, ClassifierOptions) -> Self`
@@ -99,6 +99,21 @@ fn test_clean_empty_parent_dirs_ignores_unresolvable_path() {
     clean_empty_parent_dirs_with(&child, tmp.path(), faulty.as_ref());
 
     assert!(child.exists());
+}
+
+#[test]
+fn test_clean_empty_parent_dirs_stops_when_remove_fails() {
+    let tmp = TempDir::new().unwrap();
+    let stop = tmp.path().join("source");
+    let child = stop.join("empty");
+    fs::create_dir_all(&child).unwrap();
+    let faulty = FaultyFs::new();
+    faulty.set_remove_dir(|_| Some(other_err("permission denied")));
+
+    clean_empty_parent_dirs_with(&child, &stop, faulty.as_ref());
+
+    assert!(child.exists(), "failed removal must leave the directory in place");
+    assert!(stop.exists(), "cleanup must never remove the stop directory");
 }
 
 #[test]

@@ -1,8 +1,8 @@
 //! `HttpTransport`(실제 HTTP 전송)와 `ESManager`의 통합 테스트.
 //!
 //! - 로컬 TCP 서버 테스트: 실제 ES 없이 `op`가 어떤 REST 요청(메서드, 경로, 쿼리 문자열, 본문)이 되는지 확인한다.
-//! - Docker 테스트(`#[ignore = "Docker 필요"]`): 일회용 ES 9.1.0 컨테이너(nori 분석기 설치, 보안 끔)에 붙어 Python `ESManager`의
-//!   주요 동작을 실제로 확인한다. `cargo test -p backend --test es_manager_http -- --ignored --test-threads=1`
+//! - Docker 테스트(fixture가 컨테이너를 띄운다): 일회용 ES 9.1.0 컨테이너(nori 분석기 설치, 보안 끔)에 붙어 Python `ESManager`의
+//!   주요 동작을 실제로 확인한다. `cargo test -p backend --test es_manager_http`
 //!   이미지는 환경 변수 `TM_TEST_ES_IMAGE`로 바꿀 수 있다(기본 `docker.elastic.co/elasticsearch/elasticsearch:9.1.0`).
 //!   컨테이너는 테스트가 끝나면(실패해도) `docker rm -f`로 지운다. 운영 ES와 `.env`는 쓰지 않는다.
 //!
@@ -22,6 +22,9 @@ use std::time::{Duration, Instant};
 use backend::es_manager::{ESManager, EsError, EsTransport, HttpTransport, RealEsConnector, SimilarDocsArgs, UpdateFields};
 use serde_json::{Value, json};
 use sysdeps::SystemClock;
+
+#[path = "../common/tls_server.rs"]
+mod tls_server;
 
 // ---------------------------------------------------------------------------
 // 로컬 서버
@@ -222,12 +225,17 @@ fn non_json_response_is_parse_error_and_refused_connection_is_transport_error() 
 }
 
 #[test]
-fn https_is_refused_without_connecting_and_unknown_op_is_unsupported() {
-    let t = HttpTransport::new("https://localhost:1", "u", "p", "books", Duration::from_secs(1));
-    match t.call("info", &json!({})) {
-        Err(EsError::Transport(message)) => assert!(message.contains("http"), "{message}"),
-        other => panic!("Transport 오류를 기대했다: {other:?}"),
-    }
+fn https_uses_the_configured_ca_and_unknown_op_is_unsupported() {
+    let (url, server) = tls_server::serve_tls_once();
+    let ca_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/rust/common/tls/local-es.crt");
+    let t = HttpTransport::new_with_ca(&url, "u", "p", "books", Duration::from_secs(1), Some(&ca_path));
+    assert_eq!(t.call("info", &json!({})).unwrap()["version"]["number"], "9.1.0");
+    server.join().unwrap();
+
+    let (untrusted_url, untrusted_server) = tls_server::serve_tls_once();
+    let untrusted = HttpTransport::new(&untrusted_url, "u", "p", "books", Duration::from_secs(1));
+    assert!(matches!(untrusted.call("info", &json!({})), Err(EsError::Transport(_))));
+    untrusted_server.join().unwrap();
     assert_eq!(transport("http://127.0.0.1:1").call("no.such_op", &json!({})), Err(EsError::Unsupported));
 }
 
@@ -297,6 +305,8 @@ fn start_es() -> EsContainer {
         "xpack.security.enabled=false",
         "-e",
         "ES_JAVA_OPTS=-Xms512m -Xmx512m",
+        "-e",
+        "ES_SETTING_CLUSTER_ROUTING_ALLOCATION_DISK_THRESHOLD__ENABLED=false",
         "--entrypoint",
         "sh",
         &image,
@@ -329,7 +339,6 @@ fn ids(hits: &[(i64, Value, f64)]) -> Vec<i64> {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn docker_es_manager_flow_against_real_elasticsearch() {
     let container = start_es();
     let es: Arc<dyn EsTransport> = Arc::new(HttpTransport::new(&container.url, "", "", "tm_books", Duration::from_secs(30)));
@@ -358,13 +367,13 @@ fn docker_es_manager_flow_against_real_elasticsearch() {
     manager.refresh().unwrap();
 
     // 3. search_by_id
-    assert_eq!(manager.search_by_id(1)["title"], json!("토지 첫째 권"));
-    assert_eq!(manager.search_by_id(999), json!({}));
+    assert_eq!(manager.search_by_id(1).unwrap()["title"], json!("토지 첫째 권"));
+    assert_eq!(manager.search_by_id(999).unwrap(), json!({}));
     assert_eq!(manager.get_existing_paths(&[1, 999]).unwrap(), HashMap::from([(1, "소설/한국/토지1.epub".to_string())]));
 
     // 4. update, delete, 오류 상태 코드
     assert!(manager.update(1, &UpdateFields { title: "토지 제1권".into(), updated_time: "2026-02-01T00:00:00".into(), ..Default::default() }).unwrap());
-    assert_eq!(manager.search_by_id(1)["title"], json!("토지 제1권"));
+    assert_eq!(manager.search_by_id(1).unwrap()["title"], json!("토지 제1권"));
     assert!(matches!(manager.update(999, &UpdateFields { title: "x".into(), ..Default::default() }), Err(EsError::Status { status: 404, .. })));
     assert!(matches!(manager.delete(999), Err(EsError::Status { status: 404, .. })));
     assert!(matches!(es.call("search", &json!({"index": "tm_books", "query": {"no_such_query": {}}})), Err(EsError::Status { status: 400, .. })));
@@ -440,14 +449,14 @@ fn docker_es_manager_flow_against_real_elasticsearch() {
     std::fs::write(tmp.path().join("과학/코스모스.pdf"), "x").unwrap();
     let report = manager.backfill_created_time(tmp.path(), 2);
     assert_eq!((report["updated"].clone(), report["skipped"].clone(), report["failed"].clone()), (json!(1), json!(4), json!(0)));
-    assert!(manager.search_by_id(3)["created_time_source"].as_str().is_some());
+    assert!(manager.search_by_id(3).unwrap()["created_time_source"].as_str().is_some());
 
     // 9. 이름 바꾸기, 삭제
     let renamed = manager.rename_category("과학", "자연과학").unwrap();
     assert_eq!(renamed, json!({"updated": 3, "failures": []}));
-    assert_eq!(manager.search_by_id(3)["category"], json!("자연과학"));
-    assert_eq!(manager.search_by_id(5)["category"], json!("자연과학/물리"));
-    assert_eq!(manager.search_by_id(5)["file_path"], json!("자연과학/물리/시간.txt"), "file_path의 접두사도 함께 바뀐다");
+    assert_eq!(manager.search_by_id(3).unwrap()["category"], json!("자연과학"));
+    assert_eq!(manager.search_by_id(5).unwrap()["category"], json!("자연과학/물리"));
+    assert_eq!(manager.search_by_id(5).unwrap()["file_path"], json!("자연과학/물리/시간.txt"), "file_path의 접두사도 함께 바뀐다");
     assert_eq!(manager.count_by_category("자연과학", true).unwrap(), 3);
     assert_eq!(manager.delete_by_category("자연과학/물리", false).unwrap(), json!({"deleted": 1, "failures": []}));
     assert_eq!(manager.delete_by_file_paths(&["소설/한국/토지1.epub"], Some(&[1])), 0);

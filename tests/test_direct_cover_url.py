@@ -90,6 +90,21 @@ def test_https_connects_to_validated_ip_with_original_tls_hostname(monkeypatch):
     assert pool.__enter__.return_value.urlopen.call_args.args[:2] == ("GET", "/a.jpg?q=1")
 
 
+def test_fetch_uses_python_connect_and_read_timeouts(monkeypatch):
+    public_dns(monkeypatch)
+    pool = MagicMock()
+    response = pool.__enter__.return_value.urlopen.return_value
+    response.status = 200
+    response.stream.return_value = [b"image"]
+    monkeypatch.setattr(module.urllib3, "HTTPSConnectionPool", lambda *args, **kwargs: pool)
+
+    assert module.fetch_url_image("https://example.org/a.jpg") == b"image"
+
+    timeout = pool.__enter__.return_value.urlopen.call_args.kwargs["timeout"]
+    assert timeout.connect_timeout == 5
+    assert timeout.read_timeout == 15
+
+
 @pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.org/x", "http://u:p@example.org/x", "https://example.org:444/x", "https:///no-host", "http://127.0.0.1/x"])
 def test_rejects_invalid_urls_and_private_addresses(monkeypatch, url):
     monkeypatch.setattr(module.socket, "getaddrinfo", lambda *args, **kwargs: [(2, 1, 6, "", ("127.0.0.1", 80))])

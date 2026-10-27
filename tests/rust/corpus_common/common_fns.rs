@@ -76,3 +76,16 @@ fn path_helpers_follow_posixpath() {
     assert_eq!(category_of(Path::new("/tmp/x/a.txt")), "");
     assert_eq!(category_of(Path::new("/mnt/data/text")), "");
 }
+
+#[test]
+fn korean_slow_path_keeps_decoding_long_text_after_an_invalid_byte() {
+    use corpus_common::reader::{decode_korean_ignore, decode_korean_replace};
+    // 한글은 2바이트가 3바이트 UTF-8이 되므로, 버퍼를 입력 길이로만 잡으면 중간에서 OutputFull이 난다.
+    let text = "안녕하세요 ".repeat(200);
+    let (korean, _, _) = encoding_rs::EUC_KR.encode(&text);
+    let mut raw = korean.into_owned();
+    raw.push(0xff);
+    let replaced = decode_korean_replace(&raw, false);
+    assert_eq!(replaced, format!("{}\u{fffd}", "안녕하세요 ".repeat(200)));
+    assert_eq!(decode_korean_ignore(&raw, false), "안녕하세요 ".repeat(200));
+}

@@ -31,6 +31,17 @@ fn test_tilted_crop_straightens_the_region() {
 }
 
 #[test]
+fn test_tilted_grayscale_pixels_match_python_pillow() {
+    let source = DynamicImage::ImageLuma8(ImageBuffer::from_fn(16, 16, |x, y| Luma([((x * 13 + y * 7) % 256) as u8])));
+    let out = crop_pil(&source, (0.25, 0.25, 0.75, 0.75, 10.0)).unwrap();
+    let expected = [
+        83, 97, 111, 125, 140, 154, 168, 181, 89, 103, 116, 131, 146, 160, 174, 187, 95, 108, 122, 136, 151, 165, 179, 192, 100, 113, 126, 141, 155, 170, 183, 196, 103, 116, 129, 144, 158, 173, 186,
+        199, 107, 120, 134, 148, 163, 177, 191, 204, 112, 125, 139, 153, 168, 183, 196, 210, 118, 131, 145, 159, 174, 188, 202, 216,
+    ];
+    assert_eq!(out.to_luma8().as_raw(), &expected);
+}
+
+#[test]
 fn test_one_bit_image_is_rotated_as_grey() {
     let source = DynamicImage::ImageLuma8(ImageBuffer::<Luma<u8>, _>::from_pixel(200, 200, Luma([255])));
     let out = crop_pil(&source, (0.3, 0.3, 0.7, 0.7, 5.0)).unwrap();

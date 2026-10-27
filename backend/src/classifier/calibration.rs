@@ -92,11 +92,8 @@ pub fn from_coverage_report(holdout: Option<&Value>) -> Option<Value> {
             rows.push(row);
         }
     }
-    let mut points: Vec<(f64, f64, f64)> = rows
-        .iter()
-        .filter(|r| r.get("coverage").is_some_and(is_truthy))
-        .filter_map(|r| Some((r["coverage"].as_f64()?, r["precision"].as_f64()?, r["threshold"].as_f64()?)))
-        .collect();
+    let mut points: Vec<(f64, f64, f64)> =
+        rows.iter().filter(|r| r.get("coverage").is_some_and(is_truthy)).filter_map(|r| Some((r["coverage"].as_f64()?, r["precision"].as_f64()?, r["threshold"].as_f64()?))).collect();
     points.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.total_cmp(&b.2)));
     points.dedup();
     if points.len() < 2 {

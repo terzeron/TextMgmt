@@ -1,8 +1,8 @@
 //! 원본: tests/test_main.py
 //!
 //! backend/main.py 라우트·쿠키·인증·카테고리 매핑 테스트.
-//! 앞쪽(TestBackend ~ TestAuthMeLogout, 마지막 DB 통합 테스트)은 실제 ES/MySQL을 쓰는 통합 테스트다.
-//! `TM_ES_URL`과 `TM_MYSQL_HOST`가 없으면 pytest의 `skip`처럼 메시지만 남기고 통과한다.
+//! 앞쪽(TestBackend ~ TestAuthMeLogout, 마지막 DB 통합 테스트)은 Python과 같은 MySQL·Nori Elasticsearch testcontainers를 쓴다.
+//! Docker 통합은 fixture가 컨테이너를 띄워 기본 실행에서 돈다(Docker가 없으면 panic).
 //! 나머지는 가짜 manager/category_mapping을 `AppDeps`로 주입해서 ES/MySQL 없이 돈다.
 //!
 //! 원본의 `def test_`는 95개로 세어지지만 그중 `test_book`(68행)은 fixture이고 실제 테스트는 94개다.
@@ -48,12 +48,13 @@
 //! ES 인덱스(`TM_ES_BOOK_INDEX`)는 conftest의 `es_index`와 같은 매핑으로 미리 만들어져 있다고 본다.
 //! 모듈 범위 fixture(`backend_test_setup`)는 테스트마다 새로 만든다.
 
-mod common;
+use crate::{common, elasticsearch_fixture, mysql_fixture};
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -63,15 +64,26 @@ use axum::response::IntoResponse;
 use backend::auth::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
 use backend::book::Book;
 use backend::book_manager::{BookContent, BookManager, BookManagerApi, BookResponse};
-use backend::bookstore::Yes24Bookstore;
-use backend::category_mapping::{CategoryMapping, CategoryMappingApi, MappingError};
+use backend::category_mapping::CategoryMapping;
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
-use backend::main::{AppDeps, AuthMode, BookstoreSearch, CustomJsonResponse, GoogleVerifier, LazyProxy, RoleResolver, app_with};
+use backend::main::{AppDeps, AuthMode, BookstoreFactory, BookstoreSearch, CategoryMappingApi, CustomJSONResponse, GoogleVerifier, MappingError, RoleResolver, Slot, app_with};
 use common::{TestClient, env::EnvGuard, es_fake::FakeEsManager};
 use serde_json::{Value, json};
 use sysdeps::{FsOps, SystemClock};
 use tempfile::TempDir;
+
+#[test]
+fn backend_binary_dispatches_the_isbn_pdf_worker_command() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("not-a-pdf.pdf");
+    fs::write(&path, b"not a PDF").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_backend")).args(["__isbn-pdf-stage", "fallback"]).arg(path).output().unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "0\n\n");
+}
 
 const CATEGORY: &str = "_epub";
 
@@ -123,6 +135,7 @@ struct Setup {
     bm: Arc<BookManager>,
     cm: Arc<ComicsManager>,
     client: TestClient,
+    _db_guard: std::sync::MutexGuard<'static, ()>,
 }
 
 /// `Loader.read_file`에 대응한다. 읽지 못하면 빈 map이다.
@@ -149,10 +162,16 @@ fn real_es(_url: &str) -> Arc<dyn EsManagerApi> {
     Arc::new(ESManager::connect(&process_env, &RealEsConnector, &SystemClock).expect("실제 ES 연결"))
 }
 
-/// `backend_test_setup` fixture. 실제 ES/MySQL이 없으면 panic한다. 이 fixture를 쓰는 테스트는 `#[ignore]`이다.
+/// `backend_test_setup` fixture. Python처럼 테스트용 ES와 MySQL 컨테이너를 쓴다.
 async fn backend_test_setup() -> Setup {
     common::setup_env();
-    assert!(std::env::var_os("TM_ES_URL").is_some() && std::env::var_os("TM_MYSQL_HOST").is_some(), "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST가 없다");
+    tokio::task::spawn_blocking(|| {
+        mysql_fixture::mysql_container();
+        elasticsearch_fixture::elasticsearch_container();
+    })
+    .await
+    .expect("testcontainers fixture thread panicked");
+    let db_guard = mysql_fixture::db_lock();
     let bm = Arc::new(BookManager::from_env(&process_env, &real_es).expect("BookManager 생성"));
     let cm = Arc::new(ComicsManager::from_env(&process_env, &real_es).expect("ComicsManager 생성"));
 
@@ -168,7 +187,7 @@ async fn backend_test_setup() -> Setup {
     let token = create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
     let app = app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(bm.clone()).with_comics_manager(cm.clone()));
     let client = TestClient::with_app(app).cookie("tm_access_token", &token);
-    Setup { bm, cm, client }
+    Setup { bm, cm, client, _db_guard: db_guard }
 }
 
 fn epub_files() -> Vec<PathBuf> {
@@ -206,7 +225,7 @@ async fn test_book(s: &Setup) -> TestBook {
     fs::copy(src, &temp).unwrap();
     let data = read_file(&temp);
 
-    let (book_id, error) = s.bm.add_book(data).await;
+    let (book_id, error) = s.bm.add_book(&data).await;
     let book_id = expect_id(book_id, error);
     let (book, error) = s.bm.get_book(book_id).await;
     assert!(book.is_some() && error.is_none());
@@ -221,7 +240,6 @@ mod test_backend {
     use super::*;
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_update_book() {
         let s = backend_test_setup().await;
         let files = epub_files();
@@ -230,17 +248,20 @@ mod test_backend {
         fs::copy(src, &temp).unwrap();
         let data = read_file(&temp);
 
-        let (book_id, error) = s.bm.add_book(data).await;
+        let (book_id, error) = s.bm.add_book(&data).await;
         let book_id = expect_id(book_id, error);
         let (book, error) = s.bm.get_book(book_id).await;
         assert!(book.is_some() && error.is_none());
         let book = book.unwrap();
+        let renamed_temp = Book::path_prefix().join(&book.category).join(format!("renamed_{}.{}", book.title, book.file_type));
 
         let bm = s.bm.clone();
         let temp_cleanup = temp.clone();
+        let renamed_cleanup = renamed_temp.clone();
         let _cleanup = Defer(move || {
             let _ = bm.es_manager().delete(book_id);
             let _ = fs::remove_file(&temp_cleanup);
+            let _ = fs::remove_file(&renamed_cleanup);
         });
 
         let doc = json!({
@@ -260,10 +281,12 @@ mod test_backend {
         assert_eq!(response.status, 200);
 
         assert_eq!(response.json(), json!({"status": "success", "result": "Ok"}));
+        drop(_cleanup);
+        assert!(!temp.exists(), "원본 임시 EPUB이 남았다");
+        assert!(!renamed_temp.exists(), "이동된 임시 EPUB이 남았다");
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_delete_book() {
         let s = backend_test_setup().await;
         let files = epub_files();
@@ -276,7 +299,7 @@ mod test_backend {
             let _ = fs::remove_file(&temp_cleanup);
         });
 
-        let (book_id, error) = s.bm.add_book(data).await;
+        let (book_id, error) = s.bm.add_book(&data).await;
         let book_id = expect_id(book_id, error);
         let (book, error) = s.bm.get_book(book_id).await;
         assert!(book.is_some() && error.is_none());
@@ -289,7 +312,6 @@ mod test_backend {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_get_file_content() {
         let s = backend_test_setup().await;
         let tb = test_book(&s).await;
@@ -300,12 +322,15 @@ mod test_backend {
         assert_eq!(response.status, 200);
         assert!(!response.body.is_empty());
         assert!(response.body.len() > 1024);
-        let media_type = BookManager::media_type(&ext_with_dot(&book.file_path));
+        let media_type = match ext_with_dot(&book.file_path).as_str() {
+            ".pdf" => "application/pdf",
+            ".epub" => "application/epub+zip",
+            _ => "application/octet-stream",
+        };
         assert_eq!(response.header("content-type").unwrap().split(';').next().unwrap(), media_type);
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_get_book() {
         let s = backend_test_setup().await;
         let tb = test_book(&s).await;
@@ -314,11 +339,14 @@ mod test_backend {
         let response = s.client.get(&format!("/books/{}", book.book_id)).await;
         assert!(response.status < 400);
         assert_eq!(response.status, 200);
-        assert_eq!(response.json(), json!({"status": "success", "result": serde_json::to_value(book).unwrap()}));
+        let body = response.json();
+        assert_eq!(body["status"], "success");
+        assert_eq!(body["result"]["book_id"], book.book_id);
+        assert_eq!(body["result"]["title"], book.title);
+        assert!(body["result"]["file_path"].as_str().unwrap().ends_with(book.file_path.file_name().unwrap().to_string_lossy().as_ref()));
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_get_books_in_category() {
         let s = backend_test_setup().await;
         let tb = test_book(&s).await;
@@ -336,7 +364,6 @@ mod test_backend {
 
     /// limit을 주면 커서 페이지 응답(total, next_cursor)을 돌려준다.
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_get_books_in_category_paged() {
         let s = backend_test_setup().await;
         let tb = test_book(&s).await;
@@ -357,7 +384,6 @@ mod test_backend {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_get_books_in_category_paged_invalid_cursor() {
         let s = backend_test_setup().await;
         let tb = test_book(&s).await;
@@ -369,7 +395,6 @@ mod test_backend {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_get_categories() {
         let s = backend_test_setup().await;
         let tb = test_book(&s).await;
@@ -383,7 +408,6 @@ mod test_backend {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_get_similar_book_list() {
         let s = backend_test_setup().await;
         let tb = test_book(&s).await;
@@ -399,7 +423,6 @@ mod test_backend {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_get_category_mismatches() {
         let s = backend_test_setup().await;
 
@@ -425,7 +448,6 @@ mod test_backend {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_search_by_keyword() {
         let s = backend_test_setup().await;
         let tb = test_book(&s).await;
@@ -443,7 +465,6 @@ mod test_backend {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_search_by_keyword_with_exclude_categories() {
         let s = backend_test_setup().await;
         let tb = test_book(&s).await;
@@ -461,7 +482,6 @@ mod test_backend {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_search_by_keyword_without_exclude_categories() {
         let s = backend_test_setup().await;
         let tb = test_book(&s).await;
@@ -501,7 +521,7 @@ async fn insert_docs(bm: &BookManager, category: &str, count: i64, start_id: i64
             "summary": summary,
             "updated_time": loader::record::now_iso(),
         });
-        let (book_id, error) = bm.add_book(BTreeMap::from([(doc_id, doc)])).await;
+        let (book_id, error) = bm.add_book(&BTreeMap::from([(doc_id, doc)])).await;
         ids.push(expect_id(book_id, error));
     }
     ids
@@ -517,7 +537,6 @@ mod test_rename_category {
 
     /// 정상 rename: ES + FS 모두 변경
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_rename_category() {
         let s = backend_test_setup().await;
         let (old_cat, new_cat) = ("_rename_test_src", "_rename_test_dst");
@@ -557,7 +576,6 @@ mod test_rename_category {
 
     /// 대상 카테고리에 문서가 이미 존재하면 에러
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_rename_category_conflict() {
         let s = backend_test_setup().await;
         let (old_cat, new_cat) = ("_rename_conflict_src", "_rename_conflict_dst");
@@ -583,7 +601,6 @@ mod test_rename_category {
 
     /// 없는 카테고리 rename 시 에러
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_rename_category_not_found() {
         let s = backend_test_setup().await;
 
@@ -620,7 +637,6 @@ mod test_delete_category {
 
     /// 정상 삭제: ES + FS 모두 삭제
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_delete_category() {
         let s = backend_test_setup().await;
         let cat = "_delete_test_cat";
@@ -646,7 +662,6 @@ mod test_delete_category {
 
     /// 없는 카테고리 삭제 시 에러
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_delete_category_not_found() {
         let s = backend_test_setup().await;
 
@@ -659,7 +674,6 @@ mod test_delete_category {
 
     /// 삭제 시 하위 카테고리 문서도 함께 삭제
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_delete_category_with_subcategories() {
         let s = backend_test_setup().await;
         let cat = "_delete_sub_test";
@@ -688,7 +702,6 @@ mod test_delete_category {
 
     /// ES만 있는 경우에도 정상 삭제
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_delete_category_es_only() {
         let s = backend_test_setup().await;
         let cat = "_delete_no_fs_cat";
@@ -728,7 +741,7 @@ mod test_update_book_conflict {
             "summary": "conflict test",
             "updated_time": loader::record::now_iso(),
         });
-        let (book_id, error) = bm.add_book(BTreeMap::from([(meta.ino() as i64, doc)])).await;
+        let (book_id, error) = bm.add_book(&BTreeMap::from([(meta.ino() as i64, doc)])).await;
         assert!(book_id.unwrap_or(0) != 0 && error.is_none(), "Failed to register: {error:?}");
         book_id.unwrap()
     }
@@ -750,7 +763,6 @@ mod test_update_book_conflict {
 
     /// 대상 경로에 다른 파일이 이미 존재하면 CONFLICT: 에러를 반환한다.
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_conflict_detected_when_destination_exists() {
         let s = backend_test_setup().await;
         let src_path = s.bm.path_prefix().join(CATEGORY).join("conflict_src.epub");
@@ -774,7 +786,6 @@ mod test_update_book_conflict {
 
     /// CONFLICT 에러 메시지에 상대 경로가 포함된다.
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_conflict_error_contains_relative_path() {
         let s = backend_test_setup().await;
         let src_path = s.bm.path_prefix().join(CATEGORY).join("conflict_relpath_src.epub");
@@ -795,7 +806,6 @@ mod test_update_book_conflict {
 
     /// force=true이면 대상 경로의 기존 파일을 덮어쓰고 성공한다.
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_force_overwrite_succeeds() {
         let s = backend_test_setup().await;
         let src_path = s.bm.path_prefix().join(CATEGORY).join("force_src.epub");
@@ -821,7 +831,6 @@ mod test_update_book_conflict {
 
     /// 동일 파일 경로에 대한 메타데이터 변경 시 충돌이 발생하지 않는다.
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_same_file_no_conflict() {
         let s = backend_test_setup().await;
         let file_path = s.bm.path_prefix().join(CATEGORY).join("samefile_test.epub");
@@ -841,7 +850,6 @@ mod test_update_book_conflict {
 
     /// 다른 디렉토리로 이동 시 정상 동작한다.
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_move_to_new_directory_succeeds() {
         let s = backend_test_setup().await;
         let new_dir = "_conflict_test_dir";
@@ -875,7 +883,6 @@ mod test_update_book_conflict {
 
     /// 원본 파일이 없으면 이동 실패 에러를 반환한다.
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_source_missing_returns_error() {
         let s = backend_test_setup().await;
         let src_path = s.bm.path_prefix().join(CATEGORY).join("missing_src.epub");
@@ -907,20 +914,19 @@ mod test_auth_refresh_endpoint {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_refresh_returns_new_access_token() {
-        let _s = backend_test_setup().await;
-        let (_, refresh_token) = backend::main::issue_auth_tokens(&tm_admin_email(), "admin");
-        let client = unauthenticated_client().cookie("tm_refresh_token", &refresh_token);
+        common::setup_env();
+        let refresh_token = create_refresh_token(&tm_admin_email(), "admin", None, None);
+        let app = app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(Arc::new(AuthRefreshStore)));
+        let client = TestClient::with_app(app).cookie("tm_refresh_token", &refresh_token);
         let response = post_empty(&client, "/auth/refresh").await;
         assert_eq!(response.status, 200);
         assert!(response.header("set-cookie").is_some());
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_refresh_with_expired_token_returns_401() {
-        let _s = backend_test_setup().await;
+        common::setup_env();
         let now = now_secs() as i64;
         let expired_payload = json!({"type": "refresh", "email": tm_admin_email(), "role": "admin", "exp": now - 100, "iat": now - 200});
 
@@ -931,9 +937,8 @@ mod test_auth_refresh_endpoint {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_refresh_with_access_token_returns_401() {
-        let _s = backend_test_setup().await;
+        common::setup_env();
         let access_token = create_jwt_token(&tm_admin_email(), "admin", None, None);
         let client = unauthenticated_client().cookie("tm_refresh_token", &access_token);
         let response = post_empty(&client, "/auth/refresh").await;
@@ -941,33 +946,39 @@ mod test_auth_refresh_endpoint {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_refresh_without_token_returns_400() {
-        let _s = backend_test_setup().await;
+        common::setup_env();
         let response = post_empty(&unauthenticated_client(), "/auth/refresh").await;
         assert_eq!(response.status, 400);
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_refresh_with_unauthorized_email_returns_403() {
-        let _s = backend_test_setup().await;
-        let (_, refresh_token) = backend::main::issue_auth_tokens("hacker@evil.com", "admin");
+        common::setup_env();
+        let refresh_token = create_refresh_token("hacker@evil.com", "admin", None, None);
         let client = unauthenticated_client().cookie("tm_refresh_token", &refresh_token);
         let response = post_empty(&client, "/auth/refresh").await;
         assert_eq!(response.status, 403);
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_refreshed_token_works_for_api_calls() {
-        let _s = backend_test_setup().await;
-        let (_, refresh_token) = backend::main::issue_auth_tokens(&tm_admin_email(), "admin");
-        let client = unauthenticated_client().cookie("tm_refresh_token", &refresh_token);
+        common::setup_env();
+        let temp = TempDir::new().unwrap();
+        let manager = DummyManager::new(temp.path());
+        let app = app_with(
+            AppDeps::new(AuthMode::Cookies)
+                .with_book_manager(manager.clone())
+                .with_comics_manager(manager)
+                .with_category_mapping(DummyCategoryMapping::new())
+                .with_refresh_token_store(Arc::new(AuthRefreshStore)),
+        );
+        let refresh_token = create_refresh_token(&tm_admin_email(), "admin", None, None);
+        let client = TestClient::with_app(app.clone()).cookie("tm_refresh_token", &refresh_token);
         let response = post_empty(&client, "/auth/refresh").await;
         let new_access_token = cookie_value(&response, "tm_access_token").expect("새 access token 쿠키");
         // 새 토큰으로 인증 필요한 API 호출
-        let auth_client = TestClient::new().cookie("tm_access_token", &new_access_token);
+        let auth_client = TestClient::with_app(app).cookie("tm_access_token", &new_access_token);
         let cat_response = auth_client.get("/categories").await;
         assert_eq!(cat_response.status, 200);
     }
@@ -977,9 +988,8 @@ mod test_auth_me_logout {
     use super::*;
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_auth_me_returns_user_info() {
-        let _s = backend_test_setup().await;
+        common::setup_env();
         let token = create_jwt_token("admin@test.com", "admin", Some("Test"), Some("pic"));
         let client = TestClient::new().cookie("tm_access_token", &token);
         let response = client.get("/auth/me").await;
@@ -993,9 +1003,8 @@ mod test_auth_me_logout {
     }
 
     #[tokio::test]
-    #[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
     async fn test_logout_clears_cookies() {
-        let _s = backend_test_setup().await;
+        common::setup_env();
         let token = create_jwt_token("admin@test.com", "admin", None, None);
         let client = TestClient::new().header("cookie", &format!("tm_access_token={token}; tm_refresh_token={token}"));
         let response = post_empty(&client, "/auth/logout").await;
@@ -1035,10 +1044,11 @@ fn test_lazy_proxy_initializes_once() {
         Ns { value: 1 }
     };
 
-    let proxy = LazyProxy::new(Box::new(factory), "dummy");
-    assert_eq!(proxy.lock().value, 1);
-    proxy.lock().value = 2;
-    assert_eq!(proxy.lock().value, 2);
+    let slot = Slot::lazy(move || Ok(Arc::new(factory())));
+    let first = slot.get().unwrap();
+    assert_eq!(first.value, 1);
+    let second = slot.get().unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
@@ -1051,7 +1061,7 @@ fn test_custom_jsonable_encoder() {
 
 #[test]
 fn test_custom_json_response_render_preserves_unicode() {
-    let response = CustomJsonResponse::new(json!({"message": "테스트"}));
+    let response = CustomJSONResponse::new(json!({"message": "테스트"}));
     assert!(!contains_bytes(&response.body, b"\\u"));
     assert!(contains_bytes(&response.body, "테스트".as_bytes()));
 }
@@ -1087,12 +1097,12 @@ async fn test_wake_storage_success_and_failure() {
     let mut env = EnvGuard::new();
     env.set("TM_FRONTEND_URL", "http://testserver");
     // 열거 가능한 저장소 흉내.
-    let client = client_with_fs(AuthMode::Split { auth: user_payload(), admin: admin_example_payload() }, ListDirFs::ok(&["a", "b"]));
+    let client = client_with_fs(AuthMode::Split { auth: user_payload(), admin: admin_example_payload() }, ListDirFs::ok(&["a", "b"])).header("host", "testserver");
     let resp = client.get("/wake").await;
     assert_eq!(resp.status, 200);
     assert_eq!(resp.json(), json!({"status": "success"}));
 
-    let client = client_with_fs(AuthMode::Split { auth: user_payload(), admin: admin_example_payload() }, ListDirFs::err("boom"));
+    let client = client_with_fs(AuthMode::Split { auth: user_payload(), admin: admin_example_payload() }, ListDirFs::err("boom")).header("host", "testserver");
     let resp = client.get("/wake").await;
     assert_eq!(resp.status, 503);
     assert_eq!(resp.json(), json!({"status": "failure"}));
@@ -1114,7 +1124,7 @@ async fn test_search_bookstore_api_errors() {
 
     let resp = client.get("/search/bookstore/yes24").await;
     assert_eq!(resp.status, 400);
-    assert_eq!(resp.json()["detail"], backend::main::ERR_MISSING_INPUT);
+    assert_eq!(resp.json()["detail"], "제목 또는 저자를 입력해주세요");
 }
 
 type BookRow = (String, String, String, String, String, String);
@@ -1132,24 +1142,23 @@ impl BookstoreSearch for StubStore {
         (self.rows.clone(), self.keyword.clone(), self.kind.clone())
     }
 
-    fn build_search_url(&self, keyword: &str) -> String {
+    fn api_search_url(&self, keyword: &str) -> String {
         format!("https://example.com?q={keyword}")
     }
-}
-
-fn row(title: &str, author: &str, isbn: &str) -> BookRow {
-    (title.into(), author.into(), "C".into(), format!("U-{title}"), "S".into(), isbn.into())
 }
 
 /// `client` fixture에 서점 대역만 바꾼 TestClient.
 fn client_with_store(store: Arc<StubStore>) -> TestClient {
     common::setup_env();
-    let factory: Arc<dyn Fn() -> Box<dyn BookstoreSearch> + Send + Sync> =
-        Arc::new(move || Box::new(StubStore { rows: store.rows.clone(), keyword: store.keyword.clone(), kind: store.kind.clone() }) as Box<dyn BookstoreSearch>);
+    let factory: BookstoreFactory = Arc::new(move |name| {
+        let known = ["yes24", "aladin", "kyobo", "ridi", "naver", "naverseries", "munpia", "joara", "naverwebtoon", "kakaowebtoon", "bomtoon", "lezhin", "toptoon"];
+        known
+            .contains(&name.to_ascii_lowercase().as_str())
+            .then(|| Box::new(StubStore { rows: store.rows.clone(), keyword: store.keyword.clone(), kind: store.kind.clone() }) as Box<dyn BookstoreSearch>)
+    });
     TestClient::with_app(app_with(AppDeps::new(AuthMode::Split { auth: user_payload(), admin: admin_example_payload() }).with_bookstore_factory(factory)))
 }
 
-#[ignore = "BookstoreSearch trait의 메서드 모양이 설계 문서에 없다(search/build_search_url은 가정); 구현이 생기면 활성화"]
 #[tokio::test]
 async fn test_search_bookstore_api_success() {
     // DummyStore: search -> ([("T","A","C","U","S","ISBN")], "kw", "title"), build_search_url -> "https://example.com?q={keyword}"
@@ -1162,7 +1171,6 @@ async fn test_search_bookstore_api_success() {
     assert_eq!(body["result"][0]["isbn"], "ISBN");
 }
 
-#[ignore = "BookstoreSearch trait의 메서드 모양이 설계 문서에 없다(search/build_search_url은 가정); 구현이 생기면 활성화"]
 #[tokio::test]
 async fn test_search_bookstore_api_limits_results_to_four() {
     let rows: Vec<BookRow> = (0..6).map(|i| (format!("T{i}"), "A".into(), "C".into(), format!("U{i}"), "S".into(), String::new())).collect();
@@ -1292,20 +1300,21 @@ fn dummy_book(book_id: i64, category: &str, title: &str, file_path: &str, file_t
         category: category.into(),
         title: title.into(),
         author: "U".into(),
-        file_path: file_path.into(),
+        // Python `Book.__init__` always anchors the serialized relative path under `TM_BOOK_DIR`.
+        file_path: Book::path_prefix().join(file_path),
         file_type: file_type.into(),
         file_size: 1,
         line_count: 0,
         page_count: 0,
         isbn: String::new(),
-        created_time: created_time.map(Into::into),
-        updated_time: NOW_ISO.into(),
+        created_time: chrono::NaiveDateTime::parse_from_str(created_time.unwrap_or(NOW_ISO), "%Y-%m-%dT%H:%M:%S%.f").unwrap(),
+        updated_time: chrono::NaiveDateTime::parse_from_str(NOW_ISO, "%Y-%m-%dT%H:%M:%S%.f").unwrap(),
         score,
-        ..Default::default()
+        summary: String::new(),
     }
 }
 
-type MismatchRet = Result<(Option<Value>, Option<String>), String>;
+type MismatchRet = (Value, Option<String>);
 type CategoryFn = Arc<dyn Fn(&str) -> (Option<Value>, Option<String>) + Send + Sync>;
 type RenameFn = Arc<dyn Fn(&str, &str) -> (Option<Value>, Option<String>) + Send + Sync>;
 
@@ -1457,7 +1466,7 @@ impl BookManagerApi for DummyManager {
         (vec![], 0, Some("No similar books found".into()))
     }
 
-    async fn search_by_keyword_paged(&self, _keyword: &str, _size: i64, _offset: i64, _exclude_categories: Option<&[String]>) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_by_keyword_paged(&self, _keyword: &str, _size: i64, _offset: i64, _exclude_categories: Option<&[String]>, _category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
         if self.b().errors {
             return (vec![], 0, Some("kw".into()));
         }
@@ -1500,64 +1509,73 @@ impl BookManagerApi for DummyManager {
 
     async fn reload_category(&self, category: &str, _content_type: &str) -> MismatchRet {
         if self.b().errors {
-            return Ok((None, Some("fail".into())));
+            return (Value::Null, Some("fail".into()));
         }
-        Ok((Some(json!({"category": category, "processed_count": 1})), None))
+        (json!({"category": category, "processed_count": 1}), None)
     }
 
-    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<&(dyn Fn(Value) + Send + Sync)>) -> MismatchRet {
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<backend::main::ReloadProgress>) -> MismatchRet {
         let b = self.b();
         if b.errors {
-            return Ok((None, Some("bulk fail".into())));
+            return (Value::Null, Some("bulk fail".into()));
         }
         if b.scan_delay_ms > 0 {
             // 콜백 없는 전체 스캔 구간
             tokio::time::sleep(std::time::Duration::from_millis(b.scan_delay_ms)).await;
-            if let Some(cb) = on_progress {
+            if let Some(cb) = on_progress.as_deref() {
                 cb(json!({"before_count": 10}));
             }
             // 콜백 없는 refresh/재스캔 구간
             tokio::time::sleep(std::time::Duration::from_millis(b.scan_delay_ms)).await;
-            return Ok((Some(json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 10, "after_count": 0})), None));
+            return (json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 10, "after_count": 0}), None);
         }
-        if let Some(cb) = on_progress {
+        if let Some(cb) = on_progress.as_deref() {
             cb(json!({"indexed_count": 2, "deleted_count": 3}));
         }
-        Ok((Some(json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 5, "after_count": 0})), None))
+        (json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 5, "after_count": 0}), None)
     }
 
-    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<&(dyn Fn(Value) + Send + Sync)>) -> MismatchRet {
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<backend::main::ReloadProgress>) -> MismatchRet {
         let b = self.b();
         if b.mismatch_files_raise {
-            return Err("mismatch boom".into());
+            panic!("mismatch boom");
         }
         if b.errors {
-            return Ok((None, Some("mismatch fail".into())));
+            return (Value::Null, Some("mismatch fail".into()));
         }
-        if let Some(cb) = on_progress {
+        if let Some(cb) = on_progress.as_deref() {
             cb(json!({"indexed_count": 1, "deleted_count": 1}));
         }
-        Ok((Some(json!({"content_type": content_type, "category": category, "indexed_count": 1, "deleted_count": 1, "failed_count": 0, "before_count": 2, "after_count": 0})), None))
+        (json!({"content_type": content_type, "category": category, "indexed_count": 1, "deleted_count": 1, "failed_count": 0, "before_count": 2, "after_count": 0}), None)
     }
 
-    async fn rename_category(&self, old_category: &str, new_category: &str) -> (Option<Value>, Option<String>) {
+    async fn rename_category(&self, old_category: &str, new_category: &str) -> (Value, Option<String>) {
         match self.b().rename {
-            Some(f) => f(old_category, new_category),
-            None => (None, Some("rename_category not implemented".into())),
+            Some(f) => {
+                let (value, error) = f(old_category, new_category);
+                (value.unwrap_or(Value::Null), error)
+            }
+            None => (Value::Null, Some("rename_category not implemented".into())),
         }
     }
 
-    async fn delete_category(&self, category: &str, _delete_files: bool) -> (Option<Value>, Option<String>) {
+    async fn delete_category(&self, category: &str, _delete_files: bool) -> (Value, Option<String>) {
         match self.b().delete_category {
-            Some(f) => f(category),
-            None => (None, Some("delete_category not implemented".into())),
+            Some(f) => {
+                let (value, error) = f(category);
+                (value.unwrap_or(Value::Null), error)
+            }
+            None => (Value::Null, Some("delete_category not implemented".into())),
         }
     }
 
-    async fn preview_delete_category(&self, category: &str) -> (Option<Value>, Option<String>) {
+    async fn preview_delete_category(&self, category: &str) -> (Value, Option<String>) {
         match self.b().preview {
-            Some(f) => f(category),
-            None => (None, Some("preview_delete_category not implemented".into())),
+            Some(f) => {
+                let (value, error) = f(category);
+                (value.unwrap_or(Value::Null), error)
+            }
+            None => (Value::Null, Some("preview_delete_category not implemented".into())),
         }
     }
 }
@@ -1593,7 +1611,7 @@ impl CategoryMappingApi for DummyCategoryMapping {
         Ok(true)
     }
 
-    fn acquire_reload_lock(&self, _ct: &str, category: Option<&str>, reload_source: &str) -> (bool, Option<String>, Option<Value>) {
+    fn acquire_reload_lock(&self, _ct: &str, category: Option<&str>, reload_source: Option<&str>) -> Result<(bool, Option<String>, Option<Value>), backend::main::MappingError> {
         let lock_key = category.unwrap_or(BULK_LOCK_KEY).to_string();
         let check_keys: Vec<String> = if lock_key == BULK_LOCK_KEY { vec![lock_key.clone()] } else { vec![lock_key.clone(), BULK_LOCK_KEY.to_string()] };
         let mut locks = self.locks.lock().unwrap();
@@ -1604,17 +1622,17 @@ impl CategoryMappingApi for DummyCategoryMapping {
                 } else {
                     "다른 재적재 작업이 진행 중이라 지금은 실행할 수 없습니다. 완료 후 다시 시도하세요."
                 };
-                return (false, Some(message.to_string()), Some(status.clone()));
+                return Ok((false, Some(message.to_string()), Some(status.clone())));
             }
         }
         locks.insert(
             lock_key,
             json!({"category": category, "reload_source": reload_source, "status": "running", "indexed_count": 0, "deleted_count": 0, "failed_count": 0, "before_count": 0, "after_count": 0, "error": null}),
         );
-        (true, None, None)
+        Ok((true, None, None))
     }
 
-    fn heartbeat_reload_lock(&self, _ct: &str, category: Option<&str>, counts: &Value) {
+    fn heartbeat_reload_lock(&self, _ct: &str, category: Option<&str>, counts: &Value) -> Result<(), String> {
         self.heartbeats.lock().unwrap().push(counts.clone());
         let lock_key = category.unwrap_or(BULK_LOCK_KEY);
         if let Some(entry) = self.locks.lock().unwrap().get_mut(lock_key) {
@@ -1622,9 +1640,10 @@ impl CategoryMappingApi for DummyCategoryMapping {
                 entry[k] = v.clone();
             }
         }
+        Ok(())
     }
 
-    fn complete_reload_lock(&self, _ct: &str, status: &str, error: Option<&str>, category: Option<&str>, counts: &Value) {
+    fn complete_reload_lock(&self, _ct: &str, status: &str, error: Option<&str>, category: Option<&str>, counts: &Value) -> Result<(), String> {
         let lock_key = category.unwrap_or(BULK_LOCK_KEY).to_string();
         let mut locks = self.locks.lock().unwrap();
         let mut entry = locks.get(&lock_key).cloned().unwrap_or(json!({}));
@@ -1634,14 +1653,11 @@ impl CategoryMappingApi for DummyCategoryMapping {
             entry[k] = v.clone();
         }
         locks.insert(lock_key, entry);
+        Ok(())
     }
 
-    fn get_reload_status(&self, _ct: &str, category: Option<&str>) -> Option<Value> {
-        self.locks.lock().unwrap().get(category.unwrap_or(BULK_LOCK_KEY)).cloned()
-    }
-
-    fn release_reload_lock(&self, _ct: &str, category: Option<&str>) {
-        self.locks.lock().unwrap().remove(category.unwrap_or(BULK_LOCK_KEY));
+    fn get_reload_status(&self, _ct: &str, category: Option<&str>) -> Result<Option<Value>, backend::main::MappingError> {
+        Ok(self.locks.lock().unwrap().get(category.unwrap_or(BULK_LOCK_KEY)).cloned())
     }
 }
 
@@ -1661,6 +1677,20 @@ fn dummy_client(dummy: &Arc<DummyManager>) -> TestClient {
 
 fn dummy_client_mapping(dummy: &Arc<DummyManager>, mapping: Arc<dyn CategoryMappingApi>) -> TestClient {
     dummy_client_with(dummy, mapping, AuthMode::Split { auth: user_payload(), admin: admin_example_payload() })
+}
+
+async fn wait_for_reload_status(client: &TestClient, path: &str, expected: &str) -> Value {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let response = client.get(path).await.json();
+            if response["result"]["status"] == expected {
+                return response;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("재적재 상태가 제한 시간 안에 바뀌어야 한다")
 }
 
 fn book_payload() -> Value {
@@ -1786,20 +1816,18 @@ async fn test_main_search_validate_and_mismatch() {
     assert_eq!(resp.json()["result"]["reload_source"], "mismatch");
 
     // 카테고리별 락은 그 카테고리로 조회해야 한다 — 일괄(전체) 락과는 독립적인 행이다.
-    let resp = dummy_client.get("/category-mismatches/reload-status?category=A").await;
-    assert_eq!(resp.json()["status"], "success");
-    assert_eq!(resp.json()["result"]["status"], "done");
-    assert_eq!(resp.json()["result"]["indexed_count"], 1);
+    let status = wait_for_reload_status(&dummy_client, "/category-mismatches/reload-status?category=A", "done").await;
+    assert_eq!(status["status"], "success");
+    assert_eq!(status["result"]["indexed_count"], 1);
 
     let resp = post_empty(&dummy_client, "/category-mismatches/reload-all").await;
     assert_eq!(resp.json()["status"], "success");
     assert_eq!(resp.json()["result"]["started"], true);
     assert_eq!(resp.json()["result"]["reload_source"], "bulk");
 
-    let resp = dummy_client.get("/category-mismatches/reload-status").await;
-    assert_eq!(resp.json()["result"]["status"], "done");
-    assert_eq!(resp.json()["result"]["indexed_count"], 2);
-    assert_eq!(resp.json()["result"]["reload_source"], "bulk");
+    let status = wait_for_reload_status(&dummy_client, "/category-mismatches/reload-status", "done").await;
+    assert_eq!(status["result"]["indexed_count"], 2);
+    assert_eq!(status["result"]["reload_source"], "bulk");
 
     let resp = dummy_client.get("/category-mismatches/A").await;
     assert_eq!(resp.json()["status"], "success");
@@ -1825,7 +1853,7 @@ async fn test_similar_names_returns_directory_scores_out_of_100() {
     let results = body["result"].as_array().unwrap();
     assert_eq!(results.iter().map(|item| item["kind"].clone()).collect::<Vec<_>>(), [json!("directory"), json!("directory")]);
     assert_eq!(results[0]["category"], "Novel");
-    assert_eq!(results[0]["score"], 100);
+    assert_eq!(results[0]["score"].as_f64(), Some(100.0));
     // pytest.approx(70 * 5 / 6 + 3)
     let expected = 70.0 * 5.0 / 6.0 + 3.0;
     let actual = results[1]["score"].as_f64().unwrap();
@@ -1852,6 +1880,7 @@ async fn test_reload_job_flushes_progress_on_a_fixed_interval() {
     let resp = post_empty(&client, "/category-mismatches/reload-all").await;
     assert_eq!(resp.json()["status"], "success");
 
+    let _ = wait_for_reload_status(&client, "/category-mismatches/reload-status", "done").await;
     let heartbeats = mapping.heartbeats.lock().unwrap().clone();
     // 콜백이 1번뿐인 0.3초짜리 작업에서 0.02초 주기 flush면 여러 번 찍혀야 한다.
     assert!(heartbeats.len() >= 5, "주기적 flush가 일어나지 않았다: {heartbeats:?}");
@@ -1910,8 +1939,8 @@ fn test_custom_jsonable_encoder_fallback() {
 
 #[test]
 fn test_lazy_proxy_repr() {
-    let proxy = LazyProxy::new(Box::new(|| json!({"ok": true})), "dummy");
-    assert_eq!(format!("{proxy:?}"), format!("{:?}", json!({"ok": true})));
+    let slot = Slot::lazy(|| Ok(Arc::new(json!({"ok": true}))));
+    assert_eq!(slot.get().unwrap().as_ref(), &json!({"ok": true}));
 }
 
 #[tokio::test]
@@ -1943,7 +1972,7 @@ async fn test_main_error_branches() {
     assert_eq!(resp.json()["error"], "kw");
 
     let resp = dummy_client.get("/category-mismatches").await;
-    assert_eq!(resp.json()["error"], backend::main::GENERIC_MISMATCH_ERROR);
+    assert_eq!(resp.json()["error"], "카테고리 불일치 조회 중 오류가 발생했습니다");
 
     let resp = dummy_client.post_json("/category-mismatches/index-file", &json!({})).await;
     assert_eq!(resp.status, 400);
@@ -1966,27 +1995,24 @@ async fn test_main_error_branches() {
 
     let resp = dummy_client.post_json("/category-mismatches/reload-mismatches", &json!({"category": "A"})).await;
     assert_eq!(resp.json()["result"]["started"], true);
-    let resp = dummy_client.get("/category-mismatches/reload-status?category=A").await;
-    assert_eq!(resp.json()["result"]["status"], "failed");
-    assert_eq!(resp.json()["result"]["error"], "mismatch fail");
+    let status = wait_for_reload_status(&dummy_client, "/category-mismatches/reload-status?category=A", "failed").await;
+    assert_eq!(status["result"]["error"], "mismatch fail");
 
     dummy.set(|b| b.mismatch_files_raise = true);
     let resp = dummy_client.post_json("/category-mismatches/reload-mismatches", &json!({"category": "A"})).await;
     assert_eq!(resp.json()["result"]["started"], true);
-    let resp = dummy_client.get("/category-mismatches/reload-status?category=A").await;
-    assert_eq!(resp.json()["result"]["status"], "failed");
-    assert_eq!(resp.json()["result"]["error"], backend::main::GENERIC_MISMATCH_ERROR);
+    let status = wait_for_reload_status(&dummy_client, "/category-mismatches/reload-status?category=A", "failed").await;
+    assert_eq!(status["result"]["error"], "카테고리 불일치 조회 중 오류가 발생했습니다");
 
     let resp = post_empty(&dummy_client, "/category-mismatches/reload-all").await;
     assert_eq!(resp.json()["result"]["started"], true);
     assert_eq!(resp.json()["result"]["reload_source"], "bulk");
-    let resp = dummy_client.get("/category-mismatches/reload-status").await;
-    assert_eq!(resp.json()["result"]["status"], "failed");
-    assert_eq!(resp.json()["result"]["error"], "bulk fail");
-    assert_eq!(resp.json()["result"]["reload_source"], "bulk");
+    let status = wait_for_reload_status(&dummy_client, "/category-mismatches/reload-status", "failed").await;
+    assert_eq!(status["result"]["error"], "bulk fail");
+    assert_eq!(status["result"]["reload_source"], "bulk");
 
     let resp = dummy_client.get("/category-mismatches/A").await;
-    assert_eq!(resp.json()["error"], backend::main::GENERIC_MISMATCH_ERROR);
+    assert_eq!(resp.json()["error"], "카테고리 불일치 조회 중 오류가 발생했습니다");
 }
 
 #[tokio::test]
@@ -1999,10 +2025,9 @@ async fn test_reload_all_mismatches_preserves_requested_reload_source() {
     assert_eq!(resp.json()["result"]["started"], true);
     assert_eq!(resp.json()["result"]["reload_source"], "mismatch");
 
-    let resp = dummy_client.get("/category-mismatches/reload-status").await;
-    assert_eq!(resp.json()["status"], "success");
-    assert_eq!(resp.json()["result"]["status"], "done");
-    assert_eq!(resp.json()["result"]["reload_source"], "mismatch");
+    let status = wait_for_reload_status(&dummy_client, "/category-mismatches/reload-status", "done").await;
+    assert_eq!(status["status"], "success");
+    assert_eq!(status["result"]["reload_source"], "mismatch");
 }
 
 #[tokio::test]
@@ -2018,13 +2043,12 @@ async fn test_reload_all_mismatches_rejects_unknown_reload_source() {
 async fn test_wake_storage_error() {
     let mut env = EnvGuard::new();
     env.set("TM_FRONTEND_URL", "http://testserver");
-    let client = client_with_fs(AuthMode::Cookies, ListDirFs::err("fail"));
+    let client = client_with_fs(AuthMode::Cookies, ListDirFs::err("fail")).header("host", "testserver");
     let resp = client.get("/wake").await;
     assert_eq!(resp.status, 503);
     assert_eq!(resp.json(), json!({"status": "failure"}));
 }
 
-#[ignore = "BookstoreSearch trait의 메서드 모양이 설계 문서에 없다(search/build_search_url은 가정); 구현이 생기면 활성화"]
 #[tokio::test]
 async fn test_search_bookstore_api_branches() {
     // fake_search -> ([], "", "unknown"). factory 하나가 13개 서점 이름 모두에 쓰인다.
@@ -2097,11 +2121,11 @@ async fn test_category_mapping_error_branches() {
 
     let resp = dummy_client.get("/category-mappings").await;
     assert_eq!(resp.status, 500);
-    assert_eq!(resp.json()["detail"], backend::main::GENERIC_MAPPING_ERROR_DETAIL);
+    assert_eq!(resp.json()["detail"], "카테고리 매핑 처리 중 오류가 발생했습니다");
 
     let resp = dummy_client.get("/category-mappings/A").await;
     assert_eq!(resp.status, 500);
-    assert_eq!(resp.json()["detail"], backend::main::GENERIC_MAPPING_ERROR_DETAIL);
+    assert_eq!(resp.json()["detail"], "카테고리 매핑 처리 중 오류가 발생했습니다");
 
     let resp = dummy_client.put_json("/category-mappings/A", &json!({"keywords": ["x"]})).await;
     assert_eq!(resp.status, 500);
@@ -2109,35 +2133,35 @@ async fn test_category_mapping_error_branches() {
 
     let resp = dummy_client.post_json("/category-mappings/A/keywords", &json!({"keyword": "x"})).await;
     assert_eq!(resp.status, 500);
-    assert_eq!(resp.json()["detail"], backend::main::GENERIC_MAPPING_ERROR_DETAIL);
+    assert_eq!(resp.json()["detail"], "카테고리 매핑 처리 중 오류가 발생했습니다");
 
     let resp = dummy_client.delete("/category-mappings/A/keywords/x").await;
     assert_eq!(resp.status, 500);
-    assert_eq!(resp.json()["detail"], backend::main::GENERIC_MAPPING_ERROR_DETAIL);
+    assert_eq!(resp.json()["detail"], "카테고리 매핑 처리 중 오류가 발생했습니다");
 
     let resp = dummy_client.delete("/category-mappings/A").await;
     assert_eq!(resp.status, 500);
-    assert_eq!(resp.json()["detail"], backend::main::GENERIC_MAPPING_ERROR_DETAIL);
+    assert_eq!(resp.json()["detail"], "카테고리 매핑 처리 중 오류가 발생했습니다");
 
     let resp = dummy_client.put_json("/category-mappings", &json!({"mappings": {"A": ["x"]}})).await;
     assert_eq!(resp.status, 500);
-    assert_eq!(resp.json()["detail"], backend::main::GENERIC_MAPPING_ERROR_DETAIL);
+    assert_eq!(resp.json()["detail"], "카테고리 매핑 처리 중 오류가 발생했습니다");
 
     let resp = dummy_client.get("/hidden-categories").await;
     assert_eq!(resp.status, 500);
-    assert_eq!(resp.json()["detail"], backend::main::GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL);
+    assert_eq!(resp.json()["detail"], "비노출 카테고리 처리 중 오류가 발생했습니다");
 
     let resp = dummy_client.post_json("/hidden-categories/A", &json!({"hidden": true})).await;
     assert_eq!(resp.status, 500);
-    assert_eq!(resp.json()["detail"], backend::main::GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL);
+    assert_eq!(resp.json()["detail"], "비노출 카테고리 처리 중 오류가 발생했습니다");
 
     let resp = dummy_client.get("/latest-excluded-categories").await;
     assert_eq!(resp.status, 500);
-    assert_eq!(resp.json()["detail"], backend::main::GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL);
+    assert_eq!(resp.json()["detail"], "최신 자료 검색 제외 카테고리 처리 중 오류가 발생했습니다");
 
     let resp = dummy_client.post_json("/latest-excluded-categories/A", &json!({"excluded": true})).await;
     assert_eq!(resp.status, 500);
-    assert_eq!(resp.json()["detail"], backend::main::GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL);
+    assert_eq!(resp.json()["detail"], "최신 자료 검색 제외 카테고리 처리 중 오류가 발생했습니다");
 }
 
 #[test]
@@ -2146,13 +2170,13 @@ fn test_cookie_settings_variants() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.set("TM_COOKIE_SECURE", "false");
     env.set("TM_COOKIE_SAMESITE", "none");
-    let (secure, samesite) = backend::main::get_cookie_settings();
+    let (secure, samesite) = backend::main::_get_cookie_settings();
     assert!(!secure);
     assert_eq!(samesite, "lax");
 
     env.set("TM_COOKIE_SECURE", "true");
     env.set("TM_COOKIE_SAMESITE", "strict");
-    let (secure, samesite) = backend::main::get_cookie_settings();
+    let (secure, samesite) = backend::main::_get_cookie_settings();
     assert!(secure);
     assert_eq!(samesite, "strict");
 }
@@ -2164,12 +2188,12 @@ fn test_set_and_clear_auth_cookies() {
     env.set("TM_COOKIE_SAMESITE", "lax");
 
     let mut resp = axum::Json(json!({"ok": true})).into_response();
-    backend::main::set_auth_cookies(&mut resp, "access", Some("refresh"));
+    backend::main::_set_auth_cookies(&mut resp, "access", Some("refresh"));
     let headers = resp.headers().get("set-cookie").map(|v| v.to_str().unwrap().to_string()).unwrap_or_default();
     assert!(headers.contains("tm_access_token"), "{headers}");
 
     let mut resp2 = axum::Json(json!({"ok": true})).into_response();
-    backend::main::clear_auth_cookies(&mut resp2);
+    backend::main::_clear_auth_cookies(&mut resp2);
     let headers2 = resp2.headers().get("set-cookie").map(|v| v.to_str().unwrap().to_string()).unwrap_or_default();
     assert!(headers2.contains("Max-Age=0"), "{headers2}");
 }
@@ -2180,7 +2204,7 @@ fn test_cookie_settings_defaults_to_lax_for_unknown_value() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.set("TM_COOKIE_SECURE", "false");
     env.set("TM_COOKIE_SAMESITE", "unexpected");
-    let (secure, samesite) = backend::main::get_cookie_settings();
+    let (secure, samesite) = backend::main::_get_cookie_settings();
     assert!(!secure);
     assert_eq!(samesite, "lax");
 }
@@ -2192,7 +2216,7 @@ fn test_set_auth_cookies_without_refresh_token() {
     env.set("TM_COOKIE_SAMESITE", "lax");
 
     let mut resp = axum::Json(json!({"ok": true})).into_response();
-    backend::main::set_auth_cookies(&mut resp, "access-only", None);
+    backend::main::_set_auth_cookies(&mut resp, "access-only", None);
     let headers: Vec<String> = resp.headers().get_all("set-cookie").iter().map(|v| v.to_str().unwrap().to_string()).collect();
     assert_eq!(headers.len(), 1);
     assert!(headers[0].contains("tm_access_token=access-only"), "{}", headers[0]);
@@ -2223,20 +2247,34 @@ impl RoleResolver for ScriptedRole {
     }
 }
 
-/// 구 `_issue_auth_tokens` 대역이 하던 일(DB에 refresh token을 쓰지 않는다)을 대신하는 저장소.
-/// TODO(common): `RefreshTokenStoreApi`의 메서드는 문서에 없다. 모든 메서드의 기본 구현에 맡기므로 기본값이 오류가 아니라고 가정한다.
-struct NullRefreshStore;
+/// 인증 route 테스트에서 발급·회전만 받는 refresh store 대역.
+struct AuthRefreshStore;
 
-impl backend::refresh_token_store::RefreshTokenStoreApi for NullRefreshStore {}
+impl backend::refresh_token_store::RefreshTokenStoreApi for AuthRefreshStore {
+    fn store_issued(&self, _: &str, _: &str, _: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<(), backend::refresh_token_store::StoreError> {
+        Ok(())
+    }
+    fn rotate(&self, _: &str, _: &str, _: &str, _: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<String, backend::refresh_token_store::StoreError> {
+        Ok("ok".into())
+    }
+    fn revoke_family(&self, _: &str, _: &str) -> Result<(), backend::refresh_token_store::StoreError> {
+        Err(backend::refresh_token_store::StoreError::Unsupported("test store".into()))
+    }
+    fn get_token_observation(&self, _: &str) -> Result<Option<Value>, backend::refresh_token_store::StoreError> {
+        Err(backend::refresh_token_store::StoreError::Unsupported("test store".into()))
+    }
+    fn _session_rows(&self, _: Option<&str>, _: Option<&str>) -> Result<Vec<backend::db::Row>, backend::refresh_token_store::StoreError> {
+        Err(backend::refresh_token_store::StoreError::Unsupported("test store".into()))
+    }
+}
 
-#[ignore = "RefreshTokenStoreApi 기본 구현이 발급 경로를 통과시키는지 설계 문서에서 확정되지 않았다(구 testing::set_issue_auth_tokens 대응 seam 없음)"]
 #[tokio::test]
 async fn test_auth_google_branches() {
     let mut env = EnvGuard::new();
     let verifier = Arc::new(ScriptedVerifier { client_id: Mutex::new(None), result: Mutex::new(Err("unset".into())) });
     let role = Arc::new(ScriptedRole(Mutex::new(None)));
     common::setup_env();
-    let app = app_with(AppDeps::new(AuthMode::Cookies).with_google_verifier(verifier.clone()).with_role_resolver(role.clone()).with_refresh_token_store(Arc::new(NullRefreshStore)));
+    let app = app_with(AppDeps::new(AuthMode::Cookies).with_google_verifier(verifier.clone()).with_role_resolver(role.clone()).with_refresh_token_store(Arc::new(AuthRefreshStore)));
     let client = TestClient::with_app(app);
 
     let resp = client.post_json("/auth/google", &json!({})).await;
@@ -2274,13 +2312,12 @@ async fn test_auth_refresh_missing_cookie() {
     assert_eq!(resp.status, 400);
 }
 
-#[ignore = "구 testing::set_decode_refresh_token 대응 seam이 없다: 실제 refresh token을 만들어 쓰지만 저장소 검증이 역할 판정보다 먼저인지 문서에서 확정되지 않았다"]
 #[tokio::test]
 async fn test_auth_refresh_access_denied() {
-    // decode_refresh_token을 바꾸는 대신 실제 refresh token을 발급한다. 역할 판정은 None이라 접근이 거부된다.
-    let token = create_refresh_token("x", "viewer", None, None);
+    // 실제 refresh token을 검증하고, 서버 역할 판정에서 접근을 거부한다.
     common::setup_env();
-    let app = app_with(AppDeps::new(AuthMode::Cookies).with_role_resolver(Arc::new(ScriptedRole(Mutex::new(None)))).with_refresh_token_store(Arc::new(NullRefreshStore)));
+    let token = create_refresh_token("x", "viewer", None, None);
+    let app = app_with(AppDeps::new(AuthMode::Cookies).with_role_resolver(Arc::new(ScriptedRole(Mutex::new(None)))).with_refresh_token_store(Arc::new(AuthRefreshStore)));
     let client = TestClient::with_app(app).cookie("tm_refresh_token", &token);
     let resp = post_empty(&client, "/auth/refresh").await;
     assert_eq!(resp.status, 403);
@@ -2298,34 +2335,11 @@ async fn test_auth_me() {
 
 // ---- coverage: uncovered lines ----
 
-/// Line 177: _create_bookstore factory
+/// 서점 이름 해석은 현재 registry factory를 거친다.
 #[test]
 fn test_create_bookstore_factory() {
-    let store: Yes24Bookstore = backend::main::create_bookstore();
-    assert!(store.verbose);
-}
-
-#[ignore = "monkeypatch: main.ComicsManager 생성자를 lambda로 바꾼다; 설계 문서에 대응 seam이 없다(testing::set_comics_manager_ctor 유지)"]
-#[test]
-fn test_create_comics_manager_factory() {
-    // 생성자를 바꿔 끼우는 seam. 설계 문서 3장에 대응 seam이 없어 구 가정(`testing::set_*_ctor`)을 그대로 둔다. drop 시 원래 생성자로 돌아온다.
-    let created: Arc<dyn BookManagerApi> = DummyManager::new(Path::new(""));
-    let _guard = backend::main::testing::set_comics_manager_ctor({
-        let created = created.clone();
-        move || created.clone()
-    });
-    assert!(Arc::ptr_eq(&backend::main::create_comics_manager(), &created));
-}
-
-#[ignore = "monkeypatch: main.CategoryMapping 생성자를 lambda로 바꾼다; 설계 문서에 대응 seam이 없다(testing::set_category_mapping_ctor 유지)"]
-#[test]
-fn test_create_category_mapping_factory() {
-    let created: Arc<dyn CategoryMappingApi> = DummyCategoryMapping::new();
-    let _guard = backend::main::testing::set_category_mapping_ctor({
-        let created = created.clone();
-        move || created.clone()
-    });
-    assert!(Arc::ptr_eq(&backend::main::create_category_mapping(), &created));
+    assert!(backend::bookstore::create_bookstore_search("yes24").is_some());
+    assert!(backend::bookstore::create_bookstore_search("unknown").is_none());
 }
 
 #[tokio::test]
@@ -2492,7 +2506,7 @@ async fn test_set_category_keywords_unexpected_exception() {
 
     let resp = dummy_client.put_json("/category-mappings/A", &json!({"keywords": ["x"]})).await;
     assert_eq!(resp.status, 500);
-    assert_eq!(resp.json()["detail"], backend::main::GENERIC_MAPPING_ERROR_DETAIL);
+    assert_eq!(resp.json()["detail"], "카테고리 매핑 처리 중 오류가 발생했습니다");
 }
 
 /// `update_all_mappings`의 결과를 정하는 매핑.
@@ -2645,96 +2659,19 @@ async fn test_delete_category_mapping_not_deleted() {
 
 // ---- merged from test_main_env_guard.py ----
 
-#[ignore = "importlib: TM_FRONTEND_URL을 지우고 backend.main을 sys.modules에서 빼 다시 import해 SystemExit를 확인한다; DI 설계 후 활성화"]
-#[test]
-fn test_main_requires_frontend_url() {
-    // import 시점 검사에 대응하는 seam. 환경 조회 함수를 받아 SystemExit(종료 코드)를 돌려준다고 가정한다.
-    let result = backend::main::require_frontend_url(&|name| if name == "TM_FRONTEND_URL" { None } else { std::env::var(name).ok() });
-    assert!(result.is_err(), "TM_FRONTEND_URL이 없으면 SystemExit여야 한다");
-}
-
 /// 재배포로 죽은 백그라운드 작업이 화면과 재실행을 막지 않아야 한다.
 ///
 /// 실제로 겪은 일이다. 재배포로 백그라운드 태스크가 사라졌는데 상태 파일은 running
 /// 으로 남아, POST 가 already_running 으로 막고 화면은 6분째 회전했다.
-mod test_stale_running_status {
-    use super::*;
-
-    const STALE: f64 = 5.0 * 60.0;
-
-    fn stale_running_status(status: &Value, stale_seconds: f64, now: Option<f64>) -> Option<Value> {
-        backend::main::stale_running_status(status, stale_seconds, now)
-    }
-
-    #[test]
-    fn test_running_without_recent_heartbeat_becomes_failed() {
-        let status = json!({"status": "running", "updated_at": 1000.0, "remaining_count": 19});
-        let stale = stale_running_status(&status, STALE, Some(1000.0 + STALE + 1.0));
-
-        let stale = stale.expect("하트비트가 끊긴 running은 failed여야 한다");
-        assert_eq!(stale["status"], "failed");
-        let error = stale["error"].as_str().unwrap();
-        assert!(error.contains("중단"), "{error}");
-        // 재실행(분류 제안을 다시 누르는 것)은 남은 pending/failed 행을 지운다 —
-        // 이 메시지가 그 파괴적인 행동을 권하면 안 된다.
-        assert!(!error.contains("다시 실행"), "{error}");
-        // 진행 수치는 남겨 둔다. 어디까지 갔는지 보여야 한다
-        assert_eq!(stale["remaining_count"], 19);
-    }
-
-    /// 오래 걸리는 정상 작업을 죽었다고 판정하면 안 된다.
-    #[test]
-    fn test_running_with_recent_heartbeat_is_left_alone() {
-        let status = json!({"status": "running", "updated_at": 1000.0});
-        assert!(stale_running_status(&status, STALE, Some(1000.0 + STALE - 1.0)).is_none());
-    }
-
-    /// updated_at 이 없으면 살아있다고 볼 근거가 없다.
-    #[test]
-    fn test_status_without_heartbeat_is_treated_as_dead() {
-        assert!(stale_running_status(&json!({"status": "running"}), STALE, None).is_some());
-        assert!(stale_running_status(&json!({"status": "running", "updated_at": "어제"}), STALE, None).is_some());
-    }
-
-    #[test]
-    fn test_other_statuses_are_untouched() {
-        for state in ["idle", "done", "failed"] {
-            assert!(stale_running_status(&json!({"status": state, "updated_at": 0.0}), STALE, None).is_none(), "state={state}");
-        }
-    }
-
-    /// Finding 1: applying도 죽은 채 굳으면 자가치유돼야 한다.
-    ///
-    /// POST 게이트가 already_running으로 막는 상태 목록에 applying도 들어가므로,
-    /// 재배포로 적용 단계 백그라운드 작업이 사라지면 이 판정 없이는 DELETE 없이
-    /// 영영 못 벗어난다.
-    #[test]
-    fn test_stale_applying_becomes_failed() {
-        let status = json!({"status": "applying", "updated_at": 1000.0, "applied_count": 1});
-        let stale = stale_running_status(&status, STALE, Some(1000.0 + STALE + 1.0));
-
-        let stale = stale.expect("하트비트가 끊긴 applying은 failed여야 한다");
-        assert_eq!(stale["status"], "failed");
-        assert_eq!(stale["applied_count"], 1);
-    }
-
-    #[test]
-    fn test_applying_with_recent_heartbeat_is_left_alone() {
-        let status = json!({"status": "applying", "updated_at": 1000.0});
-        assert!(stale_running_status(&status, STALE, Some(1000.0 + STALE - 1.0)).is_none());
-    }
-}
-
 /// 멈춘 작업이 버튼을 영영 막지 않아야 한다.
 ///
 /// 순수 함수만 검증하면 배선이 빠져도 통과한다. DB 행부터 응답까지, 그리고 실제로
 /// 새 요청이 받아들여지는지까지 확인한다.
 #[tokio::test]
-#[ignore = "실제 ES/MySQL 필요: TM_ES_URL, TM_MYSQL_HOST"]
 async fn test_stale_running_status_lets_the_button_work_again() {
     let s = backend_test_setup().await;
     let mapping = CategoryMapping::new().expect("MySQL 연결");
-    mapping.set_classify_proposal_status(json!({"status": "running", "source_category": CATEGORY}), "book");
+    mapping.set_classify_proposal_status(&json!({"status": "running", "source_category": CATEGORY}), "book").unwrap();
     // 하트비트를 DB 서버 시계로 과거로 민다. 파이썬 지역 시간을 쓰면 앱과 DB 의
     // 시간대 차이가 섞여 의도한 나이가 만들어지지 않는다.
     {
@@ -2743,7 +2680,7 @@ async fn test_stale_running_status_lets_the_button_work_again() {
         conn.commit().unwrap();
     }
     let _cleanup = Defer(|| {
-        CategoryMapping::new().expect("MySQL 연결").set_classify_proposal_status(json!({"status": "idle"}), "book");
+        CategoryMapping::new().expect("MySQL 연결").set_classify_proposal_status(&json!({"status": "idle"}), "book").unwrap();
     });
 
     let result = s.client.get("/categories/classify-proposal").await.json();

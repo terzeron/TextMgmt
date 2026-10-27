@@ -1,22 +1,18 @@
-//! 원본: tests/test_loader.py 후반부 HWP 단위 테스트 클래스 11개 중 tests/rust/hwp3_parser/hwp3.rs(와 hwp3_tables/tables.rs)에
-//! 같은 입력·같은 기대값의 테스트가 없는 것.
+//! 원본: `tests/test_loader.py` 후반부 HWP 단위 테스트.
 //!
 //! 대상 클래스: `TestHwp3ParserDirect`, `TestHwp3ParserEdgeCases`, `TestHwp3StreamMethods`, `TestHncToUnicodeExtended`,
 //! `TestHandleControlCharCoverage`, `TestParseEdgeCases`, `TestHandleControlCharRecursive`, `TestSafeChr`, `TestControlCharTab`,
-//! `TestControlCharDateLine`, `TestV200BruteForce`. 69개 중 8개는 hwp3.rs에 같은 테스트가 있어 옮기지 않았다(근거는 보고서).
+//! `TestControlCharDateLine`, `TestV200BruteForce`. Python의 여러 개별 사례는 Rust 테스트에서 묶어 검증한다.
 //!
 //! 실제 `hwp3_parser` crate의 공개 API만 쓴다. 없는 함수를 가정하지 않는다(가정한 API: 없음). Python과 다른 점은 다음과 같다.
 //! - 비공개 이름(`_HwpStream`, `_hnc_to_unicode` 등)은 밑줄 없이 공개돼 있다: `HwpStream`, `hnc_to_unicode`, `safe_chr`.
 //! - `parse_paragraph_list(stream, depth)`는 `depth`가 필수다. Python 기본값 0을 명시한다.
 //! - `_HwpStreamError` 예외는 `Result<_, StreamError>`로 바뀌었다. `pytest.raises` 자리는 `is_err()`로 검사한다.
-//! - `_MAX_TEXT_LENGTH`(1_000_000)는 crate에서 비공개 상수다. 같은 값을 상수로 둔다. `_MAX_RECURSION_DEPTH`를 쓰는 `test_max_recursion_depth`는 옮기지 않았다.
+//! - `_MAX_TEXT_LENGTH`(1_000_000)는 crate에서 비공개 상수라 같은 값을 둔다. 재귀 제한은 Python 테스트의 depth=11 입력으로 확인한다.
 //!
-//! Cargo 연결(기존 파일은 고치지 않아 이 파일만으로는 빌드되지 않는다): utils/loader/Cargo.toml에 아래가 필요하다.
-//! - `[[test]] name = "hwp3"`, `path = "../../tests/rust/loader/loader_hwp3.rs"`
-//! - `[dev-dependencies]`에 `hwp3_parser = { path = "../../libs/hwp3_parser" }`, `hwp3_tables = { path = "../../libs/hwp3_tables" }`
-//!   (`tempfile`은 이미 있다)
+//! Cargo target은 `utils/loader/Cargo.toml`의 `loader_hwp3`이며, parser/table crates는 dev-dependencies로 연결한다.
 //!
-//! 샘플 파일(tests/books/_hwp)이 필요한 테스트는 `#[ignore]`이고, 파일이 없으면 헬퍼가 panic한다(pytest.skip처럼 조용히 통과하지 않는다).
+//! 샘플 파일(tests/books/_hwp)을 사용하며, 파일이 없으면 헬퍼가 panic한다.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -33,7 +29,7 @@ fn hwp_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/books/_hwp")
 }
 
-/// 샘플 파일 경로. 파일이 없으면 panic한다(`#[ignore]`로만 건너뛴다).
+/// 샘플 파일 경로. 파일이 없으면 panic한다.
 fn hwp_fixture(name: &str) -> PathBuf {
     let f = hwp_dir().join(name);
     assert!(f.exists(), "샘플 파일 없음: {}", f.display());
@@ -101,7 +97,6 @@ mod test_hwp3_parser_direct {
     use super::*;
 
     #[test]
-    #[ignore = "샘플 파일 필요: tests/books/_hwp"]
     fn test_v3_00_extracts_korean_text() {
         let f = hwp_fixture("v3.00_현대시사전.hwp");
         let text = extract(&f);
@@ -110,7 +105,6 @@ mod test_hwp3_parser_direct {
     }
 
     #[test]
-    #[ignore = "샘플 파일 필요: tests/books/_hwp"]
     fn test_v2_10_extracts_korean_text() {
         let f = hwp_fixture("v2.10_KYOKA.hwp");
         let text = extract(&f);
@@ -119,7 +113,6 @@ mod test_hwp3_parser_direct {
     }
 
     #[test]
-    #[ignore = "샘플 파일 필요: tests/books/_hwp"]
     fn test_v2_10_pager() {
         let f = hwp_fixture("v2.10_PAGER.hwp");
         let text = extract(&f);
@@ -128,7 +121,6 @@ mod test_hwp3_parser_direct {
 
     /// V1.20은 미지원이라 빈 문자열을 돌려주지만, 원본 단언은 `str` 타입뿐이다.
     #[test]
-    #[ignore = "샘플 파일 필요: tests/books/_hwp"]
     fn test_v1_20_returns_empty() {
         let f = hwp_fixture("v1.20_부하의약혼녀.hwp");
         let _text: String = extract(&f);
@@ -137,6 +129,12 @@ mod test_hwp3_parser_direct {
     #[test]
     fn test_invalid_file_returns_empty() {
         assert_eq!(extract_bytes("not_hwp.hwp", b"this is definitely not an HWP file"), "");
+    }
+
+    #[test]
+    fn test_nonexistent_file_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(extract(&dir.path().join("does_not_exist.hwp")), "");
     }
 
     #[test]
@@ -162,7 +160,6 @@ mod test_hwp3_parser_edge_cases {
 
     /// V3.00 압축 파일 정상 파싱.
     #[test]
-    #[ignore = "샘플 파일 필요: tests/books/_hwp"]
     fn test_compressed_v3_file() {
         let f = hwp_fixture("v3.00_현대시사전.hwp");
         // 압축 플래그 확인
@@ -174,7 +171,6 @@ mod test_hwp3_parser_edge_cases {
 
     /// V2.10 파일 정상 파싱.
     #[test]
-    #[ignore = "샘플 파일 필요: tests/books/_hwp"]
     fn test_v2_10_file_parses() {
         let f = hwp_fixture("v2.10_KYOKA.hwp");
         let text = extract(&f);
@@ -183,7 +179,6 @@ mod test_hwp3_parser_edge_cases {
 
     /// 추출된 텍스트에 null 바이트가 없어야 함.
     #[test]
-    #[ignore = "샘플 파일 필요: tests/books/_hwp"]
     fn test_text_contains_no_null_bytes() {
         for name in ["v2.10_KYOKA.hwp", "v3.00_현대시사전.hwp", "v2.10_PAGER.hwp"] {
             let f = hwp_fixture(name);
@@ -194,7 +189,6 @@ mod test_hwp3_parser_edge_cases {
 
     /// 추출된 텍스트가 유효한 유니코드 문자열이어야 함.
     #[test]
-    #[ignore = "샘플 파일 필요: tests/books/_hwp"]
     fn test_text_is_valid_unicode() {
         for name in ["v2.10_KYOKA.hwp", "v3.00_현대시사전.hwp"] {
             let f = hwp_fixture(name);
@@ -584,6 +578,12 @@ mod test_handle_control_char_recursive {
         assert!(result.contains('\n')); // 첫 문단의 CR은 포함
     }
 
+    /// Python `test_recursion_depth_limit`: depth 10 초과면 즉시 빈 문자열이다.
+    #[test]
+    fn test_recursion_depth_limit() {
+        assert_eq!(parse_paragraph_list(&mut HwpStream::new(vec![0; 100]), 11), "");
+    }
+
     /// `_MAX_TEXT_LENGTH` 초과 시 파싱 중단.
     #[test]
     fn test_max_text_length_break() {
@@ -687,7 +687,6 @@ mod test_v200_brute_force {
 
     /// V2.00 파일에서 텍스트가 추출되는지 확인.
     #[test]
-    #[ignore = "샘플 파일 필요: tests/books/_hwp"]
     fn test_v200_extracts_text() {
         let f = hwp_fixture("v2.00_박노해_참된시작.hwp");
         let text = extract(&f);
@@ -696,7 +695,6 @@ mod test_v200_brute_force {
 
     /// V2.00 추출 결과가 UTF-8 안전한지 확인(`text.encode("utf-8")`가 예외를 던지지 않아야 한다).
     #[test]
-    #[ignore = "샘플 파일 필요: tests/books/_hwp"]
     fn test_v200_utf8_safe() {
         let f = hwp_fixture("v2.00_박노해_참된시작.hwp");
         let text = extract(&f);

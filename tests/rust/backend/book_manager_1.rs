@@ -45,14 +45,15 @@
 //! TODO(common): 아래 로컬 정의는 common에 같은 것이 생기면 지운다. `FnFileReader`(FileReader 대역), `StaticPdfDoc`/`FakePdfOpener`/`FakePdfPageOps`(문서 3.11의 `fake_pdf.rs`),
 //! `BackfillEs`(`FakeEsManager::on_backfill_created_time`).
 
-mod common;
+use crate::{common, elasticsearch_fixture};
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{self, Cursor};
+use std::ops::{Deref, DerefMut};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -236,11 +237,15 @@ impl EsManagerApi for BackfillEs {
 /// 운영용 `loader::record::read_file`은 사용자의 미커밋 crate라 쓰지 않는다. 이 테스트는 카테고리·제목·저자·크기·형식만 확인한다.
 fn loader_read_file(path: &Path) -> Docs {
     let book_dir = PathBuf::from(std::env::var("TM_BOOK_DIR").unwrap());
-    backend::book_manager::DefaultFileReader::new(book_dir).read_file(path, None)
+    loader_read_file_from(&book_dir, path)
+}
+
+fn loader_read_file_from(book_dir: &Path, path: &Path) -> Docs {
+    backend::book_manager::DefaultFileReader::new(book_dir.to_path_buf()).read_file(path, None)
 }
 
 /// `Loader.read_files(path, num_files=5)` 대응. 디렉토리를 재귀로 훑어 이름순으로 앞의 `num_files`개를 읽는다.
-fn loader_read_files(root: &Path, num_files: usize) -> Docs {
+fn loader_read_files(book_dir: &Path, root: &Path, num_files: usize) -> Docs {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(entries) = fs::read_dir(dir) else { return };
         let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
@@ -257,22 +262,66 @@ fn loader_read_files(root: &Path, num_files: usize) -> Docs {
     walk(root, &mut files);
     let mut data = Docs::new();
     for file in files.into_iter().take(num_files) {
-        data.extend(loader_read_file(&file));
+        data.extend(loader_read_file_from(book_dir, &file));
     }
     data
 }
 
-/// 모듈 fixture `book_manager_with_data`. 실제 ES가 필요하다.
-/// `TM_TEST_ES_URL`이 없으면 panic한다. 이 fixture를 쓰는 테스트는 `#[ignore]`이므로 `--ignored`로 일부러 돌릴 때만 실행된다.
-fn book_manager_with_data() -> BookManager {
+/// `tests/books`의 실제 파일을 옮기거나 지우는 테스트(`test_move_book`, `test_delete_book` 등)끼리 병렬로 돌지 않게 하는 잠금.
+/// ES 인덱스는 테스트마다 따로 만들지만 디스크 파일은 공유한다. Python은 순차 실행이다.
+static BOOKS_LOCK: Mutex<()> = Mutex::new(());
+
+/// `book_manager_with_data()`가 돌려주는 값. 테스트가 끝날 때까지 `BOOKS_LOCK`을 쥔다.
+struct LockedBookManager {
+    _lock: MutexGuard<'static, ()>,
+    bm: BookManager,
+}
+
+impl Deref for LockedBookManager {
+    type Target = BookManager;
+    fn deref(&self) -> &BookManager {
+        &self.bm
+    }
+}
+
+impl DerefMut for LockedBookManager {
+    fn deref_mut(&mut self) -> &mut BookManager {
+        &mut self.bm
+    }
+}
+
+/// 모듈 fixture `book_manager_with_data`. Docker Nori Elasticsearch를 사용한다.
+fn book_manager_with_data() -> LockedBookManager {
     common::setup_env();
-    let url = std::env::var("TM_TEST_ES_URL").expect("TM_TEST_ES_URL이 필요하다. `cargo test -- --ignored`는 실제 ES가 있을 때만 쓴다");
-    // 구 `with_es_url(url)`. 실제 ES 접속은 `ESManager::connect(env, connector, clock)`(3.3)로 만든다. 접속 생성자(`RealEsConnector`)는 문서에 없어 가정한 이름이다.
-    let es_url = url.clone();
-    let bm = BookManager::from_env(&|name: &str| std::env::var(name).ok(), &move |_default_url: &str| -> Arc<dyn EsManagerApi> {
-        let env = |name: &str| if name == "TM_ES_URL" { Some(es_url.clone()) } else { std::env::var(name).ok() };
-        Arc::new(ESManager::connect(&env, &backend::es_manager::RealEsConnector, &sysdeps::SystemClock).expect("실제 ES 접속"))
-    })
+    book_manager_with_data_at(&PathBuf::from(std::env::var("TM_BOOK_DIR").unwrap()))
+}
+
+/// 실제 ES 통합 테스트를 격리된 책 디렉터리로 실행한다.
+fn book_manager_with_data_at(book_dir: &Path) -> LockedBookManager {
+    let lock = BOOKS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    common::setup_env();
+    let es_url = elasticsearch_fixture::elasticsearch_container();
+    static NEXT_INDEX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let index = format!("bm1_{}_{}", std::process::id(), NEXT_INDEX.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    let book_index = index.clone();
+    let book_dir = book_dir.to_path_buf();
+    let bm = BookManager::from_env(
+        &move |name: &str| match name {
+            "TM_ES_BOOK_INDEX" => Some(book_index.clone()),
+            "TM_BOOK_DIR" => Some(book_dir.to_string_lossy().into_owned()),
+            _ => std::env::var(name).ok(),
+        },
+        &move |_default_url: &str| -> Arc<dyn EsManagerApi> {
+            let es_index = index.clone();
+            let endpoint = es_url.clone();
+            let env = move |name: &str| match name {
+                "TM_ES_URL" => Some(endpoint.clone()),
+                "TM_ES_BOOK_INDEX" => Some(es_index.clone()),
+                _ => std::env::var(name).ok(),
+            };
+            Arc::new(ESManager::connect(&env, &backend::es_manager::RealEsConnector, &sysdeps::SystemClock).expect("실제 ES 접속"))
+        },
+    )
     .expect("BookManager::from_env");
 
     // 실제 파일이 있으면 테스트 데이터로 적재한다
@@ -280,7 +329,7 @@ fn book_manager_with_data() -> BookManager {
     let txt_path = bm.path_prefix().join(CATEGORY2);
     for path in [epub_path, txt_path] {
         if path.exists() {
-            let data = loader_read_files(&path, 5);
+            let data = loader_read_files(&bm.path_prefix(), &path, 5);
             if !data.is_empty() {
                 bm.es_manager().insert(&data).unwrap();
             }
@@ -289,7 +338,45 @@ fn book_manager_with_data() -> BookManager {
 
     // 검색되도록 인덱스를 새로 고친다
     bm.es_manager().refresh().unwrap();
-    bm
+    LockedBookManager { _lock: lock, bm }
+}
+
+/// 기존 corpus에서 테스트에 필요한 책만 임시 디렉터리로 복사한다.
+fn isolated_book_dir() -> TempDir {
+    common::setup_env();
+    fn copy_some(source: &Path, target: &Path, limit: usize) {
+        if !source.is_dir() {
+            return;
+        }
+        fs::create_dir_all(target).unwrap();
+        let mut files = Vec::new();
+        fn collect(dir: &Path, files: &mut Vec<PathBuf>) {
+            let Ok(entries) = fs::read_dir(dir) else { return };
+            let mut paths: Vec<_> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+            paths.sort();
+            for path in paths {
+                if path.is_dir() {
+                    collect(&path, files);
+                } else if path.is_file() {
+                    files.push(path);
+                }
+            }
+        }
+        collect(source, &mut files);
+        for path in files.into_iter().take(limit) {
+            let relative = path.strip_prefix(source).unwrap();
+            let destination = target.join(relative);
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::copy(path, destination).unwrap();
+        }
+    }
+
+    let temp = TempDir::new().unwrap();
+    let source = PathBuf::from(std::env::var("TM_BOOK_DIR").unwrap());
+    for category in [CATEGORY1, CATEGORY2] {
+        copy_some(&source.join(category), &temp.path().join(category), 5);
+    }
+    temp
 }
 
 /// Book 객체의 필드 타입을 확인한다. Rust에서는 컴파일 시점에 타입이 고정되므로 대입으로 확인한다.
@@ -336,14 +423,13 @@ fn get_two_random_books(bm: &BookManager) -> Option<(Book, Book)> {
     }
 }
 // ---------------------------------------------------------------------------
-// class TestBookManager: 실제 ES 위에서 도는 테스트. `#[ignore]`이며 ES가 없으면 panic한다.
+// class TestBookManager: Docker Nori Elasticsearch 통합 테스트.
 // ---------------------------------------------------------------------------
 
 mod test_book_manager {
     use super::*;
 
     #[test]
-    #[ignore = "실제 ES 필요: TM_TEST_ES_URL"]
     fn test_get_categories() {
         let bm = book_manager_with_data();
         let (result, _) = run(bm.get_categories());
@@ -355,7 +441,6 @@ mod test_book_manager {
     }
 
     #[test]
-    #[ignore = "실제 ES 필요: TM_TEST_ES_URL"]
     fn test_get_books_in_category() {
         let bm = book_manager_with_data();
         for category in [CATEGORY1, CATEGORY2] {
@@ -372,7 +457,6 @@ mod test_book_manager {
     }
 
     #[test]
-    #[ignore = "실제 ES 필요: TM_TEST_ES_URL"]
     fn test_get_book() {
         let bm = book_manager_with_data();
         let randomly_chosen_book = get_one_random_book(&bm).expect("No books available for testing");
@@ -388,7 +472,6 @@ mod test_book_manager {
     }
 
     #[test]
-    #[ignore = "실제 ES 필요: TM_TEST_ES_URL"]
     fn test_get_book_content() {
         let bm = book_manager_with_data();
         let book = get_one_random_book(&bm).expect("No books available for testing");
@@ -399,7 +482,6 @@ mod test_book_manager {
     }
 
     #[test]
-    #[ignore = "실제 ES 필요: TM_TEST_ES_URL"]
     fn test_search_by_keyword() {
         let bm = book_manager_with_data();
         // 책 하나의 제목을 키워드로 쓴다
@@ -413,7 +495,6 @@ mod test_book_manager {
     }
 
     #[test]
-    #[ignore = "실제 ES 필요: TM_TEST_ES_URL"]
     fn test_search_similar_books() {
         let bm = book_manager_with_data();
         let book = get_one_random_book(&bm).expect("No books available for testing");
@@ -423,7 +504,6 @@ mod test_book_manager {
     }
 
     #[test]
-    #[ignore = "실제 ES 필요: TM_TEST_ES_URL"]
     fn test_add_book() {
         let bm = book_manager_with_data();
         let book = get_one_random_book(&bm).expect("No books available for testing");
@@ -462,9 +542,9 @@ mod test_book_manager {
     }
 
     #[test]
-    #[ignore = "실제 ES 필요: TM_TEST_ES_URL"]
     fn test_move_book() {
-        let bm = book_manager_with_data();
+        let isolated = isolated_book_dir();
+        let bm = book_manager_with_data_at(isolated.path());
         let (book1, book2) = get_two_random_books(&bm).expect("Need two books from different categories for this test");
 
         let book_id = book1.book_id;
@@ -509,7 +589,6 @@ mod test_book_manager {
     }
 
     #[test]
-    #[ignore = "실제 ES 필요: TM_TEST_ES_URL"]
     fn test_update_book_rejects_path_traversal() {
         let bm = book_manager_with_data();
         let tmp = TempDir::new().unwrap();
@@ -528,7 +607,6 @@ mod test_book_manager {
     }
 
     #[test]
-    #[ignore = "실제 ES 필요: TM_TEST_ES_URL"]
     fn test_get_category_mismatches() {
         let mut bm = book_manager_with_data();
         let tmp = TempDir::new().unwrap();
@@ -596,7 +674,6 @@ mod test_book_manager {
     /// FakeEsManager는 정렬을 흉내만 내서 이 회귀를 단위 테스트로 잡을 수 없다.
     /// _id를 tie-breaker로 넣었다가 fielddata 금지로 전부 0건이 된 적이 있다.
     #[test]
-    #[ignore = "실제 ES 필요: TM_TEST_ES_URL"]
     fn test_search_by_category_paged_sort_works_on_real_es() {
         let bm = book_manager_with_data();
         let (categories, error) = run(bm.get_categories());
@@ -610,9 +687,9 @@ mod test_book_manager {
     }
 
     #[test]
-    #[ignore = "실제 ES 필요: TM_TEST_ES_URL"]
     fn test_delete_book() {
-        let bm = book_manager_with_data();
+        let isolated = isolated_book_dir();
+        let bm = book_manager_with_data_at(isolated.path());
         let book = get_one_random_book(&bm).expect("No books available for testing");
         inspect_book_info(&book);
         let book_id = book.book_id;
@@ -635,7 +712,8 @@ mod test_book_manager {
 
         // 지운 파일을 되돌린다
         fs::rename(&temp_file_path, &file_path).unwrap();
-        let (book_id3, error) = run(bm.add_book(&loader_read_file(&file_path)));
+        let reader = backend::book_manager::DefaultFileReader::new(bm.path_prefix().to_path_buf());
+        let (book_id3, error) = run(bm.add_book(&reader.read_file(&file_path, None)));
         assert!(book_id3.is_some() && error.is_none());
     }
 }
@@ -730,6 +808,21 @@ fn test_update_book_conflict_and_success_and_rollback() {
     let (status, _msg) = run(manager.update_book(2, "A", "T", "U", &new2, ".txt"));
     assert_eq!(status, "Error");
     assert!(old2.exists());
+}
+
+#[test]
+fn test_update_book_rejects_malformed_es_book_before_file_move() {
+    let tmp = TempDir::new().unwrap();
+    let mut doc = make_doc("A/old.txt", ".txt");
+    doc.as_object_mut().unwrap().remove("category");
+    let manager = make_manager_with_doc(tmp.path(), doc);
+    let target = tmp.path().join("A/new.txt");
+
+    let (status, error) = run(manager.update_book(1, "A", "T", "U", &target, ".txt"));
+
+    assert_eq!(status, "Error");
+    assert!(error.unwrap().contains("category"));
+    assert!(!target.exists());
 }
 
 /// 이동 후 기존 ES 문서를 삭제하고 새 위치 문서를 다시 insert한다.
@@ -864,6 +957,19 @@ fn test_delete_book_warning_on_missing_file() {
     let (status, msg) = run(manager.delete_book(1));
     assert_eq!(status, "Warning");
     assert!(msg.as_deref().unwrap().contains("이미 삭제"));
+}
+
+#[test]
+fn test_delete_book_rejects_malformed_es_book_before_file_delete() {
+    let tmp = TempDir::new().unwrap();
+    let mut doc = make_doc("A/book.txt", ".txt");
+    doc.as_object_mut().unwrap().remove("category");
+    let manager = make_manager_with_doc(tmp.path(), doc);
+
+    let (status, error) = run(manager.delete_book(1));
+
+    assert_eq!(status, "Error");
+    assert!(error.unwrap().contains("category"));
 }
 
 #[test]
@@ -1308,6 +1414,36 @@ fn test_validate_pdf_success_and_open_error() {
 }
 
 #[test]
+fn test_validate_pdf_reports_reconstructed_cross_reference() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("damaged.pdf");
+    let objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] >>"];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    pdf.truncate(pdf.len() - 10);
+    write(&path, &pdf);
+
+    let manager = make_manager_with_doc(tmp.path(), make_doc("damaged.pdf", "pdf"));
+    let (result, err) = run(manager.validate_pdf(1));
+
+    assert!(err.is_none(), "{err:?}");
+    let result = result.unwrap();
+    assert_eq!(result["valid"], false);
+    assert!(result["summary"]["warning"].as_u64().unwrap() > 0);
+    assert!(!result["messages"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn test_validate_epub_not_found_and_missing_file() {
     let tmp = TempDir::new().unwrap();
     let es = FakeEsManager::new();
@@ -1681,6 +1817,21 @@ fn test_book_manager_init_requires_env() {
 }
 
 #[test]
+fn test_book_manager_from_env_with_es_applies_manager_customization() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().to_string_lossy().into_owned();
+    let get_env = move |name: &str| -> Option<String> { (name == "TM_BOOK_DIR").then(|| root.clone()) };
+    let mut customized = false;
+    let manager = BookManager::from_env_with_es(&get_env, FakeEsManager::new(), |deps| {
+        customized = true;
+        deps.with_bulk_reindex_batch_size(17)
+    })
+    .unwrap();
+    assert_eq!(manager.path_prefix(), tmp.path());
+    assert!(customized);
+}
+
+#[test]
 fn test_book_manager_created_time_backfill_does_not_block_init() {
     let tmp = TempDir::new().unwrap();
     let started = Event::new();
@@ -1738,6 +1889,46 @@ fn test_get_books_in_category_empty() {
     let (books, err) = run(manager.get_books_in_category("missing"));
     assert!(books.is_empty());
     assert!(err.as_deref().unwrap().contains("No books found"));
+}
+
+#[test]
+fn test_get_book_reports_missing_required_es_fields_like_python_book() {
+    let tmp = TempDir::new().unwrap();
+    let manager = make_manager_with_doc(tmp.path(), json!({"title": "T", "author": "U", "file_path": "A/t.txt", "file_type": ".txt", "file_size": 1, "updated_time": "2024-01-01T00:00:00"}));
+    let (book, error) = run(manager.get_book(1));
+    assert!(book.is_none(), "누락 필드를 빈 기본값으로 채워 Book을 반환하면 안 된다");
+    assert!(error.unwrap().contains("category"));
+}
+
+#[test]
+fn test_catalog_search_paths_report_missing_required_es_fields() {
+    let tmp = TempDir::new().unwrap();
+    let malformed = json!({"title": "T", "author": "U", "file_path": "A/t.txt", "file_type": ".txt", "file_size": 1, "updated_time": "2024-01-01T00:00:00"});
+    let es = FakeEsManager::with_doc(make_doc("A/base.txt", ".txt"));
+    es.with(|state| {
+        state.category_docs = vec![(2, malformed.clone(), 1.0)];
+        state.keyword = state.category_docs.clone();
+        state.keyword_paged = (state.category_docs.clone(), 1);
+        state.similar = state.category_docs.clone();
+        state.similar_paged = (state.category_docs.clone(), 1);
+        state.latest_docs = (state.category_docs.clone(), 1);
+    });
+    let manager = make_manager(tmp.path(), &es);
+
+    let (_, error) = run(manager.get_books_in_category("A"));
+    assert!(error.unwrap().contains("category"));
+    let (_, _, _, error) = run(manager.get_books_in_category_paged("A", 10, ""));
+    assert!(error.unwrap().contains("category"));
+    let (_, error) = run(manager.search_by_keyword("x", 10));
+    assert!(error.unwrap().contains("category"));
+    let (_, _, error) = run(manager.search_by_keyword_paged("x", 10, 0, None, None));
+    assert!(error.unwrap().contains("category"));
+    let (_, error) = run(manager.search_similar_books(1, 10));
+    assert!(error.unwrap().contains("category"));
+    let (_, _, error) = run(manager.search_similar_books_paged(1, 10, 0));
+    assert!(error.unwrap().contains("category"));
+    let (_, _, error) = run(manager.get_latest_books(10, None));
+    assert!(error.unwrap().contains("category"));
 }
 
 // ---- coverage: additional uncovered lines ----
@@ -2340,7 +2531,11 @@ fn test_propose_then_apply_moves_file_and_reindexes() {
     let (propose_result, propose_err) = {
         let sink = propose_progress.clone();
         let on_progress = move |u: Value| sink.lock().unwrap().push(u);
-        run(manager.propose_category_changes("0_inbox", Some(&mappings), ProposeOptions { use_bookstore: Some(false), use_content_meta: Some(false), on_progress: Some(&on_progress) }))
+        run(manager.propose_category_changes(
+            "0_inbox",
+            Some(&mappings),
+            ProposeOptions { use_bookstore: Some(false), use_content_meta: Some(false), on_progress: Some(&on_progress), ..Default::default() },
+        ))
     };
 
     assert!(propose_err.is_none());
@@ -2391,8 +2586,11 @@ fn test_propose_category_changes_carries_book_id() {
     let progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(vec![]));
     let sink = progress.clone();
     let on_progress = move |u: Value| sink.lock().unwrap().push(u);
-    let (result, err) =
-        run(manager.propose_category_changes("0_inbox", Some(&json!({})), ProposeOptions { use_bookstore: Some(false), use_content_meta: Some(false), on_progress: Some(&on_progress) }));
+    let (result, err) = run(manager.propose_category_changes(
+        "0_inbox",
+        Some(&json!({})),
+        ProposeOptions { use_bookstore: Some(false), use_content_meta: Some(false), on_progress: Some(&on_progress), ..Default::default() },
+    ));
     assert!(err.is_none());
 
     let expected = fs::metadata(&book).unwrap().ino() as i64;
@@ -2499,7 +2697,8 @@ fn test_propose_category_changes_uses_the_supervised_model() {
     deps = deps.with_file_reader(FnFileReader::new(move |_p: &Path, _prefix: Option<&Path>| Docs::from([(12345, fake_doc.clone())])));
     let manager = BookManager::with_deps(deps);
 
-    let (result, err) = run(manager.propose_category_changes("0_inbox", Some(&json!({})), ProposeOptions { use_bookstore: Some(false), use_content_meta: Some(true), on_progress: None }));
+    let (result, err) =
+        run(manager.propose_category_changes("0_inbox", Some(&json!({})), ProposeOptions { use_bookstore: Some(false), use_content_meta: Some(true), on_progress: None, ..Default::default() }));
 
     assert!(err.is_none());
     assert!(rofan_book.exists()); // 제안 단계는 파일을 옮기지 않는다

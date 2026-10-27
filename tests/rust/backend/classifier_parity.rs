@@ -11,10 +11,11 @@ use std::path::Path;
 
 use backend::classifier::calibration::{expected_accuracy, fit_expected_accuracy, from_coverage_report};
 use backend::classifier::config::{config_hash, default_config};
-use backend::classifier::corpus::{AttachOptions, MAX_JSONL_LINE_BYTES, absolute_path, attach_publishers_with, read_jsonl, write_jsonl};
+use backend::classifier::corpus::{AttachOptions, IndexedJsonl, MAX_JSONL_LINE_BYTES, absolute_path, attach_publishers_with, read_jsonl, write_jsonl};
 use backend::classifier::model::CategoryModel;
 use backend::classifier::pyjson::{dumps, float_repr};
-use backend::classifier::training::{blake2b_keyed, format_report, split_holdout};
+use backend::classifier::training;
+use backend::classifier::training::{blake2b_keyed, document_key, filter_by_size, format_report, holdout_document_keys, split_holdout};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -99,6 +100,21 @@ fn split_holdout_matches_python_membership_and_order() {
 }
 
 #[test]
+fn holdout_manifest_keys_match_the_filtered_document_split_without_cloning_documents() {
+    let mut docs = Vec::new();
+    for (cat, count) in [("3_소설", 6), ("5_과학", 4), ("9_희소", 1)] {
+        for index in 0..count {
+            docs.push(json!({"id": format!("{cat}-{index}"), "cat": cat, "text": "large body"}));
+        }
+    }
+    let (kept, _) = filter_by_size(&docs, 3);
+    let (_, expected_holdout) = split_holdout(&kept, 0.25, 20261026);
+    let expected: Vec<String> = expected_holdout.iter().map(document_key).collect();
+
+    assert_eq!(holdout_document_keys(&docs, 3, 0.25, 20261026), expected);
+}
+
+#[test]
 fn float_repr_and_json_dumps_match_python() {
     let p = parity();
     for case in p["float_repr"].as_array().unwrap() {
@@ -136,6 +152,42 @@ fn jsonl_is_byte_compatible_with_python_and_round_trips() {
     // Python 이 쓴 줄(와 빈 줄)을 Rust 가 읽는다.
     fs::write(&path, format!("{}\n\n{}", p["json_dumps"]["line"].as_str().unwrap(), p["json_dumps"]["line"].as_str().unwrap())).unwrap();
     assert_eq!(read_jsonl(&path).unwrap().len(), 2);
+}
+
+#[test]
+fn indexed_jsonl_retains_metadata_and_reads_documents_on_demand() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("indexed.jsonl");
+    let first = json!({"id":"id-1","cat":"3_무협","text":"긴 본문","publisher":"출판사"});
+    let second = json!({"id":7,"path":"5_과학/book.txt","cat":"5_과학","text":"더 긴 본문","publisher":""});
+    fs::write(&path, format!("{}\n\n{}\n", first, second)).unwrap();
+
+    let mut indexed = IndexedJsonl::open(&path).unwrap();
+
+    assert_eq!(indexed.len(), 2);
+    assert_eq!(indexed.category(0), Some("3_무협"));
+    assert_eq!(indexed.document_key(0), Some("id-1"));
+    assert!(indexed.has_publisher());
+    assert_eq!(indexed.category(1), Some("5_과학"));
+    assert_eq!(indexed.document_key(1), Some("5_과학/book.txt"));
+    assert_eq!(indexed.read_document(0).unwrap(), first);
+    assert_eq!(indexed.read_document(1).unwrap(), second);
+}
+
+#[test]
+fn indexed_holdout_keys_match_value_corpus_split() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("holdout.jsonl");
+    let mut rows = Vec::new();
+    for (category, count) in [("3_소설", 6), ("5_과학", 4), ("9_희소", 1)] {
+        for index in 0..count {
+            rows.push(json!({"id":format!("{category}-{index}"),"cat":category,"text":"본문"}));
+        }
+    }
+    write_jsonl(&rows, &path).unwrap();
+    let indexed = IndexedJsonl::open(&path).unwrap();
+
+    assert_eq!(training::holdout_document_keys_indexed(&indexed, 3, 0.25, 20261026), training::holdout_document_keys(&rows, 3, 0.25, 20261026));
 }
 
 #[test]

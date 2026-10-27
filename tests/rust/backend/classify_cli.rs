@@ -824,7 +824,7 @@ fn test_info_lists_dropped_categories_and_truncates_after_ten() {
 }
 
 #[test]
-#[ignore = "sklearn 대응 모델 필요; mock.patch: sys.argv + runpy(스크립트 직접 실행); 바이너리 실행 테스트로 대체 후 활성화"]
+#[ignore = "sklearn 대응 모델 필요"]
 fn test_running_as_script_exits_with_main_status() {
     // Python은 `python -m utils.classify_cli info --model <path>`를 runpy로 돌려 종료 코드 0을 확인한다.
     // Rust에서는 classify_cli 바이너리를 자식 프로세스로 실행하는 것이 대응이다.

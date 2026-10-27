@@ -78,26 +78,39 @@ fn parse_cached_at(value: Option<&Value>) -> f64 {
 impl BookstoreSearchCache {
     /// `refresh`면 파일을 비운다. 아니면 있는 파일을 읽는다.
     pub fn new(path: &Path, refresh: bool, negative_ttl_seconds: u64) -> Self {
-        let mut cache = BookstoreSearchCache { path: path.to_owned(), negative_ttl_seconds, entries: HashMap::new(), hits: 0, searches: 0, search_seconds: 0.0, last_request_completed_at: None };
-        if refresh {
-            if let Some(parent) = path.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            if let Err(e) = fs::write(path, "") {
+        match Self::try_new(path, refresh, negative_ttl_seconds) {
+            Ok(cache) => cache,
+            Err(e) => {
                 eprintln!("Cache write failed: {e}");
+                Self::empty(path, negative_ttl_seconds)
             }
-        } else if path.exists() {
-            cache.load();
         }
-        cache
     }
 
-    fn load(&mut self) {
+    /// `refresh` 실패를 호출자에게 돌려준다. CLI는 Python 원본처럼 초기화에 실패하면 중단한다.
+    pub fn try_new(path: &Path, refresh: bool, negative_ttl_seconds: u64) -> std::io::Result<Self> {
+        let mut cache = Self::empty(path, negative_ttl_seconds);
+        if refresh {
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(path, "")?;
+        } else if path.exists() {
+            cache.load()?;
+        }
+        Ok(cache)
+    }
+
+    fn empty(path: &Path, negative_ttl_seconds: u64) -> Self {
+        BookstoreSearchCache { path: path.to_owned(), negative_ttl_seconds, entries: HashMap::new(), hits: 0, searches: 0, search_seconds: 0.0, last_request_completed_at: None }
+    }
+
+    fn load(&mut self) -> std::io::Result<()> {
         let text = match fs::read(&self.path) {
-            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Ok(bytes) => String::from_utf8(bytes).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
             Err(e) => {
                 eprintln!("Cache read failed: {e}");
-                return;
+                return Ok(());
             }
         };
         for line in text.lines() {
@@ -111,6 +124,7 @@ impl BookstoreSearchCache {
                 self.entries.insert((query, store), Entry { results, cached_at: parse_cached_at(item.get("cached_at")) });
             }
         }
+        Ok(())
     }
 
     /// 항목이 있는지(만료 여부와 무관). 한도 계산에 쓴다.

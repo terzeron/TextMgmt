@@ -94,7 +94,7 @@ impl Default for Options {
     }
 }
 
-/// 인자 없이 실행하거나 `-h`/`--help`를 주면 프로그램의 용도와 인자·옵션을 보여 준다.
+/// `-h`/`--help`를 주면 프로그램의 용도와 인자·옵션을 보여 준다.
 pub fn print_usage(program: &str, out: &mut dyn Write) {
     let report_default = default_dir().join(REPORT_NAME).display().to_string();
     let cache_default = default_dir().join(CACHE_NAME).display().to_string();
@@ -108,7 +108,7 @@ pub fn print_usage(program: &str, out: &mut dyn Write) {
 --offline이면 서점에 묻지 않고 캐시만 쓴다. 캐시에 없는 질의는 SKIP_NOT_CACHED로 건너뛴다.
 
 사용법:
-  {program} run [옵션]
+  {program} [run] [옵션]
 
 명령:
   run   계획을 세워 리포트를 쓴다. --apply를 주면 디렉토리 이름도 바꾼다.
@@ -132,7 +132,10 @@ pub fn print_usage(program: &str, out: &mut dyn Write) {
 
 /// 인자를 읽는다.
 pub fn parse_options(args: &[String]) -> Result<Options, String> {
-    let mut options = Options::default();
+    parse_options_with_defaults(args, Options::default())
+}
+
+fn parse_options_with_defaults(args: &[String], mut options: Options) -> Result<Options, String> {
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let (name, inline) = match arg.split_once('=') {
@@ -172,18 +175,25 @@ pub fn run(program: &str, args: &[String], out: &mut dyn Write) -> i32 {
 
 /// `run`과 같고, 서점 검색을 바꿔 끼울 수 있다. `--offline`이면 `live`를 쓰지 않는다.
 pub fn run_with_searcher(program: &str, args: &[String], out: &mut dyn Write, live: &dyn Searcher) -> i32 {
-    match args.first().map(String::as_str) {
-        None | Some("-h" | "--help") => {
+    run_with_searcher_and_defaults(program, args, out, live, Options::default())
+}
+
+/// `run_with_searcher`와 같고 기본 옵션을 주입한다. CLI 무인자 기본 경로를 임시 디렉토리로 검증할 때 쓴다.
+pub fn run_with_searcher_and_defaults(program: &str, args: &[String], out: &mut dyn Write, live: &dyn Searcher, defaults: Options) -> i32 {
+    let option_args = match args.first().map(String::as_str) {
+        None => args,
+        Some("-h" | "--help") => {
             print_usage(program, out);
             return 0;
         }
-        Some("run") => {}
+        Some("run") => &args[1..],
+        Some(arg) if arg.starts_with("--") => args,
         Some(other) => {
             eprintln!("{program}: error: argument command: invalid choice: '{other}' (choose from 'run')");
             return 2;
         }
-    }
-    let options = match parse_options(&args[1..]) {
+    };
+    let options = match parse_options_with_defaults(option_args, defaults) {
         Ok(o) => o,
         Err(msg) => {
             eprintln!("{program}: error: {msg}");
@@ -199,7 +209,13 @@ pub fn run_with_searcher(program: &str, args: &[String], out: &mut dyn Write, li
         eprintln!("ERROR {e}");
         return 1;
     }
-    let mut cache = BookstoreSearchCache::new(&options.cache, options.refresh_cache, options.negative_cache_seconds);
+    let mut cache = match BookstoreSearchCache::try_new(&options.cache, options.refresh_cache, options.negative_cache_seconds) {
+        Ok(cache) => cache,
+        Err(e) => {
+            eprintln!("ERROR 캐시를 초기화하지 못했다: {}: {e}", options.cache.display());
+            return 1;
+        }
+    };
     let searcher: &dyn Searcher = if options.offline { &CacheOnly } else { live };
     let proposals = build_proposals(&root, options.delay, options.max_searches, &mut cache, searcher);
     if let Err(e) = write_report(&proposals, &options.report) {

@@ -304,6 +304,20 @@ fn test_split_refuses_an_image_shared_with_another_page() {
 }
 
 #[test]
+fn test_split_refuses_a_manifest_page_outside_the_spine() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = make_book(&tmp.path().join("b.epub"), &[]);
+    let mut members = read(&path);
+    let opf = members.get("OPS/book.opf").unwrap().clone();
+    let opf = replace_bytes(&opf, b"</manifest>", b"<item id=\"orphan\" href=\"p1.xhtml\" media-type=\"application/xhtml+xml\"/></manifest>");
+    members.insert("OPS/book.opf".into(), opf);
+    write_zip(&path, members.into_iter().collect());
+
+    let result = edit(&path, &tmp.path().join("0_trash"), EditImages { splits: vec![json!({"idref": "orphan", "first": full(), "second": full()})], ..EditImages::default() });
+    assert_refused(result, "편집할 쪽", "다시 열어");
+}
+
+#[test]
 fn test_delete_removes_the_page_and_its_unused_image() {
     let b = book();
     b.edit(EditImages { deletes: vec![json!({"idref": "p2"})], ..EditImages::default() }).unwrap();
@@ -344,6 +358,25 @@ fn test_delete_refuses_the_tool_cover_page() {
     write_zip(&path, members.into_iter().collect());
     let result = edit(&path, &tmp.path().join("0_trash"), EditImages { deletes: vec![json!("tm-cover-page-x")], ..EditImages::default() });
     assert_refused(result, "표지", "tm-cover-page-x");
+}
+
+#[test]
+fn test_split_and_insert_refuse_tool_cover_pages() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = make_book(&tmp.path().join("b.epub"), &[]);
+    let mut members = read(&path);
+    let opf = members.get("OPS/book.opf").unwrap().clone();
+    let opf = replace_bytes(&opf, b"<spine>", b"<spine><itemref idref=\"tm-cover-page-x\"/>");
+    let opf = replace_bytes(&opf, b"</manifest>", b"<item id=\"tm-cover-page-x\" href=\"p1.xhtml\" media-type=\"application/xhtml+xml\"/></manifest>");
+    members.insert("OPS/book.opf".into(), opf);
+    write_zip(&path, members.into_iter().collect());
+
+    let trash = tmp.path().join("0_trash");
+    let split = edit(&path, &trash, EditImages { splits: vec![json!({"idref": "tm-cover-page-x", "first": full(), "second": full()})], ..EditImages::default() });
+    assert_refused(split, "표지", "분할");
+
+    let insert = edit(&path, &trash, EditImages { inserts: vec![("tm-cover-page-x".into(), jpeg("red"))], ..EditImages::default() });
+    assert_refused(insert, "표지", "삽화");
 }
 
 fn replace_bytes(data: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
@@ -838,6 +871,58 @@ fn test_mismatched_tag_count_is_refused() {
 }
 
 #[test]
+fn test_page_image_edit_preserves_utf8_signature() {
+    let raw = b"\xEF\xBB\xBF<html><body><img src='old.jpg'/></body></html>";
+
+    let edited = edit_page_images(raw, 1, &[(0, "split", Some(json!("new image.jpg")))]).unwrap();
+
+    assert!(edited.starts_with(b"\xEF\xBB\xBF"));
+    assert!(String::from_utf8_lossy(&edited).contains("src='new%20image.jpg'"));
+}
+
+#[test]
+fn test_page_image_edit_reads_and_writes_utf16_bom() {
+    let text = "<html><body><img src='old.jpg'/></body></html>";
+    let raw: Vec<u8> = [vec![0xFF, 0xFE], text.encode_utf16().flat_map(u16::to_le_bytes).collect()].concat();
+
+    let edited = edit_page_images(&raw, 1, &[(0, "delete", None)]).unwrap();
+
+    assert!(edited.starts_with(&[0xFF, 0xFE]));
+    let words: Vec<u16> = edited[2..].chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+    assert!(!String::from_utf16(&words).unwrap().contains("<img"));
+}
+
+#[test]
+fn test_page_image_edit_round_trips_latin1_meta_charset() {
+    let raw = [b"<html><head><meta charset='ISO-8859-1'></head><body>caf".as_slice(), &[0xE9], b"<img src='old.jpg'/></body></html>"].concat();
+
+    let edited = edit_page_images(&raw, 1, &[(0, "delete", None)]).unwrap();
+
+    assert!(edited.windows(4).any(|window| window == b"caf\xE9"));
+    assert!(!edited.windows(4).any(|window| window == b"<img"));
+}
+
+#[test]
+fn test_page_image_edit_rejects_invalid_encoding_declarations() {
+    let raw = b"<?xml version='1.0' encoding='windows-1252'?><html><body><img src='a'/></body></html>";
+
+    let error = edit_page_images(raw, 1, &[(0, "delete", None)]).unwrap_err();
+
+    assert!(error.to_string().contains("문자 인코딩을 읽을 수 없음"));
+}
+
+#[test]
+fn test_page_image_split_does_not_rewrite_data_src_attribute() {
+    let raw = b"<html><body><img data-src='keep.jpg' src='old.jpg'/></body></html>";
+
+    let edited = edit_page_images(raw, 1, &[(0, "split", Some(json!("new.jpg")))]).unwrap();
+    let edited = String::from_utf8(edited).unwrap();
+
+    assert!(edited.contains("data-src='keep.jpg'"));
+    assert!(edited.contains("src='new.jpg'"));
+}
+
+#[test]
 fn test_comment_images_are_not_counted() {
     let tmp = tempfile::tempdir().unwrap();
     let page = MULTI_PAGE.replace("<li", "<!-- <img src=\"../Images/m1.jpg\"/> --><li");
@@ -845,6 +930,17 @@ fn test_comment_images_are_not_counted() {
     edit(&path, &tmp.path().join("0_trash"), EditImages { deletes: vec![json!({"idref": "multi", "index": 1})], ..EditImages::default() }).unwrap();
     let text = text_of(&read(&path), "OEBPS/Text/multi.xhtml");
     assert!(text.matches("<img").count() == 2 && !text.replace("<!-- <img", "").contains("m2.jpg"), "{text}");
+}
+
+#[test]
+fn test_delete_of_repeated_image_reference_keeps_the_shared_member() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = make_book(&tmp.path().join("b.epub"), &[("OPS/two.xhtml", page(&["img/4.jpg", "img/4.jpg"], "").into_bytes())]);
+    let result = edit(&path, &tmp.path().join("0_trash"), EditImages { deletes: vec![json!({"idref": "two", "index": 0})], ..EditImages::default() });
+    assert!(result.is_ok(), "{result:?}");
+    let members = read(&path);
+    assert!(members.contains_key("OPS/img/4.jpg"));
+    assert!(text_of(&members, "OPS/two.xhtml").contains("img/4.jpg"));
 }
 
 #[test]
@@ -880,7 +976,17 @@ fn test_edit_counts_and_indexes_are_capped() {
 fn test_malformed_crop_rectangles_are_refused() {
     let b = book();
     let original = fs::read(&b.path).unwrap();
-    let cases = [json!([0, 0, "a", 1, 0]), json!([0, 0, 1]), json!([0, 0, 1, 1, 0, 0]), json!(null), json!("0,0,1,1"), json!([0, 0, f64::NAN, 1, 0]), json!([0, 0, 1, 1, 400]), json!([0, 0, 1, 1e308, 0]), json!([-0.5, 0, 1, 1, 0])];
+    let cases = [
+        json!([0, 0, "a", 1, 0]),
+        json!([0, 0, 1]),
+        json!([0, 0, 1, 1, 0, 0]),
+        json!(null),
+        json!("0,0,1,1"),
+        json!([0, 0, f64::NAN, 1, 0]),
+        json!([0, 0, 1, 1, 400]),
+        json!([0, 0, 1, 1e308, 0]),
+        json!([-0.5, 0, 1, 1, 0]),
+    ];
     for rect in cases {
         let label = rect.to_string();
         assert!(b.edit(EditImages { crops: vec![json!({"idref": "p1", "rect": rect})], ..EditImages::default() }).is_err(), "{label}");

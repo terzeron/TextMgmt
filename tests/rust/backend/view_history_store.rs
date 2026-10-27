@@ -19,9 +19,7 @@
 //!   `ViewHistoryStore::with_max_history_rows(self, usize) -> ViewHistoryStore`(구 `set_max_history_rows`)
 //! - 로그는 `log::warn!`로 남기고 `common::log_capture::LogCapture`로 수집한다.
 
-mod common;
-#[path = "common/mysql_fixture.rs"]
-mod mysql_fixture;
+use crate::{common, mysql_fixture};
 
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::sleep;
@@ -58,7 +56,6 @@ fn list(store: &ViewHistoryStore) -> Value {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_record_and_list_single_view() {
     let (store, _guard) = fixture();
     store.record_view("a@example.com", "book", 1, "책 하나", "소설").unwrap();
@@ -77,7 +74,6 @@ fn test_record_and_list_single_view() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_reviewing_same_book_does_not_duplicate() {
     let (store, _guard) = fixture();
     store.record_view("a@example.com", "book", 1, "원래 제목", "소설").unwrap();
@@ -93,7 +89,6 @@ fn test_reviewing_same_book_does_not_duplicate() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_reviewing_moves_book_to_front() {
     let (store, _guard) = fixture();
     for (book_id, title) in [(1, "첫째"), (2, "둘째"), (3, "셋째")] {
@@ -111,7 +106,6 @@ fn test_reviewing_moves_book_to_front() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_keeps_only_max_recent_views_per_type() {
     let (store, _guard) = fixture();
     let overflow = MAX_RECENT_VIEWS + 5;
@@ -129,7 +123,6 @@ fn test_keeps_only_max_recent_views_per_type() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_book_and_comic_limits_are_independent() {
     let (store, _guard) = fixture();
     for book_id in 0..MAX_RECENT_VIEWS + 3 {
@@ -150,7 +143,6 @@ fn test_book_and_comic_limits_are_independent() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_users_ordered_by_most_recent_activity() {
     let (store, _guard) = fixture();
     store.record_view("old@example.com", "book", 1, "오래된 조회", "").unwrap();
@@ -161,7 +153,6 @@ fn test_users_ordered_by_most_recent_activity() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_users_are_isolated() {
     let (store, _guard) = fixture();
     store.record_view("a@example.com", "book", 1, "A 의 책", "").unwrap();
@@ -174,7 +165,6 @@ fn test_users_are_isolated() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_limit_argument_caps_returned_items() {
     let (store, _guard) = fixture();
     for book_id in 0..5 {
@@ -188,7 +178,6 @@ fn test_limit_argument_caps_returned_items() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_snapshot_survives_when_source_book_is_gone() {
     // 책이 삭제돼도 이력은 조회 시점 제목을 그대로 보여준다(원본 join 없음).
     let (store, _guard) = fixture();
@@ -202,7 +191,6 @@ fn test_snapshot_survives_when_source_book_is_gone() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_rejects_unknown_content_type() {
     let (store, _guard) = fixture();
     match store.record_view("a@example.com", "magazine", 1, "x", "") {
@@ -383,14 +371,12 @@ fn test_list_recent_views_warns_and_skips_unknown_content_type() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_empty_store_returns_no_users() {
     let (store, _guard) = fixture();
     assert_eq!(list(&store), json!({"limit": MAX_RECENT_VIEWS, "users": []}));
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_long_title_is_stored() {
     let (store, _guard) = fixture();
     let long_title = "가".repeat(500);
@@ -400,7 +386,6 @@ fn test_long_title_is_stored() {
 }
 
 #[test]
-#[ignore = "Docker 필요"]
 fn test_factory_returns_store() {
     mysql_fixture::mysql_container();
     let _guard = mysql_fixture::db_lock();

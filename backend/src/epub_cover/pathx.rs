@@ -24,11 +24,7 @@ pub fn normpath(path: &str) -> String {
     if initial_slashes > 0 {
         out = format!("{}{out}", "/".repeat(initial_slashes));
     }
-    if out.is_empty() {
-        ".".to_string()
-    } else {
-        out
-    }
+    if out.is_empty() { ".".to_string() } else { out }
 }
 
 /// `posixpath.join(a, b)`.
@@ -45,11 +41,7 @@ pub fn join(a: &str, b: &str) -> String {
 /// `posixpath.dirname`.
 pub fn dirname(path: &str) -> String {
     let head = &path[..path.rfind('/').map_or(0, |i| i + 1)];
-    if !head.is_empty() && head.chars().any(|c| c != '/') {
-        head.trim_end_matches('/').to_string()
-    } else {
-        head.to_string()
-    }
+    if !head.is_empty() && head.chars().any(|c| c != '/') { head.trim_end_matches('/').to_string() } else { head.to_string() }
 }
 
 /// `posixpath.splitext(path)[1]`. 파일 이름 앞쪽의 점은 확장자로 보지 않는다.
@@ -82,10 +74,13 @@ pub fn unquote(text: &str) -> String {
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() && let (Some(h), Some(l)) = ((bytes[i + 1] as char).to_digit(16), (bytes[i + 2] as char).to_digit(16)) {
-                out.push((h * 16 + l) as u8);
-                i += 3;
-                continue;
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(h), Some(l)) = ((bytes[i + 1] as char).to_digit(16), (bytes[i + 2] as char).to_digit(16))
+        {
+            out.push((h * 16 + l) as u8);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;
@@ -135,11 +130,7 @@ pub fn member_path(base: &str, href: &str) -> String {
         return String::new();
     }
     let member = normpath(&join(base, &unquote(&path)));
-    if member.starts_with('/') || member.starts_with("../") {
-        String::new()
-    } else {
-        member
-    }
+    if member.starts_with('/') || member.starts_with("../") { String::new() } else { member }
 }
 
 #[cfg(test)]

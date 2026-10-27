@@ -1,10 +1,10 @@
 //! Python random.Random(integer).shuffle와 같은 MT19937 순서. 표본을 바꾸지 않기 위해 사용한다.
-struct Random {
+pub(super) struct Random {
     mt: [u32; 624],
     index: usize,
 }
 impl Random {
-    fn new(seed: u64) -> Self {
+    pub(super) fn new(seed: u64) -> Self {
         let mut r = Self { mt: [0; 624], index: 624 };
         r.mt[0] = 19650218;
         for i in 1..624 {
@@ -54,7 +54,7 @@ impl Random {
         y ^= y >> 18;
         y
     }
-    fn below(&mut self, n: usize) -> usize {
+    pub(super) fn below(&mut self, n: usize) -> usize {
         let bits = usize::BITS - n.leading_zeros();
         loop {
             let value = if bits <= 32 { (self.next() >> (32 - bits)) as u64 } else { u64::from(self.next()) | (u64::from(self.next() >> (64 - bits)) << 32) };
@@ -62,6 +62,10 @@ impl Random {
                 return value as usize;
             }
         }
+    }
+
+    pub(super) fn randint(&mut self, low: usize, high: usize) -> usize {
+        low + self.below(high - low + 1)
     }
 }
 pub(super) fn shuffle<T>(values: &mut [T], seed: u64) {

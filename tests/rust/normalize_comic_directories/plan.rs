@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use normalize_comic_directories::cache::{BookstoreSearchCache, StoreRow};
-use normalize_comic_directories::cli::{LiveSearch, Options, parse_options, run, run_with_searcher};
+use normalize_comic_directories::cli::{CacheOnly, LiveSearch, Options, parse_options, run, run_with_searcher, run_with_searcher_and_defaults};
 use normalize_comic_directories::plan::*;
 
 fn row(title: &str, author: &str) -> StoreRow {
@@ -140,6 +140,18 @@ fn cache_loading_skips_bad_lines_and_expires_only_empty_results() {
 
     let mut forever = BookstoreSearchCache::new(&path, false, 0);
     assert!(forever.get("empty-old", "yes24").is_none(), "TTL 0이면 빈 결과는 바로 만료된다");
+}
+
+#[test]
+fn cache_loading_rejects_invalid_utf8_like_python() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("cache.jsonl");
+    fs::write(&path, [b'{', b'\n', 0xff, b'\n']).unwrap();
+    let error = match BookstoreSearchCache::try_new(&path, false, 3600) {
+        Ok(_) => panic!("invalid UTF-8 must fail cache loading"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 }
 
 #[test]
@@ -331,9 +343,21 @@ fn run_args(root: &Path, extra: &[&str]) -> (i32, String, tempfile::TempDir) {
 }
 
 #[test]
-fn run_without_arguments_prints_usage_and_bad_commands_exit_two() {
+fn no_arguments_runs_with_the_provided_default_options() {
+    let (_tmp, root) = comic_root();
+    let work = tempfile::tempdir().unwrap();
+    let options = Options { root: root.clone(), report: work.path().join("default.tsv"), cache: work.path().join("cache.jsonl"), offline: true, ..Options::default() };
     let mut out = Vec::new();
-    assert_eq!(run("ncd", &[], &mut out), 0);
+    assert_eq!(run_with_searcher_and_defaults("ncd", &[], &mut out, &CacheOnly, options), 0);
+    assert!(String::from_utf8(out).unwrap().contains("Directories scanned: 6"));
+    assert!(work.path().join("default.tsv").exists());
+    assert!(root.join("3_미정리/[홍길동] 나루토").exists());
+}
+
+#[test]
+fn help_prints_usage_and_bad_commands_exit_two() {
+    let mut out = Vec::new();
+    assert_eq!(run("ncd", &args(&["--help"]), &mut out), 0);
     assert!(String::from_utf8(out).unwrap().contains("사용법"));
     assert_eq!(run("ncd", &args(&["-h"]), &mut Vec::new()), 0);
     assert_eq!(run("ncd", &args(&["bogus"]), &mut Vec::new()), 2);
@@ -382,6 +406,21 @@ fn cache_writes_that_fail_do_not_enter_the_in_memory_cache() {
     assert!(!cache.contains("q", "yes24"));
     let refreshed = BookstoreSearchCache::new(&blocker.join("sub/cache.jsonl"), true, 100);
     assert!(!refreshed.contains("q", "yes24"));
+}
+
+#[test]
+fn refresh_cache_failure_stops_the_run_before_writing_a_report() {
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path().join("comics");
+    fs::create_dir(&root).unwrap();
+    let blocker = work.path().join("not-a-directory");
+    fs::write(&blocker, "x").unwrap();
+    let report = work.path().join("report.tsv");
+    let options = Options { root, report: report.clone(), cache: blocker.join("cache.jsonl"), refresh_cache: true, offline: true, ..Options::default() };
+    let mut out = Vec::new();
+
+    assert_eq!(run_with_searcher_and_defaults("ncd", &[], &mut out, &CacheOnly, options), 1);
+    assert!(!report.exists());
 }
 
 #[test]

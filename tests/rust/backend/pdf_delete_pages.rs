@@ -52,7 +52,7 @@ async fn test_reindexed_document_gets_a_fresh_updated_time() {
     let (_result, error) = e.run_pages(&[2]).await;
 
     assert_eq!(error, None);
-    let calls = e.add_book.calls.lock().unwrap();
+    let calls = e.es.inserted();
     let indexed = &calls.last().unwrap()[&1];
     assert_eq!(indexed["page_count"], 4);
     let updated = indexed["updated_time"].as_str().unwrap();
@@ -74,8 +74,8 @@ async fn test_deletes_pages_and_keeps_original_in_trash() {
     assert_eq!(widths(&e.pdf), [100, 102, 104]);
     let backup = e.root.join("0_trash").join("book.pdf");
     assert_eq!(fs::read(&backup).unwrap(), original);
-    assert_eq!(*e.es.deleted.lock().unwrap(), vec![1]);
-    let calls = e.add_book.calls.lock().unwrap();
+    assert_eq!(e.es.deleted(), vec![1]);
+    let calls = e.es.inserted();
     assert_eq!(calls.len(), 1);
     let indexed = &calls[0][&1];
     assert!(indexed["category"] == "cat" && indexed["file_path"] == "cat/book.pdf");
@@ -120,8 +120,7 @@ async fn test_duplicate_pages_count_once() {
 #[tokio::test]
 async fn test_non_pdf_is_rejected() {
     let e = fx::env(Opts::loader());
-    *e.es.doc.lock().unwrap() =
-        Some(json!({"category": "c", "title": "t", "author": "a", "file_path": "cat/book.epub", "file_type": "epub", "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000"}));
+    e.es.set_doc(Some(json!({"category": "c", "title": "t", "author": "a", "file_path": "cat/book.epub", "file_type": "epub", "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000"})));
     let (result, error) = e.run_pages(&[1]).await;
     assert!(result.is_none() && error_text(&error).contains("Not a PDF"), "{error:?}");
 }
@@ -129,7 +128,7 @@ async fn test_non_pdf_is_rejected() {
 #[tokio::test]
 async fn test_unknown_book() {
     let e = fx::env(Opts::loader());
-    *e.es.doc.lock().unwrap() = None;
+    e.es.set_doc(None);
     let (result, error) = e.run_pages(&[1]).await;
     assert!(result.is_none() && error_text(&error).to_lowercase().contains("not found"), "{error:?}");
 }
@@ -137,7 +136,7 @@ async fn test_unknown_book() {
 #[tokio::test]
 async fn test_reindex_failure_reports_backup_location() {
     let e = fx::env(Opts::loader());
-    *e.add_book.result.lock().unwrap() = (None, Some("boom".to_string()));
+    e.es.fail("insert", "boom");
 
     let (result, error) = e.run_pages(&[3]).await;
 
@@ -163,7 +162,7 @@ async fn test_order_rearranges_pages_and_keeps_original_in_trash() {
         assert!(result["remaining_pages"] == 5 && result["backup"] == "0_trash/book.pdf", "order={order:?}: {result}");
         assert_eq!(widths(&e.pdf), expected, "order={order:?}");
         assert_eq!(fs::read(e.root.join("0_trash").join("book.pdf")).unwrap(), original, "order={order:?}");
-        assert_eq!(*e.es.deleted.lock().unwrap(), vec![1], "order={order:?}");
+        assert_eq!(e.es.deleted(), vec![1], "order={order:?}");
     }
 }
 
@@ -210,7 +209,7 @@ async fn test_crop_keeps_only_the_given_region() {
     assert_approx(img.box_w, 50.0, "box_w");
     assert!(img.center[2] > 200 && img.center[0] < 60, "{:?}", img.center); // 오른쪽(파랑)만 남았다
     assert_eq!(first_image_size(&e.pdf, 1), (100, 60)); // 다른 쪽은 그대로
-    assert_eq!(*e.es.deleted.lock().unwrap(), vec![1]);
+    assert_eq!(e.es.deleted(), vec![1]);
 }
 
 #[tokio::test]
@@ -329,7 +328,7 @@ async fn test_invalid_rotated_crop_changes_nothing() {
         assert!(result.is_none() && has_error(&error), "{label}: {result:?} {error:?}");
         assert_eq!(fs::read(&e.pdf).unwrap(), original, "{label}");
         assert!(!e.root.join("0_trash").exists(), "{label}");
-        assert!(e.es.deleted.lock().unwrap().is_empty(), "{label}");
+        assert!(e.es.deleted().is_empty(), "{label}");
     }
 }
 
@@ -357,7 +356,7 @@ async fn test_split_replaces_the_page_with_first_then_second() {
     assert!(second.center[0] > 200 && second.center[2] < 60, "{:?}", second.center); // 3쪽: 빨강
     assert_eq!(first_image_size(&e.pdf, 1), (100, 60)); // 앞의 쪽은 그대로
     assert_eq!(first_image_size(&e.pdf, 5), (100, 60)); // 뒤의 쪽은 한 칸 밀렸다
-    assert_eq!(*e.es.deleted.lock().unwrap(), vec![1]);
+    assert_eq!(e.es.deleted(), vec![1]);
 }
 
 #[tokio::test]
@@ -461,7 +460,7 @@ async fn test_insert_adds_an_image_page_before_the_given_page() {
     assert!(down[0] > 180 && down[2] < 80, "{down:?}"); // 아래쪽: 노랑
     assert_eq!(first_image_size(&e.pdf, 3), (100, 60)); // 원본 2쪽은 한 칸 밀렸다
     assert_eq!(first_image_size(&e.pdf, 1), (100, 60));
-    assert_eq!(*e.es.deleted.lock().unwrap(), vec![1]);
+    assert_eq!(e.es.deleted(), vec![1]);
 }
 
 #[tokio::test]
@@ -560,7 +559,7 @@ async fn test_fetch_failure_changes_nothing() {
         assert!(result.is_none() && error_text(&error).contains(expected), "{expected}: {error:?}");
         assert_eq!(fs::read(&e.pdf).unwrap(), original, "{expected}");
         assert!(!e.root.join("0_trash").exists(), "{expected}");
-        assert!(e.es.deleted.lock().unwrap().is_empty(), "{expected}");
+        assert!(e.es.deleted().is_empty(), "{expected}");
     }
 }
 
@@ -937,7 +936,7 @@ async fn test_unreadable_upload_fails_without_touching_the_files() {
     assert!(result.is_none() && error_text(&error).contains("2쪽 앞에 넣을 이미지를 가져올 수 없습니다"), "{error:?}");
     assert_eq!(fs::read(&e.pdf).unwrap(), original);
     assert!(!e.root.join("0_trash").exists());
-    assert!(e.es.deleted.lock().unwrap().is_empty());
+    assert!(e.es.deleted().is_empty());
 }
 
 #[tokio::test]

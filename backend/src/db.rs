@@ -14,7 +14,7 @@ use diesel::mysql::{Mysql, MysqlConnection, MysqlType};
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
 use diesel::row::{Field, NamedRow};
 use diesel::sql_types::{BigInt, Date, Datetime, Double, Nullable, Text, Time, Timestamp};
-use diesel::{sql_query, Connection, RunQueryDsl};
+use diesel::{Connection, RunQueryDsl, sql_query};
 
 // ---------------------------------------------------------------------------
 // 값과 오류
@@ -241,6 +241,16 @@ fn map_error(e: DieselError) -> DbError {
         }
         DieselError::DatabaseError(_, info) => DbError::Other(info.message().to_string()),
         other => DbError::Other(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DbError, DieselError, map_error};
+
+    #[test]
+    fn non_database_diesel_errors_become_other_db_errors() {
+        assert!(matches!(map_error(DieselError::NotFound), DbError::Other(message) if !message.is_empty()));
     }
 }
 

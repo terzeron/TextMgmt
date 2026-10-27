@@ -132,11 +132,6 @@ export default function ViewPDF({
       return new Map(prev).set(pageNum, withBoxRect(mark, id, rect));
     });
   const saveMarkedPages = async () => {
-    if (
-      saving ||
-      (markedPages.size === 0 && insertions.size === 0 && pageOrder === null)
-    )
-      return;
     const entries = [...markedPages].sort(([a], [b]) => a - b);
     const pages = entries
       .filter(([, mark]) => mark.kind === "page")

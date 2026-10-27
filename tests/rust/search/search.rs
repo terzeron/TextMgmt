@@ -60,7 +60,22 @@ fn title_only_uses_default_ext_and_size() {
 }
 
 #[test]
-fn summary_is_cut_to_200_chars_and_missing_summary_is_empty() {
+fn size_parsing_accepts_python_integer_separators_and_surrounding_whitespace() {
+    let es = Dummy::default();
+    assert_eq!(go(&["hello", "", "", "1_000"], &es).0, 0);
+    assert_eq!(es.title_calls.borrow()[0].2, 1_000);
+
+    let es = Dummy::default();
+    assert_eq!(go(&["hello", "", "", " \t+42\n"], &es).0, 0);
+    assert_eq!(es.title_calls.borrow()[0].2, 42);
+
+    let es = Dummy::default();
+    assert_eq!(go(&["hello", "", "", "１２٣"], &es).0, 0);
+    assert_eq!(es.title_calls.borrow()[0].2, 123);
+}
+
+#[test]
+fn summary_is_cut_to_200_chars_and_missing_summary_fails_like_python() {
     struct Long;
     impl BookSearch for Long {
         fn search_by_title(&self, _: &str, _: &str, _: i64) -> Result<Vec<Hit>, EsError> {
@@ -72,17 +87,26 @@ fn summary_is_cut_to_200_chars_and_missing_summary_is_empty() {
     }
     let mut out = Vec::new();
     let args = vec!["x".to_string()];
-    assert_eq!(run("search", &args, &mut out, &|| Ok(&Long as &dyn BookSearch)), 0);
+    assert_eq!(run("search", &args, &mut out, &|| Ok(&Long as &dyn BookSearch)), 1);
     let text = String::from_utf8(out).unwrap();
     // `item:` 줄은 소스 전체를 그대로 찍는다. 잘리는 것은 그 아래 요약 줄이다.
     let summary_lines: Vec<&str> = text.lines().filter(|l| !l.starts_with("item:") && !l.starts_with("---")).collect();
-    assert_eq!(summary_lines, ["가".repeat(200).as_str(), ""]);
+    assert_eq!(summary_lines, ["가".repeat(200).as_str()]);
 }
 
 #[test]
 fn invalid_size_exits_one() {
     let es = Dummy::default();
     assert_eq!(go(&["t", "", "", "abc"], &es).0, 1);
+    assert_eq!(go(&["t", "", "", "1__0"], &es).0, 1);
+    assert!(es.title_calls.borrow().is_empty());
+}
+
+#[test]
+fn size_parsing_rejects_digits_newer_than_python_313_unicode() {
+    let es = Dummy::default();
+    assert_eq!(go(&["t", "", "", "\u{10d40}"], &es).0, 1);
+    assert!(es.title_calls.borrow().is_empty());
 }
 
 #[test]

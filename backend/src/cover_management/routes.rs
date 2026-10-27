@@ -10,15 +10,15 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
+use axum::Json;
 use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::handler::Handler;
-use axum::http::{header, HeaderValue};
+use axum::http::{HeaderValue, header};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::{with_cancel_scope, ApplyCoverModel, ApplyImageModel, ApplyUrlModel, BookCoverModel, CoverHooks, CoverManagement};
+use super::{ApplyCoverModel, ApplyImageModel, ApplyUrlModel, BookCoverModel, CoverHooks, CoverManagement, with_cancel_scope};
 use crate::epub_cover::{CoverError, MAX_IMAGE_BYTES};
 use crate::main::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, RequestValidationError, RequireAdmin, Routes};
 
@@ -176,19 +176,11 @@ fn invalid(loc: &[&str], msg: &str) -> ApiError {
 }
 
 fn max_length(name: &'static str, value: &str, max: usize) -> ApiResult<()> {
-    if value.chars().count() > max {
-        Err(invalid(&["query", name], &format!("String should have at most {max} characters")))
-    } else {
-        Ok(())
-    }
+    if value.chars().count() > max { Err(invalid(&["query", name], &format!("String should have at most {max} characters"))) } else { Ok(()) }
 }
 
 fn min_length(name: &'static str, value: &str) -> ApiResult<()> {
-    if value.is_empty() {
-        Err(invalid(&["query", name], "String should have at least 1 character"))
-    } else {
-        Ok(())
-    }
+    if value.is_empty() { Err(invalid(&["query", name], "String should have at least 1 character")) } else { Ok(()) }
 }
 
 /// FastAPI의 bool 쿼리 해석.

@@ -70,7 +70,10 @@ fn fixture_model_classifier(books: &Path) -> Arc<dyn Classify> {
 }
 
 fn service(s: &Setup, categories: [&'static str; 3], calls: &Arc<AtomicUsize>) -> BookClassifierService {
-    let mut svc = BookClassifierService::new(&s.books, Some(&s.meta.join("classification_cache.json")), Some(fixture_model_classifier(&s.books))).with_delay(0.0).with_bookstore_cache_file(&s.meta.join("bookstore_cache.jsonl")).with_bookstore_policy(BookstorePolicy::default());
+    let mut svc = BookClassifierService::new(&s.books, Some(&s.meta.join("classification_cache.json")), Some(fixture_model_classifier(&s.books)))
+        .with_delay(0.0)
+        .with_bookstore_cache_file(&s.meta.join("bookstore_cache.jsonl"))
+        .with_bookstore_policy(BookstorePolicy::default());
     svc.yes24 = Box::new(Store { category: categories[0], calls: Arc::clone(calls) });
     svc.aladin = Box::new(Store { category: categories[1], calls: Arc::clone(calls) });
     svc.kyobo = Box::new(Store { category: categories[2], calls: Arc::clone(calls) });
@@ -97,10 +100,12 @@ fn bookstore_votes_change_the_grade_compared_with_the_model_alone() {
     let s = setup(&["달빛조각사.txt"]);
 
     // 모델 단독(기존 훅). fixture 모델은 이 문서에 확신이 모자라 판정을 거부한다.
-    let model_only = manager(&s, |d| d.with_classifier_factory({
-        let classifier = fixture_model_classifier(&s.books);
-        Arc::new(move || Arc::clone(&classifier))
-    }));
+    let model_only = manager(&s, |d| {
+        d.with_classifier_factory({
+            let classifier = fixture_model_classifier(&s.books);
+            Arc::new(move || Arc::clone(&classifier))
+        })
+    });
     let alone = propose(&model_only, ProposeOptions::default());
     assert_eq!(alone["items"][0]["grade"], "unknown");
     assert!(alone["items"][0]["target_category"].is_null());
@@ -108,10 +113,12 @@ fn bookstore_votes_change_the_grade_compared_with_the_model_alone() {
     // 서비스: 서점 세 곳이 같은 카테고리를 가리키면 다수결이 이긴다.
     let calls = Arc::new(AtomicUsize::new(0));
     let shared = Arc::new(SharedBookClassifier::new(service(&s, ["소설 > 판타지", "국내도서 > 판타지", "소설 > 판타지"], &calls)));
-    let with_service = manager(&s, |d| d.with_classifier_service_factory(Arc::new({
-        let shared = Arc::clone(&shared);
-        move || Some(Arc::clone(&shared))
-    })));
+    let with_service = manager(&s, |d| {
+        d.with_classifier_service_factory(Arc::new({
+            let shared = Arc::clone(&shared);
+            move || Some(Arc::clone(&shared))
+        }))
+    });
     let result = propose(&with_service, ProposeOptions::default());
     let item = &result["items"][0];
     assert_eq!(item["target_category"], "3_판타지");
@@ -128,10 +135,12 @@ fn use_bookstore_false_skips_the_stores_and_use_content_meta_false_uses_the_file
     let s = setup(&["달빛조각사.txt"]);
     let calls = Arc::new(AtomicUsize::new(0));
     let shared = Arc::new(SharedBookClassifier::new(service(&s, ["소설 > 판타지"; 3], &calls)));
-    let m = manager(&s, |d| d.with_classifier_service_factory(Arc::new({
-        let shared = Arc::clone(&shared);
-        move || Some(Arc::clone(&shared))
-    })));
+    let m = manager(&s, |d| {
+        d.with_classifier_service_factory(Arc::new({
+            let shared = Arc::clone(&shared);
+            move || Some(Arc::clone(&shared))
+        }))
+    });
 
     let no_stores = propose(&m, ProposeOptions { use_bookstore: Some(false), ..Default::default() });
     assert_eq!(calls.load(Ordering::SeqCst), 0, "서점을 부르면 안 된다");
@@ -150,10 +159,12 @@ fn policy_boundary_and_calibration_come_from_the_service() {
     // 경계가 1.0 에 가까우면 모델 확신도가 경계 아래라 서점이 먼저다. 서점은 판타지로 일치한다.
     let svc = service(&s, ["소설 > 판타지"; 3], &calls).with_bookstore_policy(BookstorePolicy { override_below: 0.99, ..Default::default() });
     let shared = Arc::new(SharedBookClassifier::new(svc));
-    let m = manager(&s, |d| d.with_classifier_service_factory(Arc::new({
-        let shared = Arc::clone(&shared);
-        move || Some(Arc::clone(&shared))
-    })));
+    let m = manager(&s, |d| {
+        d.with_classifier_service_factory(Arc::new({
+            let shared = Arc::clone(&shared);
+            move || Some(Arc::clone(&shared))
+        }))
+    });
     let item = propose(&m, ProposeOptions::default())["items"][0].clone();
     assert_eq!(item["target_category"], "3_판타지");
     assert!(item["reason"].as_str().unwrap().contains("서점 우선"), "{}", item["reason"]);
@@ -208,10 +219,12 @@ fn concurrent_proposals_keep_the_bookstore_cache_intact_and_do_not_save_the_clas
     let s = setup(&refs);
     let calls = Arc::new(AtomicUsize::new(0));
     let shared = Arc::new(SharedBookClassifier::new(service(&s, ["소설 > 판타지"; 3], &calls)));
-    let m = Arc::new(manager(&s, |d| d.with_classifier_service_factory(Arc::new({
-        let shared = Arc::clone(&shared);
-        move || Some(Arc::clone(&shared))
-    }))));
+    let m = Arc::new(manager(&s, |d| {
+        d.with_classifier_service_factory(Arc::new({
+            let shared = Arc::clone(&shared);
+            move || Some(Arc::clone(&shared))
+        }))
+    }));
 
     let results = Mutex::new(Vec::new());
     std::thread::scope(|scope| {

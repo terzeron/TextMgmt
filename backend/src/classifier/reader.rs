@@ -9,8 +9,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-pub use corpus_common::reader::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, decode_best, korean_likeness, read_document_text, read_epub_text, read_txt_text};
 use corpus_common::reader::{MAX_MEMBER_BYTES, open_zip};
+pub use corpus_common::reader::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, decode_best, korean_likeness, read_document_text, read_epub_text, read_txt_text};
 
 /// 훑어 볼 ZIP 항목 수 상한. 정상 EPUB 은 수백 개다.
 pub const MAX_ZIP_ENTRIES: usize = 100_000;

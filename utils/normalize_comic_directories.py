@@ -251,9 +251,6 @@ def infer_identity(directory: Path) -> IdentityResult:
         groups.setdefault(title_key(title), []).append((title, author))
     key, matches = max(groups.items(), key=lambda item: len(item[1]))
     confidence = len(matches) / len(parsed)
-    if not key:
-        reason = f"book files: {len(book_files)}; parsed filenames: {len(parsed)}"
-        return IdentityResult(None, None, confidence, len(book_files), "SKIP_UNPARSEABLE_FILENAMES", reason)
     if confidence < 0.6:
         reason = f"dominant filename title: {len(matches)}/{len(parsed)}"
         return IdentityResult(None, None, confidence, len(book_files), "SKIP_AMBIGUOUS_FILE_TITLES", reason)
@@ -512,6 +509,7 @@ def apply_renames(proposals: list[Proposal]) -> int:
         raise RuntimeError("A destination appeared after preflight; no rename was started.")
 
     staged: list[tuple[Path, Path, Path]] = []
+    moved_to_target: set[Path] = set()
     try:
         for item in renames:
             temporary = item.source.with_name(f".normalize-{uuid4().hex}")
@@ -521,9 +519,10 @@ def apply_renames(proposals: list[Proposal]) -> int:
             if target.exists():
                 raise FileExistsError(target)
             temporary.rename(target)
+            moved_to_target.add(target)
     except Exception:
         for source, temporary, target in reversed(staged):
-            current = target if target.exists() else temporary
+            current = target if target in moved_to_target else temporary
             if current.exists() and not source.exists():
                 current.rename(source)
         raise

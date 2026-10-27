@@ -61,11 +61,12 @@ impl HwpStream {
     }
 
     fn take(&mut self, n: usize) -> Result<&[u8], StreamError> {
-        if self.pos + n > self.data.len() {
+        if n > self.remaining() {
             return Err(StreamError("unexpected end of stream".into()));
         }
-        let slice = &self.data[self.pos..self.pos + n];
-        self.pos += n;
+        let end = self.pos + n;
+        let slice = &self.data[self.pos..end];
+        self.pos = end;
         Ok(slice)
     }
 
@@ -84,10 +85,10 @@ impl HwpStream {
     }
 
     pub fn skip(&mut self, n: i64) -> Result<(), StreamError> {
-        if n < 0 || self.pos as i64 + n > self.data.len() as i64 {
+        let Some(skip) = usize::try_from(n).ok().filter(|skip| *skip <= self.remaining()) else {
             return Err(StreamError(format!("cannot skip {n} bytes (remaining: {})", self.remaining())));
-        }
-        self.pos += n as usize;
+        };
+        self.pos += skip;
         Ok(())
     }
 

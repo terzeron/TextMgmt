@@ -192,6 +192,72 @@ fn test_inspect_epub_metadata_reads_opf_with_comments() {
     assert_eq!(meta.author, "작가");
 }
 
+/// Python의 lxml `recover=True`처럼 잘린 OPF에서도 이미 읽을 수 있는 메타데이터를 보존한다.
+#[test]
+fn test_inspect_epub_metadata_recovers_truncated_opf() {
+    let opf = r#"<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>recovered</dc:title><dc:creator>Author</dc:creator></metadata>"#;
+    let tmp = TempDir::new().unwrap();
+    let epub_path = tmp.path().join("truncated.epub");
+    write_zip_text(&epub_path, &[("content.opf", opf)], false);
+
+    let meta = inspect_epub_metadata(&epub_path);
+
+    assert_eq!(meta.title, "recovered");
+    assert_eq!(meta.author, "Author");
+}
+
+/// Python lxml은 끝부분의 불완전한 태그를 버리고 앞서 읽은 메타데이터를 보존한다.
+#[test]
+fn test_inspect_epub_metadata_recovers_before_partial_tag() {
+    let opf = r#"<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>kept</dc:title><dc:creator"#;
+    let tmp = TempDir::new().unwrap();
+    let epub_path = tmp.path().join("partial-tag.epub");
+    write_zip_text(&epub_path, &[("content.opf", opf)], false);
+
+    let meta = inspect_epub_metadata(&epub_path);
+
+    assert_eq!(meta.title, "kept");
+}
+
+/// 복구 중 끝나지 않은 주석은 버리고 앞서 읽은 메타데이터를 보존한다.
+#[test]
+fn test_inspect_epub_metadata_recovers_before_unterminated_comment() {
+    let opf = r#"<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>kept</dc:title><!-- unfinished"#;
+    let tmp = TempDir::new().unwrap();
+    let epub_path = tmp.path().join("unterminated-comment.epub");
+    write_zip_text(&epub_path, &[("content.opf", opf)], false);
+
+    let meta = inspect_epub_metadata(&epub_path);
+
+    assert_eq!(meta.title, "kept");
+}
+
+/// CDATA와 맞지 않는 닫는 태그가 있어도 XML 구조를 복구해 메타데이터를 읽는다.
+#[test]
+fn test_inspect_epub_metadata_recovers_cdata_and_mismatched_closing_tags() {
+    let opf = concat!(r#"<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title><![CDATA[kept]]></dc:title><?pi ok?>"#, "</package>");
+    let tmp = TempDir::new().unwrap();
+    let epub_path = tmp.path().join("mismatched-tags.epub");
+    write_zip_text(&epub_path, &[("content.opf", opf)], false);
+
+    let meta = inspect_epub_metadata(&epub_path);
+
+    assert_eq!(meta.title, "kept");
+}
+
+/// 열린 태그와 대응하지 않는 종료 태그는 복구 과정에서 무시한다.
+#[test]
+fn test_inspect_epub_metadata_ignores_unmatched_closing_tag() {
+    let opf = concat!(r#"<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>kept</dc:title>"#, "</ghost></metadata></package>");
+    let tmp = TempDir::new().unwrap();
+    let epub_path = tmp.path().join("unmatched-tag.epub");
+    write_zip_text(&epub_path, &[("content.opf", opf)], false);
+
+    let meta = inspect_epub_metadata(&epub_path);
+
+    assert_eq!(meta.title, "kept");
+}
+
 #[test]
 fn test_inspect_txt_content_extracts_snippet_and_hashtags() {
     let tmp = TempDir::new().unwrap();
@@ -203,6 +269,28 @@ fn test_inspect_txt_content_extracts_snippet_and_hashtags() {
     assert_eq!(info.hashtags, vec!["무협", "강호"]);
     assert!(info.snippet.contains("문파와 마교"));
     assert!(info.snippet.chars().count() <= 2000);
+}
+
+#[test]
+fn test_inspect_txt_content_handles_crlf_and_lone_cr_line_endings() {
+    let tmp = TempDir::new().unwrap();
+    let txt_path = tmp.path().join("line-endings.txt");
+    fs::write(&txt_path, "첫째 줄\r\n둘째 줄\r셋째 줄\r\n").unwrap();
+
+    let info = inspect_txt_content(&txt_path);
+
+    assert_eq!(info.snippet, "첫째 줄 둘째 줄 셋째 줄");
+}
+
+#[test]
+fn test_inspect_txt_content_retries_legacy_decoder_without_hangul() {
+    let tmp = TempDir::new().unwrap();
+    let txt_path = tmp.path().join("ascii.txt");
+    fs::write(&txt_path, "plain ASCII text\r\nsecond line\n").unwrap();
+
+    let info = inspect_txt_content(&txt_path);
+
+    assert_eq!(info.snippet, "plain ASCII text second line");
 }
 
 #[test]
@@ -440,6 +528,45 @@ fn test_book_classifier_service_process_file() {
 }
 
 #[test]
+fn process_file_keeps_a_book_already_in_its_target_category() {
+    let tmp = TempDir::new().unwrap();
+    let library = tmp.path().join("library");
+    let source = library.join("0_telegram");
+    fs::create_dir_all(&source).unwrap();
+    let path = source.join("known.txt");
+    fs::write(&path, "content").unwrap();
+    let classifier = Arc::new(StubClassifier::new("0_telegram", 0.99));
+    let mut service = BookClassifierService::new(&library, None, Some(classifier));
+
+    let result = service.process_file(&path, &source, ProcessOptions { use_bookstore: false, ..Default::default() });
+
+    assert_eq!(result["action"], "skipped_same_category");
+    assert!(path.is_file(), "분류 결과가 현재 카테고리와 같으면 원본을 보존한다");
+}
+
+#[test]
+fn process_file_keeps_source_when_target_is_the_same_file() {
+    let tmp = TempDir::new().unwrap();
+    let library = tmp.path().join("library");
+    let source = library.join("0_telegram");
+    let target = library.join("3_판타지");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&target).unwrap();
+    let path = source.join("known.txt");
+    fs::write(&path, "content").unwrap();
+    let target_path = target.join("known.txt");
+    fs::hard_link(&path, &target_path).unwrap();
+    let classifier = Arc::new(StubClassifier::new("3_판타지", 0.99));
+    let mut service = BookClassifierService::new(&library, None, Some(classifier));
+
+    let result = service.process_file(&path, &source, ProcessOptions { use_bookstore: false, ..Default::default() });
+
+    assert_eq!(result["action"], "skipped_same_file");
+    assert!(path.exists(), "Python samefile 경로는 원본 hard link를 지우지 않는다");
+    assert!(target_path.exists());
+}
+
+#[test]
 fn test_inspect_txt_content_cp949_and_header_genre() {
     let tmp = TempDir::new().unwrap();
     let f = tmp.path().join("test_cp949.txt");
@@ -510,32 +637,16 @@ struct StubBookstore {
 
 impl StubBookstore {
     fn ok(rows: Vec<(&str, &str, &str, &str, &str, &str)>) -> Box<Self> {
-        Box::new(Self {
-            rows: rows
-                .into_iter()
-                .map(|(a, b, c, d, e, f)| {
-                    (a.into(), b.into(), c.into(), d.into(), e.into(), f.into())
-                })
-                .collect(),
-            fail: None,
-        })
+        Box::new(Self { rows: rows.into_iter().map(|(a, b, c, d, e, f)| (a.into(), b.into(), c.into(), d.into(), e.into(), f.into())).collect(), fail: None })
     }
 
     fn failing(message: &'static str) -> Box<Self> {
-        Box::new(Self {
-            rows: Vec::new(),
-            fail: Some(message),
-        })
+        Box::new(Self { rows: Vec::new(), fail: Some(message) })
     }
 }
 
 impl backend::bookstore::BookstoreSearch for StubBookstore {
-    fn search(
-        &self,
-        _isbn: &str,
-        title: &str,
-        _author: &str,
-    ) -> (Vec<backend::bookstore::SearchRow>, String, String) {
+    fn search(&self, _isbn: &str, title: &str, _author: &str) -> (Vec<backend::bookstore::SearchRow>, String, String) {
         if let Some(message) = self.fail {
             panic!("{message}");
         }
@@ -547,7 +658,7 @@ impl backend::bookstore::BookstoreSearch for StubBookstore {
 /// 지금은 같은 갈래를 `with_fs`(FaultyFs), 서점 대역(pub 필드), 모델 대역으로 만든다. 단언은 그대로다.
 #[test]
 fn test_book_classifier_service_methods_and_cache() {
-    use common::faulty_fs::{other_err, FaultyFs};
+    use common::faulty_fs::{FaultyFs, other_err};
 
     let tmp = TempDir::new().unwrap();
 
@@ -561,10 +672,7 @@ fn test_book_classifier_service_methods_and_cache() {
 
     // 1098: cache_file default
     let svc_default = BookClassifierService::new(tmp.path(), None, None);
-    assert_eq!(
-        svc_default.cache_file(),
-        tmp.path().join("classification_cache.json")
-    );
+    assert_eq!(svc_default.cache_file(), tmp.path().join("classification_cache.json"));
 
     // 1110-1116: load_cache 손상 파일 예외 처리
     let corrupted_cache = tmp.path().join("corrupted_cache.json");
@@ -574,11 +682,7 @@ fn test_book_classifier_service_methods_and_cache() {
 
     // 1113: 유효한 캐시 파일 로드 로그
     let valid_cache = tmp.path().join("valid_cache.json");
-    fs::write(
-        &valid_cache,
-        json!({"test_item": {"search_title": "삼국지"}}).to_string(),
-    )
-    .unwrap();
+    fs::write(&valid_cache, json!({"test_item": {"search_title": "삼국지"}}).to_string()).unwrap();
     let svc_valid = BookClassifierService::new(tmp.path(), Some(&valid_cache), None);
     assert_eq!(svc_valid.cache().len(), 1);
 
@@ -625,51 +729,22 @@ fn test_book_classifier_service_methods_and_cache() {
     let f_outside = tmp.path().join("outside.txt");
     fs::write(&f_outside, "내용").unwrap();
     let other_src = PathBuf::from("/some/nonexistent/source_dir");
-    svc.classify_file(
-        &f_outside,
-        &other_src,
-        ClassifyOptions {
-            use_bookstore: false,
-            ..Default::default()
-        },
-    );
+    svc.classify_file(&f_outside, &other_src, ClassifyOptions { use_bookstore: false, ..Default::default() });
 
     // 1186-1201: title_cache hit
     let f_samguk = tmp.path().join("나관중 - 삼국지 1권.txt");
     fs::write(&f_samguk, "유비 관우 장비 도원결의").unwrap();
-    let (_cat, _meth, _reas, entry) = svc.classify_file(
-        &f_samguk,
-        tmp.path(),
-        ClassifyOptions {
-            use_bookstore: false,
-            ..Default::default()
-        },
-    );
+    let (_cat, _meth, _reas, entry) = svc.classify_file(&f_samguk, tmp.path(), ClassifyOptions { use_bookstore: false, ..Default::default() });
     assert!(entry.is_some());
 
     // 1205: cache_only
     let f_uncached = tmp.path().join("미캐시책.txt");
     fs::write(&f_uncached, "내용").unwrap();
-    let (_cat_co, m_co, _r_co, _) = svc.classify_file(
-        &f_uncached,
-        tmp.path(),
-        ClassifyOptions {
-            cache_only: true,
-            use_bookstore: true,
-            ..Default::default()
-        },
-    );
+    let (_cat_co, m_co, _r_co, _) = svc.classify_file(&f_uncached, tmp.path(), ClassifyOptions { cache_only: true, use_bookstore: true, ..Default::default() });
     assert_eq!(m_co, "cache_only_skip");
 
     // 1209: use_bookstore=True (query_bookstores 호출)
-    svc.classify_file(
-        &f_uncached,
-        tmp.path(),
-        ClassifyOptions {
-            use_bookstore: true,
-            ..Default::default()
-        },
-    );
+    svc.classify_file(&f_uncached, tmp.path(), ClassifyOptions { use_bookstore: true, ..Default::default() });
 
     // 1271: process_file - not target_cat (서점 대역이 다른 책을 돌려주므로 목적지가 없다)
     let res_none = svc.process_file(&f_uncached, tmp.path(), ProcessOptions::default());
@@ -682,31 +757,14 @@ fn test_book_classifier_service_methods_and_cache() {
     fs::write(&existing_in_dest, "이미 있음").unwrap();
 
     // clean_existing = False -> skipped_already_exists (1285)
-    let res_skip = svc.process_file(
-        &f_samguk,
-        tmp.path(),
-        ProcessOptions {
-            clean_existing: false,
-            ..Default::default()
-        },
-    );
+    let res_skip = svc.process_file(&f_samguk, tmp.path(), ProcessOptions { clean_existing: false, ..Default::default() });
     assert_eq!(res_skip["target_category"], "2_소설한국");
     assert_eq!(res_skip["action"], "skipped_already_exists");
 
     // clean_existing = True -> cleaned_duplicate (1282, 1283)
-    let res_clean = svc.process_file(
-        &f_samguk,
-        tmp.path(),
-        ProcessOptions {
-            clean_existing: true,
-            ..Default::default()
-        },
-    );
+    let res_clean = svc.process_file(&f_samguk, tmp.path(), ProcessOptions { clean_existing: true, ..Default::default() });
     assert_eq!(res_clean["action"], "cleaned_duplicate");
-    assert_eq!(
-        svc.cache()["나관중 - 삼국지 1권.txt"]["status"],
-        "already_exists_cleaned"
-    );
+    assert_eq!(svc.cache()["나관중 - 삼국지 1권.txt"]["status"], "already_exists_cleaned");
     assert!(!f_samguk.exists());
 }
 #[test]
@@ -726,9 +784,42 @@ fn test_map_category_and_effective_filename_branches() {
     assert_eq!(get_effective_filename(&f, tmp.path()), "[저자] 제목 1권.txt");
 }
 
+#[test]
+fn map_category_does_not_classify_a_poetry_label_that_also_names_fiction() {
+    assert_eq!(map_category("한국시 소설", "", ""), None);
+}
+
 // ---------------------------------------------------------------------------
 // 판정 결합 — 모델이 먼저, 못 하면 서점
 // ---------------------------------------------------------------------------
+
+#[test]
+fn test_bookstore_decider_default_delegates_to_original() {
+    struct DefaultDecider;
+    impl backend::book_classifier::BookstoreDecider for DefaultDecider {}
+
+    let mut entry = json!({"before": true});
+    let vote = DefaultDecider.decide(&mut entry, false, &|entry, trust| {
+        entry["delegated"] = json!(trust);
+        (Some("3_SF".to_string()), "test".to_string(), "delegated".to_string())
+    });
+
+    assert_eq!(vote, (Some("3_SF".to_string()), "test".to_string(), "delegated".to_string()));
+    assert_eq!(entry["delegated"], false);
+}
+
+#[test]
+fn test_book_classifier_service_exposes_roots_cache_and_policy() {
+    let tmp = TempDir::new().unwrap();
+    let custom_cache = tmp.path().join("cache.json");
+    let policy = backend::classifier::bookstore_policy::BookstorePolicy { override_below: 0.42, ..Default::default() };
+    let service = BookClassifierService::new(tmp.path(), Some(&custom_cache), Some(Arc::new(StubClassifier::confident()))).with_bookstore_policy(policy.clone());
+
+    assert_eq!(service.library_root(), tmp.path());
+    assert_eq!(service.classifier_library_root(), tmp.path());
+    assert_eq!(service.cache_file(), custom_cache);
+    assert_eq!(service.bookstore_policy(), &policy);
+}
 
 fn service(tmp: &TempDir, classifier: Arc<dyn Classify>) -> BookClassifierService {
     BookClassifierService::new(tmp.path(), Some(&tmp.path().join("cache.json")), Some(classifier))
@@ -892,24 +983,16 @@ fn test_decide_returns_nothing_when_there_is_no_model_and_no_bookstore() {
 fn test_classify_file_exposes_model_confidence() {
     let tmp = TempDir::new().unwrap();
     // Policy: override_below = 0.5, prefers_bookstore(confidence) = confidence < override_below
-    let mut svc = BookClassifierService::new(
-        tmp.path(),
-        None,
-        Some(Arc::new(StubClassifier::new("3_SF", 0.87))),
-    )
-    .with_delay(0.0)
-    .with_bookstore_policy(BookstorePolicy {
-        override_below: 0.5,
-        ..Default::default()
-    });
+    let mut svc = BookClassifierService::new(tmp.path(), None, Some(Arc::new(StubClassifier::new("3_SF", 0.87))))
+        .with_delay(0.0)
+        .with_bookstore_policy(BookstorePolicy { override_below: 0.5, ..Default::default() });
     svc.yes24 = StubBookstore::ok(vec![]);
     svc.aladin = StubBookstore::ok(vec![]);
     svc.kyobo = StubBookstore::ok(vec![]);
     let target = tmp.path().join("[저자] 제목.epub");
     fs::write(&target, "x").unwrap();
 
-    let (_cat, _method, _reason, entry) =
-        svc.classify_file(&target, tmp.path(), ClassifyOptions::default());
+    let (_cat, _method, _reason, entry) = svc.classify_file(&target, tmp.path(), ClassifyOptions::default());
     let entry = entry.unwrap();
 
     assert_eq!(entry["confidence"], json!(0.87));

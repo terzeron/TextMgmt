@@ -249,13 +249,9 @@ fn convert(node: roxmltree::Node, src: &str) -> Element {
     decls.sort();
     element.decls = decls;
     for attr in node.attributes() {
-        let prefix = attr.namespace().and_then(|uri| {
-            if uri == XML_NS {
-                Some("xml".to_string())
-            } else {
-                node.namespaces().find(|n| n.uri() == uri && n.name().is_some()).and_then(|n| n.name().map(str::to_string))
-            }
-        });
+        let prefix = attr
+            .namespace()
+            .and_then(|uri| if uri == XML_NS { Some("xml".to_string()) } else { node.namespaces().find(|n| n.uri() == uri && n.name().is_some()).and_then(|n| n.name().map(str::to_string)) });
         element.attrs.push(Attr { ns: attr.namespace().map(str::to_string), prefix, name: attr.name().to_string(), value: attr.value().to_string() });
     }
     for child in node.children() {

@@ -78,7 +78,7 @@ impl Comics {
 
     pub fn dict(&self) -> Value {
         let prefix = Self::path_prefix();
-        let relative = self.file_path.strip_prefix(&prefix).unwrap_or(&self.file_path);
+        let relative = self.file_path.strip_prefix(&prefix).expect("file_path is not under TM_COMICS_DIR");
         json!({
             "book_id": self.book_id,
             "category": self.category,

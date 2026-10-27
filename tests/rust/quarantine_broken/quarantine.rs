@@ -595,10 +595,10 @@ fn load_corrupted_rejects_reports_without_a_corrupted_list() {
         assert!(load_corrupted(&f).is_err(), "{body}");
     }
     assert!(load_corrupted(&dir.path().join("none.json")).is_err());
-    // 항목이 객체가 아니면 건너뛴다.
+    // Python 원본은 객체가 아닌 항목에서 실패한다. 조용히 결과를 줄이지 않는다.
     let f = dir.path().join("mixed.json");
     fs::write(&f, r#"[1, "x", {"path": "/a"}]"#).unwrap();
-    assert_eq!(load_corrupted(&f).unwrap().len(), 1);
+    assert_eq!(load_corrupted(&f).unwrap_err().kind(), io::ErrorKind::InvalidData);
 }
 
 #[test]

@@ -66,6 +66,15 @@ mod test_comics {
         assert_eq!(c.score, 2.5);
         assert_eq!(c.dict()["file_path"], "cat2/file.pdf");
     }
+
+    #[test]
+    #[should_panic]
+    fn test_dict_rejects_paths_outside_comics_root() {
+        common::setup_env();
+        let mut value = info();
+        value["file_path"] = json!("/outside/book.epub");
+        Comics::new(4, &value, 0.0).dict();
+    }
 }
 
 #[test]

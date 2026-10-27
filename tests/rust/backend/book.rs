@@ -101,6 +101,53 @@ mod test_book {
 
         assert_eq!(book.dict()["created_time"], "2020-01-01T01:02:03.000000");
     }
+
+    #[test]
+    fn test_datetime_fromisoformat_accepts_timezone_suffixes() {
+        common::setup_env();
+        let info = json!({
+            "category": "category3",
+            "title": "title3",
+            "author": "author3",
+            "file_path": "category3/book3.pdf",
+            "file_type": "pdf",
+            "file_size": 300,
+            "created_time": "2020-01-02T03:04:05.123456+09:30",
+            "updated_time": "2022-02-03T04:05:06Z",
+        });
+
+        let book = Book::new(7, &info, 0.0);
+
+        assert_eq!(book.dict()["created_time"], "2020-01-02T03:04:05.123456");
+        assert_eq!(book.dict()["updated_time"], "2022-02-03T04:05:06.000000");
+    }
+
+    #[test]
+    fn test_datetime_fromisoformat_accepts_comma_fraction() {
+        common::setup_env();
+        let info = json!({
+            "category": "category3",
+            "title": "title3",
+            "author": "author3",
+            "file_path": "category3/book3.pdf",
+            "file_type": "pdf",
+            "file_size": 300,
+            "created_time": "2020-01-02 03:04:05,123456",
+            "updated_time": "2022-02-03T04:05:06.000000",
+        });
+
+        let book = Book::new(8, &info, 0.0);
+
+        assert_eq!(book.dict()["created_time"], "2020-01-02T03:04:05.123456");
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_dict_rejects_paths_outside_book_root() {
+        common::setup_env();
+        let info = info_with_path(PathBuf::from("/outside/book.pdf"), "pdf", 10);
+        Book::new(9, &info, 0.0).dict();
+    }
 }
 
 // ---- merged from test_book_env_guard.py ----

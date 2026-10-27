@@ -101,7 +101,10 @@ impl BookManager {
             Ok(None) => return text_response(404, format!("Book not found: {book_id}")),
             Err(e) => return text_response(500, format!("Book lookup failed: {e}")),
         };
-        let book = self.make_book(book_id, &doc, 0.0);
+        let book = match self.try_make_book(book_id, &doc, 0.0) {
+            Ok(book) => book,
+            Err(e) => return text_response(500, format!("Book conversion failed: {e}")),
+        };
         if book.file_type != "epub" && book.file_type != "pdf" {
             return text_response(404, format!("Cover not supported for type: {}", book.file_type));
         }
@@ -207,10 +210,16 @@ impl BookManager {
         let mut items: Vec<(Book, String)> = Vec::new();
         for entry in &entries {
             match entry {
-                CoverEntry::File((book_id, doc, _sort)) => items.push((self.make_book(*book_id, doc, 0.0), String::new())),
+                CoverEntry::File((book_id, doc, _sort)) => match self.try_make_book(*book_id, doc, 0.0) {
+                    Ok(book) => items.push((book, String::new())),
+                    Err(error) => return (Vec::new(), 0, None, Some(error)),
+                },
                 CoverEntry::Group(group) => {
                     if let Some((book_id, doc)) = pick_representative(representatives.get(&group.key).map_or(&[][..], Vec::as_slice)) {
-                        items.push((self.make_book(book_id, &doc, 0.0), group.name.clone()));
+                        match self.try_make_book(book_id, &doc, 0.0) {
+                            Ok(book) => items.push((book, group.name.clone())),
+                            Err(error) => return (Vec::new(), 0, None, Some(error)),
+                        }
                     }
                 }
             }

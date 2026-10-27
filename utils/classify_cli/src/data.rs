@@ -40,12 +40,46 @@ pub(crate) fn model(path: &Path) -> Result<CategoryModel, String> {
     CategoryModel::load_dir(path).map_err(|e| format!("모델을 읽지 못했다: {e}\n먼저 'collect'와 'train'을 돌릴 것. --model은 Rust export 디렉토리다."))
 }
 
-pub(crate) fn corpus(path: &Path) -> Result<Vec<Value>, String> {
-    let docs = corpus::read_jsonl(path).map_err(|e| format!("학습 데이터를 읽지 못했다: {e}\n먼저 'collect'를 돌릴 것."))?;
+pub(crate) fn indexed_corpus(path: &Path) -> Result<corpus::IndexedJsonl, String> {
+    if !path.exists() {
+        return Err(format!("학습 데이터가 없다: {}\n먼저 'collect' 를 돌릴 것.", path.display()));
+    }
+    let docs = corpus::IndexedJsonl::open(path).map_err(|error| format!("학습 데이터를 읽지 못했다: {error}\n먼저 'collect'를 돌릴 것."))?;
     if docs.is_empty() {
         return Err(format!("학습 데이터가 비었다: {}", path.display()));
     }
     Ok(docs)
+}
+
+/// JSONL 본문을 한꺼번에 올리지 않고 manifest 또는 Python 호환 분할로 holdout 위치를 찾는다.
+pub(crate) fn indexed_holdout_indices(docs: &corpus::IndexedJsonl, manifest_path: &Path, min_per_category: usize, ratio: f64, seed: u64, err: &mut dyn Write) -> Result<Vec<usize>, String> {
+    if manifest_path.exists() {
+        let value = json_file(manifest_path)?;
+        let keys = value["document_keys"].as_array().ok_or("잘못된 holdout manifest")?;
+        let keys: HashSet<&str> = keys.iter().map(|key| key.as_str().ok_or("잘못된 holdout manifest")).collect::<Result<_, _>>()?;
+        let mut found = HashSet::new();
+        let indices: Vec<usize> = (0..docs.len())
+            .filter(|&index| {
+                let Some(key) = docs.document_key(index) else { return false };
+                if keys.contains(key) {
+                    found.insert(key);
+                    true
+                } else {
+                    false
+                }
+            })
+            .collect();
+        if !keys.is_empty() && indices.is_empty() {
+            return Err("holdout manifest 문서를 현재 코퍼스에서 찾지 못했다".into());
+        }
+        if found.len() < keys.len() {
+            writeln!(err, "holdout manifest 문서 {}건을 현재 코퍼스에서 찾지 못했다", keys.len() - found.len()).map_err(|error| error.to_string())?;
+        }
+        return Ok(indices);
+    }
+
+    writeln!(err, "holdout manifest가 없어 해시 분할을 재구성한다. 코퍼스가 바뀌었다면 결과를 신뢰할 수 없다.").map_err(|error| error.to_string())?;
+    Ok(training::holdout_indices_indexed(docs, min_per_category, ratio, seed))
 }
 
 pub fn holdout_manifest_path(path: &Path) -> PathBuf {
@@ -65,24 +99,6 @@ pub fn load_manifest_holdout(docs: &[Value], path: &Path) -> Result<Vec<Value>, 
     Ok(hold)
 }
 
-pub(crate) fn holdout(docs: &[Value], model: &CategoryModel, path: &Path, err: &mut dyn Write) -> Result<Vec<Value>, String> {
-    let manifest = holdout_manifest_path(path);
-    if manifest.exists() {
-        let hold = load_manifest_holdout(docs, &manifest)?;
-        let found: HashSet<String> = hold.iter().map(training::document_key).collect();
-        let payload = json_file(&manifest)?;
-        let keys: HashSet<&str> = payload["document_keys"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-        if found.len() < keys.len() {
-            writeln!(err, "holdout manifest 문서 {}건을 현재 코퍼스에서 찾지 못했다", keys.len() - found.len()).map_err(|e| e.to_string())?;
-        }
-        return Ok(hold);
-    }
-    writeln!(err, "holdout manifest가 없어 해시 분할을 재구성한다. 코퍼스가 바뀌었다면 결과를 신뢰할 수 없다.").map_err(|e| e.to_string())?;
-    let cfg = &model.config;
-    let (kept, _) = training::filter_by_size(docs, cfg["corpus"]["min_per_category"].as_u64().unwrap_or(30) as usize);
-    Ok(training::split_holdout(&kept, cfg["holdout"].as_f64().unwrap_or(0.2), cfg["seed"].as_u64().unwrap_or(42)).1)
-}
-
 pub(crate) fn count(n: usize) -> String {
     let s = n.to_string();
     s.chars().enumerate().fold(String::new(), |mut out, (i, c)| {
@@ -92,4 +108,66 @@ pub(crate) fn count(n: usize) -> String {
         out.push(c);
         out
     })
+}
+
+#[cfg(test)]
+mod indexed_holdout_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn corpus(dir: &Path, docs: &[Value]) -> PathBuf {
+        let path = dir.join("corpus.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        for doc in docs {
+            serde_json::to_writer(&mut file, doc).unwrap();
+            writeln!(file).unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn indexed_manifest_selects_only_matching_documents_and_reports_missing_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = vec![json!({"id":"a","cat":"A"}), json!({"id":"b","cat":"B"}), json!({"id":"c","cat":"A"})];
+        let corpus_path = corpus(dir.path(), &docs);
+        let manifest = dir.path().join("holdout.json");
+        fs::write(&manifest, json!({"document_keys":["b","missing"]}).to_string()).unwrap();
+        let mut indexed = crate::data::indexed_corpus(&corpus_path).unwrap();
+        let mut warning = Vec::new();
+
+        let indices = indexed_holdout_indices(&indexed, &manifest, 1, 0.2, 42, &mut warning).unwrap();
+        let selected: Vec<Value> = indices.iter().map(|&i| indexed.read_document(i).unwrap()).collect();
+
+        assert_eq!(selected, vec![docs[1].clone()]);
+        assert!(String::from_utf8(warning).unwrap().contains("1건을 현재 코퍼스에서 찾지 못했다"));
+    }
+
+    #[test]
+    fn indexed_manifest_without_matching_keys_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let corpus_path = corpus(dir.path(), &[json!({"id":"a","cat":"A"})]);
+        let manifest = dir.path().join("holdout.json");
+        fs::write(&manifest, json!({"document_keys":["missing"]}).to_string()).unwrap();
+        let indexed = crate::data::indexed_corpus(&corpus_path).unwrap();
+
+        assert!(indexed_holdout_indices(&indexed, &manifest, 1, 0.2, 42, &mut Vec::new()).unwrap_err().contains("찾지 못했다"));
+    }
+
+    #[test]
+    fn indexed_fallback_matches_materialized_holdout_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let docs: Vec<Value> = (0..18).map(|i| json!({"id":format!("{i}"),"cat":if i % 2 == 0 {"A"} else {"B"},"name":format!("책 {i}")})).collect();
+        let corpus_path = corpus(dir.path(), &docs);
+        let indexed = crate::data::indexed_corpus(&corpus_path).unwrap();
+        let materialized = corpus::read_jsonl(&corpus_path).unwrap();
+        let (filtered, _) = training::filter_by_size(&materialized, 2);
+        let expected: HashSet<String> = training::split_holdout(&filtered, 0.25, 91).1.iter().map(training::document_key).collect();
+        let mut warning = Vec::new();
+
+        let actual = indexed_holdout_indices(&indexed, &dir.path().join("absent.json"), 2, 0.25, 91, &mut warning).unwrap();
+        let actual: HashSet<String> = actual.iter().map(|&i| indexed.document_key(i).unwrap().to_owned()).collect();
+
+        assert_eq!(actual, expected);
+        assert!(String::from_utf8(warning).unwrap().contains("manifest가 없어 해시 분할을 재구성한다"));
+    }
 }

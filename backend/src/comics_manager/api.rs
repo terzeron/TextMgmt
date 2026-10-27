@@ -1,14 +1,39 @@
 //! 만화 API는 동일한 도서 처리 로직을 만화 전용 의존성으로 실행한다.
 use super::ComicsManager;
 use crate::book::Book;
+use crate::book_manager::BookManager;
 use crate::es_manager::EsManagerApi;
-use crate::main::{BookContent, BookManagerApi, BookResponse};
+use crate::main::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[async_trait::async_trait]
 impl BookManagerApi for ComicsManager {
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> (Value, Option<String>) {
+        BookManagerApi::propose_category_changes(&self.inner, request).await
+    }
+    async fn index_single_file(&self, file_path: &str) -> (Option<i64>, Option<String>) {
+        BookManagerApi::index_single_file(&self.inner, file_path).await
+    }
+    async fn delete_file(&self, file_path: &str) -> (String, Option<String>) {
+        BookManagerApi::delete_file(&self.inner, file_path).await
+    }
+    async fn reload_category(&self, category: &str, _content_type: &str) -> (Value, Option<String>) {
+        BookManager::reload_category(&self.inner, category, Some("comic")).await
+    }
+    async fn reload_category_mismatch_files(&self, category: &str, _content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+        BookManager::reload_category_mismatch_files_for(&self.inner, category, "comic", on_progress.as_deref()).await
+    }
+    async fn reload_category_mismatches(&self, _content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+        BookManager::reload_category_mismatches_for(&self.inner, "comic", on_progress.as_deref()).await
+    }
+    async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &std::collections::HashSet<String>, clean_existing: bool) -> (Value, Option<String>) {
+        BookManagerApi::apply_category_changes(&self.inner, items, allowed_file_paths, clean_existing).await
+    }
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> (Value, Option<String>) {
+        BookManagerApi::apply_category_changes_with(&self.inner, request).await
+    }
     async fn delete_book(&self, id: i64) -> (String, Option<String>) {
         BookManagerApi::delete_book(&self.inner, id).await
     }
@@ -107,6 +132,10 @@ impl BookManagerApi for ComicsManager {
 
     fn get_category_mismatches(&self, force_refresh: bool) -> Result<Value, String> {
         BookManagerApi::get_category_mismatches(&self.inner, force_refresh)
+    }
+
+    fn get_category_mismatch_details(&self, category: &str) -> Result<Value, String> {
+        BookManagerApi::get_category_mismatch_details(&self.inner, category)
     }
 
     async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, Option<i64>, Option<String>, Option<String>) {

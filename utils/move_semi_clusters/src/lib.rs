@@ -1,6 +1,6 @@
 //! 사용자가 승인한 준확실 클러스터 도서를 대상 장르 폴더로 옮긴다. 원본: `utils/move_semi_clusters.py`.
 //!
-//! 파일을 실제로 옮기고 지우므로, 원본과 달리 `run`을 명시해야 동작한다. 인자 없이 실행하면 사용법만 보인다.
+//! 원본처럼 인자 없이 실행하면 파일을 실제로 옮기고 중복 파일을 지운다. 먼저 `--dry-run`으로 건수를 확인한다.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -108,7 +108,8 @@ pub fn move_semi_clusters(library_root: &Path, report_path: &Path, dry_run: bool
     let mut handled: HashSet<PathBuf> = HashSet::new();
 
     for (cluster, default_category) in SEMI_CLUSTERS {
-        let Some(items) = clusters.get(cluster).and_then(|v| v.as_array()) else { continue };
+        let Some(value) = clusters.get(cluster) else { continue };
+        let Some(items) = value.as_array() else { return Err(format!("{cluster}: 항목이 목록이 아니다")) };
         for item in items {
             let file = item.get("file").and_then(|v| v.as_str()).ok_or_else(|| format!("{cluster}: 항목에 'file'이 없다"))?;
             let file = PathBuf::from(file);
@@ -130,7 +131,7 @@ pub fn move_semi_clusters(library_root: &Path, report_path: &Path, dry_run: bool
     Ok(outcome)
 }
 
-/// 인자 없이 실행하거나 `-h`/`--help`를 주면 프로그램의 용도와 인자·옵션을 보여 준다.
+/// `-h`/`--help`를 주면 프로그램의 용도와 인자·옵션을 보여 준다.
 pub fn print_usage(program: &str, out: &mut dyn Write) {
     let _ = write!(
         out,
@@ -141,10 +142,10 @@ pub fn print_usage(program: &str, out: &mut dyn Write) {
   준확실_9_BLGL -> 9_BLGL, 준확실_9_성인 -> 9_성인
 '{GREEK_MYTH}'는 {GREEK_MYTH_CATEGORY}로 보내고, {SOURCE_CATEGORY}에 남은 같은 이름의 파일도 함께 옮긴다.
 대상에 같은 이름이 이미 있으면 원본을 지운다. 비게 된 하위 디렉토리는 청소한다.
-파일을 실제로 옮기고 지우므로 인자 없이 실행하면 아무것도 하지 않는다. 먼저 --dry-run으로 건수를 본다.
+인자 없이 실행하면 기본 경로에서 실제 이동을 수행한다. 먼저 --dry-run으로 건수를 본다.
 
 사용법:
-  {program} run [--dry-run] [--library-root DIR] [--report FILE]
+  {program} [run] [--dry-run] [--library-root DIR] [--report FILE]
 
 명령:
   run   이동을 실행한다.
@@ -166,8 +167,8 @@ struct Options {
     report: Option<PathBuf>,
 }
 
-fn parse_options(args: &[String]) -> Result<Options, String> {
-    let mut options = Options { dry_run: false, library_root: PathBuf::from(DEFAULT_LIBRARY_ROOT), report: None };
+fn parse_options(args: &[String], default_library_root: &Path) -> Result<Options, String> {
+    let mut options = Options { dry_run: false, library_root: default_library_root.to_path_buf(), report: None };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -182,18 +183,25 @@ fn parse_options(args: &[String]) -> Result<Options, String> {
 
 /// 진입점. 종료 코드를 돌려준다.
 pub fn run(program: &str, args: &[String], out: &mut dyn Write) -> i32 {
-    match args.first().map(String::as_str) {
-        None | Some("-h" | "--help") => {
+    run_with_library_root(program, args, out, Path::new(DEFAULT_LIBRARY_ROOT))
+}
+
+/// `run`의 기본 라이브러리 경로를 주입한다. 실제 CLI와 임시 디렉토리 테스트가 같은 실행 경로를 쓴다.
+pub fn run_with_library_root(program: &str, args: &[String], out: &mut dyn Write, default_library_root: &Path) -> i32 {
+    let option_args = match args.first().map(String::as_str) {
+        None => args,
+        Some("-h" | "--help") => {
             print_usage(program, out);
             return 0;
         }
-        Some("run") => {}
+        Some("run") => &args[1..],
+        Some(arg) if arg.starts_with("--") => args,
         Some(other) => {
             eprintln!("{program}: error: argument command: invalid choice: '{other}' (choose from 'run')");
             return 2;
         }
-    }
-    let options = match parse_options(&args[1..]) {
+    };
+    let options = match parse_options(option_args, default_library_root) {
         Ok(o) => o,
         Err(msg) => {
             eprintln!("{program}: error: {msg}");

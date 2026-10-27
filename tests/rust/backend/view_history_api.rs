@@ -24,13 +24,12 @@
 //! - 인증 없는 요청은 401을 돌려준다.
 //! - 로그는 `log::warn!`로 남기고 `common::log_capture::LogCapture`로 수집한다.
 
-mod common;
-#[path = "common/mysql_fixture.rs"]
-mod mysql_fixture;
+use crate::{common, mysql_fixture};
 
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
 use axum::http::Method;
 use backend::main::{AppDeps, AuthMode, BookAccess, BookStub, HttpException, InlineRunner, MAX_RECENT_VIEWS, ViewHistoryApi, app_with, route_dependencies};
 use backend::view_history_store::{ViewHistoryError, ViewHistoryStore};
@@ -100,8 +99,9 @@ type AccessFn = dyn Fn(i64, &Value, &str) -> Result<(Option<BookStub>, Option<St
 /// `_get_book_and_ensure_viewer_access` 대역. 클로저가 결과를 정한다.
 struct FnAccess(Box<AccessFn>);
 
+#[async_trait]
 impl BookAccess for FnAccess {
-    fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<(Option<BookStub>, Option<String>), HttpException> {
+    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<(Option<BookStub>, Option<String>), HttpException> {
         (self.0)(book_id, payload, content_type)
     }
 }
@@ -356,7 +356,6 @@ mod test_end_to_end_with_real_store {
     }
 
     #[tokio::test]
-    #[ignore = "실제 MySQL 컨테이너가 필요하다(common/mysql_fixture)"]
     async fn test_recorded_view_is_visible_to_admin() {
         let (store, _guard) = real_store().await;
         let access = FnAccess(Box::new(|book_id, _, content_type| {
@@ -383,7 +382,6 @@ mod test_end_to_end_with_real_store {
     }
 
     #[tokio::test]
-    #[ignore = "실제 MySQL 컨테이너가 필요하다(common/mysql_fixture)"]
     async fn test_limit_narrows_returned_items() {
         let (store, _guard) = real_store().await;
         let access = FnAccess(Box::new(|book_id, _, _| Ok((Some(make_book(&format!("책 {book_id}"), "분류")), None))));

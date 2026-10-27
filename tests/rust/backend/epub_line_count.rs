@@ -31,7 +31,8 @@ fn write_epub(path: &Path, bodies: &[&str]) {
 }
 
 /// Python `reader` fixture의 params: (이름, 읽기 함수).
-const READERS: [(&str, fn(&Path) -> EpubRead); 2] = [("read_from_epub", read_from_epub), ("read_from_epub_with_extracting_zip", read_from_epub_with_extracting_zip)];
+type Reader = (&'static str, fn(&Path) -> EpubRead);
+const READERS: [Reader; 2] = [("read_from_epub", read_from_epub), ("read_from_epub_with_extracting_zip", read_from_epub_with_extracting_zip)];
 
 #[test]
 fn test_line_count_ignores_source_formatting() {
@@ -93,7 +94,7 @@ fn test_forced_zip_fallback_uses_same_line_count() {
     let expected = read_from_epub(&path).line_count;
 
     let fail_read = |_path: &Path| -> Result<(String, usize), String> { Err("force ZIP fallback".to_string()) };
-    let hooks = EpubHooks { read_epub: Some(&fail_read), ..Default::default() };
+    let hooks = EpubHooks { read_epub: Some(&fail_read) };
     let forced = read_from_epub_with(&path, &hooks);
     assert_eq!(forced.path, EpubPath::Zipped);
     assert_eq!(forced.line_count, 3);

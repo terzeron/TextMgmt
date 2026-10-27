@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::{AppDeps, AuthMode, app_with};
-use backend::pdf::PdfCacheLimits;
+use backend::pdf::{LopdfPageOps, PageCountCache, PdfCacheLimits, PdfError, PdfPageOps, PdfReaderCache, PdfReaderHandle};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use common::faulty_fs::FaultyFs;
@@ -75,6 +75,70 @@ fn body_contains(body: &[u8], needle: &str) -> bool {
     String::from_utf8_lossy(body).contains(needle)
 }
 
+#[test]
+fn pdf_caches_expose_consistent_empty_clear_and_lookup_state() {
+    let reader_cache = PdfReaderCache::new(PdfCacheLimits::default());
+    assert!(reader_cache.is_empty());
+    assert_eq!(reader_cache.len(), 0);
+    assert!(!reader_cache.contains("book.pdf"));
+    reader_cache.insert_raw("book.pdf", 1, 5, 12);
+    assert!(!reader_cache.is_empty());
+    assert!(reader_cache.contains("book.pdf"));
+    reader_cache.clear();
+    assert!(reader_cache.is_empty());
+
+    let page_cache = PageCountCache::new(2);
+    let first = ("one.pdf".to_string(), 10);
+    let second = ("two.pdf".to_string(), 20);
+    assert!(page_cache.is_empty());
+    assert!(!page_cache.contains(&first));
+    page_cache.insert(first.clone(), 3);
+    page_cache.insert(second.clone(), 4);
+    assert_eq!(page_cache.get(&first), Some(3));
+    assert!(page_cache.contains(&second));
+    page_cache.evict();
+    assert_eq!(page_cache.len(), 2);
+    page_cache.clear();
+    assert!(page_cache.is_empty());
+}
+
+#[test]
+fn lopdf_page_ops_falls_back_to_path_for_a_reader_without_a_document() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("reader-fallback.pdf");
+    create_test_pdf(2, &path);
+    let reader = PdfReaderHandle::new(path, 2);
+
+    let bytes = LopdfPageOps.extract_pages_from_reader(&reader, 0, 1).unwrap();
+
+    assert_eq!(page_count_bytes(&bytes), 1);
+}
+
+struct CountingPdfPages {
+    opens: Arc<AtomicUsize>,
+    cached_extracts: Arc<AtomicUsize>,
+}
+
+impl PdfPageOps for CountingPdfPages {
+    fn page_count(&self, _path: &Path) -> Result<usize, PdfError> {
+        Ok(5)
+    }
+
+    fn extract_pages(&self, _path: &Path, _start: usize, _end: usize) -> Result<Vec<u8>, PdfError> {
+        panic!("cached reader path should be used")
+    }
+
+    fn open_reader(&self, path: &Path) -> Result<PdfReaderHandle, PdfError> {
+        self.opens.fetch_add(1, Ordering::SeqCst);
+        Ok(PdfReaderHandle::new(path.to_path_buf(), 5))
+    }
+
+    fn extract_pages_from_reader(&self, _reader: &PdfReaderHandle, _start: usize, _end: usize) -> Result<Vec<u8>, PdfError> {
+        self.cached_extracts.fetch_add(1, Ordering::SeqCst);
+        Ok(b"cached PDF pages".to_vec())
+    }
+}
+
 mod test_get_pdf_pages {
     use super::*;
 
@@ -89,6 +153,19 @@ mod test_get_pdf_pages {
         assert_eq!(response.header("Content-Encoding"), Some("identity"));
 
         assert_eq!(page_count_bytes(&response.body), 1);
+    }
+
+    #[tokio::test]
+    async fn get_pdf_pages_reuses_the_cached_reader_for_different_ranges() {
+        let opens = Arc::new(AtomicUsize::new(0));
+        let cached_extracts = Arc::new(AtomicUsize::new(0));
+        let pages = Arc::new(CountingPdfPages { opens: opens.clone(), cached_extracts: cached_extracts.clone() });
+        let e = build(|_, deps| deps.with_pdf_pages(pages));
+
+        assert_eq!(e.bm.get_pdf_pages(1, 1, 1).await.status_code, 200);
+        assert_eq!(e.bm.get_pdf_pages(1, 2, 2).await.status_code, 200);
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+        assert_eq!(cached_extracts.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

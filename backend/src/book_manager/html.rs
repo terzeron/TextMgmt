@@ -15,7 +15,8 @@ use super::util::posix_normpath;
 use super::{BookManager, BookResponse};
 
 /// 뷰어가 내려줄 수 있는 리소스 확장자.
-pub const HTML_VIEWER_RESOURCE_EXTENSIONS: [&str; 21] = [".css", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".tiff", ".ico", ".avif", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".ogg", ".wav", ".mp4", ".webm"];
+pub const HTML_VIEWER_RESOURCE_EXTENSIONS: [&str; 21] =
+    [".css", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".tiff", ".ico", ".avif", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".ogg", ".wav", ".mp4", ".webm"];
 /// HTML 본문 하나를 읽는 상한(바이트).
 pub const MAX_HTML_BYTES: u64 = 32 * 1024 * 1024;
 /// HTML 리소스 하나를 읽는 상한(바이트).
@@ -119,10 +120,7 @@ impl BookManager {
         }
 
         // 2) 남은 요소: 위험한 속성을 지우고 URL을 고친다. rel 속성 이름표는 같은 파서가 만든 것을 빌려 쓴다.
-        let rel_name = Html::parse_fragment("<a rel=\"x\"></a>")
-            .tree
-            .nodes()
-            .find_map(|n| if let Node::Element(e) = n.value() { e.attrs.iter().map(|(k, _)| k.clone()).next() } else { None });
+        let rel_name = Html::parse_fragment("<a rel=\"x\"></a>").tree.nodes().find_map(|n| if let Node::Element(e) = n.value() { e.attrs.iter().map(|(k, _)| k.clone()).next() } else { None });
         let ids: Vec<_> = html.tree.nodes().filter(|n| n.value().is_element()).map(|n| n.id()).collect();
         for id in ids {
             let Some(mut node) = html.tree.get_mut(id) else { continue };
@@ -195,7 +193,10 @@ impl BookManager {
             Ok(None) => return text_response(404, format!("Book not found: {book_id}")),
             Err(e) => return text_response(500, format!("Book lookup failed: {e}")),
         };
-        let book = self.make_book(book_id, &doc, 0.0);
+        let book = match self.try_make_book(book_id, &doc, 0.0) {
+            Ok(book) => book,
+            Err(e) => return text_response(500, format!("Book conversion failed: {e}")),
+        };
         if book.file_path.extension().map(|e| e.to_string_lossy().to_lowercase()) != Some("html".to_string()) {
             return text_response(400, "HTML resource preview is only supported for HTML files");
         }
@@ -249,7 +250,8 @@ impl BookManager {
         let mut headers = vec![("Content-Encoding".to_string(), "identity".to_string()), ("Cache-Control".to_string(), "no-transform".to_string())];
         if suffix.eq_ignore_ascii_case(".html") {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let disposition = if name.is_ascii() && !name.contains('"') && !name.contains('\\') { format!("attachment; filename=\"{name}\"") } else { format!("attachment; filename*=utf-8''{}", quote_all(&name)) };
+            let disposition =
+                if name.is_ascii() && !name.contains('"') && !name.contains('\\') { format!("attachment; filename=\"{name}\"") } else { format!("attachment; filename*=utf-8''{}", quote_all(&name)) };
             headers.push(("Content-Disposition".to_string(), disposition));
         }
         (media_type, headers)

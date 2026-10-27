@@ -21,7 +21,7 @@ use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::BookManagerApi;
 use common::es_fake::FakeEsManager;
 use common::runner::FakeRunner;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn hwp_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().map(|a| a.join("tests/books/_hwp")).find(|p| p.exists()).unwrap_or_else(|| PathBuf::from("tests/books/_hwp"))

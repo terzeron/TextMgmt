@@ -1,12 +1,11 @@
 //! `backend::db` 테스트: pymysql `DictCursor` 의미를 Diesel(MySQL) 위에서 재현하는 드라이버 추상화.
-//! 단위 테스트는 서버 없이 돈다. 통합 테스트는 일회용 MySQL 컨테이너가 필요해서 `#[ignore = "Docker 필요"]`이고 `--ignored`로 돌린다.
+//! 단위 테스트는 서버 없이 돈다. 통합 테스트는 일회용 MySQL 컨테이너를 fixture가 띄운다(Docker 필요).
 
-#[path = "common/mysql_fixture.rs"]
-mod mysql_fixture;
+use crate::mysql_fixture;
 
 use std::collections::BTreeMap;
 
-use backend::db::{connect_from_env, mysql_url, to_mysql_placeholders, DbError, DbValue, MysqlConfig, Row};
+use backend::db::{DbError, DbValue, MysqlConfig, Row, connect_from_env, mysql_url, to_mysql_placeholders};
 use chrono::NaiveDate;
 
 fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -36,6 +35,11 @@ mod placeholders {
     fn a_literal_question_mark_inside_a_string_is_left_alone() {
         // `%s`만 자리표시자다. 문자열 안의 `?`는 건드리지 않는다.
         assert_eq!(to_mysql_placeholders("SELECT '?' , %s"), "SELECT '?' , ?");
+    }
+
+    #[test]
+    fn unknown_and_trailing_percent_sequences_are_preserved() {
+        assert_eq!(to_mysql_placeholders("SELECT 10 % 3, %x, %"), "SELECT 10 % 3, %x, %");
     }
 }
 
@@ -130,6 +134,12 @@ mod errors {
         let err = connect_from_env(&env, "u").map(|_| ()).unwrap_err();
         assert!(matches!(err, DbError::Other(_)), "{err:?}");
     }
+
+    #[test]
+    fn display_distinguishes_integrity_and_other_errors() {
+        assert_eq!(DbError::IntegrityError("duplicate".into()).to_string(), "무결성 오류: duplicate");
+        assert_eq!(DbError::Other("offline".into()).to_string(), "DB 오류: offline");
+    }
 }
 
 /// 컨테이너에 접속하는 환경을 만든다.
@@ -146,7 +156,6 @@ mod mysql {
     use super::*;
 
     #[test]
-    #[ignore = "Docker 필요"]
     fn round_trip_returns_dict_rows_with_python_like_types() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
@@ -164,7 +173,6 @@ mod mysql {
     }
 
     #[test]
-    #[ignore = "Docker 필요"]
     fn fetchone_walks_rows_then_returns_none() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
@@ -181,7 +189,6 @@ mod mysql {
     }
 
     #[test]
-    #[ignore = "Docker 필요"]
     fn duplicate_key_is_an_integrity_error() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
@@ -195,7 +202,6 @@ mod mysql {
     }
 
     #[test]
-    #[ignore = "Docker 필요"]
     fn rollback_discards_uncommitted_rows_and_commit_keeps_them() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
@@ -221,7 +227,6 @@ mod mysql {
     }
 
     #[test]
-    #[ignore = "Docker 필요"]
     fn a_bad_statement_is_a_db_error() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
@@ -231,7 +236,6 @@ mod mysql {
     }
 
     #[test]
-    #[ignore = "Docker 필요"]
     fn update_reports_matched_row_count() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
@@ -245,7 +249,6 @@ mod mysql {
     }
 
     #[test]
-    #[ignore = "Docker 필요"]
     fn session_time_zone_follows_the_server_like_pymysql() {
         // Diesel은 연결할 때 time_zone을 +00:00으로 바꾼다. pymysql은 서버 값을 그대로 쓰므로 TIMESTAMP를 읽는 결과가 달라진다.
         let _g = mysql_fixture::db_lock();
@@ -257,7 +260,38 @@ mod mysql {
     }
 
     #[test]
-    #[ignore = "Docker 필요"]
+    fn remaining_mysql_column_types_match_python_values() {
+        let _g = mysql_fixture::db_lock();
+        let mut conn = container_conn();
+        let mut cur = conn.cursor();
+        cur.execute("DROP TABLE IF EXISTS db_types", &[]).unwrap();
+        cur.execute("CREATE TABLE db_types (real_value DOUBLE, timestamp_value TIMESTAMP, date_value DATE, time_value TIME, decimal_value DECIMAL(10,2))", &[]).unwrap();
+        cur.execute("INSERT INTO db_types VALUES (1.25, '2024-05-06 07:08:09', '2024-05-06', '07:08:09', 12.34)", &[]).unwrap();
+        cur.execute("SELECT * FROM db_types", &[]).unwrap();
+        let date_time = NaiveDate::from_ymd_opt(2024, 5, 6).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let timestamp = NaiveDate::from_ymd_opt(2024, 5, 6).unwrap().and_hms_opt(7, 8, 9).unwrap();
+        assert_eq!(
+            cur.fetchone(),
+            Some(row(&[
+                ("real_value", DbValue::Text("1.25".into())),
+                ("timestamp_value", DbValue::DateTime(timestamp)),
+                ("date_value", DbValue::DateTime(date_time)),
+                ("time_value", DbValue::Text("07:08:09".into())),
+                ("decimal_value", DbValue::Text("12.34".into())),
+            ])),
+        );
+        conn.rollback().unwrap();
+    }
+
+    #[test]
+    fn closed_connection_rejects_transaction_commands() {
+        let _g = mysql_fixture::db_lock();
+        let mut conn = container_conn();
+        conn.close();
+        assert!(matches!(conn.commit(), Err(DbError::Other(message)) if message == "닫힌 연결이다"));
+    }
+
+    #[test]
     fn connection_execute_and_fetch_one_wrap_a_cursor() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();

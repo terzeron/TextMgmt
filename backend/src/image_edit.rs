@@ -94,17 +94,13 @@ pub fn crop_pil_min(source: &DynamicImage, rect: Rect, min_pixels: u32) -> Resul
     })
 }
 
-/// PIL `bicubic` 필터(a = -0.5)의 가중치.
-fn cubic(x: f64) -> f64 {
-    let a = -0.5;
-    let x = x.abs();
-    if x < 1.0 {
-        ((a + 2.0) * x - (a + 3.0)) * x * x + 1.0
-    } else if x < 2.0 {
-        (((x - 5.0) * x + 8.0) * x - 4.0) * a
-    } else {
-        0.0
-    }
+/// Pillow `Geometry.c`의 4점 bicubic polynomial 순서를 따른다.
+fn cubic_interpolate(v1: f64, v2: f64, v3: f64, v4: f64, delta: f64) -> f64 {
+    let p1 = v2;
+    let p2 = -v1 + v3;
+    let p3 = 2.0 * (v1 - v2) + v3 - v4;
+    let p4 = -v1 + v2 - v3 + v4;
+    p1 + delta * (p2 + delta * (p3 + delta * p4))
 }
 
 /// PIL `Image.transform(AFFINE, BICUBIC)`과 같은 역방향 사상. 원본 밖은 흰색(255)으로 채운다.
@@ -122,19 +118,20 @@ fn affine_bicubic(src: &[u8], width: u32, height: u32, channels: usize, out_w: u
             let (fx, fy) = (xin - 0.5, yin - 0.5);
             let (ix, iy) = (fx.floor() as i64, fy.floor() as i64);
             let (dx, dy) = (fx - ix as f64, fy - iy as f64);
-            let wx: [f64; 4] = std::array::from_fn(|i| cubic(i as f64 - 1.0 - dx));
-            let wy: [f64; 4] = std::array::from_fn(|i| cubic(i as f64 - 1.0 - dy));
             let base = (y as usize * out_w as usize + x as usize) * channels;
             for ch in 0..channels {
-                let mut acc = 0.0;
-                for (j, weight_y) in wy.iter().enumerate() {
+                let mut rows = [0.0; 4];
+                for (j, row) in rows.iter_mut().enumerate() {
                     let sy = (iy + j as i64 - 1).clamp(0, h - 1);
-                    for (i, weight_x) in wx.iter().enumerate() {
+                    let mut samples = [0.0; 4];
+                    for (i, sample) in samples.iter_mut().enumerate() {
                         let sx = (ix + i as i64 - 1).clamp(0, w - 1);
-                        acc += weight_x * weight_y * f64::from(src[(sy as usize * width as usize + sx as usize) * channels + ch]);
+                        *sample = f64::from(src[(sy as usize * width as usize + sx as usize) * channels + ch]);
                     }
+                    *row = cubic_interpolate(samples[0], samples[1], samples[2], samples[3], dx);
                 }
-                out[base + ch] = acc.round().clamp(0.0, 255.0) as u8;
+                let acc = cubic_interpolate(rows[0], rows[1], rows[2], rows[3], dy);
+                out[base + ch] = acc.trunc().clamp(0.0, 255.0) as u8;
             }
         }
     }

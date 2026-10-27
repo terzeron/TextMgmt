@@ -40,11 +40,9 @@ fn local_naive(sec: i64, micro: u32) -> NaiveDateTime {
     utc.with_timezone(&Local).naive_local()
 }
 
-/// 초와 나노초로 로컬 시각을 만든다. 마이크로초는 짝수 쪽 반올림이고 올림이 초를 넘기면 다음 초로 간다.
+/// Python 원본처럼 초와 나노초를 `f64`로 합친 뒤 `datetime.fromtimestamp` 방식으로 변환한다.
 pub fn datetime_from_parts(sec: i64, nsec: u32) -> NaiveDateTime {
-    let (q, r) = (nsec / 1000, nsec % 1000);
-    let micro = if r > 500 || (r == 500 && q % 2 == 1) { q + 1 } else { q };
-    if micro >= 1_000_000 { local_naive(sec + 1, micro - 1_000_000) } else { local_naive(sec, micro) }
+    datetime_from_float(sec as f64 + nsec as f64 / 1e9)
 }
 
 /// Python `datetime.fromtimestamp(float)`와 같은 변환.
@@ -67,8 +65,15 @@ pub fn linux_btime_with(path: &Path, is_linux: bool, fetch: &dyn Fn(&Path) -> io
     if !is_linux {
         return None;
     }
-    let since_epoch = fetch(path).ok()?.duration_since(UNIX_EPOCH).ok()?;
-    Some(datetime_from_parts(since_epoch.as_secs() as i64, since_epoch.subsec_nanos()))
+    let timestamp = fetch(path).ok()?;
+    let (seconds, nanos) = match timestamp.duration_since(UNIX_EPOCH) {
+        Ok(since_epoch) => (since_epoch.as_secs() as i64, since_epoch.subsec_nanos()),
+        Err(before_epoch) => {
+            let duration = before_epoch.duration();
+            if duration.subsec_nanos() == 0 { (-(duration.as_secs() as i64), 0) } else { (-(duration.as_secs() as i64) - 1, 1_000_000_000 - duration.subsec_nanos()) }
+        }
+    };
+    Some(datetime_from_parts(seconds, nanos))
 }
 
 pub fn linux_statx_btime(path: &Path) -> Option<NaiveDateTime> {
@@ -90,7 +95,7 @@ pub fn stat_created_time(st: &StatResult) -> NaiveDateTime {
 }
 
 /// Python `datetime.isoformat()`: 마이크로초가 0이면 소수부를 생략한다.
-fn iso(dt: NaiveDateTime) -> String {
+pub fn iso(dt: NaiveDateTime) -> String {
     let base = dt.format("%Y-%m-%dT%H:%M:%S").to_string();
     match dt.nanosecond() / 1000 {
         0 => base,

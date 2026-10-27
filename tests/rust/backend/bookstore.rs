@@ -51,18 +51,271 @@ mod common;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use backend::bookstore::{
     _truncate_title, AbstractBookstore, AladinBookstore, BomtoonBookstore, JoaraBookstore, KakaoWebtoonBookstore, KyoboBookstore, LezhinBookstore, MAX_RESULTS, MunpiaBookstore, NaverSeriesBookstore,
-    NaverShoppingBookstore, NaverWebtoonBookstore, RidibooksBookstore, SearchRow, SoupSource, ToptoonBookstore, Yes24Bookstore, abstract_build_search_url, abstract_extract_book_info,
+    NaverShoppingBookstore, NaverWebtoonBookstore, RidibooksBookstore, SearchRow, SoupSource, ToptoonBookstore, UreqHttpSession, Yes24Bookstore, abstract_build_search_url, abstract_extract_book_info,
     abstract_extract_search_links,
 };
 use serde_json::{Value, json};
-use sysdeps::{FsOps, HttpError, HttpResponse, HttpSession};
+use sysdeps::{FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout};
 use tempfile::TempDir;
+
+#[test]
+fn ureq_session_preserves_http_status_headers_body_and_query() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request = String::new();
+        reader.read_line(&mut request).unwrap();
+        assert!(request.contains("/search?q=rust HTTP/1.1"), "{request}");
+        let mut has_user_agent = false;
+        loop {
+            let mut header = String::new();
+            reader.read_line(&mut header).unwrap();
+            if header == "\r\n" || header.is_empty() {
+                break;
+            }
+            has_user_agent |= header.to_ascii_lowercase().starts_with("user-agent: mozilla/");
+        }
+        assert!(has_user_agent);
+        stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbusy").unwrap();
+    });
+    let response = yes24(false).session().get(&format!("http://{address}/search"), &[("q".to_string(), "rust".to_string())]).unwrap();
+    assert_eq!(response.status_code, 503);
+    assert_eq!(response.header("content-type"), Some("text/plain"));
+    assert_eq!(response.text(), "busy");
+    server.join().unwrap();
+}
+
+#[test]
+fn ridi_session_sends_store_headers_and_preserves_redirect_responses() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request = String::new();
+        reader.read_line(&mut request).unwrap();
+        assert!(request.starts_with("GET /redirect HTTP/1.1"), "{request}");
+        let mut headers = String::new();
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            headers.push_str(&line.to_ascii_lowercase());
+        }
+        assert!(headers.contains("referer: https://ridibooks.com/"), "{headers}");
+        assert!(headers.contains("accept: application/json,text/html"), "{headers}");
+        assert!(headers.contains("accept-language: ko-kr,ko;q=0.9"), "{headers}");
+        stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: /target\r\nContent-Length: 5\r\nConnection: close\r\n\r\nmoved").unwrap();
+    });
+
+    let response = UreqHttpSession::for_store("ridi").get(&format!("http://{address}/redirect"), &[]).unwrap();
+
+    assert_eq!(response.status_code, 302);
+    assert_eq!(response.text(), "moved");
+    server.join().unwrap();
+}
+
+#[test]
+fn ureq_session_maps_connection_refusal_to_connection_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+
+    let error = UreqHttpSession::new().get(&format!("http://{address}/refused"), &[]).unwrap_err();
+
+    assert!(matches!(error, HttpError::Connection(_)));
+}
+
+#[test]
+fn ureq_session_applies_request_body_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                break;
+            }
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n").unwrap();
+        stream.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+        let _ = stream.write_all(b"late");
+    });
+
+    let timeout = HttpTimeout { connect: Duration::from_secs(1), read: Duration::from_millis(40) };
+    let result = UreqHttpSession::new().get_with_timeout(&format!("http://{address}/slow"), &[], timeout);
+
+    assert!(matches!(result, Err(HttpError::Timeout)), "{result:?}");
+    server.join().unwrap();
+}
+
+#[test]
+fn ureq_session_recovers_after_an_idle_body_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut slow, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(slow.try_clone().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                break;
+            }
+        }
+        slow.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n").unwrap();
+        slow.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+        let _ = slow.write_all(b"late");
+
+        let (mut fast, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(fast.try_clone().unwrap());
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert!(line.starts_with("GET /fast HTTP/1.1"), "{line}");
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                break;
+            }
+        }
+        fast.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+    });
+
+    let session = UreqHttpSession::new();
+    let slow_timeout = HttpTimeout { connect: Duration::from_secs(1), read: Duration::from_millis(40) };
+    assert!(matches!(session.get_with_timeout(&format!("http://{address}/slow"), &[], slow_timeout), Err(HttpError::Timeout)));
+    let response = session.get_with_timeout(&format!("http://{address}/fast"), &[], HttpTimeout::from_secs(1, 1)).unwrap();
+    assert_eq!(response.text(), "ok");
+    server.join().unwrap();
+}
+
+#[test]
+fn ureq_session_resets_body_timeout_for_each_received_chunk() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                break;
+            }
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").unwrap();
+        for chunk in [b"a".as_slice(), b"b".as_slice(), b"c".as_slice()] {
+            std::thread::sleep(Duration::from_millis(60));
+            write!(stream, "1\r\n{}\r\n", chunk[0] as char).unwrap();
+            stream.flush().unwrap();
+        }
+        stream.write_all(b"0\r\n\r\n").unwrap();
+    });
+
+    let timeout = HttpTimeout { connect: Duration::from_secs(1), read: Duration::from_millis(100) };
+    let response = UreqHttpSession::new().get_with_timeout(&format!("http://{address}/slow-stream"), &[], timeout);
+
+    assert_eq!(response.unwrap().text(), "abc");
+    server.join().unwrap();
+}
+
+#[test]
+fn ureq_session_reuses_a_connection_after_a_complete_response() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        for _ in 0..2 {
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            assert!(request.starts_with("GET / HTTP/1.1"), "{request}");
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").unwrap();
+            stream.flush().unwrap();
+        }
+    });
+
+    let session = UreqHttpSession::new();
+    for _ in 0..2 {
+        let response = session.get_with_timeout(&format!("http://{address}/"), &[], HttpTimeout::from_secs(1, 1)).unwrap();
+        assert_eq!(response.text(), "ok");
+    }
+    server.join().unwrap();
+}
+
+#[test]
+fn ureq_session_applies_response_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
+        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    });
+
+    let timeout = HttpTimeout { connect: Duration::from_secs(1), read: Duration::from_millis(40) };
+    let result = UreqHttpSession::new().get_with_timeout(&format!("http://{address}/slow"), &[], timeout);
+
+    assert!(matches!(result, Err(HttpError::Timeout)), "{result:?}");
+    server.join().unwrap();
+}
+
+#[test]
+fn ureq_session_reports_a_body_that_ends_before_content_length() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                break;
+            }
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nabc").unwrap();
+        stream.flush().unwrap();
+    });
+
+    let result = UreqHttpSession::new().get_with_timeout(&format!("http://{address}/short"), &[], HttpTimeout::from_secs(1, 1));
+
+    assert!(matches!(result, Err(HttpError::Connection(_))), "{result:?}");
+    server.join().unwrap();
+}
 
 // ---------------------------------------------------------------------------
 // 공용 도구: 구상 서점 생성, 세션 대역, 결과 행
@@ -155,6 +408,7 @@ fn http(status_code: u16, text: &str, json: Value) -> Result<HttpResponse, HttpE
 struct Call {
     url: String,
     params: BTreeMap<String, String>,
+    timeout: Option<HttpTimeout>,
 }
 
 type Handler = Box<dyn Fn(&str, &[(String, String)]) -> Result<HttpResponse, HttpError> + Send + Sync>;
@@ -166,7 +420,12 @@ struct FakeSession {
 
 impl HttpSession for FakeSession {
     fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError> {
-        self.calls.lock().unwrap().push(Call { url: url.to_owned(), params: params.iter().cloned().collect() });
+        self.calls.lock().unwrap().push(Call { url: url.to_owned(), params: params.iter().cloned().collect(), timeout: None });
+        (self.handler)(url, params)
+    }
+
+    fn get_with_timeout(&self, url: &str, params: &[(String, String)], timeout: HttpTimeout) -> Result<HttpResponse, HttpError> {
+        self.calls.lock().unwrap().push(Call { url: url.to_owned(), params: params.iter().cloned().collect(), timeout: Some(timeout) });
         (self.handler)(url, params)
     }
 }
@@ -456,6 +715,60 @@ impl SoupSource for BadSoup {
     }
 }
 
+struct TextSoup(&'static str);
+
+impl SoupSource for TextSoup {
+    fn find(&self, _name: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+    fn find_all(&self, _name: &str) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+    fn get_text(&self) -> Result<String, String> {
+        Ok(self.0.to_owned())
+    }
+    fn select(&self, _css: &str) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+}
+
+struct AladinIsbnSoup {
+    primary: Result<Vec<String>, String>,
+    fallback: Result<Vec<String>, String>,
+}
+
+impl SoupSource for AladinIsbnSoup {
+    fn find(&self, _name: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+    fn find_all(&self, _name: &str) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+    fn get_text(&self) -> Result<String, String> {
+        Ok(String::new())
+    }
+    fn select(&self, css: &str) -> Result<Vec<String>, String> {
+        if css.contains("conts_info_list1") { self.primary.clone() } else { self.fallback.clone() }
+    }
+}
+
+struct DivSoup(Result<Vec<String>, String>);
+
+impl SoupSource for DivSoup {
+    fn find(&self, _name: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+    fn find_all(&self, _name: &str) -> Result<Vec<String>, String> {
+        self.0.clone()
+    }
+    fn get_text(&self) -> Result<String, String> {
+        Ok(String::new())
+    }
+    fn select(&self, _css: &str) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // class TestBookstore(unittest.TestCase)
 // ---------------------------------------------------------------------------
@@ -661,12 +974,83 @@ fn test_base_build_isbn_search_and_empty_search() {
 }
 
 #[test]
-#[ignore = "추상 메서드의 기본 본문(None 반환)은 Rust trait에 대응이 없다. abstract_* 함수는 항상 None이라 검증할 동작이 없다"]
 fn test_base_class_abstract_methods_are_callable() {
     let store = Plain::new(Kind::BaseOnly);
     assert_eq!(abstract_build_search_url(&store, "x"), None);
     assert_eq!(abstract_extract_search_links(&store, "<html></html>"), None);
     assert_eq!(abstract_extract_book_info(&store, "<html></html>"), None);
+}
+
+#[test]
+fn bookstore_factory_resolves_every_supported_name_case_insensitively() {
+    for name in ["yes24", "aladin", "kyobo", "ridi", "naver", "naverseries", "munpia", "joara", "naverwebtoon", "kakaowebtoon", "bomtoon", "lezhin", "toptoon"] {
+        let store = backend::bookstore::create_bookstore_search(name).unwrap_or_else(|| panic!("factory missed {name}"));
+        assert!(!backend::bookstore::BookstoreSearch::api_search_url(store.as_ref(), "rust").is_empty(), "{name}");
+        assert!(backend::bookstore::create_bookstore_search(&name.to_ascii_uppercase()).is_some(), "{name}");
+    }
+    assert!(backend::bookstore::create_bookstore_search("unsupported").is_none());
+}
+
+#[test]
+fn bookstore_search_trait_default_api_url_is_empty() {
+    struct SearchOnly;
+    impl backend::bookstore::BookstoreSearch for SearchOnly {
+        fn search(&self, _isbn: &str, _title: &str, _author: &str) -> (Vec<SearchRow>, String, String) {
+            (Vec::new(), String::new(), "unknown".into())
+        }
+    }
+
+    assert_eq!(backend::bookstore::BookstoreSearch::api_search_url(&SearchOnly, "ignored"), "");
+}
+
+#[test]
+fn abstract_bookstore_defaults_work_without_overrides() {
+    struct Defaults;
+    impl AbstractBookstore for Defaults {
+        fn base_url(&self) -> &str {
+            "https://default.example"
+        }
+        fn verbose(&self) -> bool {
+            false
+        }
+        fn session(&self) -> &dyn HttpSession {
+            static SESSION: backend::bookstore::UnavailableSession = backend::bookstore::UnavailableSession;
+            &SESSION
+        }
+        fn build_search_url(&self, keyword: &str) -> String {
+            format!("https://default.example/?q={keyword}")
+        }
+        fn extract_search_links(&self, _html: &str) -> Vec<String> {
+            Vec::new()
+        }
+        fn extract_book_info(&self, _html: &str) -> Value {
+            json!({})
+        }
+    }
+
+    let store = Defaults;
+    assert!(!store.supports_isbn_search());
+    assert!(!store.author_first_search());
+    assert_eq!(store.max_results(), MAX_RESULTS);
+    assert_eq!(store.tmp_dir(), std::env::temp_dir());
+    assert_eq!(store.build_isbn_search_url("123"), "https://default.example/?q=123");
+    assert!(store.search_by_isbn("123").is_empty());
+    assert!(store.search_by_keyword("offline").is_empty());
+    assert_eq!(store.search("", "", ""), (Vec::new(), String::new(), "unknown".into()));
+    assert_eq!(store.search("", "작품", ""), (Vec::new(), "작품".into(), "title".into()));
+
+    let cache_url = format!("https://default.example/cache-test-{}", std::process::id());
+    assert_eq!(store._load_html_from_tmp(&cache_url), None);
+    store._save_html_to_tmp("<html>cached</html>", &cache_url);
+    assert_eq!(store._load_html_from_tmp(&cache_url).as_deref(), Some("<html>cached</html>"));
+    let cache_path = std::env::temp_dir().join(backend::bookstore::cache_file_name(&cache_url));
+    std::fs::remove_file(cache_path).unwrap();
+}
+
+#[test]
+fn unavailable_session_returns_a_configuration_error() {
+    let error = backend::bookstore::UnavailableSession.get("https://example.com", &[]).unwrap_err();
+    assert!(matches!(error, HttpError::Connection(message) if message.contains("with_session")));
 }
 
 #[test]
@@ -771,6 +1155,16 @@ fn test_yes24_author_text_and_isbn10() {
 }
 
 #[test]
+fn yes24_isbn_text_parser_checks_each_fallback_pattern() {
+    let store = yes24(false);
+    assert_eq!(store._extract_yes24_isbn_soup(&TextSoup("ISBN13 9781234567890 ISBN10 1234567890")), "9781234567890");
+    assert_eq!(store._extract_yes24_isbn_soup(&TextSoup("ISBN10 1234567890")), "1234567890");
+    assert_eq!(store._extract_yes24_isbn_soup(&TextSoup("ISBN 9781234567890")), "9781234567890");
+    assert_eq!(store._extract_yes24_isbn_soup(&TextSoup("other 1234567890")), "1234567890");
+    assert_eq!(store._extract_yes24_isbn_soup(&TextSoup("no identifier")), "");
+}
+
+#[test]
 fn test_yes24_category_and_isbn_exception_paths() {
     let store = yes24(false);
 
@@ -804,6 +1198,21 @@ fn test_aladin_extract_links_and_isbn_paths() {
 }
 
 #[test]
+fn aladin_isbn_soup_uses_primary_and_fallback_layouts() {
+    let store = aladin(false);
+    let primary = AladinIsbnSoup { primary: Ok(vec!["ISBN 9781234567890".into()]), fallback: Ok(vec![]) };
+    assert_eq!(store._extract_aladin_isbn_soup(&primary), "9781234567890");
+
+    let fallback = AladinIsbnSoup { primary: Ok(vec!["출판일 2024".into()]), fallback: Ok(vec!["ISBN 1234567890".into()]) };
+    assert_eq!(store._extract_aladin_isbn_soup(&fallback), "1234567890");
+
+    let absent = AladinIsbnSoup { primary: Ok(vec!["출판일 2024".into()]), fallback: Ok(vec!["ISBN 없음".into()]) };
+    assert_eq!(store._extract_aladin_isbn_soup(&absent), "");
+    let fallback_error = AladinIsbnSoup { primary: Ok(vec![]), fallback: Err("fallback failed".into()) };
+    assert_eq!(store._extract_aladin_isbn_soup(&fallback_error), "");
+}
+
+#[test]
 fn test_aladin_strip_trailing_number_and_search_order() {
     let mut store = aladin(false);
     assert_eq!(store._strip_trailing_number("마왕의 딸 3"), "마왕의 딸");
@@ -828,6 +1237,16 @@ fn test_ridibooks_extract_fallbacks_meta_and_author_link() {
     let info = store.extract_book_info(html);
     assert_eq!(info["title"], "Meta Title");
     assert_eq!(info["author"], "Link Author");
+}
+
+#[test]
+fn ridibooks_isbn_extractors_accept_only_a_thirteen_digit_value_after_label() {
+    let store = ridibooks(false);
+    assert_eq!(store._extract_ridi_isbn("<div>ISBN</div><div>9781234567890</div>"), "9781234567890");
+    assert_eq!(store._extract_ridi_isbn("<div>ISBN</div><div>1234567890</div>"), "");
+    assert_eq!(store._extract_ridi_isbn_soup(&DivSoup(Ok(vec!["ISBN".into(), "9781234567890".into()]))), "9781234567890");
+    assert_eq!(store._extract_ridi_isbn_soup(&DivSoup(Ok(vec!["ISBN".into(), "1234567890".into()]))), "");
+    assert_eq!(store._extract_ridi_isbn_soup(&DivSoup(Err("parse failed".into()))), "");
 }
 
 #[test]
@@ -1175,6 +1594,16 @@ fn test_naver_shopping_extract_book_info_exception() {
 
     let info = store.extract_book_info_soup(&soup);
     assert!(info.is_object());
+}
+
+#[test]
+fn test_naver_shopping_soup_title_and_div_fallbacks() {
+    let store = naver_shopping(false);
+    let h2 = RaisingSoup { html: "<h2Primary title</h2>", raise_on: "never" };
+    assert_eq!(store.extract_book_info_soup(&h2)["title"], "Primary title");
+
+    let div = RaisingSoup { html: "<divFallback title</div>", raise_on: "never" };
+    assert_eq!(store.extract_book_info_soup(&div)["title"], "Fallback title");
 }
 
 // ---- merged from test_bookstore_unit.py ----
@@ -1947,6 +2376,27 @@ fn test_kakao_webtoon_search_by_keyword_failure_paths() {
     failure_path_checks!(store, json!({"data": {"content": []}, "meta": {"pagination": {"totalCount": 0}}}), json!({"data": {"content": [{"title": "id 없음"}]}}));
 }
 
+#[test]
+fn test_kakao_and_lezhin_non_verbose_failure_branches() {
+    let mut kakao = kakao_webtoon(false);
+    kakao = kakao.with_session(constant(500, "", json!({})));
+    assert!(kakao.search_by_keyword("x").is_empty());
+    kakao = kakao.with_session(failing());
+    assert!(kakao.search_by_keyword("x").is_empty());
+    kakao = kakao.with_session(constant(200, "", json!({"data":{"content":[]}})));
+    assert!(kakao.search_by_keyword("x").is_empty());
+    kakao = kakao.with_session(constant(200, "", json!({"data":{"content":[{"id":1,"title":"result"}]}})));
+    assert_eq!(kakao.search_by_keyword("x")[0].0, "result");
+
+    let mut lezhin = lezhin(false);
+    lezhin = lezhin.with_session(constant(500, "", json!({})));
+    assert!(lezhin.search_by_keyword("x").is_empty());
+    lezhin = lezhin.with_session(failing());
+    assert!(lezhin.search_by_keyword("x").is_empty());
+    lezhin = lezhin.with_session(constant(200, "", json!({"data":[]})));
+    assert!(lezhin.search_by_keyword("x").is_empty());
+}
+
 /// 웹툰 서점은 API 를 직접 부르므로 HTML 훅은 호출되지 않는다.
 #[test]
 fn test_webtoon_unused_html_hooks_are_inert() {
@@ -1973,6 +2423,9 @@ fn test_new_webtoon_stores_ignore_author_and_isbn() {
     assert!(!bomtoon_store.supports_isbn_search, "BomtoonBookstore");
     assert!(!lezhin_store.supports_isbn_search, "LezhinBookstore");
     assert!(!toptoon_store.supports_isbn_search, "ToptoonBookstore");
+    assert!(bomtoon_store.search_by_isbn("123").is_empty());
+    assert!(lezhin_store.search_by_isbn("123").is_empty());
+    assert!(toptoon_store.search_by_isbn("123").is_empty());
 
     macro_rules! check {
         ($name:expr, $store:expr) => {{
@@ -2162,6 +2615,31 @@ fn test_toptoon_search_by_keyword_ranks_and_formats() {
 }
 
 #[test]
+fn test_toptoon_lowercase_matches_python_unicode_version() {
+    let mut store = toptoon(false);
+    let catalog = json!([toptoon_comic("\u{1c8a}", "new-lower", 1, &[], "작가")]);
+    store = store.with_session(session(move |url, _| if url.contains("hashtag") { http(200, CATALOG_URL, Value::Null) } else { http(200, "", catalog.clone()) }).0);
+
+    // Python 3.13 leaves U+1C89 unchanged, so it does not match U+1C8A.
+    assert!(store.search_by_keyword("\u{1c89}").is_empty());
+}
+
+#[test]
+fn test_toptoon_search_uses_python_request_timeouts() {
+    let mut store = toptoon(false);
+    let (fake, calls) =
+        session(|url, _| if url.starts_with("https://toptoon.com/hashtag") { http(200, &format!("<script>fileUrl: '{CATALOG_URL}',</script>"), Value::Null) } else { http(200, "", json!([])) });
+    store = store.with_session(fake);
+
+    store.search_by_keyword("네크로");
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].timeout, Some(HttpTimeout::from_secs(10, 10)));
+    assert_eq!(calls[1].timeout, Some(HttpTimeout::from_secs(20, 20)));
+}
+
+#[test]
 fn test_toptoon_search_by_keyword_falls_back_to_author_string() {
     let mut store = toptoon(false);
     let mut comic = toptoon_comic("크로스오버", "crossover", 0, &["판타지"], "작가");
@@ -2192,6 +2670,14 @@ fn test_toptoon_search_by_keyword_failure_paths() {
     store = store.with_session(session(|url, _| if url.contains("hashtag") { http(200, CATALOG_URL, json!([])) } else { http(404, "", json!([])) }).0);
     assert!(store.search_by_keyword("x").is_empty());
 
+    // 첫 요청은 성공했지만 목록 JSON 요청에서 연결이 끊긴다.
+    store = store.with_session(session(|url, _| if url.contains("hashtag") { http(200, CATALOG_URL, Value::Null) } else { Err(HttpError::Connection("catalog disconnected".to_owned())) }).0);
+    assert!(store.search_by_keyword("x").is_empty());
+
+    // 유효하지 않은 JSON 본문은 빈 목록처럼 처리한다.
+    store = store.with_session(session(|url, _| if url.contains("hashtag") { http(200, CATALOG_URL, Value::Null) } else { http(200, "not-json", Value::Null) }).0);
+    assert!(store.search_by_keyword("x").is_empty());
+
     // 일치하는 제목이 없음
     store = store
         .with_session(session(|url, _| if url.contains("hashtag") { http(200, CATALOG_URL, json!([])) } else { http(200, "", json!([toptoon_comic("다른 작품", "a", 0, &["판타지"], "작가")])) }).0);
@@ -2199,6 +2685,41 @@ fn test_toptoon_search_by_keyword_failure_paths() {
 
     store = store.with_session(failing());
     assert!(store.search_by_keyword("x").is_empty());
+}
+
+#[test]
+fn toptoon_search_skips_incomplete_catalog_entries_and_uses_metadata_fallbacks() {
+    let mut store = toptoon(false);
+    let catalog = json!([
+        {"id": "missing-meta"},
+        {"meta": {"title": "네크로 링크 없음"}},
+        {"meta": {
+            "title": "네크로 중간",
+            "comicsListUrl": "/comic/middle",
+            "authorList": {"authorStr": ""},
+            "author": {"authorString": "대체 작가"},
+            "genre": [{"name": "판타지"}, {"name": ""}, {"other": "무시"}]
+        }},
+        {"meta": {
+            "title": "앞 네크로 뒤",
+            "comicsListUrl": "/comic/contains",
+            "authorList": {"authorStr": ""},
+            "author": {"authorString": ""}
+        }}
+    ]);
+    store = store.with_session(session(move |url, _| if url.contains("hashtag") { http(200, CATALOG_URL, Value::Null) } else { http(200, "", catalog.clone()) }).0);
+
+    let rows = store.search_by_keyword("네크로");
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].0, "네크로 중간");
+    assert_eq!(rows[0].1, "대체 작가");
+    assert_eq!(rows[0].2, "판타지");
+    assert_eq!(rows[0].3, "https://toptoon.com/comic/middle");
+    assert_eq!(rows[1].0, "앞 네크로 뒤");
+    assert_eq!(rows[1].1, "");
+    assert_eq!(rows[1].2, "");
+    assert_eq!(rows[1].3, "https://toptoon.com/comic/contains");
 }
 
 /// 서점 하나가 돌려주는 결과는 기본 최대 4개다.

@@ -174,7 +174,9 @@ impl BackfillThread for RunnerBackfill {
         while self.is_alive() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
         }
-        if !self.is_alive() && let Some(handle) = self.handle.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        if !self.is_alive()
+            && let Some(handle) = self.handle.lock().unwrap_or_else(|e| e.into_inner()).take()
+        {
             handle.join();
         }
     }
@@ -246,8 +248,8 @@ impl BookManager {
         if let Some(hit) = self.pdf_cache.get(&key, mtime) {
             return Ok(hit);
         }
-        let total = self.pdf_pages.page_count(file_path)?;
-        let reader = Arc::new(PdfReaderHandle { path: file_path.to_path_buf(), page_count: total });
+        let reader = Arc::new(self.pdf_pages.open_reader(file_path)?);
+        let total = reader.page_count;
         let page_key = (key.clone(), mtime);
         self.page_count_cache.insert(page_key, total as i64);
         self.page_count_cache.evict();

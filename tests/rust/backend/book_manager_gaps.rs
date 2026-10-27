@@ -30,11 +30,6 @@
 //! - `async manager.get_cover_books_paged(CoverPageOpts) -> (Vec<(Book, String)>, usize, Option<String>, Option<String>)`
 //! - `backend::book_manager::{encode_category_cursor(&Value) -> String, MAX_CATEGORY_PAGE_SIZE: usize}`
 //!
-//! seam이 아직 없어 `#[ignore]`로 남긴 것(문서 3.12에 없는 이름이라 3.0 규칙대로 `BookManagerDeps::with_*`로 가정해 옮겼다. 확정 필요):
-//! `with_epub_image_min_bytes(u64)`, `with_downscale_epub_image_hook(Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>)`, `with_duplicate_name_max_index(usize)`,
-//! `with_propose_category_for_file_hook(..)`, `with_move_classified_file_hook(..)`, `with_bulk_index_files_hook(..)`.
-//! 옮길 수 없어 구 이름 그대로 둔 것: 정적 함수 `_next_numbered_path`가 읽는 상수(`set_duplicate_name_max_index`), 이미지 대역(`testing::StubImage`).
-//!
 //! TODO(common): 로컬 정의 `FnFileReader`(FileReader 대역), `CoverEs`(`FakeEsManager`에 커버 목록 메서드가 없다), `StubService`(`BookClassifierApi` 대역).
 
 mod common;
@@ -48,8 +43,8 @@ use std::sync::{Arc, Mutex};
 use backend::book::Book;
 use backend::book_manager::{ApplyOptions, BookManager, BookManagerDeps, CoverPageOpts, FileReader, MAX_CATEGORY_PAGE_SIZE, MoveOpts, ProposeOptions, encode_category_cursor};
 use backend::classifier::BookClassifierApi;
-use backend::main::BookManagerApi;
 use backend::es_manager::{EsError, EsManagerApi};
+use backend::main::BookManagerApi;
 use common::es_fake::{Docs, FakeEsManager};
 use common::faulty_fs::FaultyFs;
 use common::image::encode_image;
@@ -296,7 +291,7 @@ async fn test_propose_awaits_async_progress_callback_and_records_failures() {
     let sink = reports.clone();
     // 진행 보고 콜백은 동기 함수다(Python은 코루틴도 받는다).
     let on_progress = move |payload: Value| sink.lock().unwrap().push(payload);
-    let opts = ProposeOptions { use_bookstore: Some(false), use_content_meta: Some(false), on_progress: Some(&on_progress) };
+    let opts = ProposeOptions { content_type: Some("book"), delay: Some(0.0), use_bookstore: Some(false), use_content_meta: Some(false), on_progress: Some(&on_progress) };
 
     let (result, err) = manager.propose_category_changes("A", None, opts).await;
 
@@ -608,7 +603,6 @@ fn test_find_epub_cover_member_falls_back_to_first_spine_page_image() {
 }
 
 #[test]
-#[ignore = "대역 없음: 색 목록을 못 얻는 이미지(StubImage)를 image crate 타입으로 만들 수 없다. 0x0 이미지로 대신했으나 줄이기에서 panic한다(프로덕션 crate에 testing 모듈을 두지 않는다)"]
 fn test_blank_cover_check_returns_false_when_image_has_no_colors() {
     // 색 목록을 얻지 못하는 이미지를 흉내 낼 수 없어 크기 0 이미지를 쓴다.
     let image = image::DynamicImage::new_rgb8(0, 0);
@@ -779,6 +773,26 @@ async fn test_get_cover_books_paged_merges_files_and_work_groups_newest_first() 
     let calls = calls.lock().unwrap();
     assert_eq!(calls.files[0].categories, strings(&["A"]));
     assert_eq!(calls.reps[0].keys, strings(&["A/나작품", "A/라작품"]));
+}
+
+#[tokio::test]
+async fn test_get_cover_books_paged_rejects_malformed_es_book() {
+    let tmp = TempDir::new().unwrap();
+    let mut doc = make_doc("A/bad.epub", "epub");
+    doc.as_object_mut().unwrap().remove("category");
+    let es = Arc::new(CoverEs {
+        stats: HashMap::from([("A".to_string(), (1, 10.0, 0.0))]),
+        files: Box::new(move |_, _, _, _| (vec![(1, doc.clone(), vec![json!(10), json!(0), json!("A/bad.epub")])], 1)),
+        reps: Box::new(|_, _| HashMap::new()),
+    });
+    let manager = make_manager(tmp.path(), es);
+
+    let (items, total, cursor, error) = manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await;
+
+    assert!(items.is_empty());
+    assert_eq!(total, 0);
+    assert!(cursor.is_none());
+    assert!(error.unwrap().contains("category"));
 }
 
 #[tokio::test]
@@ -955,6 +969,32 @@ fn blank_pdf(width: u32, height: u32) -> Vec<u8> {
     out.into_bytes()
 }
 
+fn vector_pdf() -> Vec<u8> {
+    let content = b"q 1 0 0 rg 40 80 180 220 re f Q\nBT /F1 36 Tf 30 300 Td (RUST COVER) Tj ET\n";
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 450] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).into_bytes(), content.to_vec(), b"endstream".to_vec()].concat(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(object);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    out
+}
+
 #[test]
 fn test_extract_cover_thumbnail_scales_tall_first_page_to_exact_cover_size() {
     // 쪽 폭 66pt 의 세로로 긴 쪽은 pdfium 렌더 결과가 한 픽셀 어긋나(300x451) 도 썸네일 크기가 고정된다.
@@ -968,4 +1008,17 @@ fn test_extract_cover_thumbnail_scales_tall_first_page_to_exact_cover_size() {
     let thumb = image::load_from_memory(&data).unwrap();
     // Python round()는 반올림 동점을 짝수로 보내지만 Rust round()는 0에서 먼 쪽이다. 동점이 나오는 비율이면 달라질 수 있다.
     assert_eq!((thumb.width(), thumb.height()), (300, (300.0 / BookManager::COVER_ASPECT_RATIO).round() as u32));
+}
+
+#[test]
+fn test_extract_cover_thumbnail_renders_text_and_vector_content() {
+    let tmp = TempDir::new().unwrap();
+    let pdf_path = tmp.path().join("vector.pdf");
+    fs::write(&pdf_path, vector_pdf()).unwrap();
+
+    let data = BookManager::_extract_cover_thumbnail(&pdf_path, "pdf", Some(300)).expect("벡터 PDF 표지");
+    let thumb = image::load_from_memory(&data).unwrap().to_rgb8();
+
+    assert_eq!((thumb.width(), thumb.height()), (300, 450));
+    assert!(thumb.pixels().any(|pixel| pixel[0] > 180 && pixel[1] < 100 && pixel[2] < 100), "빨간 벡터 사각형이 렌더링돼야 한다");
 }

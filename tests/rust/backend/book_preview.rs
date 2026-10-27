@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use backend::book_manager::{BookManager, BookManagerDeps, BookRef};
 use backend::main::{AppDeps, AuthMode, app_with};
-use backend::pdf::{PdfDoc, PdfError, PdfOpener};
+use backend::pdf::{LopdfOpener, PdfDoc, PdfError, PdfOpener};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use common::faulty_fs::FaultyFs;
@@ -574,6 +574,22 @@ async fn register<'a>(setup: &'a Setup, epub_path: &Path) -> Registered<'a> {
     Registered { setup, book_id: book_id.unwrap(), path: epub_path.to_path_buf() }
 }
 
+struct OfficeHtmlRunner;
+
+impl CommandRunner for OfficeHtmlRunner {
+    fn run(&self, args: &[String], _timeout: Option<Duration>) -> Result<CommandOutput, CommandError> {
+        let outdir = args.iter().position(|arg| arg == "--outdir").and_then(|index| args.get(index + 1)).ok_or_else(|| CommandError::Failed("missing --outdir".into()))?;
+        let input = args.last().ok_or_else(|| CommandError::Failed("missing input file".into()))?;
+        let stem = Path::new(input).file_stem().unwrap().to_string_lossy();
+        fs::write(Path::new(outdir).join(format!("{stem}.html")), "<html><body>office</body></html>").map_err(|e| CommandError::Failed(e.to_string()))?;
+        Ok(CommandOutput { returncode: 0, ..CommandOutput::default() })
+    }
+
+    fn which(&self, _program: &str) -> Option<PathBuf> {
+        Some(PathBuf::from("/fake/libreoffice"))
+    }
+}
+
 /// 테스트 후 정리.
 async fn cleanup_book(setup: &Setup, book_id: i64, epub_path: &Path) {
     let _ = setup.client.delete(&format!("/books/{book_id}")).await; // 실패해도 무시한다
@@ -839,6 +855,82 @@ mod test_book_preview {
         let setup = setup!();
         let response = setup.client.get("/preview/999999999?chapters=3").await;
         assert_eq!(response.status, 404);
+    }
+
+    #[tokio::test]
+    async fn test_preview_reports_book_lookup_failure() {
+        let setup = setup!();
+        setup.es.fail("search_by_id", "search unavailable");
+
+        let response = setup.bm.get_book_preview(123, None, None).await;
+
+        assert_eq!(response.status_code, 500);
+        assert!(String::from_utf8(response.body).unwrap().contains("Book lookup failed:"));
+    }
+
+    #[tokio::test]
+    async fn test_preview_reports_cache_directory_creation_failure() {
+        let book = book!();
+        let cache_dir = book.setup.bm.path_prefix().join(".preview_cache");
+        fs::write(&cache_dir, b"file blocks cache directory").unwrap();
+
+        let response = book.setup.bm.get_book_preview(book.book_id, None, Some(3)).await;
+
+        assert_eq!(response.status_code, 500);
+        assert!(String::from_utf8(response.body).unwrap().contains("Preview cache unavailable:"));
+    }
+
+    #[tokio::test]
+    async fn test_office_preview_reports_cache_write_failure() {
+        let setup = setup!();
+        let path = setup.bm.path_prefix().join("office.doc");
+        fs::write(&path, b"office source").unwrap();
+        let mut data = build_epub_data(&setup.bm, &path);
+        for doc in data.as_object_mut().unwrap().values_mut() {
+            doc["file_type"] = json!("doc");
+        }
+        let (book_id, doc) = serde_json::from_value::<std::collections::BTreeMap<i64, Value>>(data).unwrap().into_iter().next().unwrap();
+        setup.es.put_doc(book_id, doc);
+
+        let faulty_fs = FaultyFs::new();
+        faulty_fs.set_write(|_| Some(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "cache is read-only")));
+        let manager = BookManager::with_deps(BookManagerDeps::new(setup.bm.path_prefix(), setup.es.clone()).with_fs(faulty_fs).with_runner(Arc::new(OfficeHtmlRunner)));
+
+        let response = manager.get_book_preview(book_id, None, None).await;
+
+        assert_eq!(response.status_code, 500);
+        assert!(String::from_utf8(response.body).unwrap().contains("DOC preview failed"));
+    }
+
+    #[tokio::test]
+    async fn test_preview_continues_when_stale_cache_removal_fails() {
+        let book = book!();
+        let cache_dir = book.setup.bm.path_prefix().join(".preview_cache");
+        fs::create_dir_all(&cache_dir).unwrap();
+        let stale = [cache_dir.join(format!("{}_ch3_v2.epub", book.book_id)), cache_dir.join(format!("{}.epub", book.book_id)), cache_dir.join(format!("{}.html", book.book_id))];
+        for path in &stale {
+            fs::write(path, b"stale cache").unwrap();
+        }
+
+        let faulty_fs = FaultyFs::new();
+        faulty_fs.set_remove_file(|_| Some(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "cache is locked")));
+        let manager = BookManager::with_deps(BookManagerDeps::new(book.setup.bm.path_prefix(), book.setup.es.clone()).with_fs(faulty_fs));
+        let response = manager.get_book_preview(book.book_id, None, Some(3)).await;
+
+        assert_eq!(response.status_code, 200);
+        assert!(stale.iter().all(|path| path.exists()));
+    }
+
+    #[tokio::test]
+    async fn test_preview_continues_when_cache_listing_fails() {
+        let book = book!();
+        let faulty_fs = FaultyFs::new();
+        faulty_fs.set_read_dir(|_| Some(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "cache listing denied")));
+        let manager = BookManager::with_deps(BookManagerDeps::new(book.setup.bm.path_prefix(), book.setup.es.clone()).with_fs(faulty_fs));
+
+        let response = manager.get_book_preview(book.book_id, None, Some(3)).await;
+
+        assert_eq!(response.status_code, 200);
     }
 
     /// 버그 #2 회귀 테스트 — 챕터 파일 1개 누락된 EPUB → 500이 아닌 200.
@@ -1582,6 +1674,15 @@ mod test_find_opf_path {
 
 mod test_book_download {
     use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tokio_stream::StreamExt;
+    use tower::ServiceExt;
+
+    fn client_with_header(book: &TestBook, name: &str, value: &str) -> TestClient {
+        let token = backend::auth::create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
+        TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(book.setup.bm.clone()))).cookie("tm_access_token", &token).header(name, value)
+    }
 
     /// book_id만으로 download 요청 → 200 + EPUB 바이너리.
     #[tokio::test]
@@ -1606,6 +1707,116 @@ mod test_book_download {
             assert_eq!(response.status, 200);
             assert_eq!(response.header("content-encoding"), Some("identity"));
             assert_eq!(response.header("cache-control"), Some("no-transform"));
+            assert_eq!(response.header("content-length").unwrap().parse::<u64>().unwrap(), fs::metadata(&book.epub_path).unwrap().len());
+            assert_eq!(response.header("accept-ranges"), Some("bytes"));
+            assert!(response.header("last-modified").is_some());
+            assert!(response.header("etag").is_some_and(|value| value.starts_with('"') && value.ends_with('"')));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_download_honors_single_byte_range() {
+        let book = book!();
+        book.run(async {
+            let client = client_with_header(&book, "range", "bytes=0-3");
+            let expected = fs::read(&book.epub_path).unwrap();
+            let response = client.get(&format!("/download/{}", book.book_id)).await;
+            assert_eq!(response.status, 206);
+            assert_eq!(response.header("content-range"), Some(format!("bytes 0-3/{}", expected.len()).as_str()));
+            assert_eq!(response.body, expected[..4]);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_download_streams_file_in_bounded_chunks() {
+        let book = book!();
+        book.run(async {
+            let content = vec![b'x'; 512 * 1024];
+            fs::write(&book.epub_path, &content).unwrap();
+            let token = backend::auth::create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
+            let app = app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(book.setup.bm.clone()));
+            let request = Request::builder().uri(format!("/download/{}", book.book_id)).header("cookie", format!("tm_access_token={token}")).body(Body::empty()).unwrap();
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), 200);
+            let mut chunks = response.into_body().into_data_stream();
+            let mut received = Vec::new();
+            let mut largest_chunk = 0;
+            while let Some(chunk) = chunks.next().await {
+                let chunk = chunk.unwrap();
+                largest_chunk = largest_chunk.max(chunk.len());
+                received.extend_from_slice(&chunk);
+            }
+            assert!(largest_chunk <= 64 * 1024, "largest chunk was {largest_chunk} bytes");
+            assert_eq!(received, content);
+
+            let range_request = Request::builder()
+                .uri(format!("/download/{}", book.book_id))
+                .header("cookie", format!("tm_access_token={token}"))
+                .header("range", "bytes=0-299999,400000-499999")
+                .body(Body::empty())
+                .unwrap();
+            let response = app.oneshot(range_request).await.unwrap();
+            assert_eq!(response.status(), 206);
+            let content_length = response.headers().get("content-length").unwrap().to_str().unwrap().parse::<usize>().unwrap();
+            let mut chunks = response.into_body().into_data_stream();
+            let mut largest_chunk = 0;
+            let mut received = 0;
+            while let Some(chunk) = chunks.next().await {
+                let chunk = chunk.unwrap();
+                largest_chunk = largest_chunk.max(chunk.len());
+                received += chunk.len();
+            }
+            assert!(largest_chunk <= 64 * 1024, "multi-range chunk was {largest_chunk} bytes");
+            assert_eq!(received, content_length);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_download_supports_suffix_and_multiple_byte_ranges() {
+        let book = book!();
+        book.run(async {
+            let expected = fs::read(&book.epub_path).unwrap();
+            let suffix = client_with_header(&book, "range", "bytes=-8").get(&format!("/download/{}", book.book_id)).await;
+            assert_eq!(suffix.status, 206);
+            assert_eq!(suffix.body, expected[expected.len() - 8..]);
+
+            let multiple = client_with_header(&book, "range", "bytes=0-1,4-5").get(&format!("/download/{}", book.book_id)).await;
+            assert_eq!(multiple.status, 206);
+            assert!(multiple.header("content-type").unwrap().starts_with("multipart/byteranges; boundary="));
+            assert!(multiple.text().contains("Content-Range: bytes 0-1/"));
+            assert!(multiple.text().contains("Content-Range: bytes 4-5/"));
+            assert!(multiple.body.windows(2).any(|part| part == &expected[..2]));
+            assert!(multiple.body.windows(2).any(|part| part == &expected[4..6]));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_download_range_errors_and_if_range_match_file_response() {
+        let book = book!();
+        book.run(async {
+            let expected = fs::read(&book.epub_path).unwrap();
+            let unsatisfiable = client_with_header(&book, "range", "bytes=999999-").get(&format!("/download/{}", book.book_id)).await;
+            assert_eq!(unsatisfiable.status, 416);
+            assert_eq!(unsatisfiable.header("content-range"), Some(format!("bytes */{}", expected.len()).as_str()));
+            let oversized_offset = client_with_header(&book, "range", "bytes=18446744073709551616-").get(&format!("/download/{}", book.book_id)).await;
+            assert_eq!(oversized_offset.status, 416);
+
+            let malformed = client_with_header(&book, "range", "items=0-1").get(&format!("/download/{}", book.book_id)).await;
+            assert_eq!(malformed.status, 400);
+            assert_eq!(malformed.text(), "Only support bytes range");
+
+            let baseline = book.client().get(&format!("/download/{}", book.book_id)).await;
+            let validator = baseline.header("etag").unwrap().to_string();
+            let matched = client_with_header(&book, "range", "bytes=0-3").header("if-range", &validator).get(&format!("/download/{}", book.book_id)).await;
+            assert_eq!(matched.status, 206);
+
+            let ignored = client_with_header(&book, "range", "bytes=0-3").header("if-range", "stale-validator").get(&format!("/download/{}", book.book_id)).await;
+            assert_eq!(ignored.status, 200);
+            assert_eq!(ignored.body, expected);
         })
         .await;
     }
@@ -1820,6 +2031,25 @@ mod test_cache_eviction {
 /// `BookManager::_validate_preview_epub` 단위 테스트.
 mod test_validate_preview_epub {
     use super::*;
+
+    /// 빈 spine 경로는 ZIP 항목 이름으로 인정하지 않는다(Python `test_in_names_empty_path`).
+    #[test]
+    fn test_empty_spine_href_is_not_present_in_archive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let epub = tmp.path().join("empty_href.epub");
+        let opf = make_opf(1, false, false).replace("href=\"ch1.xhtml\"", "href=\"\"");
+        let container =
+            r#"<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+        write_zip_stored(
+            &epub,
+            &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", container.as_bytes()), ("content.opf", opf.as_bytes()), ("toc.ncx", b"<ncx/>"), ("ch1.xhtml", chapter(1).as_bytes())],
+        );
+
+        let (valid, error) = BookManager::_validate_preview_epub(&epub);
+
+        assert!(!valid);
+        assert!(err_has(&error, "no valid spine chapters"));
+    }
 
     /// 정상 EPUB은 (True, None)을 반환한다.
     #[test]
@@ -2885,6 +3115,89 @@ mod test_validate_pdf_unit {
 
         assert_eq!(close_calls.load(Ordering::SeqCst), 1, "close는 한 번만 불려야 한다");
     }
+}
+
+#[tokio::test]
+async fn validate_pdf_reports_reconstructed_cross_reference() {
+    common::setup_env();
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("damaged.pdf");
+    common::pdf::make_blank_pdf(&path, 1);
+    let mut bytes = fs::read(&path).unwrap();
+    bytes.truncate(bytes.len() - 10);
+    fs::write(&path, bytes).unwrap();
+
+    let pdf = LopdfOpener.open(&path).unwrap();
+    let issues = pdf.check_pdf_syntax().unwrap();
+
+    assert!(!issues.is_empty(), "xref recovery should be reported as a syntax warning");
+    let book = BookRef { book_id: 1, file_type: "pdf".to_string(), file_path: path };
+    let manager = unit_manager(tmp.path(), Some(book), None).manager(|deps| deps);
+    let (result, error) = manager.validate_pdf(1).await;
+    assert!(error.is_none());
+    let result = result.unwrap();
+    assert_eq!(result["valid"], false);
+    assert!(result["summary"]["warning"].as_u64().unwrap() > 0);
+    assert!(!result["messages"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn lopdf_reader_decodes_pdf_metadata_strings_and_omits_unsupported_values() {
+    use lopdf::{Object, StringFormat, dictionary};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("metadata.pdf");
+    common::pdf::make_blank_pdf(&path, 1);
+    let mut document = lopdf::Document::load(&path).unwrap();
+    let indirect_author = document.add_object(Object::string_literal("Indirect Author"));
+    let info = document.add_object(lopdf::dictionary! {
+        "Title" => Object::String(vec![0xFE, 0xFF, 0x00, b'K', 0x00, b'O'], StringFormat::Hexadecimal),
+        "Author" => Object::Reference(indirect_author),
+        "Producer" => Object::Name(b"ExampleProducer".to_vec()),
+        "Legacy" => Object::String(vec![0xE9], StringFormat::Hexadecimal),
+        "Ignored" => Object::Integer(7),
+    });
+    document.trailer.set("Info", Object::Reference(info));
+    document.save(&path).unwrap();
+
+    let pdf = LopdfOpener.open(&path).unwrap();
+    let metadata = pdf.docinfo();
+
+    assert_eq!(metadata["/Title"], "KO");
+    assert_eq!(metadata["/Author"], "Indirect Author");
+    assert_eq!(metadata["/Producer"], "ExampleProducer");
+    assert_eq!(metadata["/Legacy"], "é");
+    assert!(!metadata.contains_key("/Ignored"));
+}
+
+#[test]
+fn lopdf_reader_distinguishes_io_and_invalid_pdf_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = LopdfOpener.open(&tmp.path().join("missing.pdf")).err().unwrap();
+    assert_eq!(missing.kind, "OSError");
+
+    let invalid_path = tmp.path().join("invalid.pdf");
+    fs::write(&invalid_path, b"not a PDF").unwrap();
+    let invalid = LopdfOpener.open(&invalid_path).err().unwrap();
+    assert_eq!(invalid.kind, "OpenError");
+}
+
+#[test]
+fn lopdf_reader_reports_a_repaired_startxref_offset() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("offset-corrected.pdf");
+    let header = "%PDF-1.5\n";
+    let first = "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n";
+    let second = "2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\n";
+    let first_offset = header.len();
+    let second_offset = first_offset + first.len();
+    let body = format!("{header}{first}{second}");
+    let xref_offset = body.len();
+    let pdf = format!("{body}xref\n0 3\n0000000000 65535 f \n{first_offset:010} 00000 n \n{second_offset:010} 00000 n \ntrailer\n<</Root 1 0 R/Size 3>>\nstartxref\n{}\n%%EOF", xref_offset + 4);
+    fs::write(&path, pdf).unwrap();
+
+    let document = LopdfOpener.open(&path).unwrap();
+    assert_eq!(document.check_pdf_syntax().unwrap(), ["Cross-reference section offset required repair"]);
 }
 
 /// URL 인코딩된 href 항목 및 전체보기(chapters=0) 시 EPUB 구조가 완전 보존되는지 검증.

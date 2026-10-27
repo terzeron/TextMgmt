@@ -24,7 +24,9 @@ fn env() -> Env {
     let root = tempfile::tempdir().unwrap();
     let pdf = root.path().join("cat/book.pdf");
     make_pdf(&pdf, 5);
-    let es = FakeEsManager::with_doc(json!({"category":"cat", "title":"Title", "author":"Author", "file_path":"cat/book.pdf", "file_type":"pdf", "page_count":5}));
+    let es = FakeEsManager::with_doc(
+        json!({"category":"cat", "title":"Title", "author":"Author", "file_path":"cat/book.pdf", "file_type":"pdf", "file_size": 0, "page_count":5, "updated_time":"2024-01-01T00:00:00.000000"}),
+    );
     let fs = FaultyFs::new();
     let bm = BookManager::with_deps(BookManagerDeps::new(root.path().to_path_buf(), es.clone()).with_fs(fs.clone()));
     Env { bm, es, fs, pdf, root }

@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use corpus_common::reader::{decode_utf8_ignore, open_zip};
 use htmlkit::{local_name, text_of, tokenize};
-use parser_timeout::run_with_timeout;
+use parser_timeout::{run_with_hard_timeout, run_with_timeout};
 use regex::Regex;
 use stat::Stat;
 
@@ -27,6 +27,8 @@ pub const HEAD_TAIL_SIZE: usize = 8 * 1024;
 pub const PDF_ISBN_PAGE_WINDOW: usize = 5;
 /// PDF ISBN 추출 상한(초). 본문 추출을 포기한 손상 PDF도 여기서 다시 파싱되므로 상한이 없으면 멈춘다.
 pub const PDF_ISBN_TIMEOUT: f64 = 30.0;
+/// ISBN PDF 파서를 자식 프로세스에서 실행하는 숨은 부명령.
+pub const PDF_ISBN_WORKER_COMMAND: &str = "__isbn-pdf-stage";
 
 // ---------------------------------------------------------------- 앞뒤 읽기
 
@@ -64,23 +66,24 @@ pub fn validate_isbn10(isbn: &str) -> bool {
         return false;
     }
     let chars: Vec<char> = isbn.chars().collect();
-    if chars.len() != 10 || !chars.iter().all(|c| c.is_ascii_digit() || *c == 'X') {
+    if chars.len() != 10 || !chars[..9].iter().all(|c| decimal_digit_value(*c).is_some()) || !(chars[9] == 'X' || decimal_digit_value(chars[9]).is_some()) {
         return false;
     }
     let mut total = 0;
     for (i, c) in chars[..9].iter().enumerate() {
-        let Some(d) = c.to_digit(10) else { return false };
+        let Some(d) = decimal_digit_value(*c) else { return false };
         total += d * (10 - i as u32);
     }
-    total += if chars[9] == 'X' { 10 } else { chars[9].to_digit(10).unwrap_or(0) };
+    total += if chars[9] == 'X' { 10 } else { decimal_digit_value(chars[9]).unwrap_or(0) };
     total % 11 == 0
 }
 
 pub fn validate_isbn13(isbn: &str) -> bool {
-    if isbn.chars().count() != 13 || !isbn.chars().all(|c| c.is_ascii_digit()) {
+    if isbn.chars().count() != 13 {
         return false;
     }
-    let total: u32 = isbn.chars().enumerate().map(|(i, c)| c.to_digit(10).unwrap_or(0) * if i.is_multiple_of(2) { 1 } else { 3 }).sum();
+    let Some(digits) = isbn.chars().map(decimal_digit_value).collect::<Option<Vec<_>>>() else { return false };
+    let total: u32 = digits.iter().enumerate().map(|(i, d)| d * if i.is_multiple_of(2) { 1 } else { 3 }).sum();
     total.is_multiple_of(10)
 }
 
@@ -146,7 +149,26 @@ fn normalize_ocr(raw: &str) -> String {
 }
 
 fn strip_to_isbn_chars(s: &str) -> String {
-    s.chars().filter(|c| c.is_ascii_digit() || *c == 'X').collect()
+    s.chars().filter(|c| decimal_digit_value(*c).is_some() || *c == 'X').collect()
+}
+
+/// Python `int()`이 읽는 Unicode DecimalNumber 문자를 숫자값으로 바꾼다.
+fn decimal_digit_value(c: char) -> Option<u32> {
+    use unicode_general_category::{GeneralCategory::DecimalNumber, get_general_category};
+
+    let code = c as u32;
+    if get_general_category(c) != DecimalNumber {
+        return None;
+    }
+    let mut zero = code;
+    while zero > 0 {
+        let previous = char::from_u32(zero - 1)?;
+        if get_general_category(previous) != DecimalNumber {
+            break;
+        }
+        zero -= 1;
+    }
+    Some((code - zero) % 10)
 }
 
 pub fn search_in_content(content: &str) -> Vec<String> {
@@ -317,21 +339,44 @@ pub fn pdf_text_primary(path: &Path) -> Result<(String, usize), String> {
     Ok((text, total))
 }
 
-fn pdfium() -> Option<&'static pdfium_render::prelude::Pdfium> {
+pub use pdfium_render;
+
+/// libpdfium 바인딩 하나를 만든다. `PDFIUM_LIB_PATH`는 라이브러리 파일이거나 그것이 든 디렉토리다.
+fn bind_pdfium() -> Option<Box<dyn pdfium_render::prelude::PdfiumLibraryBindings>> {
     use pdfium_render::prelude::Pdfium;
-    static PDFIUM: OnceLock<Option<Pdfium>> = OnceLock::new();
-    PDFIUM
-        .get_or_init(|| {
-            // PDFIUM_LIB_PATH는 라이브러리 파일이거나 그것이 든 디렉토리다.
-            if let Some(configured) = std::env::var_os("PDFIUM_LIB_PATH").map(std::path::PathBuf::from) {
-                let lib = if configured.is_dir() { Pdfium::pdfium_platform_library_name_at_path(&configured) } else { configured };
-                if let Ok(bindings) = Pdfium::bind_to_library(lib) {
-                    return Some(Pdfium::new(bindings));
-                }
-            }
-            Pdfium::bind_to_system_library().ok().map(Pdfium::new)
-        })
-        .as_ref()
+    if let Some(configured) = std::env::var_os("PDFIUM_LIB_PATH").map(std::path::PathBuf::from) {
+        let lib = if configured.is_dir() { Pdfium::pdfium_platform_library_name_at_path(&configured) } else { configured };
+        if let Ok(bindings) = Pdfium::bind_to_library(lib) {
+            return Some(bindings);
+        }
+    }
+    Pdfium::bind_to_system_library().ok()
+}
+
+type RawBindings = Box<dyn pdfium_render::prelude::PdfiumLibraryBindings>;
+
+/// `Pdfium::new` 뒤에는 같은 라이브러리를 다시 바인딩할 수 없다("AlreadyInitialized"). 둘 다 먼저 바인딩해 둔다.
+fn pdfium_pair() -> &'static (Option<pdfium_render::prelude::Pdfium>, Option<RawBindings>) {
+    use pdfium_render::prelude::Pdfium;
+    static PAIR: OnceLock<(Option<Pdfium>, Option<RawBindings>)> = OnceLock::new();
+    PAIR.get_or_init(|| {
+        let raw = bind_pdfium();
+        let high = bind_pdfium();
+        (high.map(Pdfium::new), raw)
+    })
+}
+
+/// 공유 pdfium 바인딩. 프로세스 전체에서 하나만 만든다. 라이브러리가 없으면 `None`.
+pub fn pdfium() -> Option<&'static pdfium_render::prelude::Pdfium> {
+    pdfium_pair().0.as_ref()
+}
+
+/// `pdfium()`과 같은 라이브러리의 저수준 함수 묶음. pypdfium2처럼 `FPDFText_GetText`를 직접 부를 때 쓴다.
+/// pdfium은 스레드 안전하지 않으므로 한 번에 한 스레드에서만 부른다.
+pub fn pdfium_bindings() -> Option<&'static dyn pdfium_render::prelude::PdfiumLibraryBindings> {
+    let pair = pdfium_pair();
+    pair.0.as_ref()?;
+    pair.1.as_deref()
 }
 
 /// pdfium으로 앞뒤 쪽의 텍스트와 전체 쪽수를 읽는다(pypdfium2와 같은 엔진). 라이브러리가 없거나
@@ -496,11 +541,20 @@ pub struct Backends {
     pub runner: Rc<dyn CommandRunner>,
     pub stat: Arc<Stat>,
     pub pdf_timeout: f64,
+    /// 지정하면 PDFium/pypdf 대응 단계를 별도 프로세스에서 실행해 멈춘 작업을 종료한다.
+    pub pdf_worker_executable: Option<std::path::PathBuf>,
 }
 
 impl Backends {
     pub fn real() -> Self {
-        Backends { pdf_primary: Arc::new(pdf_text_auto), pdf_fallback: Arc::new(pdf_text_fallback), runner: Rc::new(SystemRunner), stat: Arc::clone(Stat::global()), pdf_timeout: PDF_ISBN_TIMEOUT }
+        Backends {
+            pdf_primary: Arc::new(pdf_text_auto),
+            pdf_fallback: Arc::new(pdf_text_fallback),
+            runner: Rc::new(SystemRunner),
+            stat: Arc::clone(Stat::global()),
+            pdf_timeout: PDF_ISBN_TIMEOUT,
+            pdf_worker_executable: None,
+        }
     }
 }
 
@@ -522,6 +576,19 @@ fn outcome(text: &str) -> &'static str {
     if text.is_empty() { "empty" } else { "ok" }
 }
 
+fn run_pdf_worker(executable: &Path, stage: &str, path: &Path, seconds: f64) -> Result<(String, usize), StageError> {
+    let mut command = Command::new(executable);
+    command.arg(PDF_ISBN_WORKER_COMMAND).arg(stage).arg(path);
+    let output = run_with_hard_timeout(command, seconds).map_err(|_| StageError::Timeout)?;
+    if !output.status.success() {
+        return Err(StageError::Failed);
+    }
+    let output = String::from_utf8(output.stdout).map_err(|_| StageError::Failed)?;
+    let (pages, text) = output.split_once('\n').ok_or(StageError::Failed)?;
+    let pages = pages.parse::<usize>().map_err(|_| StageError::Failed)?;
+    Ok((text.to_owned(), pages))
+}
+
 fn extract_pdf(path: &Path, content: Option<&str>, b: &Backends) -> Vec<String> {
     if let Some(c) = content.filter(|c| !c.is_empty()) {
         let found = search_in_content(c);
@@ -534,7 +601,11 @@ fn extract_pdf(path: &Path, content: Option<&str>, b: &Backends) -> Vec<String> 
     let primary = Arc::clone(&b.pdf_primary);
     let owned = path.to_path_buf();
     let (mut pages, mut text) = (0, String::new());
-    match run_stage(b.pdf_timeout, "isbn/pdfium", move || primary(&owned)) {
+    let primary_result = match b.pdf_worker_executable.as_deref() {
+        Some(executable) => run_pdf_worker(executable, "pdfium", path, b.pdf_timeout),
+        None => run_stage(b.pdf_timeout, "isbn/pdfium", move || primary(&owned)),
+    };
+    match primary_result {
         Ok((t, n)) => {
             b.stat.record_pdf_stage("isbn_pdfium", start.elapsed().as_secs_f64(), outcome(&t));
             (text, pages) = (t, n);
@@ -556,7 +627,11 @@ fn extract_pdf(path: &Path, content: Option<&str>, b: &Backends) -> Vec<String> 
     let start = Instant::now();
     let fallback = Arc::clone(&b.pdf_fallback);
     let owned = path.to_path_buf();
-    match run_stage(b.pdf_timeout, "isbn/pypdf", move || fallback(&owned)) {
+    let fallback_result = match b.pdf_worker_executable.as_deref() {
+        Some(executable) => run_pdf_worker(executable, "fallback", path, b.pdf_timeout).map(|(text, _)| text),
+        None => run_stage(b.pdf_timeout, "isbn/pypdf", move || fallback(&owned)),
+    };
+    match fallback_result {
         Ok(t) => {
             b.stat.record_pdf_stage("isbn_pypdf", start.elapsed().as_secs_f64(), outcome(&t));
             search_in_content(&t)
@@ -596,4 +671,11 @@ pub fn extract(path: &Path, content: Option<&str>, backends: &Backends) -> Vec<S
 /// 실제 도구로 추출한다.
 pub fn extract_default(path: &Path, content: Option<&str>) -> Vec<String> {
     extract(path, content, &Backends::real())
+}
+
+/// 호출자가 제공한 hidden worker로 PDF 파싱을 격리해 ISBN을 추출한다.
+pub fn extract_default_with_worker(path: &Path, content: Option<&str>, executable: &Path) -> Vec<String> {
+    let mut backends = Backends::real();
+    backends.pdf_worker_executable = Some(executable.to_path_buf());
+    extract(path, content, &backends)
 }

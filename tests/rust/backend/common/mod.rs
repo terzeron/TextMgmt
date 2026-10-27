@@ -44,6 +44,11 @@ pub fn project_root() -> PathBuf {
 
 /// conftest.py와 같은 테스트용 환경 변수를 한 번만 설정한다.
 /// `Book.path_prefix`처럼 import 시점에 읽는 값이 있어 backend를 쓰기 전에 불러야 한다.
+/// 컨테이너 fixture 가 `TM_MYSQL_*` / `TM_ES_*` 를 컨테이너 값으로 설정했다는 표식. `setup_env()` 는 이 값을 지우지 않는다.
+/// fixture 모듈(`mysql_fixture.rs`, `elasticsearch_fixture.rs`)도 같은 이름을 쓴다.
+pub const MYSQL_FROM_FIXTURE: &str = "TM_TEST_MYSQL_FROM_FIXTURE";
+pub const ES_FROM_FIXTURE: &str = "TM_TEST_ES_FROM_FIXTURE";
+
 pub fn setup_env() {
     INIT.call_once(|| {
         let root = project_root();
@@ -62,6 +67,18 @@ pub fn setup_env() {
             // Rust 는 TM_CLASSIFIER_MODEL_DIR(내보내기 디렉토리)을 읽는다.
             std::env::set_var("TM_CLASSIFIER_MODEL", root.join("tests/model-that-does-not-exist.joblib"));
             std::env::set_var("TM_CLASSIFIER_MODEL_DIR", root.join("tests/model-dir-that-does-not-exist"));
+            // 개발 셸(direnv 의 `.env`)에 든 실서비스 접속 정보가 테스트에 새지 않게 지운다. 그대로 두면 테스트가
+            // 운영 MySQL·Elasticsearch 에 붙어 데이터를 바꾼다. 컨테이너 fixture 가 먼저 설정한 값(표식이 있음)은 둔다.
+            if std::env::var_os(MYSQL_FROM_FIXTURE).is_none() {
+                for k in ["TM_MYSQL_HOST", "TM_MYSQL_PORT", "TM_MYSQL_USER", "TM_MYSQL_PASSWORD", "TM_MYSQL_DATABASE", "TM_MYSQL_ROOT_PASSWORD"] {
+                    std::env::remove_var(k);
+                }
+            }
+            if std::env::var_os(ES_FROM_FIXTURE).is_none() {
+                for k in ["TM_ES_URL", "TM_ES_USER", "TM_ES_PASSWORD"] {
+                    std::env::remove_var(k);
+                }
+            }
         }
     });
 }

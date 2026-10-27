@@ -1165,3 +1165,196 @@ def test_unnamed_backup_collision_is_an_error_not_a_silent_reuse(tmp_path, monke
 
     assert path.read_bytes() == original
     assert existing.read_bytes() == b"older backup"
+
+
+def test_page_decode_handles_boms_declarations_and_decode_errors():
+    from backend.epub_cover import _decode_page
+
+    assert _decode_page(b"\xef\xbb\xbf<page>")[1] == "utf-8-sig"
+    encoded = "<page>본문</page>".encode("utf-16")
+    assert _decode_page(encoded)[1] == "utf-16"
+    assert _decode_page(b'<?xml version="1.0" encoding="cp949"?><page/>')[1] == "cp949"
+    assert _decode_page(b'<meta charset="latin-1"><page/>')[1] == "latin-1"
+    with pytest.raises(CoverError, match="문자 인코딩"):
+        _decode_page(b'<meta charset="missing-codec"><page/>')
+    with pytest.raises(CoverError, match="문자 인코딩"):
+        _decode_page(b"\xff")
+
+
+def test_visible_text_ignores_svg_title_and_description_but_keeps_tail():
+    from lxml import etree
+    from backend.epub_cover import _visible_text
+
+    root = etree.fromstring(
+        b'<body>shown<svg xmlns="http://www.w3.org/2000/svg"><title>hidden title</title>tail'
+        b'<desc>hidden description</desc>after</svg>end</body>'
+    )
+
+    assert _visible_text(root) == "showntailafterend"
+
+
+def test_fit_svg_page_resizes_matching_image_and_viewbox_only():
+    from lxml import etree
+    from backend.epub_cover import _fit_svg_page
+
+    source = b'<svg viewBox="0 0 120 180"><image width="120" height="180" href="x.png"/></svg>'
+    changed = etree.fromstring(_fit_svg_page(source, (120, 180), (60, 90)))
+    image = changed.find("{*}image")
+    assert image.get("width") == "60" and image.get("height") == "90"
+    assert changed.get("viewBox") == "0 0 60 90"
+
+    for unchanged in (b"not xml", b"<svg/>", b'<svg><image width="1" height="2"/></svg>'):
+        assert _fit_svg_page(unchanged, (120, 180), (60, 90)) == unchanged
+
+
+def test_crop_image_bytes_preserves_supported_formats_and_rejects_bad_inputs(monkeypatch):
+    import io
+    from PIL import Image
+    from backend import epub_cover
+
+    def encoded(mode, format, color):
+        output = io.BytesIO()
+        Image.new(mode, (20, 30), color).save(output, format)
+        return output.getvalue()
+
+    for mode, fmt, color in (("RGB", "JPEG", "red"), ("L", "PNG", 128), ("RGBA", "PNG", (255, 0, 0, 128)), ("P", "PNG", 1), ("1", "PNG", 1)):
+        cropped, result_format = epub_cover._crop_image_bytes(encoded(mode, fmt, color), (0.1, 0.1, 0.9, 0.9, 0))
+        assert result_format == fmt
+        with Image.open(io.BytesIO(cropped)) as result:
+            assert result.size[0] > 0 and result.size[1] > 0
+
+    gif = encoded("RGB", "GIF", "red")
+    with pytest.raises(CoverError, match="지원하지 않는 이미지 형식"):
+        epub_cover._crop_image_bytes(gif, (0.1, 0.1, 0.9, 0.9, 0))
+    with pytest.raises(CoverError, match="이미지를 읽을 수 없음"):
+        epub_cover._crop_image_bytes(b"bad image", (0.1, 0.1, 0.9, 0.9, 0))
+
+    monkeypatch.setattr(epub_cover, "MAX_IMAGE_PIXELS", 1)
+    with pytest.raises(CoverError, match="해상도가 너무 큼"):
+        epub_cover._crop_image_bytes(encoded("RGB", "PNG", "red"), (0.1, 0.1, 0.9, 0.9, 0))
+
+
+def test_page_info_validates_size_xml_image_index_and_member(tmp_path, monkeypatch):
+    import io
+    import zipfile
+    from types import SimpleNamespace
+    from backend import epub_cover
+
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w") as archive:
+        archive.writestr("OPS/page.xhtml", '<html><body><img src="image.png"/></body></html>')
+        archive.writestr("OPS/no-image.xhtml", "<html><body>text</body></html>")
+        archive.writestr("OPS/bad.xhtml", "<html><body><img src=\"broken\"></body>")
+        archive.writestr("OPS/missing-image.xhtml", '<html><body><img src="absent.png"/></body></html>')
+        archive.writestr("OPS/image.png", b"image")
+    archive_bytes.seek(0)
+    with zipfile.ZipFile(archive_bytes) as archive:
+        items = {
+            "page": SimpleNamespace(get=lambda key, default="": "page.xhtml"),
+            "no-image": SimpleNamespace(get=lambda key, default="": "no-image.xhtml"),
+            "bad": SimpleNamespace(get=lambda key, default="": "bad.xhtml"),
+            "missing-image": SimpleNamespace(get=lambda key, default="": "missing-image.xhtml"),
+        }
+        monkeypatch.setattr(epub_cover, "MAX_XML_BYTES", 1)
+        with pytest.raises(CoverError, match="문서가 너무 큼"):
+            epub_cover._page_info(archive, "OPS", items, "page")
+        monkeypatch.setattr(epub_cover, "MAX_XML_BYTES", 1024)
+        from lxml import etree
+        original_fromstring = epub_cover.etree.fromstring
+        monkeypatch.setattr(epub_cover.etree, "fromstring", lambda *_args, **_kwargs: (_ for _ in ()).throw(etree.XMLSyntaxError("bad", 0, 0, 0)))
+        with pytest.raises(CoverError, match="읽을 수 없음"):
+            epub_cover._page_info(archive, "OPS", items, "bad")
+        monkeypatch.setattr(epub_cover.etree, "fromstring", original_fromstring)
+        with pytest.raises(CoverError, match="이미지가 0개"):
+            epub_cover._page_info(archive, "OPS", items, "no-image")
+        with pytest.raises(CoverError, match="이 쪽의 2번째 이미지"):
+            epub_cover._page_info(archive, "OPS", items, "page", index=1)
+        with pytest.raises(CoverError, match="이미지를 찾을 수 없음"):
+            epub_cover._page_info(archive, "OPS", items, "missing-image")
+        info = epub_cover._page_info(archive, "OPS", items, "page")
+        assert info.image_member == "OPS/image.png"
+
+
+def test_stage_image_edits_requires_manifest_and_spine(tmp_path):
+    import io
+    import zipfile
+    from backend.epub_cover import _stage_image_edits
+
+    path = make_epub(tmp_path / "broken.epub")
+    rewrite_epub_members(path, lambda files: files.__setitem__("OPS/book.opf", b'<package xmlns="http://www.idpf.org/2007/opf"><metadata/></package>'))
+    with path.open("rb") as source, pytest.raises(CoverError, match="manifest 또는 spine"):
+        _stage_image_edits(source, tmp_path / "staged.epub", [], [], [], [], {"split": {}, "inserted": []})
+
+
+def test_edit_page_images_rejects_unencodable_edits_and_split_id_exhaustion(monkeypatch):
+    import backend.epub_cover as module
+    from lxml import etree
+
+    monkeypatch.setattr(module, "_decode_page", lambda _raw: ("€", "ascii"))
+    monkeypatch.setattr(module, "_image_tags", lambda _text: [])
+    with pytest.raises(CoverError, match="문자 인코딩"):
+        module._edit_page_images(b"", 0, [])
+
+    import hashlib
+
+    digest = hashlib.sha256(b"image").hexdigest()[:16]
+    existing_ids = {f"tm-split-{digest}"} | {f"tm-split-{digest}-{n}" for n in range(2, 1000)}
+    manifest = etree.Element(f"{{{module.OPF_NS}}}manifest")
+    for identifier in existing_ids:
+        etree.SubElement(manifest, f"{{{module.OPF_NS}}}item", id=identifier)
+    with pytest.raises(CoverError, match="ID를 만들 수 없습니다"):
+        module._add_split_image("OPS/book.opf", manifest, set(), {}, b"image", suffix=".jpg", media_type="image/jpeg")
+
+
+def test_stage_image_edits_refuses_tool_cover_split_delete_and_insert(tmp_path):
+    import io
+    from backend.epub_cover import _stage_image_edits
+
+    path = make_epub(tmp_path / "book.epub")
+
+    def with_tool_cover(files):
+        opf = files["OPS/book.opf"].replace(
+            b"</manifest>", b'<item id="tm-cover-page-a" href="cover.xhtml" media-type="application/xhtml+xml"/></manifest>'
+        ).replace(b"</spine>", b'<itemref idref="tm-cover-page-a"/></spine>')
+        files["OPS/book.opf"] = opf
+        files["OPS/cover.xhtml"] = b"<html/>"
+
+    rewrite_epub_members(path, with_tool_cover)
+    for operation, payload, expected in (
+        ("split", [{"idref": "tm-cover-page-a"}], "표지 쪽은 분할"),
+        ("delete", [{"idref": "tm-cover-page-a"}], "표지 쪽은 삭제"),
+        ("insert", [("tm-cover-page-a", image_bytes())], "표지 앞에는 삽화"),
+    ):
+        args = {"crops": [], "splits": [], "deletes": [], "inserts": []}
+        args[{"split": "splits", "delete": "deletes", "insert": "inserts"}[operation]] = payload
+        with path.open("rb") as source, pytest.raises(CoverError, match=expected):
+            _stage_image_edits(source, tmp_path / f"{operation}.epub", **args, created={"split": {}, "inserted": []})
+
+
+def test_stage_image_edits_svg_split_resizes_page_and_shared_deletes_keep_image(tmp_path):
+    from backend.epub_cover import _stage_image_edits
+
+    path = publisher_cover_epub(tmp_path)
+    with path.open("rb") as source:
+        _stage_image_edits(
+            source, tmp_path / "split.epub", [],
+            [{"idref": "titlepage", "first": (0, 0, 0.5, 1, 0), "second": (0.5, 0, 1, 1, 0)}],
+            [], [], {"split": {}, "inserted": []},
+        )
+    # Same image referenced twice in one XHTML page: deleting one occurrence must retain the shared member.
+    rewrite_epub_members(path, lambda files: files.update({"OPS/chapter.xhtml": b'<html><body><img src="cover.jpg"/><img src="cover.jpg"/></body></html>'}))
+    with path.open("rb") as source:
+        _stage_image_edits(source, tmp_path / "delete.epub", [], [], [{"idref": "chapter", "index": 0}], [], {"split": {}, "inserted": []})
+    with zipfile.ZipFile(tmp_path / "delete.epub") as result:
+        assert "OPS/cover.jpg" in result.namelist()
+
+
+def test_stage_image_edits_retains_cover_image_when_deleting_its_reference(tmp_path):
+    from backend.epub_cover import _stage_image_edits
+
+    path = make_epub(tmp_path / "book.epub", cover=True)
+    rewrite_epub_members(path, lambda files: files.update({"OPS/chapter.xhtml": b'<html><body><p>text</p><img src="cover.jpg"/></body></html>'}))
+    with path.open("rb") as source:
+        _stage_image_edits(source, tmp_path / "delete-cover-ref.epub", [], [], [{"idref": "chapter"}], [], {"split": {}, "inserted": []})
+    with zipfile.ZipFile(tmp_path / "delete-cover-ref.epub") as result:
+        assert "OPS/cover.jpg" in result.namelist()

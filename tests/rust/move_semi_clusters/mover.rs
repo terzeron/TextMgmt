@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use move_semi_clusters::{Outcome, move_semi_clusters, run};
+use move_semi_clusters::{Outcome, move_semi_clusters, run, run_with_library_root};
 
 fn touch(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -127,6 +127,8 @@ fn bad_reports_are_errors() {
     assert!(move_semi_clusters(root, &bad, false).is_err());
     fs::write(&bad, "{}").unwrap();
     assert!(move_semi_clusters(root, &bad, false).unwrap_err().contains("clusters"));
+    fs::write(&bad, r#"{"clusters": {"준확실_3_무협": null}}"#).unwrap();
+    assert!(move_semi_clusters(root, &bad, false).is_err());
     fs::write(&bad, r#"{"clusters": {"준확실_3_무협": [{"nofile": 1}]}}"#).unwrap();
     assert!(move_semi_clusters(root, &bad, false).unwrap_err().contains("file"));
 }
@@ -148,9 +150,23 @@ fn summary_lists_only_touched_categories_in_sorted_order() {
 }
 
 #[test]
-fn run_prints_usage_without_arguments_and_rejects_bad_ones() {
+fn no_arguments_executes_the_default_move_from_the_library_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let file = root.join("0_telegram/q.txt");
+    touch(&file);
+    write_report(root, serde_json::json!({ "준확실_3_판타지": [entry(&file)] }));
+
     let mut out = Vec::new();
-    assert_eq!(run("msc", &[], &mut out), 0);
+    assert_eq!(run_with_library_root("msc", &[], &mut out, root), 0);
+    assert!(root.join("3_판타지/q.txt").exists());
+    assert!(String::from_utf8(out).unwrap().contains("▶ 3_판타지: 신규 이동 1권"));
+}
+
+#[test]
+fn help_prints_usage_and_bad_arguments_are_rejected() {
+    let mut out = Vec::new();
+    assert_eq!(run("msc", &["--help".into()], &mut out), 0);
     assert!(String::from_utf8(out).unwrap().contains("사용법"));
 
     let mut out = Vec::new();

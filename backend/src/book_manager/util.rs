@@ -142,6 +142,19 @@ pub fn book_from_doc(path_prefix: &Path, book_id: i64, info: &Value, score: f64)
     }
 }
 
+/// Python `Book.__init__`가 필수로 읽는 ES 필드를 검증한다.
+pub fn try_book_from_doc(path_prefix: &Path, book_id: i64, info: &Value, score: f64) -> Result<Book, String> {
+    for key in ["category", "title", "author", "file_path", "file_type", "updated_time"] {
+        if info.get(key).and_then(Value::as_str).is_none() {
+            return Err(format!("'{key}'"));
+        }
+    }
+    if info.get("file_size").and_then(Value::as_i64).is_none() {
+        return Err("'file_size'".to_string());
+    }
+    Ok(book_from_doc(path_prefix, book_id, info, score))
+}
+
 /// `OSError.strerror`에 가까운 문구: `"... (os error N)"` 꼬리를 뗀다.
 pub fn strerror(e: &io::Error) -> String {
     let text = e.to_string();

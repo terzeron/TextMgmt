@@ -18,9 +18,11 @@ mod common;
 
 use std::sync::{Arc, Mutex};
 
-use backend::es_manager::{ESManager, EsTransport};
+use backend::es_manager::{ESManager, EsError, EsTransport};
 use common::es_dummy::DummyEs;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
+use std::path::Path;
 
 type SearchStub = Arc<dyn Fn(&Value, Option<&Value>, i64, Option<&[String]>) -> Result<Vec<(i64, Value, f64)>, backend::es_manager::EsError> + Send + Sync>;
 
@@ -39,6 +41,121 @@ fn capture_search() -> (SearchStub, Arc<Mutex<Value>>) {
         Ok(Vec::new())
     });
     (stub, captured)
+}
+
+#[test]
+fn es_manager_api_default_methods_return_unsupported() {
+    struct UnsupportedManager;
+    impl backend::es_manager::EsManagerApi for UnsupportedManager {}
+
+    macro_rules! unsupported {
+        ($call:expr) => {
+            assert!(matches!($call, Err(EsError::Unsupported)))
+        };
+    }
+
+    let manager = UnsupportedManager;
+    let docs = BTreeMap::new();
+    let strings = vec!["A".to_owned()];
+    let similar = json!({});
+    unsupported!(backend::es_manager::EsManagerApi::create_index(&manager));
+    unsupported!(backend::es_manager::EsManagerApi::search_by_id(&manager, 1));
+    unsupported!(backend::es_manager::EsManagerApi::update(&manager, 1, &Value::Null));
+    unsupported!(backend::es_manager::EsManagerApi::delete(&manager, 1));
+    unsupported!(backend::es_manager::EsManagerApi::insert(&manager, &docs));
+    unsupported!(backend::es_manager::EsManagerApi::delete_by_file_paths(&manager, &strings, None));
+    unsupported!(backend::es_manager::EsManagerApi::delete_by_ids(&manager, &[1], 1));
+    unsupported!(backend::es_manager::EsManagerApi::refresh(&manager));
+    unsupported!(backend::es_manager::EsManagerApi::search_and_aggregate_by_category(&manager));
+    unsupported!(backend::es_manager::EsManagerApi::iter_all_category_file_paths(&manager, 1));
+    unsupported!(backend::es_manager::EsManagerApi::search_categories_pdf_stats(&manager, &strings));
+    unsupported!(backend::es_manager::EsManagerApi::search_category_pdf_stats(&manager, "A"));
+    unsupported!(backend::es_manager::EsManagerApi::get_by_id_source(&manager, "1"));
+    unsupported!(backend::es_manager::EsManagerApi::search_by_path_source(&manager, "/a"));
+    unsupported!(backend::es_manager::EsManagerApi::search_by_category(&manager, "A", 10));
+    unsupported!(backend::es_manager::EsManagerApi::search_by_category_paged(&manager, "A", 10, None));
+    unsupported!(backend::es_manager::EsManagerApi::count_by_categories(&manager, &strings, false));
+    unsupported!(backend::es_manager::EsManagerApi::count_by_category(&manager, "A", false));
+    unsupported!(backend::es_manager::EsManagerApi::rename_category(&manager, "A", "B"));
+    unsupported!(backend::es_manager::EsManagerApi::delete_by_category(&manager, "A", false));
+    unsupported!(backend::es_manager::EsManagerApi::search_by_keyword(&manager, "q", 10));
+    unsupported!(backend::es_manager::EsManagerApi::search_by_keyword_paged(&manager, &json!({})));
+    unsupported!(backend::es_manager::EsManagerApi::search_similar_docs(&manager, &similar));
+    unsupported!(backend::es_manager::EsManagerApi::search_similar_docs_paged(&manager, &similar));
+    unsupported!(backend::es_manager::EsManagerApi::search_latest_docs(&manager, 10, None));
+    unsupported!(backend::es_manager::EsManagerApi::backfill_created_time(&manager, Path::new("/books")));
+    unsupported!(backend::es_manager::EsManagerApi::aggregate_cover_categories(&manager));
+    unsupported!(backend::es_manager::EsManagerApi::search_cover_files_paged(&manager, &strings, 10, None, &[]));
+    unsupported!(backend::es_manager::EsManagerApi::search_group_representatives(&manager, &strings, &[]));
+}
+
+#[test]
+fn es_error_display_keeps_each_error_kind_distinguishable() {
+    let cases = [
+        (EsError::MissingEnv("TM_ES_URL".into()), "환경 변수 TM_ES_URL이(가) 없다"),
+        (EsError::Transport("offline".into()), "ES 연결 오류: offline"),
+        (EsError::Status { status: 503, body: "busy".into() }, "ES 응답 오류 503: busy"),
+        (EsError::Parse("invalid json".into()), "ES 응답 해석 실패: invalid json"),
+        (EsError::Unsupported, "지원하지 않는 연산"),
+        (EsError::Other("custom".into()), "custom"),
+    ];
+    for (error, expected) in cases {
+        assert_eq!(error.to_string(), expected);
+    }
+}
+
+#[test]
+fn es_manager_api_implementation_delegates_to_manager_and_normalizes_results() {
+    use backend::es_manager::EsManagerApi;
+
+    let (manager, es) = manager();
+    es.on("search", |_| {
+        Ok(json!({
+            "hits": {"total": {"value": 0}, "max_score": 0, "hits": []},
+            "aggregations": {
+                "unique_values": {"buckets": [{"key": "A", "doc_count": 2}]},
+                "paths": {"buckets": []},
+                "pdfs": {"doc_count": 0, "total_pages": {"value": 0}, "total_file_size": {"value": 0}},
+                "by_category": {"buckets": {"A": {"pdfs": {"doc_count": 1, "total_pages": {"value": 3}, "total_file_size": {"value": 4}}}}},
+                "categories": {"buckets": [{"key": {"category": "A"}, "doc_count": 1, "updated": {"value": null}, "created": {"value": null}}]}
+            }
+        }))
+    });
+    let api: &dyn EsManagerApi = &manager;
+    let categories = vec!["A".to_owned()];
+    let exclude = vec!["hidden".to_owned()];
+    let docs = BTreeMap::from([(1, json!({"title": "sample"}))]);
+
+    assert!(api.create_index().is_ok());
+    assert_eq!(api.search_by_id(1).unwrap(), None);
+    let _ = api.update(1, &json!({"title": "updated"}));
+    let _ = api.delete(1);
+    let _ = api.insert(&docs);
+    let _ = api.delete_by_file_paths(&["/books/a.epub".into()], None);
+    let _ = api.delete_by_ids(&[1], 1);
+    assert!(api.refresh().is_ok());
+    assert_eq!(api.search_and_aggregate_by_category().unwrap(), BTreeMap::from([("A".into(), 2)]));
+    assert!(api.iter_all_category_file_paths(10).unwrap().is_empty());
+    assert_eq!(api.search_categories_pdf_stats(&categories).unwrap()["A"]["page_count"], 3);
+    let _ = api.search_category_pdf_stats("A");
+    assert_eq!(api.get_by_id_source("1").unwrap(), None);
+    assert_eq!(api.search_by_path_source("/books/a.epub").unwrap(), None);
+    let _ = api.search_by_category("A", 10);
+    let _ = api.search_by_category_paged("A", 10, None);
+    assert_eq!(api.count_by_categories(&categories, false).unwrap()["A"], 3);
+    let _ = api.count_by_category("A", true);
+    let _ = api.rename_category("A", "B");
+    let _ = api.delete_by_category("A", false);
+    let _ = api.search_by_keyword("sample", 10);
+    let _ = api.search_by_keyword_paged(&json!({"keyword": "sample", "exclude_categories": ["hidden"]}));
+    let _ = api.search_similar_docs(&json!({"title": "sample"}));
+    let _ = api.search_similar_docs_paged(&json!({"title": "sample"}));
+    let _ = api.search_latest_docs(10, Some(&exclude));
+    let _ = api.backfill_created_time(Path::new("/books"));
+    let aggregate = api.aggregate_cover_categories().unwrap();
+    assert_eq!(aggregate["A"].0, 1);
+    let _ = api.search_cover_files_paged(&categories, 10, Some((2, 1, "/cover".into())), &exclude);
+    let _ = api.search_group_representatives(&categories, &exclude);
 }
 
 #[test]

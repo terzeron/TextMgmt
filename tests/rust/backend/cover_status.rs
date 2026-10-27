@@ -1,7 +1,6 @@
-//! Python tests/test_cover_status.py의 표지 판정, SQLite 호환성, 목록 조회 계약.
-//! 실제 PDF/EPUB 파일과 임시 SQLite DB로 검증한다.
+//! Python tests/test_cover_status.py의 표지 판정, MySQL cache, 목록 조회 계약.
 
-mod common;
+use crate::common;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -9,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::mysql_fixture;
 use backend::book::Book as CoverBook;
 use backend::book_manager::{BookManager, BookManagerDeps, CoverBooksPager, CoverPage, CoverPageOpts};
 use backend::cover_status::{CoverStatusCache, STANDARD_COVER_SIZES, has_official_cover, pdf_first_image_size};
@@ -23,74 +23,26 @@ use serde_json::json;
 static LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
-fn cache_reads_python_sqlite_and_python_reads_rust_updates() {
-    let tmp = tempfile::tempdir().unwrap();
-    let file = tmp.path().join("한글 ' book.pdf");
-    std::fs::write(&file, b"old").unwrap();
-    let db = tmp.path().join("legacy.sqlite3");
-    let python = std::process::Command::new("python3")
-        .arg("-c")
-        .arg(
-            r#"
-import sqlite3, sys, pathlib
-p = pathlib.Path(sys.argv[2]); s = p.stat()
-with sqlite3.connect(sys.argv[1]) as c:
-    c.execute('CREATE TABLE cover_status (file_path TEXT PRIMARY KEY, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL, has_cover INTEGER NOT NULL)')
-    c.execute('INSERT INTO cover_status VALUES (?,?,?,?)', (str(p),s.st_mtime_ns,s.st_size,1))
-"#,
-        )
-        .arg(&db)
-        .arg(&file)
-        .status()
-        .unwrap();
-    assert!(python.success());
-    let cache = CoverStatusCache::new(&db);
-    assert!(cache.get_or_compute(&file, &|| panic!("legacy row should be reused")).unwrap());
-    std::fs::write(&file, b"new contents").unwrap();
-    assert!(!cache.get_or_compute(&file, &|| Ok(false)).unwrap());
-    let check = std::process::Command::new("python3")
-        .arg("-c")
-        .arg(
-            r#"
-import sqlite3, sys, pathlib
-p = pathlib.Path(sys.argv[2]); s = p.stat()
-with sqlite3.connect(sys.argv[1]) as c:
-    row = c.execute('SELECT mtime_ns,size,has_cover FROM cover_status WHERE file_path=?',(str(p),)).fetchone()
-assert row == (s.st_mtime_ns,s.st_size,0), row
-"#,
-        )
-        .arg(&db)
-        .arg(&file)
-        .status()
-        .unwrap();
-    assert!(check.success());
-}
-
-#[test]
-fn cache_invalidates_same_size_timestamp_changes_and_does_not_store_errors() {
+fn cache_invalidates_when_file_metadata_changes_and_does_not_store_errors() {
+    mysql_fixture::mysql_container();
+    let _db_guard = mysql_fixture::db_lock();
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("file.pdf");
     std::fs::write(&file, b"same").unwrap();
-    let db = tmp.path().join("cache.sqlite3");
-    let cache = CoverStatusCache::new(&db);
+    let cache = CoverStatusCache::new();
     assert!(!cache.get_or_compute(&file, &|| Ok(false)).unwrap());
     let now = std::fs::metadata(&file).unwrap().modified().unwrap();
     std::fs::File::options().write(true).open(&file).unwrap().set_modified(now + Duration::from_secs(1)).unwrap();
     assert!(cache.get_or_compute(&file, &|| Err("decode failed".into())).is_err());
     assert!(cache.get_or_compute(&file, &|| Ok(true)).unwrap());
-    assert!(CoverStatusCache::new(&db).get_or_compute(&file, &|| panic!("persisted row should be reused")).unwrap());
+    assert!(CoverStatusCache::new().get_or_compute(&file, &|| panic!("persisted row should be reused")).unwrap());
 }
 
 #[test]
-fn cache_propagates_missing_file_and_invalid_database() {
+fn cache_rejects_a_missing_file_before_opening_mysql() {
     let tmp = tempfile::tempdir().unwrap();
-    let db = tmp.path().join("bad.sqlite3");
-    std::fs::write(&db, b"not sqlite").unwrap();
-    let cache = CoverStatusCache::new(&db);
+    let cache = CoverStatusCache::new();
     assert!(cache.get_or_compute(&tmp.path().join("missing"), &|| panic!("no file")).is_err());
-    let file = tmp.path().join("present");
-    std::fs::write(&file, b"data").unwrap();
-    assert!(cache.get_or_compute(&file, &|| panic!("bad database")).is_err());
 }
 
 #[test]
@@ -174,9 +126,11 @@ fn test_unsupported_type_is_not_reported_uncovered() {
 
 #[test]
 fn test_cache_reuses_result_until_file_changes() {
+    mysql_fixture::mysql_container();
+    let _db_guard = mysql_fixture::db_lock();
     let tmp = tempfile::tempdir().unwrap();
     let pdf = make_pdf(&tmp.path().join("a.pdf"), Some((690, 1600)));
-    let cache = CoverStatusCache::new(&tmp.path().join(".cover_cache").join("status.sqlite3"));
+    let cache = CoverStatusCache::new();
     let calls = AtomicUsize::new(0);
 
     let compute = || {
@@ -229,7 +183,10 @@ fn names(items: &[(CoverBook, String)]) -> Vec<&str> {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn test_uncovered_page_collects_across_scan_pages_and_keeps_scan_cursor() {
+    mysql_fixture::mysql_container();
+    let _db_guard = mysql_fixture::db_lock();
     let tmp = tempfile::tempdir().unwrap();
     let covered = book("covered.pdf", tmp.path(), (480, 623));
     let plain1 = book("plain1.pdf", tmp.path(), (690, 1600));
@@ -247,7 +204,10 @@ async fn test_uncovered_page_collects_across_scan_pages_and_keeps_scan_cursor() 
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn test_uncovered_page_ends_when_list_ends() {
+    mysql_fixture::mysql_container();
+    let _db_guard = mysql_fixture::db_lock();
     let tmp = tempfile::tempdir().unwrap();
     let covered = book("covered.pdf", tmp.path(), (480, 623));
     let (pager, _cursors) = scripted(vec![(vec![(covered, String::new())], 1, None, None)]);
@@ -260,7 +220,10 @@ async fn test_uncovered_page_ends_when_list_ends() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn test_uncovered_page_stops_at_budget_even_without_items() {
+    mysql_fixture::mysql_container();
+    let _db_guard = mysql_fixture::db_lock();
     let tmp = tempfile::tempdir().unwrap();
     let covered = book("covered.pdf", tmp.path(), (480, 623));
     let (pager, cursors) = scripted(vec![(vec![(covered.clone(), String::new())], 9, Some("c1".into()), None), (vec![(covered, String::new())], 9, Some("c2".into()), None)]);
@@ -274,7 +237,10 @@ async fn test_uncovered_page_stops_at_budget_even_without_items() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn test_uncovered_page_stops_at_page_cap_and_returns_resume_cursor() {
+    mysql_fixture::mysql_container();
+    let _db_guard = mysql_fixture::db_lock();
     let tmp = tempfile::tempdir().unwrap();
     let covered = book("covered.pdf", tmp.path(), (480, 623));
     let (pager, cursors) = scripted(vec![
@@ -363,14 +329,25 @@ fn test_epub_is_judged_by_cover_metadata() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn uncovered_http_uses_real_book_and_comic_managers() {
     use backend::main::{AppDeps, AuthMode, app_with};
+    common::setup_env();
+    tokio::task::spawn_blocking(mysql_fixture::mysql_container).await.unwrap();
+    let _db_guard = mysql_fixture::db_lock();
     for prefix in ["", "/comics"] {
-        let tmp = tempfile::tempdir().unwrap();
-        let covered = book("covered.pdf", tmp.path(), (480, 623));
-        let plain = book("plain.pdf", tmp.path(), (690, 1600));
+        let book_root = CoverBook::path_prefix();
+        let tmp = tempfile::tempdir_in(&book_root).unwrap();
+        let make = |name: &str, size: (u32, u32)| {
+            let path = tmp.path().join(name);
+            make_pdf(&path, Some(size));
+            let relative = path.strip_prefix(&book_root).unwrap();
+            CoverBook::new(1, &json!({"category":"", "title":name, "author":"", "file_path":relative, "file_type":"pdf", "file_size":0, "updated_time":"2026-01-01T00:00:00"}), 0.0)
+        };
+        let covered = make("covered.pdf", (480, 623));
+        let plain = make("plain.pdf", (690, 1600));
         let (pager, _) = scripted(vec![(vec![(covered, String::new()), (plain, "작품 제목".into())], 2, None, None)]);
-        let managers = deps(tmp.path()).with_cover_books_pager(pager);
+        let managers = deps(&book_root).with_cover_books_pager(pager);
         let deps = AppDeps::new(AuthMode::Fixed(json!({"role":"admin"})));
         let deps = if prefix.is_empty() {
             deps.with_book_manager(Arc::new(BookManager::with_deps(managers)))
@@ -385,7 +362,7 @@ async fn uncovered_http_uses_real_book_and_comic_managers() {
         assert_eq!(body["total"], serde_json::Value::Null);
         assert_eq!(body["result"].as_array().unwrap().len(), 1);
         assert_eq!(body["result"][0]["title"], "plain.pdf");
-        assert_eq!(body["result"][0]["file_path"], "plain.pdf");
+        assert_eq!(body["result"][0]["file_path"], tmp.path().strip_prefix(&book_root).unwrap().join("plain.pdf").to_string_lossy().as_ref());
         assert_eq!(body["result"][0]["display_title"], "작품 제목");
         assert_eq!(body["next_cursor"], serde_json::Value::Null);
     }

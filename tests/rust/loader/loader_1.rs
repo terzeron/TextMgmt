@@ -1,9 +1,12 @@
+#![allow(clippy::type_complexity)]
+
 //! 원본: tests/test_loader.py (전반부)
 //!
 //! 이 파일이 가정하는 API (실제 crate에 없는 것만, 이름은 Python 원본을 따른다):
 //! - dev-dependency: `encoding_rs` (cp949/cp1252 바이트 만들기)
+//!
 //! 설계: docs/rust-test-seams.md 3.12, 3.13, 4.2. loader/doc_reader의 `_with`는 `*_with(args, &XxxHooks)` 구조체 하나로 통일했다(loader_2.rs와 같은 이름·필드).
-//! 훅은 모두 `Option<&dyn Fn(..)>` 필드이고 `Default`로 안 쓰는 훅을 생략한다.
+//!   훅은 모두 `Option<&dyn Fn(..)>` 필드이고 `Default`로 안 쓰는 훅을 생략한다.
 //! - `doc_reader::text::{TextHooks, read_from_text_with(&Path, &TextHooks) -> (TextRead, Option<String>),
 //!   reencode_text_file_to_utf8_with(&Path, dry_run, backup_dir, relative, &TextHooks) -> Reencode}`
 //!   `TextHooks { detect (chardet 대체), write_backup (백업 쓰기 대체), read_bytes (원본 읽기와 저장 후 재읽기 대체), .. }`.
@@ -12,7 +15,7 @@
 //! - `doc_reader::pdf::{FastCountHooks, fast_page_count_with(&Path, &FastCountHooks) -> Option<usize>}` xref 해석 바꿔치기 자리.
 //!   `FastCountHooks { find_xref_offset, parse_one_xref_stream, xref_stream_find_entry, read_from_obj_stream }`. 구 `XrefOps`를 흡수한다
 //! - `doc_reader::pdf::{PdftotextHooks, pdf_text_by_pdftotext_with(&Path, &PdftotextHooks) -> (String, usize)}`
-//!   `PdftotextHooks { which: Fn() -> Option<PathBuf>, run: Fn(&Path, &Path) -> Option<(i32, Vec<u8>)> }`. 구 `Pdftotext`/`PdftotextEnv`를 대체한다. `Pdftotext`가 하던 which 캐시와 `-l` 명령줄은 훅에서 보이지 않는다
+//!   `PdftotextHooks { which: Fn() -> Option<PathBuf>, run: Fn(&[String]) -> Option<(i32, Vec<u8>)>, path_cache: OnceLock }`. 구 `Pdftotext`/`PdftotextEnv`를 대체한다.
 //! - `doc_reader::epub::{read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using}` zip 직접 추출 경로
 //! - `doc_reader::office::find_libreoffice_with(which, exists)` PATH 조회와 파일 존재 확인 바꿔치기 자리
 //! - `loader::flow::get_file_list(path, recursive, num_files: Option<usize>) -> Vec<PathBuf>`, `loader::flow::read_files(cfg, path, runner, stat) -> HashMap<i64, Value>` 원본의 `Loader.get_file_list` / `Loader.read_files`
@@ -25,6 +28,7 @@ use std::fs;
 use std::io::{self, Write as _};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -35,19 +39,188 @@ use doc_reader::markup::{count_lines, read_from_html};
 use doc_reader::mojibake::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, is_usable_text};
 use doc_reader::office::{convert_with_libreoffice, find_libreoffice_with, read_from_doc, read_from_hwp, read_from_image};
 use doc_reader::pdf::{
-    FastCountHooks, InProcess, PDF_PAGE_LIMIT, PDF_STAGE_TIMEOUT, PdftotextHooks, Stage, StageError, StageRunner, apply_png_predictor, collect_pages, fast_page_count, fast_page_count_with,
-    find_xref_offset, pdf_text_by_pdftotext_with, read_from_pdf, run_stage, xref_stream_find_entry,
+    FastCountHooks, InProcess, PDF_PAGE_LIMIT, PdftotextHooks, Stage, StageError, StageRunner, apply_png_predictor, collect_pages, fast_page_count, fast_page_count_with, find_xref_offset,
+    pdf_text_by_pdftotext_with, read_from_pdf, run_stage, xref_stream_find_entry,
 };
 use doc_reader::rtf::read_from_rtf_text;
-use doc_reader::text::{
-    Enc, HIGH_BYTE_PAIRED_MIN, TextHooks, TextRead, read_from_text, read_from_text_with, reencode_text_file_to_utf8, reencode_text_file_to_utf8_with,
-};
+use doc_reader::text::{Enc, HIGH_BYTE_PAIRED_MIN, TextHooks, TextRead, read_from_text, read_from_text_with, reencode_text_file_to_utf8, reencode_text_file_to_utf8_with};
 use loader::cli::print_usage;
 use loader::config::Config;
 use loader::flow::{get_file_list, read_files};
 use loader::record::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
 use serde_json::Value;
 use stat::Stat;
+
+#[test]
+fn loader_binary_dispatches_the_isbn_pdf_worker_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("not-a-pdf.pdf");
+    fs::write(&path, b"not a PDF").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_loader")).args(["__isbn-pdf-stage", "fallback"]).arg(path).output().unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "0\n\n");
+}
+
+#[test]
+fn loader_binary_dispatches_the_pdf_worker_command() {
+    let output = Command::new(env!("CARGO_BIN_EXE_loader")).arg("__pdf-stage").output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("usage: __pdf-stage"));
+}
+
+#[test]
+fn loader_binary_prints_usage_for_help_without_connecting() {
+    let output = Command::new(env!("CARGO_BIN_EXE_loader")).arg("--help").output().unwrap();
+
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("사용법:"));
+}
+
+#[test]
+fn loader_binary_reports_missing_es_environment_before_connecting() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_loader"))
+        .args(["--delete", "book"])
+        .env("TM_BOOK_DIR", dir.path())
+        .env("TM_COMICS_DIR", dir.path())
+        .env("TM_ES_BOOK_INDEX", "books")
+        .env_remove("TM_ES_URL")
+        .env_remove("TM_ES_USER")
+        .env_remove("TM_ES_PASSWORD")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(255));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("TM_ES_URL"));
+}
+
+#[test]
+fn loader_binary_retries_es_connection_then_deletes_a_missing_index() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let dir = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        for status in [503, 200, 404, 200, 404] {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0; 1024];
+            loop {
+                let read = stream.read(&mut chunk).unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+                let Some(headers_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..headers_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().ok()).flatten()
+                    })
+                    .unwrap_or(0);
+                if request.len() >= headers_end + 4 + content_length {
+                    break;
+                }
+            }
+            let (reason, body) = match status {
+                200 => ("OK", r#"{"ok":true}"#),
+                404 => ("Not Found", r#"{"error":"missing"}"#),
+                _ => ("Service Unavailable", r#"{"error":"retry"}"#),
+            };
+            write!(stream, "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        }
+    });
+
+    let output = Command::new(env!("CARGO_BIN_EXE_loader"))
+        .args(["--delete", "book"])
+        .env("TM_BOOK_DIR", dir.path())
+        .env("TM_COMICS_DIR", dir.path())
+        .env("TM_ES_URL", format!("http://{address}"))
+        .env("TM_ES_USER", "test")
+        .env("TM_ES_PASSWORD", "test")
+        .env("TM_ES_BOOK_INDEX", "books")
+        .env_remove("TM_ES_CA_CERT")
+        .output()
+        .unwrap();
+    server.join().unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("가 존재하지 않습니다"));
+}
+
+fn pdf_with_text(text: &str) -> Vec<u8> {
+    let content = format!("BT /F1 12 Tf 72 700 Td ({text}) Tj ET");
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend(format!("{} 0 obj\n{object}\nendobj\n", index + 1).bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
+    for offset in offsets {
+        pdf.extend(format!("{offset:010} 00000 n \n").bytes());
+    }
+    pdf.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
+    pdf
+}
+
+#[test]
+fn read_file_passes_the_worker_to_isbn_extraction() {
+    struct EmptySummaryRunner(PathBuf);
+
+    impl StageRunner for EmptySummaryRunner {
+        fn run(&self, _stage: Stage, _path: &Path) -> Result<(String, usize), StageError> {
+            Ok((String::new(), 1))
+        }
+
+        fn worker_executable(&self) -> Option<&Path> {
+            Some(&self.0)
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let books = dir.path().join("books");
+    let comics = dir.path().join("comics");
+    let category = books.join("A");
+    fs::create_dir_all(&category).unwrap();
+    fs::create_dir_all(&comics).unwrap();
+    let path = category.join("book.pdf");
+    fs::write(&path, pdf_with_text("ISBN 9788994492032")).unwrap();
+    let cfg = Config::new(&books, &comics);
+    let runner = EmptySummaryRunner(PathBuf::from(env!("CARGO_BIN_EXE_loader")));
+
+    let result = read_file(&cfg, &path, None, false, None, &runner, &Stat::new());
+
+    assert_eq!(result.item.unwrap().1["isbn"], "9788994492032");
+}
+
+#[test]
+fn loader_isbn_pdf_worker_extracts_text_through_the_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("book.pdf");
+    fs::write(&path, pdf_with_text("ISBN 9788994492032")).unwrap();
+
+    let isbns = isbn::extract_default_with_worker(&path, None, Path::new(env!("CARGO_BIN_EXE_loader")));
+
+    assert_eq!(isbns, ["9788994492032"]);
+}
 use zip::write::SimpleFileOptions;
 
 // ---- 공통 헬퍼 ------------------------------------------------------------------------------
@@ -149,7 +322,7 @@ fn write_zip(path: &Path, members: &[(&str, &[u8])]) {
     zw.finish().unwrap();
 }
 
-const CONTAINER_XML: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf"/></rootfiles></container>"#;
+const CONTAINER_XML: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
 const SIMPLE_OPF: &str = r#"<package><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
 
 /// mimetype 없이 container/opf/ch1만 가진 최소 EPUB.
@@ -521,8 +694,8 @@ mod test_read_from_epub {
         let epub = d.path().join("book.epub");
         write_simple_epub(&epub, "테스트 내용입니다");
         // read_from_epub_with_extracting_zip 직접 테스트
-        let (summary, _line_count) = read_from_epub_with_extracting_zip(&epub);
-        assert!(summary.contains("테스트"));
+        let read = read_from_epub_with_extracting_zip(&epub);
+        assert!(read.summary.contains("테스트"));
     }
 
     #[test]
@@ -530,9 +703,9 @@ mod test_read_from_epub {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("bad.epub");
         write(&f, "not a zip");
-        let (summary, line_count) = read_from_epub_with_extracting_zip(&f);
-        assert_eq!(summary, "");
-        assert_eq!(line_count, 0);
+        let read = read_from_epub_with_extracting_zip(&f);
+        assert_eq!(read.summary, "");
+        assert_eq!(read.line_count, 0);
     }
 
     #[test]
@@ -540,12 +713,11 @@ mod test_read_from_epub {
         let d = tempfile::tempdir().unwrap();
         let epub = d.path().join("nocontainer.epub");
         write_zip(&epub, &[("META-INF/container.xml", b"<container></container>")]);
-        let (summary, _) = read_from_epub_with_extracting_zip(&epub);
-        assert_eq!(summary, "");
+        let read = read_from_epub_with_extracting_zip(&epub);
+        assert_eq!(read.summary, "");
     }
 
     #[test]
-    #[ignore = "mock.patch: utils.loader.BeautifulSoup이 예외를 던지게 바꾼다; DI 설계 후 활성화"]
     fn test_read_epub_chapter_exception_is_skipped() {
         let d = tempfile::tempdir().unwrap();
         let epub = d.path().join("chapter-error.epub");
@@ -917,11 +1089,18 @@ struct FakeEnv {
     stdout: Vec<u8>,
     which_calls: Mutex<Vec<String>>,
     commands: Mutex<Vec<Vec<String>>>,
+    path_cache: std::sync::OnceLock<Option<PathBuf>>,
 }
 
 impl FakeEnv {
     fn new(which_result: Option<&str>, stdout: &str) -> Self {
-        FakeEnv { which_result: which_result.map(PathBuf::from), stdout: stdout.as_bytes().to_vec(), which_calls: Mutex::new(Vec::new()), commands: Mutex::new(Vec::new()) }
+        FakeEnv {
+            which_result: which_result.map(PathBuf::from),
+            stdout: stdout.as_bytes().to_vec(),
+            which_calls: Mutex::new(Vec::new()),
+            commands: Mutex::new(Vec::new()),
+            path_cache: std::sync::OnceLock::new(),
+        }
     }
 
     /// `PdftotextHooks.which`. 원본은 `shutil.which("pdftotext")`를 기록한다.
@@ -930,17 +1109,17 @@ impl FakeEnv {
         self.which_result.clone()
     }
 
-    /// `PdftotextHooks.run`. (실행 파일, PDF 경로)만 받으므로 `-l` 같은 나머지 인자는 기록하지 못한다.
-    fn run(&self, bin: &Path, pdf: &Path) -> Option<(i32, Vec<u8>)> {
-        self.commands.lock().unwrap().push(vec![bin.to_string_lossy().into_owned(), pdf.to_string_lossy().into_owned()]);
+    /// `PdftotextHooks.run`. Python subprocess와 같이 전체 인자 목록을 기록한다.
+    fn run(&self, argv: &[String]) -> Option<(i32, Vec<u8>)> {
+        self.commands.lock().unwrap().push(argv.to_vec());
         Some((0, self.stdout.clone()))
     }
 
     /// `pdf_text_by_pdftotext_with`를 이 환경으로 호출한다.
     fn text(&self, pdf: &Path) -> (String, usize) {
         let which = || self.which();
-        let run = |bin: &Path, pdf: &Path| self.run(bin, pdf);
-        let hooks = PdftotextHooks { which: Some(&which), run: Some(&run) };
+        let run = |argv: &[String]| self.run(argv);
+        let hooks = PdftotextHooks { which: Some(&which), run: Some(&run), path_cache: &self.path_cache };
         pdf_text_by_pdftotext_with(pdf, &hooks)
     }
 }
@@ -1626,7 +1805,6 @@ mod test_pdf_extraction_cost {
     }
 
     #[test]
-    #[ignore = "mock.patch: subprocess.run (pdftotext CLI); PdftotextHooks.run이 (&Path, &Path)만 받아 -l 인자를 볼 수 없음, run 시그니처 확정 후 활성화"]
     fn test_pdftotext_is_page_limited() {
         // pdftotext에 -l 옵션이 붙어 전체 문서를 뽑지 않아야 한다.
         let d = tempfile::tempdir().unwrap();
@@ -1643,7 +1821,6 @@ mod test_pdf_extraction_cost {
     }
 
     #[test]
-    #[ignore = "mock.patch: shutil.which / subprocess.run (pdftotext CLI); pdf_text_by_pdftotext_with는 호출 사이에 which를 캐시하지 않음, 캐시 위치 확정 후 활성화"]
     fn test_pdftotext_path_is_cached() {
         // pdftotext binary 탐색은 파일마다 반복하지 않아야 한다.
         let d = tempfile::tempdir().unwrap();
@@ -1792,19 +1969,18 @@ mod test_pdf_parser_timeout {
     }
 
     #[test]
-    #[ignore = "mock.patch: pdfplumber.open이 멈추게 바꾸고 time_limit(SIGALRM)으로 끊는다; DI 설계 후 활성화"]
-    fn test_pdfplumber_leaves_no_open_handle_on_timeout() {
-        // 타임아웃이 열기 도중에 터져도 fd가 GC까지 남으면 안 된다.
+    fn test_pdfplumber_leaves_no_open_handle_after_parse_failure() {
+        // parser 실패 뒤 fd가 GC까지 남으면 안 된다.
         let d = tempfile::tempdir().unwrap();
         let pdf = d.path().join("leak.pdf");
         write(&pdf, b"%PDF-1.4 not really a pdf");
         assert!(open_fds_ending_with("leak.pdf").is_empty());
 
-        // 열기에서 멈추게 만들 자리가 없어, 실제 plumber 단계가 손상 파일을 만난 뒤의 fd를 본다.
+        // Python의 mock.patch 대신 실제 Rust plumber 단계가 손상 파일을 읽은 뒤를 확인한다.
         let _ = run_stage(Stage::Plumber, &pdf);
 
         let left = open_fds_ending_with("leak.pdf");
-        assert!(left.is_empty(), "타임아웃 후 파일 핸들이 남아 있음: {left:?}");
+        assert!(left.is_empty(), "parser 실패 뒤 파일 핸들이 남아 있음: {left:?}");
     }
 
     #[test]
@@ -1849,7 +2025,6 @@ mod test_file_type_detection {
     }
 
     #[test]
-    #[ignore = "mock.patch: Loader._zip_container_type이 호출되는지 기록한다; ReadHooks.inspect가 read_file_with_hooks의 확장자 판별 경로에서 쓰이는지 확인 후 활성화"]
     fn test_zip_based_extension_is_not_inspected_deeper() {
         // 정상 epub/cbz/docx는 내용물을 열지 않아야 한다 (비용 0 유지).
         let d = tempfile::tempdir().unwrap();
@@ -2543,8 +2718,6 @@ fn padded_pdf(parts: &[(usize, &[u8])]) -> Vec<u8> {
 }
 
 const XREF_DICT: &[u8] = b"<< /Type /XRef /Root 1 0 R >>";
-const DECODED: (Vec<u8>, [usize; 3], Vec<i64>, Option<i64>) = (Vec::new(), [1, 2, 1], Vec::new(), None);
-
 fn parsed(index: &[i64]) -> Option<(Vec<u8>, [usize; 3], Vec<i64>, Option<i64>)> {
     Some((b"decoded".to_vec(), [1, 2, 1], index.to_vec(), None))
 }
@@ -2641,7 +2814,7 @@ mod test_read_from_epub_edge_cases {
         // ch1.xhtml intentionally corrupt
         write_zip(&epub, &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", container.as_bytes()), ("content.opf", opf.as_bytes()), ("ch1.xhtml", b"\x00\x01\x02\x03")]);
         // Python의 isinstance(result, str)은 타입으로 보장된다. 패닉 없이 끝나는지만 본다.
-        let (_result, _line_count) = read_from_epub_with_extracting_zip(&epub);
+        let _read = read_from_epub_with_extracting_zip(&epub);
     }
 
     #[test]

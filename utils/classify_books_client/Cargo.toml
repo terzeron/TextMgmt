@@ -15,6 +15,7 @@ name = "client"
 path = "../../tests/rust/classify_books_client/client.rs"
 
 [dependencies]
+backend = { path = "../../backend" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 ureq.workspace = true

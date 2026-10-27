@@ -82,7 +82,17 @@ fn danger(output: &str) -> Option<String> {
         }
     }
     // 속성 값은 엔티티와 공백·제어 문자를 접어서 `jav&#x09;ascript:` 같은 우회도 잡는다. 텍스트 안의 언급은 걸리지 않게 `="`/`='` 뒤만 본다.
-    let folded: String = output.to_lowercase().replace("&#x09;", "").replace("&#9;", "").replace("&#x0a;", "").replace("&#10;", "").replace("&tab;", "").replace("&newline;", "").chars().filter(|c| !c.is_whitespace() && !c.is_control()).collect();
+    let folded: String = output
+        .to_lowercase()
+        .replace("&#x09;", "")
+        .replace("&#9;", "")
+        .replace("&#x0a;", "")
+        .replace("&#10;", "")
+        .replace("&tab;", "")
+        .replace("&newline;", "")
+        .chars()
+        .filter(|c| !c.is_whitespace() && !c.is_control())
+        .collect();
     for needle in ["=\"javascript:", "='javascript:", "=javascript:", "=\"vbscript:", "=\"data:text/html", "expression("] {
         if folded.contains(needle) {
             return Some(format!("{needle} 이(가) 남았다"));
@@ -169,7 +179,9 @@ fn links_keep_only_in_page_anchors_and_get_a_safe_rel() {
 
 #[test]
 fn external_resources_are_not_loaded() {
-    for html in ["<img src=\"http://evil.test/t.png\">", "<img src=\"//evil.test/t.png\">", "<link rel=stylesheet href=\"http://evil.test/a.css\">", "<video poster=\"https://evil.test/p.png\"></video>"] {
+    for html in
+        ["<img src=\"http://evil.test/t.png\">", "<img src=\"//evil.test/t.png\">", "<link rel=stylesheet href=\"http://evil.test/a.css\">", "<video poster=\"https://evil.test/p.png\"></video>"]
+    {
         let out = sanitize(html);
         assert!(!out.contains("evil.test"), "입력 {html:?} -> 출력 {out:?}");
     }

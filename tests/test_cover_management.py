@@ -1467,3 +1467,21 @@ def test_insert_illustration_rejects_malformed_base64_without_changing_book(tmp_
         CoverManagement(tmp_path).insert_illustration("book.epub", inspect_epub(path)["revision"], "chapter", image_data=image_data)
     assert path.read_bytes() == original
     assert not (tmp_path / ".cover_backups").exists()
+
+
+def test_edit_images_rejects_insert_without_image_or_url(tmp_path):
+    from backend.cover_management import CoverManagement
+    from backend.epub_cover import CoverError, inspect_epub
+
+    path = make_epub(tmp_path / "book.epub", cover=True)
+    manager = CoverManagement(tmp_path)
+
+    with pytest.raises(CoverError, match="이미지 URL이 비어 있습니다"):
+        manager.edit_images(
+            "book.epub",
+            inspect_epub(path)["revision"],
+            crops=[],
+            splits=[],
+            deletes=[],
+            inserts=[{"before_idref": "chapter"}],
+        )

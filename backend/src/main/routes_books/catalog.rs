@@ -60,12 +60,10 @@ fn is_hidden(category: &str, hidden: &[String]) -> bool {
 fn ensure_allowed(category: &str, hidden: &[String]) -> ApiResult<()> {
     if is_hidden(category, hidden) { Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다.")) } else { Ok(()) }
 }
-fn book_json(book: &Book, manager: &dyn BookManagerApi) -> Value {
-    let mut value = book.dict();
-    if let Ok(relative) = book.file_path.strip_prefix(manager.path_prefix()) {
-        value["file_path"] = json!(relative);
-    }
-    value
+pub(super) fn book_json(book: &Book, manager: &dyn BookManagerApi) -> Value {
+    let manager_prefix = manager.path_prefix();
+    let prefix = if !manager_prefix.as_os_str().is_empty() && book.file_path.starts_with(&manager_prefix) { manager_prefix } else { Book::path_prefix() };
+    book.dict_with_prefix(&prefix)
 }
 fn books_json(books: &[Book], manager: &dyn BookManagerApi) -> Vec<Value> {
     books.iter().map(|b| book_json(b, manager)).collect()

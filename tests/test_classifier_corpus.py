@@ -16,6 +16,7 @@ from backend.classifier.corpus import (
     collect,
     fetch_by_inode,
     fetch_by_path,
+    is_trainable,
     scan_documents,
 )
 
@@ -113,6 +114,11 @@ def test_fetch_by_path_uses_explicit_index():
     es = FakeES(search_result={"hits": {"hits": []}})
     fetch_by_path(es, "x", index="other")
     assert es.calls[0]["index"] == "other"
+
+
+def test_is_trainable_supports_python_lookahead_label_pattern():
+    doc = {"cat": "3_무협", "text": "본문", "id": "1"}
+    assert is_trainable(doc, 1, [], label_pattern=r"^[1-9]_(?=.*무협)")
 
 
 def test_collect_writes_only_trainable_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

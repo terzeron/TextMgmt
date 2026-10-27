@@ -308,6 +308,16 @@ def test_search_by_id_not_found():
     assert manager.search_by_id(1) == {}
 
 
+def test_search_by_id_propagates_unexpected_errors():
+    class FailingGetES(DummyES):
+        def get(self, index: str, id: str):
+            raise RuntimeError("backend unavailable")
+
+    manager = make_manager(FailingGetES())
+    with pytest.raises(RuntimeError, match="backend unavailable"):
+        manager.search_by_id(1)
+
+
 def test_aggregate_grouped_delete_insert_update_counts():
     es = DummyES()
     manager = make_manager(es)
@@ -439,6 +449,23 @@ def test_count_by_categories_handles_msearch_error():
     manager = make_manager(es)
     es.msearch = lambda searches: {"responses": [{"error": "boom"}, {"hits": {"total": {"value": 2}}}]}
     assert manager.count_by_categories(["A", "B"]) == {"A": 0, "B": 2}
+
+
+def test_count_by_categories_builds_prefix_queries_for_multiple_categories():
+    es = DummyES()
+    manager = make_manager(es)
+    captured = {}
+
+    def msearch(searches):
+        captured["searches"] = searches
+        return {"responses": [{"hits": {"total": {"value": 4}}}, {"hits": {"total": {"value": 6}}}]}
+
+    es.msearch = msearch
+    assert manager.count_by_categories(["A", "B"], prefix=True) == {"A": 4, "B": 6}
+    searches = captured["searches"]
+    for position, category in [(1, "A"), (3, "B")]:
+        query = searches[position]["query"]
+        assert query["bool"]["should"] == [{"term": {"category": category}}, {"prefix": {"category": f"{category}/"}}]
 
 
 def test_delete_returns_false_when_not_deleted():

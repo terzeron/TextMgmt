@@ -1303,6 +1303,33 @@ def test_main_routes_basic(dummy_client):
     assert resp.json()["status"] == "success"
 
 
+def test_get_books_in_category_paged_route_handles_success_and_error(dummy_client, monkeypatch):
+    from backend import main as main_mod
+
+    manager = main_mod.book_manager._instance
+    item = DummyBook({"book_id": 7, "category": "A", "title": "T", "author": "U", "file_path": "a.txt", "file_type": "txt", "file_size": 1, "line_count": 0, "page_count": 0, "isbn": "", "updated_time": "2024-01-01T00:00:00.000000", "score": 1.0})
+
+    async def paged_success(category, size, cursor):
+        assert (category, size, cursor) == ("A", 2, "start")
+        return [item], 1, "next", None
+
+    monkeypatch.setattr(manager, "get_books_in_category_paged", paged_success, raising=False)
+    response = dummy_client.get("/categories/A?limit=2&cursor=start")
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    assert response.json()["total"] == 1
+    assert response.json()["next_cursor"] == "next"
+    assert response.json()["result"][0]["book_id"] == 7
+
+    async def paged_failure(category, size, cursor):
+        return [], 0, None, "invalid cursor"
+
+    monkeypatch.setattr(manager, "get_books_in_category_paged", paged_failure)
+    response = dummy_client.get("/categories/A?limit=2&cursor=bad")
+    assert response.status_code == 200
+    assert response.json() == {"status": "failure", "error": "invalid cursor"}
+
+
 def test_viewer_hidden_category_access_control_routes(dummy_client, monkeypatch):
     from backend import main as main_mod
 

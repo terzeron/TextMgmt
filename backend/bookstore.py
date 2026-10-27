@@ -945,7 +945,7 @@ class JoaraBookstore(AbstractBookstore):
     BASE_URL = "https://www.joara.com"
     API_URL = "https://api.joara.com/v2/search/query"
     # 웹 클라이언트가 쓰는 공개 키다. 번들(main.*.chunk.js)에 그대로 박혀 있다.
-    API_KEY = "mw_8ba234e7801ba288554ca07ae44c7"
+    API_KEY = "*********************"
     SUPPORTS_ISBN_SEARCH = False  # 조아라 연재물에는 ISBN 이 없다
 
     def build_search_url(self, keyword: str) -> str:

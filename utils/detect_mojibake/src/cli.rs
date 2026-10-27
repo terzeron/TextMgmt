@@ -140,3 +140,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
 "
     )
 }
+
+#[cfg(test)]
+#[path = "../../../tests/rust/detect_mojibake/cli_unit.rs"]
+mod tests;

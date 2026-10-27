@@ -51,6 +51,20 @@ fn stream_errors_on_underflow_negative_skip_and_overflow() {
     assert_eq!(StreamError("x".into()).to_string(), "x");
 }
 
+#[test]
+fn stream_skip_of_i64_max_returns_error_without_overflowing() {
+    let mut stream = HwpStream::new(vec![0]);
+    stream.read_uint8().unwrap();
+    assert!(stream.skip(i64::MAX).is_err());
+}
+
+#[test]
+fn stream_read_bytes_of_usize_max_returns_error_without_overflowing() {
+    let mut stream = HwpStream::new(vec![0; 2]);
+    stream.read_uint8().unwrap();
+    assert!(stream.read_bytes(usize::MAX).is_err());
+}
+
 // ---- safe_chr ----
 
 #[test]
@@ -76,6 +90,20 @@ fn hnc_codes_map_by_range() {
     assert_eq!(hnc_to_unicode(0x7E), "~");
     assert_eq!(hnc_to_unicode(0x1F), hnc_to_unicode(0x1F));
     assert!(hnc_to_unicode(0x4000).chars().count() <= 1);
+}
+
+#[test]
+fn every_hnc_code_matches_the_python_conversion_table() {
+    // Python golden: every u16 passed through _hnc_to_unicode; lone surrogates
+    // are represented by the Rust parser's internal sentinel before UTF-8 hashing.
+    let mut hash = 0xcbf29ce484222325u64;
+    for code in 0..=u16::MAX {
+        for byte in hnc_to_unicode(code).bytes().chain(std::iter::once(0xff)) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    assert_eq!(hash, 0x2ecc897d0738d928);
 }
 
 #[test]

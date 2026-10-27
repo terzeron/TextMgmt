@@ -10,17 +10,17 @@
 //! 3. 모델 디렉토리가 없거나 읽히지 않으면 분류기 없이 키워드만 쓴다. 이유는 경고 로그로 한 번만 남긴다.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 
 use super::util::relative_to;
 use super::{BookManager, ProgressFn};
 use crate::book_classifier::{BookClassifierService, SharedBookClassifier};
-use crate::classifier::model::{CategoryModel, CategoryModelApi, model_path};
+use crate::classifier::model::{CategoryModelApi, get_default_model, model_path};
 use crate::classifier::{BookCategoryClassifier, BookClassifierApi, ClassifierOptions, ModelOnlyClassifier};
 use crate::es_manager::Docs;
 
@@ -29,10 +29,11 @@ const PROPOSAL_PLACEHOLDER_CHUNK: usize = 500;
 /// 모델 단독 판정을 '확실'로 볼 최소 확신도. `BookClassifierService.MODEL_TRUST_MIN_CONFIDENCE`와 같다.
 pub const MODEL_CERTAIN_MIN_CONFIDENCE: f64 = 0.10;
 
-
 /// `propose_category_changes` 옵션. `None`은 Python 기본값(`use_bookstore=True`, `use_content_meta=True`)이다.
 #[derive(Default)]
 pub struct ProposeOptions<'a> {
+    pub content_type: Option<&'a str>,
+    pub delay: Option<f64>,
     pub use_bookstore: Option<bool>,
     pub use_content_meta: Option<bool>,
     pub on_progress: Option<ProgressFn<'a>>,
@@ -90,7 +91,8 @@ fn mappings_from_value(mappings: &Value) -> Vec<(Value, Vec<Value>)> {
 }
 
 fn normalize_text(value: &str) -> String {
-    value.to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+    let folded = pyfmt::py_casefold(value);
+    folded.split(crate::classifier::tokenize::is_py_space).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 fn candidate(category: &str, source: &str, detail: String) -> Value {
@@ -398,9 +400,8 @@ impl BookManager {
     /// `classify_file`의 항목에서 분류 결과를 읽는다.
     fn classification_of(classifier: &dyn BookClassifierApi, file_path: &Path) -> Classification {
         let (category, method, reason, entry) = classifier.classify_file(file_path);
-        let pairs = |key: &str| -> Vec<(String, Value)> {
-            entry.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.clone()))).collect()
-        };
+        let pairs =
+            |key: &str| -> Vec<(String, Value)> { entry.get(key).and_then(Value::as_array).into_iter().flatten().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.clone()))).collect() };
         Classification {
             category,
             method,
@@ -413,7 +414,15 @@ impl BookManager {
     }
 
     /// 한 파일의 제안 목적지와 등급을 만든다. 파일을 옮기지 않는다. `classifier`가 없으면 키워드만 쓴다.
-    pub fn _propose_category_for_file(&self, file_path: &Path, source_category: &str, mappings: &[(Value, Vec<Value>)], classifier: &dyn BookClassifierApi, _use_bookstore: bool, _use_content_meta: bool) -> Value {
+    pub fn _propose_category_for_file(
+        &self,
+        file_path: &Path,
+        source_category: &str,
+        mappings: &[(Value, Vec<Value>)],
+        classifier: &dyn BookClassifierApi,
+        _use_bookstore: bool,
+        _use_content_meta: bool,
+    ) -> Value {
         self.propose_category_for_file(file_path, source_category, mappings, Some(classifier))
     }
 
@@ -489,7 +498,7 @@ impl BookManager {
             return (json!({}), Some(format!("디렉토리를 찾을 수 없습니다: {category}")));
         }
 
-        let content_type = "book";
+        let content_type = options.content_type.unwrap_or("book");
         let (use_bookstore, use_content_meta) = (options.use_bookstore.unwrap_or(true), options.use_content_meta.unwrap_or(true));
         let empty = json!({});
         let mappings = mappings.unwrap_or(&empty);
@@ -502,7 +511,7 @@ impl BookManager {
         if let Some(service) = &service {
             service.begin_request();
         }
-        let service_call = service.as_ref().map(|s| s.call(&self.category_dir(category), use_bookstore, use_content_meta));
+        let service_call = service.as_ref().map(|s| s.call_with_delay(&self.category_dir(category), use_bookstore, use_content_meta, options.delay));
         let classifier: Option<&dyn BookClassifierApi> = match (&model_only, &service_call) {
             (Some(m), _) => Some(m),
             (None, Some(c)) => Some(c),
@@ -826,10 +835,10 @@ impl BookManager {
 /// 환경변수 `TM_CLASSIFIER_MODEL_DIR` 의 모델로 기본 서비스를 만든다. 모델이 없거나 읽히지 않으면 경고를 한 번 남기고 `None` 이다.
 /// 로그에는 모델 경로만 남긴다. 서비스의 캐시 파일은 Python 과 같이 라이브러리 루트 아래 `classification_cache.json` 이다.
 fn default_classifier_service(library_root: &Path) -> Option<Arc<SharedBookClassifier>> {
-    let Some(model) = CategoryModel::load(None) else {
+    let Some(model) = get_default_model() else {
         log::warn!("분류 모델을 읽지 못해 분류기 없이 동작한다 (TM_CLASSIFIER_MODEL_DIR={})", model_path().display());
         return None;
     };
-    let classifier = BookCategoryClassifier::new(Some(Arc::new(model) as Arc<dyn CategoryModelApi>), ClassifierOptions { library_root: Some(library_root.to_path_buf()), ..Default::default() });
+    let classifier = BookCategoryClassifier::new(Some(model as Arc<dyn CategoryModelApi>), ClassifierOptions { library_root: Some(library_root.to_path_buf()), ..Default::default() });
     Some(Arc::new(SharedBookClassifier::new(BookClassifierService::new(library_root, None, Some(Arc::new(classifier))))))
 }

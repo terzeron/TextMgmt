@@ -3213,6 +3213,16 @@ class TestLoaderMain:
         result = loader_mod.main()
         assert result == 1
 
+    def test_main_getopt_error_exits_with_usage_code(self, monkeypatch, tmp_path):
+        self._setup_env(monkeypatch, tmp_path)
+        monkeypatch.setattr("sys.argv", ["loader", "--invalid-option", "book"])
+
+        import utils.loader as loader_mod
+
+        with pytest.raises(SystemExit) as exc:
+            loader_mod.main()
+        assert exc.value.code == 0
+
 
 # ---- HWP 버전별 실제 파일 테스트 ----
 

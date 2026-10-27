@@ -4,10 +4,14 @@
 //! 연결 수준 계약이라 `sysdeps::HttpSession`과 합치지 않는다. 연결은 DNS로 검증한 IP에만 하고, TLS 호스트명은 원래 호스트로 확인한다.
 
 use std::fmt;
-use std::net::IpAddr;
+use std::io::Read;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
+use std::time::Duration;
 
 use crate::cover_sources::urlx::{Netloc, urljoin, urlsplit};
 use crate::cover_sources::{is_global, system_resolve};
+use sysdeps::HttpTimeout;
 
 /// `backend.epub_cover.MAX_IMAGE_BYTES`와 같다.
 pub const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
@@ -45,6 +49,7 @@ pub struct ConnectRequest {
     pub server_hostname: Option<String>,
     pub assert_hostname: Option<String>,
     pub cert_reqs: Option<String>,
+    pub timeout: HttpTimeout,
 }
 
 pub trait PoolResponse {
@@ -65,16 +70,143 @@ pub trait Net {
     fn connect(&self, request: &ConnectRequest) -> Box<dyn Pool>;
 }
 
-/// 시스템 DNS를 쓰는 실제 `Net`.
-///
-/// TLS 라이브러리가 아직 이 crate에 없어 `connect`가 만든 풀은 요청마다 연결 실패를 돌려준다.
+/// 검증한 IP 하나만 ureq에 돌려주는 resolver.
+#[derive(Debug)]
+struct PinnedResolver(SocketAddr);
+
+impl ureq::unversioned::resolver::Resolver for PinnedResolver {
+    fn resolve(
+        &self,
+        _uri: &ureq::http::Uri,
+        _config: &ureq::config::Config,
+        _timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+        let mut addresses = ureq::unversioned::resolver::ResolvedSocketAddrs::from_fn(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
+        addresses.push(self.0);
+        Ok(addresses)
+    }
+}
+
+/// 시스템 DNS와 검증된 IP 고정 연결을 사용하는 실제 `Net`.
 pub struct SystemNet;
 
-struct UnconnectedPool;
+struct UreqPool {
+    agent: ureq::Agent,
+    base_url: String,
+    read_timeout: Duration,
+}
 
-impl Pool for UnconnectedPool {
-    fn urlopen(&mut self, _method: &str, _target: &str, _headers: &[(String, String)]) -> Result<Box<dyn PoolResponse>, String> {
-        Err("실제 연결 풀(TLS 포함)이 아직 연결되지 않았습니다".to_string())
+struct UreqResponse {
+    status: u16,
+    headers: ureq::http::HeaderMap,
+    body: Option<ureq::BodyReader<'static>>,
+    agent: Option<ureq::Agent>,
+    read_timeout: Duration,
+}
+
+/// ureq body deadline is total duration; this bounded reader channel resets an idle timeout per read.
+struct BodyChunks {
+    receiver: Receiver<Result<Vec<u8>, String>>,
+    agent: Option<ureq::Agent>,
+    read_timeout: Duration,
+    finished: bool,
+}
+
+impl BodyChunks {
+    fn new(body: ureq::BodyReader<'static>, agent: ureq::Agent, read_timeout: Duration) -> Self {
+        let (sender, receiver) = sync_channel(1);
+        std::thread::spawn(move || read_body_chunks(body, sender));
+        Self { receiver, agent: Some(agent), read_timeout, finished: false }
+    }
+}
+
+fn read_body_chunks(mut body: ureq::BodyReader<'static>, sender: SyncSender<Result<Vec<u8>, String>>) {
+    loop {
+        let mut chunk = vec![0; 8192];
+        match body.read(&mut chunk) {
+            Ok(0) => return,
+            Ok(size) => {
+                chunk.truncate(size);
+                if sender.send(Ok(chunk)).is_err() {
+                    return;
+                }
+            }
+            Err(error) => {
+                let _ = sender.send(Err(error.to_string()));
+                return;
+            }
+        }
+    }
+}
+
+impl Iterator for BodyChunks {
+    type Item = Result<Vec<u8>, String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+        match self.receiver.recv_timeout(self.read_timeout) {
+            Ok(chunk) => {
+                if chunk.is_err() {
+                    self.finished = true;
+                }
+                Some(chunk)
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                self.finished = true;
+                None
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                self.finished = true;
+                if let Some(agent) = self.agent.take() {
+                    agent.shutdown();
+                }
+                Some(Err("response body read timed out".to_string()))
+            }
+        }
+    }
+}
+
+impl PoolResponse for UreqResponse {
+    fn status(&self) -> u16 {
+        self.status
+    }
+
+    fn header(&self, name: &str) -> Option<String> {
+        self.headers.get(name).and_then(|value| value.to_str().ok()).map(str::to_owned)
+    }
+
+    fn stream(&mut self) -> Box<dyn Iterator<Item = Result<Vec<u8>, String>>> {
+        Box::new(BodyChunks::new(
+            self.body.take().expect("response stream can only be consumed once"),
+            self.agent.as_ref().expect("response agent is available until close").clone(),
+            self.read_timeout,
+        ))
+    }
+
+    fn close(&mut self) {
+        if let Some(agent) = self.agent.take() {
+            agent.shutdown();
+        }
+    }
+}
+
+impl Pool for UreqPool {
+    fn urlopen(&mut self, method: &str, target: &str, headers: &[(String, String)]) -> Result<Box<dyn PoolResponse>, String> {
+        let url = format!("{}{}", self.base_url, target);
+        let mut request = ureq::http::Request::builder().method(method).uri(&url).body(()).map_err(|error| error.to_string())?;
+        for (name, value) in headers {
+            if !name.eq_ignore_ascii_case("host") {
+                request.headers_mut().insert(
+                    name.parse::<ureq::http::header::HeaderName>().map_err(|error| error.to_string())?,
+                    value.parse().map_err(|error: ureq::http::header::InvalidHeaderValue| error.to_string())?,
+                );
+            }
+        }
+        let response = self.agent.run(request).map_err(|error| error.to_string())?;
+        let (parts, body) = response.into_parts();
+        Ok(Box::new(UreqResponse { status: parts.status.as_u16(), headers: parts.headers, body: Some(body.into_reader()), agent: Some(self.agent.clone()), read_timeout: self.read_timeout }))
     }
 }
 
@@ -83,8 +215,21 @@ impl Net for SystemNet {
         system_resolve(host, port)
     }
 
-    fn connect(&self, _request: &ConnectRequest) -> Box<dyn Pool> {
-        Box::new(UnconnectedPool)
+    fn connect(&self, request: &ConnectRequest) -> Box<dyn Pool> {
+        let address: SocketAddr =
+            format!("{}:{}", if request.address.contains(':') { format!("[{}]", request.address) } else { request.address.clone() }, request.port).parse().expect("validated socket address");
+        let host = request.server_hostname.as_deref().or(request.assert_hostname.as_deref()).unwrap_or(&request.address);
+        let url_host = if host.contains(':') { format!("[{host}]") } else { host.to_string() };
+        let scheme = if request.https { "https" } else { "http" };
+        let config = ureq::config::Config::builder()
+            .proxy(None)
+            .timeout_connect(Some(request.timeout.connect))
+            .timeout_recv_response(Some(request.timeout.read))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .build();
+        let agent = ureq::Agent::with_parts(config, ureq::unversioned::transport::DefaultConnector::default(), PinnedResolver(address));
+        Box::new(UreqPool { agent, base_url: format!("{scheme}://{url_host}"), read_timeout: request.timeout.read })
     }
 }
 
@@ -115,111 +260,18 @@ impl Drop for Closing {
     }
 }
 
-/// `str.encode("idna")`에 대응한다. ASCII 라벨은 길이만 검사하고, 비ASCII 라벨은 금지 문자를 거른 뒤 소문자로 바꿔 punycode로 만든다.
-/// (nameprep의 NFKC 정규화는 하지 않는다.)
+/// Python `str.encode("idna")`와 같은 transitional IDNA mapping으로 hostname을 ASCII로 바꾼다.
 fn idna_ascii(host: &str) -> Result<String, ()> {
-    let labels: Vec<&str> = host.split('.').collect();
-    let last = labels.len() - 1;
-    let mut out = Vec::new();
-    for (i, label) in labels.iter().enumerate() {
-        if label.is_empty() {
-            if i == last && labels.len() > 1 {
-                out.push(String::new());
-                continue;
-            }
+    #[allow(deprecated)]
+    let ascii = idna::Config::default().transitional_processing(true).to_ascii(host).map_err(|_| ())?;
+    let labels: Vec<_> = ascii.split('.').collect();
+    for (index, label) in labels.iter().enumerate() {
+        let root_label = index + 1 == labels.len() && label.is_empty() && labels.len() > 1;
+        if !root_label && (label.is_empty() || label.len() >= 64) {
             return Err(());
         }
-        let encoded = if label.is_ascii() {
-            (*label).to_string()
-        } else {
-            if label.chars().any(prohibited_in_label) {
-                return Err(());
-            }
-            let lowered = label.to_lowercase();
-            format!("xn--{}", punycode_encode(&lowered).ok_or(())?)
-        };
-        if encoded.len() > 63 {
-            return Err(());
-        }
-        out.push(encoded);
     }
-    Ok(out.join("."))
-}
-
-fn prohibited_in_label(c: char) -> bool {
-    let code = c as u32;
-    c.is_control()
-        || c.is_whitespace()
-        || (code & 0xfffe) == 0xfffe
-        || (0xfdd0..=0xfdef).contains(&code)
-        || (0xe000..=0xf8ff).contains(&code)
-        || code >= 0xf0000
-        || (0xfff9..=0xffff).contains(&code)
-        || (0x2028..=0x202e).contains(&code)
-}
-
-/// RFC 3492 punycode 인코딩.
-fn punycode_encode(input: &str) -> Option<String> {
-    const BASE: u32 = 36;
-    const T_MIN: u32 = 1;
-    const T_MAX: u32 = 26;
-    const SKEW: u32 = 38;
-    const DAMP: u32 = 700;
-    let digit = |d: u32| -> char { if d < 26 { (b'a' + d as u8) as char } else { (b'0' + (d - 26) as u8) as char } };
-    let adapt = |mut delta: u32, points: u32, first: bool| -> u32 {
-        delta = if first { delta / DAMP } else { delta / 2 };
-        delta += delta / points;
-        let mut k = 0;
-        while delta > ((BASE - T_MIN) * T_MAX) / 2 {
-            delta /= BASE - T_MIN;
-            k += BASE;
-        }
-        k + (BASE - T_MIN + 1) * delta / (delta + SKEW)
-    };
-    let chars: Vec<u32> = input.chars().map(|c| c as u32).collect();
-    let mut output: String = input.chars().filter(char::is_ascii).collect();
-    let basic = output.len() as u32;
-    let mut handled = basic;
-    if basic > 0 {
-        output.push('-');
-    }
-    let (mut n, mut delta, mut bias) = (128u32, 0u32, 72u32);
-    while (handled as usize) < chars.len() {
-        let m = chars.iter().copied().filter(|c| *c >= n).min()?;
-        delta = delta.checked_add((m - n).checked_mul(handled + 1)?)?;
-        n = m;
-        for &c in &chars {
-            if c < n {
-                delta = delta.checked_add(1)?;
-            }
-            if c == n {
-                let mut q = delta;
-                let mut k = BASE;
-                loop {
-                    let t = if k <= bias {
-                        T_MIN
-                    } else if k >= bias + T_MAX {
-                        T_MAX
-                    } else {
-                        k - bias
-                    };
-                    if q < t {
-                        break;
-                    }
-                    output.push(digit(t + (q - t) % (BASE - t)));
-                    q = (q - t) / (BASE - t);
-                    k += BASE;
-                }
-                output.push(digit(q));
-                bias = adapt(delta, handled + 1, handled == basic);
-                delta = 0;
-                handled += 1;
-            }
-        }
-        delta += 1;
-        n += 1;
-    }
-    Some(output)
+    Ok(ascii)
 }
 
 /// `url`의 이미지를 받는다. redirect는 최대 5번 따라가며 매번 DNS와 주소를 다시 검증한다.
@@ -248,6 +300,7 @@ pub fn fetch_url_image_with(url: &str, net: &dyn Net, max_image_bytes: usize) ->
             server_hostname: https.then(|| host.clone()),
             assert_hostname: https.then(|| host.clone()),
             cert_reqs: https.then(|| "CERT_REQUIRED".to_string()),
+            timeout: HttpTimeout::from_secs(5, 15),
         };
         let mut pool = net.connect(&request);
         let mut target = if parsed.path.is_empty() { "/".to_string() } else { parsed.path.clone() };

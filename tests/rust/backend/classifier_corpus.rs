@@ -116,6 +116,16 @@ fn test_fetch_by_path_uses_explicit_index() {
 }
 
 #[test]
+fn test_is_trainable_supports_python_lookahead_label_pattern() {
+    let matching = json!({"cat": "3_무협", "text": "본문", "id": "1"});
+    let nonmatching = json!({"cat": "3_판타지", "text": "본문", "id": "2"});
+    let pattern = fancy_regex::Regex::new(r"^[1-9]_(?=.*무협)").unwrap();
+
+    assert!(is_trainable_with(&matching, 1, &[], &pattern));
+    assert!(!is_trainable_with(&nonmatching, 1, &[], &pattern));
+}
+
+#[test]
 fn test_collect_writes_only_trainable_rows() {
     let fake_scan = |_: &Value| -> Vec<Value> {
         vec![
@@ -133,10 +143,29 @@ fn test_collect_writes_only_trainable_rows() {
     let tmp = TempDir::new().unwrap();
     let out = tmp.path().join("corpus.jsonl");
     let es = fake_es(Value::Null, Value::Null, "");
-    let stats = collect_with(&*es, &out, CollectOptions { min_chars: 10, excluded_prefixes: vec!["9_".to_string()] }, &fake_scan).unwrap();
+    let stats = collect_with(&*es, &out, CollectOptions { min_chars: 10, excluded_prefixes: vec!["9_".to_string()], index: None }, &fake_scan).unwrap();
 
     assert_eq!(stats, json!({"kept": 2, "skipped": 3, "categories": 1, "per_category": {"2_소설한국": 2}}));
     assert_eq!(fs::read_to_string(&out).unwrap().trim().lines().count(), 2);
+}
+
+#[test]
+fn test_collect_streams_each_scroll_page_to_jsonl_before_fetching_the_next() {
+    let tmp = TempDir::new().unwrap();
+    let out = tmp.path().join("corpus.jsonl");
+    let es = DummyEs::with_index("books");
+    es.on("search", |_| Ok(json!({"_scroll_id": "first-page", "hits": {"hits": [hit_with("1", "2_소설한국", "본문본문", "2_소설한국/a.epub", "epub", "")]}})));
+    let scroll_path = out.clone();
+    es.on("scroll", move |_| {
+        let rows = fs::read_to_string(&scroll_path).expect("다음 페이지 요청 전에 JSONL 파일이 열려 있어야 한다");
+        assert_eq!(rows.lines().count(), 1, "첫 페이지를 먼저 기록해야 한다");
+        Ok(json!({"hits": {"hits": []}}))
+    });
+
+    let stats = collect(&*es, &out, CollectOptions { min_chars: 1, excluded_prefixes: Vec::new(), index: None }).unwrap();
+
+    assert_eq!(stats["kept"], 1);
+    assert_eq!(fs::read_to_string(out).unwrap().lines().count(), 1);
 }
 
 #[test]
@@ -233,4 +262,65 @@ fn test_attach_publishers_logs_progress() {
     let messages = messages.lock().unwrap();
     assert!(messages.iter().any(|m| m.contains("publisher 2/4")), "messages={messages:?}");
     assert!(messages.iter().any(|m| m.contains("publisher 4/4")), "messages={messages:?}");
+}
+
+#[test]
+fn attach_publishers_streams_jsonl_and_preserves_existing_publishers() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("corpus.jsonl");
+    let cache = tmp.path().join("corpus.jsonl.publisher.json");
+    write_jsonl(
+        &[
+            json!({"id":"one","type":"epub","path":"one.epub","publisher":""}),
+            json!({"id":"two","type":"epub","path":"two.epub","publisher":"기존 출판사"}),
+            json!({"id":"three","type":"txt","path":"three.txt","publisher":""}),
+        ],
+        &path,
+    )
+    .unwrap();
+    let calls = Mutex::new(Vec::new());
+
+    let stats = attach_publishers_jsonl_with(&path, &cache, tmp.path(), 1, &|source| {
+        calls.lock().unwrap().push(source.file_name().unwrap().to_string_lossy().into_owned());
+        "새 출판사".to_owned()
+    })
+    .unwrap();
+
+    let docs = read_jsonl(&path).unwrap();
+    assert_eq!(stats, json!({"read":1,"cached":1,"with_publisher":2}));
+    assert_eq!(*calls.lock().unwrap(), ["one.epub"]);
+    assert_eq!(docs[0]["publisher"], "새 출판사");
+    assert_eq!(docs[1]["publisher"], "기존 출판사");
+    assert_eq!(docs[2]["publisher"], "");
+    assert_eq!(serde_json::from_slice::<Value>(&fs::read(&cache).unwrap()).unwrap()["one"], "새 출판사");
+}
+
+#[test]
+fn attach_publishers_streams_across_batches_and_keeps_the_cache() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("many.jsonl");
+    let cache = tmp.path().join("many.publisher.json");
+    let docs: Vec<Value> = (0..260).map(|index| json!({"id":index.to_string(),"type":"epub","path":format!("{index}.epub"),"publisher":""})).collect();
+    write_jsonl(&docs, &path).unwrap();
+
+    let stats = attach_publishers_jsonl_with(&path, &cache, tmp.path(), 2, &|_| "출판사".to_owned()).unwrap();
+
+    assert_eq!(stats, json!({"read":260,"cached":260,"with_publisher":260}));
+    let updated = read_jsonl(&path).unwrap();
+    assert_eq!(updated.len(), 260);
+    assert!(updated.iter().all(|doc| doc["publisher"] == "출판사"));
+    assert_eq!(serde_json::from_slice::<Value>(&fs::read(cache).unwrap()).unwrap().as_object().unwrap().len(), 260);
+}
+
+#[test]
+fn attach_publishers_does_not_replace_a_corpus_with_invalid_jsonl() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("broken.jsonl");
+    fs::write(&path, b"{\"id\":\"a\"}\nnot-json\n").unwrap();
+    let before = fs::read(&path).unwrap();
+
+    assert!(attach_publishers_jsonl_with(&path, &tmp.path().join("cache.json"), tmp.path(), 1, &|_| String::new()).is_err());
+
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 1, "임시 파일이 남으면 안 된다");
 }

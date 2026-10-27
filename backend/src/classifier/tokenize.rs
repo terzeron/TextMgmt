@@ -87,7 +87,7 @@ pub fn collapse_whitespace(text: &str) -> String {
 pub fn for_each_term<F: FnMut(&str)>(text: &str, spec: &AnalyzerSpec, mut emit: F) {
     let lowered;
     let text = if spec.lowercase {
-        lowered = text.to_lowercase();
+        lowered = pyfmt::py_lowercase(text);
         lowered.as_str()
     } else {
         text
@@ -194,5 +194,16 @@ fn char_wb_terms<F: FnMut(&str)>(text: &str, spec: &AnalyzerSpec, emit: &mut F) 
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AnalyzerKind, AnalyzerSpec, analyze};
+
+    #[test]
+    fn lowercase_preserves_codepoints_unassigned_in_python_313() {
+        let spec = AnalyzerSpec { kind: AnalyzerKind::Char, ngram_lo: 1, ngram_hi: 1, lowercase: true };
+        assert_eq!(analyze("\u{1c89}", &spec), vec!["\u{1c89}"]);
     }
 }

@@ -1,15 +1,42 @@
 //! Elasticsearch REST 클라이언트. `backend/es_manager.py`의 `ESManager` 중 검색 부분의 이식.
 //!
-//! 통신은 내부망 http 전용이다(TLS 미지원).
+//! HTTP와 TLS 검증 HTTPS를 지원한다. 자체 CA는 `TM_ES_CA_CERT` PEM 파일로 지정한다.
 //! 접속 정보는 환경변수 `TM_ES_BOOK_INDEX`, `TM_ES_URL`, `TM_ES_USER`, `TM_ES_PASSWORD`에서 읽는다.
 
+pub mod indexing;
+
 use std::fmt;
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
 /// 목록 응답에 필요한 필드만 받는다. summary는 단건 조회에만 쓴다(원본 `LIST_SOURCE_FIELDS`).
 pub const LIST_SOURCE_FIELDS: [&str; 11] = ["category", "title", "author", "file_path", "file_type", "file_size", "line_count", "page_count", "isbn", "created_time", "updated_time"];
+
+/// HTTP(S) agent를 만든다. CA를 지정하면 그 인증서를 TLS trust root로 사용한다.
+pub fn build_agent(timeout: Duration, ca_cert_path: Option<&Path>) -> Result<ureq::Agent, String> {
+    let mut builder = ureq::Agent::config_builder().timeout_global(Some(timeout)).http_status_as_error(false);
+    if let Some(path) = ca_cert_path {
+        let pem = fs::read(path).map_err(|error| format!("ES CA 인증서를 읽지 못했다 ({}): {error}", path.display()))?;
+        let certs = ureq::tls::parse_pem(&pem)
+            .filter_map(|item| match item {
+                Ok(ureq::tls::PemItem::Certificate(cert)) => Some(Ok(cert)),
+                Ok(ureq::tls::PemItem::PrivateKey(_)) => None,
+                Err(error) => Some(Err(error)),
+                _ => None,
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("ES CA 인증서 PEM을 해석하지 못했다: {error}"))?;
+        if certs.is_empty() {
+            return Err(format!("ES CA 인증서 PEM에 X.509 certificate가 없다: {}", path.display()));
+        }
+        let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::new_with_certs(&certs)).build();
+        builder = builder.tls_config(tls);
+    }
+    Ok(builder.build().into())
+}
 
 const DEFAULT_MAX_RESULT_COUNT: usize = 10;
 /// ES `max_result_window` 기본값. 이 이하는 scroll 없이 한 번에 받는다.
@@ -122,9 +149,19 @@ fn base64(input: &[u8]) -> String {
 
 impl EsClient {
     pub fn new(url: &str, user: &str, password: &str, index: &str) -> Self {
-        // 내부망 http로만 통신한다. 같은 빌드에 다른 crate가 켠 TLS 기능이 섞여도 https 주소는 `call`에서 거부한다.
-        let builder = ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).http_status_as_error(false);
-        EsClient { agent: builder.build().into(), base: url.trim_end_matches('/').to_owned(), auth: format!("Basic {}", base64(format!("{user}:{password}").as_bytes())), index: index.to_owned() }
+        Self::new_with_ca(url, user, password, index, None).expect("기본 TLS agent 설정은 실패하지 않는다")
+    }
+
+    pub fn new_with_ca(url: &str, user: &str, password: &str, index: &str, ca_cert_path: Option<&Path>) -> Result<Self, EsError> {
+        let agent = build_agent(Duration::from_secs(10), ca_cert_path).map_err(EsError::Transport)?;
+        Ok(EsClient { agent, base: url.trim_end_matches('/').to_owned(), auth: format!("Basic {}", base64(format!("{user}:{password}").as_bytes())), index: index.to_owned() })
+    }
+
+    /// 환경변수에서 접속 정보를 읽고 지정된 색인을 사용한다.
+    pub fn from_env_with_index(index: &str) -> Result<Self, EsError> {
+        let get = |k: &str| std::env::var(k).map_err(|_| EsError::MissingEnv(k.to_owned()));
+        let ca_cert_path = std::env::var_os("TM_ES_CA_CERT").map(std::path::PathBuf::from);
+        Self::new_with_ca(&get("TM_ES_URL")?, &get("TM_ES_USER")?, &get("TM_ES_PASSWORD")?, index, ca_cert_path.as_deref())
     }
 
     pub fn from_env() -> Result<Self, EsError> {
@@ -133,18 +170,23 @@ impl EsClient {
         for key in ENV_KEYS {
             get(key)?;
         }
-        Ok(Self::new(&get("TM_ES_URL")?, &get("TM_ES_USER")?, &get("TM_ES_PASSWORD")?, &get("TM_ES_BOOK_INDEX")?))
+        Self::from_env_with_index(&get("TM_ES_BOOK_INDEX")?)
     }
 
     fn call(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, EsError> {
         let url = format!("{}{path}", self.base);
-        if !url.starts_with("http://") {
-            return Err(EsError::Transport(format!("ES는 내부망 http만 지원한다(https와 인증서 검증 우회는 쓰지 않는다): {}", self.base)));
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            return Err(EsError::Transport(format!("ES URL은 http 또는 https여야 한다: {}", self.base)));
         }
+        let auth = &self.auth;
         let result = match (method, body) {
-            ("POST", Some(b)) => self.agent.post(&url).header("Authorization", &self.auth).send_json(b),
-            ("DELETE", _) => self.agent.delete(&url).header("Authorization", &self.auth).call(),
-            _ => self.agent.get(&url).header("Authorization", &self.auth).call(),
+            ("POST", Some(b)) => self.agent.post(&url).header("Authorization", auth).send_json(b),
+            ("POST", None) => self.agent.post(&url).header("Authorization", auth).send_empty(),
+            ("PUT", Some(b)) => self.agent.put(&url).header("Authorization", auth).send_json(b),
+            ("PUT", None) => self.agent.put(&url).header("Authorization", auth).send_empty(),
+            ("DELETE", Some(b)) => self.agent.delete(&url).header("Authorization", auth).force_send_body().send_json(b),
+            ("DELETE", None) => self.agent.delete(&url).header("Authorization", auth).call(),
+            _ => self.agent.get(&url).header("Authorization", auth).call(),
         };
         let mut resp = result.map_err(|e| EsError::Transport(e.to_string()))?;
         let status = resp.status().as_u16();
@@ -174,8 +216,11 @@ impl EsClient {
 
     /// 질의를 실행하고 점수를 최고점 기준 0~100으로 정규화한다. `max_score`가 없으면 빈 결과다.
     pub fn search(&self, query: Value, max_result_count: usize, source_fields: Option<&[&str]>) -> Result<Vec<Hit>, EsError> {
+        if max_result_count > MAX_RESULT_WINDOW {
+            return self.search_scroll(&query, max_result_count);
+        }
         // max_result_window 오류를 피하려고 크기를 자른다.
-        let size = max_result_count.min(MAX_RESULT_WINDOW);
+        let size = max_result_count;
         let mut body = json!({"query": query, "size": size, "track_scores": true});
         if let Some(fields) = source_fields {
             body["_source"] = json!(fields);
@@ -194,12 +239,48 @@ impl EsClient {
         Ok(result)
     }
 
+    /// Python `_search`처럼 10,000건을 넘는 요청은 ES scroll context로 이어 읽는다.
+    fn search_scroll(&self, query: &Value, max_result_count: usize) -> Result<Vec<Hit>, EsError> {
+        let mut scroll_id: Option<String> = None;
+        let outcome: Result<Vec<Hit>, EsError> = (|| {
+            let body = json!({"query": query, "size": MAX_RESULT_WINDOW, "track_scores": true});
+            let mut response = self.call("POST", &format!("/{}/_search?scroll=10m", self.index), Some(&body))?;
+            scroll_id = response.get("_scroll_id").and_then(Value::as_str).map(str::to_owned);
+            let mut result = Vec::new();
+            loop {
+                let Some(max_score) = response["hits"]["max_score"].as_f64() else {
+                    return Ok(Vec::new());
+                };
+                let rows = response["hits"]["hits"].as_array().ok_or_else(|| EsError::Parse("hits.hits가 없다".into()))?;
+                if rows.is_empty() {
+                    break;
+                }
+                for hit in rows {
+                    let id = hit["_id"].as_str().and_then(|s| s.parse().ok()).ok_or_else(|| EsError::Parse(format!("_id를 정수로 읽지 못했다: {}", hit["_id"])))?;
+                    let score = hit["_score"].as_f64().unwrap_or(0.0);
+                    result.push(Hit { id, source: hit["_source"].clone(), score: if max_score > 0.0 { score * 100.0 / max_score } else { 0.0 } });
+                    if result.len() >= max_result_count {
+                        return Ok(result);
+                    }
+                }
+                let mut next = self.call("POST", "/_search/scroll", Some(&json!({"scroll":"10m", "scroll_id":scroll_id.as_deref().unwrap_or("")})))?;
+                scroll_id = Some(next.get("_scroll_id").and_then(Value::as_str).ok_or_else(|| EsError::Parse("scroll 응답에 _scroll_id가 없다".into()))?.to_owned());
+                if next["hits"]["max_score"].as_f64().is_none() {
+                    return Ok(Vec::new());
+                }
+                // 다음 반복에서 현재 페이지 점수를 기준으로 정규화한다.
+                response = std::mem::take(&mut next);
+            }
+            Ok(result)
+        })();
+        if let Some(id) = scroll_id {
+            let _ = self.call("DELETE", "/_search/scroll", Some(&json!({"scroll_id": id})));
+        }
+        outcome
+    }
+
     fn effective_count(max_result_count: Option<usize>) -> Result<usize, EsError> {
         let n = max_result_count.unwrap_or(DEFAULT_MAX_RESULT_COUNT);
-        if n > MAX_RESULT_WINDOW {
-            // 원본은 이 경우 scroll로 이어서 읽는다. 검색 점검용으로는 필요 없어 옮기지 않았다.
-            return Err(EsError::Unsupported(format!("{MAX_RESULT_WINDOW}건을 넘는 검색(scroll)은 지원하지 않는다: {n}")));
-        }
         Ok(n)
     }
 

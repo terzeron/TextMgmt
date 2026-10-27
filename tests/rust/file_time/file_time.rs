@@ -41,10 +41,19 @@ fn statx_btime_is_none_when_unsupported_failing_or_not_linux() {
 }
 
 #[test]
+fn statx_btime_preserves_pre_epoch_timestamps() {
+    let before_epoch = UNIX_EPOCH - Duration::from_millis(500);
+    let got = linux_btime_with(Path::new("book.txt"), true, &|_| Ok(before_epoch));
+    assert_eq!(got, Some(local(-1, 500_000)));
+}
+
+#[test]
 fn microseconds_round_half_even_and_carry_into_the_next_second() {
     assert_eq!(datetime_from_parts(1_700_000_000, 123_456_499), local(1_700_000_000, 123_456));
     assert_eq!(datetime_from_parts(1_700_000_000, 123_456_500), local(1_700_000_000, 123_456));
-    assert_eq!(datetime_from_parts(1_700_000_000, 123_457_500), local(1_700_000_000, 123_458));
+    // Python first combines seconds and nanoseconds as a float. At this magnitude,
+    // the represented value is 0.1234574 seconds, so datetime.fromtimestamp yields 123457µs.
+    assert_eq!(datetime_from_parts(1_700_000_000, 123_457_500), local(1_700_000_000, 123_457));
     assert_eq!(datetime_from_parts(1_700_000_000, 999_999_600), local(1_700_000_001, 0));
 }
 

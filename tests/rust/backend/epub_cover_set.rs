@@ -287,6 +287,29 @@ async fn test_adds_a_cover_to_an_epub_without_one() {
 }
 
 #[tokio::test]
+async fn test_resolves_the_book_from_elasticsearch_without_a_lookup_override() {
+    let env = env();
+    let relative_path = env.path.strip_prefix(env.dir()).unwrap();
+    env.es.set_doc(Some(json!({
+        "category": "분류",
+        "title": "book",
+        "author": "",
+        "file_path": relative_path.to_string_lossy(),
+        "file_type": "epub",
+        "file_size": env.size(),
+        "updated_time": "2024-01-01T00:00:00.000000"
+    })));
+    let manager = BookManager::with_deps(BookManagerDeps::new(env.dir().to_path_buf(), env.es.clone()).with_trash_dirname("0_trash").with_image_fetcher(env.fetcher.clone()));
+
+    let (result, error) = manager.set_epub_cover(1, Some(URL), None).await;
+
+    assert!(error.is_none());
+    assert!(result.is_some());
+    assert!(has_cover(&env.path));
+    assert_eq!(env.es.updates().len(), 1);
+}
+
+#[tokio::test]
 async fn test_replaces_an_existing_cover_and_keeps_the_original_in_0_trash() {
     let env = env();
     make_epub(&env.path, &EpubSpec::cover("3.0", true));

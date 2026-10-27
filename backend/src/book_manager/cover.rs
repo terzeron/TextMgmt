@@ -113,6 +113,10 @@ impl BookManager {
         (ext.trash_dirname.unwrap_or_else(|| TRASH_DIRNAME.into()), ext.image_fetcher.unwrap_or_else(|| Arc::new(crate::direct_cover_url::RealImageFetcher)))
     }
 
+    pub(super) fn image_pixel_limit(&self) -> usize {
+        self.cover_ext().epub_hooks.as_ref().map(|hooks| hooks.limits().max_image_pixels).unwrap_or(crate::epub_cover::MAX_IMAGE_PIXELS)
+    }
+
     /// 훅이 정한 OPF 경로(구 `override_find_opf_path`). 훅이 없으면 `None`.
     pub(super) fn opf_path_override(&self) -> Option<String> {
         self.ext::<CoverExt>().and_then(|ext| ext.epub_hooks.as_ref().and_then(|h| h.opf_path_override()))

@@ -122,11 +122,18 @@ pub fn load_corrupted(report_path: &Path) -> io::Result<Vec<Rec>> {
     let Some(Value::Array(items)) = records else {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "리포트에서 손상 목록을 찾지 못했다"));
     };
-    Ok(items
+    items
         .into_iter()
-        .filter_map(|v| if let Value::Object(o) = v { Some(o) } else { None })
-        .filter(|r| r.get("verdict").and_then(Value::as_str).unwrap_or(VERDICT_CORRUPTED) == VERDICT_CORRUPTED)
-        .collect())
+        .map(|v| match v {
+            Value::Object(o) => Ok(o),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "손상 목록 항목이 객체가 아니다")),
+        })
+        .filter_map(|item| match item {
+            Ok(r) if r.get("verdict").and_then(Value::as_str).unwrap_or(VERDICT_CORRUPTED) == VERDICT_CORRUPTED => Some(Ok(r)),
+            Ok(_) => None,
+            Err(e) => Some(Err(e)),
+        })
+        .collect()
 }
 
 fn split_name(p: &Path) -> (String, String) {

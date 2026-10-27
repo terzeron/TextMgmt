@@ -392,3 +392,127 @@ if __name__ == "__main__":
                 stale.unlink()
         export_model(make_tiny_model(), FIXTURE_DIR, golden=40, seed=11)
     print(f"fixture 를 썼다: {FIXTURE_DIR}")
+
+
+@pytest.mark.parametrize(
+    ("field", "attribute", "value", "message"),
+    [
+        ("title", "analyzer", "invalid", "analyzer"),
+        ("title", "binary", True, "binary=True"),
+        ("title", "use_idf", False, "use_idf=False"),
+        ("title", "norm", None, "norm"),
+        ("body_word", "token_pattern", r"(?u)\w+", "token_pattern"),
+        ("title", "strip_accents", "unicode", "strip_accents"),
+        ("title", "stop_words", "english", "stop_words"),
+        ("title", "tokenizer", lambda value: value.split(), "tokenizer"),
+        ("title", "preprocessor", lambda value: value, "preprocessor"),
+    ],
+)
+def test_check_vectorizer_rejects_each_unsupported_option(tiny, field, attribute, value, message):
+    from backend.classifier.export import _check_vectorizer
+
+    vec = tiny.feature_space.vectorizers[field]
+    old_value = getattr(vec, attribute)
+    setattr(vec, attribute, value)
+    try:
+        with pytest.raises(ValueError, match=message):
+            _check_vectorizer("title", vec)
+    finally:
+        setattr(vec, attribute, old_value)
+
+
+def test_export_helpers_cover_json_vocab_and_digest_edges(tmp_path):
+    from datetime import datetime
+    from types import SimpleNamespace
+    from backend.classifier.export import _jsonable, _ordered_vocab, _sha256_file, _write_json
+
+    assert _jsonable(np.array([np.float64(np.inf), np.int64(3)])) == [None, 3]
+    assert _jsonable(Path("model.bin")) == "model.bin"
+    assert _jsonable(datetime(2026, 1, 2, 3, 4)) == "2026-01-02T03:04:00"
+    assert _jsonable(object())
+
+    with pytest.raises(ValueError, match="짝 없는 surrogate"):
+        _write_json(tmp_path / "invalid.json", "\ud800")
+    empty = tmp_path / "empty"
+    empty.write_bytes(b"")
+    assert _sha256_file(empty) == hashlib.sha256(b"").hexdigest()
+
+    assert _ordered_vocab("x", SimpleNamespace(vocabulary_={"b": 1, "a": 0})) == ["a", "b"]
+    for vocabulary in ({"a": 1}, {"a": 0, "b": 0}):
+        with pytest.raises(ValueError, match="어휘 번호"):
+            _ordered_vocab("x", SimpleNamespace(vocabulary_=vocabulary))
+
+
+def test_export_rejects_bad_estimators_and_intercepts(tiny, tmp_path):
+    from types import SimpleNamespace
+    from backend.classifier.export import _write_coef
+
+    original = tiny.classifier
+    try:
+        tiny.classifier = SimpleNamespace()
+        with pytest.raises(ValueError, match="추정기를 하나씩"):
+            _write_coef(tiny, tmp_path, 1)
+
+        tiny.classifier = SimpleNamespace(estimators_=[SimpleNamespace(coef_=np.zeros((2, 1))) for _ in tiny.classes])
+        with pytest.raises(ValueError, match="coef_ shape"):
+            _write_coef(tiny, tmp_path, 1)
+
+        tiny.classifier = SimpleNamespace(estimators_=[SimpleNamespace(coef_=np.array([[np.inf]]), intercept_=[0.0]) for _ in tiny.classes])
+        with pytest.raises(ValueError, match="계수에 NaN/Inf"):
+            _write_coef(tiny, tmp_path, 1)
+
+        tiny.classifier = SimpleNamespace(estimators_=[SimpleNamespace(coef_=np.zeros((1, 1)), intercept_=[np.inf]) for _ in tiny.classes])
+        with pytest.raises(ValueError, match="intercept"):
+            _write_coef(tiny, tmp_path, 1)
+
+        tiny.classifier = SimpleNamespace(estimators_=[SimpleNamespace(coef_=np.zeros((1, 1))) for _ in tiny.classes], classes_=["wrong"] * len(tiny.classes))
+        with pytest.raises(ValueError, match="순서가 다르다"):
+            _write_coef(tiny, tmp_path, 1)
+    finally:
+        tiny.classifier = original
+
+
+def test_export_rejects_invalid_idf_and_empty_feature_space(tiny, tmp_path):
+    original = tiny.feature_space.vectorizers
+    try:
+        vec = next(iter(original.values()))
+        old_idf = vec._tfidf.idf_.copy()
+        vec._tfidf.idf_ = np.full(len(vec.vocabulary_), np.inf)
+        with pytest.raises(ValueError, match="idf 길이 또는 값"):
+            export_model(tiny, tmp_path / "bad-idf")
+        vec._tfidf.idf_ = old_idf
+
+        tiny.feature_space.vectorizers = {}
+        with pytest.raises(ValueError, match="벡터라이저가 하나도 없다"):
+            export_model(tiny, tmp_path / "empty")
+    finally:
+        tiny.feature_space.vectorizers = original
+
+
+def test_main_returns_error_when_model_cannot_be_loaded(monkeypatch, capsys):
+    import backend.classifier.export as export_mod
+
+    monkeypatch.setattr(export_mod.CategoryModel, "load", classmethod(lambda cls, path=None: None))
+    assert main(["--model", "missing.joblib", "--out", "unused"]) == 1
+    assert "모델을 읽지 못했다" in capsys.readouterr().err
+
+
+def test_synthetic_document_skips_empty_pools_and_builds_filename():
+    import random
+    from backend.classifier.export import _synthetic_doc
+
+    generated = _synthetic_doc(random.Random(4), {"unused": [], "name": ["책"], "text": ["내용"]})
+
+    assert generated["name"].startswith("책_") and generated["name"].endswith(".epub")
+    assert "text" in generated and "unused" not in generated
+
+
+def test_module_entrypoint_parses_help(monkeypatch, capsys):
+    import runpy
+
+    monkeypatch.setattr(sys, "argv", ["backend.classifier.export", "--help"])
+    with pytest.raises(SystemExit) as exited:
+        runpy.run_module("backend.classifier.export", run_name="__main__")
+
+    assert exited.value.code == 0
+    assert "--model" in capsys.readouterr().out

@@ -13,12 +13,12 @@
 use std::fmt;
 use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 /// 파서가 제한 시간 안에 끝나지 않았다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,18 +76,30 @@ pub fn run_with_timeout<T: Send + 'static>(seconds: f64, message: &str, f: impl 
     }
 }
 
-fn read_all(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<Vec<u8>> {
+fn read_all(mut pipe: impl Read + Send + 'static) -> Receiver<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = pipe.read_to_end(&mut buf);
-        buf
-    })
+        let _ = tx.send(buf);
+    });
+    rx
+}
+
+fn kill_process_group(child: &mut Child) {
+    let process_group = child.id() as libc::pid_t;
+    // SAFETY: a negative pid targets only the process group assigned to this command.
+    unsafe {
+        libc::kill(-process_group, libc::SIGKILL);
+    }
+    let _ = child.kill();
 }
 
 /// `cmd`를 자식 프로세스로 실행한다. `timeout`초를 넘기면 강제 종료하고 `ParserTimeout`을 돌려준다.
 /// 시그널에 죽은 경우도 `ParserTimeout`이다. 0이 아닌 종료 코드는 호출자가 보도록 `Output`으로 돌려준다.
 pub fn run_with_hard_timeout(mut cmd: Command, timeout: f64) -> Result<Output, ParserTimeout> {
     let program = cmd.get_program().to_string_lossy().into_owned();
+    cmd.process_group(0);
     let mut child =
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| ParserTimeout { message: format!("프로세스를 실행하지 못했다: {program}: {e}") })?;
     // 출력이 파이프 버퍼보다 커도 막히지 않도록 읽는 스레드를 따로 둔다.
@@ -98,17 +110,26 @@ pub fn run_with_hard_timeout(mut cmd: Command, timeout: f64) -> Result<Output, P
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
-            // 시간 초과(또는 상태 확인 실패)면 강제 종료한다. 읽기 스레드는 기다리지 않는다:
-            // 손자 프로세스가 파이프를 쥐고 있으면 끝나지 않을 수 있다.
+            // 시간 초과(또는 상태 확인 실패)면 강제 종료한다.
             _ => {
-                let _ = child.kill();
+                kill_process_group(&mut child);
                 let _ = child.wait();
                 return Err(ParserTimeout { message: format!("처리 시간 초과({timeout}초): {program}") });
             }
         }
     };
-    let collect = |h: Option<thread::JoinHandle<Vec<u8>>>| h.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
-    let (stdout, stderr) = (collect(stdout), collect(stderr));
+    let mut collect = |rx: Option<Receiver<Vec<u8>>>| -> Result<Vec<u8>, ParserTimeout> {
+        let Some(rx) = rx else { return Ok(Vec::new()) };
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(bytes) => Ok(bytes),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                kill_process_group(&mut child);
+                Err(ParserTimeout { message: format!("처리 시간 초과({timeout}초): {program}") })
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(Vec::new()),
+        }
+    };
+    let (stdout, stderr) = (collect(stdout)?, collect(stderr)?);
     if let Some(signal) = status.signal() {
         return Err(ParserTimeout { message: format!("처리가 비정상 종료되었습니다(signal {signal}): {program}") });
     }

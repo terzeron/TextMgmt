@@ -498,11 +498,7 @@ fn thumbnail_size(width: u32, height: u32, max_width: u32, max_height: u32) -> (
         best.max(1.0) as u32
     };
     let (x, y) = (f64::from(max_width), f64::from(max_height));
-    if x / y >= aspect {
-        (pick(y * aspect, &|n| (aspect - n / y).abs()), max_height)
-    } else {
-        (max_width, pick(x / aspect, &|n| if n == 0.0 { 0.0 } else { (aspect - x / n).abs() }))
-    }
+    if x / y >= aspect { (pick(y * aspect, &|n| (aspect - n / y).abs()), max_height) } else { (max_width, pick(x / aspect, &|n| if n == 0.0 { 0.0 } else { (aspect - x / n).abs() })) }
 }
 
 fn encode_jpeg(image: &image::RgbImage, quality: u8) -> Result<Vec<u8>, image::ImageError> {
@@ -583,7 +579,9 @@ pub(crate) fn find_cover_member_in<R: Read + Seek>(archive: &mut ZipArchive<R>, 
         let href = unquoted.split('#').next().unwrap_or("").split('?').next().unwrap_or("");
         return Some(if opf_dir.is_empty() { pathx::normpath(href) } else { pathx::normpath(&pathx::join(&opf_dir, href)) });
     }
-    cover_pages.extend(page_items.iter().filter(|el| (!meta_cover_id.is_empty() && el.attr("id") == Some(meta_cover_id.as_str())) || id_href(el).contains("cover")).map(|el| el.attr_or("href", "").to_string()));
+    cover_pages.extend(
+        page_items.iter().filter(|el| (!meta_cover_id.is_empty() && el.attr("id") == Some(meta_cover_id.as_str())) || id_href(el).contains("cover")).map(|el| el.attr_or("href", "").to_string()),
+    );
     // 잘못된 표지 ID는 첫 페이지로 보완하되, 삭제한 표지를 본문 이미지로 대체하지 않는다.
     if !meta_cover_id.is_empty() {
         cover_pages.extend(page_items.iter().filter(|el| !first_spine_id.is_empty() && el.attr("id") == Some(first_spine_id.as_str())).map(|el| el.attr_or("href", "").to_string()));

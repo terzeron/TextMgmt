@@ -75,13 +75,20 @@ fn add_and_set_value_work_by_python_attribute_name() {
 }
 
 #[test]
-fn unknown_counter_names_are_errors() {
+fn add_requires_an_existing_counter_attribute() {
     let s = Stat::new();
-    for result in [s.add("nope", 1.0), s.set_value("nope", 1.0)] {
-        assert_eq!(result, Err(StatError::UnknownField("nope".into())));
-    }
+    assert_eq!(s.add("nope", 1.0), Err(StatError::UnknownField("nope".into())));
     assert!(s.get("nope").is_err());
     assert_eq!(StatError::UnknownField("x".into()).to_string(), "알 수 없는 통계 항목: x");
+}
+
+#[test]
+fn set_value_creates_python_style_custom_counter_attributes() {
+    let s = Stat::new();
+    s.set_value("custom_metric", 2.5).unwrap();
+    assert_eq!(s.get("custom_metric").unwrap(), 2.5);
+    s.add("custom_metric", 1.5).unwrap();
+    assert_eq!(s.get("custom_metric").unwrap(), 4.0);
 }
 
 #[test]

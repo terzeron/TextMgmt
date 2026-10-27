@@ -14,6 +14,30 @@ name = "pdf_edit"
 path = "../tests/rust/backend/pdf_edit.rs"
 
 [[test]]
+name = "pdf_delete_pages"
+path = "../tests/rust/backend/pdf_delete_pages.rs"
+
+[[test]]
+name = "pdf_delete_pages_gaps"
+path = "../tests/rust/backend/pdf_delete_pages_gaps.rs"
+
+[[test]]
+name = "main_bulk_rename"
+path = "../tests/rust/backend/main_bulk_rename.rs"
+
+[[test]]
+name = "main_gaps"
+path = "../tests/rust/backend/main_gaps.rs"
+
+[[test]]
+name = "api_exploration"
+path = "../tests/rust/backend/api_exploration.rs"
+
+[[test]]
+name = "classifier_training"
+path = "../tests/rust/backend/classifier_training.rs"
+
+[[test]]
 name = "pdf_pages"
 path = "../tests/rust/backend/pdf_pages.rs"
 
@@ -25,18 +49,21 @@ path = "../tests/rust/backend/book_preview.rs"
 name = "cover"
 path = "../tests/rust/backend/cover.rs"
 
-[[test]]
-name = "cover_status"
-path = "../tests/rust/backend/cover_status.rs"
-
 [[bin]]
 name = "backend"
 path = "src/bin/backend.rs"
 
 [dependencies]
+doc_reader = { path = "../libs/doc_reader" }
+es_client = { path = "../libs/es_client" }
+loader = { path = "../utils/loader" }
+fancy-regex = "0.14.0"
+pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_latest", "thread_safe"] }
+pyferrite = "0.0.2"
+pyfmt = { path = "../libs/pyfmt" }
 async-trait = "0.1"
 base64 = "0.23.1"
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["multipart"] }
 bookstore_lib = { package = "bookstore", path = "../libs/bookstore" }
 corpus_common = { path = "../libs/corpus_common" }
 corpus_layout = { path = "../libs/corpus_layout" }
@@ -44,9 +71,12 @@ diesel = { version = "2.3.14", default-features = false, features = ["mysql", "r
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 htmlkit = { path = "../libs/htmlkit" }
 hwp3_parser = { path = "../libs/hwp3_parser" }
+idna = "1.1.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif"] }
+isbn = { path = "../libs/isbn" }
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 log = "0.4.34"
+md5 = { package = "md-5", version = "0.11.0" }
 lopdf.workspace = true
 # MySQL 클라이언트는 개발 헤더 없이 쓰려고 소스에서 번들 빌드한다 (docs/rust-test-seams.md, diesel spike)
 mysqlclient-sys = { version = "0.5.2", features = ["bundled"] }
@@ -56,40 +86,21 @@ scraper = "0.29.0"
 sha2 = "0.11.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
+stat = { path = "../libs/stat" }
 sysdeps = { path = "../libs/sysdeps" }
-ureq.workspace = true
+ureq = { workspace = true, features = ["rustls"] }
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util"] }
+tokio-stream = "0.1.19"
+tokio-util = { version = "0.7.20", features = ["io"] }
 jpeg-encoder = "0.7.1"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
-
-[[test]]
-name = "db"
-path = "../tests/rust/backend/db.rs"
-
 [[test]]
 name = "common_smoke"
 path = "../tests/rust/backend/common_smoke.rs"
 
 [[test]]
-name = "refresh_token_store"
-path = "../tests/rust/backend/refresh_token_store.rs"
-
-[[test]]
-name = "view_history_store"
-path = "../tests/rust/backend/view_history_store.rs"
-
-[[test]]
 name = "category_mapping"
 path = "../tests/rust/backend/category_mapping.rs"
-
-[[test]]
-name = "classify_proposal_items_db"
-path = "../tests/rust/backend/classify_proposal_items_db.rs"
-
-[[test]]
-name = "classify_proposal_status_db"
-path = "../tests/rust/backend/classify_proposal_status_db.rs"
 
 [[test]]
 name = "book"
@@ -140,12 +151,20 @@ name = "auth"
 path = "../tests/rust/backend/auth.rs"
 
 [[test]]
+name = "google_verifier"
+path = "../tests/rust/backend/google_verifier.rs"
+
+[[test]]
 name = "client_error_log"
 path = "../tests/rust/backend/client_error_log.rs"
 
 [[test]]
-name = "view_history_api"
-path = "../tests/rust/backend/view_history_api.rs"
+name = "main_route_parity"
+path = "../tests/rust/backend/main_route_parity.rs"
+
+[[test]]
+name = "main_schema_parity"
+path = "../tests/rust/backend/main_schema_parity.rs"
 
 [[test]]
 name = "book_manager_2"
@@ -158,10 +177,6 @@ path = "../tests/rust/backend/book_manager_gaps.rs"
 [[test]]
 name = "book_manager_hwp_preview"
 path = "../tests/rust/backend/book_manager_hwp_preview.rs"
-
-[[test]]
-name = "book_manager_1"
-path = "../tests/rust/backend/book_manager_1.rs"
 
 [[test]]
 name = "cover_repair"
@@ -242,6 +257,8 @@ path = "../tests/rust/backend/book_manager_classifier.rs"
 [dev-dependencies]
 base64 = "0.23.1"
 flate2 = "1"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = "1.15.1"
 sha2 = "0.11.1"
 tempfile = "3.27.0"
 testcontainers-modules = { version = "0.15.0", features = ["mysql", "blocking"] }
@@ -262,3 +279,20 @@ path = "../tests/rust/backend/book_admin_api.rs"
 [[test]]
 name = "server_cli"
 path = "../tests/rust/backend/server_cli.rs"
+
+[[test]]
+name = "loader_file_reader"
+path = "../tests/rust/backend/loader_file_reader.rs"
+
+
+[[test]]
+name = "main_mock"
+path = "../tests/rust/backend/main_mock.rs"
+
+[[test]]
+name = "epub_line_count"
+path = "../tests/rust/backend/epub_line_count.rs"
+
+[[test]]
+name = "container_integration"
+path = "../tests/rust/backend/container_integration.rs"

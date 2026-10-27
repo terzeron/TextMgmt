@@ -3617,7 +3617,7 @@ class BookManager:
         pixel_count = sample.width * sample.height
         background_ratio = max(count for count, _color in colors) / pixel_count
         edges = sample.filter(ImageFilter.FIND_EDGES).convert("L")
-        detail_ratio = sum(value > 24 for value in edges.get_flattened_data()) / pixel_count
+        detail_ratio = sum(value > 24 for value in edges.tobytes()) / pixel_count
         return (
             background_ratio >= BookManager.COVER_BACKGROUND_RATIO_THRESHOLD
             and detail_ratio <= BookManager.COVER_DETAIL_RATIO_THRESHOLD

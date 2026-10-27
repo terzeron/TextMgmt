@@ -489,7 +489,16 @@ fn put(added: &mut Added, name: &str, data: Vec<u8>) -> FResult<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn stage_image_edits(source: &File, destination: &Path, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[(String, Vec<u8>)], created: &mut Value, hooks: &EpubCoverHooks) -> FResult<()> {
+fn stage_image_edits(
+    source: &File,
+    destination: &Path,
+    crops: &[Value],
+    splits: &[Value],
+    deletes: &[Value],
+    inserts: &[(String, Vec<u8>)],
+    created: &mut Value,
+    hooks: &EpubCoverHooks,
+) -> FResult<()> {
     {
         let mut original = ZipArchive::new(source)?;
         let (opf_path, mut package) = read_package_with(&mut original, hooks)?;
@@ -740,8 +749,20 @@ pub fn edit_images_with(path: &Path, expected_revision: &str, backup_dir: &Path,
         normalized.push((before.clone(), normalize_image_with(image, Some(1200), hooks)?));
     }
     let mut created = json!({"inserted": [], "split": {}});
-    let mut result = rewrite_epub(path, expected_revision, backup_dir, backup_name.as_deref(), &mut |source, staged| stage_image_edits(source, staged, &crops, &splits, &deletes, &normalized, &mut created, hooks), None, hooks)?;
+    let mut result = rewrite_epub(
+        path,
+        expected_revision,
+        backup_dir,
+        backup_name.as_deref(),
+        &mut |source, staged| stage_image_edits(source, staged, &crops, &splits, &deletes, &normalized, &mut created, hooks),
+        None,
+        hooks,
+    )?;
     result["cover_image"] = Value::Null;
     result["idrefs"] = created;
     Ok(result)
 }
+
+#[cfg(test)]
+#[path = "../../../tests/rust/backend/epub_cover_edit_unit.rs"]
+mod tests;

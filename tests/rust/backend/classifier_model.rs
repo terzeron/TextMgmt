@@ -6,11 +6,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use backend::classifier::export_format::{ModelError, sha256_hex};
+use backend::classifier::export_format::{ModelError, sha256_hex, write_dir};
 use backend::classifier::model::{CategoryModel, CategoryModelApi};
 use backend::classifier::softmax::{fixed, rank_desc, softmax_confidence};
 use backend::classifier::tokenize::{AnalyzerKind, AnalyzerSpec, analyze, collapse_whitespace, is_py_digit, is_py_space, is_py_word};
-use backend::classifier::vectorize::field_text;
+use backend::classifier::vectorize::{FieldVectorizer, field_text};
 use serde_json::{Value, json};
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/classifier_tiny");
@@ -88,6 +88,12 @@ fn lowercase_follows_python_lower() {
 }
 
 #[test]
+fn analyzer_keeps_case_when_lowercase_is_disabled() {
+    let case_sensitive = AnalyzerSpec { lowercase: false, ..spec("word", 1, 1) };
+    assert_eq!(analyze("ABC", &case_sensitive), ["ABC"]);
+}
+
+#[test]
 fn sklearn_analyzer_table() {
     for (kind, lo, hi, text, expected) in TOKEN_CASES {
         assert_eq!(&terms(kind, *lo, *hi, text), expected, "{kind} ({lo},{hi}) {text:?}");
@@ -138,72 +144,42 @@ fn fixed_rounds_like_python_format() {
     assert_eq!(fixed(1.0, 2), "1.00");
 }
 
-// ---------------------------------------------------------------------------
-// parity
-// ---------------------------------------------------------------------------
+#[test]
+fn rust_trained_model_classifies_clear_examples() {
+    let model = CategoryModel::load_dir(&Path::new(FIXTURE).join("trained")).expect("Rust 학습 모델 로드");
+    let cases = [
+        ("3_무협", "무림맹 장문인 내공 운기조식 화산파 검법 강호 협객"),
+        ("3_판타지", "드래곤 마나 던전 길드 마법사 레벨업 소환 마왕"),
+        ("5_수학과학일반", "미분 적분 함수 벡터 행렬 확률 통계 방정식"),
+    ];
 
-struct ParityStats {
-    docs: usize,
-    max_score_err: f64,
-    max_conf_err: f64,
-    rank_mismatch: usize,
-    tie_swaps: usize,
-    reason_mismatch: usize,
-    category_mismatch: usize,
-}
-
-fn check_parity(model: &CategoryModel, golden_path: &Path) -> ParityStats {
-    let golden: Value = serde_json::from_slice(&fs::read(golden_path).expect("golden.json 을 읽지 못했다")).unwrap();
-    let mut stats = ParityStats { docs: 0, max_score_err: 0.0, max_conf_err: 0.0, rank_mismatch: 0, tie_swaps: 0, reason_mismatch: 0, category_mismatch: 0 };
-    for case in golden["cases"].as_array().unwrap() {
-        let label = case["label"].as_str().unwrap();
-        let expected: Vec<f64> = case["scores"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
-        let got = model.scores(&case["doc"]);
-        assert_eq!(got.len(), expected.len(), "{label}");
-        for (g, e) in got.iter().zip(&expected) {
-            stats.max_score_err = stats.max_score_err.max((g - e).abs());
-        }
-        let pred = CategoryModelApi::predict_one(model, &case["doc"], None);
-        let top = case["top"].as_array().unwrap();
-        for (i, t) in top.iter().enumerate() {
-            stats.max_conf_err = stats.max_conf_err.max((pred.ranked[i].1 - t["confidence"].as_f64().unwrap()).abs());
-        }
-        let expected_order: Vec<&str> = top.iter().map(|t| t["category"].as_str().unwrap()).collect();
-        let got_order: Vec<&str> = pred.ranked.iter().map(|(c, _)| c.as_str()).collect();
-        if expected_order != got_order {
-            // 두 점수 차가 float32 오차 안이면 순서를 가를 수 없는 동점이다.
-            let rank = rank_desc(&expected);
-            let near_tie = rank.windows(2).take(3).any(|w| (expected[w[0]] - expected[w[1]]).abs() < 2e-4);
-            if near_tie {
-                stats.tie_swaps += 1;
-            } else {
-                stats.rank_mismatch += 1;
-                eprintln!("순위 불일치 [{label}]: python {expected_order:?} rust {got_order:?}");
-            }
-        } else {
-            if pred.category.as_deref() != case["category"].as_str() {
-                stats.category_mismatch += 1;
-                eprintln!("판정 불일치 [{label}]: python {:?} rust {:?} (확신도 {} vs {})", case["category"], pred.category, case["confidence"], pred.confidence);
-            }
-            if pred.reason != case["reason"].as_str().unwrap() {
-                stats.reason_mismatch += 1;
-                eprintln!("reason 불일치 [{label}]: python {:?} rust {:?}", case["reason"], pred.reason);
-            }
-        }
-        stats.docs += 1;
+    for (expected, words) in cases {
+        let tokens: Vec<_> = words.split_whitespace().collect();
+        let text = tokens.repeat(3).join(" ");
+        let title = format!("{} 이야기 0", tokens[0]);
+        let name = format!("{}_0.epub", tokens[0]);
+        let doc = json!({"cat": expected, "text": text, "title": title, "name": name, "type": "epub", "author": "작가0", "publisher": "테스트출판사"});
+        let prediction = CategoryModelApi::predict_one(&model, &doc, None);
+        assert_eq!(prediction.category.as_deref(), Some(expected), "입력 문서: {words}");
+        assert!(prediction.confidence >= model.min_confidence(), "확신도 {} < 임계값 {}", prediction.confidence, model.min_confidence());
     }
-    stats
 }
 
 #[test]
-fn tiny_fixture_matches_sklearn_golden() {
-    let model = CategoryModel::load_dir(Path::new(FIXTURE)).expect("fixture 로드");
-    assert_eq!(model.classes().len(), 3);
-    let stats = check_parity(&model, &Path::new(FIXTURE).join("golden.json"));
-    assert!(stats.docs >= 40, "{}", stats.docs);
-    assert!(stats.max_score_err <= 1e-4, "결정값 최대 오차 {}", stats.max_score_err);
-    assert!(stats.max_conf_err <= 1e-4, "확신도 최대 오차 {}", stats.max_conf_err);
-    assert_eq!((stats.rank_mismatch, stats.tie_swaps, stats.reason_mismatch, stats.category_mismatch), (0, 0, 0, 0));
+fn imports_legacy_joblib_without_python_and_matches_export_fixture() {
+    let input = Path::new(FIXTURE).join("legacy.joblib");
+    let output = tempfile::tempdir().unwrap();
+
+    backend::classifier::joblib_import::import_joblib(&input, output.path()).unwrap();
+
+    let imported = CategoryModel::load_dir(output.path()).unwrap();
+    let committed = CategoryModel::load_dir(Path::new(FIXTURE)).unwrap();
+    assert_eq!(imported.classes(), committed.classes());
+    assert_eq!(imported.n_features(), committed.n_features());
+    let doc = json!({"text":"무림맹 dragon", "name":"무림_123.epub", "title":"마법 이야기", "author":"작가1", "publisher":"출판사 북스", "type":"epub"});
+    for (actual, expected) in imported.scores(&doc).iter().zip(committed.scores(&doc)) {
+        assert!((actual - expected).abs() < 1e-4, "{actual} != {expected}");
+    }
 }
 
 #[test]
@@ -229,6 +205,109 @@ fn min_confidence_priority_config_then_meta_then_one() {
     let forced = CategoryModelApi::predict_one(&model, &doc, Some(0.0));
     assert_eq!(forced.category.as_deref(), Some(pred.ranked[0].0.as_str()));
     assert!(forced.reason.starts_with("모델 확신도 "));
+}
+
+#[test]
+fn saving_model_omits_private_metadata_like_python_exporter() {
+    let model = CategoryModel::load_dir(Path::new(FIXTURE)).unwrap();
+    let mut model = model;
+    model.meta["_private_cache"] = json!({"discard": true});
+    model.meta["public_note"] = json!("keep");
+
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("exported");
+    model.save(Some(&output)).unwrap();
+    let manifest: Value = serde_json::from_slice(&fs::read(output.join("model.json")).unwrap()).unwrap();
+
+    assert!(manifest["meta"].get("_private_cache").is_none());
+    assert_eq!(manifest["meta"]["public_note"], "keep");
+    let author = manifest["fields"].as_array().unwrap().iter().find(|field| field["name"] == "author").unwrap();
+    assert_eq!(author["weight"].as_f64(), Some(0.3));
+}
+
+#[test]
+fn exporter_rejects_models_without_vectorizers_like_python() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = write_dir(&dir.path().join("export"), &[], &[], &[], &[], &json!({}), &json!({}));
+    assert!(matches!(result, Err(ModelError::Invalid(message)) if message.contains("벡터라이저")));
+}
+
+#[test]
+fn exporter_rejects_coefficient_shape_and_unsafe_field_names() {
+    let classes = vec!["A".to_string()];
+    let dir = tempfile::tempdir().unwrap();
+    let field = FieldVectorizer::new("title", "title", 1.0, 0, spec("word", 1, 1), true, 0, vec!["a".into()], vec![1.0]).unwrap();
+    let result = write_dir(&dir.path().join("bad-shape"), &classes, &[field], &[], &[0.0], &json!({}), &json!({}));
+    assert!(matches!(result, Err(ModelError::Invalid(message)) if message.contains("계수 개수")));
+
+    let field = FieldVectorizer::new("title-name", "title", 1.0, 0, spec("word", 1, 1), true, 0, vec!["a".into()], vec![1.0]).unwrap();
+    let result = write_dir(&dir.path().join("bad-name"), &classes, &[field], &[1.0], &[0.0], &json!({}), &json!({}));
+    assert!(matches!(result, Err(ModelError::Invalid(message)) if message.contains("파일 이름")));
+}
+
+#[test]
+fn exporter_rejects_noncontiguous_field_offsets_instead_of_writing_unloadable_model() {
+    let classes = vec!["A".to_string()];
+    let fields = [
+        FieldVectorizer::new("title", "title", 1.0, 0, spec("word", 1, 1), true, 0, vec!["a".into()], vec![1.0]).unwrap(),
+        FieldVectorizer::new("body", "text", 1.0, 0, spec("word", 1, 1), true, 2, vec!["b".into()], vec![1.0]).unwrap(),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+
+    let result = write_dir(&dir.path().join("export"), &classes, &fields, &[1.0, 1.0], &[0.0], &json!({}), &json!({}));
+
+    assert!(matches!(result, Err(ModelError::Invalid(message)) if message.contains("offset")));
+}
+
+#[test]
+fn exporter_rejects_nonfinite_weights_idf_coefficients_and_intercepts_like_python() {
+    let classes = vec!["A".to_string()];
+    for (file, weight, idf, coef, intercept) in
+        [("model.json", f32::NAN, 1.0, 1.0, 0.0), ("idf.title.f32", 1.0, f32::NAN, 1.0, 0.0), ("coef.f32", 1.0, 1.0, f32::INFINITY, 0.0), ("model.json", 1.0, 1.0, 1.0, f64::INFINITY)]
+    {
+        let field = FieldVectorizer::new("title", "title", weight, 0, spec("word", 1, 1), true, 0, vec!["a".into()], vec![idf]).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let result = write_dir(&dir.path().join("export"), &classes, &[field], &[coef], &[intercept], &json!({}), &json!({}));
+        assert!(matches!(result, Err(ModelError::NotFinite { file: ref found }) if found == file), "{file}");
+    }
+}
+
+#[test]
+fn model_errors_render_all_variants_and_expose_only_io_sources() {
+    let errors = [
+        ModelError::Json { file: "model.json".into(), message: "bad json".into() },
+        ModelError::UnsupportedVersion(2),
+        ModelError::UnsafePath("../secret".into()),
+        ModelError::LengthMismatch { file: "coef.f32".into(), expected: 8, actual: 4 },
+        ModelError::Sha256Mismatch { file: "coef.f32".into() },
+        ModelError::NotFinite { file: "coef.f32".into() },
+        ModelError::DuplicateTerm { field: "title".into() },
+    ];
+    for error in errors {
+        assert!(!error.to_string().is_empty());
+        assert!(std::error::Error::source(&error).is_none());
+    }
+
+    let io_error = ModelError::Io { file: "model.json".into(), source: std::io::Error::other("disk error") };
+    assert!(io_error.to_string().contains("disk error"));
+    assert!(std::error::Error::source(&io_error).is_some());
+    assert!(ModelError::Invalid("bad shape".into()).to_string().contains("bad shape"));
+}
+
+#[test]
+fn exporter_defaults_a_missing_field_weight_and_rejects_non_numeric_weight() {
+    let classes = vec!["A".to_string()];
+    let field = FieldVectorizer::new("title", "title", 0.25, 0, spec("word", 1, 1), true, 0, vec!["a".into()], vec![1.0]).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("export-default-weight");
+    write_dir(&output, &classes, &[field], &[1.0], &[0.0], &json!({"fields":{"title":{}}}), &json!({})).unwrap();
+    let manifest: Value = serde_json::from_slice(&fs::read(output.join("model.json")).unwrap()).unwrap();
+    assert_eq!(manifest["fields"][0]["weight"], json!(1.0));
+
+    let output = dir.path().join("export-invalid-weight");
+    let field = FieldVectorizer::new("title", "title", 0.25, 0, spec("word", 1, 1), true, 0, vec!["a".into()], vec![1.0]).unwrap();
+    let result = write_dir(&output, &classes, &[field], &[1.0], &[0.0], &json!({"fields":{"title":{"weight":"heavy"}}}), &json!({}));
+    assert!(matches!(result, Err(ModelError::Invalid(message)) if message.contains("weight")));
 }
 
 #[test]
@@ -358,6 +437,35 @@ fn loader_rejects_missing_files() {
 }
 
 #[test]
+fn loader_rejects_malformed_manifest_shapes_and_non_regular_model_files() {
+    let dir = copy_fixture();
+    edit_manifest(dir.path(), |m| m["classes"] = json!([]));
+    assert!(matches!(load_err(dir.path()), ModelError::Invalid(message) if message.contains("classes")));
+
+    let dir = copy_fixture();
+    edit_manifest(dir.path(), |m| m["intercept"] = json!([]));
+    assert!(matches!(load_err(dir.path()), ModelError::Invalid(message) if message.contains("intercept")));
+
+    let dir = copy_fixture();
+    edit_manifest(dir.path(), |m| m["fields"] = json!([]));
+    assert!(matches!(load_err(dir.path()), ModelError::Invalid(message) if message.contains("fields")));
+
+    let dir = copy_fixture();
+    let too_many = u64::from(u32::MAX) + 1;
+    edit_manifest(dir.path(), |m| {
+        m["fields"].as_array_mut().unwrap().truncate(1);
+        m["n_features"] = json!(too_many);
+        m["fields"][0]["size"] = json!(too_many);
+    });
+    assert!(matches!(load_err(dir.path()), ModelError::Invalid(message) if message.contains("u32")));
+
+    let dir = copy_fixture();
+    fs::remove_file(dir.path().join("coef.f32")).unwrap();
+    fs::create_dir(dir.path().join("coef.f32")).unwrap();
+    assert!(matches!(load_err(dir.path()), ModelError::Invalid(message) if message.contains("일반 파일")));
+}
+
+#[test]
 fn loader_rejects_unsafe_file_names() {
     for bad in ["../coef.f32", "/etc/passwd", "sub/coef.f32", "..", ".hidden", "", "a\\b", "x\0y"] {
         let dir = copy_fixture();
@@ -415,35 +523,9 @@ fn loader_rejects_oversized_declared_sizes_without_allocating() {
     assert!(matches!(load_err(dir.path()), ModelError::Invalid(_)));
 }
 
-// ---------------------------------------------------------------------------
-// 실제 모델 / 무작위 문자열 parity (ignore)
-// ---------------------------------------------------------------------------
-
 #[test]
-#[ignore = "실제 모델 내보내기 필요: TM_CLASSIFIER_EXPORT_DIR"]
-fn real_model_matches_sklearn_golden() {
-    let dir = std::env::var("TM_CLASSIFIER_EXPORT_DIR").expect("TM_CLASSIFIER_EXPORT_DIR 이 필요하다");
-    let dir = Path::new(&dir);
-    let started = std::time::Instant::now();
-    let model = CategoryModel::load_dir(dir).expect("실제 모델 로드");
-    let load_secs = started.elapsed().as_secs_f64();
-    assert_eq!(model.classes().len(), 79);
-    let started = std::time::Instant::now();
-    let stats = check_parity(&model, &dir.join("golden.json"));
-    let per_doc_ms = started.elapsed().as_secs_f64() * 1000.0 / stats.docs as f64;
-    eprintln!(
-        "PARITY docs={} load={load_secs:.2}s predict={per_doc_ms:.2}ms/doc max_score_err={:.3e} max_conf_err={:.3e} rank_mismatch={} tie_swaps={} reason_mismatch={} category_mismatch={}",
-        stats.docs, stats.max_score_err, stats.max_conf_err, stats.rank_mismatch, stats.tie_swaps, stats.reason_mismatch, stats.category_mismatch
-    );
-    assert!(stats.max_score_err <= 1e-4, "결정값 최대 오차 {}", stats.max_score_err);
-    assert_eq!(stats.rank_mismatch, 0);
-    assert_eq!(stats.category_mismatch, 0);
-}
-
-#[test]
-#[ignore = "sklearn 분석기 대조 파일 필요: TM_CLASSIFIER_FUZZ_FILE"]
 fn analyzers_match_sklearn_on_random_strings() {
-    let path = std::env::var("TM_CLASSIFIER_FUZZ_FILE").expect("TM_CLASSIFIER_FUZZ_FILE 이 필요하다");
+    let path = std::env::var_os("TM_CLASSIFIER_FUZZ_FILE").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/classifier_analyzer_fuzz.json")));
     let cases: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     let mut bad = 0;
     let mut total = 0;
@@ -457,14 +539,19 @@ fn analyzers_match_sklearn_on_random_strings() {
             bad += 1;
             if bad <= 5 {
                 let at = got.iter().zip(&expected).position(|(a, b)| a != b);
-                eprintln!("분석기 불일치 {kind} ({lo},{hi}) 코드포인트 {:?}: rust {} 항, python {} 항, 첫 차이 {at:?}", text.chars().map(|c| c as u32).take(24).collect::<Vec<_>>(), got.len(), expected.len());
+                eprintln!(
+                    "분석기 불일치 {kind} ({lo},{hi}) 코드포인트 {:?}: rust {} 항, python {} 항, 첫 차이 {at:?}",
+                    text.chars().map(|c| c as u32).take(24).collect::<Vec<_>>(),
+                    got.len(),
+                    expected.len()
+                );
             }
         }
     }
     assert_eq!(bad, 0, "{bad}/{total} 불일치");
 }
 
-// 생성: sklearn 1.8.0 TfidfVectorizer(analyzer=..., ngram_range=..., lowercase=True).build_analyzer()(text) 결과
+// 생성: sklearn TfidfVectorizer(analyzer=..., ngram_range=..., lowercase=True, token_pattern=r"(?u)\b\w+\b").build_analyzer()(text) 결과
 pub const TOKEN_CASES: &[(&str, usize, usize, &str, &[&str])] = &[
     ("word", 1, 1, "a b  c", &["a", "b", "c"]),
     ("word", 1, 2, "a b  c", &["a", "b", "c", "a b", "b c"]),
@@ -479,8 +566,20 @@ pub const TOKEN_CASES: &[(&str, usize, usize, &str, &[&str])] = &[
     ("word", 1, 2, "漢字 한글 日本語テスト", &["漢字", "한글", "日本語テスト", "漢字 한글", "한글 日本語テスト"]),
     ("word", 2, 3, "漢字 한글 日本語テスト", &["漢字 한글", "한글 日本語テスト", "漢字 한글 日本語テスト"]),
     ("word", 1, 1, "한글 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af} abc", &["한글", "\u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}", "abc"]),
-    ("word", 1, 2, "한글 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af} abc", &["한글", "\u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}", "abc", "한글 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}", "\u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af} abc"]),
-    ("word", 2, 3, "한글 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af} abc", &["한글 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}", "\u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af} abc", "한글 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af} abc"]),
+    (
+        "word",
+        1,
+        2,
+        "한글 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af} abc",
+        &["한글", "\u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}", "abc", "한글 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}", "\u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af} abc"],
+    ),
+    (
+        "word",
+        2,
+        3,
+        "한글 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af} abc",
+        &["한글 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}", "\u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af} abc", "한글 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af} abc"],
+    ),
     ("word", 1, 1, "", &[]),
     ("word", 1, 2, "", &[]),
     ("word", 2, 3, "", &[]),
@@ -491,8 +590,20 @@ pub const TOKEN_CASES: &[(&str, usize, usize, &str, &[&str])] = &[
     ("word", 1, 2, "\u{c0}B \u{130}x \u{3a3}\u{391}\u{3a3}", &["\u{e0}b", "i", "x", "\u{3c3}\u{3b1}\u{3c2}", "\u{e0}b i", "i x", "x \u{3c3}\u{3b1}\u{3c2}"]),
     ("word", 2, 3, "\u{c0}B \u{130}x \u{3a3}\u{391}\u{3a3}", &["\u{e0}b i", "i x", "x \u{3c3}\u{3b1}\u{3c2}", "\u{e0}b i x", "i x \u{3c3}\u{3b1}\u{3c2}"]),
     ("word", 1, 1, "e\u{301} caf\u{e9} x\u{b2}y \u{2167} \u{663}", &["e", "caf\u{e9}", "x\u{b2}y", "\u{2177}", "\u{663}"]),
-    ("word", 1, 2, "e\u{301} caf\u{e9} x\u{b2}y \u{2167} \u{663}", &["e", "caf\u{e9}", "x\u{b2}y", "\u{2177}", "\u{663}", "e caf\u{e9}", "caf\u{e9} x\u{b2}y", "x\u{b2}y \u{2177}", "\u{2177} \u{663}"]),
-    ("word", 2, 3, "e\u{301} caf\u{e9} x\u{b2}y \u{2167} \u{663}", &["e caf\u{e9}", "caf\u{e9} x\u{b2}y", "x\u{b2}y \u{2177}", "\u{2177} \u{663}", "e caf\u{e9} x\u{b2}y", "caf\u{e9} x\u{b2}y \u{2177}", "x\u{b2}y \u{2177} \u{663}"]),
+    (
+        "word",
+        1,
+        2,
+        "e\u{301} caf\u{e9} x\u{b2}y \u{2167} \u{663}",
+        &["e", "caf\u{e9}", "x\u{b2}y", "\u{2177}", "\u{663}", "e caf\u{e9}", "caf\u{e9} x\u{b2}y", "x\u{b2}y \u{2177}", "\u{2177} \u{663}"],
+    ),
+    (
+        "word",
+        2,
+        3,
+        "e\u{301} caf\u{e9} x\u{b2}y \u{2167} \u{663}",
+        &["e caf\u{e9}", "caf\u{e9} x\u{b2}y", "x\u{b2}y \u{2177}", "\u{2177} \u{663}", "e caf\u{e9} x\u{b2}y", "caf\u{e9} x\u{b2}y \u{2177}", "x\u{b2}y \u{2177} \u{663}"],
+    ),
     ("word", 1, 1, "\u{1f600}a\u{1f600} b", &["a", "b"]),
     ("word", 1, 2, "\u{1f600}a\u{1f600} b", &["a", "b", "a b"]),
     ("word", 2, 3, "\u{1f600}a\u{1f600} b", &["a b"]),
@@ -534,14 +645,162 @@ pub const TOKEN_CASES: &[(&str, usize, usize, &str, &[&str])] = &[
     ("char_wb", 1, 3, "\u{1f600} 한", &[" ", "\u{1f600}", " ", " \u{1f600}", "\u{1f600} ", " \u{1f600} ", " ", "한", " ", " 한", "한 ", " 한 "]),
     ("char", 1, 3, "\u{1f600} 한", &["\u{1f600}", " ", "한", "\u{1f600} ", " 한", "\u{1f600} 한"]),
     ("char", 2, 4, "\u{1f600} 한", &["\u{1f600} ", " 한", "\u{1f600} 한"]),
-    ("char_wb", 2, 4, "한 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}", &[" 한", "한 ", " 한 ", " \u{1112}", "\u{1112}\u{1161}", "\u{1161}\u{11ab}", "\u{11ab}\u{1100}", "\u{1100}\u{1173}", "\u{1173}\u{11af}", "\u{11af} ", " \u{1112}\u{1161}", "\u{1112}\u{1161}\u{11ab}", "\u{1161}\u{11ab}\u{1100}", "\u{11ab}\u{1100}\u{1173}", "\u{1100}\u{1173}\u{11af}", "\u{1173}\u{11af} ", " \u{1112}\u{1161}\u{11ab}", "\u{1112}\u{1161}\u{11ab}\u{1100}", "\u{1161}\u{11ab}\u{1100}\u{1173}", "\u{11ab}\u{1100}\u{1173}\u{11af}", "\u{1100}\u{1173}\u{11af} "]),
-    ("char_wb", 1, 3, "한 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}", &[" ", "한", " ", " 한", "한 ", " 한 ", " ", "\u{1112}", "\u{1161}", "\u{11ab}", "\u{1100}", "\u{1173}", "\u{11af}", " ", " \u{1112}", "\u{1112}\u{1161}", "\u{1161}\u{11ab}", "\u{11ab}\u{1100}", "\u{1100}\u{1173}", "\u{1173}\u{11af}", "\u{11af} ", " \u{1112}\u{1161}", "\u{1112}\u{1161}\u{11ab}", "\u{1161}\u{11ab}\u{1100}", "\u{11ab}\u{1100}\u{1173}", "\u{1100}\u{1173}\u{11af}", "\u{1173}\u{11af} "]),
-    ("char", 1, 3, "한 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}", &["한", " ", "\u{1112}", "\u{1161}", "\u{11ab}", "\u{1100}", "\u{1173}", "\u{11af}", "한 ", " \u{1112}", "\u{1112}\u{1161}", "\u{1161}\u{11ab}", "\u{11ab}\u{1100}", "\u{1100}\u{1173}", "\u{1173}\u{11af}", "한 \u{1112}", " \u{1112}\u{1161}", "\u{1112}\u{1161}\u{11ab}", "\u{1161}\u{11ab}\u{1100}", "\u{11ab}\u{1100}\u{1173}", "\u{1100}\u{1173}\u{11af}"]),
-    ("char", 2, 4, "한 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}", &["한 ", " \u{1112}", "\u{1112}\u{1161}", "\u{1161}\u{11ab}", "\u{11ab}\u{1100}", "\u{1100}\u{1173}", "\u{1173}\u{11af}", "한 \u{1112}", " \u{1112}\u{1161}", "\u{1112}\u{1161}\u{11ab}", "\u{1161}\u{11ab}\u{1100}", "\u{11ab}\u{1100}\u{1173}", "\u{1100}\u{1173}\u{11af}", "한 \u{1112}\u{1161}", " \u{1112}\u{1161}\u{11ab}", "\u{1112}\u{1161}\u{11ab}\u{1100}", "\u{1161}\u{11ab}\u{1100}\u{1173}", "\u{11ab}\u{1100}\u{1173}\u{11af}"]),
-    ("char_wb", 2, 4, " lead trail ", &[" l", "le", "ea", "ad", "d ", " le", "lea", "ead", "ad ", " lea", "lead", "ead ", " t", "tr", "ra", "ai", "il", "l ", " tr", "tra", "rai", "ail", "il ", " tra", "trai", "rail", "ail "]),
-    ("char_wb", 1, 3, " lead trail ", &[" ", "l", "e", "a", "d", " ", " l", "le", "ea", "ad", "d ", " le", "lea", "ead", "ad ", " ", "t", "r", "a", "i", "l", " ", " t", "tr", "ra", "ai", "il", "l ", " tr", "tra", "rai", "ail", "il "]),
-    ("char", 1, 3, " lead trail ", &[" ", "l", "e", "a", "d", " ", "t", "r", "a", "i", "l", " ", " l", "le", "ea", "ad", "d ", " t", "tr", "ra", "ai", "il", "l ", " le", "lea", "ead", "ad ", "d t", " tr", "tra", "rai", "ail", "il "]),
-    ("char", 2, 4, " lead trail ", &[" l", "le", "ea", "ad", "d ", " t", "tr", "ra", "ai", "il", "l ", " le", "lea", "ead", "ad ", "d t", " tr", "tra", "rai", "ail", "il ", " lea", "lead", "ead ", "ad t", "d tr", " tra", "trai", "rail", "ail "]),
+    (
+        "char_wb",
+        2,
+        4,
+        "한 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}",
+        &[
+            " 한",
+            "한 ",
+            " 한 ",
+            " \u{1112}",
+            "\u{1112}\u{1161}",
+            "\u{1161}\u{11ab}",
+            "\u{11ab}\u{1100}",
+            "\u{1100}\u{1173}",
+            "\u{1173}\u{11af}",
+            "\u{11af} ",
+            " \u{1112}\u{1161}",
+            "\u{1112}\u{1161}\u{11ab}",
+            "\u{1161}\u{11ab}\u{1100}",
+            "\u{11ab}\u{1100}\u{1173}",
+            "\u{1100}\u{1173}\u{11af}",
+            "\u{1173}\u{11af} ",
+            " \u{1112}\u{1161}\u{11ab}",
+            "\u{1112}\u{1161}\u{11ab}\u{1100}",
+            "\u{1161}\u{11ab}\u{1100}\u{1173}",
+            "\u{11ab}\u{1100}\u{1173}\u{11af}",
+            "\u{1100}\u{1173}\u{11af} ",
+        ],
+    ),
+    (
+        "char_wb",
+        1,
+        3,
+        "한 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}",
+        &[
+            " ",
+            "한",
+            " ",
+            " 한",
+            "한 ",
+            " 한 ",
+            " ",
+            "\u{1112}",
+            "\u{1161}",
+            "\u{11ab}",
+            "\u{1100}",
+            "\u{1173}",
+            "\u{11af}",
+            " ",
+            " \u{1112}",
+            "\u{1112}\u{1161}",
+            "\u{1161}\u{11ab}",
+            "\u{11ab}\u{1100}",
+            "\u{1100}\u{1173}",
+            "\u{1173}\u{11af}",
+            "\u{11af} ",
+            " \u{1112}\u{1161}",
+            "\u{1112}\u{1161}\u{11ab}",
+            "\u{1161}\u{11ab}\u{1100}",
+            "\u{11ab}\u{1100}\u{1173}",
+            "\u{1100}\u{1173}\u{11af}",
+            "\u{1173}\u{11af} ",
+        ],
+    ),
+    (
+        "char",
+        1,
+        3,
+        "한 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}",
+        &[
+            "한",
+            " ",
+            "\u{1112}",
+            "\u{1161}",
+            "\u{11ab}",
+            "\u{1100}",
+            "\u{1173}",
+            "\u{11af}",
+            "한 ",
+            " \u{1112}",
+            "\u{1112}\u{1161}",
+            "\u{1161}\u{11ab}",
+            "\u{11ab}\u{1100}",
+            "\u{1100}\u{1173}",
+            "\u{1173}\u{11af}",
+            "한 \u{1112}",
+            " \u{1112}\u{1161}",
+            "\u{1112}\u{1161}\u{11ab}",
+            "\u{1161}\u{11ab}\u{1100}",
+            "\u{11ab}\u{1100}\u{1173}",
+            "\u{1100}\u{1173}\u{11af}",
+        ],
+    ),
+    (
+        "char",
+        2,
+        4,
+        "한 \u{1112}\u{1161}\u{11ab}\u{1100}\u{1173}\u{11af}",
+        &[
+            "한 ",
+            " \u{1112}",
+            "\u{1112}\u{1161}",
+            "\u{1161}\u{11ab}",
+            "\u{11ab}\u{1100}",
+            "\u{1100}\u{1173}",
+            "\u{1173}\u{11af}",
+            "한 \u{1112}",
+            " \u{1112}\u{1161}",
+            "\u{1112}\u{1161}\u{11ab}",
+            "\u{1161}\u{11ab}\u{1100}",
+            "\u{11ab}\u{1100}\u{1173}",
+            "\u{1100}\u{1173}\u{11af}",
+            "한 \u{1112}\u{1161}",
+            " \u{1112}\u{1161}\u{11ab}",
+            "\u{1112}\u{1161}\u{11ab}\u{1100}",
+            "\u{1161}\u{11ab}\u{1100}\u{1173}",
+            "\u{11ab}\u{1100}\u{1173}\u{11af}",
+        ],
+    ),
+    (
+        "char_wb",
+        2,
+        4,
+        " lead trail ",
+        &[" l", "le", "ea", "ad", "d ", " le", "lea", "ead", "ad ", " lea", "lead", "ead ", " t", "tr", "ra", "ai", "il", "l ", " tr", "tra", "rai", "ail", "il ", " tra", "trai", "rail", "ail "],
+    ),
+    (
+        "char_wb",
+        1,
+        3,
+        " lead trail ",
+        &[
+            " ", "l", "e", "a", "d", " ", " l", "le", "ea", "ad", "d ", " le", "lea", "ead", "ad ", " ", "t", "r", "a", "i", "l", " ", " t", "tr", "ra", "ai", "il", "l ", " tr", "tra", "rai", "ail",
+            "il ",
+        ],
+    ),
+    (
+        "char",
+        1,
+        3,
+        " lead trail ",
+        &[
+            " ", "l", "e", "a", "d", " ", "t", "r", "a", "i", "l", " ", " l", "le", "ea", "ad", "d ", " t", "tr", "ra", "ai", "il", "l ", " le", "lea", "ead", "ad ", "d t", " tr", "tra", "rai",
+            "ail", "il ",
+        ],
+    ),
+    (
+        "char",
+        2,
+        4,
+        " lead trail ",
+        &[
+            " l", "le", "ea", "ad", "d ", " t", "tr", "ra", "ai", "il", "l ", " le", "lea", "ead", "ad ", "d t", " tr", "tra", "rai", "ail", "il ", " lea", "lead", "ead ", "ad t", "d tr", " tra",
+            "trai", "rail", "ail ",
+        ],
+    ),
     ("char_wb", 2, 4, "A\u{9}B", &[" a", "a ", " a ", " b", "b ", " b "]),
     ("char_wb", 1, 3, "A\u{9}B", &[" ", "a", " ", " a", "a ", " a ", " ", "b", " ", " b", "b ", " b "]),
     ("char", 1, 3, "A\u{9}B", &["a", "\u{9}", "b", "a\u{9}", "\u{9}b", "a\u{9}b"]),

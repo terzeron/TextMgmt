@@ -1,5 +1,4 @@
-//! `EsTransport`의 실제 HTTP 구현. `libs/es_client`와 같은 규칙을 따른다: `ureq`로 내부망 http만 쓰고,
-//! https 주소는 연결하지 않고 거부한다(인증서 검증 우회는 구현하지 않는다).
+//! `EsTransport`의 실제 HTTP 구현. `libs/es_client`와 같은 HTTP(S) 전송 및 인증서 검증 규칙을 쓴다.
 //!
 //! `op`는 Python `Elasticsearch` 클라이언트 메서드 이름이고 `kwargs`는 같은 키워드 인자다.
 //! 이 모듈이 그것을 ES REST 요청으로 바꾼다(검증한 서버는 ES 9.1.0이다).
@@ -19,8 +18,10 @@
 //! | `delete_by_query` / `update_by_query` | `POST /{index}/_delete_by_query` / `_update_by_query` (`conflicts`, `refresh`는 쿼리 문자열) |
 //! | `bulk` | `POST /_bulk` (`body` 배열을 NDJSON으로, `timeout`, `refresh`는 쿼리 문자열) |
 
+use std::path::Path;
 use std::time::Duration;
 
+use es_client::build_agent;
 use serde_json::{Map, Value};
 
 use super::{EsError, EsTransport, base64_encode};
@@ -32,7 +33,7 @@ const QUERY_PARAMS: [&str; 4] = ["scroll", "timeout", "conflicts", "refresh"];
 const RESPONSE_LIMIT: u64 = 512 * 1024 * 1024;
 
 pub struct HttpTransport {
-    agent: ureq::Agent,
+    agent: Result<ureq::Agent, EsError>,
     base: String,
     auth: Option<String>,
     index: String,
@@ -84,12 +85,16 @@ fn param_text(value: &Value) -> Option<String> {
 }
 
 impl HttpTransport {
-    /// `url`은 `http://host:port`이다. `user`와 `password`가 모두 비어 있으면 인증 헤더를 보내지 않는다.
+    /// HTTP 또는 HTTPS endpoint를 쓴다. HTTPS는 기본 WebPKI roots로 검증한다.
     pub fn new(url: &str, user: &str, password: &str, index: &str, timeout: Duration) -> Self {
-        // 내부망 http로만 통신한다. 같은 빌드에 다른 crate가 켠 TLS 기능이 섞여도 https 주소는 `call`에서 거부한다.
-        let builder = ureq::Agent::config_builder().timeout_global(Some(timeout)).http_status_as_error(false);
+        Self::new_with_ca(url, user, password, index, timeout, None)
+    }
+
+    /// 사설 CA를 지정하면 해당 CA로 HTTPS 인증서를 검증한다.
+    pub fn new_with_ca(url: &str, user: &str, password: &str, index: &str, timeout: Duration, ca_cert_path: Option<&Path>) -> Self {
         let auth = (!user.is_empty() || !password.is_empty()).then(|| format!("Basic {}", base64_encode(format!("{user}:{password}").as_bytes(), B64_STANDARD)));
-        HttpTransport { agent: builder.build().into(), base: url.trim_end_matches('/').to_string(), auth, index: index.to_string() }
+        let agent = build_agent(timeout, ca_cert_path).map_err(EsError::Other);
+        HttpTransport { agent, base: url.trim_end_matches('/').to_string(), auth, index: index.to_string() }
     }
 
     fn index_of<'a>(&'a self, kwargs: &'a Value) -> String {
@@ -175,6 +180,7 @@ impl HttpTransport {
 
     /// 요청을 보내고 `(상태 코드, 본문 텍스트)`를 돌려준다. 상태 코드 오류는 호출한 쪽이 해석한다.
     fn execute(&self, request: Request) -> Result<(u16, String), EsError> {
+        let agent = self.agent.as_ref().map_err(Clone::clone)?;
         let mut url = format!("{}{}", self.base, request.path);
         if !request.query.is_empty() {
             let pairs: Vec<String> = request.query.iter().map(|(k, v)| format!("{k}={}", encode(v))).collect();
@@ -187,15 +193,15 @@ impl HttpTransport {
         }
         let transport_err = |e: &dyn std::fmt::Display| EsError::Transport(e.to_string());
         let result = match request.body {
-            Body::None => self.agent.run(builder.body(()).map_err(|e| transport_err(&e))?),
-            Body::Json(value) => self.agent.run(builder.header("Content-Type", "application/json").body(value.to_string().into_bytes()).map_err(|e| transport_err(&e))?),
+            Body::None => agent.run(builder.body(()).map_err(|e| transport_err(&e))?),
+            Body::Json(value) => agent.run(builder.header("Content-Type", "application/json").body(value.to_string().into_bytes()).map_err(|e| transport_err(&e))?),
             Body::Ndjson(lines) => {
                 let mut text = String::new();
                 for line in &lines {
                     text.push_str(&line.to_string());
                     text.push('\n');
                 }
-                self.agent.run(builder.header("Content-Type", "application/x-ndjson").body(text.into_bytes()).map_err(|e| transport_err(&e))?)
+                agent.run(builder.header("Content-Type", "application/x-ndjson").body(text.into_bytes()).map_err(|e| transport_err(&e))?)
             }
         };
         let mut response = result.map_err(|e| transport_err(&e))?;
@@ -211,8 +217,8 @@ impl EsTransport for HttpTransport {
     }
 
     fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError> {
-        if !self.base.starts_with("http://") {
-            return Err(EsError::Transport(format!("ES는 내부망 http만 지원한다(https와 인증서 검증 우회는 쓰지 않는다): {}", self.base)));
+        if !self.base.starts_with("http://") && !self.base.starts_with("https://") {
+            return Err(EsError::Transport(format!("ES URL은 http 또는 https여야 한다: {}", self.base)));
         }
         let request = self.plan(op, kwargs)?;
         let (status, text) = self.execute(request)?;

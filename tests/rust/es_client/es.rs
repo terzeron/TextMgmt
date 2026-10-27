@@ -2,12 +2,16 @@
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use es_client::{EsClient, EsError};
 use serde_json::{Value, json};
+
+#[path = "../common/tls_server.rs"]
+mod tls_server;
 
 struct Captured {
     request_line: String,
@@ -23,34 +27,40 @@ impl Captured {
 
 /// 요청 하나를 받아 `status`와 `body`로 응답하고, 받은 요청을 돌려주는 서버를 띄운다.
 fn serve_once(status: u16, body: Value) -> (String, mpsc::Receiver<Captured>) {
+    serve_sequence(vec![(status, body)])
+}
+
+fn serve_sequence(responses: Vec<(u16, Value)>) -> (String, mpsc::Receiver<Captured>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let mut buf = Vec::new();
-        let mut chunk = [0u8; 4096];
-        let header_end = loop {
-            let n = stream.read(&mut chunk).unwrap();
-            buf.extend_from_slice(&chunk[..n]);
-            if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                break p + 4;
+        for (status, body) in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let header_end = loop {
+                let n = stream.read(&mut chunk).unwrap();
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break p + 4;
+                }
+            };
+            let head = String::from_utf8_lossy(&buf[..header_end]).into_owned();
+            let mut lines = head.lines();
+            let request_line = lines.next().unwrap().to_owned();
+            let headers: Vec<(String, String)> = lines.filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned())).collect();
+            let len: usize = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-length")).and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
+            while buf.len() < header_end + len {
+                let n = stream.read(&mut chunk).unwrap();
+                buf.extend_from_slice(&chunk[..n]);
             }
-        };
-        let head = String::from_utf8_lossy(&buf[..header_end]).into_owned();
-        let mut lines = head.lines();
-        let request_line = lines.next().unwrap().to_owned();
-        let headers: Vec<(String, String)> = lines.filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned())).collect();
-        let len: usize = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-length")).and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
-        while buf.len() < header_end + len {
-            let n = stream.read(&mut chunk).unwrap();
-            buf.extend_from_slice(&chunk[..n]);
+            let parsed = serde_json::from_slice(&buf[header_end..header_end + len]).unwrap_or(Value::Null);
+            let payload = body.to_string();
+            write!(stream, "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}", payload.len()).unwrap();
+            tx.send(Captured { request_line, headers, body: parsed }).unwrap();
         }
-        let parsed = serde_json::from_slice(&buf[header_end..header_end + len]).unwrap_or(Value::Null);
-        let payload = body.to_string();
-        write!(stream, "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}", payload.len()).unwrap();
-        tx.send(Captured { request_line, headers, body: parsed }).unwrap();
     });
     (url, rx)
 }
@@ -152,10 +162,52 @@ fn http_error_status_is_an_error_with_the_body() {
 }
 
 #[test]
-fn max_result_count_above_the_window_is_rejected_because_scroll_is_not_supported() {
-    let (url, _rx) = serve_once(200, hits(json!(1.0), &[]));
-    let err = client(&url).search_by_title("a", "", 0, Some(10_001)).unwrap_err();
-    assert!(matches!(err, EsError::Unsupported(_)));
+fn search_scrolls_above_result_window_and_clears_context() {
+    let first_rows = (1..=10_000).map(|id| json!({"_id":id.to_string(),"_score":2.0,"_source":{"title":"first"}})).collect::<Vec<_>>();
+    let first = json!({"_scroll_id":"s1","hits":{"max_score":2.0,"hits":first_rows}});
+    let second = json!({"_scroll_id":"s2","hits":{"max_score":4.0,"hits":[{"_id":"10001","_score":2.0,"_source":{"title":"second"}}]}});
+    let (url, rx) = serve_sequence(vec![(200, first), (200, second), (200, json!({"succeeded":true}))]);
+    let result = client(&url).search(json!({"match_all":{}}), 10_001, Some(&["title"])).unwrap();
+    assert_eq!(result.len(), 10_001);
+    assert_eq!(result.first().unwrap().id, 1);
+    assert_eq!(result.last().unwrap().id, 10_001);
+    assert_eq!(result.first().unwrap().score, 100.0);
+    assert_eq!(result.last().unwrap().score, 50.0);
+    let initial = rx.recv().unwrap();
+    assert_eq!(initial.request_line, "POST /books/_search?scroll=10m HTTP/1.1");
+    assert_eq!(initial.body["size"], 10_000);
+    assert!(initial.body.get("_source").is_none(), "Python scroll path requests full source");
+    let page = rx.recv().unwrap();
+    assert_eq!(page.request_line, "POST /_search/scroll HTTP/1.1");
+    assert_eq!(page.body, json!({"scroll":"10m","scroll_id":"s1"}));
+    let clear = rx.recv().unwrap();
+    assert_eq!(clear.request_line, "DELETE /_search/scroll HTTP/1.1");
+    assert_eq!(clear.body, json!({"scroll_id":"s2"}));
+}
+
+#[test]
+fn search_scroll_matches_python_empty_max_score_and_cleans_up_updated_id() {
+    let first = json!({"_scroll_id":"s1","hits":{"max_score":1.0,"hits":[{"_id":"1","_score":1.0,"_source":{}}]}});
+    let next = json!({"_scroll_id":"s2","hits":{"max_score":null,"hits":[{"_id":"2","_score":1.0,"_source":{}}]}});
+    let (url, rx) = serve_sequence(vec![(200, first), (200, next), (200, json!({"succeeded":true}))]);
+    assert!(client(&url).search(json!({}), 10_001, None).unwrap().is_empty());
+    assert_eq!(rx.recv().unwrap().request_line, "POST /books/_search?scroll=10m HTTP/1.1");
+    assert_eq!(rx.recv().unwrap().request_line, "POST /_search/scroll HTTP/1.1");
+    let clear = rx.recv().unwrap();
+    assert_eq!(clear.request_line, "DELETE /_search/scroll HTTP/1.1");
+    assert_eq!(clear.body, json!({"scroll_id":"s2"}));
+}
+
+#[test]
+fn search_scroll_clears_context_when_a_page_request_fails() {
+    let first = json!({"_scroll_id":"s1","hits":{"max_score":1.0,"hits":[{"_id":"1","_score":1.0,"_source":{}}]}});
+    let (url, rx) = serve_sequence(vec![(200, first), (500, json!({"error":"scroll failed"})), (200, json!({"succeeded":true}))]);
+    assert!(matches!(client(&url).search(json!({}), 10_001, None), Err(EsError::Status { status: 500, .. })));
+    assert_eq!(rx.recv().unwrap().request_line, "POST /books/_search?scroll=10m HTTP/1.1");
+    assert_eq!(rx.recv().unwrap().request_line, "POST /_search/scroll HTTP/1.1");
+    let clear = rx.recv().unwrap();
+    assert_eq!(clear.request_line, "DELETE /_search/scroll HTTP/1.1");
+    assert_eq!(clear.body, json!({"scroll_id":"s1"}));
 }
 
 #[test]
@@ -176,10 +228,22 @@ fn from_env_reports_the_first_missing_variable() {
 }
 
 #[test]
-fn https_urls_are_rejected_even_when_tls_is_built_in_by_another_crate() {
-    // 내부망 http 전용이다. 인증서 검증을 끄는 우회로를 두지 않고 요청 단계에서 거부한다.
-    let err = EsClient::new("https://127.0.0.1:1", "u", "p", "books").search(json!({}), 10, None).unwrap_err();
-    assert!(matches!(&err, EsError::Transport(m) if m.contains("http만")), "{err}");
+fn https_uses_the_configured_ca_and_verifies_the_server_certificate() {
+    let (url, server) = tls_server::serve_tls_once();
+    let ca_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/rust/common/tls/local-es.crt");
+    let client = EsClient::new_with_ca(&url, "u", "p", "books", Some(&ca_path)).unwrap();
+
+    assert_eq!(client.connect_with_retry(1, &|_| panic!("one successful TLS request should not retry")).unwrap()["version"]["number"], "9.1.0");
+    server.join().unwrap();
+}
+
+#[test]
+fn https_rejects_an_untrusted_server_certificate() {
+    let (url, server) = tls_server::serve_tls_once();
+    let error = EsClient::new(&url, "u", "p", "books").connect_with_retry(1, &|_| {}).unwrap_err();
+
+    assert!(matches!(error, EsError::Transport(_)), "{error}");
+    server.join().unwrap();
 }
 
 #[test]

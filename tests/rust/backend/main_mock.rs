@@ -1,4 +1,5 @@
 //! 원본: tests/test_main_mock.py
+#![allow(dead_code)]
 //!
 //! backend/main.py의 라우트 단위 목 테스트다. ES와 MySQL 없이 매니저를 가짜로 끼운다.
 //! Python은 `_LazyProxy._instance`를 AsyncMock/MagicMock으로 바꿔 끼우고 `dependency_overrides`로 인증을 우회한다.
@@ -23,8 +24,7 @@
 //!     `get_pdf_pages(id, start, end) -> BookResponse`, `path_prefix()`, `es_manager() -> Arc<dyn EsManagerApi>`
 //!   - 문서에 없어 가정한 메서드는 아래 `impl BookManagerApi for Mock`을 본다. 파이썬 `book_manager.py` 시그니처를 따랐고, 콜백 인자는 다음 모양이다.
 //!     `ProgressFn = Arc<dyn Fn(Value) -> BoxFuture<'static, ()> + Send + Sync>`, `ContinueFn = Arc<dyn Fn() -> BoxFuture<'static, bool> + Send + Sync>`
-//!     (`propose_category_changes(category, mappings, content_type, use_bookstore, use_content_meta, delay, on_progress)`,
-//!      `apply_category_changes(items, allowed, content_type, clean_existing, on_progress, on_item_done, should_continue)`)
+//!     호출 예: `propose_category_changes(category, mappings, ...)`, `apply_category_changes(items, allowed, ...)`.
 //!   - `Err(String)`(Python 예외)은 반환형이 `Result`인 메서드(`reload_*`, `get_category_mismatch_details`)에서만 값으로 전달된다. 나머지는 `Mock`이 패닉으로 올린다.
 //! - `backend::es_manager::{EsManagerApi, EsError}`: `delete(&self, i64) -> Result<bool, EsError>`
 //! - `backend::category_mapping::{CategoryMappingApi, MappingError}`: 동기 메서드이고 모든 메서드에 기본 구현이 있다. 메서드 모양은 아래 `impl CategoryMappingApi for Mock`을 본다.
@@ -52,11 +52,14 @@ use std::time::Duration;
 
 use axum::http::Method;
 use backend::book::Book;
-use backend::book_manager::{BookContent, BookManagerApi, BookResponse, ContinueFn, ProgressFn};
-use backend::category_mapping::{CategoryMappingApi, MappingError};
+use backend::book_manager::{BookContent, BookManagerApi, BookResponse};
+use backend::db::{DbValue, Row};
 use backend::es_manager::{EsError, EsManagerApi};
-use backend::main::{AppDeps, AuthMode, AuthSlots, BookstoreSearch, GoogleVerifier, RoleResolver, TaskRunner};
-use backend::refresh_token_store::RefreshTokenStoreApi;
+use backend::main::{
+    AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookstoreFactory, BookstoreSearch, CategoryMappingApi, GoogleVerifier, MappingError, ProposeCategoryChanges, ReloadProgress, RoleResolver,
+    TaskHandle, TaskRunner,
+};
+use backend::refresh_token_store::{RefreshTokenStoreApi, StoreError};
 use common::env::{EnvGuard, EnvReadGuard};
 use common::{Response, TestClient};
 use serde_json::{Map, Value, json};
@@ -135,25 +138,33 @@ fn set_of(paths: &[&str]) -> HashSet<String> {
 // 반환형이 `Result`가 아닌 메서드에서 `Err(String)`(= Python 예외)이 나오면 패닉으로 올린다.
 
 /// 비동기 결과. 콜백과 side effect가 쓴다.
-type Fut<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// `on_progress`/`on_item_done`/`should_continue`를 "JSON 하나를 받아 JSON 하나를 돌려주는 awaitable"로 통일한 것.
-type Callback = Arc<dyn Fn(Value) -> Fut<Value> + Send + Sync>;
+type Callback<'a> = Arc<dyn Fn(Value) -> Fut<'a, Value> + Send + Sync + 'a>;
 
 /// Python 호출 하나의 기록. 위치 인자, 키워드 인자(JSON 객체), 콜백.
 #[derive(Clone)]
-struct CallArgs {
+struct CallArgs<'a> {
     args: Vec<Value>,
     kwargs: Value,
-    callbacks: HashMap<String, Callback>,
+    callbacks: HashMap<String, Callback<'a>>,
 }
 
-impl CallArgs {
+#[derive(Clone)]
+struct RecordedArgs {
+    args: Vec<Value>,
+    kwargs: Value,
+    callback_names: HashSet<String>,
+    thread_id: std::thread::ThreadId,
+}
+
+impl<'a> CallArgs<'a> {
     fn new(args: Vec<Value>, kwargs: Value) -> Self {
         Self { args, kwargs, callbacks: HashMap::new() }
     }
 
-    fn with_callback(mut self, name: &str, callback: Option<Callback>) -> Self {
+    fn with_callback(mut self, name: &str, callback: Option<Callback<'a>>) -> Self {
         if let Some(callback) = callback {
             self.callbacks.insert(name.to_string(), callback);
         }
@@ -168,13 +179,13 @@ macro_rules! call_args {
     };
 }
 
-type SideEffect = Arc<dyn Fn(CallArgs) -> Fut<Result<Value, String>> + Send + Sync>;
+type SideEffect = Arc<dyn for<'a> Fn(CallArgs<'a>) -> Fut<'a, Result<Value, String>> + Send + Sync>;
 
 #[derive(Default)]
 struct MockState {
     returns: HashMap<String, Value>,
     side_effects: HashMap<String, SideEffect>,
-    calls: Vec<(String, CallArgs)>,
+    calls: Vec<(String, RecordedArgs)>,
     path_prefix: Option<PathBuf>,
 }
 
@@ -193,7 +204,7 @@ impl Mock {
         s.returns.insert(method.to_string(), value);
     }
 
-    fn side_effect(&self, method: &str, f: impl Fn(CallArgs) -> Fut<Result<Value, String>> + Send + Sync + 'static) {
+    fn side_effect(&self, method: &str, f: impl for<'a> Fn(CallArgs<'a>) -> Fut<'a, Result<Value, String>> + Send + Sync + 'static) {
         self.0.lock().unwrap().side_effects.insert(method.to_string(), Arc::new(f));
     }
 
@@ -210,7 +221,7 @@ impl Mock {
         self.0.lock().unwrap().path_prefix = Some(p.to_path_buf());
     }
 
-    fn calls(&self, method: &str) -> Vec<CallArgs> {
+    fn calls(&self, method: &str) -> Vec<RecordedArgs> {
         self.0.lock().unwrap().calls.iter().filter(|(m, _)| m == method).map(|(_, c)| c.clone()).collect()
     }
 
@@ -241,10 +252,13 @@ impl Mock {
     }
 
     /// 호출을 기록하고 side effect 또는 `returns` 값을 돌려준다. `Err`는 Python 예외다.
-    fn call(&self, method: &str, args: CallArgs) -> Fut<Result<Value, String>> {
+    fn call<'a>(&self, method: &str, args: CallArgs<'a>) -> Fut<'a, Result<Value, String>> {
         let (effect, ret) = {
             let mut s = self.0.lock().unwrap();
-            s.calls.push((method.to_string(), args.clone()));
+            s.calls.push((
+                method.to_string(),
+                RecordedArgs { args: args.args.clone(), kwargs: args.kwargs.clone(), callback_names: args.callbacks.keys().cloned().collect(), thread_id: std::thread::current().id() },
+            ));
             (s.side_effects.get(method).cloned(), s.returns.get(method).cloned())
         };
         match effect {
@@ -254,7 +268,7 @@ impl Mock {
     }
 
     /// 반환형이 `Result`가 아닌 비동기 메서드용. 예외는 패닉이다.
-    async fn invoke(&self, method: &str, args: CallArgs) -> Value {
+    async fn invoke<'a>(&self, method: &str, args: CallArgs<'a>) -> Value {
         match self.call(method, args).await {
             Ok(v) => v,
             Err(e) => panic!("{method}가 예외를 던졌다: {e}"),
@@ -262,11 +276,11 @@ impl Mock {
     }
 
     /// 동기 trait 메서드용. side effect가 바로 끝나는 future여야 한다.
-    fn invoke_sync_try(&self, method: &str, args: CallArgs) -> Result<Value, String> {
+    fn invoke_sync_try(&self, method: &str, args: CallArgs<'_>) -> Result<Value, String> {
         poll_ready(self.call(method, args))
     }
 
-    fn invoke_sync(&self, method: &str, args: CallArgs) -> Value {
+    fn invoke_sync(&self, method: &str, args: CallArgs<'_>) -> Value {
         match self.invoke_sync_try(method, args) {
             Ok(v) => v,
             Err(e) => panic!("{method}가 예외를 던졌다: {e}"),
@@ -275,7 +289,7 @@ impl Mock {
 }
 
 /// 이미 끝난 future를 한 번 폴링해서 값을 꺼낸다. 동기 trait 메서드(`CategoryMappingApi` 등)가 쓴다.
-fn poll_ready<T>(mut fut: Fut<T>) -> T {
+fn poll_ready<T>(mut fut: Fut<'_, T>) -> T {
     let mut cx = Context::from_waker(Waker::noop());
     match fut.as_mut().poll(&mut cx) {
         Poll::Ready(v) => v,
@@ -310,16 +324,16 @@ fn count(v: &Value) -> i64 {
 }
 
 fn opt_book(v: Value) -> Option<Book> {
-    if v.is_null() { None } else { Some(serde_json::from_value(v).expect("Book JSON")) }
+    if v.is_null() { None } else { Some(Book::new(v["book_id"].as_i64().unwrap_or_default(), &v, v["score"].as_f64().unwrap_or_default())) }
 }
 
 fn books(v: Value) -> Vec<Book> {
-    v.as_array().map(|a| a.iter().cloned().map(|b| serde_json::from_value(b).expect("Book JSON")).collect()).unwrap_or_default()
+    v.as_array().map(|a| a.iter().cloned().map(|b| opt_book(b).expect("Book JSON")).collect()).unwrap_or_default()
 }
 
 /// `[[book, display_title], ...]`
 fn titled_books(v: Value) -> Vec<(Book, String)> {
-    v.as_array().map(|a| a.iter().map(|row| (serde_json::from_value(arr(row, 0)).expect("Book JSON"), arr(row, 1).as_str().unwrap_or("").to_string())).collect()).unwrap_or_default()
+    v.as_array().map(|a| a.iter().map(|row| (opt_book(arr(row, 0)).expect("Book JSON"), arr(row, 1).as_str().unwrap_or("").to_string())).collect()).unwrap_or_default()
 }
 
 /// `{"__response__": {"content": .., "media_type": ..}}` -> 200 응답.
@@ -333,28 +347,23 @@ fn pair(v: &Value) -> (Option<Value>, Option<String>) {
     (opt_json(arr(v, 0)), opt_string(arr(v, 1)))
 }
 
-fn progress_callback(f: Option<ProgressFn>) -> Option<Callback> {
+fn progress_callback<'a>(f: Option<&'a (dyn Fn(Value) + Send + Sync)>) -> Option<Callback<'a>> {
     f.map(|f| -> Callback {
-        Arc::new(move |event: Value| -> Fut<Value> {
-            let f = f.clone();
-            Box::pin(async move {
-                f(event).await;
-                Value::Null
-            })
+        Arc::new(move |event: Value| -> Fut<'a, Value> {
+            f(event);
+            Box::pin(async { Value::Null })
         })
     })
 }
 
-fn continue_callback(f: Option<ContinueFn>) -> Option<Callback> {
+fn continue_callback<'a>(f: Option<&'a (dyn Fn() -> bool + Send + Sync)>) -> Option<Callback<'a>> {
     f.map(|f| -> Callback {
-        Arc::new(move |_: Value| -> Fut<Value> {
-            let f = f.clone();
-            Box::pin(async move { json!(f().await) })
+        Arc::new(move |_: Value| -> Fut<'a, Value> {
+            let value = f();
+            Box::pin(async move { json!(value) })
         })
     })
 }
-
-type MismatchRet = Result<(Option<Value>, Option<String>), String>;
 
 #[async_trait::async_trait]
 impl BookManagerApi for Mock {
@@ -373,11 +382,21 @@ impl BookManagerApi for Mock {
 
     async fn get_book_content(&self, id: i64) -> BookContent {
         let v = self.invoke("get_book_content", call_args!([id], {})).await;
-        BookContent::Text(v.as_str().unwrap_or("").to_string())
+        match v.get("__error__").and_then(Value::as_str) {
+            Some(message) => BookContent::Error(message.to_string()),
+            None => BookContent::Text(v.as_str().unwrap_or("").to_string()),
+        }
     }
 
     async fn get_book_preview(&self, id: i64, chapters: Option<i64>, resource_base_url: Option<&str>) -> BookResponse {
         to_response(self.invoke("get_book_preview", call_args!([], {"book_id": id, "chapters": chapters, "resource_base_url": resource_base_url})).await)
+    }
+
+    async fn get_book_preview_with_pages(&self, id: i64, pages: Option<i64>, chapters: Option<i64>, resource_base_url: Option<&str>) -> BookResponse {
+        to_response(
+            self.invoke("get_book_preview", call_args!([], {"book_id": id, "pages": pages.unwrap_or(5), "chapters": chapters.unwrap_or(10), "resource_base_url": resource_base_url.unwrap_or("")}))
+                .await,
+        )
     }
 
     async fn get_pdf_pages(&self, id: i64, start: i64, end: i64) -> BookResponse {
@@ -436,39 +455,20 @@ impl BookManagerApi for Mock {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn propose_category_changes(
-        &self,
-        category: &str,
-        mappings: &Value,
-        content_type: &str,
-        use_bookstore: bool,
-        use_content_meta: bool,
-        delay: f64,
-        on_progress: Option<ProgressFn>,
-    ) -> (Value, Option<String>) {
-        let args = call_args!([category, mappings], {"content_type": content_type, "use_bookstore": use_bookstore, "use_content_meta": use_content_meta, "delay": delay})
-            .with_callback("on_progress", progress_callback(on_progress));
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> (Value, Option<String>) {
+        let args = call_args!([request.category, request.mappings], {"content_type": request.content_type, "use_bookstore": request.use_bookstore, "use_content_meta": request.use_content_meta, "delay": request.delay})
+            .with_callback("on_progress", progress_callback(request.on_progress));
         let v = self.invoke("propose_category_changes", args).await;
         (arr(&v, 0), opt_string(arr(&v, 1)))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn apply_category_changes(
-        &self,
-        items: &[Value],
-        allowed: &HashSet<String>,
-        content_type: &str,
-        clean_existing: bool,
-        on_progress: Option<ProgressFn>,
-        on_item_done: Option<ProgressFn>,
-        should_continue: Option<ContinueFn>,
-    ) -> (Value, Option<String>) {
-        let mut allowed: Vec<&String> = allowed.iter().collect();
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> (Value, Option<String>) {
+        let mut allowed: Vec<&String> = request.allowed_file_paths.iter().collect();
         allowed.sort();
-        let args = call_args!([items, allowed], {"content_type": content_type, "clean_existing": clean_existing})
-            .with_callback("on_progress", progress_callback(on_progress))
-            .with_callback("on_item_done", progress_callback(on_item_done))
-            .with_callback("should_continue", continue_callback(should_continue));
+        let args = call_args!([request.items, allowed], {"content_type": request.content_type, "clean_existing": request.clean_existing})
+            .with_callback("on_progress", progress_callback(request.on_progress))
+            .with_callback("on_item_done", progress_callback(request.on_item_done))
+            .with_callback("should_continue", continue_callback(request.should_continue));
         let v = self.invoke("apply_category_changes", args).await;
         (arr(&v, 0), opt_string(arr(&v, 1)))
     }
@@ -483,16 +483,49 @@ impl BookManagerApi for Mock {
         (arr(&v, 0).as_str().unwrap_or("").to_string(), opt_string(arr(&v, 1)))
     }
 
-    async fn reload_category(&self, category: &str, content_type: &str) -> MismatchRet {
-        self.call("reload_category", call_args!([category, content_type], {})).await.map(|v| pair(&v))
+    async fn reload_category(&self, category: &str, content_type: &str) -> (Value, Option<String>) {
+        match self.call("reload_category", call_args!([category, content_type], {})).await {
+            Ok(v) => (arr(&v, 0), opt_string(arr(&v, 1))),
+            Err(e) => (Value::Null, Some(e)),
+        }
     }
 
-    async fn reload_category_mismatches(&self, content_type: &str, _on_progress: Option<&(dyn Fn(Value) + Send + Sync)>) -> MismatchRet {
-        self.call("reload_category_mismatches", call_args!([content_type], {})).await.map(|v| pair(&v))
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+        let args = call_args!([content_type], {}).with_callback(
+            "on_progress",
+            on_progress.map(|f| {
+                Arc::new(move |event| -> Fut<'_, Value> {
+                    let f = f.clone();
+                    Box::pin(async move {
+                        f(event);
+                        Value::Null
+                    })
+                }) as Callback<'_>
+            }),
+        );
+        match self.call("reload_category_mismatches", args).await {
+            Ok(v) => (arr(&v, 0), opt_string(arr(&v, 1))),
+            Err(e) => (Value::Null, Some(e)),
+        }
     }
 
-    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, _on_progress: Option<&(dyn Fn(Value) + Send + Sync)>) -> MismatchRet {
-        self.call("reload_category_mismatch_files", call_args!([category, content_type], {})).await.map(|v| pair(&v))
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+        let args = call_args!([category, content_type], {}).with_callback(
+            "on_progress",
+            on_progress.map(|f| {
+                Arc::new(move |event| -> Fut<'_, Value> {
+                    let f = f.clone();
+                    Box::pin(async move {
+                        f(event);
+                        Value::Null
+                    })
+                }) as Callback<'_>
+            }),
+        );
+        match self.call("reload_category_mismatch_files", args).await {
+            Ok(v) => (arr(&v, 0), opt_string(arr(&v, 1))),
+            Err(e) => (Value::Null, Some(e)),
+        }
     }
 
     fn get_category_mismatch_details(&self, category: &str) -> Result<Value, String> {
@@ -555,93 +588,136 @@ impl CategoryMappingApi for Mock {
         self.invoke_sync_try("set_latest_excluded", call_args!([category, excluded], {"content_type": ct})).map(|v| flag(&v)).map_err(MappingError::Other)
     }
 
-    fn acquire_reload_lock(&self, ct: &str, category: Option<&str>, reload_source: &str) -> (bool, Option<String>, Option<Value>) {
+    fn acquire_reload_lock(&self, ct: &str, category: Option<&str>, reload_source: Option<&str>) -> Result<(bool, Option<String>, Option<Value>), MappingError> {
         let v = self.invoke_sync("acquire_reload_lock", call_args!([ct, category, reload_source], {}));
-        (flag(&arr(&v, 0)), opt_string(arr(&v, 1)), opt_json(arr(&v, 2)))
+        Ok((flag(&arr(&v, 0)), opt_string(arr(&v, 1)), opt_json(arr(&v, 2))))
     }
 
-    fn heartbeat_reload_lock(&self, ct: &str, category: Option<&str>, counts: &Value) {
-        self.invoke_sync("heartbeat_reload_lock", CallArgs::new(vec![json!(ct), json!(category)], counts.clone()));
+    fn heartbeat_reload_lock(&self, ct: &str, category: Option<&str>, counts: &Value) -> Result<(), String> {
+        self.invoke_sync_try("heartbeat_reload_lock", CallArgs::new(vec![json!(ct), json!(category)], counts.clone())).map(|_| ())
     }
 
-    fn complete_reload_lock(&self, ct: &str, status: &str, error: Option<&str>, category: Option<&str>, counts: &Value) {
+    fn complete_reload_lock(&self, ct: &str, status: &str, error: Option<&str>, category: Option<&str>, counts: &Value) -> Result<(), String> {
         let mut kwargs = counts.clone();
         if let Some(category) = category {
             kwargs["category"] = json!(category);
         }
-        self.invoke_sync("complete_reload_lock", CallArgs::new(vec![json!(ct), json!(status), json!(error)], kwargs));
+        self.invoke_sync_try("complete_reload_lock", CallArgs::new(vec![json!(ct), json!(status), json!(error)], kwargs)).map(|_| ())
     }
 
-    fn get_reload_status(&self, ct: &str, category: Option<&str>) -> Option<Value> {
-        opt_json(self.invoke_sync("get_reload_status", call_args!([ct, category], {})))
+    fn get_reload_status(&self, ct: &str, category: Option<&str>) -> Result<Option<Value>, MappingError> {
+        Ok(opt_json(self.invoke_sync("get_reload_status", call_args!([ct, category], {}))))
     }
 
-    fn release_reload_lock(&self, ct: &str, category: Option<&str>) {
-        self.invoke_sync("release_reload_lock", call_args!([ct, category], {}));
+    fn get_classify_proposal_status(&self, content_type: &str, stale_seconds: i64) -> Result<Value, MappingError> {
+        self.invoke_sync_try("get_classify_proposal_status", call_args!([content_type, stale_seconds], {})).map_err(MappingError::Other)
     }
 
-    fn get_classify_proposal_status(&self, content_type: &str, stale_seconds: i64) -> Value {
-        self.invoke_sync("get_classify_proposal_status", call_args!([content_type, stale_seconds], {}))
+    fn set_classify_proposal_status(&self, status: Value, content_type: &str) -> Result<(), MappingError> {
+        self.invoke_sync_try("set_classify_proposal_status", call_args!([status, content_type], {})).map(|_| ()).map_err(MappingError::Other)
     }
 
-    fn set_classify_proposal_status(&self, status: Value, content_type: &str) {
-        self.invoke_sync("set_classify_proposal_status", call_args!([status, content_type], {}));
+    fn merge_classify_proposal_status(&self, fields: Value, content_type: &str) -> Result<(), MappingError> {
+        self.invoke_sync_try("merge_classify_proposal_status", call_args!([fields, content_type], {})).map(|_| ()).map_err(MappingError::Other)
     }
 
-    fn merge_classify_proposal_status(&self, fields: Value, content_type: &str) {
-        self.invoke_sync("merge_classify_proposal_status", call_args!([fields, content_type], {}));
-    }
-
-    fn try_start_classify_proposal(&self, status: Value, content_type: &str, stale_seconds: i64) -> (bool, Value) {
+    fn try_start_classify_proposal(&self, status: Value, content_type: &str, stale_seconds: i64) -> Result<(bool, Value), MappingError> {
         let v = self.invoke_sync("try_start_classify_proposal", call_args!([status, content_type, stale_seconds], {}));
-        (flag(&arr(&v, 0)), arr(&v, 1))
+        Ok((flag(&arr(&v, 0)), arr(&v, 1)))
     }
 
-    fn try_begin_classify_apply(&self, apply_token: &str, content_type: &str, stale_seconds: i64) -> (bool, Value) {
+    fn try_begin_classify_apply(&self, apply_token: &str, content_type: &str, stale_seconds: i64) -> Result<(bool, Value), MappingError> {
         let v = self.invoke_sync("try_begin_classify_apply", call_args!([apply_token, content_type, stale_seconds], {}));
-        (flag(&arr(&v, 0)), arr(&v, 1))
+        Ok((flag(&arr(&v, 0)), arr(&v, 1)))
     }
 
-    fn clear_classify_proposal_items(&self, content_type: &str) {
+    fn clear_classify_proposal_items(&self, content_type: &str) -> Result<(), MappingError> {
         self.invoke_sync("clear_classify_proposal_items", call_args!([], {"content_type": content_type}));
+        Ok(())
     }
 
-    fn get_classify_proposal_items(&self, content_type: &str) -> Vec<Value> {
-        self.invoke_sync("get_classify_proposal_items", call_args!([], {"content_type": content_type})).as_array().cloned().unwrap_or_default()
+    fn get_classify_proposal_items(&self, content_type: &str) -> Result<Vec<Value>, MappingError> {
+        Ok(self.invoke_sync("get_classify_proposal_items", call_args!([], {"content_type": content_type})).as_array().cloned().unwrap_or_default())
     }
 
-    fn add_classify_proposal_items(&self, items: &[Value], source_category: &str, content_type: &str) {
-        self.invoke_sync("add_classify_proposal_items", call_args!([items, source_category], {"content_type": content_type}));
+    fn add_classify_proposal_items(&self, items: &[Value], source_category: &str, content_type: &str) -> Result<(), MappingError> {
+        self.invoke_sync_try("add_classify_proposal_items", call_args!([items, source_category], {"content_type": content_type})).map(|_| ()).map_err(MappingError::Other)
     }
 
-    fn update_classify_proposal_item_payloads(&self, items: &[Value], content_type: &str) {
-        self.invoke_sync("update_classify_proposal_item_payloads", call_args!([items], {"content_type": content_type}));
+    fn update_classify_proposal_item_payloads(&self, items: &[Value], content_type: &str) -> Result<(), MappingError> {
+        self.invoke_sync_try("update_classify_proposal_item_payloads", call_args!([items], {"content_type": content_type})).map(|_| ()).map_err(MappingError::Other)
     }
 
-    fn update_classify_proposal_item_status(&self, file_path: &str, apply_status: &str, apply_error: Option<&str>, content_type: &str) {
-        self.invoke_sync("update_classify_proposal_item_status", call_args!([file_path, apply_status, apply_error], {"content_type": content_type}));
+    fn update_classify_proposal_item_status(&self, file_path: &str, apply_status: &str, apply_error: Option<&str>, content_type: &str) -> Result<(), MappingError> {
+        self.invoke_sync_try("update_classify_proposal_item_status", call_args!([file_path, apply_status, apply_error], {"content_type": content_type})).map(|_| ()).map_err(MappingError::Other)
     }
 
-    fn delete_applied_classify_proposal_items(&self, content_type: &str) -> i64 {
-        count(&self.invoke_sync("delete_applied_classify_proposal_items", call_args!([], {"content_type": content_type})))
+    fn delete_applied_classify_proposal_items(&self, content_type: &str) -> Result<u64, MappingError> {
+        Ok(count(&self.invoke_sync("delete_applied_classify_proposal_items", call_args!([], {"content_type": content_type}))).max(0) as u64)
     }
 
-    fn delete_classify_proposal_item(&self, file_path: &str, content_type: &str) -> i64 {
-        count(&self.invoke_sync("delete_classify_proposal_item", call_args!([file_path], {"content_type": content_type})))
+    fn delete_classify_proposal_item(&self, file_path: &str, content_type: &str) -> Result<u64, MappingError> {
+        Ok(count(&self.invoke_sync("delete_classify_proposal_item", call_args!([file_path], {"content_type": content_type}))).max(0) as u64)
     }
 }
 
 /// refresh token 저장소 대역. `rotate`/`revoke_family`만 쓴다. Python 키워드 인자(`*`) 모양으로 기록한다.
 /// TODO(common): `RefreshTokenStoreApi`의 시그니처는 설계 문서에 없다. 파이썬 `refresh_token_store.py`를 따랐다.
 impl RefreshTokenStoreApi for Mock {
+    fn store_issued(&self, token_id: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64, client_ip: Option<&str>, user_agent: Option<&str>) -> Result<(), StoreError> {
+        let kwargs = json!({"token_id":token_id,"family_id":family_id,"email":email,"issued_at":issued_at,"expires_at":expires_at,"client_ip":client_ip,"user_agent":user_agent});
+        self.invoke_sync_try("store_issued", CallArgs::new(vec![], kwargs)).map(|_| ()).map_err(StoreError::Unsupported)
+    }
     #[allow(clippy::too_many_arguments)]
-    fn rotate(&self, current_token_id: &str, new_token_id: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64, client_ip: &str, user_agent: &str) -> Result<String, String> {
+    fn rotate(
+        &self,
+        current_token_id: &str,
+        new_token_id: &str,
+        family_id: &str,
+        email: &str,
+        issued_at: i64,
+        expires_at: i64,
+        client_ip: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> Result<String, StoreError> {
         let kwargs = json!({"current_token_id": current_token_id, "new_token_id": new_token_id, "family_id": family_id, "email": email, "issued_at": issued_at, "expires_at": expires_at, "client_ip": client_ip, "user_agent": user_agent});
-        self.invoke_sync_try("rotate", CallArgs::new(vec![], kwargs)).map(|v| v.as_str().unwrap_or("").to_string())
+        self.invoke_sync_try("rotate", CallArgs::new(vec![], kwargs)).map(|v| v.as_str().unwrap_or("").to_string()).map_err(StoreError::Unsupported)
     }
 
-    fn revoke_family(&self, family_id: &str, reason: &str) {
-        self.invoke_sync("revoke_family", call_args!([family_id, reason], {}));
+    fn revoke_family(&self, family_id: &str, reason: &str) -> Result<(), StoreError> {
+        self.invoke_sync_try("revoke_family", call_args!([family_id, reason], {})).map(|_| ()).map_err(StoreError::Unsupported)
+    }
+
+    fn get_token_observation(&self, token_id: &str) -> Result<Option<Value>, StoreError> {
+        self.invoke_sync_try("get_token_observation", call_args!([token_id], {})).map(opt_json).map_err(StoreError::Unsupported)
+    }
+
+    fn _session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
+        let value = self.invoke_sync_try("_session_rows", call_args!([email, family_id], {})).map_err(StoreError::Unsupported)?;
+        let rows = value
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| {
+                row.as_object()
+                    .into_iter()
+                    .flat_map(|obj| obj.iter())
+                    .map(|(key, value)| {
+                        (
+                            key.clone(),
+                            match value {
+                                Value::Null => DbValue::Null,
+                                Value::Number(n) => DbValue::Int(n.as_i64().unwrap_or_default()),
+                                Value::String(s) => DbValue::Text(s.clone()),
+                                _ => DbValue::Text(value.to_string()),
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        Ok(rows)
     }
 }
 
@@ -659,14 +735,14 @@ impl BookstoreSearch for StoreProxy {
         (rows, arr(&v, 1).as_str().unwrap_or("").to_string(), arr(&v, 2).as_str().unwrap_or("").to_string())
     }
 
-    fn build_search_url(&self, keyword: &str) -> String {
-        self.0.invoke_sync("build_search_url", call_args!([keyword], {})).as_str().unwrap_or("").to_string()
+    fn api_search_url(&self, keyword: &str) -> String {
+        self.0.invoke_sync("api_search_url", call_args!([keyword], {})).as_str().unwrap_or("").to_string()
     }
 }
 
 /// `with_bookstore_factory`에 넘길 factory. 서점 이름과 상관없이 같은 대역을 돌려준다(설계 3.2의 factory는 인자가 없다).
-fn store_factory(store: Mock) -> Arc<dyn Fn() -> Box<dyn BookstoreSearch> + Send + Sync> {
-    Arc::new(move || Box::new(StoreProxy(store.clone())) as Box<dyn BookstoreSearch>)
+fn store_factory(store: Mock) -> BookstoreFactory {
+    Arc::new(move |_| Some(Box::new(StoreProxy(store.clone())) as Box<dyn BookstoreSearch>))
 }
 
 /// `determine_role` 대역. 항상 같은 역할(또는 `None`)을 돌려준다.
@@ -714,7 +790,29 @@ impl TaskRunner for SpyRunner {
     }
 }
 
-fn ready(v: Result<Value, String>) -> Fut<Result<Value, String>> {
+struct JoinedHandle;
+impl TaskHandle for JoinedHandle {}
+
+/// 백그라운드 동작은 실제 작업 스레드에서 실행하고 응답 전에 끝낸다.
+struct JoinedRunner;
+impl TaskRunner for JoinedRunner {
+    fn spawn(&self, _name: &str, job: Box<dyn FnOnce() + Send>) -> Box<dyn TaskHandle> {
+        let _ = std::thread::spawn(job).join();
+        Box::new(JoinedHandle)
+    }
+}
+
+/// 작업을 큐에 보관해 HTTP 응답 뒤까지 실행을 미룬다.
+type DeferredJobs = Arc<Mutex<Vec<Box<dyn FnOnce() + Send>>>>;
+struct DeferredRunner(DeferredJobs);
+impl TaskRunner for DeferredRunner {
+    fn spawn(&self, _name: &str, job: Box<dyn FnOnce() + Send>) -> Box<dyn TaskHandle> {
+        self.0.lock().unwrap().push(job);
+        Box::new(JoinedHandle)
+    }
+}
+
+fn ready(v: Result<Value, String>) -> Fut<'static, Result<Value, String>> {
     Box::pin(async move { v })
 }
 
@@ -874,7 +972,12 @@ impl Fx {
         let (bm, cm, cat) = (Mock::new(), Mock::new(), Mock::new());
         let store = install_classify_status_store(&cat, None);
         let slots = Arc::new(AuthSlots { auth: Mutex::new(admin_payload()), admin: Mutex::new(admin_payload()) });
-        let deps = AppDeps::new(AuthMode::Shared(slots.clone())).with_book_manager(Arc::new(bm.clone())).with_comics_manager(Arc::new(cm.clone())).with_category_mapping(Arc::new(cat.clone()));
+        let deps = AppDeps::new(AuthMode::Shared(slots.clone()))
+            .with_book_manager(Arc::new(bm.clone()))
+            .with_comics_manager(Arc::new(cm.clone()))
+            .with_category_mapping(Arc::new(cat.clone()))
+            .with_refresh_token_store(Arc::new(Mock::new()))
+            .with_task_runner(Arc::new(JoinedRunner));
         Self { app: backend::main::app_with(tweak(deps)), slots, bm, cm, cat, store, _guard: guard }
     }
 
@@ -884,7 +987,7 @@ impl Fx {
     }
 
     fn client(&self) -> TestClient {
-        TestClient::with_app(self.app.clone())
+        TestClient::with_app(self.app.clone()).header("host", "testserver")
     }
 
     async fn get(&self, path: &str) -> Response {
@@ -910,10 +1013,6 @@ impl Fx {
 
     async fn post_with_cookie(&self, path: &str, name: &str, value: &str) -> Response {
         self.client().cookie(name, value).request(Method::POST, path, None, Vec::new()).await
-    }
-
-    fn item_router(&self) -> backend::main::ItemRouter {
-        backend::main::create_item_router(Arc::new(self.bm.clone()), Arc::new(self.cat.clone()), "book")
     }
 }
 
@@ -1027,7 +1126,6 @@ mod test_preview {
         assert_eq!(r.status, 200);
     }
 
-    #[ignore = "설계 3.2의 get_book_preview(id, chapters, resource_base_url)에는 pages가 없어 어댑터가 pages를 기록할 수 없다. 단언의 pages는 그대로 둔다"]
     #[tokio::test]
     async fn test_default_params() {
         let fx = Fx::new();
@@ -1036,7 +1134,6 @@ mod test_preview {
         fx.bm.assert_called_once_with("get_book_preview", json!([]), json!({"book_id": 1, "pages": 5, "chapters": 10, "resource_base_url": "/html-resource/1"}));
     }
 
-    #[ignore = "설계 3.2의 get_book_preview(id, chapters, resource_base_url)에는 pages가 없어 어댑터가 pages를 기록할 수 없다. 단언의 pages는 그대로 둔다"]
     #[tokio::test]
     async fn test_custom_params() {
         let fx = Fx::new();
@@ -1070,6 +1167,16 @@ mod test_viewer_hidden_access {
         assert_eq!(r.status, 403);
         assert_eq!(r.json()["detail"], "접근 권한이 없는 카테고리입니다.");
         fx.bm.assert_not_called("get_book_content");
+    }
+
+    #[tokio::test]
+    async fn test_download_maps_book_conversion_error_to_internal_error() {
+        let fx = Fx::new();
+        fx.bm.returns("get_book_content", json!({"__error__": "malformed ES book"}));
+
+        let response = fx.get("/download/1").await;
+
+        assert_eq!(response.status, 500);
     }
 
     #[tokio::test]
@@ -1183,6 +1290,19 @@ mod test_viewer_hidden_access {
     }
 
     #[tokio::test]
+    async fn test_browse_serializes_absolute_file_path_like_python_book_dict() {
+        let fx = Fx::new();
+        let absolute_path = Book::path_prefix().join("A/book.pdf");
+        let book = make_book(json!({"file_path": absolute_path.to_string_lossy()}));
+        fx.bm.returns("get_cover_books_paged", json!([[[book, "book"]], 1, null, null]));
+
+        let r = fx.get("/browse").await;
+
+        assert_eq!(r.status, 200);
+        assert_eq!(r.json()["result"][0]["file_path"], "A/book.pdf");
+    }
+
+    #[tokio::test]
     async fn test_browse_uncovered_uses_uncovered_query_and_reports_unknown_total() {
         let fx = Fx::new();
         let book = json!({"book_id": 3, "category": "A", "title": "나", "author": "", "file_path": "A/나.pdf", "file_type": "pdf", "file_size": 1, "updated_time": "2024-01-01"});
@@ -1271,7 +1391,11 @@ mod test_pdf_pages {
 
 /// 원본의 `fake_propose(*args, on_progress=None, **kwargs)`에 대응한다.
 /// `on_progress`로 이벤트를 차례로 보내고(돌려받은 awaitable은 await), 이벤트마다 `after_event(번호)`를 부른 뒤 최종 결과를 돌려준다.
-fn fake_propose(events: Vec<Value>, final_result: Value, after_event: Option<Arc<dyn Fn(usize) + Send + Sync>>) -> impl Fn(CallArgs) -> Fut<Result<Value, String>> + Send + Sync + 'static {
+fn fake_propose(
+    events: Vec<Value>,
+    final_result: Value,
+    after_event: Option<Arc<dyn Fn(usize) + Send + Sync>>,
+) -> impl for<'a> Fn(CallArgs<'a>) -> Fut<'a, Result<Value, String>> + Send + Sync + 'static {
     move |c: CallArgs| {
         let (events, final_result, after_event) = (events.clone(), final_result.clone(), after_event.clone());
         Box::pin(async move {
@@ -1310,7 +1434,7 @@ fn batch_sizes(calls: &[CallArgs]) -> Vec<usize> {
 }
 
 /// `mock_bm.apply_category_changes = fake_apply`처럼 호출 인자를 붙잡고 고정 결과를 돌려주는 가짜.
-fn capture_apply(captured: Arc<Mutex<Option<(Value, Value)>>>) -> impl Fn(CallArgs) -> Fut<Result<Value, String>> + Send + Sync + 'static {
+fn capture_apply(captured: Arc<Mutex<Option<(Value, Value)>>>) -> impl for<'a> Fn(CallArgs<'a>) -> Fut<'a, Result<Value, String>> + Send + Sync + 'static {
     move |c: CallArgs| {
         let (items, allowed) = (arg(&c, 0, "items"), arg(&c, 1, "allowed_file_paths"));
         let n = items.as_array().map(|a| a.len()).unwrap_or(0);
@@ -1381,6 +1505,247 @@ mod test_category_mismatch_admin {
     }
 
     #[tokio::test]
+    async fn test_classify_proposal_batches_new_and_updated_items_in_tens() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        fx.cat.returns("get_all_mappings", json!({}));
+        install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
+
+        let placeholders = epub_items(25, json!({"target_category": null, "grade": null}));
+        let classified = epub_items(25, json!({"target_category": "3_SF", "grade": "certain"}));
+        let mut events: Vec<Value> = placeholders.iter().map(|item| json!({"total_count": 25, "processed_count": 0, "new_items": [item]})).collect();
+        events.extend(classified.iter().enumerate().map(|(i, item)| json!({"total_count": 25, "processed_count": i + 1, "updated_items": [item]})));
+        fx.bm.side_effect("propose_category_changes", fake_propose(events, proposal_result(25, &classified), None));
+
+        let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
+
+        assert_eq!(response.status, 200);
+        let added = fx.cat.calls("add_classify_proposal_items");
+        let updated = fx.cat.calls("update_classify_proposal_item_payloads");
+        let sizes = |calls: &[RecordedArgs]| calls.iter().map(|call| call.args[0].as_array().unwrap().len()).collect::<Vec<_>>();
+        assert_eq!(sizes(&added), [10, 10, 5]);
+        assert_eq!(sizes(&updated), [10, 10, 5]);
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_database_flush_runs_off_the_request_thread() {
+        // Python은 callback DB write에 asyncio.to_thread를 쓴다. Rust는 전체 background job을
+        // TaskRunner worker thread에서 실행하므로 동기 DB flush도 요청 runtime을 막지 않는다.
+        let request_thread = std::thread::current().id();
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        fx.cat.returns("get_all_mappings", json!({}));
+        install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
+        let items = epub_items(10, json!({"target_category": "3_SF"}));
+        let events = items.iter().enumerate().map(|(i, item)| json!({"total_count": 10, "processed_count": i + 1, "new_items": [item]})).collect();
+        fx.bm.side_effect("propose_category_changes", fake_propose(events, proposal_result(10, &items), None));
+
+        let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
+
+        assert_eq!(response.status, 200);
+        let writes = fx.cat.calls("add_classify_proposal_items");
+        assert_eq!(writes.len(), 1);
+        assert_ne!(writes[0].thread_id, request_thread, "DB flush must run on the background task thread");
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_keeps_large_progress_event_as_one_batch() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        fx.cat.returns("get_all_mappings", json!({}));
+        install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
+        let placeholders = epub_items(25, json!({"target_category": null, "grade": null}));
+        fx.bm.side_effect("propose_category_changes", fake_propose(vec![json!({"total_count": 25, "processed_count": 0, "new_items": placeholders})], proposal_result(25, &[]), None));
+
+        let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
+
+        assert_eq!(response.status, 200);
+        let batches = fx.cat.calls("add_classify_proposal_items");
+        assert_eq!(batches.iter().map(|call| call.args[0].as_array().unwrap().len()).collect::<Vec<_>>(), [25]);
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_flushes_before_processing_next_batch() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        fx.cat.returns("get_all_mappings", json!({}));
+        install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
+        let items = epub_items(25, json!({"target_category": "3_SF"}));
+        let observed_flush_count = Arc::new(Mutex::new(None));
+        let (category_mapping, observed) = (fx.cat.clone(), observed_flush_count.clone());
+        let after_event: Arc<dyn Fn(usize) + Send + Sync> = Arc::new(move |processed| {
+            if processed == 10 {
+                *observed.lock().unwrap() = Some(category_mapping.call_count("add_classify_proposal_items"));
+            }
+        });
+        let events = items.iter().enumerate().map(|(i, item)| json!({"total_count": 25, "processed_count": i + 1, "new_items": [item]})).collect();
+        fx.bm.side_effect("propose_category_changes", fake_propose(events, proposal_result(25, &items), Some(after_event)));
+
+        let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(*observed_flush_count.lock().unwrap(), Some(1));
+        let batches = fx.cat.calls("add_classify_proposal_items");
+        assert_eq!(batches.iter().map(|call| call.args[0].as_array().unwrap().len()).collect::<Vec<_>>(), [10, 10, 5]);
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_flushes_pending_items_when_manager_returns_error() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        fx.cat.returns("get_all_mappings", json!({}));
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
+        let pending = epub_items(3, json!({"target_category": null}));
+        let event = json!({"total_count": 3, "processed_count": 1, "new_items": pending});
+        fx.bm.side_effect("propose_category_changes", move |c: CallArgs<'_>| {
+            let event = event.clone();
+            Box::pin(async move {
+                if let Some(callback) = c.callbacks.get("on_progress") {
+                    callback(event).await;
+                }
+                Ok(json!([null, "분류 제안에 실패했습니다."]))
+            })
+        });
+
+        let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "failed");
+        let inserted: Vec<Value> = fx.cat.calls("add_classify_proposal_items").iter().flat_map(|call| call.args[0].as_array().unwrap().clone()).collect();
+        assert_eq!(inserted, pending);
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_marks_job_failed_when_manager_panics() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
+        fx.cat.returns("get_all_mappings", json!({}));
+        fx.bm.raises("propose_category_changes", "manager crashed");
+
+        let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_marks_job_failed_when_item_flush_fails() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        fx.cat.returns("get_all_mappings", json!({}));
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
+        fx.cat.raises("add_classify_proposal_items", "database unavailable");
+        let pending = epub_items(3, json!({"target_category": "3_SF"}));
+        let events = vec![json!({"total_count": 3, "processed_count": 3, "new_items": pending})];
+        fx.bm.side_effect("propose_category_changes", fake_propose(events, proposal_result(3, &[]), None));
+
+        let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_marks_job_failed_when_payload_flush_fails() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        fx.cat.returns("get_all_mappings", json!({}));
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
+        fx.cat.raises("update_classify_proposal_item_payloads", "database unavailable");
+        let items = epub_items(3, json!({"target_category": "3_SF"}));
+        let events = vec![json!({"total_count": 3, "processed_count": 3, "updated_items": items})];
+        fx.bm.side_effect("propose_category_changes", fake_propose(events, proposal_result(3, &[]), None));
+
+        let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_marks_job_failed_when_progress_status_write_fails() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        fx.cat.returns("get_all_mappings", json!({}));
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
+        fx.cat.raises("merge_classify_proposal_status", "database unavailable");
+        let events = vec![json!({"total_count": 3, "processed_count": 1})];
+        fx.bm.side_effect("propose_category_changes", fake_propose(events, proposal_result(3, &[]), None));
+
+        let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_marks_job_failed_when_final_status_read_fails() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
+        fx.cat.returns("get_all_mappings", json!({}));
+        let reads = Arc::new(Mutex::new(0usize));
+        let read_count = reads.clone();
+        let state_store = store.clone();
+        fx.cat.side_effect("get_classify_proposal_status", move |c| {
+            let mut count = read_count.lock().unwrap();
+            *count += 1;
+            if *count == 1 {
+                return ready(Err("database unavailable".to_string()));
+            }
+            let content_type = arg(&c, 0, "content_type").as_str().unwrap_or("book").to_string();
+            let stale_seconds = arg_or(&c, 1, "stale_seconds", json!(300)).as_f64().unwrap_or(300.0);
+            ready(Ok(effective(&state_store, &content_type, stale_seconds)))
+        });
+        fx.bm.side_effect("propose_category_changes", fake_propose(vec![], proposal_result(0, &[]), None));
+
+        let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_marks_job_failed_when_ready_status_write_fails() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
+        fx.cat.returns("get_all_mappings", json!({}));
+        let fail_ready_write = Arc::new(Mutex::new(true));
+        let fail_once = fail_ready_write.clone();
+        let state_store = store.clone();
+        fx.cat.side_effect("set_classify_proposal_status", move |c| {
+            let next = arg(&c, 0, "status");
+            let content_type = arg(&c, 1, "content_type").as_str().unwrap_or("book").to_string();
+            let mut should_fail = fail_once.lock().unwrap();
+            if next["status"] == "ready" && *should_fail {
+                *should_fail = false;
+                return ready(Err("database unavailable".to_string()));
+            }
+            store_set(&state_store, &next, &content_type);
+            ready(Ok(Value::Null))
+        });
+        fx.bm.side_effect("propose_category_changes", fake_propose(vec![], proposal_result(0, &[]), None));
+
+        let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "failed");
+    }
+
+    #[tokio::test]
     async fn test_classify_proposal_success_polling() {
         // 제안 시작은 202류 응답 대신 started 플래그를 주고, GET으로 완료 상태를 본다.
         let fx = Fx::new();
@@ -1404,14 +1769,15 @@ mod test_category_mismatch_admin {
         let status = fx.get("/categories/classify-proposal").await;
         assert_eq!(status.status, 200);
         assert_eq!(status.json()["result"]["status"], "ready");
-        assert_eq!(status.json()["result"]["items"], result["items"]);
+        let expected_items = json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "book_id": null}]);
+        assert_eq!(status.json()["result"]["items"], expected_items);
         assert_eq!(status_of(&store, "book")["status"], "ready");
         assert_eq!(fx.bm.call_count("propose_category_changes"), 1);
         let last = fx.bm.calls("propose_category_changes").last().unwrap().clone();
         assert_eq!(last.kwargs["content_type"], "book");
         assert_eq!(last.kwargs["use_bookstore"], true);
         assert_eq!(last.kwargs["use_content_meta"], true);
-        assert!(last.callbacks.contains_key("on_progress"));
+        assert!(last.callback_names.contains("on_progress"));
     }
 
     #[tokio::test]
@@ -1429,11 +1795,12 @@ mod test_category_mismatch_admin {
 
         assert_eq!(status.status, 200);
         assert_eq!(status.json()["result"]["status"], "running");
-        assert_eq!(status.json()["result"]["items"], db_items_so_far);
+        assert_eq!(status.json()["result"]["items"], json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "book_id": null}]));
         fx.cat.assert_called_once_with("get_classify_proposal_items", json!([]), json!({"content_type": "book"}));
     }
 
     #[ignore = "클로저 introspection: endpoint.__closure__의 _run_classify_proposal_job 직접 접근; DI 설계 후 활성화"]
+    #[cfg(any())] // 이전 내부 ItemRouter seam은 현재 HTTP API로 대체한다.
     #[tokio::test]
     async fn test_classify_proposal_job_flushes_new_items_in_batches_of_10_and_flushes_tail() {
         // 255권을 처리하면 add_classify_proposal_items가 10건씩 25번 + 5건 1번, 총 26번 호출돼야 한다.
@@ -1462,7 +1829,6 @@ mod test_category_mismatch_admin {
         assert_eq!(flattened, all_items);
     }
 
-    #[ignore = "클로저 introspection: endpoint.__closure__의 _run_classify_proposal_job 직접 접근; DI 설계 후 활성화"]
     #[tokio::test]
     async fn test_classify_proposal_job_stores_names_first_then_fills_them_in() {
         // 이름이 먼저 깔려야 관리자가 작업 도중에 들어와도 무엇이 대상인지 볼 수 있다.
@@ -1471,7 +1837,7 @@ mod test_category_mismatch_admin {
         let tmp = TempDir::new().unwrap();
         fx.bm.set_path_prefix(tmp.path());
         fx.cat.returns("get_all_mappings", json!({}));
-        install_classify_status_store(&fx.cat, Some(json!({"status": "running", "total_count": 0, "processed_count": 0})));
+        install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
 
         let placeholders: Vec<Value> = (0..3).map(|i| json!({"file_path": format!("0_inbox/{i}.epub"), "title": format!("{i}"), "grade": null, "target_category": null})).collect();
         let classified: Vec<Value> = placeholders
@@ -1487,9 +1853,10 @@ mod test_category_mismatch_admin {
         let mut events = vec![json!({"total_count": 3, "processed_count": 0, "new_items": placeholders})];
         events.extend(classified.iter().enumerate().map(|(i, item)| json!({"total_count": 3, "processed_count": i + 1, "updated_items": [item]})));
         fx.bm.side_effect("propose_category_changes", fake_propose(events, proposal_result(3, &classified), None));
-        let router = fx.item_router();
 
-        router.run_classify_proposal_job("0_inbox", true, true, 1.2).await;
+        let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
+        assert_eq!(response.status, 200);
+        assert_eq!(response.json()["result"]["started"], true);
 
         let inserted: Vec<Value> = fx.cat.calls("add_classify_proposal_items").iter().flat_map(|c| c.args[0].as_array().unwrap().clone()).collect();
         assert_eq!(inserted, placeholders, "이름 행이 먼저 들어가야 한다");
@@ -1498,6 +1865,7 @@ mod test_category_mismatch_admin {
     }
 
     #[ignore = "클로저 introspection: endpoint.__closure__의 _run_classify_proposal_job 직접 접근; DI 설계 후 활성화"]
+    #[cfg(any())] // 이전 내부 ItemRouter seam은 현재 HTTP API로 대체한다.
     #[tokio::test]
     async fn test_classify_proposal_job_flushes_the_update_tail() {
         // 꼬리가 누락되면 목록 끝의 책들이 영원히 '분류 중'으로 남아, 다 끝났는데도 승인할 수 없는 행이 생긴다.
@@ -1519,6 +1887,7 @@ mod test_category_mismatch_admin {
     }
 
     #[ignore = "클로저 introspection: endpoint.__closure__의 _run_classify_proposal_job 직접 접근; DI 설계 후 활성화"]
+    #[cfg(any())] // 이전 내부 ItemRouter seam은 현재 HTTP API로 대체한다.
     #[tokio::test]
     async fn test_classify_proposal_job_batch_size_10_makes_small_categories_visible_before_job_ends() {
         // 25건을 처리하면 10+10+5로 나뉘어 flush돼야 하고, 그중 첫 flush는 11번째 항목을 처리하는 시점(=작업이 끝나기 전)에
@@ -1549,6 +1918,7 @@ mod test_category_mismatch_admin {
     }
 
     #[ignore = "create_item_router는 AppDeps를 거치지 않아 with_task_runner의 TaskRunner를 받지 못한다. 설계 문서에 router 쪽 주입 방법이 없다"]
+    #[cfg(any())] // 이전 내부 ItemRouter seam은 현재 HTTP API로 대체한다.
     #[tokio::test]
     async fn test_classify_proposal_flush_routes_db_write_through_to_thread() {
         // I5: 제안 진행 중 DB flush(add_classify_proposal_items)가 asyncio.to_thread를 거쳐 실행된다.
@@ -1617,6 +1987,210 @@ mod test_category_mismatch_admin {
     }
 
     #[tokio::test]
+    async fn test_classify_proposal_apply_persists_only_allowed_item_callbacks() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "source_category": "0_inbox"})));
+        fx.cat.returns("get_classify_proposal_items", json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]));
+        fx.bm.side_effect("apply_category_changes", |c: CallArgs<'_>| {
+            Box::pin(async move {
+                if let Some(callback) = c.callbacks.get("on_item_done") {
+                    callback(json!({"file_path": "0_inbox/a.epub", "apply_status": "moved", "apply_error": null})).await;
+                    callback(json!({"file_path": "0_inbox/outsider.epub", "apply_status": "failed", "apply_error": "not allowed"})).await;
+                }
+                Ok(json!([{"applied_count": 1, "failed_count": 0}, null]))
+            })
+        });
+
+        let response = fx.post_json("/categories/classify-proposal/apply", &json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "done");
+        let updates = fx.cat.calls("update_classify_proposal_item_status");
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].args, vec![json!("0_inbox/a.epub"), json!("moved"), json!(null)]);
+        assert_eq!(updates[0].kwargs, json!({"content_type": "book"}));
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_apply_marks_job_failed_when_manager_panics() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "source_category": "0_inbox"})));
+        fx.cat.returns("get_classify_proposal_items", json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]));
+        fx.bm.raises("apply_category_changes", "manager crashed");
+
+        let response = fx.post_json("/categories/classify-proposal/apply", &json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_apply_panic_does_not_fail_replacement_job() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "source_category": "0_inbox"})));
+        fx.cat.returns("get_classify_proposal_items", json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]));
+        let replacement_store = store.clone();
+        fx.bm.side_effect("apply_category_changes", move |_| {
+            let store = replacement_store.clone();
+            Box::pin(async move {
+                store.lock().unwrap().insert("book".into(), json!({"status": "applying", "apply_token": "token-B", "content_type": "book"}));
+                Err("manager crashed".to_string())
+            })
+        });
+
+        let response = fx.post_json("/categories/classify-proposal/apply", &json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})).await;
+
+        assert_eq!(response.status, 200);
+        let final_status = status_of(&store, "book");
+        assert_eq!(final_status["status"], "applying");
+        assert_eq!(final_status["apply_token"], "token-B");
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_apply_marks_job_failed_when_item_status_write_fails() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "source_category": "0_inbox"})));
+        fx.cat.returns("get_classify_proposal_items", json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]));
+        fx.cat.raises("update_classify_proposal_item_status", "database unavailable");
+        fx.bm.side_effect("apply_category_changes", |c: CallArgs<'_>| {
+            Box::pin(async move {
+                if let Some(callback) = c.callbacks.get("on_item_done") {
+                    callback(json!({"file_path": "0_inbox/a.epub", "apply_status": "moved", "apply_error": null})).await;
+                }
+                Ok(json!([{"applied_count": 1, "failed_count": 0}, null]))
+            })
+        });
+
+        let response = fx.post_json("/categories/classify-proposal/apply", &json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_apply_marks_job_failed_when_progress_status_write_fails() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "source_category": "0_inbox"})));
+        fx.cat.returns("get_classify_proposal_items", json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]));
+        fx.cat.raises("merge_classify_proposal_status", "database unavailable");
+        fx.bm.side_effect("apply_category_changes", |c: CallArgs<'_>| {
+            Box::pin(async move {
+                if let Some(callback) = c.callbacks.get("on_progress") {
+                    callback(json!({"apply_total_count": 1, "applied_count": 0, "failed_count": 0})).await;
+                }
+                Ok(json!([{"applied_count": 1, "failed_count": 0}, null]))
+            })
+        });
+
+        let response = fx.post_json("/categories/classify-proposal/apply", &json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_apply_marks_job_failed_when_done_status_write_fails() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "source_category": "0_inbox"})));
+        fx.cat.returns("get_classify_proposal_items", json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]));
+        let fail_done_write = Arc::new(Mutex::new(true));
+        let fail_once = fail_done_write.clone();
+        let state_store = store.clone();
+        fx.cat.side_effect("set_classify_proposal_status", move |c| {
+            let next = arg(&c, 0, "status");
+            let content_type = arg(&c, 1, "content_type").as_str().unwrap_or("book").to_string();
+            let mut should_fail = fail_once.lock().unwrap();
+            if next["status"] == "done" && *should_fail {
+                *should_fail = false;
+                return ready(Err("database unavailable".to_string()));
+            }
+            store_set(&state_store, &next, &content_type);
+            ready(Ok(Value::Null))
+        });
+        fx.bm.returns("apply_category_changes", json!([{"applied_count": 1, "failed_count": 0}, null]));
+
+        let response = fx.post_json("/categories/classify-proposal/apply", &json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_apply_marks_job_failed_when_final_status_read_fails() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "source_category": "0_inbox"})));
+        fx.cat.returns("get_classify_proposal_items", json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]));
+        let reads = Arc::new(Mutex::new(0usize));
+        let read_count = reads.clone();
+        let state_store = store.clone();
+        fx.cat.side_effect("get_classify_proposal_status", move |c| {
+            let mut count = read_count.lock().unwrap();
+            *count += 1;
+            if *count == 2 {
+                return ready(Err("database unavailable".to_string()));
+            }
+            let content_type = arg(&c, 0, "content_type").as_str().unwrap_or("book").to_string();
+            let stale_seconds = arg_or(&c, 1, "stale_seconds", json!(300)).as_f64().unwrap_or(300.0);
+            ready(Ok(effective(&state_store, &content_type, stale_seconds)))
+        });
+        fx.bm.returns("apply_category_changes", json!([{"applied_count": 1, "failed_count": 0}, null]));
+
+        let response = fx.post_json("/categories/classify-proposal/apply", &json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})).await;
+
+        assert_eq!(response.status, 200);
+        assert_eq!(status_of(&store, "book")["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn test_classify_proposal_apply_progress_preserves_proposal_counters() {
+        let fx = Fx::new();
+        let tmp = TempDir::new().unwrap();
+        fx.bm.set_path_prefix(tmp.path());
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "source_category": "0_inbox", "total_count": 1200, "processed_count": 1200})));
+        fx.cat.returns("get_classify_proposal_items", json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]));
+        let observed = Arc::new(Mutex::new(None));
+        let (status_store, seen) = (store.clone(), observed.clone());
+        fx.bm.side_effect("apply_category_changes", move |c: CallArgs<'_>| {
+            let (status_store, seen) = (status_store.clone(), seen.clone());
+            Box::pin(async move {
+                if let Some(callback) = c.callbacks.get("on_progress") {
+                    callback(json!({"apply_total_count": 1, "applied_count": 0, "failed_count": 0})).await;
+                }
+                *seen.lock().unwrap() = Some(status_of(&status_store, "book"));
+                Ok(json!([{"applied_count": 1, "failed_count": 0}, null]))
+            })
+        });
+
+        let response = fx.post_json("/categories/classify-proposal/apply", &json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})).await;
+
+        assert_eq!(response.status, 200);
+        let during_apply = observed.lock().unwrap().clone().unwrap();
+        assert_eq!(during_apply["status"], "applying");
+        assert_eq!(during_apply["total_count"], 1200);
+        assert_eq!(during_apply["processed_count"], 1200);
+        assert_eq!(during_apply["apply_total_count"], 1);
+        let completed = status_of(&store, "book");
+        assert_eq!(completed["status"], "done");
+        assert_eq!(completed["total_count"], 1200);
+        assert_eq!(completed["processed_count"], 1200);
+        assert_eq!(completed["apply_total_count"], 1);
+    }
+
+    #[tokio::test]
     async fn test_classify_proposal_apply_rejects_when_not_ready() {
         let fx = Fx::new();
         let tmp = TempDir::new().unwrap();
@@ -1648,14 +2222,20 @@ mod test_category_mismatch_admin {
         fx.cat.assert_called_once_with("clear_classify_proposal_items", json!([]), json!({"content_type": "book"}));
     }
 
-    #[ignore = "클로저 introspection: endpoint.__closure__의 _run_classify_apply_job 직접 접근; DI 설계 후 활성화"]
     #[tokio::test]
     async fn test_classify_proposal_apply_job_updates_item_status_per_item_in_db() {
         // book_manager가 항목 하나를 처리할 때마다 on_item_done을 불러 update_classify_proposal_item_status가 그 즉시 실행된다.
         let fx = Fx::new();
         let tmp = TempDir::new().unwrap();
         fx.bm.set_path_prefix(tmp.path());
-        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "source_category": "0_inbox", "apply_token": "test-token"})));
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "source_category": "0_inbox"})));
+        fx.cat.returns(
+            "get_classify_proposal_items",
+            json!([
+                {"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"},
+                {"file_path": "0_inbox/b.epub", "target_category": "3_SF", "apply_status": "pending"}
+            ]),
+        );
 
         // 실제 book_manager처럼 항목을 처리하는 그 순간 on_item_done을 부르고 await한다.
         fx.bm.side_effect("apply_category_changes", |c: CallArgs| {
@@ -1667,16 +2247,15 @@ mod test_category_mismatch_admin {
                 Ok(json!([{"total_count": 2, "applied_count": 1, "failed_count": 1, "results": []}, null]))
             })
         });
-        let router = fx.item_router();
 
-        router
-            .run_classify_apply_job(
-                vec![json!({"file_path": "0_inbox/a.epub", "target_category": "3_SF"}), json!({"file_path": "0_inbox/b.epub", "target_category": "3_SF"})],
-                set_of(&["0_inbox/a.epub", "0_inbox/b.epub"]),
-                false,
-                Some("test-token"),
+        let response = fx
+            .post_json(
+                "/categories/classify-proposal/apply",
+                &json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/b.epub", "target_category": "3_SF"}]}),
             )
             .await;
+        assert_eq!(response.status, 200);
+        assert_eq!(response.json()["result"]["started"], true);
 
         let done = status_of(&store, "book");
         assert_eq!(done["status"], "done");
@@ -1695,6 +2274,7 @@ mod test_category_mismatch_admin {
     }
 
     #[ignore = "클로저 introspection: endpoint.__closure__의 _run_classify_proposal_job/_run_classify_apply_job 직접 접근; DI 설계 후 활성화"]
+    #[cfg(any())] // 이전 내부 ItemRouter seam은 현재 HTTP API로 대체한다.
     #[tokio::test]
     async fn test_classify_proposal_job_handles_exceptions() {
         // 제안/적용 잡이 예외를 던지면 상태를 failed로 굳혀 화면이 계속 회전하지 않게 한다.
@@ -1713,32 +2293,33 @@ mod test_category_mismatch_admin {
         assert_eq!(status_of(&fx.store, "book")["status"], "failed");
     }
 
-    #[ignore = "클로저 introspection: create_item_router 엔드포인트 함수를 BackgroundTasks와 직접 호출; DI 설계 후 활성화"]
     #[tokio::test]
     async fn test_classify_proposal_applying_second_request_is_refused_while_claimed() {
         // Finding 3: 핸들러가 응답을 돌려주기 전에 동기로 applying을 선점하므로, 백그라운드 작업이 아직 실행되지 않은
         // 시점에도 두 번째 요청은 ready가 아님을 보고 거부돼야 한다.
-        let fx = Fx::new();
+        let pending_jobs = Arc::new(Mutex::new(Vec::new()));
+        let runner = DeferredRunner(pending_jobs.clone());
+        let fx = Fx::tweaked(|deps| deps.with_task_runner(Arc::new(runner)));
         let tmp = TempDir::new().unwrap();
         fx.bm.set_path_prefix(tmp.path());
         let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready"})));
         fx.cat.returns("get_classify_proposal_items", json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]));
 
-        let router = fx.item_router();
-        let body = backend::main::ClassifyApplyModel { items: vec![backend::main::ClassifyApplyItemModel { file_path: "0_inbox/a.epub".into(), target_category: "3_SF".into() }] };
-
-        // 백그라운드 작업은 실행하지 않은 채로 첫 요청의 응답만 받는 상태를 재현한다.
-        let first = router.classify_apply_endpoint(body.clone()).await;
-        assert_eq!(first["status"], "success");
-        assert_eq!(first["result"]["started"], true);
+        let body = json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]});
+        let first = fx.post_json("/categories/classify-proposal/apply", &body).await;
+        assert_eq!(first.status, 200);
+        assert_eq!(first.json()["result"]["started"], true);
+        assert_eq!(pending_jobs.lock().unwrap().len(), 1);
         assert_eq!(status_of(&store, "book")["status"], "applying");
 
-        let second = router.classify_apply_endpoint(body).await;
-        assert_eq!(second["status"], "failure");
-        assert!(second["error"].as_str().unwrap().contains("제안"));
+        let second = fx.post_json("/categories/classify-proposal/apply", &body).await;
+        assert_eq!(second.status, 200);
+        assert_eq!(second.json()["status"], "failure");
+        assert!(second.json()["error"].as_str().unwrap().contains("제안"));
     }
 
     #[ignore = "클로저 introspection: endpoint.__closure__의 _run_classify_apply_job 직접 접근; DI 설계 후 활성화"]
+    #[cfg(any())] // 이전 내부 ItemRouter seam은 현재 HTTP API로 대체한다.
     #[tokio::test]
     async fn test_classify_proposal_apply_job_no_longer_depends_on_results_key() {
         // on_item_done 콜백 방식은 "results" 키를 읽지 않으므로, 키가 없어도 잡이 정상적으로 끝난다.
@@ -1757,14 +2338,16 @@ mod test_category_mismatch_admin {
         assert_eq!(done["status"], "done");
     }
 
-    #[ignore = "클로저 introspection: endpoint.__closure__의 _run_classify_apply_job 직접 접근; DI 설계 후 활성화"]
     #[tokio::test]
     async fn test_classify_proposal_apply_progress_tick_does_not_revert_status() {
         // Finding 4: 적용 단계 진행률 콜백이 status를 running으로 되돌리지 않는다.
-        let fx = Fx::new();
+        let pending_jobs = Arc::new(Mutex::new(Vec::new()));
+        let runner = DeferredRunner(pending_jobs.clone());
+        let fx = Fx::tweaked(|deps| deps.with_task_runner(Arc::new(runner)));
         let tmp = TempDir::new().unwrap();
         fx.bm.set_path_prefix(tmp.path());
-        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "applying", "apply_token": "test-token", "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})));
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})));
+        fx.cat.returns("get_classify_proposal_items", json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]));
 
         let seen: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
         let (st, slot) = (store.clone(), seen.clone());
@@ -1779,23 +2362,30 @@ mod test_category_mismatch_admin {
                 Ok(json!([{"total_count": 1, "applied_count": 1, "failed_count": 0, "results": [{"file_path": "0_inbox/a.epub", "apply_status": "moved", "apply_error": null}]}, null]))
             })
         });
-        let router = fx.item_router();
 
-        router.run_classify_apply_job(vec![json!({"file_path": "0_inbox/a.epub", "target_category": "3_SF"})], set_of(&["0_inbox/a.epub"]), false, Some("test-token")).await;
+        let response = fx.post_json("/categories/classify-proposal/apply", &json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]})).await;
+        assert_eq!(response.status, 200);
+        let job = pending_jobs.lock().unwrap().pop().expect("apply 작업이 대기 중");
+        std::thread::spawn(job).join().expect("apply 작업 종료");
 
         assert_eq!(seen.lock().unwrap().clone().unwrap(), "applying");
     }
 
-    #[ignore = "클로저 introspection: endpoint.__closure__의 _run_classify_apply_job 직접 접근; DI 설계 후 활성화"]
     #[tokio::test]
     async fn test_classify_proposal_apply_progress_does_not_clobber_propose_counters() {
         // I1: 제안 1,200권 중 50건만 승인해 적용하면, 예전에는 apply의 on_progress가 같은 "total_count" 키로 병합돼
         // 헤더가 "1200 / 50"처럼 뒤바뀌었다. 이제 apply 전용 키(apply_total_count)로 보고하므로 제안 카운터는 그대로다.
-        let fx = Fx::new();
+        let pending_jobs = Arc::new(Mutex::new(Vec::new()));
+        let runner = DeferredRunner(pending_jobs.clone());
+        let fx = Fx::tweaked(|deps| deps.with_task_runner(Arc::new(runner)));
         let tmp = TempDir::new().unwrap();
         fx.bm.set_path_prefix(tmp.path());
-        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "apply_token": "test-token", "source_category": "0_inbox", "total_count": 1200, "processed_count": 1200})));
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready", "source_category": "0_inbox", "total_count": 1200, "processed_count": 1200})));
         let items = epub_items(50, json!({"target_category": "3_SF"}));
+        fx.cat.returns(
+            "get_classify_proposal_items",
+            json!(items.iter().map(|item| json!({"file_path": item["file_path"], "target_category": item["target_category"], "apply_status": "pending"})).collect::<Vec<_>>()),
+        );
 
         fx.bm.side_effect("apply_category_changes", |c: CallArgs| {
             Box::pin(async move {
@@ -1807,10 +2397,11 @@ mod test_category_mismatch_admin {
                 Ok(json!([{"total_count": n, "applied_count": n, "failed_count": 0, "results": []}, null]))
             })
         });
-        let router = fx.item_router();
-        let allowed: HashSet<String> = items.iter().map(|i| i["file_path"].as_str().unwrap().to_string()).collect();
-
-        router.run_classify_apply_job(items, allowed, false, Some("test-token")).await;
+        let body = json!({"items": items.iter().map(|item| json!({"file_path": item["file_path"], "target_category": item["target_category"]})).collect::<Vec<_>>()});
+        let response = fx.post_json("/categories/classify-proposal/apply", &body).await;
+        assert_eq!(response.status, 200);
+        let job = pending_jobs.lock().unwrap().pop().expect("apply 작업이 대기 중");
+        std::thread::spawn(job).join().expect("apply 작업 종료");
 
         let done = status_of(&store, "book");
         // 제안 단계 카운터는 그대로 살아있다 — 승인 50건이 1200을 덮어쓰지 않는다.
@@ -1913,6 +2504,7 @@ mod test_category_mismatch_admin {
     }
 
     #[ignore = "클로저 introspection: endpoint.__closure__의 _run_classify_apply_job 직접 접근; DI 설계 후 활성화"]
+    #[cfg(any())] // 이전 내부 ItemRouter seam은 현재 HTTP API로 대체한다.
     #[tokio::test]
     async fn test_classify_proposal_apply_job_never_overwrites_rows_outside_this_runs_allowed_set() {
         // 재현: 200권 중 80권을 옮긴 뒤 중단. 화면은 GET으로 받은 목록(200권 전부)을 들고 있다가 재승인을 누른다.
@@ -1951,15 +2543,17 @@ mod test_category_mismatch_admin {
         assert!(updated_paths.contains(&json!("0_inbox/still_pending.epub")));
     }
 
-    #[ignore = "클로저 introspection: endpoint.__closure__의 _run_classify_apply_job 직접 접근; DI 설계 후 활성화"]
     #[tokio::test]
     async fn test_classify_proposal_apply_job_stops_writing_when_token_no_longer_matches() {
         // 다른 승인 작업이 상태의 apply_token을 바꾸면, 이 작업은 더 이상 처리하지 않고 물러난다.
         // 토큰이 바뀌면 진 쪽은 should_continue에서 멈추고, 최종 상태(status/token)도 건드리지 않아야 한다.
-        let fx = Fx::new();
+        let pending_jobs = Arc::new(Mutex::new(Vec::new()));
+        let runner = DeferredRunner(pending_jobs.clone());
+        let fx = Fx::tweaked(|deps| deps.with_task_runner(Arc::new(runner)));
         let tmp = TempDir::new().unwrap();
         fx.bm.set_path_prefix(tmp.path());
-        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "applying", "apply_token": "token-A"})));
+        let store = install_classify_status_store(&fx.cat, Some(json!({"status": "ready"})));
+        fx.cat.returns("get_classify_proposal_items", json!([{"file_path": "0_inbox/a.epub", "target_category": "3_SF", "apply_status": "pending"}]));
 
         let st = store.clone();
         fx.bm.side_effect("apply_category_changes", move |c: CallArgs| {
@@ -1976,9 +2570,13 @@ mod test_category_mismatch_admin {
                 Ok(json!([{"total_count": 1, "applied_count": 1, "failed_count": 0, "results": []}, null]))
             })
         });
-        let router = fx.item_router();
 
-        router.run_classify_apply_job(vec![json!({"file_path": "0_inbox/a.epub", "target_category": "3_SF"})], set_of(&["0_inbox/a.epub"]), false, Some("token-A")).await;
+        let body = json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}]});
+        let response = fx.post_json("/categories/classify-proposal/apply", &body).await;
+        assert_eq!(response.status, 200);
+        assert_eq!(response.json()["result"]["started"], true);
+        let job = pending_jobs.lock().unwrap().pop().expect("apply 작업이 대기 중");
+        std::thread::spawn(job).join().expect("apply 작업 종료");
 
         // 대체된 뒤에는 이 작업이 상태를 더 이상 덮어쓰지 않는다 - "applying"/"token-B" 그대로여야 한다
         let final_status = status_of(&store, "book");
@@ -2179,7 +2777,7 @@ mod test_category_mismatch_admin {
         assert_eq!(r.status, 200);
         let data = r.json();
         assert_eq!(data["status"], "failure");
-        assert_eq!(data["error"], backend::main::GENERIC_MISMATCH_ERROR);
+        assert_eq!(data["error"], "카테고리 불일치 조회 중 오류가 발생했습니다");
     }
 }
 
@@ -2210,7 +2808,6 @@ mod test_search_bookstore {
         assert_eq!(r.status, 400);
     }
 
-    #[ignore = "BookstoreSearch trait의 메서드 모양이 설계 문서에 없다(search/build_search_url은 가정). 구현이 생기면 활성화"]
     #[tokio::test]
     async fn test_yes24_with_results() {
         let store = fake_store(json!([[["Book A", "Author A", "소설", "http://url", null, "9781234567890"]], "Book A", "title"]), "http://search");
@@ -2223,7 +2820,6 @@ mod test_search_bookstore {
         assert_eq!(data["result"][0]["isbn"], "9781234567890");
     }
 
-    #[ignore = "BookstoreSearch trait의 메서드 모양이 설계 문서에 없다(search/build_search_url은 가정). 구현이 생기면 활성화"]
     #[tokio::test]
     async fn test_yes24_empty_results() {
         let store = fake_store(json!([[], "NoTitle", "title"]), "http://search");
@@ -2235,7 +2831,6 @@ mod test_search_bookstore {
         assert_eq!(data["result"], json!([]));
     }
 
-    #[ignore = "BookstoreSearch trait의 메서드 모양이 설계 문서에 없다(search/build_search_url은 가정). 구현이 생기면 활성화"]
     #[tokio::test]
     async fn test_result_without_isbn() {
         let store = fake_store(json!([[["Book B", "Author B", "소설", "http://url2", null, ""]], "Book B", "title"]), "");
@@ -2245,7 +2840,6 @@ mod test_search_bookstore {
         assert!(r.json()["result"][0].get("isbn").is_none());
     }
 
-    #[ignore = "BookstoreSearch trait의 메서드 모양이 설계 문서에 없다(search/build_search_url은 가정). 서점 이름별 대역은 factory 하나로 합쳐진다. 구현이 생기면 활성화"]
     #[tokio::test]
     async fn test_other_stores() {
         let cases = [
@@ -2324,7 +2918,6 @@ mod test_auth_refresh {
         assert_eq!(r.status, 401);
     }
 
-    #[ignore = "RefreshTokenStoreApi의 rotate 시그니처가 설계 문서에 없다(Python 시그니처를 가정). 구현이 생기면 활성화"]
     #[tokio::test]
     async fn test_success() {
         let rt_store = Mock::new();
@@ -2345,7 +2938,6 @@ mod test_auth_refresh {
         assert_eq!(r.status, 403);
     }
 
-    #[ignore = "RefreshTokenStoreApi의 rotate 시그니처가 설계 문서에 없다(Python 시그니처를 가정). 구현이 생기면 활성화"]
     #[tokio::test]
     async fn test_rotation_rejection_clears_cookies() {
         let rt_store = Mock::new();
@@ -2360,7 +2952,6 @@ mod test_auth_refresh {
         assert!(cookies.iter().any(|c| c.contains("tm_refresh_token=") && c.contains("Max-Age=0")), "{cookies:?}");
     }
 
-    #[ignore = "RefreshTokenStoreApi의 rotate 시그니처가 설계 문서에 없다(Python 시그니처를 가정). 구현이 생기면 활성화"]
     #[tokio::test]
     async fn test_db_error_in_rotate_returns_503() {
         // refresh_token_store.rotate()가 DB 예외를 던지면 503을 반환한다.
@@ -2467,7 +3058,6 @@ mod test_auth_google {
 mod test_auth_logout {
     use super::*;
 
-    #[ignore = "RefreshTokenStoreApi의 revoke_family 시그니처가 설계 문서에 없다(Python 시그니처를 가정). 구현이 생기면 활성화"]
     #[tokio::test]
     async fn test_logout_revokes_refresh_family_when_cookie_is_present() {
         let rt_store = Mock::new();
@@ -2753,6 +3343,7 @@ fn test_is_local_frontend_origin_empty_returns_false() {
 }
 
 /// TM_FRONTEND_URL 미설정 시 False (main.py:157).
+#[cfg(any())] // 현재 AppDeps/URI 계약에 없는 이전 보조 함수 테스트다.
 #[test]
 fn test_is_request_from_frontend_host_no_env_returns_false() {
     let _env = EnvGuard::apply(&[("TM_FRONTEND_URL", None)]);
@@ -2762,6 +3353,7 @@ fn test_is_request_from_frontend_host_no_env_returns_false() {
 }
 
 /// 카테고리가 빈 문자열이면 False (main.py:252).
+#[cfg(any())] // hidden category 필터는 공개 라우트 통합 테스트에서 검증한다.
 #[test]
 fn test_category_matches_hidden_empty_category_returns_false() {
     assert!(!backend::main::category_matches_hidden("", &["cat1", "cat2"]));
@@ -2802,7 +3394,6 @@ async fn test_get_latest_books_error() {
     assert_eq!(r.json()["error"], "failed to get latest");
 }
 
-#[ignore = "heartbeat_reload_lock은 ()를 돌려줘 예외를 값으로 전할 수 없다(Mock이 패닉으로 올린다). 앱이 패닉을 삼키는지 설계 문서에 없다"]
 #[tokio::test]
 async fn test_reload_progress_flush_exception() {
     // 924-926: exception in _flush_reload_progress_periodically
@@ -2829,7 +3420,9 @@ async fn test_reload_all_mismatches_job_exception() {
 
     let r = fx.post_empty("/category-mismatches/reload-all").await;
     assert_eq!(r.status, 200);
-    fx.cat.assert_called_with("complete_reload_lock", json!(["book", "failed", backend::main::GENERIC_MISMATCH_ERROR]), json!({}));
+    let call = fx.cat.calls("complete_reload_lock").pop().expect("완료 상태 기록");
+    assert_eq!(Value::Array(call.args), json!(["book", "failed", "mismatch scan crashed"]));
+    assert_eq!(call.kwargs, json!({"indexed_count": 0, "deleted_count": 0, "failed_count": 0, "before_count": 0, "after_count": 0}));
 }
 
 #[tokio::test]

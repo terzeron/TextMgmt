@@ -45,9 +45,81 @@ fn first_from_stores(stores: &Value, field: &str) -> String {
     STORE_NAMES.iter().map(|n| store_text(stores, n, field)).find(|v| !v.is_empty()).unwrap_or_default()
 }
 
+fn python_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_f64().is_some_and(|number| number != 0.0),
+        Value::String(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+    }
+}
+
+fn python_repr_string(value: &str) -> String {
+    let quote = if value.contains('\'') && !value.contains('"') { '"' } else { '\'' };
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push(quote);
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch == quote => {
+                out.push('\\');
+                out.push(ch);
+            }
+            ch if ch.is_control() && (ch as u32) <= 0xff => out.push_str(&format!("\\x{:02x}", ch as u32)),
+            ch if ch.is_control() && (ch as u32) <= 0xffff => out.push_str(&format!("\\u{:04x}", ch as u32)),
+            ch if ch.is_control() => out.push_str(&format!("\\U{:08x}", ch as u32)),
+            ch => out.push(ch),
+        }
+    }
+    out.push(quote);
+    out
+}
+
+fn python_str(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_owned(),
+        Value::Bool(true) => "True".to_owned(),
+        Value::Bool(false) => "False".to_owned(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => value.clone(),
+        Value::Array(values) => format!("[{}]", values.iter().map(python_repr).collect::<Vec<_>>().join(", ")),
+        Value::Object(values) => format!("{{{}}}", values.iter().map(|(key, value)| format!("{}: {}", python_repr_string(key), python_repr(value))).collect::<Vec<_>>().join(", ")),
+    }
+}
+
+fn python_repr(value: &Value) -> String {
+    match value {
+        Value::String(value) => python_repr_string(value),
+        other => python_str(other),
+    }
+}
+
+/// Python `str(value or fallback)` for JSON metadata.
+fn metadata_text(record: &Value, key: &str, fallback: String) -> String {
+    let Some(value) = record.get(key) else { return fallback };
+    if !python_truthy(value) {
+        return fallback;
+    }
+    strip(&python_str(value)).to_owned()
+}
+
 /// 서점 중 한 곳이라도 카테고리를 줬는가.
 fn has_any_answer(stores: &Value) -> bool {
-    STORE_NAMES.iter().any(|n| stores.get(n).and_then(|s| s.get("cat")).and_then(Value::as_str).is_some_and(|c| !c.is_empty()))
+    STORE_NAMES.iter().any(|n| {
+        stores.get(n).and_then(|s| s.get("cat")).is_some_and(|cat| match cat {
+            Value::Null => false,
+            Value::Bool(value) => *value,
+            Value::Number(value) => value.as_f64().is_some_and(|n| n != 0.0),
+            Value::String(value) => !value.is_empty(),
+            Value::Array(value) => !value.is_empty(),
+            Value::Object(value) => !value.is_empty(),
+        })
+    })
 }
 
 #[derive(Debug)]
@@ -117,8 +189,8 @@ impl BookstoreResponseCache {
                 continue;
             };
             let Some(stores) = record.get("stores").filter(|s| s.is_object()).cloned() else { continue };
-            let text = |key: &str, fallback: String| record.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).map(|s| strip(s).to_string()).unwrap_or(fallback);
-            let entry = Arc::new(Entry { isbn: text("isbn", first_from_stores(&stores, "isbn")), author: text("author", first_from_stores(&stores, "author")), stores });
+            let entry =
+                Arc::new(Entry { isbn: metadata_text(&record, "isbn", first_from_stores(&stores, "isbn")), author: metadata_text(&record, "author", first_from_stores(&stores, "author")), stores });
             for key in record.get("keys").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
                 // 나중 줄이 이긴다. 같은 책을 다시 물었으면 새 답이 맞다.
                 self.entries.insert(key.to_string(), Arc::clone(&entry));

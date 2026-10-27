@@ -5,9 +5,6 @@ use backend::classifier::{
 };
 use serde_json::{Value, json};
 
-#[path = "shuffle.rs"]
-mod shuffle;
-
 /// 기존 HTTPS 클라이언트를 재사용한다. 인증서 검증은 libs/bookstore의 기본값이다.
 struct LiveStores {
     service: std::sync::Mutex<backend::book_classifier::BookClassifierService>,
@@ -48,39 +45,56 @@ impl crate::BookstoreQuery for LiveStores {
 pub(super) fn run(args: &Args, io: &mut CliIo<'_>, deps: &Deps) -> Result<i32, String> {
     let (rows, source, default_out) = if let Some(path) = args.get("--reband") {
         let path = std::path::PathBuf::from(path);
+        if !path.exists() {
+            return Err(format!("측정 결과 파일이 없다: {}", path.display()));
+        }
         let saved = data::json_file(&path)?;
-        let rows = saved["rows"].as_array().filter(|v| !v.is_empty()).ok_or("건별 결과가 없어 다시 나눌 수 없다. 서점 조회부터 다시 해야 한다.")?.clone();
+        let rows = saved["rows"].as_array().filter(|v| !v.is_empty()).ok_or_else(|| format!("건별 결과가 없어 다시 나눌 수 없다: {}\n서점 조회부터 다시 해야 한다.", path.display()))?.clone();
         (rows, saved["sample_from"].as_str().unwrap_or("unknown").to_string(), path)
     } else {
         let model_path = args.model();
         let model = data::model(&model_path)?;
-        let docs = data::corpus(&args.path("--corpus", "tmp/classifier/corpus.jsonl"))?;
-        let mut hold = data::holdout(&docs, &model, &model_path, io.err)?;
-        shuffle::shuffle(&mut hold, model.config["seed"].as_u64().unwrap_or(42));
+        let corpus_path = args.path("--corpus", "tmp/classifier/corpus.jsonl");
+        let mut docs = data::indexed_corpus(&corpus_path)?;
+        let mut hold = data::indexed_holdout_indices(
+            &docs,
+            &data::holdout_manifest_path(&model_path),
+            model.config["corpus"]["min_per_category"].as_u64().unwrap_or(30) as usize,
+            model.config["holdout"].as_f64().unwrap_or(0.2),
+            model.config["seed"].as_u64().unwrap_or(42),
+            io.err,
+        )?;
+        crate::shuffle::shuffle(&mut hold, model.config["seed"].as_u64().unwrap_or(42));
         let size = args.number("--sample", 2000.0) as usize;
         hold.truncate(size.saturating_mul(20));
-        let predictions = model.predict_top_k(&hold, Some(0.0), 1);
         let source = args.get("--sample-from").unwrap_or("refused");
         let floor = model.min_confidence();
-        let picked: Vec<_> = hold
-            .iter()
-            .zip(&predictions)
-            .filter(|(_, p)| match source {
-                "refused" => p.confidence < floor,
-                "boundary" => p.confidence < floor * 2.0,
+        let mut picked_count = 0usize;
+        let mut sample = Vec::with_capacity(size);
+        for index in hold.iter().copied() {
+            let doc = docs.read_document(index).map_err(|error| format!("홀드아웃 JSONL 문서를 읽지 못했다: {error}"))?;
+            let prediction = model.predict_top_k(std::slice::from_ref(&doc), Some(0.0), 1).into_iter().next().ok_or("모델이 홀드아웃 문서를 예측하지 못했다")?;
+            let selected = match source {
+                "refused" => prediction.confidence < floor,
+                "boundary" => prediction.confidence < floor * 2.0,
                 _ => true,
-            })
-            .collect();
+            };
+            if selected {
+                picked_count += 1;
+                if sample.len() < size {
+                    sample.push((doc, prediction));
+                }
+            }
+        }
         let where_from = match source {
             "refused" => format!("모델이 판정을 거부한 구간(확신도 < {floor:.3})"),
             "boundary" => format!("거부 구간과 그 위 (확신도 < {:.3})", floor * 2.0),
             _ => "홀드아웃 전체".into(),
         };
-        if picked.is_empty() {
+        if picked_count == 0 {
             return Err(format!("{where_from}에 해당하는 문서가 없다. --sample-from을 바꿀 것"));
         }
-        let sample: Vec<_> = picked.iter().take(size).collect();
-        writeln!(io.out, "표본 {}건을 {where_from}에서 뽑았다 (후보 {}건 / 풀 {}건)", sample.len(), picked.len(), hold.len()).map_err(|e| e.to_string())?;
+        writeln!(io.out, "표본 {}건을 {where_from}에서 뽑았다 (후보 {}건 / 풀 {}건)", sample.len(), picked_count, hold.len()).map_err(|e| e.to_string())?;
         let delay = args.number("--delay", 1.0);
         let live = deps.bookstores.is_none().then(|| LiveStores::new(delay));
         let stores: &dyn crate::BookstoreQuery = deps.bookstores.as_deref().unwrap_or_else(|| live.as_ref().unwrap());
@@ -134,6 +148,7 @@ fn summarize(rows: &[Value], count: usize, io: &mut CliIo<'_>) -> Result<Value, 
     }
     let max = confidences.iter().copied().fold(0.0, f64::max);
     threshold = threshold.min(max);
-    writeln!(io.out, "\n  서점으로 갈아탈 확신도 상한: {threshold:.3}  (측정 범위 {max:.3} 까지)").map_err(|e| e.to_string())?;
+    let note = if threshold == 0.0 { "  (서점이 모델을 이긴 구간이 없다)".to_string() } else { format!("  (측정 범위 {max:.3} 까지)") };
+    writeln!(io.out, "\n  서점으로 갈아탈 확신도 상한: {threshold:.3}{note}").map_err(|e| e.to_string())?;
     Ok(json!({"sample":rows.len(),"measured_max_confidence":max,"bands":report,"bookstore_override_below":threshold,"rows":rows}))
 }

@@ -25,7 +25,7 @@
 //!   - `Prediction { category: Option<String>, ranked: Vec<(String, f64)>, reason: String }` (Clone, PartialEq, Debug)
 //! - `backend::classifier::reader::read_epub_publisher(&Path) -> String`
 //! - `backend::classifier::training`
-//!   - `train(docs: &mut Vec<Value>, cfg: &Value, opts: TrainOptions { accept_parent: Option<HashMap<String, String>>, spill_dir: Option<PathBuf> }) -> Result<(CategoryModel, Value), ValueError>`
+//!   - `train(docs: &mut Vec<Value>, cfg: &Value, opts: TrainOptions { accept_parent: Option<HashMap<String, String>>, spill_dir: Option<PathBuf>, release_holdout_text: bool }) -> Result<(CategoryModel, Value), ValueError>`
 //!   - `evaluate(model: &CategoryModel, docs: &[Value], accept_parent: Option<&HashMap<String, String>>) -> Value`, `format_report(&Value) -> String`
 //!   - `filter_by_size(docs: &[Value], min: usize) -> (Vec<Value>, Vec<String>)`, `coverage_curve(correct: &[bool], conf: &[f64], points: &[f64]) -> Vec<Value>`
 //!   - `max_coverage_at(correct: &[bool], conf: &[f64], target: f64) -> Value`, `split_holdout(docs: &[Value], ratio: f64, seed: u64) -> (Vec<Value>, Vec<Value>)`, `rss_note_with(&Path) -> String` (아래 참조)
@@ -47,7 +47,7 @@ use std::sync::Arc;
 use backend::classifier::config::{config_hash, default_config, enabled_fields, load_config, merge_config, resolve_parent, save_config, series_to_parent};
 use backend::classifier::corpus::{absolute_path, attach_publishers, document, is_trainable, read_jsonl, write_jsonl};
 use backend::classifier::features::{Dtype, FeatureSpace, FitOptions, field_text, make_vectorizer, shrink_sources};
-use backend::classifier::model::{CategoryModel, DEFAULT_MODEL_PATH, MODEL_DIR_ENV, Prediction, model_path, softmax_confidence};
+use backend::classifier::model::{CategoryModel, DEFAULT_MODEL_PATH, MODEL_DIR_ENV, Prediction, get_default_model, model_path, reset_default_model, softmax_confidence};
 use backend::classifier::reader::read_epub_publisher;
 use backend::classifier::training::{TrainOptions, coverage_curve, evaluate, filter_by_size, format_report, max_coverage_at, rss_note_with, split_holdout, train};
 use backend::classifier::{BookCategoryClassifier, ClassifierOptions};
@@ -97,11 +97,11 @@ fn small_fields() -> Value {
 }
 
 fn train_opts() -> TrainOptions {
-    TrainOptions { accept_parent: Some(series_to_parent()), spill_dir: None }
+    TrainOptions { accept_parent: Some(series_to_parent()), spill_dir: None, release_holdout_text: false }
 }
 
-/// pytest fixture `trained`에 대응한다. Rust는 학습하지 않으므로, 같은 문서·설정으로 Python이 학습해 내보낸 모델과
-/// 홀드아웃 리포트를 읽는다(`python tests/test_classifier_export.py trained` 로 다시 쓴다).
+/// pytest fixture `trained`에 대응한다. Python sklearn 학습 결과와 비교하는 parity oracle을 읽는다
+/// (`python tests/test_classifier_export.py trained` 로 다시 쓴다).
 fn load_trained(name: &str) -> (CategoryModel, Value) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny").join(name);
     let model = CategoryModel::load(Some(&dir)).expect("학습 결과 픽스처를 읽어야 한다");
@@ -413,6 +413,41 @@ fn test_model_load_returns_none_for_missing_or_unusable_file() {
     assert!(CategoryModel::load(Some(&wrong)).is_none());
 }
 
+#[test]
+fn test_default_model_is_cached_until_reset() {
+    let mut env = EnvGuard::new();
+    let tmp = TempDir::new().unwrap();
+    let model_dir = tmp.path().join("model");
+    env.set(MODEL_DIR_ENV, model_dir.to_str().unwrap());
+    reset_default_model();
+
+    assert!(get_default_model().is_none());
+    fs::create_dir_all(&model_dir).unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny");
+    for entry in fs::read_dir(&fixture).unwrap().flatten() {
+        if entry.file_type().unwrap().is_file() {
+            fs::copy(entry.path(), model_dir.join(entry.file_name())).unwrap();
+        }
+    }
+    assert!(get_default_model().is_none(), "negative result must stay cached until reset");
+
+    let valid_model_dir = tmp.path().join("valid-model");
+    fs::create_dir(&valid_model_dir).unwrap();
+    for entry in fs::read_dir(&fixture).unwrap().flatten() {
+        if entry.file_type().unwrap().is_file() {
+            fs::copy(entry.path(), valid_model_dir.join(entry.file_name())).unwrap();
+        }
+    }
+    env.set(MODEL_DIR_ENV, valid_model_dir.to_str().unwrap());
+    let loaded = get_default_model().expect("reset 후 모델을 읽어야 한다");
+    let cached = get_default_model().expect("캐시 모델이 있어야 한다");
+    assert!(Arc::ptr_eq(&loaded, &cached));
+    reset_default_model();
+    let reloaded = get_default_model().expect("다시 reset한 뒤 모델을 읽어야 한다");
+    assert!(!Arc::ptr_eq(&loaded, &reloaded));
+    reset_default_model();
+}
+
 // ---------------------------------------------------------------------------
 // training
 // ---------------------------------------------------------------------------
@@ -667,6 +702,8 @@ fn test_build_document_finds_documents_by_relative_path() {
 fn test_model_path_follows_the_environment_variable() {
     let mut env = EnvGuard::new();
     env.remove(MODEL_DIR_ENV);
+    let expected_default = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("classifier/export");
+    assert_eq!(PathBuf::from(DEFAULT_MODEL_PATH), expected_default);
     assert_eq!(model_path(), PathBuf::from(DEFAULT_MODEL_PATH));
 
     // pod 는 /books 로, 학습 머신은 /mnt/data/text 로 같은 파일을 본다. 복사가 없다.
@@ -804,6 +841,24 @@ fn test_feature_space_spill_matches_in_memory_matrix() {
     assert_eq!(spilled.dtype(), Dtype::F64);
     assert_eq!(spilled.nnz(), plain.nnz());
     assert_eq!(spilled.to_dense(), plain.to_dense());
+    assert!(fs::read_dir(tmp.path()).unwrap().next().is_some(), "spill 행렬은 사용 중 파일로 유지돼야 한다");
+    drop(spilled);
+    assert_eq!(fs::read_dir(tmp.path()).unwrap().count(), 0, "spill 파일은 행렬 수명 종료 때 제거한다");
+}
+
+#[test]
+fn test_feature_space_lazy_rows_match_materialized_rows() {
+    let tmp = TempDir::new().unwrap();
+    let (fields, docs) = (spill_fields(), spill_docs());
+    let selected = [0usize, 1, 3];
+    let materialized: Vec<Value> = selected.iter().map(|&index| docs[index].clone()).collect();
+    let expected = FeatureSpace::new(&fields).fit_transform_with(&materialized, FitOptions { spill_dir: Some(tmp.path().join("expected")), dtype: Dtype::F64 }).unwrap();
+    let actual =
+        FeatureSpace::new(&fields).fit_transform_selected_by(&selected, FitOptions { spill_dir: Some(tmp.path().join("actual")), dtype: Dtype::F64 }, |index| Ok(docs[index].clone())).unwrap();
+
+    assert_eq!(actual.shape(), expected.shape());
+    assert_eq!(actual.nnz(), expected.nnz());
+    assert_eq!(actual.to_dense(), expected.to_dense());
 }
 
 #[test]
@@ -837,7 +892,6 @@ fn spill_train_config() -> Value {
 }
 
 #[test]
-#[ignore = "학습은 Python에 남는다: backend/classifier/training.py"]
 fn test_train_with_spill_gives_the_same_model_as_without() {
     // 스필은 메모리를 아끼는 길일 뿐, 성적이 달라지면 안 된다.
     //
@@ -865,7 +919,6 @@ fn test_train_with_spill_gives_the_same_model_as_without() {
 }
 
 #[test]
-#[ignore = "학습은 Python에 남는다: backend/classifier/training.py"]
 fn test_train_with_spill_releases_train_text_but_keeps_the_holdout() {
     // 원문 해제가 홀드아웃까지 건드리면 평가가 조용히 빈 문서로 돌아간다.
     let tmp = TempDir::new().unwrap();
@@ -881,7 +934,6 @@ fn test_train_with_spill_releases_train_text_but_keeps_the_holdout() {
 }
 
 #[test]
-#[ignore = "학습은 Python에 남는다: backend/classifier/training.py"]
 fn test_train_without_spill_leaves_the_documents_untouched() {
     let mut docs = make_docs(40);
     train(&mut docs, &spill_train_config(), train_opts()).unwrap();
@@ -922,7 +974,6 @@ fn test_rss_note_is_empty_when_proc_status_is_unreadable() {
 }
 
 #[test]
-#[ignore = "학습은 Python에 남는다: backend/classifier/training.py"]
 fn test_train_logs_dropped_small_categories() {
     let config = merge_config(&default_config(), &json!({"corpus": {"min_per_category": 5}, "model": {"n_jobs": 1}, "fields": small_fields(), "holdout": 0.25}));
     let mut docs = make_docs(40);

@@ -120,7 +120,8 @@ impl Classify for Fixed {
 }
 
 fn service(tmp: &TempDir, category: &str, confidence: f64) -> BookClassifierService {
-    BookClassifierService::new(tmp.path(), Some(&tmp.path().join("cache.json")), Some(Arc::new(Fixed(Prediction::new(Some(category), confidence, vec![(category.to_string(), confidence)], "stub"))))).with_delay(0.0)
+    BookClassifierService::new(tmp.path(), Some(&tmp.path().join("cache.json")), Some(Arc::new(Fixed(Prediction::new(Some(category), confidence, vec![(category.to_string(), confidence)], "stub")))))
+        .with_delay(0.0)
 }
 
 #[test]

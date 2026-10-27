@@ -1126,6 +1126,25 @@ def test_validate_pdf_success_and_open_error(tmp_path: Path, monkeypatch: pytest
     assert err and "Failed to open PDF" in err
 
 
+def test_validate_pdf_reports_reconstructed_cross_reference(tmp_path: Path):
+    import pikepdf
+
+    pdf_path = tmp_path / "damaged.pdf"
+    pdf = pikepdf.new()
+    pdf.add_blank_page()
+    pdf.save(pdf_path)
+    pdf.close()
+    pdf_path.write_bytes(pdf_path.read_bytes()[:-10])
+    manager = make_manager(tmp_path, make_doc("damaged.pdf", "pdf"))
+
+    result, err = asyncio_runner(manager.validate_pdf(1))
+
+    assert err is None
+    assert result["valid"] is False
+    assert result["summary"]["warning"] > 0
+    assert result["messages"]
+
+
 def test_validate_epub_not_found_and_missing_file(tmp_path: Path):
     manager = make_manager(tmp_path, DummyES())
     manager.es_manager.search_by_id = lambda _id: None
@@ -2285,6 +2304,21 @@ def test_delete_book_es_failure(tmp_path: Path):
     assert "can't delete book information" in msg
 
 
+def test_delete_book_success_removes_file_and_index_entry(tmp_path: Path):
+    es = DummyES()
+    manager = make_manager(tmp_path, es)
+    path = tmp_path / "A" / "ok.txt"
+    path.parent.mkdir(parents=True)
+    path.write_text("book")
+    es.search_by_id = lambda _id: make_doc("A/ok.txt")
+
+    status, error = asyncio_runner(manager.delete_book(1))
+
+    assert (status, error) == ("Ok", None)
+    assert not path.exists()
+    assert es.deleted_doc_ids == [1]
+
+
 # ---- coverage: book_manager additional uncovered lines ----
 
 
@@ -2439,6 +2473,17 @@ def test_category_mismatch_top_level_error(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(os, "scandir", raise_scandir)
     result = manager.get_category_mismatches()
     assert result["mismatches"] == []
+
+
+def test_category_mismatches_reports_es_only_category_without_directory(tmp_path: Path):
+    es = DummyES()
+    es.aggregate = {"Missing": 1}
+    es.all_file_paths = [("Missing", "Missing/book.txt")]
+    manager = make_manager(tmp_path, es)
+
+    result = manager.get_category_mismatches(force_refresh=True)
+
+    assert result["es_only"] == [{"category": "Missing", "es_count": 1, "fs_count": 0, "es_only_count": 1, "fs_only_count": 0, "duplicate_count": 0, "anomaly_count": 1, "diff": 1}]
 
 
 def test_category_mismatch_details_es_only(tmp_path: Path):
@@ -3336,6 +3381,9 @@ def test_get_book_preview_epub_cache_hit(tmp_path: Path):
     )
     _make_minimal_epub(cache_file)
 
+    legacy_cache = cache_dir / "1_ch2.epub"
+    _make_minimal_epub(legacy_cache)
+
     import os
 
     future = time.time() + 1000
@@ -3343,6 +3391,7 @@ def test_get_book_preview_epub_cache_hit(tmp_path: Path):
 
     result = asyncio_runner(manager.get_book_preview(1, chapters=3))
     assert result.status_code == 200
+    assert not legacy_cache.exists()
 
 
 def test_get_book_preview_epub_opf_keyerror(tmp_path: Path):
@@ -5317,6 +5366,19 @@ def test_match_category_by_keywords_picks_single_best(tmp_path: Path):
     assert ranked[0] == ("3_SF", ["과학소설"])
 
 
+def test_match_category_by_keywords_uses_full_unicode_casefold(tmp_path: Path):
+    manager = make_manager(tmp_path, DummyES())
+    target = tmp_path / "A" / "Straße\x1c.TXT"
+    target.parent.mkdir()
+    target.write_text("x")
+
+    category, matched, tie_reason, _ranked = manager._match_category_by_keywords(target, "A", {"3_SF": ["STRASSE .TXT"]})
+
+    assert category == "3_SF"
+    assert matched == ["STRASSE .TXT"]
+    assert tie_reason is None
+
+
 def test_iter_category_indexable_files_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Lines 1350-1351, 1353, 1358, 1359-1360
     manager = make_manager(tmp_path, DummyES())
@@ -6416,6 +6478,17 @@ def test_prune_dead_ncx_navpoints_drops_missing_targets_and_keeps_children(tmp_p
     pruned = _prune_dead_ncx_navpoints(ncx, "OEBPS", lambda path: path in names)
     # 판권 항목만 사라지고, 그 아래 자식은 부모 자리로 올라온다
     assert _ncx_srcs(pruned) == ["Text/a.xhtml#top", "Text/a.xhtml#kid"]
+
+
+def test_validate_epub_rewrites_ncx_when_navpoints_target_missing_files(tmp_path: Path):
+    epub = _epub_with_missing_page(tmp_path / "missing-navpoint.epub", include_page=False)
+
+    valid, error = BookManager._validate_preview_epub(epub)
+
+    assert valid, error
+    with zipfile.ZipFile(epub) as zf:
+        assert _ncx_srcs(zf.read("OEBPS/toc.ncx")) == ["Text/a.xhtml#top", "Text/a.xhtml#kid"]
+    assert not epub.with_suffix(".tmp").exists()
 
 
 def test_prune_dead_ncx_navpoints_returns_none_when_nothing_is_dead(tmp_path: Path):

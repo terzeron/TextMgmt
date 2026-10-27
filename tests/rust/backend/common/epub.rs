@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use super::image::red_jpeg;
-use super::zipx::{write_zip_with, ZipMode};
+use super::zipx::{ZipMode, write_zip_with};
 
 pub const CONTAINER_XML: &str = r#"<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>"#;
 

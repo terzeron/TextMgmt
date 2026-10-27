@@ -1,7 +1,7 @@
 //! PDF 편집 요청 모델과 admin 전용 엔드포인트.
 use axum::{
     Json,
-    extract::{DefaultBodyLimit, OriginalUri, Path, State},
+    extract::{DefaultBodyLimit, Multipart, OriginalUri, Path, State},
     handler::Handler,
     response::Response,
 };
@@ -13,7 +13,7 @@ use crate::epub_cover::MAX_IMAGE_BYTES;
 use crate::main::{
     BookResponse,
     deps::AppDeps,
-    errors::ApiResult,
+    errors::{ApiError, ApiResult, RequestValidationError},
     extract::{ApiJson, RequireAdmin},
     routes::Routes,
     routes_books::{book_response, checked_manager, parse_book_id},
@@ -26,6 +26,8 @@ pub(super) fn routes() -> Routes {
         .post("/comics/pdf-pages/{book_id}/delete", &["require_admin"], delete_pages.layer(limit()))
         .post("/pdf-pages/{book_id}/insert-preview", &["require_admin"], preview_image)
         .post("/comics/pdf-pages/{book_id}/insert-preview", &["require_admin"], preview_image)
+        .post("/pdf-pages/{book_id}/insert-preview-upload", &["require_admin"], preview_upload.layer(limit()))
+        .post("/comics/pdf-pages/{book_id}/insert-preview-upload", &["require_admin"], preview_upload.layer(limit()))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -123,6 +125,35 @@ async fn preview_image(
     book_response(match jpeg {
         Some(body) => BookResponse { status_code: 200, media_type: Some("image/jpeg".into()), headers: vec![("Cache-Control".into(), "private, no-store".into())], body },
         None => BookResponse { status_code: 400, body: error.unwrap_or_else(|| "이미지를 가져오지 못했습니다".into()).into_bytes(), ..BookResponse::default() },
+    })
+}
+
+async fn preview_upload(
+    RequireAdmin(payload): RequireAdmin,
+    State(deps): State<Arc<AppDeps>>,
+    Path(raw_id): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    multipart: Option<Multipart>,
+) -> ApiResult<Response> {
+    let id = parse_book_id(&raw_id)?;
+    let Some(mut multipart) = multipart else {
+        return Err(ApiError::Validation(RequestValidationError::single(&["body", "file"], "Field required", Value::Null)));
+    };
+    let mut data = None;
+    while let Some(field) = multipart.next_field().await.map_err(|_| ApiError::Validation(RequestValidationError::single(&["body", "file"], "Field required", Value::Null)))? {
+        if field.name() == Some("file") {
+            data = Some(field.bytes().await.map_err(|_| ApiError::Validation(RequestValidationError::single(&["body", "file"], "Field required", Value::Null)))?);
+            break;
+        }
+    }
+    let Some(data) = data else {
+        return Err(ApiError::Validation(RequestValidationError::single(&["body", "file"], "Field required", Value::Null)));
+    };
+    let manager = checked_manager(&deps, &payload, id, uri.path().starts_with("/comics/")).await?;
+    let (jpeg, error) = manager.preview_insert_upload(&data).await;
+    book_response(match jpeg {
+        Some(body) => BookResponse { status_code: 200, media_type: Some("image/jpeg".into()), headers: vec![("Cache-Control".into(), "private, no-store".into())], body },
+        None => BookResponse { status_code: 400, body: error.unwrap_or_else(|| "이미지를 읽지 못했습니다".into()).into_bytes(), ..BookResponse::default() },
     })
 }
 

@@ -59,8 +59,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use backend::auth::create_jwt_token;
 use backend::book_manager::{BookManager, BookManagerDeps, Thumbnailer};
-use backend::cover_management::{ApplyImageModel, CoverHooks, CoverManagement, check_cancelled};
-use backend::cover_sources::{STORES, SearchError};
+use backend::cover_management::{ApplyImageModel, Backup, CoverHooks, CoverManagement, EpubThumbnailer, check_cancelled};
+use backend::cover_sources::{STORES, SearchError, SearchHooks};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover::{self, CoverError, EpubCoverHooks, Limits, MAX_IMAGE_BYTES, OPF_NS};
 use backend::main::{AppDeps, AuthMode, app_with};
@@ -200,6 +200,44 @@ fn test_cover_listing_and_search_use_same_filename_title() {
         assert_eq!(*seen.lock().unwrap(), [str_of(&item, "title")], "filename={filename:?}");
         assert_eq!(read(&path), original, "filename={filename:?}");
     }
+}
+
+#[test]
+fn test_cover_management_accessors_and_normalized_book_cache_keys() {
+    let tmp = tempfile::tempdir().unwrap();
+    let service = CoverManagement::with_hooks(tmp.path(), CoverHooks::default().with_search_hooks(SearchHooks::default()));
+
+    assert_eq!(service.root(), tmp.path());
+    assert_eq!(service.cache(), tmp.path().join(".cover_management"));
+    assert_eq!(service.book_cache(""), service.book_cache("."));
+    assert_ne!(service.book_cache("/book.epub"), service.book_cache("book.epub"));
+    assert!(EpubThumbnailer.extract_cover_thumbnail(tmp.path(), "pdf", None).is_none());
+    assert!(EpubThumbnailer.extract_cover_thumbnail(tmp.path(), "epub", None).is_none());
+}
+
+#[test]
+fn test_cover_cache_write_error_removes_temporary_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let service = CoverManagement::new(tmp.path());
+    let destination = tmp.path().join("destination");
+    std::fs::create_dir(&destination).unwrap();
+
+    assert!(service.try_write(&destination, b"data").is_err());
+    assert!(std::fs::read_dir(tmp.path()).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with(".tmp-")));
+}
+
+#[test]
+fn test_edit_images_rejects_blank_insert_url_before_mutating_epub() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = make_epub(&tmp.path().join("book.epub"), &EpubSpec::cover("3.0", true));
+    let before = read(&path);
+    let service = CoverManagement::new(tmp.path());
+
+    let error = service.edit_images("book.epub", &rev(&path), epub_cover::EditImages::default(), &[json!({"before_idref":"chapter","url":"  "})], Backup::default()).unwrap_err();
+
+    assert!(error.to_string().contains("이미지 URL이 비어 있습니다"));
+    assert_eq!(read(&path), before);
+    assert!(!backups(tmp.path()).exists());
 }
 
 #[test]
@@ -882,6 +920,24 @@ fn test_filesystem_listing_includes_unindexed_epub_and_reports_errors() {
         assert_eq!(item["category"], "目录");
         assert!(truthy(&item["revision"]));
     }
+}
+
+#[test]
+fn filesystem_listing_order_matches_python_casefold() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::create_dir(root.join("zeta")).unwrap();
+    std::fs::create_dir(root.join("ßeta")).unwrap();
+    std::fs::write(root.join("z.epub"), b"bad zip").unwrap();
+    std::fs::write(root.join("ß.epub"), b"bad zip").unwrap();
+
+    let manager = CoverManagement::new(root);
+    let labels: Vec<String> = manager.directories("").unwrap().into_iter().map(|entry| entry["label"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(labels, ["ßeta", "zeta"]);
+
+    let page = manager.missing("", "", 10, false).unwrap();
+    let paths: Vec<&str> = page["items"].as_array().unwrap().iter().map(|item| item["file_path"].as_str().unwrap()).collect();
+    assert_eq!(paths, ["ß.epub", "z.epub"]);
 }
 
 #[test]

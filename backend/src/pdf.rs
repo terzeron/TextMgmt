@@ -3,14 +3,13 @@
 //! Python `pikepdf`(열기·구문 검사)와 `pypdf`(쪽 읽기·쓰기)에 대응한다. 서비스는 이 파일의 trait만 알고,
 //! 실제 구현(`LopdfOpener`, `LopdfPageOps`)은 `lopdf`로 만든다. 테스트는 대역으로 바꿔 끼운다.
 //!
-//! 이 파일은 `BookManager`가 쓰는 최소 표면만 있다. 쪽 편집(자르기, 삽입), 리더 캐시(`PdfReaderCache`),
-//! `PdfCacheLimits`는 PDF 쪽 기능을 맡는 에이전트가 이 파일에 덧붙인다.
+//! 페이지 reader는 경로·수정 시각 기반 cache로 공유하며, 추출은 reader를 복제해 원본 상태를 보존한다.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
-use lopdf::{Document, Object};
+use lopdf::{Document, Object, xref::XrefRecovery};
 
 /// PDF 라이브러리 오류. `kind`는 Python 예외 클래스 이름에 대응한다(`"OpenError"`, `"RuntimeError"` 등).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +53,16 @@ pub trait PdfPageOps: Send + Sync {
     fn page_count(&self, path: &Path) -> Result<usize, PdfError>;
     /// 0부터 세는 반열린 구간 `[start, end)`의 쪽만 담은 새 PDF 바이트를 돌려준다. Python의 `range(start - 1, end)`와 같다.
     fn extract_pages(&self, path: &Path, start: usize, end: usize) -> Result<Vec<u8>, PdfError>;
+
+    /// 재사용 가능한 reader를 연다. 대역은 기존 경로 기반 동작을 사용한다.
+    fn open_reader(&self, path: &Path) -> Result<PdfReaderHandle, PdfError> {
+        Ok(PdfReaderHandle::new(path.to_path_buf(), self.page_count(path)?))
+    }
+
+    /// 열린 reader에서 쪽을 추출한다. 기본 구현은 경로 기반 추출로 하위 호환한다.
+    fn extract_pages_from_reader(&self, reader: &PdfReaderHandle, start: usize, end: usize) -> Result<Vec<u8>, PdfError> {
+        self.extract_pages(&reader.path, start, end)
+    }
 }
 
 fn open_error(e: lopdf::Error) -> PdfError {
@@ -78,6 +87,7 @@ fn decode_pdf_text(bytes: &[u8]) -> String {
 
 struct LopdfDoc {
     doc: Document,
+    syntax_issues: Vec<String>,
 }
 
 impl PdfDoc for LopdfDoc {
@@ -107,8 +117,7 @@ impl PdfDoc for LopdfDoc {
     }
 
     fn check_pdf_syntax(&self) -> Result<Vec<String>, PdfError> {
-        // lopdf에는 qpdf 같은 구문 검사기가 없다. 열기에 성공했으면 문제 없음으로 본다.
-        Ok(Vec::new())
+        Ok(self.syntax_issues.clone())
     }
 
     fn close(&self) {}
@@ -120,7 +129,13 @@ pub struct LopdfOpener;
 impl PdfOpener for LopdfOpener {
     fn open(&self, path: &Path) -> Result<Box<dyn PdfDoc>, PdfError> {
         let doc = Document::load(path).map_err(open_error)?;
-        Ok(Box::new(LopdfDoc { doc }))
+        let syntax_issues = match doc.xref_recovery {
+            Some(XrefRecovery::OffsetCorrected) => vec!["Cross-reference section offset required repair".to_string()],
+            Some(XrefRecovery::Reconstructed) => vec!["Cross-reference table was reconstructed".to_string()],
+            Some(_) => vec!["Cross-reference data was repaired".to_string()],
+            None => Vec::new(),
+        };
+        Ok(Box::new(LopdfDoc { doc, syntax_issues }))
     }
 }
 
@@ -135,20 +150,42 @@ impl PdfPageOps for LopdfPageOps {
 
     fn extract_pages(&self, path: &Path, start: usize, end: usize) -> Result<Vec<u8>, PdfError> {
         let mut doc = Document::load(path).map_err(open_error)?;
-        let total = doc.get_pages().len();
-        // lopdf 쪽 번호는 1부터다.
-        let drop: Vec<u32> = (1..=total as u32)
-            .filter(|n| {
-                let index = *n as usize - 1;
-                index < start || index >= end
-            })
-            .collect();
-        doc.delete_pages(&drop);
-        doc.prune_objects();
+        extract_document_pages(&mut doc, start, end)?;
         let mut out = Vec::new();
         doc.save_to(&mut out).map_err(|e| PdfError::new("RuntimeError", e.to_string()))?;
         Ok(out)
     }
+
+    fn open_reader(&self, path: &Path) -> Result<PdfReaderHandle, PdfError> {
+        let doc = Document::load(path).map_err(open_error)?;
+        let page_count = doc.get_pages().len();
+        Ok(PdfReaderHandle::with_document(path.to_path_buf(), page_count, Arc::new(doc)))
+    }
+
+    fn extract_pages_from_reader(&self, reader: &PdfReaderHandle, start: usize, end: usize) -> Result<Vec<u8>, PdfError> {
+        let Some(doc) = reader.document.as_ref() else {
+            return self.extract_pages(&reader.path, start, end);
+        };
+        let mut doc = (**doc).clone();
+        extract_document_pages(&mut doc, start, end)?;
+        let mut out = Vec::new();
+        doc.save_to(&mut out).map_err(|e| PdfError::new("RuntimeError", e.to_string()))?;
+        Ok(out)
+    }
+}
+
+fn extract_document_pages(doc: &mut Document, start: usize, end: usize) -> Result<(), PdfError> {
+    let total = doc.get_pages().len();
+    // lopdf 쪽 번호는 1부터다.
+    let drop: Vec<u32> = (1..=total as u32)
+        .filter(|n| {
+            let index = *n as usize - 1;
+            index < start || index >= end
+        })
+        .collect();
+    doc.delete_pages(&drop);
+    doc.prune_objects();
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -175,11 +212,23 @@ impl Default for PdfCacheLimits {
     }
 }
 
-/// 열어 둔 PDF 한 건의 핸들. 쪽수를 이미 읽었다는 뜻이다. `PdfPageOps`가 파일 경로로 일하므로 파싱 결과는 들고 있지 않다.
+/// 열린 PDF reader. 실제 `LopdfPageOps`는 추출 때 재사용할 parsed document도 보관한다.
 #[derive(Debug)]
 pub struct PdfReaderHandle {
     pub path: std::path::PathBuf,
     pub page_count: usize,
+    document: Option<Arc<Document>>,
+}
+
+impl PdfReaderHandle {
+    /// 경로 기반 PDF 대역용 reader handle.
+    pub fn new(path: std::path::PathBuf, page_count: usize) -> Self {
+        Self { path, page_count, document: None }
+    }
+
+    fn with_document(path: std::path::PathBuf, page_count: usize, document: Arc<Document>) -> Self {
+        Self { path, page_count, document: Some(document) }
+    }
 }
 
 struct ReaderEntry {
@@ -225,7 +274,7 @@ impl PdfReaderCache {
 
     /// 테스트와 예산 검증용으로 항목을 직접 넣는다.
     pub fn insert_raw(&self, key: &str, mtime: i64, pages: i64, size: u64) {
-        let reader = Arc::new(PdfReaderHandle { path: std::path::PathBuf::from(key), page_count: pages.max(0) as usize });
+        let reader = Arc::new(PdfReaderHandle::new(std::path::PathBuf::from(key), pages.max(0) as usize));
         self.put(key, ReaderEntry { mtime, reader, pages, size });
     }
 

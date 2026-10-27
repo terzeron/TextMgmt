@@ -12,19 +12,20 @@
 //! - `backend::db::{DbValue, Row}`: `enum DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`, `From<Value>`),
 //!   `type Row = BTreeMap<String, DbValue>`. 구 `serde_json::Value` 파라미터는 `DbValue`로 쓰고, 행 값은 `DbValue::Text`로 읽는다.
 //! - `CategoryMapping::add_classify_proposal_items(&self, items: &[Value], source_category: &str, content_type: &str)`
-//! - `CategoryMapping::get_classify_proposal_items(&self, content_type: &str) -> Vec<Value>`
+//! - `CategoryMapping::get_classify_proposal_items(&self, content_type: &str).unwrap() -> Vec<Value>`
 //! - `CategoryMapping::update_classify_proposal_item_status(&self, file_path: &str, status: &str, error: Option<&str>, content_type: &str)`
 //! - `CategoryMapping::update_classify_proposal_item_payloads(&self, items: &[Value], content_type: &str)`
 //! - `CategoryMapping::clear_classify_proposal_items(&self, content_type: &str)`
-//! - `CategoryMapping::delete_applied_classify_proposal_items(&self, content_type: &str) -> u64`
+//! - `CategoryMapping::delete_applied_classify_proposal_items(&self, content_type: &str).unwrap() -> u64`
 //!
 //! Python의 `content_type` 기본값 "book"은 Rust에 기본 인자가 없어 매번 명시한다.
 //! `cm()`이 `common/mysql_fixture.rs`로 일회용 MySQL 컨테이너를 띄우고 `TM_MYSQL_*`를 설정한다(Docker가 없으면 panic).
-//! `SHOW CREATE TABLE`/`EXPLAIN`은 준비된 문장이 결과 열 정보를 주지 않아 `mysql` crate(dev-dependency)의 텍스트 프로토콜로 읽는다. 실제 MySQL이 필요하므로 모든 테스트는 `#[ignore]`이고 `--ignored`로 실행한다. 테이블을 공유하므로 직렬 실행(`--test-threads=1`)을 가정한다.
+//! `SHOW CREATE TABLE`/`EXPLAIN`은 준비된 문장이 결과 열 정보를 주지 않아 `mysql` crate(dev-dependency)의 텍스트 프로토콜로 읽는다. 테이블을 공유하므로 `cm()`이 돌려주는 값이 `db_lock()`을 쥐어 테스트끼리 직렬로 돈다.
 
-mod common;
-#[path = "common/mysql_fixture.rs"]
-mod mysql_fixture;
+use crate::{common, mysql_fixture};
+
+use std::ops::Deref;
+use std::sync::MutexGuard;
 
 use backend::category_mapping::CategoryMapping;
 
@@ -39,16 +40,30 @@ fn text(row: &Row, key: &str) -> String {
     }
 }
 
+/// `cm()`이 돌려주는 값. 테이블을 공유하는 테스트끼리 병렬로 돌지 않게 잠금을 쥐고 있다(Python은 순차 실행).
+struct Db {
+    _lock: MutexGuard<'static, ()>,
+    mapping: CategoryMapping,
+}
+
+impl Deref for Db {
+    type Target = CategoryMapping;
+    fn deref(&self) -> &CategoryMapping {
+        &self.mapping
+    }
+}
+
 /// `cm` fixture. 대상 테이블을 비운 CategoryMapping을 돌려준다. MySQL이 없으면 panic.
-fn cm() -> CategoryMapping {
+fn cm() -> Db {
     common::setup_env();
     // 일회용 MySQL 컨테이너를 세션당 한 번 띄우고 TM_MYSQL_*를 설정한다(Python `mysql_container` fixture). Docker가 없으면 panic한다.
     mysql_fixture::mysql_container();
+    let lock = mysql_fixture::db_lock();
     let mapping = CategoryMapping::new().expect("MySQL 연결");
     let mut conn = mapping.get_connection().unwrap();
     conn.execute("TRUNCATE TABLE classify_proposal_items", &[]).unwrap();
     conn.commit().unwrap();
-    mapping
+    Db { _lock: lock, mapping }
 }
 
 fn files(paths: impl IntoIterator<Item = String>) -> Vec<Value> {
@@ -62,7 +77,6 @@ fn index_names(cm: &CategoryMapping) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_create_table_statement_runs_on_real_mysql() {
     // CREATE TABLE IF NOT EXISTS classify_proposal_items가 MySQL 8.0에서 실제로 성공했는지 확인한다.
     // JSON 컬럼, 두 개의 복합/단일 인덱스, VARCHAR(1024)는 fake cursor로는 문법 오류를 잡을 수 없다.
@@ -94,14 +108,13 @@ fn chosen_range_plans<'a>(node: &'a Value, out: &mut Vec<&'a Value>) {
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_status_update_uses_an_index_instead_of_scanning_the_table() {
     // 승인이 책 한 권마다 부르는 UPDATE가 인덱스를 타는지 확인한다.
     // 실행 시간은 장비마다 달라 고정할 수 없으므로 "전수 훑기가 아니라 인덱스 조회를 고른다"는 실행 계획 자체를 잠근다.
     // 원본은 `EXPLAIN UPDATE`의 key/type을 읽는다. 준비된 문장으로는 EXPLAIN을 읽을 수 없어서, 같은 세션에서
     // 옵티마이저 trace(information_schema.OPTIMIZER_TRACE)로 실제 실행 계획이 고른 접근 경로를 읽는다.
     let cm = cm();
-    cm.add_classify_proposal_items(&files((0..50).map(|i| format!("3_판타지/책 {i}.epub"))), "3_판타지", "book");
+    cm.add_classify_proposal_items(&files((0..50).map(|i| format!("3_판타지/책 {i}.epub"))), "3_판타지", "book").unwrap();
 
     let mut conn = cm.get_connection().unwrap();
     conn.execute("SET optimizer_trace = 'enabled=on'", &[]).unwrap();
@@ -122,7 +135,6 @@ fn test_status_update_uses_an_index_instead_of_scanning_the_table() {
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_redundant_content_type_index_is_gone() {
     // idx_content_type (content_type)은 idx_content_source (content_type, source_category)의 왼쪽 접두사와 같아 조회를 하나도 더 처리하지 못한다.
     // INSERT마다 유지 비용만 드는 중복 인덱스라 지웠다. 다시 들어오면 실패한다.
@@ -135,7 +147,6 @@ fn test_redundant_content_type_index_is_gone() {
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_migration_adds_file_path_index_and_drops_the_redundant_one() {
     // 이미 테이블이 만들어진 환경을 재현한다. 옛 인덱스 구성으로 되돌린 뒤 _init_db를 다시 부르면,
     // 마이그레이션이 file_path 인덱스를 붙이고 중복 인덱스를 지워야 한다.
@@ -153,7 +164,6 @@ fn test_migration_adds_file_path_index_and_drops_the_redundant_one() {
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_payload_round_trips_korean_nested_null_and_long_path() {
     // 한글, candidates 중첩 배열(최대 2개), null 값, 매우 긴 file_path가 add -> get을 거쳐도 그대로 돌아오는지 확인한다.
     let cm = cm();
@@ -163,8 +173,8 @@ fn test_payload_round_trips_korean_nested_null_and_long_path() {
         "candidates": [{"category": "3_SF", "source": "bookstore", "detail": "서점 2곳 일치"}, {"category": "5_에세이", "source": "model", "detail": "모델 판정"}],
     });
 
-    cm.add_classify_proposal_items(std::slice::from_ref(&item), "0_inbox", "book");
-    let fetched = cm.get_classify_proposal_items("book");
+    cm.add_classify_proposal_items(std::slice::from_ref(&item), "0_inbox", "book").unwrap();
+    let fetched = cm.get_classify_proposal_items("book").unwrap();
 
     assert_eq!(fetched.len(), 1);
     // apply_status/apply_error는 payload가 아니라 컬럼에서 실려온다. 새로 넣은 행은 아직 아무것도 이동하지 않았으므로 기본값 pending/None이어야 한다.
@@ -175,32 +185,30 @@ fn test_payload_round_trips_korean_nested_null_and_long_path() {
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_get_returns_apply_status_and_apply_error_from_columns() {
     // get이 payload뿐 아니라 apply_status/apply_error 컬럼 값도 항목에 실어 돌려준다.
     let cm = cm();
-    cm.add_classify_proposal_items(&files(["a.epub".to_string()]), "0_inbox", "book");
+    cm.add_classify_proposal_items(&files(["a.epub".to_string()]), "0_inbox", "book").unwrap();
 
-    cm.update_classify_proposal_item_status("a.epub", "failed", Some("파일을 찾을 수 없습니다"), "book");
-    let item = cm.get_classify_proposal_items("book").remove(0);
+    cm.update_classify_proposal_item_status("a.epub", "failed", Some("파일을 찾을 수 없습니다"), "book").unwrap();
+    let item = cm.get_classify_proposal_items("book").unwrap().remove(0);
 
     assert_eq!(item["apply_status"], "failed");
     assert_eq!(item["apply_error"], "파일을 찾을 수 없습니다");
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_update_payload_fills_the_row_without_touching_apply_status() {
     // 분류가 끝난 항목이 기존 행의 payload만 채우고 apply_status는 건드리지 않는다.
     // 제안 시작 시 이름만 담은 행을 먼저 넣고 나중에 채우는 구조라, 채우는 쪽이 INSERT면 같은 책이 두 줄로 보인다.
     // 그리고 apply_status까지 덮으면 이미 옮긴 책의 이동 기록이 사라진다.
     let cm = cm();
-    cm.add_classify_proposal_items(&[json!({"file_path": "A/a.epub", "title": "가", "grade": null}), json!({"file_path": "A/b.epub", "title": "나", "grade": null})], "A", "book");
-    cm.update_classify_proposal_item_status("A/a.epub", "moved", None, "book");
+    cm.add_classify_proposal_items(&[json!({"file_path": "A/a.epub", "title": "가", "grade": null}), json!({"file_path": "A/b.epub", "title": "나", "grade": null})], "A", "book").unwrap();
+    cm.update_classify_proposal_item_status("A/a.epub", "moved", None, "book").unwrap();
 
-    cm.update_classify_proposal_item_payloads(&[json!({"file_path": "A/a.epub", "title": "가", "grade": "certain", "target_category": "3_SF"})], "book");
+    cm.update_classify_proposal_item_payloads(&[json!({"file_path": "A/a.epub", "title": "가", "grade": "certain", "target_category": "3_SF"})], "book").unwrap();
 
-    let items = cm.get_classify_proposal_items("book");
+    let items = cm.get_classify_proposal_items("book").unwrap();
     let by_path = |p: &str| items.iter().find(|i| i["file_path"] == p).unwrap().clone();
     assert_eq!(items.len(), 2, "행이 늘어났다 — 채우기가 INSERT로 동작한다");
     assert_eq!(by_path("A/a.epub")["grade"], "certain");
@@ -210,25 +218,23 @@ fn test_update_payload_fills_the_row_without_touching_apply_status() {
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_update_payload_ignores_an_empty_batch() {
     // 비어 있는 갱신 묶음은 DB에 가지 않는다(꼬리가 없을 때 매번 왕복하지 않는다).
     let cm = cm();
-    cm.add_classify_proposal_items(&[json!({"file_path": "A/a.epub", "grade": null})], "A", "book");
-    cm.update_classify_proposal_item_payloads(&[], "book");
-    assert!(cm.get_classify_proposal_items("book")[0]["grade"].is_null());
+    cm.add_classify_proposal_items(&[json!({"file_path": "A/a.epub", "grade": null})], "A", "book").unwrap();
+    cm.update_classify_proposal_item_payloads(&[], "book").unwrap();
+    assert!(cm.get_classify_proposal_items("book").unwrap()[0]["grade"].is_null());
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_update_status_changes_only_target_row() {
     // update가 file_path + content_type으로 지정한 행만 바꾸고 다른 행은 그대로 둔다.
     let cm = cm();
-    cm.add_classify_proposal_items(&files(["a.epub".to_string(), "b.epub".to_string()]), "0_inbox", "book");
+    cm.add_classify_proposal_items(&files(["a.epub".to_string(), "b.epub".to_string()]), "0_inbox", "book").unwrap();
 
-    cm.update_classify_proposal_item_status("a.epub", "moved", None, "book");
+    cm.update_classify_proposal_item_status("a.epub", "moved", None, "book").unwrap();
 
-    let items = cm.get_classify_proposal_items("book");
+    let items = cm.get_classify_proposal_items("book").unwrap();
     let by_path = |p: &str| items.iter().find(|i| i["file_path"] == p).unwrap().clone();
     assert_eq!(by_path("a.epub")["apply_status"], "moved");
     assert!(by_path("a.epub")["apply_error"].is_null());
@@ -236,42 +242,39 @@ fn test_update_status_changes_only_target_row() {
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_update_status_is_scoped_by_content_type() {
     // 같은 file_path라도 content_type이 다르면 건드리지 않는다.
     let cm = cm();
-    cm.add_classify_proposal_items(&files(["same.epub".to_string()]), "0_inbox", "book");
-    cm.add_classify_proposal_items(&files(["same.epub".to_string()]), "0_inbox", "comic");
+    cm.add_classify_proposal_items(&files(["same.epub".to_string()]), "0_inbox", "book").unwrap();
+    cm.add_classify_proposal_items(&files(["same.epub".to_string()]), "0_inbox", "comic").unwrap();
 
-    cm.update_classify_proposal_item_status("same.epub", "moved", None, "book");
+    cm.update_classify_proposal_item_status("same.epub", "moved", None, "book").unwrap();
 
-    assert_eq!(cm.get_classify_proposal_items("book")[0]["apply_status"], "moved");
-    assert_eq!(cm.get_classify_proposal_items("comic")[0]["apply_status"], "pending");
+    assert_eq!(cm.get_classify_proposal_items("book").unwrap()[0]["apply_status"], "moved");
+    assert_eq!(cm.get_classify_proposal_items("comic").unwrap()[0]["apply_status"], "pending");
 
     // 다음 테스트를 위해 comic도 정리한다 (컨테이너는 세션 스코프로 공유된다)
-    cm.clear_classify_proposal_items("comic");
+    cm.clear_classify_proposal_items("comic").unwrap();
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_delete_applied_removes_only_moved_rows_and_returns_count() {
     // delete_applied는 apply_status='moved'인 행만 지우고, 지운 개수를 돌려준다.
     let cm = cm();
-    cm.add_classify_proposal_items(&files(["a.epub".to_string(), "b.epub".to_string(), "c.epub".to_string()]), "0_inbox", "book");
-    cm.update_classify_proposal_item_status("a.epub", "moved", None, "book");
-    cm.update_classify_proposal_item_status("b.epub", "failed", Some("실패"), "book");
+    cm.add_classify_proposal_items(&files(["a.epub".to_string(), "b.epub".to_string(), "c.epub".to_string()]), "0_inbox", "book").unwrap();
+    cm.update_classify_proposal_item_status("a.epub", "moved", None, "book").unwrap();
+    cm.update_classify_proposal_item_status("b.epub", "failed", Some("실패"), "book").unwrap();
     // c.epub은 pending으로 남겨둔다
 
-    let deleted_count = cm.delete_applied_classify_proposal_items("book");
+    let deleted_count = cm.delete_applied_classify_proposal_items("book").unwrap();
 
     assert_eq!(deleted_count, 1);
-    let mut remaining: Vec<String> = cm.get_classify_proposal_items("book").iter().map(|i| i["file_path"].as_str().unwrap().to_string()).collect();
+    let mut remaining: Vec<String> = cm.get_classify_proposal_items("book").unwrap().iter().map(|i| i["file_path"].as_str().unwrap().to_string()).collect();
     remaining.sort();
     assert_eq!(remaining, vec!["b.epub".to_string(), "c.epub".to_string()]);
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_migration_adds_apply_status_columns_to_legacy_table() {
     // apply_status/apply_error 컬럼 없는 기존 테이블을 열어도 마이그레이션이 컬럼을 추가한다.
     // 컬럼 없는 옛 스키마로 테이블을 다시 만들고, 새 인스턴스를 생성해 _init_db가 마이그레이션을 수행하게 한 뒤 컬럼이 실제로 동작하는지 확인한다.
@@ -288,24 +291,23 @@ fn test_migration_adds_apply_status_columns_to_legacy_table() {
 
     let migrated = CategoryMapping::new().expect("MySQL 연결"); // _init_db가 마이그레이션을 수행한다
 
-    let items = migrated.get_classify_proposal_items("book");
+    let items = migrated.get_classify_proposal_items("book").unwrap();
     assert_eq!(items[0]["apply_status"], "pending");
     assert!(items[0]["apply_error"].is_null());
-    migrated.update_classify_proposal_item_status("a.epub", "moved", None, "book");
-    assert_eq!(migrated.get_classify_proposal_items("book")[0]["apply_status"], "moved");
+    migrated.update_classify_proposal_item_status("a.epub", "moved", None, "book").unwrap();
+    assert_eq!(migrated.get_classify_proposal_items("book").unwrap()[0]["apply_status"], "moved");
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_batch_of_250_across_three_adds_keeps_full_tail_in_order() {
     // 설계상 배치 크기인 100건씩(100+100+50) 나눠 넣어도 get이 250건 전부를 삽입 순서대로 돌려주는지 확인한다.
     // 마지막 잔여분(꼬리)이 누락되면 관리자가 목록 끝의 책들을 못 보고 승인하게 된다.
     let cm = cm();
-    cm.add_classify_proposal_items(&files((0..100).map(|i| format!("{i}.epub"))), "0_inbox", "book");
-    cm.add_classify_proposal_items(&files((100..200).map(|i| format!("{i}.epub"))), "0_inbox", "book");
-    cm.add_classify_proposal_items(&files((200..250).map(|i| format!("{i}.epub"))), "0_inbox", "book");
+    cm.add_classify_proposal_items(&files((0..100).map(|i| format!("{i}.epub"))), "0_inbox", "book").unwrap();
+    cm.add_classify_proposal_items(&files((100..200).map(|i| format!("{i}.epub"))), "0_inbox", "book").unwrap();
+    cm.add_classify_proposal_items(&files((200..250).map(|i| format!("{i}.epub"))), "0_inbox", "book").unwrap();
 
-    let items = cm.get_classify_proposal_items("book");
+    let items = cm.get_classify_proposal_items("book").unwrap();
 
     assert_eq!(items.len(), 250);
     let paths: Vec<String> = items.iter().map(|i| i["file_path"].as_str().unwrap().to_string()).collect();
@@ -314,45 +316,42 @@ fn test_batch_of_250_across_three_adds_keeps_full_tail_in_order() {
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_get_preserves_insertion_order_across_several_add_calls() {
     // 화면은 분류가 끝난 순서 그대로 책을 보여줘야 하므로, 여러 번의 add 호출에 걸쳐 들어간 항목도 삽입 순서를 유지한 채 조회되는지 확인한다.
     let cm = cm();
-    cm.add_classify_proposal_items(&files(["z.epub".to_string()]), "0_inbox", "book");
-    cm.add_classify_proposal_items(&files(["a.epub".to_string()]), "0_inbox", "book");
-    cm.add_classify_proposal_items(&files(["m.epub".to_string()]), "0_inbox", "book");
+    cm.add_classify_proposal_items(&files(["z.epub".to_string()]), "0_inbox", "book").unwrap();
+    cm.add_classify_proposal_items(&files(["a.epub".to_string()]), "0_inbox", "book").unwrap();
+    cm.add_classify_proposal_items(&files(["m.epub".to_string()]), "0_inbox", "book").unwrap();
 
-    let items = cm.get_classify_proposal_items("book");
+    let items = cm.get_classify_proposal_items("book").unwrap();
 
     let paths: Vec<&str> = items.iter().map(|i| i["file_path"].as_str().unwrap()).collect();
     assert_eq!(paths, vec!["z.epub", "a.epub", "m.epub"]);
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_clear_only_removes_matching_content_type() {
     // clear는 지정한 content_type 행만 지우고 다른 content_type은 그대로 남겨야 한다.
     let cm = cm();
-    cm.add_classify_proposal_items(&files(["book1.epub".to_string()]), "0_inbox", "book");
-    cm.add_classify_proposal_items(&files(["comic1.epub".to_string()]), "0_inbox", "comic");
+    cm.add_classify_proposal_items(&files(["book1.epub".to_string()]), "0_inbox", "book").unwrap();
+    cm.add_classify_proposal_items(&files(["comic1.epub".to_string()]), "0_inbox", "comic").unwrap();
 
-    cm.clear_classify_proposal_items("book");
+    cm.clear_classify_proposal_items("book").unwrap();
 
-    assert!(cm.get_classify_proposal_items("book").is_empty());
-    let remaining = cm.get_classify_proposal_items("comic");
+    assert!(cm.get_classify_proposal_items("book").unwrap().is_empty());
+    let remaining = cm.get_classify_proposal_items("comic").unwrap();
     let paths: Vec<&str> = remaining.iter().map(|i| i["file_path"].as_str().unwrap()).collect();
     assert_eq!(paths, vec!["comic1.epub"]);
 
     // 다음 테스트를 위해 comic도 정리한다 (컨테이너는 세션 스코프로 공유된다)
-    cm.clear_classify_proposal_items("comic");
+    cm.clear_classify_proposal_items("comic").unwrap();
 }
 
 #[test]
-#[ignore = "실제 MySQL 필요: TM_MYSQL_HOST"]
 fn test_get_on_empty_table_returns_empty_list_not_error() {
     // 아직 아무 제안도 만들지 않은 content_type을 조회하면 빈 리스트여야지, 에러가 나거나 None이 나오면 안 된다.
     let cm = cm();
-    let items = cm.get_classify_proposal_items("book");
+    let items = cm.get_classify_proposal_items("book").unwrap();
 
     assert!(items.is_empty());
 }

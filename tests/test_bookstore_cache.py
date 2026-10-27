@@ -82,6 +82,30 @@ def test_entries_survive_a_new_instance(tmp_path: Path):
     assert BookstoreResponseCache(path).get(title="달빛조각사", author="남희성") == STORES
 
 
+def test_load_converts_truthy_numeric_identifiers_to_strings(tmp_path: Path):
+    path = tmp_path / "bookstore_cache.jsonl"
+    path.write_text(json.dumps({
+        "keys": ["isbn:123"],
+        "isbn": 123,
+        "author": 456,
+        "stores": {"yes24": {"cat": "소설"}},
+    }) + "\n", encoding="utf-8")
+
+    assert BookstoreResponseCache(path).get(isbn="123", author="456") == {"yes24": {"cat": "소설"}}
+
+
+def test_load_stringifies_truthy_list_and_dict_identifiers(tmp_path: Path):
+    path = tmp_path / "bookstore_cache.jsonl"
+    path.write_text(json.dumps({
+        "keys": ["isbn:['123']"],
+        "isbn": ["123"],
+        "author": {"name": "홍길동"},
+        "stores": {"yes24": {"cat": "소설"}},
+    }, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    assert BookstoreResponseCache(path).get(isbn="['123']", author="{'name': '홍길동'}") == {"yes24": {"cat": "소설"}}
+
+
 def test_later_entry_wins_for_the_same_key(tmp_path: Path):
     path = tmp_path / "bookstore_cache.jsonl"
     cache = BookstoreResponseCache(path)

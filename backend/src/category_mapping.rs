@@ -14,7 +14,7 @@ use std::fmt;
 use chrono::{Local, NaiveDateTime};
 use serde_json::{Map, Value};
 
-use crate::db::{mysql_provider, ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, MysqlConfig, Row};
+use crate::db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, MysqlConfig, Row, mysql_provider};
 
 /// 재적재 락의 heartbeat(updated_at)가 이 시간 이상 갱신되지 않으면 죽은 작업으로 본다.
 /// 총 소요 시간이 아니라 "최근에 살아있다는 신호"로 판정해야, 오래 걸리는 정상 재적재와 안 풀리는 죽은 락을 구분한다.
@@ -26,6 +26,7 @@ pub const RELOAD_SOURCE_MISMATCH: &str = "mismatch";
 
 const PROGRESS_COUNT_FIELDS: [&str; 5] = ["indexed_count", "deleted_count", "failed_count", "before_count", "after_count"];
 const STALE_ERROR_MESSAGE: &str = "응답 없이 중단된 것으로 보입니다.";
+const STALE_CLASSIFY_PROPOSAL_ERROR_MESSAGE: &str = "백엔드가 다시 시작되어 진행 중이던 작업이 중단되었습니다. 남은 항목을 확인한 뒤 진행하세요.";
 
 /// Python `ValueError`에 대응한다. 알 수 없는 진행 카운트 필드나, 락 갱신 중 DB 오류를 담는다.
 #[derive(Debug, Clone, PartialEq)]
@@ -98,11 +99,7 @@ fn is_empty_value(v: Option<&DbValue>) -> bool {
 /// Python `datetime.isoformat()`: 마이크로초가 0이면 소수부를 생략한다.
 fn isoformat(dt: &NaiveDateTime) -> String {
     let micros = dt.and_utc().timestamp_subsec_micros();
-    if micros == 0 {
-        dt.format("%Y-%m-%dT%H:%M:%S").to_string()
-    } else {
-        format!("{}.{micros:06}", dt.format("%Y-%m-%dT%H:%M:%S"))
-    }
+    if micros == 0 { dt.format("%Y-%m-%dT%H:%M:%S").to_string() } else { format!("{}.{micros:06}", dt.format("%Y-%m-%dT%H:%M:%S")) }
 }
 
 fn iso_or_null(v: Option<&DbValue>) -> DbValue {
@@ -130,11 +127,7 @@ fn lock_key_of(category: Option<&str>) -> &str {
 
 fn validate_counts(counts: &[(&str, i64)]) -> Result<(), ValueError> {
     let unknown: Vec<&str> = counts.iter().map(|(k, _)| *k).filter(|k| !PROGRESS_COUNT_FIELDS.contains(k)).collect();
-    if unknown.is_empty() {
-        Ok(())
-    } else {
-        Err(ValueError(format!("알 수 없는 진행 카운트 필드: {unknown:?}")))
-    }
+    if unknown.is_empty() { Ok(()) } else { Err(ValueError(format!("알 수 없는 진행 카운트 필드: {unknown:?}"))) }
 }
 
 fn count_set_clause(counts: &[(&str, i64)]) -> String {
@@ -206,18 +199,11 @@ impl CategoryMapping {
         })
     }
 
-    fn select_strings(&self, op: &str, sql: &str, params: &[DbValue], column: &str) -> Vec<String> {
-        match self.select(sql, params) {
-            Ok(rows) => {
-                let values: Vec<String> = rows.iter().filter_map(|r| text_of(r, column).map(str::to_string)).collect();
-                log::debug!("{op}: {} rows", values.len());
-                values
-            }
-            Err(e) => {
-                log::error!("{op} failed: {e}");
-                Vec::new()
-            }
-        }
+    fn select_strings(&self, op: &str, sql: &str, params: &[DbValue], column: &str) -> Result<Vec<String>, DbError> {
+        let rows = self.select(sql, params)?;
+        let values: Vec<String> = rows.iter().filter_map(|r| text_of(r, column).map(str::to_string)).collect();
+        log::debug!("{op}: {} rows", values.len());
+        Ok(values)
     }
 
     // ---- 초기화와 마이그레이션 ----
@@ -371,14 +357,8 @@ impl CategoryMapping {
     // ---- 키워드 ----
 
     /// `{category: [keyword, ...]}`.
-    pub fn get_all_mappings(&self, content_type: &str) -> HashMap<String, Vec<String>> {
-        let rows = match self.select("SELECT category, keyword FROM category_keywords WHERE content_type = %s ORDER BY category, keyword", &[content_type.into()]) {
-            Ok(rows) => rows,
-            Err(e) => {
-                log::error!("get_all_mappings({content_type}) failed: {e}");
-                return HashMap::new();
-            }
-        };
+    pub fn get_all_mappings(&self, content_type: &str) -> Result<HashMap<String, Vec<String>>, DbError> {
+        let rows = self.select("SELECT category, keyword FROM category_keywords WHERE content_type = %s ORDER BY category, keyword", &[content_type.into()])?;
         let mut mappings: HashMap<String, Vec<String>> = HashMap::new();
         for row in &rows {
             if let (Some(category), Some(keyword)) = (text_of(row, "category"), text_of(row, "keyword")) {
@@ -386,52 +366,46 @@ impl CategoryMapping {
             }
         }
         log::debug!("get_all_mappings({content_type}): {} categories", mappings.len());
-        mappings
+        Ok(mappings)
     }
 
-    pub fn get_keywords(&self, category: &str, content_type: &str) -> Vec<String> {
-        self.select_strings(
-            &format!("get_keywords({category}, {content_type})"),
-            "SELECT keyword FROM category_keywords WHERE category = %s AND content_type = %s ORDER BY keyword",
-            &[category.into(), content_type.into()],
-            "keyword",
-        )
+    pub fn get_keywords(&self, category: &str, content_type: &str) -> Result<Vec<String>, DbError> {
+        let rows = self.select("SELECT keyword FROM category_keywords WHERE category = %s AND content_type = %s ORDER BY keyword", &[category.into(), content_type.into()])?;
+        let keywords: Vec<String> = rows.iter().filter_map(|row| text_of(row, "keyword").map(str::to_string)).collect();
+        log::debug!("get_keywords({category}, {content_type}): {} rows", keywords.len());
+        Ok(keywords)
     }
 
     /// 이미 있는 키워드나 빈 키워드면 거짓이다.
-    pub fn add_keyword(&self, category: &str, keyword: &str, content_type: &str) -> bool {
+    pub fn add_keyword(&self, category: &str, keyword: &str, content_type: &str) -> Result<bool, DbError> {
         let keyword = keyword.trim();
         if keyword.is_empty() {
             log::warn!("add_keyword: empty keyword");
-            return false;
+            return Ok(false);
         }
         match self.tx(|cursor| cursor.execute("INSERT INTO category_keywords (category, keyword, content_type) VALUES (%s, %s, %s)", &[category.into(), keyword.into(), content_type.into()])) {
             Ok(()) => {
                 log::info!("add_keyword({category}, {keyword}, {content_type}): success");
-                true
+                Ok(true)
             }
             Err(DbError::IntegrityError(_)) => {
                 log::warn!("add_keyword({category}, {keyword}, {content_type}): already exists");
-                false
+                Ok(false)
             }
             Err(e) => {
                 log::error!("add_keyword({category}, {keyword}, {content_type}) failed: {e}");
-                false
+                Err(e)
             }
         }
     }
 
-    pub fn remove_keyword(&self, category: &str, keyword: &str, content_type: &str) -> bool {
-        let result = self.tx(|cursor| {
+    pub fn remove_keyword(&self, category: &str, keyword: &str, content_type: &str) -> Result<bool, DbError> {
+        let deleted = self.tx(|cursor| {
             cursor.execute("DELETE FROM category_keywords WHERE category = %s AND keyword = %s AND content_type = %s", &[category.into(), keyword.into(), content_type.into()])?;
             Ok(cursor.rowcount() > 0)
-        });
-        let deleted = result.unwrap_or_else(|e| {
-            log::error!("remove_keyword({category}, {keyword}, {content_type}) failed: {e}");
-            false
-        });
+        })?;
         log::info!("remove_keyword({category}, {keyword}, {content_type}): {}", if deleted { "success" } else { "not found" });
-        deleted
+        Ok(deleted)
     }
 
     /// 카테고리의 키워드를 통째로 바꾼다. 공백을 걷어내고 중복을 없앤다.
@@ -489,8 +463,8 @@ impl CategoryMapping {
     }
 
     /// `prefix`가 참이면 하위 카테고리(`category/*`)도 지운다.
-    pub fn delete_category(&self, category: &str, content_type: &str, prefix: bool) -> bool {
-        let result = self.tx(|cursor| {
+    pub fn delete_category(&self, category: &str, content_type: &str, prefix: bool) -> Result<bool, DbError> {
+        let deleted = self.tx(|cursor| {
             if prefix {
                 cursor.execute(
                     "DELETE FROM category_keywords WHERE (category = %s OR category LIKE %s) AND content_type = %s",
@@ -500,17 +474,13 @@ impl CategoryMapping {
                 cursor.execute("DELETE FROM category_keywords WHERE category = %s AND content_type = %s", &[category.into(), content_type.into()])?;
             }
             Ok(cursor.rowcount() > 0)
-        });
-        let deleted = result.unwrap_or_else(|e| {
-            log::error!("delete_category({category}, {content_type}, prefix={prefix}) failed: {e}");
-            false
-        });
+        })?;
         log::info!("delete_category({category}, {content_type}, prefix={prefix}): {}", if deleted { "success" } else { "not found" });
-        deleted
+        Ok(deleted)
     }
 
     /// 키워드 부분 일치로 카테고리를 찾는다.
-    pub fn search_by_keyword(&self, keyword: &str, content_type: &str) -> Vec<String> {
+    pub fn search_by_keyword(&self, keyword: &str, content_type: &str) -> Result<Vec<String>, DbError> {
         self.select_strings(
             &format!("search_by_keyword({keyword}, {content_type})"),
             "SELECT DISTINCT category FROM category_keywords WHERE keyword LIKE %s AND content_type = %s ORDER BY category",
@@ -521,11 +491,11 @@ impl CategoryMapping {
 
     // ---- 숨김·최신 제외 카테고리 ----
 
-    pub fn get_hidden_categories(&self, content_type: &str) -> Vec<String> {
+    pub fn get_hidden_categories(&self, content_type: &str) -> Result<Vec<String>, DbError> {
         self.select_strings(&format!("get_hidden_categories({content_type})"), "SELECT category FROM hidden_categories WHERE content_type = %s ORDER BY category", &[content_type.into()], "category")
     }
 
-    pub fn set_hidden(&self, category: &str, hidden: bool, content_type: &str) -> bool {
+    pub fn set_hidden(&self, category: &str, hidden: bool, content_type: &str) -> Result<bool, DbError> {
         let result = self.tx(|cursor| {
             if hidden {
                 cursor.execute("INSERT IGNORE INTO hidden_categories (category, content_type) VALUES (%s, %s)", &[category.into(), content_type.into()])
@@ -533,20 +503,24 @@ impl CategoryMapping {
                 cursor.execute("DELETE FROM hidden_categories WHERE category = %s AND content_type = %s", &[category.into(), content_type.into()])
             }
         });
-        match result {
-            Ok(()) => {
+        match (hidden, result) {
+            (_, Ok(())) => {
                 log::info!("set_hidden({category}, {hidden}, {content_type}): success");
-                true
+                Ok(true)
             }
-            Err(e) => {
+            (true, Err(e)) => {
                 log::error!("set_hidden({category}, {hidden}, {content_type}) failed: {e}");
-                false
+                Ok(false)
+            }
+            (false, Err(e)) => {
+                log::error!("set_hidden({category}, {hidden}, {content_type}) failed: {e}");
+                Err(e)
             }
         }
     }
 
     /// 최신 자료 검색에서 제외할 카테고리.
-    pub fn get_latest_excluded_categories(&self, content_type: &str) -> Vec<String> {
+    pub fn get_latest_excluded_categories(&self, content_type: &str) -> Result<Vec<String>, DbError> {
         self.select_strings(
             &format!("get_latest_excluded_categories({content_type})"),
             "SELECT category FROM latest_excluded_categories WHERE content_type = %s ORDER BY category",
@@ -555,7 +529,7 @@ impl CategoryMapping {
         )
     }
 
-    pub fn set_latest_excluded(&self, category: &str, excluded: bool, content_type: &str) -> bool {
+    pub fn set_latest_excluded(&self, category: &str, excluded: bool, content_type: &str) -> Result<bool, DbError> {
         let result = self.tx(|cursor| {
             if excluded {
                 cursor.execute("INSERT IGNORE INTO latest_excluded_categories (category, content_type) VALUES (%s, %s)", &[category.into(), content_type.into()])
@@ -563,14 +537,18 @@ impl CategoryMapping {
                 cursor.execute("DELETE FROM latest_excluded_categories WHERE category = %s AND content_type = %s", &[category.into(), content_type.into()])
             }
         });
-        match result {
-            Ok(()) => {
+        match (excluded, result) {
+            (_, Ok(())) => {
                 log::info!("set_latest_excluded({category}, {excluded}, {content_type}): success");
-                true
+                Ok(true)
             }
-            Err(e) => {
+            (true, Err(e)) => {
                 log::error!("set_latest_excluded({category}, {excluded}, {content_type}) failed: {e}");
-                false
+                Ok(false)
+            }
+            (false, Err(e)) => {
+                log::error!("set_latest_excluded({category}, {excluded}, {content_type}) failed: {e}");
+                Err(e)
             }
         }
     }
@@ -612,8 +590,8 @@ impl CategoryMapping {
     /// 카테고리가 있으면 그 카테고리 락과 전체 락만, 없으면 이 content_type의 모든 락을 본다. 다른 카테고리끼리는 걸리지 않는다.
     /// 완료된 행은 마지막 결과 조회를 위해 남기므로 INSERT 실패가 아니라 status/heartbeat를 직접 보고 판단한다.
     /// heartbeat가 `RELOAD_LOCK_HEARTBEAT_STALE_SECONDS` 넘게 멈춘 'running' 행은 죽은 작업으로 보고 무시한다.
-    /// DB 오류가 나면 얻지 못한 것으로 답한다.
-    pub fn acquire_reload_lock(&self, content_type: &str, category: Option<&str>, reload_source: Option<&str>) -> (bool, Option<String>, Option<Row>) {
+    /// DB 오류는 호출자에게 전달한다.
+    pub fn acquire_reload_lock(&self, content_type: &str, category: Option<&str>, reload_source: Option<&str>) -> Result<(bool, Option<String>, Option<Row>), DbError> {
         let category = category.filter(|c| !c.is_empty());
         let lock_key = lock_key_of(category);
         let normalized_reload_source = Self::normalize_reload_source(reload_source, category);
@@ -652,21 +630,17 @@ impl CategoryMapping {
             conn.commit()?;
             Ok(None)
         });
-        match outcome {
-            Ok(None) => (true, None, None),
-            Ok(Some(blocking_key)) => {
+        match outcome? {
+            None => Ok((true, None, None)),
+            Some(blocking_key) => {
                 let blocking_category = (blocking_key != BULK_LOCK_KEY).then_some(blocking_key.as_str());
-                let blocking_status = self.get_reload_status(content_type, blocking_category);
+                let blocking_status = self.get_reload_status(content_type, blocking_category)?;
                 let message = if blocking_key == lock_key {
                     "이미 재적재 작업이 진행 중입니다. 완료 후 다시 시도하세요."
                 } else {
                     "다른 재적재 작업이 진행 중이라 지금은 실행할 수 없습니다. 완료 후 다시 시도하세요."
                 };
-                (false, Some(message.to_string()), blocking_status)
-            }
-            Err(e) => {
-                log::error!("acquire_reload_lock({content_type}/{lock_key}) failed: {e}");
-                (false, Some(format!("재적재 락을 확인하지 못했습니다: {e}")), None)
+                Ok((false, Some(message.to_string()), blocking_status))
             }
         }
     }
@@ -695,7 +669,7 @@ impl CategoryMapping {
     /// 재적재 작업 상태. 카테고리가 있으면 그 락, 없으면 전체 락을 본다. 이력이 없으면 `None`이다.
     ///
     /// 'running'인데 heartbeat가 끊겼으면 행은 두고 조회 결과에서만 'failed'로 보여준다. 정리는 다음 `acquire_reload_lock`이 한다.
-    pub fn get_reload_status(&self, content_type: &str, category: Option<&str>) -> Option<Row> {
+    pub fn get_reload_status(&self, content_type: &str, category: Option<&str>) -> Result<Option<Row>, DbError> {
         let lock_key = lock_key_of(category);
         let fetched = self.run(|_conn, cursor| {
             cursor.execute(
@@ -704,13 +678,9 @@ impl CategoryMapping {
             )?;
             Ok(cursor.fetchone())
         });
-        let row = match fetched {
-            Ok(Some(row)) => row,
-            Ok(None) => return None,
-            Err(e) => {
-                log::error!("get_reload_status({content_type}/{lock_key}) failed: {e}");
-                return None;
-            }
+        let row = match fetched? {
+            Some(row) => row,
+            None => return Ok(None),
         };
         let mut status = text_of(&row, "status").unwrap_or_default().to_string();
         let mut error = row.get("error").cloned().unwrap_or(DbValue::Null);
@@ -731,106 +701,79 @@ impl CategoryMapping {
             out.insert(field.into(), row.get(field).cloned().unwrap_or(DbValue::Null));
         }
         out.insert("error".into(), error);
-        Some(out)
+        Ok(Some(out))
     }
 
     /// 락 행을 완전히 지운다. 일반 완료 경로는 `complete_reload_lock`이다.
-    pub fn release_reload_lock(&self, content_type: &str, category: Option<&str>) {
+    pub fn release_reload_lock(&self, content_type: &str, category: Option<&str>) -> Result<(), DbError> {
         let lock_key = lock_key_of(category);
-        if let Err(e) = self.tx(|cursor| cursor.execute("DELETE FROM reload_locks WHERE content_type = %s AND lock_key = %s", &[content_type.into(), lock_key.into()])) {
-            log::error!("release_reload_lock({content_type}/{lock_key}) failed: {e}");
-        }
+        self.tx(|cursor| cursor.execute("DELETE FROM reload_locks WHERE content_type = %s AND lock_key = %s", &[content_type.into(), lock_key.into()]))
     }
 
     // ---- 분류 제안 항목 ----
 
     /// 새 분류 제안을 시작할 때 이 content_type의 기존 항목을 모두 지운다. 이전 제안의 행이 섞여 승인되는 일을 막는다.
-    pub fn clear_classify_proposal_items(&self, content_type: &str) {
-        if let Err(e) = self.tx(|cursor| cursor.execute("DELETE FROM classify_proposal_items WHERE content_type = %s", &[content_type.into()])) {
-            log::error!("clear_classify_proposal_items({content_type}) failed: {e}");
-        }
+    pub fn clear_classify_proposal_items(&self, content_type: &str) -> Result<(), DbError> {
+        self.tx(|cursor| cursor.execute("DELETE FROM classify_proposal_items WHERE content_type = %s", &[content_type.into()]))
     }
 
     /// 분류된 항목을 `executemany` 한 번과 커밋 한 번으로 적재한다. 비어 있으면 DB에 가지 않는다.
-    pub fn add_classify_proposal_items(&self, items: &[Value], source_category: &str, content_type: &str) {
+    pub fn add_classify_proposal_items(&self, items: &[Value], source_category: &str, content_type: &str) -> Result<(), DbError> {
         if items.is_empty() {
-            return;
+            return Ok(());
         }
         let rows: Vec<Vec<DbValue>> =
             items.iter().map(|item| vec![content_type.into(), source_category.into(), item.get("file_path").and_then(Value::as_str).into(), json_string(item).into()]).collect();
-        if let Err(e) = self.tx(|cursor| cursor.executemany("INSERT INTO classify_proposal_items (content_type, source_category, file_path, payload) VALUES (%s, %s, %s, %s)", &rows)) {
-            log::error!("add_classify_proposal_items({source_category}, {content_type}) failed: {e}");
-        }
+        self.tx(|cursor| cursor.executemany("INSERT INTO classify_proposal_items (content_type, source_category, file_path, payload) VALUES (%s, %s, %s, %s)", &rows))
     }
 
     /// 항목을 분류가 끝난 순서(id 오름차순)로 돌려준다. `apply_status`/`apply_error`는 컬럼 값을 payload 위에 덮어 싣는다.
-    pub fn get_classify_proposal_items(&self, content_type: &str) -> Vec<Value> {
-        let rows = match self.select("SELECT payload, apply_status, apply_error FROM classify_proposal_items WHERE content_type = %s ORDER BY id ASC", &[content_type.into()]) {
-            Ok(rows) => rows,
-            Err(e) => {
-                log::error!("get_classify_proposal_items({content_type}) failed: {e}");
-                return Vec::new();
-            }
-        };
+    pub fn get_classify_proposal_items(&self, content_type: &str) -> Result<Vec<Value>, DbError> {
+        let rows = self.select("SELECT payload, apply_status, apply_error FROM classify_proposal_items WHERE content_type = %s ORDER BY id ASC", &[content_type.into()])?;
         let mut items = Vec::with_capacity(rows.len());
         for row in &rows {
-            let Some(mut item) = text_of(row, "payload").and_then(|p| serde_json::from_str::<Value>(p).ok()) else {
-                log::error!("get_classify_proposal_items({content_type}): payload를 읽을 수 없어 건너뜀");
-                continue;
-            };
-            if let Some(object) = item.as_object_mut() {
-                object.insert("apply_status".into(), text_of(row, "apply_status").map_or(Value::Null, Value::from));
-                object.insert("apply_error".into(), text_of(row, "apply_error").map_or(Value::Null, Value::from));
-            }
+            let payload = text_of(row, "payload").ok_or_else(|| DbError::Other("classify proposal payload is missing".into()))?;
+            let mut item: Value = serde_json::from_str(payload).map_err(|error| DbError::Other(format!("invalid classify proposal payload: {error}")))?;
+            let object = item.as_object_mut().ok_or_else(|| DbError::Other("classify proposal payload must be a JSON object".into()))?;
+            object.insert("apply_status".into(), text_of(row, "apply_status").map_or(Value::Null, Value::from));
+            object.insert("apply_error".into(), text_of(row, "apply_error").map_or(Value::Null, Value::from));
             items.push(item);
         }
-        items
+        Ok(items)
     }
 
     /// 분류가 끝난 항목의 payload를 덮어쓴다. `apply_status`는 승인 작업이 쓰는 컬럼이라 건드리지 않는다.
-    pub fn update_classify_proposal_item_payloads(&self, items: &[Value], content_type: &str) {
+    pub fn update_classify_proposal_item_payloads(&self, items: &[Value], content_type: &str) -> Result<(), DbError> {
         if items.is_empty() {
-            return;
+            return Ok(());
         }
         let rows: Vec<Vec<DbValue>> = items.iter().map(|item| vec![json_string(item).into(), content_type.into(), item.get("file_path").and_then(Value::as_str).into()]).collect();
-        if let Err(e) = self.tx(|cursor| cursor.executemany("UPDATE classify_proposal_items SET payload = %s WHERE content_type = %s AND file_path = %s", &rows)) {
-            log::error!("update_classify_proposal_item_payloads({content_type}) failed: {e}");
-        }
+        self.tx(|cursor| cursor.executemany("UPDATE classify_proposal_items SET payload = %s WHERE content_type = %s AND file_path = %s", &rows))
     }
 
     /// 파일 하나를 옮긴 직후 그 행의 이동 상태만 바로 기록한다. 중단 후 재개하려면 건별 기록이 필요하다.
-    pub fn update_classify_proposal_item_status(&self, file_path: &str, apply_status: &str, apply_error: Option<&str>, content_type: &str) {
-        if let Err(e) = self.tx(|cursor| {
+    pub fn update_classify_proposal_item_status(&self, file_path: &str, apply_status: &str, apply_error: Option<&str>, content_type: &str) -> Result<(), DbError> {
+        self.tx(|cursor| {
             cursor.execute(
                 "UPDATE classify_proposal_items SET apply_status = %s, apply_error = %s WHERE content_type = %s AND file_path = %s",
                 &[apply_status.into(), apply_error.into(), content_type.into(), file_path.into()],
             )
-        }) {
-            log::error!("update_classify_proposal_item_status({file_path}, {apply_status}, {content_type}) failed: {e}");
-        }
+        })
     }
 
     /// 이동이 끝난(`apply_status = 'moved'`) 행만 지우고 지운 개수를 돌려준다. 대기·실패 행은 재시도를 위해 남긴다.
-    pub fn delete_applied_classify_proposal_items(&self, content_type: &str) -> u64 {
+    pub fn delete_applied_classify_proposal_items(&self, content_type: &str) -> Result<u64, DbError> {
         self.tx(|cursor| {
             cursor.execute("DELETE FROM classify_proposal_items WHERE content_type = %s AND apply_status = 'moved'", &[content_type.into()])?;
             Ok(cursor.rowcount())
         })
-        .unwrap_or_else(|e| {
-            log::error!("delete_applied_classify_proposal_items({content_type}) failed: {e}");
-            0
-        })
     }
 
     /// 제안 항목 한 건을 지우고 지운 개수를 돌려준다. 표에서 책을 지우면 그 행도 없애야 이미 없는 파일의 행이 되살아나지 않는다.
-    pub fn delete_classify_proposal_item(&self, file_path: &str, content_type: &str) -> u64 {
+    pub fn delete_classify_proposal_item(&self, file_path: &str, content_type: &str) -> Result<u64, DbError> {
         self.tx(|cursor| {
             cursor.execute("DELETE FROM classify_proposal_items WHERE content_type = %s AND file_path = %s", &[content_type.into(), file_path.into()])?;
             Ok(cursor.rowcount())
-        })
-        .unwrap_or_else(|e| {
-            log::error!("delete_classify_proposal_item({file_path}, {content_type}) failed: {e}");
-            0
         })
     }
 
@@ -848,26 +791,31 @@ impl CategoryMapping {
         payload.insert("status".into(), status.into());
         if matches!(status, "running" | "applying") && age_seconds > stale_seconds {
             payload.insert("status".into(), "failed".into());
-            let has_error = payload.get("error").is_some_and(|e| !e.is_null() && e.as_str() != Some(""));
-            if !has_error {
-                payload.insert("error".into(), STALE_ERROR_MESSAGE.into());
-            }
+            payload.insert("error".into(), STALE_CLASSIFY_PROPOSAL_ERROR_MESSAGE.into());
         }
         Value::Object(payload)
     }
 
     fn read_classify_proposal_status_row(cursor: &mut dyn DbCursor, sql: &str, content_type: &str) -> Result<Option<(String, Value, i64)>, DbError> {
         cursor.execute(sql, &[content_type.into()])?;
-        Ok(cursor.fetchone().map(|row| {
-            let status = text_of(&row, "status").unwrap_or("idle").to_string();
-            let payload = text_of(&row, "payload").and_then(|p| serde_json::from_str::<Value>(p).ok()).unwrap_or(Value::Null);
-            let age = row.get("age_seconds").and_then(DbValue::as_i64).unwrap_or(0);
-            (status, payload, age)
-        }))
+        match cursor.fetchone() {
+            Some(row) => {
+                let status = text_of(&row, "status").unwrap_or("idle").to_string();
+                let payload = match text_of(&row, "payload") {
+                    Some(payload) => serde_json::from_str::<Value>(payload).map_err(|error| DbError::Other(format!("invalid classify proposal status payload: {error}")))?,
+                    None => Value::Null,
+                };
+                // Python treats a missing or malformed updated_at as stale. SQL TIMESTAMPDIFF
+                // returns NULL for a missing timestamp, so preserve that behavior here.
+                let age = row.get("age_seconds").and_then(DbValue::as_i64).unwrap_or(i64::MAX);
+                Ok(Some((status, payload, age)))
+            }
+            None => Ok(None),
+        }
     }
 
     /// 분류 제안 작업의 현재 상태. 작업이 없으면 `{"status": "idle", "content_type": ...}`다.
-    pub fn get_classify_proposal_status(&self, content_type: &str, stale_seconds: i64) -> Value {
+    pub fn get_classify_proposal_status(&self, content_type: &str, stale_seconds: i64) -> Result<Value, DbError> {
         let fetched = self.run(|_conn, cursor| {
             Self::read_classify_proposal_status_row(
                 cursor,
@@ -875,50 +823,42 @@ impl CategoryMapping {
                 content_type,
             )
         });
-        match fetched {
-            Ok(Some((status, payload, age))) => Self::classify_proposal_effective_status(&status, payload, age, stale_seconds),
-            Ok(None) => serde_json::json!({"status": "idle", "content_type": content_type}),
-            Err(e) => {
-                log::error!("get_classify_proposal_status({content_type}) failed: {e}");
-                serde_json::json!({"status": "idle", "content_type": content_type})
-            }
+        match fetched? {
+            Some((status, payload, age)) => Ok(Self::classify_proposal_effective_status(&status, payload, age, stale_seconds)),
+            None => Ok(serde_json::json!({"status": "idle", "content_type": content_type})),
         }
     }
 
     /// 상태를 통째로 바꾼다. status 컬럼과 payload 안의 status를 함께 맞춘다.
-    pub fn set_classify_proposal_status(&self, status: &Value, content_type: &str) {
+    pub fn set_classify_proposal_status(&self, status: &Value, content_type: &str) -> Result<(), DbError> {
         let mut payload = status.as_object().cloned().unwrap_or_default();
         payload.insert("content_type".into(), content_type.into());
         let column_status = payload.get("status").and_then(Value::as_str).unwrap_or("idle").to_string();
         let payload_json = json_string(&Value::Object(payload));
-        if let Err(e) = self.tx(|cursor| {
+        self.tx(|cursor| {
             cursor.execute(
                 "INSERT INTO classify_proposal_status (content_type, status, payload, updated_at) VALUES (%s, %s, %s, NOW(3)) ON DUPLICATE KEY UPDATE status = VALUES(status), payload = VALUES(payload), updated_at = NOW(3)",
                 &[content_type.into(), column_status.as_str().into(), payload_json.as_str().into()],
             )
-        }) {
-            log::error!("set_classify_proposal_status({content_type}) failed: {e}");
-        }
+        })
     }
 
     /// 진행률처럼 일부 필드만 갱신한다. `status`는 절대 바꾸지 않는다. 서버가 `JSON_MERGE_PATCH`로 합치므로 읽기-쓰기 창이 없다.
-    pub fn merge_classify_proposal_status(&self, fields: &Value, content_type: &str) {
+    pub fn merge_classify_proposal_status(&self, fields: &Value, content_type: &str) -> Result<(), DbError> {
         let patch: Map<String, Value> = fields.as_object().map(|m| m.iter().filter(|(k, _)| k.as_str() != "status").map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
         if patch.is_empty() {
-            return;
+            return Ok(());
         }
         let patch_json = json_string(&Value::Object(patch));
-        if let Err(e) = self.tx(|cursor| {
+        self.tx(|cursor| {
             cursor
                 .execute("UPDATE classify_proposal_status SET payload = JSON_MERGE_PATCH(payload, %s), updated_at = NOW(3) WHERE content_type = %s", &[patch_json.as_str().into(), content_type.into()])
-        }) {
-            log::error!("merge_classify_proposal_status({content_type}) failed: {e}");
-        }
+        })
     }
 
     /// 이미 도는 작업이 없을 때만 새 제안 작업을 시작 상태로 만든다. `(시작했는가, 현재 상태)`.
     /// 실패하면 현재 상태는 이미 도는 작업의 것이다. 판단과 쓰기가 `FOR UPDATE` 한 트랜잭션이라 프로세스가 몇 개든 둘이 동시에 시작하지 못한다.
-    pub fn try_start_classify_proposal(&self, status: &Value, content_type: &str, stale_seconds: i64) -> (bool, Value) {
+    pub fn try_start_classify_proposal(&self, status: &Value, content_type: &str, stale_seconds: i64) -> Result<(bool, Value), DbError> {
         self.try_transition_classify_proposal(
             |current| {
                 if matches!(current, "running" | "applying") {
@@ -936,7 +876,7 @@ impl CategoryMapping {
 
     /// 승인할 제안이 있을 때만 적용 중 상태를 선점하고 토큰을 발급한다.
     /// ready뿐 아니라 done과 failed에서도 받는다. 승인 도중 중단돼 failed로 굳어도 남은 pending 행을 이어서 승인할 수 있어야 한다.
-    pub fn try_begin_classify_apply(&self, apply_token: &str, content_type: &str, stale_seconds: i64) -> (bool, Value) {
+    pub fn try_begin_classify_apply(&self, apply_token: &str, content_type: &str, stale_seconds: i64) -> Result<(bool, Value), DbError> {
         self.try_transition_classify_proposal(
             |current| {
                 if !matches!(current, "ready" | "done" | "failed") {
@@ -957,15 +897,9 @@ impl CategoryMapping {
         self.tx(|cursor| cursor.execute("INSERT IGNORE INTO classify_proposal_status (content_type, status, payload) VALUES (%s, 'idle', %s)", &[content_type.into(), initial.as_str().into()]))
     }
 
-    fn try_transition_classify_proposal(&self, next_status: impl FnOnce(&str) -> Option<Value>, content_type: &str, stale_seconds: i64, merge_into_current: bool) -> (bool, Value) {
-        let failure = |e: DbError| {
-            log::error!("classify proposal 상태 전이({content_type}) failed: {e}");
-            (false, serde_json::json!({"status": "error", "content_type": content_type, "error": e.to_string()}))
-        };
-        if let Err(e) = self.ensure_classify_proposal_status_row(content_type) {
-            return failure(e);
-        }
-        let outcome = self.run(|conn, cursor| {
+    fn try_transition_classify_proposal(&self, next_status: impl FnOnce(&str) -> Option<Value>, content_type: &str, stale_seconds: i64, merge_into_current: bool) -> Result<(bool, Value), DbError> {
+        self.ensure_classify_proposal_status_row(content_type)?;
+        self.run(|conn, cursor| {
             let row = Self::read_classify_proposal_status_row(
                 cursor,
                 "SELECT status, payload, TIMESTAMPDIFF(SECOND, updated_at, NOW(3)) AS age_seconds FROM classify_proposal_status WHERE content_type = %s FOR UPDATE",
@@ -997,7 +931,6 @@ impl CategoryMapping {
             )?;
             conn.commit()?;
             Ok((true, Value::Object(next)))
-        });
-        outcome.unwrap_or_else(failure)
+        })
     }
 }

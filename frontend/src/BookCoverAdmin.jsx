@@ -312,7 +312,7 @@ export default function BookCoverAdmin() {
           reader.readAsDataURL(candidate.file || images[candidate.candidate_id].blob);
         });
         if (generation.current !== current) return {};
-      } else body.candidate_id = candidate.candidate_id;
+      }
       const result = await coverAdminRequest(path, { body });
       if (generation.current !== current) return {};
       releaseSelection(item.file_path);

@@ -19,6 +19,7 @@ parser_timeout = { path = "../parser_timeout" }
 pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_latest", "thread_safe"] }
 regex = "1.13.1"
 stat = { path = "../stat" }
+unicode-general-category = "1.1.0"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]

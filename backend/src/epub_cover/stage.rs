@@ -13,7 +13,7 @@ use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
 use super::pathx::{dirname, ext, join, member_path};
 use super::xml::{self, Element, Node, XHTML_NS};
-use super::{entry_names, entry_size, find_cover_member_in, has_entry, inspect_archive, read_entry, read_package_with, CoverError, EpubCoverHooks, FResult, Fail, OPF_NS};
+use super::{CoverError, EpubCoverHooks, FResult, Fail, OPF_NS, entry_names, entry_size, find_cover_member_in, has_entry, inspect_archive, read_entry, read_package_with};
 
 /// 추가·교체할 멤버. 넣은 순서를 지킨다(Python `dict`).
 #[derive(Default, Debug)]
@@ -273,13 +273,7 @@ fn rename_to_xhtml_span(element: &mut Element) {
 /// 본문 페이지의 목차 링크(`<a href>`)가 빠지는 표지 페이지를 가리키면 링크만 걷어 낸 텍스트로 바꾼다.
 /// 새 표지 페이지로 다시 잇지 않는다. 도구가 넣은 표지는 삭제·교체로 사라지므로 다시 끊어진다.
 /// 링크 말고 다른 방식의 참조는 지울 수 없어 거부한다.
-pub fn detach_publisher_cover<R: Read + Seek>(
-    archive: &mut ZipArchive<R>,
-    opf_path: &str,
-    package: &mut Element,
-    removing: bool,
-    hooks: &EpubCoverHooks,
-) -> FResult<Detached> {
+pub fn detach_publisher_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_path: &str, package: &mut Element, removing: bool, hooks: &EpubCoverHooks) -> FResult<Detached> {
     let empty = || Ok((BTreeSet::new(), Vec::new()));
     let Some(member) = find_cover_member_in(archive, hooks, &|_| None).filter(|m| !m.is_empty()) else { return empty() };
     let base = dirname(opf_path);
@@ -619,7 +613,19 @@ fn staged_has_cover(destination: &Path, hooks: &EpubCoverHooks) -> FResult<bool>
 
 /// 이미지 한 장짜리 쪽을 anchor(spine itemref) 앞(`after`면 뒤)에 끼우고 새 쪽의 idref를 돌려준다.
 #[allow(clippy::too_many_arguments)]
-pub fn add_image_page(opf_path: &str, manifest: &mut Element, spine: &mut Element, original_names: &BTreeSet<String>, added: &mut Added, image: &[u8], anchor_idref: &str, prefix: &str, suffix: &str, media_type: &str, after: bool) -> FResult<String> {
+pub fn add_image_page(
+    opf_path: &str,
+    manifest: &mut Element,
+    spine: &mut Element,
+    original_names: &BTreeSet<String>,
+    added: &mut Added,
+    image: &[u8],
+    anchor_idref: &str,
+    prefix: &str,
+    suffix: &str,
+    media_type: &str,
+    after: bool,
+) -> FResult<String> {
     let digest = digest16(image);
     let existing_ids: BTreeSet<String> = manifest.child_elements().filter_map(|i| i.attr("id").map(str::to_string)).collect();
     let mut existing_names = original_names.clone();

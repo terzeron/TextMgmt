@@ -30,6 +30,12 @@ impl fmt::Display for RequestException {
 #[derive(Debug)]
 struct RuntimeError(String);
 
+impl fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 trait Okt {
     fn nouns(&self, text: &str) -> Vec<String>;
 }
@@ -225,10 +231,10 @@ fn fake_get_with(similar: Value, search: Option<Value>) -> impl Fn(&str) -> Resu
         if url.contains("/similar/1") {
             return Ok(similar.clone());
         }
-        if url.contains("/search/") {
-            if let Some(s) = &search {
-                return Ok(s.clone());
-            }
+        if url.contains("/search/")
+            && let Some(s) = &search
+        {
+            return Ok(s.clone());
         }
         Ok(json!({"result": []}))
     }

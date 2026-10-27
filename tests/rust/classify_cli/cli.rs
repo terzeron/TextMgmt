@@ -1,11 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::Arc;
 
 use classify_cli::{CliIo, Deps, main_with};
 use serde_json::{Value, json};
-use sysdeps::{CommandError, CommandOutput, CommandRunner};
 use tempfile::TempDir;
 
 #[path = "../../../utils/classify_cli/src/shuffle.rs"]
@@ -47,6 +45,14 @@ fn shuffle_matches_python_random_integer_seeds() {
     }
 }
 
+#[test]
+fn random_range_matches_python_seeded_draws() {
+    let mut random = shuffle::Random::new(42);
+    assert_eq!(random.randint(0, 40), 40);
+    assert_eq!(random.below(3), 0);
+    assert_eq!(random.randint(10, 99_999_999), 3_356_896);
+}
+
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/trained")
 }
@@ -58,19 +64,49 @@ fn run(args: &[&str], deps: &Deps) -> (i32, String, String) {
 }
 
 #[test]
-fn every_command_prints_help_and_no_args_succeed() {
+fn every_command_prints_help_and_no_args_fail_like_python() {
     let deps = Deps::system();
     for command in classify_cli::commands() {
         let (code, out, err) = run(&[command, "--help"], &deps);
         assert_eq!(code, 0, "{err}");
         assert!(out.contains(command));
     }
-    assert_eq!(run(&[], &deps).0, 0);
+    assert_eq!(run(&[], &deps).0, 1);
+    assert_eq!(run(&["-v"], &deps).0, 1);
+}
+
+#[test]
+fn verbose_classify_emits_debug_diagnostics() {
+    let dir = TempDir::new().unwrap();
+    let epub = dir.path().join("broken.epub");
+    fs::write(&epub, b"not a zip archive").unwrap();
+    let run = |verbose: bool| {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_classify_cli"));
+        if verbose {
+            command.arg("-v");
+        }
+        command.args(["classify", "--no-es", "--model"]).arg(fixture()).arg(&epub).output().unwrap()
+    };
+    let quiet = run(false);
+    assert!(quiet.status.success(), "{}", String::from_utf8_lossy(&quiet.stderr));
+    assert!(!String::from_utf8_lossy(&quiet.stderr).contains("DEBUG"));
+    let output = run(true);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("DEBUG") && stderr.contains("읽지 못했다"), "{stderr}");
 }
 
 #[test]
 fn malformed_arguments_fail_before_io() {
-    for args in [vec!["unknown"], vec!["info", "--oops"], vec!["classify"], vec!["info", "--model"], vec!["classify", "x", "--min-confidence", "NaN"], vec!["reclassify", "x", "--limit", "-1"]] {
+    for args in [
+        vec!["unknown"],
+        vec!["info", "--oops"],
+        vec!["classify"],
+        vec!["info", "--model"],
+        vec!["classify", "x", "--min-confidence", "NaN"],
+        vec!["reclassify", "x", "--limit", "-1"],
+        vec!["import-joblib", "--seed", "x"],
+    ] {
         let (code, _, err) = run(&args, &Deps::system());
         assert_eq!(code, 2, "{args:?}: {err}");
     }
@@ -88,6 +124,45 @@ fn info_reads_exported_model_and_missing_model_explains_next_step() {
 }
 
 #[test]
+fn import_joblib_creates_a_rust_model_directory() {
+    let dir = TempDir::new().unwrap();
+    let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/legacy.joblib");
+    let output = dir.path().join("imported");
+    let (code, out, err) = run(&["import-joblib", "--model", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--golden", "2", "--seed", "42"], &Deps::system());
+    assert_eq!(code, 0, "{err}");
+    assert!(output.join("model.json").exists());
+    assert!(out.contains("n_features"));
+    let golden: Value = serde_json::from_slice(&fs::read(output.join("golden.json")).unwrap()).unwrap();
+    let expected_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/legacy_golden.json");
+    let expected: Value = serde_json::from_slice(&fs::read(expected_path).unwrap()).unwrap();
+    assert_eq!(golden["seed"], 42);
+    assert_eq!(golden["cases"].as_array().unwrap().len(), 12);
+    assert_eq!(golden["cases"][0]["label"], "empty");
+    assert_eq!(golden["cases"][10]["label"], "synthetic_0");
+    for (actual, expected) in golden["cases"].as_array().unwrap().iter().zip(expected["cases"].as_array().unwrap()) {
+        assert_eq!(actual["doc"], expected["doc"]);
+        assert_eq!(actual["category"], expected["category"]);
+        assert_eq!(actual["reason"], expected["reason"]);
+        assert!((actual["confidence"].as_f64().unwrap() - expected["confidence"].as_f64().unwrap()).abs() < 1e-7);
+        for (actual, expected) in actual["scores"].as_array().unwrap().iter().zip(expected["scores"].as_array().unwrap()) {
+            assert!((actual.as_f64().unwrap() - expected.as_f64().unwrap()).abs() < 1e-7);
+        }
+        for (actual, expected) in actual["top"].as_array().unwrap().iter().zip(expected["top"].as_array().unwrap()) {
+            assert_eq!(actual["category"], expected["category"]);
+            assert!((actual["confidence"].as_f64().unwrap() - expected["confidence"].as_f64().unwrap()).abs() < 1e-7);
+        }
+    }
+    let negative_output = dir.path().join("negative-seed");
+    let (code, _, err) = run(&["import-joblib", "--model", input.to_str().unwrap(), "--out", negative_output.to_str().unwrap(), "--golden", "2", "--seed", "-42"], &Deps::system());
+    assert_eq!(code, 0, "{err}");
+    let negative: Value = serde_json::from_slice(&fs::read(negative_output.join("golden.json")).unwrap()).unwrap();
+    assert_eq!(negative["seed"], -42);
+    for (positive, negative) in golden["cases"].as_array().unwrap().iter().zip(negative["cases"].as_array().unwrap()) {
+        assert_eq!(positive["doc"], negative["doc"]);
+    }
+}
+
+#[test]
 fn classify_reads_files_and_reports_missing_paths() {
     let dir = TempDir::new().unwrap();
     let book = dir.path().join("무림.txt");
@@ -97,32 +172,16 @@ fn classify_reads_files_and_reports_missing_paths() {
     assert!(out.contains("특징 출처: 파일") && out.contains("판정:") && out.contains("파일이 없다"));
 }
 
-#[derive(Default)]
-struct Runner {
-    calls: Mutex<Vec<Vec<String>>>,
-    fail: bool,
-}
-impl CommandRunner for Runner {
-    fn run(&self, argv: &[String], _: Option<Duration>) -> Result<CommandOutput, CommandError> {
-        self.calls.lock().unwrap().push(argv.to_vec());
-        Ok(CommandOutput { returncode: if self.fail { 7 } else { 0 }, stdout: b"python output\n".to_vec(), stderr: vec![] })
-    }
-    fn which(&self, _: &str) -> Option<PathBuf> {
-        None
-    }
-}
-
 #[test]
-fn training_failure_preserves_status_and_does_not_export() {
+fn training_rejects_insufficient_corpus_without_creating_model() {
     let dir = TempDir::new().unwrap();
     let corpus = dir.path().join("corpus.jsonl");
     fs::write(&corpus, "{\"cat\":\"3_무협\"}\n").unwrap();
-    let runner = Arc::new(Runner { fail: true, ..Runner::default() });
-    let deps = Deps::system().with_runner(runner.clone());
-    let (code, out, _) = run(&["train", "--corpus", corpus.to_str().unwrap(), "--out", dir.path().join("export").to_str().unwrap()], &deps);
-    assert_eq!(code, 7);
-    assert!(out.contains("python output"));
-    assert_eq!(runner.calls.lock().unwrap().len(), 1);
+    let out = dir.path().join("export");
+    let (code, _, err) = run(&["train", "--corpus", corpus.to_str().unwrap(), "--out", out.to_str().unwrap()], &Deps::system());
+    assert_eq!(code, 1);
+    assert!(err.contains("학습할 문서가 없다"));
+    assert!(!out.exists());
 }
 
 #[test]
@@ -132,7 +191,7 @@ fn manifest_uses_exact_membership_and_rejects_invalid_or_missing_members() {
     let docs = vec![json!({"id":"a"}), json!({"id":"b"})];
     fs::write(&path, json!({"document_keys":["b"]}).to_string()).unwrap();
     assert_eq!(classify_cli::load_manifest_holdout(&docs, &path).unwrap(), vec![docs[1].clone()]);
-    for payload in [json!({"document_keys":[4]}), json!({"document_keys":["missing"]})] {
+    for payload in [json!([]), json!({"document_keys":4}), json!({"document_keys":[4]}), json!({"document_keys":["missing"]})] {
         fs::write(&path, payload.to_string()).unwrap();
         assert!(classify_cli::load_manifest_holdout(&docs, &path).is_err());
     }
@@ -148,6 +207,36 @@ fn reband_clamps_threshold_to_measured_confidence() {
     let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved["bookstore_override_below"], 0.04);
     assert_eq!(saved["sample_from"], "refused");
+}
+
+#[test]
+fn reband_missing_file_reports_a_measurement_result_error() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("없는파일.json");
+    let (code, _, err) = run(&["bookstore-policy", "--reband", path.to_str().unwrap()], &Deps::system());
+    assert_eq!(code, 1);
+    assert!(err.contains("측정 결과 파일이 없다"), "{err}");
+}
+
+#[test]
+fn reband_without_rows_names_the_file_and_next_step() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("empty-policy.json");
+    fs::write(&path, json!({"bands": []}).to_string()).unwrap();
+    let (code, _, err) = run(&["bookstore-policy", "--reband", path.to_str().unwrap()], &Deps::system());
+    assert_eq!(code, 1);
+    assert!(err.contains(&format!("건별 결과가 없어 다시 나눌 수 없다: {}", path.display())), "{err}");
+    assert!(err.contains("서점 조회부터 다시 해야 한다"), "{err}");
+}
+
+#[test]
+fn reband_explains_when_the_model_beats_stores_in_every_band() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("policy.json");
+    fs::write(&path, json!({"rows":[{"confidence":0.25,"model_ok":true,"store_ok":false,"store_answered":true}]}).to_string()).unwrap();
+    let (code, out, err) = run(&["bookstore-policy", "--reband", path.to_str().unwrap()], &Deps::system());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("서점이 모델을 이긴 구간이 없다"), "{out}");
 }
 
 fn model_and_corpus(dir: &TempDir, count: usize) -> (PathBuf, PathBuf) {
@@ -206,6 +295,44 @@ fn reclassify_preview_apply_and_collision_preserve_files() {
     assert!(book.exists());
 }
 
+#[test]
+fn reclassify_defaults_to_the_model_confidence_threshold() {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("3_무협");
+    fs::create_dir(&source).unwrap();
+    fs::write(source.join("무림맹_장문인.txt"), "무림맹 장문인 내공 운기조식 화산파 검법 강호 협객").unwrap();
+
+    let model_path = fixture();
+    let model = backend::classifier::model::CategoryModel::load_dir(&model_path).unwrap();
+    let common = ["reclassify", "3_무협", "--library-root", dir.path().to_str().unwrap(), "--model", model_path.to_str().unwrap(), "--no-es"];
+    let (code, default_output, err) = run(&common, &Deps::system());
+    assert_eq!(code, 0, "{err}");
+
+    let threshold = model.min_confidence().to_string();
+    let mut explicit = common.to_vec();
+    explicit.extend(["--min-confidence", &threshold]);
+    let (code, explicit_output, err) = run(&explicit, &Deps::system());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(default_output, explicit_output);
+    assert_ne!(model.min_confidence(), 0.90);
+}
+
+#[test]
+fn reclassify_prints_progress_every_500_files() {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("0_inbox");
+    fs::create_dir(&source).unwrap();
+    for i in 0..500 {
+        fs::write(source.join(format!("book-{i:03}.txt")), "무림맹 장문인 내공 운기조식 화산파 검법 강호 협객").unwrap();
+    }
+
+    let model = fixture();
+    let (code, out, err) = run(&["reclassify", "0_inbox", "--library-root", dir.path().to_str().unwrap(), "--model", model.to_str().unwrap(), "--no-es"], &Deps::system());
+
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("500/500 처리"), "{out}");
+}
+
 struct Stores;
 impl classify_cli::BookstoreQuery for Stores {
     fn query(&self, _: &str, _: &str, _: &str, _: f64) -> (Value, Value, Value) {
@@ -228,6 +355,38 @@ fn bookstore_policy_samples_and_writes_per_document_rows() {
     assert_eq!(saved["sample"], 12);
     assert_eq!(saved["rows"].as_array().unwrap().len(), 12);
     assert!(saved["rows"].as_array().unwrap().iter().all(|r| r["store_answered"] == true));
+}
+
+#[test]
+fn bookstore_policy_samples_the_boundary_above_the_refused_range() {
+    let dir = TempDir::new().unwrap();
+    let (model, corpus) = model_and_corpus(&dir, 60);
+    let out = dir.path().join("boundary-policy.json");
+    let deps = Deps::system().with_bookstores(Arc::new(Stores));
+
+    let (code, printed, err) = run(
+        &["bookstore-policy", "--model", model.to_str().unwrap(), "--corpus", corpus.to_str().unwrap(), "--sample", "6", "--sample-from", "boundary", "--delay", "0", "--out", out.to_str().unwrap()],
+        &deps,
+    );
+
+    assert_eq!(code, 0, "{err}");
+    assert!(printed.contains("거부 구간과 그 위"), "{printed}");
+    let saved: Value = serde_json::from_slice(&fs::read(out).unwrap()).unwrap();
+    assert_eq!(saved["sample_from"], "boundary");
+}
+
+#[test]
+fn reband_skips_bands_without_rows() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("policy.json");
+    let rows: Vec<_> = (0..4).map(|_| json!({"confidence":0.1,"model_ok":true,"store_ok":true,"store_answered":true})).collect();
+    fs::write(&path, json!({"rows":rows}).to_string()).unwrap();
+
+    let (code, _, err) = run(&["bookstore-policy", "--reband", path.to_str().unwrap(), "--bands", "3"], &Deps::system());
+
+    assert_eq!(code, 0, "{err}");
+    let saved: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    assert_eq!(saved["bands"].as_array().unwrap().iter().map(|band| band["n"].as_u64().unwrap()).collect::<Vec<_>>(), [4]);
 }
 
 struct CorpusEs;
@@ -261,6 +420,155 @@ fn collect_honors_index_label_pattern_and_prefixes_and_writes_corpus() {
 }
 
 #[test]
+fn collect_supports_python_lookahead_label_patterns() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("corpus.jsonl");
+    let config = backend::classifier::config::merge_config(&backend::classifier::config::default_config(), &json!({"corpus":{"label_pattern":"^[1-9]_(?=.*무협)"}}));
+    let deps = Deps::system().with_es(Arc::new(CorpusEs)).with_config(config);
+
+    let (code, _, err) = run(&["collect", "--out", out.to_str().unwrap(), "--index", "chosen-index", "--min-chars", "1", "--exclude-prefix", "custom_skip"], &deps);
+
+    assert_eq!(code, 0, "Python `re` accepts configured lookahead patterns: {err}");
+    let docs = backend::classifier::corpus::read_jsonl(&out).unwrap();
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0]["cat"], "3_무협");
+}
+
+struct StreamingCollectEs {
+    output: std::path::PathBuf,
+}
+
+impl backend::es_manager::EsTransport for StreamingCollectEs {
+    fn index_name(&self) -> &str {
+        "streaming"
+    }
+
+    fn call(&self, op: &str, _: &Value) -> Result<Value, backend::es_manager::EsError> {
+        match op {
+            "search" => Ok(json!({"_scroll_id":"page-1", "hits":{"hits":[
+                {"_id":"1", "_source":{"category":"2_소설한국", "summary":"본문", "file_path":"2_소설한국/a.txt", "file_type":"txt"}}
+            ]}})),
+            "scroll" => {
+                let rows = fs::read_to_string(&self.output).expect("다음 페이지 전에 corpus 파일이 있어야 한다");
+                assert_eq!(rows.lines().count(), 1, "현재 ES 페이지는 다음 요청 전에 저장되어야 한다");
+                Ok(json!({"hits":{"hits":[]}}))
+            }
+            "clear_scroll" => Ok(json!({"succeeded":true})),
+            other => panic!("unexpected ES operation: {other}"),
+        }
+    }
+}
+
+#[test]
+fn collect_streams_jsonl_instead_of_retaining_all_documents() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("corpus.jsonl");
+    let deps = Deps::system().with_es(Arc::new(StreamingCollectEs { output: out.clone() }));
+
+    let (code, _, err) = run(&["collect", "--out", out.to_str().unwrap(), "--min-chars", "1"], &deps);
+
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(backend::classifier::corpus::read_jsonl(&out).unwrap().len(), 1);
+}
+
+struct PublisherCollectEs;
+
+impl backend::es_manager::EsTransport for PublisherCollectEs {
+    fn index_name(&self) -> &str {
+        "publisher-collect"
+    }
+
+    fn call(&self, op: &str, _: &Value) -> Result<Value, backend::es_manager::EsError> {
+        assert_eq!(op, "search");
+        Ok(json!({"hits":{"hits":[
+            {"_id":"epub-1", "_source":{"category":"3_무협", "summary":"본문", "file_path":"3_무협/missing.epub", "file_type":"epub"}}
+        ]}}))
+    }
+}
+
+#[test]
+fn collect_with_publisher_saves_and_reuses_the_adjacent_cache() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("corpus.jsonl");
+    let cache = dir.path().join("corpus.jsonl.publisher.json");
+    let deps = Deps::system().with_es(Arc::new(PublisherCollectEs));
+    let args = ["collect", "--out", out.to_str().unwrap(), "--library-root", dir.path().to_str().unwrap(), "--min-chars", "1", "--publisher-workers", "1", "--with-publisher"];
+
+    let (code, first, err) = run(&args, &deps);
+    assert_eq!(code, 0, "{err}");
+    assert!(first.contains("publisher: 새로 읽음 1건"), "{first}");
+    assert!(cache.exists());
+    assert_eq!(backend::classifier::corpus::read_jsonl(&out).unwrap()[0]["publisher"], "");
+
+    let (code, second, err) = run(&args, &deps);
+    assert_eq!(code, 0, "{err}");
+    assert!(second.contains("publisher: 새로 읽음 0건"), "{second}");
+    assert_eq!(backend::classifier::corpus::read_jsonl(&out).unwrap()[0]["publisher"], "");
+}
+
+struct TiedCategoryEs;
+
+impl backend::es_manager::EsTransport for TiedCategoryEs {
+    fn index_name(&self) -> &str {
+        "tied-categories"
+    }
+
+    fn call(&self, op: &str, _: &Value) -> Result<Value, backend::es_manager::EsError> {
+        assert_eq!(op, "search");
+        Ok(json!({"hits":{"hits":[
+            {"_id":"1", "_source":{"category":"2_나중", "summary":"본문", "file_path":"2_나중/a.txt", "file_type":"txt"}},
+            {"_id":"2", "_source":{"category":"2_먼저", "summary":"본문", "file_path":"2_먼저/a.txt", "file_type":"txt"}}
+        ]}}))
+    }
+}
+
+#[test]
+fn collect_keeps_first_seen_order_for_equal_category_counts() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("corpus.jsonl");
+    let deps = Deps::system().with_es(Arc::new(TiedCategoryEs));
+
+    let (code, printed, err) = run(&["collect", "--out", out.to_str().unwrap(), "--min-chars", "1"], &deps);
+
+    assert_eq!(code, 0, "{err}");
+    let first = printed.find("2_나중").unwrap();
+    let second = printed.find("2_먼저").unwrap();
+    assert!(first < second, "동률이면 처음 나온 카테고리를 먼저 출력해야 한다: {printed}");
+}
+
+struct ManyCategoriesEs;
+
+impl backend::es_manager::EsTransport for ManyCategoriesEs {
+    fn index_name(&self) -> &str {
+        "many-categories"
+    }
+
+    fn call(&self, op: &str, _: &Value) -> Result<Value, backend::es_manager::EsError> {
+        assert_eq!(op, "search");
+        let hits: Vec<_> = (0..12)
+            .map(|n| {
+                let category = format!("3_카테고리{n:02}");
+                json!({"_id": n.to_string(), "_source": {"category": category, "summary": "본문", "title": "제목", "file_path": format!("{category}/book.txt"), "file_type": "txt"}})
+            })
+            .collect();
+        Ok(json!({"hits":{"hits":hits}}))
+    }
+}
+
+#[test]
+fn collect_prints_bottom_ten_categories_when_there_are_many() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("corpus.jsonl");
+    let deps = Deps::system().with_es(Arc::new(ManyCategoriesEs));
+
+    let (code, printed, err) = run(&["collect", "--out", out.to_str().unwrap(), "--min-chars", "1"], &deps);
+
+    assert_eq!(code, 0, "{err}");
+    assert!(printed.contains("... 하위 10개"), "{printed}");
+    assert!(printed.contains("3_카테고리11"), "{printed}");
+}
+
+#[test]
 fn reclassify_rejects_parent_traversal_and_symlink_categories() {
     let dir = TempDir::new().unwrap();
     let outside = TempDir::new().unwrap();
@@ -282,48 +590,207 @@ fn score_calibration_refuses_too_few_samples_without_writing() {
     assert_eq!(fs::read(model.join("model.json")).unwrap(), before);
 }
 
-struct TrainingRunner {
-    calls: Mutex<Vec<Vec<String>>>,
-    export_status: i32,
-}
-impl CommandRunner for TrainingRunner {
-    fn run(&self, argv: &[String], _: Option<Duration>) -> Result<CommandOutput, CommandError> {
-        self.calls.lock().unwrap().push(argv.to_vec());
-        let out = PathBuf::from(&argv[argv.iter().position(|s| s == "--out").unwrap() + 1]);
-        if argv[2].contains("from utils.classify_cli") {
-            fs::write(classify_cli::holdout_manifest_path(&out), json!({"document_keys":["1"]}).to_string()).unwrap();
-        } else {
-            if self.export_status != 0 {
-                return Ok(CommandOutput { returncode: self.export_status, ..Default::default() });
-            }
-            backend::classifier::model::CategoryModel::load_dir(&fixture()).unwrap().save(Some(&out)).unwrap();
+#[test]
+fn train_runs_in_rust_and_writes_model_and_holdout_manifest() {
+    let dir = TempDir::new().unwrap();
+    let corpus = dir.path().join("corpus.jsonl");
+    let mut rows = String::new();
+    for (cat, text) in [("3_무협", "무림 검법 강호 협객"), ("5_과학", "미분 행렬 확률 물리")] {
+        for i in 0..8 {
+            rows.push_str(&json!({"id":format!("{cat}-{i}"),"cat":cat,"text":text}).to_string());
+            rows.push('\n');
         }
-        Ok(CommandOutput::default())
     }
-    fn which(&self, _: &str) -> Option<PathBuf> {
-        None
+    fs::write(&corpus, rows).unwrap();
+    let out = dir.path().join("model with spaces;$(no-shell)");
+    let out_arg = format!("--out={}", out.display());
+    let (code, report, err) =
+        run(&["train", "--corpus", corpus.to_str().unwrap(), &out_arg, "--min-per-category", "2", "--body-min-df", "1", "--n-jobs", "1", "--no-char-ngram", "--save-config"], &Deps::system());
+    assert_eq!(code, 0, "{err}");
+    assert!(report.contains("Rust 모델 저장"));
+    assert!(report.contains(&format!("설정 저장: {}", out.join("config.json").display())), "{report}");
+    assert!(out.join("config.json").is_file());
+    let model = backend::classifier::model::CategoryModel::load_dir(&out).unwrap();
+    assert_eq!(model.classes.len(), 2);
+    assert_eq!(model.config["model"]["n_jobs"], 1);
+    let original_docs = backend::classifier::corpus::read_jsonl(&corpus).unwrap();
+    let (expected_model, expected_report) = backend::classifier::training::train(&mut original_docs.clone(), &model.config, backend::classifier::training::TrainOptions::default()).unwrap();
+    assert_eq!(expected_model.classes, model.classes);
+    assert_eq!(model.meta["holdout"], expected_report);
+    assert!(!classify_cli::load_manifest_holdout(&backend::classifier::corpus::read_jsonl(&corpus).unwrap(), &classify_cli::holdout_manifest_path(&out)).unwrap().is_empty());
+}
+
+#[test]
+fn class_weight_none_keeps_the_existing_config_value() {
+    let dir = TempDir::new().unwrap();
+    let corpus = dir.path().join("corpus.jsonl");
+    let mut rows = String::new();
+    for (category, text) in [("3_무협", "무림 검법 강호 협객"), ("5_과학", "미분 행렬 확률 물리")] {
+        for i in 0..8 {
+            rows.push_str(&json!({"id":format!("{category}-{i}"),"cat":category,"text":text}).to_string());
+            rows.push('\n');
+        }
+    }
+    fs::write(&corpus, rows).unwrap();
+    let cfg = backend::classifier::config::merge_config(
+        &backend::classifier::config::default_config(),
+        &json!({"corpus":{"min_per_category":2},"model":{"class_weight":"balanced","n_jobs":1},"fields":{"body_word":{"min_df":1},"body_char":{"enabled":false}}}),
+    );
+    let deps = Deps::system().with_config(cfg);
+    let out = dir.path().join("model");
+    let (code, _, err) = run(&["train", "--corpus", corpus.to_str().unwrap(), "--out", out.to_str().unwrap(), "--class-weight", "none", "--save-config"], &deps);
+    assert_eq!(code, 0, "{err}");
+    let saved: Value = serde_json::from_slice(&fs::read(out.join("config.json")).unwrap()).unwrap();
+    assert_eq!(saved["model"]["class_weight"], "balanced");
+}
+
+#[test]
+fn last_char_ngram_option_wins() {
+    let dir = TempDir::new().unwrap();
+    let corpus = dir.path().join("corpus.jsonl");
+    let mut rows = String::new();
+    for (category, text) in [("3_무협", "무림 검법 강호 협객"), ("5_과학", "미분 행렬 확률 물리")] {
+        for i in 0..8 {
+            rows.push_str(&json!({"id":format!("{category}-{i}"),"cat":category,"text":text}).to_string());
+            rows.push('\n');
+        }
+    }
+    fs::write(&corpus, rows).unwrap();
+    let cfg = backend::classifier::config::merge_config(
+        &backend::classifier::config::default_config(),
+        &json!({"corpus":{"min_per_category":2},"model":{"n_jobs":1},"fields":{"body_word":{"min_df":1},"body_char":{"enabled":true,"min_df":1,"max_features":100}}}),
+    );
+    let deps = Deps::system().with_config(cfg);
+    let out = dir.path().join("model");
+    let (code, _, err) = run(&["train", "--corpus", corpus.to_str().unwrap(), "--out", out.to_str().unwrap(), "--char-ngram", "--no-char-ngram", "--save-config"], &deps);
+    assert_eq!(code, 0, "{err}");
+    let saved: Value = serde_json::from_slice(&fs::read(out.join("config.json")).unwrap()).unwrap();
+    assert_eq!(saved["fields"]["body_char"]["enabled"], false);
+}
+
+#[test]
+fn body_feature_limits_apply_to_both_text_fields() {
+    let dir = TempDir::new().unwrap();
+    let corpus = dir.path().join("corpus.jsonl");
+    let mut rows = String::new();
+    for (category, text) in [("3_무협", "무림 검법 강호 협객"), ("5_과학", "미분 행렬 확률 물리")] {
+        for i in 0..8 {
+            rows.push_str(&json!({"id":format!("{category}-{i}"),"cat":category,"text":text}).to_string());
+            rows.push('\n');
+        }
+    }
+    fs::write(&corpus, rows).unwrap();
+    let cfg = backend::classifier::config::merge_config(
+        &backend::classifier::config::default_config(),
+        &json!({"corpus":{"min_per_category":2},"model":{"n_jobs":1},"fields":{"body_word":{"max_features":500,"min_df":5},"body_char":{"enabled":false,"max_features":1000,"min_df":6}}}),
+    );
+    let deps = Deps::system().with_config(cfg);
+    let out = dir.path().join("model");
+    let (code, _, err) =
+        run(&["train", "--corpus", corpus.to_str().unwrap(), "--out", out.to_str().unwrap(), "--body-max-features", "100", "--body-min-df", "2", "--no-char-ngram", "--save-config"], &deps);
+    assert_eq!(code, 0, "{err}");
+    let saved: Value = serde_json::from_slice(&fs::read(out.join("config.json")).unwrap()).unwrap();
+    for field in ["body_word", "body_char"] {
+        assert_eq!(saved["fields"][field]["max_features"], 100, "{field}");
+        assert_eq!(saved["fields"][field]["min_df"], 2, "{field}");
     }
 }
 
 #[test]
-fn train_forwards_arguments_without_shell_and_exports_the_holdout_manifest() {
-    for export_status in [0, 9] {
-        let dir = TempDir::new().unwrap();
-        let corpus = dir.path().join("corpus.jsonl");
-        fs::write(&corpus, "{\"id\":\"1\",\"cat\":\"3_무협\"}\n").unwrap();
-        let out = dir.path().join("model with spaces;$(no-shell)");
-        let runner = Arc::new(TrainingRunner { calls: Mutex::new(vec![]), export_status });
-        let deps = Deps::system().with_runner(runner.clone());
-        let out_arg = format!("--out={}", out.display());
-        let (code, _, err) = run(&["train", "--corpus", corpus.to_str().unwrap(), &out_arg, "--n-jobs", "1", "--no-char-ngram"], &deps);
-        assert_eq!(code, export_status, "{err}");
-        let calls = runner.calls.lock().unwrap();
-        assert_eq!(calls.len(), 2);
-        assert!(calls[0].iter().any(|s| s == "--no-char-ngram"));
-        assert_eq!(calls[0].last().unwrap(), &format!("{}.joblib", out.display()));
-        assert_eq!(calls[1].last().unwrap(), out.to_str().unwrap());
-        assert_eq!(classify_cli::holdout_manifest_path(&out).exists(), export_status == 0);
+fn train_warns_when_corpus_has_no_publisher() {
+    let dir = TempDir::new().unwrap();
+    let corpus = dir.path().join("corpus.jsonl");
+    let rows = (0..8)
+        .flat_map(|i| {
+            [json!({"id":format!("a-{i}"),"cat":"3_무협","text":"무림 검법 강호 협객","publisher":""}), json!({"id":format!("b-{i}"),"cat":"5_과학","text":"미분 행렬 확률 물리","publisher":""})]
+        })
+        .map(|row| format!("{}\n", row))
+        .collect::<String>();
+    fs::write(&corpus, rows).unwrap();
+    let out = dir.path().join("model");
+
+    let (code, _, err) =
+        run(&["train", "--corpus", corpus.to_str().unwrap(), "--out", out.to_str().unwrap(), "--min-per-category", "2", "--body-min-df", "1", "--n-jobs", "1", "--no-char-ngram"], &Deps::system());
+
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("publisher"), "{err}");
+}
+
+#[test]
+fn train_reports_missing_and_empty_corpus_like_python() {
+    let dir = TempDir::new().unwrap();
+    let missing = dir.path().join("missing.jsonl");
+    let out = dir.path().join("model");
+    let (code, _, err) = run(&["train", "--corpus", missing.to_str().unwrap(), "--out", out.to_str().unwrap()], &Deps::system());
+    assert_eq!(code, 1);
+    assert!(err.contains("학습 데이터가 없다") && err.contains("collect"), "{err}");
+
+    let empty = dir.path().join("empty.jsonl");
+    fs::write(&empty, "").unwrap();
+    let (code, _, err) = run(&["train", "--corpus", empty.to_str().unwrap(), "--out", out.to_str().unwrap()], &Deps::system());
+    assert_eq!(code, 1);
+    assert!(err.contains("학습 데이터가 비었다"), "{err}");
+}
+
+#[test]
+fn train_accepts_n_jobs_minus_one_for_all_available_cpus() {
+    let dir = TempDir::new().unwrap();
+    let corpus = dir.path().join("corpus.jsonl");
+    let rows = (0..8)
+        .flat_map(|i| [json!({"id":format!("a-{i}"),"cat":"3_무협","text":"무림 검법 강호 협객"}), json!({"id":format!("b-{i}"),"cat":"5_과학","text":"미분 행렬 확률 물리"})])
+        .map(|row| format!("{}\n", row))
+        .collect::<String>();
+    fs::write(&corpus, rows).unwrap();
+    let out = dir.path().join("model");
+    let (code, _, err) = run(
+        &["train", "--corpus", corpus.to_str().unwrap(), "--out", out.to_str().unwrap(), "--min-per-category", "2", "--body-min-df", "1", "--n-jobs", "-1", "--no-char-ngram", "--save-config"],
+        &Deps::system(),
+    );
+    assert_eq!(code, 0, "{err}");
+    let saved: Value = serde_json::from_slice(&fs::read(out.join("config.json")).unwrap()).unwrap();
+    assert_eq!(saved["model"]["n_jobs"].as_i64(), Some(-1));
+}
+
+#[test]
+fn train_spill_cleanup_preserves_other_files_in_requested_directory() {
+    let dir = TempDir::new().unwrap();
+    let corpus = dir.path().join("corpus.jsonl");
+    let mut rows = String::new();
+    for (cat, text) in [("3_무협", "무림 검법 강호 협객"), ("5_과학", "미분 행렬 확률 물리")] {
+        for i in 0..8 {
+            rows.push_str(&json!({"id":format!("{cat}-{i}"),"cat":cat,"text":text}).to_string());
+            rows.push('\n');
+        }
     }
+    fs::write(&corpus, rows).unwrap();
+    let spill_dir = dir.path().join("spill");
+    fs::create_dir(&spill_dir).unwrap();
+    let marker = spill_dir.join("keep.txt");
+    fs::write(&marker, "user data").unwrap();
+    let out = dir.path().join("model");
+
+    let (code, _, err) = run(
+        &[
+            "train",
+            "--corpus",
+            corpus.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--spill-dir",
+            spill_dir.to_str().unwrap(),
+            "--min-per-category",
+            "2",
+            "--body-min-df",
+            "1",
+            "--no-char-ngram",
+        ],
+        &Deps::system(),
+    );
+
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "user data");
+    let entries: Vec<PathBuf> = fs::read_dir(&spill_dir).unwrap().map(|entry| entry.unwrap().path()).collect();
+    assert_eq!(entries, vec![marker]);
 }
 
 #[test]
@@ -345,7 +812,7 @@ fn reband_separate_output_preserves_input_and_invalid_rows_fail() {
 fn executable_exit_codes_and_help_match_the_library() {
     let binary = env!("CARGO_BIN_EXE_classify_cli");
     let output = std::process::Command::new(binary).output().unwrap();
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stdout).contains("사용법"));
     let output = std::process::Command::new(binary).arg("unknown").output().unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -424,7 +891,7 @@ fn reclassify_limits_skips_refused_and_reports_move_failure() {
     let mut args = common.to_vec();
     args.extend(["--min-confidence", "0", "--apply"]);
     let (code, out, err) = run(&args, &Deps::system());
-    assert_eq!(code, 1, "{err}");
+    assert_eq!(code, 0, "Python CLI returns success after reporting per-file move failures: {err}");
     assert!(out.contains("실패 2건"));
     assert!(source.join("a.txt").exists());
 }

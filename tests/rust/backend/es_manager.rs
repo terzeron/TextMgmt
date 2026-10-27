@@ -6,7 +6,7 @@
 //!   tests/rust/update/update.rs가 이미 옮겼다. 그래서 여기서는 건너뛴다.
 //!
 //! 가정한 API (아직 구현 전이다). 설계: docs/rust-test-seams.md 3.3, 3.8, 3.13. `ESManager`는 `backend::es_manager`에 있고, Python 메서드 이름을 그대로 쓴다.
-//! 예외를 던질 수 있는 메서드는 `Result<_, EsError>`, 예외를 삼키는 메서드는 값을 바로 돌려준다.
+//! ES 오류를 전파하는 메서드는 `Result<_, EsError>`, Python에서 처리하는 오류만 값으로 변환한다.
 //! - `trait EsTransport: Send + Sync { fn index_name(&self) -> &str; fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>; }` (구 `EsApi`, `EsLike`)
 //!   (Python `Elasticsearch` 클라이언트 호출을 `op`와 키워드 인자 JSON으로 옮긴 것. `indices.exists`처럼 점으로 잇는다)
 //! - `enum EsError { MissingEnv(String), Transport(String), Status { status: u16, body: String }, Parse(String), Unsupported(String), Other(String) }` (구 `ElasticsearchError`)
@@ -28,7 +28,7 @@
 //! - `search_by_title(&self, title, file_type, file_size: i64, max_result_count: i64)`, `search_by_category(&self, category, max_result_count)`,
 //!   `search_by_keyword(&self, keyword, max_result_count)`, `search_by_keyword_paged(&self, keyword, size, offset, exclude_categories: Option<&[&str]>, category: Option<&str>)`,
 //!   `search_similar_docs(&self, &SimilarDocsArgs)`, `search_similar_docs_paged(&self, &SimilarDocsArgs)` (`SimilarDocsArgs`는 Python 기본값을 가진 `Default`)
-//! - `search_by_id(&self, doc_id: i64) -> Value`, `search_and_aggregate_by_category(&self) -> Result<Value, _>` (Python 모양의 고유 메서드. `EsManagerApi`의 `search_by_id`와는 별개다)
+//! - `search_by_id(&self, doc_id: i64) -> Result<Value, _>`, `search_and_aggregate_by_category(&self) -> Result<Value, _>` (`search_by_id`는 404만 `{}`로 변환한다)
 //! - 변경: `insert(&self, data: &[(i64, Value)], num_docs: usize, max_retries: u32) -> Result<Vec<i64>, _>`,
 //!   `update(&self, doc_id: i64, fields: &UpdateFields) -> Result<bool, _>` (`UpdateFields`는 `Default`), `delete(&self, doc_id) -> Result<bool, _>`,
 //!   `delete_by_file_paths(&self, &[&str], exclude_ids: Option<&[i64]>) -> i64`, `delete_by_ids(&self, &[i64], chunk_size: usize) -> i64`,
@@ -187,6 +187,37 @@ fn test_do_exist_index_get_existing_ids_and_paths() {
 }
 
 #[test]
+fn test_do_exist_index_uses_python_truthiness_for_all_json_shapes() {
+    let cases = [
+        (json!(null), false),
+        (json!(false), false),
+        (json!(0), false),
+        (json!(""), false),
+        (json!([]), false),
+        (json!({}), false),
+        (json!(true), true),
+        (json!(-1), true),
+        (json!("present"), true),
+        (json!([0]), true),
+        (json!({"index": true}), true),
+    ];
+
+    for (response, expected) in cases {
+        let es = new_es();
+        let response_for_es = response.clone();
+        es.on("indices.exists", move |_| Ok(response_for_es.clone()));
+        assert_eq!(make_manager(&es).do_exist_index().unwrap(), expected, "response={response}");
+    }
+}
+
+#[test]
+fn test_get_existing_created_time_metadata_omits_empty_metadata() {
+    let es = new_es();
+    es.on("mget", |_| Ok(json!({"docs": [{"_id": "3", "found": true, "_source": {}}]})));
+    assert!(make_manager(&es).get_existing_created_time_metadata(&[3]).unwrap().is_empty());
+}
+
+#[test]
 fn test_get_existing_created_time_metadata_returns_stored_values() {
     let es = new_es();
     let manager = make_manager(&es);
@@ -241,6 +272,15 @@ fn test_create_index_paths() {
 }
 
 #[test]
+fn test_create_index_is_successful_when_existing_mapping_cannot_be_read() {
+    let es = new_es();
+    es.respond("indices.exists", json!(true));
+    es.on("indices.get_mapping", |_| Err(runtime("mapping unavailable")));
+
+    assert_eq!(make_manager(&es).create_index().unwrap(), json!({"acknowledged": true}));
+}
+
+#[test]
 fn test_create_index_includes_created_time_mapping() {
     let es = new_es();
     let manager = make_manager(&es);
@@ -272,6 +312,16 @@ fn test_ensure_created_time_field_adds_missing_created_time_fields() {
 
     assert!(es.state(|s| s.put_mapping_called));
     assert_eq!(es.state(|s| s.put_mapping_properties.clone()), json!({"created_time": {"type": "date"}, "created_time_source": {"type": "keyword"}}));
+}
+
+#[test]
+fn test_ensure_created_time_field_swallows_mapping_read_error() {
+    let es = new_es();
+    es.on("indices.get_mapping", |_| Err(runtime("mapping unavailable")));
+
+    make_manager(&es)._ensure_created_time_field();
+
+    assert!(!es.state(|s| s.put_mapping_called));
 }
 
 #[test]
@@ -307,6 +357,39 @@ fn test_ensure_publisher_field_swallows_errors() {
     // 매핑 추가에 실패해도 색인 생성 자체를 막으면 안 된다
     manager._ensure_publisher_field();
     assert!(!es.state(|s| s.put_mapping_called));
+}
+
+#[test]
+fn test_ensure_mapping_helpers_skip_incomplete_mapping_shapes() {
+    let es = new_es();
+    let manager = make_manager(&es);
+
+    es.set_mapping(json!({"idx": {"mappings": {}}}));
+    manager._ensure_category_nori_subfield();
+
+    es.set_mapping(json!({"idx": {}}));
+    manager._ensure_created_time_field();
+    manager._ensure_publisher_field();
+
+    assert!(!es.state(|s| s.put_mapping_called));
+}
+
+#[test]
+fn test_ensure_mapping_helpers_swallow_put_mapping_errors() {
+    let cases =
+        [json!({"idx": {"mappings": {"properties": {"category": {}}}}}), json!({"idx": {"mappings": {"properties": {"title": {}}}}}), json!({"idx": {"mappings": {"properties": {"title": {}}}}})];
+    let ensure: [fn(&ESManager); 3] = [ESManager::_ensure_category_nori_subfield, ESManager::_ensure_created_time_field, ESManager::_ensure_publisher_field];
+
+    for (mapping, ensure) in cases.into_iter().zip(ensure) {
+        let es = new_es();
+        let manager = make_manager(&es);
+        es.set_mapping(mapping);
+        es.on("indices.put_mapping", |_| Err(runtime("mapping update rejected")));
+
+        ensure(&manager);
+
+        assert_eq!(es.calls_of("indices.put_mapping").len(), 1);
+    }
 }
 
 #[test]
@@ -350,7 +433,15 @@ fn test_search_paged_with_self_score_and_get_self_score() {
 fn test_search_by_id_not_found() {
     let es = new_es();
     let manager = make_manager(&es);
-    assert_eq!(manager.search_by_id(1), json!({}));
+    assert_eq!(manager.search_by_id(1).unwrap(), json!({}));
+}
+
+#[test]
+fn test_search_by_id_propagates_unexpected_errors() {
+    let es = new_es();
+    es.on("get", |_| Err(runtime("backend unavailable")));
+    let manager = make_manager(&es);
+    assert!(matches!(manager.search_by_id(1), Err(EsError::Other(message)) if message == "backend unavailable"));
 }
 
 #[test]
@@ -619,6 +710,13 @@ fn test_delete_index_when_exists() {
 }
 
 #[test]
+fn test_delete_index_is_a_noop_when_index_is_missing() {
+    let es = new_es();
+    make_manager(&es).delete_index().unwrap();
+    assert!(es.calls_of("indices.delete").is_empty());
+}
+
+#[test]
 fn test_update_success_and_delete_by_file_paths_empty() {
     // manager.es를 DummySuccessES로 바꾼다. 새 가짜 ES로 매니저를 다시 만든다.
     let success = new_es();
@@ -635,6 +733,26 @@ fn test_count_by_categories_single() {
     let manager = make_manager(&es);
     es.on("count", |_| Ok(json!({"count": 7})));
     assert_eq!(manager.count_by_categories(&["A"], false).unwrap(), json!({"A": 7}));
+}
+
+#[test]
+fn test_count_by_categories_empty_is_a_noop() {
+    let es = new_es();
+
+    assert_eq!(make_manager(&es).count_by_categories(&[], false).unwrap(), json!({}));
+    assert!(es.calls_of("msearch").is_empty());
+    assert!(es.calls_of("count").is_empty());
+}
+
+#[test]
+fn test_category_file_path_iterator_yields_an_error_once_then_stops() {
+    let es = new_es();
+    es.on("search", |_| Err(runtime("search failed")));
+    let manager = make_manager(&es);
+    let mut paths = manager.iter_all_category_file_paths(10);
+
+    assert!(matches!(paths.next(), Some(Err(_))));
+    assert!(paths.next().is_none());
 }
 
 // ---- coverage: uncovered lines ----
@@ -740,6 +858,28 @@ fn test_insert_final_failure() {
     let manager = connect_with(&retry_env, &es, &clock).unwrap();
     let result = manager.insert(&[(1, json!({"file_path": "/a"}))], usize::MAX, 2);
     assert!(matches!(result, Err(EsError::Transport(_))));
+}
+
+#[test]
+fn test_insert_uses_injected_clock_and_preserves_bulk_failure_modes() {
+    let retry_es = new_es();
+    retry_es.on("bulk", |_| Err(EsError::Transport("connection refused".to_string())));
+    let clock = FakeClock::new(0.0);
+    let retry_manager = make_manager(&retry_es).with_clock(clock.clone());
+    assert!(retry_manager.insert(&[(1, json!({}))], usize::MAX, 3).is_err());
+    assert_eq!(clock.slept(), vec![1.0, 2.0]);
+
+    let status_es = new_es();
+    status_es.on("bulk", |_| Err(EsError::Status { status: 400, body: "bad request".into() }));
+    let status_clock = FakeClock::new(0.0);
+    let status_manager = make_manager(&status_es).with_clock(status_clock.clone());
+    assert!(matches!(status_manager.insert(&[(1, json!({}))], usize::MAX, 3), Err(EsError::Status { status: 400, .. })));
+    assert!(status_clock.slept().is_empty());
+
+    let item_error_es = new_es();
+    item_error_es.on("bulk", |_| Ok(json!({"errors": true})));
+    let item_error_manager = make_manager(&item_error_es);
+    assert_eq!(item_error_manager.insert(&[(1, json!({}))], usize::MAX, 1).unwrap(), vec![1]);
 }
 
 #[test]
@@ -858,6 +998,19 @@ fn test_init_all_retries_fail() {
     assert_eq!(clock.slept().len(), 4);
 }
 
+#[test]
+fn test_init_does_not_retry_non_connection_errors() {
+    let es = new_es();
+    es.on("info", |_| Err(EsError::Status { status: 401, body: "unauthorized".into() }));
+    let clock = FakeClock::new(0.0);
+
+    let result = connect_with(&retry_env, &es, &clock);
+
+    assert!(matches!(result, Err(ESManagerError::Elasticsearch(EsError::Status { status: 401, .. }))));
+    assert_eq!(es.calls_of("info").len(), 1);
+    assert!(clock.slept().is_empty());
+}
+
 // ---- merged from test_get_all_file_paths_grouped_check.py ----
 // ---- coverage: update.py CLI tests ----
 // utils/search.py 는 Rust(utils/search)로 옮겨 이 파일의 search 테스트는 utils/search/tests 로 이식했다.
@@ -936,9 +1089,12 @@ fn test_search_scroll_early_return_at_max_result_count() {
 // --- C4: ES 연결 TLS 처리 ---
 
 #[test]
-fn test_https_url_enables_tls_without_cert_verification() {
-    // https URL 이면 verify_certs=False 로 TLS 암호화 연결을 구성해야 한다.
-    let env = |key: &str| if key == "TM_ES_URL" { Some("https://elasticsearch-es-http:9200".to_string()) } else { default_env(key) };
+fn test_https_url_keeps_certificate_verification_and_passes_private_ca() {
+    let env = |key: &str| match key {
+        "TM_ES_URL" => Some("https://elasticsearch-es-http:9200".to_string()),
+        "TM_ES_CA_CERT" => Some("/etc/tm-es/ca.crt".to_string()),
+        _ => default_env(key),
+    };
     let captured: Mutex<Option<ConnectOptions>> = Mutex::new(None);
     let connector = FnConnector(|options: &ConnectOptions| {
         *captured.lock().unwrap() = Some(options.clone());
@@ -948,8 +1104,9 @@ fn test_https_url_enables_tls_without_cert_verification() {
 
     let options = captured.lock().unwrap().clone().expect("연결 옵션");
     assert_eq!(options.hosts, vec!["https://elasticsearch-es-http:9200".to_string()]);
-    assert_eq!(options.verify_certs, Some(false));
-    assert_eq!(options.ssl_show_warn, Some(false));
+    assert_eq!(options.verify_certs, Some(true));
+    assert_eq!(options.ssl_show_warn, None);
+    assert_eq!(options.ca_cert_path, Some(std::path::PathBuf::from("/etc/tm-es/ca.crt")));
 }
 
 #[test]
@@ -966,6 +1123,7 @@ fn test_http_url_does_not_set_ssl_kwargs() {
     let options = captured.lock().unwrap().clone().expect("연결 옵션");
     assert_eq!(options.verify_certs, None);
     assert_eq!(options.ssl_show_warn, None);
+    assert_eq!(options.ca_cert_path, None);
 }
 
 #[test]
@@ -1183,6 +1341,14 @@ fn test_category_cursor_roundtrip_and_rejects_garbage() {
 }
 
 #[test]
+fn test_category_cursor_rejects_invalid_padding() {
+    // Base64 padding is valid only at the end, and a quartet cannot contain
+    // more than two padding bytes.
+    assert_eq!(decode_category_cursor("AA==AAAA"), None);
+    assert_eq!(decode_category_cursor("A==="), None);
+}
+
+#[test]
 fn test_search_latest_docs_edge_cases() {
     let es = new_es();
     let manager = make_manager(&es);
@@ -1375,7 +1541,7 @@ fn test_search_by_id_success() {
     let es = new_es();
     es.on("get", |kw| Ok(json!({"_id": kw["id"], "_source": {"title": "found_book"}})));
     let manager = make_manager(&es);
-    let source = manager.search_by_id(42);
+    let source = manager.search_by_id(42).unwrap();
     assert_eq!(source, json!({"title": "found_book"}));
 }
 
