@@ -48,3 +48,14 @@ backend/classifier/model.joblib
 
 # Rust build output
 /target/
+
+# Rust coverage profiles
+*.profraw
+*.profdata
+
+# Local command output and editor backups
+/*.report.txt
+*.orig
+*.orig.*
+tests/books/_epub/temp_*.epub
+tests/books/_conflict_test_dir/
