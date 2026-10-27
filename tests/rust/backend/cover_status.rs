@@ -1,6 +1,8 @@
 //! Python tests/test_cover_status.py의 표지 판정, MySQL cache, 목록 조회 계약.
 
-use crate::common;
+mod common;
+#[path = "common/mysql_fixture.rs"]
+mod mysql_fixture;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -8,7 +10,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::mysql_fixture;
 use backend::book::Book as CoverBook;
 use backend::book_manager::{BookManager, BookManagerDeps, CoverBooksPager, CoverPage, CoverPageOpts};
 use backend::cover_status::{CoverStatusCache, STANDARD_COVER_SIZES, has_official_cover, pdf_first_image_size};

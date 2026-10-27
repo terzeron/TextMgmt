@@ -109,6 +109,10 @@ name = "image_edit"
 path = "../tests/rust/backend/image_edit.rs"
 
 [[test]]
+name = "cover_status"
+path = "../tests/rust/backend/cover_status.rs"
+
+[[test]]
 name = "cover_browse"
 path = "../tests/rust/backend/cover_browse.rs"
 
