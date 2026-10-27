@@ -1741,6 +1741,21 @@ mod added_thumbnail_limits {
     }
 
     #[test]
+    fn thumbnail_decodes_lossy_webp_cover() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = make_epub(
+            &tmp.path().join("webp-cover.epub"),
+            &EpubSpec::cover("3.0", false)
+                .with_opf(r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/><manifest><item id="cover" href="cover.webp" media-type="image/webp" properties="cover-image"/></manifest><spine/></package>"#)
+                .with_extra("OPS/cover.webp", include_bytes!("fixtures/cover.webp").to_vec()),
+        );
+
+        let thumbnail = epub_cover::extract_epub_thumbnail(&path, Some(150)).expect("WebP 표지를 JPEG 썸네일로 만든다");
+
+        assert_eq!(image_size(&thumbnail), (64, 96));
+    }
+
+    #[test]
     fn thumbnail_refuses_an_image_over_the_byte_limit() {
         let tmp = tempfile::tempdir().unwrap();
         let path = epub_with_cover(tmp.path(), 40, 60);

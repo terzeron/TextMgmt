@@ -9,8 +9,8 @@
 use std::io::{Read, Write};
 use std::path::Path;
 
-use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
+use zip::CompressionMethod;
 
 /// 멤버 압축 방식. Python `zipfile.ZipFile(path, "w")`의 기본은 STORED, `writestr`에 ZIP_DEFLATED를 주면 압축한다.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

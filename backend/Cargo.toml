@@ -70,7 +70,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 htmlkit = { path = "../libs/htmlkit" }
 hwp3_parser = { path = "../libs/hwp3_parser" }
 idna = "1.1.0"
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 isbn = { path = "../libs/isbn" }
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 log = "0.4.34"

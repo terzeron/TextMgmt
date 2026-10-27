@@ -264,7 +264,11 @@ pub fn fail_on_nth_call(n: usize, msg: &'static str) -> impl Fn(&Path, &Path) ->
     move |_from, _to| {
         let mut c = calls.lock().unwrap();
         *c += 1;
-        if *c == n { Some(io::Error::other(msg)) } else { None }
+        if *c == n {
+            Some(io::Error::other(msg))
+        } else {
+            None
+        }
     }
 }
 
@@ -274,7 +278,11 @@ pub fn fail_on_nth_path(n: usize, msg: &'static str) -> impl Fn(&Path) -> Option
     move |_path| {
         let mut c = calls.lock().unwrap();
         *c += 1;
-        if *c == n { Some(io::Error::other(msg)) } else { None }
+        if *c == n {
+            Some(io::Error::other(msg))
+        } else {
+            None
+        }
     }
 }
 

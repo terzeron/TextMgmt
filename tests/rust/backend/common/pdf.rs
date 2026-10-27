@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use image::{ImageFormat, Rgb, RgbImage};
-use lopdf::{Dictionary, Document, Object, ObjectId, Stream, StringFormat, dictionary};
+use lopdf::{dictionary, Dictionary, Document, Object, ObjectId, Stream, StringFormat};
 
 use super::image::jpeg_bytes;
 use super::raster::Raster;

@@ -25,13 +25,13 @@ use std::sync::{Arc, Mutex};
 use backend::auth::create_jwt_token;
 use backend::cover_management::{CoverHooks, CoverManagement};
 use backend::es_manager::{EsError, EsManagerApi};
-use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
+use backend::main::{app_with, AppDeps, AuthMode, BookManagerApi};
 use image::{ImageFormat, Rgb, RgbImage};
-use lopdf::{Document, Object, Stream, dictionary};
-use serde_json::{Value, json};
+use lopdf::{dictionary, Document, Object, Stream};
+use serde_json::{json, Value};
 use sysdeps::Clock;
-use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
+use zip::CompressionMethod;
 
 use crate::common::TestClient;
 
