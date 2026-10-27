@@ -108,9 +108,13 @@ fn javascript_urls_are_found_even_when_obfuscated() {
 fn data_html_urls_and_dangerous_schemes_are_flagged() {
     let r = scan_chapter(r#"<a href="data:text/html;base64,PHNjcmlwdD4=">x</a>"#);
     assert!(has(&r, "JS_URL"));
-    for href in ["file:///etc/passwd", "smb://host/share", "ms-msdt:/id", "search-ms:query=x"] {
+    for href in ["file:///etc/passwd", "smb://host/share"] {
         let r = scan_chapter(&format!(r#"<a href="{href}">x</a>"#));
         assert_eq!(severity_of(&r, "DANGEROUS_URI_SCHEME"), Severity::High, "{href}");
+    }
+    for href in ["ms-msdt:/id", "search-ms:query=x", "ms-appinstaller:?source=x", "MS-MSDT:/id"] {
+        let r = scan_chapter(&format!(r#"<a href="{href}">x</a>"#));
+        assert_eq!(severity_of(&r, "DANGEROUS_URI_SCHEME"), Severity::Critical, "{href}");
     }
     let r = scan_chapter(r#"<a href="weird-app://open">x</a>"#);
     assert_eq!(severity_of(&r, "UNKNOWN_URI_SCHEME"), Severity::Low);
@@ -239,9 +243,12 @@ fn long_hex_escape_runs_count_as_obfuscation() {
 fn executable_extensions_and_magic_bytes_are_flagged() {
     assert_eq!(severity_of(&scan_extra("OEBPS/x.exe", b"hello"), "EMBEDDED_EXECUTABLE"), Severity::High);
     assert!(has(&scan_extra("OEBPS/run.sh", b"echo"), "EMBEDDED_EXECUTABLE"));
-    assert_eq!(severity_of(&scan_extra("OEBPS/a.jpg", b"MZ\x90\x00more"), "PE_EXECUTABLE_CONTENT"), Severity::High);
-    assert_eq!(severity_of(&scan_extra("OEBPS/a.jpg", b"\x7fELF\x02\x01"), "ELF_BINARY_CONTENT"), Severity::Medium);
-    assert_eq!(severity_of(&scan_extra("OEBPS/a.jpg", b"\xcf\xfa\xed\xfe\x07"), "MACHO_BINARY_CONTENT"), Severity::Medium);
+    // 실행 파일 확장자의 PE·ELF·Mach-O는 번들된 설치 파일일 수 있어 High·Medium이고, 다른 확장자로 위장하면 Critical이다.
+    assert_eq!(severity_of(&scan_extra("OEBPS/a.exe", b"MZ\x90\x00more"), "PE_EXECUTABLE_CONTENT"), Severity::High);
+    assert_eq!(severity_of(&scan_extra("OEBPS/a.so", b"\x7fELF\x02\x01"), "ELF_BINARY_CONTENT"), Severity::Medium);
+    assert_eq!(severity_of(&scan_extra("OEBPS/a.jpg", b"MZ\x90\x00more"), "PE_EXECUTABLE_CONTENT"), Severity::Critical);
+    assert_eq!(severity_of(&scan_extra("OEBPS/a.jpg", b"\x7fELF\x02\x01"), "ELF_BINARY_CONTENT"), Severity::Critical);
+    assert_eq!(severity_of(&scan_extra("OEBPS/a.jpg", b"\xcf\xfa\xed\xfe\x07"), "MACHO_BINARY_CONTENT"), Severity::Critical);
     assert_eq!(severity_of(&scan_extra("OEBPS/a.jpg", b"\xca\xfe\xba\xbe\x00\x00\x00\x34"), "JAVA_CLASS_CONTENT"), Severity::Medium);
     assert_eq!(severity_of(&scan_extra("OEBPS/a.txt", b"#!/bin/sh\nrm -rf /"), "SCRIPT_SHEBANG"), Severity::Medium);
     assert!(scan_extra("OEBPS/a.png", b"\x89PNG\r\n\x1a\nrest").findings.is_empty());
@@ -288,9 +295,9 @@ fn scan_names(names: &[&str]) -> SecurityReport {
 }
 
 #[test]
-fn path_traversal_and_absolute_names_are_high() {
+fn path_traversal_is_critical_and_absolute_names_are_high() {
     for n in ["../evil.txt", "OEBPS/../../evil.txt", "OEBPS/%2e%2e/evil.txt", "..\\evil.txt"] {
-        assert_eq!(severity_of(&scan_names(&[n]), "ZIP_PATH_TRAVERSAL"), Severity::High, "{n}");
+        assert_eq!(severity_of(&scan_names(&[n]), "ZIP_PATH_TRAVERSAL"), Severity::Critical, "{n}");
     }
     for n in ["/etc/passwd", "\\windows\\x", "C:/x.txt", "c:\\x.txt"] {
         assert_eq!(severity_of(&scan_names(&[n]), "ZIP_ABSOLUTE_PATH"), Severity::High, "{n}");
@@ -382,6 +389,8 @@ fn epub_basics_are_checked() {
 #[test]
 fn xml_external_entities_stylesheets_and_xinclude_are_flagged() {
     let r = scan_extra("OEBPS/a.xml", br#"<?xml version="1.0"?><!DOCTYPE r [<!ENTITY x SYSTEM "file:///etc/passwd">]><r>&x;</r>"#);
+    assert_eq!(severity_of(&r, "XXE_ENTITY"), Severity::Critical);
+    let r = scan_extra("OEBPS/a.xml", br#"<?xml version="1.0"?><!DOCTYPE r [<!ENTITY x SYSTEM "http://evil.example/e">]><r>&x;</r>"#);
     assert_eq!(severity_of(&r, "XXE_ENTITY"), Severity::High);
     let r = scan_extra("OEBPS/a.xml", br#"<!DOCTYPE r SYSTEM "http://evil.example/a.dtd"><r/>"#);
     assert_eq!(severity_of(&r, "EXTERNAL_DTD"), Severity::Medium);
@@ -618,4 +627,79 @@ fn markup_hidden_after_cdata_or_odd_comments_is_still_scanned() {
     // 정상적으로 닫힌 주석은 여전히 숨긴다.
     assert!(!has(&scan_chapter("<!-- <script>alert(1)</script> --><p>x</p>"), "SCRIPT_TAG"));
     assert!(!has(&scan_chapter("<!-- a --><p>x</p>"), "MALFORMED_MARKUP"));
+}
+
+// ---- CRITICAL: 정상 문서에 있을 이유가 없는 수법 ----
+
+#[test]
+fn host_command_and_obfuscated_loader_are_critical_but_library_activex_is_not() {
+    let r = scan_extra("OEBPS/a.js", b"var s = new ActiveXObject('WScript.Shell'); s.Run('calc');");
+    assert_eq!(severity_of(&r, "HOST_COMMAND_EXEC"), Severity::Critical);
+    let r = scan_extra("OEBPS/a.js", b"var cp = require('child_process');");
+    assert_eq!(severity_of(&r, "HOST_COMMAND_EXEC"), Severity::Critical);
+    for payload in ["eval(atob('YQ=='))", "eval(unescape('%61'))", "new Function(String.fromCharCode(97))()"] {
+        let r = scan_extra("OEBPS/a.js", payload.as_bytes());
+        assert_eq!(severity_of(&r, "OBFUSCATED_LOADER"), Severity::Critical, "{payload}");
+    }
+    // jQuery 1.x가 IE에서 XML을 파싱할 때 쓰는 ActiveXObject와 `new Function("return " + data)`는 정상이다.
+    let jq = scan_extra("OEBPS/a.js", br#"xml = new ActiveXObject("Microsoft.XMLDOM"); return (new Function("return " + b))();"#);
+    assert!(has(&jq, "DYNAMIC_CODE_EXEC") && !has(&jq, "HOST_API"), "{:?}", codes(&jq));
+    assert!(!has(&jq, "HOST_COMMAND_EXEC") && !has(&jq, "OBFUSCATED_LOADER"), "{:?}", codes(&jq));
+    assert!(jq.findings.iter().all(|f| f.severity != Severity::Critical));
+}
+
+#[test]
+fn script_tag_without_malicious_pattern_never_reaches_critical() {
+    let r = scan_chapter("<script>var n = eval('1+1'); document.getElementById('a').onclick = function () {};</script><button onclick=\"go()\">x</button>");
+    assert!(r.findings.iter().all(|f| f.severity != Severity::Critical), "{:?}", r.findings);
+}
+
+#[test]
+fn host_api_ignores_library_activex_fallbacks_and_feature_detection_but_keeps_the_rest() {
+    let benign: [&[u8]; 5] = [
+        br#"var x = window.ActiveXObject ? new ActiveXObject("Microsoft.XMLHTTP") : new XMLHttpRequest();"#,
+        br#"xml = new window.ActiveXObject( 'Msxml2.XMLHTTP.6.0' );"#,
+        br#"var d = new ActiveXObject("MSXML2.DOMDocument");"#,
+        br#"if ("ActiveXObject" in window) { var ie = true; }"#,
+        br#"var a = typeof ActiveXObject !== 'undefined';"#,
+    ];
+    for js in benign {
+        let r = scan_extra("OEBPS/a.js", js);
+        assert!(!has(&r, "HOST_API") && !has(&r, "HOST_COMMAND_EXEC"), "{}: {:?}", String::from_utf8_lossy(js), codes(&r));
+    }
+    // 모르는 ProgID, 동적 인자, 호스트 객체는 계속 High다.
+    let risky: [&[u8]; 6] = [
+        br#"new ActiveXObject("Some.Unknown.Control");"#,
+        br#"new ActiveXObject(prog);"#,
+        br#"new ActiveXObject ( "Microsoft.XMLDOM" + x );"#,
+        b"WScript.Echo(1);",
+        b"var fs = require('fs');",
+        b"process.binding('natives');",
+    ];
+    for js in risky {
+        let r = scan_extra("OEBPS/a.js", js);
+        assert_eq!(severity_of(&r, "HOST_API"), Severity::High, "{}", String::from_utf8_lossy(js));
+    }
+    // 레거시 AJAX 라이브러리가 쓰는 MSXML2.XMLHTTP는 Critical이 아니고, 서버측 다운로더만 Critical이다.
+    let r = scan_extra("OEBPS/a.js", br#"new ActiveXObject("MSXML2.ServerXMLHTTP");"#);
+    assert_eq!(severity_of(&r, "HOST_COMMAND_EXEC"), Severity::Critical);
+}
+
+#[test]
+fn activex_aliasing_and_comment_tricks_do_not_hide_host_calls() {
+    let evasions: [&[u8]; 5] = [
+        br#"var A = window.ActiveXObject; var s = new A("WScript.Shell");"#,
+        br#"var A = ActiveXObject; new A(prog);"#,
+        br#"var A = window["ActiveXObject"]; new A(prog);"#,
+        br#"new ActiveXObject/* x */("Some.Unknown.Control");"#,
+        br#"var s = new (window.ActiveXObject)('Scripting.FileSystemObject');"#,
+    ];
+    for js in evasions {
+        let r = scan_extra("OEBPS/a.js", js);
+        assert!(has(&r, "HOST_API") || has(&r, "HOST_COMMAND_EXEC"), "{}: {:?}", String::from_utf8_lossy(js), codes(&r));
+    }
+    // 위험 ProgID는 생성자 모양과 무관하게 Critical이다.
+    for js in [&br#"var A = window.ActiveXObject; new A("WScript.Shell");"#[..], &br#"new (window.ActiveXObject)('Scripting.FileSystemObject');"#[..]] {
+        assert_eq!(severity_of(&scan_extra("OEBPS/a.js", js), "HOST_COMMAND_EXEC"), Severity::Critical, "{}", String::from_utf8_lossy(js));
+    }
 }

@@ -25,6 +25,9 @@ pub enum Severity {
     Low,
     Medium,
     High,
+    /// 열어 보기만 해도 침해로 이어지는 알려진 공격 수법이거나, 정상 문서에는 있을 이유가 없는 구조다.
+    /// High는 "실행 가능한 구조가 있다"까지만 말하고, 정상 인터랙티브 EPUB에도 흔하다.
+    Critical,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -101,6 +104,8 @@ const DANGEROUS_SCHEMES: &[&str] = &[
     "vnc",
     "rdp",
 ];
+/// 클릭이나 렌더링만으로 원격 코드 실행·자격 증명 유출에 쓰인 적이 있는 스킴(예: Follina, CVE-2022-30190).
+const EXPLOIT_SCHEMES: &[&str] = &["ms-msdt", "search-ms", "ms-appinstaller", "ms-officecmd"];
 const SAFE_SCHEMES: &[&str] = &["http", "https", "mailto", "tel", "sms", "epub", "cid", "urn", "tag", "data"];
 const SCRIPT_MEDIA_TYPES: &[&str] = &[
     "application/javascript",
@@ -139,17 +144,20 @@ macro_rules! rule {
     };
 }
 
-static JS_RULES: [Rule; 9] = [
+static JS_RULES: [Rule; 11] = [
     rule!(Severity::High, "DYNAMIC_CODE_EXEC", "eval/Function/string timer", r#"\beval\s*\(|\bFunction\s*\(|\b(?:setTimeout|setInterval)\s*\(\s*["'`]"#),
     rule!(Severity::Medium, "DOCUMENT_WRITE", "document.write", r"\bdocument\s*\.\s*write(?:ln)?\s*\("),
     rule!(Severity::Medium, "NETWORK_API", "network API", r"\bXMLHttpRequest\b|\bfetch\s*\(|\bnew\s+WebSocket\b|\bsendBeacon\b|\bEventSource\b"),
     rule!(Severity::Medium, "NAVIGATION", "window.open or location change", r"\bwindow\s*\.\s*open\s*\(|\blocation\s*\.\s*(?:href|replace|assign)\b|\b(?:top|parent)\s*\.\s*location\b"),
+    rule!(Severity::High, "HOST_API", "host/shell API", r#"\bWScript\b|Shell\.Application|\brequire\s*\(\s*["'](?:child_process|fs|os|net|http)["']\s*\)|\bprocess\s*\.\s*binding\b"#),
+    // 명령 실행·파일 쓰기·서버측 다운로드에 쓰는 ProgID 문자열을 생성자와 무관하게 본다(`var A = ActiveXObject; new A(..)` 같은 별칭을 막는다). jQuery 같은 라이브러리의 IE용 폴백(Microsoft.XMLDOM, XMLHTTP)은 걸리지 않는다.
     rule!(
-        Severity::High,
-        "HOST_API",
-        "host/shell API",
-        r#"\bActiveXObject\b|\bWScript\b|Shell\.Application|\brequire\s*\(\s*["'](?:child_process|fs|os|net|http)["']\s*\)|\bprocess\s*\.\s*binding\b"#
+        Severity::Critical,
+        "HOST_COMMAND_EXEC",
+        "shell/file/server-side download via ActiveX or child_process",
+        r#"["'](?:WScript\.Shell|Shell\.Application|Scripting\.FileSystemObject|ADODB\.Stream|MSXML2\.ServerXMLHTTP)["']|\brequire\s*\(\s*["']child_process["']\s*\)"#
     ),
+    rule!(Severity::Critical, "OBFUSCATED_LOADER", "eval of decoded payload", r"\b(?:eval|Function)\s*\(\s*(?:atob|unescape|decodeURIComponent|String\s*\.\s*fromCharCode)\s*\("),
     rule!(Severity::Low, "STORAGE_API", "storage or cookie access", r"\blocalStorage\b|\bsessionStorage\b|\bdocument\s*\.\s*cookie\b|\bindexedDB\b"),
     rule!(Severity::Medium, "DYNAMIC_IMPORT", "dynamic import", r"\bimportScripts\s*\(|\bimport\s*\("),
     rule!(Severity::Medium, "OBFUSCATION", "decode/charcode call", r"\batob\s*\(|\bunescape\s*\(|String\s*\.\s*fromCharCode\s*\((?:[^)]*,){8,}"),
@@ -165,6 +173,12 @@ static CSS_RULES: [Rule; 6] = [
     rule!(Severity::Low, "REMOTE_RESOURCE", "remote url()", r#"(?i)url\(\s*["']?\s*(?:https?:)?//"#),
 ];
 
+/// 외부 엔티티가 로컬 파일이나 위험 프로토콜을 가리키면 파일 읽기 시도다. 일반 http DTD와 구분한다.
+static XXE_LOCAL: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)["'](?:file|php|expect|jar|gopher):|/etc/(?:passwd|shadow|hosts)|[a-z]:[\\/]windows"#));
+static ACTIVEX: LazyLock<Regex> = LazyLock::new(|| re(r"\bActiveXObject\b"));
+/// IE용 XML 파싱·AJAX 폴백에 쓰는 ProgID. 구형 JS 라이브러리(jQuery 등)에 흔해서 호스트 API로 보지 않는다.
+static BENIGN_ACTIVEX_CALL: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)^\(\s*["'](?:microsoft|msxml2)\.(?:xmldom|xmlhttp|domdocument)(?:\.\d+(?:\.\d+)?)?["']\s*\)"#));
+static BLOCK_COMMENT: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)/\*.*?\*/"));
 static CSS_COMMENT: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)/\*.*?\*/"));
 static ENTITY_DECL: LazyLock<Regex> = LazyLock::new(|| re(r"(?is)<!ENTITY\s+[^>]*>"));
 static EXTERNAL_ID: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)\b(?:SYSTEM|PUBLIC)\b"));
@@ -194,6 +208,33 @@ enum UrlKind {
     Remote,
     UnknownScheme,
     Plain,
+}
+
+fn is_exploit_scheme(value: &str) -> bool {
+    SCHEME.captures(&normalize_url(value)).is_some_and(|c| EXPLOIT_SCHEMES.contains(&&c[1]))
+}
+
+/// `ActiveXObject` 사용 중 정상이 아닌 것이 있는지. 호출이 아닌 기능 감지(`window.ActiveXObject ?`, `typeof ActiveXObject`)와
+/// IE용 XML·AJAX 폴백 호출은 제외한다. 모르는 ProgID, 문자열이 아닌 인자, 별칭 대입(`x = ActiveXObject`),
+/// 대괄호 접근(`window["ActiveXObject"]`)은 위험으로 본다. 블록 주석은 끼워 넣기 우회를 막으려 먼저 지운다.
+fn has_risky_activex(text: &str) -> bool {
+    let text = BLOCK_COMMENT.replace_all(text, " ");
+    ACTIVEX.find_iter(&text).any(|m| {
+        let after = text[m.end()..].trim_start();
+        if after.starts_with('(') {
+            return !BENIGN_ACTIVEX_CALL.is_match(after);
+        }
+        let before = text[..m.start()].trim_end();
+        let before = ["window", "self", "this", "globalThis"].iter().find_map(|o| before.strip_suffix('.').and_then(|b| b.trim_end().strip_suffix(o))).unwrap_or(before).trim_end();
+        // `window["ActiveXObject"]`, `window[ActiveXObject]`처럼 `[`가 바로 앞에 있을 때만 대괄호 접근이다.
+        let opened = before.strip_suffix(['"', '\'']).unwrap_or(before).trim_end().ends_with('[');
+        let closed = after.strip_prefix(['"', '\'']).unwrap_or(after).trim_start().starts_with(']');
+        let bracket = opened && closed;
+        // 대입의 우변이 값 그대로 쓰이면 별칭이다. 뒤에 ?, &&, ||, !, 비교 연산자가 오면 기능 감지다.
+        let assigned = before.ends_with('=') && !["==", "!=", "<=", ">="].iter().any(|op| before.ends_with(op));
+        let alias = assigned && !after.starts_with(['?', '&', '|', '!', '=', '<', '>', '.']);
+        bracket || alias
+    })
 }
 
 fn classify_url(value: &str) -> UrlKind {
@@ -262,7 +303,7 @@ impl Scanner {
         let decoded = unquote(name).replace('\\', "/");
         let drive = decoded.len() >= 2 && decoded.as_bytes()[0].is_ascii_alphabetic() && decoded.as_bytes()[1] == b':';
         if decoded.split('/').any(|c| c == "..") {
-            self.add(Severity::High, "ZIP_PATH_TRAVERSAL", name, "Entry name climbs out of the archive");
+            self.add(Severity::Critical, "ZIP_PATH_TRAVERSAL", name, "Entry name climbs out of the archive");
         }
         if decoded.starts_with('/') || drive {
             self.add(Severity::High, "ZIP_ABSOLUTE_PATH", name, "Absolute path or drive letter");
@@ -310,6 +351,9 @@ impl Scanner {
     }
 
     fn scan_js(&mut self, text: &str, name: &str) {
+        if has_risky_activex(text) {
+            self.add(Severity::High, "HOST_API", name, "host/shell API");
+        }
         for (sev, code, detail, rx) in JS_RULES.iter() {
             if rx.is_match(text) {
                 self.add(*sev, code, name, detail);
@@ -329,7 +373,10 @@ impl Scanner {
     fn url_attr(&mut self, tag: &str, attr: &str, value: &str, name: &str, resource: bool) {
         match classify_url(value) {
             UrlKind::Script => self.add(Severity::High, "JS_URL", name, &format!("{tag} {attr}: script URL")),
-            UrlKind::Dangerous => self.add(Severity::High, "DANGEROUS_URI_SCHEME", name, &format!("{tag} {attr}: {}", decode_entities(value))),
+            UrlKind::Dangerous => {
+                let sev = if is_exploit_scheme(value) { Severity::Critical } else { Severity::High };
+                self.add(sev, "DANGEROUS_URI_SCHEME", name, &format!("{tag} {attr}: {}", decode_entities(value)));
+            }
             UrlKind::Unc => self.add(Severity::High, "UNC_PATH", name, &format!("{tag} {attr}: UNC path")),
             UrlKind::UnknownScheme => self.add(Severity::Low, "UNKNOWN_URI_SCHEME", name, &format!("{tag} {attr}: {}", decode_entities(value))),
             UrlKind::Remote if resource => {
@@ -343,7 +390,8 @@ impl Scanner {
     fn scan_doctype(&mut self, text: &str, name: &str) {
         for m in ENTITY_DECL.find_iter(text) {
             if EXTERNAL_ID.is_match(m.as_str()) {
-                self.add(Severity::High, "XXE_ENTITY", name, "External entity declaration");
+                let sev = if XXE_LOCAL.is_match(m.as_str()) { Severity::Critical } else { Severity::High };
+                self.add(sev, "XXE_ENTITY", name, "External entity declaration");
             } else {
                 self.add(Severity::Medium, "ENTITY_DECLARATION", name, "Entity declaration (expansion risk)");
             }
@@ -501,7 +549,7 @@ impl Scanner {
             let props: Vec<&str> = item.attribute("properties").unwrap_or("").split_whitespace().collect();
             match classify_url(href) {
                 UrlKind::Remote => self.add(Severity::Medium, "REMOTE_MANIFEST_ITEM", name, &format!("manifest item loads {href}")),
-                UrlKind::Dangerous => self.add(Severity::High, "DANGEROUS_URI_SCHEME", name, &format!("manifest item {href}")),
+                UrlKind::Dangerous => self.add(if is_exploit_scheme(href) { Severity::Critical } else { Severity::High }, "DANGEROUS_URI_SCHEME", name, &format!("manifest item {href}")),
                 UrlKind::Script => self.add(Severity::High, "JS_URL", name, "manifest item uses a script URL"),
                 UrlKind::Unc => self.add(Severity::High, "UNC_PATH", name, "manifest item uses a UNC path"),
                 UrlKind::UnknownScheme => self.add(Severity::Low, "UNKNOWN_URI_SCHEME", name, &format!("manifest item {href}")),
@@ -592,14 +640,21 @@ fn package_documents(zip: &mut Zip, names: &[String], limits: &Limits) -> HashSe
 }
 
 fn check_magic(s: &mut Scanner, data: &[u8], name: &str, ext: &str, textual: bool) {
+    // 실행 파일 확장자(.exe 등)면 번들된 설치 파일일 수 있다. 그 밖의 확장자(.jpg 등)로 위장한 실행 코드는 정상 문서에 있을 이유가 없다.
+    let disguised = !EXEC_EXTS.contains(&ext);
     if !textual && data.starts_with(b"MZ") {
-        s.add(Severity::High, "PE_EXECUTABLE_CONTENT", name, "Windows PE/DOS MZ header");
+        s.add(
+            if disguised { Severity::Critical } else { Severity::High },
+            "PE_EXECUTABLE_CONTENT",
+            name,
+            if disguised { "Windows PE/DOS MZ header disguised by extension" } else { "Windows PE/DOS MZ header" },
+        );
     }
     if data.starts_with(b"\x7fELF") {
-        s.add(Severity::Medium, "ELF_BINARY_CONTENT", name, "ELF executable");
+        s.add(if disguised { Severity::Critical } else { Severity::Medium }, "ELF_BINARY_CONTENT", name, "ELF executable");
     }
     if [&b"\xfe\xed\xfa\xce"[..], b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe"].iter().any(|m| data.starts_with(m)) {
-        s.add(Severity::Medium, "MACHO_BINARY_CONTENT", name, "Mach-O executable");
+        s.add(if disguised { Severity::Critical } else { Severity::Medium }, "MACHO_BINARY_CONTENT", name, "Mach-O executable");
     }
     if data.starts_with(b"\xca\xfe\xba\xbe") {
         // 큰 값(≥45)이면 Java 클래스 버전, 작은 값이면 Mach-O 유니버설 바이너리의 아키텍처 수다.
