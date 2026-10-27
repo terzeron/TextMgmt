@@ -17,6 +17,8 @@ use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 pub use detect_mojibake::{DEFAULT_LIBRARY_ROOT, VERDICT_CORRUPTED};
+// 천 단위 쉼표 출력은 corpus_common에 있고 detect_mojibake가 다시 내보낸다. 같은 코드를 복사해 두지 않는다.
+pub(crate) use detect_mojibake::thousands;
 
 pub const BROKEN_DIR_NAME: &str = "0_broken";
 
@@ -319,18 +321,6 @@ pub fn undo_moves_with(manifest_path: &Path, dry_run: bool, mover: Mover) -> io:
         write_json(manifest_path, &manifest)?;
     }
     Ok(UndoResult { restored, failed })
-}
-
-pub(crate) fn thousands(n: usize) -> String {
-    let digits = n.to_string();
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
 }
 
 pub fn summarize(moves: &[Rec], out: &mut dyn Write) -> io::Result<()> {
