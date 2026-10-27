@@ -29,6 +29,17 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.miniz_oxide]
 opt-level = 3
+# RTF 파서는 토큰마다 정규식을 돌린다. 최적화하지 않으면 19MB 코퍼스 테스트가 28초다(최적화 시 7초).
+[profile.dev.package.regex]
+opt-level = 3
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.regex-syntax]
+opt-level = 3
+[profile.dev.package.aho-corasick]
+opt-level = 3
+[profile.dev.package.memchr]
+opt-level = 3
 [profile.dev.package.backend]
 opt-level = 1
 
