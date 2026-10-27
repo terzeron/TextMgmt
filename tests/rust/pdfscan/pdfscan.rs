@@ -474,11 +474,11 @@ fn javascript_in_a_stream_over_the_keep_limit_is_reported_as_not_fully_inspected
     let stream = format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
     let (code, out) = scan_pdf("/OpenAction 4 0 R", &["<< /S /JavaScript /JS 5 0 R >>", &stream]);
     assert_eq!(code, 1, "{out}");
-    assert!(out.contains("[HIGH] JavaScript stream exceeds inspection limit"), "{out}");
+    assert!(out.contains("[HIGH] JavaScript stream not fully inspected"), "{out}");
     // 작은 스트림에는 붙지 않는다.
     let small = "<< /Length 12 >>\nstream\napp.alert(2)\nendstream";
     let (_, out) = scan_pdf("/OpenAction 4 0 R", &["<< /S /JavaScript /JS 5 0 R >>", small]);
-    assert!(!out.contains("exceeds inspection limit"), "{out}");
+    assert!(!out.contains("not fully inspected"), "{out}");
 }
 
 /// Flate로 압축한 JavaScript 스트림 하나를 OpenAction으로 연 PDF.
@@ -522,7 +522,7 @@ fn exploit_javascript_that_only_decompresses_past_64kib_is_still_found() {
     assert!(compressed < 64 * 1024, "압축본이 {compressed}바이트라 보존 한도를 넘는다. 이 테스트는 한도 아래여야 한다");
     let (_, out) = scan_bytes(&bytes);
     assert!(out.contains("[CRITICAL] exploit JavaScript"), "{out}");
-    assert!(!out.contains("exceeds inspection limit"), "{out}");
+    assert!(!out.contains("not fully inspected"), "{out}");
 }
 
 #[test]
@@ -531,7 +531,7 @@ fn javascript_too_big_to_keep_is_reported_instead_of_silently_passing() {
     let js = format!("{}eval(unescape('x'));", "var a = 1;\n".repeat(10_000));
     let stream = format!("<< /Length {} >>\nstream\n{js}\nendstream", js.len());
     let (_, out) = scan_pdf("/OpenAction 4 0 R", &["<< /S /JavaScript /JS 5 0 R >>", &stream]);
-    assert!(out.contains("[HIGH] JavaScript stream exceeds inspection limit"), "{out}");
+    assert!(out.contains("[HIGH] JavaScript stream not fully inspected"), "{out}");
     assert!(out.contains("[HIGH] JavaScript action"), "{out}");
 }
 
@@ -602,4 +602,41 @@ fn nested_numeric_arrays_are_dropped_but_arrays_holding_a_dictionary_or_string_a
     let numbers = "3 ".repeat(40);
     let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("[[{numbers}] [{numbers} << /S /JavaScript /JS (app.alert(1)) >>]]")]);
     assert!(out.contains("[HIGH] JavaScript action"), "{out}");
+}
+
+#[test]
+fn every_name_key_of_a_file_specification_is_checked_not_only_the_first() {
+    // /F가 무해해도 /UF(또는 /DOS·/Mac·/Unix)에 실행 파일이 있으면 위험이다. 뷰어는 /UF를 먼저 쓰기도 한다.
+    for spec in ["<< /F (readme.txt) /UF (calc.exe) >>", "<< /F (readme.txt) /DOS (setup.bat) >>", "<< /UF (notes.txt) /Unix (run.sh) >>", "<< /F (a.txt) /Mac (x.app.exe) >>"] {
+        let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /S /Launch /F {spec} >>")]);
+        assert!(out.contains("[CRITICAL] Launch action"), "{spec}: {out}");
+    }
+    let (_, out) = scan_pdf("/OpenAction 4 0 R", &["<< /S /Launch /F << /F (a.txt) /UF (b.txt) >> >>"]);
+    assert!(out.contains("[HIGH] Launch action") && !out.contains("CRITICAL"), "{out}");
+    // 이름만 있는 파일 지정 사전도 같은 키 전부를 본다.
+    let (_, out) = scan_pdf("/OpenAction 4 0 R", &["<< /Type /Filespec /F (a.txt) /UF (calc.exe) /EF << >> >>"]);
+    assert!(out.contains("executable-looking file name"), "{out}");
+}
+
+#[test]
+fn only_a_leading_url_with_a_host_is_read_by_its_path() {
+    // 맨 앞의 http·https·ftp 주소만 경로로 읽는다. 호스트가 비었거나 중간에 `://`가 있는 이름은 이름 그대로 본다.
+    for target in ["(https:///dl/evil.exe)", "(mailto:evil.exe@example.com)", "(x.exe)", "(HTTPS://x.example/a.PS1)"] {
+        let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /S /Launch /F {target} >>")]);
+        assert!(out.contains("[CRITICAL] Launch action"), "{target}: {out}");
+    }
+    for target in ["(ftp://example.com)", "(mailto:a@example.com)", "(https://example.com/)", "(https://example.com/page.html)"] {
+        let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /S /Launch /F {target} >>")]);
+        assert!(out.contains("[HIGH] Launch action") && !out.contains("CRITICAL"), "{target}: {out}");
+    }
+}
+
+#[test]
+fn javascript_that_cannot_be_decompressed_within_the_limit_is_reported_not_passed_silently() {
+    // 압축본은 작지만 풀면 4MB 한도를 넘는 JS. 한도를 넘으면 압축 원본으로 되돌아가 조용히 지나가던 구멍을 막는다.
+    let (bytes, compressed) = pdf_with_flate_javascript(&"a".repeat(5 * 1024 * 1024));
+    assert!(compressed < 64 * 1024, "압축본이 {compressed}바이트라 보존 한도에는 걸리지 않아야 한다");
+    let (code, out) = scan_bytes(&bytes);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("[HIGH] JavaScript stream not fully inspected"), "{out}");
 }

@@ -27,7 +27,7 @@ const MAX_DECOMPRESSED_STREAM_BYTES: usize = 4 * 1024 * 1024;
 /// 로딩 중 스트림 내용을 이만큼만 남긴다. lopdf는 모든 스트림 내용을 복사해서 들고 있어서, 이미지가 많은 PDF가 입력의 2배
 /// 넘게 메모리를 쓴다(223MB 파일이 458MB). 한도를 256KB→64KB→4KB로 낮추면 454→302→240MB로 줄었다(입력은 226MB).
 /// 64KB는 JavaScript 해제분 미리보기 한도와 같고, JS는 압축하면 보통 수 KB다. 4KB는 일반 JS까지 잘라서 쓸 수 없다.
-/// 이보다 큰 JavaScript 스트림은 잘려서 끝까지 못 본 것이므로 `exceeds inspection limit`으로 알린다.
+/// 이보다 큰 JavaScript 스트림은 잘려서 끝까지 못 본 것이므로 `not fully inspected`로 알린다.
 const STREAM_KEEP_BYTES: usize = 64 * 1024;
 /// 숫자·이름·참조만 든 배열은 이 길이를 넘으면 로딩 중에 비운다. lopdf는 원소 하나를 `Object`(약 120B)로 만들어서
 /// 파일에서 2바이트인 숫자가 50배로 부풀고, 숫자 배열이 많은 PDF는 입력의 25배까지 메모리를 쓴다(22MB가 549MB).
@@ -87,33 +87,46 @@ fn is_plain(o: &Object) -> bool {
     matches!(o, Object::Null | Object::Boolean(_) | Object::Integer(_) | Object::Real(_) | Object::Name(_) | Object::Reference(_))
 }
 
+/// 줄이기가 내려가는 최대 깊이. lopdf 파서가 중첩을 100으로 제한하므로 정상 경로에서는 닿지 않는다.
+/// 그 보장이 의존성 버전에 있어서, 넘으면 줄이지 않고 그대로 둔다(스택을 지키려는 방어).
+const SHRINK_MAX_DEPTH: usize = 128;
+
 /// 배열이 어느 깊이에서도 평범한 값과 배열로만 이루어졌다면 노드 수를, 사전·스트림·문자열이 하나라도 있으면 None을 돌려준다.
-/// 좌표 쌍 목록(`[[x y] [x y] …]`)처럼 중첩된 숫자 배열도 한 덩어리로 센다.
-fn plain_nodes(items: &[Object]) -> Option<usize> {
+/// 좌표 쌍 목록(`[[x y] [x y] …]`)처럼 중첩된 숫자 배열도 한 덩어리로 센다. 너무 깊으면 None(비우지 않는다).
+fn plain_nodes(items: &[Object], depth: usize) -> Option<usize> {
+    if depth > SHRINK_MAX_DEPTH {
+        return None;
+    }
     items.iter().try_fold(1usize, |n, o| match o {
-        Object::Array(inner) => plain_nodes(inner).map(|c| n + c),
+        Object::Array(inner) => plain_nodes(inner, depth + 1).map(|c| n + c),
         o if is_plain(o) => Some(n + 1),
         _ => None,
     })
 }
 
-fn shrink_array(items: &mut Vec<Object>) {
-    if plain_nodes(items).is_some_and(|n| n > ARRAY_KEEP_LEN) {
+fn shrink_array(items: &mut Vec<Object>, depth: usize) {
+    if plain_nodes(items, depth).is_some_and(|n| n > ARRAY_KEEP_LEN) {
         *items = Vec::new();
         return;
     }
-    items.iter_mut().for_each(shrink);
+    items.iter_mut().for_each(|o| shrink(o, depth + 1));
 }
 
-fn shrink_dict(d: &mut Dictionary) {
-    d.iter_mut().for_each(|(_, v)| shrink(v));
+fn shrink_dict(d: &mut Dictionary, depth: usize) {
+    d.iter_mut().for_each(|(_, v)| shrink(v, depth + 1));
 }
+
+/// 스트림을 어떻게 해석할지 정하는 키. 배열이 길다고 비우면 필터가 사라져서, 인코딩된 JS가 해독되지 않은 채 검사를 빠져나간다.
+const STREAM_DECODING_KEYS: [&[u8]; 4] = [b"Filter", b"DecodeParms", b"FFilter", b"FDecodeParms"];
 
 /// 객체 하나를 스캔에 필요한 만큼만 남긴다. 제자리에서 줄인다.
-fn shrink(obj: &mut Object) {
+fn shrink(obj: &mut Object, depth: usize) {
+    if depth > SHRINK_MAX_DEPTH {
+        return;
+    }
     match obj {
-        Object::Array(items) => shrink_array(items),
-        Object::Dictionary(d) => shrink_dict(d),
+        Object::Array(items) => shrink_array(items, depth),
+        Object::Dictionary(d) => shrink_dict(d, depth),
         Object::Stream(st) => {
             // 객체 스트림과 xref 스트림은 구조 해석에 쓰인다. 훅이 디코딩보다 먼저 돌아서, 자르면 안의 객체를 잃는다.
             let structural = st.dict.has_type(b"ObjStm") || st.dict.has_type(b"XRef");
@@ -122,7 +135,7 @@ fn shrink(obj: &mut Object) {
                 st.content.truncate(STREAM_KEEP_BYTES);
                 st.content.shrink_to_fit();
             }
-            shrink_dict(&mut st.dict);
+            st.dict.iter_mut().filter(|(k, _)| !STREAM_DECODING_KEYS.contains(&k.as_slice())).for_each(|(_, v)| shrink(v, depth + 1));
         }
         _ => {}
     }
@@ -131,7 +144,7 @@ fn shrink(obj: &mut Object) {
 /// lopdf 로딩 훅. 객체를 파싱하자마자 줄여서, 문서 전체가 아니라 객체 하나분만 일시적으로 쓴다.
 /// 일반 경로는 제자리 수정한 객체를 그대로 쓰고, 객체 스트림 경로는 반환값을 쓰므로 복제본을 돌려준다(줄인 뒤라 작다).
 fn shrink_on_load(id: ObjectId, obj: &mut Object) -> Option<(ObjectId, Object)> {
-    shrink(obj);
+    shrink(obj, 0);
     Some((id, obj.clone()))
 }
 
@@ -160,13 +173,16 @@ fn name_of(obj: &Object) -> Option<String> {
 
 fn has_risky_ext(name: &[u8]) -> bool {
     let lower = String::from_utf8_lossy(name).to_ascii_lowercase();
-    // URL이면 호스트가 아니라 경로의 확장자를 본다. `https://example.com`의 `.com`은 DOS 실행 파일이 아니다.
-    // `https://x.example/evil.exe`는 경로가 .exe라서 그대로 잡힌다.
-    let target = if lower.starts_with("mailto:") {
-        return false;
-    } else if let Some((_, rest)) = lower.split_once("://") {
+    // 맨 앞이 http·https·ftp 주소이고 호스트가 비어 있지 않을 때만 호스트가 아니라 경로의 확장자를 본다.
+    // `https://example.com`의 `.com`은 DOS 실행 파일이 아니고, `https://x.example/evil.exe`는 경로가 .exe라서 잡힌다.
+    // 문자열 중간의 `://`나 모르는 형태는 이름 그대로 검사한다(뷰어가 어떻게 읽을지 모르므로 열어 두지 않는다).
+    let url_rest = ["http://", "https://", "ftp://"].iter().find_map(|scheme| lower.strip_prefix(scheme)).filter(|rest| !rest.is_empty() && !rest.starts_with('/'));
+    let target = if let Some(rest) = url_rest {
         let rest = rest.split(['?', '#']).next().unwrap_or("");
         rest.split_once('/').map_or("", |(_, path)| path)
+    } else if let Some(address) = lower.strip_prefix("mailto:").filter(|a| a.contains('@')) {
+        // 주소의 도메인(`.com`)이 아니라 `@` 앞 사서함 이름만 본다.
+        address.split('@').next().unwrap_or("")
     } else {
         lower.as_str()
     };
@@ -210,17 +226,22 @@ fn raw_bytes(doc: &Document, obj: &Object) -> Vec<u8> {
     }
 }
 
-/// 파일 지정(문자열, 또는 /F·/UF를 가진 사전)의 원본 바이트.
-fn filespec_bytes(doc: &Document, obj: &Object) -> Vec<u8> {
+/// 파일 지정 사전에서 이름을 담는 키. 뷰어는 /UF를 먼저 쓰기도 해서, 하나만 보면 다른 키에 실행 파일을 숨길 수 있다.
+const FILESPEC_KEYS: [&[u8]; 5] = [b"F", b"UF", b"DOS", b"Mac", b"Unix"];
+
+/// 파일 지정(문자열이거나 위 키를 가진 사전)이 문서에서 열 이유가 없는 대상을 가리키는가. 키 하나라도 위험하면 위험이다.
+fn filespec_is_dangerous(doc: &Document, obj: &Object) -> bool {
     match obj {
-        Object::Dictionary(d) => [&b"F"[..], &b"UF"[..]].iter().find_map(|k| d.get(k).ok()).map(|v| raw_bytes(doc, v)).unwrap_or_default(),
-        other => raw_bytes(doc, other),
+        Object::Dictionary(d) => FILESPEC_KEYS.iter().filter_map(|k| d.get(k).ok()).any(|v| launch_target_is_dangerous(&raw_bytes(doc, v))),
+        other => launch_target_is_dangerous(&raw_bytes(doc, other)),
     }
 }
 
-/// 참조하는 스트림이 로딩 중에 잘렸는가(`STREAM_KEEP_BYTES` 이상). 잘린 JavaScript는 끝까지 검사하지 못한 것이다.
-fn is_truncated_stream(doc: &Document, obj: &Object) -> bool {
-    matches!(obj, Object::Reference(id) if matches!(doc.get_object(*id), Ok(Object::Stream(st)) if st.content.len() >= STREAM_KEEP_BYTES))
+/// 참조하는 JavaScript 스트림을 끝까지 검사하지 못했는가: 로딩 중에 잘렸거나(`STREAM_KEEP_BYTES` 이상), 해제 한도를 넘거나 풀 수 없다.
+/// 이때 탐지는 앞부분(또는 압축 원본)만 본 것이므로, 조용히 지나가지 않고 알려야 한다. 패딩이나 거대한 해제분으로 탐지를 피하지 못하게 한다.
+fn js_stream_not_fully_inspected(doc: &Document, obj: &Object) -> bool {
+    let Object::Reference(id) = obj else { return false };
+    matches!(doc.get_object(*id), Ok(Object::Stream(st)) if st.content.len() >= STREAM_KEEP_BYTES || st.decompressed_content_with_limit(MAX_DECOMPRESSED_STREAM_BYTES).is_err())
 }
 
 /// 문서에서 열 이유가 없는 대상인가: 실행 파일 확장자이거나 셸·스크립트 인터프리터를 부른다.
@@ -298,12 +319,12 @@ impl Scanner<'_> {
             match s {
                 "Launch" => {
                     let target = d.get(b"F").map(|v| text_preview(doc, v)).unwrap_or_default();
-                    let dangerous = d.get(b"F").is_ok_and(|v| launch_target_is_dangerous(&filespec_bytes(doc, v)));
+                    let dangerous = d.get(b"F").is_ok_and(|v| filespec_is_dangerous(doc, v));
                     self.add(if dangerous { Severity::Critical } else { Severity::High }, "Launch action", id, path, target);
                 }
                 "JavaScript" => {
-                    if d.get(b"JS").is_ok_and(|v| is_truncated_stream(doc, v)) {
-                        self.add(Severity::High, "JavaScript stream exceeds inspection limit", id, path, String::new());
+                    if d.get(b"JS").is_ok_and(|v| js_stream_not_fully_inspected(doc, v)) {
+                        self.add(Severity::High, "JavaScript stream not fully inspected", id, path, String::new());
                     }
                     let js = d.get(b"JS").map(|v| text_preview(doc, v)).unwrap_or_default();
                     if d.get(b"JS").is_ok_and(|v| js_is_exploit(&raw_bytes(doc, v))) {
@@ -326,7 +347,7 @@ impl Scanner<'_> {
         }
 
         // File specification: an embedded or referenced executable-looking name.
-        for key in [&b"F"[..], &b"UF"[..]] {
+        for key in FILESPEC_KEYS {
             if let Ok(Object::String(name, _)) = d.get(key) {
                 let is_filespec = d.has(b"EF") || matches!(d.get(b"Type").ok().and_then(name_of).as_deref(), Some("Filespec")) || action.as_deref() == Some("Launch");
                 if is_filespec && has_risky_ext(name) {
@@ -342,8 +363,8 @@ impl Scanner<'_> {
             match key_name.as_str() {
                 // The action dict case is already reported through /S above.
                 "JS" if action.as_deref() != Some("JavaScript") => {
-                    if is_truncated_stream(doc, value) {
-                        self.add(Severity::High, "JavaScript stream exceeds inspection limit", id, &child, String::new());
+                    if js_stream_not_fully_inspected(doc, value) {
+                        self.add(Severity::High, "JavaScript stream not fully inspected", id, &child, String::new());
                     }
                     if js_is_exploit(&raw_bytes(doc, value)) {
                         self.add(Severity::Critical, "exploit JavaScript", id, &child, text_preview(doc, value));
@@ -357,7 +378,7 @@ impl Scanner<'_> {
                 "Win" | "Mac" | "Unix" => {
                     let cmd = value_dict_text(doc, value, &[&b"F"[..], &b"P"[..]]);
                     let dangerous = match value {
-                        Object::Dictionary(v) => [&b"F"[..], &b"P"[..]].iter().any(|k| v.get(k).is_ok_and(|x| launch_target_is_dangerous(&filespec_bytes(doc, x)))),
+                        Object::Dictionary(v) => [&b"F"[..], &b"P"[..]].iter().any(|k| v.get(k).is_ok_and(|x| filespec_is_dangerous(doc, x))),
                         _ => false,
                     };
                     self.add(if dangerous { Severity::Critical } else { Severity::High }, "platform launch parameters", id, &child, cmd);
@@ -758,6 +779,53 @@ mod tests {
     #[test]
     fn json_str_escapes_c0_and_c1_controls() {
         assert_eq!(json_str("a\u{1b}b\u{85}c\u{7f}"), "\"a\\u001bb\\u0085c\\u007f\"");
+    }
+
+    fn long_name_array() -> Object {
+        Object::Array((0..40).map(|_| Object::Name(b"FlateDecode".to_vec())).collect())
+    }
+
+    #[test]
+    fn shrink_keeps_a_streams_filter_chain_but_drops_other_long_numeric_arrays() {
+        let mut dict = Dictionary::new();
+        dict.set("Filter", long_name_array());
+        dict.set("DecodeParms", long_name_array());
+        dict.set("Widths", Object::Array((0..100).map(Object::Integer).collect()));
+        let mut obj = Object::Stream(lopdf::Stream::new(dict, b"x".to_vec()));
+        shrink(&mut obj, 0);
+        let Object::Stream(st) = obj else { unreachable!() };
+        // 필터 배열이 비면 인코딩된 JS가 해독되지 않은 채 검사를 빠져나간다.
+        assert_eq!(st.dict.get(b"Filter").unwrap().as_array().unwrap().len(), 40);
+        assert_eq!(st.dict.get(b"DecodeParms").unwrap().as_array().unwrap().len(), 40);
+        assert!(st.dict.get(b"Widths").unwrap().as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn shrink_drops_long_numeric_arrays_in_plain_dictionaries_but_not_mixed_ones() {
+        let mut d = Dictionary::new();
+        d.set("Widths", Object::Array((0..100).map(Object::Integer).collect()));
+        d.set("Names", long_name_array());
+        let mut mixed: Vec<Object> = (0..40).map(Object::Integer).collect();
+        mixed.push(Object::String(b"keep".to_vec(), lopdf::StringFormat::Literal));
+        d.set("Mixed", Object::Array(mixed));
+        let mut obj = Object::Dictionary(d);
+        shrink(&mut obj, 0);
+        let Object::Dictionary(d) = obj else { unreachable!() };
+        assert!(d.get(b"Widths").unwrap().as_array().unwrap().is_empty());
+        assert!(d.get(b"Names").unwrap().as_array().unwrap().is_empty());
+        assert_eq!(d.get(b"Mixed").unwrap().as_array().unwrap().len(), 41);
+    }
+
+    #[test]
+    fn shrink_stops_at_the_depth_guard_instead_of_recursing_without_bound() {
+        // lopdf 파서는 중첩을 100으로 제한하지만 그 보장은 의존성 버전에 있다. 넘는 깊이는 건드리지 않고 스택도 쓰지 않는다.
+        let mut obj = Object::Integer(1);
+        for _ in 0..(SHRINK_MAX_DEPTH * 3) {
+            obj = Object::Array(vec![obj]);
+        }
+        shrink(&mut obj, 0);
+        let Object::Array(outer) = &obj else { unreachable!() };
+        assert_eq!(outer.len(), 1, "깊이 가드를 넘는 배열은 비우지 않는다");
     }
 
     #[test]
