@@ -1,0 +1,59 @@
+[workspace]
+resolver = "3"
+members = ["utils/pdfscan", "libs/corpus_layout", "libs/es_client", "utils/detect_mojibake", "utils/quarantine_broken", "utils/cluster_hybrid_genres", "utils/search", "utils/epubscan", "libs/stat", "libs/file_time", "libs/parser_timeout", "libs/htmlkit", "libs/isbn", "libs/hwp3_tables", "libs/hwp3_parser", "libs/pyfmt", "libs/corpus_common", "utils/update", "utils/move_semi_clusters", "utils/classify_books_client", "utils/normalize_comic_directories", "libs/bookstore", "libs/doc_reader", "utils/loader", "libs/scan_common", "libs/sysdeps", "backend", "utils/classify_cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# 공유 의존성은 여기서 버전을 한 번만 정한다. 각 crate는 `dep.workspace = true`로 쓴다.
+[workspace.dependencies]
+lopdf = "0.46"
+log = "0.4"
+serde_json = "1"
+# 내부망 http 전용이라 TLS 기능을 켜지 않는다.
+ureq = { version = "3.5", default-features = false, features = ["json"] }
+
+[patch.crates-io]
+
+# 개발·테스트 빌드에서 이미지 디코딩이 너무 느리다 (6000x8000 JPEG 테스트가 100초). 디코더 crate만 최적화한다.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+# RTF 파서는 토큰마다 정규식을 돌린다. 최적화하지 않으면 19MB 코퍼스 테스트가 28초다(최적화 시 7초).
+[profile.dev.package.regex]
+opt-level = 3
+[profile.dev.package.regex-automata]
+opt-level = 3
+[profile.dev.package.regex-syntax]
+opt-level = 3
+[profile.dev.package.aho-corasick]
+opt-level = 3
+[profile.dev.package.memchr]
+opt-level = 3
+# EPUB 본문은 HTML 파서로 읽는다. 최적화하지 않으면 코퍼스 EPUB 테스트가 6.6초다(최적화 시 1.9초).
+[profile.dev.package.scraper]
+opt-level = 3
+[profile.dev.package.html5ever]
+opt-level = 3
+[profile.dev.package.markup5ever]
+opt-level = 3
+[profile.dev.package.tendril]
+opt-level = 3
+[profile.dev.package.backend]
+opt-level = 1
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind" # pdfscan이 catch_unwind로 파서 panic을 격리한다
+strip = true

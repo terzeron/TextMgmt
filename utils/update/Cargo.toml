@@ -1,0 +1,21 @@
+[package]
+name = "update"
+description = "ES 색인 갱신·조회·삭제 점검 (utils/update.py의 Rust 대응)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "bin"
+path = "../../tests/rust/update/bin.rs"
+
+[[test]]
+name = "update"
+path = "../../tests/rust/update/update.rs"
+
+[dependencies]
+pyfmt = { path = "../../libs/pyfmt" }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+es_client = { path = "../../libs/es_client" }
+serde_json = { workspace = true, features = ["preserve_order"] }

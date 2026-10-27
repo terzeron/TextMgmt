@@ -1,0 +1,353 @@
+[
+  [
+    "POST",
+    "/admin/book-covers/apply",
+    "application/json",
+    {
+      "file_path": "x",
+      "revision": "x",
+      "candidate_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  [
+    "POST",
+    "/admin/book-covers/apply-image",
+    "application/json",
+    {
+      "file_path": "x",
+      "revision": "x",
+      "image_data": "x"
+    }
+  ],
+  [
+    "POST",
+    "/admin/book-covers/apply-url",
+    "application/json",
+    {
+      "file_path": "x",
+      "revision": "x",
+      "url": "x"
+    }
+  ],
+  [
+    "POST",
+    "/admin/book-covers/cache/clear",
+    "application/json",
+    {
+      "file_path": "x",
+      "revision": "x"
+    }
+  ],
+  [
+    "POST",
+    "/auth/google",
+    "application/json",
+    {}
+  ],
+  [
+    "POST",
+    "/categories/bulk-rename-files",
+    "application/json",
+    {
+      "category": "x",
+      "pattern": "x",
+      "replacement": "x"
+    }
+  ],
+  [
+    "POST",
+    "/categories/classify-proposal",
+    "application/json",
+    {
+      "category": "x"
+    }
+  ],
+  [
+    "POST",
+    "/categories/classify-proposal/apply",
+    "application/json",
+    {
+      "items": []
+    }
+  ],
+  [
+    "POST",
+    "/categories/delete",
+    "application/json",
+    {
+      "category": "x"
+    }
+  ],
+  [
+    "POST",
+    "/category-mappings/{category}/keywords",
+    "application/json",
+    {}
+  ],
+  [
+    "POST",
+    "/category-mismatches/delete-file",
+    "application/json",
+    {}
+  ],
+  [
+    "POST",
+    "/category-mismatches/index-file",
+    "application/json",
+    {}
+  ],
+  [
+    "POST",
+    "/category-mismatches/reload",
+    "application/json",
+    {
+      "category": "x"
+    }
+  ],
+  [
+    "POST",
+    "/category-mismatches/reload-all",
+    "application/json",
+    {}
+  ],
+  [
+    "POST",
+    "/category-mismatches/reload-mismatches",
+    "application/json",
+    {
+      "category": "x"
+    }
+  ],
+  [
+    "POST",
+    "/comics/categories/bulk-rename-files",
+    "application/json",
+    {
+      "category": "x",
+      "pattern": "x",
+      "replacement": "x"
+    }
+  ],
+  [
+    "POST",
+    "/comics/categories/classify-proposal",
+    "application/json",
+    {
+      "category": "x"
+    }
+  ],
+  [
+    "POST",
+    "/comics/categories/classify-proposal/apply",
+    "application/json",
+    {
+      "items": []
+    }
+  ],
+  [
+    "POST",
+    "/comics/categories/delete",
+    "application/json",
+    {
+      "category": "x"
+    }
+  ],
+  [
+    "POST",
+    "/comics/category-mismatches/delete-file",
+    "application/json",
+    {}
+  ],
+  [
+    "POST",
+    "/comics/category-mismatches/index-file",
+    "application/json",
+    {}
+  ],
+  [
+    "POST",
+    "/comics/category-mismatches/reload",
+    "application/json",
+    {
+      "category": "x"
+    }
+  ],
+  [
+    "POST",
+    "/comics/category-mismatches/reload-all",
+    "application/json",
+    {}
+  ],
+  [
+    "POST",
+    "/comics/category-mismatches/reload-mismatches",
+    "application/json",
+    {
+      "category": "x"
+    }
+  ],
+  [
+    "POST",
+    "/comics/epub-cover/{book_id}",
+    "application/json",
+    {
+      "url": "https://example.test/cover.jpg"
+    }
+  ],
+  [
+    "POST",
+    "/comics/epub-illustration/{book_id}",
+    "application/json",
+    {
+      "before_idref": "spine-1",
+      "url": "https://example.test/illustration.jpg"
+    }
+  ],
+  [
+    "POST",
+    "/comics/epub-images/{book_id}",
+    "application/json",
+    {}
+  ],
+  [
+    "POST",
+    "/comics/pdf-pages/{book_id}/delete",
+    "application/json",
+    {}
+  ],
+  [
+    "POST",
+    "/comics/pdf-pages/{book_id}/insert-preview",
+    "application/json",
+    {
+      "url": "x"
+    }
+  ],
+  [
+    "POST",
+    "/epub-cover/{book_id}",
+    "application/json",
+    {
+      "url": "https://example.test/cover.jpg"
+    }
+  ],
+  [
+    "POST",
+    "/epub-illustration/{book_id}",
+    "application/json",
+    {
+      "before_idref": "spine-1",
+      "url": "https://example.test/illustration.jpg"
+    }
+  ],
+  [
+    "POST",
+    "/epub-images/{book_id}",
+    "application/json",
+    {}
+  ],
+  [
+    "POST",
+    "/hidden-categories/{category}",
+    "application/json",
+    {
+      "hidden": false
+    }
+  ],
+  [
+    "POST",
+    "/latest-excluded-categories/{category}",
+    "application/json",
+    {
+      "excluded": false
+    }
+  ],
+  [
+    "POST",
+    "/logs/client-error",
+    "application/json",
+    {
+      "error_type": "REACT_RENDER_ERROR",
+      "message": "x",
+      "url": "x"
+    }
+  ],
+  [
+    "POST",
+    "/pdf-pages/{book_id}/delete",
+    "application/json",
+    {}
+  ],
+  [
+    "POST",
+    "/pdf-pages/{book_id}/insert-preview",
+    "application/json",
+    {
+      "url": "x"
+    }
+  ],
+  [
+    "PUT",
+    "/books/{book_id}",
+    "application/json",
+    {
+      "book_id": 1,
+      "category": "x",
+      "title": "x",
+      "author": "x",
+      "file_path": "x",
+      "file_type": "x",
+      "file_size": 1,
+      "updated_time": "x"
+    }
+  ],
+  [
+    "PUT",
+    "/categories/rename",
+    "application/json",
+    {
+      "old_category": "x",
+      "new_category": "x"
+    }
+  ],
+  [
+    "PUT",
+    "/category-mappings",
+    "application/json",
+    {
+      "mappings": {}
+    }
+  ],
+  [
+    "PUT",
+    "/category-mappings/{category}",
+    "application/json",
+    {
+      "keywords": []
+    }
+  ],
+  [
+    "PUT",
+    "/comics/books/{book_id}",
+    "application/json",
+    {
+      "book_id": 1,
+      "category": "x",
+      "title": "x",
+      "author": "x",
+      "file_path": "x",
+      "file_type": "x",
+      "file_size": 1,
+      "updated_time": "x"
+    }
+  ],
+  [
+    "PUT",
+    "/comics/categories/rename",
+    "application/json",
+    {
+      "old_category": "x",
+      "new_category": "x"
+    }
+  ]
+]

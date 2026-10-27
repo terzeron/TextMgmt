@@ -22,16 +22,16 @@ Target only `3_미정리`, `4_대기`, and `9_temp` under the configured root.
 ## Commands
 
 ```text
-Dry run: python scripts/normalize_comic_directories.py
-Polite dry run: python scripts/normalize_comic_directories.py --delay 1.2
-Apply: python scripts/normalize_comic_directories.py --apply
-Syntax: python -m py_compile scripts/normalize_comic_directories.py
-Lint: ruff check scripts/normalize_comic_directories.py
+Dry run: python utils/normalize_comic_directories.py
+Polite dry run: python utils/normalize_comic_directories.py --delay 1.2
+Apply: python utils/normalize_comic_directories.py --apply
+Syntax: python -m py_compile utils/normalize_comic_directories.py
+Lint: ruff check utils/normalize_comic_directories.py
 ```
 
 ## Project Structure
 
-- `scripts/normalize_comic_directories.py`: scanning, bookstore lookup, reports, renames
+- `utils/normalize_comic_directories.py`: scanning, bookstore lookup, reports, renames
 - `docs/superpowers/specs/`: approved normalization rules
 - `/tmp/comic-directory-normalization.tsv`: default dry-run report
 

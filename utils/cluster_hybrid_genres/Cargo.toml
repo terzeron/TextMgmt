@@ -1,0 +1,29 @@
+[package]
+name = "cluster_hybrid_genres"
+description = "본문 처음·마지막 500단어로 5대 장르 비율을 재고 클러스터링한다 (utils/cluster_hybrid_genres.py의 Rust 대응)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "bin"
+path = "../../tests/rust/cluster_hybrid_genres/bin.rs"
+
+[[test]]
+name = "cluster"
+path = "../../tests/rust/cluster_hybrid_genres/cluster.rs"
+
+[dependencies]
+pyfmt = { path = "../../libs/pyfmt" }
+corpus_common = { path = "../../libs/corpus_common" }
+fancy-regex = "0.14"
+indexmap = { version = "2.14.2", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+
+
+[dev-dependencies]
+encoding_rs = "0.8.42"
+tempfile = "3.27.0"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }

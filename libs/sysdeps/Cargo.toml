@@ -1,0 +1,19 @@
+[package]
+name = "sysdeps"
+description = "시계, 파일시스템, 외부 명령, HTTP 응답 같은 시스템 능력 trait와 실제 구현 (테스트에서 대역으로 바꿔 끼운다)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "sysdeps"
+path = "../../tests/rust/sysdeps/sysdeps.rs"
+
+[dependencies]
+async-trait = "0.1"
+libc = "0.2"
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

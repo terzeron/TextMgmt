@@ -1,0 +1,13 @@
+[package]
+name = "corpus_layout"
+description = "코퍼스 디렉토리 레이아웃 상수 (utils/corpus_layout.py의 Rust 대응)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "layout"
+path = "../../tests/rust/corpus_layout/layout.rs"
+
+[dependencies]

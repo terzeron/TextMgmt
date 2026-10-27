@@ -1,0 +1,45 @@
+[package]
+name = "doc_reader"
+description = "문서 본문 요약 추출: TXT·EPUB·HTML·RTF·DOCX·PDF (utils/loader.py의 read_from_* 대응)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "text"
+path = "../../tests/rust/doc_reader/text.rs"
+
+[[test]]
+name = "pdf"
+path = "../../tests/rust/doc_reader/pdf.rs"
+
+[[test]]
+name = "formats"
+path = "../../tests/rust/doc_reader/formats.rs"
+
+[[test]]
+name = "epub"
+path = "../../tests/rust/doc_reader/epub.rs"
+
+[[test]]
+name = "markup"
+path = "../../tests/rust/doc_reader/markup.rs"
+
+[dependencies]
+corpus_common = { path = "../corpus_common" }
+ego-tree = "0.11"
+encoding_rs = "0.8.42"
+flate2 = "1"
+hwp3_parser = { path = "../hwp3_parser" }
+isbn = { path = "../isbn" }
+lopdf.workspace = true
+parser_timeout = { path = "../parser_timeout" }
+pyfmt = { path = "../pyfmt" }
+regex = "1.13.1"
+roxmltree = "0.21"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+scraper = "0.29.0"
+sysdeps = { path = "../sysdeps" }
+serde_json = { workspace = true }
+tempfile = "3.27.0"

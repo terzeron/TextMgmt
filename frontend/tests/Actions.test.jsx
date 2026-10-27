@@ -22,6 +22,7 @@ import Actions, {
   filterSubstringKeywords,
   stripNoiseWords,
   getSimilarityDebugInfo,
+  keywordCountFactor,
 } from "../src/Actions";
 import * as categoryMappingCache from "../src/categoryMappingCache";
 
@@ -770,5 +771,62 @@ describe("Actions 버튼 비활성화 조건", () => {
         element.textContent.includes("로 옮기기"),
     );
     expect(btn.disabled).toBe(true);
+  });
+});
+
+// ── 서점 내 키워드 수 감점 ──
+
+describe("keywordCountFactor", () => {
+  it("키워드가 하나 늘 때마다 10%p씩 감점하고 11개 이상은 0으로 한다", () => {
+    expect(keywordCountFactor(1)).toBe(1);
+    expect(keywordCountFactor(2)).toBeCloseTo(0.9);
+    expect(keywordCountFactor(3)).toBeCloseTo(0.8);
+    expect(keywordCountFactor(9)).toBeCloseTo(0.2);
+    expect(keywordCountFactor(11)).toBe(0);
+    expect(keywordCountFactor(12)).toBe(0);
+  });
+});
+
+describe("getSimilarityDebugInfo - 키워드 수 감점", () => {
+  const totalOf = (info, category) =>
+    info.categoryDetails.find((d) => d.category === category)?.totalScore;
+
+  it("키워드가 1개인 서점은 감점하지 않는다", () => {
+    const info = getSimilarityDebugInfo({ kyobo: "스릴러" }, ["3_스릴러"]);
+    expect(totalOf(info, "3_스릴러")).toBeCloseTo(1.0);
+  });
+
+  it("키워드가 3개인 서점은 키워드별 점수에 0.8을 곱해 합산한다", () => {
+    const info = getSimilarityDebugInfo({ yes24: "스릴러 가나다 라마바" }, [
+      "3_스릴러",
+    ]);
+    expect(totalOf(info, "3_스릴러")).toBeCloseTo(0.8);
+  });
+
+  it("일치 키워드가 여럿이면 감점 후 합산한다", () => {
+    // 매핑 mock: 소설 → ["fiction", "소설"]. 두 키워드 모두 1.0 → (1.0 + 1.0) × 0.9
+    const info = getSimilarityDebugInfo({ yes24: "fiction 소설" }, ["소설"]);
+    expect(totalOf(info, "소설")).toBeCloseTo(1.8);
+  });
+
+  it("키워드가 11개 이상이면 무시한다", () => {
+    const noise = Array.from({ length: 10 }, (_, i) => `가${i}`).join(" ");
+    const info = getSimilarityDebugInfo({ yes24: `스릴러 ${noise}` }, [
+      "3_스릴러",
+    ]);
+    expect(totalOf(info, "3_스릴러")).toBeUndefined();
+  });
+
+  it("서점 두 곳이 가리키는 스릴러가 한 곳이 가리키는 영미소설보다 앞선다", () => {
+    // yes24·aladin 이 스릴러를, kyobo 한 곳이 영미소설을 가리키는 상황
+    const info = getSimilarityDebugInfo(
+      {
+        yes24: "소설 추리 미스터리 스릴러",
+        aladin: "스릴러",
+        kyobo: "영미소설",
+      },
+      ["2_영미소설", "3_스릴러"],
+    );
+    expect(info.categoryDetails[0].category).toBe("3_스릴러");
   });
 });

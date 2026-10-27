@@ -1,0 +1,725 @@
+{
+ "parse_filename": [
+  [
+   "[작가] 원피스 01권.epub",
+   [
+    "원피스",
+    "작가"
+   ]
+  ],
+  [
+   "원피스 12화.pdf",
+   [
+    "원피스",
+    null
+   ]
+  ],
+  [
+   "[만화] 슬램덩크 3권.pdf",
+   [
+    "만화] 슬램덩크",
+    null
+   ]
+  ],
+  [
+   "[스캔] 드래곤볼 vol.5.pdf",
+   [
+    "스캔] 드래곤볼",
+    null
+   ]
+  ],
+  [
+   "제 3화 - 나루토.pdf",
+   [
+    "나루토",
+    null
+   ]
+  ],
+  [
+   "나루토 1-5권.epub",
+   [
+    "나루토",
+    null
+   ]
+  ],
+  [
+   "20권.epub",
+   null
+  ],
+  [
+   "[001] 원신 7.pdf",
+   [
+    "원신",
+    null
+   ]
+  ],
+  [
+   "Berserk Vol 3.pdf",
+   [
+    "Berserk",
+    null
+   ]
+  ],
+  [
+   "[홍길동] 임꺽정 하.pdf",
+   [
+    "임꺽정 하",
+    "홍길동"
+   ]
+  ],
+  [
+   "그냥 이름.pdf",
+   [
+    "그냥 이름",
+    null
+   ]
+  ],
+  [
+   "!!!.pdf",
+   null
+  ],
+  [
+   "[123]",
+   null
+  ],
+  [
+   "강철의 연금술사 5권 완결.pdf",
+   [
+    "강철의 연금술사",
+    null
+   ]
+  ],
+  [
+   "[일본 작가] 데스노트 2.epub",
+   [
+    "데스노트",
+    "일본 작가"
+   ]
+  ],
+  [
+   "ＡＢＣ 3권.pdf",
+   [
+    "ABC",
+    null
+   ]
+  ],
+  [
+   "dir/01.pdf",
+   null
+  ],
+  [
+   "[Ａ작가] 테스트 10.pdf",
+   [
+    "테스트",
+    "A작가"
+   ]
+  ]
+ ],
+ "directory_title": [
+  [
+   "[이름] 제목 1-10권 완결",
+   "제목"
+  ],
+  [
+   "제목 (1-5권 완)",
+   "제목"
+  ],
+  [
+   "제목 완결",
+   "제목"
+  ],
+  [
+   "[만화] 제목 3-4권",
+   "제목"
+  ],
+  [
+   "제목 12권",
+   "제목"
+  ],
+  [
+   "제목 [스캔본]",
+   "제목"
+  ],
+  [
+   "제목 미완 (연재중)",
+   "제목"
+  ],
+  [
+   "제목 (2~7화 외전)",
+   "제목"
+  ],
+  [
+   "[글 홍길동] 제목 1권",
+   "제목"
+  ],
+  [
+   "제목 (외전 포함)",
+   "제목 (외전 포함)"
+  ],
+  [
+   "제목",
+   "제목"
+  ],
+  [
+   "제목 (1-5권)",
+   "제목"
+  ],
+  [
+   "제목 (완결)",
+   "제목"
+  ],
+  [
+   "제목 3권 완결",
+   "제목"
+  ],
+  [
+   "제목 1~3 권",
+   "제목"
+  ]
+ ],
+ "directory_author": [
+  [
+   "[이름] 제목 1-10권 완결",
+   "이름"
+  ],
+  [
+   "제목 (1-5권 완)",
+   null
+  ],
+  [
+   "제목 완결",
+   null
+  ],
+  [
+   "[만화] 제목 3-4권",
+   null
+  ],
+  [
+   "제목 12권",
+   null
+  ],
+  [
+   "제목 [스캔본]",
+   null
+  ],
+  [
+   "제목 미완 (연재중)",
+   null
+  ],
+  [
+   "제목 (2~7화 외전)",
+   null
+  ],
+  [
+   "[글 홍길동] 제목 1권",
+   "글 홍길동"
+  ],
+  [
+   "제목 (외전 포함)",
+   null
+  ],
+  [
+   "제목",
+   null
+  ]
+ ],
+ "korean_author": [
+  [
+   null,
+   null
+  ],
+  [
+   "홍길동",
+   "홍길동"
+  ],
+  [
+   "글 홍길동/그림 이몽룡",
+   "홍길동/ 이몽룡"
+  ],
+  [
+   "Hong",
+   null
+  ],
+  [
+   "홍길동 (Hong)",
+   null
+  ],
+  [
+   "김철수,",
+   "김철수"
+  ],
+  [
+   "日本 作家",
+   null
+  ],
+  [
+   "홍길동 저",
+   "홍길동"
+  ],
+  [
+   "작가 만화",
+   "작가"
+  ],
+  [
+   "",
+   null
+  ]
+ ],
+ "title_key": [
+  [
+   "Hello World",
+   "helloworld"
+  ],
+  [
+   "마왕의 딸 3",
+   "마왕의딸3"
+  ],
+  [
+   "Title - Sub",
+   "titlesub"
+  ],
+  [
+   "제목 (개정판)",
+   "제목개정판"
+  ],
+  [
+   "제목: 부제",
+   "제목부제"
+  ],
+  [
+   "제목…",
+   "제목"
+  ],
+  [
+   "A/B",
+   "ab"
+  ],
+  [
+   "con*fig?",
+   "config"
+  ],
+  [
+   "  ",
+   ""
+  ],
+  [
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  ],
+  [
+   "한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글",
+   "한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글"
+  ],
+  [
+   "a. ",
+   "a"
+  ],
+  [
+   "..",
+   ""
+  ],
+  [
+   "ＡＢＣ-１２３",
+   "abc123"
+  ],
+  [
+   "Ǆ",
+   "dž"
+  ]
+ ],
+ "base": [
+  [
+   "원피스 1권",
+   "원피스"
+  ],
+  [
+   "원피스 (1-3권)",
+   "원피스"
+  ],
+  [
+   "원피스 12",
+   "원피스"
+  ],
+  [
+   "원피스.",
+   "원피스"
+  ],
+  [
+   "원피스 1화",
+   "원피스"
+  ],
+  [
+   "원피스 [3권]",
+   "원피스"
+  ],
+  [
+   "원피스 100권 ",
+   "원피스"
+  ]
+ ],
+ "variants": [
+  [
+   "Title - Sub Text",
+   [
+    "title",
+    "titlesubtext"
+   ]
+  ],
+  [
+   "제목 (개정판)",
+   [
+    "제목",
+    "제목개정판"
+   ]
+  ],
+  [
+   "제목 (Vol 2)",
+   [
+    "제목",
+    "제목vol2"
+   ]
+  ],
+  [
+   "Plain",
+   [
+    "plain"
+   ]
+  ]
+ ],
+ "safe": [
+  [
+   "Hello World",
+   "Hello World"
+  ],
+  [
+   "마왕의 딸 3",
+   "마왕의 딸 3"
+  ],
+  [
+   "Title - Sub",
+   "Title - Sub"
+  ],
+  [
+   "제목 (개정판)",
+   "제목 (개정판)"
+  ],
+  [
+   "제목: 부제",
+   "제목： 부제"
+  ],
+  [
+   "제목…",
+   "제목"
+  ],
+  [
+   "A/B",
+   "A／B"
+  ],
+  [
+   "con*fig?",
+   "con＊fig？"
+  ],
+  [
+   "  ",
+   null
+  ],
+  [
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   null
+  ],
+  [
+   "한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글한글",
+   null
+  ],
+  [
+   "a. ",
+   "a"
+  ],
+  [
+   "..",
+   null
+  ],
+  [
+   "a/b\\c:d*e?f\"g<h>i|j",
+   "a／b＼c：d＊e？f＂g＜h＞i｜j"
+  ],
+  [
+   "tab\there",
+   "tabhere"
+  ],
+  [
+   "trail. .",
+   "trail"
+  ]
+ ],
+ "equiv": [
+  [
+   "원피스",
+   "원피스 (개정판)",
+   true
+  ],
+  [
+   "Title",
+   "title - sub",
+   true
+  ],
+  [
+   "가",
+   "나",
+   false
+  ],
+  [
+   "",
+   "",
+   false
+  ]
+ ],
+ "matches": [
+  [
+   "원피스 1권",
+   "원피스",
+   true
+  ],
+  [
+   "원피스 (1-3권)",
+   "원피스",
+   true
+  ],
+  [
+   "원피스 2",
+   "원피스",
+   true
+  ],
+  [
+   "다른책 1",
+   "원피스",
+   false
+  ]
+ ],
+ "metadata": [
+  [
+   "[작가] 제목 1-3권",
+   [
+    "제목 1권.epub",
+    "제목 2권.epub",
+    "제목 3권.epub"
+   ],
+   "(1-3권)"
+  ],
+  [
+   "제목 완결",
+   [
+    "제목 01화.pdf",
+    "제목 05화.pdf",
+    "제목 외전.pdf"
+   ],
+   "(1-5화 완외)"
+  ],
+  [
+   "제목 (미완)",
+   [
+    "a 1.pdf",
+    "a 2.pdf",
+    "a 7.pdf"
+   ],
+   "(1-7권)"
+  ],
+  [
+   "제목",
+   [
+    "제목 1.pdf",
+    "제목 2.pdf"
+   ],
+   "(1-2권)"
+  ],
+  [
+   "제목",
+   [
+    "x.pdf",
+    "y.pdf"
+   ],
+   null
+  ],
+  [
+   "제목 2권 외",
+   [
+    "제목 1권.pdf",
+    "제목 2권 완결.pdf"
+   ],
+   "(1-2권 완외)"
+  ],
+  [
+   "제목",
+   [
+    "vol1",
+    "vol 2권",
+    "note.txt"
+   ],
+   "(1-2권)"
+  ],
+  [
+   "제목 (1-2권 외)",
+   [
+    "제목 특전.pdf",
+    "제목 1권.pdf",
+    "제목 2권.pdf"
+   ],
+   "(1-2권 외)"
+  ],
+  [
+   "제목",
+   [
+    "외전.pdf"
+   ],
+   null
+  ],
+  [
+   "제목",
+   [
+    "제목 1.pdf"
+   ],
+   null
+  ]
+ ],
+ "identity": [
+  [
+   "[작가] 원피스 1-5권",
+   [
+    "[작가] 원피스 1권.epub",
+    "[작가] 원피스 2권.epub",
+    "[작가] 원피스 3권.epub"
+   ],
+   [
+    "원피스",
+    "작가",
+    1.0,
+    3,
+    null,
+    ""
+   ]
+  ],
+  [
+   "원피스",
+   [
+    "원피스 1권.pdf",
+    "원피스 2권.pdf",
+    "나루토 1권.pdf"
+   ],
+   [
+    "원피스",
+    null,
+    0.666667,
+    3,
+    null,
+    ""
+   ]
+  ],
+  [
+   "원피스",
+   [
+    "원피스 1권.pdf",
+    "나루토 1권.pdf",
+    "블리치 1권.pdf"
+   ],
+   [
+    null,
+    null,
+    0.333333,
+    3,
+    "SKIP_AMBIGUOUS_FILE_TITLES",
+    "dominant filename title: 1/3"
+   ]
+  ],
+  [
+   "다른제목",
+   [
+    "원피스 1권.pdf",
+    "원피스 2권.pdf"
+   ],
+   [
+    null,
+    null,
+    1.0,
+    2,
+    "SKIP_TITLE_MISMATCH",
+    "filename title: 원피스; directory title: 다른제목"
+   ]
+  ],
+  [
+   "원피스 1-5권",
+   [
+    "01.pdf",
+    "02.pdf"
+   ],
+   [
+    "원피스",
+    null,
+    0.8,
+    2,
+    null,
+    ""
+   ]
+  ],
+  [
+   "원피스",
+   [
+    "a.pdf"
+   ],
+   [
+    null,
+    null,
+    0.0,
+    1,
+    "SKIP_INSUFFICIENT_FILES",
+    "book files: 1; parsed filenames: 1"
+   ]
+  ],
+  [
+   "원피스 1-5권",
+   [
+    "원피스 1.pdf",
+    "!!!.pdf"
+   ],
+   [
+    null,
+    null,
+    0.0,
+    2,
+    "SKIP_UNPARSEABLE_FILENAMES",
+    "book files: 2; parsed filenames: 1"
+   ]
+  ],
+  [
+   "제목",
+   [
+    "!!!.pdf",
+    "???.pdf"
+   ],
+   [
+    null,
+    null,
+    0.0,
+    2,
+    "SKIP_UNPARSEABLE_FILENAMES",
+    "book files: 2; parsed filenames: 0"
+   ]
+  ],
+  [
+   "제목 1-4권",
+   [
+    "[갑] 제목 1권.pdf",
+    "[을] 제목 2권.pdf",
+    "[갑] 제목 3권.pdf",
+    "제목 4권.pdf"
+   ],
+   [
+    "제목",
+    null,
+    1.0,
+    4,
+    null,
+    ""
+   ]
+  ]
+ ]
+}

@@ -127,11 +127,47 @@ export const stripNoiseWords = (keywords) => {
     .filter(Boolean);
 };
 
+// 한 서점 안의 키워드가 n개일 때 키워드별 점수에 곱하는 계수.
+// 정보가 흩어질수록 감점한다: 1개 100%, 2개 90%, 3개 80%, ... 11개 이상 0% (무시)
+export const keywordCountFactor = (n) => Math.max(0, 1 - 0.1 * (n - 1));
+
+// 한 서점의 키워드들을 디렉토리 키워드와 비교한다.
+// 키워드별 최선 매칭을 구하고, 키워드 수에 따른 감점을 적용해 합산한다.
+const scoreStoreKeywords = (keywords, dirKeywords) => {
+  const matchDetails = [];
+  let sum = 0;
+  for (const deepKeyword of keywords) {
+    let bestSimilarity = 0;
+    let bestMatch = null;
+    for (const dirKeyword of dirKeywords) {
+      const similarity = calculateSimilarity(deepKeyword, dirKeyword);
+      if (similarity > bestSimilarity) {
+        bestSimilarity = similarity;
+        const dkLower = deepKeyword.toLowerCase();
+        const drLower = dirKeyword.toLowerCase();
+        const isExact = dkLower === drLower;
+        const isContained =
+          drLower.includes(dkLower) || dkLower.includes(drLower);
+        bestMatch = {
+          bookstoreKeyword: deepKeyword,
+          dirKeyword,
+          similarity,
+          isContained,
+          matchType: isExact ? "exact" : isContained ? "contains" : "ngram",
+        };
+      }
+    }
+    if (bestSimilarity > 0) matchDetails.push(bestMatch);
+    sum += bestSimilarity;
+  }
+  return { score: sum * keywordCountFactor(keywords.length), matchDetails };
+};
+
 // 단일 서점 카테고리와 디렉토리의 유사도 점수 계산
 // - 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
 // - 서점 카테고리(이미 마지막 레벨)를 특수기호로 분리하여 사용
 // - 다른 키워드에 포함되는 범용 키워드는 제거 (예: "소설"이 "세계각국소설"에 포함)
-// - 각 키워드별 최선 매칭의 평균으로 점수 산출 (매칭 건수에 의한 편향 방지)
+// - 각 키워드별 최선 매칭에 키워드 수 감점(keywordCountFactor)을 적용해 합산
 // - { category: score } 형태의 객체 반환
 const calculateCategoryScores = (bookstoreCategory, categoryList) => {
   /* v8 ignore next -- public callers validate category inputs before scoring. */
@@ -158,22 +194,9 @@ const calculateCategoryScores = (bookstoreCategory, categoryList) => {
       categoryName,
     ]);
 
-    // 각 서점 키워드별 최대 유사도를 구한 뒤 평균
-    let totalScore = 0;
-    for (const deepKeyword of deepKeywords) {
-      let bestForKeyword = 0;
-      for (const dirKeyword of dirKeywords) {
-        const similarity = calculateSimilarity(deepKeyword, dirKeyword);
-        if (similarity > bestForKeyword) {
-          bestForKeyword = similarity;
-        }
-      }
-      totalScore += bestForKeyword;
-    }
-
-    const avgScore = totalScore / deepKeywords.length;
-    if (avgScore > 0) {
-      scores[category] = avgScore;
+    const { score } = scoreStoreKeywords(deepKeywords, dirKeywords);
+    if (score > 0) {
+      scores[category] = score;
     }
   }
 
@@ -258,37 +281,13 @@ export const getSimilarityDebugInfo = (
     for (const [store, storeInfo] of Object.entries(
       debugInfo.bookstoreKeywords,
     )) {
-      // 각 서점 키워드별 최선 매칭을 개별적으로 기록, 평균 산출
-      let storeTotal = 0;
-      for (const deepKeyword of storeInfo.keywords) {
-        let bestSimilarity = 0;
-        let bestMatch = null;
-
-        for (const dirKeyword of dirKeywords) {
-          const similarity = calculateSimilarity(deepKeyword, dirKeyword);
-          if (similarity > bestSimilarity) {
-            bestSimilarity = similarity;
-            const dkLower = deepKeyword.toLowerCase();
-            const drLower = dirKeyword.toLowerCase();
-            const isExact = dkLower === drLower;
-            const isContained =
-              drLower.includes(dkLower) || dkLower.includes(drLower);
-            bestMatch = {
-              bookstoreKeyword: deepKeyword,
-              dirKeyword,
-              similarity,
-              isContained,
-              matchType: isExact ? "exact" : isContained ? "contains" : "ngram",
-            };
-          }
-        }
-
-        if (bestSimilarity > 0) {
-          matchDetails.push({ store, ...bestMatch });
-        }
-        storeTotal += bestSimilarity;
-      }
-      totalScore += storeTotal / storeInfo.keywords.length;
+      // 각 서점 키워드별 최선 매칭을 개별적으로 기록, 키워드 수 감점 후 합산
+      const { score, matchDetails: storeMatches } = scoreStoreKeywords(
+        storeInfo.keywords,
+        dirKeywords,
+      );
+      for (const match of storeMatches) matchDetails.push({ store, ...match });
+      totalScore += score;
     }
 
     if (totalScore > 0) {

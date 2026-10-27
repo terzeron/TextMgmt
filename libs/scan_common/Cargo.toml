@@ -1,0 +1,23 @@
+[package]
+name = "scan_common"
+description = "파일 스캐너(epubscan, pdfscan)가 함께 쓰는 공용 코드: 파일 수집, 스트리밍 실행, 워커 상한, 출력 정리"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "scan_common"
+path = "../../tests/rust/scan_common/scan_common.rs"
+
+[features]
+# Severity를 JSON으로 내보내야 하는 쪽(epubscan)만 켠다. pdfscan은 serde를 끌어오지 않는다.
+serde = ["dep:serde"]
+
+[dependencies]
+rayon = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile = "3.27.0"

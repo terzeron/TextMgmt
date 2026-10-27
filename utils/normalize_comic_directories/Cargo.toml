@@ -1,0 +1,30 @@
+[package]
+name = "normalize_comic_directories"
+description = "만화 디렉토리 이름을 파일명과 서점 결과로 정규화한다 (utils/normalize_comic_directories.py의 Rust 대응)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "bin"
+path = "../../tests/rust/normalize_comic_directories/bin.rs"
+
+[[test]]
+name = "names"
+path = "../../tests/rust/normalize_comic_directories/names.rs"
+
+[[test]]
+name = "plan"
+path = "../../tests/rust/normalize_comic_directories/plan.rs"
+
+[dependencies]
+bookstore = { path = "../../libs/bookstore" }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+fancy-regex = "0.14"
+pyfmt = { path = "../../libs/pyfmt" }
+serde_json = { workspace = true, features = ["preserve_order"] }
+unicode-normalization = "0.1.26"
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -2455,6 +2455,16 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       expect(screen.getByRole("button", { name: "이 쪽 이미지 삭제 표시" })).toBeTruthy();
     });
 
+    it("크롭 핸들을 끌면 표시 사각형을 갱신한다", async () => {
+      await openOnImagePage();
+      fireEvent.click(await screen.findByRole("button", { name: "이 쪽 이미지 크롭" }));
+      const east = screen.getByTestId("image-crop-box").querySelector('[data-handle="e"]');
+      fireEvent.pointerDown(east, { clientX: 600, clientY: 300, pointerId: 1 });
+      fireEvent.pointerMove(east, { clientX: 640, clientY: 300, pointerId: 1 });
+
+      expect(parseFloat(screen.getByTestId("image-crop-box").style.width)).toBeCloseTo(85);
+    });
+
     it("이미지가 여러 장이면 번호 배지로 대상을 고르고, 표시는 고른 이미지에만 붙는다", async () => {
       await openOnImagePage({ imageCount: 2 });
       expect(await screen.findByRole("button", { name: "이 쪽 이미지 크롭" })).toBeTruthy();

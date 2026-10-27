@@ -7,21 +7,20 @@
 
 ## Tech Stack
 
-- **Backend**: Python 3.13+ / FastAPI, uv for package management
+- **Backend**: Rust workspace (`backend` crate)
 - **Frontend**: React (npm), Vite
-- **Testing**: pytest (backend), jest (frontend)
+- **Testing**: cargo test / llvm-cov (backend and utilities), jest (frontend)
 - **Infra**: Kubernetes (`k8s/`), Docker
-- **Search**: Elasticsearch (`backend/es_manager.py`)
+- **Search**: Elasticsearch (`backend/src/es_manager.rs`)
 - **Auth**: JWT (access + refresh token), Google OAuth2
 
 ## Project Rules
 
-- Use `uv add` / `uv remove` for Python packages. Never use `pip` directly.
-- After backend changes, verify `pytest tests/` passes.
+- After backend changes, verify the affected Rust tests; run full workspace tests for broad changes.
 - After frontend changes, verify `cd frontend && npm test` passes.
-- When modifying `backend/auth.py` or `backend/refresh_token_store.py`, always run `tests/test_auth.py`.
+- When modifying Rust auth or refresh-token code, run the matching Rust test targets.
 - Validate k8s YAML changes with `kubectl apply --dry-run=client` before committing.
-- Every new FastAPI endpoint must explicitly declare `require_auth` or `require_admin` as a dependency.
+- Every new API endpoint must explicitly declare its authentication requirement.
 
 ## Commit Format
 

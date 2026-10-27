@@ -1,0 +1,56 @@
+[
+ {
+  "html": "<html><head><title>T</title><style>p{}</style></head><body><p>하나</p><p>둘 <b>굵게</b></p><script>var x=1;</script></body></html>",
+  "text": "T하나둘 굵게",
+  "body_text": "하나둘 굵게",
+  "lines": 2
+ },
+ {
+  "html": "<body>\n<p>첫 줄\n둘째 줄 같은 문단</p><br/><p></p><div>  </div><pre>a\nb\n\nc</pre></body>",
+  "text": "\n첫 줄\n둘째 줄 같은 문단 a\nb\n\nc",
+  "body_text": "\n첫 줄\n둘째 줄 같은 문단 a\nb\n\nc",
+  "lines": 4
+ },
+ {
+  "html": "<p>그냥 문단<br>줄바꿈<br>세번째</p>",
+  "text": "그냥 문단줄바꿈세번째",
+  "body_text": "그냥 문단줄바꿈세번째",
+  "lines": 3
+ },
+ {
+  "html": "plain text only",
+  "text": "plain text only",
+  "body_text": "plain text only",
+  "lines": 1
+ },
+ {
+  "html": "",
+  "text": "",
+  "body_text": "",
+  "lines": 0
+ },
+ {
+  "html": "<html><body><ul><li>a</li><li>b<ul><li>c</li></ul></li></ul><table><tr><td>x</td><td>y</td></tr></table></body></html>",
+  "text": "abcxy",
+  "body_text": "abcxy",
+  "lines": 5
+ },
+ {
+  "html": "<h1>제목</h1>텍스트<!-- 주석 --><template><p>무시</p></template><span>끝</span>",
+  "text": "제목텍스트끝",
+  "body_text": "제목텍스트끝",
+  "lines": 2
+ },
+ {
+  "html": "<?xml version='1.0'?><html xmlns='http://www.w3.org/1999/xhtml'><head/><body><p>xhtml 문단</p></body></html>",
+  "text": "xhtml 문단",
+  "body_text": "xhtml 문단",
+  "lines": 1
+ },
+ {
+  "html": "<div>a<div>b</div>c</div>",
+  "text": "abc",
+  "body_text": "abc",
+  "lines": 3
+ }
+]

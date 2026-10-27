@@ -67,9 +67,9 @@ describe("썸네일 폭 계약", () => {
     const css = readFileSync("src/CoverGrid.css", "utf-8");
     const max = Number(css.match(/--cover-card-max:\s*(\d+)px/)[1]);
     expect(COVER_THUMB_WIDTHS).toEqual([max, max * 2]);
-    const py = readFileSync("../backend/book_manager.py", "utf-8");
-    expect(py).toMatch(
-      new RegExp(`COVER_THUMBNAIL_WIDTHS = \\(${max}, ${max * 2}\\)`),
+    const rust = readFileSync("../backend/src/book_manager/cover_list.rs", "utf-8");
+    expect(rust).toMatch(
+      new RegExp(`COVER_THUMBNAIL_WIDTHS: \\[u32; 2\\] = \\[${max}, ${max * 2}\\]`),
     );
   });
 });
