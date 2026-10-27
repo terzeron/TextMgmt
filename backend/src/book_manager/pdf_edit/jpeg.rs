@@ -125,3 +125,103 @@ pub(super) fn encode_crop(original: &[u8], cropped: &DynamicImage) -> Result<Vec
         .map_err(|e| e.to_string())?;
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    fn marker(id: u8, body: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0xff, id];
+        bytes.extend_from_slice(&((body.len() + 2) as u16).to_be_bytes());
+        bytes.extend_from_slice(body);
+        bytes
+    }
+
+    fn frame(marker_id: u8, body: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(marker(marker_id, body));
+        bytes.extend(marker(0xda, &[]));
+        bytes
+    }
+
+    fn valid_frame() -> Vec<u8> {
+        let table = [std::iter::once(0).chain(std::iter::repeat_n(10, 64)).collect::<Vec<_>>()];
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(marker(0xdb, &table[0]));
+        bytes.extend(marker(0xc0, &[8, 0, 1, 0, 1, 1, 1, 0x11, 0]));
+        bytes.extend(marker(0xda, &[]));
+        bytes
+    }
+
+    #[test]
+    fn settings_reader_rejects_malformed_marker_streams() {
+        for bytes in [
+            b"not jpeg".as_slice(),
+            &[0xff, 0xd8, 0xff],
+            &[0xff, 0xd8, 0x00],
+            &[0xff, 0xd8, 0xff, 0xdb, 0x00],
+            &[0xff, 0xd8, 0xff, 0xdb, 0x00, 0x01],
+            &[0xff, 0xd8, 0xff, 0xdb, 0x00, 0x03, 0x00],
+            &[0xff, 0xd8, 0xff, 0xd9],
+            &[0xff, 0xd8, 0xff, 0xda, 0x00, 0x02],
+        ] {
+            assert!(Settings::read(bytes).is_err(), "accepted {bytes:?}");
+        }
+    }
+
+    #[test]
+    fn settings_reader_validates_quantization_tables() {
+        for table in [
+            vec![0x20],
+            vec![0x00],
+            std::iter::once(0).chain(std::iter::repeat_n(0, 64)).collect(),
+            std::iter::once(0x10).chain(std::iter::repeat_n(0, 128)).collect(),
+            std::iter::once(0x10).chain([1, 0]).chain(std::iter::repeat_n(0, 126)).collect(),
+            std::iter::once(0x04).chain(std::iter::repeat_n(10, 64)).collect(),
+        ] {
+            let bytes = frame(0xdb, &table);
+            assert!(Settings::read(&bytes).is_err(), "accepted DQT {table:?}");
+        }
+    }
+
+    #[test]
+    fn settings_reader_validates_frame_shape_and_table_presence() {
+        for bytes in [frame(0xc0, &[12, 0, 1, 0, 1, 1, 1, 0x11, 0]), frame(0xc0, &[8, 0, 1, 0, 1, 2, 1, 0x11, 0, 2, 0x11, 0]), frame(0xc0, &[8, 0, 1, 0, 1, 1, 1])] {
+            assert!(Settings::read(&bytes).is_err());
+        }
+
+        let mut duplicate_frame = valid_frame();
+        let second_sof = marker(0xc0, &[8, 0, 1, 0, 1, 1, 1, 0x11, 0]);
+        let sos = duplicate_frame.split_off(duplicate_frame.len() - 4);
+        duplicate_frame.extend(second_sof);
+        duplicate_frame.extend(sos);
+        assert!(Settings::read(&duplicate_frame).is_err());
+
+        let missing_table = frame(0xc0, &[8, 0, 1, 0, 1, 1, 1, 0x11, 2]);
+        assert!(Settings::read(&missing_table).is_ok());
+    }
+
+    #[test]
+    fn crop_encoder_rejects_missing_tables_unsupported_sampling_and_large_dimensions() {
+        let cropped = image::DynamicImage::new_luma8(1, 1);
+        let missing_table = frame(0xc0, &[8, 0, 1, 0, 1, 1, 1, 0x11, 2]);
+        assert!(super::encode_crop(&missing_table, &cropped).is_err());
+
+        let mut color = vec![0xff, 0xd8];
+        let table = std::iter::once(0).chain(std::iter::repeat_n(10, 64)).collect::<Vec<_>>();
+        color.extend(marker(0xdb, &table));
+        color.extend(marker(0xc0, &[8, 0, 1, 0, 1, 3, 1, 0x11, 0, 2, 0x22, 0, 3, 0x11, 0]));
+        color.extend(marker(0xda, &[]));
+        let color_crop = image::DynamicImage::new_rgb8(1, 1);
+        assert!(super::encode_crop(&color, &color_crop).is_err());
+
+        let invalid_sampling = frame(0xc0, &[8, 0, 1, 0, 1, 1, 1, 0x00, 0]);
+        let with_table = valid_frame();
+        let mut invalid_sampling = invalid_sampling;
+        invalid_sampling.splice(2..2, marker(0xdb, &table));
+        assert!(super::encode_crop(&invalid_sampling, &cropped).is_err());
+
+        let too_wide = image::DynamicImage::new_luma8(65_536, 1);
+        assert!(super::encode_crop(&with_table, &too_wide).is_err());
+    }
+}

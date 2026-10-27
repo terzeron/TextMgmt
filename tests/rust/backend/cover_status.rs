@@ -148,6 +148,27 @@ fn pdf_cover_status_skips_non_images_and_rejects_zero_sized_inline_images() {
 }
 
 #[test]
+fn pdf_first_image_size_rejects_invalid_documents_and_page_content() {
+    use lopdf::Document;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let invalid = tmp.path().join("invalid.pdf");
+    std::fs::write(&invalid, b"not a PDF").unwrap();
+    assert!(pdf_first_image_size(&invalid, &LOCK).is_err());
+
+    let empty = tmp.path().join("empty.pdf");
+    Document::with_version("1.5").save(&empty).unwrap();
+    assert_eq!(pdf_first_image_size(&empty, &LOCK).unwrap(), None);
+
+    let invalid_resources = make_pdf(&tmp.path().join("invalid-resources.pdf"), None);
+    common::pdf::edit_pdf(&invalid_resources, |doc| {
+        let page_id = doc.get_pages()[&1];
+        doc.get_object_mut(page_id).unwrap().as_dict_mut().unwrap().set("Resources", 42);
+    });
+    assert!(pdf_first_image_size(&invalid_resources, &LOCK).is_err());
+}
+
+#[test]
 fn default_cover_cache_can_be_constructed_without_connecting() {
     let _cache = CoverStatusCache::default();
 }
