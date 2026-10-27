@@ -343,7 +343,11 @@ fn walk_lines(node: NodeRef<Node>, in_pre: bool, parts: &mut Vec<String>) {
 
 /// 문단과 명시적 줄바꿈으로 행을 센다. 소스 포맷상의 줄바꿈과 빈 행은 세지 않는다. `pre` 안 줄바꿈은 본문이다.
 pub fn count_lines(markup: &str) -> usize {
-    let doc = parse(markup);
+    count_lines_in(&parse(markup))
+}
+
+/// 이미 파싱한 문서의 줄 수. 같은 문서를 여러 번 파싱하지 않으려고 나눴다.
+pub(crate) fn count_lines_in(doc: &Html) -> usize {
     let body = doc.tree.root().descendants().find(|n| element_name(n) == Some("body")).unwrap_or_else(|| doc.tree.root());
     let mut parts = Vec::new();
     walk_lines(body, false, &mut parts);

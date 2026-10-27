@@ -15,7 +15,7 @@ use corpus_common::reader::{Zip, open_zip};
 use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
 use ego_tree::NodeRef;
 use regex::Regex;
-use scraper::Node;
+use scraper::{Html, Node};
 
 use crate::TEXT_SIZE;
 use crate::markup::{count_lines, get_body_text, is_blank_char_text};
@@ -338,7 +338,11 @@ fn emit_pretty(node: NodeRef<Node>, format: bool, skip_leading: bool, tail: &str
 
 /// ebooklib `get_body_content`를 거친 뒤 `(soup.body or soup).get_text()`와 같은 글.
 pub fn pretty_text(markup: &str) -> Option<String> {
-    let doc = crate::markup::parse(markup);
+    pretty_text_in(&crate::markup::parse(markup), markup)
+}
+
+/// 이미 파싱한 문서로 `pretty_text`를 만든다. `markup`은 원문 꼬리를 옮길 때 쓴다.
+fn pretty_text_in(doc: &Html, markup: &str) -> Option<String> {
     let body = doc.tree.root().descendants().find(|n| matches!(n.value(), Node::Element(e) if e.name() == "body"))?;
     if child_count(body) == 0 {
         return None;
@@ -364,8 +368,8 @@ pub fn document_text_and_lines(content: &[u8]) -> Result<(String, usize), String
     if body_children == 0 && !has_body_text && !markup.to_ascii_lowercase().contains("<body") {
         return Err("TypeError: object of type 'NoneType' has no len()".into());
     }
-    let lines = count_lines(&markup);
-    let text = pretty_text(&markup).unwrap_or_else(|| get_body_text(&markup));
+    let lines = crate::markup::count_lines_in(&doc);
+    let text = pretty_text_in(&doc, &markup).unwrap_or_else(|| get_body_text(&markup));
     Ok((text, lines))
 }
 

@@ -337,9 +337,74 @@ const CHARSETS: [(i64, &str); 31] = [
     (255, "cp850"),
 ];
 
-static PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\\([a-z]{1,32})(-?\d{1,10})?[ ]?|\\'([0-9a-f]{2})|\\([^a-z])|([{}])|[\r\n]+|(.)").unwrap());
+/// 제어어마다 찾는다. 배열을 앞에서부터 비교하면 변환 시간의 18%가 여기에 든다.
+static DESTINATION_SET: LazyLock<std::collections::HashSet<&str>> = LazyLock::new(|| DESTINATIONS.into_iter().collect());
+static UNICODE_DIGIT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d$").unwrap());
 static HYPERLINKS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)(\{\\field\{\s*\\\*\\fldinst\{.*HYPERLINK\s(".*")\}{2}\s*\{.*?\s+(.*?)\}{2,3})"#).unwrap());
 static FONTTABLE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\f(\d+).*?\\fcharset(\d+).*?([^;]+);").unwrap());
+
+/// RTF 토큰 하나. 아래 정규식의 캡처 그룹 하나에 대응한다.
+#[derive(Debug, PartialEq)]
+enum Token<'a> {
+    Word(&'a str, Option<&'a str>),
+    Hex(&'a str),
+    Ch(&'a str),
+    Brace(&'a str),
+    Newlines,
+    Char(&'a str),
+}
+
+/// `(?i)\\([a-z]{1,32})(-?\d{1,10})?[ ]?|\\'([0-9a-f]{2})|\\([^a-z])|([{}])|[\r\n]+|(.)`를 손으로 푼 토큰열.
+/// 정규식으로 캡처하면 글자마다 역방향 탐색과 backtracking을 다시 해서 변환 시간의 80%가 여기에 든다.
+struct Tokens<'a> {
+    text: &'a str,
+    pos: usize,
+}
+
+/// `(?i)[a-z]`: 유니코드 대소문자 접기로 `ſ`(U+017F)와 켈빈 기호(U+212A)도 들어간다.
+fn is_letter(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '\u{17f}' || c == '\u{212a}'
+}
+
+/// 유니코드 `\d`. ASCII가 아닌 숫자는 드물어서 정규식으로 확인한다.
+fn is_digit(c: char) -> bool {
+    c.is_ascii_digit() || (!c.is_ascii() && UNICODE_DIGIT.is_match(c.encode_utf8(&mut [0; 4])))
+}
+
+/// `\`로 시작하는 토큰과 그 바이트 길이.
+fn escape(rest: &str) -> (Token<'_>, usize) {
+    let after = &rest[1..];
+    match after.chars().next() {
+        None => (Token::Char(&rest[..1]), 1),
+        Some(c) if is_letter(c) => {
+            let word_end = after.char_indices().take(32).take_while(|&(_, ch)| is_letter(ch)).last().map_or(0, |(i, ch)| i + ch.len_utf8());
+            let digits_start = word_end + usize::from(after[word_end..].starts_with('-'));
+            let digits_end = after[digits_start..].char_indices().take(10).take_while(|&(_, ch)| is_digit(ch)).last().map(|(i, ch)| digits_start + i + ch.len_utf8());
+            let end = digits_end.unwrap_or(word_end);
+            let end = end + usize::from(after[end..].starts_with(' '));
+            (Token::Word(&after[..word_end], digits_end.map(|d| &after[word_end..d])), 1 + end)
+        }
+        Some('\'') if after.len() >= 3 && after.as_bytes()[1].is_ascii_hexdigit() && after.as_bytes()[2].is_ascii_hexdigit() => (Token::Hex(&after[1..3]), 4),
+        Some(c) => (Token::Ch(&after[..c.len_utf8()]), 1 + c.len_utf8()),
+    }
+}
+
+impl<'a> Iterator for Tokens<'a> {
+    type Item = Token<'a>;
+
+    fn next(&mut self) -> Option<Token<'a>> {
+        let rest = &self.text[self.pos..];
+        let c = rest.chars().next()?;
+        let (token, len) = match c {
+            '\\' => escape(rest),
+            '{' | '}' => (Token::Brace(&rest[..1]), 1),
+            '\r' | '\n' => (Token::Newlines, rest.bytes().take_while(|b| matches!(b, b'\r' | b'\n')).count()),
+            _ => (Token::Char(&rest[..c.len_utf8()]), c.len_utf8()),
+        };
+        self.pos += len;
+        Some(token)
+    }
+}
 
 /// `\char` 뒤에 오는 글자와 그것이 내는 글자.
 fn special(name: &str) -> Option<&'static str> {
@@ -453,87 +518,90 @@ pub fn rtf_to_text(text: &str) -> Result<String, String> {
     let mut hexes: Option<Vec<u8>> = None;
     let mut out = String::new();
 
-    for caps in PATTERN.captures_iter(&text) {
-        let (word, arg, hex, ch, brace, tchar) = (caps.get(1), caps.get(2), caps.get(3), caps.get(4), caps.get(5), caps.get(6));
-        if hex.is_none()
+    for token in (Tokens { text: &text, pos: 0 }) {
+        if !matches!(token, Token::Hex(_))
             && let Some(pending) = hexes.take()
         {
-            let enc = current_font.as_ref().and_then(|f| fonttbl.get(f)).cloned().unwrap_or_else(|| encoding.clone());
-            out.push_str(&decode_hex_bytes(&pending, &enc));
+            let enc = current_font.as_ref().and_then(|f| fonttbl.get(f)).unwrap_or(&encoding);
+            out.push_str(&decode_hex_bytes(&pending, enc));
         }
-        if let Some(brace) = brace {
-            curskip = 0;
-            if brace.as_str() == "{" {
-                stack.push((ucskip, ignorable, suppress_output));
-            } else if let Some(top) = stack.pop() {
-                (ucskip, ignorable, suppress_output) = top;
-            } else {
-                ucskip = 0;
-                ignorable = true;
-            }
-        } else if let Some(c) = ch {
-            curskip = 0;
-            let c = c.as_str();
-            if let Some(s) = special(c) {
-                if is_section(c) {
-                    current_font = default_font.clone();
-                }
-                if !ignorable {
-                    out.push_str(s);
-                }
-            } else if c == "*" {
-                ignorable = true;
-            }
-        } else if let Some(word) = word {
-            curskip = 0;
-            let word = word.as_str();
-            let arg = arg.map(|a| a.as_str());
-            if DESTINATIONS.contains(&word) {
-                ignorable = true;
-            } else if word == "ansicpg" {
-                encoding = format!("cp{}", arg.unwrap_or(""));
-                if !matches!(arg.and_then(|a| a.parse::<u32>().ok()), Some(437 | 850 | 874 | 932 | 936 | 949 | 950 | 1250..=1258)) {
-                    encoding = "utf8".into();
+        match token {
+            Token::Brace(brace) => {
+                curskip = 0;
+                if brace == "{" {
+                    stack.push((ucskip, ignorable, suppress_output));
+                } else if let Some(top) = stack.pop() {
+                    (ucskip, ignorable, suppress_output) = top;
+                } else {
+                    ucskip = 0;
+                    ignorable = true;
                 }
             }
-            if ignorable || suppress_output {
-                // 건너뛴다
-            } else if let Some(s) = special(word) {
-                out.push_str(s);
-            } else if word == "uc" {
-                ucskip = arg.ok_or("TypeError: \\uc에 인수가 없다")?.parse().map_err(|_| "ValueError: \\uc 인수".to_owned())?;
-            } else if word == "u" {
-                match arg {
-                    None => curskip = ucskip,
-                    Some(a) => {
-                        let mut c: i64 = a.parse().map_err(|_| "ValueError: \\u 인수".to_owned())?;
-                        if c < 0 {
-                            c += 0x10000;
-                        }
-                        out.push(u32::try_from(c).ok().and_then(char::from_u32).unwrap_or('\u{fffd}'));
-                        curskip = ucskip;
+            Token::Ch(c) => {
+                curskip = 0;
+                if let Some(s) = special(c) {
+                    if is_section(c) {
+                        current_font = default_font.clone();
+                    }
+                    if !ignorable {
+                        out.push_str(s);
+                    }
+                } else if c == "*" {
+                    ignorable = true;
+                }
+            }
+            Token::Word(word, arg) => {
+                curskip = 0;
+                if DESTINATION_SET.contains(word) {
+                    ignorable = true;
+                } else if word == "ansicpg" {
+                    encoding = format!("cp{}", arg.unwrap_or(""));
+                    if !matches!(arg.and_then(|a| a.parse::<u32>().ok()), Some(437 | 850 | 874 | 932 | 936 | 949 | 950 | 1250..=1258)) {
+                        encoding = "utf8".into();
                     }
                 }
-            } else if word == "f" {
-                current_font = arg.map(str::to_owned);
-            } else if word == "deff" {
-                default_font = arg.map(str::to_owned);
-            } else if word == "fonttbl" || word == "colortbl" {
-                suppress_output = true;
+                if ignorable || suppress_output {
+                    // 건너뛴다
+                } else if let Some(s) = special(word) {
+                    out.push_str(s);
+                } else if word == "uc" {
+                    ucskip = arg.ok_or("TypeError: \\uc에 인수가 없다")?.parse().map_err(|_| "ValueError: \\uc 인수".to_owned())?;
+                } else if word == "u" {
+                    match arg {
+                        None => curskip = ucskip,
+                        Some(a) => {
+                            let mut c: i64 = a.parse().map_err(|_| "ValueError: \\u 인수".to_owned())?;
+                            if c < 0 {
+                                c += 0x10000;
+                            }
+                            out.push(u32::try_from(c).ok().and_then(char::from_u32).unwrap_or('\u{fffd}'));
+                            curskip = ucskip;
+                        }
+                    }
+                } else if word == "f" {
+                    current_font = arg.map(str::to_owned);
+                } else if word == "deff" {
+                    default_font = arg.map(str::to_owned);
+                } else if word == "fonttbl" || word == "colortbl" {
+                    suppress_output = true;
+                }
             }
-        } else if let Some(h) = hex {
-            if curskip > 0 {
-                curskip -= 1;
-            } else if !ignorable {
-                let byte = u8::from_str_radix(h.as_str(), 16).map_err(|e| e.to_string())?;
-                hexes.get_or_insert_with(Vec::new).push(byte);
+            Token::Hex(h) => {
+                if curskip > 0 {
+                    curskip -= 1;
+                } else if !ignorable {
+                    let byte = u8::from_str_radix(h, 16).map_err(|e| e.to_string())?;
+                    hexes.get_or_insert_with(Vec::new).push(byte);
+                }
             }
-        } else if let Some(t) = tchar {
-            if curskip > 0 {
-                curskip -= 1;
-            } else if !ignorable && !suppress_output {
-                out.push_str(t.as_str());
+            Token::Char(t) => {
+                if curskip > 0 {
+                    curskip -= 1;
+                } else if !ignorable && !suppress_output {
+                    out.push_str(t);
+                }
             }
+            Token::Newlines => {}
         }
     }
     Ok(out)
@@ -545,4 +613,77 @@ pub fn read_from_rtf_text(content: &str) -> Result<(String, usize), String> {
     let line_count = if result.is_empty() { 0 } else { result.matches('\n').count() + 1 };
     let cleaned = keep_word_chars(&result);
     Ok((head_chars(&cleaned, TEXT_SIZE).to_owned(), line_count))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Token, Tokens};
+    use regex::Regex;
+    use std::sync::LazyLock;
+
+    /// 토크나이저가 대신하는 원래 정규식. 같은 입력에서 같은 토큰열을 내야 한다.
+    static PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\\([a-z]{1,32})(-?\d{1,10})?[ ]?|\\'([0-9a-f]{2})|\\([^a-z])|([{}])|[\r\n]+|(.)").unwrap());
+
+    fn reference(text: &str) -> Vec<Token<'_>> {
+        PATTERN
+            .captures_iter(text)
+            .map(|caps| {
+                let s = |i: usize| caps.get(i).map(|m| m.as_str());
+                if let Some(word) = s(1) {
+                    Token::Word(word, s(2))
+                } else if let Some(h) = s(3) {
+                    Token::Hex(h)
+                } else if let Some(c) = s(4) {
+                    Token::Ch(c)
+                } else if let Some(b) = s(5) {
+                    Token::Brace(b)
+                } else if let Some(t) = s(6) {
+                    Token::Char(t)
+                } else {
+                    Token::Newlines
+                }
+            })
+            .collect()
+    }
+
+    fn tokens(text: &str) -> Vec<Token<'_>> {
+        Tokens { text, pos: 0 }.collect()
+    }
+
+    #[test]
+    fn tokenizer_matches_the_regex_on_edge_cases() {
+        let long = format!("\\{}12 x", "a".repeat(40));
+        let cases = [
+            r"{\rtf1\ansi\ansicpg949 Hello\par}",
+            r"\'b0\'A1\'g0\'b\'",
+            r"\u-1234? \u65535 \uc1 \u12345678901",
+            "\\\r\n\\\n\\{\\}\\\\\\-\\_\\~\\*",
+            "\\\u{17f}ect \\\u{212a}elvin \\\u{130}x \\\u{131}x",
+            "\\par\u{661}\u{662} \\f-\u{663} \\b- \\i-x \\tab  x",
+            "\r\n\r\r\n텍스트é\\",
+            long.as_str(),
+            "",
+        ];
+        for case in cases {
+            assert_eq!(tokens(case), reference(case), "{case:?}");
+        }
+    }
+
+    #[test]
+    fn tokenizer_matches_the_regex_on_generated_inputs() {
+        let alphabet: Vec<char> = "\\\\\\\\''abfgkszAFKSZ\u{17f}\u{212a}\u{130}\u{131}0129\u{661}- {}\r\n한é".chars().collect();
+        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+        for _ in 0..3000 {
+            let len = (seed % 24) as usize;
+            let text: String = (0..len)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    alphabet[(seed % alphabet.len() as u64) as usize]
+                })
+                .collect();
+            assert_eq!(tokens(&text), reference(&text), "{text:?}");
+        }
+    }
 }
