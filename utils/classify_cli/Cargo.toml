@@ -1,6 +1,6 @@
 [package]
 name = "classify_cli"
-description = "도서 분류 모델 관리: Rust 학습·추론과 joblib 변환"
+description = "도서 분류 모델 관리: Rust 학습·추론"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

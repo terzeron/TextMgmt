@@ -1582,7 +1582,9 @@ fn test_guide_missing_cover_page_is_ignored() {
 
 #[test]
 fn test_saved_cover_is_at_most_600_pixels_wide_and_keeps_aspect_ratio() {
-    for (width, height, format) in [(1800, 2700, ImageFormat::Jpeg), (1200, 600, ImageFormat::Png), (300, 450, ImageFormat::Png), (6000, 8000, ImageFormat::Jpeg)] {
+    // 마지막 항목은 가로 2000 제한을 넘는 큰 이미지다. 6000x8000(48MP)은 디버그 빌드에서 축소만 20초가 넘게 걸려
+    // 같은 비율(3:4)로 가로 2000을 넘는 2400x3200 으로 줄였다. 2000 제한과 600px 저장 경로를 모두 지난다.
+    for (width, height, format) in [(1800, 2700, ImageFormat::Jpeg), (1200, 600, ImageFormat::Png), (300, 450, ImageFormat::Png), (2400, 3200, ImageFormat::Jpeg)] {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let raw = encode_image(width, height, RED, format);

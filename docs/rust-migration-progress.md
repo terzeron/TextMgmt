@@ -163,10 +163,10 @@
   `book_manager_classifier` 6개 통과(각 묶음의 무시 테스트 제외), Backend Clippy 통과.
 - `main.rs` API 테스트 초안을 현재 facade로 정렬해 등록했다. 48개가 통과하고 37개는 ES/MySQL 또는
   아직 연결되지 않은 테스트 seam 때문에 무시 상태다. `main_mock.rs`는 별도 HTTP mock target으로 등록돼 있다.
-- PDF 표지 썸네일을 PDFium 렌더링으로 바꿔 텍스트·벡터·이미지 페이지를 처리한다.
+- PDF 표지 썸네일을 Poppler 렌더링으로 바꿔 텍스트·벡터·이미지 페이지를 처리한다.
   Python 규칙대로 tall page 상단과 펼침면 왼쪽을 자르고, 빈 첫 쪽이면 다음 쪽을 사용한다.
   `book_manager_gaps` PDF 벡터 테스트와 `cover` 23개가 통과했다.
-  GitHub backend CI도 저장소가 고정한 `pypdfium2==5.12.1` runtime을 설치한다.
+  Poppler 실행 파일은 `poppler-utils` 패키지로 제공한다.
 - 다운로드 응답을 Python Starlette `FileResponse`와 대조해 파일 검증 헤더와 byte range를 연결했다.
   single/suffix/multiple range, malformed·unsatisfiable range, `If-Range` 동작을 검증했다.
   일반·single range와 multipart range body를 64 KiB chunk로 스트리밍한다.
@@ -187,7 +187,7 @@
 - 기존 `doc_reader`·`loader` path dependency: 실제 파일 읽기, 재색인, EPUB 행수 및 PDF 편집 초안 테스트 등록.
 - `stat` path dependency: loader 기록 API에서 통계 누적 타입을 직접 사용한다.
 - `fancy-regex 0.14.0`: Python의 lookaround/backreference를 포함하는 파일명 정규식 치환.
-- `pdfium-render 0.9.4` (`pdfium_latest`, `thread_safe`, default-features=false): 텍스트·벡터·CMYK를 포함하는 PDF 렌더링.
+- `sysdeps` Poppler adapter: `pdftotext`, `pdfinfo`, `pdftoppm`을 PATH에서 찾아 실행한다.
 
 미등록 Backend 테스트 초안은 `classify_cli`, `classify_cli_gaps` 두 파일이다. `api_exploration`과 `main_mock`은
 `backend/Cargo.toml`에 등록되어 있다. 두 초안은 과거 API 가정이 현재 Rust 계약과 맞지 않아 그대로 등록하지 않았다.

@@ -63,9 +63,7 @@ pub fn setup_env() {
             if std::env::var_os("TM_ES_COMICS_INDEX").is_none() {
                 std::env::set_var("TM_ES_COMICS_INDEX", "test_comics_index");
             }
-            // 운영 모델 파일(165MB)을 읽지 않도록 없는 경로를 가리킨다. Python 은 TM_CLASSIFIER_MODEL(joblib),
-            // Rust 는 TM_CLASSIFIER_MODEL_DIR(내보내기 디렉토리)을 읽는다.
-            std::env::set_var("TM_CLASSIFIER_MODEL", root.join("tests/model-that-does-not-exist.joblib"));
+            // 운영 모델 파일(165MB)을 읽지 않도록 없는 export 경로를 지정한다.
             std::env::set_var("TM_CLASSIFIER_MODEL_DIR", root.join("tests/model-dir-that-does-not-exist"));
             // 개발 셸(direnv 의 `.env`)에 든 실서비스 접속 정보가 테스트에 새지 않게 지운다. 그대로 두면 테스트가
             // 운영 MySQL·Elasticsearch 에 붙어 데이터를 바꾼다. 컨테이너 fixture 가 먼저 설정한 값(표식이 있음)은 둔다.

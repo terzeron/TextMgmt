@@ -1,61 +1,80 @@
 //! PDF 표지 렌더링. Python `_extract_cover_thumbnail`의 PDF 갈래와 `_is_mostly_blank_cover`에 대응한다.
 //!
-//! PDFium으로 텍스트·벡터·이미지 페이지를 렌더링한다. 썸네일 최대 크기만 메모리에 만든다.
-
-use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+//! Poppler로 텍스트·벡터·이미지 페이지를 렌더링한다. 출력은 제한된 크기의 PPM으로 받는다.
 
 use image::imageops::FilterType;
-use image::{DynamicImage, ImageBuffer, Rgb, RgbImage, Rgba};
-use isbn::pdfium_render::prelude::{PdfPage, PdfRenderConfig};
+use image::{DynamicImage, Rgb, RgbImage};
+use std::path::Path;
+use sysdeps::{SystemRunner, poppler};
 
 use super::BookManager;
 
 /// 이 크기를 넘는 PDF는 렌더링하지 않는다.
 pub const MAX_PDF_COVER_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
-/// PDFium은 프로세스 안에서 한 번에 한 작업만 수행한다.
-static PDF_COVER_RENDER_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+const MAX_RENDER_DIMENSION: u32 = 1200;
 
-/// 표지 규칙에 맞춰 PDFium 페이지를 최대 300×450 픽셀로 렌더링한다.
-fn render_pdf_cover_page(page: &PdfPage<'_>, width: u32) -> Option<RgbImage> {
-    let (pw, ph) = (f64::from(page.width().value), f64::from(page.height().value));
-    if !pw.is_finite() || !ph.is_finite() || pw <= 0.0 || ph <= 0.0 {
+fn ppm_to_rgb(bytes: &[u8]) -> Option<RgbImage> {
+    fn token<'a>(bytes: &'a [u8], offset: &mut usize) -> Option<&'a [u8]> {
+        loop {
+            while bytes.get(*offset).is_some_and(u8::is_ascii_whitespace) {
+                *offset += 1;
+            }
+            if bytes.get(*offset) != Some(&b'#') {
+                break;
+            }
+            while bytes.get(*offset).is_some_and(|byte| *byte != b'\n') {
+                *offset += 1;
+            }
+        }
+        let start = *offset;
+        while bytes.get(*offset).is_some_and(|byte| !byte.is_ascii_whitespace() && *byte != b'#') {
+            *offset += 1;
+        }
+        (start < *offset).then_some(&bytes[start..*offset])
+    }
+
+    let mut offset = 0;
+    if token(bytes, &mut offset)? != b"P6" {
         return None;
     }
-    let height = (f64::from(width) / BookManager::COVER_ASPECT_RATIO).round() as u32;
-    let (scale, crop) = if ph >= pw * BookManager::COVER_TALL_RATIO {
-        // Python은 페이지 너비에 맞춘 뒤 위쪽 표지 영역만 남긴다.
-        (f64::from(width) / pw, (0, 0, width, height))
-    } else if pw > ph {
-        // Python은 펼침면을 페이지 절반 너비로 scale한 뒤 왼쪽만 남긴다.
-        let half = pw / 2.0;
-        let scale = (f64::from(width) / half).min(f64::from(height) / ph);
-        let full_width = (pw * scale).round() as u32;
-        let full_height = (ph * scale).round() as u32;
-        (scale, (0, 0, (full_width / 2).max(1), full_height.max(1)))
+    let width = std::str::from_utf8(token(bytes, &mut offset)?).ok()?.parse::<u32>().ok()?;
+    let height = std::str::from_utf8(token(bytes, &mut offset)?).ok()?.parse::<u32>().ok()?;
+    if token(bytes, &mut offset)? != b"255" || width == 0 || height == 0 || width > MAX_RENDER_DIMENSION || height > MAX_RENDER_DIMENSION {
+        return None;
+    }
+    if bytes.get(offset).is_some_and(u8::is_ascii_whitespace) {
+        let first = bytes[offset];
+        offset += 1;
+        if first == b'\r' && bytes.get(offset) == Some(&b'\n') {
+            offset += 1;
+        }
     } else {
-        let scale = (f64::from(width) / pw).min(f64::from(height) / ph);
-        let full_width = (pw * scale).round() as u32;
-        let full_height = (ph * scale).round() as u32;
-        (scale, (0, 0, full_width.max(1), full_height.max(1)))
+        return None;
+    }
+    let expected = (width as usize).checked_mul(height as usize)?.checked_mul(3)?;
+    if bytes.len().checked_sub(offset)? != expected {
+        return None;
+    }
+    RgbImage::from_raw(width, height, bytes[offset..].to_vec())
+}
+
+/// Render and crop one page with Poppler while bounding its raster dimensions.
+fn render_pdf_cover_page(path: &Path, page: usize, width: u32) -> Option<RgbImage> {
+    let ppm = poppler::render_page(&SystemRunner, path, page, MAX_RENDER_DIMENSION).map_err(|error| log::warn!("PDF cover render failed: {error}")).ok()?;
+    let rendered = ppm_to_rgb(&ppm)?;
+    let (render_width, render_height) = rendered.dimensions();
+    let (crop_width, crop_height) = if f64::from(render_height) >= f64::from(render_width) * BookManager::COVER_TALL_RATIO {
+        (render_width.min(width), ((f64::from(width) / BookManager::COVER_ASPECT_RATIO).round() as u32).min(render_height))
+    } else if render_width > render_height {
+        (render_width / 2, render_height)
+    } else {
+        (render_width, render_height)
     };
-    let (crop_x, crop_y, output_width, output_height) = crop;
-    let rendered_width = if pw > ph { output_width.saturating_mul(2) } else { output_width };
-    let rendered_height = if ph >= pw * BookManager::COVER_TALL_RATIO { ((ph * scale).round() as u32).max(output_height) } else { output_height };
-    if u64::from(rendered_width) * u64::from(rendered_height) > 1_000_000 {
+    if crop_width == 0 || crop_height == 0 {
         return None;
     }
-    // set_fixed_size는 페이지 전체를 지정한 상자에 맞춰 왜곡하므로 scale만 지정한다.
-    let config = PdfRenderConfig::new().scale_page_by_factor(scale as f32);
-    let bitmap = page.render_with_config(&config).ok()?;
-    let (bitmap_width, bitmap_height) = (bitmap.width() as u32, bitmap.height() as u32);
-    let rgba = ImageBuffer::<Rgba<u8>, _>::from_raw(bitmap_width, bitmap_height, bitmap.as_rgba_bytes())?;
-    let rgb = DynamicImage::ImageRgba8(rgba).to_rgb8();
-    if crop_x + output_width > bitmap_width || crop_y + output_height > bitmap_height {
-        return None;
-    }
-    Some(image::imageops::crop_imm(&rgb, crop_x, crop_y, output_width, output_height).to_image())
+    Some(image::imageops::crop_imm(&rendered, 0, 0, crop_width, crop_height).to_image())
 }
 
 fn median_cut_palette(mut colors: Vec<([u8; 3], u32)>) -> Vec<[u8; 3]> {
@@ -114,21 +133,9 @@ impl BookManager {
         if std::fs::metadata(path).ok()?.len() > MAX_PDF_COVER_FILE_BYTES {
             return None;
         }
-        let _guard = PDF_COVER_RENDER_LOCK.get_or_init(|| Mutex::new(())).lock().ok()?;
-        let pdfium = isbn::pdfium().or_else(|| {
-            log::warn!("PDF cover render unavailable: libpdfium could not be loaded");
-            None
-        })?;
-        let document = pdfium.load_pdf_from_file(path, None).ok()?;
-        let pages = document.pages();
-        let first = {
-            let page = pages.get(0).ok()?;
-            render_pdf_cover_page(&page, width)?
-        };
-        if pages.len() > 1
-            && Self::_is_mostly_blank_cover(&DynamicImage::ImageRgb8(first.clone()))
-            && let Ok(page) = pages.get(1)
-            && let Some(second) = render_pdf_cover_page(&page, width)
+        let first = render_pdf_cover_page(path, 1, width)?;
+        if Self::_is_mostly_blank_cover(&DynamicImage::ImageRgb8(first.clone()))
+            && let Some(second) = render_pdf_cover_page(path, 2, width)
         {
             return Some(second);
         }
@@ -197,7 +204,14 @@ impl BookManager {
 
 #[cfg(test)]
 mod tests {
-    use super::median_cut_palette;
+    use super::{median_cut_palette, ppm_to_rgb};
+
+    #[test]
+    fn ppm_decoder_reads_poppler_pixels_and_rejects_truncated_or_oversized_output() {
+        assert_eq!(ppm_to_rgb(b"P6\n1 1\n255\n\x10\x20\x30").unwrap().get_pixel(0, 0).0, [16, 32, 48]);
+        assert!(ppm_to_rgb(b"P6\n2 1\n255\n\x00\x00\x00").is_none());
+        assert!(ppm_to_rgb(b"P6\n1300 1300\n255\n").is_none());
+    }
 
     #[test]
     fn median_cut_palette_is_independent_of_histogram_iteration_order() {

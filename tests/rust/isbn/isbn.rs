@@ -336,15 +336,15 @@ fn pdf_uses_the_primary_extractor_before_the_fallback() {
     let stat = Arc::new(Stat::new());
     let b = backends(&stat, Arc::new(|_| Ok(("ISBN 9788994492032".into(), 6))), never_fallback());
     assert_eq!(extract(Path::new("book.pdf"), None, &b), ["9788994492032"]);
-    assert!(stage_line(&stat, "isbn_pdfium").contains("ok=1"), "{}", stage_line(&stat, "isbn_pdfium"));
+    assert!(stage_line(&stat, "isbn_poppler").contains("ok=1"), "{}", stage_line(&stat, "isbn_poppler"));
 }
 
 #[test]
 fn pdf_falls_back_when_the_primary_extractor_cannot_open_the_document() {
     let stat = Arc::new(Stat::new());
-    let b = backends(&stat, Arc::new(|_| Err("pdfium fail".into())), Arc::new(|_| Ok("ISBN 9788994492032".into())));
+    let b = backends(&stat, Arc::new(|_| Err("Poppler fail".into())), Arc::new(|_| Ok("ISBN 9788994492032".into())));
     assert_eq!(extract(Path::new("book.pdf"), None, &b), ["9788994492032"]);
-    assert!(stage_line(&stat, "isbn_pdfium").contains("error=1"));
+    assert!(stage_line(&stat, "isbn_poppler").contains("error=1"));
     assert!(stage_line(&stat, "isbn_pypdf").contains("ok=1"));
 }
 
@@ -371,7 +371,7 @@ fn pdf_primary_timeout_gives_up_without_the_fallback() {
     );
     b.pdf_timeout = 0.05;
     assert!(extract(Path::new("hang.pdf"), None, &b).is_empty());
-    assert!(stage_line(&stat, "isbn_pdfium").contains("timeout=1"));
+    assert!(stage_line(&stat, "isbn_poppler").contains("timeout=1"));
 }
 
 #[cfg(unix)]
@@ -401,7 +401,7 @@ fn production_pdf_worker_is_killed_after_the_isbn_timeout() {
     assert!(start.elapsed() < Duration::from_secs(2));
     std::thread::sleep(Duration::from_millis(350));
     assert!(!completed.load(Ordering::SeqCst), "timed-out PDF work must not continue in a background thread");
-    assert!(stage_line(&stat, "isbn_pdfium").contains("timeout=1"));
+    assert!(stage_line(&stat, "isbn_poppler").contains("timeout=1"));
 }
 
 #[cfg(unix)]
@@ -419,7 +419,7 @@ fn production_pdf_worker_returns_text_and_page_count() {
     b.pdf_worker_executable = Some(worker);
 
     assert_eq!(extract(Path::new("book.pdf"), None, &b), ["9788994492032"]);
-    assert!(stage_line(&stat, "isbn_pdfium").contains("ok=1"));
+    assert!(stage_line(&stat, "isbn_poppler").contains("ok=1"));
 }
 
 #[test]
@@ -434,7 +434,7 @@ fn pdf_that_opened_but_has_no_text_does_not_use_the_fallback() {
     let stat = Arc::new(Stat::new());
     let b = backends(&stat, Arc::new(|_| Ok((String::new(), 3))), never_fallback());
     assert!(extract(Path::new("scan.pdf"), None, &b).is_empty());
-    assert!(stage_line(&stat, "isbn_pdfium").contains("ok=0 empty=1"));
+    assert!(stage_line(&stat, "isbn_poppler").contains("ok=0 empty=1"));
 }
 
 #[test]
@@ -463,7 +463,7 @@ fn a_panicking_extractor_counts_as_an_error_and_never_escapes() {
     let stat = Arc::new(Stat::new());
     let b = backends(&stat, Arc::new(|_| panic!("unexpected")), Arc::new(|_| Ok("ISBN 9788994492032".into())));
     assert_eq!(extract(Path::new("a.pdf"), None, &b), ["9788994492032"]);
-    assert!(stage_line(&stat, "isbn_pdfium").contains("error=1"));
+    assert!(stage_line(&stat, "isbn_poppler").contains("error=1"));
 }
 
 #[test]
@@ -553,36 +553,27 @@ fn the_fallback_scanner_inflates_streams_and_reads_text_arrays_and_hex_strings()
     assert!(pdf_text_fallback(&d.path().join("none.pdf")).is_err());
 }
 
-// ---- pdfium ----
+// ---- Poppler ----
 
 #[test]
-fn the_pdfium_backend_reads_head_and_tail_pages_when_the_library_is_available() {
+fn the_poppler_backend_reads_text_and_reports_page_count() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("book.pdf");
     fs::write(&f, text_pdf("ISBN 9788994492032")).unwrap();
-    match pdf_text_pdfium(&f) {
-        Ok((text, pages)) => {
-            assert_eq!(pages, 1);
-            assert!(text.contains("9788994492032"), "{text:?}");
-            assert!(pdf_text_auto(&f).unwrap().0.contains("9788994492032"));
-            // 열 수 없는 문서는 오류다. 파일이 없거나 PDF가 아닌 경우.
-            assert!(pdf_text_pdfium(&d.path().join("none.pdf")).is_err());
-            let junk = d.path().join("junk.pdf");
-            write(&junk, "not a pdf");
-            assert!(pdf_text_pdfium(&junk).is_err());
-        }
-        // 라이브러리가 없는 환경에서는 순수 Rust 추출기로 내려간다.
-        Err(e) => {
-            assert!(e.contains("libpdfium"), "{e}");
-            assert!(pdf_text_auto(&f).unwrap().0.contains("9788994492032"));
-        }
-    }
+    let (text, pages) = pdf_text_poppler(&f).unwrap();
+    assert_eq!(pages, 1);
+    assert!(text.contains("9788994492032"), "{text:?}");
+    assert!(pdf_text_auto(&f).unwrap().0.contains("9788994492032"));
+    assert!(pdf_text_poppler(&d.path().join("none.pdf")).is_err());
+    let junk = d.path().join("junk.pdf");
+    write(&junk, "not a pdf");
+    assert!(pdf_text_poppler(&junk).is_err());
 }
 
 // ---- 분기 보강 ----
 
 #[test]
-fn the_pure_rust_pdf_extractor_works_without_pdfium() {
+fn the_pure_rust_pdf_extractor_remains_available_as_fallback() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("book.pdf");
     fs::write(&f, text_pdf("ISBN 9788994492032")).unwrap();

@@ -27,7 +27,7 @@ pub struct RunHooks<'a> {
     pub on_worker_spawn: Option<&'a (dyn Fn() + Sync + 'a)>,
 }
 
-/// 자식 프로세스로 PDF 단계를 돌리는 숨은 부명령. 멈춘 pdfium을 강제로 끊기 위해 쓴다.
+/// 자식 프로세스로 PDF 단계를 돌리는 숨은 부명령. Poppler 명령을 시간 상한으로 제한한다.
 pub const PDF_STAGE_COMMAND: &str = "__pdf-stage";
 /// ISBN PDF 파싱을 별도 프로세스에서 수행하는 숨은 부명령.
 pub const ISBN_PDF_STAGE_COMMAND: &str = isbn::PDF_ISBN_WORKER_COMMAND;
@@ -138,7 +138,7 @@ pub fn parse_options(args: &[String]) -> Result<Options, String> {
 
 fn stage_key(stage: Stage) -> &'static str {
     match stage {
-        Stage::Pdfium => "pdfium",
+        Stage::Pdfium => "poppler",
         Stage::Plumber => "plumber",
         Stage::Repair => "repair",
     }
@@ -180,7 +180,7 @@ impl StageRunner for ChildRunner {
 /// 숨은 부명령 `__pdf-stage <단계> <경로>`: 단계를 실행해 JSON으로 쓴다.
 pub fn run_pdf_stage_command(args: &[String], out: &mut dyn Write) -> i32 {
     let (Some(stage), Some(path)) = (args.first().and_then(|k| stage_from_key(k)), args.get(1)) else {
-        eprintln!("usage: {PDF_STAGE_COMMAND} <pdfium|plumber|repair> <path>");
+        eprintln!("usage: {PDF_STAGE_COMMAND} <poppler|plumber|repair> <path>");
         return 2;
     };
     match doc_reader::pdf::run_stage(stage, Path::new(path)) {
@@ -195,14 +195,14 @@ pub fn run_pdf_stage_command(args: &[String], out: &mut dyn Write) -> i32 {
     }
 }
 
-/// 숨은 부명령 `__isbn-pdf-stage <pdfium|fallback> <path>`.
+/// 숨은 부명령 `__isbn-pdf-stage <poppler|fallback> <path>`.
 pub fn run_isbn_pdf_stage_command(args: &[String], out: &mut dyn Write) -> i32 {
     let (Some(stage), Some(path)) = (args.first().map(String::as_str), args.get(1)) else {
-        eprintln!("usage: {ISBN_PDF_STAGE_COMMAND} <pdfium|fallback> <path>");
+        eprintln!("usage: {ISBN_PDF_STAGE_COMMAND} <poppler|fallback> <path>");
         return 2;
     };
     let result = match stage {
-        "pdfium" => isbn::pdf_text_auto(Path::new(path)),
+        "poppler" => isbn::pdf_text_auto(Path::new(path)),
         "fallback" => isbn::pdf_text_fallback(Path::new(path)).map(|text| (text, 0)),
         _ => {
             eprintln!("unknown ISBN PDF stage: {stage}");

@@ -19,7 +19,6 @@ pub mod config;
 pub mod corpus;
 pub mod export_format;
 pub mod features;
-pub mod joblib_import;
 pub mod model;
 pub mod pyjson;
 pub mod pyunicode_table;

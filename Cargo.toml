@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["utils/pdfscan", "libs/corpus_layout", "libs/es_client", "utils/detect_mojibake", "utils/quarantine_broken", "utils/cluster_hybrid_genres", "utils/search", "utils/epubscan", "libs/stat", "libs/file_time", "libs/parser_timeout", "libs/htmlkit", "libs/isbn", "libs/hwp3_tables", "libs/hwp3_parser", "libs/pyfmt", "libs/corpus_common", "utils/update", "utils/move_semi_clusters", "utils/classify_books_client", "utils/normalize_comic_directories", "libs/bookstore", "libs/doc_reader", "libs/pyferrite", "utils/loader", "libs/scan_common", "libs/sysdeps", "backend", "utils/classify_cli"]
+members = ["utils/pdfscan", "libs/corpus_layout", "libs/es_client", "utils/detect_mojibake", "utils/quarantine_broken", "utils/cluster_hybrid_genres", "utils/search", "utils/epubscan", "libs/stat", "libs/file_time", "libs/parser_timeout", "libs/htmlkit", "libs/isbn", "libs/hwp3_tables", "libs/hwp3_parser", "libs/pyfmt", "libs/corpus_common", "utils/update", "utils/move_semi_clusters", "utils/classify_books_client", "utils/normalize_comic_directories", "libs/bookstore", "libs/doc_reader", "utils/loader", "libs/scan_common", "libs/sysdeps", "backend", "utils/classify_cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -16,7 +16,6 @@ serde_json = "1"
 ureq = { version = "3.5", default-features = false, features = ["json"] }
 
 [patch.crates-io]
-pyferrite = { path = "libs/pyferrite" }
 
 # 개발·테스트 빌드에서 이미지 디코딩이 너무 느리다 (6000x8000 JPEG 테스트가 100초). 디코더 crate만 최적화한다.
 [profile.dev.package.image]

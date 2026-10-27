@@ -59,3 +59,22 @@ pub fn is_usable_text(text: &str, mojibake_runs: Option<usize>) -> bool {
     }
     mojibake_runs.unwrap_or_else(|| count_mojibake_runs(text)) < PDF_MOJIBAKE_RUN_LIMIT
 }
+
+#[cfg(test)]
+mod tests {
+    use super::count_mojibake_runs_with;
+
+    fn mojibake(text: &str) -> String {
+        let (bytes, _, had_errors) = encoding_rs::EUC_KR.encode(text);
+        assert!(!had_errors);
+        bytes.iter().map(|byte| char::from(*byte)).collect()
+    }
+
+    #[test]
+    fn regex_mojibake_counter_handles_invalid_short_non_korean_and_valid_matches() {
+        assert_eq!(count_mojibake_runs_with(&mojibake("한글본문"), "[\\x{80}-\\x{ff}]{2,}"), 1);
+        assert_eq!(count_mojibake_runs_with("abc", "["), 0);
+        assert_eq!(count_mojibake_runs_with("abc 漢字", "."), 0);
+        assert_eq!(count_mojibake_runs_with("éé", ".+"), 0);
+    }
+}

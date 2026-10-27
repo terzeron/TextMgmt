@@ -1,15 +1,13 @@
 //! PDF 읽기. 원본: `Loader.read_from_pdf`와 `_fast_pdf_page_count`.
 //!
-//! 원본은 단계를 순서대로 시도한다: pypdfium2 -> pdfplumber -> (쪽을 하나도 못 열었을 때만) pikepdf로 구조 복구 후 pypdfium2.
-//! pdfium은 `pdfium-render`가 같은 libpdfium을 쓴다. pdfplumber와 pikepdf는 Rust 대응이 없어 `lopdf`로 대신한다.
-//! 단계 실행은 [`StageRunner`] 뒤에 둬서, 멈춘 pdfium을 끊어야 하는 실행 파일이 자식 프로세스로 돌릴 수 있게 했다.
+//! Poppler -> lopdf -> lopdf 재저장 복구 단계를 순서대로 시도한다.
+//! 단계 실행은 [`StageRunner`] 뒤에 두어 멈춘 외부 명령을 자식 프로세스와 timeout으로 격리한다.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Instant;
 
-use isbn::pdfium_render::prelude::PdfiumLibraryBindings;
 use regex::bytes::Regex as BytesRegex;
 
 use crate::TEXT_SIZE;
@@ -23,11 +21,11 @@ pub const PDF_STAGE_TIMEOUT: u64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
-    /// pypdfium2에 대응
+    /// Poppler 텍스트 추출
     Pdfium,
     /// pdfplumber에 대응(lopdf)
     Plumber,
-    /// pikepdf 복구 후 pypdfium2에 대응(lopdf로 다시 저장한 뒤 pdfium)
+    /// lopdf로 다시 저장한 뒤 Poppler 대신 lopdf로 읽는다.
     Repair,
 }
 
@@ -35,7 +33,7 @@ impl Stage {
     /// 통계에 쓰는 이름. 원본의 함수 이름 그대로다.
     pub fn name(self) -> &'static str {
         match self {
-            Stage::Pdfium => "_pdf_text_by_pypdfium2",
+            Stage::Pdfium => "_pdf_text_by_poppler",
             Stage::Plumber => "_pdf_text_by_pdfplumber",
             Stage::Repair => "_pdf_text_by_pikepdf_repair",
         }
@@ -70,13 +68,13 @@ impl StageRunner for InProcess {
 /// 단계의 실제 작업.
 pub fn run_stage(stage: Stage, path: &Path) -> Result<(String, usize), String> {
     match stage {
-        Stage::Pdfium => pdfium_text_from_file(path),
+        Stage::Pdfium => poppler_text(path),
         Stage::Plumber => lopdf_text(path),
         Stage::Repair => {
             let mut doc = lopdf::Document::load(path).map_err(|e| e.to_string())?;
             let mut buffer = Vec::new();
             doc.save_to(&mut buffer).map_err(|e| e.to_string())?;
-            pdfium_text_from_bytes(buffer)
+            lopdf_text_from_bytes(buffer)
         }
     }
 }
@@ -95,71 +93,22 @@ pub fn collect_pages<E>(page_count: usize, mut page_text: impl FnMut(usize) -> R
     Ok((out, page_count))
 }
 
-/// pypdfium2 `PdfTextPage.get_text_range()`와 같은 방식으로 한 쪽의 글을 읽는다: `FPDFText_GetText`에 글자 수 전체를 준다.
-/// 짝이 안 맞는 서로게이트는 버린다(`errors="ignore"`).
-///
-/// # Safety
-/// `bindings`가 가리키는 라이브러리에서 얻은 유효한 `text_page` 핸들이어야 한다.
-unsafe fn text_range(bindings: &dyn PdfiumLibraryBindings, text_page: isbn::pdfium_render::prelude::FPDF_TEXTPAGE) -> String {
-    let count = unsafe { bindings.FPDFText_CountChars(text_page) };
-    if count <= 0 {
-        return String::new();
-    }
-    let mut buffer = vec![0u16; count as usize + 1];
-    let written = unsafe { bindings.FPDFText_GetText(text_page, 0, count, buffer.as_mut_ptr()) };
-    if written <= 0 {
-        return String::new();
-    }
-    // 반환값은 끝의 널 글자를 포함한 글자 수다.
-    char::decode_utf16(buffer[..(written as usize - 1).min(buffer.len())].iter().copied()).filter_map(Result::ok).collect()
-}
-
-enum Source<'a> {
-    File(&'a Path),
-    Bytes(&'a [u8]),
-}
-
-/// 문서를 열어 앞쪽부터 `TEXT_SIZE`만큼의 글을 모은다. 핸들은 이 함수가 소유하고 반드시 닫는다.
-fn pdfium_text(source: Source) -> Result<(String, usize), String> {
-    let bindings = isbn::pdfium_bindings().ok_or_else(|| "libpdfium을 찾지 못했다".to_owned())?;
-    // SAFETY: 아래 핸들은 모두 이 라이브러리에서 얻어 이 함수 안에서만 쓰고, 얻은 순서의 역순으로 닫는다.
-    unsafe {
-        let doc = match source {
-            Source::File(path) => bindings.FPDF_LoadDocument(path.to_str().ok_or("경로가 UTF-8이 아니다")?, None),
-            Source::Bytes(bytes) => bindings.FPDF_LoadMemDocument(bytes, None),
-        };
-        if doc.is_null() {
-            return Err(format!("PDF를 열지 못했다(오류 {})", bindings.FPDF_GetLastError()));
-        }
-        let page_count = bindings.FPDF_GetPageCount(doc).max(0) as usize;
-        let result = collect_pages(page_count, |i| {
-            let page = bindings.FPDF_LoadPage(doc, i as i32);
-            if page.is_null() {
-                return Err(format!("{i}쪽을 열지 못했다"));
-            }
-            let text_page = bindings.FPDFText_LoadPage(page);
-            let text = if text_page.is_null() { Err(format!("{i}쪽의 글을 열지 못했다")) } else { Ok(text_range(bindings, text_page)) };
-            if !text_page.is_null() {
-                bindings.FPDFText_ClosePage(text_page);
-            }
-            bindings.FPDF_ClosePage(page);
-            text
-        });
-        bindings.FPDF_CloseDocument(doc);
-        result
-    }
-}
-
-fn pdfium_text_from_file(path: &Path) -> Result<(String, usize), String> {
-    pdfium_text(Source::File(path))
-}
-
-fn pdfium_text_from_bytes(bytes: Vec<u8>) -> Result<(String, usize), String> {
-    pdfium_text(Source::Bytes(&bytes))
+fn poppler_text(path: &Path) -> Result<(String, usize), String> {
+    let runner = sysdeps::SystemRunner;
+    let pages = sysdeps::poppler::page_count(&runner, path)?;
+    let last = pages.min(PDF_PAGE_LIMIT);
+    let text = if last == 0 { String::new() } else { sysdeps::poppler::extract_text(&runner, path, 1, last)? };
+    collect_pages(pages, |i| Ok::<_, String>(text.split('\u{000c}').nth(i).unwrap_or_default().to_owned()))
 }
 
 fn lopdf_text(path: &Path) -> Result<(String, usize), String> {
     let doc = lopdf::Document::load(path).map_err(|e| e.to_string())?;
+    let numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
+    collect_pages(numbers.len(), |i| Ok::<_, String>(doc.extract_text(&[numbers[i]]).unwrap_or_default()))
+}
+
+fn lopdf_text_from_bytes(bytes: Vec<u8>) -> Result<(String, usize), String> {
+    let doc = lopdf::Document::load_mem(&bytes).map_err(|e| e.to_string())?;
     let numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
     collect_pages(numbers.len(), |i| Ok::<_, String>(doc.extract_text(&[numbers[i]]).unwrap_or_default()))
 }

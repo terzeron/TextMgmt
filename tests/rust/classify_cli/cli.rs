@@ -48,9 +48,9 @@ fn shuffle_matches_python_random_integer_seeds() {
 #[test]
 fn random_range_matches_python_seeded_draws() {
     let mut random = shuffle::Random::new(42);
-    assert_eq!(random.randint(0, 40), 40);
+    assert_eq!(random.below(41), 40);
     assert_eq!(random.below(3), 0);
-    assert_eq!(random.randint(10, 99_999_999), 3_356_896);
+    assert_eq!(10 + random.below(99_999_990), 3_356_896);
 }
 
 fn fixture() -> PathBuf {
@@ -76,6 +76,32 @@ fn every_command_prints_help_and_no_args_fail_like_python() {
 }
 
 #[test]
+fn cli_keeps_exit_codes_when_standard_output_or_error_is_closed() {
+    use std::io::{self, Write};
+
+    struct ClosedPipe;
+    impl Write for ClosedPipe {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let deps = Deps::system();
+    let mut err = Vec::new();
+    let mut out = ClosedPipe;
+    assert_eq!(main_with(&[], &mut CliIo { out: &mut out, err: &mut err }, &deps), 1);
+    assert_eq!(main_with(&["info", "--help"], &mut CliIo { out: &mut out, err: &mut err }, &deps), 1);
+
+    let mut out = Vec::new();
+    assert_eq!(main_with(&["unknown"], &mut CliIo { out: &mut out, err: &mut ClosedPipe }, &deps), 2);
+    assert_eq!(main_with(&["info", "--model", "/no/such/model"], &mut CliIo { out: &mut out, err: &mut ClosedPipe }, &deps), 1);
+}
+
+#[test]
 fn verbose_classify_emits_debug_diagnostics() {
     let dir = TempDir::new().unwrap();
     let epub = dir.path().join("broken.epub");
@@ -97,16 +123,59 @@ fn verbose_classify_emits_debug_diagnostics() {
 }
 
 #[test]
+fn classify_reports_missing_invalid_and_incomplete_es_environment_without_connecting() {
+    use std::process::{Command, Output};
+
+    fn run_with_es(command_name: &str, url: Option<&str>, index: Option<&str>, configure_optional_auth: bool) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_classify_cli"));
+        if command_name == "classify" {
+            command.args(["classify", "/no/such/file", "--model"]).arg(fixture());
+        } else {
+            let output = TempDir::new().unwrap();
+            command.args(["collect", "--out"]).arg(output.path().join("corpus.jsonl"));
+        }
+        for key in ["TM_ES_URL", "TM_ES_BOOK_INDEX", "TM_ES_USER", "TM_ES_PASSWORD", "TM_ES_CA_CERT"] {
+            command.env_remove(key);
+        }
+        if let Some(url) = url {
+            command.env("TM_ES_URL", url);
+        }
+        if let Some(index) = index {
+            command.env("TM_ES_BOOK_INDEX", index);
+        }
+        if configure_optional_auth {
+            command.env("TM_ES_USER", "test-user").env("TM_ES_PASSWORD", "test-password").env("TM_ES_CA_CERT", "/etc/ssl/certs/ca-certificates.crt");
+        }
+        command.output().unwrap()
+    }
+
+    let missing_url = run_with_es("classify", None, None, false);
+    assert_eq!(missing_url.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&missing_url.stderr).contains("TM_ES_URL이 없다"));
+
+    let invalid_url = run_with_es("classify", Some("ftp://localhost:9200"), Some("books"), false);
+    assert_eq!(invalid_url.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&invalid_url.stderr).contains("http:// 또는 https://"));
+
+    let missing_index = run_with_es("classify", Some("http://localhost:9200"), None, false);
+    assert_eq!(missing_index.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&missing_index.stderr).contains("TM_ES_BOOK_INDEX가 없다"));
+
+    let configured = run_with_es("classify", Some("https://localhost:9200"), Some("books"), true);
+    assert!(configured.status.success(), "{}", String::from_utf8_lossy(&configured.stderr));
+    assert!(String::from_utf8_lossy(&configured.stdout).contains("/no/such/file: 파일이 없다"));
+
+    for (url, index, error) in [(None, None, "TM_ES_URL이 없다"), (Some("ftp://localhost"), Some("books"), "http:// 또는 https://"), (Some("http://localhost"), None, "TM_ES_BOOK_INDEX가 없다")]
+    {
+        let output = run_with_es("collect", url, index, false);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr).contains(error));
+    }
+}
+
+#[test]
 fn malformed_arguments_fail_before_io() {
-    for args in [
-        vec!["unknown"],
-        vec!["info", "--oops"],
-        vec!["classify"],
-        vec!["info", "--model"],
-        vec!["classify", "x", "--min-confidence", "NaN"],
-        vec!["reclassify", "x", "--limit", "-1"],
-        vec!["import-joblib", "--seed", "x"],
-    ] {
+    for args in [vec!["unknown"], vec!["info", "--oops"], vec!["classify"], vec!["info", "--model"], vec!["classify", "x", "--min-confidence", "NaN"], vec!["reclassify", "x", "--limit", "-1"]] {
         let (code, _, err) = run(&args, &Deps::system());
         assert_eq!(code, 2, "{args:?}: {err}");
     }
@@ -121,45 +190,6 @@ fn info_reads_exported_model_and_missing_model_explains_next_step() {
     let (code, _, err) = run(&["info", "--model", "/no/such/model"], &Deps::system());
     assert_eq!(code, 1);
     assert!(err.contains("collect") && err.contains("train"));
-}
-
-#[test]
-fn import_joblib_creates_a_rust_model_directory() {
-    let dir = TempDir::new().unwrap();
-    let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/legacy.joblib");
-    let output = dir.path().join("imported");
-    let (code, out, err) = run(&["import-joblib", "--model", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--golden", "2", "--seed", "42"], &Deps::system());
-    assert_eq!(code, 0, "{err}");
-    assert!(output.join("model.json").exists());
-    assert!(out.contains("n_features"));
-    let golden: Value = serde_json::from_slice(&fs::read(output.join("golden.json")).unwrap()).unwrap();
-    let expected_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/legacy_golden.json");
-    let expected: Value = serde_json::from_slice(&fs::read(expected_path).unwrap()).unwrap();
-    assert_eq!(golden["seed"], 42);
-    assert_eq!(golden["cases"].as_array().unwrap().len(), 12);
-    assert_eq!(golden["cases"][0]["label"], "empty");
-    assert_eq!(golden["cases"][10]["label"], "synthetic_0");
-    for (actual, expected) in golden["cases"].as_array().unwrap().iter().zip(expected["cases"].as_array().unwrap()) {
-        assert_eq!(actual["doc"], expected["doc"]);
-        assert_eq!(actual["category"], expected["category"]);
-        assert_eq!(actual["reason"], expected["reason"]);
-        assert!((actual["confidence"].as_f64().unwrap() - expected["confidence"].as_f64().unwrap()).abs() < 1e-7);
-        for (actual, expected) in actual["scores"].as_array().unwrap().iter().zip(expected["scores"].as_array().unwrap()) {
-            assert!((actual.as_f64().unwrap() - expected.as_f64().unwrap()).abs() < 1e-7);
-        }
-        for (actual, expected) in actual["top"].as_array().unwrap().iter().zip(expected["top"].as_array().unwrap()) {
-            assert_eq!(actual["category"], expected["category"]);
-            assert!((actual["confidence"].as_f64().unwrap() - expected["confidence"].as_f64().unwrap()).abs() < 1e-7);
-        }
-    }
-    let negative_output = dir.path().join("negative-seed");
-    let (code, _, err) = run(&["import-joblib", "--model", input.to_str().unwrap(), "--out", negative_output.to_str().unwrap(), "--golden", "2", "--seed", "-42"], &Deps::system());
-    assert_eq!(code, 0, "{err}");
-    let negative: Value = serde_json::from_slice(&fs::read(negative_output.join("golden.json")).unwrap()).unwrap();
-    assert_eq!(negative["seed"], -42);
-    for (positive, negative) in golden["cases"].as_array().unwrap().iter().zip(negative["cases"].as_array().unwrap()) {
-        assert_eq!(positive["doc"], negative["doc"]);
-    }
 }
 
 #[test]
@@ -340,6 +370,13 @@ impl classify_cli::BookstoreQuery for Stores {
     }
 }
 
+struct VoteStores([Value; 3]);
+impl classify_cli::BookstoreQuery for VoteStores {
+    fn query(&self, _: &str, _: &str, _: &str, _: f64) -> (Value, Value, Value) {
+        (self.0[0].clone(), self.0[1].clone(), self.0[2].clone())
+    }
+}
+
 #[test]
 fn bookstore_policy_samples_and_writes_per_document_rows() {
     let dir = TempDir::new().unwrap();
@@ -355,6 +392,34 @@ fn bookstore_policy_samples_and_writes_per_document_rows() {
     assert_eq!(saved["sample"], 12);
     assert_eq!(saved["rows"].as_array().unwrap().len(), 12);
     assert!(saved["rows"].as_array().unwrap().iter().all(|r| r["store_answered"] == true));
+}
+
+#[test]
+fn bookstore_policy_requires_a_majority_when_multiple_stores_answer() {
+    let dir = TempDir::new().unwrap();
+    let (model, corpus) = model_and_corpus(&dir, 60);
+    let cases = [
+        ([json!({"mapped":"3_무협"}), json!({}), json!({})], Some("3_무협")),
+        ([json!({"mapped":"3_무협"}), json!({"mapped":"5_과학"}), json!({})], None),
+        ([json!({"mapped":"3_무협"}), json!({"mapped":"3_무협"}), json!({"mapped":"5_과학"})], Some("3_무협")),
+    ];
+
+    for (index, (answers, expected)) in cases.into_iter().enumerate() {
+        let output = dir.path().join(format!("votes-{index}.json"));
+        let deps = Deps::system().with_bookstores(Arc::new(VoteStores(answers)));
+        let args =
+            ["bookstore-policy", "--model", model.to_str().unwrap(), "--corpus", corpus.to_str().unwrap(), "--sample", "1", "--sample-from", "all", "--delay", "0", "--out", output.to_str().unwrap()];
+        let (code, _, err) = run(&args, &deps);
+        assert_eq!(code, 0, "{err}");
+        let saved: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+        if let Some(expected) = expected {
+            assert_eq!(saved["rows"][0]["store_cat"], expected);
+            assert!(saved["rows"][0]["store_answered"].as_bool().unwrap());
+        } else {
+            assert!(saved["rows"][0]["store_cat"].is_null());
+            assert!(!saved["rows"][0]["store_answered"].as_bool().unwrap());
+        }
+    }
 }
 
 #[test]

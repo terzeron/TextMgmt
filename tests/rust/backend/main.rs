@@ -56,7 +56,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use axum::http::Method;
@@ -177,9 +177,12 @@ async fn backend_test_setup() -> Setup {
 
     let epub_path = bm.path_prefix().join(CATEGORY);
     if epub_path.exists() {
-        let data = read_files(&epub_path, 5);
+        // 같은 샘플 EPUB 5개를 테스트마다 다시 파싱하면 테스트당 1초 넘게 든다(HTML 파싱). 처음 한 번만 읽어 재사용한다.
+        // 준비는 db_guard 를 쥔 채 하고, 테스트가 만든 temp_ 파일은 잠금을 놓기 전에 지워지므로 매번 읽어도 결과가 같다.
+        static SAMPLE_DOCS: OnceLock<BTreeMap<i64, Value>> = OnceLock::new();
+        let data = SAMPLE_DOCS.get_or_init(|| read_files(&epub_path, 5));
         if !data.is_empty() {
-            let _ = bm.es_manager().insert(&data);
+            let _ = bm.es_manager().insert(data);
         }
     }
     let _ = bm.es_manager().refresh();

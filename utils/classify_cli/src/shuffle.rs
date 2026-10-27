@@ -63,10 +63,6 @@ impl Random {
             }
         }
     }
-
-    pub(super) fn randint(&mut self, low: usize, high: usize) -> usize {
-        low + self.below(high - low + 1)
-    }
 }
 pub(super) fn shuffle<T>(values: &mut [T], seed: u64) {
     let mut random = Random::new(seed);

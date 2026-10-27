@@ -16,7 +16,7 @@ flate2 = "1"
 htmlkit = { path = "../htmlkit" }
 lopdf.workspace = true
 parser_timeout = { path = "../parser_timeout" }
-pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_latest", "thread_safe"] }
+sysdeps = { path = "../sysdeps" }
 regex = "1.13.1"
 stat = { path = "../stat" }
 unicode-general-category = "1.1.0"

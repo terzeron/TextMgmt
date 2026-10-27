@@ -152,3 +152,82 @@ fn summarize(rows: &[Value], count: usize, io: &mut CliIo<'_>) -> Result<Value, 
     writeln!(io.out, "\n  서점으로 갈아탈 확신도 상한: {threshold:.3}{note}").map_err(|e| e.to_string())?;
     Ok(json!({"sample":rows.len(),"measured_max_confidence":max,"bands":report,"bookstore_override_below":threshold,"rows":rows}))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::summarize;
+    use crate::CliIo;
+    use serde_json::{Value, json};
+
+    fn summarize_rows(rows: &[Value]) -> (Result<Value, String>, String) {
+        let mut out = Vec::new();
+        let result = summarize(rows, 6, &mut CliIo { out: &mut out, err: &mut Vec::new() });
+        (result, String::from_utf8(out).unwrap())
+    }
+
+    #[test]
+    fn summary_rejects_confidences_outside_the_probability_range() {
+        for confidence in [json!("0.5"), json!(-0.01), json!(1.01), Value::Null] {
+            let rows = [json!({"confidence":confidence,"model_ok":true,"store_ok":false,"store_answered":false})];
+            assert_eq!(summarize_rows(&rows).0.unwrap_err(), "잘못된 confidence 값");
+        }
+    }
+
+    #[test]
+    fn summary_requires_boolean_outcomes_for_each_measurement() {
+        for field in ["model_ok", "store_ok", "store_answered"] {
+            let mut row = json!({"confidence":0.5,"model_ok":true,"store_ok":false,"store_answered":false});
+            row[field] = json!("yes");
+            assert_eq!(summarize_rows(&[row]).0.unwrap_err(), "서점 측정 행의 정오 값은 bool이어야 한다");
+        }
+    }
+
+    #[test]
+    fn summary_handles_unanswered_stores_and_caps_override_at_measured_maximum() {
+        let (unanswered, output) = summarize_rows(&[json!({"confidence":0.3,"model_ok":true,"store_ok":false,"store_answered":false})]);
+        let unanswered = unanswered.unwrap();
+        assert_eq!(unanswered["bands"][0]["store_coverage"], 0.0);
+        assert_eq!(unanswered["bands"][0]["store_accuracy"], 0.0);
+        assert!(output.contains("서점이 모델을 이긴 구간이 없다"));
+
+        let (wins, _) = summarize_rows(&[json!({"confidence":0.3,"model_ok":false,"store_ok":true,"store_answered":true})]);
+        let wins = wins.unwrap();
+        assert_eq!(wins["measured_max_confidence"], 0.3);
+        assert_eq!(wins["bookstore_override_below"], 0.3);
+    }
+
+    #[test]
+    fn summary_returns_an_empty_report_for_zero_rows() {
+        let (report, output) = summarize_rows(&[]);
+        let report = report.unwrap();
+
+        assert_eq!(report["sample"], 0);
+        assert_eq!(report["bands"], json!([]));
+        assert_eq!(report["bookstore_override_below"], 0.0);
+        assert!(output.contains("서점이 모델을 이긴 구간이 없다"));
+    }
+
+    #[test]
+    fn summary_uses_store_accuracy_only_in_answered_bands() {
+        let rows = [
+            json!({"confidence":0.1,"model_ok":true,"store_ok":false,"store_answered":false}),
+            json!({"confidence":0.2,"model_ok":true,"store_ok":false,"store_answered":false}),
+            json!({"confidence":0.3,"model_ok":true,"store_ok":false,"store_answered":false}),
+            json!({"confidence":0.4,"model_ok":true,"store_ok":false,"store_answered":false}),
+            json!({"confidence":0.5,"model_ok":true,"store_ok":false,"store_answered":false}),
+            json!({"confidence":0.9,"model_ok":false,"store_ok":true,"store_answered":true}),
+        ];
+
+        let report = summarize_rows(&rows).0.unwrap();
+
+        let bands = report["bands"].as_array().unwrap();
+        assert!(bands.len() > 1);
+        let unanswered = bands.iter().find(|band| band["low"] == 0.0).unwrap();
+        let answered = bands.iter().find(|band| band["low"].as_f64().unwrap() > 0.5).unwrap();
+        assert_eq!(unanswered["store_coverage"], 0.0);
+        assert_eq!(unanswered["store_accuracy"], 0.0);
+        assert_eq!(answered["store_coverage"], 1.0);
+        assert_eq!(answered["store_accuracy"], 1.0);
+        assert_eq!(report["bookstore_override_below"], 0.9);
+    }
+}

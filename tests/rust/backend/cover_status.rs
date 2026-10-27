@@ -80,6 +80,77 @@ fn inline_image_counts_without_xobject_resources() {
     assert!(has_official_cover(&pdf, "pdf", &LOCK).unwrap());
 }
 
+#[test]
+fn pdf_cover_status_handles_tree_errors_and_inherited_resources() {
+    use lopdf::Object;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let inherited = make_pdf(&tmp.path().join("inherited.pdf"), Some((480, 623)));
+    common::pdf::edit_pdf(&inherited, |doc| {
+        let page_id = doc.get_pages()[&1];
+        let page = doc.get_object_mut(page_id).unwrap().as_dict_mut().unwrap();
+        let resources = page.remove(b"Resources").unwrap();
+        let parent = page.get(b"Parent").unwrap().as_reference().unwrap();
+        doc.get_object_mut(parent).unwrap().as_dict_mut().unwrap().set("Resources", resources);
+    });
+    assert_eq!(pdf_first_image_size(&inherited, &LOCK).unwrap(), Some((480, 623)));
+
+    let cyclic = make_pdf(&tmp.path().join("cycle.pdf"), None);
+    common::pdf::edit_pdf(&cyclic, |doc| {
+        let page_id = doc.get_pages()[&1];
+        let page = doc.get_object_mut(page_id).unwrap().as_dict_mut().unwrap();
+        page.remove(b"Resources");
+        page.set("Parent", Object::Reference(page_id));
+    });
+    assert!(pdf_first_image_size(&cyclic, &LOCK).unwrap_err().contains("순환"));
+
+    let no_tree_links = make_pdf(&tmp.path().join("no-tree-links.pdf"), None);
+    common::pdf::edit_pdf(&no_tree_links, |doc| {
+        let page_id = doc.get_pages()[&1];
+        let page = doc.get_object_mut(page_id).unwrap().as_dict_mut().unwrap();
+        page.remove(b"Resources");
+        page.remove(b"Parent");
+        page.set("Contents", Object::Null);
+    });
+    assert_eq!(pdf_first_image_size(&no_tree_links, &LOCK).unwrap(), None);
+}
+
+#[test]
+fn pdf_cover_status_skips_non_images_and_rejects_zero_sized_inline_images() {
+    use lopdf::{
+        Object, Stream,
+        content::{Content, Operation},
+        dictionary,
+    };
+
+    let tmp = tempfile::tempdir().unwrap();
+    let non_image = make_pdf(&tmp.path().join("form.pdf"), Some((480, 623)));
+    common::pdf::edit_pdf(&non_image, |doc| {
+        let page_id = doc.get_pages()[&1];
+        let page = doc.get_object_mut(page_id).unwrap().as_dict_mut().unwrap();
+        let resources = page.get_mut(b"Resources").unwrap().as_dict_mut().unwrap();
+        let xobjects = resources.get_mut(b"XObject").unwrap().as_dict_mut().unwrap();
+        let image_id = xobjects.get(b"Im0").unwrap().as_reference().unwrap();
+        doc.get_object_mut(image_id).unwrap().as_stream_mut().unwrap().dict.set("Subtype", "Form");
+        let content = doc.add_object(Stream::new(dictionary! {}, b"/Im0 Do".to_vec()));
+        doc.get_object_mut(page_id).unwrap().as_dict_mut().unwrap().set("Contents", content);
+    });
+    assert_eq!(pdf_first_image_size(&non_image, &LOCK).unwrap(), None);
+
+    let zero_image = tmp.path().join("zero-inline.pdf");
+    let mut fixture = common::pdf::PdfBuilder::new();
+    let page = fixture.add_page(10, 10);
+    let image = Stream::new(dictionary! {"W"=>0,"H"=>10,"BPC"=>8,"CS"=>"RGB"}, vec![]);
+    fixture.content(page, &Content { operations: vec![Operation::new("BI", vec![Object::Stream(image)])] }.encode().unwrap());
+    fixture.save(&zero_image);
+    assert!(pdf_first_image_size(&zero_image, &LOCK).unwrap_err().contains("0입니다"));
+}
+
+#[test]
+fn default_cover_cache_can_be_constructed_without_connecting() {
+    let _cache = CoverStatusCache::default();
+}
+
 fn make_pdf(path: &Path, size: Option<(u32, u32)>) -> PathBuf {
     match size {
         None => write_blank_pdf(path, 100, 100),
@@ -383,6 +454,25 @@ impl backend::main::CategoryMappingApi for Hidden {
     }
 }
 
+struct FailingHidden(backend::main::MappingError);
+impl backend::main::CategoryMappingApi for FailingHidden {
+    fn get_hidden_categories(&self, _kind: &str) -> Result<Vec<String>, backend::main::MappingError> {
+        Err(self.0.clone())
+    }
+}
+
+struct BrowseOutcomes;
+#[async_trait::async_trait]
+impl backend::main::BookManagerApi for BrowseOutcomes {
+    async fn get_cover_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _excluded: Option<&[String]>) -> (Vec<(CoverBook, String)>, i64, Option<String>, Option<String>) {
+        (vec![], 0, None, Some("cover query failed".into()))
+    }
+
+    async fn get_uncovered_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _excluded: Option<&[String]>) -> (Vec<(CoverBook, String)>, Option<i64>, Option<String>, Option<String>) {
+        (vec![], None, Some("next-uncovered".into()), None)
+    }
+}
+
 #[tokio::test]
 async fn browse_passes_hidden_categories_and_blocks_hidden_descendants() {
     use backend::main::{AppDeps, AuthMode, app_with};
@@ -411,4 +501,42 @@ async fn browse_requires_auth_and_validates_limits() {
     }
     assert_eq!(client.get("/browse").await.status, 200);
     assert_eq!(manager.0.lock().unwrap().as_slice(), &[json!(["", 60, "", []])]);
+}
+
+#[tokio::test]
+async fn browse_handles_manager_initialization_and_query_errors() {
+    use backend::main::{AppDeps, AuthMode, app_with};
+
+    let unavailable = AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager_factory(|| Err("manager unavailable".into()));
+    let response = common::TestClient::with_app(app_with(unavailable)).get("/browse").await;
+    assert_eq!(response.status, 503);
+
+    let deps = AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager(Arc::new(BrowseOutcomes));
+    let client = common::TestClient::with_app(app_with(deps));
+    let failed = client.get("/browse").await;
+    assert_eq!(failed.status, 200);
+    assert_eq!(failed.json(), json!({"status":"failure","error":"cover query failed"}));
+
+    let uncovered = client.get("/browse?uncovered=true&category=public&limit=7&cursor=old").await;
+    assert_eq!(uncovered.status, 200);
+    assert_eq!(uncovered.json(), json!({"status":"success","result":[],"total":null,"next_cursor":"next-uncovered"}));
+}
+
+#[tokio::test]
+async fn browse_translates_hidden_category_store_errors() {
+    use backend::main::{AppDeps, AuthMode, MappingError, app_with};
+
+    for (error, expected_status, expected_detail) in
+        [(MappingError::Http(429, "slow down".into()), 429, "slow down"), (MappingError::Other("database failed".into()), 500, "서버 내부 오류가 발생했습니다")]
+    {
+        let deps = AppDeps::new(AuthMode::AuthOnly(json!({"role":"viewer"}))).with_book_manager(Arc::new(BrowseManager(Mutex::new(vec![])))).with_category_mapping(Arc::new(FailingHidden(error)));
+        let response = common::TestClient::with_app(app_with(deps)).get("/browse").await;
+        assert_eq!(response.status, expected_status);
+        assert_eq!(response.json()["detail"], expected_detail);
+    }
+
+    let unavailable_mapping =
+        AppDeps::new(AuthMode::AuthOnly(json!({"role":"viewer"}))).with_book_manager(Arc::new(BrowseManager(Mutex::new(vec![])))).with_category_mapping_factory(|| Err("mapping unavailable".into()));
+    let response = common::TestClient::with_app(app_with(unavailable_mapping)).get("/browse").await;
+    assert_eq!(response.status, 503);
 }

@@ -3,8 +3,7 @@
 //! Python 호환 모델의 점수 계산과 저장·불러오기를 맡는다. 학습은 `training.rs`에서 수행한다.
 //! 문서 본문은 로그에 남기지 않는다.
 //!
-//! 모델 파일은 pickle(joblib)이 아니라 export 디렉터리다. Rust 는 `TM_CLASSIFIER_MODEL_DIR` 로
-//! 그 디렉터리를 찾는다. Python joblib 경로 `TM_CLASSIFIER_MODEL` 은 읽지 않는다.
+//! 모델 파일은 export 디렉터리다. Rust 는 `TM_CLASSIFIER_MODEL_DIR` 로 그 디렉터리를 찾는다.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -37,7 +36,6 @@ impl Prediction {
 pub const DEFAULT_TOP_K: usize = 3;
 
 /// 내보내기 디렉토리를 담는 환경변수. `books-pv` 가 호스트의 /mnt/data/text 를 pod 의 /books 로 마운트하므로 같은 파일을 본다.
-/// Python 의 `TM_CLASSIFIER_MODEL`(joblib 파일 경로)과 다른 변수다.
 pub const MODEL_DIR_ENV: &str = "TM_CLASSIFIER_MODEL_DIR";
 /// 환경변수가 없을 때의 Rust export 디렉터리.
 pub const DEFAULT_MODEL_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/classifier/export");

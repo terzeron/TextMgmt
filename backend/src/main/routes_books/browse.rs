@@ -91,3 +91,27 @@ async fn browse(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
         .collect();
     Ok(Json(json!({"status":"success","result":books,"total":total,"next_cursor":next})))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Query, RawQuery};
+
+    fn raw(uncovered: Option<&str>, limit: Option<i64>) -> RawQuery {
+        RawQuery { category: Some("fiction".into()), limit, cursor: Some("next".into()), uncovered: uncovered.map(str::to_owned) }
+    }
+
+    #[test]
+    fn query_validation_accepts_boolean_aliases_and_defaults() {
+        let defaults = Query::try_from(RawQuery { category: None, limit: None, cursor: None, uncovered: None }).unwrap();
+        assert_eq!((defaults.category.as_str(), defaults.limit, defaults.cursor.as_str(), defaults.uncovered), ("", 60, "", false));
+        for value in ["1", "TRUE", "on", "yes"] {
+            assert!(Query::try_from(raw(Some(value), Some(1))).unwrap().uncovered, "{value}");
+        }
+        for value in ["0", "FALSE", "off", "no"] {
+            assert!(!Query::try_from(raw(Some(value), Some(100))).unwrap().uncovered, "{value}");
+        }
+        assert!(Query::try_from(raw(Some("maybe"), Some(1))).err().unwrap().contains("boolean"));
+        assert!(Query::try_from(raw(None, Some(0))).err().unwrap().contains("limit"));
+        assert!(Query::try_from(raw(None, Some(10_001))).err().unwrap().contains("limit"));
+    }
+}

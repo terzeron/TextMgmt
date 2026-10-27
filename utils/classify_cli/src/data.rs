@@ -171,3 +171,31 @@ mod indexed_holdout_tests {
         assert!(String::from_utf8(warning).unwrap().contains("manifest가 없어 해시 분할을 재구성한다"));
     }
 }
+
+#[cfg(test)]
+mod json_io_tests {
+    use super::{json_file, save_json};
+    use serde_json::json;
+
+    #[test]
+    fn json_file_reports_missing_non_file_and_invalid_json_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(json_file(&dir.path().join("missing.json")).unwrap_err().contains("missing.json"));
+        assert_eq!(json_file(dir.path()).unwrap_err(), "일반 파일이 아니다");
+
+        let malformed = dir.path().join("malformed.json");
+        std::fs::write(&malformed, b"{").unwrap();
+        assert!(json_file(&malformed).unwrap_err().contains("EOF"));
+    }
+
+    #[test]
+    fn save_json_creates_parent_directories_and_writes_parseable_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/output.json");
+
+        save_json(&path, &json!({"answer": 42})).unwrap();
+
+        assert_eq!(json_file(&path).unwrap(), json!({"answer": 42}));
+        assert!(std::fs::read_to_string(path).unwrap().ends_with('\n'));
+    }
+}

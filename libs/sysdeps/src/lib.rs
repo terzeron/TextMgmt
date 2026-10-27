@@ -16,6 +16,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
+pub mod poppler;
+
 /// 환경 변수 조회 함수. `loader::Config::from_env`와 같은 모양이다.
 pub type EnvFn<'a> = &'a dyn Fn(&str) -> Option<String>;
 

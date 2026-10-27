@@ -709,11 +709,6 @@ fn test_model_path_follows_the_environment_variable() {
     // pod 는 /books 로, 학습 머신은 /mnt/data/text 로 같은 파일을 본다. 복사가 없다.
     env.set(MODEL_DIR_ENV, "/books/.classifier/export");
     assert_eq!(model_path(), PathBuf::from("/books/.classifier/export"));
-
-    // Python 이 joblib 파일 경로로 쓰는 TM_CLASSIFIER_MODEL 은 Rust 가 읽지 않는다.
-    env.remove(MODEL_DIR_ENV);
-    env.set("TM_CLASSIFIER_MODEL", "/books/.classifier/model.joblib");
-    assert_eq!(model_path(), PathBuf::from(DEFAULT_MODEL_PATH));
 }
 
 #[test]

@@ -163,6 +163,19 @@ mod tests {
         assert!(path.is_dir());
     }
 
+    #[test]
+    fn spill_directory_errors_name_the_filesystem_failure() {
+        let parent = tempfile::tempdir().unwrap();
+        let blocker = parent.path().join("not-a-directory");
+        fs::write(&blocker, b"file").unwrap();
+
+        let requested_error = resolve_spill_dir(Some(blocker.join("spill")), parent.path()).err().unwrap();
+        let temporary_error = resolve_spill_dir(None, &blocker).err().unwrap();
+
+        assert!(!requested_error.is_empty());
+        assert!(temporary_error.contains("임시 spill 디렉토리를 만들지 못했다"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn default_spill_uses_var_tmp_when_available() {

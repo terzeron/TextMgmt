@@ -72,6 +72,19 @@ fn loader_binary_dispatches_the_pdf_worker_command() {
 }
 
 #[test]
+fn loader_binary_runs_poppler_pdf_stage() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("two-pages.pdf");
+    fs::write(&path, minimal_pdf(2)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_loader")).args(["__pdf-stage", "poppler"]).arg(&path).output().unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["pages"], 2);
+}
+
+#[test]
 fn loader_binary_prints_usage_for_help_without_connecting() {
     let output = Command::new(env!("CARGO_BIN_EXE_loader")).arg("--help").output().unwrap();
 
@@ -1842,7 +1855,7 @@ mod test_pdf_extraction_cost {
         write(&pdf, b"%PDF-1.4 mock pdf content");
 
         let broken: String = ["즐기는", "들어서", "필요한", "함께"].iter().map(|w| format!(" {} 정상 본문 ", mojibake(w))).collect();
-        // Rust에는 pdftotext 단계가 없으므로 pdfium 다음이 곧바로 pdfplumber 단계다.
+        // Poppler 결과가 손상되면 lopdf 기반 대체 단계로 내려간다.
         let fake = Fake::new(vec![(Stage::Pdfium, Ok((broken.as_str(), 1))), (Stage::Plumber, Ok(("정상 한글 본문입니다", 1)))]);
 
         let read = read_from_pdf(&pdf, &fake);
@@ -1863,7 +1876,7 @@ mod test_pdf_extraction_cost {
         // Rust에서는 단계 기록을 read_file이 Stat에 옮긴다.
         read_file(&cfg, &pdf, None, false, None, &fake, &stat);
 
-        let name = "_pdf_text_by_pypdfium2";
+        let name = "_pdf_text_by_poppler";
         assert_eq!(stat.pdf_stage_count(name), 1);
         assert!(stat.pdf_stage_total_time(name) >= 0.0);
         assert_eq!(stat.pdf_stage_outcome_count(name, "ok"), 1);

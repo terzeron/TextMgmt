@@ -58,8 +58,6 @@ doc_reader = { path = "../libs/doc_reader" }
 es_client = { path = "../libs/es_client" }
 loader = { path = "../utils/loader" }
 fancy-regex = "0.14.0"
-pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_latest", "thread_safe"] }
-pyferrite = "0.0.2"
 pyfmt = { path = "../libs/pyfmt" }
 async-trait = "0.1"
 base64 = "0.23.1"

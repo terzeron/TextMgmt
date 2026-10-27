@@ -1,4 +1,1 @@
-# 개발 환경에서 pdfium 라이브러리를 찾게 한다. pypdfium2 wheel이 libpdfium.so를 함께 싣고 있다.
-# 배포 환경에서는 PDFIUM_LIB_PATH를 libpdfium이 있는 디렉토리(또는 파일)로 직접 지정한다.
-[env]
-PDFIUM_LIB_PATH = { value = ".venv/lib/python3.13/site-packages/pypdfium2_raw", relative = true }
+# PDF 처리는 Poppler command line 도구를 PATH에서 찾는다.

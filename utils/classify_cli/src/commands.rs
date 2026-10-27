@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use backend::classifier::{BookCategoryClassifier, ClassifierOptions, calibration, config, corpus, training};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{CliIo, Deps, args::Args, data};
 
@@ -22,30 +22,11 @@ pub(crate) fn execute(args: &Args, io: &mut CliIo<'_>, deps: &Deps) -> Result<i3
         "train" => train::run(args, io, deps),
         "collect" => collect(args, io, deps),
         "info" => info(args, io),
-        "import-joblib" => import_joblib(args, io),
         "evaluate" | "score-calibration" => evaluate(args, io),
         "classify" | "reclassify" => classify(args, io, deps),
         "bookstore-policy" => policy::run(args, io, deps),
         _ => unreachable!("파서가 명령을 검증한다"),
     }
-}
-
-fn import_joblib(args: &Args, io: &mut CliIo<'_>) -> Result<i32, String> {
-    let input = args.get("--model").ok_or("import-joblib: --model FILE이 필요하다")?;
-    let output = args.get("--out").ok_or("import-joblib: --out DIR이 필요하다")?;
-    let mut summary = backend::classifier::joblib_import::import_joblib(Path::new(input), Path::new(output))?;
-    let golden = args.get("--golden").unwrap_or("0").parse::<i64>().map_err(|_| "--golden: 정수가 필요하다")?;
-    if golden > 0 {
-        let seed = args.get("--seed").unwrap_or("0").parse::<i64>().map_err(|_| "--seed: 정수가 필요하다")?;
-        let model = data::model(Path::new(output))?;
-        let cases = crate::golden::write_golden(&model, Path::new(output), golden as usize, seed)?;
-        summary["golden_cases"] = json!(cases);
-        if let (Some(files), Ok(metadata)) = (summary.get_mut("files").and_then(Value::as_object_mut), fs::metadata(Path::new(output).join("golden.json"))) {
-            files.insert("golden.json".into(), json!(metadata.len()));
-        }
-    }
-    writeln!(io.out, "{}", serde_json::to_string_pretty(&summary).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
-    Ok(0)
 }
 
 fn collect(args: &Args, io: &mut CliIo<'_>, deps: &Deps) -> Result<i32, String> {

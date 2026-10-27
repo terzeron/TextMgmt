@@ -287,12 +287,32 @@ fn docker(args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+/// nori 를 미리 설치한 ES 9.1.0 이미지. 없을 때 한 번만 만든다. 컨테이너마다 플러그인을 내려받아 설치하면 실행마다 수십 초가 든다.
+const NORI_IMAGE: &str = "elasticsearch-nori:9.1.0";
+
+fn ensure_nori_image() {
+    if Command::new("docker").args(["image", "inspect", NORI_IMAGE]).output().is_ok_and(|o| o.status.success()) {
+        return;
+    }
+    let mut build = Command::new("docker").args(["build", "--tag", NORI_IMAGE, "-"]).stdin(std::process::Stdio::piped()).spawn().expect("docker build 실행");
+    std::io::Write::write_all(
+        &mut build.stdin.take().expect("docker build stdin"),
+        b"FROM docker.elastic.co/elasticsearch/elasticsearch:9.1.0\nRUN bin/elasticsearch-plugin install analysis-nori --batch\n",
+    )
+    .expect("Dockerfile 전달");
+    assert!(build.wait().expect("docker build 결과").success(), "nori ES 9.1.0 이미지 빌드 실패");
+}
+
 /// nori 분석기를 설치한 ES를 띄우고 응답할 때까지 기다린다.
+/// `TM_TEST_ES_IMAGE` 로 다른 이미지를 고르면 예전처럼 컨테이너 안에서 nori 를 설치한다.
 fn start_es() -> EsContainer {
-    let image = std::env::var("TM_TEST_ES_IMAGE").unwrap_or_else(|_| "docker.elastic.co/elasticsearch/elasticsearch:9.1.0".to_string());
+    let custom = std::env::var("TM_TEST_ES_IMAGE").ok();
+    if custom.is_none() {
+        ensure_nori_image();
+    }
     let name = format!("tm-es-manager-http-{}", std::process::id());
     let _ = Command::new("docker").args(["rm", "-f", &name]).output();
-    docker(&[
+    let mut args: Vec<&str> = vec![
         "run",
         "-d",
         "--name",
@@ -307,12 +327,12 @@ fn start_es() -> EsContainer {
         "ES_JAVA_OPTS=-Xms512m -Xmx512m",
         "-e",
         "ES_SETTING_CLUSTER_ROUTING_ALLOCATION_DISK_THRESHOLD__ENABLED=false",
-        "--entrypoint",
-        "sh",
-        &image,
-        "-c",
-        "elasticsearch-plugin install --batch analysis-nori && exec /usr/local/bin/docker-entrypoint.sh eswrapper",
-    ]);
+    ];
+    match custom.as_deref() {
+        Some(image) => args.extend(["--entrypoint", "sh", image, "-c", "elasticsearch-plugin install --batch analysis-nori && exec /usr/local/bin/docker-entrypoint.sh eswrapper"]),
+        None => args.push(NORI_IMAGE),
+    }
+    docker(&args);
     let mut container = EsContainer { name: name.clone(), url: String::new() };
     let port = docker(&["port", &name, "9200/tcp"]).lines().next().and_then(|l| l.rsplit(':').next()).map(str::to_string).expect("호스트 포트");
     container.url = format!("http://127.0.0.1:{port}");
@@ -322,7 +342,7 @@ fn start_es() -> EsContainer {
         if probe.call("info", &json!({})).is_ok() {
             return container;
         }
-        thread::sleep(Duration::from_secs(2));
+        thread::sleep(Duration::from_millis(250));
     }
     let logs = docker(&["logs", "--tail", "40", &name]);
     panic!("ES가 시간 안에 뜨지 않았다:\n{logs}");

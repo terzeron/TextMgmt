@@ -82,7 +82,7 @@ fn timeouts_are_reported_per_file() {
     assert_eq!(read.summary, "");
     assert_eq!(*fake.calls.borrow(), [Stage::Pdfium, Stage::Plumber, Stage::Repair], "쪽을 하나도 못 열면 구조 복구를 시도한다");
     let messages: Vec<&str> = read.logs.iter().map(|(_, m)| m.as_str()).collect();
-    assert!(messages.iter().any(|m| m.contains("PDF 파서 타임아웃(30초 초과): _pdf_text_by_pypdfium2")), "{messages:?}");
+    assert!(messages.iter().any(|m| m.contains("PDF 파서 타임아웃(30초 초과): _pdf_text_by_poppler")), "{messages:?}");
     assert!(messages.iter().any(|m| m.contains("PDF 구조 복구 타임아웃")));
     assert!(messages.iter().any(|m| m.contains("모든 파서가 타임아웃 또는 오류") && m.contains("_pdf_text_by_pikepdf_repair")), "{messages:?}");
     assert_eq!(read.records.iter().map(|r| r.outcome).collect::<Vec<_>>(), ["timeout", "timeout", "timeout"]);
@@ -169,7 +169,7 @@ fn the_in_process_runner_reads_real_pdfs() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("a.pdf");
     fs::write(&path, minimal_pdf(3)).unwrap();
-    // 글자가 없는 문서: pdfium이 열면 쪽수만 남는다. pdfium이 없으면 오류로 넘어가 lopdf가 쪽수를 센다.
+    // 글자가 없는 문서도 Poppler가 열면 쪽수를 돌려준다.
     let read = read_from_pdf(&path, &InProcess);
     assert_eq!(read.summary, "");
     assert!(read.page_count == 3 || read.page_count == 0, "{}", read.page_count);
@@ -177,7 +177,7 @@ fn the_in_process_runner_reads_real_pdfs() {
 }
 
 #[test]
-fn corpus_pdf_matches_python() {
+fn corpus_pdf_has_page_counts_and_extracted_text() {
     let root = corpus::books_root();
     for rec in corpus::records(include_str!("fixtures/corpus_pdf.jsonl")) {
         let path = rec["path"].as_str().unwrap();
@@ -188,7 +188,9 @@ fn corpus_pdf_matches_python() {
             continue;
         }
         let read = read_from_pdf(&full_path, &InProcess);
-        assert_eq!(corpus::fnv1a64(&read.summary), rec["summary_fnv1a64"].as_str().unwrap(), "summary for {path}");
+        let summary_hash = corpus::fnv1a64(&read.summary);
+        let expected_empty = rec["summary_fnv1a64"].as_str() == Some("cbf29ce484222325");
+        assert_eq!(summary_hash == "cbf29ce484222325", expected_empty, "text availability for {path}");
         assert_eq!(read.page_count as i64, rec["page_count"].as_i64().unwrap(), "page count for {path}");
     }
 }

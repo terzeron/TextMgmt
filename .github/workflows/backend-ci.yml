@@ -1,0 +1,59 @@
+name: backend-ci
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - 'backend/**'
+      - 'libs/**'
+      - 'utils/**'
+      - 'tests/rust/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - '.github/workflows/backend-ci.yml'
+      - '!utils/pdfscan/**'
+      - '!utils/epubscan/**'
+      - '!tests/rust/pdfscan/**'
+      - '!tests/rust/epubscan/**'
+  push:
+    branches: [develop, main]
+    paths:
+      - 'backend/**'
+      - 'libs/**'
+      - 'utils/**'
+      - 'tests/rust/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - '.github/workflows/backend-ci.yml'
+      - '!utils/pdfscan/**'
+      - '!utils/epubscan/**'
+      - '!tests/rust/pdfscan/**'
+      - '!tests/rust/epubscan/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.1
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo test --workspace --exclude pdfscan --exclude epubscan --locked -- --test-threads=1
+      - run: cargo clippy -p backend -p loader --all-targets --locked -- -D warnings
+
+  container-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --file backend/Dockerfile --tag textmgmt-backend:ci .

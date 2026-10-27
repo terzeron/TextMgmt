@@ -129,3 +129,225 @@ impl Default for CoverStatusCache {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CoverStatusCache, pdf_first_image_size};
+    use crate::db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Copy)]
+    enum Failure {
+        None,
+        Create,
+        InitializeCommit,
+        Select,
+        Insert,
+    }
+
+    struct EmptyConnection(Failure);
+
+    impl DbConnection for EmptyConnection {
+        fn cursor(&mut self) -> Box<dyn DbCursor> {
+            Box::new(EmptyCursor(self.0))
+        }
+
+        fn commit(&mut self) -> Result<(), DbError> {
+            if matches!(self.0, Failure::InitializeCommit) { Err(DbError::Other("commit failed".into())) } else { Ok(()) }
+        }
+
+        fn rollback(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) {}
+    }
+
+    struct EmptyCursor(Failure);
+
+    impl DbCursor for EmptyCursor {
+        fn execute(&mut self, sql: &str, _params: &[DbValue]) -> Result<(), DbError> {
+            let message = match (self.0, sql.trim_start()) {
+                (Failure::Create, sql) if sql.starts_with("CREATE TABLE") => Some("create failed"),
+                (Failure::Select, sql) if sql.starts_with("SELECT") => Some("select failed"),
+                (Failure::Insert, sql) if sql.starts_with("INSERT") => Some("insert failed"),
+                _ => None,
+            };
+            message.map_or(Ok(()), |message| Err(DbError::Other(message.into())))
+        }
+
+        fn executemany(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn fetchall(&mut self) -> Option<Vec<Row>> {
+            Some(vec![])
+        }
+
+        fn fetchone(&mut self) -> Option<Row> {
+            None
+        }
+
+        fn rowcount(&self) -> u64 {
+            0
+        }
+    }
+
+    fn file() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("book.pdf"), b"pdf").unwrap();
+        dir
+    }
+
+    struct CachedConnection(Row);
+
+    impl DbConnection for CachedConnection {
+        fn cursor(&mut self) -> Box<dyn DbCursor> {
+            Box::new(CachedCursor(self.0.clone()))
+        }
+
+        fn commit(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn rollback(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) {}
+    }
+
+    struct CachedCursor(Row);
+
+    impl DbCursor for CachedCursor {
+        fn execute(&mut self, _sql: &str, _params: &[DbValue]) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn executemany(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn fetchall(&mut self) -> Option<Vec<Row>> {
+            Some(vec![])
+        }
+
+        fn fetchone(&mut self) -> Option<Row> {
+            Some(self.0.clone())
+        }
+
+        fn rowcount(&self) -> u64 {
+            0
+        }
+    }
+
+    #[test]
+    fn pdf_first_image_size_reports_a_poisoned_lock() {
+        let dir = file();
+        let lock = Arc::new(Mutex::new(()));
+        let poisoner = lock.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.lock().unwrap();
+            panic!("poison test lock");
+        })
+        .join();
+
+        assert!(pdf_first_image_size(&dir.path().join("book.pdf"), &lock).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_rejects_non_utf8_paths_before_opening_a_connection() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(std::ffi::OsString::from_vec(vec![0xff]));
+        std::fs::write(&path, b"book").unwrap();
+        let provider: ConnectionProvider = Arc::new(|| panic!("non-UTF8 path must fail first"));
+        let cache = CoverStatusCache::with_connection_provider(provider);
+
+        assert!(cache.get_or_compute(&path, &|| panic!("compute must not run")).is_err());
+    }
+
+    #[test]
+    fn cache_returns_provider_errors_and_does_not_compute() {
+        let dir = file();
+        let provider: ConnectionProvider = Arc::new(|| Err(DbError::Other("offline".into())));
+        let cache = CoverStatusCache::with_connection_provider(provider);
+
+        assert!(cache.get_or_compute(&dir.path().join("book.pdf"), &|| panic!("compute must not run")).unwrap_err().contains("offline"));
+    }
+
+    #[test]
+    fn cache_hit_returns_the_stored_value_without_recomputing() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = file();
+        let path = dir.path().join("book.pdf");
+        let metadata = std::fs::metadata(&path).unwrap();
+        let modified = metadata.mtime() * 1_000_000_000 + metadata.mtime_nsec();
+        for (stored, expected) in [(0_i64, false), (1, true)] {
+            let row: Row = [("mtime_ns".into(), DbValue::from(modified)), ("size".into(), DbValue::from(metadata.len() as i64)), ("has_cover".into(), DbValue::from(stored))].into_iter().collect();
+            let provider: ConnectionProvider = Arc::new(move || Ok(Box::new(CachedConnection(row.clone()))));
+            let cache = CoverStatusCache::with_connection_provider(provider);
+
+            assert_eq!(cache.get_or_compute(&path, &|| panic!("cache hit must skip computation")).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn stale_cache_metadata_triggers_recomputation() {
+        let dir = file();
+        let path = dir.path().join("book.pdf");
+        let row: Row = [("mtime_ns".into(), DbValue::from(0_i64)), ("size".into(), DbValue::from(0_i64)), ("has_cover".into(), DbValue::from(1_i64))].into_iter().collect();
+        let provider: ConnectionProvider = Arc::new(move || Ok(Box::new(CachedConnection(row.clone()))));
+        let cache = CoverStatusCache::with_connection_provider(provider);
+        let computed = std::sync::atomic::AtomicBool::new(false);
+
+        let result = cache
+            .get_or_compute(&path, &|| {
+                computed.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(false)
+            })
+            .unwrap();
+
+        assert!(!result);
+        assert!(computed.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn cache_returns_compute_errors_without_writing_a_row() {
+        let dir = file();
+        let provider: ConnectionProvider = Arc::new(|| Ok(Box::new(EmptyConnection(Failure::None))));
+        let cache = CoverStatusCache::with_connection_provider(provider);
+
+        assert_eq!(cache.get_or_compute(&dir.path().join("book.pdf"), &|| Err("decode failed".into())).unwrap_err(), "decode failed");
+    }
+
+    #[test]
+    fn cache_retries_initialization_on_the_next_request_after_a_connection_error() {
+        let dir = file();
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider_attempts = attempts.clone();
+        let provider: ConnectionProvider =
+            Arc::new(
+                move || if provider_attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 { Err(DbError::Other("offline".into())) } else { Ok(Box::new(EmptyConnection(Failure::None))) },
+            );
+        let cache = CoverStatusCache::with_connection_provider(provider);
+
+        assert!(cache.get_or_compute(&dir.path().join("book.pdf"), &|| Ok(true)).is_err());
+        assert!(cache.get_or_compute(&dir.path().join("book.pdf"), &|| Ok(true)).unwrap());
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn cache_propagates_schema_query_and_insert_errors() {
+        for (failure, expected) in [(Failure::Create, "create failed"), (Failure::InitializeCommit, "commit failed"), (Failure::Select, "select failed"), (Failure::Insert, "insert failed")] {
+            let dir = file();
+            let provider: ConnectionProvider = Arc::new(move || Ok(Box::new(EmptyConnection(failure))));
+            let cache = CoverStatusCache::with_connection_provider(provider);
+            let error = cache.get_or_compute(&dir.path().join("book.pdf"), &|| Ok(true)).unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+}

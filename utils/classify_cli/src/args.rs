@@ -40,7 +40,6 @@ pub(crate) fn usage(command: &str) -> &'static str {
         "classify" => "PATH... --model DIR --library-root PATH --no-es --min-confidence F --top N",
         "reclassify" => "CATEGORY --library-root PATH --model DIR --no-es --min-confidence F --limit N --apply (기본 미리보기)",
         "info" => "--model DIR",
-        "import-joblib" => "--model FILE --out DIR --golden N --seed N",
         _ => "",
     }
 }
@@ -108,9 +107,6 @@ pub(crate) fn parse(argv: &[&str]) -> Result<Args, String> {
                 if !n.is_finite() || n < 0.0 || (key == "--C" && n == 0.0) || (key == "--delay" && n > 86400.0) || (matches!(key, "--holdout" | "--min-confidence") && n > 1.0) {
                     return Err(format!("{key}: 범위를 벗어난 값"));
                 }
-            }
-            if matches!(key, "--golden" | "--seed") && value.parse::<i64>().is_err() {
-                return Err(format!("{key}: 정수가 필요하다"));
             }
             if (key == "--sample-from" && !["refused", "boundary", "all"].contains(&value)) || (key == "--class-weight" && !["balanced", "none"].contains(&value)) {
                 return Err(format!("{key}: 잘못된 선택 값"));

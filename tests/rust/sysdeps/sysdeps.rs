@@ -46,6 +46,103 @@ mod clock {
     }
 }
 
+mod poppler {
+    use super::*;
+
+    struct FakeRunner {
+        outputs: std::sync::Mutex<Vec<sysdeps::CommandOutput>>,
+        calls: std::sync::Mutex<Vec<Vec<String>>>,
+    }
+
+    impl CommandRunner for FakeRunner {
+        fn run(&self, argv: &[String], timeout: Option<Duration>) -> Result<sysdeps::CommandOutput, CommandError> {
+            assert_eq!(timeout, Some(Duration::from_secs(30)));
+            self.calls.lock().unwrap().push(argv.to_vec());
+            Ok(self.outputs.lock().unwrap().remove(0))
+        }
+
+        fn which(&self, program: &str) -> Option<std::path::PathBuf> {
+            Some(std::path::PathBuf::from(format!("/usr/bin/{program}")))
+        }
+    }
+
+    fn runner(outputs: &[(&str, &str, i32)]) -> FakeRunner {
+        FakeRunner {
+            outputs: std::sync::Mutex::new(
+                outputs.iter().map(|(stdout, stderr, returncode)| sysdeps::CommandOutput { stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec(), returncode: *returncode }).collect(),
+            ),
+            calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    struct FailingRunner {
+        missing: bool,
+    }
+
+    impl CommandRunner for FailingRunner {
+        fn run(&self, _argv: &[String], _timeout: Option<Duration>) -> Result<sysdeps::CommandOutput, CommandError> {
+            if self.missing { Err(CommandError::NotFound) } else { Err(CommandError::Failed("runner failure".into())) }
+        }
+
+        fn which(&self, _program: &str) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    struct InvalidUtf8Runner;
+
+    impl CommandRunner for InvalidUtf8Runner {
+        fn run(&self, _argv: &[String], _timeout: Option<Duration>) -> Result<sysdeps::CommandOutput, CommandError> {
+            Ok(sysdeps::CommandOutput { returncode: 0, stdout: vec![0xff], stderr: Vec::new() })
+        }
+
+        fn which(&self, _program: &str) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    #[test]
+    fn page_count_uses_pdfinfo_and_rejects_malformed_output() {
+        let fake = runner(&[("Title: sample\nPages:          12\n", "", 0)]);
+        assert_eq!(sysdeps::poppler::page_count(&fake, Path::new("a book.pdf")).unwrap(), 12);
+        assert_eq!(fake.calls.lock().unwrap()[0], ["pdfinfo", "a book.pdf"]);
+
+        let malformed = runner(&[("Pages: nope\n", "", 0)]);
+        assert!(sysdeps::poppler::page_count(&malformed, Path::new("a.pdf")).is_err());
+    }
+
+    #[test]
+    fn text_and_render_commands_keep_paths_as_arguments_and_report_tool_errors() {
+        let fake = runner(&[("본문\n", "", 0), ("P6\n1 1\n255\n", "", 0)]);
+        assert_eq!(sysdeps::poppler::extract_text(&fake, Path::new("a book.pdf"), 2, 5).unwrap(), "본문\n");
+        assert_eq!(fake.calls.lock().unwrap()[0], ["pdftotext", "-q", "-enc", "UTF-8", "-f", "2", "-l", "5", "a book.pdf", "-"]);
+        assert_eq!(sysdeps::poppler::render_page(&fake, Path::new("a book.pdf"), 3, 900).unwrap(), b"P6\n1 1\n255\n");
+        assert_eq!(fake.calls.lock().unwrap()[1], ["pdftoppm", "-q", "-f", "3", "-l", "3", "-scale-to", "900", "-singlefile", "a book.pdf"]);
+
+        let failed = runner(&[("", "Syntax Error: broken file", 1)]);
+        assert!(sysdeps::poppler::extract_text(&failed, Path::new("broken.pdf"), 1, 1).unwrap_err().contains("broken file"));
+    }
+
+    #[test]
+    fn reports_missing_tools_invalid_ranges_and_invalid_output() {
+        let missing = FailingRunner { missing: true };
+        assert!(sysdeps::poppler::page_count(&missing, Path::new("a.pdf")).unwrap_err().contains("install poppler-utils"));
+
+        let failed = FailingRunner { missing: false };
+        assert!(sysdeps::poppler::page_count(&failed, Path::new("a.pdf")).unwrap_err().contains("runner failure"));
+
+        let no_count = runner(&[("Title: no page count\n", "", 0)]);
+        assert!(sysdeps::poppler::page_count(&no_count, Path::new("a.pdf")).unwrap_err().contains("did not report"));
+
+        let valid = runner(&[]);
+        assert!(sysdeps::poppler::extract_text(&valid, Path::new("a.pdf"), 0, 1).unwrap_err().contains("invalid Poppler page range"));
+        assert!(sysdeps::poppler::extract_text(&valid, Path::new("a.pdf"), 2, 1).unwrap_err().contains("invalid Poppler page range"));
+        assert!(sysdeps::poppler::extract_text(&InvalidUtf8Runner, Path::new("a.pdf"), 1, 1).unwrap_err().contains("invalid UTF-8"));
+        assert!(sysdeps::poppler::render_page(&valid, Path::new("a.pdf"), 0, 900).unwrap_err().contains("invalid Poppler render dimensions"));
+        assert!(sysdeps::poppler::render_page(&valid, Path::new("a.pdf"), 1, 0).unwrap_err().contains("invalid Poppler render dimensions"));
+    }
+}
+
 mod fs {
     use super::*;
 

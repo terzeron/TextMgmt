@@ -4,10 +4,8 @@ backend/.env
 backend/*.pid
 backend/nohup.out
 backend/run.log*
-backend/__pycache__
 
 utils/run.log*
-utils/__pycache__
 
 frontend/.env
 frontend/.env.local
@@ -21,10 +19,14 @@ frontend/playwright-report
 
 node_modules/
 
+# Ignore disposable Python caches left by local pre-migration tooling.
 .python-version
+.venv/
+__pycache__/
+.coverage*
+
 .env
 run.log*
-__pycache__
 .dependency_cache
 .last_test_success
 .test_performance_cache
@@ -32,7 +34,6 @@ __pycache__
 .last_test_run
 .vagrant
 Vagrantfile
-.coverage*
 .gitnexus
 .codegraph
 .serena
@@ -43,8 +44,8 @@ graphify-out
 tmp/
 
 # 학습 산출물. 100MB 단위라 저장소에 두지 않는다.
-# 경로는 TM_CLASSIFIER_MODEL 로 준다. 기본값은 모듈 옆이다.
-backend/classifier/model.joblib
+# Rust 분류 모델은 export 디렉터리로 저장한다.
+backend/classifier/export/
 
 # Rust build output
 /target/

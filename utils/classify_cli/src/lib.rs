@@ -3,7 +3,6 @@
 mod args;
 mod commands;
 mod data;
-mod golden;
 mod shuffle;
 
 use std::io::Write;
@@ -70,7 +69,7 @@ impl Deps {
 }
 
 pub fn commands() -> &'static [&'static str] {
-    &["collect", "train", "evaluate", "score-calibration", "bookstore-policy", "classify", "reclassify", "info", "import-joblib"]
+    &["collect", "train", "evaluate", "score-calibration", "bookstore-policy", "classify", "reclassify", "info"]
 }
 
 pub fn print_usage(out: &mut dyn Write, command: Option<&str>) -> std::io::Result<()> {
@@ -82,7 +81,7 @@ pub fn print_usage(out: &mut dyn Write, command: Option<&str>) -> std::io::Resul
     if let Some(command) = command {
         writeln!(out, "\n{command}: {}", args::usage(command))?;
     }
-    writeln!(out, "\n일반 분류 명령의 --model은 Rust export 디렉토리다. import-joblib은 --model joblib 파일을 --out export 디렉토리로 변환한다.")
+    writeln!(out, "\n--model은 Rust export 디렉토리다.")
 }
 
 pub fn main_with(args: &[&str], io: &mut CliIo<'_>, deps: &Deps) -> i32 {

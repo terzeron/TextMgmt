@@ -7,29 +7,28 @@
 
 ## Tech Stack
 
-- **Backend**: Python 3.13+ / FastAPI, uv for package management
+- **Backend**: Rust workspace (`backend` crate)
 - **Frontend**: React (npm), Vite
-- **Testing**: pytest (backend), jest (frontend)
+- **Testing**: cargo test / llvm-cov (backend and utilities), jest (frontend)
 - **Infra**: Kubernetes (`k8s/`), Docker
-- **Search**: Elasticsearch (`backend/es_manager.py`)
+- **Search**: Elasticsearch (`backend/src/es_manager.rs`)
 - **Auth**: JWT (access + refresh token), Google OAuth2
 
-## Directory Layout (Python -> Rust 전환 중)
+## Directory Layout
 
-- `backend/` API, `frontend/` React, `utils/` 실행 도구(Python 스크립트 + Rust 도구 crate),
-  `libs/` 공통 모듈 crate, `tests/` Python 테스트와 Rust 테스트(`tests/rust/<crate>/`).
+- `backend/` Rust API, `frontend/` React, `utils/` Rust 실행 도구,
+  `libs/` 공통 모듈 crate, `tests/rust/<crate>/` Rust 테스트.
 - Rust workspace는 저장소 루트 `Cargo.toml`이다. 규칙과 crate 목록은 `docs/rust-workspace.md`를 본다.
 - Rust 변경 후 `cargo test --workspace`와 `cargo clippy --workspace --all-targets`를 통과시킨다.
 - 모든 Rust 바이너리는 인자 없이 실행하면 `print_usage()`로 용도와 사용법을 출력한다.
 
 ## Project Rules
 
-- Python 패키지 추가/제거는 `uv add` / `uv remove`를 사용한다. `pip` 직접 사용 금지.
-- 백엔드 변경 후 `pytest tests/` 통과를 확인한다.
+- 백엔드 변경 후 관련 Rust 테스트를 실행한다. 넓은 변경은 `cargo test --workspace`를 실행한다.
 - 프론트엔드 변경 후 `cd frontend && npm test` 통과를 확인한다.
-- auth 관련 코드(`backend/auth.py`, `backend/refresh_token_store.py`) 수정 시 `tests/test_auth.py`를 반드시 실행한다.
+- auth 또는 refresh-token Rust 코드를 수정하면 대응하는 Rust 테스트를 실행한다.
 - k8s YAML 수정 시 `kubectl apply --dry-run=client`로 유효성을 검증한다.
-- FastAPI 엔드포인트 추가 시 `require_auth` 또는 `require_admin` 의존성을 명시적으로 붙인다.
+- API 엔드포인트 추가 시 인증 요구사항을 명시적으로 적용한다.
 
 ## Commit Format
 

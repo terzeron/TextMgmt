@@ -86,8 +86,7 @@ spec:
               valueFrom: { secretKeyRef: { name: tm-es-cred, key: password } }
             - name: TM_ES_BOOK_INDEX
               value: book
-            # joblib 원본을 Rust export 디렉터리로 변환해 books-pv에 둔다.
-            # model.joblib은 학습 기준 파일이며 Rust runtime은 이 디렉터리를 읽는다.
+            # Rust가 학습한 export 디렉터리를 books-pv에 둔다.
             - name: TM_CLASSIFIER_MODEL_DIR
               value: /books/.classifier/rust-export
             - name: TM_ES_COMICS_INDEX

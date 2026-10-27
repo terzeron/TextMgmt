@@ -12,7 +12,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
 use corpus_common::reader::{decode_utf8_ignore, open_zip};
@@ -324,7 +324,7 @@ pub fn head_tail_page_indices(total_pages: usize, window: usize) -> Vec<usize> {
     seen
 }
 
-/// PDF 앞뒤 쪽의 텍스트와 전체 쪽수. 문서를 열지 못하면 오류다(pypdfium2 대응).
+/// PDF 앞뒤 쪽의 텍스트와 전체 쪽수. 문서를 열지 못하면 오류다.
 pub fn pdf_text_primary(path: &Path) -> Result<(String, usize), String> {
     let doc = lopdf::Document::load(path).map_err(|e| e.to_string())?;
     let numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
@@ -339,67 +339,20 @@ pub fn pdf_text_primary(path: &Path) -> Result<(String, usize), String> {
     Ok((text, total))
 }
 
-pub use pdfium_render;
-
-/// libpdfium 바인딩 하나를 만든다. `PDFIUM_LIB_PATH`는 라이브러리 파일이거나 그것이 든 디렉토리다.
-fn bind_pdfium() -> Option<Box<dyn pdfium_render::prelude::PdfiumLibraryBindings>> {
-    use pdfium_render::prelude::Pdfium;
-    if let Some(configured) = std::env::var_os("PDFIUM_LIB_PATH").map(std::path::PathBuf::from) {
-        let lib = if configured.is_dir() { Pdfium::pdfium_platform_library_name_at_path(&configured) } else { configured };
-        if let Ok(bindings) = Pdfium::bind_to_library(lib) {
-            return Some(bindings);
-        }
-    }
-    Pdfium::bind_to_system_library().ok()
-}
-
-type RawBindings = Box<dyn pdfium_render::prelude::PdfiumLibraryBindings>;
-
-/// `Pdfium::new` 뒤에는 같은 라이브러리를 다시 바인딩할 수 없다("AlreadyInitialized"). 둘 다 먼저 바인딩해 둔다.
-fn pdfium_pair() -> &'static (Option<pdfium_render::prelude::Pdfium>, Option<RawBindings>) {
-    use pdfium_render::prelude::Pdfium;
-    static PAIR: OnceLock<(Option<Pdfium>, Option<RawBindings>)> = OnceLock::new();
-    PAIR.get_or_init(|| {
-        let raw = bind_pdfium();
-        let high = bind_pdfium();
-        (high.map(Pdfium::new), raw)
-    })
-}
-
-/// 공유 pdfium 바인딩. 프로세스 전체에서 하나만 만든다. 라이브러리가 없으면 `None`.
-pub fn pdfium() -> Option<&'static pdfium_render::prelude::Pdfium> {
-    pdfium_pair().0.as_ref()
-}
-
-/// `pdfium()`과 같은 라이브러리의 저수준 함수 묶음. pypdfium2처럼 `FPDFText_GetText`를 직접 부를 때 쓴다.
-/// pdfium은 스레드 안전하지 않으므로 한 번에 한 스레드에서만 부른다.
-pub fn pdfium_bindings() -> Option<&'static dyn pdfium_render::prelude::PdfiumLibraryBindings> {
-    let pair = pdfium_pair();
-    pair.0.as_ref()?;
-    pair.1.as_deref()
-}
-
-/// pdfium으로 앞뒤 쪽의 텍스트와 전체 쪽수를 읽는다(pypdfium2와 같은 엔진). 라이브러리가 없거나
-/// 문서를 열지 못하면 오류다. 쪽 하나라도 못 읽으면 전체가 실패한다(원본과 같다).
-pub fn pdf_text_pdfium(path: &Path) -> Result<(String, usize), String> {
-    let pdfium = pdfium().ok_or_else(|| "libpdfium을 찾지 못했다".to_owned())?;
-    let doc = pdfium.load_pdf_from_file(path, None).map_err(|e| e.to_string())?;
-    let pages = doc.pages();
-    let total = pages.len() as usize;
+/// Poppler로 앞뒤 쪽 텍스트와 전체 쪽수를 읽는다.
+pub fn pdf_text_poppler(path: &Path) -> Result<(String, usize), String> {
+    let runner = sysdeps::SystemRunner;
+    let total = sysdeps::poppler::page_count(&runner, path)?;
     let mut text = String::new();
     for idx in head_tail_page_indices(total, PDF_ISBN_PAGE_WINDOW) {
-        let page = pages.get(idx as i32).map_err(|e| e.to_string())?;
-        // `all()`은 페이지 경계 안의 글자만 돌려준다. pypdfium2의 `get_text_range()`처럼 모든 글자를
-        // (줄바꿈으로 만들어 넣는 글자까지) 순서대로 읽는다.
-        let page_text = page.text().map_err(|e| e.to_string())?;
-        text.extend(page_text.chars().iter().filter_map(|c| c.unicode_char()));
+        text.push_str(&sysdeps::poppler::extract_text(&runner, path, idx + 1, idx + 1)?);
     }
     Ok((text, total))
 }
 
-/// 기본 추출기: pdfium이 있으면 그것을, 없으면 순수 Rust(lopdf)를 쓴다.
+/// Poppler 우선 추출기. 실행 파일이 없거나 PDF를 열지 못하면 순수 Rust(lopdf)를 쓴다.
 pub fn pdf_text_auto(path: &Path) -> Result<(String, usize), String> {
-    if pdfium().is_some() { pdf_text_pdfium(path) } else { pdf_text_primary(path) }
+    pdf_text_poppler(path).or_else(|_| pdf_text_primary(path))
 }
 
 /// 문서 구조를 못 여는 손상 PDF용 대비책(pypdf 대응): 스트림을 직접 훑어 글자열을 모은다.
@@ -541,7 +494,7 @@ pub struct Backends {
     pub runner: Rc<dyn CommandRunner>,
     pub stat: Arc<Stat>,
     pub pdf_timeout: f64,
-    /// 지정하면 PDFium/pypdf 대응 단계를 별도 프로세스에서 실행해 멈춘 작업을 종료한다.
+    /// 지정하면 Poppler/pypdf 대응 단계를 별도 프로세스에서 실행해 멈춘 작업을 종료한다.
     pub pdf_worker_executable: Option<std::path::PathBuf>,
 }
 
@@ -602,19 +555,19 @@ fn extract_pdf(path: &Path, content: Option<&str>, b: &Backends) -> Vec<String> 
     let owned = path.to_path_buf();
     let (mut pages, mut text) = (0, String::new());
     let primary_result = match b.pdf_worker_executable.as_deref() {
-        Some(executable) => run_pdf_worker(executable, "pdfium", path, b.pdf_timeout),
-        None => run_stage(b.pdf_timeout, "isbn/pdfium", move || primary(&owned)),
+        Some(executable) => run_pdf_worker(executable, "poppler", path, b.pdf_timeout),
+        None => run_stage(b.pdf_timeout, "isbn/poppler", move || primary(&owned)),
     };
     match primary_result {
         Ok((t, n)) => {
-            b.stat.record_pdf_stage("isbn_pdfium", start.elapsed().as_secs_f64(), outcome(&t));
+            b.stat.record_pdf_stage("isbn_poppler", start.elapsed().as_secs_f64(), outcome(&t));
             (text, pages) = (t, n);
         }
         Err(StageError::Timeout) => {
-            b.stat.record_pdf_stage("isbn_pdfium", start.elapsed().as_secs_f64(), "timeout");
+            b.stat.record_pdf_stage("isbn_poppler", start.elapsed().as_secs_f64(), "timeout");
             return Vec::new();
         }
-        Err(StageError::Failed) => b.stat.record_pdf_stage("isbn_pdfium", start.elapsed().as_secs_f64(), "error"),
+        Err(StageError::Failed) => b.stat.record_pdf_stage("isbn_poppler", start.elapsed().as_secs_f64(), "error"),
     }
     if !text.is_empty() {
         return search_in_content(&text);

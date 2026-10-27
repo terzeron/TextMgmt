@@ -166,23 +166,6 @@ fn rust_trained_model_classifies_clear_examples() {
 }
 
 #[test]
-fn imports_legacy_joblib_without_python_and_matches_export_fixture() {
-    let input = Path::new(FIXTURE).join("legacy.joblib");
-    let output = tempfile::tempdir().unwrap();
-
-    backend::classifier::joblib_import::import_joblib(&input, output.path()).unwrap();
-
-    let imported = CategoryModel::load_dir(output.path()).unwrap();
-    let committed = CategoryModel::load_dir(Path::new(FIXTURE)).unwrap();
-    assert_eq!(imported.classes(), committed.classes());
-    assert_eq!(imported.n_features(), committed.n_features());
-    let doc = json!({"text":"무림맹 dragon", "name":"무림_123.epub", "title":"마법 이야기", "author":"작가1", "publisher":"출판사 북스", "type":"epub"});
-    for (actual, expected) in imported.scores(&doc).iter().zip(committed.scores(&doc)) {
-        assert!((actual - expected).abs() < 1e-4, "{actual} != {expected}");
-    }
-}
-
-#[test]
 fn min_confidence_priority_config_then_meta_then_one() {
     let dir = copy_fixture();
     let model = CategoryModel::load_dir(dir.path()).unwrap();

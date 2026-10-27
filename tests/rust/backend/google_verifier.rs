@@ -16,6 +16,18 @@ struct FixtureFetcher {
     kid: String,
 }
 
+struct ScriptedFetcher {
+    calls: AtomicUsize,
+    response: Result<(Value, Duration), String>,
+}
+
+impl GoogleJwksFetcher for ScriptedFetcher {
+    fn fetch(&self) -> Result<(Value, Duration), String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.response.clone()
+    }
+}
+
 impl GoogleJwksFetcher for FixtureFetcher {
     fn fetch(&self) -> Result<(Value, Duration), String> {
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -56,4 +68,41 @@ fn rejects_oversized_token_before_fetching_keys() {
     let oversized = "x".repeat(64 * 1024 + 1);
     assert!(verifier.verify(&oversized, "textmgmt-client").is_err());
     assert_eq!(fetcher.calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn malformed_token_and_bad_jwks_fail_closed() {
+    let fetcher = Arc::new(ScriptedFetcher { calls: AtomicUsize::new(0), response: Ok((json!({"keys": []}), Duration::from_secs(300))) });
+    let verifier = GoogleIdTokenVerifier::with_fetcher(fetcher.clone());
+    assert!(verifier.verify("not.a.jwt", "textmgmt-client").is_err());
+
+    let wrong_type = json!({"keys": [{"kid":"test-key", "kty":"EC", "n":MODULUS, "e":"AQAB"}]});
+    let bad_key = GoogleIdTokenVerifier::with_fetcher(Arc::new(ScriptedFetcher { calls: AtomicUsize::new(0), response: Ok((wrong_type, Duration::from_secs(300))) }));
+    assert!(bad_key.verify(VALID, "textmgmt-client").unwrap_err().contains("unsupported"));
+
+    let missing_modulus = json!({"keys": [{"kid":"test-key", "kty":"RSA", "e":"AQAB"}]});
+    let bad_key = GoogleIdTokenVerifier::with_fetcher(Arc::new(ScriptedFetcher { calls: AtomicUsize::new(0), response: Ok((missing_modulus, Duration::from_secs(300))) }));
+    assert!(bad_key.verify(VALID, "textmgmt-client").unwrap_err().contains("no modulus"));
+
+    let unavailable = GoogleIdTokenVerifier::with_fetcher(Arc::new(ScriptedFetcher { calls: AtomicUsize::new(0), response: Err("offline".into()) }));
+    assert_eq!(unavailable.verify(VALID, "textmgmt-client").unwrap_err(), "offline");
+    assert_eq!(fetcher.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn zero_max_age_refetches_jwks_and_recent_unknown_key_refresh_is_throttled() {
+    let expiring = Arc::new(ScriptedFetcher {
+        calls: AtomicUsize::new(0),
+        response: Ok((json!({"keys": [{"kid":"test-key", "kty":"RSA", "alg":"RS256", "use":"sig", "n":MODULUS, "e":"AQAB"}]}), Duration::ZERO)),
+    });
+    let verifier = GoogleIdTokenVerifier::with_fetcher(expiring.clone());
+    assert!(verifier.verify(VALID, "textmgmt-client").is_ok());
+    assert!(verifier.verify(VALID, "textmgmt-client").is_ok());
+    assert_eq!(expiring.calls.load(Ordering::SeqCst), 2);
+
+    let rotated = Arc::new(FixtureFetcher { calls: AtomicUsize::new(0), kid: "rotated-key".into() });
+    let verifier = GoogleIdTokenVerifier::with_fetcher(rotated.clone());
+    assert!(verifier.verify(VALID, "textmgmt-client").is_err());
+    assert!(verifier.verify(VALID, "textmgmt-client").is_err());
+    assert_eq!(rotated.calls.load(Ordering::SeqCst), 2);
 }
