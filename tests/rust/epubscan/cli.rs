@@ -70,6 +70,17 @@ fn structure_scan_writes_the_report_and_prints_a_summary() {
 }
 
 #[test]
+fn structure_report_parent_creation_failure_returns_an_error() {
+    let e = env();
+    let blocked_parent = e.root.join("not-a-directory");
+    fs::write(&blocked_parent, b"file").unwrap();
+    let report = blocked_parent.join("report.json");
+    let r = run(&e.root, &["structure", "--root", p(&e.root), "--workers", "1", "--report", p(&report)]);
+
+    assert_eq!(r.code, 1);
+}
+
+#[test]
 fn structure_without_report_writes_a_per_directory_file() {
     let e = env();
     let (a, b) = (e.root.join("library_a"), e.root.join("library_b"));
@@ -156,6 +167,17 @@ fn scan_limits_are_passed_through() {
 }
 
 #[test]
+fn scan_applies_the_limit_to_found_files() {
+    let e = env();
+    for name in ["a.epub", "b.epub"] {
+        bad_epub(&e.root.join(name));
+    }
+    let r = run(&e.root, &["scan", "--limit", "1", "--json", p(&e.root)]);
+    assert_eq!(r.code, 1);
+    assert_eq!(serde_json::from_str::<Value>(&r.out).unwrap().as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn scan_with_nothing_to_scan_or_bad_options_exits_two() {
     let e = env();
     assert_eq!(run(&e.root, &["scan", p(&e.root.join("missing"))]).code, 2);
@@ -189,5 +211,116 @@ fn no_arguments_print_purpose_and_usage_for_both_subcommands() {
         {
             assert!(r.out.contains(needle), "{needle} 없음: {}", r.out);
         }
+    }
+}
+
+#[test]
+fn scan_streams_many_files_in_order_across_windows() {
+    // 창(워커 수 x 8)보다 많은 파일: 여러 창에 걸쳐도 순서와 누락이 없어야 한다.
+    let e = env();
+    let lib = e.root.join("lib");
+    fs::create_dir_all(&lib).unwrap();
+    for i in 0..21 {
+        bad_epub(&lib.join(format!("{i:02}.epub")));
+    }
+    let r = run(&e.root, &["scan", "--workers", "1", p(&lib)]);
+    assert_eq!(r.code, 1);
+    let names: Vec<&str> = r.out.lines().filter(|l| l.starts_with("== ")).map(|l| l.split(" == ").next().unwrap()).collect();
+    assert_eq!(names.len(), 21);
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted);
+}
+
+#[test]
+fn scan_json_streamed_per_window_is_byte_identical_to_one_pretty_array() {
+    let e = env();
+    let lib = e.root.join("lib");
+    fs::create_dir_all(&lib).unwrap();
+    for i in 0..11 {
+        if i % 2 == 0 { bad_epub(&lib.join(format!("{i:02}.epub"))) } else { clean_epub(&lib.join(format!("{i:02}.epub"))) }
+    }
+    let r = run(&e.root, &["scan", "--json", "--workers", "1", p(&lib)]);
+    let v: Value = serde_json::from_str(&r.out).unwrap();
+    assert_eq!(v.as_array().unwrap().len(), 11);
+    assert_eq!(r.out.trim_end(), serde_json::to_string_pretty(&v).unwrap());
+}
+
+#[test]
+fn scan_exit_code_tracks_findings_and_incomplete_across_windows() {
+    let e = env();
+    let lib = e.root.join("lib");
+    fs::create_dir_all(&lib).unwrap();
+    for i in 0..9 {
+        clean_epub(&lib.join(format!("{i:02}.epub")));
+    }
+    fs::write(lib.join("99.epub"), b"not a zip").unwrap(); // 마지막 창에서만 INCOMPLETE
+    assert_eq!(run(&e.root, &["scan", "--workers", "1", p(&lib)]).code, 2);
+    bad_epub(&lib.join("00.epub")); // 첫 창에서 지표가 나오면 뒤의 INCOMPLETE에 가려지지 않는다
+    assert_eq!(run(&e.root, &["scan", "--workers", "1", p(&lib)]).code, 1);
+}
+
+#[test]
+fn effective_workers_shrinks_with_the_member_limit_but_never_below_one() {
+    assert_eq!(cli::effective_workers(2, 20), 2);
+    assert_eq!(cli::effective_workers(64, 20), 4); // 기본 한도 20MB: 2048 / (20 x 22)
+    assert_eq!(cli::effective_workers(64, 1), 64);
+    assert_eq!(cli::effective_workers(8, 1000), 1);
+    assert_eq!(cli::effective_workers(0, 20), 1);
+    assert_eq!(cli::effective_workers(3, 0), 3);
+}
+
+#[test]
+fn missing_paths_are_incomplete_not_silently_skipped() {
+    let e = env();
+    let good = e.root.join("ok.epub");
+    clean_epub(&good);
+    let missing = e.root.join("missing.epub");
+    // 다른 파일이 깨끗해도 없는 경로는 검사하지 못한 것이다. 종료 코드가 0이면 그 사실이 사라진다.
+    let r = run(&e.root, &["scan", p(&good), p(&missing)]);
+    assert_eq!(r.code, 2, "{}", r.out);
+    assert!(r.out.contains("missing.epub") && r.out.contains("Cannot open as ZIP EPUB"), "{}", r.out);
+    // 지표가 있으면 지표가 우선이다.
+    let bad = e.root.join("bad.epub");
+    bad_epub(&bad);
+    assert_eq!(run(&e.root, &["scan", p(&bad), p(&missing)]).code, 1);
+}
+
+#[test]
+fn unreadable_directories_are_reported_instead_of_skipped() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = env();
+    let lib = e.root.join("lib");
+    let locked = lib.join("locked");
+    fs::create_dir_all(&locked).unwrap();
+    clean_epub(&lib.join("ok.epub"));
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let r = run(&e.root, &["scan", "-r", p(&lib)]);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    if fs::read_dir(&locked).is_ok() && r.code == 0 {
+        return; // root로 실행되면 권한이 막지 못한다.
+    }
+    assert_eq!(r.code, 2, "{}", r.out);
+    assert!(r.out.contains("locked") && r.out.contains("unreadable directory"), "{}", r.out);
+}
+
+#[test]
+fn scan_survives_a_closed_output() {
+    struct Broken;
+    impl std::io::Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("closed"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let e = env();
+    let f = e.root.join("a.epub");
+    bad_epub(&f);
+    for flags in [&["scan"][..], &["scan", "--json"][..]] {
+        let mut argv: Vec<String> = flags.iter().map(|s| s.to_string()).collect();
+        argv.push(p(&f).to_string());
+        assert_eq!(cli::run(&argv, &e.root, &mut Broken, &quiet), 1, "{flags:?}");
     }
 }

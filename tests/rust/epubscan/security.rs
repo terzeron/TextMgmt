@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 use common::*;
-use epubscan::security::{Limits, SecurityReport, Severity, Status, scan_epub};
+use epubscan::security::{Limits, SecurityReport, Severity, Status, guarded, scan_epub};
 
 fn scan(path: &Path) -> SecurityReport {
     scan_epub(path, &Limits::default())
@@ -165,6 +165,19 @@ fn forms_meta_refresh_and_base_are_flagged() {
 }
 
 #[test]
+fn local_script_src_and_non_remote_refresh_keep_their_expected_severity() {
+    let r = scan_chapter(r#"<script src="javascript:alert(1)"></script>"#);
+    assert_eq!(severity_of(&r, "JS_URL"), Severity::High);
+    assert!(!has(&r, "REMOTE_SCRIPT"));
+
+    let r = scan_chapter(r#"<meta http-equiv="refresh" content="5">"#);
+    assert_eq!(severity_of(&r, "META_REFRESH"), Severity::Medium);
+
+    let r = scan_chapter(r#"<svg><animate attributeName="href" from="javascript:alert(1)"/></svg>"#);
+    assert!(has(&r, "SVG_ANIMATE_HREF") && has(&r, "JS_URL"));
+}
+
+#[test]
 fn remote_resources_are_low_and_require_the_opf_declaration() {
     let r = scan_chapter(r#"<img src="https://tracker.example/p.gif"><link rel="stylesheet" href="http://x.example/a.css"><video src="https://x.example/v.mp4"></video><source src="//x.example/a">"#);
     assert_eq!(severity_of(&r, "REMOTE_RESOURCE"), Severity::Low);
@@ -251,6 +264,7 @@ fn executable_extensions_and_magic_bytes_are_flagged() {
     assert_eq!(severity_of(&scan_extra("OEBPS/a.jpg", b"\xcf\xfa\xed\xfe\x07"), "MACHO_BINARY_CONTENT"), Severity::Critical);
     assert_eq!(severity_of(&scan_extra("OEBPS/a.jpg", b"\xca\xfe\xba\xbe\x00\x00\x00\x34"), "JAVA_CLASS_CONTENT"), Severity::Medium);
     assert_eq!(severity_of(&scan_extra("OEBPS/a.txt", b"#!/bin/sh\nrm -rf /"), "SCRIPT_SHEBANG"), Severity::Medium);
+    assert_eq!(severity_of(&scan_extra("OEBPS/a.bin", b"\xca\xfe\xba\xbe\x00\x00\x00\x02"), "MACHO_BINARY_CONTENT"), Severity::Medium);
     assert!(scan_extra("OEBPS/a.png", b"\x89PNG\r\n\x1a\nrest").findings.is_empty());
 }
 
@@ -314,6 +328,7 @@ fn backslash_control_reserved_and_stream_names_are_flagged() {
     assert!(!has(&scan_names(&["OEBPS/console.txt"]), "WINDOWS_RESERVED_NAME"));
     assert_eq!(severity_of(&scan_names(&["OEBPS/a.xhtml:evil.exe"]), "ZIP_ALT_DATA_STREAM"), Severity::Medium);
     assert_eq!(severity_of(&scan_names(&[&format!("OEBPS/{}.txt", "a".repeat(300))]), "ZIP_NAME_TOO_LONG"), Severity::Low);
+    assert_eq!(severity_of(&scan_names(&[&format!("OEBPS/{}.txt", "a".repeat(1_025))]), "ZIP_NAME_TOO_LONG"), Severity::Low);
 }
 
 #[test]
@@ -351,6 +366,32 @@ fn damaged_local_headers_are_high() {
     epub_with_chapter(&q, &xhtml("<p>x</p>"));
     mangle_local_name(&q, "OEBPS/ch1.xhtml");
     assert_eq!(severity_of(&scan(&q), "ZIP_HEADER_NAME_MISMATCH"), Severity::High);
+}
+
+fn patch_central(path: &Path, member: &str, field: usize, bytes: &[u8]) {
+    let mut data = fs::read(path).unwrap();
+    let name = member.as_bytes();
+    let at = (0..data.len() - 46 - name.len()).find(|&i| &data[i..i + 4] == b"PK\x01\x02" && &data[i + 46..i + 46 + name.len()] == name).expect("central header");
+    data[at + field..at + field + bytes.len()].copy_from_slice(bytes);
+    fs::write(path, data).unwrap();
+}
+
+#[test]
+fn encrypted_and_unsupported_members_are_reported_as_incomplete() {
+    let d = tempfile::tempdir().unwrap();
+    let encrypted = d.path().join("encrypted.epub");
+    epub_with_chapter(&encrypted, &xhtml("<p>x</p>"));
+    patch_central(&encrypted, "OEBPS/ch1.xhtml", 8, &[0x01, 0x00]);
+    let r = scan(&encrypted);
+    assert_eq!(r.status, Status::Incomplete);
+    assert!(r.notes.iter().any(|n| n.contains("ZIP-encrypted")), "{:?}", r.notes);
+
+    let unsupported = d.path().join("unsupported.epub");
+    epub_with_chapter(&unsupported, &xhtml("<p>x</p>"));
+    patch_central(&unsupported, "OEBPS/ch1.xhtml", 10, &[12, 0]);
+    let r = scan(&unsupported);
+    assert_eq!(r.status, Status::Incomplete);
+    assert!(r.notes.iter().any(|n| n.contains("unsupported ZIP compression")), "{:?}", r.notes);
 }
 
 // ---- mimetype / container ----
@@ -436,6 +477,16 @@ fn opf_manifest_is_checked_for_escapes_remote_items_and_script_media_types() {
     assert_eq!(severity_of(&r, "REMOTE_MANIFEST_ITEM"), Severity::Medium);
     assert_eq!(severity_of(&r, "DANGEROUS_URI_SCHEME"), Severity::High);
     assert_eq!(severity_of(&r, "SCRIPT_MEDIA_TYPE"), Severity::Medium);
+}
+
+#[test]
+fn opf_manifest_reports_unc_and_unknown_schemes() {
+    let items = [opf_item("c1", "ch1.xhtml", "application/xhtml+xml", ""), opf_item("u1", "\\\\host\\share\\x", "text/plain", ""), opf_item("x1", "weird-app://open", "text/plain", "")].concat();
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    epub_with_files(&p, &opf(&items), &xhtml("<p>x</p>"), &[]);
+    let r = scan(&p);
+    assert!(has(&r, "UNC_PATH") && has(&r, "UNKNOWN_URI_SCHEME"), "{:?}", codes(&r));
 }
 
 #[test]
@@ -687,7 +738,13 @@ fn host_api_ignores_library_activex_fallbacks_and_feature_detection_but_keeps_th
 
 #[test]
 fn activex_aliasing_and_comment_tricks_do_not_hide_host_calls() {
-    let evasions: [&[u8]; 5] = [
+    let evasions: [&[u8]; 11] = [
+        b"function f(C) { return new C('x'); } f(ActiveXObject);",
+        b"var C = [ActiveXObject][0]; new C(prog);",
+        b"function g() { return ActiveXObject; }",
+        br#"var s = " // "; new ActiveXObject("Some.Unknown.Control");"#,
+        br#"var s = new (window.ActiveXObject)('Some.Unknown.Control');"#,
+        br#"var o = { A: window.ActiveXObject }; new o.A(prog);"#,
         br#"var A = window.ActiveXObject; var s = new A("WScript.Shell");"#,
         br#"var A = ActiveXObject; new A(prog);"#,
         br#"var A = window["ActiveXObject"]; new A(prog);"#,
@@ -702,4 +759,108 @@ fn activex_aliasing_and_comment_tricks_do_not_hide_host_calls() {
     for js in [&br#"var A = window.ActiveXObject; new A("WScript.Shell");"#[..], &br#"new (window.ActiveXObject)('Scripting.FileSystemObject');"#[..]] {
         assert_eq!(severity_of(&scan_extra("OEBPS/a.js", js), "HOST_COMMAND_EXEC"), Severity::Critical, "{}", String::from_utf8_lossy(js));
     }
+}
+
+#[test]
+fn boolean_feature_detection_is_not_mistaken_for_activex_use() {
+    let cases: [&[u8]; 3] = [br#"if (ready && window.ActiveXObject) { useLegacy(); }"#, br#"if (ready || self.ActiveXObject) { useLegacy(); }"#, br#"var supported = !window.ActiveXObject;"#];
+    for js in cases {
+        let r = scan_extra("OEBPS/a.js", js);
+        assert!(!has(&r, "HOST_API"), "{}: {:?}", String::from_utf8_lossy(js), codes(&r));
+    }
+}
+
+#[test]
+fn directory_entries_are_skipped_without_affecting_epub_findings() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    let mut z = zip::ZipWriter::new(fs::File::create(&p).unwrap());
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    z.start_file("mimetype", o).unwrap();
+    z.write_all(b"application/epub+zip").unwrap();
+    z.add_directory("OEBPS/empty/", o).unwrap();
+    z.start_file("META-INF/container.xml", o).unwrap();
+    z.write_all(CONTAINER_XML.as_bytes()).unwrap();
+    z.start_file("OEBPS/content.opf", o).unwrap();
+    z.write_all(clean_opf().as_bytes()).unwrap();
+    z.start_file("OEBPS/ch1.xhtml", o).unwrap();
+    z.write_all(xhtml("<p>ok</p>").as_bytes()).unwrap();
+    z.finish().unwrap();
+
+    let r = scan(&p);
+    assert_eq!(r.status, Status::None, "{:?}", r.findings);
+    assert_eq!(r.entries, 5);
+}
+
+#[test]
+fn a_later_critical_finding_is_not_hidden_by_an_earlier_high_one_at_the_same_location() {
+    for body in [r##"<a href="smb://h/s">a</a><a href="ms-msdt:/id">b</a>"##, r##"<a href="ms-msdt:/id">b</a><a href="smb://h/s">a</a>"##] {
+        let r = scan_chapter(body);
+        assert_eq!(severity_of(&r, "DANGEROUS_URI_SCHEME"), Severity::Critical, "{body}");
+        assert_eq!(r.findings.iter().filter(|f| f.code == "DANGEROUS_URI_SCHEME").count(), 1);
+    }
+}
+
+// ---- 큰 파일과 메모리 ----
+
+#[test]
+fn a_panicking_scan_becomes_an_incomplete_report_instead_of_killing_the_batch() {
+    let r = guarded(Path::new("/x/y.epub"), || panic!("parser bug"));
+    assert_eq!(r.status, Status::Incomplete);
+    assert!(r.findings.is_empty());
+    assert!(r.file.ends_with("y.epub") && r.notes.iter().any(|n| n.contains("panicked")), "{:?}", r.notes);
+}
+
+/// 끝에 zip64 EOCD만 있는 파일. 항목 수와 중앙 디렉터리 크기를 마음대로 적을 수 있다.
+fn zip64_stub(entries: u64, dir_bytes: u64) -> Vec<u8> {
+    let mut rec = vec![0u8; 56];
+    rec[..4].copy_from_slice(b"PK\x06\x06");
+    rec[32..40].copy_from_slice(&entries.to_le_bytes());
+    rec[40..48].copy_from_slice(&dir_bytes.to_le_bytes());
+    let mut loc = vec![0u8; 20];
+    loc[..4].copy_from_slice(b"PK\x06\x07"); // zip64 EOCD 위치 = 0
+    let mut eocd = vec![0u8; 22];
+    eocd[..4].copy_from_slice(b"PK\x05\x06");
+    eocd[10..12].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    eocd[12..16].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    [rec, loc, eocd].concat()
+}
+
+#[test]
+fn zip64_directories_that_would_exhaust_memory_are_refused_before_opening() {
+    let d = tempfile::tempdir().unwrap();
+    for (entries, dir_bytes, needle) in [(5_000_000u64, 1_000u64, "Too many entries"), (10, 10u64 << 30, "Central directory too large")] {
+        let p = d.path().join("huge.epub");
+        fs::write(&p, zip64_stub(entries, dir_bytes)).unwrap();
+        let r = scan(&p);
+        assert_eq!(r.status, Status::Incomplete, "{needle}");
+        assert!(r.notes.iter().any(|n| n.contains(needle) && n.contains("not opened")), "{:?}", r.notes);
+        assert_eq!(r.entries, 0);
+    }
+    // 정상 크기의 zip64 표기는 막지 않는다(열기를 시도하고, 못 열면 평소의 메모를 남긴다).
+    let p = d.path().join("small.epub");
+    fs::write(&p, zip64_stub(3, 100)).unwrap();
+    assert!(scan(&p).notes.iter().any(|n| n.contains("Cannot open")));
+    // zip64 로케이터나 레코드가 없으면 알아보지 못한 것으로 보고 평소처럼 연다.
+    let mut broken = zip64_stub(5_000_000, 1);
+    broken[76 - 20] = b'X';
+    fs::write(&p, broken).unwrap();
+    assert!(scan(&p).notes.iter().any(|n| n.contains("Cannot open")));
+    let mut invalid_record = zip64_stub(5_000_000, 1);
+    invalid_record[..4].copy_from_slice(b"NOPE");
+    fs::write(&p, invalid_record).unwrap();
+    assert!(scan(&p).notes.iter().any(|n| n.contains("Cannot open")));
+}
+
+#[test]
+fn the_total_scan_limit_leaves_one_note_not_one_per_member() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    let extra: Vec<(String, Vec<u8>)> = (0..20).map(|i| (format!("OEBPS/f{i}.bin"), vec![1u8; 2048])).collect();
+    let refs: Vec<(&str, &[u8])> = extra.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    epub_with_files(&p, &clean_opf(), &xhtml("<p>x</p>"), &refs);
+    let r = scan_epub(&p, &Limits { max_member: 1 << 20, max_total: 100, max_files: 10_000 });
+    let notes: Vec<_> = r.notes.iter().filter(|n| n.contains("Total decompressed-byte scan limit")).collect();
+    assert_eq!(notes.len(), 1, "{:?}", r.notes);
+    assert!(notes[0].contains("entries not inspected"));
 }

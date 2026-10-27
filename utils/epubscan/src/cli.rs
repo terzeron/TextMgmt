@@ -5,13 +5,13 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use corpus_common::{DEFAULT_LIBRARY_ROOT, DEFAULT_WORKERS, Log, default_report_path, pool};
+use corpus_common::{DEFAULT_LIBRARY_ROOT, DEFAULT_WORKERS, Log, default_report_path, limited, pool};
 use rayon::prelude::*;
 
 use crate::security::{Limits, SecurityReport, Status, scan_epub};
 use crate::structure::{inspect_epub_structure, print_epub_structure_summary, scan_epub_structure};
 
-const USAGE: &str = "usage: epubscan structure [--root ROOT] [--file FILE]... [--workers N] [--limit N] [--report PATH]\n       epubscan scan [-r] [--json] [--max-member-mb N] [--max-total-mb N] [--max-files N] [--workers N] PATH...";
+const USAGE: &str = "usage: epubscan structure [--root ROOT] [--file FILE]... [--workers N] [--limit N] [--report PATH]\n       epubscan scan [-r] [--json] [--limit N] [--max-member-mb N] [--max-total-mb N] [--max-files N] [--workers N] PATH...";
 
 struct Args {
     command: String,
@@ -139,7 +139,10 @@ fn is_epub(p: &Path) -> bool {
 }
 
 fn walk(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = fs::read_dir(dir) else { return };
+    let Ok(rd) = fs::read_dir(dir) else {
+        out.push(dir.to_path_buf()); // 읽을 수 없는 디렉토리를 조용히 건너뛰지 않는다. scan_epub가 INCOMPLETE로 보고한다.
+        return;
+    };
     let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
     entries.sort();
     for p in entries {
@@ -156,12 +159,12 @@ fn walk(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) {
 fn collect(args: &Args) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     for p in &args.paths {
-        if p.is_file() {
-            found.push(p.clone());
-        } else if p.is_dir() {
+        if p.is_dir() {
             walk(p, args.recursive, &mut found);
         } else {
-            eprintln!("Not found: {}", p.display());
+            // 파일이거나, 없거나 읽을 수 없는 경로다. 뒤의 둘은 scan_epub가 INCOMPLETE로 보고한다(종료 코드 2).
+            // 건너뛰면 다른 파일이 깨끗할 때 "정상"으로 끝나 검사하지 못한 사실이 사라진다.
+            found.push(p.clone());
         }
     }
     // 중복은 처음 것만 남긴다.
@@ -190,25 +193,71 @@ fn print_text(r: &SecurityReport, out: &mut dyn Write) -> io::Result<()> {
     Ok(())
 }
 
+/// 한 번에 검사하는 파일 수는 워커 수의 이 배수다. 보고서는 이 창 안에서만 메모리에 머문다.
+/// 창이 워커 수와 같으면 가장 느린 파일 하나를 기다리느라 놀고, 너무 크면 보고서가 쌓인다.
+const WINDOW_PER_WORKER: usize = 8;
+
+/// 동시에 해석하는 멤버들이 합쳐서 쓸 수 있는 메모리의 어림 상한(MB).
+const MEMORY_BUDGET_MB: u64 = 2048;
+/// 멤버 1MB를 해석하는 데 드는 메모리(MB). 마크업은 태그 목록과 소문자 사본 때문에 입력의 약 21배가 들고(19MB XHTML이 401MB),
+/// 원본 한 벌이 더 있다.
+const PARSE_MEMORY_FACTOR: u64 = 22;
+
+/// 워커 수를 메모리로 제한한다. 워커마다 최악의 멤버(`--max-member-mb`)를 동시에 해석할 수 있고, 스레드별 malloc 아레나는
+/// 한 번 늘린 메모리를 쥐고 있어서 큰 작업이 돌아가며 지나가도 최대 상주 메모리가 줄지 않는다. 엄밀한 한도가 아니라 보수적인 동시성 상한이다.
+pub fn effective_workers(workers: usize, max_member_mb: u64) -> usize {
+    let by_memory = (MEMORY_BUDGET_MB / (max_member_mb.max(1) * PARSE_MEMORY_FACTOR)).max(1);
+    workers.max(1).min(usize::try_from(by_memory).unwrap_or(usize::MAX))
+}
+
+/// 보고서 하나를 JSON 배열의 요소로 쓴다. 한꺼번에 `to_string_pretty(&Vec)`로 내보낼 때와 같은 모양이다.
+fn write_json_element(r: &SecurityReport, first: bool, out: &mut dyn Write) -> io::Result<()> {
+    let pretty = serde_json::to_string_pretty(r).map_err(io::Error::other)?;
+    let indented = pretty.lines().map(|l| format!("  {l}")).collect::<Vec<_>>().join("\n");
+    write!(out, "{}{indented}", if first { "[\n" } else { ",\n" })
+}
+
 fn scan(args: &Args, out: &mut dyn Write) -> io::Result<i32> {
-    let paths = collect(args);
+    let paths = limited(collect(args), args.limit);
     if paths.is_empty() {
         eprintln!("No EPUB files found");
         return Ok(2);
     }
     let limits = Limits { max_member: args.max_member_mb * 1024 * 1024, max_total: args.max_total_mb * 1024 * 1024, max_files: args.max_files };
-    let reports: Vec<SecurityReport> = pool(args.workers).install(|| paths.par_iter().map(|p| scan_epub(p, &limits)).collect());
-    if args.json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&reports).map_err(io::Error::other)?)?;
-    } else {
+    let workers = effective_workers(args.workers, args.max_member_mb);
+    if workers < args.workers {
+        eprintln!("epubscan: workers reduced from {} to {workers} to bound memory (--max-member-mb {})", args.workers, args.max_member_mb);
+    }
+    let pool = pool(workers);
+    let (mut has_findings, mut has_incomplete, mut first) = (false, false, true);
+    let mut by_severity = std::collections::BTreeMap::<String, usize>::new();
+    // 모든 보고서를 모았다가 마지막에 내보내면 파일 수에 비례해 메모리가 늘어 OOM으로 죽는다. 창 단위로 쓰고 버린다.
+    for window in paths.chunks(workers * WINDOW_PER_WORKER) {
+        let reports: Vec<SecurityReport> = pool.install(|| window.par_iter().map(|p| scan_epub(p, &limits)).collect());
         for r in &reports {
-            print_text(r, out)?;
+            has_findings |= !r.findings.is_empty();
+            has_incomplete |= r.status == Status::Incomplete;
+            for f in &r.findings {
+                *by_severity.entry(format!("{:?}", f.severity).to_uppercase()).or_default() += 1;
+            }
+            if args.json {
+                write_json_element(r, first, out)?;
+            } else {
+                print_text(r, out)?;
+            }
+            first = false;
         }
+        out.flush()?;
+    }
+    if args.json {
+        writeln!(out, "\n]")?;
+    } else {
+        eprintln!("scanned {} file(s); workers: {workers}; findings by severity: {by_severity:?}", paths.len());
     }
     // 지표가 하나라도 있으면 1이다. 검사하지 못한 파일이 있어도 지표를 2 뒤에 숨기지 않는다.
-    Ok(if reports.iter().any(|r| !r.findings.is_empty()) {
+    Ok(if has_findings {
         1
-    } else if reports.iter().any(|r| r.status == Status::Incomplete) {
+    } else if has_incomplete {
         2
     } else {
         0
@@ -226,7 +275,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
 
 사용법:
   epubscan structure [--root DIR] [--file PATH ...] [--workers N] [--limit N] [--report PATH]
-  epubscan scan [-r] [--json] [--max-member-mb N] [--max-total-mb N] [--max-files N] [--workers N] PATH...
+  epubscan scan [-r] [--json] [--limit N] [--max-member-mb N] [--max-total-mb N] [--max-files N] [--workers N] PATH...
 
 명령:
   structure  라이브러리 또는 지정한 파일의 EPUB 구조 문제를 찾는다.
@@ -239,7 +288,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   --root DIR          structure 대상 디렉토리 (기본 {DEFAULT_LIBRARY_ROOT})
   --file PATH         structure 대상 파일. 지정하면 파일당 JSON 한 줄을 출력한다.
   --report PATH       structure 리포트 경로 (기본 <repo>/tmp/epub_structure_report_<디렉토리>.json)
-  --limit N           structure에서 앞에서 N건만 처리한다 (0이면 전체).
+  --limit N           앞에서 N건만 처리한다 (0이면 전체). structure와 scan에서 쓴다.
   -r, --recursive     scan에서 디렉토리를 하위까지 훑는다.
   --json              scan 결과를 JSON으로 출력한다.
   --max-member-mb N   scan이 멤버 하나에서 읽는 최대 크기 MB (기본 20)

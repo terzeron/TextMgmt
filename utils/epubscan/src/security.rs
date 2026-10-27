@@ -5,8 +5,9 @@
 //! 상태를 `INCOMPLETE`로 표시한다.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -70,6 +71,51 @@ impl Default for Limits {
     fn default() -> Self {
         Limits { max_member: 20 * 1024 * 1024, max_total: 200 * 1024 * 1024, max_files: 10_000 }
     }
+}
+
+// ---------------------------------------------------------------- 큰 파일
+
+/// 중앙 디렉터리가 이보다 크면 열지 않는다. ZIP 라이브러리는 항목마다 메타데이터를 메모리에 올린다.
+const MAX_DIRECTORY_ENTRIES: u64 = 1_000_000;
+const MAX_DIRECTORY_BYTES: u64 = 256 * 1024 * 1024;
+
+/// 파일 끝의 EOCD(zip64 포함)에서 항목 수와 중앙 디렉터리 크기를 읽는다. 열기 전에 거대한 디렉터리를 거르려는 용도다.
+/// 알아보지 못하면 None이고, 그때는 평소처럼 연다.
+fn zip_directory_bounds(path: &Path) -> Option<(u64, u64)> {
+    const TAIL: u64 = 22 + 65_535;
+    let mut f = File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    let start = len.saturating_sub(TAIL);
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut tail = Vec::new();
+    f.take(TAIL).read_to_end(&mut tail).ok()?;
+    let eocd = tail.windows(4).rposition(|w| w == b"PK\x05\x06")?;
+    let rec = tail.get(eocd..eocd + 22)?;
+    let le16 = |b: &[u8], o: usize| u64::from(u16::from_le_bytes([b[o], b[o + 1]]));
+    let le32 = |b: &[u8], o: usize| u64::from(u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]));
+    let (mut entries, mut size) = (le16(rec, 10), le32(rec, 12));
+    if entries == 0xFFFF || size == 0xFFFF_FFFF {
+        // zip64: EOCD 바로 앞의 로케이터가 zip64 EOCD 레코드의 위치를 알려 준다.
+        let loc = tail.get(eocd.checked_sub(20)?..eocd)?;
+        if &loc[..4] != b"PK\x06\x07" {
+            return None; // 표식 값(0xFFFF)을 실제 값으로 읽으면 안 된다.
+        }
+        let off = u64::from_le_bytes(loc[8..16].try_into().ok()?);
+        let mut f = File::open(path).ok()?;
+        f.seek(SeekFrom::Start(off)).ok()?;
+        let mut z = [0u8; 56];
+        f.read_exact(&mut z).ok()?;
+        if &z[..4] != b"PK\x06\x06" {
+            return None;
+        }
+        entries = u64::from_le_bytes(z[32..40].try_into().ok()?);
+        size = u64::from_le_bytes(z[40..48].try_into().ok()?);
+    }
+    Some((entries, size))
+}
+
+fn incomplete_report(file: String, note: &str) -> SecurityReport {
+    SecurityReport { file, status: Status::Incomplete, entries: 0, inspected_bytes: 0, findings: Vec::new(), notes: vec![safe(note)] }
 }
 
 // ---------------------------------------------------------------- 상수
@@ -179,6 +225,8 @@ static ACTIVEX: LazyLock<Regex> = LazyLock::new(|| re(r"\bActiveXObject\b"));
 /// IE용 XML 파싱·AJAX 폴백에 쓰는 ProgID. 구형 JS 라이브러리(jQuery 등)에 흔해서 호스트 API로 보지 않는다.
 static BENIGN_ACTIVEX_CALL: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)^\(\s*["'](?:microsoft|msxml2)\.(?:xmldom|xmlhttp|domdocument)(?:\.\d+(?:\.\d+)?)?["']\s*\)"#));
 static BLOCK_COMMENT: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)/\*.*?\*/"));
+/// 앞이 공백이거나 줄 처음인 `//`만 줄 주석으로 본다. `http://`의 `//`는 건드리지 않는다.
+static LINE_COMMENT: LazyLock<Regex> = LazyLock::new(|| re(r"(?m)(?:^|\s)//[^\n]*"));
 static CSS_COMMENT: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)/\*.*?\*/"));
 static ENTITY_DECL: LazyLock<Regex> = LazyLock::new(|| re(r"(?is)<!ENTITY\s+[^>]*>"));
 static EXTERNAL_ID: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)\b(?:SYSTEM|PUBLIC)\b"));
@@ -214,26 +262,64 @@ fn is_exploit_scheme(value: &str) -> bool {
     SCHEME.captures(&normalize_url(value)).is_some_and(|c| EXPLOIT_SCHEMES.contains(&&c[1]))
 }
 
-/// `ActiveXObject` 사용 중 정상이 아닌 것이 있는지. 호출이 아닌 기능 감지(`window.ActiveXObject ?`, `typeof ActiveXObject`)와
-/// IE용 XML·AJAX 폴백 호출은 제외한다. 모르는 ProgID, 문자열이 아닌 인자, 별칭 대입(`x = ActiveXObject`),
-/// 대괄호 접근(`window["ActiveXObject"]`)은 위험으로 본다. 블록 주석은 끼워 넣기 우회를 막으려 먼저 지운다.
+/// `ActiveXObject` 사용 중 정상이 아닌 것이 있는지. 위험한 모양을 나열하지 않고, 알려진 정상 모양만 허용한다.
+/// 정상은 두 가지다: IE용 XML·AJAX 폴백 호출(`new ActiveXObject("Microsoft.XMLHTTP")`)과 호출이 아닌 기능 감지
+/// (`typeof ActiveXObject`, `"ActiveXObject" in window`, `window.ActiveXObject ? …`, `if (window.ActiveXObject)`).
+/// 그 밖의 모든 사용(별칭 대입, 인자 전달, 대괄호 접근, 모르는 ProgID, 동적 인자)은 위험으로 본다.
+/// 주석을 지운 글과 원문을 모두 본다. 문자열 안의 `//`가 뒤따르는 호출을 가리는 우회를 원문의 호출 검사가 막는다.
 fn has_risky_activex(text: &str) -> bool {
-    let text = BLOCK_COMMENT.replace_all(text, " ");
-    ACTIVEX.find_iter(&text).any(|m| {
+    let no_block = BLOCK_COMMENT.replace_all(text, " ");
+    let stripped = LINE_COMMENT.replace_all(&no_block, " ");
+    activex_misuse(&stripped, false) || activex_misuse(text, true)
+}
+
+/// `calls_only`이면 호출 모양만 검사한다(원문에서 주석 속 언급을 오탐하지 않으려고).
+fn activex_misuse(text: &str, calls_only: bool) -> bool {
+    ACTIVEX.find_iter(text).any(|m| {
         let after = text[m.end()..].trim_start();
         if after.starts_with('(') {
             return !BENIGN_ACTIVEX_CALL.is_match(after);
         }
-        let before = text[..m.start()].trim_end();
-        let before = ["window", "self", "this", "globalThis"].iter().find_map(|o| before.strip_suffix('.').and_then(|b| b.trim_end().strip_suffix(o))).unwrap_or(before).trim_end();
-        // `window["ActiveXObject"]`, `window[ActiveXObject]`처럼 `[`가 바로 앞에 있을 때만 대괄호 접근이다.
-        let opened = before.strip_suffix(['"', '\'']).unwrap_or(before).trim_end().ends_with('[');
-        let closed = after.strip_prefix(['"', '\'']).unwrap_or(after).trim_start().starts_with(']');
-        let bracket = opened && closed;
-        // 대입의 우변이 값 그대로 쓰이면 별칭이다. 뒤에 ?, &&, ||, !, 비교 연산자가 오면 기능 감지다.
-        let assigned = before.ends_with('=') && !["==", "!=", "<=", ">="].iter().any(|op| before.ends_with(op));
-        let alias = assigned && !after.starts_with(['?', '&', '|', '!', '=', '<', '>', '.']);
-        bracket || alias
+        !calls_only && !is_feature_detection(&text[..m.start()], after)
+    })
+}
+
+/// 호출이 아닌 `ActiveXObject` 언급이 기능 감지인지.
+fn is_feature_detection(before: &str, after: &str) -> bool {
+    let before = before.trim_end();
+    let before = ["window", "self", "this", "globalThis"].iter().find_map(|o| before.strip_suffix('.').and_then(|b| b.trim_end().strip_suffix(o))).unwrap_or(before).trim_end();
+    if before.ends_with("typeof") {
+        return true;
+    }
+    if before.ends_with('!') {
+        return true;
+    }
+    // `"ActiveXObject" in window`
+    if let (Some(_), Some(rest)) = (before.strip_suffix(['"', '\'']), after.strip_prefix(['"', '\''])) {
+        let rest = rest.trim_start();
+        return rest.starts_with("in ") || rest.starts_with("in(");
+    }
+    // `window.ActiveXObject ? a : b`, `x && window.ActiveXObject`, `!window.ActiveXObject`, `=== undefined`
+    if after.starts_with(['?', '&', '|', '!', '<', '>']) || after.starts_with("==") {
+        return true;
+    }
+    // `if (window.ActiveXObject) {…}`는 기능 감지다. `new (window.ActiveXObject)("…")`처럼 괄호 뒤에 호출이 이어지면 아니다.
+    if let Some(rest) = after.strip_prefix(')') {
+        let rest = rest.trim_start();
+        return condition_context(before) && (!rest.starts_with('(') || BENIGN_ACTIVEX_CALL.is_match(rest));
+    }
+    false
+}
+
+/// 직전 글이 조건식 안인지(`if (`, `while (`, `&&`, `||`, `!`). `f(ActiveXObject)`처럼 인자로 넘기는 경우는 아니다.
+fn condition_context(before: &str) -> bool {
+    let b = before.trim_end();
+    if ["&&", "||", "!", "?"].iter().any(|op| b.ends_with(op)) {
+        return true;
+    }
+    b.strip_suffix('(').is_some_and(|head| {
+        let h = head.trim_end();
+        ["if", "while", "&&", "||", "!"].iter().any(|k| h.ends_with(k))
     })
 }
 
@@ -279,15 +365,26 @@ struct ManifestEntry {
 struct Scanner {
     findings: Vec<Finding>,
     notes: Vec<String>,
-    seen: HashSet<(String, String)>,
+    /// (code, location)별로 findings의 위치를 기억한다. 같은 키가 다시 나오면 더 높은 심각도로 올린다.
+    seen: HashMap<(String, String), usize>,
     html_active: Vec<String>,
     html_remote: Vec<String>,
     manifest: HashMap<String, ManifestEntry>,
+    /// 전체 압축 해제 한도 때문에 검사하지 못한 멤버 수. 멤버마다 노트를 달면 노트가 항목 수만큼 쌓인다.
+    budget_skipped: usize,
 }
 
 impl Scanner {
     fn add(&mut self, severity: Severity, code: &str, location: &str, detail: &str) {
-        if self.seen.insert((code.to_owned(), location.to_owned())) {
+        let key = (code.to_owned(), location.to_owned());
+        if let Some(&i) = self.seen.get(&key) {
+            // 먼저 나온 High가 뒤에 나온 Critical을 가리지 않게 한다.
+            if severity > self.findings[i].severity {
+                self.findings[i].severity = severity;
+                self.findings[i].detail = safe(detail);
+            }
+        } else {
+            self.seen.insert(key, self.findings.len());
             self.findings.push(Finding { severity, code: code.to_owned(), location: safe(location), detail: safe(detail) });
         }
     }
@@ -617,7 +714,8 @@ fn extension(name: &str) -> String {
 
 fn read_limited(zip: &mut Zip, index: usize, limit: u64) -> Result<Vec<u8>, String> {
     let entry = zip.by_index(index).map_err(|e| e.to_string())?;
-    let mut data = Vec::new();
+    // 선언 크기만큼 미리 잡는다. 비워 두고 읽으면 read_to_end가 용량을 두 배씩 늘려 최대 2배를 쓴다. 선언이 거짓이어도 상한까지만 잡는다.
+    let mut data = Vec::with_capacity(entry.size().min(limit).saturating_add(1) as usize);
     entry.take(limit + 1).read_to_end(&mut data).map_err(|e| e.to_string())?;
     Ok(data)
 }
@@ -691,7 +789,7 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
         return 0;
     }
     if size > budget {
-        s.partial(name, "Total decompressed-byte scan limit reached");
+        s.budget_skipped += 1;
         return 0;
     }
     if csize > 0 && size / csize > 200 && size > 1024 * 1024 {
@@ -704,6 +802,13 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
             return 0;
         }
     };
+
+    // 헤더가 거짓으로 작은 크기를 적어도 읽기는 상한에서 멈춘다. 상한을 넘겼다면 뒤쪽을 못 본 것이다.
+    let mut data = data;
+    if data.len() as u64 > limits.max_member {
+        data.truncate(limits.max_member as usize);
+        s.partial(name, "Member is larger than its declared size; only the first part was inspected");
+    }
 
     let ext = extension(name);
     if EXEC_EXTS.contains(&ext.as_str()) {
@@ -735,9 +840,32 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
 }
 
 /// EPUB 하나를 검사한다. 읽을 수 없는 파일은 `INCOMPLETE`로 돌려준다.
+/// 파일 하나가 검사기를 panic시켜도 배치 전체가 죽지 않게 한다. 그 파일은 `INCOMPLETE`로 남는다.
 pub fn scan_epub(path: &Path, limits: &Limits) -> SecurityReport {
+    guarded(path, || scan_epub_unguarded(path, limits))
+}
+
+/// `scan`이 panic하면 그 파일을 `INCOMPLETE` 보고서로 바꾼다.
+pub fn guarded(path: &Path, scan: impl FnOnce() -> SecurityReport) -> SecurityReport {
+    catch_unwind(AssertUnwindSafe(scan)).unwrap_or_else(|_| incomplete_report(safe(&path.to_string_lossy()), "Scanner panicked on malformed input"))
+}
+
+fn scan_epub_unguarded(path: &Path, limits: &Limits) -> SecurityReport {
     let file = safe(&path.to_string_lossy());
-    let mut s = Scanner { findings: Vec::new(), notes: Vec::new(), seen: HashSet::new(), html_active: Vec::new(), html_remote: Vec::new(), manifest: HashMap::new() };
+    match fs::metadata(path) {
+        Err(e) => return incomplete_report(file, &format!("Cannot open as ZIP EPUB: {e}")),
+        Ok(m) if m.is_dir() => return incomplete_report(file, "Cannot open as ZIP EPUB: unreadable directory"),
+        Ok(_) => {}
+    }
+    if let Some((entries, dir_bytes)) = zip_directory_bounds(path) {
+        if entries > MAX_DIRECTORY_ENTRIES {
+            return incomplete_report(file, &format!("Too many entries: {entries} (max {MAX_DIRECTORY_ENTRIES}); not opened"));
+        }
+        if dir_bytes > MAX_DIRECTORY_BYTES {
+            return incomplete_report(file, &format!("Central directory too large: {dir_bytes} bytes (max {MAX_DIRECTORY_BYTES}); not opened"));
+        }
+    }
+    let mut s = Scanner { findings: Vec::new(), notes: Vec::new(), seen: HashMap::new(), html_active: Vec::new(), html_remote: Vec::new(), manifest: HashMap::new(), budget_skipped: 0 };
     let mut entries = 0;
     let mut inspected = 0u64;
 
@@ -797,6 +925,10 @@ pub fn scan_epub(path: &Path, limits: &Limits) -> SecurityReport {
                     continue;
                 }
                 inspected += check_member(&mut s, &mut zip, i, name, limits, limits.max_total.saturating_sub(inspected), &opf_names);
+            }
+            if s.budget_skipped > 0 {
+                let skipped = s.budget_skipped;
+                s.partial("ZIP", &format!("Total decompressed-byte scan limit reached: {skipped} entries not inspected"));
             }
             if let Some(i) = names.iter().position(|n| n == "mimetype")
                 && let Ok(data) = read_limited(&mut zip, i, 64)
