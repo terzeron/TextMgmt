@@ -676,3 +676,43 @@ fn exploit_javascript_in_utf16_without_a_bom_is_still_found() {
     let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /S /JavaScript /JS {js} >>")]);
     assert!(out.contains("[CRITICAL] exploit JavaScript"), "{out}");
 }
+
+/// 바이트를 그대로 16진 문자열로 쓴다.
+fn hex_bytes(bytes: &[u8]) -> String {
+    format!("<{}>", bytes.iter().map(|b| format!("{b:02X}")).collect::<String>())
+}
+
+#[test]
+fn a_name_is_dangerous_if_any_reading_of_it_is_dangerous() {
+    // 첫 NUL에서 자르는 소비자는 `calc.exe`로 읽고, NUL을 지우는 쪽은 `calc.exe.txt`로 읽는다. 하나라도 위험하면 위험이다.
+    for name in [&b"calc.exe\0.txt"[..], b"readme.txt\0.exe", b"setup.bat\0", b"\0run.sh"] {
+        let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /S /Launch /F {} >>", hex_bytes(name))]);
+        assert!(out.contains("[CRITICAL] Launch action"), "{:?}: {out}", String::from_utf8_lossy(name));
+    }
+    // `FF FE`는 PDF 명세의 텍스트 문자열 BOM이 아니다. 뒤에 ASCII가 오면 LE로 풀 때는 쓰레기지만 그대로 읽으면 `ÿþcalc.exe`다.
+    let mut le_bom_then_ascii = vec![0xFF, 0xFE];
+    le_bom_then_ascii.extend_from_slice(b"calc.exe");
+    let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /S /Launch /F {} >>", hex_bytes(&le_bom_then_ascii))]);
+    assert!(out.contains("[CRITICAL] Launch action"), "{out}");
+    // 어느 해석으로도 무해하면 올리지 않는다.
+    for name in [&b"notes\0.txt"[..], b"readme.txt\0", b"\xFF\xFEreadme.txt"] {
+        let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /S /Launch /F {} >>", hex_bytes(name))]);
+        assert!(out.contains("[HIGH] Launch action") && !out.contains("CRITICAL"), "{:?}: {out}", String::from_utf8_lossy(name));
+    }
+}
+
+#[test]
+fn exploit_javascript_is_found_whichever_way_the_bytes_are_read() {
+    // `FF FE`로 시작하는 ASCII JS를 LE로만 풀면 쓰레기가 되어 `eval(unescape(`를 놓친다.
+    let mut js = vec![0xFF, 0xFE];
+    js.extend_from_slice(b"eval(unescape('x'));");
+    let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /S /JavaScript /JS {} >>", hex_bytes(&js))]);
+    assert!(out.contains("[CRITICAL] exploit JavaScript"), "{out}");
+    // BOM이 올바른 UTF-16LE JS도 계속 찾는다.
+    let mut utf16 = vec![0xFF, 0xFE];
+    for u in "eval(unescape('x'));".encode_utf16() {
+        utf16.extend_from_slice(&u.to_le_bytes());
+    }
+    let (_, out) = scan_pdf("/OpenAction 4 0 R", &[&format!("<< /S /JavaScript /JS {} >>", hex_bytes(&utf16))]);
+    assert!(out.contains("[CRITICAL] exploit JavaScript"), "{out}");
+}

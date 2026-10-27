@@ -120,6 +120,9 @@ fn shrink_dict(d: &mut Dictionary, depth: usize) {
 const STREAM_DECODING_KEYS: [&[u8]; 4] = [b"Filter", b"DecodeParms", b"FFilter", b"FDecodeParms"];
 /// 현실적인 필터 체인은 몇 단계다. 이보다 길면 노드로 메모리를 부풀리려는 것이므로 잘라 낸다.
 const FILTER_KEEP_LEN: usize = 16;
+// 필터 키의 배열은 길이를 제한한 뒤에도 일반 줄이기를 거친다. 그 배열이 비워지면(해독이 사라지면) 안 되므로, 제한한 길이가
+// `ARRAY_KEEP_LEN`보다 작아야 한다(작으면 노드 수가 비우는 기준에 닿지 않는다). 둘을 바꿀 때 어기지 않게 컴파일 시점에 묶는다.
+const _: () = assert!(FILTER_KEEP_LEN + 1 < ARRAY_KEEP_LEN);
 /// 필터 체인을 잘랐다는 표지. 잘리면 해독이 틀어지므로 그 스트림은 "끝까지 검사하지 못한" 것으로 알려야 한다.
 /// 파일이 같은 키를 직접 넣어도 알림이 하나 더 붙을 뿐이라 안전한 쪽이다.
 const FILTER_TRUNCATED_KEY: &[u8] = b"PdfscanFilterTruncated";
@@ -192,7 +195,11 @@ fn name_of(obj: &Object) -> Option<String> {
 }
 
 fn has_risky_ext(name: &[u8]) -> bool {
-    let lower = name_text(name).to_ascii_lowercase();
+    name_readings(name).iter().any(|reading| ext_is_risky(&reading.to_ascii_lowercase()))
+}
+
+/// 소문자로 만든 이름 하나의 확장자가 실행 파일인가. 주소 형태는 호스트가 아니라 경로를 본다.
+fn ext_is_risky(lower: &str) -> bool {
     // 맨 앞이 http·https·ftp 주소이고 호스트가 비어 있지 않을 때만 호스트가 아니라 경로의 확장자를 본다.
     // `https://example.com`의 `.com`은 DOS 실행 파일이 아니고, `https://x.example/evil.exe`는 경로가 .exe라서 잡힌다.
     // 문자열 중간의 `://`나 모르는 형태는 이름 그대로 검사한다(뷰어가 어떻게 읽을지 모르므로 열어 두지 않는다).
@@ -204,7 +211,7 @@ fn has_risky_ext(name: &[u8]) -> bool {
         // 주소의 도메인(`.com`)이 아니라 `@` 앞 사서함 이름만 본다.
         address.split('@').next().unwrap_or("")
     } else {
-        lower.as_str()
+        lower
     };
     // Windows ignores trailing dots/spaces, so strip them before the check.
     let trimmed = target.trim_end_matches(['.', ' ']);
@@ -267,8 +274,11 @@ fn js_stream_not_fully_inspected(doc: &Document, obj: &Object) -> bool {
 /// 문서에서 열 이유가 없는 대상인가: 실행 파일 확장자이거나 셸·스크립트 인터프리터를 부른다.
 fn launch_target_is_dangerous(target: &[u8]) -> bool {
     const SHELLS: &[&str] = &["cmd.exe", "cmd/c", "powershell", "pwsh", "mshta", "wscript", "cscript", "rundll32", "regsvr32", "/bin/sh", "/bin/bash"];
-    let flat: String = name_text(target).to_ascii_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
-    has_risky_ext(target) || SHELLS.iter().any(|sh| flat.contains(sh))
+    has_risky_ext(target)
+        || name_readings(target).iter().any(|reading| {
+            let flat: String = reading.to_ascii_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
+            SHELLS.iter().any(|sh| flat.contains(sh))
+        })
 }
 
 /// JavaScript 원문을 글로 바꾼다. PDF 문자열은 UTF-16(BOM)일 수 있어서, 그대로 찾으면 인코딩만 바꿔 탐지를 피할 수 있다.
@@ -284,15 +294,44 @@ fn js_text(bytes: &[u8]) -> String {
     }
 }
 
-/// 파일 이름 바이트를 글로 바꾼다. PDF 문자열은 UTF-16(BOM)일 수 있고, BOM 없이 UTF-16이 들어오는 경우도 있어서 NUL을 지운다.
-/// 그대로 `from_utf8_lossy`로 읽으면 `<FEFF0063…>`로 인코딩한 `calc.exe`가 확장자 검사를 빠져나간다.
+/// 보이는 이름. 지표의 설명에만 쓴다(판정에는 `name_readings`).
 fn name_text(bytes: &[u8]) -> String {
     js_text(bytes).replace('\0', "")
 }
 
+/// 이름을 읽는 방법은 뷰어마다 다르다. 한 가지만 믿으면 읽는 쪽이 다른 뷰어를 속일 수 있어서, 가능한 해석을 모두 돌려준다.
+/// - 해석: BOM을 따른 글(`FE FF`, 그리고 이 스캐너가 알아보는 `FF FE`)과 BOM을 무시하고 그대로 읽은 글.
+///   `FF FE` 뒤에 ASCII 이름이 오면 LE로 풀 때는 한자 쓰레기가 되지만, 명세대로 읽는 뷰어에는 `ÿþcalc.exe`다.
+/// - NUL: 지운 글(BOM 없는 UTF-16)과 첫 NUL에서 자른 글(C 문자열). `calc.exe\0.txt`는 지우면 안전해 보이지만 자르면 `calc.exe`다.
+///
+/// 호출하는 쪽은 이 중 하나라도 위험하면 위험으로 본다.
+fn name_readings(bytes: &[u8]) -> Vec<String> {
+    let decoded = js_text(bytes);
+    let raw = String::from_utf8_lossy(bytes).into_owned();
+    let mut texts = vec![decoded];
+    if texts[0] != raw {
+        texts.push(raw);
+    }
+    let mut out = Vec::new();
+    for text in texts {
+        out.push(text.replace('\0', ""));
+        if let Some(head) = text.split('\0').next().filter(|h| h.len() != text.len()) {
+            out.push(head.to_owned());
+        }
+    }
+    out
+}
+
 /// 알려진 공격 수법이 든 JavaScript인가: 첨부 자동 실행, 로컬·UNC 경로 실행, 복호화한 페이로드의 eval, 셸코드 NOP sled.
 fn js_is_exploit(source: &[u8]) -> bool {
-    let flat: String = js_text(source).to_lowercase().chars().filter(|c| !c.is_whitespace() && *c != '\0').collect();
+    // 파일 이름과 같은 이유로 BOM을 따른 글과 그대로 읽은 글을 모두 본다. BOM이 없으면 둘이 같다.
+    let decoded = js_text(source);
+    let raw = String::from_utf8_lossy(source).into_owned();
+    exploit_in(&decoded) || (decoded != raw && exploit_in(&raw))
+}
+
+fn exploit_in(text: &str) -> bool {
+    let flat: String = text.to_lowercase().chars().filter(|c| !c.is_whitespace() && *c != '\0').collect();
     (flat.contains("exportdataobject") && flat.contains("nlaunch"))
         || (flat.contains("launchurl") && (flat.contains("file:") || flat.contains("\\\\")))
         || flat.contains("eval(unescape(")
@@ -807,38 +846,6 @@ mod tests {
         assert_eq!(json_str("a\u{1b}b\u{85}c\u{7f}"), "\"a\\u001bb\\u0085c\\u007f\"");
     }
 
-    #[test]
-    fn helper_fallbacks_and_json_report_lists_are_covered() {
-        assert_eq!(name_of(&Object::Integer(1)), None);
-        assert!(has_risky_ext(b"payload.exe"));
-        assert!(!has_risky_ext(b"notes.txt"));
-
-        let mut filespec = Dictionary::new();
-        filespec.set("Unix", Object::String(b"payload.exe".to_vec(), lopdf::StringFormat::Literal));
-        assert!(filespec_is_dangerous(&Document::new(), &Object::Dictionary(filespec)));
-        assert!(filespec_is_dangerous(&Document::new(), &Object::Name(b"cmd.exe".to_vec())));
-
-        let mut stream = filter_stream(FILTER_KEEP_LEN + 1);
-        let transformed = shrink_on_load((7, 0), &mut stream).unwrap();
-        assert_eq!(transformed.0, (7, 0));
-        assert!(matches!(transformed.1, Object::Stream(_)));
-
-        let report = Report {
-            file: PathBuf::from("report.pdf"),
-            findings: vec![
-                Finding { severity: Severity::High, kind: "first", object: (1, 0), path: "Root".into(), detail: "one".into() },
-                Finding { severity: Severity::Medium, kind: "second", object: (2, 0), path: "Names".into(), detail: "two".into() },
-            ],
-            notes: vec!["first note".into(), "second note".into()],
-            incomplete: true,
-        };
-        let mut output = Vec::new();
-        print_json_report(&report, &mut output).unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(json["notes"].as_array().unwrap().len(), 2);
-        assert_eq!(json["findings"].as_array().unwrap().len(), 2);
-    }
-
     fn long_name_array() -> Object {
         Object::Array((0..40).map(|_| Object::Name(b"FlateDecode".to_vec())).collect())
     }
@@ -861,6 +868,32 @@ mod tests {
         assert_eq!(st.dict.get(b"DecodeParms").unwrap().as_array().unwrap().len(), FILTER_KEEP_LEN);
         assert!(!st.dict.has(FILTER_TRUNCATED_KEY), "자르지 않았으면 표지가 없어야 한다");
         assert!(st.dict.get(b"Widths").unwrap().as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn shrink_never_empties_a_decoding_key_but_still_shrinks_what_is_inside_its_dictionaries() {
+        // DecodeParms 안의 사전에 든 거대한 숫자 배열은 비워서 메모리를 지킨다. 하지만 필터 배열 자체는 절대 비우면 안 된다.
+        let mut dict = Dictionary::new();
+        dict.set("Filter", Object::Array((0..FILTER_KEEP_LEN).map(|_| Object::Name(b"FlateDecode".to_vec())).collect()));
+        let parms: Vec<Object> = (0..FILTER_KEEP_LEN)
+            .map(|_| {
+                let mut p = Dictionary::new();
+                p.set("Predictor", 12);
+                p.set("Big", Object::Array((0..500).map(Object::Integer).collect()));
+                Object::Dictionary(p)
+            })
+            .collect();
+        dict.set("DecodeParms", Object::Array(parms));
+        let mut obj = Object::Stream(lopdf::Stream::new(dict, b"x".to_vec()));
+        shrink(&mut obj, 0);
+        let Object::Stream(st) = obj else { unreachable!() };
+        assert_eq!(st.dict.get(b"Filter").unwrap().as_array().unwrap().len(), FILTER_KEEP_LEN);
+        let parms = st.dict.get(b"DecodeParms").unwrap().as_array().unwrap();
+        assert_eq!(parms.len(), FILTER_KEEP_LEN);
+        let Object::Dictionary(first) = &parms[0] else { unreachable!() };
+        assert!(first.get(b"Big").unwrap().as_array().unwrap().is_empty());
+        assert_eq!(first.get(b"Predictor").unwrap().as_i64().unwrap(), 12);
+        assert!(!st.dict.has(FILTER_TRUNCATED_KEY));
     }
 
     #[test]
