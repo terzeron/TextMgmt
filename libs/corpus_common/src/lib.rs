@@ -19,8 +19,9 @@ pub const DEFAULT_LIBRARY_ROOT: &str = "/mnt/data/text";
 
 const TEXT_EXTS: [&str; 2] = ["txt", "epub"];
 
-/// /mnt/data는 회전 디스크라 워커를 늘려도 I/O로 막힌다. 2개가 실측상 가장 빨랐다.
-pub const DEFAULT_WORKERS: usize = 2;
+// 병렬 풀, 앞에서 N건만 처리, 기본 워커 수는 코퍼스와 무관한 파일 스캐너 공용 코드라 `scan_common`에 있다.
+// 이 crate를 쓰는 쪽이 경로를 바꾸지 않도록 같은 이름으로 다시 내보낸다.
+pub use scan_common::{DEFAULT_WORKERS, limited, pool};
 
 /// 로그 한 줄을 받는 쪽. 메시지 앞에 `INFO`/`ERROR` 수준이 붙어 있다.
 pub type Log<'a> = &'a (dyn Fn(&str) + Sync);
@@ -86,15 +87,4 @@ pub fn thousands(n: usize) -> String {
         out.push(c);
     }
     out
-}
-
-pub fn pool(workers: usize) -> rayon::ThreadPool {
-    rayon::ThreadPoolBuilder::new().num_threads(workers.max(1)).build().expect("thread pool")
-}
-
-pub fn limited(mut files: Vec<PathBuf>, limit: usize) -> Vec<PathBuf> {
-    if limit > 0 {
-        files.truncate(limit);
-    }
-    files
 }

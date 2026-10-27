@@ -7,16 +7,18 @@
 //! Exit: 0 = no indicators, 1 = indicator(s), 2 = incomplete / unreadable input
 //! (and no indicators found).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Write as IoWrite;
 use std::path::{Path, PathBuf};
 
-use corpus_common::{DEFAULT_WORKERS, limited, pool};
 use lopdf::xref::XrefEntry;
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
-use rayon::prelude::*;
+use scan_common::args::{long_option, number};
+use scan_common::files::{collect_files, has_extension};
+use scan_common::text::sanitize as sanitize_text;
+use scan_common::{DEFAULT_WORKERS, Report as ScanReport, Severity, limited, pool, scan_streaming, workers_within_memory};
 
 const MAX_DEPTH: usize = 100;
 /// epubscan의 --max-total-mb(기본 200)와 같은 이름·단위를 쓴다. 파일 하나의 최대 크기 MB.
@@ -42,27 +44,6 @@ const RISKY_EXT: &[&str] = &[
     "exe", "com", "scr", "pif", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta", "msi", "msp", "dll", "jar", "lnk", "reg", "cpl", "sh", "bash", "run", "bin", "appimage",
     "desktop", "py", "pl", "rb", "docm", "xlsm", "pptm", "swf",
 ];
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Severity {
-    Low,
-    Medium,
-    High,
-    /// 문서에 있을 이유가 없는 실행 수법(실행 파일·셸을 겨냥한 Launch, 첨부 자동 실행, 페이로드 복호화 후 eval).
-    /// High는 "실행 가능한 구조가 있다"까지만 뜻한다.
-    Critical,
-}
-
-impl Severity {
-    fn label(self) -> &'static str {
-        match self {
-            Severity::Low => "LOW",
-            Severity::Medium => "MEDIUM",
-            Severity::High => "HIGH",
-            Severity::Critical => "CRITICAL",
-        }
-    }
-}
 
 struct Finding {
     severity: Severity,
@@ -175,16 +156,7 @@ fn shrink_on_load(id: ObjectId, obj: &mut Object) -> Option<(ObjectId, Object)> 
 
 /// Make attacker-controlled text safe to print: no control chars, bounded length.
 fn sanitize(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    let mut out = String::new();
-    for (n, c) in text.chars().enumerate() {
-        if n >= PREVIEW_CHARS {
-            out.push('…');
-            break;
-        }
-        out.push(if c.is_control() { '.' } else { c });
-    }
-    out
+    sanitize_text(&String::from_utf8_lossy(bytes), PREVIEW_CHARS, Some('…'))
 }
 
 fn name_of(obj: &Object) -> Option<String> {
@@ -632,10 +604,6 @@ struct Args {
     max_total_mb: u64,
 }
 
-fn number<T: std::str::FromStr>(name: &str, value: &str) -> Result<T, String> {
-    value.parse().map_err(|_| format!("argument --{name}: invalid int value: '{value}'"))
-}
-
 fn parse(argv: &[String]) -> Result<Args, String> {
     let mut a = Args { paths: Vec::new(), recursive: false, json: false, workers: DEFAULT_WORKERS, limit: 0, max_total_mb: DEFAULT_MAX_TOTAL_MB };
     let mut it = argv.iter();
@@ -643,22 +611,14 @@ fn parse(argv: &[String]) -> Result<Args, String> {
         match arg.as_str() {
             "-r" | "--recursive" => a.recursive = true,
             "--json" => a.json = true,
-            _ if arg.starts_with("--") => {
-                let (name, inline) = match arg[2..].split_once('=') {
-                    Some((n, v)) => (n, Some(v.to_owned())),
-                    None => (&arg[2..], None),
-                };
-                if !["workers", "limit", "max-total-mb"].contains(&name) {
-                    return Err(format!("unrecognized arguments: {arg}"));
-                }
-                let value = inline.or_else(|| it.next().cloned()).ok_or_else(|| format!("argument --{name}: expected one argument"))?;
-                match name {
-                    "workers" => a.workers = number(name, &value)?,
-                    "limit" => a.limit = number(name, &value)?,
-                    _ => a.max_total_mb = number(name, &value)?,
-                }
-            }
-            _ => a.paths.push(arg.into()),
+            _ => match long_option(arg, &["workers", "limit", "max-total-mb"], &mut it)? {
+                Some((name, value)) => match name.as_str() {
+                    "workers" => a.workers = number(&name, &value)?,
+                    "limit" => a.limit = number(&name, &value)?,
+                    _ => a.max_total_mb = number(&name, &value)?,
+                },
+                None => a.paths.push(arg.into()),
+            },
         }
     }
     if a.paths.is_empty() {
@@ -671,39 +631,18 @@ fn parse(argv: &[String]) -> Result<Args, String> {
 }
 
 fn is_pdf(p: &Path) -> bool {
-    p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+    has_extension(p, "pdf")
 }
 
-/// epubscan과 같은 훑기 규칙: 정렬된 항목, `-r`이 있을 때만 하위로 내려가고, 심볼릭 링크 디렉토리는 따라가지 않는다.
-fn walk(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = fs::read_dir(dir) else {
-        out.push(dir.to_path_buf()); // reported as unreadable later
-        return;
-    };
-    let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
-    entries.sort();
-    for p in entries {
-        if p.is_dir() && !fs::symlink_metadata(&p).is_ok_and(|m| m.is_symlink()) {
-            if recursive {
-                walk(&p, recursive, out);
-            }
-        } else if is_pdf(&p) {
-            out.push(p);
-        }
+/// 검사 결과 한 건을 공용 실행기에 보여 주는 창구.
+impl ScanReport for Report {
+    fn severities(&self) -> impl Iterator<Item = Severity> + '_ {
+        self.findings.iter().map(|f| f.severity)
     }
-}
 
-fn collect(args: &Args, out: &mut Vec<PathBuf>) {
-    for p in &args.paths {
-        // symlink_metadata: never follow links out of the scanned tree.
-        match fs::symlink_metadata(p) {
-            Ok(m) if m.is_dir() => walk(p, args.recursive, out),
-            _ => out.push(p.clone()), // missing or unreadable: reported as incomplete later
-        }
+    fn is_incomplete(&self) -> bool {
+        self.incomplete
     }
-    // 중복은 처음 것만 남긴다. epubscan과 같다.
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|p| seen.insert(p.clone()));
 }
 
 const USAGE: &str = "usage: pdfscan [-r] [--json] [--workers N] [--limit N] [--max-total-mb N] PATH...";
@@ -756,31 +695,25 @@ pub fn run(argv: &[String], out: &mut dyn IoWrite) -> i32 {
         }
     };
 
-    let mut files = Vec::new();
-    collect(&args, &mut files);
+    let files = collect_files(&args.paths, args.recursive, is_pdf);
     if files.is_empty() {
         eprintln!("No PDF files found");
         return 2;
     }
     let files = limited(files, args.limit);
-    let workers_by_input_size = (MAX_PARALLEL_INPUT_MB / args.max_total_mb).max(1) as usize;
-    let workers = args.workers.max(1).min(workers_by_input_size);
+    let workers = workers_within_memory(args.workers, args.max_total_mb, MAX_PARALLEL_INPUT_MB);
     let pool = pool(workers);
-    let mut has_findings = false;
-    let mut has_incomplete = false;
-    let mut by_sev = BTreeMap::<&str, usize>::new();
     let mut first_json_report = true;
     if args.json && write!(out, "[").is_err() {
         return 1;
     }
-    for batch in files.chunks(workers) {
-        let reports: Vec<Report> = pool.install(|| batch.par_iter().map(|f| scan_file(f, args.max_total_mb)).collect());
-        for report in &reports {
-            has_findings |= !report.findings.is_empty();
-            has_incomplete |= report.incomplete;
-            for finding in &report.findings {
-                *by_sev.entry(finding.severity.label()).or_default() += 1;
-            }
+    // 파일 하나가 크므로 창은 워커 수와 같게 둔다: 결과는 다음 파일 검사 전에 나가고, 보고서는 창 안에서만 산다.
+    let emitted = scan_streaming(
+        &files,
+        &pool,
+        workers,
+        |f| scan_file(f, args.max_total_mb),
+        |report| {
             let result = if args.json {
                 let result = if first_json_report { Ok(()) } else { write!(out, ",") };
                 first_json_report = false;
@@ -788,28 +721,17 @@ pub fn run(argv: &[String], out: &mut dyn IoWrite) -> i32 {
             } else {
                 print_text(report, out)
             };
-            if result.is_err() {
-                return 1;
-            }
-            if out.flush().is_err() {
-                return 1;
-            }
-        }
-    }
+            result.and_then(|()| out.flush())
+        },
+    );
+    let Ok(summary) = emitted else { return 1 };
     if args.json && writeln!(out, "]").is_err() {
         return 1;
     }
     if !args.json {
-        eprintln!("scanned {} file(s); workers: {workers}; findings by severity: {by_sev:?}", files.len());
+        eprintln!("scanned {} file(s); workers: {workers}; findings by severity: {:?}", summary.scanned, summary.by_severity);
     }
-
-    if has_findings {
-        1
-    } else if has_incomplete {
-        2
-    } else {
-        0
-    }
+    summary.exit_code()
 }
 
 #[cfg(test)]

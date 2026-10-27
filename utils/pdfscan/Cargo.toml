@@ -15,9 +15,8 @@ name = "pdfscan"
 path = "../../tests/rust/pdfscan/pdfscan.rs"
 
 [dependencies]
-corpus_common = { path = "../../libs/corpus_common" }
 lopdf.workspace = true
-rayon = "1.12.0"
+scan_common = { path = "../../libs/scan_common" }
 
 [dev-dependencies]
 serde_json.workspace = true

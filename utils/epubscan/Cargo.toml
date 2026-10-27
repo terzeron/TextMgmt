@@ -33,6 +33,7 @@ fancy-regex = "0.14"
 htmlkit = { path = "../../libs/htmlkit" }
 indexmap = { version = "2.14.2", features = ["serde"] }
 rayon = "1.12.0"
+scan_common = { path = "../../libs/scan_common", features = ["serde"] }
 regex = "1.13.1"
 roxmltree = "0.21.1"
 serde = { version = "1.0.229", features = ["derive"] }

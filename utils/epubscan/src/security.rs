@@ -20,16 +20,7 @@ use zip::CompressionMethod;
 
 const MAX_TEXT: usize = 160;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum Severity {
-    Low,
-    Medium,
-    High,
-    /// 열어 보기만 해도 침해로 이어지는 알려진 공격 수법이거나, 정상 문서에는 있을 이유가 없는 구조다.
-    /// High는 "실행 가능한 구조가 있다"까지만 말하고, 정상 인터랙티브 EPUB에도 흔하다.
-    Critical,
-}
+pub use scan_common::Severity;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -56,6 +47,17 @@ pub struct SecurityReport {
     pub findings: Vec<Finding>,
     /// 한도 초과나 읽기 실패로 검사하지 못한 부분.
     pub notes: Vec<String>,
+}
+
+/// 공용 실행기가 요약(지표 수, 검사하지 못한 파일)을 만들 때 보는 창구.
+impl scan_common::Report for SecurityReport {
+    fn severities(&self) -> impl Iterator<Item = Severity> + '_ {
+        self.findings.iter().map(|f| f.severity)
+    }
+
+    fn is_incomplete(&self) -> bool {
+        self.status == Status::Incomplete
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -240,7 +242,7 @@ static KNOWN_PUBLIC_IDS: &[&str] = &["-//W3C//DTD", "-//NISO//DTD", "-//IDPF//DT
 
 /// 보고서에 들어가는 문자열: 제어문자(C0·C1)는 `.`로 바꾸고 길이를 자른다.
 fn safe(s: &str) -> String {
-    s.chars().take(MAX_TEXT).map(|c| if c.is_control() { '.' } else { c }).collect()
+    scan_common::text::sanitize(s, MAX_TEXT, None)
 }
 
 /// 브라우저가 스킴을 알아보는 방식으로 정규화한다: 엔티티를 풀고 공백·제어문자를 지우고 소문자로 만든다.

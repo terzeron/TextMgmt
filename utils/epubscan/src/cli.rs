@@ -5,8 +5,10 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use corpus_common::{DEFAULT_LIBRARY_ROOT, DEFAULT_WORKERS, Log, default_report_path, limited, pool};
-use rayon::prelude::*;
+use corpus_common::{DEFAULT_LIBRARY_ROOT, Log, default_report_path};
+use scan_common::args::{long_option, number};
+use scan_common::files::{collect_files, has_extension};
+use scan_common::{DEFAULT_WORKERS, limited, pool, scan_streaming, workers_within_memory};
 
 use crate::security::{Limits, SecurityReport, Status, scan_epub};
 use crate::structure::{inspect_epub_structure, print_epub_structure_summary, scan_epub_structure};
@@ -26,10 +28,6 @@ struct Args {
     max_member_mb: u64,
     max_total_mb: u64,
     max_files: usize,
-}
-
-fn number<T: std::str::FromStr>(name: &str, value: &str) -> Result<T, String> {
-    value.parse().map_err(|_| format!("argument --{name}: invalid int value: '{value}'"))
 }
 
 fn parse(argv: &[String]) -> Result<Option<Args>, String> {
@@ -54,28 +52,20 @@ fn parse(argv: &[String]) -> Result<Option<Args>, String> {
             "-h" | "--help" => return Ok(None),
             "-r" | "--recursive" => a.recursive = true,
             "--json" => a.json = true,
-            _ if arg.starts_with("--") => {
-                let (name, inline) = match arg[2..].split_once('=') {
-                    Some((n, v)) => (n, Some(v.to_owned())),
-                    None => (&arg[2..], None),
-                };
-                if !["root", "file", "workers", "limit", "report", "max-member-mb", "max-total-mb", "max-files"].contains(&name) {
-                    return Err(format!("unrecognized arguments: {arg}"));
-                }
-                let value = inline.or_else(|| it.next().cloned()).ok_or_else(|| format!("argument --{name}: expected one argument"))?;
-                match name {
+            _ => match long_option(arg, &["root", "file", "workers", "limit", "report", "max-member-mb", "max-total-mb", "max-files"], &mut it)? {
+                Some((name, value)) => match name.as_str() {
                     "root" => a.root = value.into(),
                     "file" => a.files.push(value.into()),
                     "report" => a.report = Some(value.into()),
-                    "workers" => a.workers = number(name, &value)?,
-                    "limit" => a.limit = number(name, &value)?,
-                    "max-member-mb" => a.max_member_mb = number(name, &value)?,
-                    "max-total-mb" => a.max_total_mb = number(name, &value)?,
-                    _ => a.max_files = number(name, &value)?,
-                }
-            }
-            _ if command.is_none() => command = Some(arg.clone()),
-            _ => a.paths.push(arg.into()),
+                    "workers" => a.workers = number(&name, &value)?,
+                    "limit" => a.limit = number(&name, &value)?,
+                    "max-member-mb" => a.max_member_mb = number(&name, &value)?,
+                    "max-total-mb" => a.max_total_mb = number(&name, &value)?,
+                    _ => a.max_files = number(&name, &value)?,
+                },
+                None if command.is_none() => command = Some(arg.clone()),
+                None => a.paths.push(arg.into()),
+            },
         }
     }
     let command = command.ok_or("the following arguments are required: command")?;
@@ -135,42 +125,7 @@ fn structure(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io
 }
 
 fn is_epub(p: &Path) -> bool {
-    p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("epub"))
-}
-
-fn walk(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = fs::read_dir(dir) else {
-        out.push(dir.to_path_buf()); // 읽을 수 없는 디렉토리를 조용히 건너뛰지 않는다. scan_epub가 INCOMPLETE로 보고한다.
-        return;
-    };
-    let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
-    entries.sort();
-    for p in entries {
-        if p.is_dir() && !fs::symlink_metadata(&p).is_ok_and(|m| m.is_symlink()) {
-            if recursive {
-                walk(&p, recursive, out);
-            }
-        } else if is_epub(&p) {
-            out.push(p);
-        }
-    }
-}
-
-fn collect(args: &Args) -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = Vec::new();
-    for p in &args.paths {
-        if p.is_dir() {
-            walk(p, args.recursive, &mut found);
-        } else {
-            // 파일이거나, 없거나 읽을 수 없는 경로다. 뒤의 둘은 scan_epub가 INCOMPLETE로 보고한다(종료 코드 2).
-            // 건너뛰면 다른 파일이 깨끗할 때 "정상"으로 끝나 검사하지 못한 사실이 사라진다.
-            found.push(p.clone());
-        }
-    }
-    // 중복은 처음 것만 남긴다.
-    let mut seen = std::collections::HashSet::new();
-    found.retain(|p| seen.insert(p.clone()));
-    found
+    has_extension(p, "epub")
 }
 
 fn print_text(r: &SecurityReport, out: &mut dyn Write) -> io::Result<()> {
@@ -184,7 +139,7 @@ fn print_text(r: &SecurityReport, out: &mut dyn Write) -> io::Result<()> {
         writeln!(out, "No matched indicators (not a safety guarantee)")?;
     }
     for f in &r.findings {
-        let sev = format!("{:?}", f.severity).to_uppercase();
+        let sev = f.severity.label();
         writeln!(out, "[{sev}] {} | {} | {}", f.code, f.location, f.detail)?;
     }
     for n in &r.notes {
@@ -206,8 +161,7 @@ const PARSE_MEMORY_FACTOR: u64 = 22;
 /// 워커 수를 메모리로 제한한다. 워커마다 최악의 멤버(`--max-member-mb`)를 동시에 해석할 수 있고, 스레드별 malloc 아레나는
 /// 한 번 늘린 메모리를 쥐고 있어서 큰 작업이 돌아가며 지나가도 최대 상주 메모리가 줄지 않는다. 엄밀한 한도가 아니라 보수적인 동시성 상한이다.
 pub fn effective_workers(workers: usize, max_member_mb: u64) -> usize {
-    let by_memory = (MEMORY_BUDGET_MB / (max_member_mb.max(1) * PARSE_MEMORY_FACTOR)).max(1);
-    workers.max(1).min(usize::try_from(by_memory).unwrap_or(usize::MAX))
+    workers_within_memory(workers, max_member_mb * PARSE_MEMORY_FACTOR, MEMORY_BUDGET_MB)
 }
 
 /// 보고서 하나를 JSON 배열의 요소로 쓴다. 한꺼번에 `to_string_pretty(&Vec)`로 내보낼 때와 같은 모양이다.
@@ -218,7 +172,7 @@ fn write_json_element(r: &SecurityReport, first: bool, out: &mut dyn Write) -> i
 }
 
 fn scan(args: &Args, out: &mut dyn Write) -> io::Result<i32> {
-    let paths = limited(collect(args), args.limit);
+    let paths = limited(collect_files(&args.paths, args.recursive, is_epub), args.limit);
     if paths.is_empty() {
         eprintln!("No EPUB files found");
         return Ok(2);
@@ -229,39 +183,25 @@ fn scan(args: &Args, out: &mut dyn Write) -> io::Result<i32> {
         eprintln!("epubscan: workers reduced from {} to {workers} to bound memory (--max-member-mb {})", args.workers, args.max_member_mb);
     }
     let pool = pool(workers);
-    let (mut has_findings, mut has_incomplete, mut first) = (false, false, true);
-    let mut by_severity = std::collections::BTreeMap::<String, usize>::new();
-    // 모든 보고서를 모았다가 마지막에 내보내면 파일 수에 비례해 메모리가 늘어 OOM으로 죽는다. 창 단위로 쓰고 버린다.
-    for window in paths.chunks(workers * WINDOW_PER_WORKER) {
-        let reports: Vec<SecurityReport> = pool.install(|| window.par_iter().map(|p| scan_epub(p, &limits)).collect());
-        for r in &reports {
-            has_findings |= !r.findings.is_empty();
-            has_incomplete |= r.status == Status::Incomplete;
-            for f in &r.findings {
-                *by_severity.entry(format!("{:?}", f.severity).to_uppercase()).or_default() += 1;
-            }
-            if args.json {
-                write_json_element(r, first, out)?;
-            } else {
-                print_text(r, out)?;
-            }
+    let mut first = true;
+    // 모든 보고서를 모았다가 마지막에 내보내면 지표 수에 비례해 메모리가 늘어 OOM으로 죽는다. 창 단위로 쓰고 버린다.
+    let summary = scan_streaming(
+        &paths,
+        &pool,
+        workers * WINDOW_PER_WORKER,
+        |p| scan_epub(p, &limits),
+        |r| {
+            let written = if args.json { write_json_element(r, first, out) } else { print_text(r, out) };
             first = false;
-        }
-        out.flush()?;
-    }
+            written.and_then(|()| out.flush())
+        },
+    )?;
     if args.json {
         writeln!(out, "\n]")?;
     } else {
-        eprintln!("scanned {} file(s); workers: {workers}; findings by severity: {by_severity:?}", paths.len());
+        eprintln!("scanned {} file(s); workers: {workers}; findings by severity: {:?}", summary.scanned, summary.by_severity);
     }
-    // 지표가 하나라도 있으면 1이다. 검사하지 못한 파일이 있어도 지표를 2 뒤에 숨기지 않는다.
-    Ok(if has_findings {
-        1
-    } else if has_incomplete {
-        2
-    } else {
-        0
-    })
+    Ok(summary.exit_code())
 }
 
 /// 인자 없이 실행하거나 `-h`/`--help`를 주면 프로그램의 용도와 인자·옵션을 보여 준다.

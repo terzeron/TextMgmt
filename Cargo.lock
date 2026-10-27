@@ -626,8 +626,8 @@ dependencies = [
  "chrono",
  "encoding_rs",
  "pyfmt",
- "rayon",
  "regex",
+ "scan_common",
  "tempfile",
  "zip",
 ]
@@ -1041,6 +1041,7 @@ dependencies = [
  "rayon",
  "regex",
  "roxmltree",
+ "scan_common",
  "serde",
  "serde_json",
  "tempfile",
@@ -2345,9 +2346,8 @@ dependencies = [
 name = "pdfscan"
 version = "0.1.0"
 dependencies = [
- "corpus_common",
  "lopdf",
- "rayon",
+ "scan_common",
  "serde_json",
  "tempfile",
 ]
@@ -2885,6 +2885,16 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "scan_common"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "schannel"
