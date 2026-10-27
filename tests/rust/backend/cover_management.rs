@@ -283,7 +283,7 @@ async fn test_saved_cover_size_matches_embedded_image() {
     for endpoint in ["apply", "apply-url", "apply-image"] {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        let data = encode_image(1800, 2400, BLUE, ImageFormat::Png);
+        let data = encode_image(900, 1200, BLUE, ImageFormat::Png);
         let served = data.clone();
         let api = cover_api(root, CoverHooks::default().with_image_fetcher(fetcher(move |_url| Ok(served.clone()))));
         let path = make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", false));
@@ -581,7 +581,8 @@ fn test_cover_replacement_preserves_content_and_has_one_generated_cover() {
         let stat = ino_mtime(&path);
         let first = epub_cover::add_cover(&path, &red_jpeg(), &rev(&path), &backups(root), false).unwrap();
         let mut before = read(&path);
-        let png = encode_image(1800, 2700, BLUE, ImageFormat::Png);
+        // 600px 축소 경로만 지나면 된다. 크게 만들면 디버그 빌드에서 Lanczos 축소가 수 초씩 걸린다.
+        let png = encode_image(900, 1350, BLUE, ImageFormat::Png);
         let mut plates: Vec<usize> = Vec::new();
         let mut result = Value::Null;
         for data in [png.clone(), png.clone(), red_jpeg()] {
@@ -1582,9 +1583,9 @@ fn test_guide_missing_cover_page_is_ignored() {
 
 #[test]
 fn test_saved_cover_is_at_most_600_pixels_wide_and_keeps_aspect_ratio() {
-    // 마지막 항목은 가로 2000 제한을 넘는 큰 이미지다. 6000x8000(48MP)은 디버그 빌드에서 축소만 20초가 넘게 걸려
-    // 같은 비율(3:4)로 가로 2000을 넘는 2400x3200 으로 줄였다. 2000 제한과 600px 저장 경로를 모두 지난다.
-    for (width, height, format) in [(1800, 2700, ImageFormat::Jpeg), (1200, 600, ImageFormat::Png), (300, 450, ImageFormat::Png), (2400, 3200, ImageFormat::Jpeg)] {
+    // 마지막 항목은 가로 2000 제한을 넘는 이미지다. 디버그 빌드에서는 축소 시간이 화소 수에 비례해
+    // (2400x3200 은 약 3초) 가로만 2000을 넘는 납작한 2100x700 을 쓴다. 2000 제한과 600px 저장 경로를 모두 지난다.
+    for (width, height, format) in [(900, 1350, ImageFormat::Jpeg), (1200, 600, ImageFormat::Png), (300, 450, ImageFormat::Png), (2100, 700, ImageFormat::Jpeg)] {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let raw = encode_image(width, height, RED, format);
