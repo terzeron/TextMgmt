@@ -54,9 +54,9 @@ pub fn paragraph_text(p: roxmltree::Node) -> String {
 }
 
 fn read_member(zip: &mut corpus_common::reader::Zip, name: &str) -> Result<String, String> {
-    let mut file = zip.by_name(name).map_err(|_| format!("KeyError: {name}"))?;
+    let file = zip.by_name(name).map_err(|_| format!("KeyError: {name}"))?;
     let mut buf = Vec::new();
-    file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    file.take(corpus_common::reader::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| e.to_string())?;
     String::from_utf8(buf.strip_prefix(b"\xef\xbb\xbf").map_or(buf.clone(), <[u8]>::to_vec)).map_err(|e| e.to_string())
 }
 

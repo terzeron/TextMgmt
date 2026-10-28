@@ -190,12 +190,27 @@ pub fn zip_names<R: Read + Seek>(zin: &mut ZipArchive<R>) -> Vec<String> {
     (0..zin.len()).filter_map(|i| zin.by_index_raw(i).ok().and_then(|f| f.name().ok().map(|n| n.into_owned()))).collect()
 }
 
+/// EPUB 멤버 하나를 풀 때의 상한. 헤더의 선언 크기는 믿지 않는다(zip bomb).
+pub const MAX_MEMBER_BYTES: u64 = 64 * 1024 * 1024;
+
 /// ZIP 멤버를 읽는다. 이름이 정확히 없으면 퍼센트 인코딩을 푼 이름이 같은 멤버를 찾는다.
 pub fn read_member<R: Read + Seek>(zin: &mut ZipArchive<R>, name: &str) -> Result<Vec<u8>, ZipError> {
+    read_member_limited(zin, name, MAX_MEMBER_BYTES)
+}
+
+/// `read_member`와 같고, 선언 크기나 실제로 푼 크기가 `limit`를 넘으면 오류다.
+fn read_member_limited<R: Read + Seek>(zin: &mut ZipArchive<R>, name: &str, limit: u64) -> Result<Vec<u8>, ZipError> {
     let actual = if zin.index_for_name(name).is_some() { name.to_string() } else { zip_names(zin).into_iter().find(|n| unquote(n) == name).unwrap_or_else(|| name.to_string()) };
-    let mut file = zin.by_name(&actual)?;
+    let too_large = || ZipError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{actual}: 압축을 푼 크기가 상한 {limit}바이트를 넘습니다")));
+    let file = zin.by_name(&actual)?;
+    if file.size() > limit {
+        return Err(too_large());
+    }
     let mut buf = Vec::with_capacity(file.size() as usize);
-    file.read_to_end(&mut buf).map_err(ZipError::Io)?;
+    file.take(limit + 1).read_to_end(&mut buf).map_err(ZipError::Io)?;
+    if buf.len() as u64 > limit {
+        return Err(too_large());
+    }
     Ok(buf)
 }
 
@@ -555,4 +570,28 @@ fn validate_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String
         let _ = std::fs::remove_file(&tmp_path);
         format!("validation error: {e}")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Cursor, Write};
+
+    use zip::ZipArchive;
+    use zip::write::{SimpleFileOptions, ZipWriter};
+
+    use super::read_member_limited;
+
+    fn archive(data: &[u8]) -> ZipArchive<Cursor<Vec<u8>>> {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer.start_file("big.bin", SimpleFileOptions::default()).unwrap();
+        writer.write_all(data).unwrap();
+        ZipArchive::new(Cursor::new(writer.finish().unwrap().into_inner())).unwrap()
+    }
+
+    #[test]
+    fn read_member_rejects_members_over_the_limit() {
+        let mut zin = archive(&[b'a'; 100]);
+        assert!(read_member_limited(&mut zin, "big.bin", 99).is_err());
+        assert_eq!(read_member_limited(&mut zin, "big.bin", 100).unwrap().len(), 100);
+    }
 }

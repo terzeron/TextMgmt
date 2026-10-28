@@ -361,14 +361,21 @@ pub fn extract_text_bruteforce(body_data: &[u8]) -> String {
     clean.join("\n")
 }
 
+/// 본문 스트림을 풀 때의 상한. 압축 폭탄이 메모리를 다 쓰지 않게 한다.
+const MAX_INFLATED_BYTES: u64 = 64 * 1024 * 1024;
+
 fn inflate(body: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::new();
-    if DeflateDecoder::new(body).read_to_end(&mut out).is_ok() {
+    if DeflateDecoder::new(body).take(MAX_INFLATED_BYTES).read_to_end(&mut out).is_ok() {
         return Some(out);
     }
     // gzip 또는 zlib 헤더가 있는 경우(Python의 wbits=15+32).
     out.clear();
-    let ok = if body.starts_with(&[0x1f, 0x8b]) { GzDecoder::new(body).read_to_end(&mut out).is_ok() } else { ZlibDecoder::new(body).read_to_end(&mut out).is_ok() };
+    let ok = if body.starts_with(&[0x1f, 0x8b]) {
+        GzDecoder::new(body).take(MAX_INFLATED_BYTES).read_to_end(&mut out).is_ok()
+    } else {
+        ZlibDecoder::new(body).take(MAX_INFLATED_BYTES).read_to_end(&mut out).is_ok()
+    };
     ok.then_some(out)
 }
 
