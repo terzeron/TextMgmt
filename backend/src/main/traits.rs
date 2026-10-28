@@ -604,10 +604,10 @@ pub struct BookStub {
     pub category: Option<String>,
 }
 
-/// Python `_get_book_and_ensure_viewer_access`: 책을 찾고, viewer가 볼 수 없는 카테고리면 403 오류를 돌려준다.
+/// Python `_get_book_and_ensure_viewer_access`: 책을 찾고, 없으면 404, viewer가 볼 수 없는 카테고리면 403 오류를 돌려준다.
 #[async_trait]
 pub trait BookAccess: Send + Sync {
-    async fn get_book_and_ensure_viewer_access(&self, _book_id: i64, _payload: &Value, _content_type: &str) -> Result<(Option<BookStub>, Option<String>), HTTPException> {
+    async fn get_book_and_ensure_viewer_access(&self, _book_id: i64, _payload: &Value, _content_type: &str) -> Result<BookStub, HTTPException> {
         Err(HTTPException::new(500, UNIMPLEMENTED))
     }
 }

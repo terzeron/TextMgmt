@@ -40,11 +40,7 @@ async fn record_comic_view(State(deps): State<Arc<AppDeps>>, RequireAuth(payload
 /// 접근 검사를 먼저 하므로 viewer가 볼 수 없는 책을 기록하거나 존재 확인 수단으로 쓰는 것도 막힌다.
 async fn record_view(deps: &AppDeps, payload: &Value, book_id: i64, content_type: &str) -> ApiResult<Json<Value>> {
     log::debug!("# record_book_view(book_id={book_id})");
-    let (book, error) = deps.book_access().get_book_and_ensure_viewer_access(book_id, payload, content_type).await?;
-    let book = match (book, error) {
-        (Some(book), None) => book,
-        (_, error) => return Err(ApiError::http(404, &error.unwrap_or_else(|| "Book not found".to_string()))),
-    };
+    let book = deps.book_access().get_book_and_ensure_viewer_access(book_id, payload, content_type).await?;
     let email = payload.get("email").and_then(Value::as_str).unwrap_or("");
     let recorded = deps
         .view_history()

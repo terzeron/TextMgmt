@@ -325,13 +325,10 @@ impl RuntimeBookAccess {
 
 #[async_trait::async_trait]
 impl BookAccess for RuntimeBookAccess {
-    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<(Option<BookStub>, Option<String>), HTTPException> {
+    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HTTPException> {
         let manager = if content_type == "comic" { &self.comics } else { &self.books };
         let manager = manager.get().map_err(|error| HTTPException::new(503, &error))?;
-        let book = match manager.get_book(book_id).await {
-            Ok(book) => book,
-            Err(error) => return Ok((None, Some(error.to_string()))),
-        };
+        let book = manager.get_book(book_id).await.map_err(|error| HTTPException::new(404, &error.to_string()))?;
 
         if payload.get("role").and_then(Value::as_str) == Some("viewer") {
             let categories = self.categories.get().map_err(|error| HTTPException::new(503, &error))?;
@@ -341,7 +338,7 @@ impl BookAccess for RuntimeBookAccess {
             }
         }
 
-        Ok((Some(BookStub { title: book.title, category: Some(book.category) }), None))
+        Ok(BookStub { title: book.title, category: Some(book.category) })
     }
 }
 
@@ -482,10 +479,9 @@ mod tests {
         let mapping: Arc<dyn CategoryMappingApi> = Arc::new(FixedHiddenCategories(vec!["소설".into()]));
         let access = RuntimeBookAccess::new(Slot::ready(manager.clone()), Slot::ready(manager), Slot::ready(mapping));
 
-        let (book, error) = access.get_book_and_ensure_viewer_access(1, &json!({"role": "admin"}), "book").await.unwrap();
+        let book = access.get_book_and_ensure_viewer_access(1, &json!({"role": "admin"}), "book").await.unwrap();
 
-        assert_eq!(book.unwrap(), BookStub { title: "title".into(), category: Some("소설/판타지".into()) });
-        assert_eq!(error, None);
+        assert_eq!(book, BookStub { title: "title".into(), category: Some("소설/판타지".into()) });
     }
 
     #[tokio::test]
