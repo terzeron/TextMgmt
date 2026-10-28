@@ -12,7 +12,7 @@ use crate::book_manager::{CoverPage, MAX_CATEGORY_PAGE_SIZE};
 use crate::main::{
     deps::AppDeps,
     errors::ApiResult,
-    extract::{ApiQuery, RequireAuth},
+    extract::{ApiQuery, RequireAuth, parse_py_bool},
     routes::Routes,
 };
 
@@ -42,11 +42,7 @@ impl TryFrom<RawQuery> for Query {
         if !(1..=MAX_CATEGORY_PAGE_SIZE).contains(&limit) {
             return Err(format!("limit should be between 1 and {MAX_CATEGORY_PAGE_SIZE}"));
         }
-        let uncovered = match raw.uncovered.as_deref().unwrap_or("false").to_ascii_lowercase().as_str() {
-            "1" | "true" | "on" | "yes" => true,
-            "0" | "false" | "off" | "no" => false,
-            _ => return Err("uncovered should be a valid boolean".into()),
-        };
+        let uncovered = raw.uncovered.as_deref().map_or(Some(false), parse_py_bool).ok_or("uncovered should be a valid boolean")?;
         Ok(Self { category: raw.category.unwrap_or_default(), limit, cursor: raw.cursor.unwrap_or_default(), uncovered })
     }
 }
@@ -88,10 +84,10 @@ mod tests {
     fn query_validation_accepts_boolean_aliases_and_defaults() {
         let defaults = Query::try_from(RawQuery { category: None, limit: None, cursor: None, uncovered: None }).unwrap();
         assert_eq!((defaults.category.as_str(), defaults.limit, defaults.cursor.as_str(), defaults.uncovered), ("", 60, "", false));
-        for value in ["1", "TRUE", "on", "yes"] {
+        for value in ["1", "TRUE", "on", "yes", "t", "Y"] {
             assert!(Query::try_from(raw(Some(value), Some(1))).unwrap().uncovered, "{value}");
         }
-        for value in ["0", "FALSE", "off", "no"] {
+        for value in ["0", "FALSE", "off", "no", "f", "N"] {
             assert!(!Query::try_from(raw(Some(value), Some(100))).unwrap().uncovered, "{value}");
         }
         assert!(Query::try_from(raw(Some("maybe"), Some(1))).err().unwrap().contains("boolean"));

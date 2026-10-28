@@ -194,7 +194,7 @@ pub(super) fn routes() -> Routes {
 }
 
 pub(super) fn parse_book_id(raw: &str) -> ApiResult<i64> {
-    raw.trim().parse().map_err(|_| RequestValidationError::single(&["path", "book_id"], "Input should be a valid integer", json!(raw)).into())
+    raw.trim().parse().map_err(|_| RequestValidationError::single(&["path", "book_id"], "Input should be a valid integer, unable to parse string as an integer", json!(raw)).into())
 }
 
 /// 미리보기·쪽 추출은 LibreOffice 변환, EPUB 재압축, PDF 로드처럼 오래 막는 일을 한다.

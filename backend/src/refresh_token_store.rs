@@ -255,15 +255,6 @@ fn opt_text(value: &DbValue) -> Option<String> {
     (!value.is_null()).then(|| text_of(value))
 }
 
-fn db_value_to_json(value: &DbValue) -> Value {
-    match value {
-        DbValue::Null => Value::Null,
-        DbValue::Int(n) => json!(n),
-        DbValue::Text(s) => json!(s),
-        DbValue::DateTime(d) => json!(d.to_string()),
-    }
-}
-
 #[derive(Clone)]
 struct Session {
     session_id: String,
@@ -617,8 +608,8 @@ pub trait RefreshTokenStoreApi: Send + Sync {
 fn observation_json(replaced_by: &DbValue, revoked_at: &DbValue, revoke_reason: &DbValue) -> Value {
     json!({
         "replaced_by_present": !replaced_by.is_null(),
-        "revoked_at": db_value_to_json(revoked_at),
-        "revoke_reason": db_value_to_json(revoke_reason),
+        "revoked_at": Value::from(revoked_at),
+        "revoke_reason": Value::from(revoke_reason),
     })
 }
 

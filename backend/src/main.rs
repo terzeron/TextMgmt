@@ -47,6 +47,7 @@ pub use errors::{
     ApiError, ApiResult, GENERIC_SERVER_ERROR_DETAIL, RequestValidationError, SERVICE_UNAVAILABLE_DETAIL, VALIDATION_ERROR_DETAIL, general_exception_handler, http_exception_handler, json_response,
     summarize_request_body, validation_exception_handler,
 };
+pub(crate) use extract::parse_py_bool;
 pub use extract::{ApiJson, ApiQuery, OptionalAuth, RequireAdmin, RequireAuth};
 pub use google::{GoogleIdTokenVerifier, GoogleJwksFetcher};
 pub use log_routes::{CLIENT_ERROR_FIELD_LIMITS, ClientErrorLogModel};

@@ -13,6 +13,7 @@ use super::deps::AppDeps;
 use super::errors::{ApiError, ApiResult, RequestValidationError};
 use super::extract::{ApiQuery, RequireAdmin, RequireAuth};
 use super::routes::Routes;
+use super::routes_books::parse_book_id;
 use crate::view_history_store::MAX_RECENT_VIEWS;
 
 pub(super) fn routes() -> Routes {
@@ -24,10 +25,6 @@ pub(super) fn routes() -> Routes {
 }
 
 /// FastAPI의 `book_id: int` 검증. 정수가 아니면 422다.
-fn parse_book_id(raw: &str) -> Result<i64, ApiError> {
-    raw.trim().parse::<i64>().map_err(|_| RequestValidationError::single(&["path", "book_id"], "Input should be a valid integer, unable to parse string as an integer", json!(raw)).into())
-}
-
 async fn record_book_view(State(deps): State<Arc<AppDeps>>, RequireAuth(payload): RequireAuth, Path(book_id): Path<String>) -> ApiResult<Json<Value>> {
     record_view(&deps, &payload, parse_book_id(&book_id)?, "book").await
 }

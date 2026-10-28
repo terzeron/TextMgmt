@@ -169,19 +169,7 @@ fn unimplemented_mapping<T>() -> Result<T, MappingError> {
 }
 
 fn db_row_to_json(row: crate::db::Row) -> Value {
-    let object = row
-        .into_iter()
-        .map(|(key, value)| {
-            let value = match value {
-                crate::db::DbValue::Null => Value::Null,
-                crate::db::DbValue::Int(number) => serde_json::json!(number),
-                crate::db::DbValue::Text(text) => serde_json::json!(text),
-                crate::db::DbValue::DateTime(datetime) => serde_json::json!(datetime.to_string()),
-            };
-            (key, value)
-        })
-        .collect();
-    Value::Object(object)
+    Value::Object(row.iter().map(|(key, value)| (key.clone(), Value::from(value))).collect())
 }
 
 fn reload_counts(value: &Value) -> Result<Vec<(&str, i64)>, String> {

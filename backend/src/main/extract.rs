@@ -15,21 +15,25 @@ use super::deps::{AppDeps, AuthMode};
 use super::errors::{ApiError, RequestValidationError};
 use crate::auth::{HTTPException, optional_auth_with, require_admin_with, require_auth_with};
 
+/// Pydantic·FastAPI bool 문자열 해석. 대소문자를 가리지 않는다. 해석할 수 없으면 `None`.
+pub(crate) fn parse_py_bool(text: &str) -> Option<bool> {
+    match text.to_ascii_lowercase().as_str() {
+        "true" | "1" | "on" | "yes" | "t" | "y" => Some(true),
+        "false" | "0" | "off" | "no" | "f" | "n" => Some(false),
+        _ => None,
+    }
+}
+
 /// Pydantic bool의 JSON·쿼리 입력 규칙.
 pub(super) fn python_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
-    let value = Value::deserialize(d)?;
-    let text = match value {
-        Value::Bool(v) => return Ok(v),
-        Value::String(s) => s.to_ascii_lowercase(),
-        Value::Number(n) if n.as_f64() == Some(0.0) => return Ok(false),
-        Value::Number(n) if n.as_f64() == Some(1.0) => return Ok(true),
-        _ => String::new(),
+    let parsed = match Value::deserialize(d)? {
+        Value::Bool(v) => Some(v),
+        Value::String(s) => parse_py_bool(&s),
+        Value::Number(n) if n.as_f64() == Some(0.0) => Some(false),
+        Value::Number(n) if n.as_f64() == Some(1.0) => Some(true),
+        _ => None,
     };
-    match text.as_str() {
-        "true" | "1" | "on" | "yes" | "t" | "y" => Ok(true),
-        "false" | "0" | "off" | "no" | "f" | "n" => Ok(false),
-        _ => Err(serde::de::Error::custom("Input should be a valid boolean")),
-    }
+    parsed.ok_or_else(|| serde::de::Error::custom("Input should be a valid boolean"))
 }
 
 async fn resolve_auth(deps: &AppDeps, parts: &Parts, admin: bool) -> Result<Value, HTTPException> {
