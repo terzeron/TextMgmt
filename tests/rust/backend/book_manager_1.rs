@@ -2825,7 +2825,7 @@ fn test_get_book_preview_pdf_cache_hit() {
     es.on_search_by_id(|_| Ok(Some(make_doc("A/a.pdf", "pdf"))));
     let cache_dir = tmp_path.join(".preview_cache");
     mkdir(&cache_dir);
-    let cache_file = cache_dir.join("1.pdf");
+    let cache_file = cache_dir.join("1_n5.pdf"); // 기본 5쪽 미리보기 캐시
     write(&cache_file, b"CACHED");
     set_mtime(&cache_file, fs::metadata(&pdf).unwrap().modified().unwrap() + Duration::from_secs(10));
     let resp = run(manager.get_book_preview(1, None, None));

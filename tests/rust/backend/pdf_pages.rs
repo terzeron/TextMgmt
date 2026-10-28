@@ -206,6 +206,49 @@ mod test_get_pdf_pages {
     }
 
     #[tokio::test]
+    async fn test_end_before_start_is_rejected() {
+        let e = env();
+        assert_eq!(e.bm.get_pdf_pages(1, 3, 2).await.status_code, 400);
+        assert!(!e.temp_dir.join(".preview_cache").join("1_p3-2.pdf").exists());
+    }
+
+    #[tokio::test]
+    async fn test_range_over_the_page_limit_is_rejected() {
+        // 범위마다 캐시 파일이 생기므로 한 요청의 쪽 수를 제한한다. 뷰어는 11쪽씩 요청한다.
+        let e = env();
+        create_test_pdf(60, &e.temp_dir.join("test_category").join("test_book.pdf"));
+        assert_eq!(e.bm.get_pdf_pages(1, 1, 50).await.status_code, 200);
+        assert_eq!(e.bm.get_pdf_pages(1, 1, 51).await.status_code, 400);
+    }
+
+    #[tokio::test]
+    async fn test_preview_cache_is_keyed_by_page_count() {
+        // 큰 pages 요청이 캐시를 덮어 다른 사용자의 기본 미리보기가 전체 책이 되면 안 된다.
+        let e = env();
+        let cache_dir = e.temp_dir.join(".preview_cache");
+
+        let two = e.bm.get_book_preview(1, Some(2), None).await;
+        assert_eq!(page_count_bytes(&two.body), 2);
+        let four = e.bm.get_book_preview(1, Some(4), None).await;
+        assert_eq!(page_count_bytes(&four.body), 4);
+        let two_again = e.bm.get_book_preview(1, Some(2), None).await;
+        assert_eq!(page_count_bytes(&two_again.body), 2);
+
+        assert!(cache_dir.join("1_n2.pdf").exists());
+        assert!(!cache_dir.join("1_n4.pdf").exists(), "같은 책의 다른 쪽 수 캐시는 하나만 남긴다");
+        assert!(!cache_dir.join("1.pdf").exists());
+    }
+
+    #[tokio::test]
+    async fn test_cache_writes_leave_no_temp_files() {
+        let e = env();
+        assert_eq!(e.bm.get_book_preview(1, Some(2), None).await.status_code, 200);
+        assert_eq!(e.bm.get_pdf_pages(1, 1, 2).await.status_code, 200);
+        let names: Vec<String> = fs::read_dir(e.temp_dir.join(".preview_cache")).unwrap().map(|x| x.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert!(names.iter().all(|n| !n.ends_with(".tmp")), "{names:?}");
+    }
+
+    #[tokio::test]
     async fn test_book_not_found() {
         let e = env();
         e.es.set_doc(None);

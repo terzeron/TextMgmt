@@ -542,7 +542,8 @@ fn validate_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String
     }
     log::info!("EPUB validate: rewriting OPF in {}", cache_file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
     let modified_opf = format!("{XML_DECLARATION}{}", apply_edits(&opf_text, doc.root_element().range(), edits));
-    let tmp_path = cache_file.with_extension("tmp");
+    // 이름을 고정하면 같은 책의 동시 요청이 서로의 임시 파일을 덮어쓴다.
+    let tmp_path = super::util::temp_sibling(cache_file);
     let rewrite = || -> Result<(), String> {
         let mut zin_r = ZipArchive::new(std::fs::File::open(cache_file).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         let mut zout = zip::ZipWriter::new(std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?);
