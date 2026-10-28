@@ -100,17 +100,14 @@ impl BookManager {
         BookContent::Text(String::new())
     }
 
-    pub async fn search_by_keyword(&self, keyword: &str, max_result_count: i64) -> (Vec<Book>, Option<String>) {
+    pub async fn search_by_keyword(&self, keyword: &str, max_result_count: i64) -> Result<Vec<Book>, String> {
         log::debug!("# search_by_keyword(keyword='{keyword}')");
         let keyword_owned = keyword.to_string();
-        match self.blocking(move |es| es.search_by_keyword(&keyword_owned, max_result_count)).await {
-            Ok(hits) if !hits.is_empty() => match self.books_from_hits(&hits, false) {
-                Ok(books) => (books, None),
-                Err(error) => (Vec::new(), Some(error)),
-            },
-            Ok(_) => (Vec::new(), Some("No books found".to_string())),
-            Err(e) => (Vec::new(), Some(e.to_string())),
+        let hits = self.blocking(move |es| es.search_by_keyword(&keyword_owned, max_result_count)).await.map_err(|e| e.to_string())?;
+        if hits.is_empty() {
+            return Err("No books found".to_string());
         }
+        self.books_from_hits(&hits, false)
     }
 
     pub async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, exclude_categories: Option<&[String]>, category: Option<&str>) -> Result<BookPage, String> {
@@ -130,23 +127,16 @@ impl BookManager {
         })
     }
 
-    pub async fn search_similar_books(&self, book_id: i64, max_result_count: i64) -> (Vec<Book>, Option<String>) {
+    pub async fn search_similar_books(&self, book_id: i64, max_result_count: i64) -> Result<Vec<Book>, String> {
         log::debug!("# search_similar_books(book_id={book_id})");
-        let doc = match self.find_doc_async(book_id).await {
-            Ok(Some(doc)) => doc,
-            Ok(None) => return (Vec::new(), Some(format!("No book found with id '{book_id}'"))),
-            Err(e) => return (Vec::new(), Some(e)),
-        };
+        let doc = self.find_doc_async(book_id).await?.ok_or_else(|| format!("No book found with id '{book_id}'"))?;
         let mut args = Self::similar_args(book_id, &doc);
         args["max_result_count"] = json!(max_result_count);
-        match self.blocking(move |es| es.search_similar_docs(&args)).await {
-            Ok(hits) if !hits.is_empty() => match self.books_from_hits(&hits, false) {
-                Ok(books) => (books, None),
-                Err(error) => (Vec::new(), Some(error)),
-            },
-            Ok(_) => (Vec::new(), Some("No similar books found".to_string())),
-            Err(e) => (Vec::new(), Some(e.to_string())),
+        let hits = self.blocking(move |es| es.search_similar_docs(&args)).await.map_err(|e| e.to_string())?;
+        if hits.is_empty() {
+            return Err("No similar books found".to_string());
         }
+        self.books_from_hits(&hits, false)
     }
 
     pub async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> Result<BookPage, String> {

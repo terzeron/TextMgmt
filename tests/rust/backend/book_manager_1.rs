@@ -516,9 +516,8 @@ mod test_book_manager {
 
         // 제목의 첫 단어를 키워드로 쓴다
         let keyword = if book.title.is_empty() { "테스트" } else { book.title.split_whitespace().next().unwrap_or("테스트") };
-        let (book_list, _error) = run(bm.search_by_keyword(keyword, 20));
         // 테스트 데이터에 따라 결과가 비어 있을 수 있다
-        let _: Vec<Book> = book_list;
+        let _: Result<Vec<Book>, String> = run(bm.search_by_keyword(keyword, 20));
     }
 
     #[test]
@@ -526,8 +525,7 @@ mod test_book_manager {
         let bm = book_manager_with_data();
         let book = get_one_random_book(&bm).expect("No books available for testing");
         inspect_book_info(&book);
-        let (book_list, _error) = run(bm.search_similar_books(book.book_id, 20));
-        let _: Vec<Book> = book_list;
+        let _: Result<Vec<Book>, String> = run(bm.search_similar_books(book.book_id, 20));
     }
 
     #[test]
@@ -1621,22 +1619,18 @@ fn test_search_by_keyword_and_similar() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.with(|s| s.keyword = vec![(1, make_doc("a.txt", ".txt"), 1.0)]);
-    let (books, err) = run(manager.search_by_keyword("k", -1));
-    assert!(!books.is_empty() && err.is_none());
+    assert!(!run(manager.search_by_keyword("k", -1)).unwrap().is_empty());
 
     es.with(|s| s.keyword = vec![]);
-    let (books, err) = run(manager.search_by_keyword("k", -1));
-    assert!(books.is_empty() && err.is_some());
+    assert!(run(manager.search_by_keyword("k", -1)).is_err());
 
     es.with(|s| s.similar = vec![(2, make_doc("b.txt", ".txt"), 1.0)]);
     let es_doc = make_doc("a.txt", ".txt");
     es.on_search_by_id(move |_| Ok(Some(es_doc.clone())));
-    let (books, err) = run(manager.search_similar_books(1, -1));
-    assert!(!books.is_empty() && err.is_none());
+    assert!(!run(manager.search_similar_books(1, -1)).unwrap().is_empty());
 
     es.with(|s| s.similar = vec![]);
-    let (books, err) = run(manager.search_similar_books(1, -1));
-    assert!(books.is_empty() && err.is_some());
+    assert!(run(manager.search_similar_books(1, -1)).is_err());
 }
 
 #[test]
@@ -1927,11 +1921,9 @@ fn test_catalog_search_paths_report_missing_required_es_fields() {
 
     assert!(run(manager.get_books_in_category("A")).unwrap_err().contains("category"));
     assert!(run(manager.get_books_in_category_paged("A", 10, "")).unwrap_err().contains("category"));
-    let (_, error) = run(manager.search_by_keyword("x", 10));
-    assert!(error.unwrap().contains("category"));
+    assert!(run(manager.search_by_keyword("x", 10)).unwrap_err().contains("category"));
     assert!(run(manager.search_by_keyword_paged("x", 10, 0, None, None)).unwrap_err().contains("category"));
-    let (_, error) = run(manager.search_similar_books(1, 10));
-    assert!(error.unwrap().contains("category"));
+    assert!(run(manager.search_similar_books(1, 10)).unwrap_err().contains("category"));
     assert!(run(manager.search_similar_books_paged(1, 10, 0)).unwrap_err().contains("category"));
     assert!(run(manager.get_latest_books(10, None)).unwrap_err().contains("category"));
 }
@@ -2102,9 +2094,7 @@ fn test_search_similar_books_not_found() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.on_search_by_id(|_| Ok(None));
-    let (books, err) = run(manager.search_similar_books(999, -1));
-    assert!(books.is_empty());
-    assert!(err.as_deref().unwrap().contains("No book found"));
+    assert!(run(manager.search_similar_books(999, -1)).unwrap_err().contains("No book found"));
 }
 
 #[test]
