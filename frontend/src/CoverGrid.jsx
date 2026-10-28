@@ -5,10 +5,11 @@ import PropTypes from "prop-types";
 
 import { getApiUrlPrefix } from "./Common.js";
 import { coverThumbProps, markTallCover } from "./coverImageFit.js";
+import { coverRequestQueue } from "./coverRequestQueue.js";
 
 /* global __COVER_VERSION__ */
-// 한 번에 그리는 카드 수. 커버 요청도 이만큼씩만 나간다.
-export const COVER_BATCH_SIZE = 20;
+// 요청 queue에 한 번에 추가하는 카드 수를 제한한다.
+export const COVER_BATCH_SIZE = 10;
 // 서버가 커버를 만들 수 있는 포맷. 나머지는 요청 없이 포맷명 박스로 그린다.
 const COVER_FILE_TYPES = new Set(["epub", "pdf"]);
 const COVER_VERSION =
@@ -16,6 +17,45 @@ const COVER_VERSION =
 
 function CoverImage({ src, fileType }) {
   const [failed, setFailed] = useState(false);
+  const imageRef = useRef(null);
+
+  useEffect(() => {
+    const image = imageRef.current;
+    if (!src || !image) return undefined;
+    setFailed(false);
+    image.removeAttribute("src");
+    image.removeAttribute("srcset");
+    const cancel = coverRequestQueue.enqueue(
+      (signal) =>
+        new Promise((resolve) => {
+          const finish = () => resolve();
+          const onAbort = () => {
+            image.removeAttribute("src");
+            image.removeAttribute("srcset");
+            finish();
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          image.onload = () => {
+            signal.removeEventListener("abort", onAbort);
+            markTallCover({ currentTarget: image });
+            finish();
+          };
+          image.onerror = () => {
+            signal.removeEventListener("abort", onAbort);
+            setFailed(true);
+            finish();
+          };
+          const thumbAttributes = coverThumbProps(src);
+          image.setAttribute("srcset", thumbAttributes.srcSet);
+          image.setAttribute("src", thumbAttributes.src);
+        }),
+    );
+    return () => {
+      cancel();
+      image.onload = null;
+      image.onerror = null;
+    };
+  }, [src]);
 
   if (!src || failed) {
     return (
@@ -26,12 +66,9 @@ function CoverImage({ src, fileType }) {
   }
   return (
     <img
+      ref={imageRef}
       className="cover-grid-image"
-      {...coverThumbProps(src)}
       alt=""
-      loading="lazy"
-      onLoad={markTallCover}
-      onError={() => setFailed(true)}
     />
   );
 }
@@ -111,7 +148,8 @@ export default function CoverGrid({
         {results.slice(0, visibleCount).map((book) => {
           const filename =
             (book.file_path || "").split("/").pop() || book.title || "Unknown";
-          const displayTitle = book.display_title || book.title || filename;
+          const rawTitle = book.display_title || book.title || filename;
+          const displayTitle = rawTitle.replace(/^(?:\d+\s+)?\[[^\]]+\]\s+/, "") || rawTitle;
           const category = book.category || "_root";
           const fileType = book.file_type || "";
           // ID를 재사용해도 브라우저가 이전 책의 이미지를 쓰지 않도록 원본 경로도 구분한다.

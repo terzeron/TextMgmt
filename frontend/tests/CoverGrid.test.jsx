@@ -63,9 +63,8 @@ describe("CoverGrid", () => {
     expect(imgs[1].getAttribute("src")).toMatch(
       /^http:\/\/api\/cover\/7\?v=\d{10}&path=/,
     );
-    expect(imgs[0].getAttribute("loading")).toBe("lazy");
     expect(imgs[0].getAttribute("srcset")).toMatch(
-      /&w=150 1x, http:\/\/api\/cover\/1\?v=\d{10}.*&w=300 2x$/,
+      /&w=100 1x, http:\/\/api\/cover\/1\?v=\d{10}.*&w=200 2x$/,
     );
   });
 
@@ -73,6 +72,23 @@ describe("CoverGrid", () => {
     render(<CoverGrid results={makeBooks(1, "pdf")} basePath="/comics-view" />);
     expect(document.querySelector("img").getAttribute("src")).toMatch(
       /^http:\/\/api\/comics\/cover\/1\?v=\d{10}&path=/,
+    );
+  });
+
+  it("동시에 커버 10개만 요청하고 완료된 슬롯으로 다음 커버를 요청한다", async () => {
+    const { container } = render(
+      <CoverGrid results={makeBooks(12, "epub")} basePath="/comics-view" />,
+    );
+    observers.at(-1).fire(true);
+
+    const images = Array.from(container.querySelectorAll("img"));
+    expect(images).toHaveLength(12);
+    expect(images.slice(0, 10).every((image) => image.hasAttribute("src"))).toBe(true);
+    expect(images.slice(10).every((image) => !image.hasAttribute("src"))).toBe(true);
+
+    fireEvent.load(images[0]);
+    await vi.waitFor(() =>
+      expect(images[10].getAttribute("src")).toMatch(/\/comics\/cover\/11\?/),
     );
   });
 
@@ -192,18 +208,38 @@ describe("CoverGrid", () => {
     );
   });
 
-  it(`처음에는 ${COVER_BATCH_SIZE}개만 그리고 끝에 닿으면 더 그린다`, () => {
+  it("커버 제목의 [저자] prefix를 책과 만화 모두에서 숨긴다", () => {
+    render(
+      <CoverGrid
+        results={[
+          { ...makeBooks(1, "epub")[0], display_title: "[책 저자] 책 제목" },
+          { ...makeBooks(1, "pdf")[0], book_id: 2, display_title: "[만화 작가] 만화 제목" },
+          { ...makeBooks(1, "epub")[0], book_id: 3, display_title: "01 [번호 저자] 번호 책 제목" },
+        ]}
+        basePath="/comics-view"
+      />,
+    );
+
+    expect(screen.getByText("책 제목")).toBeTruthy();
+    expect(screen.getByText("만화 제목")).toBeTruthy();
+    expect(screen.getByText("번호 책 제목")).toBeTruthy();
+    expect(screen.queryByText("[책 저자] 책 제목")).toBeNull();
+    expect(screen.queryByText("[만화 작가] 만화 제목")).toBeNull();
+    expect(screen.queryByText("01 [번호 저자] 번호 책 제목")).toBeNull();
+  });
+
+  it(`커버 요청을 ${COVER_BATCH_SIZE}개씩 나누어 화면 끝에서 이어 그린다`, () => {
     render(<CoverGrid results={makeBooks(45, "txt")} basePath="/book-view" />);
-    expect(screen.getAllByRole("link")).toHaveLength(20);
+    expect(screen.getAllByRole("link")).toHaveLength(10);
 
     observers.at(-1).fire(false);
+    expect(screen.getAllByRole("link")).toHaveLength(10);
+
+    observers.at(-1).fire(true);
     expect(screen.getAllByRole("link")).toHaveLength(20);
 
     observers.at(-1).fire(true);
-    expect(screen.getAllByRole("link")).toHaveLength(40);
-
-    observers.at(-1).fire(true);
-    expect(screen.getAllByRole("link")).toHaveLength(45);
+    expect(screen.getAllByRole("link")).toHaveLength(30);
   });
 
   it("IntersectionObserver가 없으면 전부 그린다", () => {
@@ -217,12 +253,12 @@ describe("CoverGrid", () => {
       <CoverGrid results={makeBooks(45, "txt")} basePath="/book-view" />,
     );
     observers.at(-1).fire(true);
-    expect(screen.getAllByRole("link")).toHaveLength(40);
+    expect(screen.getAllByRole("link")).toHaveLength(20);
 
     rerender(
       <CoverGrid results={makeBooks(30, "txt")} basePath="/book-view" />,
     );
-    expect(screen.getAllByRole("link")).toHaveLength(20);
+    expect(screen.getAllByRole("link")).toHaveLength(10);
   });
 
   it("file_type·category·제목 정보가 비어 있어도 기본값으로 그린다", () => {
@@ -291,11 +327,13 @@ describe("CoverGrid", () => {
           onLoadMore={onLoadMore}
         />,
       );
-      expect(screen.getAllByRole("link")).toHaveLength(20);
+      expect(screen.getAllByRole("link")).toHaveLength(10);
 
       observers.at(-1).fire(false);
       expect(onLoadMore).not.toHaveBeenCalled();
 
+      observers.at(-1).fire(true);
+      expect(screen.getAllByRole("link")).toHaveLength(20);
       observers.at(-1).fire(true);
       expect(onLoadMore).toHaveBeenCalledTimes(1);
     });
@@ -313,7 +351,7 @@ describe("CoverGrid", () => {
 
       observers.at(-1).fire(true);
 
-      expect(screen.getAllByRole("link")).toHaveLength(40);
+      expect(screen.getAllByRole("link")).toHaveLength(20);
       expect(onLoadMore).not.toHaveBeenCalled();
     });
 
@@ -321,7 +359,7 @@ describe("CoverGrid", () => {
       const onLoadMore = vi.fn();
       render(
         <CoverGrid
-          results={makeBooks(20, "txt")}
+          results={makeBooks(10, "txt")}
           basePath="/book-view"
           hasMore
           loading
@@ -337,7 +375,7 @@ describe("CoverGrid", () => {
     it("서버에 더 없으면 끝 감지 요소를 두지 않는다", () => {
       const { container } = render(
         <CoverGrid
-          results={makeBooks(20, "txt")}
+          results={makeBooks(10, "txt")}
           basePath="/book-view"
           hasMore={false}
           onLoadMore={vi.fn()}
@@ -356,13 +394,13 @@ describe("CoverGrid", () => {
         <CoverGrid results={makeBooks(40, "txt")} resetKey="A" {...props} />,
       );
       observers.at(-1).fire(true);
-      expect(screen.getAllByRole("link")).toHaveLength(40);
+      expect(screen.getAllByRole("link")).toHaveLength(20);
 
       rerender(
         <CoverGrid results={makeBooks(100, "txt")} resetKey="A" {...props} />,
       );
 
-      expect(screen.getAllByRole("link")).toHaveLength(40);
+      expect(screen.getAllByRole("link")).toHaveLength(20);
     });
 
     it("resetKey가 바뀌면 첫 묶음부터 다시 그린다", () => {
@@ -375,13 +413,13 @@ describe("CoverGrid", () => {
         <CoverGrid results={makeBooks(40, "txt")} resetKey="A" {...props} />,
       );
       observers.at(-1).fire(true);
-      expect(screen.getAllByRole("link")).toHaveLength(40);
+      expect(screen.getAllByRole("link")).toHaveLength(20);
 
       rerender(
         <CoverGrid results={makeBooks(40, "txt")} resetKey="B" {...props} />,
       );
 
-      expect(screen.getAllByRole("link")).toHaveLength(20);
+      expect(screen.getAllByRole("link")).toHaveLength(10);
     });
 
     it("IntersectionObserver가 없어도 서버 페이지를 이어받는다", () => {

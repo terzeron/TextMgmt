@@ -1505,7 +1505,7 @@ fn test_validate_epub_parse_error() {
     let manager = BookManager::with_deps(deps);
     let (result, err) = run(manager.validate_epub(1));
     assert!(result.is_none());
-    assert!(err.as_deref().unwrap().contains("Failed to parse epubcheck output"));
+    assert!(err.as_deref().unwrap().contains("Failed to parse epubveri output"));
 }
 
 #[test]

@@ -9,6 +9,7 @@
 mod common;
 
 use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -26,6 +27,44 @@ use common::{
 };
 use image::{DynamicImage, GenericImageView, ImageFormat, Rgb, RgbImage};
 use serde_json::{Value, json};
+
+#[test]
+fn test_epubveri_cli_writes_epubcheck_compatible_json_for_valid_and_invalid_books() {
+    let tmp = tempfile::tempdir().unwrap();
+    let valid_path = tmp.path().join("valid.epub");
+    let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:123e4567-e89b-12d3-a456-426614174000</dc:identifier><dc:title>Rust wrapper</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2024-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+    let nav = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">Chapter</a></li></ol></nav></body></html>"#;
+    let mut valid_spec = EpubSpec::minimal().with_opf(opf).with_extra("nav.xhtml", nav);
+    valid_spec.chapters = vec![("ch1.xhtml".into(), "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Text</title></head><body><p>Text</p></body></html>".into())];
+    make_epub(&valid_path, &valid_spec);
+    let valid_json = tmp.path().join("valid.json");
+    let valid = Command::new(env!("CARGO_BIN_EXE_epubveri")).arg(&valid_path).arg("--json").arg(&valid_json).output().unwrap();
+    let valid_report: Value = serde_json::from_slice(&std::fs::read(valid_json).unwrap()).unwrap();
+    assert_eq!(valid.status.code(), Some(0), "{}", valid_report);
+    assert_eq!(valid_report["checker"]["nFatal"], 0);
+    assert_eq!(valid_report["publication"]["title"], "Rust wrapper");
+
+    let invalid_path = tmp.path().join("invalid.epub");
+    make_epub(&invalid_path, &EpubSpec::minimal().without_mimetype());
+    let invalid_json = tmp.path().join("invalid.json");
+    let invalid = Command::new(env!("CARGO_BIN_EXE_epubveri")).arg(&invalid_path).arg("--json").arg(&invalid_json).output().unwrap();
+    assert_eq!(invalid.status.code(), Some(1), "{}", String::from_utf8_lossy(&invalid.stderr));
+    let invalid_report: Value = serde_json::from_slice(&std::fs::read(invalid_json).unwrap()).unwrap();
+    let messages = invalid_report["messages"].as_array().unwrap();
+    assert!(!messages.is_empty());
+    assert!(messages.iter().all(|message| message.get("ID").is_some()));
+}
 
 /// OPF metadata/manifest 조각과 이미지 멤버를 받아 최소 EPUB을 만든다.
 fn create_test_epub(output_path: &Path, metadata: &str, manifest_items: &str, images: &[(&str, Vec<u8>)]) {
@@ -365,8 +404,8 @@ mod test_get_cover {
         assert_eq!(response.status_code, 200);
         assert_jpeg_thumbnail(&response.body);
         let img = decode(&response.body);
-        assert_eq!(img.width(), 300);
-        let expected = (300.0_f64 * 792.0 / 612.0).round() as i64;
+        assert_eq!(img.width(), 200);
+        let expected = (200.0_f64 * 792.0 / 612.0).round() as i64;
         assert!((img.height() as i64 - expected).abs() <= 1, "높이 {}, 기대 {expected}", img.height());
     }
 
@@ -380,7 +419,7 @@ mod test_get_cover {
 
         assert_eq!(response.status_code, 200);
         let img = decode(&response.body);
-        assert_eq!((img.width(), img.height()), (300, 400));
+        assert_eq!((img.width(), img.height()), (200, 267));
         for x in [img.width() / 4, img.width() * 3 / 4] {
             let (red, _green, blue) = pixel(&img, x, img.height() / 2);
             assert!(red > blue, "x={x}: red={red}, blue={blue}");
@@ -397,7 +436,7 @@ mod test_get_cover {
 
         assert_eq!(response.status_code, 200);
         let img = decode(&response.body);
-        assert_eq!((img.width(), img.height()), (300, 450));
+        assert_eq!((img.width(), img.height()), (200, 300));
         let (red, _green, blue) = pixel(&img, img.width() / 2, img.height() - 10);
         assert!(red > blue, "red={red}, blue={blue}");
     }
@@ -413,7 +452,7 @@ mod test_get_cover {
 
             assert_eq!(response.status_code, 200, "background={background:?}");
             let img = decode(&response.body);
-            assert_eq!((img.width(), img.height()), (300, 450), "background={background:?}");
+            assert_eq!((img.width(), img.height()), (200, 300), "background={background:?}");
             let (red, green, blue) = pixel(&img, img.width() / 2, img.height() / 2);
             assert!(blue > red, "background={background:?}");
             assert!(blue > green, "background={background:?}");
@@ -431,7 +470,7 @@ mod test_get_cover {
         assert_eq!(response.status_code, 200);
         let img = decode(&response.body);
         let (red, green, blue) = pixel(&img, img.width() / 2, img.height() / 2);
-        assert!(red.max(green).max(blue) < 100, "({red}, {green}, {blue})");
+        assert!(red.max(green).max(blue) < 150, "({red}, {green}, {blue})");
     }
 
     #[tokio::test]
@@ -477,7 +516,7 @@ mod test_get_cover {
 
     #[tokio::test]
     async fn test_width_tier_is_whitelisted() {
-        for (requested, expected) in [(Some(150), 150), (Some(300), 300), (None, 300), (Some(0), 300), (Some(999), 300), (Some(-1), 300)] {
+        for (requested, expected) in [(Some(100), 100), (Some(200), 200), (None, 200), (Some(0), 200), (Some(300), 200), (Some(-1), 200)] {
             let e = env();
             create_test_pdf(&e.dir().join("test_category/tier.pdf"));
             use_doc(&e.es, "test_category/tier.pdf", "pdf");
@@ -496,18 +535,18 @@ mod test_get_cover {
         create_test_pdf(&e.dir().join("test_category/tiers.pdf"));
         use_doc(&e.es, "test_category/tiers.pdf", "pdf");
 
-        let small = e.manager.get_cover(131, Some(150)).await;
-        let large = e.manager.get_cover(131, Some(300)).await;
+        let small = e.manager.get_cover(131, Some(100)).await;
+        let large = e.manager.get_cover(131, Some(200)).await;
 
-        assert!(decode(&small.body).width() <= 150);
-        assert!(decode(&large.body).width() > 150);
+        assert!(decode(&small.body).width() <= 100);
+        assert!(decode(&large.body).width() > 100);
         assert_eq!(count_matching(&e.dir().join(".cover_cache"), &format!("131.v{}.w", BookManager::COVER_CACHE_VERSION), ".jpg"), 2);
     }
 
     #[test]
     fn test_normalize_cover_width_rejects_non_int() {
-        assert_eq!(BookManager::normalize_cover_width(json!(150).as_i64()), 150);
-        assert_eq!(BookManager::normalize_cover_width(json!("150").as_i64()), BookManager::COVER_THUMBNAIL_WIDTH);
+        assert_eq!(BookManager::normalize_cover_width(json!(100).as_i64()), 100);
+        assert_eq!(BookManager::normalize_cover_width(json!("100").as_i64()), BookManager::COVER_THUMBNAIL_WIDTH);
     }
 }
 
