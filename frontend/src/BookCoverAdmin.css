@@ -11,16 +11,16 @@
 .book-cover-row-actions { display: flex; flex: 0 0 auto; gap: 6px; }
 .book-cover-scan-trigger { height: 1px; }
 .book-cover-filename { font-size: .75rem; color: #6c757d; margin-bottom: 8px; overflow-wrap: anywhere; }
-.book-cover-row-body { display: flex; gap: 14px; align-items: flex-start; }
+.book-cover-row-body { display: flex; gap: 2px; align-items: flex-start; }
 .book-cover-current { flex: 0 0 var(--cover-card-width); }
 .book-cover-current small { display: block; font-size: .75rem; margin-top: 6px; }
 .book-cover-status { margin-bottom: 6px; }
 .book-cover-current-actions { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
 .book-cover-save, .book-cover-trash { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; font-size: .875rem; }
-.book-cover-completed { padding: 0; border: 2px solid #198754; cursor: pointer; }
+.book-cover-completed { padding: 0; border: 1px solid #198754; box-shadow: inset 0 0 0 1px #198754; cursor: pointer; }
 .book-cover-completed:disabled { cursor: wait; }
 .book-cover-existing { padding: 0; }
-.book-cover-candidates { min-width: 0; display: flex; gap: 14px; overflow-x: auto; padding-bottom: 10px; }
+.book-cover-candidates { min-width: 0; display: flex; gap: 2px; overflow-x: auto; padding-bottom: 10px; }
 .book-cover-store { flex: 0 0 auto; width: max-content; min-width: var(--cover-card-width); }
 .book-cover-store h4 { font-size: .8rem; font-weight: 600; margin-bottom: 6px; }
 .book-cover-store-header { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; }
@@ -29,15 +29,14 @@
 .book-cover-image-frame { position: relative; }
 .book-cover-image-frame > .book-cover-magnifier { position: absolute; top: 2px; right: 2px; z-index: 1; background: rgba(255, 255, 255, .9); }
 .book-cover-store > small { display: block; width: var(--cover-card-width); }
-.book-cover-store-images { display: flex; gap: 8px; }
+.book-cover-store-images { display: flex; gap: 2px; }
 .book-cover-candidate { width: var(--cover-card-width); flex: 0 0 var(--cover-card-width); }
-.book-cover-candidate button.cover-grid-cover { padding: 5px; }
 .book-cover-candidate .cover-grid-image { background: #f8f9fa; }
-.book-cover-image-size { display: block; min-height: 28px; line-height: 14px; margin-top: 4px; color: #495057; }
+.book-cover-image-size { display: block; min-height: 28px; line-height: 14px; margin-top: 4px; color: #495057; font-size: .7rem; }
 .book-cover-image-size span { display: block; }
 .book-cover-candidate button.cover-grid-cover:not(:disabled):hover { border-color: #0d6efd; }
 .book-cover-candidate button.cover-grid-cover:focus-visible, .book-cover-completed:focus-visible { outline: 3px solid #0d6efd; outline-offset: 2px; }
-.book-cover-candidate-title { display: block; font-size: .75rem; line-height: 1.3; margin-top: 4px; overflow-wrap: anywhere; }
+.book-cover-candidate-title { display: block; font-size: .7rem; line-height: 1.3; margin-top: 4px; overflow-wrap: anywhere; }
 .book-cover-candidate small { font-size: .7rem; }
 .book-cover-retry { display: block; border: 0; background: transparent; color: #0d6efd; padding: 4px 0; font-size: .75rem; text-decoration: underline; }
 .book-cover-search-link { display: block; font-size: .75rem; margin-top: 4px; }

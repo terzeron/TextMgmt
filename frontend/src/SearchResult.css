@@ -75,7 +75,7 @@
     white-space: nowrap;
 }
 
-/* 최신 책·최신 만화 탭은 제목을 더 크게 보여준다. 카드 폭은 모든 화면이 --cover-card-width 를 공유한다. */
+/* 최신 책·최신 만화 탭도 표지 제목 크기를 공통으로 쓴다. */
 :is(#latest-books, #latest-comics) .cover-grid-title {
-    font-size: 1.0rem;
+    font-size: 0.7rem;
 }

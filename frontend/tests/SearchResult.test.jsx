@@ -623,7 +623,7 @@ describe("SearchResult 커버 뷰", () => {
       delete globalThis.IntersectionObserver;
     });
 
-    it("커버 뷰는 '더 보기' 버튼 대신 스크롤 끝에서 다음 페이지를 이어받는다", () => {
+    it("커버 뷰는 10장씩 표시한 뒤 스크롤 끝에서 다음 페이지를 이어받는다", () => {
       const onLoadMore = vi.fn();
       render(
         <SearchResult
@@ -636,6 +636,8 @@ describe("SearchResult 커버 뷰", () => {
       );
 
       expect(screen.queryByText("더 보기")).toBeNull();
+      observers.at(-1).fire(true);
+      expect(screen.getAllByRole("link")).toHaveLength(20);
       observers.at(-1).fire(true);
       expect(onLoadMore).toHaveBeenCalledTimes(1);
     });
@@ -687,11 +689,11 @@ describe("SearchResult 커버 뷰", () => {
         <SearchResult results={makeBooks(40)} {...props} />,
       );
       observers.at(-1).fire(true);
-      expect(screen.getAllByRole("link")).toHaveLength(40);
+      expect(screen.getAllByRole("link")).toHaveLength(20);
 
       rerender(<SearchResult results={makeBooks(100)} {...props} />);
 
-      expect(screen.getAllByRole("link")).toHaveLength(40);
+      expect(screen.getAllByRole("link")).toHaveLength(20);
     });
 
     it("제목에 요소를 넘길 수 있다", () => {

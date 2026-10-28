@@ -404,8 +404,8 @@ mod test_get_cover {
         assert_eq!(response.status_code, 200);
         assert_jpeg_thumbnail(&response.body);
         let img = decode(&response.body);
-        assert_eq!(img.width(), 300);
-        let expected = (300.0_f64 * 792.0 / 612.0).round() as i64;
+        assert_eq!(img.width(), 200);
+        let expected = (200.0_f64 * 792.0 / 612.0).round() as i64;
         assert!((img.height() as i64 - expected).abs() <= 1, "높이 {}, 기대 {expected}", img.height());
     }
 
@@ -419,7 +419,7 @@ mod test_get_cover {
 
         assert_eq!(response.status_code, 200);
         let img = decode(&response.body);
-        assert_eq!((img.width(), img.height()), (300, 400));
+        assert_eq!((img.width(), img.height()), (200, 267));
         for x in [img.width() / 4, img.width() * 3 / 4] {
             let (red, _green, blue) = pixel(&img, x, img.height() / 2);
             assert!(red > blue, "x={x}: red={red}, blue={blue}");
@@ -436,7 +436,7 @@ mod test_get_cover {
 
         assert_eq!(response.status_code, 200);
         let img = decode(&response.body);
-        assert_eq!((img.width(), img.height()), (300, 450));
+        assert_eq!((img.width(), img.height()), (200, 300));
         let (red, _green, blue) = pixel(&img, img.width() / 2, img.height() - 10);
         assert!(red > blue, "red={red}, blue={blue}");
     }
@@ -452,7 +452,7 @@ mod test_get_cover {
 
             assert_eq!(response.status_code, 200, "background={background:?}");
             let img = decode(&response.body);
-            assert_eq!((img.width(), img.height()), (300, 450), "background={background:?}");
+            assert_eq!((img.width(), img.height()), (200, 300), "background={background:?}");
             let (red, green, blue) = pixel(&img, img.width() / 2, img.height() / 2);
             assert!(blue > red, "background={background:?}");
             assert!(blue > green, "background={background:?}");
@@ -470,7 +470,7 @@ mod test_get_cover {
         assert_eq!(response.status_code, 200);
         let img = decode(&response.body);
         let (red, green, blue) = pixel(&img, img.width() / 2, img.height() / 2);
-        assert!(red.max(green).max(blue) < 100, "({red}, {green}, {blue})");
+        assert!(red.max(green).max(blue) < 150, "({red}, {green}, {blue})");
     }
 
     #[tokio::test]
@@ -516,7 +516,7 @@ mod test_get_cover {
 
     #[tokio::test]
     async fn test_width_tier_is_whitelisted() {
-        for (requested, expected) in [(Some(150), 150), (Some(300), 300), (None, 300), (Some(0), 300), (Some(999), 300), (Some(-1), 300)] {
+        for (requested, expected) in [(Some(100), 100), (Some(200), 200), (None, 200), (Some(0), 200), (Some(300), 200), (Some(-1), 200)] {
             let e = env();
             create_test_pdf(&e.dir().join("test_category/tier.pdf"));
             use_doc(&e.es, "test_category/tier.pdf", "pdf");
@@ -535,18 +535,18 @@ mod test_get_cover {
         create_test_pdf(&e.dir().join("test_category/tiers.pdf"));
         use_doc(&e.es, "test_category/tiers.pdf", "pdf");
 
-        let small = e.manager.get_cover(131, Some(150)).await;
-        let large = e.manager.get_cover(131, Some(300)).await;
+        let small = e.manager.get_cover(131, Some(100)).await;
+        let large = e.manager.get_cover(131, Some(200)).await;
 
-        assert!(decode(&small.body).width() <= 150);
-        assert!(decode(&large.body).width() > 150);
+        assert!(decode(&small.body).width() <= 100);
+        assert!(decode(&large.body).width() > 100);
         assert_eq!(count_matching(&e.dir().join(".cover_cache"), &format!("131.v{}.w", BookManager::COVER_CACHE_VERSION), ".jpg"), 2);
     }
 
     #[test]
     fn test_normalize_cover_width_rejects_non_int() {
-        assert_eq!(BookManager::normalize_cover_width(json!(150).as_i64()), 150);
-        assert_eq!(BookManager::normalize_cover_width(json!("150").as_i64()), BookManager::COVER_THUMBNAIL_WIDTH);
+        assert_eq!(BookManager::normalize_cover_width(json!(100).as_i64()), 100);
+        assert_eq!(BookManager::normalize_cover_width(json!("100").as_i64()), BookManager::COVER_THUMBNAIL_WIDTH);
     }
 }
 

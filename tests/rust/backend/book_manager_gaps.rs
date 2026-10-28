@@ -36,7 +36,7 @@ mod common;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Cursor;
+use std::io::{Cursor, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -995,19 +995,33 @@ fn vector_pdf() -> Vec<u8> {
     out
 }
 
+fn append_large_unreferenced_stream(path: &Path, pdf: &[u8], stream_size: u64) {
+    let marker = b"startxref\n";
+    let start = pdf.windows(marker.len()).rposition(|window| window == marker).unwrap() + marker.len();
+    let previous_xref = String::from_utf8_lossy(&pdf[start..]).lines().next().unwrap().parse::<u64>().unwrap();
+    let mut file = fs::File::create(path).unwrap();
+    file.write_all(pdf).unwrap();
+    let object_offset = file.stream_position().unwrap();
+    write!(file, "6 0 obj\n<< /Length {stream_size} >>\nstream\n").unwrap();
+    file.seek(SeekFrom::Current(stream_size as i64)).unwrap();
+    file.write_all(b"\nendstream\nendobj\n").unwrap();
+    let xref_offset = file.stream_position().unwrap();
+    write!(file, "xref\n6 1\n{object_offset:010} 00000 n \ntrailer\n<< /Size 7 /Root 1 0 R /Prev {previous_xref} >>\nstartxref\n{xref_offset}\n%%EOF\n").unwrap();
+}
+
 #[test]
 fn test_extract_cover_thumbnail_scales_tall_first_page_to_exact_cover_size() {
-    // 쪽 폭 66pt 의 세로로 긴 쪽은 pdfium 렌더 결과가 한 픽셀 어긋나(300x451) 도 썸네일 크기가 고정된다.
+    // 쪽 폭 66pt 의 세로로 긴 쪽은 Poppler 렌더 결과가 한 픽셀 어긋나도 썸네일 크기가 고정된다.
     let tmp = TempDir::new().unwrap();
     let pdf_path = tmp.path().join("tall.pdf");
     fs::write(&pdf_path, blank_pdf(66, 165)).unwrap();
 
-    let data = BookManager::_extract_cover_thumbnail(&pdf_path, "pdf", Some(300)).expect("썸네일");
+    let data = BookManager::_extract_cover_thumbnail(&pdf_path, "pdf", Some(200)).expect("썸네일");
 
     assert_eq!(image::guess_format(&data).unwrap(), image::ImageFormat::Jpeg);
     let thumb = image::load_from_memory(&data).unwrap();
     // Python round()는 반올림 동점을 짝수로 보내지만 Rust round()는 0에서 먼 쪽이다. 동점이 나오는 비율이면 달라질 수 있다.
-    assert_eq!((thumb.width(), thumb.height()), (300, (300.0 / BookManager::COVER_ASPECT_RATIO).round() as u32));
+    assert_eq!((thumb.width(), thumb.height()), (200, (200.0 / BookManager::COVER_ASPECT_RATIO).round() as u32));
 }
 
 #[test]
@@ -1016,9 +1030,24 @@ fn test_extract_cover_thumbnail_renders_text_and_vector_content() {
     let pdf_path = tmp.path().join("vector.pdf");
     fs::write(&pdf_path, vector_pdf()).unwrap();
 
-    let data = BookManager::_extract_cover_thumbnail(&pdf_path, "pdf", Some(300)).expect("벡터 PDF 표지");
+    let data = BookManager::_extract_cover_thumbnail(&pdf_path, "pdf", Some(200)).expect("벡터 PDF 표지");
     let thumb = image::load_from_memory(&data).unwrap().to_rgb8();
 
-    assert_eq!((thumb.width(), thumb.height()), (300, 450));
+    assert_eq!((thumb.width(), thumb.height()), (200, 300));
     assert!(thumb.pixels().any(|pixel| pixel[0] > 180 && pixel[1] < 100 && pixel[2] < 100), "빨간 벡터 사각형이 렌더링돼야 한다");
+}
+
+#[test]
+fn test_extract_cover_thumbnail_renders_first_page_of_large_pdf() {
+    let tmp = TempDir::new().unwrap();
+    let pdf_path = tmp.path().join("large.pdf");
+    let stream_size = 256 * 1024 * 1024 + 1;
+    append_large_unreferenced_stream(&pdf_path, &vector_pdf(), stream_size);
+    assert!(fs::metadata(&pdf_path).unwrap().len() > 256 * 1024 * 1024);
+
+    let data = BookManager::_extract_cover_thumbnail(&pdf_path, "pdf", Some(200)).expect("큰 PDF 첫 쪽 표지");
+    let thumb = image::load_from_memory(&data).unwrap().to_rgb8();
+
+    assert_eq!((thumb.width(), thumb.height()), (200, 300));
+    assert!(thumb.pixels().any(|pixel| pixel[0] > 180 && pixel[1] < 100 && pixel[2] < 100), "첫 쪽 벡터 표지를 렌더링해야 한다");
 }

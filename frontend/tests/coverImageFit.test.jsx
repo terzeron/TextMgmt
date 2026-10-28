@@ -48,16 +48,16 @@ describe("markTallCover", () => {
 });
 
 describe("coverThumbProps", () => {
-  it("1x는 150, 2x는 300 썸네일을 srcSet으로 펼친다", () => {
+  it("1x는 100, 2x는 200 썸네일을 srcSet으로 펼친다", () => {
     expect(coverThumbProps("/cover/7?v=1")).toEqual({
-      src: "/cover/7?v=1&w=300",
-      srcSet: "/cover/7?v=1&w=150 1x, /cover/7?v=1&w=300 2x",
+      src: "/cover/7?v=1&w=200",
+      srcSet: "/cover/7?v=1&w=100 1x, /cover/7?v=1&w=200 2x",
     });
   });
 
   it("쿼리가 없는 URL에는 ?로 붙인다", () => {
     expect(coverThumbProps("/cover/7").srcSet).toBe(
-      "/cover/7?w=150 1x, /cover/7?w=300 2x",
+      "/cover/7?w=100 1x, /cover/7?w=200 2x",
     );
   });
 });
@@ -65,11 +65,13 @@ describe("coverThumbProps", () => {
 describe("썸네일 폭 계약", () => {
   it("CSS 카드 폭 상한은 서버 1x 썸네일 폭과 같고 2x는 그 두 배다", () => {
     const css = readFileSync("src/CoverGrid.css", "utf-8");
-    const max = Number(css.match(/--cover-card-max:\s*(\d+)px/)[1]);
-    expect(COVER_THUMB_WIDTHS).toEqual([max, max * 2]);
+    const imageWidth = Number(css.match(/--cover-image-width:\s*(\d+)px/)[1]);
+    const frameWidth = Number(css.match(/--cover-card-width:\s*calc\(var\(--cover-image-width\) \+ (\d+)px\)/)[1]);
+    expect(COVER_THUMB_WIDTHS).toEqual([imageWidth, imageWidth * 2]);
+    expect(frameWidth).toBe(2);
     const rust = readFileSync("../backend/src/book_manager/cover_list.rs", "utf-8");
     expect(rust).toMatch(
-      new RegExp(`COVER_THUMBNAIL_WIDTHS: \\[u32; 2\\] = \\[${max}, ${max * 2}\\]`),
+      new RegExp(`COVER_THUMBNAIL_WIDTHS: \\[u32; 2\\] = \\[${imageWidth}, ${imageWidth * 2}\\]`),
     );
   });
 });

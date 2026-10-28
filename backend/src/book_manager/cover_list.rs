@@ -43,8 +43,8 @@ fn search_after_triple(values: &[Value]) -> (i64, i64, String) {
 }
 
 impl BookManager {
-    pub const COVER_THUMBNAIL_WIDTHS: [u32; 2] = [150, 300];
-    pub const COVER_THUMBNAIL_WIDTH: u32 = 300;
+    pub const COVER_THUMBNAIL_WIDTHS: [u32; 2] = [100, 200];
+    pub const COVER_THUMBNAIL_WIDTH: u32 = 200;
     pub const COVER_JPEG_QUALITY: u8 = 85;
     pub const COVER_CACHE_VERSION: u32 = 8;
     pub const COVER_ASPECT_RATIO: f64 = 2.0 / 3.0;
