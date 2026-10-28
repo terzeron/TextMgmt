@@ -277,12 +277,12 @@ impl BookManagerApi for MockBm {
         (json!({"content_type":content_type,"indexed_count":1,"deleted_count":0,"failed_count":0,"before_count":2,"after_count":1}), None)
     }
 
-    async fn index_single_file(&self, _file_path: &str) -> (Option<i64>, Option<String>) {
-        (Some(17), None)
+    async fn index_single_file(&self, _file_path: &str) -> Result<i64, String> {
+        Ok(17)
     }
 
-    async fn delete_file(&self, _file_path: &str) -> (String, Option<String>) {
-        ("Ok".into(), None)
+    async fn delete_file(&self, _file_path: &str) -> Result<(), String> {
+        Ok(())
     }
 
     async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> (Value, Option<String>) {

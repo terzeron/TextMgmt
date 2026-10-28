@@ -90,6 +90,22 @@ use serde_json::{Value, json};
 use sysdeps::{CommandError, FsOps, RealFs};
 use tempfile::TempDir;
 
+/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+    match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    }
+}
+
+/// `Result<(), _>`를 Python 원본의 `("Ok" | "Error", 메시지)`로 펼친다.
+fn as_status(result: Result<(), String>) -> (String, Option<String>) {
+    match result {
+        Ok(()) => ("Ok".to_string(), None),
+        Err(error) => ("Error".to_string(), Some(error)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 공용 헬퍼 (전반부 정의를 복사)
 // ---------------------------------------------------------------------------
@@ -1109,7 +1125,7 @@ fn test_index_single_file_unsupported() {
     let f = tmp_path.join("test.xyz");
     fs::write(&f, "data").unwrap();
 
-    let (result, err) = asyncio_runner(manager.index_single_file("test.xyz"));
+    let (result, err) = split(asyncio_runner(manager.index_single_file("test.xyz")));
     assert!(result.is_none());
     assert!(err.expect("err").contains("지원하지 않는"));
 }
@@ -1157,7 +1173,7 @@ fn test_update_book_ioerror_on_rename() {
     fs::write(&src, "content").unwrap();
     es.set_doc(Some(make_doc("A/src.txt", ".txt")));
 
-    let (result, err) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "A", "dst", "U", &tmp_path.join("A").join("dst.txt"), "txt", false));
+    let (result, err) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "A", "dst", "U", &tmp_path.join("A").join("dst.txt"), "txt", false)));
     assert_eq!(result, "Error");
     assert!(err.expect("err").contains("can't move"));
 }
@@ -1176,7 +1192,7 @@ fn test_update_book_force_overwrite() {
     fs::write(&dst, "existing").unwrap();
     es.set_doc(Some(make_doc("A/src.txt", ".txt")));
 
-    let (result, _err) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "A", "dst", "U", &dst, "txt", true));
+    let (result, _err) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "A", "dst", "U", &dst, "txt", true)));
     assert_eq!(result, "Ok");
     assert!(!src.exists());
     assert_eq!(fs::read_to_string(&dst).unwrap(), "source");
@@ -1713,7 +1729,7 @@ fn test_update_book_no_such_book_returns_error() {
     let manager = make_manager(tmp_path, &FakeEsManager::new());
     let new_path = tmp_path.join("A").join("new.txt");
 
-    let (status, msg) = asyncio_runner(BookManagerApi::update_book(&manager, 999, "A", "Title", "Author", &new_path, "txt", false));
+    let (status, msg) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 999, "A", "Title", "Author", &new_path, "txt", false)));
     assert_eq!(status, "Error");
     assert!(msg.unwrap_or_default().contains("no such a book"));
 }
@@ -2350,7 +2366,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(empty_reader()).with_fs(faulty_rename));
 
     let dst = tmp_path.join("B").join("book.txt");
-    let (st1, msg1) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false));
+    let (st1, msg1) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false)));
     assert_eq!(st1, "Error");
     assert!(msg1.expect("msg1").contains("파일 롤백도 실패"));
 
@@ -2363,7 +2379,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     let manager =
         BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(empty_reader()).with_book_adder(book_adder(|| Err(BookManagerError::Runtime("restore old doc exception".to_string())))));
 
-    let (st2, msg2) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false));
+    let (st2, msg2) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false)));
     assert_eq!(st2, "Error");
     assert!(msg2.expect("msg2").contains("기존 ES 문서 복구 실패"));
 
@@ -2375,7 +2391,7 @@ fn test_update_book_reindex_and_rollback_branches() {
 
     let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(empty_reader()).with_book_adder(book_adder(|| Ok((None, Some("restore error message".to_string()))))));
 
-    let (st3, msg3) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false));
+    let (st3, msg3) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false)));
     assert_eq!(st3, "Error");
     assert!(msg3.expect("msg3").contains("restore error message"));
 
@@ -2388,7 +2404,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     let manager =
         BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(crash_reader()).with_book_adder(book_adder(|| Err(BookManagerError::Runtime("restore old doc exception".to_string())))));
 
-    let (st4, msg4) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false));
+    let (st4, msg4) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false)));
     assert_eq!(st4, "Error");
     assert!(msg4.expect("msg4").contains("기존 ES 문서 복구 실패"));
 
@@ -2400,7 +2416,7 @@ fn test_update_book_reindex_and_rollback_branches() {
 
     let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(crash_reader()).with_book_adder(book_adder(|| Ok((None, Some("restore error message".to_string()))))));
 
-    let (st5, msg5) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false));
+    let (st5, msg5) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false)));
     assert_eq!(st5, "Error");
     assert!(msg5.expect("msg5").contains("restore error message"));
 
@@ -2411,7 +2427,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     fs::write(&src_file, "content").unwrap();
 
     let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(crash_reader()).with_book_adder(book_adder(|| Ok((Some(1), None)))));
-    let (st6, msg6) = asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false));
+    let (st6, msg6) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false)));
     assert_eq!(st6, "Error");
     assert!(msg6.expect("msg6").contains("기존 ES 문서 복구 완료"));
 }

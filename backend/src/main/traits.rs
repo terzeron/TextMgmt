@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use crate::auth::HTTPException;
 use crate::book::{Book, BookLookupError, BookPage};
-use crate::book_manager::CoverPage;
+use crate::book_manager::{BookDeletion, CoverPage};
 use crate::category_mapping::CategoryMapping;
 use crate::es_manager::EsManagerApi;
 use crate::view_history_store::{ViewHistoryError, ViewHistoryStore};
@@ -443,14 +443,14 @@ pub trait BookManagerApi: Send + Sync {
     async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> (Value, Option<String>) {
         self.apply_category_changes(request.items, request.allowed_file_paths, request.clean_existing).await
     }
-    async fn delete_book(&self, _id: i64) -> (String, Option<String>) {
-        ("Error".into(), unimplemented_error())
+    async fn delete_book(&self, _id: i64) -> Result<BookDeletion, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
-    async fn index_single_file(&self, _file_path: &str) -> (Option<i64>, Option<String>) {
-        (None, unimplemented_error())
+    async fn index_single_file(&self, _file_path: &str) -> Result<i64, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
-    async fn delete_file(&self, _file_path: &str) -> (String, Option<String>) {
-        ("Error".into(), unimplemented_error())
+    async fn delete_file(&self, _file_path: &str) -> Result<(), String> {
+        Err(UNIMPLEMENTED.to_string())
     }
     async fn reload_category(&self, _category: &str, _content_type: &str) -> (Value, Option<String>) {
         (Value::Null, unimplemented_error())
@@ -587,8 +587,8 @@ pub trait BookManagerApi: Send + Sync {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn update_book(&self, _id: i64, _category: &str, _title: &str, _author: &str, _path: &std::path::Path, _file_type: &str, _force: bool) -> (Value, Option<String>) {
-        (Value::Null, unimplemented_error())
+    async fn update_book(&self, _id: i64, _category: &str, _title: &str, _author: &str, _path: &std::path::Path, _file_type: &str, _force: bool) -> Result<(), String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 }
 
@@ -801,9 +801,9 @@ mod tests {
         );
         assert_eq!(manager.apply_category_changes(&items, &allowed, false).await.1.as_deref(), Some(UNIMPLEMENTED));
         assert_eq!(manager.apply_category_changes_with(request).await.1.as_deref(), Some(UNIMPLEMENTED));
-        assert!(manager.delete_book(1).await.1.is_some());
-        assert!(manager.index_single_file("a.epub").await.1.is_some());
-        assert!(manager.delete_file("a.epub").await.1.is_some());
+        assert!(manager.delete_book(1).await.is_err());
+        assert!(manager.index_single_file("a.epub").await.is_err());
+        assert!(manager.delete_file("a.epub").await.is_err());
         assert!(manager.reload_category("fiction", "book").await.1.is_some());
         assert!(manager.reload_category_mismatch_files("fiction", "book", None).await.1.is_some());
         assert!(manager.reload_category_mismatches("book", None).await.1.is_some());
@@ -838,6 +838,6 @@ mod tests {
         assert!(manager.edit_epub_images(1, &[], &[], &[], &[]).await.is_err());
         assert!(manager.remove_epub_cover(1).await.is_err());
         assert!(manager.insert_epub_illustration(1, "page-1", None, None).await.is_err());
-        assert!(manager.update_book(1, "fiction", "title", "author", std::path::Path::new("a.epub"), "epub", false).await.1.is_some());
+        assert!(manager.update_book(1, "fiction", "title", "author", std::path::Path::new("a.epub"), "epub", false).await.is_err());
     }
 }

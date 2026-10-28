@@ -1,7 +1,7 @@
 //! 만화 API는 동일한 도서 처리 로직을 만화 전용 의존성으로 실행한다.
 use super::ComicsManager;
 use crate::book::{Book, BookLookupError, BookPage};
-use crate::book_manager::{BookManager, CoverPage};
+use crate::book_manager::{BookDeletion, BookManager, CoverPage};
 use crate::es_manager::EsManagerApi;
 use crate::main::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress};
 use serde_json::Value;
@@ -13,10 +13,10 @@ impl BookManagerApi for ComicsManager {
     async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> (Value, Option<String>) {
         BookManagerApi::propose_category_changes(&self.inner, request).await
     }
-    async fn index_single_file(&self, file_path: &str) -> (Option<i64>, Option<String>) {
+    async fn index_single_file(&self, file_path: &str) -> Result<i64, String> {
         BookManagerApi::index_single_file(&self.inner, file_path).await
     }
-    async fn delete_file(&self, file_path: &str) -> (String, Option<String>) {
+    async fn delete_file(&self, file_path: &str) -> Result<(), String> {
         BookManagerApi::delete_file(&self.inner, file_path).await
     }
     async fn reload_category(&self, category: &str, _content_type: &str) -> (Value, Option<String>) {
@@ -34,7 +34,7 @@ impl BookManagerApi for ComicsManager {
     async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> (Value, Option<String>) {
         BookManagerApi::apply_category_changes_with(&self.inner, request).await
     }
-    async fn delete_book(&self, id: i64) -> (String, Option<String>) {
+    async fn delete_book(&self, id: i64) -> Result<BookDeletion, String> {
         BookManagerApi::delete_book(&self.inner, id).await
     }
     async fn rename_category(&self, old: &str, new: &str) -> (Value, Option<String>) {
@@ -159,7 +159,7 @@ impl BookManagerApi for ComicsManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn update_book(&self, id: i64, category: &str, title: &str, author: &str, path: &Path, file_type: &str, force: bool) -> (Value, Option<String>) {
+    async fn update_book(&self, id: i64, category: &str, title: &str, author: &str, path: &Path, file_type: &str, force: bool) -> Result<(), String> {
         BookManagerApi::update_book(&self.inner, id, category, title, author, path, file_type, force).await
     }
 }

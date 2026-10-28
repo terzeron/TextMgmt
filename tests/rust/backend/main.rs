@@ -63,7 +63,7 @@ use axum::http::Method;
 use axum::response::IntoResponse;
 use backend::auth::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
 use backend::book::{Book, BookLookupError, BookPage};
-use backend::book_manager::{BookContent, BookManager, BookManagerApi, BookResponse};
+use backend::book_manager::{BookContent, BookDeletion, BookManager, BookManagerApi, BookResponse};
 use backend::category_mapping::CategoryMapping;
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
@@ -72,6 +72,14 @@ use common::{TestClient, env::EnvGuard, es_fake::FakeEsManager};
 use serde_json::{Value, json};
 use sysdeps::{FsOps, SystemClock};
 use tempfile::TempDir;
+
+/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+    match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    }
+}
 
 #[test]
 fn backend_binary_dispatches_the_isbn_pdf_worker_command() {
@@ -228,7 +236,7 @@ async fn test_book(s: &Setup) -> TestBook {
     fs::copy(src, &temp).unwrap();
     let data = read_file(&temp);
 
-    let (book_id, error) = s.bm.add_book(&data).await;
+    let (book_id, error) = split(s.bm.add_book(&data).await);
     let book_id = expect_id(book_id, error);
     let book = s.bm.get_book(book_id).await.expect("book");
     TestBook { book, temp, bm: s.bm.clone() }
@@ -250,7 +258,7 @@ mod test_backend {
         fs::copy(src, &temp).unwrap();
         let data = read_file(&temp);
 
-        let (book_id, error) = s.bm.add_book(&data).await;
+        let (book_id, error) = split(s.bm.add_book(&data).await);
         let book_id = expect_id(book_id, error);
         let book = s.bm.get_book(book_id).await.expect("book");
         let renamed_temp = Book::path_prefix().join(&book.category).join(format!("renamed_{}.{}", book.title, book.file_type));
@@ -299,7 +307,7 @@ mod test_backend {
             let _ = fs::remove_file(&temp_cleanup);
         });
 
-        let (book_id, error) = s.bm.add_book(&data).await;
+        let (book_id, error) = split(s.bm.add_book(&data).await);
         let book_id = expect_id(book_id, error);
         let book = s.bm.get_book(book_id).await.expect("book");
 
@@ -519,7 +527,7 @@ async fn insert_docs(bm: &BookManager, category: &str, count: i64, start_id: i64
             "summary": summary,
             "updated_time": loader::record::now_iso(),
         });
-        let (book_id, error) = bm.add_book(&BTreeMap::from([(doc_id, doc)])).await;
+        let (book_id, error) = split(bm.add_book(&BTreeMap::from([(doc_id, doc)])).await);
         ids.push(expect_id(book_id, error));
     }
     ids
@@ -739,7 +747,7 @@ mod test_update_book_conflict {
             "summary": "conflict test",
             "updated_time": loader::record::now_iso(),
         });
-        let (book_id, error) = bm.add_book(&BTreeMap::from([(meta.ino() as i64, doc)])).await;
+        let (book_id, error) = split(bm.add_book(&BTreeMap::from([(meta.ino() as i64, doc)])).await);
         assert!(book_id.unwrap_or(0) != 0 && error.is_none(), "Failed to register: {error:?}");
         book_id.unwrap()
     }
@@ -1384,22 +1392,22 @@ impl BookManagerApi for DummyManager {
         self.es.clone()
     }
 
-    async fn update_book(&self, _book_id: i64, _new_category: &str, _new_title: &str, _new_author: &str, _new_path: &Path, _new_type: &str, _force: bool) -> (Value, Option<String>) {
+    async fn update_book(&self, _book_id: i64, _new_category: &str, _new_title: &str, _new_author: &str, _new_path: &Path, _new_type: &str, _force: bool) -> Result<(), String> {
         if self.b().update_fail {
-            return (Value::Null, Some("update failed".into()));
+            return Err("update failed".into());
         }
-        (json!("Ok"), None)
+        Ok(())
     }
 
-    async fn delete_book(&self, _book_id: i64) -> (String, Option<String>) {
+    async fn delete_book(&self, _book_id: i64) -> Result<BookDeletion, String> {
         let b = self.b();
         if b.errors {
-            return ("Error".into(), Some("boom".into()));
+            return Err("boom".into());
         }
         if b.delete_book_ok {
-            return ("Ok".into(), None);
+            return Ok(BookDeletion::Done);
         }
-        ("Warning".into(), Some("warn".into()))
+        Ok(BookDeletion::DoneWithWarning("warn".into()))
     }
 
     async fn get_book_content(&self, _book_id: i64) -> BookContent {
@@ -1495,18 +1503,18 @@ impl BookManagerApi for DummyManager {
         Ok(json!({"category": category}))
     }
 
-    async fn index_single_file(&self, _file_path: &str) -> (Option<i64>, Option<String>) {
+    async fn index_single_file(&self, _file_path: &str) -> Result<i64, String> {
         if self.b().errors {
-            return (None, Some("err".into()));
+            return Err("err".into());
         }
-        (Some(1), None)
+        Ok(1)
     }
 
-    async fn delete_file(&self, _file_path: &str) -> (String, Option<String>) {
+    async fn delete_file(&self, _file_path: &str) -> Result<(), String> {
         if self.b().errors {
-            return ("Error".into(), Some("bad".into()));
+            return Err("bad".into());
         }
-        ("Ok".into(), None)
+        Ok(())
     }
 
     async fn reload_category(&self, category: &str, _content_type: &str) -> MismatchRet {

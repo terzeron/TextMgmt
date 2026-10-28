@@ -66,9 +66,10 @@ impl BookManagerApi for MockBm {
         error.map_or(Ok(BookPage { books, total, next_cursor }), Err)
     }
 
-    async fn update_book(&self, _book_id: i64, _new_category: &str, _new_title: &str, _new_author: &str, new_path: &Path, _new_type: &str, _force: bool) -> (Value, Option<String>) {
+    async fn update_book(&self, _book_id: i64, _new_category: &str, _new_title: &str, _new_author: &str, new_path: &Path, _new_type: &str, _force: bool) -> Result<(), String> {
         self.updates.lock().unwrap().push(new_path.to_path_buf());
-        self.update_result.lock().unwrap().clone()
+        let (_, error) = self.update_result.lock().unwrap().clone();
+        error.map_or(Ok(()), Err)
     }
 
     fn es_manager(&self) -> Arc<dyn EsManagerApi> {

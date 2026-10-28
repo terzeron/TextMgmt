@@ -490,14 +490,18 @@ impl BookManagerApi for Mock {
         (arr(&v, 0), opt_string(arr(&v, 1)))
     }
 
-    async fn index_single_file(&self, file_path: &str) -> (Option<i64>, Option<String>) {
+    async fn index_single_file(&self, file_path: &str) -> Result<i64, String> {
         let v = self.invoke("index_single_file", call_args!([file_path], {})).await;
-        (arr(&v, 0).as_i64(), opt_string(arr(&v, 1)))
+        match (arr(&v, 0).as_i64(), opt_string(arr(&v, 1))) {
+            (Some(book_id), None) => Ok(book_id),
+            (_, error) => Err(error.unwrap_or_default()),
+        }
     }
 
-    async fn delete_file(&self, file_path: &str) -> (String, Option<String>) {
+    /// `["Ok", null]`만 성공이다.
+    async fn delete_file(&self, file_path: &str) -> Result<(), String> {
         let v = self.invoke("delete_file", call_args!([file_path], {})).await;
-        (arr(&v, 0).as_str().unwrap_or("").to_string(), opt_string(arr(&v, 1)))
+        if arr(&v, 0).as_str() == Some("Ok") { Ok(()) } else { Err(opt_string(arr(&v, 1)).unwrap_or_default()) }
     }
 
     async fn reload_category(&self, category: &str, content_type: &str) -> (Value, Option<String>) {

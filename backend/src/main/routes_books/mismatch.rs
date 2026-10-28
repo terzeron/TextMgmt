@@ -47,10 +47,9 @@ async fn index_file(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalU
     if body.file_path.is_empty() {
         return Err(ApiError::http(400, "file_path is required"));
     }
-    let (id, error) = manager(&deps, &uri)?.index_single_file(&body.file_path).await;
-    Ok(Json(match (id, error) {
-        (Some(book_id), None) => json!({"status":"success","result":{"book_id":book_id}}),
-        (_, error) => json!({"status":"failure","error":error}),
+    Ok(Json(match manager(&deps, &uri)?.index_single_file(&body.file_path).await {
+        Ok(book_id) => json!({"status":"success","result":{"book_id":book_id}}),
+        Err(error) => json!({"status":"failure","error":error}),
     }))
 }
 
@@ -58,8 +57,10 @@ async fn delete_file(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Original
     if body.file_path.is_empty() {
         return Err(ApiError::http(400, "file_path is required"));
     }
-    let (status, error) = manager(&deps, &uri)?.delete_file(&body.file_path).await;
-    Ok(Json(if status == "Ok" { json!({"status":"success","result":status}) } else { json!({"status":"failure","error":error}) }))
+    Ok(Json(match manager(&deps, &uri)?.delete_file(&body.file_path).await {
+        Ok(()) => json!({"status":"success","result":"Ok"}),
+        Err(error) => json!({"status":"failure","error":error}),
+    }))
 }
 
 async fn delete_es_doc(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, Path(raw_id): Path<String>) -> ApiResult<Json<Value>> {

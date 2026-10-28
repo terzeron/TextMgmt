@@ -577,7 +577,7 @@ async fn register<'a>(setup: &'a Setup, epub_path: &Path) -> Registered<'a> {
     let data = build_epub_data(&setup.bm, epub_path);
     let docs = serde_json::from_value::<std::collections::BTreeMap<i64, Value>>(data.clone()).unwrap();
     setup.es.with(|s| s.docs.extend(docs));
-    let (book_id, error) = setup.bm.add_book(&serde_json::from_value(data).unwrap()).await;
+    let (book_id, error) = split(setup.bm.add_book(&serde_json::from_value(data).unwrap()).await);
     assert!(book_id.is_some_and(|id| id != 0) && error.as_deref().is_none_or(str::is_empty), "Failed to register epub: {error:?}");
     Registered { setup, book_id: book_id.unwrap(), path: epub_path.to_path_buf() }
 }
@@ -2624,7 +2624,7 @@ mod test_validate_epub {
             json!({"category": "_txt", "title": "Plain Text", "author": "Test Author", "file_path": rel_path.to_string_lossy(), "file_type": "txt", "file_size": meta.len(), "line_count": 1, "page_count": 0, "isbn": "", "summary": "test txt", "updated_time": now}),
         );
         setup.es.with(|s| s.docs.extend(serde_json::from_value::<std::collections::BTreeMap<i64, Value>>(Value::Object(data.clone())).unwrap()));
-        let (book_id, _error) = setup.bm.add_book(&serde_json::from_value(Value::Object(data)).unwrap()).await;
+        let (book_id, _error) = split(setup.bm.add_book(&serde_json::from_value(Value::Object(data)).unwrap()).await);
         let book_id = book_id.expect("book_id");
 
         let book = Registered { setup: &setup, book_id, path: txt_path.clone() };

@@ -185,11 +185,14 @@ impl BookManager {
     }
 
     /// 문서 하나를 색인한다. 성공하면 즉시 검색되도록 `refresh`한다.
-    pub async fn add_book(&self, data: &Docs) -> (Option<i64>, Option<String>) {
+    pub async fn add_book(&self, data: &Docs) -> Result<i64, String> {
         log::debug!("# add_book(data={} docs)", data.len());
+        let describe = || serde_json::to_string(data).unwrap_or_default();
         match self.add_book_raw(data) {
-            Ok(result) => result,
-            Err(e) => (None, Some(format!("can't add book '{}' to ElasticSearch: {e}", serde_json::to_string(data).unwrap_or_default()))),
+            Ok((_, Some(error))) => Err(error),
+            Ok((Some(book_id), None)) => Ok(book_id),
+            Ok((None, None)) => Err(format!("can't add book '{}' to ElasticSearch", describe())),
+            Err(e) => Err(format!("can't add book '{}' to ElasticSearch: {e}", describe())),
         }
     }
 }

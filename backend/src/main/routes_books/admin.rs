@@ -1,6 +1,7 @@
 //! 도서·만화 수정과 카테고리 관리. 실제 파일 작업은 BookManager에 위임한다.
 use super::{kind, manager};
 use crate::book::Book;
+use crate::book_manager::BookDeletion;
 use crate::main::extract::python_bool;
 use crate::main::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, RequireAdmin, Routes};
 use axum::{
@@ -726,12 +727,12 @@ async fn bulk_rename_files(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Or
         let extension = FsPath::new(&target).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
         let title = target.file_name().unwrap_or_default().to_string_lossy();
         let title = if extension.is_empty() { title.to_string() } else { title.strip_suffix(&format!(".{extension}")).unwrap_or(&title).to_string() };
-        let (_, error) = manager.update_book(book.book_id, &book.category, &title, &book.author, &target, &book.file_type, false).await;
-        if let Some(error) = error {
-            failures.push(json!({"file":source.file_name().unwrap_or_default().to_string_lossy(),"error":error}));
-        } else {
-            changed_count += 1;
-            reserved.insert(target);
+        match manager.update_book(book.book_id, &book.category, &title, &book.author, &target, &book.file_type, false).await {
+            Ok(()) => {
+                changed_count += 1;
+                reserved.insert(target);
+            }
+            Err(error) => failures.push(json!({"file":source.file_name().unwrap_or_default().to_string_lossy(),"error":error})),
         }
     }
     if let Err(error) = manager.es_manager().refresh() {
@@ -796,16 +797,17 @@ async fn update_book(
     let id = super::parse_book_id(&id)?;
     let manager = manager(&deps, &uri)?;
     let path = manager.path_prefix().join(&body.file_path);
-    let (value, error) = manager.update_book(id, &body.category, &body.title, &body.author, &path, &body.file_type, query.force).await;
-    Ok(result(value, error))
+    Ok(Json(match manager.update_book(id, &body.category, &body.title, &body.author, &path, &body.file_type, query.force).await {
+        Ok(()) => json!({"status":"success","result":"Ok"}),
+        Err(error) => json!({"status":"failure","error":error}),
+    }))
 }
 async fn delete_book(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let id = super::parse_book_id(&id)?;
-    let (status, message) = manager(&deps, &uri)?.delete_book(id).await;
-    Ok(Json(match status.as_str() {
-        "Ok" => json!({"status":"success","result":status}),
-        "Warning" => json!({"status":"success","result":status,"warning":message}),
-        _ => json!({"status":"failure","error":message}),
+    Ok(Json(match manager(&deps, &uri)?.delete_book(id).await {
+        Ok(BookDeletion::Done) => json!({"status":"success","result":"Ok"}),
+        Ok(BookDeletion::DoneWithWarning(warning)) => json!({"status":"success","result":"Warning","warning":warning}),
+        Err(error) => json!({"status":"failure","error":error}),
     }))
 }
 #[derive(Deserialize)]

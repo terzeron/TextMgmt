@@ -124,10 +124,11 @@ impl BookManager {
         .and_then(|v| v);
         let reindex = match data {
             Err(error) => Err(error),
-            Ok(data) => {
-                let (id, error) = self.add_book(&data).await;
-                if id == Some(book_id) && error.is_none() { Ok(()) } else { Err(error.unwrap_or_else(|| "ES 재색인 실패".into())) }
-            }
+            Ok(data) => match self.add_book(&data).await {
+                Ok(id) if id == book_id => Ok(()),
+                Ok(_) => Err("ES 재색인 실패".into()),
+                Err(error) => Err(error),
+            },
         };
         if let Err(error) = reindex {
             return Err(format!("페이지는 삭제되었으나 색인 갱신에 실패했습니다. 원본은 {} 에 있습니다: {error}", result.backup));

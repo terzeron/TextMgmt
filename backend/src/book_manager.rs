@@ -66,6 +66,7 @@ pub use cover_list::CoverPageOpts;
 pub use file_reader::{DefaultFileReader, LoaderFileReader};
 pub use seams::{BackfillThread, BookAdder, BookManagerError, CategoryNameCheck, PathIsRelativeTo, PreviewEpubValidator};
 pub use uncovered::{CoverBooksPager, CoverPage};
+pub use update::BookDeletion;
 pub use xml_safe::{_declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, SafeXmlParser, XmlElement, decode_category_cursor, encode_category_cursor};
 
 /// 카테고리 단위 ES 조회 상한. ES `max_result_window`(기본 10000)와 같다.

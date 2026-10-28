@@ -9,8 +9,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use super::CoverPage;
 use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
+use super::{BookDeletion, CoverPage};
 use crate::book::{Book, BookLookupError, BookPage};
 use crate::es_manager::EsManagerApi;
 use crate::main::{ApplyCategoryChanges, ProposeCategoryChanges, ReloadProgress};
@@ -53,13 +53,13 @@ impl BookManagerApi for BookManager {
         )
         .await
     }
-    async fn delete_book(&self, id: i64) -> (String, Option<String>) {
+    async fn delete_book(&self, id: i64) -> Result<BookDeletion, String> {
         BookManager::delete_book(self, id).await
     }
-    async fn index_single_file(&self, file_path: &str) -> (Option<i64>, Option<String>) {
+    async fn index_single_file(&self, file_path: &str) -> Result<i64, String> {
         BookManager::index_single_file(self, file_path).await
     }
-    async fn delete_file(&self, file_path: &str) -> (String, Option<String>) {
+    async fn delete_file(&self, file_path: &str) -> Result<(), String> {
         BookManager::delete_file(self, file_path).await
     }
     async fn reload_category(&self, category: &str, content_type: &str) -> (Value, Option<String>) {
@@ -204,8 +204,7 @@ impl BookManagerApi for BookManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn update_book(&self, id: i64, category: &str, title: &str, author: &str, path: &Path, file_type: &str, force: bool) -> (Value, Option<String>) {
-        let (status, error) = BookManager::update_book_with(self, id, category, title, author, path, file_type, force).await;
-        (json!(status), error)
+    async fn update_book(&self, id: i64, category: &str, title: &str, author: &str, path: &Path, file_type: &str, force: bool) -> Result<(), String> {
+        BookManager::update_book_with(self, id, category, title, author, path, file_type, force).await
     }
 }
