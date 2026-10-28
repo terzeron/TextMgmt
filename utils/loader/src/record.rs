@@ -9,7 +9,7 @@ use std::time::Instant;
 use corpus_common::reader::open_zip;
 use doc_reader::epub::{EpubPath, read_epub_publisher, read_from_epub};
 use doc_reader::pdf::{PDF_STAGE_TIMEOUT, StageRunner, fast_page_count, read_from_pdf};
-use doc_reader::text::{read_from_text, reencode_text_file_to_utf8};
+use doc_reader::text::{TextRead, read_from_text, reencode_text_file_to_utf8};
 use doc_reader::{docx, markup, office, rtf};
 use file_time::{StatResult, iso, path_created_time_with_source};
 use serde_json::{Map, Value, json};
@@ -227,9 +227,11 @@ pub fn read_file_with_hooks(
                 }
             }
             let t = Timed::start(stat, "text");
-            let (read, error) = read_from_text(path);
+            let read = read_from_text(path).unwrap_or_else(|error| {
+                out.messages.push(error);
+                TextRead::default()
+            });
             t.finish();
-            out.messages.extend(error);
             (summary, line_count, page_count, raw_content) = (read.summary, read.line_count, read.page_count, read.raw_content);
         }
         "epub" => {

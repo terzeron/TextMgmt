@@ -22,7 +22,7 @@
 //! - `doc_reader::pdf::{PlumberDocument, pdf_text_by_plumber_with(&Path, &dyn PlumberDocument) -> Result<(String, usize), String>,
 //!   PdftotextHooks, pdf_text_by_pdftotext_with(&Path, &PdftotextHooks) -> (String, usize)}`
 //!   `PdftotextHooks { which: Fn() -> Option<PathBuf>, run: Fn(&[String]) -> Option<(i32, Vec<u8>)>, path_cache: OnceLock }`
-//! - `doc_reader::text::{TextHooks, Candidate, read_from_text_with(&Path, &TextHooks) -> (TextRead, Option<String>),
+//! - `doc_reader::text::{TextHooks, Candidate, read_from_text_with(&Path, &TextHooks) -> Result<TextRead, String>,
 //!   reencode_text_file_to_utf8_with(&Path, bool, Option<&Path>, &Path, &TextHooks) -> Reencode}`
 //!   `TextHooks { detect, encodings, read_bytes, read_replace, write_backup }` (loader_1.rs는 detect, read_bytes, write_backup을 쓴다)
 //! - `doc_reader::mojibake::count_mojibake_runs_with(&str, &str) -> usize` (런 정규식 패턴을 받는다)
@@ -1626,7 +1626,7 @@ mod test_read_from_text_replace_fallback {
         raw.push(0xa1);
         fs::write(&f, raw).unwrap();
 
-        let (read, _error) = read_from_text_with(&f, &hooks);
+        let read = read_from_text_with(&f, &hooks).unwrap_or_default();
         assert_eq!(read.summary, "");
         assert_eq!(read.raw_content, "");
         assert_eq!((read.line_count, read.page_count), (0, 0));
@@ -1646,7 +1646,7 @@ mod test_read_from_text_replace_fallback {
         raw.push(0xa1);
         fs::write(&f, raw).unwrap();
 
-        let (read, _error) = read_from_text_with(&f, &hooks);
+        let read = read_from_text_with(&f, &hooks).unwrap_or_default();
         assert_eq!(read.summary, "");
         assert_eq!(read.raw_content, "");
     }

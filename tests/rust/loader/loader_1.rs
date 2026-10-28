@@ -7,7 +7,7 @@
 //!
 //! 설계: docs/rust-test-seams.md 3.12, 3.13, 4.2. loader/doc_reader의 `_with`는 `*_with(args, &XxxHooks)` 구조체 하나로 통일했다(loader_2.rs와 같은 이름·필드).
 //!   훅은 모두 `Option<&dyn Fn(..)>` 필드이고 `Default`로 안 쓰는 훅을 생략한다.
-//! - `doc_reader::text::{TextHooks, read_from_text_with(&Path, &TextHooks) -> (TextRead, Option<String>),
+//! - `doc_reader::text::{TextHooks, read_from_text_with(&Path, &TextHooks) -> Result<TextRead, String>,
 //!   reencode_text_file_to_utf8_with(&Path, dry_run, backup_dir, relative, &TextHooks) -> Reencode}`
 //!   `TextHooks { detect (chardet 대체), write_backup (백업 쓰기 대체), read_bytes (원본 읽기와 저장 후 재읽기 대체), .. }`.
 //!   `write_backup: Fn(&Path, &[u8]) -> io::Result<()>`, `read_bytes: Fn(&Path) -> io::Result<Vec<u8>>`. 구 `ReencodeIo`를 흡수한다.
@@ -266,7 +266,7 @@ fn write(path: &Path, data: impl AsRef<[u8]>) {
 }
 
 fn read_text(path: &Path) -> TextRead {
-    read_from_text(path).0
+    read_from_text(path).unwrap_or_default()
 }
 
 /// `Loader.read_file(path, skip_text=..., path_prefix=...)`의 결과. 원본의 `{inode: doc}` 중 첫 항목을 돌려준다.
@@ -580,7 +580,7 @@ mod test_read_from_text {
         write(&f, encode_korean("한글 본문입니다 가나다라\n"));
         let detect = |_: &[u8]| -> Option<Enc> { None };
         let hooks = TextHooks { detect: Some(&detect), ..Default::default() };
-        let (r, _) = read_from_text_with(&f, &hooks);
+        let r = read_from_text_with(&f, &hooks).unwrap();
         assert!(r.raw_content.contains("한글 본문입니다"));
     }
 
@@ -592,7 +592,7 @@ mod test_read_from_text {
         write(&f, "한글 본문입니다 가나다라\n".as_bytes());
         let detect = |_: &[u8]| -> Option<Enc> { panic!("chardet 호출되면 안 된다") };
         let hooks = TextHooks { detect: Some(&detect), ..Default::default() };
-        let (r, _) = read_from_text_with(&f, &hooks);
+        let r = read_from_text_with(&f, &hooks).unwrap();
         assert_eq!(r.raw_content, "한글 본문입니다 가나다라\n");
     }
 
