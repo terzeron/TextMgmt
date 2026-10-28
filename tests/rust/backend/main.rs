@@ -1320,7 +1320,7 @@ fn dummy_book(book_id: i64, category: &str, title: &str, file_path: &str, file_t
     }
 }
 
-type MismatchRet = (Value, Option<String>);
+type MismatchRet = Result<Value, String>;
 type CategoryFn = Arc<dyn Fn(&str) -> (Option<Value>, Option<String>) + Send + Sync>;
 type RenameFn = Arc<dyn Fn(&str, &str) -> (Option<Value>, Option<String>) + Send + Sync>;
 
@@ -1519,15 +1519,15 @@ impl BookManagerApi for DummyManager {
 
     async fn reload_category(&self, category: &str, _content_type: &str) -> MismatchRet {
         if self.b().errors {
-            return (Value::Null, Some("fail".into()));
+            return Err("fail".into());
         }
-        (json!({"category": category, "processed_count": 1}), None)
+        Ok(json!({"category": category, "processed_count": 1}))
     }
 
     async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<backend::main::ReloadProgress>) -> MismatchRet {
         let b = self.b();
         if b.errors {
-            return (Value::Null, Some("bulk fail".into()));
+            return Err("bulk fail".into());
         }
         if b.scan_delay_ms > 0 {
             // 콜백 없는 전체 스캔 구간
@@ -1537,12 +1537,12 @@ impl BookManagerApi for DummyManager {
             }
             // 콜백 없는 refresh/재스캔 구간
             tokio::time::sleep(std::time::Duration::from_millis(b.scan_delay_ms)).await;
-            return (json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 10, "after_count": 0}), None);
+            return Ok(json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 10, "after_count": 0}));
         }
         if let Some(cb) = on_progress.as_deref() {
             cb(json!({"indexed_count": 2, "deleted_count": 3}));
         }
-        (json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 5, "after_count": 0}), None)
+        Ok(json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 5, "after_count": 0}))
     }
 
     async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<backend::main::ReloadProgress>) -> MismatchRet {
@@ -1551,41 +1551,41 @@ impl BookManagerApi for DummyManager {
             panic!("mismatch boom");
         }
         if b.errors {
-            return (Value::Null, Some("mismatch fail".into()));
+            return Err("mismatch fail".into());
         }
         if let Some(cb) = on_progress.as_deref() {
             cb(json!({"indexed_count": 1, "deleted_count": 1}));
         }
-        (json!({"content_type": content_type, "category": category, "indexed_count": 1, "deleted_count": 1, "failed_count": 0, "before_count": 2, "after_count": 0}), None)
+        Ok(json!({"content_type": content_type, "category": category, "indexed_count": 1, "deleted_count": 1, "failed_count": 0, "before_count": 2, "after_count": 0}))
     }
 
-    async fn rename_category(&self, old_category: &str, new_category: &str) -> (Value, Option<String>) {
+    async fn rename_category(&self, old_category: &str, new_category: &str) -> Result<Value, String> {
         match self.b().rename {
             Some(f) => {
                 let (value, error) = f(old_category, new_category);
-                (value.unwrap_or(Value::Null), error)
+                error.map_or(Ok(value.unwrap_or(Value::Null)), Err)
             }
-            None => (Value::Null, Some("rename_category not implemented".into())),
+            None => Err("rename_category not implemented".into()),
         }
     }
 
-    async fn delete_category(&self, category: &str, _delete_files: bool) -> (Value, Option<String>) {
+    async fn delete_category(&self, category: &str, _delete_files: bool) -> Result<Value, String> {
         match self.b().delete_category {
             Some(f) => {
                 let (value, error) = f(category);
-                (value.unwrap_or(Value::Null), error)
+                error.map_or(Ok(value.unwrap_or(Value::Null)), Err)
             }
-            None => (Value::Null, Some("delete_category not implemented".into())),
+            None => Err("delete_category not implemented".into()),
         }
     }
 
-    async fn preview_delete_category(&self, category: &str) -> (Value, Option<String>) {
+    async fn preview_delete_category(&self, category: &str) -> Result<Value, String> {
         match self.b().preview {
             Some(f) => {
                 let (value, error) = f(category);
-                (value.unwrap_or(Value::Null), error)
+                error.map_or(Ok(value.unwrap_or(Value::Null)), Err)
             }
-            None => (Value::Null, Some("preview_delete_category not implemented".into())),
+            None => Err("preview_delete_category not implemented".into()),
         }
     }
 }

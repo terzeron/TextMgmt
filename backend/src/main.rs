@@ -113,8 +113,7 @@ pub async fn run_classify_apply_job(
     clean_existing: bool,
     _apply_token: &str,
 ) {
-    let (_result, error) = book_manager.apply_category_changes(&items, &allowed, clean_existing).await;
-    if let Some(error) = error {
+    if let Err(error) = book_manager.apply_category_changes(&items, &allowed, clean_existing).await {
         let mut state = match category_mapping.get_classify_proposal_status(content_type, 300) {
             Ok(state) => state,
             Err(error) => {

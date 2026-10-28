@@ -20,6 +20,14 @@ use backend::main::{ApplyCategoryChanges, BookManagerApi, ProposeCategoryChanges
 use common::es_fake::FakeEsManager;
 use serde_json::json;
 
+/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
+fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
+    match result {
+        Ok(value) => (value, None),
+        Err(error) => (serde_json::json!({}), Some(error)),
+    }
+}
+
 fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
     let map: HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     move |key: &str| map.get(key).cloned()
@@ -181,11 +189,13 @@ async fn test_category_proposals_delegate_to_shared_comics_logic() {
     let manager = ComicsManager::with_deps(BookManagerDeps::new(tmp.path().to_path_buf(), es));
     let mappings = serde_json::json!({});
 
-    let (result, error) = BookManagerApi::propose_category_changes(
-        &manager,
-        ProposeCategoryChanges { category: "0_inbox", mappings: &mappings, content_type: "comic", use_bookstore: false, use_content_meta: false, delay: 0.0, on_progress: None },
-    )
-    .await;
+    let (result, error) = outcome(
+        BookManagerApi::propose_category_changes(
+            &manager,
+            ProposeCategoryChanges { category: "0_inbox", mappings: &mappings, content_type: "comic", use_bookstore: false, use_content_meta: false, delay: 0.0, on_progress: None },
+        )
+        .await,
+    );
 
     assert_eq!(error, None);
     assert_ne!(result, serde_json::Value::Null);
@@ -207,19 +217,21 @@ async fn test_apply_category_changes_preserves_comics_cancellation_callback() {
         false
     };
 
-    let (result, error) = BookManagerApi::apply_category_changes_with(
-        &manager,
-        ApplyCategoryChanges {
-            items: &items,
-            allowed_file_paths: &allowed,
-            content_type: "comic",
-            clean_existing: false,
-            on_progress: None,
-            on_item_done: None,
-            should_continue: Some(&should_continue),
-        },
-    )
-    .await;
+    let (result, error) = outcome(
+        BookManagerApi::apply_category_changes_with(
+            &manager,
+            ApplyCategoryChanges {
+                items: &items,
+                allowed_file_paths: &allowed,
+                content_type: "comic",
+                clean_existing: false,
+                on_progress: None,
+                on_item_done: None,
+                should_continue: Some(&should_continue),
+            },
+        )
+        .await,
+    );
 
     assert_eq!(error, None);
     assert_eq!(result["applied_count"], 0);

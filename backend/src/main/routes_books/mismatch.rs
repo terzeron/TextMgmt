@@ -76,10 +76,9 @@ struct Category {
 
 async fn reload_category(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<Category>) -> ApiResult<Json<Value>> {
     let content_type = if uri.path().starts_with("/comics/") { "comic" } else { "book" };
-    let (result, error) = manager(&deps, &uri)?.reload_category(&body.category, content_type).await;
-    Ok(Json(match error {
-        Some(error) => json!({"status":"failure","error":error}),
-        None => json!({"status":"success","result":result}),
+    Ok(Json(match manager(&deps, &uri)?.reload_category(&body.category, content_type).await {
+        Ok(result) => json!({"status":"success","result":result}),
+        Err(error) => json!({"status":"failure","error":error}),
     }))
 }
 
@@ -211,11 +210,16 @@ fn spawn_reload_job(deps: &AppDeps, manager: Arc<dyn BookManagerApi>, mapping: A
                             }
                         }
                     });
-                    let (result, error) = match category.as_deref() {
+                    let reloaded = match category.as_deref() {
                         Some(category) => manager.reload_category_mismatch_files(category, &content_type, Some(progress)).await,
                         None => manager.reload_category_mismatches(&content_type, Some(progress)).await,
                     };
                     flusher.abort();
+                    // 실패하면 건수는 0이다. 구현은 실패 때 부분 건수를 내지 않는다.
+                    let (result, error) = match reloaded {
+                        Ok(result) => (result, None),
+                        Err(error) => (Value::Null, Some(error)),
+                    };
                     let counts = json!({
                         "indexed_count": result["indexed_count"].as_i64().unwrap_or(0),
                         "deleted_count": result["deleted_count"].as_i64().unwrap_or(0),

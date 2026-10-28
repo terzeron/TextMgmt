@@ -53,6 +53,14 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use zip::ZipArchive;
 
+/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
+fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
+    match result {
+        Ok(value) => (value, None),
+        Err(error) => (serde_json::json!({}), Some(error)),
+    }
+}
+
 fn category_with_files(root: &Path, category: &str, names: &[&str]) {
     fs::create_dir_all(root.join(category)).unwrap();
     for name in names {
@@ -269,7 +277,7 @@ fn test_vote_count_defaults_to_one_when_category_has_no_votes() {
 async fn test_propose_rejects_unsafe_category_name() {
     let tmp = TempDir::new().unwrap();
     let manager = make_manager(tmp.path(), FakeEsManager::new());
-    let (result, err) = manager.propose_category_changes("../밖", None, Default::default()).await;
+    let (result, err) = outcome(manager.propose_category_changes("../밖", None, Default::default()).await);
     assert_eq!(result, json!({}));
     assert_eq!(err.as_deref(), Some("잘못된 카테고리 경로입니다"));
 }
@@ -293,9 +301,8 @@ async fn test_propose_awaits_async_progress_callback_and_records_failures() {
     let on_progress = move |payload: Value| sink.lock().unwrap().push(payload);
     let opts = ProposeOptions { content_type: Some("book"), delay: Some(0.0), use_bookstore: Some(false), use_content_meta: Some(false), on_progress: Some(&on_progress) };
 
-    let (result, err) = manager.propose_category_changes("A", None, opts).await;
+    let result = manager.propose_category_changes("A", None, opts).await.unwrap();
 
-    assert_eq!(err, None);
     let titles: Vec<&str> = result["items"].as_array().unwrap().iter().map(|i| i["title"].as_str().unwrap()).collect();
     assert_eq!(titles, vec!["ok"]);
     assert_eq!(result["failures"], json!([{"file_path": "A/bad.txt", "error": "분류 제안에 실패했습니다"}]));
@@ -323,9 +330,8 @@ async fn test_apply_awaits_async_callbacks() {
     let opts = ApplyOptions { should_continue: Some(&should_continue), on_item_done: Some(&on_item_done), on_progress: Some(&on_progress), ..Default::default() };
     let allowed: HashSet<String> = ["1_A/a.txt".to_string()].into();
 
-    let (result, err) = manager.apply_category_changes_with(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, opts).await;
+    let result = manager.apply_category_changes_with(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, opts).await.unwrap();
 
-    assert_eq!(err, None);
     assert_eq!(result["applied_count"], 1);
     assert_eq!(*done.lock().unwrap(), vec!["moving", "moved"]);
     assert_eq!(*progress.lock().unwrap(), vec![json!({"apply_total_count": 1, "applied_count": 1, "failed_count": 0})]);
@@ -342,7 +348,7 @@ async fn test_apply_records_move_error_as_failed() {
     let manager = BookManager::with_deps(deps);
     let allowed: HashSet<String> = ["1_A/a.txt".to_string()].into();
 
-    let (result, _) = manager.apply_category_changes(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, Default::default()).await;
+    let (result, _) = outcome(manager.apply_category_changes(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, Default::default()).await);
 
     assert_eq!(result["failed_count"], 1);
     assert_eq!(result["results"][0]["apply_error"], "이동 실패");
@@ -360,7 +366,7 @@ async fn test_apply_rejects_file_when_resolve_raises_oserror() {
     let manager = BookManager::with_deps(make_deps(tmp.path(), FakeEsManager::new()).with_fs(fs_ops));
     let allowed: HashSet<String> = ["1_A/a.txt".to_string()].into();
 
-    let (result, _) = manager.apply_category_changes(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, Default::default()).await;
+    let (result, _) = outcome(manager.apply_category_changes(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, Default::default()).await);
 
     assert_eq!(result["results"][0]["apply_error"], "파일 경로가 corpus 밖입니다");
     assert!(tmp.path().join("1_A").join("a.txt").exists());
@@ -510,7 +516,7 @@ async fn test_reload_root_files_reports_unreadable_root() {
     fs_ops.set_read_dir(|_p: &Path| Some(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "읽기 거부")));
     let manager = BookManager::with_deps(make_deps(tmp.path(), FakeEsManager::new()).with_fs(fs_ops));
 
-    let (result, err) = manager._reload_root_files().await;
+    let (result, err) = outcome(manager._reload_root_files().await);
 
     assert_eq!(result, json!({}));
     assert!(err.unwrap().contains("최상위 디렉토리를 읽을 수 없습니다"));
@@ -527,7 +533,7 @@ async fn test_reload_root_files_reports_refresh_and_batch_failures() {
     let deps = make_deps(tmp.path(), es).with_bulk_index_files_hook(Arc::new(|_names: &[String], _clean_existing: bool| (std::collections::BTreeMap::new(), vec![json!({"error": "색인 실패"})])));
     let manager = BookManager::with_deps(deps);
 
-    let (result, err) = manager._reload_root_files().await;
+    let (result, err) = outcome(manager._reload_root_files().await);
 
     assert_eq!(result, json!({}));
     assert_eq!(err.as_deref(), Some("최상위 파일 재적재 실패 2건: 색인 실패"));

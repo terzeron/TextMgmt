@@ -74,6 +74,14 @@ use serde_json::{Value, json};
 use sysdeps::{CommandError, CommandOutput};
 use tempfile::TempDir;
 
+/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
+fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
+    match result {
+        Ok(value) => (value, None),
+        Err(error) => (serde_json::json!({}), Some(error)),
+    }
+}
+
 /// `delete_book` 결과를 Python 원본의 `("Ok" | "Warning" | "Error", 메시지)`로 펼친다.
 fn as_deletion(result: Result<backend::book_manager::BookDeletion, String>) -> (String, Option<String>) {
     match result {
@@ -1690,32 +1698,32 @@ fn test_rename_delete_category_errors() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
 
-    let (_result, err) = run(manager.rename_category("", "B"));
+    let (_result, err) = outcome(run(manager.rename_category("", "B")));
     assert!(err.is_some());
 
-    let (_result, err) = run(manager.rename_category("A", "A"));
+    let (_result, err) = outcome(run(manager.rename_category("A", "A")));
     assert!(err.is_some());
 
-    let (_result, err) = run(manager.rename_category("A", "../B"));
+    let (_result, err) = outcome(run(manager.rename_category("A", "../B")));
     assert!(err.is_some());
 
-    let (_result, err) = run(manager.delete_category("", false));
+    let (_result, err) = outcome(run(manager.delete_category("", false)));
     assert!(err.is_some());
 
-    let (_result, err) = run(manager.delete_category("../A", false));
+    let (_result, err) = outcome(run(manager.delete_category("../A", false)));
     assert!(err.is_some());
 
     es.with(|s| {
         s.counts.insert("A".into(), 0);
     });
-    let (_result, err) = run(manager.delete_category("A", false));
+    let (_result, err) = outcome(run(manager.delete_category("A", false)));
     assert!(err.is_some());
 
     es.with(|s| {
         s.counts.insert("A".into(), 1);
         s.deleted_by_category = json!({"deleted": 0, "failures": ["x"]});
     });
-    let (_result, err) = run(manager.delete_category("A", false));
+    let (_result, err) = outcome(run(manager.delete_category("A", false)));
     assert!(err.is_some());
 }
 
@@ -2315,9 +2323,8 @@ fn test_reload_category_mismatches_indexes_missing_files_and_deletes_stale_docs(
     }));
     let manager = BookManager::with_deps(deps);
 
-    let (result, err) = run(manager.reload_category_mismatches(None));
+    let result = run(manager.reload_category_mismatches(None)).unwrap();
 
-    assert!(err.is_none());
     es.with(|s| {
         // 색인은 파일 1건씩이 아니라 배치(카테고리당 fs_only/duplicates 그룹 단위)로 묶여 나간다.
         let mut inserted_ids: Vec<i64> = s.inserted.iter().flat_map(|b| b.keys().copied()).collect();
@@ -2367,9 +2374,8 @@ fn test_reload_category_mismatch_files_limits_to_selected_category() {
     }));
     let manager = BookManager::with_deps(deps);
 
-    let (result, err) = run(manager.reload_category_mismatch_files("A", None));
+    let result = run(manager.reload_category_mismatch_files("A", None)).unwrap();
 
-    assert!(err.is_none());
     assert_eq!(*detail_calls.lock().unwrap(), vec!["A".to_string(), "A".to_string()]);
     es.with(|s| {
         // fs_only(clean_existing=True)만 delete_by_file_paths 호출 - duplicates 재색인(clean_existing=False)은 호출 없음
@@ -2419,10 +2425,10 @@ fn test_reload_category_mismatch_files_reports_progress_during_run() {
     let manager = BookManager::with_deps(deps);
 
     let progress_updates: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(vec![]));
-    let (result, err) = {
+    let (result, err) = outcome({
         let sink = progress_updates.clone();
         run(manager.reload_category_mismatch_files("A", Some(&move |u: Value| sink.lock().unwrap().push(u))))
-    };
+    });
 
     assert!(err.is_none());
     assert_eq!(result["indexed_count"], 3);
@@ -2471,10 +2477,10 @@ fn test_reload_category_mismatches_reports_progress_within_category() {
     let manager = BookManager::with_deps(deps);
 
     let progress_updates: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(vec![]));
-    let (result, err) = {
+    let (result, err) = outcome({
         let sink = progress_updates.clone();
         run(manager.reload_category_mismatches(Some(&move |u: Value| sink.lock().unwrap().push(u))))
-    };
+    });
 
     assert!(err.is_none());
     assert_eq!(result["indexed_count"], 4);
@@ -2520,7 +2526,7 @@ fn test_propose_then_apply_moves_file_and_reindexes() {
 
     let propose_progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(vec![]));
     let mappings = json!({"0_inbox": ["미분류"], "1_fiction": ["소설"], "2_science": ["과학"], "2_science/physics": ["물리"]});
-    let (propose_result, propose_err) = {
+    let (propose_result, propose_err) = outcome({
         let sink = propose_progress.clone();
         let on_progress = move |u: Value| sink.lock().unwrap().push(u);
         run(manager.propose_category_changes(
@@ -2528,7 +2534,7 @@ fn test_propose_then_apply_moves_file_and_reindexes() {
             Some(&mappings),
             ProposeOptions { use_bookstore: Some(false), use_content_meta: Some(false), on_progress: Some(&on_progress), ..Default::default() },
         ))
-    };
+    });
 
     assert!(propose_err.is_none());
     assert_eq!(propose_result["total_count"], 1);
@@ -2541,10 +2547,10 @@ fn test_propose_then_apply_moves_file_and_reindexes() {
     let items = propose_result["items"].as_array().unwrap().clone();
     let allowed: HashSet<String> = items.iter().map(|item| item["file_path"].as_str().unwrap().to_string()).collect();
     let apply_progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(vec![]));
-    let (apply_result, apply_err) = {
+    let (apply_result, apply_err) = outcome({
         let sink = apply_progress.clone();
         run(manager.apply_category_changes(&items, &allowed, Some(&move |u: Value| sink.lock().unwrap().push(u))))
-    };
+    });
 
     let target_file = tmp_path.join("2_science/쉬운 과학 이야기.txt");
     assert!(apply_err.is_none());
@@ -2578,11 +2584,11 @@ fn test_propose_category_changes_carries_book_id() {
     let progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(vec![]));
     let sink = progress.clone();
     let on_progress = move |u: Value| sink.lock().unwrap().push(u);
-    let (result, err) = run(manager.propose_category_changes(
+    let (result, err) = outcome(run(manager.propose_category_changes(
         "0_inbox",
         Some(&json!({})),
         ProposeOptions { use_bookstore: Some(false), use_content_meta: Some(false), on_progress: Some(&on_progress), ..Default::default() },
-    ));
+    )));
     assert!(err.is_none());
 
     let expected = fs::metadata(&book).unwrap().ino() as i64;
@@ -2630,11 +2636,11 @@ fn test_book_id_for_path_returns_none_when_file_is_gone() {
 fn test_propose_category_changes_rejects_invalid_category() {
     let tmp = TempDir::new().unwrap();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
-    let (result1, err1) = run(manager.propose_category_changes("", None, ProposeOptions::default()));
+    let (result1, err1) = outcome(run(manager.propose_category_changes("", None, ProposeOptions::default())));
     assert_eq!(result1, json!({}));
     assert_eq!(err1.as_deref(), Some("카테고리 이름이 비어있습니다"));
 
-    let (result2, err2) = run(manager.propose_category_changes("non_existent_dir", None, ProposeOptions::default()));
+    let (result2, err2) = outcome(run(manager.propose_category_changes("non_existent_dir", None, ProposeOptions::default())));
     assert_eq!(result2, json!({}));
     assert!(err2.as_deref().unwrap().contains("디렉토리를 찾을 수 없습니다"));
 }
@@ -2648,8 +2654,7 @@ fn test_propose_category_changes_records_value_error() {
     mkdir(tmp_path.join("0_inbox"));
     deps = deps.with_iter_category_indexable_files_override(Arc::new(|_cat: &str, _recursive: bool| vec![PathBuf::from("/outside/book.txt")]));
     let manager = BookManager::with_deps(deps);
-    let (result, err) = run(manager.propose_category_changes("0_inbox", None, ProposeOptions::default()));
-    assert!(err.is_none());
+    let result = run(manager.propose_category_changes("0_inbox", None, ProposeOptions::default())).unwrap();
     assert!(result["failures"].as_array().unwrap().iter().any(|f| f.get("error").and_then(|e| e.as_str()).unwrap_or("").contains("잘못된 파일 경로")));
 }
 
@@ -2689,8 +2694,11 @@ fn test_propose_category_changes_uses_the_supervised_model() {
     deps = deps.with_file_reader(FnFileReader::new(move |_p: &Path, _prefix: Option<&Path>| Docs::from([(12345, fake_doc.clone())])));
     let manager = BookManager::with_deps(deps);
 
-    let (result, err) =
-        run(manager.propose_category_changes("0_inbox", Some(&json!({})), ProposeOptions { use_bookstore: Some(false), use_content_meta: Some(true), on_progress: None, ..Default::default() }));
+    let (result, err) = outcome(run(manager.propose_category_changes(
+        "0_inbox",
+        Some(&json!({})),
+        ProposeOptions { use_bookstore: Some(false), use_content_meta: Some(true), on_progress: None, ..Default::default() },
+    )));
 
     assert!(err.is_none());
     assert!(rofan_book.exists()); // 제안 단계는 파일을 옮기지 않는다
@@ -2708,7 +2716,7 @@ fn test_rename_category_target_dir_exists() {
     es.set_counts(&[("old", 1), ("new", 0)]);
     mkdir(tmp_path.join("old"));
     mkdir(tmp_path.join("new"));
-    let (_result, err) = run(manager.rename_category("old", "new"));
+    let (_result, err) = outcome(run(manager.rename_category("old", "new")));
     assert!(err.as_deref().unwrap().contains("이미 존재합니다"));
 }
 
@@ -2719,8 +2727,7 @@ fn test_rename_category_no_dir_es_only() {
     let manager = make_manager(tmp.path(), &es);
     es.set_counts(&[("old", 1), ("new", 0)]);
     es.with(|s| s.rename_result = json!({"updated": 3, "failures": []}));
-    let (result, err) = run(manager.rename_category("old", "new"));
-    assert!(err.is_none());
+    let result = run(manager.rename_category("old", "new")).unwrap();
     assert_eq!(result["fs_renamed"], false);
 }
 
@@ -2734,7 +2741,7 @@ fn test_rename_category_es_failure_with_rollback() {
     mkdir(tmp_path.join("old"));
 
     es.fail("rename_category", "ES failure");
-    let (_result, err) = run(manager.rename_category("old", "new"));
+    let (_result, err) = outcome(run(manager.rename_category("old", "new")));
     assert!(err.as_deref().unwrap().contains("ES 업데이트 실패"));
     assert!(tmp_path.join("old").exists());
 }
@@ -2748,7 +2755,7 @@ fn test_rename_category_partial_es_failure() {
     es.set_counts(&[("old", 1), ("new", 0)]);
     mkdir(tmp_path.join("old"));
     es.with(|s| s.rename_result = json!({"updated": 2, "failures": ["some error"]}));
-    let (_result, err) = run(manager.rename_category("old", "new"));
+    let (_result, err) = outcome(run(manager.rename_category("old", "new")));
     assert!(err.as_deref().unwrap().contains("부분 실패"));
     assert!(tmp_path.join("old").exists());
 }
@@ -3043,23 +3050,22 @@ fn test_reload_category_full_flow() {
 
     // 시간 초과
     let manager = manager_with(FakeRunner::new(|_argv| Err(CommandError::Timeout)));
-    let (_result, err) = run(manager.reload_category("A", None));
+    let (_result, err) = outcome(run(manager.reload_category("A", None)));
     assert!(err.as_deref().unwrap().contains("초과"));
 
     // 실행 오류
     let manager = manager_with(FakeRunner::new(|_argv| Err(CommandError::Failed("boom".to_string()))));
-    let (_result, err) = run(manager.reload_category("A", None));
+    let (_result, err) = outcome(run(manager.reload_category("A", None)));
     assert!(err.as_deref().unwrap().contains("재적재 실행 실패"));
 
     // 0이 아닌 종료 코드
     let manager = manager_with(FakeRunner::new(|_argv| Ok(CommandOutput { returncode: 2, stdout: vec![], stderr: b"error message".to_vec() })));
-    let (_result, err) = run(manager.reload_category("A", None));
+    let (_result, err) = outcome(run(manager.reload_category("A", None)));
     assert!(err.as_deref().unwrap().contains("exit 2"));
 
     // 성공
     let manager = manager_with(FakeRunner::new(|_argv| Ok(CommandOutput { returncode: 0, stdout: "총 5개 파일 처리됨".as_bytes().to_vec(), stderr: b"warn".to_vec() })));
-    let (result, err) = run(manager.reload_category("A", Some("comic")));
-    assert!(err.is_none());
+    let result = run(manager.reload_category("A", Some("comic"))).unwrap();
     assert_eq!(result["processed_count"], 5);
 }
 
@@ -3071,7 +3077,7 @@ fn test_delete_category_rejects_root() {
     let manager = make_manager(tmp.path(), &es);
     es.set_counts(&[("_root", 3)]);
 
-    let (result, err) = run(manager.delete_category("_root", false));
+    let (result, err) = outcome(run(manager.delete_category("_root", false)));
     assert_eq!(result, json!({}));
     assert!(err.as_deref().unwrap().contains("최상위 디렉토리"));
     es.with(|s| assert_eq!(s.deleted_by_category["deleted"], 2)); // delete_by_category 미호출
@@ -3091,9 +3097,8 @@ fn test_delete_category_keeps_files_by_default() {
     mkdir(tmp_path.join("A"));
     write(tmp_path.join("A/one.pdf"), b"x");
 
-    let (result, err) = run(manager.delete_category("A", false));
+    let result = run(manager.delete_category("A", false)).unwrap();
 
-    assert!(err.is_none());
     assert_eq!(result["deleted_count"], 1);
     assert!(result.get("fs_deleted").is_none());
     assert!(tmp_path.join("A/one.pdf").exists());
@@ -3116,9 +3121,8 @@ fn test_delete_category_removes_directory_tree() {
     mkdir(tmp_path.join("B"));
     write(tmp_path.join("B/keep.pdf"), b"x");
 
-    let (result, err) = run(manager.delete_category("A", true));
+    let result = run(manager.delete_category("A", true)).unwrap();
 
-    assert!(err.is_none());
     assert_eq!(result["deleted_count"], 2);
     assert_eq!(result["fs_deleted"], true);
     assert!(!tmp_path.join("A").exists());
@@ -3136,9 +3140,8 @@ fn test_delete_category_es_only_when_directory_missing() {
         s.deleted_by_category = json!({"deleted": 1, "failures": []});
     });
 
-    let (result, err) = run(manager.delete_category("A", true));
+    let result = run(manager.delete_category("A", true)).unwrap();
 
-    assert!(err.is_none());
     assert_eq!(result["deleted_count"], 1);
     assert_eq!(result["fs_deleted"], false);
 }
@@ -3157,9 +3160,8 @@ fn test_delete_category_removes_directory_without_es_docs() {
     mkdir(tmp_path.join("A/sub"));
     write(tmp_path.join("A/sub/unindexed.jpg"), b"x");
 
-    let (result, err) = run(manager.delete_category("A", true));
+    let result = run(manager.delete_category("A", true)).unwrap();
 
-    assert!(err.is_none());
     assert_eq!(result["deleted_count"], 0);
     assert_eq!(result["fs_deleted"], true);
     assert!(!tmp_path.join("A").exists());
@@ -3173,7 +3175,7 @@ fn test_delete_category_errors_when_nothing_to_delete() {
     let manager = make_manager(tmp.path(), &es);
     es.set_counts(&[("A", 0)]);
 
-    let (result, err) = run(manager.delete_category("A", true));
+    let (result, err) = outcome(run(manager.delete_category("A", true)));
 
     assert_eq!(result, json!({}));
     assert!(err.as_deref().unwrap().contains("문서가 없습니다"));
@@ -3197,7 +3199,7 @@ fn test_delete_category_keeps_es_when_fs_delete_fails() {
     deps = deps.with_fs(fs_ops);
     let manager = BookManager::with_deps(deps);
 
-    let (result, err) = run(manager.delete_category("A", true));
+    let (result, err) = outcome(run(manager.delete_category("A", true)));
 
     assert_eq!(result, json!({}));
     assert!(err.as_deref().unwrap().contains("디렉토리 삭제 실패"));
@@ -3217,7 +3219,7 @@ fn test_delete_category_rejects_library_root_alias() {
     mkdir(tmp_path.join("A"));
     write(tmp_path.join("A/one.pdf"), b"x");
 
-    let (result, err) = run(manager.delete_category(".", true));
+    let (result, err) = outcome(run(manager.delete_category(".", true)));
 
     assert_eq!(result, json!({}));
     assert!(err.is_some());
@@ -3240,9 +3242,8 @@ fn test_preview_delete_category_counts_subtree() {
     mkdir(tmp_path.join("B"));
     write(tmp_path.join("B/other.pdf"), b"x");
 
-    let (result, err) = run(manager.preview_delete_category("A"));
+    let result = run(manager.preview_delete_category("A")).unwrap();
 
-    assert!(err.is_none());
     assert_eq!(result, json!({"category": "A", "directory_count": 3, "file_count": 3, "es_count": 7}));
     assert!(tmp_path.join("A/one.pdf").exists());
 }
@@ -3255,9 +3256,8 @@ fn test_preview_delete_category_without_directory() {
     let manager = make_manager(tmp.path(), &es);
     es.set_counts(&[("A", 2)]);
 
-    let (result, err) = run(manager.preview_delete_category("A"));
+    let result = run(manager.preview_delete_category("A")).unwrap();
 
-    assert!(err.is_none());
     assert_eq!(result, json!({"category": "A", "directory_count": 0, "file_count": 0, "es_count": 2}));
 }
 
@@ -3269,7 +3269,7 @@ fn test_preview_delete_category_rejects_unsafe_names() {
     let manager = make_manager(tmp.path(), &es);
     mkdir(tmp.path().join("A"));
     for name in ["", "../A", "_root", "."] {
-        let (result, err) = run(manager.preview_delete_category(name));
+        let (result, err) = outcome(run(manager.preview_delete_category(name)));
         assert_eq!(result, json!({}), "{name}");
         assert!(err.is_some(), "{name}");
     }
@@ -3283,7 +3283,7 @@ fn test_rename_category_rejects_root_as_source() {
     let manager = make_manager(tmp.path(), &es);
     es.set_counts(&[("_root", 3), ("새이름", 0)]);
 
-    let (result, err) = run(manager.rename_category("_root", "새이름"));
+    let (result, err) = outcome(run(manager.rename_category("_root", "새이름")));
     assert_eq!(result, json!({}));
     assert!(err.as_deref().unwrap().contains("최상위 디렉토리"));
 }
@@ -3298,7 +3298,7 @@ fn test_rename_category_rejects_root_as_target() {
     mkdir(tmp_path.join("A"));
     es.set_counts(&[("A", 3), ("_root", 0)]);
 
-    let (result, err) = run(manager.rename_category("A", "_root"));
+    let (result, err) = outcome(run(manager.rename_category("A", "_root")));
     assert_eq!(result, json!({}));
     assert!(err.as_deref().unwrap().contains("_root"));
     assert!(tmp_path.join("A").is_dir());
@@ -3318,8 +3318,7 @@ fn test_reload_category_root_reloads_top_level_files_only() {
     deps = deps.with_runner(FakeRunner::new(|_argv| panic!("_root는 loader subprocess를 실행하면 안 된다")));
     let manager = BookManager::with_deps(deps);
 
-    let (result, err) = run(manager.reload_category("_root", None));
-    assert!(err.is_none());
+    let result = run(manager.reload_category("_root", None)).unwrap();
     assert_eq!(result["category"], "_root");
     assert_eq!(result["processed_count"], 1);
     es.with(|s| {
@@ -3368,7 +3367,7 @@ fn test_rename_category_path_traversal() {
     es.set_counts(&[("A", 1), ("B", 0)]);
     let evil = tmp_path.join("evil");
     std::os::unix::fs::symlink("/tmp", &evil).unwrap();
-    let (_result, err) = run(manager.rename_category("evil", "B"));
+    let (_result, err) = outcome(run(manager.rename_category("evil", "B")));
     assert!(err.is_some());
 }
 
@@ -3386,7 +3385,7 @@ fn test_rename_category_os_error_rename() {
     fs_ops.set_rename(|_from, _to| Some(io::Error::other("rename failed")));
     deps = deps.with_fs(fs_ops);
     let manager = BookManager::with_deps(deps);
-    let (_result, err) = run(manager.rename_category("old", "new"));
+    let (_result, err) = outcome(run(manager.rename_category("old", "new")));
     assert!(err.as_deref().unwrap().contains("이름 변경 실패"));
 }
 
@@ -3405,7 +3404,7 @@ fn test_rename_category_es_failure_rollback_fail() {
     fs_ops.set_rename(fail_on_nth_call(2, "rollback fail"));
     deps = deps.with_fs(fs_ops);
     let manager = BookManager::with_deps(deps);
-    let (_result, err) = run(manager.rename_category("old", "new"));
+    let (_result, err) = outcome(run(manager.rename_category("old", "new")));
     assert!(err.as_deref().unwrap().contains("수동 복구 필요"));
 }
 
@@ -3423,7 +3422,7 @@ fn test_rename_category_partial_es_rollback_fail() {
     fs_ops.set_rename(fail_on_nth_call(2, "rollback fail"));
     deps = deps.with_fs(fs_ops);
     let manager = BookManager::with_deps(deps);
-    let (_result, err) = run(manager.rename_category("old", "new"));
+    let (_result, err) = outcome(run(manager.rename_category("old", "new")));
     assert!(err.as_deref().unwrap().contains("수동 복구 필요"));
 }
 
@@ -3436,7 +3435,7 @@ fn test_delete_category_path_traversal() {
     let manager = make_manager(tmp_path, &es);
     let evil = tmp_path.join("evil");
     std::os::unix::fs::symlink("/tmp", &evil).unwrap();
-    let (_result, err) = run(manager.delete_category("evil", false));
+    let (_result, err) = outcome(run(manager.delete_category("evil", false)));
     assert!(err.is_some());
 }
 
@@ -3449,7 +3448,7 @@ fn test_delete_category_es_exception() {
     es.set_counts(&[("A", 1)]);
 
     es.fail("delete_by_category", "boom");
-    let (_result, err) = run(manager.delete_category("A", false));
+    let (_result, err) = outcome(run(manager.delete_category("A", false)));
     assert!(err.as_deref().unwrap().contains("ES 삭제 실패"));
 }
 

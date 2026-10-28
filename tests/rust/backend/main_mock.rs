@@ -472,14 +472,14 @@ impl BookManagerApi for Mock {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> (Value, Option<String>) {
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
         let args = call_args!([request.category, request.mappings], {"content_type": request.content_type, "use_bookstore": request.use_bookstore, "use_content_meta": request.use_content_meta, "delay": request.delay})
             .with_callback("on_progress", progress_callback(request.on_progress));
         let v = self.invoke("propose_category_changes", args).await;
-        (arr(&v, 0), opt_string(arr(&v, 1)))
+        value_result(&v)
     }
 
-    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> (Value, Option<String>) {
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<Value, String> {
         let mut allowed: Vec<&String> = request.allowed_file_paths.iter().collect();
         allowed.sort();
         let args = call_args!([request.items, allowed], {"content_type": request.content_type, "clean_existing": request.clean_existing})
@@ -487,7 +487,7 @@ impl BookManagerApi for Mock {
             .with_callback("on_item_done", progress_callback(request.on_item_done))
             .with_callback("should_continue", continue_callback(request.should_continue));
         let v = self.invoke("apply_category_changes", args).await;
-        (arr(&v, 0), opt_string(arr(&v, 1)))
+        value_result(&v)
     }
 
     async fn index_single_file(&self, file_path: &str) -> Result<i64, String> {
@@ -504,14 +504,14 @@ impl BookManagerApi for Mock {
         if arr(&v, 0).as_str() == Some("Ok") { Ok(()) } else { Err(opt_string(arr(&v, 1)).unwrap_or_default()) }
     }
 
-    async fn reload_category(&self, category: &str, content_type: &str) -> (Value, Option<String>) {
+    async fn reload_category(&self, category: &str, content_type: &str) -> Result<Value, String> {
         match self.call("reload_category", call_args!([category, content_type], {})).await {
-            Ok(v) => (arr(&v, 0), opt_string(arr(&v, 1))),
-            Err(e) => (Value::Null, Some(e)),
+            Ok(v) => value_result(&v),
+            Err(e) => Err(e),
         }
     }
 
-    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
         let args = call_args!([content_type], {}).with_callback(
             "on_progress",
             on_progress.map(|f| {
@@ -525,12 +525,12 @@ impl BookManagerApi for Mock {
             }),
         );
         match self.call("reload_category_mismatches", args).await {
-            Ok(v) => (arr(&v, 0), opt_string(arr(&v, 1))),
-            Err(e) => (Value::Null, Some(e)),
+            Ok(v) => value_result(&v),
+            Err(e) => Err(e),
         }
     }
 
-    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
         let args = call_args!([category, content_type], {}).with_callback(
             "on_progress",
             on_progress.map(|f| {
@@ -544,8 +544,8 @@ impl BookManagerApi for Mock {
             }),
         );
         match self.call("reload_category_mismatch_files", args).await {
-            Ok(v) => (arr(&v, 0), opt_string(arr(&v, 1))),
-            Err(e) => (Value::Null, Some(e)),
+            Ok(v) => value_result(&v),
+            Err(e) => Err(e),
         }
     }
 

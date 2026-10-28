@@ -90,6 +90,14 @@ use serde_json::{Value, json};
 use sysdeps::{CommandError, FsOps, RealFs};
 use tempfile::TempDir;
 
+/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
+fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
+    match result {
+        Ok(value) => (value, None),
+        Err(error) => (serde_json::json!({}), Some(error)),
+    }
+}
+
 /// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
 fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
     match result {
@@ -318,7 +326,11 @@ impl ApplyOpts {
 
 async fn apply_opts(manager: &BookManager, items: &[Value], opts: ApplyOpts) -> (Value, Option<String>) {
     let allowed: std::collections::HashSet<String> = opts.allowed.iter().cloned().collect();
-    manager.apply_category_changes_with(items, &allowed, ApplyOptions { on_item_done: opts.on_item_done.as_deref(), should_continue: opts.should_continue.as_deref(), ..ApplyOptions::default() }).await
+    outcome(
+        manager
+            .apply_category_changes_with(items, &allowed, ApplyOptions { on_item_done: opts.on_item_done.as_deref(), should_continue: opts.should_continue.as_deref(), ..ApplyOptions::default() })
+            .await,
+    )
 }
 
 /// `propose_category_changes`의 Python 키워드 인자 묶음(테스트 로컬).
@@ -338,7 +350,7 @@ async fn propose_opts(manager: &BookManager, category: &str, mappings: &Mappings
         use_content_meta: Some(opts.use_content_meta),
         on_progress: opts.on_progress.as_deref(),
     };
-    manager.propose_category_changes(category, Some(&Value::Object(object)), options).await
+    outcome(manager.propose_category_changes(category, Some(&Value::Object(object)), options).await)
 }
 
 /// 구 `loader_read_file_override(closure)`.
@@ -986,7 +998,7 @@ fn test_reload_category_empty_name() {
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
-    let (_result, err) = asyncio_runner(manager.reload_category("", None));
+    let (_result, err) = outcome(asyncio_runner(manager.reload_category("", None)));
     let err = err.expect("err is not None");
     assert!(err.contains("비어있습니다"));
 }
@@ -997,7 +1009,7 @@ fn test_reload_category_path_traversal() {
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
-    let (_result, err) = asyncio_runner(manager.reload_category("../etc", None));
+    let (_result, err) = outcome(asyncio_runner(manager.reload_category("../etc", None)));
     assert!(err.is_some());
 }
 
@@ -1010,7 +1022,7 @@ fn test_reload_category_path_escape() {
     let manager = make_manager(tmp_path, &es);
     let evil = tmp_path.join("evil");
     symlink("/tmp", &evil).unwrap();
-    let (_result, err) = asyncio_runner(manager.reload_category("evil", None));
+    let (_result, err) = outcome(asyncio_runner(manager.reload_category("evil", None)));
     assert!(err.is_some());
 }
 
@@ -1022,7 +1034,7 @@ fn test_reload_category_not_a_directory() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     fs::write(tmp_path.join("notadir"), "file").unwrap();
-    let (_result, err) = asyncio_runner(manager.reload_category("notadir", None));
+    let (_result, err) = outcome(asyncio_runner(manager.reload_category("notadir", None)));
     let err = err.expect("err is not None");
     assert!(err.contains("디렉토리를 찾을 수 없습니다"));
 }
@@ -1108,7 +1120,7 @@ fn test_rename_category_new_path_traversal() {
     es.set_counts(&[("old", 1)]);
     let evil = tmp_path.join("evil");
     symlink("/tmp", &evil).unwrap();
-    let (_result, err) = asyncio_runner(manager.rename_category("old", "evil"));
+    let (_result, err) = outcome(asyncio_runner(manager.rename_category("old", "evil")));
     assert!(err.is_some());
 }
 
@@ -1139,7 +1151,7 @@ fn test_rename_category_old_count_zero() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.set_counts(&[("old", 0), ("new", 0)]);
-    let (_result, err) = asyncio_runner(manager.rename_category("old", "new"));
+    let (_result, err) = outcome(asyncio_runner(manager.rename_category("old", "new")));
     assert!(err.expect("err").contains("문서가 없습니다"));
 }
 
@@ -1150,7 +1162,7 @@ fn test_rename_category_new_count_nonzero() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.set_counts(&[("old", 1), ("new", 5)]);
-    let (_result, err) = asyncio_runner(manager.rename_category("old", "new"));
+    let (_result, err) = outcome(asyncio_runner(manager.rename_category("old", "new")));
     let err = err.expect("err");
     assert!(err.contains("이미"));
     assert!(err.contains('5'));
@@ -1971,9 +1983,8 @@ fn test_rename_category_counts_subcategory_documents() {
     fs::create_dir(tmp_path.join("A")).unwrap();
     es.set_counts(&[("A/sub", 3)]);
 
-    let (result, err) = asyncio_runner(manager.rename_category("A", "B"));
+    let result = asyncio_runner(manager.rename_category("A", "B")).unwrap();
 
-    assert!(err.is_none());
     assert_eq!(result["fs_renamed"], json!(true));
     assert!(tmp_path.join("B").is_dir());
 }
@@ -1988,7 +1999,7 @@ fn test_rename_category_blocks_target_with_subcategory_documents() {
     fs::create_dir(tmp_path.join("A")).unwrap();
     es.set_counts(&[("A", 2), ("B/sub", 5)]);
 
-    let (result, err) = asyncio_runner(manager.rename_category("A", "B"));
+    let (result, err) = outcome(asyncio_runner(manager.rename_category("A", "B")));
 
     assert_eq!(result, json!({}));
     assert!(err.expect("err").contains("이미"));
@@ -2308,20 +2319,20 @@ fn test_mismatch_and_reload_more_edge_cases() {
     refresh_err_es.fail("refresh", "refresh error");
     // 가정한 seam: 인스턴스 메서드 바꿔치기(문서에 없는 seam, 파일 머리말 참고).
     let manager_ref_err = BookManager::with_deps(deps(tmp_path, &refresh_err_es).with_get_category_mismatches_override(Arc::new(|_force_refresh| json!({"mismatches": [{"category": "../unsafe"}]}))));
-    let (res_mismatches, _) = asyncio_runner(manager_ref_err.reload_category_mismatches(None));
+    let (res_mismatches, _) = outcome(asyncio_runner(manager_ref_err.reload_category_mismatches(None)));
     let failures = res_mismatches["failures"].as_array().unwrap();
     assert!(failures.iter().any(|f| f.to_string().contains("잘못된 카테고리 경로입니다")));
     assert!(failures.iter().any(|f| f.to_string().contains("ES refresh 실패")));
 
     // 2063, 2065, 2087-2088: reload_category_mismatch_files validation and refresh exception
-    let (_, err_empty) = asyncio_runner(manager.reload_category_mismatch_files("", None));
+    let (_, err_empty) = outcome(asyncio_runner(manager.reload_category_mismatch_files("", None)));
     assert_eq!(err_empty.as_deref(), Some("카테고리 이름이 비어있습니다"));
-    let (_, err_unsafe) = asyncio_runner(manager.reload_category_mismatch_files("../unsafe", None));
+    let (_, err_unsafe) = outcome(asyncio_runner(manager.reload_category_mismatch_files("../unsafe", None)));
     assert_eq!(err_unsafe.as_deref(), Some("잘못된 카테고리 경로입니다"));
 
     let manager_ref_details =
         BookManager::with_deps(deps(tmp_path, &refresh_err_es).with_get_category_mismatch_details_override(Arc::new(|_cat| json!({"fs_only": [], "es_only": [], "duplicates": []}))));
-    let (res_single_reload, _) = asyncio_runner(manager_ref_details.reload_category_mismatch_files("A", None));
+    let (res_single_reload, _) = outcome(asyncio_runner(manager_ref_details.reload_category_mismatch_files("A", None)));
     assert!(res_single_reload["failures"].as_array().unwrap().iter().any(|f| f.to_string().contains("ES refresh 실패")));
 }
 
@@ -2777,8 +2788,7 @@ fn test_reload_category_mismatch_files_non_int_book_id() {
             .with_get_category_mismatch_details_override(Arc::new(|_cat| json!({"duplicates": [{"file_path": "cat/dup.txt", "docs": [{"book_id": "bad_id"}]}], "fs_only": [], "es_only": []}))),
     );
     fs::create_dir_all(tmp_path.join("cat")).unwrap();
-    let (_result, err) = asyncio_runner(manager.reload_category_mismatch_files("cat", None));
-    assert!(err.is_none());
+    asyncio_runner(manager.reload_category_mismatch_files("cat", None)).unwrap();
 }
 
 #[test]
@@ -2820,8 +2830,7 @@ fn test_delete_category_success() {
     fs::create_dir_all(tmp_path.join("test_cat")).unwrap();
     es.set_counts(&[("test_cat", 5)]);
     es.with(|s| s.deleted_by_category = json!({"deleted": 5, "failures": []}));
-    let (res, err) = asyncio_runner(manager.delete_category("test_cat", false));
-    assert!(err.is_none());
+    let res = asyncio_runner(manager.delete_category("test_cat", false)).unwrap();
     assert_eq!(res["deleted_count"], 5);
     assert_eq!(res["category"], "test_cat");
 }
@@ -3245,11 +3254,11 @@ fn test_propose_category_changes_preserves_requested_content_type() {
     let tmp = tmp_dir();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
     make_source_file(tmp.path(), "A", "과학소설 모음.epub");
-    let (result, error) = asyncio_runner(manager.propose_category_changes(
+    let (result, error) = outcome(asyncio_runner(manager.propose_category_changes(
         "A",
         Some(&json!({})),
         ProposeOptions { content_type: Some("comic"), delay: Some(0.0), use_bookstore: Some(false), use_content_meta: Some(false), on_progress: None },
-    ));
+    )));
     assert!(error.is_none());
     assert_eq!(result["content_type"], "comic");
 }

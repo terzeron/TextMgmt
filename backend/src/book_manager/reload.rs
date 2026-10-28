@@ -223,15 +223,15 @@ impl BookManager {
     }
 
     /// 현재 카테고리 불일치 항목을 파일 단위로 ES에 재적재·정리한다.
-    pub async fn reload_category_mismatches(&self, on_progress: Option<ProgressFn<'_>>) -> (Value, Option<String>) {
+    pub async fn reload_category_mismatches(&self, on_progress: Option<ProgressFn<'_>>) -> Result<Value, String> {
         self.reload_category_mismatches_for("book", on_progress).await
     }
 
-    pub async fn reload_category_mismatches_for(&self, content_type: &str, on_progress: Option<ProgressFn<'_>>) -> (Value, Option<String>) {
+    pub async fn reload_category_mismatches_for(&self, content_type: &str, on_progress: Option<ProgressFn<'_>>) -> Result<Value, String> {
         log::info!("reload_category_mismatches 시작: content_type='{content_type}'");
         let before = match self.try_get_category_mismatches(true) {
             Ok(v) => v,
-            Err(e) => return (json!({}), Some(format!("불일치 조회 실패: {e}"))),
+            Err(e) => return Err(format!("불일치 조회 실패: {e}")),
         };
         let categories = self._mismatch_categories(&before);
         let before_count = self._mismatch_item_count(&before);
@@ -277,33 +277,30 @@ impl BookManager {
             "reload_category_mismatches 완료: content_type='{content_type}', categories={}, indexed={indexed_total}, deleted={deleted_total}, failed={failed_count}, before={before_count}, after={after_count}",
             categories.len()
         );
-        (
-            json!({
-                "content_type": content_type, "category_count": categories.len(), "before_count": before_count, "after_count": after_count,
-                "indexed_count": indexed_total, "deleted_count": deleted_total, "failed_count": failed_count, "failures": failures, "categories": category_results,
-            }),
-            None,
-        )
+        Ok(json!({
+            "content_type": content_type, "category_count": categories.len(), "before_count": before_count, "after_count": after_count,
+            "indexed_count": indexed_total, "deleted_count": deleted_total, "failed_count": failed_count, "failures": failures, "categories": category_results,
+        }))
     }
 
     /// 선택 카테고리의 현재 불일치 항목만 파일 단위로 ES에 재적재·정리한다.
-    pub async fn reload_category_mismatch_files(&self, category: &str, on_progress: Option<ProgressFn<'_>>) -> (Value, Option<String>) {
+    pub async fn reload_category_mismatch_files(&self, category: &str, on_progress: Option<ProgressFn<'_>>) -> Result<Value, String> {
         self.reload_category_mismatch_files_for(category, "book", on_progress).await
     }
 
-    pub async fn reload_category_mismatch_files_for(&self, category: &str, content_type: &str, on_progress: Option<ProgressFn<'_>>) -> (Value, Option<String>) {
+    pub async fn reload_category_mismatch_files_for(&self, category: &str, content_type: &str, on_progress: Option<ProgressFn<'_>>) -> Result<Value, String> {
         log::info!("reload_category_mismatch_files 시작: category='{category}', content_type='{content_type}'");
         if category.is_empty() {
-            return (json!({}), Some("카테고리 이름이 비어있습니다".to_string()));
+            return Err("카테고리 이름이 비어있습니다".to_string());
         }
         if !self.is_safe_category_name(category) {
-            return (json!({}), Some("잘못된 카테고리 경로입니다".to_string()));
+            return Err("잘못된 카테고리 경로입니다".to_string());
         }
 
         self.clear_mismatch_cache();
         let before_details = self.get_category_mismatch_details(category);
         if let Some(error) = before_details.get("error").and_then(Value::as_str) {
-            return (json!({}), Some(format!("불일치 상세 조회 실패: {error}")));
+            return Err(format!("불일치 상세 조회 실패: {error}"));
         }
         let before_count = Self::mismatch_detail_item_count(&before_details);
         if let Some(report) = on_progress {
@@ -319,29 +316,26 @@ impl BookManager {
         let after_count = Self::mismatch_detail_item_count(&self.get_category_mismatch_details(category));
         failures.extend(category_result["failures"].as_array().cloned().unwrap_or_default());
         let failed_count = failures.len();
-        (
-            json!({
-                "content_type": content_type, "category": category, "category_count": 1, "before_count": before_count, "after_count": after_count,
-                "indexed_count": category_result["indexed_count"], "deleted_count": category_result["deleted_count"],
-                "failed_count": failed_count, "failures": failures, "categories": [category_result],
-            }),
-            None,
-        )
+        Ok(json!({
+            "content_type": content_type, "category": category, "category_count": 1, "before_count": before_count, "after_count": after_count,
+            "indexed_count": category_result["indexed_count"], "deleted_count": category_result["deleted_count"],
+            "failed_count": failed_count, "failures": failures, "categories": [category_result],
+        }))
     }
 
     /// `_root`는 실제 디렉터리가 아니라 최상위 파일 묶음이라, loader 대신 최상위 파일만 직접 색인한다.
     /// `_reload_root_files`: 최상위 파일만 다시 색인한다.
-    pub async fn _reload_root_files(&self) -> (Value, Option<String>) {
+    pub async fn _reload_root_files(&self) -> Result<Value, String> {
         self.reload_root_files("book").await
     }
 
-    async fn reload_root_files(&self, content_type: &str) -> (Value, Option<String>) {
+    async fn reload_root_files(&self, content_type: &str) -> Result<Value, String> {
         log::info!("_reload_root_files 시작: content_type='{content_type}'");
         let entries = match self.fs.read_dir(&self.path_prefix) {
             Ok(entries) => entries,
             Err(e) => {
                 log::error!("_reload_root_files: 최상위 디렉토리 스캔 실패 - {e}");
-                return (json!({}), Some(format!("최상위 디렉토리를 읽을 수 없습니다: {e}")));
+                return Err(format!("최상위 디렉토리를 읽을 수 없습니다: {e}"));
             }
         };
         let mut file_names: Vec<String> =
@@ -364,21 +358,21 @@ impl BookManager {
         if let Some(first) = failures.first() {
             log::error!("_reload_root_files 실패: processed={processed}, failed={} - {first}", failures.len());
             let reason = first.get("error").and_then(Value::as_str).unwrap_or("None");
-            return (json!({}), Some(format!("최상위 파일 재적재 실패 {}건: {reason}", failures.len())));
+            return Err(format!("최상위 파일 재적재 실패 {}건: {reason}", failures.len()));
         }
         log::info!("_reload_root_files 완료: processed={processed}");
-        (json!({"category": "_root", "processed_count": processed}), None)
+        Ok(json!({"category": "_root", "processed_count": processed}))
     }
 
     /// 카테고리 전체를 ES에 재적재한다(loader를 `--recursive --reload`로 실행). `content_type`은 `"comic"`이면 만화 색인을 쓴다.
-    pub async fn reload_category(&self, category: &str, content_type: Option<&str>) -> (Value, Option<String>) {
+    pub async fn reload_category(&self, category: &str, content_type: Option<&str>) -> Result<Value, String> {
         let content_type = content_type.unwrap_or("book");
         log::info!("reload_category 시작: category='{category}', content_type='{content_type}'");
         if category.is_empty() {
-            return (json!({}), Some("카테고리 이름이 비어있습니다".to_string()));
+            return Err("카테고리 이름이 비어있습니다".to_string());
         }
         if category.contains("..") {
-            return (json!({}), Some("카테고리 이름에 '..'는 사용할 수 없습니다".to_string()));
+            return Err("카테고리 이름에 '..'는 사용할 수 없습니다".to_string());
         }
         if category == Self::ROOT_CATEGORY {
             return self.reload_root_files(content_type).await;
@@ -386,11 +380,11 @@ impl BookManager {
 
         let abs_dir = match self.resolve_path(&self.path_prefix.join(category)) {
             Ok(p) if matches!(self.is_inside_root(&p), Ok(true)) => p,
-            _ => return (json!({}), Some(format!("잘못된 경로입니다: {category}"))),
+            _ => return Err(format!("잘못된 경로입니다: {category}")),
         };
         if !abs_dir.is_dir() {
             log::error!("reload_category: 디렉토리 없음 - {}", abs_dir.display());
-            return (json!({}), Some(format!("디렉토리를 찾을 수 없습니다: {category}")));
+            return Err(format!("디렉토리를 찾을 수 없습니다: {category}"));
         }
 
         let index_name = if content_type == "comic" { "comics" } else { "book" };
@@ -400,11 +394,11 @@ impl BookManager {
             Ok(output) => output,
             Err(CommandError::Timeout) => {
                 log::error!("reload_category: 타임아웃 (10분 초과) - category='{category}'");
-                return (json!({}), Some("재적재 시간이 초과되었습니다 (10분)".to_string()));
+                return Err("재적재 시간이 초과되었습니다 (10분)".to_string());
             }
             Err(e) => {
                 log::error!("reload_category: subprocess 실행 실패 - {e}");
-                return (json!({}), Some(format!("재적재 실행 실패: {e}")));
+                return Err(format!("재적재 실행 실패: {e}"));
             }
         };
         let stdout_text = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -412,7 +406,7 @@ impl BookManager {
 
         if output.returncode != 0 {
             log::error!("reload_category: 실패 (exit {}) - stderr: {stderr_text}", output.returncode);
-            return (json!({}), Some(format!("재적재 실패 (exit {}): {stderr_text}", output.returncode)));
+            return Err(format!("재적재 실패 (exit {}): {stderr_text}", output.returncode));
         }
         if !stderr_text.is_empty() {
             log::warn!("reload_category: stderr 출력 - {stderr_text}");
@@ -421,6 +415,6 @@ impl BookManager {
         let processed = regex::Regex::new(r"총\s+(\d+)개\s+파일\s+처리됨").ok().and_then(|re| re.captures(&stdout_text)).and_then(|c| c[1].parse::<i64>().ok()).unwrap_or(0);
         log::info!("reload_category 완료: category='{category}', processed={processed}");
         self.clear_mismatch_cache();
-        (json!({"category": category, "processed_count": processed}), None)
+        Ok(json!({"category": category, "processed_count": processed}))
     }
 }

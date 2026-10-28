@@ -20,7 +20,7 @@ const DEFAULT_CATEGORY_PAGE_SIZE: i64 = 500;
 
 #[async_trait]
 impl BookManagerApi for BookManager {
-    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> (Value, Option<String>) {
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
         BookManager::propose_category_changes(
             self,
             request.category,
@@ -35,10 +35,10 @@ impl BookManagerApi for BookManager {
         )
         .await
     }
-    async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &std::collections::HashSet<String>, clean_existing: bool) -> (Value, Option<String>) {
+    async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &std::collections::HashSet<String>, clean_existing: bool) -> Result<Value, String> {
         BookManager::apply_category_changes_with(self, items, allowed_file_paths, super::ApplyOptions { clean_existing, ..Default::default() }).await
     }
-    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> (Value, Option<String>) {
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<Value, String> {
         BookManager::apply_category_changes_with(
             self,
             request.items,
@@ -62,22 +62,22 @@ impl BookManagerApi for BookManager {
     async fn delete_file(&self, file_path: &str) -> Result<(), String> {
         BookManager::delete_file(self, file_path).await
     }
-    async fn reload_category(&self, category: &str, content_type: &str) -> (Value, Option<String>) {
+    async fn reload_category(&self, category: &str, content_type: &str) -> Result<Value, String> {
         BookManager::reload_category(self, category, Some(content_type)).await
     }
-    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
         BookManager::reload_category_mismatch_files_for(self, category, content_type, on_progress.as_deref()).await
     }
-    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
         BookManager::reload_category_mismatches_for(self, content_type, on_progress.as_deref()).await
     }
-    async fn rename_category(&self, old: &str, new: &str) -> (Value, Option<String>) {
+    async fn rename_category(&self, old: &str, new: &str) -> Result<Value, String> {
         BookManager::rename_category(self, old, new).await
     }
-    async fn delete_category(&self, category: &str, delete_files: bool) -> (Value, Option<String>) {
+    async fn delete_category(&self, category: &str, delete_files: bool) -> Result<Value, String> {
         BookManager::delete_category(self, category, delete_files).await
     }
-    async fn preview_delete_category(&self, category: &str) -> (Value, Option<String>) {
+    async fn preview_delete_category(&self, category: &str) -> Result<Value, String> {
         BookManager::preview_delete_category(self, category).await
     }
     async fn preview_insert_image(&self, url: &str) -> Result<Vec<u8>, String> {

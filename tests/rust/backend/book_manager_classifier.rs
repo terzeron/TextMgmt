@@ -24,6 +24,14 @@ use common::log_capture::LogCapture;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
+fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
+    match result {
+        Ok(value) => (value, None),
+        Err(error) => (serde_json::json!({}), Some(error)),
+    }
+}
+
 fn run<F: std::future::Future>(fut: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
 }
@@ -86,7 +94,7 @@ fn manager(s: &Setup, deps: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> 
 }
 
 fn propose(m: &BookManager, opts: ProposeOptions<'_>) -> Value {
-    let (result, err) = run(m.propose_category_changes("0_inbox", Some(&json!({})), opts));
+    let (result, err) = outcome(run(m.propose_category_changes("0_inbox", Some(&json!({})), opts)));
     assert!(err.is_none(), "{err:?}");
     result
 }

@@ -487,15 +487,15 @@ impl BookManager {
     }
 
     /// 선택 카테고리 직하위 파일의 분류 제안을 만든다. 파일을 옮기지 않는다.
-    pub async fn propose_category_changes(&self, category: &str, mappings: Option<&Value>, options: ProposeOptions<'_>) -> (Value, Option<String>) {
+    pub async fn propose_category_changes(&self, category: &str, mappings: Option<&Value>, options: ProposeOptions<'_>) -> Result<Value, String> {
         if category.is_empty() {
-            return (json!({}), Some("카테고리 이름이 비어있습니다".to_string()));
+            return Err("카테고리 이름이 비어있습니다".to_string());
         }
         if !self.is_safe_category_name(category) {
-            return (json!({}), Some("잘못된 카테고리 경로입니다".to_string()));
+            return Err("잘못된 카테고리 경로입니다".to_string());
         }
         if !self.category_dir(category).is_dir() {
-            return (json!({}), Some(format!("디렉토리를 찾을 수 없습니다: {category}")));
+            return Err(format!("디렉토리를 찾을 수 없습니다: {category}"));
         }
 
         let content_type = options.content_type.unwrap_or("book");
@@ -580,7 +580,7 @@ impl BookManager {
 
         // Python은 제안 경로에서 분류 캐시를 저장하지 않는다(저장은 직접 분류 CLI뿐이다). 저장하면 서점 응답이 비었던 항목이
         // 캐시에 남아 같은 파일을 다시 제안해도 서점을 재조회하지 않는다.
-        (json!({"content_type": content_type, "source_category": category, "total_count": total_count, "processed_count": processed_count, "items": items, "failures": failures}), None)
+        Ok(json!({"content_type": content_type, "source_category": category, "total_count": total_count, "processed_count": processed_count, "items": items, "failures": failures}))
     }
 
     /// 분류 서비스. 처음 쓸 때 한 번 만든다. 꽂은 factory 가 없으면 `TM_CLASSIFIER_MODEL_DIR` 의 모델로 만들고, 못 읽으면 `None`(분류기 없음)이다.
@@ -594,12 +594,12 @@ impl BookManager {
     }
 
     /// 승인된 항목만 실제로 옮긴다.
-    pub async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &HashSet<String>, on_progress: Option<ProgressFn<'_>>) -> (Value, Option<String>) {
+    pub async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &HashSet<String>, on_progress: Option<ProgressFn<'_>>) -> Result<Value, String> {
         self.apply_category_changes_with(items, allowed_file_paths, ApplyOptions { on_progress, ..ApplyOptions::default() }).await
     }
 
     /// `apply_category_changes`의 전체 옵션 판. 목적지(`target_category`)는 브라우저가 준 값이라 `allowed_file_paths`와 안전한 이름인지 다시 검증한다.
-    pub async fn apply_category_changes_with(&self, items: &[Value], allowed_file_paths: &HashSet<String>, options: ApplyOptions<'_>) -> (Value, Option<String>) {
+    pub async fn apply_category_changes_with(&self, items: &[Value], allowed_file_paths: &HashSet<String>, options: ApplyOptions<'_>) -> Result<Value, String> {
         let content_type = options.content_type.unwrap_or("book");
         let mut results: Vec<Value> = Vec::new();
         let (mut applied_count, mut failed_count) = (0i64, 0i64);
@@ -671,7 +671,7 @@ impl BookManager {
             }
         }
 
-        (json!({"content_type": content_type, "total_count": items.len(), "applied_count": applied_count, "failed_count": failed_count, "results": results}), None)
+        Ok(json!({"content_type": content_type, "total_count": items.len(), "applied_count": applied_count, "failed_count": failed_count, "results": results}))
     }
 
     /// 파일 하나를 목적지 카테고리로 옮기고 ES를 맞춘다. 실패하면 파일과 ES 문서를 되돌린다.

@@ -405,10 +405,6 @@ struct NoEs;
 
 impl EsManagerApi for NoEs {}
 
-fn unimplemented_error() -> Option<String> {
-    Some(UNIMPLEMENTED.to_string())
-}
-
 pub struct ProposeCategoryChanges<'a> {
     pub category: &'a str,
     pub mappings: &'a Value,
@@ -434,13 +430,13 @@ pub type ReloadProgress = Arc<dyn Fn(Value) + Send + Sync>;
 /// 책/만화 관리자 facade. 책과 만화가 같은 trait를 쓴다. 지금은 문서 3.2의 통일 시그니처 일부만 있다.
 #[async_trait]
 pub trait BookManagerApi: Send + Sync {
-    async fn propose_category_changes(&self, _request: ProposeCategoryChanges<'_>) -> (Value, Option<String>) {
-        (Value::Null, unimplemented_error())
+    async fn propose_category_changes(&self, _request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
-    async fn apply_category_changes(&self, _items: &[Value], _allowed_file_paths: &std::collections::HashSet<String>, _clean_existing: bool) -> (Value, Option<String>) {
-        (Value::Null, unimplemented_error())
+    async fn apply_category_changes(&self, _items: &[Value], _allowed_file_paths: &std::collections::HashSet<String>, _clean_existing: bool) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
-    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> (Value, Option<String>) {
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<Value, String> {
         self.apply_category_changes(request.items, request.allowed_file_paths, request.clean_existing).await
     }
     async fn delete_book(&self, _id: i64) -> Result<BookDeletion, String> {
@@ -452,23 +448,23 @@ pub trait BookManagerApi: Send + Sync {
     async fn delete_file(&self, _file_path: &str) -> Result<(), String> {
         Err(UNIMPLEMENTED.to_string())
     }
-    async fn reload_category(&self, _category: &str, _content_type: &str) -> (Value, Option<String>) {
-        (Value::Null, unimplemented_error())
+    async fn reload_category(&self, _category: &str, _content_type: &str) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
-    async fn reload_category_mismatch_files(&self, _category: &str, _content_type: &str, _on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
-        (Value::Null, unimplemented_error())
+    async fn reload_category_mismatch_files(&self, _category: &str, _content_type: &str, _on_progress: Option<ReloadProgress>) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
-    async fn reload_category_mismatches(&self, _content_type: &str, _on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
-        (Value::Null, unimplemented_error())
+    async fn reload_category_mismatches(&self, _content_type: &str, _on_progress: Option<ReloadProgress>) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
-    async fn rename_category(&self, _old: &str, _new: &str) -> (Value, Option<String>) {
-        (Value::Null, unimplemented_error())
+    async fn rename_category(&self, _old: &str, _new: &str) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
-    async fn delete_category(&self, _category: &str, _delete_files: bool) -> (Value, Option<String>) {
-        (Value::Null, unimplemented_error())
+    async fn delete_category(&self, _category: &str, _delete_files: bool) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
-    async fn preview_delete_category(&self, _category: &str) -> (Value, Option<String>) {
-        (Value::Null, unimplemented_error())
+    async fn preview_delete_category(&self, _category: &str) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
     fn path_prefix(&self) -> PathBuf {
         PathBuf::new()
@@ -795,21 +791,20 @@ mod tests {
                     on_progress: None,
                 })
                 .await
-                .1
-                .as_deref(),
-            Some(UNIMPLEMENTED)
+                .unwrap_err(),
+            UNIMPLEMENTED
         );
-        assert_eq!(manager.apply_category_changes(&items, &allowed, false).await.1.as_deref(), Some(UNIMPLEMENTED));
-        assert_eq!(manager.apply_category_changes_with(request).await.1.as_deref(), Some(UNIMPLEMENTED));
+        assert_eq!(manager.apply_category_changes(&items, &allowed, false).await.unwrap_err(), UNIMPLEMENTED);
+        assert_eq!(manager.apply_category_changes_with(request).await.unwrap_err(), UNIMPLEMENTED);
         assert!(manager.delete_book(1).await.is_err());
         assert!(manager.index_single_file("a.epub").await.is_err());
         assert!(manager.delete_file("a.epub").await.is_err());
-        assert!(manager.reload_category("fiction", "book").await.1.is_some());
-        assert!(manager.reload_category_mismatch_files("fiction", "book", None).await.1.is_some());
-        assert!(manager.reload_category_mismatches("book", None).await.1.is_some());
-        assert!(manager.rename_category("old", "new").await.1.is_some());
-        assert!(manager.delete_category("fiction", false).await.1.is_some());
-        assert!(manager.preview_delete_category("fiction").await.1.is_some());
+        assert!(manager.reload_category("fiction", "book").await.is_err());
+        assert!(manager.reload_category_mismatch_files("fiction", "book", None).await.is_err());
+        assert!(manager.reload_category_mismatches("book", None).await.is_err());
+        assert!(manager.rename_category("old", "new").await.is_err());
+        assert!(manager.delete_category("fiction", false).await.is_err());
+        assert!(manager.preview_delete_category("fiction").await.is_err());
         assert!(manager.path_prefix().as_os_str().is_empty());
         assert!(matches!(manager.es_manager().create_index(), Err(crate::es_manager::EsError::Unsupported)));
         assert!(manager.get_book(1).await.is_err());
