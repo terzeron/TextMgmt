@@ -196,6 +196,13 @@ pub(super) fn parse_book_id(raw: &str) -> ApiResult<i64> {
     raw.trim().parse().map_err(|_| RequestValidationError::single(&["path", "book_id"], "Input should be a valid integer", json!(raw)).into())
 }
 
+/// 미리보기·쪽 추출은 LibreOffice 변환, EPUB 재압축, PDF 로드처럼 오래 막는 일을 한다.
+/// tokio worker를 묶으면 다른 API가 멈추므로 blocking 스레드에서 돌린다.
+pub(super) async fn run_blocking<T: Send + 'static>(work: impl Future<Output = T> + Send + 'static) -> ApiResult<T> {
+    let handle = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || handle.block_on(work)).await.map_err(|e| ApiError::Internal(format!("blocking task failed: {e}")))
+}
+
 /// viewer는 카테고리 정책을 확인한 뒤 파일을 읽는다. admin은 조회 제한을 받지 않는다.
 pub(super) async fn checked_manager(deps: &AppDeps, payload: &Value, book_id: i64, comics: bool) -> ApiResult<Arc<dyn BookManagerApi>> {
     let manager = if comics { deps.comics_manager() } else { deps.book_manager() }.map_err(|e| {
@@ -252,7 +259,7 @@ async fn preview(
     let comics = uri.path().starts_with("/comics/");
     let manager = checked_manager(&deps, &payload, book_id, comics).await?;
     let base = format!("{}/html-resource/{book_id}", if comics { "/comics" } else { "" });
-    book_response(manager.get_book_preview_with_pages(book_id, query.pages, query.chapters, Some(&base)).await)
+    book_response(run_blocking(async move { manager.get_book_preview_with_pages(book_id, query.pages, query.chapters, Some(&base)).await }).await?)
 }
 
 async fn download(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, Path(raw_id): Path<String>, OriginalUri(uri): OriginalUri, request_headers: HeaderMap) -> ApiResult<Response> {
@@ -341,7 +348,7 @@ async fn html_resource(
 ) -> ApiResult<Response> {
     let book_id = parse_book_id(&raw_id)?;
     let manager = checked_manager(&deps, &payload, book_id, uri.path().starts_with("/comics/")).await?;
-    book_response(manager.get_html_resource(book_id, &query.path).await)
+    book_response(run_blocking(async move { manager.get_html_resource(book_id, &query.path).await }).await?)
 }
 
 async fn validate(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, Path(raw_id): Path<String>, OriginalUri(uri): OriginalUri) -> ApiResult<Json<Value>> {
@@ -358,4 +365,27 @@ async fn validate(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppD
         (Some(result), None) => json!({"status":"success", "result":result}),
         (_, error) => json!({"status":"failure", "error":error}),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::run_blocking;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn run_blocking_keeps_the_worker_free() {
+        // worker가 하나뿐이어도 느린 미리보기가 다른 요청을 막지 않아야 한다.
+        let (started, wait_started) = tokio::sync::oneshot::channel();
+        let slow = tokio::spawn(run_blocking(async move {
+            let _ = started.send(());
+            std::thread::sleep(Duration::from_millis(500));
+            7
+        }));
+        wait_started.await.unwrap();
+        let start = Instant::now();
+        tokio::spawn(async { 1 }).await.unwrap();
+        assert!(start.elapsed() < Duration::from_millis(200), "{:?}", start.elapsed());
+        assert_eq!(slow.await.unwrap().unwrap(), 7);
+    }
 }

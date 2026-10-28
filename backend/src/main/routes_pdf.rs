@@ -11,7 +11,7 @@ use super::deps::AppDeps;
 use super::errors::ApiResult;
 use super::extract::{ApiQuery, RequireAuth};
 use super::routes::Routes;
-use super::routes_books::{book_response, checked_manager, parse_book_id};
+use super::routes_books::{book_response, checked_manager, parse_book_id, run_blocking};
 
 mod edit;
 
@@ -36,5 +36,6 @@ async fn comic_pages(RequireAuth(payload): RequireAuth, State(deps): State<Arc<A
 async fn pages(deps: &AppDeps, payload: &Value, book_id: &str, query: PagesQuery, comics: bool) -> ApiResult<Response> {
     let book_id = parse_book_id(book_id)?;
     let manager = checked_manager(deps, payload, book_id, comics).await?;
-    book_response(manager.get_pdf_pages(book_id, query.start.unwrap_or(1), query.end.unwrap_or(1)).await)
+    let (start, end) = (query.start.unwrap_or(1), query.end.unwrap_or(1));
+    book_response(run_blocking(async move { manager.get_pdf_pages(book_id, start, end).await }).await?)
 }
