@@ -12,8 +12,8 @@
 //! - `backend::main::run_classify_apply_job(book_manager: &dyn BookManagerApi, category_mapping: &dyn CategoryMappingApi, content_type: &str, items: Vec<Value>, allowed: HashSet<String>, clean_existing: bool, apply_token: &str)`
 //!   (async; `create_item_router` 안의 클로저 `_run_classify_apply_job`을 밖으로 낸 것)
 //! - `#[async_trait] backend::book_manager::BookManagerApi` (모든 메서드에 기본 구현이 있다)
-//!   - `async fn get_categories(&self) -> (Value, Option<String>)`
-//!   - `async fn apply_category_changes(&self, items: &[Value], allowed: &HashSet<String>, clean_existing: bool) -> (Value, Option<String>)`
+//!   - `async fn get_categories(&self) -> Result<Value, String>`
+//!   - `async fn apply_category_changes(&self, items: &[Value], allowed: &HashSet<String>, clean_existing: bool) -> Result<Value, String>`
 //!   - `fn path_prefix(&self) -> PathBuf`, `fn es_manager(&self) -> Arc<dyn EsManagerApi>`
 //!   - `backend::es_manager::EsManagerApi`는 `book_manager`가 아니라 `es_manager` 모듈에 있다.
 //! - `backend::es_manager::{EsManagerApi, EsError}` (설계 3.3. 모든 메서드에 기본 구현이 있다)

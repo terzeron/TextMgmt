@@ -21,9 +21,9 @@
 //! - `backend::book_manager::{BookManager, BookManagerDeps, BookManagerApi, BookRef, BookLookup}`
 //!   `BookRef { book_id: i64, file_path: PathBuf, file_type: String }` (`Clone`)
 //!   `BookManager::with_deps(BookManagerDeps::new(path_prefix, es).with_trash_dirname(&str).with_book_lookup(Arc<dyn BookLookup>).with_image_fetcher(Arc<dyn ImageFetcher>))` (구 `BookManagerDeps { .. }` 리터럴)
-//!   `BookManagerApi::set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>)` (async)
-//!   `BookManagerApi::remove_epub_cover(&self, book_id: i64) -> (Option<Value>, Option<String>)` (async)
-//!   `BookManagerApi::insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>)` (async)
+//!   `BookManagerApi::set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String>` (async)
+//!   `BookManagerApi::remove_epub_cover(&self, book_id: i64) -> Result<Value, String>` (async)
+//!   `BookManagerApi::insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String>` (async)
 //!   (구 `EpubCoverApi`를 `BookManagerApi`에 합쳤다. 모든 메서드에 기본 구현이 있어 fake는 쓰는 메서드만 구현한다)
 //!   `BookManager::find_epub_cover_member(archive: &mut ZipArchive<File>) -> Option<String>`
 //!   `trait BookLookup { async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> }` (`async_trait`)

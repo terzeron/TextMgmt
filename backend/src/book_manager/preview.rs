@@ -303,16 +303,12 @@ impl BookManager {
         match built {
             Ok(chapter_count) => {
                 // 생성된 EPUB 유효성 검증
-                let (valid, err) = match self.seams().preview_epub_validator {
-                    Some(validator) => {
-                        let (valid, reason) = validator(&tmp_file);
-                        (valid, (!reason.is_empty()).then_some(reason))
-                    }
+                let validated = match self.seams().preview_epub_validator {
+                    Some(validator) => validator(&tmp_file),
                     None => Self::_validate_preview_epub_with(&*self.fs, &tmp_file),
                 };
-                if !valid {
+                if let Err(err) = validated {
                     let _ = self.fs.remove_file(&tmp_file);
-                    let err = err.unwrap_or_default();
                     log::error!("EPUB preview validation failed for book_id={book_id}: {err}");
                     return text_response(422, format!("EPUB preview validation failed: {err}"));
                 }

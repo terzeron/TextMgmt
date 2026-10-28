@@ -14,26 +14,26 @@
 //!     `with_is_high_confidence_override(Arc<dyn Fn(&dyn Any, f64) -> bool + Send + Sync>)`
 //!   - `backend::book_manager::FileReader { fn read_file(&self, path: &Path, path_prefix: Option<&Path>) -> Docs }` (구 `ReadFile`/`set_read_file`/`Loader.read_file`)
 //!   - 상수: `CACHE_MAX_AGE_SECONDS: u64`, `EPUB_IMAGE_MAX_EDGE: u32`
-//!   - 비동기(`async fn`, `&self`): `get_categories() -> (BTreeMap<String, i64>, Option<String>)`, `get_books_in_category(&str) -> (Vec<Book>, Option<String>)`,
-//!     `get_book(i64) -> (Option<Book>, Option<String>)`, `get_book_content(i64) -> BookContent`, `search_by_keyword(&str, max_result_count: i64) -> (Vec<Book>, Option<String>)`,
-//!     `search_similar_books(i64, max_result_count: i64) -> (Vec<Book>, Option<String>)`, `search_similar_books_paged(i64, size: i64, offset: i64) -> (Vec<Book>, i64, Option<String>)`,
-//!     `search_by_keyword_paged(&str, size: i64, offset: i64, exclude_categories: Option<&[String]>, category: Option<&str>) -> (Vec<Book>, i64, Option<String>)`,
-//!     `add_book(&Docs) -> (Option<i64>, Option<String>)`, `update_book(i64, &str, &str, &str, &Path, &str) -> (String, Option<String>)`,
-//!     `delete_book(i64) -> (String, Option<String>)`, `delete_file(&str) -> (String, Option<String>)`, `index_single_file(&str) -> (Option<i64>, Option<String>)`,
-//!     `rename_category(&str, &str) -> (Value, Option<String>)`, `delete_category(&str, delete_files: bool) -> (Value, Option<String>)`, `preview_delete_category(&str) -> (Value, Option<String>)`,
-//!     `reload_category(&str, content_type: Option<&str>) -> (Value, Option<String>)`, `reload_category_mismatches(on_progress: Option<&dyn Fn(Value)>) -> (Value, Option<String>)`,
-//!     `reload_category_mismatch_files(&str, on_progress: Option<&dyn Fn(Value)>) -> (Value, Option<String>)`, `_reload_category_mismatch_details(&str, &Value) -> Value`,
+//!   - 비동기(`async fn`, `&self`): `get_categories() -> Result<BTreeMap<String, i64>, String>`, `get_books_in_category(&str) -> Result<Vec<Book>, String>`,
+//!     `get_book(i64) -> Result<Book, BookLookupError>`, `get_book_content(i64) -> BookContent`, `search_by_keyword(&str, max_result_count: i64) -> Result<Vec<Book>, String>`,
+//!     `search_similar_books(i64, max_result_count: i64) -> Result<Vec<Book>, String>`, `search_similar_books_paged(i64, size: i64, offset: i64) -> Result<BookPage, String>`,
+//!     `search_by_keyword_paged(&str, size: i64, offset: i64, exclude_categories: Option<&[String]>, category: Option<&str>) -> Result<BookPage, String>`,
+//!     `add_book(&Docs) -> Result<i64, String>`, `update_book(i64, &str, &str, &str, &Path, &str) -> Result<(), String>`,
+//!     `delete_book(i64) -> Result<BookDeletion, String>`, `delete_file(&str) -> Result<(), String>`, `index_single_file(&str) -> Result<i64, String>`,
+//!     `rename_category(&str, &str) -> Result<Value, String>`, `delete_category(&str, delete_files: bool) -> Result<Value, String>`, `preview_delete_category(&str) -> Result<Value, String>`,
+//!     `reload_category(&str, content_type: Option<&str>) -> Result<Value, String>`, `reload_category_mismatches(on_progress: Option<&dyn Fn(Value)>) -> Result<Value, String>`,
+//!     `reload_category_mismatch_files(&str, on_progress: Option<&dyn Fn(Value)>) -> Result<Value, String>`, `_reload_category_mismatch_details(&str, &Value) -> Value`,
 //!     `_bulk_index_files(&[&str], clean_existing: bool) -> (BTreeMap<String, i64>, Vec<Value>)`,
-//!     `propose_category_changes(&str, mappings: Option<&Value>, ProposeOptions) -> (Value, Option<String>)`, `apply_category_changes(&[Value], &HashSet<String>, on_progress: Option<&dyn Fn(Value)>) -> (Value, Option<String>)`,
+//!     `propose_category_changes(&str, mappings: Option<&Value>, ProposeOptions) -> Result<Value, String>`, `apply_category_changes(&[Value], &HashSet<String>, on_progress: Option<&dyn Fn(Value)>) -> Result<Value, String>`,
 //!     `get_book_preview(i64, pages: Option<u32>, chapters: Option<u32>) -> BookResponse`, `get_pdf_pages(i64, start: u32, end: u32) -> BookResponse`,
-//!     `validate_epub(i64) -> (Option<Value>, Option<String>)`, `validate_pdf(i64) -> (Option<Value>, Option<String>)`
+//!     `validate_epub(i64) -> Result<Value, String>`, `validate_pdf(i64) -> Result<Value, String>`
 //!   - 동기: `path_prefix() -> PathBuf`, `set_path_prefix(&mut self, &Path)`, `es_manager() -> &dyn EsManagerApi`, `get_category_mismatches(force_refresh: bool) -> Value`,
 //!     `get_category_mismatch_details(&str) -> Value`, `fill_missing_book_ids(Vec<Value>, &Path) -> Vec<Value>`, `_mismatch_categories(&Value) -> Vec<String>`,
 //!     `_mismatch_item_count(&Value) -> i64`, `_clear_mismatch_cache()`, `set_mismatch_cache(Option<Value>, Instant)` (값 설정자. 3.8 T6)
-//!   - 정적: `_evict_old_cache(&Path)`, `_find_opf_path(&mut ZipArchive<File>) -> Option<String>`, `_validate_preview_epub(&Path) -> (bool, Option<String>)`,
+//!   - 정적: `_evict_old_cache(&Path)`, `_find_opf_path(&mut ZipArchive<File>) -> Option<String>`, `_validate_preview_epub(&Path) -> Result<(), String>`,
 //!     `_get_epub_total_chapters(&Path) -> i64`, `_downscale_epub_image(&[u8]) -> Vec<u8>`, `_book_id_for_path(&Path) -> Option<i64>`,
 //!     `_convert_with_libreoffice_with(&dyn CommandRunner, bin: &str, work_dir: Option<&Path>, &Path, fmt: &str) -> String`, `_find_libreoffice_with(which: &dyn Fn(&str) -> Option<String>, exists: &dyn Fn(&Path) -> bool) -> String`,
-//!     `_validate_preview_epub_with(&dyn FsOps, &Path) -> (bool, Option<String>)`, `_evict_old_cache_with(&dyn FsOps, &Path)`, `join_created_time_backfill_thread(Duration)`
+//!     `_validate_preview_epub_with(&dyn FsOps, &Path) -> Result<(), String>`, `_evict_old_cache_with(&dyn FsOps, &Path)`, `join_created_time_backfill_thread(Duration)`
 //! - `backend::book_manager::{BookContent::{File(PathBuf), Text(String)}, BookResponse { status_code: u16, body: Vec<u8> }, RuntimeError(String), ProposeOptions { use_bookstore: Option<bool>, use_content_meta: Option<bool>, on_progress: Option<&dyn Fn(Value)> }: Default}`
 //! - `sysdeps::{FsOps, CommandRunner, CommandOutput { returncode: i32, stdout: Vec<u8>, stderr: Vec<u8> }, CommandError::{Timeout, NotFound, Failed(String)}}` (문서 3.1. `FsOps`는 `common::faulty_fs::FaultyFs`, `CommandRunner`는 `common::runner::FakeRunner`가 구현한다)
 //! - `backend::pdf::{PdfOpener { fn open(&self, &Path) -> Result<Box<dyn PdfDoc>, PdfError> }, PdfDoc (page_count/pdf_version/docinfo/check_pdf_syntax/close), PdfPageOps (page_count/extract_pages), PdfError { kind, message }}` (문서 3.11)
@@ -73,6 +73,14 @@ use common::zipx::{open_zip, write_zip};
 use serde_json::{Value, json};
 use sysdeps::{CommandError, CommandOutput};
 use tempfile::TempDir;
+
+/// 검증 결과를 Python 원본의 `(유효 여부, 사유)`로 펼친다.
+fn verdict(result: Result<(), String>) -> (bool, Option<String>) {
+    match result {
+        Ok(()) => (true, None),
+        Err(reason) => (false, Some(reason)),
+    }
+}
 
 /// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
 fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
@@ -1276,13 +1284,13 @@ fn test_validate_preview_epub_ok_and_fail() {
             ),
         ],
     );
-    let (ok, err) = BookManager::_validate_preview_epub(&epub);
+    let (ok, err) = verdict(BookManager::_validate_preview_epub(&epub));
     assert!(ok);
     assert!(err.is_none());
 
     let bad = tmp_path.join("bad.epub");
     write_zip(&bad, &[("META-INF/container.xml", b"x")]);
-    let (ok, err) = BookManager::_validate_preview_epub(&bad);
+    let (ok, err) = verdict(BookManager::_validate_preview_epub(&bad));
     assert!(!ok);
     assert!(err.as_deref().unwrap().contains("mimetype"));
 }
@@ -1733,19 +1741,19 @@ fn test_validate_preview_epub_missing_opf_and_manifest() {
     let tmp_path = tmp.path();
     let container = br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/content.opf"/></rootfiles></container>"#;
     let missing_opf = _make_epub(tmp_path, &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", container)]);
-    let (ok, err) = BookManager::_validate_preview_epub(&missing_opf);
+    let (ok, err) = verdict(BookManager::_validate_preview_epub(&missing_opf));
     assert!(!ok);
     assert!(err.as_deref().unwrap().contains("OPF file missing in archive"));
 
     let opf_no_manifest = br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf"><spine><itemref idref="c1"/></spine></package>"#;
     let no_manifest = _make_epub(tmp_path, &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", container), ("OPS/content.opf", opf_no_manifest)]);
-    let (ok, err) = BookManager::_validate_preview_epub(&no_manifest);
+    let (ok, err) = verdict(BookManager::_validate_preview_epub(&no_manifest));
     assert!(!ok);
     assert_eq!(err.as_deref(), Some("manifest element missing"));
 
     let opf_no_spine = br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf"><manifest/></package>"#;
     let no_spine = _make_epub(tmp_path, &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", container), ("OPS/content.opf", opf_no_spine)]);
-    let (ok, err) = BookManager::_validate_preview_epub(&no_spine);
+    let (ok, err) = verdict(BookManager::_validate_preview_epub(&no_spine));
     assert!(!ok);
     assert_eq!(err.as_deref(), Some("spine element missing"));
 }
@@ -1755,7 +1763,7 @@ fn test_validate_preview_epub_bad_zip() {
     let tmp = TempDir::new().unwrap();
     let bad = tmp.path().join("bad.epub");
     write(&bad, "not a zip");
-    let (ok, err) = BookManager::_validate_preview_epub(&bad);
+    let (ok, err) = verdict(BookManager::_validate_preview_epub(&bad));
     assert!(!ok);
     assert_eq!(err.as_deref(), Some("corrupted ZIP file"));
 }
@@ -3462,7 +3470,7 @@ fn test_validate_epub_invalid_mimetype() {
     let tmp = TempDir::new().unwrap();
     let epub = tmp.path().join("test.epub");
     make_epub(&epub, &minimal_spec().without_mimetype().with_extra("mimetype", "application/zip"));
-    let (valid, err) = BookManager::_validate_preview_epub(&epub);
+    let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
     assert!(!valid);
     assert!(err.as_deref().unwrap().contains("invalid mimetype"));
 }
@@ -3473,7 +3481,7 @@ fn test_validate_epub_no_opf() {
     let tmp = TempDir::new().unwrap();
     let epub = tmp.path().join("test.epub");
     make_epub(&epub, &EpubSpec { opf_path: String::new(), ..minimal_spec() }.without_container());
-    let (valid, err) = BookManager::_validate_preview_epub(&epub);
+    let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
     assert!(!valid);
     assert!(err.as_deref().unwrap().contains("OPF file not found"));
 }
@@ -3486,7 +3494,7 @@ fn test_validate_epub_opf_parse_error() {
     // lxml은 recover=True로 대부분의 깨진 XML을 처리하지만, 복구가 불가능한 바이너리 쓰레기로 예외 경로를 시험한다.
     make_epub(&epub, &minimal_spec().with_opf("\u{0}\u{1}\u{2}"));
     // 복구 모드가 쓰레기를 파싱해 낼 수도 있다. 중요한 것은 죽지 않고 bool을 돌려주는 것이다.
-    let (valid, _err): (bool, Option<String>) = BookManager::_validate_preview_epub(&epub);
+    let (valid, _err) = verdict(BookManager::_validate_preview_epub(&epub));
     let _ = valid;
 }
 
@@ -3509,7 +3517,7 @@ fn test_validate_epub_spine_idref_not_in_manifest() {
     let tmp = TempDir::new().unwrap();
     let epub = tmp.path().join("test.epub");
     make_epub(&epub, &minimal_spec().with_opf(&opf));
-    let (valid, err) = BookManager::_validate_preview_epub(&epub);
+    let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
     assert!(valid);
     assert!(err.is_none());
 }
@@ -3535,7 +3543,7 @@ fn test_validate_epub_spine_file_missing_from_zip() {
     let epub = tmp.path().join("test.epub");
     // ch2.xhtml은 manifest/spine에 있지만 zip에는 없다
     make_epub(&epub, &minimal_spec().with_opf(&opf));
-    let (valid, err) = BookManager::_validate_preview_epub(&epub);
+    let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
     assert!(valid);
     assert!(err.is_none());
 }
@@ -3559,7 +3567,7 @@ fn test_validate_epub_no_valid_spine_chapters() {
     let epub = tmp.path().join("test.epub");
     // zip 안에 ch1.xhtml도 missing.xhtml도 없다
     make_epub(&epub, &EpubSpec { chapters: vec![], ..minimal_spec() }.with_opf(&opf));
-    let (valid, err) = BookManager::_validate_preview_epub(&epub);
+    let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
     assert!(!valid);
     assert!(err.as_deref().unwrap().contains("no valid spine chapters"));
 }
@@ -3582,7 +3590,7 @@ fn test_validate_epub_toc_not_in_manifest() {
     let tmp = TempDir::new().unwrap();
     let epub = tmp.path().join("test.epub");
     make_epub(&epub, &minimal_spec().with_opf(&opf));
-    let (valid, _err) = BookManager::_validate_preview_epub(&epub);
+    let (valid, _err) = verdict(BookManager::_validate_preview_epub(&epub));
     assert!(valid);
 }
 
@@ -3606,7 +3614,7 @@ fn test_validate_epub_toc_ncx_missing_from_zip() {
     let epub = tmp.path().join("test.epub");
     // toc.ncx는 manifest에 있지만 zip에는 없다
     make_epub(&epub, &minimal_spec().with_opf(&opf));
-    let (valid, _err) = BookManager::_validate_preview_epub(&epub);
+    let (valid, _err) = verdict(BookManager::_validate_preview_epub(&epub));
     assert!(valid);
 }
 
@@ -3616,7 +3624,7 @@ fn test_validate_epub_corrupted_zip() {
     let tmp = TempDir::new().unwrap();
     let epub = tmp.path().join("test.epub");
     write(&epub, b"not a zip file");
-    let (valid, err) = BookManager::_validate_preview_epub(&epub);
+    let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
     assert!(!valid);
     assert!(err.as_deref().unwrap().contains("corrupted ZIP"));
 }
@@ -3631,7 +3639,7 @@ fn test_validate_epub_general_exception() {
     // ZIP 열기가 PermissionError로 실패하는 파일 시스템
     let fs_ops = FaultyFs::new();
     fs_ops.set_open(|_path| Some(io::Error::from(io::ErrorKind::PermissionDenied)));
-    let (valid, err) = BookManager::_validate_preview_epub_with(&*fs_ops, &epub);
+    let (valid, err) = verdict(BookManager::_validate_preview_epub_with(&*fs_ops, &epub));
     assert!(!valid);
     assert!(err.as_deref().unwrap().contains("validation error"));
 }

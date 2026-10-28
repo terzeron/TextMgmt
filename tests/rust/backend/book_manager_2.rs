@@ -20,28 +20,28 @@
 //! 문서에 아직 없는 seam (이 파일에서 `#[ignore]`로 남은 테스트만 쓴다. 구현을 정할 때 이름과 모양을 확정해야 한다):
 //! - `with_max_category_result_count(i64)` (구 `override_max_category_result_count`, 값 설정자)
 //! - `with_page_count_cache_max(usize)` + `BookManager::page_count_cache()` (`clear/insert/touch/evict/len/contains`) (구 `_page_count_cache_*` 정적 캐시)
-//! - `with_preview_epub_validator(Arc<dyn Fn(&Path) -> (bool, String) + Send + Sync>)` (구 `override_validate_preview_epub`)
+//! - `with_preview_epub_validator(Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>)` (구 `override_validate_preview_epub`)
 //! - `with_normpath(Arc<dyn Fn(&str) -> String + Send + Sync>)`, `with_path_is_relative_to(Arc<dyn Fn(&Path, &Path) -> io::Result<bool> + Send + Sync>)`
 //! - `with_get_category_mismatches_override(Arc<dyn Fn(bool) -> Value + ..>)`, `with_get_category_mismatch_details_override(Arc<dyn Fn(&str) -> Value + ..>)` (구 인스턴스 메서드 바꿔치기)
 //! - `with_category_name_check(Arc<dyn Fn(&str, &dyn Fn(&str) -> bool) -> io::Result<bool> + ..>)` (구 `override_is_safe_category_name`)
 //!
 //! 메서드 (Python 시그니처와 같은 이름을 쓴다. 정수는 모두 `i64`다, 3.0 규칙 6):
-//! - `async fn validate_pdf(&self, book_id: i64) -> (Option<Value>, Option<String>)`
+//! - `async fn validate_pdf(&self, book_id: i64) -> Result<Value, String>`
 //! - `async fn get_book_content(&self, book_id: i64) -> BookContent` (`Text(String)` | `File(BookResponse)`. 문서의 `File(PathBuf)`와 달리 헤더를 읽는 테스트가 있어 응답을 그대로 담는다.)
 //! - `async fn get_book_preview(&self, book_id: i64, chapters: Option<i64>, resource_base_url: Option<&str>) -> BookResponse`
 //! - `async fn get_pdf_pages(&self, book_id: i64, start: i64, end: i64) -> BookResponse`
 //! - `async fn get_html_resource(&self, book_id: i64, path: &str) -> BookResponse`
 //!   (`BookResponse { status_code: u16, media_type, headers: Vec<(String, String)>, body: Vec<u8> }`. 이 파일은 `.header(name) -> Option<&str>`, `.body_text()`, `.is_file()` 도우미도 쓴다.)
-//! - `async fn update_book(&self, book_id: i64, new_category: &str, new_title: &str, new_author: &str, new_path: &Path, new_type: &str, force: bool) -> (Value, Option<String>)`
-//! - `async fn rename_category / delete_category / reload_category(&self, ..) -> (Value, Option<String>)`
-//! - `async fn index_single_file(&self, rel: &str) -> (Option<Value>, Option<String>)`
-//! - `async fn get_categories(&self) -> (Value, Option<String>)`, `get_books_in_category(&self, c) -> (Vec<Book>, Option<String>)`
-//! - `async fn get_books_in_category_paged(&self, c, size: Option<i64>, cursor: Option<&str>) -> (Vec<Book>, i64, Option<String>, Option<String>)`
-//! - `async fn get_latest_books(&self, size: i64, exclude: Option<Vec<String>>) -> (Vec<Book>, i64, Option<String>)`
+//! - `async fn update_book(&self, book_id: i64, new_category: &str, new_title: &str, new_author: &str, new_path: &Path, new_type: &str, force: bool) -> Result<Value, String>`
+//! - `async fn rename_category / delete_category / reload_category(&self, ..) -> Result<Value, String>`
+//! - `async fn index_single_file(&self, rel: &str) -> Result<i64, String>`
+//! - `async fn get_categories(&self) -> Result<Value, String>`, `get_books_in_category(&self, c) -> Result<Vec<Book>, String>`
+//! - `async fn get_books_in_category_paged(&self, c, size: Option<i64>, cursor: Option<&str>) -> Result<BookPage, String>`
+//! - `async fn get_latest_books(&self, size: i64, exclude: Option<Vec<String>>) -> Result<BookPage, String>`
 //! - `async fn get_book / search_by_keyword_paged` (ES 읽기 경로, `spawn_blocking`으로 넘겨야 한다)
-//! - `async fn _move_classified_file(&self, src: &Path, category: &str, kind: &str, opts: MoveOpts) -> (Option<Value>, Option<String>)`
-//! - `async fn propose_category_changes(&self, category, mappings: &[(Value, Vec<Value>)], opts: ProposeOpts) -> (Value, Option<String>)`
-//! - `async fn apply_category_changes(&self, items: &[Value], opts: ApplyOpts) -> (Value, Option<String>)`
+//! - `async fn _move_classified_file(&self, src: &Path, category: &str, kind: &str, opts: MoveOpts) -> Result<Value, String>`
+//! - `async fn propose_category_changes(&self, category, mappings: &[(Value, Vec<Value>)], opts: ProposeOpts) -> Result<Value, String>`
+//! - `async fn apply_category_changes(&self, items: &[Value], opts: ApplyOpts) -> Result<Value, String>`
 //! - `fn _propose_category_for_file(&self, path, category, mappings, classifier: &dyn BookClassifierApi, use_bookstore: bool, use_content_meta: bool) -> Value`
 //! - `fn _match_category_by_keywords(&self, path, category, mappings) -> (Option<String>, Vec<String>, Option<String>, Vec<(String, Vec<String>)>)`
 //! - `fn _is_high_confidence(&self, classifier: &dyn BookClassifierApi, confidence: f64) -> bool`, `BookManager::GRADE_UNKNOWN: &str`
@@ -89,6 +89,14 @@ use common::{
 use serde_json::{Value, json};
 use sysdeps::{CommandError, FsOps, RealFs};
 use tempfile::TempDir;
+
+/// 검증 결과를 Python 원본의 `(유효 여부, 사유)`로 펼친다.
+fn verdict(result: Result<(), String>) -> (bool, Option<String>) {
+    match result {
+        Ok(()) => (true, None),
+        Err(reason) => (false, Some(reason)),
+    }
+}
 
 /// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
 fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
@@ -933,7 +941,7 @@ fn test_get_book_preview_epub_validation_fail() {
     make_epub(&epub, &minimal_spec());
     let es = FakeEsManager::new();
     // 가정한 seam: 미리보기 EPUB 검증 함수를 교체한다. 문서에 없는 seam이다(파일 머리말 참고).
-    let manager = BookManager::with_deps(deps(tmp_path, &es).with_preview_epub_validator(Arc::new(|_path| (false, "bad epub".to_string()))));
+    let manager = BookManager::with_deps(deps(tmp_path, &es).with_preview_epub_validator(Arc::new(|_path| Err("bad epub".to_string()))));
     es.set_doc(Some(make_doc("A/test.epub", "epub")));
     let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
     assert_eq!(result.status_code, 422);
@@ -1844,7 +1852,7 @@ fn test_empty_epub_spine_href_is_rejected() {
             ("content.opf", br#"<?xml version="1.0"?><package version="2.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId"><manifest><item id="item1" href="" media-type="text/html"/></manifest><spine toc="ncx"><itemref idref="item1"/></spine></package>"#),
         ],
     );
-    let (valid, _msg) = BookManager::_validate_preview_epub(&epub_path);
+    let (valid, _msg) = verdict(BookManager::_validate_preview_epub(&epub_path));
     assert!(!valid);
 }
 

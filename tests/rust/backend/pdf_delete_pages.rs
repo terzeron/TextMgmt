@@ -7,9 +7,9 @@
 //!   (Python fixture의 `monkeypatch.setattr`/`patch`에 대응하는 DI seam이다)
 //!   - `BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>)`: 인자 순서는 (path, es)다. book_fixtures의 (es, path)를 뒤집는다
 //!   - `.with_book_adder(Arc<dyn BookAdder>)`, `.with_file_reader(Arc<dyn FileReader>)`, `.with_image_fetcher(Arc<dyn ImageFetcher>)` (구 `AddBook`, `ReadFile`, `FetchUrlImage`)
-//! - `BookManager::delete_pdf_pages(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> (Option<Value>, Option<String>)`
-//! - `BookManager::preview_insert_image(&self, url: &str) -> (Option<Vec<u8>>, Option<String>)`
-//! - `BookManager::preview_insert_upload(&self, data: &[u8]) -> (Option<Vec<u8>>, Option<String>)`
+//! - `BookManager::delete_pdf_pages(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String>`
+//! - `BookManager::preview_insert_image(&self, url: &str) -> Result<Vec<u8>, String>`
+//! - `BookManager::preview_insert_upload(&self, data: &[u8]) -> Result<Vec<u8>, String>`
 //! - `backend::epub_cover::MAX_IMAGE_BYTES: usize`
 //! - `backend::main::{app_with, AppDeps, AuthMode}`: `app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(Arc<dyn BookManagerApi>))`.
 //!   구 `app_with_overrides(Arc, Option<Value>)`. 엔드포인트 테스트의 `fx::FakeManager`가 `BookManagerApi`를 구현한다(나머지 메서드는 trait 기본 구현)

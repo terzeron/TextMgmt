@@ -305,15 +305,12 @@ impl BookManager {
     }
 
     /// 생성된 미리보기 EPUB의 구조적 유효성을 검증하고 경미한 문제는 자동으로 고친다.
-    pub fn _validate_preview_epub(cache_file: &Path) -> (bool, Option<String>) {
-        Self::_validate_preview_epub_with(&RealFs, cache_file)
+    pub fn _validate_preview_epub(cache_file: &Path) -> Result<(), String> {
+        validate_preview_epub(&RealFs, cache_file)
     }
 
-    pub fn _validate_preview_epub_with(fs: &dyn FsOps, cache_file: &Path) -> (bool, Option<String>) {
-        match validate_preview_epub(fs, cache_file) {
-            Ok(()) => (true, None),
-            Err(message) => (false, Some(message)),
-        }
+    pub fn _validate_preview_epub_with(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String> {
+        validate_preview_epub(fs, cache_file)
     }
 
     /// 1일 넘은 캐시 파일을 지운다.

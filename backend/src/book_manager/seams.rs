@@ -45,7 +45,7 @@ pub trait BackfillThread: Send + Sync {
     fn join(&self, _timeout: Duration) {}
 }
 
-pub type PreviewEpubValidator = Arc<dyn Fn(&Path) -> (bool, String) + Send + Sync>;
+pub type PreviewEpubValidator = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
 pub type PathIsRelativeTo = Arc<dyn Fn(&Path, &Path) -> io::Result<bool> + Send + Sync>;
 /// 카테고리 이름 검사를 바꾼다. 둘째 인자는 원래 검사다. `Err`는 검사 중 파일시스템 오류다.
 pub type CategoryNameCheck = Arc<dyn Fn(&str, &dyn Fn(&str) -> bool) -> io::Result<bool> + Send + Sync>;

@@ -33,7 +33,7 @@
 //! - `backend::bookstore::Yes24Bookstore { verbose: bool }`
 //! - `backend::book_manager::{BookManager, BookManagerApi, BookContent, BookResponse}`: `BookManager::from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, _>`, `BookManager::media_type(suffix_with_dot: &str) -> &'static str`
 //!   - `bm.path_prefix() -> PathBuf`, `bm.es_manager() -> Arc<dyn EsManagerApi>` (`insert(&Docs) -> Result<Vec<i64>, EsError>`, `refresh() -> Result<(), EsError>`, `delete(i64) -> Result<bool, EsError>`, `count_by_category(&str, bool) -> Result<i64, EsError>`)
-//!   - `async add_book(BTreeMap<i64, Value>) -> (Option<i64>, Option<String>)`, `async get_book(i64) -> (Option<Book>, Option<String>)`
+//!   - `async add_book(BTreeMap<i64, Value>) -> Result<i64, String>`, `async get_book(i64) -> Result<Book, BookLookupError>`
 //!   - `BookManagerApi`(모든 메서드에 기본 구현이 있다): 아래 `DummyManager` 구현부의 시그니처를 따른다. `fn es_manager(&self) -> Arc<dyn EsManagerApi>`.
 //!     통일 시그니처(설계 3.2): `get_book_content -> BookContent`, `get_book_preview(id, chapters, resource_base_url) -> BookResponse`, `get_pdf_pages(id, start, end) -> BookResponse`, `get_category_mismatches(force_refresh) -> Result<Value, String>`
 //! - `backend::es_manager::{EsManagerApi, EsError, ESManager}`: `delete(&self, i64) -> Result<bool, EsError>`, `search_categories_pdf_stats(&self, &[String]) -> Result<Value, EsError>`. 대역은 `common::es_fake::FakeEsManager`다.

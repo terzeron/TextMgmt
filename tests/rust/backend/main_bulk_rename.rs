@@ -8,10 +8,10 @@
 //!   - `AuthMode::Fixed(serde_json::Value)`: `require_auth`/`require_admin` 의존성 override에 대응한다.
 //! - `backend::book::Book { book_id: i64, category: String, author: String, file_path: PathBuf, file_type: String, .. }` (`Default + Clone`)
 //! - `#[async_trait] backend::book_manager::BookManagerApi` (모든 메서드에 기본 구현이 있다)
-//!   - `async fn get_categories(&self) -> (Value, Option<String>)`
-//!   - `async fn get_books_in_category_paged(&self, category: &str, size: Option<i64>, cursor: Option<&str>) -> (Vec<Book>, i64, Option<String>, Option<String>)`
+//!   - `async fn get_categories(&self) -> Result<Value, String>`
+//!   - `async fn get_books_in_category_paged(&self, category: &str, size: Option<i64>, cursor: Option<&str>) -> Result<BookPage, String>`
 //!     (목록, 전체 수, 다음 커서, 오류. 설계 3.2의 통일 시그니처)
-//!   - `async fn update_book(&self, book_id: i64, new_category: &str, new_title: &str, new_author: &str, new_path: &Path, new_type: &str, force: bool) -> (Value, Option<String>)`
+//!   - `async fn update_book(&self, book_id: i64, new_category: &str, new_title: &str, new_author: &str, new_path: &Path, new_type: &str, force: bool) -> Result<Value, String>`
 //!   - `fn es_manager(&self) -> Arc<dyn EsManagerApi>`
 //! - `backend::es_manager::EsManagerApi::refresh(&self) -> Result<(), EsError>` (대역은 `common::es_fake::FakeEsManager`)
 //! - `sysdeps::FsOps::read_dir`: `Path.iterdir` 실패 주입은 `common::faulty_fs::FaultyFs`를 `AppDeps::with_fs`로 넣는다.

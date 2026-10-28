@@ -30,6 +30,14 @@ use sysdeps::{CommandError, CommandOutput, CommandRunner};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+/// 검증 결과를 Python 원본의 `(유효 여부, 사유)`로 펼친다.
+fn verdict(result: Result<(), String>) -> (bool, Option<String>) {
+    match result {
+        Ok(()) => (true, None),
+        Err(reason) => (false, Some(reason)),
+    }
+}
+
 /// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
 fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
     match result {
@@ -2053,7 +2061,7 @@ mod test_validate_preview_epub {
             &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", container.as_bytes()), ("content.opf", opf.as_bytes()), ("toc.ncx", b"<ncx/>"), ("ch1.xhtml", chapter(1).as_bytes())],
         );
 
-        let (valid, error) = BookManager::_validate_preview_epub(&epub);
+        let (valid, error) = verdict(BookManager::_validate_preview_epub(&epub));
 
         assert!(!valid);
         assert!(err_has(&error, "no valid spine chapters"));
@@ -2066,7 +2074,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("valid.epub");
         create_test_epub(&epub, 3, false, false);
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(valid);
         assert!(err.is_none());
     }
@@ -2086,7 +2094,7 @@ mod test_validate_preview_epub {
             ],
         );
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "mimetype"));
     }
@@ -2107,7 +2115,7 @@ mod test_validate_preview_epub {
             ],
         );
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "invalid mimetype"));
     }
@@ -2119,7 +2127,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("no_opf.epub");
         write_zip_stored(&epub, &[("mimetype", b"application/epub+zip"), ("OEBPS/ch1.xhtml", chapter(1).as_bytes())]);
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "OPF"));
     }
@@ -2131,7 +2139,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("empty_spine.epub");
         create_corrupted_epub(&epub, 2, true);
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "no valid spine chapters"));
     }
@@ -2154,7 +2162,7 @@ mod test_validate_preview_epub {
             ],
         );
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(valid, "Expected valid, got: {err:?}");
 
         // 수정된 EPUB에서 toc 속성이 제거되었는지 확인
@@ -2169,7 +2177,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("bad_idref.epub");
         create_epub_with_invalid_spine(&epub);
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(valid, "Expected valid, got: {err:?}");
 
         // 수정된 EPUB에서 coverpage idref가 제거되었는지 확인
@@ -2187,7 +2195,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("missing_ch1.epub");
         create_corrupted_epub(&epub, 3, false);
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(valid, "Expected valid, got: {err:?}");
 
         // ch1이 spine에서 제거되었는지 확인
@@ -2204,7 +2212,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("corrupted.epub");
         fs::write(&epub, b"this is not a zip file").unwrap();
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "corrupted ZIP"));
     }
@@ -2216,7 +2224,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("no_spine.epub");
         create_epub_without_spine(&epub);
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "spine"));
     }
@@ -2244,7 +2252,7 @@ mod test_validate_preview_epub {
             &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML.as_bytes()), ("OEBPS/content.opf", opf_content.as_bytes()), ("OEBPS/ch1.xhtml", chapter(1).as_bytes())],
         );
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(valid, "Expected valid, got: {err:?}");
 
         let (toc, _) = spine_of(&epub, "OEBPS/content.opf");
@@ -2259,7 +2267,7 @@ mod test_validate_preview_epub {
         create_test_epub(&epub, 2, false, false);
         let mtime_before = fs::metadata(&epub).unwrap().modified().unwrap();
 
-        let (valid, _err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, _err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(valid);
         let mtime_after = fs::metadata(&epub).unwrap().modified().unwrap();
         assert_eq!(mtime_before, mtime_after, "clean EPUB should not be rewritten");

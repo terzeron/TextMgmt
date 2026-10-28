@@ -17,17 +17,17 @@
 //!   `_fill_second_with_bookstore(Vec<Value>, &[(String, i64)]) -> Vec<Value>`,
 //!   `_build_candidates(Option<..>, &str, Option<..>, &[(String, i64)]) -> Vec<Value>`,
 //!   `_normalize_stored_file_path(&str) -> String`
-//! - `async manager.propose_category_changes(&str, ProposeOpts) -> (Value, Option<String>)`
-//! - `async manager.apply_category_changes(&[Value], &HashSet<String>, ApplyOpts) -> (Value, Option<String>)`
-//! - `async manager._move_classified_file(&Path, &str, &str, MoveOpts) -> (Option<Value>, Option<String>)`
+//! - `async manager.propose_category_changes(&str, ProposeOpts) -> Result<Value, String>`
+//! - `async manager.apply_category_changes(&[Value], &HashSet<String>, ApplyOpts) -> Result<Value, String>`
+//! - `async manager._move_classified_file(&Path, &str, &str, MoveOpts) -> Result<Value, String>`
 //! - `manager._iter_category_indexable_files(&str) -> Vec<PathBuf>`, `BookManager::_is_duplicate_content(&Path, &Path) -> bool`,
 //!   `BookManager::_next_numbered_path(&Path) -> Option<PathBuf>`
-//! - `manager.get_category_mismatches(force_refresh: bool) -> Value`, `async manager._reload_root_files() -> (Value, Option<String>)`
+//! - `manager.get_category_mismatches(force_refresh: bool) -> Value`, `async manager._reload_root_files() -> Result<Value, String>`
 //! - `BookManager::_find_epub_cover_member(&mut ZipArchive<File>) -> Option<String>`, `_is_mostly_blank_cover(&DynamicImage) -> bool`,
 //!   `_extract_cover_thumbnail(&Path, &str, Option<u32>) -> Option<Vec<u8>>`, `BookManager::COVER_ASPECT_RATIO: f64`
 //! - `async manager.get_cover(i64, None) -> BookResponse`, `async BookManagerApi::get_book_preview(&manager, i64, Some(chapters), None) -> BookResponse`
 //!   (`BookResponse { status_code: u16, body: Vec<u8> }`. 구 `PreviewResponse { status_code, path }`의 파일 내용은 `body`에 담긴다고 가정한다)
-//! - `async manager.get_cover_books_paged(CoverPageOpts) -> (Vec<(Book, String)>, usize, Option<String>, Option<String>)`
+//! - `async manager.get_cover_books_paged(CoverPageOpts) -> Result<CoverPage, String>`
 //! - `backend::book_manager::{encode_category_cursor(&Value) -> String, MAX_CATEGORY_PAGE_SIZE: usize}`
 //!
 //! TODO(common): 로컬 정의 `FnFileReader`(FileReader 대역), `CoverEs`(`FakeEsManager`에 커버 목록 메서드가 없다), `StubService`(`BookClassifierApi` 대역).

@@ -12,10 +12,10 @@
 //! - `backend::epub_cover::read_package(&mut zip::ZipArchive<std::fs::File>) -> Result<Package, CoverError>` (Python `_read_package`)
 //! - `backend::epub_cover::edit_page_images(html: &[u8], image_count: usize, edits: &[(usize, &str, Option<Value>)]) -> Result<Vec<u8>, CoverError>` (Python `_edit_page_images`)
 //!   (두 함수의 밑줄 접두사는 뗀다. 테스트에서 쓰려면 `pub`이어야 한다)
-//! - `BookManager::edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>)`
+//! - `BookManager::edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String>`
 //! - `BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>)`: 인자 순서는 (path, es) (docs/rust-test-seams.md 3.12)
 //!   - `.with_book_lookup(Arc<dyn BookLookup>)` (`get_book` 대역. 구 `.with_book(path, type)`), `.with_image_fetcher(Arc<dyn ImageFetcher>)` (`backend.cover_management.fetch_url_image` 대체. 구 `with_fetch_url_image`)
-//!   - `backend::book_manager::{BookLookup, BookRef}`: `#[async_trait] trait BookLookup { async fn get_book(&self, book_id: i64) -> (Option<BookRef>, Option<String>) }`, `BookRef { book_id, file_path, file_type }`
+//!   - `backend::book_manager::{BookLookup, BookRef}`: `#[async_trait] trait BookLookup { async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> }`, `BookRef { book_id, file_path, file_type }`
 //!   - `backend::direct_cover_url::{ImageFetcher, FetchError}`: `trait ImageFetcher: Send + Sync { fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError> }`
 //! - `backend::main::{app_with, AppDeps, AuthMode}`: `app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(Arc<dyn BookManagerApi>))`. 구 `app_with_overrides`. `app() -> Router`도 그대로 쓴다
 //!
