@@ -309,6 +309,23 @@ fn apply_renames_restores_sources_when_a_later_step_fails() {
     assert!(!root.join("x").exists());
 }
 
+#[test]
+fn apply_renames_rollback_does_not_move_a_directory_that_blocked_the_target() {
+    // 2단계에서 대상이 이미 있으면, 그 대상은 이번에 옮긴 것이 아니다. 롤백이 그것을 원본 이름으로 옮기면 안 된다.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    for n in ["a", "b"] {
+        fs::create_dir(root.join(n)).unwrap();
+        fs::write(root.join(n).join("f"), n).unwrap();
+    }
+    let rename = |s: &str| Proposal { source: root.join(s), target: Some(root.join("x")), confidence: 1.0, sample_count: 2, status: "RENAME".into(), evidence: String::new() };
+    assert!(apply_renames(&[rename("a"), rename("b")]).unwrap_err().contains("File exists"));
+    assert_eq!(fs::read_to_string(root.join("a/f")).unwrap(), "a");
+    assert_eq!(fs::read_to_string(root.join("b/f")).unwrap(), "b");
+    assert!(!root.join("x").exists());
+    assert!(fs::read_dir(root).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with(".normalize-")));
+}
+
 fn args(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| s.to_string()).collect()
 }

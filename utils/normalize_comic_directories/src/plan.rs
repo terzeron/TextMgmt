@@ -255,6 +255,9 @@ pub fn apply_renames(proposals: &[Proposal]) -> Result<usize, String> {
 
     // (원래 이름, 임시 이름, 목표 이름)
     let mut staged: Vec<(PathBuf, PathBuf, PathBuf)> = Vec::new();
+    // 목표 이름으로 옮기기를 끝낸 건수. 롤백은 이 수로 현재 위치를 가른다.
+    // `target.exists()`로 가르면 다른 곳에서 생긴 대상 디렉토리를 원본 이름으로 옮긴다.
+    let mut moved = 0;
     let attempt = (|| -> Result<(), String> {
         for (source, target) in &renames {
             let temporary = temporary_name(source);
@@ -266,12 +269,13 @@ pub fn apply_renames(proposals: &[Proposal]) -> Result<usize, String> {
                 return Err(format!("File exists: {}", target.display()));
             }
             fs::rename(temporary, target).map_err(|e| format!("{}: {e}", target.display()))?;
+            moved += 1;
         }
         Ok(())
     })();
     if let Err(e) = attempt {
-        for (source, temporary, target) in staged.iter().rev() {
-            let current = if target.exists() { target } else { temporary };
+        for (index, (source, temporary, target)) in staged.iter().enumerate().rev() {
+            let current = if index < moved { target } else { temporary };
             if current.exists() && !source.exists() {
                 let _ = fs::rename(current, source);
             }
