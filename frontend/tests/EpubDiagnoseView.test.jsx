@@ -424,7 +424,7 @@ describe("EpubDiagnoseView", () => {
     });
 
     it("백엔드 에러 시 에러 메시지를 표시한다", async () => {
-      setupMocks({ backendError: "epubcheck is not installed" });
+      setupMocks({ backendError: "epubveri is not installed" });
       render(<EpubDiagnoseView bookId={1} fileType="epub" />);
 
       await act(async () => {
@@ -432,7 +432,7 @@ describe("EpubDiagnoseView", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText("epubcheck is not installed")).toBeTruthy();
+        expect(screen.getByText("epubveri is not installed")).toBeTruthy();
       });
     });
 
@@ -790,7 +790,7 @@ describe("EpubDiagnoseView", () => {
       });
     });
 
-    it("EPUB에서는 Backend 진단(epubcheck) 헤더가 표시된다", async () => {
+    it("EPUB에서는 Backend 진단(epubveri) 헤더가 표시된다", async () => {
       setupMocks();
       render(<EpubDiagnoseView bookId={1} fileType="epub" />);
 
@@ -799,7 +799,7 @@ describe("EpubDiagnoseView", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText(/Backend 진단 \(epubcheck\)/)).toBeTruthy();
+        expect(screen.getByText(/Backend 진단 \(epubveri\)/)).toBeTruthy();
       });
     });
 

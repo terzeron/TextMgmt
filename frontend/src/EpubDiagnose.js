@@ -381,7 +381,7 @@ export async function diagnoseEpub(arrayBuffer) {
     let errors = 0;
     let warnings = 0;
 
-    // fatal과 errors는 겹치지 않게 분리 집계 (백엔드 epubcheck summary와 동일 패턴)
+    // fatal과 errors는 겹치지 않게 분리 집계 (백엔드 validation summary와 동일 패턴)
     const countResults = (results) => {
         for (const r of results) {
             if (r.severity === "FATAL") fatal++;

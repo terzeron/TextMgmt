@@ -13,19 +13,10 @@ COPY libs /app/libs
 COPY utils /app/utils
 RUN cargo build --locked --release -p backend -p loader
 
-FROM debian:bookworm-slim AS epubcheck
-ARG EPUBCHECK_VERSION=5.3.0
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl unzip && \
-    curl -fsSL "https://github.com/w3c/epubcheck/releases/download/v${EPUBCHECK_VERSION}/epubcheck-${EPUBCHECK_VERSION}.zip" -o /tmp/epubcheck.zip && \
-    unzip -q /tmp/epubcheck.zip -d /opt && \
-    rm -rf /tmp/epubcheck.zip /var/lib/apt/lists/*
-
 # Runtime includes only the Rust server, its loader subprocess, Poppler, and the
-# external tools still required for office conversion and EPUB validation.
+# external tools still required for office conversion.
 FROM debian:bookworm-slim
 ARG APT_REFRESH=0
-ARG EPUBCHECK_VERSION=5.3.0
 ARG USER_ID=1000
 ARG USER_NAME=terzeron
 
@@ -33,7 +24,6 @@ RUN : "apt refresh ${APT_REFRESH}" && \
     apt-get update && apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
         libreoffice-writer-nogui \
-        default-jre-headless \
         poppler-utils \
         ca-certificates \
         libssl3 && \
@@ -45,11 +35,7 @@ RUN useradd --uid "$USER_ID" --create-home "$USER_NAME" && \
 
 COPY --from=builder /app/target/release/backend /usr/local/bin/backend
 COPY --from=builder /app/target/release/loader /usr/local/bin/loader
-
-COPY --from=epubcheck /opt/epubcheck-${EPUBCHECK_VERSION} /opt/epubcheck-${EPUBCHECK_VERSION}
-RUN \
-    printf '#!/bin/sh\nexec java -jar /opt/epubcheck-%s/epubcheck.jar "$@"\n' "$EPUBCHECK_VERSION" > /usr/local/bin/epubcheck && \
-    chmod +x /usr/local/bin/epubcheck
+COPY --from=builder /app/target/release/epubveri /usr/local/bin/epubveri
 
 ARG TM_BACKEND_DEFAULT_PORT=8020
 ENV TM_BACKEND_PORT=$TM_BACKEND_DEFAULT_PORT

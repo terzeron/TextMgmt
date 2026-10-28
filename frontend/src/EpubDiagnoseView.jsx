@@ -20,7 +20,7 @@ const SEVERITY_BADGE = {
 
 const SEVERITY_TEXT_DARK = new Set(['ERROR', 'WARNING', 'USAGE', 'INFO']);
 
-// epubcheck 심각도 순서 (높은 순)
+// epubveri 심각도 순서 (높은 순)
 const SEVERITY_ORDER = ['FATAL', 'ERROR', 'WARNING', 'USAGE', 'INFO'];
 
 const SEVERITY_DESC = {
@@ -82,7 +82,7 @@ export default function EpubDiagnoseView({bookId, fileType, apiPrefix = ''}) {
     const [hasRun, setHasRun] = useState(false);
     const abortRef = useRef(null);
 
-    // Backend validation (epubcheck)
+    // Backend validation (epubveri)
     const [backendData, setBackendData] = useState(null);
     const [backendError, setBackendError] = useState(null);
     const [backendLoading, setBackendLoading] = useState(false);
@@ -192,7 +192,7 @@ export default function EpubDiagnoseView({bookId, fileType, apiPrefix = ''}) {
 
                     {/* Backend 진단 */}
                     <div className="mb-3">
-                        <strong>Backend 진단 ({isEpub ? 'epubcheck' : 'pikepdf'})</strong>
+                        <strong>Backend 진단 ({isEpub ? 'epubveri' : 'pikepdf'})</strong>
                         {backendLoading && <Spinner animation="border" size="sm" className="ms-2"/>}
 
                         {backendError && (

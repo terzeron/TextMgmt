@@ -2783,7 +2783,7 @@ mod test_validate_epub_unit {
         let (result, error) = validate_with(&bm, spawner).await;
 
         assert!(result.is_none());
-        assert!(err_has(&error, "Failed to parse epubcheck output"));
+        assert!(err_has(&error, "Failed to parse epubveri output"));
     }
 
     /// epubcheck가 빈 파일을 남김 → parse error.
@@ -2797,7 +2797,7 @@ mod test_validate_epub_unit {
         let (result, error) = validate_with(&bm, spawner).await;
 
         assert!(result.is_none());
-        assert!(err_has(&error, "Failed to parse epubcheck output"));
+        assert!(err_has(&error, "Failed to parse epubveri output"));
     }
 
     /// 성공 시 임시 JSON 파일이 삭제되는지 검증.

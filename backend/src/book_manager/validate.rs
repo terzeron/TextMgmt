@@ -1,4 +1,4 @@
-//! EPUB·PDF 검증. Python `validate_epub`(epubcheck), `validate_pdf`(pikepdf)에 대응한다.
+//! EPUB·PDF 검증. Rust `epubveri`와 Poppler 기반 PDF 검증을 제공한다.
 
 use std::io;
 use std::time::Duration;
@@ -9,11 +9,11 @@ use sysdeps::CommandError;
 use super::BookManager;
 use super::util::unique_token;
 
-/// epubcheck 실행 시간 상한.
-const EPUBCHECK_TIMEOUT: Duration = Duration::from_secs(60);
+/// epubveri 실행 시간 상한.
+const EPUBVERI_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl BookManager {
-    /// epubcheck를 실행해 EPUB 파일의 구조적 유효성을 검증한다.
+    /// Rust epubveri로 EPUB 파일의 구조적 유효성을 검증한다.
     pub async fn validate_epub(&self, book_id: i64) -> (Option<Value>, Option<String>) {
         log::debug!("# validate_epub(book_id={book_id})");
         let (book, _) = self.get_book(book_id).await;
@@ -26,11 +26,11 @@ impl BookManager {
         }
 
         // 임시 파일에 JSON 출력(stdout에 상태 메시지가 섞이는 문제 방지)
-        let json_path = std::env::temp_dir().join(format!("epubcheck-{}.json", unique_token()));
+        let json_path = std::env::temp_dir().join(format!("epubveri-{}.json", unique_token()));
         if let Err(e) = std::fs::File::create(&json_path) {
             return (None, Some(format!("Failed to create temp file: {e}")));
         }
-        let outcome = self.run_epubcheck(&book.file_path, &json_path);
+        let outcome = self.run_epubveri(&book.file_path, &json_path);
         // 임시 파일 정리. 실패는 무시한다.
         if let Err(e) = self.fs.remove_file(&json_path) {
             log::debug!("validate_epub: temp file cleanup failed: {e}");
@@ -40,7 +40,7 @@ impl BookManager {
             Err(message) => return (None, Some(message)),
         };
 
-        // epubcheck JSON의 메시지 ID 키는 대문자 "ID"다.
+        // 기존 API 형식 호환을 위해 메시지 ID 키 "ID"를 읽는다.
         let mut messages: Vec<Value> = Vec::new();
         for msg in data.get("messages").and_then(Value::as_array).into_iter().flatten() {
             let loc = msg.get("locations").and_then(Value::as_array).and_then(|l| l.first()).filter(|l| l.as_object().is_none_or(|o| !o.is_empty()));
@@ -71,14 +71,14 @@ impl BookManager {
         (Some(result), None)
     }
 
-    /// epubcheck를 돌리고 JSON 출력과 종료 코드를 돌려준다. 실패하면 오류 문구다.
-    fn run_epubcheck(&self, epub: &std::path::Path, json_path: &std::path::Path) -> Result<(Value, i32), String> {
-        let argv = vec!["epubcheck".to_string(), epub.to_string_lossy().into_owned(), "--json".to_string(), json_path.to_string_lossy().into_owned()];
-        let output = match self.runner.run(&argv, Some(EPUBCHECK_TIMEOUT)) {
+    /// epubveri subprocess를 시간 제한으로 실행해 JSON 출력과 종료 코드를 돌려준다.
+    fn run_epubveri(&self, epub: &std::path::Path, json_path: &std::path::Path) -> Result<(Value, i32), String> {
+        let argv = vec!["epubveri".to_string(), epub.to_string_lossy().into_owned(), "--json".to_string(), json_path.to_string_lossy().into_owned()];
+        let output = match self.runner.run(&argv, Some(EPUBVERI_TIMEOUT)) {
             Ok(output) => output,
-            Err(CommandError::NotFound) => return Err("epubcheck is not installed".to_string()),
-            Err(CommandError::Timeout) => return Err("epubcheck timed out (60s)".to_string()),
-            Err(CommandError::Failed(message)) => return Err(format!("epubcheck failed: {message}")),
+            Err(CommandError::NotFound) => return Err("epubveri is not installed".to_string()),
+            Err(CommandError::Timeout) => return Err("epubveri timed out (60s)".to_string()),
+            Err(CommandError::Failed(message)) => return Err(format!("epubveri failed: {message}")),
         };
         let parse = || -> Result<Value, String> {
             let bytes = std::fs::read(json_path).map_err(|e: io::Error| e.to_string())?;
@@ -86,7 +86,7 @@ impl BookManager {
         };
         match parse() {
             Ok(data) => Ok((data, output.returncode)),
-            Err(e) => Err(format!("Failed to parse epubcheck output (exit_code={}): {e}", output.returncode)),
+            Err(e) => Err(format!("Failed to parse epubveri output (exit_code={}): {e}", output.returncode)),
         }
     }
 
