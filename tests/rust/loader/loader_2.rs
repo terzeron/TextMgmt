@@ -1450,6 +1450,40 @@ fn test_main_recursive_reload_deletes_orphans() {
     assert!(!inserted.contains_key(&999999));
 }
 
+#[test]
+fn test_main_recursive_reload_skips_orphan_delete_when_directory_unreadable() {
+    // 읽지 못한 디렉토리의 책은 seen에 없다. orphan으로 지우면 실존 책 레코드가 사라진다.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmp();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    fs::write(dir.path().join("sub").join("a.txt"), "hello world\n").unwrap();
+    let locked = dir.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("b.txt"), "hidden\n").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&locked).is_ok() {
+        // root로 돌면 권한으로 막을 수 없다.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let mut env = setup_loader_env(dir.path());
+    env.insert("TM_ES_BOOK_INDEX".to_owned(), "book_idx".to_owned());
+    env.insert("TM_ES_COMICS_INDEX".to_owned(), "comics_idx".to_owned());
+
+    let store = FakeStore::new();
+    store.update(|s| {
+        s.orphan_ids.insert(999999);
+    });
+    let (rc, out) = run_main(&["--recursive", "--reload", "book", &path_str(dir.path())], &env, &store);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(rc, 0);
+    assert!(!store.inserted_docs().is_empty(), "읽을 수 있는 파일은 적재되어야 한다");
+    assert_eq!(store.state.lock().unwrap().deleted_ids, None, "읽지 못한 디렉토리가 있으면 orphan을 지우지 않는다");
+    assert!(out.contains("orphan 삭제 건너뜀"), "{out}");
+    assert!(out.contains("locked"), "{out}");
+}
+
 mod test_report_problems {
     use super::*;
 

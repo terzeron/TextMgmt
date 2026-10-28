@@ -243,9 +243,21 @@ impl Loader<'_> {
 
 /// 디렉토리 밑의 파일들. 숨김 디렉토리와 파이프라인 중간 산출물 디렉토리는 뺀다(`rglob`처럼 심볼릭 링크 디렉토리는 따라가지 않는다).
 pub fn recursive_files(root: &Path) -> Vec<PathBuf> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
-        let mut entries: Vec<_> = entries.flatten().collect();
+    recursive_files_with_unreadable(root).0
+}
+
+/// `recursive_files`와 같고, 끝까지 읽지 못한 디렉토리 목록을 함께 돌려준다.
+/// 목록이 비어 있지 않으면 파일 목록이 불완전하다. orphan 판정에 쓰면 안 된다.
+pub fn recursive_files_with_unreadable(root: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>, unreadable: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            unreadable.push(dir.to_path_buf());
+            return;
+        };
+        let Ok(mut entries) = entries.collect::<std::io::Result<Vec<_>>>() else {
+            unreadable.push(dir.to_path_buf());
+            return;
+        };
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
             let path = entry.path();
@@ -253,17 +265,18 @@ pub fn recursive_files(root: &Path) -> Vec<PathBuf> {
             if is_ignored_segment(&name) {
                 continue;
             }
-            let Ok(kind) = entry.file_type() else { continue };
-            if kind.is_dir() {
-                walk(&path, out);
-            } else if path.is_file() {
-                out.push(path);
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => walk(&path, out, unreadable),
+                Ok(_) if path.is_file() => out.push(path),
+                Ok(_) => {}
+                Err(_) => unreadable.push(path),
             }
         }
     }
     let mut out = Vec::new();
-    walk(root, &mut out);
-    out
+    let mut unreadable = Vec::new();
+    walk(root, &mut out, &mut unreadable);
+    (out, unreadable)
 }
 
 /// 직접 속한 일반 파일들(숨김 제외).
