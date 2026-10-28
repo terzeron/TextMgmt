@@ -46,15 +46,15 @@ impl BookManagerApi for ComicsManager {
     async fn preview_delete_category(&self, category: &str) -> (Value, Option<String>) {
         BookManagerApi::preview_delete_category(&self.inner, category).await
     }
-    async fn preview_insert_image(&self, url: &str) -> (Option<Vec<u8>>, Option<String>) {
+    async fn preview_insert_image(&self, url: &str) -> Result<Vec<u8>, String> {
         BookManagerApi::preview_insert_image(&self.inner, url).await
     }
 
-    async fn preview_insert_upload(&self, data: &[u8]) -> (Option<Vec<u8>>, Option<String>) {
+    async fn preview_insert_upload(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         BookManagerApi::preview_insert_upload(&self.inner, data).await
     }
 
-    async fn delete_pdf_pages(&self, id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> (Option<Value>, Option<String>) {
+    async fn delete_pdf_pages(&self, id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String> {
         BookManagerApi::delete_pdf_pages(&self.inner, id, pages, crops, splits, inserts, order).await
     }
 
@@ -102,11 +102,11 @@ impl BookManagerApi for ComicsManager {
         BookManagerApi::get_cover(&self.inner, book_id, width).await
     }
 
-    async fn validate_epub(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+    async fn validate_epub(&self, book_id: i64) -> Result<Value, String> {
         BookManagerApi::validate_epub(&self.inner, book_id).await
     }
 
-    async fn validate_pdf(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+    async fn validate_pdf(&self, book_id: i64) -> Result<Value, String> {
         BookManagerApi::validate_pdf(&self.inner, book_id).await
     }
 

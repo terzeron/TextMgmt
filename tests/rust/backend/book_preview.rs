@@ -30,6 +30,14 @@ use sysdeps::{CommandError, CommandOutput, CommandRunner};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+    match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    }
+}
+
 const CATEGORY: &str = "_epub";
 const OPF_NS: &str = "http://www.idpf.org/2007/opf";
 const CNT_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
@@ -2769,7 +2777,7 @@ mod test_validate_epub_unit {
 
     /// `configure`로 Deps를 더 꽂은 manager로 `validate_epub(1)`을 부른다.
     async fn validate_configured(bm: &UnitSetup, configure: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> (Option<Value>, Option<String>) {
-        bm.manager(configure).validate_epub(1).await
+        split(bm.manager(configure).validate_epub(1).await)
     }
 
     /// epubcheck가 유효하지 않은 JSON을 출력 → parse error.
@@ -2962,7 +2970,7 @@ fn make_mock_pdf_book(tmp_path: &Path, file_type: &str) -> BookRef {
 
 /// pikepdf 대역을 끼운 manager로 `validate_pdf(1)`을 부른다.
 async fn validate_pdf_with(bm: &UnitSetup, opened: Result<MockPdf, String>) -> (Option<Value>, Option<String>) {
-    bm.manager(|d| d.with_pdf_opener(Arc::new(FakeOpener(Mutex::new(Some(opened)))))).validate_pdf(1).await
+    split(bm.manager(|d| d.with_pdf_opener(Arc::new(FakeOpener(Mutex::new(Some(opened)))))).validate_pdf(1).await)
 }
 
 /// `validate_pdf` 메서드의 단위 테스트 (pikepdf mock).
@@ -3047,7 +3055,7 @@ mod test_validate_pdf_unit {
         let book = make_mock_pdf_book(tmp.path(), "epub");
         let bm = unit_manager(tmp.path(), Some(book), None);
 
-        let (result, error) = bm.manager(|d| d).validate_pdf(1).await;
+        let (result, error) = split(bm.manager(|d| d).validate_pdf(1).await);
 
         assert!(result.is_none());
         assert!(err_has(&error, "Not a PDF file"));
@@ -3061,7 +3069,7 @@ mod test_validate_pdf_unit {
         let book = BookRef { book_id: 1, file_type: "pdf".to_string(), file_path: missing_path };
         let bm = unit_manager(tmp.path(), Some(book), None);
 
-        let (result, error) = bm.manager(|d| d).validate_pdf(1).await;
+        let (result, error) = split(bm.manager(|d| d).validate_pdf(1).await);
 
         assert!(result.is_none());
         assert!(err_has(&error, "File not found"));
@@ -3073,7 +3081,7 @@ mod test_validate_pdf_unit {
         let tmp = tempfile::tempdir().unwrap();
         let bm = unit_manager(tmp.path(), None, Some("No book found"));
 
-        let (result, error) = bm.manager(|d| d).validate_pdf(1).await;
+        let (result, error) = split(bm.manager(|d| d).validate_pdf(1).await);
 
         assert!(result.is_none());
         assert!(err_has(&error, "Book not found"));
@@ -3133,9 +3141,7 @@ async fn validate_pdf_reports_reconstructed_cross_reference() {
     assert!(!issues.is_empty(), "xref recovery should be reported as a syntax warning");
     let book = BookRef { book_id: 1, file_type: "pdf".to_string(), file_path: path };
     let manager = unit_manager(tmp.path(), Some(book), None).manager(|deps| deps);
-    let (result, error) = manager.validate_pdf(1).await;
-    assert!(error.is_none());
-    let result = result.unwrap();
+    let result = manager.validate_pdf(1).await.unwrap();
     assert_eq!(result["valid"], false);
     assert!(result["summary"]["warning"].as_u64().unwrap() > 0);
     assert!(!result["messages"].as_array().unwrap().is_empty());

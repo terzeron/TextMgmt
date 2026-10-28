@@ -80,15 +80,15 @@ impl BookManagerApi for BookManager {
     async fn preview_delete_category(&self, category: &str) -> (Value, Option<String>) {
         BookManager::preview_delete_category(self, category).await
     }
-    async fn preview_insert_image(&self, url: &str) -> (Option<Vec<u8>>, Option<String>) {
+    async fn preview_insert_image(&self, url: &str) -> Result<Vec<u8>, String> {
         BookManager::preview_insert_image(self, url).await
     }
 
-    async fn preview_insert_upload(&self, data: &[u8]) -> (Option<Vec<u8>>, Option<String>) {
+    async fn preview_insert_upload(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         BookManager::preview_insert_upload(self, data).await
     }
 
-    async fn delete_pdf_pages(&self, id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> (Option<Value>, Option<String>) {
+    async fn delete_pdf_pages(&self, id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String> {
         BookManager::delete_pdf_pages(self, id, pages, crops, splits, inserts, order).await
     }
 
@@ -140,11 +140,11 @@ impl BookManagerApi for BookManager {
         BookManager::get_cover(self, book_id, width).await
     }
 
-    async fn validate_epub(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+    async fn validate_epub(&self, book_id: i64) -> Result<Value, String> {
         BookManager::validate_epub(self, book_id).await
     }
 
-    async fn validate_pdf(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+    async fn validate_pdf(&self, book_id: i64) -> Result<Value, String> {
         BookManager::validate_pdf(self, book_id).await
     }
 

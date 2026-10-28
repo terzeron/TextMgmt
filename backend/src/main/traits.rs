@@ -507,24 +507,16 @@ pub trait BookManagerApi: Send + Sync {
         BookResponse { status_code: 501, ..BookResponse::default() }
     }
 
-    async fn delete_pdf_pages(
-        &self,
-        _id: i64,
-        _pages: &[i64],
-        _crops: Option<&[Value]>,
-        _splits: Option<&[Value]>,
-        _inserts: Option<&[Value]>,
-        _order: Option<&[i64]>,
-    ) -> (Option<Value>, Option<String>) {
-        (None, unimplemented_error())
+    async fn delete_pdf_pages(&self, _id: i64, _pages: &[i64], _crops: Option<&[Value]>, _splits: Option<&[Value]>, _inserts: Option<&[Value]>, _order: Option<&[i64]>) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
-    async fn preview_insert_image(&self, _url: &str) -> (Option<Vec<u8>>, Option<String>) {
-        (None, unimplemented_error())
+    async fn preview_insert_image(&self, _url: &str) -> Result<Vec<u8>, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
-    async fn preview_insert_upload(&self, _data: &[u8]) -> (Option<Vec<u8>>, Option<String>) {
-        (None, unimplemented_error())
+    async fn preview_insert_upload(&self, _data: &[u8]) -> Result<Vec<u8>, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
     async fn get_html_resource(&self, _book_id: i64, _resource_path: &str) -> BookResponse {
@@ -535,12 +527,12 @@ pub trait BookManagerApi: Send + Sync {
         BookResponse { status_code: 501, ..BookResponse::default() }
     }
 
-    async fn validate_epub(&self, _book_id: i64) -> (Option<Value>, Option<String>) {
-        (None, unimplemented_error())
+    async fn validate_epub(&self, _book_id: i64) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
-    async fn validate_pdf(&self, _book_id: i64) -> (Option<Value>, Option<String>) {
-        (None, unimplemented_error())
+    async fn validate_pdf(&self, _book_id: i64) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
     async fn get_books_in_category(&self, _category: &str) -> Result<Vec<Book>, String> {
@@ -827,13 +819,13 @@ mod tests {
         assert_eq!(manager.get_book_preview(1, None, None).await.status_code, 501);
         assert_eq!(manager.get_book_preview_with_pages(1, Some(2), None, None).await.status_code, 501);
         assert_eq!(manager.get_pdf_pages(1, 0, 1).await.status_code, 501);
-        assert!(manager.delete_pdf_pages(1, &[], None, None, None, None).await.1.is_some());
-        assert!(manager.preview_insert_image("https://example.test/a.png").await.1.is_some());
-        assert!(manager.preview_insert_upload(&[]).await.1.is_some());
+        assert!(manager.delete_pdf_pages(1, &[], None, None, None, None).await.is_err());
+        assert!(manager.preview_insert_image("https://example.test/a.png").await.is_err());
+        assert!(manager.preview_insert_upload(&[]).await.is_err());
         assert_eq!(manager.get_html_resource(1, "a.html").await.status_code, 501);
         assert_eq!(manager.get_cover(1, None).await.status_code, 501);
-        assert!(manager.validate_epub(1).await.1.is_some());
-        assert!(manager.validate_pdf(1).await.1.is_some());
+        assert!(manager.validate_epub(1).await.is_err());
+        assert!(manager.validate_pdf(1).await.is_err());
         assert!(manager.get_books_in_category("fiction").await.is_err());
         assert!(manager.get_latest_books(10, None).await.is_err());
         assert!(manager.search_by_keyword_paged("query", 10, 0, None, None).await.is_err());

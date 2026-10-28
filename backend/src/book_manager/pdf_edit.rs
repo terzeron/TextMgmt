@@ -23,58 +23,47 @@ struct EditResult {
     inserted: usize,
 }
 
-async fn run_upload_preview<F>(data: Vec<u8>, max_image_pixels: usize, normalize: F) -> (Option<Vec<u8>>, Option<String>)
+async fn run_upload_preview<F>(data: Vec<u8>, max_image_pixels: usize, normalize: F) -> Result<Vec<u8>, String>
 where
     F: FnOnce(&[u8], usize) -> Result<Vec<u8>, String> + Send + 'static,
 {
     match tokio::task::spawn_blocking(move || normalize(&data, max_image_pixels)).await {
-        Ok(Ok(jpeg)) => (Some(jpeg), None),
-        Ok(Err(error)) => (None, Some(error)),
+        Ok(Ok(jpeg)) => Ok(jpeg),
+        Ok(Err(error)) => Err(error),
         Err(error) => {
             log::error!("preview_insert_upload: {error}");
-            (None, Some("이미지를 읽지 못했습니다".into()))
+            Err("이미지를 읽지 못했습니다".into())
         }
     }
 }
 
 impl BookManager {
-    pub async fn preview_insert_image(&self, url: &str) -> (Option<Vec<u8>>, Option<String>) {
+    pub async fn preview_insert_image(&self, url: &str) -> Result<Vec<u8>, String> {
         let url = url.trim().to_string();
         if url.is_empty() {
-            return (None, Some("이미지 URL이 비어 있습니다".into()));
+            return Err("이미지 URL이 비어 있습니다".into());
         }
         let (_, fetcher) = self.pdf_edit_settings();
         let max_image_pixels = self.image_pixel_limit();
         match tokio::task::spawn_blocking(move || images::download_image(fetcher.as_ref(), &url, max_image_pixels)).await {
-            Ok(Ok(jpeg)) => (Some(jpeg), None),
-            Ok(Err(error)) => (None, Some(error)),
+            Ok(Ok(jpeg)) => Ok(jpeg),
+            Ok(Err(error)) => Err(error),
             Err(error) => {
                 log::error!("preview_insert_image: {error}");
-                (None, Some("이미지를 가져오지 못했습니다".into()))
+                Err("이미지를 가져오지 못했습니다".into())
             }
         }
     }
 
-    pub async fn preview_insert_upload(&self, data: &[u8]) -> (Option<Vec<u8>>, Option<String>) {
+    pub async fn preview_insert_upload(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         let data = data.to_vec();
         let max_image_pixels = self.image_pixel_limit();
         run_upload_preview(data, max_image_pixels, images::normalize_upload_with_limit).await
     }
 
     /// Python `delete_pdf_pages`. 페이지 번호와 순서는 편집 전 문서를 기준으로 한다.
-    pub async fn delete_pdf_pages(
-        &self,
-        book_id: i64,
-        pages: &[i64],
-        crops: Option<&[Value]>,
-        splits: Option<&[Value]>,
-        inserts: Option<&[Value]>,
-        order: Option<&[i64]>,
-    ) -> (Option<Value>, Option<String>) {
-        match self.edit_pdf(book_id, pages, crops, splits, inserts, order).await {
-            Ok(value) => (Some(value), None),
-            Err(error) => (None, Some(error)),
-        }
+    pub async fn delete_pdf_pages(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String> {
+        self.edit_pdf(book_id, pages, crops, splits, inserts, order).await
     }
 
     async fn edit_pdf(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String> {
@@ -242,6 +231,6 @@ mod tests {
     #[tokio::test]
     async fn upload_preview_masks_worker_panics() {
         let result = run_upload_preview(Vec::new(), 1, |_, _| panic!("secret detail")).await;
-        assert_eq!(result, (None, Some("이미지를 읽지 못했습니다".into())));
+        assert_eq!(result, Err("이미지를 읽지 못했습니다".into()));
     }
 }

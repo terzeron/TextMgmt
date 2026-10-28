@@ -354,8 +354,9 @@ fn to_response(v: Value) -> BookResponse {
 }
 
 /// `(Option<Value>, Option<String>)` 쌍. `[결과, 오류]`
-fn pair(v: &Value) -> (Option<Value>, Option<String>) {
-    (opt_json(arr(v, 0)), opt_string(arr(v, 1)))
+/// `[값, 오류]`를 `Result`로 바꾼다. 오류가 있으면 값은 보지 않는다.
+fn value_result(v: &Value) -> Result<Value, String> {
+    opt_string(arr(v, 1)).map_or_else(|| Ok(arr(v, 0)), Err)
 }
 
 fn progress_callback<'a>(f: Option<&'a (dyn Fn(Value) + Send + Sync)>) -> Option<Callback<'a>> {
@@ -423,12 +424,12 @@ impl BookManagerApi for Mock {
         to_response(self.invoke("get_html_resource", call_args!([], {"book_id": book_id, "resource_path": resource_path})).await)
     }
 
-    async fn validate_epub(&self, book_id: i64) -> (Option<Value>, Option<String>) {
-        pair(&self.invoke("validate_epub", call_args!([book_id], {})).await)
+    async fn validate_epub(&self, book_id: i64) -> Result<Value, String> {
+        value_result(&self.invoke("validate_epub", call_args!([book_id], {})).await)
     }
 
-    async fn validate_pdf(&self, book_id: i64) -> (Option<Value>, Option<String>) {
-        pair(&self.invoke("validate_pdf", call_args!([book_id], {})).await)
+    async fn validate_pdf(&self, book_id: i64) -> Result<Value, String> {
+        value_result(&self.invoke("validate_pdf", call_args!([book_id], {})).await)
     }
 
     async fn get_books_in_category(&self, category: &str) -> Result<Vec<Book>, String> {

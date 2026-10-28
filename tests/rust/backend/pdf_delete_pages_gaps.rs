@@ -26,6 +26,14 @@ use common::pdf::{edit_pdf, first_image_size, first_xobject, first_xobject_mut, 
 use fx::{Edit, Env, Opts, image_env, pixel_env};
 use lopdf::{Dictionary, Document, Object, Stream, dictionary};
 
+/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+    match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    }
+}
+
 type EditFn = fn(&mut Document);
 
 #[tokio::test]
@@ -298,7 +306,7 @@ async fn test_crop_removes_stale_page_boxes() {
 async fn test_upload_preview_rejects_too_many_pixels() {
     let e = with_deps(image_env(Opts::plain()), false, |d| d.with_epub_hooks(EpubCoverHooks::default().with_limits(Limits { max_image_pixels: 100, ..Limits::default() })));
 
-    let (jpeg, error) = e.bm.preview_insert_upload(&png_solid(20, 20, [10, 120, 200])).await;
+    let (jpeg, error) = split(e.bm.preview_insert_upload(&png_solid(20, 20, [10, 120, 200])).await);
 
     assert!(jpeg.is_none() && error_text(&error).contains("해상도가 너무 큽니다"), "{error:?}");
 }

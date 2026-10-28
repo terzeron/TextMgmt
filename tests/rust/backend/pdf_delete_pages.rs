@@ -36,6 +36,14 @@ use common::raster::same_pixels;
 use fx::{Edit, FetchBehavior, Opts, image_env, pixel_env};
 use serde_json::{Value, json};
 
+/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+    match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    }
+}
+
 fn has_error(error: &Option<String>) -> bool {
     error.as_deref().is_some_and(|e| !e.is_empty())
 }
@@ -595,11 +603,9 @@ async fn test_unsafe_urls_are_rejected_by_the_real_fetcher() {
 async fn test_preview_returns_the_normalized_jpeg() {
     let e = image_env(Opts::fetch());
 
-    let (jpeg, error) = e.bm.preview_insert_image("  https://img.example.com/a.png  ").await;
+    let jpeg = e.bm.preview_insert_image("  https://img.example.com/a.png  ").await.unwrap();
 
-    assert_eq!(error, None);
     assert_eq!(*e.fetch.calls.lock().unwrap(), vec!["https://img.example.com/a.png".to_string()]);
-    let jpeg = jpeg.unwrap();
     assert_eq!(&jpeg[..3], b"\xff\xd8\xff"); // PNG 를 내려받아도 저장될 형식인 JPEG 로 돌려준다
     assert_eq!(image_size(&jpeg), (200, 300));
 }
@@ -608,7 +614,7 @@ async fn test_preview_returns_the_normalized_jpeg() {
 async fn test_preview_matches_what_the_save_inserts() {
     let e = image_env(Opts::loader_fetch());
 
-    let (preview, _) = e.bm.preview_insert_image("https://img.example.com/a.png").await;
+    let (preview, _) = split(e.bm.preview_insert_image("https://img.example.com/a.png").await);
     let (_, error) = e.run(&Edit { inserts: Some(vec![edits::insert(1)]), ..Edit::default() }).await;
 
     assert_eq!(error, None);
@@ -621,7 +627,7 @@ async fn test_preview_rejects_empty_and_unsafe_urls() {
     for url in ["", "   ", "ftp://example.com/a.png", "http://127.0.0.1/a.png", "http://[::1]/a.png"] {
         let e = image_env(Opts::plain());
 
-        let (jpeg, error) = e.bm.preview_insert_image(url).await;
+        let (jpeg, error) = split(e.bm.preview_insert_image(url).await);
 
         assert!(jpeg.is_none() && has_error(&error), "url={url:?}: {error:?}");
     }
@@ -638,7 +644,7 @@ async fn test_preview_reports_fetch_failures() {
         let e = image_env(Opts::fetch());
         e.fetch.set(FetchBehavior::Err(effect));
 
-        let (jpeg, error) = e.bm.preview_insert_image("https://img.example.com/a.png").await;
+        let (jpeg, error) = split(e.bm.preview_insert_image("https://img.example.com/a.png").await);
 
         assert!(jpeg.is_none() && error.as_deref() == Some(expected), "{expected}: {error:?}");
     }
@@ -649,7 +655,7 @@ async fn test_preview_rejects_non_image_download() {
     let e = image_env(Opts::fetch());
     e.fetch.set(FetchBehavior::Ok(b"<html>nope</html>".to_vec()));
 
-    let (jpeg, error) = e.bm.preview_insert_image("https://img.example.com/a.png").await;
+    let (jpeg, error) = split(e.bm.preview_insert_image("https://img.example.com/a.png").await);
 
     assert!(jpeg.is_none() && error_text(&error).contains("이미지"), "{error:?}");
 }
@@ -872,7 +878,7 @@ async fn test_uploaded_and_url_inserts_can_be_mixed() {
 async fn test_saved_upload_is_the_exact_preview_image() {
     let e = image_env(Opts::loader());
 
-    let (preview, error) = e.bm.preview_insert_upload(&png_halves(200, 300)).await;
+    let (preview, error) = split(e.bm.preview_insert_upload(&png_halves(200, 300)).await);
     assert_eq!(error, None);
     let preview = preview.unwrap();
     let (_, error) = e.run(&Edit { inserts: Some(vec![edits::upload(1, &preview)]), ..Edit::default() }).await;
@@ -888,7 +894,7 @@ async fn test_upload_preview_applies_exif_orientation() {
     for (orientation, expected) in cases {
         let e = image_env(Opts::plain());
 
-        let (jpeg, error) = e.bm.preview_insert_upload(&jpeg_with_orientation(orientation, 200, 100)).await;
+        let (jpeg, error) = split(e.bm.preview_insert_upload(&jpeg_with_orientation(orientation, 200, 100)).await);
 
         assert_eq!(error, None, "orientation={orientation}");
         assert_eq!(image_size(&jpeg.unwrap()), expected, "orientation={orientation}");
@@ -899,10 +905,9 @@ async fn test_upload_preview_applies_exif_orientation() {
 async fn test_upload_preview_shrinks_a_large_image() {
     let e = image_env(Opts::plain());
 
-    let (jpeg, error) = e.bm.preview_insert_upload(&png_halves(3000, 1500)).await;
+    let jpeg = e.bm.preview_insert_upload(&png_halves(3000, 1500)).await.unwrap();
 
-    assert_eq!(error, None);
-    assert_eq!(image_size(&jpeg.unwrap()), (2000, 1000));
+    assert_eq!(image_size(&jpeg), (2000, 1000));
 }
 
 #[tokio::test]
@@ -911,7 +916,7 @@ async fn test_upload_preview_rejects_empty_and_unreadable_data() {
     for data in cases {
         let e = image_env(Opts::plain());
 
-        let (jpeg, error) = e.bm.preview_insert_upload(data).await;
+        let (jpeg, error) = split(e.bm.preview_insert_upload(data).await);
 
         assert!(jpeg.is_none() && has_error(&error), "data={data:?}: {error:?}");
     }
@@ -921,7 +926,7 @@ async fn test_upload_preview_rejects_empty_and_unreadable_data() {
 async fn test_upload_preview_rejects_oversized_data() {
     let e = image_env(Opts::plain());
 
-    let (jpeg, error) = e.bm.preview_insert_upload(&vec![0u8; backend::epub_cover::MAX_IMAGE_BYTES + 1]).await;
+    let (jpeg, error) = split(e.bm.preview_insert_upload(&vec![0u8; backend::epub_cover::MAX_IMAGE_BYTES + 1]).await);
 
     assert!(jpeg.is_none() && error_text(&error).contains("큽니다"), "{error:?}");
 }

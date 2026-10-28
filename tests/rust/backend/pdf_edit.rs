@@ -11,6 +11,14 @@ use common::{
 use serde_json::{Value, json};
 use std::{fs, path::PathBuf, sync::Arc};
 
+/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+    match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    }
+}
+
 struct Env {
     bm: BookManager,
     es: Arc<FakeEsManager>,
@@ -34,7 +42,7 @@ fn env() -> Env {
 
 impl Env {
     async fn edit(&self, pages: &[i64], order: Option<&[i64]>) -> (Option<Value>, Option<String>) {
-        self.bm.delete_pdf_pages(1, pages, None, None, None, order).await
+        split(self.bm.delete_pdf_pages(1, pages, None, None, None, order).await)
     }
     fn backup(&self) -> PathBuf {
         self.root.path().join("0_trash/book.pdf")
@@ -188,9 +196,8 @@ async fn crop_removes_pixels_and_resizes_only_selected_page() {
     let img = image::RgbImage::from_fn(100, 60, |x, y| image::Rgb([x as u8, y as u8, 0]));
     common::pdf::write_image_pdf(&e.pdf, &[img.clone(), img]);
     let crops = [json!({"page":1,"x0":0.2,"y0":0.1,"x1":0.8,"y1":0.9})];
-    let (result, error) = e.bm.delete_pdf_pages(1, &[], Some(&crops), None, None, None).await;
-    assert_eq!(error, None);
-    assert_eq!(result.unwrap()["cropped_pages"], 1);
+    let result = e.bm.delete_pdf_pages(1, &[], Some(&crops), None, None, None).await.unwrap();
+    assert_eq!(result["cropped_pages"], 1);
     assert_eq!(common::pdf::mediabox_size(&e.pdf, 1), (60.0, 48.0));
     assert_eq!(common::pdf::mediabox_size(&e.pdf, 2), (100.0, 60.0));
     let doc = common::pdf::load(&e.pdf);
@@ -208,9 +215,8 @@ async fn split_keeps_both_halves_together_when_reordered() {
     let img = image::RgbImage::from_fn(100, 60, |x, y| image::Rgb([x as u8, y as u8, 0]));
     common::pdf::write_image_pdf(&e.pdf, &[img.clone(), img]);
     let splits = [json!({"page":1,"first":{"x0":0.0,"y0":0.0,"x1":0.4,"y1":1.0},"second":{"x0":0.4,"y0":0.0,"x1":1.0,"y1":1.0}})];
-    let (result, error) = e.bm.delete_pdf_pages(1, &[], None, Some(&splits), None, Some(&[2, 1])).await;
-    assert_eq!(error, None);
-    assert_eq!(result.unwrap()["split_pages"], 1);
+    let result = e.bm.delete_pdf_pages(1, &[], None, Some(&splits), None, Some(&[2, 1])).await.unwrap();
+    assert_eq!(result["split_pages"], 1);
     assert_eq!(widths(&e.pdf), [100, 40, 60]);
     let doc = common::pdf::load(&e.pdf);
     assert_eq!(&common::pdf::first_xobject(&doc, 3).get_plain_content().unwrap()[..3], &[40, 0, 0]);
@@ -221,9 +227,7 @@ async fn inserted_page_survives_removal_of_its_reference_page() {
     let e = env();
     let image = common::image::png_solid(80, 160, [10, 20, 30]);
     let inserts = [json!({"page":2,"image_data":base64::engine::general_purpose::STANDARD.encode(image)})];
-    let (result, error) = e.bm.delete_pdf_pages(1, &[2], None, None, Some(&inserts), Some(&[2, 1])).await;
-    assert_eq!(error, None);
-    let result = result.unwrap();
+    let result = e.bm.delete_pdf_pages(1, &[2], None, None, Some(&inserts), Some(&[2, 1])).await.unwrap();
     assert_eq!(result["remaining_pages"], 5);
     assert_eq!(result["inserted_pages"], 1);
     assert_eq!(widths(&e.pdf), [101, 100, 102, 103, 104]);
@@ -239,7 +243,7 @@ async fn unsupported_crop_and_bad_image_preserve_original_before_backup() {
     ] {
         let e = env();
         let original = fs::read(&e.pdf).unwrap();
-        let (result, error) = e.bm.delete_pdf_pages(1, &[], crops.as_deref(), None, inserts.as_deref(), None).await;
+        let (result, error) = split(e.bm.delete_pdf_pages(1, &[], crops.as_deref(), None, inserts.as_deref(), None).await);
         assert_eq!(result, None);
         assert!(error.as_deref().unwrap_or("").contains(expected), "{error:?}");
         assert_eq!(fs::read(&e.pdf).unwrap(), original);
@@ -317,7 +321,7 @@ async fn crop_preserves_lossless_pixels_and_one_bit_row_padding() {
         let e = env();
         common::pdf::make_pixel_pdf(&e.pdf, &[kind]);
         let crops = [json!({"page":1,"x0":0.25,"y0":0.0,"x1":0.75,"y1":1.0})];
-        let (_, error) = e.bm.delete_pdf_pages(1, &[], Some(&crops), None, None, None).await;
+        let (_, error) = split(e.bm.delete_pdf_pages(1, &[], Some(&crops), None, None, None).await);
         assert_eq!(error, None, "{kind}");
         let (actual, info) = common::pdf::pixel_image(&e.pdf, 1);
         let expected = common::pdf::flate_source(kind).crop(25, 0, 75, 60);
@@ -336,8 +340,7 @@ async fn crop_keeps_matching_icc_profile() {
         common::pdf::first_xobject_mut(pdf, 1).dict.set("ColorSpace", vec![lopdf::Object::Name(b"ICCBased".to_vec()), icc.into()]);
     });
     let crops = [json!({"page":1,"x0":0.5,"y0":0.0,"x1":1.0,"y1":1.0})];
-    let (_, error) = e.bm.delete_pdf_pages(1, &[], Some(&crops), None, None, None).await;
-    assert_eq!(error, None);
+    e.bm.delete_pdf_pages(1, &[], Some(&crops), None, None, None).await.unwrap();
     let pdf = common::pdf::load(&e.pdf);
     let image = common::pdf::first_xobject(&pdf, 1);
     let space = image.dict.get(b"ColorSpace").unwrap().as_array().unwrap();
@@ -351,14 +354,12 @@ async fn upload_preview_applies_exif_and_reuses_already_normalized_jpeg() {
     let e = env();
     for orientation in 1..=8 {
         let source = common::image::jpeg_with_orientation(orientation, 200, 100);
-        let (jpeg, error) = e.bm.preview_insert_upload(&source).await;
-        assert_eq!(error, None);
-        let jpeg = jpeg.unwrap();
+        let jpeg = e.bm.preview_insert_upload(&source).await.unwrap();
         assert_eq!(common::image::image_size(&jpeg), if orientation <= 4 { (200, 100) } else { (100, 200) });
-        assert_eq!(e.bm.preview_insert_upload(&jpeg).await, (Some(jpeg), None));
+        assert_eq!(e.bm.preview_insert_upload(&jpeg).await, Ok(jpeg));
     }
     for data in [b"".as_slice(), b"not an image"] {
-        let (jpeg, error) = e.bm.preview_insert_upload(data).await;
+        let (jpeg, error) = split(e.bm.preview_insert_upload(data).await);
         assert!(jpeg.is_none());
         assert!(error.is_some());
     }
@@ -375,8 +376,7 @@ async fn raw_uncompressed_image_can_be_cropped() {
         image.dict.remove(b"DecodeParms");
     });
     let crops = [json!({"page":1,"x0":0.5,"y0":0.0,"x1":1.0,"y1":1.0})];
-    let (_, error) = e.bm.delete_pdf_pages(1, &[], Some(&crops), None, None, None).await;
-    assert_eq!(error, None);
+    e.bm.delete_pdf_pages(1, &[], Some(&crops), None, None, None).await.unwrap();
     assert_eq!(common::pdf::pixel_image(&e.pdf, 1).0.pixel(10, 10), [0, 0, 255]);
 }
 
@@ -384,9 +384,8 @@ async fn raw_uncompressed_image_can_be_cropped() {
 async fn custom_trash_directory_is_used() {
     let e = env();
     let bm = BookManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()).with_trash_dirname("backup"));
-    let (result, error) = bm.delete_pdf_pages(1, &[1], None, None, None, None).await;
-    assert_eq!(error, None);
-    assert_eq!(result.unwrap()["backup"], "backup/book.pdf");
+    let result = bm.delete_pdf_pages(1, &[1], None, None, None, None).await.unwrap();
+    assert_eq!(result["backup"], "backup/book.pdf");
     assert!(e.root.path().join("backup/book.pdf").is_file());
 }
 
@@ -403,7 +402,7 @@ async fn conflicting_or_duplicate_edits_do_not_save() {
         (vec![], Some(crops.to_vec()), Some(splits.to_vec()), "같은 쪽"),
         (vec![], Some(vec![crop.clone(), crop]), None, "둘 이상"),
     ] {
-        let (result, error) = e.bm.delete_pdf_pages(1, &pages, crops.as_deref(), splits.as_deref(), None, None).await;
+        let (result, error) = split(e.bm.delete_pdf_pages(1, &pages, crops.as_deref(), splits.as_deref(), None, None).await);
         assert_eq!(result, None);
         assert!(error.unwrap().contains(expected));
     }
@@ -455,8 +454,7 @@ async fn jpeg_crop_preserves_quantization_sampling_progressive_and_grayscale() {
             stream.dict.set("ColorSpace", if gray { "DeviceGray" } else { "DeviceRGB" });
         });
         let crops = [json!({"page":1,"x0":0.5,"y0":0.0,"x1":1.0,"y1":1.0})];
-        let (_, error) = e.bm.delete_pdf_pages(1, &[], Some(&crops), None, None, None).await;
-        assert_eq!(error, None);
+        e.bm.delete_pdf_pages(1, &[], Some(&crops), None, None, None).await.unwrap();
         let doc = common::pdf::load(&e.pdf);
         let stream = common::pdf::first_xobject(&doc, 1);
         assert_eq!(stream.dict.get(b"Filter").unwrap().as_name().unwrap(), b"DCTDecode");
@@ -486,11 +484,10 @@ async fn url_preview_is_the_same_jpeg_that_gets_inserted() {
     let e = env();
     let fetcher = Arc::new(FetchImage(Ok(common::image::png_solid(80, 160, [10, 20, 30]))));
     let bm = BookManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()).with_image_fetcher(fetcher));
-    let (preview, error) = bm.preview_insert_image("  https://example.com/image.png  ").await;
-    assert_eq!(error, None);
+    let preview = bm.preview_insert_image("  https://example.com/image.png  ").await.unwrap();
     let inserts = [json!({"page":1,"url":"https://example.com/image.png"})];
-    assert_eq!(bm.delete_pdf_pages(1, &[], None, None, Some(&inserts), None).await.1, None);
-    assert_eq!(common::pdf::first_xobject(&common::pdf::load(&e.pdf), 1).content, preview.unwrap());
+    bm.delete_pdf_pages(1, &[], None, None, Some(&inserts), None).await.unwrap();
+    assert_eq!(common::pdf::first_xobject(&common::pdf::load(&e.pdf), 1).content, preview);
 }
 
 #[tokio::test]
@@ -503,11 +500,11 @@ async fn url_preview_reports_safe_fetch_errors() {
     ] {
         let e = env();
         let bm = BookManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()).with_image_fetcher(Arc::new(FetchImage(Err(effect)))));
-        assert_eq!(bm.preview_insert_image("https://example.com/image.png").await, (None, Some(expected.into())));
+        assert_eq!(bm.preview_insert_image("https://example.com/image.png").await, Err(expected.into()));
     }
     let e = env();
     for url in ["", "  ", "http://127.0.0.1/a", "ftp://example.com/a"] {
-        let (image, error) = e.bm.preview_insert_image(url).await;
+        let (image, error) = split(e.bm.preview_insert_image(url).await);
         assert!(image.is_none() && error.is_some());
     }
 }

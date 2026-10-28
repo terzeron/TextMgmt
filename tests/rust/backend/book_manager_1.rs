@@ -74,6 +74,14 @@ use serde_json::{Value, json};
 use sysdeps::{CommandError, CommandOutput};
 use tempfile::TempDir;
 
+/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+    match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    }
+}
+
 const CATEGORY1: &str = "_epub";
 const CATEGORY2: &str = "_txt";
 
@@ -1369,13 +1377,13 @@ fn test_validate_epub_success_and_errors() {
         Ok(CommandOutput { returncode: 0, stdout: vec![], stderr: vec![] })
     }));
     let manager = BookManager::with_deps(deps);
-    let (result, err) = run(manager.validate_epub(1));
+    let (result, err) = split(run(manager.validate_epub(1)));
     assert!(err.is_none());
     assert_eq!(result.unwrap()["valid"], true);
 
     // 잘못된 형식
     let manager = make_manager_with_doc(tmp_path, make_doc("a.epub", "pdf"));
-    let (_result, err) = run(manager.validate_epub(1));
+    let (_result, err) = split(run(manager.validate_epub(1)));
     assert!(err.as_deref().is_some_and(|e| e.contains("Not an EPUB")));
 }
 
@@ -1393,12 +1401,12 @@ fn test_validate_pdf_success_and_open_error() {
         pdf_version: "1.4".to_string(),
         syntax_problems: vec![],
     }))));
-    let (result, err) = run(manager.validate_pdf(1));
+    let (result, err) = split(run(manager.validate_pdf(1)));
     assert!(err.is_none());
     assert_eq!(result.unwrap()["valid"], true);
 
     let manager = BookManager::with_deps(make_deps(tmp_path, &es).with_pdf_opener(Arc::new(FakePdfOpener::OpenError("bad".to_string()))));
-    let (_result, err) = run(manager.validate_pdf(1));
+    let (_result, err) = split(run(manager.validate_pdf(1)));
     assert!(err.as_deref().is_some_and(|e| e.contains("Failed to open PDF")));
 }
 
@@ -1423,7 +1431,7 @@ fn test_validate_pdf_reports_reconstructed_cross_reference() {
     write(&path, &pdf);
 
     let manager = make_manager_with_doc(tmp.path(), make_doc("damaged.pdf", "pdf"));
-    let (result, err) = run(manager.validate_pdf(1));
+    let (result, err) = split(run(manager.validate_pdf(1)));
 
     assert!(err.is_none(), "{err:?}");
     let result = result.unwrap();
@@ -1438,13 +1446,13 @@ fn test_validate_epub_not_found_and_missing_file() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.on_search_by_id(|_| Ok(None));
-    let (result, err) = run(manager.validate_epub(1));
+    let (result, err) = split(run(manager.validate_epub(1)));
     assert!(result.is_none());
     assert!(err.as_deref().unwrap().contains("Book not found"));
 
     let doc = make_doc("missing.epub", "epub");
     es.on_search_by_id(move |_| Ok(Some(doc.clone())));
-    let (result, err) = run(manager.validate_epub(1));
+    let (result, err) = split(run(manager.validate_epub(1)));
     assert!(result.is_none());
     assert!(err.as_deref().unwrap().contains("File not found"));
 }
@@ -1459,7 +1467,7 @@ fn test_validate_epub_not_installed() {
 
     deps = deps.with_runner(FakeRunner::new(|_argv| Err(CommandError::NotFound)));
     let manager = BookManager::with_deps(deps);
-    let (result, err) = run(manager.validate_epub(1));
+    let (result, err) = split(run(manager.validate_epub(1)));
     assert!(result.is_none());
     assert!(err.as_deref().unwrap().contains("not installed"));
 }
@@ -1474,7 +1482,7 @@ fn test_validate_epub_timeout() {
 
     deps = deps.with_runner(FakeRunner::new(|_argv| Err(CommandError::Timeout)));
     let manager = BookManager::with_deps(deps);
-    let (result, err) = run(manager.validate_epub(1));
+    let (result, err) = split(run(manager.validate_epub(1)));
     assert!(result.is_none());
     assert!(err.as_deref().unwrap().contains("timed out"));
 }
@@ -1492,7 +1500,7 @@ fn test_validate_epub_parse_error() {
         Ok(CommandOutput { returncode: 1, stdout: vec![], stderr: vec![] })
     }));
     let manager = BookManager::with_deps(deps);
-    let (result, err) = run(manager.validate_epub(1));
+    let (result, err) = split(run(manager.validate_epub(1)));
     assert!(result.is_none());
     assert!(err.as_deref().unwrap().contains("Failed to parse epubveri output"));
 }
@@ -1503,13 +1511,13 @@ fn test_validate_pdf_wrong_type_and_missing_file() {
     let tmp_path = tmp.path();
     let doc = make_doc("a.txt", "txt");
     let manager = make_manager_with_doc(tmp_path, doc);
-    let (result, err) = run(manager.validate_pdf(1));
+    let (result, err) = split(run(manager.validate_pdf(1)));
     assert!(result.is_none());
     assert!(err.as_deref().unwrap().contains("Not a PDF"));
 
     let doc2 = make_doc("missing.pdf", "pdf");
     let manager2 = make_manager_with_doc(tmp_path, doc2);
-    let (result, err) = run(manager2.validate_pdf(1));
+    let (result, err) = split(run(manager2.validate_pdf(1)));
     assert!(result.is_none());
     assert!(err.as_deref().unwrap().contains("File not found"));
 }
@@ -3728,9 +3736,7 @@ fn test_validate_epub_epubcheck_json_unlink_oserror() {
     deps = deps.with_fs(fs_ops);
     let manager = BookManager::with_deps(deps);
 
-    let (result, err) = run(manager.validate_epub(1));
-    assert!(result.is_some());
-    assert!(err.is_none());
+    assert!(run(manager.validate_epub(1)).is_ok());
     assert!(!unlink_calls.lock().unwrap().is_empty());
 }
 
@@ -3759,9 +3765,7 @@ fn test_validate_epub_message_empty_locations() {
     }));
     let manager = BookManager::with_deps(deps);
 
-    let (result, err) = run(manager.validate_epub(1));
-    let result = result.expect("result");
-    assert!(err.is_none());
+    let result = run(manager.validate_epub(1)).expect("result");
     assert_eq!(result["messages"][0]["location"], Value::Null);
     assert!(result.get("publication").is_some());
     assert_eq!(result["publication"]["title"], "T");
@@ -3776,7 +3780,7 @@ fn test_validate_pdf_not_found() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.with(|s| s.default_doc = None);
-    let (result, err) = run(manager.validate_pdf(999));
+    let (result, err) = split(run(manager.validate_pdf(999)));
     assert!(result.is_none());
     assert!(err.as_deref().unwrap().to_lowercase().contains("not found"));
 }

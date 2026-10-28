@@ -1430,15 +1430,15 @@ impl BookManagerApi for DummyManager {
         Ok(book)
     }
 
-    async fn validate_epub(&self, _book_id: i64) -> (Option<Value>, Option<String>) {
+    async fn validate_epub(&self, _book_id: i64) -> Result<Value, String> {
         if self.b().validate_epub_fail {
-            return (None, Some("validation failed".into()));
+            return Err("validation failed".into());
         }
-        (Some(json!({"valid": true})), None)
+        Ok(json!({"valid": true}))
     }
 
-    async fn validate_pdf(&self, _book_id: i64) -> (Option<Value>, Option<String>) {
-        (Some(json!({"valid": true})), None)
+    async fn validate_pdf(&self, _book_id: i64) -> Result<Value, String> {
+        Ok(json!({"valid": true}))
     }
 
     async fn get_books_in_category(&self, category: &str) -> Result<Vec<Book>, String> {

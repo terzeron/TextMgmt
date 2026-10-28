@@ -463,9 +463,7 @@ fn test_validate_pdf_producer_and_creation_date() {
 
     es.set_doc(Some(make_doc("A/test.pdf", "pdf")));
 
-    let (result, err) = asyncio_runner(manager.validate_pdf(1));
-    let result = result.expect("result is not None");
-    assert!(err.is_none());
+    let result = asyncio_runner(manager.validate_pdf(1)).expect("result is not None");
     assert!(result["publication"].get("producer").is_some());
     assert!(result["publication"].get("creation_date").is_some());
 }
