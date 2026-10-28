@@ -13,25 +13,28 @@ use crate::main::{TaskHandle, TaskRunner, ThreadRunner};
 use crate::pdf::{PageCountCache, PdfCacheLimits, PdfError, PdfReaderCache, PdfReaderHandle};
 use std::os::unix::fs::MetadataExt;
 
-/// `BookManager`가 내는 오류. Python `RuntimeError`에 대응한다.
+/// 문서 색인 실패. 이동·삭제 롤백은 두 경우를 다른 문구로 보고한다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BookManagerError {
-    Runtime(String),
+pub enum AddBookError {
+    /// ES 호출 자체가 실패했다(Python에서는 예외가 올라가던 경우).
+    Exception(String),
+    /// ES는 응답했지만 문서 하나를 넣지 못했다.
+    Rejected(String),
 }
 
-impl fmt::Display for BookManagerError {
+impl fmt::Display for AddBookError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BookManagerError::Runtime(message) => f.write_str(message),
+            AddBookError::Exception(message) | AddBookError::Rejected(message) => f.write_str(message),
         }
     }
 }
 
-impl std::error::Error for BookManagerError {}
+impl std::error::Error for AddBookError {}
 
 /// 문서 색인(`add_book`)을 통째로 바꾸는 대역. 이동 롤백처럼 ES 색인이 실패하는 경로를 시험할 때 쓴다(구 `override_add_book`).
 pub trait BookAdder: Send + Sync {
-    fn add_book(&self) -> Result<(Option<i64>, Option<String>), BookManagerError>;
+    fn add_book(&self) -> Result<i64, AddBookError>;
 }
 
 /// created_time 백필 스레드. 구 `threading.Thread` 대역.

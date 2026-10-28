@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use std::sync::Arc;
 
-use super::{BookContent, BookManager, MAX_CATEGORY_PAGE_SIZE, MAX_LATEST_BOOK_COUNT};
+use super::{AddBookError, BookContent, BookManager, MAX_CATEGORY_PAGE_SIZE, MAX_LATEST_BOOK_COUNT};
 use crate::book::{Book, BookLookupError, BookPage};
 use crate::es_manager::{Docs, EsManagerApi, decode_category_cursor, encode_category_cursor};
 
@@ -160,29 +160,27 @@ impl BookManager {
         Ok(BookPage { books: self.books_from_hits(&hits, false)?, total, next_cursor: None })
     }
 
-    /// 문서를 색인한다. 문서가 하나일 때만 성공으로 본다. ES 예외는 `Err`로 돌려준다(Python은 예외가 그대로 올라간다).
-    pub(crate) fn add_book_raw(&self, data: &Docs) -> Result<(Option<i64>, Option<String>), String> {
+    /// 문서를 색인한다. 문서가 하나일 때만 성공으로 본다. 새 book_id를 돌려준다.
+    pub(crate) fn add_book_raw(&self, data: &Docs) -> Result<i64, AddBookError> {
         if let Some(adder) = self.seams().book_adder {
-            return adder.add_book().map_err(|e| e.to_string());
+            return adder.add_book();
         }
-        let ids = self.es.insert(data).map_err(|e| e.to_string())?;
-        if ids.len() == 1 {
-            // 단일 문서 추가 후 즉시 검색되도록 한다.
-            self.es.refresh().map_err(|e| e.to_string())?;
-            return Ok((Some(ids[0]), None));
-        }
-        Ok((None, Some(format!("can't add book '{}' to ElasticSearch", serde_json::to_string(data).unwrap_or_default()))))
+        let exception = |e: crate::es_manager::EsError| AddBookError::Exception(e.to_string());
+        let ids = self.es.insert(data).map_err(exception)?;
+        let [book_id] = ids[..] else {
+            return Err(AddBookError::Rejected(format!("can't add book '{}' to ElasticSearch", serde_json::to_string(data).unwrap_or_default())));
+        };
+        // 단일 문서 추가 후 즉시 검색되도록 한다.
+        self.es.refresh().map_err(exception)?;
+        Ok(book_id)
     }
 
     /// 문서 하나를 색인한다. 성공하면 즉시 검색되도록 `refresh`한다.
     pub async fn add_book(&self, data: &Docs) -> Result<i64, String> {
         log::debug!("# add_book(data={} docs)", data.len());
-        let describe = || serde_json::to_string(data).unwrap_or_default();
-        match self.add_book_raw(data) {
-            Ok((_, Some(error))) => Err(error),
-            Ok((Some(book_id), None)) => Ok(book_id),
-            Ok((None, None)) => Err(format!("can't add book '{}' to ElasticSearch", describe())),
-            Err(e) => Err(format!("can't add book '{}' to ElasticSearch: {e}", describe())),
-        }
+        self.add_book_raw(data).map_err(|error| match error {
+            AddBookError::Rejected(message) => message,
+            AddBookError::Exception(e) => format!("can't add book '{}' to ElasticSearch: {e}", serde_json::to_string(data).unwrap_or_default()),
+        })
     }
 }

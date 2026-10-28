@@ -64,7 +64,7 @@ pub use classify::{ApplyOptions, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, Propose
 pub use cover::{BookLookup, BookRef, Thumbnailer};
 pub use cover_list::CoverPageOpts;
 pub use file_reader::{DefaultFileReader, LoaderFileReader};
-pub use seams::{BackfillThread, BookAdder, BookManagerError, CategoryNameCheck, PathIsRelativeTo, PreviewEpubValidator};
+pub use seams::{AddBookError, BackfillThread, BookAdder, CategoryNameCheck, PathIsRelativeTo, PreviewEpubValidator};
 pub use uncovered::{CoverBooksPager, CoverPage};
 pub use update::BookDeletion;
 pub use xml_safe::{_declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, SafeXmlParser, XmlElement, decode_category_cursor, encode_category_cursor};

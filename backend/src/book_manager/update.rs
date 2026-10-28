@@ -6,8 +6,8 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::BookManager;
 use super::util::relative_to;
+use super::{AddBookError, BookManager};
 use crate::es_manager::Docs;
 
 /// `delete_book` 성공 결과. 파일이 이미 없었으면 색인만 지우고 경고를 남긴다.
@@ -48,9 +48,9 @@ impl BookManager {
     fn restore_old_doc(&self, book_id: i64, old_doc: &Value) -> Result<(), String> {
         let docs = Docs::from([(book_id, old_doc.clone())]);
         match self.add_book_raw(&docs) {
-            Ok((restored, None)) if restored == Some(book_id) => Ok(()),
-            Ok((_, error)) => Err(error.unwrap_or_else(|| "None".to_string())),
-            Err(e) => Err(e),
+            Ok(restored) if restored == book_id => Ok(()),
+            Ok(_) => Err("None".to_string()),
+            Err(e) => Err(e.to_string()),
         }
     }
 
@@ -68,11 +68,12 @@ impl BookManager {
             new_doc[*key] = json!(value);
         }
         self.es.delete_by_file_paths(&[new_relative.to_string()], Some(&[book_id])).map_err(|e| e.to_string())?;
-        let (reindexed, error) = self.add_book_raw(&Docs::from([(book_id, new_doc)]))?;
-        if reindexed == Some(book_id) && error.is_none() {
-            return Ok(None);
+        match self.add_book_raw(&Docs::from([(book_id, new_doc)])) {
+            Ok(reindexed) if reindexed == book_id => Ok(None),
+            Ok(_) => Ok(Some("None".to_string())),
+            Err(AddBookError::Rejected(message)) => Ok(Some(message)),
+            Err(AddBookError::Exception(message)) => Err(message),
         }
-        Ok(Some(error.unwrap_or_else(|| "None".to_string())))
     }
 
     pub async fn update_book(&self, book_id: i64, new_category: &str, new_title: &str, new_author: &str, new_path: &Path, new_type: &str) -> Result<(), String> {

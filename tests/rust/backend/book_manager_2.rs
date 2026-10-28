@@ -11,7 +11,7 @@
 //!   `shutil.move`(구 `fs_move_override`)는 `FsOps`에 별도 메서드가 없어 `rename`으로 합쳤다.
 //! - `with_runner(Arc<dyn sysdeps::CommandRunner>)`: 구 `override_convert_with_libreoffice`. 변환 문자열은 `FakeRunner::office_output`, 실패는 `CommandError`.
 //! - `with_file_reader(Arc<dyn FileReader>)`: 구 `loader_read_file_override`. `FileReader::read_file(&self, &Path) -> Result<Value, LoaderReadError>`.
-//! - `with_book_adder(Arc<dyn BookAdder>)`: 구 `manager.override_add_book`. `BookAdder::add_book(&self) -> Result<(Option<i64>, Option<String>), BookManagerError>`.
+//! - `with_book_adder(Arc<dyn BookAdder>)`: 구 `manager.override_add_book`. `BookAdder::add_book(&self) -> Result<i64, AddBookError>`.
 //! - `with_task_runner(Arc<dyn TaskRunner>)`: 구 `override_thread_start(_run_inline)`. 인라인은 `InlineRunner`다.
 //! - `with_pdf_cache_limits(PdfCacheLimits { max_file_bytes, max_bytes, max_entries })`, `BookManager::pdf_cache() -> &PdfReaderCache` (`clear/contains/len`, 문서 밖: `insert_raw(name, mtime, pages, size)`, `evict()`).
 //! - `with_pdf_pages(Arc<dyn PdfPageOps>)`: 구 `override_get_cached_page_count`(쪽수 조회 실패 주입).
@@ -68,7 +68,7 @@ use std::time::{Duration, SystemTime};
 
 use backend::book::BookPage;
 use backend::book_manager::{
-    _declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, ApplyOptions, BackfillThread, BookAdder, BookContent, BookManager, BookManagerDeps, BookManagerError,
+    _declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, AddBookError, ApplyOptions, BackfillThread, BookAdder, BookContent, BookManager, BookManagerDeps,
     CREATED_TIME_BACKFILL_ENV, FileReader, MAX_CATEGORY_RESULT_COUNT, MoveOpts, ProposeOptions, ReadFileError, decode_category_cursor, encode_category_cursor,
 };
 use backend::classifier::BookClassifierApi;
@@ -358,19 +358,19 @@ fn file_reader(f: impl Fn(&Path) -> Result<Value, LoaderReadError> + Send + Sync
     Arc::new(FnFileReader(Box::new(f)))
 }
 
-type AddBookFn = dyn Fn() -> Result<(Option<i64>, Option<String>), BookManagerError> + Send + Sync;
+type AddBookFn = dyn Fn() -> Result<i64, AddBookError> + Send + Sync;
 
 // TODO(common): 클로저를 `BookAdder`로 감싸는 어댑터.
 struct FnBookAdder(Box<AddBookFn>);
 
 impl BookAdder for FnBookAdder {
-    fn add_book(&self) -> Result<(Option<i64>, Option<String>), BookManagerError> {
+    fn add_book(&self) -> Result<i64, AddBookError> {
         (self.0)()
     }
 }
 
 /// 구 `manager.override_add_book(closure)`.
-fn book_adder(f: impl Fn() -> Result<(Option<i64>, Option<String>), BookManagerError> + Send + Sync + 'static) -> Arc<dyn BookAdder> {
+fn book_adder(f: impl Fn() -> Result<i64, AddBookError> + Send + Sync + 'static) -> Arc<dyn BookAdder> {
     Arc::new(FnBookAdder(Box::new(f)))
 }
 
@@ -2134,7 +2134,7 @@ fn test_move_classified_file_edge_cases() {
     // 앞으로 가는 이동은 성공시키고(첫 호출) 롤백 이동(두 번째 호출)만 실패시킨다.
     let faulty_rollback = FaultyFs::new();
     faulty_rollback.set_rename(fail_on_nth_call(2, "rollback move error"));
-    let manager_add_err = BookManager::with_deps(deps(tmp_path, &add_err_es).with_book_adder(book_adder(|| Ok((None, Some("ES add error".to_string()))))).with_fs(faulty_rollback));
+    let manager_add_err = BookManager::with_deps(deps(tmp_path, &add_err_es).with_book_adder(book_adder(|| Err(AddBookError::Rejected("ES add error".to_string())))).with_fs(faulty_rollback));
 
     let (res6, err6) = split(asyncio_runner(manager_add_err._move_classified_file(&f2, "B", "book", MoveOpts::default())));
     assert!(res6.is_none());
@@ -2388,7 +2388,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     fs::write(&src_file, "content").unwrap();
 
     let manager =
-        BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(empty_reader()).with_book_adder(book_adder(|| Err(BookManagerError::Runtime("restore old doc exception".to_string())))));
+        BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(empty_reader()).with_book_adder(book_adder(|| Err(AddBookError::Exception("restore old doc exception".to_string())))));
 
     let (st2, msg2) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false)));
     assert_eq!(st2, "Error");
@@ -2400,7 +2400,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     }
     fs::write(&src_file, "content").unwrap();
 
-    let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(empty_reader()).with_book_adder(book_adder(|| Ok((None, Some("restore error message".to_string()))))));
+    let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(empty_reader()).with_book_adder(book_adder(|| Err(AddBookError::Rejected("restore error message".to_string())))));
 
     let (st3, msg3) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false)));
     assert_eq!(st3, "Error");
@@ -2413,7 +2413,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     fs::write(&src_file, "content").unwrap();
 
     let manager =
-        BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(crash_reader()).with_book_adder(book_adder(|| Err(BookManagerError::Runtime("restore old doc exception".to_string())))));
+        BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(crash_reader()).with_book_adder(book_adder(|| Err(AddBookError::Exception("restore old doc exception".to_string())))));
 
     let (st4, msg4) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false)));
     assert_eq!(st4, "Error");
@@ -2425,7 +2425,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     }
     fs::write(&src_file, "content").unwrap();
 
-    let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(crash_reader()).with_book_adder(book_adder(|| Ok((None, Some("restore error message".to_string()))))));
+    let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(crash_reader()).with_book_adder(book_adder(|| Err(AddBookError::Rejected("restore error message".to_string())))));
 
     let (st5, msg5) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false)));
     assert_eq!(st5, "Error");
@@ -2437,7 +2437,7 @@ fn test_update_book_reindex_and_rollback_branches() {
     }
     fs::write(&src_file, "content").unwrap();
 
-    let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(crash_reader()).with_book_adder(book_adder(|| Ok((Some(1), None)))));
+    let manager = BookManager::with_deps(deps(tmp_path, &update_es).with_file_reader(crash_reader()).with_book_adder(book_adder(|| Ok(1))));
     let (st6, msg6) = as_status(asyncio_runner(BookManagerApi::update_book(&manager, 1, "B", "T", "A", &dst, "txt", false)));
     assert_eq!(st6, "Error");
     assert!(msg6.expect("msg6").contains("기존 ES 문서 복구 완료"));
@@ -2755,7 +2755,7 @@ fn test_move_classified_file_target_traversal_and_restore_err() {
     es.set_doc(Some(doc));
     es.fail("insert", "insert boom");
 
-    let manager = BookManager::with_deps(deps(tmp_path, &es).with_book_adder(book_adder(|| Err(BookManagerError::Runtime("restore add_book boom".to_string())))));
+    let manager = BookManager::with_deps(deps(tmp_path, &es).with_book_adder(book_adder(|| Err(AddBookError::Exception("restore add_book boom".to_string())))));
     fs::create_dir_all(tmp_path.join("target")).unwrap();
     let (_res2, err2) = split(asyncio_runner(manager._move_classified_file(&f, "target", "txt", MoveOpts::default())));
     let err2 = err2.expect("err2 is not None");

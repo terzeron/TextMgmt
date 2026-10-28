@@ -796,9 +796,10 @@ impl BookManager {
             new_doc["category"] = json!(target_category);
             new_doc["file_path"] = json!(target_rel_path);
             deleted_count += self.es.delete_by_file_paths(std::slice::from_ref(&target_rel_path), Some(&[new_book_id])).map_err(|e| e.to_string())?;
-            let (inserted, add_error) = self.add_book_raw(&Docs::from([(new_book_id, new_doc)]))?;
-            if inserted != Some(new_book_id) || add_error.is_some() {
-                return Err(add_error.unwrap_or_else(|| "ES 적재 실패".to_string()));
+            match self.add_book_raw(&Docs::from([(new_book_id, new_doc)])) {
+                Ok(inserted) if inserted == new_book_id => {}
+                Ok(_) => return Err("ES 적재 실패".to_string()),
+                Err(error) => return Err(error.to_string()),
             }
             Ok(json!({"status": "moved", "from": old_rel_path, "to": target_rel_path, "book_id": new_book_id, "target_category": target_category, "deleted_count": deleted_count}))
         })();
@@ -815,10 +816,8 @@ impl BookManager {
                 }
                 if let (Some(id), Some(doc)) = (old_book_id, &old_doc) {
                     match self.add_book_raw(&Docs::from([(id, doc.clone())])) {
-                        Ok((restored, restore_error)) if restored != Some(id) || restore_error.is_some() => {
-                            rollback_messages.push(format!("기존 ES 문서 복구 실패: {}", restore_error.unwrap_or_else(|| "None".to_string())))
-                        }
-                        Ok(_) => {}
+                        Ok(restored) if restored == id => {}
+                        Ok(_) => rollback_messages.push("기존 ES 문서 복구 실패: None".to_string()),
                         Err(e) => rollback_messages.push(format!("기존 ES 문서 복구 실패: {e}")),
                     }
                 }
