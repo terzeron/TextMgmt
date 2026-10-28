@@ -53,6 +53,14 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use zip::ZipArchive;
 
+/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+    match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    }
+}
+
 /// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
 fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
     match result {
@@ -320,7 +328,7 @@ async fn test_apply_awaits_async_callbacks() {
     let progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
 
     // 가정한 seam(문서 3.12에 없음. 3.0 규칙대로 Deps 빌더로 옮겼다): 파일 이동 함수를 교체하는 훅
-    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| (Some(json!({"status": "moved"})), None)));
+    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| Ok(json!({"status": "moved"}))));
     let manager = BookManager::with_deps(deps);
     let (done_sink, progress_sink) = (done.clone(), progress.clone());
     // 콜백은 동기 함수다(Python은 코루틴도 받는다).
@@ -344,7 +352,7 @@ async fn test_apply_records_move_error_as_failed() {
     fs::create_dir(tmp.path().join("2_B")).unwrap();
 
     // 가정한 seam(문서 3.12에 없음. 3.0 규칙대로 Deps 빌더로 옮겼다): 파일 이동 함수를 교체하는 훅
-    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| (None, Some("이동 실패".to_string()))));
+    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| Err("이동 실패".to_string())));
     let manager = BookManager::with_deps(deps);
     let allowed: HashSet<String> = ["1_A/a.txt".to_string()].into();
 
@@ -420,7 +428,7 @@ async fn test_move_reports_when_numbered_names_are_exhausted() {
     category_with_files(tmp.path(), "B", &["book.txt", "book (1).txt"]);
     fs::write(tmp.path().join("A").join("book.txt"), "다른 내용입니다").unwrap();
 
-    let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", Default::default()).await;
+    let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", Default::default()).await);
 
     assert!(result.is_none());
     assert!(err.unwrap().contains("너무 많습니다"));
@@ -435,7 +443,7 @@ async fn test_move_removes_identical_duplicate_when_clean_existing() {
     category_with_files(tmp.path(), "B", &["book.txt"]);
 
     let opts = MoveOpts { clean_existing: true, source_category: Some("A".to_string()), ..Default::default() };
-    let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await;
+    let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
 
     assert_eq!(err, None);
     assert_eq!(result.unwrap()["status"], "duplicate_cleaned");
@@ -455,7 +463,7 @@ async fn test_move_reports_duplicate_cleanup_failure() {
     let manager = BookManager::with_deps(make_deps(tmp.path(), FakeEsManager::new()).with_fs(fs_ops));
 
     let opts = MoveOpts { clean_existing: true, ..Default::default() };
-    let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await;
+    let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
 
     assert!(result.is_none());
     assert!(err.unwrap().starts_with("중복 파일 정리 실패"));
@@ -469,7 +477,7 @@ async fn test_move_dry_run_reports_plain_move_without_touching_files() {
     fs::create_dir(tmp.path().join("B")).unwrap();
 
     let opts = MoveOpts { dry_run: true, ..Default::default() };
-    let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await;
+    let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
 
     assert_eq!(err, None);
     assert_eq!(result.unwrap()["action"], "move");
@@ -484,7 +492,7 @@ async fn test_move_rolls_back_when_loader_returns_no_single_document() {
     category_with_files(tmp.path(), "A", &["book.txt"]);
     fs::create_dir(tmp.path().join("B")).unwrap();
 
-    let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", Default::default()).await;
+    let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", Default::default()).await);
 
     assert!(result.is_none());
     assert!(err.unwrap().contains("지원하지 않는 파일 형식"));

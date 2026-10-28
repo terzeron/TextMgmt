@@ -646,13 +646,13 @@ impl BookManager {
                         let source_category = file_path.rsplit_once('/').map_or(Self::ROOT_CATEGORY, |(dir, _)| dir);
                         // 실제 이동 직전에 "moving"을 기록한다. 도중에 죽으면 pending이 아니라 moving으로 남아 "시도는 했다"를 알린다.
                         notify(json!({"file_path": file_path, "apply_status": "moving", "apply_error": Value::Null}));
-                        let (file_result, error) = match &move_hook {
+                        let moved = match &move_hook {
                             Some(hook) => hook(&absolute_path, target),
                             None => self.move_classified_file(&absolute_path, target, content_type, false, options.clean_existing, Some(source_category)).await,
                         };
-                        match (file_result, error) {
-                            (Some(_), None) => apply_status = "moved",
-                            (_, error) => apply_error = Some(error.unwrap_or_else(|| "분류 적용에 실패했습니다".to_string())),
+                        match moved {
+                            Ok(_) => apply_status = "moved",
+                            Err(error) => apply_error = Some(error),
                         }
                     }
                 }
@@ -675,7 +675,7 @@ impl BookManager {
     }
 
     /// 파일 하나를 목적지 카테고리로 옮기고 ES를 맞춘다. 실패하면 파일과 ES 문서를 되돌린다.
-    pub async fn _move_classified_file(&self, file_path: &Path, target_category: &str, content_type: &str, opts: MoveOpts) -> (Option<Value>, Option<String>) {
+    pub async fn _move_classified_file(&self, file_path: &Path, target_category: &str, content_type: &str, opts: MoveOpts) -> Result<Value, String> {
         self.move_classified_file(file_path, target_category, content_type, opts.dry_run, opts.clean_existing, opts.source_category.as_deref()).await
     }
 
@@ -701,13 +701,13 @@ impl BookManager {
         dry_run: bool,
         clean_existing: bool,
         source_category: Option<&str>,
-    ) -> (Option<Value>, Option<String>) {
+    ) -> Result<Value, String> {
         let root = self.resolved_root().unwrap_or_else(|_| self.path_prefix.clone());
-        let Some(old_rel_path) = relative_to(file_path, &self.path_prefix) else { return (None, Some("잘못된 파일 경로입니다".to_string())) };
+        let Some(old_rel_path) = relative_to(file_path, &self.path_prefix) else { return Err("잘못된 파일 경로입니다".to_string()) };
 
         let mut target_path = self.path_prefix.join(target_category).join(Self::file_name_of(file_path));
         if !self.resolve_path(&target_path).is_ok_and(|p| p.starts_with(&root)) {
-            return (None, Some("잘못된 대상 경로입니다".to_string()));
+            return Err("잘못된 대상 경로입니다".to_string());
         }
         let mut target_rel_path = relative_to(&target_path, &self.path_prefix).unwrap_or_default();
         if self.path_exists(&target_path) {
@@ -715,12 +715,12 @@ impl BookManager {
             if is_same_file && old_rel_path == target_rel_path {
                 // 이미 목적지에 있다. 옮길 것이 없다고 답하고 끝낸다.
                 let status = if dry_run { "dry_run" } else { "moved" };
-                return (Some(json!({"status": status, "action": "noop", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0})), None);
+                return Ok(json!({"status": status, "action": "noop", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0}));
             }
             if !is_same_file && !same_content(file_path, &target_path) {
                 // 이름만 겹치고 내용이 다르면 서로 다른 책이다. 번호를 붙여 둘 다 남긴다.
                 let Some(numbered) = next_numbered_path(&target_path, self.duplicate_name_max_index) else {
-                    return (None, Some(format!("대상 경로에 같은 이름의 파일이 너무 많습니다: {target_rel_path}")));
+                    return Err(format!("대상 경로에 같은 이름의 파일이 너무 많습니다: {target_rel_path}"));
                 };
                 target_path = numbered;
                 target_rel_path = relative_to(&target_path, &self.path_prefix).unwrap_or_default();
@@ -728,30 +728,27 @@ impl BookManager {
                 // 내용이 같은 별개 파일이거나, 경로는 다른데 같은 실체인 하드링크다. 둘 다 "대상에 이미 있다"로 본다.
                 if clean_existing {
                     if dry_run {
-                        return (
-                            Some(json!({"status": "dry_run", "action": "duplicate_clean", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0})),
-                            None,
-                        );
+                        return Ok(json!({"status": "dry_run", "action": "duplicate_clean", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0}));
                     }
                     if let Err(e) = self.fs.remove_file(file_path) {
-                        return (None, Some(format!("중복 파일 정리 실패: {e}")));
+                        return Err(format!("중복 파일 정리 실패: {e}"));
                     }
                     if let Some(source) = source_category {
                         self.clean_empty_parent_dirs(file_path.parent().unwrap_or(Path::new("")), &self.category_dir(source));
                     }
                     return match self.es.delete_by_file_paths(std::slice::from_ref(&old_rel_path), None) {
                         Ok(deleted_count) => {
-                            (Some(json!({"status": "duplicate_cleaned", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": deleted_count})), None)
+                            Ok(json!({"status": "duplicate_cleaned", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": deleted_count}))
                         }
-                        Err(e) => (None, Some(format!("중복 파일 정리 실패: {e}"))),
+                        Err(e) => Err(format!("중복 파일 정리 실패: {e}")),
                     };
                 }
-                return (None, Some(format!("대상 경로에 파일이 이미 존재합니다: {target_rel_path}")));
+                return Err(format!("대상 경로에 파일이 이미 존재합니다: {target_rel_path}"));
             }
         }
 
         if dry_run {
-            return (Some(json!({"status": "dry_run", "action": "move", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0})), None);
+            return Ok(json!({"status": "dry_run", "action": "move", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0}));
         }
 
         let (old_book_id, old_doc): (Option<i64>, Option<Value>) = match self.fs.metadata(file_path) {
@@ -778,7 +775,7 @@ impl BookManager {
         }
         .and_then(|()| self.move_file(file_path, &target_path));
         if let Err(e) = moved {
-            return (None, Some(format!("파일 이동 실패: {e}")));
+            return Err(format!("파일 이동 실패: {e}"));
         }
         if let Some(source) = source_category {
             self.clean_empty_parent_dirs(&old_parent, &self.category_dir(source));
@@ -807,7 +804,7 @@ impl BookManager {
         })();
 
         match outcome {
-            Ok(result) => (Some(result), None),
+            Ok(result) => Ok(result),
             Err(error) => {
                 let mut rollback_messages: Vec<String> = Vec::new();
                 if self.path_exists(&target_path)
@@ -826,7 +823,7 @@ impl BookManager {
                     }
                 }
                 let message = if rollback_messages.is_empty() { error } else { format!("{error}; {}", rollback_messages.join("; ")) };
-                (None, Some(message))
+                Err(message)
             }
         }
     }

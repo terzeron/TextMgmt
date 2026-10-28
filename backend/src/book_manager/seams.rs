@@ -52,7 +52,7 @@ pub type DownscaleHook = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 /// 파일별 분류 제안 대체. `Err`는 그 파일의 제안 실패다.
 pub type ProposeHook = Arc<dyn Fn(&Path) -> Result<serde_json::Value, String> + Send + Sync>;
 /// 파일 이동 대체. 인자는 (원본 경로, 목적지 카테고리). 반환은 `_move_classified_file`과 같다.
-pub type MoveHook = Arc<dyn Fn(&Path, &str) -> (Option<serde_json::Value>, Option<String>) + Send + Sync>;
+pub type MoveHook = Arc<dyn Fn(&Path, &str) -> Result<serde_json::Value, String> + Send + Sync>;
 /// 여러 파일 색인 대체. 인자는 (상대 경로 목록, clean_existing). 반환은 (경로 -> 새 book_id, 실패 목록).
 pub type BulkIndexHook = Arc<dyn Fn(&[String], bool) -> (std::collections::BTreeMap<String, i64>, Vec<serde_json::Value>) + Send + Sync>;
 
