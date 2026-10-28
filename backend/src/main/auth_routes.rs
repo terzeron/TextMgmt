@@ -17,11 +17,10 @@ use super::cookies::{_clear_auth_cookies, _set_auth_cookies};
 use super::deps::AppDeps;
 use super::errors::{ApiError, ApiResult, json_response};
 use super::extract::{ApiJson, ApiQuery, RequireAdmin, RequireAuth};
+use super::google::GOOGLE_ISSUERS;
 use super::routes::Routes;
 use crate::auth::{ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RequestParts, observation_hash};
 use crate::refresh_token_store::Rotation;
-
-const GOOGLE_ISSUERS: [&str; 2] = ["accounts.google.com", "https://accounts.google.com"];
 
 /// family_id는 `uuid4().hex`라서 32자 소문자 hex다.
 const FAMILY_ID_LENGTH: usize = 32;
