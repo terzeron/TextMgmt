@@ -238,6 +238,39 @@ fn ureq_session_resets_body_timeout_for_each_received_chunk() {
 }
 
 #[test]
+fn ureq_session_rejects_a_body_over_the_size_limit() {
+    // 다 읽은 뒤가 아니라 읽는 도중에 끊어야 메모리를 지킨다.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                break;
+            }
+        }
+        let size = backend::bookstore::MAX_RESPONSE_BYTES + 1024 * 1024;
+        let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n");
+        let block = vec![b'x'; 64 * 1024];
+        let mut sent = 0;
+        while sent < size {
+            if stream.write_all(&block).is_err() {
+                return;
+            }
+            sent += block.len();
+        }
+    });
+
+    let error = UreqHttpSession::new().get(&format!("http://{address}/huge"), &[]).unwrap_err();
+
+    assert!(error.to_string().contains("상한"), "{error}");
+    server.join().unwrap();
+}
+
+#[test]
 fn ureq_session_reuses_a_connection_after_a_complete_response() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

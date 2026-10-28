@@ -369,12 +369,20 @@ fn read_body_chunks(mut body: ureq::BodyReader<'static>, sender: SyncSender<std:
     }
 }
 
+/// 외부 응답 본문의 상한. 다 읽은 뒤에 검사하면 메모리를 지키지 못하므로 읽는 도중에 끊는다.
+pub const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 fn read_body_with_idle_timeout(body: ureq::BodyReader<'static>, agent: ureq::Agent, timeout: std::time::Duration) -> Result<(Vec<u8>, ureq::Agent), HttpError> {
     let (sender, receiver) = sync_channel(1);
     std::thread::spawn(move || read_body_chunks(body, sender));
     let mut output = Vec::new();
     loop {
         match receiver.recv_timeout(timeout) {
+            Ok(Ok(chunk)) if output.len() + chunk.len() > MAX_RESPONSE_BYTES => {
+                // 수신 스레드는 receiver가 사라지면 send 실패로 끝난다.
+                agent.shutdown();
+                return Err(HttpError::Connection(format!("응답 본문이 상한 {MAX_RESPONSE_BYTES}바이트를 넘습니다")));
+            }
             Ok(Ok(chunk)) => output.extend(chunk),
             Ok(Err(error)) => {
                 return if error.kind() == std::io::ErrorKind::TimedOut { Err(HttpError::Timeout) } else { Err(HttpError::Connection(error.to_string())) };
