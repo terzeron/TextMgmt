@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use super::{ensure_allowed, hidden_categories, kind, manager_for};
-use crate::book_manager::MAX_CATEGORY_PAGE_SIZE;
+use crate::book_manager::{CoverPage, MAX_CATEGORY_PAGE_SIZE};
 use crate::main::{
     deps::AppDeps,
     errors::ApiResult,
@@ -56,15 +56,15 @@ async fn browse(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
     let manager = manager_for(&deps, comics)?;
     let hidden = hidden_categories(&deps, &payload, comics)?;
     ensure_allowed(&query.category, &hidden)?;
-    let (items, total, next, error) = if query.uncovered {
+    let page = if query.uncovered {
         manager.get_uncovered_books_paged(&query.category, query.limit, &query.cursor, Some(&hidden)).await
     } else {
-        let (items, total, next, error) = manager.get_cover_books_paged(&query.category, query.limit, &query.cursor, Some(&hidden)).await;
-        (items, Some(total), next, error)
+        manager.get_cover_books_paged(&query.category, query.limit, &query.cursor, Some(&hidden)).await
     };
-    if let Some(error) = error {
-        return Ok(Json(json!({"status":"failure","error":error})));
-    }
+    let CoverPage { items, total, next_cursor: next } = match page {
+        Ok(page) => page,
+        Err(error) => return Ok(Json(json!({"status":"failure","error":error}))),
+    };
     let books: Vec<Value> = items
         .into_iter()
         .map(|(book, title)| {

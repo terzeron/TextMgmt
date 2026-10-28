@@ -52,7 +52,7 @@ use std::time::Duration;
 
 use axum::http::Method;
 use backend::book::{Book, BookLookupError, BookPage};
-use backend::book_manager::{BookContent, BookManagerApi, BookResponse};
+use backend::book_manager::{BookContent, BookManagerApi, BookResponse, CoverPage};
 use backend::db::{DbValue, Row};
 use backend::es_manager::{EsError, EsManagerApi};
 use backend::main::{
@@ -323,6 +323,12 @@ fn count(v: &Value) -> i64 {
     v.as_i64().unwrap_or(0)
 }
 
+/// `[항목, 전체 수, 다음 커서, 오류]`를 `Result<CoverPage, _>`로 바꾼다. 전체 수가 null이면 모르는 것이다.
+fn cover_page(v: &Value) -> Result<CoverPage, String> {
+    let total = arr(v, 1).as_u64().map(|n| n as usize);
+    opt_string(arr(v, 3)).map_or_else(|| Ok(CoverPage { items: titled_books(arr(v, 0)), total, next_cursor: opt_string(arr(v, 2)) }), Err)
+}
+
 /// `[책 목록, 전체 수, 오류]`를 `Result<BookPage, _>`로 바꾼다.
 fn page(v: &Value) -> Result<BookPage, String> {
     opt_string(arr(v, 2)).map_or_else(|| Ok(BookPage { books: books(arr(v, 0)), total: count(&arr(v, 1)), next_cursor: None }), Err)
@@ -454,14 +460,14 @@ impl BookManagerApi for Mock {
         page(&v)
     }
 
-    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, i64, Option<String>, Option<String>) {
+    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         let v = self.invoke("get_cover_books_paged", call_args!([], {"category": category, "size": size, "cursor": cursor, "exclude_categories": exclude_categories})).await;
-        (titled_books(arr(&v, 0)), count(&arr(&v, 1)), opt_string(arr(&v, 2)), opt_string(arr(&v, 3)))
+        cover_page(&v)
     }
 
-    async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, Option<i64>, Option<String>, Option<String>) {
+    async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         let v = self.invoke("get_uncovered_books_paged", call_args!([], {"category": category, "size": size, "cursor": cursor, "exclude_categories": exclude_categories})).await;
-        (titled_books(arr(&v, 0)), arr(&v, 1).as_i64(), opt_string(arr(&v, 2)), opt_string(arr(&v, 3)))
+        cover_page(&v)
     }
 
     #[allow(clippy::too_many_arguments)]

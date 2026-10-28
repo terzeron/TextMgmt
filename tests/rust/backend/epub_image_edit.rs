@@ -178,9 +178,10 @@ impl FakeManager {
 
 #[async_trait]
 impl BookManagerApi for FakeManager {
-    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>) {
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String> {
         self.calls.lock().unwrap().push(("edit_epub_images".into(), vec![json!(book_id), json!(crops), json!(splits), json!(deletes), json!(inserts)]));
-        self.edit_epub_images.lock().unwrap().clone()
+        let (value, error) = self.edit_epub_images.lock().unwrap().clone();
+        error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 }
 
@@ -544,7 +545,7 @@ async fn test_manager_applies_a_combined_edit_and_keeps_the_original_in_trash() 
     let m = manager_env();
     let original = fs::read(&m.path).unwrap();
     let data = b64(&jpeg("blue"));
-    let (result, error) =
+    let result =
         m.bm.edit_epub_images(
             1,
             &[with_idref("p1", rect(0.0, 0.5))],
@@ -552,9 +553,8 @@ async fn test_manager_applies_a_combined_edit_and_keeps_the_original_in_trash() 
             &[json!({"idref": "shared"})],
             &[json!({"before_idref": "text", "url": "https://img.example.com/a.jpg"}), json!({"before_idref": "text", "image_data": data})],
         )
-        .await;
-    assert_eq!(error, None);
-    let result = result.unwrap();
+        .await
+        .unwrap();
     assert!(result["idrefs"]["inserted"].as_array().unwrap().len() == 2 && result["idrefs"]["split"].get("p2").is_some(), "{result}");
     assert_eq!(fs::read(m.tmp.path().join("0_trash").join("book.epub")).unwrap(), original);
     assert_eq!(m.es.updates().len(), 1);
@@ -564,10 +564,10 @@ async fn test_manager_applies_a_combined_edit_and_keeps_the_original_in_trash() 
 async fn test_manager_reports_errors_as_messages() {
     let m = manager_env();
     let original = fs::read(&m.path).unwrap();
-    let (_, error) = m.bm.edit_epub_images(1, &[with_idref("text", rect(0.0, 1.0))], &[], &[], &[]).await;
-    assert!(error.as_deref().unwrap_or("").contains("크롭할 수 없습니다"), "{error:?}");
-    let (_, error) = m.bm.edit_epub_images(1, &[], &[], &[], &[json!({"before_idref": "p1", "image_data": "!!!"})]).await;
-    assert!(error.as_deref().unwrap_or("").contains("읽을 수 없습니다"), "{error:?}");
+    let error = m.bm.edit_epub_images(1, &[with_idref("text", rect(0.0, 1.0))], &[], &[], &[]).await.unwrap_err();
+    assert!(error.contains("크롭할 수 없습니다"), "{error}");
+    let error = m.bm.edit_epub_images(1, &[], &[], &[], &[json!({"before_idref": "p1", "image_data": "!!!"})]).await.unwrap_err();
+    assert!(error.contains("읽을 수 없습니다"), "{error}");
     assert_eq!(fs::read(&m.path).unwrap(), original);
 }
 

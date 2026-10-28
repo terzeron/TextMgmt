@@ -106,10 +106,10 @@ impl TryFrom<RawIllustration> for EpubIllustrationBody {
     }
 }
 
-fn outcome((result, error): (Option<Value>, Option<String>)) -> Json<Value> {
-    match error {
-        None => Json(json!({"status": "success", "result": result})),
-        Some(error) => Json(json!({"status": "failure", "error": error})),
+fn outcome(result: Result<Value, String>) -> Json<Value> {
+    match result {
+        Ok(result) => Json(json!({"status": "success", "result": result})),
+        Err(error) => Json(json!({"status": "failure", "error": error})),
     }
 }
 

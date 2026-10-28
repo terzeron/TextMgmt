@@ -854,8 +854,9 @@ impl backend::main::BookManagerApi for FakeManager {
         self.delete_pdf_pages.lock().unwrap().clone()
     }
 
-    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>) {
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String> {
         self.calls.lock().unwrap().push(("edit_epub_images".into(), vec![json!(book_id), json!(crops), json!(splits), json!(deletes), json!(inserts)]));
-        self.edit_epub_images.lock().unwrap().clone()
+        let (value, error) = self.edit_epub_images.lock().unwrap().clone();
+        error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 }

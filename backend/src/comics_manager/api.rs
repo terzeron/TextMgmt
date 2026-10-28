@@ -1,7 +1,7 @@
 //! 만화 API는 동일한 도서 처리 로직을 만화 전용 의존성으로 실행한다.
 use super::ComicsManager;
 use crate::book::{Book, BookLookupError, BookPage};
-use crate::book_manager::BookManager;
+use crate::book_manager::{BookManager, CoverPage};
 use crate::es_manager::EsManagerApi;
 use crate::main::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress};
 use serde_json::Value;
@@ -126,7 +126,7 @@ impl BookManagerApi for ComicsManager {
         BookManagerApi::search_similar_books_paged(&self.inner, book_id, size, offset).await
     }
 
-    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, i64, Option<String>, Option<String>) {
+    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         BookManagerApi::get_cover_books_paged(&self.inner, category, size, cursor, exclude_categories).await
     }
 
@@ -138,23 +138,23 @@ impl BookManagerApi for ComicsManager {
         BookManagerApi::get_category_mismatch_details(&self.inner, category)
     }
 
-    async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, Option<i64>, Option<String>, Option<String>) {
+    async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         BookManagerApi::get_uncovered_books_paged(&self.inner, category, size, cursor, exclude_categories).await
     }
 
-    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>) {
+    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
         BookManagerApi::set_epub_cover(&self.inner, book_id, url, image_data).await
     }
 
-    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>) {
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String> {
         BookManagerApi::edit_epub_images(&self.inner, book_id, crops, splits, deletes, inserts).await
     }
 
-    async fn remove_epub_cover(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+    async fn remove_epub_cover(&self, book_id: i64) -> Result<Value, String> {
         BookManagerApi::remove_epub_cover(&self.inner, book_id).await
     }
 
-    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>) {
+    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
         BookManagerApi::insert_epub_illustration(&self.inner, book_id, before_idref, url, image_data).await
     }
 

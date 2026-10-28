@@ -41,7 +41,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use backend::book::Book;
-use backend::book_manager::{ApplyOptions, BookManager, BookManagerDeps, CoverPageOpts, FileReader, MAX_CATEGORY_PAGE_SIZE, MoveOpts, ProposeOptions, encode_category_cursor};
+use backend::book_manager::{ApplyOptions, BookManager, BookManagerDeps, CoverPage, CoverPageOpts, FileReader, MAX_CATEGORY_PAGE_SIZE, MoveOpts, ProposeOptions, encode_category_cursor};
 use backend::classifier::BookClassifierApi;
 use backend::es_manager::{EsError, EsManagerApi};
 use backend::main::BookManagerApi;
@@ -756,6 +756,17 @@ fn page(category: Option<&str>, size: usize, cursor: Option<&str>, exclude: &[&s
     CoverPageOpts { category: category.map(str::to_string), size, cursor: cursor.map(str::to_string), exclude_categories: strings(exclude) }
 }
 
+/// 원본 테스트의 `(항목, 전체 수, 다음 커서, 오류)` 쪽.
+type RawPage = (Vec<(Book, String)>, usize, Option<String>, Option<String>);
+
+/// `Result<CoverPage, _>`를 원본 테스트 모양으로 펼친다.
+fn unpage(result: Result<CoverPage, String>) -> RawPage {
+    match result {
+        Ok(page) => (page.items, page.total.unwrap_or(0), page.next_cursor, None),
+        Err(error) => (Vec::new(), 0, None, Some(error)),
+    }
+}
+
 #[tokio::test]
 async fn test_get_cover_books_paged_merges_files_and_work_groups_newest_first() {
     let tmp = TempDir::new().unwrap();
@@ -763,7 +774,7 @@ async fn test_get_cover_books_paged_merges_files_and_work_groups_newest_first() 
     let (es, calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    let (items, total, next_cursor, error) = manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await;
+    let (items, total, next_cursor, error) = unpage(manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await);
 
     assert_eq!(error, None);
     assert_eq!(next_cursor, None);
@@ -787,7 +798,7 @@ async fn test_get_cover_books_paged_rejects_malformed_es_book() {
     });
     let manager = make_manager(tmp.path(), es);
 
-    let (items, total, cursor, error) = manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await;
+    let (items, total, cursor, error) = unpage(manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await);
 
     assert!(items.is_empty());
     assert_eq!(total, 0);
@@ -806,7 +817,7 @@ async fn test_get_cover_books_paged_pages_continue_without_gaps_or_repeats() {
     let mut cursor = String::new();
     let mut finished = false;
     for _ in 0..10 {
-        let (items, total, cursor_next, error) = manager.get_cover_books_paged(page(Some("A"), 1, Some(&cursor), &[])).await;
+        let (items, total, cursor_next, error) = unpage(manager.get_cover_books_paged(page(Some("A"), 1, Some(&cursor), &[])).await);
         assert_eq!(error, None);
         assert_eq!(total, 4);
         seen.extend(titles(&items));
@@ -832,7 +843,7 @@ async fn test_get_cover_books_paged_root_shows_root_files_and_one_card_per_top_l
     let (es, calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    let (items, total, next_cursor, error) = manager.get_cover_books_paged(page(None, 10, None, &[])).await;
+    let (items, total, next_cursor, error) = unpage(manager.get_cover_books_paged(page(None, 10, None, &[])).await);
 
     assert_eq!(error, None);
     assert_eq!(next_cursor, None);
@@ -851,7 +862,7 @@ async fn test_get_cover_books_paged_scopes_to_selected_directory() {
     let (es, calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    let (items, total, _cursor, error) = manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await;
+    let (items, total, _cursor, error) = unpage(manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await);
 
     assert_eq!(error, None);
     assert_eq!(total, 4);
@@ -867,7 +878,7 @@ async fn test_get_cover_books_paged_excludes_hidden_categories_everywhere() {
     let (es, calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    let (items, total, _cursor, _error) = manager.get_cover_books_paged(page(Some("A"), 10, None, &["A/나작품"])).await;
+    let (items, total, _cursor, _error) = unpage(manager.get_cover_books_paged(page(Some("A"), 10, None, &["A/나작품"])).await);
 
     assert_eq!(total, 3);
     let calls = calls.lock().unwrap();
@@ -886,7 +897,7 @@ async fn test_get_cover_books_paged_skips_group_without_representative() {
     let (es, _calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    let (items, _total, _cursor, _error) = manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await;
+    let (items, _total, _cursor, _error) = unpage(manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await);
 
     let displays: Vec<&str> = items.iter().map(|(_, d)| d.as_str()).collect();
     assert_eq!(displays, vec!["", "", "라작품"]);
@@ -899,7 +910,7 @@ async fn test_get_cover_books_paged_keeps_paging_when_only_files_remain() {
     let (es, _calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    let (items, _total, next_cursor, _error) = manager.get_cover_books_paged(page(Some("A"), 2, None, &[])).await;
+    let (items, _total, next_cursor, _error) = unpage(manager.get_cover_books_paged(page(Some("A"), 2, None, &[])).await);
 
     let displays: Vec<&str> = items.iter().map(|(_, d)| d.as_str()).collect();
     assert_eq!(displays, vec!["", "나작품"]);
@@ -915,7 +926,7 @@ async fn test_get_cover_books_paged_rejects_malformed_cursor() {
         let (es, _calls) = fake_cover_es(&stats, &files, &reps);
         let manager = make_manager(tmp.path(), es);
 
-        let result = manager.get_cover_books_paged(page(None, 10, Some(bad_cursor), &[])).await;
+        let result = unpage(manager.get_cover_books_paged(page(None, 10, Some(bad_cursor), &[])).await);
 
         assert!(result.0.is_empty() && result.1 == 0 && result.2.is_none() && result.3.as_deref() == Some("invalid cursor"), "cursor {bad_cursor}");
     }
@@ -931,7 +942,7 @@ async fn test_get_cover_books_paged_rejects_wrong_cursor_member_shapes() {
     // 묶음·파일 커서는 [수정 시각, 생성 시각, 경로] 세 칸이어야 한다.
     for member in [json!([["a"], null]), json!([null, "x"]), json!([null, [1, 2]]), json!([[1, 2, "k", "extra"], null])] {
         let cursor = encode_category_cursor(&member);
-        let result = manager.get_cover_books_paged(page(None, 10, Some(&cursor), &[])).await;
+        let result = unpage(manager.get_cover_books_paged(page(None, 10, Some(&cursor), &[])).await);
         assert_eq!(result.3.as_deref(), Some("invalid cursor"), "member {member}");
     }
 }
@@ -943,8 +954,8 @@ async fn test_get_cover_books_paged_clamps_page_size() {
     let (es, calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    manager.get_cover_books_paged(page(None, 0, None, &[])).await;
-    manager.get_cover_books_paged(page(None, 1_000_000_000, None, &[])).await;
+    unpage(manager.get_cover_books_paged(page(None, 0, None, &[])).await);
+    unpage(manager.get_cover_books_paged(page(None, 1_000_000_000, None, &[])).await);
 
     let calls = calls.lock().unwrap();
     assert_eq!(calls.files[0].size, 1);

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+use super::CoverPage;
 use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
 use crate::book::{Book, BookLookupError, BookPage};
 use crate::es_manager::EsManagerApi;
@@ -163,15 +164,14 @@ impl BookManagerApi for BookManager {
         BookManager::search_similar_books_paged(self, book_id, size, offset).await
     }
 
-    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, i64, Option<String>, Option<String>) {
+    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         let opts = CoverPageOpts {
             category: Some(category.to_string()),
             size: size.max(0) as usize,
             cursor: Some(cursor.to_string()),
             exclude_categories: exclude_categories.map(<[String]>::to_vec).unwrap_or_default(),
         };
-        let (items, total, next_cursor, error) = BookManager::get_cover_books_paged(self, opts).await;
-        (items, total as i64, next_cursor, error)
+        BookManager::get_cover_books_paged(self, opts).await
     }
 
     fn get_category_mismatches(&self, force_refresh: bool) -> Result<Value, String> {
@@ -182,25 +182,24 @@ impl BookManagerApi for BookManager {
         self.try_get_category_mismatch_details(category)
     }
 
-    async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, Option<i64>, Option<String>, Option<String>) {
+    async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         let opts = CoverPageOpts { category: Some(category.into()), size: size.max(0) as usize, cursor: Some(cursor.into()), exclude_categories: exclude_categories.unwrap_or_default().to_vec() };
-        let (items, total, next, error) = BookManager::get_uncovered_books_paged(self, opts).await;
-        (items, total.map(|n| n as i64), next, error)
+        BookManager::get_uncovered_books_paged(self, opts).await
     }
 
-    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>) {
+    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
         BookManager::set_epub_cover(self, book_id, url, image_data).await
     }
 
-    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>) {
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String> {
         BookManager::edit_epub_images(self, book_id, crops, splits, deletes, inserts).await
     }
 
-    async fn remove_epub_cover(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+    async fn remove_epub_cover(&self, book_id: i64) -> Result<Value, String> {
         BookManager::remove_epub_cover(self, book_id).await
     }
 
-    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>) {
+    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
         BookManager::insert_epub_illustration(self, book_id, before_idref, url, image_data).await
     }
 

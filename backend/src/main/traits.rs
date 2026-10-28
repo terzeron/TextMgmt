@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use crate::auth::HTTPException;
 use crate::book::{Book, BookLookupError, BookPage};
+use crate::book_manager::CoverPage;
 use crate::category_mapping::CategoryMapping;
 use crate::es_manager::EsManagerApi;
 use crate::view_history_store::{ViewHistoryError, ViewHistoryStore};
@@ -558,19 +559,12 @@ pub trait BookManagerApi: Send + Sync {
         Err(UNIMPLEMENTED.to_string())
     }
 
-    /// (항목 [(대표 책, 작품 디렉터리 이름 또는 "")], 전체 항목 수, 다음 커서, 오류)
-    async fn get_cover_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, i64, Option<String>, Option<String>) {
-        (Vec::new(), 0, None, unimplemented_error())
+    async fn get_cover_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
-    async fn get_uncovered_books_paged(
-        &self,
-        _category: &str,
-        _size: i64,
-        _cursor: &str,
-        _exclude_categories: Option<&[String]>,
-    ) -> (Vec<(Book, String)>, Option<i64>, Option<String>, Option<String>) {
-        (Vec::new(), None, None, unimplemented_error())
+    async fn get_uncovered_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
     fn get_category_mismatches(&self, _force_refresh: bool) -> Result<Value, String> {
@@ -580,24 +574,24 @@ pub trait BookManagerApi: Send + Sync {
         Err(UNIMPLEMENTED.to_string())
     }
 
-    /// EPUB 표지를 URL 또는 올린 이미지(base64)로 넣거나 바꾼다: (결과, 오류 메시지).
-    async fn set_epub_cover(&self, _book_id: i64, _url: Option<&str>, _image_data: Option<&str>) -> (Option<Value>, Option<String>) {
-        (None, unimplemented_error())
+    /// EPUB 표지를 URL 또는 올린 이미지(base64)로 넣거나 바꾼다.
+    async fn set_epub_cover(&self, _book_id: i64, _url: Option<&str>, _image_data: Option<&str>) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
     /// EPUB 쪽 이미지의 크롭·분할·삭제·삽입을 한 번에 저장한다. 항목은 라우트가 검증한 JSON 객체다.
-    async fn edit_epub_images(&self, _book_id: i64, _crops: &[Value], _splits: &[Value], _deletes: &[Value], _inserts: &[Value]) -> (Option<Value>, Option<String>) {
-        (None, unimplemented_error())
+    async fn edit_epub_images(&self, _book_id: i64, _crops: &[Value], _splits: &[Value], _deletes: &[Value], _inserts: &[Value]) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
     /// EPUB 표지를 뺀다.
-    async fn remove_epub_cover(&self, _book_id: i64) -> (Option<Value>, Option<String>) {
-        (None, unimplemented_error())
+    async fn remove_epub_cover(&self, _book_id: i64) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
     /// `before_idref` 페이지 앞에 삽화를 넣는다.
-    async fn insert_epub_illustration(&self, _book_id: i64, _before_idref: &str, _url: Option<&str>, _image_data: Option<&str>) -> (Option<Value>, Option<String>) {
-        (None, unimplemented_error())
+    async fn insert_epub_illustration(&self, _book_id: i64, _before_idref: &str, _url: Option<&str>, _image_data: Option<&str>) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -844,14 +838,14 @@ mod tests {
         assert!(manager.get_latest_books(10, None).await.is_err());
         assert!(manager.search_by_keyword_paged("query", 10, 0, None, None).await.is_err());
         assert!(manager.search_similar_books_paged(1, 10, 0).await.is_err());
-        assert!(manager.get_cover_books_paged("fiction", 10, "", None).await.3.is_some());
-        assert!(manager.get_uncovered_books_paged("fiction", 10, "", None).await.3.is_some());
+        assert!(manager.get_cover_books_paged("fiction", 10, "", None).await.is_err());
+        assert!(manager.get_uncovered_books_paged("fiction", 10, "", None).await.is_err());
         assert!(manager.get_category_mismatches(false).is_err());
         assert!(manager.get_category_mismatch_details("fiction").is_err());
-        assert!(manager.set_epub_cover(1, None, None).await.1.is_some());
-        assert!(manager.edit_epub_images(1, &[], &[], &[], &[]).await.1.is_some());
-        assert!(manager.remove_epub_cover(1).await.1.is_some());
-        assert!(manager.insert_epub_illustration(1, "page-1", None, None).await.1.is_some());
+        assert!(manager.set_epub_cover(1, None, None).await.is_err());
+        assert!(manager.edit_epub_images(1, &[], &[], &[], &[]).await.is_err());
+        assert!(manager.remove_epub_cover(1).await.is_err());
+        assert!(manager.insert_epub_illustration(1, "page-1", None, None).await.is_err());
         assert!(manager.update_book(1, "fiction", "title", "author", std::path::Path::new("a.epub"), "epub", false).await.1.is_some());
     }
 }
