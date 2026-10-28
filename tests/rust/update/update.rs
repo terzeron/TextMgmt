@@ -90,9 +90,19 @@ fn a_failed_delete_is_reported_after_the_delete_was_attempted() {
 }
 
 #[test]
-fn no_arguments_runs_the_default_test_document_update_get_delete() {
+fn no_arguments_prints_usage_without_touching_the_index() {
+    // 운영 색인에 쓰고 지우는 도구라 인자 없는 실행은 사용법만 보인다.
     let es = Dummy::new(true, true);
     let (code, out) = go(&[], &es);
+    assert_eq!(code, 0);
+    assert!(out.contains("사용법:"), "{out}");
+    assert!(es.updated.borrow().is_empty() && es.deleted.borrow().is_empty());
+}
+
+#[test]
+fn bare_run_uses_the_default_test_document() {
+    let es = Dummy::new(true, true);
+    let (code, out) = go(&["run"], &es);
     assert_eq!(code, 0);
     assert_eq!(es.updated.borrow()[0].0, 3384);
     assert_eq!(*es.deleted.borrow(), [3384]);
