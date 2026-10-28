@@ -2255,8 +2255,8 @@ impl backend::refresh_token_store::RefreshTokenStoreApi for AuthRefreshStore {
     fn store_issued(&self, _: &str, _: &str, _: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<(), backend::refresh_token_store::StoreError> {
         Ok(())
     }
-    fn rotate(&self, _: &str, _: &str, _: &str, _: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<String, backend::refresh_token_store::StoreError> {
-        Ok("ok".into())
+    fn rotate(&self, _: &str, _: &str, _: &str, _: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<backend::refresh_token_store::Rotation, backend::refresh_token_store::StoreError> {
+        Ok(backend::refresh_token_store::Rotation::Ok)
     }
     fn revoke_family(&self, _: &str, _: &str) -> Result<(), backend::refresh_token_store::StoreError> {
         Err(backend::refresh_token_store::StoreError::Unsupported("test store".into()))

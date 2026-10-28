@@ -59,7 +59,7 @@ use backend::main::{
     AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookstoreFactory, BookstoreSearch, CategoryMappingApi, GoogleVerifier, MappingError, ProposeCategoryChanges, ReloadProgress, RoleResolver,
     TaskHandle, TaskRunner,
 };
-use backend::refresh_token_store::{RefreshTokenStoreApi, StoreError};
+use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, StoreError};
 use common::env::{EnvGuard, EnvReadGuard};
 use common::{Response, TestClient};
 use serde_json::{Map, Value, json};
@@ -684,9 +684,9 @@ impl RefreshTokenStoreApi for Mock {
         expires_at: i64,
         client_ip: Option<&str>,
         user_agent: Option<&str>,
-    ) -> Result<String, StoreError> {
+    ) -> Result<Rotation, StoreError> {
         let kwargs = json!({"current_token_id": current_token_id, "new_token_id": new_token_id, "family_id": family_id, "email": email, "issued_at": issued_at, "expires_at": expires_at, "client_ip": client_ip, "user_agent": user_agent});
-        self.invoke_sync_try("rotate", CallArgs::new(vec![], kwargs)).map(|v| v.as_str().unwrap_or("").to_string()).map_err(StoreError::Unsupported)
+        self.invoke_sync_try("rotate", CallArgs::new(vec![], kwargs)).and_then(|v| v.as_str().unwrap_or("").parse()).map_err(StoreError::Unsupported)
     }
 
     fn revoke_family(&self, family_id: &str, reason: &str) -> Result<(), StoreError> {
