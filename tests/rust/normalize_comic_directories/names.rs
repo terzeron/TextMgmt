@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use normalize_comic_directories::names::*;
+use normalize_comic_directories::plan::SkipReason;
 use serde_json::Value;
 
 fn cases() -> Value {
@@ -114,7 +115,7 @@ fn infer_identity_matches_python() {
         assert_eq!((got.title.as_deref(), got.author.as_deref()), (opt(&e[0]), opt(&e[1])), "{} {}", case[0], case[1]);
         assert!((got.confidence - e[2].as_f64().unwrap()).abs() < 1e-5, "{} {}: {}", case[0], case[1], got.confidence);
         assert_eq!(got.file_count as i64, e[3].as_i64().unwrap());
-        assert_eq!(got.failure_status.as_deref(), opt(&e[4]), "{} {}", case[0], case[1]);
+        assert_eq!(got.failure_status.map(SkipReason::as_str), opt(&e[4]), "{} {}", case[0], case[1]);
         assert_eq!(got.failure_reason, s(&e[5]));
     }
 }
@@ -128,7 +129,7 @@ fn infer_identity_ignores_symlinks_and_other_extensions() {
     fs::write(dir.join("제목 2권.txt"), b"x").unwrap();
     std::os::unix::fs::symlink(dir.join("제목 1권.pdf"), dir.join("제목 3권.pdf")).unwrap();
     let got = infer_identity(&dir);
-    assert_eq!(got.failure_status.as_deref(), Some("SKIP_INSUFFICIENT_FILES"));
+    assert_eq!(got.failure_status, Some(SkipReason::InsufficientFiles));
     assert_eq!(got.file_count, 1);
 }
 
