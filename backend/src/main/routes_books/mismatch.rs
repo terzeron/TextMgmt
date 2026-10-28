@@ -5,12 +5,12 @@ use std::sync::{Arc, Mutex};
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},
-    http::Uri,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::super::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, ReloadProgress, RequestValidationError, RequireAdmin, Routes};
+use super::manager;
 
 pub(super) fn routes() -> Routes {
     let mut routes = Routes::new();
@@ -27,14 +27,6 @@ pub(super) fn routes() -> Routes {
             .get(&format!("{prefix}/category-mismatches/{{*category}}"), &["require_admin"], mismatch_details);
     }
     routes
-}
-
-fn manager(deps: &AppDeps, uri: &Uri) -> ApiResult<Arc<dyn BookManagerApi>> {
-    let manager = if uri.path().starts_with("/comics/") { deps.comics_manager() } else { deps.book_manager() };
-    manager.map_err(|error| {
-        log::warn!("도서 관리자를 쓸 수 없다: {error}");
-        ApiError::unavailable()
-    })
 }
 
 async fn get_mismatches(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri) -> Json<Value> {

@@ -7,13 +7,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+use super::{ensure_allowed, hidden_categories, kind, manager_for};
 use crate::book_manager::MAX_CATEGORY_PAGE_SIZE;
 use crate::main::{
     deps::AppDeps,
-    errors::{ApiError, ApiResult},
+    errors::ApiResult,
     extract::{ApiQuery, RequireAuth},
     routes::Routes,
-    traits::MappingError,
 };
 
 pub(super) fn routes() -> Routes {
@@ -52,26 +52,10 @@ impl TryFrom<RawQuery> for Query {
 }
 
 async fn browse(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiQuery(query): ApiQuery<Query>) -> ApiResult<Json<Value>> {
-    let comics = uri.path().starts_with("/comics/");
-    let manager = if comics { deps.comics_manager() } else { deps.book_manager() }.map_err(|e| {
-        log::warn!("도서 관리자를 쓸 수 없다: {e}");
-        ApiError::unavailable()
-    })?;
-    let hidden = if payload["role"] == "viewer" {
-        let mapping = deps.category_mapping().map_err(|e| {
-            log::warn!("카테고리 접근 정책을 읽을 수 없다: {e}");
-            ApiError::unavailable()
-        })?;
-        mapping.get_hidden_categories(if comics { "comic" } else { "book" }).map_err(|e| match e {
-            MappingError::Http(status, detail) => ApiError::http(status, &detail),
-            MappingError::Other(message) => ApiError::Internal(message),
-        })?
-    } else {
-        vec![]
-    };
-    if !query.category.is_empty() && hidden.iter().any(|h| query.category == *h || query.category.starts_with(&format!("{h}/"))) {
-        return Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다."));
-    }
+    let comics = kind(&uri) == "comic";
+    let manager = manager_for(&deps, comics)?;
+    let hidden = hidden_categories(&deps, &payload, comics)?;
+    ensure_allowed(&query.category, &hidden)?;
     let (items, total, next, error) = if query.uncovered {
         manager.get_uncovered_books_paged(&query.category, query.limit, &query.cursor, Some(&hidden)).await
     } else {

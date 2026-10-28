@@ -1,7 +1,8 @@
 //! 도서·만화의 메타데이터, 검색, 카테고리 및 최신 목록.
+use super::{ensure_allowed, hidden_categories, is_hidden, kind, manager};
 use crate::book::Book;
 use crate::book_manager::MAX_LATEST_BOOK_COUNT;
-use crate::main::{ApiError, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, MappingError, RequireAuth, Routes};
+use crate::main::{ApiError, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, RequireAuth, Routes};
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},
@@ -28,16 +29,7 @@ pub(super) fn routes() -> Routes {
 }
 
 fn comics(uri: &Uri) -> bool {
-    uri.path().starts_with("/comics/")
-}
-fn kind(uri: &Uri) -> &'static str {
-    if comics(uri) { "comic" } else { "book" }
-}
-fn manager(deps: &AppDeps, uri: &Uri) -> ApiResult<Arc<dyn BookManagerApi>> {
-    if comics(uri) { deps.comics_manager() } else { deps.book_manager() }.map_err(|e| {
-        log::warn!("도서 관리자를 쓸 수 없다: {e}");
-        ApiError::unavailable()
-    })
+    kind(uri) == "comic"
 }
 fn mapping(deps: &AppDeps) -> ApiResult<Arc<dyn CategoryMappingApi>> {
     deps.category_mapping().map_err(|e| {
@@ -45,20 +37,8 @@ fn mapping(deps: &AppDeps) -> ApiResult<Arc<dyn CategoryMappingApi>> {
         ApiError::unavailable()
     })
 }
-fn mapping_error(error: MappingError) -> ApiError {
-    match error {
-        MappingError::Http(status, detail) => ApiError::http(status, &detail),
-        MappingError::Other(message) => ApiError::Internal(message),
-    }
-}
 fn hidden(deps: &AppDeps, payload: &Value, uri: &Uri) -> ApiResult<Vec<String>> {
-    if payload["role"] == "viewer" { mapping(deps)?.get_hidden_categories(kind(uri)).map_err(mapping_error) } else { Ok(vec![]) }
-}
-fn is_hidden(category: &str, hidden: &[String]) -> bool {
-    hidden.iter().any(|h| category == h || category.starts_with(&format!("{h}/")))
-}
-fn ensure_allowed(category: &str, hidden: &[String]) -> ApiResult<()> {
-    if is_hidden(category, hidden) { Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다.")) } else { Ok(()) }
+    hidden_categories(deps, payload, comics(uri))
 }
 pub(super) fn book_json(book: &Book, manager: &dyn BookManagerApi) -> Value {
     let manager_prefix = manager.path_prefix();
@@ -142,7 +122,7 @@ async fn latest(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
         return Err(crate::main::RequestValidationError::single(&["query", "limit"], "Invalid latest page size", json!(limit)).into());
     }
     let mut excluded = hidden(&deps, &payload, &uri)?;
-    for category in mapping(&deps)?.get_latest_excluded_categories(kind(&uri)).map_err(mapping_error)? {
+    for category in mapping(&deps)?.get_latest_excluded_categories(kind(&uri))? {
         if !excluded.contains(&category) {
             excluded.push(category);
         }

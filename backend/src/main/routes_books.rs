@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::body::{Body, Bytes};
 use axum::extract::{OriginalUri, Path, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, Uri};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -204,13 +204,60 @@ pub(super) async fn run_blocking<T: Send + 'static>(work: impl Future<Output = T
     tokio::task::spawn_blocking(move || handle.block_on(work)).await.map_err(|e| ApiError::Internal(format!("blocking task failed: {e}")))
 }
 
-/// viewer는 카테고리 정책을 확인한 뒤 파일을 읽는다. admin은 조회 제한을 받지 않는다.
-pub(super) async fn checked_manager(deps: &AppDeps, payload: &Value, book_id: i64, comics: bool) -> ApiResult<Arc<dyn BookManagerApi>> {
-    let manager = if comics { deps.comics_manager() } else { deps.book_manager() }.map_err(|e| {
+/// 경로로 도서와 만화를 가른다. 카테고리 정책과 ES가 쓰는 종류 이름이다.
+fn kind(uri: &Uri) -> &'static str {
+    if uri.path().starts_with("/comics/") { "comic" } else { "book" }
+}
+
+fn manager(deps: &AppDeps, uri: &Uri) -> ApiResult<Arc<dyn BookManagerApi>> {
+    manager_for(deps, kind(uri) == "comic")
+}
+
+fn manager_for(deps: &AppDeps, comics: bool) -> ApiResult<Arc<dyn BookManagerApi>> {
+    if comics { deps.comics_manager() } else { deps.book_manager() }.map_err(|e| {
         log::warn!("도서 관리자를 쓸 수 없다: {e}");
         ApiError::unavailable()
+    })
+}
+
+impl From<MappingError> for ApiError {
+    fn from(error: MappingError) -> Self {
+        match error {
+            MappingError::Http(status, detail) => ApiError::http(status, &detail),
+            MappingError::Other(message) => ApiError::Internal(message),
+        }
+    }
+}
+
+fn is_viewer(payload: &Value) -> bool {
+    payload.get("role").and_then(Value::as_str) == Some("viewer")
+}
+
+/// viewer에게 숨긴 카테고리. viewer가 아니면 비어 있다.
+fn hidden_categories(deps: &AppDeps, payload: &Value, comics: bool) -> ApiResult<Vec<String>> {
+    if !is_viewer(payload) {
+        return Ok(Vec::new());
+    }
+    let mapping = deps.category_mapping().map_err(|e| {
+        log::warn!("카테고리 접근 정책을 읽을 수 없다: {e}");
+        ApiError::unavailable()
     })?;
-    if payload.get("role").and_then(Value::as_str) == Some("viewer") {
+    Ok(mapping.get_hidden_categories(if comics { "comic" } else { "book" })?)
+}
+
+/// 카테고리가 숨긴 카테고리이거나 그 하위면 참이다. 모든 viewer 접근 검사가 이 판정 하나를 쓴다.
+pub(super) fn is_hidden(category: &str, hidden: &[String]) -> bool {
+    !category.is_empty() && hidden.iter().any(|h| category == h || category.strip_prefix(h.as_str()).is_some_and(|rest| rest.starts_with('/')))
+}
+
+fn ensure_allowed(category: &str, hidden: &[String]) -> ApiResult<()> {
+    if is_hidden(category, hidden) { Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다.")) } else { Ok(()) }
+}
+
+/// viewer는 카테고리 정책을 확인한 뒤 파일을 읽는다. admin은 조회 제한을 받지 않는다.
+pub(super) async fn checked_manager(deps: &AppDeps, payload: &Value, book_id: i64, comics: bool) -> ApiResult<Arc<dyn BookManagerApi>> {
+    let manager = manager_for(deps, comics)?;
+    if is_viewer(payload) {
         // 카테고리를 모르면 숨김 여부를 판정할 수 없다. 통과시키지 않고 거절한다(fail-closed).
         let book = match manager.get_book(book_id).await {
             Ok(book) => book,
@@ -220,17 +267,7 @@ pub(super) async fn checked_manager(deps: &AppDeps, payload: &Value, book_id: i6
                 return Err(ApiError::unavailable());
             }
         };
-        let mapping = deps.category_mapping().map_err(|e| {
-            log::warn!("카테고리 접근 정책을 읽을 수 없다: {e}");
-            ApiError::unavailable()
-        })?;
-        let hidden = mapping.get_hidden_categories(if comics { "comic" } else { "book" }).map_err(|e| match e {
-            MappingError::Http(status, detail) => ApiError::http(status, &detail),
-            MappingError::Other(message) => ApiError::Internal(message),
-        })?;
-        if !book.category.is_empty() && hidden.iter().any(|category| book.category == *category || book.category.starts_with(&format!("{category}/"))) {
-            return Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다."));
-        }
+        ensure_allowed(&book.category, &hidden_categories(deps, payload, comics)?)?;
     }
     Ok(manager)
 }
@@ -374,7 +411,17 @@ async fn validate(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppD
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::run_blocking;
+    use super::{is_hidden, run_blocking};
+
+    #[test]
+    fn is_hidden_matches_the_category_and_its_descendants_only() {
+        let hidden = vec!["A".to_string()];
+        assert!(is_hidden("A", &hidden));
+        assert!(is_hidden("A/b/c", &hidden));
+        assert!(!is_hidden("AB", &hidden), "이름이 같은 접두어인 형제 카테고리는 숨기지 않는다");
+        assert!(!is_hidden("", &hidden));
+        assert!(!is_hidden("A", &[]));
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn run_blocking_keeps_the_worker_free() {

@@ -1,11 +1,11 @@
 //! 도서·만화 수정과 카테고리 관리. 실제 파일 작업은 BookManager에 위임한다.
+use super::{kind, manager};
 use crate::book::Book;
 use crate::main::extract::python_bool;
 use crate::main::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, RequireAdmin, Routes};
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},
-    http::Uri,
 };
 use fancy_regex::Regex;
 use serde::Deserialize;
@@ -740,15 +740,6 @@ async fn bulk_rename_files(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Or
     let failed_count = failures.len();
     failures.truncate(20);
     Ok(Json(json!({"status":"success","result":{"changed_count":changed_count,"failed_count":failed_count,"failures":failures}})))
-}
-fn kind(uri: &Uri) -> &'static str {
-    if uri.path().starts_with("/comics/") { "comic" } else { "book" }
-}
-fn manager(deps: &AppDeps, uri: &Uri) -> ApiResult<Arc<dyn BookManagerApi>> {
-    if kind(uri) == "comic" { deps.comics_manager() } else { deps.book_manager() }.map_err(|e| {
-        log::warn!("도서 관리자를 쓸 수 없다: {e}");
-        ApiError::unavailable()
-    })
 }
 fn result(value: Value, error: Option<String>) -> Json<Value> {
     Json(match error {
