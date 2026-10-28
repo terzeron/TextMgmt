@@ -57,7 +57,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use backend::book::Book;
+use backend::book::{Book, BookPage};
 use backend::book_manager::{BookContent, BookManager, BookManagerDeps, BookResponse, FileReader, ProposeOptions, RuntimeError};
 use backend::classifier::Classify;
 use backend::classifier::model::Prediction;
@@ -394,9 +394,8 @@ fn inspect_book_info(book: &Book) {
 /// 테스트 데이터에서 책 한 권을 고른다.
 fn get_one_random_book(bm: &BookManager) -> Option<Book> {
     for category in [CATEGORY1, CATEGORY2, "_txt", "test"] {
-        let (book_list, error) = run(bm.get_books_in_category(category));
-        if !book_list.is_empty() && error.is_none() {
-            return book_list.into_iter().next();
+        if let Some(book) = run(bm.get_books_in_category(category)).ok().and_then(|books| books.into_iter().next()) {
+            return Some(book);
         }
     }
     None
@@ -407,14 +406,12 @@ fn get_two_random_books(bm: &BookManager) -> Option<(Book, Book)> {
     let mut book1 = None;
     let mut book2 = None;
 
-    let (book_list, error) = run(bm.get_books_in_category(CATEGORY1));
-    if !book_list.is_empty() && error.is_none() {
-        book1 = book_list.into_iter().next();
+    if let Some(book) = run(bm.get_books_in_category(CATEGORY1)).ok().and_then(|books| books.into_iter().next()) {
+        book1 = Some(book);
     }
 
-    let (book_list, error) = run(bm.get_books_in_category(CATEGORY2));
-    if !book_list.is_empty() && error.is_none() {
-        book2 = book_list.into_iter().next();
+    if let Some(book) = run(bm.get_books_in_category(CATEGORY2)).ok().and_then(|books| books.into_iter().next()) {
+        book2 = Some(book);
     }
 
     match (book1, book2) {
@@ -432,7 +429,7 @@ mod test_book_manager {
     #[test]
     fn test_get_categories() {
         let bm = book_manager_with_data();
-        let (result, _) = run(bm.get_categories());
+        let result = run(bm.get_categories()).unwrap_or_default();
         for (key, value) in result.iter() {
             // 키는 String, 값은 정수여야 한다
             let _: &String = key;
@@ -444,10 +441,9 @@ mod test_book_manager {
     fn test_get_books_in_category() {
         let bm = book_manager_with_data();
         for category in [CATEGORY1, CATEGORY2] {
-            let (book_list, error) = run(bm.get_books_in_category(category));
+            let book_list = run(bm.get_books_in_category(category)).unwrap();
             if !book_list.is_empty() {
                 for book in &book_list {
-                    assert!(error.is_none());
                     inspect_book_info(book);
                 }
                 return;
@@ -671,8 +667,7 @@ mod test_book_manager {
     #[test]
     fn test_search_by_category_paged_sort_works_on_real_es() {
         let bm = book_manager_with_data();
-        let (categories, error) = run(bm.get_categories());
-        assert!(error.is_none());
+        let categories = run(bm.get_categories()).unwrap();
         assert!(!categories.is_empty(), "테스트 인덱스에 문서가 없다");
 
         let category = categories.keys().next().unwrap().clone();
@@ -1623,12 +1618,10 @@ fn test_search_similar_books_paged_and_add_book() {
     let manager = make_manager(tmp.path(), &es);
     es.with(|s| s.similar_paged = (vec![(2, make_doc("b.txt", ".txt"), 10.0)], 1));
     es.on_search_by_id(|_| Ok(Some(make_doc("a.txt", ".txt"))));
-    let (_books, total, err) = run(manager.search_similar_books_paged(1, 10, 0));
-    assert!(total == 1 && err.is_none());
+    assert_eq!(run(manager.search_similar_books_paged(1, 10, 0)).unwrap().total, 1);
 
     es.with(|s| s.similar_paged = (vec![], 0));
-    let (_books, _total, err) = run(manager.search_similar_books_paged(1, 10, 0));
-    assert!(err.is_some());
+    assert!(run(manager.search_similar_books_paged(1, 10, 0)).is_err());
 
     let (result, err) = run(manager.add_book(&Docs::from([(1, make_doc("a.txt", ".txt"))])));
     assert!(result == Some(1) && err.is_none());
@@ -1640,12 +1633,12 @@ fn test_search_by_keyword_paged() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.with(|s| s.keyword_paged = (vec![(1, make_doc("a.txt", ".txt"), 1.0)], 1));
-    let (books, total, err) = run(manager.search_by_keyword_paged("k", 10, 0, None, None));
+    let BookPage { books, total, .. } = run(manager.search_by_keyword_paged("k", 10, 0, None, None)).unwrap();
     assert_eq!(total, 1);
-    assert!(!books.is_empty() && err.is_none());
+    assert!(!books.is_empty());
 
     es.with(|s| s.keyword_paged = (vec![], 0));
-    let (books, total, _err) = run(manager.search_by_keyword_paged("k", 10, 0, None, None));
+    let BookPage { books, total, .. } = run(manager.search_by_keyword_paged("k", 10, 0, None, None)).unwrap();
     assert!(books.is_empty());
     assert_eq!(total, 0);
 }
@@ -1656,7 +1649,7 @@ fn test_search_by_keyword_paged_forwards_category() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
 
-    run(manager.search_by_keyword_paged("k", 20, 10, None, Some("과학")));
+    let _ = run(manager.search_by_keyword_paged("k", 20, 10, None, Some("과학")));
 
     // 호출 인자는 FakeEsManager가 `{keyword, size, offset, exclude_categories, category}` JSON으로 기록한다
     assert_eq!(es.calls_of("search_by_keyword_paged").last().unwrap(), &json!({"keyword": "k", "size": 20, "offset": 10, "exclude_categories": null, "category": "과학"}));
@@ -1880,9 +1873,7 @@ fn test_get_books_in_category_empty() {
     let es = FakeEsManager::new();
     es.with(|s| s.category_docs = vec![]);
     let manager = make_manager(tmp.path(), &es);
-    let (books, err) = run(manager.get_books_in_category("missing"));
-    assert!(books.is_empty());
-    assert!(err.as_deref().unwrap().contains("No books found"));
+    assert!(run(manager.get_books_in_category("missing")).unwrap_err().contains("No books found"));
 }
 
 #[test]
@@ -1908,20 +1899,15 @@ fn test_catalog_search_paths_report_missing_required_es_fields() {
     });
     let manager = make_manager(tmp.path(), &es);
 
-    let (_, error) = run(manager.get_books_in_category("A"));
-    assert!(error.unwrap().contains("category"));
-    let (_, _, _, error) = run(manager.get_books_in_category_paged("A", 10, ""));
-    assert!(error.unwrap().contains("category"));
+    assert!(run(manager.get_books_in_category("A")).unwrap_err().contains("category"));
+    assert!(run(manager.get_books_in_category_paged("A", 10, "")).unwrap_err().contains("category"));
     let (_, error) = run(manager.search_by_keyword("x", 10));
     assert!(error.unwrap().contains("category"));
-    let (_, _, error) = run(manager.search_by_keyword_paged("x", 10, 0, None, None));
-    assert!(error.unwrap().contains("category"));
+    assert!(run(manager.search_by_keyword_paged("x", 10, 0, None, None)).unwrap_err().contains("category"));
     let (_, error) = run(manager.search_similar_books(1, 10));
     assert!(error.unwrap().contains("category"));
-    let (_, _, error) = run(manager.search_similar_books_paged(1, 10, 0));
-    assert!(error.unwrap().contains("category"));
-    let (_, _, error) = run(manager.get_latest_books(10, None));
-    assert!(error.unwrap().contains("category"));
+    assert!(run(manager.search_similar_books_paged(1, 10, 0)).unwrap_err().contains("category"));
+    assert!(run(manager.get_latest_books(10, None)).unwrap_err().contains("category"));
 }
 
 // ---- coverage: additional uncovered lines ----
@@ -2101,10 +2087,7 @@ fn test_search_similar_books_paged_not_found() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.on_search_by_id(|_| Ok(None));
-    let (books, total, err) = run(manager.search_similar_books_paged(999, 10, 0));
-    assert!(books.is_empty());
-    assert_eq!(total, 0);
-    assert!(err.as_deref().unwrap().contains("No book found"));
+    assert!(run(manager.search_similar_books_paged(999, 10, 0)).unwrap_err().contains("No book found"));
 }
 
 #[test]

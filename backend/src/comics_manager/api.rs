@@ -1,6 +1,6 @@
 //! 만화 API는 동일한 도서 처리 로직을 만화 전용 의존성으로 실행한다.
 use super::ComicsManager;
-use crate::book::{Book, BookLookupError};
+use crate::book::{Book, BookLookupError, BookPage};
 use crate::book_manager::BookManager;
 use crate::es_manager::EsManagerApi;
 use crate::main::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress};
@@ -70,11 +70,11 @@ impl BookManagerApi for ComicsManager {
         BookManagerApi::get_book(&self.inner, id).await
     }
 
-    async fn get_categories(&self) -> (Value, Option<String>) {
+    async fn get_categories(&self) -> Result<Value, String> {
         BookManagerApi::get_categories(&self.inner).await
     }
 
-    async fn get_books_in_category_paged(&self, category: &str, size: Option<i64>, cursor: Option<&str>) -> (Vec<Book>, i64, Option<String>, Option<String>) {
+    async fn get_books_in_category_paged(&self, category: &str, size: Option<i64>, cursor: Option<&str>) -> Result<BookPage, String> {
         BookManagerApi::get_books_in_category_paged(&self.inner, category, size, cursor).await
     }
 
@@ -110,19 +110,19 @@ impl BookManagerApi for ComicsManager {
         BookManagerApi::validate_pdf(&self.inner, book_id).await
     }
 
-    async fn get_books_in_category(&self, category: &str) -> (Vec<Book>, Option<String>) {
+    async fn get_books_in_category(&self, category: &str) -> Result<Vec<Book>, String> {
         BookManagerApi::get_books_in_category(&self.inner, category).await
     }
 
-    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> (Vec<Book>, i64, Option<String>) {
+    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> Result<BookPage, String> {
         BookManagerApi::get_latest_books(&self.inner, size, exclude_categories).await
     }
 
-    async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, excluded: Option<&[String]>, category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, excluded: Option<&[String]>, category: Option<&str>) -> Result<BookPage, String> {
         BookManagerApi::search_by_keyword_paged(&self.inner, keyword, size, offset, excluded, category).await
     }
 
-    async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> Result<BookPage, String> {
         BookManagerApi::search_similar_books_paged(&self.inner, book_id, size, offset).await
     }
 

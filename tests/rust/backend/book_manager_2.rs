@@ -66,6 +66,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use backend::book::BookPage;
 use backend::book_manager::{
     _declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, ApplyOptions, BackfillThread, BookAdder, BookContent, BookManager, BookManagerDeps, BookManagerError,
     CREATED_TIME_BACKFILL_ENV, FileReader, MAX_CATEGORY_RESULT_COUNT, MoveOpts, ProposeOptions, ReadFileError, decode_category_cursor, encode_category_cursor,
@@ -1235,8 +1236,7 @@ fn test_get_categories_unit() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.set_aggregate(&[("Cat1", 3), ("Cat2", 5)]);
-    let (cats, err) = asyncio_runner(BookManagerApi::get_categories(&manager));
-    assert!(err.is_none());
+    let cats = asyncio_runner(BookManagerApi::get_categories(&manager)).unwrap();
     assert_eq!(cats, json!({"Cat1": 3, "Cat2": 5}));
 }
 
@@ -1251,8 +1251,7 @@ fn test_get_books_in_category_unit() {
     es.set_category_docs(vec![(1, doc, 1.0)]);
     fs::create_dir_all(tmp_path.join("A")).unwrap();
     fs::write(tmp_path.join("A").join("test.txt"), "x").unwrap();
-    let (books, err) = asyncio_runner(manager.get_books_in_category("A"));
-    assert!(err.is_none());
+    let books = asyncio_runner(manager.get_books_in_category("A")).unwrap();
     assert_eq!(books.len(), 1);
 }
 
@@ -1756,7 +1755,7 @@ fn test_get_books_in_category_uses_bounded_result_count() {
     });
     let manager = make_manager(tmp.path(), &es);
 
-    asyncio_runner(manager.get_books_in_category("A"));
+    let _ = asyncio_runner(manager.get_books_in_category("A"));
 
     let got = captured.lock().unwrap().expect("search_by_category가 호출되지 않음");
     assert_eq!(got, MAX_CATEGORY_RESULT_COUNT);
@@ -1774,10 +1773,9 @@ fn test_get_books_in_category_warns_on_truncation() {
     let manager = BookManager::with_deps(deps(tmp.path(), &es).with_max_category_result_count(1));
     let logs = LogCapture::start(log::Level::Warn);
 
-    let (books, err) = asyncio_runner(manager.get_books_in_category("A"));
+    let books = asyncio_runner(manager.get_books_in_category("A")).unwrap();
     let records = logs.messages();
 
-    assert!(err.is_none());
     assert_eq!(books.len(), 1);
     assert!(records.iter().any(|r| r.contains("상한") && r.contains("get_books_in_category")), "records={records:?}");
 }
@@ -1850,8 +1848,7 @@ fn test_get_latest_books_delegation() {
     let es = FakeEsManager::new();
     es.set_latest_docs(vec![(10, make_doc("A/test.txt", ".txt"), 1.0)], 1);
     let manager = make_manager(tmp.path(), &es);
-    let (books, total, err) = asyncio_runner(manager.get_latest_books(5, Some(vec!["hidden".to_string()])));
-    assert!(err.is_none());
+    let BookPage { books, total, .. } = asyncio_runner(manager.get_latest_books(5, Some(vec!["hidden".to_string()]))).unwrap();
     assert_eq!(total, 1);
     assert_eq!(books.len(), 1);
     assert_eq!(books[0].book_id, 10);
@@ -2495,20 +2492,17 @@ fn test_get_books_in_category_paged() {
     es.set_category_docs(vec![(1, doc.clone(), 1.0), (2, doc, 1.0)]);
 
     // 1. Invalid cursor (line 524)
-    let (books, _total, _next_cur, err) = asyncio_runner(BookManagerApi::get_books_in_category_paged(&manager, "A", None, Some("bad_cursor!!!")));
-    assert_eq!(err.as_deref(), Some("invalid cursor"));
-    assert!(books.is_empty());
+    let error = asyncio_runner(BookManagerApi::get_books_in_category_paged(&manager, "A", None, Some("bad_cursor!!!"))).unwrap_err();
+    assert_eq!(error, "invalid cursor");
 
     // 2. Success first page with next cursor (lines 525-528)
-    let (books, _total, next_cur, err) = asyncio_runner(BookManagerApi::get_books_in_category_paged(&manager, "A", Some(1), None));
-    assert!(err.is_none());
+    let BookPage { books, next_cursor: next_cur, .. } = asyncio_runner(BookManagerApi::get_books_in_category_paged(&manager, "A", Some(1), None)).unwrap();
     assert_eq!(books.len(), 1);
     assert!(next_cur.is_some());
 
     // 3. Next page using cursor
-    let (books2, _total2, _next_cur2, err2) = asyncio_runner(BookManagerApi::get_books_in_category_paged(&manager, "A", Some(1), next_cur.as_deref()));
-    assert!(err2.is_none());
-    assert_eq!(books2.len(), 1);
+    let page2 = asyncio_runner(BookManagerApi::get_books_in_category_paged(&manager, "A", Some(1), next_cur.as_deref())).unwrap();
+    assert_eq!(page2.books.len(), 1);
 }
 
 #[test]
@@ -3665,11 +3659,11 @@ mod test_es_reads_do_not_block_event_loop {
         let manager = make_manager(tmp.path(), &es);
         let loop_thread = std::thread::current().id();
 
-        BookManagerApi::get_categories(&manager).await;
+        let _ = BookManagerApi::get_categories(&manager).await;
         let _ = manager.get_book(1).await;
-        BookManagerApi::get_books_in_category_paged(&manager, "A", Some(10), None).await;
-        manager.get_latest_books(10, None).await;
-        manager.search_by_keyword_paged("k", 10, 0, None, None).await;
+        let _ = BookManagerApi::get_books_in_category_paged(&manager, "A", Some(10), None).await;
+        let _ = manager.get_latest_books(10, None).await;
+        let _ = manager.search_by_keyword_paged("k", 10, 0, None, None).await;
 
         let call_threads = es.call_threads();
         let names: BTreeSet<&str> = call_threads.keys().map(String::as_str).collect();

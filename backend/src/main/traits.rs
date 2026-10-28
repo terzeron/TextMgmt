@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::auth::HTTPException;
-use crate::book::{Book, BookLookupError};
+use crate::book::{Book, BookLookupError, BookPage};
 use crate::category_mapping::CategoryMapping;
 use crate::es_manager::EsManagerApi;
 use crate::view_history_store::{ViewHistoryError, ViewHistoryStore};
@@ -481,13 +481,12 @@ pub trait BookManagerApi: Send + Sync {
         Err(BookLookupError::Failed(UNIMPLEMENTED.to_string()))
     }
 
-    async fn get_categories(&self) -> (Value, Option<String>) {
-        (Value::Null, unimplemented_error())
+    async fn get_categories(&self) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
-    /// (목록, 전체 수, 다음 커서, 오류)
-    async fn get_books_in_category_paged(&self, _category: &str, _size: Option<i64>, _cursor: Option<&str>) -> (Vec<Book>, i64, Option<String>, Option<String>) {
-        (Vec::new(), 0, None, unimplemented_error())
+    async fn get_books_in_category_paged(&self, _category: &str, _size: Option<i64>, _cursor: Option<&str>) -> Result<BookPage, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
     async fn get_book_content(&self, _id: i64) -> BookContent {
@@ -543,20 +542,20 @@ pub trait BookManagerApi: Send + Sync {
         (None, unimplemented_error())
     }
 
-    async fn get_books_in_category(&self, _category: &str) -> (Vec<Book>, Option<String>) {
-        (Vec::new(), unimplemented_error())
+    async fn get_books_in_category(&self, _category: &str) -> Result<Vec<Book>, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
-    async fn get_latest_books(&self, _size: i64, _exclude_categories: Option<&[String]>) -> (Vec<Book>, i64, Option<String>) {
-        (Vec::new(), 0, unimplemented_error())
+    async fn get_latest_books(&self, _size: i64, _exclude_categories: Option<&[String]>) -> Result<BookPage, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
-    async fn search_by_keyword_paged(&self, _keyword: &str, _size: i64, _offset: i64, _excluded: Option<&[String]>, _category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
-        (Vec::new(), 0, unimplemented_error())
+    async fn search_by_keyword_paged(&self, _keyword: &str, _size: i64, _offset: i64, _excluded: Option<&[String]>, _category: Option<&str>) -> Result<BookPage, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
-    async fn search_similar_books_paged(&self, _book_id: i64, _size: i64, _offset: i64) -> (Vec<Book>, i64, Option<String>) {
-        (Vec::new(), 0, unimplemented_error())
+    async fn search_similar_books_paged(&self, _book_id: i64, _size: i64, _offset: i64) -> Result<BookPage, String> {
+        Err(UNIMPLEMENTED.to_string())
     }
 
     /// (항목 [(대표 책, 작품 디렉터리 이름 또는 "")], 전체 항목 수, 다음 커서, 오류)
@@ -828,9 +827,8 @@ mod tests {
         assert!(manager.path_prefix().as_os_str().is_empty());
         assert!(matches!(manager.es_manager().create_index(), Err(crate::es_manager::EsError::Unsupported)));
         assert!(manager.get_book(1).await.is_err());
-        assert!(manager.get_categories().await.1.is_some());
-        let page = manager.get_books_in_category_paged("fiction", None, None).await;
-        assert!(page.0.is_empty() && page.1 == 0 && page.2.is_none() && page.3.is_some());
+        assert!(manager.get_categories().await.is_err());
+        assert!(manager.get_books_in_category_paged("fiction", None, None).await.is_err());
         assert_eq!(manager.get_book_content(1).await, BookContent::Text(String::new()));
         assert_eq!(manager.get_book_preview(1, None, None).await.status_code, 501);
         assert_eq!(manager.get_book_preview_with_pages(1, Some(2), None, None).await.status_code, 501);
@@ -842,10 +840,10 @@ mod tests {
         assert_eq!(manager.get_cover(1, None).await.status_code, 501);
         assert!(manager.validate_epub(1).await.1.is_some());
         assert!(manager.validate_pdf(1).await.1.is_some());
-        assert!(manager.get_books_in_category("fiction").await.1.is_some());
-        assert!(manager.get_latest_books(10, None).await.2.is_some());
-        assert!(manager.search_by_keyword_paged("query", 10, 0, None, None).await.2.is_some());
-        assert!(manager.search_similar_books_paged(1, 10, 0).await.2.is_some());
+        assert!(manager.get_books_in_category("fiction").await.is_err());
+        assert!(manager.get_latest_books(10, None).await.is_err());
+        assert!(manager.search_by_keyword_paged("query", 10, 0, None, None).await.is_err());
+        assert!(manager.search_similar_books_paged(1, 10, 0).await.is_err());
         assert!(manager.get_cover_books_paged("fiction", 10, "", None).await.3.is_some());
         assert!(manager.get_uncovered_books_paged("fiction", 10, "", None).await.3.is_some());
         assert!(manager.get_category_mismatches(false).is_err());

@@ -51,7 +51,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use axum::http::Method;
-use backend::book::{Book, BookLookupError};
+use backend::book::{Book, BookLookupError, BookPage};
 use backend::book_manager::{BookContent, BookManagerApi, BookResponse};
 use backend::db::{DbValue, Row};
 use backend::es_manager::{EsError, EsManagerApi};
@@ -323,6 +323,11 @@ fn count(v: &Value) -> i64 {
     v.as_i64().unwrap_or(0)
 }
 
+/// `[책 목록, 전체 수, 오류]`를 `Result<BookPage, _>`로 바꾼다.
+fn page(v: &Value) -> Result<BookPage, String> {
+    opt_string(arr(v, 2)).map_or_else(|| Ok(BookPage { books: books(arr(v, 0)), total: count(&arr(v, 1)), next_cursor: None }), Err)
+}
+
 fn opt_book(v: Value) -> Option<Book> {
     if v.is_null() { None } else { Some(Book::new(v["book_id"].as_i64().unwrap_or_default(), &v, v["score"].as_f64().unwrap_or_default())) }
 }
@@ -420,33 +425,33 @@ impl BookManagerApi for Mock {
         pair(&self.invoke("validate_pdf", call_args!([book_id], {})).await)
     }
 
-    async fn get_books_in_category(&self, category: &str) -> (Vec<Book>, Option<String>) {
+    async fn get_books_in_category(&self, category: &str) -> Result<Vec<Book>, String> {
         let v = self.invoke("get_books_in_category", call_args!([category], {})).await;
-        (books(arr(&v, 0)), opt_string(arr(&v, 1)))
+        opt_string(arr(&v, 1)).map_or_else(|| Ok(books(arr(&v, 0))), Err)
     }
 
-    async fn get_categories(&self) -> (Value, Option<String>) {
+    async fn get_categories(&self) -> Result<Value, String> {
         let v = self.invoke("get_categories", call_args!([], {})).await;
-        (arr(&v, 0), opt_string(arr(&v, 1)))
+        opt_string(arr(&v, 1)).map_or_else(|| Ok(arr(&v, 0)), Err)
     }
 
-    async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, exclude_categories: Option<&[String]>, category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, exclude_categories: Option<&[String]>, category: Option<&str>) -> Result<BookPage, String> {
         let mut kwargs = json!({"size": size, "offset": offset, "exclude_categories": exclude_categories});
         if let Some(category) = category {
             kwargs["category"] = json!(category);
         }
         let v = self.invoke("search_by_keyword_paged", CallArgs::new(vec![json!(keyword)], kwargs)).await;
-        (books(arr(&v, 0)), count(&arr(&v, 1)), opt_string(arr(&v, 2)))
+        page(&v)
     }
 
-    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> (Vec<Book>, i64, Option<String>) {
+    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> Result<BookPage, String> {
         let v = self.invoke("get_latest_books", call_args!([], {"size": size, "exclude_categories": exclude_categories})).await;
-        (books(arr(&v, 0)), count(&arr(&v, 1)), opt_string(arr(&v, 2)))
+        page(&v)
     }
 
-    async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> Result<BookPage, String> {
         let v = self.invoke("search_similar_books_paged", call_args!([book_id], {"size": size, "offset": offset})).await;
-        (books(arr(&v, 0)), count(&arr(&v, 1)), opt_string(arr(&v, 2)))
+        page(&v)
     }
 
     async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, i64, Option<String>, Option<String>) {

@@ -559,10 +559,10 @@ async fn similar_names(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Origin
         return Ok(failure("name is required"));
     }
     let manager = manager(&deps, &uri)?;
-    let (categories, error) = manager.get_categories().await;
-    if let Some(error) = error {
-        return Ok(failure(&error));
-    }
+    let categories = match manager.get_categories().await {
+        Ok(categories) => categories,
+        Err(error) => return Ok(failure(&error)),
+    };
     let categories: Vec<String> = match categories {
         Value::Array(values) => values.iter().filter_map(Value::as_str).map(str::to_string).collect(),
         Value::Object(values) => values.into_iter().map(|(key, _)| key).collect(),
@@ -637,21 +637,21 @@ async fn bulk_rename_files(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Or
         Err(error) => return Ok(Json(json!({"status":"failure","error":format!("정규표현식 오류: {error}"),"changed_count":0}))),
     };
     let manager = manager(&deps, &uri)?;
-    let (categories, error) = manager.get_categories().await;
-    if let Some(error) = error {
-        return Ok(Json(json!({"status":"failure","error":error,"changed_count":0})));
-    }
+    let categories = match manager.get_categories().await {
+        Ok(categories) => categories,
+        Err(error) => return Ok(Json(json!({"status":"failure","error":error,"changed_count":0}))),
+    };
     let mut books = Vec::<Book>::new();
     if let Some(categories) = categories.as_array() {
         for category in categories.iter().filter_map(Value::as_str).filter(|category| *category == body.category || category.starts_with(&format!("{}/", body.category))) {
             let mut cursor: Option<String> = None;
             loop {
-                let (page, _, next, error) = manager.get_books_in_category_paged(category, None, cursor.as_deref()).await;
-                if let Some(error) = error {
-                    return Ok(Json(json!({"status":"failure","error":error,"changed_count":0})));
-                }
-                books.extend(page);
-                cursor = next;
+                let page = match manager.get_books_in_category_paged(category, None, cursor.as_deref()).await {
+                    Ok(page) => page,
+                    Err(error) => return Ok(Json(json!({"status":"failure","error":error,"changed_count":0}))),
+                };
+                books.extend(page.books);
+                cursor = page.next_cursor;
                 if cursor.is_none() {
                     break;
                 }

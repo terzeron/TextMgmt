@@ -306,8 +306,9 @@ impl BookManagerApi for MockBm {
         (result, None)
     }
 
-    async fn get_categories(&self) -> (Value, Option<String>) {
-        self.categories.lock().unwrap().clone()
+    async fn get_categories(&self) -> Result<Value, String> {
+        let (value, error) = self.categories.lock().unwrap().clone();
+        error.map_or(Ok(value), Err)
     }
 
     async fn apply_category_changes(&self, _items: &[Value], _allowed: &HashSet<String>, _clean_existing: bool) -> (Value, Option<String>) {

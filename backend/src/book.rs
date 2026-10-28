@@ -18,6 +18,14 @@ pub fn path_prefix_from_env(get: &dyn Fn(&str) -> Option<String>) -> Result<Path
     }
 }
 
+/// 쪽 단위 도서 목록. `next_cursor`는 커서 방식 목록에서만 채운다.
+#[derive(Debug, Clone, Default)]
+pub struct BookPage {
+    pub books: Vec<Book>,
+    pub total: i64,
+    pub next_cursor: Option<String>,
+}
+
 /// `get_book` 실패. 없음과 조회 실패를 나눈다. viewer 접근 검사는 없음을 404, 조회 실패를 503으로 응답한다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BookLookupError {

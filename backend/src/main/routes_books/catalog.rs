@@ -66,10 +66,10 @@ async fn metadata(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppD
 
 async fn categories(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri) -> ApiResult<Json<Value>> {
     let manager = manager(&deps, &uri)?;
-    let (mut result, error) = manager.get_categories().await;
-    if error.is_some() {
-        return Ok(failure(error));
-    }
+    let mut result = match manager.get_categories().await {
+        Ok(result) => result,
+        Err(error) => return Ok(failure(Some(error))),
+    };
     let hidden = hidden(&deps, &payload, &uri)?;
     if let Some(categories) = result.as_object_mut() {
         categories.retain(|category, _| !is_hidden(category, &hidden));
@@ -99,17 +99,15 @@ async fn in_category(
     ensure_allowed(&category, &hidden(&deps, &payload, &uri)?)?;
     let manager = manager(&deps, &uri)?;
     if query.limit > 0 {
-        let (books, total, next, error) = manager.get_books_in_category_paged(&category, Some(query.limit), Some(&query.cursor)).await;
-        if error.is_some() {
-            return Ok(failure(error));
-        }
-        return Ok(Json(json!({"status":"success","result":books_json(&books,manager.as_ref()),"total":total,"next_cursor":next})));
+        return Ok(match manager.get_books_in_category_paged(&category, Some(query.limit), Some(&query.cursor)).await {
+            Ok(page) => Json(json!({"status":"success","result":books_json(&page.books,manager.as_ref()),"total":page.total,"next_cursor":page.next_cursor})),
+            Err(error) => failure(Some(error)),
+        });
     }
-    let (books, error) = manager.get_books_in_category(&category).await;
-    if error.is_some() {
-        return Ok(failure(error));
-    }
-    Ok(Json(json!({"status":"success","result":books_json(&books,manager.as_ref())})))
+    Ok(match manager.get_books_in_category(&category).await {
+        Ok(books) => Json(json!({"status":"success","result":books_json(&books,manager.as_ref())})),
+        Err(error) => failure(Some(error)),
+    })
 }
 
 #[derive(Deserialize)]
@@ -128,11 +126,10 @@ async fn latest(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
         }
     }
     let manager = manager(&deps, &uri)?;
-    let (books, total, error) = manager.get_latest_books(limit, Some(&excluded)).await;
-    if error.is_some() {
-        return Ok(failure(error));
-    }
-    Ok(Json(json!({"status":"success","result":books_json(&books,manager.as_ref()),"total":total})))
+    Ok(match manager.get_latest_books(limit, Some(&excluded)).await {
+        Ok(page) => Json(json!({"status":"success","result":books_json(&page.books,manager.as_ref()),"total":page.total})),
+        Err(error) => failure(Some(error)),
+    })
 }
 
 #[derive(Deserialize)]
@@ -170,11 +167,10 @@ async fn search(
     let manager = manager(&deps, &uri)?;
     let excluded = (!excluded.is_empty()).then_some(excluded.as_slice());
     let category = (!query.category.is_empty()).then_some(query.category.as_str());
-    let (books, total, error) = manager.search_by_keyword_paged(&keyword, query.limit, query.offset, excluded, category).await;
-    if error.is_some() {
-        return Ok(failure(error));
-    }
-    Ok(Json(json!({"status":"success","result":books_json(&books,manager.as_ref()),"total":total})))
+    Ok(match manager.search_by_keyword_paged(&keyword, query.limit, query.offset, excluded, category).await {
+        Ok(page) => Json(json!({"status":"success","result":books_json(&page.books,manager.as_ref()),"total":page.total})),
+        Err(error) => failure(Some(error)),
+    })
 }
 
 async fn similar(
@@ -186,15 +182,21 @@ async fn similar(
 ) -> ApiResult<Json<Value>> {
     let id = super::parse_book_id(&id)?;
     let manager = super::checked_manager(&deps, &payload, id, comics(&uri)).await?;
-    let (mut books, mut total, error) = manager.search_similar_books_paged(id, query.limit, query.offset).await;
+    let similar = manager.search_similar_books_paged(id, query.limit, query.offset).await;
     let hidden = hidden(&deps, &payload, &uri)?;
-    if !hidden.is_empty() {
-        books.retain(|book| !is_hidden(&book.category, &hidden));
-        total = books.len() as i64;
-    }
-    if !books.is_empty() && error.is_none() {
-        return Ok(Json(json!({"status":"success","result":books_json(&books,manager.as_ref()),"total":total})));
-    }
+    let error = match similar {
+        Ok(mut page) => {
+            if !hidden.is_empty() {
+                page.books.retain(|book| !is_hidden(&book.category, &hidden));
+                page.total = page.books.len() as i64;
+            }
+            if !page.books.is_empty() {
+                return Ok(Json(json!({"status":"success","result":books_json(&page.books,manager.as_ref()),"total":page.total})));
+            }
+            None
+        }
+        Err(error) => Some(error),
+    };
     match manager.get_book(id).await {
         Ok(book) => Ok(Json(json!({"status":"success","result":[book_json(&book,manager.as_ref())],"total":1}))),
         Err(second_error) => Ok(failure(error.or(Some(second_error.to_string())))),

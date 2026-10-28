@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
-use crate::book::{Book, BookLookupError};
+use crate::book::{Book, BookLookupError, BookPage};
 use crate::es_manager::EsManagerApi;
 use crate::main::{ApplyCategoryChanges, ProposeCategoryChanges, ReloadProgress};
 
@@ -103,12 +103,11 @@ impl BookManagerApi for BookManager {
         BookManager::get_book(self, id).await
     }
 
-    async fn get_categories(&self) -> (Value, Option<String>) {
-        let (categories, error) = BookManager::get_categories(self).await;
-        (json!(categories), error)
+    async fn get_categories(&self) -> Result<Value, String> {
+        BookManager::get_categories(self).await.map(|categories| json!(categories))
     }
 
-    async fn get_books_in_category_paged(&self, category: &str, size: Option<i64>, cursor: Option<&str>) -> (Vec<Book>, i64, Option<String>, Option<String>) {
+    async fn get_books_in_category_paged(&self, category: &str, size: Option<i64>, cursor: Option<&str>) -> Result<BookPage, String> {
         BookManager::get_books_in_category_paged(self, category, size.unwrap_or(DEFAULT_CATEGORY_PAGE_SIZE), cursor.unwrap_or("")).await
     }
 
@@ -148,19 +147,19 @@ impl BookManagerApi for BookManager {
         BookManager::validate_pdf(self, book_id).await
     }
 
-    async fn get_books_in_category(&self, category: &str) -> (Vec<Book>, Option<String>) {
+    async fn get_books_in_category(&self, category: &str) -> Result<Vec<Book>, String> {
         BookManager::get_books_in_category(self, category).await
     }
 
-    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> (Vec<Book>, i64, Option<String>) {
+    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> Result<BookPage, String> {
         BookManager::get_latest_books(self, size, exclude_categories.map(<[String]>::to_vec)).await
     }
 
-    async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, excluded: Option<&[String]>, category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, excluded: Option<&[String]>, category: Option<&str>) -> Result<BookPage, String> {
         BookManager::search_by_keyword_paged(self, keyword, size, offset, excluded, category).await
     }
 
-    async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> Result<BookPage, String> {
         BookManager::search_similar_books_paged(self, book_id, size, offset).await
     }
 

@@ -24,7 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use backend::book::Book;
+use backend::book::{Book, BookPage};
 use backend::book_manager::BookManagerApi;
 use backend::es_manager::EsManagerApi;
 use backend::main::{AppDeps, AuthMode, app_with};
@@ -54,16 +54,16 @@ struct MockBm {
 
 #[async_trait::async_trait]
 impl BookManagerApi for MockBm {
-    async fn get_categories(&self) -> (Value, Option<String>) {
-        self.categories.lock().unwrap().clone()
+    async fn get_categories(&self) -> Result<Value, String> {
+        let (value, error) = self.categories.lock().unwrap().clone();
+        error.map_or(Ok(value), Err)
     }
 
-    async fn get_books_in_category_paged(&self, category: &str, _size: Option<i64>, _cursor: Option<&str>) -> Page {
+    async fn get_books_in_category_paged(&self, category: &str, _size: Option<i64>, _cursor: Option<&str>) -> Result<BookPage, String> {
         self.visited.lock().unwrap().push(category.to_string());
-        if let Some(page) = self.page_queue.lock().unwrap().pop_front() {
-            return page;
-        }
-        self.fixed_page.lock().unwrap().clone().unwrap_or_default()
+        let queued = self.page_queue.lock().unwrap().pop_front();
+        let (books, total, next_cursor, error) = queued.unwrap_or_else(|| self.fixed_page.lock().unwrap().clone().unwrap_or_default());
+        error.map_or(Ok(BookPage { books, total, next_cursor }), Err)
     }
 
     async fn update_book(&self, _book_id: i64, _new_category: &str, _new_title: &str, _new_author: &str, new_path: &Path, _new_type: &str, _force: bool) -> (Value, Option<String>) {

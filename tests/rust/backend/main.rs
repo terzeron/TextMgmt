@@ -62,7 +62,7 @@ use std::time::Duration;
 use axum::http::Method;
 use axum::response::IntoResponse;
 use backend::auth::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
-use backend::book::{Book, BookLookupError};
+use backend::book::{Book, BookLookupError, BookPage};
 use backend::book_manager::{BookContent, BookManager, BookManagerApi, BookResponse};
 use backend::category_mapping::CategoryMapping;
 use backend::comics_manager::ComicsManager;
@@ -1441,43 +1441,44 @@ impl BookManagerApi for DummyManager {
         (Some(json!({"valid": true})), None)
     }
 
-    async fn get_books_in_category(&self, category: &str) -> (Vec<Book>, Option<String>) {
+    async fn get_books_in_category(&self, category: &str) -> Result<Vec<Book>, String> {
         if self.b().errors {
-            return (vec![], Some("nope".into()));
+            return Err("nope".into());
         }
-        (vec![dummy_book(1, category, "T", "a.txt", "txt", 0.0, None)], None)
+        Ok(vec![dummy_book(1, category, "T", "a.txt", "txt", 0.0, None)])
     }
 
-    async fn get_categories(&self) -> (Value, Option<String>) {
+    async fn get_categories(&self) -> Result<Value, String> {
         let b = self.b();
         if b.errors {
-            return (json!({}), Some("fail".into()));
+            return Err("fail".into());
         }
-        b.categories.unwrap_or((json!({"A": 1}), None))
+        let (value, error) = b.categories.unwrap_or((json!({"A": 1}), None));
+        error.map_or(Ok(value), Err)
     }
 
-    async fn search_similar_books_paged(&self, _book_id: i64, _size: i64, _offset: i64) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_similar_books_paged(&self, _book_id: i64, _size: i64, _offset: i64) -> Result<BookPage, String> {
         let b = self.b();
         if b.errors {
-            return (vec![], 0, Some("none".into()));
+            return Err("none".into());
         }
         if b.similar_ok {
-            return (vec![dummy_book(2, "A", "T2", "b.txt", "txt", 10.0, None)], 1, None);
+            return Ok(BookPage { books: vec![dummy_book(2, "A", "T2", "b.txt", "txt", 10.0, None)], total: 1, next_cursor: None });
         }
-        (vec![], 0, Some("No similar books found".into()))
+        Err("No similar books found".into())
     }
 
-    async fn search_by_keyword_paged(&self, _keyword: &str, _size: i64, _offset: i64, _exclude_categories: Option<&[String]>, _category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_by_keyword_paged(&self, _keyword: &str, _size: i64, _offset: i64, _exclude_categories: Option<&[String]>, _category: Option<&str>) -> Result<BookPage, String> {
         if self.b().errors {
-            return (vec![], 0, Some("kw".into()));
+            return Err("kw".into());
         }
-        (vec![dummy_book(3, "A", "T3", "c.txt", "txt", 9.0, None)], 1, None)
+        Ok(BookPage { books: vec![dummy_book(3, "A", "T3", "c.txt", "txt", 9.0, None)], total: 1, next_cursor: None })
     }
 
-    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> (Vec<Book>, i64, Option<String>) {
+    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> Result<BookPage, String> {
         *self.latest_size.lock().unwrap() = Some(size);
         *self.latest_exclude.lock().unwrap() = exclude_categories.map(|e| e.to_vec());
-        (vec![dummy_book(4, "A", "T4", "d.txt", "txt", 0.0, Some("2023-12-31T00:00:00.000000"))], 1, None)
+        Ok(BookPage { books: vec![dummy_book(4, "A", "T4", "d.txt", "txt", 0.0, Some("2023-12-31T00:00:00.000000"))], total: 1, next_cursor: None })
     }
 
     fn get_category_mismatches(&self, _force_refresh: bool) -> Result<Value, String> {
