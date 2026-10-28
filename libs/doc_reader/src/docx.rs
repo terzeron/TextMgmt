@@ -57,7 +57,10 @@ fn read_member(zip: &mut corpus_common::reader::Zip, name: &str) -> Result<Strin
     let file = zip.by_name(name).map_err(|_| format!("KeyError: {name}"))?;
     let mut buf = Vec::new();
     file.take(corpus_common::reader::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| e.to_string())?;
-    String::from_utf8(buf.strip_prefix(b"\xef\xbb\xbf").map_or(buf.clone(), <[u8]>::to_vec)).map_err(|e| e.to_string())
+    if buf.starts_with(b"\xef\xbb\xbf") {
+        buf.drain(..3);
+    }
+    String::from_utf8(buf).map_err(|e| e.to_string())
 }
 
 /// 주 문서 파트 이름. `_rels/.rels`의 officeDocument 관계를 따르고, 없으면 `word/document.xml`.
