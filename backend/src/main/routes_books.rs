@@ -203,19 +203,22 @@ pub(super) async fn checked_manager(deps: &AppDeps, payload: &Value, book_id: i6
         ApiError::unavailable()
     })?;
     if payload.get("role").and_then(Value::as_str) == Some("viewer") {
-        let (book, _) = manager.get_book(book_id).await;
-        if let Some(book) = book {
-            let mapping = deps.category_mapping().map_err(|e| {
-                log::warn!("카테고리 접근 정책을 읽을 수 없다: {e}");
-                ApiError::unavailable()
-            })?;
-            let hidden = mapping.get_hidden_categories(if comics { "comic" } else { "book" }).map_err(|e| match e {
-                MappingError::Http(status, detail) => ApiError::http(status, &detail),
-                MappingError::Other(message) => ApiError::Internal(message),
-            })?;
-            if !book.category.is_empty() && hidden.iter().any(|category| book.category == *category || book.category.starts_with(&format!("{category}/"))) {
-                return Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다."));
-            }
+        // 카테고리를 모르면 숨김 여부를 판정할 수 없다. 통과시키지 않고 거절한다(fail-closed).
+        let (book, error) = manager.get_book(book_id).await;
+        let Some(book) = book else {
+            log::warn!("viewer 접근 확인 중 도서를 찾지 못했다: book_id={book_id}, {}", error.as_deref().unwrap_or("-"));
+            return Err(ApiError::http(404, &format!("Book not found: {book_id}")));
+        };
+        let mapping = deps.category_mapping().map_err(|e| {
+            log::warn!("카테고리 접근 정책을 읽을 수 없다: {e}");
+            ApiError::unavailable()
+        })?;
+        let hidden = mapping.get_hidden_categories(if comics { "comic" } else { "book" }).map_err(|e| match e {
+            MappingError::Http(status, detail) => ApiError::http(status, &detail),
+            MappingError::Other(message) => ApiError::Internal(message),
+        })?;
+        if !book.category.is_empty() && hidden.iter().any(|category| book.category == *category || book.category.starts_with(&format!("{category}/"))) {
+            return Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다."));
         }
     }
     Ok(manager)

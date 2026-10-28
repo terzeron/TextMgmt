@@ -1170,6 +1170,20 @@ mod test_viewer_hidden_access {
     }
 
     #[tokio::test]
+    async fn test_viewer_download_fails_closed_when_book_lookup_fails() {
+        // 조회 오류로 카테고리를 모르면 숨김 검사를 건너뛰지 않고 거절한다.
+        let fx = Fx::new();
+        fx.set_auth(viewer_payload());
+        fx.cat.returns("get_hidden_categories", json!(["secret"]));
+        fx.bm.returns("get_book", json!([null, "ES 연결 실패"]));
+
+        let r = fx.get("/download/1").await;
+
+        assert_eq!(r.status, 404);
+        fx.bm.assert_not_called("get_book_content");
+    }
+
+    #[tokio::test]
     async fn test_download_maps_book_conversion_error_to_internal_error() {
         let fx = Fx::new();
         fx.bm.returns("get_book_content", json!({"__error__": "malformed ES book"}));
