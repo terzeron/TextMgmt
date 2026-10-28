@@ -345,6 +345,23 @@ mod runner {
     }
 
     #[test]
+    fn run_timeout_kills_grandchildren_holding_the_pipes() {
+        // 손자가 stdout을 쥐고 있으면 자식만 죽여서는 파이프가 닫히지 않는다.
+        let start = Instant::now();
+        let err = SystemRunner.run(&argv(&["sh", "-c", "sleep 20 & sleep 20"]), Some(Duration::from_millis(200))).unwrap_err();
+        assert!(matches!(err, CommandError::Timeout), "{err:?}");
+        assert!(start.elapsed() < Duration::from_secs(3), "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn run_does_not_wait_past_the_deadline_for_pipes_after_the_child_exits() {
+        let start = Instant::now();
+        let err = SystemRunner.run(&argv(&["sh", "-c", "sleep 20 & echo started"]), Some(Duration::from_millis(500))).unwrap_err();
+        assert!(matches!(err, CommandError::Timeout), "{err:?}");
+        assert!(start.elapsed() < Duration::from_secs(3), "{:?}", start.elapsed());
+    }
+
+    #[test]
     fn run_reports_a_missing_program_as_not_found() {
         let err = SystemRunner.run(&argv(&["definitely-not-a-real-program-xyz"]), None).unwrap_err();
         assert!(matches!(err, CommandError::NotFound), "{err:?}");

@@ -7,10 +7,11 @@ use std::fs;
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -229,12 +230,24 @@ pub trait CommandRunner: Send + Sync {
 
 pub struct SystemRunner;
 
-fn drain<R: Read + Send + 'static>(mut r: R) -> thread::JoinHandle<Vec<u8>> {
+fn drain<R: Read + Send + 'static>(mut r: R) -> mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = r.read_to_end(&mut buf);
-        buf
-    })
+        let _ = tx.send(buf);
+    });
+    rx
+}
+
+/// 자식이 만든 process group 전체를 죽인다. 파이프를 쥔 손자 프로세스까지 정리해야 읽기 스레드가 끝난다.
+fn kill_process_group(child: &mut std::process::Child) {
+    // SAFETY: 음수 pid는 이 명령에 배정한 process group만 가리킨다.
+    unsafe {
+        libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 impl CommandRunner for SystemRunner {
@@ -242,6 +255,7 @@ impl CommandRunner for SystemRunner {
         let (program, args) = argv.split_first().ok_or_else(|| CommandError::Failed("빈 argv".into()))?;
         let mut child = Command::new(program)
             .args(args)
+            .process_group(0)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -258,9 +272,7 @@ impl CommandRunner for SystemRunner {
                 Err(e) => return Err(CommandError::Failed(e.to_string())),
             }
             if deadline.is_some_and(|d| Instant::now() >= d) {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = (out.join(), err.join());
+                kill_process_group(&mut child);
                 return Err(CommandError::Timeout);
             }
             thread::sleep(Duration::from_millis(5));
@@ -270,7 +282,20 @@ impl CommandRunner for SystemRunner {
             // Python은 시그널로 죽으면 음수 시그널 번호를 돌려준다.
             status.code().unwrap_or_else(|| -status.signal().unwrap_or(1))
         };
-        Ok(CommandOutput { returncode, stdout: out.join().unwrap_or_default(), stderr: err.join().unwrap_or_default() })
+        // 자식이 끝나도 손자가 파이프를 쥐고 있으면 EOF가 오지 않는다. 남은 기한까지만 기다린다.
+        let mut collect = |rx: mpsc::Receiver<Vec<u8>>| match deadline {
+            None => Ok(rx.recv().unwrap_or_default()),
+            Some(d) => match rx.recv_timeout(d.saturating_duration_since(Instant::now())) {
+                Ok(bytes) => Ok(bytes),
+                Err(mpsc::RecvTimeoutError::Disconnected) => Ok(Vec::new()),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    kill_process_group(&mut child);
+                    Err(CommandError::Timeout)
+                }
+            },
+        };
+        let (stdout, stderr) = (collect(out)?, collect(err)?);
+        Ok(CommandOutput { returncode, stdout, stderr })
     }
 
     fn which(&self, program: &str) -> Option<PathBuf> {
