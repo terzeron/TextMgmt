@@ -169,6 +169,7 @@ struct State {
     delete_by_paths_result: i64,
     inserted: Vec<Vec<(i64, Value)>>,
     orphan_ids: HashSet<i64>,
+    prefix_lookup_error: bool,
     deleted_ids: Option<Vec<i64>>,
 }
 
@@ -230,19 +231,22 @@ impl IndexStore for FakeStore {
     fn get_existing_created_time_metadata(&self, _doc_ids: &[i64]) -> Result<HashMap<i64, BTreeMap<String, String>>, EsError> {
         Ok(self.state.lock().unwrap().created_meta.clone())
     }
-    fn delete_by_file_paths(&self, _file_paths: &[String], _exclude_ids: &[i64]) -> i64 {
-        self.state.lock().unwrap().delete_by_paths_result
+    fn delete_by_file_paths(&self, _file_paths: &[String], _exclude_ids: &[i64]) -> Result<i64, EsError> {
+        Ok(self.state.lock().unwrap().delete_by_paths_result)
     }
-    fn get_doc_ids_by_path_prefix(&self, _path_prefix: &str) -> HashSet<i64> {
+    fn get_doc_ids_by_path_prefix(&self, _path_prefix: &str) -> Result<HashSet<i64>, EsError> {
         // 실제 적재된 inode + 디스크에 없는 orphan
         let s = self.state.lock().unwrap();
-        s.inserted.iter().flatten().map(|(id, _)| *id).chain(s.orphan_ids.iter().copied()).collect()
+        if s.prefix_lookup_error {
+            return Err(EsError::Transport("scroll failed".to_owned()));
+        }
+        Ok(s.inserted.iter().flatten().map(|(id, _)| *id).chain(s.orphan_ids.iter().copied()).collect())
     }
-    fn delete_by_ids(&self, ids: &[i64]) -> i64 {
+    fn delete_by_ids(&self, ids: &[i64]) -> Result<i64, EsError> {
         let mut sorted = ids.to_vec();
         sorted.sort_unstable();
         self.state.lock().unwrap().deleted_ids = Some(sorted);
-        ids.len() as i64
+        Ok(ids.len() as i64)
     }
     fn insert(&self, docs: &[(i64, Value)]) -> Result<(), EsError> {
         self.state.lock().unwrap().inserted.push(docs.to_vec());
@@ -1482,6 +1486,26 @@ fn test_main_recursive_reload_skips_orphan_delete_when_directory_unreadable() {
     assert_eq!(store.state.lock().unwrap().deleted_ids, None, "읽지 못한 디렉토리가 있으면 orphan을 지우지 않는다");
     assert!(out.contains("orphan 삭제 건너뜀"), "{out}");
     assert!(out.contains("locked"), "{out}");
+}
+
+#[test]
+fn test_main_recursive_reload_skips_orphan_delete_when_lookup_fails() {
+    // 기존 레코드 조회가 실패하면 "orphan 없음"으로 보고하지 않고 삭제도 하지 않는다.
+    let dir = tmp();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    fs::write(dir.path().join("sub").join("a.txt"), "hello world\n").unwrap();
+    let mut env = setup_loader_env(dir.path());
+    env.insert("TM_ES_BOOK_INDEX".to_owned(), "book_idx".to_owned());
+    env.insert("TM_ES_COMICS_INDEX".to_owned(), "comics_idx".to_owned());
+
+    let store = FakeStore::new();
+    store.update(|s| s.prefix_lookup_error = true);
+    let (rc, out) = run_main(&["--recursive", "--reload", "book", &path_str(dir.path())], &env, &store);
+
+    assert_eq!(rc, 0);
+    assert_eq!(store.state.lock().unwrap().deleted_ids, None);
+    assert!(out.contains("orphan 삭제 건너뜀"), "{out}");
+    assert!(!out.contains("orphan 없음"), "{out}");
 }
 
 mod test_report_problems {

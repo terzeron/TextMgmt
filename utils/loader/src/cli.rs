@@ -455,14 +455,29 @@ pub fn run_with_hooks(program: &str, args: &[String], world: &World, out: &mut d
                 let prefix = cfg.path_prefix(&target);
                 let rel = target.strip_prefix(prefix).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
                 refresh_or_fail!(es.refresh()); // 방금 넣은 문서가 scroll에 잡히도록
-                let existing = es.get_doc_ids_by_path_prefix(&rel);
-                let mut orphans: Vec<i64> = existing.difference(&seen).copied().collect();
-                orphans.sort_unstable();
-                if orphans.is_empty() {
-                    let _ = writeln!(out, "  orphan 없음 (삭제할 예전 레코드 없음)");
-                } else {
-                    let deleted = es.delete_by_ids(&orphans);
-                    let _ = writeln!(out, "  [orphan 삭제: {deleted}개] (디스크에서 사라진 예전 레코드, 경로: {rel})");
+                match es.get_doc_ids_by_path_prefix(&rel) {
+                    // 조회가 실패하면 "orphan 없음"으로 보고하지 않는다.
+                    Err(e) => {
+                        eprintln!("ERROR get_doc_ids_by_path_prefix error: {e}");
+                        let _ = writeln!(out, "  [orphan 삭제 건너뜀] 기존 레코드 조회 실패");
+                    }
+                    Ok(existing) => {
+                        let mut orphans: Vec<i64> = existing.difference(&seen).copied().collect();
+                        orphans.sort_unstable();
+                        if orphans.is_empty() {
+                            let _ = writeln!(out, "  orphan 없음 (삭제할 예전 레코드 없음)");
+                        } else {
+                            match es.delete_by_ids(&orphans) {
+                                Ok(deleted) => {
+                                    let _ = writeln!(out, "  [orphan 삭제: {deleted}개] (디스크에서 사라진 예전 레코드, 경로: {rel})");
+                                }
+                                Err(e) => {
+                                    eprintln!("ERROR delete_by_ids error: {e}");
+                                    let _ = writeln!(out, "  [orphan 삭제 실패] 일부만 지워졌을 수 있음 (경로: {rel})");
+                                }
+                            }
+                        }
+                    }
                 }
             }
         } else {

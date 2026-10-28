@@ -212,20 +212,20 @@ fn existing_paths_and_created_time_metadata_come_from_mget() {
 }
 
 #[test]
-fn delete_by_file_paths_excludes_ids_and_swallows_errors() {
+fn delete_by_file_paths_excludes_ids_and_reports_errors() {
     let m = mock(|_| ok(json!({"deleted": 4})));
     let c = m.client();
-    assert_eq!(c.delete_by_file_paths(&["a".into(), "b".into()], &[1, 2]), 4);
+    assert_eq!(c.delete_by_file_paths(&["a".into(), "b".into()], &[1, 2]).unwrap(), 4);
     let r = &m.requests()[0];
     assert_eq!(r.path, "/books/_delete_by_query?conflicts=proceed&refresh=false");
     assert_eq!(r.json()["query"], json!({"bool": {"must": [{"terms": {"file_path": ["a", "b"]}}], "must_not": [{"ids": {"values": ["1", "2"]}}]}}));
-    assert_eq!(c.delete_by_file_paths(&[], &[]), 0);
+    assert_eq!(c.delete_by_file_paths(&[], &[]).unwrap(), 0);
     assert_eq!(m.requests().len(), 1);
-    c.delete_by_file_paths(&["x".into()], &[]);
+    c.delete_by_file_paths(&["x".into()], &[]).unwrap();
     assert!(m.requests()[1].json()["query"]["bool"].get("must_not").is_none());
 
     let failing = mock(|_| (500, "{}".into()));
-    assert_eq!(failing.client().delete_by_file_paths(&["a".into()], &[]), 0);
+    assert!(matches!(failing.client().delete_by_file_paths(&["a".into()], &[]), Err(EsError::Status { status: 500, .. })));
 }
 
 #[test]
@@ -240,7 +240,7 @@ fn doc_ids_by_path_prefix_scroll_through_all_pages_and_clear_the_scroll() {
         }
         _ => ok(json!({})),
     });
-    let ids = m.client().get_doc_ids_by_path_prefix("3_판타지");
+    let ids = m.client().get_doc_ids_by_path_prefix("3_판타지").unwrap();
     assert_eq!(ids, [1, 2, 3].into_iter().collect());
     let seen = m.requests();
     assert_eq!(seen[0].json()["_source"], json!(false));
@@ -251,21 +251,21 @@ fn doc_ids_by_path_prefix_scroll_through_all_pages_and_clear_the_scroll() {
     assert_eq!(last.json()["scroll_id"], "S2");
 
     let failing = mock(|_| (500, "{}".into()));
-    assert!(failing.client().get_doc_ids_by_path_prefix("x").is_empty());
+    assert!(failing.client().get_doc_ids_by_path_prefix("x").is_err());
 }
 
 #[test]
 fn delete_by_ids_chunks_requests() {
     let m = mock(|_| ok(json!({"deleted": 7})));
     let ids: Vec<i64> = (0..10_001).collect();
-    assert_eq!(m.client().delete_by_ids(&ids), 14);
+    assert_eq!(m.client().delete_by_ids(&ids).unwrap(), 14);
     let seen = m.requests();
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0].json()["query"]["ids"]["values"].as_array().unwrap().len(), 10_000);
     assert_eq!(seen[1].json()["query"]["ids"]["values"].as_array().unwrap().len(), 1);
-    assert_eq!(m.client().delete_by_ids(&[]), 0);
+    assert_eq!(m.client().delete_by_ids(&[]).unwrap(), 0);
     let failing = mock(|_| (500, "{}".into()));
-    assert_eq!(failing.client().delete_by_ids(&[1]), 0);
+    assert!(failing.client().delete_by_ids(&[1]).is_err());
 }
 
 #[test]

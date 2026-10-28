@@ -222,9 +222,13 @@ impl Loader<'_> {
                     }
                 }
                 let new_paths: Vec<String> = batch_data.iter().filter_map(|(_, d)| d["file_path"].as_str().map(str::to_owned)).collect();
-                let cleaned = self.es.delete_by_file_paths(&new_paths, &ids);
-                if cleaned > 0 {
-                    let _ = writeln!(out, "  [중복 제거: {cleaned}개 기존 문서 삭제]");
+                match self.es.delete_by_file_paths(&new_paths, &ids) {
+                    Ok(cleaned) if cleaned > 0 => {
+                        let _ = writeln!(out, "  [중복 제거: {cleaned}개 기존 문서 삭제]");
+                    }
+                    Ok(_) => {}
+                    // 원본처럼 중복 정리 실패는 적재를 멈추지 않는다.
+                    Err(e) => eprintln!("ERROR delete_by_file_paths error: {e}"),
                 }
                 self.es.insert(&batch_data)?;
                 processed_count += batch_data.len();

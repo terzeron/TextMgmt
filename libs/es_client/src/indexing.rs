@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use crate::{EsClient, EsError};
+use crate::{EsClient, EsError, Method};
 
 /// bulk 한 번에 보내는 문서 수.
 pub const BULK_CHUNK_SIZE: usize = 100;
@@ -29,10 +29,12 @@ pub trait IndexStore {
     fn get_existing_paths(&self, doc_ids: &[i64]) -> Result<HashMap<i64, String>, EsError>;
     /// `{inode: {created_time, created_time_source, updated_time 중 있는 것}}`
     fn get_existing_created_time_metadata(&self, doc_ids: &[i64]) -> Result<HashMap<i64, BTreeMap<String, String>>, EsError>;
-    /// 오류는 삼키고 0을 돌려준다(원본과 같다).
-    fn delete_by_file_paths(&self, file_paths: &[String], exclude_ids: &[i64]) -> i64;
-    fn get_doc_ids_by_path_prefix(&self, path_prefix: &str) -> HashSet<i64>;
-    fn delete_by_ids(&self, ids: &[i64]) -> i64;
+    /// 지운 문서 수. 오류 처리(원본은 삼키고 0)는 호출자가 정한다.
+    fn delete_by_file_paths(&self, file_paths: &[String], exclude_ids: &[i64]) -> Result<i64, EsError>;
+    /// scroll 도중 실패하면 모은 일부 대신 오류를 돌려준다.
+    fn get_doc_ids_by_path_prefix(&self, path_prefix: &str) -> Result<HashSet<i64>, EsError>;
+    /// 청크 단위로 지운다. 중간 청크가 실패하면 앞 청크는 이미 지워진 채 오류를 돌려준다.
+    fn delete_by_ids(&self, ids: &[i64]) -> Result<i64, EsError>;
     fn insert(&self, docs: &[(i64, Value)]) -> Result<(), EsError>;
     fn refresh(&self) -> Result<(), EsError>;
 }
@@ -99,32 +101,23 @@ fn transport(e: &EsError) -> bool {
 
 impl EsClient {
     fn call_ndjson(&self, path: &str, body: &str) -> Result<Value, EsError> {
-        let url = format!("{}{path}", self.base);
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(EsError::Transport(format!("ES URL은 http 또는 https여야 한다: {}", self.base)));
-        }
-        let mut resp = self.agent.post(&url).header("Authorization", &self.auth).content_type("application/x-ndjson").send(body.as_bytes()).map_err(|e| EsError::Transport(e.to_string()))?;
-        let status = resp.status().as_u16();
-        let text = resp.body_mut().read_to_string().map_err(|e| EsError::Transport(e.to_string()))?;
-        if status >= 400 {
-            return Err(EsError::Status { status, body: text });
-        }
-        serde_json::from_str(&text).map_err(|e| EsError::Parse(e.to_string()))
+        let url = self.url(path)?;
+        Self::finish(self.agent.post(&url).header("Authorization", &self.auth).content_type("application/x-ndjson").send(body.as_bytes()))
     }
 
     fn mget(&self, ids: &[i64], source: &[&str]) -> Result<Vec<Value>, EsError> {
         let body = json!({"docs": mget_docs(&self.index, ids)});
-        let response = self.call("POST", &format!("/_mget?_source={}", source.join(",")), Some(&body))?;
+        let response = self.call(Method::Post, &format!("/_mget?_source={}", source.join(",")), Some(&body))?;
         Ok(response["docs"].as_array().cloned().unwrap_or_default())
     }
 
     fn mapping_properties(&self) -> Result<Value, EsError> {
-        let mapping = self.call("GET", &format!("/{}/_mapping", self.index), None)?;
+        let mapping = self.call(Method::Get, &format!("/{}/_mapping", self.index), None)?;
         Ok(mapping[&self.index]["mappings"]["properties"].clone())
     }
 
     fn put_properties(&self, properties: Value) -> Result<(), EsError> {
-        self.call("PUT", &format!("/{}/_mapping", self.index), Some(&json!({"properties": properties}))).map(|_| ())
+        self.call(Method::Put, &format!("/{}/_mapping", self.index), Some(&json!({"properties": properties}))).map(|_| ())
     }
 
     /// 기존 인덱스에 빠진 필드(category.nori, created_time 계열, publisher)를 더한다. 실패해도 경고만 남기고 넘어간다.
@@ -160,7 +153,7 @@ impl EsClient {
     }
 
     fn delete_by_query(&self, query: Value) -> Result<i64, EsError> {
-        let response = self.call("POST", &format!("/{}/_delete_by_query?conflicts=proceed&refresh=false", self.index), Some(&json!({"query": query})))?;
+        let response = self.call(Method::Post, &format!("/{}/_delete_by_query?conflicts=proceed&refresh=false", self.index), Some(&json!({"query": query})))?;
         Ok(response["deleted"].as_i64().unwrap_or(0))
     }
 }
@@ -171,11 +164,11 @@ impl IndexStore for EsClient {
     }
 
     fn ping(&self) -> Result<(), EsError> {
-        self.call("GET", "/", None).map(|_| ())
+        self.call(Method::Get, "/", None).map(|_| ())
     }
 
     fn index_exists(&self) -> Result<bool, EsError> {
-        match self.call("GET", &format!("/{}", self.index), None) {
+        match self.call(Method::Get, &format!("/{}", self.index), None) {
             Ok(_) => Ok(true),
             Err(EsError::Status { status: 404, .. }) => Ok(false),
             Err(e) => Err(e),
@@ -187,7 +180,7 @@ impl IndexStore for EsClient {
             self.ensure_existing_index_mappings();
             return Ok(());
         }
-        match self.call("PUT", &format!("/{}", self.index), Some(&json!({"settings": index_settings(), "mappings": index_mappings()}))) {
+        match self.call(Method::Put, &format!("/{}", self.index), Some(&json!({"settings": index_settings(), "mappings": index_mappings()}))) {
             Ok(_) => Ok(()),
             Err(EsError::Status { status: 400, body }) if body.contains("resource_already_exists_exception") => {
                 eprintln!("INFO Index {} already exists, skipping creation", self.index);
@@ -200,7 +193,7 @@ impl IndexStore for EsClient {
 
     fn delete_index(&self) -> Result<(), EsError> {
         if self.index_exists()? {
-            self.call("DELETE", &format!("/{}", self.index), None)?;
+            self.call(Method::Delete, &format!("/{}", self.index), None)?;
         }
         Ok(())
     }
@@ -240,34 +233,27 @@ impl IndexStore for EsClient {
         Ok(result)
     }
 
-    fn delete_by_file_paths(&self, file_paths: &[String], exclude_ids: &[i64]) -> i64 {
+    fn delete_by_file_paths(&self, file_paths: &[String], exclude_ids: &[i64]) -> Result<i64, EsError> {
         if file_paths.is_empty() {
-            return 0;
+            return Ok(0);
         }
         let mut query = json!({"bool": {"must": [{"terms": {"file_path": file_paths}}]}});
         if !exclude_ids.is_empty() {
             query["bool"]["must_not"] = json!([{"ids": {"values": exclude_ids.iter().map(i64::to_string).collect::<Vec<_>>()}}]);
         }
-        match self.delete_by_query(query) {
-            Ok(deleted) => {
-                if deleted > 0 {
-                    eprintln!("INFO delete_by_file_paths: {deleted} docs deleted for {} paths", file_paths.len());
-                }
-                deleted
-            }
-            Err(e) => {
-                eprintln!("ERROR delete_by_file_paths error: {e}");
-                0
-            }
+        let deleted = self.delete_by_query(query)?;
+        if deleted > 0 {
+            eprintln!("INFO delete_by_file_paths: {deleted} docs deleted for {} paths", file_paths.len());
         }
+        Ok(deleted)
     }
 
-    fn get_doc_ids_by_path_prefix(&self, path_prefix: &str) -> HashSet<i64> {
+    fn get_doc_ids_by_path_prefix(&self, path_prefix: &str) -> Result<HashSet<i64>, EsError> {
         let mut ids = HashSet::new();
         let mut scroll_id: Option<String> = None;
         let outcome = (|| -> Result<(), EsError> {
             let body = json!({"query": path_prefix_query(path_prefix), "size": SCROLL_PAGE_SIZE, "_source": false});
-            let mut response = self.call("POST", &format!("/{}/_search?scroll=10m", self.index), Some(&body))?;
+            let mut response = self.call(Method::Post, &format!("/{}/_search?scroll=10m", self.index), Some(&body))?;
             scroll_id = response["_scroll_id"].as_str().map(str::to_owned);
             loop {
                 let hits = response["hits"]["hits"].as_array().cloned().unwrap_or_default();
@@ -275,37 +261,25 @@ impl IndexStore for EsClient {
                     return Ok(());
                 }
                 ids.extend(hits.iter().filter_map(|h| h["_id"].as_str().and_then(|s| s.parse::<i64>().ok())));
-                response = self.call("POST", "/_search/scroll", Some(&json!({"scroll": "10m", "scroll_id": scroll_id})))?;
+                response = self.call(Method::Post, "/_search/scroll", Some(&json!({"scroll": "10m", "scroll_id": scroll_id})))?;
                 scroll_id = response["_scroll_id"].as_str().map(str::to_owned).or(scroll_id.take());
             }
         })();
-        if let Err(e) = outcome {
-            eprintln!("ERROR get_doc_ids_by_path_prefix error: {e}");
-        }
         if let Some(id) = scroll_id {
-            let _ = self.call("DELETE", "/_search/scroll", Some(&json!({"scroll_id": id})));
+            let _ = self.call(Method::Delete, "/_search/scroll", Some(&json!({"scroll_id": id})));
         }
-        ids
+        outcome.map(|()| ids)
     }
 
-    fn delete_by_ids(&self, ids: &[i64]) -> i64 {
-        if ids.is_empty() {
-            return 0;
-        }
+    fn delete_by_ids(&self, ids: &[i64]) -> Result<i64, EsError> {
         let mut deleted = 0;
         for chunk in ids.chunks(DELETE_CHUNK_SIZE) {
-            match self.delete_by_query(json!({"ids": {"values": chunk.iter().map(i64::to_string).collect::<Vec<_>>()}})) {
-                Ok(n) => deleted += n,
-                Err(e) => {
-                    eprintln!("ERROR delete_by_ids error: {e}");
-                    return deleted;
-                }
-            }
+            deleted += self.delete_by_query(json!({"ids": {"values": chunk.iter().map(i64::to_string).collect::<Vec<_>>()}}))?;
         }
         if deleted > 0 {
             eprintln!("INFO delete_by_ids: {deleted} docs deleted for {} ids", ids.len());
         }
-        deleted
+        Ok(deleted)
     }
 
     fn insert(&self, docs: &[(i64, Value)]) -> Result<(), EsError> {
@@ -313,7 +287,7 @@ impl IndexStore for EsClient {
     }
 
     fn refresh(&self) -> Result<(), EsError> {
-        self.call("POST", &format!("/{}/_refresh", self.index), None).map(|_| ())
+        self.call(Method::Post, &format!("/{}/_refresh", self.index), None).map(|_| ())
     }
 }
 

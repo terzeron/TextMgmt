@@ -127,6 +127,15 @@ pub trait BookStore {
     fn delete(&self, doc_id: i64) -> Result<bool, EsError>;
 }
 
+/// ES REST 호출의 HTTP 메서드.
+#[derive(Clone, Copy)]
+enum Method {
+    Get,
+    Post,
+    Put,
+    Delete,
+}
+
 pub struct EsClient {
     agent: ureq::Agent,
     base: String,
@@ -173,21 +182,17 @@ impl EsClient {
         Self::from_env_with_index(&get("TM_ES_BOOK_INDEX")?)
     }
 
-    fn call(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, EsError> {
+    /// 요청 URL. http·https가 아니면 보내지 않는다.
+    fn url(&self, path: &str) -> Result<String, EsError> {
         let url = format!("{}{path}", self.base);
         if !url.starts_with("http://") && !url.starts_with("https://") {
             return Err(EsError::Transport(format!("ES URL은 http 또는 https여야 한다: {}", self.base)));
         }
-        let auth = &self.auth;
-        let result = match (method, body) {
-            ("POST", Some(b)) => self.agent.post(&url).header("Authorization", auth).send_json(b),
-            ("POST", None) => self.agent.post(&url).header("Authorization", auth).send_empty(),
-            ("PUT", Some(b)) => self.agent.put(&url).header("Authorization", auth).send_json(b),
-            ("PUT", None) => self.agent.put(&url).header("Authorization", auth).send_empty(),
-            ("DELETE", Some(b)) => self.agent.delete(&url).header("Authorization", auth).force_send_body().send_json(b),
-            ("DELETE", None) => self.agent.delete(&url).header("Authorization", auth).call(),
-            _ => self.agent.get(&url).header("Authorization", auth).call(),
-        };
+        Ok(url)
+    }
+
+    /// 응답 상태를 확인하고 본문을 JSON으로 읽는다.
+    fn finish(result: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<Value, EsError> {
         let mut resp = result.map_err(|e| EsError::Transport(e.to_string()))?;
         let status = resp.status().as_u16();
         let text = resp.body_mut().read_to_string().map_err(|e| EsError::Transport(e.to_string()))?;
@@ -197,11 +202,25 @@ impl EsClient {
         serde_json::from_str(&text).map_err(|e| EsError::Parse(e.to_string()))
     }
 
+    fn call(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Value, EsError> {
+        let url = self.url(path)?;
+        let auth = &self.auth;
+        Self::finish(match (method, body) {
+            (Method::Post, Some(b)) => self.agent.post(&url).header("Authorization", auth).send_json(b),
+            (Method::Post, None) => self.agent.post(&url).header("Authorization", auth).send_empty(),
+            (Method::Put, Some(b)) => self.agent.put(&url).header("Authorization", auth).send_json(b),
+            (Method::Put, None) => self.agent.put(&url).header("Authorization", auth).send_empty(),
+            (Method::Delete, Some(b)) => self.agent.delete(&url).header("Authorization", auth).force_send_body().send_json(b),
+            (Method::Delete, None) => self.agent.delete(&url).header("Authorization", auth).call(),
+            (Method::Get, _) => self.agent.get(&url).header("Authorization", auth).call(),
+        })
+    }
+
     /// 접속을 확인한다. 실패하면 `2**(n+1)`초(최대 10초)씩 쉬며 `max_retries`번 시도한다.
     pub fn connect_with_retry(&self, max_retries: u32, sleep: &dyn Fn(u64)) -> Result<Value, EsError> {
         let mut last = None;
         for attempt in 0..max_retries {
-            match self.call("GET", "/", None) {
+            match self.call(Method::Get, "/", None) {
                 Ok(info) => return Ok(info),
                 Err(e) => {
                     if attempt + 1 < max_retries {
@@ -219,24 +238,15 @@ impl EsClient {
         if max_result_count > MAX_RESULT_WINDOW {
             return self.search_scroll(&query, max_result_count);
         }
-        // max_result_window 오류를 피하려고 크기를 자른다.
-        let size = max_result_count;
-        let mut body = json!({"query": query, "size": size, "track_scores": true});
+        let mut body = json!({"query": query, "size": max_result_count, "track_scores": true});
         if let Some(fields) = source_fields {
             body["_source"] = json!(fields);
         }
-        let response = self.call("POST", &format!("/{}/_search", self.index), Some(&body))?;
+        let response = self.call(Method::Post, &format!("/{}/_search", self.index), Some(&body))?;
         let hits = &response["hits"];
         let Some(max_score) = hits["max_score"].as_f64() else { return Ok(Vec::new()) };
         let rows = hits["hits"].as_array().ok_or_else(|| EsError::Parse("hits.hits가 없다".into()))?;
-        let mut result = Vec::with_capacity(rows.len());
-        for hit in rows {
-            let id = hit["_id"].as_str().and_then(|s| s.parse().ok()).ok_or_else(|| EsError::Parse(format!("_id를 정수로 읽지 못했다: {}", hit["_id"])))?;
-            let score = hit["_score"].as_f64().unwrap_or(0.0);
-            result.push(Hit { id, source: hit["_source"].clone(), score: if max_score > 0.0 { score * 100.0 / max_score } else { 0.0 } });
-        }
-        result.truncate(max_result_count);
-        Ok(result)
+        rows.iter().map(|hit| to_hit(hit, max_score)).collect()
     }
 
     /// Python `_search`처럼 10,000건을 넘는 요청은 ES scroll context로 이어 읽는다.
@@ -244,7 +254,7 @@ impl EsClient {
         let mut scroll_id: Option<String> = None;
         let outcome: Result<Vec<Hit>, EsError> = (|| {
             let body = json!({"query": query, "size": MAX_RESULT_WINDOW, "track_scores": true});
-            let mut response = self.call("POST", &format!("/{}/_search?scroll=10m", self.index), Some(&body))?;
+            let mut response = self.call(Method::Post, &format!("/{}/_search?scroll=10m", self.index), Some(&body))?;
             scroll_id = response.get("_scroll_id").and_then(Value::as_str).map(str::to_owned);
             let mut result = Vec::new();
             loop {
@@ -256,14 +266,12 @@ impl EsClient {
                     break;
                 }
                 for hit in rows {
-                    let id = hit["_id"].as_str().and_then(|s| s.parse().ok()).ok_or_else(|| EsError::Parse(format!("_id를 정수로 읽지 못했다: {}", hit["_id"])))?;
-                    let score = hit["_score"].as_f64().unwrap_or(0.0);
-                    result.push(Hit { id, source: hit["_source"].clone(), score: if max_score > 0.0 { score * 100.0 / max_score } else { 0.0 } });
+                    result.push(to_hit(hit, max_score)?);
                     if result.len() >= max_result_count {
                         return Ok(result);
                     }
                 }
-                let mut next = self.call("POST", "/_search/scroll", Some(&json!({"scroll":"10m", "scroll_id":scroll_id.as_deref().unwrap_or("")})))?;
+                let mut next = self.call(Method::Post, "/_search/scroll", Some(&json!({"scroll":"10m", "scroll_id":scroll_id.as_deref().unwrap_or("")})))?;
                 scroll_id = Some(next.get("_scroll_id").and_then(Value::as_str).ok_or_else(|| EsError::Parse("scroll 응답에 _scroll_id가 없다".into()))?.to_owned());
                 if next["hits"]["max_score"].as_f64().is_none() {
                     return Ok(Vec::new());
@@ -274,19 +282,14 @@ impl EsClient {
             Ok(result)
         })();
         if let Some(id) = scroll_id {
-            let _ = self.call("DELETE", "/_search/scroll", Some(&json!({"scroll_id": id})));
+            let _ = self.call(Method::Delete, "/_search/scroll", Some(&json!({"scroll_id": id})));
         }
         outcome
     }
 
-    fn effective_count(max_result_count: Option<usize>) -> Result<usize, EsError> {
-        let n = max_result_count.unwrap_or(DEFAULT_MAX_RESULT_COUNT);
-        Ok(n)
-    }
-
     /// 제목·확장자·크기로 찾는다. 기본 건수는 10건이다.
     pub fn search_by_title(&self, title: &str, file_type: &str, file_size: i64, max_result_count: Option<usize>) -> Result<Vec<Hit>, EsError> {
-        let n = Self::effective_count(max_result_count)?;
+        let n = max_result_count.unwrap_or(DEFAULT_MAX_RESULT_COUNT);
         // Python `title.split(" ")`처럼 공백 하나를 기준으로 센다. 빈 문자열도 1개다.
         let words = title.split(' ').count() as f64;
         let query = json!({"bool": {"should": [
@@ -298,7 +301,7 @@ impl EsClient {
     }
 
     pub fn search_similar_docs(&self, title: &str, author: &str, file_size: i64, summary: &str, max_result_count: Option<usize>, exclude_id: Option<i64>) -> Result<Vec<Hit>, EsError> {
-        let n = Self::effective_count(max_result_count)?;
+        let n = max_result_count.unwrap_or(DEFAULT_MAX_RESULT_COUNT);
         let size = file_size as f64;
         let mut query = json!({"bool": {
             "should": [
@@ -320,13 +323,13 @@ impl EsClient {
     /// 문서의 일부 필드를 갱신한다(`refresh=true`). 샤드 실패가 있으면 `false`다. 없는 문서는 오류다.
     pub fn update(&self, doc_id: i64, fields: &UpdateFields) -> Result<bool, EsError> {
         let body = json!({"doc": fields.to_doc()});
-        let response = self.call("POST", &format!("/{}/_update/{doc_id}?refresh=true", self.index), Some(&body))?;
+        let response = self.call(Method::Post, &format!("/{}/_update/{doc_id}?refresh=true", self.index), Some(&body))?;
         Ok(response["_shards"]["failed"].as_i64().is_none_or(|failed| failed <= 0))
     }
 
     /// 문서 하나의 `_source`. 없으면 빈 객체다.
     pub fn search_by_id(&self, doc_id: i64) -> Result<Value, EsError> {
-        match self.call("GET", &format!("/{}/_doc/{doc_id}", self.index), None) {
+        match self.call(Method::Get, &format!("/{}/_doc/{doc_id}", self.index), None) {
             Ok(response) => Ok(response["_source"].clone()),
             Err(EsError::Status { status: 404, .. }) => Ok(json!({})),
             Err(e) => Err(e),
@@ -335,9 +338,16 @@ impl EsClient {
 
     /// 문서를 지운다(`refresh=true`). 결과가 `deleted`일 때만 `true`다. 없는 문서는 오류다.
     pub fn delete(&self, doc_id: i64) -> Result<bool, EsError> {
-        let response = self.call("DELETE", &format!("/{}/_doc/{doc_id}?refresh=true", self.index), None)?;
+        let response = self.call(Method::Delete, &format!("/{}/_doc/{doc_id}?refresh=true", self.index), None)?;
         Ok(response["result"] == "deleted")
     }
+}
+
+/// 검색 hit 하나를 읽고 점수를 `max_score` 기준 0~100으로 정규화한다.
+fn to_hit(hit: &Value, max_score: f64) -> Result<Hit, EsError> {
+    let id = hit["_id"].as_str().and_then(|s| s.parse().ok()).ok_or_else(|| EsError::Parse(format!("_id를 정수로 읽지 못했다: {}", hit["_id"])))?;
+    let score = hit["_score"].as_f64().unwrap_or(0.0);
+    Ok(Hit { id, source: hit["_source"].clone(), score: if max_score > 0.0 { score * 100.0 / max_score } else { 0.0 } })
 }
 
 impl BookStore for EsClient {
