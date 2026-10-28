@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use zip::ZipArchive;
 
 use super::{BookManager, BookManagerDeps};
+use crate::book::BookLookupError;
 use crate::cover_management::{Backup, CoverHooks, CoverManagement};
 use crate::direct_cover_url::ImageFetcher;
 use crate::epub_cover::{self, CoverError, EpubCoverHooks};
@@ -33,7 +34,7 @@ pub struct BookRef {
 /// 책 ID로 책을 찾는 능력. 꽂지 않으면 ES(`BookManager::get_book`)로 찾는다.
 #[async_trait]
 pub trait BookLookup: Send + Sync {
-    async fn get_book(&self, book_id: i64) -> (Option<BookRef>, Option<String>);
+    async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError>;
 }
 
 /// 표지 편집이 쓰는 설정과 대역. `BookManagerDeps::with_ext`로 꽂는다.
@@ -141,14 +142,12 @@ impl BookManager {
         hooks
     }
 
-    async fn cover_book(&self, book_id: i64) -> (Option<BookRef>, Option<String>) {
+    async fn cover_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> {
         if let Some(lookup) = self.cover_ext().lookup {
             return lookup.get_book(book_id).await;
         }
-        match self.get_book(book_id).await {
-            Ok(book) => (Some(BookRef { book_id: book.book_id, file_path: book.file_path, file_type: book.file_type }), None),
-            Err(error) => (None, Some(error.to_string())),
-        }
+        let book = self.get_book(book_id).await?;
+        Ok(BookRef { book_id: book.book_id, file_path: book.file_path, file_type: book.file_type })
     }
 
     /// EPUB 표지를 URL의 이미지(`url`) 또는 올린 이미지(`image_data`, base64)로 넣거나 바꾼다.
@@ -227,8 +226,7 @@ impl BookManager {
     /// 뷰어는 파일의 현재 revision을 모르므로 여기서 읽어 넘기고, 저장 직전에 잠금 안에서 다시 확인한다.
     /// 원본은 PDF 편집과 같이 휴지통에 원래 이름으로 보존한다.
     async fn change_epub_cover(&self, book_id: i64, change: Change) -> Result<Value, String> {
-        let (book, error) = self.cover_book(book_id).await;
-        let Some(book) = book else { return Err(error.unwrap_or_else(|| format!("Book not found: {book_id}"))) };
+        let book = self.cover_book(book_id).await.map_err(|error| error.to_string())?;
         if book.file_type != "epub" {
             return Err(NOT_EPUB.to_string());
         }

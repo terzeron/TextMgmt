@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use backend::book::BookLookupError;
 use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, Limits, OPF_NS, edit_images, edit_images_with, edit_page_images, read_package, revision};
@@ -513,8 +514,8 @@ struct StaticBookLookup {
 
 #[async_trait]
 impl BookLookup for StaticBookLookup {
-    async fn get_book(&self, book_id: i64) -> (Option<BookRef>, Option<String>) {
-        (Some(BookRef { book_id, file_path: self.path.clone(), file_type: self.file_type.clone() }), None)
+    async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> {
+        Ok(BookRef { book_id, file_path: self.path.clone(), file_type: self.file_type.clone() })
     }
 }
 

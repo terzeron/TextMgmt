@@ -26,7 +26,7 @@
 //!   `BookManagerApi::insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>)` (async)
 //!   (구 `EpubCoverApi`를 `BookManagerApi`에 합쳤다. 모든 메서드에 기본 구현이 있어 fake는 쓰는 메서드만 구현한다)
 //!   `BookManager::find_epub_cover_member(archive: &mut ZipArchive<File>) -> Option<String>`
-//!   `trait BookLookup { async fn get_book(&self, book_id: i64) -> (Option<BookRef>, Option<String>) }` (`async_trait`)
+//!   `trait BookLookup { async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> }` (`async_trait`)
 //! - `backend::direct_cover_url::{ImageFetcher, FetchError}`: `trait ImageFetcher: Send + Sync { fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError>; }`, `enum FetchError { Value(String), Os(String), Other(String) }`
 //! - `backend::es_manager::EsManagerApi::update(&self, doc_id: i64, fields: &Value) -> Result<bool, EsError>` (`common::es_fake::FakeEsManager`가 구현한다)
 //! - `backend::main::{app_with, AppDeps, AuthMode}`: `AppDeps::new(AuthMode::Fixed(Value)).with_book_manager(Arc<dyn BookManagerApi>) -> AppDeps`, `app_with(deps) -> axum::Router`
@@ -43,6 +43,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use backend::book::BookLookupError;
 use backend::book_manager::{BookLookup, BookManager, BookManagerApi, BookManagerDeps, BookRef};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover::{self, CoverError, EpubCoverHooks, Limits};
@@ -195,8 +196,12 @@ impl FakeBooks {
 
 #[async_trait::async_trait]
 impl BookLookup for FakeBooks {
-    async fn get_book(&self, _book_id: i64) -> (Option<BookRef>, Option<String>) {
-        self.0.lock().unwrap().clone()
+    async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> {
+        match self.0.lock().unwrap().clone() {
+            (Some(book), _) => Ok(book),
+            (None, Some(error)) => Err(BookLookupError::Failed(error)),
+            (None, None) => Err(BookLookupError::NotFound(book_id)),
+        }
     }
 }
 
