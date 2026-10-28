@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use super::{BookContent, BookManager, MAX_CATEGORY_PAGE_SIZE, MAX_LATEST_BOOK_COUNT};
-use crate::book::Book;
+use crate::book::{Book, BookLookupError};
 use crate::es_manager::{Docs, EsManagerApi, decode_category_cursor, encode_category_cursor};
 
 /// Python `if doc:`: 없거나 빈 객체면 문서가 없는 것이다.
@@ -92,16 +92,10 @@ impl BookManager {
         }
     }
 
-    pub async fn get_book(&self, book_id: i64) -> (Option<Book>, Option<String>) {
+    pub async fn get_book(&self, book_id: i64) -> Result<Book, BookLookupError> {
         log::debug!("# get_book(book_id={book_id})");
-        match self.find_doc_async(book_id).await {
-            Ok(Some(doc)) => match self.try_make_book(book_id, &doc, 0.0) {
-                Ok(book) => (Some(book), None),
-                Err(e) => (None, Some(e)),
-            },
-            Ok(None) => (None, Some(format!("No book found by '{book_id}'"))),
-            Err(e) => (None, Some(e)),
-        }
+        let doc = self.find_doc_async(book_id).await.map_err(BookLookupError::Failed)?.ok_or(BookLookupError::NotFound(book_id))?;
+        self.try_make_book(book_id, &doc, 0.0).map_err(BookLookupError::Failed)
     }
 
     /// 책 파일을 돌려준다. 문서나 파일이 없으면 빈 문자열이다.

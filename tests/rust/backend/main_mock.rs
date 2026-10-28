@@ -51,7 +51,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use axum::http::Method;
-use backend::book::Book;
+use backend::book::{Book, BookLookupError};
 use backend::book_manager::{BookContent, BookManagerApi, BookResponse};
 use backend::db::{DbValue, Row};
 use backend::es_manager::{EsError, EsManagerApi};
@@ -375,9 +375,14 @@ impl BookManagerApi for Mock {
         Arc::new(EsProxy(self.clone()))
     }
 
-    async fn get_book(&self, id: i64) -> (Option<Book>, Option<String>) {
+    /// `[책, null]`은 찾음, `[null, 오류]`는 조회 실패, `[null, null]`은 없음이다.
+    async fn get_book(&self, id: i64) -> Result<Book, BookLookupError> {
         let v = self.invoke("get_book", call_args!([id], {})).await;
-        (opt_book(arr(&v, 0)), opt_string(arr(&v, 1)))
+        match (opt_book(arr(&v, 0)), opt_string(arr(&v, 1))) {
+            (Some(book), _) => Ok(book),
+            (None, Some(error)) => Err(BookLookupError::Failed(error)),
+            (None, None) => Err(BookLookupError::NotFound(id)),
+        }
     }
 
     async fn get_book_content(&self, id: i64) -> BookContent {
@@ -1176,6 +1181,19 @@ mod test_viewer_hidden_access {
         fx.set_auth(viewer_payload());
         fx.cat.returns("get_hidden_categories", json!(["secret"]));
         fx.bm.returns("get_book", json!([null, "ES 연결 실패"]));
+
+        let r = fx.get("/download/1").await;
+
+        assert_eq!(r.status, 503, "조회 실패는 없음(404)과 구분한다");
+        fx.bm.assert_not_called("get_book_content");
+    }
+
+    #[tokio::test]
+    async fn test_viewer_download_of_a_missing_book_is_not_found() {
+        let fx = Fx::new();
+        fx.set_auth(viewer_payload());
+        fx.cat.returns("get_hidden_categories", json!(["secret"]));
+        fx.bm.returns("get_book", json!([null, null]));
 
         let r = fx.get("/download/1").await;
 

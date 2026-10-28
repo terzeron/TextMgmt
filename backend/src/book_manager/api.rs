@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
-use crate::book::Book;
+use crate::book::{Book, BookLookupError};
 use crate::es_manager::EsManagerApi;
 use crate::main::{ApplyCategoryChanges, ProposeCategoryChanges, ReloadProgress};
 
@@ -99,7 +99,7 @@ impl BookManagerApi for BookManager {
         self.es.clone()
     }
 
-    async fn get_book(&self, id: i64) -> (Option<Book>, Option<String>) {
+    async fn get_book(&self, id: i64) -> Result<Book, BookLookupError> {
         BookManager::get_book(self, id).await
     }
 

@@ -18,6 +18,25 @@ pub fn path_prefix_from_env(get: &dyn Fn(&str) -> Option<String>) -> Result<Path
     }
 }
 
+/// `get_book` 실패. 없음과 조회 실패를 나눈다. viewer 접근 검사는 없음을 404, 조회 실패를 503으로 응답한다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BookLookupError {
+    NotFound(i64),
+    /// ES 조회나 문서 변환 실패. 메시지는 API 응답의 `error`로 나간다.
+    Failed(String),
+}
+
+impl fmt::Display for BookLookupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound(book_id) => write!(f, "No book found by '{book_id}'"),
+            Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for BookLookupError {}
+
 #[derive(Debug, Clone)]
 pub struct Book {
     pub book_id: i64,

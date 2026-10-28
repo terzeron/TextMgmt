@@ -462,9 +462,7 @@ mod test_book_manager {
         let randomly_chosen_book = get_one_random_book(&bm).expect("No books available for testing");
 
         let book_id = randomly_chosen_book.book_id;
-        let (book, error) = run(bm.get_book(book_id));
-        let book = book.expect("book");
-        assert!(error.is_none());
+        let book = run(bm.get_book(book_id)).expect("book");
         inspect_book_info(&book);
         assert_eq!(book.book_id, randomly_chosen_book.book_id);
         assert_eq!(book.category, randomly_chosen_book.category);
@@ -524,8 +522,7 @@ mod test_book_manager {
             let (book_id2, error) = run(bm.add_book(&loader_read_file(&temp_file_path)));
             let book_id2 = book_id2.expect("book_id2");
             assert!(error.is_none());
-            let (book2, _error) = run(bm.get_book(book_id2));
-            let book2 = book2.expect("book2");
+            let book2 = run(bm.get_book(book_id2)).expect("book2");
             inspect_book_info(&book2);
 
             // 복사본을 지운다
@@ -570,9 +567,7 @@ mod test_book_manager {
             assert!(!path1.is_file());
             assert!(path2.is_file());
 
-            let (book3, error) = run(bm.get_book(book_id));
-            let book3 = book3.expect("book3");
-            assert!(error.is_none());
+            let book3 = run(bm.get_book(book_id)).expect("book3");
             inspect_book_info(&book3);
             assert_eq!(book3.category, category2);
             assert_eq!(book3.title, title2);
@@ -707,8 +702,7 @@ mod test_book_manager {
         let (result2, error) = run(bm.delete_book(book_id));
         assert!(!result2.is_empty() && error.is_none());
 
-        let (book2, error) = run(bm.get_book(book_id));
-        assert!(book2.is_none() && error.is_some());
+        assert!(run(bm.get_book(book_id)).is_err());
 
         // 지운 파일을 되돌린다
         fs::rename(&temp_file_path, &file_path).unwrap();
@@ -1895,9 +1889,8 @@ fn test_get_books_in_category_empty() {
 fn test_get_book_reports_missing_required_es_fields_like_python_book() {
     let tmp = TempDir::new().unwrap();
     let manager = make_manager_with_doc(tmp.path(), json!({"title": "T", "author": "U", "file_path": "A/t.txt", "file_type": ".txt", "file_size": 1, "updated_time": "2024-01-01T00:00:00"}));
-    let (book, error) = run(manager.get_book(1));
-    assert!(book.is_none(), "누락 필드를 빈 기본값으로 채워 Book을 반환하면 안 된다");
-    assert!(error.unwrap().contains("category"));
+    let error = run(manager.get_book(1)).expect_err("누락 필드를 빈 기본값으로 채워 Book을 반환하면 안 된다");
+    assert!(error.to_string().contains("category"));
 }
 
 #[test]

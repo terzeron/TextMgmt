@@ -75,13 +75,12 @@ fn failure(error: Option<String>) -> Json<Value> {
 async fn metadata(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let id = super::parse_book_id(&id)?;
     let manager = manager(&deps, &uri)?;
-    let (book, error) = manager.get_book(id).await;
-    if let Some(book) = &book {
-        ensure_allowed(&book.category, &hidden(&deps, &payload, &uri)?)?;
-    }
-    match book.filter(|_| error.is_none()) {
-        Some(book) => Ok(Json(json!({"status":"success","result":book_json(&book,manager.as_ref())}))),
-        None => Ok(failure(error)),
+    match manager.get_book(id).await {
+        Ok(book) => {
+            ensure_allowed(&book.category, &hidden(&deps, &payload, &uri)?)?;
+            Ok(Json(json!({"status":"success","result":book_json(&book,manager.as_ref())})))
+        }
+        Err(error) => Ok(failure(Some(error.to_string()))),
     }
 }
 
@@ -216,9 +215,8 @@ async fn similar(
     if !books.is_empty() && error.is_none() {
         return Ok(Json(json!({"status":"success","result":books_json(&books,manager.as_ref()),"total":total})));
     }
-    let (book, second_error) = manager.get_book(id).await;
-    match book.filter(|_| second_error.is_none()) {
-        Some(book) => Ok(Json(json!({"status":"success","result":[book_json(&book,manager.as_ref())],"total":1}))),
-        None => Ok(failure(error.or(second_error))),
+    match manager.get_book(id).await {
+        Ok(book) => Ok(Json(json!({"status":"success","result":[book_json(&book,manager.as_ref())],"total":1}))),
+        Err(second_error) => Ok(failure(error.or(Some(second_error.to_string())))),
     }
 }

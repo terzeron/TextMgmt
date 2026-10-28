@@ -62,7 +62,7 @@ use std::time::Duration;
 use axum::http::Method;
 use axum::response::IntoResponse;
 use backend::auth::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
-use backend::book::Book;
+use backend::book::{Book, BookLookupError};
 use backend::book_manager::{BookContent, BookManager, BookManagerApi, BookResponse};
 use backend::category_mapping::CategoryMapping;
 use backend::comics_manager::ComicsManager;
@@ -230,9 +230,8 @@ async fn test_book(s: &Setup) -> TestBook {
 
     let (book_id, error) = s.bm.add_book(&data).await;
     let book_id = expect_id(book_id, error);
-    let (book, error) = s.bm.get_book(book_id).await;
-    assert!(book.is_some() && error.is_none());
-    TestBook { book: book.unwrap(), temp, bm: s.bm.clone() }
+    let book = s.bm.get_book(book_id).await.expect("book");
+    TestBook { book, temp, bm: s.bm.clone() }
 }
 
 fn ext_with_dot(path: &Path) -> String {
@@ -253,9 +252,7 @@ mod test_backend {
 
         let (book_id, error) = s.bm.add_book(&data).await;
         let book_id = expect_id(book_id, error);
-        let (book, error) = s.bm.get_book(book_id).await;
-        assert!(book.is_some() && error.is_none());
-        let book = book.unwrap();
+        let book = s.bm.get_book(book_id).await.expect("book");
         let renamed_temp = Book::path_prefix().join(&book.category).join(format!("renamed_{}.{}", book.title, book.file_type));
 
         let bm = s.bm.clone();
@@ -304,9 +301,7 @@ mod test_backend {
 
         let (book_id, error) = s.bm.add_book(&data).await;
         let book_id = expect_id(book_id, error);
-        let (book, error) = s.bm.get_book(book_id).await;
-        assert!(book.is_some() && error.is_none());
-        let book = book.unwrap();
+        let book = s.bm.get_book(book_id).await.expect("book");
 
         let response = s.client.delete(&format!("/books/{}", book.book_id)).await;
         assert!(response.status < 400);
@@ -1419,17 +1414,20 @@ impl BookManagerApi for DummyManager {
         book_response("application/pdf", "pdf")
     }
 
-    async fn get_book(&self, book_id: i64) -> (Option<Book>, Option<String>) {
+    async fn get_book(&self, book_id: i64) -> Result<Book, BookLookupError> {
         let b = self.b();
-        if b.errors || b.book_missing {
-            return (None, Some("not found".into()));
+        if b.book_missing {
+            return Err(BookLookupError::NotFound(book_id));
+        }
+        if b.errors {
+            return Err(BookLookupError::Failed("not found".into()));
         }
         let mut book = self.default_book(book_id);
         if let Some(t) = b.book_type {
             book.file_type = t.into();
             book.file_path = format!("a.{t}").into();
         }
-        (Some(book), None)
+        Ok(book)
     }
 
     async fn validate_epub(&self, _book_id: i64) -> (Option<Value>, Option<String>) {

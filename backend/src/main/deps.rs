@@ -328,9 +328,9 @@ impl BookAccess for RuntimeBookAccess {
     async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<(Option<BookStub>, Option<String>), HTTPException> {
         let manager = if content_type == "comic" { &self.comics } else { &self.books };
         let manager = manager.get().map_err(|error| HTTPException::new(503, &error))?;
-        let (book, error) = manager.get_book(book_id).await;
-        let Some(book) = book else {
-            return Ok((None, error));
+        let book = match manager.get_book(book_id).await {
+            Ok(book) => book,
+            Err(error) => return Ok((None, Some(error.to_string()))),
         };
 
         if payload.get("role").and_then(Value::as_str) == Some("viewer") {
@@ -341,7 +341,7 @@ impl BookAccess for RuntimeBookAccess {
             }
         }
 
-        Ok((Some(BookStub { title: book.title, category: Some(book.category) }), error))
+        Ok((Some(BookStub { title: book.title, category: Some(book.category) }), None))
     }
 }
 
@@ -391,7 +391,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{RuntimeBookAccess, Slot, build_book_manager, build_comics_manager};
-    use crate::book::Book;
+    use crate::book::{Book, BookLookupError};
     use crate::es_manager::{EsError, EsManagerApi};
     use crate::main::{BookAccess, BookManagerApi, BookStub, CategoryMappingApi};
     use async_trait::async_trait;
@@ -432,8 +432,8 @@ mod tests {
 
     #[async_trait]
     impl BookManagerApi for FixedBookManager {
-        async fn get_book(&self, _id: i64) -> (Option<Book>, Option<String>) {
-            (Some(self.0.clone()), None)
+        async fn get_book(&self, _id: i64) -> Result<Book, BookLookupError> {
+            Ok(self.0.clone())
         }
     }
 

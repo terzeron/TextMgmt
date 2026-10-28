@@ -16,8 +16,7 @@ impl BookManager {
     /// Rust epubveri로 EPUB 파일의 구조적 유효성을 검증한다.
     pub async fn validate_epub(&self, book_id: i64) -> (Option<Value>, Option<String>) {
         log::debug!("# validate_epub(book_id={book_id})");
-        let (book, _) = self.get_book(book_id).await;
-        let Some(book) = book else { return (None, Some(format!("Book not found: {book_id}"))) };
+        let Ok(book) = self.get_book(book_id).await else { return (None, Some(format!("Book not found: {book_id}"))) };
         if book.file_type != "epub" {
             return (None, Some(format!("Not an EPUB file (type: {})", book.file_type)));
         }
@@ -93,8 +92,7 @@ impl BookManager {
     /// PDF 파일의 구문 유효성을 검증하고 메타데이터를 추출한다.
     pub async fn validate_pdf(&self, book_id: i64) -> (Option<Value>, Option<String>) {
         log::debug!("# validate_pdf(book_id={book_id})");
-        let (book, _) = self.get_book(book_id).await;
-        let Some(book) = book else { return (None, Some(format!("Book not found: {book_id}"))) };
+        let Ok(book) = self.get_book(book_id).await else { return (None, Some(format!("Book not found: {book_id}"))) };
         if book.file_type != "pdf" {
             return (None, Some(format!("Not a PDF file (type: {})", book.file_type)));
         }

@@ -16,6 +16,7 @@ use super::errors::{ApiError, ApiResult, RequestValidationError};
 use super::extract::{ApiQuery, RequireAuth};
 use super::routes::Routes;
 use super::traits::{BookContent, BookManagerApi, BookResponse, MappingError};
+use crate::book::BookLookupError;
 use crate::book_manager::BookManager;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio::sync::mpsc;
@@ -211,10 +212,13 @@ pub(super) async fn checked_manager(deps: &AppDeps, payload: &Value, book_id: i6
     })?;
     if payload.get("role").and_then(Value::as_str) == Some("viewer") {
         // 카테고리를 모르면 숨김 여부를 판정할 수 없다. 통과시키지 않고 거절한다(fail-closed).
-        let (book, error) = manager.get_book(book_id).await;
-        let Some(book) = book else {
-            log::warn!("viewer 접근 확인 중 도서를 찾지 못했다: book_id={book_id}, {}", error.as_deref().unwrap_or("-"));
-            return Err(ApiError::http(404, &format!("Book not found: {book_id}")));
+        let book = match manager.get_book(book_id).await {
+            Ok(book) => book,
+            Err(BookLookupError::NotFound(_)) => return Err(ApiError::http(404, &format!("Book not found: {book_id}"))),
+            Err(error) => {
+                log::warn!("viewer 접근 확인 중 도서를 조회하지 못했다: book_id={book_id}, {error}");
+                return Err(ApiError::unavailable());
+            }
         };
         let mapping = deps.category_mapping().map_err(|e| {
             log::warn!("카테고리 접근 정책을 읽을 수 없다: {e}");
@@ -354,8 +358,7 @@ async fn html_resource(
 async fn validate(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, Path(raw_id): Path<String>, OriginalUri(uri): OriginalUri) -> ApiResult<Json<Value>> {
     let book_id = parse_book_id(&raw_id)?;
     let manager = checked_manager(&deps, &payload, book_id, uri.path().starts_with("/comics/")).await?;
-    let (book, _) = manager.get_book(book_id).await;
-    let Some(book) = book else { return Ok(Json(json!({"status":"failure", "error":format!("Book not found: {book_id}")}))) };
+    let Ok(book) = manager.get_book(book_id).await else { return Ok(Json(json!({"status":"failure", "error":format!("Book not found: {book_id}")}))) };
     let (result, error) = match book.file_type.as_str() {
         "epub" => manager.validate_epub(book_id).await,
         "pdf" => manager.validate_pdf(book_id).await,

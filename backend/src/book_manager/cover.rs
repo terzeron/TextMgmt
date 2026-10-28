@@ -146,8 +146,8 @@ impl BookManager {
             return lookup.get_book(book_id).await;
         }
         match self.get_book(book_id).await {
-            (Some(book), error) => (Some(BookRef { book_id: book.book_id, file_path: book.file_path, file_type: book.file_type }), error),
-            (None, error) => (None, error),
+            Ok(book) => (Some(BookRef { book_id: book.book_id, file_path: book.file_path, file_type: book.file_type }), None),
+            Err(error) => (None, Some(error.to_string())),
         }
     }
 

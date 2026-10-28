@@ -1,6 +1,6 @@
 //! 만화 API는 동일한 도서 처리 로직을 만화 전용 의존성으로 실행한다.
 use super::ComicsManager;
-use crate::book::Book;
+use crate::book::{Book, BookLookupError};
 use crate::book_manager::BookManager;
 use crate::es_manager::EsManagerApi;
 use crate::main::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress};
@@ -66,7 +66,7 @@ impl BookManagerApi for ComicsManager {
         BookManagerApi::es_manager(&self.inner)
     }
 
-    async fn get_book(&self, id: i64) -> (Option<Book>, Option<String>) {
+    async fn get_book(&self, id: i64) -> Result<Book, BookLookupError> {
         BookManagerApi::get_book(&self.inner, id).await
     }
 

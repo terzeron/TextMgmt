@@ -3666,7 +3666,7 @@ mod test_es_reads_do_not_block_event_loop {
         let loop_thread = std::thread::current().id();
 
         BookManagerApi::get_categories(&manager).await;
-        manager.get_book(1).await;
+        let _ = manager.get_book(1).await;
         BookManagerApi::get_books_in_category_paged(&manager, "A", Some(10), None).await;
         manager.get_latest_books(10, None).await;
         manager.search_by_keyword_paged("k", 10, 0, None, None).await;

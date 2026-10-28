@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::auth::HTTPException;
-use crate::book::Book;
+use crate::book::{Book, BookLookupError};
 use crate::category_mapping::CategoryMapping;
 use crate::es_manager::EsManagerApi;
 use crate::view_history_store::{ViewHistoryError, ViewHistoryStore};
@@ -477,8 +477,8 @@ pub trait BookManagerApi: Send + Sync {
         Arc::new(NoEs)
     }
 
-    async fn get_book(&self, _id: i64) -> (Option<Book>, Option<String>) {
-        (None, unimplemented_error())
+    async fn get_book(&self, _id: i64) -> Result<Book, BookLookupError> {
+        Err(BookLookupError::Failed(UNIMPLEMENTED.to_string()))
     }
 
     async fn get_categories(&self) -> (Value, Option<String>) {
@@ -827,7 +827,7 @@ mod tests {
         assert!(manager.preview_delete_category("fiction").await.1.is_some());
         assert!(manager.path_prefix().as_os_str().is_empty());
         assert!(matches!(manager.es_manager().create_index(), Err(crate::es_manager::EsError::Unsupported)));
-        assert!(manager.get_book(1).await.1.is_some());
+        assert!(manager.get_book(1).await.is_err());
         assert!(manager.get_categories().await.1.is_some());
         let page = manager.get_books_in_category_paged("fiction", None, None).await;
         assert!(page.0.is_empty() && page.1 == 0 && page.2.is_none() && page.3.is_some());
