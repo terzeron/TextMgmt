@@ -722,6 +722,35 @@ describe("ViewPDF", () => {
       expect(scrolled).toEqual([]);
     });
 
+    it("우->좌 버튼은 1장씩 보기에서만 보이고 기본은 꺼져 있다", async () => {
+      const { root } = await setup(1);
+      const rtl = root.querySelector(".pdf-rtl-btn");
+      expect(rtl).not.toBeNull();
+      expect(rtl.classList.contains("active")).toBe(false);
+      expect(rtl.getAttribute("aria-pressed")).toBe("false");
+      expect(rtl.previousElementSibling).toBe(root.querySelector(".pdf-single-btn"));
+      document.querySelector(".pdf-single-btn").click();
+      await waitFor(() => {
+        expect(root.querySelector(".pdf-rtl-btn")).toBeNull();
+      });
+    });
+
+    it("우->좌를 켜면 왼쪽 방향키·오른쪽 스와이프가 다음 쪽이다", async () => {
+      const { root, pages } = await setup(1);
+      root.querySelector(".pdf-rtl-btn").click();
+      await waitFor(() => {
+        expect(root.querySelector(".pdf-rtl-btn").classList.contains("active")).toBe(true);
+      });
+      press("ArrowLeft");
+      expect(scrolled).toEqual([pages[2]]);
+      press("ArrowRight");
+      expect(scrolled).toEqual([pages[2], pages[0]]);
+      swipe(root, [100, 300], [200, 300]);
+      expect(scrolled).toEqual([pages[2], pages[0], pages[2]]);
+      swipe(root, [200, 300], [100, 300]);
+      expect(scrolled).toEqual([pages[2], pages[0], pages[2], pages[0]]);
+    });
+
     it("1장씩 보기를 끄면 방향키 처리를 해제한다", async () => {
       const { root } = await setup(1);
       document.querySelector(".pdf-single-btn").click();

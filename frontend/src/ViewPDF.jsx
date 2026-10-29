@@ -95,6 +95,8 @@ export default function ViewPDF({
   const [fitMode, setFitMode] = useState(!preview);
   // 1장씩 보기: CSS scroll-snap으로 뷰포트당 1쪽만 보이게 한다 (PC·모바일 공통, 기본 꺼짐)
   const [singlePage, setSinglePage] = useState(false);
+  // 우->좌: 일본 만화처럼 오른쪽에서 왼쪽으로 진행하는 책. 1장씩 보기의 쪽 넘김 방향만 반대로 한다.
+  const [rightToLeft, setRightToLeft] = useState(false);
   const [zoomIndex, setZoomIndex] = useState(ZOOM_STEPS.indexOf(100));
   const zoomPercent = ZOOM_STEPS[zoomIndex];
   const toggleSinglePage = () => {
@@ -517,13 +519,15 @@ export default function ViewPDF({
 
   // 1장씩 보기: 좌우 스와이프와 좌우 방향키로 쪽을 넘긴다(EPUB 뷰어와 같은 기준).
   // 세로 스크롤·snap은 그대로 두고, 현재 쪽의 이웃 쪽 맨 위로 이동만 시킨다.
+  // 우->좌이면 방향키·스와이프가 가리키는 방향을 뒤집는다.
   useEffect(() => {
     const el = containerRef.current;
     if (!singlePage || !el) return undefined;
     const turn = (direction) => {
+      const step = rightToLeft ? -direction : direction;
       const pages = Array.from(el.querySelectorAll(".pdf-content > .pdf-page"));
       const index = currentPageIndex(el, pages, PDF_TOOLBAR_HEIGHT);
-      const target = pages[index + direction];
+      const target = pages[index + step];
       if (index >= 0 && target) target.scrollIntoView?.({ block: "start" });
     };
     const onKey = (event) => {
@@ -566,7 +570,7 @@ export default function ViewPDF({
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", reset);
     };
-  }, [singlePage]);
+  }, [singlePage, rightToLeft]);
 
   useEffect(() => {
     if (!bookId) {
@@ -867,6 +871,19 @@ export default function ViewPDF({
             </span>
             1장씩
           </button>
+          {singlePage && (
+            <button
+              className={`pdf-zoom-btn pdf-zoom-fit-btn pdf-rtl-btn ${rightToLeft ? "active" : ""}`}
+              onClick={() => setRightToLeft((prev) => !prev)}
+              aria-pressed={rightToLeft}
+              title="켜면 왼쪽으로 넘겨야 다음 쪽이 나옵니다"
+            >
+              <span className="toggle-track">
+                <span className="toggle-knob" />
+              </span>
+              우-&gt;좌
+            </button>
+          )}
           <button
             className={`pdf-zoom-btn pdf-zoom-fit-btn ${fitMode ? "active" : ""}`}
             onClick={() => setFitMode((prev) => !prev)}
