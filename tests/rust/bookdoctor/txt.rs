@@ -114,6 +114,21 @@ fn flags_binary_content_on_nul() {
 }
 
 #[test]
+fn does_not_flag_an_isolated_nul_in_a_large_text() {
+    let mut s = "abcdefghij\n".repeat(50_000);
+    s.insert(1000, '\0');
+    s.insert(200_000, '\0');
+    assert!(!has(&scan_str(&s), "BINARY_CONTENT"));
+}
+
+#[test]
+fn flags_binary_content_when_nuls_are_dense() {
+    let mut b = vec![0u8; 4096];
+    b.extend_from_slice(b"text");
+    assert!(has(&scan_bytes(&b), "BINARY_CONTENT"));
+}
+
+#[test]
 fn flags_binary_content_on_control_ratio() {
     let mut s = "가".repeat(90);
     s.push_str(&"\u{1}".repeat(10));
