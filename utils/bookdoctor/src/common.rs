@@ -26,6 +26,23 @@ pub fn sniff_head(head: &[u8]) -> Sniffed {
     sniff(head)
 }
 
+/// 머리(`head`)만으로 `sniff_head`가 정하지 못한 PE를 파일에서 확인한다. e_lfanew가 머리 밖에 있어도 유효한 PE일 수 있으므로,
+/// `MZ`로 시작하고 e_lfanew가 머리 끝 이후·파일 안이면 그 자리의 4바이트가 `PE\0\0`인지 읽는다.
+fn sniff_file(head: &[u8], file: &mut File, len: u64) -> std::io::Result<Sniffed> {
+    let sniffed = sniff_head(head);
+    if sniffed != Sniffed::Unknown || !head.starts_with(b"MZ") || head.len() < 0x40 {
+        return Ok(sniffed);
+    }
+    let off = u64::from(u32::from_le_bytes([head[0x3C], head[0x3D], head[0x3E], head[0x3F]]));
+    if off < head.len() as u64 || off.checked_add(4).is_none_or(|end| end > len) {
+        return Ok(sniffed);
+    }
+    file.seek(SeekFrom::Start(off))?;
+    let mut sig = [0u8; 4];
+    file.read_exact(&mut sig)?;
+    Ok(if &sig == b"PE\0\0" { Sniffed::Pe } else { sniffed })
+}
+
 fn is_exe(s: Sniffed) -> bool {
     matches!(s, Sniffed::Elf | Sniffed::MachO | Sniffed::Pe)
 }
@@ -116,7 +133,14 @@ pub fn inspect(path: &Path, opts: &Options, report: &mut FileReport) -> Option<V
             }
         }
     }
-    check_content_vs_name(path, sniff_head(&head), report);
+    let sniffed = match sniff_file(&head, &mut file, len) {
+        Ok(s) => s,
+        Err(e) => {
+            report.mark_incomplete(&format!("unreadable: {e}"));
+            return None;
+        }
+    };
+    check_content_vs_name(path, sniffed, report);
     Some(head)
 }
 

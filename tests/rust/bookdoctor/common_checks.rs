@@ -274,3 +274,36 @@ fn file_of_exactly_max_total_mb_is_not_skipped() {
     assert!(!r.incomplete, "{:?}", r.reasons);
     assert_eq!(r.format, Some(Format::Txt));
 }
+
+/// MZ + e_lfanew=`lfanew`인 머리 뒤를 0으로 채워 `total` 바이트로 만든다. `sig`가 있으면 `lfanew`에 쓴다.
+fn far_pe(lfanew: u32, total: usize, sig: bool) -> Vec<u8> {
+    let mut v = vec![0u8; total];
+    v[..2].copy_from_slice(b"MZ");
+    v[0x3C..0x40].copy_from_slice(&lfanew.to_le_bytes());
+    if sig {
+        v[lfanew as usize..lfanew as usize + 4].copy_from_slice(b"PE\0\0");
+    }
+    v
+}
+
+#[test]
+fn far_pe_header_beyond_head_is_disguised_executable() {
+    let f = common::file_with("a.epub", &far_pe(70000, 70004, true));
+    let r = scan_file(f.path(), &Options::default());
+    assert_eq!(find(&r, "DISGUISED_EXECUTABLE").severity, Severity::Critical);
+    assert_eq!(count(&r, "FORMAT_MISMATCH"), 1);
+}
+
+#[test]
+fn far_mz_without_pe_signature_is_not_disguised() {
+    let f = common::file_with("a.epub", &far_pe(70000, 70100, false));
+    assert_eq!(count(&scan_file(f.path(), &Options::default()), "DISGUISED_EXECUTABLE"), 0);
+}
+
+#[test]
+fn mz_with_lfanew_past_eof_is_not_disguised() {
+    let f = common::file_with("a.epub", &far_pe(70000, 69999, false));
+    let r = scan_file(f.path(), &Options::default());
+    assert_eq!(count(&r, "DISGUISED_EXECUTABLE"), 0);
+    assert!(!r.incomplete || r.reasons.iter().all(|x| !x.starts_with("unreadable")));
+}
