@@ -405,10 +405,94 @@ impl Ctx {
     }
 }
 
+/// XHTML 1.0/1.1 DTD(`xhtml-lat1.ent`, `xhtml-symbol.ent`, `xhtml-special.ent`)가 정의하는 이름 있는 문자 중 XML 기본 5개를 뺀 것.
+/// 이름순이라 이분 탐색한다. 값은 유니코드 코드 포인트다.
+const XHTML_ENTITIES: [(&str, u32); 248] = [
+    ("AElig", 198), ("Aacute", 193), ("Acirc", 194), ("Agrave", 192), ("Alpha", 913), ("Aring", 197),
+    ("Atilde", 195), ("Auml", 196), ("Beta", 914), ("Ccedil", 199), ("Chi", 935), ("Dagger", 8225),
+    ("Delta", 916), ("ETH", 208), ("Eacute", 201), ("Ecirc", 202), ("Egrave", 200), ("Epsilon", 917),
+    ("Eta", 919), ("Euml", 203), ("Gamma", 915), ("Iacute", 205), ("Icirc", 206), ("Igrave", 204),
+    ("Iota", 921), ("Iuml", 207), ("Kappa", 922), ("Lambda", 923), ("Mu", 924), ("Ntilde", 209),
+    ("Nu", 925), ("OElig", 338), ("Oacute", 211), ("Ocirc", 212), ("Ograve", 210), ("Omega", 937),
+    ("Omicron", 927), ("Oslash", 216), ("Otilde", 213), ("Ouml", 214), ("Phi", 934), ("Pi", 928),
+    ("Prime", 8243), ("Psi", 936), ("Rho", 929), ("Scaron", 352), ("Sigma", 931), ("THORN", 222),
+    ("Tau", 932), ("Theta", 920), ("Uacute", 218), ("Ucirc", 219), ("Ugrave", 217), ("Upsilon", 933),
+    ("Uuml", 220), ("Xi", 926), ("Yacute", 221), ("Yuml", 376), ("Zeta", 918), ("aacute", 225),
+    ("acirc", 226), ("acute", 180), ("aelig", 230), ("agrave", 224), ("alefsym", 8501), ("alpha", 945),
+    ("and", 8743), ("ang", 8736), ("aring", 229), ("asymp", 8776), ("atilde", 227), ("auml", 228),
+    ("bdquo", 8222), ("beta", 946), ("brvbar", 166), ("bull", 8226), ("cap", 8745), ("ccedil", 231),
+    ("cedil", 184), ("cent", 162), ("chi", 967), ("circ", 710), ("clubs", 9827), ("cong", 8773),
+    ("copy", 169), ("crarr", 8629), ("cup", 8746), ("curren", 164), ("dArr", 8659), ("dagger", 8224),
+    ("darr", 8595), ("deg", 176), ("delta", 948), ("diams", 9830), ("divide", 247), ("eacute", 233),
+    ("ecirc", 234), ("egrave", 232), ("empty", 8709), ("emsp", 8195), ("ensp", 8194), ("epsilon", 949),
+    ("equiv", 8801), ("eta", 951), ("eth", 240), ("euml", 235), ("euro", 8364), ("exist", 8707),
+    ("fnof", 402), ("forall", 8704), ("frac12", 189), ("frac14", 188), ("frac34", 190), ("frasl", 8260),
+    ("gamma", 947), ("ge", 8805), ("hArr", 8660), ("harr", 8596), ("hearts", 9829), ("hellip", 8230),
+    ("iacute", 237), ("icirc", 238), ("iexcl", 161), ("igrave", 236), ("image", 8465), ("infin", 8734),
+    ("int", 8747), ("iota", 953), ("iquest", 191), ("isin", 8712), ("iuml", 239), ("kappa", 954),
+    ("lArr", 8656), ("lambda", 955), ("lang", 9001), ("laquo", 171), ("larr", 8592), ("lceil", 8968),
+    ("ldquo", 8220), ("le", 8804), ("lfloor", 8970), ("lowast", 8727), ("loz", 9674), ("lrm", 8206),
+    ("lsaquo", 8249), ("lsquo", 8216), ("macr", 175), ("mdash", 8212), ("micro", 181), ("middot", 183),
+    ("minus", 8722), ("mu", 956), ("nabla", 8711), ("nbsp", 160), ("ndash", 8211), ("ne", 8800),
+    ("ni", 8715), ("not", 172), ("notin", 8713), ("nsub", 8836), ("ntilde", 241), ("nu", 957),
+    ("oacute", 243), ("ocirc", 244), ("oelig", 339), ("ograve", 242), ("oline", 8254), ("omega", 969),
+    ("omicron", 959), ("oplus", 8853), ("or", 8744), ("ordf", 170), ("ordm", 186), ("oslash", 248),
+    ("otilde", 245), ("otimes", 8855), ("ouml", 246), ("para", 182), ("part", 8706), ("permil", 8240),
+    ("perp", 8869), ("phi", 966), ("pi", 960), ("piv", 982), ("plusmn", 177), ("pound", 163),
+    ("prime", 8242), ("prod", 8719), ("prop", 8733), ("psi", 968), ("rArr", 8658), ("radic", 8730),
+    ("rang", 9002), ("raquo", 187), ("rarr", 8594), ("rceil", 8969), ("rdquo", 8221), ("real", 8476),
+    ("reg", 174), ("rfloor", 8971), ("rho", 961), ("rlm", 8207), ("rsaquo", 8250), ("rsquo", 8217),
+    ("sbquo", 8218), ("scaron", 353), ("sdot", 8901), ("sect", 167), ("shy", 173), ("sigma", 963),
+    ("sigmaf", 962), ("sim", 8764), ("spades", 9824), ("sub", 8834), ("sube", 8838), ("sum", 8721),
+    ("sup", 8835), ("sup1", 185), ("sup2", 178), ("sup3", 179), ("supe", 8839), ("szlig", 223),
+    ("tau", 964), ("there4", 8756), ("theta", 952), ("thetasym", 977), ("thinsp", 8201), ("thorn", 254),
+    ("tilde", 732), ("times", 215), ("trade", 8482), ("uArr", 8657), ("uacute", 250), ("uarr", 8593),
+    ("ucirc", 251), ("ugrave", 249), ("uml", 168), ("upsih", 978), ("upsilon", 965), ("uuml", 252),
+    ("weierp", 8472), ("xi", 958), ("yacute", 253), ("yen", 165), ("yuml", 255), ("zeta", 950),
+    ("zwj", 8205), ("zwnj", 8204),
+];
+
+/// XHTML 1.x 공개 식별자를 DOCTYPE에 선언한 문서인가. 선언이 없으면 이름 있는 문자는 정의되지 않은 것이다.
+fn declares_xhtml_doctype(text: &str) -> bool {
+    let head: String = text.chars().take(2048).collect::<String>().to_ascii_uppercase();
+    head.find("<!DOCTYPE").is_some_and(|at| head[at..].contains("-//W3C//DTD XHTML"))
+}
+
+/// XHTML DOCTYPE가 있는 문서의 `&이름;`을 DTD가 정의한 것에 한해 숫자 참조로 바꾼다.
+/// 바꿀 것이 없거나 XHTML DOCTYPE가 없으면 None이다. DTD에 없는 이름은 그대로 두어 계속 오류가 된다.
+fn expand_xhtml_entities(text: &str) -> Option<String> {
+    if !declares_xhtml_doctype(text) {
+        return None;
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut changed = false;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp + 1..];
+        let name_len = after.bytes().take_while(u8::is_ascii_alphanumeric).count();
+        let name = &after[..name_len];
+        let code = (after.as_bytes().get(name_len) == Some(&b';') && !name.is_empty()).then(|| XHTML_ENTITIES.binary_search_by(|(n, _)| (*n).cmp(name)).ok()).flatten();
+        if let Some(i) = code {
+            out.push_str(&format!("&#{};", XHTML_ENTITIES[i].1));
+            rest = &after[name_len + 1..];
+            changed = true;
+        } else {
+            out.push('&');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    changed.then_some(out)
+}
+
 /// 본문 XHTML 하나를 검사한다. 읽은 CSS는 `ctx.css_cache`에 두고 다시 읽지 않는다.
 fn analyze_xhtml(zip: &mut Zip, bytes: &[u8], member: &str, name_set: &HashSet<&str>, ctx: &mut Ctx, sink: &mut Sink) {
     let text = String::from_utf8_lossy(bytes);
-    let doc = parse_xml(bytes);
+    // XHTML DOCTYPE 아래의 `&nbsp;` 같은 이름 있는 문자는 DTD가 정의한다. roxmltree는 외부 DTD를 읽지 않으므로
+    // 첫 파싱이 실패했을 때만 숫자 참조로 바꿔 다시 읽는다. 진짜 깨진 문서는 바꿔도 여전히 실패한다.
+    let expanded = if parse_xml(bytes).is_none() { expand_xhtml_entities(&text) } else { None };
+    let doc = parse_xml(expanded.as_deref().map_or(bytes, str::as_bytes));
 
     match &doc {
         // EpubDiagnose.js `checkContentDocuments`: 브라우저 DOMParser 파싱 실패.

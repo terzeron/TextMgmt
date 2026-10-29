@@ -215,6 +215,41 @@ fn flags_xhtml_parse_failed() {
     assert_eq!((c, s, loc.as_str()), (Category::Render, Severity::High, "OEBPS/ch1.xhtml"));
 }
 
+const XHTML11_DOCTYPE: &str = r#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">"#;
+
+fn chapter_with_doctype(doctype: &str, body: &str) -> Vec<u8> {
+    format!("{doctype}<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body>{body}</body></html>").into_bytes()
+}
+
+#[test]
+fn xhtml_named_entities_are_defined_under_an_xhtml_doctype() {
+    let mut p = valid();
+    p.ch1 = chapter_with_doctype(XHTML11_DOCTYPE, "<p>a&nbsp;b &copy; &hellip; &amp; &lt;</p>");
+    let r = scan(&p);
+    assert!(!r.has("XHTML_PARSE_FAILED") && !r.has("HEAD_MISSING"));
+}
+
+#[test]
+fn undefined_entity_without_xhtml_doctype_is_still_flagged() {
+    let mut p = valid();
+    p.ch1 = chapter_with_doctype("", "<p>a&nbsp;b</p>");
+    assert!(scan(&p).has("XHTML_PARSE_FAILED"));
+}
+
+#[test]
+fn non_xhtml_entity_under_xhtml_doctype_is_still_flagged() {
+    let mut p = valid();
+    p.ch1 = chapter_with_doctype(XHTML11_DOCTYPE, "<p>a&bogusname;b</p>");
+    assert!(scan(&p).has("XHTML_PARSE_FAILED"));
+}
+
+#[test]
+fn malformed_markup_with_entities_under_xhtml_doctype_is_still_flagged() {
+    let mut p = valid();
+    p.ch1 = chapter_with_doctype(XHTML11_DOCTYPE, "<p>a&nbsp;b");
+    assert!(scan(&p).has("XHTML_PARSE_FAILED"));
+}
+
 #[test]
 fn clean_epub_has_no_xhtml_parse_failed() {
     assert_clean("XHTML_PARSE_FAILED");
