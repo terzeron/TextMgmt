@@ -1731,3 +1731,140 @@ Python `backend/classifier/export.py`는 기준 구현과 fixture 생성용으�
   두 도구의 JSON 출력이 80개 모두 같았다. 지운 것은 `epub_structure.rs`, 그 테스트, `cli.rs`·`lib.rs`·`Cargo.toml`의 연결 코드다.
   EPUB 구조 검사는 `epubscan structure` 한 곳에서만 유지한다. `detect_mojibake`는 커밋된 `HEAD`와 같아졌다.
   `corpus_common`의 `decode_korean_replace` 변경은 이 삭제와 무관하게 자체 테스트가 있어 그대로 두었다.
+
+## bookdoctor 동등성 검증
+
+결론: 옛 도구 발견이 새 `bookdoctor`에서 빠진 사례는 0건이다. 단 `bookdoctor`가 정상 파일을 잘못 `HIGH`로 표시하는 오탐 두 가지를 찾았다.
+`ZERO_PAGES`와 `XHTML_PARSE_FAILED`다. 코드는 고치지 않았다. 옛 도구 삭제(Task 17) 여부는 컨트롤러가 정한다.
+검증일 2026-10-29~30. 디버그 빌드(`target/debug`)를 썼고 말뭉치는 순차로, 읽기 전용으로 스캔했다.
+`/mnt/data/text/0_broken`이 없어 그 부분은 미실행이다.
+
+### 1. 전체 회귀
+
+| 명령 | 결과 |
+|---|---|
+| `cargo test --workspace --locked` | 30개 crate, 통과 3,965건, 실패 0, 무시 0 |
+| `cargo clippy --workspace --all-targets` | 종료 코드 0. 경고는 `backend` 테스트 코드 20건뿐이고 `bookdoctor` 경고는 없다 |
+
+crate별 통과 건수: backend 2378, bookdoctor 415, loader 362, epubscan 111, classify_cli 65, quarantine_broken 58,
+pdfscan 53, doc_reader 50, normalize_comic_directories 45, es_client 41, detect_mojibake 40, 나머지 19개 crate 합 347.
+`epubveri`는 테스트가 0건이다.
+
+### 2. EPUB 구조 동등성
+
+| 항목 | 값 |
+|---|---|
+| `epub-structure-flagged.txt` | 3,751건 중 존재 3,748건, 없음 3건 |
+| 옛 `epubscan structure` 출력 | 3,748건 |
+| 새 `bookdoctor --json` 출력 | 발견이 있는 파일 3,708건. 나머지 40건은 출력 없음(깨끗) |
+| 지금 옛 도구가 이슈를 내는 파일 | 3건 (`not_zip` 2, `member_unreadable` 1, `bad_mimetype` 1) |
+| 누락 (옛 이슈가 `ISSUE_TO_CODE` 코드로 새 출력에 없음) | 0건 |
+| 새 쪽에만 있는 구조 코드 | `MEMBER_UNREADABLE` 4건 |
+
+옛 리포트(`tmp/epub_structure_report*.json`)가 기록한 이슈와 지금 옛 도구 결과가 다른 파일은 3,746건이다.
+`bad_mimetype` 3,729건 등 대부분이 그 뒤에 고쳐졌기 때문이다. 이 파일들은 옛 도구도 새 도구도 같은 이슈를 내지 않는다.
+옛 리포트의 `member_unreadable` 4건은 옛 도구가 지금은 내지 않지만 새 도구는 `XHTML_PARSE_FAILED`와 `MEMBER_UNREADABLE`로 잡는다.
+실제 이슈가 3건뿐이라 이 단계의 실데이터 비교력은 약하다. 나머지는 단위 테스트(`epub_structure.rs` 31건)가 맡는다.
+새 출력의 "검사 N건" 요약은 `--report`가 없으면 나오지 않아 40건의 검사 완료 여부는 출력으로 확인하지 못했다.
+
+### 3. EPUB·PDF 보안 동등성
+
+| 대상 | 옛 도구 | 새 도구 | 비교 파일 | 옛 (code, location) 쌍 | 누락 | 심각도 하락 |
+|---|---|---|---|---|---|---|
+| EPUB 200건 | `epubscan scan --json` | `bookdoctor --json --only security,render` | 200 | 2,933 | 0 | 0 |
+| PDF 200건 | `pdfscan --json --workers 2` | `bookdoctor --json --only security` | 187 | 1,078 | 0 | 0 |
+
+PDF 13건은 옛 도구와 새 도구 모두 `incomplete`다(파일 없음 4건, 크기 한도 초과 등). 같은 사유라 비교에서 뺐다.
+정규화: 옛 PDF `object=[N,G]`와 `path`를 `"N G:path"`로 합쳤고, 새 `location`에서 `obj ` 접두사를 뗐다. 코드는 옛 `kind`와 새 `code`를 그대로 비교했다.
+EPUB 쪽은 `render` 분류를 포함했다(MISSING_MIMETYPE 등 네 코드가 `render`로 옮겨졌기 때문이다).
+
+새 쪽에만 있는 항목(허용):
+
+| 코드 | 건수 | 표본 |
+|---|---|---|
+| XHTML_PARSE_FAILED (EPUB `render`) | 95파일 | 오탐 의심, 6절 참고 |
+| FONT_TOO_LARGE | 20파일 | 9_BLGL/[BL] 악우 1.epub 외 |
+| NCX_REF_MISSING | 5파일 | 9_BLGL/[ZIG] 릭 미 업 이프 유 캔 5.epub 외 |
+| DC_METADATA_MISSING | 2파일 | 9_BLGL/아스파라거스튀김 가이드버스 ... 完.epub 외 |
+| UNDECLARED_PREFIX | 1파일 | 9_BLGL/[이하진] 주인님 X 대표님 - 소 비서의 이중생활.epub |
+| GoToR action (PDF) | 147건, 1파일 | 8_IT/[신승희] 이젠 나도 네이버 스마트스토어(쇼핑몰 가이드북) (2).pdf |
+| many incremental updates (PDF) | 1파일 | 8_IT/[히라야마오사무] SQL 서버의 구조(그림으로 이해하는).pdf |
+
+### 4. 인코딩 손상 동등성
+
+| 대상 | 옛 `corrupted` | 새 `MOJIBAKE` | 차이 |
+|---|---|---|---|
+| `sample-txt.txt` 200건 | 0 (clean 153, undetermined 38, unreadable 9) | 0 | 없음 |
+| `sample-epub.txt` 200건 | 0 (clean 200) | 0 | 없음 |
+| `broken-dir.txt` | 미실행(0_broken 없음) | 미실행 | - |
+
+두 표본 모두 손상 파일이 0건이라 0 대 0 비교다. 양성 대조가 되지 않는다. likeness 값은 두 도구가 모든 파일에서 같았다.
+대체 양성 대조(계획된 비교가 아니다): 깨끗한 한글 본문 TXT·EPUB과, UTF-8 바이트를 CP949로 읽어 만든 두 종류(본문 깨짐, BOM `癤` 깨짐)를 합성했다.
+옛 도구와 새 도구 모두 4건(TXT 2, EPUB 2) `corrupted`/`MOJIBAKE`로 표시했고(likeness 0.0107 안팎), 깨끗한 쌍은 둘 다 통과시켰다.
+cp1252로 읽어 만든 합성은 두 도구 모두 `undetermined`로 같이 놓쳤다. 옛 도구에도 없던 한계다.
+
+### 5. 손상 재현율
+
+| 대상 | 존재 | 파일 없음(미확인) | 새 도구가 `defect` 또는 `incomplete`를 낸 파일 | 놓침 |
+|---|---|---|---|---|
+| `pdf-redownload.txt` 26건 | 17 | 9 | 17 | 0 |
+| `epub-redownload.txt` 3건 | 3 | 0 | 3 | 0 |
+
+주의: PDF 1건(`9_성인/[Moon Night Snap]... Where Does It Hurt.pdf`, 406 MB, 헤더 정상)은 크기 한도(256 MB) 초과로 `incomplete`가 됐을 뿐
+손상을 찾은 것이 아니다. 이 건을 빼면 실제 손상 탐지는 19건 중 19건이다(PDF 16건, EPUB 3건).
+이유 TSV에 이유가 적힌 4건 중 존재하는 "미상 바이너리" 2건은 `NO_PDF_HEADER`/`FORMAT_MISMATCH` 또는 `XREF_BROKEN`로 잡혔다. "0바이트", "HTML 다운로드 실패" 2건은 파일이 없어 확인하지 못했다.
+
+### 6. 오탐 측정 (표본 600건)
+
+| 항목 | 값 |
+|---|---|
+| High 이상 발견이 있는 파일 | 163 / 600 (EPUB 96, PDF 60, TXT 7) |
+| `incomplete` 파일 | 13 (모두 PDF: 파일 없음 4, 크기 한도 1, 객체 스트림 4 MB 한도 8) |
+| `NOT_UTF8` | 3파일 (모두 `HIGH`, cp949 2, unknown 1) |
+
+High 이상 코드별 파일 수:
+
+| 코드 | 파일 | 판단 |
+|---|---|---|
+| XHTML_PARSE_FAILED (EPUB) | 95 | 오탐으로 보인다. 95건 모두 `&nbsp;` 때문이다 |
+| ZERO_PAGES (PDF) | 59 | 오탐이다. `pdfinfo`를 돌린 58건 중 56건이 33~2,710쪽을 낸다(2건은 쪽수 줄 없음) |
+| BINARY_CONTENT (TXT) | 4 | 과하다. 수 MB 파일에 NUL 1~2바이트가 있을 뿐이다 |
+| NOT_UTF8 / INVALID_UTF8 (TXT) | 3 / 3 | 진짜다. cp949 파일이다 |
+| SCRIPT_TAG, ACTIVE_ELEMENT (EPUB) | 1 / 1 | 요소는 실제로 있다. 옛 도구도 같은 항목을 냈다 |
+| Launch action (PDF) | 1 | 구조는 실제로 있다. 옛 도구도 같다. 악성 여부는 확인하지 않았다 |
+
+요청한 소음 후보 코드(전체 심각도, 600건): FONT_NOT_EMBEDDED 12파일(모두 `LOW`).
+FORMAT_MISMATCH, SPARSE_FILE, NO_EOF_MARKER, TINY_PAGE, ZIP_CRC_MISMATCH, MEMBER_UNREADABLE, OBFUSCATED_TEXT,
+HIGH_COMPRESSION_RATIO, MARKUP_UNDECODABLE, JS_URL은 표본에서 0건이다. 소음 여부는 이 표본으로 판단하지 못한다.
+
+오탐 재현:
+- `ZERO_PAGES`: `/mnt/data/text/0_telegram/마스크걸/마스크걸 00104.pdf` (img2pdf, `pdfinfo` 40쪽, `qpdf --show-npages` 40). trailer에 `/Root`가 없는 파일로 보이고, `doc.get_pages()`가 비어 `structure.rs:148`이 발화한다. 코드 원인은 확인하지 않았다.
+- `XHTML_PARSE_FAILED`: `/mnt/data/text/9_BLGL/[2RE] 키보드를 돌려줘요 2.epub`의 `OEBPS/Text/chapter_01.xhtml`. XHTML 1.1 DOCTYPE을 선언하고 `&nbsp;`를 쓴다. 엄격한 XML 파서는 실패하고 `xmllint`는 경고만 낸다. 뷰어에서 실제로 렌더링되는지는 확인하지 않았다.
+
+### 7. 요약과 미실행
+
+| 단계 | 누락 | 비고 |
+|---|---|---|
+| 1 회귀 | 해당 없음 | 실패 0, clippy 종료 0 |
+| 2 EPUB 구조 | 0 | 실데이터의 옛 이슈가 3건뿐이라 비교력이 약하다 |
+| 3 보안 | 0 / 0 | 심각도 하락 0. 새 쪽에만 있는 항목은 위 표 |
+| 4 인코딩 | 0 | 표본에 손상 0건이라 비교력이 없다. 합성 양성 대조 4건은 일치 |
+| 5 재현율 | 0 | 파일 없음 9건은 미확인 |
+| 6 오탐 | 해당 없음 | `ZERO_PAGES`, `XHTML_PARSE_FAILED` 오탐 |
+
+미실행: `/mnt/data/text/0_broken` 대조(디렉토리 없음), 파일 없는 PDF 9건, 오탐 원인 코드 분석.
+검사 도중 표본 PDF 4건(`2_소설외국/사냥개들 *.pdf`)이 말뭉치에서 사라져 두 도구 모두 `incomplete`로 처리했다.
+
+### 사용한 명령
+
+```
+cargo test --workspace --locked ; cargo clippy --workspace --all-targets   # env -u TM_MYSQL_HOST -u TM_ES_URL, CARGO_TARGET_DIR=/home/terzeron/workspace/tm_dev/target
+xargs -d '\n' -n1 -I{} epubscan structure --file {} < epub-structure-flagged(존재분)
+xargs -d '\n' -n 100 bookdoctor --json < epub-structure-flagged(존재분)
+xargs -d '\n' -n 50 epubscan scan --json < sample-epub.txt
+xargs -d '\n' -n 100 bookdoctor --json --only security,render < sample-epub.txt
+xargs -d '\n' -n 50 pdfscan --json --workers 2 < sample-pdf.txt
+xargs -d '\n' -n 100 bookdoctor --json --only security < sample-pdf.txt
+xargs -d '\n' -n1 -I{} detect_mojibake check --file {} < sample-txt.txt   # sample-epub.txt도 같다
+xargs -d '\n' -n 100 bookdoctor --json < sample-{txt,epub,pdf}.txt, pdf-redownload.txt, epub-redownload.txt
+```
