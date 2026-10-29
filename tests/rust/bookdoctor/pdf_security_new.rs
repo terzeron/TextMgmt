@@ -284,7 +284,8 @@ fn dangling_action_type_is_reported_low() {
 
 #[test]
 fn action_type_of_wrong_type_is_reported_low() {
-    let r = action("<< /S 7 >>", &[]);
+    // 인라인 비-Name은 사전이 `/Type /Action`이라고 밝힐 때만 알린다(I1).
+    let r = action("<< /Type /Action /S 7 >>", &[]);
     assert_eq!(hits(&r, "unresolvable action type").len(), 1);
     let r = action("<< /S 5 0 R >>", &[s("42")]);
     assert_eq!(hits(&r, "unresolvable action type").len(), 1);
@@ -337,4 +338,89 @@ fn indirect_file_name_string_is_flagged_as_executable_looking() {
     assert_eq!(hits(&r, "executable-looking file name").len(), 1);
     let r = run(&pdf("", &[s("<< /Type /Filespec /F 5 0 R /EF << >> >>"), s("(notes.txt)")]));
     assert!(hits(&r, "executable-looking file name").is_empty());
+}
+
+// ---------------------------------------------------------------- 리뷰 보완 (I1, M2~M5)
+
+#[test]
+fn linearized_hint_stream_integer_s_is_not_flagged() {
+    // I1: 선형화 PDF의 힌트 스트림 사전은 `/S <정수>`를 가진다. 동작이 아니므로 지표가 없어야 한다.
+    let r = run(&pdf("", &[stream("/Filter /FlateDecode /S 36", b"x")]));
+    assert!(hits(&r, "unresolvable action type").is_empty());
+    // 동작이 아닌 사전의 인라인 비-Name도 마찬가지다.
+    let r = action("<< /S 7 /D [0 /Fit] >>", &[]);
+    assert!(hits(&r, "unresolvable action type").is_empty());
+}
+
+/// 객체 5부터 `refs`개의 참조가 이어지고 마지막이 `/Launch`인 사슬. `/S 5 0 R`가 따라가는 참조 횟수는 `refs + 1`이다.
+fn chain(refs: usize) -> Vec<Vec<u8>> {
+    let mut objs: Vec<Vec<u8>> = (0..refs).map(|i| s(&format!("{} 0 R", 6 + i))).collect();
+    objs.push(s("/Launch"));
+    objs
+}
+
+#[test]
+fn reference_chain_of_eight_hops_resolves_and_nine_does_not() {
+    // M4: 8번 따라가면 Name에 닿고(참조 7개 + Name), 9번이면 한도에 걸려 풀리지 않는다.
+    let r = action("<< /S 5 0 R /F (a.txt) >>", &chain(7));
+    assert_eq!(hits(&r, "Launch action").len(), 1);
+    assert!(hits(&r, "unresolvable action type").is_empty());
+    let r = action("<< /S 5 0 R /F (a.txt) >>", &chain(8));
+    assert!(hits(&r, "Launch action").is_empty());
+    assert_eq!(hits(&r, "unresolvable action type").len(), 1);
+}
+
+#[test]
+fn raw_byte_findings_carry_offset_and_startxref_locations() {
+    let mut bytes = pdf("/J#53 (x)", &[]);
+    let offset = bytes.windows(5).position(|w| w == b"/J#53").unwrap();
+    for i in 0..9 {
+        bytes.extend(format!("startxref\n{i}\n%%EOF\n").bytes());
+    }
+    let r = run(&bytes);
+    assert_eq!(hits(&r, "hex-obfuscated action name")[0].location, format!("obj 0 0:raw@{offset}"));
+    assert_eq!(hits(&r, "many incremental updates")[0].location, "obj 0 0:startxref");
+}
+
+/// 저장(stored) 블록만 쓰는 zlib 스트림. 압축되지 않아 입력과 같은 크기다.
+fn zlib_stored(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x78, 0x01];
+    let mut chunks = data.chunks(65535).peekable();
+    while let Some(c) = chunks.next() {
+        out.push(u8::from(chunks.peek().is_none()));
+        let len = u16::try_from(c.len()).unwrap();
+        out.extend(len.to_le_bytes());
+        out.extend((!len).to_le_bytes());
+        out.extend(c);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in data {
+        a = (a + u32::from(x)) % 65521;
+        b = (b + a) % 65521;
+    }
+    out.extend(((b << 16) | a).to_be_bytes());
+    out
+}
+
+#[test]
+fn flate_embedded_pe_larger_than_64kib_is_still_found() {
+    // M2: 로딩 훅이 스트림을 64KiB로 자르지만, Flate는 잘린 앞부분이 해제되어 PE를 판별할 수 있다.
+    let mut payload = pe_at(0x80);
+    let mut x = 12345u32;
+    payload.extend((0..100_000).map(|_| {
+        x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+        (x >> 16) as u8
+    }));
+    let z = zlib_stored(&payload);
+    assert!(z.len() > 64 * 1024);
+    let r = run(&pdf("", &[stream("/Type /EmbeddedFile /Filter /FlateDecode", &z)]));
+    assert_eq!(hits(&r, "embedded executable content").len(), 1);
+}
+
+#[test]
+fn long_filter_finding_does_not_claim_truncation_when_only_decode_parms_were_cut() {
+    // M3: DecodeParms만 16개를 넘고 /Filter는 짧다. 필터 체인이 길다는 지표는 없어야 한다.
+    let parms = "null ".repeat(30);
+    let r = run(&pdf("", &[stream(&format!("/Filter /FlateDecode /DecodeParms [{parms}]"), b"x")]));
+    assert!(hits(&r, "long filter chain").is_empty());
 }

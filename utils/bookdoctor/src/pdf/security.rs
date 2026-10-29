@@ -105,6 +105,9 @@ const _: () = assert!(FILTER_KEEP_LEN + 1 < ARRAY_KEEP_LEN);
 /// 필터 체인을 잘랐다는 표지. 잘리면 해독이 틀어지므로 그 스트림은 "끝까지 검사하지 못한" 것으로 알려야 한다.
 /// 파일이 같은 키를 직접 넣어도 알림이 하나 더 붙을 뿐이라 안전한 쪽이다.
 const FILTER_TRUNCATED_KEY: &[u8] = b"PdfscanFilterTruncated";
+/// `/Filter` 배열 자체를 잘랐다는 표지. 위 표지는 `DecodeParms` 등 다른 해독 키만 잘려도 붙으므로 어느 키인지 말하지 못한다.
+/// `long filter chain`은 필터 체인이 길다는 뜻이라 `/Filter`가 잘린 경우에만 이 표지로 판단한다(위 표지는 그대로 둔다).
+const FILTER_ARRAY_TRUNCATED_KEY: &[u8] = b"PdfscanFilterArrayTruncated";
 
 /// 객체 하나를 스캔에 필요한 만큼만 남긴다. 제자리에서 줄인다.
 fn shrink(obj: &mut Object, depth: usize) {
@@ -124,6 +127,7 @@ fn shrink(obj: &mut Object, depth: usize) {
             }
             // 필터 키는 배열이 길다는 이유로 비우면 해독이 사라지므로 비우지 않되, 노드로 메모리를 부풀리지 못하게 길이는 제한한다.
             let mut truncated = false;
+            let mut filter_truncated = false;
             for (k, v) in st.dict.iter_mut() {
                 if STREAM_DECODING_KEYS.contains(&k.as_slice())
                     && let Object::Array(items) = v
@@ -132,11 +136,15 @@ fn shrink(obj: &mut Object, depth: usize) {
                     items.truncate(FILTER_KEEP_LEN);
                     items.shrink_to_fit();
                     truncated = true;
+                    filter_truncated |= k.as_slice() == b"Filter";
                 }
                 shrink(v, depth + 1);
             }
             if truncated {
                 st.dict.set(FILTER_TRUNCATED_KEY.to_vec(), Object::Boolean(true));
+            }
+            if filter_truncated {
+                st.dict.set(FILTER_ARRAY_TRUNCATED_KEY.to_vec(), Object::Boolean(true));
             }
         }
         _ => {}
@@ -345,10 +353,11 @@ fn describe_unresolved(raw: &Object, resolved: Option<&Object>) -> String {
         Object::Stream(_) => "stream",
         Object::Reference(_) => "reference",
     };
+    let article = |k: &str| if k.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
     match (raw, resolved) {
         (Object::Reference(id), None) => format!("reference {} {} R does not resolve", id.0, id.1),
-        (Object::Reference(id), Some(o)) => format!("reference {} {} R resolves to a {}, not a name", id.0, id.1, kind(o)),
-        (o, _) => format!("value is a {}, not a name", kind(o)),
+        (Object::Reference(id), Some(o)) => format!("reference {} {} R resolves to {} {}, not a name", id.0, id.1, article(kind(o)), kind(o)),
+        (o, _) => format!("value is {} {}, not a name", article(kind(o)), kind(o)),
     }
 }
 
@@ -399,7 +408,12 @@ impl Scanner<'_> {
             Some(v) => match resolve(doc, v) {
                 Some(resolved @ Object::Name(_)) => name_of(resolved),
                 other => {
-                    self.add(Severity::Low, "unresolvable action type", id, path, describe_unresolved(v, other));
+                    // 선형화 PDF의 힌트 스트림 사전은 `/S <정수>`를 가진다(공유 객체 힌트 표의 오프셋). 인라인 비-Name `/S`는
+                    // 사전이 스스로 동작(`/Type /Action`)이라 밝힐 때만, 참조는 끊기거나 순환하거나 Name이 아닐 때 알린다.
+                    let declared_action = matches!(d.get(b"Type").ok().and_then(|t| resolve(doc, t)), Some(Object::Name(n)) if n.as_slice() == b"Action");
+                    if matches!(v, Object::Reference(_)) || declared_action {
+                        self.add(Severity::Low, "unresolvable action type", id, path, describe_unresolved(v, other));
+                    }
                     None
                 }
             },
@@ -537,13 +551,16 @@ fn stream_checks(doc: &Document, findings: &mut Vec<Finding>) {
         let Object::Stream(st) = obj else { continue };
         let chain = resolve(doc, st.dict.get(b"Filter").unwrap_or(&Object::Null));
         let long_chain = matches!(chain, Some(Object::Array(items)) if items.len() >= LONG_FILTER_CHAIN);
-        if long_chain || st.dict.has(FILTER_TRUNCATED_KEY) {
+        let filter_cut = st.dict.has(FILTER_ARRAY_TRUNCATED_KEY);
+        if long_chain || filter_cut {
             let detail = match chain {
-                Some(Object::Array(items)) if !st.dict.has(FILTER_TRUNCATED_KEY) => format!("{} filters", items.len()),
+                Some(Object::Array(items)) if !filter_cut => format!("{} filters", items.len()),
                 _ => format!("{FILTER_KEEP_LEN} or more filters"),
             };
             findings.push(Finding { severity: Severity::Medium, kind: "long filter chain", object: *id, path: String::new(), detail });
         }
+        // 한계: 로딩 훅이 스트림 내용을 64KiB로 자른다. Flate는 잘린 앞부분도 해제되어(앞 64KiB 해제분으로 판별) 잡히지만,
+        // ASCII85·LZW 등 앞부분만으로는 해제되지 않는 필터 체인은 64KiB를 넘으면 놓친다.
         if embedded.contains(id) || st.dict.has_type(b"EmbeddedFile") {
             let data = st.decompressed_content_with_limit(MAX_DECOMPRESSED_STREAM_BYTES).unwrap_or_else(|_| st.content.clone());
             let head = data.get(..data.len().min(EMBEDDED_SNIFF_BYTES)).unwrap_or(&[]);
