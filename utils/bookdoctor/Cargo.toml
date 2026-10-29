@@ -23,6 +23,10 @@ name = "epub_gaps"
 path = "../../tests/rust/bookdoctor/epub_gaps.rs"
 
 [[test]]
+name = "epub_structure"
+path = "../../tests/rust/bookdoctor/epub_structure.rs"
+
+[[test]]
 name = "epub_security"
 path = "../../tests/rust/bookdoctor/epub_security.rs"
 
