@@ -21,7 +21,7 @@ use corpus_common::reader::{Zip, open_zip};
 use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
 
 use super::security::Limits;
-use super::structure::{is_markup, parse_xml, read_member, rootfile_path, spine_members};
+use super::structure::{is_markup, parse_xml, rootfile_path, spine_members};
 
 // EpubDiagnose.js 상단 상수.
 const OPF_NS: &str = "http://www.idpf.org/2007/opf";
@@ -44,6 +44,9 @@ const FONT_MEDIA_TYPES: [&str; 8] = ["font/ttf", "font/otf", "font/woff", "font/
 /// (U+202E)로 순서를 뒤집는다. 정상 책에는 거의 없고 난독화 책은 쪽당 수백 개라 20은 보수적인 하한이다.
 /// 실제 난독화 EPUB으로는 검증하지 않았다(scripts/epub_deobfuscate.py와 표본이 이 작업 트리에 없다).
 const OBFUSCATION_THRESHOLD: usize = 20;
+/// 문서 하나가 모을 선택자와 스타일시트의 상한. 악성 CSS가 선택자 × 요소 곱으로 시간을 쓰지 못하게 한다.
+const MAX_SELECTORS_PER_DOC: usize = 10_000;
+const MAX_STYLESHEETS_PER_DOC: usize = 64;
 
 /// EpubDiagnose.js `findUndeclaredPrefixes`의 두 정규식. JS의 `\w`는 ASCII라 같은 범위로 쓴다.
 static DECLARED_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"xmlns:([A-Za-z0-9_]+)\s*=").unwrap());
@@ -51,8 +54,8 @@ static USED_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[< ]\s*([A-Za-z0
 /// EpubDiagnose.js `checkGuide`: `<guide>…</guide>` 구간과 그 안의 `href="…"`.
 static GUIDE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<guide>(.*?)</guide>").unwrap());
 static HREF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"href="([^"]+)""#).unwrap());
-/// `font-size`를 0으로 만드는 선언(`0`, `0%`, `0px`). `0.5em`이나 `10px`은 맞지 않는다.
-static ZERO_SIZE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(?:^|[\s;{])font-size\s*:\s*0(?:\.0+)?(?:%|px)?\s*(?:;|!|$)").unwrap());
+/// `font-size`를 0으로 만드는 선언(`0`, `0%`, `0px`, `0em`, `0rem`, `0pt`). `0.5em`이나 `10px`은 맞지 않는다.
+static ZERO_SIZE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(?:^|[\s;{])font-size\s*:\s*0(?:\.0+)?(?:%|px|rem|em|pt)?\s*(?:;|!|$)").unwrap());
 static CSS_RULE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"([^{}]+)\{([^{}]*)\}").unwrap());
 
 // ---------------------------------------------------------------- 결과 모으기
@@ -77,12 +80,6 @@ impl Sink {
 struct Budget {
     remaining: u64,
     exhausted: bool,
-}
-
-impl Budget {
-    fn spend(&mut self, n: usize) {
-        self.remaining = self.remaining.saturating_sub(n as u64);
-    }
 }
 
 /// 읽은 바이트를 세고, 요청하면 내용을 담는 `Write`. 읽기가 중간에 실패해도 그때까지의 수가 남는다.
@@ -257,14 +254,14 @@ fn analyze_ncx(bytes: &[u8], ncx_path: &str, opf_dir: &str, name_set: &HashSet<&
 }
 
 /// CSS 선택자 하나(마지막 복합 선택자의 태그 이름과 클래스들).
-#[derive(Clone)]
-struct Selector {
-    tag: String,
-    classes: Vec<String>,
+#[derive(Clone, Debug)]
+pub struct Selector {
+    pub tag: String,
+    pub classes: Vec<String>,
 }
 
 /// CSS 본문에서 `font-size:0` 규칙의 선택자를 모은다. 속성·의사 클래스·id가 든 선택자는 건너뛴다.
-fn zero_size_selectors(css: &str) -> Vec<Selector> {
+pub fn zero_size_selectors(css: &str) -> Vec<Selector> {
     let mut out = Vec::new();
     for rule in CSS_RULE_RE.captures_iter(css) {
         if !ZERO_SIZE_RE.is_match(&rule[2]) {
@@ -294,8 +291,105 @@ fn matches_selector(node: &Node, sel: &Selector) -> bool {
     sel.classes.iter().all(|c| class_attr.split_whitespace().any(|t| t == c))
 }
 
-/// 본문 XHTML 하나를 검사한다. 읽은 CSS는 `css_cache`에 두고 다시 읽지 않는다.
-fn analyze_xhtml(zip: &mut Zip, bytes: &[u8], member: &str, name_set: &HashSet<&str>, css_cache: &mut HashMap<String, Vec<Selector>>, budget: &mut Budget, sink: &mut Sink) {
+/// 크기 0 요소(인라인 style 또는 선택자 일치)를 `stop_at`개까지만 센다. 임계값에 닿으면 더 보지 않는다.
+pub fn count_hidden_elements(doc: &Document, selectors: &[Selector], stop_at: usize) -> usize {
+    doc.descendants()
+        .filter(|n| n.is_element())
+        .filter(|n| n.attribute("style").is_some_and(|s| ZERO_SIZE_RE.is_match(s)) || selectors.iter().any(|s| matches_selector(n, s)))
+        .take(stop_at)
+        .count()
+}
+
+/// 읽기 오류의 종류. 체크섬은 지표, 손상된 스트림은 structure의 MEMBER_UNREADABLE 몫, 그 밖(I/O)은 incomplete다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadErrorKind {
+    Checksum,
+    Corrupt,
+    Io,
+}
+
+pub fn classify_read_error(e: &io::Error) -> ReadErrorKind {
+    match e.kind() {
+        // zip 9의 Crc32Reader는 EOF에서 InvalidData "Invalid checksum"을 낸다(테스트로 확인).
+        io::ErrorKind::InvalidData if e.to_string().contains("checksum") => ReadErrorKind::Checksum,
+        io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput | io::ErrorKind::UnexpectedEof => ReadErrorKind::Corrupt,
+        _ => ReadErrorKind::Io,
+    }
+}
+
+fn classify_zip_error(e: &zip::result::ZipError) -> ReadErrorKind {
+    match e {
+        zip::result::ZipError::Io(io) => classify_read_error(io),
+        _ => ReadErrorKind::Corrupt,
+    }
+}
+
+/// 한 번의 검사가 공유하는 읽기 상태.
+struct Ctx {
+    budget: Budget,
+    max_member: u64,
+    css_cache: HashMap<String, Vec<Selector>>,
+    /// 이미 한도 안에서 읽은 멤버(container, OPF, CSS). 전체 읽기 단계에서 다시 읽지 않는다.
+    done: HashSet<String>,
+    skipped: usize,
+    io_errors: usize,
+    css_failed: usize,
+    selector_cap_hit: bool,
+    sheet_cap_hit: bool,
+}
+
+impl Ctx {
+    fn on_error(&mut self, kind: ReadErrorKind, name: &str, sink: &mut Sink) {
+        match kind {
+            ReadErrorKind::Checksum => sink.flag(Category::Defect, Severity::High, "ZIP_CRC_MISMATCH", name, "멤버를 끝까지 읽으면 CRC가 맞지 않음"),
+            ReadErrorKind::Corrupt => {}
+            ReadErrorKind::Io => self.io_errors += 1,
+        }
+    }
+
+    /// 작은 멤버(container, OPF, CSS)를 min(max_member, 작은 멤버 상한, 남은 예산)까지만 읽는다.
+    /// 읽은 바이트를 예산에서 빼고, 못 읽거나 상한을 넘으면 사유를 기록하고 None을 돌려준다.
+    fn read_small(&mut self, zip: &mut Zip, name: &str, sink: &mut Sink) -> Option<Vec<u8>> {
+        self.done.insert(name.to_string());
+        let cap = self.max_member.min(MAX_SMALL_BYTES as u64);
+        if self.budget.remaining == 0 {
+            self.budget.exhausted = true;
+            return None;
+        }
+        let limit = cap.min(self.budget.remaining);
+        let mut entry = match zip.by_name(name) {
+            Ok(e) => e,
+            Err(e) => {
+                let kind = classify_zip_error(&e);
+                self.on_error(kind, name, sink);
+                return None;
+            }
+        };
+        let mut cap_w = Capture { n: 0, buf: Some(Vec::new()) };
+        let result = io::copy(&mut (&mut entry).take(limit + 1), &mut cap_w);
+        drop(entry);
+        self.budget.remaining -= cap_w.n.min(limit);
+        match result {
+            Err(e) => {
+                let kind = classify_read_error(&e);
+                self.on_error(kind, name, sink);
+                None
+            }
+            Ok(_) if cap_w.n > limit => {
+                if limit < cap {
+                    self.budget.exhausted = true;
+                } else {
+                    self.skipped += 1;
+                }
+                None
+            }
+            Ok(_) => cap_w.buf,
+        }
+    }
+}
+
+/// 본문 XHTML 하나를 검사한다. 읽은 CSS는 `ctx.css_cache`에 두고 다시 읽지 않는다.
+fn analyze_xhtml(zip: &mut Zip, bytes: &[u8], member: &str, name_set: &HashSet<&str>, ctx: &mut Ctx, sink: &mut Sink) {
     let text = String::from_utf8_lossy(bytes);
     let doc = parse_xml(bytes);
 
@@ -319,31 +413,51 @@ fn analyze_xhtml(zip: &mut Zip, bytes: &[u8], member: &str, name_set: &HashSet<&
     if let Some(doc) = &doc {
         let dir = posix_dirname(member);
         let mut selectors: Vec<Selector> = Vec::new();
+        // 같은 스타일시트는 문서마다 한 번만 더한다.
+        let mut seen_css: HashSet<String> = HashSet::new();
+        let push_capped = |selectors: &mut Vec<Selector>, new: Vec<Selector>, hit: &mut bool| {
+            for s in new {
+                if selectors.len() >= MAX_SELECTORS_PER_DOC {
+                    *hit = true;
+                    break;
+                }
+                selectors.push(s);
+            }
+        };
         for n in doc.descendants().filter(|n| n.is_element()) {
             match n.tag_name().name() {
-                "style" => selectors.extend(zero_size_selectors(&n.descendants().filter_map(|d| d.text()).collect::<String>())),
+                "style" => {
+                    let css: String = n.descendants().filter_map(|d| d.text()).collect();
+                    push_capped(&mut selectors, zero_size_selectors(&css), &mut ctx.selector_cap_hit);
+                }
                 "link" if n.attribute("rel").is_some_and(|r| r.to_lowercase().contains("stylesheet")) => {
                     let Some(path) = n.attribute("href").and_then(|h| resolve(&dir, h)).filter(|p| name_set.contains(p.as_str())) else { continue };
-                    if !css_cache.contains_key(&path) {
-                        let css = read_member(zip, &path, MAX_SMALL_BYTES).map(|c| {
-                            budget.spend(c.len());
-                            zero_size_selectors(&String::from_utf8_lossy(&c))
-                        });
-                        css_cache.insert(path.clone(), css.unwrap_or_default());
+                    if !seen_css.insert(path.clone()) {
+                        continue;
                     }
-                    selectors.extend(css_cache[&path].iter().cloned());
+                    if seen_css.len() > MAX_STYLESHEETS_PER_DOC {
+                        ctx.sheet_cap_hit = true;
+                        continue;
+                    }
+                    if !ctx.css_cache.contains_key(&path) {
+                        let parsed = match ctx.read_small(zip, &path, sink) {
+                            Some(css) => zero_size_selectors(&String::from_utf8_lossy(&css)),
+                            None => {
+                                ctx.css_failed += 1;
+                                Vec::new()
+                            }
+                        };
+                        ctx.css_cache.insert(path.clone(), parsed);
+                    }
+                    push_capped(&mut selectors, ctx.css_cache[&path].clone(), &mut ctx.selector_cap_hit);
                 }
                 _ => {}
             }
         }
-        hidden = doc
-            .descendants()
-            .filter(|n| n.is_element())
-            .filter(|n| n.attribute("style").is_some_and(|s| ZERO_SIZE_RE.is_match(s)) || selectors.iter().any(|s| matches_selector(n, s)))
-            .count();
+        hidden = count_hidden_elements(doc, &selectors, OBFUSCATION_THRESHOLD);
     }
     if hidden >= OBFUSCATION_THRESHOLD || rtl >= OBFUSCATION_THRESHOLD {
-        sink.flag(Category::Render, Severity::Medium, "OBFUSCATED_TEXT", member, &format!("크기 0 요소 {hidden}개, U+202E {rtl}개 (임계 {OBFUSCATION_THRESHOLD})"));
+        sink.flag(Category::Render, Severity::Medium, "OBFUSCATED_TEXT", member, &format!("크기 0 요소 {hidden}개 이상 또는 U+202E {rtl}개 (임계 {OBFUSCATION_THRESHOLD})"));
     }
 }
 
@@ -352,31 +466,46 @@ fn analyze_xhtml(zip: &mut Zip, bytes: &[u8], member: &str, name_set: &HashSet<&
 fn run(zip: &mut Zip, limits: &Limits, sink: &mut Sink) {
     let names: Vec<String> = zip.file_names().filter_map(|n| n.ok().map(|n| n.into_owned())).collect();
     let name_set: HashSet<&str> = names.iter().map(String::as_str).collect();
-    let mut budget = Budget { remaining: limits.max_total, exhausted: false };
+    let mut ctx = Ctx {
+        budget: Budget { remaining: limits.max_total, exhausted: false },
+        max_member: limits.max_member,
+        css_cache: HashMap::new(),
+        done: HashSet::new(),
+        skipped: 0,
+        io_errors: 0,
+        css_failed: 0,
+        selector_cap_hit: false,
+        sheet_cap_hit: false,
+    };
 
     // container → OPF. 못 찾거나 못 읽는 것은 structure가 보고하므로 여기서는 OPF 규칙만 건너뛴다.
+    // 한 번만 읽고 예산에서 한 번만 뺀다(전체 읽기 단계는 `done`에 든 멤버를 건너뛴다).
     let mut plan = OpfPlan::default();
-    if let Some(container) = read_member(zip, CONTAINER, MAX_SMALL_BYTES) {
-        budget.spend(container.len());
-        if let Some(opf_path) = rootfile_path(&container)
-            && let Some(opf) = read_member(zip, &opf_path, MAX_SMALL_BYTES)
-        {
-            budget.spend(opf.len());
-            plan = analyze_opf(&opf, &opf_path, &name_set, sink);
-        }
+    if name_set.contains(CONTAINER)
+        && let Some(container) = ctx.read_small(zip, CONTAINER, sink)
+        && let Some(opf_path) = rootfile_path(&container)
+        && name_set.contains(opf_path.as_str())
+        && let Some(opf) = ctx.read_small(zip, &opf_path, sink)
+    {
+        plan = analyze_opf(&opf, &opf_path, &name_set, sink);
     }
 
-    let mut css_cache: HashMap<String, Vec<Selector>> = HashMap::new();
-    let mut skipped = 0usize;
     for i in 0..zip.len() {
         let mut entry = match zip.by_index(i) {
             Ok(e) => e,
-            Err(_) => continue,
+            Err(e) => {
+                let kind = classify_zip_error(&e);
+                ctx.on_error(kind, "", sink);
+                continue;
+            }
         };
         if entry.is_dir() {
             continue;
         }
         let Ok(name) = entry.name().map(|n| n.into_owned()) else { continue };
+        if ctx.done.contains(&name) {
+            continue;
+        }
         let declared = entry.size();
 
         // preview.rs:527: 폰트 크기는 선언 크기로 잰다(읽기 한도에서 건너뛰는 큰 폰트도 잡아야 한다).
@@ -386,42 +515,41 @@ fn run(zip: &mut Zip, limits: &Limits, sink: &mut Sink) {
         }
 
         if declared > limits.max_member {
-            skipped += 1;
+            ctx.skipped += 1;
             continue;
         }
-        if budget.remaining == 0 {
-            budget.exhausted = true;
+        if ctx.budget.remaining == 0 {
+            ctx.budget.exhausted = true;
             break;
         }
         // 선언 크기를 믿지 않는다: 읽기 자체를 min(멤버 한도, 남은 예산)+1바이트로 자른다.
-        let limit = limits.max_member.min(budget.remaining);
+        let limit = limits.max_member.min(ctx.budget.remaining);
         let keep = plan.spine_docs.contains(&name) || plan.ncx.as_deref() == Some(name.as_str());
         let mut cap = Capture { n: 0, buf: keep.then(Vec::new) };
         // ZIP은 끝까지 읽어야 CRC를 검증한다. limit+1바이트까지 읽으면 limit 이하 멤버는 항상 끝에 닿는다.
         let result = io::copy(&mut (&mut entry).take(limit + 1), &mut cap);
         drop(entry); // 이어서 CSS를 읽으려면 zip의 빌림을 풀어야 한다.
-        budget.remaining -= cap.n.min(limit);
+        ctx.budget.remaining -= cap.n.min(limit);
 
         match result {
-            // zip 9의 Crc32Reader는 EOF에서 InvalidData "Invalid checksum"을 낸다(테스트로 확인).
-            Err(e) if e.kind() == io::ErrorKind::InvalidData && e.to_string().contains("checksum") => {
-                sink.flag(Category::Defect, Severity::High, "ZIP_CRC_MISMATCH", &name, "멤버를 끝까지 읽으면 CRC가 맞지 않음");
+            // 체크섬은 지표, 손상된 스트림은 structure의 MEMBER_UNREADABLE, 그 밖의 오류는 incomplete.
+            Err(e) => {
+                let kind = classify_read_error(&e);
+                ctx.on_error(kind, &name, sink);
             }
-            // 그 밖의 압축 해제 오류는 structure의 MEMBER_UNREADABLE이 맡는다.
-            Err(_) => {}
             Ok(_) if cap.n > limit => {
                 if limit < limits.max_member {
-                    budget.exhausted = true;
+                    ctx.budget.exhausted = true;
                     break;
                 }
-                skipped += 1; // 선언 크기보다 실제로 큰 멤버.
+                ctx.skipped += 1; // 선언 크기보다 실제로 큰 멤버.
             }
             Ok(_) => {
                 if let Some(bytes) = cap.buf {
                     if plan.ncx.as_deref() == Some(name.as_str()) {
                         analyze_ncx(&bytes, &name, &plan.opf_dir, &name_set, sink);
                     } else {
-                        analyze_xhtml(zip, &bytes, &name, &name_set, &mut css_cache, &mut budget, sink);
+                        analyze_xhtml(zip, &bytes, &name, &name_set, &mut ctx, sink);
                     }
                 }
             }
@@ -429,11 +557,23 @@ fn run(zip: &mut Zip, limits: &Limits, sink: &mut Sink) {
     }
 
     // 한도 때문에 못 본 멤버는 결함이 아니다. 검사가 불완전하다고만 한 번씩 알린다.
-    if skipped > 0 {
-        sink.notes.push(format!("render: {skipped} member(s) larger than max_member ({} bytes) skipped, CRC and content unchecked", limits.max_member));
+    if ctx.skipped > 0 {
+        sink.notes.push(format!("render: {} member(s) larger than read cap (max_member {} bytes) skipped, CRC and content unchecked", ctx.skipped, limits.max_member));
     }
-    if budget.exhausted {
+    if ctx.budget.exhausted {
         sink.notes.push(format!("render: decompression budget {} bytes reached, remaining members unchecked", limits.max_total));
+    }
+    if ctx.io_errors > 0 {
+        sink.notes.push(format!("render: {} member(s) failed to read (I/O error), checks skipped", ctx.io_errors));
+    }
+    if ctx.css_failed > 0 {
+        sink.notes.push(format!("render: {} stylesheet(s) unread (over cap, budget or error), OBFUSCATED_TEXT may be missed", ctx.css_failed));
+    }
+    if ctx.sheet_cap_hit {
+        sink.notes.push(format!("render: more than {MAX_STYLESHEETS_PER_DOC} stylesheets in one document, extra stylesheets ignored"));
+    }
+    if ctx.selector_cap_hit {
+        sink.notes.push(format!("render: more than {MAX_SELECTORS_PER_DOC} selectors in one document, extra selectors ignored"));
     }
 }
 

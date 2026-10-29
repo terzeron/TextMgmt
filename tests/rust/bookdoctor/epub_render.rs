@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use bookdoctor::cli::Options;
-use bookdoctor::epub::render::{inspect, inspect_with};
+use bookdoctor::epub::render::{ReadErrorKind, Selector, classify_read_error, count_hidden_elements, inspect, inspect_with, zero_size_selectors};
 use bookdoctor::epub::security::Limits;
 use bookdoctor::scan::scan_file;
 use common::*;
@@ -454,6 +454,144 @@ fn total_budget_is_enforced_by_actual_bytes_not_declared_size() {
     forge_declared_size(f.path(), "OEBPS/bomb.bin", 10);
     let mut r = FileReport::new(f.path(), Some(Format::Epub));
     inspect_with(f.path(), &mut r, &limits);
+    assert!(!r.incomplete, "{:?}", r.reasons);
+    assert!(r.findings.is_empty(), "속인 선언 크기가 거짓 지표를 만들면 안 된다: {:?}", r.findings);
+}
+
+// ---- 읽기 예산·CSS·오류 분류 (fix round 1) ----
+
+fn chapter_with(head_extra: &str, body: &str) -> Vec<u8> {
+    format!(r#"<?xml version="1.0"?><html xmlns="{XHTML_NS}"><head><title>t</title>{head_extra}</head><body>{body}</body></html>"#).into_bytes()
+}
+
+fn link(name: &str) -> String {
+    format!(r#"<link rel="stylesheet" href="{name}"/>"#)
+}
+
+fn rules(n: usize) -> Vec<u8> {
+    (0..n).map(|i| format!(".c{i}{{font-size:0}}")).collect::<String>().into_bytes()
+}
+
+fn padded(rule: &str, len: usize) -> Vec<u8> {
+    let mut v = rule.as_bytes().to_vec();
+    v.resize(len, b' ');
+    v
+}
+
+fn reasons_containing(r: &FileReport, word: &str) -> usize {
+    r.reasons.iter().filter(|m| m.contains(word)).count()
+}
+
+#[test]
+fn css_reads_are_bounded_by_remaining_budget() {
+    // 서로 다른 스타일시트 5개(각 3000바이트). 예산은 앞의 둘쯤에서 바닥나고, 숨김 규칙이 든 마지막 CSS는 읽지 못한다.
+    let limits = Limits { max_member: 4000, max_total: 8000, ..Limits::default() };
+    let mut p = valid();
+    let links: String = (0..5).map(|i| link(&format!("s{i}.css"))).collect();
+    p.ch1 = chapter_with(&links, &r#"<span class="h">x</span>"#.repeat(20));
+    for i in 0..4 {
+        p.extra.push((format!("OEBPS/s{i}.css"), padded(".z{color:red}", 3000)));
+    }
+    p.extra.push(("OEBPS/s4.css".into(), padded(".h{font-size:0}", 3000)));
+    let r = scan_with(&p, &limits);
+    assert!(r.incomplete);
+    assert!(reasons_containing(&r, "budget") >= 1, "{:?}", r.reasons);
+    assert!(!r.has("OBFUSCATED_TEXT"), "예산 밖 CSS를 일부만 읽고 판정하면 안 된다");
+}
+
+#[test]
+fn css_over_the_read_cap_is_incomplete_not_silent() {
+    // 6MiB CSS는 작은 멤버 상한(5MiB)을 넘는다. 빈 선택자로 조용히 넘기면 난독화를 놓친다.
+    let mut p = valid();
+    p.ch1 = chapter_with(&link("big.css"), &r#"<span class="h">x</span>"#.repeat(20));
+    p.extra.push(("OEBPS/big.css".into(), padded(".h{font-size:0}", 6 << 20)));
+    let r = scan(&p);
+    assert!(r.incomplete, "{:?}", r.findings);
+    assert_eq!(reasons_containing(&r, "stylesheet"), 1, "{:?}", r.reasons);
+    assert!(!r.has("OBFUSCATED_TEXT"));
+}
+
+#[test]
+fn duplicate_link_to_one_stylesheet_adds_selectors_once() {
+    let mut p = valid();
+    p.ch1 = chapter_with(&link("a.css").repeat(3), "<p>x</p>");
+    p.extra.push(("OEBPS/a.css".into(), rules(5000)));
+    let r = scan(&p);
+    assert!(!r.incomplete, "한 번만 더하면 5000개라 상한(10000) 안이다: {:?}", r.reasons);
+    // 대조: 서로 다른 스타일시트 3개면 15000개라 상한을 넘는다.
+    let mut q = valid();
+    q.ch1 = chapter_with(&format!("{}{}{}", link("a.css"), link("b.css"), link("c.css")), "<p>x</p>");
+    for n in ["a", "b", "c"] {
+        q.extra.push((format!("OEBPS/{n}.css"), rules(5000)));
+    }
+    assert!(scan(&q).incomplete);
+}
+
+#[test]
+fn selector_cap_hit_marks_incomplete_once() {
+    let mut p = valid();
+    let css = String::from_utf8(rules(10_100)).unwrap();
+    p.ch1 = chapter_with(&format!("<style>{css}</style>"), "<p>x</p>");
+    let r = scan(&p);
+    assert!(r.incomplete);
+    assert_eq!(reasons_containing(&r, "selector"), 1, "{:?}", r.reasons);
+}
+
+#[test]
+fn stylesheet_cap_per_document_marks_incomplete() {
+    let mut p = valid();
+    let links: String = (0..65).map(|i| link(&format!("s{i}.css"))).collect();
+    p.ch1 = chapter_with(&links, "<p>x</p>");
+    for i in 0..65 {
+        p.extra.push((format!("OEBPS/s{i}.css"), b".z{color:red}".to_vec()));
+    }
+    let r = scan(&p);
+    assert!(r.incomplete);
+    assert_eq!(reasons_containing(&r, "stylesheet"), 1, "{:?}", r.reasons);
+}
+
+#[test]
+fn counting_stops_at_the_threshold() {
+    let body = r#"<span class="h">x</span>"#.repeat(100);
+    let xml = format!("<r>{body}</r>");
+    let doc = roxmltree::Document::parse(&xml).unwrap();
+    let sels = zero_size_selectors(".h{font-size:0}");
+    assert_eq!(sels.len(), 1);
+    assert_eq!(count_hidden_elements(&doc, &sels, 20), 20);
+    assert_eq!(count_hidden_elements(&doc, &sels, 1000), 100);
+}
+
+#[test]
+fn read_errors_are_classified() {
+    use std::io::{Error, ErrorKind};
+    assert_eq!(classify_read_error(&Error::new(ErrorKind::InvalidData, "Invalid checksum")), ReadErrorKind::Checksum);
+    assert_eq!(classify_read_error(&Error::new(ErrorKind::InvalidData, "deflate")), ReadErrorKind::Corrupt);
+    assert_eq!(classify_read_error(&Error::new(ErrorKind::UnexpectedEof, "eof")), ReadErrorKind::Corrupt);
+    assert_eq!(classify_read_error(&Error::new(ErrorKind::PermissionDenied, "io")), ReadErrorKind::Io);
+    assert_eq!(classify_read_error(&Error::other("io")), ReadErrorKind::Io);
+}
+
+#[test]
+fn zero_font_size_units_are_flagged_and_nonzero_are_not() {
+    for unit in ["0em", "0pt", "0rem", "0%", "0px", "0"] {
+        assert_eq!(zero_size_selectors(&format!(".h{{font-size:{unit}}}")).len(), 1, "{unit}");
+    }
+    for value in ["0.5em", "10px", "100%", "1em"] {
+        assert!(zero_size_selectors(&format!(".h{{font-size:{value}}}")).is_empty(), "{value}");
+    }
+    let _: Option<Selector> = None;
+}
+
+#[test]
+fn container_and_opf_are_charged_to_the_budget_once() {
+    // 예산이 container+opf(+mimetype 등) 합보다 약간 넉넉하면 되풀이해 읽지 않으므로 incomplete가 아니다.
+    let base = build(&valid());
+    let total: u64 = {
+        let mut z = zip::ZipArchive::new(std::fs::File::open(base.path()).unwrap()).unwrap();
+        (0..z.len()).map(|i| z.by_index(i).unwrap().size()).sum()
+    };
+    let limits = Limits { max_total: total + 16, ..Limits::default() };
+    let r = scan_with(&valid(), &limits);
     assert!(!r.incomplete, "{:?}", r.reasons);
 }
 
