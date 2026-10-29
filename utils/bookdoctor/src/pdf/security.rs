@@ -32,7 +32,10 @@ const ARRAY_KEEP_LEN: usize = 32;
 /// 훅은 lopdf가 rayon 작업 스레드에서 부르므로(객체 16개 이상이거나 입력 1MiB 이상) 상태를 둘 수 없다. 그래서 배열 하나만 보는
 /// 무상태 규칙이고, 파일 전체의 합계는 읽은 뒤 호출 스레드에서 `LoadInfo`로 센다.
 const REF_ARRAY_KEEP_LEN: usize = 20_000;
-/// 읽은 뒤 센 "남긴 참조 노드" 합계가 이를 넘으면 쪽 트리 판정을 믿지 않고 `incomplete`로 알린다. 표본 최대 쪽 수의 약 180배(노드 약 60MB)다.
+/// 메모리 상한(최악의 경우): 참조 하나는 파일에서 최소 6바이트(`1 0 R `)이고 lopdf 노드(`Object`)는 약 120B라 증폭은 최대 약 20배다.
+/// 배열 하나는 2만 개 x 120B = 약 2.4MB다. 배열 수는 파일 크기가 막지만 크기 한도(`--max-total-mb`)만으로는 참조 폭탄이
+/// 한도 x 20배를 쓸 수 있어 안전하지 않다. 그래서 읽기 전에 원본 참조 수를 세어 이 예산을 넘으면 참조 배열도 비우는 훅을 쓴다.
+/// 예산 안이면 참조 노드는 최대 50만 x 120B = 약 60MB다. 읽은 뒤 센 "남긴 참조 노드" 합계가 이를 넘으면 쪽 트리 판정을 믿지 않고 `incomplete`로 알린다. 표본 최대 쪽 수의 약 180배(노드 약 60MB)다.
 const REF_FILE_BUDGET: usize = 500_000;
 /// 훅이 비운 참조 배열이 들어 있던 자리에 남기는 표지 이름. 진짜 빈 배열과 구별해 읽은 뒤에 찾는다.
 const EMPTIED_REF_ARRAY_MARK: &[u8] = b"PdfscanEmptiedRefArray";
@@ -123,12 +126,12 @@ impl LoadInfo {
     }
 }
 
-fn shrink_array(items: &mut Vec<Object>, depth: usize) {
+fn shrink_array(items: &mut Vec<Object>, depth: usize, keep_refs: bool) {
     // 참조만 든 배열은 쪽 트리(/Kids)와 /Contents 같은 구조 정보다. `/Kids 21 0 R`처럼 배열이 독립 객체일 때는 훅이 키를 모르므로
     // 내용으로 가려야 한다. 비우면 lopdf가 쪽을 하나도 찾지 못해 멀쩡한 PDF가 0쪽이 된다. 그래서 배열당 상한까지는 남기고,
     // 넘으면 비우되 표지를 남겨 읽은 뒤에 알아볼 수 있게 한다.
     if items.len() > ARRAY_KEEP_LEN && items.iter().all(|o| matches!(o, Object::Reference(_))) {
-        if items.len() > REF_ARRAY_KEEP_LEN {
+        if !keep_refs || items.len() > REF_ARRAY_KEEP_LEN {
             *items = vec![Object::Name(EMPTIED_REF_ARRAY_MARK.to_vec())];
         }
         return;
@@ -137,11 +140,11 @@ fn shrink_array(items: &mut Vec<Object>, depth: usize) {
         *items = Vec::new();
         return;
     }
-    items.iter_mut().for_each(|o| shrink(o, depth + 1));
+    items.iter_mut().for_each(|o| shrink_with(o, depth + 1, keep_refs));
 }
 
-fn shrink_dict(d: &mut Dictionary, depth: usize) {
-    d.iter_mut().for_each(|(_, v)| shrink(v, depth + 1));
+fn shrink_dict(d: &mut Dictionary, depth: usize, keep_refs: bool) {
+    d.iter_mut().for_each(|(_, v)| shrink_with(v, depth + 1, keep_refs));
 }
 
 /// 스트림을 어떻게 해석할지 정하는 키. 배열이 길다고 비우면 필터가 사라져서, 인코딩된 JS가 해독되지 않은 채 검사를 빠져나간다.
@@ -172,12 +175,17 @@ const FILTER_ARRAY_TRUNCATED_KEY: &[u8] = b"PdfscanFilterArrayTruncated";
 
 /// 객체 하나를 스캔에 필요한 만큼만 남긴다. 제자리에서 줄인다.
 fn shrink(obj: &mut Object, depth: usize) {
+    shrink_with(obj, depth, true);
+}
+
+/// `keep_refs`가 참이면 참조 전용 배열을 배열당 상한까지 남기고, 거짓이면 32개 초과를 모두 비운다(표지는 남긴다).
+fn shrink_with(obj: &mut Object, depth: usize, keep_refs: bool) {
     if depth > SHRINK_MAX_DEPTH {
         return;
     }
     match obj {
-        Object::Array(items) => shrink_array(items, depth),
-        Object::Dictionary(d) => shrink_dict(d, depth),
+        Object::Array(items) => shrink_array(items, depth, keep_refs),
+        Object::Dictionary(d) => shrink_dict(d, depth, keep_refs),
         Object::Stream(st) => {
             // 객체 스트림과 xref 스트림은 구조 해석에 쓰인다. 훅이 디코딩보다 먼저 돌아서, 자르면 안의 객체를 잃는다.
             let structural = st.dict.has_type(b"ObjStm") || st.dict.has_type(b"XRef");
@@ -199,7 +207,7 @@ fn shrink(obj: &mut Object, depth: usize) {
                     truncated = true;
                     filter_truncated |= k.as_slice() == b"Filter";
                 }
-                shrink(v, depth + 1);
+                shrink_with(v, depth + 1, keep_refs);
             }
             if truncated {
                 st.dict.set(FILTER_TRUNCATED_KEY.to_vec(), Object::Boolean(true));
@@ -215,8 +223,22 @@ fn shrink(obj: &mut Object, depth: usize) {
 /// lopdf 로딩 훅. 객체를 파싱하자마자 줄여서, 문서 전체가 아니라 객체 하나분만 일시적으로 쓴다.
 /// 일반 경로는 제자리 수정한 객체를 그대로 쓰고, 객체 스트림 경로는 반환값을 쓰므로 복제본을 돌려준다(줄인 뒤라 작다).
 fn shrink_on_load(id: ObjectId, obj: &mut Object) -> Option<(ObjectId, Object)> {
-    shrink(obj, 0);
+    shrink_with(obj, 0, true);
     Some((id, obj.clone()))
+}
+
+/// 참조가 너무 많은 파일용 훅. 참조 전용 배열도 32개 초과면 모두 비운다. 훅은 함수 포인터이고 lopdf가 rayon 작업 스레드에서 부르므로
+/// 상태(공유 예산 등)를 둘 수 없다. 그래서 읽기 전에 `load`가 두 훅 중 하나를 고른다. 이 훅이 만든 표지는 `LoadInfo`가 찾는다.
+fn shrink_on_load_strict(id: ObjectId, obj: &mut Object) -> Option<(ObjectId, Object)> {
+    shrink_with(obj, 0, false);
+    Some((id, obj.clone()))
+}
+
+/// 파일 원본에서 `N 0 R` 꼴 참조가 몇 개인지 센다. 압축 객체 스트림 안의 참조는 세지 못한다(해제 한도 `MAX_DECOMPRESSED_STREAM_BYTES`가
+/// 스트림당 따로 막는다). 세는 값은 일반 객체 속 참조 노드 수의 상한에 가깝다.
+fn count_raw_references(data: &[u8]) -> usize {
+    static RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r" 0 R\b").ok());
+    RE.as_ref().map_or(0, |re| re.find_iter(data).count())
 }
 
 // ---------------------------------------------------------------- helpers
@@ -737,9 +759,11 @@ fn scan_document(doc: &Document, report: &mut FileReport) {
 /// PDF를 읽는다. 구문 오류와 파서 panic을 모두 `Err(사유)`로 돌려준다(사유는 정화한다).
 /// `data`에 `%PDF-` 머리가 있는지는 호출자가 이미 확인했다.
 pub fn load(data: &[u8]) -> Result<(Document, LoadInfo), String> {
+    // 참조 수가 예산을 넘는 파일은 참조 배열을 남기지 않는 훅으로 읽는다. 선택은 읽기 전에 끝나므로 스레드·동시 읽기와 무관하다.
+    let hook: lopdf::FilterFunc = if count_raw_references(data) > REF_FILE_BUDGET { shrink_on_load_strict } else { shrink_on_load };
     // A malformed file must not take the whole batch down.
     let parsed = std::panic::catch_unwind(|| {
-        Document::load_mem_with_options(data, LoadOptions { filter: Some(shrink_on_load), max_decompressed_size: Some(MAX_DECOMPRESSED_STREAM_BYTES), ..LoadOptions::default() })
+        Document::load_mem_with_options(data, LoadOptions { filter: Some(hook), max_decompressed_size: Some(MAX_DECOMPRESSED_STREAM_BYTES), ..LoadOptions::default() })
     });
     match parsed {
         Ok(Ok(doc)) => {
@@ -1008,6 +1032,28 @@ mod tests {
             assert_eq!(info, LoadInfo { emptied_ref_array: false, kept_ref_nodes: 40 });
             assert_eq!(doc.get_pages().len(), 40);
         }
+    }
+
+    #[test]
+    fn a_reference_bomb_is_read_with_the_strict_hook_so_peak_memory_stays_bounded() {
+        // 1만 개짜리 배열(배열당 상한 2만 밑) 80개 = 80만 참조는 예산(50만)을 넘는다. 엄격 훅이 모두 비우고 표지를 남긴다.
+        let mut doc = Document::with_version("1.5");
+        for n in 0..80u32 {
+            doc.objects.insert((10 + n, 0), Object::Array((0..10_000).map(|r| Object::Reference((1000 + r, 0))).collect()));
+        }
+        let mut cat = Dictionary::new();
+        cat.set("Type", "Catalog");
+        doc.objects.insert((1, 0), Object::Dictionary(cat));
+        doc.trailer.set("Root", Object::Reference((1, 0)));
+        doc.max_id = 100;
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        assert!(count_raw_references(&bytes) > REF_FILE_BUDGET);
+        let (loaded, info) = load(&bytes).unwrap();
+        assert!(info.emptied_ref_array && info.page_tree_unreliable());
+        assert_eq!(info.kept_ref_nodes, 0);
+        let kept: usize = loaded.objects.values().filter_map(|o| o.as_array().ok()).map(Vec::len).sum();
+        assert!(kept <= 80, "남은 원소 {kept}");
     }
 
     #[test]
