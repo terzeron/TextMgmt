@@ -196,6 +196,44 @@ fn extracting_pages_updates_nested_counts_and_preserves_inherited_resources() {
     }
 }
 
+#[test]
+fn encrypted_pdf_preview_only_contains_the_requested_pages_without_encryption() {
+    use common::pdf::PdfBuilder;
+    use lopdf::{EncryptionState, EncryptionVersion, Permissions};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("encrypted book.pdf");
+    let mut builder = PdfBuilder::new();
+    for width in [200, 300, 400, 500] {
+        let id = builder.add_page(width, 600);
+        builder.content(id, b"q 0 0 20 20 re f Q");
+    }
+    builder.save(&path);
+    let mut source = lopdf::Document::load(&path).unwrap();
+    source.trailer.set("ID", vec![lopdf::Object::string_literal("preview-fixture"), lopdf::Object::string_literal("preview-fixture")]);
+    let state = EncryptionState::try_from(EncryptionVersion::V2 { document: &source, owner_password: "owner", user_password: "", key_length: 128, permissions: Permissions::PRINTABLE }).unwrap();
+    source.encrypt(&state).unwrap();
+    source.save(&path).unwrap();
+
+    let reader = LopdfPageOps.open_reader(&path).unwrap();
+    assert_eq!(reader.page_count, 4);
+    // 암호화 문서는 전체 객체를 reader에 보관하지 않고 필요할 때 파일에서 읽는다.
+    let moved = tmp.path().join("moved.pdf");
+    fs::rename(&path, &moved).unwrap();
+    assert_eq!(LopdfPageOps.extract_pages_from_reader(&reader, 0, 1).unwrap_err().kind, "OSError");
+    fs::rename(&moved, &path).unwrap();
+    assert_eq!(LopdfPageOps.page_count(&path).unwrap(), 4);
+    let bytes = LopdfPageOps.extract_pages_from_reader(&reader, 1, 3).unwrap();
+    let metadata = lopdf::Document::load_metadata_mem(&bytes).unwrap();
+    assert!(!metadata.encrypted);
+    assert_eq!(metadata.page_count, 2);
+    let output = tmp.path().join("preview.pdf");
+    fs::write(&output, bytes).unwrap();
+    assert_eq!(common::pdf::widths(&output), vec![300, 400]);
+    let first = LopdfPageOps.extract_pages(&path, 0, 1).unwrap();
+    assert_eq!(page_count_bytes(&first), 1);
+}
+
 struct CountingPdfPages {
     opens: Arc<AtomicUsize>,
     cached_extracts: Arc<AtomicUsize>,

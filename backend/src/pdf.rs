@@ -144,11 +144,15 @@ pub struct LopdfPageOps;
 
 impl PdfPageOps for LopdfPageOps {
     fn page_count(&self, path: &Path) -> Result<usize, PdfError> {
-        let doc = Document::load(path).map_err(open_error)?;
-        Ok(doc.get_pages().len())
+        let metadata = Document::load_metadata(path).map_err(open_error)?;
+        Ok(metadata.page_count as usize)
     }
 
     fn extract_pages(&self, path: &Path, start: usize, end: usize) -> Result<Vec<u8>, PdfError> {
+        let metadata = Document::load_metadata(path).map_err(open_error)?;
+        if metadata.encrypted {
+            return extract_encrypted_pages(path, start, end.min(metadata.page_count as usize));
+        }
         let mut doc = Document::load(path).map_err(open_error)?;
         extract_document_pages(&mut doc, start, end)?;
         let mut out = Vec::new();
@@ -157,6 +161,12 @@ impl PdfPageOps for LopdfPageOps {
     }
 
     fn open_reader(&self, path: &Path) -> Result<PdfReaderHandle, PdfError> {
+        let metadata = Document::load_metadata(path).map_err(open_error)?;
+        if metadata.encrypted {
+            // 암호화 문서 전체를 해독해 보관하면 작은 파일도 수 GiB로 커질 수 있다.
+            // 쪽수만 보관하고 실제 요청 범위는 Poppler가 파일에서 읽는다.
+            return Ok(PdfReaderHandle::new(path.to_path_buf(), metadata.page_count as usize));
+        }
         let doc = Document::load(path).map_err(open_error)?;
         let page_count = doc.get_pages().len();
         Ok(PdfReaderHandle::with_document(path.to_path_buf(), page_count, Arc::new(doc)))
@@ -172,6 +182,36 @@ impl PdfPageOps for LopdfPageOps {
         doc.save_to(&mut out).map_err(|e| PdfError::new("RuntimeError", e.to_string()))?;
         Ok(out)
     }
+}
+
+fn extract_encrypted_pages(path: &Path, start: usize, end: usize) -> Result<Vec<u8>, PdfError> {
+    use sysdeps::{CommandRunner, SystemRunner};
+
+    if start >= end {
+        return Err(PdfError::new("RuntimeError", "Invalid PDF page range"));
+    }
+    // 운영 이미지에 포함된 Poppler로 지정 범위만 PDF로 출력한다. 벡터와
+    // 텍스트를 유지하고 자식 프로세스의 메모리·실행 시간도 제한한다.
+    let args = [
+        "prlimit".to_string(),
+        "--as=536870912".to_string(),
+        "--cpu=25".to_string(),
+        "--".to_string(),
+        "pdftocairo".to_string(),
+        "-pdf".to_string(),
+        "-origpagesizes".to_string(),
+        "-f".to_string(),
+        (start + 1).to_string(),
+        "-l".to_string(),
+        end.to_string(),
+        path.to_string_lossy().into_owned(),
+        "-".to_string(),
+    ];
+    let output = SystemRunner.run(&args, Some(std::time::Duration::from_secs(30))).map_err(|e| PdfError::new("RuntimeError", e.to_string()))?;
+    if output.returncode != 0 {
+        return Err(PdfError::new("RuntimeError", format!("PDF page conversion failed: {}", String::from_utf8_lossy(&output.stderr).trim())));
+    }
+    Ok(output.stdout)
 }
 
 fn extract_document_pages(doc: &mut Document, start: usize, end: usize) -> Result<(), PdfError> {
