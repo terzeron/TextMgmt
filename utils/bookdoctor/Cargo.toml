@@ -27,6 +27,10 @@ name = "epub_render"
 path = "../../tests/rust/bookdoctor/epub_render.rs"
 
 [[test]]
+name = "epub_security_hardening"
+path = "../../tests/rust/bookdoctor/epub_security_hardening.rs"
+
+[[test]]
 name = "epub_structure"
 path = "../../tests/rust/bookdoctor/epub_structure.rs"
 

@@ -4,6 +4,7 @@
 //! "지표 없음"은 안전하다는 보증이 아니다. 한도(`Limits`)를 넘어 못 본 부분은 `notes`에 남기고
 //! 상태를 `INCOMPLETE`로 표시한다.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -154,6 +155,14 @@ fn is_executable_script_type(ty: &str) -> bool {
 }
 
 const URL_ATTRS: &[&str] = &["href", "src", "action", "formaction", "xlink:href", "background", "poster", "data", "codebase", "manifest", "ping"];
+/// 보안 리뷰 지적(접두사 우회): XLink 등 네임스페이스를 다른 접두사(`x:href`)에 묶으면 리터럴 비교를 피한다.
+/// 접두사를 뗀 로컬 이름으로도 URL 속성을 알아본다. `URL_ATTRS`의 로컬 이름과 같은 집합이다.
+const URL_ATTR_LOCALS: &[&str] = &["href", "src", "action", "formaction", "background", "poster", "data", "codebase", "manifest", "ping"];
+
+/// 속성 이름에서 접두사를 뗀 로컬 이름(마지막 `:` 뒤).
+fn attr_local(name: &str) -> &str {
+    name.rsplit(':').next().unwrap_or(name)
+}
 
 // ---------------------------------------------------------------- 정규식
 
@@ -302,6 +311,27 @@ fn condition_context(before: &str) -> bool {
     })
 }
 
+/// 보안 리뷰 지적(data: 전면 허용): 정규화된 `data:` URL의 MIME이 마크업·SVG·XML·스크립트면 실행 가능한 문서다.
+/// 기존 `data:text/html`·`data:application/xhtml` 규칙에 더해 같은 코드·심각도로 잡는다.
+fn is_active_data_url(n: &str) -> bool {
+    let Some(rest) = n.strip_prefix("data:") else { return false };
+    let mime = rest.split([';', ',']).next().unwrap_or("");
+    matches!(
+        mime,
+        "text/html" | "application/xhtml+xml" | "image/svg+xml" | "text/xml" | "application/xml" | "text/javascript" | "application/javascript" | "application/x-javascript"
+    ) || mime.ends_with("+xml")
+}
+
+/// 프레임·object·embed에 넣는 `data:` URL은 알려진 이미지(svg 제외)나 폰트가 아니면 문서로 로드될 수 있다.
+fn is_non_media_data_url(value: &str) -> bool {
+    let n = normalize_url(value);
+    let Some(rest) = n.strip_prefix("data:") else { return false };
+    let mime = rest.split([';', ',']).next().unwrap_or("");
+    let image = matches!(mime, "image/png" | "image/jpeg" | "image/gif" | "image/webp");
+    let font = mime.starts_with("font/") || mime.starts_with("application/font-") || mime.starts_with("application/x-font-") || mime == "application/vnd.ms-fontobject";
+    !(image || font)
+}
+
 fn classify_url(value: &str) -> UrlKind {
     let decoded = decode_entities(value);
     let trimmed = decoded.trim();
@@ -309,7 +339,7 @@ fn classify_url(value: &str) -> UrlKind {
         return UrlKind::Unc;
     }
     let n = normalize_url(value);
-    if n.starts_with("javascript:") || n.starts_with("vbscript:") || n.starts_with("data:text/html") || n.starts_with("data:application/xhtml") {
+    if n.starts_with("javascript:") || n.starts_with("vbscript:") || n.starts_with("data:text/html") || n.starts_with("data:application/xhtml") || is_active_data_url(&n) {
         return UrlKind::Script;
     }
     if n.starts_with("//") {
@@ -370,6 +400,14 @@ impl Scanner {
 
     fn partial(&mut self, location: &str, msg: &str) {
         let note = safe(&format!("{location}: {msg}"));
+        if !self.notes.contains(&note) {
+            self.notes.push(note);
+        }
+    }
+
+    /// `partial`과 달리 `위치: ` 접두사 없이 문구 그대로 남긴다. 같은 문구는 한 번만 쌓는다.
+    fn incomplete(&mut self, msg: &str) {
+        let note = safe(msg);
         if !self.notes.contains(&note) {
             self.notes.push(note);
         }
@@ -520,12 +558,19 @@ impl Scanner {
             )
         };
         for (k, v) in &tag.attrs {
-            if URL_ATTRS.contains(&k.as_str()) {
-                let resource = rel_resource(k);
+            // 리터럴 철자(`xlink:href` 포함)는 예전 그대로이고, 그 밖의 접두사는 로컬 이름으로 같은 검사를 받는다.
+            let local = attr_local(k);
+            let literal = URL_ATTRS.contains(&k.as_str());
+            if literal || URL_ATTR_LOCALS.contains(&local) {
+                let resource = rel_resource(if literal { k } else { local });
                 if k == "src" && t == "script" {
                     continue;
                 }
                 self.url_attr(t, k, v, name, resource);
+                // 보안 리뷰 지적: 프레임·object·embed의 data: URL은 이미지·폰트가 아니면 문서로 열린다.
+                if matches!(t, "frame" | "iframe" | "object" | "embed") && matches!(local, "src" | "data") && is_non_media_data_url(v) {
+                    self.add(Severity::High, "JS_URL", name, &format!("{t} {k}: data URL embeds non-image content"));
+                }
             }
         }
         match t {
@@ -583,7 +628,8 @@ impl Scanner {
             "foreignobject" => self.add(Severity::Medium, "SVG_FOREIGN_OBJECT", name, "foreignObject embeds HTML in SVG"),
             "animate" | "set" | "animatetransform" | "animatemotion" => {
                 let target = tag.attr("attributename").unwrap_or("").to_lowercase();
-                if target == "href" || target == "xlink:href" {
+                // 보안 리뷰 지적: `x:href`처럼 접두사가 달라도 href 재작성이다. 예전 두 철자는 이 조건에 그대로 든다.
+                if attr_local(&target) == "href" {
                     self.add(Severity::Medium, "SVG_ANIMATE_HREF", name, "animation rewrites href");
                     for key in ["to", "values", "from"] {
                         if let Some(v) = tag.attr(key).filter(|v| classify_url(v) == UrlKind::Script) {
@@ -691,6 +737,78 @@ fn extension(name: &str) -> String {
     base.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default()
 }
 
+/// 마크업 바이트를 어떻게 읽었는지.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextEnc {
+    /// UTF-8(BOM 유무 무관). 예전과 같다.
+    Utf8,
+    /// UTF-16을 BOM이나 NUL 교차로 알아보고 변환했다.
+    Utf16,
+    /// UTF-32 BOM. encoding_rs가 지원하지 않아 변환하지 못한다.
+    Utf32,
+    /// BOM 없는 UTF-8이 아닌 바이트. 대체 문자(U+FFFD)로 읽었다.
+    Invalid,
+}
+
+/// BOM 없는 UTF-16 추정: 앞 64바이트에서 (비NUL, NUL) 쌍이 4분의 3 이상이면 LE, (NUL, 비NUL) 쌍이면 BE다.
+/// 단순한 휴리스틱이다. XHTML·XML은 ASCII 표식으로 시작하므로 이 정도로 충분하다.
+fn bomless_utf16(data: &[u8]) -> Option<bool> {
+    let head = &data[..data.len().min(64)];
+    let pairs = head.chunks_exact(2).len();
+    if pairs < 2 {
+        return None;
+    }
+    let le = head.chunks_exact(2).filter(|p| p[0] != 0 && p[1] == 0).count();
+    let be = head.chunks_exact(2).filter(|p| p[0] == 0 && p[1] != 0).count();
+    if le * 4 >= pairs * 3 {
+        Some(true)
+    } else if be * 4 >= pairs * 3 {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// 보안 리뷰 지적(from_utf8_lossy): UTF-16 마크업은 모든 정규식을 피해 간다. BOM·NUL 교차로 UTF-16을 알아봐 변환한다.
+/// UTF-8 BOM은 호출부가 예전처럼 벗긴다.
+fn decode_text(data: &[u8]) -> (Cow<'_, str>, TextEnc) {
+    if data.starts_with(&[0xFF, 0xFE, 0, 0]) || data.starts_with(&[0, 0, 0xFE, 0xFF]) {
+        return (String::from_utf8_lossy(data), TextEnc::Utf32);
+    }
+    if let Some(rest) = data.strip_prefix(&[0xFF, 0xFE]) {
+        return (encoding_rs::UTF_16LE.decode_without_bom_handling(rest).0, TextEnc::Utf16);
+    }
+    if let Some(rest) = data.strip_prefix(&[0xFE, 0xFF]) {
+        return (encoding_rs::UTF_16BE.decode_without_bom_handling(rest).0, TextEnc::Utf16);
+    }
+    if let Some(le) = bomless_utf16(data) {
+        let enc = if le { encoding_rs::UTF_16LE } else { encoding_rs::UTF_16BE };
+        return (enc.decode_without_bom_handling(data).0, TextEnc::Utf16);
+    }
+    match std::str::from_utf8(data) {
+        Ok(t) => (Cow::Borrowed(t), TextEnc::Utf8),
+        Err(_) => (String::from_utf8_lossy(data), TextEnc::Invalid),
+    }
+}
+
+/// 선검사용 읽기. 남은 전체 예산과 `cap` 중 작은 쪽 +1바이트까지만 읽고, 읽은 바이트를 `spent`에 더한다.
+/// 보안 리뷰 지적(선검사가 예산 밖): 예산이 바닥났거나 넘기면 `budget_skipped`로 한 번의 사유가 되게 한다.
+fn read_budgeted(zip: &mut Zip, index: usize, cap: u64, limits: &Limits, spent: &mut u64, s: &mut Scanner) -> Option<Vec<u8>> {
+    let remaining = limits.max_total.saturating_sub(*spent);
+    if remaining == 0 {
+        s.budget_skipped += 1;
+        return None;
+    }
+    let bound = cap.min(remaining);
+    let mut data = read_limited(zip, index, bound).ok()?;
+    if remaining <= cap && data.len() as u64 > remaining {
+        data.truncate(remaining as usize);
+        s.budget_skipped += 1;
+    }
+    *spent += (data.len() as u64).min(remaining);
+    Some(data)
+}
+
 fn read_limited(zip: &mut Zip, index: usize, limit: u64) -> Result<Vec<u8>, String> {
     let entry = zip.by_index(index).map_err(|e| e.to_string())?;
     // 선언 크기만큼 미리 잡는다. 비워 두고 읽으면 read_to_end가 용량을 두 배씩 늘려 최대 2배를 쓴다. 선언이 거짓이어도 상한까지만 잡는다.
@@ -700,11 +818,11 @@ fn read_limited(zip: &mut Zip, index: usize, limit: u64) -> Result<Vec<u8>, Stri
 }
 
 /// 패키지 문서 이름들: `.opf` 확장자이거나 container.xml의 rootfile이 가리키는 파일.
-fn package_documents(zip: &mut Zip, names: &[String], limits: &Limits) -> HashSet<String> {
+fn package_documents(zip: &mut Zip, names: &[String], limits: &Limits, spent: &mut u64, s: &mut Scanner) -> HashSet<String> {
     let mut found: HashSet<String> = names.iter().filter(|n| n.to_lowercase().ends_with(".opf")).cloned().collect();
     if let Some(i) = names.iter().position(|n| n == "META-INF/container.xml")
-        && let Ok(data) = read_limited(zip, i, limits.max_member.min(5 * 1024 * 1024))
-        && let Ok(doc) = roxmltree::Document::parse_with_options(&String::from_utf8_lossy(&data), roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
+        && let Some(data) = read_budgeted(zip, i, limits.max_member.min(5 * 1024 * 1024), limits, spent, s)
+        && let Ok(doc) = roxmltree::Document::parse_with_options(&decode_text(&data).0, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
     {
         for root in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "rootfile") {
             let path = posix_normpath(&unquote(root.attribute("full-path").unwrap_or("")));
@@ -774,7 +892,9 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
     if csize > 0 && size / csize > 200 && size > 1024 * 1024 {
         s.add(Severity::Medium, "HIGH_COMPRESSION_RATIO", name, "Potential decompression bomb");
     }
-    let data = match read_limited(zip, index, limits.max_member) {
+    // 보안 리뷰 지적(선언 크기 신뢰): 읽기는 멤버 상한과 남은 예산 중 작은 쪽 +1바이트에서 멈춘다.
+    let bound = limits.max_member.min(budget);
+    let data = match read_limited(zip, index, bound) {
         Ok(d) => d,
         Err(e) => {
             s.partial(name, &format!("Could not decompress/check CRC: {e}"));
@@ -782,11 +902,22 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
         }
     };
 
+    // 실제로 푼 바이트로도 압축비를 본다. 선언이 거짓으로 작아도 놓치지 않는다. 같은 (코드, 위치)는 add가 합친다.
+    let actual = data.len() as u64;
+    if csize > 0 && actual / csize > 200 && actual > 1024 * 1024 {
+        s.add(Severity::Medium, "HIGH_COMPRESSION_RATIO", name, "Potential decompression bomb");
+    }
+
     // 헤더가 거짓으로 작은 크기를 적어도 읽기는 상한에서 멈춘다. 상한을 넘겼다면 뒤쪽을 못 본 것이다.
     let mut data = data;
-    if data.len() as u64 > limits.max_member {
-        data.truncate(limits.max_member as usize);
-        s.partial(name, "Member is larger than its declared size; only the first part was inspected");
+    if data.len() as u64 > bound {
+        data.truncate(bound as usize);
+        if bound < limits.max_member {
+            // 남은 예산이 바닥난 것이다. 멤버마다 노트를 달지 않고 한 번의 사유로 모은다.
+            s.budget_skipped += 1;
+        } else {
+            s.partial(name, "Member is larger than its declared size; only the first part was inspected");
+        }
     }
 
     let ext = extension(name);
@@ -803,7 +934,18 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
     let kind = declared.map_or(ext_kind, |(_, k)| k);
     check_magic(s, &data, name, &ext, kind != Kind::Other || ext == "txt");
 
-    let text = String::from_utf8_lossy(&data);
+    let (text, enc) = decode_text(&data);
+    if kind != Kind::Other {
+        match enc {
+            // 숨은 내용을 볼 수 없으니 지표로 남긴다. 예전처럼 대체 문자 텍스트 검사는 계속한다.
+            TextEnc::Utf32 => {
+                s.add(Severity::Medium, "MARKUP_UNDECODABLE", name, "UTF-32 content cannot be inspected");
+                s.incomplete(&format!("unsupported encoding utf-32: {name}"));
+            }
+            TextEnc::Invalid if matches!(kind, Kind::Html | Kind::Xml) => s.incomplete(&format!("non-utf8 markup: {name}")),
+            _ => {}
+        }
+    }
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     match kind {
         Kind::Html => s.scan_html(text, name),
@@ -909,19 +1051,21 @@ fn scan_epub_unguarded(path: &Path, limits: &Limits, s: &mut Scanner, stats: &mu
             }
 
             // 매니페스트를 먼저 읽는다. 선언된 media-type으로 각 멤버를 어떻게 읽을지 정해야 하기 때문이다.
-            let opf_names = package_documents(&mut zip, &names, limits);
-            for (i, name) in names.iter().enumerate() {
+            // 선검사 읽기도 같은 전체 예산에서 빼고(`prepass`), 항목 수는 max_files로 자른다.
+            let mut prepass = 0u64;
+            let opf_names = package_documents(&mut zip, &names, limits, &mut prepass, s);
+            for (i, name) in names.iter().enumerate().take(limits.max_files) {
                 if opf_names.contains(name)
-                    && let Ok(data) = read_limited(&mut zip, i, limits.max_member)
+                    && let Some(data) = read_budgeted(&mut zip, i, limits.max_member, limits, &mut prepass, s)
                 {
-                    s.scan_opf(&String::from_utf8_lossy(&data), name);
+                    s.scan_opf(&decode_text(&data).0, name);
                 }
             }
             for (i, name) in names.iter().enumerate().take(limits.max_files) {
                 if name.ends_with('/') {
                     continue;
                 }
-                inspected += check_member(s, &mut zip, i, name, limits, limits.max_total.saturating_sub(inspected), &opf_names);
+                inspected += check_member(s, &mut zip, i, name, limits, limits.max_total.saturating_sub(prepass + inspected), &opf_names);
             }
             if s.budget_skipped > 0 {
                 let skipped = s.budget_skipped;
