@@ -181,7 +181,8 @@ bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N]
 
 ## 9. 검증 기준
 
-- 같은 코퍼스 스냅샷에서 새 도구가 기존 결과를 재현한다. 알려진 기준은 EPUB 손상 58건(63,282건 중), PDF 손상 34건(21,150건 중), 인코딩 손상 255건(`0_broken`에 격리됨)이다.
+- 기존 도구 출력과의 동등성(코퍼스 표본): EPUB 구조는 `tmp/epub_structure_report*.json`의 flagged 목록을 `epubscan structure`와, EPUB·PDF 보안은 무작위 표본을 `epubscan scan`·`pdfscan`과, 인코딩 손상은 표본을 `detect_mojibake`와 비교한다. 옛 도구가 잡은 항목은 대응 코드로 모두 잡혀야 한다.
+- 손상 기준(새 검사의 재현율): EPUB 손상 58건(63,282건 중)과 PDF 손상 34건(21,150건 중)은 기존 세 도구의 출력이 아니라 2026-08의 별도 전수 스캔(tail 검사·pypdfium2) 결과다. 새 도구가 남아 있는 목록(`/home/terzeron/tmp/redownload_list.txt` PDF 26건, `tmp/epub_redownload_20261022.txt` EPUB 5건)의 파일을 `defect` 또는 `incomplete`로 모두 잡는지 확인한다. 인코딩 손상 255건은 `0_broken`이 마운트되어 있을 때만 비교한다.
 - 기존 세 도구의 테스트가 모두 이식되어 통과한다. 이식하지 못한 테스트가 있으면 이유를 적는다.
 - 새 검사(§6의 "신규")는 테스트를 먼저 쓴다. 커버리지는 100%에 가깝게 유지한다(프로젝트 규칙).
 - `cargo test --workspace`와 `cargo clippy --workspace --all-targets`가 통과한다.
