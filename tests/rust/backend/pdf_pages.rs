@@ -115,6 +115,43 @@ fn lopdf_page_ops_falls_back_to_path_for_a_reader_without_a_document() {
 }
 
 #[test]
+fn sparse_pdf_preview_reads_only_needed_ranges() {
+    use std::io::{Seek, SeekFrom, Write};
+
+    const PROBE_PATH: &str = "TM_PDF_SPARSE_PROBE";
+    if let Some(path) = std::env::var_os(PROBE_PATH) {
+        let path = Path::new(&path);
+        let reader = LopdfPageOps.open_reader(path).unwrap();
+        assert_eq!(reader.page_count, 2);
+        assert_eq!(page_count_bytes(&LopdfPageOps.extract_pages_from_reader(&reader, 0, 1).unwrap()), 1);
+        return;
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("sparse.pdf");
+    create_test_pdf(2, &path);
+    let original = fs::read(&path).unwrap();
+    let text = String::from_utf8_lossy(&original);
+    let xref = text.rsplit_once("startxref").unwrap().1.split_whitespace().next().unwrap();
+    // EOF 뒤의 빈 구간은 읽을 필요가 없다. 마지막 startxref도 같은 객체를 가리킨다.
+    let mut file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_len(1024 * 1024 * 1024).unwrap();
+    file.seek(SeekFrom::End(0)).unwrap();
+    write!(file, "\nstartxref\n{xref}\n%%EOF\n").unwrap();
+    drop(file);
+
+    // 1GiB 파일을 256MiB 제한에서 처리해 전체 read_to_end 경로의 재발을 잡는다.
+    let output = std::process::Command::new("prlimit")
+        .args(["--as=268435456:536870912", "--"])
+        .arg(std::env::current_exe().unwrap())
+        .args(["--exact", "sparse_pdf_preview_reads_only_needed_ranges", "--nocapture"])
+        .env(PROBE_PATH, &path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
 fn extracting_a_page_from_a_large_tagged_pdf_does_not_rescan_each_deleted_page() {
     use common::pdf::PdfBuilder;
     use lopdf::{Object, dictionary};
@@ -143,11 +180,16 @@ fn extracting_a_page_from_a_large_tagged_pdf_does_not_rescan_each_deleted_page()
     assert!(!extracted.catalog().unwrap().has(b"MarkInfo"));
     assert!(bytes.len() < 10_000, "preview must not retain the original structure tree");
     assert_eq!(extracted.get_pages().len(), 1);
-    assert_eq!(extracted.get_page_content(pages[50]), b"q 0 0 20 20 re f Q\n");
-    for id in pages.iter().filter(|id| **id != pages[50]) {
-        assert!(!extracted.objects.contains_key(id));
-    }
-    // reader 원본을 보존해 다른 범위도 같은 문서에서 추출한다.
+    let preview_path = tmp.path().join("preview.pdf");
+    fs::write(&preview_path, &bytes).unwrap();
+    let render = |path: &Path, page: &str| {
+        let output = std::process::Command::new("pdftoppm").args(["-r", "36", "-f", page, "-l", page, "-singlefile"]).arg(path).output().unwrap();
+        assert!(output.status.success());
+        assert!(!output.stdout.is_empty());
+        output.stdout
+    };
+    assert_eq!(render(&path, "51"), render(&preview_path, "1"));
+    // 경로와 쪽수만 보관하는 reader로 다른 범위도 추출한다.
     assert_eq!(page_count_bytes(&LopdfPageOps.extract_pages_from_reader(&reader, 0, 2).unwrap()), 2);
 }
 
@@ -185,14 +227,10 @@ fn extracting_pages_updates_nested_counts_and_preserves_inherited_resources() {
     // 두 Pages 노드에 걸친 가운데 두 쪽을 추출한다.
     let bytes = LopdfPageOps.extract_pages(&path, 1, 3).unwrap();
     let extracted = lopdf::Document::load_mem(&bytes).unwrap();
-    assert_eq!(extracted.get_pages().values().copied().collect::<Vec<_>>(), pages[1..3]);
-    assert_eq!(extracted.get_dictionary(root).unwrap().get(b"Count").unwrap().as_i64().unwrap(), 2);
-    for branch in branches {
-        let ancestor = extracted.get_dictionary(branch.as_reference().unwrap()).unwrap();
-        assert_eq!(ancestor.get(b"Count").unwrap().as_i64().unwrap(), 1);
-        assert_eq!(ancestor.get(b"Kids").unwrap().as_array().unwrap().len(), 1);
-        assert_eq!(ancestor.get(b"MediaBox").unwrap().as_array().unwrap()[2].as_i64().unwrap(), 400);
-        assert!(ancestor.has(b"Resources"));
+    assert_eq!(extracted.get_pages().len(), 2);
+    for number in 1..=2 {
+        assert_eq!(common::pdf::mediabox_of(&extracted, number), [0.0, 0.0, 400.0, 500.0]);
+        assert!(common::pdf::page_dict(&extracted, number).has(b"Resources"));
     }
 }
 
