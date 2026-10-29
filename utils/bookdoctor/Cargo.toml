@@ -19,6 +19,14 @@ name = "common_checks"
 path = "../../tests/rust/bookdoctor/common_checks.rs"
 
 [[test]]
+name = "epub_gaps"
+path = "../../tests/rust/bookdoctor/epub_gaps.rs"
+
+[[test]]
+name = "epub_security"
+path = "../../tests/rust/bookdoctor/epub_security.rs"
+
+[[test]]
 name = "report"
 path = "../../tests/rust/bookdoctor/report.rs"
 
