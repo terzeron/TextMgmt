@@ -185,6 +185,11 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   --no-poppler        poppler 외부 명령을 쓰지 않는다.
   -h, --help          이 도움말
 
+주의:
+  회전 디스크(HDD)에서는 워커 2개가 빠르고 8개는 오히려 느리다. 기본 메모리 상한(256MB)에서는 워커가 1개가 된다.
+  PDF는 프로세스 안에서 메모리를 제한하지 못한다. 압축 객체 스트림(ObjStm)이 많은 PDF 하나가 RSS 2GB까지 쓴 것을 측정했고
+  종료 코드는 0이다. 바깥에서 한도를 걸어 실행하라: systemd-run --user -p MemoryMax=4G bookdoctor ...
+
 종료 코드:
   0 지표 없음, 1 지표 있음, 2 검사하지 못한 파일이 있고 지표는 없음 또는 잘못된 인자
 "

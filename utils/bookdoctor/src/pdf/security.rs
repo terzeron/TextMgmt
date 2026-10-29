@@ -242,8 +242,10 @@ fn shrink_on_load_strict(id: ObjectId, obj: &mut Object) -> Option<(ObjectId, Ob
 ///
 /// 한계(압축 객체 스트림): 스트림 안의 참조는 압축돼 있어 세지 못하고, 안쪽 객체도 훅을 거치지만 31개 이하 참조 배열은 두 훅 모두
 /// 남긴다. 해제 한도(`MAX_DECOMPRESSED_STREAM_BYTES`, 4MiB)는 스트림 하나에만 걸린다. 4MiB 스트림은 압축하면 수 KB라 그런 스트림
-/// 하나가 참조 약 70만 개, 노드 약 80MB를 남긴다. 남은 노드는 `doc.objects`에 문서 수명 내내 유지되고 `/ObjStm` 개수 상한이 없으므로
-/// 최악은 약 80MB × ObjStm 개수이며, 프로세스 안에는 이를 막는 한도가 없다. 이는 예전 PDF 검사 도구와 같은 동작이다(Ruling R20).
+/// 하나가 참조 약 70만 개를 남기고(노드만 세면 약 80MB), 실측으로는 ObjStm 하나당 RSS가 약 200MB였다(합성 PDF: ObjStm 10개,
+/// 31개짜리 배열 50만 개, 파일 3.7MB가 RSS 2.0GB이고 보고는 `normal`, 종료 코드 0). 노드 외 할당자 오버헤드와 파싱 중간 사본이 더해진
+/// 값이다. 일반 PDF도 31개짜리 숫자 배열 20만 개(21MB)가 RSS 849MB를 썼고 `normal`이었다. 남은 노드는 `doc.objects`에 문서
+/// 수명 내내 유지되고 `/ObjStm` 개수 상한이 없으므로 최악은 약 200MB × ObjStm 개수이며, 프로세스 안에는 이를 막는 한도가 없다. 이는 예전 PDF 검사 도구와 같은 동작이다(Ruling R20).
 /// 작업자 수 상한은 문서 하나의 메모리를 막지 못하고, 외부 메모리 한도(cgroup/ulimit)만 막는다. `/ObjStm` 개수로 훅을 고르면
 /// ObjStm를 쓰는 현대 PDF 대부분이 엄격 훅이 되어 긴 /Kids가 모두 비워지므로(오탐성 incomplete) 하지 않는다.
 fn count_raw_references(data: &[u8]) -> usize {

@@ -54,3 +54,13 @@ fn usage_explains_the_memory_cap_on_workers() {
     let text = String::from_utf8(out).unwrap();
     assert!(text.contains("256 / max-total-mb"), "{text}");
 }
+
+#[test]
+fn usage_advises_external_memory_limit_and_worker_choice() {
+    let mut out = Vec::new();
+    print_usage(&mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("MemoryMax"), "{text}");
+    assert!(text.contains("워커 2개가 빠르고 8개는 오히려 느리다"), "{text}");
+    assert!(text.contains("워커가 1개"), "{text}");
+}

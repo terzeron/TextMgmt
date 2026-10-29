@@ -1886,7 +1886,7 @@ Task 16이 찾은 오탐 세 가지를 원인부터 고쳤다. 수정은 PDF, EP
 진짜 발견은 바뀌지 않았다. `Launch action`, `SCRIPT_TAG`, `ACTIVE_ELEMENT`, `INVALID_UTF8`, `NOT_UTF8`은 수정 전후가 같다.
 수정 내용은 다음과 같다.
 
-- PDF: 참조로만 된 배열은 배열당 100,000개, 파일당 500,000개(`REF_FILE_BUDGET`)까지 hook이 유지한다. 예산을 넘으면 엄격 hook으로 바꾸고 쪽 트리를 `incomplete`로 표시한다.
+- PDF: 참조로만 된 배열은 배열당 20,000개(`REF_ARRAY_KEEP_LEN`)까지 hook이 유지하고, 파일 전체는 원본 참조 500,000개(`REF_FILE_BUDGET`)를 넘으면 엄격 hook을 쓴다. 남긴 노드가 예산을 넘거나 hook이 배열을 비웠으면 쪽 트리를 `incomplete`로 표시한다.
   hook이 비운 배열이 있으면 `ZERO_PAGES`를 `High`로 내지 않고 `incomplete`로 낸다.
 - EPUB: XHTML 1.x DOCTYPE을 선언한 문서가 첫 파싱에 실패하면 이름 있는 엔티티 248개를 숫자 참조로 바꿔 한 번 더 파싱한다. 보안 파싱 경로는 그대로다.
 - TXT: 제어 문자(NUL 포함)가 문자 수의 1%를 넘을 때만 `BINARY_CONTENT`를 낸다.
@@ -1904,7 +1904,7 @@ lopdf load hook은 ObjStm 안의 배열을 문서 수명 동안 `doc.objects`에
 | ObjStm 10개, 31개짜리 배열 50만 개, 파일 3.7MB | 2.0GB | `normal`, 종료 코드 0 |
 | 일반 PDF 21MB, 31개짜리 숫자 배열 20만 개 | 849MB | `normal` |
 
-ObjStm 하나당 약 200MB다. 앞 수정 라운드의 "스트림당 약 80MB" 추정은 낮았다. `--workers` 상한은 한 문서의 사용량을 줄이지 못한다.
+ObjStm 하나당 약 200MB다. 앞 수정 라운드의 "스트림당 노드 약 80MB" 추정은 노드만 센 값이라 실측보다 낮았다. `--workers` 상한은 한 문서의 사용량을 줄이지 못한다.
 메모리 한도는 바깥에서 건다(`systemd-run --user -p MemoryMax=...`). 옛 `pdfscan`도 같은 한계였다.
 
 ### 9절 이식하지 못한 옛 테스트
