@@ -466,3 +466,39 @@ fn real_poppler_smoke_when_installed() {
     let r = scan_file(f.path(), &Options::default());
     assert_absent(&r, "POPPLER_OPEN_FAILED");
 }
+
+// ---- 긴 /Kids 배열 (실제 load 경로, 객체 16개 이상이라 lopdf가 rayon으로 읽는다) ----
+
+fn pdf_bytes_with_kids(kids: u32) -> Vec<u8> {
+    let mut doc = doc_with_pages((0..kids).map(|n| Object::Reference((10 + n, 0))).collect());
+    for n in 0..kids {
+        let mut page = Dictionary::new();
+        page.set("Type", "Page");
+        page.set("Parent", Object::Reference((2, 0)));
+        doc.objects.insert((10 + n, 0), Object::Dictionary(page));
+    }
+    doc.max_id = 10 + kids;
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    bytes
+}
+
+#[test]
+fn oversized_kids_array_is_incomplete_not_zero_pages_through_the_real_load() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("big.pdf");
+    fs::write(&p, pdf_bytes_with_kids(25_000)).unwrap();
+    let r = scan_file(&p, &opts());
+    assert_absent(&r, "ZERO_PAGES");
+    assert!(r.incomplete, "{r:?}");
+}
+
+#[test]
+fn normal_kids_array_through_the_real_load_is_complete() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("ok.pdf");
+    fs::write(&p, pdf_bytes_with_kids(100)).unwrap();
+    let r = scan_file(&p, &opts());
+    assert_absent(&r, "ZERO_PAGES");
+    assert!(!r.incomplete, "{r:?}");
+}
