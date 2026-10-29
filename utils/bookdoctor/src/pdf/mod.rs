@@ -34,13 +34,17 @@ pub fn scan_pdf_file_with(path: &Path, opts: &Options, report: &mut FileReport, 
     if !security::has_header(&data) {
         // 구문 분석을 시도하지 않으므로 보안 검사도 하지 못했다. 그 사실은 incomplete로 남긴다.
         report.mark_incomplete("no %PDF- header");
-        structure::inspect_with(&data, None, None, path, opts, report, runner);
+        structure::inspect_with(&data, None, security::LoadInfo::default(), None, path, opts, report, runner);
         return;
     }
-    let (doc, error) = match security::load(&data) {
-        Ok(doc) => (Some(doc), None),
-        Err(e) => (None, Some(e)),
+    let (doc, info, error) = match security::load(&data) {
+        Ok((doc, info)) => (Some(doc), info, None),
+        Err(e) => (None, security::LoadInfo::default(), Some(e)),
     };
+    if info.page_tree_unreliable() {
+        // 훅이 긴 참조 배열을 비웠거나 남긴 참조 배열의 합이 예산을 넘었다. 쪽 트리와 보안 검사가 일부만 본 것이다.
+        report.mark_incomplete("long reference arrays were emptied or exceed the file budget; page tree may be partial");
+    }
     security::scan_loaded(&data, doc.as_ref(), report);
-    structure::inspect_with(&data, doc.as_ref(), error.as_deref(), path, opts, report, runner);
+    structure::inspect_with(&data, doc.as_ref(), info, error.as_deref(), path, opts, report, runner);
 }

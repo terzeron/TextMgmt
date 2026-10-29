@@ -17,7 +17,7 @@ use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 
 use crate::cli::Options;
 use crate::epub::security::guarded;
-use crate::pdf::security::has_header;
+use crate::pdf::security::{LoadInfo, has_header};
 
 /// 머리·꼬리 표지를 찾는 구간. 뷰어도 앞 1024바이트 안에서 `%PDF-`를 찾는다(pdf.js `find("%PDF-", 1024)`).
 const MARKER_WINDOW: usize = 1024;
@@ -107,12 +107,13 @@ fn mentions_password(msg: &str) -> bool {
 }
 
 /// 운영용 진입점. `SystemRunner`로 Poppler를 부른다.
-pub fn inspect(data: &[u8], doc: Option<&Document>, parse_error: Option<&str>, path: &Path, opts: &Options, report: &mut FileReport) {
-    inspect_with(data, doc, parse_error, path, opts, report, &SystemRunner);
+pub fn inspect(data: &[u8], doc: Option<&Document>, info: LoadInfo, parse_error: Option<&str>, path: &Path, opts: &Options, report: &mut FileReport) {
+    inspect_with(data, doc, info, parse_error, path, opts, report, &SystemRunner);
 }
 
 /// `inspect`에 Poppler 실행기를 주입한다.
-pub fn inspect_with(data: &[u8], doc: Option<&Document>, parse_error: Option<&str>, path: &Path, opts: &Options, report: &mut FileReport, runner: &dyn CommandRunner) {
+#[allow(clippy::too_many_arguments, reason = "Poppler 실행기 주입과 읽기 정보를 함께 받는 한 곳뿐인 진입점이라 묶음 타입을 만들지 않았다")]
+pub fn inspect_with(data: &[u8], doc: Option<&Document>, info: LoadInfo, parse_error: Option<&str>, path: &Path, opts: &Options, report: &mut FileReport, runner: &dyn CommandRunner) {
     let header = has_header(data);
     if !header {
         report.push(Category::Defect, Severity::High, "NO_PDF_HEADER", "", "앞 1024바이트에 %PDF-가 없다");
@@ -126,14 +127,14 @@ pub fn inspect_with(data: &[u8], doc: Option<&Document>, parse_error: Option<&st
         report.mark_incomplete(&format!("parse error: {e}"));
     }
     if let Some(doc) = doc {
-        guarded(report, |r| document_checks(doc, r));
+        guarded(report, |r| document_checks(doc, info, r));
     }
     if header {
         poppler_checks(path, opts, doc, report, runner);
     }
 }
 
-fn document_checks(doc: &Document, report: &mut FileReport) {
+fn document_checks(doc: &Document, info: LoadInfo, report: &mut FileReport) {
     let has_root = doc.trailer.get(b"Root").is_ok();
     if !has_root {
         report.push(Category::Defect, Severity::High, "NO_ROOT", "trailer", "trailer에 /Root가 없다");
@@ -147,7 +148,7 @@ fn document_checks(doc: &Document, report: &mut FileReport) {
     if has_root && pages.is_empty() && !doc.trailer.has(b"Encrypt") {
         // 읽기 훅이 참조 배열을 비웠거나 /Pages의 /Count가 0보다 크면 쪽 트리가 잘렸을 뿐 0쪽이라는 증거가 아니다.
         // 그 경우 High 결함이 아니라 "끝까지 보지 못함"으로만 알린다.
-        if crate::pdf::security::emptied_ref_array() || declared_page_count(doc) > 0 {
+        if info.page_tree_unreliable() || declared_page_count(doc) > 0 {
             report.mark_incomplete("page tree could not be read (reference array emptied or /Count > 0)");
         } else {
             report.push(Category::Defect, Severity::High, "ZERO_PAGES", "", "페이지가 0쪽이다");
@@ -307,7 +308,6 @@ fn poppler_checks(path: &Path, opts: &Options, doc: Option<&Document>, report: &
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pdf::security;
 
     fn empty_tree_doc(count: i64) -> Document {
         let mut doc = Document::with_version("1.7");
@@ -324,29 +324,28 @@ mod tests {
         doc
     }
 
-    fn check(doc: &Document) -> FileReport {
+    fn check(doc: &Document, info: LoadInfo) -> FileReport {
         let mut r = FileReport::new(Path::new("x.pdf"), None);
-        document_checks(doc, &mut r);
+        document_checks(doc, info, &mut r);
         r
     }
 
     #[test]
     fn zero_pages_is_high_only_when_the_tree_is_really_empty() {
-        let r = check(&empty_tree_doc(0));
+        let r = check(&empty_tree_doc(0), LoadInfo::default());
         assert!(r.findings.iter().any(|f| f.code == "ZERO_PAGES") && !r.incomplete);
     }
 
     #[test]
     fn positive_count_with_empty_page_list_is_incomplete_not_zero_pages() {
-        let r = check(&empty_tree_doc(40));
+        let r = check(&empty_tree_doc(40), LoadInfo::default());
         assert!(!r.findings.iter().any(|f| f.code == "ZERO_PAGES"));
         assert!(r.incomplete);
     }
 
     #[test]
     fn emptied_reference_array_makes_zero_pages_incomplete() {
-        security::mark_emptied_ref_array_for_test();
-        let r = check(&empty_tree_doc(0));
+        let r = check(&empty_tree_doc(0), LoadInfo { emptied_ref_array: true, kept_ref_nodes: 0 });
         assert!(!r.findings.iter().any(|f| f.code == "ZERO_PAGES"));
         assert!(r.incomplete);
     }

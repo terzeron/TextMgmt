@@ -28,12 +28,14 @@ const STREAM_KEEP_BYTES: usize = 64 * 1024;
 /// 숫자·이름·참조만 든 배열은 이 길이를 넘으면 로딩 중에 비운다. lopdf는 원소 하나를 `Object`(약 120B)로 만들어서
 /// 파일에서 2바이트인 숫자가 50배로 부풀고, 숫자 배열이 많은 PDF는 입력의 25배까지 메모리를 쓴다(22MB가 549MB).
 const ARRAY_KEEP_LEN: usize = 32;
-/// 한 파일을 읽는 동안 남기는 참조 노드의 총량. 한 배열 상한만으로는 중간 크기 배열 수백 개가 합쳐져 메모리를 부풀리므로(노드 약 120B,
-/// 숫자 배열 사례가 22MB 파일에서 549MB) 합계에도 상한을 둔다. 표본 최대 쪽 수 2,710의 약 180배인 50만 노드(약 60MB)다.
-/// 쪽 트리 하나가 이를 넘을 일은 없고, 넘으면 `ZERO_PAGES`를 내지 않고 `incomplete`로 알린다.
-const REF_KEEP_BUDGET: usize = 500_000;
-/// 참조만 든 배열은 이 길이까지 남긴다. 쪽 트리의 /Kids는 쪽 수만큼 길다(표본 최대 2,710쪽). 10만 개면 노드 약 12MB다.
-const REF_ARRAY_KEEP_LEN: usize = 100_000;
+/// 참조만 든 배열은 이 길이까지 남긴다. 쪽 트리의 /Kids는 쪽 수만큼 길다(표본 최대 2,710쪽). 그 약 7배인 2만 개면 노드 약 2.4MB다.
+/// 훅은 lopdf가 rayon 작업 스레드에서 부르므로(객체 16개 이상이거나 입력 1MiB 이상) 상태를 둘 수 없다. 그래서 배열 하나만 보는
+/// 무상태 규칙이고, 파일 전체의 합계는 읽은 뒤 호출 스레드에서 `LoadInfo`로 센다.
+const REF_ARRAY_KEEP_LEN: usize = 20_000;
+/// 읽은 뒤 센 "남긴 참조 노드" 합계가 이를 넘으면 쪽 트리 판정을 믿지 않고 `incomplete`로 알린다. 표본 최대 쪽 수의 약 180배(노드 약 60MB)다.
+const REF_FILE_BUDGET: usize = 500_000;
+/// 훅이 비운 참조 배열이 들어 있던 자리에 남기는 표지 이름. 진짜 빈 배열과 구별해 읽은 뒤에 찾는다.
+const EMPTIED_REF_ARRAY_MARK: &[u8] = b"PdfscanEmptiedRefArray";
 /// Bound the amount of input PDF data held by concurrent scans. `lopdf` may
 /// allocate more than the input size while parsing, so this is a conservative
 /// concurrency guard rather than a hard process-memory limit.
@@ -77,44 +79,59 @@ fn plain_nodes(items: &[Object], depth: usize) -> Option<usize> {
     })
 }
 
-thread_local! {
-    /// 이번 읽기에서 남길 수 있는 참조 노드의 남은 수. lopdf 훅이 함수 포인터라 상태를 스레드별로 둔다. `load`가 매번 다시 채운다.
-    static REF_BUDGET: std::cell::Cell<usize> = const { std::cell::Cell::new(REF_KEEP_BUDGET) };
-    /// 이번 읽기에서 훅이 참조 배열(쪽 트리일 수 있다)을 비웠는가.
-    static EMPTIED_REF_ARRAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+/// 읽은 문서에서 센 참조 배열 정보. 훅이 아니라 호출 스레드에서 `doc.objects`를 훑어 만든다.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LoadInfo {
+    /// 훅이 참조 배열(쪽 트리의 /Kids일 수 있다)을 비운 흔적이 있다.
+    pub emptied_ref_array: bool,
+    /// 남아 있는 긴(32개 초과) 참조 전용 배열의 원소 합계.
+    pub kept_ref_nodes: usize,
 }
 
-fn spend(budget: &std::cell::Cell<usize>, n: usize) -> bool {
-    match budget.get().checked_sub(n) {
-        Some(rest) => {
-            budget.set(rest);
-            true
+impl LoadInfo {
+    pub fn from_document(doc: &Document) -> Self {
+        let mut info = Self::default();
+        for obj in doc.objects.values() {
+            info.visit(obj, 0);
         }
-        None => false,
+        info
     }
-}
 
-/// 마지막 `load`가 참조 배열을 비웠는가. 그러면 쪽 트리가 잘렸을 수 있어 0쪽 판정을 믿을 수 없다.
-pub fn emptied_ref_array() -> bool {
-    EMPTIED_REF_ARRAY.with(std::cell::Cell::get)
-}
+    fn visit(&mut self, obj: &Object, depth: usize) {
+        if depth > SHRINK_MAX_DEPTH {
+            return;
+        }
+        match obj {
+            Object::Array(items) => {
+                if matches!(items.as_slice(), [Object::Name(n)] if n.as_slice() == EMPTIED_REF_ARRAY_MARK) {
+                    self.emptied_ref_array = true;
+                } else if items.len() > ARRAY_KEEP_LEN && items.iter().all(|o| matches!(o, Object::Reference(_))) {
+                    self.kept_ref_nodes += items.len();
+                } else {
+                    items.iter().for_each(|o| self.visit(o, depth + 1));
+                }
+            }
+            Object::Dictionary(d) => d.iter().for_each(|(_, v)| self.visit(v, depth + 1)),
+            Object::Stream(st) => st.dict.iter().for_each(|(_, v)| self.visit(v, depth + 1)),
+            _ => {}
+        }
+    }
 
-#[cfg(test)]
-pub(crate) fn mark_emptied_ref_array_for_test() {
-    EMPTIED_REF_ARRAY.with(|f| f.set(true));
+    /// 쪽 트리가 잘렸을 수 있어 0쪽 판정을 믿을 수 없는가.
+    pub fn page_tree_unreliable(&self) -> bool {
+        self.emptied_ref_array || self.kept_ref_nodes > REF_FILE_BUDGET
+    }
 }
 
 fn shrink_array(items: &mut Vec<Object>, depth: usize) {
     // 참조만 든 배열은 쪽 트리(/Kids)와 /Contents 같은 구조 정보다. `/Kids 21 0 R`처럼 배열이 독립 객체일 때는 훅이 키를 모르므로
-    // 내용으로 가려야 한다. 비우면 lopdf가 쪽을 하나도 찾지 못해 멀쩡한 PDF가 0쪽이 된다. 한 배열 상한과 한 파일 전체 예산이
-    // 둘 다 남아 있을 때만 남기고, 아니면 아래의 일반 규칙(32노드 초과는 비움)으로 넘어간다.
-    if items.iter().all(|o| matches!(o, Object::Reference(_))) {
-        if items.len() <= REF_ARRAY_KEEP_LEN && REF_BUDGET.with(|b| spend(b, items.len())) {
-            return;
+    // 내용으로 가려야 한다. 비우면 lopdf가 쪽을 하나도 찾지 못해 멀쩡한 PDF가 0쪽이 된다. 그래서 배열당 상한까지는 남기고,
+    // 넘으면 비우되 표지를 남겨 읽은 뒤에 알아볼 수 있게 한다.
+    if items.len() > ARRAY_KEEP_LEN && items.iter().all(|o| matches!(o, Object::Reference(_))) {
+        if items.len() > REF_ARRAY_KEEP_LEN {
+            *items = vec![Object::Name(EMPTIED_REF_ARRAY_MARK.to_vec())];
         }
-        if items.len() > ARRAY_KEEP_LEN {
-            EMPTIED_REF_ARRAY.with(|f| f.set(true));
-        }
+        return;
     }
     if plain_nodes(items, depth).is_some_and(|n| n > ARRAY_KEEP_LEN) {
         *items = Vec::new();
@@ -719,15 +736,16 @@ fn scan_document(doc: &Document, report: &mut FileReport) {
 
 /// PDF를 읽는다. 구문 오류와 파서 panic을 모두 `Err(사유)`로 돌려준다(사유는 정화한다).
 /// `data`에 `%PDF-` 머리가 있는지는 호출자가 이미 확인했다.
-pub fn load(data: &[u8]) -> Result<Document, String> {
-    REF_BUDGET.with(|b| b.set(REF_KEEP_BUDGET));
-    EMPTIED_REF_ARRAY.with(|f| f.set(false));
+pub fn load(data: &[u8]) -> Result<(Document, LoadInfo), String> {
     // A malformed file must not take the whole batch down.
     let parsed = std::panic::catch_unwind(|| {
         Document::load_mem_with_options(data, LoadOptions { filter: Some(shrink_on_load), max_decompressed_size: Some(MAX_DECOMPRESSED_STREAM_BYTES), ..LoadOptions::default() })
     });
     match parsed {
-        Ok(Ok(doc)) => Ok(doc),
+        Ok(Ok(doc)) => {
+            let info = LoadInfo::from_document(&doc);
+            Ok((doc, info))
+        }
         Ok(Err(e)) => Err(sanitize_text(&e.to_string(), PREVIEW_CHARS, Some('…'))),
         Err(payload) => Err(panic_reason(payload.as_ref())),
     }
@@ -762,7 +780,7 @@ pub fn scan(data: &[u8], report: &mut FileReport) {
         return;
     }
     match load(data) {
-        Ok(doc) => scan_loaded(data, Some(&doc), report),
+        Ok((doc, _)) => scan_loaded(data, Some(&doc), report),
         Err(e) => {
             scan_loaded(data, None, report);
             report.mark_incomplete(&format!("parse error: {e}"));
@@ -900,7 +918,7 @@ mod tests {
         doc.max_id = 50;
         let mut bytes = Vec::new();
         doc.save_to(&mut bytes).unwrap();
-        assert_eq!(load(&bytes).unwrap().get_pages().len(), 40);
+        assert_eq!(load(&bytes).unwrap().0.get_pages().len(), 40);
     }
 
     #[test]
@@ -929,34 +947,74 @@ mod tests {
         doc.max_id = 60;
         let mut bytes = Vec::new();
         doc.save_to(&mut bytes).unwrap();
-        assert_eq!(load(&bytes).unwrap().get_pages().len(), 40);
+        assert_eq!(load(&bytes).unwrap().0.get_pages().len(), 40);
     }
 
     #[test]
-    fn shrink_keeps_reference_arrays_up_to_the_cap_and_drops_longer_ones() {
+    fn shrink_keeps_reference_arrays_up_to_the_cap_and_marks_longer_ones() {
         let mut short = Object::Array((0..1000).map(|n| Object::Reference((n, 0))).collect());
         shrink(&mut short, 0);
         assert_eq!(short.as_array().unwrap().len(), 1000);
         let mut long = Object::Array((0..=REF_ARRAY_KEEP_LEN as u32).map(|n| Object::Reference((n, 0))).collect());
         shrink(&mut long, 0);
-        assert!(long.as_array().unwrap().is_empty());
+        assert!(matches!(long.as_array().unwrap().as_slice(), [Object::Name(n)] if n.as_slice() == EMPTIED_REF_ARRAY_MARK));
+    }
+
+    /// `kids`개 쪽을 가진 PDF 바이트. 쪽 외에 `filler`개의 빈 사전 객체를 더해 객체 수를 늘린다(16개 이상이면 lopdf가 rayon으로 읽는다).
+    fn pdf_with_kids(kids: u32, filler: u32) -> Vec<u8> {
+        let mut doc = Document::with_version("1.5");
+        let mut list = Vec::new();
+        for n in 0..kids {
+            let mut page = Dictionary::new();
+            page.set("Type", "Page");
+            page.set("Parent", Object::Reference((2, 0)));
+            doc.objects.insert((10 + n, 0), Object::Dictionary(page));
+            list.push(Object::Reference((10 + n, 0)));
+        }
+        for n in 0..filler {
+            doc.objects.insert((kids + 20 + n, 0), Object::Dictionary(Dictionary::new()));
+        }
+        let mut pages = Dictionary::new();
+        pages.set("Type", "Pages");
+        pages.set("Count", i64::from(kids));
+        pages.set("Kids", Object::Array(list));
+        doc.objects.insert((2, 0), Object::Dictionary(pages));
+        let mut cat = Dictionary::new();
+        cat.set("Type", "Catalog");
+        cat.set("Pages", Object::Reference((2, 0)));
+        doc.objects.insert((1, 0), Object::Dictionary(cat));
+        doc.trailer.set("Root", Object::Reference((1, 0)));
+        doc.max_id = kids + filler + 30;
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        bytes
     }
 
     #[test]
-    fn many_mid_size_reference_arrays_exhaust_the_per_load_budget() {
-        // 한 배열 상한(10만) 밑인 1만 노드짜리 배열 100개는 합이 예산(50만)을 넘는다. 넘친 뒤의 배열은 비우고 표지를 남긴다.
-        REF_BUDGET.with(|b| b.set(REF_KEEP_BUDGET));
-        EMPTIED_REF_ARRAY.with(|f| f.set(false));
-        let mut kept = 0;
-        for _ in 0..100 {
-            let mut arr = Object::Array((0..10_000).map(|n| Object::Reference((n, 0))).collect());
-            shrink(&mut arr, 0);
-            if !arr.as_array().unwrap().is_empty() {
-                kept += 1;
-            }
+    fn real_load_of_a_parallel_sized_pdf_reports_an_emptied_oversized_kids_array() {
+        // 객체가 16개를 넘으면 lopdf가 훅을 rayon 작업 스레드에서 부른다. 정보는 스레드와 무관하게 읽은 뒤 계산돼야 한다.
+        let (doc, info) = load(&pdf_with_kids(REF_ARRAY_KEEP_LEN as u32 + 5, 40)).unwrap();
+        assert!(info.emptied_ref_array && info.page_tree_unreliable());
+        assert!(doc.get_pages().is_empty());
+    }
+
+    #[test]
+    fn consecutive_loads_do_not_affect_each_other() {
+        let big = pdf_with_kids(REF_ARRAY_KEEP_LEN as u32 + 5, 40);
+        let small = pdf_with_kids(40, 40);
+        for _ in 0..3 {
+            assert!(load(&big).unwrap().1.emptied_ref_array);
+            let (doc, info) = load(&small).unwrap();
+            assert_eq!(info, LoadInfo { emptied_ref_array: false, kept_ref_nodes: 40 });
+            assert_eq!(doc.get_pages().len(), 40);
         }
-        assert_eq!(kept, REF_KEEP_BUDGET / 10_000);
-        assert!(emptied_ref_array());
+    }
+
+    #[test]
+    fn kept_reference_arrays_over_the_file_budget_make_the_page_tree_unreliable() {
+        let info = LoadInfo { emptied_ref_array: false, kept_ref_nodes: REF_FILE_BUDGET + 1 };
+        assert!(info.page_tree_unreliable());
+        assert!(!LoadInfo { emptied_ref_array: false, kept_ref_nodes: REF_FILE_BUDGET }.page_tree_unreliable());
     }
 
     #[test]

@@ -193,7 +193,7 @@ fn truncated_pdf_reports_structure_defects_not_abort() {
 
 fn inspect_doc(doc: &Document) -> FileReport {
     let mut r = FileReport::new(Path::new("x.pdf"), None);
-    structure::inspect_with(b"%PDF-1.7\n%%EOF\n", Some(doc), None, Path::new("x.pdf"), &opts(), &mut r, &FakeRunner::pages(1));
+    structure::inspect_with(b"%PDF-1.7\n%%EOF\n", Some(doc), bookdoctor::pdf::security::LoadInfo::default(), None, Path::new("x.pdf"), &opts(), &mut r, &FakeRunner::pages(1));
     r
 }
 
@@ -327,7 +327,7 @@ fn encrypted_doc() -> Document {
 fn inspect_doc_with(doc: &Document, runner: &FakeRunner) -> FileReport {
     let mut r = FileReport::new(Path::new("x.pdf"), None);
     let o = Options::default();
-    structure::inspect_with(b"%PDF-1.7\n%%EOF\n", Some(doc), None, Path::new("x.pdf"), &o, &mut r, runner);
+    structure::inspect_with(b"%PDF-1.7\n%%EOF\n", Some(doc), bookdoctor::pdf::security::LoadInfo::default(), None, Path::new("x.pdf"), &o, &mut r, runner);
     r
 }
 
