@@ -28,6 +28,10 @@ const STREAM_KEEP_BYTES: usize = 64 * 1024;
 /// 숫자·이름·참조만 든 배열은 이 길이를 넘으면 로딩 중에 비운다. lopdf는 원소 하나를 `Object`(약 120B)로 만들어서
 /// 파일에서 2바이트인 숫자가 50배로 부풀고, 숫자 배열이 많은 PDF는 입력의 25배까지 메모리를 쓴다(22MB가 549MB).
 const ARRAY_KEEP_LEN: usize = 32;
+/// 한 파일을 읽는 동안 남기는 참조 노드의 총량. 한 배열 상한만으로는 중간 크기 배열 수백 개가 합쳐져 메모리를 부풀리므로(노드 약 120B,
+/// 숫자 배열 사례가 22MB 파일에서 549MB) 합계에도 상한을 둔다. 표본 최대 쪽 수 2,710의 약 180배인 50만 노드(약 60MB)다.
+/// 쪽 트리 하나가 이를 넘을 일은 없고, 넘으면 `ZERO_PAGES`를 내지 않고 `incomplete`로 알린다.
+const REF_KEEP_BUDGET: usize = 500_000;
 /// 참조만 든 배열은 이 길이까지 남긴다. 쪽 트리의 /Kids는 쪽 수만큼 길다(표본 최대 2,710쪽). 10만 개면 노드 약 12MB다.
 const REF_ARRAY_KEEP_LEN: usize = 100_000;
 /// Bound the amount of input PDF data held by concurrent scans. `lopdf` may
@@ -73,12 +77,39 @@ fn plain_nodes(items: &[Object], depth: usize) -> Option<usize> {
     })
 }
 
+thread_local! {
+    /// 이번 읽기에서 남길 수 있는 참조 노드의 남은 수. lopdf 훅이 함수 포인터라 상태를 스레드별로 둔다. `load`가 매번 다시 채운다.
+    static REF_BUDGET: std::cell::Cell<usize> = const { std::cell::Cell::new(REF_KEEP_BUDGET) };
+    /// 이번 읽기에서 훅이 참조 배열(쪽 트리일 수 있다)을 비웠는가.
+    static EMPTIED_REF_ARRAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn spend(budget: &std::cell::Cell<usize>, n: usize) -> bool {
+    match budget.get().checked_sub(n) {
+        Some(rest) => {
+            budget.set(rest);
+            true
+        }
+        None => false,
+    }
+}
+
+/// 마지막 `load`가 참조 배열을 비웠는가. 그러면 쪽 트리가 잘렸을 수 있어 0쪽 판정을 믿을 수 없다.
+pub fn emptied_ref_array() -> bool {
+    EMPTIED_REF_ARRAY.with(std::cell::Cell::get)
+}
+
 fn shrink_array(items: &mut Vec<Object>, depth: usize) {
     // 참조만 든 배열은 쪽 트리(/Kids)와 /Contents 같은 구조 정보다. `/Kids 21 0 R`처럼 배열이 독립 객체일 때는 훅이 키를 모르므로
-    // 내용으로 가려야 한다. 비우면 lopdf가 쪽을 하나도 찾지 못해 멀쩡한 PDF가 0쪽이 된다. 참조는 파일에서 6바이트 이상이라
-    // 숫자(2바이트)보다 부풀림이 작고, 상한을 넘는 배열만 비운다.
-    if items.len() <= REF_ARRAY_KEEP_LEN && items.iter().all(|o| matches!(o, Object::Reference(_))) {
-        return;
+    // 내용으로 가려야 한다. 비우면 lopdf가 쪽을 하나도 찾지 못해 멀쩡한 PDF가 0쪽이 된다. 한 배열 상한과 한 파일 전체 예산이
+    // 둘 다 남아 있을 때만 남기고, 아니면 아래의 일반 규칙(32노드 초과는 비움)으로 넘어간다.
+    if items.iter().all(|o| matches!(o, Object::Reference(_))) {
+        if items.len() <= REF_ARRAY_KEEP_LEN && REF_BUDGET.with(|b| spend(b, items.len())) {
+            return;
+        }
+        if items.len() > ARRAY_KEEP_LEN {
+            EMPTIED_REF_ARRAY.with(|f| f.set(true));
+        }
     }
     if plain_nodes(items, depth).is_some_and(|n| n > ARRAY_KEEP_LEN) {
         *items = Vec::new();
@@ -684,6 +715,8 @@ fn scan_document(doc: &Document, report: &mut FileReport) {
 /// PDF를 읽는다. 구문 오류와 파서 panic을 모두 `Err(사유)`로 돌려준다(사유는 정화한다).
 /// `data`에 `%PDF-` 머리가 있는지는 호출자가 이미 확인했다.
 pub fn load(data: &[u8]) -> Result<Document, String> {
+    REF_BUDGET.with(|b| b.set(REF_KEEP_BUDGET));
+    EMPTIED_REF_ARRAY.with(|f| f.set(false));
     // A malformed file must not take the whole batch down.
     let parsed = std::panic::catch_unwind(|| {
         Document::load_mem_with_options(data, LoadOptions { filter: Some(shrink_on_load), max_decompressed_size: Some(MAX_DECOMPRESSED_STREAM_BYTES), ..LoadOptions::default() })
@@ -902,6 +935,23 @@ mod tests {
         let mut long = Object::Array((0..=REF_ARRAY_KEEP_LEN as u32).map(|n| Object::Reference((n, 0))).collect());
         shrink(&mut long, 0);
         assert!(long.as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn many_mid_size_reference_arrays_exhaust_the_per_load_budget() {
+        // 한 배열 상한(10만) 밑인 1만 노드짜리 배열 100개는 합이 예산(50만)을 넘는다. 넘친 뒤의 배열은 비우고 표지를 남긴다.
+        REF_BUDGET.with(|b| b.set(REF_KEEP_BUDGET));
+        EMPTIED_REF_ARRAY.with(|f| f.set(false));
+        let mut kept = 0;
+        for _ in 0..100 {
+            let mut arr = Object::Array((0..10_000).map(|n| Object::Reference((n, 0))).collect());
+            shrink(&mut arr, 0);
+            if !arr.as_array().unwrap().is_empty() {
+                kept += 1;
+            }
+        }
+        assert_eq!(kept, REF_KEEP_BUDGET / 10_000);
+        assert!(emptied_ref_array());
     }
 
     #[test]
