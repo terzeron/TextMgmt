@@ -105,7 +105,7 @@ pub fn run(argv: &[String], repo_root: &Path, out: &mut dyn Write, log: Log) -> 
 }
 
 fn execute(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io::Result<i32> {
-    let report = args.report.clone().unwrap_or_else(|| repo_root.join("tmp/mojibake_recheck.json"));
+    let report = args.report.clone().unwrap_or_else(|| repo_root.join("tmp/bookdoctor_report.json"));
     let manifest = args.manifest.clone().unwrap_or_else(|| repo_root.join("tmp/quarantine_manifest.json"));
 
     match args.command.as_str() {
@@ -181,7 +181,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
         out,
         "quarantine_broken - 인코딩이 손상된 문서를 {BROKEN_DIR_NAME} 디렉토리로 격리하고 되돌린다.
 
-검사 리포트(detect_mojibake의 JSON)에서 손상 판정만 골라 원래 카테고리를 하위 디렉토리로
+검사 리포트(bookdoctor `--report`의 JSON)에서 손상 판정만 골라 원래 카테고리를 하위 디렉토리로
 유지한 채 옮긴다. 판정에 오탐이 섞일 수 있어 이동은 매니페스트에 기록하고 `undo`로 복구한다.
 
 사용법:
@@ -197,7 +197,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   fix-ext  UTF-16LE로 읽혀 저장된 바이너리(HWP·PDF·PNG)를 원래 바이트와 확장자로 되돌린다.
 
 옵션:
-  --report PATH        검사 리포트 (기본 <repo>/tmp/mojibake_recheck.json)
+  --report PATH        검사 리포트 (기본 <repo>/tmp/bookdoctor_report.json)
   --library-root DIR   코퍼스 루트 (기본 {DEFAULT_LIBRARY_ROOT})
   --manifest PATH      이동 기록 (기본 <repo>/tmp/quarantine_manifest.json)
   --limit N            앞에서 N건만 처리한다 (0이면 전체).

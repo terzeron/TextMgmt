@@ -16,9 +16,14 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
-pub use detect_mojibake::{DEFAULT_LIBRARY_ROOT, VERDICT_CORRUPTED};
-// 천 단위 쉼표 출력은 corpus_common에 있고 detect_mojibake가 다시 내보낸다. 같은 코드를 복사해 두지 않는다.
-pub(crate) use detect_mojibake::thousands;
+pub use corpus_common::DEFAULT_LIBRARY_ROOT;
+// 천 단위 쉼표 출력은 corpus_common에 있다. 같은 코드를 복사해 두지 않는다.
+pub(crate) use corpus_common::thousands;
+
+/// 격리 대상으로 고른 항목에 붙이는 판정 값. 옛 detect_mojibake의 `VERDICT_CORRUPTED`와 같은 문자열이다.
+pub const VERDICT_CORRUPTED: &str = "corrupted";
+/// bookdoctor 리포트에서 인코딩 손상을 뜻하는 지표 코드. 다른 코드(NOT_UTF8, FORMAT_MISMATCH 등)는 격리하지 않는다.
+pub const MOJIBAKE_CODE: &str = "MOJIBAKE";
 
 pub const BROKEN_DIR_NAME: &str = "0_broken";
 
@@ -112,28 +117,42 @@ pub fn fix_extension_with(path: &Path, dry_run: bool, unmangle: &dyn Fn(&[u8]) -
     Some(result)
 }
 
-/// 검사 리포트에서 손상 판정 항목만 뽑는다. scan 리포트와 recheck 목록을 모두 받는다.
+/// bookdoctor `--report` 리포트에서 인코딩 손상(`MOJIBAKE`) 항목만 뽑는다.
+///
+/// `files[]` 중 `findings`에 `code == "MOJIBAKE"`가 있는 항목만 `Rec`(path, likeness, verdict)로 바꾼다.
+/// likeness가 없거나 null이면 키를 넣지 않는다(옛 코드도 없는 키는 그대로 두었다).
+/// 옛 detect_mojibake 형식(`{"corrupted": [...]}`)은 조용히 빈 결과가 되지 않도록 오류로 돌려준다.
 pub fn load_corrupted(report_path: &Path) -> io::Result<Vec<Rec>> {
     let data: Value = serde_json::from_str(&fs::read_to_string(report_path)?).map_err(io::Error::other)?;
-    let records = match data {
-        Value::Object(mut o) => o.remove("corrupted"),
-        other => Some(other),
+    let invalid = |msg: &str| io::Error::new(io::ErrorKind::InvalidData, msg.to_owned());
+    let Value::Object(mut o) = data else {
+        return Err(invalid("리포트가 객체가 아니다. `bookdoctor --report`로 다시 만들어라"));
     };
-    let Some(Value::Array(items)) = records else {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "리포트에서 손상 목록을 찾지 못했다"));
+    let Some(files) = o.remove("files") else {
+        let hint = if o.contains_key("corrupted") { "옛 detect_mojibake 리포트 형식이다" } else { "리포트에 files 목록이 없다" };
+        return Err(invalid(&format!("{hint}. `bookdoctor --report`로 리포트를 다시 만들어라")));
     };
-    items
-        .into_iter()
-        .map(|v| match v {
-            Value::Object(o) => Ok(o),
-            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "손상 목록 항목이 객체가 아니다")),
-        })
-        .filter_map(|item| match item {
-            Ok(r) if r.get("verdict").and_then(Value::as_str).unwrap_or(VERDICT_CORRUPTED) == VERDICT_CORRUPTED => Some(Ok(r)),
-            Ok(_) => None,
-            Err(e) => Some(Err(e)),
-        })
-        .collect()
+    let Value::Array(items) = files else {
+        return Err(invalid("리포트의 files가 배열이 아니다. `bookdoctor --report`로 다시 만들어라"));
+    };
+    let mut found = Vec::new();
+    for item in items {
+        let Value::Object(file) = item else { return Err(invalid("files 항목이 객체가 아니다")) };
+        let is_mojibake = file.get("findings").and_then(Value::as_array).is_some_and(|fs| fs.iter().any(|f| f.get("code").and_then(Value::as_str) == Some(MOJIBAKE_CODE)));
+        if !is_mojibake {
+            continue;
+        }
+        let mut rec = Rec::new();
+        if let Some(path) = file.get("path") {
+            rec.insert("path".into(), path.clone());
+        }
+        if let Some(likeness) = file.get("likeness").filter(|l| l.is_number()) {
+            rec.insert("likeness".into(), likeness.clone());
+        }
+        rec.insert("verdict".into(), json!(VERDICT_CORRUPTED));
+        found.push(rec);
+    }
+    Ok(found)
 }
 
 fn split_name(p: &Path) -> (String, String) {

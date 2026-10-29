@@ -2574,7 +2574,7 @@ name = "quarantine_broken"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "detect_mojibake",
+ "corpus_common",
  "indexmap 2.14.2",
  "serde",
  "serde_json",
