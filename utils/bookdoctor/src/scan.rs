@@ -7,7 +7,7 @@ use scan_common::sniff::Sniffed;
 use scan_common::{FileReport, Format};
 
 use crate::cli::Options;
-use crate::{common, epub, pdf, txt};
+use crate::{common, epub, pdf, txt, viewer};
 
 /// 검사할 포맷을 정한다. `.pdf`·`.epub`은 내용이 PDF·ZIP이면 내용을 따르고(`.pdf`인데 ZIP이면 EPUB),
 /// 그 밖에는 확장자를 따른다. 모르는 확장자는 `None`이다.
@@ -39,13 +39,15 @@ fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
     }
 }
 
-/// 파일 하나를 검사한다. 포맷 모듈의 panic은 `incomplete`로 바꾸고, `--only`가 있으면 그 분류만 남긴다.
+/// 파일 하나를 검사한다. 포맷 모듈의 panic은 `incomplete`로 바꾸고, `--only`가 있으면 그 분류만 남긴다. 뷰어 차단 여부는 걸러내기 전에 채운다.
 pub fn scan_file(path: &Path, opts: &Options) -> FileReport {
     let mut report = FileReport::new(path, None);
     if let Err(payload) = catch_unwind(AssertUnwindSafe(|| scan_inner(path, opts, &mut report))) {
         let msg = payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_default();
         report.mark_incomplete(&format!("panic: {msg}"));
     }
+    // `--only`가 지표를 걸러내기 전에 채워서 남은 지표가 모두 값을 가진다.
+    viewer::annotate(&mut report);
     if !opts.only.is_empty() {
         report.findings.retain(|f| opts.only.contains(&f.category));
     }
