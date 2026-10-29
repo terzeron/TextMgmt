@@ -1,18 +1,13 @@
 //! 파일 하나를 포맷별 검사기로 보낸다. 포맷은 확장자가 아니라 내용(매직바이트)을 우선한다.
 
-use std::fs::{self, File};
-use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
-use scan_common::sniff::{Sniffed, sniff};
+use scan_common::sniff::Sniffed;
 use scan_common::{FileReport, Format};
 
 use crate::cli::Options;
-use crate::{epub, pdf, txt};
-
-/// sniff에 넘기는 앞부분의 크기.
-const HEAD_BYTES: u64 = 64 * 1024;
+use crate::{common, epub, pdf, txt};
 
 /// 검사할 포맷을 정한다. `.pdf`·`.epub`은 내용이 PDF·ZIP이면 내용을 따르고(`.pdf`인데 ZIP이면 EPUB),
 /// 그 밖에는 확장자를 따른다. 모르는 확장자는 `None`이다.
@@ -33,25 +28,9 @@ pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
     }
 }
 
-fn read_head(path: &Path) -> std::io::Result<Vec<u8>> {
-    let mut head = Vec::new();
-    File::open(path)?.take(HEAD_BYTES).read_to_end(&mut head)?;
-    Ok(head)
-}
-
 fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
-    if let Err(e) = fs::metadata(path) {
-        report.mark_incomplete(&format!("unreadable: {e}"));
-        return;
-    }
-    let head = match read_head(path) {
-        Ok(h) => h,
-        Err(e) => {
-            report.mark_incomplete(&format!("unreadable: {e}"));
-            return;
-        }
-    };
-    report.format = dispatch_format(path, sniff(&head));
+    let Some(head) = common::inspect(path, opts, report) else { return };
+    report.format = dispatch_format(path, common::sniff_head(&head));
     match report.format {
         Some(Format::Epub) => epub::scan_epub_file(path, opts, report),
         Some(Format::Pdf) => pdf::scan_pdf_file(path, opts, report),

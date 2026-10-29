@@ -178,3 +178,33 @@ pub fn mangle_local_name(path: &Path, member: &str) {
     data[off + 30] ^= 0x01;
     fs::write(path, data).unwrap();
 }
+
+// ---- 공통 검사용 fixture ----
+
+/// 임시 디렉토리가 살아 있는 동안만 파일이 존재한다.
+pub struct NamedFile {
+    _dir: tempfile::TempDir,
+    path: std::path::PathBuf,
+}
+
+impl NamedFile {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// 정상 EPUB 내용을 `name`이라는 이름으로 만든다. 확장자를 일부러 틀리게 줄 때 쓴다.
+pub fn epub_named(name: &str) -> NamedFile {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(name);
+    make_epub(&path);
+    NamedFile { _dir: dir, path }
+}
+
+/// `name`이라는 이름으로 `bytes`를 담은 파일을 만든다.
+pub fn file_with(name: &str, bytes: &[u8]) -> NamedFile {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(name);
+    fs::write(&path, bytes).unwrap();
+    NamedFile { _dir: dir, path }
+}
