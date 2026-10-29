@@ -15,6 +15,15 @@ pub enum Sniffed {
 const PDF_WINDOW: usize = 1024;
 const MACHO_MAGICS: [[u8; 4]; 5] = [[0xFE, 0xED, 0xFA, 0xCE], [0xFE, 0xED, 0xFA, 0xCF], [0xCE, 0xFA, 0xED, 0xFE], [0xCF, 0xFA, 0xED, 0xFE], [0xCA, 0xFE, 0xBA, 0xBE]];
 
+/// `MZ`로 시작하고 e_lfanew(오프셋 0x3C, u32 LE)가 `PE\0\0`를 가리키면 PE다. `MZ`만으로는 평문과 구분되지 않는다.
+fn is_pe(head: &[u8]) -> bool {
+    if !head.starts_with(b"MZ") || head.len() < 0x40 {
+        return false;
+    }
+    let off = u32::from_le_bytes([head[0x3C], head[0x3D], head[0x3E], head[0x3F]]) as usize;
+    off.checked_add(4).is_some_and(|end| end <= head.len()) && &head[off..off + 4] == b"PE\0\0"
+}
+
 /// 파일 앞부분(`head`)의 바이트로 종류를 판별한다. `Pdf`는 앞 1024바이트 안 어디든 `%PDF-`가 있으면 맞다.
 pub fn sniff(head: &[u8]) -> Sniffed {
     if head[..head.len().min(PDF_WINDOW)].windows(5).any(|w| w == b"%PDF-") {
@@ -29,7 +38,7 @@ pub fn sniff(head: &[u8]) -> Sniffed {
     if MACHO_MAGICS.iter().any(|m| head.starts_with(m)) {
         return Sniffed::MachO;
     }
-    if head.starts_with(b"MZ") {
+    if is_pe(head) {
         return Sniffed::Pe;
     }
     let body = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);

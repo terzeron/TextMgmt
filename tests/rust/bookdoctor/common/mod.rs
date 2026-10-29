@@ -208,3 +208,12 @@ pub fn file_with(name: &str, bytes: &[u8]) -> NamedFile {
     fs::write(&path, bytes).unwrap();
     NamedFile { _dir: dir, path }
 }
+
+/// MZ + e_lfanew(0x3C) -> "PE\0\0"인 최소 PE 머리.
+pub fn minimal_pe() -> Vec<u8> {
+    let mut v = vec![0u8; 0x44];
+    v[..2].copy_from_slice(b"MZ");
+    v[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
+    v[0x40..0x44].copy_from_slice(b"PE\0\0");
+    v
+}

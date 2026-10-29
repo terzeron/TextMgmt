@@ -135,7 +135,7 @@ fn epub_embedding_a_pdf_early_is_still_a_zip() {
 
 #[test]
 fn flags_disguised_executable() {
-    for (name, head) in [("a.epub", &b"\x7fELF\x02\x01"[..]), ("a.pdf", b"MZ\x90\x00"), ("a.txt", b"\xCF\xFA\xED\xFE")] {
+    for (name, head) in [("a.epub", &b"\x7fELF\x02\x01"[..]), ("a.pdf", &common::minimal_pe()[..]), ("a.txt", b"\xCF\xFA\xED\xFE")] {
         let f = common::file_with(name, head);
         let r = scan_file(f.path(), &Options::default());
         let x = find(&r, "DISGUISED_EXECUTABLE");
@@ -250,4 +250,27 @@ fn fifo_returns_promptly_as_incomplete() {
     let r = rx.recv_timeout(Duration::from_secs(5)).expect("FIFO 검사가 멈췄다");
     assert!(r.incomplete);
     assert_eq!(r.reasons[0], "unreadable: not a regular file");
+}
+
+#[test]
+fn text_starting_with_mz_has_no_findings() {
+    let f = common::file_with("a.txt", b"MZ Software notes\n");
+    let r = scan_file(f.path(), &Options::default());
+    assert!(r.findings.is_empty(), "{:?}", r.findings);
+}
+
+#[test]
+fn valid_pe_in_txt_is_disguised_executable() {
+    let f = common::file_with("a.txt", &common::minimal_pe());
+    let r = scan_file(f.path(), &Options::default());
+    assert_eq!(find(&r, "DISGUISED_EXECUTABLE").severity, Severity::Critical);
+}
+
+#[test]
+fn file_of_exactly_max_total_mb_is_not_skipped() {
+    let f = common::file_with("a.txt", &vec![b'a'; 1024 * 1024]);
+    let opts = Options { max_total_mb: 1, ..Options::default() };
+    let r = scan_file(f.path(), &opts);
+    assert!(!r.incomplete, "{:?}", r.reasons);
+    assert_eq!(r.format, Some(Format::Txt));
 }

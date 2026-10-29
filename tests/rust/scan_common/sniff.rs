@@ -29,9 +29,33 @@ fn sniffs_macho() {
     }
 }
 
+/// MZ + e_lfanew(0x3C) -> "PE\0\0"인 최소 PE 머리.
+fn minimal_pe() -> Vec<u8> {
+    let mut v = vec![0u8; 0x44];
+    v[..2].copy_from_slice(b"MZ");
+    v[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
+    v[0x40..0x44].copy_from_slice(b"PE\0\0");
+    v
+}
+
+#[test]
+fn bare_mz_is_not_pe() {
+    assert_eq!(sniff(b"MZ Software notes\n"), Sniffed::Unknown);
+    assert_eq!(sniff(b"MZ\x90\x00"), Sniffed::Unknown);
+}
+
+#[test]
+fn mz_with_out_of_range_lfanew_is_not_pe() {
+    let mut v = minimal_pe();
+    v[0x3C..0x40].copy_from_slice(&0x41u32.to_le_bytes());
+    assert_eq!(sniff(&v), Sniffed::Unknown);
+    v[0x3C..0x40].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert_eq!(sniff(&v), Sniffed::Unknown);
+}
+
 #[test]
 fn sniffs_pe() {
-    assert_eq!(sniff(b"MZ\x90\x00"), Sniffed::Pe);
+    assert_eq!(sniff(&minimal_pe()), Sniffed::Pe);
 }
 
 #[test]
