@@ -26,6 +26,10 @@ path = "../../tests/rust/bookdoctor/report.rs"
 name = "scan"
 path = "../../tests/rust/bookdoctor/scan.rs"
 
+[[test]]
+name = "txt"
+path = "../../tests/rust/bookdoctor/txt.rs"
+
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 corpus_common = { path = "../../libs/corpus_common" }
