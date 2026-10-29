@@ -14,6 +14,11 @@ use crate::cli::Options;
 /// EPUB 파일 하나를 검사해 `report`에 더한다.
 pub fn scan_epub_file(path: &Path, opts: &Options, report: &mut FileReport) {
     let limits = security::Limits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..security::Limits::default() };
+    // 중앙 디렉터리가 한도를 넘으면 어느 단계도 ZIP을 열지 않는다. 구조·렌더링·손상 검사는 한도를 따로 보지 않는다.
+    if security::directory_limit_note(path).is_some() {
+        security::scan(path, &limits, report);
+        return;
+    }
     structure::inspect(path, report);
     let structure_len = report.findings.len();
     let structure_codes: HashSet<String> = report.findings.iter().map(|f| f.code.clone()).collect();

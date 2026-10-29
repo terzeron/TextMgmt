@@ -352,3 +352,26 @@ fn different_codes_from_security_and_structure_both_stay() {
     scan_epub_file(&p, &Options::default(), &mut r);
     assert!(r.has("NO_CONTAINER") && r.has("MISSING_CONTAINER_XML"), "{:?}", codes_of(&r));
 }
+
+#[test]
+fn oversized_zip_directory_skips_every_stage_but_security() {
+    // 끝에 zip64 EOCD만 있고 항목 수가 한도를 넘는 파일. 구조·렌더링·손상 검사가 열면 안 된다(최종 검토 지적).
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("huge.epub");
+    let mut rec = vec![0u8; 56];
+    rec[..4].copy_from_slice(b"PK\x06\x06");
+    rec[32..40].copy_from_slice(&5_000_000u64.to_le_bytes());
+    let mut loc = vec![0u8; 20];
+    loc[..4].copy_from_slice(b"PK\x06\x07");
+    let mut eocd = vec![0u8; 22];
+    eocd[..4].copy_from_slice(b"PK\x05\x06");
+    eocd[10..12].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    eocd[12..16].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    fs::write(&p, [rec, loc, eocd].concat()).unwrap();
+    let mut r = FileReport::new(&p, Some(Format::Epub));
+    scan_epub_file(&p, &Options::default(), &mut r);
+    assert!(r.incomplete);
+    assert!(r.reasons.iter().any(|n| n.contains("Too many entries") && n.contains("not opened")), "{:?}", r.reasons);
+    assert!(r.findings.is_empty(), "{:?}", codes_of(&r));
+    assert!(!r.reasons.iter().any(|n| n.contains("no text extracted")), "{:?}", r.reasons);
+}

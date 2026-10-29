@@ -102,6 +102,18 @@ fn zip_directory_bounds(path: &Path) -> Option<(u64, u64)> {
     Some((entries, size))
 }
 
+/// 중앙 디렉터리가 한도를 넘으면 열지 않는 사유를 돌려준다. 어느 검사 단계든 ZIP을 열기 전에 먼저 확인한다.
+pub fn directory_limit_note(path: &Path) -> Option<String> {
+    let (entries, dir_bytes) = zip_directory_bounds(path)?;
+    if entries > MAX_DIRECTORY_ENTRIES {
+        return Some(safe(&format!("Too many entries: {entries} (max {MAX_DIRECTORY_ENTRIES}); not opened")));
+    }
+    if dir_bytes > MAX_DIRECTORY_BYTES {
+        return Some(safe(&format!("Central directory too large: {dir_bytes} bytes (max {MAX_DIRECTORY_BYTES}); not opened")));
+    }
+    None
+}
+
 // ---------------------------------------------------------------- 상수
 
 const EXEC_EXTS: &[&str] = &[
@@ -1051,13 +1063,8 @@ fn scan_epub_unguarded(path: &Path, limits: &Limits, s: &mut Scanner, stats: &mu
         Ok(m) if m.is_dir() => return s.notes.push(safe("Cannot open as ZIP EPUB: unreadable directory")),
         Ok(_) => {}
     }
-    if let Some((entries, dir_bytes)) = zip_directory_bounds(path) {
-        if entries > MAX_DIRECTORY_ENTRIES {
-            return s.notes.push(safe(&format!("Too many entries: {entries} (max {MAX_DIRECTORY_ENTRIES}); not opened")));
-        }
-        if dir_bytes > MAX_DIRECTORY_BYTES {
-            return s.notes.push(safe(&format!("Central directory too large: {dir_bytes} bytes (max {MAX_DIRECTORY_BYTES}); not opened")));
-        }
+    if let Some(note) = directory_limit_note(path) {
+        return s.notes.push(note);
     }
     let mut entries = 0;
     let mut inspected = 0u64;
