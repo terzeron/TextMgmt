@@ -21,7 +21,7 @@ use corpus_common::reader::{Zip, open_zip};
 use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
 
 use super::security::Limits;
-use super::structure::{is_markup, parse_xml, rootfile_path, spine_members};
+use super::structure::{ISSUE_MEMBER_UNREADABLE, ISSUE_TO_CODE, is_markup, parse_xml, rootfile_path, spine_members};
 
 // EpubDiagnose.js 상단 상수.
 const OPF_NS: &str = "http://www.idpf.org/2007/opf";
@@ -47,6 +47,8 @@ const OBFUSCATION_THRESHOLD: usize = 20;
 /// 문서 하나가 모을 선택자와 스타일시트의 상한. 악성 CSS가 선택자 × 요소 곱으로 시간을 쓰지 못하게 한다.
 const MAX_SELECTORS_PER_DOC: usize = 10_000;
 const MAX_STYLESHEETS_PER_DOC: usize = 64;
+/// 압축을 풀 수 없는 멤버를 지표로 남기는 최대 개수. 넘는 것은 마지막 지표의 detail에 개수만 적는다.
+pub const MAX_UNREADABLE_FINDINGS: usize = 20;
 
 /// EpubDiagnose.js `findUndeclaredPrefixes`의 두 정규식. JS의 `\w`는 ASCII라 같은 범위로 쓴다.
 static DECLARED_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"xmlns:([A-Za-z0-9_]+)\s*=").unwrap());
@@ -333,16 +335,31 @@ struct Ctx {
     done: HashSet<String>,
     skipped: usize,
     io_errors: usize,
+    /// 압축을 풀 수 없는 멤버(이름, 오류 글). 멤버마다 한 번.
+    unreadable: Vec<(String, String)>,
+    unreadable_names: HashSet<String>,
+    unreadable_extra: usize,
     css_failed: usize,
     selector_cap_hit: bool,
     sheet_cap_hit: bool,
 }
 
 impl Ctx {
-    fn on_error(&mut self, kind: ReadErrorKind, name: &str, sink: &mut Sink) {
+    fn on_error(&mut self, kind: ReadErrorKind, name: &str, err: &str, sink: &mut Sink) {
         match kind {
             ReadErrorKind::Checksum => sink.flag(Category::Defect, Severity::High, "ZIP_CRC_MISMATCH", name, "멤버를 끝까지 읽으면 CRC가 맞지 않음"),
-            ReadErrorKind::Corrupt => {}
+            // 압축 해제 오류나 로컬 헤더 손상. structure의 MEMBER_UNREADABLE은 container, OPF, 본문 머리만 보므로
+            // 폰트·이미지 같은 나머지 멤버의 손상은 여기서 같은 코드로 보고한다.
+            ReadErrorKind::Corrupt => {
+                if self.unreadable_names.insert(name.to_string()) {
+                    if self.unreadable.len() < MAX_UNREADABLE_FINDINGS {
+                        let text: String = err.chars().filter(|c| !c.is_control()).take(120).collect();
+                        self.unreadable.push((name.to_string(), text));
+                    } else {
+                        self.unreadable_extra += 1;
+                    }
+                }
+            }
             ReadErrorKind::Io => self.io_errors += 1,
         }
     }
@@ -361,7 +378,7 @@ impl Ctx {
             Ok(e) => e,
             Err(e) => {
                 let kind = classify_zip_error(&e);
-                self.on_error(kind, name, sink);
+                self.on_error(kind, name, &e.to_string(), sink);
                 return None;
             }
         };
@@ -372,7 +389,7 @@ impl Ctx {
         match result {
             Err(e) => {
                 let kind = classify_read_error(&e);
-                self.on_error(kind, name, sink);
+                self.on_error(kind, name, &e.to_string(), sink);
                 None
             }
             Ok(_) if cap_w.n > limit => {
@@ -473,6 +490,9 @@ fn run(zip: &mut Zip, limits: &Limits, sink: &mut Sink) {
         done: HashSet::new(),
         skipped: 0,
         io_errors: 0,
+        unreadable: Vec::new(),
+        unreadable_names: HashSet::new(),
+        unreadable_extra: 0,
         css_failed: 0,
         selector_cap_hit: false,
         sheet_cap_hit: false,
@@ -495,7 +515,8 @@ fn run(zip: &mut Zip, limits: &Limits, sink: &mut Sink) {
             Ok(e) => e,
             Err(e) => {
                 let kind = classify_zip_error(&e);
-                ctx.on_error(kind, "", sink);
+                let label = names.get(i).cloned().unwrap_or_else(|| format!("#{i}"));
+                ctx.on_error(kind, &label, &e.to_string(), sink);
                 continue;
             }
         };
@@ -535,7 +556,7 @@ fn run(zip: &mut Zip, limits: &Limits, sink: &mut Sink) {
             // 체크섬은 지표, 손상된 스트림은 structure의 MEMBER_UNREADABLE, 그 밖의 오류는 incomplete.
             Err(e) => {
                 let kind = classify_read_error(&e);
-                ctx.on_error(kind, &name, sink);
+                ctx.on_error(kind, &name, &e.to_string(), sink);
             }
             Ok(_) if cap.n > limit => {
                 if limit < limits.max_member {
@@ -553,6 +574,15 @@ fn run(zip: &mut Zip, limits: &Limits, sink: &mut Sink) {
                     }
                 }
             }
+        }
+    }
+
+    // structure의 `member_unreadable` 행과 같은 코드·분류·심각도로 남긴다.
+    if let Some(&(_, code, category, severity)) = ISSUE_TO_CODE.iter().find(|row| row.0 == ISSUE_MEMBER_UNREADABLE) {
+        let last = ctx.unreadable.len().saturating_sub(1);
+        for (i, (name, err)) in ctx.unreadable.iter().enumerate() {
+            let more = if i == last && ctx.unreadable_extra > 0 { format!(" …and {} more", ctx.unreadable_extra) } else { String::new() };
+            sink.findings.push((category, severity, code, name.clone(), format!("멤버를 읽을 수 없음: {err}{more}")));
         }
     }
 

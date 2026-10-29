@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use bookdoctor::cli::Options;
-use bookdoctor::epub::render::{ReadErrorKind, Selector, classify_read_error, count_hidden_elements, inspect, inspect_with, zero_size_selectors};
+use bookdoctor::epub::render::{MAX_UNREADABLE_FINDINGS, ReadErrorKind, Selector, classify_read_error, count_hidden_elements, inspect, inspect_with, zero_size_selectors};
 use bookdoctor::epub::security::Limits;
 use bookdoctor::scan::scan_file;
 use common::*;
@@ -455,7 +455,10 @@ fn total_budget_is_enforced_by_actual_bytes_not_declared_size() {
     let mut r = FileReport::new(f.path(), Some(Format::Epub));
     inspect_with(f.path(), &mut r, &limits);
     assert!(!r.incomplete, "{:?}", r.reasons);
-    assert!(r.findings.is_empty(), "속인 선언 크기가 거짓 지표를 만들면 안 된다: {:?}", r.findings);
+    // 선언보다 크게 풀리는 멤버는 실제로 손상된 것이다. MEMBER_UNREADABLE 한 건만 있고 다른 거짓 지표는 없다.
+    let codes: Vec<&str> = r.findings.iter().map(|f| f.code.as_str()).collect();
+    assert_eq!(codes, ["MEMBER_UNREADABLE"], "{:?}", r.findings);
+    assert_eq!(r.findings[0].location, "OEBPS/bomb.bin");
 }
 
 // ---- 읽기 예산·CSS·오류 분류 (fix round 1) ----
@@ -593,6 +596,79 @@ fn container_and_opf_are_charged_to_the_budget_once() {
     let limits = Limits { max_total: total + 16, ..Limits::default() };
     let r = scan_with(&valid(), &limits);
     assert!(!r.incomplete, "{:?}", r.reasons);
+}
+
+// ---- 압축을 풀 수 없는 멤버 (fix round 2) ----
+
+fn font_payload() -> Vec<u8> {
+    (0..3000).map(|i| format!("glyph{i} ")).collect::<String>().into_bytes()
+}
+
+/// 멤버의 deflate 데이터 앞머리를 0xFF로 덮는다. 로컬 헤더, 크기, CRC 필드는 그대로라 풀기만 실패한다.
+/// (처음에는 데이터 중간을 덮었으나 디코더가 그 바이트열을 받아들여 체크섬 오류가 났다. 첫 블록 머리의
+/// BTYPE=11은 예약값이라 항상 풀기 오류가 난다.)
+fn corrupt_deflate_data(path: &Path, member: &str) {
+    let mut data = fs::read(path).unwrap();
+    let name = member.as_bytes();
+    let at = (0..data.len() - 30).find(|&i| &data[i..i + 4] == b"PK\x03\x04" && &data[i + 30..i + 30 + name.len()] == name).expect("local header");
+    let compressed = u32::from_le_bytes(data[at + 18..at + 22].try_into().unwrap()) as usize;
+    let extra = u16::from_le_bytes(data[at + 28..at + 30].try_into().unwrap()) as usize;
+    let start = at + 30 + name.len() + extra;
+    assert!(compressed > 64, "fixture must compress to more than 64 bytes: {compressed}");
+    data[start..start + 16].fill(0xFF);
+    fs::write(path, data).unwrap();
+}
+
+fn epub_with_damaged_fonts(n: usize) -> NamedFile {
+    let mut p = valid();
+    for i in 0..n {
+        p.extra.push((format!("OEBPS/f{i}.ttf"), font_payload()));
+    }
+    let f = build(&p);
+    for i in 0..n {
+        corrupt_deflate_data(f.path(), &format!("OEBPS/f{i}.ttf"));
+    }
+    f
+}
+
+#[test]
+fn flags_member_unreadable_for_damaged_non_spine_font() {
+    let f = epub_with_damaged_fonts(1);
+    let r = report(&f);
+    let (c, s, loc) = flagged(&r, "MEMBER_UNREADABLE");
+    assert_eq!((c, s, loc.as_str()), (Category::Defect, Severity::High, "OEBPS/f0.ttf"));
+    // 헤더와 CRC 필드는 그대로이므로 체크섬 오류가 아니라 압축 해제 오류여야 한다.
+    assert!(!r.has("ZIP_CRC_MISMATCH"), "{:?}", r.findings);
+    assert!(!r.reasons.iter().any(|m| m.starts_with("panic")), "{:?}", r.reasons);
+}
+
+#[test]
+fn clean_epub_has_no_member_unreadable() {
+    assert_clean("MEMBER_UNREADABLE");
+    let mut p = valid();
+    p.extra.push(("OEBPS/f0.ttf".into(), font_payload()));
+    assert!(!scan(&p).has("MEMBER_UNREADABLE"));
+}
+
+#[test]
+fn member_unreadable_is_capped_with_a_remainder_count() {
+    let r = report(&epub_with_damaged_fonts(MAX_UNREADABLE_FINDINGS + 5));
+    let found: Vec<_> = r.findings.iter().filter(|f| f.code == "MEMBER_UNREADABLE").collect();
+    assert_eq!(found.len(), MAX_UNREADABLE_FINDINGS);
+    assert!(found.last().unwrap().detail.contains("5 more"), "{}", found.last().unwrap().detail);
+    assert!(found[..found.len() - 1].iter().all(|f| !f.detail.contains("more")));
+    let mut names: Vec<_> = found.iter().map(|f| f.location.clone()).collect();
+    names.sort();
+    names.dedup();
+    assert_eq!(names.len(), MAX_UNREADABLE_FINDINGS, "멤버마다 한 건");
+}
+
+#[test]
+fn scan_file_flags_damaged_font_epub_high() {
+    let f = epub_with_damaged_fonts(1);
+    let r = scan_file(f.path(), &Options::default());
+    let m = r.findings.iter().find(|x| x.code == "MEMBER_UNREADABLE").unwrap_or_else(|| panic!("{:?}", r.findings));
+    assert_eq!((m.category, m.severity), (Category::Defect, Severity::High));
 }
 
 // ---- 종합 ----
