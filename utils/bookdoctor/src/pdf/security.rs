@@ -235,10 +235,16 @@ fn shrink_on_load_strict(id: ObjectId, obj: &mut Object) -> Option<(ObjectId, Ob
     Some((id, obj.clone()))
 }
 
-/// 파일 원본에서 `N 0 R` 꼴 참조가 몇 개인지 센다. 압축 객체 스트림 안의 참조는 세지 못한다(해제 한도 `MAX_DECOMPRESSED_STREAM_BYTES`가
-/// 스트림당 따로 막는다). 세는 값은 일반 객체 속 참조 노드 수의 상한에 가깝다.
+/// 파일 원본에서 `번호 세대 R` 꼴 참조가 몇 개인지 센다. 세대 번호가 0이 아니어도, 구분이 공백·탭·CR·LF·FF·NUL 어느 것이어도 센다
+/// (`1\n0\nR`, `1 5 R`). 한 번의 선형 훑기다. 세는 값은 일반 객체 속 참조 노드 수의 상한에 가깝다.
+///
+/// 한계(압축 객체 스트림): 스트림 안의 참조는 압축돼 있어 세지 못한다. 스트림 하나는 해제 4MiB(`MAX_DECOMPRESSED_STREAM_BYTES`)까지라
+/// 참조 약 70만 개, 노드 약 80MB가 일시적으로 생기고, rayon 작업 스레드 수만큼 겹칠 수 있으며 스트림 개수 상한은 없다. 그러나 이는
+/// 엄격 훅으로도 줄지 않는다(31개 이하 배열은 엄격 훅도 남기므로 `[1 0 R ... ]` 31개짜리 배열만 이어 붙인 스트림은 똑같이 80MB다).
+/// 즉 이 위험은 배열 규칙을 바꿔서가 아니라 스트림당 해제 한도로만 막히는 기존 한계다. `/ObjStm` 개수로 훅을 고르면 ObjStm를
+/// 쓰는 현대 PDF 대부분이 엄격 훅이 되어 긴 /Kids가 모두 비워지므로(오탐성 incomplete) 하지 않는다.
 fn count_raw_references(data: &[u8]) -> usize {
-    static RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r" 0 R\b").ok());
+    static RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"(?-u)[0-9]+[ \t\r\n\x0c\x00]+[0-9]+[ \t\r\n\x0c\x00]+R\b").ok());
     RE.as_ref().map_or(0, |re| re.find_iter(data).count())
 }
 
@@ -1055,6 +1061,36 @@ mod tests {
         assert_eq!(info.kept_ref_nodes, 0);
         let kept: usize = loaded.objects.values().filter_map(|o| o.as_array().ok()).map(Vec::len).sum();
         assert!(kept <= 80, "남은 원소 {kept}");
+    }
+
+    #[test]
+    fn reference_counting_covers_other_generations_and_whitespace_separators() {
+        assert_eq!(count_raw_references(b"[1 0 R 2 5 R 3\n0\nR 4 0\nR 5\t1\tR 6\r\n0\r\nR]"), 6);
+        // 참조가 아닌 것: R로 끝나지 않거나 숫자가 하나뿐이다.
+        assert_eq!(count_raw_references(b"1 0 Rx 7 R /Name 3 0 obj"), 0);
+    }
+
+    #[test]
+    fn a_hand_written_bomb_with_generation_one_and_newlines_goes_to_the_strict_hook() {
+        // ` 0 R`만 세던 때는 이 형태가 예산을 피했다. 한 배열 1만 개(상한 밑)로 80개를 쓴 PDF를 직접 쓴다.
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        for n in 0..80u32 {
+            pdf.extend_from_slice(format!("{} 0 obj\n[", 10 + n).as_bytes());
+            for r in 0..10_000u32 {
+                pdf.extend_from_slice(format!("{}\n1\nR ", 1000 + r).as_bytes());
+            }
+            pdf.extend_from_slice(b"]\nendobj\n");
+        }
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
+        assert!(count_raw_references(&pdf) > REF_FILE_BUDGET);
+        // 엄격 훅은 32개 초과 참조 배열을 모두 비운다(표지 하나로 바꾼다).
+        let mut arr = Object::Array((0..10_000).map(|n| Object::Reference((n, 0))).collect());
+        shrink_with(&mut arr, 0, false);
+        assert_eq!(arr.as_array().unwrap().len(), 1);
+        // 31개 이하 배열은 엄격 훅도 남긴다(`plain_nodes`가 배열 자신을 1로 세므로 실제 경계는 31/32다). 압축 객체 스트림 위험이 훅 선택으로 줄지 않는 이유다.
+        let mut small = Object::Array((0..31).map(|n| Object::Reference((n, 0))).collect());
+        shrink_with(&mut small, 0, false);
+        assert_eq!(small.as_array().unwrap().len(), 31);
     }
 
     #[test]
