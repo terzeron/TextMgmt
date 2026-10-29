@@ -1,2 +1,1 @@
 uv.lock merge=uv-lock
-frontend/package-lock.json merge=npm-lock
