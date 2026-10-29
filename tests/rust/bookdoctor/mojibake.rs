@@ -7,7 +7,7 @@ mod common;
 use std::fs;
 
 use bookdoctor::cli::Options;
-use bookdoctor::mojibake::{self, MIN_HANGUL_RATIO, MOJIBAKE_LIKENESS_THRESHOLD, Verdict, classify_text};
+use bookdoctor::mojibake::{self, MIN_HANGUL_RATIO, MOJIBAKE_LIKENESS_THRESHOLD, TextSource, Verdict, classify_text};
 use bookdoctor::pdf;
 use bookdoctor::scan::scan_file;
 use common::*;
@@ -302,6 +302,56 @@ fn pdf_text_runner_failure_is_incomplete_not_a_finding() {
 fn check_file_on_missing_path_is_incomplete() {
     let dir = tempfile::tempdir().unwrap();
     let mut r = FileReport::new(&dir.path().join("none.txt"), None);
-    mojibake::check_file(&dir.path().join("none.txt"), &mut r);
+    mojibake::check_file(&dir.path().join("none.txt"), &mut r, TextSource::Txt);
     assert!(r.incomplete);
+}
+
+// ---- 확장자가 pdf인 EPUB(내용은 ZIP) ----
+
+fn pdf_named_epub_report(chapter: &str) -> FileReport {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("book.pdf");
+    epub_with_chapter(&path, chapter);
+    scan_file(&path, &opts())
+}
+
+#[test]
+fn pdf_named_epub_with_garbled_body_is_flagged_and_complete() {
+    let r = pdf_named_epub_report(&xhtml(&format!("<p>{}</p>", corrupted())));
+    assert!(find(&r, "MOJIBAKE").is_some(), "{r:?}");
+    assert!(!r.reasons.iter().any(|x| x == "no text extracted"), "{r:?}");
+    assert_eq!(r.format, Some(scan_common::Format::Epub));
+    assert_eq!(r.findings.iter().filter(|f| f.code == "FORMAT_MISMATCH").count(), 1, "{r:?}");
+}
+
+#[test]
+fn pdf_named_epub_with_clean_body_has_no_mojibake_and_is_complete() {
+    let r = pdf_named_epub_report(&xhtml(&format!("<p>{}</p>", clean_korean().repeat(4))));
+    assert!(find(&r, "MOJIBAKE").is_none() && !r.incomplete, "{r:?}");
+    assert_eq!(r.format, Some(scan_common::Format::Epub));
+    assert_eq!(r.findings.iter().filter(|f| f.code == "FORMAT_MISMATCH").count(), 1, "{r:?}");
+}
+
+#[test]
+fn epub_named_file_keeps_the_old_tool_verdict() {
+    // 확장자가 .epub이면 옛 `classify_text(read_document_text(..))`와 판정이 같다.
+    for chapter in [corrupted(), clean_korean().repeat(4)] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("b.epub");
+        epub_with_chapter(&path, &xhtml(&format!("<p>{chapter}</p>")));
+        let old = classify_text(&read_document_text(&path, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS)).0;
+        let r = scan_file(&path, &opts());
+        assert_eq!(find(&r, "MOJIBAKE").is_some(), old == Verdict::Corrupted, "{r:?}");
+    }
+}
+
+#[test]
+fn pdf_text_with_unknown_page_count_is_incomplete() {
+    let on = Options { pdf_text: true, ..Options::default() };
+    let r = pdf_report(&on, &FakeRunner::pages_text(0, "x"));
+    assert!(r.reasons.iter().any(|x| x == "pdf text not extracted: page count unknown"), "{r:?}");
+    let r = pdf_report(&on, &FakeRunner::fails("boom"));
+    assert!(r.reasons.iter().any(|x| x == "pdf text not extracted: page count unknown"), "{r:?}");
+    let r = pdf_report(&Options::default(), &FakeRunner::pages_text(0, "x"));
+    assert!(!r.reasons.iter().any(|x| x.contains("page count unknown")), "{r:?}");
 }

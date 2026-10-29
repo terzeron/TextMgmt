@@ -30,6 +30,8 @@ const TEXT_PROBE_PAGES: usize = 5;
 const MAX_PARENT_DEPTH: usize = 64;
 /// 지표에 이름을 나열할 최대 개수.
 const LIST_LIMIT: usize = 5;
+/// `--pdf-text`인데 쪽수를 몰라 본문(NO_TEXT_LAYER·MOJIBAKE 검사)을 뽑지 못했다.
+const PAGE_COUNT_UNKNOWN: &str = "pdf text not extracted: page count unknown";
 const POPPLER_MISSING: &str = "poppler not installed";
 
 /// PDF 32000-1:2008 9.6.2.2 "Standard Type 1 Fonts (Standard 14 Fonts)". 이 글꼴은 뷰어가 내장하므로 임베드하지 않아도 된다.
@@ -245,10 +247,17 @@ fn poppler_checks(path: &Path, opts: &Options, doc: Option<&Document>, report: &
                 return;
             }
             report.push(Category::Render, Severity::High, "POPPLER_OPEN_FAILED", "", &sanitize(&e, 200, Some('…')));
+            if opts.pdf_text {
+                report.mark_incomplete(PAGE_COUNT_UNKNOWN);
+            }
             return;
         }
     };
-    if !opts.pdf_text || pages == 0 {
+    if !opts.pdf_text {
+        return;
+    }
+    if pages == 0 {
+        report.mark_incomplete(PAGE_COUNT_UNKNOWN);
         return;
     }
     let head_last = pages.min(TEXT_PROBE_PAGES);

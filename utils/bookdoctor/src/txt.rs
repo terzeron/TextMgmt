@@ -90,7 +90,7 @@ fn trim_truncated_tail(bytes: &[u8]) -> &[u8] {
 /// `quarantine_broken`이 쓰는 옛 `corrupted` 집합이 모두 `MOJIBAKE`로 남는다.
 pub fn scan_txt_file(path: &Path, opts: &Options, report: &mut FileReport) {
     if scan_txt_content(path, opts, report) {
-        mojibake::check_file(path, report);
+        mojibake::check_file(path, report, mojibake::TextSource::Txt);
     }
 }
 

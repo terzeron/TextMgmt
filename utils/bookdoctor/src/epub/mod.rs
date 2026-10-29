@@ -27,7 +27,7 @@ pub fn scan_epub_file(path: &Path, opts: &Options, report: &mut FileReport) {
     // ZIP으로 열렸을 때만 렌더링·손상 검사를 한다. NOT_ZIP이면 읽을 멤버가 없다.
     if !report.has("NOT_ZIP") {
         render::inspect_with(path, report, &limits);
-        // 옛 detect_mojibake와 같은 표본(`read_document_text`)으로 인코딩 손상을 판정한다.
-        crate::mojibake::check_file(path, report);
+        // 옛 detect_mojibake와 같은 표본(`read_epub_text`, 확장자와 무관)으로 인코딩 손상을 판정한다.
+        crate::mojibake::check_file(path, report, crate::mojibake::TextSource::Epub);
     }
 }
