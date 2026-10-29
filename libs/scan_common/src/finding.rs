@@ -4,7 +4,6 @@ use std::path::Path;
 
 use crate::severity::Severity;
 use crate::stream::Report;
-use crate::text::sanitize;
 
 /// 파일 포맷.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,9 +60,10 @@ pub struct FileReport {
 }
 
 impl FileReport {
-    /// 빈 보고서. 경로의 제어문자는 터미널을 속이지 못하게 지운다.
+    /// 빈 보고서. 경로는 원문 그대로 둔다(JSON은 serde가 이스케이프하고, `quarantine_broken`이 실제 파일을 찾으려면 원문이어야 한다).
+    /// 터미널에 찍는 쪽이 `text::sanitize_display`로 제어·방향 문자를 지운다.
     pub fn new(path: &Path, format: Option<Format>) -> Self {
-        let path = sanitize(&path.to_string_lossy(), usize::MAX, None);
+        let path = path.to_string_lossy().into_owned();
         FileReport { path, format, findings: Vec::new(), incomplete: false, reasons: Vec::new(), likeness: None }
     }
 

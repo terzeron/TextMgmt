@@ -23,10 +23,9 @@ fn mark_incomplete_keeps_the_reason() {
 }
 
 #[test]
-fn path_is_sanitized_of_control_characters() {
-    let r = FileReport::new(Path::new("a\u{1b}b.txt"), None);
-    assert!(!r.path.contains('\u{1b}'));
-    assert!(r.path.ends_with("b.txt"));
+fn path_keeps_the_original_name_so_quarantine_finds_the_real_file() {
+    let r = FileReport::new(Path::new("a\u{1b}b\u{202e}.txt"), None);
+    assert_eq!(r.path, "a\u{1b}b\u{202e}.txt");
 }
 
 #[cfg(feature = "serde")]

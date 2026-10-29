@@ -307,3 +307,16 @@ fn mz_with_lfanew_past_eof_is_not_disguised() {
     assert_eq!(count(&r, "DISGUISED_EXECUTABLE"), 0);
     assert!(!r.incomplete || r.reasons.iter().all(|x| !x.starts_with("unreadable")));
 }
+
+#[test]
+fn flags_bidi_and_zero_width_characters_in_the_file_name() {
+    for name in ["evil\u{202e}gpj.txt", "a\u{200b}b.txt", "a\u{feff}b.txt", "a\u{2066}b.txt"] {
+        let f = common::file_with(name, "본문\n".as_bytes());
+        let r = scan_file(f.path(), &Options { no_poppler: true, ..Options::default() });
+        let x = find(&r, "FILENAME_CONTROL_CHAR");
+        assert_eq!((x.category, x.severity), (Category::Defect, Severity::Medium), "{name:?}");
+        assert_eq!(count(&r, "FILENAME_CONTROL_CHAR"), 1, "{name:?}");
+    }
+    let ok = common::file_with("정상 이름.txt", "본문\n".as_bytes());
+    assert_eq!(count(&scan_file(ok.path(), &Options { no_poppler: true, ..Options::default() }), "FILENAME_CONTROL_CHAR"), 0);
+}

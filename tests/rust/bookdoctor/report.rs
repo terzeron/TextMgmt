@@ -96,3 +96,15 @@ fn incomplete_file_is_kept_and_printed_with_reasons() {
     agg.add(&r);
     assert_eq!((agg.incomplete(), agg.findings()), (1, 0));
 }
+
+#[test]
+fn bidi_file_name_is_hidden_in_text_but_kept_in_json() {
+    let r = flagged(Path::new("evil\u{202e}gpj.exe"));
+    let mut text = Vec::new();
+    write_text(&r, &mut text).unwrap();
+    assert!(!String::from_utf8(text).unwrap().contains('\u{202e}'));
+    let mut json = Vec::new();
+    write_json_line(&r, &mut json).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(v["path"], "evil\u{202e}gpj.exe");
+}

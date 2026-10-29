@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use scan_common::args::{long_option, number};
 use scan_common::files::{collect_files, has_extension};
-use scan_common::text::sanitize;
+use scan_common::text::{is_hidden_format_char, sanitize, sanitize_display};
 use scan_common::{DEFAULT_WORKERS, Report, Severity, Summary, limited, pool, scan_streaming, workers_within_memory};
 
 // ---- severity ----
@@ -299,4 +299,17 @@ fn scan_streaming_with_no_paths_returns_an_empty_summary() {
     // window가 0이어도 멈추지 않는다.
     let s = scan_streaming(&paths(3), &pool(1), 0, fake, |_| Ok(())).unwrap();
     assert_eq!(s.scanned, 3);
+}
+
+#[test]
+fn sanitize_display_also_replaces_bidi_and_zero_width_characters() {
+    for c in ['\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{200E}', '\u{200F}', '\u{061C}', '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}'] {
+        assert!(is_hidden_format_char(c), "{c:?}");
+        assert_eq!(sanitize_display(&format!("a{c}b"), 100, None), "a.b", "{c:?}");
+    }
+    // 일반 글자와 인접 코드 포인트는 그대로 둔다.
+    assert!(!is_hidden_format_char('가') && !is_hidden_format_char('\u{2029}') && !is_hidden_format_char('\u{2070}'));
+    assert_eq!(sanitize_display("가\u{1b}나\u{202e}다", 100, None), "가.나.다");
+    // `sanitize` 자체는 방향 문자를 건드리지 않는다.
+    assert_eq!(sanitize("a\u{202e}b", 100, None), "a\u{202e}b");
 }

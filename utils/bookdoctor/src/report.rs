@@ -7,7 +7,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-use scan_common::text::sanitize;
+use scan_common::text::sanitize_display;
 use scan_common::{FileReport, Summary};
 use serde::Serialize;
 
@@ -16,9 +16,9 @@ fn is_flagged(r: &FileReport) -> bool {
     !r.findings.is_empty() || r.incomplete
 }
 
-/// 터미널에 안전한 한 줄. 제어문자는 `.`로 바뀐다.
+/// 터미널에 안전한 한 줄. 제어문자와 방향·서식 문자는 `.`로 바뀐다.
 fn safe(s: &str) -> String {
-    sanitize(s, usize::MAX, None)
+    sanitize_display(s, usize::MAX, None)
 }
 
 fn io_err(e: serde_json::Error) -> io::Error {
