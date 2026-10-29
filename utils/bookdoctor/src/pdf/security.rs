@@ -28,6 +28,8 @@ const STREAM_KEEP_BYTES: usize = 64 * 1024;
 /// 숫자·이름·참조만 든 배열은 이 길이를 넘으면 로딩 중에 비운다. lopdf는 원소 하나를 `Object`(약 120B)로 만들어서
 /// 파일에서 2바이트인 숫자가 50배로 부풀고, 숫자 배열이 많은 PDF는 입력의 25배까지 메모리를 쓴다(22MB가 549MB).
 const ARRAY_KEEP_LEN: usize = 32;
+/// 참조만 든 배열은 이 길이까지 남긴다. 쪽 트리의 /Kids는 쪽 수만큼 길다(표본 최대 2,710쪽). 10만 개면 노드 약 12MB다.
+const REF_ARRAY_KEEP_LEN: usize = 100_000;
 /// Bound the amount of input PDF data held by concurrent scans. `lopdf` may
 /// allocate more than the input size while parsing, so this is a conservative
 /// concurrency guard rather than a hard process-memory limit.
@@ -72,6 +74,12 @@ fn plain_nodes(items: &[Object], depth: usize) -> Option<usize> {
 }
 
 fn shrink_array(items: &mut Vec<Object>, depth: usize) {
+    // 참조만 든 배열은 쪽 트리(/Kids)와 /Contents 같은 구조 정보다. `/Kids 21 0 R`처럼 배열이 독립 객체일 때는 훅이 키를 모르므로
+    // 내용으로 가려야 한다. 비우면 lopdf가 쪽을 하나도 찾지 못해 멀쩡한 PDF가 0쪽이 된다. 참조는 파일에서 6바이트 이상이라
+    // 숫자(2바이트)보다 부풀림이 작고, 상한을 넘는 배열만 비운다.
+    if items.len() <= REF_ARRAY_KEEP_LEN && items.iter().all(|o| matches!(o, Object::Reference(_))) {
+        return;
+    }
     if plain_nodes(items, depth).is_some_and(|n| n > ARRAY_KEEP_LEN) {
         *items = Vec::new();
         return;
@@ -826,6 +834,74 @@ mod tests {
         assert!(d.get(b"Widths").unwrap().as_array().unwrap().is_empty());
         assert!(d.get(b"Names").unwrap().as_array().unwrap().is_empty());
         assert_eq!(d.get(b"Mixed").unwrap().as_array().unwrap().len(), 41);
+    }
+
+    #[test]
+    fn load_keeps_a_page_tree_with_many_kids() {
+        // /Kids는 참조만 든 긴 배열이다. 숫자 배열처럼 비우면 쪽 트리가 사라져 멀쩡한 PDF가 0쪽이 된다(선형화 이미지 PDF에서 재현).
+        let mut doc = Document::with_version("1.5");
+        let mut kids = Vec::new();
+        for n in 0..40u32 {
+            let mut page = Dictionary::new();
+            page.set("Type", "Page");
+            page.set("Parent", Object::Reference((2, 0)));
+            page.set("MediaBox", Object::Array(vec![0.into(), 0.into(), 100.into(), 100.into()]));
+            doc.objects.insert((10 + n, 0), Object::Dictionary(page));
+            kids.push(Object::Reference((10 + n, 0)));
+        }
+        let mut pages = Dictionary::new();
+        pages.set("Type", "Pages");
+        pages.set("Count", 40);
+        pages.set("Kids", Object::Array(kids));
+        doc.objects.insert((2, 0), Object::Dictionary(pages));
+        let mut cat = Dictionary::new();
+        cat.set("Type", "Catalog");
+        cat.set("Pages", Object::Reference((2, 0)));
+        doc.objects.insert((1, 0), Object::Dictionary(cat));
+        doc.trailer.set("Root", Object::Reference((1, 0)));
+        doc.max_id = 50;
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        assert_eq!(load(&bytes).unwrap().get_pages().len(), 40);
+    }
+
+    #[test]
+    fn load_keeps_a_page_tree_whose_kids_is_an_indirect_array() {
+        // 쪽 많은 PDF는 `/Kids 21 0 R`처럼 배열을 독립 객체로 둔다. 훅은 키를 모르므로 참조 배열은 내용으로 보존해야 한다.
+        let mut doc = Document::with_version("1.5");
+        let mut kids = Vec::new();
+        for n in 0..40u32 {
+            let mut page = Dictionary::new();
+            page.set("Type", "Page");
+            page.set("Parent", Object::Reference((2, 0)));
+            doc.objects.insert((10 + n, 0), Object::Dictionary(page));
+            kids.push(Object::Reference((10 + n, 0)));
+        }
+        doc.objects.insert((21, 0), Object::Array(kids));
+        let mut pages = Dictionary::new();
+        pages.set("Type", "Pages");
+        pages.set("Count", 40);
+        pages.set("Kids", Object::Reference((21, 0)));
+        doc.objects.insert((2, 0), Object::Dictionary(pages));
+        let mut cat = Dictionary::new();
+        cat.set("Type", "Catalog");
+        cat.set("Pages", Object::Reference((2, 0)));
+        doc.objects.insert((1, 0), Object::Dictionary(cat));
+        doc.trailer.set("Root", Object::Reference((1, 0)));
+        doc.max_id = 60;
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        assert_eq!(load(&bytes).unwrap().get_pages().len(), 40);
+    }
+
+    #[test]
+    fn shrink_keeps_reference_arrays_up_to_the_cap_and_drops_longer_ones() {
+        let mut short = Object::Array((0..1000).map(|n| Object::Reference((n, 0))).collect());
+        shrink(&mut short, 0);
+        assert_eq!(short.as_array().unwrap().len(), 1000);
+        let mut long = Object::Array((0..=REF_ARRAY_KEEP_LEN as u32).map(|n| Object::Reference((n, 0))).collect());
+        shrink(&mut long, 0);
+        assert!(long.as_array().unwrap().is_empty());
     }
 
     #[test]
