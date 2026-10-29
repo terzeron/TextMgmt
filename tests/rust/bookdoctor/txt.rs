@@ -129,6 +129,22 @@ fn flags_binary_content_when_nuls_are_dense() {
 }
 
 #[test]
+fn executable_disguised_as_txt_is_still_critical_after_the_density_rule() {
+    // 밀도 규칙은 BINARY_CONTENT만 바꾼다. 머리 표지로 가려내는 DISGUISED_EXECUTABLE은 NUL이 섞여도 남아야 한다.
+    // PE는 `MZ`만으로는 실행 파일이 아니므로 e_lfanew(0x3C)가 가리키는 자리에 `PE\0\0`를 둔다.
+    let mut pe = vec![0u8; 4096];
+    pe[..2].copy_from_slice(b"MZ");
+    pe[0x3C] = 0x80;
+    pe[0x80..0x84].copy_from_slice(b"PE\0\0");
+    let mut elf = vec![0u8; 4096];
+    elf[..4].copy_from_slice(b"\x7fELF");
+    for (name, bytes) in [("pe", pe), ("elf", elf)] {
+        let r = scan_bytes(&bytes);
+        assert!(has(&r, "DISGUISED_EXECUTABLE"), "{name}: {:?}", r.findings);
+    }
+}
+
+#[test]
 fn flags_binary_content_on_control_ratio() {
     let mut s = "가".repeat(90);
     s.push_str(&"\u{1}".repeat(10));
