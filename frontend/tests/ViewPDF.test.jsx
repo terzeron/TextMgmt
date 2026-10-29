@@ -578,6 +578,161 @@ describe("ViewPDF", () => {
     });
   });
 
+  describe("1장씩 보기 좌우 쪽 넘김", () => {
+    let originalScrollIntoView;
+    let scrolled;
+
+    beforeEach(() => {
+      originalScrollIntoView = Element.prototype.scrollIntoView;
+      scrolled = [];
+      Element.prototype.scrollIntoView = function scrollIntoView() {
+        scrolled.push(this);
+      };
+    });
+
+    afterEach(() => {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    });
+
+    // 쪽 3개를 800px 간격으로 쌓고 index번째 쪽이 기준선(툴바 아래)에 오게 한다.
+    const setup = async (current) => {
+      globalThis.fetch = createMockFetch(3);
+      setupGetDocument(() => createMockPdf(1));
+      const view = render(<ViewPDF bookId={1} />);
+      await waitFor(() => {
+        expect(screen.getByText("총 3쪽 표시")).toBeTruthy();
+      });
+      view.container.querySelector(".pdf-single-btn").click();
+      const root = view.container.querySelector(".pdf-container");
+      await waitFor(() => {
+        expect(root.classList.contains("pdf-single")).toBe(true);
+      });
+      const pages = Array.from(view.container.querySelectorAll(".pdf-content > .pdf-page"));
+      expect(pages).toHaveLength(3);
+      root.getBoundingClientRect = () => ({ top: 0 });
+      pages.forEach((page, i) => {
+        page.getBoundingClientRect = () => ({ top: 32 + (i - current) * 800 });
+      });
+      scrolled.length = 0;
+      return { root, pages };
+    };
+
+    const press = (key, init = {}) => {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+      document.body.dispatchEvent(event);
+      return event;
+    };
+
+    const swipe = (root, from, to) => {
+      const touch = (x, y) => ({ identifier: 1, clientX: x, clientY: y, target: root });
+      const fire = (type, touches, changed) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        event.touches = touches;
+        event.changedTouches = changed;
+        root.dispatchEvent(event);
+      };
+      fire("touchstart", [touch(...from)], [touch(...from)]);
+      fire("touchend", [], [touch(...to)]);
+    };
+
+    it("오른쪽 방향키는 다음 쪽, 왼쪽 방향키는 이전 쪽으로 넘긴다", async () => {
+      const { pages } = await setup(1);
+      const right = press("ArrowRight");
+      expect(right.defaultPrevented).toBe(true);
+      expect(scrolled).toEqual([pages[2]]);
+      press("ArrowLeft");
+      expect(scrolled).toEqual([pages[2], pages[0]]);
+    });
+
+    it("처음 쪽에서 이전, 마지막 쪽에서 다음은 아무것도 하지 않는다", async () => {
+      const first = await setup(0);
+      press("ArrowLeft");
+      expect(scrolled).toEqual([]);
+      first.pages.forEach((page, i) => {
+        page.getBoundingClientRect = () => ({ top: 32 + (i - 2) * 800 });
+      });
+      press("ArrowRight");
+      expect(scrolled).toEqual([]);
+    });
+
+    it("수정 키 조합, 입력 컨트롤, 대화상자, 다른 키는 무시한다", async () => {
+      await setup(1);
+      press("ArrowRight", { ctrlKey: true });
+      press("ArrowRight", { altKey: true });
+      press("ArrowRight", { metaKey: true });
+      press("ArrowDown");
+      const input = document.createElement("input");
+      document.body.appendChild(input);
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      document.body.appendChild(dialog);
+      dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      input.remove();
+      dialog.remove();
+      expect(scrolled).toEqual([]);
+    });
+
+    it("1장씩 보기가 꺼져 있으면 방향키로 넘기지 않는다", async () => {
+      globalThis.fetch = createMockFetch(3);
+      setupGetDocument(() => createMockPdf(1));
+      render(<ViewPDF bookId={1} />);
+      await waitFor(() => {
+        expect(screen.getByText("총 3쪽 표시")).toBeTruthy();
+      });
+      press("ArrowRight");
+      expect(scrolled).toEqual([]);
+    });
+
+    it("왼쪽으로 스와이프하면 다음 쪽, 오른쪽이면 이전 쪽으로 넘긴다", async () => {
+      const { root, pages } = await setup(1);
+      swipe(root, [200, 300], [100, 310]);
+      expect(scrolled).toEqual([pages[2]]);
+      swipe(root, [100, 300], [200, 290]);
+      expect(scrolled).toEqual([pages[2], pages[0]]);
+    });
+
+    it("짧거나 세로에 가까운 스와이프, 다중 터치, 버튼 위 터치는 넘기지 않는다", async () => {
+      const { root } = await setup(1);
+      swipe(root, [200, 300], [180, 300]);
+      swipe(root, [200, 300], [100, 500]);
+      const touch = (x, y) => ({ identifier: 1, clientX: x, clientY: y });
+      const fire = (type, touches, changed, target = root) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        event.touches = touches;
+        event.changedTouches = changed;
+        target.dispatchEvent(event);
+      };
+      // 두 손가락
+      fire("touchstart", [touch(200, 300), touch(210, 300)], []);
+      fire("touchend", [], [touch(100, 300)]);
+      // 버튼 위에서 시작
+      const button = root.querySelector("button");
+      fire("touchstart", [touch(200, 300)], [touch(200, 300)], button);
+      fire("touchend", [], [touch(100, 300)]);
+      // 취소된 제스처
+      fire("touchstart", [touch(200, 300)], [touch(200, 300)]);
+      fire("touchcancel", [], []);
+      fire("touchend", [], [touch(100, 300)]);
+      // 끝날 때 손가락이 남아 있거나 다른 손가락이 끝난 경우
+      fire("touchstart", [touch(200, 300)], [touch(200, 300)]);
+      fire("touchend", [touch(50, 50)], [touch(100, 300)]);
+      fire("touchstart", [touch(200, 300)], [touch(200, 300)]);
+      fire("touchend", [], [{ identifier: 9, clientX: 100, clientY: 300 }]);
+      expect(scrolled).toEqual([]);
+    });
+
+    it("1장씩 보기를 끄면 방향키 처리를 해제한다", async () => {
+      const { root } = await setup(1);
+      document.querySelector(".pdf-single-btn").click();
+      await waitFor(() => {
+        expect(root.classList.contains("pdf-single")).toBe(false);
+      });
+      press("ArrowRight");
+      expect(scrolled).toEqual([]);
+    });
+  });
+
   describe("1장씩 보기 높이 측정", () => {
     const AVAIL = "--pdf-avail-h";
     let originalInnerHeight;

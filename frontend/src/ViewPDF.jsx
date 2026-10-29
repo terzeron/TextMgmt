@@ -30,6 +30,10 @@ import {
   getFullPageImageSize,
 } from "./pdfRenderScale";
 import { pdfjs, PDF_DOCUMENT_OPTIONS } from "./pdfjsEnv";
+import { currentPageIndex, keyDirection, swipeDirection } from "./pdfPageTurn";
+
+// CSS의 --pdf-toolbar-h와 같은 값(px). 1장씩 보기에서 쪽이 멈추는 기준선 계산에 쓴다.
+const PDF_TOOLBAR_HEIGHT = 32;
 
 // 서버는 실패 사유를 본문에 담아 보낸다(파일 없음, 스토리지 접근 오류 등).
 // 쪽 크기(pt)가 비정상적으로 작은 PDF가 있다. 이미지를 0.09pt 폭으로 그려 넣은 만화 PDF가 그렇다.
@@ -508,6 +512,59 @@ export default function ViewPDF({
     return () => {
       window.removeEventListener("resize", measure);
       el.style.removeProperty("--pdf-avail-h");
+    };
+  }, [singlePage]);
+
+  // 1장씩 보기: 좌우 스와이프와 좌우 방향키로 쪽을 넘긴다(EPUB 뷰어와 같은 기준).
+  // 세로 스크롤·snap은 그대로 두고, 현재 쪽의 이웃 쪽 맨 위로 이동만 시킨다.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!singlePage || !el) return undefined;
+    const turn = (direction) => {
+      const pages = Array.from(el.querySelectorAll(".pdf-content > .pdf-page"));
+      const index = currentPageIndex(el, pages, PDF_TOOLBAR_HEIGHT);
+      const target = pages[index + direction];
+      if (index >= 0 && target) target.scrollIntoView?.({ block: "start" });
+    };
+    const onKey = (event) => {
+      if (event.ctrlKey || event.altKey || event.metaKey) return;
+      if (/^(INPUT|SELECT|TEXTAREA)$/.test(event.target?.tagName)) return;
+      if (event.target?.closest?.("[role='dialog']")) return;
+      const direction = keyDirection(event.key);
+      if (!direction) return;
+      event.preventDefault();
+      turn(direction);
+    };
+    let start = null;
+    const onTouchStart = (event) => {
+      const touch = event.touches[0];
+      const interactive = event.target?.closest?.("a, button, input, select, textarea");
+      start =
+        event.touches.length === 1 && !interactive
+          ? { x: touch.clientX, y: touch.clientY, id: touch.identifier }
+          : null;
+    };
+    const onTouchEnd = (event) => {
+      const origin = start;
+      start = null;
+      if (!origin || event.touches.length) return;
+      const touch = Array.from(event.changedTouches).find((t) => t.identifier === origin.id);
+      if (!touch) return;
+      const direction = swipeDirection(touch.clientX - origin.x, touch.clientY - origin.y);
+      if (direction) turn(direction);
+    };
+    const reset = () => {
+      start = null;
+    };
+    document.addEventListener("keydown", onKey);
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", reset, { passive: true });
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", reset);
     };
   }, [singlePage]);
 
@@ -1150,6 +1207,8 @@ const pdfStyles = `
         height: var(--pdf-avail-h, calc(100vh - 10px));
         scroll-snap-type: y mandatory;
         scroll-padding-top: var(--pdf-toolbar-h);
+        /* 가로 팬은 브라우저가 가로채지 않게 막아 좌우 스와이프를 쪽 넘김으로 쓴다 */
+        touch-action: pan-y;
     }
     /* overflow-x:auto는 overflow-y도 auto로 만들어 snap 컨테이너를 가로채므로 푼다 */
     .pdf-container.pdf-single .pdf-content {
