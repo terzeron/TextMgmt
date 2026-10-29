@@ -17,6 +17,10 @@ ureq = { version = "3.5", default-features = false, features = ["json"] }
 
 [patch.crates-io]
 
+# 테스트 바이너리의 80%가 debug info였다(413M 중 328M). 백트레이스용 줄 정보만 남긴다.
+[profile.dev]
+debug = "line-tables-only"
+
 # 개발·테스트 빌드에서 이미지 디코딩이 너무 느리다 (6000x8000 JPEG 테스트가 100초). 디코더 crate만 최적화한다.
 [profile.dev.package.image]
 opt-level = 3
