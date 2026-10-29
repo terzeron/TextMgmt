@@ -355,3 +355,29 @@ fn pdf_text_with_unknown_page_count_is_incomplete() {
     let r = pdf_report(&Options::default(), &FakeRunner::pages_text(0, "x"));
     assert!(!r.reasons.iter().any(|x| x.contains("page count unknown")), "{r:?}");
 }
+
+#[test]
+fn epub_with_many_large_compressible_members_is_bounded_and_incomplete() {
+    // 멤버마다 2MB로 풀리는 문서 40개(압축 후 수십 KB). 표본 추출이 한도 없이 풀면 분 단위가 걸린다(최종 검토 지적).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bomb.epub");
+    let zeros = "\0".repeat(2 * 1024 * 1024);
+    let docs: Vec<(String, &str)> = (0..40).map(|i| (format!("ch{i}.xhtml"), zeros.as_str())).collect();
+    let refs: Vec<(&str, &str)> = docs.iter().map(|(a, b)| (a.as_str(), *b)).collect();
+    make_zip(&path, &refs);
+    let started = std::time::Instant::now();
+    let r = scan_file(&path, &Options { max_total_mb: 1, ..Options::default() });
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    assert!(r.incomplete, "{r:?}");
+    assert!(find(&r, "MOJIBAKE").is_none(), "{r:?}");
+}
+
+#[test]
+fn mojibake_sampling_is_skipped_when_security_already_reported_the_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bomb.epub");
+    let zeros = "\0".repeat(2 * 1024 * 1024);
+    make_zip(&path, &[("a.xhtml", zeros.as_str()), ("b.xhtml", zeros.as_str())]);
+    let r = scan_file(&path, &Options { max_total_mb: 1, ..Options::default() });
+    assert!(r.reasons.iter().any(|x| x.contains("mojibake sampling skipped")), "{:?}", r.reasons);
+}

@@ -28,6 +28,16 @@ pub fn scan_epub_file(path: &Path, opts: &Options, report: &mut FileReport) {
     if !report.has("NOT_ZIP") {
         render::inspect_with(path, report, &limits);
         // 옛 인코딩 검사 도구와 같은 표본(`read_epub_text`, 확장자와 무관)으로 인코딩 손상을 판정한다.
-        crate::mojibake::check_file(path, report, crate::mojibake::TextSource::Epub);
+        // 보안 검사가 압축 폭탄이나 예산 소진을 이미 보고했다면 같은 멤버를 다시 풀지 않는다.
+        if bomb_reported(report) {
+            report.mark_incomplete("mojibake sampling skipped: decompression bomb or budget exhaustion already reported");
+        } else {
+            crate::mojibake::check_file_limited(path, report, crate::mojibake::TextSource::Epub, limits.max_total, limits.max_files);
+        }
     }
+}
+
+/// 보안 검사가 압축 폭탄(`HIGH_COMPRESSION_RATIO`)이나 압축 해제 예산 소진을 보고했는가.
+fn bomb_reported(report: &FileReport) -> bool {
+    report.has("HIGH_COMPRESSION_RATIO") || report.reasons.iter().any(|r| r.contains("decompression budget") || r.contains("decompressed-byte scan limit"))
 }

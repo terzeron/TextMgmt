@@ -214,3 +214,43 @@ fn read_document_text_dispatches_by_extension() {
     fs::write(&other, b"%PDF-1.4").unwrap();
     assert_eq!(read_document_text(&other, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS), "");
 }
+
+#[test]
+fn read_epub_text_limited_stops_at_the_total_budget() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("bomb.epub");
+    // 멤버마다 2MB로 풀리는데 거의 0바이트로 압축되는 문서 40개. 예산 없이 읽으면 전부 푼다.
+    let zeros = "\0".repeat(2 * 1024 * 1024);
+    let docs: Vec<(String, &str)> = (0..40).map(|i| (format!("ch{i}.xhtml"), zeros.as_str())).collect();
+    let refs: Vec<(&str, &str)> = docs.iter().map(|(a, b)| (a.as_str(), *b)).collect();
+    make_zip(&p, &refs);
+    let started = std::time::Instant::now();
+    let (_, cut) = read_epub_text_limited(&p, 20_000, 10_000, 1024 * 1024, usize::MAX);
+    assert!(cut, "예산이 바닥나면 잘렸다고 알려야 한다");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "예산이 읽기량을 묶어야 한다: {:?}", started.elapsed());
+}
+
+#[test]
+fn read_epub_text_limited_stops_at_the_member_count() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("tags.epub");
+    // 태그뿐인 문서는 50자 미만이라 건너뛰는데, 건너뛴 것도 읽은 것으로 센다.
+    let docs: Vec<(String, &str)> = (0..100).map(|i| (format!("ch{i}.xhtml"), "<p></p>")).collect();
+    let refs: Vec<(&str, &str)> = docs.iter().map(|(a, b)| (a.as_str(), *b)).collect();
+    make_zip(&p, &refs);
+    let (text, cut) = read_epub_text_limited(&p, 20_000, 10_000, u64::MAX, 10);
+    assert!(cut);
+    assert_eq!(text, "");
+}
+
+#[test]
+fn read_epub_text_limited_is_not_cut_when_the_sample_fits() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("ok.epub");
+    let body = format!("<p>{}</p>", KOREAN.repeat(5));
+    make_zip(&p, &[("a.xhtml", &body)]);
+    let (text, cut) = read_epub_text_limited(&p, 2000, 0, 1024 * 1024, 100);
+    assert!(!cut);
+    assert!(text.contains("바람이"));
+    assert_eq!(text, read_epub_text(&p, 2000, 0));
+}
