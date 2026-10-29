@@ -89,11 +89,63 @@ fn ureq_session_preserves_http_status_headers_body_and_query() {
         assert!(has_user_agent);
         stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbusy").unwrap();
     });
-    let response = yes24(false).session().get(&format!("http://{address}/search"), &[("q".to_string(), "rust".to_string())]).unwrap();
+    let response = AladinBookstore::new(false).session().get(&format!("http://{address}/search"), &[("q".to_string(), "rust".to_string())]).unwrap();
     assert_eq!(response.status_code, 503);
     assert_eq!(response.header("content-type"), Some("text/plain"));
     assert_eq!(response.text(), "busy");
     server.join().unwrap();
+}
+
+/// `get`이 보낸 요청의 User-Agent 값을 돌려준다.
+fn user_agent_sent_by(get: impl FnOnce(&str)) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut user_agent = String::new();
+        loop {
+            let mut header = String::new();
+            reader.read_line(&mut header).unwrap();
+            if header == "\r\n" || header.is_empty() {
+                break;
+            }
+            if header.to_ascii_lowercase().starts_with("user-agent:") {
+                user_agent = header["user-agent:".len()..].trim().to_string();
+            }
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
+        user_agent
+    });
+    get(&format!("http://{address}/ua"));
+    server.join().unwrap()
+}
+
+// yes24는 브라우저형 UA의 첫 요청을 쿠키를 심고 메인 페이지로 302한다. 세션은 쿠키를 저장하지 않으므로 검색 결과를 못 받는다.
+#[test]
+fn yes24_sessions_send_a_non_browser_user_agent() {
+    let search = user_agent_sent_by(|url| {
+        Yes24Bookstore::new(false).session().get(url, &[]).unwrap();
+    });
+    let cover = user_agent_sent_by(|url| {
+        UreqHttpSession::for_store("yes24").get(url, &[]).unwrap();
+    });
+
+    assert_eq!(search, "curl/7.79.1");
+    assert_eq!(cover, "curl/7.79.1");
+}
+
+#[test]
+fn other_store_sessions_keep_the_browser_user_agent() {
+    let aladin = user_agent_sent_by(|url| {
+        AladinBookstore::new(false).session().get(url, &[]).unwrap();
+    });
+    let ridi = user_agent_sent_by(|url| {
+        UreqHttpSession::for_store("ridi").get(url, &[]).unwrap();
+    });
+
+    assert!(aladin.starts_with("Mozilla/5.0"), "{aladin}");
+    assert!(ridi.starts_with("Mozilla/5.0"), "{ridi}");
 }
 
 #[test]

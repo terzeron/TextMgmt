@@ -301,6 +301,15 @@ impl HttpSession for UnavailableSession {
     }
 }
 
+const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/142.0.0.0 Safari/537.36";
+
+/// yes24는 브라우저형 UA의 첫 요청에 쿠키를 심고 메인 페이지로 302한다. 세션이 쿠키를 저장하지 않아 검색 결과를 못 받으므로 `libs/bookstore`처럼 curl UA를 쓴다.
+const CURL_USER_AGENT: &str = "curl/7.79.1";
+
+fn user_agent_for(store: &str) -> &'static str {
+    if store == "yes24" { CURL_USER_AGENT } else { BROWSER_USER_AGENT }
+}
+
 /// `ureq` 기반 동기 HTTP GET 세션. 응답 상태와 본문을 보존해 서점별 오류 규칙에 맡긴다.
 pub struct UreqHttpSession {
     config: ureq::config::Config,
@@ -310,21 +319,22 @@ pub struct UreqHttpSession {
 
 impl UreqHttpSession {
     pub fn new() -> Self {
-        Self::with_redirect_limit(10)
+        Self::with_redirect_limit(10, BROWSER_USER_AGENT)
     }
 
-    fn with_redirect_limit(max_redirects: u32) -> Self {
+    /// 서점 구조체용 세션. `type_name`은 `Yes24Bookstore` 같은 구조체 이름이다.
+    fn for_bookstore(type_name: &str) -> Self {
+        Self::with_redirect_limit(10, user_agent_for(&type_name.trim_end_matches("Bookstore").to_ascii_lowercase()))
+    }
+
+    fn with_redirect_limit(max_redirects: u32, user_agent: &str) -> Self {
         let config = ureq::Agent::config_builder().max_redirects(max_redirects).http_status_as_error(false).build();
-        Self {
-            agents: Mutex::new(vec![ureq::Agent::new_with_config(config.clone())]),
-            config,
-            headers: vec![("User-Agent".to_string(), "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/142.0.0.0 Safari/537.36".to_string())],
-        }
+        Self { agents: Mutex::new(vec![ureq::Agent::new_with_config(config.clone())]), config, headers: vec![("User-Agent".to_string(), user_agent.to_string())] }
     }
 
     pub fn for_store(store: &str) -> Self {
         // cover_sources는 각 redirect target을 검사하므로 ureq의 자동 follow를 막는다.
-        let mut session = Self::with_redirect_limit(0);
+        let mut session = Self::with_redirect_limit(0, user_agent_for(store));
         if store == "ridi" {
             session.headers.extend([
                 ("Referer".to_string(), "https://ridibooks.com/".to_string()),
@@ -737,7 +747,7 @@ macro_rules! bookstore_struct {
                     verbose,
                     max_results: MAX_RESULTS,
                     supports_isbn_search: $isbn,
-                    session: Arc::new(UreqHttpSession::new()),
+                    session: Arc::new(UreqHttpSession::for_bookstore(stringify!($name))),
                     fs: Arc::new(RealFs),
                     tmp_dir: None,
                     fetch_hook: None,
