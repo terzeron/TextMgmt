@@ -1735,7 +1735,8 @@ Python `backend/classifier/export.py`는 기준 구현과 fixture 생성용으�
 ## bookdoctor 동등성 검증
 
 결론: 옛 도구 발견이 새 `bookdoctor`에서 빠진 사례는 0건이다. 단 `bookdoctor`가 정상 파일을 잘못 `HIGH`로 표시하는 오탐 두 가지를 찾았다.
-`ZERO_PAGES`와 `XHTML_PARSE_FAILED`다. 코드는 고치지 않았다. 옛 도구 삭제(Task 17) 여부는 컨트롤러가 정한다.
+`ZERO_PAGES`와 `XHTML_PARSE_FAILED`다. 이 절은 수정 전(Task 16) 측정이다. 두 오탐과 TXT `BINARY_CONTENT` 과다 판정은
+Task 16b에서 고쳤고 결과는 아래 "Task 16b 결과"에 있다.
 검증일 2026-10-29~30. 디버그 빌드(`target/debug`)를 썼고 말뭉치는 순차로, 읽기 전용으로 스캔했다.
 `/mnt/data/text/0_broken`이 없어 그 부분은 미실행이다.
 
@@ -1838,7 +1839,9 @@ FORMAT_MISMATCH, SPARSE_FILE, NO_EOF_MARKER, TINY_PAGE, ZIP_CRC_MISMATCH, MEMBER
 HIGH_COMPRESSION_RATIO, MARKUP_UNDECODABLE, JS_URL은 표본에서 0건이다. 소음 여부는 이 표본으로 판단하지 못한다.
 
 오탐 재현:
-- `ZERO_PAGES`: `/mnt/data/text/0_telegram/마스크걸/마스크걸 00104.pdf` (img2pdf, `pdfinfo` 40쪽, `qpdf --show-npages` 40). trailer에 `/Root`가 없는 파일로 보이고, `doc.get_pages()`가 비어 `structure.rs:148`이 발화한다. 코드 원인은 확인하지 않았다.
+- `ZERO_PAGES`: `/mnt/data/text/0_telegram/마스크걸/마스크걸 00104.pdf` (img2pdf, `pdfinfo` 40쪽, `qpdf --show-npages` 40).
+  원인은 `/Root` 누락이 아니었다. 메모리 보호용 load hook(`shrink_array`)이 길이 32를 넘는 일반 배열을 비웠고, 쪽 참조로만 된 `/Kids`도 비워서
+  `doc.get_pages()`가 0쪽을 돌려줬다. 같은 파일을 hook 없이 lopdf로 읽으면 40쪽이다(Task 16b에서 재현·확인).
 - `XHTML_PARSE_FAILED`: `/mnt/data/text/9_BLGL/[2RE] 키보드를 돌려줘요 2.epub`의 `OEBPS/Text/chapter_01.xhtml`. XHTML 1.1 DOCTYPE을 선언하고 `&nbsp;`를 쓴다. 엄격한 XML 파서는 실패하고 `xmllint`는 경고만 낸다. 뷰어에서 실제로 렌더링되는지는 확인하지 않았다.
 
 ### 7. 요약과 미실행
@@ -1868,6 +1871,61 @@ xargs -d '\n' -n 100 bookdoctor --json --only security < sample-pdf.txt
 xargs -d '\n' -n1 -I{} detect_mojibake check --file {} < sample-txt.txt   # sample-epub.txt도 같다
 xargs -d '\n' -n 100 bookdoctor --json < sample-{txt,epub,pdf}.txt, pdf-redownload.txt, epub-redownload.txt
 ```
+
+### Task 16b 결과
+
+Task 16이 찾은 오탐 세 가지를 원인부터 고쳤다. 수정은 PDF, EPUB, TXT 세 커밋과 네 번의 수정 라운드이고 마지막 커밋은 `dd5b531b`다.
+재검사는 디버그 빌드로 순차 실행했다(`--workers 1`).
+
+| 대상 | 수정 전 (High 이상 파일) | 수정 후 |
+|---|---|---|
+| PDF 187건 | `ZERO_PAGES` 59, `Launch action` 1 | `ZERO_PAGES` 0, `Launch action` 1. `incomplete` 13건은 그대로 |
+| EPUB 200건 | `XHTML_PARSE_FAILED` 95, `SCRIPT_TAG` 1, `ACTIVE_ELEMENT` 1 | `XHTML_PARSE_FAILED` 0, 나머지 둘은 그대로 |
+| TXT 200건 | `BINARY_CONTENT` 4, `INVALID_UTF8` 3, `NOT_UTF8` 3 | `BINARY_CONTENT` 0, 나머지 둘은 그대로 |
+
+진짜 발견은 바뀌지 않았다. `Launch action`, `SCRIPT_TAG`, `ACTIVE_ELEMENT`, `INVALID_UTF8`, `NOT_UTF8`은 수정 전후가 같다.
+수정 내용은 다음과 같다.
+
+- PDF: 참조로만 된 배열은 배열당 100,000개, 파일당 500,000개(`REF_FILE_BUDGET`)까지 hook이 유지한다. 예산을 넘으면 엄격 hook으로 바꾸고 쪽 트리를 `incomplete`로 표시한다.
+  hook이 비운 배열이 있으면 `ZERO_PAGES`를 `High`로 내지 않고 `incomplete`로 낸다.
+- EPUB: XHTML 1.x DOCTYPE을 선언한 문서가 첫 파싱에 실패하면 이름 있는 엔티티 248개를 숫자 참조로 바꿔 한 번 더 파싱한다. 보안 파싱 경로는 그대로다.
+- TXT: 제어 문자(NUL 포함)가 문자 수의 1%를 넘을 때만 `BINARY_CONTENT`를 낸다.
+
+한계: PDF 참조 수는 ObjStm 안의 참조를 세지 못한다. 이 경우의 메모리 상한은 아래 "R20 메모리 한계"를 본다.
+옛 도구 대비 누락 검사(Task 16의 3절)는 바뀐 규칙에 대해 다시 돌리지 않았다. 브라우저에서 `&nbsp;` XHTML이 실제로 렌더링되는지도 확인하지 않았다.
+
+### R20 메모리 한계
+
+lopdf load hook은 ObjStm 안의 배열을 문서 수명 동안 `doc.objects`에 남긴다. ObjStm 개수에 상한이 없고 프로세스 안에서 막을 방법이 없다.
+추가 측정(디버그 빌드, 합성 PDF):
+
+| 입력 | 최대 RSS | 보고 |
+|---|---|---|
+| ObjStm 10개, 31개짜리 배열 50만 개, 파일 3.7MB | 2.0GB | `normal`, 종료 코드 0 |
+| 일반 PDF 21MB, 31개짜리 숫자 배열 20만 개 | 849MB | `normal` |
+
+ObjStm 하나당 약 200MB다. 앞 수정 라운드의 "스트림당 약 80MB" 추정은 낮았다. `--workers` 상한은 한 문서의 사용량을 줄이지 못한다.
+메모리 한도는 바깥에서 건다(`systemd-run --user -p MemoryMax=...`). 옛 `pdfscan`도 같은 한계였다.
+
+### 9절 이식하지 못한 옛 테스트
+
+설계서 9절은 "기존 세 도구의 테스트가 모두 이식되어 통과한다. 이식하지 못한 테스트가 있으면 이유를 적는다"를 요구한다.
+옛 건수는 Task 1 기준선(`cargo test`, 255건)이다. 이식 건수는 Task 7, 8, 10, 13 보고와 `tmp/bookdoctor-baseline/ported-tests.txt`에서 옮겼다.
+"미확인"은 옛 테스트 이름을 새 테스트와 하나씩 대조하지 않았다는 뜻이다.
+
+| 옛 도구 (테스트 수) | 이식 | 이식하지 않은 것 | 이유 |
+|---|---|---|---|
+| `epubscan` 111 (`bin` 3, `cli` 21, `gaps` 11, `security` 58, `structure` 18) | `security` 58, `gaps` 9, `structure` 18 | `gaps` 2건(`inline_option_values_and_extra_positionals_are_accepted`, `structure_report_write_failure_exits_one`) | 옛 `epubscan` CLI와 `structure` 서브커맨드가 없어졌다. Task 7 보고의 판단이다 |
+| 〃 | - | `cli` 21, `bin` 3 | 옛 CLI(`scan`·`structure` 서브커맨드, 종료 코드, 스트리밍, 리포트 쓰기)의 테스트다. 새 CLI는 `tests/rust/bookdoctor/{cli,bin,scan,report}.rs`가 따로 맡는다. 일대일 대조는 하지 않았다(미확인) |
+| `pdfscan` 53 (`bin` 2, `pdfscan.rs` 41, `lib.rs` 단위 10) | `pdfscan.rs` 33, 단위 7 | `pdfscan.rs` 8건(`directories_respect_the_recursive_flag_and_symlinked_dirs_are_not_followed`, `empty_directories_and_the_limit_option`, `indicators_win_over_incomplete_in_the_exit_code`, `text_output_sanitizes_attacker_controlled_file_names`, `json_output_escapes_controls_and_lists_findings`, `usage_and_bad_arguments`, `run_survives_a_closed_output`, `text_results_are_written_before_the_next_file_finishes`) | 모두 옛 CLI 동작(디렉터리 순회, 종료 코드, 출력 형식, 사용법, 스트리밍)이다. Task 10 보고는 Task 3·4의 CLI 테스트가 대신한다고 적었다 |
+| 〃 | - | 단위 3건(`usage_is_requested_for_no_arguments_and_help_flags`, `print_usage_explains_purpose_arguments_options_and_exit_codes`, `json_str_escapes_c0_and_c1_controls`), `bin` 2 | 옛 CLI 사용법과 JSON 출력 함수다. `bin` 2건은 Task 10 보고에 따로 적혀 있지 않다(미확인) |
+| `detect_mojibake` 40 (`bin` 3, `cli_unit` 5, `detect` 32) | `detect` 중 판정 6건(`classify_text_table`, `hanja_heavy`, `returns_likeness`, `english_noise`, `sparse`, `round4` 반올림) | `detect` 26, `cli_unit` 5, `bin` 3 | Task 13 보고: 나머지 26건은 옛 도구의 scan·리포트·CLI·라이브러리 순회 테스트라서 새 판정 모듈과 대응이 없다. `cli_unit`·`bin`은 옛 CLI 테스트다. 같은 판정을 새 파일 `mojibake.rs`의 신규 20건이 통합 경로로 다시 확인한다. 이름별 대조는 하지 않았다(미확인) |
+
+정리: 판정·검사 규칙을 확인하는 옛 테스트는 이식했다(`epubscan` 85건, `pdfscan` 40건, `detect_mojibake` 6건).
+이식하지 않은 것은 옛 도구의 CLI, 리포트, 순회 테스트이고, 새 CLI는 자체 테스트가 있다. 이 판단에서 아래 두 가지는 미확인으로 남는다.
+
+- 옛 CLI 테스트가 보던 동작 중 새 CLI에 대응 테스트가 없는 것이 있는지. 이름별 대조를 하지 않았다.
+- `detect_mojibake`의 `detect` 26건이 보던 라이브러리 순회·리포트 동작이 `bookdoctor`에서 같은지. 합성 4건과 표본 400건의 0 대 0 비교로만 확인했다.
 
 ### 8. 옛 도구 제거 전 기준 수치 (Task 17)
 
