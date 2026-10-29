@@ -4,7 +4,6 @@ mod common;
 
 use bookdoctor::cli::Options;
 use bookdoctor::scan::scan_file;
-use bookdoctor::txt::LOADER_TEXT_SIZE;
 use scan_common::{Category, FileReport, Severity};
 
 const CLEAN: &str = "한글 소설입니다.\n두 번째 줄입니다.\n";
@@ -177,21 +176,6 @@ fn flags_html_in_text() {
 fn does_not_flag_html_in_text_on_clean_text() {
     assert!(!has(&scan_str(CLEAN), "HTML_IN_TEXT"));
     assert!(!has(&scan_str("a < b 이고 scripture 이다\n"), "HTML_IN_TEXT"));
-}
-
-#[test]
-fn flags_text_too_large_only_above_loader_size() {
-    let at = "가".repeat(LOADER_TEXT_SIZE);
-    assert!(!has(&scan_str(&at), "TEXT_TOO_LARGE"));
-    let over = "가".repeat(LOADER_TEXT_SIZE + 1);
-    let r = scan_str(&over);
-    let d = find(&r, "TEXT_TOO_LARGE");
-    assert_eq!((d.category, d.severity), (Category::Render, Severity::Medium));
-}
-
-#[test]
-fn does_not_flag_text_too_large_on_clean_text() {
-    assert!(!has(&scan_str(CLEAN), "TEXT_TOO_LARGE"));
 }
 
 #[test]

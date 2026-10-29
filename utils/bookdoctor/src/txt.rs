@@ -10,11 +10,6 @@ use scan_common::{Category, FileReport, Severity};
 
 use crate::cli::Options;
 
-/// 로더가 본문 요약으로 자르는 글자 수. 출처: `libs/doc_reader/src/lib.rs`의 `TEXT_SIZE`.
-/// doc_reader는 `chars().count()`와 비교하므로 `TEXT_TOO_LARGE`도 바이트가 아니라 글자 수로 비교한다.
-/// UTF-8이 아닌 파일은 글자 수를 셀 수 없어 이 검사를 건너뛴다.
-pub const LOADER_TEXT_SIZE: usize = 4096;
-
 /// 한 줄의 최대 글자 수. 프론트(`frontend/src/ViewTXT.jsx`)가 `\n`으로 줄을 나눠 줄마다 `<p>`를 그린다.
 const MAX_LINE_CHARS: usize = 100_000;
 
@@ -169,9 +164,7 @@ fn check_text(text: &str, report: &mut FileReport) {
         report.push(Category::Security, Severity::Medium, "HTML_IN_TEXT", &format!("line {html_line}"), &format!("count={html_count}"));
     }
 
-    if chars > LOADER_TEXT_SIZE {
-        report.push(Category::Render, Severity::Medium, "TEXT_TOO_LARGE", "", &format!("chars={chars} limit={LOADER_TEXT_SIZE}"));
-    }
+    // 크기 상한은 두지 않는다: doc_reader::TEXT_SIZE는 요약 길이이며 렌더링 한도가 아니다
 
     let cr_total = text.matches('\r').count();
     let lf_total = text.matches('\n').count();
