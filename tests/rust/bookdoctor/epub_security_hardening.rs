@@ -98,6 +98,7 @@ fn forge_declared_size(path: &Path, member: &str, declared: u32) {
     fs::write(path, data).unwrap();
 }
 
+// 이 테스트는 zip 크레이트의 선언 크기 강제를 지키는 가드다. 실제 RED 근거는 위의 OPF 선검사 테스트다.
 #[test]
 fn forged_small_declared_size_cannot_exceed_the_total_budget() {
     let d = tempfile::tempdir().unwrap();
@@ -148,6 +149,7 @@ fn prefixed_url_attribute_with_a_safe_value_or_other_local_name_is_not_flagged()
     assert!(!has(&scan_chapter(r#"<a x:href="chapter2.xhtml">x</a>"#), "JS_URL"));
     assert!(!has(&scan_chapter(r#"<a x:myhref="javascript:alert(1)">x</a>"#), "JS_URL"));
     assert!(!has(&scan_chapter(r#"<a x:href="https://example.com/">x</a>"#), "JS_URL"));
+    assert!(!has(&scan_chapter(r#"<div d:data="plain text" x:action="/submit">x</div>"#), "JS_URL"));
 }
 
 #[test]
@@ -220,15 +222,89 @@ fn utf8_and_utf8_bom_markup_behave_as_before() {
 }
 
 #[test]
-fn invalid_utf8_markup_makes_the_scan_incomplete_once_per_member() {
+fn invalid_utf8_markup_makes_the_scan_incomplete_with_one_summary_note() {
     let mut bad = xhtml("<p>caf").into_bytes();
     bad.push(0xE9);
     bad.extend(b"</p><script>1</script>");
     let r = scan_extra("OEBPS/latin.xhtml", &bad);
-    let notes: Vec<_> = r.reasons.iter().filter(|n| n.contains("non-utf8 markup: OEBPS/latin.xhtml")).collect();
+    let notes: Vec<_> = r.reasons.iter().filter(|n| n.contains("non-utf8 markup")).collect();
     assert_eq!(notes.len(), 1, "{:?}", r.reasons);
+    assert!(notes[0].contains("1 members") && notes[0].contains("first: OEBPS/latin.xhtml"), "{notes:?}");
     assert!(r.incomplete);
     assert_eq!(sev(&r, "SCRIPT_TAG"), Severity::High);
+}
+
+fn scan_many(members: &[(String, Vec<u8>)]) -> FileReport {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    let refs: Vec<(&str, &[u8])> = members.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    epub_with_files(&p, &clean_opf(), &xhtml("<p>x</p>"), &refs);
+    scan_with(&p, &Limits::default())
+}
+
+#[test]
+fn many_undecodable_members_leave_one_note_per_kind_and_capped_findings() {
+    let mut members = Vec::new();
+    for i in 0..40 {
+        members.push((format!("OEBPS/l{i}.xhtml"), vec![b'<', b'p', b'>', 0xE9, b'<', b'/', b'p', b'>']));
+        members.push((format!("OEBPS/w{i}.xhtml"), [&[0xFF, 0xFE, 0, 0][..], b"<\0\0\0"].concat()));
+    }
+    let r = scan_many(&members);
+    for kind in ["non-utf8 markup", "unsupported encoding utf-32"] {
+        let n = r.reasons.iter().filter(|m| m.contains(kind)).count();
+        assert_eq!(n, 1, "{kind}: {:?}", r.reasons);
+    }
+    let f: Vec<_> = r.findings.iter().filter(|f| f.code == "MARKUP_UNDECODABLE").collect();
+    assert_eq!(f.len(), 20, "{}", f.len());
+    assert!(f.iter().any(|x| x.detail.contains("more")), "{f:?}");
+    let note = r.reasons.iter().find(|m| m.contains("utf-32")).unwrap();
+    assert!(note.contains("40 members"), "{note}");
+}
+
+// ---- 3b. 옛 탐지를 가리지 않는다 / NUL을 품은 마크업 ----
+
+#[test]
+fn utf16_bom_followed_by_ascii_markup_keeps_the_old_finding() {
+    let mut bytes = vec![0xFF, 0xFE];
+    bytes.extend(b"<script>alert(1)</script>");
+    let r = scan_extra("OEBPS/tricky.xhtml", &bytes);
+    assert_eq!(sev(&r, "SCRIPT_TAG"), Severity::High, "{:?}", codes(&r));
+    let mut bytes = vec![0xFE, 0xFF];
+    bytes.extend(b"<script>alert(1)</script>");
+    assert_eq!(sev(&scan_extra("OEBPS/tricky2.xhtml", &bytes), "SCRIPT_TAG"), Severity::High);
+}
+
+#[test]
+fn nul_interleaved_prefix_followed_by_ascii_markup_keeps_the_old_finding() {
+    let mut bytes: Vec<u8> = (0..28).flat_map(|_| [b' ', 0]).collect();
+    bytes.extend(b"<script>alert(1)</script>");
+    let r = scan_extra("OEBPS/tricky.xhtml", &bytes);
+    assert_eq!(sev(&r, "SCRIPT_TAG"), Severity::High, "{:?}", codes(&r));
+}
+
+#[test]
+fn bomless_utf32_markup_is_undecodable() {
+    let le: Vec<u8> = "<script>alert(1)</script>".bytes().flat_map(|b| [b, 0, 0, 0]).collect();
+    let be: Vec<u8> = "<script>alert(1)</script>".bytes().flat_map(|b| [0, 0, 0, b]).collect();
+    for bytes in [le, be] {
+        let r = scan_extra("OEBPS/u32.xhtml", &bytes);
+        assert_eq!(sev(&r, "MARKUP_UNDECODABLE"), Severity::Medium, "{:?}", codes(&r));
+        assert!(r.incomplete);
+    }
+}
+
+#[test]
+fn valid_utf8_markup_with_a_nul_is_undecodable_but_still_scanned() {
+    let doc = xhtml("<p>a\0b</p><script>1</script>");
+    let r = scan_extra("OEBPS/nul.xhtml", doc.as_bytes());
+    assert_eq!(sev(&r, "MARKUP_UNDECODABLE"), Severity::Medium, "{:?}", codes(&r));
+    assert_eq!(sev(&r, "SCRIPT_TAG"), Severity::High);
+    assert!(r.incomplete);
+    let r = scan_extra("OEBPS/clean.xhtml", xhtml("<p>ok</p>").as_bytes());
+    assert!(!has(&r, "MARKUP_UNDECODABLE") && !r.incomplete);
+    // 변환한 UTF-16은 NUL이 있어도 undecodable이 아니다.
+    let r = scan_extra("OEBPS/u16.xhtml", &utf16(SCRIPT_DOC, true, true));
+    assert!(!has(&r, "MARKUP_UNDECODABLE"), "{:?}", codes(&r));
 }
 
 // ---- 4. data: URL ----

@@ -20,6 +20,10 @@ use scan_common::{Category, FileReport};
 use zip::CompressionMethod;
 
 const MAX_TEXT: usize = 160;
+/// 읽을 수 없는 인코딩 지표(`MARKUP_UNDECODABLE`)의 파일당 최대 개수. 넘는 것은 마지막 지표의 detail에 개수만 적는다.
+const MAX_UNDECODABLE_FINDINGS: usize = 20;
+/// 인코딩 문제 종류별 요약 노트 문구. 인덱스는 `Scanner::enc`와 같다.
+const ENC_NOTE_LABELS: [&str; 3] = ["unsupported encoding utf-32", "non-utf8 markup", "NUL bytes in markup"];
 
 pub use scan_common::Severity;
 
@@ -157,6 +161,7 @@ fn is_executable_script_type(ty: &str) -> bool {
 const URL_ATTRS: &[&str] = &["href", "src", "action", "formaction", "xlink:href", "background", "poster", "data", "codebase", "manifest", "ping"];
 /// 보안 리뷰 지적(접두사 우회): XLink 등 네임스페이스를 다른 접두사(`x:href`)에 묶으면 리터럴 비교를 피한다.
 /// 접두사를 뗀 로컬 이름으로도 URL 속성을 알아본다. `URL_ATTRS`의 로컬 이름과 같은 집합이다.
+/// 허용한 오탐: 사용자 정의 네임스페이스의 `d:data="javascript:..."`도 지표가 된다. 값이 URL처럼 위험할 때만 걸리므로 감수한다.
 const URL_ATTR_LOCALS: &[&str] = &["href", "src", "action", "formaction", "background", "poster", "data", "codebase", "manifest", "ping"];
 
 /// 속성 이름에서 접두사를 뗀 로컬 이름(마지막 `:` 뒤).
@@ -381,9 +386,46 @@ struct Scanner {
     manifest: HashMap<String, ManifestEntry>,
     /// 전체 압축 해제 한도 때문에 검사하지 못한 멤버 수. 멤버마다 노트를 달면 노트가 항목 수만큼 쌓인다.
     budget_skipped: usize,
+    /// 인코딩 문제 종류별 (멤버 수, 첫 멤버). 멤버마다 노트를 달면 노트가 항목 수만큼 쌓여 종류당 한 줄로 모은다.
+    enc: [(usize, String); 3],
+    /// `MARKUP_UNDECODABLE` 지표 후보 (멤버, 설명). 상한까지만 담고 나머지는 `undecodable_extra`로 센다.
+    undecodable: Vec<(String, &'static str)>,
+    undecodable_extra: usize,
 }
 
 impl Scanner {
+    /// 보안 리뷰 지적(노트 폭주): 인코딩 문제 멤버를 센다. `finding`이면 `MARKUP_UNDECODABLE` 후보로도 남긴다.
+    fn record_enc(&mut self, kind: usize, name: &str, finding: Option<&'static str>) {
+        let e = &mut self.enc[kind];
+        if e.0 == 0 {
+            e.1 = name.to_owned();
+        }
+        e.0 += 1;
+        if let Some(detail) = finding {
+            if self.undecodable.len() < MAX_UNDECODABLE_FINDINGS {
+                self.undecodable.push((name.to_owned(), detail));
+            } else {
+                self.undecodable_extra += 1;
+            }
+        }
+    }
+
+    /// 모은 인코딩 문제를 종류당 노트 한 줄과 상한 있는 지표로 낸다.
+    fn flush_encoding(&mut self) {
+        for (i, label) in ENC_NOTE_LABELS.iter().enumerate() {
+            let (n, first) = (self.enc[i].0, self.enc[i].1.clone());
+            if n > 0 {
+                self.incomplete(&format!("{label}: {n} members (first: {first})"));
+            }
+        }
+        let list = std::mem::take(&mut self.undecodable);
+        let last = list.len().saturating_sub(1);
+        for (i, (name, detail)) in list.iter().enumerate() {
+            let text = if i == last && self.undecodable_extra > 0 { format!("{detail} (…and {} more)", self.undecodable_extra) } else { (*detail).to_owned() };
+            self.add(Severity::Medium, "MARKUP_UNDECODABLE", name, &text);
+        }
+    }
+
     fn add(&mut self, severity: Severity, code: &str, location: &str, detail: &str) {
         let key = (code.to_owned(), location.to_owned());
         if let Some(&i) = self.seen.get(&key) {
@@ -868,6 +910,19 @@ fn check_magic(s: &mut Scanner, data: &[u8], name: &str, ext: &str, textual: boo
     }
 }
 
+fn scan_text(s: &mut Scanner, kind: Kind, text: &str, name: &str, is_opf: bool) {
+    match kind {
+        Kind::Html => s.scan_html(text, name),
+        Kind::Js => {
+            s.add(Severity::Medium, "SCRIPT_FILE", name, "JavaScript member present");
+            s.scan_js(text, name);
+        }
+        Kind::Css => s.scan_css(text, name),
+        Kind::Xml => s.scan_xml(text, name, is_opf),
+        Kind::Other => {}
+    }
+}
+
 fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits: &Limits, budget: u64, opf_names: &HashSet<String>) -> u64 {
     let (size, csize, encrypted, method) = match zip.by_index_raw(index) {
         Ok(f) => (f.size(), f.compressed_size(), f.encrypted(), f.compression()),
@@ -938,24 +993,22 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
     if kind != Kind::Other {
         match enc {
             // 숨은 내용을 볼 수 없으니 지표로 남긴다. 예전처럼 대체 문자 텍스트 검사는 계속한다.
-            TextEnc::Utf32 => {
-                s.add(Severity::Medium, "MARKUP_UNDECODABLE", name, "UTF-32 content cannot be inspected");
-                s.incomplete(&format!("unsupported encoding utf-32: {name}"));
-            }
-            TextEnc::Invalid if matches!(kind, Kind::Html | Kind::Xml) => s.incomplete(&format!("non-utf8 markup: {name}")),
+            TextEnc::Utf32 => s.record_enc(0, name, Some("UTF-32 content cannot be inspected")),
+            TextEnc::Invalid if matches!(kind, Kind::Html | Kind::Xml) => s.record_enc(1, name, None),
+            // 보안 리뷰 지적(BOM 없는 UTF-32·NUL 삽입): 유효한 UTF-8인데 NUL이 있으면 BOM 없는 UTF-32이거나 파서가
+            // 다르게 읽을 수 있다. 우선순위는 UTF-32 BOM, UTF-16(BOM·NUL 교차, 변환했으므로 해당 없음), 그 다음이 이 검사다.
+            TextEnc::Utf8 if data.contains(&0) => s.record_enc(2, name, Some("NUL bytes: content cannot be reliably inspected")),
             _ => {}
         }
     }
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    match kind {
-        Kind::Html => s.scan_html(text, name),
-        Kind::Js => {
-            s.add(Severity::Medium, "SCRIPT_FILE", name, "JavaScript member present");
-            s.scan_js(text, name);
-        }
-        Kind::Css => s.scan_css(text, name),
-        Kind::Xml => s.scan_xml(text, name, opf_names.contains(name)),
-        Kind::Other => {}
+    let is_opf = opf_names.contains(name);
+    scan_text(s, kind, text, name, is_opf);
+    // 보안 리뷰 지적(옛 탐지 가림): UTF-16으로 본 멤버도 예전처럼 바이트를 대체 문자로 읽은 텍스트를 함께 검사한다.
+    // `FF FE` 뒤에 ASCII 마크업이 오는 멤버가 변환 결과(깨진 글자)에 가려지지 않게 한다. 같은 키의 지표는 `add`가 합친다.
+    if enc == TextEnc::Utf16 {
+        let old = String::from_utf8_lossy(&data);
+        scan_text(s, kind, old.strip_prefix('\u{feff}').unwrap_or(&old), name, is_opf);
     }
     data.len() as u64
 }
@@ -968,7 +1021,7 @@ pub fn scan(path: &Path, limits: &Limits, report: &mut FileReport) {
 
 /// `scan`과 같고 검사한 항목 수와 바이트를 함께 돌려준다.
 pub fn scan_stats(path: &Path, limits: &Limits, report: &mut FileReport) -> Stats {
-    let mut s = Scanner { findings: Vec::new(), notes: Vec::new(), seen: HashMap::new(), html_active: Vec::new(), html_remote: Vec::new(), manifest: HashMap::new(), budget_skipped: 0 };
+    let mut s = Scanner { findings: Vec::new(), notes: Vec::new(), seen: HashMap::new(), html_active: Vec::new(), html_remote: Vec::new(), manifest: HashMap::new(), budget_skipped: 0, enc: Default::default(), undecodable: Vec::new(), undecodable_extra: 0 };
     let mut stats = Stats::default();
     guarded(report, |_| scan_epub_unguarded(path, limits, &mut s, &mut stats));
 
@@ -1051,7 +1104,8 @@ fn scan_epub_unguarded(path: &Path, limits: &Limits, s: &mut Scanner, stats: &mu
             }
 
             // 매니페스트를 먼저 읽는다. 선언된 media-type으로 각 멤버를 어떻게 읽을지 정해야 하기 때문이다.
-            // 선검사 읽기도 같은 전체 예산에서 빼고(`prepass`), 항목 수는 max_files로 자른다.
+            // 의도한 상한: 선검사 읽기도 같은 전체 예산에서 뺀다(`prepass`). OPF는 멤버 검사에서 다시 읽으므로
+            // max_total이 아주 작으면 이중으로 차감되는데 허용한다. 선검사 루프도 `take(max_files)`로 자른다.
             let mut prepass = 0u64;
             let opf_names = package_documents(&mut zip, &names, limits, &mut prepass, s);
             for (i, name) in names.iter().enumerate().take(limits.max_files) {
@@ -1067,6 +1121,7 @@ fn scan_epub_unguarded(path: &Path, limits: &Limits, s: &mut Scanner, stats: &mu
                 }
                 inspected += check_member(s, &mut zip, i, name, limits, limits.max_total.saturating_sub(prepass + inspected), &opf_names);
             }
+            s.flush_encoding();
             if s.budget_skipped > 0 {
                 let skipped = s.budget_skipped;
                 s.partial("ZIP", &format!("Total decompressed-byte scan limit reached: {skipped} entries not inspected"));
