@@ -1,0 +1,38 @@
+[package]
+name = "bookdoctor"
+description = "EPUB·PDF·TXT 통합 진단 (보안, 결함, 렌더링 차단 검사)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "bin"
+path = "../../tests/rust/bookdoctor/bin.rs"
+
+[[test]]
+name = "cli"
+path = "../../tests/rust/bookdoctor/cli.rs"
+
+[[test]]
+name = "scan"
+path = "../../tests/rust/bookdoctor/scan.rs"
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+corpus_common = { path = "../../libs/corpus_common" }
+encoding_rs = "0.8.42"
+fancy-regex = "0.14"
+htmlkit = { path = "../../libs/htmlkit" }
+lopdf.workspace = true
+rayon = "1.12.0"
+regex = "1.13.1"
+roxmltree = "0.21.1"
+scan_common = { path = "../../libs/scan_common", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+sysdeps = { path = "../../libs/sysdeps" }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

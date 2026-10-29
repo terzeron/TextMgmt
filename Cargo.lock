@@ -378,6 +378,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "bookdoctor"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "corpus_common",
+ "encoding_rs",
+ "fancy-regex",
+ "htmlkit",
+ "lopdf",
+ "rayon",
+ "regex",
+ "roxmltree",
+ "scan_common",
+ "serde",
+ "serde_json",
+ "sysdeps",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
 name = "bookstore"
 version = "0.1.0"
 dependencies = [

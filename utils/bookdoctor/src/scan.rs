@@ -1,0 +1,74 @@
+//! 파일 하나를 포맷별 검사기로 보낸다. 포맷은 확장자가 아니라 내용(매직바이트)을 우선한다.
+
+use std::fs::{self, File};
+use std::io::Read;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::Path;
+
+use scan_common::sniff::{Sniffed, sniff};
+use scan_common::{FileReport, Format};
+
+use crate::cli::Options;
+use crate::{epub, pdf, txt};
+
+/// sniff에 넘기는 앞부분의 크기.
+const HEAD_BYTES: u64 = 64 * 1024;
+
+/// 검사할 포맷을 정한다. `.pdf`·`.epub`은 내용이 PDF·ZIP이면 내용을 따르고(`.pdf`인데 ZIP이면 EPUB),
+/// 그 밖에는 확장자를 따른다. 모르는 확장자는 `None`이다.
+pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
+    let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    if matches!(ext.as_str(), "pdf" | "epub") {
+        match sniffed {
+            Sniffed::Pdf => return Some(Format::Pdf),
+            Sniffed::Zip => return Some(Format::Epub),
+            _ => {}
+        }
+    }
+    match ext.as_str() {
+        "pdf" => Some(Format::Pdf),
+        "epub" => Some(Format::Epub),
+        "txt" => Some(Format::Txt),
+        _ => None,
+    }
+}
+
+fn read_head(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut head = Vec::new();
+    File::open(path)?.take(HEAD_BYTES).read_to_end(&mut head)?;
+    Ok(head)
+}
+
+fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
+    if let Err(e) = fs::metadata(path) {
+        report.mark_incomplete(&format!("unreadable: {e}"));
+        return;
+    }
+    let head = match read_head(path) {
+        Ok(h) => h,
+        Err(e) => {
+            report.mark_incomplete(&format!("unreadable: {e}"));
+            return;
+        }
+    };
+    report.format = dispatch_format(path, sniff(&head));
+    match report.format {
+        Some(Format::Epub) => epub::scan_epub_file(path, opts, report),
+        Some(Format::Pdf) => pdf::scan_pdf_file(path, opts, report),
+        Some(Format::Txt) => txt::scan_txt_file(path, opts, report),
+        None => report.mark_incomplete("unsupported format"),
+    }
+}
+
+/// 파일 하나를 검사한다. 포맷 모듈의 panic은 `incomplete`로 바꾸고, `--only`가 있으면 그 분류만 남긴다.
+pub fn scan_file(path: &Path, opts: &Options) -> FileReport {
+    let mut report = FileReport::new(path, None);
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| scan_inner(path, opts, &mut report))) {
+        let msg = payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_default();
+        report.mark_incomplete(&format!("panic: {msg}"));
+    }
+    if !opts.only.is_empty() {
+        report.findings.retain(|f| opts.only.contains(&f.category));
+    }
+    report
+}
