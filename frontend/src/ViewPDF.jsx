@@ -30,6 +30,20 @@ import {
   getFullPageImageSize,
 } from "./pdfRenderScale";
 import { pdfjs, PDF_DOCUMENT_OPTIONS } from "./pdfjsEnv";
+import { currentPageIndex, keyDirection, swipeDirection } from "./pdfPageTurn";
+
+// CSS의 --pdf-toolbar-h와 같은 값(px). 1장씩 보기에서 쪽이 멈추는 기준선 계산에 쓴다.
+const PDF_TOOLBAR_HEIGHT = 32;
+// 1장씩 보기에서 막는 상하 스크롤 키. 방향키 좌우만 쪽 넘김에 쓴다.
+const VERTICAL_SCROLL_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "PageUp",
+  "PageDown",
+  " ",
+  "Home",
+  "End",
+]);
 
 // 서버는 실패 사유를 본문에 담아 보낸다(파일 없음, 스토리지 접근 오류 등).
 // 쪽 크기(pt)가 비정상적으로 작은 PDF가 있다. 이미지를 0.09pt 폭으로 그려 넣은 만화 PDF가 그렇다.
@@ -89,8 +103,12 @@ export default function ViewPDF({
   // 저장 뒤 같은 bookId로 PDF를 다시 불러오기 위한 카운터
   const [reloadToken, setReloadToken] = useState(0);
   const [fitMode, setFitMode] = useState(!preview);
-  // 1장씩 보기: CSS scroll-snap으로 뷰포트당 1쪽만 보이게 한다 (PC·모바일 공통, 기본 꺼짐)
+  // 1장씩 보기: 쪽을 뷰포트 크기에 맞추고 상하 스크롤 시 CSS scroll-snap으로 한 쪽씩 멈춘다 (PC·모바일 공통, 기본 꺼짐)
   const [singlePage, setSinglePage] = useState(false);
+  // 쪽 넘김 방식: 1장씩 보기와 독립이며 셋 중 하나만 켜진다(xor).
+  //   vertical: 상하 스크롤만 / ltr: 좌우 넘김만 / rtl: 좌우 넘김만, 방향 반대(일본 만화 등)
+  const [pageMode, setPageMode] = useState("vertical");
+  const horizontal = pageMode !== "vertical";
   const [zoomIndex, setZoomIndex] = useState(ZOOM_STEPS.indexOf(100));
   const zoomPercent = ZOOM_STEPS[zoomIndex];
   const toggleSinglePage = () => {
@@ -511,6 +529,71 @@ export default function ViewPDF({
     };
   }, [singlePage]);
 
+  // 좌우 넘김 모드(좌→우·좌←우): 좌우 스와이프와 좌우 방향키로 쪽을 넘긴다(EPUB 뷰어와 같은 기준).
+  // 1장씩 보기와 무관하게 동작하며, 현재 쪽의 이웃 쪽 맨 위로 이동만 시킨다.
+  // 좌←우이면 방향키·스와이프가 가리키는 방향을 뒤집는다.
+  // 사용자의 상하 스크롤(휠·터치·스크롤 키)은 막는다. 쪽 이동은 scrollIntoView만 한다.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!horizontal || !el) return undefined;
+    const turn = (direction) => {
+      const step = pageMode === "rtl" ? -direction : direction;
+      const pages = Array.from(el.querySelectorAll(".pdf-content > .pdf-page"));
+      const index = currentPageIndex(el, pages, PDF_TOOLBAR_HEIGHT);
+      const target = pages[index + step];
+      if (index >= 0 && target) target.scrollIntoView?.({ block: "start" });
+    };
+    const onKey = (event) => {
+      if (event.ctrlKey || event.altKey || event.metaKey) return;
+      if (/^(INPUT|SELECT|TEXTAREA)$/.test(event.target?.tagName)) return;
+      if (event.target?.closest?.("[role='dialog']")) return;
+      const direction = keyDirection(event.key);
+      if (!direction) {
+        // 포커스된 버튼은 Space로 눌러야 하므로 스크롤 키 차단에서 뺀다.
+        if (VERTICAL_SCROLL_KEYS.has(event.key) && !event.target?.closest?.("button, a")) {
+          event.preventDefault();
+        }
+        return;
+      }
+      event.preventDefault();
+      turn(direction);
+    };
+    let start = null;
+    const onTouchStart = (event) => {
+      const touch = event.touches[0];
+      const interactive = event.target?.closest?.("a, button, input, select, textarea");
+      start =
+        event.touches.length === 1 && !interactive
+          ? { x: touch.clientX, y: touch.clientY, id: touch.identifier }
+          : null;
+    };
+    const onTouchEnd = (event) => {
+      const origin = start;
+      start = null;
+      if (!origin || event.touches.length) return;
+      const touch = Array.from(event.changedTouches).find((t) => t.identifier === origin.id);
+      if (!touch) return;
+      const direction = swipeDirection(touch.clientX - origin.x, touch.clientY - origin.y);
+      if (direction) turn(direction);
+    };
+    const reset = () => {
+      start = null;
+    };
+    const onWheel = (event) => event.preventDefault();
+    document.addEventListener("keydown", onKey);
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", reset, { passive: true });
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", reset);
+    };
+  }, [horizontal, pageMode]);
+
   useEffect(() => {
     if (!bookId) {
       setError("유효한 bookId가 제공되지 않았습니다.");
@@ -780,7 +863,7 @@ export default function ViewPDF({
 
   return (
     <div
-      className={`pdf-container${singlePage ? " pdf-single" : ""}`}
+      className={`pdf-container${singlePage ? " pdf-single" : ""}${horizontal ? " pdf-horizontal" : ""}`}
       ref={containerRef}
       tabIndex={-1}
     >
@@ -801,6 +884,38 @@ export default function ViewPDF({
           )}
         </div>
         <div className="pdf-zoom-controls">
+          {/* 쪽 넘김 방식: 셋 중 하나만 선택되는 분할 버튼(xor). 1장씩과는 독립이다. */}
+          <span
+            className="pdf-direction-group"
+            role="group"
+            aria-label="쪽 넘김 방식"
+          >
+            <button
+              className={`pdf-zoom-btn pdf-direction-btn pdf-vertical-btn ${pageMode === "vertical" ? "active" : ""}`}
+              onClick={() => setPageMode("vertical")}
+              aria-pressed={pageMode === "vertical"}
+              title="상하로 스크롤"
+            >
+              상→하
+            </button>
+            <button
+              className={`pdf-zoom-btn pdf-direction-btn pdf-ltr-btn ${pageMode === "ltr" ? "active" : ""}`}
+              onClick={() => setPageMode("ltr")}
+              aria-pressed={pageMode === "ltr"}
+              title="좌우로 넘김: 왼쪽에서 오른쪽으로 진행하는 책"
+            >
+              좌→우
+            </button>
+            <button
+              className={`pdf-zoom-btn pdf-direction-btn pdf-rtl-btn ${pageMode === "rtl" ? "active" : ""}`}
+              onClick={() => setPageMode("rtl")}
+              aria-pressed={pageMode === "rtl"}
+              title="좌우로 넘김: 오른쪽에서 왼쪽으로 진행하는 책(일본 만화 등)"
+            >
+              좌←우
+            </button>
+          </span>
+          <span className="pdf-zoom-separator" />
           <button
             className={`pdf-zoom-btn pdf-zoom-fit-btn pdf-single-btn ${singlePage ? "active" : ""}`}
             onClick={toggleSinglePage}
@@ -1058,6 +1173,15 @@ const pdfStyles = `
         height: calc(100vh - 10px);
         overflow-y: auto;
         outline: none;
+        /* scrollIntoView·snap 이동 때 sticky 툴바 밑에 쪽 윗부분이 가려지지 않게 한다 */
+        scroll-padding-top: var(--pdf-toolbar-h);
+    }
+    /* 좌우 넘김 모드: 상하 스크롤은 끈다. 터치 팬을 막아 좌우 스와이프만 쪽 넘김(JS)으로 쓴다.
+       overflow-y: hidden이어도 scrollIntoView 같은 프로그램 이동은 동작한다. */
+    .pdf-container.pdf-horizontal {
+        overflow-y: hidden;
+        overscroll-behavior: none;
+        touch-action: none;
     }
     .pdf-toolbar {
         box-sizing: border-box;
@@ -1124,6 +1248,28 @@ const pdfStyles = `
     .pdf-zoom-fit-btn.active .toggle-knob {
         left: 14px;
     }
+    .pdf-direction-group {
+        display: inline-flex;
+    }
+    .pdf-direction-btn {
+        border-radius: 0;
+    }
+    .pdf-direction-btn + .pdf-direction-btn {
+        margin-left: -1px;
+    }
+    .pdf-direction-btn:first-child {
+        border-radius: 4px 0 0 4px;
+    }
+    .pdf-direction-btn:last-child {
+        border-radius: 0 4px 4px 0;
+    }
+    /* .pdf-zoom-btn:hover:not(:disabled)의 회색보다 우선하도록 hover 선택자를 함께 쓴다 */
+    .pdf-direction-btn.active,
+    .pdf-direction-btn.active:hover:not(:disabled) {
+        background: #4a90d9;
+        border-color: #4a90d9;
+        color: #fff;
+    }
     .pdf-zoom-separator {
         width: 1px;
         height: 16px;
@@ -1143,13 +1289,12 @@ const pdfStyles = `
     .pdf-content {
         overflow-x: auto;
     }
-    /* 1장씩 보기: 각 쪽을 뷰포트 높이에 맞춰 snap 지점으로 만든다.
-       PC는 키 스크롤(Space/PageDown), 모바일은 터치 스와이프가 한 쪽씩 넘어간다.
+    /* 1장씩 보기: 각 쪽을 뷰포트 높이에 맞춰 snap 지점으로 만든다(크기 조절만 담당).
+       상하 스크롤 모드에서는 PC 키 스크롤(Space/PageDown), 모바일 터치 스와이프가 한 쪽씩 넘어간다.
        scroll-snap-stop: always가 빠른 스와이프로 여러 쪽을 건너뛰는 것을 막는다. */
     .pdf-container.pdf-single {
         height: var(--pdf-avail-h, calc(100vh - 10px));
         scroll-snap-type: y mandatory;
-        scroll-padding-top: var(--pdf-toolbar-h);
     }
     /* overflow-x:auto는 overflow-y도 auto로 만들어 snap 컨테이너를 가로채므로 푼다 */
     .pdf-container.pdf-single .pdf-content {

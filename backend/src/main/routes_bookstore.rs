@@ -11,6 +11,7 @@ use std::sync::Arc;
 use super::{ApiError, ApiQuery, ApiResult, AppDeps, RequireAuth, Routes};
 
 const MISSING_INPUT: &str = "제목 또는 저자를 입력해주세요";
+const BLOCKED_MESSAGE: &str = "서점이 자동 검색을 차단했습니다. 서점 링크로 직접 검색하세요.";
 
 pub(super) fn routes() -> Routes {
     Routes::new().get("/search/bookstore/{store_name}", &["require_auth"], search_bookstore)
@@ -36,10 +37,10 @@ async fn search_bookstore(_: RequireAuth, State(deps): State<Arc<AppDeps>>, Path
     let title = query.title.trim().to_string();
     let author = query.author.trim().to_string();
     let isbn = query.isbn.trim().to_string();
-    let (rows, search_keyword, search_method, search_url) = tokio::task::spawn_blocking(move || {
+    let (rows, search_keyword, search_method, search_url, blocked) = tokio::task::spawn_blocking(move || {
         let (rows, keyword, method) = store.search(&isbn, &title, &author);
         let url = if keyword.is_empty() { String::new() } else { store.api_search_url(&keyword) };
-        (rows, keyword, method, url)
+        (rows, keyword, method, url, store.blocked())
     })
     .await
     .map_err(|error| ApiError::Internal(error.to_string()))?;
@@ -55,6 +56,14 @@ async fn search_bookstore(_: RequireAuth, State(deps): State<Arc<AppDeps>>, Path
             item
         })
         .collect();
-    let status = if result.is_empty() { "not_found" } else { "success" };
-    Ok(Json(json!({"status":status,"store":store_name,"search_keyword":search_keyword,"search_method":search_method,"search_url":search_url,"result":result})))
+    let status = match (result.is_empty(), blocked) {
+        (false, _) => "success",
+        (true, true) => "blocked",
+        (true, false) => "not_found",
+    };
+    let mut body = json!({"status":status,"store":store_name,"search_keyword":search_keyword,"search_method":search_method,"search_url":search_url,"result":result});
+    if status == "blocked" {
+        body["message"] = json!(BLOCKED_MESSAGE);
+    }
+    Ok(Json(body))
 }

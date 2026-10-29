@@ -114,6 +114,164 @@ fn lopdf_page_ops_falls_back_to_path_for_a_reader_without_a_document() {
     assert_eq!(page_count_bytes(&bytes), 1);
 }
 
+#[test]
+fn sparse_pdf_preview_reads_only_needed_ranges() {
+    use std::io::{Seek, SeekFrom, Write};
+
+    const PROBE_PATH: &str = "TM_PDF_SPARSE_PROBE";
+    if let Some(path) = std::env::var_os(PROBE_PATH) {
+        let path = Path::new(&path);
+        let reader = LopdfPageOps.open_reader(path).unwrap();
+        assert_eq!(reader.page_count, 2);
+        assert_eq!(page_count_bytes(&LopdfPageOps.extract_pages_from_reader(&reader, 0, 1).unwrap()), 1);
+        return;
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("sparse.pdf");
+    create_test_pdf(2, &path);
+    let original = fs::read(&path).unwrap();
+    let text = String::from_utf8_lossy(&original);
+    let xref = text.rsplit_once("startxref").unwrap().1.split_whitespace().next().unwrap();
+    // EOF 뒤의 빈 구간은 읽을 필요가 없다. 마지막 startxref도 같은 객체를 가리킨다.
+    let mut file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_len(1024 * 1024 * 1024).unwrap();
+    file.seek(SeekFrom::End(0)).unwrap();
+    write!(file, "\nstartxref\n{xref}\n%%EOF\n").unwrap();
+    drop(file);
+
+    // 1GiB 파일을 256MiB 제한에서 처리해 전체 read_to_end 경로의 재발을 잡는다.
+    let output = std::process::Command::new("prlimit")
+        .args(["--as=268435456:536870912", "--"])
+        .arg(std::env::current_exe().unwrap())
+        .args(["--exact", "sparse_pdf_preview_reads_only_needed_ranges", "--nocapture"])
+        .env(PROBE_PATH, &path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn extracting_a_page_from_a_large_tagged_pdf_does_not_rescan_each_deleted_page() {
+    use common::pdf::PdfBuilder;
+    use lopdf::{Object, dictionary};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("tagged.pdf");
+    let mut builder = PdfBuilder::new();
+    let pages: Vec<_> = (0..100).map(|_| builder.add_page(200, 300)).collect();
+    // Tagged PDF와 같이 각 쪽을 참조하는 객체가 많으면 반복 삭제가 급격히 느려진다.
+    let tags: Vec<_> = (0..4000).map(|i| Object::Reference(builder.doc.add_object(dictionary! {"Pg" => pages[i % pages.len()]}))).collect();
+    builder.content(pages[50], b"q 0 0 20 20 re f Q");
+    builder.save(&path);
+    let mut source = lopdf::Document::load(&path).unwrap();
+    let structure = source.add_object(dictionary! {"Type" => "StructTreeRoot", "K" => tags});
+    let catalog = source.catalog_mut().unwrap();
+    catalog.set("StructTreeRoot", structure);
+    catalog.set("MarkInfo", dictionary! {"Marked" => true});
+    source.save(&path).unwrap();
+    let reader = LopdfPageOps.open_reader(&path).unwrap();
+    let started = std::time::Instant::now();
+    let bytes = LopdfPageOps.extract_pages_from_reader(&reader, 50, 51).unwrap();
+    let elapsed = started.elapsed();
+    assert!(elapsed < Duration::from_secs(3), "single-page extraction took {elapsed:?}");
+    let extracted = lopdf::Document::load_mem(&bytes).unwrap();
+    assert!(!extracted.catalog().unwrap().has(b"StructTreeRoot"));
+    assert!(!extracted.catalog().unwrap().has(b"MarkInfo"));
+    assert!(bytes.len() < 10_000, "preview must not retain the original structure tree");
+    assert_eq!(extracted.get_pages().len(), 1);
+    let preview_path = tmp.path().join("preview.pdf");
+    fs::write(&preview_path, &bytes).unwrap();
+    let render = |path: &Path, page: &str| {
+        let output = std::process::Command::new("pdftoppm").args(["-r", "36", "-f", page, "-l", page, "-singlefile"]).arg(path).output().unwrap();
+        assert!(output.status.success());
+        assert!(!output.stdout.is_empty());
+        output.stdout
+    };
+    assert_eq!(render(&path, "51"), render(&preview_path, "1"));
+    // 경로와 쪽수만 보관하는 reader로 다른 범위도 추출한다.
+    assert_eq!(page_count_bytes(&LopdfPageOps.extract_pages_from_reader(&reader, 0, 2).unwrap()), 2);
+}
+
+#[test]
+fn extracting_pages_updates_nested_counts_and_preserves_inherited_resources() {
+    use common::pdf::PdfBuilder;
+    use lopdf::{Object, dictionary};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("nested.pdf");
+    let mut builder = PdfBuilder::new();
+    let pages: Vec<_> = (0..4).map(|_| builder.add_page(200, 300)).collect();
+    builder.save(&path);
+    let mut doc = lopdf::Document::load(&path).unwrap();
+    let root = doc.catalog().unwrap().get(b"Pages").unwrap().as_reference().unwrap();
+    let mut branches = Vec::new();
+    for pair in pages.chunks(2) {
+        let kids: Vec<_> = pair.iter().copied().map(Object::Reference).collect();
+        let branch = doc.add_object(dictionary! {
+            "Type" => "Pages", "Parent" => root, "Count" => 2, "Kids" => kids,
+            "MediaBox" => vec![0.into(), 0.into(), 400.into(), 500.into()],
+            "Resources" => dictionary! {"ProcSet" => vec![Object::Name(b"PDF".to_vec())]},
+        });
+        branches.push(Object::Reference(branch));
+        for id in pair {
+            let page = doc.get_dictionary_mut(*id).unwrap();
+            page.set("Parent", branch);
+            page.remove(b"MediaBox");
+            page.remove(b"Resources");
+        }
+    }
+    doc.get_dictionary_mut(root).unwrap().set("Kids", branches.clone());
+    doc.save(&path).unwrap();
+
+    // 두 Pages 노드에 걸친 가운데 두 쪽을 추출한다.
+    let bytes = LopdfPageOps.extract_pages(&path, 1, 3).unwrap();
+    let extracted = lopdf::Document::load_mem(&bytes).unwrap();
+    assert_eq!(extracted.get_pages().len(), 2);
+    for number in 1..=2 {
+        assert_eq!(common::pdf::mediabox_of(&extracted, number), [0.0, 0.0, 400.0, 500.0]);
+        assert!(common::pdf::page_dict(&extracted, number).has(b"Resources"));
+    }
+}
+
+#[test]
+fn encrypted_pdf_preview_only_contains_the_requested_pages_without_encryption() {
+    use common::pdf::PdfBuilder;
+    use lopdf::{EncryptionState, EncryptionVersion, Permissions};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("encrypted book.pdf");
+    let mut builder = PdfBuilder::new();
+    for width in [200, 300, 400, 500] {
+        let id = builder.add_page(width, 600);
+        builder.content(id, b"q 0 0 20 20 re f Q");
+    }
+    builder.save(&path);
+    let mut source = lopdf::Document::load(&path).unwrap();
+    source.trailer.set("ID", vec![lopdf::Object::string_literal("preview-fixture"), lopdf::Object::string_literal("preview-fixture")]);
+    let state = EncryptionState::try_from(EncryptionVersion::V2 { document: &source, owner_password: "owner", user_password: "", key_length: 128, permissions: Permissions::PRINTABLE }).unwrap();
+    source.encrypt(&state).unwrap();
+    source.save(&path).unwrap();
+
+    let reader = LopdfPageOps.open_reader(&path).unwrap();
+    assert_eq!(reader.page_count, 4);
+    // 암호화 문서는 전체 객체를 reader에 보관하지 않고 필요할 때 파일에서 읽는다.
+    let moved = tmp.path().join("moved.pdf");
+    fs::rename(&path, &moved).unwrap();
+    assert_eq!(LopdfPageOps.extract_pages_from_reader(&reader, 0, 1).unwrap_err().kind, "OSError");
+    fs::rename(&moved, &path).unwrap();
+    assert_eq!(LopdfPageOps.page_count(&path).unwrap(), 4);
+    let bytes = LopdfPageOps.extract_pages_from_reader(&reader, 1, 3).unwrap();
+    let metadata = lopdf::Document::load_metadata_mem(&bytes).unwrap();
+    assert!(!metadata.encrypted);
+    assert_eq!(metadata.page_count, 2);
+    let output = tmp.path().join("preview.pdf");
+    fs::write(&output, bytes).unwrap();
+    assert_eq!(common::pdf::widths(&output), vec![300, 400]);
+    let first = LopdfPageOps.extract_pages(&path, 0, 1).unwrap();
+    assert_eq!(page_count_bytes(&first), 1);
+}
+
 struct CountingPdfPages {
     opens: Arc<AtomicUsize>,
     cached_extracts: Arc<AtomicUsize>,

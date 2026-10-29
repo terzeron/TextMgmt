@@ -578,6 +578,272 @@ describe("ViewPDF", () => {
     });
   });
 
+  describe("쪽 넘김 모드(상→하 / 좌→우 / 좌←우)", () => {
+    let originalScrollIntoView;
+    let scrolled;
+
+    beforeEach(() => {
+      originalScrollIntoView = Element.prototype.scrollIntoView;
+      scrolled = [];
+      Element.prototype.scrollIntoView = function scrollIntoView() {
+        scrolled.push(this);
+      };
+    });
+
+    afterEach(() => {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    });
+
+    // 쪽 3개를 800px 간격으로 쌓고 current번째 쪽이 기준선(툴바 아래)에 오게 한다.
+    // mode: 켤 모드 버튼(없으면 기본값 상→하), single: 1장씩 토글을 켤지 여부.
+    const setup = async (current, { mode, single = false } = {}) => {
+      globalThis.fetch = createMockFetch(3);
+      setupGetDocument(() => createMockPdf(1));
+      const view = render(<ViewPDF bookId={1} />);
+      await waitFor(() => {
+        expect(screen.getByText("총 3쪽 표시")).toBeTruthy();
+      });
+      const root = view.container.querySelector(".pdf-container");
+      if (single) {
+        view.container.querySelector(".pdf-single-btn").click();
+        await waitFor(() => {
+          expect(root.classList.contains("pdf-single")).toBe(true);
+        });
+      }
+      if (mode) {
+        root.querySelector(`.pdf-${mode}-btn`).click();
+        await waitFor(() => {
+          expect(root.classList.contains("pdf-horizontal")).toBe(mode !== "vertical");
+        });
+      }
+      const pages = Array.from(view.container.querySelectorAll(".pdf-content > .pdf-page"));
+      expect(pages).toHaveLength(3);
+      root.getBoundingClientRect = () => ({ top: 0 });
+      pages.forEach((page, i) => {
+        page.getBoundingClientRect = () => ({ top: 32 + (i - current) * 800 });
+      });
+      scrolled.length = 0;
+      return { root, pages };
+    };
+
+    const press = (key, init = {}) => {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+      document.body.dispatchEvent(event);
+      return event;
+    };
+
+    const touch = (x, y) => ({ identifier: 1, clientX: x, clientY: y });
+    const fire = (target, type, touches, changed) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      event.touches = touches;
+      event.changedTouches = changed;
+      target.dispatchEvent(event);
+    };
+    const swipe = (root, from, to) => {
+      fire(root, "touchstart", [touch(...from)], [touch(...from)]);
+      fire(root, "touchend", [], [touch(...to)]);
+    };
+    const wheel = (root) => {
+      const event = new WheelEvent("wheel", { deltaY: 100, bubbles: true, cancelable: true });
+      root.dispatchEvent(event);
+      return event;
+    };
+
+    it("기본은 상→하만 켜져 있고 좌우 토글은 모두 꺼져 있다", async () => {
+      const { root } = await setup(1);
+      const vertical = root.querySelector(".pdf-vertical-btn");
+      const ltr = root.querySelector(".pdf-ltr-btn");
+      const rtl = root.querySelector(".pdf-rtl-btn");
+      expect(vertical.textContent).toBe("상→하");
+      expect(ltr.textContent).toBe("좌→우");
+      expect(rtl.textContent).toBe("좌←우");
+      expect(vertical.classList.contains("active")).toBe(true);
+      expect(vertical.getAttribute("aria-pressed")).toBe("true");
+      for (const btn of [ltr, rtl]) {
+        expect(btn.classList.contains("active")).toBe(false);
+        expect(btn.getAttribute("aria-pressed")).toBe("false");
+      }
+      expect(root.classList.contains("pdf-horizontal")).toBe(false);
+    });
+
+    it("상→하·좌→우·좌←우는 한 분할 버튼 안에 이 순서로 있고 1장씩 토글은 그 오른쪽에 따로 있다", async () => {
+      const { root } = await setup(1);
+      const group = root.querySelector(".pdf-direction-group");
+      expect(group.getAttribute("role")).toBe("group");
+      expect(Array.from(group.children).map((b) => b.textContent)).toEqual([
+        "상→하",
+        "좌→우",
+        "좌←우",
+      ]);
+      expect(group.contains(root.querySelector(".pdf-single-btn"))).toBe(false);
+      expect(group.compareDocumentPosition(root.querySelector(".pdf-single-btn"))).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    });
+
+    it("세 토글은 xor라 하나를 켜면 나머지는 꺼지고, 켜진 토글을 다시 눌러도 유지된다", async () => {
+      const { root } = await setup(1);
+      const state = () =>
+        ["vertical", "ltr", "rtl"].filter((m) =>
+          root.querySelector(`.pdf-${m}-btn`).classList.contains("active"),
+        );
+      expect(state()).toEqual(["vertical"]);
+      root.querySelector(".pdf-ltr-btn").click();
+      await waitFor(() => expect(state()).toEqual(["ltr"]));
+      root.querySelector(".pdf-ltr-btn").click();
+      await waitFor(() => expect(state()).toEqual(["ltr"]));
+      root.querySelector(".pdf-rtl-btn").click();
+      await waitFor(() => expect(state()).toEqual(["rtl"]));
+      root.querySelector(".pdf-vertical-btn").click();
+      await waitFor(() => expect(state()).toEqual(["vertical"]));
+      root.querySelector(".pdf-vertical-btn").click();
+      await waitFor(() => expect(state()).toEqual(["vertical"]));
+    });
+
+    it("상→하에서는 좌우 넘김을 하지 않고 상하 스크롤을 막지 않는다", async () => {
+      const { root } = await setup(1, { single: true });
+      expect(press("ArrowRight").defaultPrevented).toBe(false);
+      expect(press("ArrowLeft").defaultPrevented).toBe(false);
+      swipe(root, [200, 300], [100, 300]);
+      expect(scrolled).toEqual([]);
+      expect(wheel(root).defaultPrevented).toBe(false);
+      expect(press("PageDown").defaultPrevented).toBe(false);
+      expect(press(" ").defaultPrevented).toBe(false);
+    });
+
+    it("좌→우에서는 오른쪽 방향키·왼쪽 스와이프가 다음 쪽, 반대가 이전 쪽이다", async () => {
+      const { root, pages } = await setup(1, { mode: "ltr" });
+      expect(press("ArrowRight").defaultPrevented).toBe(true);
+      expect(scrolled).toEqual([pages[2]]);
+      press("ArrowLeft");
+      expect(scrolled).toEqual([pages[2], pages[0]]);
+      swipe(root, [200, 300], [100, 310]);
+      swipe(root, [100, 300], [200, 290]);
+      expect(scrolled).toEqual([pages[2], pages[0], pages[2], pages[0]]);
+    });
+
+    it("좌←우에서는 방향이 반대다", async () => {
+      const { root, pages } = await setup(1, { mode: "rtl" });
+      press("ArrowLeft");
+      expect(scrolled).toEqual([pages[2]]);
+      press("ArrowRight");
+      expect(scrolled).toEqual([pages[2], pages[0]]);
+      swipe(root, [100, 300], [200, 300]);
+      expect(scrolled).toEqual([pages[2], pages[0], pages[2]]);
+      swipe(root, [200, 300], [100, 300]);
+      expect(scrolled).toEqual([pages[2], pages[0], pages[2], pages[0]]);
+    });
+
+    it("좌우 넘김은 1장씩 토글과 무관하게 켜져 있어도 꺼져 있어도 동작한다", async () => {
+      for (const single of [false, true]) {
+        const { root, pages } = await setup(1, { mode: "ltr", single });
+        expect(root.classList.contains("pdf-single")).toBe(single);
+        press("ArrowRight");
+        expect(scrolled).toEqual([pages[2]]);
+        cleanup();
+      }
+    });
+
+    it("1장씩 토글을 켜고 꺼도 선택한 쪽 넘김 모드는 바뀌지 않는다", async () => {
+      const { root } = await setup(1, { mode: "ltr" });
+      const single = root.querySelector(".pdf-single-btn");
+      single.click();
+      await waitFor(() => expect(root.classList.contains("pdf-single")).toBe(true));
+      expect(root.querySelector(".pdf-ltr-btn").classList.contains("active")).toBe(true);
+      single.click();
+      await waitFor(() => expect(root.classList.contains("pdf-single")).toBe(false));
+      expect(root.querySelector(".pdf-ltr-btn").classList.contains("active")).toBe(true);
+      // 토글로 쪽 노드가 다시 만들어질 수 있으므로 좌표 모킹을 새로 건다.
+      const pages = Array.from(root.querySelectorAll(".pdf-content > .pdf-page"));
+      pages.forEach((page, i) => {
+        page.getBoundingClientRect = () => ({ top: 32 + (i - 1) * 800 });
+      });
+      scrolled.length = 0;
+      press("ArrowRight");
+      expect(scrolled).toEqual([pages[2]]);
+    });
+
+    it("처음 쪽에서 이전, 마지막 쪽에서 다음은 아무것도 하지 않는다", async () => {
+      const first = await setup(0, { mode: "ltr" });
+      press("ArrowLeft");
+      expect(scrolled).toEqual([]);
+      first.pages.forEach((page, i) => {
+        page.getBoundingClientRect = () => ({ top: 32 + (i - 2) * 800 });
+      });
+      press("ArrowRight");
+      expect(scrolled).toEqual([]);
+    });
+
+    it("좌우 넘김 모드에서는 휠과 상하 스크롤 키의 기본 동작을 막는다", async () => {
+      const { root } = await setup(1, { mode: "ltr" });
+      expect(wheel(root).defaultPrevented).toBe(true);
+      for (const key of ["ArrowUp", "ArrowDown", "PageUp", "PageDown", " ", "Home", "End"]) {
+        expect(press(key).defaultPrevented).toBe(true);
+      }
+      expect(press("a").defaultPrevented).toBe(false);
+      expect(press("ArrowDown", { ctrlKey: true }).defaultPrevented).toBe(false);
+      expect(scrolled).toEqual([]);
+    });
+
+    it("버튼에 포커스가 있으면 Space는 막지 않아 버튼을 누를 수 있다", async () => {
+      const { root } = await setup(1, { mode: "ltr" });
+      const button = root.querySelector(".pdf-single-btn");
+      const event = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+      button.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    });
+
+    it("상→하로 되돌리면 휠·스크롤 키·좌우 넘김 처리를 해제한다", async () => {
+      const { root } = await setup(1, { mode: "ltr" });
+      root.querySelector(".pdf-vertical-btn").click();
+      await waitFor(() => expect(root.classList.contains("pdf-horizontal")).toBe(false));
+      expect(wheel(root).defaultPrevented).toBe(false);
+      expect(press("PageDown").defaultPrevented).toBe(false);
+      press("ArrowRight");
+      expect(scrolled).toEqual([]);
+    });
+
+    it("수정 키 조합, 입력 컨트롤, 대화상자, 다른 키는 무시한다", async () => {
+      await setup(1, { mode: "ltr" });
+      press("ArrowRight", { ctrlKey: true });
+      press("ArrowRight", { altKey: true });
+      press("ArrowRight", { metaKey: true });
+      const input = document.createElement("input");
+      document.body.appendChild(input);
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      document.body.appendChild(dialog);
+      dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      input.remove();
+      dialog.remove();
+      expect(scrolled).toEqual([]);
+    });
+
+    it("짧거나 세로에 가까운 스와이프, 다중 터치, 버튼 위 터치는 넘기지 않는다", async () => {
+      const { root } = await setup(1, { mode: "ltr" });
+      swipe(root, [200, 300], [180, 300]);
+      swipe(root, [200, 300], [100, 500]);
+      // 두 손가락
+      fire(root, "touchstart", [touch(200, 300), touch(210, 300)], []);
+      fire(root, "touchend", [], [touch(100, 300)]);
+      // 버튼 위에서 시작
+      const button = root.querySelector("button");
+      fire(button, "touchstart", [touch(200, 300)], [touch(200, 300)]);
+      fire(button, "touchend", [], [touch(100, 300)]);
+      // 취소된 제스처
+      fire(root, "touchstart", [touch(200, 300)], [touch(200, 300)]);
+      fire(root, "touchcancel", [], []);
+      fire(root, "touchend", [], [touch(100, 300)]);
+      // 끝날 때 손가락이 남아 있거나 다른 손가락이 끝난 경우
+      fire(root, "touchstart", [touch(200, 300)], [touch(200, 300)]);
+      fire(root, "touchend", [touch(50, 50)], [touch(100, 300)]);
+      fire(root, "touchstart", [touch(200, 300)], [touch(200, 300)]);
+      fire(root, "touchend", [], [{ identifier: 9, clientX: 100, clientY: 300 }]);
+      expect(scrolled).toEqual([]);
+    });
+  });
+
   describe("1장씩 보기 높이 측정", () => {
     const AVAIL = "--pdf-avail-h";
     let originalInnerHeight;

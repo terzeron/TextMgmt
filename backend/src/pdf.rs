@@ -3,7 +3,7 @@
 //! Python `pikepdf`(열기·구문 검사)와 `pypdf`(쪽 읽기·쓰기)에 대응한다. 서비스는 이 파일의 trait만 알고,
 //! 실제 구현(`LopdfOpener`, `LopdfPageOps`)은 `lopdf`로 만든다. 테스트는 대역으로 바꿔 끼운다.
 //!
-//! 페이지 reader는 경로·수정 시각 기반 cache로 공유하며, 추출은 reader를 복제해 원본 상태를 보존한다.
+//! 페이지 미리보기는 Poppler가 필요한 객체를 찾아 읽는다. reader는 경로와 쪽수만 캐시한다.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -139,53 +139,42 @@ impl PdfOpener for LopdfOpener {
     }
 }
 
-/// `lopdf` 기반 `PdfPageOps`.
+/// 기존 이름을 유지하는 Poppler 기반 `PdfPageOps`. 전체 파일 읽기와 문서 복제를 피한다.
 pub struct LopdfPageOps;
 
 impl PdfPageOps for LopdfPageOps {
     fn page_count(&self, path: &Path) -> Result<usize, PdfError> {
-        let doc = Document::load(path).map_err(open_error)?;
-        Ok(doc.get_pages().len())
+        let output = run_pdf_tool(path, &["pdfinfo".into(), path.to_string_lossy().into_owned()])?;
+        String::from_utf8_lossy(&output)
+            .lines()
+            .find_map(|line| line.strip_prefix("Pages:").map(str::trim))
+            .and_then(|count| count.parse().ok())
+            .ok_or_else(|| PdfError::new("RuntimeError", "pdfinfo did not report a valid page count"))
     }
 
     fn extract_pages(&self, path: &Path, start: usize, end: usize) -> Result<Vec<u8>, PdfError> {
-        let mut doc = Document::load(path).map_err(open_error)?;
-        extract_document_pages(&mut doc, start, end)?;
-        let mut out = Vec::new();
-        doc.save_to(&mut out).map_err(|e| PdfError::new("RuntimeError", e.to_string()))?;
-        Ok(out)
-    }
-
-    fn open_reader(&self, path: &Path) -> Result<PdfReaderHandle, PdfError> {
-        let doc = Document::load(path).map_err(open_error)?;
-        let page_count = doc.get_pages().len();
-        Ok(PdfReaderHandle::with_document(path.to_path_buf(), page_count, Arc::new(doc)))
-    }
-
-    fn extract_pages_from_reader(&self, reader: &PdfReaderHandle, start: usize, end: usize) -> Result<Vec<u8>, PdfError> {
-        let Some(doc) = reader.document.as_ref() else {
-            return self.extract_pages(&reader.path, start, end);
-        };
-        let mut doc = (**doc).clone();
-        extract_document_pages(&mut doc, start, end)?;
-        let mut out = Vec::new();
-        doc.save_to(&mut out).map_err(|e| PdfError::new("RuntimeError", e.to_string()))?;
-        Ok(out)
+        if start >= end {
+            return Err(PdfError::new("RuntimeError", "Invalid PDF page range"));
+        }
+        run_pdf_tool(
+            path,
+            &["pdftocairo".into(), "-pdf".into(), "-origpagesizes".into(), "-f".into(), (start + 1).to_string(), "-l".into(), end.to_string(), path.to_string_lossy().into_owned(), "-".into()],
+        )
     }
 }
 
-fn extract_document_pages(doc: &mut Document, start: usize, end: usize) -> Result<(), PdfError> {
-    let total = doc.get_pages().len();
-    // lopdf 쪽 번호는 1부터다.
-    let drop: Vec<u32> = (1..=total as u32)
-        .filter(|n| {
-            let index = *n as usize - 1;
-            index < start || index >= end
-        })
-        .collect();
-    doc.delete_pages(&drop);
-    doc.prune_objects();
-    Ok(())
+fn run_pdf_tool(path: &Path, args: &[String]) -> Result<Vec<u8>, PdfError> {
+    use sysdeps::{CommandRunner, SystemRunner};
+
+    // stat은 파일 내용을 읽지 않는다. 저장소 오류는 기존 OSError 응답을 유지한다.
+    std::fs::metadata(path).map_err(|e| PdfError::new("OSError", e.to_string()))?;
+    let mut command = vec!["prlimit".into(), "--as=536870912".into(), "--cpu=25".into(), "--".into()];
+    command.extend_from_slice(args);
+    let output = SystemRunner.run(&command, Some(std::time::Duration::from_secs(30))).map_err(|e| PdfError::new("RuntimeError", e.to_string()))?;
+    if output.returncode != 0 {
+        return Err(PdfError::new("RuntimeError", format!("PDF helper failed: {}", String::from_utf8_lossy(&output.stderr).trim())));
+    }
+    Ok(output.stdout)
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +184,7 @@ fn extract_document_pages(doc: &mut Document, start: usize, end: usize) -> Resul
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-/// PDF 리더 캐시 한도. 개수가 아니라 바이트로 막는다(리더 하나는 PDF 크기와 거의 1:1로 메모리를 쓴다). `None`은 제한 없음이다.
+/// PDF 리더 캐시 한도. 호환성을 위해 원본 파일 크기를 예산으로 쓴다. `None`은 제한 없음이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PdfCacheLimits {
     /// 이 크기를 넘는 파일은 캐시하지 않는다.
@@ -212,22 +201,17 @@ impl Default for PdfCacheLimits {
     }
 }
 
-/// 열린 PDF reader. 실제 `LopdfPageOps`는 추출 때 재사용할 parsed document도 보관한다.
+/// PDF reader. 파일 내용 없이 경로와 총 쪽수만 보관한다.
 #[derive(Debug)]
 pub struct PdfReaderHandle {
     pub path: std::path::PathBuf,
     pub page_count: usize,
-    document: Option<Arc<Document>>,
 }
 
 impl PdfReaderHandle {
     /// 경로 기반 PDF 대역용 reader handle.
     pub fn new(path: std::path::PathBuf, page_count: usize) -> Self {
-        Self { path, page_count, document: None }
-    }
-
-    fn with_document(path: std::path::PathBuf, page_count: usize, document: Arc<Document>) -> Self {
-        Self { path, page_count, document: Some(document) }
+        Self { path, page_count }
     }
 }
 

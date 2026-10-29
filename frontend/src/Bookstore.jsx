@@ -116,6 +116,11 @@ const combineSearchResults = (titleResult, authorTitleResult) => {
   if (!results.length && titleResult?.error && (authorTitleResult?.error || !authorTitleResult)) {
     return titleResult;
   }
+  // 서점이 자동 요청을 막은 경우는 "결과 없음"과 구분해 안내를 남긴다.
+  const blocked = [titleResult, authorTitleResult].find((r) => r?.status === "blocked");
+  if (!results.length && blocked) {
+    return { ...authorTitleResult, ...titleResult, status: "blocked", message: blocked.message, result: results };
+  }
   return {
     ...authorTitleResult,
     ...titleResult,
@@ -141,6 +146,13 @@ const requestSearch = (store, search) => {
 const buildStoreSearchUrl = (store, title, author) => {
   const encodedTitle = encodeURIComponent(title || "");
   switch (store) {
+    // RIDI는 자동 요청을 차단하므로 서점 링크로 직접 검색하게 한다. 검색어가 없으면 첫 화면으로 보낸다.
+    case "ridi": {
+      const keyword = [author, title].filter(Boolean).join(" ");
+      return keyword
+        ? `https://ridibooks.com/search?q=${encodeURIComponent(keyword)}&adult_exclude=n`
+        : "https://ridibooks.com";
+    }
     case "munpia": {
       const keyword = [author, title].filter(Boolean).join(" ");
       return keyword
@@ -618,7 +630,9 @@ export default function Bookstore(props) {
 
           {result && !result.loading && !result.error && (
             <>
-              {result.status === "success" && result.result.length > 0 ? (
+              {result.status === "blocked" ? (
+                <span className="text-warning">{result.message}</span>
+              ) : result.status === "success" && result.result.length > 0 ? (
                 result.result.map((item, idx) => (
                   <div
                     key={item.book_url || idx}

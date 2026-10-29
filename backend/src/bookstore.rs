@@ -23,7 +23,7 @@ use std::fmt::Write as _;
 use std::hash::{BuildHasher, Hasher};
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
@@ -301,6 +301,15 @@ impl HttpSession for UnavailableSession {
     }
 }
 
+const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/142.0.0.0 Safari/537.36";
+
+/// yes24는 브라우저형 UA의 첫 요청에 쿠키를 심고 메인 페이지로 302한다. 세션이 쿠키를 저장하지 않아 검색 결과를 못 받으므로 `libs/bookstore`처럼 curl UA를 쓴다.
+const CURL_USER_AGENT: &str = "curl/7.79.1";
+
+fn user_agent_for(store: &str) -> &'static str {
+    if store == "yes24" { CURL_USER_AGENT } else { BROWSER_USER_AGENT }
+}
+
 /// `ureq` 기반 동기 HTTP GET 세션. 응답 상태와 본문을 보존해 서점별 오류 규칙에 맡긴다.
 pub struct UreqHttpSession {
     config: ureq::config::Config,
@@ -310,21 +319,22 @@ pub struct UreqHttpSession {
 
 impl UreqHttpSession {
     pub fn new() -> Self {
-        Self::with_redirect_limit(10)
+        Self::with_redirect_limit(10, BROWSER_USER_AGENT)
     }
 
-    fn with_redirect_limit(max_redirects: u32) -> Self {
+    /// 서점 구조체용 세션. `type_name`은 `Yes24Bookstore` 같은 구조체 이름이다.
+    fn for_bookstore(type_name: &str) -> Self {
+        Self::with_redirect_limit(10, user_agent_for(&type_name.trim_end_matches("Bookstore").to_ascii_lowercase()))
+    }
+
+    fn with_redirect_limit(max_redirects: u32, user_agent: &str) -> Self {
         let config = ureq::Agent::config_builder().max_redirects(max_redirects).http_status_as_error(false).build();
-        Self {
-            agents: Mutex::new(vec![ureq::Agent::new_with_config(config.clone())]),
-            config,
-            headers: vec![("User-Agent".to_string(), "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/142.0.0.0 Safari/537.36".to_string())],
-        }
+        Self { agents: Mutex::new(vec![ureq::Agent::new_with_config(config.clone())]), config, headers: vec![("User-Agent".to_string(), user_agent.to_string())] }
     }
 
     pub fn for_store(store: &str) -> Self {
         // cover_sources는 각 redirect target을 검사하므로 ureq의 자동 follow를 막는다.
-        let mut session = Self::with_redirect_limit(0);
+        let mut session = Self::with_redirect_limit(0, user_agent_for(store));
         if store == "ridi" {
             session.headers.extend([
                 ("Referer".to_string(), "https://ridibooks.com/".to_string()),
@@ -480,6 +490,11 @@ pub trait AbstractBookstore: Sync {
 
     fn max_results(&self) -> usize {
         MAX_RESULTS
+    }
+
+    /// 마지막 검색 요청을 서점이 자동 요청 차단으로 거절했는가. 차단을 알리는 서점만 덮어쓴다.
+    fn request_blocked(&self) -> bool {
+        false
     }
 
     /// 파일 쓰기·읽기 능력. 테스트는 디스크 여유와 쓰기 오류를 흉내 낸다.
@@ -678,9 +693,18 @@ pub trait BookstoreSearch: Send + Sync {
     fn api_search_url(&self, _keyword: &str) -> String {
         String::new()
     }
+
+    /// 마지막 검색이 서점의 자동 요청 차단으로 실패했는가. 차단이면 빈 결과가 "결과 없음"이 아니다.
+    fn blocked(&self) -> bool {
+        false
+    }
 }
 
 impl<T: AbstractBookstore + Send> BookstoreSearch for T {
+    fn blocked(&self) -> bool {
+        self.request_blocked()
+    }
+
     fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String) {
         AbstractBookstore::search(self, isbn, title, author)
     }
@@ -737,7 +761,7 @@ macro_rules! bookstore_struct {
                     verbose,
                     max_results: MAX_RESULTS,
                     supports_isbn_search: $isbn,
-                    session: Arc::new(UreqHttpSession::new()),
+                    session: Arc::new(UreqHttpSession::for_bookstore(stringify!($name))),
                     fs: Arc::new(RealFs),
                     tmp_dir: None,
                     fetch_hook: None,
@@ -1088,11 +1112,14 @@ impl AbstractBookstore for KyoboBookstore {
 
 bookstore_struct!(
     /// 리디북스. 검색은 `search-api.ridibooks.com` JSON을 직접 부른다. ISBN 검색은 지원하지 않는다.
-    RidibooksBookstore, supports_isbn = false
+    RidibooksBookstore, supports_isbn = false, blocked: AtomicBool = AtomicBool::new(false)
 );
 
 const RIDI_BASE_URL: &str = "https://ridibooks.com";
 const RIDI_API_URL: &str = "https://search-api.ridibooks.com/search";
+
+/// RIDI(Cloudflare)가 자동 요청에 돌려주는 차단 상태. 403은 챌린지 페이지다.
+const RIDI_BLOCK_STATUSES: [u16; 3] = [403, 418, 429];
 
 impl RidibooksBookstore {
     /// 첫 `ISBN` 라벨 `div` 다음 형제 `div`에서 13자리 코드를 뽑는다.
@@ -1129,7 +1156,23 @@ impl RidibooksBookstore {
 
     fn search_api(&self, keyword: &str) -> Vec<SearchRow> {
         let search_url = self.build_search_url(keyword);
-        let Some(resp) = fetch_ok(&*self.session, self.verbose, "RIDI", RIDI_API_URL, &params(&[("keyword", keyword)]), HttpTimeout::from_secs(10, 10), "") else { return Vec::new() };
+        self.blocked.store(false, Ordering::Relaxed);
+        let resp = match self.session.get_with_timeout(RIDI_API_URL, &params(&[("keyword", keyword)]), HttpTimeout::from_secs(10, 10)) {
+            Ok(resp) => resp,
+            Err(e) => {
+                log::warn!("RIDI 검색 실패: {e}");
+                return Vec::new();
+            }
+        };
+        if RIDI_BLOCK_STATUSES.contains(&resp.status_code) {
+            self.blocked.store(true, Ordering::Relaxed);
+            log::warn!("RIDI가 자동 검색을 차단했습니다: {}", resp.status_code);
+            return Vec::new();
+        }
+        if resp.status_code != 200 {
+            log::warn!("RIDI API 응답 실패: {}", resp.status_code);
+            return Vec::new();
+        }
         let data = resp.json();
         let books = array_field(&data, "books");
         if books.is_empty() {
@@ -1171,6 +1214,10 @@ impl RidibooksBookstore {
 impl AbstractBookstore for RidibooksBookstore {
     bookstore_common!(RIDI_BASE_URL, author_first = true);
     api_keyword_search!(search_api);
+
+    fn request_blocked(&self) -> bool {
+        self.blocked.load(Ordering::Relaxed)
+    }
 
     fn build_search_url(&self, keyword: &str) -> String {
         format!("{RIDI_BASE_URL}/search?q={}&adult_exclude=n", quote(keyword, "/"))
