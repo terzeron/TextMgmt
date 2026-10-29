@@ -717,3 +717,13 @@ pub fn inspect_with(path: &Path, report: &mut FileReport, limits: &Limits) {
 pub fn inspect(path: &Path, report: &mut FileReport) {
     inspect_with(path, report, &Limits::default());
 }
+
+#[cfg(test)]
+mod entity_table_tests {
+    use super::XHTML_ENTITIES;
+
+    #[test]
+    fn xhtml_entities_are_strictly_sorted_for_binary_search() {
+        assert!(XHTML_ENTITIES.windows(2).all(|w| w[0].0 < w[1].0));
+    }
+}

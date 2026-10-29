@@ -250,6 +250,24 @@ fn malformed_markup_with_entities_under_xhtml_doctype_is_still_flagged() {
     assert!(scan(&p).has("XHTML_PARSE_FAILED"));
 }
 
+// 한계: 실체 치환은 원문을 글자 그대로 훑으므로 CDATA·주석 안의 `&이름;`도 숫자 참조로 바뀐다. 그 안은 어차피 실체로 해석되지 않고,
+// 첫 파싱이 실패했을 때만 치환하므로 결과(통과/실패)는 바뀌지 않는다. 아래 테스트가 그 동작을 고정한다.
+#[test]
+fn nbsp_inside_cdata_or_comment_alone_is_not_a_parse_failure() {
+    let mut p = valid();
+    p.ch1 = chapter_with_doctype(XHTML11_DOCTYPE, "<!-- a&nbsp;b --><script><![CDATA[ x = \"&nbsp;\"; ]]></script><p>x</p>");
+    assert!(!scan(&p).has("XHTML_PARSE_FAILED"));
+}
+
+#[test]
+fn nbsp_in_cdata_and_comment_does_not_hide_a_real_entity_in_the_body() {
+    let mut p = valid();
+    p.ch1 = chapter_with_doctype(XHTML11_DOCTYPE, "<!-- &nbsp; --><![CDATA[&nbsp;]]><p>a&nbsp;b</p>");
+    assert!(!scan(&p).has("XHTML_PARSE_FAILED"), "본문의 &nbsp;는 정의된 실체다");
+    p.ch1 = chapter_with_doctype(XHTML11_DOCTYPE, "<!-- &nbsp; --><![CDATA[&nbsp;]]><p>a&bogusname;b</p>");
+    assert!(scan(&p).has("XHTML_PARSE_FAILED"), "정의되지 않은 이름은 CDATA·주석의 &nbsp;와 무관하게 실패");
+}
+
 #[test]
 fn clean_epub_has_no_xhtml_parse_failed() {
     assert_clean("XHTML_PARSE_FAILED");
