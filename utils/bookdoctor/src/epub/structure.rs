@@ -1,5 +1,5 @@
-//! EPUB 구조 검사: epubscan이 하는 일 중 "뷰어가 렌더링하지 못하는 구조"를 찾는 부분.
-//! (원래 `detect_mojibake epub-structure`였고 `epubscan structure`로 옮겼다.)
+//! EPUB 구조 검사: 옛 EPUB 검사 도구가 하던 일 중 "뷰어가 렌더링하지 못하는 구조"를 찾는 부분.
+//! (원래 인코딩 검사 도구의 `epub-structure`였고 EPUB 검사 도구의 `structure`로 옮겼다.)
 //!
 //! epubcheck는 XML 규격만 보므로 `<html:html>`처럼 접두사가 붙은 본문도 통과시키지만 뷰어의
 //! 정제기는 이를 거부한다. 단 bad_mimetype은 표준 위반일 뿐 뷰어를 깨뜨리지 않는다.
@@ -28,7 +28,7 @@ pub const ISSUE_OPF_UNPARSABLE: &str = "opf_unparsable";
 pub const ISSUE_SPINE_MEMBER_MISSING: &str = "spine_member_missing";
 pub const ISSUE_PREFIXED_ROOT: &str = "prefixed_root";
 
-/// 옛 epubscan 이슈 이름 → (새 코드, 분류, 심각도). Task 16이 "옛 이슈 ⊆ 새 코드"를 증명할 때 쓴다.
+/// 옛 EPUB 검사 도구 이슈 이름 → (새 코드, 분류, 심각도). Task 16이 "옛 이슈 ⊆ 새 코드"를 증명할 때 쓴다.
 ///
 /// `scan_error`는 지표가 아니라 "검사 불완전"(`mark_incomplete("panic: …")`)으로 보고한다. 타입이 "불완전"을
 /// 표현하지 못하므로 코드를 빈 문자열로 두고 분류·심각도는 자리표시(`Defect`/`High`)다. 소비자는 빈 코드를

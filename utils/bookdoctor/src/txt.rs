@@ -85,7 +85,7 @@ fn trim_truncated_tail(bytes: &[u8]) -> &[u8] {
 /// TXT 파일 하나를 검사해 `report`에 더한다.
 ///
 /// 인코딩 손상 판정은 이미 읽은 UTF-8 본문을 재사용하지 않고 `mojibake::check_file`로 따로 읽는다(앞 20000자+뒤 10000자만이라 싸다).
-/// 옛 `detect_mojibake`가 `read_document_text`(→ `decode_best`)로 앞·뒤 표본을 뽑아 판정했기 때문이다. 전체 본문에 `check_text`를 쓰면
+/// 옛 인코딩 검사 도구가 `read_document_text`(→ `decode_best`)로 앞·뒤 표본을 뽑아 판정했기 때문이다. 전체 본문에 `check_text`를 쓰면
 /// 표본이 달라져 큰 파일의 판정이 바뀌고, UTF-8이 아닌 파일은 위에서 일찍 끝나 `corrupted` 판정을 잃는다. 같은 읽기 함수를 써야
 /// `quarantine_broken`이 쓰는 옛 `corrupted` 집합이 모두 `MOJIBAKE`로 남는다.
 pub fn scan_txt_file(path: &Path, opts: &Options, report: &mut FileReport) {

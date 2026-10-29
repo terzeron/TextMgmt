@@ -125,7 +125,7 @@ pub fn corrupt_local_header(path: &Path, member: &str) {
     fs::write(path, data).unwrap();
 }
 
-// ---- epubscan 보안 검사용 fixture ----
+// ---- EPUB 보안 검사용 fixture ----
 
 pub const XHTML_HEAD: &str = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>"#;
 

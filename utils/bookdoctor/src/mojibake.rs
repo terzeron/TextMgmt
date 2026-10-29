@@ -1,4 +1,4 @@
-//! 인코딩 손상(mojibake) 판정. 원본: `utils/detect_mojibake/src/lib.rs`의 `classify_text`와 `inspect_file`.
+//! 인코딩 손상(mojibake) 판정. 원본: 옛 인코딩 검사 도구의 `classify_text`와 `inspect_file`.
 //!
 //! 손상 유형은 원본 텍스트를 잘못된 코드페이지로 읽고 다시 UTF-8로 저장한 것이다. 파일 자체는 유효한 UTF-8이라
 //! 디코딩으로는 걸러지지 않는다. 판별은 `korean_likeness` 하나로 한다(손상 0.006 이하, 정상 0.271 이상).
@@ -10,11 +10,11 @@ use corpus_common::reader::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, is_hangul_syllable
 use scan_common::{Category, FileReport, Severity};
 
 /// 손상 0.006 이하, 정상 0.271 이상. 사이가 비어 있어 경계를 넉넉히 잡는다.
-/// 값 출처: utils/detect_mojibake/src/lib.rs 28행.
+/// 값 출처: 옛 인코딩 검사 도구 소스 28행.
 pub const MOJIBAKE_LIKENESS_THRESHOLD: f64 = 0.10;
 
 /// 한글이 전체의 이 비율에 못 미치면 판정하지 않는다. 영문 OCR 문서의 한글 잡음 오탐(1,971건)을 막는다.
-/// 값 출처: utils/detect_mojibake/src/lib.rs 34행.
+/// 값 출처: 옛 인코딩 검사 도구 소스 34행.
 pub const MIN_HANGUL_RATIO: f64 = 0.10;
 
 /// 표본이 이보다 짧으면 판독할 수 없다. 원본 lib.rs 60행.

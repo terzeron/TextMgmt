@@ -31,9 +31,7 @@ docs/       문서
 
 | crate | 용도 |
 | --- | --- |
-| `pdfscan` | PDF의 Launch·JavaScript·OpenAction·첨부 등 실행 가능 요소 정적 검사 |
-| `epubscan` | EPUB 구조 검사와 스크립트 실행 코드·위험 ZIP 구조 검사 |
-| `detect_mojibake` | 인코딩 손상 문서 탐지 |
+| `bookdoctor` | epub·pdf·txt 보안 위험·파일 결함·렌더링 불가 구조 진단 |
 | `quarantine_broken` | 손상 문서를 `0_broken`으로 격리·복구 |
 | `cluster_hybrid_genres` | 5대 장르 비율 클러스터링 |
 | `search` | ES 제목·내용 검색 점검 |

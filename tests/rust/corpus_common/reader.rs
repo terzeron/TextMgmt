@@ -1,4 +1,4 @@
-//! backend/classifier/reader.py 중 detect_mojibake가 쓰는 부분의 테스트(tests/test_classifier_reader.py 이식).
+//! backend/classifier/reader.py 중 인코딩 검사 도구가 쓰던 부분의 테스트(tests/test_classifier_reader.py 이식).
 
 mod common;
 

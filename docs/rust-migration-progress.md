@@ -10,7 +10,7 @@
 - API의 인증·입출력·오류 코드와 파일 수정 동작을 Python과 대조한다.
 - 미구현 기본값, 미등록 테스트, `ignore`, Python 호출을 전수 확인하고 남은 예외를 명시한다.
 - Frontend는 사용자 지시에 따라 제외한다. Backend·utils와 모델 학습의 Python 실행 경로는 전환 대상이다.
-- `pdfscan`·`epubscan`은 다른 세션이 맡으므로 이 작업에서 수정하지 않는다.
+- `pdfscan`·`epubscan`·`detect_mojibake`는 `bookdoctor`로 대체해 제거했다(Task 17).
 - Python 원본은 검증 기준으로 유지한다. 배포·push·운영 데이터 변경은 별도 승인 대상이다.
 
 ## 순서와 검증
@@ -1868,3 +1868,26 @@ xargs -d '\n' -n 100 bookdoctor --json --only security < sample-pdf.txt
 xargs -d '\n' -n1 -I{} detect_mojibake check --file {} < sample-txt.txt   # sample-epub.txt도 같다
 xargs -d '\n' -n 100 bookdoctor --json < sample-{txt,epub,pdf}.txt, pdf-redownload.txt, epub-redownload.txt
 ```
+
+### 8. 옛 도구 제거 전 기준 수치 (Task 17)
+
+옛 `epubscan structure` 리포트(`tmp/epub_structure_report*.json`, 2026-10 스캔)를 삭제하기 전에 합계를 옮겼다. 리포트는 카테고리 74개 파일이다.
+
+| 항목 | 값 |
+|---|---|
+| 리포트 파일 수 | 74 |
+| 검사한 EPUB 합계(`total`) | 40,605 |
+| flagged 합계(`flagged_count`) | 3,752 |
+
+| 이슈 | 건수 |
+|---|---|
+| `bad_mimetype` | 3,733 |
+| `spine_member_missing` | 67 |
+| `opf_unparsable` | 30 |
+| `member_unreadable` | 4 |
+| `not_zip` | 3 |
+| `opf_missing` | 1 |
+| `prefixed_root` | 1 |
+| `no_container`, `scan_error` | 0 |
+
+`tmp/mojibake_recheck*.json`은 메인 체크아웃에 없었다.

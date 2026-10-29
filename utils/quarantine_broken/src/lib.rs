@@ -20,7 +20,7 @@ pub use corpus_common::DEFAULT_LIBRARY_ROOT;
 // 천 단위 쉼표 출력은 corpus_common에 있다. 같은 코드를 복사해 두지 않는다.
 pub(crate) use corpus_common::thousands;
 
-/// 격리 대상으로 고른 항목에 붙이는 판정 값. 옛 detect_mojibake의 `VERDICT_CORRUPTED`와 같은 문자열이다.
+/// 격리 대상으로 고른 항목에 붙이는 판정 값. 옛 인코딩 검사 도구의 `VERDICT_CORRUPTED`와 같은 문자열이다.
 pub const VERDICT_CORRUPTED: &str = "corrupted";
 /// bookdoctor 리포트에서 인코딩 손상을 뜻하는 지표 코드. 다른 코드(NOT_UTF8, FORMAT_MISMATCH 등)는 격리하지 않는다.
 pub const MOJIBAKE_CODE: &str = "MOJIBAKE";
@@ -123,7 +123,7 @@ pub fn fix_extension_with(path: &Path, dry_run: bool, unmangle: &dyn Fn(&[u8]) -
 /// likeness가 없거나 null이면 키를 넣지 않는다(옛 코드도 없는 키는 그대로 두었다).
 /// 알려진 한계: bookdoctor는 `path`의 제어 문자를 '.'으로 바꿔 쓴다. 이름에 제어 문자가 든 파일은 정확히 찾지 못한다.
 /// 최악의 경우 이동이 건너뛰어지거나, 점으로 바뀐 이름의 다른 실제 파일이 옮겨진다(`undo`로 되돌릴 수 있다).
-/// 옛 detect_mojibake 형식(`{"corrupted": [...]}`)은 조용히 빈 결과가 되지 않도록 오류로 돌려준다.
+/// 옛 인코딩 검사 도구 형식(`{"corrupted": [...]}`)은 조용히 빈 결과가 되지 않도록 오류로 돌려준다.
 pub fn load_corrupted(report_path: &Path) -> io::Result<Vec<Rec>> {
     let data: Value = serde_json::from_str(&fs::read_to_string(report_path)?).map_err(io::Error::other)?;
     let invalid = |msg: &str| io::Error::new(io::ErrorKind::InvalidData, msg.to_owned());
@@ -131,7 +131,7 @@ pub fn load_corrupted(report_path: &Path) -> io::Result<Vec<Rec>> {
         return Err(invalid("리포트가 객체가 아니다. `bookdoctor --report`로 다시 만들어라"));
     };
     let Some(files) = o.remove("files") else {
-        let hint = if o.contains_key("corrupted") { "옛 detect_mojibake 리포트 형식이다" } else { "리포트에 files 목록이 없다" };
+        let hint = if o.contains_key("corrupted") { "옛 인코딩 검사 도구 리포트 형식이다" } else { "리포트에 files 목록이 없다" };
         return Err(invalid(&format!("{hint}. `bookdoctor --report`로 리포트를 다시 만들어라")));
     };
     let Value::Array(items) = files else {

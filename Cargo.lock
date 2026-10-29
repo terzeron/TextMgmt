@@ -862,24 +862,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "detect_mojibake"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "corpus_common",
- "encoding_rs",
- "indexmap 2.14.2",
- "pyfmt",
- "rayon",
- "regex",
- "roxmltree",
- "serde",
- "serde_json",
- "tempfile",
- "zip",
-]
-
-[[package]]
 name = "diesel"
 version = "2.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1062,26 +1044,6 @@ dependencies = [
  "rustversion",
  "scopeguard",
  "simdutf8",
-]
-
-[[package]]
-name = "epubscan"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "corpus_common",
- "encoding_rs",
- "fancy-regex",
- "htmlkit",
- "indexmap 2.14.2",
- "rayon",
- "regex",
- "roxmltree",
- "scan_common",
- "serde",
- "serde_json",
- "tempfile",
- "zip",
 ]
 
 [[package]]
@@ -2354,16 +2316,6 @@ name = "parser_timeout"
 version = "0.1.0"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "pdfscan"
-version = "0.1.0"
-dependencies = [
- "lopdf",
- "scan_common",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]

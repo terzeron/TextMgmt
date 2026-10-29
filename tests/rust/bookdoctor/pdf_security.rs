@@ -1,4 +1,4 @@
-//! bookdoctor PDF 보안 검사 통합 테스트: PDF를 직접 만들어 규칙마다 확인한다. pdfscan 테스트에서 이식했다.
+//! bookdoctor PDF 보안 검사 통합 테스트: PDF를 직접 만들어 규칙마다 확인한다. 옛 PDF 검사 도구 테스트에서 이식했다.
 //! 옛 CLI 출력(`run`) 대신 `scan_file(..).findings`를 옛 텍스트 출력과 같은 모양으로 펴서 단언한다.
 
 use std::fs;

@@ -1,5 +1,5 @@
 //! 경로·URL 유틸. Python `posixpath`와 `urllib.parse`의 동작에 맞춘다.
-//! EPUB 구조 검사(`epubscan`)와 분류 도구가 함께 쓴다.
+//! EPUB 구조 검사(`bookdoctor`)와 분류 도구가 함께 쓴다.
 
 use std::fs;
 use std::path::{Path, PathBuf};

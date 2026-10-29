@@ -1,4 +1,4 @@
-//! PDF 정적 동작·활성 콘텐츠 검사 (pdfscan에서 이식).
+//! PDF 정적 동작·활성 콘텐츠 검사 (옛 PDF 검사 도구에서 이식).
 //!
 //! PDF를 렌더링하거나 JavaScript를 실행하거나 첨부를 열거나 프로그램을 띄우지 않는다. PDF 파싱 자체가 공격면이므로
 //! 신뢰할 수 없는 파일은 권한 없는 샌드박스에서 검사한다.
@@ -243,7 +243,7 @@ fn shrink_on_load_strict(id: ObjectId, obj: &mut Object) -> Option<(ObjectId, Ob
 /// 한계(압축 객체 스트림): 스트림 안의 참조는 압축돼 있어 세지 못하고, 안쪽 객체도 훅을 거치지만 31개 이하 참조 배열은 두 훅 모두
 /// 남긴다. 해제 한도(`MAX_DECOMPRESSED_STREAM_BYTES`, 4MiB)는 스트림 하나에만 걸린다. 4MiB 스트림은 압축하면 수 KB라 그런 스트림
 /// 하나가 참조 약 70만 개, 노드 약 80MB를 남긴다. 남은 노드는 `doc.objects`에 문서 수명 내내 유지되고 `/ObjStm` 개수 상한이 없으므로
-/// 최악은 약 80MB × ObjStm 개수이며, 프로세스 안에는 이를 막는 한도가 없다. 이는 예전 pdfscan과 같은 동작이다(Ruling R20).
+/// 최악은 약 80MB × ObjStm 개수이며, 프로세스 안에는 이를 막는 한도가 없다. 이는 예전 PDF 검사 도구와 같은 동작이다(Ruling R20).
 /// 작업자 수 상한은 문서 하나의 메모리를 막지 못하고, 외부 메모리 한도(cgroup/ulimit)만 막는다. `/ObjStm` 개수로 훅을 고르면
 /// ObjStm를 쓰는 현대 PDF 대부분이 엄격 훅이 되어 긴 /Kids가 모두 비워지므로(오탐성 incomplete) 하지 않는다.
 fn count_raw_references(data: &[u8]) -> usize {

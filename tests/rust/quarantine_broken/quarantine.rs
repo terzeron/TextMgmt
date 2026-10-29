@@ -643,7 +643,7 @@ fn only_mojibake_findings_are_quarantined() {
 }
 
 #[test]
-fn rejects_old_detect_mojibake_report_shape() {
+fn rejects_old_encoding_tool_report_shape() {
     let dir = tempfile::tempdir().unwrap();
     let f = dir.path().join("old.json");
     fs::write(&f, json!({"corrupted": [{"path": "/a.txt", "verdict": "corrupted", "likeness": 0.004}]}).to_string()).unwrap();
