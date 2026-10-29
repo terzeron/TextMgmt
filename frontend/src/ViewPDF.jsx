@@ -884,23 +884,20 @@ export default function ViewPDF({
           )}
         </div>
         <div className="pdf-zoom-controls">
-          {/* 쪽 넘김 방식: 상→하와 좌→우/좌←우는 xor라 하나만 켜진다. 1장씩과는 독립이다. */}
-          <button
-            className={`pdf-zoom-btn pdf-zoom-fit-btn pdf-vertical-btn ${horizontal ? "" : "active"}`}
-            onClick={() => setPageMode("vertical")}
-            aria-pressed={!horizontal}
-            title="상하로 스크롤"
-          >
-            <span className="toggle-track">
-              <span className="toggle-knob" />
-            </span>
-            상→하
-          </button>
+          {/* 쪽 넘김 방식: 셋 중 하나만 선택되는 분할 버튼(xor). 1장씩과는 독립이다. */}
           <span
             className="pdf-direction-group"
             role="group"
-            aria-label="쪽 넘김 방향"
+            aria-label="쪽 넘김 방식"
           >
+            <button
+              className={`pdf-zoom-btn pdf-direction-btn pdf-vertical-btn ${pageMode === "vertical" ? "active" : ""}`}
+              onClick={() => setPageMode("vertical")}
+              aria-pressed={pageMode === "vertical"}
+              title="상하로 스크롤"
+            >
+              상→하
+            </button>
             <button
               className={`pdf-zoom-btn pdf-direction-btn pdf-ltr-btn ${pageMode === "ltr" ? "active" : ""}`}
               onClick={() => setPageMode("ltr")}

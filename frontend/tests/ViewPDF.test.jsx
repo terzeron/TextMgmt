@@ -666,11 +666,16 @@ describe("ViewPDF", () => {
       expect(root.classList.contains("pdf-horizontal")).toBe(false);
     });
 
-    it("상→하는 좌우 토글 왼쪽에 놓이고 1장씩 토글은 그 오른쪽에 따로 있다", async () => {
+    it("상→하·좌→우·좌←우는 한 분할 버튼 안에 이 순서로 있고 1장씩 토글은 그 오른쪽에 따로 있다", async () => {
       const { root } = await setup(1);
       const group = root.querySelector(".pdf-direction-group");
-      expect(group.previousElementSibling).toBe(root.querySelector(".pdf-vertical-btn"));
-      expect(root.querySelector(".pdf-single-btn").previousElementSibling).not.toBe(group);
+      expect(group.getAttribute("role")).toBe("group");
+      expect(Array.from(group.children).map((b) => b.textContent)).toEqual([
+        "상→하",
+        "좌→우",
+        "좌←우",
+      ]);
+      expect(group.contains(root.querySelector(".pdf-single-btn"))).toBe(false);
       expect(group.compareDocumentPosition(root.querySelector(".pdf-single-btn"))).toBe(
         Node.DOCUMENT_POSITION_FOLLOWING,
       );
