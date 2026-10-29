@@ -342,6 +342,28 @@ impl Default for UreqHttpSession {
     }
 }
 
+/// 서점 API를 불러 200 응답만 돌려준다. 실패하면 `verbose`일 때 `{label} 검색 실패`나 `{label} API 응답 실패`를 남긴다.
+/// `secret`은 오류 문구에서 `****`로 가린다(빈 문자열이면 가리지 않는다).
+fn fetch_ok(session: &dyn HttpSession, verbose: bool, label: &str, url: &str, query: &[(String, String)], timeout: HttpTimeout, secret: &str) -> Option<HttpResponse> {
+    let resp = match session.get_with_timeout(url, query, timeout) {
+        Ok(resp) => resp,
+        Err(e) => {
+            if verbose {
+                let message = e.to_string();
+                log::error!("{label} 검색 실패: {}", if secret.is_empty() { message } else { message.replace(secret, "****") });
+            }
+            return None;
+        }
+    };
+    if resp.status_code != 200 {
+        if verbose {
+            log::warn!("{label} API 응답 실패: {}", resp.status_code);
+        }
+        return None;
+    }
+    Some(resp)
+}
+
 fn map_ureq_error(error: ureq::Error) -> HttpError {
     match &error {
         ureq::Error::Timeout(_) => HttpError::Timeout,
@@ -369,12 +391,20 @@ fn read_body_chunks(mut body: ureq::BodyReader<'static>, sender: SyncSender<std:
     }
 }
 
+/// 외부 응답 본문의 상한. 다 읽은 뒤에 검사하면 메모리를 지키지 못하므로 읽는 도중에 끊는다.
+pub const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 fn read_body_with_idle_timeout(body: ureq::BodyReader<'static>, agent: ureq::Agent, timeout: std::time::Duration) -> Result<(Vec<u8>, ureq::Agent), HttpError> {
     let (sender, receiver) = sync_channel(1);
     std::thread::spawn(move || read_body_chunks(body, sender));
     let mut output = Vec::new();
     loop {
         match receiver.recv_timeout(timeout) {
+            Ok(Ok(chunk)) if output.len() + chunk.len() > MAX_RESPONSE_BYTES => {
+                // 수신 스레드는 receiver가 사라지면 send 실패로 끝난다.
+                agent.shutdown();
+                return Err(HttpError::Connection(format!("응답 본문이 상한 {MAX_RESPONSE_BYTES}바이트를 넘습니다")));
+            }
             Ok(Ok(chunk)) => output.extend(chunk),
             Ok(Err(error)) => {
                 return if error.kind() == std::io::ErrorKind::TimedOut { Err(HttpError::Timeout) } else { Err(HttpError::Connection(error.to_string())) };
@@ -1099,21 +1129,7 @@ impl RidibooksBookstore {
 
     fn search_api(&self, keyword: &str) -> Vec<SearchRow> {
         let search_url = self.build_search_url(keyword);
-        let resp = match self.session.get_with_timeout(RIDI_API_URL, &params(&[("keyword", keyword)]), HttpTimeout::from_secs(10, 10)) {
-            Ok(r) => r,
-            Err(e) => {
-                if self.verbose {
-                    log::error!("RIDI 검색 실패: {e}");
-                }
-                return Vec::new();
-            }
-        };
-        if resp.status_code != 200 {
-            if self.verbose {
-                log::warn!("RIDI API 응답 실패: {}", resp.status_code);
-            }
-            return Vec::new();
-        }
+        let Some(resp) = fetch_ok(&*self.session, self.verbose, "RIDI", RIDI_API_URL, &params(&[("keyword", keyword)]), HttpTimeout::from_secs(10, 10), "") else { return Vec::new() };
         let data = resp.json();
         let books = array_field(&data, "books");
         if books.is_empty() {
@@ -1522,21 +1538,7 @@ impl JoaraBookstore {
             ("orderby", "score"),
         ]);
 
-        let resp = match self.session.get_with_timeout(JOARA_API_URL, &query, HttpTimeout::from_secs(10, 10)) {
-            Ok(r) => r,
-            Err(e) => {
-                if self.verbose {
-                    log::error!("조아라 검색 실패: {}", self.redact(&e.to_string(), &api_key));
-                }
-                return Vec::new();
-            }
-        };
-        if resp.status_code != 200 {
-            if self.verbose {
-                log::warn!("조아라 API 응답 실패: {}", resp.status_code);
-            }
-            return Vec::new();
-        }
+        let Some(resp) = fetch_ok(&*self.session, self.verbose, "조아라", JOARA_API_URL, &query, HttpTimeout::from_secs(10, 10), &api_key) else { return Vec::new() };
         let data = resp.json();
         // 조아라는 파라미터가 빠져도 HTTP 200을 주고 status로만 실패를 알린다.
         if data.get("status").and_then(Value::as_i64) != Some(1) {
@@ -1598,21 +1600,9 @@ const NAVER_WEBTOON_API_URL: &str = "https://comic.naver.com/api/search/webtoon"
 impl NaverWebtoonBookstore {
     fn search_api(&self, keyword: &str) -> Vec<SearchRow> {
         let search_url = self.build_search_url(keyword);
-        let resp = match self.session.get_with_timeout(NAVER_WEBTOON_API_URL, &params(&[("keyword", keyword), ("page", "1")]), HttpTimeout::from_secs(10, 10)) {
-            Ok(r) => r,
-            Err(e) => {
-                if self.verbose {
-                    log::error!("네이버 웹툰 검색 실패: {e}");
-                }
-                return Vec::new();
-            }
-        };
-        if resp.status_code != 200 {
-            if self.verbose {
-                log::warn!("네이버 웹툰 API 응답 실패: {}", resp.status_code);
-            }
+        let Some(resp) = fetch_ok(&*self.session, self.verbose, "네이버 웹툰", NAVER_WEBTOON_API_URL, &params(&[("keyword", keyword), ("page", "1")]), HttpTimeout::from_secs(10, 10), "") else {
             return Vec::new();
-        }
+        };
         let data = resp.json();
         let webtoons = array_field(&data, "searchList");
         if webtoons.is_empty() {
@@ -1671,21 +1661,11 @@ impl KakaoWebtoonBookstore {
     fn search_api(&self, keyword: &str) -> Vec<SearchRow> {
         let search_url = self.build_search_url(keyword);
         let limit = self.max_results.to_string();
-        let resp = match self.session.get_with_timeout(KAKAO_WEBTOON_API_URL, &params(&[("word", keyword), ("offset", "0"), ("limit", &limit)]), HttpTimeout::from_secs(10, 10)) {
-            Ok(r) => r,
-            Err(e) => {
-                if self.verbose {
-                    log::error!("카카오웹툰 검색 실패: {e}");
-                }
-                return Vec::new();
-            }
-        };
-        if resp.status_code != 200 {
-            if self.verbose {
-                log::warn!("카카오웹툰 API 응답 실패: {}", resp.status_code);
-            }
+        let Some(resp) =
+            fetch_ok(&*self.session, self.verbose, "카카오웹툰", KAKAO_WEBTOON_API_URL, &params(&[("word", keyword), ("offset", "0"), ("limit", &limit)]), HttpTimeout::from_secs(10, 10), "")
+        else {
             return Vec::new();
-        }
+        };
         let data = resp.json();
         let contents = data.get("data").map_or(&[][..], |d| array_field(d, "content"));
         if contents.is_empty() {
@@ -1758,21 +1738,7 @@ impl BomtoonBookstore {
             ("isSearchTool", "true"),
             ("sortType", "ACCURACY"),
         ]);
-        let resp = match self.session.get_with_timeout(BOMTOON_API_URL, &query, HttpTimeout::from_secs(10, 10)) {
-            Ok(r) => r,
-            Err(e) => {
-                if self.verbose {
-                    log::error!("봄툰 검색 실패: {e}");
-                }
-                return Vec::new();
-            }
-        };
-        if resp.status_code != 200 {
-            if self.verbose {
-                log::warn!("봄툰 API 응답 실패: {}", resp.status_code);
-            }
-            return Vec::new();
-        }
+        let Some(resp) = fetch_ok(&*self.session, self.verbose, "봄툰", BOMTOON_API_URL, &query, HttpTimeout::from_secs(10, 10), "") else { return Vec::new() };
         let data = resp.json();
         let contents = data.get("data").map_or(&[][..], |d| array_field(d, "results"));
 
@@ -1832,21 +1798,7 @@ impl LezhinBookstore {
         let search_url = self.build_search_url(keyword);
         let limit = self.max_results.to_string();
         let query = params(&[("q", keyword), ("t", "all"), ("order", "popular"), ("offset", "0"), ("limit", &limit)]);
-        let resp = match self.session.get_with_timeout(LEZHIN_API_URL, &query, HttpTimeout::from_secs(10, 10)) {
-            Ok(r) => r,
-            Err(e) => {
-                if self.verbose {
-                    log::error!("레진코믹스 검색 실패: {e}");
-                }
-                return Vec::new();
-            }
-        };
-        if resp.status_code != 200 {
-            if self.verbose {
-                log::warn!("레진코믹스 API 응답 실패: {}", resp.status_code);
-            }
-            return Vec::new();
-        }
+        let Some(resp) = fetch_ok(&*self.session, self.verbose, "레진코믹스", LEZHIN_API_URL, &query, HttpTimeout::from_secs(10, 10), "") else { return Vec::new() };
         let data = resp.json();
         let contents = data.get("data").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
 

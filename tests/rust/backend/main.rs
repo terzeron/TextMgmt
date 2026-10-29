@@ -33,7 +33,7 @@
 //! - `backend::bookstore::Yes24Bookstore { verbose: bool }`
 //! - `backend::book_manager::{BookManager, BookManagerApi, BookContent, BookResponse}`: `BookManager::from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, _>`, `BookManager::media_type(suffix_with_dot: &str) -> &'static str`
 //!   - `bm.path_prefix() -> PathBuf`, `bm.es_manager() -> Arc<dyn EsManagerApi>` (`insert(&Docs) -> Result<Vec<i64>, EsError>`, `refresh() -> Result<(), EsError>`, `delete(i64) -> Result<bool, EsError>`, `count_by_category(&str, bool) -> Result<i64, EsError>`)
-//!   - `async add_book(BTreeMap<i64, Value>) -> (Option<i64>, Option<String>)`, `async get_book(i64) -> (Option<Book>, Option<String>)`
+//!   - `async add_book(BTreeMap<i64, Value>) -> Result<i64, String>`, `async get_book(i64) -> Result<Book, BookLookupError>`
 //!   - `BookManagerApi`(모든 메서드에 기본 구현이 있다): 아래 `DummyManager` 구현부의 시그니처를 따른다. `fn es_manager(&self) -> Arc<dyn EsManagerApi>`.
 //!     통일 시그니처(설계 3.2): `get_book_content -> BookContent`, `get_book_preview(id, chapters, resource_base_url) -> BookResponse`, `get_pdf_pages(id, start, end) -> BookResponse`, `get_category_mismatches(force_refresh) -> Result<Value, String>`
 //! - `backend::es_manager::{EsManagerApi, EsError, ESManager}`: `delete(&self, i64) -> Result<bool, EsError>`, `search_categories_pdf_stats(&self, &[String]) -> Result<Value, EsError>`. 대역은 `common::es_fake::FakeEsManager`다.
@@ -62,8 +62,8 @@ use std::time::Duration;
 use axum::http::Method;
 use axum::response::IntoResponse;
 use backend::auth::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
-use backend::book::Book;
-use backend::book_manager::{BookContent, BookManager, BookManagerApi, BookResponse};
+use backend::book::{Book, BookLookupError, BookPage};
+use backend::book_manager::{BookContent, BookDeletion, BookManager, BookManagerApi, BookResponse};
 use backend::category_mapping::CategoryMapping;
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
@@ -72,6 +72,14 @@ use common::{TestClient, env::EnvGuard, es_fake::FakeEsManager};
 use serde_json::{Value, json};
 use sysdeps::{FsOps, SystemClock};
 use tempfile::TempDir;
+
+/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+    match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    }
+}
 
 #[test]
 fn backend_binary_dispatches_the_isbn_pdf_worker_command() {
@@ -228,11 +236,10 @@ async fn test_book(s: &Setup) -> TestBook {
     fs::copy(src, &temp).unwrap();
     let data = read_file(&temp);
 
-    let (book_id, error) = s.bm.add_book(&data).await;
+    let (book_id, error) = split(s.bm.add_book(&data).await);
     let book_id = expect_id(book_id, error);
-    let (book, error) = s.bm.get_book(book_id).await;
-    assert!(book.is_some() && error.is_none());
-    TestBook { book: book.unwrap(), temp, bm: s.bm.clone() }
+    let book = s.bm.get_book(book_id).await.expect("book");
+    TestBook { book, temp, bm: s.bm.clone() }
 }
 
 fn ext_with_dot(path: &Path) -> String {
@@ -251,11 +258,9 @@ mod test_backend {
         fs::copy(src, &temp).unwrap();
         let data = read_file(&temp);
 
-        let (book_id, error) = s.bm.add_book(&data).await;
+        let (book_id, error) = split(s.bm.add_book(&data).await);
         let book_id = expect_id(book_id, error);
-        let (book, error) = s.bm.get_book(book_id).await;
-        assert!(book.is_some() && error.is_none());
-        let book = book.unwrap();
+        let book = s.bm.get_book(book_id).await.expect("book");
         let renamed_temp = Book::path_prefix().join(&book.category).join(format!("renamed_{}.{}", book.title, book.file_type));
 
         let bm = s.bm.clone();
@@ -302,11 +307,9 @@ mod test_backend {
             let _ = fs::remove_file(&temp_cleanup);
         });
 
-        let (book_id, error) = s.bm.add_book(&data).await;
+        let (book_id, error) = split(s.bm.add_book(&data).await);
         let book_id = expect_id(book_id, error);
-        let (book, error) = s.bm.get_book(book_id).await;
-        assert!(book.is_some() && error.is_none());
-        let book = book.unwrap();
+        let book = s.bm.get_book(book_id).await.expect("book");
 
         let response = s.client.delete(&format!("/books/{}", book.book_id)).await;
         assert!(response.status < 400);
@@ -524,7 +527,7 @@ async fn insert_docs(bm: &BookManager, category: &str, count: i64, start_id: i64
             "summary": summary,
             "updated_time": loader::record::now_iso(),
         });
-        let (book_id, error) = bm.add_book(&BTreeMap::from([(doc_id, doc)])).await;
+        let (book_id, error) = split(bm.add_book(&BTreeMap::from([(doc_id, doc)])).await);
         ids.push(expect_id(book_id, error));
     }
     ids
@@ -744,7 +747,7 @@ mod test_update_book_conflict {
             "summary": "conflict test",
             "updated_time": loader::record::now_iso(),
         });
-        let (book_id, error) = bm.add_book(&BTreeMap::from([(meta.ino() as i64, doc)])).await;
+        let (book_id, error) = split(bm.add_book(&BTreeMap::from([(meta.ino() as i64, doc)])).await);
         assert!(book_id.unwrap_or(0) != 0 && error.is_none(), "Failed to register: {error:?}");
         book_id.unwrap()
     }
@@ -1317,7 +1320,7 @@ fn dummy_book(book_id: i64, category: &str, title: &str, file_path: &str, file_t
     }
 }
 
-type MismatchRet = (Value, Option<String>);
+type MismatchRet = Result<Value, String>;
 type CategoryFn = Arc<dyn Fn(&str) -> (Option<Value>, Option<String>) + Send + Sync>;
 type RenameFn = Arc<dyn Fn(&str, &str) -> (Option<Value>, Option<String>) + Send + Sync>;
 
@@ -1389,22 +1392,22 @@ impl BookManagerApi for DummyManager {
         self.es.clone()
     }
 
-    async fn update_book(&self, _book_id: i64, _new_category: &str, _new_title: &str, _new_author: &str, _new_path: &Path, _new_type: &str, _force: bool) -> (Value, Option<String>) {
+    async fn update_book(&self, _book_id: i64, _new_category: &str, _new_title: &str, _new_author: &str, _new_path: &Path, _new_type: &str, _force: bool) -> Result<(), String> {
         if self.b().update_fail {
-            return (Value::Null, Some("update failed".into()));
+            return Err("update failed".into());
         }
-        (json!("Ok"), None)
+        Ok(())
     }
 
-    async fn delete_book(&self, _book_id: i64) -> (String, Option<String>) {
+    async fn delete_book(&self, _book_id: i64) -> Result<BookDeletion, String> {
         let b = self.b();
         if b.errors {
-            return ("Error".into(), Some("boom".into()));
+            return Err("boom".into());
         }
         if b.delete_book_ok {
-            return ("Ok".into(), None);
+            return Ok(BookDeletion::Done);
         }
-        ("Warning".into(), Some("warn".into()))
+        Ok(BookDeletion::DoneWithWarning("warn".into()))
     }
 
     async fn get_book_content(&self, _book_id: i64) -> BookContent {
@@ -1419,67 +1422,71 @@ impl BookManagerApi for DummyManager {
         book_response("application/pdf", "pdf")
     }
 
-    async fn get_book(&self, book_id: i64) -> (Option<Book>, Option<String>) {
+    async fn get_book(&self, book_id: i64) -> Result<Book, BookLookupError> {
         let b = self.b();
-        if b.errors || b.book_missing {
-            return (None, Some("not found".into()));
+        if b.book_missing {
+            return Err(BookLookupError::NotFound(book_id));
+        }
+        if b.errors {
+            return Err(BookLookupError::Failed("not found".into()));
         }
         let mut book = self.default_book(book_id);
         if let Some(t) = b.book_type {
             book.file_type = t.into();
             book.file_path = format!("a.{t}").into();
         }
-        (Some(book), None)
+        Ok(book)
     }
 
-    async fn validate_epub(&self, _book_id: i64) -> (Option<Value>, Option<String>) {
+    async fn validate_epub(&self, _book_id: i64) -> Result<Value, String> {
         if self.b().validate_epub_fail {
-            return (None, Some("validation failed".into()));
+            return Err("validation failed".into());
         }
-        (Some(json!({"valid": true})), None)
+        Ok(json!({"valid": true}))
     }
 
-    async fn validate_pdf(&self, _book_id: i64) -> (Option<Value>, Option<String>) {
-        (Some(json!({"valid": true})), None)
+    async fn validate_pdf(&self, _book_id: i64) -> Result<Value, String> {
+        Ok(json!({"valid": true}))
     }
 
-    async fn get_books_in_category(&self, category: &str) -> (Vec<Book>, Option<String>) {
+    async fn get_books_in_category(&self, category: &str) -> Result<Vec<Book>, String> {
         if self.b().errors {
-            return (vec![], Some("nope".into()));
+            return Err("nope".into());
         }
-        (vec![dummy_book(1, category, "T", "a.txt", "txt", 0.0, None)], None)
+        Ok(vec![dummy_book(1, category, "T", "a.txt", "txt", 0.0, None)])
     }
 
-    async fn get_categories(&self) -> (Value, Option<String>) {
+    async fn get_categories(&self) -> Result<Value, String> {
         let b = self.b();
         if b.errors {
-            return (json!({}), Some("fail".into()));
+            return Err("fail".into());
         }
-        b.categories.unwrap_or((json!({"A": 1}), None))
+        let (value, error) = b.categories.unwrap_or((json!({"A": 1}), None));
+        error.map_or(Ok(value), Err)
     }
 
-    async fn search_similar_books_paged(&self, _book_id: i64, _size: i64, _offset: i64) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_similar_books_paged(&self, _book_id: i64, _size: i64, _offset: i64) -> Result<BookPage, String> {
         let b = self.b();
         if b.errors {
-            return (vec![], 0, Some("none".into()));
+            return Err("none".into());
         }
         if b.similar_ok {
-            return (vec![dummy_book(2, "A", "T2", "b.txt", "txt", 10.0, None)], 1, None);
+            return Ok(BookPage { books: vec![dummy_book(2, "A", "T2", "b.txt", "txt", 10.0, None)], total: 1, next_cursor: None });
         }
-        (vec![], 0, Some("No similar books found".into()))
+        Err("No similar books found".into())
     }
 
-    async fn search_by_keyword_paged(&self, _keyword: &str, _size: i64, _offset: i64, _exclude_categories: Option<&[String]>, _category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_by_keyword_paged(&self, _keyword: &str, _size: i64, _offset: i64, _exclude_categories: Option<&[String]>, _category: Option<&str>) -> Result<BookPage, String> {
         if self.b().errors {
-            return (vec![], 0, Some("kw".into()));
+            return Err("kw".into());
         }
-        (vec![dummy_book(3, "A", "T3", "c.txt", "txt", 9.0, None)], 1, None)
+        Ok(BookPage { books: vec![dummy_book(3, "A", "T3", "c.txt", "txt", 9.0, None)], total: 1, next_cursor: None })
     }
 
-    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> (Vec<Book>, i64, Option<String>) {
+    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> Result<BookPage, String> {
         *self.latest_size.lock().unwrap() = Some(size);
         *self.latest_exclude.lock().unwrap() = exclude_categories.map(|e| e.to_vec());
-        (vec![dummy_book(4, "A", "T4", "d.txt", "txt", 0.0, Some("2023-12-31T00:00:00.000000"))], 1, None)
+        Ok(BookPage { books: vec![dummy_book(4, "A", "T4", "d.txt", "txt", 0.0, Some("2023-12-31T00:00:00.000000"))], total: 1, next_cursor: None })
     }
 
     fn get_category_mismatches(&self, _force_refresh: bool) -> Result<Value, String> {
@@ -1496,31 +1503,31 @@ impl BookManagerApi for DummyManager {
         Ok(json!({"category": category}))
     }
 
-    async fn index_single_file(&self, _file_path: &str) -> (Option<i64>, Option<String>) {
+    async fn index_single_file(&self, _file_path: &str) -> Result<i64, String> {
         if self.b().errors {
-            return (None, Some("err".into()));
+            return Err("err".into());
         }
-        (Some(1), None)
+        Ok(1)
     }
 
-    async fn delete_file(&self, _file_path: &str) -> (String, Option<String>) {
+    async fn delete_file(&self, _file_path: &str) -> Result<(), String> {
         if self.b().errors {
-            return ("Error".into(), Some("bad".into()));
+            return Err("bad".into());
         }
-        ("Ok".into(), None)
+        Ok(())
     }
 
     async fn reload_category(&self, category: &str, _content_type: &str) -> MismatchRet {
         if self.b().errors {
-            return (Value::Null, Some("fail".into()));
+            return Err("fail".into());
         }
-        (json!({"category": category, "processed_count": 1}), None)
+        Ok(json!({"category": category, "processed_count": 1}))
     }
 
     async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<backend::main::ReloadProgress>) -> MismatchRet {
         let b = self.b();
         if b.errors {
-            return (Value::Null, Some("bulk fail".into()));
+            return Err("bulk fail".into());
         }
         if b.scan_delay_ms > 0 {
             // 콜백 없는 전체 스캔 구간
@@ -1530,12 +1537,12 @@ impl BookManagerApi for DummyManager {
             }
             // 콜백 없는 refresh/재스캔 구간
             tokio::time::sleep(std::time::Duration::from_millis(b.scan_delay_ms)).await;
-            return (json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 10, "after_count": 0}), None);
+            return Ok(json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 10, "after_count": 0}));
         }
         if let Some(cb) = on_progress.as_deref() {
             cb(json!({"indexed_count": 2, "deleted_count": 3}));
         }
-        (json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 5, "after_count": 0}), None)
+        Ok(json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 5, "after_count": 0}))
     }
 
     async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<backend::main::ReloadProgress>) -> MismatchRet {
@@ -1544,41 +1551,41 @@ impl BookManagerApi for DummyManager {
             panic!("mismatch boom");
         }
         if b.errors {
-            return (Value::Null, Some("mismatch fail".into()));
+            return Err("mismatch fail".into());
         }
         if let Some(cb) = on_progress.as_deref() {
             cb(json!({"indexed_count": 1, "deleted_count": 1}));
         }
-        (json!({"content_type": content_type, "category": category, "indexed_count": 1, "deleted_count": 1, "failed_count": 0, "before_count": 2, "after_count": 0}), None)
+        Ok(json!({"content_type": content_type, "category": category, "indexed_count": 1, "deleted_count": 1, "failed_count": 0, "before_count": 2, "after_count": 0}))
     }
 
-    async fn rename_category(&self, old_category: &str, new_category: &str) -> (Value, Option<String>) {
+    async fn rename_category(&self, old_category: &str, new_category: &str) -> Result<Value, String> {
         match self.b().rename {
             Some(f) => {
                 let (value, error) = f(old_category, new_category);
-                (value.unwrap_or(Value::Null), error)
+                error.map_or(Ok(value.unwrap_or(Value::Null)), Err)
             }
-            None => (Value::Null, Some("rename_category not implemented".into())),
+            None => Err("rename_category not implemented".into()),
         }
     }
 
-    async fn delete_category(&self, category: &str, _delete_files: bool) -> (Value, Option<String>) {
+    async fn delete_category(&self, category: &str, _delete_files: bool) -> Result<Value, String> {
         match self.b().delete_category {
             Some(f) => {
                 let (value, error) = f(category);
-                (value.unwrap_or(Value::Null), error)
+                error.map_or(Ok(value.unwrap_or(Value::Null)), Err)
             }
-            None => (Value::Null, Some("delete_category not implemented".into())),
+            None => Err("delete_category not implemented".into()),
         }
     }
 
-    async fn preview_delete_category(&self, category: &str) -> (Value, Option<String>) {
+    async fn preview_delete_category(&self, category: &str) -> Result<Value, String> {
         match self.b().preview {
             Some(f) => {
                 let (value, error) = f(category);
-                (value.unwrap_or(Value::Null), error)
+                error.map_or(Ok(value.unwrap_or(Value::Null)), Err)
             }
-            None => (Value::Null, Some("preview_delete_category not implemented".into())),
+            None => Err("preview_delete_category not implemented".into()),
         }
     }
 }
@@ -2257,8 +2264,8 @@ impl backend::refresh_token_store::RefreshTokenStoreApi for AuthRefreshStore {
     fn store_issued(&self, _: &str, _: &str, _: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<(), backend::refresh_token_store::StoreError> {
         Ok(())
     }
-    fn rotate(&self, _: &str, _: &str, _: &str, _: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<String, backend::refresh_token_store::StoreError> {
-        Ok("ok".into())
+    fn rotate(&self, _: &str, _: &str, _: &str, _: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<backend::refresh_token_store::Rotation, backend::refresh_token_store::StoreError> {
+        Ok(backend::refresh_token_store::Rotation::Ok)
     }
     fn revoke_family(&self, _: &str, _: &str) -> Result<(), backend::refresh_token_store::StoreError> {
         Err(backend::refresh_token_store::StoreError::Unsupported("test store".into()))

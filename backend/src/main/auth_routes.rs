@@ -17,10 +17,10 @@ use super::cookies::{_clear_auth_cookies, _set_auth_cookies};
 use super::deps::AppDeps;
 use super::errors::{ApiError, ApiResult, json_response};
 use super::extract::{ApiJson, ApiQuery, RequireAdmin, RequireAuth};
+use super::google::GOOGLE_ISSUERS;
 use super::routes::Routes;
 use crate::auth::{ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RequestParts, observation_hash};
-
-const GOOGLE_ISSUERS: [&str; 2] = ["accounts.google.com", "https://accounts.google.com"];
+use crate::refresh_token_store::Rotation;
 
 /// family_id는 `uuid4().hex`라서 32자 소문자 hex다.
 const FAMILY_ID_LENGTH: usize = 32;
@@ -173,15 +173,15 @@ async fn refresh_access_token(State(deps): State<Arc<AppDeps>>, headers: HeaderM
     let rotated = deps.refresh_store().and_then(|store| {
         store.rotate(current_token_id, &new_token_id, family_id, email, issued_at, issued_at + REFRESH_TOKEN_EXPIRATION_SECONDS, Some(&client.ip), Some(&client.user_agent)).map_err(|e| e.to_string())
     });
-    let rotation_status = match rotated {
-        Ok(status) => status,
+    let rotation = match rotated {
+        Ok(rotation) => rotation,
         Err(e) => {
             log::error!("refresh_token_store.rotate() failed for email_hash={}: {e}", observation_hash(email));
             return Err(ApiError::unavailable());
         }
     };
-    if rotation_status != "ok" {
-        log_refresh_rotation_rejected(&deps, &client, &rotation_status, email, family_id, current_token_id);
+    if rotation != Rotation::Ok {
+        log_refresh_rotation_rejected(&deps, &client, rotation.as_str(), email, family_id, current_token_id);
         let mut response = json_response(401, &json!({"detail": "Invalid refresh token state"}));
         _clear_auth_cookies(&mut response);
         return Ok(response);

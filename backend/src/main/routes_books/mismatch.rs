@@ -5,12 +5,12 @@ use std::sync::{Arc, Mutex};
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},
-    http::Uri,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::super::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, ReloadProgress, RequestValidationError, RequireAdmin, Routes};
+use super::manager;
 
 pub(super) fn routes() -> Routes {
     let mut routes = Routes::new();
@@ -27,14 +27,6 @@ pub(super) fn routes() -> Routes {
             .get(&format!("{prefix}/category-mismatches/{{*category}}"), &["require_admin"], mismatch_details);
     }
     routes
-}
-
-fn manager(deps: &AppDeps, uri: &Uri) -> ApiResult<Arc<dyn BookManagerApi>> {
-    let manager = if uri.path().starts_with("/comics/") { deps.comics_manager() } else { deps.book_manager() };
-    manager.map_err(|error| {
-        log::warn!("도서 관리자를 쓸 수 없다: {error}");
-        ApiError::unavailable()
-    })
 }
 
 async fn get_mismatches(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri) -> Json<Value> {
@@ -55,10 +47,9 @@ async fn index_file(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalU
     if body.file_path.is_empty() {
         return Err(ApiError::http(400, "file_path is required"));
     }
-    let (id, error) = manager(&deps, &uri)?.index_single_file(&body.file_path).await;
-    Ok(Json(match (id, error) {
-        (Some(book_id), None) => json!({"status":"success","result":{"book_id":book_id}}),
-        (_, error) => json!({"status":"failure","error":error}),
+    Ok(Json(match manager(&deps, &uri)?.index_single_file(&body.file_path).await {
+        Ok(book_id) => json!({"status":"success","result":{"book_id":book_id}}),
+        Err(error) => json!({"status":"failure","error":error}),
     }))
 }
 
@@ -66,8 +57,10 @@ async fn delete_file(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Original
     if body.file_path.is_empty() {
         return Err(ApiError::http(400, "file_path is required"));
     }
-    let (status, error) = manager(&deps, &uri)?.delete_file(&body.file_path).await;
-    Ok(Json(if status == "Ok" { json!({"status":"success","result":status}) } else { json!({"status":"failure","error":error}) }))
+    Ok(Json(match manager(&deps, &uri)?.delete_file(&body.file_path).await {
+        Ok(()) => json!({"status":"success","result":"Ok"}),
+        Err(error) => json!({"status":"failure","error":error}),
+    }))
 }
 
 async fn delete_es_doc(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, Path(raw_id): Path<String>) -> ApiResult<Json<Value>> {
@@ -83,10 +76,9 @@ struct Category {
 
 async fn reload_category(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<Category>) -> ApiResult<Json<Value>> {
     let content_type = if uri.path().starts_with("/comics/") { "comic" } else { "book" };
-    let (result, error) = manager(&deps, &uri)?.reload_category(&body.category, content_type).await;
-    Ok(Json(match error {
-        Some(error) => json!({"status":"failure","error":error}),
-        None => json!({"status":"success","result":result}),
+    Ok(Json(match manager(&deps, &uri)?.reload_category(&body.category, content_type).await {
+        Ok(result) => json!({"status":"success","result":result}),
+        Err(error) => json!({"status":"failure","error":error}),
     }))
 }
 
@@ -218,11 +210,16 @@ fn spawn_reload_job(deps: &AppDeps, manager: Arc<dyn BookManagerApi>, mapping: A
                             }
                         }
                     });
-                    let (result, error) = match category.as_deref() {
+                    let reloaded = match category.as_deref() {
                         Some(category) => manager.reload_category_mismatch_files(category, &content_type, Some(progress)).await,
                         None => manager.reload_category_mismatches(&content_type, Some(progress)).await,
                     };
                     flusher.abort();
+                    // 실패하면 건수는 0이다. 구현은 실패 때 부분 건수를 내지 않는다.
+                    let (result, error) = match reloaded {
+                        Ok(result) => (result, None),
+                        Err(error) => (Value::Null, Some(error)),
+                    };
                     let counts = json!({
                         "indexed_count": result["indexed_count"].as_i64().unwrap_or(0),
                         "deleted_count": result["deleted_count"].as_i64().unwrap_or(0),

@@ -577,11 +577,13 @@ pub struct ClassifyOptions {
     pub use_bookstore: bool,
     pub use_content_meta: bool,
     pub cache_only: bool,
+    /// 서점 조회 간격(초). `None`이면 서비스 기본값을 쓴다.
+    pub delay: Option<f64>,
 }
 
 impl Default for ClassifyOptions {
     fn default() -> Self {
-        Self { trust_single_match: true, use_bookstore: true, use_content_meta: true, cache_only: false }
+        Self { trust_single_match: true, use_bookstore: true, use_content_meta: true, cache_only: false, delay: None }
     }
 }
 
@@ -817,24 +819,28 @@ impl BookClassifierService {
         res
     }
 
-    fn pause(&self) {
-        if self.delay > 0.0 {
-            std::thread::sleep(Duration::from_secs_f64(self.delay));
+    fn pause(delay: f64) {
+        if delay > 0.0 {
+            std::thread::sleep(Duration::from_secs_f64(delay));
         }
     }
 
     /// 서점 3곳에 묻는다. 같은 책을 이미 물었으면 캐시에서 꺼내 조회 3회와 간격 3회를 건너뛴다.
     pub fn query_bookstores(&mut self, search_title: &str, raw_author: &str, raw_title: &str, isbn: &str) -> (Value, Value, Value) {
+        self.query_bookstores_with_delay(search_title, raw_author, raw_title, isbn, self.delay)
+    }
+
+    fn query_bookstores_with_delay(&mut self, search_title: &str, raw_author: &str, raw_title: &str, isbn: &str, delay: f64) -> (Value, Value, Value) {
         if let Some(cached) = self.bookstore_cache.get(isbn, search_title, raw_author) {
             let part = |name: &str| cached.get(name).cloned().unwrap_or_else(|| json!({}));
             return (part("yes24"), part("aladin"), part("kyobo"));
         }
         let y = Self::query_store(self.yes24.as_ref(), isbn, search_title, raw_author, raw_title);
-        self.pause();
+        Self::pause(delay);
         let a = Self::query_store(self.aladin.as_ref(), isbn, search_title, raw_author, raw_title);
-        self.pause();
+        Self::pause(delay);
         let k = Self::query_store(self.kyobo.as_ref(), isbn, search_title, raw_author, raw_title);
-        self.pause();
+        Self::pause(delay);
         self.bookstore_cache.put(&json!({"yes24": y, "aladin": a, "kyobo": k}), search_title, raw_author, isbn);
         (y, a, k)
     }
@@ -884,7 +890,11 @@ impl BookClassifierService {
                     return (None, "cache_only_skip".into(), "Not in cache".into(), Some(json!({})), cache_key);
                 }
                 let empty = json!({"title": "", "author": "", "cat": "", "mapped": null, "url": ""});
-                let (y, a, k) = if opts.use_bookstore { self.query_bookstores(&search_title, &raw_author, &raw_title, "") } else { (empty.clone(), empty.clone(), empty) };
+                let (y, a, k) = if opts.use_bookstore {
+                    self.query_bookstores_with_delay(&search_title, &raw_author, &raw_title, "", opts.delay.map_or(self.delay, |d| d.max(0.0)))
+                } else {
+                    (empty.clone(), empty.clone(), empty)
+                };
                 let made = json!({"filename": effective, "rel_path": rel_path, "author": raw_author, "title": raw_title, "search_title": search_title,
                     "yes24": y, "aladin": a, "kyobo": k, "status": "pending", "target_category": null});
                 self.cache.insert(cache_key.clone(), made.clone());
@@ -1042,7 +1052,7 @@ impl BookClassifierService {
         let (target_cat, method, reason, entry, key) = self.classify_file_keyed(
             fpath,
             source_dir,
-            ClassifyOptions { trust_single_match: opts.trust_single_match, use_bookstore: opts.use_bookstore, use_content_meta: opts.use_content_meta, cache_only: opts.cache_only },
+            ClassifyOptions { trust_single_match: opts.trust_single_match, use_bookstore: opts.use_bookstore, use_content_meta: opts.use_content_meta, cache_only: opts.cache_only, delay: None },
         );
         let mut result = json!({"file": fpath.to_string_lossy(), "target_category": target_cat, "method": method, "reason": reason, "action": "none"});
         let Some(target_cat) = target_cat else { return result };
@@ -1179,7 +1189,7 @@ impl SharedBookClassifier {
     }
 
     pub fn call_with_delay(&self, source_dir: &Path, use_bookstore: bool, use_content_meta: bool, delay: Option<f64>) -> ServiceCall<'_> {
-        ServiceCall { shared: self, source_dir: source_dir.to_path_buf(), opts: ClassifyOptions { use_bookstore, use_content_meta, ..Default::default() }, delay }
+        ServiceCall { shared: self, source_dir: source_dir.to_path_buf(), opts: ClassifyOptions { use_bookstore, use_content_meta, delay, ..Default::default() } }
     }
 }
 
@@ -1188,18 +1198,12 @@ pub struct ServiceCall<'a> {
     shared: &'a SharedBookClassifier,
     source_dir: PathBuf,
     opts: ClassifyOptions,
-    delay: Option<f64>,
 }
 
 impl BookClassifierApi for ServiceCall<'_> {
     fn classify_file(&self, path: &Path) -> (Option<String>, String, String, Value) {
         let mut svc = self.shared.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let original_delay = svc.delay;
-        if let Some(delay) = self.delay {
-            svc.delay = delay.max(0.0);
-        }
         let (cat, method, reason, entry) = svc.classify_file(path, &self.source_dir, self.opts);
-        svc.delay = original_delay;
         (cat, method, reason, entry.unwrap_or_else(|| json!({})))
     }
 

@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use zip::ZipArchive;
 
 use super::{BookManager, BookManagerDeps};
+use crate::book::BookLookupError;
 use crate::cover_management::{Backup, CoverHooks, CoverManagement};
 use crate::direct_cover_url::ImageFetcher;
 use crate::epub_cover::{self, CoverError, EpubCoverHooks};
@@ -33,7 +34,7 @@ pub struct BookRef {
 /// 책 ID로 책을 찾는 능력. 꽂지 않으면 ES(`BookManager::get_book`)로 찾는다.
 #[async_trait]
 pub trait BookLookup: Send + Sync {
-    async fn get_book(&self, book_id: i64) -> (Option<BookRef>, Option<String>);
+    async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError>;
 }
 
 /// 표지 편집이 쓰는 설정과 대역. `BookManagerDeps::with_ext`로 꽂는다.
@@ -141,48 +142,46 @@ impl BookManager {
         hooks
     }
 
-    async fn cover_book(&self, book_id: i64) -> (Option<BookRef>, Option<String>) {
+    async fn cover_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> {
         if let Some(lookup) = self.cover_ext().lookup {
             return lookup.get_book(book_id).await;
         }
-        match self.get_book(book_id).await {
-            (Some(book), error) => (Some(BookRef { book_id: book.book_id, file_path: book.file_path, file_type: book.file_type }), error),
-            (None, error) => (None, error),
-        }
+        let book = self.get_book(book_id).await?;
+        Ok(BookRef { book_id: book.book_id, file_path: book.file_path, file_type: book.file_type })
     }
 
-    /// EPUB 표지를 URL의 이미지(`url`) 또는 올린 이미지(`image_data`, base64)로 넣거나 바꾼다: (결과, 오류 메시지).
+    /// EPUB 표지를 URL의 이미지(`url`) 또는 올린 이미지(`image_data`, base64)로 넣거나 바꾼다.
     ///
     /// 표지 관리와 같은 경로(`CoverManagement::apply_url`/`apply_image`)를 쓰므로 검증과 썸네일·미리보기 캐시 무효화가 같다.
-    pub async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>) {
+    pub async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
         if let Some(data) = image_data.filter(|d| !d.is_empty()) {
             let data = data.to_string();
             return self.change_epub_cover(book_id, Box::new(move |service, relative, revision, backup| service.apply_image_backup(relative, &data, revision, backup))).await;
         }
         let url = url.unwrap_or("").trim().to_string();
         if url.is_empty() {
-            return (None, Some(EMPTY_URL.to_string()));
+            return Err(EMPTY_URL.to_string());
         }
         self.change_epub_cover(book_id, Box::new(move |service, relative, revision, backup| service.apply_url_backup(relative, &url, revision, true, backup))).await
     }
 
-    /// `before_idref` 페이지 앞에 삽화를 넣는다: (결과, 오류 메시지). 표지는 바꾸지 않는다.
-    pub async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>) {
+    /// `before_idref` 페이지 앞에 삽화를 넣는다. 표지는 바꾸지 않는다.
+    pub async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
         let url = url.unwrap_or("").trim().to_string();
         let data = image_data.filter(|d| !d.is_empty()).map(str::to_string);
         if data.is_none() && url.is_empty() {
-            return (None, Some(EMPTY_URL.to_string()));
+            return Err(EMPTY_URL.to_string());
         }
         let before = before_idref.to_string();
         self.change_epub_cover(book_id, Box::new(move |service, relative, revision, backup| service.insert_illustration_backup(relative, revision, &before, Some(&url), data.as_deref(), backup))).await
     }
 
-    /// EPUB 쪽 이미지의 크롭·분할·삭제·삽입을 한 번에 저장한다: (결과, 오류 메시지).
+    /// EPUB 쪽 이미지의 크롭·분할·삭제·삽입을 한 번에 저장한다.
     ///
     /// crops: `[{idref, index, x0, y0, x1, y1, angle}]`, splits: `[{idref, index, first, second}]`, deletes: `[{idref, index}]`
     /// (index는 쪽 안 이미지의 문서 순서, 기본 0), inserts: `[{before_idref, url | image_data(base64)}]`.
     /// 저장 절차는 표지와 같다(백업·색인 갱신·캐시 무효화).
-    pub async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>) {
+    pub async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String> {
         fn number(entry: &Value, key: &str) -> Result<f64, CoverError> {
             entry.get(key).and_then(Value::as_f64).filter(|f| f.is_finite()).ok_or_else(|| CoverError::new("크롭 영역이 올바르지 않습니다"))
         }
@@ -204,7 +203,7 @@ impl BookManager {
         })();
         let (crop_args, split_args) = match converted {
             Ok(args) => args,
-            Err(err) => return (None, Some(err.to_string())),
+            Err(err) => return Err(err.to_string()),
         };
         let (deletes, inserts) = (deletes.to_vec(), inserts.to_vec());
         self.change_epub_cover(
@@ -217,8 +216,8 @@ impl BookManager {
         .await
     }
 
-    /// EPUB 표지를 읽기 순서에서 뺀다: (결과, 오류 메시지). 본문과 공유하는 이미지는 보존한다.
-    pub async fn remove_epub_cover(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+    /// EPUB 표지를 읽기 순서에서 뺀다. 본문과 공유하는 이미지는 보존한다.
+    pub async fn remove_epub_cover(&self, book_id: i64) -> Result<Value, String> {
         self.change_epub_cover(book_id, Box::new(|service, relative, revision, backup| service.remove(relative, revision, backup))).await
     }
 
@@ -226,11 +225,10 @@ impl BookManager {
     ///
     /// 뷰어는 파일의 현재 revision을 모르므로 여기서 읽어 넘기고, 저장 직전에 잠금 안에서 다시 확인한다.
     /// 원본은 PDF 편집과 같이 휴지통에 원래 이름으로 보존한다.
-    async fn change_epub_cover(&self, book_id: i64, change: Change) -> (Option<Value>, Option<String>) {
-        let (book, error) = self.cover_book(book_id).await;
-        let Some(book) = book else { return (None, error) };
+    async fn change_epub_cover(&self, book_id: i64, change: Change) -> Result<Value, String> {
+        let book = self.cover_book(book_id).await.map_err(|error| error.to_string())?;
         if book.file_type != "epub" {
-            return (None, Some(NOT_EPUB.to_string()));
+            return Err(NOT_EPUB.to_string());
         }
         let root = self.path_prefix.clone();
         let trash = root.join(self.cover_ext().trash_dirname.as_deref().unwrap_or(TRASH_DIRNAME));
@@ -259,14 +257,14 @@ impl BookManager {
         };
         let mut result = match tokio::task::spawn_blocking(work).await {
             Ok(Ok(result)) => result,
-            Ok(Err(err)) if !err.is_io() && !err.is_cancelled() => return (None, Some(err.to_string())),
+            Ok(Err(err)) if !err.is_io() && !err.is_cancelled() => return Err(err.to_string()),
             Ok(Err(err)) => {
                 log::error!("change_epub_cover failed: {err}");
-                return (None, Some(SAVE_FAILED.to_string()));
+                return Err(SAVE_FAILED.to_string());
             }
             Err(err) => {
                 log::error!("change_epub_cover failed: {err}");
-                return (None, Some(SAVE_FAILED.to_string()));
+                return Err(SAVE_FAILED.to_string());
             }
         };
         // 최신 책 목록은 updated_time 순이다. 표지 저장은 EPUB의 mtime을 되돌리므로(캐시·재적재 판정 보존) 색인에 직접 반영한다.
@@ -279,6 +277,6 @@ impl BookManager {
             log::warn!("Cover saved; ES metadata update failed");
             result["warning"] = json!(INDEX_WARNING);
         }
-        (Some(result), None)
+        Ok(result)
     }
 }

@@ -22,7 +22,7 @@
 //! - `doc_reader::pdf::{PlumberDocument, pdf_text_by_plumber_with(&Path, &dyn PlumberDocument) -> Result<(String, usize), String>,
 //!   PdftotextHooks, pdf_text_by_pdftotext_with(&Path, &PdftotextHooks) -> (String, usize)}`
 //!   `PdftotextHooks { which: Fn() -> Option<PathBuf>, run: Fn(&[String]) -> Option<(i32, Vec<u8>)>, path_cache: OnceLock }`
-//! - `doc_reader::text::{TextHooks, Candidate, read_from_text_with(&Path, &TextHooks) -> (TextRead, Option<String>),
+//! - `doc_reader::text::{TextHooks, Candidate, read_from_text_with(&Path, &TextHooks) -> Result<TextRead, String>,
 //!   reencode_text_file_to_utf8_with(&Path, bool, Option<&Path>, &Path, &TextHooks) -> Reencode}`
 //!   `TextHooks { detect, encodings, read_bytes, read_replace, write_backup }` (loader_1.rs는 detect, read_bytes, write_backup을 쓴다)
 //! - `doc_reader::mojibake::count_mojibake_runs_with(&str, &str) -> usize` (런 정규식 패턴을 받는다)
@@ -169,6 +169,7 @@ struct State {
     delete_by_paths_result: i64,
     inserted: Vec<Vec<(i64, Value)>>,
     orphan_ids: HashSet<i64>,
+    prefix_lookup_error: bool,
     deleted_ids: Option<Vec<i64>>,
 }
 
@@ -230,19 +231,22 @@ impl IndexStore for FakeStore {
     fn get_existing_created_time_metadata(&self, _doc_ids: &[i64]) -> Result<HashMap<i64, BTreeMap<String, String>>, EsError> {
         Ok(self.state.lock().unwrap().created_meta.clone())
     }
-    fn delete_by_file_paths(&self, _file_paths: &[String], _exclude_ids: &[i64]) -> i64 {
-        self.state.lock().unwrap().delete_by_paths_result
+    fn delete_by_file_paths(&self, _file_paths: &[String], _exclude_ids: &[i64]) -> Result<i64, EsError> {
+        Ok(self.state.lock().unwrap().delete_by_paths_result)
     }
-    fn get_doc_ids_by_path_prefix(&self, _path_prefix: &str) -> HashSet<i64> {
+    fn get_doc_ids_by_path_prefix(&self, _path_prefix: &str) -> Result<HashSet<i64>, EsError> {
         // 실제 적재된 inode + 디스크에 없는 orphan
         let s = self.state.lock().unwrap();
-        s.inserted.iter().flatten().map(|(id, _)| *id).chain(s.orphan_ids.iter().copied()).collect()
+        if s.prefix_lookup_error {
+            return Err(EsError::Transport("scroll failed".to_owned()));
+        }
+        Ok(s.inserted.iter().flatten().map(|(id, _)| *id).chain(s.orphan_ids.iter().copied()).collect())
     }
-    fn delete_by_ids(&self, ids: &[i64]) -> i64 {
+    fn delete_by_ids(&self, ids: &[i64]) -> Result<i64, EsError> {
         let mut sorted = ids.to_vec();
         sorted.sort_unstable();
         self.state.lock().unwrap().deleted_ids = Some(sorted);
-        ids.len() as i64
+        Ok(ids.len() as i64)
     }
     fn insert(&self, docs: &[(i64, Value)]) -> Result<(), EsError> {
         self.state.lock().unwrap().inserted.push(docs.to_vec());
@@ -1450,6 +1454,60 @@ fn test_main_recursive_reload_deletes_orphans() {
     assert!(!inserted.contains_key(&999999));
 }
 
+#[test]
+fn test_main_recursive_reload_skips_orphan_delete_when_directory_unreadable() {
+    // 읽지 못한 디렉토리의 책은 seen에 없다. orphan으로 지우면 실존 책 레코드가 사라진다.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmp();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    fs::write(dir.path().join("sub").join("a.txt"), "hello world\n").unwrap();
+    let locked = dir.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("b.txt"), "hidden\n").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&locked).is_ok() {
+        // root로 돌면 권한으로 막을 수 없다.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let mut env = setup_loader_env(dir.path());
+    env.insert("TM_ES_BOOK_INDEX".to_owned(), "book_idx".to_owned());
+    env.insert("TM_ES_COMICS_INDEX".to_owned(), "comics_idx".to_owned());
+
+    let store = FakeStore::new();
+    store.update(|s| {
+        s.orphan_ids.insert(999999);
+    });
+    let (rc, out) = run_main(&["--recursive", "--reload", "book", &path_str(dir.path())], &env, &store);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(rc, 0);
+    assert!(!store.inserted_docs().is_empty(), "읽을 수 있는 파일은 적재되어야 한다");
+    assert_eq!(store.state.lock().unwrap().deleted_ids, None, "읽지 못한 디렉토리가 있으면 orphan을 지우지 않는다");
+    assert!(out.contains("orphan 삭제 건너뜀"), "{out}");
+    assert!(out.contains("locked"), "{out}");
+}
+
+#[test]
+fn test_main_recursive_reload_skips_orphan_delete_when_lookup_fails() {
+    // 기존 레코드 조회가 실패하면 "orphan 없음"으로 보고하지 않고 삭제도 하지 않는다.
+    let dir = tmp();
+    fs::create_dir(dir.path().join("sub")).unwrap();
+    fs::write(dir.path().join("sub").join("a.txt"), "hello world\n").unwrap();
+    let mut env = setup_loader_env(dir.path());
+    env.insert("TM_ES_BOOK_INDEX".to_owned(), "book_idx".to_owned());
+    env.insert("TM_ES_COMICS_INDEX".to_owned(), "comics_idx".to_owned());
+
+    let store = FakeStore::new();
+    store.update(|s| s.prefix_lookup_error = true);
+    let (rc, out) = run_main(&["--recursive", "--reload", "book", &path_str(dir.path())], &env, &store);
+
+    assert_eq!(rc, 0);
+    assert_eq!(store.state.lock().unwrap().deleted_ids, None);
+    assert!(out.contains("orphan 삭제 건너뜀"), "{out}");
+    assert!(!out.contains("orphan 없음"), "{out}");
+}
+
 mod test_report_problems {
     use super::*;
 
@@ -1592,7 +1650,7 @@ mod test_read_from_text_replace_fallback {
         raw.push(0xa1);
         fs::write(&f, raw).unwrap();
 
-        let (read, _error) = read_from_text_with(&f, &hooks);
+        let read = read_from_text_with(&f, &hooks).unwrap_or_default();
         assert_eq!(read.summary, "");
         assert_eq!(read.raw_content, "");
         assert_eq!((read.line_count, read.page_count), (0, 0));
@@ -1612,7 +1670,7 @@ mod test_read_from_text_replace_fallback {
         raw.push(0xa1);
         fs::write(&f, raw).unwrap();
 
-        let (read, _error) = read_from_text_with(&f, &hooks);
+        let read = read_from_text_with(&f, &hooks).unwrap_or_default();
         assert_eq!(read.summary, "");
         assert_eq!(read.raw_content, "");
     }

@@ -255,15 +255,6 @@ fn opt_text(value: &DbValue) -> Option<String> {
     (!value.is_null()).then(|| text_of(value))
 }
 
-fn db_value_to_json(value: &DbValue) -> Value {
-    match value {
-        DbValue::Null => Value::Null,
-        DbValue::Int(n) => json!(n),
-        DbValue::Text(s) => json!(s),
-        DbValue::DateTime(d) => json!(d.to_string()),
-    }
-}
-
 #[derive(Clone)]
 struct Session {
     session_id: String,
@@ -504,33 +495,66 @@ impl TokenRow {
     }
 }
 
+/// `rotate` 결과. `Ok`일 때만 새 토큰을 발급한다. 나머지는 거절 사유다.
+/// 문자열 비교 오타 하나로 인가 판정이 바뀌지 않게 enum으로 둔다. 로그와 테스트에는 `as_str`을 쓴다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rotation {
+    Ok,
+    Missing,
+    Mismatch,
+    Expired,
+    Reused,
+    Revoked,
+}
+
+impl Rotation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Missing => "missing",
+            Self::Mismatch => "mismatch",
+            Self::Expired => "expired",
+            Self::Reused => "reused",
+            Self::Revoked => "revoked",
+        }
+    }
+}
+
+impl std::str::FromStr for Rotation {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, String> {
+        [Self::Ok, Self::Missing, Self::Mismatch, Self::Expired, Self::Reused, Self::Revoked].into_iter().find(|r| r.as_str() == text).ok_or_else(|| format!("unknown rotation result: {text}"))
+    }
+}
+
 enum Plan {
-    /// 변경 없이 rollback 하고 결과 문자열을 돌려준다.
-    Reject(&'static str),
+    /// 변경 없이 rollback 하고 결과를 돌려준다.
+    Reject(Rotation),
     /// grace window 내 동시 요청: 패밀리를 살린 채 후속 토큰만 재발급한다.
     InsertOnly,
-    /// 패밀리를 폐기하고 commit 한 뒤 결과 문자열을 돌려준다.
-    RevokeFamily { reason: &'static str, result: &'static str },
+    /// 패밀리를 폐기하고 commit 한 뒤 결과를 돌려준다.
+    RevokeFamily { reason: &'static str, result: Rotation },
     /// 새 토큰을 넣고 이전 토큰을 'rotated' 로 표시한다.
     Rotate,
 }
 
 fn plan_rotation(row: Option<&TokenRow>, family_id: &str, email: &str, now: i64) -> Plan {
-    let Some(row) = row else { return Plan::Reject("missing") };
+    let Some(row) = row else { return Plan::Reject(Rotation::Missing) };
     if row.family_id != family_id || row.email != email {
-        return Plan::Reject("mismatch");
+        return Plan::Reject(Rotation::Mismatch);
     }
     if row.expires_at < now {
-        return Plan::Reject("expired");
+        return Plan::Reject(Rotation::Expired);
     }
     if row.replaced_by.is_some() {
         if is_within_rotation_grace(row.revoke_reason.as_deref(), row.revoked_at, now) {
             return Plan::InsertOnly;
         }
-        return Plan::RevokeFamily { reason: "reuse-detected", result: "reused" };
+        return Plan::RevokeFamily { reason: "reuse-detected", result: Rotation::Reused };
     }
     if row.revoked_at.is_some() {
-        return Plan::RevokeFamily { reason: "revoked-token-reuse", result: "revoked" };
+        return Plan::RevokeFamily { reason: "revoked-token-reuse", result: Rotation::Revoked };
     }
     Plan::Rotate
 }
@@ -544,7 +568,6 @@ fn plan_rotation(row: Option<&TokenRow>, family_id: &str, email: &str, now: i64)
 pub trait RefreshTokenStoreApi: Send + Sync {
     fn store_issued(&self, token_id: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64, client_ip: Option<&str>, user_agent: Option<&str>) -> Result<(), StoreError>;
 
-    /// "ok" | "missing" | "mismatch" | "expired" | "reused" | "revoked"
     fn rotate(
         &self,
         current_token_id: &str,
@@ -555,7 +578,7 @@ pub trait RefreshTokenStoreApi: Send + Sync {
         expires_at: i64,
         client_ip: Option<&str>,
         user_agent: Option<&str>,
-    ) -> Result<String, StoreError>;
+    ) -> Result<Rotation, StoreError>;
 
     fn revoke_family(&self, family_id: &str, reason: &str) -> Result<(), StoreError>;
 
@@ -585,8 +608,8 @@ pub trait RefreshTokenStoreApi: Send + Sync {
 fn observation_json(replaced_by: &DbValue, revoked_at: &DbValue, revoke_reason: &DbValue) -> Value {
     json!({
         "replaced_by_present": !replaced_by.is_null(),
-        "revoked_at": db_value_to_json(revoked_at),
-        "revoke_reason": db_value_to_json(revoke_reason),
+        "revoked_at": Value::from(revoked_at),
+        "revoke_reason": Value::from(revoke_reason),
     })
 }
 
@@ -748,7 +771,7 @@ impl RefreshTokenStoreApi for MySQLRefreshTokenStore {
         expires_at: i64,
         client_ip: Option<&str>,
         user_agent: Option<&str>,
-    ) -> Result<String, StoreError> {
+    ) -> Result<Rotation, StoreError> {
         let now = self.now();
         let insert_params: [DbValue; 7] = [
             new_token_id.into(),
@@ -768,23 +791,23 @@ impl RefreshTokenStoreApi for MySQLRefreshTokenStore {
             match plan_rotation(row.as_ref(), family_id, email, now) {
                 Plan::Reject(result) => {
                     conn.rollback()?;
-                    Ok(result.to_string())
+                    Ok(result)
                 }
                 Plan::InsertOnly => {
                     cur.execute(&insert_sql, &insert_params)?;
                     conn.commit()?;
-                    Ok("ok".to_string())
+                    Ok(Rotation::Ok)
                 }
                 Plan::RevokeFamily { reason, result } => {
                     Self::revoke_family_in(cur.as_mut(), family_id, reason, now)?;
                     conn.commit()?;
-                    Ok(result.to_string())
+                    Ok(result)
                 }
                 Plan::Rotate => {
                     cur.execute(&insert_sql, &insert_params)?;
                     cur.execute(&sql_with(MARK_ROTATED_SQL, "%s"), &[new_token_id.into(), issued_at.into(), "rotated".into(), current_token_id.into()])?;
                     conn.commit()?;
-                    Ok("ok".to_string())
+                    Ok(Rotation::Ok)
                 }
             }
         })
@@ -856,7 +879,7 @@ impl RefreshTokenStoreApi for AnyRefreshTokenStore {
         expires_at: i64,
         client_ip: Option<&str>,
         user_agent: Option<&str>,
-    ) -> Result<String, StoreError> {
+    ) -> Result<Rotation, StoreError> {
         self.inner().rotate(current_token_id, new_token_id, family_id, email, issued_at, expires_at, client_ip, user_agent)
     }
 

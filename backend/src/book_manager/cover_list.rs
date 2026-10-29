@@ -12,7 +12,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::preview::text_response;
-use super::{BookManager, BookResponse, MAX_CATEGORY_PAGE_SIZE};
+use super::{BookManager, BookResponse, CoverPage, MAX_CATEGORY_PAGE_SIZE};
 use crate::book::Book;
 use crate::cover_browse::{CoverEntry, CoverGroup, CoverStats, MISSING_TIME, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
 use crate::es_manager::{decode_category_cursor, encode_category_cursor};
@@ -158,9 +158,8 @@ impl BookManager {
     }
 
     /// 커버 목록용 책을 최신순으로 한 페이지 조회한다. epub, pdf만 대상이다. 작품 디렉터리는 대표 한 권으로 묶는다.
-    /// 반환: (항목 [(대표 책, 작품 디렉터리 이름 또는 ""))], 전체 항목 수, 다음 커서, 오류).
-    pub async fn get_cover_books_paged(&self, opts: CoverPageOpts) -> (Vec<(Book, String)>, usize, Option<String>, Option<String>) {
-        let invalid = || (Vec::new(), 0, None, Some("invalid cursor".to_string()));
+    pub async fn get_cover_books_paged(&self, opts: CoverPageOpts) -> Result<CoverPage, String> {
+        let invalid = || Err("invalid cursor".to_string());
         let category = opts.category.clone().unwrap_or_default();
         let cursor = opts.cursor.clone().unwrap_or_default();
         log::debug!("# get_cover_books_paged(category='{category}', size={}, cursor='{cursor}', exclude_categories={:?})", opts.size, opts.exclude_categories);
@@ -183,7 +182,7 @@ impl BookManager {
                     (name, (count as u64, optional(updated), optional(created)))
                 })
                 .collect(),
-            Err(e) => return (Vec::new(), 0, None, Some(e.to_string())),
+            Err(e) => return Err(e.to_string()),
         };
         let (file_categories, groups) = plan_cover_scope(&stats, &category, &excluded);
         let remaining: Vec<CoverGroup> = match &group_after {
@@ -196,7 +195,7 @@ impl BookManager {
         let (cats, excl, after, take) = (file_categories, excluded.clone(), file_after.as_deref().map(search_after_triple), size as i64);
         let (files, files_total) = match self.blocking(move |es| es.search_cover_files_paged(&cats, take, after, &excl)).await {
             Ok(result) => result,
-            Err(e) => return (Vec::new(), 0, None, Some(e.to_string())),
+            Err(e) => return Err(e.to_string()),
         };
         let page_groups: Vec<CoverGroup> = remaining.iter().take(size).cloned().collect();
         let (entries, groups_used, files_used) = merge_cover_page(&page_groups, &files, size);
@@ -204,7 +203,7 @@ impl BookManager {
         let (keys, excl) = (used_groups.iter().map(|g| g.key.clone()).collect::<Vec<_>>(), excluded.clone());
         let representatives: HashMap<String, Vec<(i64, Value)>> = match self.blocking(move |es| es.search_group_representatives(&keys, &excl)).await {
             Ok(r) => r,
-            Err(e) => return (Vec::new(), 0, None, Some(e.to_string())),
+            Err(e) => return Err(e.to_string()),
         };
 
         let mut items: Vec<(Book, String)> = Vec::new();
@@ -212,13 +211,13 @@ impl BookManager {
             match entry {
                 CoverEntry::File((book_id, doc, _sort)) => match self.try_make_book(*book_id, doc, 0.0) {
                     Ok(book) => items.push((book, String::new())),
-                    Err(error) => return (Vec::new(), 0, None, Some(error)),
+                    Err(error) => return Err(error),
                 },
                 CoverEntry::Group(group) => {
                     if let Some((book_id, doc)) = pick_representative(representatives.get(&group.key).map_or(&[][..], Vec::as_slice)) {
                         match self.try_make_book(book_id, &doc, 0.0) {
                             Ok(book) => items.push((book, group.name.clone())),
-                            Err(error) => return (Vec::new(), 0, None, Some(error)),
+                            Err(error) => return Err(error),
                         }
                     }
                 }
@@ -228,6 +227,6 @@ impl BookManager {
         let next_file_after = if files_used > 0 { Value::Array(files[files_used - 1].2.clone()) } else { file_after.clone().map(Value::Array).unwrap_or(Value::Null) };
         let has_more = remaining.len() > groups_used || files_used < files.len() || files.len() == size;
         let next_cursor = has_more.then(|| encode_category_cursor(&[next_group_after, next_file_after]));
-        (items, groups.len() + files_total.max(0) as usize, next_cursor, None)
+        Ok(CoverPage { items, total: Some(groups.len() + files_total.max(0) as usize), next_cursor })
     }
 }

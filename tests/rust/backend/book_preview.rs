@@ -30,6 +30,22 @@ use sysdeps::{CommandError, CommandOutput, CommandRunner};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+/// 검증 결과를 Python 원본의 `(유효 여부, 사유)`로 펼친다.
+fn verdict(result: Result<(), String>) -> (bool, Option<String>) {
+    match result {
+        Ok(()) => (true, None),
+        Err(reason) => (false, Some(reason)),
+    }
+}
+
+/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+    match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    }
+}
+
 const CATEGORY: &str = "_epub";
 const OPF_NS: &str = "http://www.idpf.org/2007/opf";
 const CNT_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
@@ -569,7 +585,7 @@ async fn register<'a>(setup: &'a Setup, epub_path: &Path) -> Registered<'a> {
     let data = build_epub_data(&setup.bm, epub_path);
     let docs = serde_json::from_value::<std::collections::BTreeMap<i64, Value>>(data.clone()).unwrap();
     setup.es.with(|s| s.docs.extend(docs));
-    let (book_id, error) = setup.bm.add_book(&serde_json::from_value(data).unwrap()).await;
+    let (book_id, error) = split(setup.bm.add_book(&serde_json::from_value(data).unwrap()).await);
     assert!(book_id.is_some_and(|id| id != 0) && error.as_deref().is_none_or(str::is_empty), "Failed to register epub: {error:?}");
     Registered { setup, book_id: book_id.unwrap(), path: epub_path.to_path_buf() }
 }
@@ -2045,7 +2061,7 @@ mod test_validate_preview_epub {
             &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", container.as_bytes()), ("content.opf", opf.as_bytes()), ("toc.ncx", b"<ncx/>"), ("ch1.xhtml", chapter(1).as_bytes())],
         );
 
-        let (valid, error) = BookManager::_validate_preview_epub(&epub);
+        let (valid, error) = verdict(BookManager::_validate_preview_epub(&epub));
 
         assert!(!valid);
         assert!(err_has(&error, "no valid spine chapters"));
@@ -2058,7 +2074,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("valid.epub");
         create_test_epub(&epub, 3, false, false);
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(valid);
         assert!(err.is_none());
     }
@@ -2078,7 +2094,7 @@ mod test_validate_preview_epub {
             ],
         );
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "mimetype"));
     }
@@ -2099,7 +2115,7 @@ mod test_validate_preview_epub {
             ],
         );
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "invalid mimetype"));
     }
@@ -2111,7 +2127,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("no_opf.epub");
         write_zip_stored(&epub, &[("mimetype", b"application/epub+zip"), ("OEBPS/ch1.xhtml", chapter(1).as_bytes())]);
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "OPF"));
     }
@@ -2123,7 +2139,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("empty_spine.epub");
         create_corrupted_epub(&epub, 2, true);
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "no valid spine chapters"));
     }
@@ -2146,7 +2162,7 @@ mod test_validate_preview_epub {
             ],
         );
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(valid, "Expected valid, got: {err:?}");
 
         // 수정된 EPUB에서 toc 속성이 제거되었는지 확인
@@ -2161,7 +2177,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("bad_idref.epub");
         create_epub_with_invalid_spine(&epub);
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(valid, "Expected valid, got: {err:?}");
 
         // 수정된 EPUB에서 coverpage idref가 제거되었는지 확인
@@ -2179,7 +2195,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("missing_ch1.epub");
         create_corrupted_epub(&epub, 3, false);
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(valid, "Expected valid, got: {err:?}");
 
         // ch1이 spine에서 제거되었는지 확인
@@ -2196,7 +2212,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("corrupted.epub");
         fs::write(&epub, b"this is not a zip file").unwrap();
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "corrupted ZIP"));
     }
@@ -2208,7 +2224,7 @@ mod test_validate_preview_epub {
         let epub = tmp.path().join("no_spine.epub");
         create_epub_without_spine(&epub);
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "spine"));
     }
@@ -2236,7 +2252,7 @@ mod test_validate_preview_epub {
             &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML.as_bytes()), ("OEBPS/content.opf", opf_content.as_bytes()), ("OEBPS/ch1.xhtml", chapter(1).as_bytes())],
         );
 
-        let (valid, err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(valid, "Expected valid, got: {err:?}");
 
         let (toc, _) = spine_of(&epub, "OEBPS/content.opf");
@@ -2251,7 +2267,7 @@ mod test_validate_preview_epub {
         create_test_epub(&epub, 2, false, false);
         let mtime_before = fs::metadata(&epub).unwrap().modified().unwrap();
 
-        let (valid, _err) = BookManager::_validate_preview_epub(&epub);
+        let (valid, _err) = verdict(BookManager::_validate_preview_epub(&epub));
         assert!(valid);
         let mtime_after = fs::metadata(&epub).unwrap().modified().unwrap();
         assert_eq!(mtime_before, mtime_after, "clean EPUB should not be rewritten");
@@ -2616,7 +2632,7 @@ mod test_validate_epub {
             json!({"category": "_txt", "title": "Plain Text", "author": "Test Author", "file_path": rel_path.to_string_lossy(), "file_type": "txt", "file_size": meta.len(), "line_count": 1, "page_count": 0, "isbn": "", "summary": "test txt", "updated_time": now}),
         );
         setup.es.with(|s| s.docs.extend(serde_json::from_value::<std::collections::BTreeMap<i64, Value>>(Value::Object(data.clone())).unwrap()));
-        let (book_id, _error) = setup.bm.add_book(&serde_json::from_value(Value::Object(data)).unwrap()).await;
+        let (book_id, _error) = split(setup.bm.add_book(&serde_json::from_value(Value::Object(data)).unwrap()).await);
         let book_id = book_id.expect("book_id");
 
         let book = Registered { setup: &setup, book_id, path: txt_path.clone() };
@@ -2769,7 +2785,7 @@ mod test_validate_epub_unit {
 
     /// `configure`로 Deps를 더 꽂은 manager로 `validate_epub(1)`을 부른다.
     async fn validate_configured(bm: &UnitSetup, configure: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> (Option<Value>, Option<String>) {
-        bm.manager(configure).validate_epub(1).await
+        split(bm.manager(configure).validate_epub(1).await)
     }
 
     /// epubcheck가 유효하지 않은 JSON을 출력 → parse error.
@@ -2962,7 +2978,7 @@ fn make_mock_pdf_book(tmp_path: &Path, file_type: &str) -> BookRef {
 
 /// pikepdf 대역을 끼운 manager로 `validate_pdf(1)`을 부른다.
 async fn validate_pdf_with(bm: &UnitSetup, opened: Result<MockPdf, String>) -> (Option<Value>, Option<String>) {
-    bm.manager(|d| d.with_pdf_opener(Arc::new(FakeOpener(Mutex::new(Some(opened)))))).validate_pdf(1).await
+    split(bm.manager(|d| d.with_pdf_opener(Arc::new(FakeOpener(Mutex::new(Some(opened)))))).validate_pdf(1).await)
 }
 
 /// `validate_pdf` 메서드의 단위 테스트 (pikepdf mock).
@@ -3047,7 +3063,7 @@ mod test_validate_pdf_unit {
         let book = make_mock_pdf_book(tmp.path(), "epub");
         let bm = unit_manager(tmp.path(), Some(book), None);
 
-        let (result, error) = bm.manager(|d| d).validate_pdf(1).await;
+        let (result, error) = split(bm.manager(|d| d).validate_pdf(1).await);
 
         assert!(result.is_none());
         assert!(err_has(&error, "Not a PDF file"));
@@ -3061,7 +3077,7 @@ mod test_validate_pdf_unit {
         let book = BookRef { book_id: 1, file_type: "pdf".to_string(), file_path: missing_path };
         let bm = unit_manager(tmp.path(), Some(book), None);
 
-        let (result, error) = bm.manager(|d| d).validate_pdf(1).await;
+        let (result, error) = split(bm.manager(|d| d).validate_pdf(1).await);
 
         assert!(result.is_none());
         assert!(err_has(&error, "File not found"));
@@ -3073,7 +3089,7 @@ mod test_validate_pdf_unit {
         let tmp = tempfile::tempdir().unwrap();
         let bm = unit_manager(tmp.path(), None, Some("No book found"));
 
-        let (result, error) = bm.manager(|d| d).validate_pdf(1).await;
+        let (result, error) = split(bm.manager(|d| d).validate_pdf(1).await);
 
         assert!(result.is_none());
         assert!(err_has(&error, "Book not found"));
@@ -3133,9 +3149,7 @@ async fn validate_pdf_reports_reconstructed_cross_reference() {
     assert!(!issues.is_empty(), "xref recovery should be reported as a syntax warning");
     let book = BookRef { book_id: 1, file_type: "pdf".to_string(), file_path: path };
     let manager = unit_manager(tmp.path(), Some(book), None).manager(|deps| deps);
-    let (result, error) = manager.validate_pdf(1).await;
-    assert!(error.is_none());
-    let result = result.unwrap();
+    let result = manager.validate_pdf(1).await.unwrap();
     assert_eq!(result["valid"], false);
     assert!(result["summary"]["warning"].as_u64().unwrap() > 0);
     assert!(!result["messages"].as_array().unwrap().is_empty());

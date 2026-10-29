@@ -11,9 +11,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::deps::AppDeps;
-use super::errors::{ApiError, ApiResult, RequestValidationError};
+use super::errors::{ApiError, ApiResult};
 use super::extract::{ApiJson, RequireAdmin};
 use super::routes::Routes;
+use super::routes_books::parse_book_id;
 use super::traits::BookManagerApi;
 use crate::epub_cover::MAX_IMAGE_BYTES;
 
@@ -34,10 +35,6 @@ pub(super) fn routes() -> Routes {
 }
 
 /// FastAPI의 `book_id: int` 검증. 정수가 아니면 422다.
-fn parse_book_id(raw: &str) -> Result<i64, ApiError> {
-    raw.trim().parse::<i64>().map_err(|_| RequestValidationError::single(&["path", "book_id"], "Input should be a valid integer, unable to parse string as an integer", json!(raw)).into())
-}
-
 /// 이미지 출처: 공개 URL(`url`)이거나 올린 이미지(`image_data`, base64)다. 하나만 받는다.
 #[derive(Debug, Deserialize)]
 #[serde(try_from = "RawSource")]
@@ -106,10 +103,10 @@ impl TryFrom<RawIllustration> for EpubIllustrationBody {
     }
 }
 
-fn outcome((result, error): (Option<Value>, Option<String>)) -> Json<Value> {
-    match error {
-        None => Json(json!({"status": "success", "result": result})),
-        Some(error) => Json(json!({"status": "failure", "error": error})),
+fn outcome(result: Result<Value, String>) -> Json<Value> {
+    match result {
+        Ok(result) => Json(json!({"status": "success", "result": result})),
+        Err(error) => Json(json!({"status": "failure", "error": error})),
     }
 }
 

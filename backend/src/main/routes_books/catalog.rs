@@ -1,7 +1,8 @@
 //! 도서·만화의 메타데이터, 검색, 카테고리 및 최신 목록.
+use super::{ensure_allowed, hidden_categories, is_hidden, kind, manager};
 use crate::book::Book;
 use crate::book_manager::MAX_LATEST_BOOK_COUNT;
-use crate::main::{ApiError, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, MappingError, RequireAuth, Routes};
+use crate::main::{ApiError, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, RequireAuth, Routes};
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},
@@ -28,16 +29,7 @@ pub(super) fn routes() -> Routes {
 }
 
 fn comics(uri: &Uri) -> bool {
-    uri.path().starts_with("/comics/")
-}
-fn kind(uri: &Uri) -> &'static str {
-    if comics(uri) { "comic" } else { "book" }
-}
-fn manager(deps: &AppDeps, uri: &Uri) -> ApiResult<Arc<dyn BookManagerApi>> {
-    if comics(uri) { deps.comics_manager() } else { deps.book_manager() }.map_err(|e| {
-        log::warn!("도서 관리자를 쓸 수 없다: {e}");
-        ApiError::unavailable()
-    })
+    kind(uri) == "comic"
 }
 fn mapping(deps: &AppDeps) -> ApiResult<Arc<dyn CategoryMappingApi>> {
     deps.category_mapping().map_err(|e| {
@@ -45,20 +37,8 @@ fn mapping(deps: &AppDeps) -> ApiResult<Arc<dyn CategoryMappingApi>> {
         ApiError::unavailable()
     })
 }
-fn mapping_error(error: MappingError) -> ApiError {
-    match error {
-        MappingError::Http(status, detail) => ApiError::http(status, &detail),
-        MappingError::Other(message) => ApiError::Internal(message),
-    }
-}
 fn hidden(deps: &AppDeps, payload: &Value, uri: &Uri) -> ApiResult<Vec<String>> {
-    if payload["role"] == "viewer" { mapping(deps)?.get_hidden_categories(kind(uri)).map_err(mapping_error) } else { Ok(vec![]) }
-}
-fn is_hidden(category: &str, hidden: &[String]) -> bool {
-    hidden.iter().any(|h| category == h || category.starts_with(&format!("{h}/")))
-}
-fn ensure_allowed(category: &str, hidden: &[String]) -> ApiResult<()> {
-    if is_hidden(category, hidden) { Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다.")) } else { Ok(()) }
+    hidden_categories(deps, payload, comics(uri))
 }
 pub(super) fn book_json(book: &Book, manager: &dyn BookManagerApi) -> Value {
     let manager_prefix = manager.path_prefix();
@@ -75,22 +55,21 @@ fn failure(error: Option<String>) -> Json<Value> {
 async fn metadata(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let id = super::parse_book_id(&id)?;
     let manager = manager(&deps, &uri)?;
-    let (book, error) = manager.get_book(id).await;
-    if let Some(book) = &book {
-        ensure_allowed(&book.category, &hidden(&deps, &payload, &uri)?)?;
-    }
-    match book.filter(|_| error.is_none()) {
-        Some(book) => Ok(Json(json!({"status":"success","result":book_json(&book,manager.as_ref())}))),
-        None => Ok(failure(error)),
+    match manager.get_book(id).await {
+        Ok(book) => {
+            ensure_allowed(&book.category, &hidden(&deps, &payload, &uri)?)?;
+            Ok(Json(json!({"status":"success","result":book_json(&book,manager.as_ref())})))
+        }
+        Err(error) => Ok(failure(Some(error.to_string()))),
     }
 }
 
 async fn categories(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri) -> ApiResult<Json<Value>> {
     let manager = manager(&deps, &uri)?;
-    let (mut result, error) = manager.get_categories().await;
-    if error.is_some() {
-        return Ok(failure(error));
-    }
+    let mut result = match manager.get_categories().await {
+        Ok(result) => result,
+        Err(error) => return Ok(failure(Some(error))),
+    };
     let hidden = hidden(&deps, &payload, &uri)?;
     if let Some(categories) = result.as_object_mut() {
         categories.retain(|category, _| !is_hidden(category, &hidden));
@@ -120,17 +99,15 @@ async fn in_category(
     ensure_allowed(&category, &hidden(&deps, &payload, &uri)?)?;
     let manager = manager(&deps, &uri)?;
     if query.limit > 0 {
-        let (books, total, next, error) = manager.get_books_in_category_paged(&category, Some(query.limit), Some(&query.cursor)).await;
-        if error.is_some() {
-            return Ok(failure(error));
-        }
-        return Ok(Json(json!({"status":"success","result":books_json(&books,manager.as_ref()),"total":total,"next_cursor":next})));
+        return Ok(match manager.get_books_in_category_paged(&category, Some(query.limit), Some(&query.cursor)).await {
+            Ok(page) => Json(json!({"status":"success","result":books_json(&page.books,manager.as_ref()),"total":page.total,"next_cursor":page.next_cursor})),
+            Err(error) => failure(Some(error)),
+        });
     }
-    let (books, error) = manager.get_books_in_category(&category).await;
-    if error.is_some() {
-        return Ok(failure(error));
-    }
-    Ok(Json(json!({"status":"success","result":books_json(&books,manager.as_ref())})))
+    Ok(match manager.get_books_in_category(&category).await {
+        Ok(books) => Json(json!({"status":"success","result":books_json(&books,manager.as_ref())})),
+        Err(error) => failure(Some(error)),
+    })
 }
 
 #[derive(Deserialize)]
@@ -143,17 +120,16 @@ async fn latest(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
         return Err(crate::main::RequestValidationError::single(&["query", "limit"], "Invalid latest page size", json!(limit)).into());
     }
     let mut excluded = hidden(&deps, &payload, &uri)?;
-    for category in mapping(&deps)?.get_latest_excluded_categories(kind(&uri)).map_err(mapping_error)? {
+    for category in mapping(&deps)?.get_latest_excluded_categories(kind(&uri))? {
         if !excluded.contains(&category) {
             excluded.push(category);
         }
     }
     let manager = manager(&deps, &uri)?;
-    let (books, total, error) = manager.get_latest_books(limit, Some(&excluded)).await;
-    if error.is_some() {
-        return Ok(failure(error));
-    }
-    Ok(Json(json!({"status":"success","result":books_json(&books,manager.as_ref()),"total":total})))
+    Ok(match manager.get_latest_books(limit, Some(&excluded)).await {
+        Ok(page) => Json(json!({"status":"success","result":books_json(&page.books,manager.as_ref()),"total":page.total})),
+        Err(error) => failure(Some(error)),
+    })
 }
 
 #[derive(Deserialize)]
@@ -191,11 +167,10 @@ async fn search(
     let manager = manager(&deps, &uri)?;
     let excluded = (!excluded.is_empty()).then_some(excluded.as_slice());
     let category = (!query.category.is_empty()).then_some(query.category.as_str());
-    let (books, total, error) = manager.search_by_keyword_paged(&keyword, query.limit, query.offset, excluded, category).await;
-    if error.is_some() {
-        return Ok(failure(error));
-    }
-    Ok(Json(json!({"status":"success","result":books_json(&books,manager.as_ref()),"total":total})))
+    Ok(match manager.search_by_keyword_paged(&keyword, query.limit, query.offset, excluded, category).await {
+        Ok(page) => Json(json!({"status":"success","result":books_json(&page.books,manager.as_ref()),"total":page.total})),
+        Err(error) => failure(Some(error)),
+    })
 }
 
 async fn similar(
@@ -207,18 +182,23 @@ async fn similar(
 ) -> ApiResult<Json<Value>> {
     let id = super::parse_book_id(&id)?;
     let manager = super::checked_manager(&deps, &payload, id, comics(&uri)).await?;
-    let (mut books, mut total, error) = manager.search_similar_books_paged(id, query.limit, query.offset).await;
+    let similar = manager.search_similar_books_paged(id, query.limit, query.offset).await;
     let hidden = hidden(&deps, &payload, &uri)?;
-    if !hidden.is_empty() {
-        books.retain(|book| !is_hidden(&book.category, &hidden));
-        total = books.len() as i64;
-    }
-    if !books.is_empty() && error.is_none() {
-        return Ok(Json(json!({"status":"success","result":books_json(&books,manager.as_ref()),"total":total})));
-    }
-    let (book, second_error) = manager.get_book(id).await;
-    match book.filter(|_| second_error.is_none()) {
-        Some(book) => Ok(Json(json!({"status":"success","result":[book_json(&book,manager.as_ref())],"total":1}))),
-        None => Ok(failure(error.or(second_error))),
+    let error = match similar {
+        Ok(mut page) => {
+            if !hidden.is_empty() {
+                page.books.retain(|book| !is_hidden(&book.category, &hidden));
+                page.total = page.books.len() as i64;
+            }
+            if !page.books.is_empty() {
+                return Ok(Json(json!({"status":"success","result":books_json(&page.books,manager.as_ref()),"total":page.total})));
+            }
+            None
+        }
+        Err(error) => Some(error),
+    };
+    match manager.get_book(id).await {
+        Ok(book) => Ok(Json(json!({"status":"success","result":[book_json(&book,manager.as_ref())],"total":1}))),
+        Err(second_error) => Ok(failure(error.or(Some(second_error.to_string())))),
     }
 }

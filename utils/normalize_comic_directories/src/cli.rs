@@ -1,13 +1,12 @@
 //! 명령행: 사용법, 인자 읽기, 실행.
 
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 
 use bookstore::{Fetcher, HttpFetcher, Store};
 
 use crate::cache::{BookstoreSearchCache, DEFAULT_NEGATIVE_CACHE_SECONDS, StoreRow};
-use crate::plan::{Searcher, apply_renames, build_proposals, write_report};
+use crate::plan::{Searcher, Status, apply_renames, build_proposals, write_report};
 
 const DEFAULT_ROOT: &str = "/mnt/data/만화";
 const REPORT_NAME: &str = "comic-directory-normalization.tsv";
@@ -222,14 +221,10 @@ pub fn run_with_searcher_and_defaults(program: &str, args: &[String], out: &mut 
         eprintln!("ERROR 리포트를 쓰지 못했다: {}: {e}", options.report.display());
         return 1;
     }
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for p in &proposals {
-        *counts.entry(p.status.as_str()).or_insert(0) += 1;
-    }
-    let count = |status: &str| counts.get(status).copied().unwrap_or(0);
-    let skipped: usize = counts.iter().filter(|(s, _)| s.starts_with("SKIP_")).map(|(_, n)| n).sum();
+    let count = |status: Status| proposals.iter().filter(|p| p.status == status).count();
+    let skipped = proposals.iter().filter(|p| matches!(p.status, Status::Skip(_))).count();
     let _ = writeln!(out, "Directories scanned: {}", proposals.len());
-    let _ = writeln!(out, "Rename proposals: {}; unchanged: {}; skipped: {skipped}", count("RENAME"), count("UNCHANGED"));
+    let _ = writeln!(out, "Rename proposals: {}; unchanged: {}; skipped: {skipped}", count(Status::Rename), count(Status::Unchanged));
     let _ = writeln!(out, "Report: {}", options.report.display());
     let _ = writeln!(out, "Bookstore cache: {}; store requests: {}; store cache hits: {}; bookstore time: {:.1}s", options.cache.display(), cache.searches, cache.hits, cache.search_seconds);
     if options.apply {

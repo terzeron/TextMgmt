@@ -51,15 +51,15 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use axum::http::Method;
-use backend::book::Book;
-use backend::book_manager::{BookContent, BookManagerApi, BookResponse};
+use backend::book::{Book, BookLookupError, BookPage};
+use backend::book_manager::{BookContent, BookManagerApi, BookResponse, CoverPage};
 use backend::db::{DbValue, Row};
 use backend::es_manager::{EsError, EsManagerApi};
 use backend::main::{
     AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookstoreFactory, BookstoreSearch, CategoryMappingApi, GoogleVerifier, MappingError, ProposeCategoryChanges, ReloadProgress, RoleResolver,
     TaskHandle, TaskRunner,
 };
-use backend::refresh_token_store::{RefreshTokenStoreApi, StoreError};
+use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, StoreError};
 use common::env::{EnvGuard, EnvReadGuard};
 use common::{Response, TestClient};
 use serde_json::{Map, Value, json};
@@ -323,6 +323,17 @@ fn count(v: &Value) -> i64 {
     v.as_i64().unwrap_or(0)
 }
 
+/// `[항목, 전체 수, 다음 커서, 오류]`를 `Result<CoverPage, _>`로 바꾼다. 전체 수가 null이면 모르는 것이다.
+fn cover_page(v: &Value) -> Result<CoverPage, String> {
+    let total = arr(v, 1).as_u64().map(|n| n as usize);
+    opt_string(arr(v, 3)).map_or_else(|| Ok(CoverPage { items: titled_books(arr(v, 0)), total, next_cursor: opt_string(arr(v, 2)) }), Err)
+}
+
+/// `[책 목록, 전체 수, 오류]`를 `Result<BookPage, _>`로 바꾼다.
+fn page(v: &Value) -> Result<BookPage, String> {
+    opt_string(arr(v, 2)).map_or_else(|| Ok(BookPage { books: books(arr(v, 0)), total: count(&arr(v, 1)), next_cursor: None }), Err)
+}
+
 fn opt_book(v: Value) -> Option<Book> {
     if v.is_null() { None } else { Some(Book::new(v["book_id"].as_i64().unwrap_or_default(), &v, v["score"].as_f64().unwrap_or_default())) }
 }
@@ -343,8 +354,9 @@ fn to_response(v: Value) -> BookResponse {
 }
 
 /// `(Option<Value>, Option<String>)` 쌍. `[결과, 오류]`
-fn pair(v: &Value) -> (Option<Value>, Option<String>) {
-    (opt_json(arr(v, 0)), opt_string(arr(v, 1)))
+/// `[값, 오류]`를 `Result`로 바꾼다. 오류가 있으면 값은 보지 않는다.
+fn value_result(v: &Value) -> Result<Value, String> {
+    opt_string(arr(v, 1)).map_or_else(|| Ok(arr(v, 0)), Err)
 }
 
 fn progress_callback<'a>(f: Option<&'a (dyn Fn(Value) + Send + Sync)>) -> Option<Callback<'a>> {
@@ -375,9 +387,14 @@ impl BookManagerApi for Mock {
         Arc::new(EsProxy(self.clone()))
     }
 
-    async fn get_book(&self, id: i64) -> (Option<Book>, Option<String>) {
+    /// `[책, null]`은 찾음, `[null, 오류]`는 조회 실패, `[null, null]`은 없음이다.
+    async fn get_book(&self, id: i64) -> Result<Book, BookLookupError> {
         let v = self.invoke("get_book", call_args!([id], {})).await;
-        (opt_book(arr(&v, 0)), opt_string(arr(&v, 1)))
+        match (opt_book(arr(&v, 0)), opt_string(arr(&v, 1))) {
+            (Some(book), _) => Ok(book),
+            (None, Some(error)) => Err(BookLookupError::Failed(error)),
+            (None, None) => Err(BookLookupError::NotFound(id)),
+        }
     }
 
     async fn get_book_content(&self, id: i64) -> BookContent {
@@ -407,62 +424,62 @@ impl BookManagerApi for Mock {
         to_response(self.invoke("get_html_resource", call_args!([], {"book_id": book_id, "resource_path": resource_path})).await)
     }
 
-    async fn validate_epub(&self, book_id: i64) -> (Option<Value>, Option<String>) {
-        pair(&self.invoke("validate_epub", call_args!([book_id], {})).await)
+    async fn validate_epub(&self, book_id: i64) -> Result<Value, String> {
+        value_result(&self.invoke("validate_epub", call_args!([book_id], {})).await)
     }
 
-    async fn validate_pdf(&self, book_id: i64) -> (Option<Value>, Option<String>) {
-        pair(&self.invoke("validate_pdf", call_args!([book_id], {})).await)
+    async fn validate_pdf(&self, book_id: i64) -> Result<Value, String> {
+        value_result(&self.invoke("validate_pdf", call_args!([book_id], {})).await)
     }
 
-    async fn get_books_in_category(&self, category: &str) -> (Vec<Book>, Option<String>) {
+    async fn get_books_in_category(&self, category: &str) -> Result<Vec<Book>, String> {
         let v = self.invoke("get_books_in_category", call_args!([category], {})).await;
-        (books(arr(&v, 0)), opt_string(arr(&v, 1)))
+        opt_string(arr(&v, 1)).map_or_else(|| Ok(books(arr(&v, 0))), Err)
     }
 
-    async fn get_categories(&self) -> (Value, Option<String>) {
+    async fn get_categories(&self) -> Result<Value, String> {
         let v = self.invoke("get_categories", call_args!([], {})).await;
-        (arr(&v, 0), opt_string(arr(&v, 1)))
+        opt_string(arr(&v, 1)).map_or_else(|| Ok(arr(&v, 0)), Err)
     }
 
-    async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, exclude_categories: Option<&[String]>, category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, exclude_categories: Option<&[String]>, category: Option<&str>) -> Result<BookPage, String> {
         let mut kwargs = json!({"size": size, "offset": offset, "exclude_categories": exclude_categories});
         if let Some(category) = category {
             kwargs["category"] = json!(category);
         }
         let v = self.invoke("search_by_keyword_paged", CallArgs::new(vec![json!(keyword)], kwargs)).await;
-        (books(arr(&v, 0)), count(&arr(&v, 1)), opt_string(arr(&v, 2)))
+        page(&v)
     }
 
-    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> (Vec<Book>, i64, Option<String>) {
+    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> Result<BookPage, String> {
         let v = self.invoke("get_latest_books", call_args!([], {"size": size, "exclude_categories": exclude_categories})).await;
-        (books(arr(&v, 0)), count(&arr(&v, 1)), opt_string(arr(&v, 2)))
+        page(&v)
     }
 
-    async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> Result<BookPage, String> {
         let v = self.invoke("search_similar_books_paged", call_args!([book_id], {"size": size, "offset": offset})).await;
-        (books(arr(&v, 0)), count(&arr(&v, 1)), opt_string(arr(&v, 2)))
+        page(&v)
     }
 
-    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, i64, Option<String>, Option<String>) {
+    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         let v = self.invoke("get_cover_books_paged", call_args!([], {"category": category, "size": size, "cursor": cursor, "exclude_categories": exclude_categories})).await;
-        (titled_books(arr(&v, 0)), count(&arr(&v, 1)), opt_string(arr(&v, 2)), opt_string(arr(&v, 3)))
+        cover_page(&v)
     }
 
-    async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, Option<i64>, Option<String>, Option<String>) {
+    async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         let v = self.invoke("get_uncovered_books_paged", call_args!([], {"category": category, "size": size, "cursor": cursor, "exclude_categories": exclude_categories})).await;
-        (titled_books(arr(&v, 0)), arr(&v, 1).as_i64(), opt_string(arr(&v, 2)), opt_string(arr(&v, 3)))
+        cover_page(&v)
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> (Value, Option<String>) {
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
         let args = call_args!([request.category, request.mappings], {"content_type": request.content_type, "use_bookstore": request.use_bookstore, "use_content_meta": request.use_content_meta, "delay": request.delay})
             .with_callback("on_progress", progress_callback(request.on_progress));
         let v = self.invoke("propose_category_changes", args).await;
-        (arr(&v, 0), opt_string(arr(&v, 1)))
+        value_result(&v)
     }
 
-    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> (Value, Option<String>) {
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<Value, String> {
         let mut allowed: Vec<&String> = request.allowed_file_paths.iter().collect();
         allowed.sort();
         let args = call_args!([request.items, allowed], {"content_type": request.content_type, "clean_existing": request.clean_existing})
@@ -470,27 +487,31 @@ impl BookManagerApi for Mock {
             .with_callback("on_item_done", progress_callback(request.on_item_done))
             .with_callback("should_continue", continue_callback(request.should_continue));
         let v = self.invoke("apply_category_changes", args).await;
-        (arr(&v, 0), opt_string(arr(&v, 1)))
+        value_result(&v)
     }
 
-    async fn index_single_file(&self, file_path: &str) -> (Option<i64>, Option<String>) {
+    async fn index_single_file(&self, file_path: &str) -> Result<i64, String> {
         let v = self.invoke("index_single_file", call_args!([file_path], {})).await;
-        (arr(&v, 0).as_i64(), opt_string(arr(&v, 1)))
-    }
-
-    async fn delete_file(&self, file_path: &str) -> (String, Option<String>) {
-        let v = self.invoke("delete_file", call_args!([file_path], {})).await;
-        (arr(&v, 0).as_str().unwrap_or("").to_string(), opt_string(arr(&v, 1)))
-    }
-
-    async fn reload_category(&self, category: &str, content_type: &str) -> (Value, Option<String>) {
-        match self.call("reload_category", call_args!([category, content_type], {})).await {
-            Ok(v) => (arr(&v, 0), opt_string(arr(&v, 1))),
-            Err(e) => (Value::Null, Some(e)),
+        match (arr(&v, 0).as_i64(), opt_string(arr(&v, 1))) {
+            (Some(book_id), None) => Ok(book_id),
+            (_, error) => Err(error.unwrap_or_default()),
         }
     }
 
-    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+    /// `["Ok", null]`만 성공이다.
+    async fn delete_file(&self, file_path: &str) -> Result<(), String> {
+        let v = self.invoke("delete_file", call_args!([file_path], {})).await;
+        if arr(&v, 0).as_str() == Some("Ok") { Ok(()) } else { Err(opt_string(arr(&v, 1)).unwrap_or_default()) }
+    }
+
+    async fn reload_category(&self, category: &str, content_type: &str) -> Result<Value, String> {
+        match self.call("reload_category", call_args!([category, content_type], {})).await {
+            Ok(v) => value_result(&v),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
         let args = call_args!([content_type], {}).with_callback(
             "on_progress",
             on_progress.map(|f| {
@@ -504,12 +525,12 @@ impl BookManagerApi for Mock {
             }),
         );
         match self.call("reload_category_mismatches", args).await {
-            Ok(v) => (arr(&v, 0), opt_string(arr(&v, 1))),
-            Err(e) => (Value::Null, Some(e)),
+            Ok(v) => value_result(&v),
+            Err(e) => Err(e),
         }
     }
 
-    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
         let args = call_args!([category, content_type], {}).with_callback(
             "on_progress",
             on_progress.map(|f| {
@@ -523,8 +544,8 @@ impl BookManagerApi for Mock {
             }),
         );
         match self.call("reload_category_mismatch_files", args).await {
-            Ok(v) => (arr(&v, 0), opt_string(arr(&v, 1))),
-            Err(e) => (Value::Null, Some(e)),
+            Ok(v) => value_result(&v),
+            Err(e) => Err(e),
         }
     }
 
@@ -679,9 +700,9 @@ impl RefreshTokenStoreApi for Mock {
         expires_at: i64,
         client_ip: Option<&str>,
         user_agent: Option<&str>,
-    ) -> Result<String, StoreError> {
+    ) -> Result<Rotation, StoreError> {
         let kwargs = json!({"current_token_id": current_token_id, "new_token_id": new_token_id, "family_id": family_id, "email": email, "issued_at": issued_at, "expires_at": expires_at, "client_ip": client_ip, "user_agent": user_agent});
-        self.invoke_sync_try("rotate", CallArgs::new(vec![], kwargs)).map(|v| v.as_str().unwrap_or("").to_string()).map_err(StoreError::Unsupported)
+        self.invoke_sync_try("rotate", CallArgs::new(vec![], kwargs)).and_then(|v| v.as_str().unwrap_or("").parse()).map_err(StoreError::Unsupported)
     }
 
     fn revoke_family(&self, family_id: &str, reason: &str) -> Result<(), StoreError> {
@@ -1166,6 +1187,33 @@ mod test_viewer_hidden_access {
 
         assert_eq!(r.status, 403);
         assert_eq!(r.json()["detail"], "접근 권한이 없는 카테고리입니다.");
+        fx.bm.assert_not_called("get_book_content");
+    }
+
+    #[tokio::test]
+    async fn test_viewer_download_fails_closed_when_book_lookup_fails() {
+        // 조회 오류로 카테고리를 모르면 숨김 검사를 건너뛰지 않고 거절한다.
+        let fx = Fx::new();
+        fx.set_auth(viewer_payload());
+        fx.cat.returns("get_hidden_categories", json!(["secret"]));
+        fx.bm.returns("get_book", json!([null, "ES 연결 실패"]));
+
+        let r = fx.get("/download/1").await;
+
+        assert_eq!(r.status, 503, "조회 실패는 없음(404)과 구분한다");
+        fx.bm.assert_not_called("get_book_content");
+    }
+
+    #[tokio::test]
+    async fn test_viewer_download_of_a_missing_book_is_not_found() {
+        let fx = Fx::new();
+        fx.set_auth(viewer_payload());
+        fx.cat.returns("get_hidden_categories", json!(["secret"]));
+        fx.bm.returns("get_book", json!([null, null]));
+
+        let r = fx.get("/download/1").await;
+
+        assert_eq!(r.status, 404);
         fx.bm.assert_not_called("get_book_content");
     }
 

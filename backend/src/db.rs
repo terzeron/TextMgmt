@@ -28,6 +28,18 @@ pub enum DbValue {
     DateTime(NaiveDateTime),
 }
 
+/// JSON 응답용 변환. 날짜는 `NaiveDateTime`의 `Display` 문자열이다.
+impl From<&DbValue> for serde_json::Value {
+    fn from(value: &DbValue) -> Self {
+        match value {
+            DbValue::Null => Self::Null,
+            DbValue::Int(n) => Self::from(*n),
+            DbValue::Text(s) => Self::from(s.as_str()),
+            DbValue::DateTime(d) => Self::from(d.to_string()),
+        }
+    }
+}
+
 impl DbValue {
     pub fn is_null(&self) -> bool {
         matches!(self, DbValue::Null)

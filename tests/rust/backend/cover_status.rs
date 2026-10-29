@@ -258,15 +258,34 @@ fn opts(size: Option<usize>, cursor: Option<&str>) -> CoverPageOpts {
     CoverPageOpts { size: size.unwrap_or(60), cursor: cursor.map(str::to_string), ..Default::default() }
 }
 
+/// 원본 테스트의 `(항목, 전체 수, 다음 커서, 오류)` 쪽.
+type RawPage = (Vec<(CoverBook, String)>, usize, Option<String>, Option<String>);
+
+fn page(raw: RawPage) -> Result<CoverPage, String> {
+    let (items, total, next_cursor, error) = raw;
+    error.map_or(Ok(CoverPage { items, total: Some(total), next_cursor }), Err)
+}
+
+/// 미표지 목록 결과를 원본 테스트 모양으로 펼친 것. 전체 수는 모르면 `None`이다.
+type Unpaged = (Vec<(CoverBook, String)>, Option<usize>, Option<String>, Option<String>);
+
+/// `Result<CoverPage, _>`를 원본 테스트의 `(항목, 전체 수, 다음 커서, 오류)`로 펼친다.
+fn unpage(result: Result<CoverPage, String>) -> Unpaged {
+    match result {
+        Ok(page) => (page.items, page.total, page.next_cursor, None),
+        Err(error) => (Vec::new(), None, None, Some(error)),
+    }
+}
+
 /// 스크립트한 페이지를 차례로 돌려주고, 받은 커서를 기록하는 pager. Python `AsyncMock(side_effect=[...])`.
-fn scripted(pages: Vec<CoverPage>) -> (CoverBooksPager, Arc<Mutex<Vec<Option<String>>>>) {
+fn scripted(pages: Vec<RawPage>) -> (CoverBooksPager, Arc<Mutex<Vec<Option<String>>>>) {
     let queue = Arc::new(Mutex::new(VecDeque::from(pages)));
     let cursors = Arc::new(Mutex::new(Vec::new()));
     let (q, c) = (queue.clone(), cursors.clone());
     let pager: CoverBooksPager = Arc::new(move |opts: CoverPageOpts| {
         c.lock().unwrap().push(opts.cursor);
-        let page = q.lock().unwrap().pop_front().expect("스크립트한 페이지를 모두 썼다");
-        Box::pin(async move { page })
+        let raw = q.lock().unwrap().pop_front().expect("스크립트한 페이지를 모두 썼다");
+        Box::pin(async move { page(raw) })
     });
     (pager, cursors)
 }
@@ -287,7 +306,7 @@ async fn test_uncovered_page_collects_across_scan_pages_and_keeps_scan_cursor() 
     let (pager, cursors) = scripted(vec![(vec![(covered, String::new()), (plain1, String::new())], 3, Some("c1".into()), None), (vec![(plain2, String::new())], 3, Some("c2".into()), None)]);
     let manager = BookManager::with_deps(deps(tmp.path()).with_cover_books_pager(pager));
 
-    let (items, total, next_cursor, error) = manager.get_uncovered_books_paged(opts(Some(2), None)).await;
+    let (items, total, next_cursor, error) = unpage(manager.get_uncovered_books_paged(opts(Some(2), None)).await);
 
     assert_eq!(error, None);
     assert_eq!(names(&items), ["plain1.pdf", "plain2.pdf"]);
@@ -306,7 +325,7 @@ async fn test_uncovered_page_ends_when_list_ends() {
     let (pager, _cursors) = scripted(vec![(vec![(covered, String::new())], 1, None, None)]);
     let manager = BookManager::with_deps(deps(tmp.path()).with_cover_books_pager(pager));
 
-    let (items, total, next_cursor, error) = manager.get_uncovered_books_paged(opts(Some(5), None)).await;
+    let (items, total, next_cursor, error) = unpage(manager.get_uncovered_books_paged(opts(Some(5), None)).await);
 
     assert!(items.is_empty());
     assert_eq!((total, next_cursor, error), (None, None, None));
@@ -322,7 +341,7 @@ async fn test_uncovered_page_stops_at_budget_even_without_items() {
     let (pager, cursors) = scripted(vec![(vec![(covered.clone(), String::new())], 9, Some("c1".into()), None), (vec![(covered, String::new())], 9, Some("c2".into()), None)]);
     let manager = BookManager::with_deps(deps(tmp.path()).with_uncovered_scan_budget_seconds(-1.0).with_cover_books_pager(pager));
 
-    let (items, _total, next_cursor, error) = manager.get_uncovered_books_paged(opts(Some(5), None)).await;
+    let (items, _total, next_cursor, error) = unpage(manager.get_uncovered_books_paged(opts(Some(5), None)).await);
 
     assert!(items.is_empty());
     assert_eq!((next_cursor.as_deref(), error), (Some("c1"), None));
@@ -343,7 +362,7 @@ async fn test_uncovered_page_stops_at_page_cap_and_returns_resume_cursor() {
     ]);
     let manager = BookManager::with_deps(deps(tmp.path()).with_uncovered_max_scan_pages(2).with_cover_books_pager(pager));
 
-    let (items, _total, next_cursor, _error) = manager.get_uncovered_books_paged(opts(Some(5), None)).await;
+    let (items, _total, next_cursor, _error) = unpage(manager.get_uncovered_books_paged(opts(Some(5), None)).await);
 
     assert!(items.is_empty());
     assert_eq!(next_cursor.as_deref(), Some("c2"));
@@ -364,7 +383,7 @@ async fn test_uncovered_scans_run_at_most_two_at_once() {
             p.fetch_max(now, Ordering::SeqCst);
             tokio::time::sleep(Duration::from_millis(20)).await;
             r.fetch_sub(1, Ordering::SeqCst);
-            (Vec::new(), 0, None, None)
+            Ok(CoverPage::default())
         })
     });
     let manager = Arc::new(BookManager::with_deps(deps(tmp.path()).with_cover_books_pager(slow_page)));
@@ -374,7 +393,7 @@ async fn test_uncovered_scans_run_at_most_two_at_once() {
         tasks.spawn(async move { manager.get_uncovered_books_paged(opts(None, None)).await });
     }
     while let Some(result) = tasks.join_next().await {
-        result.unwrap();
+        result.unwrap().unwrap();
     }
 
     assert_eq!(peak.load(Ordering::SeqCst), BookManager::UNCOVERED_MAX_CONCURRENT_SCANS);
@@ -386,7 +405,7 @@ async fn test_uncovered_page_passes_through_errors() {
     let (pager, _cursors) = scripted(vec![(Vec::new(), 0, None, Some("invalid cursor".into()))]);
     let manager = BookManager::with_deps(deps(tmp.path()).with_cover_books_pager(pager));
 
-    let (items, total, next_cursor, error) = manager.get_uncovered_books_paged(opts(None, Some("x"))).await;
+    let (items, total, next_cursor, error) = unpage(manager.get_uncovered_books_paged(opts(None, Some("x"))).await);
 
     assert!(items.is_empty());
     assert_eq!((total, next_cursor, error.as_deref()), (None, None, Some("invalid cursor")));
@@ -464,9 +483,9 @@ async fn uncovered_http_uses_real_book_and_comic_managers() {
 struct BrowseManager(Mutex<Vec<serde_json::Value>>);
 #[async_trait::async_trait]
 impl backend::main::BookManagerApi for BrowseManager {
-    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, excluded: Option<&[String]>) -> (Vec<(CoverBook, String)>, i64, Option<String>, Option<String>) {
+    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, excluded: Option<&[String]>) -> Result<CoverPage, String> {
         self.0.lock().unwrap().push(json!([category, size, cursor, excluded]));
-        (vec![], 17, Some("next".into()), None)
+        Ok(CoverPage { items: vec![], total: Some(17), next_cursor: Some("next".into()) })
     }
 }
 struct Hidden;
@@ -486,12 +505,12 @@ impl backend::main::CategoryMappingApi for FailingHidden {
 struct BrowseOutcomes;
 #[async_trait::async_trait]
 impl backend::main::BookManagerApi for BrowseOutcomes {
-    async fn get_cover_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _excluded: Option<&[String]>) -> (Vec<(CoverBook, String)>, i64, Option<String>, Option<String>) {
-        (vec![], 0, None, Some("cover query failed".into()))
+    async fn get_cover_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _excluded: Option<&[String]>) -> Result<CoverPage, String> {
+        Err("cover query failed".into())
     }
 
-    async fn get_uncovered_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _excluded: Option<&[String]>) -> (Vec<(CoverBook, String)>, Option<i64>, Option<String>, Option<String>) {
-        (vec![], None, Some("next-uncovered".into()), None)
+    async fn get_uncovered_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _excluded: Option<&[String]>) -> Result<CoverPage, String> {
+        Ok(CoverPage { items: vec![], total: None, next_cursor: Some("next-uncovered".into()) })
     }
 }
 

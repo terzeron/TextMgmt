@@ -288,22 +288,17 @@ pub fn summarize(raw_content: &str) -> (String, usize) {
     (collapse_spaces(&keep_ascii_hangul(&head)), line_count)
 }
 
-/// TXT 파일을 읽는다. 읽지 못하면 빈 결과와 오류 메시지를 함께 돌려준다.
-pub fn read_from_text(path: &Path) -> (TextRead, Option<String>) {
+/// TXT 파일을 읽는다. 읽지 못하면 오류 메시지를 돌려준다(원본은 빈 결과와 오류를 함께 돌려줬다).
+pub fn read_from_text(path: &Path) -> Result<TextRead, String> {
     read_from_text_with(path, &TextHooks::default())
 }
 
-pub fn read_from_text_with(path: &Path, hooks: &TextHooks<'_>) -> (TextRead, Option<String>) {
-    let raw = match hooks.read_bytes.map_or_else(|| fs::read(path), |read| read(path)) {
-        Ok(raw) => raw,
-        Err(e) => return (TextRead::default(), Some(format!("can't read unicode text from file '{}', {e}", path.display()))),
-    };
-    let (raw_content, error) = match decode_text_with(path, &raw, hooks) {
-        Ok(content) => (content, None),
-        Err(e) => (String::new(), Some(format!("can't read unicode text from file '{}', {e}", path.display()))),
-    };
+pub fn read_from_text_with(path: &Path, hooks: &TextHooks<'_>) -> Result<TextRead, String> {
+    let error = |e: &dyn std::fmt::Display| format!("can't read unicode text from file '{}', {e}", path.display());
+    let raw = hooks.read_bytes.map_or_else(|| fs::read(path), |read| read(path)).map_err(|e| error(&e))?;
+    let raw_content = decode_text_with(path, &raw, hooks).map_err(|e| error(&e))?;
     let (summary, line_count) = summarize(&raw_content);
-    (TextRead { summary, line_count, page_count: 0, raw_content }, error)
+    Ok(TextRead { summary, line_count, page_count: 0, raw_content })
 }
 
 /// `reencode_text_file_to_utf8`이 쓰는 인코딩 순서. 근거 없는 UTF-16과, 고립 상위바이트일 때의 한글 코덱을 뺀다.

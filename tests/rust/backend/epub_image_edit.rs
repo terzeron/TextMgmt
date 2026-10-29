@@ -12,10 +12,10 @@
 //! - `backend::epub_cover::read_package(&mut zip::ZipArchive<std::fs::File>) -> Result<Package, CoverError>` (Python `_read_package`)
 //! - `backend::epub_cover::edit_page_images(html: &[u8], image_count: usize, edits: &[(usize, &str, Option<Value>)]) -> Result<Vec<u8>, CoverError>` (Python `_edit_page_images`)
 //!   (두 함수의 밑줄 접두사는 뗀다. 테스트에서 쓰려면 `pub`이어야 한다)
-//! - `BookManager::edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>)`
+//! - `BookManager::edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String>`
 //! - `BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>)`: 인자 순서는 (path, es) (docs/rust-test-seams.md 3.12)
 //!   - `.with_book_lookup(Arc<dyn BookLookup>)` (`get_book` 대역. 구 `.with_book(path, type)`), `.with_image_fetcher(Arc<dyn ImageFetcher>)` (`backend.cover_management.fetch_url_image` 대체. 구 `with_fetch_url_image`)
-//!   - `backend::book_manager::{BookLookup, BookRef}`: `#[async_trait] trait BookLookup { async fn get_book(&self, book_id: i64) -> (Option<BookRef>, Option<String>) }`, `BookRef { book_id, file_path, file_type }`
+//!   - `backend::book_manager::{BookLookup, BookRef}`: `#[async_trait] trait BookLookup { async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> }`, `BookRef { book_id, file_path, file_type }`
 //!   - `backend::direct_cover_url::{ImageFetcher, FetchError}`: `trait ImageFetcher: Send + Sync { fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError> }`
 //! - `backend::main::{app_with, AppDeps, AuthMode}`: `app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(Arc<dyn BookManagerApi>))`. 구 `app_with_overrides`. `app() -> Router`도 그대로 쓴다
 //!
@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use backend::book::BookLookupError;
 use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, Limits, OPF_NS, edit_images, edit_images_with, edit_page_images, read_package, revision};
@@ -178,9 +179,10 @@ impl FakeManager {
 
 #[async_trait]
 impl BookManagerApi for FakeManager {
-    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>) {
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String> {
         self.calls.lock().unwrap().push(("edit_epub_images".into(), vec![json!(book_id), json!(crops), json!(splits), json!(deletes), json!(inserts)]));
-        self.edit_epub_images.lock().unwrap().clone()
+        let (value, error) = self.edit_epub_images.lock().unwrap().clone();
+        error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 }
 
@@ -512,8 +514,8 @@ struct StaticBookLookup {
 
 #[async_trait]
 impl BookLookup for StaticBookLookup {
-    async fn get_book(&self, book_id: i64) -> (Option<BookRef>, Option<String>) {
-        (Some(BookRef { book_id, file_path: self.path.clone(), file_type: self.file_type.clone() }), None)
+    async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> {
+        Ok(BookRef { book_id, file_path: self.path.clone(), file_type: self.file_type.clone() })
     }
 }
 
@@ -544,7 +546,7 @@ async fn test_manager_applies_a_combined_edit_and_keeps_the_original_in_trash() 
     let m = manager_env();
     let original = fs::read(&m.path).unwrap();
     let data = b64(&jpeg("blue"));
-    let (result, error) =
+    let result =
         m.bm.edit_epub_images(
             1,
             &[with_idref("p1", rect(0.0, 0.5))],
@@ -552,9 +554,8 @@ async fn test_manager_applies_a_combined_edit_and_keeps_the_original_in_trash() 
             &[json!({"idref": "shared"})],
             &[json!({"before_idref": "text", "url": "https://img.example.com/a.jpg"}), json!({"before_idref": "text", "image_data": data})],
         )
-        .await;
-    assert_eq!(error, None);
-    let result = result.unwrap();
+        .await
+        .unwrap();
     assert!(result["idrefs"]["inserted"].as_array().unwrap().len() == 2 && result["idrefs"]["split"].get("p2").is_some(), "{result}");
     assert_eq!(fs::read(m.tmp.path().join("0_trash").join("book.epub")).unwrap(), original);
     assert_eq!(m.es.updates().len(), 1);
@@ -564,10 +565,10 @@ async fn test_manager_applies_a_combined_edit_and_keeps_the_original_in_trash() 
 async fn test_manager_reports_errors_as_messages() {
     let m = manager_env();
     let original = fs::read(&m.path).unwrap();
-    let (_, error) = m.bm.edit_epub_images(1, &[with_idref("text", rect(0.0, 1.0))], &[], &[], &[]).await;
-    assert!(error.as_deref().unwrap_or("").contains("크롭할 수 없습니다"), "{error:?}");
-    let (_, error) = m.bm.edit_epub_images(1, &[], &[], &[], &[json!({"before_idref": "p1", "image_data": "!!!"})]).await;
-    assert!(error.as_deref().unwrap_or("").contains("읽을 수 없습니다"), "{error:?}");
+    let error = m.bm.edit_epub_images(1, &[with_idref("text", rect(0.0, 1.0))], &[], &[], &[]).await.unwrap_err();
+    assert!(error.contains("크롭할 수 없습니다"), "{error}");
+    let error = m.bm.edit_epub_images(1, &[], &[], &[], &[json!({"before_idref": "p1", "image_data": "!!!"})]).await.unwrap_err();
+    assert!(error.contains("읽을 수 없습니다"), "{error}");
     assert_eq!(fs::read(&m.path).unwrap(), original);
 }
 

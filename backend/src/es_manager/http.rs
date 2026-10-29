@@ -24,9 +24,11 @@ use std::time::Duration;
 use es_client::build_agent;
 use serde_json::{Map, Value};
 
-use super::{EsError, EsTransport, base64_encode};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 
-const B64_STANDARD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+use super::{EsError, EsTransport};
+
 /// 본문 대신 쿼리 문자열로 가는 인자. 이 순서로 붙인다.
 const QUERY_PARAMS: [&str; 4] = ["scroll", "timeout", "conflicts", "refresh"];
 /// 응답 본문 상한. ureq 기본(10MB)은 1만 건 검색에 모자랄 수 있다.
@@ -92,7 +94,7 @@ impl HttpTransport {
 
     /// 사설 CA를 지정하면 해당 CA로 HTTPS 인증서를 검증한다.
     pub fn new_with_ca(url: &str, user: &str, password: &str, index: &str, timeout: Duration, ca_cert_path: Option<&Path>) -> Self {
-        let auth = (!user.is_empty() || !password.is_empty()).then(|| format!("Basic {}", base64_encode(format!("{user}:{password}").as_bytes(), B64_STANDARD)));
+        let auth = (!user.is_empty() || !password.is_empty()).then(|| format!("Basic {}", STANDARD.encode(format!("{user}:{password}"))));
         let agent = build_agent(timeout, ca_cert_path).map_err(EsError::Other);
         HttpTransport { agent, base: url.trim_end_matches('/').to_string(), auth, index: index.to_string() }
     }

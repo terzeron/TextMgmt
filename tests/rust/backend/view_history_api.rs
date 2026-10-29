@@ -18,7 +18,7 @@
 //!   `list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError>` (`ViewHistoryStore`도 구현한다)
 //! - `ViewHistoryStore::get_connection(&self) -> Result<Box<dyn DbConnection>, DbError>` (구 `_get_connection() -> mysql::Conn`), `DbConnection::execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>`
 //! - `backend::main::BookAccess` (Python `_get_book_and_ensure_viewer_access`):
-//!   `get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<(Option<BookStub>, Option<String>), HttpException>`
+//!   `get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HttpException>`
 //! - `backend::main::BookStub { title: String, category: Option<String> }`, `backend::main::HttpException { status_code: u16, detail: String }`
 //! - `backend::main::route_dependencies(path: &str) -> Vec<&'static str>`: 라우트에 붙은 의존성 이름 (`route.dependant.dependencies` 대응)
 //! - 인증 없는 요청은 401을 돌려준다.
@@ -94,14 +94,14 @@ impl ViewHistoryApi for FakeStore {
     }
 }
 
-type AccessFn = dyn Fn(i64, &Value, &str) -> Result<(Option<BookStub>, Option<String>), HttpException> + Send + Sync;
+type AccessFn = dyn Fn(i64, &Value, &str) -> Result<BookStub, HttpException> + Send + Sync;
 
 /// `_get_book_and_ensure_viewer_access` 대역. 클로저가 결과를 정한다.
 struct FnAccess(Box<AccessFn>);
 
 #[async_trait]
 impl BookAccess for FnAccess {
-    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<(Option<BookStub>, Option<String>), HttpException> {
+    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HttpException> {
         (self.0)(book_id, payload, content_type)
     }
 }
@@ -117,7 +117,7 @@ fn allow_book() -> (Arc<dyn BookAccess>, Arc<Mutex<Vec<Value>>>) {
     let sink = calls.clone();
     let access = FnAccess(Box::new(move |book_id, payload, content_type| {
         sink.lock().unwrap().push(json!({"book_id": book_id, "payload": payload, "content_type": content_type}));
-        Ok((Some(make_book("원래 제목", "소설")), None))
+        Ok(make_book("원래 제목", "소설"))
     }));
     (Arc::new(access), calls)
 }
@@ -204,7 +204,7 @@ mod test_record_book_view {
     #[tokio::test]
     async fn test_unknown_book_returns_404_and_records_nothing() {
         let store = FakeStore::new();
-        let missing = FnAccess(Box::new(|_, _, _| Ok((None, Some("Book not found".to_string())))));
+        let missing = FnAccess(Box::new(|_, _, _| Err(HttpException { status_code: 404, detail: "Book not found".to_string() })));
         let client = admin_client(store.clone(), Some(Arc::new(missing)));
 
         let resp = client.request(Method::POST, "/books/view-history/999", None, Vec::new()).await;
@@ -360,7 +360,7 @@ mod test_end_to_end_with_real_store {
         let (store, _guard) = real_store().await;
         let access = FnAccess(Box::new(|book_id, _, content_type| {
             let title = if content_type == "comic" { "만화 제목" } else { "책 제목" };
-            Ok((Some(make_book(&format!("{title} {book_id}"), "분류")), None))
+            Ok(make_book(&format!("{title} {book_id}"), "분류"))
         }));
         let client = admin_client(store.clone(), Some(Arc::new(access)));
 
@@ -384,7 +384,7 @@ mod test_end_to_end_with_real_store {
     #[tokio::test]
     async fn test_limit_narrows_returned_items() {
         let (store, _guard) = real_store().await;
-        let access = FnAccess(Box::new(|book_id, _, _| Ok((Some(make_book(&format!("책 {book_id}"), "분류")), None))));
+        let access = FnAccess(Box::new(|book_id, _, _| Ok(make_book(&format!("책 {book_id}"), "분류"))));
         let client = admin_client(store.clone(), Some(Arc::new(access)));
         for book_id in 0..4 {
             client.request(Method::POST, &format!("/books/view-history/{book_id}"), None, Vec::new()).await;

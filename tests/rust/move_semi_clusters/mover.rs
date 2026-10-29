@@ -150,7 +150,8 @@ fn summary_lists_only_touched_categories_in_sorted_order() {
 }
 
 #[test]
-fn no_arguments_executes_the_default_move_from_the_library_root() {
+fn no_arguments_prints_usage_without_moving_anything() {
+    // 파일을 옮기고 지우는 도구라 인자 없는 실행은 사용법만 보인다.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let file = root.join("0_telegram/q.txt");
@@ -159,8 +160,43 @@ fn no_arguments_executes_the_default_move_from_the_library_root() {
 
     let mut out = Vec::new();
     assert_eq!(run_with_library_root("msc", &[], &mut out, root), 0);
+    assert!(file.exists() && !root.join("3_판타지/q.txt").exists());
+    assert!(String::from_utf8(out).unwrap().contains("사용법"));
+}
+
+#[test]
+fn bare_run_executes_the_default_move_from_the_library_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let file = root.join("0_telegram/q.txt");
+    touch(&file);
+    write_report(root, serde_json::json!({ "준확실_3_판타지": [entry(&file)] }));
+
+    let mut out = Vec::new();
+    assert_eq!(run_with_library_root("msc", &["run".into()], &mut out, root), 0);
     assert!(root.join("3_판타지/q.txt").exists());
     assert!(String::from_utf8(out).unwrap().contains("▶ 3_판타지: 신규 이동 1권"));
+}
+
+#[test]
+fn report_entries_outside_the_source_category_are_skipped() {
+    // 다른 라이브러리 루트로 만든 보고서가 라이브러리 밖 파일을 지우면 안 된다.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    let outside = tmp.path().join("elsewhere/dup.txt");
+    let escaped = root.join("0_telegram/../4_other/esc.txt");
+    touch(&outside);
+    touch(&root.join("4_other/esc.txt"));
+    touch(&root.join("3_판타지/dup.txt"));
+    touch(&root.join("3_판타지/esc.txt"));
+    let report = write_report(&root, serde_json::json!({ "준확실_3_판타지": [entry(&outside), entry(&escaped)] }));
+
+    let outcome = move_semi_clusters(&root, &report, false).unwrap();
+    assert!(outside.exists(), "소스 카테고리 밖 파일은 지우지 않는다");
+    assert!(root.join("4_other/esc.txt").exists(), "`..`로 빠져나가는 경로도 건너뛴다");
+    assert_eq!(outcome.skipped_outside, 2);
+    assert_eq!(outcome.total_moved() + outcome.total_cleaned(), 0);
+    assert!(outcome.summary().contains("소스 카테고리 밖 항목 2건"), "{}", outcome.summary());
 }
 
 #[test]

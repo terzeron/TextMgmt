@@ -121,10 +121,9 @@ async fn preview_image(
 ) -> ApiResult<Response> {
     let id = parse_book_id(&raw_id)?;
     let manager = checked_manager(&deps, &payload, id, uri.path().starts_with("/comics/")).await?;
-    let (jpeg, error) = manager.preview_insert_image(&body.url).await;
-    book_response(match jpeg {
-        Some(body) => BookResponse { status_code: 200, media_type: Some("image/jpeg".into()), headers: vec![("Cache-Control".into(), "private, no-store".into())], body },
-        None => BookResponse { status_code: 400, body: error.unwrap_or_else(|| "이미지를 가져오지 못했습니다".into()).into_bytes(), ..BookResponse::default() },
+    book_response(match manager.preview_insert_image(&body.url).await {
+        Ok(body) => BookResponse { status_code: 200, media_type: Some("image/jpeg".into()), headers: vec![("Cache-Control".into(), "private, no-store".into())], body },
+        Err(error) => BookResponse { status_code: 400, body: error.into_bytes(), ..BookResponse::default() },
     })
 }
 
@@ -150,10 +149,9 @@ async fn preview_upload(
         return Err(ApiError::Validation(RequestValidationError::single(&["body", "file"], "Field required", Value::Null)));
     };
     let manager = checked_manager(&deps, &payload, id, uri.path().starts_with("/comics/")).await?;
-    let (jpeg, error) = manager.preview_insert_upload(&data).await;
-    book_response(match jpeg {
-        Some(body) => BookResponse { status_code: 200, media_type: Some("image/jpeg".into()), headers: vec![("Cache-Control".into(), "private, no-store".into())], body },
-        None => BookResponse { status_code: 400, body: error.unwrap_or_else(|| "이미지를 읽지 못했습니다".into()).into_bytes(), ..BookResponse::default() },
+    book_response(match manager.preview_insert_upload(&data).await {
+        Ok(body) => BookResponse { status_code: 200, media_type: Some("image/jpeg".into()), headers: vec![("Cache-Control".into(), "private, no-store".into())], body },
+        Err(error) => BookResponse { status_code: 400, body: error.into_bytes(), ..BookResponse::default() },
     })
 }
 
@@ -169,9 +167,8 @@ async fn delete_pages(
     let crops: Vec<Value> = body.crops.iter().map(|v| json!(v)).collect();
     let splits: Vec<Value> = body.splits.iter().map(|v| json!(v)).collect();
     let inserts: Vec<Value> = body.inserts.iter().map(|v| json!(v)).collect();
-    let (result, error) = manager.delete_pdf_pages(id, &body.pages, Some(&crops), Some(&splits), Some(&inserts), Some(&body.order)).await;
-    Ok(Json(match error {
-        None => json!({"status":"success","result":result}),
-        Some(error) => json!({"status":"failure","error":error}),
+    Ok(Json(match manager.delete_pdf_pages(id, &body.pages, Some(&crops), Some(&splits), Some(&inserts), Some(&body.order)).await {
+        Ok(result) => json!({"status":"success","result":result}),
+        Err(error) => json!({"status":"failure","error":error}),
     }))
 }

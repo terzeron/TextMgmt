@@ -8,7 +8,7 @@
 //!   `try_*`와 `acquire_reload_lock`은 오류 때 "시작·획득 안 됨"으로 답한다.
 //! - 마이그레이션의 `information_schema` 조회는 `table_schema = DATABASE()`를 쓴다. 제공자가 DB 이름을 모르기 때문이다.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 use chrono::{Local, NaiveDateTime};
@@ -356,10 +356,10 @@ impl CategoryMapping {
 
     // ---- 키워드 ----
 
-    /// `{category: [keyword, ...]}`.
-    pub fn get_all_mappings(&self, content_type: &str) -> Result<HashMap<String, Vec<String>>, DbError> {
+    /// `{category: [keyword, ...]}`. 카테고리 순서는 결정적이다. 키워드 동률 판정과 API 응답 순서가 이 순서를 따른다.
+    pub fn get_all_mappings(&self, content_type: &str) -> Result<BTreeMap<String, Vec<String>>, DbError> {
         let rows = self.select("SELECT category, keyword FROM category_keywords WHERE content_type = %s ORDER BY category, keyword", &[content_type.into()])?;
-        let mut mappings: HashMap<String, Vec<String>> = HashMap::new();
+        let mut mappings: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for row in &rows {
             if let (Some(category), Some(keyword)) = (text_of(row, "category"), text_of(row, "keyword")) {
                 mappings.entry(category.to_string()).or_default().push(keyword.to_string());

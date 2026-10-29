@@ -76,9 +76,9 @@ impl BookManagerApi for Update {
     fn path_prefix(&self) -> PathBuf {
         "/tmp/update-library".into()
     }
-    async fn update_book(&self, id: i64, category: &str, title: &str, author: &str, path: &Path, kind: &str, force: bool) -> (Value, Option<String>) {
+    async fn update_book(&self, id: i64, category: &str, title: &str, author: &str, path: &Path, kind: &str, force: bool) -> Result<(), String> {
         self.0.lock().unwrap().push(json!([id, category, title, author, path, kind, force]));
-        if id == 9 { (Value::Null, Some("update failed".into())) } else { (json!("Ok"), None) }
+        if id == 9 { Err("update failed".into()) } else { Ok(()) }
     }
 }
 #[tokio::test]

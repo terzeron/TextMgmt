@@ -98,14 +98,14 @@ impl IndexStore for FakeStore {
         let state = self.state.lock().unwrap();
         if state.fail_created_meta { Err(EsError::Transport("metadata lookup failed".to_owned())) } else { Ok(state.created_meta.clone()) }
     }
-    fn delete_by_file_paths(&self, _file_paths: &[String], _exclude_ids: &[i64]) -> i64 {
-        0
+    fn delete_by_file_paths(&self, _file_paths: &[String], _exclude_ids: &[i64]) -> Result<i64, EsError> {
+        Ok(0)
     }
-    fn get_doc_ids_by_path_prefix(&self, _path_prefix: &str) -> HashSet<i64> {
-        HashSet::new()
+    fn get_doc_ids_by_path_prefix(&self, _path_prefix: &str) -> Result<HashSet<i64>, EsError> {
+        Ok(HashSet::new())
     }
-    fn delete_by_ids(&self, ids: &[i64]) -> i64 {
-        ids.len() as i64
+    fn delete_by_ids(&self, ids: &[i64]) -> Result<i64, EsError> {
+        Ok(ids.len() as i64)
     }
     fn insert(&self, docs: &[(i64, Value)]) -> Result<(), EsError> {
         let mut state = self.state.lock().unwrap();

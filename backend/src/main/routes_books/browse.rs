@@ -7,13 +7,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use crate::book_manager::MAX_CATEGORY_PAGE_SIZE;
+use super::{ensure_allowed, hidden_categories, kind, manager_for};
+use crate::book_manager::{CoverPage, MAX_CATEGORY_PAGE_SIZE};
 use crate::main::{
     deps::AppDeps,
-    errors::{ApiError, ApiResult},
-    extract::{ApiQuery, RequireAuth},
+    errors::ApiResult,
+    extract::{ApiQuery, RequireAuth, parse_py_bool},
     routes::Routes,
-    traits::MappingError,
 };
 
 pub(super) fn routes() -> Routes {
@@ -42,45 +42,25 @@ impl TryFrom<RawQuery> for Query {
         if !(1..=MAX_CATEGORY_PAGE_SIZE).contains(&limit) {
             return Err(format!("limit should be between 1 and {MAX_CATEGORY_PAGE_SIZE}"));
         }
-        let uncovered = match raw.uncovered.as_deref().unwrap_or("false").to_ascii_lowercase().as_str() {
-            "1" | "true" | "on" | "yes" => true,
-            "0" | "false" | "off" | "no" => false,
-            _ => return Err("uncovered should be a valid boolean".into()),
-        };
+        let uncovered = raw.uncovered.as_deref().map_or(Some(false), parse_py_bool).ok_or("uncovered should be a valid boolean")?;
         Ok(Self { category: raw.category.unwrap_or_default(), limit, cursor: raw.cursor.unwrap_or_default(), uncovered })
     }
 }
 
 async fn browse(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiQuery(query): ApiQuery<Query>) -> ApiResult<Json<Value>> {
-    let comics = uri.path().starts_with("/comics/");
-    let manager = if comics { deps.comics_manager() } else { deps.book_manager() }.map_err(|e| {
-        log::warn!("도서 관리자를 쓸 수 없다: {e}");
-        ApiError::unavailable()
-    })?;
-    let hidden = if payload["role"] == "viewer" {
-        let mapping = deps.category_mapping().map_err(|e| {
-            log::warn!("카테고리 접근 정책을 읽을 수 없다: {e}");
-            ApiError::unavailable()
-        })?;
-        mapping.get_hidden_categories(if comics { "comic" } else { "book" }).map_err(|e| match e {
-            MappingError::Http(status, detail) => ApiError::http(status, &detail),
-            MappingError::Other(message) => ApiError::Internal(message),
-        })?
-    } else {
-        vec![]
-    };
-    if !query.category.is_empty() && hidden.iter().any(|h| query.category == *h || query.category.starts_with(&format!("{h}/"))) {
-        return Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다."));
-    }
-    let (items, total, next, error) = if query.uncovered {
+    let comics = kind(&uri) == "comic";
+    let manager = manager_for(&deps, comics)?;
+    let hidden = hidden_categories(&deps, &payload, comics)?;
+    ensure_allowed(&query.category, &hidden)?;
+    let page = if query.uncovered {
         manager.get_uncovered_books_paged(&query.category, query.limit, &query.cursor, Some(&hidden)).await
     } else {
-        let (items, total, next, error) = manager.get_cover_books_paged(&query.category, query.limit, &query.cursor, Some(&hidden)).await;
-        (items, Some(total), next, error)
+        manager.get_cover_books_paged(&query.category, query.limit, &query.cursor, Some(&hidden)).await
     };
-    if let Some(error) = error {
-        return Ok(Json(json!({"status":"failure","error":error})));
-    }
+    let CoverPage { items, total, next_cursor: next } = match page {
+        Ok(page) => page,
+        Err(error) => return Ok(Json(json!({"status":"failure","error":error}))),
+    };
     let books: Vec<Value> = items
         .into_iter()
         .map(|(book, title)| {
@@ -104,10 +84,10 @@ mod tests {
     fn query_validation_accepts_boolean_aliases_and_defaults() {
         let defaults = Query::try_from(RawQuery { category: None, limit: None, cursor: None, uncovered: None }).unwrap();
         assert_eq!((defaults.category.as_str(), defaults.limit, defaults.cursor.as_str(), defaults.uncovered), ("", 60, "", false));
-        for value in ["1", "TRUE", "on", "yes"] {
+        for value in ["1", "TRUE", "on", "yes", "t", "Y"] {
             assert!(Query::try_from(raw(Some(value), Some(1))).unwrap().uncovered, "{value}");
         }
-        for value in ["0", "FALSE", "off", "no"] {
+        for value in ["0", "FALSE", "off", "no", "f", "N"] {
             assert!(!Query::try_from(raw(Some(value), Some(100))).unwrap().uncovered, "{value}");
         }
         assert!(Query::try_from(raw(Some("maybe"), Some(1))).err().unwrap().contains("boolean"));

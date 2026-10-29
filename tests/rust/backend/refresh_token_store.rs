@@ -39,8 +39,8 @@ use crate::{common, mysql_fixture};
 
 use backend::db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
 use backend::refresh_token_store::{
-    _rotation_grace_seconds, AnyRefreshTokenStore, DEFAULT_ROTATION_GRACE_SECONDS, MAX_USER_AGENT_LENGTH, MySQLRefreshTokenStore, RefreshTokenStoreApi, SessionQuery, create_refresh_token_store,
-    create_refresh_token_store_with, summarize_user_agent,
+    _rotation_grace_seconds, AnyRefreshTokenStore, DEFAULT_ROTATION_GRACE_SECONDS, MAX_USER_AGENT_LENGTH, MySQLRefreshTokenStore, RefreshTokenStoreApi, Rotation, SessionQuery,
+    create_refresh_token_store, create_refresh_token_store_with, summarize_user_agent,
 };
 use common::env::EnvGuard;
 use common::log_capture::LogCapture;
@@ -75,8 +75,8 @@ fn issue_from(s: &dyn RefreshTokenStoreApi, token_id: &str, family_id: &str, ema
     s.store_issued(token_id, family_id, email, issued_at, expires_at, Some(client_ip), Some(user_agent)).unwrap();
 }
 
-fn rot(s: &dyn RefreshTokenStoreApi, current: &str, new: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64) -> String {
-    s.rotate(current, new, family_id, email, issued_at, expires_at, None, None).unwrap()
+fn rot(s: &dyn RefreshTokenStoreApi, current: &str, new: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64) -> &'static str {
+    s.rotate(current, new, family_id, email, issued_at, expires_at, None, None).unwrap().as_str()
 }
 
 fn all() -> SessionQuery {
@@ -610,7 +610,10 @@ fn test_mysql_rotation_observation_session_listing_and_revoke() {
     let issued_at = now();
     issue_from(&store, "old", &fam('s'), "reader@example.com", issued_at, issued_at + 3600, "203.0.113.8", "Mozilla/5.0 Chrome/120.0 Safari/537.36");
 
-    assert_eq!(store.rotate("old", "new", &fam('s'), "reader@example.com", issued_at + 1, issued_at + 3601, Some("203.0.113.8"), Some("Mozilla/5.0 Chrome/120.0 Safari/537.36")).unwrap(), "ok");
+    assert_eq!(
+        store.rotate("old", "new", &fam('s'), "reader@example.com", issued_at + 1, issued_at + 3601, Some("203.0.113.8"), Some("Mozilla/5.0 Chrome/120.0 Safari/537.36")).unwrap(),
+        Rotation::Ok
+    );
     let observation = store.get_token_observation("old").unwrap().unwrap();
     assert_eq!(observation["replaced_by_present"], true);
     assert_eq!(observation["revoke_reason"], "rotated");
@@ -1322,7 +1325,7 @@ fn test_mysql_aggregate_sql_runs_and_reports_latest_client_info() {
     let (_guard, store) = mysql_store();
     let now = now();
     issue_from(&store, "t1", &fam('a'), "admin@example.com", now - 100, now + 1000, "203.0.113.7", CHROME_MAC_UA);
-    assert_eq!(store.rotate("t1", "t2", &fam('a'), "admin@example.com", now - 10, now + 2000, Some("198.51.100.42"), Some(SAFARI_IOS_UA)).unwrap(), "ok");
+    assert_eq!(store.rotate("t1", "t2", &fam('a'), "admin@example.com", now - 10, now + 2000, Some("198.51.100.42"), Some(SAFARI_IOS_UA)).unwrap(), Rotation::Ok);
 
     let page = store.list_sessions(&all()).unwrap();
 

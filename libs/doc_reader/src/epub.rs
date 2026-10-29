@@ -82,9 +82,10 @@ fn xml_doc(text: &str) -> Result<roxmltree::Document<'_>, String> {
 }
 
 fn read_member(zip: &mut Zip, name: &str) -> Result<Vec<u8>, String> {
-    let mut file = zip.by_name(name).map_err(|_| format!("KeyError: {name}"))?;
-    let mut buf = Vec::with_capacity(file.size() as usize);
-    file.read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
+    let file = zip.by_name(name).map_err(|_| format!("KeyError: {name}"))?;
+    // 헤더의 선언 크기는 믿지 않는다(zip bomb). 미리 할당하지 않고 상한까지만 푼다.
+    let mut buf = Vec::new();
+    file.take(corpus_common::reader::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
     Ok(buf)
 }
 

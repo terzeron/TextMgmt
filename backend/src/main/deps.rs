@@ -325,23 +325,20 @@ impl RuntimeBookAccess {
 
 #[async_trait::async_trait]
 impl BookAccess for RuntimeBookAccess {
-    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<(Option<BookStub>, Option<String>), HTTPException> {
+    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HTTPException> {
         let manager = if content_type == "comic" { &self.comics } else { &self.books };
         let manager = manager.get().map_err(|error| HTTPException::new(503, &error))?;
-        let (book, error) = manager.get_book(book_id).await;
-        let Some(book) = book else {
-            return Ok((None, error));
-        };
+        let book = manager.get_book(book_id).await.map_err(|error| HTTPException::new(404, &error.to_string()))?;
 
         if payload.get("role").and_then(Value::as_str) == Some("viewer") {
             let categories = self.categories.get().map_err(|error| HTTPException::new(503, &error))?;
             let hidden = categories.get_hidden_categories(content_type).map_err(|error| HTTPException::new(500, &error.to_string()))?;
-            if !book.category.is_empty() && hidden.iter().any(|category| book.category == *category || book.category.starts_with(&format!("{category}/"))) {
+            if super::routes_books::is_hidden(&book.category, &hidden) {
                 return Err(HTTPException::new(403, "접근 권한이 없는 카테고리입니다."));
             }
         }
 
-        Ok((Some(BookStub { title: book.title, category: Some(book.category) }), error))
+        Ok(BookStub { title: book.title, category: Some(book.category) })
     }
 }
 
@@ -391,7 +388,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{RuntimeBookAccess, Slot, build_book_manager, build_comics_manager};
-    use crate::book::Book;
+    use crate::book::{Book, BookLookupError};
     use crate::es_manager::{EsError, EsManagerApi};
     use crate::main::{BookAccess, BookManagerApi, BookStub, CategoryMappingApi};
     use async_trait::async_trait;
@@ -432,8 +429,8 @@ mod tests {
 
     #[async_trait]
     impl BookManagerApi for FixedBookManager {
-        async fn get_book(&self, _id: i64) -> (Option<Book>, Option<String>) {
-            (Some(self.0.clone()), None)
+        async fn get_book(&self, _id: i64) -> Result<Book, BookLookupError> {
+            Ok(self.0.clone())
         }
     }
 
@@ -482,10 +479,9 @@ mod tests {
         let mapping: Arc<dyn CategoryMappingApi> = Arc::new(FixedHiddenCategories(vec!["소설".into()]));
         let access = RuntimeBookAccess::new(Slot::ready(manager.clone()), Slot::ready(manager), Slot::ready(mapping));
 
-        let (book, error) = access.get_book_and_ensure_viewer_access(1, &json!({"role": "admin"}), "book").await.unwrap();
+        let book = access.get_book_and_ensure_viewer_access(1, &json!({"role": "admin"}), "book").await.unwrap();
 
-        assert_eq!(book.unwrap(), BookStub { title: "title".into(), category: Some("소설/판타지".into()) });
-        assert_eq!(error, None);
+        assert_eq!(book, BookStub { title: "title".into(), category: Some("소설/판타지".into()) });
     }
 
     #[tokio::test]

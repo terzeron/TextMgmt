@@ -12,8 +12,8 @@
 //! - `backend::main::run_classify_apply_job(book_manager: &dyn BookManagerApi, category_mapping: &dyn CategoryMappingApi, content_type: &str, items: Vec<Value>, allowed: HashSet<String>, clean_existing: bool, apply_token: &str)`
 //!   (async; `create_item_router` 안의 클로저 `_run_classify_apply_job`을 밖으로 낸 것)
 //! - `#[async_trait] backend::book_manager::BookManagerApi` (모든 메서드에 기본 구현이 있다)
-//!   - `async fn get_categories(&self) -> (Value, Option<String>)`
-//!   - `async fn apply_category_changes(&self, items: &[Value], allowed: &HashSet<String>, clean_existing: bool) -> (Value, Option<String>)`
+//!   - `async fn get_categories(&self) -> Result<Value, String>`
+//!   - `async fn apply_category_changes(&self, items: &[Value], allowed: &HashSet<String>, clean_existing: bool) -> Result<Value, String>`
 //!   - `fn path_prefix(&self) -> PathBuf`, `fn es_manager(&self) -> Arc<dyn EsManagerApi>`
 //!   - `backend::es_manager::EsManagerApi`는 `book_manager`가 아니라 `es_manager` 모듈에 있다.
 //! - `backend::es_manager::{EsManagerApi, EsError}` (설계 3.3. 모든 메서드에 기본 구현이 있다)
@@ -259,33 +259,33 @@ impl BookManagerApi for MockBm {
         Ok(self.mismatch_details.lock().unwrap().clone())
     }
 
-    async fn reload_category(&self, category: &str, content_type: &str) -> (Value, Option<String>) {
-        (json!({"category":category,"content_type":content_type,"processed":3}), None)
+    async fn reload_category(&self, category: &str, content_type: &str) -> Result<Value, String> {
+        Ok(json!({"category":category,"content_type":content_type,"processed":3}))
     }
 
-    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
         if let Some(report) = on_progress {
             report(json!({"before_count":2,"indexed_count":1}));
         }
-        (json!({"content_type":content_type,"category":category,"indexed_count":1,"deleted_count":0,"failed_count":0,"before_count":2,"after_count":1}), None)
+        Ok(json!({"content_type":content_type,"category":category,"indexed_count":1,"deleted_count":0,"failed_count":0,"before_count":2,"after_count":1}))
     }
 
-    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
         if let Some(report) = on_progress {
             report(json!({"before_count":2,"indexed_count":1}));
         }
-        (json!({"content_type":content_type,"indexed_count":1,"deleted_count":0,"failed_count":0,"before_count":2,"after_count":1}), None)
+        Ok(json!({"content_type":content_type,"indexed_count":1,"deleted_count":0,"failed_count":0,"before_count":2,"after_count":1}))
     }
 
-    async fn index_single_file(&self, _file_path: &str) -> (Option<i64>, Option<String>) {
-        (Some(17), None)
+    async fn index_single_file(&self, _file_path: &str) -> Result<i64, String> {
+        Ok(17)
     }
 
-    async fn delete_file(&self, _file_path: &str) -> (String, Option<String>) {
-        ("Ok".into(), None)
+    async fn delete_file(&self, _file_path: &str) -> Result<(), String> {
+        Ok(())
     }
 
-    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> (Value, Option<String>) {
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
         if let Some(progress) = request.on_progress {
             let events = self.proposal_progress.lock().unwrap().clone();
             if events.is_empty() {
@@ -303,18 +303,20 @@ impl BookManagerApi for MockBm {
             .unwrap()
             .clone()
             .unwrap_or_else(|| json!({"source_category":"0_inbox","total_count":1,"processed_count":1,"items":[{"file_path":"0_inbox/a.epub","target_category":"3_SF"}],"failures":[]}));
-        (result, None)
+        Ok(result)
     }
 
-    async fn get_categories(&self) -> (Value, Option<String>) {
-        self.categories.lock().unwrap().clone()
+    async fn get_categories(&self) -> Result<Value, String> {
+        let (value, error) = self.categories.lock().unwrap().clone();
+        error.map_or(Ok(value), Err)
     }
 
-    async fn apply_category_changes(&self, _items: &[Value], _allowed: &HashSet<String>, _clean_existing: bool) -> (Value, Option<String>) {
-        self.apply_result.lock().unwrap().clone()
+    async fn apply_category_changes(&self, _items: &[Value], _allowed: &HashSet<String>, _clean_existing: bool) -> Result<Value, String> {
+        let (value, error) = self.apply_result.lock().unwrap().clone();
+        error.map_or(Ok(value), Err)
     }
 
-    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> (Value, Option<String>) {
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<Value, String> {
         if let Some(progress) = request.on_progress {
             progress(json!({"processed_count":request.items.len()}));
         }
@@ -326,7 +328,7 @@ impl BookManagerApi for MockBm {
             }
         }
         if request.should_continue.is_some_and(|check| !check()) {
-            return (json!({}), Some("stopped".into()));
+            return Err("stopped".into());
         }
         self.apply_category_changes(request.items, request.allowed_file_paths, request.clean_existing).await
     }

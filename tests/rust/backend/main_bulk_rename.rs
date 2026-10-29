@@ -8,10 +8,10 @@
 //!   - `AuthMode::Fixed(serde_json::Value)`: `require_auth`/`require_admin` 의존성 override에 대응한다.
 //! - `backend::book::Book { book_id: i64, category: String, author: String, file_path: PathBuf, file_type: String, .. }` (`Default + Clone`)
 //! - `#[async_trait] backend::book_manager::BookManagerApi` (모든 메서드에 기본 구현이 있다)
-//!   - `async fn get_categories(&self) -> (Value, Option<String>)`
-//!   - `async fn get_books_in_category_paged(&self, category: &str, size: Option<i64>, cursor: Option<&str>) -> (Vec<Book>, i64, Option<String>, Option<String>)`
+//!   - `async fn get_categories(&self) -> Result<Value, String>`
+//!   - `async fn get_books_in_category_paged(&self, category: &str, size: Option<i64>, cursor: Option<&str>) -> Result<BookPage, String>`
 //!     (목록, 전체 수, 다음 커서, 오류. 설계 3.2의 통일 시그니처)
-//!   - `async fn update_book(&self, book_id: i64, new_category: &str, new_title: &str, new_author: &str, new_path: &Path, new_type: &str, force: bool) -> (Value, Option<String>)`
+//!   - `async fn update_book(&self, book_id: i64, new_category: &str, new_title: &str, new_author: &str, new_path: &Path, new_type: &str, force: bool) -> Result<Value, String>`
 //!   - `fn es_manager(&self) -> Arc<dyn EsManagerApi>`
 //! - `backend::es_manager::EsManagerApi::refresh(&self) -> Result<(), EsError>` (대역은 `common::es_fake::FakeEsManager`)
 //! - `sysdeps::FsOps::read_dir`: `Path.iterdir` 실패 주입은 `common::faulty_fs::FaultyFs`를 `AppDeps::with_fs`로 넣는다.
@@ -24,7 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use backend::book::Book;
+use backend::book::{Book, BookPage};
 use backend::book_manager::BookManagerApi;
 use backend::es_manager::EsManagerApi;
 use backend::main::{AppDeps, AuthMode, app_with};
@@ -54,21 +54,22 @@ struct MockBm {
 
 #[async_trait::async_trait]
 impl BookManagerApi for MockBm {
-    async fn get_categories(&self) -> (Value, Option<String>) {
-        self.categories.lock().unwrap().clone()
+    async fn get_categories(&self) -> Result<Value, String> {
+        let (value, error) = self.categories.lock().unwrap().clone();
+        error.map_or(Ok(value), Err)
     }
 
-    async fn get_books_in_category_paged(&self, category: &str, _size: Option<i64>, _cursor: Option<&str>) -> Page {
+    async fn get_books_in_category_paged(&self, category: &str, _size: Option<i64>, _cursor: Option<&str>) -> Result<BookPage, String> {
         self.visited.lock().unwrap().push(category.to_string());
-        if let Some(page) = self.page_queue.lock().unwrap().pop_front() {
-            return page;
-        }
-        self.fixed_page.lock().unwrap().clone().unwrap_or_default()
+        let queued = self.page_queue.lock().unwrap().pop_front();
+        let (books, total, next_cursor, error) = queued.unwrap_or_else(|| self.fixed_page.lock().unwrap().clone().unwrap_or_default());
+        error.map_or(Ok(BookPage { books, total, next_cursor }), Err)
     }
 
-    async fn update_book(&self, _book_id: i64, _new_category: &str, _new_title: &str, _new_author: &str, new_path: &Path, _new_type: &str, _force: bool) -> (Value, Option<String>) {
+    async fn update_book(&self, _book_id: i64, _new_category: &str, _new_title: &str, _new_author: &str, new_path: &Path, _new_type: &str, _force: bool) -> Result<(), String> {
         self.updates.lock().unwrap().push(new_path.to_path_buf());
-        self.update_result.lock().unwrap().clone()
+        let (_, error) = self.update_result.lock().unwrap().clone();
+        error.map_or(Ok(()), Err)
     }
 
     fn es_manager(&self) -> Arc<dyn EsManagerApi> {

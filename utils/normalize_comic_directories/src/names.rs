@@ -9,6 +9,8 @@ use std::sync::LazyLock;
 use fancy_regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
+use crate::plan::SkipReason;
+
 pub const TARGET_CATEGORIES: [&str; 3] = ["3_미정리", "4_대기", "9_temp"];
 const BOOK_EXTENSIONS: [&str; 2] = ["pdf", "epub"];
 const AUTHOR_TAGS: [&str; 12] = ["만화", "comic", "코믹", "webtoon", "scan", "스캔", "스캔본", "한글", "영문", "일문", "정발", "번역"];
@@ -333,12 +335,12 @@ pub struct IdentityResult {
     pub author: Option<String>,
     pub confidence: f64,
     pub file_count: usize,
-    pub failure_status: Option<String>,
+    pub failure_status: Option<SkipReason>,
     pub failure_reason: String,
 }
 
-fn failure(status: &str, reason: String, confidence: f64, file_count: usize) -> IdentityResult {
-    IdentityResult { title: None, author: None, confidence, file_count, failure_status: Some(status.to_owned()), failure_reason: reason }
+fn failure(status: SkipReason, reason: String, confidence: f64, file_count: usize) -> IdentityResult {
+    IdentityResult { title: None, author: None, confidence, file_count, failure_status: Some(status), failure_reason: reason }
 }
 
 /// 처음 나온 순서가 앞선 쪽을 이기는 최빈값. Python `Counter.most_common(1)`과 같은 동률 처리다.
@@ -377,7 +379,7 @@ pub fn infer_identity(directory: &Path) -> IdentityResult {
             let author = most_common(parsed.iter().filter_map(|(_, a)| a.clone())).map(|(a, _)| a).or_else(|| directory_author(&dir_name));
             return IdentityResult { title: Some(fallback_title), author, confidence: 0.8, file_count: book_files.len(), failure_status: None, failure_reason: String::new() };
         }
-        let status = if book_files.len() < 2 { "SKIP_INSUFFICIENT_FILES" } else { "SKIP_UNPARSEABLE_FILENAMES" };
+        let status = if book_files.len() < 2 { SkipReason::InsufficientFiles } else { SkipReason::UnparseableFilenames };
         return failure(status, format!("book files: {}; parsed filenames: {}", book_files.len(), parsed.len()), 0.0, book_files.len());
     }
 
@@ -400,15 +402,15 @@ pub fn infer_identity(directory: &Path) -> IdentityResult {
     let matches = &groups[&best_key];
     let confidence = matches.len() as f64 / parsed.len() as f64;
     if best_key.is_empty() {
-        return failure("SKIP_UNPARSEABLE_FILENAMES", format!("book files: {}; parsed filenames: {}", book_files.len(), parsed.len()), confidence, book_files.len());
+        return failure(SkipReason::UnparseableFilenames, format!("book files: {}; parsed filenames: {}", book_files.len(), parsed.len()), confidence, book_files.len());
     }
     if confidence < 0.6 {
-        return failure("SKIP_AMBIGUOUS_FILE_TITLES", format!("dominant filename title: {}/{}", matches.len(), parsed.len()), confidence, book_files.len());
+        return failure(SkipReason::AmbiguousFileTitles, format!("dominant filename title: {}/{}", matches.len(), parsed.len()), confidence, book_files.len());
     }
     let title = most_common(matches.iter().map(|m| m.0.clone())).map(|(t, _)| t).unwrap_or_default();
     let current_title = directory_title(&dir_name);
     if !titles_equivalent(&title, &current_title) {
-        return failure("SKIP_TITLE_MISMATCH", format!("filename title: {title}; directory title: {current_title}"), confidence, book_files.len());
+        return failure(SkipReason::TitleMismatch, format!("filename title: {title}; directory title: {current_title}"), confidence, book_files.len());
     }
     let mut author = None;
     if let Some((a, count)) = most_common(matches.iter().filter_map(|m| m.1.clone()))

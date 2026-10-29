@@ -15,7 +15,7 @@ use parser_timeout::run_with_hard_timeout;
 use stat::Stat;
 
 use crate::config::Config;
-use crate::flow::{FILE_ARGUMENT_BATCH_SIZE, Loader, ProcessHooks, direct_files, recursive_files, sample_files};
+use crate::flow::{FILE_ARGUMENT_BATCH_SIZE, Loader, ProcessHooks, direct_files, recursive_files_with_unreadable, sample_files};
 use crate::record::ReadOutcome;
 
 pub type ReadFileHook<'a> = dyn Fn(&Path, Option<&Metadata>, bool) -> ReadOutcome + Sync + 'a;
@@ -434,7 +434,7 @@ pub fn run_with_hooks(program: &str, args: &[String], world: &World, out: &mut d
         flush_or_fail!(&mut pending, out);
 
         if options.recursive {
-            let files = recursive_files(&target);
+            let (files, unreadable) = recursive_files_with_unreadable(&target);
             let mut seen: Option<HashSet<i64>> = options.reload.then(HashSet::new);
             let (processed, skipped, synced) = process_batch_or_fail!(loader.process_file_iter_with_hooks(out, files, options.reload, skip_text, seen.as_mut(), &process_hooks));
             let _ = writeln!(out, "  총 {processed}개 파일 처리됨");
@@ -445,18 +445,39 @@ pub fn run_with_hooks(program: &str, args: &[String], world: &World, out: &mut d
                 let _ = writeln!(out, "  총 {synced}개 경로 동기화");
             }
             // --reload: 대상 경로 아래에서 디스크에 더 이상 없는 고아 레코드를 지운다.
-            if let Some(seen) = seen {
+            // 읽지 못한 디렉토리의 책은 seen에 없어서 orphan으로 잘못 지워진다.
+            if seen.is_some() && !unreadable.is_empty() {
+                let _ = writeln!(out, "  [orphan 삭제 건너뜀] 읽지 못한 디렉토리 {}개:", unreadable.len());
+                for path in &unreadable {
+                    let _ = writeln!(out, "    {}", path.display());
+                }
+            } else if let Some(seen) = seen {
                 let prefix = cfg.path_prefix(&target);
                 let rel = target.strip_prefix(prefix).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
                 refresh_or_fail!(es.refresh()); // 방금 넣은 문서가 scroll에 잡히도록
-                let existing = es.get_doc_ids_by_path_prefix(&rel);
-                let mut orphans: Vec<i64> = existing.difference(&seen).copied().collect();
-                orphans.sort_unstable();
-                if orphans.is_empty() {
-                    let _ = writeln!(out, "  orphan 없음 (삭제할 예전 레코드 없음)");
-                } else {
-                    let deleted = es.delete_by_ids(&orphans);
-                    let _ = writeln!(out, "  [orphan 삭제: {deleted}개] (디스크에서 사라진 예전 레코드, 경로: {rel})");
+                match es.get_doc_ids_by_path_prefix(&rel) {
+                    // 조회가 실패하면 "orphan 없음"으로 보고하지 않는다.
+                    Err(e) => {
+                        eprintln!("ERROR get_doc_ids_by_path_prefix error: {e}");
+                        let _ = writeln!(out, "  [orphan 삭제 건너뜀] 기존 레코드 조회 실패");
+                    }
+                    Ok(existing) => {
+                        let mut orphans: Vec<i64> = existing.difference(&seen).copied().collect();
+                        orphans.sort_unstable();
+                        if orphans.is_empty() {
+                            let _ = writeln!(out, "  orphan 없음 (삭제할 예전 레코드 없음)");
+                        } else {
+                            match es.delete_by_ids(&orphans) {
+                                Ok(deleted) => {
+                                    let _ = writeln!(out, "  [orphan 삭제: {deleted}개] (디스크에서 사라진 예전 레코드, 경로: {rel})");
+                                }
+                                Err(e) => {
+                                    eprintln!("ERROR delete_by_ids error: {e}");
+                                    let _ = writeln!(out, "  [orphan 삭제 실패] 일부만 지워졌을 수 있음 (경로: {rel})");
+                                }
+                            }
+                        }
+                    }
                 }
             }
         } else {

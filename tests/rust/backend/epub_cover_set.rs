@@ -21,12 +21,12 @@
 //! - `backend::book_manager::{BookManager, BookManagerDeps, BookManagerApi, BookRef, BookLookup}`
 //!   `BookRef { book_id: i64, file_path: PathBuf, file_type: String }` (`Clone`)
 //!   `BookManager::with_deps(BookManagerDeps::new(path_prefix, es).with_trash_dirname(&str).with_book_lookup(Arc<dyn BookLookup>).with_image_fetcher(Arc<dyn ImageFetcher>))` (구 `BookManagerDeps { .. }` 리터럴)
-//!   `BookManagerApi::set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>)` (async)
-//!   `BookManagerApi::remove_epub_cover(&self, book_id: i64) -> (Option<Value>, Option<String>)` (async)
-//!   `BookManagerApi::insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>)` (async)
+//!   `BookManagerApi::set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String>` (async)
+//!   `BookManagerApi::remove_epub_cover(&self, book_id: i64) -> Result<Value, String>` (async)
+//!   `BookManagerApi::insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String>` (async)
 //!   (구 `EpubCoverApi`를 `BookManagerApi`에 합쳤다. 모든 메서드에 기본 구현이 있어 fake는 쓰는 메서드만 구현한다)
 //!   `BookManager::find_epub_cover_member(archive: &mut ZipArchive<File>) -> Option<String>`
-//!   `trait BookLookup { async fn get_book(&self, book_id: i64) -> (Option<BookRef>, Option<String>) }` (`async_trait`)
+//!   `trait BookLookup { async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> }` (`async_trait`)
 //! - `backend::direct_cover_url::{ImageFetcher, FetchError}`: `trait ImageFetcher: Send + Sync { fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError>; }`, `enum FetchError { Value(String), Os(String), Other(String) }`
 //! - `backend::es_manager::EsManagerApi::update(&self, doc_id: i64, fields: &Value) -> Result<bool, EsError>` (`common::es_fake::FakeEsManager`가 구현한다)
 //! - `backend::main::{app_with, AppDeps, AuthMode}`: `AppDeps::new(AuthMode::Fixed(Value)).with_book_manager(Arc<dyn BookManagerApi>) -> AppDeps`, `app_with(deps) -> axum::Router`
@@ -43,6 +43,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use backend::book::BookLookupError;
 use backend::book_manager::{BookLookup, BookManager, BookManagerApi, BookManagerDeps, BookRef};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover::{self, CoverError, EpubCoverHooks, Limits};
@@ -195,8 +196,12 @@ impl FakeBooks {
 
 #[async_trait::async_trait]
 impl BookLookup for FakeBooks {
-    async fn get_book(&self, _book_id: i64) -> (Option<BookRef>, Option<String>) {
-        self.0.lock().unwrap().clone()
+    async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> {
+        match self.0.lock().unwrap().clone() {
+            (Some(book), _) => Ok(book),
+            (None, Some(error)) => Err(BookLookupError::Failed(error)),
+            (None, None) => Err(BookLookupError::NotFound(book_id)),
+        }
     }
 }
 
@@ -227,19 +232,19 @@ impl Env {
     }
 
     async fn call(&self, url: &str) -> (Option<Value>, Option<String>) {
-        self.manager.set_epub_cover(1, Some(url), None).await
+        split(self.manager.set_epub_cover(1, Some(url), None).await)
     }
 
     async fn upload(&self, image_data: &str) -> (Option<Value>, Option<String>) {
-        self.manager.set_epub_cover(1, None, Some(image_data)).await
+        split(self.manager.set_epub_cover(1, None, Some(image_data)).await)
     }
 
     async fn remove(&self) -> (Option<Value>, Option<String>) {
-        self.manager.remove_epub_cover(1).await
+        split(self.manager.remove_epub_cover(1).await)
     }
 
     async fn illustrate(&self, before: &str) -> (Option<Value>, Option<String>) {
-        self.manager.insert_epub_illustration(1, before, Some(URL), None).await
+        split(self.manager.insert_epub_illustration(1, before, Some(URL), None).await)
     }
 
     fn size(&self) -> u64 {
@@ -248,6 +253,14 @@ impl Env {
 }
 
 /// `"x" in error`: error가 None이면 Python은 TypeError로 실패한다.
+/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+fn split(result: Result<Value, String>) -> (Option<Value>, Option<String>) {
+    match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    }
+}
+
 fn err_has(error: &Option<String>, needle: &str) -> bool {
     error.as_deref().unwrap_or_else(|| panic!("error가 None이다 (기대: {needle:?} 포함)")).contains(needle)
 }
@@ -301,7 +314,7 @@ async fn test_resolves_the_book_from_elasticsearch_without_a_lookup_override() {
     })));
     let manager = BookManager::with_deps(BookManagerDeps::new(env.dir().to_path_buf(), env.es.clone()).with_trash_dirname("0_trash").with_image_fetcher(env.fetcher.clone()));
 
-    let (result, error) = manager.set_epub_cover(1, Some(URL), None).await;
+    let (result, error) = split(manager.set_epub_cover(1, Some(URL), None).await);
 
     assert!(error.is_none());
     assert!(result.is_some());
@@ -697,7 +710,7 @@ async fn test_illustration_from_an_uploaded_image_needs_no_download() {
     let env = env();
     env.fetcher.set(|_| panic!("다운로드 금지"));
 
-    let (_, error) = env.manager.insert_epub_illustration(1, "chapter", None, Some(&b64(&color_jpeg("blue")))).await;
+    let (_, error) = split(env.manager.insert_epub_illustration(1, "chapter", None, Some(&b64(&color_jpeg("blue")))).await);
 
     assert!(error.is_none());
     assert!(spine_idrefs(&env.path)[0].starts_with("tm-plate-page-"));
@@ -708,7 +721,7 @@ async fn test_illustration_requires_an_image_source() {
     let env = env();
     let before = fs::read(&env.path).unwrap();
 
-    let (result, error) = env.manager.insert_epub_illustration(1, "chapter", Some("  "), None).await;
+    let (result, error) = split(env.manager.insert_epub_illustration(1, "chapter", Some("  "), None).await);
 
     assert!(result.is_none() && err_truthy(&error));
     assert_eq!(fs::read(&env.path).unwrap(), before);
@@ -939,19 +952,22 @@ impl FakeBookManager {
 
 #[async_trait::async_trait]
 impl BookManagerApi for FakeBookManager {
-    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Outcome {
+    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
         self.calls.lock().unwrap().push(FakeCall::SetCover(book_id, url.map(String::from), image_data.map(String::from)));
-        self.set_epub_cover.lock().unwrap().clone()
+        let (value, error) = self.set_epub_cover.lock().unwrap().clone();
+        error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 
-    async fn remove_epub_cover(&self, book_id: i64) -> Outcome {
+    async fn remove_epub_cover(&self, book_id: i64) -> Result<Value, String> {
         self.calls.lock().unwrap().push(FakeCall::RemoveCover(book_id));
-        self.remove_epub_cover.lock().unwrap().clone()
+        let (value, error) = self.remove_epub_cover.lock().unwrap().clone();
+        error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 
-    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Outcome {
+    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
         self.calls.lock().unwrap().push(FakeCall::Illustrate(book_id, before_idref.to_string(), url.map(String::from), image_data.map(String::from)));
-        self.insert_epub_illustration.lock().unwrap().clone()
+        let (value, error) = self.insert_epub_illustration.lock().unwrap().clone();
+        error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 }
 
@@ -1066,7 +1082,7 @@ async fn test_adds_a_cover_from_an_uploaded_image_without_fetching() {
     let env = env();
     env.fetcher.set(|_| panic!("올린 이미지는 URL 을 내려받지 않는다"));
 
-    let (result, error) = env.manager.set_epub_cover(1, None, Some(&b64(&color_jpeg("red")))).await;
+    let (result, error) = split(env.manager.set_epub_cover(1, None, Some(&b64(&color_jpeg("red")))).await);
 
     assert!(error.is_none());
     assert!(has_cover(&env.path));
@@ -1109,7 +1125,7 @@ async fn test_without_url_or_image_data_nothing_is_changed() {
     let env = env();
     let original = fs::read(&env.path).unwrap();
 
-    let (result, error) = env.manager.set_epub_cover(1, None, None).await;
+    let (result, error) = split(env.manager.set_epub_cover(1, None, None).await);
 
     assert!(result.is_none() && err_has(&error, "비어"));
     assert_eq!(fs::read(&env.path).unwrap(), original);

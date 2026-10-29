@@ -13,25 +13,28 @@ use crate::main::{TaskHandle, TaskRunner, ThreadRunner};
 use crate::pdf::{PageCountCache, PdfCacheLimits, PdfError, PdfReaderCache, PdfReaderHandle};
 use std::os::unix::fs::MetadataExt;
 
-/// `BookManager`가 내는 오류. Python `RuntimeError`에 대응한다.
+/// 문서 색인 실패. 이동·삭제 롤백은 두 경우를 다른 문구로 보고한다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BookManagerError {
-    Runtime(String),
+pub enum AddBookError {
+    /// ES 호출 자체가 실패했다(Python에서는 예외가 올라가던 경우).
+    Exception(String),
+    /// ES는 응답했지만 문서 하나를 넣지 못했다.
+    Rejected(String),
 }
 
-impl fmt::Display for BookManagerError {
+impl fmt::Display for AddBookError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BookManagerError::Runtime(message) => f.write_str(message),
+            AddBookError::Exception(message) | AddBookError::Rejected(message) => f.write_str(message),
         }
     }
 }
 
-impl std::error::Error for BookManagerError {}
+impl std::error::Error for AddBookError {}
 
 /// 문서 색인(`add_book`)을 통째로 바꾸는 대역. 이동 롤백처럼 ES 색인이 실패하는 경로를 시험할 때 쓴다(구 `override_add_book`).
 pub trait BookAdder: Send + Sync {
-    fn add_book(&self) -> Result<(Option<i64>, Option<String>), BookManagerError>;
+    fn add_book(&self) -> Result<i64, AddBookError>;
 }
 
 /// created_time 백필 스레드. 구 `threading.Thread` 대역.
@@ -42,7 +45,7 @@ pub trait BackfillThread: Send + Sync {
     fn join(&self, _timeout: Duration) {}
 }
 
-pub type PreviewEpubValidator = Arc<dyn Fn(&Path) -> (bool, String) + Send + Sync>;
+pub type PreviewEpubValidator = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
 pub type PathIsRelativeTo = Arc<dyn Fn(&Path, &Path) -> io::Result<bool> + Send + Sync>;
 /// 카테고리 이름 검사를 바꾼다. 둘째 인자는 원래 검사다. `Err`는 검사 중 파일시스템 오류다.
 pub type CategoryNameCheck = Arc<dyn Fn(&str, &dyn Fn(&str) -> bool) -> io::Result<bool> + Send + Sync>;
@@ -52,7 +55,7 @@ pub type DownscaleHook = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 /// 파일별 분류 제안 대체. `Err`는 그 파일의 제안 실패다.
 pub type ProposeHook = Arc<dyn Fn(&Path) -> Result<serde_json::Value, String> + Send + Sync>;
 /// 파일 이동 대체. 인자는 (원본 경로, 목적지 카테고리). 반환은 `_move_classified_file`과 같다.
-pub type MoveHook = Arc<dyn Fn(&Path, &str) -> (Option<serde_json::Value>, Option<String>) + Send + Sync>;
+pub type MoveHook = Arc<dyn Fn(&Path, &str) -> Result<serde_json::Value, String> + Send + Sync>;
 /// 여러 파일 색인 대체. 인자는 (상대 경로 목록, clean_existing). 반환은 (경로 -> 새 book_id, 실패 목록).
 pub type BulkIndexHook = Arc<dyn Fn(&[String], bool) -> (std::collections::BTreeMap<String, i64>, Vec<serde_json::Value>) + Send + Sync>;
 

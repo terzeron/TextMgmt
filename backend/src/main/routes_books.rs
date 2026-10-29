@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::body::{Body, Bytes};
 use axum::extract::{OriginalUri, Path, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, Uri};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -16,6 +16,7 @@ use super::errors::{ApiError, ApiResult, RequestValidationError};
 use super::extract::{ApiQuery, RequireAuth};
 use super::routes::Routes;
 use super::traits::{BookContent, BookManagerApi, BookResponse, MappingError};
+use crate::book::BookLookupError;
 use crate::book_manager::BookManager;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio::sync::mpsc;
@@ -193,30 +194,80 @@ pub(super) fn routes() -> Routes {
 }
 
 pub(super) fn parse_book_id(raw: &str) -> ApiResult<i64> {
-    raw.trim().parse().map_err(|_| RequestValidationError::single(&["path", "book_id"], "Input should be a valid integer", json!(raw)).into())
+    raw.trim().parse().map_err(|_| RequestValidationError::single(&["path", "book_id"], "Input should be a valid integer, unable to parse string as an integer", json!(raw)).into())
+}
+
+/// 미리보기·쪽 추출은 LibreOffice 변환, EPUB 재압축, PDF 로드처럼 오래 막는 일을 한다.
+/// tokio worker를 묶으면 다른 API가 멈추므로 blocking 스레드에서 돌린다.
+pub(super) async fn run_blocking<T: Send + 'static>(work: impl Future<Output = T> + Send + 'static) -> ApiResult<T> {
+    let handle = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || handle.block_on(work)).await.map_err(|e| ApiError::Internal(format!("blocking task failed: {e}")))
+}
+
+/// 경로로 도서와 만화를 가른다. 카테고리 정책과 ES가 쓰는 종류 이름이다.
+fn kind(uri: &Uri) -> &'static str {
+    if uri.path().starts_with("/comics/") { "comic" } else { "book" }
+}
+
+fn manager(deps: &AppDeps, uri: &Uri) -> ApiResult<Arc<dyn BookManagerApi>> {
+    manager_for(deps, kind(uri) == "comic")
+}
+
+fn manager_for(deps: &AppDeps, comics: bool) -> ApiResult<Arc<dyn BookManagerApi>> {
+    if comics { deps.comics_manager() } else { deps.book_manager() }.map_err(|e| {
+        log::warn!("도서 관리자를 쓸 수 없다: {e}");
+        ApiError::unavailable()
+    })
+}
+
+impl From<MappingError> for ApiError {
+    fn from(error: MappingError) -> Self {
+        match error {
+            MappingError::Http(status, detail) => ApiError::http(status, &detail),
+            MappingError::Other(message) => ApiError::Internal(message),
+        }
+    }
+}
+
+fn is_viewer(payload: &Value) -> bool {
+    payload.get("role").and_then(Value::as_str) == Some("viewer")
+}
+
+/// viewer에게 숨긴 카테고리. viewer가 아니면 비어 있다.
+fn hidden_categories(deps: &AppDeps, payload: &Value, comics: bool) -> ApiResult<Vec<String>> {
+    if !is_viewer(payload) {
+        return Ok(Vec::new());
+    }
+    let mapping = deps.category_mapping().map_err(|e| {
+        log::warn!("카테고리 접근 정책을 읽을 수 없다: {e}");
+        ApiError::unavailable()
+    })?;
+    Ok(mapping.get_hidden_categories(if comics { "comic" } else { "book" })?)
+}
+
+/// 카테고리가 숨긴 카테고리이거나 그 하위면 참이다. 모든 viewer 접근 검사가 이 판정 하나를 쓴다.
+pub(super) fn is_hidden(category: &str, hidden: &[String]) -> bool {
+    !category.is_empty() && hidden.iter().any(|h| category == h || category.strip_prefix(h.as_str()).is_some_and(|rest| rest.starts_with('/')))
+}
+
+fn ensure_allowed(category: &str, hidden: &[String]) -> ApiResult<()> {
+    if is_hidden(category, hidden) { Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다.")) } else { Ok(()) }
 }
 
 /// viewer는 카테고리 정책을 확인한 뒤 파일을 읽는다. admin은 조회 제한을 받지 않는다.
 pub(super) async fn checked_manager(deps: &AppDeps, payload: &Value, book_id: i64, comics: bool) -> ApiResult<Arc<dyn BookManagerApi>> {
-    let manager = if comics { deps.comics_manager() } else { deps.book_manager() }.map_err(|e| {
-        log::warn!("도서 관리자를 쓸 수 없다: {e}");
-        ApiError::unavailable()
-    })?;
-    if payload.get("role").and_then(Value::as_str) == Some("viewer") {
-        let (book, _) = manager.get_book(book_id).await;
-        if let Some(book) = book {
-            let mapping = deps.category_mapping().map_err(|e| {
-                log::warn!("카테고리 접근 정책을 읽을 수 없다: {e}");
-                ApiError::unavailable()
-            })?;
-            let hidden = mapping.get_hidden_categories(if comics { "comic" } else { "book" }).map_err(|e| match e {
-                MappingError::Http(status, detail) => ApiError::http(status, &detail),
-                MappingError::Other(message) => ApiError::Internal(message),
-            })?;
-            if !book.category.is_empty() && hidden.iter().any(|category| book.category == *category || book.category.starts_with(&format!("{category}/"))) {
-                return Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다."));
+    let manager = manager_for(deps, comics)?;
+    if is_viewer(payload) {
+        // 카테고리를 모르면 숨김 여부를 판정할 수 없다. 통과시키지 않고 거절한다(fail-closed).
+        let book = match manager.get_book(book_id).await {
+            Ok(book) => book,
+            Err(BookLookupError::NotFound(_)) => return Err(ApiError::http(404, &format!("Book not found: {book_id}"))),
+            Err(error) => {
+                log::warn!("viewer 접근 확인 중 도서를 조회하지 못했다: book_id={book_id}, {error}");
+                return Err(ApiError::unavailable());
             }
-        }
+        };
+        ensure_allowed(&book.category, &hidden_categories(deps, payload, comics)?)?;
     }
     Ok(manager)
 }
@@ -249,7 +300,7 @@ async fn preview(
     let comics = uri.path().starts_with("/comics/");
     let manager = checked_manager(&deps, &payload, book_id, comics).await?;
     let base = format!("{}/html-resource/{book_id}", if comics { "/comics" } else { "" });
-    book_response(manager.get_book_preview_with_pages(book_id, query.pages, query.chapters, Some(&base)).await)
+    book_response(run_blocking(async move { manager.get_book_preview_with_pages(book_id, query.pages, query.chapters, Some(&base)).await }).await?)
 }
 
 async fn download(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, Path(raw_id): Path<String>, OriginalUri(uri): OriginalUri, request_headers: HeaderMap) -> ApiResult<Response> {
@@ -338,21 +389,53 @@ async fn html_resource(
 ) -> ApiResult<Response> {
     let book_id = parse_book_id(&raw_id)?;
     let manager = checked_manager(&deps, &payload, book_id, uri.path().starts_with("/comics/")).await?;
-    book_response(manager.get_html_resource(book_id, &query.path).await)
+    book_response(run_blocking(async move { manager.get_html_resource(book_id, &query.path).await }).await?)
 }
 
 async fn validate(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, Path(raw_id): Path<String>, OriginalUri(uri): OriginalUri) -> ApiResult<Json<Value>> {
     let book_id = parse_book_id(&raw_id)?;
     let manager = checked_manager(&deps, &payload, book_id, uri.path().starts_with("/comics/")).await?;
-    let (book, _) = manager.get_book(book_id).await;
-    let Some(book) = book else { return Ok(Json(json!({"status":"failure", "error":format!("Book not found: {book_id}")}))) };
-    let (result, error) = match book.file_type.as_str() {
+    let Ok(book) = manager.get_book(book_id).await else { return Ok(Json(json!({"status":"failure", "error":format!("Book not found: {book_id}")}))) };
+    let validated = match book.file_type.as_str() {
         "epub" => manager.validate_epub(book_id).await,
         "pdf" => manager.validate_pdf(book_id).await,
         _ => return Ok(Json(json!({"status":"failure", "error":format!("Validation not supported for type: {}", book.file_type)}))),
     };
-    Ok(Json(match (result, error) {
-        (Some(result), None) => json!({"status":"success", "result":result}),
-        (_, error) => json!({"status":"failure", "error":error}),
+    Ok(Json(match validated {
+        Ok(result) => json!({"status":"success", "result":result}),
+        Err(error) => json!({"status":"failure", "error":error}),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::{is_hidden, run_blocking};
+
+    #[test]
+    fn is_hidden_matches_the_category_and_its_descendants_only() {
+        let hidden = vec!["A".to_string()];
+        assert!(is_hidden("A", &hidden));
+        assert!(is_hidden("A/b/c", &hidden));
+        assert!(!is_hidden("AB", &hidden), "이름이 같은 접두어인 형제 카테고리는 숨기지 않는다");
+        assert!(!is_hidden("", &hidden));
+        assert!(!is_hidden("A", &[]));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn run_blocking_keeps_the_worker_free() {
+        // worker가 하나뿐이어도 느린 미리보기가 다른 요청을 막지 않아야 한다.
+        let (started, wait_started) = tokio::sync::oneshot::channel();
+        let slow = tokio::spawn(run_blocking(async move {
+            let _ = started.send(());
+            std::thread::sleep(Duration::from_millis(500));
+            7
+        }));
+        wait_started.await.unwrap();
+        let start = Instant::now();
+        tokio::spawn(async { 1 }).await.unwrap();
+        assert!(start.elapsed() < Duration::from_millis(200), "{:?}", start.elapsed());
+        assert_eq!(slow.await.unwrap().unwrap(), 7);
+    }
 }

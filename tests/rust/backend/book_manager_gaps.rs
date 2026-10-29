@@ -17,17 +17,17 @@
 //!   `_fill_second_with_bookstore(Vec<Value>, &[(String, i64)]) -> Vec<Value>`,
 //!   `_build_candidates(Option<..>, &str, Option<..>, &[(String, i64)]) -> Vec<Value>`,
 //!   `_normalize_stored_file_path(&str) -> String`
-//! - `async manager.propose_category_changes(&str, ProposeOpts) -> (Value, Option<String>)`
-//! - `async manager.apply_category_changes(&[Value], &HashSet<String>, ApplyOpts) -> (Value, Option<String>)`
-//! - `async manager._move_classified_file(&Path, &str, &str, MoveOpts) -> (Option<Value>, Option<String>)`
+//! - `async manager.propose_category_changes(&str, ProposeOpts) -> Result<Value, String>`
+//! - `async manager.apply_category_changes(&[Value], &HashSet<String>, ApplyOpts) -> Result<Value, String>`
+//! - `async manager._move_classified_file(&Path, &str, &str, MoveOpts) -> Result<Value, String>`
 //! - `manager._iter_category_indexable_files(&str) -> Vec<PathBuf>`, `BookManager::_is_duplicate_content(&Path, &Path) -> bool`,
 //!   `BookManager::_next_numbered_path(&Path) -> Option<PathBuf>`
-//! - `manager.get_category_mismatches(force_refresh: bool) -> Value`, `async manager._reload_root_files() -> (Value, Option<String>)`
+//! - `manager.get_category_mismatches(force_refresh: bool) -> Value`, `async manager._reload_root_files() -> Result<Value, String>`
 //! - `BookManager::_find_epub_cover_member(&mut ZipArchive<File>) -> Option<String>`, `_is_mostly_blank_cover(&DynamicImage) -> bool`,
 //!   `_extract_cover_thumbnail(&Path, &str, Option<u32>) -> Option<Vec<u8>>`, `BookManager::COVER_ASPECT_RATIO: f64`
 //! - `async manager.get_cover(i64, None) -> BookResponse`, `async BookManagerApi::get_book_preview(&manager, i64, Some(chapters), None) -> BookResponse`
 //!   (`BookResponse { status_code: u16, body: Vec<u8> }`. 구 `PreviewResponse { status_code, path }`의 파일 내용은 `body`에 담긴다고 가정한다)
-//! - `async manager.get_cover_books_paged(CoverPageOpts) -> (Vec<(Book, String)>, usize, Option<String>, Option<String>)`
+//! - `async manager.get_cover_books_paged(CoverPageOpts) -> Result<CoverPage, String>`
 //! - `backend::book_manager::{encode_category_cursor(&Value) -> String, MAX_CATEGORY_PAGE_SIZE: usize}`
 //!
 //! TODO(common): 로컬 정의 `FnFileReader`(FileReader 대역), `CoverEs`(`FakeEsManager`에 커버 목록 메서드가 없다), `StubService`(`BookClassifierApi` 대역).
@@ -41,7 +41,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use backend::book::Book;
-use backend::book_manager::{ApplyOptions, BookManager, BookManagerDeps, CoverPageOpts, FileReader, MAX_CATEGORY_PAGE_SIZE, MoveOpts, ProposeOptions, encode_category_cursor};
+use backend::book_manager::{ApplyOptions, BookManager, BookManagerDeps, CoverPage, CoverPageOpts, FileReader, MAX_CATEGORY_PAGE_SIZE, MoveOpts, ProposeOptions, encode_category_cursor};
 use backend::classifier::BookClassifierApi;
 use backend::es_manager::{EsError, EsManagerApi};
 use backend::main::BookManagerApi;
@@ -52,6 +52,22 @@ use common::zipx::{open_zip, write_zip};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use zip::ZipArchive;
+
+/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+    match result {
+        Ok(value) => (Some(value), None),
+        Err(error) => (None, Some(error)),
+    }
+}
+
+/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
+fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
+    match result {
+        Ok(value) => (value, None),
+        Err(error) => (serde_json::json!({}), Some(error)),
+    }
+}
 
 fn category_with_files(root: &Path, category: &str, names: &[&str]) {
     fs::create_dir_all(root.join(category)).unwrap();
@@ -269,7 +285,7 @@ fn test_vote_count_defaults_to_one_when_category_has_no_votes() {
 async fn test_propose_rejects_unsafe_category_name() {
     let tmp = TempDir::new().unwrap();
     let manager = make_manager(tmp.path(), FakeEsManager::new());
-    let (result, err) = manager.propose_category_changes("../밖", None, Default::default()).await;
+    let (result, err) = outcome(manager.propose_category_changes("../밖", None, Default::default()).await);
     assert_eq!(result, json!({}));
     assert_eq!(err.as_deref(), Some("잘못된 카테고리 경로입니다"));
 }
@@ -293,9 +309,8 @@ async fn test_propose_awaits_async_progress_callback_and_records_failures() {
     let on_progress = move |payload: Value| sink.lock().unwrap().push(payload);
     let opts = ProposeOptions { content_type: Some("book"), delay: Some(0.0), use_bookstore: Some(false), use_content_meta: Some(false), on_progress: Some(&on_progress) };
 
-    let (result, err) = manager.propose_category_changes("A", None, opts).await;
+    let result = manager.propose_category_changes("A", None, opts).await.unwrap();
 
-    assert_eq!(err, None);
     let titles: Vec<&str> = result["items"].as_array().unwrap().iter().map(|i| i["title"].as_str().unwrap()).collect();
     assert_eq!(titles, vec!["ok"]);
     assert_eq!(result["failures"], json!([{"file_path": "A/bad.txt", "error": "분류 제안에 실패했습니다"}]));
@@ -313,7 +328,7 @@ async fn test_apply_awaits_async_callbacks() {
     let progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
 
     // 가정한 seam(문서 3.12에 없음. 3.0 규칙대로 Deps 빌더로 옮겼다): 파일 이동 함수를 교체하는 훅
-    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| (Some(json!({"status": "moved"})), None)));
+    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| Ok(json!({"status": "moved"}))));
     let manager = BookManager::with_deps(deps);
     let (done_sink, progress_sink) = (done.clone(), progress.clone());
     // 콜백은 동기 함수다(Python은 코루틴도 받는다).
@@ -323,9 +338,8 @@ async fn test_apply_awaits_async_callbacks() {
     let opts = ApplyOptions { should_continue: Some(&should_continue), on_item_done: Some(&on_item_done), on_progress: Some(&on_progress), ..Default::default() };
     let allowed: HashSet<String> = ["1_A/a.txt".to_string()].into();
 
-    let (result, err) = manager.apply_category_changes_with(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, opts).await;
+    let result = manager.apply_category_changes_with(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, opts).await.unwrap();
 
-    assert_eq!(err, None);
     assert_eq!(result["applied_count"], 1);
     assert_eq!(*done.lock().unwrap(), vec!["moving", "moved"]);
     assert_eq!(*progress.lock().unwrap(), vec![json!({"apply_total_count": 1, "applied_count": 1, "failed_count": 0})]);
@@ -338,11 +352,11 @@ async fn test_apply_records_move_error_as_failed() {
     fs::create_dir(tmp.path().join("2_B")).unwrap();
 
     // 가정한 seam(문서 3.12에 없음. 3.0 규칙대로 Deps 빌더로 옮겼다): 파일 이동 함수를 교체하는 훅
-    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| (None, Some("이동 실패".to_string()))));
+    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| Err("이동 실패".to_string())));
     let manager = BookManager::with_deps(deps);
     let allowed: HashSet<String> = ["1_A/a.txt".to_string()].into();
 
-    let (result, _) = manager.apply_category_changes(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, Default::default()).await;
+    let (result, _) = outcome(manager.apply_category_changes(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, Default::default()).await);
 
     assert_eq!(result["failed_count"], 1);
     assert_eq!(result["results"][0]["apply_error"], "이동 실패");
@@ -360,7 +374,7 @@ async fn test_apply_rejects_file_when_resolve_raises_oserror() {
     let manager = BookManager::with_deps(make_deps(tmp.path(), FakeEsManager::new()).with_fs(fs_ops));
     let allowed: HashSet<String> = ["1_A/a.txt".to_string()].into();
 
-    let (result, _) = manager.apply_category_changes(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, Default::default()).await;
+    let (result, _) = outcome(manager.apply_category_changes(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, Default::default()).await);
 
     assert_eq!(result["results"][0]["apply_error"], "파일 경로가 corpus 밖입니다");
     assert!(tmp.path().join("1_A").join("a.txt").exists());
@@ -414,7 +428,7 @@ async fn test_move_reports_when_numbered_names_are_exhausted() {
     category_with_files(tmp.path(), "B", &["book.txt", "book (1).txt"]);
     fs::write(tmp.path().join("A").join("book.txt"), "다른 내용입니다").unwrap();
 
-    let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", Default::default()).await;
+    let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", Default::default()).await);
 
     assert!(result.is_none());
     assert!(err.unwrap().contains("너무 많습니다"));
@@ -429,7 +443,7 @@ async fn test_move_removes_identical_duplicate_when_clean_existing() {
     category_with_files(tmp.path(), "B", &["book.txt"]);
 
     let opts = MoveOpts { clean_existing: true, source_category: Some("A".to_string()), ..Default::default() };
-    let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await;
+    let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
 
     assert_eq!(err, None);
     assert_eq!(result.unwrap()["status"], "duplicate_cleaned");
@@ -449,7 +463,7 @@ async fn test_move_reports_duplicate_cleanup_failure() {
     let manager = BookManager::with_deps(make_deps(tmp.path(), FakeEsManager::new()).with_fs(fs_ops));
 
     let opts = MoveOpts { clean_existing: true, ..Default::default() };
-    let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await;
+    let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
 
     assert!(result.is_none());
     assert!(err.unwrap().starts_with("중복 파일 정리 실패"));
@@ -463,7 +477,7 @@ async fn test_move_dry_run_reports_plain_move_without_touching_files() {
     fs::create_dir(tmp.path().join("B")).unwrap();
 
     let opts = MoveOpts { dry_run: true, ..Default::default() };
-    let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await;
+    let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
 
     assert_eq!(err, None);
     assert_eq!(result.unwrap()["action"], "move");
@@ -478,7 +492,7 @@ async fn test_move_rolls_back_when_loader_returns_no_single_document() {
     category_with_files(tmp.path(), "A", &["book.txt"]);
     fs::create_dir(tmp.path().join("B")).unwrap();
 
-    let (result, err) = manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", Default::default()).await;
+    let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", Default::default()).await);
 
     assert!(result.is_none());
     assert!(err.unwrap().contains("지원하지 않는 파일 형식"));
@@ -510,7 +524,7 @@ async fn test_reload_root_files_reports_unreadable_root() {
     fs_ops.set_read_dir(|_p: &Path| Some(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "읽기 거부")));
     let manager = BookManager::with_deps(make_deps(tmp.path(), FakeEsManager::new()).with_fs(fs_ops));
 
-    let (result, err) = manager._reload_root_files().await;
+    let (result, err) = outcome(manager._reload_root_files().await);
 
     assert_eq!(result, json!({}));
     assert!(err.unwrap().contains("최상위 디렉토리를 읽을 수 없습니다"));
@@ -527,7 +541,7 @@ async fn test_reload_root_files_reports_refresh_and_batch_failures() {
     let deps = make_deps(tmp.path(), es).with_bulk_index_files_hook(Arc::new(|_names: &[String], _clean_existing: bool| (std::collections::BTreeMap::new(), vec![json!({"error": "색인 실패"})])));
     let manager = BookManager::with_deps(deps);
 
-    let (result, err) = manager._reload_root_files().await;
+    let (result, err) = outcome(manager._reload_root_files().await);
 
     assert_eq!(result, json!({}));
     assert_eq!(err.as_deref(), Some("최상위 파일 재적재 실패 2건: 색인 실패"));
@@ -756,6 +770,17 @@ fn page(category: Option<&str>, size: usize, cursor: Option<&str>, exclude: &[&s
     CoverPageOpts { category: category.map(str::to_string), size, cursor: cursor.map(str::to_string), exclude_categories: strings(exclude) }
 }
 
+/// 원본 테스트의 `(항목, 전체 수, 다음 커서, 오류)` 쪽.
+type RawPage = (Vec<(Book, String)>, usize, Option<String>, Option<String>);
+
+/// `Result<CoverPage, _>`를 원본 테스트 모양으로 펼친다.
+fn unpage(result: Result<CoverPage, String>) -> RawPage {
+    match result {
+        Ok(page) => (page.items, page.total.unwrap_or(0), page.next_cursor, None),
+        Err(error) => (Vec::new(), 0, None, Some(error)),
+    }
+}
+
 #[tokio::test]
 async fn test_get_cover_books_paged_merges_files_and_work_groups_newest_first() {
     let tmp = TempDir::new().unwrap();
@@ -763,7 +788,7 @@ async fn test_get_cover_books_paged_merges_files_and_work_groups_newest_first() 
     let (es, calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    let (items, total, next_cursor, error) = manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await;
+    let (items, total, next_cursor, error) = unpage(manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await);
 
     assert_eq!(error, None);
     assert_eq!(next_cursor, None);
@@ -787,7 +812,7 @@ async fn test_get_cover_books_paged_rejects_malformed_es_book() {
     });
     let manager = make_manager(tmp.path(), es);
 
-    let (items, total, cursor, error) = manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await;
+    let (items, total, cursor, error) = unpage(manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await);
 
     assert!(items.is_empty());
     assert_eq!(total, 0);
@@ -806,7 +831,7 @@ async fn test_get_cover_books_paged_pages_continue_without_gaps_or_repeats() {
     let mut cursor = String::new();
     let mut finished = false;
     for _ in 0..10 {
-        let (items, total, cursor_next, error) = manager.get_cover_books_paged(page(Some("A"), 1, Some(&cursor), &[])).await;
+        let (items, total, cursor_next, error) = unpage(manager.get_cover_books_paged(page(Some("A"), 1, Some(&cursor), &[])).await);
         assert_eq!(error, None);
         assert_eq!(total, 4);
         seen.extend(titles(&items));
@@ -832,7 +857,7 @@ async fn test_get_cover_books_paged_root_shows_root_files_and_one_card_per_top_l
     let (es, calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    let (items, total, next_cursor, error) = manager.get_cover_books_paged(page(None, 10, None, &[])).await;
+    let (items, total, next_cursor, error) = unpage(manager.get_cover_books_paged(page(None, 10, None, &[])).await);
 
     assert_eq!(error, None);
     assert_eq!(next_cursor, None);
@@ -851,7 +876,7 @@ async fn test_get_cover_books_paged_scopes_to_selected_directory() {
     let (es, calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    let (items, total, _cursor, error) = manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await;
+    let (items, total, _cursor, error) = unpage(manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await);
 
     assert_eq!(error, None);
     assert_eq!(total, 4);
@@ -867,7 +892,7 @@ async fn test_get_cover_books_paged_excludes_hidden_categories_everywhere() {
     let (es, calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    let (items, total, _cursor, _error) = manager.get_cover_books_paged(page(Some("A"), 10, None, &["A/나작품"])).await;
+    let (items, total, _cursor, _error) = unpage(manager.get_cover_books_paged(page(Some("A"), 10, None, &["A/나작품"])).await);
 
     assert_eq!(total, 3);
     let calls = calls.lock().unwrap();
@@ -886,7 +911,7 @@ async fn test_get_cover_books_paged_skips_group_without_representative() {
     let (es, _calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    let (items, _total, _cursor, _error) = manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await;
+    let (items, _total, _cursor, _error) = unpage(manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await);
 
     let displays: Vec<&str> = items.iter().map(|(_, d)| d.as_str()).collect();
     assert_eq!(displays, vec!["", "", "라작품"]);
@@ -899,7 +924,7 @@ async fn test_get_cover_books_paged_keeps_paging_when_only_files_remain() {
     let (es, _calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    let (items, _total, next_cursor, _error) = manager.get_cover_books_paged(page(Some("A"), 2, None, &[])).await;
+    let (items, _total, next_cursor, _error) = unpage(manager.get_cover_books_paged(page(Some("A"), 2, None, &[])).await);
 
     let displays: Vec<&str> = items.iter().map(|(_, d)| d.as_str()).collect();
     assert_eq!(displays, vec!["", "나작품"]);
@@ -915,7 +940,7 @@ async fn test_get_cover_books_paged_rejects_malformed_cursor() {
         let (es, _calls) = fake_cover_es(&stats, &files, &reps);
         let manager = make_manager(tmp.path(), es);
 
-        let result = manager.get_cover_books_paged(page(None, 10, Some(bad_cursor), &[])).await;
+        let result = unpage(manager.get_cover_books_paged(page(None, 10, Some(bad_cursor), &[])).await);
 
         assert!(result.0.is_empty() && result.1 == 0 && result.2.is_none() && result.3.as_deref() == Some("invalid cursor"), "cursor {bad_cursor}");
     }
@@ -931,7 +956,7 @@ async fn test_get_cover_books_paged_rejects_wrong_cursor_member_shapes() {
     // 묶음·파일 커서는 [수정 시각, 생성 시각, 경로] 세 칸이어야 한다.
     for member in [json!([["a"], null]), json!([null, "x"]), json!([null, [1, 2]]), json!([[1, 2, "k", "extra"], null])] {
         let cursor = encode_category_cursor(&member);
-        let result = manager.get_cover_books_paged(page(None, 10, Some(&cursor), &[])).await;
+        let result = unpage(manager.get_cover_books_paged(page(None, 10, Some(&cursor), &[])).await);
         assert_eq!(result.3.as_deref(), Some("invalid cursor"), "member {member}");
     }
 }
@@ -943,8 +968,8 @@ async fn test_get_cover_books_paged_clamps_page_size() {
     let (es, calls) = fake_cover_es(&stats, &files, &reps);
     let manager = make_manager(tmp.path(), es);
 
-    manager.get_cover_books_paged(page(None, 0, None, &[])).await;
-    manager.get_cover_books_paged(page(None, 1_000_000_000, None, &[])).await;
+    unpage(manager.get_cover_books_paged(page(None, 0, None, &[])).await);
+    unpage(manager.get_cover_books_paged(page(None, 1_000_000_000, None, &[])).await);
 
     let calls = calls.lock().unwrap();
     assert_eq!(calls.files[0].size, 1);

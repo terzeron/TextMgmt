@@ -193,14 +193,14 @@ fn build_proposals_assigns_statuses() {
     let proposals = build_proposals(&root, 0.0, 0, &mut cache, &fake);
     let by_source: HashMap<String, &Proposal> = proposals.iter().map(|p| (p.source.file_name().unwrap().to_string_lossy().into_owned(), p)).collect();
 
-    assert_eq!(by_source["원피스 모음"].status, "SKIP_TITLE_MISMATCH");
-    assert_eq!(by_source["한 권"].status, "SKIP_INSUFFICIENT_FILES");
-    assert_eq!(by_source["이름없음"].status, "SKIP_UNPARSEABLE_FILENAMES");
-    assert_eq!(by_source["제목"].status, "SKIP_NO_RANGE");
+    assert_eq!(by_source["원피스 모음"].status, Status::Skip(SkipReason::TitleMismatch));
+    assert_eq!(by_source["한 권"].status, Status::Skip(SkipReason::InsufficientFiles));
+    assert_eq!(by_source["이름없음"].status, Status::Skip(SkipReason::UnparseableFilenames));
+    assert_eq!(by_source["제목"].status, Status::Skip(SkipReason::NoRange));
     let naruto = by_source["[홍길동] 나루토"];
-    assert_eq!(naruto.status, "RENAME");
+    assert_eq!(naruto.status, Status::Rename);
     assert_eq!(naruto.target.as_deref(), Some(root.join("3_미정리/[홍길동] 나루토 (1-2권)").as_path()));
-    assert_eq!(by_source["블리치 1-3권"].status, "SKIP_NO_BOOKSTORE_MATCH");
+    assert_eq!(by_source["블리치 1-3권"].status, Status::Skip(SkipReason::NoBookstoreMatch));
     assert_eq!(proposals.len(), 6);
 }
 
@@ -212,7 +212,7 @@ fn build_proposals_marks_cache_misses_without_live_search() {
     let mut cache = cache_in(tmp.path());
     let proposals = build_proposals(&root, 0.0, 0, &mut cache, &fake);
     let bleach = proposals.iter().find(|p| p.source.ends_with("블리치 1-3권")).unwrap();
-    assert_eq!(bleach.status, "SKIP_NOT_CACHED");
+    assert_eq!(bleach.status, Status::Skip(SkipReason::NotCached));
 }
 
 #[test]
@@ -221,8 +221,8 @@ fn max_searches_limits_new_queries_but_not_cached_ones() {
     let fake = Fake::new(vec![("yes24", Ok(vec![row("나루토", "기시모토 마사시")]))]);
     let mut cache = cache_in(tmp.path());
     let proposals = build_proposals(&root, 0.0, 1, &mut cache, &fake);
-    let statuses: Vec<_> = proposals.iter().filter(|p| p.status.starts_with("SKIP_SEARCH") || p.status == "RENAME").map(|p| p.status.as_str()).collect();
-    assert_eq!(statuses.iter().filter(|s| **s == "SKIP_SEARCH_LIMIT").count(), 1, "{statuses:?}");
+    let statuses: Vec<_> = proposals.iter().filter(|p| matches!(p.status, Status::Skip(SkipReason::SearchLimit) | Status::Rename)).map(|p| p.status).collect();
+    assert_eq!(statuses.iter().filter(|s| **s == Status::Skip(SkipReason::SearchLimit)).count(), 1, "{statuses:?}");
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn conflicts_are_detected_for_occupied_and_duplicate_targets() {
     let fake = Fake::new(vec![("yes24", Ok(vec![row("나루토", "기시모토 마사시")]))]);
     let mut cache = cache_in(tmp.path());
     let proposals = build_proposals(&root, 0.0, 0, &mut cache, &fake);
-    assert!(proposals.iter().all(|p| p.status == "SKIP_CONFLICT"), "{:?}", proposals.iter().map(|p| &p.status).collect::<Vec<_>>());
+    assert!(proposals.iter().all(|p| p.status == Status::Skip(SkipReason::Conflict)), "{:?}", proposals.iter().map(|p| &p.status).collect::<Vec<_>>());
 
     // 대상이 이미 있는 경우
     let (tmp2, root2) = comic_root();
@@ -250,7 +250,7 @@ fn conflicts_are_detected_for_occupied_and_duplicate_targets() {
     let fake2 = Fake::new(vec![("yes24", Ok(vec![row("나루토", "기시모토 마사시")]))]);
     let proposals = build_proposals(&root2, 0.0, 0, &mut cache2, &fake2);
     let naruto = proposals.iter().find(|p| p.source.ends_with("[홍길동] 나루토")).unwrap();
-    assert_eq!(naruto.status, "RENAME", "원래 저자 태그를 쓰므로 대상이 다르다");
+    assert_eq!(naruto.status, Status::Rename, "원래 저자 태그를 쓰므로 대상이 다르다");
 }
 
 #[test]
@@ -258,14 +258,14 @@ fn report_is_a_bom_prefixed_crlf_tsv_with_minimal_quoting() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("out/report.tsv");
     let proposals = vec![
-        Proposal { source: "/a/b".into(), target: Some("/a/c".into()), confidence: 0.6666666, sample_count: 3, status: "RENAME".into(), evidence: "plain".into() },
-        Proposal { source: "/a/d".into(), target: None, confidence: 1.0, sample_count: 2, status: "SKIP_X".into(), evidence: "has\ttab and \"quote\"".into() },
+        Proposal { source: "/a/b".into(), target: Some("/a/c".into()), confidence: 0.6666666, sample_count: 3, status: Status::Rename, evidence: "plain".into() },
+        Proposal { source: "/a/d".into(), target: None, confidence: 1.0, sample_count: 2, status: Status::Skip(SkipReason::NoRange), evidence: "has\ttab and \"quote\"".into() },
     ];
     write_report(&proposals, &path).unwrap();
     let bytes = fs::read(&path).unwrap();
     assert_eq!(&bytes[..3], b"\xef\xbb\xbf");
     let text = String::from_utf8(bytes[3..].to_vec()).unwrap();
-    assert_eq!(text, "status\tconfidence\tbook_files\tsource\ttarget\tevidence\r\nRENAME\t0.667\t3\t/a/b\t/a/c\tplain\r\nSKIP_X\t1.000\t2\t/a/d\t\t\"has\ttab and \"\"quote\"\"\"\r\n");
+    assert_eq!(text, "status\tconfidence\tbook_files\tsource\ttarget\tevidence\r\nRENAME\t0.667\t3\t/a/b\t/a/c\tplain\r\nSKIP_NO_RANGE\t1.000\t2\t/a/d\t\t\"has\ttab and \"\"quote\"\"\"\r\n");
 }
 
 #[test]
@@ -276,8 +276,8 @@ fn apply_renames_moves_directories_and_rolls_back_on_failure() {
         fs::create_dir(root.join(n)).unwrap();
         fs::write(root.join(n).join("f"), n).unwrap();
     }
-    let rename = |s: &str, t: &str| Proposal { source: root.join(s), target: Some(root.join(t)), confidence: 1.0, sample_count: 2, status: "RENAME".into(), evidence: String::new() };
-    let skip = Proposal { source: root.join("c"), target: None, confidence: 1.0, sample_count: 2, status: "SKIP_NO_RANGE".into(), evidence: String::new() };
+    let rename = |s: &str, t: &str| Proposal { source: root.join(s), target: Some(root.join(t)), confidence: 1.0, sample_count: 2, status: Status::Rename, evidence: String::new() };
+    let skip = Proposal { source: root.join("c"), target: None, confidence: 1.0, sample_count: 2, status: Status::Skip(SkipReason::NoRange), evidence: String::new() };
 
     // 서로 이름을 맞바꾸는 순환도 처리한다.
     let swap = vec![rename("a", "b"), rename("b", "a"), skip];
@@ -300,13 +300,30 @@ fn apply_renames_restores_sources_when_a_later_step_fails() {
     fs::create_dir(root.join("a")).unwrap();
     fs::create_dir(root.join("b")).unwrap();
     let proposals = vec![
-        Proposal { source: root.join("a"), target: Some(root.join("x")), confidence: 1.0, sample_count: 2, status: "RENAME".into(), evidence: String::new() },
+        Proposal { source: root.join("a"), target: Some(root.join("x")), confidence: 1.0, sample_count: 2, status: Status::Rename, evidence: String::new() },
         // 부모가 없는 대상이라 두 번째 이름 바꾸기가 실패한다.
-        Proposal { source: root.join("b"), target: Some(root.join("missing/parent/y")), confidence: 1.0, sample_count: 2, status: "RENAME".into(), evidence: String::new() },
+        Proposal { source: root.join("b"), target: Some(root.join("missing/parent/y")), confidence: 1.0, sample_count: 2, status: Status::Rename, evidence: String::new() },
     ];
     assert!(apply_renames(&proposals).is_err());
     assert!(root.join("a").is_dir() && root.join("b").is_dir(), "실패하면 원래 이름으로 되돌린다");
     assert!(!root.join("x").exists());
+}
+
+#[test]
+fn apply_renames_rollback_does_not_move_a_directory_that_blocked_the_target() {
+    // 2단계에서 대상이 이미 있으면, 그 대상은 이번에 옮긴 것이 아니다. 롤백이 그것을 원본 이름으로 옮기면 안 된다.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    for n in ["a", "b"] {
+        fs::create_dir(root.join(n)).unwrap();
+        fs::write(root.join(n).join("f"), n).unwrap();
+    }
+    let rename = |s: &str| Proposal { source: root.join(s), target: Some(root.join("x")), confidence: 1.0, sample_count: 2, status: Status::Rename, evidence: String::new() };
+    assert!(apply_renames(&[rename("a"), rename("b")]).unwrap_err().contains("File exists"));
+    assert_eq!(fs::read_to_string(root.join("a/f")).unwrap(), "a");
+    assert_eq!(fs::read_to_string(root.join("b/f")).unwrap(), "b");
+    assert!(!root.join("x").exists());
+    assert!(fs::read_dir(root).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with(".normalize-")));
 }
 
 fn args(list: &[&str]) -> Vec<String> {

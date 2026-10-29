@@ -185,12 +185,7 @@ fn min_length(name: &'static str, value: &str) -> ApiResult<()> {
 
 /// FastAPI의 bool 쿼리 해석.
 fn parse_bool(name: &'static str, value: Option<&str>) -> ApiResult<bool> {
-    match value.map(str::to_lowercase).as_deref() {
-        None => Ok(false),
-        Some("true" | "1" | "on" | "yes" | "t" | "y") => Ok(true),
-        Some("false" | "0" | "off" | "no" | "f" | "n") => Ok(false),
-        Some(_) => Err(invalid(&["query", name], "Input should be a valid boolean, unable to interpret input")),
-    }
+    value.map_or(Some(false), crate::main::parse_py_bool).ok_or_else(|| invalid(&["query", name], "Input should be a valid boolean, unable to interpret input"))
 }
 
 // ---------------------------------------------------------------------------

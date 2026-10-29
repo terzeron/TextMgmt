@@ -8,9 +8,15 @@ use super::{BookManager, BookManagerDeps, CoverPageOpts, MAX_CATEGORY_PAGE_SIZE}
 use crate::book::Book;
 use crate::cover_status::{CoverStatusCache, has_official_cover};
 
-pub type CoverPage = (Vec<(Book, String)>, usize, Option<String>, Option<String>);
-pub type CoverBooksPager = Arc<dyn Fn(CoverPageOpts) -> Pin<Box<dyn Future<Output = CoverPage> + Send>> + Send + Sync>;
-pub type UncoveredPage = (Vec<(Book, String)>, Option<usize>, Option<String>, Option<String>);
+/// 표지 목록 한 쪽. `items`는 (대표 책, 작품 디렉터리 이름 또는 "")이다.
+/// `total`은 표지 목록에서만 채운다. 미표지 목록은 전체를 훑지 않으므로 모른다.
+#[derive(Debug, Clone, Default)]
+pub struct CoverPage {
+    pub items: Vec<(Book, String)>,
+    pub total: Option<usize>,
+    pub next_cursor: Option<String>,
+}
+pub type CoverBooksPager = Arc<dyn Fn(CoverPageOpts) -> Pin<Box<dyn Future<Output = Result<CoverPage, String>> + Send>> + Send + Sync>;
 
 #[derive(Clone)]
 struct Options {
@@ -72,7 +78,7 @@ impl BookManager {
         flags(books)
     }
 
-    pub async fn get_uncovered_books_paged(&self, mut opts: CoverPageOpts) -> UncoveredPage {
+    pub async fn get_uncovered_books_paged(&self, mut opts: CoverPageOpts) -> Result<CoverPage, String> {
         opts.size = opts.size.clamp(1, MAX_CATEGORY_PAGE_SIZE as usize);
         let options = self.ext::<Options>().map(|v| (*v).clone()).unwrap_or_default();
         let start = Instant::now();
@@ -81,25 +87,19 @@ impl BookManager {
         let mut items = Vec::new();
         let mut next = None;
         for _ in 0..options.max_pages {
-            let (page, _, cursor, error) = match &options.pager {
+            let page = match &options.pager {
                 Some(pager) => pager(opts.clone()).await,
                 None => self.get_cover_books_paged(opts.clone()).await,
-            };
-            if error.is_some() {
-                return (Vec::new(), None, None, error);
-            }
-            let books: Vec<Book> = page.iter().map(|(book, _)| book.clone()).collect();
-            let uncovered = match tokio::task::spawn_blocking(move || flags(&books)).await {
-                Ok(result) => result,
-                Err(error) => return (Vec::new(), None, None, Some(format!("표지 판정 실패: {error}"))),
-            };
-            items.extend(page.into_iter().zip(uncovered).filter_map(|(entry, uncovered)| uncovered.then_some(entry)));
-            next = cursor;
+            }?;
+            let books: Vec<Book> = page.items.iter().map(|(book, _)| book.clone()).collect();
+            let uncovered = tokio::task::spawn_blocking(move || flags(&books)).await.map_err(|error| format!("표지 판정 실패: {error}"))?;
+            items.extend(page.items.into_iter().zip(uncovered).filter_map(|(entry, uncovered)| uncovered.then_some(entry)));
+            next = page.next_cursor;
             if next.as_deref().is_none_or(str::is_empty) || items.len() >= opts.size || start.elapsed().as_secs_f64() > options.budget_seconds {
                 break;
             }
             opts.cursor = next.clone();
         }
-        (items, None, next, None)
+        Ok(CoverPage { items, total: None, next_cursor: next })
     }
 }

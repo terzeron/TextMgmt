@@ -18,9 +18,9 @@ fn failures_text(failures: &Value) -> String {
 }
 
 impl BookManager {
-    pub async fn rename_category(&self, old_category: &str, new_category: &str) -> (Value, Option<String>) {
+    pub async fn rename_category(&self, old_category: &str, new_category: &str) -> Result<Value, String> {
         log::debug!("# rename_category(old='{old_category}', new='{new_category}')");
-        let fail = |message: String| (json!({}), Some(message));
+        let fail = |message: String| Err(message);
 
         // 입력 검증
         if old_category.is_empty() || new_category.is_empty() {
@@ -102,7 +102,7 @@ impl BookManager {
             return fail(format!("ES 업데이트 부분 실패: {}", failures_text(failures)));
         }
 
-        (json!({"old_category": old_category, "new_category": new_category, "updated_count": es_result["updated"], "fs_renamed": fs_renamed}), None)
+        Ok(json!({"old_category": old_category, "new_category": new_category, "updated_count": es_result["updated"], "fs_renamed": fs_renamed}))
     }
 
     /// 삭제 대상 카테고리의 디스크 경로를 검증해 돌려준다.
@@ -130,10 +130,10 @@ impl BookManager {
     }
 
     /// 삭제 확인 모달용으로, 지워질 하위 디렉터리 수·디스크 파일 수·ES 문서 수를 센다. 아무것도 바꾸지 않는다.
-    pub async fn preview_delete_category(&self, category: &str) -> (Value, Option<String>) {
+    pub async fn preview_delete_category(&self, category: &str) -> Result<Value, String> {
         let dir_check = match self.resolve_deletable_category_dir(category, true) {
             Ok(dir) => dir,
-            Err(e) => return (json!({}), Some(e)),
+            Err(e) => return Err(e),
         };
         let (mut directory_count, mut file_count) = (0i64, 0i64);
         if dir_check.is_dir() {
@@ -152,50 +152,50 @@ impl BookManager {
             }
         }
         match self.es.count_by_category(category, true) {
-            Ok(es_count) => (json!({"category": category, "directory_count": directory_count, "file_count": file_count, "es_count": es_count}), None),
-            Err(e) => (json!({}), Some(format!("ES 조회 실패: {e}"))),
+            Ok(es_count) => Ok(json!({"category": category, "directory_count": directory_count, "file_count": file_count, "es_count": es_count})),
+            Err(e) => Err(format!("ES 조회 실패: {e}")),
         }
     }
 
     /// 카테고리의 모든 문서를 일괄 삭제한다. `delete_files`가 거짓이면 ES 문서만 지우고 파일은 남긴다.
     /// 참이면 디렉터리 트리도 지운다(디스크를 먼저 지워서, 실패하면 ES 문서가 남아 다시 시도할 수 있다).
-    pub async fn delete_category(&self, category: &str, delete_files: bool) -> (Value, Option<String>) {
+    pub async fn delete_category(&self, category: &str, delete_files: bool) -> Result<Value, String> {
         log::debug!("# delete_category(category='{category}')");
         let dir_check = match self.resolve_deletable_category_dir(category, delete_files) {
             Ok(dir) => dir,
-            Err(e) => return (json!({}), Some(e)),
+            Err(e) => return Err(e),
         };
 
         // 하위 카테고리 포함 문서 수. 파일까지 지우는 경우 ES 문서가 없어도 디스크 디렉터리가 있으면 지운다.
         let doc_count = match self.es.count_by_category(category, true) {
             Ok(n) => n,
-            Err(e) => return (json!({}), Some(format!("ES 조회 실패: {e}"))),
+            Err(e) => return Err(format!("ES 조회 실패: {e}")),
         };
         if doc_count == 0 && !(delete_files && dir_check.is_dir()) {
-            return (json!({}), Some(format!("카테고리 '{category}'에 문서가 없습니다")));
+            return Err(format!("카테고리 '{category}'에 문서가 없습니다"));
         }
 
         let mut fs_deleted = false;
         if delete_files && dir_check.is_dir() {
             if let Err(e) = self.fs.remove_dir_all(&dir_check) {
                 log::warn!("delete_category: 디렉토리 삭제 실패 '{}': {e}", dir_check.display());
-                return (json!({}), Some(format!("디렉토리 삭제 실패: {e}")));
+                return Err(format!("디렉토리 삭제 실패: {e}"));
             }
             fs_deleted = true;
         }
 
         let es_result = match self.es.delete_by_category(category, true) {
             Ok(result) => result,
-            Err(e) => return (json!({}), Some(format!("ES 삭제 실패: {e}"))),
+            Err(e) => return Err(format!("ES 삭제 실패: {e}")),
         };
         if let Some(failures) = failures_of(&es_result) {
-            return (json!({}), Some(format!("ES 삭제 부분 실패: {}", failures_text(failures))));
+            return Err(format!("ES 삭제 부분 실패: {}", failures_text(failures)));
         }
 
         let mut result = json!({"category": category, "deleted_count": es_result["deleted"]});
         if delete_files {
             result["fs_deleted"] = json!(fs_deleted);
         }
-        (result, None)
+        Ok(result)
     }
 }

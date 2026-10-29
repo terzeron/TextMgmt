@@ -487,15 +487,15 @@ impl BookManager {
     }
 
     /// 선택 카테고리 직하위 파일의 분류 제안을 만든다. 파일을 옮기지 않는다.
-    pub async fn propose_category_changes(&self, category: &str, mappings: Option<&Value>, options: ProposeOptions<'_>) -> (Value, Option<String>) {
+    pub async fn propose_category_changes(&self, category: &str, mappings: Option<&Value>, options: ProposeOptions<'_>) -> Result<Value, String> {
         if category.is_empty() {
-            return (json!({}), Some("카테고리 이름이 비어있습니다".to_string()));
+            return Err("카테고리 이름이 비어있습니다".to_string());
         }
         if !self.is_safe_category_name(category) {
-            return (json!({}), Some("잘못된 카테고리 경로입니다".to_string()));
+            return Err("잘못된 카테고리 경로입니다".to_string());
         }
         if !self.category_dir(category).is_dir() {
-            return (json!({}), Some(format!("디렉토리를 찾을 수 없습니다: {category}")));
+            return Err(format!("디렉토리를 찾을 수 없습니다: {category}"));
         }
 
         let content_type = options.content_type.unwrap_or("book");
@@ -580,7 +580,7 @@ impl BookManager {
 
         // Python은 제안 경로에서 분류 캐시를 저장하지 않는다(저장은 직접 분류 CLI뿐이다). 저장하면 서점 응답이 비었던 항목이
         // 캐시에 남아 같은 파일을 다시 제안해도 서점을 재조회하지 않는다.
-        (json!({"content_type": content_type, "source_category": category, "total_count": total_count, "processed_count": processed_count, "items": items, "failures": failures}), None)
+        Ok(json!({"content_type": content_type, "source_category": category, "total_count": total_count, "processed_count": processed_count, "items": items, "failures": failures}))
     }
 
     /// 분류 서비스. 처음 쓸 때 한 번 만든다. 꽂은 factory 가 없으면 `TM_CLASSIFIER_MODEL_DIR` 의 모델로 만들고, 못 읽으면 `None`(분류기 없음)이다.
@@ -594,12 +594,12 @@ impl BookManager {
     }
 
     /// 승인된 항목만 실제로 옮긴다.
-    pub async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &HashSet<String>, on_progress: Option<ProgressFn<'_>>) -> (Value, Option<String>) {
+    pub async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &HashSet<String>, on_progress: Option<ProgressFn<'_>>) -> Result<Value, String> {
         self.apply_category_changes_with(items, allowed_file_paths, ApplyOptions { on_progress, ..ApplyOptions::default() }).await
     }
 
     /// `apply_category_changes`의 전체 옵션 판. 목적지(`target_category`)는 브라우저가 준 값이라 `allowed_file_paths`와 안전한 이름인지 다시 검증한다.
-    pub async fn apply_category_changes_with(&self, items: &[Value], allowed_file_paths: &HashSet<String>, options: ApplyOptions<'_>) -> (Value, Option<String>) {
+    pub async fn apply_category_changes_with(&self, items: &[Value], allowed_file_paths: &HashSet<String>, options: ApplyOptions<'_>) -> Result<Value, String> {
         let content_type = options.content_type.unwrap_or("book");
         let mut results: Vec<Value> = Vec::new();
         let (mut applied_count, mut failed_count) = (0i64, 0i64);
@@ -646,13 +646,13 @@ impl BookManager {
                         let source_category = file_path.rsplit_once('/').map_or(Self::ROOT_CATEGORY, |(dir, _)| dir);
                         // 실제 이동 직전에 "moving"을 기록한다. 도중에 죽으면 pending이 아니라 moving으로 남아 "시도는 했다"를 알린다.
                         notify(json!({"file_path": file_path, "apply_status": "moving", "apply_error": Value::Null}));
-                        let (file_result, error) = match &move_hook {
+                        let moved = match &move_hook {
                             Some(hook) => hook(&absolute_path, target),
                             None => self.move_classified_file(&absolute_path, target, content_type, false, options.clean_existing, Some(source_category)).await,
                         };
-                        match (file_result, error) {
-                            (Some(_), None) => apply_status = "moved",
-                            (_, error) => apply_error = Some(error.unwrap_or_else(|| "분류 적용에 실패했습니다".to_string())),
+                        match moved {
+                            Ok(_) => apply_status = "moved",
+                            Err(error) => apply_error = Some(error),
                         }
                     }
                 }
@@ -671,11 +671,11 @@ impl BookManager {
             }
         }
 
-        (json!({"content_type": content_type, "total_count": items.len(), "applied_count": applied_count, "failed_count": failed_count, "results": results}), None)
+        Ok(json!({"content_type": content_type, "total_count": items.len(), "applied_count": applied_count, "failed_count": failed_count, "results": results}))
     }
 
     /// 파일 하나를 목적지 카테고리로 옮기고 ES를 맞춘다. 실패하면 파일과 ES 문서를 되돌린다.
-    pub async fn _move_classified_file(&self, file_path: &Path, target_category: &str, content_type: &str, opts: MoveOpts) -> (Option<Value>, Option<String>) {
+    pub async fn _move_classified_file(&self, file_path: &Path, target_category: &str, content_type: &str, opts: MoveOpts) -> Result<Value, String> {
         self.move_classified_file(file_path, target_category, content_type, opts.dry_run, opts.clean_existing, opts.source_category.as_deref()).await
     }
 
@@ -701,13 +701,13 @@ impl BookManager {
         dry_run: bool,
         clean_existing: bool,
         source_category: Option<&str>,
-    ) -> (Option<Value>, Option<String>) {
+    ) -> Result<Value, String> {
         let root = self.resolved_root().unwrap_or_else(|_| self.path_prefix.clone());
-        let Some(old_rel_path) = relative_to(file_path, &self.path_prefix) else { return (None, Some("잘못된 파일 경로입니다".to_string())) };
+        let Some(old_rel_path) = relative_to(file_path, &self.path_prefix) else { return Err("잘못된 파일 경로입니다".to_string()) };
 
         let mut target_path = self.path_prefix.join(target_category).join(Self::file_name_of(file_path));
         if !self.resolve_path(&target_path).is_ok_and(|p| p.starts_with(&root)) {
-            return (None, Some("잘못된 대상 경로입니다".to_string()));
+            return Err("잘못된 대상 경로입니다".to_string());
         }
         let mut target_rel_path = relative_to(&target_path, &self.path_prefix).unwrap_or_default();
         if self.path_exists(&target_path) {
@@ -715,12 +715,12 @@ impl BookManager {
             if is_same_file && old_rel_path == target_rel_path {
                 // 이미 목적지에 있다. 옮길 것이 없다고 답하고 끝낸다.
                 let status = if dry_run { "dry_run" } else { "moved" };
-                return (Some(json!({"status": status, "action": "noop", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0})), None);
+                return Ok(json!({"status": status, "action": "noop", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0}));
             }
             if !is_same_file && !same_content(file_path, &target_path) {
                 // 이름만 겹치고 내용이 다르면 서로 다른 책이다. 번호를 붙여 둘 다 남긴다.
                 let Some(numbered) = next_numbered_path(&target_path, self.duplicate_name_max_index) else {
-                    return (None, Some(format!("대상 경로에 같은 이름의 파일이 너무 많습니다: {target_rel_path}")));
+                    return Err(format!("대상 경로에 같은 이름의 파일이 너무 많습니다: {target_rel_path}"));
                 };
                 target_path = numbered;
                 target_rel_path = relative_to(&target_path, &self.path_prefix).unwrap_or_default();
@@ -728,30 +728,27 @@ impl BookManager {
                 // 내용이 같은 별개 파일이거나, 경로는 다른데 같은 실체인 하드링크다. 둘 다 "대상에 이미 있다"로 본다.
                 if clean_existing {
                     if dry_run {
-                        return (
-                            Some(json!({"status": "dry_run", "action": "duplicate_clean", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0})),
-                            None,
-                        );
+                        return Ok(json!({"status": "dry_run", "action": "duplicate_clean", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0}));
                     }
                     if let Err(e) = self.fs.remove_file(file_path) {
-                        return (None, Some(format!("중복 파일 정리 실패: {e}")));
+                        return Err(format!("중복 파일 정리 실패: {e}"));
                     }
                     if let Some(source) = source_category {
                         self.clean_empty_parent_dirs(file_path.parent().unwrap_or(Path::new("")), &self.category_dir(source));
                     }
                     return match self.es.delete_by_file_paths(std::slice::from_ref(&old_rel_path), None) {
                         Ok(deleted_count) => {
-                            (Some(json!({"status": "duplicate_cleaned", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": deleted_count})), None)
+                            Ok(json!({"status": "duplicate_cleaned", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": deleted_count}))
                         }
-                        Err(e) => (None, Some(format!("중복 파일 정리 실패: {e}"))),
+                        Err(e) => Err(format!("중복 파일 정리 실패: {e}")),
                     };
                 }
-                return (None, Some(format!("대상 경로에 파일이 이미 존재합니다: {target_rel_path}")));
+                return Err(format!("대상 경로에 파일이 이미 존재합니다: {target_rel_path}"));
             }
         }
 
         if dry_run {
-            return (Some(json!({"status": "dry_run", "action": "move", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0})), None);
+            return Ok(json!({"status": "dry_run", "action": "move", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0}));
         }
 
         let (old_book_id, old_doc): (Option<i64>, Option<Value>) = match self.fs.metadata(file_path) {
@@ -778,7 +775,7 @@ impl BookManager {
         }
         .and_then(|()| self.move_file(file_path, &target_path));
         if let Err(e) = moved {
-            return (None, Some(format!("파일 이동 실패: {e}")));
+            return Err(format!("파일 이동 실패: {e}"));
         }
         if let Some(source) = source_category {
             self.clean_empty_parent_dirs(&old_parent, &self.category_dir(source));
@@ -799,15 +796,16 @@ impl BookManager {
             new_doc["category"] = json!(target_category);
             new_doc["file_path"] = json!(target_rel_path);
             deleted_count += self.es.delete_by_file_paths(std::slice::from_ref(&target_rel_path), Some(&[new_book_id])).map_err(|e| e.to_string())?;
-            let (inserted, add_error) = self.add_book_raw(&Docs::from([(new_book_id, new_doc)]))?;
-            if inserted != Some(new_book_id) || add_error.is_some() {
-                return Err(add_error.unwrap_or_else(|| "ES 적재 실패".to_string()));
+            match self.add_book_raw(&Docs::from([(new_book_id, new_doc)])) {
+                Ok(inserted) if inserted == new_book_id => {}
+                Ok(_) => return Err("ES 적재 실패".to_string()),
+                Err(error) => return Err(error.to_string()),
             }
             Ok(json!({"status": "moved", "from": old_rel_path, "to": target_rel_path, "book_id": new_book_id, "target_category": target_category, "deleted_count": deleted_count}))
         })();
 
         match outcome {
-            Ok(result) => (Some(result), None),
+            Ok(result) => Ok(result),
             Err(error) => {
                 let mut rollback_messages: Vec<String> = Vec::new();
                 if self.path_exists(&target_path)
@@ -818,15 +816,13 @@ impl BookManager {
                 }
                 if let (Some(id), Some(doc)) = (old_book_id, &old_doc) {
                     match self.add_book_raw(&Docs::from([(id, doc.clone())])) {
-                        Ok((restored, restore_error)) if restored != Some(id) || restore_error.is_some() => {
-                            rollback_messages.push(format!("기존 ES 문서 복구 실패: {}", restore_error.unwrap_or_else(|| "None".to_string())))
-                        }
-                        Ok(_) => {}
+                        Ok(restored) if restored == id => {}
+                        Ok(_) => rollback_messages.push("기존 ES 문서 복구 실패: None".to_string()),
                         Err(e) => rollback_messages.push(format!("기존 ES 문서 복구 실패: {e}")),
                     }
                 }
                 let message = if rollback_messages.is_empty() { error } else { format!("{error}; {}", rollback_messages.join("; ")) };
-                (None, Some(message))
+                Err(message)
             }
         }
     }

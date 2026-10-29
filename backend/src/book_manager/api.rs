@@ -10,7 +10,8 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
-use crate::book::Book;
+use super::{BookDeletion, CoverPage};
+use crate::book::{Book, BookLookupError, BookPage};
 use crate::es_manager::EsManagerApi;
 use crate::main::{ApplyCategoryChanges, ProposeCategoryChanges, ReloadProgress};
 
@@ -19,7 +20,7 @@ const DEFAULT_CATEGORY_PAGE_SIZE: i64 = 500;
 
 #[async_trait]
 impl BookManagerApi for BookManager {
-    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> (Value, Option<String>) {
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
         BookManager::propose_category_changes(
             self,
             request.category,
@@ -34,10 +35,10 @@ impl BookManagerApi for BookManager {
         )
         .await
     }
-    async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &std::collections::HashSet<String>, clean_existing: bool) -> (Value, Option<String>) {
+    async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &std::collections::HashSet<String>, clean_existing: bool) -> Result<Value, String> {
         BookManager::apply_category_changes_with(self, items, allowed_file_paths, super::ApplyOptions { clean_existing, ..Default::default() }).await
     }
-    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> (Value, Option<String>) {
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<Value, String> {
         BookManager::apply_category_changes_with(
             self,
             request.items,
@@ -52,42 +53,42 @@ impl BookManagerApi for BookManager {
         )
         .await
     }
-    async fn delete_book(&self, id: i64) -> (String, Option<String>) {
+    async fn delete_book(&self, id: i64) -> Result<BookDeletion, String> {
         BookManager::delete_book(self, id).await
     }
-    async fn index_single_file(&self, file_path: &str) -> (Option<i64>, Option<String>) {
+    async fn index_single_file(&self, file_path: &str) -> Result<i64, String> {
         BookManager::index_single_file(self, file_path).await
     }
-    async fn delete_file(&self, file_path: &str) -> (String, Option<String>) {
+    async fn delete_file(&self, file_path: &str) -> Result<(), String> {
         BookManager::delete_file(self, file_path).await
     }
-    async fn reload_category(&self, category: &str, content_type: &str) -> (Value, Option<String>) {
+    async fn reload_category(&self, category: &str, content_type: &str) -> Result<Value, String> {
         BookManager::reload_category(self, category, Some(content_type)).await
     }
-    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
         BookManager::reload_category_mismatch_files_for(self, category, content_type, on_progress.as_deref()).await
     }
-    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> (Value, Option<String>) {
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
         BookManager::reload_category_mismatches_for(self, content_type, on_progress.as_deref()).await
     }
-    async fn rename_category(&self, old: &str, new: &str) -> (Value, Option<String>) {
+    async fn rename_category(&self, old: &str, new: &str) -> Result<Value, String> {
         BookManager::rename_category(self, old, new).await
     }
-    async fn delete_category(&self, category: &str, delete_files: bool) -> (Value, Option<String>) {
+    async fn delete_category(&self, category: &str, delete_files: bool) -> Result<Value, String> {
         BookManager::delete_category(self, category, delete_files).await
     }
-    async fn preview_delete_category(&self, category: &str) -> (Value, Option<String>) {
+    async fn preview_delete_category(&self, category: &str) -> Result<Value, String> {
         BookManager::preview_delete_category(self, category).await
     }
-    async fn preview_insert_image(&self, url: &str) -> (Option<Vec<u8>>, Option<String>) {
+    async fn preview_insert_image(&self, url: &str) -> Result<Vec<u8>, String> {
         BookManager::preview_insert_image(self, url).await
     }
 
-    async fn preview_insert_upload(&self, data: &[u8]) -> (Option<Vec<u8>>, Option<String>) {
+    async fn preview_insert_upload(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         BookManager::preview_insert_upload(self, data).await
     }
 
-    async fn delete_pdf_pages(&self, id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> (Option<Value>, Option<String>) {
+    async fn delete_pdf_pages(&self, id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String> {
         BookManager::delete_pdf_pages(self, id, pages, crops, splits, inserts, order).await
     }
 
@@ -99,16 +100,15 @@ impl BookManagerApi for BookManager {
         self.es.clone()
     }
 
-    async fn get_book(&self, id: i64) -> (Option<Book>, Option<String>) {
+    async fn get_book(&self, id: i64) -> Result<Book, BookLookupError> {
         BookManager::get_book(self, id).await
     }
 
-    async fn get_categories(&self) -> (Value, Option<String>) {
-        let (categories, error) = BookManager::get_categories(self).await;
-        (json!(categories), error)
+    async fn get_categories(&self) -> Result<Value, String> {
+        BookManager::get_categories(self).await.map(|categories| json!(categories))
     }
 
-    async fn get_books_in_category_paged(&self, category: &str, size: Option<i64>, cursor: Option<&str>) -> (Vec<Book>, i64, Option<String>, Option<String>) {
+    async fn get_books_in_category_paged(&self, category: &str, size: Option<i64>, cursor: Option<&str>) -> Result<BookPage, String> {
         BookManager::get_books_in_category_paged(self, category, size.unwrap_or(DEFAULT_CATEGORY_PAGE_SIZE), cursor.unwrap_or("")).await
     }
 
@@ -140,39 +140,38 @@ impl BookManagerApi for BookManager {
         BookManager::get_cover(self, book_id, width).await
     }
 
-    async fn validate_epub(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+    async fn validate_epub(&self, book_id: i64) -> Result<Value, String> {
         BookManager::validate_epub(self, book_id).await
     }
 
-    async fn validate_pdf(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+    async fn validate_pdf(&self, book_id: i64) -> Result<Value, String> {
         BookManager::validate_pdf(self, book_id).await
     }
 
-    async fn get_books_in_category(&self, category: &str) -> (Vec<Book>, Option<String>) {
+    async fn get_books_in_category(&self, category: &str) -> Result<Vec<Book>, String> {
         BookManager::get_books_in_category(self, category).await
     }
 
-    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> (Vec<Book>, i64, Option<String>) {
+    async fn get_latest_books(&self, size: i64, exclude_categories: Option<&[String]>) -> Result<BookPage, String> {
         BookManager::get_latest_books(self, size, exclude_categories.map(<[String]>::to_vec)).await
     }
 
-    async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, excluded: Option<&[String]>, category: Option<&str>) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, excluded: Option<&[String]>, category: Option<&str>) -> Result<BookPage, String> {
         BookManager::search_by_keyword_paged(self, keyword, size, offset, excluded, category).await
     }
 
-    async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> (Vec<Book>, i64, Option<String>) {
+    async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> Result<BookPage, String> {
         BookManager::search_similar_books_paged(self, book_id, size, offset).await
     }
 
-    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, i64, Option<String>, Option<String>) {
+    async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         let opts = CoverPageOpts {
             category: Some(category.to_string()),
             size: size.max(0) as usize,
             cursor: Some(cursor.to_string()),
             exclude_categories: exclude_categories.map(<[String]>::to_vec).unwrap_or_default(),
         };
-        let (items, total, next_cursor, error) = BookManager::get_cover_books_paged(self, opts).await;
-        (items, total as i64, next_cursor, error)
+        BookManager::get_cover_books_paged(self, opts).await
     }
 
     fn get_category_mismatches(&self, force_refresh: bool) -> Result<Value, String> {
@@ -183,31 +182,29 @@ impl BookManagerApi for BookManager {
         self.try_get_category_mismatch_details(category)
     }
 
-    async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> (Vec<(Book, String)>, Option<i64>, Option<String>, Option<String>) {
+    async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         let opts = CoverPageOpts { category: Some(category.into()), size: size.max(0) as usize, cursor: Some(cursor.into()), exclude_categories: exclude_categories.unwrap_or_default().to_vec() };
-        let (items, total, next, error) = BookManager::get_uncovered_books_paged(self, opts).await;
-        (items, total.map(|n| n as i64), next, error)
+        BookManager::get_uncovered_books_paged(self, opts).await
     }
 
-    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>) {
+    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
         BookManager::set_epub_cover(self, book_id, url, image_data).await
     }
 
-    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>) {
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String> {
         BookManager::edit_epub_images(self, book_id, crops, splits, deletes, inserts).await
     }
 
-    async fn remove_epub_cover(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+    async fn remove_epub_cover(&self, book_id: i64) -> Result<Value, String> {
         BookManager::remove_epub_cover(self, book_id).await
     }
 
-    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> (Option<Value>, Option<String>) {
+    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
         BookManager::insert_epub_illustration(self, book_id, before_idref, url, image_data).await
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn update_book(&self, id: i64, category: &str, title: &str, author: &str, path: &Path, file_type: &str, force: bool) -> (Value, Option<String>) {
-        let (status, error) = BookManager::update_book_with(self, id, category, title, author, path, file_type, force).await;
-        (json!(status), error)
+    async fn update_book(&self, id: i64, category: &str, title: &str, author: &str, path: &Path, file_type: &str, force: bool) -> Result<(), String> {
+        BookManager::update_book_with(self, id, category, title, author, path, file_type, force).await
     }
 }

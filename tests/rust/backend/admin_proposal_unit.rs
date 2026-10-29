@@ -86,11 +86,11 @@ struct ProgressProposalManager {
 
 #[async_trait::async_trait]
 impl BookManagerApi for ProgressProposalManager {
-    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> (Value, Option<String>) {
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
         if let Some(callback) = request.on_progress {
             callback(self.progress.clone());
         }
-        (json!({"new_count": 2, "items": [{"internal": true}]}), self.error.clone())
+        self.error.clone().map_or_else(|| Ok(json!({"new_count": 2, "items": [{"internal": true}]})), Err)
     }
 }
 

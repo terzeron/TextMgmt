@@ -36,7 +36,7 @@
 //!   - `pub const RELOAD_LOCK_HEARTBEAT_STALE_SECONDS: i64`, `struct ValueError(pub String)`
 //! - `chrono`가 dev-dependency에 있다고 본다 (`datetime.now()` 대응).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -295,9 +295,20 @@ mod test_category_mapping {
         let cursor = FakeCursor::new().with_rows(vec![row([("category", "c1".into()), ("keyword", "k1".into())]), row([("category", "c1".into()), ("keyword", "k2".into())])]);
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
         let mappings = cm.get_all_mappings("book").unwrap();
-        assert_eq!(mappings, HashMap::from([("c1".to_string(), strs(&["k1", "k2"]))]));
+        assert_eq!(mappings, BTreeMap::from([("c1".to_string(), strs(&["k1", "k2"]))]));
         let keywords = cm.get_keywords("c1", "book").unwrap();
         assert_eq!(keywords, strs(&["k1", "k2"]));
+    }
+
+    #[test]
+    fn test_get_all_mappings_keeps_category_order() {
+        // 키워드 동률 판정과 /mapping 응답이 SQL의 ORDER BY category 순서를 따라야 한다(Python dict와 같다).
+        let categories = ["a", "b", "c", "d", "e", "f", "g", "h"];
+        let rows = categories.iter().map(|c| row([("category", (*c).into()), ("keyword", "k".into())])).collect();
+        let cursor = FakeCursor::new().with_rows(rows);
+        let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
+        let order: Vec<String> = cm.get_all_mappings("book").unwrap().into_keys().collect();
+        assert_eq!(order, strs(&categories));
     }
 
     #[test]

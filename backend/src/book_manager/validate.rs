@@ -14,21 +14,20 @@ const EPUBVERI_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl BookManager {
     /// Rust epubveri로 EPUB 파일의 구조적 유효성을 검증한다.
-    pub async fn validate_epub(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+    pub async fn validate_epub(&self, book_id: i64) -> Result<Value, String> {
         log::debug!("# validate_epub(book_id={book_id})");
-        let (book, _) = self.get_book(book_id).await;
-        let Some(book) = book else { return (None, Some(format!("Book not found: {book_id}"))) };
+        let Ok(book) = self.get_book(book_id).await else { return Err(format!("Book not found: {book_id}")) };
         if book.file_type != "epub" {
-            return (None, Some(format!("Not an EPUB file (type: {})", book.file_type)));
+            return Err(format!("Not an EPUB file (type: {})", book.file_type));
         }
         if !self.fs.is_file(&book.file_path).unwrap_or(false) {
-            return (None, Some(format!("File not found: {}", book.file_path.display())));
+            return Err(format!("File not found: {}", book.file_path.display()));
         }
 
         // 임시 파일에 JSON 출력(stdout에 상태 메시지가 섞이는 문제 방지)
         let json_path = std::env::temp_dir().join(format!("epubveri-{}.json", unique_token()));
         if let Err(e) = std::fs::File::create(&json_path) {
-            return (None, Some(format!("Failed to create temp file: {e}")));
+            return Err(format!("Failed to create temp file: {e}"));
         }
         let outcome = self.run_epubveri(&book.file_path, &json_path);
         // 임시 파일 정리. 실패는 무시한다.
@@ -37,7 +36,7 @@ impl BookManager {
         }
         let (data, returncode) = match outcome {
             Ok(v) => v,
-            Err(message) => return (None, Some(message)),
+            Err(message) => return Err(message),
         };
 
         // 기존 API 형식 호환을 위해 메시지 ID 키 "ID"를 읽는다.
@@ -68,7 +67,7 @@ impl BookManager {
         if let Some(publication) = publication {
             result["publication"] = publication;
         }
-        (Some(result), None)
+        Ok(result)
     }
 
     /// epubveri subprocess를 시간 제한으로 실행해 JSON 출력과 종료 코드를 돌려준다.
@@ -91,20 +90,19 @@ impl BookManager {
     }
 
     /// PDF 파일의 구문 유효성을 검증하고 메타데이터를 추출한다.
-    pub async fn validate_pdf(&self, book_id: i64) -> (Option<Value>, Option<String>) {
+    pub async fn validate_pdf(&self, book_id: i64) -> Result<Value, String> {
         log::debug!("# validate_pdf(book_id={book_id})");
-        let (book, _) = self.get_book(book_id).await;
-        let Some(book) = book else { return (None, Some(format!("Book not found: {book_id}"))) };
+        let Ok(book) = self.get_book(book_id).await else { return Err(format!("Book not found: {book_id}")) };
         if book.file_type != "pdf" {
-            return (None, Some(format!("Not a PDF file (type: {})", book.file_type)));
+            return Err(format!("Not a PDF file (type: {})", book.file_type));
         }
         if !self.fs.is_file(&book.file_path).unwrap_or(false) {
-            return (None, Some(format!("File not found: {}", book.file_path.display())));
+            return Err(format!("File not found: {}", book.file_path.display()));
         }
 
         let pdf = match self.pdf_opener.open(&book.file_path) {
             Ok(pdf) => pdf,
-            Err(e) => return (None, Some(format!("Failed to open PDF: {e}"))),
+            Err(e) => return Err(format!("Failed to open PDF: {e}")),
         };
         let result = (|| -> Result<Value, String> {
             let issues = pdf.check_pdf_syntax().map_err(|e| e.to_string())?;
@@ -128,8 +126,8 @@ impl BookManager {
         })();
         pdf.close();
         match result {
-            Ok(result) => (Some(result), None),
-            Err(e) => (None, Some(format!("Failed to open PDF: {e}"))),
+            Ok(result) => Ok(result),
+            Err(e) => Err(format!("Failed to open PDF: {e}")),
         }
     }
 }

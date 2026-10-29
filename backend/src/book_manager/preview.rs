@@ -102,6 +102,9 @@ impl From<ZipError> for PreviewFailure {
     }
 }
 
+/// `get_pdf_pages` 한 요청의 최대 쪽 수. 뷰어는 11쪽씩 요청한다.
+pub const MAX_PDF_PAGE_RANGE: i64 = 50;
+
 impl BookManager {
     /// Python과 같은 공개 검증 지점. EPUB 미리보기의 HTML 호환 변환을 수행한다.
     pub fn _expand_self_closing_rcdata(data: &[u8]) -> Vec<u8> {
@@ -113,6 +116,14 @@ impl BookManager {
     }
 
     /// 캐시 파일이 있고 원본보다 새것인가.
+    /// 캐시를 임시 파일에 다 쓴 뒤 이름을 바꾼다. 동시 요청이 쓰는 중인 잘린 파일을 캐시 적중으로 내보내지 않게 한다.
+    fn write_cache(&self, cache_file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        let tmp = super::util::temp_sibling(cache_file);
+        self.fs.write(&tmp, bytes).and_then(|()| self.fs.rename(&tmp, cache_file)).inspect_err(|_| {
+            let _ = self.fs.remove_file(&tmp);
+        })
+    }
+
     fn cache_is_fresh(&self, cache_file: &Path, original_mtime: SystemTime) -> bool {
         self.mtime_of(cache_file).is_some_and(|t| t >= original_mtime)
     }
@@ -166,8 +177,32 @@ impl BookManager {
         }
     }
 
+    /// `prefix`로 시작하고 `suffix`로 끝나는 캐시 중 `keep`이 아닌 것을 지운다. 책마다 캐시를 하나만 남긴다.
+    fn remove_other_caches(&self, cache_dir: &Path, prefix: &str, suffix: &str, keep: &str) {
+        let Ok(entries) = self.fs.read_dir(cache_dir) else { return };
+        for old in entries {
+            let name = old.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            if name.starts_with(prefix)
+                && name.ends_with(suffix)
+                && name != keep
+                && let Err(e) = self.fs.remove_file(&old)
+            {
+                log::warn!("Failed to remove old preview cache {name}: {e}");
+            }
+        }
+    }
+
     fn preview_pdf(&self, book_id: i64, file_path: &Path, cache_dir: &Path, original_mtime: SystemTime, pages: u32) -> BookResponse {
-        let cache_file = cache_dir.join(format!("{book_id}.pdf"));
+        // 쪽 수를 이름에 넣는다. 빼면 큰 pages 요청 하나가 모든 사용자의 미리보기를 전체 책으로 바꾼다.
+        let cache_name = format!("{book_id}_n{pages}.pdf");
+        let cache_file = cache_dir.join(&cache_name);
+        self.remove_other_caches(cache_dir, &format!("{book_id}_n"), ".pdf", &cache_name);
+        let legacy = cache_dir.join(format!("{book_id}.pdf"));
+        if self.path_exists(&legacy)
+            && let Err(e) = self.fs.remove_file(&legacy)
+        {
+            log::warn!("Failed to remove old preview cache {}: {e}", legacy.display());
+        }
         if self.cache_is_fresh(&cache_file, original_mtime) {
             log::debug!("Preview cache hit for book_id={book_id} (PDF)");
             return self.file_response(&cache_file, "application/pdf", no_transform_headers());
@@ -176,7 +211,7 @@ impl BookManager {
             let (reader, total) = self.try_get_cached_pdf_reader(file_path).map_err(|e| e.to_string())?;
             let take = (total as usize).min(pages as usize);
             let bytes = self.pdf_pages.extract_pages_from_reader(&reader, 0, take).map_err(|e| e.to_string())?;
-            self.fs.write(&cache_file, &bytes).map_err(|e| e.to_string())?;
+            self.write_cache(&cache_file, &bytes).map_err(|e| e.to_string())?;
             log::debug!("Preview generated for book_id={book_id} (PDF, {take} pages)");
             Ok(bytes)
         };
@@ -216,7 +251,7 @@ impl BookManager {
             }
         }
         if !html_content.is_empty() {
-            if let Err(e) = self.fs.write(&cache_file, html_content.as_bytes()) {
+            if let Err(e) = self.write_cache(&cache_file, html_content.as_bytes()) {
                 log::error!("{} preview cache write failed for book_id={book_id}: {e}", suffix.to_uppercase());
                 return text_response(500, format!("{} preview failed", suffix.to_uppercase()));
             }
@@ -241,19 +276,7 @@ impl BookManager {
         let cache_file = cache_dir.join(&cache_name);
 
         // 구 형식 캐시 정리(book_id.epub, book_id.html, 정책 버전 없는 ch 캐시)
-        if let Ok(entries) = self.fs.read_dir(cache_dir) {
-            let ch_prefix = format!("{book_id}_ch");
-            for old in entries {
-                let name = old.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                if name.starts_with(&ch_prefix)
-                    && name.ends_with(".epub")
-                    && name != cache_name
-                    && let Err(e) = self.fs.remove_file(&old)
-                {
-                    log::warn!("Failed to remove old preview cache {name}: {e}");
-                }
-            }
-        }
+        self.remove_other_caches(cache_dir, &format!("{book_id}_ch"), ".epub", &cache_name);
         for old_name in [format!("{book_id}.epub"), format!("{book_id}.html")] {
             let old = cache_dir.join(old_name);
             if self.path_exists(&old)
@@ -269,24 +292,30 @@ impl BookManager {
             return self.file_response(&cache_file, "application/epub+zip", extra_headers);
         }
 
+        // 임시 파일에 만들고 검증까지 마친 뒤 이름을 바꾼다. 동시 요청이 만드는 중인 파일을 캐시 적중으로 보지 않게 한다.
+        let tmp_file = super::util::temp_sibling(&cache_file);
         // 훅이나 파서가 panic해도 요청 하나의 500으로 끝낸다.
-        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.build_epub_preview(book_id, file_path, &cache_file, requested_chapters == 0, chapters)))
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.build_epub_preview(book_id, file_path, &tmp_file, requested_chapters == 0, chapters)))
             .unwrap_or_else(|_| Err(PreviewFailure::Other("panic during EPUB preview".to_string())));
+        if built.is_err() {
+            let _ = self.fs.remove_file(&tmp_file);
+        }
         match built {
             Ok(chapter_count) => {
                 // 생성된 EPUB 유효성 검증
-                let (valid, err) = match self.seams().preview_epub_validator {
-                    Some(validator) => {
-                        let (valid, reason) = validator(&cache_file);
-                        (valid, (!reason.is_empty()).then_some(reason))
-                    }
-                    None => Self::_validate_preview_epub_with(&*self.fs, &cache_file),
+                let validated = match self.seams().preview_epub_validator {
+                    Some(validator) => validator(&tmp_file),
+                    None => Self::_validate_preview_epub_with(&*self.fs, &tmp_file),
                 };
-                if !valid {
-                    let _ = self.fs.remove_file(&cache_file);
-                    let err = err.unwrap_or_default();
+                if let Err(err) = validated {
+                    let _ = self.fs.remove_file(&tmp_file);
                     log::error!("EPUB preview validation failed for book_id={book_id}: {err}");
                     return text_response(422, format!("EPUB preview validation failed: {err}"));
+                }
+                if let Err(e) = self.fs.rename(&tmp_file, &cache_file) {
+                    let _ = self.fs.remove_file(&tmp_file);
+                    log::error!("EPUB preview cache write failed for book_id={book_id}: {e}");
+                    return text_response(500, "EPUB preview failed");
                 }
                 Self::_evict_old_cache_with(&*self.fs, cache_dir);
                 log::debug!("Preview generated for book_id={book_id} (EPUB, {chapter_count} chapters)");
@@ -598,7 +627,7 @@ impl BookManager {
         text_response(500, format!("PDF pages extraction failed ({}): {}", e.kind, e.message))
     }
 
-    /// PDF에서 `start`~`end`쪽(1부터, 양끝 포함)만 추출해 돌려준다.
+    /// PDF에서 `start`~`end`쪽(1부터, 양끝 포함)만 추출해 돌려준다. 한 번에 `MAX_PDF_PAGE_RANGE`쪽까지다.
     pub async fn get_pdf_pages(&self, book_id: i64, start: i64, end: i64) -> BookResponse {
         log::debug!("# get_pdf_pages(book_id={book_id}, start={start}, end={end})");
         let doc = match self.find_doc(book_id) {
@@ -634,6 +663,13 @@ impl BookManager {
         if start > total_pages {
             return text_response(400, format!("Start page {start} exceeds total pages {total_pages}"));
         }
+        // 범위마다 캐시 파일이 생기므로 거꾸로 된 범위와 너무 넓은 범위는 받지 않는다.
+        if end < start {
+            return text_response(400, format!("End page {end} is before start page {start}"));
+        }
+        if end - start + 1 > MAX_PDF_PAGE_RANGE {
+            return text_response(400, format!("Page range exceeds {MAX_PDF_PAGE_RANGE} pages"));
+        }
 
         let cache_dir = self.path_prefix.join(".preview_cache");
         let storage_error = |e: &std::io::Error| text_response(503, format!("Storage access error ({}): {}", super::util::strerror(e), book.file_path.display()));
@@ -668,7 +704,7 @@ impl BookManager {
             Ok(bytes) => bytes,
             Err(e) => return self.pdf_pages_failure(book_id, &book.file_path, &e),
         };
-        if let Err(e) = self.fs.write(&cache_file, &pdf_bytes) {
+        if let Err(e) = self.write_cache(&cache_file, &pdf_bytes) {
             log::error!("PDF pages extraction failed for book_id={book_id} ({}): {e}", book.file_path.display());
             return storage_error(&e);
         }

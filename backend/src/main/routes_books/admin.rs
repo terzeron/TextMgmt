@@ -1,11 +1,12 @@
 //! 도서·만화 수정과 카테고리 관리. 실제 파일 작업은 BookManager에 위임한다.
+use super::{kind, manager};
 use crate::book::Book;
+use crate::book_manager::BookDeletion;
 use crate::main::extract::python_bool;
 use crate::main::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, RequireAdmin, Routes};
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},
-    http::Uri,
 };
 use fancy_regex::Regex;
 use serde::Deserialize;
@@ -245,7 +246,7 @@ async fn run_classify_proposal_job(
             callback_flush_error.lock().expect("proposal flush error poisoned").get_or_insert_with(|| error.to_string());
         }
     };
-    let (result, error) = manager
+    let proposed = manager
         .propose_category_changes(ProposeCategoryChanges {
             category: &category,
             mappings: &mappings,
@@ -274,10 +275,13 @@ async fn run_classify_proposal_job(
         set_proposal_failed(final_mapping.as_ref(), &final_type, "분류 제안에 실패했습니다.");
         return;
     }
-    if let Some(error) = error {
-        set_proposal_failed(mapping.as_ref(), &content_type, &error);
-        return;
-    }
+    let result = match proposed {
+        Ok(result) => result,
+        Err(error) => {
+            set_proposal_failed(mapping.as_ref(), &content_type, &error);
+            return;
+        }
+    };
     let mut state = match mapping.get_classify_proposal_status(&content_type, 300) {
         Ok(state) => state,
         Err(error) => {
@@ -364,7 +368,7 @@ async fn run_classify_apply_job(
             false
         }
     };
-    let (result, error) = manager
+    let applied = manager
         .apply_category_changes_with(ApplyCategoryChanges {
             items: &items,
             allowed_file_paths: &allowed,
@@ -383,10 +387,13 @@ async fn run_classify_apply_job(
         set_proposal_failed(mapping.as_ref(), &content_type, "분류 적용에 실패했습니다.");
         return;
     }
-    if let Some(error) = error {
-        set_proposal_failed(mapping.as_ref(), &content_type, &error);
-        return;
-    }
+    let result = match applied {
+        Ok(result) => result,
+        Err(error) => {
+            set_proposal_failed(mapping.as_ref(), &content_type, &error);
+            return;
+        }
+    };
     let mut state = match mapping.get_classify_proposal_status(&content_type, 300) {
         Ok(state) => state,
         Err(error) => {
@@ -559,10 +566,10 @@ async fn similar_names(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Origin
         return Ok(failure("name is required"));
     }
     let manager = manager(&deps, &uri)?;
-    let (categories, error) = manager.get_categories().await;
-    if let Some(error) = error {
-        return Ok(failure(&error));
-    }
+    let categories = match manager.get_categories().await {
+        Ok(categories) => categories,
+        Err(error) => return Ok(failure(&error)),
+    };
     let categories: Vec<String> = match categories {
         Value::Array(values) => values.iter().filter_map(Value::as_str).map(str::to_string).collect(),
         Value::Object(values) => values.into_iter().map(|(key, _)| key).collect(),
@@ -637,21 +644,21 @@ async fn bulk_rename_files(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Or
         Err(error) => return Ok(Json(json!({"status":"failure","error":format!("정규표현식 오류: {error}"),"changed_count":0}))),
     };
     let manager = manager(&deps, &uri)?;
-    let (categories, error) = manager.get_categories().await;
-    if let Some(error) = error {
-        return Ok(Json(json!({"status":"failure","error":error,"changed_count":0})));
-    }
+    let categories = match manager.get_categories().await {
+        Ok(categories) => categories,
+        Err(error) => return Ok(Json(json!({"status":"failure","error":error,"changed_count":0}))),
+    };
     let mut books = Vec::<Book>::new();
     if let Some(categories) = categories.as_array() {
         for category in categories.iter().filter_map(Value::as_str).filter(|category| *category == body.category || category.starts_with(&format!("{}/", body.category))) {
             let mut cursor: Option<String> = None;
             loop {
-                let (page, _, next, error) = manager.get_books_in_category_paged(category, None, cursor.as_deref()).await;
-                if let Some(error) = error {
-                    return Ok(Json(json!({"status":"failure","error":error,"changed_count":0})));
-                }
-                books.extend(page);
-                cursor = next;
+                let page = match manager.get_books_in_category_paged(category, None, cursor.as_deref()).await {
+                    Ok(page) => page,
+                    Err(error) => return Ok(Json(json!({"status":"failure","error":error,"changed_count":0}))),
+                };
+                books.extend(page.books);
+                cursor = page.next_cursor;
                 if cursor.is_none() {
                     break;
                 }
@@ -726,12 +733,12 @@ async fn bulk_rename_files(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Or
         let extension = FsPath::new(&target).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
         let title = target.file_name().unwrap_or_default().to_string_lossy();
         let title = if extension.is_empty() { title.to_string() } else { title.strip_suffix(&format!(".{extension}")).unwrap_or(&title).to_string() };
-        let (_, error) = manager.update_book(book.book_id, &book.category, &title, &book.author, &target, &book.file_type, false).await;
-        if let Some(error) = error {
-            failures.push(json!({"file":source.file_name().unwrap_or_default().to_string_lossy(),"error":error}));
-        } else {
-            changed_count += 1;
-            reserved.insert(target);
+        match manager.update_book(book.book_id, &book.category, &title, &book.author, &target, &book.file_type, false).await {
+            Ok(()) => {
+                changed_count += 1;
+                reserved.insert(target);
+            }
+            Err(error) => failures.push(json!({"file":source.file_name().unwrap_or_default().to_string_lossy(),"error":error})),
         }
     }
     if let Err(error) = manager.es_manager().refresh() {
@@ -741,19 +748,10 @@ async fn bulk_rename_files(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Or
     failures.truncate(20);
     Ok(Json(json!({"status":"success","result":{"changed_count":changed_count,"failed_count":failed_count,"failures":failures}})))
 }
-fn kind(uri: &Uri) -> &'static str {
-    if uri.path().starts_with("/comics/") { "comic" } else { "book" }
-}
-fn manager(deps: &AppDeps, uri: &Uri) -> ApiResult<Arc<dyn BookManagerApi>> {
-    if kind(uri) == "comic" { deps.comics_manager() } else { deps.book_manager() }.map_err(|e| {
-        log::warn!("도서 관리자를 쓸 수 없다: {e}");
-        ApiError::unavailable()
-    })
-}
-fn result(value: Value, error: Option<String>) -> Json<Value> {
-    Json(match error {
-        Some(error) => json!({"status":"failure","error":error}),
-        None => json!({"status":"success","result":value}),
+fn result(outcome: Result<Value, String>) -> Json<Value> {
+    Json(match outcome {
+        Ok(value) => json!({"status":"success","result":value}),
+        Err(error) => json!({"status":"failure","error":error}),
     })
 }
 async fn mapping<T: Send + 'static>(deps: Arc<AppDeps>, action: impl FnOnce(Arc<dyn CategoryMappingApi>) -> Result<T, MappingError> + Send + 'static) -> ApiResult<T> {
@@ -805,16 +803,17 @@ async fn update_book(
     let id = super::parse_book_id(&id)?;
     let manager = manager(&deps, &uri)?;
     let path = manager.path_prefix().join(&body.file_path);
-    let (value, error) = manager.update_book(id, &body.category, &body.title, &body.author, &path, &body.file_type, query.force).await;
-    Ok(result(value, error))
+    Ok(Json(match manager.update_book(id, &body.category, &body.title, &body.author, &path, &body.file_type, query.force).await {
+        Ok(()) => json!({"status":"success","result":"Ok"}),
+        Err(error) => json!({"status":"failure","error":error}),
+    }))
 }
 async fn delete_book(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let id = super::parse_book_id(&id)?;
-    let (status, message) = manager(&deps, &uri)?.delete_book(id).await;
-    Ok(Json(match status.as_str() {
-        "Ok" => json!({"status":"success","result":status}),
-        "Warning" => json!({"status":"success","result":status,"warning":message}),
-        _ => json!({"status":"failure","error":message}),
+    Ok(Json(match manager(&deps, &uri)?.delete_book(id).await {
+        Ok(BookDeletion::Done) => json!({"status":"success","result":"Ok"}),
+        Ok(BookDeletion::DoneWithWarning(warning)) => json!({"status":"success","result":"Warning","warning":warning}),
+        Err(error) => json!({"status":"failure","error":error}),
     }))
 }
 #[derive(Deserialize)]
@@ -823,8 +822,8 @@ struct Rename {
     new_category: String,
 }
 async fn rename_category(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<Rename>) -> ApiResult<Json<Value>> {
-    let (mut value, error) = manager(&deps, &uri)?.rename_category(&body.old_category, &body.new_category).await;
-    if error.is_none() {
+    let mut renamed = manager(&deps, &uri)?.rename_category(&body.old_category, &body.new_category).await;
+    if let Ok(value) = &mut renamed {
         let ct = kind(&uri);
         let updated = mapping(deps, move |m| m.rename_category(&body.old_category, &body.new_category, ct)).await?;
         if !updated {
@@ -832,7 +831,7 @@ async fn rename_category(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Orig
         }
         value["mapping_updated"] = json!(updated);
     }
-    Ok(result(value, error))
+    Ok(result(renamed))
 }
 #[derive(Deserialize)]
 struct Delete {
@@ -841,8 +840,8 @@ struct Delete {
     delete_files: bool,
 }
 async fn delete_category(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<Delete>) -> ApiResult<Json<Value>> {
-    let (mut value, error) = manager(&deps, &uri)?.delete_category(&body.category, body.delete_files).await;
-    if error.is_none() {
+    let mut deleted_category = manager(&deps, &uri)?.delete_category(&body.category, body.delete_files).await;
+    if let Ok(value) = &mut deleted_category {
         let ct = kind(&uri);
         let deleted = mapping(deps, move |m| {
             let deleted = m.delete_category(&body.category, ct, true)?;
@@ -867,15 +866,14 @@ async fn delete_category(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Orig
         }
         value["mapping_deleted"] = json!(deleted);
     }
-    Ok(result(value, error))
+    Ok(result(deleted_category))
 }
 #[derive(Deserialize)]
 struct CategoryQuery {
     category: String,
 }
 async fn delete_preview(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiQuery(query): ApiQuery<CategoryQuery>) -> ApiResult<Json<Value>> {
-    let (value, error) = manager(&deps, &uri)?.preview_delete_category(&query.category).await;
-    Ok(result(value, error))
+    Ok(result(manager(&deps, &uri)?.preview_delete_category(&query.category).await))
 }
 async fn pdf_stats(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiQuery(query): ApiQuery<CategoryQuery>) -> ApiResult<Json<Value>> {
     if query.category.is_empty() || query.category == "_root" {
@@ -883,10 +881,10 @@ async fn pdf_stats(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUr
     }
     let es = manager(&deps, &uri)?.es_manager();
     match tokio::task::spawn_blocking(move || es.search_category_pdf_stats(&query.category)).await {
-        Ok(Ok(value)) => Ok(result(value, None)),
+        Ok(Ok(value)) => Ok(result(Ok(value))),
         error => {
             log::error!("get_category_pdf_stats failed: {error:?}");
-            Ok(result(Value::Null, Some("PDF 통계를 불러오지 못했습니다.".into())))
+            Ok(result(Err("PDF 통계를 불러오지 못했습니다.".into())))
         }
     }
 }
@@ -969,7 +967,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl BookManagerApi for ApplyManager {
-        async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> (serde_json::Value, Option<String>) {
+        async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<serde_json::Value, String> {
             if let Some(on_progress) = request.on_progress {
                 on_progress(json!({"processed_count":1}));
             }
@@ -979,7 +977,7 @@ mod tests {
             if let Some(should_continue) = request.should_continue {
                 let _ = should_continue();
             }
-            (json!({"applied_count":1,"failed_count":0}), self.error.map(str::to_string))
+            self.error.map_or_else(|| Ok(json!({"applied_count":1,"failed_count":0})), |error| Err(error.to_string()))
         }
     }
 
@@ -1119,10 +1117,10 @@ mod tests {
 
     #[test]
     fn result_serializes_success_and_failure_shapes() {
-        let success = result(json!({"count":2}), None);
+        let success = result(Ok(json!({"count":2})));
         assert_eq!(success.0, json!({"status":"success","result":{"count":2}}));
 
-        let failure = result(serde_json::Value::Null, Some("failed".into()));
+        let failure = result(Err("failed".into()));
         assert_eq!(failure.0, json!({"status":"failure","error":"failed"}));
     }
 }

@@ -53,7 +53,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
 use backend::auth::{ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, RequestParts, SystemExit, TokenIssuer};
 use backend::db::Row;
 use backend::main::{ACCESS_COOKIE_NAME, AppDeps, AuthMode, CustomJSONResponse, GoogleVerifier, REFRESH_COOKIE_NAME, RequestValidationError, RoleResolver, app_with, observation_hash};
-use backend::refresh_token_store::{RefreshTokenStoreApi, SessionQuery, StoreError};
+use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, SessionQuery, StoreError};
 use common::env::EnvGuard;
 use common::log_capture::LogCapture;
 use common::{Response, TestClient};
@@ -283,12 +283,12 @@ impl RefreshTokenStoreApi for FakeStore {
         _expires_at: i64,
         client_ip: Option<&str>,
         user_agent: Option<&str>,
-    ) -> Result<String, StoreError> {
+    ) -> Result<Rotation, StoreError> {
         self.rotated
             .lock()
             .unwrap()
             .push(json!({"current_token_id": current_token_id, "new_token_id": new_token_id, "family_id": family_id, "email": email, "client_ip": client_ip, "user_agent": user_agent}));
-        Ok(self.rotate_status.lock().unwrap().clone().unwrap_or_else(|| "ok".to_string()))
+        Ok(self.rotate_status.lock().unwrap().as_deref().map_or(Rotation::Ok, |status| status.parse().unwrap()))
     }
 
     fn revoke_family(&self, family_id: &str, reason: &str) -> Result<(), StoreError> {

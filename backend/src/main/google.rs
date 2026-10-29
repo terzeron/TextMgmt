@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::traits::GoogleVerifier;
 
 const GOOGLE_JWKS_URL: &str = "https://www.googleapis.com/oauth2/v3/certs";
-const GOOGLE_ISSUERS: [&str; 2] = ["accounts.google.com", "https://accounts.google.com"];
+pub(super) const GOOGLE_ISSUERS: [&str; 2] = ["accounts.google.com", "https://accounts.google.com"];
 const UNKNOWN_KID_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Google 공개 서명 키를 가져온다. 테스트는 고정 JWKS를 주입한다.
@@ -84,17 +84,11 @@ impl GoogleIdTokenVerifier {
         Ok(value)
     }
 
-    fn verify_with_jwks(credential: &str, audience: &str, jwks: &Value) -> Result<Value, String> {
-        let header = decode_header(credential).map_err(|e| e.to_string())?;
-        if header.alg != Algorithm::RS256 {
-            return Err("Google ID token must use RS256".to_string());
-        }
-        let kid = header.kid.ok_or_else(|| "Google ID token has no key id".to_string())?;
-        let key = jwks
-            .get("keys")
-            .and_then(Value::as_array)
-            .and_then(|keys| keys.iter().find(|key| key.get("kid").and_then(Value::as_str) == Some(kid.as_str())))
-            .ok_or_else(|| format!("Google signing key not found: {kid}"))?;
+    fn find_key<'a>(jwks: &'a Value, kid: &str) -> Option<&'a Value> {
+        jwks.get("keys").and_then(Value::as_array).and_then(|keys| keys.iter().find(|key| key.get("kid").and_then(Value::as_str) == Some(kid)))
+    }
+
+    fn verify_with_key(credential: &str, audience: &str, key: &Value) -> Result<Value, String> {
         if key.get("kty").and_then(Value::as_str) != Some("RSA")
             || key.get("use").and_then(Value::as_str).is_some_and(|usage| usage != "sig")
             || key.get("alg").and_then(Value::as_str).is_some_and(|alg| alg != "RS256")
@@ -124,14 +118,18 @@ impl GoogleVerifier for GoogleIdTokenVerifier {
         if credential.len() > 64 * 1024 {
             return Err("Google ID token exceeds 64 KiB".to_string());
         }
-        let jwks = self.jwks(false)?;
-        match Self::verify_with_jwks(credential, audience, &jwks) {
-            Err(error) if error.starts_with("Google signing key not found:") => {
-                let refreshed = self.jwks(true)?;
-                Self::verify_with_jwks(credential, audience, &refreshed)
-            }
-            result => result,
+        let mut jwks = self.jwks(false)?;
+        let header = decode_header(credential).map_err(|e| e.to_string())?;
+        if header.alg != Algorithm::RS256 {
+            return Err("Google ID token must use RS256".to_string());
         }
+        let kid = header.kid.ok_or_else(|| "Google ID token has no key id".to_string())?;
+        // 캐시에 없는 kid는 Google 키 교체일 수 있으므로 한 번 다시 받는다.
+        if Self::find_key(&jwks, &kid).is_none() {
+            jwks = self.jwks(true)?;
+        }
+        let key = Self::find_key(&jwks, &kid).ok_or_else(|| format!("Google signing key not found: {kid}"))?;
+        Self::verify_with_key(credential, audience, key)
     }
 }
 

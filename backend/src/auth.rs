@@ -9,6 +9,8 @@ use std::fmt;
 use std::io::Read;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde_json::{Value, json};
@@ -163,29 +165,6 @@ pub fn uuid_hex() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn base64url_decode(text: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(text.len() * 3 / 4);
-    let (mut acc, mut bits) = (0u32, 0u32);
-    for c in text.bytes() {
-        let v = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'-' => 62,
-            b'_' => 63,
-            _ => continue,
-        } as u32;
-        acc = (acc << 6) | v;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-            acc &= (1 << bits) - 1;
-        }
-    }
-    out
-}
-
 /// 관측 로그용 단방향 해시. Python `observation_hash`: `HMAC-SHA256(secret, "tm-observation|" + value)`의 hex 앞 16자.
 ///
 /// refresh 회전 실패를 "같은 브라우저의 동시 요청"과 "다른 환경에서 복사된 상태"로 나누려는 진단 신호다.
@@ -200,7 +179,7 @@ pub fn observation_hash(value: &str) -> String {
     let Ok(signature) = jsonwebtoken::crypto::sign(message.as_bytes(), &key, JWT_ALGORITHM) else {
         return String::new();
     };
-    let hex: String = base64url_decode(&signature).iter().map(|b| format!("{b:02x}")).collect();
+    let hex: String = URL_SAFE_NO_PAD.decode(&signature).unwrap_or_default().iter().map(|b| format!("{b:02x}")).collect();
     hex.chars().take(OBSERVATION_HASH_LENGTH).collect()
 }
 
@@ -399,13 +378,6 @@ mod tests {
         assert!(id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
         assert_eq!(&id[12..13], "4");
         assert_ne!(id, uuid_hex());
-    }
-
-    #[test]
-    fn base64url_decode_matches_known_value() {
-        // "any carnal pleas" -> YW55IGNhcm5hbCBwbGVhcw
-        assert_eq!(base64url_decode("YW55IGNhcm5hbCBwbGVhcw"), b"any carnal pleas");
-        assert_eq!(base64url_decode("-_8"), vec![0xfb, 0xff]);
     }
 
     #[test]

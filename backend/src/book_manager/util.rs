@@ -182,6 +182,12 @@ pub fn unique_token() -> String {
     format!("{}-{nanos}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
+/// `path`와 같은 디렉토리의 고유한 임시 경로. 다 쓴 뒤 `rename`해야 읽는 쪽이 쓰는 중인 파일을 보지 않는다.
+pub fn temp_sibling(path: &Path) -> PathBuf {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!(".{name}.{}.tmp", unique_token()))
+}
+
 /// 지울 때 알아서 정리되는 임시 디렉터리. `tempfile`은 개발 의존이라 직접 만든다.
 pub struct TempDir {
     path: PathBuf,

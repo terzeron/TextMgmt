@@ -117,7 +117,10 @@ pub struct Edit {
 
 impl Env {
     pub async fn run(&self, edit: &Edit) -> (Option<Value>, Option<String>) {
-        self.bm.delete_pdf_pages(1, &edit.pages, edit.crops.as_deref(), edit.splits.as_deref(), edit.inserts.as_deref(), edit.order.as_deref()).await
+        match self.bm.delete_pdf_pages(1, &edit.pages, edit.crops.as_deref(), edit.splits.as_deref(), edit.inserts.as_deref(), edit.order.as_deref()).await {
+            Ok(value) => (Some(value), None),
+            Err(error) => (None, Some(error)),
+        }
     }
 
     /// 인자를 따로 쓰는 호출: `delete_pdf_pages(1, pages)`
@@ -831,31 +834,27 @@ impl FakeManager {
 
 #[async_trait::async_trait]
 impl backend::main::BookManagerApi for FakeManager {
-    async fn preview_insert_image(&self, url: &str) -> (Option<Vec<u8>>, Option<String>) {
+    async fn preview_insert_image(&self, url: &str) -> Result<Vec<u8>, String> {
         self.calls.lock().unwrap().push(("preview_insert_image".into(), vec![json!(url)]));
-        self.preview_insert_image.lock().unwrap().clone()
+        let (value, error) = self.preview_insert_image.lock().unwrap().clone();
+        error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 
-    async fn preview_insert_upload(&self, data: &[u8]) -> (Option<Vec<u8>>, Option<String>) {
+    async fn preview_insert_upload(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         self.calls.lock().unwrap().push(("preview_insert_upload".into(), vec![json!(data)]));
-        self.preview_insert_upload.lock().unwrap().clone()
+        let (value, error) = self.preview_insert_upload.lock().unwrap().clone();
+        error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 
-    async fn delete_pdf_pages(
-        &self,
-        book_id: i64,
-        pages: &[i64],
-        crops: Option<&[Value]>,
-        splits: Option<&[Value]>,
-        inserts: Option<&[Value]>,
-        order: Option<&[i64]>,
-    ) -> (Option<Value>, Option<String>) {
+    async fn delete_pdf_pages(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String> {
         self.calls.lock().unwrap().push(("delete_pdf_pages".into(), vec![json!(book_id), json!(pages), json!(crops), json!(splits), json!(inserts), json!(order)]));
-        self.delete_pdf_pages.lock().unwrap().clone()
+        let (value, error) = self.delete_pdf_pages.lock().unwrap().clone();
+        error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 
-    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> (Option<Value>, Option<String>) {
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String> {
         self.calls.lock().unwrap().push(("edit_epub_images".into(), vec![json!(book_id), json!(crops), json!(splits), json!(deletes), json!(inserts)]));
-        self.edit_epub_images.lock().unwrap().clone()
+        let (value, error) = self.edit_epub_images.lock().unwrap().clone();
+        error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 }

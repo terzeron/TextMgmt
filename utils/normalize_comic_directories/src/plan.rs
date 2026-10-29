@@ -1,6 +1,7 @@
 //! 디렉토리별 이름 변경 계획을 세우고, 리포트로 쓰고, 실제로 바꾼다.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -22,18 +23,70 @@ pub trait Searcher {
 }
 
 /// 디렉토리 하나의 처리 계획.
+/// 디렉토리를 건너뛴 이유. 리포트에는 `SKIP_*` 이름(원본 상태 문자열)으로 쓴다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SkipReason {
+    InsufficientFiles,
+    UnparseableFilenames,
+    AmbiguousFileTitles,
+    TitleMismatch,
+    NoRange,
+    SearchLimit,
+    NotCached,
+    NoBookstoreMatch,
+    NoAuthor,
+    InvalidName,
+    Conflict,
+}
+
+impl SkipReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InsufficientFiles => "SKIP_INSUFFICIENT_FILES",
+            Self::UnparseableFilenames => "SKIP_UNPARSEABLE_FILENAMES",
+            Self::AmbiguousFileTitles => "SKIP_AMBIGUOUS_FILE_TITLES",
+            Self::TitleMismatch => "SKIP_TITLE_MISMATCH",
+            Self::NoRange => "SKIP_NO_RANGE",
+            Self::SearchLimit => "SKIP_SEARCH_LIMIT",
+            Self::NotCached => "SKIP_NOT_CACHED",
+            Self::NoBookstoreMatch => "SKIP_NO_BOOKSTORE_MATCH",
+            Self::NoAuthor => "SKIP_NO_AUTHOR",
+            Self::InvalidName => "SKIP_INVALID_NAME",
+            Self::Conflict => "SKIP_CONFLICT",
+        }
+    }
+}
+
+/// 디렉토리 하나의 계획 결과. `Display`는 리포트 TSV의 status 열 문자열이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Status {
+    Rename,
+    Unchanged,
+    Skip(SkipReason),
+}
+
+impl fmt::Display for Status {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Rename => "RENAME",
+            Self::Unchanged => "UNCHANGED",
+            Self::Skip(reason) => reason.as_str(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Proposal {
     pub source: PathBuf,
     pub target: Option<PathBuf>,
     pub confidence: f64,
     pub sample_count: usize,
-    pub status: String,
+    pub status: Status,
     pub evidence: String,
 }
 
-fn skip(source: &Path, confidence: f64, count: usize, status: &str, evidence: &str) -> Proposal {
-    Proposal { source: source.to_owned(), target: None, confidence, sample_count: count, status: status.to_owned(), evidence: evidence.to_owned() }
+fn skip(source: &Path, confidence: f64, count: usize, reason: SkipReason, evidence: &str) -> Proposal {
+    Proposal { source: source.to_owned(), target: None, confidence, sample_count: count, status: Status::Skip(reason), evidence: evidence.to_owned() }
 }
 
 /// 서점 투표로 정한 제목과 저자.
@@ -130,13 +183,13 @@ pub fn build_proposals(root: &Path, delay: f64, max_searches: usize, cache: &mut
             let identity = infer_identity(&directory);
             let (confidence, count) = (identity.confidence, identity.file_count);
             let Some(title) = identity.title.clone() else {
-                proposals.push(skip(&directory, confidence, count, identity.failure_status.as_deref().unwrap_or("SKIP_UNPARSEABLE_FILENAMES"), &identity.failure_reason));
+                proposals.push(skip(&directory, confidence, count, identity.failure_status.unwrap_or(SkipReason::UnparseableFilenames), &identity.failure_reason));
                 continue;
             };
             let dir_name = directory.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let original_author = directory_author(&dir_name);
             let Some(metadata) = normalized_directory_metadata(&directory) else {
-                proposals.push(skip(&directory, confidence, count, "SKIP_NO_RANGE", ""));
+                proposals.push(skip(&directory, confidence, count, SkipReason::NoRange, ""));
                 continue;
             };
             let query_author = original_author.clone().or_else(|| identity.author.clone());
@@ -145,7 +198,7 @@ pub fn build_proposals(root: &Path, delay: f64, max_searches: usize, cache: &mut
             if !query_cache.contains_key(&query_key) {
                 let has_any_cached_store = BOOKSTORES.iter().any(|s| cache.contains(&cache_key, s));
                 if max_searches > 0 && queries_processed >= max_searches && !has_any_cached_store {
-                    proposals.push(skip(&directory, confidence, count, "SKIP_SEARCH_LIMIT", ""));
+                    proposals.push(skip(&directory, confidence, count, SkipReason::SearchLimit, ""));
                     continue;
                 }
                 let canonical = canonical_book_title(&title, query_author.as_deref(), &BOOKSTORES, delay, &cache_key, cache, searcher);
@@ -158,8 +211,8 @@ pub fn build_proposals(root: &Path, delay: f64, max_searches: usize, cache: &mut
             }
             let canonical = &query_cache[&query_key];
             let Some(book_title) = &canonical.title else {
-                let status = if canonical.unavailable { "SKIP_NOT_CACHED" } else { "SKIP_NO_BOOKSTORE_MATCH" };
-                proposals.push(skip(&directory, confidence, count, status, &canonical.evidence));
+                let reason = if canonical.unavailable { SkipReason::NotCached } else { SkipReason::NoBookstoreMatch };
+                proposals.push(skip(&directory, confidence, count, reason, &canonical.evidence));
                 continue;
             };
             let resolved_author = korean_author(original_author.as_deref())
@@ -167,16 +220,16 @@ pub fn build_proposals(root: &Path, delay: f64, max_searches: usize, cache: &mut
                 .or_else(|| matching_local_author(book_title, &author_references))
                 .or_else(|| korean_author(canonical.author.as_deref()));
             let Some(resolved_author) = resolved_author else {
-                proposals.push(skip(&directory, confidence, count, "SKIP_NO_AUTHOR", &canonical.evidence));
+                proposals.push(skip(&directory, confidence, count, SkipReason::NoAuthor, &canonical.evidence));
                 continue;
             };
             let Some(target_name) = filesystem_safe_name(&format!("[{resolved_author}] {book_title} {metadata}")) else {
-                proposals.push(skip(&directory, confidence, count, "SKIP_INVALID_NAME", &canonical.evidence));
+                proposals.push(skip(&directory, confidence, count, SkipReason::InvalidName, &canonical.evidence));
                 continue;
             };
             let target = directory.with_file_name(target_name);
-            let status = if target == directory { "UNCHANGED" } else { "RENAME" };
-            proposals.push(Proposal { source: directory, target: Some(target), confidence, sample_count: count, status: status.into(), evidence: canonical.evidence.clone() });
+            let status = if target == directory { Status::Unchanged } else { Status::Rename };
+            proposals.push(Proposal { source: directory, target: Some(target), confidence, sample_count: count, status, evidence: canonical.evidence.clone() });
         }
     }
 
@@ -189,19 +242,19 @@ pub fn build_proposals(root: &Path, delay: f64, max_searches: usize, cache: &mut
         cache.search_seconds
     );
 
-    let planned_sources: HashSet<PathBuf> = proposals.iter().filter(|p| p.status == "RENAME").map(|p| p.source.clone()).collect();
+    let planned_sources: HashSet<PathBuf> = proposals.iter().filter(|p| p.status == Status::Rename).map(|p| p.source.clone()).collect();
     let mut target_counts: HashMap<PathBuf, usize> = HashMap::new();
-    for p in proposals.iter().filter(|p| p.status == "RENAME") {
+    for p in proposals.iter().filter(|p| p.status == Status::Rename) {
         if let Some(t) = &p.target {
             *target_counts.entry(t.clone()).or_insert(0) += 1;
         }
     }
-    for p in proposals.iter_mut().filter(|p| p.status == "RENAME") {
+    for p in proposals.iter_mut().filter(|p| p.status == Status::Rename) {
         let Some(target) = &p.target else { continue };
         let occupied = target.exists() && !planned_sources.contains(target);
         let duplicate = target_counts[target] > 1;
         if occupied || duplicate {
-            p.status = "SKIP_CONFLICT".into();
+            p.status = Status::Skip(SkipReason::Conflict);
         }
     }
     proposals
@@ -225,7 +278,7 @@ pub fn write_report(proposals: &[Proposal], path: &Path) -> std::io::Result<()> 
     row(["status", "confidence", "book_files", "source", "target", "evidence"].map(String::from));
     for item in proposals {
         row([
-            item.status.clone(),
+            item.status.to_string(),
             format!("{:.3}", item.confidence),
             item.sample_count.to_string(),
             item.source.display().to_string(),
@@ -247,7 +300,7 @@ fn temporary_name(source: &Path) -> PathBuf {
 /// `RENAME` 계획을 적용한다. 먼저 모두 임시 이름으로 옮긴 뒤 목표 이름으로 바꿔서, 서로 이름을 맞바꾸는 경우도 된다.
 /// 중간에 실패하면 원래 이름으로 되돌린다.
 pub fn apply_renames(proposals: &[Proposal]) -> Result<usize, String> {
-    let renames: Vec<(&Path, &Path)> = proposals.iter().filter(|p| p.status == "RENAME").filter_map(|p| p.target.as_deref().map(|t| (p.source.as_path(), t))).collect();
+    let renames: Vec<(&Path, &Path)> = proposals.iter().filter(|p| p.status == Status::Rename).filter_map(|p| p.target.as_deref().map(|t| (p.source.as_path(), t))).collect();
     let sources: HashSet<&Path> = renames.iter().map(|(s, _)| *s).collect();
     if renames.iter().any(|(_, t)| t.exists() && !sources.contains(t)) {
         return Err("A destination appeared after preflight; no rename was started.".into());
@@ -255,6 +308,9 @@ pub fn apply_renames(proposals: &[Proposal]) -> Result<usize, String> {
 
     // (원래 이름, 임시 이름, 목표 이름)
     let mut staged: Vec<(PathBuf, PathBuf, PathBuf)> = Vec::new();
+    // 목표 이름으로 옮기기를 끝낸 건수. 롤백은 이 수로 현재 위치를 가른다.
+    // `target.exists()`로 가르면 다른 곳에서 생긴 대상 디렉토리를 원본 이름으로 옮긴다.
+    let mut moved = 0;
     let attempt = (|| -> Result<(), String> {
         for (source, target) in &renames {
             let temporary = temporary_name(source);
@@ -266,12 +322,13 @@ pub fn apply_renames(proposals: &[Proposal]) -> Result<usize, String> {
                 return Err(format!("File exists: {}", target.display()));
             }
             fs::rename(temporary, target).map_err(|e| format!("{}: {e}", target.display()))?;
+            moved += 1;
         }
         Ok(())
     })();
     if let Err(e) = attempt {
-        for (source, temporary, target) in staged.iter().rev() {
-            let current = if target.exists() { target } else { temporary };
+        for (index, (source, temporary, target)) in staged.iter().enumerate().rev() {
+            let current = if index < moved { target } else { temporary };
             if current.exists() && !source.exists() {
                 let _ = fs::rename(current, source);
             }

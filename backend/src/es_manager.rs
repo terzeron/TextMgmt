@@ -9,6 +9,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE;
 use chrono::{DateTime, Local};
 use serde_json::{Map, Value, json};
 use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
@@ -359,58 +361,15 @@ impl UpdateFields {
 // 커서
 // ---------------------------------------------------------------------------
 
-const B64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-pub(crate) fn base64_encode(input: &[u8], alphabet: &[u8; 64]) -> String {
-    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    for c in input.chunks(3) {
-        let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
-        out.push(alphabet[(n >> 18) as usize & 63] as char);
-        out.push(alphabet[(n >> 12) as usize & 63] as char);
-        out.push(if c.len() > 1 { alphabet[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if c.len() > 2 { alphabet[n as usize & 63] as char } else { '=' });
-    }
-    out
-}
-
-fn base64_url_decode(input: &str) -> Option<Vec<u8>> {
-    let bytes = input.as_bytes();
-    if !bytes.len().is_multiple_of(4) {
-        return None;
-    }
-    let value = |b: u8| B64_URL.iter().position(|&c| c == b).map(|p| p as u32);
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    let chunks = bytes.len() / 4;
-    for (i, chunk) in bytes.chunks(4).enumerate() {
-        let pad = chunk.iter().rev().take_while(|&&b| b == b'=').count();
-        if pad > 2 || (pad > 0 && i + 1 != chunks) {
-            return None;
-        }
-        let mut n = 0u32;
-        for (j, &b) in chunk.iter().enumerate() {
-            let v = if j >= 4 - pad { if b == b'=' { 0 } else { return None } } else { value(b)? };
-            n = (n << 6) | v;
-        }
-        out.push((n >> 16) as u8);
-        if pad < 2 {
-            out.push((n >> 8) as u8);
-        }
-        if pad < 1 {
-            out.push(n as u8);
-        }
-    }
-    Some(out)
-}
-
 /// ES sort 값을 클라이언트에 내보낼 불투명 커서 문자열로 만든다. Python `encode_category_cursor`와 같다
 /// (JSON을 URL-safe base64로 감싼다. 비ASCII는 `\u` 이스케이프 없이 UTF-8 그대로라 바이트열은 Python과 다를 수 있으나 서로 복원된다).
 pub fn encode_category_cursor(sort_values: &[Value]) -> String {
-    base64_encode(Value::Array(sort_values.to_vec()).to_string().as_bytes(), B64_URL)
+    URL_SAFE.encode(Value::Array(sort_values.to_vec()).to_string())
 }
 
 /// 커서를 sort 값으로 되돌린다. 형식이 잘못되면 `None`이다.
 pub fn decode_category_cursor(cursor: &str) -> Option<Vec<Value>> {
-    let bytes = base64_url_decode(cursor)?;
+    let bytes = URL_SAFE.decode(cursor).ok()?;
     match serde_json::from_slice::<Value>(&bytes).ok()? {
         Value::Array(values) => Some(values),
         _ => None,
