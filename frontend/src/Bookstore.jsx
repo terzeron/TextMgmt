@@ -141,6 +141,13 @@ const requestSearch = (store, search) => {
 const buildStoreSearchUrl = (store, title, author) => {
   const encodedTitle = encodeURIComponent(title || "");
   switch (store) {
+    // RIDI는 자동 요청을 차단하므로 서점 링크로 직접 검색하게 한다. 검색어가 없으면 첫 화면으로 보낸다.
+    case "ridi": {
+      const keyword = [author, title].filter(Boolean).join(" ");
+      return keyword
+        ? `https://ridibooks.com/search?q=${encodeURIComponent(keyword)}&adult_exclude=n`
+        : "https://ridibooks.com";
+    }
     case "munpia": {
       const keyword = [author, title].filter(Boolean).join(" ");
       return keyword

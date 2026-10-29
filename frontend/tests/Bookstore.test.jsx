@@ -897,6 +897,30 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
       ).toBe(true);
     });
   });
+
+  // RIDI는 자동 요청을 차단(Cloudflare 챌린지)하므로 수동 검색만 제공하고, 서점 링크는 검색 전에도 보여 준다.
+  it("RIDI는 검색 전에도 서점 링크를 표시하고 자동 검색하지 않는다", async () => {
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "success", result: [] }), 0);
+    });
+
+    await act(async () => {
+      render(<Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} searchTrigger={1} />);
+    });
+
+    const link = within(storeRow("RIDI")).getByText("서점").closest("a");
+    expect(link.getAttribute("href")).toBe("https://ridibooks.com/search?q=%EC%A0%80%EC%9E%90%20%EC%A0%9C%EB%AA%A9&adult_exclude=n");
+    expect(rawJsonGetReq.mock.calls.some(([url]) => url.includes("/search/bookstore/ridi"))).toBe(false);
+  });
+
+  it("RIDI는 검색어가 없어도 서점 링크를 표시한다", async () => {
+    await act(async () => {
+      render(<Bookstore bookInfo={{ title: "", author: "", isbn: "" }} />);
+    });
+
+    const link = within(storeRow("RIDI")).getByText("서점").closest("a");
+    expect(link.getAttribute("href")).toBe("https://ridibooks.com");
+  });
 });
 
 describe("Bookstore 만화 전용 서점", () => {
