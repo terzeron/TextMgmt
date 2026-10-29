@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 
 use scan_common::args::{long_option, number};
 use scan_common::files::collect_files;
-use scan_common::{Category, DEFAULT_WORKERS, limited, pool, scan_streaming};
+use scan_common::{Category, DEFAULT_WORKERS, limited, pool, scan_streaming, workers_within_memory};
 
+use crate::pdf::security::MAX_PARALLEL_INPUT_MB;
 use crate::report::{Aggregate, write_json_line, write_report_file, write_summary_line, write_text};
 use crate::scan::scan_file;
 
@@ -124,15 +125,22 @@ pub fn run(argv: &[String], out: &mut dyn Write) -> i32 {
     }
 }
 
+/// 실제로 쓰는 워커 수. lopdf는 입력보다 훨씬 많은 메모리를 쓰므로 동시에 해석하는 수를 메모리로 제한한다:
+/// `workers <= MAX_PARALLEL_INPUT_MB / max-total-mb`, 최소 1.
+pub fn effective_workers(opts: &Options) -> usize {
+    workers_within_memory(opts.workers, opts.max_total_mb, MAX_PARALLEL_INPUT_MB)
+}
+
 /// 파일을 검사해 텍스트나 NDJSON으로 내보내고, 요청하면 리포트 파일을 쓴다.
 fn scan(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
     let paths = limited(collect_files(&opts.paths, opts.recursive, wanted), opts.limit);
-    let pool = pool(opts.workers);
+    let workers = effective_workers(opts);
+    let pool = pool(workers);
     let mut agg = Aggregate::new();
     let summary = scan_streaming(
         &paths,
         &pool,
-        opts.workers * WINDOW_PER_WORKER,
+        workers * WINDOW_PER_WORKER,
         |p| scan_file(p, opts),
         |r| {
             agg.add(r);
@@ -167,9 +175,11 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   -r, --recursive     디렉토리를 하위까지 훑는다.
   --json              결과를 JSON으로 출력한다.
   --report PATH       리포트 파일 경로
-  --workers N         병렬 작업 수 (기본 {DEFAULT_WORKERS})
+  --workers N         병렬 작업 수 (기본 {DEFAULT_WORKERS}). 메모리 때문에 낮아질 수 있다:
+                      실제 워커 수는 256 / max-total-mb 이하이고 최소 1이다
   --limit N           앞에서 N건만 처리한다 (0이면 전체)
-  --max-total-mb N    파일 하나에서 읽는 최대 크기 MB (기본 256)
+  --max-total-mb N    파일 하나에서 읽는 최대 크기 MB (기본 256).
+                      기본값이면 워커 1개, 128이면 2개까지 허용한다
   --only LIST         지정한 분류(security, defect, render)의 지표만 남긴다.
   --pdf-text          PDF 본문 텍스트까지 검사한다.
   --no-poppler        poppler 외부 명령을 쓰지 않는다.

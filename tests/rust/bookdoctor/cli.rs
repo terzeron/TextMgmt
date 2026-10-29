@@ -1,6 +1,6 @@
 //! 명령행 파싱과 `run` 종료 코드 테스트.
 
-use bookdoctor::cli::{parse, run};
+use bookdoctor::cli::{Options, effective_workers, parse, print_usage, run};
 use scan_common::Category;
 
 fn args(s: &str) -> Vec<String> {
@@ -34,4 +34,23 @@ fn clean_empty_dir_exits_0() {
     let d = tempfile::tempdir().unwrap();
     let mut out = Vec::new();
     assert_eq!(run(&["-r".into(), d.path().to_string_lossy().into_owned()], &mut out), 0);
+}
+
+#[test]
+fn effective_workers_are_capped_by_memory() {
+    // 한도 256MB 기준: workers <= 256 / max-total-mb, 최소 1.
+    assert_eq!(effective_workers(&Options::default()), 1);
+    assert_eq!(effective_workers(&Options { workers: 2, max_total_mb: 128, ..Options::default() }), 2);
+    assert_eq!(effective_workers(&Options { workers: 8, max_total_mb: 64, ..Options::default() }), 4);
+    assert_eq!(effective_workers(&Options { workers: 8, max_total_mb: 1000, ..Options::default() }), 1);
+    // 0은 parse가 먼저 거른다.
+    assert!(parse(&args("--max-total-mb 0 a")).is_err());
+}
+
+#[test]
+fn usage_explains_the_memory_cap_on_workers() {
+    let mut out = Vec::new();
+    print_usage(&mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("256 / max-total-mb"), "{text}");
 }
