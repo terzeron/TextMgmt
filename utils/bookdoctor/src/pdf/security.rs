@@ -174,6 +174,7 @@ const FILTER_TRUNCATED_KEY: &[u8] = b"PdfscanFilterTruncated";
 const FILTER_ARRAY_TRUNCATED_KEY: &[u8] = b"PdfscanFilterArrayTruncated";
 
 /// 객체 하나를 스캔에 필요한 만큼만 남긴다. 제자리에서 줄인다.
+#[cfg(test)]
 fn shrink(obj: &mut Object, depth: usize) {
     shrink_with(obj, depth, true);
 }
