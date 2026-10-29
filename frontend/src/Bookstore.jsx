@@ -116,6 +116,11 @@ const combineSearchResults = (titleResult, authorTitleResult) => {
   if (!results.length && titleResult?.error && (authorTitleResult?.error || !authorTitleResult)) {
     return titleResult;
   }
+  // 서점이 자동 요청을 막은 경우는 "결과 없음"과 구분해 안내를 남긴다.
+  const blocked = [titleResult, authorTitleResult].find((r) => r?.status === "blocked");
+  if (!results.length && blocked) {
+    return { ...authorTitleResult, ...titleResult, status: "blocked", message: blocked.message, result: results };
+  }
   return {
     ...authorTitleResult,
     ...titleResult,
@@ -625,7 +630,9 @@ export default function Bookstore(props) {
 
           {result && !result.loading && !result.error && (
             <>
-              {result.status === "success" && result.result.length > 0 ? (
+              {result.status === "blocked" ? (
+                <span className="text-warning">{result.message}</span>
+              ) : result.status === "success" && result.result.length > 0 ? (
                 result.result.map((item, idx) => (
                   <div
                     key={item.book_url || idx}

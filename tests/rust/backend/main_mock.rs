@@ -759,6 +759,10 @@ impl BookstoreSearch for StoreProxy {
     fn api_search_url(&self, keyword: &str) -> String {
         self.0.invoke_sync("api_search_url", call_args!([keyword], {})).as_str().unwrap_or("").to_string()
     }
+
+    fn blocked(&self) -> bool {
+        self.0.invoke_sync("blocked", call_args!([], {})).as_bool().unwrap_or(false)
+    }
 }
 
 /// `with_bookstore_factory`에 넘길 factory. 서점 이름과 상관없이 같은 대역을 돌려준다(설계 3.2의 factory는 인자가 없다).
@@ -2877,6 +2881,31 @@ mod test_search_bookstore {
         let data = r.json();
         assert_eq!(data["status"], "not_found");
         assert_eq!(data["result"], json!([]));
+    }
+
+    // 서점이 자동 요청을 막은 것과 정말 결과가 없는 것을 화면이 구분할 수 있어야 한다.
+    #[tokio::test]
+    async fn test_blocked_store_is_reported_apart_from_not_found() {
+        let store = fake_store(json!([[], "kw", "title"]), "");
+        store.returns("blocked", json!(true));
+        let fx = Fx::tweaked(|d| d.with_bookstore_factory(store_factory(store)));
+        let r = fx.get("/search/bookstore/ridi?title=kw").await;
+        assert_eq!(r.status, 200);
+        let data = r.json();
+        assert_eq!(data["status"], "blocked");
+        assert_eq!(data["result"], json!([]));
+        assert!(data["message"].as_str().is_some_and(|m| m.contains("차단")), "{data}");
+        assert_eq!(data["search_keyword"], "kw");
+    }
+
+    #[tokio::test]
+    async fn test_blocked_flag_is_ignored_when_results_exist() {
+        let store = fake_store(json!([[["Book A", "Author A", "소설", "http://url", null, ""]], "Book A", "title"]), "");
+        store.returns("blocked", json!(true));
+        let fx = Fx::tweaked(|d| d.with_bookstore_factory(store_factory(store)));
+        let data = fx.get("/search/bookstore/ridi?title=Book+A").await.json();
+        assert_eq!(data["status"], "success");
+        assert!(data.get("message").is_none());
     }
 
     #[tokio::test]

@@ -23,7 +23,7 @@ use std::fmt::Write as _;
 use std::hash::{BuildHasher, Hasher};
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
@@ -492,6 +492,11 @@ pub trait AbstractBookstore: Sync {
         MAX_RESULTS
     }
 
+    /// 마지막 검색 요청을 서점이 자동 요청 차단으로 거절했는가. 차단을 알리는 서점만 덮어쓴다.
+    fn request_blocked(&self) -> bool {
+        false
+    }
+
     /// 파일 쓰기·읽기 능력. 테스트는 디스크 여유와 쓰기 오류를 흉내 낸다.
     fn fs(&self) -> &dyn FsOps {
         &RealFs
@@ -688,9 +693,18 @@ pub trait BookstoreSearch: Send + Sync {
     fn api_search_url(&self, _keyword: &str) -> String {
         String::new()
     }
+
+    /// 마지막 검색이 서점의 자동 요청 차단으로 실패했는가. 차단이면 빈 결과가 "결과 없음"이 아니다.
+    fn blocked(&self) -> bool {
+        false
+    }
 }
 
 impl<T: AbstractBookstore + Send> BookstoreSearch for T {
+    fn blocked(&self) -> bool {
+        self.request_blocked()
+    }
+
     fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String) {
         AbstractBookstore::search(self, isbn, title, author)
     }
@@ -1098,11 +1112,14 @@ impl AbstractBookstore for KyoboBookstore {
 
 bookstore_struct!(
     /// 리디북스. 검색은 `search-api.ridibooks.com` JSON을 직접 부른다. ISBN 검색은 지원하지 않는다.
-    RidibooksBookstore, supports_isbn = false
+    RidibooksBookstore, supports_isbn = false, blocked: AtomicBool = AtomicBool::new(false)
 );
 
 const RIDI_BASE_URL: &str = "https://ridibooks.com";
 const RIDI_API_URL: &str = "https://search-api.ridibooks.com/search";
+
+/// RIDI(Cloudflare)가 자동 요청에 돌려주는 차단 상태. 403은 챌린지 페이지다.
+const RIDI_BLOCK_STATUSES: [u16; 3] = [403, 418, 429];
 
 impl RidibooksBookstore {
     /// 첫 `ISBN` 라벨 `div` 다음 형제 `div`에서 13자리 코드를 뽑는다.
@@ -1139,7 +1156,23 @@ impl RidibooksBookstore {
 
     fn search_api(&self, keyword: &str) -> Vec<SearchRow> {
         let search_url = self.build_search_url(keyword);
-        let Some(resp) = fetch_ok(&*self.session, self.verbose, "RIDI", RIDI_API_URL, &params(&[("keyword", keyword)]), HttpTimeout::from_secs(10, 10), "") else { return Vec::new() };
+        self.blocked.store(false, Ordering::Relaxed);
+        let resp = match self.session.get_with_timeout(RIDI_API_URL, &params(&[("keyword", keyword)]), HttpTimeout::from_secs(10, 10)) {
+            Ok(resp) => resp,
+            Err(e) => {
+                log::warn!("RIDI 검색 실패: {e}");
+                return Vec::new();
+            }
+        };
+        if RIDI_BLOCK_STATUSES.contains(&resp.status_code) {
+            self.blocked.store(true, Ordering::Relaxed);
+            log::warn!("RIDI가 자동 검색을 차단했습니다: {}", resp.status_code);
+            return Vec::new();
+        }
+        if resp.status_code != 200 {
+            log::warn!("RIDI API 응답 실패: {}", resp.status_code);
+            return Vec::new();
+        }
         let data = resp.json();
         let books = array_field(&data, "books");
         if books.is_empty() {
@@ -1181,6 +1214,10 @@ impl RidibooksBookstore {
 impl AbstractBookstore for RidibooksBookstore {
     bookstore_common!(RIDI_BASE_URL, author_first = true);
     api_keyword_search!(search_api);
+
+    fn request_blocked(&self) -> bool {
+        self.blocked.load(Ordering::Relaxed)
+    }
 
     fn build_search_url(&self, keyword: &str) -> String {
         format!("{RIDI_BASE_URL}/search?q={}&adult_exclude=n", quote(keyword, "/"))

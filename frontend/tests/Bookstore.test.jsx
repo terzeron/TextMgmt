@@ -913,6 +913,47 @@ describe("Bookstore 탭 렌더링 및 버튼 클릭", () => {
     expect(rawJsonGetReq.mock.calls.some(([url]) => url.includes("/search/bookstore/ridi"))).toBe(false);
   });
 
+  it("서점이 자동 검색을 차단하면 결과 없음과 다른 안내를 표시한다", async () => {
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({
+        status: "blocked",
+        message: "서점이 자동 검색을 차단했습니다. 서점 링크로 직접 검색하세요.",
+        search_url: "https://ridibooks.com/search?q=x&adult_exclude=n",
+        result: [],
+      }), 0);
+    });
+
+    await act(async () => {
+      render(<Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />);
+    });
+    await act(async () => {
+      fireEvent.click(within(storeRow("RIDI")).getByRole("button", { name: "도서명" }));
+    });
+
+    await waitFor(() => {
+      expect(within(storeRow("RIDI")).getByText("서점이 자동 검색을 차단했습니다. 서점 링크로 직접 검색하세요.")).toBeTruthy();
+    });
+    expect(within(storeRow("RIDI")).queryByText("검색 결과가 없습니다.")).toBeNull();
+    expect(within(storeRow("RIDI")).getByText("서점").closest("a").getAttribute("href")).toBe("https://ridibooks.com/search?q=x&adult_exclude=n");
+  });
+
+  it("결과 없음(not_found)은 기존 문구를 유지한다", async () => {
+    rawJsonGetReq.mockImplementation((_url, onSuccess) => {
+      setTimeout(() => onSuccess({ status: "not_found", result: [] }), 0);
+    });
+
+    await act(async () => {
+      render(<Bookstore bookInfo={{ title: "제목", author: "저자", isbn: "" }} />);
+    });
+    await act(async () => {
+      fireEvent.click(within(storeRow("RIDI")).getByRole("button", { name: "도서명" }));
+    });
+
+    await waitFor(() => {
+      expect(within(storeRow("RIDI")).getByText("검색 결과가 없습니다.")).toBeTruthy();
+    });
+  });
+
   it("RIDI는 검색어가 없어도 서점 링크를 표시한다", async () => {
     await act(async () => {
       render(<Bookstore bookInfo={{ title: "", author: "", isbn: "" }} />);

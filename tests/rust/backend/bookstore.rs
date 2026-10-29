@@ -1404,6 +1404,49 @@ fn test_ridibooks_search_empty_and_exception() {
     assert!(store.search_by_keyword("k").is_empty());
 }
 
+// RIDI는 자동 요청을 Cloudflare 챌린지(403)로 막는다. 막힘과 "결과 없음"을 호출한 쪽이 구분할 수 있어야 한다.
+#[test]
+fn ridibooks_reports_blocked_only_for_block_statuses() {
+    let store = ridibooks(false);
+    for status in [403, 418, 429] {
+        let store = ridibooks(false).with_session(constant(status, "<title>Just a moment...</title>", Value::Null));
+        assert!(store.search_by_keyword("k").is_empty());
+        assert!(backend::bookstore::BookstoreSearch::blocked(&store), "status={status}");
+    }
+    assert!(!backend::bookstore::BookstoreSearch::blocked(&store));
+
+    let empty = ridibooks(false).with_session(constant(200, "", json!({"books": []})));
+    assert!(empty.search_by_keyword("k").is_empty());
+    assert!(!backend::bookstore::BookstoreSearch::blocked(&empty));
+
+    let server_error = ridibooks(false).with_session(constant(500, "oops", Value::Null));
+    assert!(server_error.search_by_keyword("k").is_empty());
+    assert!(!backend::bookstore::BookstoreSearch::blocked(&server_error));
+
+    let broken = ridibooks(false).with_session(failing());
+    assert!(broken.search_by_keyword("k").is_empty());
+    assert!(!backend::bookstore::BookstoreSearch::blocked(&broken));
+}
+
+#[test]
+fn ridibooks_blocked_flag_follows_the_latest_request() {
+    let blocked_first = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&blocked_first);
+    let store = ridibooks(false).with_session(session(move |_, _| if counter.fetch_add(1, Ordering::SeqCst) == 0 { http(403, "blocked", Value::Null) } else { http(200, "", json!({"books": []})) }).0);
+
+    assert!(store.search_by_keyword("k").is_empty());
+    assert!(backend::bookstore::BookstoreSearch::blocked(&store));
+    assert!(store.search_by_keyword("k").is_empty());
+    assert!(!backend::bookstore::BookstoreSearch::blocked(&store));
+}
+
+#[test]
+fn other_stores_never_report_blocked() {
+    let store = yes24(false).with_session(constant(403, "", Value::Null));
+    assert!(store.search_by_keyword("k").is_empty());
+    assert!(!backend::bookstore::BookstoreSearch::blocked(&store));
+}
+
 #[test]
 fn test_ridibooks_search_success_and_extract() {
     let mut store = ridibooks(true);
