@@ -15,6 +15,10 @@ name = "cli"
 path = "../../tests/rust/bookdoctor/cli.rs"
 
 [[test]]
+name = "report"
+path = "../../tests/rust/bookdoctor/report.rs"
+
+[[test]]
 name = "scan"
 path = "../../tests/rust/bookdoctor/scan.rs"
 

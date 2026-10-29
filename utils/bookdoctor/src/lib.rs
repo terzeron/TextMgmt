@@ -3,5 +3,6 @@
 pub mod cli;
 pub mod epub;
 pub mod pdf;
+pub mod report;
 pub mod scan;
 pub mod txt;

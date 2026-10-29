@@ -7,6 +7,7 @@ use scan_common::args::{long_option, number};
 use scan_common::files::collect_files;
 use scan_common::{Category, DEFAULT_WORKERS, limited, pool, scan_streaming};
 
+use crate::report::{Aggregate, write_json_line, write_report_file, write_summary_line, write_text};
 use crate::scan::scan_file;
 
 const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--pdf-text] [--no-poppler] PATH...";
@@ -123,25 +124,29 @@ pub fn run(argv: &[String], out: &mut dyn Write) -> i32 {
     }
 }
 
-/// 임시 출력. 지표나 미완료가 있는 파일마다 한 줄을 쓴다. 보고서 출력(report.rs)이 대신한다.
+/// 파일을 검사해 텍스트나 NDJSON으로 내보내고, 요청하면 리포트 파일을 쓴다.
 fn scan(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
     let paths = limited(collect_files(&opts.paths, opts.recursive, wanted), opts.limit);
     let pool = pool(opts.workers);
+    let mut agg = Aggregate::new();
     let summary = scan_streaming(
         &paths,
         &pool,
         opts.workers * WINDOW_PER_WORKER,
         |p| scan_file(p, opts),
         |r| {
-            if r.incomplete {
-                writeln!(out, "{} INCOMPLETE {}", r.path, r.reasons.join("; "))?;
-            }
-            for f in &r.findings {
-                writeln!(out, "{} [{}] {} {} {}", r.path, f.severity.label(), f.code, f.location, f.detail)?;
-            }
+            agg.add(r);
+            if opts.json { write_json_line(r, out)? } else { write_text(r, out)? }
             out.flush()
         },
     )?;
+    if !opts.json {
+        write_summary_line(&agg, &summary, out)?;
+    }
+    if let Some(path) = &opts.report {
+        let root = opts.paths.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>().join(", ");
+        write_report_file(path, &agg, &summary, &root)?;
+    }
     Ok(summary.exit_code())
 }
 
