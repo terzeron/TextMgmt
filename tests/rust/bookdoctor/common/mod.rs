@@ -254,6 +254,8 @@ enum Info {
     Pages(usize),
     NotFound,
     Fails(String),
+    Timeout,
+    Spawn(String),
 }
 
 /// 미리 정한 `pdfinfo`·`pdftotext` 결과를 돌려주고 호출을 기록한다. 실제 Poppler를 부르지 않는다.
@@ -284,6 +286,16 @@ impl FakeRunner {
         Self::new(Info::Fails(msg.to_owned()), "")
     }
 
+    /// 시간 상한을 넘겼다.
+    pub fn timeout() -> Self {
+        Self::new(Info::Timeout, "")
+    }
+
+    /// 프로세스를 띄우지 못했다(권한 등).
+    pub fn spawn_error(msg: &str) -> Self {
+        Self::new(Info::Spawn(msg.to_owned()), "")
+    }
+
     /// 1쪽이고 `pdftotext`가 `s`를 돌려준다.
     pub fn text(s: &str) -> Self {
         Self::new(Info::Pages(1), s)
@@ -309,6 +321,8 @@ impl CommandRunner for FakeRunner {
         match &self.info {
             Info::Pages(n) => Ok(CommandOutput { returncode: 0, stdout: format!("Title: x\nPages:          {n}\n").into_bytes(), stderr: Vec::new() }),
             Info::NotFound => Err(CommandError::NotFound),
+            Info::Timeout => Err(CommandError::Timeout),
+            Info::Spawn(msg) => Err(CommandError::Failed(msg.clone())),
             Info::Fails(msg) => Ok(CommandOutput { returncode: 1, stdout: Vec::new(), stderr: msg.clone().into_bytes() }),
         }
     }

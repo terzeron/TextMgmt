@@ -683,12 +683,14 @@ pub fn load(data: &[u8]) -> Result<Document, String> {
     match parsed {
         Ok(Ok(doc)) => Ok(doc),
         Ok(Err(e)) => Err(sanitize_text(&e.to_string(), PREVIEW_CHARS, Some('…'))),
-        Err(payload) => {
-            let msg = payload.downcast_ref::<&str>().map(|m| (*m).to_owned()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown".into());
-            // 페이로드는 파일 내용에서 올 수 있으므로 `epub::security::guarded`처럼 정화한다.
-            Err(sanitize_text(&format!("panic: parser panicked on malformed input: {msg}"), PREVIEW_CHARS, Some('…')))
-        }
+        Err(payload) => Err(panic_reason(payload.as_ref())),
     }
+}
+
+/// 파서 panic 페이로드를 `incomplete` 사유로 만든다. 페이로드는 파일 내용에서 올 수 있으므로 `epub::security::guarded`처럼 정화한다.
+fn panic_reason(payload: &(dyn std::any::Any + Send)) -> String {
+    let msg = payload.downcast_ref::<&str>().map(|m| (*m).to_owned()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown".into());
+    sanitize_text(&format!("panic: parser panicked on malformed input: {msg}"), PREVIEW_CHARS, Some('…'))
 }
 
 /// 이미 읽은 문서(없을 수 있다)로 보안 검사를 한다. 구문 오류 보고는 하지 않는다(`pdf::structure`가 한다).
@@ -725,6 +727,16 @@ pub fn scan(data: &[u8], report: &mut FileReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panic_reason_replaces_control_characters_and_truncates() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(format!("bad\x1b[31mname\n{}", "x".repeat(300)));
+        let r = panic_reason(payload.as_ref());
+        assert!(!r.chars().any(|c| c.is_control()), "{r:?}");
+        assert!(r.starts_with("panic: parser panicked") && r.chars().count() <= PREVIEW_CHARS + 1, "{r:?}");
+        let unknown: Box<dyn std::any::Any + Send> = Box::new(5u8);
+        assert!(panic_reason(unknown.as_ref()).ends_with("unknown"));
+    }
 
     fn long_name_array() -> Object {
         Object::Array((0..40).map(|_| Object::Name(b"FlateDecode".to_vec())).collect())

@@ -295,6 +295,69 @@ fn poppler_is_still_asked_when_lopdf_cannot_parse_but_never_without_header() {
     assert_eq!(runner.call_count(), 0);
 }
 
+#[test]
+fn poppler_timeout_is_incomplete_not_a_finding() {
+    let r = run(&plain(), &Options::default(), &FakeRunner::timeout());
+    assert_absent(&r, "POPPLER_OPEN_FAILED");
+    assert!(r.incomplete && r.reasons.iter().any(|m| m == "poppler timed out"), "{r:?}");
+}
+
+#[test]
+fn poppler_spawn_error_is_incomplete_not_a_finding() {
+    let r = run(&plain(), &Options::default(), &FakeRunner::spawn_error("permission denied\x1b[31m"));
+    assert_absent(&r, "POPPLER_OPEN_FAILED");
+    let reason = r.reasons.iter().find(|m| m.starts_with("poppler failed to run: ")).unwrap_or_else(|| panic!("{r:?}"));
+    assert!(reason.contains("permission denied") && !reason.contains('\x1b'), "{reason:?}");
+    assert!(r.incomplete);
+}
+
+#[test]
+fn nonzero_pdfinfo_exit_is_still_a_finding_and_not_incomplete() {
+    let r = run(&plain(), &Options::default(), &FakeRunner::fails("Syntax Error: bad"));
+    assert_flag(&r, "POPPLER_OPEN_FAILED", Category::Render, Severity::High);
+    assert!(!r.incomplete, "{r:?}");
+}
+
+fn encrypted_doc() -> Document {
+    let mut doc = doc_with_pages(vec![]);
+    doc.trailer.set("Encrypt", Object::Reference((9, 0)));
+    doc
+}
+
+fn inspect_doc_with(doc: &Document, runner: &FakeRunner) -> FileReport {
+    let mut r = FileReport::new(Path::new("x.pdf"), None);
+    let o = Options::default();
+    structure::inspect_with(b"%PDF-1.7\n%%EOF\n", Some(doc), None, Path::new("x.pdf"), &o, &mut r, runner);
+    r
+}
+
+#[test]
+fn encrypted_document_does_not_also_report_zero_pages() {
+    let r = inspect_doc(&encrypted_doc());
+    assert_flag(&r, "ENCRYPTED", Category::Render, Severity::High);
+    assert_absent(&r, "ZERO_PAGES");
+}
+
+#[test]
+fn encrypted_file_suppresses_poppler_failure_that_mentions_a_password() {
+    // 실제 pdfinfo(qpdf 256비트 암호화 파일): "Command Line Error: Incorrect password"
+    let r = inspect_doc_with(&encrypted_doc(), &FakeRunner::fails("Command Line Error: Incorrect password"));
+    assert_flag(&r, "ENCRYPTED", Category::Render, Severity::High);
+    assert_absent(&r, "POPPLER_OPEN_FAILED");
+}
+
+#[test]
+fn encrypted_file_keeps_poppler_failure_with_unrelated_message() {
+    let r = inspect_doc_with(&encrypted_doc(), &FakeRunner::fails("Syntax Error: Couldn't read xref table"));
+    assert_flag(&r, "POPPLER_OPEN_FAILED", Category::Render, Severity::High);
+}
+
+#[test]
+fn unencrypted_file_keeps_poppler_failure_even_if_message_mentions_a_password() {
+    let r = inspect_doc_with(&doc_with_pages(vec![]), &FakeRunner::fails("Incorrect password"));
+    assert_flag(&r, "POPPLER_OPEN_FAILED", Category::Render, Severity::High);
+}
+
 // ---- FONT_NOT_EMBEDDED ----
 
 #[test]
@@ -323,6 +386,20 @@ fn base_14_fonts_are_not_flagged_even_with_subset_prefix() {
 fn fonts_without_descriptor_and_type3_are_not_flagged() {
     let more = vec!["<< /Type /Font /Subtype /Type1 /BaseFont /Foo >>".to_owned(), "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] >>".to_owned()];
     assert_absent(&run_no_poppler(&pdf_with("/MediaBox [0 0 612 792]", "", &more)), "FONT_NOT_EMBEDDED");
+}
+
+#[test]
+fn common_windows_aliases_of_base_14_fonts_are_not_flagged() {
+    for name in ["Arial", "Arial,Bold", "Arial-BoldMT", "ArialMT", "TimesNewRoman", "TimesNewRomanPSMT", "TimesNewRomanPS-BoldMT", "CourierNew", "CourierNewPSMT", "CourierNew,Italic", "ABCDEF+Arial-ItalicMT"] {
+        assert_absent(&run_no_poppler(&pdf_with_descriptor(&format!("/FontName /{name}"))), "FONT_NOT_EMBEDDED");
+    }
+}
+
+#[test]
+fn custom_or_look_alike_font_names_are_still_flagged() {
+    for name in ["ArialNarrow", "ArialUnicodeMS", "TimesTen-Roman", "CourierPrimeCode", "Calibri"] {
+        assert_flag(&run_no_poppler(&pdf_with_descriptor(&format!("/FontName /{name}"))), "FONT_NOT_EMBEDDED", Category::Defect, Severity::Low);
+    }
 }
 
 // ---- NO_TEXT_LAYER ----

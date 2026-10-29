@@ -45,7 +45,7 @@ fn scan_bytes(bytes: &[u8]) -> (i32, String) {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("t.pdf");
     fs::write(&p, bytes).unwrap();
-    go(&p, &Options::default())
+    go(&p, &Options { no_poppler: true, ..Options::default() })
 }
 
 fn pdf_with_large_object_stream(expanded_bytes: usize) -> Vec<u8> {
@@ -222,17 +222,17 @@ fn unreadable_and_non_pdf_inputs_are_incomplete() {
     let d = tempfile::tempdir().unwrap();
     let not_pdf = d.path().join("a.pdf");
     fs::write(&not_pdf, b"hello").unwrap();
-    let (code, out) = go(&not_pdf, &Options::default());
+    let (code, out) = go(&not_pdf, &Options { no_poppler: true, ..Options::default() });
     assert_eq!(code, 2);
     assert!(out.contains("INCOMPLETE") && out.contains("no %PDF- header"), "{out}");
 
-    let (code, out) = go(&d.path().join("missing.pdf"), &Options::default());
+    let (code, out) = go(&d.path().join("missing.pdf"), &Options { no_poppler: true, ..Options::default() });
     assert_eq!(code, 2);
     assert!(out.contains("unreadable"), "{out}");
 
     let garbage = d.path().join("g.pdf");
     fs::write(&garbage, b"%PDF-1.7\nthis is not a pdf at all\n").unwrap();
-    let (code, out) = go(&garbage, &Options::default());
+    let (code, out) = go(&garbage, &Options { no_poppler: true, ..Options::default() });
     assert_eq!(code, 2);
     assert!(out.contains("parse error") || out.contains("panicked"), "{out}");
 }
@@ -245,7 +245,7 @@ fn files_over_max_total_mb_are_skipped_as_incomplete() {
     let mut big = pdf(&[&catalog(""), PAGES, PAGE]);
     big.extend(vec![b'%'; 2 * 1024 * 1024]);
     fs::write(&p, big).unwrap();
-    let (code, out) = go(&p, &Options { max_total_mb: 1, ..Options::default() });
+    let (code, out) = go(&p, &Options { max_total_mb: 1, no_poppler: true, ..Options::default() });
     assert_eq!(code, 2);
     assert!(out.contains("exceeds --max-total-mb"), "{out}");
 }
@@ -618,7 +618,7 @@ fn truncated_pdf_is_incomplete_not_abort() {
     for cut in [full.len() / 4, full.len() / 2, full.len() - 40] {
         let p = d.path().join(format!("cut{cut}.pdf"));
         fs::write(&p, &full[..cut]).unwrap();
-        let r = scan_file(&p, &Options::default());
+        let r = scan_file(&p, &Options { no_poppler: true, ..Options::default() });
         assert!(r.incomplete || !r.findings.is_empty(), "cut={cut}: {r:?}");
         assert!(!r.reasons.iter().any(|m| m.starts_with("panic")), "cut={cut}: {:?}", r.reasons);
     }
@@ -631,7 +631,7 @@ fn pipeline_reports_javascript_action_with_legacy_code_and_object_location() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("t.pdf");
     fs::write(&p, &bytes).unwrap();
-    let r = scan_file(&p, &Options::default());
+    let r = scan_file(&p, &Options { no_poppler: true, ..Options::default() });
     let f = r.findings.iter().find(|f| f.code == "JavaScript action").unwrap_or_else(|| panic!("{r:?}"));
     assert_eq!((f.category, f.severity), (Category::Security, Severity::High));
     assert!(f.location.starts_with("obj 4 0:"), "{}", f.location);

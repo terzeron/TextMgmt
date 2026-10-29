@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use lopdf::{Dictionary, Document, Object};
@@ -36,17 +36,32 @@ const POPPLER_MISSING: &str = "poppler not installed";
 const BASE_14: [&str; 14] =
     ["Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic", "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique", "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique", "Symbol", "ZapfDingbats"];
 
-/// `NotFound`를 기록하는 실행기 래퍼. `sysdeps::poppler`는 오류를 문자열로만 돌려주기 때문이다.
+/// 실행기가 낸 `CommandError`의 종류. `sysdeps::poppler`는 오류를 문자열로 뭉개므로 래퍼가 직접 기록한다.
+/// 0이 아닌 종료 코드는 `CommandError`가 아니므로 여기에 남지 않는다(그것만 `POPPLER_OPEN_FAILED`다).
+enum Failure {
+    NotFound,
+    Timeout,
+    Spawn(String),
+}
+
+/// `CommandError`를 기록하는 실행기 래퍼.
 struct Watching<'a> {
     inner: &'a dyn CommandRunner,
-    not_found: AtomicBool,
+    failure: Mutex<Option<Failure>>,
 }
 
 impl CommandRunner for Watching<'_> {
     fn run(&self, argv: &[String], timeout: Option<Duration>) -> Result<CommandOutput, CommandError> {
         let result = self.inner.run(argv, timeout);
-        if matches!(result, Err(CommandError::NotFound)) {
-            self.not_found.store(true, Ordering::Relaxed);
+        if let Err(e) = &result {
+            let failure = match e {
+                CommandError::NotFound => Failure::NotFound,
+                CommandError::Timeout => Failure::Timeout,
+                CommandError::Failed(m) => Failure::Spawn(m.clone()),
+            };
+            if let Ok(mut slot) = self.failure.lock() {
+                *slot = Some(failure);
+            }
         }
         result
     }
@@ -54,6 +69,39 @@ impl CommandRunner for Watching<'_> {
     fn which(&self, program: &str) -> Option<PathBuf> {
         self.inner.which(program)
     }
+}
+
+impl Watching<'_> {
+    fn take(&self) -> Option<Failure> {
+        self.failure.lock().ok().and_then(|mut slot| slot.take())
+    }
+}
+
+/// 실행기 자체의 실패(검사 불능)를 `incomplete` 사유로 바꾼다. 실행기 실패가 아니면 `false`다.
+fn note_runner_failure(failure: Option<Failure>, report: &mut FileReport) -> bool {
+    match failure {
+        None => false,
+        Some(Failure::NotFound) => {
+            report.mark_incomplete(POPPLER_MISSING);
+            true
+        }
+        // 시간 초과와 실행 실패는 파일 결함의 증거가 아니다. 부하가 큰 디스크에서 멀쩡한 파일도 시간을 넘길 수 있다.
+        Some(Failure::Timeout) => {
+            report.mark_incomplete("poppler timed out");
+            true
+        }
+        Some(Failure::Spawn(m)) => {
+            report.mark_incomplete(&format!("poppler failed to run: {}", sanitize(&m, 200, Some('…'))));
+            true
+        }
+    }
+}
+
+/// pdfinfo가 암호 때문에 못 열 때 stderr에 쓰는 문구. 실제 출력(qpdf 256비트로 암호화한 파일):
+/// `Command Line Error: Incorrect password`.
+fn mentions_password(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("password") || lower.contains("encrypted")
 }
 
 /// 운영용 진입점. `SystemRunner`로 Poppler를 부른다.
@@ -79,7 +127,7 @@ pub fn inspect_with(data: &[u8], doc: Option<&Document>, parse_error: Option<&st
         guarded(report, |r| document_checks(doc, r));
     }
     if header {
-        poppler_checks(path, opts, report, runner);
+        poppler_checks(path, opts, doc, report, runner);
     }
 }
 
@@ -93,7 +141,8 @@ fn document_checks(doc: &Document, report: &mut FileReport) {
         report.push(Category::Render, Severity::High, "ENCRYPTED", "trailer", "trailer에 /Encrypt가 있다");
     }
     let pages = doc.get_pages();
-    if has_root && pages.is_empty() {
+    // 암호화 문서는 객체를 읽지 못해 쪽 트리가 비어 보인다. ENCRYPTED만 알린다.
+    if has_root && pages.is_empty() && !doc.trailer.has(b"Encrypt") {
         report.push(Category::Defect, Severity::High, "ZERO_PAGES", "", "페이지가 0쪽이다");
     }
     tiny_pages(doc, &pages, report);
@@ -135,6 +184,20 @@ fn tiny_pages(doc: &Document, pages: &std::collections::BTreeMap<u32, lopdf::Obj
     }
 }
 
+/// Base-14 이름과 흔한 별칭인가. 별칭은 PDF 32000-1:2008 9.6.2.2 표 중 Arial=Helvetica, TimesNewRoman=Times,
+/// CourierNew=Courier 대응(글꼴 대체 표)과 Windows가 쓰는 철자(`Arial,Bold`, `Arial-BoldMT`, `TimesNewRomanPSMT`,
+/// `TimesNewRomanPS-BoldMT`, `CourierNewPSMT`)를 따른다. 구분 문자를 지우고 소문자로 만들어 가족 접두와 스타일 꼬리로 나눠 비교한다.
+fn is_standard_font(name: &str) -> bool {
+    if BASE_14.contains(&name) {
+        return true;
+    }
+    let norm: String = name.chars().filter(|c| !matches!(c, ',' | '-' | ' ' | '_')).flat_map(char::to_lowercase).collect();
+    // 긴 접두를 먼저 본다(`timesnewroman`이 `times`보다 앞).
+    let Some(rest) = ["timesnewroman", "couriernew", "helvetica", "arial", "courier", "times"].iter().find_map(|f| norm.strip_prefix(f)) else { return false };
+    let style = rest.trim_start_matches("ps").trim_end_matches("mt");
+    ["", "roman", "regular", "bold", "italic", "oblique", "bolditalic", "boldoblique"].contains(&style)
+}
+
 fn font_file_missing(d: &Dictionary) -> bool {
     !(d.has(b"FontFile") || d.has(b"FontFile2") || d.has(b"FontFile3"))
 }
@@ -150,7 +213,7 @@ fn unembedded_fonts(doc: &Document, report: &mut FileReport) {
         let raw = d.get(b"FontName").ok().and_then(|n| n.as_name().ok()).map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_default();
         // 부분 집합 글꼴은 `ABCDEF+Name`이다.
         let name = raw.split_once('+').filter(|(tag, _)| tag.len() == 6).map_or(raw.as_str(), |(_, n)| n);
-        if BASE_14.contains(&name) {
+        if is_standard_font(name) {
             continue;
         }
         first.get_or_insert(id);
@@ -163,32 +226,37 @@ fn unembedded_fonts(doc: &Document, report: &mut FileReport) {
     }
 }
 
-fn poppler_checks(path: &Path, opts: &Options, report: &mut FileReport, runner: &dyn CommandRunner) {
+fn poppler_checks(path: &Path, opts: &Options, doc: Option<&Document>, report: &mut FileReport, runner: &dyn CommandRunner) {
     if opts.no_poppler {
         return;
     }
-    let watching = Watching { inner: runner, not_found: AtomicBool::new(false) };
-    let adapter = &watching;
-    let pages = match page_count(adapter, path) {
+    let watching = Watching { inner: runner, failure: Mutex::new(None) };
+    let pages = match page_count(&watching, path) {
         Ok(n) => n,
         Err(e) => {
-            if watching.not_found.load(Ordering::Relaxed) {
-                report.mark_incomplete(POPPLER_MISSING);
-            } else {
-                report.push(Category::Render, Severity::High, "POPPLER_OPEN_FAILED", "", &sanitize(&e, 200, Some('…')));
+            if note_runner_failure(watching.take(), report) {
+                return;
             }
+            // 암호화 파일은 pdfinfo가 비밀번호를 요구하며 실패한다. 이미 ENCRYPTED로 알렸으므로 중복 지표를 내지 않는다.
+            if doc.is_some_and(|d| d.trailer.has(b"Encrypt")) && mentions_password(&e) {
+                return;
+            }
+            report.push(Category::Render, Severity::High, "POPPLER_OPEN_FAILED", "", &sanitize(&e, 200, Some('…')));
             return;
         }
     };
     if !opts.pdf_text || pages == 0 {
         return;
     }
-    match extract_text(adapter, path, 1, pages.min(TEXT_PROBE_PAGES)) {
+    match extract_text(&watching, path, 1, pages.min(TEXT_PROBE_PAGES)) {
         Ok(text) if text.trim().is_empty() => {
             report.push(Category::Defect, Severity::Low, "NO_TEXT_LAYER", "", &format!("앞 {}쪽에서 추출한 텍스트가 없다", pages.min(TEXT_PROBE_PAGES)));
         }
         Ok(_) => {}
-        Err(_) if watching.not_found.load(Ordering::Relaxed) => report.mark_incomplete(POPPLER_MISSING),
-        Err(e) => report.mark_incomplete(&format!("pdftotext failed: {}", sanitize(&e, 200, Some('…')))),
+        Err(e) => {
+            if !note_runner_failure(watching.take(), report) {
+                report.mark_incomplete(&format!("pdftotext failed: {}", sanitize(&e, 200, Some('…'))));
+            }
+        }
     }
 }
