@@ -34,6 +34,16 @@ import { currentPageIndex, keyDirection, swipeDirection } from "./pdfPageTurn";
 
 // CSS의 --pdf-toolbar-h와 같은 값(px). 1장씩 보기에서 쪽이 멈추는 기준선 계산에 쓴다.
 const PDF_TOOLBAR_HEIGHT = 32;
+// 1장씩 보기에서 막는 상하 스크롤 키. 방향키 좌우만 쪽 넘김에 쓴다.
+const VERTICAL_SCROLL_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "PageUp",
+  "PageDown",
+  " ",
+  "Home",
+  "End",
+]);
 
 // 서버는 실패 사유를 본문에 담아 보낸다(파일 없음, 스토리지 접근 오류 등).
 // 쪽 크기(pt)가 비정상적으로 작은 PDF가 있다. 이미지를 0.09pt 폭으로 그려 넣은 만화 PDF가 그렇다.
@@ -520,6 +530,7 @@ export default function ViewPDF({
   // 1장씩 보기: 좌우 스와이프와 좌우 방향키로 쪽을 넘긴다(EPUB 뷰어와 같은 기준).
   // 세로 스크롤·snap은 그대로 두고, 현재 쪽의 이웃 쪽 맨 위로 이동만 시킨다.
   // 우->좌이면 방향키·스와이프가 가리키는 방향을 뒤집는다.
+  // 사용자의 상하 스크롤(휠·터치·스크롤 키)은 막는다. 쪽 이동은 scrollIntoView만 한다.
   useEffect(() => {
     const el = containerRef.current;
     if (!singlePage || !el) return undefined;
@@ -535,7 +546,10 @@ export default function ViewPDF({
       if (/^(INPUT|SELECT|TEXTAREA)$/.test(event.target?.tagName)) return;
       if (event.target?.closest?.("[role='dialog']")) return;
       const direction = keyDirection(event.key);
-      if (!direction) return;
+      if (!direction) {
+        if (VERTICAL_SCROLL_KEYS.has(event.key)) event.preventDefault();
+        return;
+      }
       event.preventDefault();
       turn(direction);
     };
@@ -560,12 +574,15 @@ export default function ViewPDF({
     const reset = () => {
       start = null;
     };
+    const onWheel = (event) => event.preventDefault();
     document.addEventListener("keydown", onKey);
+    el.addEventListener("wheel", onWheel, { passive: false });
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
     el.addEventListener("touchcancel", reset, { passive: true });
     return () => {
       document.removeEventListener("keydown", onKey);
+      el.removeEventListener("wheel", onWheel);
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", reset);
@@ -1255,8 +1272,11 @@ const pdfStyles = `
         height: var(--pdf-avail-h, calc(100vh - 10px));
         scroll-snap-type: y mandatory;
         scroll-padding-top: var(--pdf-toolbar-h);
-        /* 가로 팬은 브라우저가 가로채지 않게 막아 좌우 스와이프를 쪽 넘김으로 쓴다 */
-        touch-action: pan-y;
+        /* 상하 스크롤은 끈다. 터치 팬을 막아 좌우 스와이프만 쪽 넘김(JS)으로 쓴다.
+           overflow-y: hidden이어도 scrollIntoView 같은 프로그램 이동은 동작한다. */
+        overflow-y: hidden;
+        overscroll-behavior: none;
+        touch-action: none;
     }
     /* overflow-x:auto는 overflow-y도 auto로 만들어 snap 컨테이너를 가로채므로 푼다 */
     .pdf-container.pdf-single .pdf-content {

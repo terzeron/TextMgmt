@@ -673,6 +673,31 @@ describe("ViewPDF", () => {
       expect(scrolled).toEqual([]);
     });
 
+    it("1장씩 보기에서는 휠과 상하 스크롤 키의 기본 동작을 막는다", async () => {
+      const { root } = await setup(1);
+      const wheel = new WheelEvent("wheel", { deltaY: 100, bubbles: true, cancelable: true });
+      root.dispatchEvent(wheel);
+      expect(wheel.defaultPrevented).toBe(true);
+      for (const key of ["ArrowUp", "ArrowDown", "PageUp", "PageDown", " ", "Home", "End"]) {
+        expect(press(key).defaultPrevented).toBe(true);
+      }
+      expect(press("a").defaultPrevented).toBe(false);
+      expect(press("ArrowDown", { ctrlKey: true }).defaultPrevented).toBe(false);
+      expect(scrolled).toEqual([]);
+    });
+
+    it("1장씩 보기를 끄면 휠과 상하 스크롤 키를 다시 허용한다", async () => {
+      const { root } = await setup(1);
+      document.querySelector(".pdf-single-btn").click();
+      await waitFor(() => {
+        expect(root.classList.contains("pdf-single")).toBe(false);
+      });
+      const wheel = new WheelEvent("wheel", { deltaY: 100, bubbles: true, cancelable: true });
+      root.dispatchEvent(wheel);
+      expect(wheel.defaultPrevented).toBe(false);
+      expect(press("PageDown").defaultPrevented).toBe(false);
+    });
+
     it("1장씩 보기가 꺼져 있으면 방향키로 넘기지 않는다", async () => {
       globalThis.fetch = createMockFetch(3);
       setupGetDocument(() => createMockPdf(1));
