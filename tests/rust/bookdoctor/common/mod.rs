@@ -188,6 +188,11 @@ pub struct NamedFile {
 }
 
 impl NamedFile {
+    /// 이미 만든 임시 디렉토리와 그 안의 파일 경로를 묶는다.
+    pub fn keep(dir: tempfile::TempDir, path: std::path::PathBuf) -> Self {
+        NamedFile { _dir: dir, path }
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -216,4 +221,21 @@ pub fn minimal_pe() -> Vec<u8> {
     v[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
     v[0x40..0x44].copy_from_slice(b"PE\0\0");
     v
+}
+
+// ---- 렌더링 검사용 fixture ----
+
+/// mimetype(stored), container.xml을 앞에 두고 `members`(이름, 내용)를 deflate로 더한다.
+/// `stored_names`에 든 이름은 압축하지 않고 그대로 쓴다.
+pub fn epub_members(path: &Path, members: &[(&str, &[u8])], stored_names: &[&str]) {
+    let mut z = ZipWriter::new(File::create(path).unwrap());
+    z.start_file("mimetype", stored()).unwrap();
+    z.write_all(b"application/epub+zip").unwrap();
+    z.start_file("META-INF/container.xml", deflated()).unwrap();
+    z.write_all(CONTAINER_XML.as_bytes()).unwrap();
+    for (name, data) in members {
+        z.start_file(*name, if stored_names.contains(name) { stored() } else { deflated() }).unwrap();
+        z.write_all(data).unwrap();
+    }
+    z.finish().unwrap();
 }

@@ -1,5 +1,6 @@
 //! EPUB 검사. 이후 task가 하위 모듈을 더한다.
 
+pub mod render;
 pub mod security;
 pub mod structure;
 
@@ -23,4 +24,8 @@ pub fn scan_epub_file(path: &Path, opts: &Options, report: &mut FileReport) {
         index += 1;
         index <= structure_len || !structure_codes.contains(&f.code)
     });
+    // ZIP으로 열렸을 때만 렌더링·손상 검사를 한다. NOT_ZIP이면 읽을 멤버가 없다.
+    if !report.has("NOT_ZIP") {
+        render::inspect_with(path, report, &limits);
+    }
 }

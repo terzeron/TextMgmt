@@ -67,7 +67,7 @@ const MARKUP_EXTENSIONS: [&str; 5] = [".xhtml", ".html", ".htm", ".xml", ".svg"]
 // ---- ZIP 읽기 ----
 
 /// ZIP 멤버를 읽는다. 없거나 깨졌거나 limit를 넘으면 None. 구분은 호출자가 이름 목록으로 한다.
-fn read_member(zip: &mut Zip, name: &str, limit: usize) -> Option<Vec<u8>> {
+pub(crate) fn read_member(zip: &mut Zip, name: &str, limit: usize) -> Option<Vec<u8>> {
     let entry = zip.by_name(name).ok()?;
     let mut data = Vec::new();
     entry.take(limit as u64 + 1).read_to_end(&mut data).ok()?;
@@ -80,6 +80,13 @@ fn read_head(zip: &mut Zip, name: &str, size: usize) -> Option<Vec<u8>> {
     let mut data = Vec::new();
     entry.take(size as u64).read_to_end(&mut data).ok()?;
     Some(data)
+}
+
+/// container.xml의 첫 rootfile `full-path`(정규화). render 검사도 같은 규칙으로 OPF를 찾는다.
+pub(crate) fn rootfile_path(container: &[u8]) -> Option<String> {
+    let doc = parse_xml(container)?;
+    let rootfile = doc.descendants().find(|n| n.is_element() && n.tag_name().name() == "rootfile")?;
+    Some(posix_normpath(&unquote(rootfile.attribute("full-path").unwrap_or(""))))
 }
 
 pub fn parse_xml(bytes: &[u8]) -> Option<roxmltree::Document<'_>> {
@@ -95,7 +102,7 @@ pub fn root_tag_name(head: &[u8]) -> Option<String> {
     ROOT_TAG_RE.captures(&stripped).map(|m| String::from_utf8_lossy(&m[1]).into_owned())
 }
 
-fn is_markup(member: &str, media_type: &str) -> bool {
+pub(crate) fn is_markup(member: &str, media_type: &str) -> bool {
     if !media_type.is_empty() {
         return MARKUP_MEDIA_TYPES.contains(&media_type.to_lowercase().as_str());
     }
@@ -143,10 +150,7 @@ fn check_epub_members(zip: &mut Zip, root_tag: &dyn Fn(&[u8]) -> Option<String>,
         flag(if name_set.contains(CONTAINER) { ISSUE_MEMBER_UNREADABLE } else { ISSUE_NO_CONTAINER }, CONTAINER);
         return;
     };
-    let opf_path = parse_xml(&container).and_then(|doc| {
-        let rootfile = doc.descendants().find(|n| n.is_element() && n.tag_name().name() == "rootfile")?;
-        Some(posix_normpath(&unquote(rootfile.attribute("full-path").unwrap_or(""))))
-    });
+    let opf_path = rootfile_path(&container);
     let Some(opf_path) = opf_path else {
         flag(ISSUE_NO_CONTAINER, CONTAINER);
         return;
