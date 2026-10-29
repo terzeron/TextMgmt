@@ -1263,7 +1263,9 @@ const pdfStyles = `
     .pdf-direction-btn:last-child {
         border-radius: 0 4px 4px 0;
     }
-    .pdf-direction-btn.active {
+    /* .pdf-zoom-btn:hover:not(:disabled)의 회색보다 우선하도록 hover 선택자를 함께 쓴다 */
+    .pdf-direction-btn.active,
+    .pdf-direction-btn.active:hover:not(:disabled) {
         background: #4a90d9;
         border-color: #4a90d9;
         color: #fff;
