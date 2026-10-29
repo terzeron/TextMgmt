@@ -124,7 +124,15 @@ pub fn fix_extension_with(path: &Path, dry_run: bool, unmangle: &dyn Fn(&[u8]) -
 /// 알려진 한계: bookdoctor는 `path`의 제어 문자를 '.'으로 바꿔 쓴다. 이름에 제어 문자가 든 파일은 정확히 찾지 못한다.
 /// 최악의 경우 이동이 건너뛰어지거나, 점으로 바뀐 이름의 다른 실제 파일이 옮겨진다(`undo`로 되돌릴 수 있다).
 /// 옛 인코딩 검사 도구 형식(`{"corrupted": [...]}`)은 조용히 빈 결과가 되지 않도록 오류로 돌려준다.
+///
+/// `format`이 `pdf`인 항목은 건너뛴다. `bookdoctor --pdf-text`는 PDF에도 `MOJIBAKE`를 내지만, 옛 격리 대상은 txt와 epub뿐이었고
+/// 설계서 12-1이 "동작은 지금과 같다"고 정했다. PDF 텍스트층의 손상 판정을 근거로 파일을 옮기지 않는다.
 pub fn load_corrupted(report_path: &Path) -> io::Result<Vec<Rec>> {
+    load_corrupted_logged(report_path, &|_| {})
+}
+
+/// `load_corrupted`와 같고 건너뛴 PDF 항목을 `log`로 알린다.
+pub fn load_corrupted_logged(report_path: &Path, log: Log) -> io::Result<Vec<Rec>> {
     let data: Value = serde_json::from_str(&fs::read_to_string(report_path)?).map_err(io::Error::other)?;
     let invalid = |msg: &str| io::Error::new(io::ErrorKind::InvalidData, msg.to_owned());
     let Value::Object(mut o) = data else {
@@ -142,6 +150,11 @@ pub fn load_corrupted(report_path: &Path) -> io::Result<Vec<Rec>> {
         let Value::Object(file) = item else { return Err(invalid("files 항목이 객체가 아니다")) };
         let is_mojibake = file.get("findings").and_then(Value::as_array).is_some_and(|fs| fs.iter().any(|f| f.get("code").and_then(Value::as_str) == Some(MOJIBAKE_CODE)));
         if !is_mojibake {
+            continue;
+        }
+        if file.get("format").and_then(Value::as_str) == Some("pdf") {
+            let shown = file.get("path").and_then(Value::as_str).unwrap_or("?");
+            log(&format!("INFO PDF 인코딩 손상 판정은 격리 대상이 아니라 건너뛴다: {shown}"));
             continue;
         }
         let mut rec = Rec::new();

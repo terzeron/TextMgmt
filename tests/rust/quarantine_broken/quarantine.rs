@@ -783,3 +783,22 @@ fn plan_keeps_a_size_the_record_already_has_and_uses_zero_for_a_missing_file() {
     let rec = json!({"path": ghost.to_string_lossy(), "verdict": "corrupted"}).as_object().unwrap().clone();
     assert_eq!(plan_moves(&[rec], &lib.root, &quiet)[0]["size"], json!(0));
 }
+
+#[test]
+fn load_corrupted_skips_pdf_mojibake_and_logs_it() {
+    // `bookdoctor --pdf-text`는 PDF에도 MOJIBAKE를 낸다. 설계서 12-1: 격리 대상은 지금처럼 txt와 epub뿐이다.
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("report.json");
+    let mut pdf = bd_file("/lib/a.pdf", &["MOJIBAKE"], Some(0.001));
+    pdf["format"] = json!("pdf");
+    let mut epub = bd_file("/lib/b.epub", &["MOJIBAKE"], Some(0.002));
+    epub["format"] = json!("epub");
+    fs::write(&f, bd_report(&[("/lib/c.txt", Some(0.003))], vec![pdf, epub])).unwrap();
+    let logged = std::cell::RefCell::new(Vec::<String>::new());
+    let recs = load_corrupted_logged(&f, &|m| logged.borrow_mut().push(m.to_owned())).unwrap();
+    let paths: Vec<String> = recs.iter().map(|r| s(r, "path")).collect();
+    assert_eq!(paths, ["/lib/c.txt", "/lib/b.epub"]);
+    assert_eq!(logged.borrow().len(), 1);
+    assert!(logged.borrow()[0].contains("/lib/a.pdf"), "{:?}", logged.borrow());
+    assert_eq!(load_corrupted(&f).unwrap().len(), 2);
+}

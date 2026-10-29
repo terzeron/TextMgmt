@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::{BROKEN_DIR_NAME, DEFAULT_LIBRARY_ROOT, FixResult, Log, Rec, apply_moves, fix_extension, load_corrupted, plan_moves, summarize, undo_moves};
+use crate::{BROKEN_DIR_NAME, DEFAULT_LIBRARY_ROOT, FixResult, Log, Rec, apply_moves, fix_extension, load_corrupted_logged, plan_moves, summarize, undo_moves};
 
 const USAGE: &str = "usage: quarantine_broken {plan,move,undo,fix-ext} [--report REPORT] [--library-root LIBRARY_ROOT] [--manifest MANIFEST] [--limit LIMIT] [--exclude EXCLUDE] [--dry-run]";
 
@@ -112,7 +112,7 @@ fn execute(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io::
         "fix-ext" => {
             // (원본, 교정 결과 파일, 전, 후)와 (원본, 오류)로 나눠 모은다.
             let (mut fixed, mut skipped) = (Vec::new(), Vec::new());
-            for rec in load_corrupted(&report)? {
+            for rec in load_corrupted_logged(&report, log)? {
                 match fix_extension(Path::new(&field(&rec, "path")), args.dry_run) {
                     None => {}
                     Some(FixResult::Error { path, error }) => skipped.push((path, error)),
@@ -137,7 +137,7 @@ fn execute(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io::
             Ok(0)
         }
         _ => {
-            let mut records = load_corrupted(&report)?;
+            let mut records = load_corrupted_logged(&report, log)?;
             if !args.exclude.is_empty() {
                 let before = records.len();
                 records.retain(|r| {
