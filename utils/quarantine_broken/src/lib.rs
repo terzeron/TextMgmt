@@ -31,6 +31,11 @@ pub const BROKEN_DIR_NAME: &str = "0_broken";
 pub type Rec = Map<String, Value>;
 
 /// 로그 한 줄을 받는 쪽. 메시지 앞에 `INFO`/`WARNING` 수준이 붙어 있다.
+/// 터미널에 찍을 문자열에서 제어문자(ESC 포함)와 방향·서식 문자를 지운다. 경로는 파일을 열거나 옮길 때만 원문을 쓴다.
+fn show(text: &str) -> String {
+    scan_common::text::sanitize_display(text, usize::MAX, None)
+}
+
 pub type Log<'a> = &'a dyn Fn(&str);
 
 /// 파일 한 건을 옮기는 함수. 테스트가 OS 오류를 주입하는 데 쓴다.
@@ -154,7 +159,7 @@ pub fn load_corrupted_logged(report_path: &Path, log: Log) -> io::Result<Vec<Rec
         }
         if file.get("format").and_then(Value::as_str) == Some("pdf") {
             let shown = file.get("path").and_then(Value::as_str).unwrap_or("?");
-            log(&format!("INFO PDF 인코딩 손상 판정은 격리 대상이 아니라 건너뛴다: {shown}"));
+            log(&format!("INFO PDF 인코딩 손상 판정은 격리 대상이 아니라 건너뛴다: {}", show(shown)));
             continue;
         }
         let mut rec = Rec::new();
@@ -184,7 +189,7 @@ pub fn plan_moves(records: &[Rec], library_root: &Path, log: Log) -> Vec<Rec> {
     for rec in records {
         let Some(src) = rec.get("path").and_then(Value::as_str).map(PathBuf::from) else { continue };
         let Ok(rel) = src.strip_prefix(library_root) else {
-            log(&format!("WARNING 라이브러리 밖 경로는 건너뛴다: {}", src.display()));
+            log(&format!("WARNING 라이브러리 밖 경로는 건너뛴다: {}", show(&src.to_string_lossy())));
             continue;
         };
         match rel.components().next() {
@@ -285,7 +290,7 @@ pub fn apply_moves_with(moves: &[Rec], manifest_path: &Path, dry_run: bool, log:
         match moved {
             Ok(()) => done.push(mv.clone()),
             Err(e) => {
-                log(&format!("WARNING 이동 실패: {} -> {}: {e}", src.display(), dst.display()));
+                log(&format!("WARNING 이동 실패: {} -> {}: {}", show(&src.to_string_lossy()), show(&dst.to_string_lossy()), show(&e.to_string())));
                 failed.push(with_error(mv, e.to_string()));
             }
         }
@@ -300,14 +305,14 @@ pub fn apply_moves_with(moves: &[Rec], manifest_path: &Path, dry_run: bool, log:
                     prev.extend(done);
                     manifest.moved = prev;
                 }
-                Err(e) => log(&format!("WARNING 기존 매니페스트를 읽지 못해 새로 쓴다: {e}")),
+                Err(e) => log(&format!("WARNING 기존 매니페스트를 읽지 못해 새로 쓴다: {}", show(&e.to_string()))),
             }
         }
         if let Some(dir) = manifest_path.parent() {
             let _ = fs::create_dir_all(dir);
         }
         if let Err(e) = write_json(manifest_path, &manifest) {
-            log(&format!("ERROR 매니페스트를 쓰지 못했다: {e}"));
+            log(&format!("ERROR 매니페스트를 쓰지 못했다: {}", show(&e.to_string())));
         }
     }
     manifest
@@ -333,7 +338,7 @@ pub fn undo_moves(manifest_path: &Path, dry_run: bool) -> io::Result<UndoResult>
 /// 매니페스트에 적힌 이동을 되돌린다.
 pub fn undo_moves_with(manifest_path: &Path, dry_run: bool, mover: Mover) -> io::Result<UndoResult> {
     if !manifest_path.exists() {
-        return Err(io::Error::new(io::ErrorKind::NotFound, format!("매니페스트가 없다: {}", manifest_path.display())));
+        return Err(io::Error::new(io::ErrorKind::NotFound, format!("매니페스트가 없다: {}", show(&manifest_path.to_string_lossy()))));
     }
     let mut manifest: Value = serde_json::from_str(&fs::read_to_string(manifest_path)?).map_err(io::Error::other)?;
     let moved = read_previous_moved(manifest_path)?;
@@ -385,7 +390,7 @@ pub fn summarize(moves: &[Rec], out: &mut dyn Write) -> io::Result<()> {
     let mut rows: Vec<(&String, &usize)> = by_cat.iter().collect();
     rows.sort_by(|a, b| b.1.cmp(a.1));
     for (cat, n) in rows {
-        writeln!(out, "  {cat:<26}{n:>6}")?;
+        writeln!(out, "  {:<26}{n:>6}", show(cat))?;
     }
     Ok(())
 }

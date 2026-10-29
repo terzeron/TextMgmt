@@ -108,3 +108,21 @@ fn bidi_file_name_is_hidden_in_text_but_kept_in_json() {
     let v: serde_json::Value = serde_json::from_slice(&json).unwrap();
     assert_eq!(v["path"], "evil\u{202e}gpj.exe");
 }
+
+#[test]
+fn escape_and_bidi_in_the_path_are_hidden_in_text_but_the_real_file_is_found() {
+    use bookdoctor::cli::Options;
+    use bookdoctor::scan::scan_file;
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("ev\u{1b}[31m\u{202e}il.txt");
+    std::fs::write(&p, [0u8; 4096]).unwrap();
+    let r = scan_file(&p, &Options { no_poppler: true, ..Options::default() });
+    // 열고 옮기는 쪽이 쓰는 경로는 원문이다.
+    assert_eq!(Path::new(&r.path), p.as_path());
+    assert!(Path::new(&r.path).exists());
+    let mut text = Vec::new();
+    write_text(&r, &mut text).unwrap();
+    let text = String::from_utf8(text).unwrap();
+    assert!(!text.is_empty());
+    assert!(!text.contains('\u{1b}') && !text.contains('\u{202e}'), "{text:?}");
+}

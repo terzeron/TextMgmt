@@ -17,6 +17,7 @@ path = "../../tests/rust/quarantine_broken/quarantine.rs"
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 corpus_common = { path = "../../libs/corpus_common" }
+scan_common = { path = "../../libs/scan_common" }
 indexmap = { version = "2.14.2", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }

@@ -112,14 +112,14 @@ pub fn run(argv: &[String], out: &mut dyn Write) -> i32 {
     let opts = match parse(argv) {
         Ok(o) => o,
         Err(msg) => {
-            eprintln!("{USAGE}\nbookdoctor: error: {msg}");
+            eprintln!("{USAGE}\nbookdoctor: error: {}", scan_common::text::sanitize_display(&msg, usize::MAX, None));
             return 2;
         }
     };
     match scan(&opts, out) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("bookdoctor: error: {e}");
+            eprintln!("bookdoctor: error: {}", scan_common::text::sanitize_display(&e.to_string(), usize::MAX, None));
             1
         }
     }

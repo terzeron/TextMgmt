@@ -63,7 +63,12 @@ fn parse(argv: &[String]) -> Result<Option<Args>, String> {
 }
 
 fn name_of(path: &str, max_chars: usize) -> String {
-    Path::new(path).file_name().map(|n| n.to_string_lossy().chars().take(max_chars).collect()).unwrap_or_default()
+    Path::new(path).file_name().map(|n| scan_common::text::sanitize_display(&n.to_string_lossy(), max_chars, None)).unwrap_or_default()
+}
+
+/// 터미널에 찍는 임의 문자열(오류 메시지 등). 제어·방향 문자를 지운다.
+fn shown(text: &str) -> String {
+    scan_common::text::sanitize_display(text, usize::MAX, None)
 }
 
 fn field(rec: &Rec, key: &str) -> String {
@@ -124,7 +129,7 @@ fn execute(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io::
                 writeln!(out, "  {}\n    -> {}  ({} -> {} 바이트)", name_of(path, 48), name_of(restored_to, 48), crate::thousands(*before), crate::thousands(*after))?;
             }
             for (path, error) in &skipped {
-                writeln!(out, "  건너뜀: {} - {error}", name_of(path, 44))?;
+                writeln!(out, "  건너뜀: {} - {}", name_of(path, 44), shown(error))?;
             }
             Ok(0)
         }
@@ -132,7 +137,7 @@ fn execute(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io::
             let res = undo_moves(&manifest, args.dry_run)?;
             writeln!(out, "원위치 {}건, 실패 {}건", crate::thousands(res.restored.len()), crate::thousands(res.failed.len()))?;
             for f in res.failed.iter().take(10) {
-                writeln!(out, "  실패: {} - {}", name_of(&field(f, "dst"), 50), field(f, "error"))?;
+                writeln!(out, "  실패: {} - {}", name_of(&field(f, "dst"), 50), shown(&field(f, "error")))?;
             }
             Ok(0)
         }
@@ -164,10 +169,10 @@ fn execute(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io::
             let result = apply_moves(&moves, &manifest, args.dry_run, log);
             writeln!(out, "\n{} {}건, 실패 {}건", if args.dry_run { "이동 예정" } else { "이동 완료" }, crate::thousands(result.moved.len()), crate::thousands(result.failed.len()))?;
             for f in result.failed.iter().take(10) {
-                writeln!(out, "  실패: {} - {}", name_of(&field(f, "src"), 50), field(f, "error"))?;
+                writeln!(out, "  실패: {} - {}", name_of(&field(f, "src"), 50), shown(&field(f, "error")))?;
             }
             if !args.dry_run && !result.moved.is_empty() {
-                writeln!(out, "매니페스트: {}", manifest.display())?;
+                writeln!(out, "매니페스트: {}", shown(&manifest.to_string_lossy()))?;
                 writeln!(out, "되돌리려면: quarantine_broken undo")?;
             }
             Ok(0)

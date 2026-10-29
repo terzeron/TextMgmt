@@ -2528,6 +2528,7 @@ dependencies = [
  "chrono",
  "corpus_common",
  "indexmap 2.14.2",
+ "scan_common",
  "serde",
  "serde_json",
  "tempfile",

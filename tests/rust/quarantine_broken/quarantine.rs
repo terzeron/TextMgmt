@@ -802,3 +802,91 @@ fn load_corrupted_skips_pdf_mojibake_and_logs_it() {
     assert!(logged.borrow()[0].contains("/lib/a.pdf"), "{:?}", logged.borrow());
     assert_eq!(load_corrupted(&f).unwrap().len(), 2);
 }
+
+// ---- 표시용 문자열 정리: 화면에는 ESC[31m·U+202E가 없고, 열거나 옮기는 경로는 원문이다 ----
+
+const EVIL: &str = "ev\u{1b}[31m\u{202e}il.txt";
+
+fn assert_clean(text: &str) {
+    assert!(!text.contains('\u{1b}') && !text.contains('\u{202e}'), "{text:?}");
+}
+
+fn evil_library() -> Lib {
+    let lib = library();
+    fs::write(lib.root.join("3_판타지").join(EVIL), "본문").unwrap();
+    lib
+}
+
+#[test]
+fn cli_plan_and_move_print_clean_names_but_move_the_real_file() {
+    let lib = evil_library();
+    let rel = format!("3_판타지/{EVIL}");
+    let report = report_for(&lib, &[rel.as_str()]);
+    let manifest = lib.tmp.join("manifest.json");
+    let (_, out) = run_cli(&lib, &["plan", "--report", p(&report), "--library-root", p(&lib.root)]);
+    assert_clean(&out);
+    assert!(out.contains("ev.[31m.il.txt"), "{out:?}");
+    let (code, out) = run_cli(&lib, &["move", "--report", p(&report), "--library-root", p(&lib.root), "--manifest", p(&manifest)]);
+    assert_eq!(code, 0);
+    assert_clean(&out);
+    assert!(!lib.root.join("3_판타지").join(EVIL).exists());
+    assert!(lib.root.join(BROKEN_DIR_NAME).join("3_판타지").join(EVIL).exists());
+}
+
+#[test]
+fn cli_failure_lines_and_manifest_path_are_clean() {
+    let lib = library();
+    let manifest = lib.tmp.join(format!("m{EVIL}.json"));
+    let rel = format!("3_판타지/없는{EVIL}");
+    let report = report_for(&lib, &[rel.as_str()]);
+    let (_, out) = run_cli(&lib, &["move", "--report", p(&report), "--library-root", p(&lib.root), "--manifest", p(&manifest)]);
+    assert_clean(&out);
+    assert!(out.contains("원본 없음"), "{out:?}");
+    // 실제 이동 뒤 격리본을 지워 undo 실패 줄과 매니페스트 줄도 확인한다.
+    fs::write(lib.root.join("3_판타지").join(EVIL), "본문").unwrap();
+    let rel = format!("3_판타지/{EVIL}");
+    let report = report_for(&lib, &[rel.as_str()]);
+    let (_, out) = run_cli(&lib, &["move", "--report", p(&report), "--library-root", p(&lib.root), "--manifest", p(&manifest)]);
+    assert_clean(&out);
+    assert!(out.contains("매니페스트: "), "{out:?}");
+    let moved = read_json(&manifest)["moved"].clone();
+    fs::remove_file(moved[0]["dst"].as_str().unwrap()).unwrap();
+    let (_, out) = run_cli(&lib, &["undo", "--manifest", p(&manifest)]);
+    assert_clean(&out);
+    assert!(out.contains("격리본 없음"), "{out:?}");
+}
+
+#[test]
+fn move_failure_log_is_clean_while_the_mover_gets_the_raw_paths() {
+    let lib = evil_library();
+    let rel = format!("3_판타지/{EVIL}");
+    let moves = plan(&lib, &[rel.as_str()]);
+    let seen = RefCell::new(Vec::<PathBuf>::new());
+    let logged = RefCell::new(Vec::<String>::new());
+    let boom = |a: &Path, _: &Path| -> io::Result<()> {
+        seen.borrow_mut().push(a.to_path_buf());
+        Err(io::Error::other(format!("실패 {EVIL}")))
+    };
+    let result = apply_moves_with(&moves, &lib.tmp.join("manifest.json"), false, &|m| logged.borrow_mut().push(m.to_owned()), &boom);
+    assert_eq!(result.failed.len(), 1);
+    assert_eq!(seen.borrow()[0], lib.root.join("3_판타지").join(EVIL));
+    assert!(!logged.borrow().is_empty());
+    for l in logged.borrow().iter() {
+        assert_clean(l);
+    }
+}
+
+#[test]
+fn skipped_paths_and_summary_categories_are_clean() {
+    let lib = library();
+    let logged = RefCell::new(Vec::<String>::new());
+    let outside = json!({"path": format!("/elsewhere/{EVIL}"), "verdict": "corrupted"}).as_object().unwrap().clone();
+    plan_moves(&[outside], &lib.root, &|m| logged.borrow_mut().push(m.to_owned()));
+    assert_eq!(logged.borrow().len(), 1);
+    assert_clean(&logged.borrow()[0]);
+
+    let mv = json!({"src": "/x", "dst": format!("{}/_broken/3_{EVIL}/a.txt", lib.root.display())}).as_object().unwrap().clone();
+    let mut out = Vec::new();
+    summarize(&[mv], &mut out).unwrap();
+    assert_clean(&String::from_utf8(out).unwrap());
+}
