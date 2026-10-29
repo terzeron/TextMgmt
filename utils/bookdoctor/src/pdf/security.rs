@@ -673,27 +673,51 @@ fn scan_document(doc: &Document, report: &mut FileReport) {
     }
 }
 
-/// PDF 바이트를 검사해 `report`에 더한다. 크기 제한은 호출자(`common::inspect`)가 이미 걸었다.
-pub fn scan(data: &[u8], report: &mut FileReport) {
-    if !data.windows(5).take(1024).any(|w| w == b"%PDF-") {
-        report.mark_incomplete("no %PDF- header");
-        return;
-    }
-
-    // 구문 분석 성패와 무관하게 원본 바이트 검사를 한다. 깨진 파일일수록 은닉을 쓸 수 있다.
-    guarded(report, |r| raw_checks(data, r));
-
+/// PDF를 읽는다. 구문 오류와 파서 panic을 모두 `Err(사유)`로 돌려준다(사유는 정화한다).
+/// `data`에 `%PDF-` 머리가 있는지는 호출자가 이미 확인했다.
+pub fn load(data: &[u8]) -> Result<Document, String> {
     // A malformed file must not take the whole batch down.
     let parsed = std::panic::catch_unwind(|| {
         Document::load_mem_with_options(data, LoadOptions { filter: Some(shrink_on_load), max_decompressed_size: Some(MAX_DECOMPRESSED_STREAM_BYTES), ..LoadOptions::default() })
     });
     match parsed {
-        // 문서를 훑다 panic하면 그때까지 모은 지표는 버린다(옛 구조와 같다: 지표는 정렬 뒤에 한꺼번에 낸다).
-        Ok(Ok(doc)) => guarded(report, |r| scan_document(&doc, r)),
-        Ok(Err(e)) => report.mark_incomplete(&format!("parse error: {e}")),
+        Ok(Ok(doc)) => Ok(doc),
+        Ok(Err(e)) => Err(sanitize_text(&e.to_string(), PREVIEW_CHARS, Some('…'))),
         Err(payload) => {
             let msg = payload.downcast_ref::<&str>().map(|m| (*m).to_owned()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown".into());
-            report.mark_incomplete(&format!("panic: parser panicked on malformed input: {msg}"));
+            // 페이로드는 파일 내용에서 올 수 있으므로 `epub::security::guarded`처럼 정화한다.
+            Err(sanitize_text(&format!("panic: parser panicked on malformed input: {msg}"), PREVIEW_CHARS, Some('…')))
+        }
+    }
+}
+
+/// 이미 읽은 문서(없을 수 있다)로 보안 검사를 한다. 구문 오류 보고는 하지 않는다(`pdf::structure`가 한다).
+pub fn scan_loaded(data: &[u8], doc: Option<&Document>, report: &mut FileReport) {
+    // 구문 분석 성패와 무관하게 원본 바이트 검사를 한다. 깨진 파일일수록 은닉을 쓸 수 있다.
+    guarded(report, |r| raw_checks(data, r));
+    // 문서를 훑다 panic하면 그때까지 모은 지표는 버린다(옛 구조와 같다: 지표는 정렬 뒤에 한꺼번에 낸다).
+    if let Some(doc) = doc {
+        guarded(report, |r| scan_document(doc, r));
+    }
+}
+
+/// `data`의 앞 1024바이트에 `%PDF-`가 있는가.
+pub fn has_header(data: &[u8]) -> bool {
+    data.windows(5).take(1024).any(|w| w == b"%PDF-")
+}
+
+/// PDF 바이트를 검사해 `report`에 더한다. 크기 제한은 호출자(`common::inspect`)가 이미 걸었다.
+/// 구문 오류는 `incomplete` 사유로만 남긴다. 구조 지표(`XREF_BROKEN` 등)는 `pdf::structure::inspect`가 낸다.
+pub fn scan(data: &[u8], report: &mut FileReport) {
+    if !has_header(data) {
+        report.mark_incomplete("no %PDF- header");
+        return;
+    }
+    match load(data) {
+        Ok(doc) => scan_loaded(data, Some(&doc), report),
+        Err(e) => {
+            scan_loaded(data, None, report);
+            report.mark_incomplete(&format!("parse error: {e}"));
         }
     }
 }

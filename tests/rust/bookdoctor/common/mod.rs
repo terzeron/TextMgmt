@@ -239,3 +239,81 @@ pub fn epub_members(path: &Path, members: &[(&str, &[u8])], stored_names: &[&str
     }
     z.finish().unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// Poppler 가짜 실행기
+// ---------------------------------------------------------------------------
+
+use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+use sysdeps::{CommandError, CommandOutput, CommandRunner};
+
+enum Info {
+    Pages(usize),
+    NotFound,
+    Fails(String),
+}
+
+/// 미리 정한 `pdfinfo`·`pdftotext` 결과를 돌려주고 호출을 기록한다. 실제 Poppler를 부르지 않는다.
+pub struct FakeRunner {
+    info: Info,
+    text: String,
+    calls: AtomicUsize,
+    programs: Mutex<Vec<String>>,
+}
+
+impl FakeRunner {
+    fn new(info: Info, text: &str) -> Self {
+        FakeRunner { info, text: text.to_owned(), calls: AtomicUsize::new(0), programs: Mutex::new(Vec::new()) }
+    }
+
+    /// `pdfinfo`가 `n`쪽이라고 답하고 `pdftotext`는 본문이 있다고 답한다.
+    pub fn pages(n: usize) -> Self {
+        Self::new(Info::Pages(n), "본문 텍스트")
+    }
+
+    /// Poppler 실행 파일이 없다.
+    pub fn not_found() -> Self {
+        Self::new(Info::NotFound, "")
+    }
+
+    /// `pdfinfo`가 0이 아닌 종료 코드로 끝난다.
+    pub fn fails(msg: &str) -> Self {
+        Self::new(Info::Fails(msg.to_owned()), "")
+    }
+
+    /// 1쪽이고 `pdftotext`가 `s`를 돌려준다.
+    pub fn text(s: &str) -> Self {
+        Self::new(Info::Pages(1), s)
+    }
+
+    pub fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    pub fn programs(&self) -> Vec<String> {
+        self.programs.lock().unwrap().clone()
+    }
+}
+
+impl CommandRunner for FakeRunner {
+    fn run(&self, argv: &[String], _timeout: Option<Duration>) -> Result<CommandOutput, CommandError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let program = argv.first().cloned().unwrap_or_default();
+        self.programs.lock().unwrap().push(program.clone());
+        if program == "pdftotext" {
+            return Ok(CommandOutput { returncode: 0, stdout: self.text.clone().into_bytes(), stderr: Vec::new() });
+        }
+        match &self.info {
+            Info::Pages(n) => Ok(CommandOutput { returncode: 0, stdout: format!("Title: x\nPages:          {n}\n").into_bytes(), stderr: Vec::new() }),
+            Info::NotFound => Err(CommandError::NotFound),
+            Info::Fails(msg) => Ok(CommandOutput { returncode: 1, stdout: Vec::new(), stderr: msg.clone().into_bytes() }),
+        }
+    }
+
+    fn which(&self, _program: &str) -> Option<PathBuf> {
+        None
+    }
+}
