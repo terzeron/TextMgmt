@@ -43,6 +43,10 @@ name = "pdf_security"
 path = "../../tests/rust/bookdoctor/pdf_security.rs"
 
 [[test]]
+name = "pdf_security_new"
+path = "../../tests/rust/bookdoctor/pdf_security_new.rs"
+
+[[test]]
 name = "report"
 path = "../../tests/rust/bookdoctor/report.rs"
 
