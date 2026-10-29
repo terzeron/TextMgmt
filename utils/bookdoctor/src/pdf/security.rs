@@ -235,16 +235,19 @@ fn shrink_on_load_strict(id: ObjectId, obj: &mut Object) -> Option<(ObjectId, Ob
     Some((id, obj.clone()))
 }
 
-/// 파일 원본에서 `번호 세대 R` 꼴 참조가 몇 개인지 센다. 세대 번호가 0이 아니어도, 구분이 공백·탭·CR·LF·FF·NUL 어느 것이어도 센다
-/// (`1\n0\nR`, `1 5 R`). 한 번의 선형 훑기다. 세는 값은 일반 객체 속 참조 노드 수의 상한에 가깝다.
+/// 파일 원본에서 `번호 세대 R` 꼴 참조가 몇 개인지 센다. 패턴은 lopdf 0.46 `reference` 문법을 따른다: `(정수 space)(정수 space) R`,
+/// space는 공백 바이트(공백·탭·CR·LF·FF·NUL)나 `%` 주석(줄끝까지)이 0개 이상이다. 두 정수 사이는 `digit1`이 탐욕적이라 구분이 하나
+/// 이상 있어야 하고, 세대 번호와 R 사이는 없어도 되며(`1 0R`), R 뒤 구분자도 요구하지 않는다(`1 0 R2 0 R`). 그래서 `\b`를 두지 않는다.
+/// 이 때문에 `0 0 1 RG` 같은 비참조도 셀 수 있으나, 이 값은 예산 판정용 상한이라 많이 세는 쪽이 안전하다. 한 번의 선형 훑기다.
 ///
-/// 한계(압축 객체 스트림): 스트림 안의 참조는 압축돼 있어 세지 못한다. 스트림 하나는 해제 4MiB(`MAX_DECOMPRESSED_STREAM_BYTES`)까지라
-/// 참조 약 70만 개, 노드 약 80MB가 일시적으로 생기고, rayon 작업 스레드 수만큼 겹칠 수 있으며 스트림 개수 상한은 없다. 그러나 이는
-/// 엄격 훅으로도 줄지 않는다(31개 이하 배열은 엄격 훅도 남기므로 `[1 0 R ... ]` 31개짜리 배열만 이어 붙인 스트림은 똑같이 80MB다).
-/// 즉 이 위험은 배열 규칙을 바꿔서가 아니라 스트림당 해제 한도로만 막히는 기존 한계다. `/ObjStm` 개수로 훅을 고르면 ObjStm를
-/// 쓰는 현대 PDF 대부분이 엄격 훅이 되어 긴 /Kids가 모두 비워지므로(오탐성 incomplete) 하지 않는다.
+/// 한계(압축 객체 스트림): 스트림 안의 참조는 압축돼 있어 세지 못하고, 안쪽 객체도 훅을 거치지만 31개 이하 참조 배열은 두 훅 모두
+/// 남긴다. 해제 한도(`MAX_DECOMPRESSED_STREAM_BYTES`, 4MiB)는 스트림 하나에만 걸린다. 4MiB 스트림은 압축하면 수 KB라 그런 스트림
+/// 하나가 참조 약 70만 개, 노드 약 80MB를 남긴다. 남은 노드는 `doc.objects`에 문서 수명 내내 유지되고 `/ObjStm` 개수 상한이 없으므로
+/// 최악은 약 80MB × ObjStm 개수이며, 프로세스 안에는 이를 막는 한도가 없다. 이는 예전 pdfscan과 같은 동작이다(Ruling R20).
+/// 작업자 수 상한은 문서 하나의 메모리를 막지 못하고, 외부 메모리 한도(cgroup/ulimit)만 막는다. `/ObjStm` 개수로 훅을 고르면
+/// ObjStm를 쓰는 현대 PDF 대부분이 엄격 훅이 되어 긴 /Kids가 모두 비워지므로(오탐성 incomplete) 하지 않는다.
 fn count_raw_references(data: &[u8]) -> usize {
-    static RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"(?-u)[0-9]+[ \t\r\n\x0c\x00]+[0-9]+[ \t\r\n\x0c\x00]+R\b").ok());
+    static RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"(?-u)[0-9]+(?:[ \t\r\n\x0c\x00]|%[^\r\n]*[\r\n])+[0-9]+(?:[ \t\r\n\x0c\x00]|%[^\r\n]*[\r\n])*R").ok());
     RE.as_ref().map_or(0, |re| re.find_iter(data).count())
 }
 
@@ -1066,8 +1069,46 @@ mod tests {
     #[test]
     fn reference_counting_covers_other_generations_and_whitespace_separators() {
         assert_eq!(count_raw_references(b"[1 0 R 2 5 R 3\n0\nR 4 0\nR 5\t1\tR 6\r\n0\r\nR]"), 6);
-        // 참조가 아닌 것: R로 끝나지 않거나 숫자가 하나뿐이다.
-        assert_eq!(count_raw_references(b"1 0 Rx 7 R /Name 3 0 obj"), 0);
+        // 참조가 아닌 것: 숫자가 하나뿐이거나 R이 없다. 두 정수 사이는 구분이 꼭 있어야 한다(`10R`은 정수 하나다).
+        assert_eq!(count_raw_references(b"7 R /Name 3 0 obj 10R"), 0);
+        // `1 0 Rx`는 센다. lopdf는 R 뒤 구분자를 요구하지 않고, 상한은 많이 세는 쪽이 안전하다.
+        assert_eq!(count_raw_references(b"1 0 Rx"), 1);
+    }
+
+    #[test]
+    fn reference_counting_follows_the_lopdf_grammar_without_a_trailing_delimiter() {
+        // lopdf `reference`: (정수 space)(정수 space) 뒤 `R`. space는 0개 이상이고 R 뒤 구분자는 요구하지 않는다.
+        assert_eq!(count_raw_references(b"[1 0R2 0R3 0R]"), 3);
+        assert_eq!(count_raw_references(b"[1 0 R2 0 R3 0 R]"), 3);
+        // 구분으로 주석(`%...` + 줄끝)도 쓸 수 있다.
+        assert_eq!(count_raw_references(b"[1 %c\n0 %c\nR 2%x\r\n0%y\rR]"), 2);
+        // 위 꼴들을 lopdf가 실제로 참조로 읽는지 확인한다(세는 규칙이 문법과 어긋나지 않게).
+        let pdf = b"%PDF-1.4\n10 0 obj\n[1 0R2 0 R3 %c\n0%c\nR4 0R]\nendobj\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+        assert_eq!(count_raw_references(pdf), 5);
+        let (doc, _) = load(pdf).unwrap();
+        let arr = doc.get_object((10, 0)).unwrap().as_array().unwrap();
+        assert_eq!(arr.len(), 4);
+        assert!(arr.iter().all(|o| o.as_reference().is_ok()));
+    }
+
+    #[test]
+    fn a_bomb_written_without_space_before_r_goes_to_the_strict_hook() {
+        // `N 0R` 꼴 1만 개 배열 80개 = 80만 참조. 예전 패턴은 이 꼴을 0으로 세어 관대한 훅으로 보냈다.
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        for n in 0..80u32 {
+            pdf.extend_from_slice(format!("{} 0 obj\n[", 10 + n).as_bytes());
+            for r in 0..10_000u32 {
+                pdf.extend_from_slice(format!("{} 0R", 1000 + r).as_bytes());
+            }
+            pdf.extend_from_slice(b"]\nendobj\n");
+        }
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
+        assert!(count_raw_references(&pdf) > REF_FILE_BUDGET);
+        let (loaded, info) = load(&pdf).unwrap();
+        assert!(info.emptied_ref_array && info.page_tree_unreliable());
+        assert_eq!(info.kept_ref_nodes, 0);
+        let kept: usize = loaded.objects.values().filter_map(|o| o.as_array().ok()).map(Vec::len).sum();
+        assert!(kept <= 80, "남은 원소 {kept}");
     }
 
     #[test]
