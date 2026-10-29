@@ -20,6 +20,11 @@ pub const MIN_HANGUL_RATIO: f64 = 0.10;
 /// 표본이 이보다 짧으면 판독할 수 없다. 원본 lib.rs 60행.
 const MIN_SAMPLE_CHARS: usize = 200;
 
+/// EPUB 표본을 위해 읽는 멤버 수 상한(건너뛴 것 포함). 표본은 앞 20,000자와 뒤 10,000자이고 본문 문서 하나가 보통 수천 자 이상이라
+/// 정상 EPUB은 몇 개만 읽어도 채워진다. 태그뿐인 문서(50자 미만)를 건너뛰며 읽는 경우에도 64개면 충분하다.
+/// 보안 검사의 `max_files`(10,000)와 따로 정한다. 그 값은 파일 전체 검사용이라 표본에는 너무 크다.
+pub const SAMPLE_MAX_MEMBERS: usize = 64;
+
 /// 원본의 `VERDICT_*` 문자열 상수에 대응한다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {

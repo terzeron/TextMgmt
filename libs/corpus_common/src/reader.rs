@@ -237,8 +237,13 @@ fn read_entry(zip: &mut Zip, index: usize, budget: &mut Budget) -> Option<Vec<u8
     let cap = MAX_MEMBER_BYTES.min(budget.bytes_left);
     let entry = zip.by_index(index).ok()?;
     let mut data = Vec::new();
-    entry.take(cap).read_to_end(&mut data).ok()?;
-    budget.bytes_left -= data.len() as u64;
+    let res = entry.take(cap).read_to_end(&mut data);
+    // 읽다가 실패해도(CRC 불일치, 잘린 deflate) 이미 푼 바이트는 예산에서 뺀다. 안 빼면 풀고 실패하는 멤버로 예산을 우회한다.
+    budget.bytes_left = budget.bytes_left.saturating_sub(data.len() as u64);
+    if res.is_err() {
+        budget.cut = true;
+        return None;
+    }
     // 예산 상한에 걸려 잘렸다면(멤버 상한보다 예산이 작았다) 표본이 불완전하다.
     if data.len() as u64 == cap && cap < MAX_MEMBER_BYTES {
         budget.cut = true;

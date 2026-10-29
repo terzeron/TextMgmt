@@ -254,3 +254,32 @@ fn read_epub_text_limited_is_not_cut_when_the_sample_fits() {
     assert!(text.contains("바람이"));
     assert_eq!(text, read_epub_text(&p, 2000, 0));
 }
+
+#[test]
+fn read_epub_text_limited_charges_members_that_inflate_and_then_fail() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("badcrc.epub");
+    let zeros = "\0".repeat(2 * 1024 * 1024);
+    let docs: Vec<(String, &str)> = (0..40).map(|i| (format!("ch{i}.xhtml"), zeros.as_str())).collect();
+    let refs: Vec<(&str, &str)> = docs.iter().map(|(a, b)| (a.as_str(), *b)).collect();
+    make_zip(&p, &refs);
+    // 로컬 헤더(CRC는 14행 오프셋)와 중앙 디렉터리(16)의 CRC를 깨서, 끝까지 푼 뒤 읽기가 실패하게 한다.
+    let mut bytes = fs::read(&p).unwrap();
+    for (sig, off) in [(&b"PK\x03\x04"[..], 14usize), (&b"PK\x01\x02"[..], 16usize)] {
+        let mut i = 0;
+        while i + 4 <= bytes.len() {
+            if &bytes[i..i + 4] == sig {
+                bytes[i + off] ^= 0xff;
+                i += 4;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    fs::write(&p, &bytes).unwrap();
+    let started = std::time::Instant::now();
+    // 예산 3MB. 멤버 하나가 2MB라 예산이 없으면 40개(80MB)를 전부 푼다.
+    let (_, cut) = read_epub_text_limited(&p, 20_000, 10_000, 3 * 1024 * 1024, usize::MAX);
+    assert!(cut);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}

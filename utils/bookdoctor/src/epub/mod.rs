@@ -37,7 +37,7 @@ pub fn scan_epub_file(path: &Path, opts: &Options, report: &mut FileReport) {
         if bomb_reported(report) {
             report.mark_incomplete("mojibake sampling skipped: decompression bomb or budget exhaustion already reported");
         } else {
-            crate::mojibake::check_file_limited(path, report, crate::mojibake::TextSource::Epub, limits.max_total, limits.max_files);
+            crate::mojibake::check_file_limited(path, report, crate::mojibake::TextSource::Epub, limits.max_total, crate::mojibake::SAMPLE_MAX_MEMBERS);
         }
     }
 }
