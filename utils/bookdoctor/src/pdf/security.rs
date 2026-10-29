@@ -99,6 +99,11 @@ pub fn emptied_ref_array() -> bool {
     EMPTIED_REF_ARRAY.with(std::cell::Cell::get)
 }
 
+#[cfg(test)]
+pub(crate) fn mark_emptied_ref_array_for_test() {
+    EMPTIED_REF_ARRAY.with(|f| f.set(true));
+}
+
 fn shrink_array(items: &mut Vec<Object>, depth: usize) {
     // 참조만 든 배열은 쪽 트리(/Kids)와 /Contents 같은 구조 정보다. `/Kids 21 0 R`처럼 배열이 독립 객체일 때는 훅이 키를 모르므로
     // 내용으로 가려야 한다. 비우면 lopdf가 쪽을 하나도 찾지 못해 멀쩡한 PDF가 0쪽이 된다. 한 배열 상한과 한 파일 전체 예산이

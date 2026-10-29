@@ -145,10 +145,21 @@ fn document_checks(doc: &Document, report: &mut FileReport) {
     let pages = doc.get_pages();
     // 암호화 문서는 객체를 읽지 못해 쪽 트리가 비어 보인다. ENCRYPTED만 알린다.
     if has_root && pages.is_empty() && !doc.trailer.has(b"Encrypt") {
-        report.push(Category::Defect, Severity::High, "ZERO_PAGES", "", "페이지가 0쪽이다");
+        // 읽기 훅이 참조 배열을 비웠거나 /Pages의 /Count가 0보다 크면 쪽 트리가 잘렸을 뿐 0쪽이라는 증거가 아니다.
+        // 그 경우 High 결함이 아니라 "끝까지 보지 못함"으로만 알린다.
+        if crate::pdf::security::emptied_ref_array() || declared_page_count(doc) > 0 {
+            report.mark_incomplete("page tree could not be read (reference array emptied or /Count > 0)");
+        } else {
+            report.push(Category::Defect, Severity::High, "ZERO_PAGES", "", "페이지가 0쪽이다");
+        }
     }
     tiny_pages(doc, &pages, report);
     unembedded_fonts(doc, report);
+}
+
+/// 카탈로그 `/Pages`의 `/Count`. 없거나 읽을 수 없으면 0이다.
+fn declared_page_count(doc: &Document) -> i64 {
+    doc.catalog().ok().and_then(|c| c.get(b"Pages").ok()).and_then(|o| doc.dereference(o).ok()).and_then(|(_, o)| o.as_dict().ok()).and_then(|d| d.get(b"Count").ok()).and_then(|c| c.as_i64().ok()).unwrap_or(0)
 }
 
 /// 상속을 풀어 쪽의 MediaBox를 찾는다(PDF 32000-1:2008 7.7.3.4: 쪽에 없으면 /Parent 사슬에서 물려받는다).
@@ -291,4 +302,52 @@ fn poppler_checks(path: &Path, opts: &Options, doc: Option<&Document>, report: &
         }
     }
     crate::mojibake::check_text(report, &sample);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pdf::security;
+
+    fn empty_tree_doc(count: i64) -> Document {
+        let mut doc = Document::with_version("1.7");
+        let mut cat = Dictionary::new();
+        cat.set("Type", "Catalog");
+        cat.set("Pages", Object::Reference((2, 0)));
+        doc.objects.insert((1, 0), Object::Dictionary(cat));
+        let mut pages = Dictionary::new();
+        pages.set("Type", "Pages");
+        pages.set("Count", count);
+        pages.set("Kids", Object::Array(vec![]));
+        doc.objects.insert((2, 0), Object::Dictionary(pages));
+        doc.trailer.set("Root", Object::Reference((1, 0)));
+        doc
+    }
+
+    fn check(doc: &Document) -> FileReport {
+        let mut r = FileReport::new(Path::new("x.pdf"), None);
+        document_checks(doc, &mut r);
+        r
+    }
+
+    #[test]
+    fn zero_pages_is_high_only_when_the_tree_is_really_empty() {
+        let r = check(&empty_tree_doc(0));
+        assert!(r.findings.iter().any(|f| f.code == "ZERO_PAGES") && !r.incomplete);
+    }
+
+    #[test]
+    fn positive_count_with_empty_page_list_is_incomplete_not_zero_pages() {
+        let r = check(&empty_tree_doc(40));
+        assert!(!r.findings.iter().any(|f| f.code == "ZERO_PAGES"));
+        assert!(r.incomplete);
+    }
+
+    #[test]
+    fn emptied_reference_array_makes_zero_pages_incomplete() {
+        security::mark_emptied_ref_array_for_test();
+        let r = check(&empty_tree_doc(0));
+        assert!(!r.findings.iter().any(|f| f.code == "ZERO_PAGES"));
+        assert!(r.incomplete);
+    }
 }
