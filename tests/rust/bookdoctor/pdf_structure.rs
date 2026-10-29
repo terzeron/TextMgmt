@@ -477,6 +477,10 @@ fn pdf_bytes_with_kids(kids: u32) -> Vec<u8> {
         page.set("Parent", Object::Reference((2, 0)));
         doc.objects.insert((10 + n, 0), Object::Dictionary(page));
     }
+    // /Count를 빼서 "Count 없음 + 잘린 Kids"만으로도 incomplete가 되는지 본다(Count가 있으면 다른 경로로도 incomplete가 된다).
+    if let Some(Object::Dictionary(pages)) = doc.objects.get_mut(&(2, 0)) {
+        pages.remove(b"Count");
+    }
     doc.max_id = 10 + kids;
     let mut bytes = Vec::new();
     doc.save_to(&mut bytes).unwrap();
