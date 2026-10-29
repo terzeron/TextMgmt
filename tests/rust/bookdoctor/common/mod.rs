@@ -301,6 +301,11 @@ impl FakeRunner {
         Self::new(Info::Pages(1), s)
     }
 
+    /// `n`쪽이고 `pdftotext`가 `s`를 돌려준다.
+    pub fn pages_text(n: usize, s: &str) -> Self {
+        Self::new(Info::Pages(n), s)
+    }
+
     pub fn call_count(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }

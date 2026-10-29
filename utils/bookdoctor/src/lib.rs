@@ -3,6 +3,7 @@
 pub mod cli;
 pub mod common;
 pub mod epub;
+pub mod mojibake;
 pub mod pdf;
 pub mod report;
 pub mod scan;

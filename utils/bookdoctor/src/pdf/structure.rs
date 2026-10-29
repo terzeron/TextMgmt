@@ -228,6 +228,9 @@ fn unembedded_fonts(doc: &Document, report: &mut FileReport) {
 
 fn poppler_checks(path: &Path, opts: &Options, doc: Option<&Document>, report: &mut FileReport, runner: &dyn CommandRunner) {
     if opts.no_poppler {
+        if opts.pdf_text {
+            report.mark_incomplete("mojibake check skipped: poppler disabled");
+        }
         return;
     }
     let watching = Watching { inner: runner, failure: Mutex::new(None) };
@@ -248,15 +251,35 @@ fn poppler_checks(path: &Path, opts: &Options, doc: Option<&Document>, report: &
     if !opts.pdf_text || pages == 0 {
         return;
     }
-    match extract_text(&watching, path, 1, pages.min(TEXT_PROBE_PAGES)) {
-        Ok(text) if text.trim().is_empty() => {
-            report.push(Category::Defect, Severity::Low, "NO_TEXT_LAYER", "", &format!("앞 {}쪽에서 추출한 텍스트가 없다", pages.min(TEXT_PROBE_PAGES)));
-        }
-        Ok(_) => {}
+    let head_last = pages.min(TEXT_PROBE_PAGES);
+    let head = match extract_text(&watching, path, 1, head_last) {
+        Ok(text) => text,
         Err(e) => {
             if !note_runner_failure(watching.take(), report) {
                 report.mark_incomplete(&format!("pdftotext failed: {}", sanitize(&e, 200, Some('…'))));
             }
+            return;
+        }
+    };
+    if head.trim().is_empty() {
+        report.push(Category::Defect, Severity::Low, "NO_TEXT_LAYER", "", &format!("앞 {head_last}쪽에서 추출한 텍스트가 없다"));
+    }
+    // 인코딩 손상 판정 표본은 앞 5쪽과 끝 5쪽이다. 앞 5쪽은 위에서 이미 뽑았고, 겹치지 않는 뒤쪽만 더 뽑는다.
+    let mut sample = head;
+    if pages > head_last {
+        let tail_first = (pages - TEXT_PROBE_PAGES + 1).max(head_last + 1);
+        match extract_text(&watching, path, tail_first, pages) {
+            Ok(text) => {
+                sample.push(' ');
+                sample.push_str(&text);
+            }
+            Err(e) => {
+                if !note_runner_failure(watching.take(), report) {
+                    report.mark_incomplete(&format!("pdftotext failed: {}", sanitize(&e, 200, Some('…'))));
+                }
+                return;
+            }
         }
     }
+    crate::mojibake::check_text(report, &sample);
 }
