@@ -126,8 +126,7 @@ pub fn fix_extension_with(path: &Path, dry_run: bool, unmangle: &dyn Fn(&[u8]) -
 ///
 /// `files[]` 중 `findings`에 `code == "MOJIBAKE"`가 있는 항목만 `Rec`(path, likeness, verdict)로 바꾼다.
 /// likeness가 없거나 null이면 키를 넣지 않는다(옛 코드도 없는 키는 그대로 두었다).
-/// 알려진 한계: bookdoctor는 `path`의 제어 문자를 '.'으로 바꿔 쓴다. 이름에 제어 문자가 든 파일은 정확히 찾지 못한다.
-/// 최악의 경우 이동이 건너뛰어지거나, 점으로 바뀐 이름의 다른 실제 파일이 옮겨진다(`undo`로 되돌릴 수 있다).
+/// 리포트는 `path` 원문을 그대로 담는다. 화면에 찍는 출력만 제어·방향 문자를 정리한다(`show`).
 /// 옛 인코딩 검사 도구 형식(`{"corrupted": [...]}`)은 조용히 빈 결과가 되지 않도록 오류로 돌려준다.
 ///
 /// `format`이 `pdf`인 항목은 건너뛴다. `bookdoctor --pdf-text`는 PDF에도 `MOJIBAKE`를 내지만, 옛 격리 대상은 txt와 epub뿐이었고

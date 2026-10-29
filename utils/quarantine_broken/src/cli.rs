@@ -96,14 +96,14 @@ pub fn run(argv: &[String], repo_root: &Path, out: &mut dyn Write, log: Log) -> 
             return 0;
         }
         Err(msg) => {
-            eprintln!("{USAGE}\nquarantine_broken: error: {msg}");
+            eprintln!("{USAGE}\nquarantine_broken: error: {}", shown(&msg));
             return 2;
         }
     };
     match execute(&args, repo_root, out, log) {
         Ok(code) => code,
         Err(e) => {
-            log(&format!("ERROR {e}"));
+            log(&format!("ERROR {}", shown(&e.to_string())));
             1
         }
     }
@@ -188,8 +188,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
 
 검사 리포트(bookdoctor `--report`의 JSON)에서 손상 판정만 골라 원래 카테고리를 하위 디렉토리로
 유지한 채 옮긴다. 판정에 오탐이 섞일 수 있어 이동은 매니페스트에 기록하고 `undo`로 복구한다.
-리포트가 경로의 제어 문자를 '.'으로 바꿔 두므로 이름에 제어 문자가 든 파일은 정확히 찾지 못한다
-(건너뛰거나, 점 이름의 다른 파일을 옮길 수 있으며 `undo`로 되돌린다).
+리포트는 경로 원문을 그대로 담고, 화면에 찍는 출력만 제어·방향 문자를 '.'으로 바꾼다.
 
 사용법:
   quarantine_broken plan    [--report PATH] [--library-root DIR] [--limit N] [--exclude TEXT ...]
