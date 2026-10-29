@@ -271,7 +271,7 @@ fn move_across_filesystems_falls_back_to_copy_and_keeps_mtime() {
 // ---- 리포트 읽기 ----
 
 #[test]
-fn load_corrupted_reads_both_report_shapes() {
+fn load_corrupted_reads_single_and_mixed_bookdoctor_reports() {
     // 옛 테스트는 scan 리포트와 recheck 목록 두 형태를 읽었다. 이제는 bookdoctor 리포트 한 형태이고,
     // 항목 하나짜리 리포트와 지표가 섞인 여러 항목 리포트가 둘 다 읽혀야 한다.
     let dir = tempfile::tempdir().unwrap();
@@ -755,4 +755,31 @@ fn manifest_write_failure_is_logged_but_the_move_is_reported() {
 fn summaries_group_thousands_with_commas() {
     let moves: Vec<Value> = (0..1234).map(|i| json!({"dst": format!("/text/{BROKEN_DIR_NAME}/3_판타지/{i}.txt"), "size": 1})).collect();
     assert!(summary(&moves).contains("대상 1,234건"));
+}
+
+// ---- 크기 보충 ----
+
+#[test]
+fn plan_stats_the_source_when_the_record_has_no_size() {
+    // bookdoctor 리포트에는 size가 없다. 계획 단계에서 원본 파일 크기를 읽어 채운다.
+    let lib = library();
+    let big = lib.root.join("3_판타지/큰파일.txt");
+    fs::write(&big, vec![b'x'; 1024 * 1024]).unwrap();
+    let f = lib.tmp.join("r.json");
+    fs::write(&f, bd_report(&[(p(&big), Some(0.002))], vec![])).unwrap();
+    let moves = plan_moves(&load_corrupted(&f).unwrap(), &lib.root, &quiet);
+    assert_eq!(moves[0]["size"], json!(1024 * 1024));
+    assert!(summary(&moves.into_iter().map(Value::Object).collect::<Vec<_>>()).contains("대상 1건, 1.0MB"));
+}
+
+#[test]
+fn plan_keeps_a_size_the_record_already_has_and_uses_zero_for_a_missing_file() {
+    let lib = library();
+    let mut recs = records_for(&lib, &["3_판타지/a.txt"]);
+    recs[0].insert("size".into(), json!(777));
+    assert_eq!(plan_moves(&recs, &lib.root, &quiet)[0]["size"], json!(777));
+
+    let ghost = lib.root.join("3_판타지/없는파일.txt");
+    let rec = json!({"path": ghost.to_string_lossy(), "verdict": "corrupted"}).as_object().unwrap().clone();
+    assert_eq!(plan_moves(&[rec], &lib.root, &quiet)[0]["size"], json!(0));
 }

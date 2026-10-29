@@ -121,6 +121,8 @@ pub fn fix_extension_with(path: &Path, dry_run: bool, unmangle: &dyn Fn(&[u8]) -
 ///
 /// `files[]` 중 `findings`에 `code == "MOJIBAKE"`가 있는 항목만 `Rec`(path, likeness, verdict)로 바꾼다.
 /// likeness가 없거나 null이면 키를 넣지 않는다(옛 코드도 없는 키는 그대로 두었다).
+/// 알려진 한계: bookdoctor는 `path`의 제어 문자를 '.'으로 바꿔 쓴다. 이름에 제어 문자가 든 파일은 정확히 찾지 못한다.
+/// 최악의 경우 이동이 건너뛰어지거나, 점으로 바뀐 이름의 다른 실제 파일이 옮겨진다(`undo`로 되돌릴 수 있다).
 /// 옛 detect_mojibake 형식(`{"corrupted": [...]}`)은 조용히 빈 결과가 되지 않도록 오류로 돌려준다.
 pub fn load_corrupted(report_path: &Path) -> io::Result<Vec<Rec>> {
     let data: Value = serde_json::from_str(&fs::read_to_string(report_path)?).map_err(io::Error::other)?;
@@ -193,7 +195,12 @@ pub fn plan_moves(records: &[Rec], library_root: &Path, log: Log) -> Vec<Rec> {
         mv.insert("src".into(), json!(src.to_string_lossy()));
         mv.insert("dst".into(), json!(candidate.to_string_lossy()));
         mv.insert("likeness".into(), rec.get("likeness").cloned().unwrap_or(Value::Null));
-        mv.insert("size".into(), rec.get("size").cloned().unwrap_or(json!(0)));
+        // bookdoctor 리포트에는 size가 없다. 숫자 size가 없으면 원본을 직접 읽는다(apply_moves도 exists()로 링크를 따라간다).
+        let size = match rec.get("size") {
+            Some(v) if v.is_number() => v.clone(),
+            _ => json!(fs::metadata(&src).map(|m| m.len()).unwrap_or(0)),
+        };
+        mv.insert("size".into(), size);
         moves.push(mv);
     }
     moves
