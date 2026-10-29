@@ -5,7 +5,7 @@
 //!
 //! 페이지 reader는 경로·수정 시각 기반 cache로 공유하며, 추출은 reader를 복제해 원본 상태를 보존한다.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
@@ -175,15 +175,54 @@ impl PdfPageOps for LopdfPageOps {
 }
 
 fn extract_document_pages(doc: &mut Document, start: usize, end: usize) -> Result<(), PdfError> {
-    let total = doc.get_pages().len();
-    // lopdf 쪽 번호는 1부터다.
-    let drop: Vec<u32> = (1..=total as u32)
-        .filter(|n| {
-            let index = *n as usize - 1;
-            index < start || index >= end
+    let removed: HashSet<_> = doc
+        .get_pages()
+        .into_iter()
+        .filter_map(|(number, id)| {
+            let index = number as usize - 1;
+            (index < start || index >= end).then_some(id)
         })
         .collect();
-    doc.delete_pages(&drop);
+    // 원본 전체의 태그 트리는 제외한다. StructTreeRoot의 참조를 따라가면
+    // 선택하지 않은 쪽의 콘텐츠까지 미리보기에 남는다.
+    let catalog = doc.catalog_mut().map_err(open_error)?;
+    catalog.remove(b"StructTreeRoot");
+    catalog.remove(b"MarkInfo");
+    // delete_pages는 삭제할 쪽마다 문서 전체를 순회한다. 조상 Count를 먼저
+    // 계산하고 참조를 한 번에 제거해 객체가 많은 tagged PDF도 빠르게 추출한다.
+    let mut decrements = HashMap::<_, i64>::new();
+    for &id in &removed {
+        let mut parent = doc.get_dictionary(id).and_then(|page| page.get(b"Parent")).and_then(Object::as_reference).ok();
+        let mut visited = HashSet::new();
+        while let Some(id) = parent {
+            if !visited.insert(id) {
+                return Err(PdfError::new("RuntimeError", "Cycle in PDF page tree"));
+            }
+            let Ok(ancestor) = doc.get_dictionary(id) else { break };
+            *decrements.entry(id).or_default() += 1;
+            parent = ancestor.get(b"Parent").and_then(Object::as_reference).ok();
+        }
+    }
+    for (id, decrement) in decrements {
+        if let Ok(ancestor) = doc.get_dictionary_mut(id)
+            && let Ok(count) = ancestor.get(b"Count").and_then(Object::as_i64)
+        {
+            ancestor.set("Count", count - decrement);
+        }
+    }
+    doc.traverse_objects(|object| match object {
+        Object::Array(items) => items.retain(|item| !matches!(item, Object::Reference(id) if removed.contains(id))),
+        Object::Dictionary(dict) => {
+            let keys: Vec<_> = dict.iter().filter_map(|(key, value)| matches!(value, Object::Reference(id) if removed.contains(id)).then_some(key.clone())).collect();
+            for key in keys {
+                dict.remove(&key);
+            }
+        }
+        _ => {}
+    });
+    for id in removed {
+        doc.objects.remove(&id);
+    }
     doc.prune_objects();
     Ok(())
 }

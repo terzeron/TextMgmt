@@ -114,6 +114,88 @@ fn lopdf_page_ops_falls_back_to_path_for_a_reader_without_a_document() {
     assert_eq!(page_count_bytes(&bytes), 1);
 }
 
+#[test]
+fn extracting_a_page_from_a_large_tagged_pdf_does_not_rescan_each_deleted_page() {
+    use common::pdf::PdfBuilder;
+    use lopdf::{Object, dictionary};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("tagged.pdf");
+    let mut builder = PdfBuilder::new();
+    let pages: Vec<_> = (0..100).map(|_| builder.add_page(200, 300)).collect();
+    // Tagged PDF와 같이 각 쪽을 참조하는 객체가 많으면 반복 삭제가 급격히 느려진다.
+    let tags: Vec<_> = (0..4000).map(|i| Object::Reference(builder.doc.add_object(dictionary! {"Pg" => pages[i % pages.len()]}))).collect();
+    builder.content(pages[50], b"q 0 0 20 20 re f Q");
+    builder.save(&path);
+    let mut source = lopdf::Document::load(&path).unwrap();
+    let structure = source.add_object(dictionary! {"Type" => "StructTreeRoot", "K" => tags});
+    let catalog = source.catalog_mut().unwrap();
+    catalog.set("StructTreeRoot", structure);
+    catalog.set("MarkInfo", dictionary! {"Marked" => true});
+    source.save(&path).unwrap();
+    let reader = LopdfPageOps.open_reader(&path).unwrap();
+    let started = std::time::Instant::now();
+    let bytes = LopdfPageOps.extract_pages_from_reader(&reader, 50, 51).unwrap();
+    let elapsed = started.elapsed();
+    assert!(elapsed < Duration::from_secs(3), "single-page extraction took {elapsed:?}");
+    let extracted = lopdf::Document::load_mem(&bytes).unwrap();
+    assert!(!extracted.catalog().unwrap().has(b"StructTreeRoot"));
+    assert!(!extracted.catalog().unwrap().has(b"MarkInfo"));
+    assert!(bytes.len() < 10_000, "preview must not retain the original structure tree");
+    assert_eq!(extracted.get_pages().len(), 1);
+    assert_eq!(extracted.get_page_content(pages[50]), b"q 0 0 20 20 re f Q\n");
+    for id in pages.iter().filter(|id| **id != pages[50]) {
+        assert!(!extracted.objects.contains_key(id));
+    }
+    // reader 원본을 보존해 다른 범위도 같은 문서에서 추출한다.
+    assert_eq!(page_count_bytes(&LopdfPageOps.extract_pages_from_reader(&reader, 0, 2).unwrap()), 2);
+}
+
+#[test]
+fn extracting_pages_updates_nested_counts_and_preserves_inherited_resources() {
+    use common::pdf::PdfBuilder;
+    use lopdf::{Object, dictionary};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("nested.pdf");
+    let mut builder = PdfBuilder::new();
+    let pages: Vec<_> = (0..4).map(|_| builder.add_page(200, 300)).collect();
+    builder.save(&path);
+    let mut doc = lopdf::Document::load(&path).unwrap();
+    let root = doc.catalog().unwrap().get(b"Pages").unwrap().as_reference().unwrap();
+    let mut branches = Vec::new();
+    for pair in pages.chunks(2) {
+        let kids: Vec<_> = pair.iter().copied().map(Object::Reference).collect();
+        let branch = doc.add_object(dictionary! {
+            "Type" => "Pages", "Parent" => root, "Count" => 2, "Kids" => kids,
+            "MediaBox" => vec![0.into(), 0.into(), 400.into(), 500.into()],
+            "Resources" => dictionary! {"ProcSet" => vec![Object::Name(b"PDF".to_vec())]},
+        });
+        branches.push(Object::Reference(branch));
+        for id in pair {
+            let page = doc.get_dictionary_mut(*id).unwrap();
+            page.set("Parent", branch);
+            page.remove(b"MediaBox");
+            page.remove(b"Resources");
+        }
+    }
+    doc.get_dictionary_mut(root).unwrap().set("Kids", branches.clone());
+    doc.save(&path).unwrap();
+
+    // 두 Pages 노드에 걸친 가운데 두 쪽을 추출한다.
+    let bytes = LopdfPageOps.extract_pages(&path, 1, 3).unwrap();
+    let extracted = lopdf::Document::load_mem(&bytes).unwrap();
+    assert_eq!(extracted.get_pages().values().copied().collect::<Vec<_>>(), pages[1..3]);
+    assert_eq!(extracted.get_dictionary(root).unwrap().get(b"Count").unwrap().as_i64().unwrap(), 2);
+    for branch in branches {
+        let ancestor = extracted.get_dictionary(branch.as_reference().unwrap()).unwrap();
+        assert_eq!(ancestor.get(b"Count").unwrap().as_i64().unwrap(), 1);
+        assert_eq!(ancestor.get(b"Kids").unwrap().as_array().unwrap().len(), 1);
+        assert_eq!(ancestor.get(b"MediaBox").unwrap().as_array().unwrap()[2].as_i64().unwrap(), 400);
+        assert!(ancestor.has(b"Resources"));
+    }
+}
+
 struct CountingPdfPages {
     opens: Arc<AtomicUsize>,
     cached_extracts: Arc<AtomicUsize>,
