@@ -722,20 +722,24 @@ describe("ViewPDF", () => {
       expect(scrolled).toEqual([]);
     });
 
-    it("우->좌 버튼은 1장씩 보기에서만 보이고 기본은 꺼져 있다", async () => {
+    it("방향 토글은 1장씩 보기에서만 보이고 기본은 좌→우다", async () => {
       const { root } = await setup(1);
+      const ltr = root.querySelector(".pdf-ltr-btn");
       const rtl = root.querySelector(".pdf-rtl-btn");
-      expect(rtl).not.toBeNull();
+      expect(ltr.textContent).toBe("좌→우");
+      expect(rtl.textContent).toBe("좌←우");
+      expect(ltr.classList.contains("active")).toBe(true);
+      expect(ltr.getAttribute("aria-pressed")).toBe("true");
       expect(rtl.classList.contains("active")).toBe(false);
       expect(rtl.getAttribute("aria-pressed")).toBe("false");
-      expect(rtl.previousElementSibling).toBe(root.querySelector(".pdf-single-btn"));
+      expect(ltr.parentElement.previousElementSibling).toBe(root.querySelector(".pdf-single-btn"));
       document.querySelector(".pdf-single-btn").click();
       await waitFor(() => {
-        expect(root.querySelector(".pdf-rtl-btn")).toBeNull();
+        expect(root.querySelector(".pdf-direction-group")).toBeNull();
       });
     });
 
-    it("우->좌를 켜면 왼쪽 방향키·오른쪽 스와이프가 다음 쪽이다", async () => {
+    it("좌←우를 고르면 왼쪽 방향키·오른쪽 스와이프가 다음 쪽이고, 좌→우로 되돌릴 수 있다", async () => {
       const { root, pages } = await setup(1);
       root.querySelector(".pdf-rtl-btn").click();
       await waitFor(() => {
@@ -749,6 +753,13 @@ describe("ViewPDF", () => {
       expect(scrolled).toEqual([pages[2], pages[0], pages[2]]);
       swipe(root, [200, 300], [100, 300]);
       expect(scrolled).toEqual([pages[2], pages[0], pages[2], pages[0]]);
+      scrolled.length = 0;
+      root.querySelector(".pdf-ltr-btn").click();
+      await waitFor(() => {
+        expect(root.querySelector(".pdf-ltr-btn").classList.contains("active")).toBe(true);
+      });
+      press("ArrowRight");
+      expect(scrolled).toEqual([pages[2]]);
     });
 
     it("1장씩 보기를 끄면 방향키 처리를 해제한다", async () => {

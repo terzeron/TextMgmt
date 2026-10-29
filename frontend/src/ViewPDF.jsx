@@ -872,17 +872,28 @@ export default function ViewPDF({
             1장씩
           </button>
           {singlePage && (
-            <button
-              className={`pdf-zoom-btn pdf-zoom-fit-btn pdf-rtl-btn ${rightToLeft ? "active" : ""}`}
-              onClick={() => setRightToLeft((prev) => !prev)}
-              aria-pressed={rightToLeft}
-              title="켜면 왼쪽으로 넘겨야 다음 쪽이 나옵니다"
+            <span
+              className="pdf-direction-group"
+              role="group"
+              aria-label="쪽 넘김 방향"
             >
-              <span className="toggle-track">
-                <span className="toggle-knob" />
-              </span>
-              우-&gt;좌
-            </button>
+              <button
+                className={`pdf-zoom-btn pdf-direction-btn pdf-ltr-btn ${rightToLeft ? "" : "active"}`}
+                onClick={() => setRightToLeft(false)}
+                aria-pressed={!rightToLeft}
+                title="왼쪽에서 오른쪽으로 진행하는 책"
+              >
+                좌→우
+              </button>
+              <button
+                className={`pdf-zoom-btn pdf-direction-btn pdf-rtl-btn ${rightToLeft ? "active" : ""}`}
+                onClick={() => setRightToLeft(true)}
+                aria-pressed={rightToLeft}
+                title="오른쪽에서 왼쪽으로 진행하는 책(일본 만화 등)"
+              >
+                좌←우
+              </button>
+            </span>
           )}
           <button
             className={`pdf-zoom-btn pdf-zoom-fit-btn ${fitMode ? "active" : ""}`}
@@ -1197,6 +1208,26 @@ const pdfStyles = `
     }
     .pdf-zoom-fit-btn.active .toggle-knob {
         left: 14px;
+    }
+    .pdf-direction-group {
+        display: inline-flex;
+    }
+    .pdf-direction-btn {
+        border-radius: 0;
+    }
+    .pdf-direction-btn + .pdf-direction-btn {
+        margin-left: -1px;
+    }
+    .pdf-direction-btn:first-child {
+        border-radius: 4px 0 0 4px;
+    }
+    .pdf-direction-btn:last-child {
+        border-radius: 0 4px 4px 0;
+    }
+    .pdf-direction-btn.active {
+        background: #4a90d9;
+        border-color: #4a90d9;
+        color: #fff;
     }
     .pdf-zoom-separator {
         width: 1px;
