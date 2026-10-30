@@ -103,6 +103,12 @@ fn the_standard_word_datastore_is_medium_and_a_payload_in_it_is_still_found() {
     let r = scan("a.rtf", format!("{{\\rtf1{{\\*\\datastore {}}}}}", hex(&benign)).as_bytes());
     assert_eq!(finding(&r, "RTF_DATASTORE").severity, Severity::Medium);
     assert!(!r.has("RTF_EMBEDDED_OBJECT") && !r.has("RTF_EMBEDDED_EXECUTABLE"), "{:?}", r.findings);
+    // customXml 저장소는 OLE 복합 파일을 담는 것이 정상이다. OLE 매직만으로는 지표를 더하지 않는다.
+    let mut with_ole = benign.clone();
+    with_ole.extend_from_slice(&OLE_MAGIC);
+    with_ole.extend_from_slice(&[0u8; 64]);
+    let r = scan("c.rtf", format!("{{\\rtf1{{\\*\\datastore {}}}}}", hex(&with_ole)).as_bytes());
+    assert!(!r.has("RTF_EMBEDDED_OLE") && !r.has("RTF_EMBEDDED_OBJECT"), "{:?}", r.findings);
     // 그 안에 실행 파일을 숨기면 Critical이다.
     let r = scan("b.rtf", &rtf_with_objdata("datastore", &pe_bytes()));
     assert_eq!(finding(&r, "RTF_EMBEDDED_EXECUTABLE").severity, Severity::Critical);

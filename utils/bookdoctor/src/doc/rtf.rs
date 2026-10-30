@@ -135,8 +135,9 @@ pub fn inspect(bytes: &[u8], report: &mut FileReport) {
             objdata_seen += 1;
             match payload_kind(&decode_hex_prefix(&data, skip_parameter(&data, end))) {
                 Payload::Executable => push_once(report, Severity::Critical, "RTF_EMBEDDED_EXECUTABLE", &format!("\\{lower}"), "Embedded object payload is an executable (PE/ELF)"),
-                Payload::Ole => push_once(report, Severity::High, "RTF_EMBEDDED_OLE", &format!("\\{lower}"), "Embedded object payload is an OLE compound file"),
-                Payload::None => {}
+                // customXml 저장소는 OLE 복합 파일을 담는 것이 표준이라 `\datastore`의 OLE 매직은 지표가 아니다.
+                Payload::Ole if !datastore => push_once(report, Severity::High, "RTF_EMBEDDED_OLE", &format!("\\{lower}"), "Embedded object payload is an OLE compound file"),
+                Payload::Ole | Payload::None => {}
             }
         }
     }
