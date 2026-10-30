@@ -91,6 +91,10 @@ name = "pdf_security_new"
 path = "../../tests/rust/bookdoctor/pdf_security_new.rs"
 
 [[test]]
+name = "html"
+path = "../../tests/rust/bookdoctor/html.rs"
+
+[[test]]
 name = "hwp"
 path = "../../tests/rust/bookdoctor/hwp.rs"
 

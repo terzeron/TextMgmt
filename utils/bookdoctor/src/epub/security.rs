@@ -404,6 +404,10 @@ struct Scanner {
 }
 
 impl Scanner {
+    fn new() -> Scanner {
+        Scanner { findings: Vec::new(), notes: Vec::new(), seen: HashMap::new(), html_active: Vec::new(), html_remote: Vec::new(), manifest: HashMap::new(), budget_skipped: 0, enc: Default::default(), undecodable: Vec::new(), undecodable_extra: 0 }
+    }
+
     /// 보안 리뷰 지적(노트 폭주): 인코딩 문제 멤버를 센다. `finding`이면 `MARKUP_UNDECODABLE` 후보로도 남긴다.
     fn record_enc(&mut self, kind: usize, name: &str, finding: Option<&'static str>) {
         let e = &mut self.enc[kind];
@@ -1012,7 +1016,7 @@ pub fn scan_stats(path: &Path, limits: &Limits, report: &mut FileReport) -> Stat
 /// 렌더링 단계가 이 멤버를 다시 풀지 않게 하려는 것이다. 이름이 아니라 인덱스로 거는 것은 같은 이름의 멤버가 둘일 때
 /// 한쪽이 손상되어도 다른 쪽 검증이 가리지 않게 하려는 것이다.
 pub fn scan_verified(path: &Path, limits: &Limits, report: &mut FileReport) -> (Stats, HashMap<usize, u64>) {
-    let mut s = Scanner { findings: Vec::new(), notes: Vec::new(), seen: HashMap::new(), html_active: Vec::new(), html_remote: Vec::new(), manifest: HashMap::new(), budget_skipped: 0, enc: Default::default(), undecodable: Vec::new(), undecodable_extra: 0 };
+    let mut s = Scanner::new();
     let mut stats = Stats::default();
     let mut verified = HashMap::new();
     guarded(report, |_| scan_epub_unguarded(path, limits, &mut s, &mut stats, &mut verified));
@@ -1026,6 +1030,20 @@ pub fn scan_verified(path: &Path, limits: &Limits, report: &mut FileReport) -> (
         report.mark_incomplete(note);
     }
     (stats, verified)
+}
+
+/// 독립 HTML 문서(`text`, 표시 이름 `name`)를 EPUB의 HTML 규칙으로 검사해 `report`에 더한다.
+pub fn scan_html_document(text: &str, name: &str, report: &mut FileReport) {
+    let mut s = Scanner::new();
+    guarded(report, |_| s.scan_html(text, name));
+    s.findings.sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.code.cmp(&b.code)).then_with(|| a.location.cmp(&b.location)));
+    for f in &s.findings {
+        let category = if RENDER_CODES.contains(&f.code.as_str()) { Category::Render } else { Category::Security };
+        report.push(category, f.severity, &f.code, &f.location, &f.detail);
+    }
+    for note in &s.notes {
+        report.mark_incomplete(note);
+    }
 }
 
 /// `scan`이 panic하면 그 파일을 incomplete로 바꾼다.

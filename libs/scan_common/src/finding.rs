@@ -21,6 +21,8 @@ pub enum Format {
     Doc,
     /// `.hwp`(HWP 5.x OLE, 서명만 보는 HWP 3.x 이하).
     Hwp,
+    /// 독립 `.html`·`.htm`·`.xhtml`.
+    Html,
 }
 
 /// 지표의 분류.

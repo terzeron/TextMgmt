@@ -168,12 +168,14 @@ fn check_content_vs_name(path: &Path, sniffed: Sniffed, report: &mut FileReport)
         "doc" | "dot" => sniffed != Sniffed::Ole,
         "rtf" => sniffed != Sniffed::Rtf,
         "hwp" => !matches!(sniffed, Sniffed::Ole | Sniffed::Hwp3),
+        // HTML은 텍스트면 시작이 무엇이든 받는다. 바이너리 내용만 불일치다.
+        "html" | "htm" | "xhtml" => matches!(sniffed, Sniffed::Pdf | Sniffed::Zip | Sniffed::Ole | Sniffed::Rtf | Sniffed::Hwp3 | Sniffed::Elf | Sniffed::MachO | Sniffed::Pe),
         _ => false,
     };
     if mismatch {
         report.push(Category::Defect, Severity::Medium, "FORMAT_MISMATCH", "", &format!("확장자 .{ext}와 내용({sniffed:?})이 다르다"));
     }
-    if is_exe(sniffed) && matches!(ext.as_str(), "epub" | "pdf" | "txt" | "zip" | "docx" | "docm" | "dotx" | "dotm" | "hwpx" | "doc" | "dot" | "rtf" | "hwp") {
+    if is_exe(sniffed) && matches!(ext.as_str(), "epub" | "pdf" | "txt" | "zip" | "docx" | "docm" | "dotx" | "dotm" | "hwpx" | "doc" | "dot" | "rtf" | "hwp" | "html" | "htm" | "xhtml") {
         report.push(Category::Security, Severity::Critical, "DISGUISED_EXECUTABLE", "", &format!("확장자 .{ext}인데 실행 파일({sniffed:?})이다"));
     }
 }

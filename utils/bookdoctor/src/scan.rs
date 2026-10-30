@@ -7,7 +7,7 @@ use scan_common::sniff::Sniffed;
 use scan_common::{FileReport, Format};
 
 use crate::cli::Options;
-use crate::{common, doc, hwp, epub, exe, pdf, txt, viewer, zipcheck};
+use crate::{common, doc, html, hwp, epub, exe, pdf, txt, viewer, zipcheck};
 
 /// 검사할 포맷을 정한다. `.pdf`·`.epub`은 내용이 PDF·ZIP이면 내용을 따르고(`.pdf`인데 ZIP이면 EPUB),
 /// 그 밖에는 확장자를 따른다. 모르는 확장자는 `None`이다.
@@ -23,6 +23,14 @@ pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
     // ZIP 계열 확장자도 내용이 PDF면 PDF로 본다(위장). ZIP이면 확장자를 따른다.
     if is_zip_family(&ext) && sniffed == Sniffed::Pdf {
         return Some(Format::Pdf);
+    }
+    // 이름은 HTML인데 내용이 PDF·ZIP이면 내용을 따른다(확장자 불일치는 `common`이 알린다).
+    if matches!(ext.as_str(), "html" | "htm" | "xhtml") {
+        match sniffed {
+            Sniffed::Pdf => return Some(Format::Pdf),
+            Sniffed::Zip => return Some(Format::Zip),
+            _ => {}
+        }
     }
     // 이름은 `.hwp`인데 내용이 ZIP이면 HWPX를 이름만 바꾼 것이다.
     if ext == "hwp" && sniffed == Sniffed::Zip {
@@ -45,6 +53,7 @@ pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
         "hwpx" => Some(Format::Hwpx),
         "doc" | "dot" | "rtf" => Some(Format::Doc),
         "hwp" => Some(Format::Hwp),
+        "html" | "htm" | "xhtml" => Some(Format::Html),
         e if exe::is_exec_extension(e) => Some(Format::Executable),
         _ => None,
     }
@@ -68,6 +77,7 @@ fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
         Some(Format::Hwpx) => zipcheck::scan_hwpx_file(path, opts, sniffed, report),
         Some(Format::Doc) => doc::scan_doc_file(path, opts, sniffed, report),
         Some(Format::Hwp) => hwp::scan_hwp_file(path, opts, sniffed, report),
+        Some(Format::Html) => html::scan_html_file(path, sniffed, report),
         None => report.mark_incomplete("unsupported format"),
     }
 }

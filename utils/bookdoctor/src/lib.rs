@@ -3,6 +3,7 @@
 pub mod cli;
 pub mod common;
 pub mod doc;
+pub mod html;
 pub mod hwp;
 pub mod epub;
 pub mod exe;
