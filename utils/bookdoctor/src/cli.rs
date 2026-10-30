@@ -12,9 +12,10 @@ use crate::exe::is_exec_extension;
 use crate::pdf::security::MAX_PARALLEL_INPUT_MB;
 use crate::prefetch::Prefetcher;
 use crate::report::{Aggregate, write_json_line, write_report_file, write_summary_line, write_text};
+use crate::isolate::scan_isolated;
 use crate::scan::scan_file;
 
-const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--pdf-text] [--no-poppler] PATH...";
+const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--pdf-text] [--no-poppler] PATH...";
 
 /// 한 번에 검사하는 파일 수는 워커 수의 이 배수다.
 const WINDOW_PER_WORKER: usize = 8;
@@ -48,6 +49,14 @@ pub struct Options {
     pub no_poppler: bool,
     /// ZIP 계열 안의 컨테이너 멤버를 재귀 검사한다. `--no-recurse`로 끈다.
     pub recurse: bool,
+    /// 파일마다 하위 프로세스에서 메모리·시간 상한을 걸고 검사한다. `--isolate`.
+    pub isolate: bool,
+    /// `--isolate`의 자식 프로세스 주소 공간 상한(MiB).
+    pub isolate_mem_mb: u64,
+    /// `--isolate`의 자식 프로세스 시간 상한(초).
+    pub isolate_timeout_s: u64,
+    /// 내부용: 한 파일을 검사해 필터 없는 JSON 한 줄로 낸다. `--isolate`의 자식이 쓴다.
+    pub child: bool,
 }
 
 impl Default for Options {
@@ -68,6 +77,10 @@ impl Default for Options {
             prefetch: true,
             no_poppler: false,
             recurse: true,
+            isolate: false,
+            isolate_mem_mb: 4096,
+            isolate_timeout_s: 120,
+            child: false,
         }
     }
 }
@@ -109,12 +122,16 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
             "--no-prefetch" => o.prefetch = false,
             "--no-poppler" => o.no_poppler = true,
             "--no-recurse" => o.recurse = false,
-            _ => match long_option(arg, &["report", "workers", "limit", "max-total-mb", "only", "min-severity", "color"], &mut it)? {
+            "--isolate" => o.isolate = true,
+            "--child" => o.child = true,
+            _ => match long_option(arg, &["report", "workers", "limit", "max-total-mb", "only", "min-severity", "color", "isolate-mem-mb", "isolate-timeout-s"], &mut it)? {
                 Some((name, value)) => match name.as_str() {
                     "report" => o.report = Some(value.into()),
                     "workers" => o.workers = number(&name, &value)?,
                     "limit" => o.limit = number(&name, &value)?,
                     "max-total-mb" => o.max_total_mb = number(&name, &value)?,
+                    "isolate-mem-mb" => o.isolate_mem_mb = number(&name, &value)?,
+                    "isolate-timeout-s" => o.isolate_timeout_s = number(&name, &value)?,
                     "color" => o.color = parse_color(&value)?,
                     "min-severity" => o.min_severity = parse_min_severity(&value)?,
                     _ => o.only = parse_only(&value)?,
@@ -126,7 +143,7 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
     if o.paths.is_empty() {
         return Err("the following arguments are required: PATH...".into());
     }
-    if o.max_total_mb == 0 {
+    if o.max_total_mb == 0 || o.isolate_mem_mb == 0 || o.isolate_timeout_s == 0 {
         return Err("Limits must be positive".into());
     }
     Ok(o)
@@ -159,6 +176,9 @@ pub fn run_with_env(argv: &[String], out: &mut dyn Write, is_tty: bool, no_color
             return 2;
         }
     };
+    if opts.child {
+        return run_child(&opts, out);
+    }
     match scan(&opts, out, enabled(opts.color, is_tty, no_color)) {
         Ok(code) => code,
         Err(e) => {
@@ -166,6 +186,14 @@ pub fn run_with_env(argv: &[String], out: &mut dyn Write, is_tty: bool, no_color
             1
         }
     }
+}
+
+/// `--isolate`의 자식: 첫 경로 하나를 검사해 필터 없는 JSON 보고서를 한 줄로 낸다. 깨끗한 파일도 한 줄을 낸다(부모가 실패와 구분하려고).
+fn run_child(opts: &Options, out: &mut dyn Write) -> i32 {
+    let Some(path) = opts.paths.first() else { return 2 };
+    let report = scan_file(path, opts);
+    let written = serde_json::to_writer(&mut *out, &report).map_err(io::Error::other).and_then(|()| out.write_all(b"\n")).and_then(|()| out.flush());
+    if written.is_ok() { 0 } else { 1 }
 }
 
 /// 실제로 쓰는 워커 수. lopdf는 입력보다 훨씬 많은 메모리를 쓰므로 동시에 해석하는 수를 메모리로 제한한다:
@@ -179,8 +207,10 @@ fn scan(opts: &Options, out: &mut dyn Write, color: bool) -> io::Result<i32> {
     let paths = limited(collect_files(&opts.paths, opts.recursive, wanted), opts.limit);
     let workers = effective_workers(opts);
     let pool = pool(workers);
+    // 자식은 자기 자신이다. 실행 파일 경로를 알 수 없으면 격리 없이 검사한다.
+    let exe = std::env::current_exe().ok();
     // 처리한 파일 수를 선읽기 스레드에 알려 소비자보다 너무 앞서가지 않게 한다. 파일이 하나뿐이면 겹칠 것이 없다.
-    let prefetcher = (opts.prefetch && paths.len() > 1).then(|| Prefetcher::start(paths.clone(), PREFETCH_FILES + workers * WINDOW_PER_WORKER, PREFETCH_BYTES, PREFETCH_MAX_FILE));
+    let prefetcher = (opts.prefetch && !opts.isolate && paths.len() > 1).then(|| Prefetcher::start(paths.clone(), PREFETCH_FILES + workers * WINDOW_PER_WORKER, PREFETCH_BYTES, PREFETCH_MAX_FILE));
     let mut emitted = 0usize;
     let mut agg = Aggregate::new();
     let summary = scan_streaming(
@@ -189,7 +219,10 @@ fn scan(opts: &Options, out: &mut dyn Write, color: bool) -> io::Result<i32> {
         workers * WINDOW_PER_WORKER,
         |p| {
             // 점수 같은 판단은 scan_file 안에서 끝낸다. 출력 필터는 그 뒤에만 건다.
-            let mut r = scan_file(p, opts);
+            let mut r = match (&exe, opts.isolate) {
+                (Some(exe), true) => scan_isolated(exe, p, opts),
+                _ => scan_file(p, opts),
+            };
             r.suppress_below(opts.min_severity);
             r
         },
@@ -225,7 +258,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
 사용법:
   bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N]
              [--only security,defect,render] [--min-severity low|medium|high|critical]
-             [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--pdf-text] [--no-poppler] PATH...
+             [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--pdf-text] [--no-poppler] PATH...
 
 인자:
   PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt, zip, docx(docm·dotx·dotm), hwpx, hwp, doc(dot), rtf, html(htm·xhtml)와 실행 파일 확장자(exe, dll, so, dylib 등)를 모은다.
@@ -246,6 +279,9 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   --color MODE        auto(기본, 터미널이고 NO_COLOR가 없을 때만), always, never.
                       CRITICAL과 렌더링 구조 에러는 red, HIGH는 purple, 암호화·DRM은 cyan이다. --json에는 색이 없다.
   --zip-deep          ZIP 멤버를 끝까지 풀어 CRC까지 확인한다 (기본은 멤버마다 앞 4096바이트만 풀어 본다).
+  --isolate           파일마다 하위 프로세스에서 검사한다. 자식이 죽거나 멈추거나 메모리를 넘으면 그 파일만 미완료로 보고하고 계속한다. 선읽기는 끈다.
+  --isolate-mem-mb N  --isolate의 자식 주소 공간 상한(MiB, 기본 4096). 0은 허용하지 않는다.
+  --isolate-timeout-s N  --isolate의 자식 시간 상한(초, 기본 120). 넘으면 프로세스 그룹 전체를 죽인다.
   --no-recurse        ZIP·DOCX·HWPX 안의 중첩 ZIP·PDF·RTF·Word·HWP를 재귀 검사하지 않는다. 기본은 깊이 3, 파일 64개, 바이트 합계는 --max-total-mb까지 검사한다.
   --no-prefetch       다음 파일을 미리 읽지 않는다. 기본은 검사하는 동안 다음 파일 최대 16개(512MiB)를 미리 읽는다.
   --pdf-text          PDF 본문 텍스트까지 검사한다.

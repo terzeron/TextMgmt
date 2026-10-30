@@ -7,7 +7,7 @@ use crate::stream::Report;
 
 /// 파일 포맷.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize), serde(rename_all = "lowercase"))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(rename_all = "lowercase"))]
 pub enum Format {
     Epub,
     Pdf,
@@ -27,7 +27,7 @@ pub enum Format {
 
 /// 지표의 분류.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize), serde(rename_all = "lowercase"))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(rename_all = "lowercase"))]
 pub enum Category {
     Security,
     Defect,
@@ -36,7 +36,7 @@ pub enum Category {
 
 /// 뷰어가 이 지표를 막는지. 판정하기 전이거나 해당 없으면 `NotApplicable`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ViewerBlocked {
     #[cfg_attr(feature = "serde", serde(rename = "blocked"))]
     Blocked,
@@ -48,7 +48,7 @@ pub enum ViewerBlocked {
 
 /// 지표 한 건.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Finding {
     pub category: Category,
     pub severity: Severity,
@@ -67,7 +67,7 @@ const ENCRYPTED_REASON_MARKERS: &[&str] = &["encrypted: ", "ZIP-encrypted entry"
 
 /// 출력 필터가 지운 지표의 심각도별 건수. 점수·요약에서 "숨겼을 뿐 있었다"를 남기려고 센다.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Suppressed {
     pub low: usize,
     pub medium: usize,
@@ -88,7 +88,7 @@ impl Suppressed {
 
 /// 파일 하나의 보고서.
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FileReport {
     pub path: String,
     pub format: Option<Format>,
@@ -97,10 +97,10 @@ pub struct FileReport {
     pub reasons: Vec<String>,
     pub likeness: Option<f64>,
     /// `suppress_below`가 지운 지표의 건수. 지운 것이 없으면 JSON에 나오지 않는다.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Suppressed::is_empty"))]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Suppressed::is_empty", default))]
     pub suppressed: Suppressed,
     /// 확장자와 매직바이트가 모두 실행 파일이다. 출력 필터가 지표를 지워도 집계가 남도록 따로 둔다.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "std::ops::Not::not"))]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "std::ops::Not::not", default))]
     pub confirmed_executable: bool,
     /// 0~100 위험 점수. 출력 필터가 숨긴 지표도 포함해 `scan_file`이 정한다.
     pub risk_score: u8,

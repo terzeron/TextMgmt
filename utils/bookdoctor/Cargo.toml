@@ -95,6 +95,10 @@ name = "entropy"
 path = "../../tests/rust/bookdoctor/entropy.rs"
 
 [[test]]
+name = "isolate"
+path = "../../tests/rust/bookdoctor/isolate.rs"
+
+[[test]]
 name = "html"
 path = "../../tests/rust/bookdoctor/html.rs"
 

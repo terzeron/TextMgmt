@@ -4,6 +4,7 @@ pub mod cli;
 pub mod common;
 pub mod doc;
 pub mod html;
+pub mod isolate;
 pub mod hwp;
 pub mod epub;
 pub mod exe;
