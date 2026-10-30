@@ -69,12 +69,12 @@ static DOCTYPE_EXTERNAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<!
 /// 엔티티가 읽어 들이는 대상이 로컬 파일이나 위험한 스킴인가(EPUB의 `XXE_LOCAL`과 같은 기준).
 static XXE_LOCAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)["'](?:file|php|expect|jar|gopher):|/etc/(?:passwd|shadow|hosts)|[a-z]:[\\/]windows"#).unwrap());
 
-fn preview(text: &str) -> String {
+pub(super) fn preview(text: &str) -> String {
     sanitize_display(text, DETAIL_CHARS, Some('…'))
 }
 
 /// 같은 (코드, 위치) 지표는 한 번만 낸다.
-fn push_once(report: &mut FileReport, severity: Severity, code: &str, location: &str, detail: &str) {
+pub(super) fn push_once(report: &mut FileReport, severity: Severity, code: &str, location: &str, detail: &str) {
     if !report.findings.iter().any(|f| f.code == code && f.location == location) {
         report.push(Category::Security, severity, code, location, detail);
     }
@@ -105,7 +105,7 @@ fn check_part_names(names: &[String], macro_enabled: bool, report: &mut FileRepo
 }
 
 /// DTD·엔티티 공격. OOXML 부분에는 DOCTYPE이 있을 이유가 없다. 파서는 DTD를 해석하지 않으므로 원문에서 찾는다.
-fn check_xml_attacks(text: &str, name: &str, report: &mut FileReport) {
+pub(super) fn check_xml_attacks(text: &str, name: &str, report: &mut FileReport) {
     if !text.contains("<!") {
         return;
     }
@@ -121,7 +121,7 @@ fn check_xml_attacks(text: &str, name: &str, report: &mut FileReport) {
     }
 }
 
-fn parse(text: &str) -> Option<roxmltree::Document<'_>> {
+pub(super) fn parse(text: &str) -> Option<roxmltree::Document<'_>> {
     roxmltree::Document::parse_with_options(text.strip_prefix('\u{feff}').unwrap_or(text), roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).ok()
 }
 

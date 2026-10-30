@@ -52,7 +52,7 @@ fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
         // 검사기는 이 계획의 뒤 태스크에서 붙는다. 그때까지 검사하지 못한 파일로 남긴다.
         Some(Format::Zip) => zipcheck::scan_zip_file(path, opts, report),
         Some(Format::Docx) => zipcheck::scan_docx_file(path, opts, sniffed, report),
-        Some(Format::Hwpx) => report.mark_incomplete("unsupported format"),
+        Some(Format::Hwpx) => zipcheck::scan_hwpx_file(path, opts, sniffed, report),
         None => report.mark_incomplete("unsupported format"),
     }
 }

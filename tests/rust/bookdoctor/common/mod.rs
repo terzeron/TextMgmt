@@ -406,3 +406,28 @@ pub fn docx_with(path: &Path, remove: &[&str], add: &[(&str, &[u8])]) {
     let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
     zip_of(path, &refs);
 }
+
+// ---- HWPX 점검용 fixture (합성: docs/bookdoctor-hwpx-notes.md의 설명에서 만들었고 실제 한글 파일로 검증하지 못했다) ----
+
+pub fn minimal_hwpx_parts() -> Vec<(String, Vec<u8>)> {
+    let part = |n: &str, b: &str| (n.to_string(), b.as_bytes().to_vec());
+    vec![
+        part("mimetype", "application/hwp+zip"),
+        part("version.xml", r#"<?xml version="1.0" encoding="UTF-8"?><hv:HCFVersion xmlns:hv="http://www.hancom.co.kr/hwpml/2011/version" tagetApplication="WORDPROCESSOR"/>"#),
+        part("META-INF/container.xml", r#"<?xml version="1.0" encoding="UTF-8"?><ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>"#),
+        part("Contents/content.hpf", r#"<?xml version="1.0" encoding="UTF-8"?><opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="header" href="Contents/header.xml" media-type="application/xml"/><opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="header"/><opf:itemref idref="section0"/></opf:spine></opf:package>"#),
+        part("Contents/header.xml", r#"<?xml version="1.0" encoding="UTF-8"?><hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"/>"#),
+        part("Contents/section0.xml", r#"<?xml version="1.0" encoding="UTF-8"?><hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"><hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"/></hs:sec>"#),
+    ]
+}
+
+/// 최소 HWPX에서 `remove`한 부분을 빼고 `add`한 부분을 더하거나 바꿔 만든다.
+pub fn hwpx_with(path: &Path, remove: &[&str], add: &[(&str, &[u8])]) {
+    let mut parts: Vec<(String, Vec<u8>)> = minimal_hwpx_parts().into_iter().filter(|(n, _)| !remove.contains(&n.as_str())).collect();
+    for (name, body) in add {
+        parts.retain(|(n, _)| n != name);
+        parts.push((name.to_string(), body.to_vec()));
+    }
+    let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    zip_of(path, &refs);
+}
