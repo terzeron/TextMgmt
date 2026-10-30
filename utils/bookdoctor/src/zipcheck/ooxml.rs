@@ -10,7 +10,7 @@ use regex::Regex;
 use scan_common::text::sanitize_display;
 use scan_common::{Category, FileReport, Severity};
 
-use crate::epub::security::{Limits, read_limited};
+use crate::epub::security::{Limits, TextEnc, decode_text, read_limited};
 
 /// 이게 없으면 Word 문서가 아니다.
 const REQUIRED_PARTS: [&str; 3] = ["[Content_Types].xml", "_rels/.rels", "word/document.xml"];
@@ -38,8 +38,8 @@ pub fn inspect_structure(path: &Path, limits: &Limits, report: &mut FileReport) 
     for part in REQUIRED_PARTS {
         let Some(index) = names.iter().position(|n| n == part) else { continue };
         let Some(data) = read_part(&mut zip, index, part, limits, report) else { continue };
-        let text = String::from_utf8_lossy(&data);
-        let parsed = roxmltree::Document::parse_with_options(text.strip_prefix('\u{feff}').unwrap_or(&text), roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() });
+        let Some(text) = decode_xml(&data, part, report) else { continue };
+        let parsed = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() });
         match parsed {
             Err(e) => report.push(Category::Render, Severity::High, "MALFORMED_MARKUP", part, &format!("XML이 올바르지 않다: {e}")),
             Ok(doc) if part == "[Content_Types].xml" => {
@@ -54,6 +54,49 @@ pub fn inspect_structure(path: &Path, limits: &Limits, report: &mut FileReport) 
             Ok(_) => {}
         };
     }
+}
+
+/// XML 부분의 바이트를 읽는다. UTF-16은 BOM·NUL 교차로 알아봐 변환하고(Word 같은 XML 파서가 받아들이는 인코딩이라 그대로 읽으면 검사를 피한다),
+/// UTF-32는 변환하지 못하므로 미완료로 남긴다.
+pub(super) fn decode_xml(data: &[u8], name: &str, report: &mut FileReport) -> Option<String> {
+    let (text, enc) = decode_text(data);
+    if enc == TextEnc::Utf32 {
+        report.mark_incomplete(&format!("{}: UTF-32 content cannot be inspected", preview(name)));
+        return None;
+    }
+    Some(text.strip_prefix('\u{feff}').unwrap_or(&text).to_string())
+}
+
+/// 보안 검사용으로 XML 부분 하나를 읽어 디코딩한다. 읽기는 남은 예산 +1바이트에서 멈추고, 예산을 넘으면 미완료로 남긴다.
+pub(super) fn read_xml_part(zip: &mut corpus_common::reader::Zip, index: usize, name: &str, limits: &Limits, spent: &mut u64, report: &mut FileReport) -> Option<String> {
+    let cap = limits.max_member.min(limits.max_total.saturating_sub(*spent));
+    if cap == 0 {
+        report.mark_incomplete("security scan stopped: decompression budget exhausted");
+        return None;
+    }
+    let data = read_limited(zip, index, cap).ok()?;
+    // 예산을 넘겨 건너뛰는 부분도 읽은 만큼 예산에서 뺀다. 안 빼면 부분마다 다시 같은 만큼 풀 수 있다.
+    *spent += data.len() as u64;
+    if data.len() as u64 > cap {
+        report.mark_incomplete(&format!("{}: part larger than the remaining inspection budget", preview(name)));
+        return None;
+    }
+    decode_xml(&data, name, report)
+}
+
+/// 이름이 XML 부분(`.xml`·`.rels`, 대소문자 무시)인가. OPC 부분 이름은 대소문자를 가리지 않고 본문이 `word/` 밖에 있을 수도 있어 디렉터리로 고르지 않는다.
+pub(super) fn is_xml_part(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.ends_with(".xml") || lower.ends_with(".rels") || lower.ends_with(".hpf")
+}
+
+/// 파싱하지 못하면 이 부분의 검사를 건너뛴 것을 미완료로 남긴다(조용히 넘기지 않는다).
+fn parse_or_note<'a>(text: &'a str, name: &str, report: &mut FileReport) -> Option<roxmltree::Document<'a>> {
+    let doc = parse(text);
+    if doc.is_none() {
+        report.mark_incomplete(&format!("{}: XML could not be parsed; security checks for this part were skipped", preview(name)));
+    }
+    doc
 }
 
 // ---------------------------------------------------------------- 보안
@@ -133,7 +176,7 @@ fn is_unc_or_file(target: &str) -> bool {
 
 /// 관계 파일(`.rels`)의 외부 참조를 본다. 일반 하이퍼링크는 지표를 내지 않는다.
 fn check_relationships(text: &str, name: &str, report: &mut FileReport) {
-    let Some(doc) = parse(text) else { return };
+    let Some(doc) = parse_or_note(text, name, report) else { return };
     let shown = preview(name);
     for rel in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "Relationship") {
         let external = rel.attribute("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
@@ -170,24 +213,58 @@ fn classify_field(instr: &str, name: &str, report: &mut FileReport) {
     }
 }
 
+/// 열려 있는 필드 하나. 지시문은 여러 run에 나뉘고 다른 필드를 품을 수 있다.
+#[derive(Default)]
+struct OpenField {
+    /// 이 필드 자신의 지시문.
+    own: String,
+    /// 품은 필드의 지시문까지 읽은 순서대로 이어 붙인 것.
+    all: String,
+    nested: bool,
+    /// 지시문 키워드 자리(맨 앞)에서 안쪽 필드가 시작했다: 키워드를 계산해서 숨기는 방식이다.
+    nested_at_keyword: bool,
+}
+
+fn finish_field(field: OpenField, name: &str, report: &mut FileReport) {
+    classify_field(&field.own, name, report);
+    if field.nested {
+        // 안쪽 필드의 지시문까지 이어 붙여 다시 본다(`INCLUDETEXT` + 중첩 `QUOTE "http://..."` 같은 조립).
+        classify_field(&field.all, name, report);
+        if field.nested_at_keyword {
+            push_once(report, Severity::High, "OOXML_COMPUTED_FIELD", &preview(name), "Field type is computed by a nested field (DDE obfuscation pattern)");
+        }
+    }
+}
+
 /// 본문의 필드 지시문을 본다. 한 필드의 지시문은 여러 run에 나뉠 수 있어(`DDE` + `AUTO ...`) begin부터 end까지 이어 붙여 읽는다.
 fn check_fields(text: &str, name: &str, report: &mut FileReport) {
-    let Some(doc) = parse(text) else { return };
-    let mut stack: Vec<String> = Vec::new();
+    let Some(doc) = parse_or_note(text, name, report) else { return };
+    let mut stack: Vec<OpenField> = Vec::new();
     for node in doc.descendants().filter(|n| n.is_element()) {
         match node.tag_name().name() {
             "fldChar" => match node.attributes().find(|a| a.name() == "fldCharType").map(|a| a.value()) {
-                Some("begin") => stack.push(String::new()),
+                Some("begin") => {
+                    if let Some(parent) = stack.last_mut() {
+                        parent.nested = true;
+                        parent.nested_at_keyword |= parent.own.trim().is_empty();
+                    }
+                    stack.push(OpenField::default());
+                }
                 Some("end") => {
-                    if let Some(instr) = stack.pop() {
-                        classify_field(&instr, name, report);
+                    if let Some(field) = stack.pop() {
+                        if let Some(parent) = stack.last_mut() {
+                            parent.all.push_str(&field.all);
+                        }
+                        finish_field(field, name, report);
                     }
                 }
                 _ => {}
             },
             "instrText" => {
                 if let Some(top) = stack.last_mut() {
-                    top.push_str(node.text().unwrap_or(""));
+                    let t = node.text().unwrap_or("");
+                    top.own.push_str(t);
+                    top.all.push_str(t);
                 }
             }
             "fldSimple" => {
@@ -198,8 +275,8 @@ fn check_fields(text: &str, name: &str, report: &mut FileReport) {
             _ => {}
         }
     }
-    for instr in stack {
-        classify_field(&instr, name, report);
+    while let Some(field) = stack.pop() {
+        finish_field(field, name, report);
     }
 }
 
@@ -211,9 +288,7 @@ pub fn inspect_security(path: &Path, limits: &Limits, macro_enabled: bool, repor
     let mut spent = 0u64;
     let mut scanned = 0usize;
     for (index, name) in names.iter().enumerate() {
-        let is_rels = name.ends_with(".rels");
-        let is_word_xml = name.starts_with("word/") && name.ends_with(".xml") && !name.contains("/_rels/");
-        if !(is_rels || is_word_xml || name == "[Content_Types].xml") {
+        if !is_xml_part(name) {
             continue;
         }
         scanned += 1;
@@ -221,25 +296,38 @@ pub fn inspect_security(path: &Path, limits: &Limits, macro_enabled: bool, repor
             report.mark_incomplete(&format!("security scan stopped after {MAX_PARTS_SCANNED} XML parts"));
             break;
         }
-        let remaining = limits.max_total.saturating_sub(spent);
-        let cap = limits.max_member.min(remaining);
-        if cap == 0 {
-            report.mark_incomplete("security scan stopped: decompression budget exhausted");
-            break;
-        }
-        // 읽기는 남은 예산 +1바이트에서 멈춘다. 선언 크기를 믿지 않는다.
-        let Ok(data) = read_limited(&mut zip, index, cap) else { continue };
-        if data.len() as u64 > cap {
-            report.mark_incomplete(&format!("{}: part larger than the remaining inspection budget", preview(name)));
-            continue;
-        }
-        spent += data.len() as u64;
-        let text = String::from_utf8_lossy(&data);
+        let Some(text) = read_xml_part(&mut zip, index, name, limits, &mut spent, report) else { continue };
         check_xml_attacks(&text, name, report);
-        if is_rels {
+        if name.to_lowercase().ends_with(".rels") {
             check_relationships(&text, name, report);
-        } else if is_word_xml {
+        } else if text.contains("fldChar") || text.contains("fldSimple") {
+            // 필드가 있는 부분만 파싱한다. 본문이 `word/document.xml`이 아닌 곳에 있어도 찾도록 모든 XML 부분을 후보로 본다.
             check_fields(&text, name, report);
         }
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use std::io::Write;
+
+    use super::*;
+
+    /// 예산을 넘겨 건너뛰는 부분도 읽은 만큼 `spent`에서 빠진다(안 빼면 부분마다 같은 만큼 다시 풀 수 있다).
+    #[test]
+    fn oversized_part_is_charged_to_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.zip");
+        let mut w = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        w.start_file("big.xml", zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated)).unwrap();
+        w.write_all(&vec![b' '; 600 * 1024]).unwrap();
+        w.finish().unwrap();
+        let mut zip = open_zip(&path).unwrap();
+        let limits = Limits { max_total: 1024 * 1024, ..Limits::default() };
+        let mut spent = 600 * 1024;
+        let mut report = FileReport::new(&path, None);
+        assert!(read_xml_part(&mut zip, 0, "big.xml", &limits, &mut spent, &mut report).is_none());
+        assert!(report.incomplete);
+        assert!(spent > 600 * 1024 + 400 * 1024, "읽은 바이트가 예산에서 빠지지 않았다: {spent}");
     }
 }

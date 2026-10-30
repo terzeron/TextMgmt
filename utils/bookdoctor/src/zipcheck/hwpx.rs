@@ -8,7 +8,7 @@ use corpus_common::reader::open_zip;
 use corpus_common::util::unquote;
 use scan_common::{Category, FileReport, Severity};
 
-use super::ooxml::{check_xml_attacks, parse, preview, push_once};
+use super::ooxml::{check_xml_attacks, is_xml_part, parse, preview, push_once, read_xml_part};
 use crate::epub::security::{Limits, read_limited};
 
 const MANIFEST: &str = "Contents/content.hpf";
@@ -61,7 +61,7 @@ pub fn inspect(path: &Path, limits: &Limits, report: &mut FileReport) {
     }
 
     // BinData: 내장 OLE 객체. 실행 파일은 빠른 점검이 이름·매직으로 이미 본다.
-    for (i, name) in names.iter().enumerate().filter(|(_, n)| n.starts_with("BinData/")) {
+    for (i, name) in names.iter().enumerate().filter(|(_, n)| n.to_lowercase().starts_with("bindata/")) {
         let ole_name = name.to_lowercase().ends_with(".ole");
         let ole_magic = !ole_name && read_limited(&mut zip, i, OLE_MAGIC.len() as u64).is_ok_and(|d| d.starts_with(&OLE_MAGIC));
         if ole_name || ole_magic {
@@ -73,8 +73,8 @@ pub fn inspect(path: &Path, limits: &Limits, report: &mut FileReport) {
     let mut spent = 0u64;
     let mut scanned = 0usize;
     for (index, name) in names.iter().enumerate() {
-        let is_xml = name.starts_with("Contents/") && name.ends_with(".xml") || name == MANIFEST || name == "version.xml" || name == "META-INF/container.xml";
-        if !is_xml {
+        // 이름의 대소문자와 디렉터리를 가리지 않고 모든 XML 부분을 본다(OPC 부분 이름은 대소문자를 가리지 않는다).
+        if !is_xml_part(name) {
             continue;
         }
         scanned += 1;
@@ -82,18 +82,7 @@ pub fn inspect(path: &Path, limits: &Limits, report: &mut FileReport) {
             report.mark_incomplete(&format!("scan stopped after {MAX_PARTS_SCANNED} XML parts"));
             break;
         }
-        let cap = limits.max_member.min(limits.max_total.saturating_sub(spent));
-        if cap == 0 {
-            report.mark_incomplete("scan stopped: decompression budget exhausted");
-            break;
-        }
-        let Ok(data) = read_limited(&mut zip, index, cap) else { continue };
-        if data.len() as u64 > cap {
-            report.mark_incomplete(&format!("{}: part larger than the remaining inspection budget", preview(name)));
-            continue;
-        }
-        spent += data.len() as u64;
-        let text = String::from_utf8_lossy(&data);
+        let Some(text) = read_xml_part(&mut zip, index, name, limits, &mut spent, report) else { continue };
         check_xml_attacks(&text, name, report);
         if name == MANIFEST {
             check_manifest(&text, &set, report);

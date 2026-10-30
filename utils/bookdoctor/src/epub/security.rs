@@ -753,7 +753,7 @@ fn extension(name: &str) -> String {
 
 /// 마크업 바이트를 어떻게 읽었는지.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum TextEnc {
+pub(crate) enum TextEnc {
     /// UTF-8(BOM 유무 무관). 예전과 같다.
     Utf8,
     /// UTF-16을 BOM이나 NUL 교차로 알아보고 변환했다.
@@ -788,7 +788,7 @@ fn bomless_utf16(data: &[u8]) -> Option<bool> {
 /// `decode_text`를 부른 횟수. 비텍스트 멤버를 변환하지 않는지 테스트가 센다(성능 회귀 감시용, 검사 결과와 무관).
 pub static DECODE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-fn decode_text(data: &[u8]) -> (Cow<'_, str>, TextEnc) {
+pub(crate) fn decode_text(data: &[u8]) -> (Cow<'_, str>, TextEnc) {
     DECODE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if data.starts_with(&[0xFF, 0xFE, 0, 0]) || data.starts_with(&[0, 0, 0xFE, 0xFF]) {
         return (String::from_utf8_lossy(data), TextEnc::Utf32);

