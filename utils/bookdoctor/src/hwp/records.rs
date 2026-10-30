@@ -65,6 +65,8 @@ use super::inflate::{InflateError, decompress};
 
 /// `DocInfo`를 읽는 최대 바이트(압축 입력과 풀린 출력 각각).
 pub const MAX_DOCINFO: usize = 16 * 1024 * 1024;
+/// 검사하는 `DocInfo` 스트림 수의 상한(정상 문서는 하나다).
+const MAX_DOCINFO_COPIES: usize = 4;
 /// `BodyText/Section*` 전체에서 푸는 바이트의 합계 상한.
 const MAX_SECTIONS_TOTAL: usize = 64 * 1024 * 1024;
 /// 검사하는 본문 섹션 수의 상한.
@@ -74,34 +76,50 @@ const MAX_RECORDS: usize = 5_000_000;
 /// `HWPTAG_BEGIN`(0x010) + 68.
 const TAG_SHAPE_COMPONENT_OLE: u16 = 0x054;
 
-/// 레코드 스트림 하나를 읽는다. 문서가 압축이면 푼다(압축 입력과 풀린 출력 모두 `limit` 이하).
-/// 읽거나 풀지 못하면 사유를 미완료로 남기고 `None`을 돌려준다.
-pub fn load(file: &mut OleFile, header: &FileHeader, path: &str, limit: usize, report: &mut FileReport) -> Option<Vec<u8>> {
-    let entry = file.find(path).cloned()?;
-    let data = match file.read_stream_prefix(&entry, limit) {
+/// `load`가 실패한 이유. `TooLarge`는 풀다가 상한을 넘긴 것이라 작업량은 이미 쓰였다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadError {
+    Failed,
+    TooLarge,
+}
+
+/// 레코드 스트림 하나(`entry`, 표시 이름 `path`)를 읽는다. 문서가 압축이면 푼다(압축 입력과 풀린 출력 모두 `limit` 이하).
+/// 이름으로 다시 찾지 않고 열거한 항목을 그대로 읽는다(같은 이름의 항목이 여럿이어도 각자 읽힌다).
+/// 읽거나 풀지 못하면 사유를 미완료로 남기고 오류를 돌려준다.
+pub fn load(file: &mut OleFile, header: &FileHeader, path: &str, entry: &Entry, limit: usize, report: &mut FileReport) -> Result<Vec<u8>, LoadError> {
+    let data = match file.read_stream_prefix(entry, limit) {
         Ok(d) => d,
         Err(e) => {
             report.mark_incomplete(&format!("{path} could not be read: {e:?}"));
-            return None;
+            return Err(LoadError::Failed);
         }
     };
     if entry.size > limit as u64 {
         report.mark_incomplete(&format!("{path} exceeds the scan limit; only the first part was scanned"));
     }
     if !header.compressed() {
-        return Some(data);
+        return Ok(data);
     }
     match decompress(&data, limit) {
-        Ok(b) => Some(b),
+        Ok(b) => Ok(b),
         Err(InflateError::TooLarge) => {
             report.mark_incomplete(&format!("{path} decompresses beyond the scan limit; its records were not read"));
-            None
+            Err(LoadError::TooLarge)
         }
         Err(InflateError::Invalid) => {
             report.mark_incomplete(&format!("{path} could not be decompressed; its records were not read"));
-            None
+            Err(LoadError::Failed)
         }
     }
+}
+
+/// 루트 아래 `DocInfo` 스트림을 모두 읽는다(같은 이름이 여럿이면 모두, 최대 `MAX_DOCINFO_COPIES`개).
+pub fn load_docinfos(file: &mut OleFile, header: &FileHeader, report: &mut FileReport) -> Vec<Vec<u8>> {
+    let entries: Vec<Entry> = file.entries().iter().filter(|e| e.kind == EntryKind::Stream && file.path_of(e).eq_ignore_ascii_case("DocInfo")).take(MAX_DOCINFO_COPIES + 1).cloned().collect();
+    if entries.len() > MAX_DOCINFO_COPIES {
+        report.mark_incomplete(&format!("more than {MAX_DOCINFO_COPIES} DocInfo streams; the rest were not scanned"));
+    }
+    entries.iter().take(MAX_DOCINFO_COPIES).filter_map(|e| load(file, header, "DocInfo", e, MAX_DOCINFO, report).ok()).collect()
 }
 
 /// 레코드 스트림의 구조를 검증한다. 길이가 스트림을 넘으면 High 결함, 레벨이 한 번에 2 이상 깊어지면 Medium 결함(한 번만),
@@ -151,13 +169,19 @@ pub fn inspect_sections(file: &mut OleFile, header: &FileHeader, report: &mut Fi
         sections.truncate(MAX_SECTIONS);
     }
     let mut remaining = MAX_SECTIONS_TOTAL;
-    for (path, _) in sections {
+    for (index, (path, entry)) in sections.iter().enumerate() {
         if remaining == 0 {
-            report.mark_incomplete("BodyText sections exceed the total scan budget; the rest were not validated");
+            report.mark_incomplete(&format!("BodyText section budget used up; {} section(s) from {path} on were not validated", sections.len() - index));
             break;
         }
-        let Some(bytes) = load(file, header, &path, remaining, report) else { continue };
-        remaining = remaining.saturating_sub(bytes.len());
-        validate(&bytes, &path, report);
+        match load(file, header, path, entry, remaining, report) {
+            Ok(bytes) => {
+                remaining = remaining.saturating_sub(bytes.len());
+                validate(&bytes, path, report);
+            }
+            // 풀다가 상한을 넘긴 작업도 예산을 썼다. 뒤 섹션이 같은 작업을 되풀이하지 못하게 예산을 비운다.
+            Err(LoadError::TooLarge) => remaining = 0,
+            Err(LoadError::Failed) => {}
+        }
     }
 }

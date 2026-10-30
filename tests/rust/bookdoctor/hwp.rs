@@ -626,3 +626,39 @@ fn record_count_limit_is_incomplete_and_zero_headers_are_linear() {
     let r = scan_sections(0, None, vec![0u8; 1 << 20]);
     assert!(r.findings.is_empty() && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
 }
+
+#[test]
+fn a_failed_decompression_uses_up_the_section_budget() {
+    // 둘째 섹션이 상한을 넘게 풀리면 그 작업도 예산을 쓴 것이다. 이후 섹션은 검증하지 않고 미완료로 남긴다.
+    let bad = {
+        let mut b = valid_stream();
+        b.extend_from_slice(&(HWPTAG_BEGIN | 100 << 20).to_le_bytes());
+        b
+    };
+    let big = raw_deflate(&vec![0u8; 70 * 1024 * 1024]);
+    let small = raw_deflate(&valid_stream());
+    let cfb = make_cfb_v4(&[("FileHeader", &file_header(0x1)[..]), ("BodyText/Section0", &small[..]), ("BodyText/Section1", &big[..]), ("BodyText/Section2", &raw_deflate(&bad)[..])]);
+    let r = scan("a.hwp", &cfb.bytes);
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("Section1")), "{:?}", r.reasons);
+    assert!(r.reasons.iter().any(|m| m.contains("budget") || m.contains("not validated")), "{:?}", r.reasons);
+    assert!(!r.has("HWP_BAD_RECORD"), "a section after the exhausted budget must not be decompressed: {:?}", r.findings);
+}
+
+#[test]
+fn sections_and_docinfo_with_duplicate_or_case_colliding_names_are_all_scanned() {
+    let bad = {
+        let mut b = valid_stream();
+        b.extend_from_slice(&(HWPTAG_BEGIN | 100 << 20).to_le_bytes());
+        b
+    };
+    let ok = valid_stream();
+    // 같은 이름의 섹션이 둘이면 둘 다 본다(경로 조회는 첫 항목만 돌려준다).
+    let cfb = make_cfb(&[("FileHeader", &file_header(0)[..]), ("BodyText/Section0", &ok[..]), ("BodyText/Section0", &bad[..])]);
+    assert!(scan("a.hwp", &cfb.bytes).has("HWP_BAD_RECORD"));
+    let cfb = make_cfb(&[("FileHeader", &file_header(0)[..]), ("BodyText/Section0", &ok[..]), ("BodyText/SECTION0", &bad[..])]);
+    assert!(scan("b.hwp", &cfb.bytes).has("HWP_BAD_RECORD"));
+    // 같은 이름의 DocInfo가 둘이어도 연결 파일을 놓치지 않는다.
+    let link = bin_data_link("\\\\evil\\s\\a", "a");
+    let cfb = make_cfb(&[("FileHeader", &file_header(0)[..]), ("DocInfo", &ok[..]), ("DocInfo", &link[..])]);
+    assert!(scan("c.hwp", &cfb.bytes).has("HWP_LINKED_FILE"));
+}

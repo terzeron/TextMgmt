@@ -77,10 +77,10 @@ fn inspect(file: &mut OleFile, report: &mut FileReport) {
     }
     script::inspect(file, &header, report);
     // DocInfo는 한 번만 읽고 푼다. 레코드 검증과 BinData 연결 파일 검사가 같은 바이트를 쓴다.
-    let docinfo = records::load(file, &header, "DocInfo", records::MAX_DOCINFO, report);
-    if let Some(bytes) = &docinfo {
+    let docinfos = records::load_docinfos(file, &header, report);
+    for bytes in &docinfos {
         records::validate(bytes, "DocInfo", report);
     }
-    bindata::inspect(file, docinfo.as_deref(), report);
+    bindata::inspect(file, &docinfos, report);
     records::inspect_sections(file, &header, report);
 }

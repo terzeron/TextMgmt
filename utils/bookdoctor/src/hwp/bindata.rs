@@ -103,8 +103,8 @@ fn inspect_stream(file: &mut OleFile, path: &str, entry: &Entry, report: &mut Fi
 }
 
 /// `DocInfo`의 연결 파일과 `BinData/*` 스트림의 내용을 검사한다.
-pub fn inspect(file: &mut OleFile, docinfo: Option<&[u8]>, report: &mut FileReport) {
-    if let Some(bytes) = docinfo {
+pub fn inspect(file: &mut OleFile, docinfos: &[Vec<u8>], report: &mut FileReport) {
+    for bytes in docinfos {
         inspect_docinfo(bytes, report);
     }
     let streams: Vec<(String, Entry)> = file.entries().iter().filter(|e| e.kind == EntryKind::Stream).map(|e| (file.path_of(e), e.clone())).filter(|(p, _)| p.to_lowercase().starts_with("bindata/")).collect();
