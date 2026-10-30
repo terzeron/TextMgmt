@@ -314,3 +314,43 @@ fn a_package_with_a_container_xml_is_epub_unless_it_is_clearly_a_genuine_hwpx() 
     let r = scan_bytes("c.zip", &zip_bytes(&[("doc.dat", &hwpx_bytes(&[]))]), &Options::default());
     assert!(!r.has("PACKAGE_POLYGLOT"), "{:?}", r.findings);
 }
+
+#[test]
+fn byte_mutations_of_nested_containers_never_panic_or_stall() {
+    // 중첩 ZIP·DOCX·PDF·RTF가 든 바깥 ZIP의 바이트를 바꿔 가며 돌린다. panic·지연·임시 디렉터리 잔류가 없어야 한다.
+    let pdf = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /OpenAction << /S /JavaScript /JS (x) >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    let inner_zip = zip_bytes(&[("deep.docx", &vba_docx())]);
+    let outer = zip_bytes(&[("a.docx", &vba_docx()), ("b.zip", &inner_zip), ("c.pdf", pdf), ("d.rtf", b"{\\rtf1{\\*\\objclass X}}"), ("e.txt", b"plain text")]);
+    let before = scratch_dirs();
+    let mut seed = 0xBADC_0DE5u32;
+    let mut next = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as usize
+    };
+    let started = Instant::now();
+    for round in 0..300 {
+        let mut m = outer.clone();
+        match round % 3 {
+            0 => (0..1 + next() % 6).for_each(|_| {
+                let at = next() % m.len();
+                m[at] = (next() & 0xFF) as u8;
+            }),
+            1 => (0..1 + next() % 3).for_each(|_| {
+                // 중앙 디렉터리와 로컬 헤더가 몰린 끝·앞부분을 집중 변조한다.
+                let at = if next() % 2 == 0 { next() % m.len().min(256) } else { m.len() - 1 - next() % m.len().min(256) };
+                m[at] = (next() & 0xFF) as u8;
+            }),
+            _ => m.truncate(4 + next() % (m.len() - 4)),
+        }
+        let r = scan_bytes("m.zip", &m, &Options::default());
+        assert!(!r.reasons.iter().any(|x| x.contains("panic")), "round {round}: {:?}", r.reasons);
+    }
+    assert!(started.elapsed() < Duration::from_secs(60), "{:?}", started.elapsed());
+    assert!(scratch_dirs() <= before, "scratch directories were left behind");
+}
+
+/// 이 프로세스가 만든 임시 디렉터리 수. 다른 테스트가 동시에 만든 것이 늘 수 있어 "이전보다 늘지 않음"만 본다.
+fn scratch_dirs() -> usize {
+    let prefix = format!("bookdoctor-{}-", std::process::id());
+    fs::read_dir(std::env::temp_dir()).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&prefix)).count()).unwrap_or(0)
+}
