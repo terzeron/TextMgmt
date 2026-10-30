@@ -7,7 +7,8 @@ COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
 # 이미지 빌드는 락파일을 그대로 재현하기만 한다. caniuse-lite 갱신은 레포에서
 # `npm run deps:browsers` 로 수행하고 package-lock.json 변경을 커밋한다.
 # (빌드 중 원격 패키지를 받아 락파일을 바꾸면 빌드 재현성이 깨진다.)
-RUN npm install -g npm@10.9.2 && npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm install -g npm@10.9.2 && npm ci
 
 COPY frontend/ .
 # build.sh가 넘기는 이미지 태그(TAG)를 번들에 박아 화면 하단에서

@@ -4,7 +4,8 @@
 # Dependencies (installed inside container)
 **/node_modules
 
-# Build artifacts
+# Build artifacts (Rust target은 수십 GB라 context 전송 시간을 지배한다)
+**/target
 **/dist
 **/__pycache__
 **/.mypy_cache
@@ -24,4 +25,11 @@
 
 # Misc
 *.md
+*.txt
 .env
+
+# 이미지에 복사하지 않는 최상위 디렉터리
+/tests
+/tmp
+/docs
+/k8s

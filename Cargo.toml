@@ -61,3 +61,10 @@ lto = "thin"
 codegen-units = 1
 panic = "unwind" # bookdoctor가 catch_unwind로 파서 panic을 격리한다
 strip = true
+
+# Docker 이미지 빌드 전용. release 대비 LTO를 끄고 codegen-units를 늘려 컴파일을 줄인다.
+# 운영 성능 영향은 측정 후 채택한다. 로컬 `cargo build --release`에는 영향이 없다.
+[profile.image]
+inherits = "release"
+lto = false
+codegen-units = 16

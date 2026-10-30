@@ -81,7 +81,21 @@ case "$TARGET" in
         build_frontend && rollout_frontend
         ;;
     all|"")
-        build_backend && build_frontend && rollout_backend && rollout_frontend
+        # 두 이미지는 서로 독립이라 병렬로 빌드한다. 하위 셸에서 설정한 digest는
+        # 부모에 전달되지 않으므로 임시 파일로 받는다.
+        DIGEST_DIR="$(mktemp -d)"
+        trap 'rm -rf "$DIGEST_DIR"' EXIT
+        (build_backend && echo "$BACKEND_DIGEST" > "$DIGEST_DIR/backend") &
+        BACKEND_PID=$!
+        (build_frontend && echo "$FRONTEND_DIGEST" > "$DIGEST_DIR/frontend") &
+        FRONTEND_PID=$!
+        BUILD_FAILED=0
+        wait "$BACKEND_PID" || BUILD_FAILED=1
+        wait "$FRONTEND_PID" || BUILD_FAILED=1
+        [ "$BUILD_FAILED" -eq 0 ] || { echo "이미지 빌드 실패" >&2; exit 1; }
+        BACKEND_DIGEST="$(cat "$DIGEST_DIR/backend")"
+        FRONTEND_DIGEST="$(cat "$DIGEST_DIR/frontend")"
+        rollout_backend && rollout_frontend
         ;;
     *)
         echo "Usage: $0 [backend|frontend]"
