@@ -25,10 +25,23 @@ fn extension(name: &str) -> String {
     name.rsplit('/').next().and_then(|base| base.rsplit_once('.')).map(|(_, e)| e.to_lowercase()).unwrap_or_default()
 }
 
-/// 읽기 오류를 CRC 불일치와 그 밖의 해제 실패로 가른다.
+/// 읽기 오류를 CRC 불일치, 선언 크기 위조, 그 밖의 해제 실패로 가른다. zip crate는 선언 크기를 넘어 읽으면 오류를 낸다.
 fn read_failure(report: &mut FileReport, shown: &str, error: &str) {
-    let code = if error.to_lowercase().contains("checksum") { "ZIP_CRC_MISMATCH" } else { "ZIP_ENTRY_UNREADABLE" };
+    let lower = error.to_lowercase();
+    if lower.contains("larger than its declared") {
+        report.push(Category::Security, Severity::High, "ZIP_SIZE_MISMATCH", shown, "Declared size is smaller than the data it yields");
+        return;
+    }
+    let code = if lower.contains("checksum") { "ZIP_CRC_MISMATCH" } else { "ZIP_ENTRY_UNREADABLE" };
     report.push(Category::Defect, Severity::High, code, shown, error);
+}
+
+/// 디코딩한 이름이 있으면 그것을, 디코딩에 실패했으면 원본 바이트의 손실 변환을 이름으로 쓴다. 둘째 값은 디코딩 실패 여부다.
+pub fn resolve_name<E>(decoded: Result<String, E>, raw: &[u8]) -> (String, bool) {
+    match decoded {
+        Ok(name) => (name, false),
+        Err(_) => (String::from_utf8_lossy(raw).into_owned(), true),
+    }
 }
 
 /// ZIP 하나를 점검해 `report`에 더한다. 열기 전에 중앙 디렉터리 상한부터 본다. 열어서 멤버를 훑었으면 `true`다.
@@ -48,19 +61,32 @@ pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) 
     let mut raw = File::open(path).ok();
     let mut spent = 0u64;
     for i in 0..count.min(limits.max_files) {
-        let (name, start, raw_name, symlink, is_dir, size, csize, encrypted, method) = match zip.by_index_raw(i) {
-            Ok(f) => (f.name().map(|c| c.into_owned()).unwrap_or_else(|_| "<invalid-name>".into()), f.header_start(), f.name_raw().to_vec(), f.is_symlink(), f.is_dir(), f.size(), f.compressed_size(), f.encrypted(), f.compression()),
+        let (decoded, start, raw_name, symlink, is_dir, size, csize, encrypted, method) = match zip.by_index_raw(i) {
+            Ok(f) => (f.name().map(|c| c.into_owned()), f.header_start(), f.name_raw().to_vec(), f.is_symlink(), f.is_dir(), f.size(), f.compressed_size(), f.encrypted(), f.compression()),
             Err(_) => {
                 report.push(Category::Security, Severity::High, "BAD_LOCAL_HEADER", &format!("#{i}"), "ZIP local header absent or invalid");
                 continue;
             }
         };
+        // 추출기마다 이름을 다르게 읽을 수 있다(UTF-8, CP437, 손실 변환). 디코딩한 이름과 원본 바이트의 손실 변환 이름을 모두 검사한다.
+        // 디코딩에 실패하면 자리표시자가 아니라 원본 바이트로 검사하고, 실패 자체를 지표로 남긴다.
+        let lossy = String::from_utf8_lossy(&raw_name).into_owned();
+        let (name, undecodable) = resolve_name(decoded, &raw_name);
         let shown = sanitize_display(&name, 200, Some('…'));
+        if undecodable {
+            report.push(Category::Security, Severity::High, "ZIP_INVALID_NAME", &shown, "Entry name cannot be decoded (extractors may read it differently)");
+        }
         let mut seen = Vec::new();
-        for found in zipnames::check(&name) {
-            if !seen.contains(&found.code) {
-                seen.push(found.code);
-                report.push(Category::Security, found.severity, found.code, &shown, found.detail);
+        let mut candidates = vec![name.as_str()];
+        if lossy != name {
+            candidates.push(lossy.as_str());
+        }
+        for candidate in candidates {
+            for found in zipnames::check(candidate) {
+                if !seen.contains(&found.code) {
+                    seen.push(found.code);
+                    report.push(Category::Security, found.severity, found.code, &shown, found.detail);
+                }
             }
         }
         if let Some(raw) = raw.as_mut()
@@ -85,6 +111,10 @@ pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) 
         if csize > 0 && size / csize > RATIO_LIMIT && size > RATIO_MIN_SIZE {
             report.push(Category::Security, Severity::Medium, "HIGH_COMPRESSION_RATIO", &shown, "Potential decompression bomb");
         }
+        // 무압축 멤버는 압축 크기와 원래 크기가 같아야 한다. 다르면 헤더가 거짓이다.
+        if method == CompressionMethod::Stored && csize != size {
+            report.push(Category::Security, Severity::High, "ZIP_SIZE_MISMATCH", &shown, &format!("Stored member declares {size} bytes but occupies {csize}"));
+        }
         let mut flagged_exec = false;
         let ext = extension(&name);
         if EXEC_EXTS.contains(&ext.as_str()) {
@@ -98,6 +128,7 @@ pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) 
             Ok(entry) => entry.take(PROBE_BYTES as u64).read_to_end(&mut probe).map(|_| ()).map_err(|e| e.to_string()),
             Err(e) => Err(e.to_string()),
         };
+        let probe_failed = result.is_err();
         match result {
             Err(e) => read_failure(report, &shown, &e),
             Ok(()) => {
@@ -111,7 +142,8 @@ pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) 
         }
 
         // 깊은 점검: 예산 안에서 끝까지 풀어 CRC를 확인한다.
-        if deep {
+        // 앞부분 시험이 이미 실패한 멤버는 같은 오류를 다시 내지 않도록 건너뛴다.
+        if deep && !probe_failed {
             if size > limits.max_member {
                 report.mark_incomplete(&format!("{shown}: Member larger than max inspection size: {size}"));
                 continue;
@@ -125,6 +157,7 @@ pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) 
                 Err(e) => read_failure(report, &shown, &e),
                 Ok(data) => {
                     spent += data.len() as u64;
+
                     if data.len() as u64 > bound {
                         report.mark_incomplete(&format!("{shown}: Member is larger than its declared size; only the first part was inspected"));
                     }

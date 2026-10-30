@@ -121,7 +121,8 @@ fn forged_small_declared_size_does_not_make_deep_scan_read_everything() {
     fs::write(&p, b).unwrap();
     let r = scan_file(&p, &Options { zip_deep: true, max_total_mb: 2, ..Options::default() });
     // 읽기는 상한에서 멈춘다: 끝까지 풀었다고 통과시키지 않고 미완료나 압축비 지표로 남긴다.
-    assert!(r.incomplete || r.has("HIGH_COMPRESSION_RATIO") || r.has("ZIP_ENTRY_UNREADABLE") || r.has("ZIP_CRC_MISMATCH"), "{:?} {:?}", r.findings, r.reasons);
+    assert!(r.incomplete || r.has("HIGH_COMPRESSION_RATIO") || r.has("ZIP_SIZE_MISMATCH") || r.has("ZIP_ENTRY_UNREADABLE") || r.has("ZIP_CRC_MISMATCH"), "{:?} {:?}", r.findings, r.reasons);
+    assert_eq!(r.findings.iter().filter(|f| f.code == "ZIP_SIZE_MISMATCH").count(), 1, "one report per member: {:?}", r.findings);
 }
 
 #[test]
@@ -198,4 +199,90 @@ fn zip_deep_option_is_parsed_and_documented() {
     print_usage(&mut out).unwrap();
     let usage = String::from_utf8(out).unwrap();
     assert!(usage.contains("--zip-deep") && usage.contains("zip"), "{usage}");
+}
+
+// --- 보안 검토 반영: 이름 디코딩 차이, 선언 크기 위조 ---
+
+use bookdoctor::zipcheck::fast::resolve_name;
+
+#[test]
+fn traversal_is_found_when_the_raw_bytes_are_not_valid_utf8() {
+    // 원본 이름 `AAAA/evil.txt`의 앞 4바이트를 `../` + 0xFF로 바꾼다. zip crate는 이를 CP437로 읽는다.
+    // 디코딩한 이름과 원본 바이트의 손실 변환 이름을 모두 검사하므로 어느 쪽으로 읽어도 `..`를 놓치지 않는다.
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("rawname.zip");
+    common::zip_of(&p, &[("AAAA/evil.txt", b"x")]);
+    let mut b = fs::read(&p).unwrap();
+    let mut from = 0;
+    while let Some(at) = b[from..].windows(13).position(|w| w == b"AAAA/evil.txt") {
+        let at = from + at;
+        b[at..at + 4].copy_from_slice(&[b'.', b'.', b'/', 0xFF]);
+        from = at + 13;
+    }
+    fs::write(&p, b).unwrap();
+    assert!(scan(&p).has("ZIP_PATH_TRAVERSAL"));
+}
+
+#[test]
+fn resolve_name_falls_back_to_the_raw_bytes_and_flags_a_failed_decode() {
+    let (name, undecodable) = resolve_name::<()>(Err(()), b"../x\xFF");
+    assert!(undecodable && name.starts_with("../x"), "{name}");
+    let (name, undecodable) = resolve_name::<()>(Ok("a/b.txt".to_string()), b"a/b.txt");
+    assert!(!undecodable && name == "a/b.txt");
+}
+
+#[test]
+fn stored_member_whose_declared_size_differs_from_its_extent_is_a_size_mismatch() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("forged.zip");
+    common::zip_stored(&p, &[("a.bin", &vec![b'x'; 8192])]);
+    let mut b = fs::read(&p).unwrap();
+    let central = b.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    b[central + 24..central + 28].copy_from_slice(&10u32.to_le_bytes());
+    fs::write(&p, b).unwrap();
+    let r = scan(&p);
+    let f = finding(&r, "ZIP_SIZE_MISMATCH");
+    assert_eq!((f.category, f.severity, f.location.as_str()), (Category::Security, Severity::High, "a.bin"));
+}
+
+fn forge_declared_size(p: &Path, size: u32) {
+    let mut b = fs::read(p).unwrap();
+    let central = b.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    b[central + 24..central + 28].copy_from_slice(&size.to_le_bytes());
+    fs::write(p, b).unwrap();
+}
+
+#[test]
+fn deflate_member_declaring_less_than_the_probe_window_is_a_size_mismatch_not_unreadable() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("forged-small.zip");
+    common::zip_of(&p, &[("zeros.bin", &vec![0u8; 8 * 1024 * 1024])]);
+    forge_declared_size(&p, 10);
+    let r = scan(&p);
+    let f = finding(&r, "ZIP_SIZE_MISMATCH");
+    assert_eq!((f.category, f.severity), (Category::Security, Severity::High));
+    assert!(!r.has("ZIP_ENTRY_UNREADABLE"), "{:?}", r.findings);
+}
+
+#[test]
+fn forged_size_above_the_probe_window_is_only_seen_by_zip_deep() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("forged-big.zip");
+    common::zip_of(&p, &[("zeros.bin", &vec![0u8; 8 * 1024 * 1024])]);
+    forge_declared_size(&p, 5000);
+    assert!(!scan(&p).has("ZIP_SIZE_MISMATCH"), "probe-only reads 4096 bytes and cannot see it (documented limit)");
+    let r = deep(&p);
+    assert!(r.has("ZIP_SIZE_MISMATCH") && !r.has("ZIP_ENTRY_UNREADABLE"), "{:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn honest_headers_never_get_a_size_mismatch() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("ok.zip");
+    common::zip_of(&p, &[("a.txt", &text(200)), ("b.bin", &vec![1u8; 10_000])]);
+    common::zip_stored(&d.path().join("ok2.zip"), &[("c.bin", &vec![2u8; 9000])]);
+    for name in ["ok.zip", "ok2.zip"] {
+        let path = d.path().join(name);
+        assert!(!scan(&path).has("ZIP_SIZE_MISMATCH") && !deep(&path).has("ZIP_SIZE_MISMATCH"), "{name}");
+    }
 }
