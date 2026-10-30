@@ -7,7 +7,7 @@ use scan_common::sniff::Sniffed;
 use scan_common::{FileReport, Format};
 
 use crate::cli::Options;
-use crate::{common, doc, html, hwp, recurse, epub, exe, pdf, txt, viewer, zipcheck};
+use crate::{common, doc, html, hwp, recurse, rules, epub, exe, pdf, txt, viewer, zipcheck};
 
 /// 검사할 포맷을 정한다. `.pdf`·`.epub`은 내용이 PDF·ZIP이면 내용을 따르고(`.pdf`인데 ZIP이면 EPUB),
 /// 그 밖에는 확장자를 따른다. 모르는 확장자는 `None`이다.
@@ -91,7 +91,13 @@ pub fn scan_file(path: &Path, opts: &Options) -> FileReport {
     // 최상위 검사면 재귀 예산을 만든다. 중첩 검사(재귀가 부른 `scan_file`)는 바깥 예산을 이어 쓴다.
     let _budget = recurse::begin(opts);
     let mut report = FileReport::new(path, None);
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| scan_inner(path, opts, &mut report))) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+        scan_inner(path, opts, &mut report);
+        // 규칙은 분석기가 끝난 뒤 파일의 원시 바이트에 적용한다(꺼져 있으면 비용이 없다). 재귀가 부른 중첩 파일에도 같은 옵션으로 적용된다.
+        if let Some(set) = &opts.ruleset {
+            rules::scan_report(path, set, &mut report);
+        }
+    })) {
         let msg = payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_default();
         report.mark_incomplete(&format!("panic: {msg}"));
     }

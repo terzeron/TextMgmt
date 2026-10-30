@@ -143,3 +143,14 @@ fn empty_source_is_an_empty_set() {
     assert!(ok("").rules.is_empty());
     assert!(ok("  // only a comment\n/* and a block */\n").rules.is_empty());
 }
+
+#[test]
+fn the_number_of_condition_terms_per_rule_is_limited() {
+    let terms = |n: usize| (0..n).map(|_| "$a").collect::<Vec<_>>().join(" or ");
+    ok(&format!("rule X {{ strings: $a = \"ab\" condition: {} }}", terms(1000)));
+    let e = err(&format!("rule X {{ strings: $a = \"ab\" condition: {} }}", terms(1001)));
+    assert!(e.message.contains("terms") && e.message.contains("1000"), "{}", e.message);
+    // `at`·`#`·`of them` 항도 항으로 센다.
+    let at: String = (0..1001).map(|i| format!("$a at {i}")).collect::<Vec<_>>().join(" or ");
+    assert!(err(&format!("rule X {{ strings: $a = \"ab\" condition: {at} }}")).message.contains("terms"));
+}

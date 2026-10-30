@@ -1,5 +1,6 @@
 //! 명령행. 옵션은 argparse와 같은 규칙으로 읽고, 잘못된 입력은 종료 코드 2로 끝낸다.
 
+use std::sync::Arc;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -13,9 +14,10 @@ use crate::pdf::security::MAX_PARALLEL_INPUT_MB;
 use crate::prefetch::Prefetcher;
 use crate::report::{Aggregate, write_json_line, write_report_file, write_summary_line, write_text};
 use crate::isolate::scan_isolated;
+use crate::rules::Compiled;
 use crate::scan::scan_file;
 
-const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--pdf-text] [--no-poppler] PATH...";
+const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--rules PATH]... [--builtin-rules] [--pdf-text] [--no-poppler] PATH...";
 
 /// 한 번에 검사하는 파일 수는 워커 수의 이 배수다.
 const WINDOW_PER_WORKER: usize = 8;
@@ -57,6 +59,12 @@ pub struct Options {
     pub isolate_timeout_s: u64,
     /// 내부용: 한 파일을 검사해 필터 없는 JSON 한 줄로 낸다. `--isolate`의 자식이 쓴다.
     pub child: bool,
+    /// `--rules`로 준 규칙 파일·디렉터리.
+    pub rule_files: Vec<PathBuf>,
+    /// `--builtin-rules`: 내장 소규모 규칙을 켠다.
+    pub builtin_rules: bool,
+    /// 읽어서 컴파일한 규칙. `run`이 `rule_files`와 `builtin_rules`로 채운다. 없으면 규칙을 적용하지 않는다(비용 0).
+    pub ruleset: Option<Arc<Compiled>>,
 }
 
 impl Default for Options {
@@ -81,6 +89,9 @@ impl Default for Options {
             isolate_mem_mb: 4096,
             isolate_timeout_s: 120,
             child: false,
+            rule_files: Vec::new(),
+            builtin_rules: false,
+            ruleset: None,
         }
     }
 }
@@ -123,13 +134,15 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
             "--no-poppler" => o.no_poppler = true,
             "--no-recurse" => o.recurse = false,
             "--isolate" => o.isolate = true,
+            "--builtin-rules" => o.builtin_rules = true,
             "--child" => o.child = true,
-            _ => match long_option(arg, &["report", "workers", "limit", "max-total-mb", "only", "min-severity", "color", "isolate-mem-mb", "isolate-timeout-s"], &mut it)? {
+            _ => match long_option(arg, &["report", "workers", "limit", "max-total-mb", "only", "min-severity", "color", "isolate-mem-mb", "isolate-timeout-s", "rules"], &mut it)? {
                 Some((name, value)) => match name.as_str() {
                     "report" => o.report = Some(value.into()),
                     "workers" => o.workers = number(&name, &value)?,
                     "limit" => o.limit = number(&name, &value)?,
                     "max-total-mb" => o.max_total_mb = number(&name, &value)?,
+                    "rules" => o.rule_files.push(value.into()),
                     "isolate-mem-mb" => o.isolate_mem_mb = number(&name, &value)?,
                     "isolate-timeout-s" => o.isolate_timeout_s = number(&name, &value)?,
                     "color" => o.color = parse_color(&value)?,
@@ -176,6 +189,14 @@ pub fn run_with_env(argv: &[String], out: &mut dyn Write, is_tty: bool, no_color
             return 2;
         }
     };
+    let mut opts = opts;
+    match crate::rules::load(&opts.rule_files, opts.builtin_rules) {
+        Ok(set) => opts.ruleset = set.map(Arc::new),
+        Err(msg) => {
+            eprintln!("bookdoctor: error: {}", scan_common::text::sanitize_display(&msg, usize::MAX, None));
+            return 2;
+        }
+    }
     if opts.child {
         return run_child(&opts, out);
     }
@@ -258,7 +279,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
 사용법:
   bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N]
              [--only security,defect,render] [--min-severity low|medium|high|critical]
-             [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--pdf-text] [--no-poppler] PATH...
+             [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--rules PATH]... [--builtin-rules] [--pdf-text] [--no-poppler] PATH...
 
 인자:
   PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt, zip, docx(docm·dotx·dotm), hwpx, hwp, doc(dot), rtf, html(htm·xhtml)와 실행 파일 확장자(exe, dll, so, dylib 등)를 모은다.
@@ -279,6 +300,8 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   --color MODE        auto(기본, 터미널이고 NO_COLOR가 없을 때만), always, never.
                       CRITICAL과 렌더링 구조 에러는 red, HIGH는 purple, 암호화·DRM은 cyan이다. --json에는 색이 없다.
   --zip-deep          ZIP 멤버를 끝까지 풀어 CRC까지 확인한다 (기본은 멤버마다 앞 4096바이트만 풀어 본다).
+  --rules PATH        규칙 파일이나 디렉터리(*.rules)를 읽어 파일의 앞 16MiB에 적용한다. 여러 번 쓸 수 있다. 일치는 RULE_MATCH 지표다. 문법은 docs/bookdoctor-rules.md.
+  --builtin-rules     내장 소규모 규칙(강한 IOC만)을 켠다. 기본은 규칙을 적용하지 않는다.
   --isolate           파일마다 하위 프로세스에서 검사한다. 자식이 죽거나 멈추거나 메모리를 넘으면 그 파일만 미완료로 보고하고 계속한다. 선읽기는 끈다.
   --isolate-mem-mb N  --isolate의 자식 주소 공간 상한(MiB, 기본 4096). 0은 허용하지 않는다.
   --isolate-timeout-s N  --isolate의 자식 시간 상한(초, 기본 120). 넘으면 프로세스 그룹 전체를 죽인다.

@@ -12,6 +12,8 @@ pub const MAX_RULES: usize = 1000;
 pub const MAX_STRINGS: usize = 256;
 /// 문자열 하나의 최대 바이트.
 pub const MAX_STRING_BYTES: usize = 4096;
+/// 규칙 하나의 조건이 가질 수 있는 항(`$id`, `#id …`, `$id at …`, `N of them`)의 최대 수. 평가 비용과 재귀 깊이를 제한한다.
+pub const MAX_TERMS: usize = 1000;
 /// 조건식 중첩(괄호, `not`)의 최대 깊이.
 const MAX_DEPTH: usize = 32;
 /// 지원하지 않는 YARA 문법의 키워드. 만나면 "unsupported syntax"다.
@@ -20,6 +22,8 @@ const UNSUPPORTED: &[&str] = &["import", "include", "private", "global", "for", 
 struct Parser<'a> {
     src: &'a [u8],
     pos: usize,
+    /// 지금 읽는 조건에서 센 항의 수.
+    terms: usize,
 }
 
 fn is_ident_start(b: u8) -> bool {
@@ -265,6 +269,13 @@ impl<'a> Parser<'a> {
 
     fn cond_primary(&mut self, depth: usize) -> Result<Cond, RuleError> {
         self.skip()?;
+        // 괄호를 빼고 항 하나를 읽을 때마다 센다.
+        if self.peek() != Some(b'(') {
+            self.terms += 1;
+            if self.terms > MAX_TERMS {
+                return self.fail(format!("condition has more than {MAX_TERMS} terms"));
+            }
+        }
         match self.peek() {
             Some(b'(') => {
                 if depth + 1 > MAX_DEPTH {
@@ -447,6 +458,7 @@ impl<'a> Parser<'a> {
                 "meta" => self.meta(&mut rule)?,
                 "strings" => self.strings(&mut rule)?,
                 "condition" => {
+                    self.terms = 0;
                     condition = Some(self.cond_or(0)?);
                 }
                 other => {
@@ -497,7 +509,7 @@ pub fn parse(source: &str) -> Result<RuleSet, RuleError> {
     if source.len() > MAX_SOURCE {
         return Err(RuleError { line: 1, message: format!("rules source is too large (max 1 MiB, got {} bytes)", source.len()) });
     }
-    let mut p = Parser { src: source.as_bytes(), pos: 0 };
+    let mut p = Parser { src: source.as_bytes(), pos: 0, terms: 0 };
     let mut set = RuleSet::default();
     let mut names: Vec<String> = Vec::new();
     loop {

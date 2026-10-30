@@ -42,6 +42,12 @@ fn child_args(opts: &Options, path: &Path) -> Vec<String> {
             args.push(flag.to_owned());
         }
     }
+    for file in &opts.rule_files {
+        args.extend(["--rules".to_owned(), file.to_string_lossy().into_owned()]);
+    }
+    if opts.builtin_rules {
+        args.push("--builtin-rules".to_owned());
+    }
     if let Some(only) = only_arg(opts) {
         args.extend(["--only".to_owned(), only]);
     }

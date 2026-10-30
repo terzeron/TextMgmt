@@ -143,3 +143,30 @@ fn a_thousand_rules_over_a_megabyte_is_fast() {
     assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
     assert!(!out.work_limit_hit);
 }
+
+#[test]
+fn condition_evaluation_is_charged_to_the_work_budget() {
+    // 데이터는 작아 훑기는 싸지만, 조건이 4KiB 패턴에 대한 `at` 검사를 1,000번 한다. 평가도 예산을 써야 한다.
+    let pattern = "a".repeat(4000);
+    let terms: String = (0..1000).map(|i| format!("$a at {i}")).collect::<Vec<_>>().join(" or ");
+    let set = set(&format!("rule R {{ strings: $a = \"{pattern}\" ascii wide condition: {terms} }}"));
+    let compiled = set.compile();
+    let data = vec![b'x'; 200];
+    let out = compiled.scan_with_budget(&data, 1_000_000);
+    assert!(out.work_limit_hit, "1000 at-checks over a 4000-byte pattern cost millions of byte comparisons");
+    // 예산이 충분하면 끝까지 평가한다.
+    let out = compiled.scan_with_budget(&data, 1_000_000_000);
+    assert!(!out.work_limit_hit && out.matches.is_empty());
+}
+
+#[test]
+fn the_at_check_only_looks_at_that_strings_variants() {
+    // 규칙 1,000개(변형 1,000개) 곁에서 `at` 하나를 여러 번 평가해도 빠르다.
+    let many: String = (0..999).map(|i| format!("rule M{i} {{ strings: $a = \"zz{i:04}zz\" condition: $a }}\n")).collect();
+    let src = format!("{many}rule Target {{ strings: $a = \"abcd\" condition: {} }}", (0..500).map(|i| format!("$a at {i}")).collect::<Vec<_>>().join(" or "));
+    let compiled = set(&src).compile();
+    let started = Instant::now();
+    let out = compiled.scan(b"abcd and more");
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    assert_eq!(out.matches.len(), 1);
+}
