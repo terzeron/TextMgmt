@@ -253,3 +253,41 @@ fn a_package_that_matches_several_formats_is_scanned_by_every_analyzer() {
     let r = scan_bytes("b.zip", &zip_bytes(&[("inner.docx", &vba_docx())]), &Options::default());
     assert!(!r.has("PACKAGE_POLYGLOT"), "{:?}", r.findings);
 }
+
+fn hwpx_bytes(replace: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut parts: Vec<(String, Vec<u8>)> = common::minimal_hwpx_parts();
+    for (name, body) in replace {
+        parts.retain(|(n, _)| n != name);
+        parts.push((name.to_string(), body.to_vec()));
+    }
+    let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    zip_bytes(&refs)
+}
+
+const EPUB_CONTAINER: &[u8] = br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+const REMOTE_XHTML: &[u8] = br#"<html><script src="http://evil.example/a.js"></script></html>"#;
+
+#[test]
+fn a_hwpx_marker_does_not_hide_the_epub_marker() {
+    // HWPX 표지(content.hpf)에 EPUB의 container.xml(rootfile=.opf)과 mimetype을 더한 멤버: 두 분석기를 모두 쓴다.
+    let poly = hwpx_bytes(&[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", EPUB_CONTAINER), ("OEBPS/a.xhtml", REMOTE_XHTML)]);
+    let r = scan_bytes("a.zip", &zip_bytes(&[("poly.dat", &poly)]), &Options::default());
+    assert!(r.findings.iter().any(|f| f.code == "REMOTE_SCRIPT" && f.location.starts_with("poly.dat!")), "epub analyzer skipped: {:?} {:?}", r.findings, r.reasons);
+    assert!(r.has("PACKAGE_POLYGLOT"), "{:?}", r.findings);
+    // mimetype이 없어도 container.xml이 .opf를 가리키면 EPUB으로도 본다.
+    let no_mime = {
+        let mut parts: Vec<(String, Vec<u8>)> = common::minimal_hwpx_parts().into_iter().filter(|(n, _)| n != "mimetype" && n != "META-INF/container.xml").collect();
+        parts.push(("META-INF/container.xml".into(), EPUB_CONTAINER.to_vec()));
+        parts.push(("OEBPS/a.xhtml".into(), REMOTE_XHTML.to_vec()));
+        let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+        zip_bytes(&refs)
+    };
+    let r = scan_bytes("b.zip", &zip_bytes(&[("poly.dat", &no_mime)]), &Options::default());
+    assert!(r.findings.iter().any(|f| f.code == "REMOTE_SCRIPT"), "{:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn a_genuine_hwpx_is_scanned_once_without_a_polyglot_finding() {
+    let r = scan_bytes("a.zip", &zip_bytes(&[("doc.dat", &hwpx_bytes(&[]))]), &Options::default());
+    assert!(!r.has("PACKAGE_POLYGLOT"), "{:?}", r.findings);
+}

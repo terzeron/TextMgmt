@@ -123,23 +123,36 @@ enum Kind {
     Ole,
 }
 
+/// `name` 멤버의 앞 `max`바이트를 읽는다.
+fn read_prefix(zip: &mut corpus_common::reader::Zip, name: &str, max: u64) -> Option<Vec<u8>> {
+    let mut data = Vec::new();
+    zip.by_name(name).ok()?.take(max).read_to_end(&mut data).ok()?;
+    Some(data)
+}
+
 /// 임시 파일의 ZIP이 어떤 문서 패키지인지 멤버 이름 구조로 가려 맞는 확장자를 모두 돌려준다. 멤버 이름(바깥 ZIP의 이름)은 쓰지 않는다.
-/// 표지: DOCX(`word/document.xml`), HWPX(`Contents/content.hpf`), EPUB(`META-INF/container.xml`과 `mimetype`; HWPX도 `container.xml`을 갖는다).
+/// 표지: DOCX는 `word/document.xml`, HWPX는 `Contents/content.hpf`, EPUB은 `META-INF/container.xml`이다.
+/// HWPX도 `container.xml`과 `mimetype`을 갖는다. 그래서 EPUB은 `container.xml`이 있고 (`mimetype`이 없거나, `application/epub+zip`이거나,
+/// `container.xml`이 `.opf`/`oebps-package`를 가리킬 때)로 본다. 정상 HWPX는 `application/hwp+zip`과 `hwpml-package`라 EPUB이 아니다.
 /// 둘 이상 맞으면 한쪽 분석기만으로는 다른 쪽 지표가 가려지므로 모두 돌려주고, 하나도 안 맞으면 `zip`이다.
 fn zip_extensions(file: &Path) -> Vec<&'static str> {
-    let Some(zip) = open_zip(file) else { return vec!["zip"] };
-    let (mut docx, mut hwpx, mut container, mut mimetype) = (false, false, false, false);
+    let Some(mut zip) = open_zip(file) else { return vec!["zip"] };
+    let (mut docx, mut hwpx, mut container, mut has_mimetype) = (false, false, false, false);
     for name in zip.file_names().take(MAX_ENTRIES).flatten() {
         match name.as_ref() {
             "word/document.xml" => docx = true,
             "Contents/content.hpf" => hwpx = true,
             "META-INF/container.xml" => container = true,
-            "mimetype" => mimetype = true,
+            "mimetype" => has_mimetype = true,
             _ => {}
         }
     }
-    // HWPX는 `container.xml`과 `mimetype`을 모두 갖지만 EPUB이 아니다. HWPX 표지가 없을 때만 EPUB으로 본다.
-    let epub = container && mimetype && !hwpx;
+    let epub = container && {
+        let mime = if has_mimetype { read_prefix(&mut zip, "mimetype", 64) } else { None };
+        let says_epub = mime.as_ref().is_none_or(|m| m.trim_ascii().eq_ignore_ascii_case(b"application/epub+zip"));
+        let xml = read_prefix(&mut zip, "META-INF/container.xml", 4096).map(|d| String::from_utf8_lossy(&d).to_lowercase()).unwrap_or_default();
+        says_epub || xml.contains(".opf") || xml.contains("oebps-package")
+    };
     let mut found: Vec<&'static str> = [(docx, "docx"), (hwpx, "hwpx"), (epub, "epub")].into_iter().filter(|(on, _)| *on).map(|(_, e)| e).collect();
     if found.is_empty() {
         found.push("zip");
