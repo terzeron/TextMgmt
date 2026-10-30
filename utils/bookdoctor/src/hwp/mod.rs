@@ -1,8 +1,10 @@
 //! HWP 5.x(OLE 복합 파일) 검사. 포맷 사실은 `docs/bookdoctor-hwp5-notes.md`에 있다.
 //! 파일을 실행하거나 렌더링하지 않는다.
 
+pub mod bindata;
 pub mod header;
 pub mod inflate;
+pub mod records;
 pub mod script;
 
 use std::path::Path;
@@ -74,4 +76,5 @@ fn inspect(file: &mut OleFile, report: &mut FileReport) {
         report.mark_incomplete("distribution document: ViewText not analyzed");
     }
     script::inspect(file, &header, report);
+    bindata::inspect(file, &header, report);
 }

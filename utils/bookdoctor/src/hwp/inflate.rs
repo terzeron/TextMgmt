@@ -49,3 +49,24 @@ pub fn decompress(data: &[u8], limit: usize) -> Result<Vec<u8>, InflateError> {
         other => other,
     }
 }
+
+/// 앞 `n`바이트만 푼다. 출력이 더 커도 오류가 아니고, 스트림이 끊겨도 그때까지 풀린 앞부분을 돌려준다.
+/// 어느 형식으로도 한 바이트도 못 풀면 `Invalid`다. 내용의 매직만 볼 때 쓴다.
+pub fn decompress_prefix(data: &[u8], n: usize) -> Result<Vec<u8>, InflateError> {
+    if data.is_empty() {
+        return Ok(Vec::new());
+    }
+    let try_zlib = |data: &[u8]| {
+        let mut out = Vec::new();
+        // 읽기 오류가 나도 `read_to_end`는 그때까지 읽은 바이트를 `out`에 남긴다.
+        let _ = ZlibDecoder::new(data).take(n as u64).read_to_end(&mut out);
+        out
+    };
+    let try_raw = |data: &[u8]| {
+        let mut out = Vec::new();
+        let _ = DeflateDecoder::new(data).take(n as u64).read_to_end(&mut out);
+        out
+    };
+    let out = if looks_like_zlib(data) { Some(try_zlib(data)).filter(|o| !o.is_empty()).or_else(|| Some(try_raw(data))) } else { Some(try_raw(data)).filter(|o| !o.is_empty()).or_else(|| Some(try_zlib(data))) };
+    out.filter(|o| !o.is_empty()).ok_or(InflateError::Invalid)
+}

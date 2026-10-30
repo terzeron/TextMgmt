@@ -378,3 +378,136 @@ fn every_stream_under_scripts_is_scanned_not_only_defaultjscript() {
     let cfb = hwp_cfb(&[("Scripts/Extra", &raw_deflate(&evil)[..])], 0x1 | 0x8);
     assert!(scan_cfb("b.hwp", &cfb).has("HWP_SCRIPT_SUSPICIOUS"));
 }
+
+// --- BinData (명세 표 17, 18) ---
+
+use bookdoctor::hwp::inflate::decompress_prefix;
+
+/// 레코드 하나: 헤더 32비트(TagID 10, Level 10, Size 12), Size가 0xFFF 이상이면 뒤에 DWORD 길이(명세 4.1).
+fn record(tag: u32, level: u32, data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    if data.len() >= 0xFFF {
+        out.extend_from_slice(&(tag | level << 10 | 0xFFF << 20).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    } else {
+        out.extend_from_slice(&(tag | level << 10 | (data.len() as u32) << 20).to_le_bytes());
+    }
+    out.extend_from_slice(data);
+    out
+}
+
+const HWPTAG_BEGIN: u32 = 0x010;
+const TAG_BIN_DATA: u32 = HWPTAG_BEGIN + 2;
+
+fn wstr_with_len(s: &str) -> Vec<u8> {
+    let mut out = (s.encode_utf16().count() as u16).to_le_bytes().to_vec();
+    out.extend_from_slice(&wchars(s));
+    out
+}
+
+/// `HWPTAG_BIN_DATA` LINK(Type 0): 속성, 절대 경로, 상대 경로.
+fn bin_data_link(absolute: &str, relative: &str) -> Vec<u8> {
+    let mut d = 0u16.to_le_bytes().to_vec();
+    d.extend_from_slice(&wstr_with_len(absolute));
+    d.extend_from_slice(&wstr_with_len(relative));
+    record(TAG_BIN_DATA, 1, &d)
+}
+
+fn scan_bindata(flags: u32, docinfo: Option<Vec<u8>>, bins: &[(&str, Vec<u8>)]) -> FileReport {
+    let mut streams: Vec<(String, Vec<u8>)> = Vec::new();
+    if let Some(d) = docinfo {
+        streams.push(("DocInfo".to_string(), d));
+    }
+    for (name, data) in bins {
+        streams.push((format!("BinData/{name}"), data.clone()));
+    }
+    let refs: Vec<(&str, &[u8])> = streams.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    scan_cfb("a.hwp", &hwp_cfb(&refs, flags))
+}
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR some png bytes";
+
+#[test]
+fn decompress_prefix_stops_after_n_bytes_without_error() {
+    let bomb = raw_deflate(&vec![0u8; 64 * 1024 * 1024]);
+    assert_eq!(decompress_prefix(&bomb, 4096).map(|v| v.len()), Ok(4096));
+    // 끊긴 스트림도 그때까지 풀린 앞부분을 돌려준다.
+    let full = raw_deflate(&b"abcdefgh".repeat(4096));
+    let cut = &full[..full.len() / 2];
+    assert!(decompress_prefix(cut, 16).is_ok_and(|v| v == b"abcdefghabcdefgh"));
+    assert_eq!(decompress_prefix(&[0xFF, 0xEE, 0xDD], 16), Err(InflateError::Invalid));
+}
+
+#[test]
+fn linked_file_unc_is_high_and_local_is_medium() {
+    for (path, severity) in [("\\\\evil\\share\\a.exe", scan_common::Severity::High), ("http://evil.example/a", scan_common::Severity::High), ("C:\\docs\\a.png", scan_common::Severity::Medium)] {
+        let r = scan_bindata(0, Some(bin_data_link(path, "a")), &[]);
+        let f = finding(&r, "HWP_LINKED_FILE");
+        assert_eq!(f.severity, severity, "{path}");
+    }
+    // 연결 문서(`Type`이 EMBEDDING)는 외부 경로가 아니다.
+    let mut embedding = 1u16.to_le_bytes().to_vec();
+    embedding.extend_from_slice(&1u16.to_le_bytes());
+    embedding.extend_from_slice(&wstr_with_len("png"));
+    assert!(!scan_bindata(0, Some(record(TAG_BIN_DATA, 1, &embedding)), &[]).has("HWP_LINKED_FILE"));
+}
+
+#[test]
+fn linked_file_in_a_compressed_docinfo_is_found() {
+    let r = scan_bindata(0x1, Some(raw_deflate(&bin_data_link("\\\\evil\\s\\a", "a"))), &[]);
+    assert!(r.has("HWP_LINKED_FILE") && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn pe_in_a_compressed_bindata_is_flagged_by_content() {
+    let r = scan_bindata(0x1, None, &[("BIN0001.jpg", raw_deflate(&pe_bytes())), ("BIN0002.jpg", zlib(&pe_bytes()))]);
+    assert_eq!(r.findings.iter().filter(|f| f.code == "EMBEDDED_EXECUTABLE").count(), 2, "{:?}", r.findings);
+    assert!(r.findings.iter().all(|f| f.severity != scan_common::Severity::Low));
+}
+
+#[test]
+fn pe_with_a_png_name_is_still_flagged_and_an_exe_name_is_flagged_by_name() {
+    // 압축 비트가 없는 문서, 압축 비트가 있지만 스트림은 압축하지 않은 경우(속성 0x20), 이름만 png인 PE.
+    assert!(scan_bindata(0, None, &[("BIN0001.png", pe_bytes())]).has("EMBEDDED_EXECUTABLE"));
+    assert!(scan_bindata(0x1, None, &[("BIN0001.png", pe_bytes())]).has("EMBEDDED_EXECUTABLE"));
+    // 이름이 exe면 내용이 PNG여도 High다.
+    let r = scan_bindata(0, None, &[("BIN0001.exe", PNG.to_vec())]);
+    assert_eq!(finding(&r, "EMBEDDED_EXECUTABLE").severity, scan_common::Severity::High);
+}
+
+#[test]
+fn ole_and_eps_payloads() {
+    let mut ole = vec![0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+    ole.extend_from_slice(&[0u8; 64]);
+    let eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\n".to_vec();
+    let mut dos_eps = vec![0xC5, 0xD0, 0xD3, 0xC6];
+    dos_eps.extend_from_slice(&[0u8; 60]);
+    let r = scan_bindata(0x1, None, &[("BIN0001.ole", raw_deflate(&ole)), ("BIN0002.eps", raw_deflate(&eps)), ("BIN0003.eps", dos_eps)]);
+    assert_eq!(finding(&r, "HWP_OLE_OBJECT").severity, scan_common::Severity::High);
+    assert_eq!(finding(&r, "HWP_EPS_OBJECT").severity, scan_common::Severity::Medium);
+    assert_eq!(r.findings.iter().filter(|f| f.code == "HWP_EPS_OBJECT").count(), 2, "{:?}", r.findings);
+}
+
+#[test]
+fn plain_png_bindata_is_clean() {
+    let r = scan_bindata(0x1, Some(raw_deflate(&record(HWPTAG_BEGIN, 0, &[0u8; 8]))), &[("BIN0001.png", PNG.to_vec()), ("BIN0002.png", raw_deflate(PNG))]);
+    assert!(r.findings.is_empty() && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn decompression_bombs_are_bounded() {
+    // BinData는 앞 4KiB만 풀기 때문에 폭탄이 있어도 빠르고 미완료도 아니다.
+    let started = std::time::Instant::now();
+    let r = scan_bindata(0x1, None, &[("BIN0001.bin", raw_deflate(&vec![0u8; 64 * 1024 * 1024]))]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    assert!(!r.has("EMBEDDED_EXECUTABLE") && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+    // DocInfo는 전부 풀어야 하므로 상한을 넘으면 미완료다.
+    let r = scan_bindata(0x1, Some(raw_deflate(&vec![0u8; 20 * 1024 * 1024])), &[]);
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("DocInfo")), "{:?}", r.reasons);
+}
+
+#[test]
+fn a_docinfo_that_cannot_be_decompressed_is_incomplete() {
+    let r = scan_bindata(0x1, Some(vec![0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA]), &[]);
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("DocInfo")), "{:?}", r.reasons);
+}
