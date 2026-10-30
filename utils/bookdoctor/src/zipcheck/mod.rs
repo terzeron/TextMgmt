@@ -28,10 +28,12 @@ pub fn scan_docx_file(path: &Path, opts: &Options, sniffed: Sniffed, report: &mu
     }
     let limits = Limits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..Limits::default() };
     if fast::check(path, &limits, opts.zip_deep, report) {
-        ooxml::inspect_structure(path, &limits, report);
+        // 구조와 보안 검사가 같은 압축 해제 예산을 쓴다.
+        let mut spent = 0u64;
+        ooxml::inspect_structure(path, &limits, &mut spent, report);
         // 매크로를 허용하는 형식(.docm·.dotm)인지에 따라 `vbaProject.bin`의 심각도가 갈린다.
         let macro_enabled = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("docm") || e.eq_ignore_ascii_case("dotm"));
-        ooxml::inspect_security(path, &limits, macro_enabled, report);
+        ooxml::inspect_security(path, &limits, macro_enabled, &mut spent, report);
     }
 }
 

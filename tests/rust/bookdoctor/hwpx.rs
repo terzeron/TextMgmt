@@ -33,14 +33,15 @@ fn minimal_hwpx_has_no_findings() {
 fn missing_manifest_is_high() {
     let r = hwpx(&["Contents/content.hpf"], &[]);
     let f = finding(&r, "HWPX_NO_MANIFEST");
-    assert_eq!((f.category, f.severity), (Category::Render, Severity::High));
+    // 실제 한컴 파일로 검증하지 못한 규칙이라 기본 출력에서 숨겨지는 MEDIUM으로 둔다.
+    assert_eq!((f.category, f.severity), (Category::Render, Severity::Medium));
 }
 
 #[test]
 fn manifest_pointing_to_a_missing_section_is_high() {
     let r = hwpx(&["Contents/section0.xml"], &[]);
     let f = finding(&r, "HWPX_SECTION_MISSING");
-    assert_eq!((f.category, f.severity, f.location.as_str()), (Category::Render, Severity::High, "Contents/section0.xml"));
+    assert_eq!((f.category, f.severity, f.location.as_str()), (Category::Render, Severity::Medium, "Contents/section0.xml"));
 }
 
 #[test]
@@ -176,4 +177,20 @@ fn xml_hidden_in_a_part_with_another_extension_is_inspected_in_hwpx_too() {
     let xxe = br#"<?xml version="1.0"?><!DOCTYPE d [<!ENTITY x SYSTEM "file:///etc/passwd">]><hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">&x;</hs:sec>"#;
     let r = hwpx(&[], &[("Contents/section9.bin", xxe)]);
     assert_eq!(finding(&r, "XXE_ENTITY").severity, Severity::Critical);
+}
+
+#[test]
+fn crc_error_in_a_content_part_is_reported_not_silently_skipped() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("crc.hwpx");
+    let sec = format!(r#"<?xml version="1.0"?><hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"><!-- {} --></hs:sec>"#, " ".repeat(6000));
+    let parts: Vec<(String, Vec<u8>)> = common::minimal_hwpx_parts().into_iter().map(|(n, b)| if n == "Contents/section0.xml" { (n, sec.clone().into_bytes()) } else { (n, b) }).collect();
+    let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    common::zip_stored(&p, &refs);
+    let mut b = fs::read(&p).unwrap();
+    let at = common::data_offset(&b, "Contents/section0.xml");
+    b[at + 5000] ^= 0x01;
+    fs::write(&p, b).unwrap();
+    let r = scan_file(&p, &Options::default());
+    assert!(r.has("ZIP_CRC_MISMATCH"), "{:?} {:?}", r.findings, r.reasons);
 }

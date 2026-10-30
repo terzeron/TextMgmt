@@ -1,53 +1,111 @@
-//! OOXML(DOCX 계열) 검사. 구조(필수 부분, XML 파싱, 선언된 부분의 존재)를 본다.
-//! 압축 해제는 `epub::security::read_limited`로 상한에서 멈춘다.
+//! OOXML(DOCX 계열) 검사. 구조(필수 부분, XML 파싱, 선언된 부분의 존재)와 보안 지표를 본다.
+//! 압축 해제는 `epub::security::read_limited`로 상한에서 멈추고, 읽은 바이트는 모두 공유 예산(`spent`)에서 뺀다.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use corpus_common::reader::open_zip;
+use corpus_common::reader::{Zip, open_zip};
+use corpus_common::util::{posix_join, posix_normpath, unquote};
 use regex::Regex;
+use scan_common::sniff::{Sniffed, sniff};
 use scan_common::text::sanitize_display;
 use scan_common::{Category, FileReport, Severity};
 
+use super::fast::read_failure;
 use crate::epub::security::{Limits, TextEnc, decode_text, read_limited};
 
-/// 이게 없으면 Word 문서가 아니다.
-const REQUIRED_PARTS: [&str; 3] = ["[Content_Types].xml", "_rels/.rels", "word/document.xml"];
+/// 주 문서 부분을 가리키는 관계가 없을 때 기본으로 보는 이름.
+const DEFAULT_MAIN_PART: &str = "word/document.xml";
 
-/// 부분 하나를 상한 안에서 읽는다. 상한을 넘으면 `None`이고 미완료로 남긴다. 읽을 수 없으면 `None`이다(해제 실패는 빠른 점검이 이미 알렸다).
-fn read_part(zip: &mut corpus_common::reader::Zip, index: usize, name: &str, limits: &Limits, report: &mut FileReport) -> Option<Vec<u8>> {
-    let data = read_limited(zip, index, limits.max_member).ok()?;
-    if data.len() as u64 > limits.max_member {
-        report.mark_incomplete(&format!("{name}: part larger than max inspection size"));
+/// 부분 하나를 읽는다. 오류가 나도 그때까지 읽은 바이트를 돌려주고(CRC 오류는 본문이 온전하다) 오류 글도 돌려준다.
+fn read_partial(zip: &mut Zip, index: usize, cap: u64) -> (Vec<u8>, Option<String>) {
+    let mut entry = match zip.by_index(index) {
+        Ok(e) => e,
+        Err(e) => return (Vec::new(), Some(e.to_string())),
+    };
+    let mut data = Vec::new();
+    let result = (&mut entry).take(cap.saturating_add(1)).read_to_end(&mut data);
+    (data, result.err().map(|e| e.to_string()))
+}
+
+/// 부분 하나를 공유 예산 안에서 읽어 디코딩한다. 읽기는 남은 예산 +1바이트에서 멈추고 읽은 만큼 예산에서 뺀다(넘겨서 건너뛰는 부분도).
+/// 읽기 오류(CRC 불일치, 선언 크기 위조, 손상)는 지표와 미완료로 남긴다. 기본 모드의 빠른 점검은 앞 4KiB만 풀어 보므로 그 뒤의 오류는 여기서만 드러난다.
+pub(super) fn read_xml_part(zip: &mut Zip, index: usize, name: &str, limits: &Limits, spent: &mut u64, report: &mut FileReport) -> Option<String> {
+    let cap = limits.max_member.min(limits.max_total.saturating_sub(*spent));
+    if cap == 0 {
+        report.mark_incomplete("security scan stopped: decompression budget exhausted");
         return None;
     }
-    Some(data)
+    let (data, error) = read_partial(zip, index, cap);
+    *spent += data.len() as u64;
+    if let Some(e) = error {
+        read_failure(report, &preview(name), &e);
+        report.mark_incomplete(&format!("{}: read failed ({}); security checks for this part may be incomplete", preview(name), preview(&e)));
+        if data.is_empty() {
+            return None;
+        }
+    }
+    if data.len() as u64 > cap {
+        report.mark_incomplete(&format!("{}: part larger than the remaining inspection budget", preview(name)));
+        return None;
+    }
+    decode_xml(&data, name, report)
+}
+
+/// `_rels/.rels`의 officeDocument 관계가 가리키는 주 문서 부분 이름(앞 `/` 없이). 관계가 없거나 읽지 못하면 `None`이다.
+fn main_part_target(text: &str) -> Option<String> {
+    let doc = parse(text)?;
+    doc.descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "Relationship")
+        .find(|n| n.attribute("Type").is_some_and(|t| t.ends_with("/officeDocument")))
+        .and_then(|n| n.attribute("Target"))
+        .map(|t| unquote(t).trim_start_matches('/').to_string())
 }
 
 /// DOCX의 구조를 검사해 `report`에 더한다. ZIP으로 열리지 않으면 아무것도 하지 않는다(빠른 점검이 `NOT_ZIP`을 낸다).
-pub fn inspect_structure(path: &Path, limits: &Limits, report: &mut FileReport) {
+/// 읽은 바이트는 `spent`(보안 검사와 공유하는 예산)에서 뺀다. 부분 이름은 대소문자를 가리지 않고, 주 문서는 관계로 찾는다.
+pub fn inspect_structure(path: &Path, limits: &Limits, spent: &mut u64, report: &mut FileReport) {
     let Some(mut zip) = open_zip(path) else { return };
     let names: Vec<String> = zip.file_names().map(|r| r.map(|c| c.into_owned()).unwrap_or_else(|_| "<invalid-name>".into())).collect();
     let set: HashSet<&str> = names.iter().map(String::as_str).collect();
-    for part in REQUIRED_PARTS {
+    let mut by_lower: HashMap<String, usize> = HashMap::new();
+    for (i, n) in names.iter().enumerate() {
+        by_lower.entry(n.to_lowercase()).or_insert(i);
+    }
+
+    // 주 문서 이름은 `_rels/.rels`가 정한다.
+    let rels_index = names.iter().position(|n| n == "_rels/.rels");
+    let rels_text = rels_index.and_then(|i| read_xml_part(&mut zip, i, "_rels/.rels", limits, spent, report));
+    let main_name = rels_text.as_deref().and_then(main_part_target).unwrap_or_else(|| DEFAULT_MAIN_PART.to_string());
+    let main_index = by_lower.get(&main_name.to_lowercase()).copied();
+
+    for part in ["[Content_Types].xml", "_rels/.rels"] {
         if !set.contains(part) {
             report.push(Category::Render, Severity::High, "OOXML_NOT_DOCX", part, "필수 부분이 없다");
         }
     }
-    for part in REQUIRED_PARTS {
-        let Some(index) = names.iter().position(|n| n == part) else { continue };
-        let Some(data) = read_part(&mut zip, index, part, limits, report) else { continue };
-        let Some(text) = decode_xml(&data, part, report) else { continue };
-        let parsed = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() });
-        match parsed {
-            Err(e) => report.push(Category::Render, Severity::High, "MALFORMED_MARKUP", part, &format!("XML이 올바르지 않다: {e}")),
+    if main_index.is_none() {
+        report.push(Category::Render, Severity::High, "OOXML_NOT_DOCX", &preview(&main_name), "필수 부분이 없다");
+    }
+
+    let mut texts: Vec<(String, Option<String>)> = Vec::new();
+    texts.push(("_rels/.rels".to_string(), rels_text));
+    for (label, index) in [("[Content_Types].xml".to_string(), names.iter().position(|n| n == "[Content_Types].xml")), (main_name.clone(), main_index)] {
+        let text = index.and_then(|i| read_xml_part(&mut zip, i, &label, limits, spent, report));
+        texts.push((label, text));
+    }
+    for (part, text) in texts {
+        let Some(text) = text else { continue };
+        match roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }) {
+            Err(e) => report.push(Category::Render, Severity::High, "MALFORMED_MARKUP", &preview(&part), &format!("XML이 올바르지 않다: {e}")),
             Ok(doc) if part == "[Content_Types].xml" => {
                 for node in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "Override") {
                     let Some(declared) = node.attribute("PartName") else { continue };
                     let declared = declared.trim_start_matches('/');
-                    if !set.contains(declared) {
-                        report.push(Category::Render, Severity::Medium, "OOXML_PART_MISSING", declared, "[Content_Types].xml이 선언한 부분이 ZIP에 없다");
+                    if !by_lower.contains_key(&declared.to_lowercase()) {
+                        report.push(Category::Render, Severity::Medium, "OOXML_PART_MISSING", &preview(declared), "[Content_Types].xml이 선언한 부분이 ZIP에 없다");
                     }
                 }
             }
@@ -56,8 +114,8 @@ pub fn inspect_structure(path: &Path, limits: &Limits, report: &mut FileReport) 
     }
 }
 
-/// XML 부분의 바이트를 읽는다. UTF-16은 BOM·NUL 교차로 알아봐 변환하고(Word 같은 XML 파서가 받아들이는 인코딩이라 그대로 읽으면 검사를 피한다),
-/// UTF-32는 변환하지 못하므로 미완료로 남긴다.
+/// XML 부분의 바이트를 디코딩한다. UTF-16은 BOM·NUL 교차로 알아봐 변환하고(Word 같은 XML 파서가 받아들이는 인코딩이라 그대로 읽으면 검사를 피한다),
+/// UTF-32는 변환하지 못하므로 미완료로 남긴다. UTF-8이 아닌 바이트나 선언이 다른 인코딩은 검사는 계속하되 미완료로 남긴다.
 pub(super) fn decode_xml(data: &[u8], name: &str, report: &mut FileReport) -> Option<String> {
     let (text, enc) = decode_text(data);
     match enc {
@@ -65,68 +123,78 @@ pub(super) fn decode_xml(data: &[u8], name: &str, report: &mut FileReport) -> Op
             report.mark_incomplete(&format!("{}: UTF-32 content cannot be inspected", preview(name)));
             return None;
         }
-        // UTF-8이 아닌 바이트: 대체 문자로 읽어 검사는 계속하지만 파서마다 다르게 읽을 수 있어 완전하다고 하지 않는다.
         TextEnc::Invalid => report.mark_incomplete(&format!("{}: non-UTF-8 content cannot be reliably inspected", preview(name))),
-        _ => {
-            // 선언이 UTF-8·UTF-16·ASCII가 아니면 XML 파서는 다른 인코딩으로 읽는다. 바이트가 유효한 UTF-8이어도 읽는 결과가 다르다.
-            if let Some(declared) = declared_encoding(&text)
-                && !matches!(declared.as_str(), "utf-8" | "utf8" | "us-ascii" | "ascii" | "utf-16" | "utf16" | "utf-16le" | "utf-16be")
-            {
-                report.mark_incomplete(&format!("{}: declared encoding {} cannot be reliably inspected", preview(name), preview(&declared)));
-            }
-        }
+        _ => check_declaration(&text, enc == TextEnc::Utf16, name, report),
     }
     Some(text.strip_prefix('\u{feff}').unwrap_or(&text).to_string())
 }
 
-static XML_DECL_ENCODING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?is)^\s*(?:\x{feff})?<\?xml[^>]*?\bencoding\s*=\s*["']([^"']+)["']"#).unwrap());
+static XML_ENCODING_ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?is)\bencoding\s*=\s*["']([^"']+)["']"#).unwrap());
+/// XML 선언을 찾는 최대 글자 수. 선언이 이 안에 끝나지 않으면 읽을 수 없는 것으로 본다.
+const DECLARATION_CHARS: usize = 1024;
 
-/// XML 선언의 `encoding` 값(소문자). 선언이 없으면 `None`이다.
-fn declared_encoding(text: &str) -> Option<String> {
-    let head: String = text.chars().take(256).collect();
-    XML_DECL_ENCODING.captures(&head).map(|c| c[1].trim().to_ascii_lowercase())
+/// XML 선언(`<?xml ... ?>`) 전체를 읽어 인코딩 선언을 확인한다. 고정 창만 보면 속성을 뒤로 밀어 피할 수 있다.
+fn check_declaration(text: &str, bytes_are_utf16: bool, name: &str, report: &mut FileReport) {
+    let t = text.strip_prefix('\u{feff}').unwrap_or(text).trim_start();
+    if !t.starts_with("<?xml") {
+        return;
+    }
+    let head: String = t.chars().take(DECLARATION_CHARS).collect();
+    let Some(end) = head.find("?>") else {
+        report.mark_incomplete(&format!("{}: XML declaration is not terminated within {DECLARATION_CHARS} characters", preview(name)));
+        return;
+    };
+    let Some(caps) = XML_ENCODING_ATTR.captures(&head[..end]) else { return };
+    let declared = caps[1].trim().to_ascii_lowercase();
+    match declared.as_str() {
+        "utf-8" | "utf8" | "us-ascii" | "ascii" => {}
+        "utf-16" | "utf16" | "utf-16le" | "utf-16be" => {
+            if !bytes_are_utf16 {
+                report.mark_incomplete(&format!("{}: declares UTF-16 but the bytes are not UTF-16", preview(name)));
+            }
+        }
+        other => report.mark_incomplete(&format!("{}: declared encoding {} cannot be reliably inspected", preview(name), preview(other))),
+    }
 }
 
 /// 이름이 `.xml`·`.rels`·`.hpf`가 아니어도 내용이 XML처럼 보이는가. OPC는 부분의 종류를 확장자가 아니라 content type으로 정하므로
-/// 확장자만 믿으면 `.dat`나 확장자 없는 이름에 숨긴 XML을 놓친다. 앞 256바이트만 본다: UTF-8 BOM과 공백 뒤 `<`,
-/// UTF-16 BOM, BOM 없는 UTF-16의 `3C 00`·`00 3C`(XML 부록 F).
+/// 확장자만 믿으면 `.dat`나 확장자 없는 이름에 숨긴 XML을 놓친다. 앞부분만 본다: UTF-8 BOM과 공백 뒤 `<`, UTF-16 BOM,
+/// BOM 없는 UTF-16의 `3C 00`·`00 3C`(XML 부록 F). 앞부분이 전부 공백이면 `<`가 더 뒤에 있을 수 있으므로 후보로 본다.
 pub(super) fn looks_like_xml(prefix: &[u8]) -> bool {
     if prefix.starts_with(&[0xFF, 0xFE]) || prefix.starts_with(&[0xFE, 0xFF]) || prefix.starts_with(&[0x3C, 0x00]) || prefix.starts_with(&[0x00, 0x3C]) {
         return true;
     }
     let body = prefix.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(prefix);
-    body.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<')
+    match body.iter().find(|b| !b.is_ascii_whitespace()) {
+        Some(b) => *b == b'<',
+        None => !body.is_empty(),
+    }
 }
 
-/// 검사할 XML 부분인가: 확장자가 XML 계열이거나 내용이 XML처럼 보인다.
-pub(super) fn is_xml_member(zip: &mut corpus_common::reader::Zip, index: usize, name: &str) -> bool {
+/// 부분의 종류. 확장자가 XML 계열이거나 내용이 XML처럼 보이면 `Xml`, OLE 복합 파일 매직이면 `Ole`이다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Member {
+    Xml,
+    Ole,
+    Other,
+}
+
+/// 부분의 종류를 정한다. 이름이 XML 계열이 아니면 앞 256바이트를 풀어 내용으로 정한다(읽기 오류는 빠른 점검이 이미 알린 것으로 보고 `Other`다).
+pub(super) fn classify_member(zip: &mut Zip, index: usize, name: &str) -> Member {
     if is_xml_part(name) {
-        return true;
+        return Member::Xml;
     }
     if name.ends_with('/') {
-        return false;
+        return Member::Other;
     }
-    read_limited(zip, index, 256).is_ok_and(|prefix| looks_like_xml(&prefix))
+    match read_limited(zip, index, 256) {
+        Ok(prefix) if sniff(&prefix) == Sniffed::Ole => Member::Ole,
+        Ok(prefix) if looks_like_xml(&prefix) => Member::Xml,
+        _ => Member::Other,
+    }
 }
 
-/// 보안 검사용으로 XML 부분 하나를 읽어 디코딩한다. 읽기는 남은 예산 +1바이트에서 멈추고, 예산을 넘으면 미완료로 남긴다.
-pub(super) fn read_xml_part(zip: &mut corpus_common::reader::Zip, index: usize, name: &str, limits: &Limits, spent: &mut u64, report: &mut FileReport) -> Option<String> {
-    let cap = limits.max_member.min(limits.max_total.saturating_sub(*spent));
-    if cap == 0 {
-        report.mark_incomplete("security scan stopped: decompression budget exhausted");
-        return None;
-    }
-    let data = read_limited(zip, index, cap).ok()?;
-    // 예산을 넘겨 건너뛰는 부분도 읽은 만큼 예산에서 뺀다. 안 빼면 부분마다 다시 같은 만큼 풀 수 있다.
-    *spent += data.len() as u64;
-    if data.len() as u64 > cap {
-        report.mark_incomplete(&format!("{}: part larger than the remaining inspection budget", preview(name)));
-        return None;
-    }
-    decode_xml(&data, name, report)
-}
-
-/// 이름이 XML 부분(`.xml`·`.rels`, 대소문자 무시)인가. OPC 부분 이름은 대소문자를 가리지 않고 본문이 `word/` 밖에 있을 수도 있어 디렉터리로 고르지 않는다.
+/// 이름이 XML 부분(`.xml`·`.rels`·`.hpf`, 대소문자 무시)인가.
 pub(super) fn is_xml_part(name: &str) -> bool {
     let lower = name.to_lowercase();
     lower.ends_with(".xml") || lower.ends_with(".rels") || lower.ends_with(".hpf")
@@ -210,33 +278,103 @@ pub(super) fn parse(text: &str) -> Option<roxmltree::Document<'_>> {
     roxmltree::Document::parse_with_options(text.strip_prefix('\u{feff}').unwrap_or(text), roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).ok()
 }
 
-/// 대상이 UNC 경로(`\\host\share`)나 `file:`인가. 열면 NTLM 해시가 새거나 로컬 파일을 읽는다.
-fn is_unc_or_file(target: &str) -> bool {
-    let t = target.trim().to_ascii_lowercase();
-    t.starts_with("\\\\") || t.starts_with("file:")
+/// 관계·필드 대상이 어디를 가리키는가.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Target {
+    /// 원격: URL(`http:` 등), UNC(`\\\\host\\share`), 호스트가 있는 `file://host/...`. 열면 네트워크에 닿고 UNC·file 호스트는 NTLM 해시가 샌다.
+    Remote { unc: bool },
+    /// 로컬 `file:` 경로(`file:///C:/...`).
+    LocalFile,
+    /// 상대 경로나 그 밖의 것.
+    Other,
 }
 
-/// 관계 파일(`.rels`)의 외부 참조를 본다. 일반 하이퍼링크는 지표를 내지 않는다.
-fn check_relationships(doc: &roxmltree::Document, name: &str, report: &mut FileReport) {
+static SCHEME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^([a-z][a-z0-9+.-]*):").unwrap());
+
+fn target_kind(target: &str) -> Target {
+    let t = target.trim();
+    if t.starts_with("\\\\") {
+        return Target::Remote { unc: true };
+    }
+    let lower = t.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("file:") {
+        return match rest.strip_prefix("//") {
+            Some(after) => {
+                let authority = after.split('/').next().unwrap_or("");
+                if authority.is_empty() || authority == "localhost" { Target::LocalFile } else { Target::Remote { unc: true } }
+            }
+            None => Target::LocalFile,
+        };
+    }
+    if SCHEME.is_match(&lower) && lower.contains("://") { Target::Remote { unc: false } } else { Target::Other }
+}
+
+/// 관계 파일 이름과 `Target`으로 가리키는 부분의 이름을 구한다(내부 관계). `word/_rels/document.xml.rels`의 기준 디렉터리는 `word`다.
+fn resolve_target(rels_name: &str, target: &str) -> String {
+    let base = rels_name.to_lowercase().rfind("/_rels/").map_or(String::new(), |i| rels_name[..i].to_string());
+    let target = unquote(target);
+    if let Some(rooted) = target.strip_prefix('/') {
+        return posix_normpath(rooted);
+    }
+    posix_normpath(&posix_join(&base, &target))
+}
+
+/// 관계 파일(`.rels`)을 본다. 외부 참조(원격 템플릿, 외부 객체, UNC)와 내부 관계의 종류(매크로 프로젝트, OLE, ActiveX, 패키지)를 종류로 정한다.
+/// Word는 부분 이름이 아니라 관계 종류와 content type으로 부분을 해석하므로 이름만 보면 이름을 바꿔 피할 수 있다. 일반 하이퍼링크는 지표를 내지 않는다.
+fn check_relationships(doc: &roxmltree::Document, name: &str, macro_enabled: bool, report: &mut FileReport) {
     let shown = preview(name);
     for rel in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "Relationship") {
         let external = rel.attribute("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
-        if !external {
-            continue;
-        }
         let ty = rel.attribute("Type").unwrap_or("").rsplit('/').next().unwrap_or("");
         let target = rel.attribute("Target").unwrap_or("");
         let detail = preview(&format!("{ty} -> {target}"));
+        if !external {
+            let part = preview(&resolve_target(name, target));
+            match ty {
+                "vbaProject" => {
+                    let (severity, why) = if macro_enabled { (Severity::High, "VBA macro project in a macro-enabled document") } else { (Severity::Critical, "VBA macro project inside a macro-free format (disguised macro document)") };
+                    push_once(report, severity, "OOXML_VBA_PROJECT", &part, why);
+                }
+                "oleObject" => push_once(report, Severity::High, "OOXML_OLE_OBJECT", &part, "Embedded OLE object"),
+                "control" => push_once(report, Severity::High, "OOXML_ACTIVEX", &part, "ActiveX control part"),
+                "package" => push_once(report, Severity::Medium, "OOXML_EMBEDDED_PACKAGE", &part, "Embedded Office package (not inspected recursively yet)"),
+                _ => {}
+            }
+            continue;
+        }
+        let kind = target_kind(target);
         match ty {
-            "attachedTemplate" => push_once(report, Severity::Critical, "OOXML_REMOTE_TEMPLATE", &shown, &detail),
+            // 원격 템플릿은 열 때 가져온다(T1221). 로컬 경로의 템플릿은 사용자가 만든 문서에 흔하다.
+            "attachedTemplate" if matches!(kind, Target::Remote { .. }) => push_once(report, Severity::Critical, "OOXML_REMOTE_TEMPLATE", &shown, &detail),
+            "attachedTemplate" => push_once(report, Severity::Low, "OOXML_LOCAL_TEMPLATE", &shown, &detail),
             "oleObject" | "subDocument" | "frame" | "externalLinkPath" => push_once(report, Severity::High, "OOXML_EXTERNAL_OBJECT", &shown, &detail),
             "image" => push_once(report, Severity::Medium, "OOXML_EXTERNAL_IMAGE", &shown, &detail),
             _ => {}
         }
-        if is_unc_or_file(target) {
-            push_once(report, Severity::High, "OOXML_UNC_TARGET", &shown, &detail);
+        match kind {
+            Target::Remote { unc: true } => push_once(report, Severity::High, "OOXML_UNC_TARGET", &shown, &detail),
+            Target::LocalFile if ty != "attachedTemplate" => push_once(report, Severity::Low, "OOXML_LOCAL_FILE_TARGET", &shown, &detail),
+            _ => {}
         }
     }
+}
+
+/// UNC 경로가 토큰 맨 앞에 오는가. Word 지시문은 역슬래시를 두 배로 쓰므로 `"\\\\host`와 `"\\host`를 모두 본다.
+/// 로컬 경로의 `c:\\dir`는 `:` 뒤에 오므로 맞지 않는다.
+static FIELD_UNC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?:^|["'\s])\\{2,4}[A-Za-z0-9_.$-]"#).unwrap());
+static FIELD_URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\b([a-z][a-z0-9+.-]*)://([^\s"'/]*)"#).unwrap());
+
+/// 지시문이 가리키는 원격 대상. 원격이 아니면 `None`이다. 두 번째 값은 UNC·file 호스트(NTLM 해시가 새는 대상)인지다.
+fn field_remote(instr: &str) -> Option<bool> {
+    if FIELD_UNC.is_match(instr) {
+        return Some(true);
+    }
+    let caps = FIELD_URL.captures(instr)?;
+    if caps[1].eq_ignore_ascii_case("file") {
+        let authority = caps[2].to_ascii_lowercase();
+        return if authority.is_empty() || authority == "localhost" { None } else { Some(true) };
+    }
+    Some(false)
 }
 
 fn classify_field(instr: &str, name: &str, report: &mut FileReport) {
@@ -245,23 +383,33 @@ fn classify_field(instr: &str, name: &str, report: &mut FileReport) {
     match word.as_str() {
         "DDEAUTO" | "DDE" => push_once(report, Severity::Critical, "OOXML_DDE_FIELD", &shown, &preview(instr.trim())),
         "INCLUDETEXT" | "INCLUDEPICTURE" | "LINK" | "IMPORT" => {
-            let lower = instr.to_ascii_lowercase();
-            if lower.contains("://") || lower.contains("\\\\") || lower.contains("file:") {
-                push_once(report, Severity::High, "OOXML_DANGEROUS_FIELD", &shown, &preview(instr.trim()));
-            }
+            let Some(unc) = field_remote(instr) else { return };
+            // 브라우저에서 붙여 넣은 그림은 Word가 `INCLUDEPICTURE "https://..."`로 쓴다. http(s)는 MEDIUM이고 UNC·file 호스트와 텍스트·링크 포함은 HIGH다.
+            let severity = if word == "INCLUDEPICTURE" && !unc { Severity::Medium } else { Severity::High };
+            push_once(report, severity, "OOXML_DANGEROUS_FIELD", &shown, &preview(instr.trim()));
         }
         _ => {}
     }
 }
 
-/// 중첩 필드 추적 깊이와 이어 붙이는 지시문 길이의 상한. 깊게 중첩된 필드가 안쪽 텍스트를 바깥마다 복사하면 제곱 시간이 든다.
+/// 중첩 필드 추적 깊이와 이어 붙이는 지시문 길이(바이트)의 상한. 깊게 중첩된 필드가 안쪽 텍스트를 바깥마다 복사하면 제곱 시간이 든다.
+/// 정상 문서의 긴 지시문(참고문헌 관리자의 `ADDIN ... CSL_CITATION {...}`은 수십 KB까지 간다)을 담을 만큼 크게 잡는다.
 const MAX_FIELD_DEPTH: usize = 32;
-const MAX_FIELD_TEXT: usize = 4096;
+const MAX_FIELD_TEXT: usize = 64 * 1024;
 
-/// `dst`에 `src`를 `MAX_FIELD_TEXT`까지만 이어 붙인다(키워드와 URL을 읽는 데는 앞부분이면 충분하다).
-fn push_capped(dst: &mut String, src: &str) {
-    let room = MAX_FIELD_TEXT.saturating_sub(dst.chars().count());
-    dst.extend(src.chars().take(room));
+/// `dst`에 `src`를 `MAX_FIELD_TEXT`바이트까지만 이어 붙인다. 잘렸으면 `true`다(글자 경계에서 자른다).
+fn push_capped(dst: &mut String, src: &str) -> bool {
+    let room = MAX_FIELD_TEXT.saturating_sub(dst.len());
+    if src.len() <= room {
+        dst.push_str(src);
+        return false;
+    }
+    let mut end = room;
+    while !src.is_char_boundary(end) {
+        end -= 1;
+    }
+    dst.push_str(&src[..end]);
+    true
 }
 
 /// 열려 있는 필드 하나. 지시문은 여러 run에 나뉘고 다른 필드를 품을 수 있다.
@@ -274,6 +422,8 @@ struct OpenField {
     nested: bool,
     /// 지시문 키워드 자리(맨 앞)에서 안쪽 필드가 시작했다: 키워드를 계산해서 숨기는 방식이다.
     nested_at_keyword: bool,
+    /// 지시문이 상한에서 잘렸다. 뒤쪽은 분석하지 못했다.
+    truncated: bool,
 }
 
 fn finish_field(field: OpenField, name: &str, report: &mut FileReport) {
@@ -284,6 +434,9 @@ fn finish_field(field: OpenField, name: &str, report: &mut FileReport) {
         if field.nested_at_keyword {
             push_once(report, Severity::High, "OOXML_COMPUTED_FIELD", &preview(name), "Field type is computed by a nested field (DDE obfuscation pattern)");
         }
+    }
+    if field.truncated {
+        report.mark_incomplete(&format!("{}: field instruction truncated at {MAX_FIELD_TEXT} bytes; the rest was not analyzed", preview(name)));
     }
 }
 
@@ -307,7 +460,7 @@ fn check_fields(doc: &roxmltree::Document, name: &str, report: &mut FileReport) 
                 Some("end") => {
                     if let Some(field) = stack.pop() {
                         if let Some(parent) = stack.last_mut() {
-                            push_capped(&mut parent.all, &field.all);
+                            parent.truncated |= push_capped(&mut parent.all, &field.all);
                         }
                         finish_field(field, name, report);
                     }
@@ -317,8 +470,8 @@ fn check_fields(doc: &roxmltree::Document, name: &str, report: &mut FileReport) 
             "instrText" => {
                 if let Some(top) = stack.last_mut() {
                     let t = node.text().unwrap_or("");
-                    push_capped(&mut top.own, t);
-                    push_capped(&mut top.all, t);
+                    top.truncated |= push_capped(&mut top.own, t);
+                    top.truncated |= push_capped(&mut top.all, t);
                 }
             }
             "fldSimple" => {
@@ -334,29 +487,58 @@ fn check_fields(doc: &roxmltree::Document, name: &str, report: &mut FileReport) 
     }
 }
 
-/// DOCX 계열의 보안 지표를 `report`에 더한다. 압축 해제는 남은 예산 안에서만 한다. 예산을 넘는 부분은 미완료로 남긴다.
-pub fn inspect_security(path: &Path, limits: &Limits, macro_enabled: bool, report: &mut FileReport) {
+/// 검사 우선순위: 관계 파일, `word/` 아래 XML, 그 밖의 XML, 이름으로는 XML이 아닌 부분 순이다. 부분 수 상한에 걸려도 주 문서와 관계가 먼저 검사되도록 한다.
+fn scan_priority(name: &str) -> u8 {
+    let lower = name.to_lowercase();
+    if lower.ends_with(".rels") {
+        0
+    } else if lower.starts_with("word/") && is_xml_part(name) {
+        1
+    } else if is_xml_part(name) {
+        2
+    } else {
+        3
+    }
+}
+
+/// DOCX 계열의 보안 지표를 `report`에 더한다. 압축 해제는 공유 예산(`spent`) 안에서만 하고, 읽을 항목은 `limits.max_files`개까지다.
+/// 상한을 넘는 항목과 예산을 넘는 부분은 미완료로 남긴다.
+pub fn inspect_security(path: &Path, limits: &Limits, macro_enabled: bool, spent: &mut u64, report: &mut FileReport) {
     let Some(mut zip) = open_zip(path) else { return };
-    let names: Vec<String> = zip.file_names().map(|r| r.map(|c| c.into_owned()).unwrap_or_else(|_| "<invalid-name>".into())).collect();
+    let all: Vec<String> = zip.file_names().map(|r| r.map(|c| c.into_owned()).unwrap_or_else(|_| "<invalid-name>".into())).collect();
+    if all.len() > limits.max_files {
+        report.mark_incomplete(&format!("security scan limited to the first {} of {} entries", limits.max_files, all.len()));
+    }
+    let names: Vec<String> = all.into_iter().take(limits.max_files).collect();
     check_part_names(&names, macro_enabled, report);
-    let mut spent = 0u64;
+    let mut order: Vec<usize> = (0..names.len()).collect();
+    order.sort_by_key(|&i| scan_priority(&names[i]));
     let mut scanned = 0usize;
-    for (index, name) in names.iter().enumerate() {
-        if !is_xml_member(&mut zip, index, name) {
-            continue;
+    for index in order {
+        let name = &names[index];
+        match classify_member(&mut zip, index, name) {
+            Member::Other => continue,
+            Member::Ole => {
+                // 매크로 프로젝트는 위의 이름 규칙·관계 규칙이 이미 `OOXML_VBA_PROJECT`로 낸다.
+                if !name.to_lowercase().ends_with("vbaproject.bin") {
+                    push_once(report, Severity::High, "OOXML_OLE_OBJECT", &preview(name), "OLE compound file content");
+                }
+                continue;
+            }
+            Member::Xml => {}
         }
         scanned += 1;
         if scanned > MAX_PARTS_SCANNED {
             report.mark_incomplete(&format!("security scan stopped after {MAX_PARTS_SCANNED} XML parts"));
             break;
         }
-        let Some(text) = read_xml_part(&mut zip, index, name, limits, &mut spent, report) else { continue };
+        let Some(text) = read_xml_part(&mut zip, index, name, limits, spent, report) else { continue };
         check_xml_attacks(&text, name, report);
         // 모든 XML 부분을 파싱하고, 파싱하지 못하면 미완료로 남긴다(필드 표지가 없어도 건너뛰지 않는다).
         let Some(doc) = parse_or_note(&text, name, report) else { continue };
         // 이름이 `.rels`가 아니어도 루트가 `Relationships`면 관계 파일로 읽는다(이름으로 숨긴 경우).
         if name.to_lowercase().ends_with(".rels") || doc.root_element().tag_name().name() == "Relationships" {
-            check_relationships(&doc, name, report);
+            check_relationships(&doc, name, macro_enabled, report);
         } else {
             check_fields(&doc, name, report);
         }

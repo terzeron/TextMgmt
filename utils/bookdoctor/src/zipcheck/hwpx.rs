@@ -8,7 +8,7 @@ use corpus_common::reader::open_zip;
 use corpus_common::util::unquote;
 use scan_common::{Category, FileReport, Severity};
 
-use super::ooxml::{check_xml_attacks, is_xml_member, parse, preview, push_once, read_xml_part};
+use super::ooxml::{Member, check_xml_attacks, classify_member, parse, preview, push_once, read_xml_part};
 use crate::epub::security::{Limits, read_limited};
 
 const MANIFEST: &str = "Contents/content.hpf";
@@ -30,7 +30,7 @@ fn check_manifest(text: &str, set: &HashSet<&str>, report: &mut FileReport) {
         }
         let rooted = format!("Contents/{href}");
         if !set.contains(href.as_str()) && !set.contains(rooted.as_str()) {
-            push_render(report, Severity::High, "HWPX_SECTION_MISSING", &href, "매니페스트가 가리키는 섹션이 ZIP에 없다");
+            push_render(report, Severity::Medium, "HWPX_SECTION_MISSING", &href, "매니페스트가 가리키는 섹션이 ZIP에 없다");
         }
     }
 }
@@ -46,6 +46,9 @@ pub fn inspect(path: &Path, limits: &Limits, report: &mut FileReport) {
     let Some(mut zip) = open_zip(path) else { return };
     let names: Vec<String> = zip.file_names().map(|r| r.map(|c| c.into_owned()).unwrap_or_else(|_| "<invalid-name>".into())).collect();
     let set: HashSet<&str> = names.iter().map(String::as_str).collect();
+    if names.len() > limits.max_files {
+        report.mark_incomplete(&format!("scan limited to the first {} of {} entries", limits.max_files, names.len()));
+    }
 
     // mimetype은 없어도 허용한다. 있는데 hwp·owpml이 아니면 다른 종류의 파일이다.
     if let Some(i) = names.iter().position(|n| n == "mimetype")
@@ -57,11 +60,12 @@ pub fn inspect(path: &Path, limits: &Limits, report: &mut FileReport) {
         }
     }
     if !set.contains(MANIFEST) {
-        push_render(report, Severity::High, "HWPX_NO_MANIFEST", MANIFEST, "패키지 매니페스트가 없다");
+        // 실제 한컴 파일로 검증하지 못한 규칙이라 기본 출력에서 숨겨지는 MEDIUM으로 둔다.
+        push_render(report, Severity::Medium, "HWPX_NO_MANIFEST", MANIFEST, "패키지 매니페스트가 없다");
     }
 
     // BinData: 내장 OLE 객체. 실행 파일은 빠른 점검이 이름·매직으로 이미 본다.
-    for (i, name) in names.iter().enumerate().filter(|(_, n)| n.to_lowercase().starts_with("bindata/")) {
+    for (i, name) in names.iter().enumerate().take(limits.max_files).filter(|(_, n)| n.to_lowercase().starts_with("bindata/")) {
         let ole_name = name.to_lowercase().ends_with(".ole");
         let ole_magic = !ole_name && read_limited(&mut zip, i, OLE_MAGIC.len() as u64).is_ok_and(|d| d.starts_with(&OLE_MAGIC));
         if ole_name || ole_magic {
@@ -72,9 +76,9 @@ pub fn inspect(path: &Path, limits: &Limits, report: &mut FileReport) {
     // XML 부분: 파싱, 매니페스트 확인, DTD·엔티티 공격. 읽기는 남은 예산에서 멈춘다.
     let mut spent = 0u64;
     let mut scanned = 0usize;
-    for (index, name) in names.iter().enumerate() {
-        // 이름의 대소문자와 디렉터리를 가리지 않고 모든 XML 부분을 본다(OPC 부분 이름은 대소문자를 가리지 않는다).
-        if !is_xml_member(&mut zip, index, name) {
+    for (index, name) in names.iter().enumerate().take(limits.max_files) {
+        // 이름의 대소문자와 디렉터리를 가리지 않고, 확장자와 무관하게 내용이 XML인 부분도 본다.
+        if classify_member(&mut zip, index, name) != Member::Xml {
             continue;
         }
         scanned += 1;

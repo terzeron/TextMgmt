@@ -87,11 +87,21 @@ fn run(shared: &Shared, paths: &[PathBuf], ahead_files: usize, ahead_bytes: u64,
     let mut buf = vec![0u8; CHUNK];
     while !shared.stop.load(Ordering::Relaxed) && next < paths.len() {
         let done = shared.done.load(Ordering::SeqCst);
+        // 소비자가 이미 지나간 파일은 다시 읽지 않는다. 뒤처졌다면 소비자 위치로 건너뛴다.
+        next = next.max(done);
+        if next >= paths.len() {
+            break;
+        }
         while inflight.front().is_some_and(|(i, _)| *i < done) {
             inflight.pop_front();
         }
         if next >= done.saturating_add(ahead_files) {
             wait(shared);
+            continue;
+        }
+        // 실행 파일 확장자는 검사기가 머리만 읽으므로 통째로 미리 읽을 이유가 없다.
+        if paths[next].extension().is_some_and(|e| crate::exe::is_exec_extension(&e.to_string_lossy())) {
+            next += 1;
             continue;
         }
         // 일반 파일만 읽는다. FIFO·장치는 열기만 해도 멈출 수 있고 디렉터리는 읽을 것이 없다.

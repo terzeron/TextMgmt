@@ -20,6 +20,7 @@ const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers 
 const WINDOW_PER_WORKER: usize = 8;
 
 /// 선읽기 한도: 소비자보다 이만큼(파일 수, 바이트)까지만 앞서가고, 이보다 큰 파일은 미리 읽지 않는다.
+/// 소비자는 한 창(워커 수 × `WINDOW_PER_WORKER`개)이 끝나야 처리한 수를 알리므로, 한 창을 넘어서 읽을 수 있게 창 크기를 더해 준다.
 const PREFETCH_FILES: usize = 16;
 const PREFETCH_BYTES: u64 = 512 * 1024 * 1024;
 const PREFETCH_MAX_FILE: u64 = 128 * 1024 * 1024;
@@ -175,7 +176,7 @@ fn scan(opts: &Options, out: &mut dyn Write, color: bool) -> io::Result<i32> {
     let workers = effective_workers(opts);
     let pool = pool(workers);
     // 처리한 파일 수를 선읽기 스레드에 알려 소비자보다 너무 앞서가지 않게 한다. 파일이 하나뿐이면 겹칠 것이 없다.
-    let prefetcher = (opts.prefetch && paths.len() > 1).then(|| Prefetcher::start(paths.clone(), PREFETCH_FILES, PREFETCH_BYTES, PREFETCH_MAX_FILE));
+    let prefetcher = (opts.prefetch && paths.len() > 1).then(|| Prefetcher::start(paths.clone(), PREFETCH_FILES + workers * WINDOW_PER_WORKER, PREFETCH_BYTES, PREFETCH_MAX_FILE));
     let mut emitted = 0usize;
     let mut agg = Aggregate::new();
     let summary = scan_streaming(

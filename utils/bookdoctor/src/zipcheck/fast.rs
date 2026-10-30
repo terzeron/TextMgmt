@@ -13,8 +13,15 @@ use scan_common::text::sanitize_display;
 use scan_common::{Category, FileReport, Severity};
 use zip::CompressionMethod;
 
-use crate::epub::security::{EXEC_EXTS, Limits, directory_limit_note, read_limited};
+use crate::epub::security::{Limits, directory_limit_note, read_limited, zip_directory_bounds};
 use crate::zipnames;
+
+/// ZIP 안에서 이름만으로 실행 파일로 보는 확장자. EPUB 목록에서 데이터로 흔한 `bin`을 빼고(내용이 실행 파일이면 매직 검사가 잡는다),
+/// EPUB은 따로 다루지만 ZIP·문서 패키지에서는 흔한 전달 수단인 `js`, 디스크 이미지, 설치·도움말 형식을 더했다.
+pub(crate) const ZIP_EXEC_EXTS: &[&str] = &[
+    "exe", "dll", "scr", "com", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "jse", "wsf", "wsh", "hta", "msi", "msp", "jar", "lnk", "reg", "cpl", "sh", "bash", "zsh", "py", "pl", "rb", "php", "apk", "app", "dmg", "so", "dylib", "run", "swf", "class", "js",
+    "pif", "msc", "scf", "url", "iso", "img", "vhd", "vhdx", "chm", "xll", "wsc", "one", "appx", "msix",
+];
 
 /// 멤버마다 풀어 보는 앞부분의 바이트 수.
 pub const PROBE_BYTES: usize = 4096;
@@ -26,14 +33,19 @@ fn extension(name: &str) -> String {
 }
 
 /// 읽기 오류를 CRC 불일치, 선언 크기 위조, 그 밖의 해제 실패로 가른다. zip crate는 선언 크기를 넘어 읽으면 오류를 낸다.
-fn read_failure(report: &mut FileReport, shown: &str, error: &str) {
+pub(super) fn read_failure(report: &mut FileReport, shown: &str, error: &str) {
     let lower = error.to_lowercase();
-    if lower.contains("larger than its declared") {
-        report.push(Category::Security, Severity::High, "ZIP_SIZE_MISMATCH", shown, "Declared size is smaller than the data it yields");
-        return;
+    let (category, code, detail) = if lower.contains("larger than its declared") {
+        (Category::Security, "ZIP_SIZE_MISMATCH", "Declared size is smaller than the data it yields")
+    } else if lower.contains("checksum") {
+        (Category::Defect, "ZIP_CRC_MISMATCH", error)
+    } else {
+        (Category::Defect, "ZIP_ENTRY_UNREADABLE", error)
+    };
+    // 같은 멤버의 같은 오류는 한 번만 낸다(빠른 점검과 보안 검사가 같은 부분을 읽는다).
+    if !report.findings.iter().any(|f| f.code == code && f.location == shown) {
+        report.push(category, Severity::High, code, shown, detail);
     }
-    let code = if lower.contains("checksum") { "ZIP_CRC_MISMATCH" } else { "ZIP_ENTRY_UNREADABLE" };
-    report.push(Category::Defect, Severity::High, code, shown, error);
 }
 
 /// 디코딩한 이름이 있으면 그것을, 디코딩에 실패했으면 원본 바이트의 손실 변환을 이름으로 쓴다. 둘째 값은 디코딩 실패 여부다.
@@ -57,6 +69,13 @@ pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) 
     let count = zip.len();
     if count > limits.max_files {
         report.mark_incomplete(&format!("Too many entries: {count} (max {})", limits.max_files));
+    }
+    // zip crate는 같은 이름의 멤버를 하나로 합쳐 앞 사본을 보여 주지 않는다. 중앙 디렉터리가 알리는 항목 수와 다르면 가려진 멤버가 있다.
+    if let Some((entries, _)) = zip_directory_bounds(path)
+        && entries != count as u64
+    {
+        report.push(Category::Security, Severity::High, "ZIP_DUPLICATE_NAME", "", &format!("The directory lists {entries} entries but the reader sees {count}: duplicate names hide members"));
+        report.mark_incomplete("duplicate member names: only one copy of each name could be inspected");
     }
     let mut raw = File::open(path).ok();
     let mut spent = 0u64;
@@ -117,7 +136,7 @@ pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) 
         }
         let mut flagged_exec = false;
         let ext = extension(&name);
-        if EXEC_EXTS.contains(&ext.as_str()) {
+        if ZIP_EXEC_EXTS.contains(&ext.as_str()) {
             flagged_exec = true;
             report.push(Category::Security, Severity::High, "EMBEDDED_EXECUTABLE", &shown, &format!("Executable/script file type: .{ext}"));
         }

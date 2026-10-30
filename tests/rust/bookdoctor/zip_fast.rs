@@ -286,3 +286,62 @@ fn honest_headers_never_get_a_size_mismatch() {
         assert!(!scan(&path).has("ZIP_SIZE_MISMATCH") && !deep(&path).has("ZIP_SIZE_MISMATCH"), "{name}");
     }
 }
+
+// --- 최종 리뷰: 실행 파일 확장자, .bin, 중복 이름 ---
+
+#[test]
+fn common_dropper_types_in_a_zip_are_flagged_by_name() {
+    for name in ["invoice.js", "a.pif", "a.msc", "a.scf", "a.url", "a.iso", "a.img", "a.vhd", "a.vhdx", "a.chm", "a.xll", "a.wsc", "a.one", "a.appx", "a.msix", "a.exe", "a.lnk"] {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("z.zip");
+        common::zip_of(&p, &[(name, b"payload")]);
+        let r = scan(&p);
+        assert!(r.findings.iter().any(|f| f.code == "EMBEDDED_EXECUTABLE" && f.location == name), "{name}: {:?}", r.findings);
+    }
+}
+
+#[test]
+fn bin_members_are_data_unless_their_content_is_executable() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("z.zip");
+    common::zip_of(&p, &[("printerSettings1.bin", b"\x01\x02 plain data"), ("a.bin", b"data")]);
+    assert!(scan(&p).findings.is_empty());
+    let mut pe = vec![0u8; 0x100];
+    pe[..2].copy_from_slice(b"MZ");
+    pe[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
+    pe[0x40..0x44].copy_from_slice(b"PE\0\0");
+    let q = d.path().join("pe.zip");
+    common::zip_of(&q, &[("real.bin", &pe)]);
+    assert!(scan(&q).has("EMBEDDED_EXECUTABLE"));
+}
+
+#[test]
+fn duplicate_member_names_are_reported_because_the_zip_crate_hides_one_copy() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("dup.zip");
+    let mut pe = vec![0u8; 0x100];
+    pe[..2].copy_from_slice(b"MZ");
+    pe[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
+    pe[0x40..0x44].copy_from_slice(b"PE\0\0");
+    common::zip_of(&p, &[("readmeA.txt", &pe), ("readmeB.txt", b"hello")]);
+    let mut b = fs::read(&p).unwrap();
+    let mut from = 0;
+    while let Some(at) = b[from..].windows(11).position(|w| w == b"readmeB.txt") {
+        let at = from + at;
+        b[at..at + 11].copy_from_slice(b"readmeA.txt");
+        from = at + 11;
+    }
+    fs::write(&p, b).unwrap();
+    let r = scan(&p);
+    let f = finding(&r, "ZIP_DUPLICATE_NAME");
+    assert_eq!((f.category, f.severity), (Category::Security, Severity::High));
+    assert!(r.incomplete, "한쪽 사본을 못 본 검사는 완전하다고 할 수 없다");
+}
+
+#[test]
+fn archives_without_duplicates_never_get_the_duplicate_finding() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("ok.zip");
+    common::zip_of(&p, &[("a.txt", b"a"), ("dir/", b""), ("dir/b.txt", b"b")]);
+    assert!(!scan(&p).has("ZIP_DUPLICATE_NAME"));
+}

@@ -69,7 +69,7 @@ const MAX_DIRECTORY_BYTES: u64 = 256 * 1024 * 1024;
 
 /// 파일 끝의 EOCD(zip64 포함)에서 항목 수와 중앙 디렉터리 크기를 읽는다. 열기 전에 거대한 디렉터리를 거르려는 용도다.
 /// 알아보지 못하면 None이고, 그때는 평소처럼 연다.
-fn zip_directory_bounds(path: &Path) -> Option<(u64, u64)> {
+pub(crate) fn zip_directory_bounds(path: &Path) -> Option<(u64, u64)> {
     const TAIL: u64 = 22 + 65_535;
     let mut f = File::open(path).ok()?;
     let len = f.metadata().ok()?.len();

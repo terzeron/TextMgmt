@@ -14,7 +14,8 @@ fn files(dir: &Path, sizes: &[usize]) -> Vec<PathBuf> {
         .iter()
         .enumerate()
         .map(|(i, n)| {
-            let p = dir.join(format!("f{i}.bin"));
+            // `.bin`은 실행 파일 확장자라 선읽기에서 빠지므로 일반 확장자를 쓴다.
+            let p = dir.join(format!("f{i}.dat"));
             fs::write(&p, vec![b'x'; *n]).unwrap();
             p
         })
@@ -44,9 +45,10 @@ fn prefetcher_reads_ahead_but_not_beyond_the_file_limit() {
     p.advance(0);
     assert_eq!(wait_for(&p, 3), 3);
     assert_eq!(settle(&p), 3, "소비자가 움직이지 않으면 3개에서 멈춘다");
+    // 소비자가 5개를 처리하면 읽는 위치도 5번으로 건너뛴다: 5·6·7번을 읽어 모두 6개가 된다(지나간 3·4번은 다시 읽지 않는다).
     p.advance(5);
-    assert_eq!(wait_for(&p, 8), 8);
-    assert_eq!(settle(&p), 8);
+    assert_eq!(wait_for(&p, 6), 6);
+    assert_eq!(settle(&p), 6);
 }
 
 #[test]
@@ -83,7 +85,7 @@ fn missing_files_and_directories_do_not_stop_the_prefetcher() {
     paths.push(d.path().join("missing.bin"));
     paths.push(d.path().to_path_buf()); // 디렉터리
     paths.extend(files(&d.path().join(".."), &[]));
-    let tail = d.path().join("tail.bin");
+    let tail = d.path().join("tail.dat");
     fs::write(&tail, vec![b'y'; MIB]).unwrap();
     paths.push(tail);
     let p = Prefetcher::start(paths, 10, 1 << 40, 1 << 40);
@@ -142,4 +144,30 @@ fn output_is_the_same_with_and_without_prefetch() {
     let (c2, o2) = run_with(&["--no-prefetch"]);
     assert_eq!((c1, &o1), (c2, &o2));
     assert!(o1.contains("EMPTY_FILE"));
+}
+
+#[test]
+fn prefetcher_jumps_to_the_consumer_instead_of_rereading_files_already_passed() {
+    let d = tempfile::tempdir().unwrap();
+    let paths = files(d.path(), &[MIB; 10]);
+    let p = Prefetcher::start(paths, 3, 1 << 40, 1 << 40);
+    assert_eq!(wait_for(&p, 3), 3);
+    assert_eq!(settle(&p), 3);
+    p.advance(8);
+    assert_eq!(wait_for(&p, 5), 5, "8번과 9번만 읽는다");
+    assert_eq!(settle(&p), 5, "소비자가 지나간 3~7번은 다시 읽지 않는다");
+}
+
+#[test]
+fn prefetcher_skips_executable_extensions_because_those_scanners_read_only_the_head() {
+    let d = tempfile::tempdir().unwrap();
+    let a = d.path().join("big.exe");
+    fs::write(&a, vec![b'x'; MIB]).unwrap();
+    let b = d.path().join("doc.txt");
+    fs::write(&b, vec![b'y'; MIB]).unwrap();
+    let c = d.path().join("lib.so");
+    fs::write(&c, vec![b'z'; MIB]).unwrap();
+    let p = Prefetcher::start(vec![a, b, c], 10, 1 << 40, 1 << 40);
+    assert_eq!(wait_for(&p, 1), 1);
+    assert_eq!(settle(&p), 1, "txt 하나만 읽는다");
 }

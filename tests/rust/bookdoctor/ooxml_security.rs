@@ -82,7 +82,7 @@ fn external_ole_object_subdocument_frame_and_link_path_are_high() {
 
 #[test]
 fn unc_and_file_targets_are_high_for_any_relationship_type() {
-    for target in ["\\\\\\\\evil\\\\share\\\\x.png", "file:///c:/secret.txt", "FILE://host/x"] {
+    for target in ["\\\\\\\\evil\\\\share\\\\x.png", "FILE://host/x", "file://evil.example/share/x.png"] {
         let r = docx(&[("word/_rels/document.xml.rels", &rels(&[("hyperlink", target, true)]))]);
         assert_security(&r, "OOXML_UNC_TARGET", Severity::High);
     }
@@ -143,7 +143,7 @@ fn dde_fields_are_critical_including_split_runs_and_fldsimple_and_lowercase() {
 
 #[test]
 fn include_fields_are_high_only_when_they_point_at_a_url_or_unc() {
-    for instr in [" INCLUDETEXT \"http://evil.example/x.docx\" ", " INCLUDEPICTURE \"https://evil.example/p.png\" ", " LINK Excel.Sheet.12 \"\\\\\\\\evil\\\\share\\\\x.xlsx\" ", " INCLUDETEXT \"file:///c:/x.docx\" "] {
+    for instr in [" INCLUDETEXT \"http://evil.example/x.docx\" ", " INCLUDEPICTURE \"\\\\\\\\evil\\\\share\\\\p.png\" ", " LINK Excel.Sheet.12 \"\\\\\\\\evil\\\\share\\\\x.xlsx\" "] {
         let r = docx(&[("word/document.xml", &document(&field(&[instr])))]);
         assert_security(&r, "OOXML_DANGEROUS_FIELD", Severity::High);
     }
@@ -339,7 +339,7 @@ fn non_utf8_bytes_and_other_declared_encodings_are_incomplete() {
 
 #[test]
 fn utf8_and_utf16_declarations_are_not_incomplete() {
-    for decl in ["UTF-8", "utf-8", "US-ASCII", "UTF-16"] {
+    for decl in ["UTF-8", "utf-8", "US-ASCII"] {
         let xml = format!(r#"<?xml version="1.0" encoding="{decl}"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#);
         let r = docx(&[("word/footer3.xml", xml.as_bytes())]);
         assert!(!r.incomplete, "{decl}: {:?}", r.reasons);
@@ -350,4 +350,185 @@ fn utf8_and_utf16_declarations_are_not_incomplete() {
 fn parse_failures_are_recorded_even_when_the_part_has_no_field_markup() {
     let r = docx(&[("word/footer4.xml", b"<w:p><w:r>unclosed")]);
     assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("footer4.xml") && x.contains("parsed")), "{:?}", r.reasons);
+}
+
+// --- 최종 리뷰 수정 ---
+
+fn docx_stored(add: &[(&str, &[u8])]) -> (tempfile::TempDir, std::path::PathBuf) {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("s.docx");
+    let mut parts: Vec<(String, Vec<u8>)> = common::minimal_docx_parts();
+    for (n, b) in add {
+        parts.retain(|(x, _)| x != n);
+        parts.push((n.to_string(), b.to_vec()));
+    }
+    let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    common::zip_stored(&p, &refs);
+    (d, p)
+}
+
+fn padded_dde() -> Vec<u8> {
+    document(&format!("{}<!-- {} -->", field(&[" DDEAUTO cmd.exe "]), " ".repeat(9000)))
+}
+
+#[test]
+fn forged_declared_size_in_the_main_part_is_not_clean_in_default_mode() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("forged.docx");
+    common::docx_with(&p, &[], &[("word/document.xml", &padded_dde())]);
+    let mut b = std::fs::read(&p).unwrap();
+    let name = b"word/document.xml";
+    let local = (0..b.len() - 30).find(|&i| &b[i..i + 4] == b"PK\x03\x04" && b[i + 30..].starts_with(name)).unwrap();
+    b[local + 22..local + 26].copy_from_slice(&5000u32.to_le_bytes());
+    let central = (0..b.len() - 46).find(|&i| &b[i..i + 4] == b"PK\x01\x02" && b[i + 46..].starts_with(name)).unwrap();
+    b[central + 24..central + 28].copy_from_slice(&5000u32.to_le_bytes());
+    std::fs::write(&p, b).unwrap();
+    let r = scan_file(&p, &Options::default());
+    assert!(r.has("ZIP_SIZE_MISMATCH") && r.incomplete, "기본 모드에서도 못 읽은 부분을 깨끗하다고 하면 안 된다: {:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn crc_error_in_the_main_part_is_reported_and_the_content_is_still_inspected() {
+    let (_d, p) = docx_stored(&[("word/document.xml", &padded_dde())]);
+    let mut b = std::fs::read(&p).unwrap();
+    let at = common::data_offset(&b, "word/document.xml");
+    b[at + 6000] ^= 0x01; // 주석 안의 공백 하나
+    std::fs::write(&p, b).unwrap();
+    let r = scan_file(&p, &Options::default());
+    assert!(r.has("ZIP_CRC_MISMATCH"), "{:?}", r.findings);
+    assert_security(&r, "OOXML_DDE_FIELD", Severity::Critical);
+}
+
+#[test]
+fn macro_and_ole_parts_are_found_through_relationships_and_content() {
+    let ole = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1 payload";
+    let vba = rels(&[("vbaProject", "macros.dat", false)]);
+    let add: &[(&str, &[u8])] = &[("word/_rels/document.xml.rels", &vba), ("word/macros.dat", ole)];
+    assert_security(&scan_named("a.docm", add).1, "OOXML_VBA_PROJECT", Severity::High);
+    assert_security(&scan_named("a.docx", add).1, "OOXML_VBA_PROJECT", Severity::Critical);
+    let olerel = rels(&[("oleObject", "media/image1.png", false)]);
+    let r = docx(&[("word/_rels/document.xml.rels", &olerel), ("word/media/image1.png", ole)]);
+    assert_security(&r, "OOXML_OLE_OBJECT", Severity::High);
+    let r = docx(&[("word/blob.dat", ole)]);
+    assert_security(&r, "OOXML_OLE_OBJECT", Severity::High);
+    let ctrl = docx(&[("word/_rels/document.xml.rels", &rels(&[("control", "activeX/a.xml", false)])), ("word/activeX/a.xml", b"<ax/>")]);
+    assert_security(&ctrl, "OOXML_ACTIVEX", Severity::High);
+}
+
+#[test]
+fn local_template_and_local_file_references_are_low_not_critical() {
+    let r = docx(&[("word/_rels/settings.xml.rels", &rels(&[("attachedTemplate", "file:///C:\\Users\\kim\\Templates\\Report.dotx", true)]))]);
+    assert!(!r.has("OOXML_REMOTE_TEMPLATE") && !r.has("OOXML_UNC_TARGET"), "{:?}", r.findings);
+    assert_eq!(finding(&r, "OOXML_LOCAL_TEMPLATE").severity, Severity::Low);
+    let remote = docx(&[("word/_rels/settings.xml.rels", &rels(&[("attachedTemplate", "\\\\corp\\share\\t.dotm", true)]))]);
+    assert_security(&remote, "OOXML_REMOTE_TEMPLATE", Severity::Critical);
+    let host = docx(&[("word/_rels/settings.xml.rels", &rels(&[("attachedTemplate", "file://corp/share/t.dotm", true)]))]);
+    assert_security(&host, "OOXML_REMOTE_TEMPLATE", Severity::Critical);
+}
+
+#[test]
+fn web_pasted_pictures_are_medium_and_remote_includes_stay_high() {
+    let pic = docx(&[("word/document.xml", &document(&field(&[" INCLUDEPICTURE \"https://upload.wikimedia.org/a.png\" \\* MERGEFORMATINET "])))]);
+    assert_security(&pic, "OOXML_DANGEROUS_FIELD", Severity::Medium);
+    let text = docx(&[("word/document.xml", &document(&field(&[" INCLUDETEXT \"http://evil.example/x.docx\" "])))]);
+    assert_security(&text, "OOXML_DANGEROUS_FIELD", Severity::High);
+}
+
+#[test]
+fn main_part_is_resolved_through_the_officedocument_relationship_case_insensitively() {
+    let root = rels(&[("officeDocument", "word/document2.xml", false)]);
+    let (d, p) = {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("d2.docx");
+        common::docx_with(&p, &["word/document.xml"], &[("_rels/.rels", &root), ("word/document2.xml", &document("<w:p/>"))]);
+        (d, p)
+    };
+    let r = scan_file(&p, &Options::default());
+    assert!(!r.has("OOXML_NOT_DOCX"), "{:?}", r.findings);
+    let root = rels(&[("officeDocument", "/WORD/Document.XML", false)]);
+    let p2 = d.path().join("d3.docx");
+    common::docx_with(&p2, &[], &[("_rels/.rels", &root)]);
+    assert!(!scan_file(&p2, &Options::default()).has("OOXML_NOT_DOCX"));
+    let missing = rels(&[("officeDocument", "word/gone.xml", false)]);
+    let p3 = d.path().join("d4.docx");
+    common::docx_with(&p3, &[], &[("_rels/.rels", &missing)]);
+    let r = scan_file(&p3, &Options::default());
+    assert!(r.findings.iter().any(|f| f.code == "OOXML_NOT_DOCX" && f.location == "word/gone.xml"), "{:?}", r.findings);
+}
+
+#[test]
+fn the_part_cap_cannot_push_the_main_document_out_of_the_scan() {
+    let junk = document("<w:p/>");
+    let mut adds: Vec<(String, Vec<u8>)> = (0..300).map(|i| (format!("customXml/item{i}.xml"), junk.clone())).collect();
+    adds.push(("word/document.xml".into(), document(&field(&[" DDEAUTO cmd.exe "]))));
+    let refs: Vec<(&str, &[u8])> = adds.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    let r = docx(&refs);
+    assert_security(&r, "OOXML_DDE_FIELD", Severity::Critical);
+}
+
+#[test]
+fn entries_beyond_max_files_are_not_walked_and_the_scan_is_incomplete() {
+    use bookdoctor::epub::security::Limits;
+    use bookdoctor::zipcheck::ooxml::inspect_security;
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("many.docx");
+    let junk: Vec<(String, Vec<u8>)> = (0..200).map(|i| (format!("junk/{i}.dat"), b"x".to_vec())).collect();
+    let mut refs: Vec<(&str, &[u8])> = junk.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    let doc = document(&field(&[" DDEAUTO cmd.exe "]));
+    refs.push(("word/document.xml", &doc));
+    common::zip_of(&p, &refs);
+    let mut spent = 0u64;
+    let mut r = FileReport::new(&p, None);
+    inspect_security(&p, &Limits { max_files: 50, ..Limits::default() }, false, &mut spent, &mut r);
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("entries")), "{:?}", r.reasons);
+}
+
+#[test]
+fn structure_reads_are_charged_to_the_shared_budget() {
+    use bookdoctor::epub::security::Limits;
+    use bookdoctor::zipcheck::ooxml::inspect_structure;
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("s.docx");
+    common::docx_with(&p, &[], &[]);
+    let mut spent = 0u64;
+    let mut r = FileReport::new(&p, None);
+    inspect_structure(&p, &Limits { max_total: 100, ..Limits::default() }, &mut spent, &mut r);
+    assert!(r.incomplete && spent > 0, "{:?} {spent}", r.reasons);
+}
+
+#[test]
+fn xml_with_a_long_whitespace_prefix_is_still_recognized() {
+    // XML 선언은 맨 앞에만 올 수 있으므로 선언 없이 공백 뒤에 루트 요소를 둔다.
+    let dde = String::from_utf8(document(&field(&[" DDEAUTO cmd.exe "]))).unwrap().replacen("<?xml version=\"1.0\" encoding=\"UTF-8\"?>", "", 1).into_bytes();
+    let mut padded = vec![b' '; 600];
+    padded.extend(&dde);
+    assert_security(&docx(&[("word/footer9.dat", &padded)]), "OOXML_DDE_FIELD", Severity::Critical);
+    let blank = docx(&[("word/blank.dat", &[b' '; 700][..])]);
+    assert!(blank.findings.is_empty(), "{:?}", blank.findings);
+}
+
+#[test]
+fn long_legitimate_field_instructions_are_fine_and_oversized_ones_are_incomplete() {
+    let citation = format!(" ADDIN ZOTERO_ITEM CSL_CITATION {{{}}} ", "a".repeat(20_000));
+    let r = docx(&[("word/document.xml", &document(&field(&[&citation])))]);
+    assert!(r.findings.is_empty() && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+    let late_url = format!(" INCLUDETEXT \"{}http://evil.example/x.docx\" ", "a".repeat(5_000));
+    assert_security(&docx(&[("word/document.xml", &document(&field(&[&late_url])))]), "OOXML_DANGEROUS_FIELD", Severity::High);
+    let huge = format!(" ADDIN {{{}}} ", "a".repeat(80_000));
+    let r = docx(&[("word/document.xml", &document(&field(&[&huge])))]);
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("truncated")), "{:?}", r.reasons);
+}
+
+#[test]
+fn xml_declaration_is_parsed_in_full_not_in_a_fixed_window() {
+    let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+    let late = format!(r#"<?xml version="1.0" standalone="yes" {}encoding="windows-1252"?><w:document {ns}><w:body/></w:document>"#, " ".repeat(400));
+    let r = docx(&[("word/footer1.xml", late.as_bytes())]);
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("windows-1252")), "{:?}", r.reasons);
+    let open = format!(r#"<?xml version="1.0" {}"#, " ".repeat(3000));
+    let r = docx(&[("word/footer2.xml", open.as_bytes())]);
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("declaration")), "{:?}", r.reasons);
+    let lie = format!(r#"<?xml version="1.0" encoding="UTF-16"?><w:document {ns}><w:body/></w:document>"#);
+    let r = docx(&[("word/footer3.xml", lie.as_bytes())]);
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("UTF-16")), "{:?}", r.reasons);
 }
