@@ -43,8 +43,15 @@
 | SVG 안의 `<script>`                          | 미확인 | -                                                                                            |
 | `encryption.xml` DRM과 폰트 난독화 구분      | 없음   | P1에서 알고리즘 URI로 구분                                                                   |
 
-## 새 포맷(ZIP, DOCX, HWPX, DOC, HWP, HTML)
+## 새 포맷 (P1 이후 상태)
 
-검사기가 아직 없다. 담당은 설계서의 P1~P4다. 이 문서의 "없음"·"부분" 행이 각 단계 계획의 입력이다.
+| 포맷 | 상태 | 있는 검사 | 아직 없는 것 |
+|---|---|---|---|
+| ZIP | 있음 | 열기, 멤버별 앞 4096바이트 해제 시험(`--zip-deep`이면 끝까지 CRC), `ZIP_PATH_TRAVERSAL` 등 이름 규칙, 로컬 헤더 일치, 압축비, 선언 크기 위조(`ZIP_SIZE_MISMATCH`), 내장 실행 파일, 중첩 ZIP 표시, 암호화 멤버(미완료) | 중첩 ZIP 재귀(P4) |
+| DOCX 계열 | 있음 | 필수 부분·XML·선언 부분, 확장자 위장, 원격 템플릿·외부 객체·UNC, `vbaProject.bin`(형식별 등급), OLE·ActiveX·내장 패키지, DDE·INCLUDE 필드(run 분할·중첩), DTD·엔티티, UTF-16 | 매크로(VBA) 내용 분석(P2), 내장 패키지 재귀(P4), 구형 DOC·암호화 OOXML(OLE, P2) |
+| HWPX | 부분 | mimetype, 매니페스트, 섹션, XML, `BinData` OLE·실행 파일, DTD·엔티티 | 스크립트·매크로(저장 위치 미확인, `docs/bookdoctor-hwpx-notes.md`) |
+| DOC, HWP 5.x | 없음 | OLE 매직 판별과 이름 위장 표시(미완료)만 | CFB 파서와 분석기(P2, P3) |
+| HTML | 없음 | - | P4 |
+| 실행 파일 | 있음 | 확장자 + 매직바이트 이중 확인(P0) | - |
 
-근거 코드 검증: 문서의 백틱 항목 64개 중 58개가 소스의 지표 문자열과 일치한다. 나머지 6개는 코드가 아니라 경로·용어(`AcroForm`, `encryption.xml`은 "없음" 행)다.
+실제 문서로 검증한 범위: DOCX는 코퍼스에 2건(악보)뿐이라 오탐률을 측정하지 못했고, HWPX는 0건이라 합성 fixture로만 확인했다.
