@@ -13,7 +13,7 @@ use crate::pdf::security::MAX_PARALLEL_INPUT_MB;
 use crate::report::{Aggregate, write_json_line, write_report_file, write_summary_line, write_text};
 use crate::scan::scan_file;
 
-const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--pdf-text] [--no-poppler] PATH...";
+const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--pdf-text] [--no-poppler] PATH...";
 
 /// 한 번에 검사하는 파일 수는 워커 수의 이 배수다.
 const WINDOW_PER_WORKER: usize = 8;
@@ -34,6 +34,8 @@ pub struct Options {
     /// 텍스트 출력의 색. `--json`은 항상 색이 없다.
     pub color: ColorMode,
     pub pdf_text: bool,
+    /// ZIP 계열 멤버를 끝까지 풀어 CRC까지 확인한다. 기본은 멤버마다 앞부분만 풀어 본다.
+    pub zip_deep: bool,
     pub no_poppler: bool,
 }
 
@@ -51,6 +53,7 @@ impl Default for Options {
             min_severity: Severity::High,
             color: ColorMode::Auto,
             pdf_text: false,
+            zip_deep: false,
             no_poppler: false,
         }
     }
@@ -89,6 +92,7 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
             "-r" | "--recursive" => o.recursive = true,
             "--json" => o.json = true,
             "--pdf-text" => o.pdf_text = true,
+            "--zip-deep" => o.zip_deep = true,
             "--no-poppler" => o.no_poppler = true,
             _ => match long_option(arg, &["report", "workers", "limit", "max-total-mb", "only", "min-severity", "color"], &mut it)? {
                 Some((name, value)) => match name.as_str() {
@@ -199,10 +203,10 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
 사용법:
   bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N]
              [--only security,defect,render] [--min-severity low|medium|high|critical]
-             [--color auto|always|never] [--pdf-text] [--no-poppler] PATH...
+             [--color auto|always|never] [--zip-deep] [--pdf-text] [--no-poppler] PATH...
 
 인자:
-  PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt와 실행 파일 확장자(exe, dll, so, dylib 등)를 모은다.
+  PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt, zip, docx(docm·dotx·dotm), hwpx와 실행 파일 확장자(exe, dll, so, dylib 등)를 모은다.
          실행 파일은 확장자와 매직바이트(ELF·Mach-O·PE)가 모두 맞을 때 EXECUTABLE_FILE로 알린다.
 
 옵션:
@@ -219,6 +223,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
                       low로 주면 모두 출력한다.
   --color MODE        auto(기본, 터미널이고 NO_COLOR가 없을 때만), always, never.
                       CRITICAL과 렌더링 구조 에러는 red, HIGH는 purple, 암호화·DRM은 cyan이다. --json에는 색이 없다.
+  --zip-deep          ZIP 멤버를 끝까지 풀어 CRC까지 확인한다 (기본은 멤버마다 앞 4096바이트만 풀어 본다).
   --pdf-text          PDF 본문 텍스트까지 검사한다.
   --no-poppler        poppler 외부 명령을 쓰지 않는다.
   -h, --help          이 도움말

@@ -336,3 +336,45 @@ impl CommandRunner for FakeRunner {
         None
     }
 }
+
+// ---- ZIP 점검용 fixture ----
+
+/// (이름, 바이트) 목록으로 deflate ZIP을 만든다.
+pub fn zip_of(path: &Path, entries: &[(&str, &[u8])]) {
+    let mut z = ZipWriter::new(File::create(path).unwrap());
+    for (name, body) in entries {
+        z.start_file(*name, deflated()).unwrap();
+        z.write_all(body).unwrap();
+    }
+    z.finish().unwrap();
+}
+
+/// (이름, 바이트) 목록으로 무압축(stored) ZIP을 만든다. 바이트를 깨뜨려도 압축 오류가 나지 않아 CRC 시험에 쓴다.
+pub fn zip_stored(path: &Path, entries: &[(&str, &[u8])]) {
+    let mut z = ZipWriter::new(File::create(path).unwrap());
+    for (name, body) in entries {
+        z.start_file(*name, stored()).unwrap();
+        z.write_all(body).unwrap();
+    }
+    z.finish().unwrap();
+}
+
+/// 멤버 본문(로컬 헤더 뒤)이 시작하는 파일 오프셋.
+pub fn data_offset(bytes: &[u8], member: &str) -> usize {
+    let name = member.as_bytes();
+    let at = (0..bytes.len().saturating_sub(30 + name.len())).find(|&i| &bytes[i..i + 4] == b"PK\x03\x04" && &bytes[i + 30..i + 30 + name.len()] == name).expect("local header not found");
+    let name_len = usize::from(u16::from_le_bytes([bytes[at + 26], bytes[at + 27]]));
+    let extra_len = usize::from(u16::from_le_bytes([bytes[at + 28], bytes[at + 29]]));
+    at + 30 + name_len + extra_len
+}
+
+/// 멤버를 암호화된 것으로 표시한다(로컬·중앙 헤더의 일반 목적 플래그 bit 0). 비밀번호 API 없이 `encrypted()`를 참으로 만든다.
+pub fn mark_encrypted(path: &Path, member: &str) {
+    let mut b = fs::read(path).unwrap();
+    let name = member.as_bytes();
+    let local = (0..b.len() - 30 - name.len()).find(|&i| &b[i..i + 4] == b"PK\x03\x04" && &b[i + 30..i + 30 + name.len()] == name).unwrap();
+    b[local + 6] |= 1;
+    let central = (0..b.len() - 46 - name.len()).find(|&i| &b[i..i + 4] == b"PK\x01\x02" && &b[i + 46..i + 46 + name.len()] == name).unwrap();
+    b[central + 8] |= 1;
+    fs::write(path, b).unwrap();
+}

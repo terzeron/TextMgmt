@@ -54,3 +54,30 @@ pub fn check(name: &str) -> Vec<NameFinding> {
     }
     out
 }
+
+/// 로컬 파일 헤더의 문제. 위치(멤버 이름)는 호출자가 붙인다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeaderIssue {
+    pub severity: Severity,
+    pub code: &'static str,
+    pub detail: String,
+}
+
+/// 멤버의 로컬 헤더가 있는지, 이름이 중앙 디렉터리와 같은지 본다. 문제가 없으면 `None`이다.
+/// 중앙 디렉터리만 읽는 추출기와 로컬 헤더를 따라가는 추출기가 서로 다른 파일을 보게 하는 위조를 잡는다.
+pub fn local_header_issue(file: &mut std::fs::File, header_start: u64, central_name: &[u8]) -> Option<HeaderIssue> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut h = [0u8; 30];
+    if file.seek(SeekFrom::Start(header_start)).is_err() || file.read_exact(&mut h).is_err() || &h[..4] != b"PK\x03\x04" {
+        return Some(HeaderIssue { severity: Severity::High, code: "BAD_LOCAL_HEADER", detail: "ZIP local header absent or invalid".into() });
+    }
+    let name_len = usize::from(u16::from_le_bytes([h[26], h[27]]));
+    let mut local = vec![0u8; name_len];
+    if file.read_exact(&mut local).is_err() {
+        return Some(HeaderIssue { severity: Severity::High, code: "TRUNCATED_LOCAL_HEADER", detail: "Incomplete local filename".into() });
+    }
+    if local != central_name {
+        return Some(HeaderIssue { severity: Severity::High, code: "ZIP_HEADER_NAME_MISMATCH", detail: format!("Local filename differs: {}", String::from_utf8_lossy(&local)) });
+    }
+    None
+}

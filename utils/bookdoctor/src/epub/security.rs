@@ -116,7 +116,7 @@ pub fn directory_limit_note(path: &Path) -> Option<String> {
 
 // ---------------------------------------------------------------- 상수
 
-const EXEC_EXTS: &[&str] = &[
+pub(crate) const EXEC_EXTS: &[&str] = &[
     "exe", "dll", "scr", "com", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "jse", "wsf", "wsh", "hta", "msi", "msp", "jar", "lnk", "reg", "cpl", "sh", "bash", "zsh", "py", "pl", "rb", "php", "apk",
     "app", "dmg", "so", "dylib", "bin", "run", "swf", "class",
 ];
@@ -473,19 +473,8 @@ impl Scanner {
 
     fn local_header(&mut self, raw: &mut Option<File>, header_start: u64, central_name: &[u8], name: &str) {
         let Some(f) = raw.as_mut() else { return };
-        let mut h = [0u8; 30];
-        if f.seek(SeekFrom::Start(header_start)).is_err() || f.read_exact(&mut h).is_err() || &h[..4] != b"PK\x03\x04" {
-            self.add(Severity::High, "BAD_LOCAL_HEADER", name, "ZIP local header absent or invalid");
-            return;
-        }
-        let name_len = usize::from(u16::from_le_bytes([h[26], h[27]]));
-        let mut local = vec![0u8; name_len];
-        if f.read_exact(&mut local).is_err() {
-            self.add(Severity::High, "TRUNCATED_LOCAL_HEADER", name, "Incomplete local filename");
-            return;
-        }
-        if local != central_name {
-            self.add(Severity::High, "ZIP_HEADER_NAME_MISMATCH", name, &format!("Local filename differs: {}", String::from_utf8_lossy(&local)));
+        if let Some(issue) = crate::zipnames::local_header_issue(f, header_start, central_name) {
+            self.add(issue.severity, issue.code, name, &issue.detail);
         }
     }
 
@@ -834,7 +823,7 @@ fn read_budgeted(zip: &mut Zip, index: usize, cap: u64, limits: &Limits, spent: 
     Some(data)
 }
 
-fn read_limited(zip: &mut Zip, index: usize, limit: u64) -> Result<Vec<u8>, String> {
+pub(crate) fn read_limited(zip: &mut Zip, index: usize, limit: u64) -> Result<Vec<u8>, String> {
     let entry = zip.by_index(index).map_err(|e| e.to_string())?;
     // 선언 크기만큼 미리 잡는다. 비워 두고 읽으면 read_to_end가 용량을 두 배씩 늘려 최대 2배를 쓴다. 선언이 거짓이어도 상한까지만 잡는다.
     let mut data = Vec::with_capacity(entry.size().min(limit).saturating_add(1) as usize);

@@ -7,7 +7,7 @@ use scan_common::sniff::Sniffed;
 use scan_common::{FileReport, Format};
 
 use crate::cli::Options;
-use crate::{common, epub, exe, pdf, txt, viewer};
+use crate::{common, epub, exe, pdf, txt, viewer, zipcheck};
 
 /// 검사할 포맷을 정한다. `.pdf`·`.epub`은 내용이 PDF·ZIP이면 내용을 따르고(`.pdf`인데 ZIP이면 EPUB),
 /// 그 밖에는 확장자를 따른다. 모르는 확장자는 `None`이다.
@@ -50,7 +50,8 @@ fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
         Some(Format::Txt) => txt::scan_txt_file(path, opts, report),
         Some(Format::Executable) => exe::scan_exe_file(sniffed, report),
         // 검사기는 이 계획의 뒤 태스크에서 붙는다. 그때까지 검사하지 못한 파일로 남긴다.
-        Some(Format::Zip | Format::Docx | Format::Hwpx) => report.mark_incomplete("unsupported format"),
+        Some(Format::Zip) => zipcheck::scan_zip_file(path, opts, report),
+        Some(Format::Docx | Format::Hwpx) => report.mark_incomplete("unsupported format"),
         None => report.mark_incomplete("unsupported format"),
     }
 }
