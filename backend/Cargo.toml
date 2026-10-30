@@ -162,6 +162,10 @@ name = "google_verifier"
 path = "../tests/rust/backend/google_verifier.rs"
 
 [[test]]
+name = "stderr_logger"
+path = "../tests/rust/backend/stderr_logger.rs"
+
+[[test]]
 name = "client_error_log"
 path = "../tests/rust/backend/client_error_log.rs"
 

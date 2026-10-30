@@ -56,10 +56,22 @@
 }
 
 .book-viewer-actions {
+    font-size: 0.8rem !important;
     display: flex;
     gap: 6px;
     align-items: center;
     justify-content: center;
+}
+
+.book-viewer-actions .btn-sm {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.7rem !important;
+}
+
+/* PDF 쪽 영역 바깥 여백(Card의 1px padding, 조회 패널의 8px 아래 간격)을 없앤다 */
+.card:has(.pdf-container) {
+    padding: 0 !important;
+    margin-bottom: 0 !important;
 }
 
 .book-viewer-prev {
@@ -75,8 +87,8 @@
     background: transparent;
     color: #856404;
     border-radius: 4px;
-    padding: 4px 12px;
-    font-size: 0.85rem;
+    padding: 3px 10px;
+    font-size: 0.68rem !important;
     cursor: pointer;
 }
 

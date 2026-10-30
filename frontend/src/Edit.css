@@ -23,6 +23,21 @@
     font-size: 0.6rem;
 }
 
+/* Actions(이전/다음 책, 카테고리 버튼, 옮기기 입력줄) 영역은 기본 크기의 80%로 쓴다 */
+#edit .actions-area .btn-xs {
+    padding: 0.04rem 0.12rem;
+    font-size: 0.48rem;
+}
+
+#edit .actions-area .btn-sm {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.7rem;
+}
+
+#edit .actions-area .form-control {
+    font-size: 0.8rem;
+}
+
 #edit .btn-md {
     padding: 0.25rem 0.5rem;
     font-size: 0.875rem;

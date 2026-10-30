@@ -59,6 +59,8 @@ async fn main() -> ExitCode {
         eprintln!("{error}");
         return ExitCode::from(255);
     }
+    // 로거를 등록하지 않으면 log::error! 출력이 모두 버려진다(프런트엔드 에러 보고 포함).
+    let _ = backend::stderr_logger::init();
     match serve(address).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

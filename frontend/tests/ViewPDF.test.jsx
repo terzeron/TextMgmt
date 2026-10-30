@@ -29,6 +29,11 @@ const { mockGetDocument } = vi.hoisted(() => ({
 
 vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
   getDocument: mockGetDocument,
+  PDFWorker: class {
+    constructor() {
+      this.destroy = vi.fn();
+    }
+  },
   GlobalWorkerOptions: { workerSrc: "" },
   OPS: { paintImageXObject: 85 },
 }));
@@ -225,7 +230,7 @@ describe("ViewPDF", () => {
     expect(canvases.length).toBe(2);
   });
 
-  it('렌더링 진행 중 "렌더링 중... X/Y쪽" 상태를 표시한다', async () => {
+  it('렌더링 진행 중 "X/Y 렌더링 중" 상태를 표시한다', async () => {
     // fetch 성공하지만 pdfjs.getDocument의 render가 영원히 pending
     globalThis.fetch = createMockFetch(2);
     const mockPdf = {
@@ -242,8 +247,59 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(screen.getByText("렌더링 중... 0/2쪽")).toBeTruthy();
+      expect(screen.getByText("0/2 렌더링 중")).toBeTruthy();
     });
+  });
+
+  it("모든 청크가 하나의 PDFWorker 를 공유하고 언마운트하면 해제한다", async () => {
+    globalThis.fetch = createMockFetch(3);
+    setupGetDocument(() => createMockPdf(1));
+
+    const { unmount } = render(<ViewPDF bookId={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/총 3쪽 표시/)).toBeTruthy();
+    });
+    const workers = mockGetDocument.mock.calls.map(([params]) => params.worker);
+    // 첫 쪽 청크와 2~3쪽 청크: 둘 다 같은 worker 를 써야 Worker/wasm 이 청크 수만큼 늘지 않는다
+    expect(workers.length).toBeGreaterThanOrEqual(2);
+    expect(workers[0]).toBeTruthy();
+    expect(new Set(workers).size).toBe(1);
+
+    unmount();
+    expect(workers[0].destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("전체 보기는 진단 기록을 남기고 닫으면 정상 종료로 표시한다", async () => {
+    localStorage.clear();
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createMockPdf(1));
+
+    const { unmount } = render(<ViewPDF bookId={5} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+    });
+    const running = JSON.parse(localStorage.getItem("tm.pdfTrace"));
+    expect(running.clean).toBe(false);
+    expect(running.bookId).toBe(5);
+    expect(running.events.some((line) => line.includes("render-done p1"))).toBe(true);
+
+    unmount();
+    expect(JSON.parse(localStorage.getItem("tm.pdfTrace")).clean).toBe(true);
+  });
+
+  it("미리보기는 진단 기록을 남기지 않는다", async () => {
+    localStorage.clear();
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createMockPdf(1));
+
+    render(<ViewPDF bookId={5} preview />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+    });
+    expect(localStorage.getItem("tm.pdfTrace")).toBeNull();
   });
 
   // ── pageCount 제한 ──
@@ -2001,20 +2057,35 @@ describe("computeRenderScale", () => {
   });
 
   it("화면 폭에 맞춘 배율이 기본 배율보다 크면 그 배율을 쓴다", () => {
-    // wanted = 1000 * 1 / 100 = 10, areaCap = sqrt(1.5M / (100*100)) ≈ 12.2
+    // wanted = 1000 * 1 / 100 = 10, areaCap = sqrt(3M / (100*100)) ≈ 17.3
     expect(
       computeRenderScale(pageOf(100, 100), { clientWidth: 1000 }, 1),
     ).toBeCloseTo(10);
   });
 
   it("캔버스 면적 상한을 넘기지 않는다", () => {
-    // wanted = 5000 / 100 = 50, areaCap = sqrt(1.5M / 10000) ≈ 12.247
+    // wanted = 5000 / 100 = 50, areaCap = sqrt(3M / 10000) ≈ 17.32
     const scale = computeRenderScale(
       pageOf(100, 100),
       { clientWidth: 5000 },
       1,
     );
-    expect(scale).toBeCloseTo(Math.sqrt(1_500_000 / 10_000));
+    expect(scale).toBeCloseTo(Math.sqrt(3_000_000 / 10_000));
+  });
+
+  it("큰 쪽은 기본 배율(1.2 x dpr)보다 면적 상한이 우선해 canvas 가 3M 픽셀을 넘지 않는다", () => {
+    // 실제 크래시 재현: dpr 3 휴대폰(CSS 폭 390), 900x1450pt 쪽. 기본 배율 3.6 이면 약 17M 픽셀이 된다.
+    const base = { width: 900, height: 1450 };
+    const scale = computeRenderScale(
+      pageOf(base.width, base.height),
+      { clientWidth: 390 },
+      3,
+    );
+    expect(base.width * scale * base.height * scale).toBeLessThanOrEqual(
+      3_000_000 * 1.0001,
+    );
+    // 한 쪽이 17M 픽셀이던 이전 동작과 비교해 6배 가까이 줄었다
+    expect(scale).toBeLessThan(3.6 / 2);
   });
 
   it("화면이 작아 계산 배율이 기본보다 작아도 기본 배율 아래로 내려가지 않는다", () => {
