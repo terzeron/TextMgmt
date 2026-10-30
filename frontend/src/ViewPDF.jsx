@@ -1306,7 +1306,9 @@ const pdfStyles = `
         scroll-snap-align: start;
         scroll-snap-stop: always;
     }
-    .pdf-container.pdf-single.pdf-fit .pdf-page {
+    /* 맞춤: 폭만 맞추면 작은 이미지가 늘어나 세로가 영역을 넘친다.
+       비율을 유지한 채 영역(폭 × 보이는 높이) 안에 최대한 크게 넣는다(contain). */
+    .pdf-container.pdf-fit .pdf-page {
         width: 100% !important;
         height: calc(var(--pdf-avail-h, calc(100vh - 10px)) - var(--pdf-toolbar-h)) !important;
         object-fit: contain;
@@ -1324,7 +1326,7 @@ const pdfStyles = `
         width: 100%;
         height: 100%;
     }
-    .pdf-container.pdf-single.pdf-fit .pdf-page-wrap .pdf-page-canvas {
+    .pdf-container.pdf-fit .pdf-page-wrap .pdf-page-canvas {
         object-fit: contain;
     }
     /* 이미지 삽입 미리보기: 저장 전에도 삽입될 쪽을 다른 쪽처럼 보여 준다. 점선 테두리와 라벨로 아직 저장 전임을 알린다. */
@@ -1336,7 +1338,7 @@ const pdfStyles = `
         width: 100%;
         height: auto;
     }
-    .pdf-container.pdf-single.pdf-fit .pdf-insert-image {
+    .pdf-container.pdf-fit .pdf-insert-image {
         height: 100%;
         object-fit: contain;
     }
