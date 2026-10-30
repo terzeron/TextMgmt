@@ -103,6 +103,10 @@ name = "hwp"
 path = "../../tests/rust/bookdoctor/hwp.rs"
 
 [[test]]
+name = "recurse"
+path = "../../tests/rust/bookdoctor/recurse.rs"
+
+[[test]]
 name = "report"
 path = "../../tests/rust/bookdoctor/report.rs"
 

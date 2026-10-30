@@ -14,7 +14,7 @@ use crate::prefetch::Prefetcher;
 use crate::report::{Aggregate, write_json_line, write_report_file, write_summary_line, write_text};
 use crate::scan::scan_file;
 
-const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--no-prefetch] [--pdf-text] [--no-poppler] PATH...";
+const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--pdf-text] [--no-poppler] PATH...";
 
 /// 한 번에 검사하는 파일 수는 워커 수의 이 배수다.
 const WINDOW_PER_WORKER: usize = 8;
@@ -46,6 +46,8 @@ pub struct Options {
     /// 다음 파일을 미리 읽어 디스크 대기와 검사를 겹친다. `--no-prefetch`로 끈다.
     pub prefetch: bool,
     pub no_poppler: bool,
+    /// ZIP 계열 안의 컨테이너 멤버를 재귀 검사한다. `--no-recurse`로 끈다.
+    pub recurse: bool,
 }
 
 impl Default for Options {
@@ -65,6 +67,7 @@ impl Default for Options {
             zip_deep: false,
             prefetch: true,
             no_poppler: false,
+            recurse: true,
         }
     }
 }
@@ -105,6 +108,7 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
             "--zip-deep" => o.zip_deep = true,
             "--no-prefetch" => o.prefetch = false,
             "--no-poppler" => o.no_poppler = true,
+            "--no-recurse" => o.recurse = false,
             _ => match long_option(arg, &["report", "workers", "limit", "max-total-mb", "only", "min-severity", "color"], &mut it)? {
                 Some((name, value)) => match name.as_str() {
                     "report" => o.report = Some(value.into()),
@@ -221,7 +225,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
 사용법:
   bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N]
              [--only security,defect,render] [--min-severity low|medium|high|critical]
-             [--color auto|always|never] [--zip-deep] [--no-prefetch] [--pdf-text] [--no-poppler] PATH...
+             [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--pdf-text] [--no-poppler] PATH...
 
 인자:
   PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt, zip, docx(docm·dotx·dotm), hwpx, hwp, doc(dot), rtf, html(htm·xhtml)와 실행 파일 확장자(exe, dll, so, dylib 등)를 모은다.
@@ -242,6 +246,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   --color MODE        auto(기본, 터미널이고 NO_COLOR가 없을 때만), always, never.
                       CRITICAL과 렌더링 구조 에러는 red, HIGH는 purple, 암호화·DRM은 cyan이다. --json에는 색이 없다.
   --zip-deep          ZIP 멤버를 끝까지 풀어 CRC까지 확인한다 (기본은 멤버마다 앞 4096바이트만 풀어 본다).
+  --no-recurse        ZIP·DOCX·HWPX 안의 중첩 ZIP·PDF·RTF·Word·HWP를 재귀 검사하지 않는다. 기본은 깊이 3, 파일 64개, 바이트 합계는 --max-total-mb까지 검사한다.
   --no-prefetch       다음 파일을 미리 읽지 않는다. 기본은 검사하는 동안 다음 파일 최대 16개(512MiB)를 미리 읽는다.
   --pdf-text          PDF 본문 텍스트까지 검사한다.
   --no-poppler        poppler 외부 명령을 쓰지 않는다.

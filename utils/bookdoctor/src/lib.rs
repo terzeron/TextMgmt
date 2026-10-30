@@ -10,6 +10,7 @@ pub mod exe;
 pub mod mojibake;
 pub mod pdf;
 pub mod prefetch;
+pub mod recurse;
 pub mod report;
 pub mod scan;
 pub mod txt;

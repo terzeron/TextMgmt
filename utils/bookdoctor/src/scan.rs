@@ -7,7 +7,7 @@ use scan_common::sniff::Sniffed;
 use scan_common::{FileReport, Format};
 
 use crate::cli::Options;
-use crate::{common, doc, html, hwp, epub, exe, pdf, txt, viewer, zipcheck};
+use crate::{common, doc, html, hwp, recurse, epub, exe, pdf, txt, viewer, zipcheck};
 
 /// 검사할 포맷을 정한다. `.pdf`·`.epub`은 내용이 PDF·ZIP이면 내용을 따르고(`.pdf`인데 ZIP이면 EPUB),
 /// 그 밖에는 확장자를 따른다. 모르는 확장자는 `None`이다.
@@ -80,10 +80,16 @@ fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
         Some(Format::Html) => html::scan_html_file(path, sniffed, report),
         None => report.mark_incomplete("unsupported format"),
     }
+    // ZIP 안의 컨테이너(중첩 ZIP·PDF·RTF·Word·HWP)를 깊이·개수·바이트 상한 안에서 재귀 검사한다.
+    if sniffed == Sniffed::Zip && matches!(report.format, Some(Format::Zip | Format::Docx | Format::Hwpx)) {
+        recurse::scan_zip_members(path, opts, report);
+    }
 }
 
 /// 파일 하나를 검사한다. 포맷 모듈의 panic은 `incomplete`로 바꾸고, `--only`가 있으면 그 분류만 남긴다. 뷰어 차단 여부는 걸러내기 전에 채운다.
 pub fn scan_file(path: &Path, opts: &Options) -> FileReport {
+    // 최상위 검사면 재귀 예산을 만든다. 중첩 검사(재귀가 부른 `scan_file`)는 바깥 예산을 이어 쓴다.
+    let _budget = recurse::begin(opts);
     let mut report = FileReport::new(path, None);
     if let Err(payload) = catch_unwind(AssertUnwindSafe(|| scan_inner(path, opts, &mut report))) {
         let msg = payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_default();

@@ -140,15 +140,20 @@ fn directory_over_the_size_limit_is_incomplete_and_not_opened() {
 }
 
 #[test]
-fn nested_zip_is_flagged_but_not_recursed() {
+fn nested_zip_is_flagged_and_recursed_unless_disabled() {
     let d = tempfile::tempdir().unwrap();
     let inner = d.path().join("inner.zip");
     common::zip_of(&inner, &[("../../deep-evil", b"x")]);
     let p = d.path().join("outer.zip");
     common::zip_of(&p, &[("inner.dat", &fs::read(&inner).unwrap())]);
+    // 기본은 P4의 재귀 검사가 켜져 있다: 안쪽 ZIP의 경로 위험이 `멤버!안쪽이름` 위치로 올라온다.
     let r = scan(&p);
     assert_eq!(finding(&r, "NESTED_ARCHIVE").severity, Severity::Medium);
-    assert!(!r.has("ZIP_PATH_TRAVERSAL"), "nested archive must not be recursed in P1");
+    let nested = finding(&r, "ZIP_PATH_TRAVERSAL");
+    assert!(nested.location.starts_with("inner.dat!"), "{}", nested.location);
+    // `--no-recurse`면 표시만 하고 안쪽은 보지 않는다.
+    let off = bookdoctor::scan::scan_file(&p, &bookdoctor::cli::Options { recurse: false, ..Default::default() });
+    assert!(off.has("NESTED_ARCHIVE") && !off.has("ZIP_PATH_TRAVERSAL"));
 }
 
 #[test]
