@@ -185,3 +185,105 @@ fn a_word_document_named_hwp_is_analyzed_as_doc() {
     let enc = make_cfb(&[("EncryptionInfo", &[4u8, 0, 4, 0][..]), ("EncryptedPackage", &[0u8; 64][..])]);
     assert!(scan_cfb("a.hwp", &enc).reasons.iter().any(|m| FileReport::is_encrypted_reason(m)));
 }
+
+// --- Scripts (명세 표 8, 9) ---
+
+fn wchars(s: &str) -> Vec<u8> {
+    s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+}
+
+/// `DefaultJScript`: 헤더·소스·Pre·Post 각각 DWORD 길이(글자 수) + WCHAR 배열, 끝에 DWORD `-1`.
+fn default_jscript(parts: [&str; 4]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for p in parts {
+        out.extend_from_slice(&(p.encode_utf16().count() as u32).to_le_bytes());
+        out.extend_from_slice(&wchars(p));
+    }
+    out.extend_from_slice(&u32::MAX.to_le_bytes());
+    out
+}
+
+const JSCRIPT_VERSION: [u8; 8] = [0u8; 8];
+
+fn scan_scripts(flags: u32, script: &[u8]) -> FileReport {
+    scan_cfb("a.hwp", &hwp_cfb(&[("Scripts/JScriptVersion", &JSCRIPT_VERSION[..]), ("Scripts/DefaultJScript", script)], flags))
+}
+
+#[test]
+fn no_scripts_storage_and_no_flag_is_clean() {
+    let r = scan_cfb("a.hwp", &hwp_cfb(&[], 0));
+    assert!(!r.has("HWP_SCRIPT") && !r.has("HWP_SCRIPT_FLAG_MISMATCH"), "{:?}", r.findings);
+}
+
+#[test]
+fn scripts_storage_is_high_even_when_empty() {
+    let r = scan_cfb("a.hwp", &hwp_cfb(&[("Scripts/JScriptVersion", &JSCRIPT_VERSION[..])], 0x8));
+    assert_eq!(finding(&r, "HWP_SCRIPT").severity, scan_common::Severity::High);
+    assert!(!r.has("HWP_SCRIPT_FLAG_MISMATCH"), "{:?}", r.findings);
+}
+
+#[test]
+fn the_script_flag_and_the_storage_must_agree() {
+    // 비트는 있는데 스토리지가 없다.
+    let r = scan_cfb("a.hwp", &hwp_cfb(&[], 0x8));
+    let f = finding(&r, "HWP_SCRIPT_FLAG_MISMATCH");
+    assert_eq!((f.severity, f.category), (scan_common::Severity::Medium, scan_common::Category::Defect));
+    assert!(!r.has("HWP_SCRIPT"));
+    // 스토리지는 있는데 비트가 없다. 스크립트는 그대로 High다.
+    let r = scan_scripts(0, &default_jscript(["", "var a = 1;", "", ""]));
+    assert!(r.has("HWP_SCRIPT_FLAG_MISMATCH") && r.has("HWP_SCRIPT"), "{:?}", r.findings);
+}
+
+#[test]
+fn suspicious_script_is_critical_in_any_part() {
+    let evil = r#"var s = new ActiveXObject("WScript.Shell"); s.Run("cmd.exe /c calc");"#;
+    for parts in [["", evil, "", ""], ["", "", evil, ""], ["", "", "", evil], [evil, "", "", ""]] {
+        let r = scan_scripts(0x8, &default_jscript(parts));
+        assert_eq!(finding(&r, "HWP_SCRIPT_SUSPICIOUS").severity, scan_common::Severity::Critical, "{parts:?}");
+    }
+    let r = scan_scripts(0x8, &default_jscript(["", "var x = EVAL ( payload ) ; new Function('a')", "", ""]));
+    assert!(r.has("HWP_SCRIPT_SUSPICIOUS"), "{:?}", r.findings);
+}
+
+#[test]
+fn benign_script_is_high_not_critical() {
+    let r = scan_scripts(0x8, &default_jscript(["", "function f() { return 1 + 1; } // a shell of a function", "", ""]));
+    assert_eq!(finding(&r, "HWP_SCRIPT").severity, scan_common::Severity::High);
+    assert!(!r.has("HWP_SCRIPT_SUSPICIOUS") && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn malformed_script_is_still_high_incomplete_and_never_panics() {
+    let mut huge = Vec::new();
+    huge.extend_from_slice(&0x7FFF_FFFFu32.to_le_bytes());
+    huge.extend_from_slice(&wchars("short"));
+    let mut missing_end = default_jscript(["", "x", "", ""]);
+    missing_end.truncate(missing_end.len() - 4);
+    let mut wrong_end = default_jscript(["", "x", "", ""]);
+    let n = wrong_end.len();
+    wrong_end[n - 4..].copy_from_slice(&7u32.to_le_bytes());
+    for (name, bytes) in [("huge length", huge), ("missing end flag", missing_end), ("wrong end flag", wrong_end), ("empty", Vec::new()), ("three bytes", vec![1, 2, 3])] {
+        let r = scan_scripts(0x8, &bytes);
+        assert!(r.has("HWP_SCRIPT") && r.incomplete, "{name}: {:?} {:?}", r.findings, r.reasons);
+    }
+    // 구조가 깨져도 원시 바이트에서 키워드를 찾는다.
+    let mut evil = Vec::new();
+    evil.extend_from_slice(&0x7FFF_FFFFu32.to_le_bytes());
+    evil.extend_from_slice(&wchars("WScript.Shell"));
+    assert!(scan_scripts(0x8, &evil).has("HWP_SCRIPT_SUSPICIOUS"));
+    // 임의 바이트로 열어도 panic하지 않는다.
+    let mut seed = 0x1234_5678u32;
+    for _ in 0..200 {
+        let bytes: Vec<u8> = (0..64).map(|_| { seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223); (seed >> 24) as u8 }).collect();
+        let r = scan_scripts(0x8, &bytes);
+        assert!(!r.reasons.iter().any(|m| m.contains("panic")), "{:?}", r.reasons);
+    }
+}
+
+#[test]
+fn a_script_stream_over_the_limit_is_incomplete() {
+    let big = default_jscript(["", &"a".repeat(3 * 1024 * 1024), "", ""]);
+    assert!(big.len() > 4 * 1024 * 1024);
+    let r = scan_scripts(0x8, &big);
+    assert!(r.has("HWP_SCRIPT") && r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+}

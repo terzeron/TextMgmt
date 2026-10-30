@@ -2,6 +2,7 @@
 //! 파일을 실행하거나 렌더링하지 않는다.
 
 pub mod header;
+pub mod script;
 
 use std::path::Path;
 
@@ -71,4 +72,5 @@ fn inspect(file: &mut OleFile, report: &mut FileReport) {
     if header.distributable() && file.find("BodyText").is_none() && file.find("ViewText").is_some() {
         report.mark_incomplete("distribution document: ViewText not analyzed");
     }
+    script::inspect(file, &header, report);
 }
