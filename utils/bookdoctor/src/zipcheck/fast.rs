@@ -31,15 +31,15 @@ fn read_failure(report: &mut FileReport, shown: &str, error: &str) {
     report.push(Category::Defect, Severity::High, code, shown, error);
 }
 
-/// ZIP 하나를 점검해 `report`에 더한다. 열기 전에 중앙 디렉터리 상한부터 본다.
-pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) {
+/// ZIP 하나를 점검해 `report`에 더한다. 열기 전에 중앙 디렉터리 상한부터 본다. 열어서 멤버를 훑었으면 `true`다.
+pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) -> bool {
     if let Some(note) = directory_limit_note(path) {
         report.mark_incomplete(&note);
-        return;
+        return false;
     }
     let Some(mut zip) = open_zip(path) else {
         report.push(Category::Defect, Severity::High, "NOT_ZIP", "", "ZIP으로 열 수 없다");
-        return;
+        return false;
     };
     let count = zip.len();
     if count > limits.max_files {
@@ -132,4 +132,5 @@ pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) 
             }
         }
     }
+    true
 }

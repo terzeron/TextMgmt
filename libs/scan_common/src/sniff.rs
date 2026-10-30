@@ -8,11 +8,14 @@ pub enum Sniffed {
     Elf,
     MachO,
     Pe,
+    /// OLE 복합 파일(구형 DOC·HWP 5.x, 암호화 OOXML의 컨테이너).
+    Ole,
     Html,
     Unknown,
 }
 
 const PDF_WINDOW: usize = 1024;
+const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 const MACHO_MAGICS: [[u8; 4]; 5] = [[0xFE, 0xED, 0xFA, 0xCE], [0xFE, 0xED, 0xFA, 0xCF], [0xCE, 0xFA, 0xED, 0xFE], [0xCF, 0xFA, 0xED, 0xFE], [0xCA, 0xFE, 0xBA, 0xBE]];
 
 /// `MZ`로 시작하고 e_lfanew(오프셋 0x3C, u32 LE)가 `PE\0\0`를 가리키면 PE다. `MZ`만으로는 평문과 구분되지 않는다.
@@ -36,6 +39,9 @@ pub fn sniff(head: &[u8]) -> Sniffed {
     }
     if is_pe(head) {
         return Sniffed::Pe;
+    }
+    if head.starts_with(&OLE_MAGIC) {
+        return Sniffed::Ole;
     }
     if head[..head.len().min(PDF_WINDOW)].windows(5).any(|w| w == b"%PDF-") {
         return Sniffed::Pdf;

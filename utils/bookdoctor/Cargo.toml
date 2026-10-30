@@ -23,6 +23,10 @@ name = "exe"
 path = "../../tests/rust/bookdoctor/exe.rs"
 
 [[test]]
+name = "ooxml_structure"
+path = "../../tests/rust/bookdoctor/ooxml_structure.rs"
+
+[[test]]
 name = "zip_fast"
 path = "../../tests/rust/bookdoctor/zip_fast.rs"
 

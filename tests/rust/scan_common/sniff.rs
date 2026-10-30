@@ -110,3 +110,18 @@ fn pdf_marker_after_junk_is_still_a_pdf_and_mz_text_is_not_a_pe() {
     assert_eq!(sniff(b"junk before %PDF-1.4"), Sniffed::Pdf);
     assert_eq!(sniff(b"MZ plain text with %PDF- inside it, no PE header at all, padding padding padding"), Sniffed::Pdf);
 }
+
+#[test]
+fn sniffs_ole_compound_file_and_keeps_exec_precedence() {
+    let mut ole = vec![0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+    ole.resize(600, 0);
+    assert_eq!(sniff(&ole), Sniffed::Ole);
+    // OLE 매직 뒤에 %PDF-가 있어도 OLE다.
+    let mut with_pdf = ole.clone();
+    with_pdf[100..105].copy_from_slice(b"%PDF-");
+    assert_eq!(sniff(&with_pdf), Sniffed::Ole);
+    // 8바이트가 다 있어야 한다.
+    assert_eq!(sniff(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A]), Sniffed::Unknown);
+    // 실행 파일 매직은 계속 먼저다.
+    assert_eq!(sniff(b"\x7fELF\x02"), Sniffed::Elf);
+}

@@ -378,3 +378,31 @@ pub fn mark_encrypted(path: &Path, member: &str) {
     b[central + 8] |= 1;
     fs::write(path, b).unwrap();
 }
+
+// ---- DOCX 점검용 fixture ----
+
+pub const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+pub const DOCX_CONTENT_TYPES: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
+pub const DOCX_ROOT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+pub const DOCX_DOCUMENT: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>본문</w:t></w:r></w:p></w:body></w:document>"#;
+
+/// 최소 유효 DOCX의 부분 목록.
+pub fn minimal_docx_parts() -> Vec<(String, Vec<u8>)> {
+    vec![
+        ("[Content_Types].xml".into(), DOCX_CONTENT_TYPES.as_bytes().to_vec()),
+        ("_rels/.rels".into(), DOCX_ROOT_RELS.as_bytes().to_vec()),
+        ("word/document.xml".into(), DOCX_DOCUMENT.as_bytes().to_vec()),
+    ]
+}
+
+/// 최소 DOCX에서 `remove`한 부분을 빼고 `add`한 부분을 더하거나(같은 이름이면 바꾸고) 만든다.
+pub fn docx_with(path: &Path, remove: &[&str], add: &[(&str, &[u8])]) {
+    let mut parts: Vec<(String, Vec<u8>)> = minimal_docx_parts().into_iter().filter(|(n, _)| !remove.contains(&n.as_str())).collect();
+    for (name, body) in add {
+        parts.retain(|(n, _)| n != name);
+        parts.push((name.to_string(), body.to_vec()));
+    }
+    let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    zip_of(path, &refs);
+}
