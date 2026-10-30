@@ -723,3 +723,20 @@ fn byte_mutations_of_a_full_hwp_never_panic_or_stall() {
     }
     assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
 }
+
+#[test]
+fn streams_skipped_by_the_cap_or_hidden_behind_the_version_name_are_not_proof_of_an_empty_scripts_storage() {
+    // 스트림 상한(32)에 잘려 못 본 스트림이 있으면 비어 있음을 증명하지 못한다.
+    let empty = default_jscript(["", "", "", ""]);
+    let names: Vec<String> = (0..40).map(|_| "Scripts/JScriptVersion".to_string()).collect();
+    let mut streams: Vec<(&str, &[u8])> = vec![("Scripts/DefaultJScript", &empty[..])];
+    streams.extend(names.iter().map(|n| (n.as_str(), &JSCRIPT_VERSION[..])));
+    let r = scan_cfb("a.hwp", &hwp_cfb(&streams, 0));
+    assert!(r.has("HWP_SCRIPT") && r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+    // `JScriptVersion`이라는 이름의 예외는 최상위 `Scripts/JScriptVersion`에만 적용한다.
+    let r = scan_cfb("b.hwp", &hwp_cfb(&[("Scripts/DefaultJScript", &empty[..]), ("Scripts/Sub/JScriptVersion", &[1u8, 2, 3, 4, 5, 6, 7, 8, 9][..])], 0));
+    assert!(r.has("HWP_SCRIPT"), "a nested stream named JScriptVersion must not be exempt: {:?}", r.findings);
+    // 정상 구조(최상위 버전 스트림 하나)는 여전히 깨끗하다.
+    let r = scan_cfb("c.hwp", &hwp_cfb(&[("Scripts/DefaultJScript", &empty[..]), ("Scripts/JScriptVersion", &JSCRIPT_VERSION[..])], 0));
+    assert!(r.findings.is_empty() && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+}

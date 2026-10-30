@@ -117,6 +117,8 @@ pub fn inspect(file: &mut OleFile, header: &FileHeader, report: &mut FileReport)
     if streams.len() > MAX_STREAMS {
         report.mark_incomplete(&format!("{} streams under Scripts exceed the scan limit of {MAX_STREAMS}; the rest were not scanned", streams.len() - MAX_STREAMS));
         streams.truncate(MAX_STREAMS);
+        // 못 본 스트림이 있으면 비어 있음을 증명하지 못한다.
+        present = true;
     }
     for (path, entry) in streams {
         let (candidates, note) = match read_script(file, &entry, header.compressed()) {
@@ -142,7 +144,8 @@ pub fn inspect(file: &mut OleFile, header: &FileHeader, report: &mut FileReport)
         // `DefaultJScript`는 소스가 비어 있지 않거나 표로 읽히지 않을 때, 그 밖의 알 수 없는 스트림은 있다는 것만으로 스크립트가 있다고 본다(`JScriptVersion`은 버전 숫자뿐이다).
         if default {
             present |= parsed.is_empty() || parsed.iter().any(|t| !t.trim().is_empty());
-        } else if !entry.name.eq_ignore_ascii_case("JScriptVersion") {
+        } else if !path.eq_ignore_ascii_case("Scripts/JScriptVersion") {
+            // 버전 숫자뿐인 최상위 `Scripts/JScriptVersion`만 예외다. 다른 위치의 같은 이름은 알 수 없는 스트림이다.
             present = true;
         }
         let original = candidates.last().map(|d| raw_text(d)).unwrap_or_default();
