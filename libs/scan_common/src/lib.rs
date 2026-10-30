@@ -12,6 +12,7 @@
 
 pub mod args;
 pub mod color;
+pub mod entropy;
 pub mod files;
 pub mod finding;
 pub mod names;

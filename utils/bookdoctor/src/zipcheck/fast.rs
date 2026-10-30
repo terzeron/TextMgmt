@@ -8,6 +8,7 @@ use std::io::Read;
 use std::path::Path;
 
 use corpus_common::reader::open_zip;
+use scan_common::entropy::{is_text_name, shannon};
 use scan_common::sniff::{Sniffed, sniff};
 use scan_common::text::sanitize_display;
 use scan_common::{Category, FileReport, Severity};
@@ -25,6 +26,10 @@ pub(crate) const ZIP_EXEC_EXTS: &[&str] = &[
 
 /// 멤버마다 풀어 보는 앞부분의 바이트 수.
 pub const PROBE_BYTES: usize = 4096;
+/// 엔트로피를 판단하는 최소 표본(바이트). 이보다 작으면 값이 불안정하다.
+const ENTROPY_MIN_SAMPLE: usize = 512;
+/// 이 값 이상이면 압축·암호화된 데이터로 본다(비트/바이트). 텍스트는 대체로 5 안팎이다.
+const ENTROPY_THRESHOLD: f64 = 7.2;
 const RATIO_MIN_SIZE: u64 = 1024 * 1024;
 const RATIO_LIMIT: u64 = 200;
 
@@ -153,6 +158,10 @@ pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) 
             Ok(()) => {
                 if !flagged_exec && matches!(sniff(&probe), Sniffed::Pe | Sniffed::Elf | Sniffed::MachO) {
                     report.push(Category::Security, Severity::High, "EMBEDDED_EXECUTABLE", &shown, "Executable content (PE/ELF/Mach-O magic)");
+                }
+                // 텍스트 이름인데 앞부분이 압축·암호화된 듯하면 렌더러가 읽지 못하는 숨은 데이터일 수 있다. 이미 읽은 앞부분만 본다.
+                if probe.len() >= ENTROPY_MIN_SAMPLE && is_text_name(&name) && shannon(&probe) >= ENTROPY_THRESHOLD {
+                    report.push(Category::Security, Severity::Medium, "HIGH_ENTROPY_TEXT_MEMBER", &shown, "Text-named member looks compressed or encrypted");
                 }
                 if probe.starts_with(b"PK\x03\x04") {
                     report.push(Category::Security, Severity::Medium, "NESTED_ARCHIVE", &shown, "ZIP archive inside the archive");

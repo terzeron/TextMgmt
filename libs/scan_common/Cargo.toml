@@ -15,6 +15,10 @@ name = "color"
 path = "../../tests/rust/scan_common/color.rs"
 
 [[test]]
+name = "entropy"
+path = "../../tests/rust/scan_common/entropy.rs"
+
+[[test]]
 name = "finding"
 path = "../../tests/rust/scan_common/finding.rs"
 
