@@ -785,7 +785,11 @@ fn bomless_utf16(data: &[u8]) -> Option<bool> {
 
 /// 보안 리뷰 지적(from_utf8_lossy): UTF-16 마크업은 모든 정규식을 피해 간다. BOM·NUL 교차로 UTF-16을 알아봐 변환한다.
 /// UTF-8 BOM은 호출부가 예전처럼 벗긴다.
+/// `decode_text`를 부른 횟수. 비텍스트 멤버를 변환하지 않는지 테스트가 센다(성능 회귀 감시용, 검사 결과와 무관).
+pub static DECODE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn decode_text(data: &[u8]) -> (Cow<'_, str>, TextEnc) {
+    DECODE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if data.starts_with(&[0xFF, 0xFE, 0, 0]) || data.starts_with(&[0, 0, 0xFE, 0xFF]) {
         return (String::from_utf8_lossy(data), TextEnc::Utf32);
     }
@@ -961,8 +965,10 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
     let kind = declared.map_or(ext_kind, |(_, k)| k);
     check_magic(s, &data, name, &ext, kind != Kind::Other || ext == "txt");
 
-    let (text, enc) = decode_text(&data);
+    // `Kind::Other`(이미지, 폰트, txt 등)는 텍스트 규칙이 없다: `scan_text`가 아무것도 하지 않고 인코딩 지표도 `kind != Other`일 때만 낸다.
+    // 이런 멤버를 UTF-8로 변환하면 큰 바이너리마다 복사본을 만들 뿐이라(표본 EPUB에서 전체 명령의 19.5%) 건너뛴다.
     if kind != Kind::Other {
+        let (text, enc) = decode_text(&data);
         match enc {
             // 숨은 내용을 볼 수 없으니 지표로 남긴다. 예전처럼 대체 문자 텍스트 검사는 계속한다.
             TextEnc::Utf32 => s.record_enc(0, name, Some("UTF-32 content cannot be inspected")),
@@ -972,15 +978,15 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
             TextEnc::Utf8 if data.contains(&0) => s.record_enc(2, name, Some("NUL bytes: content cannot be reliably inspected")),
             _ => {}
         }
-    }
-    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    let is_opf = opf_names.contains(name);
-    scan_text(s, kind, text, name, is_opf);
-    // 보안 리뷰 지적(옛 탐지 가림): UTF-16으로 본 멤버도 예전처럼 바이트를 대체 문자로 읽은 텍스트를 함께 검사한다.
-    // `FF FE` 뒤에 ASCII 마크업이 오는 멤버가 변환 결과(깨진 글자)에 가려지지 않게 한다. 같은 키의 지표는 `add`가 합친다.
-    if enc == TextEnc::Utf16 {
-        let old = String::from_utf8_lossy(&data);
-        scan_text(s, kind, old.strip_prefix('\u{feff}').unwrap_or(&old), name, is_opf);
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+        let is_opf = opf_names.contains(name);
+        scan_text(s, kind, text, name, is_opf);
+        // 보안 리뷰 지적(옛 탐지 가림): UTF-16으로 본 멤버도 예전처럼 바이트를 대체 문자로 읽은 텍스트를 함께 검사한다.
+        // `FF FE` 뒤에 ASCII 마크업이 오는 멤버가 변환 결과(깨진 글자)에 가려지지 않게 한다. 같은 키의 지표는 `add`가 합친다.
+        if enc == TextEnc::Utf16 {
+            let old = String::from_utf8_lossy(&data);
+            scan_text(s, kind, old.strip_prefix('\u{feff}').unwrap_or(&old), name, is_opf);
+        }
     }
     data.len() as u64
 }

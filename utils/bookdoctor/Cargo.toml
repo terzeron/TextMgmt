@@ -35,6 +35,10 @@ name = "zipnames"
 path = "../../tests/rust/bookdoctor/zipnames.rs"
 
 [[test]]
+name = "epub_perf"
+path = "../../tests/rust/bookdoctor/epub_perf.rs"
+
+[[test]]
 name = "epub_gaps"
 path = "../../tests/rust/bookdoctor/epub_gaps.rs"
 
