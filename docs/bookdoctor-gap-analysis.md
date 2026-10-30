@@ -56,6 +56,7 @@
 | HWP 3.x 이하 | 최소 | `HWP Document File V` 서명 판별과 이름 위장 표시 | 서명 밖의 내용은 검사하지 않는다(코퍼스 `.hwp` 200건 중 198건이 이 형식이라 미완료로 표시하지 않았다) |
 | HTML | 있음 | EPUB의 HTML 규칙 재사용(스크립트, 이벤트 핸들러, 원격 스크립트, iframe, 폼, 난독화), 인코딩 우회(UTF-16·UTF-32·NUL), 이름 위장 | 코퍼스 `.html` 3,034건 중 High 이상 9건(0.3%, 모두 분석·광고 스크립트가 든 저장 페이지). 브라우저가 실제로 실행하는지는 판정하지 못한다 |
 | 격리 실행 | 있음 | `--isolate`: 파일마다 하위 프로세스에서 `ulimit -v`(기본 4096MiB)와 시간 상한(기본 120초), 실패는 그 파일의 미완료 | PDF 로딩 메모리 상한(R20)을 완화한다. 자식 출력 크기에는 상한이 없다 |
+| 규칙 엔진 | 있음(선택, 기본 꺼짐) | `--rules PATH`·`--builtin-rules`: YARA 문법의 부분집합(문자열·16진·nocase·wide, any/all/N of them, `#개수`, `at`, and/or/not)을 파일의 앞 16MiB 원시 바이트에 적용해 `RULE_MATCH`로 보고. 내장 규칙 7개(EICAR, PowerShell 인코딩·내려받기, LOLBin 원격 실행, base64·16진 PE 헤더, WScript.Shell). 문법·한도·YARA와의 차이는 `docs/bookdoctor-rules.md` | 압축된 내용(ZIP 멤버, PDF·OLE·HWP 스트림)은 못 본다. 코퍼스에 악성 파일이 없어 오탐만 측정했다(3,660개 파일에서 0건). YARA-X는 쓰지 않았다(182개 패키지, Rust 1.95 필요, 현재 Rust로 풀리는 1.19.0은 취약점 8건) |
 | 실행 파일 | 있음 | 확장자 + 매직바이트 이중 확인(P0) | - |
 
 실제 문서로 검증한 범위: DOCX는 코퍼스에 2건(악보)뿐이라 오탐률을 측정하지 못했고, HWPX는 0건이라 합성 fixture로만 확인했다. HWP 5.x는 코퍼스에 `.hwp` 정상 샘플이 없고 EPUB 안에서 1건(341KB)만 발견해, 그 1건과 한컴 명세(revision 1.3), 합성 fixture로 확인했다. DOC는 코퍼스에 0건이라 합성 fixture와 LibreOffice가 만든 3건으로만 확인했고, RTF는 11건이 모두 정상이었다(Word 표준 `\datastore` 오탐 1건을 이 과정에서 고쳤다).

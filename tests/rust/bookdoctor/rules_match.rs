@@ -170,3 +170,41 @@ fn the_at_check_only_looks_at_that_strings_variants() {
     assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
     assert_eq!(out.matches.len(), 1);
 }
+
+#[test]
+fn mutated_rule_sources_and_random_data_never_panic_or_stall() {
+    // 모든 문법 요소가 든 규칙 텍스트를 변조해 파싱하고, 파싱이 되면 무작위 데이터에 적용한다. panic·지연이 없어야 한다.
+    let base = "rule A { meta: severity = \"high\" description = \"d\" strings: $a = \"abc\" nocase wide $b = { 4D ?? 90 00 } $c = \"x\\x41y\" ascii condition: ( $a and #b >= 1 ) or $c at 3 or 2 of them or not $a }\nrule B { strings: $z = \"zz\" condition: any of them }";
+    let mut seed = 0x5EED_1234u32;
+    let mut next = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as usize
+    };
+    let data: Vec<u8> = (0..4096).map(|_| (next() & 0xFF) as u8).collect();
+    let started = Instant::now();
+    let (mut parsed, mut rejected) = (0, 0);
+    for _ in 0..3000 {
+        let mut bytes = base.as_bytes().to_vec();
+        for _ in 0..1 + next() % 4 {
+            let at = next() % bytes.len();
+            match next() % 3 {
+                0 => bytes[at] = (next() & 0xFF) as u8,
+                1 => bytes.insert(at, (next() & 0xFF) as u8),
+                _ => {
+                    bytes.remove(at);
+                }
+            }
+        }
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        match parse(&text) {
+            Ok(set) => {
+                parsed += 1;
+                let _ = set.scan(&data);
+                let _ = set.scan(b"");
+            }
+            Err(_) => rejected += 1,
+        }
+    }
+    assert!(started.elapsed() < Duration::from_secs(60), "{:?}", started.elapsed());
+    assert!(parsed > 0 && rejected > 0, "the mutations should produce both valid and invalid sources ({parsed}/{rejected})");
+}
