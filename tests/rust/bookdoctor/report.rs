@@ -4,7 +4,8 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use bookdoctor::report::{Aggregate, write_json_line, write_report_file, write_text};
+use bookdoctor::report::{Aggregate, finding_style, write_json_line, write_report_file, write_text};
+use scan_common::color::Style;
 use scan_common::{Category, FileReport, Format, Severity, Summary};
 
 fn flagged(path: &Path) -> FileReport {
@@ -36,7 +37,7 @@ fn file_name_with_control_chars_never_breaks_json_or_text() {
     serde_json::from_str::<serde_json::Value>(body).unwrap();
 
     let mut text = Vec::new();
-    write_text(&r, &mut text).unwrap();
+    write_text(&r, &mut text, false).unwrap();
     let text = String::from_utf8(text).unwrap();
     assert!(!text.contains('\u{1b}'), "{text:?}");
     assert!(text.lines().count() >= 2);
@@ -47,7 +48,7 @@ fn file_name_with_control_chars_never_breaks_json_or_text() {
 fn non_utf8_file_name_is_lossy_not_a_panic() {
     let r = flagged(Path::new(OsStr::from_bytes(b"\xff.txt")));
     let mut text = Vec::new();
-    write_text(&r, &mut text).unwrap();
+    write_text(&r, &mut text, false).unwrap();
     assert!(String::from_utf8(text).unwrap().contains(".txt"));
     let mut json = Vec::new();
     write_json_line(&r, &mut json).unwrap();
@@ -80,7 +81,7 @@ fn report_file_contains_only_flagged_files_and_summary() {
 fn clean_file_prints_nothing() {
     let clean = FileReport::new(Path::new("ok.epub"), Some(Format::Epub));
     let (mut t, mut j) = (Vec::new(), Vec::new());
-    write_text(&clean, &mut t).unwrap();
+    write_text(&clean, &mut t, false).unwrap();
     write_json_line(&clean, &mut j).unwrap();
     assert!(t.is_empty() && j.is_empty());
 }
@@ -90,7 +91,7 @@ fn incomplete_file_is_kept_and_printed_with_reasons() {
     let mut r = FileReport::new(Path::new("x.pdf"), Some(Format::Pdf));
     r.mark_incomplete("unreadable: boom");
     let mut t = Vec::new();
-    write_text(&r, &mut t).unwrap();
+    write_text(&r, &mut t, false).unwrap();
     assert!(String::from_utf8(t).unwrap().contains("unreadable: boom"));
     let mut agg = Aggregate::new();
     agg.add(&r);
@@ -101,7 +102,7 @@ fn incomplete_file_is_kept_and_printed_with_reasons() {
 fn bidi_file_name_is_hidden_in_text_but_kept_in_json() {
     let r = flagged(Path::new("evil\u{202e}gpj.exe"));
     let mut text = Vec::new();
-    write_text(&r, &mut text).unwrap();
+    write_text(&r, &mut text, false).unwrap();
     assert!(!String::from_utf8(text).unwrap().contains('\u{202e}'));
     let mut json = Vec::new();
     write_json_line(&r, &mut json).unwrap();
@@ -121,7 +122,7 @@ fn escape_and_bidi_in_the_path_are_hidden_in_text_but_the_real_file_is_found() {
     assert_eq!(Path::new(&r.path), p.as_path());
     assert!(Path::new(&r.path).exists());
     let mut text = Vec::new();
-    write_text(&r, &mut text).unwrap();
+    write_text(&r, &mut text, false).unwrap();
     let text = String::from_utf8(text).unwrap();
     assert!(!text.is_empty());
     assert!(!text.contains('\u{1b}') && !text.contains('\u{202e}'), "{text:?}");
@@ -167,4 +168,66 @@ fn summary_line_lists_only_nonzero_suppressed_severities() {
     write_summary_line(&agg, &Summary::default(), &mut out).unwrap();
     let line = String::from_utf8(out).unwrap();
     assert!(line.contains("억제 MEDIUM 1건") && !line.contains("LOW"), "{line}");
+}
+
+// --- 색 ---
+
+fn finding_of(category: Category, severity: Severity, code: &str) -> scan_common::Finding {
+    let mut r = FileReport::new(Path::new("a"), None);
+    r.push(category, severity, code, "", "");
+    r.findings.remove(0)
+}
+
+#[test]
+fn finding_style_rules() {
+    let s = |c, v, code| finding_style(&finding_of(c, v, code));
+    assert_eq!(s(Category::Render, Severity::Low, "X"), Some(Style::Red));
+    assert_eq!(s(Category::Defect, Severity::High, "X"), Some(Style::Red));
+    assert_eq!(s(Category::Security, Severity::High, "X"), Some(Style::Purple));
+    assert_eq!(s(Category::Security, Severity::Critical, "X"), Some(Style::Red));
+    assert_eq!(s(Category::Security, Severity::Medium, "X"), None);
+    assert_eq!(s(Category::Security, Severity::Low, "X"), None);
+    // 암호화는 분류·심각도와 무관하게 cyan이다.
+    assert_eq!(s(Category::Render, Severity::High, "ENCRYPTED"), Some(Style::Cyan));
+}
+
+#[test]
+fn write_text_paints_whole_finding_line_when_color_is_on() {
+    let r = flagged(Path::new("a.epub"));
+    let mut out = Vec::new();
+    write_text(&r, &mut out, true).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    let painted: Vec<&str> = text.lines().filter(|l| l.contains("\u{1b}[35m")).collect();
+    assert_eq!(painted.len(), 1, "{text:?}");
+    assert!(painted[0].starts_with("\u{1b}[35m  [HIGH] EPUB_SCRIPT") && painted[0].ends_with("\u{1b}[0m"), "{text:?}");
+}
+
+#[test]
+fn write_text_without_color_has_no_escape_at_all() {
+    let r = flagged(Path::new("a.epub"));
+    let mut out = Vec::new();
+    write_text(&r, &mut out, false).unwrap();
+    assert!(!String::from_utf8(out).unwrap().contains('\u{1b}'));
+}
+
+#[test]
+fn encrypted_incomplete_reason_is_cyan_and_other_reasons_are_not() {
+    let mut r = FileReport::new(Path::new("a.pdf"), Some(Format::Pdf));
+    r.mark_incomplete("encrypted: string values may be unreadable");
+    r.mark_incomplete("skipped: too big");
+    let mut out = Vec::new();
+    write_text(&r, &mut out, true).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.contains("\u{1b}[36m  INCOMPLETE encrypted: string values may be unreadable\u{1b}[0m"), "{text:?}");
+    assert!(text.contains("\n  INCOMPLETE skipped: too big\n"), "{text:?}");
+}
+
+#[test]
+fn escape_in_file_name_and_detail_never_reaches_output_raw() {
+    let r = flagged(Path::new("a\u{1b}[31m.txt"));
+    let mut out = Vec::new();
+    write_text(&r, &mut out, true).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    // 우리가 붙인 시작·끝 코드 한 쌍(칠한 줄 1개)만 있어야 한다.
+    assert_eq!(text.matches('\u{1b}').count(), 2, "{text:?}");
 }

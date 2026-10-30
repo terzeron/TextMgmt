@@ -8,8 +8,9 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use scan_common::text::sanitize_display;
-use scan_common::finding::Suppressed;
-use scan_common::{FileReport, Summary};
+use scan_common::color::{Style, paint};
+use scan_common::finding::{ENCRYPTION_CODES, Suppressed};
+use scan_common::{Category, FileReport, Finding, Severity, Summary};
 use serde::Serialize;
 
 /// 출력할 내용이 있는가: 발견이 있거나 검사를 끝내지 못했다.
@@ -26,17 +27,40 @@ fn io_err(e: serde_json::Error) -> io::Error {
     io::Error::other(e)
 }
 
-/// 파일 1건당 텍스트 블록: 경로 한 줄, 이어서 발견과 미완료 이유를 한 줄씩 쓴다.
-pub fn write_text(r: &FileReport, out: &mut dyn Write) -> io::Result<()> {
+/// 지표 줄의 색. 암호화·DRM은 cyan, 렌더링 구조 에러(`render`·`defect`)와 CRITICAL은 red, HIGH 보안 지표는 purple이다.
+pub fn finding_style(f: &Finding) -> Option<Style> {
+    if ENCRYPTION_CODES.contains(&f.code.as_str()) {
+        Some(Style::Cyan)
+    } else if matches!(f.category, Category::Render | Category::Defect) || f.severity == Severity::Critical {
+        Some(Style::Red)
+    } else if f.severity == Severity::High {
+        Some(Style::Purple)
+    } else {
+        None
+    }
+}
+
+fn paint_opt(line: String, style: Option<Style>, color: bool) -> String {
+    match style {
+        Some(s) => paint(&line, s, color),
+        None => line,
+    }
+}
+
+/// 파일 1건당 텍스트 블록: 경로 한 줄, 이어서 발견과 미완료 이유를 한 줄씩 쓴다. `color`면 줄 전체에 색을 입힌다.
+/// 색 코드는 `safe()`를 거친 문자열 바깥에만 붙는다.
+pub fn write_text(r: &FileReport, out: &mut dyn Write, color: bool) -> io::Result<()> {
     if !is_flagged(r) {
         return Ok(());
     }
     writeln!(out, "{}", safe(&r.path))?;
     for reason in r.reasons.iter().filter(|_| r.incomplete) {
-        writeln!(out, "  INCOMPLETE {}", safe(reason))?;
+        let style = FileReport::is_encrypted_reason(reason).then_some(Style::Cyan);
+        writeln!(out, "{}", paint_opt(format!("  INCOMPLETE {}", safe(reason)), style, color))?;
     }
     for f in &r.findings {
-        writeln!(out, "  [{}] {} {} {}", f.severity.label(), safe(&f.code), safe(&f.location), safe(&f.detail))?;
+        let line = format!("  [{}] {} {} {}", f.severity.label(), safe(&f.code), safe(&f.location), safe(&f.detail));
+        writeln!(out, "{}", paint_opt(line, finding_style(f), color))?;
     }
     Ok(())
 }

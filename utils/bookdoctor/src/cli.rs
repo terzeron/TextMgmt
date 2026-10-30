@@ -1,9 +1,10 @@
 //! 명령행. 옵션은 argparse와 같은 규칙으로 읽고, 잘못된 입력은 종료 코드 2로 끝낸다.
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use scan_common::args::{long_option, number};
+use scan_common::color::{ColorMode, enabled};
 use scan_common::files::collect_files;
 use scan_common::{Category, DEFAULT_WORKERS, Severity, limited, pool, scan_streaming, workers_within_memory};
 
@@ -11,7 +12,7 @@ use crate::pdf::security::MAX_PARALLEL_INPUT_MB;
 use crate::report::{Aggregate, write_json_line, write_report_file, write_summary_line, write_text};
 use crate::scan::scan_file;
 
-const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--pdf-text] [--no-poppler] PATH...";
+const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--pdf-text] [--no-poppler] PATH...";
 
 /// 한 번에 검사하는 파일 수는 워커 수의 이 배수다.
 const WINDOW_PER_WORKER: usize = 8;
@@ -29,6 +30,8 @@ pub struct Options {
     pub only: Vec<Category>,
     /// 이보다 낮은 심각도의 지표는 출력하지 않는다. 기본은 `High`다.
     pub min_severity: Severity,
+    /// 텍스트 출력의 색. `--json`은 항상 색이 없다.
+    pub color: ColorMode,
     pub pdf_text: bool,
     pub no_poppler: bool,
 }
@@ -45,6 +48,7 @@ impl Default for Options {
             max_total_mb: 256,
             only: Vec::new(),
             min_severity: Severity::High,
+            color: ColorMode::Auto,
             pdf_text: false,
             no_poppler: false,
         }
@@ -67,6 +71,10 @@ fn parse_only(value: &str) -> Result<Vec<Category>, String> {
     Ok(only)
 }
 
+fn parse_color(value: &str) -> Result<ColorMode, String> {
+    ColorMode::parse(value).ok_or_else(|| format!("argument --color: invalid choice: '{value}' (choose from 'auto', 'always', 'never')"))
+}
+
 fn parse_min_severity(value: &str) -> Result<Severity, String> {
     Severity::parse(value).ok_or_else(|| format!("argument --min-severity: invalid choice: '{value}' (choose from 'low', 'medium', 'high', 'critical')"))
 }
@@ -81,12 +89,13 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
             "--json" => o.json = true,
             "--pdf-text" => o.pdf_text = true,
             "--no-poppler" => o.no_poppler = true,
-            _ => match long_option(arg, &["report", "workers", "limit", "max-total-mb", "only", "min-severity"], &mut it)? {
+            _ => match long_option(arg, &["report", "workers", "limit", "max-total-mb", "only", "min-severity", "color"], &mut it)? {
                 Some((name, value)) => match name.as_str() {
                     "report" => o.report = Some(value.into()),
                     "workers" => o.workers = number(&name, &value)?,
                     "limit" => o.limit = number(&name, &value)?,
                     "max-total-mb" => o.max_total_mb = number(&name, &value)?,
+                    "color" => o.color = parse_color(&value)?,
                     "min-severity" => o.min_severity = parse_min_severity(&value)?,
                     _ => o.only = parse_only(&value)?,
                 },
@@ -144,6 +153,7 @@ fn scan(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
     let paths = limited(collect_files(&opts.paths, opts.recursive, wanted), opts.limit);
     let workers = effective_workers(opts);
     let pool = pool(workers);
+    let color = enabled(opts.color, io::stdout().is_terminal(), std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()));
     let mut agg = Aggregate::new();
     let summary = scan_streaming(
         &paths,
@@ -157,7 +167,7 @@ fn scan(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
         },
         |r| {
             agg.add(r);
-            if opts.json { write_json_line(r, out)? } else { write_text(r, out)? }
+            if opts.json { write_json_line(r, out)? } else { write_text(r, out, color)? }
             out.flush()
         },
     )?;
@@ -180,7 +190,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
 사용법:
   bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N]
              [--only security,defect,render] [--min-severity low|medium|high|critical]
-             [--pdf-text] [--no-poppler] PATH...
+             [--color auto|always|never] [--pdf-text] [--no-poppler] PATH...
 
 인자:
   PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt만 모은다.
@@ -197,6 +207,8 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   --only LIST         지정한 분류(security, defect, render)의 지표만 남긴다.
   --min-severity LVL  이 심각도 이상의 지표만 출력한다 (기본 high). 낮은 지표는 요약 줄에 건수만 남긴다.
                       low로 주면 모두 출력한다.
+  --color MODE        auto(기본, 터미널이고 NO_COLOR가 없을 때만), always, never.
+                      CRITICAL과 렌더링 구조 에러는 red, HIGH는 purple, 암호화·DRM은 cyan이다. --json에는 색이 없다.
   --pdf-text          PDF 본문 텍스트까지 검사한다.
   --no-poppler        poppler 외부 명령을 쓰지 않는다.
   -h, --help          이 도움말

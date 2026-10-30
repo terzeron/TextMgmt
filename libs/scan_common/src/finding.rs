@@ -47,6 +47,13 @@ pub struct Finding {
     pub viewer_blocked: ViewerBlocked,
 }
 
+/// 암호화·DRM을 뜻하는 지표 코드. 출력에서 cyan으로 칠한다.
+pub const ENCRYPTION_CODES: &[&str] = &["ENCRYPTED"];
+
+/// 암호화·DRM 때문에 검사하지 못했다는 사유의 표지 문구. 사유 앞에 위치(멤버 이름)가 붙을 수 있어 포함 여부로 본다.
+/// 이름에 `encrypted`가 들어 있을 뿐인 다른 사유와 섞이지 않도록 알려진 문구만 쓴다.
+const ENCRYPTED_REASON_MARKERS: &[&str] = &["encrypted: ", "ZIP-encrypted entry"];
+
 /// 출력 필터가 지운 지표의 심각도별 건수. 점수·요약에서 "숨겼을 뿐 있었다"를 남기려고 센다.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -107,6 +114,11 @@ impl FileReport {
     pub fn mark_incomplete(&mut self, reason: &str) {
         self.incomplete = true;
         self.reasons.push(reason.to_string());
+    }
+
+    /// 이 미완료 사유가 암호화·DRM 때문인가.
+    pub fn is_encrypted_reason(reason: &str) -> bool {
+        ENCRYPTED_REASON_MARKERS.iter().any(|m| reason.contains(m))
     }
 
     /// `min`보다 낮은 심각도의 지표를 지우고 심각도별 건수를 `suppressed`에 더한다. 미완료 상태는 건드리지 않는다.

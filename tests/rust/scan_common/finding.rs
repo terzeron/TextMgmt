@@ -99,3 +99,17 @@ fn suppressed_is_omitted_from_json_when_empty_and_present_otherwise() {
     assert_eq!(v["suppressed"]["medium"], 1);
     assert_eq!(v["suppressed"]["high"], 0);
 }
+
+#[test]
+fn encrypted_reason_markers_are_specific() {
+    assert!(FileReport::is_encrypted_reason("encrypted: string values may be unreadable"));
+    assert!(FileReport::is_encrypted_reason("a.bin: ZIP-encrypted entry cannot be reliably inspected"));
+    // 이름에 encrypted가 들어 있을 뿐인 다른 사유는 암호화로 보지 않는다.
+    assert!(!FileReport::is_encrypted_reason("encrypted.xml: OPF is not well-formed XML"));
+    assert!(!FileReport::is_encrypted_reason("skipped: 5 bytes exceeds --max-total-mb"));
+}
+
+#[test]
+fn encryption_codes_include_the_pdf_encrypted_code() {
+    assert!(scan_common::finding::ENCRYPTION_CODES.contains(&"ENCRYPTED"));
+}

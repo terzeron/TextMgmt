@@ -193,3 +193,46 @@ fn usage_documents_min_severity() {
     let text = String::from_utf8(out).unwrap();
     assert!(text.contains("--min-severity"), "{text}");
 }
+
+// --- --color ---
+
+#[test]
+fn parse_color_defaults_to_auto_and_reads_each_value() {
+    use scan_common::color::ColorMode;
+    assert_eq!(parse(&args("a")).unwrap().color, ColorMode::Auto);
+    assert_eq!(parse(&args("--color always a")).unwrap().color, ColorMode::Always);
+    assert_eq!(parse(&args("--color never a")).unwrap().color, ColorMode::Never);
+    let e = parse(&args("--color rainbow a")).unwrap_err();
+    assert!(e.contains("invalid choice") && e.contains("rainbow"), "{e}");
+}
+
+#[test]
+fn color_always_paints_structure_errors_red() {
+    let d = low_and_medium_dir();
+    let (_, out) = run_in(d.path(), &["--min-severity", "low", "--color", "always"]);
+    assert!(out.contains("\u{1b}[31m  [LOW] FILENAME_RESERVED_NAME"), "{out:?}");
+    assert!(out.contains("\u{1b}[31m  [MEDIUM] EMPTY_FILE"), "{out:?}");
+}
+
+#[test]
+fn piped_output_has_no_ansi_in_auto_mode_and_never_mode() {
+    let d = low_and_medium_dir();
+    for extra in [vec!["--min-severity", "low"], vec!["--min-severity", "low", "--color", "never"]] {
+        let (_, out) = run_in(d.path(), &extra);
+        assert!(!out.contains('\u{1b}'), "{extra:?}: {out:?}");
+    }
+}
+
+#[test]
+fn json_output_has_no_ansi_even_with_color_always() {
+    let d = low_and_medium_dir();
+    let (_, out) = run_in(d.path(), &["--json", "--min-severity", "low", "--color", "always"]);
+    assert!(out.contains("EMPTY_FILE") && !out.contains('\u{1b}'), "{out:?}");
+}
+
+#[test]
+fn usage_documents_color() {
+    let mut out = Vec::new();
+    print_usage(&mut out).unwrap();
+    assert!(String::from_utf8(out).unwrap().contains("--color"));
+}
