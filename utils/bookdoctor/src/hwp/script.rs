@@ -72,25 +72,24 @@ fn raw_text(data: &[u8]) -> String {
     format!("{}\n{latin1}", utf16_lossy(data))
 }
 
-/// 스트림을 읽는다. 압축 비트가 서 있으면 raw deflate나 zlib으로 풀어 본다(표 2는 `Scripts`를 압축 대상으로 표시하지 않으므로
-/// 압축하지 않은 스트림도 받는다). 풀린 바이트와, 상한이나 읽기 문제로 덜 본 사유를 돌려준다.
-fn read_script(file: &mut OleFile, entry: &ole_reader::Entry, compressed: bool) -> Result<(Vec<u8>, Option<String>), String> {
+/// 스트림을 읽어 검사할 바이트 후보를 돌려준다: 원본, 그리고 압축 비트가 서 있으면 raw deflate나 zlib으로 푼 내용.
+/// 표 2는 `Scripts`를 압축 대상으로 표시하지 않으므로 압축하지 않은 스트림도 받는다. 읽는 쪽이 어느 쪽으로 읽는지 알 수 없어 둘 다 본다.
+/// 상한이나 풀기 문제로 덜 본 사유도 함께 돌려준다.
+fn read_script(file: &mut OleFile, entry: &ole_reader::Entry, compressed: bool) -> Result<(Vec<Vec<u8>>, Option<String>), String> {
     let data = file.read_stream_prefix(entry, MAX_SCRIPT).map_err(|e| format!("{} could not be read: {e:?}", entry.name))?;
     let mut note = (entry.size > MAX_SCRIPT as u64).then(|| format!("{} ({} bytes) exceeds the scan limit; only the first {} MiB were scanned", entry.name, entry.size, MAX_SCRIPT / (1024 * 1024)));
-    if compressed && !(entry.name == "DefaultJScript" && parse(&data).is_some()) && !looks_like_text(&data) {
+    let mut candidates = Vec::new();
+    // 8바이트 이하(`JScriptVersion` 등)는 풀 필요가 없다.
+    if compressed && data.len() > 8 {
         match decompress(&data, MAX_SCRIPT) {
-            Ok(inflated) => return Ok((inflated, note)),
+            Ok(inflated) => candidates.push(inflated),
             Err(InflateError::TooLarge) => note = Some(format!("{} decompresses beyond the {} MiB scan limit", entry.name, MAX_SCRIPT / (1024 * 1024))),
-            // 압축된 스트림이 아니었다. 있는 그대로 본다.
+            // 압축된 스트림이 아니었다. 원본만 본다.
             Err(InflateError::Invalid) => {}
         }
     }
-    Ok((data, note))
-}
-
-/// 풀 필요가 없는 평문처럼 보이는가(`Scripts`의 짧은 버전 스트림 등). 8바이트 이하는 풀지 않는다.
-fn looks_like_text(data: &[u8]) -> bool {
-    data.len() <= 8
+    candidates.push(data);
+    Ok((candidates, note))
 }
 
 /// `Scripts` 스토리지를 검사한다. 스토리지와 `FileHeader` 비트 3이 어긋나면 결함이다.
@@ -107,16 +106,21 @@ pub fn inspect(file: &mut OleFile, header: &FileHeader, report: &mut FileReport)
     if !has_storage {
         return;
     }
-    let streams: Vec<(String, ole_reader::Entry)> = file
+    let mut streams: Vec<(String, ole_reader::Entry)> = file
         .entries()
         .iter()
         .filter(|e| e.kind == ole_reader::EntryKind::Stream)
         .map(|e| (file.path_of(e), e.clone()))
         .filter(|(path, _)| path.to_lowercase().starts_with("scripts/"))
-        .take(MAX_STREAMS)
         .collect();
+    // `DefaultJScript`를 먼저 보고, 상한 때문에 건너뛴 스트림이 있으면 깨끗하다고 하지 않는다.
+    streams.sort_by_key(|(_, e)| !e.name.eq_ignore_ascii_case("DefaultJScript"));
+    if streams.len() > MAX_STREAMS {
+        report.mark_incomplete(&format!("{} streams under Scripts exceed the scan limit of {MAX_STREAMS}; the rest were not scanned", streams.len() - MAX_STREAMS));
+        streams.truncate(MAX_STREAMS);
+    }
     for (path, entry) in streams {
-        let (data, note) = match read_script(file, &entry, header.compressed()) {
+        let (candidates, note) = match read_script(file, &entry, header.compressed()) {
             Ok(r) => r,
             Err(reason) => {
                 report.mark_incomplete(&reason);
@@ -127,11 +131,15 @@ pub fn inspect(file: &mut OleFile, header: &FileHeader, report: &mut FileReport)
             report.mark_incomplete(&note);
         }
         let default = entry.name.eq_ignore_ascii_case("DefaultJScript");
-        let parsed = if default && data.len() <= MAX_SCRIPT && entry.size <= MAX_SCRIPT as u64 { parse(&data) } else { None };
-        if default && parsed.is_none() && entry.size <= MAX_SCRIPT as u64 {
+        let within_limit = entry.size <= MAX_SCRIPT as u64;
+        // 표 9 구조로 읽히는 후보는 그 텍스트를, 그렇지 않은 후보는 원시 바이트를 본다. 원본의 원시 바이트는 항상 함께 본다(표 뒤에 붙은 바이트 포함).
+        let parsed: Vec<String> = if default && within_limit { candidates.iter().filter_map(|c| parse(c)).collect() } else { Vec::new() };
+        if default && within_limit && parsed.is_empty() {
             report.mark_incomplete("Scripts/DefaultJScript does not follow the documented layout; scanned as raw bytes");
         }
-        let text = parsed.unwrap_or_else(|| raw_text(&data));
+        let original = candidates.last().map(|d| raw_text(d)).unwrap_or_default();
+        let inflated: Vec<String> = candidates.iter().rev().skip(1).map(|d| raw_text(d)).collect();
+        let text = [parsed, inflated, vec![original]].concat().join("\n");
         if let Some(keyword) = suspicious(&text) {
             report.push(Category::Security, Severity::Critical, "HWP_SCRIPT_SUSPICIOUS", &sanitize_display(&path, 120, Some('…')), &format!("script uses {keyword}"));
         }

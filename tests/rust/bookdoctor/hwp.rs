@@ -511,3 +511,29 @@ fn a_docinfo_that_cannot_be_decompressed_is_incomplete() {
     let r = scan_bindata(0x1, Some(vec![0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA]), &[]);
     assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("DocInfo")), "{:?}", r.reasons);
 }
+
+#[test]
+fn defaultjscript_is_scanned_even_when_many_other_streams_come_first() {
+    let evil = default_jscript(["", r#"new ActiveXObject("WScript.Shell")"#, "", ""]);
+    let junk = [1u8, 2, 3];
+    let names: Vec<String> = (0..60).map(|i| format!("Scripts/S{i:02}")).collect();
+    let mut streams: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), &junk[..])).collect();
+    streams.push(("Scripts/DefaultJScript", &evil[..]));
+    let r = scan_cfb("a.hwp", &hwp_cfb(&streams, 0x8));
+    assert!(r.has("HWP_SCRIPT_SUSPICIOUS"), "DefaultJScript past the stream cap was skipped: {:?} {:?}", r.findings, r.reasons);
+    // 상한 때문에 건너뛴 스트림이 있으면 깨끗하다고 하지 않는다.
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("Scripts")), "{:?}", r.reasons);
+}
+
+#[test]
+fn data_after_a_valid_script_table_is_still_scanned() {
+    // 표 9 구조를 지킨 앞부분 뒤에 붙은 바이트도 키워드를 찾는다. 읽는 쪽이 어디까지 읽는지 알 수 없다.
+    let mut bytes = default_jscript(["", "var a = 1;", "", ""]);
+    bytes.extend_from_slice(&wchars("new ActiveXObject('WScript.Shell')"));
+    let r = scan_scripts(0x8, &bytes);
+    assert!(r.has("HWP_SCRIPT_SUSPICIOUS"), "{:?} {:?}", r.findings, r.reasons);
+    // 압축 비트가 서 있어도 같다: 원본의 뒷부분과 푼 내용을 모두 본다.
+    let mut compressed_flag = default_jscript(["", "var a = 1;", "", ""]);
+    compressed_flag.extend_from_slice(&wchars("WScript.Shell"));
+    assert!(scan_scripts(0x1 | 0x8, &compressed_flag).has("HWP_SCRIPT_SUSPICIOUS"));
+}
