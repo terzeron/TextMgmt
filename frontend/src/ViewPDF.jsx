@@ -31,9 +31,10 @@ import {
 } from "./pdfRenderScale";
 import { pdfjs, PDF_DOCUMENT_OPTIONS } from "./pdfjsEnv";
 import { currentPageIndex, keyDirection, swipeDirection } from "./pdfPageTurn";
+import { endPdfTrace, startPdfTrace, tracePdf } from "./pdfViewerTrace";
 
 // CSS의 --pdf-toolbar-h와 같은 값(px). 1장씩 보기에서 쪽이 멈추는 기준선 계산에 쓴다.
-const PDF_TOOLBAR_HEIGHT = 32;
+const PDF_TOOLBAR_HEIGHT = 22;
 // 1장씩 보기에서 막는 상하 스크롤 키. 방향키 좌우만 쪽 넘김에 쓴다.
 const VERTICAL_SCROLL_KEYS = new Set([
   "ArrowUp",
@@ -245,6 +246,35 @@ export default function ViewPDF({
   const fetchingRef = useRef(new Set()); // 현재 페칭 중인 범위 추적
   const cancelledRef = useRef(false);
   const totalPagesRef = useRef(0);
+  // 청크마다 getDocument 가 Worker(와 wasm)를 새로 만들면 모바일에서 메모리가 겹쳐 쌓이므로 하나를 공유한다.
+  const workerRef = useRef(null);
+  const traceModeRef = useRef("");
+
+  // 진단 기록: 지금 메모리를 잡고 있는 canvas 와 pdfDoc 규모를 이벤트와 함께 남긴다.
+  // 탭이 죽으면 마지막 기록이 다음 열림 때 서버로 전송된다(pdfViewerTrace.js).
+  const trace = useCallback((event) => {
+    let live = 0;
+    let pixels = 0;
+    for (const canvas of Object.values(canvasRefs.current)) {
+      if (canvas && canvas.width > 1) {
+        live += 1;
+        pixels += canvas.width * canvas.height;
+      }
+    }
+    const near = [...nearPagesRef.current].sort((a, b) => a - b);
+    const heap = globalThis.performance?.memory?.usedJSHeapSize;
+    tracePdf(event, {
+      live,
+      mpx: Math.round(pixels / 100000) / 10,
+      docs: chunkDocsRef.current.size,
+      act: activeRenderTasksRef.current.size,
+      q: renderQueueRef.current.size,
+      near: near.length ? `${near[0]}-${near[near.length - 1]}` : "-",
+      dpr: window.devicePixelRatio || 1,
+      mode: traceModeRef.current,
+      ...(heap ? { heapMB: Math.round(heap / 1048576) } : {}),
+    });
+  }, []);
 
   // 청크 키에서 해당 페이지를 포함하는 청크의 pdfDoc과 로컬 페이지 번호를 반환
   const findChunkForPage = useCallback((globalPageNum) => {
@@ -278,6 +308,7 @@ export default function ViewPDF({
         const pdfDoc = await pdfjs.getDocument({
           ...PDF_DOCUMENT_OPTIONS,
           data: buffer,
+          worker: workerRef.current,
         }).promise;
         if (cancelledRef.current) {
           pdfDoc.loadingTask.destroy();
@@ -285,6 +316,7 @@ export default function ViewPDF({
         }
 
         chunkDocsRef.current.set(key, pdfDoc);
+        trace(`chunk ${key}`);
 
         // 청크 로드 완료 → 큐에 대기 중이던 페이지들을 다시 펌프 (렌더 가능해짐)
         pumpQueue();
@@ -297,7 +329,7 @@ export default function ViewPDF({
         fetchingRef.current.delete(key);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix/pumpQueue는 chunk fetch에 영향 없는 안정 참조라 의도적으로 제외
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix/pumpQueue/trace는 chunk fetch에 영향 없는 안정 참조라 의도적으로 제외
     [bookId],
   );
 
@@ -361,7 +393,8 @@ export default function ViewPDF({
     const evicted = far.slice(RETAIN_PAGES_OUTSIDE_VIEW).map((f) => f.pageNum);
     for (const pageNum of evicted) evictPage(pageNum);
     releaseIdleChunks(evicted);
-  }, [evictPage, releaseIdleChunks]);
+    trace(`trim -${evicted.length}`);
+  }, [evictPage, releaseIdleChunks, trace]);
 
   // 실제 렌더 실행. 스케줄러가 "청크 로드된" 페이지에 대해서만 호출한다. 취소 가능.
   const executeRender = useCallback(
@@ -393,6 +426,7 @@ export default function ViewPDF({
           scale: computeRenderScale(page, canvas, dpr),
         });
 
+        trace(`render-start p${globalPageNum}`);
         const context = canvas.getContext("2d");
         canvas.style.aspectRatio = "";
         canvas.width = renderViewport.width;
@@ -410,6 +444,7 @@ export default function ViewPDF({
 
         everRenderedRef.current.add(globalPageNum);
         setLoadedPages(everRenderedRef.current.size);
+        trace(`render-done p${globalPageNum}`);
 
         if (globalPageNum === 1) {
           setIsFirstPageReady(true);
@@ -423,7 +458,7 @@ export default function ViewPDF({
         }
       }
     },
-    [findChunkForPage, trimFarPages],
+    [findChunkForPage, trimFarPages, trace],
   );
 
   // 큐에서 청크가 로드되어 즉시 렌더 가능한 페이지 중 뷰포트에 가장 가까운 것을 고른다
@@ -541,7 +576,10 @@ export default function ViewPDF({
       const pages = Array.from(el.querySelectorAll(".pdf-content > :is(.pdf-page, .pdf-page-slot)"));
       const index = currentPageIndex(el, pages, PDF_TOOLBAR_HEIGHT);
       const target = pages[index + step];
-      if (index >= 0 && target) target.scrollIntoView?.({ block: "start" });
+      if (index >= 0 && target) {
+        trace(`turn ${index + 1}->${index + 1 + step}`);
+        target.scrollIntoView?.({ block: "start" });
+      }
     };
     const onKey = (event) => {
       if (event.ctrlKey || event.altKey || event.metaKey) return;
@@ -592,7 +630,24 @@ export default function ViewPDF({
       el.removeEventListener("touchend", onTouchEnd);
       el.removeEventListener("touchcancel", reset);
     };
-  }, [horizontal, pageMode]);
+  }, [horizontal, pageMode, trace]);
+
+  useEffect(() => {
+    traceModeRef.current = `${pageMode}${singlePage ? "+single" : ""}${fitMode ? "+fit" : ""}`;
+  }, [pageMode, singlePage, fitMode]);
+
+  // 진단 기록의 수명. 전체 보기 한 곳에서만 기록한다: 미리보기는 한 화면에 여러 개가 함께 떠서
+  // 기록이 서로 덮어써지고, 그러면 멀쩡한 뷰어가 비정상 종료로 보고된다.
+  useEffect(() => {
+    if (!bookId || preview) return undefined;
+    startPdfTrace({ bookId });
+    const onPageHide = () => endPdfTrace();
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      endPdfTrace();
+    };
+  }, [bookId, preview]);
 
   useEffect(() => {
     if (!bookId) {
@@ -639,9 +694,11 @@ export default function ViewPDF({
 
         setDownloadProgress(30);
 
+        workerRef.current = new pdfjs.PDFWorker();
         const firstPdfDoc = await pdfjs.getDocument({
           ...PDF_DOCUMENT_OPTIONS,
           data: firstBuffer,
+          worker: workerRef.current,
         }).promise;
         if (cancelledRef.current) {
           firstPdfDoc.loadingTask.destroy();
@@ -702,17 +759,22 @@ export default function ViewPDF({
           setTotalPages(pagesToRender);
         });
 
-        // 모든 canvas에 추정 크기 설정 (placeholder로 레이아웃 확보)
+        // 모든 canvas에 추정 크기 설정 (placeholder로 레이아웃 확보).
+        // 비트맵은 1x1 로 두고 aspect-ratio 로 높이만 확보한다. 쪽 수만큼 실제 해상도 비트맵을 잡으면
+        // 아직 그리지 않은 쪽까지 메모리를 차지해 모바일 브라우저가 탭을 다시 불러온다(evictPage 와 같은 방식).
+        const placeholderWidth = implausiblySmall
+          ? FALLBACK_PLACEHOLDER_PIXEL_WIDTH
+          : firstRenderViewport.width;
+        const placeholderHeight = implausiblySmall
+          ? Math.max(1, Math.round(FALLBACK_PLACEHOLDER_PIXEL_WIDTH * aspect))
+          : firstRenderViewport.height;
         for (let i = 1; i <= pagesToRender; i++) {
           const canvas = canvasRefs.current[i];
-          /* v8 ignore next 4 -- flushSync creates all page canvases before sizing. */
+          /* v8 ignore next 5 -- flushSync creates all page canvases before sizing. */
           if (canvas) {
-            canvas.width = implausiblySmall
-              ? FALLBACK_PLACEHOLDER_PIXEL_WIDTH
-              : firstRenderViewport.width;
-            canvas.height = implausiblySmall
-              ? Math.max(1, Math.round(FALLBACK_PLACEHOLDER_PIXEL_WIDTH * aspect))
-              : firstRenderViewport.height;
+            canvas.style.aspectRatio = `${placeholderWidth} / ${placeholderHeight}`;
+            canvas.width = 1;
+            canvas.height = 1;
           }
         }
 
@@ -801,6 +863,8 @@ export default function ViewPDF({
       }
       chunkDocsRef.current.clear();
       fetchingRef.current.clear();
+      workerRef.current?.destroy();
+      workerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- apiPrefix는 mount 시 고정이라 의도적으로 deps에서 제외
   }, [
@@ -863,14 +927,14 @@ export default function ViewPDF({
 
   return (
     <div
-      className={`pdf-container${singlePage ? " pdf-single" : ""}${fitMode ? " pdf-fit" : ""}${horizontal ? " pdf-horizontal" : ""}`}
+      className={`pdf-container${singlePage ? " pdf-single" : ""}${fitMode ? " pdf-fit" : ""}${fitMode && !horizontal && !singlePage ? " pdf-fit-width" : ""}${horizontal ? " pdf-horizontal" : ""}`}
       ref={containerRef}
       tabIndex={-1}
     >
       <div className="pdf-toolbar">
         <div className="pdf-info">
           {loadedPages < totalPages
-            ? `렌더링 중... ${loadedPages}/${totalPages}쪽`
+            ? `${loadedPages}/${totalPages} 렌더링 중`
             : `총 ${totalPages}쪽 표시`}
           {editable &&
             markedPages.size + insertions.size > 0 &&
@@ -915,7 +979,6 @@ export default function ViewPDF({
               좌←우
             </button>
           </span>
-          <span className="pdf-zoom-separator" />
           <button
             className={`pdf-zoom-btn pdf-zoom-fit-btn pdf-single-btn ${singlePage ? "active" : ""}`}
             onClick={toggleSinglePage}
@@ -934,7 +997,6 @@ export default function ViewPDF({
             </span>
             맞춤
           </button>
-          <span className="pdf-zoom-separator" />
           <button
             className="pdf-zoom-btn"
             onClick={zoomDown}
@@ -1169,7 +1231,7 @@ export default function ViewPDF({
 
 const pdfStyles = `
     .pdf-container {
-        --pdf-toolbar-h: 32px;
+        --pdf-toolbar-h: 22px;
         width: 100%;
         height: calc(100vh - 10px);
         overflow-y: auto;
@@ -1193,27 +1255,31 @@ const pdfStyles = `
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 4px 8px;
+        padding: 0 4px;
         background: rgba(255,255,255,0.95);
     }
+    /* 툴바 글자는 모두 10.5px(기존 "렌더링 중" 14px의 75%)로 맞춘다.
+       조회 화면의 #view * { font-size: small }, 전역 button { padding-left/right: 5px !important }가
+       클래스 선택자보다 우선하므로 font-size와 padding에는 !important를 쓴다. */
     .pdf-info {
         color: #666;
-        font-size: 14px;
+        font-size: 10.5px !important;
     }
     .pdf-zoom-controls {
         display: flex;
         align-items: center;
-        gap: 2px;
+        gap: 0;
     }
     .pdf-zoom-btn {
-        padding: 2px 8px;
-        font-size: 12px;
+        margin: 0;
+        padding: 0 2px !important;
+        font-size: 10.5px !important;
         border: 1px solid #ccc;
-        border-radius: 4px;
+        border-radius: 3px;
         background: rgba(255,255,255,0.9);
         cursor: pointer;
         color: #555;
-        line-height: 1.4;
+        line-height: 1.2;
     }
     .pdf-zoom-btn:hover:not(:disabled) {
         background: #e0e0e0;
@@ -1221,24 +1287,24 @@ const pdfStyles = `
     .pdf-zoom-fit-btn {
         display: flex;
         align-items: center;
-        gap: 6px;
-        padding: 2px 8px 2px 4px;
+        gap: 2px;
+        padding: 0 2px 0 1px !important;
     }
     .pdf-zoom-fit-btn .toggle-track {
         position: relative;
-        width: 28px;
-        height: 16px;
-        border-radius: 8px;
+        width: 19px;
+        height: 11px;
+        border-radius: 6px;
         background: #ccc;
         flex-shrink: 0;
         transition: background 0.2s;
     }
     .pdf-zoom-fit-btn .toggle-knob {
         position: absolute;
-        left: 2px;
-        top: 2px;
-        width: 12px;
-        height: 12px;
+        left: 1px;
+        top: 1px;
+        width: 9px;
+        height: 9px;
         border-radius: 50%;
         background: #fff;
         transition: left 0.2s;
@@ -1247,7 +1313,7 @@ const pdfStyles = `
         background: #4a90d9;
     }
     .pdf-zoom-fit-btn.active .toggle-knob {
-        left: 14px;
+        left: 9px;
     }
     .pdf-direction-group {
         display: inline-flex;
@@ -1259,10 +1325,10 @@ const pdfStyles = `
         margin-left: -1px;
     }
     .pdf-direction-btn:first-child {
-        border-radius: 4px 0 0 4px;
+        border-radius: 3px 0 0 3px;
     }
     .pdf-direction-btn:last-child {
-        border-radius: 0 4px 4px 0;
+        border-radius: 0 3px 3px 0;
     }
     /* .pdf-zoom-btn:hover:not(:disabled)의 회색보다 우선하도록 hover 선택자를 함께 쓴다 */
     .pdf-direction-btn.active,
@@ -1271,20 +1337,14 @@ const pdfStyles = `
         border-color: #4a90d9;
         color: #fff;
     }
-    .pdf-zoom-separator {
-        width: 1px;
-        height: 16px;
-        background: #ccc;
-        margin: 0 6px;
-    }
     .pdf-zoom-btn:disabled {
         opacity: 0.3;
         cursor: default;
     }
     .pdf-zoom-label {
-        font-size: 11px;
+        font-size: 10.5px !important;
         color: #555;
-        min-width: 36px;
+        min-width: 28px;
         text-align: center;
     }
     .pdf-content {
@@ -1307,9 +1367,12 @@ const pdfStyles = `
         scroll-snap-stop: always;
     }
     /* 맞춤: 폭만 맞추면 작은 이미지가 늘어나 세로가 영역을 넘친다.
-       비율을 유지한 채 영역(폭 × 보이는 높이) 안에 최대한 크게 넣는다(contain). */
+       비율을 유지한 채 영역(폭 × 보이는 높이) 안에 최대한 크게 넣는다(contain).
+       상하 스크롤 + 1장씩 꺼짐(pdf-fit-width)은 세로가 이어지므로 높이는 맞추지 않고 폭만 맞춘다. */
     .pdf-container.pdf-fit .pdf-page {
         width: 100% !important;
+    }
+    .pdf-container.pdf-fit:not(.pdf-fit-width) .pdf-page {
         height: calc(var(--pdf-avail-h, calc(100vh - 10px)) - var(--pdf-toolbar-h)) !important;
         object-fit: contain;
     }
@@ -1326,7 +1389,7 @@ const pdfStyles = `
         width: 100%;
         height: 100%;
     }
-    .pdf-container.pdf-fit .pdf-page-wrap .pdf-page-canvas {
+    .pdf-container.pdf-fit:not(.pdf-fit-width) .pdf-page-wrap .pdf-page-canvas {
         object-fit: contain;
     }
     /* 이미지 삽입 미리보기: 저장 전에도 삽입될 쪽을 다른 쪽처럼 보여 준다. 점선 테두리와 라벨로 아직 저장 전임을 알린다. */
@@ -1338,7 +1401,7 @@ const pdfStyles = `
         width: 100%;
         height: auto;
     }
-    .pdf-container.pdf-fit .pdf-insert-image {
+    .pdf-container.pdf-fit:not(.pdf-fit-width) .pdf-insert-image {
         height: 100%;
         object-fit: contain;
     }

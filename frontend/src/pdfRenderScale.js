@@ -5,9 +5,11 @@
 
 // 화면 표시 크기(CSS)를 정하는 기준 배율.
 export const DISPLAY_SCALE = 1.2;
-// 페이지당 canvas 면적 상한. 그린 canvas는 해제하지 않으므로 100쪽 넘는 만화에서 iPad 메모리가 차지 않게 잡는다.
-// (iOS Safari 단일 canvas 상한 16,777,216px보다도 충분히 낮다.)
-const MAX_CANVAS_PIXELS = 1_500_000;
+// 페이지당 canvas 면적 상한(픽셀). 비트맵은 쪽당 4바이트 x 면적이라 3M 이면 12MB 다.
+// 보이는 쪽과 남겨 두는 쪽을 합쳐 10장쯤 살아 있어도 120MB 안에 든다. iOS Safari 는 canvas 메모리가
+// 수백 MB 를 넘으면 탭을 강제로 다시 불러온다(실측: dpr 3, 쪽당 17M px 가 9장 쌓인 183M px 에서 크래시).
+// 휴대폰 화면 폭(약 1170px)에 맞춘 한 쪽이 약 2M px 라서 이 상한에서도 선명하다.
+const MAX_CANVAS_PIXELS = 3_000_000;
 // canvas 짧은 변의 최소 픽셀 수. 이보다 작으면 쪽이 보이지 않는다.
 const MIN_CANVAS_SIDE = 100;
 
@@ -24,7 +26,9 @@ export function computeRenderScale(page, canvas, dpr) {
   if (!cssWidth) return Math.max(floor, minScale);
   const wanted = (cssWidth * dpr) / base.width;
   const areaCap = Math.sqrt(MAX_CANVAS_PIXELS / (base.width * base.height));
-  return Math.max(floor, Math.min(wanted, areaCap));
+  // 면적 상한이 기본 배율(floor)보다 우선한다. floor 가 우선이면 큰 쪽에서 화면보다 훨씬 큰 비트맵을 만든다.
+  // 쪽 크기가 비정상적으로 작은 PDF 는 areaCap 이 매우 커서 영향이 없고, 짧은 변은 minScale 이 지킨다.
+  return Math.max(minScale, Math.min(Math.max(floor, wanted), areaCap));
 }
 
 // 쪽 전체를 이미지 한 장으로 채운 PDF(만화·스캔본)의 이미지 픽셀 크기를 돌려준다. 아니면 null.

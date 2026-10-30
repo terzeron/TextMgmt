@@ -397,7 +397,7 @@ export default function Actions(props) {
 
   return (
     <>
-      <Row className="button_group">
+      <Row className="button_group actions-area">
         {props.directoryMode && props.showDirectoryNavigation && <Button
           variant="outline-warning"
           className="btn-xs"
@@ -483,7 +483,7 @@ export default function Actions(props) {
         })}
       </Row>
 
-      <Row>
+      <Row className="actions-area">
         <InputGroup className="ms-0 me-0">
           <Form.Control value={props.selectedCategory} readOnly placeholder="이동할 카테고리를 선택하세요" />
           <Button
