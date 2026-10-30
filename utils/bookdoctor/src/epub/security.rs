@@ -899,7 +899,8 @@ fn scan_text(s: &mut Scanner, kind: Kind, text: &str, name: &str, is_opf: bool) 
     }
 }
 
-fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits: &Limits, budget: u64, opf_names: &HashSet<String>) -> u64 {
+#[allow(clippy::too_many_arguments, reason = "멤버 하나를 검사하는 한 곳뿐인 내부 함수라 묶음 타입을 만들지 않았다")]
+fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits: &Limits, budget: u64, opf_names: &HashSet<String>, verified: &mut HashMap<usize, u64>) -> u64 {
     let (size, csize, encrypted, method) = match zip.by_index_raw(index) {
         Ok(f) => (f.size(), f.compressed_size(), f.encrypted(), f.compression()),
         Err(_) => return 0,
@@ -937,6 +938,11 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
     let actual = data.len() as u64;
     if csize > 0 && actual / csize > 200 && actual > 1024 * 1024 {
         s.add(Severity::Medium, "HIGH_COMPRESSION_RATIO", name, "Potential decompression bomb");
+    }
+
+    // 끝까지 읽어 CRC를 통과한 멤버다(상한을 넘기지 않았다). 렌더링 단계가 다시 풀지 않도록 알린다.
+    if actual <= bound {
+        verified.insert(index, actual);
     }
 
     // 헤더가 거짓으로 작은 크기를 적어도 읽기는 상한에서 멈춘다. 상한을 넘겼다면 뒤쪽을 못 본 것이다.
@@ -999,9 +1005,17 @@ pub fn scan(path: &Path, limits: &Limits, report: &mut FileReport) {
 
 /// `scan`과 같고 검사한 항목 수와 바이트를 함께 돌려준다.
 pub fn scan_stats(path: &Path, limits: &Limits, report: &mut FileReport) -> Stats {
+    scan_verified(path, limits, report).0
+}
+
+/// `scan_stats`와 같고, 끝까지 읽어 CRC까지 통과한 멤버도 돌려준다(ZIP 인덱스 → 읽은 바이트).
+/// 렌더링 단계가 이 멤버를 다시 풀지 않게 하려는 것이다. 이름이 아니라 인덱스로 거는 것은 같은 이름의 멤버가 둘일 때
+/// 한쪽이 손상되어도 다른 쪽 검증이 가리지 않게 하려는 것이다.
+pub fn scan_verified(path: &Path, limits: &Limits, report: &mut FileReport) -> (Stats, HashMap<usize, u64>) {
     let mut s = Scanner { findings: Vec::new(), notes: Vec::new(), seen: HashMap::new(), html_active: Vec::new(), html_remote: Vec::new(), manifest: HashMap::new(), budget_skipped: 0, enc: Default::default(), undecodable: Vec::new(), undecodable_extra: 0 };
     let mut stats = Stats::default();
-    guarded(report, |_| scan_epub_unguarded(path, limits, &mut s, &mut stats));
+    let mut verified = HashMap::new();
+    guarded(report, |_| scan_epub_unguarded(path, limits, &mut s, &mut stats, &mut verified));
 
     s.findings.sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.code.cmp(&b.code)).then_with(|| a.location.cmp(&b.location)));
     for f in &s.findings {
@@ -1011,7 +1025,7 @@ pub fn scan_stats(path: &Path, limits: &Limits, report: &mut FileReport) -> Stat
     for note in &s.notes {
         report.mark_incomplete(note);
     }
-    stats
+    (stats, verified)
 }
 
 /// `scan`이 panic하면 그 파일을 incomplete로 바꾼다.
@@ -1022,7 +1036,7 @@ pub fn guarded(report: &mut FileReport, scan: impl FnOnce(&mut FileReport)) {
     }
 }
 
-fn scan_epub_unguarded(path: &Path, limits: &Limits, s: &mut Scanner, stats: &mut Stats) {
+fn scan_epub_unguarded(path: &Path, limits: &Limits, s: &mut Scanner, stats: &mut Stats, verified: &mut HashMap<usize, u64>) {
     let file = safe(&path.to_string_lossy());
     match fs::metadata(path) {
         Err(e) => return s.notes.push(safe(&format!("Cannot open as ZIP EPUB: {e}"))),
@@ -1092,7 +1106,7 @@ fn scan_epub_unguarded(path: &Path, limits: &Limits, s: &mut Scanner, stats: &mu
                 if name.ends_with('/') {
                     continue;
                 }
-                inspected += check_member(s, &mut zip, i, name, limits, limits.max_total.saturating_sub(prepass + inspected), &opf_names);
+                inspected += check_member(s, &mut zip, i, name, limits, limits.max_total.saturating_sub(prepass + inspected), &opf_names, verified);
             }
             s.flush_encoding();
             if s.budget_skipped > 0 {

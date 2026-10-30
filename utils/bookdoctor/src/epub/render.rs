@@ -564,7 +564,7 @@ fn analyze_xhtml(zip: &mut Zip, bytes: &[u8], member: &str, name_set: &HashSet<&
 
 // ---------------------------------------------------------------- ZIP 전체 읽기
 
-fn run(zip: &mut Zip, limits: &Limits, sink: &mut Sink) {
+fn run(zip: &mut Zip, limits: &Limits, verified: &HashMap<usize, u64>, sink: &mut Sink) {
     let names: Vec<String> = zip.file_names().filter_map(|n| n.ok().map(|n| n.into_owned())).collect();
     let name_set: HashSet<&str> = names.iter().map(String::as_str).collect();
     let mut ctx = Ctx {
@@ -630,6 +630,14 @@ fn run(zip: &mut Zip, limits: &Limits, sink: &mut Sink) {
         // 선언 크기를 믿지 않는다: 읽기 자체를 min(멤버 한도, 남은 예산)+1바이트로 자른다.
         let limit = limits.max_member.min(ctx.budget.remaining);
         let keep = plan.spine_docs.contains(&name) || plan.ncx.as_deref() == Some(name.as_str());
+        // 보안 단계가 끝까지 읽어 CRC를 통과시킨 멤버는 내용이 필요 없으면 다시 풀지 않는다. 읽은 것으로 치고 예산만 뺀다.
+        // 읽은 바이트가 이번 한도를 넘으면(예산이 모자라면) 옛 경로와 같은 판정이 나오도록 그대로 읽는다.
+        if !keep && let Some(&n) = verified.get(&i) && n <= limit {
+            drop(entry);
+            ctx.budget.remaining -= n;
+            continue;
+        }
+        FULL_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut cap = Capture { n: 0, buf: keep.then(Vec::new) };
         // ZIP은 끝까지 읽어야 CRC를 검증한다. limit+1바이트까지 읽으면 limit 이하 멤버는 항상 끝에 닿는다.
         let result = io::copy(&mut (&mut entry).take(limit + 1), &mut cap);
@@ -697,10 +705,19 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 /// 한도를 바꿔 끼울 수 있는 검사. 테스트가 작은 한도로 예산과 건너뛰기를 확인하는 데 쓴다.
 pub fn inspect_with(path: &Path, report: &mut FileReport, limits: &Limits) {
+    inspect_with_verified(path, report, limits, &HashMap::new());
+}
+
+/// 전체 읽기 단계에서 실제로 `io::copy`로 읽은 멤버 수. 보안 단계가 검증한 멤버를 건너뛰는지 테스트가 센다(성능 회귀 감시용).
+pub static FULL_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// `inspect_with`와 같되, 보안 단계가 이미 끝까지 읽어 CRC를 통과한 멤버(ZIP 인덱스 → 읽은 바이트)는 다시 풀지 않는다.
+/// 읽은 것으로 치고 예산에서 같은 바이트만 뺀다. 내용이 필요한 spine 문서·NCX는 `verified`에 있어도 읽는다.
+pub fn inspect_with_verified(path: &Path, report: &mut FileReport, limits: &Limits, verified: &HashMap<usize, u64>) {
     let Some(mut zip) = open_zip(path) else { return };
     let mut sink = Sink::default();
     // 한 파일 때문에 수천 건 스캔이 중단되면 안 된다. panic 전에 모은 지표는 남긴다.
-    let outcome = catch_unwind(AssertUnwindSafe(|| run(&mut zip, limits, &mut sink)));
+    let outcome = catch_unwind(AssertUnwindSafe(|| run(&mut zip, limits, verified, &mut sink)));
     for (category, severity, code, location, detail) in &sink.findings {
         report.push(*category, *severity, code, location, detail);
     }
