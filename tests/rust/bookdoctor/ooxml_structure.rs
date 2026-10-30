@@ -120,7 +120,7 @@ fn docx_with_ole_content_is_a_mismatch_and_incomplete_but_not_called_encrypted()
     assert!(!r.has("NOT_ZIP"), "OLE content is not reported as a broken zip");
     assert!(r.incomplete);
     assert!(r.reasons.iter().any(|x| x.contains("OLE")), "{:?}", r.reasons);
-    // 암호화인지 구형 .doc인지는 CFB를 읽어야 안다. 확인하지 못한 것을 암호화라고 칠하지 않는다.
+    // CFB로 읽히지 않는 파일은 암호화인지 구형 .doc인지 알 수 없다. 확인하지 못한 것을 암호화라고 칠하지 않는다.
     assert!(!r.reasons.iter().any(|x| FileReport::is_encrypted_reason(x)), "{:?}", r.reasons);
 }
 

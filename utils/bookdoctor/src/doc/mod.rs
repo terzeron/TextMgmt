@@ -50,11 +50,35 @@ pub fn scan_doc_file(path: &Path, opts: &Options, sniffed: Sniffed, report: &mut
             return;
         }
     }
+    if let Some(mut file) = open_ole(path, opts, report) {
+        inspect(&mut file, report);
+    }
+}
+
+/// `.docx` 계열인데 내용이 OLE인 파일을 검사한다. 암호화 OOXML 패키지거나 구형 `.doc`를 이름만 바꾼 것이다.
+/// 둘 다 아니면 열 수 없는 파일로 미완료를 남긴다(확장자 불일치는 `common`이 알린다).
+pub fn scan_ole_named_docx(path: &Path, opts: &Options, report: &mut FileReport) {
+    let Some(mut file) = open_ole(path, opts, report) else { return };
+    if file.find("EncryptedPackage").is_some() || file.find("WordDocument").is_some() {
+        inspect(&mut file, report);
+    } else {
+        report.mark_incomplete("OLE container cannot be inspected: .docx extension with OLE content that is neither an encrypted package nor a Word document");
+    }
+}
+
+/// OLE 파일을 한도 안에서 연다. 열지 못하면 사유를 미완료로 남기고 `None`을 돌려준다.
+fn open_ole(path: &Path, opts: &Options, report: &mut FileReport) -> Option<OleFile> {
     let limits = OleLimits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..OleLimits::default() };
     match OleFile::open(path, &limits) {
-        Ok(mut file) => inspect(&mut file, report),
-        Err(OleError::Limit(message)) => report.mark_incomplete(&format!("skipped: {message}")),
-        Err(e) => report.mark_incomplete(&format!("OLE container could not be read: {e:?}")),
+        Ok(file) => Some(file),
+        Err(OleError::Limit(message)) => {
+            report.mark_incomplete(&format!("skipped: {message}"));
+            None
+        }
+        Err(e) => {
+            report.mark_incomplete(&format!("OLE container could not be read: {e:?}"));
+            None
+        }
     }
 }
 
@@ -129,6 +153,11 @@ fn report_anomalies(file: &OleFile, report: &mut FileReport) {
 /// `WordDocument` 스트림을 확인한다. 암호화되어 있으면 `true`다(본문을 읽을 수 없다).
 fn check_word_stream(file: &mut OleFile, report: &mut FileReport) -> bool {
     let Some(entry) = file.find("WordDocument").cloned() else {
+        // 암호화 OOXML은 OLE 안에 `EncryptedPackage`로 들어 있다. 본문을 읽을 수 없고 Word 문서 구조도 없다.
+        if file.find("EncryptedPackage").is_some() {
+            report.mark_incomplete("encrypted: OOXML encrypted package (EncryptedPackage)");
+            return true;
+        }
         report.push(Category::Defect, Severity::Medium, "FORMAT_MISMATCH", "WordDocument", "OLE 파일이지만 Word 문서가 아니다(WordDocument 스트림이 없다)");
         return false;
     };

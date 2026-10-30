@@ -23,7 +23,7 @@ pub fn scan_zip_file(path: &Path, opts: &Options, report: &mut FileReport) {
 /// 구형 `.doc`인지 암호화된 OOXML인지는 CFB를 읽어야 알 수 있다. 확인하지 못한 것을 암호화라고 하지 않는다.
 pub fn scan_docx_file(path: &Path, opts: &Options, sniffed: Sniffed, report: &mut FileReport) {
     if sniffed == Sniffed::Ole {
-        report.mark_incomplete("OLE container cannot be inspected yet: .docx extension with OLE content (legacy .doc or encrypted OOXML)");
+        crate::doc::scan_ole_named_docx(path, opts, report);
         return;
     }
     let limits = Limits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..Limits::default() };

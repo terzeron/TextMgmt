@@ -48,10 +48,12 @@
 | 포맷 | 상태 | 있는 검사 | 아직 없는 것 |
 |---|---|---|---|
 | ZIP | 있음 | 열기, 멤버별 앞 4096바이트 해제 시험(`--zip-deep`이면 끝까지 CRC), `ZIP_PATH_TRAVERSAL` 등 이름 규칙, 로컬 헤더 일치, 압축비, 선언 크기 위조(`ZIP_SIZE_MISMATCH`), 내장 실행 파일, 중첩 ZIP 표시, 암호화 멤버(미완료) | 중첩 ZIP 재귀(P4) |
-| DOCX 계열 | 있음 | 필수 부분·XML·선언 부분, 확장자 위장, 원격 템플릿·외부 객체·UNC, `vbaProject.bin`(형식별 등급), OLE·ActiveX·내장 패키지, DDE·INCLUDE 필드(run 분할·중첩), DTD·엔티티, UTF-16 | 매크로(VBA) 내용 분석(P2), 내장 패키지 재귀(P4), 구형 DOC·암호화 OOXML(OLE, P2) |
+| DOCX 계열 | 있음 | 필수 부분·XML·선언 부분, 확장자 위장, 원격 템플릿·외부 객체·UNC, `vbaProject.bin`(형식별 등급), OLE·ActiveX·내장 패키지, DDE·INCLUDE 필드(run 분할·중첩), DTD·엔티티, UTF-16 | 내장 패키지 재귀(P4). 암호화 OOXML(OLE `EncryptedPackage`)은 cyan 미완료로, 이름만 바꾼 구형 DOC는 DOC 분석기로 넘긴다(P2) |
 | HWPX | 부분 | mimetype, 매니페스트, 섹션, XML, `BinData` OLE·실행 파일, DTD·엔티티 | 스크립트·매크로(저장 위치 미확인, `docs/bookdoctor-hwpx-notes.md`) |
-| DOC, HWP 5.x | 없음 | OLE 매직 판별과 이름 위장 표시(미완료)만 | CFB 파서와 분석기(P2, P3) |
+| DOC | 부분 | `ole_reader`(관대한 CFB 파서, MS-OVBA), OLE 구조 이상(`OLE_*`), FIB 암호화(cyan), VBA 매크로·자동 실행·의심 키워드 조합, `ObjectPool`·`Ole10Native` 내장 실행 파일(레이블·원본·임시 경로), DDE·INCLUDE 필드(중첩·8비트·UTF-16), 이름만 바꾼 `.docx`·`.rtf` 위장 | 실제 DOC로 검증하지 못했다(합성·LibreOffice 생성 3건뿐). 표 스트림 기반 텍스트, 수식 편집기 CVE 패턴은 없다 |
+| RTF | 부분 | `{\rtf` 판별, `\objdata`·`\objclass` 등 내장 객체(쪼갠 제어어 포함), 본문의 OLE·PE 매직, `\datastore`(단독은 Medium) | 코퍼스 `.rtf` 11건은 모두 정상 RTF였고 악성 양성 대조군은 없다 |
+| HWP 5.x | 없음 | OLE 매직 판별과 이름 위장 표시(미완료)만 | HWP 5.x 레코드 분석기(P3). 코퍼스에 건강한 HWP5 샘플이 없다 |
 | HTML | 없음 | - | P4 |
 | 실행 파일 | 있음 | 확장자 + 매직바이트 이중 확인(P0) | - |
 
-실제 문서로 검증한 범위: DOCX는 코퍼스에 2건(악보)뿐이라 오탐률을 측정하지 못했고, HWPX는 0건이라 합성 fixture로만 확인했다.
+실제 문서로 검증한 범위: DOCX는 코퍼스에 2건(악보)뿐이라 오탐률을 측정하지 못했고, HWPX는 0건이라 합성 fixture로만 확인했다. DOC는 코퍼스에 0건이라 합성 fixture와 LibreOffice가 만든 3건으로만 확인했고, RTF는 11건이 모두 정상이었다(Word 표준 `\datastore` 오탐 1건을 이 과정에서 고쳤다).

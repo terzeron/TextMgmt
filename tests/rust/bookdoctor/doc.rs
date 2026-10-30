@@ -315,3 +315,44 @@ fn an_executable_hidden_in_the_native_source_or_temp_path_is_flagged() {
     let clean = native("notes.txt", "C:\\x\\a.txt", "C:\\t\\a.txt");
     assert!(!scan_doc(&[("ObjectPool/_1/\u{1}Ole10Native", &clean)], 0, b"hi").has("EMBEDDED_EXECUTABLE"));
 }
+
+fn scan_named(name: &str, cfb: &Cfb) -> FileReport {
+    let (_d, p) = write(name, &cfb.bytes);
+    scan_file(&p, &Options::default())
+}
+
+#[test]
+fn docx_that_is_an_encrypted_package_is_incomplete_cyan() {
+    let cfb = make_cfb(&[("EncryptionInfo", &[4u8, 0, 4, 0, 0, 0][..]), ("EncryptedPackage", &[0u8; 64][..])]);
+    for name in ["a.docx", "b.docm", "c.doc"] {
+        let r = scan_named(name, &cfb);
+        assert!(r.incomplete, "{name}: {:?}", r.reasons);
+        assert!(r.reasons.iter().any(|m| FileReport::is_encrypted_reason(m) && m.contains("EncryptedPackage")), "{name}: {:?}", r.reasons);
+        // 암호화 패키지는 구형 Word 문서가 아니므로 WordDocument 부재를 결함으로 칠하지 않는다.
+        assert!(!r.findings.iter().any(|f| f.location == "WordDocument"), "{name}: {:?}", r.findings);
+    }
+    // 이름이 docx인데 OLE 내용이므로 확장자 불일치는 알린다. `.doc`는 OLE가 맞으니 알리지 않는다.
+    assert!(scan_named("a.docx", &cfb).has("FORMAT_MISMATCH"));
+    assert!(!scan_named("c.doc", &cfb).has("FORMAT_MISMATCH"));
+}
+
+#[test]
+fn docx_that_is_a_renamed_doc_is_analyzed_as_doc() {
+    let owned = vba_streams("Sub AutoOpen()\nShell \"calc\"\nEnd Sub\n");
+    let mut streams: Vec<(&str, &[u8])> = owned.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    let word = word_stream(0, b"hello");
+    streams.push(("WordDocument", &word));
+    let r = scan_named("renamed.docx", &make_cfb(&streams));
+    assert!(r.has("FORMAT_MISMATCH"), "{:?}", r.findings);
+    assert!(r.has("DOC_VBA_MACRO"), "{:?} {:?}", r.findings, r.reasons);
+    assert_eq!(finding(&r, "DOC_VBA_SUSPICIOUS").severity, Severity::Critical);
+}
+
+#[test]
+fn docx_ole_without_either_stream_stays_plain_incomplete() {
+    let r = scan_named("odd.docx", &make_cfb(&[("Something", &[1u8, 2, 3][..])]));
+    assert!(r.has("FORMAT_MISMATCH"), "{:?}", r.findings);
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("OLE")), "{:?}", r.reasons);
+    assert!(!r.reasons.iter().any(|m| FileReport::is_encrypted_reason(m)), "{:?}", r.reasons);
+    assert!(!r.findings.iter().any(|f| f.code.starts_with("DOC_")), "{:?}", r.findings);
+}
