@@ -291,3 +291,26 @@ fn a_genuine_hwpx_is_scanned_once_without_a_polyglot_finding() {
     let r = scan_bytes("a.zip", &zip_bytes(&[("doc.dat", &hwpx_bytes(&[]))]), &Options::default());
     assert!(!r.has("PACKAGE_POLYGLOT"), "{:?}", r.findings);
 }
+
+#[test]
+fn a_package_with_a_container_xml_is_epub_unless_it_is_clearly_a_genuine_hwpx() {
+    let remote = |name: &str| -> (String, Vec<u8>) { (name.to_string(), REMOTE_XHTML.to_vec()) };
+    let nested = |parts: Vec<(String, Vec<u8>)>| -> Vec<u8> {
+        let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+        zip_bytes(&refs)
+    };
+    // 알 수 없는 mimetype과 .opf를 가리키지 않는 container.xml: 거르는 근거가 없으므로 EPUB으로도 본다.
+    let odd = nested(vec![("mimetype".into(), b"application/x-custom".to_vec()), ("META-INF/container.xml".into(), b"<container/>".to_vec()), remote("OEBPS/a.xhtml")]);
+    let r = scan_bytes("a.zip", &zip_bytes(&[("odd.dat", &odd)]), &Options::default());
+    assert!(r.findings.iter().any(|f| f.code == "REMOTE_SCRIPT" && f.location.starts_with("odd.dat!")), "{:?} {:?}", r.findings, r.reasons);
+    // `.opf` 표시가 container.xml의 앞 4KiB 밖에 있어도 놓치지 않는다.
+    let mut padded = b"<container><!--".to_vec();
+    padded.extend(std::iter::repeat_n(b'x', 6000));
+    padded.extend_from_slice(b"--><rootfile full-path=\"OEBPS/content.opf\"/></container>");
+    let big = nested(vec![("mimetype".into(), b"application/x-custom".to_vec()), ("META-INF/container.xml".into(), padded), remote("OEBPS/a.xhtml")]);
+    let r = scan_bytes("b.zip", &zip_bytes(&[("big.dat", &big)]), &Options::default());
+    assert!(r.findings.iter().any(|f| f.code == "REMOTE_SCRIPT"), "{:?} {:?}", r.findings, r.reasons);
+    // 정상 HWPX는 EPUB으로 보지 않는다.
+    let r = scan_bytes("c.zip", &zip_bytes(&[("doc.dat", &hwpx_bytes(&[]))]), &Options::default());
+    assert!(!r.has("PACKAGE_POLYGLOT"), "{:?}", r.findings);
+}

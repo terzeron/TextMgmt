@@ -132,8 +132,9 @@ fn read_prefix(zip: &mut corpus_common::reader::Zip, name: &str, max: u64) -> Op
 
 /// 임시 파일의 ZIP이 어떤 문서 패키지인지 멤버 이름 구조로 가려 맞는 확장자를 모두 돌려준다. 멤버 이름(바깥 ZIP의 이름)은 쓰지 않는다.
 /// 표지: DOCX는 `word/document.xml`, HWPX는 `Contents/content.hpf`, EPUB은 `META-INF/container.xml`이다.
-/// HWPX도 `container.xml`과 `mimetype`을 갖는다. 그래서 EPUB은 `container.xml`이 있고 (`mimetype`이 없거나, `application/epub+zip`이거나,
-/// `container.xml`이 `.opf`/`oebps-package`를 가리킬 때)로 본다. 정상 HWPX는 `application/hwp+zip`과 `hwpml-package`라 EPUB이 아니다.
+/// HWPX도 `container.xml`과 `mimetype`을 갖는다. 판정은 fail-closed다: `container.xml`이 있으면 EPUB으로 보고,
+/// **정상 HWPX로 확신할 때만** 뺀다(HWPX 표지가 있고, `mimetype`이 `application/hwp+zip`이고, 4KiB 안의 `container.xml`이 `hwpml-package`를 말하고 `.opf`가 없을 때).
+/// 한 가지 문자열 판정이 빗나가도 EPUB 분석이 빠지지 않게 하려는 것이다.
 /// 둘 이상 맞으면 한쪽 분석기만으로는 다른 쪽 지표가 가려지므로 모두 돌려주고, 하나도 안 맞으면 `zip`이다.
 fn zip_extensions(file: &Path) -> Vec<&'static str> {
     let Some(mut zip) = open_zip(file) else { return vec!["zip"] };
@@ -147,17 +148,25 @@ fn zip_extensions(file: &Path) -> Vec<&'static str> {
             _ => {}
         }
     }
-    let epub = container && {
-        let mime = if has_mimetype { read_prefix(&mut zip, "mimetype", 64) } else { None };
-        let says_epub = mime.as_ref().is_none_or(|m| m.trim_ascii().eq_ignore_ascii_case(b"application/epub+zip"));
-        let xml = read_prefix(&mut zip, "META-INF/container.xml", 4096).map(|d| String::from_utf8_lossy(&d).to_lowercase()).unwrap_or_default();
-        says_epub || xml.contains(".opf") || xml.contains("oebps-package")
-    };
+    let epub = container && !(hwpx && has_mimetype && is_genuine_hwpx_container(&mut zip));
     let mut found: Vec<&'static str> = [(docx, "docx"), (hwpx, "hwpx"), (epub, "epub")].into_iter().filter(|(on, _)| *on).map(|(_, e)| e).collect();
     if found.is_empty() {
         found.push("zip");
     }
     found
+}
+
+/// `mimetype`이 `application/hwp+zip`이고 `container.xml`이 (4KiB 안에서) `hwpml-package`를 말하며 `.opf`를 가리키지 않는가.
+/// `container.xml`이 4KiB보다 크면 끝까지 보지 못하므로 확신할 수 없다(`false`).
+fn is_genuine_hwpx_container(zip: &mut corpus_common::reader::Zip) -> bool {
+    const CAP: u64 = 4096;
+    let mime_ok = read_prefix(zip, "mimetype", 64).is_some_and(|m| m.trim_ascii().eq_ignore_ascii_case(b"application/hwp+zip"));
+    let Some(xml) = read_prefix(zip, "META-INF/container.xml", CAP + 1) else { return false };
+    if xml.len() as u64 > CAP {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&xml).to_lowercase();
+    mime_ok && text.contains("hwpml-package") && !text.contains(".opf") && !text.contains("oebps-package")
 }
 
 /// 임시 파일의 현재 확장자.
