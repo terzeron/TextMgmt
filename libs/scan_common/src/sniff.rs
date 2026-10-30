@@ -45,7 +45,10 @@ pub fn sniff(head: &[u8]) -> Sniffed {
     if head.starts_with(&OLE_MAGIC) {
         return Sniffed::Ole;
     }
-    if head.starts_with(b"{\\rtf") {
+    // Word는 `{\rt`만 맞아도 RTF로 연다. BOM과 앞 공백도 건너뛴다(HTML 판별과 같다).
+    let trimmed = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
+    let lead = trimmed.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(trimmed.len());
+    if trimmed[lead..].starts_with(b"{\\rt") {
         return Sniffed::Rtf;
     }
     if head[..head.len().min(PDF_WINDOW)].windows(5).any(|w| w == b"%PDF-") {

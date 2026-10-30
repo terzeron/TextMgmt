@@ -46,41 +46,105 @@ fn control_word(data: &[u8], pos: usize) -> (&[u8], usize) {
     (&data[pos..end], end)
 }
 
-/// 이름 뒤의 숫자 인자와 구분 공백 하나를 건너뛴다.
-fn skip_parameter(data: &[u8], mut pos: usize) -> usize {
-    if data.get(pos) == Some(&b'-') {
+/// 이름 뒤의 숫자 인자와 구분 공백 하나를 읽는다. 인자 값(없으면 0)과 다음 위치를 돌려준다.
+fn parameter(data: &[u8], mut pos: usize) -> (i64, usize) {
+    let negative = data.get(pos) == Some(&b'-');
+    if negative {
         pos += 1;
     }
-    while data.get(pos).is_some_and(u8::is_ascii_digit) {
+    let mut value: i64 = 0;
+    while let Some(d) = data.get(pos).filter(|b| b.is_ascii_digit()) {
+        value = value.saturating_mul(10).saturating_add(i64::from(d - b'0')).min(i64::from(u32::MAX));
         pos += 1;
     }
     if data.get(pos) == Some(&b' ') {
         pos += 1;
     }
-    pos
+    (if negative { -value } else { value }, pos)
 }
 
-/// `\objdata` 본문의 16진 앞부분을 해독한다. 공백과 줄바꿈은 건너뛰고 16진이 아닌 문자에서 멈춘다.
-fn decode_hex_prefix(data: &[u8], mut pos: usize) -> Vec<u8> {
+/// `\objdata` 하나를 해독할 때 살펴보는 입력 바이트의 상한.
+const DECODE_BUDGET: usize = 64 * 1024;
+
+/// 16진 본문 해독 결과.
+struct Decoded {
+    bytes: Vec<u8>,
+    /// 본문 그룹의 끝(`}`)이나 `PAYLOAD_PREFIX`에 닿기 전에 입력 상한을 다 썼다.
+    budget_hit: bool,
+}
+
+/// `\objdata` 본문의 16진 앞부분을 해독한다. RTF 파서처럼 공백, 제어어(`\par` 등), 안쪽 그룹, `\binN` 원시 바이트를 건너뛰고
+/// 본문 그룹을 닫는 `}`에서 멈춘다. 16진이 아닌 글자는 무시한다.
+fn decode_hex_prefix(data: &[u8], start: usize) -> Decoded {
+    let end = data.len().min(start.saturating_add(DECODE_BUDGET));
     let mut out = Vec::new();
     let mut pending: Option<u32> = None;
-    while let Some(&b) = data.get(pos) {
-        pos += 1;
-        match (b as char).to_digit(16) {
-            Some(d) => match pending.take() {
-                Some(h) => {
-                    out.push((h * 16 + d) as u8);
-                    if out.len() >= PAYLOAD_PREFIX {
-                        break;
+    let mut depth = 0usize;
+    let mut i = start;
+    while i < end {
+        let b = data[i];
+        i += 1;
+        match b {
+            b'{' => depth += 1,
+            b'}' if depth == 0 => return Decoded { bytes: out, budget_hit: false },
+            b'}' => depth -= 1,
+            b'\\' => match data.get(i) {
+                Some(c) if c.is_ascii_alphabetic() => {
+                    let (name, name_end) = control_word(data, i);
+                    let (value, after) = parameter(data, name_end);
+                    i = after;
+                    if name.eq_ignore_ascii_case(b"bin") && value > 0 {
+                        i = i.saturating_add(value as usize);
                     }
                 }
-                None => pending = Some(d),
+                // `\'xx`는 16진 두 글자까지 건너뛴다. 그 밖의 기호(`\\`, `\{`, `\}`)는 한 글자다.
+                Some(b'\'') => i += 3,
+                Some(_) => i += 1,
+                None => {}
             },
-            None if matches!(b, b' ' | b'\r' | b'\n' | b'\t') => {}
-            None => break,
+            _ if depth == 0 => {
+                if let Some(d) = (b as char).to_digit(16) {
+                    match pending.take() {
+                        Some(h) => {
+                            out.push((h * 16 + d) as u8);
+                            if out.len() >= PAYLOAD_PREFIX {
+                                return Decoded { bytes: out, budget_hit: false };
+                            }
+                        }
+                        None => pending = Some(d),
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    out
+    // 입력이 끝났거나 상한을 다 썼다. 파일 끝까지 읽었다면 상한 문제가 아니다.
+    Decoded { bytes: out, budget_hit: i < data.len() }
+}
+
+/// OLE1 머리말에서 본문(NativeData)의 위치를 알 수 있는가.
+enum NativeOffset {
+    NotOle1,
+    /// 본문 위치가 해독한 앞부분 안에 있다.
+    Within,
+    /// 머리말이 해독한 앞부분보다 길어 본문 위치를 알 수 없다.
+    Beyond,
+}
+
+/// OLE1 객체 머리말(버전 `0x501`, 형식 2, 문자열 세 개, 본문 크기)을 읽어 본문 위치가 앞부분 안인지 가른다.
+fn native_offset(d: &[u8]) -> NativeOffset {
+    let u32_at = |pos: usize| d.get(pos..pos + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    if d.len() < 8 || d[..4] != [0x01, 0x05, 0x00, 0x00] || u32_at(4) != Some(2) {
+        return NativeOffset::NotOle1;
+    }
+    let mut pos = 8usize;
+    for _ in 0..3 {
+        let Some(len) = u32_at(pos) else { return NativeOffset::Beyond };
+        pos = pos.saturating_add(4).saturating_add(len);
+    }
+    // 본문 크기(4바이트) 다음이 본문이다.
+    let at = pos.saturating_add(4);
+    if at > d.len() { NativeOffset::Beyond } else { NativeOffset::Within }
 }
 
 #[derive(PartialEq)]
@@ -115,6 +179,7 @@ pub fn inspect(bytes: &[u8], report: &mut FileReport) {
     let data = normalize(bytes);
     let mut i = 0;
     let mut objdata_seen = 0;
+    let mut incomplete_reason: Option<&str> = None;
     while let Some(off) = data[i..].iter().position(|&b| b == b'\\') {
         let start = i + off + 1;
         let (name, end) = control_word(&data, start);
@@ -131,14 +196,31 @@ pub fn inspect(bytes: &[u8], report: &mut FileReport) {
             push_once(report, Severity::High, "RTF_EMBEDDED_OBJECT", &sanitize_display(&format!("\\{lower}"), 40, Some('…')), "RTF embeds an OLE object");
         }
         // 16진 본문을 갖는 제어어는 앞부분에서 실행 파일·OLE 매직을 찾는다.
-        if (lower == "objdata" || datastore) && objdata_seen < MAX_OBJDATA {
+        if lower == "objdata" || datastore {
+            if objdata_seen >= MAX_OBJDATA {
+                incomplete_reason.get_or_insert("more embedded object bodies than the scan limit; the rest were not decoded");
+                continue;
+            }
             objdata_seen += 1;
-            match payload_kind(&decode_hex_prefix(&data, skip_parameter(&data, end))) {
+            let (_, after) = parameter(&data, end);
+            let decoded = decode_hex_prefix(&data, after);
+            match payload_kind(&decoded.bytes) {
                 Payload::Executable => push_once(report, Severity::Critical, "RTF_EMBEDDED_EXECUTABLE", &format!("\\{lower}"), "Embedded object payload is an executable (PE/ELF)"),
                 // customXml 저장소는 OLE 복합 파일을 담는 것이 표준이라 `\datastore`의 OLE 매직은 지표가 아니다.
                 Payload::Ole if !datastore => push_once(report, Severity::High, "RTF_EMBEDDED_OLE", &format!("\\{lower}"), "Embedded object payload is an OLE compound file"),
-                Payload::Ole | Payload::None => {}
+                Payload::Ole => {}
+                Payload::None => {
+                    // 본문을 확인하지 못한 채 지표가 없으면 깨끗하다고 하지 않는다.
+                    if decoded.budget_hit {
+                        incomplete_reason.get_or_insert("an embedded object body could not be decoded within the scan budget");
+                    } else if !datastore && matches!(native_offset(&decoded.bytes), NativeOffset::Beyond) && decoded.bytes.len() >= PAYLOAD_PREFIX {
+                        incomplete_reason.get_or_insert("an embedded object's header is longer than the decoded prefix; its payload was not checked");
+                    }
+                }
             }
         }
+    }
+    if let Some(reason) = incomplete_reason {
+        report.mark_incomplete(reason);
     }
 }

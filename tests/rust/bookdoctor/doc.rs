@@ -356,3 +356,33 @@ fn docx_ole_without_either_stream_stays_plain_incomplete() {
     assert!(!r.reasons.iter().any(|m| FileReport::is_encrypted_reason(m)), "{:?}", r.reasons);
     assert!(!r.findings.iter().any(|f| f.code.starts_with("DOC_")), "{:?}", r.findings);
 }
+
+#[test]
+fn a_native_file_name_longer_than_the_display_limit_still_has_its_extension_checked() {
+    let native = |label: &str, src: &str, temp: &str| {
+        let mut body = Vec::new();
+        body.extend_from_slice(&2u16.to_le_bytes());
+        body.extend_from_slice(label.as_bytes());
+        body.push(0);
+        body.extend_from_slice(src.as_bytes());
+        body.push(0);
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&((temp.len() + 1) as u32).to_le_bytes());
+        body.extend_from_slice(temp.as_bytes());
+        body.push(0);
+        body.extend_from_slice(&4u32.to_le_bytes());
+        body.extend_from_slice(b"data");
+        let mut s = (body.len() as u32).to_le_bytes().to_vec();
+        s.extend(body);
+        s
+    };
+    let long = |ext: &str| format!("{}.{ext}", "A".repeat(400));
+    for (name, bytes) in [
+        ("label", native(&long("exe"), "C:\\x\\a.txt", "C:\\t\\a.txt")),
+        ("src", native("n.txt", &long("scr"), "C:\\t\\a.txt")),
+        ("temp", native("n.txt", "C:\\x\\a.txt", &long("bat"))),
+    ] {
+        let r = scan_doc(&[("ObjectPool/_1/\u{1}Ole10Native", &bytes)], 0, b"hi");
+        assert!(r.has("EMBEDDED_EXECUTABLE"), "{name}: {:?}", r.findings);
+    }
+}

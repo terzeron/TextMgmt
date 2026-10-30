@@ -163,3 +163,55 @@ fn rtf_is_collected_and_other_content_named_rtf_is_a_mismatch() {
     let r = scan("c.rtf", "그냥 텍스트\n".repeat(50).as_bytes());
     assert!(r.has("FORMAT_MISMATCH"), "{:?}", r.findings);
 }
+
+#[test]
+fn rtf_is_recognized_like_word_does_after_a_bom_or_whitespace_and_with_a_short_signature() {
+    let body = "{\\objclass X}";
+    for (name, head) in [("a.doc", "{\\rt"), ("b.doc", "\u{feff}  \r\n{\\rtf1"), ("c.docx", "\n{\\rtf1")] {
+        let r = scan(name, format!("{head}{body}}}").as_bytes());
+        assert_eq!(r.format, Some(Format::Doc), "{name}");
+        assert!(r.has("RTF_EMBEDDED_OBJECT"), "{name}: {:?}", r.findings);
+    }
+}
+
+#[test]
+fn control_words_groups_and_bin_data_inside_the_hex_do_not_hide_the_payload() {
+    let h = hex(&pe_bytes());
+    let (a, b) = h.split_at(40);
+    let (b, c) = b.split_at(40);
+    let cases = [
+        format!("{{\\rtf1{{\\*\\objdata {a}\\par {b}\\v0 {c}}}}}"),
+        format!("{{\\rtf1{{\\*\\objdata {a}{{\\*\\junk 0123456789abcdef}}{b}{{\\fonttbl{{x}}}}{c}}}}}"),
+        format!("{{\\rtf1{{\\*\\objdata {a}\\bin3 abc{b}\\\\\\{{{c}}}}}"),
+    ];
+    for (i, rtf) in cases.iter().enumerate() {
+        assert!(scan("a.rtf", rtf.as_bytes()).has("RTF_EMBEDDED_EXECUTABLE"), "case {i}: {rtf}");
+    }
+}
+
+#[test]
+fn a_payload_the_scan_budget_cannot_reach_is_incomplete_not_clean() {
+    let padding = " ".repeat(200 * 1024);
+    let r = scan("a.rtf", format!("{{\\rtf1{{\\*\\objdata {padding}{}}}}}", hex(&pe_bytes())).as_bytes());
+    assert!(r.incomplete && !r.has("RTF_EMBEDDED_EXECUTABLE"), "{:?} {:?}", r.findings, r.reasons);
+    // 상한(256개)을 넘는 objdata가 더 있으면 확인하지 못한 것이다.
+    let many = "{\\*\\objdata 00}".repeat(300);
+    let r = scan("b.rtf", format!("{{\\rtf1{many}}}").as_bytes());
+    assert!(r.incomplete, "{:?}", r.reasons);
+    // OLE1 머리말이 길어 본문이 해독한 앞부분 밖에 있으면 확인하지 못한 것이다.
+    let mut payload = vec![0x01, 0x05, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00];
+    payload.extend_from_slice(&5000u32.to_le_bytes());
+    payload.extend(vec![b'A'; 5000]);
+    payload.extend_from_slice(&[0u8; 8]);
+    payload.extend_from_slice(&4u32.to_le_bytes());
+    payload.extend_from_slice(&OLE_MAGIC);
+    let r = scan("c.rtf", &rtf_with_objdata("objdata", &payload));
+    assert!(r.incomplete, "{:?}", r.reasons);
+    // 크지만 평범한 객체(머리말이 짧고 매직이 없다)는 미완료가 아니다.
+    let mut plain = vec![0x01, 0x05, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00];
+    plain.extend_from_slice(b"Package\0");
+    plain.extend_from_slice(&[0u8; 8]);
+    plain.extend_from_slice(&20000u32.to_le_bytes());
+    plain.extend(vec![0x41u8; 20000]);
+    assert!(!scan("d.rtf", &rtf_with_objdata("objdata", &plain)).incomplete);
+}

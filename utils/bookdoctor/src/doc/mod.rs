@@ -27,8 +27,6 @@ const MAX_FIELD_BYTES: usize = 8192;
 const VBA_BUDGET: u64 = 16 * 1024 * 1024;
 /// 내장 객체(`Ole10Native`)에서 읽는 앞부분.
 const NATIVE_PREFIX: usize = 64 * 1024;
-/// 내장 객체의 파일 이름 하나로 읽는 최대 바이트.
-const MAX_NATIVE_NAME: usize = 260;
 /// RTF를 읽는 최대 바이트(`OleFile`의 스트림 상한과 같다).
 const RTF_READ_MAX: u64 = 64 * 1024 * 1024;
 /// 한 파일에서 보고하는 구조 이상 수의 상한.
@@ -207,11 +205,13 @@ fn check_vba(file: &mut OleFile, report: &mut FileReport) {
     }
 }
 
-/// `pos`부터 널로 끝나는 문자열을 읽는다(바이트를 그대로 글자로 본다). 문자열과 널 다음 위치를 돌려준다.
-fn c_string(bytes: &[u8], pos: usize) -> (String, usize) {
+/// `pos`부터 널로 끝나는 문자열을 읽는다(바이트를 그대로 글자로 본다). 길이를 자르지 않는다: 확장자는 이름의 끝에 있다.
+/// 문자열, 널 다음 위치, 널을 찾았는지를 돌려준다.
+fn c_string(bytes: &[u8], pos: usize) -> (String, usize, bool) {
     let rest = bytes.get(pos..).unwrap_or(&[]);
-    let len = rest.iter().take(MAX_NATIVE_NAME).take_while(|&&b| b != 0).count();
-    (rest[..len].iter().map(|&b| b as char).collect(), pos + len + 1)
+    let len = rest.iter().position(|&b| b == 0);
+    let end = len.unwrap_or(rest.len());
+    (rest[..end].iter().map(|&b| b as char).collect(), pos + end + 1, len.is_some())
 }
 
 fn check_objects(file: &mut OleFile, report: &mut FileReport) {
@@ -229,10 +229,14 @@ fn check_objects(file: &mut OleFile, report: &mut FileReport) {
         };
         // 내장 파일: 4바이트 크기와 2바이트 형식 뒤에 레이블, 원본 경로, (4바이트 미상, 임시 경로 길이 4바이트) 임시 경로가 온다.
         // Word는 어느 이름으로든 파일을 풀 수 있으므로 세 이름 모두 확장자를 본다.
-        let (label, next) = c_string(&prefix, 6);
-        let (source, next) = c_string(&prefix, next);
-        let temp_len = prefix.get(next + 4..next + 8).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).min(MAX_NATIVE_NAME);
+        let (label, next, label_end) = c_string(&prefix, 6);
+        let (source, next, source_end) = c_string(&prefix, next);
+        let temp_len = prefix.get(next + 4..next + 8).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
         let temp = prefix.get(next + 8..).map_or_else(String::new, |rest| c_string(&rest[..temp_len.min(rest.len())], 0).0);
+        // 이름이 읽은 앞부분 안에서 끝나지 않으면 확장자를 볼 수 없다.
+        if !label_end || !source_end {
+            report.mark_incomplete("embedded object file name is longer than the scanned prefix; its extension was not checked");
+        }
         let shown = sanitize_display(&label, 120, Some('…'));
         for name in [&label, &source, &temp] {
             let ext = name.trim_end_matches([' ', '.']).rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
