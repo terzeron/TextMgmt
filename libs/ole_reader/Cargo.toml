@@ -7,6 +7,10 @@ publish.workspace = true
 autotests = false
 
 [[test]]
+name = "anomalies"
+path = "../../tests/rust/ole_reader/anomalies.rs"
+
+[[test]]
 name = "ole_reader"
 path = "../../tests/rust/ole_reader/ole_reader.rs"
 

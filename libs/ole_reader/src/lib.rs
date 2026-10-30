@@ -70,7 +70,101 @@ pub struct Entry {
 
 /// 파일이 비정상인 곳. 읽을 수 있는 만큼 읽은 뒤에 모은다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Anomaly {}
+pub enum Anomaly {
+    /// 바이트 순서 표지가 `0xFFFE`가 아니다.
+    BadByteOrder,
+    /// 섹터 시프트가 주버전과 맞지 않는다(3이면 9, 4이면 12). 주버전에 맞춰 계속 읽는다.
+    BadSectorShift(u16),
+    /// 미니 섹터 시프트가 6이 아니다.
+    BadMiniSectorShift(u16),
+    /// 미니 스트림 한도가 4096이 아니다.
+    BadMiniCutoff(u32),
+    /// 섹터 사슬이 순환한다. 값은 사슬이 시작하는 섹터다.
+    FatChainCycle { start: u32 },
+    /// 사슬이 FAT 밖이나 파일 밖의 섹터, 또는 특수 값으로 이어진다.
+    SectorOutOfRange { sector: u32 },
+    /// 헤더가 적은 FAT 섹터 수와 실제로 읽은 수가 다르다.
+    FatSectorCountMismatch { header: u32, found: u32 },
+    /// 헤더가 적은 DIFAT 섹터 수만큼 사슬이 이어지지 않는다.
+    DifatTruncated,
+    /// 디렉터리 사슬이 파일 끝을 넘는다.
+    DirectoryTruncated,
+    /// 디렉터리 사슬이 순환한다.
+    DirectoryCycle,
+    /// 디렉터리 항목이 상한보다 많다. 값은 읽은 항목 수다.
+    TooManyEntries(usize),
+    /// 스트림이 파일 전체보다 크다고 선언한다.
+    StreamSizeExceedsFile { id: u32, size: u64 },
+    /// 작은 스트림이 있는데 미니 스트림이 없다.
+    MiniStreamMissing,
+    /// 서로 다른 스트림이 같은 섹터를 쓴다.
+    CrossLinkedSectors { sector: u32 },
+    /// 마지막 섹터 뒤에 남는 바이트 수.
+    TrailingGarbage(u64),
+    /// 이름 길이 필드가 실제 이름과 맞지 않는다.
+    NameLengthMismatch { id: u32 },
+    /// 명세가 정하지 않은 객체 종류.
+    InvalidObjectType { id: u32, value: u8 },
+}
+
+impl Anomaly {
+    /// 보고서에 쓰는 안정적인 이름.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Anomaly::BadByteOrder => "OLE_BAD_BYTE_ORDER",
+            Anomaly::BadSectorShift(_) => "OLE_BAD_SECTOR_SHIFT",
+            Anomaly::BadMiniSectorShift(_) => "OLE_BAD_MINI_SECTOR_SHIFT",
+            Anomaly::BadMiniCutoff(_) => "OLE_BAD_MINI_CUTOFF",
+            Anomaly::FatChainCycle { .. } => "OLE_FAT_CYCLE",
+            Anomaly::SectorOutOfRange { .. } => "OLE_SECTOR_OUT_OF_RANGE",
+            Anomaly::FatSectorCountMismatch { .. } => "OLE_FAT_COUNT_MISMATCH",
+            Anomaly::DifatTruncated => "OLE_DIFAT_TRUNCATED",
+            Anomaly::DirectoryTruncated => "OLE_DIRECTORY_TRUNCATED",
+            Anomaly::DirectoryCycle => "OLE_DIRECTORY_CYCLE",
+            Anomaly::TooManyEntries(_) => "OLE_TOO_MANY_ENTRIES",
+            Anomaly::StreamSizeExceedsFile { .. } => "OLE_STREAM_SIZE_EXCEEDS_FILE",
+            Anomaly::MiniStreamMissing => "OLE_MINI_STREAM_MISSING",
+            Anomaly::CrossLinkedSectors { .. } => "OLE_CROSS_LINKED",
+            Anomaly::TrailingGarbage(_) => "OLE_TRAILING_GARBAGE",
+            Anomaly::NameLengthMismatch { .. } => "OLE_NAME_LENGTH_MISMATCH",
+            Anomaly::InvalidObjectType { .. } => "OLE_INVALID_OBJECT_TYPE",
+        }
+    }
+
+    /// 사람이 읽는 설명.
+    pub fn detail(&self) -> String {
+        match self {
+            Anomaly::BadByteOrder => "byte order mark is not 0xFFFE".into(),
+            Anomaly::BadSectorShift(v) => format!("sector shift {v} does not match the major version"),
+            Anomaly::BadMiniSectorShift(v) => format!("mini sector shift {v} (expected 6)"),
+            Anomaly::BadMiniCutoff(v) => format!("mini stream cutoff {v} (expected 4096)"),
+            Anomaly::FatChainCycle { start } => format!("sector chain starting at {start} loops"),
+            Anomaly::SectorOutOfRange { sector } => format!("sector chain reaches {sector:#x}, outside the FAT or the file"),
+            Anomaly::FatSectorCountMismatch { header, found } => format!("header lists {header} FAT sectors but {found} could be read"),
+            Anomaly::DifatTruncated => "DIFAT chain ends before the header's sector count".into(),
+            Anomaly::DirectoryTruncated => "directory chain continues past the end of the file".into(),
+            Anomaly::DirectoryCycle => "directory sector chain loops".into(),
+            Anomaly::TooManyEntries(n) => format!("{n} directory entries read (limit exceeded)"),
+            Anomaly::StreamSizeExceedsFile { id, size } => format!("stream {id} declares {size} bytes, more than the whole file"),
+            Anomaly::MiniStreamMissing => "small streams exist but the mini stream does not".into(),
+            Anomaly::CrossLinkedSectors { sector } => format!("sector {sector} is used by more than one stream"),
+            Anomaly::TrailingGarbage(n) => format!("{n} bytes after the last full sector"),
+            Anomaly::NameLengthMismatch { id } => format!("entry {id}: name length field does not match the name"),
+            Anomaly::InvalidObjectType { id, value } => format!("entry {id}: object type {value:#x} is not defined"),
+        }
+    }
+}
+
+/// 사슬을 따라가다 멈춘 이유.
+enum ChainEnd {
+    /// `ENDOFCHAIN`에 닿았다.
+    End,
+    Cycle,
+    /// 다음 값이 일반 섹터 번호도 `ENDOFCHAIN`도 아니거나 표(FAT) 밖이다.
+    Bad(u32),
+    /// 호출자가 정한 길이에서 멈췄다(필요한 만큼만 걷는다).
+    Cap,
+}
 
 /// 읽을 수 없는 경우.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +190,8 @@ pub struct OleFile {
     /// 항목마다 [왼쪽, 오른쪽, 자식] 형제 ID(원본 그대로).
     siblings: Vec<[u32; 3]>,
     anomalies: Vec<Anomaly>,
+    /// 실제로 읽은 서로 다른 FAT 섹터 수.
+    fat_found: u32,
     limits: Limits,
     spent: u64,
 }
@@ -144,10 +240,12 @@ impl OleFile {
             (4, _) => 4096,
             _ => 512,
         };
-        let mut file = OleFile { data, sector_size, major, fat: Vec::new(), minifat: Vec::new(), mini_stream: Vec::new(), entries: Vec::new(), siblings: Vec::new(), anomalies: Vec::new(), limits: *limits, spent: 0 };
+        let mut file = OleFile { data, sector_size, major, fat: Vec::new(), minifat: Vec::new(), mini_stream: Vec::new(), entries: Vec::new(), siblings: Vec::new(), anomalies: Vec::new(), fat_found: 0, limits: *limits, spent: 0 };
+        file.read_header_anomalies();
         file.read_fat();
         file.read_directory();
         file.read_minifat();
+        file.check_streams();
         file.link_parents();
         if file.entries.is_empty() {
             return Err(OleError::Unreadable("no directory entries could be read".into()));
@@ -169,35 +267,72 @@ impl OleFile {
         self.data.get(start..start.checked_add(self.sector_size)?)
     }
 
+    fn read_header_anomalies(&mut self) {
+        if u16_at(&self.data, 28) != Some(0xFFFE) {
+            self.anomalies.push(Anomaly::BadByteOrder);
+        }
+        let shift = u16_at(&self.data, 30).unwrap_or(0);
+        if !matches!((self.major, shift), (3, 9) | (4, 12)) {
+            self.anomalies.push(Anomaly::BadSectorShift(shift));
+        }
+        let mini = u16_at(&self.data, 32).unwrap_or(0);
+        if mini != 6 {
+            self.anomalies.push(Anomaly::BadMiniSectorShift(mini));
+        }
+        let cutoff = u32_at(&self.data, 56).unwrap_or(0);
+        if u64::from(cutoff) != MINI_CUTOFF {
+            self.anomalies.push(Anomaly::BadMiniCutoff(cutoff));
+        }
+        let extra = (self.data.len() % self.sector_size) as u64;
+        if extra != 0 {
+            self.anomalies.push(Anomaly::TrailingGarbage(extra));
+        }
+    }
+
     fn read_fat(&mut self) {
         let per = self.sector_size / 4;
         let max_sectors = self.sector_count();
+        // FAT 섹터 목록은 파일에 실제로 있는 섹터 수를 넘지 못한다(파일 밖 번호는 버린다). DIFAT 섹터마다 항목이 수백 개라
+        // 상한 없이 모으면 파일 크기의 수십 배를 할당할 수 있다.
         let mut fat_sectors: Vec<u32> = Vec::new();
+        let keep = |s: u32, v: &Vec<u32>| s <= MAXREGSECT && (s as usize) < max_sectors && v.len() < max_sectors;
         for i in 0..109 {
             if let Some(s) = u32_at(&self.data, 76 + i * 4)
-                && s <= MAXREGSECT
+                && keep(s, &fat_sectors)
             {
                 fat_sectors.push(s);
             }
         }
-        // DIFAT 사슬: 각 섹터의 마지막 항목이 다음 DIFAT 섹터다.
+        // DIFAT 사슬: 각 섹터의 마지막 항목이 다음 DIFAT 섹터다. 헤더가 적은 섹터 수만큼 이어지지 않으면 알린다.
+        let mut remaining = u32_at(&self.data, 72).unwrap_or(0);
         let mut next = u32_at(&self.data, 68).unwrap_or(ENDOFCHAIN);
         let mut seen = HashSet::new();
-        while next <= MAXREGSECT && seen.len() < max_sectors && seen.insert(next) {
-            let Some(sector) = self.sector(next) else { break };
+        while remaining > 0 {
+            if next > MAXREGSECT || seen.len() >= max_sectors || !seen.insert(next) {
+                self.anomalies.push(Anomaly::DifatTruncated);
+                break;
+            }
+            let Some(sector) = self.sector(next) else {
+                self.anomalies.push(Anomaly::DifatTruncated);
+                break;
+            };
             for k in 0..per.saturating_sub(1) {
                 if let Some(s) = u32_at(sector, k * 4)
-                    && s <= MAXREGSECT
+                    && keep(s, &fat_sectors)
                 {
                     fat_sectors.push(s);
                 }
             }
             next = u32_at(sector, (per - 1) * 4).unwrap_or(ENDOFCHAIN);
+            remaining -= 1;
         }
         let mut seen_fat = HashSet::new();
         let mut table = Vec::new();
         for s in fat_sectors {
-            if !seen_fat.insert(s) || seen_fat.len() > max_sectors {
+            if seen_fat.len() >= max_sectors {
+                break;
+            }
+            if !seen_fat.insert(s) {
                 continue;
             }
             if let Some(sector) = self.sector(s) {
@@ -206,46 +341,90 @@ impl OleFile {
                 }
             }
         }
+        self.fat_found = (table.len() / per.max(1)) as u32;
+        let header = u32_at(&self.data, 44).unwrap_or(0);
+        if header != self.fat_found {
+            self.anomalies.push(Anomaly::FatSectorCountMismatch { header, found: self.fat_found });
+        }
         self.fat = table;
     }
 
-    /// FAT를 따라 섹터 번호 사슬을 모은다. 순환은 방문 표시로, 길이는 파일의 섹터 수로 끊는다.
-    fn chain(&self, table: &[u32], start: u32) -> Vec<u32> {
+    /// 표(FAT 또는 미니 FAT)를 따라 섹터 번호 사슬을 모은다. 순환은 방문 표시로 끊고, `max_len`개를 넘게 걷지 않는다.
+    /// 읽을 만큼(선언 크기가 덮는 섹터 수 + 1)만 걷게 해서, 긴 사슬을 가리키는 작은 스트림이 일을 키우지 못하게 한다.
+    fn chain_ex(table: &[u32], start: u32, max_len: usize) -> (Vec<u32>, ChainEnd) {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
         let mut cur = start;
-        let limit = table.len().min(self.sector_count().max(table.len().min(1 << 20)));
-        while cur <= MAXREGSECT && out.len() <= limit && seen.insert(cur) {
+        loop {
+            if cur == ENDOFCHAIN {
+                return (out, ChainEnd::End);
+            }
+            if cur > MAXREGSECT || cur as usize >= table.len() {
+                return (out, ChainEnd::Bad(cur));
+            }
+            if out.len() >= max_len {
+                return (out, ChainEnd::Cap);
+            }
+            if !seen.insert(cur) {
+                return (out, ChainEnd::Cycle);
+            }
             out.push(cur);
-            cur = table.get(cur as usize).copied().unwrap_or(ENDOFCHAIN);
+            cur = table[cur as usize];
         }
-        out
+    }
+
+    fn chain(table: &[u32], start: u32, max_len: usize) -> Vec<u32> {
+        Self::chain_ex(table, start, max_len).0
     }
 
     fn read_directory(&mut self) {
         let start = u32_at(&self.data, 48).unwrap_or(ENDOFCHAIN);
-        let chain = self.chain(&self.fat, start);
+        // 상한이 허용하는 항목 수를 담는 섹터까지만 걷는다.
+        let dir_max = (self.limits.max_entries.saturating_mul(ENTRY_LEN)).div_ceil(self.sector_size) + 1;
+        let (chain, end) = Self::chain_ex(&self.fat, start, dir_max);
+        match end {
+            ChainEnd::Cycle => self.anomalies.push(Anomaly::DirectoryCycle),
+            ChainEnd::Bad(s) => self.anomalies.push(Anomaly::SectorOutOfRange { sector: s }),
+            ChainEnd::End | ChainEnd::Cap => {}
+        }
         let mut raw = Vec::new();
         for s in chain {
-            let Some(sector) = self.sector(s) else { break };
+            let Some(sector) = self.sector(s) else {
+                self.anomalies.push(Anomaly::DirectoryTruncated);
+                break;
+            };
             raw.extend_from_slice(sector);
             if raw.len() / ENTRY_LEN > self.limits.max_entries {
                 break;
             }
         }
-        let count = (raw.len() / ENTRY_LEN).min(self.limits.max_entries);
+        let total = raw.len() / ENTRY_LEN;
+        if total > self.limits.max_entries {
+            self.anomalies.push(Anomaly::TooManyEntries(total));
+        }
+        let count = total.min(self.limits.max_entries);
         for id in 0..count {
             let e = &raw[id * ENTRY_LEN..(id + 1) * ENTRY_LEN];
-            let name_len = (u16_at(e, 64).unwrap_or(0) as usize).min(64) & !1;
-            let units: Vec<u16> = (0..name_len / 2).map(|i| u16::from_le_bytes([e[i * 2], e[i * 2 + 1]])).collect();
+            let name_len = u16_at(e, 64).unwrap_or(0) as usize;
+            let usable = name_len.min(64) & !1;
+            let units: Vec<u16> = (0..usable / 2).map(|i| u16::from_le_bytes([e[i * 2], e[i * 2 + 1]])).collect();
             let units = units.split(|&u| u == 0).next().unwrap_or(&[]);
+            // 실제 파일 중에는 안 쓰는 슬롯을 0xFF로 채우는 작성기가 있다. 유형, 시작 섹터, 크기가 모두 0xFF인 슬롯은 빈 슬롯으로 본다.
+            let free_slot = e[66] == 0xFF && u32_at(e, 116) == Some(FREESECT) && u64_at(e, 120) == Some(u64::MAX);
             let kind = match e[66] {
+                _ if free_slot => EntryKind::Unallocated,
                 0 => EntryKind::Unallocated,
                 1 => EntryKind::Storage,
                 2 => EntryKind::Stream,
                 5 => EntryKind::Root,
                 other => EntryKind::Invalid(other),
             };
+            if let EntryKind::Invalid(value) = kind {
+                self.anomalies.push(Anomaly::InvalidObjectType { id: id as u32, value });
+            }
+            if kind != EntryKind::Unallocated && name_len != (units.len() + 1) * 2 {
+                self.anomalies.push(Anomaly::NameLengthMismatch { id: id as u32 });
+            }
             let raw_size = u64_at(e, 120).unwrap_or(0);
             let size = if self.major == 3 { raw_size & 0xFFFF_FFFF } else { raw_size };
             let mut clsid = [0u8; 16];
@@ -255,10 +434,66 @@ impl OleFile {
         }
     }
 
+    /// 스트림마다 사슬을 한 번 걸어 순환·범위 밖·교차 연결·크기 모순을 찾는다. 다른 스트림이 쓰는 섹터를 만나면 그 사슬은 거기서 멈춘다
+    /// (여러 항목이 같은 긴 사슬을 가리키는 입력에서 일이 항목 수 × 사슬 길이로 늘지 않게 한다).
+    fn check_streams(&mut self) {
+        let file_len = self.data.len() as u64;
+        let mut owner: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        let mut mini_owner: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        let mut reported: HashSet<u32> = HashSet::new();
+        let mut found = Vec::new();
+        let mut small_streams = false;
+        for i in 0..self.entries.len() {
+            let e = self.entries[i].clone();
+            if e.kind != EntryKind::Stream || e.size == 0 {
+                continue;
+            }
+            if e.size > file_len {
+                found.push(Anomaly::StreamSizeExceedsFile { id: e.id, size: e.size });
+            }
+            let mini = e.size < MINI_CUTOFF;
+            small_streams |= mini;
+            let (table, owners) = if mini { (&self.minifat, &mut mini_owner) } else { (&self.fat, &mut owner) };
+            let mut seen = HashSet::new();
+            let mut cur = e.start;
+            loop {
+                if cur == ENDOFCHAIN {
+                    break;
+                }
+                if cur > MAXREGSECT || cur as usize >= table.len() {
+                    found.push(Anomaly::SectorOutOfRange { sector: cur });
+                    break;
+                }
+                if !seen.insert(cur) {
+                    found.push(Anomaly::FatChainCycle { start: e.start });
+                    break;
+                }
+                if let Some(&other) = owners.get(&cur)
+                    && other != e.id
+                {
+                    if reported.insert(cur) {
+                        found.push(Anomaly::CrossLinkedSectors { sector: cur });
+                    }
+                    break;
+                }
+                owners.insert(cur, e.id);
+                if !mini && self.sector(cur).is_none() {
+                    found.push(Anomaly::SectorOutOfRange { sector: cur });
+                    break;
+                }
+                cur = table[cur as usize];
+            }
+        }
+        if small_streams && self.mini_stream.is_empty() {
+            found.push(Anomaly::MiniStreamMissing);
+        }
+        self.anomalies.extend(found);
+    }
+
     fn read_minifat(&mut self) {
         let start = u32_at(&self.data, 60).unwrap_or(ENDOFCHAIN);
         let mut table = Vec::new();
-        for s in self.chain(&self.fat, start) {
+        for s in Self::chain(&self.fat, start, self.fat.len()) {
             let Some(sector) = self.sector(s) else { break };
             for k in 0..self.sector_size / 4 {
                 table.push(u32_at(sector, k * 4).unwrap_or(FREESECT));
@@ -269,7 +504,7 @@ impl OleFile {
         let Some(root) = self.entries.first().filter(|e| e.kind == EntryKind::Root).cloned() else { return };
         let want = root.size.min(self.limits.max_stream) as usize;
         let mut buf = Vec::new();
-        for s in self.chain(&self.fat, root.start) {
+        for s in Self::chain(&self.fat, root.start, want.div_ceil(self.sector_size) + 1) {
             let Some(sector) = self.sector(s) else { break };
             buf.extend_from_slice(sector);
             if buf.len() >= want {
@@ -347,7 +582,7 @@ impl OleFile {
         let size = entry.size as usize;
         let mut out = Vec::with_capacity(size.min(self.data.len()));
         if entry.size < MINI_CUTOFF && entry.kind != EntryKind::Root {
-            for s in self.chain(&self.minifat, entry.start) {
+            for s in Self::chain(&self.minifat, entry.start, size.div_ceil(MINI_SECTOR) + 1) {
                 let at = (s as usize).saturating_mul(MINI_SECTOR);
                 let Some(piece) = self.mini_stream.get(at..at.saturating_add(MINI_SECTOR).min(self.mini_stream.len())) else { break };
                 out.extend_from_slice(piece);
@@ -356,7 +591,7 @@ impl OleFile {
                 }
             }
         } else {
-            for s in self.chain(&self.fat, entry.start) {
+            for s in Self::chain(&self.fat, entry.start, size.div_ceil(self.sector_size) + 1) {
                 let Some(sector) = self.sector(s) else { break };
                 out.extend_from_slice(sector);
                 if out.len() >= size {
@@ -367,5 +602,54 @@ impl OleFile {
         out.truncate(size);
         self.spent += out.len() as u64;
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 사슬 걷기는 호출자가 정한 길이에서 멈춘다. 긴 사슬을 가리키는 작은 스트림이 표 전체를 훑지 않게 한다.
+    #[test]
+    fn chain_walk_stops_at_the_requested_length() {
+        let table: Vec<u32> = (1..=1_000_000u32).chain(std::iter::once(ENDOFCHAIN)).collect();
+        let (out, end) = OleFile::chain_ex(&table, 0, 10);
+        assert_eq!(out.len(), 10);
+        assert!(matches!(end, ChainEnd::Cap));
+        let (all, end) = OleFile::chain_ex(&table, 999_990, usize::MAX);
+        assert_eq!(all.len(), 11);
+        assert!(matches!(end, ChainEnd::End));
+    }
+
+    /// DIFAT 섹터가 파일 밖 섹터 번호를 잔뜩 담아도 FAT 섹터 목록은 파일의 섹터 수를 넘지 않는다.
+    #[test]
+    fn fat_sector_list_is_bounded_by_the_file_even_with_a_hostile_difat() {
+        // 헤더 + DIFAT 섹터 3개(자기들끼리 사슬). 각 DIFAT 섹터의 항목은 전부 파일 밖 번호다.
+        let sectors = 3usize;
+        let mut data = vec![0u8; 512 * (sectors + 1)];
+        data[..8].copy_from_slice(&SIGNATURE);
+        data[26..28].copy_from_slice(&3u16.to_le_bytes());
+        data[28..30].copy_from_slice(&0xFFFEu16.to_le_bytes());
+        data[30..32].copy_from_slice(&9u16.to_le_bytes());
+        data[32..34].copy_from_slice(&6u16.to_le_bytes());
+        data[56..60].copy_from_slice(&4096u32.to_le_bytes());
+        data[48..52].copy_from_slice(&ENDOFCHAIN.to_le_bytes());
+        data[68..72].copy_from_slice(&0u32.to_le_bytes());
+        data[72..76].copy_from_slice(&3u32.to_le_bytes());
+        for i in 0..109 {
+            data[76 + i * 4..80 + i * 4].copy_from_slice(&0x00FF_FFFFu32.to_le_bytes());
+        }
+        for s in 0..sectors {
+            let base = 512 * (s + 1);
+            for k in 0..127 {
+                data[base + k * 4..base + k * 4 + 4].copy_from_slice(&0x00FF_FFFFu32.to_le_bytes());
+            }
+            let next = if s + 1 < sectors { (s + 1) as u32 } else { ENDOFCHAIN };
+            data[base + 127 * 4..base + 128 * 4].copy_from_slice(&next.to_le_bytes());
+        }
+        let mut f = OleFile { data, sector_size: 512, major: 3, fat: Vec::new(), minifat: Vec::new(), mini_stream: Vec::new(), entries: Vec::new(), siblings: Vec::new(), anomalies: Vec::new(), fat_found: 0, limits: Limits::default(), spent: 0 };
+        f.read_fat();
+        assert_eq!(f.fat.len(), 0, "파일 밖 번호는 FAT 섹터로 모으지 않는다");
+        assert_eq!(f.fat_found, 0);
     }
 }
