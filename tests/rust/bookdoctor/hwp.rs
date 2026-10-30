@@ -104,3 +104,63 @@ fn hwpx_named_ole_with_a_fileheader_is_analyzed_as_hwp() {
     let r = scan("odd.hwpx", &make_cfb(&[("Something", &[1u8, 2, 3][..])]).bytes);
     assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("OLE")), "{:?}", r.reasons);
 }
+
+fn scan_cfb(name: &str, cfb: &Cfb) -> FileReport {
+    scan(name, &cfb.bytes)
+}
+
+fn finding<'a>(r: &'a FileReport, code: &str) -> &'a scan_common::Finding {
+    r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
+}
+
+#[test]
+fn plain_and_compressed_headers_are_clean() {
+    for flags in [0u32, 0x1, 0x1 | 0x20 | 0x40] {
+        let r = scan_cfb("a.hwp", &hwp_cfb(&[], flags));
+        assert!(r.findings.is_empty() && !r.incomplete, "flags {flags:#x}: {:?} {:?}", r.findings, r.reasons);
+    }
+}
+
+#[test]
+fn password_drm_and_certificate_flags_are_incomplete_and_marked_encrypted() {
+    // 명세 표 3: bit1 암호, bit4 DRM, bit8 공인 인증서 암호화, bit10 공인 인증서 DRM.
+    for (bit, what) in [(1u32, "password"), (4, "DRM"), (8, "certificate encryption"), (10, "certificate DRM")] {
+        let r = scan_cfb("a.hwp", &hwp_cfb(&[], 1 << bit));
+        assert!(r.incomplete, "bit {bit}");
+        assert!(r.reasons.iter().any(|m| FileReport::is_encrypted_reason(m) && m.contains(what)), "bit {bit}: {:?}", r.reasons);
+        assert!(!r.has("FORMAT_MISMATCH"), "bit {bit}");
+    }
+    // 같은 비트를 담은 .hwpx 이름도 같다.
+    assert!(scan_cfb("b.hwpx", &hwp_cfb(&[], 1 << 1)).reasons.iter().any(|m| FileReport::is_encrypted_reason(m)));
+}
+
+#[test]
+fn bad_signature_and_short_header_are_defects() {
+    let mut bad = file_header(0);
+    bad[..17].copy_from_slice(b"Not A Hwp Doc!!!!");
+    let short = vec![0u8; 100];
+    for (name, header) in [("bad signature", bad), ("short", short)] {
+        let r = scan_cfb("a.hwp", &make_cfb(&[("FileHeader", &header[..])]));
+        let f = finding(&r, "HWP_BAD_HEADER");
+        assert_eq!(f.severity, scan_common::Severity::Medium, "{name}");
+        assert_eq!(f.category, scan_common::Category::Defect, "{name}");
+    }
+}
+
+#[test]
+fn distribution_doc_without_bodytext_is_incomplete() {
+    let section = [0u8; 16];
+    let r = scan_cfb("a.hwp", &hwp_cfb(&[("ViewText/Section0", &section[..])], 0x4));
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("ViewText")), "{:?}", r.reasons);
+    assert!(!r.reasons.iter().any(|m| FileReport::is_encrypted_reason(m)), "{:?}", r.reasons);
+    // 배포용 비트가 있어도 BodyText가 있으면 평소처럼 읽는다.
+    let r = scan_cfb("b.hwp", &hwp_cfb(&[("BodyText/Section0", &section[..])], 0x4));
+    assert!(!r.incomplete, "{:?}", r.reasons);
+}
+
+#[test]
+fn ole_without_a_fileheader_is_a_mismatch_defect() {
+    let r = scan_cfb("a.hwp", &make_cfb(&[("Something", &[1u8, 2, 3][..])]));
+    let f = finding(&r, "FORMAT_MISMATCH");
+    assert_eq!(f.location, "FileHeader");
+}

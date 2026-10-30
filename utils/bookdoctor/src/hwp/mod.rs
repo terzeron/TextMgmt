@@ -1,10 +1,12 @@
 //! HWP 5.x(OLE 복합 파일) 검사. 포맷 사실은 `docs/bookdoctor-hwp5-notes.md`에 있다.
 //! 파일을 실행하거나 렌더링하지 않는다.
 
+pub mod header;
+
 use std::path::Path;
 
 use ole_reader::OleFile;
-use scan_common::FileReport;
+use scan_common::{Category, FileReport, Severity};
 use scan_common::sniff::Sniffed;
 
 use crate::cli::Options;
@@ -41,4 +43,31 @@ pub fn scan_ole_named_hwpx(path: &Path, opts: &Options, report: &mut FileReport)
 /// 열린 HWP 5.x를 검사해 `report`에 더한다.
 fn inspect(file: &mut OleFile, report: &mut FileReport) {
     report_anomalies(file, report);
+    let Some(entry) = file.find("FileHeader").cloned() else {
+        report.push(Category::Defect, Severity::Medium, "FORMAT_MISMATCH", "FileHeader", "OLE 파일이지만 HWP 문서가 아니다(FileHeader 스트림이 없다)");
+        return;
+    };
+    let bytes = match file.read_stream_prefix(&entry, header::HEADER_LEN) {
+        Ok(b) => b,
+        Err(e) => {
+            report.mark_incomplete(&format!("FileHeader could not be read: {e:?}"));
+            return;
+        }
+    };
+    let header = match header::parse(&bytes) {
+        Ok(h) => h,
+        Err(e) => {
+            report.push(Category::Defect, Severity::Medium, "HWP_BAD_HEADER", "FileHeader", &e.detail());
+            return;
+        }
+    };
+    // 암호·DRM 문서는 본문과 BinData를 읽을 수 없다. 깨끗하다고 하지 않고 미완료로 남긴다.
+    if let Some(reason) = header.encryption_reason() {
+        report.mark_incomplete(reason);
+        return;
+    }
+    // 배포용 문서는 본문이 `ViewText`에 따로 저장된다. 이 명세에는 그 구조가 없어 읽지 않는다.
+    if header.distributable() && file.find("BodyText").is_none() && file.find("ViewText").is_some() {
+        report.mark_incomplete("distribution document: ViewText not analyzed");
+    }
 }
