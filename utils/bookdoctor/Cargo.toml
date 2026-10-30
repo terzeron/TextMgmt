@@ -27,6 +27,10 @@ name = "hwpx"
 path = "../../tests/rust/bookdoctor/hwpx.rs"
 
 [[test]]
+name = "doc"
+path = "../../tests/rust/bookdoctor/doc.rs"
+
+[[test]]
 name = "ooxml_security"
 path = "../../tests/rust/bookdoctor/ooxml_security.rs"
 
@@ -112,6 +116,7 @@ lopdf.workspace = true
 rayon = "1.12.0"
 regex = "1.13.1"
 roxmltree = "0.21.1"
+ole_reader = { path = "../../libs/ole_reader" }
 scan_common = { path = "../../libs/scan_common", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }

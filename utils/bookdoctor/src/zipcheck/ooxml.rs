@@ -409,7 +409,7 @@ fn cap_text(s: &str) -> (&str, bool) {
     (&s[..end], true)
 }
 
-fn classify_field(instr: &str, name: &str, report: &mut FileReport) {
+pub(crate) fn classify_field(instr: &str, name: &str, report: &mut FileReport) {
     // 어떤 경로로 들어와도 분석하는 길이를 상한으로 막는다(`fldSimple`의 `instr` 속성은 `push_capped`를 거치지 않는다).
     let (instr, _) = cap_text(instr);
     let word = instr.split_whitespace().next().unwrap_or("").to_ascii_uppercase();

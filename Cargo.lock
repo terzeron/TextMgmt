@@ -387,6 +387,7 @@ dependencies = [
  "fancy-regex",
  "htmlkit",
  "lopdf",
+ "ole_reader",
  "rayon",
  "regex",
  "roxmltree",

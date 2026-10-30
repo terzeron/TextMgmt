@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod common;
+pub mod doc;
 pub mod epub;
 pub mod exe;
 pub mod mojibake;

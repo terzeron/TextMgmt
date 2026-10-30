@@ -17,6 +17,8 @@ pub enum Format {
     Zip,
     Docx,
     Hwpx,
+    /// 구형 `.doc`·`.dot`(OLE 복합 파일).
+    Doc,
 }
 
 /// 지표의 분류.
