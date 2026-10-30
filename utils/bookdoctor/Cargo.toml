@@ -107,6 +107,10 @@ name = "hwp"
 path = "../../tests/rust/bookdoctor/hwp.rs"
 
 [[test]]
+name = "rules_builtin"
+path = "../../tests/rust/bookdoctor/rules_builtin.rs"
+
+[[test]]
 name = "rules_cli"
 path = "../../tests/rust/bookdoctor/rules_cli.rs"
 
