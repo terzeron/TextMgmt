@@ -26,6 +26,7 @@ docs/       문서
 | `parser_timeout` | 파서 시간 상한, 스레드 제한, 자식 프로세스 종료 |
 | `isbn` | 파일에서 ISBN 추출(TXT·EPUB·PDF·DJVU·HWP) |
 | `hwp3_tables`, `hwp3_parser` | HWP 3.x 텍스트 추출 |
+| `ole_reader` | OLE 복합 파일(CFB)을 관대하게 읽는 파서와 MS-OVBA 압축 해제. 손상 구조를 오류 대신 `Anomaly`로 알린다 |
 
 ## utils (도구)
 

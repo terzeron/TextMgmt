@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["libs/corpus_layout", "libs/es_client", "utils/quarantine_broken", "utils/cluster_hybrid_genres", "utils/search", "utils/bookdoctor", "libs/stat", "libs/file_time", "libs/parser_timeout", "libs/htmlkit", "libs/isbn", "libs/hwp3_tables", "libs/hwp3_parser", "libs/pyfmt", "libs/corpus_common", "utils/update", "utils/move_semi_clusters", "utils/classify_books_client", "utils/normalize_comic_directories", "libs/bookstore", "libs/doc_reader", "utils/loader", "libs/scan_common", "libs/sysdeps", "backend", "utils/classify_cli"]
+members = ["libs/corpus_layout", "libs/es_client", "utils/quarantine_broken", "utils/cluster_hybrid_genres", "utils/search", "utils/bookdoctor", "libs/stat", "libs/file_time", "libs/parser_timeout", "libs/htmlkit", "libs/isbn", "libs/hwp3_tables", "libs/hwp3_parser", "libs/pyfmt", "libs/corpus_common", "utils/update", "utils/move_semi_clusters", "utils/classify_books_client", "utils/normalize_comic_directories", "libs/bookstore", "libs/doc_reader", "utils/loader", "libs/scan_common", "libs/ole_reader", "libs/sysdeps", "backend", "utils/classify_cli"]
 
 [workspace.package]
 version = "0.1.0"
