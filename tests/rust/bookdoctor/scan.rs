@@ -113,3 +113,42 @@ fn risk_score_is_computed_before_the_only_filter() {
     assert!(only_render.findings.iter().all(|f| f.category == Category::Render));
     assert_eq!(only_render.risk_score, full);
 }
+
+// --- zip · docx · hwpx 디스패치 ---
+
+#[test]
+fn dispatch_routes_zip_docx_and_hwpx_by_extension() {
+    assert_eq!(dispatch_format(Path::new("a.zip"), Sniffed::Zip), Some(Format::Zip));
+    assert_eq!(dispatch_format(Path::new("a.zip"), Sniffed::Unknown), Some(Format::Zip));
+    for name in ["a.docx", "a.DOCM", "a.dotx", "a.dotm"] {
+        assert_eq!(dispatch_format(Path::new(name), Sniffed::Zip), Some(Format::Docx), "{name}");
+        assert_eq!(dispatch_format(Path::new(name), Sniffed::Unknown), Some(Format::Docx), "{name}");
+    }
+    assert_eq!(dispatch_format(Path::new("a.hwpx"), Sniffed::Zip), Some(Format::Hwpx));
+}
+
+#[test]
+fn dispatch_follows_pdf_content_for_zip_family_extensions_and_keeps_epub() {
+    for name in ["a.zip", "a.docx", "a.hwpx"] {
+        assert_eq!(dispatch_format(Path::new(name), Sniffed::Pdf), Some(Format::Pdf), "{name}");
+    }
+    assert_eq!(dispatch_format(Path::new("a.epub"), Sniffed::Zip), Some(Format::Epub));
+    assert_eq!(dispatch_format(Path::new("a.docs"), Sniffed::Zip), None);
+}
+
+#[test]
+fn directory_walk_collects_zip_docx_hwpx_but_not_lookalike_extensions() {
+    let d = tempfile::tempdir().unwrap();
+    for name in ["a.zip", "b.docx", "c.hwpx", "d.docs", "e.zipx"] {
+        std::fs::write(d.path().join(name), b"PK\x03\x04 not a real archive").unwrap();
+    }
+    let mut out = Vec::new();
+    run(&["-r".into(), "--min-severity".into(), "low".into(), "--color".into(), "never".into(), d.path().to_string_lossy().into_owned()], &mut out);
+    let out = String::from_utf8(out).unwrap();
+    for hit in ["a.zip", "b.docx", "c.hwpx"] {
+        assert!(out.contains(hit), "{hit}: {out}");
+    }
+    for miss in ["d.docs", "e.zipx"] {
+        assert!(!out.contains(miss), "{miss}: {out}");
+    }
+}

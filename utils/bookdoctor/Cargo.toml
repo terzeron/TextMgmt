@@ -23,6 +23,10 @@ name = "exe"
 path = "../../tests/rust/bookdoctor/exe.rs"
 
 [[test]]
+name = "zipnames"
+path = "../../tests/rust/bookdoctor/zipnames.rs"
+
+[[test]]
 name = "epub_gaps"
 path = "../../tests/rust/bookdoctor/epub_gaps.rs"
 

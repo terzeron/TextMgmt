@@ -20,13 +20,25 @@ pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
             _ => {}
         }
     }
+    // ZIP 계열 확장자도 내용이 PDF면 PDF로 본다(위장). ZIP이면 확장자를 따른다.
+    if is_zip_family(&ext) && sniffed == Sniffed::Pdf {
+        return Some(Format::Pdf);
+    }
     match ext.as_str() {
         "pdf" => Some(Format::Pdf),
         "epub" => Some(Format::Epub),
         "txt" => Some(Format::Txt),
+        "zip" => Some(Format::Zip),
+        "docx" | "docm" | "dotx" | "dotm" => Some(Format::Docx),
+        "hwpx" => Some(Format::Hwpx),
         e if exe::is_exec_extension(e) => Some(Format::Executable),
         _ => None,
     }
+}
+
+/// ZIP으로 묶인 포맷의 확장자인가.
+fn is_zip_family(ext: &str) -> bool {
+    matches!(ext, "zip" | "docx" | "docm" | "dotx" | "dotm" | "hwpx")
 }
 
 fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
@@ -37,6 +49,8 @@ fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
         Some(Format::Pdf) => pdf::scan_pdf_file(path, opts, report),
         Some(Format::Txt) => txt::scan_txt_file(path, opts, report),
         Some(Format::Executable) => exe::scan_exe_file(sniffed, report),
+        // 검사기는 이 계획의 뒤 태스크에서 붙는다. 그때까지 검사하지 못한 파일로 남긴다.
+        Some(Format::Zip | Format::Docx | Format::Hwpx) => report.mark_incomplete("unsupported format"),
         None => report.mark_incomplete("unsupported format"),
     }
 }

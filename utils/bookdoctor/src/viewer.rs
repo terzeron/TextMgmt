@@ -158,7 +158,7 @@ pub fn viewer_blocked(format: Format, code: &str) -> ViewerBlocked {
         Format::Pdf => PDF_CODES,
         Format::Txt => TXT_CODES,
         // 실행 파일은 뷰어로 렌더링하지 않는다.
-        Format::Executable => &[],
+        Format::Executable | Format::Zip | Format::Docx | Format::Hwpx => &[],
     };
     table.iter().find(|(c, _)| *c == code).map_or(NotApplicable, |(_, v)| *v)
 }

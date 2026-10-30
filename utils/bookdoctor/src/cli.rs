@@ -114,7 +114,7 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
 }
 
 fn wanted(p: &Path) -> bool {
-    p.is_file() && p.extension().is_some_and(|e| ["epub", "pdf", "txt"].iter().any(|x| e.eq_ignore_ascii_case(x)) || is_exec_extension(&e.to_string_lossy()))
+    p.is_file() && p.extension().is_some_and(|e| ["epub", "pdf", "txt", "zip", "docx", "docm", "dotx", "dotm", "hwpx"].iter().any(|x| e.eq_ignore_ascii_case(x)) || is_exec_extension(&e.to_string_lossy()))
 }
 
 /// 진입점. 종료 코드를 돌려준다. 색은 실제 stdout이 터미널인지와 `NO_COLOR`로 정한다.

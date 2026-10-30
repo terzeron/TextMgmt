@@ -122,8 +122,6 @@ const EXEC_EXTS: &[&str] = &[
 ];
 const HTML_EXTS: &[&str] = &["xhtml", "html", "htm", "svg"];
 const XML_EXTS: &[&str] = &["xml", "opf", "ncx", "xsl", "xslt", "smil", "dtd"];
-const WIN_RESERVED: &[&str] =
-    &["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"];
 const DANGEROUS_SCHEMES: &[&str] = &[
     "file",
     "smb",
@@ -468,35 +466,8 @@ impl Scanner {
     }
 
     fn zip_name(&mut self, name: &str) {
-        let decoded = unquote(name).replace('\\', "/");
-        let drive = decoded.len() >= 2 && decoded.as_bytes()[0].is_ascii_alphabetic() && decoded.as_bytes()[1] == b':';
-        if decoded.split('/').any(|c| c == "..") {
-            self.add(Severity::Critical, "ZIP_PATH_TRAVERSAL", name, "Entry name climbs out of the archive");
-        }
-        if decoded.starts_with('/') || drive {
-            self.add(Severity::High, "ZIP_ABSOLUTE_PATH", name, "Absolute path or drive letter");
-        }
-        if name.contains('\\') {
-            self.add(Severity::Medium, "ZIP_BACKSLASH_PATH", name, "Backslash in entry name");
-        }
-        if name.chars().any(char::is_control) {
-            self.add(Severity::Medium, "ZIP_CONTROL_CHAR_NAME", name, "Control character in entry name");
-        }
-        let comps: Vec<&str> = decoded.split('/').collect();
-        for (i, c) in comps.iter().enumerate() {
-            let stem = c.trim_end_matches(['.', ' ']).split('.').next().unwrap_or("").to_lowercase();
-            if WIN_RESERVED.contains(&stem.as_str()) {
-                self.add(Severity::Medium, "WINDOWS_RESERVED_NAME", name, "Windows device name");
-            }
-            if c.contains(':') && !(drive && i == 0) {
-                self.add(Severity::Medium, "ZIP_ALT_DATA_STREAM", name, "Colon in name (NTFS stream)");
-            }
-            if c.chars().count() > 255 {
-                self.add(Severity::Low, "ZIP_NAME_TOO_LONG", name, "Path component over 255 characters");
-            }
-        }
-        if name.chars().count() > 1024 {
-            self.add(Severity::Low, "ZIP_NAME_TOO_LONG", name, "Entry name over 1024 characters");
+        for found in crate::zipnames::check(name) {
+            self.add(found.severity, found.code, name, found.detail);
         }
     }
 

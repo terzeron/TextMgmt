@@ -10,3 +10,4 @@ pub mod report;
 pub mod scan;
 pub mod txt;
 pub mod viewer;
+pub mod zipnames;

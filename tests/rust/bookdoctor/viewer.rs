@@ -12,6 +12,8 @@ use regex::Regex;
 use scan_common::{Category, Format, ViewerBlocked};
 
 const EPUB_SECURITY_RS: &str = include_str!("../../../utils/bookdoctor/src/epub/security.rs");
+/// EPUB의 ZIP 이름 규칙(`ZIP_PATH_TRAVERSAL` 등)은 `zipnames.rs`로 옮겨 갔다. EPUB 지표 코드의 출처는 두 파일이다.
+const ZIPNAMES_RS: &str = include_str!("../../../utils/bookdoctor/src/zipnames.rs");
 const PDF_SECURITY_RS: &str = include_str!("../../../utils/bookdoctor/src/pdf/security.rs");
 const TXT_RS: &str = include_str!("../../../utils/bookdoctor/src/txt.rs");
 
@@ -58,7 +60,7 @@ fn defect_is_not_applicable() {
 #[test]
 fn every_table_code_exists_in_its_scanner_source() {
     for (code, _) in EPUB_CODES {
-        assert!(EPUB_SECURITY_RS.contains(&format!("\"{code}\"")), "EPUB 표의 {code}가 security.rs에 없다");
+        assert!(EPUB_SECURITY_RS.contains(&format!("\"{code}\"")) || ZIPNAMES_RS.contains(&format!("\"{code}\"")), "EPUB 표의 {code}가 security.rs·zipnames.rs에 없다");
     }
     for (code, _) in PDF_CODES {
         assert!(PDF_SECURITY_RS.contains(&format!("\"{code}\"")), "PDF 표의 {code}가 security.rs에 없다");
@@ -73,7 +75,7 @@ fn epub_scanner_codes() -> BTreeSet<String> {
     // 현재 security.rs에는 코드가 아닌 대문자 리터럴이 없다. 생기면 여기에 사유와 함께 적는다.
     const NOT_CODES: &[&str] = &[];
     let re = Regex::new(r#""([A-Z][A-Z_]{5,})""#).unwrap();
-    re.captures_iter(EPUB_SECURITY_RS).map(|c| c[1].to_string()).filter(|c| !NOT_CODES.contains(&c.as_str())).collect()
+    re.captures_iter(EPUB_SECURITY_RS).chain(re.captures_iter(ZIPNAMES_RS)).map(|c| c[1].to_string()).filter(|c| !NOT_CODES.contains(&c.as_str())).collect()
 }
 
 #[test]
@@ -172,4 +174,11 @@ fn executable_format_is_not_applicable_to_the_viewer() {
 #[test]
 fn combined_suspicious_is_not_applicable_to_the_viewer() {
     assert_eq!(viewer_blocked(Format::Epub, "COMBINED_SUSPICIOUS"), ViewerBlocked::NotApplicable);
+}
+
+#[test]
+fn zip_family_formats_are_not_applicable_to_the_viewer() {
+    for f in [Format::Zip, Format::Docx, Format::Hwpx] {
+        assert_eq!(viewer_blocked(f, "ANYTHING"), ViewerBlocked::NotApplicable, "{f:?}");
+    }
 }

@@ -14,6 +14,9 @@ pub enum Format {
     Txt,
     /// 확장자가 실행 파일인 것. 매직바이트까지 맞으면 `confirmed_executable`이다.
     Executable,
+    Zip,
+    Docx,
+    Hwpx,
 }
 
 /// 지표의 분류.
