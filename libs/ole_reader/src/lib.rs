@@ -8,6 +8,8 @@
 //! `MAXREGSECT = 0xFFFFFFFA`, `DIFSECT = 0xFFFFFFFC`, `FATSECT = 0xFFFFFFFD`, `ENDOFCHAIN = 0xFFFFFFFE`, `FREESECT = 0xFFFFFFFF`다.
 //! 헤더·디렉터리 항목의 필드 위치는 MS-CFB 2.2와 2.6.1을 따른다(`docs/superpowers/plans/2026-10-30-bookdoctor-p2.md`의 표).
 
+pub mod vba;
+
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
