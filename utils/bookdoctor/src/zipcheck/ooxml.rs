@@ -294,7 +294,16 @@ static SCHEME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^([a-z][a-z0-
 /// `file:` 뒤의 문자열(역슬래시는 `/`로, 소문자로 바꾼 것)이 원격을 가리키는가. 호스트가 있으면(`file://host/...`) 원격이고,
 /// 호스트가 비었거나 `localhost`여도 경로가 `//`로 시작하면(`file:////host/share`, `file://localhost//host/share`) UNC다.
 /// 드라이브 경로(`file:///C:/...`, `file:/C:/...`)와 POSIX 절대 경로만 로컬이다.
+/// `file:` 뒤에서 보는 최대 바이트 수.
+const TAIL_LOOKAHEAD: usize = 512;
+
 fn file_tail_is_remote(tail: &str) -> bool {
+    // 앞 `TAIL_LOOKAHEAD`바이트만 본다. 경로의 시작(`//`, 호스트)만 필요하고, `file:`이 수십만 번 되풀이되는 입력에서 일치마다 끝까지 훑으면 제곱 시간이다.
+    let mut end = tail.len().min(TAIL_LOOKAHEAD);
+    while !tail.is_char_boundary(end) {
+        end -= 1;
+    }
+    let tail = &tail[..end];
     let tail = tail.split(|c: char| c.is_whitespace() || c == '"' || c == '\'').next().unwrap_or("");
     let (authority, path) = match tail.strip_prefix("//") {
         Some(after) => {
@@ -388,7 +397,21 @@ fn field_remote(instr: &str) -> Option<bool> {
     FIELD_URL.captures_iter(instr).any(|c| !c[1].eq_ignore_ascii_case("file")).then_some(false)
 }
 
+/// `s`를 `MAX_FIELD_TEXT`바이트까지만 남긴다(글자 경계에서 자른다). 잘렸으면 `true`다.
+fn cap_text(s: &str) -> (&str, bool) {
+    if s.len() <= MAX_FIELD_TEXT {
+        return (s, false);
+    }
+    let mut end = MAX_FIELD_TEXT;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&s[..end], true)
+}
+
 fn classify_field(instr: &str, name: &str, report: &mut FileReport) {
+    // 어떤 경로로 들어와도 분석하는 길이를 상한으로 막는다(`fldSimple`의 `instr` 속성은 `push_capped`를 거치지 않는다).
+    let (instr, _) = cap_text(instr);
     let word = instr.split_whitespace().next().unwrap_or("").to_ascii_uppercase();
     let shown = preview(name);
     match word.as_str() {
@@ -487,6 +510,9 @@ fn check_fields(doc: &roxmltree::Document, name: &str, report: &mut FileReport) 
             }
             "fldSimple" => {
                 if let Some(instr) = node.attributes().find(|a| a.name() == "instr").map(|a| a.value()) {
+                    if cap_text(instr).1 {
+                        report.mark_incomplete(&format!("{}: field instruction truncated at {MAX_FIELD_TEXT} bytes; the rest was not analyzed", preview(name)));
+                    }
                     classify_field(instr, name, report);
                 }
             }

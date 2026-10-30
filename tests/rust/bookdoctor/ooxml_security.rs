@@ -569,3 +569,14 @@ fn part_names_whose_lowercase_changes_the_byte_length_do_not_panic_the_scan() {
     assert!(!r.reasons.iter().any(|x| x.starts_with("panic")), "{:?}", r.reasons);
     assert!(r.findings.iter().any(|f| f.code == "OOXML_VBA_PROJECT" && f.location.ends_with("m.dat")), "{:?}", r.findings);
 }
+
+#[test]
+fn a_huge_simple_field_instruction_is_capped_and_scanned_in_linear_time() {
+    // `file:`이 수십만 번 되풀이되는 지시문. 각 일치마다 나머지 전체를 훑으면 제곱 시간이다.
+    let instr = format!("INCLUDETEXT {}", "file:".repeat(80_000));
+    let body = format!(r#"<w:p><w:fldSimple w:instr="{instr}"><w:r><w:t>x</w:t></w:r></w:fldSimple></w:p>"#);
+    let start = std::time::Instant::now();
+    let r = docx(&[("word/document.xml", &document(&body))]);
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("truncated")), "{:?}", r.reasons);
+}
