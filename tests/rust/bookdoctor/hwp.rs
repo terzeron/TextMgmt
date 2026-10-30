@@ -662,3 +662,47 @@ fn sections_and_docinfo_with_duplicate_or_case_colliding_names_are_all_scanned()
     let cfb = make_cfb(&[("FileHeader", &file_header(0)[..]), ("DocInfo", &ok[..]), ("DocInfo", &link[..])]);
     assert!(scan("c.hwp", &cfb.bytes).has("HWP_LINKED_FILE"));
 }
+
+#[test]
+fn byte_mutations_of_a_full_hwp_never_panic_or_stall() {
+    // 모든 검사 경로(헤더, 압축 DocInfo·본문, 스크립트, BinData)를 타는 HWP를 만들어 바이트를 바꿔 가며 돌린다.
+    let docinfo = raw_deflate(&[bin_data_link("\\\\evil\\s\\a", "a"), valid_stream()].concat());
+    let section = raw_deflate(&[valid_stream(), record(TAG_SHAPE_COMPONENT_OLE, 1, &[0u8; 24])].concat());
+    let script = raw_deflate(&default_jscript(["", r#"new ActiveXObject("WScript.Shell")"#, "", ""]));
+    let pe = raw_deflate(&pe_bytes());
+    let base = make_cfb(&[
+        ("FileHeader", &file_header(0x1 | 0x8)[..]),
+        ("DocInfo", &docinfo[..]),
+        ("BodyText/Section0", &section[..]),
+        ("Scripts/DefaultJScript", &script[..]),
+        ("Scripts/JScriptVersion", &JSCRIPT_VERSION[..]),
+        ("BinData/BIN0001.jpg", &pe[..]),
+    ])
+    .bytes;
+    let clean = scan("base.hwp", &base);
+    assert!(clean.has("HWP_LINKED_FILE") && clean.has("HWP_SCRIPT_SUSPICIOUS") && clean.has("EMBEDDED_EXECUTABLE") && clean.has("HWP_OLE_OBJECT"), "the unmutated file must exercise every path: {:?} {:?}", clean.findings, clean.reasons);
+    let mut seed = 0xC0FF_EE11u32;
+    let mut next = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (seed >> 8) as usize
+    };
+    let started = std::time::Instant::now();
+    for round in 0..600 {
+        let mut m = base.clone();
+        match round % 3 {
+            0 => (0..1 + next() % 8).for_each(|_| {
+                let at = next() % m.len();
+                m[at] = (next() & 0xFF) as u8;
+            }),
+            1 => (0..1 + next() % 4).for_each(|_| {
+                // 헤더와 디렉터리 영역(앞 1.5KiB)을 집중 변조한다.
+                let at = next() % m.len().min(1536);
+                m[at] = (next() & 0xFF) as u8;
+            }),
+            _ => m.truncate(8 + next() % (m.len() - 8)),
+        }
+        let r = scan("m.hwp", &m);
+        assert!(!r.reasons.iter().any(|x| x.contains("panic")), "round {round}: {:?}", r.reasons);
+    }
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+}
