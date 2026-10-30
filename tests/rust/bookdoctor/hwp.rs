@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use bookdoctor::cli::{Options, run};
 use bookdoctor::scan::scan_file;
-use ole_common::{Cfb, make_cfb};
+use ole_common::{Cfb, compress, dir_stream, make_cfb, module_stream};
 use scan_common::{FileReport, Format};
 
 /// `FileHeader` 스트림: 서명 32, 버전 4, 속성1 4, 속성2 4, EncryptVersion 4, KOGL 1, 예약 207 = 256바이트(명세 표 3).
@@ -159,8 +159,29 @@ fn distribution_doc_without_bodytext_is_incomplete() {
 }
 
 #[test]
-fn ole_without_a_fileheader_is_a_mismatch_defect() {
+fn ole_without_a_fileheader_is_a_mismatch_defect_and_not_clean() {
+    for name in ["a.hwp", "b.hwpx"] {
+        let r = scan_cfb(name, &make_cfb(&[("Something", &[1u8, 2, 3][..])]));
+        assert!(r.incomplete, "{name}: unanalyzed OLE must not be reported clean: {:?}", r.reasons);
+    }
     let r = scan_cfb("a.hwp", &make_cfb(&[("Something", &[1u8, 2, 3][..])]));
     let f = finding(&r, "FORMAT_MISMATCH");
     assert_eq!(f.location, "FileHeader");
+}
+
+#[test]
+fn a_word_document_named_hwp_is_analyzed_as_doc() {
+    let dir = compress(&dir_stream(&[("Module1", "Module1", 16)]));
+    let module = module_stream(16, "Sub AutoOpen()\nShell \"calc\"\nEnd Sub\n");
+    let mut word = vec![0u8; 512];
+    word[0..2].copy_from_slice(&0xA5ECu16.to_le_bytes());
+    for name in ["renamed.hwp", "renamed.hwpx"] {
+        let cfb = make_cfb(&[("WordDocument", &word[..]), ("Macros/VBA/dir", &dir[..]), ("Macros/VBA/Module1", &module[..])]);
+        let r = scan_cfb(name, &cfb);
+        assert!(r.has("FORMAT_MISMATCH"), "{name}: {:?}", r.findings);
+        assert!(r.has("DOC_VBA_MACRO"), "{name}: macro in a renamed Word document was missed: {:?} {:?}", r.findings, r.reasons);
+    }
+    // 암호화 OOXML 패키지도 같다.
+    let enc = make_cfb(&[("EncryptionInfo", &[4u8, 0, 4, 0][..]), ("EncryptedPackage", &[0u8; 64][..])]);
+    assert!(scan_cfb("a.hwp", &enc).reasons.iter().any(|m| FileReport::is_encrypted_reason(m)));
 }

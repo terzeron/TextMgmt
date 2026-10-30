@@ -29,15 +29,10 @@ pub fn scan_hwp_file(path: &Path, opts: &Options, sniffed: Sniffed, report: &mut
     }
 }
 
-/// `.hwpx` 이름인데 내용이 OLE인 파일을 검사한다. `FileHeader`가 있으면 HWP 5.x를 이름만 바꾼 것이다.
-/// 없으면 HWP인지 알 수 없으므로 일반 미완료로 남긴다(확장자 불일치는 `common`이 알린다).
+/// `.hwpx` 이름인데 내용이 OLE인 파일을 검사한다. `FileHeader`가 있으면 HWP 5.x를 이름만 바꾼 것이다(확장자 불일치는 `common`이 알린다).
 pub fn scan_ole_named_hwpx(path: &Path, opts: &Options, report: &mut FileReport) {
     let Some(mut file) = open_ole(path, opts, report) else { return };
-    if file.find("FileHeader").is_some() {
-        inspect(&mut file, report);
-    } else {
-        report.mark_incomplete("OLE container cannot be inspected: .hwpx extension with OLE content that has no HWP FileHeader");
-    }
+    inspect(&mut file, report);
 }
 
 /// 열린 HWP 5.x를 검사해 `report`에 더한다.
@@ -45,6 +40,12 @@ fn inspect(file: &mut OleFile, report: &mut FileReport) {
     report_anomalies(file, report);
     let Some(entry) = file.find("FileHeader").cloned() else {
         report.push(Category::Defect, Severity::Medium, "FORMAT_MISMATCH", "FileHeader", "OLE 파일이지만 HWP 문서가 아니다(FileHeader 스트림이 없다)");
+        // 이름만 HWP인 Word 문서나 암호화 OOXML이면 그쪽 분석기로 본다. 매크로를 놓치지 않기 위해서다.
+        if file.find("WordDocument").is_some() || file.find("EncryptedPackage").is_some() {
+            crate::doc::inspect(file, report);
+        } else {
+            report.mark_incomplete("OLE container cannot be inspected: no HWP FileHeader and not a Word document");
+        }
         return;
     };
     let bytes = match file.read_stream_prefix(&entry, header::HEADER_LEN) {
