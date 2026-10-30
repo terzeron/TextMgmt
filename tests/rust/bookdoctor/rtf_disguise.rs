@@ -215,3 +215,14 @@ fn a_payload_the_scan_budget_cannot_reach_is_incomplete_not_clean() {
     plain.extend(vec![0x41u8; 20000]);
     assert!(!scan("d.rtf", &rtf_with_objdata("objdata", &plain)).incomplete);
 }
+
+#[test]
+fn an_ambiguous_construct_in_the_body_without_an_indicator_is_incomplete() {
+    // 안쪽 그룹이나 \binN이 있으면 Word가 본문을 어떻게 읽는지 확정할 수 없다. 지표가 없으면 깨끗하다고 하지 않는다.
+    for body in ["0102{\\fonttbl 0304}0506", "0102\\bin3 abc0304", "0102{0304}"] {
+        let r = scan("a.rtf", format!("{{\\rtf1{{\\*\\objdata {body}}}}}").as_bytes());
+        assert!(r.incomplete, "{body}: {:?}", r.findings);
+    }
+    // 평범한 본문은 미완료가 아니다.
+    assert!(!scan("b.rtf", b"{\\rtf1{\\*\\objdata 0102030405060708}}").incomplete);
+}

@@ -71,6 +71,8 @@ struct Decoded {
     bytes: Vec<u8>,
     /// 본문 그룹의 끝(`}`)이나 `PAYLOAD_PREFIX`에 닿기 전에 입력 상한을 다 썼다.
     budget_hit: bool,
+    /// 본문 안에 안쪽 그룹이나 `\binN`이 있었다. Word가 이를 어떻게 읽는지 확정할 수 없다.
+    ambiguous: bool,
 }
 
 /// `\objdata` 본문의 16진 앞부분을 해독한다. RTF 파서처럼 공백, 제어어(`\par` 등), 안쪽 그룹, `\binN` 원시 바이트를 건너뛰고
@@ -80,13 +82,17 @@ fn decode_hex_prefix(data: &[u8], start: usize) -> Decoded {
     let mut out = Vec::new();
     let mut pending: Option<u32> = None;
     let mut depth = 0usize;
+    let mut ambiguous = false;
     let mut i = start;
     while i < end {
         let b = data[i];
         i += 1;
         match b {
-            b'{' => depth += 1,
-            b'}' if depth == 0 => return Decoded { bytes: out, budget_hit: false },
+            b'{' => {
+                depth += 1;
+                ambiguous = true;
+            }
+            b'}' if depth == 0 => return Decoded { bytes: out, budget_hit: false, ambiguous },
             b'}' => depth -= 1,
             b'\\' => match data.get(i) {
                 Some(c) if c.is_ascii_alphabetic() => {
@@ -95,6 +101,7 @@ fn decode_hex_prefix(data: &[u8], start: usize) -> Decoded {
                     i = after;
                     if name.eq_ignore_ascii_case(b"bin") && value > 0 {
                         i = i.saturating_add(value as usize);
+                        ambiguous = true;
                     }
                 }
                 // `\'xx`는 16진 두 글자까지 건너뛴다. 그 밖의 기호(`\\`, `\{`, `\}`)는 한 글자다.
@@ -108,7 +115,7 @@ fn decode_hex_prefix(data: &[u8], start: usize) -> Decoded {
                         Some(h) => {
                             out.push((h * 16 + d) as u8);
                             if out.len() >= PAYLOAD_PREFIX {
-                                return Decoded { bytes: out, budget_hit: false };
+                                return Decoded { bytes: out, budget_hit: false, ambiguous };
                             }
                         }
                         None => pending = Some(d),
@@ -119,7 +126,7 @@ fn decode_hex_prefix(data: &[u8], start: usize) -> Decoded {
         }
     }
     // 입력이 끝났거나 상한을 다 썼다. 파일 끝까지 읽었다면 상한 문제가 아니다.
-    Decoded { bytes: out, budget_hit: i < data.len() }
+    Decoded { bytes: out, budget_hit: i < data.len(), ambiguous }
 }
 
 /// OLE1 머리말에서 본문(NativeData)의 위치를 알 수 있는가.
@@ -213,6 +220,8 @@ pub fn inspect(bytes: &[u8], report: &mut FileReport) {
                     // 본문을 확인하지 못한 채 지표가 없으면 깨끗하다고 하지 않는다.
                     if decoded.budget_hit {
                         incomplete_reason.get_or_insert("an embedded object body could not be decoded within the scan budget");
+                    } else if decoded.ambiguous {
+                        incomplete_reason.get_or_insert("an embedded object body has nested groups or \\bin data; how Word reads it is ambiguous");
                     } else if !datastore && matches!(native_offset(&decoded.bytes), NativeOffset::Beyond) && decoded.bytes.len() >= PAYLOAD_PREFIX {
                         incomplete_reason.get_or_insert("an embedded object's header is longer than the decoded prefix; its payload was not checked");
                     }
