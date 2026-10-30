@@ -76,5 +76,11 @@ fn inspect(file: &mut OleFile, report: &mut FileReport) {
         report.mark_incomplete("distribution document: ViewText not analyzed");
     }
     script::inspect(file, &header, report);
-    bindata::inspect(file, &header, report);
+    // DocInfo는 한 번만 읽고 푼다. 레코드 검증과 BinData 연결 파일 검사가 같은 바이트를 쓴다.
+    let docinfo = records::load(file, &header, "DocInfo", records::MAX_DOCINFO, report);
+    if let Some(bytes) = &docinfo {
+        records::validate(bytes, "DocInfo", report);
+    }
+    bindata::inspect(file, docinfo.as_deref(), report);
+    records::inspect_sections(file, &header, report);
 }

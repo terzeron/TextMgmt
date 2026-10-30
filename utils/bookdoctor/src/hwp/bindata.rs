@@ -5,15 +5,12 @@ use scan_common::sniff::{Sniffed, sniff};
 use scan_common::text::sanitize_display;
 use scan_common::{Category, FileReport, Severity};
 
-use super::header::FileHeader;
-use super::inflate::{InflateError, decompress, decompress_prefix};
+use super::inflate::decompress_prefix;
 use super::records::walk;
 use crate::zipcheck::fast::ZIP_EXEC_EXTS;
 
 /// `HWPTAG_BEGIN`(0x010) + 2.
 const TAG_BIN_DATA: u16 = 0x012;
-/// `DocInfo`를 읽는 최대 바이트(압축 입력과 풀린 출력 각각).
-const MAX_DOCINFO: usize = 16 * 1024 * 1024;
 /// `BinData` 스트림에서 입력으로 읽는 최대 바이트와, 매직을 보려고 푸는 앞부분.
 const MAX_STREAM_READ: usize = 256 * 1024;
 const MAGIC_PREFIX: usize = 4096;
@@ -60,35 +57,9 @@ fn is_remote(path: &str) -> bool {
     lower.starts_with("\\\\") || lower.starts_with("//") || lower.contains("://") || lower.starts_with("file:")
 }
 
-/// `DocInfo`의 `HWPTAG_BIN_DATA`를 읽어 연결 파일(Type 0)을 알린다.
-fn inspect_docinfo(file: &mut OleFile, header: &FileHeader, report: &mut FileReport) {
-    let Some(entry) = file.find("DocInfo").cloned() else { return };
-    let data = match file.read_stream_prefix(&entry, MAX_DOCINFO) {
-        Ok(d) => d,
-        Err(e) => {
-            report.mark_incomplete(&format!("DocInfo could not be read: {e:?}"));
-            return;
-        }
-    };
-    if entry.size > MAX_DOCINFO as u64 {
-        report.mark_incomplete("DocInfo exceeds the scan limit; only the first part was scanned");
-    }
-    let bytes = if header.compressed() {
-        match decompress(&data, MAX_DOCINFO) {
-            Ok(b) => b,
-            Err(InflateError::TooLarge) => {
-                report.mark_incomplete("DocInfo decompresses beyond the scan limit; BinData records were not read");
-                return;
-            }
-            Err(InflateError::Invalid) => {
-                report.mark_incomplete("DocInfo could not be decompressed; BinData records were not read");
-                return;
-            }
-        }
-    } else {
-        data
-    };
-    for record in walk(&bytes).filter(|r| r.tag == TAG_BIN_DATA) {
+/// 풀린 `DocInfo`의 `HWPTAG_BIN_DATA`를 읽어 연결 파일(Type 0)을 알린다.
+fn inspect_docinfo(bytes: &[u8], report: &mut FileReport) {
+    for record in walk(bytes).filter(|r| r.tag == TAG_BIN_DATA) {
         // 속성의 bit 0~3이 Type: 0 LINK, 1 EMBEDDING, 2 STORAGE(OLE). LINK만 외부 경로를 가진다.
         let Some(attr) = u16_at(record.data, 0) else { continue };
         if attr & 0xF != 0 {
@@ -132,8 +103,10 @@ fn inspect_stream(file: &mut OleFile, path: &str, entry: &Entry, report: &mut Fi
 }
 
 /// `DocInfo`의 연결 파일과 `BinData/*` 스트림의 내용을 검사한다.
-pub fn inspect(file: &mut OleFile, header: &FileHeader, report: &mut FileReport) {
-    inspect_docinfo(file, header, report);
+pub fn inspect(file: &mut OleFile, docinfo: Option<&[u8]>, report: &mut FileReport) {
+    if let Some(bytes) = docinfo {
+        inspect_docinfo(bytes, report);
+    }
     let streams: Vec<(String, Entry)> = file.entries().iter().filter(|e| e.kind == EntryKind::Stream).map(|e| (file.path_of(e), e.clone())).filter(|(p, _)| p.to_lowercase().starts_with("bindata/")).collect();
     if streams.len() > MAX_BINDATA {
         report.mark_incomplete(&format!("{} BinData streams; only the first {MAX_BINDATA} were scanned", streams.len()));

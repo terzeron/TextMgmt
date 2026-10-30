@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use bookdoctor::cli::{Options, run};
 use bookdoctor::scan::scan_file;
-use ole_common::{Cfb, compress, dir_stream, make_cfb, module_stream};
+use ole_common::{Cfb, compress, dir_stream, make_cfb, make_cfb_v4, module_stream};
 use scan_common::{FileReport, Format};
 
 /// `FileHeader` 스트림: 서명 32, 버전 4, 속성1 4, 속성2 4, EncryptVersion 4, KOGL 1, 예약 207 = 256바이트(명세 표 3).
@@ -536,4 +536,93 @@ fn data_after_a_valid_script_table_is_still_scanned() {
     let mut compressed_flag = default_jscript(["", "var a = 1;", "", ""]);
     compressed_flag.extend_from_slice(&wchars("WScript.Shell"));
     assert!(scan_scripts(0x1 | 0x8, &compressed_flag).has("HWP_SCRIPT_SUSPICIOUS"));
+}
+
+// --- 레코드 검증 (명세 4.1) ---
+
+const TAG_SHAPE_COMPONENT_OLE: u32 = HWPTAG_BEGIN + 68;
+
+fn scan_sections(flags: u32, docinfo: Option<Vec<u8>>, section0: Vec<u8>) -> FileReport {
+    let mut streams: Vec<(&str, Vec<u8>)> = vec![("BodyText/Section0", section0)];
+    if let Some(d) = docinfo {
+        streams.push(("DocInfo", d));
+    }
+    let refs: Vec<(&str, &[u8])> = streams.iter().map(|(n, d)| (*n, d.as_slice())).collect();
+    scan_cfb("a.hwp", &hwp_cfb(&refs, flags))
+}
+
+fn valid_stream() -> Vec<u8> {
+    [record(HWPTAG_BEGIN + 50, 0, &[0u8; 22]), record(HWPTAG_BEGIN + 51, 1, &[0u8; 8]), record(HWPTAG_BEGIN + 55, 1, &[0u8; 8]), record(HWPTAG_BEGIN + 56, 2, &[0u8; 4]), record(HWPTAG_BEGIN + 50, 0, &[0u8; 22])].concat()
+}
+
+#[test]
+fn valid_records_are_clean_plain_and_compressed() {
+    let r = scan_sections(0, Some(valid_stream()), valid_stream());
+    assert!(r.findings.is_empty() && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+    let r = scan_sections(0x1, Some(raw_deflate(&valid_stream())), raw_deflate(&valid_stream()));
+    assert!(r.findings.is_empty() && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn size_past_the_end_is_a_high_defect() {
+    let mut bad = valid_stream();
+    bad.extend_from_slice(&(HWPTAG_BEGIN | 100 << 20).to_le_bytes());
+    bad.extend_from_slice(&[0u8; 10]);
+    let r = scan_sections(0, None, bad.clone());
+    let f = finding(&r, "HWP_BAD_RECORD");
+    assert_eq!((f.severity, f.category), (scan_common::Severity::High, scan_common::Category::Defect));
+    assert!(f.location.contains("Section0"), "{}", f.location);
+    // 압축된 본문 안에서도 같다. DocInfo도 본다.
+    assert!(scan_sections(0x1, None, raw_deflate(&bad)).has("HWP_BAD_RECORD"));
+    assert!(scan_sections(0, Some(bad), valid_stream()).findings.iter().any(|f| f.code == "HWP_BAD_RECORD" && f.location == "DocInfo"));
+}
+
+#[test]
+fn truncated_extended_length_is_a_high_defect() {
+    // 확장 길이(0xFFF)인데 길이 DWORD가 잘렸거나 선언 길이가 남은 바이트를 넘는다.
+    let mut cut = valid_stream();
+    cut.extend_from_slice(&(HWPTAG_BEGIN | 0xFFF << 20).to_le_bytes());
+    cut.extend_from_slice(&[1, 2]);
+    assert!(scan_sections(0, None, cut).has("HWP_BAD_RECORD"));
+    let mut huge = valid_stream();
+    huge.extend_from_slice(&(HWPTAG_BEGIN | 0xFFF << 20).to_le_bytes());
+    huge.extend_from_slice(&u32::MAX.to_le_bytes());
+    assert!(scan_sections(0, None, huge).has("HWP_BAD_RECORD"));
+    // 4095바이트 이상의 정상 확장 레코드는 문제없다.
+    let ok = [record(HWPTAG_BEGIN + 51, 1, &vec![0u8; 5000]), valid_stream()].concat();
+    assert!(!scan_sections(0, None, ok).has("HWP_BAD_RECORD"));
+}
+
+#[test]
+fn level_jump_is_medium_and_reported_once() {
+    let jump = [record(HWPTAG_BEGIN + 50, 0, &[0u8; 4]), record(HWPTAG_BEGIN + 51, 3, &[0u8; 4]), record(HWPTAG_BEGIN + 51, 9, &[0u8; 4])].concat();
+    let r = scan_sections(0, None, jump);
+    assert_eq!(finding(&r, "HWP_RECORD_LEVEL_JUMP").severity, scan_common::Severity::Medium);
+    assert_eq!(r.findings.iter().filter(|f| f.code == "HWP_RECORD_LEVEL_JUMP").count(), 1);
+}
+
+#[test]
+fn ole_shape_records_are_high() {
+    let body = [record(HWPTAG_BEGIN + 50, 0, &[0u8; 4]), record(TAG_SHAPE_COMPONENT_OLE, 1, &[0u8; 24])].concat();
+    assert_eq!(finding(&scan_sections(0, None, body), "HWP_OLE_OBJECT").severity, scan_common::Severity::High);
+}
+
+#[test]
+fn a_section_that_cannot_be_decompressed_is_incomplete() {
+    let r = scan_sections(0x1, None, vec![0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA]);
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("Section0")), "{:?}", r.reasons);
+}
+
+#[test]
+fn record_count_limit_is_incomplete_and_zero_headers_are_linear() {
+    // 크기 0 레코드 한 개가 4바이트다. 상한(5,000,000)을 넘는 스트림은 미완료다.
+    let many = vec![0u8; 4 * 5_000_100];
+    let (_d, p) = write("many.hwp", &make_cfb_v4(&[("FileHeader", &file_header(0)[..]), ("BodyText/Section0", &many[..])]).bytes);
+    let started = std::time::Instant::now();
+    let r = scan_file(&p, &Options::default());
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("records")), "{:?}", r.reasons);
+    // 1MiB의 0은 레코드 262,144개이고 정상이다.
+    let r = scan_sections(0, None, vec![0u8; 1 << 20]);
+    assert!(r.findings.is_empty() && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
 }
