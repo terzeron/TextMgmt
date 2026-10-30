@@ -24,6 +24,10 @@ pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
     if is_zip_family(&ext) && sniffed == Sniffed::Pdf {
         return Some(Format::Pdf);
     }
+    // Word 계열 이름이나 `.rtf`인데 내용이 RTF면 RTF로 검사한다(Word는 이름과 무관하게 RTF로 연다).
+    if sniffed == Sniffed::Rtf && matches!(ext.as_str(), "doc" | "dot" | "docx" | "docm" | "dotx" | "dotm" | "rtf") {
+        return Some(Format::Doc);
+    }
     // 이름은 `.doc`인데 내용이 ZIP이면 docx를 이름만 바꾼 것이다. 패키지로 검사한다(확장자 불일치는 `common`이 알린다).
     if matches!(ext.as_str(), "doc" | "dot") && sniffed == Sniffed::Zip {
         return Some(Format::Docx);
@@ -35,7 +39,7 @@ pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
         "zip" => Some(Format::Zip),
         "docx" | "docm" | "dotx" | "dotm" => Some(Format::Docx),
         "hwpx" => Some(Format::Hwpx),
-        "doc" | "dot" => Some(Format::Doc),
+        "doc" | "dot" | "rtf" => Some(Format::Doc),
         e if exe::is_exec_extension(e) => Some(Format::Executable),
         _ => None,
     }

@@ -129,7 +129,7 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
 }
 
 fn wanted(p: &Path) -> bool {
-    p.is_file() && p.extension().is_some_and(|e| ["epub", "pdf", "txt", "zip", "docx", "docm", "dotx", "dotm", "hwpx", "doc", "dot"].iter().any(|x| e.eq_ignore_ascii_case(x)) || is_exec_extension(&e.to_string_lossy()))
+    p.is_file() && p.extension().is_some_and(|e| ["epub", "pdf", "txt", "zip", "docx", "docm", "dotx", "dotm", "hwpx", "doc", "dot", "rtf"].iter().any(|x| e.eq_ignore_ascii_case(x)) || is_exec_extension(&e.to_string_lossy()))
 }
 
 /// 진입점. 종료 코드를 돌려준다. 색은 실제 stdout이 터미널인지와 `NO_COLOR`로 정한다.
@@ -224,7 +224,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
              [--color auto|always|never] [--zip-deep] [--no-prefetch] [--pdf-text] [--no-poppler] PATH...
 
 인자:
-  PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt, zip, docx(docm·dotx·dotm), hwpx, doc(dot)와 실행 파일 확장자(exe, dll, so, dylib 등)를 모은다.
+  PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt, zip, docx(docm·dotx·dotm), hwpx, doc(dot), rtf와 실행 파일 확장자(exe, dll, so, dylib 등)를 모은다.
          실행 파일은 확장자와 매직바이트(ELF·Mach-O·PE)가 모두 맞을 때 EXECUTABLE_FILE로 알린다.
 
 옵션:

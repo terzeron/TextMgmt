@@ -10,6 +10,8 @@ pub enum Sniffed {
     Pe,
     /// OLE 복합 파일(구형 DOC·HWP 5.x, 암호화 OOXML의 컨테이너).
     Ole,
+    /// RTF 문서(`{\rtf`로 시작). Word는 이름과 무관하게 연다.
+    Rtf,
     Html,
     Unknown,
 }
@@ -42,6 +44,9 @@ pub fn sniff(head: &[u8]) -> Sniffed {
     }
     if head.starts_with(&OLE_MAGIC) {
         return Sniffed::Ole;
+    }
+    if head.starts_with(b"{\\rtf") {
+        return Sniffed::Rtf;
     }
     if head[..head.len().min(PDF_WINDOW)].windows(5).any(|w| w == b"%PDF-") {
         return Sniffed::Pdf;

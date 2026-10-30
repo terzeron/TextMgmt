@@ -95,6 +95,10 @@ name = "report"
 path = "../../tests/rust/bookdoctor/report.rs"
 
 [[test]]
+name = "rtf_disguise"
+path = "../../tests/rust/bookdoctor/rtf_disguise.rs"
+
+[[test]]
 name = "scan"
 path = "../../tests/rust/bookdoctor/scan.rs"
 

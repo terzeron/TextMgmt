@@ -1,6 +1,9 @@
 //! 구형 DOC(OLE 복합 파일) 검사. `ole_reader`로 구조를 읽고 손상, 암호화, VBA 매크로, 내장 OLE 객체, DDE·필드를 본다.
 //! 파일을 실행하거나 렌더링하지 않는다. 매크로는 텍스트로만 읽는다.
 
+pub mod rtf;
+
+use std::io::Read;
 use std::path::Path;
 
 use ole_reader::{Anomaly, EntryKind, Limits as OleLimits, OleError, OleFile, vba};
@@ -24,13 +27,28 @@ const MAX_FIELD_BYTES: usize = 8192;
 const VBA_BUDGET: u64 = 16 * 1024 * 1024;
 /// 내장 객체(`Ole10Native`)에서 읽는 앞부분.
 const NATIVE_PREFIX: usize = 64 * 1024;
+/// 내장 객체의 파일 이름 하나로 읽는 최대 바이트.
+const MAX_NATIVE_NAME: usize = 260;
+/// RTF를 읽는 최대 바이트(`OleFile`의 스트림 상한과 같다).
+const RTF_READ_MAX: u64 = 64 * 1024 * 1024;
 /// 한 파일에서 보고하는 구조 이상 수의 상한.
 const MAX_ANOMALY_FINDINGS: usize = 50;
 
 /// `.doc`·`.dot` 하나를 검사한다. 내용이 OLE가 아니면 열지 않는다(확장자 위장은 `common`이 알린다).
 pub fn scan_doc_file(path: &Path, opts: &Options, sniffed: Sniffed, report: &mut FileReport) {
-    if sniffed != Sniffed::Ole {
+    if sniffed == Sniffed::Rtf {
+        scan_rtf_file(path, report);
         return;
+    }
+    match sniffed {
+        Sniffed::Ole => {}
+        // 실행 파일은 `common`이 이미 Critical로 알렸다.
+        Sniffed::Elf | Sniffed::MachO | Sniffed::Pe => return,
+        // 이름만 Word 문서인 텍스트·HTML 등은 여기서 분석하지 않는다. 이름 불일치는 `common`이 알린다.
+        other => {
+            report.mark_incomplete(&format!("content is not an OLE document ({other:?}); not analyzed"));
+            return;
+        }
     }
     let limits = OleLimits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..OleLimits::default() };
     match OleFile::open(path, &limits) {
@@ -38,6 +56,24 @@ pub fn scan_doc_file(path: &Path, opts: &Options, sniffed: Sniffed, report: &mut
         Err(OleError::Limit(message)) => report.mark_incomplete(&format!("skipped: {message}")),
         Err(e) => report.mark_incomplete(&format!("OLE container could not be read: {e:?}")),
     }
+}
+
+/// RTF 파일을 한도까지 읽어 `rtf::inspect`에 넘긴다. 한도를 넘으면 앞부분만 보고 미완료로 남긴다.
+fn scan_rtf_file(path: &Path, report: &mut FileReport) {
+    let Ok(file) = std::fs::File::open(path) else {
+        report.mark_incomplete("RTF file could not be opened");
+        return;
+    };
+    let mut bytes = Vec::new();
+    if file.take(RTF_READ_MAX + 1).read_to_end(&mut bytes).is_err() {
+        report.mark_incomplete("RTF file could not be read");
+        return;
+    }
+    if bytes.len() as u64 > RTF_READ_MAX {
+        bytes.truncate(RTF_READ_MAX as usize);
+        report.mark_incomplete("skipped: RTF larger than the read limit; only the first part was inspected");
+    }
+    rtf::inspect(&bytes, report);
 }
 
 fn severity_of(a: &Anomaly) -> Severity {
@@ -142,19 +178,39 @@ fn check_vba(file: &mut OleFile, report: &mut FileReport) {
     }
 }
 
+/// `pos`부터 널로 끝나는 문자열을 읽는다(바이트를 그대로 글자로 본다). 문자열과 널 다음 위치를 돌려준다.
+fn c_string(bytes: &[u8], pos: usize) -> (String, usize) {
+    let rest = bytes.get(pos..).unwrap_or(&[]);
+    let len = rest.iter().take(MAX_NATIVE_NAME).take_while(|&&b| b != 0).count();
+    (rest[..len].iter().map(|&b| b as char).collect(), pos + len + 1)
+}
+
 fn check_objects(file: &mut OleFile, report: &mut FileReport) {
     if file.entries().iter().any(|e| e.kind == EntryKind::Storage && e.name.eq_ignore_ascii_case("ObjectPool")) {
         push_once(report, Category::Security, Severity::High, "DOC_OLE_OBJECT", "ObjectPool", "Embedded OLE objects");
     }
     let natives: Vec<_> = file.entries().iter().filter(|e| e.kind == EntryKind::Stream && e.name.trim_start_matches('\u{1}').eq_ignore_ascii_case("Ole10Native")).cloned().collect();
     for entry in natives.into_iter().take(64) {
-        let Ok(prefix) = file.read_stream_prefix(&entry, NATIVE_PREFIX) else { continue };
-        // 내장 파일 이름: 4바이트 크기와 2바이트 플래그 뒤에 널로 끝나는 레이블이 온다.
-        let label: String = prefix.get(6..).unwrap_or(&[]).iter().take_while(|&&b| b != 0).take(260).map(|&b| b as char).collect();
+        let prefix = match file.read_stream_prefix(&entry, NATIVE_PREFIX) {
+            Ok(p) => p,
+            Err(e) => {
+                report.mark_incomplete(&format!("embedded object stream could not be read: {e:?}"));
+                continue;
+            }
+        };
+        // 내장 파일: 4바이트 크기와 2바이트 형식 뒤에 레이블, 원본 경로, (4바이트 미상, 임시 경로 길이 4바이트) 임시 경로가 온다.
+        // Word는 어느 이름으로든 파일을 풀 수 있으므로 세 이름 모두 확장자를 본다.
+        let (label, next) = c_string(&prefix, 6);
+        let (source, next) = c_string(&prefix, next);
+        let temp_len = prefix.get(next + 4..next + 8).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).min(MAX_NATIVE_NAME);
+        let temp = prefix.get(next + 8..).map_or_else(String::new, |rest| c_string(&rest[..temp_len.min(rest.len())], 0).0);
         let shown = sanitize_display(&label, 120, Some('…'));
-        let ext = label.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
-        if ZIP_EXEC_EXTS.contains(&ext.as_str()) {
-            push_once(report, Category::Security, Severity::High, "EMBEDDED_EXECUTABLE", &shown, &format!("Embedded file type .{ext}"));
+        for name in [&label, &source, &temp] {
+            let ext = name.trim_end_matches([' ', '.']).rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
+            if ZIP_EXEC_EXTS.contains(&ext.as_str()) {
+                push_once(report, Category::Security, Severity::High, "EMBEDDED_EXECUTABLE", &sanitize_display(name, 120, Some('…')), &format!("Embedded file type .{ext}"));
+                break;
+            }
         }
         // 이름이 무엇이든 내용이 실행 파일인 것을 찾는다(앞부분에서 `MZ`·`\x7fELF`가 나오는 자리마다 헤더를 확인한다).
         let hit = prefix.windows(2).enumerate().any(|(i, w)| (w == b"MZ" || w == b"\x7f\x45") && matches!(sniff(&prefix[i..]), Sniffed::Pe | Sniffed::Elf));
@@ -164,63 +220,98 @@ fn check_objects(file: &mut OleFile, report: &mut FileReport) {
     }
 }
 
-/// `0x13` 필드 시작부터 `0x14`(구분)나 `0x15`(끝)까지를 지시문으로 모은다. 본문이 8비트인 문서와 UTF-16인 문서를 모두 본다.
+/// 필드 중첩 깊이의 상한. 더 깊은 필드는 분석하지 않고 미완료로 남긴다.
+const MAX_FIELD_DEPTH: usize = 64;
+/// 분류하는 지시문 수의 상한.
+const MAX_INSTRUCTIONS: usize = 20_000;
+
+/// 필드 문자(0x13 시작, 0x14 구분, 0x15 끝)를 따라 지시문을 모아 `emit`에 넘긴다. 지시문은 시작과 구분 사이 글자다.
+/// 안쪽 필드가 지시문 중간에 끼어도 바깥 지시문을 이어 붙이도록 스택으로 중첩을 추적한다.
+/// 상한에 걸리면 `true`를 돌려준다.
+fn scan_units(units: impl Iterator<Item = u16>, emit: &mut impl FnMut(&str)) -> bool {
+    // 각 칸은 지시문 글자와 "이미 내보냈는가(결과 부분인가)"다.
+    let mut stack: Vec<(String, bool)> = Vec::new();
+    let mut overflow = 0usize;
+    let mut emitted = 0usize;
+    let mut limited = false;
+    let mut send = |text: &str, limited: &mut bool| {
+        if text.trim().is_empty() {
+            return;
+        }
+        if emitted >= MAX_INSTRUCTIONS {
+            *limited = true;
+            return;
+        }
+        emitted += 1;
+        emit(text);
+    };
+    for u in units {
+        match u {
+            0x13 => {
+                if stack.len() < MAX_FIELD_DEPTH {
+                    stack.push((String::new(), false));
+                } else {
+                    overflow += 1;
+                    limited = true;
+                }
+            }
+            0x14 if overflow == 0 => {
+                if let Some((text, done)) = stack.last_mut()
+                    && !*done
+                {
+                    *done = true;
+                    send(text, &mut limited);
+                }
+            }
+            0x15 => {
+                if overflow > 0 {
+                    overflow -= 1;
+                } else if let Some((text, done)) = stack.pop()
+                    && !done
+                {
+                    send(&text, &mut limited);
+                }
+            }
+            _ if overflow == 0 => {
+                if let Some((text, false)) = stack.last_mut()
+                    && text.len() < MAX_FIELD_BYTES
+                    && (u >= 0x20 || matches!(u, 0x09 | 0x0D | 0x0A))
+                {
+                    text.push(char::from_u32(u32::from(u)).unwrap_or('\u{FFFD}'));
+                }
+            }
+            _ => {}
+        }
+    }
+    limited
+}
+
+/// `WordDocument`의 필드를 훑는다. 본문이 8비트인 문서와 UTF-16인 문서를 모두 본다.
 fn scan_fields(file: &mut OleFile, report: &mut FileReport) {
     let Some(entry) = file.find("WordDocument").cloned() else { return };
-    let Ok(data) = file.read_stream_prefix(&entry, FIELD_SCAN_MAX) else { return };
-    let mut instructions: Vec<String> = Vec::new();
-    // 8비트 본문.
-    let mut cap: Option<Vec<u8>> = None;
-    for &b in &data {
-        match b {
-            0x13 => cap = Some(Vec::new()),
-            0x14 | 0x15 => {
-                if let Some(c) = cap.take() {
-                    instructions.push(c.iter().map(|&x| x as char).collect());
-                }
-            }
-            _ => {
-                if let Some(c) = cap.as_mut()
-                    && c.len() < MAX_FIELD_BYTES
-                    && (b >= 0x20 || matches!(b, b'\t' | b'\r' | b'\n'))
-                {
-                    c.push(b);
-                }
-            }
+    let data = match file.read_stream_prefix(&entry, FIELD_SCAN_MAX) {
+        Ok(d) => d,
+        Err(e) => {
+            report.mark_incomplete(&format!("WordDocument stream could not be read for field analysis: {e:?}"));
+            return;
         }
+    };
+    if entry.size > FIELD_SCAN_MAX as u64 {
+        report.mark_incomplete(&format!("WordDocument stream ({} bytes) exceeds the field scan limit; only the first {} MiB were scanned", entry.size, FIELD_SCAN_MAX / (1024 * 1024)));
     }
+    // 분류 규칙은 OOXML 필드와 같다. 코드 이름만 DOC_로 바꿔 낸다.
+    let mut tmp = FileReport::new(Path::new(""), None);
+    let mut emit = |instr: &str| classify_field(instr, "WordDocument", &mut tmp);
+    let mut limited = scan_units(data.iter().map(|&b| u16::from(b)), &mut emit);
     // UTF-16LE 본문: 시작 위치가 짝수일 수도 홀수일 수도 있어 두 정렬을 모두 본다.
     for start in 0..2usize {
-        let mut cap: Option<Vec<u16>> = None;
-        let mut i = start;
-        while i + 1 < data.len() {
-            let u = u16::from_le_bytes([data[i], data[i + 1]]);
-            match u {
-                0x13 => cap = Some(Vec::new()),
-                0x14 | 0x15 => {
-                    if let Some(c) = cap.take() {
-                        instructions.push(String::from_utf16_lossy(&c));
-                    }
-                }
-                _ => {
-                    if let Some(c) = cap.as_mut()
-                        && c.len() < MAX_FIELD_BYTES
-                        && (u >= 0x20 || matches!(u, 0x09 | 0x0D | 0x0A))
-                    {
-                        c.push(u);
-                    }
-                }
-            }
-            i += 2;
-        }
+        limited |= scan_units(data[start.min(data.len())..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])), &mut emit);
     }
-    for instr in instructions {
-        // 분류 규칙은 OOXML 필드와 같다. 코드 이름만 DOC_로 바꿔 낸다.
-        let mut tmp = FileReport::new(Path::new(""), None);
-        classify_field(&instr, "WordDocument", &mut tmp);
-        for f in tmp.findings {
-            let code = f.code.replacen("OOXML_", "DOC_", 1);
-            push_once(report, Category::Security, f.severity, &code, &f.location, &f.detail);
-        }
+    if limited {
+        report.mark_incomplete(&format!("field analysis limits reached (depth {MAX_FIELD_DEPTH}, {MAX_INSTRUCTIONS} instructions); some fields were not analyzed"));
+    }
+    for f in tmp.findings {
+        let code = f.code.replacen("OOXML_", "DOC_", 1);
+        push_once(report, Category::Security, f.severity, &code, &f.location, &f.detail);
     }
 }

