@@ -1,8 +1,10 @@
 //! 자체 규칙 엔진. YARA 문법의 작은 부분집합으로 쓴 규칙(문자열·16진 패턴과 간단한 조건)을 파일의 원시 바이트에 적용한다.
 //! 문법과 YARA와의 차이는 `docs/superpowers/plans/2026-10-30-bookdoctor-p5.md`에 있다. 외부 의존성은 없다.
 
+mod matcher;
 mod parse;
 
+pub use matcher::{Compiled, DEFAULT_WORK_BUDGET, RuleMatch, ScanOutcome, StringMatch};
 pub use parse::{MAX_RULES, MAX_SOURCE, MAX_STRINGS, MAX_STRING_BYTES, parse};
 
 use scan_common::Severity;
