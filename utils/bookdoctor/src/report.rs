@@ -8,6 +8,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use scan_common::text::sanitize_display;
+use scan_common::finding::Suppressed;
 use scan_common::{FileReport, Summary};
 use serde::Serialize;
 
@@ -51,7 +52,13 @@ pub fn write_json_line(r: &FileReport, out: &mut dyn Write) -> io::Result<()> {
 
 /// 텍스트 모드의 마지막 요약 한 줄.
 pub fn write_summary_line(agg: &Aggregate, summary: &Summary, out: &mut dyn Write) -> io::Result<()> {
-    writeln!(out, "검사 {}건, 발견 {}건, 검사하지 못함 {}건", summary.scanned, agg.findings(), agg.incomplete())
+    write!(out, "검사 {}건, 발견 {}건, 검사하지 못함 {}건", summary.scanned, agg.findings(), agg.incomplete())?;
+    let gone = agg.suppressed();
+    let parts: Vec<String> = [("LOW", gone.low), ("MEDIUM", gone.medium), ("HIGH", gone.high)].iter().filter(|(_, n)| *n > 0).map(|(name, n)| format!("{name} {n}건")).collect();
+    if !parts.is_empty() {
+        write!(out, ", 억제 {}", parts.join(", "))?;
+    }
+    writeln!(out)
 }
 
 /// 리포트 파일에 넣을 보고서를 모은다. 발견이나 미완료가 있는 `FileReport`만 보관한다.
@@ -61,6 +68,7 @@ pub struct Aggregate {
     findings: usize,
     incomplete: usize,
     by_category: BTreeMap<&'static str, usize>,
+    suppressed: Suppressed,
 }
 
 impl Aggregate {
@@ -69,6 +77,10 @@ impl Aggregate {
     }
 
     pub fn add(&mut self, r: &FileReport) {
+        // 숨긴 지표가 있어도 출력할 것이 없는 파일은 아래에서 건너뛴다. 억제 건수는 그 전에 센다.
+        self.suppressed.low += r.suppressed.low;
+        self.suppressed.medium += r.suppressed.medium;
+        self.suppressed.high += r.suppressed.high;
         if !is_flagged(r) {
             return;
         }
@@ -83,6 +95,11 @@ impl Aggregate {
             *self.by_category.entry(name).or_default() += 1;
         }
         self.files.push(r.clone());
+    }
+
+    /// 출력 필터가 숨긴 지표의 심각도별 건수.
+    pub fn suppressed(&self) -> Suppressed {
+        self.suppressed
     }
 
     /// 발견 총 건수.
@@ -102,6 +119,7 @@ struct SummaryOut<'a> {
     by_severity: &'a BTreeMap<&'static str, usize>,
     by_category: &'a BTreeMap<&'static str, usize>,
     incomplete: usize,
+    suppressed: Suppressed,
 }
 
 #[derive(Serialize)]
@@ -117,7 +135,7 @@ pub fn write_report_file(path: &Path, agg: &Aggregate, summary: &Summary, root: 
     let doc = ReportOut {
         scanned_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         root,
-        summary: SummaryOut { scanned: summary.scanned, by_severity: &summary.by_severity, by_category: &agg.by_category, incomplete: agg.incomplete },
+        summary: SummaryOut { scanned: summary.scanned, by_severity: &summary.by_severity, by_category: &agg.by_category, incomplete: agg.incomplete, suppressed: agg.suppressed },
         files: &agg.files,
     };
     let mut f = io::BufWriter::new(fs::File::create(path)?);

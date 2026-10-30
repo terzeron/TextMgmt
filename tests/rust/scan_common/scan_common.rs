@@ -313,3 +313,14 @@ fn sanitize_display_also_replaces_bidi_and_zero_width_characters() {
     // `sanitize` 자체는 방향 문자를 건드리지 않는다.
     assert_eq!(sanitize("a\u{202e}b", 100, None), "a\u{202e}b");
 }
+
+#[test]
+fn severity_parse_accepts_four_lowercase_names_and_rejects_others() {
+    assert_eq!(Severity::parse("low"), Some(Severity::Low));
+    assert_eq!(Severity::parse("medium"), Some(Severity::Medium));
+    assert_eq!(Severity::parse("high"), Some(Severity::High));
+    assert_eq!(Severity::parse("critical"), Some(Severity::Critical));
+    for bad in ["", "HIGH", "High", "info", "highest", " high"] {
+        assert_eq!(Severity::parse(bad), None, "{bad:?}");
+    }
+}

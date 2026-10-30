@@ -126,3 +126,45 @@ fn escape_and_bidi_in_the_path_are_hidden_in_text_but_the_real_file_is_found() {
     assert!(!text.is_empty());
     assert!(!text.contains('\u{1b}') && !text.contains('\u{202e}'), "{text:?}");
 }
+
+#[test]
+fn aggregate_counts_suppressed_even_for_files_that_print_nothing() {
+    use bookdoctor::report::write_summary_line;
+    let mut only_low = FileReport::new(Path::new("a.epub"), Some(Format::Epub));
+    only_low.push(Category::Defect, Severity::Low, "L", "", "");
+    only_low.push(Category::Defect, Severity::Medium, "M", "", "");
+    only_low.suppress_below(Severity::High);
+    let mut agg = Aggregate::new();
+    agg.add(&only_low);
+    assert_eq!(agg.suppressed().low, 1);
+    assert_eq!(agg.suppressed().medium, 1);
+    assert_eq!(agg.findings(), 0);
+    let mut out = Vec::new();
+    write_summary_line(&agg, &Summary { scanned: 1, ..Summary::default() }, &mut out).unwrap();
+    let line = String::from_utf8(out).unwrap();
+    assert!(line.contains("억제 LOW 1건, MEDIUM 1건"), "{line}");
+}
+
+#[test]
+fn summary_line_omits_suppressed_part_when_nothing_was_suppressed() {
+    use bookdoctor::report::write_summary_line;
+    let agg = Aggregate::new();
+    let mut out = Vec::new();
+    write_summary_line(&agg, &Summary { scanned: 3, ..Summary::default() }, &mut out).unwrap();
+    let line = String::from_utf8(out).unwrap();
+    assert!(!line.contains("억제"), "{line}");
+}
+
+#[test]
+fn summary_line_lists_only_nonzero_suppressed_severities() {
+    use bookdoctor::report::write_summary_line;
+    let mut r = FileReport::new(Path::new("a.epub"), Some(Format::Epub));
+    r.push(Category::Defect, Severity::Medium, "M", "", "");
+    r.suppress_below(Severity::High);
+    let mut agg = Aggregate::new();
+    agg.add(&r);
+    let mut out = Vec::new();
+    write_summary_line(&agg, &Summary::default(), &mut out).unwrap();
+    let line = String::from_utf8(out).unwrap();
+    assert!(line.contains("억제 MEDIUM 1건") && !line.contains("LOW"), "{line}");
+}

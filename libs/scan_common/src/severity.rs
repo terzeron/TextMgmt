@@ -14,6 +14,17 @@ pub enum Severity {
 }
 
 impl Severity {
+    /// 소문자 이름(`low`·`medium`·`high`·`critical`)으로 읽는다. 그 밖의 문자열은 `None`이다.
+    pub fn parse(name: &str) -> Option<Severity> {
+        match name {
+            "low" => Some(Severity::Low),
+            "medium" => Some(Severity::Medium),
+            "high" => Some(Severity::High),
+            "critical" => Some(Severity::Critical),
+            _ => None,
+        }
+    }
+
     /// 출력에 쓰는 대문자 이름.
     pub fn label(self) -> &'static str {
         match self {
