@@ -192,4 +192,38 @@ test("PDF 전체 보기: pdf.js가 모든 페이지를 canvas에 실제로 렌�
   expect(renderErrors, "PDF 렌더링 실패 에러 없음").toHaveLength(0);
   // 첫 페이지 단독 청크 + 나머지 묶음 청크가 요청됐는지 확인
   expect(chunkRanges).toContain("1-1");
+
+  // 1장씩은 이미지 크기를 유지하고 다음 쪽이 뷰어 안에 들어오지 않게 한다.
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    const canvas = page.locator("canvas.pdf-page").first();
+    const single = page.getByRole("button", { name: "1장씩", exact: true });
+    const fit = page.getByRole("button", { name: "맞춤", exact: true });
+    await fit.click();
+    for (const zoom of [100, 110]) {
+      if (zoom > 100) await page.getByRole("button", { name: "+", exact: true }).click();
+      const before = await canvas.boundingBox();
+      await single.click();
+      const after = await canvas.boundingBox();
+      expect(after.width).toBeCloseTo(before.width, 0);
+      expect(after.height).toBeCloseTo(before.height, 0);
+      await expect(page.locator(".pdf-zoom-label")).toHaveText(`${zoom}%`);
+      await expect(page.getByRole("button", { name: "+", exact: true })).toBeEnabled();
+      const next = await page.locator("canvas.pdf-page").nth(1).boundingBox();
+      const viewer = await container.boundingBox();
+      expect(next.y).toBeGreaterThanOrEqual(viewer.y + viewer.height - 1);
+      await single.click();
+    }
+    // 맞춤을 켜면 기존 화면 맞춤을 적용하고, 끄면 선택한 배율로 돌아온다.
+    await single.click();
+    const manual = await canvas.boundingBox();
+    await fit.click();
+    await expect(page.locator(".pdf-zoom-label")).toHaveText("-");
+    await fit.click();
+    expect((await canvas.boundingBox()).width).toBeCloseTo(manual.width, 0);
+    expect((await canvas.boundingBox()).height).toBeCloseTo(manual.height, 0);
+    await single.click();
+    await page.getByRole("button", { name: "−", exact: true }).click();
+    await fit.click();
+  }
 });

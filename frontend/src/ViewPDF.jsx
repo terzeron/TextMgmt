@@ -103,7 +103,7 @@ export default function ViewPDF({
   // 저장 뒤 같은 bookId로 PDF를 다시 불러오기 위한 카운터
   const [reloadToken, setReloadToken] = useState(0);
   const [fitMode, setFitMode] = useState(!preview);
-  // 1장씩 보기: 쪽을 뷰포트 크기에 맞추고 상하 스크롤 시 CSS scroll-snap으로 한 쪽씩 멈춘다 (PC·모바일 공통, 기본 꺼짐)
+  // 1장씩 보기: 이미지 배율은 유지하고 각 쪽에 뷰포트 높이 이상의 공간을 확보해 한 쪽씩 멈춘다.
   const [singlePage, setSinglePage] = useState(false);
   // 쪽 넘김 방식: 1장씩 보기와 독립이며 셋 중 하나만 켜진다(xor).
   //   vertical: 상하 스크롤만 / ltr: 좌우 넘김만 / rtl: 좌우 넘김만, 방향 반대(일본 만화 등)
@@ -538,7 +538,7 @@ export default function ViewPDF({
     if (!horizontal || !el) return undefined;
     const turn = (direction) => {
       const step = pageMode === "rtl" ? -direction : direction;
-      const pages = Array.from(el.querySelectorAll(".pdf-content > .pdf-page"));
+      const pages = Array.from(el.querySelectorAll(".pdf-content > :is(.pdf-page, .pdf-page-slot)"));
       const index = currentPageIndex(el, pages, PDF_TOOLBAR_HEIGHT);
       const target = pages[index + step];
       if (index >= 0 && target) target.scrollIntoView?.({ block: "start" });
@@ -863,7 +863,7 @@ export default function ViewPDF({
 
   return (
     <div
-      className={`pdf-container${singlePage ? " pdf-single" : ""}${horizontal ? " pdf-horizontal" : ""}`}
+      className={`pdf-container${singlePage ? " pdf-single" : ""}${fitMode ? " pdf-fit" : ""}${horizontal ? " pdf-horizontal" : ""}`}
       ref={containerRef}
       tabIndex={-1}
     >
@@ -938,18 +938,18 @@ export default function ViewPDF({
           <button
             className="pdf-zoom-btn"
             onClick={zoomDown}
-            disabled={fitMode || singlePage || zoomIndex === 0}
+            disabled={fitMode || zoomIndex === 0}
           >
             −
           </button>
           <span className="pdf-zoom-label">
-            {fitMode || singlePage ? "-" : `${zoomPercent}%`}
+            {fitMode ? "-" : `${zoomPercent}%`}
           </span>
           <button
             className="pdf-zoom-btn"
             onClick={zoomUp}
             disabled={
-              fitMode || singlePage || zoomIndex === ZOOM_STEPS.length - 1
+              fitMode || zoomIndex === ZOOM_STEPS.length - 1
             }
           >
             +
@@ -969,12 +969,13 @@ export default function ViewPDF({
               };
           if (!editable) {
             return (
-              <canvas
-                key={pageNum}
-                ref={setCanvasRef(pageNum)}
-                className="pdf-page"
-                style={canvasStyle}
-              />
+              <div key={pageNum} className="pdf-page-slot">
+                <canvas
+                  ref={setCanvasRef(pageNum)}
+                  className="pdf-page"
+                  style={canvasStyle}
+                />
+              </div>
             );
           }
           const mark = markedPages.get(pageNum);
@@ -1289,7 +1290,7 @@ const pdfStyles = `
     .pdf-content {
         overflow-x: auto;
     }
-    /* 1장씩 보기: 각 쪽을 뷰포트 높이에 맞춰 snap 지점으로 만든다(크기 조절만 담당).
+    /* 1장씩 보기: 각 쪽의 공간을 뷰포트 높이 이상으로 확보하고 이미지 배율은 유지한다.
        상하 스크롤 모드에서는 PC 키 스크롤(Space/PageDown), 모바일 터치 스와이프가 한 쪽씩 넘어간다.
        scroll-snap-stop: always가 빠른 스와이프로 여러 쪽을 건너뛰는 것을 막는다. */
     .pdf-container.pdf-single {
@@ -1300,12 +1301,17 @@ const pdfStyles = `
     .pdf-container.pdf-single .pdf-content {
         overflow: visible;
     }
-    .pdf-container.pdf-single .pdf-page {
+    .pdf-container.pdf-single .pdf-content > :is(.pdf-page, .pdf-page-slot) {
+        min-height: calc(var(--pdf-avail-h, calc(100vh - 10px)) - var(--pdf-toolbar-h));
+        scroll-snap-align: start;
+        scroll-snap-stop: always;
+    }
+    /* 맞춤: 폭만 맞추면 작은 이미지가 늘어나 세로가 영역을 넘친다.
+       비율을 유지한 채 영역(폭 × 보이는 높이) 안에 최대한 크게 넣는다(contain). */
+    .pdf-container.pdf-fit .pdf-page {
         width: 100% !important;
         height: calc(var(--pdf-avail-h, calc(100vh - 10px)) - var(--pdf-toolbar-h)) !important;
         object-fit: contain;
-        scroll-snap-align: start;
-        scroll-snap-stop: always;
     }
     .pdf-page {
         display: block;
@@ -1320,7 +1326,7 @@ const pdfStyles = `
         width: 100%;
         height: 100%;
     }
-    .pdf-container.pdf-single .pdf-page-wrap .pdf-page-canvas {
+    .pdf-container.pdf-fit .pdf-page-wrap .pdf-page-canvas {
         object-fit: contain;
     }
     /* 이미지 삽입 미리보기: 저장 전에도 삽입될 쪽을 다른 쪽처럼 보여 준다. 점선 테두리와 라벨로 아직 저장 전임을 알린다. */
@@ -1332,7 +1338,7 @@ const pdfStyles = `
         width: 100%;
         height: auto;
     }
-    .pdf-container.pdf-single .pdf-insert-image {
+    .pdf-container.pdf-fit .pdf-insert-image {
         height: 100%;
         object-fit: contain;
     }

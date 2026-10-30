@@ -578,6 +578,26 @@ describe("ViewPDF", () => {
     });
   });
 
+  it.each([false, true])("맞춤을 끄면 1장씩 보기에서도 배율을 유지하고 확대할 수 있다 (editable=%s)", async (editable) => {
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createMockPdf(1));
+    const { container } = render(<ViewPDF bookId={1} editable={editable} />);
+    await waitFor(() => expect(screen.getByText("총 2쪽 표시")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "맞춤" }));
+    fireEvent.click(screen.getByRole("button", { name: "+" }));
+    const page = container.querySelector(editable ? ".pdf-page-wrap" : "canvas.pdf-page");
+    const width = page.style.width;
+    fireEvent.click(screen.getByRole("button", { name: "1장씩" }));
+    expect(page.style.width).toBe(width);
+    expect(container.querySelector(".pdf-zoom-label").textContent).toBe("110%");
+    expect(screen.getByRole("button", { name: "+" }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "+" }));
+    expect(container.querySelector(".pdf-zoom-label").textContent).toBe("125%");
+    expect(parseInt(page.style.width)).toBeGreaterThan(parseInt(width));
+    fireEvent.click(screen.getByRole("button", { name: "1장씩" }));
+    expect(container.querySelector(".pdf-zoom-label").textContent).toBe("125%");
+  });
+
   describe("쪽 넘김 모드(상→하 / 좌→우 / 좌←우)", () => {
     let originalScrollIntoView;
     let scrolled;
@@ -616,7 +636,7 @@ describe("ViewPDF", () => {
           expect(root.classList.contains("pdf-horizontal")).toBe(mode !== "vertical");
         });
       }
-      const pages = Array.from(view.container.querySelectorAll(".pdf-content > .pdf-page"));
+      const pages = Array.from(view.container.querySelectorAll(".pdf-content > :is(.pdf-page, .pdf-page-slot)"));
       expect(pages).toHaveLength(3);
       root.getBoundingClientRect = () => ({ top: 0 });
       pages.forEach((page, i) => {
@@ -754,7 +774,7 @@ describe("ViewPDF", () => {
       await waitFor(() => expect(root.classList.contains("pdf-single")).toBe(false));
       expect(root.querySelector(".pdf-ltr-btn").classList.contains("active")).toBe(true);
       // 토글로 쪽 노드가 다시 만들어질 수 있으므로 좌표 모킹을 새로 건다.
-      const pages = Array.from(root.querySelectorAll(".pdf-content > .pdf-page"));
+      const pages = Array.from(root.querySelectorAll(".pdf-content > :is(.pdf-page, .pdf-page-slot)"));
       pages.forEach((page, i) => {
         page.getBoundingClientRect = () => ({ top: 32 + (i - 1) * 800 });
       });

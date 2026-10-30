@@ -526,7 +526,14 @@ export default function ViewEPUB({
     // 텍스트 읽기 전용 기본 스타일
     rendition.themes.default({
       "html, body": { margin: 0, padding: 0 },
-      "img, svg": { "max-width": "100%", height: "auto" },
+      // 폭만 제한하면 세로로 긴 이미지가 뷰어 높이를 넘친다. iframe 안의 100vh는 뷰어 높이다.
+      // object-fit으로 width/height 속성이 있는 이미지도 비율을 유지한 채 줄인다.
+      "img, svg": {
+        "max-width": "100%",
+        "max-height": "100vh",
+        height: "auto",
+        "object-fit": "contain",
+      },
     });
     if (fontSize !== 100) rendition.themes.fontSize(`${fontSize}%`);
 
