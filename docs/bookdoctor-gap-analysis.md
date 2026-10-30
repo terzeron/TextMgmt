@@ -52,8 +52,9 @@
 | HWPX | 부분 | mimetype, 매니페스트, 섹션, XML, `BinData` OLE·실행 파일, DTD·엔티티 | 스크립트·매크로(저장 위치 미확인, `docs/bookdoctor-hwpx-notes.md`) |
 | DOC | 부분 | `ole_reader`(관대한 CFB 파서, MS-OVBA), OLE 구조 이상(`OLE_*`), FIB 암호화(cyan), VBA 매크로·자동 실행·의심 키워드 조합, `ObjectPool`·`Ole10Native` 내장 실행 파일(레이블·원본·임시 경로), DDE·INCLUDE 필드(중첩·8비트·UTF-16), 이름만 바꾼 `.docx`·`.rtf` 위장 | 실제 DOC로 검증하지 못했다(합성·LibreOffice 생성 3건뿐). 표 스트림 기반 텍스트, 수식 편집기 CVE 패턴은 없다 |
 | RTF | 부분 | `{\rtf` 판별, `\objdata`·`\objclass` 등 내장 객체(쪼갠 제어어 포함), 본문의 OLE·PE 매직, `\datastore`(단독은 Medium) | 코퍼스 `.rtf` 11건은 모두 정상 RTF였고 악성 양성 대조군은 없다 |
-| HWP 5.x | 없음 | OLE 매직 판별과 이름 위장 표시(미완료)만 | HWP 5.x 레코드 분석기(P3). 코퍼스에 건강한 HWP5 샘플이 없다 |
+| HWP 5.x | 부분 | `FileHeader`(암호·DRM·공인 인증서 cyan 미완료, 배포용), `Scripts`(High, 의심 키워드 Critical, 압축·표 뒤 바이트·모든 스트림), `BinData` 내용 매직(실행 파일 High, OLE High, EPS Medium), `DocInfo`의 연결 파일(UNC·URL High), 레코드 구조(`HWP_BAD_RECORD`), OLE 구조 이상, 이름만 바꾼 Word 문서·`.hwpx` 처리 | 정상 HWP5 실파일로 검증하지 못했다(합성 fixture와 한컴 명세로만 확인, 코퍼스 OLE 2건은 구조 이상). 하이퍼링크 필드(`%hlk`), `ViewText`(배포용 본문), 문서 이력, 본문 텍스트 속 개체는 검사하지 않는다. 압축 형식(zlib 헤더 유무)은 두 경로를 모두 받지만 실파일 확인은 못 했다 |
+| HWP 3.x 이하 | 최소 | `HWP Document File V` 서명 판별과 이름 위장 표시 | 서명 밖의 내용은 검사하지 않는다(코퍼스 `.hwp` 200건 중 198건이 이 형식이라 미완료로 표시하지 않았다) |
 | HTML | 없음 | - | P4 |
 | 실행 파일 | 있음 | 확장자 + 매직바이트 이중 확인(P0) | - |
 
-실제 문서로 검증한 범위: DOCX는 코퍼스에 2건(악보)뿐이라 오탐률을 측정하지 못했고, HWPX는 0건이라 합성 fixture로만 확인했다. DOC는 코퍼스에 0건이라 합성 fixture와 LibreOffice가 만든 3건으로만 확인했고, RTF는 11건이 모두 정상이었다(Word 표준 `\datastore` 오탐 1건을 이 과정에서 고쳤다).
+실제 문서로 검증한 범위: DOCX는 코퍼스에 2건(악보)뿐이라 오탐률을 측정하지 못했고, HWPX는 0건이라 합성 fixture로만 확인했다. HWP 5.x는 코퍼스에 정상 샘플이 없어 한컴 명세(revision 1.3)와 합성 fixture로만 확인했다. DOC는 코퍼스에 0건이라 합성 fixture와 LibreOffice가 만든 3건으로만 확인했고, RTF는 11건이 모두 정상이었다(Word 표준 `\datastore` 오탐 1건을 이 과정에서 고쳤다).
