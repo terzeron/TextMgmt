@@ -98,3 +98,47 @@ fn utf16_html_is_decoded() {
     let r = scan("a.html", &utf16le_bom("<html><script src=\"http://evil.example/a.js\"></script></html>"));
     assert!(r.has("REMOTE_SCRIPT"), "{:?}", r.findings);
 }
+
+// --- 인코딩 우회 (EPUB의 `check_member`와 같은 처리) ---
+
+const REMOTE: &str = r#"<html><script src="http://evil.example/a.js"></script></html>"#;
+
+#[test]
+fn utf32_html_is_incomplete_because_it_cannot_be_inspected() {
+    let mut bytes = vec![0xFF, 0xFE, 0, 0];
+    bytes.extend(REMOTE.chars().flat_map(|c| (c as u32).to_le_bytes()));
+    let r = scan("a.html", &bytes);
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.to_lowercase().contains("utf-32")), "{:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn nul_bytes_in_utf8_html_are_not_reported_clean() {
+    let mut bytes = REMOTE.as_bytes().to_vec();
+    bytes.splice(6..6, [0u8]);
+    let r = scan("a.html", &bytes);
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("NUL")), "{:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn utf16_bom_followed_by_ascii_markup_is_still_scanned() {
+    // `FF FE` 뒤에 ASCII 마크업이 오면 UTF-16 변환 결과는 깨진 글자다. 바이트를 그대로 읽은 텍스트도 함께 검사한다.
+    let mut bytes = vec![0xFF, 0xFE];
+    bytes.extend_from_slice(REMOTE.as_bytes());
+    assert!(scan("a.html", &bytes).has("REMOTE_SCRIPT"));
+}
+
+#[test]
+fn a_utf8_bom_does_not_hide_the_markup() {
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend_from_slice(REMOTE.as_bytes());
+    assert!(scan("a.html", &bytes).has("REMOTE_SCRIPT"));
+}
+
+#[test]
+fn legacy_encoded_pages_are_still_scanned() {
+    // EUC-KR 한글(0xB0 0xA1)이 든 페이지도 ASCII 마크업은 그대로 검사한다.
+    let mut bytes = b"<html><body>".to_vec();
+    bytes.extend_from_slice(&[0xB0, 0xA1, 0xB3, 0xAA]);
+    bytes.extend_from_slice(br#"<script src="http://evil.example/a.js"></script></body></html>"#);
+    assert!(scan("a.html", &bytes).has("REMOTE_SCRIPT"));
+}

@@ -425,6 +425,28 @@ impl Scanner {
     }
 
     /// 모은 인코딩 문제를 종류당 노트 한 줄과 상한 있는 지표로 낸다.
+    /// 마크업 바이트를 디코딩해 검사한다. EPUB 멤버와 독립 HTML이 같은 처리를 쓰도록 한 곳에 둔다:
+    /// 디코딩할 수 없는 인코딩(UTF-32, NUL 삽입, 잘못된 UTF-8)은 지표·미완료로 남기고, UTF-16으로 본 내용도 바이트를 그대로 읽은 텍스트와 함께 검사한다.
+    fn scan_markup_bytes(&mut self, kind: Kind, data: &[u8], name: &str, is_opf: bool) {
+        let (text, enc) = decode_text(data);
+        match enc {
+            // 숨은 내용을 볼 수 없으니 지표로 남긴다. 예전처럼 대체 문자 텍스트 검사는 계속한다.
+            TextEnc::Utf32 => self.record_enc(0, name, Some("UTF-32 content cannot be inspected")),
+            TextEnc::Invalid if matches!(kind, Kind::Html | Kind::Xml) => self.record_enc(1, name, None),
+            // 보안 리뷰 지적(BOM 없는 UTF-32·NUL 삽입): 유효한 UTF-8인데 NUL이 있으면 BOM 없는 UTF-32이거나 파서가
+            // 다르게 읽을 수 있다. 우선순위는 UTF-32 BOM, UTF-16(BOM·NUL 교차, 변환했으므로 해당 없음), 그 다음이 이 검사다.
+            TextEnc::Utf8 if data.contains(&0) => self.record_enc(2, name, Some("NUL bytes: content cannot be reliably inspected")),
+            _ => {}
+        }
+        scan_text(self, kind, text.strip_prefix('\u{feff}').unwrap_or(&text), name, is_opf);
+        // 보안 리뷰 지적(옛 탐지 가림): UTF-16으로 본 멤버도 예전처럼 바이트를 대체 문자로 읽은 텍스트를 함께 검사한다.
+        // `FF FE` 뒤에 ASCII 마크업이 오는 멤버가 변환 결과(깨진 글자)에 가려지지 않게 한다. 같은 키의 지표는 `add`가 합친다.
+        if enc == TextEnc::Utf16 {
+            let old = String::from_utf8_lossy(data);
+            scan_text(self, kind, old.strip_prefix('\u{feff}').unwrap_or(&old), name, is_opf);
+        }
+    }
+
     fn flush_encoding(&mut self) {
         for (i, label) in ENC_NOTE_LABELS.iter().enumerate() {
             let (n, first) = (self.enc[i].0, self.enc[i].1.clone());
@@ -978,25 +1000,8 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
     // `Kind::Other`(이미지, 폰트, txt 등)는 텍스트 규칙이 없다: `scan_text`가 아무것도 하지 않고 인코딩 지표도 `kind != Other`일 때만 낸다.
     // 이런 멤버를 UTF-8로 변환하면 큰 바이너리마다 복사본을 만들 뿐이라(표본 EPUB에서 전체 명령의 19.5%) 건너뛴다.
     if kind != Kind::Other {
-        let (text, enc) = decode_text(&data);
-        match enc {
-            // 숨은 내용을 볼 수 없으니 지표로 남긴다. 예전처럼 대체 문자 텍스트 검사는 계속한다.
-            TextEnc::Utf32 => s.record_enc(0, name, Some("UTF-32 content cannot be inspected")),
-            TextEnc::Invalid if matches!(kind, Kind::Html | Kind::Xml) => s.record_enc(1, name, None),
-            // 보안 리뷰 지적(BOM 없는 UTF-32·NUL 삽입): 유효한 UTF-8인데 NUL이 있으면 BOM 없는 UTF-32이거나 파서가
-            // 다르게 읽을 수 있다. 우선순위는 UTF-32 BOM, UTF-16(BOM·NUL 교차, 변환했으므로 해당 없음), 그 다음이 이 검사다.
-            TextEnc::Utf8 if data.contains(&0) => s.record_enc(2, name, Some("NUL bytes: content cannot be reliably inspected")),
-            _ => {}
-        }
-        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         let is_opf = opf_names.contains(name);
-        scan_text(s, kind, text, name, is_opf);
-        // 보안 리뷰 지적(옛 탐지 가림): UTF-16으로 본 멤버도 예전처럼 바이트를 대체 문자로 읽은 텍스트를 함께 검사한다.
-        // `FF FE` 뒤에 ASCII 마크업이 오는 멤버가 변환 결과(깨진 글자)에 가려지지 않게 한다. 같은 키의 지표는 `add`가 합친다.
-        if enc == TextEnc::Utf16 {
-            let old = String::from_utf8_lossy(&data);
-            scan_text(s, kind, old.strip_prefix('\u{feff}').unwrap_or(&old), name, is_opf);
-        }
+        s.scan_markup_bytes(kind, &data, name, is_opf);
     }
     data.len() as u64
 }
@@ -1032,10 +1037,14 @@ pub fn scan_verified(path: &Path, limits: &Limits, report: &mut FileReport) -> (
     (stats, verified)
 }
 
-/// 독립 HTML 문서(`text`, 표시 이름 `name`)를 EPUB의 HTML 규칙으로 검사해 `report`에 더한다.
-pub fn scan_html_document(text: &str, name: &str, report: &mut FileReport) {
+/// 독립 HTML 문서(`data`, 표시 이름 `name`)를 EPUB의 HTML 규칙으로 검사해 `report`에 더한다.
+/// 디코딩·인코딩 우회 처리는 EPUB 멤버와 같은 `scan_markup_bytes`를 쓴다.
+pub fn scan_html_document(data: &[u8], name: &str, report: &mut FileReport) {
     let mut s = Scanner::new();
-    guarded(report, |_| s.scan_html(text, name));
+    guarded(report, |_| {
+        s.scan_markup_bytes(Kind::Html, data, name, false);
+        s.flush_encoding();
+    });
     s.findings.sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.code.cmp(&b.code)).then_with(|| a.location.cmp(&b.location)));
     for f in &s.findings {
         let category = if RENDER_CODES.contains(&f.code.as_str()) { Category::Render } else { Category::Security };

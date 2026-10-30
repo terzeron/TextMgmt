@@ -6,7 +6,7 @@ use std::path::Path;
 use scan_common::FileReport;
 use scan_common::sniff::Sniffed;
 
-use crate::epub::security::{decode_text, scan_html_document};
+use crate::epub::security::scan_html_document;
 
 /// 읽는 최대 바이트. 넘으면 앞부분만 보고 미완료로 남긴다.
 const MAX_HTML: u64 = 16 * 1024 * 1024;
@@ -37,5 +37,5 @@ pub fn scan_html_file(path: &Path, sniffed: Sniffed, report: &mut FileReport) {
         report.mark_incomplete(&format!("skipped: HTML larger than the {} MiB read limit; only the first part was inspected", MAX_HTML / (1024 * 1024)));
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    scan_html_document(&decode_text(&bytes).0, &name, report);
+    scan_html_document(&bytes, &name, report);
 }
