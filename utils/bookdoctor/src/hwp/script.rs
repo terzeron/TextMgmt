@@ -92,20 +92,19 @@ fn read_script(file: &mut OleFile, entry: &ole_reader::Entry, compressed: bool) 
     Ok((candidates, note))
 }
 
-/// `Scripts` 스토리지를 검사한다. 스토리지와 `FileHeader` 비트 3이 어긋나면 결함이다.
-/// `DefaultJScript`는 표 9 구조로, 그 밖의 `Scripts` 아래 스트림은 원시 텍스트로 키워드를 찾는다.
+/// `Scripts` 스토리지를 검사한다. 한글은 스크립트가 없어도 빈 `DefaultJScript`가 든 `Scripts` 저장소를 항상 쓰므로(실제 HWP5로 확인했다)
+/// 저장소가 있다는 것만으로는 지표가 아니다. `FileHeader` 비트 3(스크립트 저장)이 서 있거나, 소스가 비어 있지 않거나, 비어 있음을 증명하지 못할 때만 `HWP_SCRIPT`다.
+/// 비트만 서 있고 저장소가 없으면 결함이다. `DefaultJScript`는 표 9 구조로, 그 밖의 `Scripts` 아래 스트림은 원시 텍스트로 키워드를 찾는다.
 pub fn inspect(file: &mut OleFile, header: &FileHeader, report: &mut FileReport) {
     let has_storage = file.find("Scripts").is_some();
-    if has_storage {
-        report.push(Category::Security, Severity::High, "HWP_SCRIPT", "Scripts", "HWP document stores script code");
-    }
-    if header.has_scripts() != has_storage {
-        let detail = if has_storage { "Scripts storage exists but FileHeader bit3 (script saved) is clear" } else { "FileHeader bit3 (script saved) is set but there is no Scripts storage" };
-        report.push(Category::Defect, Severity::Medium, "HWP_SCRIPT_FLAG_MISMATCH", "Scripts", detail);
+    if header.has_scripts() && !has_storage {
+        report.push(Category::Defect, Severity::Medium, "HWP_SCRIPT_FLAG_MISMATCH", "Scripts", "FileHeader bit3 (script saved) is set but there is no Scripts storage");
     }
     if !has_storage {
         return;
     }
+    // 작성자가 스크립트 저장을 선언했으면 소스가 비었어도 스크립트가 있는 문서다.
+    let mut present = header.has_scripts();
     let mut streams: Vec<(String, ole_reader::Entry)> = file
         .entries()
         .iter()
@@ -123,11 +122,14 @@ pub fn inspect(file: &mut OleFile, header: &FileHeader, report: &mut FileReport)
         let (candidates, note) = match read_script(file, &entry, header.compressed()) {
             Ok(r) => r,
             Err(reason) => {
+                // 읽지 못했으면 비어 있음을 증명하지 못한다.
+                present = true;
                 report.mark_incomplete(&reason);
                 continue;
             }
         };
         if let Some(note) = note {
+            present = true;
             report.mark_incomplete(&note);
         }
         let default = entry.name.eq_ignore_ascii_case("DefaultJScript");
@@ -137,11 +139,21 @@ pub fn inspect(file: &mut OleFile, header: &FileHeader, report: &mut FileReport)
         if default && within_limit && parsed.is_empty() {
             report.mark_incomplete("Scripts/DefaultJScript does not follow the documented layout; scanned as raw bytes");
         }
+        // `DefaultJScript`는 소스가 비어 있지 않거나 표로 읽히지 않을 때, 그 밖의 알 수 없는 스트림은 있다는 것만으로 스크립트가 있다고 본다(`JScriptVersion`은 버전 숫자뿐이다).
+        if default {
+            present |= parsed.is_empty() || parsed.iter().any(|t| !t.trim().is_empty());
+        } else if !entry.name.eq_ignore_ascii_case("JScriptVersion") {
+            present = true;
+        }
         let original = candidates.last().map(|d| raw_text(d)).unwrap_or_default();
         let inflated: Vec<String> = candidates.iter().rev().skip(1).map(|d| raw_text(d)).collect();
         let text = [parsed, inflated, vec![original]].concat().join("\n");
         if let Some(keyword) = suspicious(&text) {
+            present = true;
             report.push(Category::Security, Severity::Critical, "HWP_SCRIPT_SUSPICIOUS", &sanitize_display(&path, 120, Some('…')), &format!("script uses {keyword}"));
         }
+    }
+    if present {
+        report.push(Category::Security, Severity::High, "HWP_SCRIPT", "Scripts", "HWP document stores script code");
     }
 }

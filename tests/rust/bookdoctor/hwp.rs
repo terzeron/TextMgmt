@@ -216,22 +216,39 @@ fn no_scripts_storage_and_no_flag_is_clean() {
 }
 
 #[test]
-fn scripts_storage_is_high_even_when_empty() {
-    let r = scan_cfb("a.hwp", &hwp_cfb(&[("Scripts/JScriptVersion", &JSCRIPT_VERSION[..])], 0x8));
-    assert_eq!(finding(&r, "HWP_SCRIPT").severity, scan_common::Severity::High);
-    assert!(!r.has("HWP_SCRIPT_FLAG_MISMATCH"), "{:?}", r.findings);
+fn an_empty_scripts_storage_of_an_ordinary_document_is_clean() {
+    // 한글은 스크립트가 없어도 `Scripts` 저장소(빈 DefaultJScript)를 항상 쓴다. 실제 건강한 HWP5(EPUB 안에서 발견)의 두 스트림을 그대로 쓴다.
+    const REAL_JSCRIPT_VERSION: [u8; 13] = [0x63, 0x64, 0x80, 0x00, 0x00, 0xf7, 0xdf, 0x88, 0xa9, 0x08, 0x00, 0x00, 0x00];
+    const REAL_DEFAULT_JSCRIPT: [u8; 16] = [0x63, 0x60, 0x40, 0x05, 0xff, 0x81, 0x00, 0x00, 0x6e, 0xbb, 0x6e, 0xd1, 0x14, 0x00, 0x00, 0x00];
+    let real = scan_cfb("a.hwp", &hwp_cfb(&[("Scripts/JScriptVersion", &REAL_JSCRIPT_VERSION[..]), ("Scripts/DefaultJScript", &REAL_DEFAULT_JSCRIPT[..])], 0x1));
+    assert!(real.findings.is_empty() && !real.incomplete, "{:?} {:?}", real.findings, real.reasons);
+    // 압축하지 않은 빈 표와 압축한 빈 표도 같다.
+    let empty = default_jscript(["", "", "", ""]);
+    for (flags, bytes) in [(0u32, empty.clone()), (0x1, raw_deflate(&empty)), (0x1, zlib(&empty))] {
+        let r = scan_scripts(flags, &bytes);
+        assert!(r.findings.is_empty() && !r.incomplete, "flags {flags:#x}: {:?} {:?}", r.findings, r.reasons);
+    }
+    // 공백뿐인 스크립트도 스크립트가 아니다.
+    assert!(scan_scripts(0, &default_jscript(["  ", "\n\t", "", ""])).findings.is_empty());
 }
 
 #[test]
-fn the_script_flag_and_the_storage_must_agree() {
-    // 비트는 있는데 스토리지가 없다.
+fn the_script_flag_makes_the_storage_high_even_when_empty() {
+    let r = scan_cfb("a.hwp", &hwp_cfb(&[("Scripts/JScriptVersion", &JSCRIPT_VERSION[..])], 0x8));
+    assert_eq!(finding(&r, "HWP_SCRIPT").severity, scan_common::Severity::High);
+    assert!(!r.has("HWP_SCRIPT_FLAG_MISMATCH"), "{:?}", r.findings);
+    // 실제 스크립트 소스가 있으면 비트가 없어도 High다.
+    let r = scan_scripts(0, &default_jscript(["", "var a = 1;", "", ""]));
+    assert_eq!(finding(&r, "HWP_SCRIPT").severity, scan_common::Severity::High);
+    assert!(!r.has("HWP_SCRIPT_FLAG_MISMATCH"), "storage without the flag is what Hangul writes: {:?}", r.findings);
+}
+
+#[test]
+fn a_script_bit_without_a_storage_is_a_mismatch() {
     let r = scan_cfb("a.hwp", &hwp_cfb(&[], 0x8));
     let f = finding(&r, "HWP_SCRIPT_FLAG_MISMATCH");
     assert_eq!((f.severity, f.category), (scan_common::Severity::Medium, scan_common::Category::Defect));
     assert!(!r.has("HWP_SCRIPT"));
-    // 스토리지는 있는데 비트가 없다. 스크립트는 그대로 High다.
-    let r = scan_scripts(0, &default_jscript(["", "var a = 1;", "", ""]));
-    assert!(r.has("HWP_SCRIPT_FLAG_MISMATCH") && r.has("HWP_SCRIPT"), "{:?}", r.findings);
 }
 
 #[test]
