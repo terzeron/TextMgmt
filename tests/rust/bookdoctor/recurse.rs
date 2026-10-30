@@ -196,3 +196,35 @@ fn no_recurse_turns_the_nested_scan_off() {
     run(&["--no-recurse".into(), "--min-severity".into(), "low".into(), "--json".into(), d.path().join("a.zip").to_string_lossy().into_owned()], &mut out);
     assert!(!String::from_utf8(out).unwrap().contains("inner.docx!"));
 }
+
+// --- 보안 검토 반영: 내용으로 판단, 읽기 전에 예산 확인 ---
+
+#[test]
+fn an_epub_named_container_is_recursed_too() {
+    let outer = zip_bytes(&[("inner.docx", &vba_docx())]);
+    let r = scan_bytes("a.epub", &outer, &Options::default());
+    assert!(has_vba_under(&r, "inner.docx!"), "{:?} {:?}", r.findings, r.reasons);
+    // `.pdf`라는 이름의 ZIP 내용도 같다.
+    let r = scan_bytes("b.pdf", &outer, &Options::default());
+    assert!(has_vba_under(&r, "inner.docx!"), "{:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn a_nested_docx_with_an_unrelated_member_name_is_scanned_as_docx() {
+    // 이름이 `payload.dat`여도 내용이 DOCX면 DOCX 규칙(매크로 없는 형식의 vbaProject는 Critical)으로 본다.
+    let r = scan_bytes("a.zip", &zip_bytes(&[("payload.dat", &vba_docx())]), &Options::default());
+    let f = r.findings.iter().find(|f| f.code == "OOXML_VBA_PROJECT").unwrap_or_else(|| panic!("{:?} {:?}", r.findings, r.reasons));
+    assert!(f.location.starts_with("payload.dat!"), "{}", f.location);
+    assert_eq!(f.severity, scan_common::Severity::Critical);
+}
+
+#[test]
+fn ole_members_are_charged_to_the_budget_before_they_are_kept() {
+    // OLE 서명만 있는 10MB 멤버 다섯 개. 읽는 양이 예산(20MiB)에 계산되지 않으면 아무 사유도 남지 않는다.
+    let mut ole = vec![0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+    ole.resize(10 * 1024 * 1024, 0);
+    let outer = zip_bytes(&[("a.bin", &ole), ("b.bin", &ole), ("c.bin", &ole), ("d.bin", &ole), ("e.bin", &ole)]);
+    let opts = Options { max_total_mb: 20, ..Options::default() };
+    let r = scan_bytes("ole.zip", &outer, &opts);
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("recursion byte budget")), "{:?}", r.reasons);
+}

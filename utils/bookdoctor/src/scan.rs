@@ -81,7 +81,7 @@ fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
         None => report.mark_incomplete("unsupported format"),
     }
     // ZIP 안의 컨테이너(중첩 ZIP·PDF·RTF·Word·HWP)를 깊이·개수·바이트 상한 안에서 재귀 검사한다.
-    if sniffed == Sniffed::Zip && matches!(report.format, Some(Format::Zip | Format::Docx | Format::Hwpx)) {
+    if sniffed == Sniffed::Zip && matches!(report.format, Some(Format::Zip | Format::Docx | Format::Hwpx | Format::Epub)) {
         recurse::scan_zip_members(path, opts, report);
     }
 }

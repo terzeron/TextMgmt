@@ -32,8 +32,6 @@ const SNIFF_BYTES: u64 = 1024;
 const MAX_ENTRIES: usize = 20_000;
 /// 바깥 보고서에 합치는 중첩 지표 수의 상한.
 const MAX_MERGED_FINDINGS: usize = 500;
-/// 중첩 ZIP의 확장자로 허용하는 이름(그 밖에는 `zip`). 멤버 이름의 나머지는 경로에 쓰지 않는다.
-const ZIP_EXTENSIONS: &[&str] = &["docx", "docm", "dotx", "dotm", "hwpx", "epub", "zip"];
 
 static SCRATCH_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -115,31 +113,64 @@ fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> Option<R> {
     STATE.with(|s| s.borrow_mut().as_mut().map(f))
 }
 
-/// 멤버의 앞부분으로 중첩 검사에 쓸 임시 파일 확장자를 정한다. 재귀 대상이 아니면 `None`이다.
-/// OLE는 Word·HWP 구조(`WordDocument`, `EncryptedPackage`, `FileHeader`)가 있는 것만 대상이다(`vbaProject.bin` 같은 일반 OLE는 제외).
-fn nested_extension(head: &[u8], member_name: &str, full: impl FnOnce() -> Option<Vec<u8>>) -> Option<&'static str> {
+/// 앞부분으로 가른 중첩 멤버 종류.
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Zip,
+    Pdf,
+    Rtf,
+    Ole,
+}
+
+/// 임시 파일의 ZIP이 어떤 문서 패키지인지 멤버 이름 구조로 가려 확장자를 돌려준다. 멤버 이름(바깥 ZIP의 이름)은 쓰지 않는다.
+/// 확인 순서: DOCX(`word/document.xml`), HWPX(`Contents/content.hpf`), EPUB(`META-INF/container.xml`; HWPX도 갖고 있어 뒤에 둔다), 그 밖은 `zip`.
+fn zip_extension(file: &Path) -> &'static str {
+    let Some(zip) = open_zip(file) else { return "zip" };
+    let (mut docx, mut hwpx, mut epub) = (false, false, false);
+    for name in zip.file_names().take(MAX_ENTRIES).flatten() {
+        match name.as_ref() {
+            "word/document.xml" => docx = true,
+            "Contents/content.hpf" => hwpx = true,
+            "META-INF/container.xml" => epub = true,
+            _ => {}
+        }
+    }
+    if docx {
+        "docx"
+    } else if hwpx {
+        "hwpx"
+    } else if epub {
+        "epub"
+    } else {
+        "zip"
+    }
+}
+
+/// 임시 파일의 OLE가 검사 대상 문서인지 스트림 구조로 가려 확장자를 돌려준다. `FileHeader`는 HWP, `WordDocument`·`EncryptedPackage`는 Word·암호화 OOXML이다.
+/// `vbaProject.bin` 같은 일반 OLE는 `None`이다(DOC 분석기에 넣으면 `FORMAT_MISMATCH` 소음이 생긴다).
+fn ole_extension(file: &Path) -> Option<&'static str> {
+    let ole = OleFile::open(file, &OleLimits::default()).ok()?;
+    if ole.find("FileHeader").is_some() {
+        Some("hwp")
+    } else if ole.find("WordDocument").is_some() || ole.find("EncryptedPackage").is_some() {
+        Some("doc")
+    } else {
+        None
+    }
+}
+
+fn kind_of(head: &[u8]) -> Option<(Kind, &'static str)> {
     match sniff(head) {
-        Sniffed::Zip => {
-            let ext = member_name.rsplit(['/', '\\']).next().and_then(|f| f.rsplit_once('.')).map(|(_, e)| e.to_ascii_lowercase());
-            Some(ZIP_EXTENSIONS.iter().copied().find(|z| Some(*z) == ext.as_deref()).unwrap_or("zip"))
-        }
-        Sniffed::Pdf => Some("pdf"),
-        Sniffed::Rtf => Some("rtf"),
-        Sniffed::Ole => {
-            let ole = OleFile::from_bytes(full()?, &OleLimits::default()).ok()?;
-            if ole.find("FileHeader").is_some() {
-                Some("hwp")
-            } else if ole.find("WordDocument").is_some() || ole.find("EncryptedPackage").is_some() {
-                Some("doc")
-            } else {
-                None
-            }
-        }
+        Sniffed::Zip => Some((Kind::Zip, "zip")),
+        Sniffed::Pdf => Some((Kind::Pdf, "pdf")),
+        Sniffed::Rtf => Some((Kind::Rtf, "rtf")),
+        Sniffed::Ole => Some((Kind::Ole, "ole")),
         _ => None,
     }
 }
 
 /// ZIP 계열 파일의 컨테이너 멤버를 재귀 검사하고 결과를 `report`에 합친다. `--no-recurse`면 아무것도 하지 않는다.
+/// 종류는 멤버 이름이 아니라 내용으로 정한다. 예산(깊이·파일 수·바이트)은 멤버를 읽기 전에 확인하고 읽는 양만큼 차감한다.
 pub fn scan_zip_members(path: &Path, opts: &Options, report: &mut FileReport) {
     if !opts.recurse || with_state(|_| ()).is_none() {
         return;
@@ -151,7 +182,6 @@ pub fn scan_zip_members(path: &Path, opts: &Options, report: &mut FileReport) {
     let mut scratch: Option<ScratchDir> = None;
     let mut merged = 0usize;
     let mut depth_noted = false;
-    let nested_opts = Options { only: Vec::new(), ..opts.clone() };
     for i in 0..zip.len().min(MAX_ENTRIES) {
         let (name, size, head) = {
             let Ok(entry) = zip.by_index(i) else { continue };
@@ -166,39 +196,30 @@ pub fn scan_zip_members(path: &Path, opts: &Options, report: &mut FileReport) {
             }
             (name, size, head)
         };
-        // 컨테이너가 아니면 재귀하지 않는다. OLE만 구조를 보려고 통째로 읽는다.
-        let member_cap = size.min(MAX_MEMBER);
-        let mut full_cache: Option<Vec<u8>> = None;
-        let read_full = |zip: &mut corpus_common::reader::Zip| -> Option<Vec<u8>> {
-            let entry = zip.by_index(i).ok()?;
-            let mut data = Vec::new();
-            entry.take(member_cap).read_to_end(&mut data).ok()?;
-            Some(data)
-        };
-        let ext = nested_extension(&head, &name, || {
-            full_cache = read_full(&mut zip);
-            full_cache.clone()
-        });
-        let Some(ext) = ext else { continue };
+        let Some((kind, first_ext)) = kind_of(&head) else { continue };
         let shown = sanitize_display(&name, 120, Some('…'));
         if size > MAX_MEMBER {
             report.mark_incomplete(&format!("{shown}: nested member larger than the {} MiB recursion limit", MAX_MEMBER / (1024 * 1024)));
             continue;
         }
-        let allowed = with_state(|s| {
-            if s.depth >= MAX_DEPTH {
+        // 읽기 전에 예산을 확인하고 차감한다. OLE는 대상인지 구조를 본 뒤에야 파일 수를 차감한다(대상이 아닌 OLE가 파일 수를 쓰지 않게).
+        let gate = with_state(|s| {
+            // OLE는 대상인지 구조를 본 뒤에 깊이를 적용한다(깊은 곳의 `vbaProject.bin` 같은 일반 OLE가 미완료 사유가 되지 않게).
+            if s.depth >= MAX_DEPTH && kind != Kind::Ole {
                 Err("depth")
             } else if s.files_left == 0 {
                 Err("files")
             } else if size > s.bytes_left {
                 Err("bytes")
             } else {
-                s.files_left -= 1;
                 s.bytes_left -= size;
+                if kind != Kind::Ole {
+                    s.files_left -= 1;
+                }
                 Ok(())
             }
         });
-        match allowed {
+        match gate {
             Some(Ok(())) => {}
             Some(Err("depth")) => {
                 if !depth_noted {
@@ -216,13 +237,12 @@ pub fn scan_zip_members(path: &Path, opts: &Options, report: &mut FileReport) {
                 break;
             }
         }
-        let data = match full_cache.take().or_else(|| read_full(&mut zip)) {
-            Some(d) => d,
-            None => {
-                report.mark_incomplete(&format!("{shown}: nested member could not be read"));
-                continue;
-            }
-        };
+        let mut data = Vec::new();
+        let read_ok = zip.by_index(i).is_ok_and(|entry| entry.take(size).read_to_end(&mut data).is_ok());
+        if !read_ok {
+            report.mark_incomplete(&format!("{shown}: nested member could not be read"));
+            continue;
+        }
         if scratch.is_none() {
             scratch = ScratchDir::new().ok();
         }
@@ -230,11 +250,44 @@ pub fn scan_zip_members(path: &Path, opts: &Options, report: &mut FileReport) {
             report.mark_incomplete("recursion skipped: scratch directory could not be created");
             return;
         };
-        let Ok(file) = dir.write(&data, ext) else {
+        let written = dir.write(&data, first_ext);
+        drop(data);
+        let Ok(mut file) = written else {
             report.mark_incomplete(&format!("{shown}: nested member could not be written for scanning"));
             continue;
         };
-        drop(data);
+        // 종류는 임시 파일의 구조로 정한다. 확장자를 바꿀 뿐 내용은 그대로다.
+        let final_ext = match kind {
+            Kind::Zip => Some(zip_extension(&file)),
+            Kind::Ole => ole_extension(&file),
+            Kind::Pdf | Kind::Rtf => Some(first_ext),
+        };
+        let Some(final_ext) = final_ext else {
+            let _ = fs::remove_file(&file);
+            continue;
+        };
+        if kind == Kind::Ole && with_state(|s| s.depth >= MAX_DEPTH) == Some(true) {
+            let _ = fs::remove_file(&file);
+            if !depth_noted {
+                depth_noted = true;
+                report.mark_incomplete(&format!("{shown}: recursion depth limit ({MAX_DEPTH}) reached; nested content below was not scanned"));
+            }
+            continue;
+        }
+        if kind == Kind::Ole && with_state(|s| if s.files_left == 0 { false } else { s.files_left -= 1; true }) != Some(true) {
+            let _ = fs::remove_file(&file);
+            report.mark_incomplete(&format!("{shown}: recursion file limit ({MAX_FILES}) reached; the remaining members were not scanned"));
+            break;
+        }
+        if final_ext != first_ext {
+            let renamed = file.with_extension(final_ext);
+            if fs::rename(&file, &renamed).is_ok() {
+                file = renamed;
+            }
+        }
+        // 안쪽 파일에는 남은 바이트 예산을 `--max-total-mb`로 넘긴다.
+        let remaining_mb = with_state(|s| s.bytes_left / (1024 * 1024)).unwrap_or(0).max(1);
+        let nested_opts = Options { only: Vec::new(), max_total_mb: remaining_mb.min(opts.max_total_mb), ..opts.clone() };
         with_state(|s| s.depth += 1);
         let inner = scan_file(&file, &nested_opts);
         with_state(|s| s.depth -= 1);
