@@ -4,6 +4,7 @@
 //! 임시 파일 이름에 멤버 이름을 쓰지 않고, 임시 디렉터리는 소유자만 접근하며 `Drop`으로 지운다.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -12,7 +13,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use corpus_common::reader::open_zip;
 use ole_reader::{Limits as OleLimits, OleFile};
-use scan_common::FileReport;
+use scan_common::{Category, FileReport, Severity};
 use scan_common::sniff::{Sniffed, sniff};
 use scan_common::text::sanitize_display;
 
@@ -122,28 +123,33 @@ enum Kind {
     Ole,
 }
 
-/// 임시 파일의 ZIP이 어떤 문서 패키지인지 멤버 이름 구조로 가려 확장자를 돌려준다. 멤버 이름(바깥 ZIP의 이름)은 쓰지 않는다.
-/// 확인 순서: DOCX(`word/document.xml`), HWPX(`Contents/content.hpf`), EPUB(`META-INF/container.xml`; HWPX도 갖고 있어 뒤에 둔다), 그 밖은 `zip`.
-fn zip_extension(file: &Path) -> &'static str {
-    let Some(zip) = open_zip(file) else { return "zip" };
-    let (mut docx, mut hwpx, mut epub) = (false, false, false);
+/// 임시 파일의 ZIP이 어떤 문서 패키지인지 멤버 이름 구조로 가려 맞는 확장자를 모두 돌려준다. 멤버 이름(바깥 ZIP의 이름)은 쓰지 않는다.
+/// 표지: DOCX(`word/document.xml`), HWPX(`Contents/content.hpf`), EPUB(`META-INF/container.xml`과 `mimetype`; HWPX도 `container.xml`을 갖는다).
+/// 둘 이상 맞으면 한쪽 분석기만으로는 다른 쪽 지표가 가려지므로 모두 돌려주고, 하나도 안 맞으면 `zip`이다.
+fn zip_extensions(file: &Path) -> Vec<&'static str> {
+    let Some(zip) = open_zip(file) else { return vec!["zip"] };
+    let (mut docx, mut hwpx, mut container, mut mimetype) = (false, false, false, false);
     for name in zip.file_names().take(MAX_ENTRIES).flatten() {
         match name.as_ref() {
             "word/document.xml" => docx = true,
             "Contents/content.hpf" => hwpx = true,
-            "META-INF/container.xml" => epub = true,
+            "META-INF/container.xml" => container = true,
+            "mimetype" => mimetype = true,
             _ => {}
         }
     }
-    if docx {
-        "docx"
-    } else if hwpx {
-        "hwpx"
-    } else if epub {
-        "epub"
-    } else {
-        "zip"
+    // HWPX는 `container.xml`과 `mimetype`을 모두 갖지만 EPUB이 아니다. HWPX 표지가 없을 때만 EPUB으로 본다.
+    let epub = container && mimetype && !hwpx;
+    let mut found: Vec<&'static str> = [(docx, "docx"), (hwpx, "hwpx"), (epub, "epub")].into_iter().filter(|(on, _)| *on).map(|(_, e)| e).collect();
+    if found.is_empty() {
+        found.push("zip");
     }
+    found
+}
+
+/// 임시 파일의 현재 확장자.
+fn first_ext_current(file: &Path) -> String {
+    file.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 /// 임시 파일의 OLE가 검사 대상 문서인지 스트림 구조로 가려 확장자를 돌려준다. `FileHeader`는 HWP, `WordDocument`·`EncryptedPackage`는 Word·암호화 OOXML이다.
@@ -257,15 +263,15 @@ pub fn scan_zip_members(path: &Path, opts: &Options, report: &mut FileReport) {
             continue;
         };
         // 종류는 임시 파일의 구조로 정한다. 확장자를 바꿀 뿐 내용은 그대로다.
-        let final_ext = match kind {
-            Kind::Zip => Some(zip_extension(&file)),
-            Kind::Ole => ole_extension(&file),
-            Kind::Pdf | Kind::Rtf => Some(first_ext),
+        let final_exts: Vec<&'static str> = match kind {
+            Kind::Zip => zip_extensions(&file),
+            Kind::Ole => ole_extension(&file).into_iter().collect(),
+            Kind::Pdf | Kind::Rtf => vec![first_ext],
         };
-        let Some(final_ext) = final_ext else {
+        if final_exts.is_empty() {
             let _ = fs::remove_file(&file);
             continue;
-        };
+        }
         if kind == Kind::Ole && with_state(|s| s.depth >= MAX_DEPTH) == Some(true) {
             let _ = fs::remove_file(&file);
             if !depth_noted {
@@ -279,30 +285,43 @@ pub fn scan_zip_members(path: &Path, opts: &Options, report: &mut FileReport) {
             report.mark_incomplete(&format!("{shown}: recursion file limit ({MAX_FILES}) reached; the remaining members were not scanned"));
             break;
         }
-        if final_ext != first_ext {
-            let renamed = file.with_extension(final_ext);
-            if fs::rename(&file, &renamed).is_ok() {
-                file = renamed;
-            }
+        if final_exts.len() > 1 {
+            report.push(Category::Security, Severity::Medium, "PACKAGE_POLYGLOT", &shown, &format!("member matches several document package formats: {}", final_exts.join(", ")));
         }
         // 안쪽 파일에는 남은 바이트 예산을 `--max-total-mb`로 넘긴다.
         let remaining_mb = with_state(|s| s.bytes_left / (1024 * 1024)).unwrap_or(0).max(1);
         let nested_opts = Options { only: Vec::new(), max_total_mb: remaining_mb.min(opts.max_total_mb), ..opts.clone() };
-        with_state(|s| s.depth += 1);
-        let inner = scan_file(&file, &nested_opts);
-        with_state(|s| s.depth -= 1);
-        let _ = fs::remove_file(&file);
-        for f in inner.findings {
-            if merged >= MAX_MERGED_FINDINGS {
-                report.mark_incomplete(&format!("more than {MAX_MERGED_FINDINGS} nested findings; the rest were not listed"));
-                break;
+        // 맞는 분석기마다 한 번씩 본다. 같은 지표가 두 번 합쳐지지 않게 (코드, 위치, 설명)으로 거른다.
+        let mut seen: HashSet<(String, String, String)> = HashSet::new();
+        for ext in final_exts {
+            if ext != first_ext_current(&file) {
+                let renamed = file.with_extension(ext);
+                if fs::rename(&file, &renamed).is_ok() {
+                    file = renamed;
+                }
             }
-            merged += 1;
-            let location = if f.location.is_empty() { shown.clone() } else { format!("{shown}!{}", f.location) };
-            report.push(f.category, f.severity, &f.code, &location, &f.detail);
+            with_state(|s| s.depth += 1);
+            let inner = scan_file(&file, &nested_opts);
+            with_state(|s| s.depth -= 1);
+            for f in inner.findings {
+                if !seen.insert((f.code.clone(), f.location.clone(), f.detail.clone())) {
+                    continue;
+                }
+                if merged >= MAX_MERGED_FINDINGS {
+                    report.mark_incomplete(&format!("more than {MAX_MERGED_FINDINGS} nested findings; the rest were not listed"));
+                    break;
+                }
+                merged += 1;
+                let location = if f.location.is_empty() { shown.clone() } else { format!("{shown}!{}", f.location) };
+                report.push(f.category, f.severity, &f.code, &location, &f.detail);
+            }
+            for reason in inner.reasons {
+                let note = format!("{shown}: {reason}");
+                if !report.reasons.contains(&note) {
+                    report.mark_incomplete(&note);
+                }
+            }
         }
-        for reason in inner.reasons {
-            report.mark_incomplete(&format!("{shown}: {reason}"));
-        }
+        let _ = fs::remove_file(&file);
     }
 }
