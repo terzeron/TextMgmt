@@ -60,11 +60,53 @@ pub fn inspect_structure(path: &Path, limits: &Limits, report: &mut FileReport) 
 /// UTF-32는 변환하지 못하므로 미완료로 남긴다.
 pub(super) fn decode_xml(data: &[u8], name: &str, report: &mut FileReport) -> Option<String> {
     let (text, enc) = decode_text(data);
-    if enc == TextEnc::Utf32 {
-        report.mark_incomplete(&format!("{}: UTF-32 content cannot be inspected", preview(name)));
-        return None;
+    match enc {
+        TextEnc::Utf32 => {
+            report.mark_incomplete(&format!("{}: UTF-32 content cannot be inspected", preview(name)));
+            return None;
+        }
+        // UTF-8이 아닌 바이트: 대체 문자로 읽어 검사는 계속하지만 파서마다 다르게 읽을 수 있어 완전하다고 하지 않는다.
+        TextEnc::Invalid => report.mark_incomplete(&format!("{}: non-UTF-8 content cannot be reliably inspected", preview(name))),
+        _ => {
+            // 선언이 UTF-8·UTF-16·ASCII가 아니면 XML 파서는 다른 인코딩으로 읽는다. 바이트가 유효한 UTF-8이어도 읽는 결과가 다르다.
+            if let Some(declared) = declared_encoding(&text)
+                && !matches!(declared.as_str(), "utf-8" | "utf8" | "us-ascii" | "ascii" | "utf-16" | "utf16" | "utf-16le" | "utf-16be")
+            {
+                report.mark_incomplete(&format!("{}: declared encoding {} cannot be reliably inspected", preview(name), preview(&declared)));
+            }
+        }
     }
     Some(text.strip_prefix('\u{feff}').unwrap_or(&text).to_string())
+}
+
+static XML_DECL_ENCODING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?is)^\s*(?:\x{feff})?<\?xml[^>]*?\bencoding\s*=\s*["']([^"']+)["']"#).unwrap());
+
+/// XML 선언의 `encoding` 값(소문자). 선언이 없으면 `None`이다.
+fn declared_encoding(text: &str) -> Option<String> {
+    let head: String = text.chars().take(256).collect();
+    XML_DECL_ENCODING.captures(&head).map(|c| c[1].trim().to_ascii_lowercase())
+}
+
+/// 이름이 `.xml`·`.rels`·`.hpf`가 아니어도 내용이 XML처럼 보이는가. OPC는 부분의 종류를 확장자가 아니라 content type으로 정하므로
+/// 확장자만 믿으면 `.dat`나 확장자 없는 이름에 숨긴 XML을 놓친다. 앞 256바이트만 본다: UTF-8 BOM과 공백 뒤 `<`,
+/// UTF-16 BOM, BOM 없는 UTF-16의 `3C 00`·`00 3C`(XML 부록 F).
+pub(super) fn looks_like_xml(prefix: &[u8]) -> bool {
+    if prefix.starts_with(&[0xFF, 0xFE]) || prefix.starts_with(&[0xFE, 0xFF]) || prefix.starts_with(&[0x3C, 0x00]) || prefix.starts_with(&[0x00, 0x3C]) {
+        return true;
+    }
+    let body = prefix.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(prefix);
+    body.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<')
+}
+
+/// 검사할 XML 부분인가: 확장자가 XML 계열이거나 내용이 XML처럼 보인다.
+pub(super) fn is_xml_member(zip: &mut corpus_common::reader::Zip, index: usize, name: &str) -> bool {
+    if is_xml_part(name) {
+        return true;
+    }
+    if name.ends_with('/') {
+        return false;
+    }
+    read_limited(zip, index, 256).is_ok_and(|prefix| looks_like_xml(&prefix))
 }
 
 /// 보안 검사용으로 XML 부분 하나를 읽어 디코딩한다. 읽기는 남은 예산 +1바이트에서 멈추고, 예산을 넘으면 미완료로 남긴다.
@@ -175,8 +217,7 @@ fn is_unc_or_file(target: &str) -> bool {
 }
 
 /// 관계 파일(`.rels`)의 외부 참조를 본다. 일반 하이퍼링크는 지표를 내지 않는다.
-fn check_relationships(text: &str, name: &str, report: &mut FileReport) {
-    let Some(doc) = parse_or_note(text, name, report) else { return };
+fn check_relationships(doc: &roxmltree::Document, name: &str, report: &mut FileReport) {
     let shown = preview(name);
     for rel in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "Relationship") {
         let external = rel.attribute("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
@@ -213,6 +254,16 @@ fn classify_field(instr: &str, name: &str, report: &mut FileReport) {
     }
 }
 
+/// 중첩 필드 추적 깊이와 이어 붙이는 지시문 길이의 상한. 깊게 중첩된 필드가 안쪽 텍스트를 바깥마다 복사하면 제곱 시간이 든다.
+const MAX_FIELD_DEPTH: usize = 32;
+const MAX_FIELD_TEXT: usize = 4096;
+
+/// `dst`에 `src`를 `MAX_FIELD_TEXT`까지만 이어 붙인다(키워드와 URL을 읽는 데는 앞부분이면 충분하다).
+fn push_capped(dst: &mut String, src: &str) {
+    let room = MAX_FIELD_TEXT.saturating_sub(dst.chars().count());
+    dst.extend(src.chars().take(room));
+}
+
 /// 열려 있는 필드 하나. 지시문은 여러 run에 나뉘고 다른 필드를 품을 수 있다.
 #[derive(Default)]
 struct OpenField {
@@ -237,13 +288,16 @@ fn finish_field(field: OpenField, name: &str, report: &mut FileReport) {
 }
 
 /// 본문의 필드 지시문을 본다. 한 필드의 지시문은 여러 run에 나뉠 수 있어(`DDE` + `AUTO ...`) begin부터 end까지 이어 붙여 읽는다.
-fn check_fields(text: &str, name: &str, report: &mut FileReport) {
-    let Some(doc) = parse_or_note(text, name, report) else { return };
+fn check_fields(doc: &roxmltree::Document, name: &str, report: &mut FileReport) {
     let mut stack: Vec<OpenField> = Vec::new();
     for node in doc.descendants().filter(|n| n.is_element()) {
         match node.tag_name().name() {
             "fldChar" => match node.attributes().find(|a| a.name() == "fldCharType").map(|a| a.value()) {
                 Some("begin") => {
+                    if stack.len() >= MAX_FIELD_DEPTH {
+                        report.mark_incomplete(&format!("{}: field nesting deeper than {MAX_FIELD_DEPTH}; the remaining fields were not analyzed", preview(name)));
+                        break;
+                    }
                     if let Some(parent) = stack.last_mut() {
                         parent.nested = true;
                         parent.nested_at_keyword |= parent.own.trim().is_empty();
@@ -253,7 +307,7 @@ fn check_fields(text: &str, name: &str, report: &mut FileReport) {
                 Some("end") => {
                     if let Some(field) = stack.pop() {
                         if let Some(parent) = stack.last_mut() {
-                            parent.all.push_str(&field.all);
+                            push_capped(&mut parent.all, &field.all);
                         }
                         finish_field(field, name, report);
                     }
@@ -263,8 +317,8 @@ fn check_fields(text: &str, name: &str, report: &mut FileReport) {
             "instrText" => {
                 if let Some(top) = stack.last_mut() {
                     let t = node.text().unwrap_or("");
-                    top.own.push_str(t);
-                    top.all.push_str(t);
+                    push_capped(&mut top.own, t);
+                    push_capped(&mut top.all, t);
                 }
             }
             "fldSimple" => {
@@ -288,7 +342,7 @@ pub fn inspect_security(path: &Path, limits: &Limits, macro_enabled: bool, repor
     let mut spent = 0u64;
     let mut scanned = 0usize;
     for (index, name) in names.iter().enumerate() {
-        if !is_xml_part(name) {
+        if !is_xml_member(&mut zip, index, name) {
             continue;
         }
         scanned += 1;
@@ -298,11 +352,13 @@ pub fn inspect_security(path: &Path, limits: &Limits, macro_enabled: bool, repor
         }
         let Some(text) = read_xml_part(&mut zip, index, name, limits, &mut spent, report) else { continue };
         check_xml_attacks(&text, name, report);
-        if name.to_lowercase().ends_with(".rels") {
-            check_relationships(&text, name, report);
-        } else if text.contains("fldChar") || text.contains("fldSimple") {
-            // 필드가 있는 부분만 파싱한다. 본문이 `word/document.xml`이 아닌 곳에 있어도 찾도록 모든 XML 부분을 후보로 본다.
-            check_fields(&text, name, report);
+        // 모든 XML 부분을 파싱하고, 파싱하지 못하면 미완료로 남긴다(필드 표지가 없어도 건너뛰지 않는다).
+        let Some(doc) = parse_or_note(&text, name, report) else { continue };
+        // 이름이 `.rels`가 아니어도 루트가 `Relationships`면 관계 파일로 읽는다(이름으로 숨긴 경우).
+        if name.to_lowercase().ends_with(".rels") || doc.root_element().tag_name().name() == "Relationships" {
+            check_relationships(&doc, name, report);
+        } else {
+            check_fields(&doc, name, report);
         }
     }
 }

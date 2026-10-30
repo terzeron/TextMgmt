@@ -8,7 +8,7 @@ use corpus_common::reader::open_zip;
 use corpus_common::util::unquote;
 use scan_common::{Category, FileReport, Severity};
 
-use super::ooxml::{check_xml_attacks, is_xml_part, parse, preview, push_once, read_xml_part};
+use super::ooxml::{check_xml_attacks, is_xml_member, parse, preview, push_once, read_xml_part};
 use crate::epub::security::{Limits, read_limited};
 
 const MANIFEST: &str = "Contents/content.hpf";
@@ -74,7 +74,7 @@ pub fn inspect(path: &Path, limits: &Limits, report: &mut FileReport) {
     let mut scanned = 0usize;
     for (index, name) in names.iter().enumerate() {
         // 이름의 대소문자와 디렉터리를 가리지 않고 모든 XML 부분을 본다(OPC 부분 이름은 대소문자를 가리지 않는다).
-        if !is_xml_part(name) {
+        if !is_xml_member(&mut zip, index, name) {
             continue;
         }
         scanned += 1;

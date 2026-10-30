@@ -170,3 +170,10 @@ fn xml_parts_are_inspected_whatever_their_case() {
     let r = hwpx(&[], &[("CONTENTS/SECTION1.XML", xxe)]);
     assert_eq!(finding(&r, "XXE_ENTITY").severity, Severity::Critical);
 }
+
+#[test]
+fn xml_hidden_in_a_part_with_another_extension_is_inspected_in_hwpx_too() {
+    let xxe = br#"<?xml version="1.0"?><!DOCTYPE d [<!ENTITY x SYSTEM "file:///etc/passwd">]><hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">&x;</hs:sec>"#;
+    let r = hwpx(&[], &[("Contents/section9.bin", xxe)]);
+    assert_eq!(finding(&r, "XXE_ENTITY").severity, Severity::Critical);
+}

