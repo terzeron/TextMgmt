@@ -16,9 +16,14 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
-pub use detect_mojibake::{DEFAULT_LIBRARY_ROOT, VERDICT_CORRUPTED};
-// 천 단위 쉼표 출력은 corpus_common에 있고 detect_mojibake가 다시 내보낸다. 같은 코드를 복사해 두지 않는다.
-pub(crate) use detect_mojibake::thousands;
+pub use corpus_common::DEFAULT_LIBRARY_ROOT;
+// 천 단위 쉼표 출력은 corpus_common에 있다. 같은 코드를 복사해 두지 않는다.
+pub(crate) use corpus_common::thousands;
+
+/// 격리 대상으로 고른 항목에 붙이는 판정 값. 옛 인코딩 검사 도구의 `VERDICT_CORRUPTED`와 같은 문자열이다.
+pub const VERDICT_CORRUPTED: &str = "corrupted";
+/// bookdoctor 리포트에서 인코딩 손상을 뜻하는 지표 코드. 다른 코드(NOT_UTF8, FORMAT_MISMATCH 등)는 격리하지 않는다.
+pub const MOJIBAKE_CODE: &str = "MOJIBAKE";
 
 pub const BROKEN_DIR_NAME: &str = "0_broken";
 
@@ -26,6 +31,11 @@ pub const BROKEN_DIR_NAME: &str = "0_broken";
 pub type Rec = Map<String, Value>;
 
 /// 로그 한 줄을 받는 쪽. 메시지 앞에 `INFO`/`WARNING` 수준이 붙어 있다.
+/// 터미널에 찍을 문자열에서 제어문자(ESC 포함)와 방향·서식 문자를 지운다. 경로는 파일을 열거나 옮길 때만 원문을 쓴다.
+fn show(text: &str) -> String {
+    scan_common::text::sanitize_display(text, usize::MAX, None)
+}
+
 pub type Log<'a> = &'a dyn Fn(&str);
 
 /// 파일 한 건을 옮기는 함수. 테스트가 OS 오류를 주입하는 데 쓴다.
@@ -112,28 +122,56 @@ pub fn fix_extension_with(path: &Path, dry_run: bool, unmangle: &dyn Fn(&[u8]) -
     Some(result)
 }
 
-/// 검사 리포트에서 손상 판정 항목만 뽑는다. scan 리포트와 recheck 목록을 모두 받는다.
+/// bookdoctor `--report` 리포트에서 인코딩 손상(`MOJIBAKE`) 항목만 뽑는다.
+///
+/// `files[]` 중 `findings`에 `code == "MOJIBAKE"`가 있는 항목만 `Rec`(path, likeness, verdict)로 바꾼다.
+/// likeness가 없거나 null이면 키를 넣지 않는다(옛 코드도 없는 키는 그대로 두었다).
+/// 리포트는 `path` 원문을 그대로 담는다. 화면에 찍는 출력만 제어·방향 문자를 정리한다(`show`).
+/// 옛 인코딩 검사 도구 형식(`{"corrupted": [...]}`)은 조용히 빈 결과가 되지 않도록 오류로 돌려준다.
+///
+/// `format`이 `pdf`인 항목은 건너뛴다. `bookdoctor --pdf-text`는 PDF에도 `MOJIBAKE`를 내지만, 옛 격리 대상은 txt와 epub뿐이었고
+/// 설계서 12-1이 "동작은 지금과 같다"고 정했다. PDF 텍스트층의 손상 판정을 근거로 파일을 옮기지 않는다.
 pub fn load_corrupted(report_path: &Path) -> io::Result<Vec<Rec>> {
+    load_corrupted_logged(report_path, &|_| {})
+}
+
+/// `load_corrupted`와 같고 건너뛴 PDF 항목을 `log`로 알린다.
+pub fn load_corrupted_logged(report_path: &Path, log: Log) -> io::Result<Vec<Rec>> {
     let data: Value = serde_json::from_str(&fs::read_to_string(report_path)?).map_err(io::Error::other)?;
-    let records = match data {
-        Value::Object(mut o) => o.remove("corrupted"),
-        other => Some(other),
+    let invalid = |msg: &str| io::Error::new(io::ErrorKind::InvalidData, msg.to_owned());
+    let Value::Object(mut o) = data else {
+        return Err(invalid("리포트가 객체가 아니다. `bookdoctor --report`로 다시 만들어라"));
     };
-    let Some(Value::Array(items)) = records else {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "리포트에서 손상 목록을 찾지 못했다"));
+    let Some(files) = o.remove("files") else {
+        let hint = if o.contains_key("corrupted") { "옛 인코딩 검사 도구 리포트 형식이다" } else { "리포트에 files 목록이 없다" };
+        return Err(invalid(&format!("{hint}. `bookdoctor --report`로 리포트를 다시 만들어라")));
     };
-    items
-        .into_iter()
-        .map(|v| match v {
-            Value::Object(o) => Ok(o),
-            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "손상 목록 항목이 객체가 아니다")),
-        })
-        .filter_map(|item| match item {
-            Ok(r) if r.get("verdict").and_then(Value::as_str).unwrap_or(VERDICT_CORRUPTED) == VERDICT_CORRUPTED => Some(Ok(r)),
-            Ok(_) => None,
-            Err(e) => Some(Err(e)),
-        })
-        .collect()
+    let Value::Array(items) = files else {
+        return Err(invalid("리포트의 files가 배열이 아니다. `bookdoctor --report`로 다시 만들어라"));
+    };
+    let mut found = Vec::new();
+    for item in items {
+        let Value::Object(file) = item else { return Err(invalid("files 항목이 객체가 아니다")) };
+        let is_mojibake = file.get("findings").and_then(Value::as_array).is_some_and(|fs| fs.iter().any(|f| f.get("code").and_then(Value::as_str) == Some(MOJIBAKE_CODE)));
+        if !is_mojibake {
+            continue;
+        }
+        if file.get("format").and_then(Value::as_str) == Some("pdf") {
+            let shown = file.get("path").and_then(Value::as_str).unwrap_or("?");
+            log(&format!("INFO PDF 인코딩 손상 판정은 격리 대상이 아니라 건너뛴다: {}", show(shown)));
+            continue;
+        }
+        let mut rec = Rec::new();
+        if let Some(path) = file.get("path") {
+            rec.insert("path".into(), path.clone());
+        }
+        if let Some(likeness) = file.get("likeness").filter(|l| l.is_number()) {
+            rec.insert("likeness".into(), likeness.clone());
+        }
+        rec.insert("verdict".into(), json!(VERDICT_CORRUPTED));
+        found.push(rec);
+    }
+    Ok(found)
 }
 
 fn split_name(p: &Path) -> (String, String) {
@@ -150,7 +188,7 @@ pub fn plan_moves(records: &[Rec], library_root: &Path, log: Log) -> Vec<Rec> {
     for rec in records {
         let Some(src) = rec.get("path").and_then(Value::as_str).map(PathBuf::from) else { continue };
         let Ok(rel) = src.strip_prefix(library_root) else {
-            log(&format!("WARNING 라이브러리 밖 경로는 건너뛴다: {}", src.display()));
+            log(&format!("WARNING 라이브러리 밖 경로는 건너뛴다: {}", show(&src.to_string_lossy())));
             continue;
         };
         match rel.components().next() {
@@ -174,7 +212,12 @@ pub fn plan_moves(records: &[Rec], library_root: &Path, log: Log) -> Vec<Rec> {
         mv.insert("src".into(), json!(src.to_string_lossy()));
         mv.insert("dst".into(), json!(candidate.to_string_lossy()));
         mv.insert("likeness".into(), rec.get("likeness").cloned().unwrap_or(Value::Null));
-        mv.insert("size".into(), rec.get("size").cloned().unwrap_or(json!(0)));
+        // bookdoctor 리포트에는 size가 없다. 숫자 size가 없으면 원본을 직접 읽는다(apply_moves도 exists()로 링크를 따라간다).
+        let size = match rec.get("size") {
+            Some(v) if v.is_number() => v.clone(),
+            _ => json!(fs::metadata(&src).map(|m| m.len()).unwrap_or(0)),
+        };
+        mv.insert("size".into(), size);
         moves.push(mv);
     }
     moves
@@ -246,7 +289,7 @@ pub fn apply_moves_with(moves: &[Rec], manifest_path: &Path, dry_run: bool, log:
         match moved {
             Ok(()) => done.push(mv.clone()),
             Err(e) => {
-                log(&format!("WARNING 이동 실패: {} -> {}: {e}", src.display(), dst.display()));
+                log(&format!("WARNING 이동 실패: {} -> {}: {}", show(&src.to_string_lossy()), show(&dst.to_string_lossy()), show(&e.to_string())));
                 failed.push(with_error(mv, e.to_string()));
             }
         }
@@ -261,14 +304,14 @@ pub fn apply_moves_with(moves: &[Rec], manifest_path: &Path, dry_run: bool, log:
                     prev.extend(done);
                     manifest.moved = prev;
                 }
-                Err(e) => log(&format!("WARNING 기존 매니페스트를 읽지 못해 새로 쓴다: {e}")),
+                Err(e) => log(&format!("WARNING 기존 매니페스트를 읽지 못해 새로 쓴다: {}", show(&e.to_string()))),
             }
         }
         if let Some(dir) = manifest_path.parent() {
             let _ = fs::create_dir_all(dir);
         }
         if let Err(e) = write_json(manifest_path, &manifest) {
-            log(&format!("ERROR 매니페스트를 쓰지 못했다: {e}"));
+            log(&format!("ERROR 매니페스트를 쓰지 못했다: {}", show(&e.to_string())));
         }
     }
     manifest
@@ -294,7 +337,7 @@ pub fn undo_moves(manifest_path: &Path, dry_run: bool) -> io::Result<UndoResult>
 /// 매니페스트에 적힌 이동을 되돌린다.
 pub fn undo_moves_with(manifest_path: &Path, dry_run: bool, mover: Mover) -> io::Result<UndoResult> {
     if !manifest_path.exists() {
-        return Err(io::Error::new(io::ErrorKind::NotFound, format!("매니페스트가 없다: {}", manifest_path.display())));
+        return Err(io::Error::new(io::ErrorKind::NotFound, format!("매니페스트가 없다: {}", show(&manifest_path.to_string_lossy()))));
     }
     let mut manifest: Value = serde_json::from_str(&fs::read_to_string(manifest_path)?).map_err(io::Error::other)?;
     let moved = read_previous_moved(manifest_path)?;
@@ -346,7 +389,7 @@ pub fn summarize(moves: &[Rec], out: &mut dyn Write) -> io::Result<()> {
     let mut rows: Vec<(&String, &usize)> = by_cat.iter().collect();
     rows.sort_by(|a, b| b.1.cmp(a.1));
     for (cat, n) in rows {
-        writeln!(out, "  {cat:<26}{n:>6}")?;
+        writeln!(out, "  {:<26}{n:>6}", show(cat))?;
     }
     Ok(())
 }

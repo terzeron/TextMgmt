@@ -1,4 +1,4 @@
-//! corpus_common의 경로·목록 도구 테스트 (detect_mojibake 테스트에서 옮겨 왔다).
+//! corpus_common의 경로·목록 도구 테스트 (옛 인코딩 검사 도구 테스트에서 옮겨 왔다).
 
 use std::fs;
 use std::path::Path;

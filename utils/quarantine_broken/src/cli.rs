@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::{BROKEN_DIR_NAME, DEFAULT_LIBRARY_ROOT, FixResult, Log, Rec, apply_moves, fix_extension, load_corrupted, plan_moves, summarize, undo_moves};
+use crate::{BROKEN_DIR_NAME, DEFAULT_LIBRARY_ROOT, FixResult, Log, Rec, apply_moves, fix_extension, load_corrupted_logged, plan_moves, summarize, undo_moves};
 
 const USAGE: &str = "usage: quarantine_broken {plan,move,undo,fix-ext} [--report REPORT] [--library-root LIBRARY_ROOT] [--manifest MANIFEST] [--limit LIMIT] [--exclude EXCLUDE] [--dry-run]";
 
@@ -63,7 +63,12 @@ fn parse(argv: &[String]) -> Result<Option<Args>, String> {
 }
 
 fn name_of(path: &str, max_chars: usize) -> String {
-    Path::new(path).file_name().map(|n| n.to_string_lossy().chars().take(max_chars).collect()).unwrap_or_default()
+    Path::new(path).file_name().map(|n| scan_common::text::sanitize_display(&n.to_string_lossy(), max_chars, None)).unwrap_or_default()
+}
+
+/// 터미널에 찍는 임의 문자열(오류 메시지 등). 제어·방향 문자를 지운다.
+fn shown(text: &str) -> String {
+    scan_common::text::sanitize_display(text, usize::MAX, None)
 }
 
 fn field(rec: &Rec, key: &str) -> String {
@@ -91,28 +96,28 @@ pub fn run(argv: &[String], repo_root: &Path, out: &mut dyn Write, log: Log) -> 
             return 0;
         }
         Err(msg) => {
-            eprintln!("{USAGE}\nquarantine_broken: error: {msg}");
+            eprintln!("{USAGE}\nquarantine_broken: error: {}", shown(&msg));
             return 2;
         }
     };
     match execute(&args, repo_root, out, log) {
         Ok(code) => code,
         Err(e) => {
-            log(&format!("ERROR {e}"));
+            log(&format!("ERROR {}", shown(&e.to_string())));
             1
         }
     }
 }
 
 fn execute(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io::Result<i32> {
-    let report = args.report.clone().unwrap_or_else(|| repo_root.join("tmp/mojibake_recheck.json"));
+    let report = args.report.clone().unwrap_or_else(|| repo_root.join("tmp/bookdoctor_report.json"));
     let manifest = args.manifest.clone().unwrap_or_else(|| repo_root.join("tmp/quarantine_manifest.json"));
 
     match args.command.as_str() {
         "fix-ext" => {
             // (원본, 교정 결과 파일, 전, 후)와 (원본, 오류)로 나눠 모은다.
             let (mut fixed, mut skipped) = (Vec::new(), Vec::new());
-            for rec in load_corrupted(&report)? {
+            for rec in load_corrupted_logged(&report, log)? {
                 match fix_extension(Path::new(&field(&rec, "path")), args.dry_run) {
                     None => {}
                     Some(FixResult::Error { path, error }) => skipped.push((path, error)),
@@ -124,7 +129,7 @@ fn execute(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io::
                 writeln!(out, "  {}\n    -> {}  ({} -> {} 바이트)", name_of(path, 48), name_of(restored_to, 48), crate::thousands(*before), crate::thousands(*after))?;
             }
             for (path, error) in &skipped {
-                writeln!(out, "  건너뜀: {} - {error}", name_of(path, 44))?;
+                writeln!(out, "  건너뜀: {} - {}", name_of(path, 44), shown(error))?;
             }
             Ok(0)
         }
@@ -132,12 +137,12 @@ fn execute(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io::
             let res = undo_moves(&manifest, args.dry_run)?;
             writeln!(out, "원위치 {}건, 실패 {}건", crate::thousands(res.restored.len()), crate::thousands(res.failed.len()))?;
             for f in res.failed.iter().take(10) {
-                writeln!(out, "  실패: {} - {}", name_of(&field(f, "dst"), 50), field(f, "error"))?;
+                writeln!(out, "  실패: {} - {}", name_of(&field(f, "dst"), 50), shown(&field(f, "error")))?;
             }
             Ok(0)
         }
         _ => {
-            let mut records = load_corrupted(&report)?;
+            let mut records = load_corrupted_logged(&report, log)?;
             if !args.exclude.is_empty() {
                 let before = records.len();
                 records.retain(|r| {
@@ -164,10 +169,10 @@ fn execute(args: &Args, repo_root: &Path, out: &mut dyn Write, log: Log) -> io::
             let result = apply_moves(&moves, &manifest, args.dry_run, log);
             writeln!(out, "\n{} {}건, 실패 {}건", if args.dry_run { "이동 예정" } else { "이동 완료" }, crate::thousands(result.moved.len()), crate::thousands(result.failed.len()))?;
             for f in result.failed.iter().take(10) {
-                writeln!(out, "  실패: {} - {}", name_of(&field(f, "src"), 50), field(f, "error"))?;
+                writeln!(out, "  실패: {} - {}", name_of(&field(f, "src"), 50), shown(&field(f, "error")))?;
             }
             if !args.dry_run && !result.moved.is_empty() {
-                writeln!(out, "매니페스트: {}", manifest.display())?;
+                writeln!(out, "매니페스트: {}", shown(&manifest.to_string_lossy()))?;
                 writeln!(out, "되돌리려면: quarantine_broken undo")?;
             }
             Ok(0)
@@ -181,8 +186,9 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
         out,
         "quarantine_broken - 인코딩이 손상된 문서를 {BROKEN_DIR_NAME} 디렉토리로 격리하고 되돌린다.
 
-검사 리포트(detect_mojibake의 JSON)에서 손상 판정만 골라 원래 카테고리를 하위 디렉토리로
+검사 리포트(bookdoctor `--report`의 JSON)에서 손상 판정만 골라 원래 카테고리를 하위 디렉토리로
 유지한 채 옮긴다. 판정에 오탐이 섞일 수 있어 이동은 매니페스트에 기록하고 `undo`로 복구한다.
+리포트는 경로 원문을 그대로 담고, 화면에 찍는 출력만 제어·방향 문자를 '.'으로 바꾼다.
 
 사용법:
   quarantine_broken plan    [--report PATH] [--library-root DIR] [--limit N] [--exclude TEXT ...]
@@ -197,7 +203,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   fix-ext  UTF-16LE로 읽혀 저장된 바이너리(HWP·PDF·PNG)를 원래 바이트와 확장자로 되돌린다.
 
 옵션:
-  --report PATH        검사 리포트 (기본 <repo>/tmp/mojibake_recheck.json)
+  --report PATH        검사 리포트 (기본 <repo>/tmp/bookdoctor_report.json)
   --library-root DIR   코퍼스 루트 (기본 {DEFAULT_LIBRARY_ROOT})
   --manifest PATH      이동 기록 (기본 <repo>/tmp/quarantine_manifest.json)
   --limit N            앞에서 N건만 처리한다 (0이면 전체).

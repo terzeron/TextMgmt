@@ -1,0 +1,168 @@
+[package]
+name = "bookdoctor"
+description = "EPUB·PDF·TXT 통합 진단 (보안, 결함, 렌더링 차단 검사)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "bin"
+path = "../../tests/rust/bookdoctor/bin.rs"
+
+[[test]]
+name = "cli"
+path = "../../tests/rust/bookdoctor/cli.rs"
+
+[[test]]
+name = "common_checks"
+path = "../../tests/rust/bookdoctor/common_checks.rs"
+
+[[test]]
+name = "exe"
+path = "../../tests/rust/bookdoctor/exe.rs"
+
+[[test]]
+name = "hwpx"
+path = "../../tests/rust/bookdoctor/hwpx.rs"
+
+[[test]]
+name = "doc"
+path = "../../tests/rust/bookdoctor/doc.rs"
+
+[[test]]
+name = "ooxml_security"
+path = "../../tests/rust/bookdoctor/ooxml_security.rs"
+
+[[test]]
+name = "ooxml_structure"
+path = "../../tests/rust/bookdoctor/ooxml_structure.rs"
+
+[[test]]
+name = "zip_fast"
+path = "../../tests/rust/bookdoctor/zip_fast.rs"
+
+[[test]]
+name = "zipnames"
+path = "../../tests/rust/bookdoctor/zipnames.rs"
+
+[[test]]
+name = "epub_perf"
+path = "../../tests/rust/bookdoctor/epub_perf.rs"
+
+[[test]]
+name = "prefetch"
+path = "../../tests/rust/bookdoctor/prefetch.rs"
+
+[[test]]
+name = "epub_gaps"
+path = "../../tests/rust/bookdoctor/epub_gaps.rs"
+
+[[test]]
+name = "epub_render"
+path = "../../tests/rust/bookdoctor/epub_render.rs"
+
+[[test]]
+name = "epub_security_hardening"
+path = "../../tests/rust/bookdoctor/epub_security_hardening.rs"
+
+[[test]]
+name = "epub_structure"
+path = "../../tests/rust/bookdoctor/epub_structure.rs"
+
+[[test]]
+name = "epub_security"
+path = "../../tests/rust/bookdoctor/epub_security.rs"
+
+[[test]]
+name = "mojibake"
+path = "../../tests/rust/bookdoctor/mojibake.rs"
+
+[[test]]
+name = "pdf_structure"
+path = "../../tests/rust/bookdoctor/pdf_structure.rs"
+
+[[test]]
+name = "pdf_security"
+path = "../../tests/rust/bookdoctor/pdf_security.rs"
+
+[[test]]
+name = "pdf_security_new"
+path = "../../tests/rust/bookdoctor/pdf_security_new.rs"
+
+[[test]]
+name = "entropy"
+path = "../../tests/rust/bookdoctor/entropy.rs"
+
+[[test]]
+name = "isolate"
+path = "../../tests/rust/bookdoctor/isolate.rs"
+
+[[test]]
+name = "html"
+path = "../../tests/rust/bookdoctor/html.rs"
+
+[[test]]
+name = "hwp"
+path = "../../tests/rust/bookdoctor/hwp.rs"
+
+[[test]]
+name = "rules_builtin"
+path = "../../tests/rust/bookdoctor/rules_builtin.rs"
+
+[[test]]
+name = "rules_cli"
+path = "../../tests/rust/bookdoctor/rules_cli.rs"
+
+[[test]]
+name = "rules_match"
+path = "../../tests/rust/bookdoctor/rules_match.rs"
+
+[[test]]
+name = "rules_parse"
+path = "../../tests/rust/bookdoctor/rules_parse.rs"
+
+[[test]]
+name = "recurse"
+path = "../../tests/rust/bookdoctor/recurse.rs"
+
+[[test]]
+name = "report"
+path = "../../tests/rust/bookdoctor/report.rs"
+
+[[test]]
+name = "rtf_disguise"
+path = "../../tests/rust/bookdoctor/rtf_disguise.rs"
+
+[[test]]
+name = "scan"
+path = "../../tests/rust/bookdoctor/scan.rs"
+
+[[test]]
+name = "txt"
+path = "../../tests/rust/bookdoctor/txt.rs"
+
+[[test]]
+name = "viewer"
+path = "../../tests/rust/bookdoctor/viewer.rs"
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+corpus_common = { path = "../../libs/corpus_common" }
+encoding_rs = "0.8.42"
+fancy-regex = "0.14"
+flate2 = "1"
+htmlkit = { path = "../../libs/htmlkit" }
+lopdf.workspace = true
+rayon = "1.12.0"
+regex = "1.13.1"
+roxmltree = "0.21.1"
+ole_reader = { path = "../../libs/ole_reader" }
+scan_common = { path = "../../libs/scan_common", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+sysdeps = { path = "../../libs/sysdeps" }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

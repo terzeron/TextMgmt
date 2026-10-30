@@ -378,6 +378,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "bookdoctor"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "corpus_common",
+ "encoding_rs",
+ "fancy-regex",
+ "flate2",
+ "htmlkit",
+ "lopdf",
+ "ole_reader",
+ "rayon",
+ "regex",
+ "roxmltree",
+ "scan_common",
+ "serde",
+ "serde_json",
+ "sysdeps",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
 name = "bookstore"
 version = "0.1.0"
 dependencies = [
@@ -841,24 +864,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "detect_mojibake"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "corpus_common",
- "encoding_rs",
- "indexmap 2.14.2",
- "pyfmt",
- "rayon",
- "regex",
- "roxmltree",
- "serde",
- "serde_json",
- "tempfile",
- "zip",
-]
-
-[[package]]
 name = "diesel"
 version = "2.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1041,26 +1046,6 @@ dependencies = [
  "rustversion",
  "scopeguard",
  "simdutf8",
-]
-
-[[package]]
-name = "epubscan"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "corpus_common",
- "encoding_rs",
- "fancy-regex",
- "htmlkit",
- "indexmap 2.14.2",
- "rayon",
- "regex",
- "roxmltree",
- "scan_common",
- "serde",
- "serde_json",
- "tempfile",
- "zip",
 ]
 
 [[package]]
@@ -2257,6 +2242,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ole_reader"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2333,16 +2325,6 @@ name = "parser_timeout"
 version = "0.1.0"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "pdfscan"
-version = "0.1.0"
-dependencies = [
- "lopdf",
- "scan_common",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -2553,8 +2535,9 @@ name = "quarantine_broken"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "detect_mojibake",
+ "corpus_common",
  "indexmap 2.14.2",
+ "scan_common",
  "serde",
  "serde_json",
  "tempfile",

@@ -26,14 +26,13 @@ docs/       문서
 | `parser_timeout` | 파서 시간 상한, 스레드 제한, 자식 프로세스 종료 |
 | `isbn` | 파일에서 ISBN 추출(TXT·EPUB·PDF·DJVU·HWP) |
 | `hwp3_tables`, `hwp3_parser` | HWP 3.x 텍스트 추출 |
+| `ole_reader` | OLE 복합 파일(CFB)을 관대하게 읽는 파서와 MS-OVBA 압축 해제. 손상 구조를 오류 대신 `Anomaly`로 알린다 |
 
 ## utils (도구)
 
 | crate | 용도 |
 | --- | --- |
-| `pdfscan` | PDF의 Launch·JavaScript·OpenAction·첨부 등 실행 가능 요소 정적 검사 |
-| `epubscan` | EPUB 구조 검사와 스크립트 실행 코드·위험 ZIP 구조 검사 |
-| `detect_mojibake` | 인코딩 손상 문서 탐지 |
+| `bookdoctor` | epub·pdf·txt 보안 위험·파일 결함·렌더링 불가 구조 진단 |
 | `quarantine_broken` | 손상 문서를 `0_broken`으로 격리·복구 |
 | `cluster_hybrid_genres` | 5대 장르 비율 클러스터링 |
 | `search` | ES 제목·내용 검색 점검 |

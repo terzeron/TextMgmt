@@ -12,10 +12,6 @@ on:
       - 'Cargo.lock'
       - '.cargo/**'
       - '.github/workflows/backend-ci.yml'
-      - '!utils/pdfscan/**'
-      - '!utils/epubscan/**'
-      - '!tests/rust/pdfscan/**'
-      - '!tests/rust/epubscan/**'
   push:
     branches: [develop, main]
     paths:
@@ -27,10 +23,6 @@ on:
       - 'Cargo.lock'
       - '.cargo/**'
       - '.github/workflows/backend-ci.yml'
-      - '!utils/pdfscan/**'
-      - '!utils/epubscan/**'
-      - '!tests/rust/pdfscan/**'
-      - '!tests/rust/epubscan/**'
 
 permissions:
   contents: read
@@ -49,7 +41,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      - run: cargo test --workspace --exclude pdfscan --exclude epubscan --locked -- --test-threads=1
+      - run: cargo test --workspace --locked -- --test-threads=1
       - run: cargo clippy -p backend -p loader --all-targets --locked -- -D warnings
 
   container-build:
