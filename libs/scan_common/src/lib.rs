@@ -6,7 +6,7 @@
 //! - [`stream`]: 보고서를 창 단위로 검사하고 바로 내보낸 뒤 버린다. 파일 수가 아니라 창 크기에 비례해 메모리를 쓴다.
 //! - [`workers`]: 병렬 풀, 앞에서 N건만 처리, 메모리로 제한하는 워커 수.
 //! - [`finding`]: bookdoctor의 지표·파일 보고서 모델. [`sniff`]: 매직바이트 판별. [`names`]: Windows 예약 이름.
-//! - [`args`]: 명령행 옵션 읽기. [`text`]: 사람이 읽는 출력용 문자열 정리. [`severity`]: 심각도. [`color`]: 터미널 색.
+//! - [`args`]: 명령행 옵션 읽기. [`text`]: 사람이 읽는 출력용 문자열 정리. [`severity`]: 심각도. [`color`]: 터미널 색. [`risk`]: 위험 점수와 조합 승격.
 //!
 //! `corpus_common`과 별도로 둔 것은 이 코드가 코퍼스와 무관한 파일 스캐너의 것이기 때문이다. 의존성도 `rayon` 하나다.
 
@@ -15,6 +15,7 @@ pub mod color;
 pub mod files;
 pub mod finding;
 pub mod names;
+pub mod risk;
 pub mod severity;
 pub mod sniff;
 pub mod stream;

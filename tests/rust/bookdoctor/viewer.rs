@@ -168,3 +168,8 @@ fn executable_format_is_not_applicable_to_the_viewer() {
         assert_eq!(viewer_blocked(Format::Executable, code), ViewerBlocked::NotApplicable, "{code}");
     }
 }
+
+#[test]
+fn combined_suspicious_is_not_applicable_to_the_viewer() {
+    assert_eq!(viewer_blocked(Format::Epub, "COMBINED_SUSPICIOUS"), ViewerBlocked::NotApplicable);
+}

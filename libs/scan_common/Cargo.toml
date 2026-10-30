@@ -19,6 +19,10 @@ name = "finding"
 path = "../../tests/rust/scan_common/finding.rs"
 
 [[test]]
+name = "risk"
+path = "../../tests/rust/scan_common/risk.rs"
+
+[[test]]
 name = "sniff"
 path = "../../tests/rust/scan_common/sniff.rs"
 

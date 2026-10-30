@@ -93,6 +93,8 @@ pub struct FileReport {
     /// 확장자와 매직바이트가 모두 실행 파일이다. 출력 필터가 지표를 지워도 집계가 남도록 따로 둔다.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "std::ops::Not::not"))]
     pub confirmed_executable: bool,
+    /// 0~100 위험 점수. 출력 필터가 숨긴 지표도 포함해 `scan_file`이 정한다.
+    pub risk_score: u8,
 }
 
 impl FileReport {
@@ -100,7 +102,7 @@ impl FileReport {
     /// 터미널에 찍는 쪽이 `text::sanitize_display`로 제어·방향 문자를 지운다.
     pub fn new(path: &Path, format: Option<Format>) -> Self {
         let path = path.to_string_lossy().into_owned();
-        FileReport { path, format, findings: Vec::new(), incomplete: false, reasons: Vec::new(), likeness: None, suppressed: Suppressed::default(), confirmed_executable: false }
+        FileReport { path, format, findings: Vec::new(), incomplete: false, reasons: Vec::new(), likeness: None, suppressed: Suppressed::default(), confirmed_executable: false, risk_score: 0 }
     }
 
     /// 지표를 더한다. `viewer_blocked`는 나중에 채우므로 `NotApplicable`로 둔다.

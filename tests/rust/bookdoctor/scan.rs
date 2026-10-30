@@ -53,3 +53,63 @@ unsafe extern "C" {
     #[link_name = "geteuid"]
     fn libc_geteuid() -> u32;
 }
+
+// --- 위험 점수와 조합 승격 ---
+
+use bookdoctor::cli::Options;
+use bookdoctor::scan::scan_file;
+use scan_common::{Category, Severity};
+
+fn epub_with_script(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    common::epub_with_chapter(&p, &common::xhtml(&format!("<p>본문</p><script>{script}</script>")));
+    (d, p)
+}
+
+#[test]
+fn scan_file_adds_combined_suspicious_for_obfuscation_plus_network() {
+    let (_d, p) = epub_with_script("var x = atob('aGk='); fetch('/x');");
+    let r = scan_file(&p, &Options::default());
+    let f = r.findings.iter().find(|f| f.code == "COMBINED_SUSPICIOUS").unwrap_or_else(|| panic!("{:?}", r.findings));
+    assert_eq!((f.category, f.severity), (Category::Security, Severity::High));
+    assert_eq!(f.detail, "OBFUSCATION + NETWORK_API");
+}
+
+#[test]
+fn scan_file_does_not_escalate_a_single_medium_signal() {
+    let (_d, p) = epub_with_script("var x = atob('aGk=');");
+    assert!(!scan_file(&p, &Options::default()).has("COMBINED_SUSPICIOUS"));
+}
+
+#[test]
+fn scan_file_fills_risk_score_and_a_clean_file_stays_below_high() {
+    let (_d, p) = epub_with_script("var x = atob('aGk='); fetch('/x');");
+    assert!(scan_file(&p, &Options::default()).risk_score >= 70);
+    let d = tempfile::tempdir().unwrap();
+    let clean = d.path().join("ok.epub");
+    common::make_epub(&clean);
+    // make_epub의 기본형은 LOW 지표(NAV_MISSING)만 낸다. LOW는 10점이다.
+    let r = scan_file(&clean, &Options::default());
+    assert!(r.findings.iter().all(|f| f.severity == Severity::Low), "{:?}", r.findings);
+    assert_eq!(r.risk_score, if r.findings.is_empty() { 0 } else { 10 });
+}
+
+#[test]
+fn risk_score_keeps_counting_findings_hidden_by_the_output_filter() {
+    let (_d, p) = epub_with_script("var x = atob('aGk='); fetch('/x');");
+    let mut r = scan_file(&p, &Options::default());
+    let before = r.risk_score;
+    r.suppress_below(Severity::Critical);
+    assert!(r.findings.is_empty());
+    assert_eq!(r.risk_score, before);
+}
+
+#[test]
+fn risk_score_is_computed_before_the_only_filter() {
+    let (_d, p) = epub_with_script("var x = atob('aGk='); fetch('/x');");
+    let full = scan_file(&p, &Options::default()).risk_score;
+    let only_render = scan_file(&p, &Options { only: vec![Category::Render], ..Options::default() });
+    assert!(only_render.findings.iter().all(|f| f.category == Category::Render));
+    assert_eq!(only_render.risk_score, full);
+}
