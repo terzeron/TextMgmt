@@ -10,13 +10,19 @@ use scan_common::{Category, DEFAULT_WORKERS, Severity, limited, pool, scan_strea
 
 use crate::exe::is_exec_extension;
 use crate::pdf::security::MAX_PARALLEL_INPUT_MB;
+use crate::prefetch::Prefetcher;
 use crate::report::{Aggregate, write_json_line, write_report_file, write_summary_line, write_text};
 use crate::scan::scan_file;
 
-const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--pdf-text] [--no-poppler] PATH...";
+const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--no-prefetch] [--pdf-text] [--no-poppler] PATH...";
 
 /// 한 번에 검사하는 파일 수는 워커 수의 이 배수다.
 const WINDOW_PER_WORKER: usize = 8;
+
+/// 선읽기 한도: 소비자보다 이만큼(파일 수, 바이트)까지만 앞서가고, 이보다 큰 파일은 미리 읽지 않는다.
+const PREFETCH_FILES: usize = 16;
+const PREFETCH_BYTES: u64 = 512 * 1024 * 1024;
+const PREFETCH_MAX_FILE: u64 = 128 * 1024 * 1024;
 
 /// 명령행 옵션.
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +42,8 @@ pub struct Options {
     pub pdf_text: bool,
     /// ZIP 계열 멤버를 끝까지 풀어 CRC까지 확인한다. 기본은 멤버마다 앞부분만 풀어 본다.
     pub zip_deep: bool,
+    /// 다음 파일을 미리 읽어 디스크 대기와 검사를 겹친다. `--no-prefetch`로 끈다.
+    pub prefetch: bool,
     pub no_poppler: bool,
 }
 
@@ -54,6 +62,7 @@ impl Default for Options {
             color: ColorMode::Auto,
             pdf_text: false,
             zip_deep: false,
+            prefetch: true,
             no_poppler: false,
         }
     }
@@ -93,6 +102,7 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
             "--json" => o.json = true,
             "--pdf-text" => o.pdf_text = true,
             "--zip-deep" => o.zip_deep = true,
+            "--no-prefetch" => o.prefetch = false,
             "--no-poppler" => o.no_poppler = true,
             _ => match long_option(arg, &["report", "workers", "limit", "max-total-mb", "only", "min-severity", "color"], &mut it)? {
                 Some((name, value)) => match name.as_str() {
@@ -164,6 +174,9 @@ fn scan(opts: &Options, out: &mut dyn Write, color: bool) -> io::Result<i32> {
     let paths = limited(collect_files(&opts.paths, opts.recursive, wanted), opts.limit);
     let workers = effective_workers(opts);
     let pool = pool(workers);
+    // 처리한 파일 수를 선읽기 스레드에 알려 소비자보다 너무 앞서가지 않게 한다. 파일이 하나뿐이면 겹칠 것이 없다.
+    let prefetcher = (opts.prefetch && paths.len() > 1).then(|| Prefetcher::start(paths.clone(), PREFETCH_FILES, PREFETCH_BYTES, PREFETCH_MAX_FILE));
+    let mut emitted = 0usize;
     let mut agg = Aggregate::new();
     let summary = scan_streaming(
         &paths,
@@ -176,6 +189,10 @@ fn scan(opts: &Options, out: &mut dyn Write, color: bool) -> io::Result<i32> {
             r
         },
         |r| {
+            emitted += 1;
+            if let Some(p) = &prefetcher {
+                p.advance(emitted);
+            }
             agg.add(r);
             if opts.json { write_json_line(r, out)? } else { write_text(r, out, color)? }
             out.flush()
@@ -203,7 +220,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
 사용법:
   bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N]
              [--only security,defect,render] [--min-severity low|medium|high|critical]
-             [--color auto|always|never] [--zip-deep] [--pdf-text] [--no-poppler] PATH...
+             [--color auto|always|never] [--zip-deep] [--no-prefetch] [--pdf-text] [--no-poppler] PATH...
 
 인자:
   PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt, zip, docx(docm·dotx·dotm), hwpx와 실행 파일 확장자(exe, dll, so, dylib 등)를 모은다.
@@ -224,6 +241,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   --color MODE        auto(기본, 터미널이고 NO_COLOR가 없을 때만), always, never.
                       CRITICAL과 렌더링 구조 에러는 red, HIGH는 purple, 암호화·DRM은 cyan이다. --json에는 색이 없다.
   --zip-deep          ZIP 멤버를 끝까지 풀어 CRC까지 확인한다 (기본은 멤버마다 앞 4096바이트만 풀어 본다).
+  --no-prefetch       다음 파일을 미리 읽지 않는다. 기본은 검사하는 동안 다음 파일 최대 16개(512MiB)를 미리 읽는다.
   --pdf-text          PDF 본문 텍스트까지 검사한다.
   --no-poppler        poppler 외부 명령을 쓰지 않는다.
   -h, --help          이 도움말

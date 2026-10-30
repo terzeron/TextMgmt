@@ -39,6 +39,10 @@ name = "epub_perf"
 path = "../../tests/rust/bookdoctor/epub_perf.rs"
 
 [[test]]
+name = "prefetch"
+path = "../../tests/rust/bookdoctor/prefetch.rs"
+
+[[test]]
 name = "epub_gaps"
 path = "../../tests/rust/bookdoctor/epub_gaps.rs"
 
