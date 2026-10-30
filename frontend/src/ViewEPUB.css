@@ -14,10 +14,18 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 12px;
+    padding: 2px 8px;
     background: rgba(255, 255, 255, 0.9);
     border-bottom-left-radius: 8px;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+    /* 본문을 가리지 않게 평소에는 희미하게 두고, 조작할 때만 또렷하게 한다. */
+    opacity: 0.2;
+    transition: opacity 0.15s;
+}
+
+.epub-toolbar:hover,
+.epub-toolbar:focus-within {
+    opacity: 1;
 }
 
 .epub-toolbar button {
@@ -56,27 +64,32 @@
     border: none;
     background: rgba(255, 255, 255, 0.85);
     border-radius: 50%;
-    width: 40px;
-    height: 40px;
-    font-size: 22px;
+    width: 27px;
+    height: 27px;
+    font-size: 15px;
     line-height: 1;
     cursor: pointer;
     color: #555;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
     padding: 0;
+    opacity: 0.15;
+    transition: opacity 0.15s;
 }
 
-.epub-page-btn:hover {
+.epub-page-btn:hover,
+.epub-page-btn:focus-visible,
+.epub-page-btn:active {
+    opacity: 1;
     background: #fff;
     color: #111;
 }
 
 .epub-page-btn.epub-page-prev {
-    left: 8px;
+    left: 2px;
 }
 
 .epub-page-btn.epub-page-next {
-    right: 8px;
+    right: 2px;
 }
 
 .epub-progress {
@@ -126,6 +139,17 @@
 
 .epub-viewer--framed .epub-cover-page {
     inset: 56px 64px 44px;
+}
+
+/* 모바일은 좌우 버튼이 본문과 겹쳐도 되므로 여백을 1/10로 줄여 본문 폭을 넓힌다. */
+@media (max-width: 767px) {
+    .epub-viewer--framed {
+        padding: 5.6px 6.4px 4.4px 6.4px;
+    }
+
+    .epub-viewer--framed .epub-cover-page {
+        inset: 5.6px 6.4px 4.4px;
+    }
 }
 
 .epub-cover-page img {

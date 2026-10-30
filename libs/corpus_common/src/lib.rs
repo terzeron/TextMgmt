@@ -4,7 +4,7 @@
 //! - [`util`]: Python `posixpath`/`urllib` 호환 경로·URL 도구, 카테고리 판정
 //! - 경로 목록, 병렬 풀, 리포트 경로 같은 작은 도구들
 //!
-//! 원래 `detect_mojibake`에 있던 것을 라이브러리 계층으로 옮겼다. 도구 crate끼리 서로 의존하지 않게 하려는 것이다.
+//! 원래 인코딩 손상 탐지 도구에 있던 것을 라이브러리 계층으로 옮겼다. 도구 crate끼리 서로 의존하지 않게 하려는 것이다.
 
 pub mod reader;
 pub mod util;

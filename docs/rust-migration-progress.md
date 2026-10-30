@@ -10,7 +10,7 @@
 - API의 인증·입출력·오류 코드와 파일 수정 동작을 Python과 대조한다.
 - 미구현 기본값, 미등록 테스트, `ignore`, Python 호출을 전수 확인하고 남은 예외를 명시한다.
 - Frontend는 사용자 지시에 따라 제외한다. Backend·utils와 모델 학습의 Python 실행 경로는 전환 대상이다.
-- `pdfscan`·`epubscan`은 다른 세션이 맡으므로 이 작업에서 수정하지 않는다.
+- `pdfscan`·`epubscan`·`detect_mojibake`는 `bookdoctor`로 대체해 제거했다(Task 17).
 - Python 원본은 검증 기준으로 유지한다. 배포·push·운영 데이터 변경은 별도 승인 대상이다.
 
 ## 순서와 검증
@@ -1731,3 +1731,221 @@ Python `backend/classifier/export.py`는 기준 구현과 fixture 생성용으�
   두 도구의 JSON 출력이 80개 모두 같았다. 지운 것은 `epub_structure.rs`, 그 테스트, `cli.rs`·`lib.rs`·`Cargo.toml`의 연결 코드다.
   EPUB 구조 검사는 `epubscan structure` 한 곳에서만 유지한다. `detect_mojibake`는 커밋된 `HEAD`와 같아졌다.
   `corpus_common`의 `decode_korean_replace` 변경은 이 삭제와 무관하게 자체 테스트가 있어 그대로 두었다.
+
+## bookdoctor 동등성 검증
+
+결론: 옛 도구 발견이 새 `bookdoctor`에서 빠진 사례는 0건이다. 단 `bookdoctor`가 정상 파일을 잘못 `HIGH`로 표시하는 오탐 두 가지를 찾았다.
+`ZERO_PAGES`와 `XHTML_PARSE_FAILED`다. 이 절은 수정 전(Task 16) 측정이다. 두 오탐과 TXT `BINARY_CONTENT` 과다 판정은
+Task 16b에서 고쳤고 결과는 아래 "Task 16b 결과"에 있다.
+검증일 2026-10-29~30. 디버그 빌드(`target/debug`)를 썼고 말뭉치는 순차로, 읽기 전용으로 스캔했다.
+`/mnt/data/text/0_broken`이 없어 그 부분은 미실행이다.
+
+### 1. 전체 회귀
+
+| 명령 | 결과 |
+|---|---|
+| `cargo test --workspace --locked` | 30개 crate, 통과 3,965건, 실패 0, 무시 0 |
+| `cargo clippy --workspace --all-targets` | 종료 코드 0. 경고는 `backend` 테스트 코드 20건뿐이고 `bookdoctor` 경고는 없다 |
+
+crate별 통과 건수: backend 2378, bookdoctor 415, loader 362, epubscan 111, classify_cli 65, quarantine_broken 58,
+pdfscan 53, doc_reader 50, normalize_comic_directories 45, es_client 41, detect_mojibake 40, 나머지 19개 crate 합 347.
+`epubveri`는 테스트가 0건이다.
+
+### 2. EPUB 구조 동등성
+
+| 항목 | 값 |
+|---|---|
+| `epub-structure-flagged.txt` | 3,751건 중 존재 3,748건, 없음 3건 |
+| 옛 `epubscan structure` 출력 | 3,748건 |
+| 새 `bookdoctor --json` 출력 | 발견이 있는 파일 3,708건. 나머지 40건은 출력 없음(깨끗) |
+| 지금 옛 도구가 이슈를 내는 파일 | 3건 (`not_zip` 2, `member_unreadable` 1, `bad_mimetype` 1) |
+| 누락 (옛 이슈가 `ISSUE_TO_CODE` 코드로 새 출력에 없음) | 0건 |
+| 새 쪽에만 있는 구조 코드 | `MEMBER_UNREADABLE` 4건 |
+
+옛 리포트(`tmp/epub_structure_report*.json`)가 기록한 이슈와 지금 옛 도구 결과가 다른 파일은 3,746건이다.
+`bad_mimetype` 3,729건 등 대부분이 그 뒤에 고쳐졌기 때문이다. 이 파일들은 옛 도구도 새 도구도 같은 이슈를 내지 않는다.
+옛 리포트의 `member_unreadable` 4건은 옛 도구가 지금은 내지 않지만 새 도구는 `XHTML_PARSE_FAILED`와 `MEMBER_UNREADABLE`로 잡는다.
+실제 이슈가 3건뿐이라 이 단계의 실데이터 비교력은 약하다. 나머지는 단위 테스트(`epub_structure.rs` 31건)가 맡는다.
+새 출력의 "검사 N건" 요약은 `--report`가 없으면 나오지 않아 40건의 검사 완료 여부는 출력으로 확인하지 못했다.
+
+### 3. EPUB·PDF 보안 동등성
+
+| 대상 | 옛 도구 | 새 도구 | 비교 파일 | 옛 (code, location) 쌍 | 누락 | 심각도 하락 |
+|---|---|---|---|---|---|---|
+| EPUB 200건 | `epubscan scan --json` | `bookdoctor --json --only security,render` | 200 | 2,933 | 0 | 0 |
+| PDF 200건 | `pdfscan --json --workers 2` | `bookdoctor --json --only security` | 187 | 1,078 | 0 | 0 |
+
+PDF 13건은 옛 도구와 새 도구 모두 `incomplete`다(파일 없음 4건, 크기 한도 초과 등). 같은 사유라 비교에서 뺐다.
+정규화: 옛 PDF `object=[N,G]`와 `path`를 `"N G:path"`로 합쳤고, 새 `location`에서 `obj ` 접두사를 뗐다. 코드는 옛 `kind`와 새 `code`를 그대로 비교했다.
+EPUB 쪽은 `render` 분류를 포함했다(MISSING_MIMETYPE 등 네 코드가 `render`로 옮겨졌기 때문이다).
+
+새 쪽에만 있는 항목(허용):
+
+| 코드 | 건수 | 표본 |
+|---|---|---|
+| XHTML_PARSE_FAILED (EPUB `render`) | 95파일 | 오탐 의심, 6절 참고 |
+| FONT_TOO_LARGE | 20파일 | 9_BLGL/[BL] 악우 1.epub 외 |
+| NCX_REF_MISSING | 5파일 | 9_BLGL/[ZIG] 릭 미 업 이프 유 캔 5.epub 외 |
+| DC_METADATA_MISSING | 2파일 | 9_BLGL/아스파라거스튀김 가이드버스 ... 完.epub 외 |
+| UNDECLARED_PREFIX | 1파일 | 9_BLGL/[이하진] 주인님 X 대표님 - 소 비서의 이중생활.epub |
+| GoToR action (PDF) | 147건, 1파일 | 8_IT/[신승희] 이젠 나도 네이버 스마트스토어(쇼핑몰 가이드북) (2).pdf |
+| many incremental updates (PDF) | 1파일 | 8_IT/[히라야마오사무] SQL 서버의 구조(그림으로 이해하는).pdf |
+
+### 4. 인코딩 손상 동등성
+
+| 대상 | 옛 `corrupted` | 새 `MOJIBAKE` | 차이 |
+|---|---|---|---|
+| `sample-txt.txt` 200건 | 0 (clean 153, undetermined 38, unreadable 9) | 0 | 없음 |
+| `sample-epub.txt` 200건 | 0 (clean 200) | 0 | 없음 |
+| `broken-dir.txt` | 미실행(0_broken 없음) | 미실행 | - |
+
+두 표본 모두 손상 파일이 0건이라 0 대 0 비교다. 양성 대조가 되지 않는다. likeness 값은 두 도구가 모든 파일에서 같았다.
+대체 양성 대조(계획된 비교가 아니다): 깨끗한 한글 본문 TXT·EPUB과, UTF-8 바이트를 CP949로 읽어 만든 두 종류(본문 깨짐, BOM `癤` 깨짐)를 합성했다.
+옛 도구와 새 도구 모두 4건(TXT 2, EPUB 2) `corrupted`/`MOJIBAKE`로 표시했고(likeness 0.0107 안팎), 깨끗한 쌍은 둘 다 통과시켰다.
+cp1252로 읽어 만든 합성은 두 도구 모두 `undetermined`로 같이 놓쳤다. 옛 도구에도 없던 한계다.
+
+### 5. 손상 재현율
+
+| 대상 | 존재 | 파일 없음(미확인) | 새 도구가 `defect` 또는 `incomplete`를 낸 파일 | 놓침 |
+|---|---|---|---|---|
+| `pdf-redownload.txt` 26건 | 17 | 9 | 17 | 0 |
+| `epub-redownload.txt` 3건 | 3 | 0 | 3 | 0 |
+
+주의: PDF 1건(`9_성인/[Moon Night Snap]... Where Does It Hurt.pdf`, 406 MB, 헤더 정상)은 크기 한도(256 MB) 초과로 `incomplete`가 됐을 뿐
+손상을 찾은 것이 아니다. 이 건을 빼면 실제 손상 탐지는 19건 중 19건이다(PDF 16건, EPUB 3건).
+이유 TSV에 이유가 적힌 4건 중 존재하는 "미상 바이너리" 2건은 `NO_PDF_HEADER`/`FORMAT_MISMATCH` 또는 `XREF_BROKEN`로 잡혔다. "0바이트", "HTML 다운로드 실패" 2건은 파일이 없어 확인하지 못했다.
+
+### 6. 오탐 측정 (표본 600건)
+
+| 항목 | 값 |
+|---|---|
+| High 이상 발견이 있는 파일 | 163 / 600 (EPUB 96, PDF 60, TXT 7) |
+| `incomplete` 파일 | 13 (모두 PDF: 파일 없음 4, 크기 한도 1, 객체 스트림 4 MB 한도 8) |
+| `NOT_UTF8` | 3파일 (모두 `HIGH`, cp949 2, unknown 1) |
+
+High 이상 코드별 파일 수:
+
+| 코드 | 파일 | 판단 |
+|---|---|---|
+| XHTML_PARSE_FAILED (EPUB) | 95 | 오탐으로 보인다. 95건 모두 `&nbsp;` 때문이다 |
+| ZERO_PAGES (PDF) | 59 | 오탐이다. `pdfinfo`를 돌린 58건 중 56건이 33~2,710쪽을 낸다(2건은 쪽수 줄 없음) |
+| BINARY_CONTENT (TXT) | 4 | 과하다. 수 MB 파일에 NUL 1~2바이트가 있을 뿐이다 |
+| NOT_UTF8 / INVALID_UTF8 (TXT) | 3 / 3 | 진짜다. cp949 파일이다 |
+| SCRIPT_TAG, ACTIVE_ELEMENT (EPUB) | 1 / 1 | 요소는 실제로 있다. 옛 도구도 같은 항목을 냈다 |
+| Launch action (PDF) | 1 | 구조는 실제로 있다. 옛 도구도 같다. 악성 여부는 확인하지 않았다 |
+
+요청한 소음 후보 코드(전체 심각도, 600건): FONT_NOT_EMBEDDED 12파일(모두 `LOW`).
+FORMAT_MISMATCH, SPARSE_FILE, NO_EOF_MARKER, TINY_PAGE, ZIP_CRC_MISMATCH, MEMBER_UNREADABLE, OBFUSCATED_TEXT,
+HIGH_COMPRESSION_RATIO, MARKUP_UNDECODABLE, JS_URL은 표본에서 0건이다. 소음 여부는 이 표본으로 판단하지 못한다.
+
+오탐 재현:
+- `ZERO_PAGES`: `/mnt/data/text/0_telegram/마스크걸/마스크걸 00104.pdf` (img2pdf, `pdfinfo` 40쪽, `qpdf --show-npages` 40).
+  원인은 `/Root` 누락이 아니었다. 메모리 보호용 load hook(`shrink_array`)이 길이 32를 넘는 일반 배열을 비웠고, 쪽 참조로만 된 `/Kids`도 비워서
+  `doc.get_pages()`가 0쪽을 돌려줬다. 같은 파일을 hook 없이 lopdf로 읽으면 40쪽이다(Task 16b에서 재현·확인).
+- `XHTML_PARSE_FAILED`: `/mnt/data/text/9_BLGL/[2RE] 키보드를 돌려줘요 2.epub`의 `OEBPS/Text/chapter_01.xhtml`. XHTML 1.1 DOCTYPE을 선언하고 `&nbsp;`를 쓴다. 엄격한 XML 파서는 실패하고 `xmllint`는 경고만 낸다. 뷰어에서 실제로 렌더링되는지는 확인하지 않았다.
+
+### 7. 요약과 미실행
+
+| 단계 | 누락 | 비고 |
+|---|---|---|
+| 1 회귀 | 해당 없음 | 실패 0, clippy 종료 0 |
+| 2 EPUB 구조 | 0 | 실데이터의 옛 이슈가 3건뿐이라 비교력이 약하다 |
+| 3 보안 | 0 / 0 | 심각도 하락 0. 새 쪽에만 있는 항목은 위 표 |
+| 4 인코딩 | 0 | 표본에 손상 0건이라 비교력이 없다. 합성 양성 대조 4건은 일치 |
+| 5 재현율 | 0 | 파일 없음 9건은 미확인 |
+| 6 오탐 | 해당 없음 | `ZERO_PAGES`, `XHTML_PARSE_FAILED` 오탐 |
+
+미실행: `/mnt/data/text/0_broken` 대조(디렉토리 없음), 파일 없는 PDF 9건, 오탐 원인 코드 분석.
+검사 도중 표본 PDF 4건(`2_소설외국/사냥개들 *.pdf`)이 말뭉치에서 사라져 두 도구 모두 `incomplete`로 처리했다.
+
+### 사용한 명령
+
+```
+cargo test --workspace --locked ; cargo clippy --workspace --all-targets   # env -u TM_MYSQL_HOST -u TM_ES_URL, CARGO_TARGET_DIR=/home/terzeron/workspace/tm_dev/target
+xargs -d '\n' -n1 -I{} epubscan structure --file {} < epub-structure-flagged(존재분)
+xargs -d '\n' -n 100 bookdoctor --json < epub-structure-flagged(존재분)
+xargs -d '\n' -n 50 epubscan scan --json < sample-epub.txt
+xargs -d '\n' -n 100 bookdoctor --json --only security,render < sample-epub.txt
+xargs -d '\n' -n 50 pdfscan --json --workers 2 < sample-pdf.txt
+xargs -d '\n' -n 100 bookdoctor --json --only security < sample-pdf.txt
+xargs -d '\n' -n1 -I{} detect_mojibake check --file {} < sample-txt.txt   # sample-epub.txt도 같다
+xargs -d '\n' -n 100 bookdoctor --json < sample-{txt,epub,pdf}.txt, pdf-redownload.txt, epub-redownload.txt
+```
+
+### Task 16b 결과
+
+Task 16이 찾은 오탐 세 가지를 원인부터 고쳤다. 수정은 PDF, EPUB, TXT 세 커밋과 네 번의 수정 라운드이고 마지막 커밋은 `dd5b531b`다.
+재검사는 디버그 빌드로 순차 실행했다(`--workers 1`).
+
+| 대상 | 수정 전 (High 이상 파일) | 수정 후 |
+|---|---|---|
+| PDF 187건 | `ZERO_PAGES` 59, `Launch action` 1 | `ZERO_PAGES` 0, `Launch action` 1. `incomplete` 13건은 그대로 |
+| EPUB 200건 | `XHTML_PARSE_FAILED` 95, `SCRIPT_TAG` 1, `ACTIVE_ELEMENT` 1 | `XHTML_PARSE_FAILED` 0, 나머지 둘은 그대로 |
+| TXT 200건 | `BINARY_CONTENT` 4, `INVALID_UTF8` 3, `NOT_UTF8` 3 | `BINARY_CONTENT` 0, 나머지 둘은 그대로 |
+
+진짜 발견은 바뀌지 않았다. `Launch action`, `SCRIPT_TAG`, `ACTIVE_ELEMENT`, `INVALID_UTF8`, `NOT_UTF8`은 수정 전후가 같다.
+수정 내용은 다음과 같다.
+
+- PDF: 참조로만 된 배열은 배열당 20,000개(`REF_ARRAY_KEEP_LEN`)까지 hook이 유지하고, 파일 전체는 원본 참조 500,000개(`REF_FILE_BUDGET`)를 넘으면 엄격 hook을 쓴다. 남긴 노드가 예산을 넘거나 hook이 배열을 비웠으면 쪽 트리를 `incomplete`로 표시한다.
+  hook이 비운 배열이 있으면 `ZERO_PAGES`를 `High`로 내지 않고 `incomplete`로 낸다.
+- EPUB: XHTML 1.x DOCTYPE을 선언한 문서가 첫 파싱에 실패하면 이름 있는 엔티티 248개를 숫자 참조로 바꿔 한 번 더 파싱한다. 보안 파싱 경로는 그대로다.
+- TXT: 제어 문자(NUL 포함)가 문자 수의 1%를 넘을 때만 `BINARY_CONTENT`를 낸다.
+
+한계: PDF 참조 수는 ObjStm 안의 참조를 세지 못한다. 이 경우의 메모리 상한은 아래 "R20 메모리 한계"를 본다.
+옛 도구 대비 누락 검사(Task 16의 3절)는 바뀐 규칙에 대해 다시 돌리지 않았다. 브라우저에서 `&nbsp;` XHTML이 실제로 렌더링되는지도 확인하지 않았다.
+
+### R20 메모리 한계
+
+lopdf load hook은 ObjStm 안의 배열을 문서 수명 동안 `doc.objects`에 남긴다. ObjStm 개수에 상한이 없고 프로세스 안에서 막을 방법이 없다.
+추가 측정(디버그 빌드, 합성 PDF):
+
+| 입력 | 최대 RSS | 보고 |
+|---|---|---|
+| ObjStm 10개, 31개짜리 배열 50만 개, 파일 3.7MB | 2.0GB | `normal`, 종료 코드 0 |
+| 일반 PDF 21MB, 31개짜리 숫자 배열 20만 개 | 849MB | `normal` |
+
+ObjStm 하나당 약 200MB다. 앞 수정 라운드의 "스트림당 노드 약 80MB" 추정은 노드만 센 값이라 실측보다 낮았다. `--workers` 상한은 한 문서의 사용량을 줄이지 못한다.
+메모리 한도는 바깥에서 건다(`systemd-run --user -p MemoryMax=...`). 옛 `pdfscan`도 같은 한계였다.
+
+### 9절 이식하지 못한 옛 테스트
+
+설계서 9절은 "기존 세 도구의 테스트가 모두 이식되어 통과한다. 이식하지 못한 테스트가 있으면 이유를 적는다"를 요구한다.
+옛 건수는 Task 1 기준선(`cargo test`, 255건)이다. 이식 건수는 Task 7, 8, 10, 13 보고와 `tmp/bookdoctor-baseline/ported-tests.txt`에서 옮겼다.
+"미확인"은 옛 테스트 이름을 새 테스트와 하나씩 대조하지 않았다는 뜻이다.
+
+| 옛 도구 (테스트 수) | 이식 | 이식하지 않은 것 | 이유 |
+|---|---|---|---|
+| `epubscan` 111 (`bin` 3, `cli` 21, `gaps` 11, `security` 58, `structure` 18) | `security` 58, `gaps` 9, `structure` 18 | `gaps` 2건(`inline_option_values_and_extra_positionals_are_accepted`, `structure_report_write_failure_exits_one`) | 옛 `epubscan` CLI와 `structure` 서브커맨드가 없어졌다. Task 7 보고의 판단이다 |
+| 〃 | - | `cli` 21, `bin` 3 | 옛 CLI(`scan`·`structure` 서브커맨드, 종료 코드, 스트리밍, 리포트 쓰기)의 테스트다. 새 CLI는 `tests/rust/bookdoctor/{cli,bin,scan,report}.rs`가 따로 맡는다. 일대일 대조는 하지 않았다(미확인) |
+| `pdfscan` 53 (`bin` 2, `pdfscan.rs` 41, `lib.rs` 단위 10) | `pdfscan.rs` 33, 단위 7 | `pdfscan.rs` 8건(`directories_respect_the_recursive_flag_and_symlinked_dirs_are_not_followed`, `empty_directories_and_the_limit_option`, `indicators_win_over_incomplete_in_the_exit_code`, `text_output_sanitizes_attacker_controlled_file_names`, `json_output_escapes_controls_and_lists_findings`, `usage_and_bad_arguments`, `run_survives_a_closed_output`, `text_results_are_written_before_the_next_file_finishes`) | 모두 옛 CLI 동작(디렉터리 순회, 종료 코드, 출력 형식, 사용법, 스트리밍)이다. Task 10 보고는 Task 3·4의 CLI 테스트가 대신한다고 적었다 |
+| 〃 | - | 단위 3건(`usage_is_requested_for_no_arguments_and_help_flags`, `print_usage_explains_purpose_arguments_options_and_exit_codes`, `json_str_escapes_c0_and_c1_controls`), `bin` 2 | 옛 CLI 사용법과 JSON 출력 함수다. `bin` 2건은 Task 10 보고에 따로 적혀 있지 않다(미확인) |
+| `detect_mojibake` 40 (`bin` 3, `cli_unit` 5, `detect` 32) | `detect` 중 판정 6건(`classify_text_table`, `hanja_heavy`, `returns_likeness`, `english_noise`, `sparse`, `round4` 반올림) | `detect` 26, `cli_unit` 5, `bin` 3 | Task 13 보고: 나머지 26건은 옛 도구의 scan·리포트·CLI·라이브러리 순회 테스트라서 새 판정 모듈과 대응이 없다. `cli_unit`·`bin`은 옛 CLI 테스트다. 같은 판정을 새 파일 `mojibake.rs`의 신규 20건이 통합 경로로 다시 확인한다. 이름별 대조는 하지 않았다(미확인) |
+
+정리: 판정·검사 규칙을 확인하는 옛 테스트는 이식했다(`epubscan` 85건, `pdfscan` 40건, `detect_mojibake` 6건).
+이식하지 않은 것은 옛 도구의 CLI, 리포트, 순회 테스트이고, 새 CLI는 자체 테스트가 있다. 이 판단에서 아래 두 가지는 미확인으로 남는다.
+
+- 옛 CLI 테스트가 보던 동작 중 새 CLI에 대응 테스트가 없는 것이 있는지. 이름별 대조를 하지 않았다.
+- `detect_mojibake`의 `detect` 26건이 보던 라이브러리 순회·리포트 동작이 `bookdoctor`에서 같은지. 합성 4건과 표본 400건의 0 대 0 비교로만 확인했다.
+
+### 8. 옛 도구 제거 전 기준 수치 (Task 17)
+
+옛 `epubscan structure` 리포트(`tmp/epub_structure_report*.json`, 2026-10 스캔)를 삭제하기 전에 합계를 옮겼다. 리포트는 카테고리 74개 파일이다.
+
+| 항목 | 값 |
+|---|---|
+| 리포트 파일 수 | 74 |
+| 검사한 EPUB 합계(`total`) | 40,605 |
+| flagged 합계(`flagged_count`) | 3,752 |
+
+| 이슈 | 건수 |
+|---|---|
+| `bad_mimetype` | 3,733 |
+| `spine_member_missing` | 67 |
+| `opf_unparsable` | 30 |
+| `member_unreadable` | 4 |
+| `not_zip` | 3 |
+| `opf_missing` | 1 |
+| `prefixed_root` | 1 |
+| `no_container`, `scan_error` | 0 |
+
+`tmp/mojibake_recheck*.json`은 메인 체크아웃에 없었다.

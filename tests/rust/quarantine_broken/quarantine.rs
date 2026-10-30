@@ -34,6 +34,19 @@ fn records_for(lib: &Lib, rels: &[&str]) -> Vec<Rec> {
     rels.iter().map(|r| json!({"path": lib.root.join(r).to_string_lossy(), "verdict": "corrupted", "likeness": 0.004, "size": 100}).as_object().unwrap().clone()).collect()
 }
 
+/// bookdoctor 리포트의 `files[]` 항목 하나. 지표 코드 목록을 그대로 받는다.
+fn bd_file(path: &str, codes: &[&str], likeness: Option<f64>) -> Value {
+    let findings: Vec<Value> = codes.iter().map(|c| json!({"category": "defect", "severity": "HIGH", "code": c, "location": "", "detail": "", "viewer_blocked": "n/a"})).collect();
+    json!({"path": path, "format": "txt", "findings": findings, "incomplete": false, "reasons": [], "likeness": likeness})
+}
+
+/// bookdoctor `--report`가 쓰는 형태의 리포트. `(경로, likeness)`는 MOJIBAKE 항목, `decoys`는 그 밖의 항목이다.
+fn bd_report(mojibake: &[(&str, Option<f64>)], decoys: Vec<Value>) -> String {
+    let mut files: Vec<Value> = mojibake.iter().map(|(p, l)| bd_file(p, &["MOJIBAKE"], *l)).collect();
+    files.extend(decoys);
+    json!({"scanned_at": "2026-10-29 21:55:56", "root": "/lib", "summary": {"scanned": files.len(), "by_severity": {}, "by_category": {}, "incomplete": 0}, "files": files}).to_string()
+}
+
 fn s(rec: &Rec, key: &str) -> String {
     rec[key].as_str().unwrap().to_owned()
 }
@@ -258,16 +271,21 @@ fn move_across_filesystems_falls_back_to_copy_and_keeps_mtime() {
 // ---- 리포트 읽기 ----
 
 #[test]
-fn load_corrupted_reads_both_report_shapes() {
+fn load_corrupted_reads_single_and_mixed_bookdoctor_reports() {
+    // 옛 테스트는 scan 리포트와 recheck 목록 두 형태를 읽었다. 이제는 bookdoctor 리포트 한 형태이고,
+    // 항목 하나짜리 리포트와 지표가 섞인 여러 항목 리포트가 둘 다 읽혀야 한다.
     let dir = tempfile::tempdir().unwrap();
     let scan = dir.path().join("report.json");
-    fs::write(&scan, json!({"corrupted": [{"path": "/a.txt", "verdict": "corrupted"}]}).to_string()).unwrap();
-    assert_eq!(load_corrupted(&scan).unwrap().len(), 1);
+    fs::write(&scan, bd_report(&[("/a.txt", Some(0.002))], vec![])).unwrap();
+    let recs = load_corrupted(&scan).unwrap();
+    assert_eq!(recs.len(), 1);
+    assert_eq!(s(&recs[0], "verdict"), VERDICT_CORRUPTED);
+    assert_eq!(recs[0]["likeness"], json!(0.002));
 
-    let recheck = dir.path().join("recheck.json");
-    fs::write(&recheck, json!([{"path": "/a.txt", "verdict": "corrupted"}, {"path": "/b.txt", "verdict": "clean"}, {"path": "/c.txt", "verdict": "undetermined"}, {"path": "/d.txt"}]).to_string())
-        .unwrap();
-    let paths: Vec<String> = load_corrupted(&recheck).unwrap().iter().map(|r| s(r, "path")).collect();
+    let mixed = dir.path().join("mixed.json");
+    let decoys = vec![bd_file("/b.txt", &[], None), bd_file("/c.txt", &["NOT_UTF8"], None)];
+    fs::write(&mixed, bd_report(&[("/a.txt", Some(0.004)), ("/d.txt", None)], decoys)).unwrap();
+    let paths: Vec<String> = load_corrupted(&mixed).unwrap().iter().map(|r| s(r, "path")).collect();
     assert_eq!(paths, ["/a.txt", "/d.txt"]);
 }
 
@@ -405,7 +423,9 @@ fn summarize_labels_files_without_a_category() {
 
 fn report_for(lib: &Lib, rels: &[&str]) -> PathBuf {
     let p = lib.tmp.join("report.json");
-    fs::write(&p, serde_json::to_string(&records_for(lib, rels)).unwrap()).unwrap();
+    let entries: Vec<(String, Option<f64>)> = rels.iter().map(|r| (lib.root.join(r).to_string_lossy().into_owned(), Some(0.004))).collect();
+    let refs: Vec<(&str, Option<f64>)> = entries.iter().map(|(p, l)| (p.as_str(), *l)).collect();
+    fs::write(&p, bd_report(&refs, vec![])).unwrap();
     p
 }
 
@@ -492,7 +512,7 @@ fn cli_fix_ext_restores_reports_and_dry_runs() {
     let target = lib.tmp.join("망가진문서.txt");
     fs::write(&target, &mangled).unwrap();
     let report = lib.tmp.join("fix.json");
-    fs::write(&report, json!([{"path": target.to_string_lossy(), "verdict": "corrupted"}]).to_string()).unwrap();
+    fs::write(&report, bd_report(&[(p(&target), Some(0.002))], vec![])).unwrap();
     let (code, out) = run_cli(&lib, &["fix-ext", "--report", p(&report)]);
     assert_eq!(code, 0);
     assert!(out.contains("교정 완료 1건"));
@@ -503,7 +523,7 @@ fn cli_fix_ext_restores_reports_and_dry_runs() {
     let plain = lib.tmp.join("정상문서.txt");
     fs::write(&plain, "보통 한국어 문장입니다").unwrap();
     let missing = lib.tmp.join("없는파일.txt");
-    fs::write(&report, json!([{"path": target.to_string_lossy()}, {"path": plain.to_string_lossy()}, {"path": missing.to_string_lossy()}]).to_string()).unwrap();
+    fs::write(&report, bd_report(&[(p(&target), None), (p(&plain), None), (p(&missing), None)], vec![])).unwrap();
     fs::remove_file(lib.tmp.join("망가진문서.hwp")).unwrap();
     let (_, out) = run_cli(&lib, &["fix-ext", "--report", p(&report), "--dry-run"]);
     assert!(out.contains("교정 예정 1건") && out.contains("건너뜀: 없는파일.txt"));
@@ -557,7 +577,7 @@ fn cli_parses_inline_values_and_rejects_unknown_options_and_extra_positionals() 
 fn plan_prints_none_for_a_missing_likeness() {
     let lib = library();
     let report = lib.tmp.join("r.json");
-    fs::write(&report, json!([{"path": lib.root.join("3_판타지/a.txt").to_string_lossy(), "verdict": "corrupted"}]).to_string()).unwrap();
+    fs::write(&report, bd_report(&[(p(&lib.root.join("3_판타지/a.txt")), None)], vec![])).unwrap();
     let (_, out) = run_cli(&lib, &["plan", "--report", p(&report), "--library-root", p(&lib.root)]);
     assert!(out.contains("likeness=None"), "{out}");
 }
@@ -589,16 +609,102 @@ fn fix_extension_reports_a_write_failure_and_keeps_the_original() {
 #[test]
 fn load_corrupted_rejects_reports_without_a_corrupted_list() {
     let dir = tempfile::tempdir().unwrap();
-    for body in [r#"{"total": 3}"#, r#""text""#, "not json"] {
+    // 옛 테스트의 세 본문에 최상위 배열(옛 recheck 형태)을 더했다. 모두 files 목록이 없다.
+    for body in [r#"{"total": 3}"#, r#""text""#, "not json", r#"[{"path": "/a"}]"#] {
         let f = dir.path().join("r.json");
         fs::write(&f, body).unwrap();
         assert!(load_corrupted(&f).is_err(), "{body}");
     }
     assert!(load_corrupted(&dir.path().join("none.json")).is_err());
-    // Python 원본은 객체가 아닌 항목에서 실패한다. 조용히 결과를 줄이지 않는다.
+    // 객체가 아닌 항목에서 실패한다. 조용히 결과를 줄이지 않는다.
     let f = dir.path().join("mixed.json");
-    fs::write(&f, r#"[1, "x", {"path": "/a"}]"#).unwrap();
+    fs::write(&f, r#"{"files": [1, "x", {"path": "/a"}]}"#).unwrap();
     assert_eq!(load_corrupted(&f).unwrap_err().kind(), io::ErrorKind::InvalidData);
+}
+
+// ---- bookdoctor 리포트 형식 ----
+
+#[test]
+fn only_mojibake_findings_are_quarantined() {
+    let lib = library();
+    let a = lib.root.join("3_판타지/a.txt");
+    let b = lib.root.join("3_판타지/b.txt");
+    let c = lib.root.join("9_격언명언/c.txt");
+    let decoys = vec![
+        bd_file(p(&a), &["NOT_UTF8", "FORMAT_MISMATCH"], None),
+        bd_file(p(&c), &["BINARY_CONTENT", "MOJIBAKE_SUSPECT"], Some(0.001)),
+        bd_file(p(&b), &["NOT_UTF8", "MOJIBAKE", "FORMAT_MISMATCH"], Some(0.003)),
+    ];
+    let f = lib.tmp.join("r.json");
+    fs::write(&f, bd_report(&[], decoys)).unwrap();
+    let moves = plan_moves(&load_corrupted(&f).unwrap(), &lib.root, &quiet);
+    let srcs: Vec<String> = moves.iter().map(|m| s(m, "src")).collect();
+    assert_eq!(srcs, [b.to_string_lossy()]);
+}
+
+#[test]
+fn rejects_old_encoding_tool_report_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("old.json");
+    fs::write(&f, json!({"corrupted": [{"path": "/a.txt", "verdict": "corrupted", "likeness": 0.004}]}).to_string()).unwrap();
+    let err = load_corrupted(&f).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("bookdoctor --report"), "{err}");
+}
+
+#[test]
+fn report_without_files_array_is_invalid() {
+    let dir = tempfile::tempdir().unwrap();
+    for body in [r#"{"summary": {}}"#, r#"{"files": null}"#, r#"{"files": {"a": 1}}"#, r#"{"files": "x"}"#] {
+        let f = dir.path().join("r.json");
+        fs::write(&f, body).unwrap();
+        assert_eq!(load_corrupted(&f).unwrap_err().kind(), io::ErrorKind::InvalidData, "{body}");
+    }
+}
+
+#[test]
+fn likeness_null_or_missing_is_handled_like_the_old_code() {
+    // 옛 코드는 likeness 키가 없는 항목을 그대로 받아 plan_moves가 null로, plan 출력이 `None`으로 보여 줬다.
+    let lib = library();
+    let a = lib.root.join("3_판타지/a.txt");
+    let b = lib.root.join("3_판타지/b.txt");
+    let mut no_key = bd_file(p(&b), &["MOJIBAKE"], None);
+    no_key.as_object_mut().unwrap().remove("likeness");
+    let f = lib.tmp.join("r.json");
+    fs::write(&f, bd_report(&[(p(&a), None)], vec![no_key])).unwrap();
+    let recs = load_corrupted(&f).unwrap();
+    assert_eq!(recs.len(), 2);
+    assert!(recs.iter().all(|r| !r.contains_key("likeness") && s(r, "verdict") == VERDICT_CORRUPTED));
+    let moves = plan_moves(&recs, &lib.root, &quiet);
+    assert!(moves.iter().all(|m| m["likeness"].is_null()));
+    let (_, out) = run_cli(&lib, &["plan", "--report", p(&f), "--library-root", p(&lib.root)]);
+    assert_eq!(out.matches("likeness=None").count(), 2, "{out}");
+}
+
+#[test]
+fn reads_a_report_shaped_like_the_real_bookdoctor_output() {
+    // `bookdoctor -r --report r.json DIR`를 한글 음절을 무작위로 섞은 TXT 하나에 돌려 얻은 files[0]이다
+    // (경로만 /lib/a.txt로 바꿨다). quarantine_broken은 bookdoctor에 의존하지 않으므로 실제 출력을 그대로 붙여 둔다.
+    let real = r#"{
+      "scanned_at": "2026-10-29 21:55:56",
+      "root": "/lib",
+      "summary": {"scanned": 1, "by_severity": {"HIGH": 1}, "by_category": {"defect": 1}, "incomplete": 0},
+      "files": [{
+        "path": "/lib/a.txt",
+        "format": "txt",
+        "findings": [{"category": "defect", "severity": "HIGH", "code": "MOJIBAKE", "location": "", "detail": "likeness=0.002", "viewer_blocked": "n/a"}],
+        "incomplete": false,
+        "reasons": [],
+        "likeness": 0.002
+      }]
+    }"#;
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("r.json");
+    fs::write(&f, real).unwrap();
+    let recs = load_corrupted(&f).unwrap();
+    assert_eq!(recs.len(), 1);
+    assert_eq!((s(&recs[0], "path"), s(&recs[0], "verdict")), ("/lib/a.txt".to_owned(), "corrupted".to_owned()));
+    assert_eq!(recs[0]["likeness"], json!(0.002));
 }
 
 #[test]
@@ -649,4 +755,138 @@ fn manifest_write_failure_is_logged_but_the_move_is_reported() {
 fn summaries_group_thousands_with_commas() {
     let moves: Vec<Value> = (0..1234).map(|i| json!({"dst": format!("/text/{BROKEN_DIR_NAME}/3_판타지/{i}.txt"), "size": 1})).collect();
     assert!(summary(&moves).contains("대상 1,234건"));
+}
+
+// ---- 크기 보충 ----
+
+#[test]
+fn plan_stats_the_source_when_the_record_has_no_size() {
+    // bookdoctor 리포트에는 size가 없다. 계획 단계에서 원본 파일 크기를 읽어 채운다.
+    let lib = library();
+    let big = lib.root.join("3_판타지/큰파일.txt");
+    fs::write(&big, vec![b'x'; 1024 * 1024]).unwrap();
+    let f = lib.tmp.join("r.json");
+    fs::write(&f, bd_report(&[(p(&big), Some(0.002))], vec![])).unwrap();
+    let moves = plan_moves(&load_corrupted(&f).unwrap(), &lib.root, &quiet);
+    assert_eq!(moves[0]["size"], json!(1024 * 1024));
+    assert!(summary(&moves.into_iter().map(Value::Object).collect::<Vec<_>>()).contains("대상 1건, 1.0MB"));
+}
+
+#[test]
+fn plan_keeps_a_size_the_record_already_has_and_uses_zero_for_a_missing_file() {
+    let lib = library();
+    let mut recs = records_for(&lib, &["3_판타지/a.txt"]);
+    recs[0].insert("size".into(), json!(777));
+    assert_eq!(plan_moves(&recs, &lib.root, &quiet)[0]["size"], json!(777));
+
+    let ghost = lib.root.join("3_판타지/없는파일.txt");
+    let rec = json!({"path": ghost.to_string_lossy(), "verdict": "corrupted"}).as_object().unwrap().clone();
+    assert_eq!(plan_moves(&[rec], &lib.root, &quiet)[0]["size"], json!(0));
+}
+
+#[test]
+fn load_corrupted_skips_pdf_mojibake_and_logs_it() {
+    // `bookdoctor --pdf-text`는 PDF에도 MOJIBAKE를 낸다. 설계서 12-1: 격리 대상은 지금처럼 txt와 epub뿐이다.
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("report.json");
+    let mut pdf = bd_file("/lib/a.pdf", &["MOJIBAKE"], Some(0.001));
+    pdf["format"] = json!("pdf");
+    let mut epub = bd_file("/lib/b.epub", &["MOJIBAKE"], Some(0.002));
+    epub["format"] = json!("epub");
+    fs::write(&f, bd_report(&[("/lib/c.txt", Some(0.003))], vec![pdf, epub])).unwrap();
+    let logged = std::cell::RefCell::new(Vec::<String>::new());
+    let recs = load_corrupted_logged(&f, &|m| logged.borrow_mut().push(m.to_owned())).unwrap();
+    let paths: Vec<String> = recs.iter().map(|r| s(r, "path")).collect();
+    assert_eq!(paths, ["/lib/c.txt", "/lib/b.epub"]);
+    assert_eq!(logged.borrow().len(), 1);
+    assert!(logged.borrow()[0].contains("/lib/a.pdf"), "{:?}", logged.borrow());
+    assert_eq!(load_corrupted(&f).unwrap().len(), 2);
+}
+
+// ---- 표시용 문자열 정리: 화면에는 ESC[31m·U+202E가 없고, 열거나 옮기는 경로는 원문이다 ----
+
+const EVIL: &str = "ev\u{1b}[31m\u{202e}il.txt";
+
+fn assert_clean(text: &str) {
+    assert!(!text.contains('\u{1b}') && !text.contains('\u{202e}'), "{text:?}");
+}
+
+fn evil_library() -> Lib {
+    let lib = library();
+    fs::write(lib.root.join("3_판타지").join(EVIL), "본문").unwrap();
+    lib
+}
+
+#[test]
+fn cli_plan_and_move_print_clean_names_but_move_the_real_file() {
+    let lib = evil_library();
+    let rel = format!("3_판타지/{EVIL}");
+    let report = report_for(&lib, &[rel.as_str()]);
+    let manifest = lib.tmp.join("manifest.json");
+    let (_, out) = run_cli(&lib, &["plan", "--report", p(&report), "--library-root", p(&lib.root)]);
+    assert_clean(&out);
+    assert!(out.contains("ev.[31m.il.txt"), "{out:?}");
+    let (code, out) = run_cli(&lib, &["move", "--report", p(&report), "--library-root", p(&lib.root), "--manifest", p(&manifest)]);
+    assert_eq!(code, 0);
+    assert_clean(&out);
+    assert!(!lib.root.join("3_판타지").join(EVIL).exists());
+    assert!(lib.root.join(BROKEN_DIR_NAME).join("3_판타지").join(EVIL).exists());
+}
+
+#[test]
+fn cli_failure_lines_and_manifest_path_are_clean() {
+    let lib = library();
+    let manifest = lib.tmp.join(format!("m{EVIL}.json"));
+    let rel = format!("3_판타지/없는{EVIL}");
+    let report = report_for(&lib, &[rel.as_str()]);
+    let (_, out) = run_cli(&lib, &["move", "--report", p(&report), "--library-root", p(&lib.root), "--manifest", p(&manifest)]);
+    assert_clean(&out);
+    assert!(out.contains("원본 없음"), "{out:?}");
+    // 실제 이동 뒤 격리본을 지워 undo 실패 줄과 매니페스트 줄도 확인한다.
+    fs::write(lib.root.join("3_판타지").join(EVIL), "본문").unwrap();
+    let rel = format!("3_판타지/{EVIL}");
+    let report = report_for(&lib, &[rel.as_str()]);
+    let (_, out) = run_cli(&lib, &["move", "--report", p(&report), "--library-root", p(&lib.root), "--manifest", p(&manifest)]);
+    assert_clean(&out);
+    assert!(out.contains("매니페스트: "), "{out:?}");
+    let moved = read_json(&manifest)["moved"].clone();
+    fs::remove_file(moved[0]["dst"].as_str().unwrap()).unwrap();
+    let (_, out) = run_cli(&lib, &["undo", "--manifest", p(&manifest)]);
+    assert_clean(&out);
+    assert!(out.contains("격리본 없음"), "{out:?}");
+}
+
+#[test]
+fn move_failure_log_is_clean_while_the_mover_gets_the_raw_paths() {
+    let lib = evil_library();
+    let rel = format!("3_판타지/{EVIL}");
+    let moves = plan(&lib, &[rel.as_str()]);
+    let seen = RefCell::new(Vec::<PathBuf>::new());
+    let logged = RefCell::new(Vec::<String>::new());
+    let boom = |a: &Path, _: &Path| -> io::Result<()> {
+        seen.borrow_mut().push(a.to_path_buf());
+        Err(io::Error::other(format!("실패 {EVIL}")))
+    };
+    let result = apply_moves_with(&moves, &lib.tmp.join("manifest.json"), false, &|m| logged.borrow_mut().push(m.to_owned()), &boom);
+    assert_eq!(result.failed.len(), 1);
+    assert_eq!(seen.borrow()[0], lib.root.join("3_판타지").join(EVIL));
+    assert!(!logged.borrow().is_empty());
+    for l in logged.borrow().iter() {
+        assert_clean(l);
+    }
+}
+
+#[test]
+fn skipped_paths_and_summary_categories_are_clean() {
+    let lib = library();
+    let logged = RefCell::new(Vec::<String>::new());
+    let outside = json!({"path": format!("/elsewhere/{EVIL}"), "verdict": "corrupted"}).as_object().unwrap().clone();
+    plan_moves(&[outside], &lib.root, &|m| logged.borrow_mut().push(m.to_owned()));
+    assert_eq!(logged.borrow().len(), 1);
+    assert_clean(&logged.borrow()[0]);
+
+    let mv = json!({"src": "/x", "dst": format!("{}/_broken/3_{EVIL}/a.txt", lib.root.display())}).as_object().unwrap().clone();
+    let mut out = Vec::new();
+    summarize(&[mv], &mut out).unwrap();
+    assert_clean(&String::from_utf8(out).unwrap());
 }

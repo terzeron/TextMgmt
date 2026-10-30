@@ -1,0 +1,24 @@
+[package]
+name = "ole_reader"
+description = "OLE 복합 파일(CFB)을 관대하게 읽는 파서: 손상된 구조도 읽을 수 있는 만큼 읽고 비정상을 목록으로 돌려준다. MS-OVBA(VBA) 압축 해제 포함"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[test]]
+name = "vba"
+path = "../../tests/rust/ole_reader/vba.rs"
+
+[[test]]
+name = "anomalies"
+path = "../../tests/rust/ole_reader/anomalies.rs"
+
+[[test]]
+name = "ole_reader"
+path = "../../tests/rust/ole_reader/ole_reader.rs"
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3.27.0"
