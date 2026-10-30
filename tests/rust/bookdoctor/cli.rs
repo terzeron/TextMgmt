@@ -4,7 +4,7 @@ mod common;
 
 use std::path::Path;
 
-use bookdoctor::cli::{Options, effective_workers, parse, print_usage, run};
+use bookdoctor::cli::{Options, effective_workers, parse, print_usage, run, run_with_env};
 use scan_common::{Category, Severity};
 
 fn args(s: &str) -> Vec<String> {
@@ -214,13 +214,25 @@ fn color_always_paints_structure_errors_red() {
     assert!(out.contains("\u{1b}[31m  [MEDIUM] EMPTY_FILE"), "{out:?}");
 }
 
+fn run_env(dir: &Path, extra: &[&str], is_tty: bool, no_color: bool) -> String {
+    let mut argv: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
+    argv.push("-r".into());
+    argv.push(dir.to_string_lossy().into_owned());
+    let mut out = Vec::new();
+    run_with_env(&argv, &mut out, is_tty, no_color);
+    String::from_utf8(out).unwrap()
+}
+
 #[test]
-fn piped_output_has_no_ansi_in_auto_mode_and_never_mode() {
+fn auto_color_follows_the_callers_tty_and_no_color_not_the_test_runners_stdout() {
     let d = low_and_medium_dir();
-    for extra in [vec!["--min-severity", "low"], vec!["--min-severity", "low", "--color", "never"]] {
-        let (_, out) = run_in(d.path(), &extra);
-        assert!(!out.contains('\u{1b}'), "{extra:?}: {out:?}");
-    }
+    let low = ["--min-severity", "low"];
+    assert!(run_env(d.path(), &low, true, false).contains('\u{1b}'), "tty, no NO_COLOR -> color");
+    assert!(!run_env(d.path(), &low, true, true).contains('\u{1b}'), "NO_COLOR wins");
+    assert!(!run_env(d.path(), &low, false, false).contains('\u{1b}'), "pipe -> no color");
+    // --color never는 TTY여도, --color always는 파이프여도 따른다.
+    assert!(!run_env(d.path(), &["--min-severity", "low", "--color", "never"], true, false).contains('\u{1b}'));
+    assert!(run_env(d.path(), &["--min-severity", "low", "--color", "always"], false, true).contains('\u{1b}'));
 }
 
 #[test]

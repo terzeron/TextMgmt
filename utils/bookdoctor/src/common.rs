@@ -30,7 +30,8 @@ pub fn sniff_head(head: &[u8]) -> Sniffed {
 /// `MZ`로 시작하고 e_lfanew가 머리 끝 이후·파일 안이면 그 자리의 4바이트가 `PE\0\0`인지 읽는다.
 fn sniff_file(head: &[u8], file: &mut File, len: u64) -> std::io::Result<Sniffed> {
     let sniffed = sniff_head(head);
-    if sniffed != Sniffed::Unknown || !head.starts_with(b"MZ") || head.len() < 0x40 {
+    // `%PDF-`가 머리에 있어 Pdf로 판정된 경우에도 먼 PE 헤더를 확인한다(PE가 DOS stub에 `%PDF-`를 넣어 위장할 수 있다).
+    if !matches!(sniffed, Sniffed::Unknown | Sniffed::Pdf) || !head.starts_with(b"MZ") || head.len() < 0x40 {
         return Ok(sniffed);
     }
     let off = u64::from(u32::from_le_bytes([head[0x3C], head[0x3D], head[0x3E], head[0x3F]]));
@@ -112,11 +113,14 @@ pub fn inspect_with_sniff(path: &Path, opts: &Options, report: &mut FileReport) 
         report.push(Category::Defect, Severity::Medium, "EMPTY_FILE", "", "길이가 0이다");
         return None;
     }
-    if len > opts.max_total_mb.saturating_mul(1024 * 1024) {
+    // 실행 파일 확장자는 앞 64KiB와 PE 헤더 4바이트만 읽는다. 파서용 크기 한도와 잘린 다운로드 검사(희소 파일, 끝 0)는 걸지 않는다.
+    // 펌웨어·이미지처럼 끝이 0으로 찬 정상 데이터가 오탐이 되고, 큰 설치 파일이 한도로 확정을 피하는 것을 막는다.
+    let exec_ext = path.extension().is_some_and(|e| crate::exe::is_exec_extension(&e.to_string_lossy()));
+    if !exec_ext && len > opts.max_total_mb.saturating_mul(1024 * 1024) {
         report.mark_incomplete(&format!("skipped: {len} bytes exceeds --max-total-mb"));
         return None;
     }
-    if is_sparse(&meta) {
+    if !exec_ext && is_sparse(&meta) {
         report.push(Category::Defect, Severity::High, "SPARSE_FILE", "", "할당된 블록이 길이의 99% 미만이다 (잘린 다운로드)");
     }
     let mut file = match File::open(path) {
@@ -131,7 +135,7 @@ pub fn inspect_with_sniff(path: &Path, opts: &Options, report: &mut FileReport) 
         report.mark_incomplete(&format!("unreadable: {e}"));
         return None;
     }
-    if len >= TAIL_BYTES {
+    if !exec_ext && len >= TAIL_BYTES {
         match tail_is_zero(&mut file, len) {
             Ok(true) => report.push(Category::Defect, Severity::High, "ZERO_TAIL", "", "마지막 4096바이트가 전부 0이다"),
             Ok(false) => {}

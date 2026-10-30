@@ -213,3 +213,55 @@ fn executable_count_survives_a_filter_that_hides_the_finding() {
     assert_eq!(code, 0, "{out}");
     assert!(!out.contains("EXECUTABLE_FILE") && out.contains("실행 파일 1건"), "{out}");
 }
+
+// --- 최종 리뷰 반영 ---
+
+#[test]
+fn executable_with_a_pdf_marker_in_the_head_is_still_confirmed() {
+    let mut b = pe_bytes(0x200, 0x300);
+    b[0x80..0x85].copy_from_slice(b"%PDF-");
+    assert!(scan_named("evil.exe", &b).has("EXECUTABLE_FILE"));
+}
+
+#[test]
+fn far_pe_with_a_pdf_marker_in_the_head_is_still_confirmed() {
+    let mut b = pe_bytes(70_000, 70_100);
+    b[0x80..0x85].copy_from_slice(b"%PDF-");
+    assert!(scan_named("evil.dll", &b).has("EXECUTABLE_FILE"));
+}
+
+#[test]
+fn txt_with_pe_and_a_pdf_marker_still_reports_disguised_executable() {
+    let mut b = pe_bytes(0x200, 0x300);
+    b[0x80..0x85].copy_from_slice(b"%PDF-");
+    assert!(scan_named("evil.txt", &b).has("DISGUISED_EXECUTABLE"));
+}
+
+#[test]
+fn data_like_executable_extension_does_not_get_zero_tail_or_sparse_findings() {
+    let mut b: Vec<u8> = (0..8192u32).map(|i| (i % 251) as u8 + 1).collect();
+    b.extend(vec![0u8; 8192]);
+    let r = scan_named("firmware.bin", &b);
+    assert!(!r.has("ZERO_TAIL") && !r.has("SPARSE_FILE"), "{:?}", r.findings);
+    assert!(r.has("EXECUTABLE_EXTENSION_NO_MAGIC"));
+}
+
+#[test]
+fn executable_over_the_size_limit_is_still_confirmed_and_not_incomplete() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("big.exe");
+    let mut b = pe_bytes(0x40, 0x100);
+    b.resize(2 * 1024 * 1024, 0xAA);
+    std::fs::write(&p, &b).unwrap();
+    let r = scan_file(&p, &Options { max_total_mb: 1, ..Options::default() });
+    assert!(r.has("EXECUTABLE_FILE"), "{:?} {:?}", r.findings, r.reasons);
+    assert!(!r.incomplete);
+}
+
+#[test]
+fn non_executable_files_keep_the_size_limit_and_zero_tail_checks() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("big.txt");
+    std::fs::write(&p, vec![b'a'; 2 * 1024 * 1024]).unwrap();
+    assert!(scan_file(&p, &Options { max_total_mb: 1, ..Options::default() }).incomplete);
+}

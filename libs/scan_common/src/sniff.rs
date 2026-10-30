@@ -24,14 +24,10 @@ fn is_pe(head: &[u8]) -> bool {
     off.checked_add(4).is_some_and(|end| end <= head.len()) && &head[off..off + 4] == b"PE\0\0"
 }
 
-/// 파일 앞부분(`head`)의 바이트로 종류를 판별한다. `Pdf`는 앞 1024바이트 안 어디든 `%PDF-`가 있으면 맞다.
+/// 파일 앞부분(`head`)의 바이트로 종류를 판별한다. 오프셋 0의 실행 파일 매직(ELF·Mach-O·`MZ`+PE)이 먼저다.
+/// 그 밖에는 앞 1024바이트 안 어디든 `%PDF-`가 있으면 `Pdf`다.
 pub fn sniff(head: &[u8]) -> Sniffed {
-    if head[..head.len().min(PDF_WINDOW)].windows(5).any(|w| w == b"%PDF-") {
-        return Sniffed::Pdf;
-    }
-    if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
-        return Sniffed::Zip;
-    }
+    // 오프셋 0의 실행 파일 매직은 "앞 1KiB 안의 `%PDF-`"보다 강한 신호다. 실행 파일은 DOS stub 같은 자기 영역에 `%PDF-`를 넣어 PDF로 위장할 수 있다.
     if head.starts_with(b"\x7fELF") {
         return Sniffed::Elf;
     }
@@ -40,6 +36,12 @@ pub fn sniff(head: &[u8]) -> Sniffed {
     }
     if is_pe(head) {
         return Sniffed::Pe;
+    }
+    if head[..head.len().min(PDF_WINDOW)].windows(5).any(|w| w == b"%PDF-") {
+        return Sniffed::Pdf;
+    }
+    if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
+        return Sniffed::Zip;
     }
     let body = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
     let start = body.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(body.len());

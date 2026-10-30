@@ -117,8 +117,14 @@ fn wanted(p: &Path) -> bool {
     p.is_file() && p.extension().is_some_and(|e| ["epub", "pdf", "txt"].iter().any(|x| e.eq_ignore_ascii_case(x)) || is_exec_extension(&e.to_string_lossy()))
 }
 
-/// 진입점. 종료 코드를 돌려준다.
+/// 진입점. 종료 코드를 돌려준다. 색은 실제 stdout이 터미널인지와 `NO_COLOR`로 정한다.
 pub fn run(argv: &[String], out: &mut dyn Write) -> i32 {
+    run_with_env(argv, out, io::stdout().is_terminal(), std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()))
+}
+
+/// `run`과 같되 터미널 여부(`is_tty`)와 `NO_COLOR` 설정 여부를 호출자가 정한다. `--color auto`가 이 값을 따른다.
+/// `out`이 stdout이 아닐 수 있으므로 테스트가 실행 환경과 무관하게 같은 결과를 얻는다.
+pub fn run_with_env(argv: &[String], out: &mut dyn Write, is_tty: bool, no_color: bool) -> i32 {
     if argv.iter().any(|a| a == "-h" || a == "--help") {
         let _ = print_usage(out);
         return 0;
@@ -134,7 +140,7 @@ pub fn run(argv: &[String], out: &mut dyn Write) -> i32 {
             return 2;
         }
     };
-    match scan(&opts, out) {
+    match scan(&opts, out, enabled(opts.color, is_tty, no_color)) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("bookdoctor: error: {}", scan_common::text::sanitize_display(&e.to_string(), usize::MAX, None));
@@ -150,11 +156,10 @@ pub fn effective_workers(opts: &Options) -> usize {
 }
 
 /// 파일을 검사해 텍스트나 NDJSON으로 내보내고, 요청하면 리포트 파일을 쓴다.
-fn scan(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
+fn scan(opts: &Options, out: &mut dyn Write, color: bool) -> io::Result<i32> {
     let paths = limited(collect_files(&opts.paths, opts.recursive, wanted), opts.limit);
     let workers = effective_workers(opts);
     let pool = pool(workers);
-    let color = enabled(opts.color, io::stdout().is_terminal(), std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()));
     let mut agg = Aggregate::new();
     let summary = scan_streaming(
         &paths,
@@ -172,7 +177,10 @@ fn scan(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
             out.flush()
         },
     )?;
-    if !opts.json {
+    if opts.json {
+        // NDJSON stdout에는 파일 레코드만 둔다. 요약 줄은 stderr에 남겨 "깨끗함"과 "전부 억제됨"을 가를 수 있게 한다.
+        write_summary_line(&agg, &summary, &mut io::stderr().lock())?;
+    } else {
         write_summary_line(&agg, &summary, out)?;
     }
     if let Some(path) = &opts.report {
@@ -220,7 +228,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   PDF는 프로세스 안에서 메모리를 제한하지 못한다. 압축 객체 스트림(ObjStm)이 많은 PDF 하나가 RSS 2GB까지 쓴 것을 측정했고
   종료 코드는 0이다. 바깥에서 한도를 걸어 실행하라: systemd-run --user -p MemoryMax=4G bookdoctor ...
 
-종료 코드:
+종료 코드 (출력된 지표 기준. --min-severity보다 낮은 지표는 세지 않는다):
   0 지표 없음, 1 지표 있음, 2 검사하지 못한 파일이 있고 지표는 없음 또는 잘못된 인자
 "
     )
