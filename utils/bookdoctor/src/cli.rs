@@ -8,6 +8,7 @@ use scan_common::color::{ColorMode, enabled};
 use scan_common::files::collect_files;
 use scan_common::{Category, DEFAULT_WORKERS, Severity, limited, pool, scan_streaming, workers_within_memory};
 
+use crate::exe::is_exec_extension;
 use crate::pdf::security::MAX_PARALLEL_INPUT_MB;
 use crate::report::{Aggregate, write_json_line, write_report_file, write_summary_line, write_text};
 use crate::scan::scan_file;
@@ -113,7 +114,7 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
 }
 
 fn wanted(p: &Path) -> bool {
-    p.is_file() && p.extension().is_some_and(|e| ["epub", "pdf", "txt"].iter().any(|x| e.eq_ignore_ascii_case(x)))
+    p.is_file() && p.extension().is_some_and(|e| ["epub", "pdf", "txt"].iter().any(|x| e.eq_ignore_ascii_case(x)) || is_exec_extension(&e.to_string_lossy()))
 }
 
 /// 진입점. 종료 코드를 돌려준다.
@@ -185,7 +186,7 @@ fn scan(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
 pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
     write!(
         out,
-        "bookdoctor - EPUB·PDF·TXT 통합 진단. 파일을 렌더링하거나 실행하지 않고 보안, 결함, 렌더링 차단 여부를 본다.
+        "bookdoctor - EPUB·PDF·TXT 통합 진단과 실행 파일 확인. 파일을 렌더링하거나 실행하지 않고 보안, 결함, 렌더링 차단 여부를 본다.
 
 사용법:
   bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N]
@@ -193,7 +194,8 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
              [--color auto|always|never] [--pdf-text] [--no-poppler] PATH...
 
 인자:
-  PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt만 모은다.
+  PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt와 실행 파일 확장자(exe, dll, so, dylib 등)를 모은다.
+         실행 파일은 확장자와 매직바이트(ELF·Mach-O·PE)가 모두 맞을 때 EXECUTABLE_FILE로 알린다.
 
 옵션:
   -r, --recursive     디렉토리를 하위까지 훑는다.

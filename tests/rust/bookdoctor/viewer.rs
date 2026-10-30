@@ -161,3 +161,10 @@ fn only_filter_keeps_viewer_values() {
     assert!(r.findings.iter().all(|f| f.category == Category::Security));
     assert_eq!(value_of(&r, "SCRIPT_TAG"), ViewerBlocked::Blocked);
 }
+
+#[test]
+fn executable_format_is_not_applicable_to_the_viewer() {
+    for code in ["EXECUTABLE_FILE", "EXECUTABLE_EXTENSION_NO_MAGIC", "ANYTHING"] {
+        assert_eq!(viewer_blocked(Format::Executable, code), ViewerBlocked::NotApplicable, "{code}");
+    }
+}

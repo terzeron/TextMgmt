@@ -7,7 +7,7 @@ use scan_common::sniff::Sniffed;
 use scan_common::{FileReport, Format};
 
 use crate::cli::Options;
-use crate::{common, epub, pdf, txt, viewer};
+use crate::{common, epub, exe, pdf, txt, viewer};
 
 /// 검사할 포맷을 정한다. `.pdf`·`.epub`은 내용이 PDF·ZIP이면 내용을 따르고(`.pdf`인데 ZIP이면 EPUB),
 /// 그 밖에는 확장자를 따른다. 모르는 확장자는 `None`이다.
@@ -24,17 +24,19 @@ pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
         "pdf" => Some(Format::Pdf),
         "epub" => Some(Format::Epub),
         "txt" => Some(Format::Txt),
+        e if exe::is_exec_extension(e) => Some(Format::Executable),
         _ => None,
     }
 }
 
 fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
-    let Some(head) = common::inspect(path, opts, report) else { return };
-    report.format = dispatch_format(path, common::sniff_head(&head));
+    let Some((_head, sniffed)) = common::inspect_with_sniff(path, opts, report) else { return };
+    report.format = dispatch_format(path, sniffed);
     match report.format {
         Some(Format::Epub) => epub::scan_epub_file(path, opts, report),
         Some(Format::Pdf) => pdf::scan_pdf_file(path, opts, report),
         Some(Format::Txt) => txt::scan_txt_file(path, opts, report),
+        Some(Format::Executable) => exe::scan_exe_file(sniffed, report),
         None => report.mark_incomplete("unsupported format"),
     }
 }

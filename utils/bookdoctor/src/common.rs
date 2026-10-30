@@ -89,6 +89,11 @@ fn is_sparse(_meta: &fs::Metadata) -> bool {
 
 /// 공통 검사를 하고 앞 64KiB를 돌려준다. 이후 검사를 계속할 수 없으면 `None`이다.
 pub fn inspect(path: &Path, opts: &Options, report: &mut FileReport) -> Option<Vec<u8>> {
+    inspect_with_sniff(path, opts, report).map(|(head, _)| head)
+}
+
+/// `inspect`와 같되 매직바이트 판별 결과도 함께 돌려준다. 머리 밖에 있는 PE 헤더까지 확인한 값이다.
+pub fn inspect_with_sniff(path: &Path, opts: &Options, report: &mut FileReport) -> Option<(Vec<u8>, Sniffed)> {
     check_name(path, report);
     let meta = match fs::metadata(path) {
         Ok(m) => m,
@@ -144,7 +149,7 @@ pub fn inspect(path: &Path, opts: &Options, report: &mut FileReport) -> Option<V
         }
     };
     check_content_vs_name(path, sniffed, report);
-    Some(head)
+    Some((head, sniffed))
 }
 
 fn check_content_vs_name(path: &Path, sniffed: Sniffed, report: &mut FileReport) {

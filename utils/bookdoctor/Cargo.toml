@@ -19,6 +19,10 @@ name = "common_checks"
 path = "../../tests/rust/bookdoctor/common_checks.rs"
 
 [[test]]
+name = "exe"
+path = "../../tests/rust/bookdoctor/exe.rs"
+
+[[test]]
 name = "epub_gaps"
 path = "../../tests/rust/bookdoctor/epub_gaps.rs"
 

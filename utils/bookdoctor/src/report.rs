@@ -77,6 +77,9 @@ pub fn write_json_line(r: &FileReport, out: &mut dyn Write) -> io::Result<()> {
 /// 텍스트 모드의 마지막 요약 한 줄.
 pub fn write_summary_line(agg: &Aggregate, summary: &Summary, out: &mut dyn Write) -> io::Result<()> {
     write!(out, "검사 {}건, 발견 {}건, 검사하지 못함 {}건", summary.scanned, agg.findings(), agg.incomplete())?;
+    if agg.executables() > 0 {
+        write!(out, ", 실행 파일 {}건", agg.executables())?;
+    }
     let gone = agg.suppressed();
     let parts: Vec<String> = [("LOW", gone.low), ("MEDIUM", gone.medium), ("HIGH", gone.high)].iter().filter(|(_, n)| *n > 0).map(|(name, n)| format!("{name} {n}건")).collect();
     if !parts.is_empty() {
@@ -93,6 +96,7 @@ pub struct Aggregate {
     incomplete: usize,
     by_category: BTreeMap<&'static str, usize>,
     suppressed: Suppressed,
+    executables: usize,
 }
 
 impl Aggregate {
@@ -105,6 +109,7 @@ impl Aggregate {
         self.suppressed.low += r.suppressed.low;
         self.suppressed.medium += r.suppressed.medium;
         self.suppressed.high += r.suppressed.high;
+        self.executables += usize::from(r.confirmed_executable);
         if !is_flagged(r) {
             return;
         }
@@ -126,6 +131,11 @@ impl Aggregate {
         self.suppressed
     }
 
+    /// 확장자와 매직바이트가 모두 실행 파일인 파일 수.
+    pub fn executables(&self) -> usize {
+        self.executables
+    }
+
     /// 발견 총 건수.
     pub fn findings(&self) -> usize {
         self.findings
@@ -144,6 +154,7 @@ struct SummaryOut<'a> {
     by_category: &'a BTreeMap<&'static str, usize>,
     incomplete: usize,
     suppressed: Suppressed,
+    executables: usize,
 }
 
 #[derive(Serialize)]
@@ -159,7 +170,7 @@ pub fn write_report_file(path: &Path, agg: &Aggregate, summary: &Summary, root: 
     let doc = ReportOut {
         scanned_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
         root,
-        summary: SummaryOut { scanned: summary.scanned, by_severity: &summary.by_severity, by_category: &agg.by_category, incomplete: agg.incomplete, suppressed: agg.suppressed },
+        summary: SummaryOut { scanned: summary.scanned, by_severity: &summary.by_severity, by_category: &agg.by_category, incomplete: agg.incomplete, suppressed: agg.suppressed, executables: agg.executables },
         files: &agg.files,
     };
     let mut f = io::BufWriter::new(fs::File::create(path)?);

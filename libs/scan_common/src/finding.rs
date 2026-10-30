@@ -12,6 +12,8 @@ pub enum Format {
     Epub,
     Pdf,
     Txt,
+    /// 확장자가 실행 파일인 것. 매직바이트까지 맞으면 `confirmed_executable`이다.
+    Executable,
 }
 
 /// 지표의 분류.
@@ -88,6 +90,9 @@ pub struct FileReport {
     /// `suppress_below`가 지운 지표의 건수. 지운 것이 없으면 JSON에 나오지 않는다.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Suppressed::is_empty"))]
     pub suppressed: Suppressed,
+    /// 확장자와 매직바이트가 모두 실행 파일이다. 출력 필터가 지표를 지워도 집계가 남도록 따로 둔다.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "std::ops::Not::not"))]
+    pub confirmed_executable: bool,
 }
 
 impl FileReport {
@@ -95,7 +100,7 @@ impl FileReport {
     /// 터미널에 찍는 쪽이 `text::sanitize_display`로 제어·방향 문자를 지운다.
     pub fn new(path: &Path, format: Option<Format>) -> Self {
         let path = path.to_string_lossy().into_owned();
-        FileReport { path, format, findings: Vec::new(), incomplete: false, reasons: Vec::new(), likeness: None, suppressed: Suppressed::default() }
+        FileReport { path, format, findings: Vec::new(), incomplete: false, reasons: Vec::new(), likeness: None, suppressed: Suppressed::default(), confirmed_executable: false }
     }
 
     /// 지표를 더한다. `viewer_blocked`는 나중에 채우므로 `NotApplicable`로 둔다.

@@ -18,7 +18,7 @@ fn dispatch_follows_content_for_pdf_that_is_a_zip() {
 fn dispatch_follows_extension_otherwise() {
     assert_eq!(dispatch_format(Path::new("a.txt"), Sniffed::Unknown), Some(Format::Txt));
     assert_eq!(dispatch_format(Path::new("a.epub"), Sniffed::Unknown), Some(Format::Epub));
-    assert_eq!(dispatch_format(Path::new("a.bin"), Sniffed::Pdf), None);
+    assert_eq!(dispatch_format(Path::new("a.dat"), Sniffed::Pdf), None);
 }
 
 #[test]
