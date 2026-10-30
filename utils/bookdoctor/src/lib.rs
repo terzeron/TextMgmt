@@ -13,6 +13,7 @@ pub mod pdf;
 pub mod prefetch;
 pub mod recurse;
 pub mod report;
+pub mod rules;
 pub mod scan;
 pub mod txt;
 pub mod viewer;
