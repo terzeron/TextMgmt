@@ -291,27 +291,38 @@ enum Target {
 
 static SCHEME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^([a-z][a-z0-9+.-]*):").unwrap());
 
+/// `file:` 뒤의 문자열(역슬래시는 `/`로, 소문자로 바꾼 것)이 원격을 가리키는가. 호스트가 있으면(`file://host/...`) 원격이고,
+/// 호스트가 비었거나 `localhost`여도 경로가 `//`로 시작하면(`file:////host/share`, `file://localhost//host/share`) UNC다.
+/// 드라이브 경로(`file:///C:/...`, `file:/C:/...`)와 POSIX 절대 경로만 로컬이다.
+fn file_tail_is_remote(tail: &str) -> bool {
+    let tail = tail.split(|c: char| c.is_whitespace() || c == '"' || c == '\'').next().unwrap_or("");
+    let (authority, path) = match tail.strip_prefix("//") {
+        Some(after) => {
+            let end = after.find('/').unwrap_or(after.len());
+            (&after[..end], &after[end..])
+        }
+        None => ("", tail),
+    };
+    (!authority.is_empty() && authority != "localhost") || path.starts_with("//")
+}
+
 fn target_kind(target: &str) -> Target {
     let t = target.trim();
     if t.starts_with("\\\\") {
         return Target::Remote { unc: true };
     }
-    let lower = t.to_ascii_lowercase();
-    if let Some(rest) = lower.strip_prefix("file:") {
-        return match rest.strip_prefix("//") {
-            Some(after) => {
-                let authority = after.split('/').next().unwrap_or("");
-                if authority.is_empty() || authority == "localhost" { Target::LocalFile } else { Target::Remote { unc: true } }
-            }
-            None => Target::LocalFile,
-        };
+    // 역슬래시를 `/`로 바꿔 `file:\\host\share`와 `file://host/share`를 같게 본다.
+    let normalized = t.replace('\\', "/").to_ascii_lowercase();
+    if let Some(rest) = normalized.strip_prefix("file:") {
+        return if file_tail_is_remote(rest) { Target::Remote { unc: true } } else { Target::LocalFile };
     }
-    if SCHEME.is_match(&lower) && lower.contains("://") { Target::Remote { unc: false } } else { Target::Other }
+    if SCHEME.is_match(&normalized) && normalized.contains("://") { Target::Remote { unc: false } } else { Target::Other }
 }
 
 /// 관계 파일 이름과 `Target`으로 가리키는 부분의 이름을 구한다(내부 관계). `word/_rels/document.xml.rels`의 기준 디렉터리는 `word`다.
 fn resolve_target(rels_name: &str, target: &str) -> String {
-    let base = rels_name.to_lowercase().rfind("/_rels/").map_or(String::new(), |i| rels_name[..i].to_string());
+    // 소문자 변환은 바이트 길이를 바꿀 수 있으므로(`İ` 등) 길이를 보존하는 ASCII 변환으로 찾고, 원본은 `get`으로 자른다.
+    let base = rels_name.to_ascii_lowercase().rfind("/_rels/").and_then(|i| rels_name.get(..i)).map_or(String::new(), str::to_string);
     let target = unquote(target);
     if let Some(rooted) = target.strip_prefix('/') {
         return posix_normpath(rooted);
@@ -364,17 +375,17 @@ fn check_relationships(doc: &roxmltree::Document, name: &str, macro_enabled: boo
 static FIELD_UNC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?:^|["'\s])\\{2,4}[A-Za-z0-9_.$-]"#).unwrap());
 static FIELD_URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\b([a-z][a-z0-9+.-]*)://([^\s"'/]*)"#).unwrap());
 
-/// 지시문이 가리키는 원격 대상. 원격이 아니면 `None`이다. 두 번째 값은 UNC·file 호스트(NTLM 해시가 새는 대상)인지다.
+/// 지시문이 가리키는 원격 대상. 원격이 아니면 `None`이다. 값은 UNC·file 호스트(NTLM 해시가 새는 대상)인지다.
+/// `file:`은 역슬래시를 `/`로 바꿔 본다. 그 변환을 URL 검사에 쓰면 두 배 역슬래시의 로컬 경로(`c:\\dir`)가 `c://dir`이 되어 URL로 오인된다.
 fn field_remote(instr: &str) -> Option<bool> {
     if FIELD_UNC.is_match(instr) {
         return Some(true);
     }
-    let caps = FIELD_URL.captures(instr)?;
-    if caps[1].eq_ignore_ascii_case("file") {
-        let authority = caps[2].to_ascii_lowercase();
-        return if authority.is_empty() || authority == "localhost" { None } else { Some(true) };
+    let normalized = instr.replace('\\', "/").to_ascii_lowercase();
+    if normalized.match_indices("file:").any(|(i, _)| file_tail_is_remote(&normalized[i + 5..])) {
+        return Some(true);
     }
-    Some(false)
+    FIELD_URL.captures_iter(instr).any(|c| !c[1].eq_ignore_ascii_case("file")).then_some(false)
 }
 
 fn classify_field(instr: &str, name: &str, report: &mut FileReport) {

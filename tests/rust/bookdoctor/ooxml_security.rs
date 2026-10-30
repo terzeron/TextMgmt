@@ -532,3 +532,40 @@ fn xml_declaration_is_parsed_in_full_not_in_a_fixed_window() {
     let r = docx(&[("word/footer3.xml", lie.as_bytes())]);
     assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("UTF-16")), "{:?}", r.reasons);
 }
+
+// --- 보안 검토 4차: file: URL 변형, 소문자 변환 인덱스 ---
+
+#[test]
+fn file_urls_with_extra_slashes_backslashes_or_localhost_unc_are_remote() {
+    for target in ["file:////corp/share/t.dotm", "file:\\\\corp\\share\\t.dotm", "file://localhost//corp/share/t.dotm", "file:\\\\\\\\corp\\\\share\\\\t.dotm"] {
+        let r = docx(&[("word/_rels/settings.xml.rels", &rels(&[("attachedTemplate", target, true)]))]);
+        assert_security(&r, "OOXML_REMOTE_TEMPLATE", Severity::Critical);
+        assert_security(&r, "OOXML_UNC_TARGET", Severity::High);
+    }
+    for target in ["file:///C:/Users/x/t.dotx", "file:/C:/Users/x/t.dotx", "file://localhost/C:/Users/x/t.dotx"] {
+        let r = docx(&[("word/_rels/settings.xml.rels", &rels(&[("attachedTemplate", target, true)]))]);
+        assert!(!r.has("OOXML_REMOTE_TEMPLATE") && !r.has("OOXML_UNC_TARGET"), "{target}: {:?}", r.findings);
+        assert_eq!(finding(&r, "OOXML_LOCAL_TEMPLATE").severity, Severity::Low, "{target}");
+    }
+}
+
+#[test]
+fn field_instructions_with_file_unc_variants_are_flagged_and_local_drive_paths_are_not() {
+    for instr in [" INCLUDETEXT \"file:////corp/share/x.docx\" ", " INCLUDETEXT \"file:\\\\\\\\corp\\\\share\\\\x.docx\" ", " LINK Word.Document.12 \"file://corp/share/x.docx\" "] {
+        let r = docx(&[("word/document.xml", &document(&field(&[instr])))]);
+        assert_security(&r, "OOXML_DANGEROUS_FIELD", Severity::High);
+    }
+    for instr in [" INCLUDETEXT \"file:///C:/docs/x.docx\" ", " INCLUDETEXT \"c:\\\\docs\\\\x.docx\" "] {
+        let r = docx(&[("word/document.xml", &document(&field(&[instr])))]);
+        assert!(!has_ooxml(&r), "{instr}: {:?}", r.findings);
+    }
+}
+
+#[test]
+fn part_names_whose_lowercase_changes_the_byte_length_do_not_panic_the_scan() {
+    // `İ`(U+0130)의 소문자는 바이트 수가 늘어난다. 소문자 문자열의 인덱스로 원본을 자르면 글자 한가운데에서 panic한다.
+    let name = format!("word/{}/_rels/한글.rels", "\u{130}".repeat(8));
+    let r = docx(&[(name.as_str(), &rels(&[("vbaProject", "m.dat", false)]))]);
+    assert!(!r.reasons.iter().any(|x| x.starts_with("panic")), "{:?}", r.reasons);
+    assert!(r.findings.iter().any(|f| f.code == "OOXML_VBA_PROJECT" && f.location.ends_with("m.dat")), "{:?}", r.findings);
+}
