@@ -119,6 +119,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 corpus_common = { path = "../../libs/corpus_common" }
 encoding_rs = "0.8.42"
 fancy-regex = "0.14"
+flate2 = "1"
 htmlkit = { path = "../../libs/htmlkit" }
 lopdf.workspace = true
 rayon = "1.12.0"

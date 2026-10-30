@@ -3,12 +3,17 @@
 use ole_reader::OleFile;
 use scan_common::{Category, FileReport, Severity};
 
+use scan_common::text::sanitize_display;
+
 use super::header::FileHeader;
+use super::inflate::{InflateError, decompress};
 
 /// 스크립트 스트림에서 읽는 최대 바이트.
 const MAX_SCRIPT: usize = 4 * 1024 * 1024;
 /// 실행·내려받기·환경 접근을 뜻하는 키워드(소문자). 단어 경계가 필요한 `eval(`·`new function`은 따로 본다.
 const KEYWORDS: &[&str] = &["activexobject", "wscript", "shell.", "shellexecute", "xmlhttp", "adodb.stream", "powershell", "cmd.exe", "urldownloadtofile"];
+/// 검사하는 `Scripts` 아래 스트림 수의 상한.
+const MAX_STREAMS: usize = 32;
 /// `DefaultJScript`의 끝 표시(DWORD `-1`).
 const END_FLAG: u32 = u32::MAX;
 
@@ -61,7 +66,35 @@ fn suspicious(text: &str) -> Option<&'static str> {
     None
 }
 
+/// 원시 바이트를 UTF-16과 8비트로 모두 읽은 텍스트. 구조를 모를 때 키워드만 찾는 데 쓴다.
+fn raw_text(data: &[u8]) -> String {
+    let latin1: String = data.iter().map(|&b| b as char).collect();
+    format!("{}\n{latin1}", utf16_lossy(data))
+}
+
+/// 스트림을 읽는다. 압축 비트가 서 있으면 raw deflate나 zlib으로 풀어 본다(표 2는 `Scripts`를 압축 대상으로 표시하지 않으므로
+/// 압축하지 않은 스트림도 받는다). 풀린 바이트와, 상한이나 읽기 문제로 덜 본 사유를 돌려준다.
+fn read_script(file: &mut OleFile, entry: &ole_reader::Entry, compressed: bool) -> Result<(Vec<u8>, Option<String>), String> {
+    let data = file.read_stream_prefix(entry, MAX_SCRIPT).map_err(|e| format!("{} could not be read: {e:?}", entry.name))?;
+    let mut note = (entry.size > MAX_SCRIPT as u64).then(|| format!("{} ({} bytes) exceeds the scan limit; only the first {} MiB were scanned", entry.name, entry.size, MAX_SCRIPT / (1024 * 1024)));
+    if compressed && !(entry.name == "DefaultJScript" && parse(&data).is_some()) && !looks_like_text(&data) {
+        match decompress(&data, MAX_SCRIPT) {
+            Ok(inflated) => return Ok((inflated, note)),
+            Err(InflateError::TooLarge) => note = Some(format!("{} decompresses beyond the {} MiB scan limit", entry.name, MAX_SCRIPT / (1024 * 1024))),
+            // 압축된 스트림이 아니었다. 있는 그대로 본다.
+            Err(InflateError::Invalid) => {}
+        }
+    }
+    Ok((data, note))
+}
+
+/// 풀 필요가 없는 평문처럼 보이는가(`Scripts`의 짧은 버전 스트림 등). 8바이트 이하는 풀지 않는다.
+fn looks_like_text(data: &[u8]) -> bool {
+    data.len() <= 8
+}
+
 /// `Scripts` 스토리지를 검사한다. 스토리지와 `FileHeader` 비트 3이 어긋나면 결함이다.
+/// `DefaultJScript`는 표 9 구조로, 그 밖의 `Scripts` 아래 스트림은 원시 텍스트로 키워드를 찾는다.
 pub fn inspect(file: &mut OleFile, header: &FileHeader, report: &mut FileReport) {
     let has_storage = file.find("Scripts").is_some();
     if has_storage {
@@ -71,27 +104,36 @@ pub fn inspect(file: &mut OleFile, header: &FileHeader, report: &mut FileReport)
         let detail = if has_storage { "Scripts storage exists but FileHeader bit3 (script saved) is clear" } else { "FileHeader bit3 (script saved) is set but there is no Scripts storage" };
         report.push(Category::Defect, Severity::Medium, "HWP_SCRIPT_FLAG_MISMATCH", "Scripts", detail);
     }
-    let Some(entry) = file.find("Scripts/DefaultJScript").cloned() else { return };
-    let data = match file.read_stream_prefix(&entry, MAX_SCRIPT) {
-        Ok(d) => d,
-        Err(e) => {
-            report.mark_incomplete(&format!("Scripts/DefaultJScript could not be read: {e:?}"));
-            return;
+    if !has_storage {
+        return;
+    }
+    let streams: Vec<(String, ole_reader::Entry)> = file
+        .entries()
+        .iter()
+        .filter(|e| e.kind == ole_reader::EntryKind::Stream)
+        .map(|e| (file.path_of(e), e.clone()))
+        .filter(|(path, _)| path.to_lowercase().starts_with("scripts/"))
+        .take(MAX_STREAMS)
+        .collect();
+    for (path, entry) in streams {
+        let (data, note) = match read_script(file, &entry, header.compressed()) {
+            Ok(r) => r,
+            Err(reason) => {
+                report.mark_incomplete(&reason);
+                continue;
+            }
+        };
+        if let Some(note) = note {
+            report.mark_incomplete(&note);
         }
-    };
-    if entry.size > MAX_SCRIPT as u64 {
-        report.mark_incomplete(&format!("Scripts/DefaultJScript ({} bytes) exceeds the scan limit; only the first {} MiB were scanned", entry.size, MAX_SCRIPT / (1024 * 1024)));
-    }
-    let parsed = if entry.size > MAX_SCRIPT as u64 { None } else { parse(&data) };
-    let text = parsed.clone().unwrap_or_else(|| {
-        // 구조가 맞지 않으면 원시 바이트를 UTF-16과 8비트로 모두 읽어 키워드만 찾는다.
-        let latin1: String = data.iter().map(|&b| b as char).collect();
-        format!("{}\n{latin1}", utf16_lossy(&data))
-    });
-    if parsed.is_none() && entry.size <= MAX_SCRIPT as u64 {
-        report.mark_incomplete("Scripts/DefaultJScript does not follow the documented layout; scanned as raw bytes");
-    }
-    if let Some(keyword) = suspicious(&text) {
-        report.push(Category::Security, Severity::Critical, "HWP_SCRIPT_SUSPICIOUS", "Scripts/DefaultJScript", &format!("script uses {keyword}"));
+        let default = entry.name.eq_ignore_ascii_case("DefaultJScript");
+        let parsed = if default && data.len() <= MAX_SCRIPT && entry.size <= MAX_SCRIPT as u64 { parse(&data) } else { None };
+        if default && parsed.is_none() && entry.size <= MAX_SCRIPT as u64 {
+            report.mark_incomplete("Scripts/DefaultJScript does not follow the documented layout; scanned as raw bytes");
+        }
+        let text = parsed.unwrap_or_else(|| raw_text(&data));
+        if let Some(keyword) = suspicious(&text) {
+            report.push(Category::Security, Severity::Critical, "HWP_SCRIPT_SUSPICIOUS", &sanitize_display(&path, 120, Some('…')), &format!("script uses {keyword}"));
+        }
     }
 }

@@ -2,6 +2,7 @@
 //! 파일을 실행하거나 렌더링하지 않는다.
 
 pub mod header;
+pub mod inflate;
 pub mod script;
 
 use std::path::Path;

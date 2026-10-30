@@ -385,6 +385,7 @@ dependencies = [
  "corpus_common",
  "encoding_rs",
  "fancy-regex",
+ "flate2",
  "htmlkit",
  "lopdf",
  "ole_reader",
