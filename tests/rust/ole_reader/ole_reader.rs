@@ -114,3 +114,26 @@ fn open_reads_a_file_from_disk_and_respects_the_total_limit() {
     let tiny = Limits { max_total: 1024, ..Limits::default() };
     assert!(matches!(OleFile::open(&p, &tiny), Err(OleError::Limit(_))));
 }
+
+#[test]
+fn path_of_joins_storage_names_from_the_root() {
+    let data = bytes_of(50, 1);
+    let file = open(&make_cfb(&[("Macros/VBA/dir", &data), ("WordDocument", &data)]));
+    let dir = file.find("Macros/VBA/dir").unwrap().clone();
+    assert_eq!(file.path_of(&dir), "Macros/VBA/dir");
+    let vba = file.find("macros/vba").unwrap().clone();
+    assert_eq!(file.path_of(&vba), "Macros/VBA");
+    assert_eq!(file.path_of(&file.entries()[0].clone()), "");
+}
+
+#[test]
+fn prefix_read_returns_only_the_requested_bytes() {
+    let big = bytes_of(70_000, 5);
+    let small = bytes_of(300, 6);
+    let mut file = open(&make_cfb(&[("big", &big), ("small", &small)]));
+    let e = file.find("big").unwrap().clone();
+    assert_eq!(file.read_stream_prefix(&e, 1000).unwrap(), big[..1000].to_vec());
+    let e = file.find("small").unwrap().clone();
+    assert_eq!(file.read_stream_prefix(&e, 1000).unwrap(), small, "스트림이 요청보다 짧으면 전부");
+    assert_eq!(file.read_stream_prefix(&e, 10).unwrap(), small[..10].to_vec());
+}

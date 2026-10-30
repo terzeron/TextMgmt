@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::make_cfb;
+use common::{compress, dir_stream, make_cfb, module_stream, pseudo};
 use ole_reader::vba::{VbaError, decompress, read_project};
 use ole_reader::{Limits, OleFile};
 
@@ -12,41 +12,6 @@ const SPEC_COMPRESSED: [u8; 51] = [
     0x00, 0x72, 0x73, 0x74, 0x75, 0x76, 0x10, 0x77, 0x78, 0x79, 0x7A, 0x00, 0x2C,
 ];
 const SPEC_TEXT: &str = "#aaabcdefaaaaghijaaaaaklaaamnopqaaaaaaaaaaaarstuvwxyzaaa";
-
-/// 테스트용 압축기: 리터럴 토큰만 쓴다(압축은 안 되지만 유효한 컨테이너다). 청크가 4096바이트를 채우면 비압축 청크로 둔다.
-fn compress(data: &[u8]) -> Vec<u8> {
-    let mut out = vec![0x01];
-    for chunk in data.chunks(4096) {
-        let mut body = Vec::new();
-        for group in chunk.chunks(8) {
-            body.push(0u8); // 플래그: 전부 리터럴
-            body.extend_from_slice(group);
-        }
-        // 청크 크기 필드는 12비트다(청크 전체 길이 - 3 <= 4095). 리터럴 토큰이 이에 안 맞는 큰 청크는 비압축 청크로 둔다.
-        if body.len() + 2 - 3 <= 0x0FFF {
-            let header: u16 = 0xB000 | (body.len() as u16 + 2 - 3);
-            out.extend_from_slice(&header.to_le_bytes());
-            out.extend_from_slice(&body);
-        } else {
-            let header: u16 = 0x3000 | (chunk.len() as u16 + 2 - 3);
-            out.extend_from_slice(&header.to_le_bytes());
-            out.extend_from_slice(chunk);
-        }
-    }
-    out
-}
-
-fn pseudo(n: usize, seed: u64) -> Vec<u8> {
-    let mut x = seed | 1;
-    (0..n)
-        .map(|_| {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            x as u8
-        })
-        .collect()
-}
 
 #[test]
 fn decompresses_the_spec_example() {
@@ -98,47 +63,6 @@ fn bad_signature_and_truncated_chunks_are_errors() {
 
 // --- 프로젝트 읽기 ---
 
-fn record(id: u16, data: &[u8]) -> Vec<u8> {
-    let mut r = id.to_le_bytes().to_vec();
-    r.extend_from_slice(&(data.len() as u32).to_le_bytes());
-    r.extend_from_slice(data);
-    r
-}
-
-fn utf16(s: &str) -> Vec<u8> {
-    s.encode_utf16().flat_map(u16::to_le_bytes).collect()
-}
-
-/// `dir` 스트림(압축 전). 앞에 모듈과 무관한 레코드 몇 개를 둔다.
-fn dir_stream(modules: &[(&str, &str, u32)]) -> Vec<u8> {
-    let mut d = Vec::new();
-    d.extend(record(0x0001, &1u32.to_le_bytes())); // PROJECTSYSKIND
-    d.extend(record(0x0002, &0x0409u32.to_le_bytes())); // PROJECTLCID
-    d.extend(record(0x0003, &1252u16.to_le_bytes())); // PROJECTCODEPAGE
-    d.extend(record(0x000F, &(modules.len() as u16).to_le_bytes())); // PROJECTMODULES
-    d.extend(record(0x0013, &0xFFFFu16.to_le_bytes())); // PROJECTCOOKIE
-    for (name, stream, offset) in modules {
-        d.extend(record(0x0019, name.as_bytes())); // MODULENAME
-        let mut sn = stream.as_bytes().to_vec();
-        sn.extend_from_slice(&0x0032u16.to_le_bytes());
-        sn.extend_from_slice(&((stream.len() * 2) as u32).to_le_bytes());
-        sn.extend(utf16(stream));
-        // MODULESTREAMNAME: 크기 필드는 MBCS 이름의 길이이고 뒤에 예약값과 유니코드 이름이 이어진다.
-        d.extend_from_slice(&0x001Au16.to_le_bytes());
-        d.extend_from_slice(&(stream.len() as u32).to_le_bytes());
-        d.extend_from_slice(&sn);
-        d.extend(record(0x0031, &offset.to_le_bytes())); // MODULEOFFSET
-        d.extend(record(0x002B, &[])); // 종결자
-    }
-    d
-}
-
-fn module_stream(junk: usize, source: &str) -> Vec<u8> {
-    let mut s = pseudo(junk, 77);
-    s.extend(compress(source.as_bytes()));
-    s
-}
-
 #[test]
 fn read_project_extracts_module_sources() {
     let src1 = "Attribute VB_Name = \"Module1\"\r\nSub AutoOpen()\r\n  Shell \"calc.exe\"\r\nEnd Sub\r\n";
@@ -185,4 +109,47 @@ fn the_total_output_budget_is_enforced_across_modules() {
     // dir를 푸는 데 쓴 바이트까지 포함해 4000바이트만 허용하면 둘째 모듈은 못 푼다.
     let project = read_project(&mut f, "Macros/VBA", 4000).unwrap();
     assert!(project.modules.len() <= 1 && !project.errors.is_empty(), "{} {:?}", project.modules.len(), project.errors);
+}
+
+#[test]
+fn modules_that_fail_to_decompress_still_consume_the_output_budget() {
+    // 리터럴 3000바이트를 낸 뒤 같은 청크 안에서 잘못된 복사 토큰을 만나 오류가 나는 모듈 스트림.
+    let bad_after_output = || {
+        let mut body = Vec::new();
+        for group in vec![b'A'; 3000].chunks(8) {
+            body.push(0u8);
+            body.extend_from_slice(group);
+        }
+        // 마지막 그룹 뒤에 복사 토큰 하나: 플래그 비트 0이 1이고 오프셋이 청크 시작 앞을 가리킨다(해제한 3000바이트보다 먼 오프셋).
+        body.push(0x01);
+        body.extend_from_slice(&[0xFF, 0xFF]);
+        let header: u16 = 0xB000 | (body.len() as u16 + 2 - 3);
+        let mut c = vec![0x01];
+        c.extend_from_slice(&header.to_le_bytes());
+        c.extend_from_slice(&body);
+        c
+    };
+    assert_eq!(decompress(&bad_after_output(), 1 << 20), Err(VbaError::BadOffset), "fixture must fail after producing output");
+    let names: Vec<String> = (0..6).map(|i| format!("M{i}")).collect();
+    let modules: Vec<(&str, &str, u32)> = names.iter().map(|n| (n.as_str(), n.as_str(), 0u32)).collect();
+    let dir = compress(&dir_stream(&modules));
+    let streams: Vec<(String, Vec<u8>)> = names.iter().map(|n| (format!("Macros/VBA/{n}"), bad_after_output())).collect();
+    let mut all: Vec<(&str, &[u8])> = vec![("Macros/VBA/dir", dir.as_slice())];
+    all.extend(streams.iter().map(|(n, b)| (n.as_str(), b.as_slice())));
+    let cfb = make_cfb(&all);
+    let mut f = OleFile::from_bytes(cfb.bytes, &Limits::default()).unwrap();
+    // 예산 7000바이트: dir 해제분을 빼고, 실패한 모듈이 낸 3000바이트씩이 예산에서 빠지면 서너 개째에서 멈춘다.
+    let project = read_project(&mut f, "Macros/VBA", 7000).unwrap();
+    assert!(project.errors.len() < 6, "실패한 해제도 예산에서 빠져야 한다: {} errors", project.errors.len());
+}
+
+#[test]
+fn the_same_module_stream_is_not_decompressed_twice() {
+    let src = "Sub A()\r\nEnd Sub\r\n";
+    let dir = compress(&dir_stream(&[("A", "Same", 0), ("B", "Same", 0), ("C", "Same", 0)]));
+    let cfb = make_cfb(&[("Macros/VBA/dir", &dir), ("Macros/VBA/Same", &module_stream(0, src))]);
+    let mut f = OleFile::from_bytes(cfb.bytes, &Limits::default()).unwrap();
+    let project = read_project(&mut f, "Macros/VBA", 1 << 20).unwrap();
+    assert_eq!(project.modules.len(), 1, "{:?}", project.modules);
+    assert_eq!(project.errors.len(), 2, "{:?}", project.errors);
 }

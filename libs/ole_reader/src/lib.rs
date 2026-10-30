@@ -572,6 +572,37 @@ impl OleFile {
         found
     }
 
+    /// 항목의 경로(루트 아래 `/`로 이은 이름). 루트는 빈 문자열이다. 부모를 따라가지 못한 항목은 이름만 돌려준다.
+    pub fn path_of(&self, entry: &Entry) -> String {
+        if entry.id == 0 {
+            return String::new();
+        }
+        let mut parts = vec![entry.name.clone()];
+        let mut cur = entry.parent;
+        // 부모 사슬은 `link_parents`가 방문 표시로 만든 트리라 순환이 없지만, 방어로 길이를 제한한다.
+        while let Some(p) = cur.filter(|&p| p != 0).filter(|_| parts.len() < 64) {
+            let Some(parent) = self.entries.get(p as usize) else { break };
+            parts.push(parent.name.clone());
+            cur = parent.parent;
+        }
+        parts.reverse();
+        parts.join("/")
+    }
+
+    /// 스트림의 앞 `max`바이트만 읽는다(선언 크기가 더 작으면 그만큼). 큰 스트림을 통째로 읽지 않고 머리만 볼 때 쓴다.
+    pub fn read_stream_prefix(&mut self, entry: &Entry, max: usize) -> Result<Vec<u8>, OleError> {
+        let size = entry.size.min(max as u64);
+        let mut partial = entry.clone();
+        partial.size = size;
+        // 미니 스트림 여부는 원래 크기로 정해진다. 크기만 줄이면 일반 스트림이 미니 경로를 타므로 원래 종류를 유지한다.
+        if (entry.size < MINI_CUTOFF) != (partial.size < MINI_CUTOFF) {
+            let mut all = self.read_stream(entry)?;
+            all.truncate(size as usize);
+            return Ok(all);
+        }
+        self.read_stream(&partial)
+    }
+
     /// 스트림의 바이트를 읽는다. 선언 크기가 `max_stream`을 넘으면 할당하지 않고 `Limit` 오류다.
     /// 사슬이 선언 크기보다 짧으면 읽은 만큼만 돌려준다.
     pub fn read_stream(&mut self, entry: &Entry) -> Result<Vec<u8>, OleError> {

@@ -208,3 +208,82 @@ pub fn make_cfb(streams: &[(&str, &[u8])]) -> Cfb {
 pub fn make_cfb_v4(streams: &[(&str, &[u8])]) -> Cfb {
     make_cfb_sized(streams, 4096)
 }
+
+// ---- VBA 프로젝트 fixture (vba.rs와 bookdoctor의 DOC 테스트가 함께 쓴다) ----
+
+/// 테스트용 압축기: 리터럴 토큰만 쓴다(압축은 안 되지만 유효한 컨테이너다). 청크가 4096바이트를 채우면 비압축 청크로 둔다.
+pub fn compress(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x01];
+    for chunk in data.chunks(4096) {
+        let mut body = Vec::new();
+        for group in chunk.chunks(8) {
+            body.push(0u8); // 플래그: 전부 리터럴
+            body.extend_from_slice(group);
+        }
+        // 청크 크기 필드는 12비트다(청크 전체 길이 - 3 <= 4095). 리터럴 토큰이 이에 안 맞는 큰 청크는 비압축 청크로 둔다.
+        if body.len() + 2 - 3 <= 0x0FFF {
+            let header: u16 = 0xB000 | (body.len() as u16 + 2 - 3);
+            out.extend_from_slice(&header.to_le_bytes());
+            out.extend_from_slice(&body);
+        } else {
+            let header: u16 = 0x3000 | (chunk.len() as u16 + 2 - 3);
+            out.extend_from_slice(&header.to_le_bytes());
+            out.extend_from_slice(chunk);
+        }
+    }
+    out
+}
+
+pub fn pseudo(n: usize, seed: u64) -> Vec<u8> {
+    let mut x = seed | 1;
+    (0..n)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x as u8
+        })
+        .collect()
+}
+
+pub fn record(id: u16, data: &[u8]) -> Vec<u8> {
+    let mut r = id.to_le_bytes().to_vec();
+    r.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    r.extend_from_slice(data);
+    r
+}
+
+pub fn utf16(s: &str) -> Vec<u8> {
+    s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+}
+
+/// `dir` 스트림(압축 전). 앞에 모듈과 무관한 레코드 몇 개를 둔다.
+pub fn dir_stream(modules: &[(&str, &str, u32)]) -> Vec<u8> {
+    let mut d = Vec::new();
+    d.extend(record(0x0001, &1u32.to_le_bytes())); // PROJECTSYSKIND
+    d.extend(record(0x0002, &0x0409u32.to_le_bytes())); // PROJECTLCID
+    d.extend(record(0x0003, &1252u16.to_le_bytes())); // PROJECTCODEPAGE
+    d.extend(record(0x000F, &(modules.len() as u16).to_le_bytes())); // PROJECTMODULES
+    d.extend(record(0x0013, &0xFFFFu16.to_le_bytes())); // PROJECTCOOKIE
+    for (name, stream, offset) in modules {
+        d.extend(record(0x0019, name.as_bytes())); // MODULENAME
+        let mut sn = stream.as_bytes().to_vec();
+        sn.extend_from_slice(&0x0032u16.to_le_bytes());
+        sn.extend_from_slice(&((stream.len() * 2) as u32).to_le_bytes());
+        sn.extend(utf16(stream));
+        // MODULESTREAMNAME: 크기 필드는 MBCS 이름의 길이이고 뒤에 예약값과 유니코드 이름이 이어진다.
+        d.extend_from_slice(&0x001Au16.to_le_bytes());
+        d.extend_from_slice(&(stream.len() as u32).to_le_bytes());
+        d.extend_from_slice(&sn);
+        d.extend(record(0x0031, &offset.to_le_bytes())); // MODULEOFFSET
+        d.extend(record(0x002B, &[])); // 종결자
+    }
+    d
+}
+
+pub fn module_stream(junk: usize, source: &str) -> Vec<u8> {
+    let mut s = pseudo(junk, 77);
+    s.extend(compress(source.as_bytes()));
+    s
+}
+

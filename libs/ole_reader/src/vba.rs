@@ -49,10 +49,16 @@ fn bit_count(done_in_chunk: usize) -> u32 {
 
 /// MS-OVBA 압축 컨테이너를 푼다. `max_out`을 넘으면 `OutputLimit`이다.
 pub fn decompress(data: &[u8], max_out: usize) -> Result<Vec<u8>, VbaError> {
+    let mut out = Vec::new();
+    decompress_into(data, &mut out, max_out).map(|()| out)
+}
+
+/// `decompress`와 같되 결과를 `out`에 쌓는다. 오류로 끝나도 그때까지 푼 바이트가 `out`에 남으므로 호출자가 예산에서 뺄 수 있다.
+/// (실패한 해제가 예산을 쓰지 않으면 실패하는 모듈을 여러 개 두어 같은 작업을 되풀이시킬 수 있다.)
+pub fn decompress_into(data: &[u8], out: &mut Vec<u8>, max_out: usize) -> Result<(), VbaError> {
     if data.first() != Some(&0x01) {
         return Err(VbaError::NotCompressed);
     }
-    let mut out: Vec<u8> = Vec::new();
     let mut pos = 1usize;
     while pos < data.len() {
         let header = u16::from_le_bytes([*data.get(pos).ok_or(VbaError::Truncated)?, *data.get(pos + 1).ok_or(VbaError::Truncated)?]);
@@ -112,7 +118,7 @@ pub fn decompress(data: &[u8], max_out: usize) -> Result<Vec<u8>, VbaError> {
             }
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 struct ModuleInfo {
@@ -187,11 +193,19 @@ pub fn read_project(file: &mut OleFile, vba_root: &str, max_total: u64) -> Resul
     let dir_entry: Entry = file.find(&format!("{vba_root}/dir")).cloned().ok_or_else(|| VbaError::BadDir("no dir stream".into()))?;
     let raw = file.read_stream(&dir_entry).map_err(|e| VbaError::BadDir(format!("{e:?}")))?;
     let mut remaining = usize::try_from(max_total).unwrap_or(usize::MAX);
-    let dir = decompress(&raw, remaining)?;
+    let mut dir = Vec::new();
+    let dir_result = decompress_into(&raw, &mut dir, remaining);
     remaining = remaining.saturating_sub(dir.len());
+    dir_result?;
     let infos = parse_modules(&dir)?;
     let mut project = VbaProject::default();
+    let mut seen_streams = std::collections::HashSet::new();
     for info in infos {
+        // 여러 모듈이 같은 스트림을 가리켜도 한 번만 푼다(같은 일을 되풀이시키는 입력을 막는다).
+        if !seen_streams.insert(info.stream.to_lowercase()) {
+            project.errors.push(format!("{}: module stream {:?} is already used by another module", info.name, info.stream));
+            continue;
+        }
         let Some(entry) = file.find(&format!("{vba_root}/{}", info.stream)).cloned() else {
             project.errors.push(format!("{}: module stream {:?} not found", info.name, info.stream));
             continue;
@@ -207,14 +221,15 @@ pub fn read_project(file: &mut OleFile, vba_root: &str, max_total: u64) -> Resul
             project.errors.push(format!("{}: text offset {} is past the end of the stream ({} bytes)", info.name, info.offset, data.len()));
             continue;
         };
-        match decompress(tail, remaining) {
-            Ok(text) => {
-                remaining = remaining.saturating_sub(text.len());
-                project.modules.push(VbaModule { name: info.name, source: String::from_utf8_lossy(&text).into_owned() });
-            }
+        let mut text = Vec::new();
+        let result = decompress_into(tail, &mut text, remaining);
+        // 실패한 해제도 푼 만큼 예산에서 뺀다.
+        remaining = remaining.saturating_sub(text.len());
+        match result {
+            Ok(()) => project.modules.push(VbaModule { name: info.name, source: String::from_utf8_lossy(&text).into_owned() }),
             Err(e) => {
                 project.errors.push(format!("{}: {e:?}", info.name));
-                if e == VbaError::OutputLimit {
+                if e == VbaError::OutputLimit || remaining == 0 {
                     break;
                 }
             }
