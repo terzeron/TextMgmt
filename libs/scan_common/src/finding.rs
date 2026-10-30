@@ -19,6 +19,8 @@ pub enum Format {
     Hwpx,
     /// 구형 `.doc`·`.dot`(OLE 복합 파일).
     Doc,
+    /// `.hwp`(HWP 5.x OLE, 서명만 보는 HWP 3.x 이하).
+    Hwp,
 }
 
 /// 지표의 분류.

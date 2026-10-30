@@ -12,6 +12,8 @@ pub enum Sniffed {
     Ole,
     /// RTF 문서(`{\rtf`로 시작). Word는 이름과 무관하게 연다.
     Rtf,
+    /// HWP 3.x 이하(`HWP Document File V` 서명, OLE가 아니다).
+    Hwp3,
     Html,
     Unknown,
 }
@@ -44,6 +46,9 @@ pub fn sniff(head: &[u8]) -> Sniffed {
     }
     if head.starts_with(&OLE_MAGIC) {
         return Sniffed::Ole;
+    }
+    if head.starts_with(b"HWP Document File V") {
+        return Sniffed::Hwp3;
     }
     // Word는 `{\rt`만 맞아도 RTF로 연다. BOM과 앞 공백도 건너뛴다(HTML 판별과 같다).
     let trimmed = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);

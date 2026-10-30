@@ -65,7 +65,7 @@ pub fn scan_ole_named_docx(path: &Path, opts: &Options, report: &mut FileReport)
 }
 
 /// OLE 파일을 한도 안에서 연다. 열지 못하면 사유를 미완료로 남기고 `None`을 돌려준다.
-fn open_ole(path: &Path, opts: &Options, report: &mut FileReport) -> Option<OleFile> {
+pub(crate) fn open_ole(path: &Path, opts: &Options, report: &mut FileReport) -> Option<OleFile> {
     let limits = OleLimits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..OleLimits::default() };
     match OleFile::open(path, &limits) {
         Ok(file) => Some(file),
@@ -135,7 +135,7 @@ pub fn inspect(file: &mut OleFile, report: &mut FileReport) {
     }
 }
 
-fn report_anomalies(file: &OleFile, report: &mut FileReport) {
+pub(crate) fn report_anomalies(file: &OleFile, report: &mut FileReport) {
     let anomalies = file.anomalies();
     for a in anomalies.iter().take(MAX_ANOMALY_FINDINGS) {
         report.push(Category::Defect, severity_of(a), a.code(), "", &sanitize_display(&a.detail(), 200, Some('…')));

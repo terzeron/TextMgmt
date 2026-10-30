@@ -167,12 +167,13 @@ fn check_content_vs_name(path: &Path, sniffed: Sniffed, report: &mut FileReport)
         // 구형 Word 문서는 OLE 복합 파일이어야 한다. RTF나 ZIP을 이름만 바꾼 것은 불일치다.
         "doc" | "dot" => sniffed != Sniffed::Ole,
         "rtf" => sniffed != Sniffed::Rtf,
+        "hwp" => !matches!(sniffed, Sniffed::Ole | Sniffed::Hwp3),
         _ => false,
     };
     if mismatch {
         report.push(Category::Defect, Severity::Medium, "FORMAT_MISMATCH", "", &format!("확장자 .{ext}와 내용({sniffed:?})이 다르다"));
     }
-    if is_exe(sniffed) && matches!(ext.as_str(), "epub" | "pdf" | "txt" | "zip" | "docx" | "docm" | "dotx" | "dotm" | "hwpx" | "doc" | "dot" | "rtf") {
+    if is_exe(sniffed) && matches!(ext.as_str(), "epub" | "pdf" | "txt" | "zip" | "docx" | "docm" | "dotx" | "dotm" | "hwpx" | "doc" | "dot" | "rtf" | "hwp") {
         report.push(Category::Security, Severity::Critical, "DISGUISED_EXECUTABLE", "", &format!("확장자 .{ext}인데 실행 파일({sniffed:?})이다"));
     }
 }

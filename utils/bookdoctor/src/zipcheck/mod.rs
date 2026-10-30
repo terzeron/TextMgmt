@@ -40,7 +40,7 @@ pub fn scan_docx_file(path: &Path, opts: &Options, sniffed: Sniffed, report: &mu
 /// `.hwpx` 하나를 검사한다. 내용이 OLE면 HWP 5.x를 이름만 바꾼 것이다. ZIP이 아니므로 열지 않고 미완료로 남긴다(HWP 5.x 검사기는 아직 없다).
 pub fn scan_hwpx_file(path: &Path, opts: &Options, sniffed: Sniffed, report: &mut FileReport) {
     if sniffed == Sniffed::Ole {
-        report.mark_incomplete("HWP 5.x (OLE) container cannot be inspected yet: .hwpx extension with OLE content");
+        crate::hwp::scan_ole_named_hwpx(path, opts, report);
         return;
     }
     let limits = Limits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..Limits::default() };

@@ -7,7 +7,7 @@ use scan_common::sniff::Sniffed;
 use scan_common::{FileReport, Format};
 
 use crate::cli::Options;
-use crate::{common, doc, epub, exe, pdf, txt, viewer, zipcheck};
+use crate::{common, doc, hwp, epub, exe, pdf, txt, viewer, zipcheck};
 
 /// 검사할 포맷을 정한다. `.pdf`·`.epub`은 내용이 PDF·ZIP이면 내용을 따르고(`.pdf`인데 ZIP이면 EPUB),
 /// 그 밖에는 확장자를 따른다. 모르는 확장자는 `None`이다.
@@ -23,6 +23,10 @@ pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
     // ZIP 계열 확장자도 내용이 PDF면 PDF로 본다(위장). ZIP이면 확장자를 따른다.
     if is_zip_family(&ext) && sniffed == Sniffed::Pdf {
         return Some(Format::Pdf);
+    }
+    // 이름은 `.hwp`인데 내용이 ZIP이면 HWPX를 이름만 바꾼 것이다.
+    if ext == "hwp" && sniffed == Sniffed::Zip {
+        return Some(Format::Hwpx);
     }
     // Word 계열 이름이나 `.rtf`인데 내용이 RTF면 RTF로 검사한다(Word는 이름과 무관하게 RTF로 연다).
     if sniffed == Sniffed::Rtf && matches!(ext.as_str(), "doc" | "dot" | "docx" | "docm" | "dotx" | "dotm" | "rtf") {
@@ -40,6 +44,7 @@ pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
         "docx" | "docm" | "dotx" | "dotm" => Some(Format::Docx),
         "hwpx" => Some(Format::Hwpx),
         "doc" | "dot" | "rtf" => Some(Format::Doc),
+        "hwp" => Some(Format::Hwp),
         e if exe::is_exec_extension(e) => Some(Format::Executable),
         _ => None,
     }
@@ -47,7 +52,7 @@ pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
 
 /// 컨테이너 포맷(ZIP·OLE) 문서 확장자인가. 내용이 PDF면 PDF로 본다.
 fn is_zip_family(ext: &str) -> bool {
-    matches!(ext, "zip" | "docx" | "docm" | "dotx" | "dotm" | "hwpx" | "doc" | "dot")
+    matches!(ext, "zip" | "docx" | "docm" | "dotx" | "dotm" | "hwpx" | "doc" | "dot" | "hwp")
 }
 
 fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
@@ -62,6 +67,7 @@ fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
         Some(Format::Docx) => zipcheck::scan_docx_file(path, opts, sniffed, report),
         Some(Format::Hwpx) => zipcheck::scan_hwpx_file(path, opts, sniffed, report),
         Some(Format::Doc) => doc::scan_doc_file(path, opts, sniffed, report),
+        Some(Format::Hwp) => hwp::scan_hwp_file(path, opts, sniffed, report),
         None => report.mark_incomplete("unsupported format"),
     }
 }

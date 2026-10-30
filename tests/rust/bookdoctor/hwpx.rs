@@ -113,7 +113,7 @@ fn hwpx_extension_with_ole_content_is_a_mismatch_and_incomplete_without_claiming
     fs::write(&p, b).unwrap();
     let r = scan_file(&p, &Options::default());
     assert!(r.has("FORMAT_MISMATCH") && !r.has("NOT_ZIP"));
-    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("HWP 5")), "{:?}", r.reasons);
+    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("OLE") && x.contains("HWP")), "{:?}", r.reasons);
     assert!(!r.reasons.iter().any(|x| FileReport::is_encrypted_reason(x)), "{:?}", r.reasons);
 }
 
