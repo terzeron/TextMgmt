@@ -4,7 +4,7 @@
 //!
 //! 가정한 API:
 //! - `backend::main::app() -> axum::Router` (common::TestClient가 쓴다)
-//! - `backend::auth::create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String` (4인자 통일안. 이 파일은 `jwt()`로 감싼다)
+//! - `crate::common::session::token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String` (4인자 통일안. 이 파일은 `jwt()`로 감싼다)
 //! - `backend::auth::ACCESS_COOKIE_NAME: &str`
 //! - `backend::main::CLIENT_ERROR_FIELD_LIMITS: LazyLock<HashMap<&'static str, usize>>` (필드 이름 -> 최대 길이)
 //! - 핸들러는 `log::error!`로 `[CLIENT_ERROR] type=..., user=email(role)` 줄과 `Component Stack:`/`Stack Trace:` 줄을 남긴다.
@@ -12,7 +12,7 @@
 
 mod common;
 
-use backend::auth::{ACCESS_COOKIE_NAME, create_jwt_token};
+use backend::auth::ACCESS_COOKIE_NAME;
 use backend::main::CLIENT_ERROR_FIELD_LIMITS;
 use common::TestClient;
 use common::log_capture::LogCapture;
@@ -21,11 +21,12 @@ use serde_json::{Value, json};
 
 // TODO(common): `common::fx::jwt(email, role)`로 옮긴다. cover, pdf_pages, book_preview도 같은 헬퍼가 필요하다(문서 3.2).
 fn jwt(email: &str, role: &str) -> String {
-    create_jwt_token(email, role, None, None)
+    common::session::token(email, role, None, None)
 }
 
 fn client() -> TestClient {
-    TestClient::new()
+    common::setup_env();
+    TestClient::with_app(backend::main::app_with(backend::main::AppDeps::from_env().with_refresh_token_store(common::session::store())))
 }
 
 #[tokio::test]

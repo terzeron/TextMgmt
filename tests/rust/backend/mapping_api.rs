@@ -69,7 +69,7 @@ impl CategoryMappingApi for Mapping {
     }
 }
 fn client(mapping: Arc<Mapping>, auth: AuthMode) -> TestClient {
-    TestClient::with_app(app_with(AppDeps::new(auth).with_category_mapping(mapping)))
+    TestClient::with_app(app_with(AppDeps::new(auth).with_refresh_token_store(common::session::store()).with_category_mapping(mapping)))
 }
 fn admin() -> AuthMode {
     AuthMode::Fixed(json!({"role":"admin"}))
@@ -210,7 +210,7 @@ async fn failed_policy_changes_return_specific_errors() {
 async fn viewer_token_cannot_change_any_category_setting() {
     common::setup_env();
     let mapping = Mapping::new(true, false);
-    let token = backend::auth::create_jwt_token("viewer@test.com", "viewer", None, None);
+    let token = common::session::token("viewer@test.com", "viewer", None, None);
     let client = client(mapping.clone(), AuthMode::Cookies).bearer(&token);
     assert_eq!(client.get("/category-mappings").await.status, 200);
     for (method, path, body) in [

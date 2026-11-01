@@ -195,8 +195,8 @@ async fn backend_test_setup() -> Setup {
     }
     let _ = bm.es_manager().refresh();
 
-    let token = create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
-    let app = app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(bm.clone()).with_comics_manager(cm.clone()));
+    let token = common::session::token("admin@test.com", "admin", Some("Test Admin"), None);
+    let app = app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(common::session::store()).with_book_manager(bm.clone()).with_comics_manager(cm.clone()));
     let client = TestClient::with_app(app).cookie("tm_access_token", &token);
     Setup { bm, cm, client, _db_guard: db_guard }
 }
@@ -923,7 +923,7 @@ mod test_auth_refresh_endpoint {
     async fn test_refresh_returns_new_access_token() {
         common::setup_env();
         let refresh_token = create_refresh_token(&tm_admin_email(), "admin", None, None);
-        let app = app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(Arc::new(AuthRefreshStore)));
+        let app = app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(Arc::new(AuthRefreshStore::default())));
         let client = TestClient::with_app(app).cookie("tm_refresh_token", &refresh_token);
         let response = post_empty(&client, "/auth/refresh").await;
         assert_eq!(response.status, 200);
@@ -977,7 +977,7 @@ mod test_auth_refresh_endpoint {
                 .with_book_manager(manager.clone())
                 .with_comics_manager(manager)
                 .with_category_mapping(DummyCategoryMapping::new())
-                .with_refresh_token_store(Arc::new(AuthRefreshStore)),
+                .with_refresh_token_store(Arc::new(AuthRefreshStore::default())),
         );
         let refresh_token = create_refresh_token(&tm_admin_email(), "admin", None, None);
         let client = TestClient::with_app(app.clone()).cookie("tm_refresh_token", &refresh_token);
@@ -996,8 +996,8 @@ mod test_auth_me_logout {
     #[tokio::test]
     async fn test_auth_me_returns_user_info() {
         common::setup_env();
-        let token = create_jwt_token("admin@test.com", "admin", Some("Test"), Some("pic"));
-        let client = TestClient::new().cookie("tm_access_token", &token);
+        let token = common::session::token("admin@test.com", "admin", Some("Test"), Some("pic"));
+        let client = TestClient::with_app(app_with(AppDeps::from_env().with_refresh_token_store(common::session::store()))).cookie("tm_access_token", &token);
         let response = client.get("/auth/me").await;
         assert_eq!(response.status, 200);
         let data = response.json();
@@ -2258,13 +2258,26 @@ impl RoleResolver for ScriptedRole {
 }
 
 /// 인증 route 테스트에서 발급·회전만 받는 refresh store 대역.
-struct AuthRefreshStore;
+#[derive(Default)]
+struct AuthRefreshStore(Mutex<HashMap<String, String>>);
 
 impl backend::refresh_token_store::RefreshTokenStoreApi for AuthRefreshStore {
-    fn store_issued(&self, _: &str, _: &str, _: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<(), backend::refresh_token_store::StoreError> {
+    fn store_issued(&self, _: &str, family: &str, email: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<(), backend::refresh_token_store::StoreError> {
+        self.0.lock().unwrap().insert(family.into(), email.into());
         Ok(())
     }
-    fn rotate(&self, _: &str, _: &str, _: &str, _: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<backend::refresh_token_store::Rotation, backend::refresh_token_store::StoreError> {
+    fn rotate(
+        &self,
+        _: &str,
+        _: &str,
+        family: &str,
+        email: &str,
+        _: i64,
+        _: i64,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<backend::refresh_token_store::Rotation, backend::refresh_token_store::StoreError> {
+        self.0.lock().unwrap().insert(family.into(), email.into());
         Ok(backend::refresh_token_store::Rotation::Ok)
     }
     fn revoke_family(&self, _: &str, _: &str) -> Result<(), backend::refresh_token_store::StoreError> {
@@ -2273,8 +2286,15 @@ impl backend::refresh_token_store::RefreshTokenStoreApi for AuthRefreshStore {
     fn get_token_observation(&self, _: &str) -> Result<Option<Value>, backend::refresh_token_store::StoreError> {
         Err(backend::refresh_token_store::StoreError::Unsupported("test store".into()))
     }
-    fn _session_rows(&self, _: Option<&str>, _: Option<&str>) -> Result<Vec<backend::db::Row>, backend::refresh_token_store::StoreError> {
-        Err(backend::refresh_token_store::StoreError::Unsupported("test store".into()))
+    fn _session_rows(&self, email: Option<&str>, family: Option<&str>) -> Result<Vec<backend::db::Row>, backend::refresh_token_store::StoreError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(fid, owner)| email.is_none_or(|e| e == owner.as_str()) && family.is_none_or(|f| f == fid.as_str()))
+            .map(|(fid, owner)| backend::db::Row::from([("family_id".into(), fid.as_str().into()), ("email".into(), owner.as_str().into()), ("valid_token_count".into(), 1_i64.into())]))
+            .collect())
     }
 }
 
@@ -2284,7 +2304,7 @@ async fn test_auth_google_branches() {
     let verifier = Arc::new(ScriptedVerifier { client_id: Mutex::new(None), result: Mutex::new(Err("unset".into())) });
     let role = Arc::new(ScriptedRole(Mutex::new(None)));
     common::setup_env();
-    let app = app_with(AppDeps::new(AuthMode::Cookies).with_google_verifier(verifier.clone()).with_role_resolver(role.clone()).with_refresh_token_store(Arc::new(AuthRefreshStore)));
+    let app = app_with(AppDeps::new(AuthMode::Cookies).with_google_verifier(verifier.clone()).with_role_resolver(role.clone()).with_refresh_token_store(Arc::new(AuthRefreshStore::default())));
     let client = TestClient::with_app(app);
 
     let resp = client.post_json("/auth/google", &json!({})).await;
@@ -2327,7 +2347,7 @@ async fn test_auth_refresh_access_denied() {
     // 실제 refresh token을 검증하고, 서버 역할 판정에서 접근을 거부한다.
     common::setup_env();
     let token = create_refresh_token("x", "viewer", None, None);
-    let app = app_with(AppDeps::new(AuthMode::Cookies).with_role_resolver(Arc::new(ScriptedRole(Mutex::new(None)))).with_refresh_token_store(Arc::new(AuthRefreshStore)));
+    let app = app_with(AppDeps::new(AuthMode::Cookies).with_role_resolver(Arc::new(ScriptedRole(Mutex::new(None)))).with_refresh_token_store(Arc::new(AuthRefreshStore::default())));
     let client = TestClient::with_app(app).cookie("tm_refresh_token", &token);
     let resp = post_empty(&client, "/auth/refresh").await;
     assert_eq!(resp.status, 403);

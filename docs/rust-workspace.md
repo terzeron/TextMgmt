@@ -55,6 +55,20 @@ docs/       문서
 - ZIP은 `corpus_common::reader::open_zip`으로 연다. `zip` 크레이트 기본 설정(`Detect`)은 파일 전체를 훑어 느리다
   (1.5MB EPUB 하나에 읽기 1만 3천 번, 48ms). `open_zip`은 `Known(0)`으로 먼저 열고(0.2ms) 실패하면 `Detect`로 다시 연다.
 
+## Backend 세션 인증
+
+- Access token에 Refresh token과 같은 세션 식별자(`fid`)를 넣는다.
+  보호 API는 JWT 서명·만료·현재 역할과 해당 세션의 유효 상태를 확인한다.
+- 로그아웃이나 관리자 세션 폐기는 다음 요청부터 해당 세션의 Access token도 거부한다.
+  다른 기기의 세션은 유지한다. Refresh token 회전은 같은 `fid`를 유지한다.
+- 세션 상태는 기존 `refresh_tokens` 테이블에서 조회한다. DB 스키마 변경은 없다.
+  즉시 폐기를 위해 상태를 캐시하지 않으므로, 인증 요청마다 MySQL 조회가 추가된다.
+- 세션 저장소 장애 시 보호 API는 `503`을 반환한다. 폐기·만료·누락 세션은 `401`을 반환한다.
+- 배포 전 발급한 Access token에는 `fid`가 없으므로 `401`을 반환한다.
+  기존 Refresh token으로 갱신하거나 다시 로그인하면 세션에 연결한 Access token을 받는다.
+- 운영용 토큰은 `create_session_jwt_token` 또는 `TokenIssuer::create_access_token`으로 발급한다.
+  `create_jwt_token`의 세션 없는 토큰은 저수준 JWT 검증 테스트용이며 보호 API 인증에는 사용할 수 없다.
+
 ## 분류 CLI
 
 `cargo run -p classify_cli -- <명령>`으로 실행한다. 인자 없이 실행하면 도움말을 출력하고 종료 코드 1을 반환한다.

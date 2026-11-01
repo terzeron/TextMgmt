@@ -91,7 +91,7 @@ fn issue_auth_tokens(deps: &AppDeps, email: &str, role: &str, name: &str, pictur
     let tokens = deps.tokens();
     let refresh_token_id = tokens.new_id();
     let family_id = tokens.new_id();
-    let access = tokens.create_access_token(email, role, name, picture);
+    let access = tokens.create_access_token(email, role, name, picture, &family_id);
     let refresh = tokens.create_refresh_token(email, role, name, picture, &family_id, &refresh_token_id);
     let store = deps.refresh_store().map_err(|e| internal("refresh token store", e))?;
     store
@@ -187,7 +187,7 @@ async fn refresh_access_token(State(deps): State<Arc<AppDeps>>, headers: HeaderM
         return Ok(response);
     }
 
-    let access = deps.tokens().create_access_token(email, &role, name, picture);
+    let access = deps.tokens().create_access_token(email, &role, name, picture, family_id);
     let new_refresh = deps.tokens().create_refresh_token(email, &role, name, picture, family_id, &new_token_id);
     let mut response = json_response(200, &json!({"status": "success", "expires_in": ACCESS_TOKEN_EXPIRATION_SECONDS}));
     _set_auth_cookies(&mut response, &access, new_refresh.as_str());
@@ -203,13 +203,26 @@ async fn auth_me(State(deps): State<Arc<AppDeps>>, RequireAuth(payload): Require
 }
 
 async fn logout(State(deps): State<Arc<AppDeps>>, headers: HeaderMap) -> ApiResult<Response> {
+    let mut families = Vec::new();
     if let Some(refresh_token) = headers.cookie(REFRESH_COOKIE_NAME).filter(|t| !t.is_empty()) {
         match deps.tokens().decode_refresh_token(&refresh_token) {
             Ok(payload) => {
-                let store = deps.refresh_store().map_err(|e| internal("refresh token store", e))?;
-                store.revoke_family(str_of(&payload, "fid"), "logout").map_err(|e| internal("revoke_family", e))?;
+                families.push(str_of(&payload, "fid").to_string());
             }
             Err(_) => log::debug!("Ignoring invalid refresh token during logout"),
+        }
+    }
+    // refresh 쿠키가 없어도 서명된 access 토큰이 가리키는 세션을 폐기한다.
+    if let Ok(payload) = crate::auth::_extract_payload(&headers) {
+        let family = str_of(&payload, "fid");
+        if !family.is_empty() && !families.iter().any(|fid| fid == family) {
+            families.push(family.to_string());
+        }
+    }
+    if !families.is_empty() {
+        let store = deps.refresh_store().map_err(|e| internal("refresh token store", e))?;
+        for family in families {
+            store.revoke_family(&family, "logout").map_err(|e| internal("revoke_family", e))?;
         }
     }
     let mut response = json_response(200, &json!({"status": "success"}));

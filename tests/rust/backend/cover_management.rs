@@ -41,9 +41,9 @@
 //!   `with_is_disconnected(Fn() -> bool)`, `with_resolve(Fn(&Path) -> PathBuf)`, `with_lock_wait_observer(Fn())`(독점 잠금이 막힐 때 부른다)
 //! - `backend::cover_management::{ApplyImageModel::new(file_path, revision, image_data) -> Result<_, ValidationError>, check_cancelled() -> Result<(), CoverError>}` (`ValidationError: Display`)
 //! - `backend::cover_sources::{STORES: &[&str], SearchError::{Value(String), Http { status: u16 }, Cancelled}}`
-//! - `backend::main::{app_with, AppDeps, AuthMode}`: `AppDeps::new(AuthMode::Cookies).with_book_manager(Arc<dyn BookManagerApi>)`. 표지 라우터는 앱 안에 조립되어 있다(구 `create_cover_router`, `AdminGate`).
+//! - `backend::main::{app_with, AppDeps, AuthMode}`: `AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(Arc<dyn BookManagerApi>)`. 표지 라우터는 앱 안에 조립되어 있다(구 `create_cover_router`, `AdminGate`).
 //!   `AdminGate`는 아직 `cover_fixtures::cover_api`가 쓴다(`api.gate.allow/deny/clear`). 구 `set_extract_payload_override`는 실제 쿠키 JWT로 바꿨다.
-//! - `backend::auth::create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String` (4인자 통일)
+//! - `crate::common::session::token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String` (4인자 통일)
 //! - `common::log_capture::LogCapture::start(log::Level)`, `.text() -> String` (Python `caplog`)
 
 mod common;
@@ -57,7 +57,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use backend::auth::create_jwt_token;
 use backend::book_manager::{BookManager, BookManagerDeps, Thumbnailer};
 use backend::cover_management::{ApplyImageModel, Backup, CoverHooks, CoverManagement, EpubThumbnailer, check_cancelled};
 use backend::cover_sources::{STORES, SearchError, SearchHooks};
@@ -151,11 +150,11 @@ fn thumbnailer<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync 
 /// 실제 쿠키 인증으로 표지 라우터를 올린 앱. 구 `create_cover_router` + `AdminGate` 조립을 `AppDeps`가 대신한다.
 fn cover_app(root: &Path) -> axum::Router {
     let manager = Arc::new(BookManager::with_deps(BookManagerDeps::new(root.to_path_buf(), FakeEsManager::new())));
-    app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(manager))
+    app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(manager))
 }
 
 fn admin_client(app: axum::Router) -> TestClient {
-    TestClient::with_app(app).cookie("tm_access_token", &create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None))
+    TestClient::with_app(app).cookie("tm_access_token", &crate::common::session::token("admin@test.com", "admin", Some("Test Admin"), None))
 }
 
 #[tokio::test]
@@ -1359,7 +1358,7 @@ async fn test_new_api_auth_and_input_validation() {
     // 실제 쿠키 인증을 쓴다. 쿠키 없음은 401, viewer 쿠키는 403, 관리자 쿠키는 입력 검증까지 간다.
     let app = cover_app(tmp.path());
     let anonymous = TestClient::with_app(app.clone());
-    let viewer = TestClient::with_app(app.clone()).cookie("tm_access_token", &create_jwt_token("viewer@test.com", "viewer", None, None));
+    let viewer = TestClient::with_app(app.clone()).cookie("tm_access_token", &crate::common::session::token("viewer@test.com", "viewer", None, None));
     let admin = admin_client(app);
     let body = json!({"file_path": "book.epub", "revision": "r1", "url": "https://example.org/a"});
     for endpoint in ["apply-url", "cache/clear"] {

@@ -708,7 +708,7 @@ mod test_pdf_pages_endpoint {
     #[tokio::test]
     async fn test_authentication_precedes_input_validation() {
         let e = env();
-        let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(e.bm.clone())));
+        let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(e.bm.clone())));
         for path in ["/pdf-pages/1", "/pdf-pages/invalid?start=bad", "/comics/pdf-pages/1", "/preview/1", "/download/1", "/validate/1", "/html-resource/1?path=x", "/comics/preview/1"] {
             assert_eq!(client.get(path).await.status, 401);
         }
@@ -769,8 +769,9 @@ mod test_pdf_pages_endpoint {
     /// 라우터 클로저가 캡처한 manager의 내부 속성을 패치하는 fixture를 `AppDeps::with_book_manager`로 대신한다.
     fn setup_client() -> (TestClient, Env) {
         let e = env();
-        let token = backend::auth::create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
-        let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(e.bm.clone()))).cookie("tm_access_token", &token);
+        let token = crate::common::session::token("admin@test.com", "admin", Some("Test Admin"), None);
+        let client =
+            TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(e.bm.clone()))).cookie("tm_access_token", &token);
         (client, e)
     }
 

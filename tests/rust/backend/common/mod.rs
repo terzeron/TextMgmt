@@ -25,6 +25,7 @@ pub mod log_capture;
 pub mod pdf;
 pub mod raster;
 pub mod runner;
+pub mod session;
 pub mod zipx;
 
 use std::path::PathBuf;

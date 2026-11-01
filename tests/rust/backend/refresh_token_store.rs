@@ -1427,3 +1427,41 @@ fn test_mysql_session_rows_treats_none_result_as_empty() {
     let store = MySQLRefreshTokenStore::with_connection_provider(provider_of(&conn));
     assert!(store._session_rows(None, None).unwrap().is_empty());
 }
+
+#[test]
+fn test_access_session_state_tracks_rotation_revocation_expiration_and_owner() {
+    let store = memory_mysql_store();
+    let now = now();
+    let email = "admin@example.com";
+    let family = fam('a');
+    issue(&store, "first", &family, email, now, now + 3600);
+    issue(&store, "other", &fam('b'), email, now, now + 3600);
+    issue(&store, "expired", &fam('c'), email, now - 100, now - 1);
+    assert!(store.is_session_active(&family, email).unwrap());
+    assert!(!store.is_session_active(&family, "different@example.com").unwrap());
+    assert!(!store.is_session_active(&fam('d'), email).unwrap());
+    assert!(!store.is_session_active(&fam('c'), email).unwrap());
+    assert_eq!(rot(&store, "first", "second", &family, email, now, now + 3600), "ok");
+    assert!(store.is_session_active(&family, email).unwrap());
+    store.revoke_family(&family, "logout").unwrap();
+    assert!(!store.is_session_active(&family, email).unwrap());
+    assert!(store.is_session_active(&fam('b'), email).unwrap());
+}
+
+#[test]
+fn test_mysql_access_session_state_filters_family_and_owner() {
+    let (_guard, store) = mysql_store();
+    let now = now();
+    issue(&store, "a1", &fam('a'), "admin@example.com", now, now + 3600);
+    issue(&store, "b1", &fam('b'), "viewer@example.com", now, now + 3600);
+    issue(&store, "c1", &fam('c'), "admin@example.com", now - 100, now - 1);
+    assert!(store.is_session_active(&fam('a'), "admin@example.com").unwrap());
+    assert!(!store.is_session_active(&fam('a'), "viewer@example.com").unwrap());
+    assert!(!store.is_session_active(&fam('c'), "admin@example.com").unwrap());
+    assert!(!store.is_session_active(&fam('d'), "admin@example.com").unwrap());
+    assert_eq!(rot(&store, "a1", "a2", &fam('a'), "admin@example.com", now, now + 3600), "ok");
+    assert!(store.is_session_active(&fam('a'), "admin@example.com").unwrap());
+    store.revoke_family(&fam('a'), "admin-revoked").unwrap();
+    assert!(!store.is_session_active(&fam('a'), "admin@example.com").unwrap());
+    assert!(store.is_session_active(&fam('b'), "viewer@example.com").unwrap());
+}

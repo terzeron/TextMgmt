@@ -303,9 +303,24 @@ impl RefreshTokenStoreApi for FakeStore {
         }
     }
 
-    // 이 fake는 `list_sessions`/`revoke_session`을 직접 구현하므로 행 조회는 쓰이지 않는다.
-    fn _session_rows(&self, _email: Option<&str>, _family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
-        Err(StoreError::Unsupported("unimplemented".to_string()))
+    fn _session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
+        if let Some(Err(error)) = self.sessions.lock().unwrap().as_ref() {
+            return Err(StoreError::Unsupported(error.clone()));
+        }
+        let revoked = self.revoked_families.lock().unwrap();
+        let revoked_sessions = self.revoke_session_calls.lock().unwrap();
+        Ok(self
+            .issued
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|row| email.is_none_or(|e| row["email"] == e) && family_id.is_none_or(|fid| row["family_id"] == fid))
+            .map(|row| {
+                let fid = row["family_id"].as_str().unwrap();
+                let active = !revoked.iter().any(|(family, _)| family == fid) && !revoked_sessions.iter().any(|session| session["family_id"] == fid);
+                Row::from([("family_id".into(), fid.into()), ("email".into(), row["email"].as_str().unwrap().into()), ("valid_token_count".into(), i64::from(active).into())])
+            })
+            .collect())
     }
 
     fn list_sessions(&self, q: &SessionQuery) -> Result<Value, StoreError> {
@@ -325,7 +340,7 @@ impl RefreshTokenStoreApi for FakeStore {
 struct FixedTokens;
 
 impl TokenIssuer for FixedTokens {
-    fn create_access_token(&self, _email: &str, _role: &str, _name: &str, _picture: &str) -> String {
+    fn create_access_token(&self, _email: &str, _role: &str, _name: &str, _picture: &str, _family_id: &str) -> String {
         "jwt".to_string()
     }
 
@@ -961,10 +976,12 @@ async fn test_logout_ignores_invalid_refresh_token() {
 async fn test_auth_me_expires_in_with_real_token() {
     // 실제 JWT로 /auth/me 호출 시 expires_in이 남은 초를 정확히 반환하는지 검증.
     let _env = fixture();
-    let token = backend::auth::create_jwt_token("admin@example.com", "admin", Some("A"), Some("P"));
+    let store = FakeStore::new();
+    store.store_issued("token", &family_a(), "admin@example.com", now(), now() + 3600, None, None).unwrap();
+    let token = backend::auth::create_session_jwt_token("admin@example.com", "admin", "A", "P", &family_a());
 
     // 인증을 고정하지 않고(`AuthMode::Cookies`) 실제 토큰으로 호출
-    let app = auth_app(AppDeps::new(AuthMode::Cookies).with_role_resolver(role("admin")));
+    let app = auth_app(AppDeps::new(AuthMode::Cookies).with_role_resolver(role("admin")).with_refresh_token_store(store));
     let resp = client(&app).cookie(ACCESS_COOKIE_NAME, &token).get("/auth/me").await;
     assert_eq!(resp.status, 200);
     let data = resp.json();
@@ -1605,4 +1622,120 @@ mod test_login_session_client_info {
         assert_eq!(item["user_agent"], UA);
         assert_eq!(item["user_agent_summary"], "Chrome 131 / macOS 10.15");
     }
+}
+
+// 실제 서명·인증과 상태를 보관하는 저장소 대역으로 세션 폐기를 검증한다.
+async fn session_login(app: &Router) -> (String, String, String) {
+    let response = client(app).post_json("/auth/google", &json!({"credential":"valid"})).await;
+    assert_eq!(response.status, 200);
+    let access = cookie_value(&response, ACCESS_COOKIE_NAME).unwrap();
+    let refresh = cookie_value(&response, REFRESH_COOKIE_NAME).unwrap();
+    let fid = backend::auth::decode_refresh_token(&refresh).unwrap()["fid"].as_str().unwrap().to_string();
+    (access, refresh, fid)
+}
+
+fn session_app(store: Arc<FakeStore>) -> Router {
+    auth_app(
+        AppDeps::new(AuthMode::Cookies)
+            .with_refresh_token_store(store)
+            .with_google_verifier(fake_google("cid", |_, _| Ok(json!({"iss":"https://accounts.google.com","email":"admin@example.com","email_verified":true})))),
+    )
+}
+
+#[tokio::test]
+async fn test_session_access_revoked_after_logout() {
+    let _env = fixture();
+    let app = session_app(FakeStore::new());
+    let (access, refresh, _) = session_login(&app).await;
+    assert_eq!(client(&app).cookie(ACCESS_COOKIE_NAME, &access).get("/auth/me").await.status, 200);
+    let response = post_empty(&client(&app).cookie(REFRESH_COOKIE_NAME, &refresh), "/auth/logout").await;
+    assert_eq!(response.status, 200);
+    assert_eq!(client(&app).cookie(ACCESS_COOKIE_NAME, &access).get("/auth/me").await.status, 401);
+    assert_eq!(client(&app).header("authorization", &format!("Bearer {access}")).get("/auth/me").await.status, 401);
+}
+
+#[tokio::test]
+async fn test_session_access_admin_revocation_is_scoped_to_one_family() {
+    let _env = fixture();
+    let store = FakeStore::revoking(Ok(json!({"found":true,"revoked":true,"session":{"status":"revoked"}})));
+    let app = session_app(store);
+    let (first, _, fid) = session_login(&app).await;
+    let (second, _, _) = session_login(&app).await;
+    let response = client(&app).cookie(ACCESS_COOKIE_NAME, &second).delete(&format!("/auth/sessions/{fid}")).await;
+    assert_eq!(response.status, 200);
+    assert_eq!(client(&app).cookie(ACCESS_COOKIE_NAME, &first).get("/auth/me").await.status, 401);
+    assert_eq!(client(&app).cookie(ACCESS_COOKIE_NAME, &second).get("/auth/me").await.status, 200);
+    assert_eq!(client(&app).cookie(ACCESS_COOKIE_NAME, &first).get("/auth/sessions").await.status, 401);
+}
+
+#[tokio::test]
+async fn test_session_access_rejects_unbound_missing_and_mismatched_sessions() {
+    let _env = fixture();
+    let app = session_app(FakeStore::new());
+    let (_, _, fid) = session_login(&app).await;
+    for family in [Value::Null, json!(""), json!(family_a()), json!(fid)] {
+        let email = if family == json!(fid) { "viewer1@example.com" } else { "admin@example.com" };
+        let role = if email.starts_with("viewer") { "viewer" } else { "admin" };
+        let token = encode_hs256(&json!({"type":"access","email":email,"role":role,"fid":family,"iat":now(),"exp":now()+3600}));
+        assert_eq!(client(&app).cookie(ACCESS_COOKIE_NAME, &token).get("/auth/me").await.status, 401);
+    }
+}
+
+#[tokio::test]
+async fn test_session_access_fails_closed_when_store_is_unavailable() {
+    let _env = fixture();
+    let store = FakeStore::new();
+    let app = session_app(store.clone());
+    let (access, _, _) = session_login(&app).await;
+    *store.sessions.lock().unwrap() = Some(Err("database unavailable".into()));
+    let response = client(&app).cookie(ACCESS_COOKIE_NAME, &access).get("/auth/me").await;
+    assert_eq!(response.status, 503);
+    assert!(!response.json().to_string().contains("database unavailable"));
+}
+
+#[tokio::test]
+async fn test_session_access_logout_without_refresh_cookie_revokes_session() {
+    let _env = fixture();
+    let app = session_app(FakeStore::new());
+    let (access, _, _) = session_login(&app).await;
+    let response = post_empty(&client(&app).cookie(ACCESS_COOKIE_NAME, &access), "/auth/logout").await;
+    assert_eq!(response.status, 200);
+    assert_eq!(client(&app).cookie(ACCESS_COOKIE_NAME, &access).get("/auth/me").await.status, 401);
+}
+
+#[tokio::test]
+async fn test_session_access_refresh_keeps_family_and_prior_access_valid() {
+    let _env = fixture();
+    let app = session_app(FakeStore::new());
+    let (access, refresh, fid) = session_login(&app).await;
+    let response = post_empty(&client(&app).cookie(REFRESH_COOKIE_NAME, &refresh), "/auth/refresh").await;
+    assert_eq!(response.status, 200);
+    let next_access = cookie_value(&response, ACCESS_COOKIE_NAME).unwrap();
+    let payload = backend::auth::_extract_payload(&make_request(Some(&next_access), None)).unwrap();
+    assert_eq!(payload["fid"], fid);
+    for token in [access, next_access] {
+        assert_eq!(client(&app).cookie(ACCESS_COOKIE_NAME, &token).get("/auth/me").await.status, 200);
+    }
+}
+
+#[tokio::test]
+async fn test_session_access_logout_with_invalid_refresh_cookie_revokes_session() {
+    let _env = fixture();
+    let app = session_app(FakeStore::new());
+    let (access, _, _) = session_login(&app).await;
+    let cookies = format!("{ACCESS_COOKIE_NAME}={access}; {REFRESH_COOKIE_NAME}=invalid");
+    assert_eq!(post_empty(&client(&app).header("cookie", &cookies), "/auth/logout").await.status, 200);
+    assert_eq!(client(&app).cookie(ACCESS_COOKIE_NAME, &access).get("/auth/me").await.status, 401);
+}
+
+#[tokio::test]
+async fn test_session_access_optional_auth_treats_revoked_token_as_anonymous() {
+    let _env = fixture();
+    let app = session_app(FakeStore::new());
+    let (access, refresh, _) = session_login(&app).await;
+    post_empty(&client(&app).cookie(REFRESH_COOKIE_NAME, &refresh), "/auth/logout").await;
+    let logs = LogCapture::start(log::Level::Error);
+    let response = client(&app).cookie(ACCESS_COOKIE_NAME, &access).post_json("/logs/client-error", &json!({"error_type":"CUSTOM_ERROR","message":"test","url":"/"})).await;
+    assert_eq!(response.status, 200);
+    assert!(logs.text().contains("user=anonymous(anonymous)"));
 }

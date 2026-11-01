@@ -13,7 +13,6 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use backend::auth::create_jwt_token;
 use backend::book_manager::{BookManager, BookManagerApi, BookManagerDeps, Thumbnailer};
 use backend::comics_manager::ComicsManager;
 use backend::main::{AppDeps, AuthMode, CategoryMappingApi, MappingError, app_with};
@@ -727,7 +726,7 @@ fn endpoint_env() -> EndpointEnv {
 }
 
 fn admin_client(app: axum::Router) -> TestClient {
-    let token = create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
+    let token = crate::common::session::token("admin@test.com", "admin", Some("Test Admin"), None);
     TestClient::with_app(app).cookie("tm_access_token", &token)
 }
 
@@ -746,7 +745,7 @@ mod test_cover_endpoint {
     #[tokio::test]
     async fn test_returns_jpeg() {
         let env = endpoint_env();
-        let client = admin_client(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(env.manager.clone())));
+        let client = admin_client(app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(env.manager.clone())));
 
         let response = client.get("/cover/201").await;
 
@@ -757,7 +756,7 @@ mod test_cover_endpoint {
     #[tokio::test]
     async fn test_requires_auth() {
         let env = endpoint_env();
-        let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(env.manager.clone())));
+        let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(env.manager.clone())));
 
         let response = client.get("/cover/201").await;
 
