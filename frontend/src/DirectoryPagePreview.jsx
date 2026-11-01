@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import { getApiUrlPrefix, rawJsonGetReq } from "./Common";
 import { pdfjs, PDF_DOCUMENT_OPTIONS } from "./pdfjsEnv";
+import { preparePdfCanvasFonts } from "./pdfCanvasFonts";
 import {
   PREVIEW_HEIGHT,
   PREVIEW_PAGE_COUNT,
@@ -110,8 +111,11 @@ export default function DirectoryPagePreview({ category, apiPrefix }) {
           });
           canvas.width = Math.max(1, Math.floor(viewport.width));
           canvas.height = Math.max(1, Math.floor(viewport.height));
+          const context = canvas.getContext("2d");
+          await preparePdfCanvasFonts(context);
+          if (cancelled) return;
           await page.render({
-            canvasContext: canvas.getContext("2d"),
+            canvasContext: context,
             viewport,
           }).promise;
         } catch (err) {

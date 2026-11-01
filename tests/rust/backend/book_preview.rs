@@ -524,8 +524,9 @@ async fn backend_test_setup() -> Setup {
     let tmp = tempfile::tempdir().unwrap();
     let es = FakeEsManager::new();
     let bm = Arc::new(BookManager::with_deps(BookManagerDeps::new(tmp.path().to_path_buf(), es.clone())));
-    let token = backend::auth::create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
-    let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(bm.clone()))).cookie("tm_access_token", &token);
+    let token = crate::common::session::token("admin@test.com", "admin", Some("Test Admin"), None);
+    let client =
+        TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(bm.clone()))).cookie("tm_access_token", &token);
     Setup { bm, client, es, _tmp: tmp }
 }
 
@@ -533,8 +534,9 @@ impl Setup {
     /// 같은 ES와 경로를 쓰되 epubcheck 대역을 꽂은 `BookManager`로 라우터를 만든 클라이언트. 구 `hooks::set_epubcheck_spawner`.
     fn client_with_spawner(&self, spawner: Arc<FakeSpawner>) -> TestClient {
         let deps = BookManagerDeps::new(self.bm.path_prefix(), self.es.clone()).with_runner(spawner);
-        let token = backend::auth::create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
-        TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(Arc::new(BookManager::with_deps(deps))))).cookie("tm_access_token", &token)
+        let token = crate::common::session::token("admin@test.com", "admin", Some("Test Admin"), None);
+        TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(Arc::new(BookManager::with_deps(deps)))))
+            .cookie("tm_access_token", &token)
     }
 }
 
@@ -1696,8 +1698,10 @@ mod test_book_download {
     use tower::ServiceExt;
 
     fn client_with_header(book: &TestBook, name: &str, value: &str) -> TestClient {
-        let token = backend::auth::create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
-        TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(book.setup.bm.clone()))).cookie("tm_access_token", &token).header(name, value)
+        let token = crate::common::session::token("admin@test.com", "admin", Some("Test Admin"), None);
+        TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(book.setup.bm.clone())))
+            .cookie("tm_access_token", &token)
+            .header(name, value)
     }
 
     /// book_id만으로 download 요청 → 200 + EPUB 바이너리.
@@ -1751,8 +1755,8 @@ mod test_book_download {
         book.run(async {
             let content = vec![b'x'; 512 * 1024];
             fs::write(&book.epub_path, &content).unwrap();
-            let token = backend::auth::create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
-            let app = app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(book.setup.bm.clone()));
+            let token = crate::common::session::token("admin@test.com", "admin", Some("Test Admin"), None);
+            let app = app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(book.setup.bm.clone()));
             let request = Request::builder().uri(format!("/download/{}", book.book_id)).header("cookie", format!("tm_access_token={token}")).body(Body::empty()).unwrap();
             let response = app.clone().oneshot(request).await.unwrap();
             assert_eq!(response.status(), 200);

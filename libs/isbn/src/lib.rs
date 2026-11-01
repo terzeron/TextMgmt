@@ -342,10 +342,10 @@ pub fn pdf_text_primary(path: &Path) -> Result<(String, usize), String> {
 /// Poppler로 앞뒤 쪽 텍스트와 전체 쪽수를 읽는다.
 pub fn pdf_text_poppler(path: &Path) -> Result<(String, usize), String> {
     let runner = sysdeps::SystemRunner;
-    let total = sysdeps::poppler::page_count(&runner, path)?;
+    let total = sysdeps::pdf::page_count(&runner, path)?;
     let mut text = String::new();
     for idx in head_tail_page_indices(total, PDF_ISBN_PAGE_WINDOW) {
-        text.push_str(&sysdeps::poppler::extract_text(&runner, path, idx + 1, idx + 1)?);
+        text.push_str(&sysdeps::pdf::extract_text(&runner, path, idx + 1, idx + 1)?);
     }
     Ok((text, total))
 }

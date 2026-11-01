@@ -1,8 +1,8 @@
-//! PDF 구조·렌더링 검사. lopdf로 구조를 보고, Poppler(`pdfinfo`, `pdftotext`)로 실제 열리는지 확인한다.
+//! PDF 구조·렌더링 검사. lopdf로 구조를 보고, MuPDF Rust worker로 실제 열리는지 확인한다.
 //!
 //! Poppler 호출 정책: 비싼 외부 프로세스라서 파일당 `pdfinfo`는 최대 한 번이다. `--no-poppler`이거나 `%PDF-` 머리가 없으면
 //! 부르지 않는다. lopdf가 못 읽은 파일도 부른다(lopdf는 못 읽어도 뷰어는 여는 파일을 가려내는 것이 목적이다).
-//! 값싼 구조 검사를 모두 끝낸 뒤에 부르고, 시간 상한은 `sysdeps::poppler`의 30초다.
+//! 값싼 구조 검사를 모두 끝낸 뒤에 부르고, 시간 상한은 `sysdeps::pdf`의 30초다.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use std::time::Duration;
 use lopdf::{Dictionary, Document, Object};
 use scan_common::text::sanitize;
 use scan_common::{Category, FileReport, Severity};
-use sysdeps::poppler::{extract_text, page_count};
+use sysdeps::pdf::{extract_text, page_count};
 use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 
 use crate::cli::Options;
@@ -32,13 +32,27 @@ const MAX_PARENT_DEPTH: usize = 64;
 const LIST_LIMIT: usize = 5;
 /// `--pdf-text`인데 쪽수를 몰라 본문(NO_TEXT_LAYER·MOJIBAKE 검사)을 뽑지 못했다.
 const PAGE_COUNT_UNKNOWN: &str = "pdf text not extracted: page count unknown";
-const POPPLER_MISSING: &str = "poppler not installed";
+const POPPLER_MISSING: &str = "PDF worker not installed";
 
 /// PDF 32000-1:2008 9.6.2.2 "Standard Type 1 Fonts (Standard 14 Fonts)". 이 글꼴은 뷰어가 내장하므로 임베드하지 않아도 된다.
-const BASE_14: [&str; 14] =
-    ["Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic", "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique", "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique", "Symbol", "ZapfDingbats"];
+const BASE_14: [&str; 14] = [
+    "Times-Roman",
+    "Times-Bold",
+    "Times-Italic",
+    "Times-BoldItalic",
+    "Helvetica",
+    "Helvetica-Bold",
+    "Helvetica-Oblique",
+    "Helvetica-BoldOblique",
+    "Courier",
+    "Courier-Bold",
+    "Courier-Oblique",
+    "Courier-BoldOblique",
+    "Symbol",
+    "ZapfDingbats",
+];
 
-/// 실행기가 낸 `CommandError`의 종류. `sysdeps::poppler`는 오류를 문자열로 뭉개므로 래퍼가 직접 기록한다.
+/// 실행기가 낸 `CommandError`의 종류. `sysdeps::pdf`는 오류를 문자열로 뭉개므로 래퍼가 직접 기록한다.
 /// 0이 아닌 종료 코드는 `CommandError`가 아니므로 여기에 남지 않는다(그것만 `POPPLER_OPEN_FAILED`다).
 enum Failure {
     NotFound,
@@ -89,11 +103,11 @@ fn note_runner_failure(failure: Option<Failure>, report: &mut FileReport) -> boo
         }
         // 시간 초과와 실행 실패는 파일 결함의 증거가 아니다. 부하가 큰 디스크에서 멀쩡한 파일도 시간을 넘길 수 있다.
         Some(Failure::Timeout) => {
-            report.mark_incomplete("poppler timed out");
+            report.mark_incomplete("PDF worker timed out");
             true
         }
         Some(Failure::Spawn(m)) => {
-            report.mark_incomplete(&format!("poppler failed to run: {}", sanitize(&m, 200, Some('…'))));
+            report.mark_incomplete(&format!("PDF worker failed to run: {}", sanitize(&m, 200, Some('…'))));
             true
         }
     }
@@ -160,7 +174,14 @@ fn document_checks(doc: &Document, info: LoadInfo, report: &mut FileReport) {
 
 /// 카탈로그 `/Pages`의 `/Count`. 없거나 읽을 수 없으면 0이다.
 fn declared_page_count(doc: &Document) -> i64 {
-    doc.catalog().ok().and_then(|c| c.get(b"Pages").ok()).and_then(|o| doc.dereference(o).ok()).and_then(|(_, o)| o.as_dict().ok()).and_then(|d| d.get(b"Count").ok()).and_then(|c| c.as_i64().ok()).unwrap_or(0)
+    doc.catalog()
+        .ok()
+        .and_then(|c| c.get(b"Pages").ok())
+        .and_then(|o| doc.dereference(o).ok())
+        .and_then(|(_, o)| o.as_dict().ok())
+        .and_then(|d| d.get(b"Count").ok())
+        .and_then(|c| c.as_i64().ok())
+        .unwrap_or(0)
 }
 
 /// 상속을 풀어 쪽의 MediaBox를 찾는다(PDF 32000-1:2008 7.7.3.4: 쪽에 없으면 /Parent 사슬에서 물려받는다).
@@ -252,6 +273,10 @@ fn poppler_checks(path: &Path, opts: &Options, doc: Option<&Document>, report: &
         Ok(n) => n,
         Err(e) => {
             if note_runner_failure(watching.take(), report) {
+                return;
+            }
+            if ["PDF worker unavailable", "PDF worker terminated", "PDF worker resource limit:"].iter().any(|prefix| e.starts_with(prefix)) {
+                report.mark_incomplete(&sanitize(&e, 200, Some('…')));
                 return;
             }
             // 암호화 파일은 pdfinfo가 비밀번호를 요구하며 실패한다. 이미 ENCRYPTED로 알렸으므로 중복 지표를 내지 않는다.

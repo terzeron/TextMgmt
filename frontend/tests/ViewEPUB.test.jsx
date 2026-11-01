@@ -414,7 +414,11 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     render(<ViewEPUB bookId={7} />);
     await openBook();
     const secure = lastBook.spine.hooks.content.register.mock.calls[0][0];
-    const doc = new DOMParser().parseFromString("<html><body>본문</body></html>", "application/xhtml+xml");
+    // 유효한 XHTML namespace를 사용해 head 누락에 따른 거부를 검사한다.
+    const doc = new DOMParser().parseFromString(
+      '<html xmlns="http://www.w3.org/1999/xhtml"><body>본문</body></html>',
+      "application/xhtml+xml",
+    );
     await expect(secure(doc)).rejects.toThrow("head");
   });
 

@@ -106,6 +106,9 @@ impl From<ZipError> for PreviewFailure {
 pub const MAX_PDF_PAGE_RANGE: i64 = 50;
 
 impl BookManager {
+    /// CJK CMap과 서버 글꼴을 보완하기 전에 생성한 PDF를 재사용하지 않는다.
+    pub const PDF_PREVIEW_CACHE_VERSION: u32 = 3;
+
     /// Python과 같은 공개 검증 지점. EPUB 미리보기의 HTML 호환 변환을 수행한다.
     pub fn _expand_self_closing_rcdata(data: &[u8]) -> Vec<u8> {
         expand_self_closing_rcdata(data)
@@ -194,7 +197,7 @@ impl BookManager {
 
     fn preview_pdf(&self, book_id: i64, file_path: &Path, cache_dir: &Path, original_mtime: SystemTime, pages: u32) -> BookResponse {
         // 쪽 수를 이름에 넣는다. 빼면 큰 pages 요청 하나가 모든 사용자의 미리보기를 전체 책으로 바꾼다.
-        let cache_name = format!("{book_id}_n{pages}.pdf");
+        let cache_name = format!("{book_id}_n{pages}_v{}.pdf", Self::PDF_PREVIEW_CACHE_VERSION);
         let cache_file = cache_dir.join(&cache_name);
         self.remove_other_caches(cache_dir, &format!("{book_id}_n"), ".pdf", &cache_name);
         let legacy = cache_dir.join(format!("{book_id}.pdf"));
@@ -676,7 +679,7 @@ impl BookManager {
         if let Err(e) = std::fs::create_dir_all(&cache_dir) {
             return storage_error(&e);
         }
-        let cache_file = cache_dir.join(format!("{book_id}_p{start}-{end}.pdf"));
+        let cache_file = cache_dir.join(format!("{book_id}_p{start}-{end}_v{}.pdf", Self::PDF_PREVIEW_CACHE_VERSION));
         let original_mtime = match self.fs.metadata(&book.file_path).and_then(|m| m.modified()) {
             Ok(t) => t,
             Err(e) => return storage_error(&e),

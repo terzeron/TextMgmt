@@ -114,6 +114,208 @@ fn lopdf_page_ops_falls_back_to_path_for_a_reader_without_a_document() {
     assert_eq!(page_count_bytes(&bytes), 1);
 }
 
+/// 비내장 UHC 한글 글꼴과 쪽별 content/주석으로 원본 객체 보존을 확인한다.
+fn make_korean_annotation_pdf(path: &Path, encrypted: bool) {
+    use common::pdf::PdfBuilder;
+    use lopdf::{EncryptionState, EncryptionVersion, Object, Permissions, dictionary};
+
+    let mut builder = PdfBuilder::new();
+    let descriptor = builder.doc.add_object(dictionary! {
+        "Type" => "FontDescriptor", "FontName" => "Batang", "Flags" => 6,
+        "FontBBox" => vec![Object::Integer(-100), Object::Integer(-300), Object::Integer(1200), Object::Integer(1000)],
+        "ItalicAngle" => 0, "Ascent" => 880, "Descent" => -120, "CapHeight" => 700, "StemV" => 80,
+    });
+    let descendant = builder.doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "CIDFontType2", "BaseFont" => "Batang",
+        "CIDSystemInfo" => dictionary! {"Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Korea1"), "Supplement" => 1},
+        "FontDescriptor" => descriptor, "DW" => 1000,
+    });
+    let font = builder.doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "Batang",
+        "Encoding" => "KSCms-UHC-H", "DescendantFonts" => vec![Object::Reference(descendant)],
+    });
+    let latin = builder.doc.add_object(dictionary! {"Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica"});
+    for number in 1..=3 {
+        let page = builder.add_page(200, 200);
+        builder.page_mut(page).set("Resources", dictionary! {"Font" => dictionary! {"F1" => font, "F2" => latin}});
+        builder.content(page, format!("BT /F1 28 Tf 50 100 Td <C7D1B1DB> Tj ET BT /F2 12 Tf 50 50 Td (PAGE-{number}) Tj ET").as_bytes());
+        let annotation = builder.doc.add_object(dictionary! {
+            "Type" => "Annot", "Subtype" => "Text", "Rect" => vec![10.into(), 10.into(), 20.into(), 20.into()],
+            "Contents" => Object::string_literal(format!("annotation-{number}")), "P" => page,
+        });
+        builder.page_mut(page).set("Annots", vec![Object::Reference(annotation)]);
+    }
+    builder.save(path);
+    if encrypted {
+        let mut doc = lopdf::Document::load(path).unwrap();
+        doc.trailer.set("ID", vec![Object::string_literal("korean-fixture"), Object::string_literal("korean-fixture")]);
+        let encryption = EncryptionState::try_from(EncryptionVersion::V2 { document: &doc, owner_password: "owner", user_password: "", key_length: 128, permissions: Permissions::PRINTABLE }).unwrap();
+        doc.encrypt(&encryption).unwrap();
+        doc.save(path).unwrap();
+    }
+}
+
+#[test]
+fn preview_preserves_korean_font_objects_annotations_and_page_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("korean-annotations.pdf");
+    make_korean_annotation_pdf(&path, false);
+    let original = fs::read(&path).unwrap();
+
+    let bytes = LopdfPageOps.extract_pages(&path, 1, 3).unwrap();
+    let doc = lopdf::Document::load_mem(&bytes).unwrap();
+    let pages = doc.get_pages();
+    assert_eq!(pages.len(), 2);
+    for (output_number, original_number) in [(1, 2), (2, 3)] {
+        let id = pages[&output_number];
+        let page = doc.get_dictionary(id).unwrap();
+        let resources = doc.dereference(page.get(b"Resources").unwrap()).unwrap().1.as_dict().unwrap();
+        let fonts = doc.dereference(resources.get(b"Font").unwrap()).unwrap().1.as_dict().unwrap();
+        let font = doc.dereference(fonts.get(b"F1").expect("원본 F1 글꼴을 보존한다")).unwrap().1.as_dict().unwrap();
+        assert_eq!(font.get(b"Subtype").unwrap().as_name().unwrap(), b"Type0");
+        assert_eq!(font.get(b"BaseFont").unwrap().as_name().unwrap(), b"Batang");
+        assert_eq!(font.get(b"Encoding").unwrap().as_name().unwrap(), b"KSCms-UHC-H");
+        let descendant = doc.dereference(&font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0]).unwrap().1.as_dict().unwrap();
+        let descriptor = doc.dereference(descendant.get(b"FontDescriptor").unwrap()).unwrap().1.as_dict().unwrap();
+        assert!(![b"FontFile".as_slice(), b"FontFile2", b"FontFile3"].iter().any(|key| descriptor.has(key)));
+        let content = lopdf::content::Content::decode(&doc.get_page_content(id)).unwrap();
+        let marker = format!("PAGE-{original_number}");
+        assert!(
+            content.operations.iter().any(|op| op.operator == "Tj" && op.operands.iter().any(|value| value.as_str().ok() == Some(marker.as_bytes()))),
+            "page marker {marker} must retain its order"
+        );
+        let annotations = page.get(b"Annots").unwrap().as_array().unwrap();
+        assert_eq!(annotations.len(), 1);
+        let annotation = doc.dereference(&annotations[0]).unwrap().1.as_dict().unwrap();
+        assert_eq!(annotation.get(b"Contents").unwrap().as_str().unwrap(), format!("annotation-{original_number}").as_bytes());
+        assert_eq!(annotation.get(b"P").unwrap().as_reference().unwrap(), id);
+    }
+    assert_eq!(fs::read(&path).unwrap(), original, "미리보기 생성은 원본을 수정하지 않는다");
+}
+
+#[test]
+fn preview_rejects_invalid_page_ranges_without_rewriting_the_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("ranges.pdf");
+    create_test_pdf(3, &path);
+    let original = fs::read(&path).unwrap();
+    for (start, end) in [(0, 0), (2, 1), (3, 4), (0, 4)] {
+        assert!(LopdfPageOps.extract_pages(&path, start, end).is_err(), "범위 [{start}, {end})는 오류여야 한다");
+    }
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn preview_reports_missing_input_as_a_storage_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("missing.pdf");
+    assert_eq!(LopdfPageOps.page_count(&missing).unwrap_err().kind, "OSError");
+    assert_eq!(LopdfPageOps.extract_pages(&missing, 0, 1).unwrap_err().kind, "OSError");
+}
+
+#[test]
+fn encrypted_preview_removes_encryption_but_preserves_source_bytes_and_annotations() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("encrypted-annotations.pdf");
+    make_korean_annotation_pdf(&path, true);
+    let original = fs::read(&path).unwrap();
+    assert!(lopdf::Document::load_metadata_mem(&original).unwrap().encrypted);
+    let bytes = LopdfPageOps.extract_pages(&path, 1, 3).unwrap();
+    assert!(!lopdf::Document::load_metadata_mem(&bytes).unwrap().encrypted);
+    let doc = lopdf::Document::load_mem(&bytes).unwrap();
+    assert_eq!(doc.get_pages().len(), 2);
+    for (output_number, original_number) in [(1, 2), (2, 3)] {
+        let page = common::pdf::page_dict(&doc, output_number);
+        let annotations = page.get(b"Annots").expect("복호화 뒤에도 주석을 보존한다").as_array().unwrap();
+        assert_eq!(annotations.len(), 1);
+        let annotation = doc.dereference(&annotations[0]).unwrap().1.as_dict().unwrap();
+        assert_eq!(annotation.get(b"Contents").unwrap().as_str().unwrap(), format!("annotation-{original_number}").as_bytes());
+    }
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn extracting_encrypted_korean_pages_keeps_readable_korean_text() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("korean.pdf");
+    make_korean_annotation_pdf(&path, true);
+
+    let bytes = LopdfPageOps.extract_pages(&path, 1, 3).unwrap();
+    let extracted = lopdf::Document::load_mem(&bytes).unwrap();
+    assert!(!extracted.is_encrypted());
+    assert_eq!(extracted.get_pages().len(), 2);
+    let output = tmp.path().join("preview.pdf");
+    fs::write(&output, bytes).unwrap();
+    let text = sysdeps::pdf::extract_text(&sysdeps::SystemRunner, &output, 1, 2).unwrap();
+    assert_eq!(text.matches("한글").count(), 2);
+}
+
+#[test]
+fn large_pdf_preview_preserves_korean_fonts_annotations_and_order() {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let tmp = tempfile::tempdir().unwrap();
+    for encrypted in [false, true] {
+        let path = tmp.path().join(format!("large-korean-{encrypted}.pdf"));
+        make_korean_annotation_pdf(&path, encrypted);
+        let original = fs::read(&path).unwrap();
+        assert_eq!(lopdf::Document::load_metadata_mem(&original).unwrap().encrypted, encrypted);
+        let source_text = String::from_utf8_lossy(&original);
+        let xref = source_text.rsplit_once("startxref").unwrap().1.split_whitespace().next().unwrap();
+        let tail = format!("\nstartxref\n{xref}\n%%EOF\n").into_bytes();
+        let mut file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        // 64MiB 초과 분기를 강제하되 실제 디스크 공간은 작은 원본과 마지막 trailer만 쓴다.
+        file.set_len(65 * 1024 * 1024).unwrap();
+        file.seek(SeekFrom::End(0)).unwrap();
+        file.write_all(&tail).unwrap();
+        drop(file);
+        let source_len = fs::metadata(&path).unwrap().len();
+        assert!(source_len > 64 * 1024 * 1024);
+
+        let bytes = LopdfPageOps.extract_pages(&path, 1, 3).unwrap();
+        assert!(!lopdf::Document::load_metadata_mem(&bytes).unwrap().encrypted);
+        let doc = lopdf::Document::load_mem(&bytes).unwrap();
+        assert!(!doc.trailer.has(b"Encrypt"));
+        let pages = doc.get_pages();
+        assert_eq!(pages.len(), 2);
+        for (output_number, original_number) in [(1, 2), (2, 3)] {
+            let id = pages[&output_number];
+            let page = doc.get_dictionary(id).unwrap();
+            let resources = doc.dereference(page.get(b"Resources").unwrap()).unwrap().1.as_dict().unwrap();
+            let fonts = doc.dereference(resources.get(b"Font").unwrap()).unwrap().1.as_dict().unwrap();
+            let font = doc.dereference(fonts.get(b"F1").expect("큰 PDF의 원본 F1 글꼴을 보존한다")).unwrap().1.as_dict().unwrap();
+            assert_eq!(font.get(b"Subtype").unwrap().as_name().unwrap(), b"Type0");
+            assert_eq!(font.get(b"BaseFont").unwrap().as_name().unwrap(), b"Batang");
+            assert_eq!(font.get(b"Encoding").unwrap().as_name().unwrap(), b"KSCms-UHC-H");
+            let descendant = doc.dereference(&font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0]).unwrap().1.as_dict().unwrap();
+            let descriptor = doc.dereference(descendant.get(b"FontDescriptor").unwrap()).unwrap().1.as_dict().unwrap();
+            assert!(![b"FontFile".as_slice(), b"FontFile2", b"FontFile3"].iter().any(|key| descriptor.has(key)));
+            let content = lopdf::content::Content::decode(&doc.get_page_content(id)).unwrap();
+            let marker = format!("PAGE-{original_number}");
+            assert!(
+                content.operations.iter().any(|op| op.operator == "Tj" && op.operands.iter().any(|value| value.as_str().ok() == Some(marker.as_bytes()))),
+                "large PDF page marker {marker} must retain its order (encrypted={encrypted})"
+            );
+            let annotations = page.get(b"Annots").expect("큰 PDF의 주석을 보존한다").as_array().unwrap();
+            assert_eq!(annotations.len(), 1);
+            let annotation = doc.dereference(&annotations[0]).unwrap().1.as_dict().unwrap();
+            assert_eq!(annotation.get(b"Contents").unwrap().as_str().unwrap(), format!("annotation-{original_number}").as_bytes());
+            assert_eq!(annotation.get(b"P").unwrap().as_reference().unwrap(), id);
+        }
+
+        // sparse 원본 전체를 읽지 않고도 앞부분·trailer·파일 크기가 바뀌지 않았는지 확인한다.
+        assert_eq!(fs::metadata(&path).unwrap().len(), source_len);
+        let mut source = fs::File::open(&path).unwrap();
+        let mut prefix = vec![0; original.len()];
+        source.read_exact(&mut prefix).unwrap();
+        assert_eq!(prefix, original);
+        source.seek(SeekFrom::End(-(tail.len() as i64))).unwrap();
+        let mut actual_tail = vec![0; tail.len()];
+        source.read_exact(&mut actual_tail).unwrap();
+        assert_eq!(actual_tail, tail);
+    }
+}
+
 #[test]
 fn sparse_pdf_preview_reads_only_needed_ranges() {
     use std::io::{Seek, SeekFrom, Write};
@@ -182,13 +384,12 @@ fn extracting_a_page_from_a_large_tagged_pdf_does_not_rescan_each_deleted_page()
     assert_eq!(extracted.get_pages().len(), 1);
     let preview_path = tmp.path().join("preview.pdf");
     fs::write(&preview_path, &bytes).unwrap();
-    let render = |path: &Path, page: &str| {
-        let output = std::process::Command::new("pdftoppm").args(["-r", "36", "-f", page, "-l", page, "-singlefile"]).arg(path).output().unwrap();
-        assert!(output.status.success());
-        assert!(!output.stdout.is_empty());
-        output.stdout
+    let render = |path: &Path, page: usize| {
+        let pixels = sysdeps::pdf::render_page(&sysdeps::SystemRunner, path, page, 150).unwrap();
+        assert!(!pixels.is_empty());
+        pixels
     };
-    assert_eq!(render(&path, "51"), render(&preview_path, "1"));
+    assert_eq!(render(&path, 51), render(&preview_path, 1));
     // 경로와 쪽수만 보관하는 reader로 다른 범위도 추출한다.
     assert_eq!(page_count_bytes(&LopdfPageOps.extract_pages_from_reader(&reader, 0, 2).unwrap()), 2);
 }
@@ -314,6 +515,23 @@ mod test_get_pdf_pages {
     }
 
     #[tokio::test]
+    async fn legacy_pdf_caches_are_regenerated_after_korean_font_support_changes() {
+        let e = env();
+        let cache_dir = e.temp_dir.join(".preview_cache");
+        fs::create_dir_all(&cache_dir).unwrap();
+        // 이전 서버가 만든 캐시는 최신 mtime이어도 한글이 이미 빠져 있을 수 있다.
+        for name in ["1_p1-1.pdf", "1_n5.pdf"] {
+            fs::write(cache_dir.join(name), b"LEGACY PDF WITHOUT KOREAN").unwrap();
+        }
+        let pages = e.bm.get_pdf_pages(1, 1, 1).await;
+        assert_eq!(pages.status_code, 200);
+        assert_eq!(page_count_bytes(&pages.body), 1);
+        let preview = e.bm.get_book_preview(1, None, None).await;
+        assert_eq!(preview.status_code, 200);
+        assert_eq!(page_count_bytes(&preview.body), 5);
+    }
+
+    #[tokio::test]
     async fn get_pdf_pages_reuses_the_cached_reader_for_different_ranges() {
         let opens = Arc::new(AtomicUsize::new(0));
         let cached_extracts = Arc::new(AtomicUsize::new(0));
@@ -367,7 +585,7 @@ mod test_get_pdf_pages {
     async fn test_end_before_start_is_rejected() {
         let e = env();
         assert_eq!(e.bm.get_pdf_pages(1, 3, 2).await.status_code, 400);
-        assert!(!e.temp_dir.join(".preview_cache").join("1_p3-2.pdf").exists());
+        assert!(!e.temp_dir.join(".preview_cache").join(format!("1_p3-2_v{}.pdf", BookManager::PDF_PREVIEW_CACHE_VERSION)).exists());
     }
 
     #[tokio::test]
@@ -392,8 +610,8 @@ mod test_get_pdf_pages {
         let two_again = e.bm.get_book_preview(1, Some(2), None).await;
         assert_eq!(page_count_bytes(&two_again.body), 2);
 
-        assert!(cache_dir.join("1_n2.pdf").exists());
-        assert!(!cache_dir.join("1_n4.pdf").exists(), "같은 책의 다른 쪽 수 캐시는 하나만 남긴다");
+        assert!(cache_dir.join(format!("1_n2_v{}.pdf", BookManager::PDF_PREVIEW_CACHE_VERSION)).exists());
+        assert!(!cache_dir.join(format!("1_n4_v{}.pdf", BookManager::PDF_PREVIEW_CACHE_VERSION)).exists(), "같은 책의 다른 쪽 수 캐시는 하나만 남긴다");
         assert!(!cache_dir.join("1.pdf").exists());
     }
 
@@ -424,7 +642,7 @@ mod test_get_pdf_pages {
         assert_eq!(response1.status_code, 200);
 
         // 캐시 파일 존재 확인
-        let cache_file = e.temp_dir.join(".preview_cache").join("1_p1-2.pdf");
+        let cache_file = e.temp_dir.join(".preview_cache").join(format!("1_p1-2_v{}.pdf", BookManager::PDF_PREVIEW_CACHE_VERSION));
         assert!(cache_file.exists());
 
         // 두 번째 호출: 캐시 히트 (같은 결과)
@@ -490,7 +708,7 @@ mod test_pdf_pages_endpoint {
     #[tokio::test]
     async fn test_authentication_precedes_input_validation() {
         let e = env();
-        let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(e.bm.clone())));
+        let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(e.bm.clone())));
         for path in ["/pdf-pages/1", "/pdf-pages/invalid?start=bad", "/comics/pdf-pages/1", "/preview/1", "/download/1", "/validate/1", "/html-resource/1?path=x", "/comics/preview/1"] {
             assert_eq!(client.get(path).await.status, 401);
         }
@@ -551,8 +769,9 @@ mod test_pdf_pages_endpoint {
     /// 라우터 클로저가 캡처한 manager의 내부 속성을 패치하는 fixture를 `AppDeps::with_book_manager`로 대신한다.
     fn setup_client() -> (TestClient, Env) {
         let e = env();
-        let token = backend::auth::create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
-        let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(e.bm.clone()))).cookie("tm_access_token", &token);
+        let token = crate::common::session::token("admin@test.com", "admin", Some("Test Admin"), None);
+        let client =
+            TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(e.bm.clone()))).cookie("tm_access_token", &token);
         (client, e)
     }
 

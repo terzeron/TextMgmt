@@ -17,7 +17,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-pub mod poppler;
+pub mod pdf;
+// 기존 호출자의 모듈 경로는 유지하되 구현은 MuPDF Rust worker를 사용한다.
+pub use pdf as poppler;
+mod native_pdf;
 
 /// 환경 변수 조회 함수. `loader::Config::from_env`와 같은 모양이다.
 pub type EnvFn<'a> = &'a dyn Fn(&str) -> Option<String>;

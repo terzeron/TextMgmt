@@ -1,112 +1,24 @@
 //! PDF 표지 렌더링. Python `_extract_cover_thumbnail`의 PDF 갈래와 `_is_mostly_blank_cover`에 대응한다.
 //!
-//! Poppler로 텍스트·벡터·이미지 페이지를 렌더링한다. 출력은 제한된 크기의 PPM으로 받는다.
+//! MuPDF Rust worker로 텍스트·벡터·이미지 페이지를 렌더링한다. 출력은 제한된 크기의 PPM으로 받는다.
 
+use image::ImageReader;
 use image::imageops::FilterType;
 use image::{DynamicImage, Rgb, RgbImage};
-use image::ImageReader;
 use std::io::Cursor;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
-use sysdeps::{CommandRunner, SystemRunner};
+use std::path::Path;
+use sysdeps::SystemRunner;
 
 use super::BookManager;
 
 const MAX_RENDER_DIMENSION: u32 = 1200;
-const PDF_TOOL_ADDRESS_SPACE: u64 = 512 * 1024 * 1024;
-const MAX_DIRECT_JPEG_PIXELS: u64 = 16_000_000;
-const MAX_DIRECT_JPEG_BYTES: u64 = 16 * 1024 * 1024;
-const PDF_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
-static PDF_COVER_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-struct PdfCoverTempDir(PathBuf);
-
-impl PdfCoverTempDir {
-    fn new() -> std::io::Result<Self> {
-        for _ in 0..32 {
-            let sequence = PDF_COVER_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!("tm-pdf-cover-{}-{sequence}", std::process::id()));
-            let mut builder = std::fs::DirBuilder::new();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                builder.mode(0o700);
-            }
-            match builder.create(&path) {
-                Ok(()) => return Ok(Self(path)),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "표지 임시 디렉터리를 만들 수 없습니다"))
-    }
-}
-
-impl Drop for PdfCoverTempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn run_pdf_tool(args: &[String], max_file_bytes: Option<u64>) -> Option<Vec<u8>> {
-    let mut command = vec!["prlimit".to_string(), format!("--as={PDF_TOOL_ADDRESS_SPACE}"), "--cpu=25".to_string()];
-    if let Some(limit) = max_file_bytes {
-        command.push(format!("--fsize={limit}"));
-    }
-    command.push("--".to_string());
-    command.extend_from_slice(args);
-    let output = SystemRunner.run(&command, Some(PDF_TOOL_TIMEOUT)).ok()?;
-    if output.returncode != 0 {
-        log::debug!("PDF cover helper failed (exit={}): {}", output.returncode, String::from_utf8_lossy(&output.stderr).trim());
-        return None;
-    }
-    Some(output.stdout)
-}
-
-fn single_first_page_jpeg(list: &str) -> Option<(u32, u32)> {
-    let rows: Vec<_> = list
-        .lines()
-        .filter_map(|line| {
-            let fields: Vec<_> = line.split_whitespace().collect();
-            (fields.len() >= 9 && fields[0].parse::<u32>().is_ok()).then_some(fields)
-        })
-        .collect();
-    let [fields] = rows.as_slice() else { return None };
-    if fields[0] != "1" || fields[2] != "image" || fields[8] != "jpeg" {
-        return None;
-    }
-    let width = fields[3].parse::<u32>().ok()?;
-    let height = fields[4].parse::<u32>().ok()?;
-    let pixels = u64::from(width).checked_mul(u64::from(height))?;
-    (width > 0 && height > 0 && pixels <= MAX_DIRECT_JPEG_PIXELS).then_some((width, height))
-}
-
 fn extract_first_page_jpeg(path: &Path) -> Option<RgbImage> {
-    let listing = run_pdf_tool(
-        &["pdfimages", "-f", "1", "-l", "1", "-list"].into_iter().map(str::to_string).chain([path.to_string_lossy().into_owned()]).collect::<Vec<_>>(),
-        None,
-    )?;
-    let dimensions = single_first_page_jpeg(&String::from_utf8_lossy(&listing))?;
-    let directory = PdfCoverTempDir::new().ok()?;
-    let prefix = directory.0.join("cover");
-    let args = ["pdfimages", "-q", "-f", "1", "-l", "1", "-j"]
-        .into_iter()
-        .map(str::to_string)
-        .chain([path.to_string_lossy().into_owned(), prefix.to_string_lossy().into_owned()])
-        .collect::<Vec<_>>();
-    run_pdf_tool(&args, Some(MAX_DIRECT_JPEG_BYTES))?;
-    let image_path = directory.0.join("cover-000.jpg");
-    let metadata = std::fs::metadata(&image_path).ok()?;
-    if !metadata.is_file() || metadata.len() > MAX_DIRECT_JPEG_BYTES {
+    let bytes = sysdeps::pdf::first_page_jpeg(&SystemRunner, path).ok()?;
+    if bytes.is_empty() {
         return None;
     }
-    let bytes = std::fs::read(image_path).ok()?;
-    let reader = ImageReader::new(Cursor::new(&bytes)).with_guessed_format().ok()?;
-    if reader.into_dimensions().ok()? != dimensions {
-        return None;
-    }
-    image::load_from_memory(&bytes).ok().map(|image| image.to_rgb8())
+    let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?;
+    reader.decode().ok().map(|image| image.to_rgb8())
 }
 
 fn crop_cover_image(rendered: &RgbImage, width: u32) -> Option<RgbImage> {
@@ -169,17 +81,10 @@ fn ppm_to_rgb(bytes: &[u8]) -> Option<RgbImage> {
     RgbImage::from_raw(width, height, bytes[offset..].to_vec())
 }
 
-/// Render and crop one page with Poppler while bounding its raster dimensions.
+/// Render a bounded page through the MuPDF Rust worker.
 fn render_pdf_cover_page(path: &Path, page: usize, width: u32) -> Option<RgbImage> {
-    let args = ["pdftoppm", "-q", "-f"]
-        .into_iter()
-        .map(str::to_string)
-        .chain([page.to_string()])
-        .chain(["-l".to_string(), page.to_string(), "-scale-to".to_string(), MAX_RENDER_DIMENSION.to_string(), "-singlefile".to_string(), path.to_string_lossy().into_owned()])
-        .collect::<Vec<_>>();
-    let ppm = run_pdf_tool(&args, None)?;
-    let rendered = ppm_to_rgb(&ppm)?;
-    crop_cover_image(&rendered, width)
+    let ppm = sysdeps::pdf::render_page(&SystemRunner, path, page, MAX_RENDER_DIMENSION).ok()?;
+    crop_cover_image(&ppm_to_rgb(&ppm)?, width)
 }
 
 fn median_cut_palette(mut colors: Vec<([u8; 3], u32)>) -> Vec<[u8; 3]> {
@@ -308,7 +213,7 @@ impl BookManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_first_page_jpeg, median_cut_palette, ppm_to_rgb, single_first_page_jpeg};
+    use super::{extract_first_page_jpeg, median_cut_palette, ppm_to_rgb};
     use image::RgbImage;
     use lopdf::{Document, Object, Stream, dictionary};
     use std::path::Path;
@@ -319,7 +224,10 @@ mod tests {
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95).encode_image(&image).unwrap();
         let mut document = Document::with_version("1.5");
         let pages_id = document.new_object_id();
-        let image_id = document.add_object(Stream::new(dictionary! {"Type" => "XObject", "Subtype" => "Image", "Width" => 390, "Height" => 559, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode"}, jpeg));
+        let image_id = document.add_object(Stream::new(
+            dictionary! {"Type" => "XObject", "Subtype" => "Image", "Width" => 390, "Height" => 559, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode"},
+            jpeg,
+        ));
         let content_id = document.add_object(Stream::new(dictionary! {}, b"q 390 0 0 559 0 0 cm /Im0 Do Q".to_vec()));
         let page_id = document.add_object(dictionary! {"Type" => "Page", "Parent" => Object::Reference(pages_id), "MediaBox" => Object::Array(vec![0, 0, 390, 559].into_iter().map(Object::Integer).collect()), "Resources" => dictionary! {"XObject" => dictionary! {"Im0" => Object::Reference(image_id)}}, "Contents" => Object::Reference(content_id)});
         document.objects.insert(pages_id, Object::Dictionary(dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page_id)], "Count" => 1}));
@@ -346,17 +254,24 @@ mod tests {
 
     #[test]
     fn direct_extraction_accepts_only_one_bounded_first_page_jpeg() {
-        let one_jpeg = "page num type width height color comp bpc enc interp object ID x-ppi y-ppi size ratio\n1 0 image 390 559 rgb 3 8 jpeg no 139 0 11 11 76.6K 12%\n";
-        assert_eq!(single_first_page_jpeg(one_jpeg), Some((390, 559)));
-
-        let multiple = format!("{one_jpeg}1 1 image 100 100 rgb 3 8 jpeg no 140 0 11 11 1K 10%\n");
-        let non_jpeg = one_jpeg.replace("jpeg", "flate");
-        let oversized = one_jpeg.replace("390 559", "10000 10000");
-        let mask = one_jpeg.replace("image 390", "smask 390");
-        assert_eq!(single_first_page_jpeg(&multiple), None);
-        assert_eq!(single_first_page_jpeg(&non_jpeg), None);
-        assert_eq!(single_first_page_jpeg(&oversized), None);
-        assert_eq!(single_first_page_jpeg(&mask), None);
+        use lopdf::Object;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("image.pdf");
+        single_jpeg_pdf(&path);
+        assert!(extract_first_page_jpeg(&path).is_some());
+        for key in ["SMask", "Mask", "Width", "Height", "Filter"] {
+            single_jpeg_pdf(&path);
+            let mut doc = lopdf::Document::load(&path).unwrap();
+            let stream = doc.objects.values_mut().find_map(|o| o.as_stream_mut().ok().filter(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Image"))).unwrap();
+            match key {
+                "Width" => stream.dict.set("Width", 1_000_000),
+                "Height" => stream.dict.set("Height", 1),
+                "Filter" => stream.dict.set("Filter", Object::Name(b"FlateDecode".to_vec())),
+                _ => stream.dict.set(key, Object::Null),
+            }
+            doc.save(&path).unwrap();
+            assert!(extract_first_page_jpeg(&path).is_none(), "{key}");
+        }
     }
 
     #[test]

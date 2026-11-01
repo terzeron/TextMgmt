@@ -22,16 +22,15 @@ use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use backend::auth::create_jwt_token;
 use backend::cover_management::{CoverHooks, CoverManagement};
 use backend::es_manager::{EsError, EsManagerApi};
-use backend::main::{app_with, AppDeps, AuthMode, BookManagerApi};
+use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
 use image::{ImageFormat, Rgb, RgbImage};
-use lopdf::{dictionary, Document, Object, Stream};
-use serde_json::{json, Value};
+use lopdf::{Document, Object, Stream, dictionary};
+use serde_json::{Value, json};
 use sysdeps::Clock;
-use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
+use zip::write::SimpleFileOptions;
 
 use crate::common::TestClient;
 
@@ -378,8 +377,8 @@ impl AdminGate {
 
     fn token(&self) -> Option<String> {
         match *self.state.lock().unwrap() {
-            Some("admin") => Some(create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None)),
-            Some(_) => Some(create_jwt_token("viewer@test.com", "viewer", None, None)),
+            Some("admin") => Some(crate::common::session::token("admin@test.com", "admin", Some("Test Admin"), None)),
+            Some(_) => Some(crate::common::session::token("viewer@test.com", "viewer", None, None)),
             None => None,
         }
     }
@@ -449,7 +448,8 @@ pub struct CoverApi {
 pub fn cover_api(root: &Path, hooks: CoverHooks) -> CoverApi {
     let manager = MockManager::new(root);
     let gate = AdminGate::new();
-    let app = app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(Arc::new(MockManagerHandle(manager.clone()))).with_cover_hooks(hooks));
+    let app =
+        app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager(Arc::new(MockManagerHandle(manager.clone()))).with_cover_hooks(hooks));
     CoverApi { client: GateClient { app, gate: gate.clone() }, gate, manager }
 }
 

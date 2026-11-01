@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use super::deps::{AppDeps, AuthMode};
 use super::errors::{ApiError, RequestValidationError};
-use crate::auth::{HTTPException, optional_auth_with, require_admin_with, require_auth_with};
+use crate::auth::{optional_auth_with, require_admin_with, require_auth_with};
 
 /// Pydantic·FastAPI bool 문자열 해석. 대소문자를 가리지 않는다. 해석할 수 없으면 `None`.
 pub(crate) fn parse_py_bool(text: &str) -> Option<bool> {
@@ -36,7 +36,7 @@ pub(super) fn python_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Er
     parsed.ok_or_else(|| serde::de::Error::custom("Input should be a valid boolean"))
 }
 
-async fn resolve_auth(deps: &AppDeps, parts: &Parts, admin: bool) -> Result<Value, HTTPException> {
+async fn resolve_auth(deps: &AppDeps, parts: &Parts, admin: bool) -> Result<Value, ApiError> {
     let slot = |m: &std::sync::Mutex<Value>| m.lock().unwrap_or_else(|e| e.into_inner()).clone();
     match (deps.auth_mode(), admin) {
         (AuthMode::Fixed(v), _) => Ok(v.clone()),
@@ -45,9 +45,31 @@ async fn resolve_auth(deps: &AppDeps, parts: &Parts, admin: bool) -> Result<Valu
         (AuthMode::AuthOnly(v), false) => Ok(v.clone()),
         (AuthMode::Shared(slots), false) => Ok(slot(&slots.auth)),
         (AuthMode::Shared(slots), true) => Ok(slot(&slots.admin)),
-        (AuthMode::Cookies, false) => require_auth_with(parts, deps.role_resolver()).await,
-        (AuthMode::Cookies | AuthMode::AuthOnly(_), true) => require_admin_with(parts, deps.role_resolver()).await,
+        (AuthMode::Cookies, false) => {
+            let payload = require_auth_with(parts, deps.role_resolver()).await?;
+            require_active_session(deps, &payload).await?;
+            Ok(payload)
+        }
+        (AuthMode::Cookies | AuthMode::AuthOnly(_), true) => {
+            let payload = require_admin_with(parts, deps.role_resolver()).await?;
+            require_active_session(deps, &payload).await?;
+            Ok(payload)
+        }
     }
+}
+
+/// 폐기 결과를 다음 요청부터 반영한다. 저장소 오류도 인증 성공으로 처리하지 않는다.
+async fn require_active_session(deps: &AppDeps, payload: &Value) -> Result<(), ApiError> {
+    let family_id = payload.get("fid").and_then(Value::as_str).filter(|fid| !fid.is_empty()).ok_or_else(|| ApiError::http(401, "Session token required"))?.to_string();
+    let email = payload.get("email").and_then(Value::as_str).unwrap_or_default().to_string();
+    let unavailable = |error: String| {
+        log::warn!("Access session validation failed: {error}");
+        ApiError::unavailable()
+    };
+    let store = deps.refresh_store().map_err(&unavailable)?;
+    let active =
+        tokio::task::spawn_blocking(move || store.is_session_active(&family_id, &email)).await.map_err(|error| unavailable(error.to_string()))?.map_err(|error| unavailable(error.to_string()))?;
+    if active { Ok(()) } else { Err(ApiError::http(401, "Session is no longer active")) }
 }
 
 /// `Depends(require_auth)`: admin 또는 viewer. 값은 토큰 payload(역할은 지금 정책으로 덮어쓴다)다.
@@ -81,7 +103,13 @@ impl FromRequestParts<Arc<AppDeps>> for OptionalAuth {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, deps: &Arc<AppDeps>) -> Result<Self, Self::Rejection> {
-        Ok(Self(optional_auth_with(parts, deps.role_resolver()).await))
+        let mut payload = optional_auth_with(parts, deps.role_resolver()).await;
+        if let Some(value) = &payload
+            && require_active_session(deps, value).await.is_err()
+        {
+            payload = None;
+        }
+        Ok(Self(payload))
     }
 }
 
@@ -92,14 +120,14 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for ApiJson<T> {
     type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let is_json = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_none_or(|ct| {
+        let is_json = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|ct| {
             let ct = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
-            ct == "application/json" || ct.ends_with("+json")
+            ct == "application/json" || ct.strip_prefix("application/").is_some_and(|subtype| subtype.len() > "+json".len() && subtype.ends_with("+json"))
         });
-        let bytes = axum::body::Bytes::from_request(req, state).await.map_err(|e| RequestValidationError::single(&["body"], &e.to_string(), Value::Null))?;
         if !is_json {
             return Err(RequestValidationError::single(&["body"], "Input should be a valid JSON body", Value::Null).into());
         }
+        let bytes = axum::body::Bytes::from_request(req, state).await.map_err(|e| RequestValidationError::single(&["body"], &e.to_string(), Value::Null))?;
         let raw: Value = serde_json::from_slice(&bytes).map_err(|e| RequestValidationError::single(&["body"], &format!("JSON decode error: {e}"), Value::Null))?;
         match serde_json::from_value::<T>(raw.clone()) {
             Ok(v) => Ok(Self(v)),

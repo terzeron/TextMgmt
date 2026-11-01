@@ -30,6 +30,7 @@ import {
   getFullPageImageSize,
 } from "./pdfRenderScale";
 import { pdfjs, PDF_DOCUMENT_OPTIONS } from "./pdfjsEnv";
+import { preparePdfCanvasFonts } from "./pdfCanvasFonts";
 import { currentPageIndex, keyDirection, swipeDirection } from "./pdfPageTurn";
 import { endPdfTrace, startPdfTrace, tracePdf } from "./pdfViewerTrace";
 
@@ -428,6 +429,8 @@ export default function ViewPDF({
 
         trace(`render-start p${globalPageNum}`);
         const context = canvas.getContext("2d");
+        await preparePdfCanvasFonts(context);
+        if (cancelledRef.current) return;
         canvas.style.aspectRatio = "";
         canvas.width = renderViewport.width;
         canvas.height = renderViewport.height;

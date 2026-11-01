@@ -68,8 +68,8 @@ impl RoleResolver for EnvRoleResolver {}
 
 /// 토큰 발급·해독 seam. 기본 구현은 모두 실제 JWT다. 테스트는 쓰는 메서드만 바꾼다(Python `monkeypatch.setattr(main_mod, "create_jwt_token", ..)`).
 pub trait TokenIssuer: Send + Sync {
-    fn create_access_token(&self, email: &str, role: &str, name: &str, picture: &str) -> String {
-        create_jwt_token(email, role, Some(name), Some(picture))
+    fn create_access_token(&self, email: &str, role: &str, name: &str, picture: &str, family_id: &str) -> String {
+        create_session_jwt_token(email, role, name, picture, family_id)
     }
 
     fn create_refresh_token(&self, email: &str, role: &str, name: &str, picture: &str, family_id: &str, token_id: &str) -> String {
@@ -210,6 +210,15 @@ pub fn create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Op
     sign(&json!({
         "type": "access", "email": email, "role": role, "name": name.unwrap_or(""), "picture": picture.unwrap_or(""),
         "exp": now + ACCESS_TOKEN_EXPIRATION_SECONDS, "iat": now,
+    }))
+}
+
+/// 운영용 접근 토큰. 세션 식별자가 없는 기존 토큰은 HTTP 인증에서 거부한다.
+pub fn create_session_jwt_token(email: &str, role: &str, name: &str, picture: &str, family_id: &str) -> String {
+    let now = now_secs();
+    sign(&json!({
+        "type": "access", "email": email, "role": role, "name": name, "picture": picture,
+        "fid": family_id, "exp": now + ACCESS_TOKEN_EXPIRATION_SECONDS, "iat": now,
     }))
 }
 

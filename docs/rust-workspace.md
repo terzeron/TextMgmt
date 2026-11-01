@@ -55,6 +55,27 @@ docs/       문서
 - ZIP은 `corpus_common::reader::open_zip`으로 연다. `zip` 크레이트 기본 설정(`Detect`)은 파일 전체를 훑어 느리다
   (1.5MB EPUB 하나에 읽기 1만 3천 번, 48ms). `open_zip`은 `Known(0)`으로 먼저 열고(0.2ms) 실패하면 `Detect`로 다시 연다.
 
+## Backend 세션 인증
+
+- Access token에 Refresh token과 같은 세션 식별자(`fid`)를 넣는다.
+  보호 API는 JWT 서명·만료·현재 역할과 해당 세션의 유효 상태를 확인한다.
+- 로그아웃이나 관리자 세션 폐기는 다음 요청부터 해당 세션의 Access token도 거부한다.
+  다른 기기의 세션은 유지한다. Refresh token 회전은 같은 `fid`를 유지한다.
+- 세션 상태는 기존 `refresh_tokens` 테이블에서 조회한다. DB 스키마 변경은 없다.
+  즉시 폐기를 위해 상태를 캐시하지 않으므로, 인증 요청마다 MySQL 조회가 추가된다.
+- 세션 저장소 장애 시 보호 API는 `503`을 반환한다. 폐기·만료·누락 세션은 `401`을 반환한다.
+- 배포 전 발급한 Access token에는 `fid`가 없으므로 `401`을 반환한다.
+  기존 Refresh token으로 갱신하거나 다시 로그인하면 세션에 연결한 Access token을 받는다.
+- 운영용 토큰은 `create_session_jwt_token` 또는 `TokenIssuer::create_access_token`으로 발급한다.
+  `create_jwt_token`의 세션 없는 토큰은 저수준 JWT 검증 테스트용이며 보호 API 인증에는 사용할 수 없다.
+- 쿠키를 사용하는 상태 변경 요청과 Google 로그인은 `TM_FRONTEND_URL`과 같은 Origin만 허용한다.
+  Origin이 없으면 Referer의 scheme·host·port를 비교한다. 출처가 없거나 다르면 처리 전에 `403`을 반환한다.
+  Origin이 있으면 Referer로 우회할 수 없다. `null` 또는 중복 Origin도 거부한다.
+- JSON 본문은 `application/json` 또는 `application/*+json` Content-Type을 지정해야 한다.
+  헤더 누락과 다른 본문 형식은 기존 입력 오류 계약에 따라 `422`를 반환한다.
+- Bearer만 사용하는 CLI는 Origin 없이 호출할 수 있다. 인증 쿠키도 보내면 Origin 또는 Referer를 지정해야 한다.
+  쿠키 없는 익명 디버깅 로그에는 출처 검사를 적용하지 않는다.
+
 ## 분류 CLI
 
 `cargo run -p classify_cli -- <명령>`으로 실행한다. 인자 없이 실행하면 도움말을 출력하고 종료 코드 1을 반환한다.
@@ -102,6 +123,5 @@ cargo clippy --workspace --all-targets
 cargo llvm-cov --workspace --summary-only   # 커버리지
 ```
 
-PDF 텍스트 추출과 cover 렌더링은 `poppler-utils`의 `pdftotext`, `pdfinfo`, `pdftoppm`을 쓴다.
-개발 환경에서는 Debian/Ubuntu의 `sudo apt-get install poppler-utils`로 설치하고 실행 파일을 `PATH`에서 찾는다.
-별도 native library 경로 설정은 필요하지 않다. Docker runtime image에도 `poppler-utils`가 포함된다.
+PDF 쪽수·텍스트·cover 렌더링은 MuPDF Rust library를 사용한다. 원본 객체를 보존하는 미리보기와 편집은 lopdf를 사용한다.
+자체 `tm-pdf-worker`에서 네이티브 파서를 실행해 30초·512MiB 제한을 유지한다. 빌드·배포 패키지와 큰 PDF 처리 기준은 [PDF engine](pdf-engine.md)을 본다.

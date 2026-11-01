@@ -2,13 +2,13 @@ import { test, expect } from "@playwright/test";
 
 // 글꼴과 ToUnicode를 내장하지 않은 UHC PDF. CMap이 빠지면 페이지 렌더는
 // 성공하지만 한글만 사라지므로, 성공 상태와 별개로 실제 잉크 픽셀을 검사한다.
-function buildKoreanPdf(numPages) {
+function buildKoreanPdf(numPages, fontName) {
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     `<< /Type /Pages /Count ${numPages} /Kids [${Array.from({ length: numPages }, (_, i) => `${6 + i * 2} 0 R`).join(" ")}] >>`,
-    "<< /Type /Font /Subtype /Type0 /BaseFont /Batang /Encoding /KSCms-UHC-H /DescendantFonts [4 0 R] >>",
-    "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Batang /CIDSystemInfo << /Registry (Adobe) /Ordering (Korea1) /Supplement 1 >> /FontDescriptor 5 0 R /DW 1000 >>",
-    "<< /Type /FontDescriptor /FontName /Batang /Flags 6 /FontBBox [-100 -300 1200 1000] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 700 /StemV 80 >>",
+    `<< /Type /Font /Subtype /Type0 /BaseFont /${fontName} /Encoding /KSCms-UHC-H /DescendantFonts [4 0 R] >>`,
+    `<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${fontName} /CIDSystemInfo << /Registry (Adobe) /Ordering (Korea1) /Supplement 1 >> /FontDescriptor 5 0 R /DW 1000 >>`,
+    `<< /Type /FontDescriptor /FontName /${fontName} /Flags 6 /FontBBox [-100 -300 1200 1000] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 700 /StemV 80 >>`,
   ];
   for (let i = 0; i < numPages; i++) {
     objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 3 0 R >> >> /Contents ${7 + i * 2} 0 R >>`);
@@ -28,7 +28,22 @@ function buildKoreanPdf(numPages) {
   return Buffer.from(pdf);
 }
 
-test("비내장 UHC 글꼴 PDF의 첫 쪽과 후속 청크에 한글을 그린다", async ({ page, request }) => {
+// 군중정류 PDF처럼 CP949 글꼴 이름을 PDF Name 바이트로 저장한 경우도 검사한다.
+for (const fontName of ["Batang", "#B9#D9#C5#C1#C3#BC"]) {
+test(`비내장 UHC 글꼴(${fontName})의 첫 쪽과 후속 청크에 Noto로 한글을 그린다`, async ({ page, request }) => {
+  await page.addInitScript(() => {
+    window.pdfKoreanDraws = [];
+    const fillText = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (text, ...args) {
+      if (this.canvas.matches?.(".pdf-page") && /[가-힣]/.test(text)) {
+        window.pdfKoreanDraws.push({
+          font: this.font,
+          ready: document.fonts.check('28px "TM PDF Noto Serif CJK"'),
+        });
+      }
+      return fillText.call(this, text, ...args);
+    };
+  });
   // 빌드 산출물에서 CMap과 기본 글꼴이 실제 바이너리로 제공되는지도 검사한다.
   for (const asset of [
     "pdf-cmaps/KSCms-UHC-H.bcmap",
@@ -53,7 +68,7 @@ test("비내장 UHC 글꼴 PDF의 첫 쪽과 후속 청크에 한글을 그린�
     return route.fulfill({
       contentType: "application/pdf",
       headers: { "X-Total-Pages": "3", "Access-Control-Expose-Headers": "X-Total-Pages" },
-      body: buildKoreanPdf(end - start + 1),
+      body: buildKoreanPdf(end - start + 1, fontName),
     });
   });
   const errors = [];
@@ -77,4 +92,8 @@ test("비내장 UHC 글꼴 PDF의 첫 쪽과 후속 청크에 한글을 그린�
   expect(ranges).toContain("1-1");
   expect(ranges).toContain("2-3");
   expect(errors).toEqual([]);
+  const draws = await page.evaluate(() => window.pdfKoreanDraws);
+  expect(draws.length).toBeGreaterThanOrEqual(6);
+  expect(draws.every(({ font, ready }) => font.includes("TM PDF Noto Serif CJK") && ready)).toBe(true);
 });
+}

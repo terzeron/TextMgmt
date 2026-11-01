@@ -587,6 +587,12 @@ pub trait RefreshTokenStoreApi: Send + Sync {
 
     fn _session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError>;
 
+    /// 회전된 개별 토큰 대신 family의 유효 토큰을 확인해 갱신 중에도 접근을 유지한다.
+    fn is_session_active(&self, family_id: &str, email: &str) -> Result<bool, StoreError> {
+        let rows = self._session_rows(Some(email), Some(family_id))?;
+        Ok(rows.iter().any(|row| text_of(cell(row, "family_id")) == family_id && text_of(cell(row, "email")) == email && int_of(cell(row, "valid_token_count")) > 0))
+    }
+
     fn list_sessions(&self, q: &SessionQuery) -> Result<Value, StoreError> {
         let rows = self._session_rows(q.email.as_deref(), None)?;
         Ok(build_session_page(&rows, q))

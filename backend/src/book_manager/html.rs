@@ -242,13 +242,16 @@ impl BookManager {
         BookResponse { status_code: 200, media_type: Some(media_type_for_suffix(&suffix).to_string()), headers: html_security_headers(), body }
     }
 
-    /// `get_book_content`가 돌려준 파일을 내려줄 때 쓸 미디어 타입과 헤더. HTML은 첨부로만 내려 브라우저가 직접 렌더링하지 못하게 한다.
+    /// HTML과 SVG는 첨부로 내려 활성 콘텐츠가 API Origin에서 실행되지 않게 한다.
     pub fn file_response_meta(path: &Path) -> (String, Vec<(String, String)>) {
-        let suffix = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+        let suffix = path.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default();
         let media_type = media_type_for_suffix(&suffix).to_string();
         // Content-Encoding: identity는 압축 미들웨어를, no-transform은 외부 프록시의 응답 변환을 막는다.
         let mut headers = vec![("Content-Encoding".to_string(), "identity".to_string()), ("Cache-Control".to_string(), "no-transform".to_string())];
-        if suffix.eq_ignore_ascii_case(".html") {
+        if suffix == ".svg" {
+            headers.extend(html_security_headers());
+        }
+        if matches!(suffix.as_str(), ".html" | ".svg") {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let disposition =
                 if name.is_ascii() && !name.contains('"') && !name.contains('\\') { format!("attachment; filename=\"{name}\"") } else { format!("attachment; filename*=utf-8''{}", quote_all(&name)) };
