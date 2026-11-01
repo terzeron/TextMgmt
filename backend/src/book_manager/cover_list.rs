@@ -3,9 +3,13 @@
 //! 정식 표지가 없는 책만 찾는 경로는 `uncovered` 모듈에 있다.
 
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io;
 use std::io::Cursor;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use image::{DynamicImage, RgbImage};
 use serde_json::Value;
@@ -16,6 +20,37 @@ use super::{BookManager, BookResponse, CoverPage, MAX_CATEGORY_PAGE_SIZE};
 use crate::book::Book;
 use crate::cover_browse::{CoverEntry, CoverGroup, CoverStats, MISSING_TIME, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
 use crate::es_manager::{decode_category_cursor, encode_category_cursor};
+
+const COVER_GENERATION_LIMIT: usize = 10;
+
+struct CoverSlots(Arc<tokio::sync::Semaphore>);
+impl Default for CoverSlots {
+    fn default() -> Self {
+        Self(Arc::new(tokio::sync::Semaphore::new(COVER_GENERATION_LIMIT)))
+    }
+}
+
+// 같은 라이브러리를 마운트한 replica도 합계 10개만 추출한다.
+// 잠금 파일을 지우면 다른 inode에 잠금이 갈리므로 생성한 파일은 유지한다.
+fn acquire_cover_slot(cache_dir: &Path) -> io::Result<File> {
+    let dir = cache_dir.join(".generation_slots");
+    std::fs::create_dir_all(&dir)?;
+    let mut slots = (0..COVER_GENERATION_LIMIT).map(|slot| OpenOptions::new().read(true).append(true).create(true).open(dir.join(format!("{slot}.lock")))).collect::<io::Result<Vec<_>>>()?;
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        for index in 0..slots.len() {
+            match slots[index].try_lock() {
+                Ok(()) => return Ok(slots.swap_remove(index)),
+                Err(std::fs::TryLockError::WouldBlock) => {}
+                Err(std::fs::TryLockError::Error(error)) => return Err(error),
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "커버 생성 대기 시간이 초과되었습니다"));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
 
 /// `get_cover_books_paged` 입력.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -140,20 +175,39 @@ impl BookManager {
 
         let (path, file_type) = (book.file_path.clone(), book.file_type.clone());
         let thumbnailer = self.thumbnailer();
-        let data = tokio::task::spawn_blocking(move || match thumbnailer {
-            Some(extractor) => extractor.extract_cover_thumbnail(&path, &file_type, Some(width)),
-            None => Self::_extract_cover_thumbnail(&path, &file_type, Some(width)),
+        let permit = self.state::<CoverSlots>().0.clone().acquire_owned().await.expect("private semaphore stays open");
+        let data = tokio::task::spawn_blocking(move || -> io::Result<Option<Vec<u8>>> {
+            // HTTP handler가 취소되어도 추출·캐시 저장이 끝나야 슬롯이 반환된다.
+            let _permit = permit;
+            let _slot = acquire_cover_slot(&cache_dir)?;
+            if let Ok(bytes) = std::fs::read(&cache_file) {
+                return Ok(Some(bytes));
+            }
+            let data = match thumbnailer {
+                Some(extractor) => extractor.extract_cover_thumbnail(&path, &file_type, Some(width)),
+                None => Self::_extract_cover_thumbnail(&path, &file_type, Some(width)),
+            };
+            if let Some(bytes) = &data
+                && let Err(error) = std::fs::write(&cache_file, bytes)
+            {
+                log::warn!("Cover cache write failed ({}): {error}", cache_file.display());
+            }
+            Ok(data)
         })
         .await
         .unwrap_or_else(|e| {
             // 손상 파일 등은 여기로 온다. 화면은 포맷명 상자로 대체한다.
             log::warn!("Cover extraction failed for book_id={book_id} ({}): {e}", book.file_path.display());
-            None
+            Ok(None)
         });
+        let data = match data {
+            Ok(data) => data,
+            Err(error) => {
+                log::error!("Cover generation slot failed for book_id={book_id}: {error}");
+                return text_response(503, "커버 생성을 잠시 후 다시 시도해 주세요");
+            }
+        };
         let Some(data) = data else { return text_response(404, format!("Cover not found: {book_id}")) };
-        if std::fs::create_dir_all(&cache_dir).and_then(|()| std::fs::write(&cache_file, &data)).is_err() {
-            log::warn!("Cover cache write failed: {}", cache_file.display());
-        }
         jpeg(data)
     }
 

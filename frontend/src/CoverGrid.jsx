@@ -23,37 +23,32 @@ function CoverImage({ src, fileType }) {
     const image = imageRef.current;
     if (!src || !image) return undefined;
     setFailed(false);
-    image.removeAttribute("src");
-    image.removeAttribute("srcset");
+    let disposed = false;
     const cancel = coverRequestQueue.enqueue(
-      (signal) =>
+      () =>
         new Promise((resolve) => {
-          const finish = () => resolve();
-          const onAbort = () => {
-            image.removeAttribute("src");
-            image.removeAttribute("srcset");
+          const finish = () => {
+            image.removeEventListener("load", onLoad);
+            image.removeEventListener("error", onError);
+            resolve();
+          };
+          const onLoad = () => {
             finish();
           };
-          signal.addEventListener("abort", onAbort, { once: true });
-          image.onload = () => {
-            signal.removeEventListener("abort", onAbort);
-            markTallCover({ currentTarget: image });
+          const onError = () => {
+            if (!disposed) setFailed(true);
             finish();
           };
-          image.onerror = () => {
-            signal.removeEventListener("abort", onAbort);
-            setFailed(true);
-            finish();
-          };
+          image.addEventListener("load", onLoad);
+          image.addEventListener("error", onError);
           const thumbAttributes = coverThumbProps(src);
           image.setAttribute("srcset", thumbAttributes.srcSet);
           image.setAttribute("src", thumbAttributes.src);
         }),
     );
     return () => {
+      disposed = true;
       cancel();
-      image.onload = null;
-      image.onerror = null;
     };
   }, [src]);
 
@@ -69,6 +64,7 @@ function CoverImage({ src, fileType }) {
       ref={imageRef}
       className="cover-grid-image"
       alt=""
+      onLoad={markTallCover}
     />
   );
 }
@@ -170,7 +166,7 @@ export default function CoverGrid({
               title={displayTitle}
             >
               <div className="cover-grid-cover">
-                <CoverImage src={coverSrc} fileType={fileType} />
+                <CoverImage key={coverSrc} src={coverSrc} fileType={fileType} />
               </div>
               <div className="cover-grid-title">{displayTitle}</div>
             </a>

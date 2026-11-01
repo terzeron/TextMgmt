@@ -3,6 +3,24 @@ import { describe, expect, it, vi } from "vitest";
 import { createCoverRequestQueue } from "../src/coverRequestQueue.js";
 
 describe("createCoverRequestQueue", () => {
+  it("keeps a cancelled running request's slot until the work settles", async () => {
+    const queue = createCoverRequestQueue(1);
+    const started = [];
+    let finish;
+    let signal;
+    const cancel = queue.enqueue((requestSignal) => {
+      signal = requestSignal;
+      started.push("old");
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    queue.enqueue(() => started.push("new"));
+    cancel();
+    expect(signal.aborted).toBe(false);
+    expect(started).toEqual(["old"]);
+    finish();
+    await vi.waitFor(() => expect(started).toEqual(["old", "new"]));
+  });
+
   it("starts only the configured number of requests at once", async () => {
     const queue = createCoverRequestQueue(2);
     const started = [];

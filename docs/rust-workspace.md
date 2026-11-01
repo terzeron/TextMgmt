@@ -102,6 +102,5 @@ cargo clippy --workspace --all-targets
 cargo llvm-cov --workspace --summary-only   # 커버리지
 ```
 
-PDF 텍스트 추출과 cover 렌더링은 `poppler-utils`의 `pdftotext`, `pdfinfo`, `pdftoppm`을 쓴다.
-개발 환경에서는 Debian/Ubuntu의 `sudo apt-get install poppler-utils`로 설치하고 실행 파일을 `PATH`에서 찾는다.
-별도 native library 경로 설정은 필요하지 않다. Docker runtime image에도 `poppler-utils`가 포함된다.
+PDF 쪽수·텍스트·cover 렌더링은 MuPDF Rust library를 사용한다. 원본 객체를 보존하는 미리보기와 편집은 lopdf를 사용한다.
+자체 `tm-pdf-worker`에서 네이티브 파서를 실행해 30초·512MiB 제한을 유지한다. 빌드·배포 패키지와 큰 PDF 처리 기준은 [PDF engine](pdf-engine.md)을 본다.

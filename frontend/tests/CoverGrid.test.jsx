@@ -13,8 +13,15 @@ vi.mock("../src/Common.js", () => ({
 }));
 
 import CoverGrid, { COVER_BATCH_SIZE } from "../src/CoverGrid";
+import { StrictMode } from "react";
 
 let observers = [];
+const queueRef = vi.hoisted(() => ({ current: null }));
+vi.mock("../src/coverRequestQueue.js", async (importOriginal) => {
+  const original = await importOriginal();
+  return { ...original, coverRequestQueue: { enqueue: (...args) => queueRef.current.enqueue(...args) } };
+});
+import { createCoverRequestQueue } from "../src/coverRequestQueue.js";
 class MockIntersectionObserver {
   constructor(callback) {
     this.callback = callback;
@@ -37,6 +44,7 @@ const makeBooks = (count, fileType = "epub") =>
 
 describe("CoverGrid", () => {
   beforeEach(() => {
+    queueRef.current = createCoverRequestQueue();
     observers = [];
     globalThis.IntersectionObserver = MockIntersectionObserver;
   });
@@ -90,6 +98,25 @@ describe("CoverGrid", () => {
     await vi.waitFor(() =>
       expect(images[10].getAttribute("src")).toMatch(/\/comics\/cover\/11\?/),
     );
+  });
+
+  it("목록을 바꿔도 이전 이미지가 끝나야 다음 요청을 시작한다", async () => {
+    const old = render(<CoverGrid results={makeBooks(10)} basePath="/book-view" />);
+    const oldImages = [...old.container.querySelectorAll("img")];
+    old.unmount();
+    const next = render(<CoverGrid results={makeBooks(10, "pdf")} basePath="/book-view" />);
+    const newImages = [...next.container.querySelectorAll("img")];
+    expect(newImages.every((image) => !image.hasAttribute("src"))).toBe(true);
+    fireEvent.load(oldImages[0]);
+    await vi.waitFor(() => expect(newImages[0].hasAttribute("src")).toBe(true));
+    expect(newImages.slice(1).every((image) => !image.hasAttribute("src"))).toBe(true);
+    for (const image of oldImages.slice(1)) fireEvent.error(image);
+    await vi.waitFor(() => expect(newImages.every((image) => image.hasAttribute("src"))).toBe(true));
+  });
+
+  it("StrictMode의 effect 재실행이 진행 중인 이미지 요청을 지우지 않는다", () => {
+    const { container } = render(<StrictMode><CoverGrid results={makeBooks(10)} basePath="/book-view" /></StrictMode>);
+    expect([...container.querySelectorAll("img")].every((image) => image.hasAttribute("src"))).toBe(true);
   });
 
   it("updated_time이 바뀌면 커버 URL도 바뀌어 브라우저 캐시를 우회한다", () => {

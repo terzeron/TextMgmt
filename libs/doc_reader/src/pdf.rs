@@ -95,9 +95,9 @@ pub fn collect_pages<E>(page_count: usize, mut page_text: impl FnMut(usize) -> R
 
 fn poppler_text(path: &Path) -> Result<(String, usize), String> {
     let runner = sysdeps::SystemRunner;
-    let pages = sysdeps::poppler::page_count(&runner, path)?;
+    let pages = sysdeps::pdf::page_count(&runner, path)?;
     let last = pages.min(PDF_PAGE_LIMIT);
-    let text = if last == 0 { String::new() } else { sysdeps::poppler::extract_text(&runner, path, 1, last)? };
+    let text = if last == 0 { String::new() } else { sysdeps::pdf::extract_text(&runner, path, 1, last)? };
     collect_pages(pages, |i| Ok::<_, String>(text.split('\u{000c}').nth(i).unwrap_or_default().to_owned()))
 }
 
@@ -243,12 +243,18 @@ pub struct PdftotextHooks<'a> {
 
 /// 호환성 검증용 pdftotext 추출기. 운영 파싱은 `read_from_pdf`의 StageRunner 경로를 쓴다.
 pub fn pdf_text_by_pdftotext_with(path: &Path, hooks: &PdftotextHooks<'_>) -> (String, usize) {
+    if hooks.which.is_none() && hooks.run.is_none() {
+        return match poppler_text(path) {
+            Ok((text, pages)) => (head_chars(&keep_word_chars(&text), TEXT_SIZE).to_owned(), pages),
+            Err(_) => (String::new(), 0),
+        };
+    }
     let binary = hooks
         .path_cache
         .get_or_init(|| hooks.which.map_or_else(|| std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).map(|dir| dir.join("pdftotext")).find(|p| p.is_file()), |find| find()));
     let Some(binary) = binary else { return (String::new(), 0) };
     let argv = vec![binary.to_string_lossy().into_owned(), "-enc".to_string(), "UTF-8".to_string(), "-l".to_string(), PDF_PAGE_LIMIT.to_string(), path.to_string_lossy().into_owned(), "-".to_string()];
-    let output = hooks.run.map_or_else(|| std::process::Command::new(&argv[0]).args(&argv[1..]).output().ok().map(|o| (o.status.code().unwrap_or(1), o.stdout)), |run| run(&argv));
+    let output = hooks.run.map_or_else(|| poppler_text(path).ok().map(|(text, _)| (0, text.into_bytes())), |run| run(&argv));
     let Some((0, bytes)) = output else { return (String::new(), 0) };
     let text = String::from_utf8_lossy(&bytes);
     let cleaned = keep_word_chars(&text);

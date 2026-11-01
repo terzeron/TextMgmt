@@ -10,10 +10,16 @@ autotests = false
 name = "sysdeps"
 path = "../../tests/rust/sysdeps/sysdeps.rs"
 
+[[bin]]
+name = "tm-pdf-worker"
+path = "src/bin/pdf_worker.rs"
+
 [dependencies]
 async-trait = "0.1"
 libc = "0.2"
 serde_json.workspace = true
+lopdf.workspace = true
+mupdf = { version = "=0.8.0", default-features = false, features = ["base14-fonts", "system-fonts", "sys-lib-libjpeg", "sys-lib-zlib", "sys-lib-freetype", "sys-lib-harfbuzz", "sys-lib-openjpeg"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -31,11 +31,7 @@ fn build(bodies: &[String]) -> Vec<u8> {
 
 /// 쪽 하나짜리 PDF. `page_extra`는 쪽 사전에, `pages_extra`는 Pages 사전에 들어간다. 4번 객체부터 `more`다.
 fn pdf_with(page_extra: &str, pages_extra: &str, more: &[String]) -> Vec<u8> {
-    let mut bodies = vec![
-        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
-        format!("<< /Type /Pages /Kids [3 0 R] /Count 1 {pages_extra} >>"),
-        format!("<< /Type /Page /Parent 2 0 R {page_extra} >>"),
-    ];
+    let mut bodies = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_owned(), format!("<< /Type /Pages /Kids [3 0 R] /Count 1 {pages_extra} >>"), format!("<< /Type /Page /Parent 2 0 R {page_extra} >>")];
     bodies.extend_from_slice(more);
     build(&bodies)
 }
@@ -260,7 +256,7 @@ fn poppler_failure_is_flagged_and_success_is_not() {
 fn poppler_not_installed_is_incomplete_not_a_finding() {
     let r = run(&plain(), &Options::default(), &FakeRunner::not_found());
     assert_absent(&r, "POPPLER_OPEN_FAILED");
-    assert!(r.incomplete && r.reasons.iter().any(|m| m == "poppler not installed"), "{r:?}");
+    assert!(r.incomplete && r.reasons.iter().any(|m| m == "PDF worker not installed"), "{r:?}");
 }
 
 #[test]
@@ -276,10 +272,10 @@ fn no_poppler_option_never_calls_the_runner() {
 fn poppler_page_count_runs_once_and_text_is_probed_only_on_request() {
     let runner = FakeRunner::pages(3);
     run(&plain(), &Options::default(), &runner);
-    assert_eq!(runner.programs(), ["pdfinfo"]);
+    assert_eq!(runner.programs(), ["info"]);
     let runner = FakeRunner::pages(3);
     run(&plain(), &Options { pdf_text: true, ..Options::default() }, &runner);
-    assert_eq!(runner.programs(), ["pdfinfo", "pdftotext"]);
+    assert_eq!(runner.programs(), ["info", "text"]);
 }
 
 #[test]
@@ -299,14 +295,14 @@ fn poppler_is_still_asked_when_lopdf_cannot_parse_but_never_without_header() {
 fn poppler_timeout_is_incomplete_not_a_finding() {
     let r = run(&plain(), &Options::default(), &FakeRunner::timeout());
     assert_absent(&r, "POPPLER_OPEN_FAILED");
-    assert!(r.incomplete && r.reasons.iter().any(|m| m == "poppler timed out"), "{r:?}");
+    assert!(r.incomplete && r.reasons.iter().any(|m| m == "PDF worker timed out"), "{r:?}");
 }
 
 #[test]
 fn poppler_spawn_error_is_incomplete_not_a_finding() {
     let r = run(&plain(), &Options::default(), &FakeRunner::spawn_error("permission denied\x1b[31m"));
     assert_absent(&r, "POPPLER_OPEN_FAILED");
-    let reason = r.reasons.iter().find(|m| m.starts_with("poppler failed to run: ")).unwrap_or_else(|| panic!("{r:?}"));
+    let reason = r.reasons.iter().find(|m| m.starts_with("PDF worker failed to run: ")).unwrap_or_else(|| panic!("{r:?}"));
     assert!(reason.contains("permission denied") && !reason.contains('\x1b'), "{reason:?}");
     assert!(r.incomplete);
 }
@@ -316,6 +312,15 @@ fn nonzero_pdfinfo_exit_is_still_a_finding_and_not_incomplete() {
     let r = run(&plain(), &Options::default(), &FakeRunner::fails("Syntax Error: bad"));
     assert_flag(&r, "POPPLER_OPEN_FAILED", Category::Render, Severity::High);
     assert!(!r.incomplete, "{r:?}");
+}
+
+#[test]
+fn native_worker_resource_failures_are_incomplete_not_pdf_defects() {
+    for message in ["", "memory allocation failed", "cannot allocate memory"] {
+        let r = run(&plain(), &Options::default(), &FakeRunner::fails(message));
+        assert!(r.incomplete, "{message:?}: {r:?}");
+        assert_absent(&r, "POPPLER_OPEN_FAILED");
+    }
 }
 
 fn encrypted_doc() -> Document {
@@ -390,7 +395,9 @@ fn fonts_without_descriptor_and_type3_are_not_flagged() {
 
 #[test]
 fn common_windows_aliases_of_base_14_fonts_are_not_flagged() {
-    for name in ["Arial", "Arial,Bold", "Arial-BoldMT", "ArialMT", "TimesNewRoman", "TimesNewRomanPSMT", "TimesNewRomanPS-BoldMT", "CourierNew", "CourierNewPSMT", "CourierNew,Italic", "ABCDEF+Arial-ItalicMT"] {
+    for name in
+        ["Arial", "Arial,Bold", "Arial-BoldMT", "ArialMT", "TimesNewRoman", "TimesNewRomanPSMT", "TimesNewRomanPS-BoldMT", "CourierNew", "CourierNewPSMT", "CourierNew,Italic", "ABCDEF+Arial-ItalicMT"]
+    {
         assert_absent(&run_no_poppler(&pdf_with_descriptor(&format!("/FontName /{name}"))), "FONT_NOT_EMBEDDED");
     }
 }
@@ -411,7 +418,7 @@ fn flags_missing_text_layer_only_with_pdf_text() {
     assert_absent(&run(&plain(), &o, &FakeRunner::text("본문")), "NO_TEXT_LAYER");
     let runner = FakeRunner::text("");
     assert_absent(&run(&plain(), &Options::default(), &runner), "NO_TEXT_LAYER");
-    assert_eq!(runner.programs(), ["pdfinfo"]);
+    assert_eq!(runner.programs(), ["info"]);
 }
 
 #[test]
@@ -419,7 +426,7 @@ fn text_probe_is_skipped_for_zero_pages() {
     let o = Options { pdf_text: true, ..Options::default() };
     let runner = FakeRunner::pages(0);
     run(&plain(), &o, &runner);
-    assert_eq!(runner.programs(), ["pdfinfo"]);
+    assert_eq!(runner.programs(), ["info"]);
 }
 
 // ---- 파이프라인·읽기 ----
@@ -457,11 +464,6 @@ fn read_is_bounded_by_max_total_mb() {
 
 #[test]
 fn real_poppler_smoke_when_installed() {
-    let installed = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("pdfinfo").is_file()));
-    if !installed {
-        eprintln!("skip: pdfinfo가 없다");
-        return;
-    }
     let f = file_with("ok.pdf", &plain());
     let r = scan_file(f.path(), &Options::default());
     assert_absent(&r, "POPPLER_OPEN_FAILED");

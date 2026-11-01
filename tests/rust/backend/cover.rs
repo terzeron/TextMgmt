@@ -286,6 +286,78 @@ mod test_get_cover {
     use super::*;
 
     #[tokio::test]
+    async fn cover_slot_io_error_returns_503_without_running_extractor() {
+        let e = env();
+        std::fs::write(e.dir().join("source.pdf"), b"pdf").unwrap();
+        std::fs::write(e.dir().join(".cover_cache"), b"not a directory").unwrap();
+        use_doc(&e.es, "source.pdf", "pdf");
+        let manager = BookManager::with_deps(BookManagerDeps::new(e.dir().to_path_buf(), e.es.clone()).with_thumbnailer(thumbnailer(|_, _, _| panic!("must not run without a slot"))));
+        assert_eq!(manager.get_cover(1, None).await.status_code, 503);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_cover_generation_stays_at_ten_across_managers_after_cancellation() {
+        let e = env();
+        std::fs::write(e.dir().join("slow.pdf"), b"pdf").unwrap();
+        use_doc(&e.es, "slow.pdf", "pdf");
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let extractor = {
+            let (active, peak, started, release) = (active.clone(), peak.clone(), started.clone(), release.clone());
+            thumbnailer(move |_, _, _| {
+                let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                started.fetch_add(1, Ordering::SeqCst);
+                let (lock, ready) = &*release;
+                let mut released = lock.lock().unwrap();
+                while !*released {
+                    let (next, timeout) = ready.wait_timeout(released, std::time::Duration::from_secs(5)).unwrap();
+                    released = next;
+                    if timeout.timed_out() {
+                        break;
+                    }
+                }
+                active.fetch_sub(1, Ordering::SeqCst);
+                Some(b"cover".to_vec())
+            })
+        };
+        let first = Arc::new(BookManager::with_deps(BookManagerDeps::new(e.dir().to_path_buf(), e.es.clone()).with_thumbnailer(extractor.clone())));
+        let second = Arc::new(BookManager::with_deps(BookManagerDeps::new(e.dir().to_path_buf(), e.es.clone()).with_thumbnailer(extractor)));
+        let mut tasks = Vec::new();
+        for id in 0..10 {
+            let manager = first.clone();
+            tasks.push(tokio::spawn(async move { manager.get_cover(id, None).await }));
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while started.load(Ordering::SeqCst) < 10 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        // HTTP handler를 버려도 이미 시작한 blocking 추출은 끝날 때까지 슬롯을 쥐어야 한다.
+        for task in &tasks {
+            task.abort();
+        }
+        for id in 10..20 {
+            let manager = second.clone();
+            tasks.push(tokio::spawn(async move { manager.get_cover(id, None).await }));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let before_release = started.load(Ordering::SeqCst);
+        *release.0.lock().unwrap() = true;
+        release.1.notify_all();
+        for task in tasks {
+            let _ = task.await;
+        }
+        assert_eq!(before_release, 10, "취소된 추출과 다음 관리자 요청이 겹치면 안 된다");
+        assert_eq!(started.load(Ordering::SeqCst), 20);
+        assert_eq!(peak.load(Ordering::SeqCst), 10);
+    }
+
+    #[tokio::test]
     async fn test_pdf_pixel_stream_formats_and_decode_errors() {
         // pypdfium2 renders malformed Flate data as black and ignores mismatched image dimensions.
         for (kind, expected_status) in [("rgb", 200), ("gray", 200), ("rgb_png", 200), ("corrupt", 200), ("cmyk", 200), ("smask", 200)] {

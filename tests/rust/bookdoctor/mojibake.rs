@@ -246,7 +246,7 @@ fn pdf_report(opts: &Options, runner: &FakeRunner) -> FileReport {
 }
 
 fn text_calls(runner: &FakeRunner) -> usize {
-    runner.programs().iter().filter(|p| *p == "pdftotext").count()
+    runner.programs().iter().filter(|p| *p == "text").count()
 }
 
 #[test]

@@ -318,9 +318,9 @@ impl FakeRunner {
 impl CommandRunner for FakeRunner {
     fn run(&self, argv: &[String], _timeout: Option<Duration>) -> Result<CommandOutput, CommandError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        let program = argv.first().cloned().unwrap_or_default();
+        let program = argv.get(5).cloned().unwrap_or_default();
         self.programs.lock().unwrap().push(program.clone());
-        if program == "pdftotext" {
+        if program == "text" {
             return Ok(CommandOutput { returncode: 0, stdout: self.text.clone().into_bytes(), stderr: Vec::new() });
         }
         match &self.info {
@@ -414,10 +414,19 @@ pub fn minimal_hwpx_parts() -> Vec<(String, Vec<u8>)> {
     vec![
         part("mimetype", "application/hwp+zip"),
         part("version.xml", r#"<?xml version="1.0" encoding="UTF-8"?><hv:HCFVersion xmlns:hv="http://www.hancom.co.kr/hwpml/2011/version" tagetApplication="WORDPROCESSOR"/>"#),
-        part("META-INF/container.xml", r#"<?xml version="1.0" encoding="UTF-8"?><ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>"#),
-        part("Contents/content.hpf", r#"<?xml version="1.0" encoding="UTF-8"?><opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="header" href="Contents/header.xml" media-type="application/xml"/><opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="header"/><opf:itemref idref="section0"/></opf:spine></opf:package>"#),
+        part(
+            "META-INF/container.xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>"#,
+        ),
+        part(
+            "Contents/content.hpf",
+            r#"<?xml version="1.0" encoding="UTF-8"?><opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest><opf:item id="header" href="Contents/header.xml" media-type="application/xml"/><opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/></opf:manifest><opf:spine><opf:itemref idref="header"/><opf:itemref idref="section0"/></opf:spine></opf:package>"#,
+        ),
         part("Contents/header.xml", r#"<?xml version="1.0" encoding="UTF-8"?><hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"/>"#),
-        part("Contents/section0.xml", r#"<?xml version="1.0" encoding="UTF-8"?><hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"><hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"/></hs:sec>"#),
+        part(
+            "Contents/section0.xml",
+            r#"<?xml version="1.0" encoding="UTF-8"?><hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"><hp:p xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"/></hs:sec>"#,
+        ),
     ]
 }
 

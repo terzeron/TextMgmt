@@ -3,7 +3,7 @@
 //! Python `pikepdf`(열기·구문 검사)와 `pypdf`(쪽 읽기·쓰기)에 대응한다. 서비스는 이 파일의 trait만 알고,
 //! 실제 구현(`LopdfOpener`, `LopdfPageOps`)은 `lopdf`로 만든다. 테스트는 대역으로 바꿔 끼운다.
 //!
-//! 페이지 미리보기는 Poppler가 필요한 객체를 찾아 읽는다. reader는 경로와 쪽수만 캐시한다.
+//! 페이지 미리보기는 Rust worker에서 lopdf/MuPDF가 필요한 객체를 읽는다. reader는 경로와 쪽수만 캐시한다.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -139,42 +139,20 @@ impl PdfOpener for LopdfOpener {
     }
 }
 
-/// 기존 이름을 유지하는 Poppler 기반 `PdfPageOps`. 전체 파일 읽기와 문서 복제를 피한다.
+/// 원본 객체를 보존하는 lopdf 추출과 MuPDF 쪽수 조회. 파일 내용은 reader에 보관하지 않는다.
 pub struct LopdfPageOps;
-
 impl PdfPageOps for LopdfPageOps {
     fn page_count(&self, path: &Path) -> Result<usize, PdfError> {
-        let output = run_pdf_tool(path, &["pdfinfo".into(), path.to_string_lossy().into_owned()])?;
-        String::from_utf8_lossy(&output)
-            .lines()
-            .find_map(|line| line.strip_prefix("Pages:").map(str::trim))
-            .and_then(|count| count.parse().ok())
-            .ok_or_else(|| PdfError::new("RuntimeError", "pdfinfo did not report a valid page count"))
+        std::fs::metadata(path).map_err(|e| PdfError::new("OSError", e.to_string()))?;
+        sysdeps::pdf::page_count(&sysdeps::SystemRunner, path).map_err(|e| PdfError::new("RuntimeError", e))
     }
-
     fn extract_pages(&self, path: &Path, start: usize, end: usize) -> Result<Vec<u8>, PdfError> {
         if start >= end {
             return Err(PdfError::new("RuntimeError", "Invalid PDF page range"));
         }
-        run_pdf_tool(
-            path,
-            &["pdftocairo".into(), "-pdf".into(), "-origpagesizes".into(), "-f".into(), (start + 1).to_string(), "-l".into(), end.to_string(), path.to_string_lossy().into_owned(), "-".into()],
-        )
+        std::fs::metadata(path).map_err(|e| PdfError::new("OSError", e.to_string()))?;
+        sysdeps::pdf::extract_pages(&sysdeps::SystemRunner, path, start + 1, end).map_err(|e| PdfError::new("RuntimeError", e))
     }
-}
-
-fn run_pdf_tool(path: &Path, args: &[String]) -> Result<Vec<u8>, PdfError> {
-    use sysdeps::{CommandRunner, SystemRunner};
-
-    // stat은 파일 내용을 읽지 않는다. 저장소 오류는 기존 OSError 응답을 유지한다.
-    std::fs::metadata(path).map_err(|e| PdfError::new("OSError", e.to_string()))?;
-    let mut command = vec!["prlimit".into(), "--as=536870912".into(), "--cpu=25".into(), "--".into()];
-    command.extend_from_slice(args);
-    let output = SystemRunner.run(&command, Some(std::time::Duration::from_secs(30))).map_err(|e| PdfError::new("RuntimeError", e.to_string()))?;
-    if output.returncode != 0 {
-        return Err(PdfError::new("RuntimeError", format!("PDF helper failed: {}", String::from_utf8_lossy(&output.stderr).trim())));
-    }
-    Ok(output.stdout)
 }
 
 // ---------------------------------------------------------------------------
