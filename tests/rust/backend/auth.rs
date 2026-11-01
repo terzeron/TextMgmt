@@ -1739,3 +1739,140 @@ async fn test_session_access_optional_auth_treats_revoked_token_as_anonymous() {
     assert_eq!(response.status, 200);
     assert!(logs.text().contains("user=anonymous(anonymous)"));
 }
+
+mod test_csrf {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    const SOURCE: &str = "https://app.example.com";
+    const ATTACKER: &str = "https://evil.example.com";
+
+    fn setup() -> EnvGuard {
+        common::setup_env();
+        let mut env = fixture();
+        env.set("TM_FRONTEND_URL", SOURCE);
+        env
+    }
+
+    // Origin 자동 주입이 없는 실제 HTTP 요청으로 차단 여부를 검사한다.
+    async fn request(app: &Router, method: Method, path: &str, headers: &[(&str, &str)], body: &str) -> axum::response::Response {
+        let mut request = Request::builder().method(method).uri(path);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        app.clone().oneshot(request.body(Body::from(body.to_string())).unwrap()).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn cookie_mutations_reject_untrusted_or_missing_source_before_side_effects() {
+        let _env = setup();
+        let store = FakeStore::new();
+        let app = session_app(store.clone());
+        let (access, refresh, _) = session_login(&app).await;
+        let cookies = format!("{ACCESS_COOKIE_NAME}={access}; {REFRESH_COOKIE_NAME}={refresh}");
+        for source in [ATTACKER, "null", "https://app.example.com.evil.test", "http://app.example.com", "https://app.example.com:8443"] {
+            for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+                let response = request(&app, method, "/auth/logout", &[("cookie", &cookies), ("origin", source)], "").await;
+                assert_eq!(response.status(), 403, "source={source}");
+            }
+        }
+        for headers in [
+            vec![("cookie", cookies.as_str())],
+            vec![("cookie", cookies.as_str()), ("referer", "https://app.example.com.evil.test/path")],
+            vec![("cookie", cookies.as_str()), ("referer", "https://app.example.com@evil.test/path")],
+            vec![("cookie", cookies.as_str()), ("origin", ATTACKER), ("referer", "https://app.example.com/path")],
+            vec![("cookie", cookies.as_str()), ("origin", SOURCE), ("origin", ATTACKER)],
+            vec![("cookie", cookies.as_str()), ("referer", "https://app.example.com/path"), ("referer", "https://evil.example.com/path")],
+            vec![("cookie", cookies.as_str()), ("authorization", "Bearer invalid")],
+        ] {
+            assert_eq!(request(&app, Method::POST, "/auth/logout", &headers, "").await.status(), 403);
+        }
+        assert_eq!(request(&app, Method::POST, "/auth/refresh", &[("cookie", &cookies), ("origin", ATTACKER)], "").await.status(), 403);
+        assert!(store.revoked_families.lock().unwrap().is_empty());
+        assert!(store.rotated.lock().unwrap().is_empty());
+        assert_eq!(request(&app, Method::GET, "/auth/me", &[("cookie", &cookies), ("origin", ATTACKER)], "").await.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn trusted_origin_or_referer_allows_cookie_mutations() {
+        let _env = setup();
+        let store = FakeStore::new();
+        let app = session_app(store.clone());
+        for source in [vec![("origin", SOURCE)], vec![("referer", "https://app.example.com/reader?book=1")]] {
+            let (_, refresh, _) = session_login(&app).await;
+            let cookies = format!("{REFRESH_COOKIE_NAME}={refresh}");
+            let mut headers = source;
+            headers.push(("cookie", &cookies));
+            let response = request(&app, Method::POST, "/auth/logout", &headers, "").await;
+            assert_eq!(response.status(), 200);
+        }
+        assert_eq!(store.revoked_families.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn cookie_requests_fail_closed_without_frontend_configuration() {
+        let mut env = setup();
+        let store = FakeStore::new();
+        let app = session_app(store.clone());
+        let (_, refresh, _) = session_login(&app).await;
+        env.remove("TM_FRONTEND_URL");
+        let cookies = format!("{REFRESH_COOKIE_NAME}={refresh}");
+        for source in [vec![("origin", SOURCE)], vec![("referer", "https://app.example.com/path")]] {
+            let mut headers = source;
+            headers.push(("cookie", &cookies));
+            assert_eq!(request(&app, Method::POST, "/auth/logout", &headers, "").await.status(), 403);
+        }
+        assert!(store.revoked_families.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn google_login_requires_trusted_source_even_without_cookies() {
+        let _env = setup();
+        let store = FakeStore::new();
+        let app = session_app(store.clone());
+        for source in [None, Some(ATTACKER), Some("null")] {
+            let mut headers = vec![("content-type", "application/json")];
+            if let Some(source) = source {
+                headers.push(("origin", source));
+            }
+            assert_eq!(request(&app, Method::POST, "/auth/google", &headers, r#"{"credential":"valid"}"#).await.status(), 403);
+        }
+        assert!(store.issued.lock().unwrap().is_empty());
+        let response = request(&app, Method::POST, "/auth/google", &[("content-type", "application/json"), ("origin", SOURCE)], r#"{"credential":"valid"}"#).await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["access-control-allow-origin"], SOURCE);
+        assert_eq!(store.issued.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn bearer_only_cli_requests_and_anonymous_debug_logs_remain_usable() {
+        let _env = setup();
+        let store = FakeStore::new();
+        let app = session_app(store.clone());
+        let (access, _, _) = session_login(&app).await;
+        let bearer = format!("Bearer {access}");
+        assert_eq!(request(&app, Method::POST, "/auth/logout", &[("authorization", &bearer)], "").await.status(), 200);
+        assert_eq!(store.revoked_families.lock().unwrap().len(), 1);
+        assert_eq!(
+            request(&app, Method::POST, "/logs/client-error", &[("content-type", "application/json"), ("origin", ATTACKER)], r#"{"error_type":"CUSTOM_ERROR","message":"test","url":"/"}"#)
+                .await
+                .status(),
+            200
+        );
+    }
+
+    #[tokio::test]
+    async fn json_content_type_is_required_and_allows_application_json_suffixes() {
+        let _env = setup();
+        let app = session_app(FakeStore::new());
+        let body = r#"{"error_type":"CUSTOM_ERROR","message":"test","url":"/"}"#;
+        for content_type in [None, Some(""), Some("text/plain"), Some("text/plain+json"), Some("application/x-www-form-urlencoded"), Some("multipart/form-data")] {
+            let headers = content_type.map(|value| vec![("content-type", value)]).unwrap_or_default();
+            assert_eq!(request(&app, Method::POST, "/logs/client-error", &headers, body).await.status(), 422, "content-type={content_type:?}");
+        }
+        for content_type in ["application/json", "application/json; charset=utf-8", "application/problem+json", "APPLICATION/JSON"] {
+            assert_eq!(request(&app, Method::POST, "/logs/client-error", &[("content-type", content_type)], body).await.status(), 200, "{content_type}");
+        }
+    }
+}

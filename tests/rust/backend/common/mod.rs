@@ -133,12 +133,20 @@ impl TestClient {
     }
 
     pub async fn request(&self, method: Method, path: &str, content_type: Option<&str>, body: Vec<u8>) -> Response {
+        let browser_mutation = !matches!(method, Method::GET | Method::HEAD | Method::OPTIONS);
         let mut builder = Request::builder().method(method).uri(path);
         for (k, v) in &self.headers {
             builder = builder.header(k, v);
         }
         if let Some(ct) = content_type {
             builder = builder.header("content-type", ct);
+        }
+        // 브라우저의 상태 변경 요청은 Origin을 보낸다. 출처 누락 검사는 raw Request로 한다.
+        if browser_mutation
+            && !self.headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("origin"))
+            && let Ok(origin) = std::env::var("TM_FRONTEND_URL")
+        {
+            builder = builder.header("origin", origin);
         }
         let resp = self.app.clone().oneshot(builder.body(Body::from(body)).unwrap()).await.unwrap();
         let status = resp.status().as_u16();

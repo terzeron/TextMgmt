@@ -2,12 +2,15 @@
 //!
 //! 인증은 HttpOnly 쿠키(credentials include) 기반이라 `Authorization` 헤더는 허용하지 않는다(CWE-942: 실제 쓰는 메서드·헤더만 연다).
 //! Origin이 `TM_FRONTEND_URL`과 같을 때만 허용 헤더를 붙인다. 허용 Origin은 요청 시점에 환경 변수에서 읽는다.
+//! 쿠키 인증의 상태 변경과 Google 로그인은 Origin/Referer도 확인해 CSRF를 차단한다.
 
 use axum::body::Body;
 use axum::extract::Request;
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
+
+use crate::auth::{ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME, RequestParts};
 
 const ALLOW_METHODS: &str = "GET, POST, PUT, DELETE";
 const ALLOW_HEADERS: &str = "Content-Type";
@@ -18,6 +21,41 @@ fn allowed_origin(headers: &HeaderMap) -> Option<HeaderValue> {
     let origin = headers.get(header::ORIGIN)?;
     let frontend = std::env::var("TM_FRONTEND_URL").ok().filter(|u| !u.is_empty())?;
     (origin.to_str().ok()? == frontend).then(|| origin.clone())
+}
+
+fn url_origin(value: &str) -> Option<String> {
+    let uri: Uri = value.parse().ok()?;
+    let scheme = uri.scheme_str()?;
+    if !matches!(scheme, "http" | "https") {
+        return None;
+    }
+    let authority = uri.authority()?;
+    if authority.as_str().contains('@') {
+        return None;
+    }
+    Some(format!("{scheme}://{authority}"))
+}
+
+fn csrf_allowed(req: &Request, origin: Option<&HeaderValue>) -> bool {
+    if matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS) {
+        return true;
+    }
+    let headers = req.headers();
+    // Bearer 전용 CLI와 익명 로그는 자동으로 붙는 인증 쿠키를 사용하지 않는다.
+    let has_auth_cookie = headers.cookie(ACCESS_COOKIE_NAME).is_some() || headers.cookie(REFRESH_COOKIE_NAME).is_some();
+    if !has_auth_cookie && req.uri().path() != "/auth/google" {
+        return true;
+    }
+    if headers.contains_key(header::ORIGIN) {
+        // Origin이 있으면 Referer로 대체하지 않는다. null·중복·비정상 Origin도 거부한다.
+        return headers.get_all(header::ORIGIN).iter().count() == 1 && origin.and_then(|o| o.to_str().ok()).is_some_and(|o| url_origin(o).as_deref() == Some(o));
+    }
+    if headers.get_all(header::REFERER).iter().count() != 1 {
+        return false;
+    }
+    let source = headers.get(header::REFERER).and_then(|value| value.to_str().ok()).and_then(url_origin);
+    let frontend = std::env::var("TM_FRONTEND_URL").ok().filter(|value| !value.is_empty());
+    source.is_some() && source == frontend
 }
 
 fn plain(status: StatusCode, text: &str) -> Response {
@@ -69,6 +107,11 @@ pub async fn cors_middleware(req: Request, next: Next) -> Response {
     let is_preflight = req.method() == Method::OPTIONS && req.headers().contains_key("access-control-request-method");
     if has_origin && is_preflight {
         return preflight(&req, origin);
+    }
+    if !csrf_allowed(&req, origin.as_ref()) {
+        let mut response = super::errors::ApiError::http(403, "Untrusted request origin").into_response();
+        vary_origin(&mut response);
+        return response;
     }
     let mut resp = next.run(req).await;
     if let Some(origin) = origin {

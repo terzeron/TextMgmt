@@ -120,14 +120,14 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for ApiJson<T> {
     type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let is_json = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_none_or(|ct| {
+        let is_json = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|ct| {
             let ct = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
-            ct == "application/json" || ct.ends_with("+json")
+            ct == "application/json" || ct.strip_prefix("application/").is_some_and(|subtype| subtype.len() > "+json".len() && subtype.ends_with("+json"))
         });
-        let bytes = axum::body::Bytes::from_request(req, state).await.map_err(|e| RequestValidationError::single(&["body"], &e.to_string(), Value::Null))?;
         if !is_json {
             return Err(RequestValidationError::single(&["body"], "Input should be a valid JSON body", Value::Null).into());
         }
+        let bytes = axum::body::Bytes::from_request(req, state).await.map_err(|e| RequestValidationError::single(&["body"], &e.to_string(), Value::Null))?;
         let raw: Value = serde_json::from_slice(&bytes).map_err(|e| RequestValidationError::single(&["body"], &format!("JSON decode error: {e}"), Value::Null))?;
         match serde_json::from_value::<T>(raw.clone()) {
             Ok(v) => Ok(Self(v)),

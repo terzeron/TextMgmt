@@ -68,6 +68,13 @@ docs/       문서
   기존 Refresh token으로 갱신하거나 다시 로그인하면 세션에 연결한 Access token을 받는다.
 - 운영용 토큰은 `create_session_jwt_token` 또는 `TokenIssuer::create_access_token`으로 발급한다.
   `create_jwt_token`의 세션 없는 토큰은 저수준 JWT 검증 테스트용이며 보호 API 인증에는 사용할 수 없다.
+- 쿠키를 사용하는 상태 변경 요청과 Google 로그인은 `TM_FRONTEND_URL`과 같은 Origin만 허용한다.
+  Origin이 없으면 Referer의 scheme·host·port를 비교한다. 출처가 없거나 다르면 처리 전에 `403`을 반환한다.
+  Origin이 있으면 Referer로 우회할 수 없다. `null` 또는 중복 Origin도 거부한다.
+- JSON 본문은 `application/json` 또는 `application/*+json` Content-Type을 지정해야 한다.
+  헤더 누락과 다른 본문 형식은 기존 입력 오류 계약에 따라 `422`를 반환한다.
+- Bearer만 사용하는 CLI는 Origin 없이 호출할 수 있다. 인증 쿠키도 보내면 Origin 또는 Referer를 지정해야 한다.
+  쿠키 없는 익명 디버깅 로그에는 출처 검사를 적용하지 않는다.
 
 ## 분류 CLI
 
