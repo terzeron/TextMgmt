@@ -1531,6 +1531,18 @@ fn test_get_book_content_html_forces_attachment() {
     assert!(content_disposition.starts_with("attachment;"));
 }
 
+#[test]
+fn test_svg_download_blocks_active_content() {
+    for name in ["untrusted.svg", "untrusted.SVG", "한글 표지.svg"] {
+        let (media_type, headers) = BookManager::file_response_meta(Path::new(name));
+        assert_eq!(media_type, "image/svg+xml");
+        let header = |name: &str| headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str());
+        assert!(header("Content-Disposition").is_some_and(|v| v.starts_with("attachment;")));
+        assert!(header("Content-Security-Policy").is_some_and(|v| v.starts_with("sandbox;") && v.contains("script-src 'none'")));
+        assert_eq!(header("X-Content-Type-Options"), Some("nosniff"));
+    }
+}
+
 // ── _build_html_resource_url 엣지 케이스 (lines 61, 64, 71, 73) ──────────────
 
 mod test_build_html_resource_url {
