@@ -265,6 +265,89 @@ fn self_closing_script_does_not_hide_the_chapter_from_verification() {
     assert!(verify(&src, &lost).is_err());
 }
 
+// ---- 보안 리뷰: 형식 판정, URL 슬래시, CSS 이스케이프, 출력 ----
+
+fn opf_declaring(href: &str, media: &str) -> String {
+    format!(r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="x" href="{href}" media-type="{media}"/></manifest><spine><itemref idref="c1"/></spine></package>"#)
+}
+
+#[test]
+fn members_are_classified_by_declared_media_type_not_just_extension() {
+    // `.css`라고 적혀 있어도 manifest가 XHTML이라 선언하면 리더는 마크업으로 연다.
+    let src = epub_bytes(&xhtml("<p>본문</p>"), &opf_declaring("style.css", "application/xhtml+xml"), &[("OEBPS/style.css", b"<html><body><script>alert(1)</script><p>x</p></body></html>")]);
+    let plan = rebuild(&src).unwrap();
+    assert!(!member(&plan.bytes, "OEBPS/style.css").contains("<script"));
+    // 이미지 확장자인데 SVG·XHTML이라고 선언했거나 내용이 마크업이면 지운다.
+    let svg = b"<svg xmlns='http://www.w3.org/2000/svg' onload='alert(1)'><script>alert(1)</script></svg>";
+    let src = epub_bytes(&xhtml("<p>본문</p>"), &opf_declaring("a.png", "image/svg+xml"), &[("OEBPS/a.png", svg), ("OEBPS/b.jpg", b"  <html><script>alert(1)</script></html>")]);
+    let kept = names(&rebuild(&src).unwrap().bytes);
+    assert!(!kept.iter().any(|n| n.ends_with("a.png") || n.ends_with("b.jpg")), "{kept:?}");
+    // 스크립트 형식으로 선언한 멤버는 확장자와 무관하게 지운다.
+    let src = epub_bytes(&xhtml("<p>본문</p>"), &opf_declaring("data.txt", "text/javascript"), &[("OEBPS/data.txt", b"alert(1)")]);
+    assert!(!names(&rebuild(&src).unwrap().bytes).iter().any(|n| n.ends_with("data.txt")));
+    // 위험한 멤버 이름(경로 탈출, 절대 경로, Windows 장치 이름)은 허용 확장자여도 지운다.
+    let src = epub_bytes(&xhtml("<p>본문</p>"), &clean_opf(), &[("/abs.txt", b"x"), ("OEBPS/../../evil.txt", b"x"), ("OEBPS/con.txt", b"x"), ("OEBPS/ok.txt", b"x")]);
+    let kept = names(&rebuild(&src).unwrap().bytes);
+    assert!(kept.contains(&"OEBPS/ok.txt".to_string()) && !kept.iter().any(|n| n.contains("abs.txt") || n.contains("evil.txt") || n.ends_with("con.txt")), "{kept:?}");
+}
+
+#[test]
+fn backslashes_count_as_slashes_like_browsers_do() {
+    for tag in [r#"<img src="/\evil/x.png"/>"#, r#"<img src="\/evil/x.png"/>"#, r#"<img src="http:\\evil\x.png"/>"#] {
+        let out = markup(tag);
+        assert!(!out.contains("evil"), "{tag} -> {out}");
+    }
+    assert_eq!(markup(r#"<img src="images\a.png"/>"#), r#"<img src="images\a.png"/>"#);
+}
+
+#[test]
+fn css_escapes_cannot_hide_remote_loads() {
+    for css in [
+        r#"p{background:\75rl(http://evil/a.png)}"#,
+        r#"p{background:u\72l("http://evil/i.png")}"#,
+        r#"@\69mport "http://evil/a.css";"#,
+        r#"@import "\68ttp://evil/a.css";"#,
+        r#"p{background:url(\68 ttp://evil/a.png)}"#,
+        r#"p{background:image-set("http://evil/a.png" 1x)}"#,
+        r#"p{background:-webkit-image-set(url(http://evil/a.png) 1x)}"#,
+        r#"p{background:src("http://evil/a.png")}"#,
+        r#"p{background:url("\\evil\share\a.png")}"#,
+        r#"p{wid\74h:expr\65ssion(alert(1))}"#,
+    ] {
+        let out = strip_css(css);
+        assert!(!out.contains("evil") && !out.to_ascii_lowercase().contains("expression"), "{css} -> {out}");
+    }
+    // 정상 CSS의 이스케이프(한자 글꼴 이름)와 상대 경로는 그대로 둔다.
+    for keep in [r#"p{font-family:"\5B8B\4F53",serif}"#, "p{background:url(img/a.png)}", r#"p{background:url("../img/a b.png")}"#] {
+        assert_eq!(strip_css(keep), keep);
+    }
+}
+
+#[test]
+fn output_never_carries_terminal_escapes_from_member_names() {
+    let d = tempfile::tempdir().unwrap();
+    let opf = opf_with(r#"<item id="e" href="Misc/a%1B%5B31mred.exe" media-type="application/x-dosexec"/>"#);
+    let p = d.path().join("a.epub");
+    epub_with_files(&p, &opf, &xhtml("<script>x</script><p>t</p>"), &[("OEBPS/Misc/a\u{1b}[31mred.exe", b"MZ\x90\x00more")]);
+    let (code, out) = run(&["--sanitize", "--dry-run", p.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out:?}");
+    assert!(!out.contains('\u{1b}'), "{out:?}");
+}
+
+#[test]
+fn a_file_with_security_findings_left_after_rebuild_is_not_applied() {
+    // manifest가 압축 밖을 가리키는 항목은 허용 목록으로 고치지 못한다. 남은 보안 지표가 있으면 적용하지 않는다.
+    let d = tempfile::tempdir().unwrap();
+    let trash = d.path().join("0_trash");
+    let p = d.path().join("a.epub");
+    epub_with_files(&p, &opf_with(r#"<item id="esc" href="../../outside.xhtml" media-type="application/xhtml+xml"/>"#), &xhtml("<p>본문</p><script>alert(1)</script>"), &[]);
+    let before = fs::read(&p).unwrap();
+    let (code, out) = run(&["--sanitize", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("SKIP"), "{out}");
+    assert_eq!(fs::read(&p).unwrap(), before);
+}
+
 // ---- 실행: --dry-run, 적용, 휴지통 ----
 
 fn run(args: &[&str]) -> (i32, String) {

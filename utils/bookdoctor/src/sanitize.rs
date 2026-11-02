@@ -46,7 +46,9 @@ fn re(p: &str) -> Regex {
 }
 
 static CSS_IMPORT: LazyLock<Regex> = LazyLock::new(|| re(r"(?is)@import\s+[^;{}]*;?"));
-static CSS_URL: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)"#));
+static CSS_URL: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)(?:url|src)\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)"#));
+static CSS_IMAGE_SET: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)(?:-webkit-)?image-set\((?:[^()"']|"[^"]*"|'[^']*'|\([^()]*\))*\)"#));
+static CSS_STRING: LazyLock<Regex> = LazyLock::new(|| re(r#""([^"]*)"|'([^']*)'"#));
 static CSS_EXPRESSION: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)expression\s*\((?:[^()]|\([^()]*\))*\)"));
 static CSS_HOOKS: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)(?:-moz-binding|behavior)\s*:[^;}]*"));
 static SELF_CLOSING_RAW: LazyLock<Regex> = LazyLock::new(|| re(r"(?is)<(script|style)\b([^>]*?)/>"));
@@ -81,8 +83,10 @@ impl Changes {
 
 // ---------------------------------------------------------------- URL 판정
 
+/// 브라우저가 URL을 읽는 방식으로 정규화한다: 엔티티를 풀고, 공백·제어문자를 지우고, 소문자로 만들고, `\`를 `/`로 본다
+/// (`/\evil`과 `\/evil`은 프로토콜 상대 주소 `//evil`이다).
 fn normalize_url(v: &str) -> String {
-    decode_entities(v).chars().filter(|c| !c.is_control() && !c.is_whitespace()).collect::<String>().to_lowercase()
+    decode_entities(v).chars().filter(|c| !c.is_control() && !c.is_whitespace()).map(|c| if c == '\\' { '/' } else { c }).collect::<String>().to_lowercase()
 }
 
 fn scheme_of(n: &str) -> Option<&str> {
@@ -132,8 +136,56 @@ fn is_resource_attr(tag: &str, attr: &str) -> bool {
 
 // ---------------------------------------------------------------- CSS
 
+/// CSS 이스케이프(`\75`, `\75 `, `\u`)를 푼다. 줄바꿈 앞의 `\`는 이어 붙임이라 지운다.
+fn css_unescape(css: &str) -> String {
+    let chars: Vec<char> = css.chars().collect();
+    let mut out = String::with_capacity(css.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '\\' || i + 1 >= chars.len() {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        if chars[j] == '\n' {
+            i = j + 1;
+            continue;
+        }
+        let start = j;
+        while j < chars.len() && j - start < 6 && chars[j].is_ascii_hexdigit() {
+            j += 1;
+        }
+        if j > start {
+            let code = u32::from_str_radix(&chars[start..j].iter().collect::<String>(), 16).unwrap_or(0xFFFD);
+            out.push(char::from_u32(code).filter(|c| *c != '\0').unwrap_or('\u{FFFD}'));
+            if j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+        } else {
+            out.push(chars[j]);
+            j += 1;
+        }
+        i = j;
+    }
+    out
+}
+
 /// CSS에서 원격 로드, 스크립트 훅(`expression()`, `-moz-binding`, `behavior`)을 지운다.
+/// 이스케이프로 감춘 위험(`\75rl(...)`)은 이스케이프를 푼 글로 찾는다. 푼 글에서 지울 것이 나오면 푼 글을 정리해 쓰고,
+/// 아니면 원문을 그대로 둔다(한자 글꼴 이름의 `\5B8B` 같은 정상 이스케이프를 보존한다).
 pub fn strip_css(css: &str) -> String {
+    if css.contains('\\') {
+        let unescaped = css_unescape(css);
+        let cleaned = strip_css_plain(&unescaped);
+        if cleaned != unescaped {
+            return cleaned;
+        }
+    }
+    strip_css_plain(css)
+}
+
+fn strip_css_plain(css: &str) -> String {
     let no_import = CSS_IMPORT.replace_all(css, |c: &regex::Captures| {
         let m = &c[0];
         let n = normalize_url(m);
@@ -143,7 +195,12 @@ pub fn strip_css(css: &str) -> String {
         let target = c.get(1).or_else(|| c.get(2)).or_else(|| c.get(3)).map_or("", |m| m.as_str());
         if keep_url(target, true) { c[0].to_owned() } else { "url()".to_owned() }
     });
-    let no_expr = CSS_EXPRESSION.replace_all(&no_url, "");
+    // `image-set()`의 문자열 인자와 `url()`은 모두 URL이다. 하나라도 남기면 안 되는 주소면 함수째 `none`으로 바꾼다.
+    let no_set = CSS_IMAGE_SET.replace_all(&no_url, |c: &regex::Captures| {
+        let all_local = CSS_STRING.captures_iter(&c[0]).all(|s| keep_url(s.get(1).or_else(|| s.get(2)).map_or("", |m| m.as_str()), true)) && !c[0].to_ascii_lowercase().contains("//");
+        if all_local { c[0].to_owned() } else { "none".to_owned() }
+    });
+    let no_expr = CSS_EXPRESSION.replace_all(&no_set, "");
     CSS_HOOKS.replace_all(&no_expr, "").into_owned()
 }
 
@@ -581,8 +638,46 @@ fn undecodable(name: &str) -> bool {
     name.starts_with('\0')
 }
 
-fn classify(name: &str, data: &[u8]) -> Option<&'static str> {
+const MARKUP_MEDIA: &[&str] = &["application/xhtml+xml", "text/html", "image/svg+xml", "application/xml", "text/xml", "application/x-dtbncx+xml", "application/oebps-package+xml", "application/smil+xml", "application/smil"];
+
+fn is_script_media(media: &str) -> bool {
+    media.contains("javascript") || media.contains("ecmascript") || matches!(media, "application/java-archive" | "application/x-sh" | "application/x-msdownload" | "application/x-msdos-program" | "application/x-executable" | "application/x-bat" | "application/x-dosexec")
+}
+
+/// 내용이 마크업처럼 시작하는가(BOM·앞 공백을 건너뛴다). 이미지·글꼴·미디어는 `<`로 시작하지 않는다.
+fn looks_like_markup(data: &[u8]) -> bool {
+    let d = data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data);
+    d.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<')
+}
+
+/// manifest가 선언한 형식. 멤버 경로(OPF 기준으로 푼 것) → 소문자 media-type.
+fn declared_media(members: &[Member]) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    for m in members.iter().filter(|m| ext_of(&m.name) == "opf") {
+        let Ok(text) = String::from_utf8(m.data.clone()) else { continue };
+        let Ok(doc) = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }) else { continue };
+        let base = posix_dirname(&m.name);
+        for item in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "item") {
+            let (Some(href), Some(media)) = (item.attribute("href"), item.attribute("media-type")) else { continue };
+            map.insert(posix_normpath(&posix_join(&base, unquote(href).split('#').next().unwrap_or(""))), media.trim().to_ascii_lowercase());
+        }
+    }
+    map
+}
+
+fn classify(name: &str, data: &[u8], media: Option<&str>) -> Option<&'static str> {
+    if crate::zipnames::check(name.trim_start_matches('\0')).iter().any(|f| f.severity >= Severity::High) {
+        return Some("위험한 멤버 이름");
+    }
+    if media.is_some_and(is_script_media) {
+        return Some("스크립트 형식으로 선언됨");
+    }
     let ext = ext_of(name);
+    let passive = PASSIVE_EXTS.contains(&ext.as_str());
+    // 리더는 확장자가 아니라 선언된 형식으로 연다. 이미지·글꼴 확장자가 마크업·CSS라고 선언했거나 내용이 마크업이면 지운다.
+    if passive && (media.is_some_and(|m| MARKUP_MEDIA.contains(&m) || m == "text/css") || looks_like_markup(data)) {
+        return Some("확장자와 선언 형식 불일치(마크업 위장)");
+    }
     let textual = HTML_EXTS.contains(&ext.as_str()) || XML_EXTS.contains(&ext.as_str()) || matches!(ext.as_str(), "css" | "svg" | "txt");
     // 스캐너(`check_magic`)와 같은 기준이다: `MZ`로 시작하면 헤더가 온전하지 않아도 실행 파일 후보로 본다.
     if !textual && (data.starts_with(b"MZ") || matches!(sniff(data), Sniffed::Pe | Sniffed::Elf | Sniffed::MachO)) {
@@ -627,10 +722,11 @@ fn rewrite_opf(text: &str, opf_name: &str, removed: &BTreeSet<String>, changes: 
 /// EPUB 바이트를 허용 목록으로 다시 만든다.
 pub fn rebuild(src: &[u8]) -> Result<Plan, String> {
     let members = read_members(src)?;
+    let media = declared_media(&members);
     let mut removed: Vec<(String, &'static str)> = Vec::new();
     let mut kept: Vec<Member> = Vec::new();
     for m in members {
-        match classify(&m.name, &m.data) {
+        match classify(&m.name, &m.data, media.get(m.name.trim_start_matches('\0')).map(String::as_str)) {
             Some(reason) => removed.push((m.name.trim_start_matches('\0').to_owned(), reason)),
             None if undecodable(&m.name) => return Err(format!("{}: 이름이 UTF-8이 아니라 다시 쓸 수 없다", m.name.trim_start_matches('\0'))),
             None => kept.push(m),
@@ -641,19 +737,22 @@ pub fn rebuild(src: &[u8]) -> Result<Plan, String> {
     for m in &mut kept {
         let ext = ext_of(&m.name);
         let is_opf = ext == "opf";
-        let (text, mut changes) = if HTML_EXTS.contains(&ext.as_str()) || ext == "svg" || XML_EXTS.contains(&ext.as_str()) {
-            strip_markup(&decode(&m.name, &m.data)?, ext == "svg")
-        } else if ext == "css" {
-            let t = decode(&m.name, &m.data)?;
-            let c = strip_css(&t);
-            let mut ch = Changes::default();
-            if c != t {
-                ch.add("CSS 정리");
-            }
-            (c, ch)
-        } else {
+        let declared = media.get(m.name.as_str()).map(String::as_str);
+        // 확장자와 선언 형식 중 하나라도 마크업이면 마크업으로, CSS면 CSS로 정리한다(둘 다일 수도 있다).
+        let markup = HTML_EXTS.contains(&ext.as_str()) || ext == "svg" || XML_EXTS.contains(&ext.as_str()) || declared.is_some_and(|d| MARKUP_MEDIA.contains(&d));
+        let css = ext == "css" || declared == Some("text/css");
+        if !markup && !css {
             continue;
-        };
+        }
+        let original = decode(&m.name, &m.data)?;
+        let (mut text, mut changes) = if markup { strip_markup(&original, ext == "svg") } else { (original.clone(), Changes::default()) };
+        if css {
+            let cleaned = strip_css(&text);
+            if cleaned != text {
+                changes.add("CSS 정리");
+                text = cleaned;
+            }
+        }
         let text = if is_opf {
             let mut more = Changes::default();
             let t = rewrite_opf(&text, &m.name, &removed_names, &mut more);
@@ -783,6 +882,11 @@ fn apply(path: &Path, bytes: &[u8], trash_dir: &Path) -> io::Result<PathBuf> {
     Ok(trash)
 }
 
+/// 터미널로 나가는 문자열의 제어문자(ESC 등)와 숨은 서식 문자를 지운다. 멤버 이름과 오류 메시지는 파일이 정한 값이다.
+fn show(text: &str) -> String {
+    scan_common::text::sanitize_display(text, usize::MAX, None)
+}
+
 fn has_serious_security(report: &scan_common::FileReport) -> bool {
     report.findings.iter().any(|f| f.category == Category::Security && f.severity >= Severity::High)
 }
@@ -809,15 +913,13 @@ fn create_private_temp(bytes: &[u8]) -> io::Result<PathBuf> {
     Err(io::Error::other("임시 파일 이름을 정하지 못했다"))
 }
 
-/// 재구성본을 임시 파일에 써서 다시 검사한다. CRITICAL이 남으면 오류, 아니면 남은 HIGH 수를 돌려준다.
-fn rescan(bytes: &[u8], opts: &Options) -> Result<usize, String> {
+/// 재구성본을 임시 파일에 써서 다시 검사한다. 보안 지표(HIGH 이상)가 하나라도 남으면 오류다: 허용 목록으로 고치지 못한 문제가 있는 파일은 적용하지 않는다.
+fn rescan(bytes: &[u8], opts: &Options) -> Result<(), String> {
     let tmp = create_private_temp(bytes).map_err(|e| e.to_string())?;
     let report = scan_file(&tmp, opts);
     let _ = fs::remove_file(&tmp);
-    if report.findings.iter().any(|f| f.severity == Severity::Critical) {
-        return Err("재검사에서 CRITICAL이 남았다".into());
-    }
-    Ok(report.findings.iter().filter(|f| f.category == Category::Security && f.severity == Severity::High).count())
+    let left: Vec<String> = report.findings.iter().filter(|f| f.category == Category::Security && f.severity >= Severity::High).map(|f| f.code.to_string()).collect();
+    if left.is_empty() { Ok(()) } else { Err(format!("재검사에서 보안 지표가 남았다: {}", left.join(", "))) }
 }
 
 /// `--sanitize` 진입점. 종료 코드를 돌려준다(건너뛴 파일이 있어도 0, 쓰기 실패가 있으면 1).
@@ -826,7 +928,7 @@ pub fn run(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
     let scan_opts = Options { only: Vec::new(), ..opts.clone() };
     let (mut done, mut untouched, mut skipped, mut failed) = (0usize, 0usize, 0usize, 0usize);
     for path in &paths {
-        let shown = path.display();
+        let shown = show(&path.to_string_lossy());
         let report = scan_file(path, &scan_opts);
         if !has_serious_security(&report) {
             untouched += 1;
@@ -836,7 +938,7 @@ pub fn run(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
         let (src, plan) = match planned {
             Ok(v) => v,
             Err(e) => {
-                writeln!(out, "SKIP {shown}: {e}")?;
+                writeln!(out, "SKIP {shown}: {}", show(&e))?;
                 skipped += 1;
                 continue;
             }
@@ -846,28 +948,25 @@ pub fn run(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
             untouched += 1;
             continue;
         }
-        let remaining = match verify(&src, &plan.bytes).and_then(|()| rescan(&plan.bytes, &scan_opts)) {
-            Ok(n) => n,
-            Err(e) => {
-                writeln!(out, "SKIP {shown}: 검증 실패: {e}")?;
-                skipped += 1;
-                continue;
-            }
-        };
+        if let Err(e) = verify(&src, &plan.bytes).and_then(|()| rescan(&plan.bytes, &scan_opts)) {
+            writeln!(out, "SKIP {shown}: 검증 실패: {}", show(&e))?;
+            skipped += 1;
+            continue;
+        }
         let head = if opts.dry_run { "WOULD" } else { "SANITIZED" };
-        writeln!(out, "{head} {shown}: 멤버 {}개 제거, {}개 수정, 남은 HIGH {remaining}건", plan.removed.len(), plan.edited.len())?;
+        writeln!(out, "{head} {shown}: 멤버 {}개 제거, {}개 수정", plan.removed.len(), plan.edited.len())?;
         for (name, why) in &plan.removed {
-            writeln!(out, "  - 제거 {name} ({why})")?;
+            writeln!(out, "  - 제거 {} ({why})", show(name))?;
         }
         for (name, what) in &plan.edited {
-            writeln!(out, "  - 수정 {name} ({what})")?;
+            writeln!(out, "  - 수정 {} ({what})", show(name))?;
         }
         if !opts.dry_run {
             let trash = opts.trash_dir.as_deref().unwrap_or_else(|| Path::new("0_trash"));
             match apply(path, &plan.bytes, trash) {
-                Ok(saved) => writeln!(out, "  - 원본 보관 {}", saved.display())?,
+                Ok(saved) => writeln!(out, "  - 원본 보관 {}", show(&saved.to_string_lossy()))?,
                 Err(e) => {
-                    writeln!(out, "FAIL {shown}: {e}")?;
+                    writeln!(out, "FAIL {shown}: {}", show(&e.to_string()))?;
                     failed += 1;
                     continue;
                 }
