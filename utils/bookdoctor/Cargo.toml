@@ -171,3 +171,7 @@ tempfile = "3.27.0"
 [[test]]
 name = "critical_promotion"
 path = "../../tests/rust/bookdoctor/critical_promotion.rs"
+
+[[test]]
+name = "sanitize"
+path = "../../tests/rust/bookdoctor/sanitize.rs"
