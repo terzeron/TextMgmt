@@ -241,14 +241,14 @@ fn check_objects(file: &mut OleFile, report: &mut FileReport) {
         for name in [&label, &source, &temp] {
             let ext = name.trim_end_matches([' ', '.']).rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
             if ZIP_EXEC_EXTS.contains(&ext.as_str()) {
-                push_once(report, Category::Security, Severity::High, "EMBEDDED_EXECUTABLE", &sanitize_display(name, 120, Some('…')), &format!("Embedded file type .{ext}"));
+                push_once(report, Category::Security, Severity::Critical, "EMBEDDED_EXECUTABLE", &sanitize_display(name, 120, Some('…')), &format!("Embedded file type .{ext}"));
                 break;
             }
         }
         // 이름이 무엇이든 내용이 실행 파일인 것을 찾는다(앞부분에서 `MZ`·`\x7fELF`가 나오는 자리마다 헤더를 확인한다).
         let hit = prefix.windows(2).enumerate().any(|(i, w)| (w == b"MZ" || w == b"\x7f\x45") && matches!(sniff(&prefix[i..]), Sniffed::Pe | Sniffed::Elf));
         if hit {
-            push_once(report, Category::Security, Severity::High, "EMBEDDED_EXECUTABLE", &shown, "Embedded executable content (PE/ELF magic)");
+            push_once(report, Category::Security, Severity::Critical, "EMBEDDED_EXECUTABLE", &shown, "Embedded executable content (PE/ELF magic)");
         }
     }
 }

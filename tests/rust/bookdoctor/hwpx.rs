@@ -69,7 +69,7 @@ fn bindata_executables_by_name_and_by_magic_are_high() {
     let r = hwpx(&[], &[("BinData/setup.exe", b"not really"), ("BinData/image1.dat", &pe), ("BinData/ok.png", PNG)]);
     let locs: Vec<&str> = r.findings.iter().filter(|f| f.code == "EMBEDDED_EXECUTABLE").map(|f| f.location.as_str()).collect();
     assert!(locs.contains(&"BinData/setup.exe") && locs.contains(&"BinData/image1.dat") && !locs.contains(&"BinData/ok.png"), "{locs:?}");
-    assert_eq!(finding(&r, "EMBEDDED_EXECUTABLE").severity, Severity::High);
+    assert_eq!(finding(&r, "EMBEDDED_EXECUTABLE").severity, Severity::Critical);
 }
 
 #[test]

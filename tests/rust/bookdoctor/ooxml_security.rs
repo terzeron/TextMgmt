@@ -162,7 +162,7 @@ fn xml_entity_and_dtd_attacks_use_the_epub_codes() {
     let dtd = br#"<?xml version="1.0"?><!DOCTYPE d SYSTEM "http://evil.example/x.dtd"><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#;
     assert!(docx(&[("word/document.xml", dtd)]).has("EXTERNAL_DTD"));
     let local = br#"<?xml version="1.0"?><!DOCTYPE d [<!ENTITY y "text">]><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body/></w:document>"#;
-    assert_security(&docx(&[("word/document.xml", local)]), "ENTITY_DECLARATION", Severity::Medium);
+    assert_security(&docx(&[("word/document.xml", local)]), "ENTITY_DECLARATION", Severity::High);
 }
 
 #[test]

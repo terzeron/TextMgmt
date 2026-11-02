@@ -31,7 +31,7 @@ pub fn check(name: &str) -> Vec<NameFinding> {
         out.push(f(Severity::High, "ZIP_ABSOLUTE_PATH", "Absolute path or drive letter"));
     }
     if name.contains('\\') {
-        out.push(f(Severity::Medium, "ZIP_BACKSLASH_PATH", "Backslash in entry name"));
+        out.push(f(Severity::High, "ZIP_BACKSLASH_PATH", "Backslash in entry name"));
     }
     if name.chars().any(char::is_control) {
         out.push(f(Severity::Medium, "ZIP_CONTROL_CHAR_NAME", "Control character in entry name"));
@@ -40,10 +40,10 @@ pub fn check(name: &str) -> Vec<NameFinding> {
     for (i, c) in comps.iter().enumerate() {
         let stem = c.trim_end_matches(['.', ' ']).split('.').next().unwrap_or("").to_lowercase();
         if WIN_RESERVED.contains(&stem.as_str()) {
-            out.push(f(Severity::Medium, "WINDOWS_RESERVED_NAME", "Windows device name"));
+            out.push(f(Severity::High, "WINDOWS_RESERVED_NAME", "Windows device name"));
         }
         if c.contains(':') && !(drive && i == 0) {
-            out.push(f(Severity::Medium, "ZIP_ALT_DATA_STREAM", "Colon in name (NTFS stream)"));
+            out.push(f(Severity::High, "ZIP_ALT_DATA_STREAM", "Colon in name (NTFS stream)"));
         }
         if c.chars().count() > 255 {
             out.push(f(Severity::Low, "ZIP_NAME_TOO_LONG", "Path component over 255 characters"));

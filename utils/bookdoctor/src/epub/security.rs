@@ -193,7 +193,7 @@ macro_rules! rule {
     };
 }
 
-static JS_RULES: [Rule; 11] = [
+static JS_RULES: [Rule; 14] = [
     rule!(Severity::High, "DYNAMIC_CODE_EXEC", "eval/Function/string timer", r#"\beval\s*\(|\bFunction\s*\(|\b(?:setTimeout|setInterval)\s*\(\s*["'`]"#),
     rule!(Severity::Medium, "DOCUMENT_WRITE", "document.write", r"\bdocument\s*\.\s*write(?:ln)?\s*\("),
     rule!(Severity::Medium, "NETWORK_API", "network API", r"\bXMLHttpRequest\b|\bfetch\s*\(|\bnew\s+WebSocket\b|\bsendBeacon\b|\bEventSource\b"),
@@ -207,6 +207,10 @@ static JS_RULES: [Rule; 11] = [
         r#"["'](?:WScript\.Shell|Shell\.Application|Scripting\.FileSystemObject|ADODB\.Stream|MSXML2\.ServerXMLHTTP)["']|\brequire\s*\(\s*["']child_process["']\s*\)"#
     ),
     rule!(Severity::Critical, "OBFUSCATED_LOADER", "eval of decoded payload", r"\b(?:eval|Function)\s*\(\s*(?:atob|unescape|decodeURIComponent|String\s*\.\s*fromCharCode)\s*\("),
+    rule!(Severity::Critical, "OBFUSCATED_LOADER", "timer of decoded payload", r"\b(?:setTimeout|setInterval)\s*\(\s*(?:atob|unescape|decodeURIComponent|String\s*\.\s*fromCharCode)\s*\("),
+    // `document.write(unescape('%3Cscript…'))`는 Google Analytics 같은 정상 로더도 쓰는 모양이라 High로 둔다. 다른 디코더는 정상 코드에 거의 없다.
+    rule!(Severity::High, "OBFUSCATED_LOADER", "document.write of unescaped markup", r"\bdocument\s*\.\s*write(?:ln)?\s*\(\s*unescape\s*\("),
+    rule!(Severity::Critical, "OBFUSCATED_LOADER", "document.write of decoded payload", r"\bdocument\s*\.\s*write(?:ln)?\s*\(\s*(?:atob|decodeURIComponent|String\s*\.\s*fromCharCode)\s*\("),
     rule!(Severity::Low, "STORAGE_API", "storage or cookie access", r"\blocalStorage\b|\bsessionStorage\b|\bdocument\s*\.\s*cookie\b|\bindexedDB\b"),
     rule!(Severity::Medium, "DYNAMIC_IMPORT", "dynamic import", r"\bimportScripts\s*\(|\bimport\s*\("),
     rule!(Severity::Medium, "OBFUSCATION", "decode/charcode call", r"\batob\s*\(|\bunescape\s*\(|String\s*\.\s*fromCharCode\s*\((?:[^)]*,){8,}"),
@@ -227,6 +231,57 @@ static XXE_LOCAL: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)["'](?:file|php|e
 static ACTIVEX: LazyLock<Regex> = LazyLock::new(|| re(r"\bActiveXObject\b"));
 /// IE용 XML 파싱·AJAX 폴백에 쓰는 ProgID. 구형 JS 라이브러리(jQuery 등)에 흔해서 호스트 API로 보지 않는다.
 static BENIGN_ACTIVEX_CALL: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)^\(\s*["'](?:microsoft|msxml2)\.(?:xmldom|xmlhttp|domdocument)(?:\.\d+(?:\.\d+)?)?["']\s*\)"#));
+/// `eval`·`Function`을 별칭에 담거나(`var e = eval;`, `(0, eval)(…)`) 대괄호로 꺼내는(`window["eval"](…)`) 모양. 문자열 결합은 `join_string_concat`으로 먼저 합친 글에 쓴다.
+static ALIAS_EXEC: LazyLock<Regex> = LazyLock::new(|| {
+    re(r#"(?:[=,(:?]|&&|\|\||\breturn\b)\s*(?:(?:window|self|globalThis|this|top|parent)\s*\.\s*)?(?:eval|Function)\s*[;,)\]}]|\[\s*["'](?:eval|Function)["']\s*\]"#)
+});
+/// 문자열을 코드로 되돌리는 호출.
+static DECODE_CALL: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:atob|unescape|decodeURIComponent)\s*\(|String\s*\.\s*fromCharCode\s*\("));
+static STRING_CONCAT: LazyLock<Regex> = LazyLock::new(|| re(r#"["']\s*\+\s*["']"#));
+
+/// 붙어 있는 문자열 리터럴(`"ev"+"al"`)을 하나로 합친다. 이름을 쪼개 정규식을 피하는 수법을 막는다.
+fn join_string_concat(text: &str) -> Cow<'_, str> {
+    STRING_CONCAT.replace_all(text, "")
+}
+
+/// 별칭 사용 앞뒤 `ALIAS_WINDOW`바이트 안에 디코딩 호출이 있는가. 파일 전체에서 따로 나오는 둘(jQuery의 `window["eval"].call`과 멀리 있는 `decodeURIComponent`)은 묶지 않는다.
+const ALIAS_WINDOW: usize = 300;
+
+fn alias_near_decode(text: &str) -> bool {
+    ALIAS_EXEC.find_iter(text).any(|m| {
+        let mut a = m.start().saturating_sub(ALIAS_WINDOW);
+        while !text.is_char_boundary(a) {
+            a -= 1;
+        }
+        let mut b = (m.end() + ALIAS_WINDOW).min(text.len());
+        while !text.is_char_boundary(b) {
+            b += 1;
+        }
+        DECODE_CALL.is_match(&text[a..b])
+    })
+}
+
+/// `javascript:`·`vbscript:` URL의 본문. 브라우저처럼 앞쪽 공백·제어문자를 건너뛰고 `%XX`를 푼다.
+fn script_url_body(value: &str) -> String {
+    let decoded = decode_entities(value);
+    let rest = decoded.trim_start_matches(|c: char| c.is_control() || c == ' ');
+    let body = rest.split_once(':').map_or(rest, |(_, b)| b);
+    unquote(body)
+}
+
+/// 클릭 없이 자원으로 불러올 때 네트워크 공유에 닿는 대상인가: `smb:`, 호스트가 있는 `file://host/…`.
+/// `file:///C:/x`와 `file://localhost/…`는 로컬 경로라 아니다.
+fn is_network_share_target(value: &str) -> bool {
+    let n = normalize_url(value);
+    if n.starts_with("smb:") {
+        return true;
+    }
+    n.strip_prefix("file://").is_some_and(|rest| {
+        let host = rest.split(['/', '\\']).next().unwrap_or("");
+        !host.is_empty() && host != "localhost"
+    })
+}
+
 static BLOCK_COMMENT: LazyLock<Regex> = LazyLock::new(|| re(r"(?s)/\*.*?\*/"));
 /// 앞이 공백이거나 줄 처음인 `//`만 줄 주석으로 본다. `http://`의 `//`는 건드리지 않는다.
 static LINE_COMMENT: LazyLock<Regex> = LazyLock::new(|| re(r"(?m)(?:^|\s)//[^\n]*"));
@@ -513,6 +568,15 @@ impl Scanner {
                 self.add(*sev, code, name, detail);
             }
         }
+        // 별칭·문자열 결합으로 `eval`을 감춘 로더. 디코딩 호출이 함께 있으면 난독화 로더로 본다.
+        let joined = join_string_concat(text);
+        if ALIAS_EXEC.is_match(&joined) {
+            if alias_near_decode(&joined) {
+                self.add(Severity::Critical, "OBFUSCATED_LOADER", name, "aliased eval of decoded payload");
+            } else {
+                self.add(Severity::High, "DYNAMIC_CODE_EXEC", name, "aliased eval/Function");
+            }
+        }
     }
 
     fn scan_css(&mut self, text: &str, name: &str) {
@@ -526,12 +590,20 @@ impl Scanner {
 
     fn url_attr(&mut self, tag: &str, attr: &str, value: &str, name: &str, resource: bool) {
         match classify_url(value) {
-            UrlKind::Script => self.add(Severity::High, "JS_URL", name, &format!("{tag} {attr}: script URL")),
+            UrlKind::Script => {
+                self.add(Severity::High, "JS_URL", name, &format!("{tag} {attr}: script URL"));
+                let n = normalize_url(value);
+                if n.starts_with("javascript:") || n.starts_with("vbscript:") {
+                    self.scan_js(&script_url_body(value), name);
+                }
+            }
             UrlKind::Dangerous => {
-                let sev = if is_exploit_scheme(value) { Severity::Critical } else { Severity::High };
+                // 자원으로 자동 로드되는 네트워크 공유는 클릭 없이 인증 정보(NTLM 해시)가 나간다.
+                let zero_click = resource && is_network_share_target(value);
+                let sev = if is_exploit_scheme(value) || zero_click { Severity::Critical } else { Severity::High };
                 self.add(sev, "DANGEROUS_URI_SCHEME", name, &format!("{tag} {attr}: {}", decode_entities(value)));
             }
-            UrlKind::Unc => self.add(Severity::High, "UNC_PATH", name, &format!("{tag} {attr}: UNC path")),
+            UrlKind::Unc => self.add(if resource { Severity::Critical } else { Severity::High }, "UNC_PATH", name, &format!("{tag} {attr}: UNC path")),
             UrlKind::UnknownScheme => self.add(Severity::Low, "UNKNOWN_URI_SCHEME", name, &format!("{tag} {attr}: {}", decode_entities(value))),
             UrlKind::Remote if resource => {
                 self.add(Severity::Low, "REMOTE_RESOURCE", name, &format!("{tag} {attr}: remote load"));
@@ -547,7 +619,7 @@ impl Scanner {
                 let sev = if XXE_LOCAL.is_match(m.as_str()) { Severity::Critical } else { Severity::High };
                 self.add(sev, "XXE_ENTITY", name, "External entity declaration");
             } else {
-                self.add(Severity::Medium, "ENTITY_DECLARATION", name, "Entity declaration (expansion risk)");
+                self.add(Severity::High, "ENTITY_DECLARATION", name, "Entity declaration (expansion risk)");
             }
         }
         if let Some(c) = DOCTYPE_EXTERNAL.captures(text) {
@@ -578,6 +650,7 @@ impl Scanner {
         for (k, v) in &tag.attrs {
             if k.len() >= 4 && k.starts_with("on") && k[2..].bytes().all(|b| b.is_ascii_lowercase()) {
                 self.add(Severity::High, "EVENT_HANDLER_ATTR", name, &format!("{t} {k}"));
+                self.scan_js(&decode_entities(v), name);
                 active = true;
             }
             if k == "style" {
@@ -657,7 +730,8 @@ impl Scanner {
                 if tag.attr("http-equiv").is_some_and(|v| v.trim().eq_ignore_ascii_case("refresh")) {
                     let target = tag.attr("content").and_then(|c| REFRESH_URL.captures(c).map(|m| m[1].to_owned()));
                     let risky = target.as_deref().is_some_and(|u| matches!(classify_url(u), UrlKind::Remote | UrlKind::Script | UrlKind::Dangerous));
-                    self.add(if risky { Severity::High } else { Severity::Medium }, "META_REFRESH", name, "meta refresh");
+                    let exploit = target.as_deref().is_some_and(|u| classify_url(u) == UrlKind::Dangerous && is_exploit_scheme(u));
+                    self.add(if exploit { Severity::Critical } else if risky { Severity::High } else { Severity::Medium }, "META_REFRESH", name, "meta refresh");
                 }
             }
             "base" => {
@@ -724,7 +798,7 @@ impl Scanner {
                 }
             }
             if SCRIPT_MEDIA_TYPES.contains(&media.as_str()) {
-                self.add(Severity::Medium, "SCRIPT_MEDIA_TYPE", name, &format!("manifest media-type {media}"));
+                self.add(Severity::High, "SCRIPT_MEDIA_TYPE", name, &format!("manifest media-type {media}"));
             }
         }
     }
@@ -878,22 +952,29 @@ fn package_documents(zip: &mut Zip, names: &[String], limits: &Limits, spent: &m
     found
 }
 
-fn check_magic(s: &mut Scanner, data: &[u8], name: &str, ext: &str, textual: bool) {
-    // 실행 파일 확장자(.exe 등)면 번들된 설치 파일일 수 있다. 그 밖의 확장자(.jpg 등)로 위장한 실행 코드는 정상 문서에 있을 이유가 없다.
+/// 멤버 내용의 SHA-256(소문자 16진). 번들 실행 파일을 알려진 정상 설치 파일과 맞춰 보는 데 쓴다.
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(data).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 멤버 전체를 읽었을 때만(잘리지 않았을 때만) 설명 뒤에 해시를 붙인다.
+fn with_hash(detail: &str, data: &[u8], complete: bool) -> String {
+    if complete { format!("{detail} sha256={}", sha256_hex(data)) } else { detail.to_owned() }
+}
+
+fn check_magic(s: &mut Scanner, data: &[u8], name: &str, ext: &str, textual: bool, complete: bool) {
+    // 번들 실행 파일은 확장자로 위장했든 설치 파일 모양이든 문서에 있을 이유가 없어서 모두 Critical이다.
     let disguised = !EXEC_EXTS.contains(&ext);
     if !textual && data.starts_with(b"MZ") {
-        s.add(
-            if disguised { Severity::Critical } else { Severity::High },
-            "PE_EXECUTABLE_CONTENT",
-            name,
-            if disguised { "Windows PE/DOS MZ header disguised by extension" } else { "Windows PE/DOS MZ header" },
-        );
+        let what = if disguised { "Windows PE/DOS MZ header disguised by extension" } else { "Windows PE/DOS MZ header" };
+        s.add(Severity::Critical, "PE_EXECUTABLE_CONTENT", name, &with_hash(what, data, complete));
     }
     if data.starts_with(b"\x7fELF") {
-        s.add(if disguised { Severity::Critical } else { Severity::Medium }, "ELF_BINARY_CONTENT", name, "ELF executable");
+        s.add(Severity::Critical, "ELF_BINARY_CONTENT", name, &with_hash("ELF executable", data, complete));
     }
     if [&b"\xfe\xed\xfa\xce"[..], b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe"].iter().any(|m| data.starts_with(m)) {
-        s.add(if disguised { Severity::Critical } else { Severity::Medium }, "MACHO_BINARY_CONTENT", name, "Mach-O executable");
+        s.add(Severity::Critical, "MACHO_BINARY_CONTENT", name, &with_hash("Mach-O executable", data, complete));
     }
     if data.starts_with(b"\xca\xfe\xba\xbe") {
         // 큰 값(≥45)이면 Java 클래스 버전, 작은 값이면 Mach-O 유니버설 바이너리의 아키텍처 수다.
@@ -985,7 +1066,7 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
 
     let ext = extension(name);
     if EXEC_EXTS.contains(&ext.as_str()) {
-        s.add(Severity::High, "EMBEDDED_EXECUTABLE", name, &format!("Executable/script file type: .{ext}"));
+        s.add(Severity::Critical, "EMBEDDED_EXECUTABLE", name, &with_hash(&format!("Executable/script file type: .{ext}"), &data, actual <= bound));
     }
     let ext_kind = kind_of_ext(&ext);
     let declared = s.manifest.get(&posix_normpath(name)).map(|e| (e.media.clone(), kind_of_media(&e.media))).filter(|(_, k)| *k != Kind::Other);
@@ -995,7 +1076,7 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
         s.add(Severity::Medium, "MEDIA_TYPE_MISMATCH", name, &format!("Declared {media} but the extension is .{ext}"));
     }
     let kind = declared.map_or(ext_kind, |(_, k)| k);
-    check_magic(s, &data, name, &ext, kind != Kind::Other || ext == "txt");
+    check_magic(s, &data, name, &ext, kind != Kind::Other || ext == "txt", actual <= bound);
 
     // `Kind::Other`(이미지, 폰트, txt 등)는 텍스트 규칙이 없다: `scan_text`가 아무것도 하지 않고 인코딩 지표도 `kind != Other`일 때만 낸다.
     // 이런 멤버를 UTF-8로 변환하면 큰 바이너리마다 복사본을 만들 뿐이라(표본 EPUB에서 전체 명령의 19.5%) 건너뛴다.

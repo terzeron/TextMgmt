@@ -137,7 +137,7 @@ fn object_pool_is_high_and_native_payloads_are_checked_for_executables() {
     };
     let by_name = native("payload.exe", b"not really a binary");
     let r = scan_doc(&[("ObjectPool/_1/\u{1}Ole10Native", &by_name)], 0, b"hi");
-    assert!(r.findings.iter().any(|f| f.code == "EMBEDDED_EXECUTABLE" && f.severity == Severity::High), "{:?}", r.findings);
+    assert!(r.findings.iter().any(|f| f.code == "EMBEDDED_EXECUTABLE" && f.severity == Severity::Critical), "{:?}", r.findings);
 
     let mut pe = vec![0u8; 0x100];
     pe[..2].copy_from_slice(b"MZ");

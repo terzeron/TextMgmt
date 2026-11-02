@@ -413,6 +413,7 @@ dependencies = [
  "scan_common",
  "serde",
  "serde_json",
+ "sha2",
  "sysdeps",
  "tempfile",
  "zip",

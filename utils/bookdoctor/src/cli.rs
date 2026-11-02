@@ -17,7 +17,7 @@ use crate::isolate::scan_isolated;
 use crate::rules::Compiled;
 use crate::scan::scan_file;
 
-const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--rules PATH]... [--builtin-rules] [--pdf-text] [--no-poppler] PATH...";
+const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--rules PATH]... [--builtin-rules] [--pdf-text] [--no-poppler] [--sanitize [--dry-run] [--trash-dir DIR]] PATH...";
 
 /// 한 번에 검사하는 파일 수는 워커 수의 이 배수다.
 const WINDOW_PER_WORKER: usize = 8;
@@ -59,6 +59,12 @@ pub struct Options {
     pub isolate_timeout_s: u64,
     /// 내부용: 한 파일을 검사해 필터 없는 JSON 한 줄로 낸다. `--isolate`의 자식이 쓴다.
     pub child: bool,
+    /// `--sanitize`: 보안 지표가 있는 EPUB을 허용 목록으로 재구성한다.
+    pub sanitize: bool,
+    /// `--dry-run`: `--sanitize`가 지울 요소만 보이고 파일은 건드리지 않는다.
+    pub dry_run: bool,
+    /// `--trash-dir`: `--sanitize`가 원본을 두는 디렉터리.
+    pub trash_dir: Option<PathBuf>,
     /// `--rules`로 준 규칙 파일·디렉터리.
     pub rule_files: Vec<PathBuf>,
     /// `--builtin-rules`: 내장 소규모 규칙을 켠다.
@@ -89,6 +95,9 @@ impl Default for Options {
             isolate_mem_mb: 4096,
             isolate_timeout_s: 120,
             child: false,
+            sanitize: false,
+            dry_run: false,
+            trash_dir: None,
             rule_files: Vec::new(),
             builtin_rules: false,
             ruleset: None,
@@ -136,13 +145,16 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
             "--isolate" => o.isolate = true,
             "--builtin-rules" => o.builtin_rules = true,
             "--child" => o.child = true,
-            _ => match long_option(arg, &["report", "workers", "limit", "max-total-mb", "only", "min-severity", "color", "isolate-mem-mb", "isolate-timeout-s", "rules"], &mut it)? {
+            "--sanitize" => o.sanitize = true,
+            "--dry-run" => o.dry_run = true,
+            _ => match long_option(arg, &["report", "workers", "limit", "max-total-mb", "only", "min-severity", "color", "isolate-mem-mb", "isolate-timeout-s", "rules", "trash-dir"], &mut it)? {
                 Some((name, value)) => match name.as_str() {
                     "report" => o.report = Some(value.into()),
                     "workers" => o.workers = number(&name, &value)?,
                     "limit" => o.limit = number(&name, &value)?,
                     "max-total-mb" => o.max_total_mb = number(&name, &value)?,
                     "rules" => o.rule_files.push(value.into()),
+                    "trash-dir" => o.trash_dir = Some(value.into()),
                     "isolate-mem-mb" => o.isolate_mem_mb = number(&name, &value)?,
                     "isolate-timeout-s" => o.isolate_timeout_s = number(&name, &value)?,
                     "color" => o.color = parse_color(&value)?,
@@ -155,6 +167,12 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
     }
     if o.paths.is_empty() {
         return Err("the following arguments are required: PATH...".into());
+    }
+    if (o.dry_run || o.trash_dir.is_some()) && !o.sanitize {
+        return Err("--dry-run and --trash-dir require --sanitize".into());
+    }
+    if o.sanitize && !o.dry_run && o.trash_dir.is_none() {
+        return Err("--sanitize requires --trash-dir DIR (or --dry-run)".into());
     }
     if o.max_total_mb == 0 || o.isolate_mem_mb == 0 || o.isolate_timeout_s == 0 {
         return Err("Limits must be positive".into());
@@ -199,6 +217,15 @@ pub fn run_with_env(argv: &[String], out: &mut dyn Write, is_tty: bool, no_color
     }
     if opts.child {
         return run_child(&opts, out);
+    }
+    if opts.sanitize {
+        return match crate::sanitize::run(&opts, out) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("bookdoctor: error: {}", scan_common::text::sanitize_display(&e.to_string(), usize::MAX, None));
+                1
+            }
+        };
     }
     match scan(&opts, out, enabled(opts.color, is_tty, no_color)) {
         Ok(code) => code,
@@ -279,7 +306,8 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
 사용법:
   bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N]
              [--only security,defect,render] [--min-severity low|medium|high|critical]
-             [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--rules PATH]... [--builtin-rules] [--pdf-text] [--no-poppler] PATH...
+             [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--rules PATH]... [--builtin-rules] [--pdf-text] [--no-poppler]
+             [--sanitize [--dry-run] [--trash-dir DIR]] PATH...
 
 인자:
   PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt, zip, docx(docm·dotx·dotm), hwpx, hwp, doc(dot), rtf, html(htm·xhtml)와 실행 파일 확장자(exe, dll, so, dylib 등)를 모은다.
@@ -309,6 +337,10 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   --no-prefetch       다음 파일을 미리 읽지 않는다. 기본은 검사하는 동안 다음 파일 최대 16개(512MiB)를 미리 읽는다.
   --pdf-text          PDF 본문 텍스트까지 검사한다.
   --no-poppler        poppler 외부 명령을 쓰지 않는다.
+  --sanitize          보안 지표(HIGH 이상)가 있는 EPUB을 허용 목록으로 재구성한다. 스크립트, 실행 파일, 원격 로드, 외부 개체를 지우고
+                      manifest 항목도 함께 지운다. 인터랙티브 기능은 깨진다. 본문 글자·구조 검증과 재검사를 통과해야 적용한다.
+  --dry-run           --sanitize가 지울 요소만 보이고 파일은 바꾸지 않는다.
+  --trash-dir DIR     --sanitize가 원본을 두는 디렉토리(필수, --dry-run이면 생략). 같은 inode에 덮어쓰고 mtime을 유지한다.
   -h, --help          이 도움말
 
 주의:

@@ -590,6 +590,22 @@ fn test_find_epub_cover_member_ignores_comment_nodes() {
 }
 
 #[test]
+fn test_find_epub_cover_member_prefers_exact_cover_name_over_incover() {
+    // 표지 선언이 없을 때 id/href에 "cover"가 들어간다는 이유만으로 속표지(incover.jpg)를 먼저 고르면 안 된다.
+    let opf = r#"<?xml version="1.0"?>
+    <package xmlns="http://www.idpf.org/2007/opf">
+      <manifest>
+        <item id="incover.jpg" href="Images/incover.jpg" media-type="image/jpeg"/>
+        <item id="cover.jpg" href="Images/cover.jpg" media-type="image/jpeg"/>
+      </manifest>
+    </package>"#;
+    let members = [("META-INF/container.xml", CONTAINER), ("OEBPS/content.opf", opf), ("OEBPS/Images/incover.jpg", "x"), ("OEBPS/Images/cover.jpg", "x")];
+    let tmp = TempDir::new().unwrap();
+    let mut zin = epub_with(tmp.path(), &members);
+    assert_eq!(BookManager::_find_epub_cover_member(&mut zin).as_deref(), Some("OEBPS/Images/cover.jpg"));
+}
+
+#[test]
 fn test_find_epub_cover_member_falls_back_to_first_spine_page_image() {
     // 표지 선언이 없고 meta cover 가 존재하지 않는 id 를 가리켜도 첫 spine 페이지의 이미지를 쓴다.
     let opf = r#"<?xml version="1.0"?>

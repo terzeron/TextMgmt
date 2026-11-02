@@ -67,19 +67,26 @@ fn test_epubveri_cli_writes_epubcheck_compatible_json_for_valid_and_invalid_book
 
 /// OPF metadata/manifest 조각과 이미지 멤버를 받아 최소 EPUB을 만든다.
 fn create_test_epub(output_path: &Path, metadata: &str, manifest_items: &str, images: &[(&str, Vec<u8>)]) {
+    create_test_epub_with_chapters(output_path, metadata, manifest_items, &["<html><body><p>x</p></body></html>"], images);
+}
+
+/// `create_test_epub`에 본문 쪽(spine 순서)을 직접 정해서 준다. 쪽 파일 이름은 `ch1.xhtml`, `ch2.xhtml`, … 이다.
+fn create_test_epub_with_chapters(output_path: &Path, metadata: &str, manifest_items: &str, chapters: &[&str], images: &[(&str, Vec<u8>)]) {
+    let pages: String = (1..=chapters.len()).map(|n| format!(r#"<item id="ch{n}" href="ch{n}.xhtml" media-type="application/xhtml+xml"/>"#)).collect();
+    let spine: String = (1..=chapters.len()).map(|n| format!(r#"<itemref idref="ch{n}"/>"#)).collect();
     let opf = format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title>{metadata}</metadata>
   <manifest>
-    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    {pages}
     {manifest_items}
   </manifest>
-  <spine><itemref idref="ch1"/></spine>
+  <spine>{spine}</spine>
 </package>"#
     );
     let mut spec = EpubSpec::cover("3.0", false).with_opf(&opf).with_opf_path("OEBPS/content.opf");
-    spec.chapters = vec![("ch1.xhtml".to_string(), "<html><body><p>x</p></body></html>".to_string())];
+    spec.chapters = chapters.iter().enumerate().map(|(index, html)| (format!("ch{}.xhtml", index + 1), html.to_string())).collect();
     spec.include_style = false;
     for (name, data) in images {
         spec = spec.with_extra(&format!("OEBPS/{name}"), data.clone());
@@ -449,6 +456,69 @@ mod test_get_cover {
         let response = e.manager.get_cover(104, None).await;
 
         assert_eq!(response.status_code, 404);
+    }
+
+    const FIGURE: &str = r#"<item id="i1" href="fig.png" media-type="image/png"/>"#;
+    const FIGURE_PAGE: &str = r#"<html><body><img src="fig.png"/></body></html>"#;
+    const TEXT_PAGE: &str = "<html><body><p>x</p></body></html>";
+
+    #[tokio::test]
+    async fn test_epub_without_explicit_cover_uses_first_spine_image() {
+        let e = env();
+        create_test_epub_with_chapters(&e.dir().join("test_category/first.epub"), "", FIGURE, &[FIGURE_PAGE], &[("fig.png", png_bytes(600, 900))]);
+        use_doc(&e.es, "test_category/first.epub", "epub");
+
+        let response = e.manager.get_cover(140, None).await;
+
+        assert_eq!(response.status_code, 200);
+        assert_eq!(response.media_type.as_deref(), Some("image/jpeg"));
+        assert_jpeg_thumbnail(&response.body);
+    }
+
+    #[tokio::test]
+    async fn test_explicit_cover_wins_over_first_spine_image() {
+        let e = env();
+        let manifest = r#"<item id="front" href="front.png" media-type="image/png" properties="cover-image"/><item id="i1" href="fig.png" media-type="image/png"/>"#;
+        let images = [("front.png", png_bytes(600, 900)), ("fig.png", png_bytes(900, 600))];
+        create_test_epub_with_chapters(&e.dir().join("test_category/explicit.epub"), "", manifest, &[FIGURE_PAGE], &images);
+        use_doc(&e.es, "test_category/explicit.epub", "epub");
+
+        let response = e.manager.get_cover(141, None).await;
+
+        assert_eq!(response.status_code, 200);
+        let img = decode(&response.body);
+        assert!(img.height() > img.width(), "세로 표지가 아니라 본문 그림(가로)을 썼다: {}x{}", img.width(), img.height());
+    }
+
+    #[tokio::test]
+    async fn test_epub_image_after_page_limit_is_not_a_cover() {
+        let e = env();
+        let mut chapters = vec![TEXT_PAGE; 5];
+        chapters.push(FIGURE_PAGE);
+        create_test_epub_with_chapters(&e.dir().join("test_category/late.epub"), "", FIGURE, &chapters, &[("fig.png", png_bytes(600, 900))]);
+        use_doc(&e.es, "test_category/late.epub", "epub");
+
+        assert_eq!(e.manager.get_cover(142, None).await.status_code, 404);
+    }
+
+    #[tokio::test]
+    async fn test_epub_image_on_fifth_page_is_still_a_cover() {
+        let e = env();
+        let mut chapters = vec![TEXT_PAGE; 4];
+        chapters.push(FIGURE_PAGE);
+        create_test_epub_with_chapters(&e.dir().join("test_category/fifth.epub"), "", FIGURE, &chapters, &[("fig.png", png_bytes(600, 900))]);
+        use_doc(&e.es, "test_category/fifth.epub", "epub");
+
+        assert_eq!(e.manager.get_cover(143, None).await.status_code, 200);
+    }
+
+    #[tokio::test]
+    async fn test_epub_page_image_missing_from_zip_is_not_a_cover() {
+        let e = env();
+        create_test_epub_with_chapters(&e.dir().join("test_category/dangling.epub"), "", FIGURE, &[FIGURE_PAGE], &[]);
+        use_doc(&e.es, "test_category/dangling.epub", "epub");
+
+        assert_eq!(e.manager.get_cover(144, None).await.status_code, 404);
     }
 
     #[tokio::test]
