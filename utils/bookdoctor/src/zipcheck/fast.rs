@@ -143,7 +143,7 @@ pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) 
         let ext = extension(&name);
         if ZIP_EXEC_EXTS.contains(&ext.as_str()) {
             flagged_exec = true;
-            report.push(Category::Security, Severity::High, "EMBEDDED_EXECUTABLE", &shown, &format!("Executable/script file type: .{ext}"));
+            report.push(Category::Security, Severity::Critical, "EMBEDDED_EXECUTABLE", &shown, &format!("Executable/script file type: .{ext}"));
         }
 
         // 앞부분 시험: 풀 수 있는지와 내용 종류를 본다.
@@ -157,7 +157,7 @@ pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) 
             Err(e) => read_failure(report, &shown, &e),
             Ok(()) => {
                 if !flagged_exec && matches!(sniff(&probe), Sniffed::Pe | Sniffed::Elf | Sniffed::MachO) {
-                    report.push(Category::Security, Severity::High, "EMBEDDED_EXECUTABLE", &shown, "Executable content (PE/ELF/Mach-O magic)");
+                    report.push(Category::Security, Severity::Critical, "EMBEDDED_EXECUTABLE", &shown, "Executable content (PE/ELF/Mach-O magic)");
                 }
                 // 텍스트 이름인데 앞부분이 압축·암호화된 듯하면 렌더러가 읽지 못하는 숨은 데이터일 수 있다. 이미 읽은 앞부분만 본다.
                 if probe.len() >= ENTROPY_MIN_SAMPLE && is_text_name(&name) && shannon(&probe) >= ENTROPY_THRESHOLD {

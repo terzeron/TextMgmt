@@ -168,7 +168,7 @@ fn executable_member_is_flagged_by_name_and_by_magic() {
     let r = scan(&p);
     let locs: Vec<&str> = r.findings.iter().filter(|f| f.code == "EMBEDDED_EXECUTABLE").map(|f| f.location.as_str()).collect();
     assert!(locs.contains(&"setup.exe") && locs.contains(&"picture.dat") && !locs.contains(&"readme.txt"), "{locs:?}");
-    assert_eq!(finding(&r, "EMBEDDED_EXECUTABLE").severity, Severity::High);
+    assert_eq!(finding(&r, "EMBEDDED_EXECUTABLE").severity, Severity::Critical);
 }
 
 #[test]

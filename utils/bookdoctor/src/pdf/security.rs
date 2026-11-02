@@ -3,6 +3,7 @@
 //! PDF를 렌더링하거나 JavaScript를 실행하거나 첨부를 열거나 프로그램을 띄우지 않는다. PDF 파싱 자체가 공격면이므로
 //! 신뢰할 수 없는 파일은 권한 없는 샌드박스에서 검사한다.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
@@ -404,13 +405,47 @@ fn js_is_exploit(source: &[u8]) -> bool {
     exploit_in(&decoded) || (decoded != raw && exploit_in(&raw))
 }
 
+static JS_STRING_CONCAT: LazyLock<Option<regex::Regex>> = LazyLock::new(|| regex::Regex::new(r#"["']\s*\+\s*["']"#).ok());
+/// 공백을 지우고 소문자로 만든 글에 쓴다. `util.printf("%45000f")`처럼 폭이 네 자리 이상이면 오버플로 시도다.
+static JS_PRINTF_OVERFLOW: LazyLock<Option<regex::Regex>> = LazyLock::new(|| regex::Regex::new(r#"util\.printf\(["'][^"']*%[0-9]{4,}"#).ok());
+static JS_ALIAS_EXEC: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
+    regex::Regex::new(r#"(?:[=,(:?]|&&|\|\||return)(?:(?:window|self|globalthis|this|top|parent)\.)?(?:eval|function)[;,)\]}]|\[["'](?:eval|function)["']\]"#).ok()
+});
+static JS_DECODE_CALL: LazyLock<Option<regex::Regex>> = LazyLock::new(|| regex::Regex::new(r"(?:atob|unescape|decodeuricomponent)\(|string\.fromcharcode\(").ok());
+
+/// 별칭 사용 앞뒤 300바이트 안에 디코딩 호출이 있는가. 멀리 떨어져 따로 나오는 둘은 묶지 않는다.
+fn alias_near_decode(flat: &str) -> bool {
+    let (Some(alias), Some(decode)) = (JS_ALIAS_EXEC.as_ref(), JS_DECODE_CALL.as_ref()) else { return false };
+    alias.find_iter(flat).any(|m| {
+        let mut a = m.start().saturating_sub(300);
+        while !flat.is_char_boundary(a) {
+            a -= 1;
+        }
+        let mut b = (m.end() + 300).min(flat.len());
+        while !flat.is_char_boundary(b) {
+            b += 1;
+        }
+        decode.is_match(&flat[a..b])
+    })
+}
+
 fn exploit_in(text: &str) -> bool {
-    let flat: String = text.to_lowercase().chars().filter(|c| !c.is_whitespace() && *c != '\0').collect();
+    // 붙어 있는 문자열 리터럴(`"export"+"DataObject"`)은 합쳐서 본다.
+    let joined = JS_STRING_CONCAT.as_ref().map_or(Cow::Borrowed(text), |rx| rx.replace_all(text, ""));
+    let flat: String = joined.to_lowercase().chars().filter(|c| !c.is_whitespace() && *c != '\0').collect();
     (flat.contains("exportdataobject") && flat.contains("nlaunch"))
         || (flat.contains("launchurl") && (flat.contains("file:") || flat.contains("\\\\")))
         || flat.contains("eval(unescape(")
         || flat.contains("eval(string.fromcharcode(")
         || flat.matches("%u9090").count() >= 4
+        // 알려진 취약점 호출: util.printf 정수 폭 오버플로(CVE-2008-2992), Collab.collectEmailInfo(CVE-2007-5659), Collab.getIcon(CVE-2009-0927), media.newPlayer(CVE-2009-4324).
+        || JS_PRINTF_OVERFLOW.as_ref().is_some_and(|rx| rx.is_match(&flat))
+        || flat.contains("collab.getauthor(")
+        || flat.contains("collab.collectemailinfo(")
+        || flat.contains("collab.geticon(")
+        || flat.contains("media.newplayer(")
+        // `eval`을 별칭이나 대괄호로 꺼내 디코딩한 페이로드를 실행한다.
+        || alias_near_decode(&flat)
 }
 
 /// 참조를 따라가는 최대 횟수. 이 안에 값에 닿지 못하면(끊긴 참조·순환) None이다.
@@ -666,7 +701,7 @@ fn stream_checks(doc: &Document, findings: &mut Vec<Finding>) {
                 _ => None,
             };
             if let Some(kind) = kind {
-                findings.push(Finding { severity: Severity::High, kind: "embedded executable content", object: *id, path: String::new(), detail: format!("{kind} executable") });
+                findings.push(Finding { severity: Severity::Critical, kind: "embedded executable content", object: *id, path: String::new(), detail: format!("{kind} executable") });
             }
         }
     }

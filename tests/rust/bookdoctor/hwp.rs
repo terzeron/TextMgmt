@@ -489,7 +489,7 @@ fn pe_with_a_png_name_is_still_flagged_and_an_exe_name_is_flagged_by_name() {
     assert!(scan_bindata(0x1, None, &[("BIN0001.png", pe_bytes())]).has("EMBEDDED_EXECUTABLE"));
     // 이름이 exe면 내용이 PNG여도 High다.
     let r = scan_bindata(0, None, &[("BIN0001.exe", PNG.to_vec())]);
-    assert_eq!(finding(&r, "EMBEDDED_EXECUTABLE").severity, scan_common::Severity::High);
+    assert_eq!(finding(&r, "EMBEDDED_EXECUTABLE").severity, scan_common::Severity::Critical);
 }
 
 #[test]

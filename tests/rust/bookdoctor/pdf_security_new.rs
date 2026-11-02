@@ -213,7 +213,7 @@ fn flags_embedded_elf() {
     let r = embedded(&elf());
     let h = hits(&r, "embedded executable content");
     assert_eq!(h.len(), 1);
-    assert_eq!(h[0].severity, Severity::High);
+    assert_eq!(h[0].severity, Severity::Critical);
 }
 
 #[test]
