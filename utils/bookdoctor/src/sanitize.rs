@@ -138,7 +138,9 @@ fn is_resource_attr(tag: &str, attr: &str) -> bool {
 
 /// CSS 이스케이프(`\75`, `\75 `, `\u`)를 푼다. 줄바꿈 앞의 `\`는 이어 붙임이라 지운다.
 fn css_unescape(css: &str) -> String {
-    let chars: Vec<char> = css.chars().collect();
+    // CSS 규격의 입력 전처리: CRLF·CR·FF는 LF 하나로, NUL은 U+FFFD로 바꾼다. 이스케이프 뒤의 CRLF가 공백 하나로 먹히게 한다.
+    let normalized = css.replace("\r\n", "\n").replace(['\r', '\x0c'], "\n").replace('\0', "\u{FFFD}");
+    let chars: Vec<char> = normalized.chars().collect();
     let mut out = String::with_capacity(css.len());
     let mut i = 0;
     while i < chars.len() {
@@ -640,26 +642,87 @@ fn undecodable(name: &str) -> bool {
 
 const MARKUP_MEDIA: &[&str] = &["application/xhtml+xml", "text/html", "image/svg+xml", "application/xml", "text/xml", "application/x-dtbncx+xml", "application/oebps-package+xml", "application/smil+xml", "application/smil"];
 
+/// `media-type` 값을 비교할 수 있게 정규화한다: `;` 뒤의 매개변수를 떼고 앞뒤 공백을 지우고 소문자로 만든다.
+fn base_media(raw: &str) -> String {
+    raw.split(';').next().unwrap_or("").trim().to_ascii_lowercase()
+}
+
+/// 리더가 마크업으로 여는 형식: 알려진 형식, `+xml` 접미사, `text/plain`·`text/css`가 아닌 `text/*`.
+fn is_markup_media(media: &str) -> bool {
+    MARKUP_MEDIA.contains(&media) || media.ends_with("+xml") || (media.starts_with("text/") && !matches!(media, "text/plain" | "text/css") && !is_script_media(media))
+}
+
 fn is_script_media(media: &str) -> bool {
     media.contains("javascript") || media.contains("ecmascript") || matches!(media, "application/java-archive" | "application/x-sh" | "application/x-msdownload" | "application/x-msdos-program" | "application/x-executable" | "application/x-bat" | "application/x-dosexec")
 }
 
 /// 내용이 마크업처럼 시작하는가(BOM·앞 공백을 건너뛴다). 이미지·글꼴·미디어는 `<`로 시작하지 않는다.
+/// UTF-16·UTF-32(BOM이 있든 없든)로 인코딩한 마크업도 알아본다.
 fn looks_like_markup(data: &[u8]) -> bool {
-    let d = data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data);
-    d.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<')
+    let head = &data[..data.len().min(256)];
+    let first_char = |units: Vec<u32>| units.into_iter().filter_map(char::from_u32).find(|c| !c.is_whitespace());
+    let utf16 = |bytes: &[u8], le: bool| -> Vec<u32> { bytes.chunks_exact(2).map(|c| u32::from(if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })).collect() };
+    let utf32 = |bytes: &[u8], le: bool| -> Vec<u32> { bytes.chunks_exact(4).map(|c| if le { u32::from_le_bytes([c[0], c[1], c[2], c[3]]) } else { u32::from_be_bytes([c[0], c[1], c[2], c[3]]) }).collect() };
+    let decoded = if let Some(rest) = head.strip_prefix(b"\xFF\xFE\x00\x00") {
+        first_char(utf32(rest, true))
+    } else if let Some(rest) = head.strip_prefix(b"\x00\x00\xFE\xFF") {
+        first_char(utf32(rest, false))
+    } else if let Some(rest) = head.strip_prefix(b"\xFF\xFE") {
+        first_char(utf16(rest, true))
+    } else if let Some(rest) = head.strip_prefix(b"\xFE\xFF") {
+        first_char(utf16(rest, false))
+    } else if head.starts_with(b"<\x00\x00\x00") {
+        first_char(utf32(head, true))
+    } else if head.starts_with(b"\x00\x00\x00<") {
+        first_char(utf32(head, false))
+    } else if head.starts_with(b"<\x00") {
+        first_char(utf16(head, true))
+    } else if head.starts_with(b"\x00<") {
+        first_char(utf16(head, false))
+    } else {
+        let d = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
+        return d.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'<');
+    };
+    decoded == Some('<')
+}
+
+static PACKAGE_ROOT: LazyLock<Regex> = LazyLock::new(|| re(r"(?is)\A\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--.*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?<(?:\w+:)?package\b"));
+
+/// 패키지 문서(OPF) 이름들: `.opf` 확장자, `META-INF/container.xml`의 rootfile `full-path`, 루트 요소가 `<package>`인 XML.
+/// 확장자만 믿으면 다른 이름의 패키지 문서가 manifest 정리와 검증에서 빠진다.
+fn package_names(members: &[Member]) -> BTreeSet<String> {
+    let mut set = BTreeSet::new();
+    for m in members {
+        let ext = ext_of(&m.name);
+        if ext == "opf" {
+            set.insert(m.name.clone());
+        }
+        if m.name == "META-INF/container.xml" {
+            if let Ok(text) = std::str::from_utf8(&m.data)
+                && let Ok(doc) = roxmltree::Document::parse_with_options(text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
+            {
+                for root in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "rootfile") {
+                    set.insert(posix_normpath(&unquote(root.attribute("full-path").unwrap_or(""))));
+                }
+            }
+        } else if (XML_EXTS.contains(&ext.as_str()) || ext.is_empty() || ext == "txt") && PACKAGE_ROOT.is_match(&String::from_utf8_lossy(&m.data[..m.data.len().min(4096)])) {
+            set.insert(m.name.clone());
+        }
+    }
+    set
 }
 
 /// manifest가 선언한 형식. 멤버 경로(OPF 기준으로 푼 것) → 소문자 media-type.
 fn declared_media(members: &[Member]) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
-    for m in members.iter().filter(|m| ext_of(&m.name) == "opf") {
+    let packages = package_names(members);
+    for m in members.iter().filter(|m| packages.contains(&m.name)) {
         let Ok(text) = String::from_utf8(m.data.clone()) else { continue };
         let Ok(doc) = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }) else { continue };
         let base = posix_dirname(&m.name);
         for item in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "item") {
             let (Some(href), Some(media)) = (item.attribute("href"), item.attribute("media-type")) else { continue };
-            map.insert(posix_normpath(&posix_join(&base, unquote(href).split('#').next().unwrap_or(""))), media.trim().to_ascii_lowercase());
+            map.insert(posix_normpath(&posix_join(&base, unquote(href).split('#').next().unwrap_or(""))), base_media(media));
         }
     }
     map
@@ -675,7 +738,7 @@ fn classify(name: &str, data: &[u8], media: Option<&str>) -> Option<&'static str
     let ext = ext_of(name);
     let passive = PASSIVE_EXTS.contains(&ext.as_str());
     // 리더는 확장자가 아니라 선언된 형식으로 연다. 이미지·글꼴 확장자가 마크업·CSS라고 선언했거나 내용이 마크업이면 지운다.
-    if passive && (media.is_some_and(|m| MARKUP_MEDIA.contains(&m) || m == "text/css") || looks_like_markup(data)) {
+    if passive && (media.is_some_and(|m| is_markup_media(m) || m == "text/css") || looks_like_markup(data)) {
         return Some("확장자와 선언 형식 불일치(마크업 위장)");
     }
     let textual = HTML_EXTS.contains(&ext.as_str()) || XML_EXTS.contains(&ext.as_str()) || matches!(ext.as_str(), "css" | "svg" | "txt");
@@ -723,6 +786,7 @@ fn rewrite_opf(text: &str, opf_name: &str, removed: &BTreeSet<String>, changes: 
 pub fn rebuild(src: &[u8]) -> Result<Plan, String> {
     let members = read_members(src)?;
     let media = declared_media(&members);
+    let packages = package_names(&members);
     let mut removed: Vec<(String, &'static str)> = Vec::new();
     let mut kept: Vec<Member> = Vec::new();
     for m in members {
@@ -736,10 +800,10 @@ pub fn rebuild(src: &[u8]) -> Result<Plan, String> {
     let mut edited: Vec<(String, String)> = Vec::new();
     for m in &mut kept {
         let ext = ext_of(&m.name);
-        let is_opf = ext == "opf";
+        let is_opf = packages.contains(&m.name);
         let declared = media.get(m.name.as_str()).map(String::as_str);
         // 확장자와 선언 형식 중 하나라도 마크업이면 마크업으로, CSS면 CSS로 정리한다(둘 다일 수도 있다).
-        let markup = HTML_EXTS.contains(&ext.as_str()) || ext == "svg" || XML_EXTS.contains(&ext.as_str()) || declared.is_some_and(|d| MARKUP_MEDIA.contains(&d));
+        let markup = is_opf || HTML_EXTS.contains(&ext.as_str()) || ext == "svg" || XML_EXTS.contains(&ext.as_str()) || declared.is_some_and(is_markup_media);
         let css = ext == "css" || declared == Some("text/css");
         if !markup && !css {
             continue;
@@ -801,7 +865,8 @@ fn is_subsequence(needle: &str, hay: &str) -> bool {
 fn dangling(members: &[Member]) -> Result<(usize, usize), String> {
     let names: BTreeSet<&str> = members.iter().map(|m| m.name.as_str()).collect();
     let (mut missing, mut bad_spine) = (0, 0);
-    for m in members.iter().filter(|m| ext_of(&m.name) == "opf") {
+    let packages = package_names(members);
+    for m in members.iter().filter(|m| packages.contains(&m.name)) {
         let text = decode(&m.name, &m.data)?;
         let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("{}: OPF를 해석할 수 없다: {e}", m.name))?;
         let base = posix_dirname(&m.name);

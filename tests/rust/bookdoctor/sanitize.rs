@@ -348,6 +348,67 @@ fn a_file_with_security_findings_left_after_rebuild_is_not_applied() {
     assert_eq!(fs::read(&p).unwrap(), before);
 }
 
+// ---- 보안 리뷰 3차: CSS 줄바꿈 전처리, media-type 정규화, 패키지 문서 찾기 ----
+
+#[test]
+fn css_escape_followed_by_any_line_break_is_still_decoded() {
+    for css in ["p{background:\\75\r\nrl(http://evil/a.png)}", "p{background:\\75\x0crl(http://evil/a.png)}", "p{background:\\75\nrl(http://evil/a.png)}", "p{background:\\75\trl(http://evil/a.png)}"] {
+        let out = strip_css(css);
+        assert!(!out.contains("evil"), "{css:?} -> {out:?}");
+    }
+}
+
+#[test]
+fn declared_media_types_are_normalized_before_comparison() {
+    // 매개변수·대소문자·`+xml` 접미사·`text/*`도 마크업으로 본다.
+    for media in ["application/xhtml+xml; charset=utf-8", "APPLICATION/XHTML+XML", "application/vnd.foo+xml", "text/html;charset=utf-8", "Text/Html ; x=y"] {
+        let src = epub_bytes(&xhtml("<p>본문</p>"), &opf_declaring("style.css", media), &[("OEBPS/style.css", b"<html><body><script>alert(1)</script><p>x</p></body></html>")]);
+        let plan = rebuild(&src).unwrap();
+        assert!(!member(&plan.bytes, "OEBPS/style.css").contains("<script"), "{media}");
+    }
+    for media in ["text/javascript; charset=utf-8", "Application/Javascript"] {
+        let src = epub_bytes(&xhtml("<p>본문</p>"), &opf_declaring("data.txt", media), &[("OEBPS/data.txt", b"alert(1)")]);
+        assert!(!names(&rebuild(&src).unwrap().bytes).iter().any(|n| n.ends_with("data.txt")), "{media}");
+    }
+    let src = epub_bytes(&xhtml("<p>본문</p>"), &opf_declaring("a.png", "text/html; charset=utf-8"), &[("OEBPS/a.png", b"\x89PNG\r\n\x1a\nrest")]);
+    assert!(!names(&rebuild(&src).unwrap().bytes).iter().any(|n| n.ends_with("a.png")));
+}
+
+#[test]
+fn markup_in_utf16_or_utf32_is_recognized_in_binary_extensions() {
+    let utf16le: Vec<u8> = [&[0xFF, 0xFE][..], &"<html><script>alert(1)</script></html>".encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>()].concat();
+    let utf16be: Vec<u8> = [&[0xFE, 0xFF][..], &"  <svg onload='x'/>".encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>()].concat();
+    let utf16_bomless: Vec<u8> = "<html/>".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let utf32le: Vec<u8> = [&[0xFF, 0xFE, 0, 0][..], &"<html/>".chars().flat_map(|c| (c as u32).to_le_bytes()).collect::<Vec<u8>>()].concat();
+    let src = epub_bytes(&xhtml("<p>본문</p>"), &clean_opf(), &[("OEBPS/a.png", &utf16le), ("OEBPS/b.jpg", &utf16be), ("OEBPS/c.gif", &utf16_bomless), ("OEBPS/d.webp", &utf32le), ("OEBPS/e.png", b"\x89PNG\r\n\x1a\nrest")]);
+    let kept = names(&rebuild(&src).unwrap().bytes);
+    assert!(kept.contains(&"OEBPS/e.png".to_string()), "{kept:?}");
+    for gone in ["a.png", "b.jpg", "c.gif", "d.webp"] {
+        assert!(!kept.iter().any(|n| n.ends_with(gone)), "{gone}: {kept:?}");
+    }
+}
+
+#[test]
+fn the_package_document_is_found_through_container_xml_not_the_extension() {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/package.xml" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+    let package = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="exe" href="Misc/setup.exe" media-type="application/x-dosexec"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
+    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let stored = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    z.start_file("mimetype", stored).unwrap();
+    z.write_all(b"application/epub+zip").unwrap();
+    for (name, data) in [("META-INF/container.xml", container.as_bytes()), ("OEBPS/package.xml", package.as_bytes()), ("OEBPS/ch1.xhtml", xhtml("<p>본문</p>").as_bytes()), ("OEBPS/Misc/setup.exe", b"MZ\x90\x00more")] {
+        z.start_file(name, deflated).unwrap();
+        z.write_all(data).unwrap();
+    }
+    let src = z.finish().unwrap().into_inner();
+    let plan = rebuild(&src).unwrap();
+    assert!(!member(&plan.bytes, "OEBPS/package.xml").contains("setup.exe"), "{}", member(&plan.bytes, "OEBPS/package.xml"));
+    verify(&src, &plan.bytes).unwrap();
+}
+
 // ---- 실행: --dry-run, 적용, 휴지통 ----
 
 fn run(args: &[&str]) -> (i32, String) {
