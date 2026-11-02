@@ -27,7 +27,7 @@ use crate::scan::scan_file;
 const MAX_MEMBER: u64 = 256 * 1024 * 1024;
 const MAX_TOTAL: u64 = 1024 * 1024 * 1024;
 
-const HTML_EXTS: &[&str] = &["xhtml", "html", "htm"];
+pub(crate) const HTML_EXTS: &[&str] = &["xhtml", "html", "htm"];
 const XML_EXTS: &[&str] = &["xml", "opf", "ncx", "smil"];
 const PASSIVE_EXTS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "avif", "ico", "jp2", "jxl", "ttf", "otf", "woff", "woff2", "eot", "ttc", "mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "mp4", "m4v", "ogv", "webm",
@@ -593,16 +593,16 @@ pub struct Plan {
     pub edited: Vec<(String, String)>,
 }
 
-fn ext_of(name: &str) -> String {
+pub(crate) fn ext_of(name: &str) -> String {
     let file = name.rsplit('/').next().unwrap_or(name);
     file.rsplit_once('.').map_or(String::new(), |(_, e)| e.to_ascii_lowercase())
 }
 
-struct Member {
-    name: String,
-    data: Vec<u8>,
-    method: CompressionMethod,
-    modified: Option<zip::DateTime>,
+pub(crate) struct Member {
+    pub(crate) name: String,
+    pub(crate) data: Vec<u8>,
+    pub(crate) method: CompressionMethod,
+    pub(crate) modified: Option<zip::DateTime>,
 }
 
 /// 멤버 텍스트의 인코딩. 정리한 글을 같은 인코딩으로 되써서 원본의 인코딩 선언과 어긋나지 않게 한다.
@@ -643,16 +643,39 @@ fn encode_enc(text: &str, enc: Enc) -> Vec<u8> {
     }
 }
 
-fn decode(name: &str, data: &[u8]) -> Result<String, String> {
+pub(crate) fn decode(name: &str, data: &[u8]) -> Result<String, String> {
     decode_enc(name, data).map(|(t, _)| t)
 }
 
-fn read_members(bytes: &[u8]) -> Result<Vec<Member>, String> {
+pub(crate) fn read_members(bytes: &[u8]) -> Result<Vec<Member>, String> {
+    let (members, broken) = read_members_lenient(bytes)?;
+    match broken.into_iter().next() {
+        Some((_, message)) => Err(message),
+        None => Ok(members),
+    }
+}
+
+/// 읽을 수 없는 멤버: `(이름, 오류 메시지)`.
+pub(crate) type BrokenMembers = Vec<(String, String)>;
+
+/// 읽을 수 없는 멤버를 오류로 올리지 않고 `(이름, 오류 메시지)`로 모아 돌려준다. 이름을 알 수 없는 멤버나 크기 한도 초과는 여전히 오류다.
+pub(crate) fn read_members_lenient(bytes: &[u8]) -> Result<(Vec<Member>, BrokenMembers), String> {
     let mut zip = ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ZIP을 열 수 없다: {e}"))?;
     let mut members = Vec::new();
+    let mut broken = Vec::new();
     let mut total = 0u64;
     for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).map_err(|e| format!("멤버 {i}를 읽을 수 없다: {e}"))?;
+        let known = zip.name_for_index(i).and_then(Result::ok).map(std::borrow::Cow::into_owned);
+        let mut entry = match zip.by_index(i) {
+            Ok(entry) => entry,
+            Err(e) => match known {
+                Some(name) => {
+                    broken.push((name, format!("멤버 {i}를 읽을 수 없다: {e}")));
+                    continue;
+                }
+                None => return Err(format!("멤버 {i}를 읽을 수 없다: {e}")),
+            },
+        };
         let raw = entry.name_raw().to_vec();
         let name = String::from_utf8_lossy(&raw).into_owned();
         if entry.is_dir() {
@@ -662,7 +685,10 @@ fn read_members(bytes: &[u8]) -> Result<Vec<Member>, String> {
             return Err(format!("{name}: 멤버가 너무 크다"));
         }
         let mut data = Vec::with_capacity(entry.size().min(MAX_MEMBER) as usize);
-        (&mut entry).take(MAX_MEMBER + 1).read_to_end(&mut data).map_err(|e| format!("{name}: 읽을 수 없다: {e}"))?;
+        if let Err(e) = (&mut entry).take(MAX_MEMBER + 1).read_to_end(&mut data) {
+            broken.push((name.clone(), format!("{name}: 읽을 수 없다: {e}")));
+            continue;
+        }
         total += data.len() as u64;
         if data.len() as u64 > MAX_MEMBER || total > MAX_TOTAL {
             return Err(format!("{name}: 압축을 푼 크기가 한도를 넘는다"));
@@ -670,7 +696,7 @@ fn read_members(bytes: &[u8]) -> Result<Vec<Member>, String> {
         let kept_utf8 = std::str::from_utf8(&raw).is_ok();
         members.push(Member { name: if kept_utf8 { name } else { format!("\u{0}{name}") }, data, method: entry.compression(), modified: entry.last_modified() });
     }
-    Ok(members)
+    Ok((members, broken))
 }
 
 /// 이름이 UTF-8이 아닌 멤버는 이름을 그대로 다시 쓸 수 없다. `read_members`가 앞에 NUL을 붙여 표시한다.
@@ -729,7 +755,7 @@ static PACKAGE_ROOT: LazyLock<Regex> = LazyLock::new(|| re(r"(?is)\A\s*(?:<\?xml
 /// 패키지 문서(OPF) 이름들: `.opf` 확장자, `META-INF/container.xml`의 rootfile `full-path`(그대로와 퍼센트 디코딩한 두 형태 모두),
 /// 루트 요소가 `<package>`인 XML. 확장자만 믿으면 다른 이름의 패키지 문서가 manifest 정리와 검증에서 빠진다.
 /// `container.xml`이 있는데 해석할 수 없거나 가리키는 멤버가 없으면 오류다: 무엇이 패키지인지 모르면 고치지 않는다.
-fn package_names(members: &[Member]) -> Result<BTreeSet<String>, String> {
+pub(crate) fn package_names(members: &[Member]) -> Result<BTreeSet<String>, String> {
     let existing: BTreeSet<&str> = members.iter().map(|m| m.name.as_str()).collect();
     let mut set = BTreeSet::new();
     for m in members {
@@ -757,7 +783,7 @@ fn package_names(members: &[Member]) -> Result<BTreeSet<String>, String> {
 
 /// 패키지 문서로 쓸 수 있는지 확인하고 해석에 쓴 글을 돌려준다. 실행 파일 확장자가 아니고, 읽을 수 있는 인코딩이고,
 /// 내용이 정말 `<package>` 루트의 XML이어야 한다. 하나라도 어긋나면 오류다: 패키지 문서를 읽지 못하고 넘어가면 선언 형식을 놓친다.
-fn package_text(m: &Member) -> Result<String, String> {
+pub(crate) fn package_text(m: &Member) -> Result<String, String> {
     let name = m.name.trim_start_matches('\0');
     if crate::epub::security::EXEC_EXTS.contains(&ext_of(name).as_str()) {
         return Err(format!("{name}: 실행 파일 확장자인 패키지 문서"));
@@ -897,10 +923,15 @@ pub fn rebuild(src: &[u8]) -> Result<Plan, String> {
             m.data = encoded;
         }
     }
-    // mimetype은 항상 첫 멤버이고 압축하지 않는다.
+    let bytes = write_members(&mut kept)?;
+    Ok(Plan { bytes, removed, edited })
+}
+
+/// 멤버를 EPUB ZIP으로 쓴다. `mimetype`은 항상 첫 멤버이고 압축하지 않는다.
+pub(crate) fn write_members(kept: &mut [Member]) -> Result<Vec<u8>, String> {
     kept.sort_by_key(|m| m.name != "mimetype");
     let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
-    for m in &kept {
+    for m in kept.iter() {
         let method = if m.name == "mimetype" || m.method == CompressionMethod::Stored { CompressionMethod::Stored } else { CompressionMethod::Deflated };
         let mut opts = SimpleFileOptions::default().compression_method(method);
         if let Some(t) = m.modified {
@@ -910,7 +941,7 @@ pub fn rebuild(src: &[u8]) -> Result<Plan, String> {
         zip.write_all(&m.data).map_err(|e| e.to_string())?;
     }
     let bytes = zip.finish().map_err(|e| e.to_string())?.into_inner();
-    Ok(Plan { bytes, removed, edited })
+    Ok(bytes)
 }
 
 // ---------------------------------------------------------------- 검증
@@ -918,18 +949,18 @@ pub fn rebuild(src: &[u8]) -> Result<Plan, String> {
 /// 눈에 보이는 글자만 공백 없이 모은다. `text_of`는 HTML 규칙으로 읽어서 XHTML의 자기 닫힘 `<script src=".."/>`를 문서 끝까지 이어지는
 /// 스크립트로 보고 본문을 버리므로, 자기 닫힘 `script`·`style`을 먼저 펼친다. 스크립트나 주석을 지우면 이어 붙는 텍스트 노드의
 /// 경계 공백도 달라지므로 공백은 글자로 세지 않는다.
-fn visible_text(markup: &str) -> String {
+pub(crate) fn visible_text(markup: &str) -> String {
     let expanded = SELF_CLOSING_RAW.replace_all(markup, "<$1$2></$1>");
     text_of(&expanded).chars().filter(|c| !c.is_whitespace()).collect()
 }
 
-fn is_subsequence(needle: &str, hay: &str) -> bool {
+pub(crate) fn is_subsequence(needle: &str, hay: &str) -> bool {
     let mut it = hay.chars();
     needle.chars().all(|c| it.any(|h| h == c))
 }
 
 /// OPF manifest 항목 중 대상이 없는 수와 spine에서 manifest에 없는 idref 수.
-fn dangling(members: &[Member]) -> Result<(usize, usize), String> {
+pub(crate) fn dangling(members: &[Member]) -> Result<(usize, usize), String> {
     let names: BTreeSet<&str> = members.iter().map(|m| m.name.as_str()).collect();
     let (mut missing, mut bad_spine) = (0, 0);
     let packages = package_names(members)?;
@@ -993,7 +1024,7 @@ fn unique_trash_path(dir: &Path, file_name: &str) -> PathBuf {
 }
 
 /// 원본을 휴지통에 두고, 같은 inode에 새 내용을 덮어쓰고, mtime을 되돌린다.
-fn apply(path: &Path, bytes: &[u8], trash_dir: &Path) -> io::Result<PathBuf> {
+pub(crate) fn apply(path: &Path, bytes: &[u8], trash_dir: &Path) -> io::Result<PathBuf> {
     let meta = fs::metadata(path)?;
     let mtime = meta.modified()?;
     fs::create_dir_all(trash_dir)?;
@@ -1015,7 +1046,7 @@ fn apply(path: &Path, bytes: &[u8], trash_dir: &Path) -> io::Result<PathBuf> {
 }
 
 /// 터미널로 나가는 문자열의 제어문자(ESC 등)와 숨은 서식 문자를 지운다. 멤버 이름과 오류 메시지는 파일이 정한 값이다.
-fn show(text: &str) -> String {
+pub(crate) fn show(text: &str) -> String {
     scan_common::text::sanitize_display(text, usize::MAX, None)
 }
 
@@ -1025,7 +1056,7 @@ fn has_serious_security(report: &scan_common::FileReport) -> bool {
 
 /// 임시 파일을 `O_EXCL`(`create_new`)과 모드 0600으로 만든다. 이름이 겹치거나 링크가 이미 있으면 다른 이름으로 다시 시도한다.
 /// 파일을 새로 만든 경우에만 쓰므로 미리 심어 둔 심볼릭 링크를 따라가지 않는다.
-fn create_private_temp(bytes: &[u8]) -> io::Result<PathBuf> {
+pub(crate) fn create_private_temp(bytes: &[u8]) -> io::Result<PathBuf> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);

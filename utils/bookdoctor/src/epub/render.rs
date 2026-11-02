@@ -486,6 +486,17 @@ fn expand_xhtml_entities(text: &str) -> Option<String> {
     changed.then_some(out)
 }
 
+/// 뷰어가 거부하는 본문 XHTML의 결함 코드. `analyze_xhtml`과 같은 규칙(이름 있는 문자 확장 후 XML 파싱, head 요소 유무)이다.
+pub fn xhtml_defect(bytes: &[u8]) -> Option<&'static str> {
+    let text = String::from_utf8_lossy(bytes);
+    let expanded = if parse_xml(bytes).is_none() { expand_xhtml_entities(&text) } else { None };
+    match parse_xml(expanded.as_deref().map_or(bytes, str::as_bytes)) {
+        None => Some("XHTML_PARSE_FAILED"),
+        Some(doc) if !doc.descendants().any(|n| n.is_element() && n.tag_name().name() == "head") => Some("HEAD_MISSING"),
+        Some(_) => None,
+    }
+}
+
 /// 본문 XHTML 하나를 검사한다. 읽은 CSS는 `ctx.css_cache`에 두고 다시 읽지 않는다.
 fn analyze_xhtml(zip: &mut Zip, bytes: &[u8], member: &str, name_set: &HashSet<&str>, ctx: &mut Ctx, sink: &mut Sink) {
     let text = String::from_utf8_lossy(bytes);

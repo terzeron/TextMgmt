@@ -411,6 +411,7 @@ dependencies = [
  "regex",
  "roxmltree",
  "scan_common",
+ "scraper",
  "serde",
  "serde_json",
  "sha2",

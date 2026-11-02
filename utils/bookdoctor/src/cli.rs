@@ -17,7 +17,7 @@ use crate::isolate::scan_isolated;
 use crate::rules::Compiled;
 use crate::scan::scan_file;
 
-const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--rules PATH]... [--builtin-rules] [--pdf-text] [--no-poppler] [--sanitize [--dry-run] [--trash-dir DIR]] PATH...";
+const USAGE: &str = "usage: bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N] [--only security,defect,render] [--min-severity low|medium|high|critical] [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--rules PATH]... [--builtin-rules] [--pdf-text] [--no-poppler] [--sanitize | --fix-xhtml] [--dry-run] [--trash-dir DIR] PATH...";
 
 /// 한 번에 검사하는 파일 수는 워커 수의 이 배수다.
 const WINDOW_PER_WORKER: usize = 8;
@@ -61,6 +61,8 @@ pub struct Options {
     pub child: bool,
     /// `--sanitize`: 보안 지표가 있는 EPUB을 허용 목록으로 재구성한다.
     pub sanitize: bool,
+    /// `--fix-xhtml`: 뷰어가 거부하는 본문 XHTML을 고친다.
+    pub fix_xhtml: bool,
     /// `--dry-run`: `--sanitize`가 지울 요소만 보이고 파일은 건드리지 않는다.
     pub dry_run: bool,
     /// `--trash-dir`: `--sanitize`가 원본을 두는 디렉터리.
@@ -96,6 +98,7 @@ impl Default for Options {
             isolate_timeout_s: 120,
             child: false,
             sanitize: false,
+            fix_xhtml: false,
             dry_run: false,
             trash_dir: None,
             rule_files: Vec::new(),
@@ -146,6 +149,7 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
             "--builtin-rules" => o.builtin_rules = true,
             "--child" => o.child = true,
             "--sanitize" => o.sanitize = true,
+            "--fix-xhtml" => o.fix_xhtml = true,
             "--dry-run" => o.dry_run = true,
             _ => match long_option(arg, &["report", "workers", "limit", "max-total-mb", "only", "min-severity", "color", "isolate-mem-mb", "isolate-timeout-s", "rules", "trash-dir"], &mut it)? {
                 Some((name, value)) => match name.as_str() {
@@ -168,11 +172,15 @@ pub fn parse(argv: &[String]) -> Result<Options, String> {
     if o.paths.is_empty() {
         return Err("the following arguments are required: PATH...".into());
     }
-    if (o.dry_run || o.trash_dir.is_some()) && !o.sanitize {
-        return Err("--dry-run and --trash-dir require --sanitize".into());
+    if o.sanitize && o.fix_xhtml {
+        return Err("--sanitize and --fix-xhtml cannot be combined".into());
     }
-    if o.sanitize && !o.dry_run && o.trash_dir.is_none() {
-        return Err("--sanitize requires --trash-dir DIR (or --dry-run)".into());
+    let rewrites = o.sanitize || o.fix_xhtml;
+    if (o.dry_run || o.trash_dir.is_some()) && !rewrites {
+        return Err("--dry-run and --trash-dir require --sanitize or --fix-xhtml".into());
+    }
+    if rewrites && !o.dry_run && o.trash_dir.is_none() {
+        return Err("--sanitize and --fix-xhtml require --trash-dir DIR (or --dry-run)".into());
     }
     if o.max_total_mb == 0 || o.isolate_mem_mb == 0 || o.isolate_timeout_s == 0 {
         return Err("Limits must be positive".into());
@@ -218,8 +226,9 @@ pub fn run_with_env(argv: &[String], out: &mut dyn Write, is_tty: bool, no_color
     if opts.child {
         return run_child(&opts, out);
     }
-    if opts.sanitize {
-        return match crate::sanitize::run(&opts, out) {
+    if opts.sanitize || opts.fix_xhtml {
+        let result = if opts.sanitize { crate::sanitize::run(&opts, out) } else { crate::xhtml_fix::run(&opts, out) };
+        return match result {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("bookdoctor: error: {}", scan_common::text::sanitize_display(&e.to_string(), usize::MAX, None));
@@ -307,7 +316,7 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   bookdoctor [-r] [--json] [--report PATH] [--workers N] [--limit N] [--max-total-mb N]
              [--only security,defect,render] [--min-severity low|medium|high|critical]
              [--color auto|always|never] [--zip-deep] [--no-prefetch] [--no-recurse] [--isolate] [--isolate-mem-mb N] [--isolate-timeout-s N] [--rules PATH]... [--builtin-rules] [--pdf-text] [--no-poppler]
-             [--sanitize [--dry-run] [--trash-dir DIR]] PATH...
+             [--sanitize | --fix-xhtml] [--dry-run] [--trash-dir DIR] PATH...
 
 인자:
   PATH   검사할 파일 또는 디렉토리 (여러 개 가능). 확장자 epub, pdf, txt, zip, docx(docm·dotx·dotm), hwpx, hwp, doc(dot), rtf, html(htm·xhtml)와 실행 파일 확장자(exe, dll, so, dylib 등)를 모은다.
@@ -339,8 +348,10 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   --no-poppler        poppler 외부 명령을 쓰지 않는다.
   --sanitize          보안 지표(HIGH 이상)가 있는 EPUB을 허용 목록으로 재구성한다. 스크립트, 실행 파일, 원격 로드, 외부 개체를 지우고
                       manifest 항목도 함께 지운다. 인터랙티브 기능은 깨진다. 본문 글자·구조 검증과 재검사를 통과해야 적용한다.
-  --dry-run           --sanitize가 지울 요소만 보이고 파일은 바꾸지 않는다.
-  --trash-dir DIR     --sanitize가 원본을 두는 디렉토리(필수, --dry-run이면 생략). 같은 inode에 덮어쓰고 mtime을 유지한다.
+  --fix-xhtml         XHTML_PARSE_FAILED·HEAD_MISSING가 있는 EPUB의 본문 XHTML을 고친다. 브라우저 규칙으로 태그를 바로잡고, 빈 멤버는 뼈대로 채우고,
+                      읽을 수 없거나 마크업이 아닌 멤버는 지우며 manifest·목차·링크를 정리한다. 많이 깨진 파일은 DELETE_CANDIDATE로만 알린다.
+  --dry-run           --sanitize·--fix-xhtml이 바꿀 내용만 보이고 파일은 바꾸지 않는다.
+  --trash-dir DIR     --sanitize·--fix-xhtml이 원본을 두는 디렉토리(필수, --dry-run이면 생략). 같은 inode에 덮어쓰고 mtime을 유지한다.
   -h, --help          이 도움말
 
 주의:
