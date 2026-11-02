@@ -180,3 +180,7 @@ path = "../../tests/rust/bookdoctor/sanitize.rs"
 [[test]]
 name = "xhtml_fix"
 path = "../../tests/rust/bookdoctor/xhtml_fix.rs"
+
+[[test]]
+name = "pdf_sanitize"
+path = "../../tests/rust/bookdoctor/pdf_sanitize.rs"

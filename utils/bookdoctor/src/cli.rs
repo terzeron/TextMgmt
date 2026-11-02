@@ -346,8 +346,9 @@ pub fn print_usage(out: &mut dyn Write) -> io::Result<()> {
   --no-prefetch       다음 파일을 미리 읽지 않는다. 기본은 검사하는 동안 다음 파일 최대 16개(512MiB)를 미리 읽는다.
   --pdf-text          PDF 본문 텍스트까지 검사한다.
   --no-poppler        poppler 외부 명령을 쓰지 않는다.
-  --sanitize          보안 지표(HIGH 이상)가 있는 EPUB을 허용 목록으로 재구성한다. 스크립트, 실행 파일, 원격 로드, 외부 개체를 지우고
-                      manifest 항목도 함께 지운다. 인터랙티브 기능은 깨진다. 본문 글자·구조 검증과 재검사를 통과해야 적용한다.
+  --sanitize          보안 지표(HIGH 이상)가 있는 EPUB·PDF를 정리한다. EPUB은 허용 목록으로 재구성해 스크립트, 실행 파일, 원격 로드, 외부 개체와
+                      manifest 항목을 지우고, PDF는 Launch·JavaScript·RichMediaExecute 동작과 /JS 키를 지운다. 인터랙티브 기능은 깨진다.
+                      본문 글자·구조(PDF는 쪽 수·쪽 내용) 검증과 재검사를 통과해야 적용한다. 암호화·128MB 초과 PDF는 건너뛴다.
   --fix-xhtml         XHTML_PARSE_FAILED·HEAD_MISSING가 있는 EPUB의 본문 XHTML을 고친다. 브라우저 규칙으로 태그를 바로잡고, 빈 멤버는 뼈대로 채우고,
                       읽을 수 없거나 마크업이 아닌 멤버는 지우며 manifest·목차·링크를 정리한다. 많이 깨진 파일은 DELETE_CANDIDATE로만 알린다.
   --dry-run           --sanitize·--fix-xhtml이 바꿀 내용만 보이고 파일은 바꾸지 않는다.

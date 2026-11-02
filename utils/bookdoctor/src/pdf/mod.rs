@@ -1,5 +1,6 @@
 //! PDF 검사: 보안(`security`)과 구조·렌더링(`structure`).
 
+pub mod sanitize;
 pub mod security;
 pub mod structure;
 

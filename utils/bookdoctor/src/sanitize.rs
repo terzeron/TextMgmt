@@ -1057,13 +1057,18 @@ pub(crate) fn has_serious_security(report: &scan_common::FileReport) -> bool {
 /// 임시 파일을 `O_EXCL`(`create_new`)과 모드 0600으로 만든다. 이름이 겹치거나 링크가 이미 있으면 다른 이름으로 다시 시도한다.
 /// 파일을 새로 만든 경우에만 쓰므로 미리 심어 둔 심볼릭 링크를 따라가지 않는다.
 pub(crate) fn create_private_temp(bytes: &[u8]) -> io::Result<PathBuf> {
+    create_private_temp_ext(bytes, "epub")
+}
+
+/// `create_private_temp`와 같고 확장자를 고른다. 검사는 확장자로 형식을 가르므로 PDF는 `pdf`로 만든다.
+pub(crate) fn create_private_temp_ext(bytes: &[u8], ext: &str) -> io::Result<PathBuf> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir();
     for _ in 0..100 {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
-        let path = dir.join(format!("bookdoctor-sanitize-{}-{nanos:x}-{}.epub", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)));
+        let path = dir.join(format!("bookdoctor-sanitize-{}-{nanos:x}-{}.{ext}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)));
         match fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path) {
             Ok(mut f) => {
                 f.write_all(bytes)?;
@@ -1087,11 +1092,20 @@ fn rescan(bytes: &[u8], opts: &Options) -> Result<(), String> {
 
 /// `--sanitize` 진입점. 종료 코드를 돌려준다(건너뛴 파일이 있어도 0, 쓰기 실패가 있으면 1).
 pub fn run(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
-    let paths = collect_files(&opts.paths, opts.recursive, |p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("epub")));
+    let paths = collect_files(&opts.paths, opts.recursive, |p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("epub") || e.eq_ignore_ascii_case("pdf")));
     let scan_opts = Options { only: Vec::new(), ..opts.clone() };
     let (mut done, mut untouched, mut skipped, mut failed) = (0usize, 0usize, 0usize, 0usize);
     for path in &paths {
         let shown = show(&path.to_string_lossy());
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+            match crate::pdf::sanitize::process(path, &shown, opts, &scan_opts, out)? {
+                crate::pdf::sanitize::Outcome::Done => done += 1,
+                crate::pdf::sanitize::Outcome::Untouched => untouched += 1,
+                crate::pdf::sanitize::Outcome::Skipped => skipped += 1,
+                crate::pdf::sanitize::Outcome::Failed => failed += 1,
+            }
+            continue;
+        }
         let report = scan_file(path, &scan_opts);
         if !has_serious_security(&report) {
             untouched += 1;
