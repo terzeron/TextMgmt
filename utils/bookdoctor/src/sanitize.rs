@@ -755,19 +755,39 @@ fn package_names(members: &[Member]) -> Result<BTreeSet<String>, String> {
     Ok(set)
 }
 
-/// manifest가 선언한 형식. 멤버 경로(OPF 기준으로 푼 것) → 소문자 media-type.
-fn declared_media(members: &[Member], packages: &BTreeSet<String>) -> BTreeMap<String, String> {
+/// 패키지 문서로 쓸 수 있는지 확인하고 해석에 쓴 글을 돌려준다. 실행 파일 확장자가 아니고, 읽을 수 있는 인코딩이고,
+/// 내용이 정말 `<package>` 루트의 XML이어야 한다. 하나라도 어긋나면 오류다: 패키지 문서를 읽지 못하고 넘어가면 선언 형식을 놓친다.
+fn package_text(m: &Member) -> Result<String, String> {
+    let name = m.name.trim_start_matches('\0');
+    if crate::epub::security::EXEC_EXTS.contains(&ext_of(name).as_str()) {
+        return Err(format!("{name}: 실행 파일 확장자인 패키지 문서"));
+    }
+    let (text, _) = decode_enc(name, &m.data)?;
+    let text = text.trim_start_matches('\u{feff}').to_owned();
+    if !PACKAGE_ROOT.is_match(&text) {
+        return Err(format!("{name}: 컨테이너가 가리키는 패키지 문서가 `<package>` 문서가 아니다"));
+    }
+    let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("{name}: 패키지 문서를 해석할 수 없다: {e}"))?;
+    if doc.root_element().tag_name().name() != "package" {
+        return Err(format!("{name}: 루트 요소가 `<package>`가 아니다"));
+    }
+    drop(doc);
+    Ok(text)
+}
+
+/// manifest가 선언한 형식. 멤버 경로(OPF 기준으로 푼 것) → 소문자 media-type. 패키지 문서를 읽지 못하면 오류다.
+fn declared_media(members: &[Member], packages: &BTreeSet<String>) -> Result<BTreeMap<String, String>, String> {
     let mut map = BTreeMap::new();
     for m in members.iter().filter(|m| packages.contains(&m.name)) {
-        let Ok(text) = String::from_utf8(m.data.clone()) else { continue };
-        let Ok(doc) = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }) else { continue };
+        let text = package_text(m)?;
+        let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("{}: {e}", m.name))?;
         let base = posix_dirname(&m.name);
         for item in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "item") {
             let (Some(href), Some(media)) = (item.attribute("href"), item.attribute("media-type")) else { continue };
             map.insert(posix_normpath(&posix_join(&base, unquote(href).split('#').next().unwrap_or(""))), base_media(media));
         }
     }
-    map
+    Ok(map)
 }
 
 fn classify(name: &str, data: &[u8], media: Option<&str>, is_package: bool) -> Option<&'static str> {
@@ -832,7 +852,7 @@ fn rewrite_opf(text: &str, opf_name: &str, removed: &BTreeSet<String>, changes: 
 pub fn rebuild(src: &[u8]) -> Result<Plan, String> {
     let members = read_members(src)?;
     let packages = package_names(&members)?;
-    let media = declared_media(&members, &packages);
+    let media = declared_media(&members, &packages)?;
     let mut removed: Vec<(String, &'static str)> = Vec::new();
     let mut kept: Vec<Member> = Vec::new();
     for m in members {
@@ -914,7 +934,7 @@ fn dangling(members: &[Member]) -> Result<(usize, usize), String> {
     let (mut missing, mut bad_spine) = (0, 0);
     let packages = package_names(members)?;
     for m in members.iter().filter(|m| packages.contains(&m.name)) {
-        let text = decode(&m.name, &m.data)?;
+        let text = package_text(m)?;
         let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("{}: OPF를 해석할 수 없다: {e}", m.name))?;
         let base = posix_dirname(&m.name);
         let mut ids = BTreeSet::new();

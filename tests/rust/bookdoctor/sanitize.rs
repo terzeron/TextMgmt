@@ -484,6 +484,65 @@ fn a_package_document_keeps_its_place_whatever_its_extension() {
     verify(&src, &plan.bytes).unwrap();
 }
 
+// ---- 보안 리뷰 5차: 패키지 문서는 정말 패키지일 때만 예외, 읽지 못하면 닫는다 ----
+
+fn epub_with_package(package_name: &str, package: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let stored = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    z.start_file("mimetype", stored).unwrap();
+    z.write_all(b"application/epub+zip").unwrap();
+    for (name, data) in [
+        ("META-INF/container.xml", container_for(package_name).as_bytes()),
+        (package_name, package),
+        ("OEBPS/ch1.xhtml", xhtml("<p>본문</p>").as_bytes()),
+        ("OEBPS/style.css", b"<html><body><script>alert(1)</script><p>x</p></body></html>"),
+    ] {
+        z.start_file(name, deflated).unwrap();
+        z.write_all(data).unwrap();
+    }
+    z.finish().unwrap().into_inner()
+}
+
+const PACKAGE_DECLARING_CSS_AS_XHTML: &str = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="s" href="style.css" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
+
+#[test]
+fn a_utf16_package_still_contributes_its_declared_media_types() {
+    let utf16: Vec<u8> = [&[0xFF, 0xFE][..], &PACKAGE_DECLARING_CSS_AS_XHTML.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>()].concat();
+    let src = epub_with_package("OEBPS/package.xml", &utf16);
+    let plan = rebuild(&src).unwrap();
+    // 선언(application/xhtml+xml)에 따라 style.css도 마크업으로 정리돼야 한다.
+    assert!(!member(&plan.bytes, "OEBPS/style.css").contains("<script"));
+}
+
+#[test]
+fn a_package_document_that_cannot_be_read_stops_the_rebuild() {
+    for bad in [&b"<package xmlns='http://www.idpf.org/2007/opf'><manifest>"[..], b"\xff\xfe\x00\x00<", b"\xb0\xa1<package/>"] {
+        let src = epub_with_package("OEBPS/package.xml", bad);
+        assert!(rebuild(&src).is_err(), "{:?}", String::from_utf8_lossy(bad));
+    }
+}
+
+#[test]
+fn only_a_real_package_document_is_exempt_from_the_extension_allowlist() {
+    // 컨테이너가 가리키는 멤버가 패키지가 아니면(실행 파일, 다른 XML, 평문) 예외를 주지 않고 중단한다.
+    for (name, data) in [
+        ("OEBPS/package.dat", &b"MZ\x90\x00more"[..]),
+        ("OEBPS/package.dat", b"just text"),
+        ("OEBPS/package.dat", b"<?xml version=\"1.0\"?><html xmlns='http://www.w3.org/1999/xhtml'/>"),
+        ("OEBPS/package.exe", PACKAGE_DECLARING_CSS_AS_XHTML.as_bytes()),
+        ("OEBPS/package.sh", PACKAGE_DECLARING_CSS_AS_XHTML.as_bytes()),
+    ] {
+        let src = epub_with_package(name, data);
+        assert!(rebuild(&src).is_err(), "{name}: {:?}", String::from_utf8_lossy(&data[..data.len().min(20)]));
+    }
+    // 진짜 패키지면 `.dat` 확장자여도 남긴다.
+    let src = epub_with_package("OEBPS/package.dat", PACKAGE_DECLARING_CSS_AS_XHTML.as_bytes());
+    assert!(names(&rebuild(&src).unwrap().bytes).contains(&"OEBPS/package.dat".to_string()));
+}
+
 // ---- 실행: --dry-run, 적용, 휴지통 ----
 
 fn run(args: &[&str]) -> (i32, String) {
