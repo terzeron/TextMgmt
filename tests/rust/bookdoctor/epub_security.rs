@@ -339,13 +339,13 @@ fn path_traversal_is_critical_and_absolute_names_are_high() {
 
 #[test]
 fn backslash_control_reserved_and_stream_names_are_flagged() {
-    assert_eq!(severity_of(&scan_names(&["OEBPS\\a.txt"]), "ZIP_BACKSLASH_PATH"), Severity::Medium);
+    assert_eq!(severity_of(&scan_names(&["OEBPS\\a.txt"]), "ZIP_BACKSLASH_PATH"), Severity::High);
     assert_eq!(severity_of(&scan_names(&["OEBPS/a\u{1b}b.txt"]), "ZIP_CONTROL_CHAR_NAME"), Severity::Medium);
     for n in ["OEBPS/CON.txt", "OEBPS/nul", "OEBPS/Com1.html", "OEBPS/lpt9.x"] {
         assert!(has(&scan_names(&[n]), "WINDOWS_RESERVED_NAME"), "{n}");
     }
     assert!(!has(&scan_names(&["OEBPS/console.txt"]), "WINDOWS_RESERVED_NAME"));
-    assert_eq!(severity_of(&scan_names(&["OEBPS/a.xhtml:evil.exe"]), "ZIP_ALT_DATA_STREAM"), Severity::Medium);
+    assert_eq!(severity_of(&scan_names(&["OEBPS/a.xhtml:evil.exe"]), "ZIP_ALT_DATA_STREAM"), Severity::High);
     assert_eq!(severity_of(&scan_names(&[&format!("OEBPS/{}.txt", "a".repeat(300))]), "ZIP_NAME_TOO_LONG"), Severity::Low);
     assert_eq!(severity_of(&scan_names(&[&format!("OEBPS/{}.txt", "a".repeat(1_025))]), "ZIP_NAME_TOO_LONG"), Severity::Low);
 }
@@ -455,7 +455,7 @@ fn xml_external_entities_stylesheets_and_xinclude_are_flagged() {
     let r = scan_extra("OEBPS/a.xml", br#"<!DOCTYPE r SYSTEM "http://evil.example/a.dtd"><r/>"#);
     assert_eq!(severity_of(&r, "EXTERNAL_DTD"), Severity::Medium);
     let r = scan_extra("OEBPS/a.xml", br#"<!DOCTYPE r [<!ENTITY a "aaaa">]><r>&a;</r>"#);
-    assert_eq!(severity_of(&r, "ENTITY_DECLARATION"), Severity::Medium);
+    assert_eq!(severity_of(&r, "ENTITY_DECLARATION"), Severity::High);
     let r = scan_extra("OEBPS/a.xml", br#"<?xml-stylesheet type="text/xsl" href="http://evil.example/a.xsl"?><r/>"#);
     assert_eq!(severity_of(&r, "XML_STYLESHEET"), Severity::Medium);
     let r = scan_extra("OEBPS/a.xml", br#"<r xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include href="/etc/passwd" parse="text"/></r>"#);
@@ -495,7 +495,7 @@ fn opf_manifest_is_checked_for_escapes_remote_items_and_script_media_types() {
     assert_eq!(severity_of(&r, "MANIFEST_PATH_ESCAPE"), Severity::High);
     assert_eq!(severity_of(&r, "REMOTE_MANIFEST_ITEM"), Severity::Medium);
     assert_eq!(severity_of(&r, "DANGEROUS_URI_SCHEME"), Severity::High);
-    assert_eq!(severity_of(&r, "SCRIPT_MEDIA_TYPE"), Severity::Medium);
+    assert_eq!(severity_of(&r, "SCRIPT_MEDIA_TYPE"), Severity::High);
 }
 
 #[test]

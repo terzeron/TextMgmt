@@ -308,7 +308,7 @@ pub fn scan_zip_members(path: &Path, opts: &Options, report: &mut FileReport) {
             break;
         }
         if final_exts.len() > 1 {
-            report.push(Category::Security, Severity::Medium, "PACKAGE_POLYGLOT", &shown, &format!("member matches several document package formats: {}", final_exts.join(", ")));
+            report.push(Category::Security, Severity::High, "PACKAGE_POLYGLOT", &shown, &format!("member matches several document package formats: {}", final_exts.join(", ")));
         }
         // 안쪽 파일에는 남은 바이트 예산을 `--max-total-mb`로 넘긴다.
         let remaining_mb = with_state(|s| s.bytes_left / (1024 * 1024)).unwrap_or(0).max(1);

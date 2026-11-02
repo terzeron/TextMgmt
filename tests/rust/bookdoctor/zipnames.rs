@@ -27,25 +27,25 @@ fn traversal_is_critical_including_encoded_and_backslash_forms() {
     assert_eq!(got("../evil.txt"), want(&[("ZIP_PATH_TRAVERSAL", Critical)]));
     assert_eq!(got("OEBPS/../../evil.txt"), want(&[("ZIP_PATH_TRAVERSAL", Critical)]));
     assert_eq!(got("OEBPS/%2e%2e/evil.txt"), want(&[("ZIP_PATH_TRAVERSAL", Critical)]));
-    assert_eq!(got("..\\evil.txt"), want(&[("ZIP_PATH_TRAVERSAL", Critical), ("ZIP_BACKSLASH_PATH", Medium)]));
+    assert_eq!(got("..\\evil.txt"), want(&[("ZIP_PATH_TRAVERSAL", Critical), ("ZIP_BACKSLASH_PATH", High)]));
 }
 
 #[test]
 fn absolute_paths_and_drive_letters_are_high() {
     assert_eq!(got("/etc/passwd"), want(&[("ZIP_ABSOLUTE_PATH", High)]));
     assert_eq!(got("C:/x.txt"), want(&[("ZIP_ABSOLUTE_PATH", High)]));
-    assert_eq!(got("\\windows\\x"), want(&[("ZIP_ABSOLUTE_PATH", High), ("ZIP_BACKSLASH_PATH", Medium)]));
-    assert_eq!(got("c:\\x.txt"), want(&[("ZIP_ABSOLUTE_PATH", High), ("ZIP_BACKSLASH_PATH", Medium)]));
+    assert_eq!(got("\\windows\\x"), want(&[("ZIP_ABSOLUTE_PATH", High), ("ZIP_BACKSLASH_PATH", High)]));
+    assert_eq!(got("c:\\x.txt"), want(&[("ZIP_ABSOLUTE_PATH", High), ("ZIP_BACKSLASH_PATH", High)]));
 }
 
 #[test]
 fn backslash_control_reserved_and_stream_names_are_medium() {
-    assert_eq!(got("OEBPS\\a.txt"), want(&[("ZIP_BACKSLASH_PATH", Medium)]));
+    assert_eq!(got("OEBPS\\a.txt"), want(&[("ZIP_BACKSLASH_PATH", High)]));
     assert_eq!(got("OEBPS/a\u{1b}b.txt"), want(&[("ZIP_CONTROL_CHAR_NAME", Medium)]));
     for n in ["OEBPS/CON.txt", "OEBPS/nul", "OEBPS/Com1.html", "OEBPS/lpt9.x"] {
-        assert_eq!(got(n), want(&[("WINDOWS_RESERVED_NAME", Medium)]), "{n}");
+        assert_eq!(got(n), want(&[("WINDOWS_RESERVED_NAME", High)]), "{n}");
     }
-    assert_eq!(got("OEBPS/a.xhtml:evil.exe"), want(&[("ZIP_ALT_DATA_STREAM", Medium)]));
+    assert_eq!(got("OEBPS/a.xhtml:evil.exe"), want(&[("ZIP_ALT_DATA_STREAM", High)]));
 }
 
 #[test]

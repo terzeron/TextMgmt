@@ -248,7 +248,7 @@ fn a_package_that_matches_several_formats_is_scanned_by_every_analyzer() {
     assert!(has_vba_under(&r, "poly.dat!"), "docx analyzer missing: {:?} {:?}", r.findings, r.reasons);
     assert!(r.findings.iter().any(|f| f.code == "REMOTE_SCRIPT" && f.location.starts_with("poly.dat!")), "epub analyzer missing: {:?}", r.findings);
     let f = r.findings.iter().find(|f| f.code == "PACKAGE_POLYGLOT").unwrap_or_else(|| panic!("{:?}", r.findings));
-    assert_eq!(f.severity, scan_common::Severity::Medium);
+    assert_eq!(f.severity, scan_common::Severity::High);
     // 한 형식만 가진 멤버는 폴리글롯이 아니다.
     let r = scan_bytes("b.zip", &zip_bytes(&[("inner.docx", &vba_docx())]), &Options::default());
     assert!(!r.has("PACKAGE_POLYGLOT"), "{:?}", r.findings);

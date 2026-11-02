@@ -267,7 +267,7 @@ pub(super) fn check_xml_attacks(text: &str, name: &str, report: &mut FileReport)
         let severity = if XXE_LOCAL.is_match(m.as_str()) { Severity::Critical } else { Severity::High };
         push_once(report, severity, "XXE_ENTITY", &shown, "External entity declaration");
     } else if ENTITY_ANY.is_match(text) {
-        push_once(report, Severity::Medium, "ENTITY_DECLARATION", &shown, "Entity declaration (expansion risk)");
+        push_once(report, Severity::High, "ENTITY_DECLARATION", &shown, "Entity declaration (expansion risk)");
     }
     if DOCTYPE_EXTERNAL.is_match(text) {
         push_once(report, Severity::High, "EXTERNAL_DTD", &shown, "DOCTYPE references an external DTD");

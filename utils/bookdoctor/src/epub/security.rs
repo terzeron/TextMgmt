@@ -619,7 +619,7 @@ impl Scanner {
                 let sev = if XXE_LOCAL.is_match(m.as_str()) { Severity::Critical } else { Severity::High };
                 self.add(sev, "XXE_ENTITY", name, "External entity declaration");
             } else {
-                self.add(Severity::Medium, "ENTITY_DECLARATION", name, "Entity declaration (expansion risk)");
+                self.add(Severity::High, "ENTITY_DECLARATION", name, "Entity declaration (expansion risk)");
             }
         }
         if let Some(c) = DOCTYPE_EXTERNAL.captures(text) {
@@ -798,7 +798,7 @@ impl Scanner {
                 }
             }
             if SCRIPT_MEDIA_TYPES.contains(&media.as_str()) {
-                self.add(Severity::Medium, "SCRIPT_MEDIA_TYPE", name, &format!("manifest media-type {media}"));
+                self.add(Severity::High, "SCRIPT_MEDIA_TYPE", name, &format!("manifest media-type {media}"));
             }
         }
     }
