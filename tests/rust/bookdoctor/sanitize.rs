@@ -225,11 +225,30 @@ fn rebuild_cleans_markup_inside_members_and_keeps_the_text() {
 
 #[test]
 fn rebuild_refuses_what_it_cannot_rewrite_safely() {
-    // 읽을 수 없는 인코딩의 마크업은 정리했다고 말할 수 없으므로 건너뛴다.
-    let src = epub_bytes(&xhtml("<p>본문</p>"), &clean_opf(), &[("OEBPS/bad.xhtml", &[0xff, 0xfe, b'<', 0, b'p', 0, b'>', 0, 0xc3, 0x28])]);
-    let err = rebuild(&src).err().unwrap();
-    assert!(err.contains("bad.xhtml"), "{err}");
+    // 읽을 수 없는 인코딩의 마크업은 정리했다고 말할 수 없으므로 건너뛴다: 코드페이지 바이트, UTF-32, 짝이 없는 UTF-16 서로게이트.
+    let cp949: &[u8] = &[b'<', b'p', b'>', 0xb0, 0xa1, 0xb0, 0xa2];
+    let utf32: &[u8] = &[0xff, 0xfe, 0, 0, b'<', 0, 0, 0];
+    let lone_surrogate: &[u8] = &[0xff, 0xfe, b'<', 0, 0x00, 0xd8, b'p', 0];
+    for bad in [cp949, utf32, lone_surrogate] {
+        let src = epub_bytes(&xhtml("<p>본문</p>"), &clean_opf(), &[("OEBPS/bad.xhtml", bad)]);
+        let err = rebuild(&src).err().unwrap_or_else(|| panic!("{bad:?}는 거절해야 한다"));
+        assert!(err.contains("bad.xhtml"), "{err}");
+    }
     assert!(rebuild(b"not a zip").is_err());
+}
+
+#[test]
+fn utf16_markup_is_cleaned_and_written_back_as_utf16() {
+    let page: Vec<u8> = [&[0xFF, 0xFE][..], &xhtml("<p>앞</p><script>alert(1)</script><p>뒤</p>").encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>()].concat();
+    let src = epub_bytes(&xhtml("<p>본문</p>"), &clean_opf(), &[("OEBPS/u.xhtml", &page)]);
+    let plan = rebuild(&src).unwrap();
+    let mut z = zip::ZipArchive::new(Cursor::new(&plan.bytes)).unwrap();
+    let mut raw = Vec::new();
+    z.by_name("OEBPS/u.xhtml").unwrap().read_to_end(&mut raw).unwrap();
+    assert_eq!(&raw[..2], &[0xFF, 0xFE], "UTF-16LE BOM을 유지한다");
+    let units: Vec<u16> = raw[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let text = String::from_utf16(&units).unwrap();
+    assert!(text.contains("<p>앞</p>") && text.contains("<p>뒤</p>") && !text.contains("script"), "{text}");
 }
 
 #[test]
@@ -406,6 +425,62 @@ fn the_package_document_is_found_through_container_xml_not_the_extension() {
     let src = z.finish().unwrap().into_inner();
     let plan = rebuild(&src).unwrap();
     assert!(!member(&plan.bytes, "OEBPS/package.xml").contains("setup.exe"), "{}", member(&plan.bytes, "OEBPS/package.xml"));
+    verify(&src, &plan.bytes).unwrap();
+}
+
+// ---- 보안 리뷰 4차: 패키지 문서 찾기는 실패하면 닫는다 ----
+
+/// 컨테이너와 패키지 문서를 직접 지정한 EPUB. 패키지 문서 안에 실행 파일 manifest 항목이 하나 있다.
+fn epub_with_container(container: &[u8], package_name: &str) -> Vec<u8> {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    let package = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="exe" href="Misc/setup.exe" media-type="application/x-dosexec"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
+    let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let stored = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let deflated = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    z.start_file("mimetype", stored).unwrap();
+    z.write_all(b"application/epub+zip").unwrap();
+    for (name, data) in [("META-INF/container.xml", container), (package_name, package.as_bytes()), ("OEBPS/ch1.xhtml", xhtml("<p>본문</p>").as_bytes()), ("OEBPS/Misc/setup.exe", b"MZ\x90\x00more")] {
+        z.start_file(name, deflated).unwrap();
+        z.write_all(data).unwrap();
+    }
+    z.finish().unwrap().into_inner()
+}
+
+fn container_for(full_path: &str) -> String {
+    format!(r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="{full_path}" media-type="application/oebps-package+xml"/></rootfiles></container>"#)
+}
+
+#[test]
+fn rootfile_paths_are_matched_both_raw_and_percent_decoded() {
+    // 퍼센트 인코딩한 경로(`pack%20age.xml`)가 공백 있는 멤버를, 그대로의 경로가 `%`가 든 멤버를 가리킨다.
+    for (full_path, member_name) in [("OEBPS/pack%20age.xml", "OEBPS/pack age.xml"), ("OEBPS/pack%20age.xml", "OEBPS/pack%20age.xml")] {
+        let src = epub_with_container(container_for(full_path).as_bytes(), member_name);
+        let plan = rebuild(&src).unwrap_or_else(|e| panic!("{full_path} {member_name}: {e}"));
+        assert!(!member(&plan.bytes, member_name).contains("setup.exe"), "{full_path} {member_name}");
+        verify(&src, &plan.bytes).unwrap();
+    }
+}
+
+#[test]
+fn a_utf16_container_is_decoded_and_an_unreadable_one_stops_the_rebuild() {
+    let utf16: Vec<u8> = [&[0xFF, 0xFE][..], &container_for("OEBPS/package.xml").encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>()].concat();
+    let src = epub_with_container(&utf16, "OEBPS/package.xml");
+    let plan = rebuild(&src).unwrap();
+    assert!(!member(&plan.bytes, "OEBPS/package.xml").contains("setup.exe"));
+    // 해석할 수 없는 container.xml이나 가리키는 멤버가 없는 rootfile은 닫는다: 무엇이 패키지인지 모르면 고치지 않는다.
+    for bad in [&b"<container><rootfiles>"[..], b"\xff\xfe\xfa not xml", container_for("OEBPS/missing.opf").as_bytes()] {
+        let src = epub_with_container(bad, "OEBPS/package.xml");
+        assert!(rebuild(&src).is_err(), "{:?}", String::from_utf8_lossy(bad));
+    }
+}
+
+#[test]
+fn a_package_document_keeps_its_place_whatever_its_extension() {
+    let src = epub_with_container(container_for("OEBPS/package.dat").as_bytes(), "OEBPS/package.dat");
+    let plan = rebuild(&src).unwrap();
+    assert!(names(&plan.bytes).contains(&"OEBPS/package.dat".to_string()));
+    assert!(!member(&plan.bytes, "OEBPS/package.dat").contains("setup.exe"));
     verify(&src, &plan.bytes).unwrap();
 }
 

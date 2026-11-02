@@ -605,8 +605,46 @@ struct Member {
     modified: Option<zip::DateTime>,
 }
 
+/// 멤버 텍스트의 인코딩. 정리한 글을 같은 인코딩으로 되써서 원본의 인코딩 선언과 어긋나지 않게 한다.
+#[derive(Clone, Copy)]
+enum Enc {
+    Utf8,
+    Utf16 { le: bool },
+}
+
+/// UTF-8(BOM 유무)과 BOM이 있는 UTF-16을 읽는다. 그 밖(UTF-32, 다른 코드페이지)은 안전하게 정리할 수 없어 오류다.
+fn decode_enc(name: &str, data: &[u8]) -> Result<(String, Enc), String> {
+    let utf16 = |bytes: &[u8], le: bool| -> Result<(String, Enc), String> {
+        let units: Vec<u16> = bytes.chunks_exact(2).map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) }).collect();
+        String::from_utf16(&units).map(|t| (t, Enc::Utf16 { le })).map_err(|_| format!("{name}: UTF-16이 올바르지 않아 안전하게 정리할 수 없다"))
+    };
+    if data.starts_with(b"\xFF\xFE\x00\x00") || data.starts_with(b"\x00\x00\xFE\xFF") {
+        return Err(format!("{name}: UTF-32라 안전하게 정리할 수 없다"));
+    }
+    if let Some(rest) = data.strip_prefix(b"\xFF\xFE") {
+        return utf16(rest, true);
+    }
+    if let Some(rest) = data.strip_prefix(b"\xFE\xFF") {
+        return utf16(rest, false);
+    }
+    String::from_utf8(data.to_vec()).map(|t| (t, Enc::Utf8)).map_err(|_| format!("{name}: UTF-8이 아니라 안전하게 정리할 수 없다"))
+}
+
+fn encode_enc(text: &str, enc: Enc) -> Vec<u8> {
+    match enc {
+        Enc::Utf8 => text.as_bytes().to_vec(),
+        Enc::Utf16 { le } => {
+            let mut out = if le { vec![0xFF, 0xFE] } else { vec![0xFE, 0xFF] };
+            for unit in text.encode_utf16() {
+                out.extend(if le { unit.to_le_bytes() } else { unit.to_be_bytes() });
+            }
+            out
+        }
+    }
+}
+
 fn decode(name: &str, data: &[u8]) -> Result<String, String> {
-    String::from_utf8(data.to_vec()).map_err(|_| format!("{name}: UTF-8이 아니라 안전하게 정리할 수 없다"))
+    decode_enc(name, data).map(|(t, _)| t)
 }
 
 fn read_members(bytes: &[u8]) -> Result<Vec<Member>, String> {
@@ -688,9 +726,11 @@ fn looks_like_markup(data: &[u8]) -> bool {
 
 static PACKAGE_ROOT: LazyLock<Regex> = LazyLock::new(|| re(r"(?is)\A\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--.*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)?<(?:\w+:)?package\b"));
 
-/// 패키지 문서(OPF) 이름들: `.opf` 확장자, `META-INF/container.xml`의 rootfile `full-path`, 루트 요소가 `<package>`인 XML.
-/// 확장자만 믿으면 다른 이름의 패키지 문서가 manifest 정리와 검증에서 빠진다.
-fn package_names(members: &[Member]) -> BTreeSet<String> {
+/// 패키지 문서(OPF) 이름들: `.opf` 확장자, `META-INF/container.xml`의 rootfile `full-path`(그대로와 퍼센트 디코딩한 두 형태 모두),
+/// 루트 요소가 `<package>`인 XML. 확장자만 믿으면 다른 이름의 패키지 문서가 manifest 정리와 검증에서 빠진다.
+/// `container.xml`이 있는데 해석할 수 없거나 가리키는 멤버가 없으면 오류다: 무엇이 패키지인지 모르면 고치지 않는다.
+fn package_names(members: &[Member]) -> Result<BTreeSet<String>, String> {
+    let existing: BTreeSet<&str> = members.iter().map(|m| m.name.as_str()).collect();
     let mut set = BTreeSet::new();
     for m in members {
         let ext = ext_of(&m.name);
@@ -698,24 +738,26 @@ fn package_names(members: &[Member]) -> BTreeSet<String> {
             set.insert(m.name.clone());
         }
         if m.name == "META-INF/container.xml" {
-            if let Ok(text) = std::str::from_utf8(&m.data)
-                && let Ok(doc) = roxmltree::Document::parse_with_options(text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
-            {
-                for root in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "rootfile") {
-                    set.insert(posix_normpath(&unquote(root.attribute("full-path").unwrap_or(""))));
+            let text = decode(&m.name, &m.data).map_err(|e| format!("container.xml의 인코딩을 읽을 수 없다: {e}"))?;
+            let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("META-INF/container.xml을 해석할 수 없다: {e}"))?;
+            for root in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "rootfile") {
+                let raw = root.attribute("full-path").unwrap_or("");
+                let found: Vec<String> = [posix_normpath(raw), posix_normpath(&unquote(raw))].into_iter().filter(|p| existing.contains(p.as_str())).collect();
+                if found.is_empty() {
+                    return Err(format!("container.xml이 가리키는 패키지 문서가 없다: {raw}"));
                 }
+                set.extend(found);
             }
         } else if (XML_EXTS.contains(&ext.as_str()) || ext.is_empty() || ext == "txt") && PACKAGE_ROOT.is_match(&String::from_utf8_lossy(&m.data[..m.data.len().min(4096)])) {
             set.insert(m.name.clone());
         }
     }
-    set
+    Ok(set)
 }
 
 /// manifest가 선언한 형식. 멤버 경로(OPF 기준으로 푼 것) → 소문자 media-type.
-fn declared_media(members: &[Member]) -> BTreeMap<String, String> {
+fn declared_media(members: &[Member], packages: &BTreeSet<String>) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
-    let packages = package_names(members);
     for m in members.iter().filter(|m| packages.contains(&m.name)) {
         let Ok(text) = String::from_utf8(m.data.clone()) else { continue };
         let Ok(doc) = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }) else { continue };
@@ -728,12 +770,16 @@ fn declared_media(members: &[Member]) -> BTreeMap<String, String> {
     map
 }
 
-fn classify(name: &str, data: &[u8], media: Option<&str>) -> Option<&'static str> {
+fn classify(name: &str, data: &[u8], media: Option<&str>, is_package: bool) -> Option<&'static str> {
     if crate::zipnames::check(name.trim_start_matches('\0')).iter().any(|f| f.severity >= Severity::High) {
         return Some("위험한 멤버 이름");
     }
     if media.is_some_and(is_script_media) {
         return Some("스크립트 형식으로 선언됨");
+    }
+    // 컨테이너가 가리키는 패키지 문서는 확장자와 무관하게 남긴다(마크업으로 정리한다).
+    if is_package {
+        return None;
     }
     let ext = ext_of(name);
     let passive = PASSIVE_EXTS.contains(&ext.as_str());
@@ -785,12 +831,12 @@ fn rewrite_opf(text: &str, opf_name: &str, removed: &BTreeSet<String>, changes: 
 /// EPUB 바이트를 허용 목록으로 다시 만든다.
 pub fn rebuild(src: &[u8]) -> Result<Plan, String> {
     let members = read_members(src)?;
-    let media = declared_media(&members);
-    let packages = package_names(&members);
+    let packages = package_names(&members)?;
+    let media = declared_media(&members, &packages);
     let mut removed: Vec<(String, &'static str)> = Vec::new();
     let mut kept: Vec<Member> = Vec::new();
     for m in members {
-        match classify(&m.name, &m.data, media.get(m.name.trim_start_matches('\0')).map(String::as_str)) {
+        match classify(&m.name, &m.data, media.get(m.name.trim_start_matches('\0')).map(String::as_str), packages.contains(&m.name)) {
             Some(reason) => removed.push((m.name.trim_start_matches('\0').to_owned(), reason)),
             None if undecodable(&m.name) => return Err(format!("{}: 이름이 UTF-8이 아니라 다시 쓸 수 없다", m.name.trim_start_matches('\0'))),
             None => kept.push(m),
@@ -808,7 +854,7 @@ pub fn rebuild(src: &[u8]) -> Result<Plan, String> {
         if !markup && !css {
             continue;
         }
-        let original = decode(&m.name, &m.data)?;
+        let (original, enc) = decode_enc(&m.name, &m.data)?;
         let (mut text, mut changes) = if markup { strip_markup(&original, ext == "svg") } else { (original.clone(), Changes::default()) };
         if css {
             let cleaned = strip_css(&text);
@@ -825,9 +871,10 @@ pub fn rebuild(src: &[u8]) -> Result<Plan, String> {
         } else {
             text
         };
-        if text.as_bytes() != m.data.as_slice() {
+        let encoded = encode_enc(&text, enc);
+        if encoded != m.data {
             edited.push((m.name.clone(), changes.summary()));
-            m.data = text.into_bytes();
+            m.data = encoded;
         }
     }
     // mimetype은 항상 첫 멤버이고 압축하지 않는다.
@@ -865,7 +912,7 @@ fn is_subsequence(needle: &str, hay: &str) -> bool {
 fn dangling(members: &[Member]) -> Result<(usize, usize), String> {
     let names: BTreeSet<&str> = members.iter().map(|m| m.name.as_str()).collect();
     let (mut missing, mut bad_spine) = (0, 0);
-    let packages = package_names(members);
+    let packages = package_names(members)?;
     for m in members.iter().filter(|m| packages.contains(&m.name)) {
         let text = decode(&m.name, &m.data)?;
         let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("{}: OPF를 해석할 수 없다: {e}", m.name))?;
