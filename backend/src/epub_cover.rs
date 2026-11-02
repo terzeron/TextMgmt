@@ -573,6 +573,8 @@ pub(crate) fn find_cover_member_in<R: Read + Seek>(archive: &mut ZipArchive<R>, 
         .iter()
         .find(|el| el.attr_or("properties", "").split_whitespace().any(|p| p == "cover-image"))
         .or_else(|| if meta_cover_id.is_empty() { None } else { image_items.iter().find(|el| el.attr("id") == Some(meta_cover_id.as_str())) })
+        // 파일명이 정확히 cover인 이미지를 먼저 본다. 부분 일치만 쓰면 incover(속표지)가 OPF 순서상 앞서 표지로 뽑힌다.
+        .or_else(|| image_items.iter().find(|el| is_exact_cover_name(el.attr_or("href", ""))))
         .or_else(|| image_items.iter().find(|el| id_href(el).contains("cover")));
     let opf_dir = pathx::dirname(&opf_path);
     if let Some(chosen) = chosen {
@@ -598,6 +600,12 @@ pub(crate) fn find_cover_member_in<R: Read + Seek>(archive: &mut ZipArchive<R>, 
         }
     }
     None
+}
+
+/// `href`의 파일명(확장자 제외)이 대소문자 무시하고 정확히 `cover`인지 본다.
+fn is_exact_cover_name(href: &str) -> bool {
+    let file = href.rsplit('/').next().unwrap_or("");
+    file.rsplit_once('.').map_or(file, |(stem, _)| stem).eq_ignore_ascii_case("cover")
 }
 
 /// 쪽 XHTML(`page_href`, OPF 디렉터리 기준)이 처음 참조하는 이미지의 ZIP 멤버 경로. 쪽이나 이미지가 ZIP에 없거나 쪽이 너무 크면 `None`이다.
