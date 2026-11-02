@@ -332,3 +332,18 @@ fn a_deletion_candidate_is_reported_and_left_in_place() {
     assert!(out.contains("DELETE_CANDIDATE"), "{out}");
     assert_eq!(fs::read(&p).unwrap(), before);
 }
+
+#[test]
+fn a_file_with_security_findings_is_skipped_and_left_for_sanitize() {
+    let d = tempfile::tempdir().unwrap();
+    let trash = d.path().join("0_trash");
+    let p = d.path().join("evil.epub");
+    // 깨진 마크업(XHTML_PARSE_FAILED)과 스크립트가 함께 있다. 수리하면 스크립트가 되살아날 수 있으므로 먼저 --sanitize로 정리해야 한다.
+    epub_with_files(&p, &clean_opf(), "<html><head></head><body><p title=\"a><script>alert(1)</script></p><br></body></html>", &[]);
+    let before = fs::read(&p).unwrap();
+    let (code, out) = run(&["--fix-xhtml", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("SKIP") && out.contains("--sanitize"), "{out}");
+    assert_eq!(fs::read(&p).unwrap(), before);
+    assert!(!trash.exists() || fs::read_dir(&trash).unwrap().count() == 0);
+}

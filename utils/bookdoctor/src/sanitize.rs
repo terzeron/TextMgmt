@@ -1050,7 +1050,7 @@ pub(crate) fn show(text: &str) -> String {
     scan_common::text::sanitize_display(text, usize::MAX, None)
 }
 
-fn has_serious_security(report: &scan_common::FileReport) -> bool {
+pub(crate) fn has_serious_security(report: &scan_common::FileReport) -> bool {
     report.findings.iter().any(|f| f.category == Category::Security && f.severity >= Severity::High)
 }
 

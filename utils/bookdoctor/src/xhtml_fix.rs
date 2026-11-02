@@ -20,7 +20,7 @@ use scraper::{Html, Node};
 
 use crate::cli::Options;
 use crate::epub::render::xhtml_defect;
-use crate::sanitize::{HTML_EXTS, Member, apply, create_private_temp, dangling, decode, ext_of, is_subsequence, package_names, package_text, read_members, read_members_lenient, show, visible_text, write_members};
+use crate::sanitize::{HTML_EXTS, Member, apply, create_private_temp, dangling, decode, ext_of, has_serious_security, is_subsequence, package_names, package_text, read_members, read_members_lenient, show, visible_text, write_members};
 use crate::scan::scan_file;
 
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
@@ -490,11 +490,15 @@ fn has_defect(report: &scan_common::FileReport) -> bool {
     report.findings.iter().any(|f| matches!(f.code.to_string().as_str(), "XHTML_PARSE_FAILED" | "HEAD_MISSING"))
 }
 
-/// 고친 결과를 임시 파일에 써서 다시 검사한다. 본문 결함이 남으면 오류다.
+/// 고친 결과를 임시 파일에 써서 다시 검사한다. 본문 결함이 남거나 보안 지표(HIGH 이상)가 있으면 오류다.
+/// 수리는 마크업을 읽는 방식을 바꾼다. 닫히지 않은 따옴표에 가려져 있던 `<script>` 같은 것이 살아날 수 있으므로 결과를 다시 검사한다.
 fn rescan(bytes: &[u8], opts: &Options) -> Result<(), String> {
     let tmp = create_private_temp(bytes).map_err(|e| e.to_string())?;
     let report = scan_file(&tmp, opts);
     let _ = fs::remove_file(&tmp);
+    if has_serious_security(&report) {
+        return Err("수리한 결과에 보안 지표(HIGH 이상)가 있다. 먼저 --sanitize로 정리한다".to_owned());
+    }
     if has_defect(&report) { Err("재검사에서 본문 결함이 남았다".to_owned()) } else { Ok(()) }
 }
 
@@ -505,8 +509,14 @@ pub fn run(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
     let (mut done, mut untouched, mut candidates, mut skipped, mut failed) = (0usize, 0usize, 0usize, 0usize, 0usize);
     for path in &paths {
         let shown = show(&path.to_string_lossy());
-        if !has_defect(&scan_file(path, &scan_opts)) {
+        let report = scan_file(path, &scan_opts);
+        if !has_defect(&report) {
             untouched += 1;
+            continue;
+        }
+        if has_serious_security(&report) {
+            writeln!(out, "SKIP {shown}: 보안 지표(HIGH 이상)가 있다. 먼저 --sanitize로 정리한다")?;
+            skipped += 1;
             continue;
         }
         let planned = fs::read(path).map_err(|e| e.to_string()).and_then(|src| rebuild(&src).map(|verdict| (src, verdict)));
