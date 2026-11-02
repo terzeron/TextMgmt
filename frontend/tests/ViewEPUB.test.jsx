@@ -1170,6 +1170,27 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
       expect(lastRendition.prev).toHaveBeenCalledTimes(1);
     });
 
+    it.each([false, true])("뷰어 루트의 여백(host 밖)에서 시작한 스와이프도 넘긴다 (preview=%s)", async (preview) => {
+      const { container } = render(<ViewEPUB bookId={1} preview={preview} />);
+      await openBook();
+      const root = container.querySelector(".epub-viewer");
+      expect(root.contains(screen.getByTestId("epub-host"))).toBe(true);
+      emit("touchstart", [touch(250)], root);
+      const move = emit("touchmove", [touch(180, 110)], root);
+      expect(move.defaultPrevented).toBe(true);
+      emit("touchend", [], root, [touch(100, 110)]);
+      expect(lastRendition.next).toHaveBeenCalledTimes(1);
+      emit("touchstart", [touch(100)], root);
+      emit("touchend", [], root, [touch(250)]);
+      expect(lastRendition.prev).toHaveBeenCalledTimes(1);
+    });
+
+    it("뷰어 루트도 가로 팬을 막는 touch-action: pan-y를 가진다", async () => {
+      const { container } = render(<ViewEPUB bookId={1} />);
+      await openBook();
+      expect(container.querySelector(".epub-viewer").style.touchAction).toBe("pan-y");
+    });
+
     it("표지 위 스와이프는 본문을 건너뛰지 않고 표지만 닫는다", async () => {
       mockCoverUrl = "blob:cover";
       render(<ViewEPUB bookId={1} />);

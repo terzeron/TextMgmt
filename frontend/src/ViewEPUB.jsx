@@ -808,10 +808,11 @@ export default function ViewEPUB({
 
   // epub.js가 전달하는 터치는 passive라 기본 스크롤을 막을 수 없다.
   // iframe 문서에서 직접 받아 가로 팬을 막고, 세로 스크롤은 허용한다.
+  // host가 아니라 뷰어 루트에 건다. 프레임 여백과 host 밖 요소 위에서 시작한 스와이프도 넘어가야 한다.
   useEffect(() => {
     const rendition = renditionRef.current;
-    const host = hostRef.current;
-    if (!rendition || !host) return;
+    const root = viewerRef.current;
+    if (!rendition || !root) return;
     let gesture = null;
     const reset = () => { gesture = null; };
     const onStart = (event) => {
@@ -882,13 +883,13 @@ export default function ViewEPUB({
       onRemoved(null, view);
       contentCleanups.set(view, bind(doc));
     };
-    const unbindHost = bind(host);
+    const unbindRoot = bind(root);
     rendition.on("rendered", onRendered);
     rendition.on("removed", onRemoved);
     for (const view of rendition.manager?.views?.all?.() || []) onRendered(null, view);
     return () => {
       reset();
-      unbindHost();
+      unbindRoot();
       for (const cleanup of contentCleanups.values()) cleanup();
       rendition.off("rendered", onRendered);
       rendition.off("removed", onRemoved);
@@ -1013,6 +1014,7 @@ export default function ViewEPUB({
         textAlign: "center",
         position: "relative",
         overflow: "hidden",
+        touchAction: "pan-y",
       }}
     >
       {isLoading && (
