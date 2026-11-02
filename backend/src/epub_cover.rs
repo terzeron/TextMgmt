@@ -10,6 +10,7 @@
 //! - XML 문자 인코딩은 UTF-8과 UTF-16 BOM만 읽는다(`encoding=` 선언을 따르지 않는다).
 //! - 목록 검사에서 `flock(LOCK_SH)`는 실제 파일 시스템이면 공유 잠금이고, `with_fs`로 대역을 넣으면 `FsOps::lock_exclusive`를 쓴다(공유 잠금 seam이 없다).
 
+use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek};
@@ -592,24 +593,59 @@ pub(crate) fn find_cover_member_in<R: Read + Seek>(archive: &mut ZipArchive<R>, 
             continue;
         }
         seen.push(page_href.clone());
-        let Some(page_member) = existing_member_path(archive, &opf_dir, &page_href) else { continue };
-        let size = file_size(&page_member).or_else(|| entry_size(archive, &page_member).ok());
-        if size.is_none_or(|s| s > MAX_XML_BYTES as u64) {
-            continue;
-        }
-        let Some(page) = read_entry(archive, &page_member).ok().and_then(|data| xml::parse_lenient(&data)) else { continue };
-        for el in page.descendants() {
-            let href = match el.name.as_str() {
-                "img" => el.attr_or("src", "").to_string(),
-                "image" => el.attr("href").filter(|h| !h.is_empty()).or_else(|| el.attr_ns(xml::XLINK_NS, "href")).unwrap_or("").to_string(),
-                _ => continue,
-            };
-            if let Some(member) = existing_member_path(archive, &pathx::dirname(&page_member), &href) {
-                return Some(member);
-            }
+        if let Some(member) = first_image_in_page(archive, &opf_dir, &page_href, file_size) {
+            return Some(member);
         }
     }
     None
+}
+
+/// 쪽 XHTML(`page_href`, OPF 디렉터리 기준)이 처음 참조하는 이미지의 ZIP 멤버 경로. 쪽이나 이미지가 ZIP에 없거나 쪽이 너무 크면 `None`이다.
+fn first_image_in_page<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_dir: &str, page_href: &str, file_size: &dyn Fn(&str) -> Option<u64>) -> Option<String> {
+    let page_member = existing_member_path(archive, opf_dir, page_href)?;
+    let size = file_size(&page_member).or_else(|| entry_size(archive, &page_member).ok());
+    if size.is_none_or(|s| s > MAX_XML_BYTES as u64) {
+        return None;
+    }
+    let page = read_entry(archive, &page_member).ok().and_then(|data| xml::parse_lenient(&data))?;
+    for el in page.descendants() {
+        let href = match el.name.as_str() {
+            "img" => el.attr_or("src", "").to_string(),
+            "image" => el.attr("href").filter(|h| !h.is_empty()).or_else(|| el.attr_ns(xml::XLINK_NS, "href")).unwrap_or("").to_string(),
+            _ => continue,
+        };
+        if let Some(member) = existing_member_path(archive, &pathx::dirname(&page_member), &href) {
+            return Some(member);
+        }
+    }
+    None
+}
+
+/// 명시한 표지가 없는 책의 썸네일 대체 표지를 찾는 spine 앞쪽 쪽 수. 이미지가 없는 긴 본문을 매번 다 읽지 않게 막는다.
+const FALLBACK_COVER_PAGES: usize = 5;
+
+/// 읽는 순서(spine)로 앞쪽 `FALLBACK_COVER_PAGES`쪽 안에서 처음 참조되는 이미지의 ZIP 멤버 경로.
+///
+/// 썸네일에만 쓴다. `find_cover_member_in`은 건드리지 않으므로 `has_cover`와 표지 삭제·교체는 명시한 표지만 본다.
+fn find_first_spine_image<R: Read + Seek>(archive: &mut ZipArchive<R>, hooks: &EpubCoverHooks) -> Option<String> {
+    let opf_path = resolve_opf_path(archive, hooks);
+    if opf_path.is_empty() {
+        return None;
+    }
+    let opf = xml::parse_lenient(&read_entry(archive, &opf_path).ok()?)?;
+    let mut pages: HashMap<&str, &str> = HashMap::new();
+    let mut spine_ids: Vec<&str> = Vec::new();
+    for element in opf.descendants() {
+        match element.name.as_str() {
+            "item" if element.attr_or("media-type", "") == "application/xhtml+xml" => {
+                pages.insert(element.attr_or("id", ""), element.attr_or("href", ""));
+            }
+            "itemref" => spine_ids.push(element.attr_or("idref", "")),
+            _ => {}
+        }
+    }
+    let opf_dir = pathx::dirname(&opf_path);
+    spine_ids.into_iter().filter_map(|id| pages.get(id).copied()).take(FALLBACK_COVER_PAGES).find_map(|href| first_image_in_page(archive, &opf_dir, href, &|_| None))
 }
 
 /// `member_path`에 더해 ZIP에 실제로 있는 멤버만 돌려준다.
@@ -618,7 +654,8 @@ fn existing_member_path<R: Read + Seek>(archive: &ZipArchive<R>, base: &str, hre
     (!member.is_empty() && has_entry(archive, &member)).then_some(member)
 }
 
-/// EPUB 표지 이미지를 `width`(150 또는 300, 그 밖에는 300) 안에 들어가는 JPEG 썸네일로 만든다. 표지가 없으면 `None`이다.
+/// EPUB 표지 이미지를 `width`(150 또는 300, 그 밖에는 300) 안에 들어가는 JPEG 썸네일로 만든다.
+/// 명시한 표지가 없으면 spine 앞쪽에서 처음 참조되는 이미지를 쓰고, 그것도 없으면 `None`이다.
 pub fn extract_epub_thumbnail(path: &Path, width: Option<u32>) -> Option<Vec<u8>> {
     extract_epub_thumbnail_with(path, width, &EpubCoverHooks::default())
 }
@@ -629,7 +666,7 @@ pub fn extract_epub_thumbnail_with(path: &Path, width: Option<u32>, hooks: &Epub
     let width = if matches!(width, Some(150 | 300)) { width.unwrap_or(300) } else { 300 };
     let limits = hooks.limits();
     let mut archive = ZipArchive::new(File::open(path).ok()?).ok()?;
-    let member = find_epub_cover_member(&mut archive)?;
+    let member = find_epub_cover_member(&mut archive).or_else(|| find_first_spine_image(&mut archive, hooks))?;
     if entry_size(&mut archive, &member).ok()? > limits.max_image_bytes as u64 {
         return None;
     }
