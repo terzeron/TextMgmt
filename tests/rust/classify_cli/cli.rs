@@ -271,12 +271,12 @@ fn reband_explains_when_the_model_beats_stores_in_every_band() {
 
 fn model_and_corpus(dir: &TempDir, count: usize) -> (PathBuf, PathBuf) {
     let path = dir.path().join("model");
-    let model = backend::classifier::model::CategoryModel::load_dir(&fixture()).unwrap();
+    let model = classifier::model::CategoryModel::load_dir(&fixture()).unwrap();
     model.save(Some(&path)).unwrap();
     let docs: Vec<Value> =
         (0..count).map(|i| json!({"id":i.to_string(),"cat":"3_무협","text":"무림맹 장문인 내공 운기조식 화산파 검법 강호 협객","name":format!("무협_{i}.txt"),"type":"txt"})).collect();
     let corpus = dir.path().join("corpus.jsonl");
-    backend::classifier::corpus::write_jsonl(&docs, &corpus).unwrap();
+    classifier::corpus::write_jsonl(&docs, &corpus).unwrap();
     fs::write(classify_cli::holdout_manifest_path(&path), json!({"document_keys":docs.iter().map(|d| d["id"].clone()).collect::<Vec<_>>()} ).to_string()).unwrap();
     (path, corpus)
 }
@@ -299,7 +299,7 @@ fn evaluate_and_calibration_use_saved_holdout_and_dry_run_preserves_model() {
     assert_eq!(fs::read(model.join("model.json")).unwrap(), before);
     args.pop();
     assert_eq!(run(&args, &Deps::system()).0, 0);
-    let loaded = backend::classifier::model::CategoryModel::load_dir(&model).unwrap();
+    let loaded = classifier::model::CategoryModel::load_dir(&model).unwrap();
     assert_eq!(loaded.meta["confidence_calibration"]["n"], 240);
 }
 
@@ -333,7 +333,7 @@ fn reclassify_defaults_to_the_model_confidence_threshold() {
     fs::write(source.join("무림맹_장문인.txt"), "무림맹 장문인 내공 운기조식 화산파 검법 강호 협객").unwrap();
 
     let model_path = fixture();
-    let model = backend::classifier::model::CategoryModel::load_dir(&model_path).unwrap();
+    let model = classifier::model::CategoryModel::load_dir(&model_path).unwrap();
     let common = ["reclassify", "3_무협", "--library-root", dir.path().to_str().unwrap(), "--model", model_path.to_str().unwrap(), "--no-es"];
     let (code, default_output, err) = run(&common, &Deps::system());
     assert_eq!(code, 0, "{err}");
@@ -455,11 +455,11 @@ fn reband_skips_bands_without_rows() {
 }
 
 struct CorpusEs;
-impl backend::es_manager::EsTransport for CorpusEs {
+impl es_client::transport::EsTransport for CorpusEs {
     fn index_name(&self) -> &str {
         "default-index"
     }
-    fn call(&self, op: &str, kwargs: &Value) -> Result<Value, backend::es_manager::EsError> {
+    fn call(&self, op: &str, kwargs: &Value) -> Result<Value, es_client::EsError> {
         assert_eq!(op, "search");
         assert_eq!(kwargs["index"], "chosen-index");
         Ok(json!({"hits":{"hits":[
@@ -474,11 +474,11 @@ impl backend::es_manager::EsTransport for CorpusEs {
 fn collect_honors_index_label_pattern_and_prefixes_and_writes_corpus() {
     let dir = TempDir::new().unwrap();
     let out = dir.path().join("corpus.jsonl");
-    let config = backend::classifier::config::merge_config(&backend::classifier::config::default_config(), &json!({"corpus":{"label_pattern":"^custom_"}}));
+    let config = classifier::config::merge_config(&classifier::config::default_config(), &json!({"corpus":{"label_pattern":"^custom_"}}));
     let deps = Deps::system().with_es(Arc::new(CorpusEs)).with_config(config);
     let (code, printed, err) = run(&["collect", "--out", out.to_str().unwrap(), "--index", "chosen-index", "--min-chars", "1", "--exclude-prefix", "custom_skip", "--with-publisher"], &deps);
     assert_eq!(code, 0, "{err}");
-    let docs = backend::classifier::corpus::read_jsonl(&out).unwrap();
+    let docs = classifier::corpus::read_jsonl(&out).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0]["cat"], "custom_cat");
     assert!(printed.contains("제외 2건") && printed.contains("publisher:"));
@@ -488,13 +488,13 @@ fn collect_honors_index_label_pattern_and_prefixes_and_writes_corpus() {
 fn collect_supports_python_lookahead_label_patterns() {
     let dir = TempDir::new().unwrap();
     let out = dir.path().join("corpus.jsonl");
-    let config = backend::classifier::config::merge_config(&backend::classifier::config::default_config(), &json!({"corpus":{"label_pattern":"^[1-9]_(?=.*무협)"}}));
+    let config = classifier::config::merge_config(&classifier::config::default_config(), &json!({"corpus":{"label_pattern":"^[1-9]_(?=.*무협)"}}));
     let deps = Deps::system().with_es(Arc::new(CorpusEs)).with_config(config);
 
     let (code, _, err) = run(&["collect", "--out", out.to_str().unwrap(), "--index", "chosen-index", "--min-chars", "1", "--exclude-prefix", "custom_skip"], &deps);
 
     assert_eq!(code, 0, "Python `re` accepts configured lookahead patterns: {err}");
-    let docs = backend::classifier::corpus::read_jsonl(&out).unwrap();
+    let docs = classifier::corpus::read_jsonl(&out).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0]["cat"], "3_무협");
 }
@@ -503,12 +503,12 @@ struct StreamingCollectEs {
     output: std::path::PathBuf,
 }
 
-impl backend::es_manager::EsTransport for StreamingCollectEs {
+impl es_client::transport::EsTransport for StreamingCollectEs {
     fn index_name(&self) -> &str {
         "streaming"
     }
 
-    fn call(&self, op: &str, _: &Value) -> Result<Value, backend::es_manager::EsError> {
+    fn call(&self, op: &str, _: &Value) -> Result<Value, es_client::EsError> {
         match op {
             "search" => Ok(json!({"_scroll_id":"page-1", "hits":{"hits":[
                 {"_id":"1", "_source":{"category":"2_소설한국", "summary":"본문", "file_path":"2_소설한국/a.txt", "file_type":"txt"}}
@@ -533,17 +533,17 @@ fn collect_streams_jsonl_instead_of_retaining_all_documents() {
     let (code, _, err) = run(&["collect", "--out", out.to_str().unwrap(), "--min-chars", "1"], &deps);
 
     assert_eq!(code, 0, "{err}");
-    assert_eq!(backend::classifier::corpus::read_jsonl(&out).unwrap().len(), 1);
+    assert_eq!(classifier::corpus::read_jsonl(&out).unwrap().len(), 1);
 }
 
 struct PublisherCollectEs;
 
-impl backend::es_manager::EsTransport for PublisherCollectEs {
+impl es_client::transport::EsTransport for PublisherCollectEs {
     fn index_name(&self) -> &str {
         "publisher-collect"
     }
 
-    fn call(&self, op: &str, _: &Value) -> Result<Value, backend::es_manager::EsError> {
+    fn call(&self, op: &str, _: &Value) -> Result<Value, es_client::EsError> {
         assert_eq!(op, "search");
         Ok(json!({"hits":{"hits":[
             {"_id":"epub-1", "_source":{"category":"3_무협", "summary":"본문", "file_path":"3_무협/missing.epub", "file_type":"epub"}}
@@ -563,22 +563,22 @@ fn collect_with_publisher_saves_and_reuses_the_adjacent_cache() {
     assert_eq!(code, 0, "{err}");
     assert!(first.contains("publisher: 새로 읽음 1건"), "{first}");
     assert!(cache.exists());
-    assert_eq!(backend::classifier::corpus::read_jsonl(&out).unwrap()[0]["publisher"], "");
+    assert_eq!(classifier::corpus::read_jsonl(&out).unwrap()[0]["publisher"], "");
 
     let (code, second, err) = run(&args, &deps);
     assert_eq!(code, 0, "{err}");
     assert!(second.contains("publisher: 새로 읽음 0건"), "{second}");
-    assert_eq!(backend::classifier::corpus::read_jsonl(&out).unwrap()[0]["publisher"], "");
+    assert_eq!(classifier::corpus::read_jsonl(&out).unwrap()[0]["publisher"], "");
 }
 
 struct TiedCategoryEs;
 
-impl backend::es_manager::EsTransport for TiedCategoryEs {
+impl es_client::transport::EsTransport for TiedCategoryEs {
     fn index_name(&self) -> &str {
         "tied-categories"
     }
 
-    fn call(&self, op: &str, _: &Value) -> Result<Value, backend::es_manager::EsError> {
+    fn call(&self, op: &str, _: &Value) -> Result<Value, es_client::EsError> {
         assert_eq!(op, "search");
         Ok(json!({"hits":{"hits":[
             {"_id":"1", "_source":{"category":"2_나중", "summary":"본문", "file_path":"2_나중/a.txt", "file_type":"txt"}},
@@ -603,12 +603,12 @@ fn collect_keeps_first_seen_order_for_equal_category_counts() {
 
 struct ManyCategoriesEs;
 
-impl backend::es_manager::EsTransport for ManyCategoriesEs {
+impl es_client::transport::EsTransport for ManyCategoriesEs {
     fn index_name(&self) -> &str {
         "many-categories"
     }
 
-    fn call(&self, op: &str, _: &Value) -> Result<Value, backend::es_manager::EsError> {
+    fn call(&self, op: &str, _: &Value) -> Result<Value, es_client::EsError> {
         assert_eq!(op, "search");
         let hits: Vec<_> = (0..12)
             .map(|n| {
@@ -675,14 +675,14 @@ fn train_runs_in_rust_and_writes_model_and_holdout_manifest() {
     assert!(report.contains("Rust 모델 저장"));
     assert!(report.contains(&format!("설정 저장: {}", out.join("config.json").display())), "{report}");
     assert!(out.join("config.json").is_file());
-    let model = backend::classifier::model::CategoryModel::load_dir(&out).unwrap();
+    let model = classifier::model::CategoryModel::load_dir(&out).unwrap();
     assert_eq!(model.classes.len(), 2);
     assert_eq!(model.config["model"]["n_jobs"], 1);
-    let original_docs = backend::classifier::corpus::read_jsonl(&corpus).unwrap();
-    let (expected_model, expected_report) = backend::classifier::training::train(&mut original_docs.clone(), &model.config, backend::classifier::training::TrainOptions::default()).unwrap();
+    let original_docs = classifier::corpus::read_jsonl(&corpus).unwrap();
+    let (expected_model, expected_report) = classifier::training::train(&mut original_docs.clone(), &model.config, classifier::training::TrainOptions::default()).unwrap();
     assert_eq!(expected_model.classes, model.classes);
     assert_eq!(model.meta["holdout"], expected_report);
-    assert!(!classify_cli::load_manifest_holdout(&backend::classifier::corpus::read_jsonl(&corpus).unwrap(), &classify_cli::holdout_manifest_path(&out)).unwrap().is_empty());
+    assert!(!classify_cli::load_manifest_holdout(&classifier::corpus::read_jsonl(&corpus).unwrap(), &classify_cli::holdout_manifest_path(&out)).unwrap().is_empty());
 }
 
 #[test]
@@ -697,8 +697,8 @@ fn class_weight_none_keeps_the_existing_config_value() {
         }
     }
     fs::write(&corpus, rows).unwrap();
-    let cfg = backend::classifier::config::merge_config(
-        &backend::classifier::config::default_config(),
+    let cfg = classifier::config::merge_config(
+        &classifier::config::default_config(),
         &json!({"corpus":{"min_per_category":2},"model":{"class_weight":"balanced","n_jobs":1},"fields":{"body_word":{"min_df":1},"body_char":{"enabled":false}}}),
     );
     let deps = Deps::system().with_config(cfg);
@@ -721,8 +721,8 @@ fn last_char_ngram_option_wins() {
         }
     }
     fs::write(&corpus, rows).unwrap();
-    let cfg = backend::classifier::config::merge_config(
-        &backend::classifier::config::default_config(),
+    let cfg = classifier::config::merge_config(
+        &classifier::config::default_config(),
         &json!({"corpus":{"min_per_category":2},"model":{"n_jobs":1},"fields":{"body_word":{"min_df":1},"body_char":{"enabled":true,"min_df":1,"max_features":100}}}),
     );
     let deps = Deps::system().with_config(cfg);
@@ -745,8 +745,8 @@ fn body_feature_limits_apply_to_both_text_fields() {
         }
     }
     fs::write(&corpus, rows).unwrap();
-    let cfg = backend::classifier::config::merge_config(
-        &backend::classifier::config::default_config(),
+    let cfg = classifier::config::merge_config(
+        &classifier::config::default_config(),
         &json!({"corpus":{"min_per_category":2},"model":{"n_jobs":1},"fields":{"body_word":{"max_features":500,"min_df":5},"body_char":{"enabled":false,"max_features":1000,"min_df":6}}}),
     );
     let deps = Deps::system().with_config(cfg);
@@ -925,7 +925,7 @@ fn evaluate_reconstructs_missing_manifest_and_reports_partially_missing_keys() {
 fn info_shows_dropped_categories_without_dumping_the_entire_list() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("model");
-    let mut model = backend::classifier::model::CategoryModel::load_dir(&fixture()).unwrap();
+    let mut model = classifier::model::CategoryModel::load_dir(&fixture()).unwrap();
     model.meta["dropped_categories"] = json!((0..12).map(|i| format!("drop{i}")).collect::<Vec<_>>());
     model.save(Some(&path)).unwrap();
     let (code, out, err) = run(&["info", "--model", path.to_str().unwrap()], &Deps::system());
@@ -949,7 +949,7 @@ fn reclassify_limits_skips_refused_and_reports_move_failure() {
     let (code, out, err) = run(&args, &Deps::system());
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("대상 1건") && out.contains("판정 안 함 1건"));
-    let m = backend::classifier::model::CategoryModel::load_dir(&model).unwrap();
+    let m = classifier::model::CategoryModel::load_dir(&model).unwrap();
     for cat in m.classes {
         fs::write(dir.path().join(cat), "디렉토리가 아닌 파일").unwrap();
     }

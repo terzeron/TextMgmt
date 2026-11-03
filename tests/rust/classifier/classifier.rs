@@ -1,15 +1,15 @@
 //! 원본: tests/test_classifier.py
 //!
 //! 가정한 API (모듈 경로는 Python 경로를 따른다):
-//! - `backend::classifier::config`
+//! - `classifier::config`
 //!   - `default_config() -> Value` (Python `DEFAULT_CONFIG`), `series_to_parent() -> HashMap<String, String>` (`SERIES_TO_PARENT`)
 //!   - `merge_config(base: &Value, over: &Value) -> Value`, `load_config(path: &Path) -> Value`, `save_config(cfg: &Value, path: &Path) -> io::Result<()>`
 //!   - `config_hash(cfg: &Value) -> String`, `enabled_fields(cfg: &Value) -> Value`, `resolve_parent(Option<&str>) -> Option<String>`
-//! - `backend::classifier::corpus`
+//! - `classifier::corpus`
 //!   - `document(hit: &Value) -> Value` (Python `_document`), `is_trainable(doc: &Value, min_chars: usize, excluded: &[&str]) -> bool`
 //!   - `absolute_path(doc: &Value, root: &str) -> Option<PathBuf>`, `read_jsonl(&Path) -> io::Result<Vec<Value>>`, `write_jsonl(&[Value], &Path) -> io::Result<usize>`
 //!   - `attach_publishers(docs: &mut [Value], cache: &Path, root: &Path, workers: usize) -> Value`
-//! - `backend::classifier::features`
+//! - `classifier::features`
 //!   - `field_text(doc: &Value, spec: &Value) -> String`, `make_vectorizer(spec: &Value) -> Vectorizer` (`fit(&[&str]) -> &Self`, `vocabulary() -> &HashMap<String, usize>`)
 //!   - `FeatureSpace::new(fields: &Value)`, `fit_transform(&mut self, docs: &[Value]) -> Result<SparseMatrix, ValueError>`,
 //!     `fit_transform_with(&mut self, docs: &[Value], FitOptions { spill_dir: Option<PathBuf>, dtype: Dtype }) -> Result<SparseMatrix, ValueError>`,
@@ -17,25 +17,25 @@
 //!     `block_sizes() -> Vec<(String, usize)>`, `describe() -> Value`
 //!   - `SparseMatrix { shape() -> (usize, usize), nnz() -> usize, dtype() -> Dtype, to_dense() -> Vec<Vec<f64>> }`
 //!   - `shrink_sources(docs: &mut [Value], sources: &[&str], remaining: &[(&str, Value)])`
-//! - `backend::classifier::model`
+//! - `classifier::model`
 //!   - `DEFAULT_MODEL_PATH: &str`, `MODEL_DIR_ENV: &str`, `model_path() -> PathBuf`, `softmax_confidence(scores: &[Vec<f64>], temperature: f64) -> Vec<Vec<f64>>`
 //!   - `CategoryModel` (Clone): `classes: Vec<String>`, `meta: Value`, `config: Value`, `predict_one(&self, doc: &Value, min_confidence: f64) -> Prediction`,
 //!     `predict(&self, docs: &[Value]) -> Vec<Prediction>`, `save(&self, Option<&Path>) -> io::Result<PathBuf>`, `CategoryModel::load(Option<&Path>) -> Option<CategoryModel>`,
 //!     `min_confidence(&self) -> f64`
 //!   - `Prediction { category: Option<String>, ranked: Vec<(String, f64)>, reason: String }` (Clone, PartialEq, Debug)
-//! - `backend::classifier::reader::read_epub_publisher(&Path) -> String`
-//! - `backend::classifier::training`
+//! - `classifier::reader::read_epub_publisher(&Path) -> String`
+//! - `classifier::training`
 //!   - `train(docs: &mut Vec<Value>, cfg: &Value, opts: TrainOptions { accept_parent: Option<HashMap<String, String>>, spill_dir: Option<PathBuf>, release_holdout_text: bool }) -> Result<(CategoryModel, Value), ValueError>`
 //!   - `evaluate(model: &CategoryModel, docs: &[Value], accept_parent: Option<&HashMap<String, String>>) -> Value`, `format_report(&Value) -> String`
 //!   - `filter_by_size(docs: &[Value], min: usize) -> (Vec<Value>, Vec<String>)`, `coverage_curve(correct: &[bool], conf: &[f64], points: &[f64]) -> Vec<Value>`
 //!   - `max_coverage_at(correct: &[bool], conf: &[f64], target: f64) -> Value`, `split_holdout(docs: &[Value], ratio: f64, seed: u64) -> (Vec<Value>, Vec<Value>)`, `rss_note_with(&Path) -> String` (아래 참조)
-//! - `backend::classifier::{BookCategoryClassifier, ClassifierOptions, ValueError}` (docs/rust-test-seams.md 3.12, 3.13)
+//! - `classifier::{BookCategoryClassifier, ClassifierOptions, ValueError}` (docs/rust-test-seams.md 3.12, 3.13)
 //!   - `BookCategoryClassifier::new(model: Option<Arc<dyn CategoryModelApi>>, ClassifierOptions { es: Option<Arc<dyn EsTransport>>, library_root: Option<PathBuf>, min_confidence: Option<f64> })`
 //!     (`CategoryModel`이 `CategoryModelApi`를 구현한다. 구 `es_manager: Box<dyn EsLookup>`은 `es: Arc<dyn EsTransport>`로 바뀌었다)
 //!   - `is_enabled()`, `classify_path(&Path) -> Prediction`, `classify_documents(&[Value]) -> Vec<Prediction>`, `build_document(&Path) -> Value`, `min_confidence() -> f64`, `indexed_path(&Path) -> String`
-//! - `backend::es_manager::EsTransport`: `index_name()`, `call(op, kwargs) -> Result<Value, EsError>` (`get`, `search` 기본 구현). 구 `EsLookup`(`get_by_id`, `search_by_path`) 대신
+//! - `es_client::transport::EsTransport`: `index_name()`, `call(op, kwargs) -> Result<Value, EsError>` (`get`, `search` 기본 구현). 구 `EsLookup`(`get_by_id`, `search_by_path`) 대신
 //!   `common::es_dummy::DummyEs`의 `get`(id 조회)·`search`(`query.term.file_path` 조회) 응답으로 같은 조회를 만든다.
-//! - `backend::classifier::training::rss_note_with(status_path: &Path) -> String` (전역 `set_proc_status_path` 대신. 상태 파일 경로를 인자로 받는다)
+//! - `classifier::training::rss_note_with(status_path: &Path) -> String` (전역 `set_proc_status_path` 대신. 상태 파일 경로를 인자로 받는다)
 
 mod common;
 
@@ -44,14 +44,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use backend::classifier::config::{config_hash, default_config, enabled_fields, load_config, merge_config, resolve_parent, save_config, series_to_parent};
-use backend::classifier::corpus::{absolute_path, attach_publishers, document, is_trainable, read_jsonl, write_jsonl};
-use backend::classifier::features::{Dtype, FeatureSpace, FitOptions, field_text, make_vectorizer, shrink_sources};
-use backend::classifier::model::{CategoryModel, DEFAULT_MODEL_PATH, MODEL_DIR_ENV, Prediction, get_default_model, model_path, reset_default_model, softmax_confidence};
-use backend::classifier::reader::read_epub_publisher;
-use backend::classifier::training::{TrainOptions, coverage_curve, evaluate, filter_by_size, format_report, max_coverage_at, rss_note_with, split_holdout, train};
-use backend::classifier::{BookCategoryClassifier, ClassifierOptions};
-use backend::es_manager::EsTransport;
+use classifier::config::{config_hash, default_config, enabled_fields, load_config, merge_config, resolve_parent, save_config, series_to_parent};
+use classifier::corpus::{absolute_path, attach_publishers, document, is_trainable, read_jsonl, write_jsonl};
+use classifier::features::{Dtype, FeatureSpace, FitOptions, field_text, make_vectorizer, shrink_sources};
+use classifier::model::{CategoryModel, DEFAULT_MODEL_PATH, MODEL_DIR_ENV, Prediction, get_default_model, model_path, reset_default_model, softmax_confidence};
+use classifier::reader::read_epub_publisher;
+use classifier::training::{TrainOptions, coverage_curve, evaluate, filter_by_size, format_report, max_coverage_at, rss_note_with, split_holdout, train};
+use classifier::{BookCategoryClassifier, ClassifierOptions};
+use es_client::transport::EsTransport;
 use common::env::EnvGuard;
 use common::epub::{EpubSpec, make_epub};
 use common::es_dummy::{DummyEs, not_found_error};
@@ -103,7 +103,7 @@ fn train_opts() -> TrainOptions {
 /// pytest fixture `trained`에 대응한다. Python sklearn 학습 결과와 비교하는 parity oracle을 읽는다
 /// (`python tests/test_classifier_export.py trained` 로 다시 쓴다).
 fn load_trained(name: &str) -> (CategoryModel, Value) {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny").join(name);
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny").join(name);
     let model = CategoryModel::load(Some(&dir)).expect("학습 결과 픽스처를 읽어야 한다");
     let report: Value = serde_json::from_slice(&fs::read(dir.join("report.json")).unwrap()).unwrap();
     (model, report)
@@ -423,7 +423,7 @@ fn test_default_model_is_cached_until_reset() {
 
     assert!(get_default_model().is_none());
     fs::create_dir_all(&model_dir).unwrap();
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny");
     for entry in fs::read_dir(&fixture).unwrap().flatten() {
         if entry.file_type().unwrap().is_file() {
             fs::copy(entry.path(), model_dir.join(entry.file_name())).unwrap();
@@ -702,7 +702,7 @@ fn test_build_document_finds_documents_by_relative_path() {
 fn test_model_path_follows_the_environment_variable() {
     let mut env = EnvGuard::new();
     env.remove(MODEL_DIR_ENV);
-    let expected_default = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("classifier/export");
+    let expected_default = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../backend/classifier/export");
     assert_eq!(PathBuf::from(DEFAULT_MODEL_PATH), expected_default);
     assert_eq!(model_path(), PathBuf::from(DEFAULT_MODEL_PATH));
 

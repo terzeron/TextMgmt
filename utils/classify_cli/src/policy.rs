@@ -1,5 +1,5 @@
 use crate::{CliIo, Deps, args::Args, data};
-use backend::classifier::{
+use classifier::{
     bookstore_policy::{bands_from_cuts, quantile_bands},
     config,
 };
@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 /// 기존 HTTPS 클라이언트를 재사용한다. 인증서 검증은 libs/bookstore의 기본값이다.
 struct LiveStores {
-    service: std::sync::Mutex<backend::book_classifier::BookClassifierService>,
+    service: std::sync::Mutex<classifier::book_classifier::BookClassifierService>,
 }
 
 struct StoreClient {
@@ -24,10 +24,10 @@ impl bookstore::stores::BookstoreSearch for StoreClient {
 
 impl LiveStores {
     fn new(delay: f64) -> Self {
-        use backend::classifier::{BookCategoryClassifier, ClassifierOptions};
+        use classifier::{BookCategoryClassifier, ClassifierOptions};
         let root = std::path::Path::new("/mnt/data/text");
         let classifier = std::sync::Arc::new(BookCategoryClassifier::new(None, ClassifierOptions::default()));
-        let mut service = backend::book_classifier::BookClassifierService::new(root, None, Some(classifier)).with_delay(delay);
+        let mut service = classifier::book_classifier::BookClassifierService::new(root, None, Some(classifier)).with_delay(delay);
         let client = |store| Box::new(StoreClient { store, fetcher: bookstore::HttpFetcher::new() });
         service.yes24 = client(bookstore::Store::Yes24);
         service.aladin = client(bookstore::Store::Aladin);
@@ -101,7 +101,7 @@ pub(super) fn run(args: &Args, io: &mut CliIo<'_>, deps: &Deps) -> Result<i32, S
         let started = std::time::Instant::now();
         let mut rows = Vec::new();
         for (i, (doc, pred)) in sample.iter().enumerate() {
-            let (author, raw_title, title) = backend::book_classifier::clean_filename_to_author_title(doc["name"].as_str().unwrap_or(""));
+            let (author, raw_title, title) = classifier::book_classifier::clean_filename_to_author_title(doc["name"].as_str().unwrap_or(""));
             let (y, a, k) = stores.query(&title, &author, &raw_title, delay);
             let votes: Vec<&str> = [&y, &a, &k].iter().filter_map(|v| v["mapped"].as_str()).filter(|s| !s.is_empty()).collect();
             let store_cat = votes.iter().copied().find(|v| votes.len() == 1 || votes.iter().filter(|w| *w == v).count() >= 2);

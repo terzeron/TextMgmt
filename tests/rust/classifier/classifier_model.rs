@@ -6,14 +6,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use backend::classifier::export_format::{ModelError, sha256_hex, write_dir};
-use backend::classifier::model::{CategoryModel, CategoryModelApi};
-use backend::classifier::softmax::{fixed, rank_desc, softmax_confidence};
-use backend::classifier::tokenize::{AnalyzerKind, AnalyzerSpec, analyze, collapse_whitespace, is_py_digit, is_py_space, is_py_word};
-use backend::classifier::vectorize::{FieldVectorizer, field_text};
+use classifier::export_format::{ModelError, sha256_hex, write_dir};
+use classifier::model::{CategoryModel, CategoryModelApi};
+use classifier::softmax::{fixed, rank_desc, softmax_confidence};
+use classifier::tokenize::{AnalyzerKind, AnalyzerSpec, analyze, collapse_whitespace, is_py_digit, is_py_space, is_py_word};
+use classifier::vectorize::{FieldVectorizer, field_text};
 use serde_json::{Value, json};
 
-const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/classifier_tiny");
+const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/classifier_tiny");
 
 fn spec(kind: &str, lo: usize, hi: usize) -> AnalyzerSpec {
     AnalyzerSpec { kind: AnalyzerKind::parse(kind).unwrap(), ngram_lo: lo, ngram_hi: hi, lowercase: true }
@@ -508,7 +508,7 @@ fn loader_rejects_oversized_declared_sizes_without_allocating() {
 
 #[test]
 fn analyzers_match_sklearn_on_random_strings() {
-    let path = std::env::var_os("TM_CLASSIFIER_FUZZ_FILE").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/classifier_analyzer_fuzz.json")));
+    let path = std::env::var_os("TM_CLASSIFIER_FUZZ_FILE").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/classifier_analyzer_fuzz.json")));
     let cases: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     let mut bad = 0;
     let mut total = 0;
@@ -837,7 +837,7 @@ fn training_output_is_validated_and_exposed_through_accessors() {
 // ---------------------------------------------------------------------------
 
 mod config_file {
-    use backend::classifier::config::{CONFIG_ENV, MAX_CONFIG_BYTES, default_config, enabled_fields, load_config, load_config_from_env, merge_config};
+    use classifier::config::{CONFIG_ENV, MAX_CONFIG_BYTES, default_config, enabled_fields, load_config, load_config_from_env, merge_config};
     use serde_json::json;
 
     #[test]

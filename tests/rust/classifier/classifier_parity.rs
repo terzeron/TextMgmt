@@ -9,18 +9,18 @@
 use std::fs;
 use std::path::Path;
 
-use backend::classifier::calibration::{expected_accuracy, fit_expected_accuracy, from_coverage_report};
-use backend::classifier::config::{config_hash, default_config};
-use backend::classifier::corpus::{AttachOptions, IndexedJsonl, MAX_JSONL_LINE_BYTES, absolute_path, attach_publishers_with, read_jsonl, write_jsonl};
-use backend::classifier::model::CategoryModel;
-use backend::classifier::pyjson::{dumps, float_repr};
-use backend::classifier::training;
-use backend::classifier::training::{blake2b_keyed, document_key, filter_by_size, format_report, holdout_document_keys, split_holdout};
+use classifier::calibration::{expected_accuracy, fit_expected_accuracy, from_coverage_report};
+use classifier::config::{config_hash, default_config};
+use classifier::corpus::{AttachOptions, IndexedJsonl, MAX_JSONL_LINE_BYTES, absolute_path, attach_publishers_with, read_jsonl, write_jsonl};
+use classifier::model::CategoryModel;
+use classifier::pyjson::{dumps, float_repr};
+use classifier::training;
+use classifier::training::{blake2b_keyed, document_key, filter_by_size, format_report, holdout_document_keys, split_holdout};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 fn parity() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny/parity.json");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/parity.json");
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
 
@@ -130,14 +130,14 @@ fn config_hash_matches_python() {
     let p = parity();
     assert_eq!(config_hash(&default_config()), p["config_hash_default"].as_str().unwrap());
     // Python 이 학습한 모델이 meta 에 적어 둔 해시를, 내보낸 config 에서 Rust 가 다시 계산해도 같다.
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny/trained");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/trained");
     let model = CategoryModel::load(Some(&dir)).unwrap();
     assert_eq!(config_hash(&model.config), model.meta["config_hash"].as_str().unwrap());
 }
 
 #[test]
 fn format_report_matches_python() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny/trained");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/trained");
     let report: Value = serde_json::from_slice(&fs::read(dir.join("report.json")).unwrap()).unwrap();
     assert_eq!(format_report(&report), parity()["report_text"].as_str().unwrap());
 }

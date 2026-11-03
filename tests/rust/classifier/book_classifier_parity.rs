@@ -11,15 +11,15 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use backend::book_classifier::*;
-use backend::classifier::bookstore_policy::{map_bookstore_candidates, match_keyword};
-use backend::classifier::model::Prediction;
-use backend::classifier::{BookClassifierApi, Classify};
+use classifier::book_classifier::*;
+use classifier::bookstore_policy::{map_bookstore_candidates, match_keyword};
+use classifier::model::Prediction;
+use classifier::{BookClassifierApi, Classify};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
 fn fixture() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny/book_classifier_parity.json");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/book_classifier_parity.json");
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
 
@@ -192,7 +192,7 @@ fn shared_service_serves_the_book_manager_facade() {
 
 #[test]
 fn policy_and_cache_files_reject_symlinks_and_oversized_input() {
-    use backend::bookstore_cache::BookstoreResponseCache;
+    use classifier::bookstore_cache::BookstoreResponseCache;
     let tmp = TempDir::new().unwrap();
 
     // 정책 파일: 심볼릭 링크와 상한 초과는 기본값으로 본다.
@@ -203,7 +203,7 @@ fn policy_and_cache_files_reject_symlinks_and_oversized_input() {
     std::os::unix::fs::symlink(&real, &link).unwrap();
     assert_eq!(BookstorePolicy::load(Some(&link)).override_below, 0.0);
     let big = tmp.path().join("big.json");
-    fs::write(&big, format!("{{\"sample\": 1, \"pad\": \"{}\"}}", "x".repeat(backend::classifier::bookstore_policy::MAX_POLICY_BYTES as usize))).unwrap();
+    fs::write(&big, format!("{{\"sample\": 1, \"pad\": \"{}\"}}", "x".repeat(classifier::bookstore_policy::MAX_POLICY_BYTES as usize))).unwrap();
     assert_eq!(BookstorePolicy::load(Some(&big)).sample, 0);
     // 깊이가 한도를 넘는 JSON 도 기본값이다.
     let deep = tmp.path().join("deep.json");

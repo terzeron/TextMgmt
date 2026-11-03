@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use backend::book_classifier::{BookClassifierService, ProcessOptions, get_effective_filename};
+use classifier::book_classifier::{BookClassifierService, ProcessOptions, get_effective_filename};
 use serde_json::{Value, json};
 
 pub const DEFAULT_CATEGORY: &str = "0_telegram";

@@ -1,5 +1,5 @@
 use crate::{CliIo, Deps, args::Args, data};
-use backend::classifier::{config, training};
+use classifier::{config, training};
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};

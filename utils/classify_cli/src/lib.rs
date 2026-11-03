@@ -8,7 +8,7 @@ mod shuffle;
 use std::io::Write;
 use std::sync::Arc;
 
-use backend::es_manager::{EsTransport, HttpTransport};
+use es_client::transport::{EsTransport, HttpTransport};
 
 pub use data::{holdout_manifest_path, load_manifest_holdout};
 

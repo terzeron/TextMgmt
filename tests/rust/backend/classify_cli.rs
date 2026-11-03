@@ -18,10 +18,10 @@
 //!   - `with_clock(Arc<dyn sysdeps::Clock>)`: 구 `time`
 //!   - `with_boundary_factor(f64)`: 구 `boundary_factor` (값 설정자)
 //! - `utils::classify_cli::{load_model(&Path), load_corpus(&Path), publisher_cache_path(&Path) -> PathBuf, overrides(&Value) -> Value, holdout_manifest_path(&Path) -> PathBuf, holdout_docs(&[Value], &Value, Option<&Path>) -> Vec<Value>}`
-//! - `backend::classifier::config::{default_config() -> Value, series_to_parent() -> HashMap<String, String>, merge_config(&Value, &Value) -> Value}`
-//! - `backend::classifier::corpus::{write_jsonl(&[Value], &Path), read_jsonl(&Path) -> Vec<Value>}`
-//! - `backend::classifier::training::{train(&[Value], &Value, Option<&HashMap<String, String>>) -> Result<(CategoryModel, Value), ValueError>, document_key(&Value) -> String}`
-//! - `backend::classifier::model::CategoryModel::{load(&Path) -> Result<Self, _>, save(&self, &Path), meta: Value, min_confidence: f64}`
+//! - `classifier::config::{default_config() -> Value, series_to_parent() -> HashMap<String, String>, merge_config(&Value, &Value) -> Value}`
+//! - `classifier::corpus::{write_jsonl(&[Value], &Path), read_jsonl(&Path) -> Vec<Value>}`
+//! - `classifier::training::{train(&[Value], &Value, Option<&HashMap<String, String>>) -> Result<(CategoryModel, Value), ValueError>, document_key(&Value) -> String}`
+//! - `classifier::model::CategoryModel::{load(&Path) -> Result<Self, _>, save(&self, &Path), meta: Value, min_confidence: f64}`
 //! - 대역: `common::es_fake::FakeEsManager`(`EsManagerApi`), `common::faulty_fs::FaultyFs`(`FsOps`), `common::log_capture::LogCapture`(caplog).
 //!
 //! 학습이 필요한 테스트는 `#[ignore = "sklearn 대응 모델 필요"]`다. 전역 상태 재정의가 사라져 직렬 실행(`--test-threads=1`) 가정은 필요 없다.
@@ -34,10 +34,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use backend::classifier::config::{default_config, merge_config, series_to_parent};
-use backend::classifier::corpus::{read_jsonl, write_jsonl};
-use backend::classifier::model::CategoryModel;
-use backend::classifier::training::{document_key, train};
+use classifier::config::{default_config, merge_config, series_to_parent};
+use classifier::corpus::{read_jsonl, write_jsonl};
+use classifier::model::CategoryModel;
+use classifier::training::{document_key, train};
 use backend::es_manager::EsManagerApi;
 use common::{es_fake::FakeEsManager, faulty_fs::FaultyFs, log_capture::LogCapture};
 use serde_json::{Value, json};

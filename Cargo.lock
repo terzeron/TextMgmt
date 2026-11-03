@@ -205,6 +205,7 @@ dependencies = [
  "base64 0.23.1",
  "bookstore",
  "chrono",
+ "classifier",
  "corpus_common",
  "corpus_layout",
  "db",
@@ -568,11 +569,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "classifier"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "bookstore",
+ "chrono",
+ "corpus_common",
+ "db",
+ "es_client",
+ "fancy-regex",
+ "image",
+ "log",
+ "pyfmt",
+ "regex",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sysdeps",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
 name = "classify_books_client"
 version = "0.1.0"
 dependencies = [
- "backend",
  "chrono",
+ "classifier",
  "serde_json",
  "ureq",
 ]
@@ -581,8 +606,9 @@ dependencies = [
 name = "classify_cli"
 version = "0.1.0"
 dependencies = [
- "backend",
  "bookstore",
+ "classifier",
+ "es_client",
  "log",
  "regex",
  "serde_json",

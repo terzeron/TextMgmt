@@ -13,11 +13,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use backend::book_classifier::{BookClassifierService, BookstorePolicy, SharedBookClassifier};
+use classifier::book_classifier::{BookClassifierService, BookstorePolicy, SharedBookClassifier};
 use backend::book_manager::{BookManager, BookManagerDeps, ProposeOptions};
 use bookstore::stores::{BookstoreSearch, SearchRow};
-use backend::classifier::model::CategoryModel;
-use backend::classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
+use classifier::model::CategoryModel;
+use classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
 use common::env::EnvGuard;
 use common::es_fake::FakeEsManager;
 use common::log_capture::LogCapture;

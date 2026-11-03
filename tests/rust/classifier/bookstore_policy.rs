@@ -5,7 +5,7 @@
 //! 2. 결합 규칙 - 측정된 경계 아래에서는 서점을 모델보다 먼저 본다
 //!
 //! 가정한 API (Python dict는 `serde_json::Value`로 받는다):
-//! - `backend::classifier::bookstore_policy`
+//! - `classifier::bookstore_policy`
 //!   - `keyword_map(loader: Option<&dyn Fn() -> Result<Value, String>>, force: bool) -> Value`
 //!   - `reset_keyword_cache()`
 //!   - `match_keyword(cat_str: &str, keywords: &Value) -> Vec<String>`
@@ -16,14 +16,14 @@
 //!   - `BookstorePolicy { override_below: f64, sample: i64, bands: Vec<Value>, source: Option<String>, measured_max: f64 }` (`Default`)
 //!     - `BookstorePolicy::load(path: Option<&Path>) -> Self`, `prefers_bookstore(&self, confidence: f64) -> bool`
 //!   - `_load_from_db_with(get_all_mappings: &dyn Fn(&str) -> Value) -> Value` (Python이 `sys.modules`에 끼우던 `CategoryMapping.get_all_mappings(content_type)` 대역을 인자로 받는 seam)
-//! - `backend::book_classifier::{BookClassifierService, DecideOptions}`
+//! - `classifier::book_classifier::{BookClassifierService, DecideOptions}`
 //!   - `BookClassifierService::new(library_root: &Path, cache_file: Option<&Path>, classifier: Option<Arc<dyn Classify>>) -> Self`
 //!   - `with_bookstore_policy(self, BookstorePolicy) -> Self`, `classifier_library_root(&self) -> PathBuf`
 //!   - `_decide(&self, fpath: Option<&Path>, effective_fname: &str, entry: &mut Value, DecideOptions) -> Decision { category: Option<String>, method: String, reason: String, .. }`
 //!   - `with_bookstore_decider(self, Arc<dyn BookstoreDecider>) -> Self` (docs/rust-test-seams.md 3.12; 구 `wrap_decide_by_bookstore`)
 //!   - `BookstoreDecider: Send + Sync`의 `decide(&self, entry: &mut Value, trust_single_match: bool, original: &dyn Fn(&mut Value, bool) -> (Option<String>, String, String)) -> (Option<String>, String, String)`
 //!     (문서에 시그니처가 없어 기존 래퍼 클로저 모양을 그대로 옮긴 가정이다. 기본 구현은 `original`을 그대로 호출한다)
-//! - `backend::classifier::{Classify, model::Prediction}`는 tests/rust/backend/book_classifier.rs와 같다.
+//! - `classifier::{Classify, model::Prediction}`는 tests/rust/classifier/book_classifier.rs와 같다.
 
 mod common;
 
@@ -33,12 +33,12 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use backend::book_classifier::{BookClassifierService, BookstoreDecider, DecideOptions};
-use backend::classifier::Classify;
-use backend::classifier::bookstore_policy::{
+use classifier::book_classifier::{BookClassifierService, BookstoreDecider, DecideOptions};
+use classifier::Classify;
+use classifier::bookstore_policy::{
     self, BookstorePolicy, bands_from_cuts, keyword_map, map_bookstore_candidates, map_bookstore_category, match_keyword, quantile_bands, reset_keyword_cache,
 };
-use backend::classifier::model::Prediction;
+use classifier::model::Prediction;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

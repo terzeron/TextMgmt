@@ -418,5 +418,5 @@ pub fn write_dir(dir: &Path, classes: &[String], fields: &[FieldVectorizer], coe
 }
 
 #[cfg(test)]
-#[path = "../../../tests/rust/backend/export_format_unit.rs"]
+#[path = "../../../tests/rust/classifier/export_format_unit.rs"]
 mod tests;

@@ -5,10 +5,7 @@
 
 pub mod auth;
 pub mod book;
-pub mod book_classifier;
 pub mod book_manager;
-pub mod bookstore_cache;
-pub mod classifier;
 pub mod comics;
 pub mod comics_manager;
 pub mod cover_management;

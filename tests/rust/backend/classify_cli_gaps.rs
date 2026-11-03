@@ -10,7 +10,7 @@
 //! - `ClassifyCliDeps::{system, with_config_store, with_es_factory, with_corpus, with_service_factory, with_fs, with_clock, with_boundary_factor}`
 //!   - `CorpusOps::holdout_docs(&self) -> Vec<Value>`(구 `override_holdout_docs`)와 `collect`를 이 파일에서 바꿔치기한다.
 //!   - `ConfigStore::{load_config, save_config}`, `BookstoreQuery::query_bookstores`, `sysdeps::Clock`, `sysdeps::FsOps::read_dir`(구 `iter_files`)
-//! - `backend::classifier::corpus::{read_jsonl, write_jsonl}`, `backend::classifier::training::train`, `backend::classifier::model::CategoryModel::save`
+//! - `classifier::corpus::{read_jsonl, write_jsonl}`, `classifier::training::train`, `classifier::model::CategoryModel::save`
 //!
 //! tests/test_classify_cli.py의 `FakeBookstoreService`, `TEST_CONFIG`, `model_file`과 tests/test_classifier.py의 `VOCAB`, `make_docs`는
 //! 테스트 바이너리가 파일마다 따로라 이 파일에 같은 헬퍼를 둔다.
@@ -23,9 +23,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use backend::classifier::config::{default_config, merge_config, series_to_parent};
-use backend::classifier::corpus::{read_jsonl, write_jsonl};
-use backend::classifier::training::train;
+use classifier::config::{default_config, merge_config, series_to_parent};
+use classifier::corpus::{read_jsonl, write_jsonl};
+use classifier::training::train;
 use backend::es_manager::EsManagerApi;
 use common::{es_fake::FakeEsManager, log_capture::LogCapture};
 use serde_json::{Value, json};

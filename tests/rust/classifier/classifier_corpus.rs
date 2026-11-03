@@ -4,11 +4,11 @@
 //! ES 조회와 EPUB 읽기는 통합 테스트에서 안 밟히는 구간이라 여기서 직접 확인한다.
 //!
 //! 가정한 API:
-//! - `backend::es_manager::EsTransport` 트레이트: `index_name(&self) -> &str`, `call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>`
+//! - `es_client::transport::EsTransport` 트레이트: `index_name(&self) -> &str`, `call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>`
 //!   (`get`, `search`는 `call("get")`, `call("search")`로 가는 기본 구현). 구 `EsLike`를 대체한다(docs/rust-test-seams.md 3.3, 3.13).
 //!   대역은 `common::es_dummy::DummyEs`(`respond`, `fail`, `calls_of`)다.
-//! - `backend::classifier::corpus::fetch_by_inode(es: &dyn EsTransport, inode: u64, index: Option<&str>) -> Option<Value>`
-//! - `backend::classifier::corpus::fetch_by_path(es: &dyn EsTransport, path: &str, index: Option<&str>) -> Option<Value>`
+//! - `classifier::corpus::fetch_by_inode(es: &dyn EsTransport, inode: u64, index: Option<&str>) -> Option<Value>`
+//! - `classifier::corpus::fetch_by_path(es: &dyn EsTransport, path: &str, index: Option<&str>) -> Option<Value>`
 //! - (mock.patch 테스트용 seam, 문서 4.1에 따라 `*_with` 클로저는 현행 유지) `scan_documents_with(es, ScanOptions { batch, index }, scan: &dyn Fn(&Value) -> Vec<Value>) -> Vec<Value>`,
 //!   `collect_with(es, out: &Path, CollectOptions { min_chars, excluded_prefixes }, scan) -> Value`,
 //!   `publisher_of_with(path: &Path, reader: &dyn Fn(&Path) -> Result<String, String>) -> String`,
@@ -20,7 +20,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use backend::classifier::corpus::*;
+use classifier::corpus::*;
 use common::es_dummy::DummyEs;
 use serde_json::{Value, json};
 use tempfile::TempDir;

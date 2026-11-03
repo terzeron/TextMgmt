@@ -4,7 +4,7 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 use std::time::Instant;
 
-use backend::classifier::{BookCategoryClassifier, ClassifierOptions, calibration, config, corpus, training};
+use classifier::{BookCategoryClassifier, ClassifierOptions, calibration, config, corpus, training};
 use serde_json::Value;
 
 use crate::{CliIo, Deps, args::Args, data};

@@ -1,6 +1,6 @@
 //! 도서 자동 분류의 운영 계층. Python `backend/book_classifier.py` 대응.
 //!
-//! 판정 자체는 `crate::classifier` 의 모델이 한다. 이 모듈은 그 둘레를 맡는다: 캐시, 서점 조회와 다수결, 파일명 파싱,
+//! 판정 자체는 crate 최상위 의 모델이 한다. 이 모듈은 그 둘레를 맡는다: 캐시, 서점 조회와 다수결, 파일명 파싱,
 //! 카테고리 매핑, 파일 이동, 빈 디렉토리 정리.
 //!
 //! 입력은 신뢰할 수 없는 파일 이름과 EPUB·캐시 파일이다. EPUB 은 DTD 를 읽지 않고 크기를 읽기 전에 재며, 캐시는 크기 상한을
@@ -19,16 +19,16 @@ use sysdeps::{FsOps, RealFs};
 
 use bookstore::stores::{AladinBookstore, BookstoreSearch, KyoboBookstore, Yes24Bookstore};
 use crate::bookstore_cache::BookstoreResponseCache;
-use crate::classifier::bookstore_policy::map_bookstore_candidates;
-use crate::classifier::model::{CategoryModelApi, Prediction, get_default_model};
-use crate::classifier::softmax::fixed;
-use crate::classifier::tokenize::{is_py_space, is_py_word};
-use crate::classifier::{BookCategoryClassifier, BookClassifierApi, ClassifierOptions, Classify, resolve_lenient};
+use crate::bookstore_policy::map_bookstore_candidates;
+use crate::model::{CategoryModelApi, Prediction, get_default_model};
+use crate::softmax::fixed;
+use crate::tokenize::{is_py_space, is_py_word};
+use crate::{BookCategoryClassifier, BookClassifierApi, ClassifierOptions, Classify, resolve_lenient};
 
 mod map_category;
 mod tables;
 
-pub use crate::classifier::bookstore_policy::BookstorePolicy;
+pub use crate::bookstore_policy::BookstorePolicy;
 pub use map_category::map_category;
 pub use tables::STANDARD_CATEGORIES;
 
@@ -217,7 +217,7 @@ fn parse_opf(xml: &str, meta: &mut EpubMetadata) -> bool {
 pub fn inspect_epub_metadata(path: &Path) -> EpubMetadata {
     let meta = EpubMetadata::default();
     let Some(mut zip) = corpus_common::reader::open_zip(path) else { return meta };
-    if zip.len() > crate::classifier::reader::MAX_ZIP_ENTRIES {
+    if zip.len() > crate::reader::MAX_ZIP_ENTRIES {
         return meta;
     }
     let Some(index) = zip.file_names().enumerate().find(|(_, n)| n.as_ref().is_ok_and(|n| n.ends_with(".opf"))).map(|(i, _)| i) else { return meta };
@@ -768,7 +768,7 @@ impl BookClassifierService {
             let parent = self.cache_file.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
             let name = self.cache_file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "cache".into());
             let tmp = parent.join(format!(".{name}.{}.tmp", std::process::id()));
-            let body = crate::classifier::pyjson::dumps_indent2(&Value::Object(self.cache.clone()));
+            let body = crate::pyjson::dumps_indent2(&Value::Object(self.cache.clone()));
             let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
             if let Err(e) = file.write_all(body.as_bytes()).and_then(|()| file.sync_all()).and_then(|()| self.fs.rename(&tmp, &self.cache_file)) {
                 let _ = fs::remove_file(&tmp);

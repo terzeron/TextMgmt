@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 
 use super::pyjson;
 use super::reader::read_epub_publisher;
-use crate::es_manager::EsTransport;
+use es_client::transport::EsTransport;
 
 /// ES 에서 가져올 필드. `summary` 가 본문 앞부분이다.
 pub const SOURCE_FIELDS: [&str; 7] = ["category", "summary", "title", "author", "publisher", "file_path", "file_type"];
@@ -123,7 +123,7 @@ pub fn scan_documents_with(es: &dyn EsTransport, opts: ScanOptions, scan: &dyn F
 }
 
 /// scroll 로 인덱스 전체를 훑으며 히트마다 `each` 를 부른다. 메모리에 다 올리지 않는다. 오류는 호출한 쪽에 돌려준다.
-pub fn scan_each(es: &dyn EsTransport, opts: &ScanOptions, each: &mut dyn FnMut(Value)) -> Result<(), crate::es_manager::EsError> {
+pub fn scan_each(es: &dyn EsTransport, opts: &ScanOptions, each: &mut dyn FnMut(Value)) -> Result<(), es_client::EsError> {
     scan_each_with_page(
         es,
         opts,
@@ -138,9 +138,9 @@ pub fn scan_each(es: &dyn EsTransport, opts: &ScanOptions, each: &mut dyn FnMut(
 fn scan_each_with_page(
     es: &dyn EsTransport,
     opts: &ScanOptions,
-    each: &mut dyn FnMut(Value) -> Result<(), crate::es_manager::EsError>,
-    after_page: &mut dyn FnMut() -> Result<(), crate::es_manager::EsError>,
-) -> Result<(), crate::es_manager::EsError> {
+    each: &mut dyn FnMut(Value) -> Result<(), es_client::EsError>,
+    after_page: &mut dyn FnMut() -> Result<(), es_client::EsError>,
+) -> Result<(), es_client::EsError> {
     let index = opts.index.clone().unwrap_or_else(|| es.index_name().to_string());
     let mut response = es.call("search", &json!({"index": index, "query": {"match_all": {}}, "_source": SOURCE_FIELDS, "size": opts.batch, "scroll": "10m"}))?;
     let mut scroll_id = response["_scroll_id"].as_str().map(str::to_string);
@@ -411,8 +411,8 @@ pub fn collect_with_pattern(es: &dyn EsTransport, out_path: &Path, opts: Collect
     scan_each_with_page(
         es,
         &ScanOptions { index: opts.index.clone(), ..Default::default() },
-        &mut |hit| writer.borrow_mut().push(document(&hit), opts.min_chars, &prefixes, &pattern).map_err(|e| crate::es_manager::EsError::Other(e.to_string())),
-        &mut || writer.borrow_mut().flush().map_err(|e| crate::es_manager::EsError::Other(e.to_string())),
+        &mut |hit| writer.borrow_mut().push(document(&hit), opts.min_chars, &prefixes, &pattern).map_err(|e| es_client::EsError::Other(e.to_string())),
+        &mut || writer.borrow_mut().flush().map_err(|e| es_client::EsError::Other(e.to_string())),
     )
     .map_err(|e| io::Error::other(e.to_string()))?;
     writer.into_inner().finish()

@@ -34,10 +34,6 @@ name = "api_exploration"
 path = "../tests/rust/backend/api_exploration.rs"
 
 [[test]]
-name = "classifier_training"
-path = "../tests/rust/backend/classifier_training.rs"
-
-[[test]]
 name = "pdf_pages"
 path = "../tests/rust/backend/pdf_pages.rs"
 
@@ -70,6 +66,7 @@ axum = { version = "0.8.9", features = ["multipart"] }
 bookstore = { path = "../libs/bookstore" }
 corpus_common = { path = "../libs/corpus_common" }
 corpus_layout = { path = "../libs/corpus_layout" }
+classifier = { path = "../libs/classifier" }
 db = { path = "../libs/db" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 htmlkit = { path = "../libs/htmlkit" }
@@ -192,56 +189,8 @@ name = "html_sanitizer"
 path = "../tests/rust/backend/html_sanitizer.rs"
 
 [[test]]
-name = "classifier_model"
-path = "../tests/rust/backend/classifier_model.rs"
-
-[[test]]
-name = "classifier"
-path = "../tests/rust/backend/classifier.rs"
-
-[[test]]
-name = "classifier_calibration"
-path = "../tests/rust/backend/classifier_calibration.rs"
-
-[[test]]
-name = "classifier_corpus"
-path = "../tests/rust/backend/classifier_corpus.rs"
-
-[[test]]
-name = "classifier_reader"
-path = "../tests/rust/backend/classifier_reader.rs"
-
-[[test]]
-name = "classifier_service"
-path = "../tests/rust/backend/classifier_service.rs"
-
-[[test]]
-name = "classifier_parity"
-path = "../tests/rust/backend/classifier_parity.rs"
-
-[[test]]
-name = "book_classifier"
-path = "../tests/rust/backend/book_classifier.rs"
-
-[[test]]
-name = "classifier_gaps"
-path = "../tests/rust/backend/classifier_gaps.rs"
-
-[[test]]
-name = "bookstore_policy"
-path = "../tests/rust/backend/bookstore_policy.rs"
-
-[[test]]
-name = "bookstore_cache"
-path = "../tests/rust/backend/bookstore_cache.rs"
-
-[[test]]
 name = "auth_bookstore_gaps"
 path = "../tests/rust/backend/auth_bookstore_gaps.rs"
-
-[[test]]
-name = "book_classifier_parity"
-path = "../tests/rust/backend/book_classifier_parity.rs"
 
 [[test]]
 name = "book_manager_classifier"

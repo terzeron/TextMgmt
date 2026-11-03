@@ -7,8 +7,9 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
-backend = { path = "../../backend" }
 bookstore = { path = "../../libs/bookstore" }
+classifier = { path = "../../libs/classifier" }
+es_client = { path = "../../libs/es_client" }
 log.workspace = true
 regex = "1.13.1"
 serde_json.workspace = true

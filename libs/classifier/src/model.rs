@@ -38,7 +38,7 @@ pub const DEFAULT_TOP_K: usize = 3;
 /// 내보내기 디렉토리를 담는 환경변수. `books-pv` 가 호스트의 /mnt/data/text 를 pod 의 /books 로 마운트하므로 같은 파일을 본다.
 pub const MODEL_DIR_ENV: &str = "TM_CLASSIFIER_MODEL_DIR";
 /// 환경변수가 없을 때의 Rust export 디렉터리.
-pub const DEFAULT_MODEL_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/classifier/export");
+pub const DEFAULT_MODEL_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../backend/classifier/export");
 
 /// 설정된 모델 경로.
 pub fn model_path() -> PathBuf {

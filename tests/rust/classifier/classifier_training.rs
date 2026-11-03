@@ -1,4 +1,4 @@
-use backend::classifier::{
+use classifier::{
     config,
     corpus::{IndexedJsonl, write_jsonl},
     model::CategoryModel,
@@ -133,13 +133,13 @@ fn indexed_holdout_evaluation_matches_materialized_report_and_calibration() {
             .iter()
             .map(|doc| {
                 let scores = model.scores(doc);
-                let probabilities = backend::classifier::model::softmax_confidence(std::slice::from_ref(&scores), model.temperature());
+                let probabilities = classifier::model::softmax_confidence(std::slice::from_ref(&scores), model.temperature());
                 let best = scores.iter().enumerate().fold(0, |best, (index, score)| if *score > scores[best] { index } else { best });
                 (probabilities[0][best], model.classes[best] == doc["cat"].as_str().unwrap_or(""))
             })
             .collect();
         let (confidence, correct): (Vec<_>, Vec<_>) = confidence_and_correct.into_iter().unzip();
-        backend::classifier::calibration::fit_expected_accuracy(&confidence, &correct).unwrap().unwrap_or(Value::Null)
+        classifier::calibration::fit_expected_accuracy(&confidence, &correct).unwrap().unwrap_or(Value::Null)
     };
 
     assert_eq!(actual_report, expected_report);
@@ -220,11 +220,11 @@ fn parallel_category_training_matches_serial_scores() {
 
 #[test]
 fn rust_training_matches_python_trained_fixture_report() {
-    let expected: Value = serde_json::from_slice(&std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/classifier_tiny/trained/report.json")).unwrap()).unwrap();
+    let expected: Value = serde_json::from_slice(&std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/classifier_tiny/trained/report.json")).unwrap()).unwrap();
     let mut docs = python_fixture_docs();
     let options = TrainOptions { accept_parent: Some(config::series_to_parent()), spill_dir: None, release_holdout_text: false };
     let (model, actual) = training::train(&mut docs, &python_fixture_config(), options).unwrap();
-    let expected_model = CategoryModel::load_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny/trained")).unwrap();
+    let expected_model = CategoryModel::load_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/trained")).unwrap();
 
     assert_eq!(actual["n"], expected["n"]);
     assert_eq!(actual["top1_accuracy"], expected["top1_accuracy"]);
@@ -239,13 +239,13 @@ fn rust_training_matches_python_trained_fixture_report() {
 
 #[test]
 fn rust_training_matches_python_ninety_five_percent_fixture() {
-    let expected: Value = serde_json::from_slice(&std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/classifier_tiny/trained_95/report.json")).unwrap()).unwrap();
+    let expected: Value = serde_json::from_slice(&std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/classifier_tiny/trained_95/report.json")).unwrap()).unwrap();
     let mut cfg = python_fixture_config();
     cfg["decision"]["target_accuracy"] = json!(0.95);
     let mut docs = python_fixture_docs();
     let options = TrainOptions { accept_parent: Some(config::series_to_parent()), spill_dir: None, release_holdout_text: false };
     let (model, actual) = training::train(&mut docs, &cfg, options).unwrap();
-    let expected_model = CategoryModel::load_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny/trained_95")).unwrap();
+    let expected_model = CategoryModel::load_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/trained_95")).unwrap();
 
     assert_eq!(actual["n"], expected["n"]);
     assert_eq!(actual["top1_accuracy"], expected["top1_accuracy"]);

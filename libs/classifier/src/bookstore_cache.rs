@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use crate::classifier::pyjson;
-use crate::classifier::tokenize::is_py_space;
+use crate::pyjson;
+use crate::tokenize::is_py_space;
 
 pub const STORE_NAMES: [&str; 3] = ["yes24", "aladin", "kyobo"];
 /// 캐시 파일 최대 크기. 11만 건이 수십 MB 다.

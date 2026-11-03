@@ -4,15 +4,15 @@
 //! (ES 미적재, stat 실패, 본문 빈 문서, 파일 읽기 실패, 모델 없음)를 직접 확인한다.
 //!
 //! 가정한 API (docs/rust-test-seams.md 3.3, 3.12, 3.13):
-//! - `backend::es_manager::EsTransport` 트레이트: `index_name(&self) -> &str`, `call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>`
+//! - `es_client::transport::EsTransport` 트레이트: `index_name(&self) -> &str`, `call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>`
 //!   (`get`, `search`는 `call("get")`, `call("search")`로 가는 기본 구현이다. Python `es_manager.es.get(**kwargs)` / `.search(**kwargs)`의 kwargs를 JSON 객체로 받는다).
 //!   구 `EsLike`를 대체한다. 대역은 `common::es_dummy::DummyEs`다.
-//! - `backend::classifier::model::CategoryModelApi` 트레이트: `min_confidence(&self) -> f64`,
+//! - `classifier::model::CategoryModelApi` 트레이트: `min_confidence(&self) -> f64`,
 //!   `predict_one(&self, doc: &Value, min_confidence: Option<f64>) -> Prediction`,
 //!   `predict(&self, docs: &[Value], min_confidence: Option<f64>) -> Vec<Prediction>` (`expected_accuracy`는 기본 구현). 구 `Model`, `ClassifierModel`을 대체한다.
-//! - `backend::classifier::model::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str)`
+//! - `classifier::model::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str)`
 //!   (필드 `category: Option<String>`, `reason: String`)
-//! - `backend::classifier::BookCategoryClassifier::new(model: Option<Arc<dyn CategoryModelApi>>, ClassifierOptions { es: Option<Arc<dyn EsTransport>>, library_root: Option<PathBuf>, min_confidence: Option<f64> }) -> Self`
+//! - `classifier::BookCategoryClassifier::new(model: Option<Arc<dyn CategoryModelApi>>, ClassifierOptions { es: Option<Arc<dyn EsTransport>>, library_root: Option<PathBuf>, min_confidence: Option<f64> }) -> Self`
 //!   (`ClassifierOptions`는 `Default` 구현. 구 `new(model, es_manager, root).with_min_confidence(x)`는 `ClassifierOptions`의 필드로 옮겼다)
 //!   - `min_confidence(&self) -> f64`, `is_available(&self) -> bool` (Python `bool(clf)`)
 //!   - `build_document(&self, path: &Path) -> Value`, `indexed_path(&self, path: &Path) -> String`
@@ -26,9 +26,9 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use backend::classifier::model::{CategoryModelApi, Prediction};
-use backend::classifier::{BookCategoryClassifier, ClassifierOptions};
-use backend::es_manager::EsTransport;
+use classifier::model::{CategoryModelApi, Prediction};
+use classifier::{BookCategoryClassifier, ClassifierOptions};
+use es_client::transport::EsTransport;
 use common::es_dummy::DummyEs;
 use serde_json::{Value, json};
 use tempfile::TempDir;

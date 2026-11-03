@@ -1,25 +1,25 @@
 //! 원본: tests/test_book_classifier.py
 //!
 //! 가정한 API:
-//! - `backend::book_classifier::extract_explicit_genre(name: &str) -> Option<String>`
-//! - `backend::book_classifier::inspect_epub_metadata(path: &Path) -> EpubMetadata` (title/author/subject/description: String, `PartialEq + Debug`)
-//! - `backend::book_classifier::inspect_txt_content(path: &Path) -> TxtContent` (hashtags: Vec<String>, snippet: String, header_genre: Option<String>)
-//! - `backend::book_classifier::clean_filename_to_author_title(name: &str) -> (String, String, String)`
-//! - `backend::book_classifier::get_effective_filename(path: &Path, root: &Path) -> String`
-//! - `backend::book_classifier::title_similarity(a: &str, b: &str) -> f64`
-//! - `backend::book_classifier::is_single_match_valid(search: &str, found: &str) -> bool`
-//! - `backend::book_classifier::is_title_match_reliable(search: &str, found: &str) -> bool`
-//! - `backend::book_classifier::map_category(cat: &str, title: &str, author: &str) -> Option<String>`
-//! - `backend::book_classifier::clean_empty_parent_dirs(path: &Path, stop_dir: &Path)`
-//! - `backend::book_classifier::MAX_OPF_BYTES: usize`
-//! - `backend::book_classifier::BookClassifierService::new(library_root: &Path, cache_file: Option<&Path>, classifier: Option<Arc<dyn backend::classifier::Classify>>) -> Self` (구 `Option<Box<..>>`, docs/rust-test-seams.md 4.1)
+//! - `classifier::book_classifier::extract_explicit_genre(name: &str) -> Option<String>`
+//! - `classifier::book_classifier::inspect_epub_metadata(path: &Path) -> EpubMetadata` (title/author/subject/description: String, `PartialEq + Debug`)
+//! - `classifier::book_classifier::inspect_txt_content(path: &Path) -> TxtContent` (hashtags: Vec<String>, snippet: String, header_genre: Option<String>)
+//! - `classifier::book_classifier::clean_filename_to_author_title(name: &str) -> (String, String, String)`
+//! - `classifier::book_classifier::get_effective_filename(path: &Path, root: &Path) -> String`
+//! - `classifier::book_classifier::title_similarity(a: &str, b: &str) -> f64`
+//! - `classifier::book_classifier::is_single_match_valid(search: &str, found: &str) -> bool`
+//! - `classifier::book_classifier::is_title_match_reliable(search: &str, found: &str) -> bool`
+//! - `classifier::book_classifier::map_category(cat: &str, title: &str, author: &str) -> Option<String>`
+//! - `classifier::book_classifier::clean_empty_parent_dirs(path: &Path, stop_dir: &Path)`
+//! - `classifier::book_classifier::MAX_OPF_BYTES: usize`
+//! - `classifier::book_classifier::BookClassifierService::new(library_root: &Path, cache_file: Option<&Path>, classifier: Option<Arc<dyn classifier::Classify>>) -> Self` (구 `Option<Box<..>>`, docs/rust-test-seams.md 4.1)
 //!   - `with_delay(f64)`, `with_bookstore_cache_file(&Path)`, `with_bookstore_policy(BookstorePolicy)`, `with_bookstore_decider(Arc<dyn BookstoreDecider>)` 소비형 빌더 (3.12). 구 `for_test`, `set_bookstore_policy`를 대체한다
 //!   - `process_file(&mut self, path, source_dir, ProcessOptions) -> Value` (target_category, action)
 //!   - `classify_file`, `_decide(...)` -> `Decision { category, method, reason, model_category, confidence }`, `_decide_by_bookstore(&mut Value) -> (Option<String>, String, String)`
-//! - `backend::classifier::Classify` 트레이트: `is_available()`, `classify_path(&Path, Option<f64>) -> Result<Prediction, String>`, `classify_document(&Value, Option<f64>) -> Result<Prediction, String>`
-//! - `backend::classifier::model::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str)`
-//! - `backend::classifier::BookCategoryClassifier::new(model: Option<Arc<dyn CategoryModelApi>>, ClassifierOptions)`는 `Classify`를 구현한다
-//! - `backend::book_classifier::BookstorePolicy { override_below: f64 }` (`prefers_bookstore(confidence) = confidence < override_below`)
+//! - `classifier::Classify` 트레이트: `is_available()`, `classify_path(&Path, Option<f64>) -> Result<Prediction, String>`, `classify_document(&Value, Option<f64>) -> Result<Prediction, String>`
+//! - `classifier::model::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str)`
+//! - `classifier::BookCategoryClassifier::new(model: Option<Arc<dyn CategoryModelApi>>, ClassifierOptions)`는 `Classify`를 구현한다
+//! - `classifier::book_classifier::BookstorePolicy { override_below: f64 }` (`prefers_bookstore(confidence) = confidence < override_below`)
 //!
 //! `test_book_classifier_service_methods_and_cache`와 `test_classify_file_exposes_model_confidence`는 서비스 내부 바꿔치기(`stub_*`, `set_fs`, `set_bookstores`) 대신
 //! `with_fs`(FaultyFs), 서점 클라이언트 pub 필드(`StubBookstore`), 모델 대역으로 같은 갈래를 만든다. 단언은 원본 그대로다.
@@ -32,9 +32,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use backend::book_classifier::*;
-use backend::classifier::model::Prediction;
-use backend::classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
+use classifier::book_classifier::*;
+use classifier::model::Prediction;
+use classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
 use common::zipx::write_zip_text;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -796,7 +796,7 @@ fn map_category_does_not_classify_a_poetry_label_that_also_names_fiction() {
 #[test]
 fn test_bookstore_decider_default_delegates_to_original() {
     struct DefaultDecider;
-    impl backend::book_classifier::BookstoreDecider for DefaultDecider {}
+    impl classifier::book_classifier::BookstoreDecider for DefaultDecider {}
 
     let mut entry = json!({"before": true});
     let vote = DefaultDecider.decide(&mut entry, false, &|entry, trust| {
@@ -812,7 +812,7 @@ fn test_bookstore_decider_default_delegates_to_original() {
 fn test_book_classifier_service_exposes_roots_cache_and_policy() {
     let tmp = TempDir::new().unwrap();
     let custom_cache = tmp.path().join("cache.json");
-    let policy = backend::classifier::bookstore_policy::BookstorePolicy { override_below: 0.42, ..Default::default() };
+    let policy = classifier::bookstore_policy::BookstorePolicy { override_below: 0.42, ..Default::default() };
     let service = BookClassifierService::new(tmp.path(), Some(&custom_cache), Some(Arc::new(StubClassifier::confident()))).with_bookstore_policy(policy.clone());
 
     assert_eq!(service.library_root(), tmp.path());

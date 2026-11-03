@@ -4,7 +4,7 @@
 //! 여기에는 `read_epub_publisher` 네 개만 둔다(corpus_common crate에는 아직 없는 함수다).
 //!
 //! 가정한 API:
-//! - `backend::classifier::reader::read_epub_publisher(path: &Path) -> String`
+//! - `classifier::reader::read_epub_publisher(path: &Path) -> String`
 
 mod common;
 
@@ -12,7 +12,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use backend::classifier::reader::read_epub_publisher;
+use classifier::reader::read_epub_publisher;
 use tempfile::TempDir;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;

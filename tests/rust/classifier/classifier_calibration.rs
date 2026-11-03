@@ -1,21 +1,21 @@
 //! 원본: tests/test_classifier_calibration.py
 //!
 //! 가정한 API:
-//! - `backend::classifier::calibration::MIN_SAMPLES: usize`
-//! - `backend::classifier::calibration::fit_expected_accuracy(conf: &[f64], correct: &[bool]) -> Result<Option<Value>, ValueError>`
-//! - `backend::classifier::calibration::expected_accuracy(cal: Option<&Value>, conf: Option<f64>) -> Option<f64>`
-//! - `backend::classifier::calibration::from_coverage_report(holdout: Option<&Value>) -> Option<Value>`
-//! - `backend::classifier::model::CategoryModel::with_meta(meta: Value) -> CategoryModel` (Python `__new__` 후 meta 대입에 대응)
+//! - `classifier::calibration::MIN_SAMPLES: usize`
+//! - `classifier::calibration::fit_expected_accuracy(conf: &[f64], correct: &[bool]) -> Result<Option<Value>, ValueError>`
+//! - `classifier::calibration::expected_accuracy(cal: Option<&Value>, conf: Option<f64>) -> Option<f64>`
+//! - `classifier::calibration::from_coverage_report(holdout: Option<&Value>) -> Option<Value>`
+//! - `classifier::model::CategoryModel::with_meta(meta: Value) -> CategoryModel` (Python `__new__` 후 meta 대입에 대응)
 //! - `CategoryModel::confidence_calibration(&self) -> Option<Value>`, `CategoryModel::expected_accuracy(&self, f64) -> Option<f64>`
-//! - `backend::classifier::ValueError` (Python `ValueError`)
+//! - `classifier::ValueError` (Python `ValueError`)
 //!
 //! 확신도 보정의 쓸모는 하나다. 화면에 뜨는 숫자가 '맞을 확률'로 읽혀도 되는가.
 //! 그래서 단조성, 표본 부족, 보정 없음 세 가지를 본다.
 
 mod common;
 
-use backend::classifier::calibration::{MIN_SAMPLES, expected_accuracy, fit_expected_accuracy, from_coverage_report};
-use backend::classifier::model::CategoryModel;
+use classifier::calibration::{MIN_SAMPLES, expected_accuracy, fit_expected_accuracy, from_coverage_report};
+use classifier::model::CategoryModel;
 use serde_json::{Value, json};
 
 /// 시드 고정 난수. numpy 대신 splitmix64를 쓴다.

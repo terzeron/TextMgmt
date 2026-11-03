@@ -4,14 +4,14 @@
 //! 그래서 확인할 것도 두 가지다. 어떤 키로 같은 책을 알아보는가, 그리고 어떤 응답을 남기면 안 되는가.
 //!
 //! 가정한 API:
-//! - `backend::bookstore_cache::BookstoreResponseCache::new(path: impl AsRef<Path>) -> Self`
+//! - `classifier::bookstore_cache::BookstoreResponseCache::new(path: impl AsRef<Path>) -> Self`
 //!   - `get(&self, isbn: &str, title: &str, author: &str) -> Option<Value>` (Python 기본값 `""`는 빈 문자열로 넘긴다)
 //!   - `put(&mut self, stores: &Value, title: &str, author: &str, isbn: &str)`
 //!   - `path(&self) -> &Path`
 //! - 경고 로그는 `log` crate 파사드로 남긴다. 테스트는 `common::log_capture::LogCapture`(RAII, 스레드 로컬)로 caplog를 대신한다.
 //! - `bookstore::stores::BookstoreSearch` 트레이트: `search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String)`
 //!   (`SearchRow`는 `(title, author, category, detail_url, search_url, isbn)` 문자열 6-튜플)
-//! - `backend::book_classifier::BookClassifierService`
+//! - `classifier::book_classifier::BookClassifierService`
 //!   - `new(library_root: &Path, cache_file: Option<&Path>, classifier: Option<Arc<dyn Classify>>) -> Self`
 //!   - `with_delay(self, f64) -> Self`, `with_bookstore_cache_file(self, &Path) -> Self`
 //!   - pub 필드 `yes24`, `aladin`, `kyobo: Box<dyn BookstoreSearch>`
@@ -24,9 +24,9 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use backend::book_classifier::BookClassifierService;
+use classifier::book_classifier::BookClassifierService;
 use bookstore::stores::{BookstoreSearch, SearchRow};
-use backend::bookstore_cache::BookstoreResponseCache;
+use classifier::bookstore_cache::BookstoreResponseCache;
 use common::log_capture::LogCapture;
 use serde_json::{Value, json};
 use tempfile::TempDir;

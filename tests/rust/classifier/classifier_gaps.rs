@@ -1,17 +1,17 @@
 //! 원본: tests/test_classifier_gaps.py
 //!
 //! 가정한 API (docs/rust-test-seams.md 3.12, 3.13):
-//! - `backend::book_classifier::{BookClassifierService, clean_empty_parent_dirs_with, inspect_epub_metadata, is_title_match_reliable}`
+//! - `classifier::book_classifier::{BookClassifierService, clean_empty_parent_dirs_with, inspect_epub_metadata, is_title_match_reliable}`
 //!   - `BookClassifierService::new(library_root: &Path, cache_file: Option<&Path>, classifier: Option<Arc<dyn Classify>>) -> Self` (구 `Option<BookCategoryClassifier>`)
 //!   - `BookClassifierService::_decide_by_bookstore(&self, entry: &mut Value) -> (String, String)` (Python은 튜플, 둘째 값이 판정 사유 코드; Rust 이름은 `decide_by_bookstore`)
 //!   - `clean_empty_parent_dirs_with(child: &Path, root: &Path, fs: &dyn sysdeps::FsOps)` (`FsOps`에서 경로 정보와 삭제 작업을 받는다.)
 //!   - `inspect_epub_metadata(path: &Path) -> Value`
 //!   - `is_title_match_reliable(a: &str, b: &str) -> bool`
-//! - `backend::classifier::{BookCategoryClassifier, ClassifierOptions}`: `BookCategoryClassifier::new(model: Option<Arc<dyn CategoryModelApi>>, ClassifierOptions) -> Self`
+//! - `classifier::{BookCategoryClassifier, ClassifierOptions}`: `BookCategoryClassifier::new(model: Option<Arc<dyn CategoryModelApi>>, ClassifierOptions) -> Self`
 //!   - `ClassifierOptions { es: Option<Arc<dyn EsTransport>>, library_root: Option<PathBuf>, min_confidence: Option<f64> }` (Default 구현)
 //!   - `BookCategoryClassifier::expected_accuracy(&self, f64) -> Option<f64>`
-//! - `backend::classifier::model::CategoryModelApi` trait: `fn expected_accuracy(&self, f64) -> Option<f64>` (MagicMock 대체 seam. 구 `ClassifierModel`. 다른 메서드는 기본 구현)
-//! - `backend::classifier::features::FeatureSpace::new(&Value) -> Self`, `FeatureSpace::names() -> Vec<String>`
+//! - `classifier::model::CategoryModelApi` trait: `fn expected_accuracy(&self, f64) -> Option<f64>` (MagicMock 대체 seam. 구 `ClassifierModel`. 다른 메서드는 기본 구현)
+//! - `classifier::features::FeatureSpace::new(&Value) -> Self`, `FeatureSpace::names() -> Vec<String>`
 
 mod common;
 
@@ -19,10 +19,10 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use backend::book_classifier::{BookClassifierService, clean_empty_parent_dirs_with, inspect_epub_metadata, is_title_match_reliable};
-use backend::classifier::features::FeatureSpace;
-use backend::classifier::model::CategoryModelApi;
-use backend::classifier::{BookCategoryClassifier, ClassifierOptions};
+use classifier::book_classifier::{BookClassifierService, clean_empty_parent_dirs_with, inspect_epub_metadata, is_title_match_reliable};
+use classifier::features::FeatureSpace;
+use classifier::model::CategoryModelApi;
+use classifier::{BookCategoryClassifier, ClassifierOptions};
 use common::faulty_fs::{FaultyFs, other_err};
 use common::zipx::write_zip;
 use serde_json::json;

@@ -10,7 +10,7 @@
 //!   - `FileReader { fn read_file(&self, path: &Path, path_prefix: Option<&Path>) -> Docs }` (구 `Loader.read_file` 바꿔치기. 모양은 book_manager_1과 같다고 가정)
 //! - `backend::es_manager::EsManagerApi`의 커버 목록 메서드(문서 3.3 "나머지"): `search_cover_files_paged(&[String], size: i64, search_after: Option<(i64, i64, String)>, exclude: &[String]) -> Result<(Vec<(i64, Value, Vec<Value>)>, i64), EsError>`,
 //!   `search_group_representatives(&[String], exclude: &[String]) -> Result<HashMap<String, Vec<(i64, Value)>>, EsError>`, `aggregate_cover_categories() -> Result<HashMap<String, (usize, f64, f64)>, EsError>`
-//! - `backend::book_classifier::BookClassifierApi` (구 `ClassifierService`. 3.12): `min_confidence() -> Option<f64>`, `expected_accuracy(Option<f64>) -> Option<Option<f64>>`. 모든 메서드에 기본 구현이 있다
+//! - `classifier::book_classifier::BookClassifierApi` (구 `ClassifierService`. 3.12): `min_confidence() -> Option<f64>`, `expected_accuracy(Option<f64>) -> Option<Option<f64>>`. 모든 메서드에 기본 구현이 있다
 //! - `BookManager::_downscale_epub_image(&[u8]) -> Vec<u8>` (정적), `_model_decision_floor(&dyn BookClassifierApi) -> f64`,
 //!   `_expected_accuracy(&dyn BookClassifierApi, f64) -> Option<f64>`, `_vote_count_for(&str, &[(String, i64)]) -> i64`
 //! - `manager._fill_second_with_model(Vec<Value>, &[(String, f64)]) -> Vec<Value>`,
@@ -42,7 +42,7 @@ use std::sync::{Arc, Mutex};
 
 use backend::book::Book;
 use backend::book_manager::{ApplyOptions, BookManager, BookManagerDeps, CoverPage, CoverPageOpts, FileReader, MAX_CATEGORY_PAGE_SIZE, MoveOpts, ProposeOptions, encode_category_cursor};
-use backend::classifier::BookClassifierApi;
+use classifier::BookClassifierApi;
 use backend::es_manager::{EsError, EsManagerApi};
 use backend::main::BookManagerApi;
 use common::es_fake::{Docs, FakeEsManager};

@@ -1,4 +1,4 @@
-use backend::classifier::{corpus, model::CategoryModel, training};
+use classifier::{corpus, model::CategoryModel, training};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
