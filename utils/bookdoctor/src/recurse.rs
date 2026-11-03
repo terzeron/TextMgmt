@@ -11,7 +11,7 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use corpus_common::reader::open_zip;
+use text_extractor::open_zip;
 use crate::ole::{Limits as OleLimits, OleFile};
 use crate::{Category, FileReport, Severity};
 use crate::sniff::{Sniffed, sniff};
@@ -124,7 +124,7 @@ enum Kind {
 }
 
 /// `name` 멤버의 앞 `max`바이트를 읽는다.
-fn read_prefix(zip: &mut corpus_common::reader::Zip, name: &str, max: u64) -> Option<Vec<u8>> {
+fn read_prefix(zip: &mut text_extractor::Zip, name: &str, max: u64) -> Option<Vec<u8>> {
     let mut data = Vec::new();
     zip.by_name(name).ok()?.take(max).read_to_end(&mut data).ok()?;
     Some(data)
@@ -158,7 +158,7 @@ fn zip_extensions(file: &Path) -> Vec<&'static str> {
 
 /// `mimetype`이 `application/hwp+zip`이고 `container.xml`이 (4KiB 안에서) `hwpml-package`를 말하며 `.opf`를 가리키지 않는가.
 /// `container.xml`이 4KiB보다 크면 끝까지 보지 못하므로 확신할 수 없다(`false`).
-fn is_genuine_hwpx_container(zip: &mut corpus_common::reader::Zip) -> bool {
+fn is_genuine_hwpx_container(zip: &mut text_extractor::Zip) -> bool {
     const CAP: u64 = 4096;
     let mime_ok = read_prefix(zip, "mimetype", 64).is_some_and(|m| m.trim_ascii().eq_ignore_ascii_case(b"application/hwp+zip"));
     let Some(xml) = read_prefix(zip, "META-INF/container.xml", CAP + 1) else { return false };

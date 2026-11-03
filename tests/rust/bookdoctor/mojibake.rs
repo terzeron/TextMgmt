@@ -11,7 +11,7 @@ use bookdoctor::mojibake::{self, MIN_HANGUL_RATIO, MOJIBAKE_LIKENESS_THRESHOLD, 
 use bookdoctor::pdf;
 use bookdoctor::scan::scan_file;
 use common::*;
-use corpus_common::reader::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, korean_likeness, read_document_text};
+use text_extractor::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, korean_likeness, extract_document_text};
 use bookdoctor::{Category, FileReport, Severity};
 
 fn hanja() -> String {
@@ -164,13 +164,13 @@ fn cp949_txt_is_not_utf8_but_not_mojibake() {
 #[test]
 fn txt_with_a_stray_invalid_byte_keeps_the_old_verdict() {
     // UTF-8이 아닌 파일은 `decode_best`가 가장 한국어다운 디코딩을 고른다. 새 도구는 같은 읽기 함수를 쓰므로
-    // 옛 판정(`classify_text(read_document_text(..))`)과 MOJIBAKE 여부가 항상 같다.
+    // 옛 판정(`classify_text(extract_document_text(..))`)과 MOJIBAKE 여부가 항상 같다.
     let mut bytes = corrupted().into_bytes();
     bytes.insert(bytes.len() / 2, 0xFF);
     let f = file_with("s.txt", &bytes);
     let r = scan_file(f.path(), &opts());
     assert!(find(&r, "INVALID_UTF8").is_some());
-    let old = classify_text(&read_document_text(f.path(), TEXT_HEAD_CHARS, TEXT_TAIL_CHARS)).0;
+    let old = classify_text(&extract_document_text(f.path(), TEXT_HEAD_CHARS, TEXT_TAIL_CHARS)).0;
     assert_eq!(find(&r, "MOJIBAKE").is_some(), old == Verdict::Corrupted, "{r:?}");
 }
 
@@ -331,12 +331,12 @@ fn pdf_named_epub_with_clean_body_has_no_mojibake_and_is_complete() {
 
 #[test]
 fn epub_named_file_keeps_the_old_tool_verdict() {
-    // 확장자가 .epub이면 옛 `classify_text(read_document_text(..))`와 판정이 같다.
+    // 확장자가 .epub이면 옛 `classify_text(extract_document_text(..))`와 판정이 같다.
     for chapter in [corrupted(), clean_korean().repeat(4)] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("b.epub");
         epub_with_chapter(&path, &xhtml(&format!("<p>{chapter}</p>")));
-        let old = classify_text(&read_document_text(&path, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS)).0;
+        let old = classify_text(&extract_document_text(&path, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS)).0;
         let r = scan_file(&path, &opts());
         assert_eq!(find(&r, "MOJIBAKE").is_some(), old == Verdict::Corrupted, "{r:?}");
     }

@@ -1,7 +1,7 @@
 //! 원본: tests/test_classifier_reader.py
 //!
-//! 27개 중 23개는 `tests/rust/corpus_common/reader.rs`에 이미 옮겨져 있어 건너뛰었다.
-//! 여기에는 `read_epub_publisher` 네 개만 둔다(corpus_common crate에는 아직 없는 함수다).
+//! 27개 중 23개는 `tests/rust/text_extractor/reader.rs`에 이미 옮겨져 있어 건너뛰었다.
+//! 여기에는 `read_epub_publisher` 네 개만 둔다(text_extractor crate에는 아직 없는 함수다).
 //!
 //! 가정한 API:
 //! - `classifier::reader::read_epub_publisher(path: &Path) -> String`

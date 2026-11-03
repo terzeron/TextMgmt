@@ -172,7 +172,7 @@ path = "../../tests/rust/bookdoctor/runner.rs"
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-corpus_common = { path = "../../libs/corpus_common" }
+text_extractor = { path = "../../libs/text_extractor" }
 encoding_rs = "0.8.42"
 fancy-regex = "0.14"
 flate2 = "1"

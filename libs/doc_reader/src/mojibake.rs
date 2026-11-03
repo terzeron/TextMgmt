@@ -1,6 +1,6 @@
 //! EUC-KR 바이트를 latin-1로 잘못 읽은 구간 세기. 원본: `Loader._count_mojibake_runs`.
 
-use corpus_common::reader::{decode_korean_ignore, is_hangul_syllable};
+use text_extractor::{decode_korean_ignore, is_hangul_syllable};
 
 use crate::TEXT_SIZE;
 use crate::pytext::head_chars;

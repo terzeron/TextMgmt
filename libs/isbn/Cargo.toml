@@ -11,7 +11,7 @@ name = "isbn"
 path = "../../tests/rust/isbn/isbn.rs"
 
 [dependencies]
-corpus_common = { path = "../corpus_common" }
+text_extractor = { path = "../text_extractor" }
 flate2 = "1"
 htmlkit = { path = "../htmlkit" }
 lopdf.workspace = true

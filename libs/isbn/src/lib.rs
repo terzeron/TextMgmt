@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
-use corpus_common::reader::{decode_utf8_ignore, open_zip};
+use text_extractor::{decode_utf8_ignore, open_zip};
 use htmlkit::{local_name, text_of, tokenize};
 use sysdeps::timeout::{run_with_hard_timeout, run_with_timeout};
 use sysdeps::{CommandError, CommandRunner, SystemRunner};
@@ -238,11 +238,11 @@ pub fn extract_from_hwp(path: &Path, runner: &dyn CommandRunner) -> Vec<String> 
 
 // ---------------------------------------------------------------- EPUB
 
-fn read_member(zip: &mut corpus_common::reader::Zip, name: &str) -> Result<Option<String>, ()> {
+fn read_member(zip: &mut text_extractor::Zip, name: &str) -> Result<Option<String>, ()> {
     use std::io::Read as _;
     let Ok(entry) = zip.by_name(name) else { return Ok(None) };
     let mut data = Vec::new();
-    entry.take(corpus_common::reader::MAX_MEMBER_BYTES).read_to_end(&mut data).map_err(|_| ())?;
+    entry.take(text_extractor::MAX_MEMBER_BYTES).read_to_end(&mut data).map_err(|_| ())?;
     Ok(Some(decode_utf8_ignore(&data)))
 }
 
@@ -354,7 +354,7 @@ pub fn pdf_text_fallback(path: &Path) -> Result<String, String> {
         let raw = blocks[idx];
         let mut inflated = Vec::new();
         // 압축 폭탄 스트림이 메모리를 다 쓰지 않도록 상한까지만 푼다.
-        let content = match flate2::read::ZlibDecoder::new(raw).take(corpus_common::reader::MAX_MEMBER_BYTES).read_to_end(&mut inflated) {
+        let content = match flate2::read::ZlibDecoder::new(raw).take(text_extractor::MAX_MEMBER_BYTES).read_to_end(&mut inflated) {
             Ok(_) => &inflated[..],
             Err(_) => raw,
         };

@@ -1,6 +1,6 @@
 [package]
-name = "corpus_common"
-description = "코퍼스 도구 공용 코드: 본문 읽기, 인코딩 판별, 경로 도구"
+name = "text_extractor"
+description = "책 파일 본문 발췌, 인코딩 판별, 한국어 판정, ZIP 열기, EPUB 내부 경로 도구"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -8,11 +8,11 @@ autotests = false
 
 [[test]]
 name = "common_fns"
-path = "../../tests/rust/corpus_common/common_fns.rs"
+path = "../../tests/rust/text_extractor/common_fns.rs"
 
 [[test]]
 name = "reader"
-path = "../../tests/rust/corpus_common/reader.rs"
+path = "../../tests/rust/text_extractor/reader.rs"
 
 [dependencies]
 encoding_rs = "0.8.42"

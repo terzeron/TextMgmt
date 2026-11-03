@@ -9,7 +9,7 @@ autotests = false
 [dependencies]
 bookstore = { path = "../bookstore" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-corpus_common = { path = "../corpus_common" }
+text_extractor = { path = "../text_extractor" }
 db = { path = "../db" }
 es_client = { path = "../es_client" }
 fancy-regex = "0.14.0"

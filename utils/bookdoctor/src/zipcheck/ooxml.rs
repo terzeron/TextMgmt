@@ -6,8 +6,8 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use corpus_common::reader::{Zip, open_zip};
-use corpus_common::util::{posix_join, posix_normpath, unquote};
+use text_extractor::{Zip, open_zip};
+use text_extractor::path::{posix_join, posix_normpath, unquote};
 use regex::Regex;
 use crate::sniff::{Sniffed, sniff};
 use crate::display::sanitize_display;

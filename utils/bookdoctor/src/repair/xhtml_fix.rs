@@ -12,7 +12,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::sync::LazyLock;
 
-use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
+use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 use regex::Regex;
 use scraper::{Html, Node};
 

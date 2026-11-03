@@ -11,7 +11,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
+use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 use htmlkit::{decode_entities, text_of};
 use regex::Regex;
 use crate::sniff::{Sniffed, sniff};

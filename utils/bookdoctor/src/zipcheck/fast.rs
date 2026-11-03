@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use corpus_common::reader::open_zip;
+use text_extractor::open_zip;
 use crate::sniff::{is_text_name, shannon};
 use crate::sniff::{Sniffed, sniff};
 use crate::display::sanitize_display;

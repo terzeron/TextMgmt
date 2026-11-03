@@ -1,7 +1,7 @@
 //! ZIP 멤버 이름 규칙. EPUB 보안 검사(`epub::security`)와 ZIP·DOCX·HWPX 검사가 같은 규칙을 쓰도록 순수 함수로 둔다.
 //! 이름이 가리키는 위험은 압축을 푸는 쪽(추출기)이 입는다: 경로 탈출(Zip Slip), 절대 경로, Windows 장치 이름, NTFS 스트림.
 
-use corpus_common::util::unquote;
+use text_extractor::path::unquote;
 use crate::Severity;
 
 /// Windows 예약 장치 이름. 확장자를 떼고 소문자로 비교한다.

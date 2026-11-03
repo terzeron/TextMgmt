@@ -14,8 +14,8 @@ use regex::bytes::Regex;
 use crate::{Category, FileReport, Severity};
 use zip::CompressionMethod;
 
-use corpus_common::reader::{Zip, open_zip};
-use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
+use text_extractor::{Zip, open_zip};
+use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 
 pub const EPUB_MIMETYPE: &[u8] = b"application/epub+zip";
 pub const ISSUE_NOT_ZIP: &str = "not_zip";

@@ -27,7 +27,7 @@ name = "markup"
 path = "../../tests/rust/doc_reader/markup.rs"
 
 [dependencies]
-corpus_common = { path = "../corpus_common" }
+text_extractor = { path = "../text_extractor" }
 ego-tree = "0.11"
 encoding_rs = "0.8.42"
 flate2 = "1"

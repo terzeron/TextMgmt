@@ -17,8 +17,8 @@ use regex::Regex;
 use roxmltree::{Document, Node};
 use crate::{Category, FileReport, Severity};
 
-use corpus_common::reader::{Zip, open_zip};
-use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
+use text_extractor::{Zip, open_zip};
+use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 
 use super::security::Limits;
 use super::structure::{ISSUE_MEMBER_UNREADABLE, ISSUE_TO_CODE, is_markup, parse_xml, rootfile_path, spine_members};

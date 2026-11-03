@@ -235,7 +235,7 @@ impl BookCategoryClassifier {
 
     /// 파일에서 본문 앞부분을 읽는다. ES summary 는 앞부분만 담으므로 뒷부분은 붙이지 않는다.
     pub fn read_text(path: &Path) -> String {
-        Self::read_text_with(path, &|p| Ok(reader::read_document_text(p, FALLBACK_TEXT_CHARS, 0)))
+        Self::read_text_with(path, &|p| Ok(reader::extract_document_text(p, FALLBACK_TEXT_CHARS, 0)))
     }
 
     /// `read_text` 의 리더 주입 판. 리더가 실패해도 빈 문자열로 삼킨다.

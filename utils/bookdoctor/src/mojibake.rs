@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use corpus_common::reader::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, is_hangul_syllable, korean_likeness, read_epub_text_limited, read_txt_text};
+use text_extractor::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, is_hangul_syllable, korean_likeness, extract_epub_text_limited, extract_txt_text};
 use crate::{Category, FileReport, Severity};
 
 /// 손상 0.006 이하, 정상 0.271 이상. 사이가 비어 있어 경계를 넉넉히 잡는다.
@@ -67,14 +67,14 @@ pub fn check_text(report: &mut FileReport, text: &str) {
 }
 
 /// 표본을 읽는 방식. 확장자가 아니라 호출한 검사기(내용으로 정한 포맷)가 정한다.
-/// `read_document_text`는 확장자로 분기하므로 `.pdf`라는 이름의 EPUB에는 빈 문자열을 돌려준다(검토 I1).
+/// `extract_document_text`는 확장자로 분기하므로 `.pdf`라는 이름의 EPUB에는 빈 문자열을 돌려준다(검토 I1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextSource {
     Txt,
     Epub,
 }
 
-/// 파일에서 앞·뒤 표본을 읽어 판정한다. `read_document_text`가 확장자별로 부르는 읽기 함수를 `source`로 직접 고르므로
+/// 파일에서 앞·뒤 표본을 읽어 판정한다. `extract_document_text`가 확장자별로 부르는 읽기 함수를 `source`로 직접 고르므로
 /// `.txt`·`.epub` 이름 파일의 표본은 원본 `inspect_file`(lib.rs 99행~)과 같다.
 /// 추출한 본문이 없으면 검사하지 못한 것이므로 `incomplete`다. 너무 짧은 본문은 발견도 `incomplete`도 아니다.
 /// EPUB 표본은 압축 해제 총량 상한 없이 읽는다. 신뢰할 수 없는 파일은 `check_file_limited`를 쓴다.
@@ -86,8 +86,8 @@ pub fn check_file(path: &Path, report: &mut FileReport, source: TextSource) {
 /// 예산이 바닥나 표본이 잘렸으면 `incomplete`로 표시한다.
 pub fn check_file_limited(path: &Path, report: &mut FileReport, source: TextSource, max_total: u64, max_members: usize) {
     let (text, cut) = match source {
-        TextSource::Txt => (read_txt_text(path, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS), false),
-        TextSource::Epub => read_epub_text_limited(path, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, max_total, max_members),
+        TextSource::Txt => (extract_txt_text(path, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS), false),
+        TextSource::Epub => extract_epub_text_limited(path, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, max_total, max_members),
     };
     if cut {
         report.mark_incomplete("mojibake sampling: decompression budget reached, sample truncated");

@@ -32,7 +32,7 @@ pub fn scan_epub_file(path: &Path, opts: &Options, report: &mut FileReport) {
     // ZIP으로 열렸을 때만 렌더링·손상 검사를 한다. NOT_ZIP이면 읽을 멤버가 없다.
     if !report.has("NOT_ZIP") {
         render::inspect_with_verified(path, report, &limits, &verified);
-        // 옛 인코딩 검사 도구와 같은 표본(`read_epub_text`, 확장자와 무관)으로 인코딩 손상을 판정한다.
+        // 옛 인코딩 검사 도구와 같은 표본(`extract_epub_text`, 확장자와 무관)으로 인코딩 손상을 판정한다.
         // 보안 검사가 압축 폭탄이나 예산 소진을 이미 보고했다면 같은 멤버를 다시 풀지 않는다.
         if bomb_reported(report) {
             report.mark_incomplete("mojibake sampling skipped: decompression bomb or budget exhaustion already reported");

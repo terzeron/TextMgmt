@@ -15,7 +15,7 @@ docs/       문서
 
 | crate | 용도 |
 | --- | --- |
-| `corpus_common` | 본문 표본 읽기, 인코딩 판별, ZIP 열기, Python `posixpath` 호환 경로·URL 도구 |
+| `text_extractor` | 책 파일(TXT·EPUB) 본문 앞뒤 발췌(`extract_*`), 인코딩 판별, 한국어 판정, ZIP 열기, EPUB 내부 경로 도구(`path`). `doc_reader`의 아래 계층이다 |
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. backend `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
@@ -46,7 +46,7 @@ docs/       문서
 - **라이브러리와 backend는 도구에 의존하지 않는다.** 공유할 코드는 `libs/`로 올린다.
 - **한 crate만 쓰는 코드는 그 crate 안에 둔다.** 사용자가 둘 이상이 될 때 `libs/`로 올린다.
 - `bookstore`는 공개 서점 HTTPS를 사용한다. ES client도 HTTP와 인증서 검증 HTTPS를 지원하며, 사설 CA는 `TM_ES_CA_CERT` PEM 경로로 지정한다. 인증서 검증을 끄는 우회로는 두지 않는다.
-- ZIP은 `corpus_common::reader::open_zip`으로 연다. `zip` 크레이트 기본 설정(`Detect`)은 파일 전체를 훑어 느리다
+- ZIP은 `text_extractor::open_zip`으로 연다. `zip` 크레이트 기본 설정(`Detect`)은 파일 전체를 훑어 느리다
   (1.5MB EPUB 하나에 읽기 1만 3천 번, 48ms). `open_zip`은 `Known(0)`으로 먼저 열고(0.2ms) 실패하면 `Detect`로 다시 연다.
 
 ## Backend 세션 인증

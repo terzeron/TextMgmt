@@ -398,7 +398,6 @@ name = "bookdoctor"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "corpus_common",
  "encoding_rs",
  "fancy-regex",
  "flate2",
@@ -413,6 +412,7 @@ dependencies = [
  "sha2",
  "sysdeps",
  "tempfile",
+ "text_extractor",
  "zip",
 ]
 
@@ -573,7 +573,6 @@ dependencies = [
  "base64 0.23.1",
  "bookstore",
  "chrono",
- "corpus_common",
  "db",
  "es_client",
  "fancy-regex",
@@ -587,6 +586,7 @@ dependencies = [
  "sha2",
  "sysdeps",
  "tempfile",
+ "text_extractor",
  "zip",
 ]
 
@@ -707,16 +707,6 @@ name = "core_detect"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
-
-[[package]]
-name = "corpus_common"
-version = "0.1.0"
-dependencies = [
- "encoding_rs",
- "regex",
- "tempfile",
- "zip",
-]
 
 [[package]]
 name = "cpubits"
@@ -1035,7 +1025,6 @@ dependencies = [
 name = "doc_reader"
 version = "0.1.0"
 dependencies = [
- "corpus_common",
  "ego-tree",
  "encoding_rs",
  "flate2",
@@ -1049,6 +1038,7 @@ dependencies = [
  "serde_json",
  "sysdeps",
  "tempfile",
+ "text_extractor",
  "zip",
 ]
 
@@ -1259,7 +1249,6 @@ name = "file_record"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "corpus_common",
  "doc_reader",
  "isbn",
  "lopdf",
@@ -1267,6 +1256,7 @@ dependencies = [
  "stat",
  "sysdeps",
  "tempfile",
+ "text_extractor",
 ]
 
 [[package]]
@@ -1958,7 +1948,6 @@ dependencies = [
 name = "isbn"
 version = "0.1.0"
 dependencies = [
- "corpus_common",
  "flate2",
  "htmlkit",
  "lopdf",
@@ -1966,6 +1955,7 @@ dependencies = [
  "stat",
  "sysdeps",
  "tempfile",
+ "text_extractor",
  "unicode-general-category",
  "zip",
 ]
@@ -3616,6 +3606,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5985fde5befe4ffa77a052e035e16c2da86e8bae301baa9f9904ad3c494d357"
 dependencies = [
  "testcontainers",
+]
+
+[[package]]
+name = "text_extractor"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "regex",
+ "tempfile",
+ "zip",
 ]
 
 [[package]]

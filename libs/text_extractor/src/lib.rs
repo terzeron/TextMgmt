@@ -1,10 +1,21 @@
-//! 파일에서 본문 표본을 읽는다. backend/classifier/reader.py 중 탐지기가 쓰는 부분의 이식.
+//! 책 파일(TXT·EPUB)에서 본문 일부(앞뒤 발췌)를 인코딩에 맞게 떼어 내고, 정상 한국어로 읽히는지 판정한다.
+//! `doc_reader`(형식별로 문서 전체를 읽는 상위 계층)와 분류기, bookdoctor가 아래 계층으로 쓴다.
+//!
+//! - 본문 발췌: [`extract_txt_text`], [`extract_epub_text`], [`extract_epub_text_limited`], [`extract_document_text`]
+//! - 인코딩 판별·디코딩: [`decode_best`], [`decode_korean_ignore`], [`decode_utf8_ignore`]
+//! - 한국어 판정: [`korean_likeness`]
+//! - ZIP 열기: [`open_zip`]
+//! - [`path`]: EPUB·OOXML 내부 경로용 Python `posixpath`/`urllib` 호환 도구
+//!
+//! 원본: backend/classifier/reader.py 중 탐지기가 쓰는 부분.
 //!
 //! 인코딩 판별은 네 번 고쳐 잡은 로직이다. 다시 쓰지 말 것:
 //!   - "한글이 하나라도 나오면 그 인코딩 채택"은 정상 CP949 소설 1,856건을 오판했다
 //!   - 한글 비율 하한이 없으면 영문 OCR 문서를 한글 잡음 60자로 판정한다
 //!   - UTF-16을 빼면 97건을 못 읽는다
 //!   - EPUB은 첫 문서가 목차인 경우가 있어 건너뛰어야 한다
+
+pub mod path;
 
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -181,7 +192,7 @@ fn last_chars(s: &str, n: usize) -> String {
 }
 
 /// TXT 앞부분과 뒷부분을 인코딩 추정하여 읽는다.
-pub fn read_txt_text(path: &Path, head_chars: usize, tail_chars: usize) -> String {
+pub fn extract_txt_text(path: &Path, head_chars: usize, tail_chars: usize) -> String {
     let Ok(size) = std::fs::metadata(path).map(|m| m.len()) else {
         return String::new();
     };
@@ -207,7 +218,7 @@ fn read_txt_parts(path: &Path, size: u64, head_chars: usize, tail_chars: usize) 
 /// 표본은 앞쪽 수만 자만 쓰므로 정상 문서는 영향이 없다.
 pub const MAX_MEMBER_BYTES: u64 = 16 * 1024 * 1024;
 
-/// `read_epub_text_limited`가 두 패스(앞·뒤)에 걸쳐 함께 쓰는 압축 해제 예산.
+/// `extract_epub_text_limited`가 두 패스(앞·뒤)에 걸쳐 함께 쓰는 압축 해제 예산.
 struct Budget {
     bytes_left: u64,
     members_left: usize,
@@ -266,15 +277,15 @@ fn gather(zip: &mut Zip, order: &[usize], chars: usize, budget: &mut Budget) -> 
 }
 
 /// EPUB 본문 앞쪽/뒤쪽 챕터의 태그를 걷어낸 텍스트. 총 압축 해제량과 읽는 멤버 수에 상한이 없다(멤버당 상한만 있다).
-/// 신뢰할 수 없는 파일에는 `read_epub_text_limited`를 쓴다.
-pub fn read_epub_text(path: &Path, head_chars: usize, tail_chars: usize) -> String {
-    read_epub_text_limited(path, head_chars, tail_chars, u64::MAX, usize::MAX).0
+/// 신뢰할 수 없는 파일에는 `extract_epub_text_limited`를 쓴다.
+pub fn extract_epub_text(path: &Path, head_chars: usize, tail_chars: usize) -> String {
+    extract_epub_text_limited(path, head_chars, tail_chars, u64::MAX, usize::MAX).0
 }
 
-/// `read_epub_text`에 압축 해제 총량(`max_total` 바이트)과 읽는 멤버 수(`max_members`) 상한을 둔다.
+/// `extract_epub_text`에 압축 해제 총량(`max_total` 바이트)과 읽는 멤버 수(`max_members`) 상한을 둔다.
 /// 앞·뒤 두 패스가 같은 예산을 나눠 쓴다. 예산이 바닥나 표본이 잘렸으면 두 번째 값이 true다.
 /// 작게 압축된 거대 멤버가 많은 EPUB(zip bomb)이 표본 추출만으로 분 단위 시간을 쓰지 못하게 한다.
-pub fn read_epub_text_limited(path: &Path, head_chars: usize, tail_chars: usize, max_total: u64, max_members: usize) -> (String, bool) {
+pub fn extract_epub_text_limited(path: &Path, head_chars: usize, tail_chars: usize, max_total: u64, max_members: usize) -> (String, bool) {
     let Some(mut zip) = open_zip(path) else { return (String::new(), false) };
 
     let names: Vec<(usize, String)> = zip
@@ -311,10 +322,10 @@ pub fn read_epub_text_limited(path: &Path, head_chars: usize, tail_chars: usize,
 }
 
 /// 확장자에 맞춰 본문 표본을 읽는다.
-pub fn read_document_text(path: &Path, head_chars: usize, tail_chars: usize) -> String {
+pub fn extract_document_text(path: &Path, head_chars: usize, tail_chars: usize) -> String {
     match path.extension().map(|e| e.to_string_lossy().to_lowercase()).as_deref() {
-        Some("txt") => read_txt_text(path, head_chars, tail_chars),
-        Some("epub") => read_epub_text(path, head_chars, tail_chars),
+        Some("txt") => extract_txt_text(path, head_chars, tail_chars),
+        Some("epub") => extract_epub_text(path, head_chars, tail_chars),
         _ => String::new(),
     }
 }

@@ -1,8 +1,8 @@
-//! corpus_common의 경로 도구와 한국어 디코딩 테스트 (옛 인코딩 검사 도구 테스트에서 옮겨 왔다).
+//! text_extractor의 경로 도구와 한국어 디코딩 테스트 (옛 인코딩 검사 도구 테스트에서 옮겨 왔다).
 
 #[test]
 fn path_helpers_follow_posixpath() {
-    use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
+    use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
     assert_eq!(posix_normpath(""), ".");
     assert_eq!(posix_normpath("a/./b//c/../d"), "a/b/d");
     assert_eq!(posix_normpath("//a"), "//a");
@@ -21,7 +21,7 @@ fn path_helpers_follow_posixpath() {
 
 #[test]
 fn korean_slow_path_keeps_decoding_long_text_after_an_invalid_byte() {
-    use corpus_common::reader::decode_korean_ignore;
+    use text_extractor::decode_korean_ignore;
     // 한글은 2바이트가 3바이트 UTF-8이 되므로, 버퍼를 입력 길이로만 잡으면 중간에서 OutputFull이 난다.
     let text = "안녕하세요 ".repeat(200);
     let (korean, _, _) = encoding_rs::EUC_KR.encode(&text);

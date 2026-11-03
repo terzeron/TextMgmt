@@ -11,8 +11,8 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use corpus_common::reader::{Zip, open_zip};
-use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
+use text_extractor::{Zip, open_zip};
+use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 use ego_tree::NodeRef;
 use regex::Regex;
 use scraper::{Html, Node};
@@ -85,7 +85,7 @@ fn read_member(zip: &mut Zip, name: &str) -> Result<Vec<u8>, String> {
     let file = zip.by_name(name).map_err(|_| format!("KeyError: {name}"))?;
     // 헤더의 선언 크기는 믿지 않는다(zip bomb). 미리 할당하지 않고 상한까지만 푼다.
     let mut buf = Vec::new();
-    file.take(corpus_common::reader::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
+    file.take(text_extractor::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
     Ok(buf)
 }
 
@@ -423,7 +423,7 @@ fn read_with_zip_regex_using(path: &Path, errors: &mut Vec<String>, parse: &Chap
 }
 
 fn decode_utf8_ignore(bytes: &[u8]) -> String {
-    corpus_common::reader::decode_utf8_ignore(bytes)
+    text_extractor::decode_utf8_ignore(bytes)
 }
 
 /// EPUB 파일: (요약, 줄 수). ebooklib 경로가 실패하면 정규식 경로로 간다.

@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use corpus_common::reader::*;
+use text_extractor::*;
 use std::fs;
 
 const KOREAN: &str = "그는 아무 말도 하지 않았다 그리고 다시 길을 걸었다 바람이 불었다 ";
@@ -99,124 +99,124 @@ fn decode_best_all_garbage_returns_something() {
 }
 
 #[test]
-fn read_txt_text_missing_file() {
+fn extract_txt_text_missing_file() {
     let d = tempfile::tempdir().unwrap();
-    assert_eq!(read_txt_text(&d.path().join("없는파일.txt"), 100, 10), "");
+    assert_eq!(extract_txt_text(&d.path().join("없는파일.txt"), 100, 10), "");
 }
 
 #[test]
-fn read_txt_text_head_only() {
+fn extract_txt_text_head_only() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("a.txt");
     fs::write(&f, KOREAN).unwrap();
-    assert_eq!(read_txt_text(&f, 1000, 100).trim(), KOREAN.trim());
+    assert_eq!(extract_txt_text(&f, 1000, 100).trim(), KOREAN.trim());
 }
 
 #[test]
-fn read_txt_text_reads_head_and_tail() {
+fn extract_txt_text_reads_head_and_tail() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("b.txt");
     fs::write(&f, format!("시작{}끝부분", "가".repeat(5000))).unwrap();
-    let text = read_txt_text(&f, 50, 20);
+    let text = extract_txt_text(&f, 50, 20);
     assert!(text.contains("시작"));
     assert!(text.contains("끝부분"));
 }
 
 #[test]
-fn read_txt_text_tail_disabled() {
+fn extract_txt_text_tail_disabled() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("c.txt");
     fs::write(&f, format!("시작{}끝부분", "가".repeat(5000))).unwrap();
-    assert!(!read_txt_text(&f, 50, 0).contains("끝부분"));
+    assert!(!extract_txt_text(&f, 50, 0).contains("끝부분"));
 }
 
 #[test]
-fn read_txt_text_unopenable_path_is_empty() {
+fn extract_txt_text_unopenable_path_is_empty() {
     let d = tempfile::tempdir().unwrap();
     // 디렉토리는 stat은 되지만 파일로 열어 읽을 수 없다.
-    assert_eq!(read_txt_text(d.path(), 100, 10), "");
+    assert_eq!(extract_txt_text(d.path(), 100, 10), "");
 }
 
 #[test]
-fn read_epub_text_without_html_documents() {
+fn extract_epub_text_without_html_documents() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("a.epub");
     make_zip(&p, &[("mimetype", "application/epub+zip")]);
-    assert_eq!(read_epub_text(&p, 100, 10), "");
+    assert_eq!(extract_epub_text(&p, 100, 10), "");
 }
 
 #[test]
-fn read_epub_text_strips_tags_and_skips_front_matter() {
+fn extract_epub_text_strips_tags_and_skips_front_matter() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("b.epub");
     let cover = format!("<html><body>{}</body></html>", "표지".repeat(100));
     let body = format!("<html><body>{}</body></html>", KOREAN.repeat(5));
     make_zip(&p, &[("cover.xhtml", &cover), ("body1.xhtml", &body)]);
-    let text = read_epub_text(&p, 2000, 0);
+    let text = extract_epub_text(&p, 2000, 0);
     assert!(!text.contains("표지"));
     assert!(text.contains("바람이"));
     assert!(!text.contains('<'));
 }
 
 #[test]
-fn read_epub_text_rotates_when_many_documents() {
+fn extract_epub_text_rotates_when_many_documents() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("c.epub");
     let docs: Vec<(String, String)> = (0..6).map(|i| (format!("ch{i}.xhtml"), format!("<p>장면{i} {}</p>", KOREAN.repeat(3)))).collect();
     let refs: Vec<(&str, &str)> = docs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
     make_zip(&p, &refs);
-    let text = read_epub_text(&p, 400, 100);
+    let text = extract_epub_text(&p, 400, 100);
     assert!(text.contains("장면2"));
     let head: String = text.chars().take(400).collect();
     assert!(!head.contains("장면0"));
 }
 
 #[test]
-fn read_epub_text_skips_short_documents() {
+fn extract_epub_text_skips_short_documents() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("d.epub");
     let long = format!("<p>{}</p>", KOREAN.repeat(5));
     make_zip(&p, &[("a.xhtml", "<p>짧음</p>"), ("b.xhtml", &long)]);
-    assert!(!read_epub_text(&p, 2000, 0).contains("짧음"));
+    assert!(!extract_epub_text(&p, 2000, 0).contains("짧음"));
 }
 
 #[test]
-fn read_epub_text_on_broken_zip() {
+fn extract_epub_text_on_broken_zip() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("broken.epub");
     fs::write(&p, b"not a zip at all").unwrap();
-    assert_eq!(read_epub_text(&p, 100, 10), "");
+    assert_eq!(extract_epub_text(&p, 100, 10), "");
 }
 
 #[test]
-fn read_epub_text_ignores_unreadable_member() {
+fn extract_epub_text_ignores_unreadable_member() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("e.epub");
     let body = format!("<p>{}</p>", KOREAN.repeat(5));
     make_zip(&p, &[("a.xhtml", &body)]);
     corrupt_local_header(&p, "a.xhtml");
-    assert_eq!(read_epub_text(&p, 2000, 0), "");
+    assert_eq!(extract_epub_text(&p, 2000, 0), "");
 }
 
 #[test]
-fn read_document_text_dispatches_by_extension() {
+fn extract_document_text_dispatches_by_extension() {
     let d = tempfile::tempdir().unwrap();
     let txt = d.path().join("a.txt");
     fs::write(&txt, KOREAN).unwrap();
-    assert!(read_document_text(&txt, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS).contains("바람이"));
+    assert!(extract_document_text(&txt, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS).contains("바람이"));
 
     let epub = d.path().join("a.epub");
     let body = format!("<p>{}</p>", KOREAN.repeat(5));
     make_zip(&epub, &[("body.xhtml", &body)]);
-    assert!(read_document_text(&epub, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS).contains("바람이"));
+    assert!(extract_document_text(&epub, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS).contains("바람이"));
 
     let other = d.path().join("a.pdf");
     fs::write(&other, b"%PDF-1.4").unwrap();
-    assert_eq!(read_document_text(&other, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS), "");
+    assert_eq!(extract_document_text(&other, TEXT_HEAD_CHARS, TEXT_TAIL_CHARS), "");
 }
 
 #[test]
-fn read_epub_text_limited_stops_at_the_total_budget() {
+fn extract_epub_text_limited_stops_at_the_total_budget() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("bomb.epub");
     // 멤버마다 2MB로 풀리는데 거의 0바이트로 압축되는 문서 40개. 예산 없이 읽으면 전부 푼다.
@@ -225,38 +225,38 @@ fn read_epub_text_limited_stops_at_the_total_budget() {
     let refs: Vec<(&str, &str)> = docs.iter().map(|(a, b)| (a.as_str(), *b)).collect();
     make_zip(&p, &refs);
     let started = std::time::Instant::now();
-    let (_, cut) = read_epub_text_limited(&p, 20_000, 10_000, 1024 * 1024, usize::MAX);
+    let (_, cut) = extract_epub_text_limited(&p, 20_000, 10_000, 1024 * 1024, usize::MAX);
     assert!(cut, "예산이 바닥나면 잘렸다고 알려야 한다");
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "예산이 읽기량을 묶어야 한다: {:?}", started.elapsed());
 }
 
 #[test]
-fn read_epub_text_limited_stops_at_the_member_count() {
+fn extract_epub_text_limited_stops_at_the_member_count() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("tags.epub");
     // 태그뿐인 문서는 50자 미만이라 건너뛰는데, 건너뛴 것도 읽은 것으로 센다.
     let docs: Vec<(String, &str)> = (0..100).map(|i| (format!("ch{i}.xhtml"), "<p></p>")).collect();
     let refs: Vec<(&str, &str)> = docs.iter().map(|(a, b)| (a.as_str(), *b)).collect();
     make_zip(&p, &refs);
-    let (text, cut) = read_epub_text_limited(&p, 20_000, 10_000, u64::MAX, 10);
+    let (text, cut) = extract_epub_text_limited(&p, 20_000, 10_000, u64::MAX, 10);
     assert!(cut);
     assert_eq!(text, "");
 }
 
 #[test]
-fn read_epub_text_limited_is_not_cut_when_the_sample_fits() {
+fn extract_epub_text_limited_is_not_cut_when_the_sample_fits() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("ok.epub");
     let body = format!("<p>{}</p>", KOREAN.repeat(5));
     make_zip(&p, &[("a.xhtml", &body)]);
-    let (text, cut) = read_epub_text_limited(&p, 2000, 0, 1024 * 1024, 100);
+    let (text, cut) = extract_epub_text_limited(&p, 2000, 0, 1024 * 1024, 100);
     assert!(!cut);
     assert!(text.contains("바람이"));
-    assert_eq!(text, read_epub_text(&p, 2000, 0));
+    assert_eq!(text, extract_epub_text(&p, 2000, 0));
 }
 
 #[test]
-fn read_epub_text_limited_charges_members_that_inflate_and_then_fail() {
+fn extract_epub_text_limited_charges_members_that_inflate_and_then_fail() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("badcrc.epub");
     let zeros = "\0".repeat(2 * 1024 * 1024);
@@ -279,7 +279,7 @@ fn read_epub_text_limited_charges_members_that_inflate_and_then_fail() {
     fs::write(&p, &bytes).unwrap();
     let started = std::time::Instant::now();
     // 예산 3MB. 멤버 하나가 2MB라 예산이 없으면 40개(80MB)를 전부 푼다.
-    let (_, cut) = read_epub_text_limited(&p, 20_000, 10_000, 3 * 1024 * 1024, usize::MAX);
+    let (_, cut) = extract_epub_text_limited(&p, 20_000, 10_000, 3 * 1024 * 1024, usize::MAX);
     assert!(cut);
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
 }

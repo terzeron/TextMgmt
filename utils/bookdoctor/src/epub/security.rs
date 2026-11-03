@@ -12,8 +12,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::LazyLock;
 
-use corpus_common::reader::{Zip, open_zip};
-use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
+use text_extractor::{Zip, open_zip};
+use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 use htmlkit::{Tag, decode_entities, local_name, tokenize};
 use regex::Regex;
 use crate::{Category, FileReport};

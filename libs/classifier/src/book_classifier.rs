@@ -65,7 +65,7 @@ static EXPLICIT_TAGS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| ta
 
 /// 파일명(URL 디코딩 후)에 명시된 장르 태그나 접두어를 표준 카테고리로 옮긴다.
 pub fn extract_explicit_genre(filename: &str) -> Option<String> {
-    let name = corpus_common::util::unquote(filename);
+    let name = text_extractor::path::unquote(filename);
     EXPLICIT_TAGS.iter().find(|(re, _)| re.is_match(&name)).map(|(_, c)| (*c).to_string())
 }
 
@@ -216,7 +216,7 @@ fn parse_opf(xml: &str, meta: &mut EpubMetadata) -> bool {
 /// EPUB 파일 내부의 `.opf` 메타데이터(title, author, subject, description)를 읽는다. 못 읽으면 빈 값이다.
 pub fn inspect_epub_metadata(path: &Path) -> EpubMetadata {
     let meta = EpubMetadata::default();
-    let Some(mut zip) = corpus_common::reader::open_zip(path) else { return meta };
+    let Some(mut zip) = text_extractor::open_zip(path) else { return meta };
     if zip.len() > crate::reader::MAX_ZIP_ENTRIES {
         return meta;
     }
@@ -288,7 +288,7 @@ pub fn inspect_txt_content(path: &Path) -> TxtContent {
     if file.take(HEAD_BYTES).read_to_end(&mut raw).is_err() {
         return info;
     }
-    let cp949 = |bytes: &[u8]| corpus_common::reader::decode_korean_ignore(bytes, false);
+    let cp949 = |bytes: &[u8]| text_extractor::decode_korean_ignore(bytes, false);
     // 앞 40줄이 들어가는 만큼만 본다. 잘린 끝 바이트 때문에 엄격 디코딩이 헛되이 실패하지 않게 꼬리를 다듬는다.
     let mut lines = match (0..4).find_map(|trim| std::str::from_utf8(&raw[..raw.len().saturating_sub(trim)]).ok()) {
         Some(text) => first_lines(text, 40),
@@ -406,7 +406,7 @@ fn remove_inner_dots(s: &str) -> String {
 /// 파일명에서 (저자, 원제목, 검색용 제목)을 뽑는다.
 pub fn clean_filename_to_author_title(filename: &str) -> (String, String, String) {
     // URL 인코딩 해제 (예: %5B로맨스판타지%5D -> [로맨스판타지])
-    let filename = corpus_common::util::unquote(filename);
+    let filename = text_extractor::path::unquote(filename);
     let mut stem = splitext_stem(&filename).to_string();
     stem = sub(rx!(r"(?i)\s*\([^)]*z-lib[^)]*\)"), &stem);
     stem = sub(rx!(r"(?i)\s*\([^)]*1lib[^)]*\)"), &stem);

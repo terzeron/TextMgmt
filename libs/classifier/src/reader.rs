@@ -1,6 +1,6 @@
 //! 파일에서 본문과 메타데이터를 읽는다. Python `backend/classifier/reader.py` 대응.
 //!
-//! 본문 샘플 읽기, 인코딩 판별, ZIP 열기는 `corpus_common` 에 이미 있어 그대로 쓴다. 여기에는 그 crate 에 없는
+//! 본문 샘플 읽기, 인코딩 판별, ZIP 열기는 `text_extractor` 에 이미 있어 그대로 쓴다. 여기에는 그 crate 에 없는
 //! `read_epub_publisher` 만 새로 둔다. EPUB(ZIP)은 신뢰할 수 없는 입력이라 항목 수와 OPF 크기에 상한을 둔다.
 
 use std::io::Read;
@@ -9,8 +9,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use corpus_common::reader::{MAX_MEMBER_BYTES, open_zip};
-pub use corpus_common::reader::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, decode_best, korean_likeness, read_document_text, read_epub_text, read_txt_text};
+use text_extractor::{MAX_MEMBER_BYTES, open_zip};
+pub use text_extractor::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, decode_best, korean_likeness, extract_document_text, extract_epub_text, extract_txt_text};
 
 /// 훑어 볼 ZIP 항목 수 상한. 정상 EPUB 은 수백 개다.
 pub const MAX_ZIP_ENTRIES: usize = 100_000;
