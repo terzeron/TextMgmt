@@ -19,6 +19,5 @@ pub mod sanitize;
 pub mod scan;
 pub mod txt;
 pub mod viewer;
-pub mod xhtml_fix;
 pub mod zipcheck;
 pub mod zipnames;

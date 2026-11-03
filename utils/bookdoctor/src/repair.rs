@@ -13,6 +13,8 @@ use corpus_common::thousands;
 use crate::cli::Options;
 use crate::sanitize::apply;
 
+pub mod xhtml_fix;
+
 // 되돌리면 알려진 바이너리가 되는 파일의 매직 바이트.
 // 바이너리를 UTF-16LE로 읽고 UTF-8로 저장하면 이런 상태가 된다.
 //   OLE 매직 D0 CF 11 E0 A1 B1 1A E1
@@ -141,7 +143,7 @@ fn restore_binaries(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
 
 /// `repair` 진입점. EPUB 본문 XHTML을 고친 뒤 TXT로 남은 바이너리를 되돌린다.
 pub fn run(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
-    let epub = crate::xhtml_fix::run(opts, out)?;
+    let epub = xhtml_fix::run(opts, out)?;
     let binaries = restore_binaries(opts, out)?;
     Ok(epub.max(binaries))
 }

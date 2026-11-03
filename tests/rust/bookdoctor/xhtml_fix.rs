@@ -9,7 +9,7 @@ use std::path::Path;
 
 use bookdoctor::cli::{Options, execute, parse};
 use bookdoctor::epub::render::xhtml_defect;
-use bookdoctor::xhtml_fix::{rebuild, repair_markup, verify, Verdict};
+use bookdoctor::repair::xhtml_fix::{rebuild, repair_markup, verify, Verdict};
 use common::*;
 
 fn fixed(src: &str) -> String {
@@ -144,7 +144,7 @@ fn names(bytes: &[u8]) -> Vec<String> {
     zip::ZipArchive::new(Cursor::new(bytes)).unwrap().file_names().map(|n| n.unwrap().into_owned()).collect()
 }
 
-fn plan(v: Verdict) -> bookdoctor::xhtml_fix::Plan {
+fn plan(v: Verdict) -> bookdoctor::repair::xhtml_fix::Plan {
     match v {
         Verdict::Fix(p) => p,
         Verdict::Delete(why) => panic!("삭제 후보로 판정했다: {why}"),
