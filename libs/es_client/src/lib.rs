@@ -1,9 +1,11 @@
 //! Elasticsearch REST 클라이언트. `backend/es_manager.py`의 `ESManager` 중 검색 부분의 이식.
 //!
 //! HTTP와 TLS 검증 HTTPS를 지원한다. 자체 CA는 `TM_ES_CA_CERT` PEM 파일로 지정한다.
+//! 연산 이름과 JSON 인자를 받는 저수준 전송은 [`transport`]에 있다. backend `ESManager`가 그것을 쓴다.
 //! 접속 정보는 환경변수 `TM_ES_BOOK_INDEX`, `TM_ES_URL`, `TM_ES_USER`, `TM_ES_PASSWORD`에서 읽는다.
 
 pub mod indexing;
+pub mod transport;
 
 use std::fmt;
 use std::fs;
@@ -45,33 +47,47 @@ const SIMILAR_SUMMARY_MAX_QUERY_TERMS: u32 = 25;
 const SIMILAR_SUMMARY_MIN_DOC_FREQ: u32 = 3;
 const ENV_KEYS: [&str; 4] = ["TM_ES_BOOK_INDEX", "TM_ES_URL", "TM_ES_USER", "TM_ES_PASSWORD"];
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EsError {
-    /// 필요한 환경변수가 없다.
+    /// 필수 환경 변수가 없다.
     MissingEnv(String),
-    /// 연결·전송 실패.
+    /// 연결 실패나 시간 초과 같은 전송 계층 오류.
     Transport(String),
-    /// ES가 오류 상태로 응답했다.
+    /// ES가 오류 상태 코드를 돌려줬다.
     Status { status: u16, body: String },
-    /// 응답 형식이 예상과 다르다.
+    /// 응답 본문을 해석할 수 없다.
     Parse(String),
-    /// 아직 옮기지 않은 경로.
-    Unsupported(String),
+    /// 이 구현에 없는 연산.
+    Unsupported,
+    Other(String),
 }
 
 impl fmt::Display for EsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EsError::MissingEnv(k) => write!(f, "The environment variable {k} is not set."),
-            EsError::Transport(m) => write!(f, "ES 연결 실패: {m}"),
+            EsError::MissingEnv(name) => write!(f, "환경 변수 {name}이(가) 없다"),
+            EsError::Transport(msg) => write!(f, "ES 연결 오류: {msg}"),
             EsError::Status { status, body } => write!(f, "ES 응답 오류 {status}: {body}"),
-            EsError::Parse(m) => write!(f, "ES 응답 해석 실패: {m}"),
-            EsError::Unsupported(m) => write!(f, "지원하지 않는 요청: {m}"),
+            EsError::Parse(msg) => write!(f, "ES 응답 해석 실패: {msg}"),
+            EsError::Unsupported => write!(f, "지원하지 않는 연산"),
+            EsError::Other(msg) => write!(f, "{msg}"),
         }
     }
 }
 
 impl std::error::Error for EsError {}
+
+impl EsError {
+    /// 문서나 색인이 없다(404).
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, EsError::Status { status: 404, .. })
+    }
+
+    /// 연결을 만들지 못했거나 응답을 해석하지 못했다. Python `ConnectionError`, `ConnectionTimeout`, `SerializationError`에 대응한다.
+    pub fn is_connection(&self) -> bool {
+        matches!(self, EsError::Transport(_) | EsError::Parse(_))
+    }
+}
 
 /// 검색 결과 한 건. `score`는 최고점을 100으로 맞춘 값이다.
 #[derive(Debug, Clone, PartialEq)]
@@ -143,7 +159,7 @@ pub struct EsClient {
     pub index: String,
 }
 
-fn base64(input: &[u8]) -> String {
+pub(crate) fn base64(input: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for c in input.chunks(3) {

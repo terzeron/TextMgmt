@@ -15,9 +15,8 @@ use chrono::{DateTime, Local};
 use serde_json::{Map, Value, json};
 use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 
-mod http;
-
-pub use http::HttpTransport;
+pub use es_client::EsError;
+pub use es_client::transport::{EsTransport, HttpTransport};
 
 /// (문서 ID, `_source`, 점수)
 pub type Hit = (i64, Value, f64);
@@ -26,45 +25,6 @@ pub type Docs = BTreeMap<i64, Value>;
 pub type PagedHits = (Vec<Hit>, i64, Option<Vec<Value>>);
 /// 커버 파일 한 페이지: ([(문서 id, 문서, 정렬값)], 전체 건수).
 pub type CoverFileHits = (Vec<(i64, Value, Vec<Value>)>, i64);
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum EsError {
-    /// 필수 환경 변수가 없다.
-    MissingEnv(String),
-    /// 연결 실패나 시간 초과 같은 전송 계층 오류.
-    Transport(String),
-    /// ES가 오류 상태 코드를 돌려줬다.
-    Status {
-        status: u16,
-        body: String,
-    },
-    /// 응답 본문을 해석할 수 없다.
-    Parse(String),
-    /// 이 구현에 없는 연산.
-    Unsupported,
-    Other(String),
-}
-
-impl fmt::Display for EsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            EsError::MissingEnv(name) => write!(f, "환경 변수 {name}이(가) 없다"),
-            EsError::Transport(msg) => write!(f, "ES 연결 오류: {msg}"),
-            EsError::Status { status, body } => write!(f, "ES 응답 오류 {status}: {body}"),
-            EsError::Parse(msg) => write!(f, "ES 응답 해석 실패: {msg}"),
-            EsError::Unsupported => write!(f, "지원하지 않는 연산"),
-            EsError::Other(msg) => write!(f, "{msg}"),
-        }
-    }
-}
-
-impl std::error::Error for EsError {}
-
-/// 저수준 전송: 연산 이름과 인자(JSON)를 받아 응답 JSON을 돌려준다. Python `Elasticsearch` 클라이언트 호출 하나에 대응한다.
-pub trait EsTransport: Send + Sync {
-    fn index_name(&self) -> &str;
-    fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>;
-}
 
 /// 고수준 facade. Python `ESManager`의 공개 메서드에 대응한다.
 pub trait EsManagerApi: Send + Sync {
@@ -163,18 +123,6 @@ pub trait EsManagerApi: Send + Sync {
     /// 작품 디렉토리마다 대표 후보(경로순 앞쪽 몇 권).
     fn search_group_representatives(&self, _keys: &[String], _exclude: &[String]) -> Result<HashMap<String, Vec<(i64, Value)>>, EsError> {
         Err(EsError::Unsupported)
-    }
-}
-
-impl EsError {
-    /// 문서나 색인이 없다(404).
-    pub fn is_not_found(&self) -> bool {
-        matches!(self, EsError::Status { status: 404, .. })
-    }
-
-    /// 연결을 만들지 못했거나 응답을 해석하지 못했다. Python `ConnectionError`, `ConnectionTimeout`, `SerializationError`에 대응한다.
-    pub fn is_connection(&self) -> bool {
-        matches!(self, EsError::Transport(_) | EsError::Parse(_))
     }
 }
 

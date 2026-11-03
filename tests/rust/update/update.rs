@@ -134,7 +134,7 @@ fn connection_and_request_errors_map_to_exit_codes() {
     let args = vec!["run".to_string()];
     let mut out = Vec::new();
     assert_eq!(run("update", &args, &mut out, &|| Err(EsError::MissingEnv("TM_ES_URL".into()))), 255);
-    assert_eq!(run("update", &args, &mut out, &|| Err(EsError::Unsupported("x".into()))), 1);
+    assert_eq!(run("update", &args, &mut out, &|| Err(EsError::Other("x".into()))), 1);
 
     struct Failing(&'static str);
     impl BookStore for Failing {

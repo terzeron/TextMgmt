@@ -268,9 +268,9 @@ fn connect_with_retry_succeeds_when_the_server_answers() {
 
 #[test]
 fn error_messages_are_readable() {
-    assert!(EsError::Transport("refused".into()).to_string().contains("연결 실패"));
+    assert!(EsError::Transport("refused".into()).to_string().contains("연결 오류"));
     assert!(EsError::Parse("x".into()).to_string().contains("해석 실패"));
-    assert!(EsError::Unsupported("y".into()).to_string().contains("지원하지 않는"));
+    assert!(EsError::Unsupported.to_string().contains("지원하지 않는"));
     assert!(EsError::MissingEnv("K".into()).to_string().contains("K"));
 }
 

@@ -1,4 +1,4 @@
-//! `EsTransport`의 실제 HTTP 구현. `libs/es_client`와 같은 HTTP(S) 전송 및 인증서 검증 규칙을 쓴다.
+//! 저수준 ES 전송 [`EsTransport`]와 그 HTTP 구현 [`HttpTransport`]. [`crate::EsClient`]와 같은 HTTP(S) 전송 및 인증서 검증 규칙을 쓴다.
 //!
 //! `op`는 Python `Elasticsearch` 클라이언트 메서드 이름이고 `kwargs`는 같은 키워드 인자다.
 //! 이 모듈이 그것을 ES REST 요청으로 바꾼다(검증한 서버는 ES 9.1.0이다).
@@ -21,13 +21,15 @@
 use std::path::Path;
 use std::time::Duration;
 
-use es_client::build_agent;
 use serde_json::{Map, Value};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
+use crate::{EsError, base64, build_agent};
 
-use super::{EsError, EsTransport};
+/// 저수준 전송: 연산 이름과 인자(JSON)를 받아 응답 JSON을 돌려준다. Python `Elasticsearch` 클라이언트 호출 하나에 대응한다.
+pub trait EsTransport: Send + Sync {
+    fn index_name(&self) -> &str;
+    fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>;
+}
 
 /// 본문 대신 쿼리 문자열로 가는 인자. 이 순서로 붙인다.
 const QUERY_PARAMS: [&str; 4] = ["scroll", "timeout", "conflicts", "refresh"];
@@ -94,7 +96,7 @@ impl HttpTransport {
 
     /// 사설 CA를 지정하면 해당 CA로 HTTPS 인증서를 검증한다.
     pub fn new_with_ca(url: &str, user: &str, password: &str, index: &str, timeout: Duration, ca_cert_path: Option<&Path>) -> Self {
-        let auth = (!user.is_empty() || !password.is_empty()).then(|| format!("Basic {}", STANDARD.encode(format!("{user}:{password}"))));
+        let auth = (!user.is_empty() || !password.is_empty()).then(|| format!("Basic {}", base64(format!("{user}:{password}").as_bytes())));
         let agent = build_agent(timeout, ca_cert_path).map_err(EsError::Other);
         HttpTransport { agent, base: url.trim_end_matches('/').to_string(), auth, index: index.to_string() }
     }
