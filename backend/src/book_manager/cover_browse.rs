@@ -62,6 +62,7 @@ pub struct CoverGroup {
 }
 
 impl CoverGroup {
+    #[cfg(test)]
     pub fn new(name: &str, key: &str, updated: Option<f64>, created: Option<f64>) -> CoverGroup {
         CoverGroup { name: name.to_string(), key: key.to_string(), updated, created }
     }
@@ -177,3 +178,6 @@ pub fn merge_cover_page(groups: &[CoverGroup], files: &[CoverHit], size: usize) 
     }
     (entries, group_index, file_index)
 }
+
+#[cfg(test)]
+mod tests;

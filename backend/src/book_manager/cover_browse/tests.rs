@@ -2,22 +2,10 @@
 //!
 //! 커버 목록 묶음 규칙(backend/cover_browse.py)을 ES 없이 확인한다. 순수 함수만 쓴다.
 //!
-//! 가정한 API (아직 구현 전이다):
-//! - `backend::cover_browse::MISSING_TIME: f64`
-//! - `type CoverStats = BTreeMap<String, (u64, Option<f64>, Option<f64>)>` (카테고리 -> (문서 수, 수정 시각, 생성 시각))
-//! - `type CoverHit = (i64, serde_json::Value, Vec<serde_json::Value>)` (book_id, _source, ES sort 값 `[수정, 생성, 경로]`)
-//! - `struct Rank` (`PartialEq + PartialOrd + Debug`), `fn latest_rank(updated: Option<f64>, created: Option<f64>, path: &str) -> Rank`
-//! - `fn file_rank(sort_values: &[Value]) -> Rank`
-//! - `struct CoverGroup { pub name: String, pub key: String, pub updated: Option<f64>, pub created: Option<f64> }`
-//!   - `CoverGroup::new(name: &str, key: &str, updated: Option<f64>, created: Option<f64>) -> CoverGroup`
-//!   - `fn rank(&self) -> Rank`, `fn cursor_values(&self) -> Vec<Value>` (`[수정|null, 생성|null, key]`)
-//! - `fn plan_cover_scope(stats: &CoverStats, scope: &str, hidden: &[String]) -> (Vec<String>, Vec<CoverGroup>)`
-//! - `fn pick_representative(hits: &[(i64, Value)]) -> Option<(i64, Value)>`
-//! - `enum CoverEntry { Group(CoverGroup), File(CoverHit) }`, `fn merge_cover_page(groups: &[CoverGroup], files: &[CoverHit], size: usize) -> (Vec<CoverEntry>, usize, usize)`
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use backend::cover_browse::{CoverEntry, CoverGroup, CoverHit, CoverStats, MISSING_TIME, file_rank, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
+use super::{CoverEntry, CoverGroup, CoverHit, CoverStats, MISSING_TIME, file_rank, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
 use serde_json::{Value, json};
 
 /// {카테고리: 문서 수}를 ES 집계 결과 모양 (수, 수정 시각, 생성 시각)으로 바꾼다.
@@ -192,7 +180,7 @@ mod test_cover_group {
     use super::*;
 
     /// Python `latest_rank(*group.cursor_values)`: 커서 값 `[수정, 생성, 경로]`을 그대로 풀어 넘긴다.
-    fn rank_of_cursor(values: &[Value]) -> backend::cover_browse::Rank {
+    fn rank_of_cursor(values: &[Value]) -> crate::book_manager::cover_browse::Rank {
         latest_rank(values[0].as_f64(), values[1].as_f64(), values[2].as_str().unwrap())
     }
 

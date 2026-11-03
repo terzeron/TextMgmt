@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use super::preview::text_response;
 use super::{BookManager, BookResponse, CoverPage, MAX_CATEGORY_PAGE_SIZE};
 use crate::book::Book;
-use crate::cover_browse::{CoverEntry, CoverGroup, CoverStats, MISSING_TIME, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
+use super::cover_browse::{CoverEntry, CoverGroup, CoverStats, MISSING_TIME, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
 use crate::es_manager::{decode_category_cursor, encode_category_cursor};
 
 const COVER_GENERATION_LIMIT: usize = 10;

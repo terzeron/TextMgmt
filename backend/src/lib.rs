@@ -13,7 +13,6 @@ pub mod category_mapping;
 pub mod classifier;
 pub mod comics;
 pub mod comics_manager;
-pub mod cover_browse;
 pub mod cover_management;
 pub mod cover_sources;
 pub mod cover_status;

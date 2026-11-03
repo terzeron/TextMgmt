@@ -118,10 +118,6 @@ name = "cover_status"
 path = "../tests/rust/backend/cover_status.rs"
 
 [[test]]
-name = "cover_browse"
-path = "../tests/rust/backend/cover_browse.rs"
-
-[[test]]
 name = "cover_sources"
 path = "../tests/rust/backend/cover_sources.rs"
 

@@ -43,6 +43,7 @@ mod catalog;
 mod category;
 mod classify;
 mod cover;
+mod cover_browse;
 mod cover_list;
 mod epub;
 mod file_reader;
