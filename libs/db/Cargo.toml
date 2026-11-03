@@ -1,0 +1,19 @@
+[package]
+name = "db"
+description = "MySQL 접근 추상화와 카테고리 매핑 저장소. backend와 분류기가 함께 쓴다"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+diesel = { version = "2.3.14", default-features = false, features = ["mysql", "r2d2", "chrono"] }
+log = "0.4.34"
+# MySQL 클라이언트는 개발 헤더 없이 쓰려고 소스에서 번들 빌드한다 (docs/rust-test-seams.md, diesel spike)
+mysqlclient-sys = { version = "0.5.2", features = ["bundled"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+
+[[test]]
+name = "category_mapping"
+path = "../../tests/rust/db/category_mapping.rs"

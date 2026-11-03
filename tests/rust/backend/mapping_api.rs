@@ -167,7 +167,7 @@ async fn mapping_auth_and_body_validation_run_before_db() {
 
 #[test]
 fn real_mapping_facade_propagates_mapping_read_database_failures() {
-    use backend::{category_mapping::CategoryMapping, db::DbError};
+    use db::{DbError, category_mapping::CategoryMapping};
     let mapping = CategoryMapping::with_connection_provider(Arc::new(|| Err(DbError::Other("offline".into()))));
     assert!(CategoryMappingApi::get_all_mappings(&mapping, "book").is_err());
     assert!(CategoryMappingApi::get_keywords(&mapping, "fiction", "book").is_err());

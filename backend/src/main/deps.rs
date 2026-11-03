@@ -17,7 +17,7 @@ use crate::auth::HTTPException;
 use crate::auth::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
 use crate::book_manager::{BookManager, LoaderFileReader};
 use crate::bookstore::BookstoreSearch;
-use crate::category_mapping::CategoryMapping;
+use db::category_mapping::CategoryMapping;
 use crate::comics_manager::ComicsManager;
 use crate::cover_management::CoverHooks;
 use crate::es_manager::{ESManager, EsManagerApi, RealEsConnector};

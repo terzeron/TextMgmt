@@ -5,10 +5,10 @@
 //! 하트비트가 끊긴 작업이 조회에서만 failed로 보이고 행은 그대로인가.
 //!
 //! 가정한 API (아직 구현 전이다. docs/rust-test-seams.md 3.4, 3.13):
-//! - `backend::category_mapping::CategoryMapping::new() -> Result<CategoryMapping, DbError>`
+//! - `db::category_mapping::CategoryMapping::new() -> Result<CategoryMapping, DbError>`
 //! - `CategoryMapping::get_connection(&self) -> Result<MappingConnection, DbError>` (`execute`/`fetch_one`/`commit`을 가진 래퍼)
 //! - `MappingConnection::{execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>, fetch_one(&mut self, sql, &[DbValue]) -> Result<Option<Row>, DbError>, commit(&mut self) -> Result<(), DbError>}`
-//! - `backend::db::{DbValue, Row}`: `enum DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`, `From<Value>`),
+//! - `db::{DbValue, Row}`: `enum DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`, `From<Value>`),
 //!   `type Row = BTreeMap<String, DbValue>`. 구 `serde_json::Value` 파라미터는 `DbValue`로 쓴다.
 //! - `CategoryMapping::get_classify_proposal_status(&self, content_type: &str, stale_seconds: i64) -> Result<Value, DbError>`
 //! - `CategoryMapping::set_classify_proposal_status(&self, status: &Value, content_type: &str)`
@@ -26,8 +26,8 @@ use std::ops::Deref;
 use std::sync::{Arc, Barrier, Mutex, MutexGuard};
 use std::thread;
 
-use backend::category_mapping::CategoryMapping;
-use backend::db::DbValue;
+use db::category_mapping::CategoryMapping;
+use db::DbValue;
 use serde_json::json;
 
 const STALE: i64 = 300;

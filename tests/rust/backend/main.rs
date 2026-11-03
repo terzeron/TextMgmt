@@ -39,7 +39,7 @@
 //! - `backend::es_manager::{EsManagerApi, EsError, ESManager}`: `delete(&self, i64) -> Result<bool, EsError>`, `search_categories_pdf_stats(&self, &[String]) -> Result<Value, EsError>`. 대역은 `common::es_fake::FakeEsManager`다.
 //!   (실제 ES 통합 테스트만 `ESManager::connect(env, &RealEsConnector, &SystemClock)`를 가정한다. 커넥터 이름은 문서에 없다.)
 //! - `backend::comics_manager::ComicsManager::from_env(env, es_factory)` (`BookManagerApi` 구현)
-//! - `backend::category_mapping::{CategoryMapping, CategoryMappingApi, MappingError}`
+//! - `db::category_mapping::{CategoryMapping, CategoryMappingApi, MappingError}`
 //!   - `MappingError::{Http(u16, String), Other(String)}`, `CategoryMappingApi`는 동기 메서드이고 기본 구현은 `Err(Other("unimplemented"))`다.
 //!   - `CategoryMapping::new() -> Result<Self, MappingError>`(env + 실제 MySQL), `get_connection() -> Result<Box<dyn DbConnection>, DbError>`, `DbConnection::{execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>, commit(&mut self) -> Result<(), DbError>}` (설계 3.4)
 //! - `file_record::{config::Config, record::read_file, record::now_iso}`, `doc_reader::pdf::InProcess`, `stat::Stat` (libs/file_record/src에서 확인한 실제 API)
@@ -64,7 +64,7 @@ use axum::response::IntoResponse;
 use backend::auth::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
 use backend::book::{Book, BookLookupError, BookPage};
 use backend::book_manager::{BookContent, BookDeletion, BookManager, BookManagerApi, BookResponse};
-use backend::category_mapping::CategoryMapping;
+use db::category_mapping::CategoryMapping;
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
 use backend::main::{AppDeps, AuthMode, BookstoreFactory, BookstoreSearch, CategoryMappingApi, CustomJSONResponse, GoogleVerifier, MappingError, RoleResolver, Slot, app_with};
@@ -2294,14 +2294,14 @@ impl backend::refresh_token_store::RefreshTokenStoreApi for AuthRefreshStore {
     fn get_token_observation(&self, _: &str) -> Result<Option<Value>, backend::refresh_token_store::StoreError> {
         Err(backend::refresh_token_store::StoreError::Unsupported("test store".into()))
     }
-    fn _session_rows(&self, email: Option<&str>, family: Option<&str>) -> Result<Vec<backend::db::Row>, backend::refresh_token_store::StoreError> {
+    fn _session_rows(&self, email: Option<&str>, family: Option<&str>) -> Result<Vec<db::Row>, backend::refresh_token_store::StoreError> {
         Ok(self
             .0
             .lock()
             .unwrap()
             .iter()
             .filter(|(fid, owner)| email.is_none_or(|e| e == owner.as_str()) && family.is_none_or(|f| f == fid.as_str()))
-            .map(|(fid, owner)| backend::db::Row::from([("family_id".into(), fid.as_str().into()), ("email".into(), owner.as_str().into()), ("valid_token_count".into(), 1_i64.into())]))
+            .map(|(fid, owner)| db::Row::from([("family_id".into(), fid.as_str().into()), ("email".into(), owner.as_str().into()), ("valid_token_count".into(), 1_i64.into())]))
             .collect())
     }
 }

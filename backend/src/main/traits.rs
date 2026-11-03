@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::auth::HTTPException;
 use crate::book::{Book, BookLookupError, BookPage};
 use crate::book_manager::{BookDeletion, CoverPage};
-use crate::category_mapping::CategoryMapping;
+use db::category_mapping::CategoryMapping;
 use crate::es_manager::EsManagerApi;
 use crate::view_history_store::{ViewHistoryError, ViewHistoryStore};
 
@@ -168,7 +168,7 @@ fn unimplemented_mapping<T>() -> Result<T, MappingError> {
     Err(MappingError::Other(UNIMPLEMENTED.to_string()))
 }
 
-fn db_row_to_json(row: crate::db::Row) -> Value {
+fn db_row_to_json(row: db::Row) -> Value {
     Value::Object(row.iter().map(|(key, value)| (key.clone(), Value::from(value))).collect())
 }
 
@@ -711,12 +711,12 @@ mod tests {
 
     #[test]
     fn row_and_reload_progress_converters_cover_all_value_types_and_errors() {
-        let mut row = crate::db::Row::new();
-        row.insert("null".into(), crate::db::DbValue::Null);
-        row.insert("number".into(), crate::db::DbValue::Int(7));
-        row.insert("text".into(), crate::db::DbValue::Text("value".into()));
+        let mut row = db::Row::new();
+        row.insert("null".into(), db::DbValue::Null);
+        row.insert("number".into(), db::DbValue::Int(7));
+        row.insert("text".into(), db::DbValue::Text("value".into()));
         let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 27).unwrap().and_hms_opt(1, 2, 3).unwrap();
-        row.insert("date".into(), crate::db::DbValue::DateTime(date));
+        row.insert("date".into(), db::DbValue::DateTime(date));
         assert_eq!(db_row_to_json(row), json!({"null": null, "number": 7, "text": "value", "date": "2026-10-27 01:02:03"}));
 
         assert_eq!(reload_counts(&json!({"done": 2, "failed": 0})).unwrap(), vec![("done", 2), ("failed", 0)]);
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn concrete_category_mapping_adapter_forwards_database_errors() {
-        let mapping = CategoryMapping::with_connection_provider(Arc::new(|| Err(crate::db::DbError::Other("offline".into()))));
+        let mapping = CategoryMapping::with_connection_provider(Arc::new(|| Err(db::DbError::Other("offline".into()))));
         let counts = json!({"indexed_count": 1});
         let item = json!({"file_path": "/books/a.epub"});
 

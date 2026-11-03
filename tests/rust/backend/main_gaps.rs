@@ -20,7 +20,7 @@
 //!   - `fn search_categories_pdf_stats(&self, categories: &[String]) -> Result<Value, EsError>`
 //!   - `fn search_category_pdf_stats(&self, category: &str) -> Result<Value, EsError>`
 //!   - 대역은 `common::es_fake::FakeEsManager`를 쓴다.
-//! - `backend::category_mapping::CategoryMappingApi` (동기 메서드, 모든 메서드에 기본 구현이 있다)
+//! - `db::category_mapping::CategoryMappingApi` (동기 메서드, 모든 메서드에 기본 구현이 있다)
 //!   - `get_classify_proposal_status(&self, content_type: &str, stale_seconds: i64) -> Value`
 //!   - `set_classify_proposal_status(&self, status: Value, content_type: &str)`
 //!   - `merge_classify_proposal_status(&self, fields: Value, content_type: &str)`

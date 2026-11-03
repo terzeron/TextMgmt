@@ -1,6 +1,6 @@
 //! 카테고리별 키워드 매핑, 숨김 카테고리, 재적재 락, 분류 제안 항목·상태를 MySQL에 보관한다.
 //! Python `backend/category_mapping.py`를 옮겼다. SQL 문장과 파라미터는 원본과 같다.
-//! 연결은 `backend::db::ConnectionProvider`가 연산마다 새로 열어 준다(원본의 `_get_connection`).
+//! 연결은 `db::ConnectionProvider`가 연산마다 새로 열어 준다(원본의 `_get_connection`).
 //!
 //! 원본과 다른 점:
 //! - `content_type` 기본값("book")이 없다. 호출자가 매번 넘긴다.
@@ -14,7 +14,7 @@ use std::fmt;
 use chrono::{Local, NaiveDateTime};
 use serde_json::{Map, Value};
 
-use crate::db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, MysqlConfig, Row, mysql_provider};
+use crate::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, MysqlConfig, Row, mysql_provider};
 
 /// 재적재 락의 heartbeat(updated_at)가 이 시간 이상 갱신되지 않으면 죽은 작업으로 본다.
 /// 총 소요 시간이 아니라 "최근에 살아있다는 신호"로 판정해야, 오래 걸리는 정상 재적재와 안 풀리는 죽은 락을 구분한다.

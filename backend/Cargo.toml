@@ -70,7 +70,7 @@ axum = { version = "0.8.9", features = ["multipart"] }
 bookstore_lib = { package = "bookstore", path = "../libs/bookstore" }
 corpus_common = { path = "../libs/corpus_common" }
 corpus_layout = { path = "../libs/corpus_layout" }
-diesel = { version = "2.3.14", default-features = false, features = ["mysql", "r2d2", "chrono"] }
+db = { path = "../libs/db" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 htmlkit = { path = "../libs/htmlkit" }
 hwp3_parser = { path = "../libs/hwp3_parser" }
@@ -81,8 +81,6 @@ jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_
 log = "0.4.34"
 md5 = { package = "md-5", version = "0.11.0" }
 lopdf.workspace = true
-# MySQL 클라이언트는 개발 헤더 없이 쓰려고 소스에서 번들 빌드한다 (docs/rust-test-seams.md, diesel spike)
-mysqlclient-sys = { version = "0.5.2", features = ["bundled"] }
 regex = "1.13.1"
 roxmltree = "0.21.1"
 scraper = "0.29.0"
@@ -100,10 +98,6 @@ jpeg-encoder = "0.7.1"
 [[test]]
 name = "common_smoke"
 path = "../tests/rust/backend/common_smoke.rs"
-
-[[test]]
-name = "category_mapping"
-path = "../tests/rust/backend/category_mapping.rs"
 
 [[test]]
 name = "book"

@@ -12,7 +12,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 use sysdeps::{Clock, SystemClock};
 
-use crate::db::{ConnectionProvider, DbConnection, DbError, DbValue, MysqlConfig, Row, mysql_provider};
+use db::{ConnectionProvider, DbConnection, DbError, DbValue, MysqlConfig, Row, mysql_provider};
 
 // 멀티탭/멀티기기 환경에서 여러 요청이 같은 refresh token 으로 거의 동시에 회전을 시도하면, 먼저 처리된 요청이
 // 토큰을 회전(replaced_by 설정)시킨 직후 나머지 요청이 이미 회전된 토큰을 제출한다. 이를 재사용 공격으로 오판해
@@ -722,7 +722,7 @@ impl MySQLRefreshTokenStore {
     }
 
     /// 컬럼 추가 이전에 만들어진 테이블에 client_ip/user_agent 를 붙인다.
-    fn migrate_add_client_columns(cur: &mut dyn crate::db::DbCursor) -> Result<(), DbError> {
+    fn migrate_add_client_columns(cur: &mut dyn db::DbCursor) -> Result<(), DbError> {
         for (column, definition) in [("client_ip", "VARCHAR(45)"), ("user_agent", "VARCHAR(512)")] {
             cur.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'refresh_tokens' AND column_name = %s", &[column.into()])?;
             if cur.fetchone().is_some_and(|row| int_of(cell(&row, "cnt")) == 0) {
@@ -733,7 +733,7 @@ impl MySQLRefreshTokenStore {
         Ok(())
     }
 
-    fn revoke_family_in(cur: &mut dyn crate::db::DbCursor, family_id: &str, reason: &str, revoked_at: i64) -> Result<(), DbError> {
+    fn revoke_family_in(cur: &mut dyn db::DbCursor, family_id: &str, reason: &str, revoked_at: i64) -> Result<(), DbError> {
         cur.execute(&sql_with(REVOKE_FAMILY_SQL, "%s"), &[revoked_at.into(), reason.into(), family_id.into()])
     }
 }

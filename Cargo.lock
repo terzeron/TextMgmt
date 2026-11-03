@@ -207,7 +207,7 @@ dependencies = [
  "chrono",
  "corpus_common",
  "corpus_layout",
- "diesel",
+ "db",
  "doc_reader",
  "epubveri",
  "es_client",
@@ -224,7 +224,6 @@ dependencies = [
  "log",
  "lopdf",
  "md-5",
- "mysqlclient-sys",
  "pyfmt",
  "regex",
  "roxmltree",
@@ -884,6 +883,17 @@ dependencies = [
  "darling_core 0.24.1",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "db"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "diesel",
+ "log",
+ "mysqlclient-sys",
+ "serde_json",
 ]
 
 [[package]]

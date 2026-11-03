@@ -2,11 +2,11 @@
 //!
 //! `CategoryMapping`(MySQL 기반 카테고리 키워드·숨김·재적재 락·분류 제안 테이블) 테스트.
 //! Python은 `patch.dict(sys.modules, {"pymysql": ...})`로 드라이버를 가짜로 바꾸고, 인스턴스의 `_get_connection`을 대입으로 갈아끼운다.
-//! Rust는 `backend::db`의 `DbConnection`/`ConnectionProvider`로 가짜 연결을 주입한다(설계: docs/rust-test-seams.md 3.4).
+//! Rust는 `db`의 `DbConnection`/`ConnectionProvider`로 가짜 연결을 주입한다(설계: docs/rust-test-seams.md 3.4).
 //! 생성자 세 가지: `with_connector(provider)`는 초기화(`init_db`)를 실행하고, `with_connection_provider(provider)`는 초기화를 건너뛴다.
 //!
 //! 가정한 API (아직 구현 전이다. Python과 이름·시그니처가 같다고 본다):
-//! - `backend::db`: 드라이버 추상화 (가짜 연결이 구현한다)
+//! - `db`: 드라이버 추상화 (가짜 연결이 구현한다)
 //!   - `enum DbValue { Null, Int(i64), Text(String), DateTime(chrono::NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`)
 //!   - `type Row = BTreeMap<String, DbValue>`, `enum DbError { IntegrityError(String), Other(String) }`
 //!   - `trait DbCursor { fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError>;
@@ -14,7 +14,7 @@
 //!      fn fetchall(&mut self) -> Option<Vec<Row>>; fn fetchone(&mut self) -> Option<Row>; fn rowcount(&self) -> u64; }`
 //!   - `trait DbConnection: Send { fn cursor(&mut self) -> Box<dyn DbCursor>; fn commit(&mut self) -> Result<(), DbError>; fn rollback(&mut self) -> Result<(), DbError>; fn close(&mut self); }`
 //!   - `type ConnectionProvider = Arc<dyn Fn() -> Result<Box<dyn DbConnection>, DbError> + Send + Sync>`
-//! - `backend::category_mapping::CategoryMapping`
+//! - `db::category_mapping::CategoryMapping`
 //!   - `with_connector(provider: ConnectionProvider) -> Result<CategoryMapping, DbError>` (`init_db` 실행. 마이그레이션의 인덱스 삭제 예외는 삼킨다)
 //!   - `with_connection_provider(provider: ConnectionProvider) -> CategoryMapping` (`init_db` 생략)
 //!   - `content_type`은 기본값이 없어 매번 마지막 인자로 넘긴다(`delete_category`만 `(category, content_type, prefix)`). 아래 목록은 `"book"`을 넘기는 모양이다.
@@ -40,8 +40,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use backend::category_mapping::{CategoryMapping, RELOAD_LOCK_HEARTBEAT_STALE_SECONDS, ValueError};
-use backend::db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
+use db::category_mapping::{CategoryMapping, RELOAD_LOCK_HEARTBEAT_STALE_SECONDS, ValueError};
+use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
 use chrono::{Duration, Local, NaiveDateTime};
 use serde_json::{Value, json};
 
