@@ -1,3 +1,8 @@
+#[path = "../../../utils/trainer/src/shuffle.rs"]
+mod shuffle;
+#[path = "../../../utils/trainer/src/move_file.rs"]
+mod move_file;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -5,12 +10,6 @@ use std::sync::Arc;
 use trainer::{CliIo, Deps, main_with};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-
-#[path = "../../../utils/trainer/src/shuffle.rs"]
-mod shuffle;
-
-#[path = "../../../utils/trainer/src/move_file.rs"]
-mod move_file;
 
 #[test]
 fn move_file_preserves_content_time_and_collisions_across_filesystems() {
@@ -64,18 +63,6 @@ fn run(args: &[&str], deps: &Deps) -> (i32, String, String) {
 }
 
 #[test]
-fn every_command_prints_help_and_no_args_fail_like_python() {
-    let deps = Deps::system();
-    for command in trainer::commands() {
-        let (code, out, err) = run(&[command, "--help"], &deps);
-        assert_eq!(code, 0, "{err}");
-        assert!(out.contains(command));
-    }
-    assert_eq!(run(&[], &deps).0, 1);
-    assert_eq!(run(&["-v"], &deps).0, 1);
-}
-
-#[test]
 fn cli_keeps_exit_codes_when_standard_output_or_error_is_closed() {
     use std::io::{self, Write};
 
@@ -99,78 +86,6 @@ fn cli_keeps_exit_codes_when_standard_output_or_error_is_closed() {
     let mut out = Vec::new();
     assert_eq!(main_with(&["unknown"], &mut CliIo { out: &mut out, err: &mut ClosedPipe }, &deps), 2);
     assert_eq!(main_with(&["info", "--model", "/no/such/model"], &mut CliIo { out: &mut out, err: &mut ClosedPipe }, &deps), 1);
-}
-
-#[test]
-fn verbose_classify_emits_debug_diagnostics() {
-    let dir = TempDir::new().unwrap();
-    let epub = dir.path().join("broken.epub");
-    fs::write(&epub, b"not a zip archive").unwrap();
-    let run = |verbose: bool| {
-        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_trainer"));
-        if verbose {
-            command.arg("-v");
-        }
-        command.args(["classify", "--no-es", "--model"]).arg(fixture()).arg(&epub).output().unwrap()
-    };
-    let quiet = run(false);
-    assert!(quiet.status.success(), "{}", String::from_utf8_lossy(&quiet.stderr));
-    assert!(!String::from_utf8_lossy(&quiet.stderr).contains("DEBUG"));
-    let output = run(true);
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("DEBUG") && stderr.contains("읽지 못했다"), "{stderr}");
-}
-
-#[test]
-fn classify_reports_missing_invalid_and_incomplete_es_environment_without_connecting() {
-    use std::process::{Command, Output};
-
-    fn run_with_es(command_name: &str, url: Option<&str>, index: Option<&str>, configure_optional_auth: bool) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_trainer"));
-        if command_name == "classify" {
-            command.args(["classify", "/no/such/file", "--model"]).arg(fixture());
-        } else {
-            let output = TempDir::new().unwrap();
-            command.args(["collect", "--out"]).arg(output.path().join("corpus.jsonl"));
-        }
-        for key in ["TM_ES_URL", "TM_ES_BOOK_INDEX", "TM_ES_USER", "TM_ES_PASSWORD", "TM_ES_CA_CERT"] {
-            command.env_remove(key);
-        }
-        if let Some(url) = url {
-            command.env("TM_ES_URL", url);
-        }
-        if let Some(index) = index {
-            command.env("TM_ES_BOOK_INDEX", index);
-        }
-        if configure_optional_auth {
-            command.env("TM_ES_USER", "test-user").env("TM_ES_PASSWORD", "test-password").env("TM_ES_CA_CERT", "/etc/ssl/certs/ca-certificates.crt");
-        }
-        command.output().unwrap()
-    }
-
-    let missing_url = run_with_es("classify", None, None, false);
-    assert_eq!(missing_url.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&missing_url.stderr).contains("TM_ES_URL이 없다"));
-
-    let invalid_url = run_with_es("classify", Some("ftp://localhost:9200"), Some("books"), false);
-    assert_eq!(invalid_url.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&invalid_url.stderr).contains("http:// 또는 https://"));
-
-    let missing_index = run_with_es("classify", Some("http://localhost:9200"), None, false);
-    assert_eq!(missing_index.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&missing_index.stderr).contains("TM_ES_BOOK_INDEX가 없다"));
-
-    let configured = run_with_es("classify", Some("https://localhost:9200"), Some("books"), true);
-    assert!(configured.status.success(), "{}", String::from_utf8_lossy(&configured.stderr));
-    assert!(String::from_utf8_lossy(&configured.stdout).contains("/no/such/file: 파일이 없다"));
-
-    for (url, index, error) in [(None, None, "TM_ES_URL이 없다"), (Some("ftp://localhost"), Some("books"), "http:// 또는 https://"), (Some("http://localhost"), None, "TM_ES_BOOK_INDEX가 없다")]
-    {
-        let output = run_with_es("collect", url, index, false);
-        assert_eq!(output.status.code(), Some(1));
-        assert!(String::from_utf8_lossy(&output.stderr).contains(error));
-    }
 }
 
 #[test]
@@ -215,19 +130,6 @@ fn training_rejects_insufficient_corpus_without_creating_model() {
 }
 
 #[test]
-fn manifest_uses_exact_membership_and_rejects_invalid_or_missing_members() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("holdout.json");
-    let docs = vec![json!({"id":"a"}), json!({"id":"b"})];
-    fs::write(&path, json!({"document_keys":["b"]}).to_string()).unwrap();
-    assert_eq!(trainer::load_manifest_holdout(&docs, &path).unwrap(), vec![docs[1].clone()]);
-    for payload in [json!([]), json!({"document_keys":4}), json!({"document_keys":[4]}), json!({"document_keys":["missing"]})] {
-        fs::write(&path, payload.to_string()).unwrap();
-        assert!(trainer::load_manifest_holdout(&docs, &path).is_err());
-    }
-}
-
-#[test]
 fn reband_clamps_threshold_to_measured_confidence() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("policy.json");
@@ -267,40 +169,6 @@ fn reband_explains_when_the_model_beats_stores_in_every_band() {
     let (code, out, err) = run(&["bookstore-policy", "--reband", path.to_str().unwrap()], &Deps::system());
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("서점이 모델을 이긴 구간이 없다"), "{out}");
-}
-
-fn model_and_corpus(dir: &TempDir, count: usize) -> (PathBuf, PathBuf) {
-    let path = dir.path().join("model");
-    let model = classifier::model::CategoryModel::load_dir(&fixture()).unwrap();
-    model.save(Some(&path)).unwrap();
-    let docs: Vec<Value> =
-        (0..count).map(|i| json!({"id":i.to_string(),"cat":"3_무협","text":"무림맹 장문인 내공 운기조식 화산파 검법 강호 협객","name":format!("무협_{i}.txt"),"type":"txt"})).collect();
-    let corpus = dir.path().join("corpus.jsonl");
-    classifier::corpus::write_jsonl(&docs, &corpus).unwrap();
-    fs::write(trainer::holdout_manifest_path(&path), json!({"document_keys":docs.iter().map(|d| d["id"].clone()).collect::<Vec<_>>()} ).to_string()).unwrap();
-    (path, corpus)
-}
-
-#[test]
-fn evaluate_and_calibration_use_saved_holdout_and_dry_run_preserves_model() {
-    let dir = TempDir::new().unwrap();
-    let (model, corpus) = model_and_corpus(&dir, 240);
-    let before = fs::read(model.join("model.json")).unwrap();
-    let common = ["--model", model.to_str().unwrap(), "--corpus", corpus.to_str().unwrap()];
-    let mut args = vec!["evaluate"];
-    args.extend(common);
-    let (code, out, err) = run(&args, &Deps::system());
-    assert_eq!(code, 0, "{err}");
-    assert!(out.contains("판정률"));
-    args[0] = "score-calibration";
-    args.push("--dry-run");
-    let (code, out, err) = run(&args, &Deps::system());
-    assert_eq!(code, 0, "{out} {err}");
-    assert_eq!(fs::read(model.join("model.json")).unwrap(), before);
-    args.pop();
-    assert_eq!(run(&args, &Deps::system()).0, 0);
-    let loaded = classifier::model::CategoryModel::load_dir(&model).unwrap();
-    assert_eq!(loaded.meta["confidence_calibration"]["n"], 240);
 }
 
 #[test]
@@ -361,83 +229,6 @@ fn reclassify_prints_progress_every_500_files() {
 
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("500/500 처리"), "{out}");
-}
-
-struct Stores;
-impl trainer::BookstoreQuery for Stores {
-    fn query(&self, _: &str, _: &str, _: &str, _: f64) -> (Value, Value, Value) {
-        (json!({"mapped":"3_무협"}), json!({"mapped":"3_무협"}), json!({}))
-    }
-}
-
-struct VoteStores([Value; 3]);
-impl trainer::BookstoreQuery for VoteStores {
-    fn query(&self, _: &str, _: &str, _: &str, _: f64) -> (Value, Value, Value) {
-        (self.0[0].clone(), self.0[1].clone(), self.0[2].clone())
-    }
-}
-
-#[test]
-fn bookstore_policy_samples_and_writes_per_document_rows() {
-    let dir = TempDir::new().unwrap();
-    let (model, corpus) = model_and_corpus(&dir, 60);
-    let out = dir.path().join("policy.json");
-    let deps = Deps::system().with_bookstores(Arc::new(Stores));
-    let (code, _, err) = run(
-        &["bookstore-policy", "--model", model.to_str().unwrap(), "--corpus", corpus.to_str().unwrap(), "--sample", "12", "--sample-from", "all", "--delay", "0", "--out", out.to_str().unwrap()],
-        &deps,
-    );
-    assert_eq!(code, 0, "{err}");
-    let saved: Value = serde_json::from_slice(&fs::read(out).unwrap()).unwrap();
-    assert_eq!(saved["sample"], 12);
-    assert_eq!(saved["rows"].as_array().unwrap().len(), 12);
-    assert!(saved["rows"].as_array().unwrap().iter().all(|r| r["store_answered"] == true));
-}
-
-#[test]
-fn bookstore_policy_requires_a_majority_when_multiple_stores_answer() {
-    let dir = TempDir::new().unwrap();
-    let (model, corpus) = model_and_corpus(&dir, 60);
-    let cases = [
-        ([json!({"mapped":"3_무협"}), json!({}), json!({})], Some("3_무협")),
-        ([json!({"mapped":"3_무협"}), json!({"mapped":"5_과학"}), json!({})], None),
-        ([json!({"mapped":"3_무협"}), json!({"mapped":"3_무협"}), json!({"mapped":"5_과학"})], Some("3_무협")),
-    ];
-
-    for (index, (answers, expected)) in cases.into_iter().enumerate() {
-        let output = dir.path().join(format!("votes-{index}.json"));
-        let deps = Deps::system().with_bookstores(Arc::new(VoteStores(answers)));
-        let args =
-            ["bookstore-policy", "--model", model.to_str().unwrap(), "--corpus", corpus.to_str().unwrap(), "--sample", "1", "--sample-from", "all", "--delay", "0", "--out", output.to_str().unwrap()];
-        let (code, _, err) = run(&args, &deps);
-        assert_eq!(code, 0, "{err}");
-        let saved: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
-        if let Some(expected) = expected {
-            assert_eq!(saved["rows"][0]["store_cat"], expected);
-            assert!(saved["rows"][0]["store_answered"].as_bool().unwrap());
-        } else {
-            assert!(saved["rows"][0]["store_cat"].is_null());
-            assert!(!saved["rows"][0]["store_answered"].as_bool().unwrap());
-        }
-    }
-}
-
-#[test]
-fn bookstore_policy_samples_the_boundary_above_the_refused_range() {
-    let dir = TempDir::new().unwrap();
-    let (model, corpus) = model_and_corpus(&dir, 60);
-    let out = dir.path().join("boundary-policy.json");
-    let deps = Deps::system().with_bookstores(Arc::new(Stores));
-
-    let (code, printed, err) = run(
-        &["bookstore-policy", "--model", model.to_str().unwrap(), "--corpus", corpus.to_str().unwrap(), "--sample", "6", "--sample-from", "boundary", "--delay", "0", "--out", out.to_str().unwrap()],
-        &deps,
-    );
-
-    assert_eq!(code, 0, "{err}");
-    assert!(printed.contains("거부 구간과 그 위"), "{printed}");
-    let saved: Value = serde_json::from_slice(&fs::read(out).unwrap()).unwrap();
-    assert_eq!(saved["sample_from"], "boundary");
 }
 
 #[test]
@@ -645,47 +436,6 @@ fn reclassify_rejects_parent_traversal_and_symlink_categories() {
 }
 
 #[test]
-fn score_calibration_refuses_too_few_samples_without_writing() {
-    let dir = TempDir::new().unwrap();
-    let (model, corpus) = model_and_corpus(&dir, 3);
-    let before = fs::read(model.join("model.json")).unwrap();
-    let (code, out, err) = run(&["score-calibration", "--model", model.to_str().unwrap(), "--corpus", corpus.to_str().unwrap()], &Deps::system());
-    assert_eq!(code, 1, "{err}");
-    assert!(out.contains("표본이 모자라"));
-    assert_eq!(fs::read(model.join("model.json")).unwrap(), before);
-}
-
-#[test]
-fn train_runs_in_rust_and_writes_model_and_holdout_manifest() {
-    let dir = TempDir::new().unwrap();
-    let corpus = dir.path().join("corpus.jsonl");
-    let mut rows = String::new();
-    for (cat, text) in [("3_무협", "무림 검법 강호 협객"), ("5_과학", "미분 행렬 확률 물리")] {
-        for i in 0..8 {
-            rows.push_str(&json!({"id":format!("{cat}-{i}"),"cat":cat,"text":text}).to_string());
-            rows.push('\n');
-        }
-    }
-    fs::write(&corpus, rows).unwrap();
-    let out = dir.path().join("model with spaces;$(no-shell)");
-    let out_arg = format!("--out={}", out.display());
-    let (code, report, err) =
-        run(&["train", "--corpus", corpus.to_str().unwrap(), &out_arg, "--min-per-category", "2", "--body-min-df", "1", "--n-jobs", "1", "--no-char-ngram", "--save-config"], &Deps::system());
-    assert_eq!(code, 0, "{err}");
-    assert!(report.contains("Rust 모델 저장"));
-    assert!(report.contains(&format!("설정 저장: {}", out.join("config.json").display())), "{report}");
-    assert!(out.join("config.json").is_file());
-    let model = classifier::model::CategoryModel::load_dir(&out).unwrap();
-    assert_eq!(model.classes.len(), 2);
-    assert_eq!(model.config["model"]["n_jobs"], 1);
-    let original_docs = classifier::corpus::read_jsonl(&corpus).unwrap();
-    let (expected_model, expected_report) = classifier::training::train(&mut original_docs.clone(), &model.config, classifier::training::TrainOptions::default()).unwrap();
-    assert_eq!(expected_model.classes, model.classes);
-    assert_eq!(model.meta["holdout"], expected_report);
-    assert!(!trainer::load_manifest_holdout(&classifier::corpus::read_jsonl(&corpus).unwrap(), &trainer::holdout_manifest_path(&out)).unwrap().is_empty());
-}
-
-#[test]
 fn class_weight_none_keeps_the_existing_config_value() {
     let dir = TempDir::new().unwrap();
     let corpus = dir.path().join("corpus.jsonl");
@@ -874,16 +624,6 @@ fn reband_separate_output_preserves_input_and_invalid_rows_fail() {
 }
 
 #[test]
-fn executable_exit_codes_and_help_match_the_library() {
-    let binary = env!("CARGO_BIN_EXE_trainer");
-    let output = std::process::Command::new(binary).output().unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stdout).contains("사용법"));
-    let output = std::process::Command::new(binary).arg("unknown").output().unwrap();
-    assert_eq!(output.status.code(), Some(2));
-}
-
-#[test]
 fn parser_validates_numeric_choices_and_accepts_paths_after_separator() {
     for args in [
         vec!["train", "--C", "0"],
@@ -901,24 +641,6 @@ fn parser_validates_numeric_choices_and_accepts_paths_after_separator() {
     let (code, out, err) = run(&["classify", "--model", model.to_str().unwrap(), "--no-es", "--", "--not-an-option.txt"], &Deps::system());
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("파일이 없다"));
-}
-
-#[test]
-fn evaluate_reconstructs_missing_manifest_and_reports_partially_missing_keys() {
-    let dir = TempDir::new().unwrap();
-    let (model, corpus) = model_and_corpus(&dir, 20);
-    let args = ["evaluate", "--model", model.to_str().unwrap(), "--corpus", corpus.to_str().unwrap()];
-    fs::remove_file(trainer::holdout_manifest_path(&model)).unwrap();
-    let (code, _, err) = run(&args, &Deps::system());
-    assert_eq!(code, 0, "{err}");
-    assert!(err.contains("해시 분할"));
-    fs::write(trainer::holdout_manifest_path(&model), json!({"document_keys":["0","missing"]}).to_string()).unwrap();
-    let (code, _, err) = run(&args, &Deps::system());
-    assert_eq!(code, 0, "{err}");
-    assert!(err.contains("1건"));
-    fs::write(&corpus, "").unwrap();
-    assert_eq!(run(&args, &Deps::system()).0, 1);
-    assert_eq!(run(&["train", "--corpus", corpus.to_str().unwrap()], &Deps::system()).0, 1);
 }
 
 #[test]
@@ -959,25 +681,4 @@ fn reclassify_limits_skips_refused_and_reports_move_failure() {
     assert_eq!(code, 0, "Python CLI returns success after reporting per-file move failures: {err}");
     assert!(out.contains("실패 2건"));
     assert!(source.join("a.txt").exists());
-}
-
-#[test]
-fn bookstore_policy_reports_progress_and_refuses_an_empty_sampling_band() {
-    let dir = TempDir::new().unwrap();
-    let (model, corpus) = model_and_corpus(&dir, 120);
-    let out = dir.path().join("policy.json");
-    let deps = Deps::system().with_bookstores(Arc::new(Stores));
-    let common = ["bookstore-policy", "--model", model.to_str().unwrap(), "--corpus", corpus.to_str().unwrap(), "--out", out.to_str().unwrap(), "--delay", "0"];
-    let mut args = common.to_vec();
-    args.extend(["--sample-from", "all", "--sample", "120"]);
-    let (code, printed, err) = run(&args, &deps);
-    assert_eq!(code, 0, "{err}");
-    assert!(printed.contains("100/120"));
-    let manifest = model.join("model.json");
-    let mut value: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
-    value["config"]["decision"]["min_confidence"] = json!(0.0);
-    fs::write(manifest, value.to_string()).unwrap();
-    let (code, _, err) = run(&common, &deps);
-    assert_eq!(code, 1);
-    assert!(err.contains("해당하는 문서가 없다"));
 }

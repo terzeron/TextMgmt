@@ -18,5 +18,17 @@ serde_json.workspace = true
 tempfile = "3.27.0"
 
 [[test]]
-name = "cli"
-path = "../../tests/rust/trainer/cli.rs"
+name = "commands"
+path = "../../tests/rust/trainer/commands.rs"
+
+[[test]]
+name = "data"
+path = "../../tests/rust/trainer/data.rs"
+
+[[test]]
+name = "trainer"
+path = "../../tests/rust/trainer/trainer.rs"
+
+[[test]]
+name = "integration_cli"
+path = "../../tests/rust/trainer/integration/cli.rs"
