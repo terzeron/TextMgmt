@@ -1,6 +1,24 @@
-//! Python 3.13 `str.lower()` compatibility for Unicode 15.1.
+//! Python 3.13 대소문자 변환: `str.casefold()`(생성 표 기반)와 `str.lower()`. Unicode 15.1 기준이다.
 
 use crate::py_is_assigned;
+
+#[path = "casefold_table.rs"]
+mod table;
+
+pub fn py_casefold(value: &str) -> String {
+    let mut folded = String::with_capacity(value.len());
+    for character in value.chars() {
+        match table::CASE_FOLD.binary_search_by_key(&(character as u32), |(codepoint, _)| *codepoint) {
+            Ok(index) => {
+                for &codepoint in table::CASE_FOLD[index].1 {
+                    folded.push(char::from_u32(codepoint).expect("generated casefold data contains Unicode scalar values"));
+                }
+            }
+            Err(_) => folded.push(character),
+        }
+    }
+    folded
+}
 
 pub fn py_lowercase(value: &str) -> String {
     let mut lowered = String::with_capacity(value.len());
@@ -22,7 +40,12 @@ pub fn py_lowercase(value: &str) -> String {
 mod tests {
     use std::collections::HashMap;
 
-    use super::py_lowercase;
+    use super::{py_casefold, py_lowercase};
+
+    #[test]
+    fn full_casefold_expands_and_normalizes_unicode_cases() {
+        assert_eq!(py_casefold("Straße Σς ﬃ"), "strasse σσ ffi");
+    }
 
     #[test]
     fn lowercase_matches_python_313_unicode_151_for_every_codepoint() {

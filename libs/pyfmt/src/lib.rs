@@ -10,10 +10,8 @@ mod alnum_table;
 mod decimal_table;
 mod unicode151;
 
-mod casefold;
-pub use casefold::py_casefold;
-mod lowercase;
-pub use lowercase::py_lowercase;
+mod case;
+pub use case::{py_casefold, py_lowercase};
 pub use unicode151::py_is_assigned;
 
 /// Python `repr(str)`: 작은따옴표를 기본으로 쓰되 `'`만 있으면 큰따옴표로 감싼다.
