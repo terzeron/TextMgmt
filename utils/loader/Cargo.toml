@@ -7,21 +7,6 @@ publish.workspace = true
 autotests = false
 
 # loader_1, loader_2는 doc_reader/loader에 *_with(&XxxHooks) API를 만든 뒤 등록한다.
-[[test]]
-name = "loader_gaps"
-path = "../../tests/rust/loader/loader_gaps.rs"
-
-[[test]]
-name = "loader_hwp3"
-path = "../../tests/rust/loader/loader_hwp3.rs"
-
-[[test]]
-name = "loader_1"
-path = "../../tests/rust/loader/loader_1.rs"
-
-[[test]]
-name = "loader_2"
-path = "../../tests/rust/loader/loader_2.rs"
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
@@ -38,3 +23,27 @@ isbn = { path = "../../libs/isbn" }
 sysdeps = { path = "../../libs/sysdeps" }
 tempfile = "3.27.0"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+[[test]]
+name = "cli"
+path = "../../tests/rust/loader/cli.rs"
+
+[[test]]
+name = "flow"
+path = "../../tests/rust/loader/flow.rs"
+
+[[test]]
+name = "integration_loader_1"
+path = "../../tests/rust/loader/integration/loader_1.rs"
+
+[[test]]
+name = "integration_loader_2"
+path = "../../tests/rust/loader/integration/loader_2.rs"
+
+[[test]]
+name = "integration_loader_gaps"
+path = "../../tests/rust/loader/integration/loader_gaps.rs"
+
+[[test]]
+name = "integration_loader_hwp3"
+path = "../../tests/rust/loader/integration/loader_hwp3.rs"

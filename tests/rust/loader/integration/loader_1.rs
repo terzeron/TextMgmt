@@ -1,5 +1,3 @@
-#![allow(clippy::type_complexity)]
-
 //! 원본: tests/test_loader.py (전반부)
 //!
 //! 이 파일이 가정하는 API (실제 crate에 없는 것만, 이름은 Python 원본을 따른다):
@@ -23,7 +21,8 @@
 //!   `ReadHooks { fast_page_count (_fast_pdf_page_count 대체), fallback_page_count (pypdf 대체), inspect (_zip_container_type 대체, 구 detect_file_type_with) }`
 //! - `stat::Stat::{pdf_stage_count, pdf_stage_total_time, pdf_stage_outcome_count}` 단계별 통계 조회
 
-use std::collections::HashMap;
+#![allow(clippy::type_complexity)]
+
 use std::fs;
 use std::io::{self, Write as _};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -44,9 +43,7 @@ use doc_reader::pdf::{
 };
 use doc_reader::rtf::read_from_rtf_text;
 use doc_reader::text::{Enc, HIGH_BYTE_PAIRED_MIN, TextHooks, TextRead, read_from_text, read_from_text_with, reencode_text_file_to_utf8, reencode_text_file_to_utf8_with};
-use loader::cli::print_usage;
 use file_record::config::Config;
-use loader::flow::{get_file_list, read_files};
 use file_record::record::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
 use serde_json::Value;
 use stat::Stat;
@@ -467,38 +464,6 @@ fn fake_libreoffice(dir: &Path, payload: Option<&str>) -> PathBuf {
     script
 }
 
-// ---- TestLoaderInit -------------------------------------------------------------------------
-
-mod test_loader_init {
-    use super::*;
-
-    #[test]
-    fn test_loader_class_exists() {
-        // Python의 hasattr(Loader, "read_file"/"read_files") 대신, 두 함수가 같은 이름으로 있음을 컴파일 시점에 확인한다.
-        let _read_file = read_file;
-        let _read_files = read_files;
-    }
-
-    #[test]
-    fn test_loader_requires_book_dir() {
-        // 원본은 import 시점 SystemExit. Rust는 Config::from_env가 빠진 변수 이름을 담은 오류를 돌려준다.
-        let get = |name: &str| {
-            if name == "TM_COMICS_DIR" { Some("/tmp/comics".to_owned()) } else { None }
-        };
-        let err = Config::from_env(&get).unwrap_err();
-        assert!(err.contains("TM_BOOK_DIR"), "{err}");
-    }
-
-    #[test]
-    fn test_loader_requires_comics_dir() {
-        let get = |name: &str| {
-            if name == "TM_BOOK_DIR" { conftest_env(name) } else { None }
-        };
-        let err = Config::from_env(&get).unwrap_err();
-        assert!(err.contains("TM_COMICS_DIR"), "{err}");
-    }
-}
-
 // ---- TestReadFromText -----------------------------------------------------------------------
 
 mod test_read_from_text {
@@ -772,77 +737,6 @@ mod test_read_from_image {
         assert_eq!(summary, "");
         assert_eq!(line_count, 0);
         assert_eq!(page_count, 0);
-    }
-}
-
-// ---- TestGetFileList ------------------------------------------------------------------------
-
-mod test_get_file_list {
-    use super::*;
-
-    #[test]
-    fn test_single_file() {
-        let d = tempfile::tempdir().unwrap();
-        let f = d.path().join("test.txt");
-        write(&f, "hello");
-        let result = get_file_list(&f, false, None);
-        assert_eq!(result, vec![f]);
-    }
-
-    #[test]
-    fn test_directory() {
-        let d = tempfile::tempdir().unwrap();
-        write(&d.path().join("a.txt"), "a");
-        write(&d.path().join("b.txt"), "b");
-        let result = get_file_list(d.path(), false, None);
-        assert!(result.len() >= 2, "{result:?}");
-    }
-
-    #[test]
-    fn test_directory_with_subdirs() {
-        let d = tempfile::tempdir().unwrap();
-        let sub = d.path().join("sub");
-        fs::create_dir(&sub).unwrap();
-        write(&sub.join("c.txt"), "c");
-        write(&d.path().join("a.txt"), "a");
-        let result = get_file_list(d.path(), false, None);
-        // Should include one file from subdir + direct files
-        assert!(result.len() >= 2, "{result:?}");
-    }
-
-    #[test]
-    fn test_directory_recursive() {
-        let d = tempfile::tempdir().unwrap();
-        let sub = d.path().join("sub");
-        fs::create_dir(&sub).unwrap();
-        write(&sub.join("c.txt"), "c");
-        write(&d.path().join("a.txt"), "a");
-        let result = get_file_list(d.path(), true, None);
-        assert!(result.len() >= 2, "{result:?}");
-    }
-
-    #[test]
-    fn test_directory_num_files_limit() {
-        let d = tempfile::tempdir().unwrap();
-        for i in 0..5 {
-            write(&d.path().join(format!("{i}.txt")), i.to_string());
-        }
-        let result = get_file_list(d.path(), false, Some(2));
-        assert_eq!(result.len(), 2);
-    }
-
-    #[test]
-    fn test_directory_skips_hidden() {
-        let d = tempfile::tempdir().unwrap();
-        write(&d.path().join(".hidden"), "x");
-        write(&d.path().join("visible.txt"), "y");
-        let hidden_dir = d.path().join(".hidden_dir");
-        fs::create_dir(&hidden_dir).unwrap();
-        write(&hidden_dir.join("z.txt"), "z");
-        let result = get_file_list(d.path(), true, None);
-        let names: Vec<String> = result.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
-        assert!(!names.contains(&".hidden".to_owned()), "{names:?}");
-        assert!(!names.contains(&"z.txt".to_owned()), "{names:?}");
     }
 }
 
@@ -2607,22 +2501,6 @@ mod test_read_file_branches {
     }
 }
 
-// ---- TestReadFiles / TestGetStat / TestPrintUsage -------------------------------------------
-
-mod test_read_files {
-    use super::*;
-
-    #[test]
-    fn test_read_files() {
-        let d = tempfile::tempdir().unwrap();
-        let cfg = config_with_book(d.path());
-        write(&d.path().join("a.txt"), "hello");
-        write(&d.path().join("b.txt"), "world");
-        let result: HashMap<i64, Value> = read_files(&cfg, d.path(), &InProcess, &Stat::new());
-        assert!(result.len() >= 2, "{}", result.len());
-    }
-}
-
 mod test_get_stat {
     use super::*;
 
@@ -2634,20 +2512,6 @@ mod test_get_stat {
         // Loader.get_stat은 os.stat 래퍼다. Rust는 fs::metadata를 직접 쓴다.
         let st = fs::metadata(&f).unwrap();
         assert_eq!(st.len(), 5);
-    }
-}
-
-mod test_print_usage {
-    use super::*;
-
-    #[test]
-    fn test_print_usage() {
-        // 원본의 print_usage는 SystemExit를 일으킨다. Rust의 print_usage는 쓰기만 하고 돌아온다(종료는 `run`의 반환 코드).
-        let mut out = Vec::new();
-        print_usage("test_program", &mut out);
-        let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("test_program"), "{text}");
-        assert!(text.contains("사용법"), "{text}");
     }
 }
 
