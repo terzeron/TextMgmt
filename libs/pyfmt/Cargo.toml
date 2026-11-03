@@ -6,9 +6,9 @@ edition.workspace = true
 publish.workspace = true
 autotests = false
 
+[dependencies]
+serde_json = { workspace = true, features = ["preserve_order"] }
+
 [[test]]
 name = "pyfmt"
 path = "../../tests/rust/pyfmt/pyfmt.rs"
-
-[dependencies]
-serde_json = { workspace = true, features = ["preserve_order"] }
