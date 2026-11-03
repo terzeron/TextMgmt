@@ -15,8 +15,7 @@ docs/       문서
 
 | crate | 용도 |
 | --- | --- |
-| `corpus_common` | 본문 표본 읽기, 인코딩 판별, ZIP 열기, 경로·URL 도구, 빈 디렉토리 청소, 병렬 풀 |
-| `corpus_layout` | 색인 제외 디렉토리 상수 |
+| `corpus_common` | 본문 표본 읽기, 인코딩 판별, ZIP 열기, Python `posixpath` 호환 경로·URL 도구 |
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. backend `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
@@ -24,10 +23,10 @@ docs/       문서
 | `stat` | 색인·파싱 통계 카운터 |
 | `db` | MySQL 접근 추상화와 카테고리 매핑 저장소(`category_mapping`) |
 | `classifier` | 도서 분류기: 모델 학습·추론, 코퍼스, 서점 정책, 서점 응답 캐시. backend와 분류 도구가 함께 쓴다 |
-| `file_record` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리. loader와 backend가 함께 쓴다 |
+| `file_record` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리, 색인 제외 디렉토리 규칙(`layout`). loader와 backend가 함께 쓴다 |
 | `sysdeps` | 시계, 파일시스템, 외부 명령, HTTP 같은 시스템 능력의 trait와 실제 구현. 파서 시간 상한(`timeout`)과 PDF worker(`tm-pdf-worker`)를 포함한다 |
 | `isbn` | 파일에서 ISBN 추출(TXT·EPUB·PDF·DJVU·HWP) |
-| `hwp3_tables`, `hwp3_parser` | HWP 3.x 텍스트 추출 |
+| `hwp3_parser` | HWP 3.x 텍스트 추출. 생성된 HNC→유니코드 매핑 표(`tables`)를 포함한다 |
 
 ## utils (도구)
 

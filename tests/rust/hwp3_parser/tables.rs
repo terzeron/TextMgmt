@@ -1,7 +1,7 @@
 //! 매핑 표 테스트: Python 원본(`utils/hwp3_tables.py`)과 같은 값인지 확인한다.
 //! 기대 체크섬은 원본 모듈에서 같은 FNV-1a 계산으로 얻었다.
 
-use hwp3_tables::*;
+use hwp3_parser::tables::*;
 
 fn fnv(values: impl IntoIterator<Item = u64>) -> u64 {
     values.into_iter().fold(1469598103934665603u64, |h, v| (h ^ v).wrapping_mul(1099511628211))

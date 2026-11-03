@@ -9,12 +9,14 @@
 //! 내부 단계(스트림, HNC 변환, 문단 파싱)도 `pub`으로 열어 둔다. Python 원본의 비공개 함수 테스트를 그대로
 //! 옮기기 위해서다.
 
+pub mod tables;
+
 use std::fmt;
 use std::io::Read;
 use std::path::Path;
 
 use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
-use hwp3_tables::{FILL, HNC_L1, HNC_L2, HNC_T1, HNC_T2, HNC_V1, HNC_V2, KSC5601_TO_UNI, L_MAP, NONE, T_MAP, V_MAP, hnc2uni};
+use tables::{FILL, HNC_L1, HNC_L2, HNC_T1, HNC_T2, HNC_V1, HNC_V2, KSC5601_TO_UNI, L_MAP, NONE, T_MAP, V_MAP, hnc2uni};
 
 /// Python은 현대 음절 조합 계산(`chr(0xAC00 + ...)`)에서 lone surrogate 문자를 만든다. 이것은 run을 끊지 않은 채
 /// 마지막에 일괄 제거된다. Rust의 `String`은 surrogate를 담을 수 없어서 같은 자리를 이 표시 문자로 채우고

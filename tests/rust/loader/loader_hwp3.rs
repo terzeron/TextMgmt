@@ -18,7 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use hwp3_parser::{HwpStream, extract_text_from_hwp3, hnc_to_unicode, parse_paragraph, parse_paragraph_list, safe_chr};
-use hwp3_tables::hnc2uni;
+use hwp3_parser::tables::hnc2uni;
 
 /// `_MAX_TEXT_LENGTH`. crate에서 비공개라 같은 값을 둔다.
 const MAX_TEXT_LENGTH: usize = 1_000_000;

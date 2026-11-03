@@ -6,7 +6,7 @@ use std::io::Write;
 use flate2::Compression;
 use flate2::write::DeflateEncoder;
 use hwp3_parser::*;
-use hwp3_tables::{HNC2UNI, KSC5601_TO_UNI};
+use hwp3_parser::tables::{HNC2UNI, KSC5601_TO_UNI};
 
 fn le16(v: u16) -> Vec<u8> {
     v.to_le_bytes().to_vec()

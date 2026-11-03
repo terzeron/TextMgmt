@@ -1647,13 +1647,8 @@ name = "hwp3_parser"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "hwp3_tables",
  "tempfile",
 ]
-
-[[package]]
-name = "hwp3_tables"
-version = "0.1.0"
 
 [[package]]
 name = "hybrid-array"
@@ -2164,7 +2159,6 @@ dependencies = [
  "es_client",
  "file_record",
  "hwp3_parser",
- "hwp3_tables",
  "isbn",
  "serde_json",
  "stat",

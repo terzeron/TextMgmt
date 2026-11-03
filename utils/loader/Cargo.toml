@@ -34,7 +34,6 @@ stat = { path = "../../libs/stat" }
 [dev-dependencies]
 encoding_rs = "0.8.35"
 hwp3_parser = { path = "../../libs/hwp3_parser" }
-hwp3_tables = { path = "../../libs/hwp3_tables" }
 isbn = { path = "../../libs/isbn" }
 sysdeps = { path = "../../libs/sysdeps" }
 tempfile = "3.27.0"

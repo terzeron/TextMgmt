@@ -1,4 +1,4 @@
-//! HNC(한컴 내부 코드) → 유니코드 매핑 표. `utils/hwp3_tables.py`에서 생성했다.
+//! HNC(한컴 내부 코드) → 유니코드 매핑 표. 생성된 데이터다: `utils/hwp3_tables.py`에서 만들었고 손으로 고치지 않는다.
 //!
 //! 출처: namhyung/libhwp `hnc2unicode.inc` (LGPL-3.0), Hodong Kim <cogniti@gmail.com>.
 //! 값은 Python 모듈과 한 항목도 다르지 않다. 테스트가 원본 개수와 표본을 확인한다.

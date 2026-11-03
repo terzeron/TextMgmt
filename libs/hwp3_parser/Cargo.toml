@@ -7,12 +7,15 @@ publish.workspace = true
 autotests = false
 
 [[test]]
+name = "tables"
+path = "../../tests/rust/hwp3_parser/tables.rs"
+
+[[test]]
 name = "hwp3"
 path = "../../tests/rust/hwp3_parser/hwp3.rs"
 
 [dependencies]
 flate2 = "1"
-hwp3_tables = { path = "../hwp3_tables" }
 
 [dev-dependencies]
 tempfile = "3.27.0"
