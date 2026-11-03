@@ -284,3 +284,11 @@ fn json_output_has_no_ansi_even_on_a_tty() {
     let out = run_env(d.path(), &["--json", "--min-severity", "low"], true, false);
     assert!(out.contains("EMPTY_FILE") && !out.contains('\u{1b}'), "{out:?}");
 }
+
+#[test]
+fn an_empty_argument_list_needs_a_command_and_help_exits_0() {
+    assert!(parse(&[]).unwrap_err().contains("command"));
+    let mut out = Vec::new();
+    assert_eq!(run(&["scan".into(), "-h".into()], &mut out), 0);
+    assert!(String::from_utf8(out).unwrap().contains("bookdoctor unquarantine"));
+}

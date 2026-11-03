@@ -81,3 +81,12 @@ fn the_min_severity_filter_applies_to_rule_matches() {
     r.suppress_below(Severity::High);
     assert!(!r.has("RULE_MATCH"), "low must be hidden by the default min severity");
 }
+
+#[test]
+fn a_path_that_cannot_be_read_is_incomplete() {
+    let d = tempfile::tempdir().unwrap();
+    let compiled = parse(MARKER_RULE).unwrap().compile();
+    let mut report = FileReport::new(d.path(), None);
+    rules::scan_report(d.path(), &compiled, &mut report);
+    assert!(report.incomplete && report.reasons.iter().any(|m| m == "rules: file could not be read"), "{:?}", report.reasons);
+}

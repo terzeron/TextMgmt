@@ -275,3 +275,43 @@ fn unquarantine_without_a_manifest_exits_1() {
     let (code, _) = run_in(&lib.root, &["unquarantine"]);
     assert_eq!(code, 1);
 }
+
+#[test]
+fn a_failed_copy_removes_the_partial_destination() {
+    let lib = library();
+    let src = lib.root.join("3_판타지/a.txt");
+    let err = copy_then_remove(&src, &lib.tmp.join("없는 폴더/a.txt"));
+    assert!(err.is_err());
+    assert!(src.exists());
+}
+
+#[test]
+fn a_manifest_that_cannot_be_written_is_logged_but_the_move_stands() {
+    let lib = library();
+    let manifest = lib.tmp.join("manifest-dir");
+    fs::create_dir(&manifest).unwrap();
+    let logged = std::cell::RefCell::new(Vec::new());
+    let log = |m: &str| logged.borrow_mut().push(m.to_owned());
+    let result = apply_moves(&plan(&lib, &["3_판타지/a.txt"]), &manifest.join("."), &log);
+    assert_eq!(result.moved.len(), 1);
+    assert!(logged.borrow().iter().any(|m| m.contains("매니페스트를 쓰지 못했다")), "{:?}", logged.borrow());
+}
+
+#[test]
+fn move_and_undo_failures_are_listed_and_exit_1() {
+    let lib = library();
+    fs::write(lib.root.join("3_판타지/broken.txt"), common::corrupted()).unwrap();
+    // 격리 디렉터리 자리에 파일이 있으면 하위 디렉터리를 만들 수 없다.
+    fs::write(lib.root.join(BROKEN_DIR_NAME), "막힘").unwrap();
+    let (code, out) = run_in(&lib.root, &["quarantine", lib.root.to_str().unwrap()]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("실패: broken.txt"), "{out}");
+
+    fs::remove_file(lib.root.join(BROKEN_DIR_NAME)).unwrap();
+    let (code, _) = run_in(&lib.root, &["quarantine", lib.root.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    fs::remove_file(lib.root.join(BROKEN_DIR_NAME).join("3_판타지/broken.txt")).unwrap();
+    let (code, out) = run_in(&lib.root, &["unquarantine"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("격리본 없음"), "{out}");
+}

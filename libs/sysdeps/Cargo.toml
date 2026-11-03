@@ -10,6 +10,10 @@ autotests = false
 name = "sysdeps"
 path = "../../tests/rust/sysdeps/sysdeps.rs"
 
+[[test]]
+name = "native_pdf"
+path = "../../tests/rust/sysdeps/native_pdf.rs"
+
 [[bin]]
 name = "tm-pdf-worker"
 path = "src/bin/pdf_worker.rs"

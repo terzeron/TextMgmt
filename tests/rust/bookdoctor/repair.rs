@@ -145,3 +145,36 @@ fn rewriting_commands_skip_the_trash_and_quarantine_directories() {
     assert!(String::from_utf8(out).unwrap().contains("TXT 검사 0건"));
     assert!(dir.path().join("0_trash/old.txt").exists() && dir.path().join("0_broken/cat/old.txt").exists());
 }
+
+#[test]
+fn a_file_that_already_has_the_right_extension_is_left_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, mangled) = binary_pair();
+    let p = dir.path().join("책.hwp");
+    fs::write(&p, &mangled).unwrap();
+    assert!(restore_binary(&p, &dir.path().join("0_trash")).is_none());
+}
+
+#[test]
+fn a_rename_failure_is_reported_and_exits_1() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let (_, mangled) = binary_pair();
+    let cat = dir.path().join("cat");
+    fs::create_dir(&cat).unwrap();
+    fs::write(cat.join("책.txt"), &mangled).unwrap();
+    fs::set_permissions(&cat, fs::Permissions::from_mode(0o555)).unwrap();
+    if fs::write(cat.join("probe"), b"").is_ok() {
+        fs::set_permissions(&cat, fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skip: root는 읽기 전용 디렉터리에도 쓴다");
+        return;
+    }
+    let argv: Vec<String> = ["repair".to_string(), dir.path().to_string_lossy().into_owned()].into();
+    let opts = Options { library_root: dir.path().to_path_buf(), ..parse(&argv).unwrap() };
+    let mut out = Vec::new();
+    let code = execute(&opts, &mut out, false, true);
+    fs::set_permissions(&cat, fs::Permissions::from_mode(0o755)).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("FAIL") && out.contains("실패 1건"), "{out}");
+}
