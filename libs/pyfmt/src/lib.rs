@@ -2,6 +2,7 @@
 //!
 //! - [`py_repr`]: JSON 값을 `repr(dict)` 모양으로 (`print("item:", item)`)
 //! - [`py_round`]: `round(x, ndigits)`와 같은 결과(이진 값을 십진 전개해 짝수 쪽으로)
+//! - [`py_truthy`]: JSON 값의 `bool(v)`
 
 use serde_json::Value;
 
@@ -55,7 +56,11 @@ fn py_float_repr(v: f64) -> String {
         let exp: i32 = exp.parse().unwrap_or(0);
         return format!("{mant}e{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs());
     }
-    if v.fract() == 0.0 { format!("{v:.1}") } else { format!("{v}") }
+    if v.fract() == 0.0 {
+        format!("{v:.1}")
+    } else {
+        format!("{v}")
+    }
 }
 
 /// JSON 값을 Python `repr(dict)`과 같은 모양으로 쓴다(`print("item:", item)`과 같은 출력).
@@ -67,6 +72,18 @@ pub fn py_repr(v: &Value) -> String {
         Value::String(s) => py_str_repr(s),
         Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
         Value::Object(o) => format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", py_str_repr(k), py_repr(v))).collect::<Vec<_>>().join(", ")),
+    }
+}
+
+/// Python `bool(v)`: `None`, `False`, 0, 빈 문자열·리스트·dict만 거짓이다.
+pub fn py_truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
     }
 }
 
@@ -89,5 +106,9 @@ pub fn py_decimal_digit(c: char) -> Option<u8> {
     let codepoint = c as u32;
     let index = decimal_table::PY_DECIMAL_RANGES.partition_point(|(_, end)| *end < codepoint);
     let (start, end) = decimal_table::PY_DECIMAL_RANGES.get(index)?;
-    if codepoint >= *start && codepoint <= *end { Some(((codepoint - start) % 10) as u8) } else { None }
+    if codepoint >= *start && codepoint <= *end {
+        Some(((codepoint - start) % 10) as u8)
+    } else {
+        None
+    }
 }

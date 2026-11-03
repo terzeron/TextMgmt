@@ -91,3 +91,13 @@ fn py_decimal_digit_matches_python_313_unicode_151_for_all_codepoints() {
         assert_eq!(actual, expected, "U+{codepoint:04X}");
     }
 }
+
+#[test]
+fn py_truthy_matches_python_bool() {
+    for falsy in [json!(null), json!(false), json!(0), json!(0.0), json!(""), json!([]), json!({})] {
+        assert!(!py_truthy(&falsy), "{falsy}");
+    }
+    for truthy in [json!(true), json!(1), json!(-0.5), json!("0"), json!([0]), json!({"a": null})] {
+        assert!(py_truthy(&truthy), "{truthy}");
+    }
+}

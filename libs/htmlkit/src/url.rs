@@ -1,4 +1,4 @@
-//! `urllib.parse`의 `urlsplit`/`urljoin`/`urlencode`/`quote`에 해당하는 최소 구현. 표지 URL 검증과 다운로드가 함께 쓴다.
+//! `urllib.parse`의 `urlsplit`/`urljoin`/`urlencode`/`quote`에 해당하는 최소 구현. 표지 URL 검증·다운로드와 서점 검색 결과 링크 해석이 함께 쓴다.
 
 /// `urlsplit` 결과. `netloc`은 `//`가 있을 때만 `Some`이다.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

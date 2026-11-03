@@ -13,6 +13,7 @@ pub mod stores;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use htmlkit::url::urljoin;
 use regex::Regex;
 use scraper::{ElementRef, Html, Node, Selector};
 
@@ -93,23 +94,6 @@ fn attr<'a>(el: &ElementRef<'a>, name: &str) -> Option<&'a str> {
     el.value().attr(name)
 }
 
-/// `urllib.parse.urljoin`의 흔한 경우: 절대 URL, `//host`, `/path`, 상대 경로.
-fn urljoin(base: &str, href: &str) -> String {
-    if href.contains("://") {
-        return href.to_owned();
-    }
-    let scheme_end = base.find("://").map_or(0, |i| i + 3);
-    let origin_end = base[scheme_end..].find('/').map_or(base.len(), |i| scheme_end + i);
-    if let Some(rest) = href.strip_prefix("//") {
-        return format!("{}//{rest}", &base[..scheme_end.saturating_sub(2).max(0)]);
-    }
-    if href.starts_with('/') {
-        return format!("{}{href}", &base[..origin_end]);
-    }
-    let dir_end = base[origin_end..].rfind('/').map_or(origin_end, |i| origin_end + i + 1);
-    let dir = if dir_end == origin_end { format!("{}/", &base[..origin_end]) } else { base[..dir_end].to_owned() };
-    format!("{dir}{href}")
-}
 
 /// `urllib.parse.quote(s)`: 영문·숫자·`_.-~/`만 그대로 둔다.
 fn quote(value: &str) -> String {

@@ -3,7 +3,6 @@
 //! 네트워크·시계·파일시스템은 `sysdeps`(`HttpSession`, `Clock`, `FsOps`)로 받는다. 설계: docs/rust-test-seams.md 3.1, 3.5, 3.7, 3.8.
 
 pub mod soup;
-pub mod urlx;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -19,7 +18,7 @@ use serde_json::{Map, Value, json};
 use sysdeps::{Clock, FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout, RealFs, SystemClock};
 
 use self::soup::Soup;
-use self::urlx::{Netloc, quote, urlencode, urljoin, urlsplit};
+use htmlkit::url::{Netloc, quote, urlencode, urljoin, urlsplit};
 
 pub const STORE_NAMES: [&str; 8] = ["yes24", "aladin", "kyobo", "naver", "ridi", "munpia", "naverseries", "joara"];
 
@@ -606,14 +605,7 @@ fn value_text(value: &Value) -> String {
 }
 
 fn truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64().is_some_and(|f| f != 0.0),
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Array(a)) => !a.is_empty(),
-        Some(Value::Object(o)) => !o.is_empty(),
-    }
+    value.is_some_and(pyfmt::py_truthy)
 }
 
 pub fn extract_html_candidates(store: &str, detail_url: &str, html: &str) -> Vec<Value> {

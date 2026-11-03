@@ -840,7 +840,7 @@ impl BookClassifierService {
         } else {
             rel_path.clone()
         };
-        let mut entry = self.cache.get(&cache_key).cloned().filter(truthy);
+        let mut entry = self.cache.get(&cache_key).cloned().filter(is_filled_entry);
 
         if entry.is_none()
             && let Some(ref_entry) = self.title_cache.get(&search_title)
@@ -1022,7 +1022,8 @@ impl BookClassifierService {
     }
 }
 
-fn truthy(v: &Value) -> bool {
+/// 캐시 항목이 채워져 있는가. null과 빈 객체·배열만 비었다고 본다(`false`·0·`""`는 채워진 값).
+fn is_filled_entry(v: &Value) -> bool {
     match v {
         Value::Null => false,
         Value::Object(o) => !o.is_empty(),

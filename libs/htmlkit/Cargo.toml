@@ -11,3 +11,7 @@ autotests = false
 [[test]]
 name = "htmlkit"
 path = "../../tests/rust/htmlkit/htmlkit.rs"
+
+[[test]]
+name = "url"
+path = "../../tests/rust/htmlkit/url.rs"

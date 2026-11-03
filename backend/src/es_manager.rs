@@ -378,14 +378,7 @@ fn category_or_children(category: &str) -> Value {
 }
 
 fn truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64().is_none_or(|f| f != 0.0),
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Array(a)) => !a.is_empty(),
-        Some(Value::Object(o)) => !o.is_empty(),
-    }
+    value.is_some_and(pyfmt::py_truthy)
 }
 
 impl ESManager {

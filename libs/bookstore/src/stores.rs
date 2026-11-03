@@ -30,6 +30,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{BookInfo, Store};
+use htmlkit::url::urljoin;
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
 use serde_json::{Value, json};
@@ -136,32 +137,10 @@ fn quote(value: &str, safe: &str) -> String {
     out
 }
 
-/// `urllib.parse.urljoin`의 흔한 경우: 절대 URL, `//host`, `/path`, 상대 경로.
-fn urljoin(base: &str, href: &str) -> String {
-    if href.contains("://") {
-        return href.to_owned();
-    }
-    let scheme_end = base.find("://").map_or(0, |i| i + 3);
-    let origin_end = base[scheme_end..].find('/').map_or(base.len(), |i| scheme_end + i);
-    if let Some(rest) = href.strip_prefix("//") {
-        return format!("{}//{rest}", &base[..scheme_end.saturating_sub(2)]);
-    }
-    if href.starts_with('/') {
-        return format!("{}{href}", &base[..origin_end]);
-    }
-    format!("{}/{href}", &base[..origin_end])
-}
 
 /// Python 진리값. `None`, `False`, `0`, `""`, `[]`, `{}`은 거짓이다.
 fn truthy(v: Option<&Value>) -> bool {
-    match v {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64().is_some_and(|f| f != 0.0),
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Array(a)) => !a.is_empty(),
-        Some(Value::Object(o)) => !o.is_empty(),
-    }
+    v.is_some_and(pyfmt::py_truthy)
 }
 
 /// Python `str(value)` 대응. 문자열은 그대로, 없음은 빈 문자열, 나머지는 JSON 표기다.
@@ -2014,16 +1993,6 @@ mod utility_tests {
 
         assert_eq!(session.headers.len(), 1);
         assert_eq!(session.headers[0].0, "User-Agent");
-    }
-
-    #[test]
-    fn urljoin_handles_absolute_protocol_relative_root_and_relative_paths() {
-        let base = "https://example.com/books/list";
-        assert_eq!(urljoin(base, "https://cdn.example.com/book"), "https://cdn.example.com/book");
-        assert_eq!(urljoin(base, "//cdn.example.com/book"), "https://cdn.example.com/book");
-        assert_eq!(urljoin(base, "/book"), "https://example.com/book");
-        assert_eq!(urljoin(base, "book"), "https://example.com/book");
-        assert_eq!(urljoin("example.com", "/book"), "example.com/book");
     }
 
     #[test]

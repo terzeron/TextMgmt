@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use pyfmt::py_truthy;
 use serde_json::Value;
 
 use super::export_format::ModelError;
@@ -14,8 +15,8 @@ use super::tokenize::{AnalyzerSpec, for_each_term, is_py_digit};
 pub fn field_text(doc: &Value, source: &str, max_chars: usize) -> String {
     let raw = doc.get(source).unwrap_or(&Value::Null);
     let mut text = match raw {
-        Value::Array(items) => items.iter().filter(|v| is_truthy(v)).map(py_str).collect::<Vec<_>>().join(" "),
-        v if is_truthy(v) => py_str(v),
+        Value::Array(items) => items.iter().filter(|v| py_truthy(v)).map(py_str).collect::<Vec<_>>().join(" "),
+        v if py_truthy(v) => py_str(v),
         _ => String::new(),
     };
     if source == "name" {
@@ -27,17 +28,6 @@ pub fn field_text(doc: &Value, source: &str, max_chars: usize) -> String {
         text.truncate(byte);
     }
     text
-}
-
-fn is_truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
 }
 
 /// Python `str(x)`. 숫자·불리언·문자열만 정확히 맞춘다. 중첩 값은 JSON 문자열로 대신한다.

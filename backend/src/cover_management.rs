@@ -25,7 +25,7 @@ use sha2::{Digest, Sha256};
 use sysdeps::{Clock, RealFs, SystemClock};
 use zip::ZipArchive;
 
-use crate::cover_sources::urlx::{Netloc, urlsplit};
+use htmlkit::url::{Netloc, urlsplit};
 use crate::cover_sources::{CancelFn, GateError, STORES, SearchError, SearchHooks, StoreGate, blocked_status, build_search_url, search_candidates_with, store_hosts, store_lock_with};
 use crate::direct_cover_url::{ImageFetcher, RealImageFetcher};
 use crate::epub_cover::pathx;
@@ -284,14 +284,7 @@ fn now_seconds() -> f64 {
 }
 
 fn truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64().is_some_and(|f| f != 0.0),
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Array(a)) => !a.is_empty(),
-        Some(Value::Object(o)) => !o.is_empty(),
-    }
+    value.is_some_and(pyfmt::py_truthy)
 }
 
 fn is_epub_name(name: &str) -> bool {

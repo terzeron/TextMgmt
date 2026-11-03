@@ -23,7 +23,7 @@ use super::rewrite::rewrite_epub;
 use super::stage::{Added, add_image_page, add_split_image, read_previous_cover, sections, verify_staged, write_epub};
 use super::xml::{self, Element, Node};
 use super::{CoverError, EpubCoverHooks, FResult, Fail, MAX_XML_BYTES, entry_names, entry_size, has_entry, normalize_image_with, read_dimensions, read_entry, read_package_with};
-use crate::cover_sources::urlx::quote;
+use htmlkit::url::quote;
 use crate::image_edit::{Rect, crop_pil};
 
 /// crops 의 idref 에 이 값을 주면 쪽이 아니라 표지 이미지를 자른다(표지 화면은 spine 항목이 아닐 수 있다).

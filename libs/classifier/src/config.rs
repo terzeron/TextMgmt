@@ -9,6 +9,7 @@ use std::io::{self, Read};
 use std::path::Path;
 use std::sync::LazyLock;
 
+use pyfmt::py_truthy;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -106,18 +107,7 @@ pub fn config_hash(cfg: &Value) -> String {
 /// `enabled` 가 참인 필드만 남긴다. 순서는 설정 순서다.
 pub fn enabled_fields(cfg: &Value) -> Value {
     let fields = cfg["fields"].as_object().cloned().unwrap_or_default();
-    Value::Object(fields.into_iter().filter(|(_, v)| v.get("enabled").is_some_and(truthy)).collect())
-}
-
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
+    Value::Object(fields.into_iter().filter(|(_, v)| v.get("enabled").is_some_and(py_truthy)).collect())
 }
 
 /// 하위 카테고리면 상위 장르를, 아니면 그대로 돌려준다.

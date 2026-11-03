@@ -4,6 +4,7 @@
 //! isotonic 구현은 sklearn `IsotonicRegression(y_min=0, y_max=1, increasing=True, out_of_bounds="clip")` 의
 //! `_build_y` 와 같다(동률 x 병합, 풀링, 중복 점 제거).
 
+use pyfmt::py_truthy;
 use serde_json::{Value, json};
 
 use super::ValueError;
@@ -83,17 +84,17 @@ fn isotonic_increasing(y: &[f64], w: &[f64]) -> Vec<f64> {
 /// 학습 때 기록해 둔 판정률-정답률 곡선에서 눈금을 만든다. 누적 곡선의 인접 점을 차분해 구간 정답률을 얻는다.
 pub fn from_coverage_report(holdout: Option<&Value>) -> Option<Value> {
     let holdout = holdout?;
-    if !is_truthy(holdout) {
+    if !py_truthy(holdout) {
         return None;
     }
     let mut rows: Vec<&Value> = holdout.get("curve").and_then(Value::as_array).map(|a| a.iter().collect()).unwrap_or_default();
     for key in ["at_precision_90", "at_precision_95"] {
-        if let Some(row) = holdout.get(key).filter(|r| r.get("coverage").is_some_and(is_truthy)) {
+        if let Some(row) = holdout.get(key).filter(|r| r.get("coverage").is_some_and(py_truthy)) {
             rows.push(row);
         }
     }
     let mut points: Vec<(f64, f64, f64)> =
-        rows.iter().filter(|r| r.get("coverage").is_some_and(is_truthy)).filter_map(|r| Some((r["coverage"].as_f64()?, r["precision"].as_f64()?, r["threshold"].as_f64()?))).collect();
+        rows.iter().filter(|r| r.get("coverage").is_some_and(py_truthy)).filter_map(|r| Some((r["coverage"].as_f64()?, r["precision"].as_f64()?, r["threshold"].as_f64()?))).collect();
     points.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.total_cmp(&b.2)));
     points.dedup();
     if points.len() < 2 {
@@ -141,21 +142,10 @@ pub fn from_coverage_report(holdout: Option<&Value>) -> Option<Value> {
     Some(json!({"x": dx, "y": dy, "n": n, "source": "coverage_curve"}))
 }
 
-fn is_truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
-
 /// 보정 계단 위에서 확신도를 정답률로 읽는다. 계단 사이는 직선으로 잇고 양끝 밖은 끝값으로 자른다(`np.interp`).
 /// 보정이 없거나 값을 못 읽으면 `None`.
 pub fn expected_accuracy(calibration: Option<&Value>, confidence: Option<f64>) -> Option<f64> {
-    let cal = calibration.filter(|c| is_truthy(c))?;
+    let cal = calibration.filter(|c| py_truthy(c))?;
     let confidence = confidence?;
     let xs = floats(cal.get("x"))?;
     let ys = floats(cal.get("y"))?;
