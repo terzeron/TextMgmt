@@ -24,5 +24,9 @@ name = "file_time"
 path = "../../tests/rust/file_record/file_time.rs"
 
 [[test]]
+name = "record"
+path = "../../tests/rust/file_record/record.rs"
+
+[[test]]
 name = "layout"
 path = "../../tests/rust/file_record/layout.rs"

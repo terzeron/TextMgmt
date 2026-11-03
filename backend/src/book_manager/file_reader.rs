@@ -11,11 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Local, NaiveDateTime};
-use doc_reader::pdf::InProcess;
 use file_record::config::Config;
 use file_record::record;
 use serde_json::{Value, json};
-use stat::Stat;
 use sysdeps::FsOps;
 
 use super::paths::{declared_type, is_indexable_type};
@@ -103,8 +101,7 @@ impl LoaderFileReader {
     }
 
     fn read(&self, path: &Path, path_prefix: Option<&Path>, skip_text: bool) -> Docs {
-        let runner = InProcess;
-        let outcome = record::read_file(&self.config, path, None, skip_text, path_prefix, &runner, Stat::global());
+        let outcome = record::read_file_in_process(&self.config, path, skip_text, path_prefix);
         for message in outcome.messages {
             log::warn!("loader failed to read '{}': {message}", path.display());
         }
