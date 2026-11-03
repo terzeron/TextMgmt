@@ -83,15 +83,6 @@ fn decode_cp949_strict(raw: &[u8]) -> Option<String> {
 /// 텍스트를 이 경로로 읽을 때 판정이 바뀐다(실측: 표본 400건 중 7건).
 /// `ksx1001_only`가 참이면 확장 완성형(UHC)을 빼고 KS X 1001 영역만 받아들인다(Python `euc-kr`).
 pub fn decode_korean_ignore(raw: &[u8], ksx1001_only: bool) -> String {
-    decode_korean(raw, ksx1001_only, false)
-}
-
-/// CP949 / EUC-KR을 Python 코덱처럼 `errors="replace"`로 푼다. 해석할 수 없는 바이트 1개마다 U+FFFD 하나를 둔다.
-pub fn decode_korean_replace(raw: &[u8], ksx1001_only: bool) -> String {
-    decode_korean(raw, ksx1001_only, true)
-}
-
-fn decode_korean(raw: &[u8], ksx1001_only: bool, replace: bool) -> String {
     // 흔한 경우: 전부 유효하면 한 번에 푼다. 잘못된 바이트가 있을 때만 아래 느린 경로를 탄다.
     if !ksx1001_only && let Some(all) = decode_cp949_strict(raw) {
         return all;
@@ -121,9 +112,6 @@ fn decode_korean(raw: &[u8], ksx1001_only: bool, replace: bool) -> String {
             }
             _ => false,
         };
-        if !pair_ok && replace {
-            out.push('\u{fffd}');
-        }
         i += if pair_ok { 2 } else { 1 };
     }
     out
