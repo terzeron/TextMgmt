@@ -34,19 +34,13 @@ docs/       문서
 | crate | 용도 |
 | --- | --- |
 | `bookdoctor` | 문서 파일 진단(`scan`), 보안 정리(`sanitize`), 결함 수리(`repair`), 손상 문서 격리·복구(`quarantine`·`unquarantine`). OLE 복합 파일 파서(`ole`)를 포함한다 |
-| `cluster_hybrid_genres` | 5대 장르 비율 클러스터링 |
+| `loader` | 책·만화 디렉토리의 파일을 읽어 ES 색인을 만들고 맞춘다 |
 | `search` | ES 제목·내용 검색 점검 |
-| `update` | ES 갱신·조회·삭제 점검 |
-| `move_semi_clusters` | 준확실 클러스터 이동 및 미리보기 |
-| `classify_books_client` | REST API 감시와 직접 분류 옵션 |
 | `trainer` | 수집·학습·평가·보정·서점 정책·분류·재분류·모델 정보 |
-| `normalize_comic_directories` | 만화 경로 스캔과 이름 변경 |
 
 ## 규칙
 
-- `-h`/`--help`는 도움말을 출력한다. 각 CLI의 기본 실행과 종료 코드는 아래 계약을 따른다.
-  `update`, `move_semi_clusters`, `classify_books_client`, `normalize_comic_directories`는 기본 작업을 실행하고,
-  `loader`와 `trainer`는 사용법을 출력하고 코드 1로 끝난다.
+- `-h`/`--help`는 도움말을 출력한다. `loader`와 `trainer`는 인자 없이 실행하면 사용법을 출력하고 코드 1로 끝난다.
 - 잘못된 인자의 출력 위치와 종료 코드는 각 CLI 계약을 따른다.
 - **테스트를 먼저 쓴다(TDD).** 정해진 동작 사례를 Rust 테스트로 먼저 옮기고 실패를 확인한 뒤 구현한다.
 - **커버리지는 100%에 가깝게 유지한다.** `cargo llvm-cov --workspace --summary-only`.

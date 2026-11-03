@@ -593,31 +593,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "classify_books_client"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "classifier",
- "serde_json",
- "ureq",
-]
-
-[[package]]
-name = "cluster_hybrid_genres"
-version = "0.1.0"
-dependencies = [
- "corpus_common",
- "encoding_rs",
- "fancy-regex",
- "indexmap 2.14.2",
- "pyfmt",
- "serde",
- "serde_json",
- "tempfile",
- "zip",
-]
-
-[[package]]
 name = "cmake"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2331,15 +2306,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "move_semi_clusters"
-version = "0.1.0"
-dependencies = [
- "corpus_common",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2458,19 +2424,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "normalize_comic_directories"
-version = "0.1.0"
-dependencies = [
- "bookstore",
- "chrono",
- "fancy-regex",
- "pyfmt",
- "serde_json",
- "tempfile",
- "unicode-normalization",
 ]
 
 [[package]]
@@ -4002,16 +3955,6 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
-
-[[package]]
-name = "update"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "es_client",
- "pyfmt",
- "serde_json",
-]
 
 [[package]]
 name = "ureq"
