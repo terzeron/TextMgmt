@@ -147,33 +147,6 @@ fn indexed_holdout_evaluation_matches_materialized_report_and_calibration() {
 }
 
 #[test]
-fn confidence_calibration_uses_accept_parent_as_correct_and_requires_minimum_samples() {
-    let model = CategoryModel::from_training(vec!["3_무협".into(), "5_과학".into()], config::default_config(), json!({}), Vec::new(), Vec::new(), vec![1.0, 0.0]).unwrap();
-    let docs: Vec<Value> = (0..200).map(|_| json!({"cat": "3_무협/하위", "text": ""})).collect();
-    let parents = std::collections::HashMap::from([("3_무협/하위".to_string(), "3_무협".to_string())]);
-
-    let calibration = training::fit_confidence_calibration(&model, &docs, Some(&parents)).unwrap().unwrap();
-
-    assert_eq!(calibration["n"], 200);
-    assert_eq!(calibration["y"], json!([1.0]), "accept_parent에 속한 예측은 맞은 표본으로 계산한다");
-    assert!(training::fit_confidence_calibration(&model, &docs[..199], Some(&parents)).unwrap().is_none());
-}
-
-#[test]
-fn indexed_holdout_indices_match_materialized_selection_when_keys_repeat() {
-    let docs = vec![json!({"id":"same","cat":"A","text":"first"}), json!({"id":"same","cat":"A","text":"second"})];
-    let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("duplicate-keys.jsonl");
-    write_jsonl(&docs, &path).unwrap();
-    let indexed = IndexedJsonl::open(&path).unwrap();
-    let (kept, _) = training::filter_by_size(&docs, 2);
-    let (_, expected_docs) = training::split_holdout(&kept, 0.5, 42);
-    let expected: Vec<usize> = expected_docs.iter().map(|expected| docs.iter().position(|doc| doc == expected).unwrap()).collect();
-
-    assert_eq!(training::holdout_indices_indexed(&indexed, 2, 0.5, 42), expected);
-}
-
-#[test]
 fn spilled_training_releases_holdout_source_text_and_keeps_metrics() {
     let mut docs = training_data();
     let original_docs = docs.clone();

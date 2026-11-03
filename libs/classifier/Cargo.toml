@@ -29,48 +29,8 @@ tempfile = "3.27.0"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [[test]]
-name = "classifier"
-path = "../../tests/rust/classifier/classifier.rs"
-
-[[test]]
-name = "classifier_calibration"
-path = "../../tests/rust/classifier/classifier_calibration.rs"
-
-[[test]]
-name = "classifier_corpus"
-path = "../../tests/rust/classifier/classifier_corpus.rs"
-
-[[test]]
-name = "classifier_gaps"
-path = "../../tests/rust/classifier/classifier_gaps.rs"
-
-[[test]]
-name = "classifier_model"
-path = "../../tests/rust/classifier/classifier_model.rs"
-
-[[test]]
-name = "classifier_parity"
-path = "../../tests/rust/classifier/classifier_parity.rs"
-
-[[test]]
-name = "classifier_reader"
-path = "../../tests/rust/classifier/classifier_reader.rs"
-
-[[test]]
-name = "classifier_service"
-path = "../../tests/rust/classifier/classifier_service.rs"
-
-[[test]]
-name = "classifier_training"
-path = "../../tests/rust/classifier/classifier_training.rs"
-
-[[test]]
 name = "book_classifier"
 path = "../../tests/rust/classifier/book_classifier.rs"
-
-[[test]]
-name = "book_classifier_parity"
-path = "../../tests/rust/classifier/book_classifier_parity.rs"
 
 [[test]]
 name = "bookstore_cache"
@@ -79,3 +39,47 @@ path = "../../tests/rust/classifier/bookstore_cache.rs"
 [[test]]
 name = "bookstore_policy"
 path = "../../tests/rust/classifier/bookstore_policy.rs"
+
+[[test]]
+name = "calibration"
+path = "../../tests/rust/classifier/calibration.rs"
+
+[[test]]
+name = "classifier"
+path = "../../tests/rust/classifier/classifier.rs"
+
+[[test]]
+name = "config"
+path = "../../tests/rust/classifier/config.rs"
+
+[[test]]
+name = "corpus"
+path = "../../tests/rust/classifier/corpus.rs"
+
+[[test]]
+name = "export_format"
+path = "../../tests/rust/classifier/export_format.rs"
+
+[[test]]
+name = "model"
+path = "../../tests/rust/classifier/model.rs"
+
+[[test]]
+name = "reader"
+path = "../../tests/rust/classifier/reader.rs"
+
+[[test]]
+name = "softmax"
+path = "../../tests/rust/classifier/softmax.rs"
+
+[[test]]
+name = "tokenize"
+path = "../../tests/rust/classifier/tokenize.rs"
+
+[[test]]
+name = "training"
+path = "../../tests/rust/classifier/training.rs"
+
+[[test]]
+name = "vectorize"
+path = "../../tests/rust/classifier/vectorize.rs"
