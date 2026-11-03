@@ -1,10 +1,11 @@
 //! MS-OVBA 압축 해제와 VBA 프로젝트 읽기 테스트.
 
+#[path = "ole_common.rs"]
 mod common;
 
 use common::{compress, dir_stream, make_cfb, module_stream, pseudo};
-use ole_reader::vba::{VbaError, decompress, read_project};
-use ole_reader::{Limits, OleFile};
+use bookdoctor::ole::vba::{VbaError, decompress, read_project};
+use bookdoctor::ole::{Limits, OleFile};
 
 /// MS-OVBA 3.2.2 일반 압축 예제의 압축 바이트와 해제 결과.
 const SPEC_COMPRESSED: [u8; 51] = [

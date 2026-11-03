@@ -1,6 +1,6 @@
 //! HWP 5.x 테스트. fixture는 합성이다: 코퍼스에 정상 HWP5 파일이 없다(`docs/bookdoctor-hwp5-notes.md`).
 
-#[path = "../ole_reader/common.rs"]
+#[path = "ole_common.rs"]
 mod ole_common;
 
 use std::fs;

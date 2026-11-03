@@ -8,6 +8,7 @@ pub mod hwp;
 pub mod epub;
 pub mod exe;
 pub mod mojibake;
+pub mod ole;
 pub mod pdf;
 pub mod prefetch;
 pub mod quarantine;

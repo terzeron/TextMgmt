@@ -1,9 +1,10 @@
-//! ole_reader 테스트: 읽기 코어.
+//! ole 모듈 테스트: 읽기 코어.
 
+#[path = "ole_common.rs"]
 mod common;
 
 use common::{make_cfb, make_cfb_v4};
-use ole_reader::{EntryKind, Limits, OleError, OleFile};
+use bookdoctor::ole::{EntryKind, Limits, OleError, OleFile};
 
 fn bytes_of(n: usize, seed: u8) -> Vec<u8> {
     (0..n).map(|i| (i as u8).wrapping_mul(7).wrapping_add(seed)).collect()

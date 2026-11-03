@@ -6,7 +6,7 @@
 //! 레코드 ID는 MS-OVBA 2.3.4.2.3에서 확인했다: PROJECTMODULES `0x000F`, MODULENAME `0x0019`, MODULESTREAMNAME `0x001A`
 //! (MBCS 이름 + 예약 `0x0032` + 유니코드 이름), MODULEOFFSET `0x0031`(TextOffset u32), MODULE 종결자 `0x002B`.
 
-use crate::{Entry, OleFile};
+use super::{Entry, OleFile};
 
 const CHUNK_OUT: usize = 4096;
 /// 한 프로젝트에서 읽는 모듈 수 상한.

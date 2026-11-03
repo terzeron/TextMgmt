@@ -1,6 +1,6 @@
 //! `BinData` 검사(명세 3.2.5, 표 17·18). `DocInfo`의 `HWPTAG_BIN_DATA`로 연결 파일을 찾고, `BinData/*` 스트림은 내용의 매직으로 본다.
 
-use ole_reader::{Entry, EntryKind, OleFile};
+use crate::ole::{Entry, EntryKind, OleFile};
 use scan_common::sniff::{Sniffed, sniff};
 use scan_common::text::sanitize_display;
 use scan_common::{Category, FileReport, Severity};

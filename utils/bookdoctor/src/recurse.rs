@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use corpus_common::reader::open_zip;
-use ole_reader::{Limits as OleLimits, OleFile};
+use crate::ole::{Limits as OleLimits, OleFile};
 use scan_common::{Category, FileReport, Severity};
 use scan_common::sniff::{Sniffed, sniff};
 use scan_common::text::sanitize_display;

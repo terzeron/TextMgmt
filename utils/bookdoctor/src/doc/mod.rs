@@ -1,4 +1,4 @@
-//! 구형 DOC(OLE 복합 파일) 검사. `ole_reader`로 구조를 읽고 손상, 암호화, VBA 매크로, 내장 OLE 객체, DDE·필드를 본다.
+//! 구형 DOC(OLE 복합 파일) 검사. `ole` 모듈로 구조를 읽고 손상, 암호화, VBA 매크로, 내장 OLE 객체, DDE·필드를 본다.
 //! 파일을 실행하거나 렌더링하지 않는다. 매크로는 텍스트로만 읽는다.
 
 pub mod rtf;
@@ -6,7 +6,7 @@ pub mod rtf;
 use std::io::Read;
 use std::path::Path;
 
-use ole_reader::{Anomaly, EntryKind, Limits as OleLimits, OleError, OleFile, vba};
+use crate::ole::{Anomaly, EntryKind, Limits as OleLimits, OleError, OleFile, vba};
 use scan_common::sniff::{Sniffed, sniff};
 use scan_common::text::sanitize_display;
 use scan_common::{Category, FileReport, Severity};

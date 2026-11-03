@@ -1,6 +1,6 @@
 //! `Scripts` 스토리지 검사(명세 3.2.9, 표 8·9). 스크립트는 텍스트로만 본다.
 
-use ole_reader::OleFile;
+use crate::ole::OleFile;
 use scan_common::{Category, FileReport, Severity};
 
 use scan_common::text::sanitize_display;
@@ -75,7 +75,7 @@ fn raw_text(data: &[u8]) -> String {
 /// 스트림을 읽어 검사할 바이트 후보를 돌려준다: 원본, 그리고 압축 비트가 서 있으면 raw deflate나 zlib으로 푼 내용.
 /// 표 2는 `Scripts`를 압축 대상으로 표시하지 않으므로 압축하지 않은 스트림도 받는다. 읽는 쪽이 어느 쪽으로 읽는지 알 수 없어 둘 다 본다.
 /// 상한이나 풀기 문제로 덜 본 사유도 함께 돌려준다.
-fn read_script(file: &mut OleFile, entry: &ole_reader::Entry, compressed: bool) -> Result<(Vec<Vec<u8>>, Option<String>), String> {
+fn read_script(file: &mut OleFile, entry: &crate::ole::Entry, compressed: bool) -> Result<(Vec<Vec<u8>>, Option<String>), String> {
     let data = file.read_stream_prefix(entry, MAX_SCRIPT).map_err(|e| format!("{} could not be read: {e:?}", entry.name))?;
     let mut note = (entry.size > MAX_SCRIPT as u64).then(|| format!("{} ({} bytes) exceeds the scan limit; only the first {} MiB were scanned", entry.name, entry.size, MAX_SCRIPT / (1024 * 1024)));
     let mut candidates = Vec::new();
@@ -105,10 +105,10 @@ pub fn inspect(file: &mut OleFile, header: &FileHeader, report: &mut FileReport)
     }
     // 작성자가 스크립트 저장을 선언했으면 소스가 비었어도 스크립트가 있는 문서다.
     let mut present = header.has_scripts();
-    let mut streams: Vec<(String, ole_reader::Entry)> = file
+    let mut streams: Vec<(String, crate::ole::Entry)> = file
         .entries()
         .iter()
-        .filter(|e| e.kind == ole_reader::EntryKind::Stream)
+        .filter(|e| e.kind == crate::ole::EntryKind::Stream)
         .map(|e| (file.path_of(e), e.clone()))
         .filter(|(path, _)| path.to_lowercase().starts_with("scripts/"))
         .collect();

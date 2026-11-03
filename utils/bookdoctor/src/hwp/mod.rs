@@ -9,7 +9,7 @@ pub mod script;
 
 use std::path::Path;
 
-use ole_reader::OleFile;
+use crate::ole::OleFile;
 use scan_common::{Category, FileReport, Severity};
 use scan_common::sniff::Sniffed;
 

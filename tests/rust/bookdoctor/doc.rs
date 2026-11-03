@@ -1,6 +1,6 @@
 //! 구형 DOC(OLE 복합 파일) 분석 테스트. fixture는 합성이다: 코퍼스에 .doc가 없다.
 
-#[path = "../ole_reader/common.rs"]
+#[path = "ole_common.rs"]
 mod ole_common;
 
 use std::fs;
@@ -187,7 +187,7 @@ fn a_giant_unterminated_field_is_bounded() {
 fn structural_damage_is_reported_with_ole_codes_and_a_security_summary() {
     let cfb = doc_cfb(&[("Data", &[7u8; 5000][..])], 0, b"hi");
     let bytes = cfb.bytes.clone();
-    let start = ole_reader::OleFile::from_bytes(bytes.clone(), &ole_reader::Limits::default()).unwrap().find("Data").unwrap().start;
+    let start = bookdoctor::ole::OleFile::from_bytes(bytes.clone(), &bookdoctor::ole::Limits::default()).unwrap().find("Data").unwrap().start;
     let mut b = bytes;
     let at = cfb.fat_entry_offset(start);
     b[at..at + 4].copy_from_slice(&start.to_le_bytes());

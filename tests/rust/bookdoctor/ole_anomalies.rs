@@ -1,11 +1,12 @@
-//! ole_reader 테스트: 손상·악의적 구조를 Anomaly로 알린다. 읽을 수 있는 만큼 읽고 panic하지 않는다.
+//! ole 모듈 테스트: 손상·악의적 구조를 Anomaly로 알린다. 읽을 수 있는 만큼 읽고 panic하지 않는다.
 
+#[path = "ole_common.rs"]
 mod common;
 
 use std::time::{Duration, Instant};
 
 use common::{Cfb, make_cfb, make_cfb_v4};
-use ole_reader::{Anomaly, Limits, OleError, OleFile};
+use bookdoctor::ole::{Anomaly, Limits, OleError, OleFile};
 
 fn bytes_of(n: usize, seed: u8) -> Vec<u8> {
     (0..n).map(|i| (i as u8).wrapping_mul(13).wrapping_add(seed)).collect()
