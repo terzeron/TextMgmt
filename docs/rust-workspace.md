@@ -22,17 +22,16 @@ docs/       문서
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출 |
 | `pyfmt` | 일관된 문자열·숫자 출력 형식 |
 | `stat` | 색인·파싱 통계 카운터 |
-| `file_time` | 파일 생성 시각 |
+| `file_record` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리. loader와 backend가 함께 쓴다 |
 | `parser_timeout` | 파서 시간 상한, 스레드 제한, 자식 프로세스 종료 |
 | `isbn` | 파일에서 ISBN 추출(TXT·EPUB·PDF·DJVU·HWP) |
 | `hwp3_tables`, `hwp3_parser` | HWP 3.x 텍스트 추출 |
-| `ole_reader` | OLE 복합 파일(CFB)을 관대하게 읽는 파서와 MS-OVBA 압축 해제. 손상 구조를 오류 대신 `Anomaly`로 알린다 |
 
 ## utils (도구)
 
 | crate | 용도 |
 | --- | --- |
-| `bookdoctor` | 문서 파일 진단(`scan`), 보안 정리(`sanitize`), 결함 수리(`repair`), 손상 문서 격리·복구(`quarantine`·`unquarantine`) |
+| `bookdoctor` | 문서 파일 진단(`scan`), 보안 정리(`sanitize`), 결함 수리(`repair`), 손상 문서 격리·복구(`quarantine`·`unquarantine`). OLE 복합 파일 파서(`ole`)를 포함한다 |
 | `cluster_hybrid_genres` | 5대 장르 비율 클러스터링 |
 | `search` | ES 제목·내용 검색 점검 |
 | `update` | ES 갱신·조회·삭제 점검 |
@@ -49,7 +48,8 @@ docs/       문서
 - 잘못된 인자의 출력 위치와 종료 코드는 각 CLI 계약을 따른다.
 - **테스트를 먼저 쓴다(TDD).** 정해진 동작 사례를 Rust 테스트로 먼저 옮기고 실패를 확인한 뒤 구현한다.
 - **커버리지는 100%에 가깝게 유지한다.** `cargo llvm-cov --workspace --summary-only`.
-- **라이브러리는 도구에 의존하지 않는다.** 공유할 코드는 `libs/`로 올린다.
+- **라이브러리와 backend는 도구에 의존하지 않는다.** 공유할 코드는 `libs/`로 올린다.
+- **한 crate만 쓰는 코드는 그 crate 안에 둔다.** 사용자가 둘 이상이 될 때 `libs/`로 올린다.
 - `bookstore`는 공개 서점 HTTPS를 사용한다. ES client도 HTTP와 인증서 검증 HTTPS를 지원하며, 사설 CA는 `TM_ES_CA_CERT` PEM 경로로 지정한다. 인증서 검증을 끄는 우회로는 두지 않는다.
 - ZIP은 `corpus_common::reader::open_zip`으로 연다. `zip` 크레이트 기본 설정(`Detect`)은 파일 전체를 훑어 느리다
   (1.5MB EPUB 하나에 읽기 1만 3천 번, 48ms). `open_zip`은 `Known(0)`으로 먼저 열고(0.2ms) 실패하면 `Detect`로 다시 연다.
