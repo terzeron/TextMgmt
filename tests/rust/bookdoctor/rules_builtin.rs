@@ -8,7 +8,7 @@ use bookdoctor::rules::{self, Compiled};
 use scan_common::Severity;
 
 fn builtin() -> Compiled {
-    rules::load(&[], true).expect("builtin rules must parse").expect("builtin rules must not be empty")
+    rules::builtin_compiled()
 }
 
 fn names(data: &[u8]) -> Vec<String> {

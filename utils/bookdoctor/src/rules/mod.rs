@@ -82,64 +82,20 @@ pub struct RuleError {
     pub message: String,
 }
 
-// ---- 규칙 읽기와 파일에 적용 ----
+// ---- 내장 규칙과 파일에 적용 ----
 
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use scan_common::text::sanitize_display;
 use scan_common::{Category, FileReport};
 
 /// 규칙을 적용하려고 읽는 파일 앞부분의 최대 바이트.
 pub const MAX_SCAN_BYTES: u64 = 16 * 1024 * 1024;
-/// 디렉터리에서 읽는 `.rules` 파일 수의 상한.
-const MAX_RULE_FILES: usize = 100;
-
-/// `--rules` 경로(파일이나 디렉터리의 `*.rules`)와 내장 규칙을 읽어 한 모음으로 합치고 컴파일한다. 규칙이 하나도 없으면 `None`이다.
-/// 오류는 `파일:줄: 메시지` 꼴이다. 이름이 겹치는 규칙, 규칙 1,000개 초과, 1MiB 초과 파일은 오류다.
-pub fn load(files: &[PathBuf], include_builtin: bool) -> Result<Option<Compiled>, String> {
-    let mut sources: Vec<(String, String)> = Vec::new();
-    if include_builtin {
-        sources.push(("builtin".to_owned(), builtin::BUILTIN.to_owned()));
-    }
-    for path in files {
-        let meta = fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut paths = vec![path.clone()];
-        if meta.is_dir() {
-            let mut found: Vec<PathBuf> = fs::read_dir(path).map_err(|e| format!("{}: {e}", path.display()))?.flatten().map(|e| e.path()).filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("rules"))).collect();
-            found.sort();
-            if found.len() > MAX_RULE_FILES {
-                return Err(format!("{}: more than {MAX_RULE_FILES} .rules files", path.display()));
-            }
-            paths = found;
-        }
-        for p in paths {
-            let mut text = String::new();
-            let size = fs::metadata(&p).map(|m| m.len()).map_err(|e| format!("{}: {e}", p.display()))?;
-            if size > MAX_SOURCE as u64 {
-                return Err(format!("{}: rules file is too large (max 1 MiB)", p.display()));
-            }
-            fs::File::open(&p).and_then(|mut f| f.read_to_string(&mut text)).map_err(|e| format!("{}: {e}", p.display()))?;
-            sources.push((p.display().to_string(), text));
-        }
-    }
-    let mut all = RuleSet::default();
-    let mut origin: Vec<String> = Vec::new();
-    for (name, text) in sources {
-        let set = parse(&text).map_err(|e| format!("{name}:{}: {}", e.line, e.message))?;
-        for rule in set.rules {
-            if let Some(i) = all.rules.iter().position(|r| r.name == rule.name) {
-                return Err(format!("{name}: duplicate rule name {} (already defined in {})", rule.name, origin[i]));
-            }
-            if all.rules.len() >= MAX_RULES {
-                return Err(format!("{name}: more than {MAX_RULES} rules in total"));
-            }
-            origin.push(name.clone());
-            all.rules.push(rule);
-        }
-    }
-    Ok((!all.rules.is_empty()).then(|| all.compile()))
+/// 내장 규칙을 컴파일한다. 내장 규칙의 문법은 테스트(`rules_builtin.rs`)가 검증하므로 실패는 코드 결함이다.
+pub fn builtin_compiled() -> Compiled {
+    parse(builtin::BUILTIN).expect("내장 규칙은 문법이 맞아야 한다").compile()
 }
 
 /// 일치한 문자열을 `$id ×횟수 @오프셋,…` 꼴로 줄인다.

@@ -207,14 +207,7 @@ pub fn run_with_env(argv: &[String], out: &mut dyn Write, is_tty: bool, no_color
 
 /// 읽은 설정으로 명령을 실행한다. 내장 규칙을 읽어 `ruleset`에 넣는다.
 pub fn execute(opts: &Options, out: &mut dyn Write, is_tty: bool, no_color: bool) -> i32 {
-    let mut opts = opts.clone();
-    match crate::rules::load(&[], true) {
-        Ok(set) => opts.ruleset = set.map(Arc::new),
-        Err(msg) => {
-            report_error(&msg);
-            return 2;
-        }
-    }
+    let opts = Options { ruleset: Some(Arc::new(crate::rules::builtin_compiled())), ..opts.clone() };
     let result = match opts.command {
         Command::Scan => scan(&opts, out, is_tty && !no_color),
         Command::Sanitize => crate::sanitize::run(&opts, out),
