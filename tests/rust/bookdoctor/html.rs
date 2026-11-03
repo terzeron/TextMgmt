@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use bookdoctor::cli::{Options, run};
 use bookdoctor::scan::scan_file;
-use scan_common::{FileReport, Format};
+use bookdoctor::{FileReport, Format};
 
 fn write(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
     let d = tempfile::tempdir().unwrap();
@@ -146,8 +146,8 @@ fn legacy_encoded_pages_are_still_scanned() {
 #[test]
 fn a_missing_or_unreadable_html_path_is_incomplete() {
     use bookdoctor::html::scan_html_file;
-    use scan_common::FileReport;
-    use scan_common::sniff::Sniffed;
+    use bookdoctor::FileReport;
+    use bookdoctor::sniff::Sniffed;
     let d = tempfile::tempdir().unwrap();
     let mut r = FileReport::new(&d.path().join("none.html"), None);
     scan_html_file(&d.path().join("none.html"), Sniffed::Html, &mut r);

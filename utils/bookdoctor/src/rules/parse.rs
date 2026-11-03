@@ -1,6 +1,6 @@
 //! 규칙 텍스트 파서. 재귀 하강이고 중첩은 깊이 카운터로 제한한다(적대적 규칙 파일이 스택을 넘기지 못하게).
 
-use scan_common::Severity;
+use crate::Severity;
 
 use super::{Cmp, Cond, Pattern, Quant, Rule, RuleError, RuleSet, RuleString};
 

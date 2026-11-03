@@ -154,6 +154,22 @@ path = "../../tests/rust/bookdoctor/ole_vba.rs"
 name = "ole_anomalies"
 path = "../../tests/rust/bookdoctor/ole_anomalies.rs"
 
+[[test]]
+name = "finding"
+path = "../../tests/rust/bookdoctor/finding.rs"
+
+[[test]]
+name = "sniff"
+path = "../../tests/rust/bookdoctor/sniff.rs"
+
+[[test]]
+name = "display"
+path = "../../tests/rust/bookdoctor/display.rs"
+
+[[test]]
+name = "runner"
+path = "../../tests/rust/bookdoctor/runner.rs"
+
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 corpus_common = { path = "../../libs/corpus_common" }
@@ -167,7 +183,6 @@ regex = "1.13.1"
 roxmltree = "0.21.1"
 scraper = "0.29.0"
 sha2 = "0.11.1"
-scan_common = { path = "../../libs/scan_common", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 sysdeps = { path = "../../libs/sysdeps" }

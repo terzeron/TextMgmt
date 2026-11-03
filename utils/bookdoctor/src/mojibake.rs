@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use corpus_common::reader::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, is_hangul_syllable, korean_likeness, read_epub_text_limited, read_txt_text};
-use scan_common::{Category, FileReport, Severity};
+use crate::{Category, FileReport, Severity};
 
 /// 손상 0.006 이하, 정상 0.271 이상. 사이가 비어 있어 경계를 넉넉히 잡는다.
 /// 값 출처: 옛 인코딩 검사 도구 소스 28행.

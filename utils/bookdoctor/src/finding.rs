@@ -1,13 +1,54 @@
-//! 파일 하나의 진단 결과 모델. bookdoctor가 채우고 출력한다.
+//! 진단 결과 모델: 심각도, 지표, 파일 보고서, 위험 점수와 조합 승격. 포맷과 무관하다.
 
 use std::path::Path;
 
-use crate::severity::Severity;
-use crate::stream::Report;
+use crate::runner::Report;
+
+// ---- 지표의 심각도. ----
+
+/// 지표의 심각도. 큰 쪽이 더 위험하다.
+///
+/// `Critical`은 알려진 공격 수법이거나 정상 문서에 있을 이유가 없는 구조다. `High`는 "실행 가능한 구조가 있다"까지만 뜻하고
+/// 정상 인터랙티브 문서에도 흔하다. 둘을 섞으면 `High` 수천 건 속에서 실제 공격이 묻힌다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Severity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl Severity {
+    /// 소문자 이름(`low`·`medium`·`high`·`critical`)으로 읽는다. 그 밖의 문자열은 `None`이다.
+    pub fn parse(name: &str) -> Option<Severity> {
+        match name {
+            "low" => Some(Severity::Low),
+            "medium" => Some(Severity::Medium),
+            "high" => Some(Severity::High),
+            "critical" => Some(Severity::Critical),
+            _ => None,
+        }
+    }
+
+    /// 출력에 쓰는 대문자 이름.
+    pub fn label(self) -> &'static str {
+        match self {
+            Severity::Low => "LOW",
+            Severity::Medium => "MEDIUM",
+            Severity::High => "HIGH",
+            Severity::Critical => "CRITICAL",
+        }
+    }
+}
+
+// ---- 파일 하나의 진단 결과 모델. bookdoctor가 채우고 출력한다. ----
 
 /// 파일 포맷.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(rename_all = "lowercase"))]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Format {
     Epub,
     Pdf,
@@ -27,7 +68,8 @@ pub enum Format {
 
 /// 지표의 분류.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(rename_all = "lowercase"))]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Category {
     Security,
     Defect,
@@ -36,19 +78,19 @@ pub enum Category {
 
 /// 뷰어가 이 지표를 막는지. 판정하기 전이거나 해당 없으면 `NotApplicable`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum ViewerBlocked {
-    #[cfg_attr(feature = "serde", serde(rename = "blocked"))]
+    #[serde(rename = "blocked")]
     Blocked,
-    #[cfg_attr(feature = "serde", serde(rename = "not_blocked"))]
+    #[serde(rename = "not_blocked")]
     NotBlocked,
-    #[cfg_attr(feature = "serde", serde(rename = "n/a"))]
+    #[serde(rename = "n/a")]
     NotApplicable,
 }
 
 /// 지표 한 건.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Finding {
     pub category: Category,
     pub severity: Severity,
@@ -67,7 +109,7 @@ const ENCRYPTED_REASON_MARKERS: &[&str] = &["encrypted: ", "ZIP-encrypted entry"
 
 /// 출력 필터가 지운 지표의 심각도별 건수. 점수·요약에서 "숨겼을 뿐 있었다"를 남기려고 센다.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Suppressed {
     pub low: usize,
     pub medium: usize,
@@ -88,7 +130,7 @@ impl Suppressed {
 
 /// 파일 하나의 보고서.
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct FileReport {
     pub path: String,
     pub format: Option<Format>,
@@ -97,10 +139,10 @@ pub struct FileReport {
     pub reasons: Vec<String>,
     pub likeness: Option<f64>,
     /// `suppress_below`가 지운 지표의 건수. 지운 것이 없으면 JSON에 나오지 않는다.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Suppressed::is_empty", default))]
+    #[serde(skip_serializing_if = "Suppressed::is_empty", default)]
     pub suppressed: Suppressed,
     /// 확장자와 매직바이트가 모두 실행 파일이다. 출력 필터가 지표를 지워도 집계가 남도록 따로 둔다.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "std::ops::Not::not", default))]
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub confirmed_executable: bool,
     /// 0~100 위험 점수. 출력 필터가 숨긴 지표도 포함해 `scan_file`이 정한다.
     pub risk_score: u8,
@@ -170,5 +212,48 @@ impl Report for FileReport {
 
     fn is_incomplete(&self) -> bool {
         self.incomplete
+    }
+}
+
+// ---- 위험 점수와 조합 승격. 점수는 출력 필터가 지표를 숨기기 전의 지표 전체로 계산한다. ----
+
+/// 단독으로는 소음인 MEDIUM 지표 중 함께 나오면 HIGH로 올리는 조합: (왼쪽 코드, 함께 나오면 올리는 코드들).
+/// 지표가 거의 모든 파일에 나오므로 조합은 실제 표본에서 소음이 없음을 확인한 것만 둔다.
+pub const COMBINATIONS: &[(&str, &[&str])] = &[("OBFUSCATION", &["NETWORK_API", "NAVIGATION", "DYNAMIC_IMPORT"])];
+
+/// 조합 승격으로 만드는 지표 코드.
+pub const COMBINED_CODE: &str = "COMBINED_SUSPICIOUS";
+
+fn weight(s: Severity) -> u32 {
+    match s {
+        Severity::Low => 10,
+        Severity::Medium => 30,
+        Severity::High => 70,
+        Severity::Critical => 100,
+    }
+}
+
+/// 0~100 점수. 지표가 없으면 0이다. 있으면 `최고 가중치 + 5 × (MEDIUM 이상 지표 수 − 1)`이고 100을 넘지 않는다.
+/// 가중치는 CRITICAL 100, HIGH 70, MEDIUM 30, LOW 10이다. MEDIUM 이상이 없으면 최고 가중치만이다.
+pub fn risk_score(findings: &[Finding]) -> u8 {
+    let Some(max) = findings.iter().map(|f| weight(f.severity)).max() else { return 0 };
+    let serious = findings.iter().filter(|f| f.severity >= Severity::Medium).count() as u32;
+    let bonus = 5 * serious.saturating_sub(1);
+    (max + bonus).min(100) as u8
+}
+
+/// `COMBINATIONS`의 조합이 보고서에 있으면 `COMBINED_SUSPICIOUS`(보안, HIGH)를 한 번만 더한다.
+pub fn escalate(report: &mut FileReport) {
+    if report.has(COMBINED_CODE) {
+        return;
+    }
+    for (left, partners) in COMBINATIONS {
+        if !report.has(left) {
+            continue;
+        }
+        if let Some(partner) = partners.iter().find(|p| report.has(p)) {
+            report.push(Category::Security, Severity::High, COMBINED_CODE, "", &format!("{left} + {partner}"));
+            return;
+        }
     }
 }

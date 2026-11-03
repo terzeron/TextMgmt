@@ -7,7 +7,7 @@ use std::path::Path;
 
 use bookdoctor::cli::{Options, parse, run, run_with_env};
 use bookdoctor::scan::scan_file;
-use scan_common::{Category, FileReport, Format, Severity};
+use bookdoctor::{Category, FileReport, Format, Severity};
 
 fn scan(path: &Path) -> FileReport {
     scan_file(path, &Options::default())
@@ -17,7 +17,7 @@ fn deep(path: &Path) -> FileReport {
     scan_file(path, &Options { zip_deep: true, ..Options::default() })
 }
 
-fn finding<'a>(r: &'a FileReport, code: &str) -> &'a scan_common::Finding {
+fn finding<'a>(r: &'a FileReport, code: &str) -> &'a bookdoctor::Finding {
     r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
 }
 

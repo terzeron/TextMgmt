@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use bookdoctor::pdf::security;
-use scan_common::{Category, FileReport, Severity};
+use bookdoctor::{Category, FileReport, Severity};
 
 /// 객체 본문 목록으로 PDF를 만든다. 1번 Catalog, 2번 Pages, 3번 Page, 4번부터 `more`다. 본문은 바이트라 스트림을 담을 수 있다.
 fn pdf(catalog_extra: &str, more: &[Vec<u8>]) -> Vec<u8> {
@@ -47,7 +47,7 @@ fn run(bytes: &[u8]) -> FileReport {
     r
 }
 
-fn hits<'a>(r: &'a FileReport, code: &str) -> Vec<&'a scan_common::Finding> {
+fn hits<'a>(r: &'a FileReport, code: &str) -> Vec<&'a bookdoctor::Finding> {
     r.findings.iter().filter(|f| f.code == code && f.category == Category::Security).collect()
 }
 

@@ -7,7 +7,7 @@ use bookdoctor::cli::Options;
 use bookdoctor::pdf::security;
 use bookdoctor::scan::scan_file;
 use lopdf::{Dictionary, Document, Object, StringFormat};
-use scan_common::{Category, FileReport, Severity};
+use bookdoctor::{Category, FileReport, Severity};
 
 /// 객체 본문 목록으로 PDF를 만든다. 1번 객체가 Catalog, 2번이 Pages, 3번이 Page다.
 fn pdf(objects: &[&str]) -> Vec<u8> {

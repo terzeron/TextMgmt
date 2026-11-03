@@ -3,8 +3,8 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
-use scan_common::sniff::Sniffed;
-use scan_common::{FileReport, Format};
+use crate::sniff::Sniffed;
+use crate::{FileReport, Format};
 
 use crate::cli::Options;
 use crate::{common, doc, html, hwp, recurse, rules, epub, exe, pdf, txt, viewer, zipcheck};
@@ -102,8 +102,8 @@ pub fn scan_file(path: &Path, opts: &Options) -> FileReport {
         report.mark_incomplete(&format!("panic: {msg}"));
     }
     // 조합 승격과 점수는 전체 지표로 정한다.
-    scan_common::risk::escalate(&mut report);
-    report.risk_score = scan_common::risk::risk_score(&report.findings);
+    crate::finding::escalate(&mut report);
+    report.risk_score = crate::finding::risk_score(&report.findings);
     viewer::annotate(&mut report);
     report
 }

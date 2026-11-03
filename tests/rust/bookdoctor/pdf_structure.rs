@@ -10,7 +10,7 @@ use bookdoctor::pdf::{self, structure};
 use bookdoctor::scan::scan_file;
 use common::{FakeRunner, file_with};
 use lopdf::{Dictionary, Document, Object};
-use scan_common::{Category, FileReport, Severity};
+use bookdoctor::{Category, FileReport, Severity};
 
 /// 객체 본문 목록으로 PDF를 만든다. 1번 객체가 Catalog다.
 fn build(bodies: &[String]) -> Vec<u8> {
@@ -64,7 +64,7 @@ fn run_no_worker(bytes: &[u8]) -> FileReport {
     run(bytes, &opts(), &FakeRunner::pages(1))
 }
 
-fn finding<'a>(r: &'a FileReport, code: &str) -> Option<&'a scan_common::Finding> {
+fn finding<'a>(r: &'a FileReport, code: &str) -> Option<&'a bookdoctor::Finding> {
     r.findings.iter().find(|f| f.code == code)
 }
 

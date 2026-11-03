@@ -1,105 +1,13 @@
-//! scan_common 테스트: 포맷과 무관한 공용 코드를 직접 확인한다.
+//! runner 테스트: 대상 파일 수집과 창 단위 스트리밍 실행.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use scan_common::args::{long_option, number};
-use scan_common::files::{collect_files, has_extension};
-use scan_common::text::{is_hidden_format_char, sanitize, sanitize_display};
-use scan_common::{DEFAULT_WORKERS, Report, Severity, Summary, limited, pool, scan_streaming, workers_within_memory};
-
-// ---- severity ----
-
-#[test]
-fn severity_orders_from_low_to_critical_and_has_upper_case_labels() {
-    assert!(Severity::Low < Severity::Medium && Severity::Medium < Severity::High && Severity::High < Severity::Critical);
-    let labels: Vec<_> = [Severity::Low, Severity::Medium, Severity::High, Severity::Critical].iter().map(|s| s.label()).collect();
-    assert_eq!(labels, ["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
-}
-
-#[cfg(feature = "serde")]
-#[test]
-fn severity_serializes_as_its_upper_case_label_with_the_serde_feature() {
-    assert_eq!(serde_json::to_string(&Severity::Critical).unwrap(), "\"CRITICAL\"");
-    assert_eq!(serde_json::to_string(&Severity::Low).unwrap(), "\"LOW\"");
-}
-
-// ---- text ----
-
-#[test]
-fn sanitize_replaces_c0_and_c1_controls_and_cuts_at_the_limit() {
-    assert_eq!(sanitize("a\u{1b}[2Jb\u{85}c\u{7f}", 100, None), "a.[2Jb.c.");
-    assert_eq!(sanitize("가나다라마", 3, None), "가나다");
-    assert_eq!(sanitize("가나다라마", 3, Some('…')), "가나다…");
-    // 딱 맞으면 자르지 않았으므로 말줄임표도 없다.
-    assert_eq!(sanitize("가나다", 3, Some('…')), "가나다");
-    assert_eq!(sanitize("", 3, Some('…')), "");
-}
-
-// ---- args ----
-
-#[test]
-fn number_parses_or_reports_the_argparse_style_error() {
-    assert_eq!(number::<usize>("workers", "4"), Ok(4));
-    assert_eq!(number::<u64>("limit", "x"), Err("argument --limit: invalid int value: 'x'".to_string()));
-    assert!(number::<usize>("limit", "-1").is_err());
-}
-
-#[test]
-fn long_option_reads_inline_and_separate_values_and_rejects_unknown_names() {
-    let allowed = ["workers", "limit"];
-    let none: Vec<String> = Vec::new();
-    // 옵션이 아니면 위치 인자다. 다음 인자를 먹지 않는다.
-    let rest = ["x".to_string()];
-    let mut it = rest.iter();
-    assert_eq!(long_option("a.pdf", &allowed, &mut it), Ok(None));
-    assert_eq!(long_option("-r", &allowed, &mut it), Ok(None));
-    assert_eq!(it.next().map(String::as_str), Some("x"));
-    // `--이름=값`은 다음 인자를 먹지 않는다. `=` 뒤가 비어도 값이다.
-    let rest = ["unused".to_string()];
-    let mut it = rest.iter();
-    assert_eq!(long_option("--workers=3", &allowed, &mut it), Ok(Some(("workers".into(), "3".into()))));
-    assert_eq!(long_option("--limit=", &allowed, &mut it), Ok(Some(("limit".into(), String::new()))));
-    assert_eq!(it.next().map(String::as_str), Some("unused"));
-    // `--이름 값`은 다음 인자를 쓴다.
-    let rest = ["7".to_string()];
-    let mut it = rest.iter();
-    assert_eq!(long_option("--limit", &allowed, &mut it), Ok(Some(("limit".into(), "7".into()))));
-    // 모르는 이름, 값이 없는 경우.
-    assert_eq!(long_option("--bogus=1", &allowed, &mut none.iter()), Err("unrecognized arguments: --bogus=1".to_string()));
-    assert_eq!(long_option("--workers", &allowed, &mut none.iter()), Err("argument --workers: expected one argument".to_string()));
-}
-
-// ---- workers ----
-
-#[test]
-fn workers_within_memory_never_goes_below_one_and_never_above_the_request() {
-    assert_eq!(workers_within_memory(2, 20, 2048), 2);
-    assert_eq!(workers_within_memory(64, 440, 2048), 4);
-    assert_eq!(workers_within_memory(64, 1, 2048), 64);
-    assert_eq!(workers_within_memory(8, 100_000, 2048), 1);
-    assert_eq!(workers_within_memory(0, 20, 2048), 1);
-    assert_eq!(workers_within_memory(3, 0, 2048), 3);
-}
-
-#[test]
-fn limited_keeps_the_head_and_zero_means_all() {
-    let files: Vec<PathBuf> = (0..5).map(|i| PathBuf::from(format!("{i}"))).collect();
-    assert_eq!(limited(files.clone(), 0).len(), 5);
-    assert_eq!(limited(files.clone(), 2), vec![PathBuf::from("0"), PathBuf::from("1")]);
-    assert_eq!(limited(files, 99).len(), 5);
-}
-
-#[test]
-fn pool_has_at_least_one_thread_and_the_default_is_two() {
-    assert_eq!(DEFAULT_WORKERS, 2);
-    assert_eq!(pool(0).current_num_threads(), 1);
-    assert_eq!(pool(3).current_num_threads(), 3);
-}
-
-// ---- files ----
+use bookdoctor::runner::{collect_files, has_extension};
+use bookdoctor::{Report, Severity, Summary, scan_streaming};
+use corpus_common::pool;
 
 fn touch(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -299,28 +207,4 @@ fn scan_streaming_with_no_paths_returns_an_empty_summary() {
     // window가 0이어도 멈추지 않는다.
     let s = scan_streaming(&paths(3), &pool(1), 0, fake, |_| Ok(())).unwrap();
     assert_eq!(s.scanned, 3);
-}
-
-#[test]
-fn sanitize_display_also_replaces_bidi_and_zero_width_characters() {
-    for c in ['\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{200E}', '\u{200F}', '\u{061C}', '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}'] {
-        assert!(is_hidden_format_char(c), "{c:?}");
-        assert_eq!(sanitize_display(&format!("a{c}b"), 100, None), "a.b", "{c:?}");
-    }
-    // 일반 글자와 인접 코드 포인트는 그대로 둔다.
-    assert!(!is_hidden_format_char('가') && !is_hidden_format_char('\u{2029}') && !is_hidden_format_char('\u{2070}'));
-    assert_eq!(sanitize_display("가\u{1b}나\u{202e}다", 100, None), "가.나.다");
-    // `sanitize` 자체는 방향 문자를 건드리지 않는다.
-    assert_eq!(sanitize("a\u{202e}b", 100, None), "a\u{202e}b");
-}
-
-#[test]
-fn severity_parse_accepts_four_lowercase_names_and_rejects_others() {
-    assert_eq!(Severity::parse("low"), Some(Severity::Low));
-    assert_eq!(Severity::parse("medium"), Some(Severity::Medium));
-    assert_eq!(Severity::parse("high"), Some(Severity::High));
-    assert_eq!(Severity::parse("critical"), Some(Severity::Critical));
-    for bad in ["", "HIGH", "High", "info", "highest", " high"] {
-        assert_eq!(Severity::parse(bad), None, "{bad:?}");
-    }
 }

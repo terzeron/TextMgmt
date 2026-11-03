@@ -10,7 +10,7 @@ use bookdoctor::cli::{Options, run};
 use bookdoctor::scan::scan_file;
 use bookdoctor::viewer::viewer_blocked;
 use ole_common::{Cfb, compress, dir_stream, make_cfb, make_cfb_v4, module_stream};
-use scan_common::{Category, FileReport, Finding, Format, Severity, ViewerBlocked};
+use bookdoctor::{Category, FileReport, Finding, Format, Severity, ViewerBlocked};
 
 /// `WordDocument` 스트림: FIB 32바이트(wIdent, nFib, flags1)를 512바이트로 채우고 본문을 붙인다.
 fn word_stream(flags1: u16, body: &[u8]) -> Vec<u8> {

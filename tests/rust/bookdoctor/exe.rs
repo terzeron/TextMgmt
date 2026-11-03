@@ -5,8 +5,8 @@ use std::path::Path;
 use bookdoctor::cli::{Options, run};
 use bookdoctor::exe::{EXEC_EXTENSIONS, is_exec_extension};
 use bookdoctor::scan::{dispatch_format, scan_file};
-use scan_common::sniff::Sniffed;
-use scan_common::{Category, FileReport, Format, Severity};
+use bookdoctor::sniff::Sniffed;
+use bookdoctor::{Category, FileReport, Format, Severity};
 
 /// `MZ` 머리, e_lfanew=`offset`, 그 자리의 `PE\0\0`. 파일 길이는 `len`이다.
 fn pe_bytes(offset: u32, len: usize) -> Vec<u8> {
@@ -42,7 +42,7 @@ fn scan_named(name: &str, bytes: &[u8]) -> FileReport {
     scan_file(&p, &Options::default())
 }
 
-fn finding<'a>(r: &'a FileReport, code: &str) -> &'a scan_common::Finding {
+fn finding<'a>(r: &'a FileReport, code: &str) -> &'a bookdoctor::Finding {
     r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing in {:?}", r.findings))
 }
 

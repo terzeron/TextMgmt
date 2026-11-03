@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use bookdoctor::cli::{Options, run};
 use bookdoctor::scan::scan_file;
-use scan_common::{FileReport, Finding, Format, Severity};
+use bookdoctor::{FileReport, Finding, Format, Severity};
 
 fn write(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
     let d = tempfile::tempdir().unwrap();

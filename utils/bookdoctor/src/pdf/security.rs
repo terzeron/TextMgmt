@@ -11,9 +11,9 @@ use regex::bytes::Regex;
 
 use lopdf::xref::XrefEntry;
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
-use scan_common::sniff::{Sniffed, sniff};
-use scan_common::text::sanitize as sanitize_text;
-use scan_common::{Category, FileReport, Severity};
+use crate::sniff::{Sniffed, sniff};
+use crate::display::sanitize as sanitize_text;
+use crate::{Category, FileReport, Severity};
 
 use crate::epub::security::guarded;
 

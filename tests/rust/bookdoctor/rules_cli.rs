@@ -8,7 +8,7 @@ use std::sync::Arc;
 use bookdoctor::cli::Options;
 use bookdoctor::rules::{self, parse};
 use bookdoctor::scan::scan_file;
-use scan_common::{FileReport, Severity};
+use bookdoctor::{FileReport, Severity};
 
 const MARKER_RULE: &str = "rule Marker { meta: severity = \"high\" description = \"시험 표지\" strings: $a = \"EVIL_MARKER\" nocase condition: $a }";
 

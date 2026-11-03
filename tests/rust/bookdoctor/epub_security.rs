@@ -8,7 +8,7 @@ use std::path::Path;
 
 use common::*;
 use bookdoctor::epub::security::{Limits, Stats, guarded, scan as scan_into, scan_stats};
-use scan_common::{Category, FileReport, Format, Severity};
+use bookdoctor::{Category, FileReport, Format, Severity};
 
 fn scan_with(path: &Path, limits: &Limits) -> FileReport {
     let mut r = FileReport::new(path, Some(Format::Epub));

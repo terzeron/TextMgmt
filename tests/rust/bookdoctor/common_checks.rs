@@ -10,14 +10,14 @@ use std::time::Duration;
 use bookdoctor::cli::Options;
 use bookdoctor::common::sniff_head;
 use bookdoctor::scan::scan_file;
-use scan_common::sniff::Sniffed;
-use scan_common::{Category, Format, Severity};
+use bookdoctor::sniff::Sniffed;
+use bookdoctor::{Category, Format, Severity};
 
-fn count(r: &scan_common::FileReport, code: &str) -> usize {
+fn count(r: &bookdoctor::FileReport, code: &str) -> usize {
     r.findings.iter().filter(|f| f.code == code).count()
 }
 
-fn find<'a>(r: &'a scan_common::FileReport, code: &str) -> &'a scan_common::Finding {
+fn find<'a>(r: &'a bookdoctor::FileReport, code: &str) -> &'a bookdoctor::Finding {
     r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} 없음: {:?}", r.findings))
 }
 

@@ -16,7 +16,7 @@ use corpus_common::reader::{Zip, open_zip};
 use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
 use htmlkit::{Tag, decode_entities, local_name, tokenize};
 use regex::Regex;
-use scan_common::{Category, FileReport};
+use crate::{Category, FileReport};
 use zip::CompressionMethod;
 
 const MAX_TEXT: usize = 160;
@@ -25,7 +25,7 @@ const MAX_UNDECODABLE_FINDINGS: usize = 20;
 /// 인코딩 문제 종류별 요약 노트 문구. 인덱스는 `Scanner::enc`와 같다.
 const ENC_NOTE_LABELS: [&str; 3] = ["unsupported encoding utf-32", "non-utf8 markup", "NUL bytes in markup"];
 
-pub use scan_common::Severity;
+pub use crate::Severity;
 
 /// 검사 도중 모은 지표 하나. 끝에 `FileReport`로 옮긴다.
 #[derive(Debug, Clone)]
@@ -298,7 +298,7 @@ static KNOWN_PUBLIC_IDS: &[&str] = &["-//W3C//DTD", "-//NISO//DTD", "-//IDPF//DT
 
 /// 보고서에 들어가는 문자열: 제어문자(C0·C1)는 `.`로 바꾸고 길이를 자른다.
 fn safe(s: &str) -> String {
-    scan_common::text::sanitize(s, MAX_TEXT, None)
+    crate::display::sanitize(s, MAX_TEXT, None)
 }
 
 /// 브라우저가 스킴을 알아보는 방식으로 정규화한다: 엔티티를 풀고 공백·제어문자를 지우고 소문자로 만든다.

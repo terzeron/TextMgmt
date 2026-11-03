@@ -5,7 +5,7 @@ use std::fs;
 
 use bookdoctor::cli::run;
 use bookdoctor::rules::{self, Compiled};
-use scan_common::Severity;
+use bookdoctor::Severity;
 
 fn builtin() -> Compiled {
     rules::builtin_compiled()

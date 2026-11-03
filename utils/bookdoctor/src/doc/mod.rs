@@ -7,9 +7,9 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::ole::{Anomaly, EntryKind, Limits as OleLimits, OleError, OleFile, vba};
-use scan_common::sniff::{Sniffed, sniff};
-use scan_common::text::sanitize_display;
-use scan_common::{Category, FileReport, Severity};
+use crate::sniff::{Sniffed, sniff};
+use crate::display::sanitize_display;
+use crate::{Category, FileReport, Severity};
 
 use crate::cli::Options;
 use crate::zipcheck::fast::ZIP_EXEC_EXTS;

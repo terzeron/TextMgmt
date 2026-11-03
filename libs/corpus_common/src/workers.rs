@@ -25,3 +25,35 @@ pub fn workers_within_memory(workers: usize, per_worker_mb: u64, budget_mb: u64)
     let by_memory = (budget_mb / per_worker_mb.max(1)).max(1);
     workers.max(1).min(usize::try_from(by_memory).unwrap_or(usize::MAX))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{DEFAULT_WORKERS, limited, pool, workers_within_memory};
+
+    #[test]
+    fn workers_within_memory_never_goes_below_one_and_never_above_the_request() {
+        assert_eq!(workers_within_memory(2, 20, 2048), 2);
+        assert_eq!(workers_within_memory(64, 440, 2048), 4);
+        assert_eq!(workers_within_memory(64, 1, 2048), 64);
+        assert_eq!(workers_within_memory(8, 100_000, 2048), 1);
+        assert_eq!(workers_within_memory(0, 20, 2048), 1);
+        assert_eq!(workers_within_memory(3, 0, 2048), 3);
+    }
+
+    #[test]
+    fn limited_keeps_the_head_and_zero_means_all() {
+        let files: Vec<PathBuf> = (0..5).map(|i| PathBuf::from(format!("{i}"))).collect();
+        assert_eq!(limited(files.clone(), 0).len(), 5);
+        assert_eq!(limited(files.clone(), 2), vec![PathBuf::from("0"), PathBuf::from("1")]);
+        assert_eq!(limited(files, 99).len(), 5);
+    }
+
+    #[test]
+    fn pool_has_at_least_one_thread_and_the_default_is_two() {
+        assert_eq!(DEFAULT_WORKERS, 2);
+        assert_eq!(pool(0).current_num_threads(), 1);
+        assert_eq!(pool(3).current_num_threads(), 3);
+    }
+}

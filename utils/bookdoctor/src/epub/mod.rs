@@ -7,7 +7,7 @@ pub mod structure;
 use std::collections::HashSet;
 use std::path::Path;
 
-use scan_common::FileReport;
+use crate::FileReport;
 
 use crate::cli::Options;
 

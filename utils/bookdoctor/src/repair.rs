@@ -107,11 +107,11 @@ pub fn restore_binary_with(path: &Path, trash_dir: &Path, unmangle: &dyn Fn(&[u8
 }
 
 fn show(text: &str) -> String {
-    scan_common::text::sanitize_display(text, usize::MAX, None)
+    crate::display::sanitize_display(text, usize::MAX, None)
 }
 
 fn name_of(path: &str) -> String {
-    Path::new(path).file_name().map(|n| scan_common::text::sanitize_display(&n.to_string_lossy(), 60, None)).unwrap_or_default()
+    Path::new(path).file_name().map(|n| crate::display::sanitize_display(&n.to_string_lossy(), 60, None)).unwrap_or_default()
 }
 
 /// TXT 파일에서 잘못 저장된 바이너리를 찾아 되돌린다. 쓰기 실패가 있으면 1이다.

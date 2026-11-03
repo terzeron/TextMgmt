@@ -10,8 +10,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use lopdf::{Dictionary, Document, Object};
-use scan_common::text::sanitize;
-use scan_common::{Category, FileReport, Severity};
+use crate::display::sanitize;
+use crate::{Category, FileReport, Severity};
 use sysdeps::pdf::extract_text;
 use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 

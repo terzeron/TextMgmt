@@ -15,7 +15,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 use roxmltree::{Document, Node};
-use scan_common::{Category, FileReport, Severity};
+use crate::{Category, FileReport, Severity};
 
 use corpus_common::reader::{Zip, open_zip};
 use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};

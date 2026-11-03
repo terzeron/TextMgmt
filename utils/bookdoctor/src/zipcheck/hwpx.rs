@@ -6,7 +6,7 @@ use std::path::Path;
 
 use corpus_common::reader::open_zip;
 use corpus_common::util::unquote;
-use scan_common::{Category, FileReport, Severity};
+use crate::{Category, FileReport, Severity};
 
 use super::ooxml::{Member, check_xml_attacks, classify_member, parse, preview, push_once, read_xml_part};
 use crate::epub::security::{Limits, read_limited};

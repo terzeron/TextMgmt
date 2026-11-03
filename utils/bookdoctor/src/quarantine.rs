@@ -32,11 +32,11 @@ pub type Mover<'a> = &'a dyn Fn(&Path, &Path) -> io::Result<()>;
 
 /// 터미널에 찍을 문자열에서 제어문자와 방향·서식 문자를 지운다. 경로는 파일을 열거나 옮길 때만 원문을 쓴다.
 fn show(text: &str) -> String {
-    scan_common::text::sanitize_display(text, usize::MAX, None)
+    crate::display::sanitize_display(text, usize::MAX, None)
 }
 
 fn name_of(path: &str, max_chars: usize) -> String {
-    Path::new(path).file_name().map(|n| scan_common::text::sanitize_display(&n.to_string_lossy(), max_chars, None)).unwrap_or_default()
+    Path::new(path).file_name().map(|n| crate::display::sanitize_display(&n.to_string_lossy(), max_chars, None)).unwrap_or_default()
 }
 
 fn field(rec: &Rec, key: &str) -> String {

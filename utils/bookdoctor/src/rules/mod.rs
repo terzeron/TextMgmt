@@ -8,7 +8,7 @@ mod parse;
 pub use matcher::{Compiled, DEFAULT_WORK_BUDGET, RuleMatch, ScanOutcome, StringMatch};
 pub use parse::{MAX_RULES, MAX_SOURCE, MAX_STRINGS, MAX_STRING_BYTES, MAX_TERMS, parse};
 
-use scan_common::Severity;
+use crate::Severity;
 
 /// 파싱한 규칙 모음.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -88,8 +88,8 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 
-use scan_common::text::sanitize_display;
-use scan_common::{Category, FileReport};
+use crate::display::sanitize_display;
+use crate::{Category, FileReport};
 
 /// 규칙을 적용하려고 읽는 파일 앞부분의 최대 바이트.
 pub const MAX_SCAN_BYTES: u64 = 16 * 1024 * 1024;

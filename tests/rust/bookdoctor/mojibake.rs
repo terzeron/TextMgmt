@@ -12,7 +12,7 @@ use bookdoctor::pdf;
 use bookdoctor::scan::scan_file;
 use common::*;
 use corpus_common::reader::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, korean_likeness, read_document_text};
-use scan_common::{Category, FileReport, Severity};
+use bookdoctor::{Category, FileReport, Severity};
 
 fn hanja() -> String {
     HANJA_CLASSIC_UNIT.repeat(20)
@@ -28,7 +28,7 @@ fn opts() -> Options {
     Options { no_pdf_worker: true, ..Options::default() }
 }
 
-fn find<'a>(r: &'a FileReport, code: &str) -> Option<&'a scan_common::Finding> {
+fn find<'a>(r: &'a FileReport, code: &str) -> Option<&'a bookdoctor::Finding> {
     r.findings.iter().find(|f| f.code == code)
 }
 
@@ -317,7 +317,7 @@ fn pdf_named_epub_with_garbled_body_is_flagged_and_complete() {
     let r = pdf_named_epub_report(&xhtml(&format!("<p>{}</p>", corrupted())));
     assert!(find(&r, "MOJIBAKE").is_some(), "{r:?}");
     assert!(!r.reasons.iter().any(|x| x == "no text extracted"), "{r:?}");
-    assert_eq!(r.format, Some(scan_common::Format::Epub));
+    assert_eq!(r.format, Some(bookdoctor::Format::Epub));
     assert_eq!(r.findings.iter().filter(|f| f.code == "FORMAT_MISMATCH").count(), 1, "{r:?}");
 }
 
@@ -325,7 +325,7 @@ fn pdf_named_epub_with_garbled_body_is_flagged_and_complete() {
 fn pdf_named_epub_with_clean_body_has_no_mojibake_and_is_complete() {
     let r = pdf_named_epub_report(&xhtml(&format!("<p>{}</p>", clean_korean().repeat(4))));
     assert!(find(&r, "MOJIBAKE").is_none() && !r.incomplete, "{r:?}");
-    assert_eq!(r.format, Some(scan_common::Format::Epub));
+    assert_eq!(r.format, Some(bookdoctor::Format::Epub));
     assert_eq!(r.findings.iter().filter(|f| f.code == "FORMAT_MISMATCH").count(), 1, "{r:?}");
 }
 

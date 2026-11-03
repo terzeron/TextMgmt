@@ -4,10 +4,10 @@
 
 use std::io::{self, Write};
 
-use scan_common::text::sanitize_display;
-use scan_common::color::{Style, paint};
-use scan_common::finding::{ENCRYPTION_CODES, Suppressed};
-use scan_common::{Category, FileReport, Finding, Severity, Summary};
+use crate::display::sanitize_display;
+use crate::display::{Style, paint};
+use crate::finding::{ENCRYPTION_CODES, Suppressed};
+use crate::{Category, FileReport, Finding, Severity, Summary};
 
 /// 출력할 내용이 있는가: 발견이 있거나 검사를 끝내지 못했다.
 fn is_flagged(r: &FileReport) -> bool {

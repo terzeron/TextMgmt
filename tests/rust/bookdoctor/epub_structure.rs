@@ -9,7 +9,7 @@ use bookdoctor::cli::Options;
 use bookdoctor::epub::scan_epub_file;
 use bookdoctor::epub::structure::{ISSUE_TO_CODE, inspect, inspect_with};
 use common::*;
-use scan_common::{Category, FileReport, Format, Severity};
+use bookdoctor::{Category, FileReport, Format, Severity};
 
 fn write(p: &Path, text: &str) {
     fs::write(p, text).unwrap();

@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use regex::bytes::Regex;
-use scan_common::{Category, FileReport, Severity};
+use crate::{Category, FileReport, Severity};
 use zip::CompressionMethod;
 
 use corpus_common::reader::{Zip, open_zip};

@@ -409,7 +409,6 @@ dependencies = [
  "rayon",
  "regex",
  "roxmltree",
- "scan_common",
  "scraper",
  "serde",
  "serde_json",
@@ -727,8 +726,8 @@ dependencies = [
  "chrono",
  "encoding_rs",
  "pyfmt",
+ "rayon",
  "regex",
- "scan_common",
  "tempfile",
  "zip",
 ]
@@ -3131,16 +3130,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "scan_common"
-version = "0.1.0"
-dependencies = [
- "rayon",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]

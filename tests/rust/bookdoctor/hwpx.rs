@@ -6,7 +6,7 @@ use std::fs;
 
 use bookdoctor::cli::Options;
 use bookdoctor::scan::scan_file;
-use scan_common::{Category, FileReport, Finding, Format, Severity};
+use bookdoctor::{Category, FileReport, Finding, Format, Severity};
 
 fn hwpx(remove: &[&str], add: &[(&str, &[u8])]) -> FileReport {
     let d = tempfile::tempdir().unwrap();

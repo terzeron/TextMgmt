@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use bookdoctor::cli::Options;
 use bookdoctor::scan::scan_file;
-use scan_common::{FileReport, Severity};
+use bookdoctor::{FileReport, Severity};
 
 fn random_bytes(n: usize, mut seed: u32) -> Vec<u8> {
     (0..n)

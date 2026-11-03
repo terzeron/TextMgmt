@@ -6,8 +6,8 @@ use std::path::Path;
 
 use bookdoctor::cli::{run, run_with_env};
 use bookdoctor::scan::dispatch_format;
-use scan_common::Format;
-use scan_common::sniff::Sniffed;
+use bookdoctor::Format;
+use bookdoctor::sniff::Sniffed;
 
 #[test]
 fn dispatch_follows_content_for_pdf_that_is_a_zip() {
@@ -58,7 +58,7 @@ unsafe extern "C" {
 
 use bookdoctor::cli::Options;
 use bookdoctor::scan::scan_file;
-use scan_common::{Category, Severity};
+use bookdoctor::{Category, Severity};
 
 fn epub_with_script(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let d = tempfile::tempdir().unwrap();

@@ -484,7 +484,7 @@ pub fn verify(orig: &[u8], new: &[u8]) -> Result<(), String> {
 
 // ---------------------------------------------------------------- 실행
 
-fn has_defect(report: &scan_common::FileReport) -> bool {
+fn has_defect(report: &crate::FileReport) -> bool {
     report.findings.iter().any(|f| matches!(f.code.to_string().as_str(), "XHTML_PARSE_FAILED" | "HEAD_MISSING"))
 }
 

@@ -9,7 +9,7 @@ use bookdoctor::report::write_json_line;
 use bookdoctor::scan::scan_file;
 use bookdoctor::viewer::{EPUB_CODES, PDF_CODES, TXT_CODES, viewer_blocked};
 use regex::Regex;
-use scan_common::{Category, Format, ViewerBlocked};
+use bookdoctor::{Category, Format, ViewerBlocked};
 
 const EPUB_SECURITY_RS: &str = include_str!("../../../utils/bookdoctor/src/epub/security.rs");
 /// EPUB의 ZIP 이름 규칙(`ZIP_PATH_TRAVERSAL` 등)은 `zipnames.rs`로 옮겨 갔다. EPUB 지표 코드의 출처는 두 파일이다.
@@ -115,7 +115,7 @@ fn scripted_epub() -> common::NamedFile {
     f
 }
 
-fn value_of(r: &scan_common::FileReport, code: &str) -> ViewerBlocked {
+fn value_of(r: &bookdoctor::FileReport, code: &str) -> ViewerBlocked {
     r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} 없음: {:?}", r.findings)).viewer_blocked
 }
 

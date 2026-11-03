@@ -14,8 +14,8 @@ use std::sync::LazyLock;
 use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
 use htmlkit::{decode_entities, text_of};
 use regex::Regex;
-use scan_common::sniff::{Sniffed, sniff};
-use scan_common::{Category, Severity};
+use crate::sniff::{Sniffed, sniff};
+use crate::{Category, Severity};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -1046,10 +1046,10 @@ pub(crate) fn apply(path: &Path, bytes: &[u8], trash_dir: &Path) -> io::Result<P
 
 /// 터미널로 나가는 문자열의 제어문자(ESC 등)와 숨은 서식 문자를 지운다. 멤버 이름과 오류 메시지는 파일이 정한 값이다.
 pub(crate) fn show(text: &str) -> String {
-    scan_common::text::sanitize_display(text, usize::MAX, None)
+    crate::display::sanitize_display(text, usize::MAX, None)
 }
 
-pub(crate) fn has_serious_security(report: &scan_common::FileReport) -> bool {
+pub(crate) fn has_serious_security(report: &crate::FileReport) -> bool {
     report.findings.iter().any(|f| f.category == Category::Security && f.severity >= Severity::High)
 }
 

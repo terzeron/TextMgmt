@@ -8,9 +8,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use corpus_common::DEFAULT_LIBRARY_ROOT;
-use scan_common::args::long_option;
-use scan_common::files::collect_files;
-use scan_common::{pool, scan_streaming, workers_within_memory, Severity, DEFAULT_WORKERS};
+use corpus_common::{DEFAULT_WORKERS, pool, workers_within_memory};
+
+use crate::runner::collect_files;
+use crate::{Severity, scan_streaming};
 
 use crate::exe::is_exec_extension;
 use crate::pdf::security::MAX_PARALLEL_INPUT_MB;
@@ -177,7 +178,7 @@ fn wanted(p: &Path) -> bool {
 }
 
 fn report_error(e: &dyn std::fmt::Display) {
-    eprintln!("bookdoctor: error: {}", scan_common::text::sanitize_display(&e.to_string(), usize::MAX, None));
+    eprintln!("bookdoctor: error: {}", crate::display::sanitize_display(&e.to_string(), usize::MAX, None));
 }
 
 /// 진입점. 종료 코드를 돌려준다. 색은 실제 stdout이 터미널인지와 `NO_COLOR`로 정한다.
@@ -199,7 +200,7 @@ pub fn run_with_env(argv: &[String], out: &mut dyn Write, is_tty: bool, no_color
     match parse(argv) {
         Ok(opts) => execute(&opts, out, is_tty, no_color),
         Err(msg) => {
-            eprintln!("{USAGE}\nbookdoctor: error: {}", scan_common::text::sanitize_display(&msg, usize::MAX, None));
+            eprintln!("{USAGE}\nbookdoctor: error: {}", crate::display::sanitize_display(&msg, usize::MAX, None));
             2
         }
     }
@@ -333,4 +334,54 @@ scan 옵션:
         broken = BROKEN_DIR_NAME,
         manifest = MANIFEST_NAME,
     )
+}
+
+/// `--이름=값` 또는 `--이름 값` 꼴의 긴 옵션을 읽는다. 값이 따로 오면 `rest`의 다음 인자를 쓴다.
+///
+/// - `--`로 시작하지 않으면 `Ok(None)`: 옵션이 아니라 위치 인자다.
+/// - `allowed`에 없는 이름이면 오류(`unrecognized arguments`). 값이 없으면 오류(`expected one argument`).
+fn long_option<'a, I>(arg: &str, allowed: &[&str], rest: &mut I) -> Result<Option<(String, String)>, String>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let Some(body) = arg.strip_prefix("--") else { return Ok(None) };
+    let (name, inline) = match body.split_once('=') {
+        Some((n, v)) => (n, Some(v.to_owned())),
+        None => (body, None),
+    };
+    if !allowed.contains(&name) {
+        return Err(format!("unrecognized arguments: {arg}"));
+    }
+    let value = inline.or_else(|| rest.next().cloned()).ok_or_else(|| format!("argument --{name}: expected one argument"))?;
+    Ok(Some((name.to_owned(), value)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::long_option;
+
+    #[test]
+    fn long_option_reads_inline_and_separate_values_and_rejects_unknown_names() {
+        let allowed = ["workers", "limit"];
+        let none: Vec<String> = Vec::new();
+        // 옵션이 아니면 위치 인자다. 다음 인자를 먹지 않는다.
+        let rest = ["x".to_string()];
+        let mut it = rest.iter();
+        assert_eq!(long_option("a.pdf", &allowed, &mut it), Ok(None));
+        assert_eq!(long_option("-r", &allowed, &mut it), Ok(None));
+        assert_eq!(it.next().map(String::as_str), Some("x"));
+        // `--이름=값`은 다음 인자를 먹지 않는다. `=` 뒤가 비어도 값이다.
+        let rest = ["unused".to_string()];
+        let mut it = rest.iter();
+        assert_eq!(long_option("--workers=3", &allowed, &mut it), Ok(Some(("workers".into(), "3".into()))));
+        assert_eq!(long_option("--limit=", &allowed, &mut it), Ok(Some(("limit".into(), String::new()))));
+        assert_eq!(it.next().map(String::as_str), Some("unused"));
+        // `--이름 값`은 다음 인자를 쓴다.
+        let rest = ["7".to_string()];
+        let mut it = rest.iter();
+        assert_eq!(long_option("--limit", &allowed, &mut it), Ok(Some(("limit".into(), "7".into()))));
+        // 모르는 이름, 값이 없는 경우.
+        assert_eq!(long_option("--bogus=1", &allowed, &mut none.iter()), Err("unrecognized arguments: --bogus=1".to_string()));
+        assert_eq!(long_option("--workers", &allowed, &mut none.iter()), Err("argument --workers: expected one argument".to_string()));
+    }
 }

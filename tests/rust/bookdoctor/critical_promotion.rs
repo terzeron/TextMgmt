@@ -9,7 +9,7 @@ use bookdoctor::cli::Options;
 use bookdoctor::epub::security::{Limits, scan as scan_into};
 use bookdoctor::scan::scan_file;
 use common::*;
-use scan_common::{FileReport, Format, Severity};
+use bookdoctor::{FileReport, Format, Severity};
 
 fn scan_epub(chapter: &str, extra: &[(&str, &[u8])]) -> FileReport {
     let d = tempfile::tempdir().unwrap();

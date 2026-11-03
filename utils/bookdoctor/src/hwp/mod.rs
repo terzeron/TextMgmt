@@ -10,8 +10,8 @@ pub mod script;
 use std::path::Path;
 
 use crate::ole::OleFile;
-use scan_common::{Category, FileReport, Severity};
-use scan_common::sniff::Sniffed;
+use crate::{Category, FileReport, Severity};
+use crate::sniff::Sniffed;
 
 use crate::cli::Options;
 use crate::doc::{open_ole, report_anomalies};

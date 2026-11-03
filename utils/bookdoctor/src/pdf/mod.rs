@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use scan_common::FileReport;
+use crate::FileReport;
 use sysdeps::{CommandRunner, SystemRunner};
 
 use crate::cli::Options;

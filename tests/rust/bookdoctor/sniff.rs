@@ -1,7 +1,7 @@
-//! scan_common::sniff, scan_common::names 테스트: 매직바이트 판별과 Windows 예약 이름.
+//! sniff 테스트: 매직바이트 판별, 섀넌 엔트로피, Windows 예약 이름.
 
-use scan_common::names::windows_reserved;
-use scan_common::sniff::{Sniffed, sniff};
+use bookdoctor::sniff::windows_reserved;
+use bookdoctor::sniff::{Sniffed, sniff};
 
 #[test]
 fn sniffs_pdf_even_at_offset_300() {
@@ -124,4 +124,30 @@ fn sniffs_ole_compound_file_and_keeps_exec_precedence() {
     assert_eq!(sniff(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A]), Sniffed::Unknown);
     // 실행 파일 매직은 계속 먼저다.
     assert_eq!(sniff(b"\x7fELF\x02"), Sniffed::Elf);
+}
+
+use bookdoctor::sniff::{is_text_name, shannon};
+
+#[test]
+fn shannon_of_known_inputs() {
+    assert_eq!(shannon(&[]), 0.0);
+    assert_eq!(shannon(&[0u8; 1000]), 0.0);
+    let all: Vec<u8> = (0..=255u8).cycle().take(256 * 8).collect();
+    assert!((shannon(&all) - 8.0).abs() < 1e-9, "{}", shannon(&all));
+    let two: Vec<u8> = [0u8, 1].iter().copied().cycle().take(1000).collect();
+    assert!((shannon(&two) - 1.0).abs() < 1e-9, "{}", shannon(&two));
+    // 영어 문장은 대략 4~5 비트다.
+    let text = b"the quick brown fox jumps over the lazy dog ".repeat(40);
+    let e = shannon(&text);
+    assert!(e > 3.0 && e < 5.0, "{e}");
+}
+
+#[test]
+fn is_text_name_cases() {
+    for name in ["word/document.xml", "a/b/c.RELS", "index.HTML", "x.htm", "p.xhtml", "s.js", "s.css", "n.txt", "d.json", "i.svg", "Contents/section0.xml"] {
+        assert!(is_text_name(name), "{name}");
+    }
+    for name in ["a.jpg", "a.png", "a.zip", "a.gz", "BinData/BIN0001.bin", "noext", "dir/", "a.xml.bak", "a.", ".xml", "xml"] {
+        assert!(!is_text_name(name), "{name}");
+    }
 }

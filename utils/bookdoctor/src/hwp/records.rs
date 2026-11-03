@@ -57,8 +57,8 @@ impl<'a> Iterator for Records<'a> {
 // --- 스트림 읽기와 검증 ---
 
 use crate::ole::{Entry, EntryKind, OleFile};
-use scan_common::text::sanitize_display;
-use scan_common::{Category, FileReport, Severity};
+use crate::display::sanitize_display;
+use crate::{Category, FileReport, Severity};
 
 use super::header::FileHeader;
 use super::inflate::{InflateError, decompress};

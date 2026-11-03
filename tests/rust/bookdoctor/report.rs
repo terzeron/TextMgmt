@@ -5,8 +5,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use bookdoctor::report::{Aggregate, finding_style, write_json_line, write_text};
-use scan_common::color::Style;
-use scan_common::{Category, FileReport, Format, Severity, Summary};
+use bookdoctor::display::Style;
+use bookdoctor::{Category, FileReport, Format, Severity, Summary};
 
 fn flagged(path: &Path) -> FileReport {
     let mut r = FileReport::new(path, Some(Format::Epub));
@@ -150,7 +150,7 @@ fn summary_line_lists_only_nonzero_suppressed_severities() {
 
 // --- 색 ---
 
-fn finding_of(category: Category, severity: Severity, code: &str) -> scan_common::Finding {
+fn finding_of(category: Category, severity: Severity, code: &str) -> bookdoctor::Finding {
     let mut r = FileReport::new(Path::new("a"), None);
     r.push(category, severity, code, "", "");
     r.findings.remove(0)

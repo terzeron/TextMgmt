@@ -1,9 +1,9 @@
 //! `Scripts` 스토리지 검사(명세 3.2.9, 표 8·9). 스크립트는 텍스트로만 본다.
 
 use crate::ole::OleFile;
-use scan_common::{Category, FileReport, Severity};
+use crate::{Category, FileReport, Severity};
 
-use scan_common::text::sanitize_display;
+use crate::display::sanitize_display;
 
 use super::header::FileHeader;
 use super::inflate::{InflateError, decompress};

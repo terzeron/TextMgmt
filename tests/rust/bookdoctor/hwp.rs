@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use bookdoctor::cli::{Options, run};
 use bookdoctor::scan::scan_file;
 use ole_common::{Cfb, compress, dir_stream, make_cfb, make_cfb_v4, module_stream};
-use scan_common::{FileReport, Format};
+use bookdoctor::{FileReport, Format};
 
 /// `FileHeader` 스트림: 서명 32, 버전 4, 속성1 4, 속성2 4, EncryptVersion 4, KOGL 1, 예약 207 = 256바이트(명세 표 3).
 fn file_header(flags: u32) -> Vec<u8> {
@@ -109,7 +109,7 @@ fn scan_cfb(name: &str, cfb: &Cfb) -> FileReport {
     scan(name, &cfb.bytes)
 }
 
-fn finding<'a>(r: &'a FileReport, code: &str) -> &'a scan_common::Finding {
+fn finding<'a>(r: &'a FileReport, code: &str) -> &'a bookdoctor::Finding {
     r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
 }
 
@@ -142,8 +142,8 @@ fn bad_signature_and_short_header_are_defects() {
     for (name, header) in [("bad signature", bad), ("short", short)] {
         let r = scan_cfb("a.hwp", &make_cfb(&[("FileHeader", &header[..])]));
         let f = finding(&r, "HWP_BAD_HEADER");
-        assert_eq!(f.severity, scan_common::Severity::Medium, "{name}");
-        assert_eq!(f.category, scan_common::Category::Defect, "{name}");
+        assert_eq!(f.severity, bookdoctor::Severity::Medium, "{name}");
+        assert_eq!(f.category, bookdoctor::Category::Defect, "{name}");
     }
 }
 
@@ -235,11 +235,11 @@ fn an_empty_scripts_storage_of_an_ordinary_document_is_clean() {
 #[test]
 fn the_script_flag_makes_the_storage_high_even_when_empty() {
     let r = scan_cfb("a.hwp", &hwp_cfb(&[("Scripts/JScriptVersion", &JSCRIPT_VERSION[..])], 0x8));
-    assert_eq!(finding(&r, "HWP_SCRIPT").severity, scan_common::Severity::High);
+    assert_eq!(finding(&r, "HWP_SCRIPT").severity, bookdoctor::Severity::High);
     assert!(!r.has("HWP_SCRIPT_FLAG_MISMATCH"), "{:?}", r.findings);
     // 실제 스크립트 소스가 있으면 비트가 없어도 High다.
     let r = scan_scripts(0, &default_jscript(["", "var a = 1;", "", ""]));
-    assert_eq!(finding(&r, "HWP_SCRIPT").severity, scan_common::Severity::High);
+    assert_eq!(finding(&r, "HWP_SCRIPT").severity, bookdoctor::Severity::High);
     assert!(!r.has("HWP_SCRIPT_FLAG_MISMATCH"), "storage without the flag is what Hangul writes: {:?}", r.findings);
 }
 
@@ -247,7 +247,7 @@ fn the_script_flag_makes_the_storage_high_even_when_empty() {
 fn a_script_bit_without_a_storage_is_a_mismatch() {
     let r = scan_cfb("a.hwp", &hwp_cfb(&[], 0x8));
     let f = finding(&r, "HWP_SCRIPT_FLAG_MISMATCH");
-    assert_eq!((f.severity, f.category), (scan_common::Severity::Medium, scan_common::Category::Defect));
+    assert_eq!((f.severity, f.category), (bookdoctor::Severity::Medium, bookdoctor::Category::Defect));
     assert!(!r.has("HWP_SCRIPT"));
 }
 
@@ -256,7 +256,7 @@ fn suspicious_script_is_critical_in_any_part() {
     let evil = r#"var s = new ActiveXObject("WScript.Shell"); s.Run("cmd.exe /c calc");"#;
     for parts in [["", evil, "", ""], ["", "", evil, ""], ["", "", "", evil], [evil, "", "", ""]] {
         let r = scan_scripts(0x8, &default_jscript(parts));
-        assert_eq!(finding(&r, "HWP_SCRIPT_SUSPICIOUS").severity, scan_common::Severity::Critical, "{parts:?}");
+        assert_eq!(finding(&r, "HWP_SCRIPT_SUSPICIOUS").severity, bookdoctor::Severity::Critical, "{parts:?}");
     }
     let r = scan_scripts(0x8, &default_jscript(["", "var x = EVAL ( payload ) ; new Function('a')", "", ""]));
     assert!(r.has("HWP_SCRIPT_SUSPICIOUS"), "{:?}", r.findings);
@@ -265,7 +265,7 @@ fn suspicious_script_is_critical_in_any_part() {
 #[test]
 fn benign_script_is_high_not_critical() {
     let r = scan_scripts(0x8, &default_jscript(["", "function f() { return 1 + 1; } // a shell of a function", "", ""]));
-    assert_eq!(finding(&r, "HWP_SCRIPT").severity, scan_common::Severity::High);
+    assert_eq!(finding(&r, "HWP_SCRIPT").severity, bookdoctor::Severity::High);
     assert!(!r.has("HWP_SCRIPT_SUSPICIOUS") && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
 }
 
@@ -457,7 +457,7 @@ fn decompress_prefix_stops_after_n_bytes_without_error() {
 
 #[test]
 fn linked_file_unc_is_high_and_local_is_medium() {
-    for (path, severity) in [("\\\\evil\\share\\a.exe", scan_common::Severity::High), ("http://evil.example/a", scan_common::Severity::High), ("C:\\docs\\a.png", scan_common::Severity::Medium)] {
+    for (path, severity) in [("\\\\evil\\share\\a.exe", bookdoctor::Severity::High), ("http://evil.example/a", bookdoctor::Severity::High), ("C:\\docs\\a.png", bookdoctor::Severity::Medium)] {
         let r = scan_bindata(0, Some(bin_data_link(path, "a")), &[]);
         let f = finding(&r, "HWP_LINKED_FILE");
         assert_eq!(f.severity, severity, "{path}");
@@ -479,7 +479,7 @@ fn linked_file_in_a_compressed_docinfo_is_found() {
 fn pe_in_a_compressed_bindata_is_flagged_by_content() {
     let r = scan_bindata(0x1, None, &[("BIN0001.jpg", raw_deflate(&pe_bytes())), ("BIN0002.jpg", zlib(&pe_bytes()))]);
     assert_eq!(r.findings.iter().filter(|f| f.code == "EMBEDDED_EXECUTABLE").count(), 2, "{:?}", r.findings);
-    assert!(r.findings.iter().all(|f| f.severity != scan_common::Severity::Low));
+    assert!(r.findings.iter().all(|f| f.severity != bookdoctor::Severity::Low));
 }
 
 #[test]
@@ -489,7 +489,7 @@ fn pe_with_a_png_name_is_still_flagged_and_an_exe_name_is_flagged_by_name() {
     assert!(scan_bindata(0x1, None, &[("BIN0001.png", pe_bytes())]).has("EMBEDDED_EXECUTABLE"));
     // 이름이 exe면 내용이 PNG여도 High다.
     let r = scan_bindata(0, None, &[("BIN0001.exe", PNG.to_vec())]);
-    assert_eq!(finding(&r, "EMBEDDED_EXECUTABLE").severity, scan_common::Severity::Critical);
+    assert_eq!(finding(&r, "EMBEDDED_EXECUTABLE").severity, bookdoctor::Severity::Critical);
 }
 
 #[test]
@@ -500,8 +500,8 @@ fn ole_and_eps_payloads() {
     let mut dos_eps = vec![0xC5, 0xD0, 0xD3, 0xC6];
     dos_eps.extend_from_slice(&[0u8; 60]);
     let r = scan_bindata(0x1, None, &[("BIN0001.ole", raw_deflate(&ole)), ("BIN0002.eps", raw_deflate(&eps)), ("BIN0003.eps", dos_eps)]);
-    assert_eq!(finding(&r, "HWP_OLE_OBJECT").severity, scan_common::Severity::High);
-    assert_eq!(finding(&r, "HWP_EPS_OBJECT").severity, scan_common::Severity::Medium);
+    assert_eq!(finding(&r, "HWP_OLE_OBJECT").severity, bookdoctor::Severity::High);
+    assert_eq!(finding(&r, "HWP_EPS_OBJECT").severity, bookdoctor::Severity::Medium);
     assert_eq!(r.findings.iter().filter(|f| f.code == "HWP_EPS_OBJECT").count(), 2, "{:?}", r.findings);
 }
 
@@ -587,7 +587,7 @@ fn size_past_the_end_is_a_high_defect() {
     bad.extend_from_slice(&[0u8; 10]);
     let r = scan_sections(0, None, bad.clone());
     let f = finding(&r, "HWP_BAD_RECORD");
-    assert_eq!((f.severity, f.category), (scan_common::Severity::High, scan_common::Category::Defect));
+    assert_eq!((f.severity, f.category), (bookdoctor::Severity::High, bookdoctor::Category::Defect));
     assert!(f.location.contains("Section0"), "{}", f.location);
     // 압축된 본문 안에서도 같다. DocInfo도 본다.
     assert!(scan_sections(0x1, None, raw_deflate(&bad)).has("HWP_BAD_RECORD"));
@@ -614,14 +614,14 @@ fn truncated_extended_length_is_a_high_defect() {
 fn level_jump_is_medium_and_reported_once() {
     let jump = [record(HWPTAG_BEGIN + 50, 0, &[0u8; 4]), record(HWPTAG_BEGIN + 51, 3, &[0u8; 4]), record(HWPTAG_BEGIN + 51, 9, &[0u8; 4])].concat();
     let r = scan_sections(0, None, jump);
-    assert_eq!(finding(&r, "HWP_RECORD_LEVEL_JUMP").severity, scan_common::Severity::Medium);
+    assert_eq!(finding(&r, "HWP_RECORD_LEVEL_JUMP").severity, bookdoctor::Severity::Medium);
     assert_eq!(r.findings.iter().filter(|f| f.code == "HWP_RECORD_LEVEL_JUMP").count(), 1);
 }
 
 #[test]
 fn ole_shape_records_are_high() {
     let body = [record(HWPTAG_BEGIN + 50, 0, &[0u8; 4]), record(TAG_SHAPE_COMPONENT_OLE, 1, &[0u8; 24])].concat();
-    assert_eq!(finding(&scan_sections(0, None, body), "HWP_OLE_OBJECT").severity, scan_common::Severity::High);
+    assert_eq!(finding(&scan_sections(0, None, body), "HWP_OLE_OBJECT").severity, bookdoctor::Severity::High);
 }
 
 #[test]

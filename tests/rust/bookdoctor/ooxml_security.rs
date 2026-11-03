@@ -6,7 +6,7 @@ use std::path::Path;
 
 use bookdoctor::cli::{Options, run_with_env};
 use bookdoctor::scan::scan_file;
-use scan_common::{Category, FileReport, Finding, Severity};
+use bookdoctor::{Category, FileReport, Finding, Severity};
 
 const REL_NS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
 const TYPE_BASE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
