@@ -25,20 +25,9 @@ fn fail(reason: &str) -> ImageCropError {
     ImageCropError(reason.to_string())
 }
 
-/// Python `round`: 0.5는 짝수 쪽으로 보낸다.
+/// Python `round(value)`: 0.5는 짝수 쪽으로 보낸다.
 fn py_round(value: f64) -> i64 {
-    let floor = value.floor();
-    let diff = value - floor;
-    let rounded = if diff < 0.5 {
-        floor
-    } else if diff > 0.5 {
-        floor + 1.0
-    } else if floor % 2.0 == 0.0 {
-        floor
-    } else {
-        floor + 1.0
-    };
-    rounded as i64
+    pyfmt::py_round(value, 0) as i64
 }
 
 /// `source`에서 `rect` 영역만 잘라 새 이미지로 돌려준다 (`MIN_CROP_PIXELS` 기준).

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use pyfmt::py_truthy;
+use pyfmt::{py_float_repr, py_truthy};
 use serde_json::Value;
 
 use super::export_format::ModelError;
@@ -42,17 +42,6 @@ fn py_str(v: &Value) -> String {
             _ => py_float_repr(n.as_f64().unwrap_or(0.0)),
         },
         other => other.to_string(),
-    }
-}
-
-fn py_float_repr(f: f64) -> String {
-    let s = format!("{f:?}");
-    match s.split_once('e') {
-        Some((mantissa, exp)) => {
-            let e: i32 = exp.parse().unwrap_or(0);
-            format!("{mantissa}e{}{:02}", if e < 0 { '-' } else { '+' }, e.abs())
-        }
-        None => s,
     }
 }
 

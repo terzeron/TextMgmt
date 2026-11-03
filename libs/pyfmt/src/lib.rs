@@ -2,6 +2,7 @@
 //!
 //! - [`py_repr`]: JSON 값을 `repr(dict)` 모양으로 (`print("item:", item)`)
 //! - [`py_round`]: `round(x, ndigits)`와 같은 결과(이진 값을 십진 전개해 짝수 쪽으로)
+//! - [`py_float_repr`]: float를 `repr(float)` 모양으로
 //! - [`py_truthy`]: JSON 값의 `bool(v)`
 
 use serde_json::Value;
@@ -47,7 +48,8 @@ fn py_str_repr(s: &str) -> String {
     out
 }
 
-fn py_float_repr(v: f64) -> String {
+/// Python `repr(float)`: 1e-4 미만·1e16 이상은 두 자리 이상 지수(`1e-05`), 정수 값은 `.0`을 붙인다.
+pub fn py_float_repr(v: f64) -> String {
     let abs = v.abs();
     if abs != 0.0 && !(1e-4..1e16).contains(&abs) {
         // Python은 지수를 두 자리 이상으로 쓴다(1e-05).

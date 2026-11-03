@@ -101,3 +101,10 @@ fn py_truthy_matches_python_bool() {
         assert!(py_truthy(&truthy), "{truthy}");
     }
 }
+
+#[test]
+fn py_float_repr_matches_python_exponent_and_integer_forms() {
+    for (v, want) in [(0.0, "0.0"), (-0.0, "-0.0"), (1.0, "1.0"), (0.1, "0.1"), (1e-4, "0.0001"), (1e-5, "1e-05"), (9999999999999998.0, "9999999999999998.0"), (1e16, "1e+16"), (1.5e16, "1.5e+16"), (-3e-9, "-3e-09"), (123.456, "123.456"), (5e-324, "5e-324")] {
+        assert_eq!(py_float_repr(v), want, "{v:e}");
+    }
+}
