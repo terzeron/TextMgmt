@@ -137,3 +137,6 @@ fn affine_bicubic(src: &[u8], width: u32, height: u32, channels: usize, out_w: u
     }
     out
 }
+
+#[cfg(test)]
+mod tests;

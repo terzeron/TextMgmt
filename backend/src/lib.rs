@@ -20,7 +20,7 @@ pub mod db;
 pub mod direct_cover_url;
 pub mod epub_cover;
 pub mod es_manager;
-pub mod image_edit;
+pub(crate) mod image_edit;
 pub mod main;
 pub mod pdf;
 pub mod refresh_token_store;
