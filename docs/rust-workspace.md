@@ -17,11 +17,13 @@ docs/       문서
 | --- | --- |
 | `corpus_common` | 본문 표본 읽기, 인코딩 판별, ZIP 열기, 경로·URL 도구, 빈 디렉토리 청소, 병렬 풀 |
 | `corpus_layout` | 색인 제외 디렉토리 상수 |
-| `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제 |
+| `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. backend `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
-| `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출 |
+| `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
 | `pyfmt` | 일관된 문자열·숫자 출력 형식 |
 | `stat` | 색인·파싱 통계 카운터 |
+| `db` | MySQL 접근 추상화와 카테고리 매핑 저장소(`category_mapping`) |
+| `classifier` | 도서 분류기: 모델 학습·추론, 코퍼스, 서점 정책, 서점 응답 캐시. backend와 분류 도구가 함께 쓴다 |
 | `file_record` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리. loader와 backend가 함께 쓴다 |
 | `parser_timeout` | 파서 시간 상한, 스레드 제한, 자식 프로세스 종료 |
 | `isbn` | 파일에서 ISBN 추출(TXT·EPUB·PDF·DJVU·HWP) |
@@ -98,7 +100,8 @@ cargo run -p classify_cli -- reclassify 0_inbox --library-root /books --model tm
   `--reband PATH`는 서점 접속 없이 저장된 행을 다시 집계한다. 실서점 응답의 정확성은 네트워크와 HTML 상태에 달려 있다.
 - `reclassify`는 기본 미리보기다. `--apply`를 붙여야 이동하며, 목적지 충돌과 카테고리 심볼릭 링크를 거부한다.
   같은 filesystem에서는 inode를 보존하고, 다른 filesystem에서는 복사 후 원본을 지운다. 파일 이동 실패를 출력·집계한 뒤 종료 코드 0을 반환한다.
-- 테스트는 `tests/rust/classify_cli/cli.rs`에 등록했다. 기존 `tests/rust/backend/classify_cli*.rs`는 구현 전 가정 API로 작성한 미등록 테스트다.
+- 분류 도구는 backend가 아니라 `libs/classifier`에 의존한다. 기본 모델 경로는 전과 같이 `backend/classifier/export`다.
+- 테스트는 `tests/rust/classify_cli/cli.rs`에 등록했다. 분류기 자체 테스트는 `tests/rust/classifier/`에 있다. 기존 `tests/rust/backend/classify_cli*.rs`는 구현 전 가정 API로 작성한 미등록 테스트다.
   새 테스트는 실제 export 모델과 현재 `EsTransport`·`CommandRunner` 계약으로 실행한다.
 
 검증: `cargo test -p classify_cli --locked`, `cargo clippy -p classify_cli --all-targets --locked -- -D warnings`.
