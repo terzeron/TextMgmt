@@ -1,10 +1,14 @@
 //! 온라인 서점(Yes24·알라딘·교보문고) 검색. 원본: `backend/bookstore.py`의 `AbstractBookstore`와 세 구현.
 //!
+//! [`stores`]는 backend가 쓰는 전체 서점(리디북스·네이버·문피아·조아라·웹툰 포함) 구현이다. 세 서점의 URL 조립과 파싱은 이 최상위 모듈을 재사용한다.
+//!
 //! 검색 페이지에서 상세 페이지 링크를 뽑고(`extract_search_links`), 상세 페이지를 받아
 //! 제목·저자·카테고리·ISBN을 뽑는다(`extract_book_info`). 네트워크는 [`Fetcher`] 뒤에 둬서 테스트에서 갈아 끼운다.
 //!
 //! 원본과 다른 점: BeautifulSoup `html.parser` 대신 html5ever(`scraper`)로 파싱한다. 정상 HTML에서는 같고
 //! 심하게 깨진 HTML에서는 트리가 다를 수 있다. 상세 페이지 HTML을 임시 디렉토리에 캐시하지 않고, 쿠키를 넘기지 않는다.
+
+pub mod stores;
 
 use std::sync::LazyLock;
 use std::time::Duration;

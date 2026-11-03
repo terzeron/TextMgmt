@@ -67,7 +67,7 @@ pyfmt = { path = "../libs/pyfmt" }
 async-trait = "0.1"
 base64 = "0.23.1"
 axum = { version = "0.8.9", features = ["multipart"] }
-bookstore_lib = { package = "bookstore", path = "../libs/bookstore" }
+bookstore = { path = "../libs/bookstore" }
 corpus_common = { path = "../libs/corpus_common" }
 corpus_layout = { path = "../libs/corpus_layout" }
 db = { path = "../libs/db" }
@@ -134,10 +134,6 @@ path = "../tests/rust/backend/comics.rs"
 [[test]]
 name = "comics_manager"
 path = "../tests/rust/backend/comics_manager.rs"
-
-[[test]]
-name = "bookstore"
-path = "../tests/rust/backend/bookstore.rs"
 
 [[test]]
 name = "auth"

@@ -5,7 +5,7 @@
 //! 서점 HTTP는 `sysdeps::HttpSession` 대역으로 갈아 끼운다(docs/rust-test-seams.md 3.7. libs/bookstore의 `Fetcher` 대역과 같은 방식).
 //!
 //! 가정한 API (Python 이름을 그대로 쓴다. `_`로 시작하는 비공개 메서드도 같다):
-//! - `backend::bookstore`
+//! - `bookstore::stores`
 //!   - `type SearchRow = (String, String, String, String, String, String)` = `(title, author, category, detail_url, search_url, isbn)`
 //!   - `const MAX_RESULTS: usize = 4` (`AbstractBookstore.MAX_RESULTS`)
 //!   - `fn _truncate_title(title: &str) -> String` (Python의 정적/인스턴스 호출을 모두 이 함수로 옮긴다)
@@ -46,7 +46,16 @@
 
 #![allow(clippy::type_complexity)]
 
-mod common;
+// backend 공용 테스트 도구 중 서점 테스트가 쓰는 것만 가져온다. backend `common`은 axum과 backend를 끌어온다.
+#[path = "../backend/common/env.rs"]
+mod env_helpers;
+#[path = "../backend/common/log_capture.rs"]
+mod log_capture;
+
+/// `env_helpers`가 부르는 자리. 서점 코드는 backend 환경 변수(`TM_BOOK_DIR`, MySQL, ES)를 읽지 않으므로 맞출 값이 없다.
+mod common {
+    pub fn setup_env() {}
+}
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -58,7 +67,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use backend::bookstore::{
+use bookstore::stores::{
     _truncate_title, AbstractBookstore, AladinBookstore, BomtoonBookstore, JoaraBookstore, KakaoWebtoonBookstore, KyoboBookstore, LezhinBookstore, MAX_RESULTS, MunpiaBookstore, NaverSeriesBookstore,
     NaverShoppingBookstore, NaverWebtoonBookstore, RidibooksBookstore, SearchRow, SoupSource, ToptoonBookstore, UreqHttpSession, Yes24Bookstore, abstract_build_search_url, abstract_extract_book_info,
     abstract_extract_search_links,
@@ -304,7 +313,7 @@ fn ureq_session_rejects_a_body_over_the_size_limit() {
                 break;
             }
         }
-        let size = backend::bookstore::MAX_RESPONSE_BYTES + 1024 * 1024;
+        let size = bookstore::stores::MAX_RESPONSE_BYTES + 1024 * 1024;
         let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n");
         let block = vec![b'x'; 64 * 1024];
         let mut sent = 0;
@@ -407,67 +416,54 @@ fn ureq_session_reports_a_body_that_ends_before_content_length() {
 // ---------------------------------------------------------------------------
 
 fn yes24(verbose: bool) -> Yes24Bookstore {
-    common::setup_env();
     Yes24Bookstore::new(verbose)
 }
 
 fn aladin(verbose: bool) -> AladinBookstore {
-    common::setup_env();
     AladinBookstore::new(verbose)
 }
 
 fn kyobo(verbose: bool) -> KyoboBookstore {
-    common::setup_env();
     KyoboBookstore::new(verbose)
 }
 
 fn ridibooks(verbose: bool) -> RidibooksBookstore {
-    common::setup_env();
     RidibooksBookstore::new(verbose)
 }
 
 fn naver_shopping(verbose: bool) -> NaverShoppingBookstore {
-    common::setup_env();
     NaverShoppingBookstore::new(verbose)
 }
 
 fn naver_series(verbose: bool) -> NaverSeriesBookstore {
-    common::setup_env();
     NaverSeriesBookstore::new(verbose)
 }
 
 fn munpia(verbose: bool) -> MunpiaBookstore {
-    common::setup_env();
     MunpiaBookstore::new(verbose)
 }
 
 fn joara(verbose: bool) -> JoaraBookstore {
-    common::setup_env();
     JoaraBookstore::new(verbose)
 }
 
 fn naver_webtoon(verbose: bool) -> NaverWebtoonBookstore {
-    common::setup_env();
     NaverWebtoonBookstore::new(verbose)
 }
 
 fn kakao_webtoon(verbose: bool) -> KakaoWebtoonBookstore {
-    common::setup_env();
     KakaoWebtoonBookstore::new(verbose)
 }
 
 fn bomtoon(verbose: bool) -> BomtoonBookstore {
-    common::setup_env();
     BomtoonBookstore::new(verbose)
 }
 
 fn lezhin(verbose: bool) -> LezhinBookstore {
-    common::setup_env();
     LezhinBookstore::new(verbose)
 }
 
 fn toptoon(verbose: bool) -> ToptoonBookstore {
-    common::setup_env();
     ToptoonBookstore::new(verbose)
 }
 
@@ -606,7 +602,6 @@ macro_rules! dummy_store {
         #[allow(dead_code)]
         impl $name {
             fn new(kind: Kind) -> Self {
-                common::setup_env();
                 let (base_url, supports_isbn_search, author_first_search) = match kind {
                     Kind::Dummy => ("https://example.com", true, true),
                     Kind::Unit => ("http://example.com", false, false),
@@ -1069,23 +1064,23 @@ fn test_base_class_abstract_methods_are_callable() {
 #[test]
 fn bookstore_factory_resolves_every_supported_name_case_insensitively() {
     for name in ["yes24", "aladin", "kyobo", "ridi", "naver", "naverseries", "munpia", "joara", "naverwebtoon", "kakaowebtoon", "bomtoon", "lezhin", "toptoon"] {
-        let store = backend::bookstore::create_bookstore_search(name).unwrap_or_else(|| panic!("factory missed {name}"));
-        assert!(!backend::bookstore::BookstoreSearch::api_search_url(store.as_ref(), "rust").is_empty(), "{name}");
-        assert!(backend::bookstore::create_bookstore_search(&name.to_ascii_uppercase()).is_some(), "{name}");
+        let store = bookstore::stores::create_bookstore_search(name).unwrap_or_else(|| panic!("factory missed {name}"));
+        assert!(!bookstore::stores::BookstoreSearch::api_search_url(store.as_ref(), "rust").is_empty(), "{name}");
+        assert!(bookstore::stores::create_bookstore_search(&name.to_ascii_uppercase()).is_some(), "{name}");
     }
-    assert!(backend::bookstore::create_bookstore_search("unsupported").is_none());
+    assert!(bookstore::stores::create_bookstore_search("unsupported").is_none());
 }
 
 #[test]
 fn bookstore_search_trait_default_api_url_is_empty() {
     struct SearchOnly;
-    impl backend::bookstore::BookstoreSearch for SearchOnly {
+    impl bookstore::stores::BookstoreSearch for SearchOnly {
         fn search(&self, _isbn: &str, _title: &str, _author: &str) -> (Vec<SearchRow>, String, String) {
             (Vec::new(), String::new(), "unknown".into())
         }
     }
 
-    assert_eq!(backend::bookstore::BookstoreSearch::api_search_url(&SearchOnly, "ignored"), "");
+    assert_eq!(bookstore::stores::BookstoreSearch::api_search_url(&SearchOnly, "ignored"), "");
 }
 
 #[test]
@@ -1099,7 +1094,7 @@ fn abstract_bookstore_defaults_work_without_overrides() {
             false
         }
         fn session(&self) -> &dyn HttpSession {
-            static SESSION: backend::bookstore::UnavailableSession = backend::bookstore::UnavailableSession;
+            static SESSION: bookstore::stores::UnavailableSession = bookstore::stores::UnavailableSession;
             &SESSION
         }
         fn build_search_url(&self, keyword: &str) -> String {
@@ -1128,13 +1123,13 @@ fn abstract_bookstore_defaults_work_without_overrides() {
     assert_eq!(store._load_html_from_tmp(&cache_url), None);
     store._save_html_to_tmp("<html>cached</html>", &cache_url);
     assert_eq!(store._load_html_from_tmp(&cache_url).as_deref(), Some("<html>cached</html>"));
-    let cache_path = std::env::temp_dir().join(backend::bookstore::cache_file_name(&cache_url));
+    let cache_path = std::env::temp_dir().join(bookstore::stores::cache_file_name(&cache_url));
     std::fs::remove_file(cache_path).unwrap();
 }
 
 #[test]
 fn unavailable_session_returns_a_configuration_error() {
-    let error = backend::bookstore::UnavailableSession.get("https://example.com", &[]).unwrap_err();
+    let error = bookstore::stores::UnavailableSession.get("https://example.com", &[]).unwrap_err();
     assert!(matches!(error, HttpError::Connection(message) if message.contains("with_session")));
 }
 
@@ -1411,21 +1406,21 @@ fn ridibooks_reports_blocked_only_for_block_statuses() {
     for status in [403, 418, 429] {
         let store = ridibooks(false).with_session(constant(status, "<title>Just a moment...</title>", Value::Null));
         assert!(store.search_by_keyword("k").is_empty());
-        assert!(backend::bookstore::BookstoreSearch::blocked(&store), "status={status}");
+        assert!(bookstore::stores::BookstoreSearch::blocked(&store), "status={status}");
     }
-    assert!(!backend::bookstore::BookstoreSearch::blocked(&store));
+    assert!(!bookstore::stores::BookstoreSearch::blocked(&store));
 
     let empty = ridibooks(false).with_session(constant(200, "", json!({"books": []})));
     assert!(empty.search_by_keyword("k").is_empty());
-    assert!(!backend::bookstore::BookstoreSearch::blocked(&empty));
+    assert!(!bookstore::stores::BookstoreSearch::blocked(&empty));
 
     let server_error = ridibooks(false).with_session(constant(500, "oops", Value::Null));
     assert!(server_error.search_by_keyword("k").is_empty());
-    assert!(!backend::bookstore::BookstoreSearch::blocked(&server_error));
+    assert!(!bookstore::stores::BookstoreSearch::blocked(&server_error));
 
     let broken = ridibooks(false).with_session(failing());
     assert!(broken.search_by_keyword("k").is_empty());
-    assert!(!backend::bookstore::BookstoreSearch::blocked(&broken));
+    assert!(!bookstore::stores::BookstoreSearch::blocked(&broken));
 }
 
 #[test]
@@ -1435,16 +1430,16 @@ fn ridibooks_blocked_flag_follows_the_latest_request() {
     let store = ridibooks(false).with_session(session(move |_, _| if counter.fetch_add(1, Ordering::SeqCst) == 0 { http(403, "blocked", Value::Null) } else { http(200, "", json!({"books": []})) }).0);
 
     assert!(store.search_by_keyword("k").is_empty());
-    assert!(backend::bookstore::BookstoreSearch::blocked(&store));
+    assert!(bookstore::stores::BookstoreSearch::blocked(&store));
     assert!(store.search_by_keyword("k").is_empty());
-    assert!(!backend::bookstore::BookstoreSearch::blocked(&store));
+    assert!(!bookstore::stores::BookstoreSearch::blocked(&store));
 }
 
 #[test]
 fn other_stores_never_report_blocked() {
     let store = yes24(false).with_session(constant(403, "", Value::Null));
     assert!(store.search_by_keyword("k").is_empty());
-    assert!(!backend::bookstore::BookstoreSearch::blocked(&store));
+    assert!(!bookstore::stores::BookstoreSearch::blocked(&store));
 }
 
 #[test]
@@ -2870,8 +2865,8 @@ fn test_bookstore_default_max_results_is_four() {
 
 mod added_joara_key_and_cache_name {
     use super::*;
-    use common::env::{EnvGuard, empty_env, map_env};
-    use common::log_capture::LogCapture;
+    use crate::env_helpers::{EnvGuard, empty_env, map_env};
+    use crate::log_capture::LogCapture;
     use std::sync::Arc;
 
     const DUMMY_KEY: &str = "dummy-joara-key-0000";
@@ -2970,9 +2965,9 @@ mod added_joara_key_and_cache_name {
     /// Python `uuid.uuid5(uuid.NAMESPACE_URL, url)`와 같은 이름이어야 기존 캐시 파일을 이어 쓴다.
     #[test]
     fn test_cache_file_name_matches_python_uuid5() {
-        assert_eq!(backend::bookstore::cache_file_name("https://example.com/detail/1"), "2c75ebbd-c7d8-5945-b588-d1286cf77aee.html");
-        assert_eq!(backend::bookstore::cache_file_name("http://example.com/detail/123"), "0a5f1021-24ca-5315-aa3e-96a26387cd63.html");
-        assert_eq!(backend::bookstore::cache_file_name(""), "1b4db7eb-4057-5ddf-91e0-36dec72071f5.html");
+        assert_eq!(bookstore::stores::cache_file_name("https://example.com/detail/1"), "2c75ebbd-c7d8-5945-b588-d1286cf77aee.html");
+        assert_eq!(bookstore::stores::cache_file_name("http://example.com/detail/123"), "0a5f1021-24ca-5315-aa3e-96a26387cd63.html");
+        assert_eq!(bookstore::stores::cache_file_name(""), "1b4db7eb-4057-5ddf-91e0-36dec72071f5.html");
     }
 
     #[test]

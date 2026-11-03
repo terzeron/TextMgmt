@@ -422,9 +422,13 @@ name = "bookstore"
 version = "0.1.0"
 dependencies = [
  "htmlkit",
+ "log",
+ "pyfmt",
  "regex",
  "scraper",
  "serde_json",
+ "sysdeps",
+ "tempfile",
  "ureq",
 ]
 

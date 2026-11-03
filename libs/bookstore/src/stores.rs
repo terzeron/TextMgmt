@@ -3,7 +3,7 @@
 //! 서점마다 검색 URL, 검색 결과 링크, 상세 페이지 정보 추출이 다르다. 공통 흐름(ISBN > 제목+저자 > 제목 우선순위,
 //! 상세 페이지 병렬 수집, 임시 디렉터리 HTML 캐시)은 [`AbstractBookstore`]의 기본 메서드에 있다.
 //!
-//! - Yes24·알라딘·교보문고의 URL 조립과 HTML 파싱은 `libs/bookstore` crate(`bookstore_lib`)를 재사용한다.
+//! - Yes24·알라딘·교보문고의 URL 조립과 HTML 파싱은 이 crate 최상위의 [`crate::Store`]를 재사용한다.
 //! - 리디북스·네이버쇼핑·네이버시리즈·문피아는 `scraper`로 새로 포팅했다.
 //! - 조아라·웹툰 5종은 JSON API를 직접 부른다. HTML 훅은 쓰지 않는다.
 //! - HTTP는 `sysdeps::HttpSession`, 파일 쓰기는 `sysdeps::FsOps`로 주입한다. 기본 HTTP는 `ureq`를 쓰며
@@ -16,7 +16,7 @@
 //!   `<li><li>` 처럼 html5ever가 형제로 펴는 깨진 중첩은 트리가 다르다(리디북스 헤더 저자는 비어 있지 않은 첫 `li`를 쓴다).
 //! - 상세 페이지용 별도 세션과 쿠키 복사는 없다. 주입한 같은 세션을 스레드에서 함께 쓴다.
 //! - 요청별 timeout(10초, 탑툰 목록 20초)은 `HttpSession::get`에 자리가 없어서 세션 구현이 정한다.
-//! - 알라딘·교보문고의 검색 링크 상한은 `libs/bookstore`의 `MAX_RESULTS`(4)까지다. `max_results`가 더 커도 4개 넘게 뽑지 못한다.
+//! - 알라딘·교보문고의 검색 링크 상한은 crate 최상위의 [`crate::MAX_RESULTS`](4)까지다. `max_results`가 더 커도 4개 넘게 뽑지 못한다.
 
 use std::collections::hash_map::RandomState;
 use std::fmt::Write as _;
@@ -29,7 +29,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bookstore_lib::{BookInfo, Store};
+use crate::{BookInfo, Store};
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
 use serde_json::{Value, json};
@@ -212,7 +212,7 @@ fn lib_info(info: BookInfo) -> Value {
 
 /// 제목에서 부제 구분자(` - `, `－`, `-`, `：`) 왼쪽 부분만 남긴다.
 pub fn _truncate_title(title: &str) -> String {
-    bookstore_lib::truncate_title(title)
+    crate::truncate_title(title)
 }
 
 // ---------------------------------------------------------------------------
@@ -1005,7 +1005,7 @@ bookstore_struct!(
 impl AladinBookstore {
     /// 제목 끝의 권수 번호를 뗀다. 예: `마왕의 딸 3` -> `마왕의 딸`.
     pub fn _strip_trailing_number(&self, title: &str) -> String {
-        bookstore_lib::strip_trailing_number(title)
+        crate::strip_trailing_number(title)
     }
 
     pub fn _extract_aladin_isbn(&self, soup: &str) -> String {

@@ -15,8 +15,8 @@ struct StoreClient {
     fetcher: bookstore::HttpFetcher,
 }
 
-impl backend::bookstore::BookstoreSearch for StoreClient {
-    fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<backend::bookstore::SearchRow>, String, String) {
+impl bookstore::stores::BookstoreSearch for StoreClient {
+    fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<bookstore::stores::SearchRow>, String, String) {
         let outcome = bookstore::search(self.store, &self.fetcher, isbn, title, author);
         (outcome.rows.into_iter().map(|r| (r.title, r.author, r.category, r.detail_url, r.search_url, r.isbn)).collect(), outcome.keyword, outcome.method.into())
     }

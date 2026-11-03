@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use backend::book_classifier::{BookClassifierService, BookstorePolicy, SharedBookClassifier};
 use backend::book_manager::{BookManager, BookManagerDeps, ProposeOptions};
-use backend::bookstore::{BookstoreSearch, SearchRow};
+use bookstore::stores::{BookstoreSearch, SearchRow};
 use backend::classifier::model::CategoryModel;
 use backend::classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
 use common::env::EnvGuard;

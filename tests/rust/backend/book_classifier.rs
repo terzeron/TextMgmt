@@ -631,7 +631,7 @@ fn test_clean_filename_author_title_edge_patterns() {
 
 /// 서점 클라이언트 대역. `BookstoreSearch` 를 구현한다. `failing` 은 조회가 예외를 던지는 서점이다(패닉).
 struct StubBookstore {
-    rows: Vec<backend::bookstore::SearchRow>,
+    rows: Vec<bookstore::stores::SearchRow>,
     fail: Option<&'static str>,
 }
 
@@ -645,8 +645,8 @@ impl StubBookstore {
     }
 }
 
-impl backend::bookstore::BookstoreSearch for StubBookstore {
-    fn search(&self, _isbn: &str, title: &str, _author: &str) -> (Vec<backend::bookstore::SearchRow>, String, String) {
+impl bookstore::stores::BookstoreSearch for StubBookstore {
+    fn search(&self, _isbn: &str, title: &str, _author: &str) -> (Vec<bookstore::stores::SearchRow>, String, String) {
         if let Some(message) = self.fail {
             panic!("{message}");
         }

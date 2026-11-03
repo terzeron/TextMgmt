@@ -30,7 +30,7 @@
 //! - `backend::auth`: `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`, `create_refresh_token`(같은 인자),
 //!   `tm_admin_email() -> String`, `jwt_secret() -> String`, `JWT_ALGORITHM: jsonwebtoken::Algorithm`
 //! - `backend::book::Book` (`Default + Clone + Serialize`): `book_id, category, title, author, file_path: PathBuf, file_type, file_size, line_count, page_count, isbn, created_time: Option<String>, updated_time, score: f64`, `Book::path_prefix() -> PathBuf`
-//! - `backend::bookstore::Yes24Bookstore { verbose: bool }`
+//! - `bookstore::stores::Yes24Bookstore { verbose: bool }`
 //! - `backend::book_manager::{BookManager, BookManagerApi, BookContent, BookResponse}`: `BookManager::from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, _>`, `BookManager::media_type(suffix_with_dot: &str) -> &'static str`
 //!   - `bm.path_prefix() -> PathBuf`, `bm.es_manager() -> Arc<dyn EsManagerApi>` (`insert(&Docs) -> Result<Vec<i64>, EsError>`, `refresh() -> Result<(), EsError>`, `delete(i64) -> Result<bool, EsError>`, `count_by_category(&str, bool) -> Result<i64, EsError>`)
 //!   - `async add_book(BTreeMap<i64, Value>) -> Result<i64, String>`, `async get_book(i64) -> Result<Book, BookLookupError>`
@@ -2376,8 +2376,8 @@ async fn test_auth_me() {
 /// 서점 이름 해석은 현재 registry factory를 거친다.
 #[test]
 fn test_create_bookstore_factory() {
-    assert!(backend::bookstore::create_bookstore_search("yes24").is_some());
-    assert!(backend::bookstore::create_bookstore_search("unknown").is_none());
+    assert!(bookstore::stores::create_bookstore_search("yes24").is_some());
+    assert!(bookstore::stores::create_bookstore_search("unknown").is_none());
 }
 
 #[tokio::test]

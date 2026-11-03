@@ -17,7 +17,7 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use sysdeps::{FsOps, RealFs};
 
-use crate::bookstore::{AladinBookstore, BookstoreSearch, KyoboBookstore, Yes24Bookstore};
+use bookstore::stores::{AladinBookstore, BookstoreSearch, KyoboBookstore, Yes24Bookstore};
 use crate::bookstore_cache::BookstoreResponseCache;
 use crate::classifier::bookstore_policy::map_bookstore_candidates;
 use crate::classifier::model::{CategoryModelApi, Prediction, get_default_model};

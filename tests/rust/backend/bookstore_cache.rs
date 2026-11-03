@@ -9,7 +9,7 @@
 //!   - `put(&mut self, stores: &Value, title: &str, author: &str, isbn: &str)`
 //!   - `path(&self) -> &Path`
 //! - 경고 로그는 `log` crate 파사드로 남긴다. 테스트는 `common::log_capture::LogCapture`(RAII, 스레드 로컬)로 caplog를 대신한다.
-//! - `backend::bookstore::BookstoreSearch` 트레이트: `search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String)`
+//! - `bookstore::stores::BookstoreSearch` 트레이트: `search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String)`
 //!   (`SearchRow`는 `(title, author, category, detail_url, search_url, isbn)` 문자열 6-튜플)
 //! - `backend::book_classifier::BookClassifierService`
 //!   - `new(library_root: &Path, cache_file: Option<&Path>, classifier: Option<Arc<dyn Classify>>) -> Self`
@@ -25,7 +25,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use backend::book_classifier::BookClassifierService;
-use backend::bookstore::{BookstoreSearch, SearchRow};
+use bookstore::stores::{BookstoreSearch, SearchRow};
 use backend::bookstore_cache::BookstoreResponseCache;
 use common::log_capture::LogCapture;
 use serde_json::{Value, json};
