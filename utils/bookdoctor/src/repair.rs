@@ -8,7 +8,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-use corpus_common::thousands;
+use crate::display::thousands;
 
 use crate::cli::Options;
 use crate::sanitize::apply;

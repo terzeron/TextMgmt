@@ -1,6 +1,17 @@
-//! 사람이 읽는 출력: 공격자가 정한 문자열 정리와 터미널 색.
+//! 사람이 읽는 출력: 숫자 형식, 공격자가 정한 문자열 정리, 터미널 색.
 
-
+/// 정수를 세 자리마다 쉼표로 끊는다(`1,234,567`).
+pub fn thousands(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
 
 // ---- 사람이 읽는 출력에 들어가는 문자열 정리. ----
 

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bookdoctor::runner::{collect_files, has_extension};
 use bookdoctor::{Report, Severity, Summary, scan_streaming};
-use corpus_common::pool;
+use bookdoctor::workers::pool;
 
 fn touch(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();

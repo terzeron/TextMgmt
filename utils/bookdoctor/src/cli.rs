@@ -7,8 +7,8 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use corpus_common::DEFAULT_LIBRARY_ROOT;
-use corpus_common::{DEFAULT_WORKERS, pool, workers_within_memory};
+use crate::DEFAULT_LIBRARY_ROOT;
+use crate::workers::{DEFAULT_WORKERS, pool, workers_within_memory};
 
 use crate::runner::collect_files;
 use crate::{Severity, scan_streaming};

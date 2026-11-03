@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use corpus_common::thousands;
+use crate::display::thousands;
 use serde_json::{json, Map, Value};
 
 use crate::cli::{Options, BROKEN_DIR_NAME};

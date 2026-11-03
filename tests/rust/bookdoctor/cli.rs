@@ -5,7 +5,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use bookdoctor::cli::{effective_workers, execute, parse, print_usage, run, run_with_env, Command, Options};
-use corpus_common::DEFAULT_LIBRARY_ROOT;
+use bookdoctor::DEFAULT_LIBRARY_ROOT;
 use bookdoctor::Severity;
 
 fn args(s: &str) -> Vec<String> {

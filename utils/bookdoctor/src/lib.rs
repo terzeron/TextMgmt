@@ -24,8 +24,12 @@ pub mod scan;
 pub mod sniff;
 pub mod txt;
 pub mod viewer;
+pub mod workers;
 pub mod zipcheck;
 pub mod zipnames;
 
 pub use finding::{Category, FileReport, Finding, Format, Severity, ViewerBlocked};
 pub use runner::{Report, Summary, scan_streaming};
+
+/// 진단 대상의 기본 라이브러리 루트.
+pub const DEFAULT_LIBRARY_ROOT: &str = "/mnt/data/text";
