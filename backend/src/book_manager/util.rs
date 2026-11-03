@@ -8,85 +8,8 @@ use serde_json::Value;
 
 use crate::book::Book;
 
-/// `posixpath.normpath`: `//`, `.`, `..`를 접는다. 빈 문자열은 `"."`이다.
-pub fn posix_normpath(path: &str) -> String {
-    if path.is_empty() {
-        return ".".to_string();
-    }
-    let absolute = path.starts_with('/');
-    let mut parts: Vec<&str> = Vec::new();
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                if parts.last().is_some_and(|last| *last != "..") {
-                    parts.pop();
-                } else if !absolute {
-                    parts.push("..");
-                }
-            }
-            other => parts.push(other),
-        }
-    }
-    let joined = parts.join("/");
-    match (absolute, joined.is_empty()) {
-        (true, _) => format!("/{joined}"),
-        (false, true) => ".".to_string(),
-        (false, false) => joined,
-    }
-}
-
-/// `posixpath.join(base, rel)`: `rel`이 절대 경로면 `rel`만 쓴다.
-pub fn posix_join(base: &str, rel: &str) -> String {
-    if rel.starts_with('/') || base.is_empty() {
-        rel.to_string()
-    } else if base.ends_with('/') {
-        format!("{base}{rel}")
-    } else {
-        format!("{base}/{rel}")
-    }
-}
-
-/// `posixpath.dirname`.
-pub fn posix_dirname(path: &str) -> String {
-    match path.rfind('/') {
-        None => String::new(),
-        Some(i) => {
-            let head = &path[..=i];
-            let trimmed = head.trim_end_matches('/');
-            if trimmed.is_empty() { head.to_string() } else { trimmed.to_string() }
-        }
-    }
-}
-
-/// `urllib.parse.unquote`: `%XX`를 풀고 UTF-8이 아닌 바이트는 대체 문자로 바꾼다.
-pub fn unquote(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%'
-            && i + 2 < bytes.len()
-            && let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2]))
-        {
-            out.push(hi * 16 + lo);
-            i += 3;
-            continue;
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn hex(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
-}
+// 경로 도구는 `text_extractor::path`의 것(Python `posixpath`와 같은 동작)을 쓴다.
+pub use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 
 /// `unquote(href).split("#")[0].split("?")[0]`.
 pub fn clean_href(href: &str) -> String {

@@ -235,6 +235,7 @@ dependencies = [
  "sysdeps",
  "tempfile",
  "testcontainers-modules",
+ "text_extractor",
  "tokio",
  "tokio-stream",
  "tokio-util",

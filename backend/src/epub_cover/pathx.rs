@@ -1,48 +1,7 @@
 //! Python `posixpath`와 `urllib.parse`의 필요한 부분. EPUB 안의 상대 경로를 ZIP 멤버 이름으로 바꾸는 데 쓴다.
 
-/// `posixpath.normpath`.
-pub fn normpath(path: &str) -> String {
-    if path.is_empty() {
-        return ".".to_string();
-    }
-    let mut initial_slashes = if path.starts_with('/') { 1 } else { 0 };
-    if path.starts_with("//") && !path.starts_with("///") {
-        initial_slashes = 2;
-    }
-    let mut parts: Vec<&str> = Vec::new();
-    for comp in path.split('/') {
-        if comp.is_empty() || comp == "." {
-            continue;
-        }
-        if comp != ".." || (initial_slashes == 0 && parts.is_empty()) || parts.last() == Some(&"..") {
-            parts.push(comp);
-        } else if !parts.is_empty() {
-            parts.pop();
-        }
-    }
-    let mut out = parts.join("/");
-    if initial_slashes > 0 {
-        out = format!("{}{out}", "/".repeat(initial_slashes));
-    }
-    if out.is_empty() { ".".to_string() } else { out }
-}
-
-/// `posixpath.join(a, b)`.
-pub fn join(a: &str, b: &str) -> String {
-    if b.starts_with('/') {
-        b.to_string()
-    } else if a.is_empty() || a.ends_with('/') {
-        format!("{a}{b}")
-    } else {
-        format!("{a}/{b}")
-    }
-}
-
-/// `posixpath.dirname`.
-pub fn dirname(path: &str) -> String {
-    let head = &path[..path.rfind('/').map_or(0, |i| i + 1)];
-    if !head.is_empty() && head.chars().any(|c| c != '/') { head.trim_end_matches('/').to_string() } else { head.to_string() }
-}
+// normpath·join·dirname·unquote는 `text_extractor::path`의 것을 이 모듈 이름으로 다시 내보낸다.
+pub use text_extractor::path::{posix_dirname as dirname, posix_join as join, posix_normpath as normpath, unquote};
 
 /// `posixpath.splitext(path)[1]`. 파일 이름 앞쪽의 점은 확장자로 보지 않는다.
 pub fn ext(path: &str) -> String {
@@ -65,28 +24,6 @@ pub fn relpath(path: &str, start: &str) -> String {
     if parts.is_empty() { ".".to_string() } else { parts.join("/") }
 }
 
-/// `urllib.parse.unquote`. 잘못된 UTF-8은 U+FFFD로 바꾼다.
-pub fn unquote(text: &str) -> String {
-    if !text.contains('%') {
-        return text.to_string();
-    }
-    let bytes = text.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%'
-            && i + 2 < bytes.len()
-            && let (Some(h), Some(l)) = ((bytes[i + 1] as char).to_digit(16), (bytes[i + 2] as char).to_digit(16))
-        {
-            out.push((h * 16 + l) as u8);
-            i += 3;
-            continue;
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
 
 /// `urlparse(href)`가 돌려주는 `(scheme, netloc, path)`. 질의·조각·`;params`는 path에서 뺀다.
 pub fn urlparse_path(href: &str) -> (String, String, String) {
