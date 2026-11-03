@@ -240,6 +240,12 @@ fn sha1(data: &[u8]) -> [u8; 20] {
     out
 }
 
+/// 기본 HTML 캐시 디렉터리 `<temp>/tm-bookstore-<euid>`(0700). 공유 `/tmp`에 예측 가능한 이름으로 쓰면
+/// 다른 사용자가 미리 심은 파일이나 symlink를 따라갈 수 있어 사용자 전용 디렉터리를 쓴다.
+pub fn default_cache_dir() -> Option<PathBuf> {
+    sysdeps::private_temp_dir("tm-bookstore")
+}
+
 /// 상세 페이지 HTML 캐시 파일 이름. `uuid5(NAMESPACE_URL, url)`에 `.html`을 붙인다.
 pub fn cache_file_name(url: &str) -> String {
     const NAMESPACE_URL: [u8; 16] = [0x6b, 0xa7, 0xb8, 0x11, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8];
@@ -481,9 +487,9 @@ pub trait AbstractBookstore: Sync {
         &RealFs
     }
 
-    /// 상세 페이지 HTML 캐시 디렉터리 (`tempfile.gettempdir`)
-    fn tmp_dir(&self) -> PathBuf {
-        std::env::temp_dir()
+    /// 상세 페이지 HTML 캐시 디렉터리. `None`이면 캐시를 쓰지도 읽지도 않는다.
+    fn tmp_dir(&self) -> Option<PathBuf> {
+        default_cache_dir()
     }
 
     /// ISBN 검색 URL. 기본은 일반 검색과 같다.
@@ -517,7 +523,7 @@ pub trait AbstractBookstore: Sync {
     }
 
     fn _save_html_to_tmp(&self, html: &str, url: &str) {
-        let dir = self.tmp_dir();
+        let Some(dir) = self.tmp_dir() else { return };
         match self.fs().disk_free(&dir) {
             Ok(free) if free < MIN_FREE_BYTES => return,
             // 여유 공간을 못 재도 쓰기는 시도한다
@@ -538,7 +544,7 @@ pub trait AbstractBookstore: Sync {
 
     /// URL에 해당하는 임시 저장 HTML. 없거나 읽지 못하면 `None`이다.
     fn _load_html_from_tmp(&self, url: &str) -> Option<String> {
-        let path = self.tmp_dir().join(cache_file_name(url));
+        let path = self.tmp_dir()?.join(cache_file_name(url));
         let result = (|| {
             if !self.fs().is_file(&path)? {
                 return Ok(None);
@@ -801,8 +807,8 @@ macro_rules! bookstore_common {
             self.fs.as_ref()
         }
 
-        fn tmp_dir(&self) -> PathBuf {
-            self.tmp_dir.clone().unwrap_or_else(std::env::temp_dir)
+        fn tmp_dir(&self) -> Option<PathBuf> {
+            self.tmp_dir.clone().or_else(default_cache_dir)
         }
 
         fn supports_isbn_search(&self) -> bool {

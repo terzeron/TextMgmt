@@ -11,7 +11,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -193,6 +193,27 @@ impl FsOps for RealFs {
         }
         Ok(())
     }
+}
+
+/// 현재 사용자만 쓰는 임시 디렉터리 `<temp>/<name>-<euid>`. 자세한 조건은 [`private_dir_in`]을 본다.
+pub fn private_temp_dir(name: &str) -> Option<PathBuf> {
+    private_dir_in(&std::env::temp_dir(), name)
+}
+
+/// `parent/<name>-<euid>`를 0700으로 만들고 돌려준다. 공유 디렉터리에서 다른 사용자가 미리 심은
+/// 디렉터리나 symlink를 쓰지 않도록, 링크이거나 소유자가 다르거나 group·other 권한이 있으면 `None`이다.
+pub fn private_dir_in(parent: &Path, name: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::DirBuilderExt;
+    // SAFETY: geteuid는 인자가 없고 실패하지 않는다.
+    let uid = unsafe { libc::geteuid() };
+    let dir = parent.join(format!("{name}-{uid}"));
+    match fs::DirBuilder::new().mode(0o700).create(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(_) => return None,
+    }
+    let meta = fs::symlink_metadata(&dir).ok()?;
+    (meta.file_type().is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0).then_some(dir)
 }
 
 // ---------------------------------------------------------------------------

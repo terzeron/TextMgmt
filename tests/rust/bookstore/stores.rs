@@ -22,7 +22,7 @@
 //!     - `[기본]` `build_isbn_search_url(isbn)`(= `build_search_url(isbn)`), `search_by_keyword(keyword)`, `search_by_isbn(isbn)`
 //!     - `[기본]` `search(isbn, title, author) -> (Vec<SearchRow>, String, String)` (결과, 실제 검색어, 방식 `isbn`/`title_author`/`title`/`unknown`)
 //!     - `[기본]` `_fetch_search_results(url) -> Vec<SearchRow>`, `_load_html_from_tmp(url) -> Option<String>`, `_save_html_to_tmp(html, url)`
-//!     - `[기본]` `tmp_dir() -> PathBuf`(`std::env::temp_dir()`, `tempfile.gettempdir` 대응 seam)
+//!     - `[기본]` `tmp_dir() -> Option<PathBuf>`(`default_cache_dir()`, 사용자 전용 0700 디렉터리)
 //!       (구 `new_detail_session()`은 없앴다. 상세 페이지 스레드도 `with_session`으로 주입한 같은 `Arc<dyn HttpSession>`을 쓴다)
 //!   - 구상 클래스 `Yes24Bookstore`, `AladinBookstore`, `KyoboBookstore`, `RidibooksBookstore`, `NaverShoppingBookstore`,
 //!     `NaverSeriesBookstore`, `MunpiaBookstore`, `JoaraBookstore`, `NaverWebtoonBookstore`, `KakaoWebtoonBookstore`,
@@ -323,8 +323,8 @@ macro_rules! dummy_store {
                 self.session.as_ref()
             }
 
-            fn tmp_dir(&self) -> PathBuf {
-                self.tmp_dir.clone().unwrap_or_else(std::env::temp_dir)
+            fn tmp_dir(&self) -> Option<PathBuf> {
+                self.tmp_dir.clone().or_else(bookstore::stores::default_cache_dir)
             }
 
             fn build_search_url(&self, keyword: &str) -> String {
@@ -745,6 +745,40 @@ fn bookstore_search_trait_default_api_url_is_empty() {
 }
 
 #[test]
+fn html_cache_is_skipped_when_no_private_cache_dir_is_available() {
+    struct NoCache;
+    impl AbstractBookstore for NoCache {
+        fn base_url(&self) -> &str {
+            "https://default.example"
+        }
+        fn verbose(&self) -> bool {
+            false
+        }
+        fn session(&self) -> &dyn HttpSession {
+            static SESSION: bookstore::stores::UnavailableSession = bookstore::stores::UnavailableSession;
+            &SESSION
+        }
+        fn tmp_dir(&self) -> Option<PathBuf> {
+            None
+        }
+        fn build_search_url(&self, keyword: &str) -> String {
+            format!("https://default.example/?q={keyword}")
+        }
+        fn extract_search_links(&self, _html: &str) -> Vec<String> {
+            Vec::new()
+        }
+        fn extract_book_info(&self, _html: &str) -> Value {
+            json!({})
+        }
+    }
+
+    let url = format!("https://default.example/no-cache-{}", std::process::id());
+    NoCache._save_html_to_tmp("<html>x</html>", &url);
+    assert_eq!(NoCache._load_html_from_tmp(&url), None);
+    assert!(!std::env::temp_dir().join(bookstore::stores::cache_file_name(&url)).exists());
+}
+
+#[test]
 fn abstract_bookstore_defaults_work_without_overrides() {
     struct Defaults;
     impl AbstractBookstore for Defaults {
@@ -773,7 +807,8 @@ fn abstract_bookstore_defaults_work_without_overrides() {
     assert!(!store.supports_isbn_search());
     assert!(!store.author_first_search());
     assert_eq!(store.max_results(), MAX_RESULTS);
-    assert_eq!(store.tmp_dir(), std::env::temp_dir());
+    assert_eq!(store.tmp_dir(), bookstore::stores::default_cache_dir());
+    assert!(store.tmp_dir().unwrap().starts_with(std::env::temp_dir()));
     assert_eq!(store.build_isbn_search_url("123"), "https://default.example/?q=123");
     assert!(store.search_by_isbn("123").is_empty());
     assert!(store.search_by_keyword("offline").is_empty());
@@ -784,7 +819,7 @@ fn abstract_bookstore_defaults_work_without_overrides() {
     assert_eq!(store._load_html_from_tmp(&cache_url), None);
     store._save_html_to_tmp("<html>cached</html>", &cache_url);
     assert_eq!(store._load_html_from_tmp(&cache_url).as_deref(), Some("<html>cached</html>"));
-    let cache_path = std::env::temp_dir().join(bookstore::stores::cache_file_name(&cache_url));
+    let cache_path = store.tmp_dir().unwrap().join(bookstore::stores::cache_file_name(&cache_url));
     std::fs::remove_file(cache_path).unwrap();
 }
 

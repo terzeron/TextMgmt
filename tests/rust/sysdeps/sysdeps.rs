@@ -485,3 +485,51 @@ mod http {
         assert_eq!(ok.header("Content-Type"), None);
     }
 }
+
+mod private_dir {
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+
+    use sysdeps::private_dir_in;
+
+    /// 테스트가 만든 디렉터리의 소유자 = 현재 euid.
+    fn expected_name(parent: &std::path::Path) -> std::path::PathBuf {
+        parent.join(format!("cache-{}", fs::metadata(parent).unwrap().uid()))
+    }
+
+    #[test]
+    fn creates_a_0700_directory_and_reuses_it() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = private_dir_in(parent.path(), "cache").unwrap();
+        assert_eq!(dir, expected_name(parent.path()));
+        assert_eq!(fs::metadata(&dir).unwrap().mode() & 0o777, 0o700);
+        assert_eq!(private_dir_in(parent.path(), "cache"), Some(dir));
+    }
+
+    #[test]
+    fn rejects_a_directory_open_to_group_or_other() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = expected_name(parent.path());
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(private_dir_in(parent.path(), "cache"), None);
+    }
+
+    #[test]
+    fn rejects_a_symlink_even_to_a_private_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("real");
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
+        symlink(&target, expected_name(parent.path())).unwrap();
+        assert_eq!(private_dir_in(parent.path(), "cache"), None);
+    }
+
+    #[test]
+    fn rejects_a_regular_file_or_missing_parent() {
+        let parent = tempfile::tempdir().unwrap();
+        fs::write(expected_name(parent.path()), "x").unwrap();
+        assert_eq!(private_dir_in(parent.path(), "cache"), None);
+        assert_eq!(private_dir_in(&parent.path().join("missing"), "cache"), None);
+    }
+}

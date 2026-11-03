@@ -22,7 +22,7 @@
 //!     - `[기본]` `build_isbn_search_url(isbn)`(= `build_search_url(isbn)`), `search_by_keyword(keyword)`, `search_by_isbn(isbn)`
 //!     - `[기본]` `search(isbn, title, author) -> (Vec<SearchRow>, String, String)` (결과, 실제 검색어, 방식 `isbn`/`title_author`/`title`/`unknown`)
 //!     - `[기본]` `_fetch_search_results(url) -> Vec<SearchRow>`, `_load_html_from_tmp(url) -> Option<String>`, `_save_html_to_tmp(html, url)`
-//!     - `[기본]` `tmp_dir() -> PathBuf`(`std::env::temp_dir()`, `tempfile.gettempdir` 대응 seam)
+//!     - `[기본]` `tmp_dir() -> Option<PathBuf>`(`default_cache_dir()`, 사용자 전용 0700 디렉터리)
 //!       (구 `new_detail_session()`은 없앴다. 상세 페이지 스레드도 `with_session`으로 주입한 같은 `Arc<dyn HttpSession>`을 쓴다)
 //!   - 구상 클래스 `Yes24Bookstore`, `AladinBookstore`, `KyoboBookstore`, `RidibooksBookstore`, `NaverShoppingBookstore`,
 //!     `NaverSeriesBookstore`, `MunpiaBookstore`, `JoaraBookstore`, `NaverWebtoonBookstore`, `KakaoWebtoonBookstore`,
@@ -565,8 +565,8 @@ macro_rules! dummy_store {
                 self.session.as_ref()
             }
 
-            fn tmp_dir(&self) -> PathBuf {
-                self.tmp_dir.clone().unwrap_or_else(std::env::temp_dir)
+            fn tmp_dir(&self) -> Option<PathBuf> {
+                self.tmp_dir.clone().or_else(bookstore::stores::default_cache_dir)
             }
 
             fn build_search_url(&self, keyword: &str) -> String {
