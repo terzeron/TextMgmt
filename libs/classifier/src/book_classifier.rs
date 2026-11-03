@@ -61,14 +61,6 @@ fn strip(s: &str) -> &str {
 // 파일명·메타데이터
 // ---------------------------------------------------------------------------
 
-static EXPLICIT_TAGS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| tables::EXPLICIT_TAGS.iter().map(|(p, c)| (Regex::new(&format!("(?i){p}")).expect("정규식"), *c)).collect());
-
-/// 파일명(URL 디코딩 후)에 명시된 장르 태그나 접두어를 표준 카테고리로 옮긴다.
-pub fn extract_explicit_genre(filename: &str) -> Option<String> {
-    let name = text_extractor::path::unquote(filename);
-    EXPLICIT_TAGS.iter().find(|(re, _)| re.is_match(&name)).map(|(_, c)| (*c).to_string())
-}
-
 /// EPUB 의 OPF 에서 읽은 메타데이터.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EpubMetadata {

@@ -217,7 +217,6 @@ dependencies = [
  "hwp3_parser",
  "idna",
  "image",
- "isbn",
  "jpeg-encoder",
  "jsonwebtoken",
  "log",
@@ -399,7 +398,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "encoding_rs",
- "fancy-regex",
  "flate2",
  "htmlkit",
  "lopdf",
@@ -1029,7 +1027,6 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "hwp3_parser",
- "isbn",
  "lopdf",
  "pyfmt",
  "regex",
@@ -3857,7 +3854,6 @@ dependencies = [
  "classifier",
  "es_client",
  "log",
- "regex",
  "serde_json",
  "tempfile",
 ]

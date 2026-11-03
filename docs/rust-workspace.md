@@ -41,6 +41,9 @@ docs/       문서
 
 - `-h`/`--help`는 도움말을 출력한다. `loader`와 `trainer`는 인자 없이 실행하면 사용법을 출력하고 코드 1로 끝난다.
 - 잘못된 인자의 출력 위치와 종료 코드는 각 CLI 계약을 따른다.
+- **테스트 파일은 소스 모듈과 1:1로 둔다.** `tests/rust/<crate>/<모듈 경로>.rs` 하나가 `src/<모듈 경로>.rs` 하나를 검증한다(예: `bookdoctor/epub/security.rs`).
+  HTTP 라우트, CLI 진입점, 실행 파일, 소켓, 컨테이너를 거치는 테스트는 `tests/rust/<crate>/integration/<시나리오>.rs`에 두고 target 이름을 `integration_<시나리오>`로 한다.
+  `*_gaps`, `*_parity`, `*_1`처럼 작업 이력을 따르는 파일 이름은 쓰지 않는다.
 - **테스트를 먼저 쓴다(TDD).** 정해진 동작 사례를 Rust 테스트로 먼저 옮기고 실패를 확인한 뒤 구현한다.
 - **커버리지는 100%에 가깝게 유지한다.** `cargo llvm-cov --workspace --summary-only`.
 - **라이브러리와 backend는 도구에 의존하지 않는다.** 공유할 코드는 `libs/`로 올린다.
@@ -94,7 +97,7 @@ cargo run -p trainer -- reclassify 0_inbox --library-root /books --model tmp/cla
 - `reclassify`는 기본 미리보기다. `--apply`를 붙여야 이동하며, 목적지 충돌과 카테고리 심볼릭 링크를 거부한다.
   같은 filesystem에서는 inode를 보존하고, 다른 filesystem에서는 복사 후 원본을 지운다. 파일 이동 실패를 출력·집계한 뒤 종료 코드 0을 반환한다.
 - 분류 도구는 backend가 아니라 `libs/classifier`에 의존한다. 기본 모델 경로는 전과 같이 `backend/classifier/export`다.
-- 테스트는 `tests/rust/trainer/cli.rs`에 등록했다. 분류기 자체 테스트는 `tests/rust/classifier/`에 있다. 기존 `tests/rust/backend/classify_cli*.rs`는 구현 전 가정 API로 작성한 미등록 테스트다.
+- 테스트는 `tests/rust/trainer/`에 모듈별로 있고, 실행 파일을 띄우는 테스트는 `integration/cli.rs`에 있다. 분류기 자체 테스트는 `tests/rust/classifier/`에 있다.
   새 테스트는 실제 export 모델과 현재 `EsTransport`·`CommandRunner` 계약으로 실행한다.
 
 검증: `cargo test -p trainer --locked`, `cargo clippy -p trainer --all-targets --locked -- -D warnings`.

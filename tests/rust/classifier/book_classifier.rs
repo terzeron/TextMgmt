@@ -7,7 +7,6 @@ mod book_classifier {
     //! 원본: tests/test_book_classifier.py
     //!
     //! 가정한 API:
-    //! - `classifier::book_classifier::extract_explicit_genre(name: &str) -> Option<String>`
     //! - `classifier::book_classifier::inspect_epub_metadata(path: &Path) -> EpubMetadata` (title/author/subject/description: String, `PartialEq + Debug`)
     //! - `classifier::book_classifier::inspect_txt_content(path: &Path) -> TxtContent` (hashtags: Vec<String>, snippet: String, header_genre: Option<String>)
     //! - `classifier::book_classifier::clean_filename_to_author_title(name: &str) -> (String, String, String)`
@@ -44,17 +43,6 @@ mod book_classifier {
 
     fn empty_meta() -> EpubMetadata {
         EpubMetadata { title: String::new(), author: String::new(), subject: String::new(), description: String::new() }
-    }
-
-    #[test]
-    fn test_extract_explicit_genre() {
-        assert_eq!(extract_explicit_genre("[로판] 악녀는 오늘도").as_deref(), Some("3_여성향"));
-        assert_eq!(extract_explicit_genre("(무협) 광마회귀 1-100").as_deref(), Some("3_무협"));
-        assert_eq!(extract_explicit_genre("[판타지] 달빛조각사 01권").as_deref(), Some("3_판타지"));
-        assert_eq!(extract_explicit_genre("[BL] 사랑의 형태").as_deref(), Some("9_BLGL"));
-        assert_eq!(extract_explicit_genre("[SF] 은하영웅전설").as_deref(), Some("3_SF"));
-        assert_eq!(extract_explicit_genre("[라노벨] 소드아트온라인").as_deref(), Some("3_라이트노벨"));
-        assert_eq!(extract_explicit_genre("일반 소설 제목.txt"), None);
     }
 
     #[test]
@@ -1018,9 +1006,6 @@ mod book_classifier_parity {
             let want: Vec<&str> = c["clean"].as_array().unwrap().iter().map(s).collect();
             if [a.as_str(), t.as_str(), st.as_str()] != want[..] {
                 bad.push(format!("clean {name:?}: rust {:?} python {want:?}", (&a, &t, &st)));
-            }
-            if extract_explicit_genre(name).as_deref() != c["genre"].as_str() {
-                bad.push(format!("genre {name:?}: rust {:?} python {}", extract_explicit_genre(name), c["genre"]));
             }
         }
         assert!(bad.is_empty(), "{} 건 불일치: {:?}", bad.len(), &bad[..bad.len().min(5)]);

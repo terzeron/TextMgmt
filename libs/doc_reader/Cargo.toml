@@ -12,7 +12,6 @@ ego-tree = "0.11"
 encoding_rs = "0.8.42"
 flate2 = "1"
 hwp3_parser = { path = "../hwp3_parser" }
-isbn = { path = "../isbn" }
 lopdf.workspace = true
 pyfmt = { path = "../pyfmt" }
 regex = "1.13.1"
