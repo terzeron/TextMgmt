@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use parser_timeout::run_with_hard_timeout;
+use sysdeps::timeout::run_with_hard_timeout;
 
 use crate::TEXT_SIZE;
 use crate::pytext::{head_chars, is_space, keep_word_chars};

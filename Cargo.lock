@@ -1050,7 +1050,6 @@ dependencies = [
  "hwp3_parser",
  "isbn",
  "lopdf",
- "parser_timeout",
  "pyfmt",
  "regex",
  "roxmltree",
@@ -1272,9 +1271,9 @@ dependencies = [
  "doc_reader",
  "isbn",
  "lopdf",
- "parser_timeout",
  "serde_json",
  "stat",
+ "sysdeps",
  "tempfile",
 ]
 
@@ -1976,7 +1975,6 @@ dependencies = [
  "flate2",
  "htmlkit",
  "lopdf",
- "parser_timeout",
  "regex",
  "stat",
  "sysdeps",
@@ -2177,9 +2175,9 @@ dependencies = [
  "hwp3_parser",
  "hwp3_tables",
  "isbn",
- "parser_timeout",
  "serde_json",
  "stat",
+ "sysdeps",
  "tempfile",
  "zip",
 ]
@@ -2579,13 +2577,6 @@ dependencies = [
  "regex-syntax",
  "structmeta",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "parser_timeout"
-version = "0.1.0"
-dependencies = [
- "libc",
 ]
 
 [[package]]

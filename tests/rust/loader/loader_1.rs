@@ -1947,7 +1947,7 @@ mod test_pdf_mojibake_detection {
 // ---- TestPdfParserTimeout -------------------------------------------------------------------
 //
 // 원본에서 이 클래스의 앞 7개(time_limit 2개 + 워커 스레드 1개, run_with_hard_timeout 4개)는 utils.parser_timeout 단위 테스트라
-// tests/rust/parser_timeout/ 에 대응 테스트가 있어 옮기지 않았다.
+// tests/rust/sysdeps/timeout.rs 에 대응 테스트가 있어 옮기지 않았다.
 
 mod test_pdf_parser_timeout {
     use super::*;

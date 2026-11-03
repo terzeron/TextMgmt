@@ -55,7 +55,7 @@ pub fn detect_file_type(path: &Path, declared: &str) -> Option<String> {
 
 pub type FileInspector<'a> = dyn Fn(&Path) -> Option<&'static str> + 'a;
 pub type PageCounter<'a> = dyn Fn(&Path) -> Option<usize> + 'a;
-pub type FallbackPageCounter<'a> = dyn Fn(&Path) -> Result<usize, parser_timeout::ParserTimeout> + 'a;
+pub type FallbackPageCounter<'a> = dyn Fn(&Path) -> Result<usize, sysdeps::timeout::ParserTimeout> + 'a;
 
 #[derive(Clone, Copy, Default)]
 pub struct ReadHooks<'a> {

@@ -34,7 +34,6 @@ flate2 = "1"
 hwp3_parser = { path = "../hwp3_parser" }
 isbn = { path = "../isbn" }
 lopdf.workspace = true
-parser_timeout = { path = "../parser_timeout" }
 pyfmt = { path = "../pyfmt" }
 regex = "1.13.1"
 roxmltree = "0.21"

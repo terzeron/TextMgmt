@@ -37,6 +37,6 @@ encoding_rs = "0.8.35"
 hwp3_parser = { path = "../../libs/hwp3_parser" }
 hwp3_tables = { path = "../../libs/hwp3_tables" }
 isbn = { path = "../../libs/isbn" }
-parser_timeout = { path = "../../libs/parser_timeout" }
+sysdeps = { path = "../../libs/sysdeps" }
 tempfile = "3.27.0"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }

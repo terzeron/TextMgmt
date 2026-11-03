@@ -21,6 +21,7 @@ pub mod pdf;
 // 기존 호출자의 모듈 경로는 유지하되 구현은 MuPDF Rust worker를 사용한다.
 pub use pdf as poppler;
 mod native_pdf;
+pub mod timeout;
 
 /// 환경 변수 조회 함수. `file_record::config::Config::from_env`와 같은 모양이다.
 pub type EnvFn<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -253,52 +254,62 @@ fn kill_process_group(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
+/// 자식 프로세스를 실행하고 출력을 모은다. `SystemRunner`와 [`timeout::run_with_hard_timeout`]이 함께 쓰는 실행 엔진이다.
+///
+/// 자식은 새 process group으로 띄우고 stdin을 닫는다. `timeout`을 넘기면 group 전체를 죽이고 `Timeout`이다.
+/// 인자는 `Command`로 받아 UTF-8이 아닌 경로도 그대로 넘긴다.
+pub(crate) fn run_child(mut cmd: Command, timeout: Option<Duration>) -> Result<std::process::Output, CommandError> {
+    let mut child = cmd
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| if e.kind() == io::ErrorKind::NotFound { CommandError::NotFound } else { CommandError::Failed(e.to_string()) })?;
+    // 파이프가 가득 차서 자식이 멈추지 않게 별도 스레드에서 비운다.
+    let out = drain(child.stdout.take().expect("stdout 파이프"));
+    let err = drain(child.stderr.take().expect("stderr 파이프"));
+    let deadline = timeout.map(|t| Instant::now() + t);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(e) => return Err(CommandError::Failed(e.to_string())),
+        }
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            kill_process_group(&mut child);
+            return Err(CommandError::Timeout);
+        }
+        thread::sleep(Duration::from_millis(5));
+    };
+    // 자식이 끝나도 손자가 파이프를 쥐고 있으면 EOF가 오지 않는다. 남은 기한까지만 기다린다.
+    let mut collect = |rx: mpsc::Receiver<Vec<u8>>| match deadline {
+        None => Ok(rx.recv().unwrap_or_default()),
+        Some(d) => match rx.recv_timeout(d.saturating_duration_since(Instant::now())) {
+            Ok(bytes) => Ok(bytes),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(Vec::new()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                kill_process_group(&mut child);
+                Err(CommandError::Timeout)
+            }
+        },
+    };
+    let (stdout, stderr) = (collect(out)?, collect(err)?);
+    Ok(std::process::Output { status, stdout, stderr })
+}
+
 impl CommandRunner for SystemRunner {
     fn run(&self, argv: &[String], timeout: Option<Duration>) -> Result<CommandOutput, CommandError> {
         let (program, args) = argv.split_first().ok_or_else(|| CommandError::Failed("빈 argv".into()))?;
-        let mut child = Command::new(program)
-            .args(args)
-            .process_group(0)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| if e.kind() == io::ErrorKind::NotFound { CommandError::NotFound } else { CommandError::Failed(e.to_string()) })?;
-        // 파이프가 가득 차서 자식이 멈추지 않게 별도 스레드에서 비운다.
-        let out = drain(child.stdout.take().expect("stdout 파이프"));
-        let err = drain(child.stderr.take().expect("stderr 파이프"));
-        let deadline = timeout.map(|t| Instant::now() + t);
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {}
-                Err(e) => return Err(CommandError::Failed(e.to_string())),
-            }
-            if deadline.is_some_and(|d| Instant::now() >= d) {
-                kill_process_group(&mut child);
-                return Err(CommandError::Timeout);
-            }
-            thread::sleep(Duration::from_millis(5));
-        };
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        let output = run_child(cmd, timeout)?;
         let returncode = {
             use std::os::unix::process::ExitStatusExt;
             // Python은 시그널로 죽으면 음수 시그널 번호를 돌려준다.
-            status.code().unwrap_or_else(|| -status.signal().unwrap_or(1))
+            output.status.code().unwrap_or_else(|| -output.status.signal().unwrap_or(1))
         };
-        // 자식이 끝나도 손자가 파이프를 쥐고 있으면 EOF가 오지 않는다. 남은 기한까지만 기다린다.
-        let mut collect = |rx: mpsc::Receiver<Vec<u8>>| match deadline {
-            None => Ok(rx.recv().unwrap_or_default()),
-            Some(d) => match rx.recv_timeout(d.saturating_duration_since(Instant::now())) {
-                Ok(bytes) => Ok(bytes),
-                Err(mpsc::RecvTimeoutError::Disconnected) => Ok(Vec::new()),
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    kill_process_group(&mut child);
-                    Err(CommandError::Timeout)
-                }
-            },
-        };
-        let (stdout, stderr) = (collect(out)?, collect(err)?);
-        Ok(CommandOutput { returncode, stdout, stderr })
+        Ok(CommandOutput { returncode, stdout: output.stdout, stderr: output.stderr })
     }
 
     fn which(&self, program: &str) -> Option<PathBuf> {

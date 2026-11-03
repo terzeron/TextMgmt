@@ -1,13 +1,13 @@
 //! 파서 시간 상한 테스트 (tests/test_parser_timeout.py 이식).
 //! Python은 SIGALRM으로 실행 중인 코드에 예외를 던지고 fork한 자식을 죽인다. Rust는 같은 목적을
-//! 협력적 `Deadline`, 스레드 기반 `run_with_timeout`, 자식 프로세스 강제 종료 `run_with_hard_timeout`로 나눈다.
+//! 스레드 기반 `run_with_timeout`, 자식 프로세스 강제 종료 `run_with_hard_timeout`로 나눈다.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use parser_timeout::*;
+use sysdeps::timeout::*;
 
 #[test]
 fn time_limit_returns_the_value_when_the_work_finishes_in_time() {
@@ -34,23 +34,6 @@ fn a_panic_inside_the_work_is_passed_through_like_the_child_process_error() {
     let caught = catch_unwind(AssertUnwindSafe(|| run_with_timeout(2.0, "t", || -> i32 { panic!("Something went wrong") })));
     let payload = caught.unwrap_err();
     assert_eq!(payload.downcast_ref::<&str>().copied(), Some("Something went wrong"));
-}
-
-#[test]
-fn deadline_checks_are_cooperative() {
-    let d = Deadline::new(0.05, "slow parser");
-    assert!(d.check().is_ok());
-    assert!(!d.expired());
-    thread::sleep(Duration::from_millis(80));
-    assert!(d.expired());
-    assert_eq!(d.check().unwrap_err().message, "slow parser");
-    assert!(d.remaining() == Duration::ZERO);
-    assert!(Deadline::new(10.0, "x").remaining() > Duration::from_secs(5));
-}
-
-#[test]
-fn the_retry_interval_matches_the_python_constant() {
-    assert_eq!(PARSER_TIMEOUT_RETRY_INTERVAL, 0.5);
 }
 
 #[test]

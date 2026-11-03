@@ -11,6 +11,10 @@ name = "sysdeps"
 path = "../../tests/rust/sysdeps/sysdeps.rs"
 
 [[test]]
+name = "timeout"
+path = "../../tests/rust/sysdeps/timeout.rs"
+
+[[test]]
 name = "native_pdf"
 path = "../../tests/rust/sysdeps/native_pdf.rs"
 

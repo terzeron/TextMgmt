@@ -16,9 +16,9 @@ corpus_common = { path = "../corpus_common" }
 doc_reader = { path = "../doc_reader" }
 isbn = { path = "../isbn" }
 lopdf.workspace = true
-parser_timeout = { path = "../parser_timeout" }
 serde_json = { workspace = true, features = ["preserve_order"] }
 stat = { path = "../stat" }
+sysdeps = { path = "../sysdeps" }
 
 [dev-dependencies]
 tempfile = "3.27.0"

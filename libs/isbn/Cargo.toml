@@ -15,7 +15,6 @@ corpus_common = { path = "../corpus_common" }
 flate2 = "1"
 htmlkit = { path = "../htmlkit" }
 lopdf.workspace = true
-parser_timeout = { path = "../parser_timeout" }
 sysdeps = { path = "../sysdeps" }
 regex = "1.13.1"
 stat = { path = "../stat" }

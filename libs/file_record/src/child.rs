@@ -8,7 +8,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use doc_reader::pdf::{PDF_STAGE_TIMEOUT, Stage, StageError, StageRunner};
-use parser_timeout::run_with_hard_timeout;
+use sysdeps::timeout::run_with_hard_timeout;
 use stat::Stat;
 
 use crate::config::Config;
@@ -108,7 +108,7 @@ pub fn run_isbn_pdf_stage_command(args: &[String], out: &mut dyn Write) -> i32 {
 
 #[derive(Debug)]
 pub enum ChildReadError {
-    Timeout(parser_timeout::ParserTimeout),
+    Timeout(sysdeps::timeout::ParserTimeout),
     Other(String),
 }
 

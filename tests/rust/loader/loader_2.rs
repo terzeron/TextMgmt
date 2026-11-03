@@ -54,7 +54,7 @@ use loader::cli::{RunHooks, World, parse_options, run, run_with_hooks};
 use file_record::config::Config;
 use loader::flow::{recursive_files, report_problems, sample_files};
 use file_record::record::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, zip_container_type};
-use parser_timeout::ParserTimeout;
+use sysdeps::timeout::ParserTimeout;
 use serde_json::{Value, json};
 use stat::Stat;
 use tempfile::TempDir;
