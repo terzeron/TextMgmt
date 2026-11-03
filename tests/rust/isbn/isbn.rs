@@ -2,18 +2,18 @@
 //! Python 테스트는 subprocess와 pypdfium2·pypdf를 monkeypatch로 바꾼다. Rust는 같은 자리를
 //! `Backends`로 주입한다.
 
-use std::cell::RefCell;
 use std::fs;
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
 
 use isbn::*;
+use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 use stat::Stat;
 
 fn write(p: &Path, text: &str) {
@@ -211,26 +211,49 @@ fn epub_opf_is_found_by_a_case_sensitive_suffix_and_uses_the_first_one() {
 
 // ---- 외부 명령 ----
 
-type Answer = Box<dyn Fn(&str, &[String]) -> io::Result<CmdOutput>>;
+type Answer = Box<dyn Fn(&str, &[String]) -> Result<CommandOutput, CommandError> + Send + Sync>;
 
 struct Fake {
-    calls: RefCell<Vec<Vec<String>>>,
+    calls: Mutex<Vec<Vec<String>>>,
+    timeouts: Mutex<Vec<Option<Duration>>>,
     answer: Answer,
 }
 
 impl CommandRunner for Fake {
-    fn run(&self, program: &str, args: &[String]) -> io::Result<CmdOutput> {
-        self.calls.borrow_mut().push(std::iter::once(program.to_string()).chain(args.iter().cloned()).collect());
-        (self.answer)(program, args)
+    fn run(&self, argv: &[String], timeout: Option<Duration>) -> Result<CommandOutput, CommandError> {
+        self.calls.lock().unwrap().push(argv.to_vec());
+        self.timeouts.lock().unwrap().push(timeout);
+        (self.answer)(&argv[0], &argv[1..])
+    }
+
+    fn which(&self, _program: &str) -> Option<std::path::PathBuf> {
+        None
     }
 }
 
-fn fake(answer: impl Fn(&str, &[String]) -> io::Result<CmdOutput> + 'static) -> Fake {
-    Fake { calls: RefCell::new(Vec::new()), answer: Box::new(answer) }
+fn fake(answer: impl Fn(&str, &[String]) -> Result<CommandOutput, CommandError> + Send + Sync + 'static) -> Fake {
+    Fake { calls: Mutex::new(Vec::new()), timeouts: Mutex::new(Vec::new()), answer: Box::new(answer) }
 }
 
-fn out(code: i32, stdout: &str) -> io::Result<CmdOutput> {
-    Ok(CmdOutput { code: Some(code), stdout: stdout.to_string() })
+fn out(code: i32, stdout: &str) -> Result<CommandOutput, CommandError> {
+    Ok(CommandOutput { returncode: code, stdout: stdout.as_bytes().to_vec(), stderr: Vec::new() })
+}
+
+#[test]
+fn external_tools_run_under_the_isbn_time_limit() {
+    let f = fake(|prog, _| if prog == "djvused" { out(0, "2") } else { out(0, "ISBN 9788994492032") });
+    extract_from_djvu(Path::new("b.djvu"), &f);
+    extract_from_hwp(Path::new("b.hwp"), &f);
+    let timeouts = f.timeouts.lock().unwrap();
+    assert_eq!(timeouts.len(), 4, "djvused 1번, djvutxt 2번, strings 1번");
+    assert!(timeouts.iter().all(|t| *t == Some(Duration::from_secs_f64(PDF_ISBN_TIMEOUT))), "{timeouts:?}");
+}
+
+#[test]
+fn external_tools_that_time_out_yield_no_isbn() {
+    assert!(extract_from_djvu(Path::new("b"), &fake(|_, _| Err(CommandError::Timeout))).is_empty());
+    assert!(extract_from_djvu(Path::new("b"), &fake(|p, _| if p == "djvused" { out(0, "10") } else { Err(CommandError::Timeout) })).is_empty());
+    assert!(extract_from_hwp(Path::new("b.hwp"), &fake(|_, _| Err(CommandError::Timeout))).is_empty());
 }
 
 #[test]
@@ -238,7 +261,7 @@ fn djvu_text_comes_from_the_first_and_last_five_pages() {
     let f = fake(|prog, _| if prog == "djvused" { out(0, "10\n") } else { out(0, "ISBN 9788994492032") });
     let r = extract_from_djvu(Path::new("book.djvu"), &f);
     assert!(r.contains(&"9788994492032".to_string()));
-    let calls = f.calls.borrow();
+    let calls = f.calls.lock().unwrap();
     assert_eq!(calls[0], ["djvused", "book.djvu", "-e", "n"]);
     assert_eq!(calls[1], ["djvutxt", "--page=1,2,3,4,5", "book.djvu"]);
     assert_eq!(calls[2], ["djvutxt", "--page=6,7,8,9,10", "book.djvu"]);
@@ -248,12 +271,12 @@ fn djvu_text_comes_from_the_first_and_last_five_pages() {
 fn djvu_with_few_pages_and_every_failure_mode() {
     let f = fake(|prog, _| if prog == "djvused" { out(0, "3") } else { out(0, "x") });
     extract_from_djvu(Path::new("b.djvu"), &f);
-    assert_eq!(f.calls.borrow()[1][1], "--page=1,2,3");
-    assert_eq!(f.calls.borrow()[2][1], "--page=1,2,3");
+    assert_eq!(f.calls.lock().unwrap()[1][1], "--page=1,2,3");
+    assert_eq!(f.calls.lock().unwrap()[2][1], "--page=1,2,3");
 
     assert!(extract_from_djvu(Path::new("b"), &fake(|_, _| out(1, ""))).is_empty());
     assert!(extract_from_djvu(Path::new("b"), &fake(|_, _| out(0, "not_a_number\n"))).is_empty());
-    assert!(extract_from_djvu(Path::new("b"), &fake(|_, _| Err(io::Error::from(io::ErrorKind::NotFound)))).is_empty());
+    assert!(extract_from_djvu(Path::new("b"), &fake(|_, _| Err(CommandError::NotFound))).is_empty());
     // 텍스트 추출이 모두 실패하면 비어 있다.
     assert!(extract_from_djvu(Path::new("b"), &fake(|p, _| if p == "djvused" { out(0, "10") } else { out(1, "") })).is_empty());
     // 페이지 수가 0이면 범위를 만들지 않는다.
@@ -265,19 +288,11 @@ fn djvu_with_few_pages_and_every_failure_mode() {
 fn hwp_strings_are_cut_to_head_and_tail() {
     assert!(extract_from_hwp(Path::new("b.hwp"), &fake(|_, _| out(0, "ISBN 9788994492032"))).contains(&"9788994492032".to_string()));
     assert!(extract_from_hwp(Path::new("b.hwp"), &fake(|_, _| out(1, ""))).is_empty());
-    assert!(extract_from_hwp(Path::new("b.hwp"), &fake(|_, _| Err(io::Error::from(io::ErrorKind::NotFound)))).is_empty());
+    assert!(extract_from_hwp(Path::new("b.hwp"), &fake(|_, _| Err(CommandError::NotFound))).is_empty());
     assert!(extract_from_hwp(Path::new("b.hwp"), &fake(|_, _| out(0, ""))).is_empty());
     // 가운데에 있는 번호는 버려진다.
     let long = format!("{}ISBN 9788994492032{}", "x".repeat(HEAD_TAIL_SIZE + 10), "y".repeat(HEAD_TAIL_SIZE + 10));
     assert!(extract_from_hwp(Path::new("b.hwp"), &fake(move |_, _| out(0, &long))).is_empty());
-}
-
-#[test]
-fn the_real_command_runner_reports_missing_programs() {
-    let err = SystemRunner.run("definitely-not-a-program-xyz", &[]).unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::NotFound);
-    let ok = SystemRunner.run("sh", &["-c".into(), "echo hi".into()]).unwrap();
-    assert_eq!((ok.code, ok.stdout.trim()), (Some(0), "hi"));
 }
 
 // ---- PDF ----

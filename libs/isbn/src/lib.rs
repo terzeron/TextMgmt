@@ -13,11 +13,12 @@ use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use corpus_common::reader::{decode_utf8_ignore, open_zip};
 use htmlkit::{local_name, text_of, tokenize};
 use sysdeps::timeout::{run_with_hard_timeout, run_with_timeout};
+use sysdeps::{CommandError, CommandRunner, SystemRunner};
 use regex::Regex;
 use stat::Stat;
 
@@ -191,24 +192,12 @@ pub fn search_in_content_bytes(content: &[u8]) -> Vec<String> {
 
 // ---------------------------------------------------------------- 외부 명령
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CmdOutput {
-    pub code: Option<i32>,
-    pub stdout: String,
-}
-
-/// 외부 명령 실행. 테스트가 `djvused`·`strings` 같은 도구 없이 확인할 수 있게 분리했다.
-pub trait CommandRunner {
-    fn run(&self, program: &str, args: &[String]) -> io::Result<CmdOutput>;
-}
-
-pub struct SystemRunner;
-
-impl CommandRunner for SystemRunner {
-    fn run(&self, program: &str, args: &[String]) -> io::Result<CmdOutput> {
-        let out = Command::new(program).args(args).output()?;
-        Ok(CmdOutput { code: out.status.code(), stdout: decode_utf8_ignore(&out.stdout) })
-    }
+/// 외부 도구(`djvused`, `djvutxt`, `strings`)를 시간 상한 안에서 실행하고 (종료 코드, 표준 출력)을 돌려준다.
+/// 상한은 PDF ISBN 추출과 같은 [`PDF_ISBN_TIMEOUT`]이다. 넘기면 프로세스를 죽이고 `Err(Timeout)`이다.
+fn run_tool(runner: &dyn CommandRunner, program: &str, args: &[String]) -> Result<(i32, String), CommandError> {
+    let argv: Vec<String> = std::iter::once(program.to_owned()).chain(args.iter().cloned()).collect();
+    let out = runner.run(&argv, Some(Duration::from_secs_f64(PDF_ISBN_TIMEOUT)))?;
+    Ok((out.returncode, decode_utf8_ignore(&out.stdout)))
 }
 
 fn path_arg(path: &Path) -> String {
@@ -218,18 +207,18 @@ fn path_arg(path: &Path) -> String {
 /// DJVU: 앞 5쪽과 뒤 5쪽의 텍스트만 본다. 도구가 없으면 빈 목록이다.
 pub fn extract_from_djvu(path: &Path, runner: &dyn CommandRunner) -> Vec<String> {
     let file = path_arg(path);
-    let Ok(pages) = runner.run("djvused", &[file.clone(), "-e".into(), "n".into()]) else { return Vec::new() };
-    if pages.code != Some(0) {
+    let Ok((code, pages)) = run_tool(runner, "djvused", &[file.clone(), "-e".into(), "n".into()]) else { return Vec::new() };
+    if code != 0 {
         return Vec::new();
     }
-    let Ok(total) = pages.stdout.trim().parse::<usize>() else { return Vec::new() };
+    let Ok(total) = pages.trim().parse::<usize>() else { return Vec::new() };
 
     let head: Vec<String> = (1..=total.min(5)).map(|i| i.to_string()).collect();
     let tail: Vec<String> = (total.saturating_sub(4).max(1)..=total).map(|i| i.to_string()).collect();
     let mut content = String::new();
     for range in [head.join(","), tail.join(",")] {
-        match runner.run("djvutxt", &[format!("--page={range}"), file.clone()]) {
-            Ok(o) if o.code == Some(0) => content.push_str(&o.stdout),
+        match run_tool(runner, "djvutxt", &[format!("--page={range}"), file.clone()]) {
+            Ok((0, text)) => content.push_str(&text),
             Ok(_) => {}
             Err(_) => return Vec::new(),
         }
@@ -239,11 +228,11 @@ pub fn extract_from_djvu(path: &Path, runner: &dyn CommandRunner) -> Vec<String>
 
 /// HWP: `strings` 출력의 앞뒤만 본다. 도구가 없으면 빈 목록이다.
 pub fn extract_from_hwp(path: &Path, runner: &dyn CommandRunner) -> Vec<String> {
-    let Ok(out) = runner.run("strings", &[path_arg(path)]) else { return Vec::new() };
-    if out.code != Some(0) {
+    let Ok((code, out)) = run_tool(runner, "strings", &[path_arg(path)]) else { return Vec::new() };
+    if code != 0 {
         return Vec::new();
     }
-    let content = read_head_tail_from_content(&out.stdout, HEAD_TAIL_SIZE);
+    let content = read_head_tail_from_content(&out, HEAD_TAIL_SIZE);
     if content.is_empty() { Vec::new() } else { search_in_content(&content) }
 }
 
@@ -341,7 +330,7 @@ pub fn pdf_text_primary(path: &Path) -> Result<(String, usize), String> {
 
 /// Poppler로 앞뒤 쪽 텍스트와 전체 쪽수를 읽는다.
 pub fn pdf_text_poppler(path: &Path) -> Result<(String, usize), String> {
-    let runner = sysdeps::SystemRunner;
+    let runner = SystemRunner;
     let total = sysdeps::pdf::page_count(&runner, path)?;
     let mut text = String::new();
     for idx in head_tail_page_indices(total, PDF_ISBN_PAGE_WINDOW) {

@@ -25,7 +25,7 @@ docs/       문서
 | `db` | MySQL 접근 추상화와 카테고리 매핑 저장소(`category_mapping`) |
 | `classifier` | 도서 분류기: 모델 학습·추론, 코퍼스, 서점 정책, 서점 응답 캐시. backend와 분류 도구가 함께 쓴다 |
 | `file_record` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리. loader와 backend가 함께 쓴다 |
-| `parser_timeout` | 파서 시간 상한, 스레드 제한, 자식 프로세스 종료 |
+| `sysdeps` | 시계, 파일시스템, 외부 명령, HTTP 같은 시스템 능력의 trait와 실제 구현. 파서 시간 상한(`timeout`)과 PDF worker(`tm-pdf-worker`)를 포함한다 |
 | `isbn` | 파일에서 ISBN 추출(TXT·EPUB·PDF·DJVU·HWP) |
 | `hwp3_tables`, `hwp3_parser` | HWP 3.x 텍스트 추출 |
 
