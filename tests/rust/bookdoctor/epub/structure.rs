@@ -1,5 +1,4 @@
-//! EPUB 구조 검사 테스트 (옛 인코딩 검사 도구의 epub-structure 테스트를 이식).
-
+#[path = "../support/mod.rs"]
 mod support;
 
 use std::fs;

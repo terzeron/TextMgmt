@@ -1,11 +1,10 @@
-//! 범용 ZIP 빠른 점검 테스트: 열 수 있는지, 멤버를 풀 수 있는지, 이름·압축비·내장 실행 파일을 본다.
-
+#[path = "../support/mod.rs"]
 mod support;
 
 use std::fs;
 use std::path::Path;
 
-use bookdoctor::cli::{Options, parse, run, run_with_env};
+use bookdoctor::cli::{Options, parse};
 use bookdoctor::scan::scan_file;
 use bookdoctor::{Category, FileReport, Format, Severity};
 
@@ -180,20 +179,6 @@ fn encrypted_member_is_incomplete_not_clean() {
     let r = scan(&p);
     assert!(r.incomplete);
     assert!(r.reasons.iter().any(|x| x.contains("secret.txt") && FileReport::is_encrypted_reason(x)), "{:?}", r.reasons);
-}
-
-#[test]
-fn member_name_with_escape_never_reaches_the_terminal_raw() {
-    let d = tempfile::tempdir().unwrap();
-    let p = d.path().join("esc.zip");
-    support::zip_of(&p, &[("a\u{1b}[2J.exe", b"x")]);
-    let mut out = Vec::new();
-    run_with_env(&["scan".into(), "--min-severity".into(), "low".into(), p.to_string_lossy().into_owned()], &mut out, false, false);
-    assert!(!String::from_utf8(out).unwrap().contains('\u{1b}'));
-    let mut json = Vec::new();
-    run(&["scan".into(), "--json".into(), "--min-severity".into(), "low".into(), p.to_string_lossy().into_owned()], &mut json);
-    let json = String::from_utf8(json).unwrap();
-    assert!(!json.contains("\\u001b") && !json.contains('\u{1b}'), "{json}");
 }
 
 #[test]

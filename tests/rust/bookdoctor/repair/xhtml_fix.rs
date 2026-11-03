@@ -1,5 +1,4 @@
-//! `--fix-xhtml`: 뷰어가 거부하는 XHTML을 고친다. 마크업 수리, 빈·깨진 멤버 처리, EPUB 재구성, 휴지통 보관과 제자리 덮어쓰기.
-
+#[path = "../support/mod.rs"]
 mod support;
 
 use std::fs;

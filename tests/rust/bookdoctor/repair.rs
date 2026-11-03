@@ -1,8 +1,3 @@
-//! `repair`의 바이너리 복원: UTF-16LE로 읽혀 UTF-8로 저장된 바이너리를 되돌린다(옛 quarantine_broken fix-ext 이식).
-//! 원본은 휴지통에 두고, 같은 inode에 덮어쓴 뒤 이름만 바꾼다.
-
-mod support;
-
 use std::cell::Cell;
 use std::fs;
 use std::os::unix::fs::MetadataExt;

@@ -1,6 +1,4 @@
-//! MS-OVBA 압축 해제와 VBA 프로젝트 읽기 테스트.
-
-#[path = "ole_common.rs"]
+#[path = "../ole_common.rs"]
 mod support;
 
 use support::{compress, dir_stream, make_cfb, module_stream, pseudo};

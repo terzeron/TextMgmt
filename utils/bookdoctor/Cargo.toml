@@ -6,170 +6,6 @@ edition.workspace = true
 publish.workspace = true
 autotests = false
 
-[[test]]
-name = "bin"
-path = "../../tests/rust/bookdoctor/bin.rs"
-
-[[test]]
-name = "cli"
-path = "../../tests/rust/bookdoctor/cli.rs"
-
-[[test]]
-name = "common_checks"
-path = "../../tests/rust/bookdoctor/common_checks.rs"
-
-[[test]]
-name = "exe"
-path = "../../tests/rust/bookdoctor/exe.rs"
-
-[[test]]
-name = "hwpx"
-path = "../../tests/rust/bookdoctor/hwpx.rs"
-
-[[test]]
-name = "doc"
-path = "../../tests/rust/bookdoctor/doc.rs"
-
-[[test]]
-name = "ooxml_security"
-path = "../../tests/rust/bookdoctor/ooxml_security.rs"
-
-[[test]]
-name = "ooxml_structure"
-path = "../../tests/rust/bookdoctor/ooxml_structure.rs"
-
-[[test]]
-name = "zip_fast"
-path = "../../tests/rust/bookdoctor/zip_fast.rs"
-
-[[test]]
-name = "zipnames"
-path = "../../tests/rust/bookdoctor/zipnames.rs"
-
-[[test]]
-name = "epub_perf"
-path = "../../tests/rust/bookdoctor/epub_perf.rs"
-
-[[test]]
-name = "prefetch"
-path = "../../tests/rust/bookdoctor/prefetch.rs"
-
-[[test]]
-name = "epub_gaps"
-path = "../../tests/rust/bookdoctor/epub_gaps.rs"
-
-[[test]]
-name = "epub_render"
-path = "../../tests/rust/bookdoctor/epub_render.rs"
-
-[[test]]
-name = "epub_security_hardening"
-path = "../../tests/rust/bookdoctor/epub_security_hardening.rs"
-
-[[test]]
-name = "epub_structure"
-path = "../../tests/rust/bookdoctor/epub_structure.rs"
-
-[[test]]
-name = "epub_security"
-path = "../../tests/rust/bookdoctor/epub_security.rs"
-
-[[test]]
-name = "mojibake"
-path = "../../tests/rust/bookdoctor/mojibake.rs"
-
-[[test]]
-name = "pdf_structure"
-path = "../../tests/rust/bookdoctor/pdf_structure.rs"
-
-[[test]]
-name = "pdf_security"
-path = "../../tests/rust/bookdoctor/pdf_security.rs"
-
-[[test]]
-name = "pdf_security_new"
-path = "../../tests/rust/bookdoctor/pdf_security_new.rs"
-
-[[test]]
-name = "entropy"
-path = "../../tests/rust/bookdoctor/entropy.rs"
-
-[[test]]
-name = "html"
-path = "../../tests/rust/bookdoctor/html.rs"
-
-[[test]]
-name = "hwp"
-path = "../../tests/rust/bookdoctor/hwp.rs"
-
-[[test]]
-name = "rules_builtin"
-path = "../../tests/rust/bookdoctor/rules_builtin.rs"
-
-[[test]]
-name = "rules_cli"
-path = "../../tests/rust/bookdoctor/rules_cli.rs"
-
-[[test]]
-name = "rules_match"
-path = "../../tests/rust/bookdoctor/rules_match.rs"
-
-[[test]]
-name = "rules_parse"
-path = "../../tests/rust/bookdoctor/rules_parse.rs"
-
-[[test]]
-name = "recurse"
-path = "../../tests/rust/bookdoctor/recurse.rs"
-
-[[test]]
-name = "report"
-path = "../../tests/rust/bookdoctor/report.rs"
-
-[[test]]
-name = "rtf_disguise"
-path = "../../tests/rust/bookdoctor/rtf_disguise.rs"
-
-[[test]]
-name = "scan"
-path = "../../tests/rust/bookdoctor/scan.rs"
-
-[[test]]
-name = "txt"
-path = "../../tests/rust/bookdoctor/txt.rs"
-
-[[test]]
-name = "viewer"
-path = "../../tests/rust/bookdoctor/viewer.rs"
-
-[[test]]
-name = "ole"
-path = "../../tests/rust/bookdoctor/ole.rs"
-
-[[test]]
-name = "ole_vba"
-path = "../../tests/rust/bookdoctor/ole_vba.rs"
-
-[[test]]
-name = "ole_anomalies"
-path = "../../tests/rust/bookdoctor/ole_anomalies.rs"
-
-[[test]]
-name = "finding"
-path = "../../tests/rust/bookdoctor/finding.rs"
-
-[[test]]
-name = "sniff"
-path = "../../tests/rust/bookdoctor/sniff.rs"
-
-[[test]]
-name = "display"
-path = "../../tests/rust/bookdoctor/display.rs"
-
-[[test]]
-name = "runner"
-path = "../../tests/rust/bookdoctor/runner.rs"
-
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 text_extractor = { path = "../../libs/text_extractor" }
@@ -192,25 +28,193 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 tempfile = "3.27.0"
 
 [[test]]
-name = "critical_promotion"
-path = "../../tests/rust/bookdoctor/critical_promotion.rs"
+name = "cli"
+path = "../../tests/rust/bookdoctor/cli.rs"
 
 [[test]]
-name = "sanitize"
-path = "../../tests/rust/bookdoctor/sanitize.rs"
+name = "common"
+path = "../../tests/rust/bookdoctor/common.rs"
 
 [[test]]
-name = "xhtml_fix"
-path = "../../tests/rust/bookdoctor/xhtml_fix.rs"
+name = "display"
+path = "../../tests/rust/bookdoctor/display.rs"
+
+[[test]]
+name = "doc"
+path = "../../tests/rust/bookdoctor/doc.rs"
+
+[[test]]
+name = "doc_rtf"
+path = "../../tests/rust/bookdoctor/doc/rtf.rs"
+
+[[test]]
+name = "epub"
+path = "../../tests/rust/bookdoctor/epub.rs"
+
+[[test]]
+name = "epub_render"
+path = "../../tests/rust/bookdoctor/epub/render.rs"
+
+[[test]]
+name = "epub_security"
+path = "../../tests/rust/bookdoctor/epub/security.rs"
+
+[[test]]
+name = "epub_structure"
+path = "../../tests/rust/bookdoctor/epub/structure.rs"
+
+[[test]]
+name = "exe"
+path = "../../tests/rust/bookdoctor/exe.rs"
+
+[[test]]
+name = "finding"
+path = "../../tests/rust/bookdoctor/finding.rs"
+
+[[test]]
+name = "html"
+path = "../../tests/rust/bookdoctor/html.rs"
+
+[[test]]
+name = "hwp"
+path = "../../tests/rust/bookdoctor/hwp.rs"
+
+[[test]]
+name = "hwp_inflate"
+path = "../../tests/rust/bookdoctor/hwp/inflate.rs"
+
+[[test]]
+name = "mojibake"
+path = "../../tests/rust/bookdoctor/mojibake.rs"
+
+[[test]]
+name = "ole"
+path = "../../tests/rust/bookdoctor/ole.rs"
+
+[[test]]
+name = "ole_vba"
+path = "../../tests/rust/bookdoctor/ole/vba.rs"
+
+[[test]]
+name = "pdf_sanitize"
+path = "../../tests/rust/bookdoctor/pdf/sanitize.rs"
+
+[[test]]
+name = "pdf_security"
+path = "../../tests/rust/bookdoctor/pdf/security.rs"
+
+[[test]]
+name = "pdf_structure"
+path = "../../tests/rust/bookdoctor/pdf/structure.rs"
+
+[[test]]
+name = "prefetch"
+path = "../../tests/rust/bookdoctor/prefetch.rs"
 
 [[test]]
 name = "quarantine"
 path = "../../tests/rust/bookdoctor/quarantine.rs"
 
 [[test]]
+name = "recurse"
+path = "../../tests/rust/bookdoctor/recurse.rs"
+
+[[test]]
 name = "repair"
 path = "../../tests/rust/bookdoctor/repair.rs"
 
 [[test]]
-name = "pdf_sanitize"
-path = "../../tests/rust/bookdoctor/pdf_sanitize.rs"
+name = "repair_xhtml_fix"
+path = "../../tests/rust/bookdoctor/repair/xhtml_fix.rs"
+
+[[test]]
+name = "report"
+path = "../../tests/rust/bookdoctor/report.rs"
+
+[[test]]
+name = "rules"
+path = "../../tests/rust/bookdoctor/rules.rs"
+
+[[test]]
+name = "rules_builtin"
+path = "../../tests/rust/bookdoctor/rules/builtin.rs"
+
+[[test]]
+name = "rules_parse"
+path = "../../tests/rust/bookdoctor/rules/parse.rs"
+
+[[test]]
+name = "runner"
+path = "../../tests/rust/bookdoctor/runner.rs"
+
+[[test]]
+name = "sanitize"
+path = "../../tests/rust/bookdoctor/sanitize.rs"
+
+[[test]]
+name = "scan"
+path = "../../tests/rust/bookdoctor/scan.rs"
+
+[[test]]
+name = "sniff"
+path = "../../tests/rust/bookdoctor/sniff.rs"
+
+[[test]]
+name = "txt"
+path = "../../tests/rust/bookdoctor/txt.rs"
+
+[[test]]
+name = "viewer"
+path = "../../tests/rust/bookdoctor/viewer.rs"
+
+[[test]]
+name = "zipcheck_fast"
+path = "../../tests/rust/bookdoctor/zipcheck/fast.rs"
+
+[[test]]
+name = "zipcheck_hwpx"
+path = "../../tests/rust/bookdoctor/zipcheck/hwpx.rs"
+
+[[test]]
+name = "zipcheck_ooxml"
+path = "../../tests/rust/bookdoctor/zipcheck/ooxml.rs"
+
+[[test]]
+name = "zipnames"
+path = "../../tests/rust/bookdoctor/zipnames.rs"
+
+[[test]]
+name = "integration_bin"
+path = "../../tests/rust/bookdoctor/integration/bin.rs"
+
+[[test]]
+name = "integration_doc"
+path = "../../tests/rust/bookdoctor/integration/doc.rs"
+
+[[test]]
+name = "integration_html"
+path = "../../tests/rust/bookdoctor/integration/html.rs"
+
+[[test]]
+name = "integration_hwp"
+path = "../../tests/rust/bookdoctor/integration/hwp.rs"
+
+[[test]]
+name = "integration_recurse"
+path = "../../tests/rust/bookdoctor/integration/recurse.rs"
+
+[[test]]
+name = "integration_rtf_disguise"
+path = "../../tests/rust/bookdoctor/integration/rtf_disguise.rs"
+
+[[test]]
+name = "integration_rules_builtin"
+path = "../../tests/rust/bookdoctor/integration/rules_builtin.rs"
+
+[[test]]
+name = "integration_scan"
+path = "../../tests/rust/bookdoctor/integration/scan.rs"
+
+[[test]]
+name = "integration_zip_fast"
+path = "../../tests/rust/bookdoctor/integration/zip_fast.rs"

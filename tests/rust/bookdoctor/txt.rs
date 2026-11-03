@@ -1,5 +1,3 @@
-//! TXT 검사 테스트.
-
 mod support;
 
 use bookdoctor::cli::Options;

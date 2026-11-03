@@ -1,12 +1,9 @@
-//! 구형 DOC(OLE 복합 파일) 분석 테스트. fixture는 합성이다: 코퍼스에 .doc가 없다.
-
-#[path = "ole_common.rs"]
 mod ole_common;
 
 use std::fs;
 use std::path::PathBuf;
 
-use bookdoctor::cli::{Options, run};
+use bookdoctor::cli::Options;
 use bookdoctor::scan::scan_file;
 use bookdoctor::viewer::viewer_blocked;
 use ole_common::{Cfb, compress, dir_stream, make_cfb, make_cfb_v4, module_stream};
@@ -206,21 +203,6 @@ fn a_truncated_ole_file_is_incomplete_and_never_panics() {
     let (_d, p) = write("cut.doc", &b);
     let r = scan_file(&p, &Options::default());
     assert!(r.incomplete && !r.reasons.iter().any(|x| x.starts_with("panic")), "{:?}", r.reasons);
-}
-
-#[test]
-fn doc_and_dot_are_collected_and_lookalikes_are_not() {
-    let d = tempfile::tempdir().unwrap();
-    let bytes = doc_cfb(&[], 0, b"x").bytes;
-    for name in ["a.doc", "b.DOT", "c.docs"] {
-        fs::write(d.path().join(name), &bytes).unwrap();
-    }
-    let mut out = Vec::new();
-    run(&["-r".into(), "--min-severity".into(), "low".into(), "--json".into(), d.path().to_string_lossy().into_owned()], &mut out);
-    let out = String::from_utf8(out).unwrap();
-    assert!(!out.contains("c.docs"), "{out}");
-    let (_d2, p) = write("b.dot", &bytes);
-    assert_eq!(scan_file(&p, &Options::default()).format, Some(Format::Doc));
 }
 
 #[test]

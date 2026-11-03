@@ -1,12 +1,9 @@
-//! HWP 5.x 테스트. fixture는 합성이다: 코퍼스에 정상 HWP5 파일이 없다(`docs/bookdoctor-hwp5-notes.md`).
-
-#[path = "ole_common.rs"]
 mod ole_common;
 
 use std::fs;
 use std::path::PathBuf;
 
-use bookdoctor::cli::{Options, run};
+use bookdoctor::cli::Options;
 use bookdoctor::scan::scan_file;
 use ole_common::{Cfb, compress, dir_stream, make_cfb, make_cfb_v4, module_stream};
 use bookdoctor::{FileReport, Format};
@@ -47,21 +44,6 @@ fn pe_bytes() -> Vec<u8> {
     pe[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
     pe[0x40..0x44].copy_from_slice(b"PE\0\0");
     pe
-}
-
-#[test]
-fn hwp_is_collected_and_lookalikes_are_not() {
-    let d = tempfile::tempdir().unwrap();
-    // 깨끗한 파일은 출력에 나오지 않으므로 이름 불일치가 나오는 내용을 쓴다.
-    for name in ["a.hwp", "b.HWP", "c.hwpp"] {
-        fs::write(d.path().join(name), "그냥 텍스트\n".repeat(50)).unwrap();
-    }
-    let mut out = Vec::new();
-    run(&["scan".into(), "--min-severity".into(), "low".into(), "--json".into(), d.path().to_string_lossy().into_owned()], &mut out);
-    let out = String::from_utf8(out).unwrap();
-    assert!(out.contains("a.hwp") && out.contains("b.HWP"), "{out}");
-    assert!(!out.contains("c.hwpp"), "{out}");
-    assert_eq!(scan("x.hwp", &hwp_cfb(&[], 0).bytes).format, Some(Format::Hwp));
 }
 
 #[test]
@@ -307,7 +289,6 @@ fn a_script_stream_over_the_limit_is_incomplete() {
 
 // --- 압축 해제 ---
 
-use bookdoctor::hwp::inflate::{InflateError, decompress};
 use flate2::Compression;
 use flate2::write::{DeflateEncoder, ZlibEncoder};
 use std::io::Write;
@@ -322,41 +303,6 @@ fn zlib(data: &[u8]) -> Vec<u8> {
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
     e.write_all(data).unwrap();
     e.finish().unwrap()
-}
-
-#[test]
-fn zlib_and_raw_deflate_both_decode() {
-    let text = b"hello hwp ".repeat(50);
-    assert_eq!(decompress(&raw_deflate(&text), 1 << 20), Ok(text.clone()));
-    assert_eq!(decompress(&zlib(&text), 1 << 20), Ok(text));
-}
-
-#[test]
-fn output_over_the_limit_is_too_large_without_allocating_it() {
-    // 1GiB의 0을 압축하면 1MiB 남짓이다. 상한 1MiB로 풀면 TooLarge이고 메모리를 쓰지 않는다.
-    let bomb = raw_deflate(&vec![0u8; 64 * 1024 * 1024]);
-    assert!(bomb.len() < 128 * 1024, "fixture sanity: {}", bomb.len());
-    assert_eq!(decompress(&bomb, 1 << 20), Err(InflateError::TooLarge));
-    assert_eq!(decompress(&zlib(&vec![0u8; 8 << 20]), 1 << 20), Err(InflateError::TooLarge));
-    // 상한과 같은 크기는 허용한다.
-    assert_eq!(decompress(&raw_deflate(&vec![1u8; 1 << 20]), 1 << 20).map(|v| v.len()), Ok(1 << 20));
-}
-
-#[test]
-fn truncated_and_garbage_are_invalid() {
-    let full = raw_deflate(&b"some text that compresses ".repeat(100));
-    assert_eq!(decompress(&full[..full.len() / 2], 1 << 20), Err(InflateError::Invalid));
-    assert_eq!(decompress(&[0xFF, 0xEE, 0xDD, 0xCC, 0xBB], 1 << 20), Err(InflateError::Invalid));
-    let mut seed = 99u32;
-    for _ in 0..200 {
-        let bytes: Vec<u8> = (0..128).map(|_| { seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223); (seed >> 24) as u8 }).collect();
-        let _ = decompress(&bytes, 1 << 16); // panic하지 않는다.
-    }
-}
-
-#[test]
-fn empty_input_is_an_empty_output() {
-    assert_eq!(decompress(&[], 1 << 20), Ok(Vec::new()));
 }
 
 #[test]
@@ -397,8 +343,6 @@ fn every_stream_under_scripts_is_scanned_not_only_defaultjscript() {
 }
 
 // --- BinData (명세 표 17, 18) ---
-
-use bookdoctor::hwp::inflate::decompress_prefix;
 
 /// 레코드 하나: 헤더 32비트(TagID 10, Level 10, Size 12), Size가 0xFFF 이상이면 뒤에 DWORD 길이(명세 4.1).
 fn record(tag: u32, level: u32, data: &[u8]) -> Vec<u8> {
@@ -443,17 +387,6 @@ fn scan_bindata(flags: u32, docinfo: Option<Vec<u8>>, bins: &[(&str, Vec<u8>)]) 
 }
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR some png bytes";
-
-#[test]
-fn decompress_prefix_stops_after_n_bytes_without_error() {
-    let bomb = raw_deflate(&vec![0u8; 64 * 1024 * 1024]);
-    assert_eq!(decompress_prefix(&bomb, 4096).map(|v| v.len()), Ok(4096));
-    // 끊긴 스트림도 그때까지 풀린 앞부분을 돌려준다.
-    let full = raw_deflate(&b"abcdefgh".repeat(4096));
-    let cut = &full[..full.len() / 2];
-    assert!(decompress_prefix(cut, 16).is_ok_and(|v| v == b"abcdefghabcdefgh"));
-    assert_eq!(decompress_prefix(&[0xFF, 0xEE, 0xDD], 16), Err(InflateError::Invalid));
-}
 
 #[test]
 fn linked_file_unc_is_high_and_local_is_medium() {

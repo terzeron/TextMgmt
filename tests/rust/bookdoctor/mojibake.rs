@@ -1,7 +1,3 @@
-//! bookdoctor 인코딩 손상 판정 테스트(계획 Task 13). `classify_text` 관련 테스트는
-//! 옛 인코딩 검사 도구 테스트에서 옮기고 단언을 `Verdict`로 바꿨다.
-//! MuPDF worker는 `FakeRunner`로 대신하므로 worker가 없어도 통과한다.
-
 mod support;
 
 use std::fs;

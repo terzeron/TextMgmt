@@ -1,5 +1,4 @@
-//! bookdoctor PDF 구조·렌더링 검사(계획 Task 12): 코드마다 양성·음성 쌍을 둔다. MuPDF worker는 `FakeRunner`로 대신한다.
-
+#[path = "../support/mod.rs"]
 mod support;
 
 use std::fs;

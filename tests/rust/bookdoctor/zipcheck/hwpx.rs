@@ -1,5 +1,4 @@
-//! HWPX 테스트: 구조, 내장 실행 파일·OLE, XML 공격. 스크립트 탐지는 구현하지 않는다(docs/bookdoctor-hwpx-notes.md).
-
+#[path = "../support/mod.rs"]
 mod support;
 
 use std::fs;

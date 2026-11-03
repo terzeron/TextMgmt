@@ -1,6 +1,3 @@
-//! `quarantine`·`unquarantine`: 인코딩이 손상된 문서를 격리하고 되돌린다(옛 quarantine_broken 테스트 이식).
-//! 이동은 항상 되돌릴 수 있어야 한다. 판정에 오탐이 섞일 수 있기 때문이다.
-
 mod support;
 
 use std::cell::Cell;

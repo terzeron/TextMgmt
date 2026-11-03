@@ -1,5 +1,3 @@
-//! `viewer_blocked` 표 테스트. 표가 낡지 않도록 스캐너 소스와 대조한다.
-
 mod support;
 
 use std::collections::BTreeSet;

@@ -1,5 +1,3 @@
-//! `--sanitize`: 허용 목록으로 EPUB을 재구성한다. 마크업·CSS 정리, 멤버 제거, 검증, 휴지통 보관과 제자리 덮어쓰기.
-
 mod support;
 
 use std::fs;

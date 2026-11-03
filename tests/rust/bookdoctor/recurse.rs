@@ -1,5 +1,3 @@
-//! 재귀 검사 테스트: 컨테이너 안의 컨테이너를 깊이·개수·바이트 상한 안에서 검사한다.
-
 mod support;
 
 use std::fs;
@@ -8,7 +6,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use bookdoctor::cli::{Options, run};
+use bookdoctor::cli::Options;
 use bookdoctor::recurse::ScratchDir;
 use bookdoctor::scan::scan_file;
 use bookdoctor::FileReport;
@@ -180,21 +178,6 @@ fn the_scratch_dir_is_private_and_removed_on_drop_and_on_panic() {
     }));
     assert!(result.is_err());
     assert!(!leaked.lock().unwrap().exists());
-}
-
-#[test]
-fn no_recurse_turns_the_nested_scan_off() {
-    let outer = zip_bytes(&[("inner.docx", &vba_docx())]);
-    let opts = Options { recurse: false, ..Options::default() };
-    let r = scan_bytes("a.zip", &outer, &opts);
-    assert!(!has_vba_under(&r, "inner.docx!"), "{:?}", r.findings);
-    assert!(Options::default().recurse);
-    // 명령행 옵션도 받는다.
-    let d = tempfile::tempdir().unwrap();
-    fs::write(d.path().join("a.zip"), &outer).unwrap();
-    let mut out = Vec::new();
-    run(&["--no-recurse".into(), "--min-severity".into(), "low".into(), "--json".into(), d.path().join("a.zip").to_string_lossy().into_owned()], &mut out);
-    assert!(!String::from_utf8(out).unwrap().contains("inner.docx!"));
 }
 
 // --- 보안 검토 반영: 내용으로 판단, 읽기 전에 예산 확인 ---

@@ -1,5 +1,4 @@
-//! EPUB 렌더링 검사 테스트. 규칙의 근거는 frontend/src/EpubDiagnose.js와 ViewEPUB.jsx다.
-
+#[path = "../support/mod.rs"]
 mod support;
 
 use std::fs;
