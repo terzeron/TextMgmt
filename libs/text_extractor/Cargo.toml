@@ -6,14 +6,6 @@ edition.workspace = true
 publish.workspace = true
 autotests = false
 
-[[test]]
-name = "common_fns"
-path = "../../tests/rust/text_extractor/common_fns.rs"
-
-[[test]]
-name = "reader"
-path = "../../tests/rust/text_extractor/reader.rs"
-
 [dependencies]
 encoding_rs = "0.8.42"
 regex = "1.13.1"
@@ -21,3 +13,11 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[[test]]
+name = "path"
+path = "../../tests/rust/text_extractor/path.rs"
+
+[[test]]
+name = "text_extractor"
+path = "../../tests/rust/text_extractor/text_extractor.rs"
