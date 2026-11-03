@@ -206,7 +206,6 @@ dependencies = [
  "bookstore",
  "chrono",
  "classifier",
- "corpus_common",
  "corpus_layout",
  "db",
  "doc_reader",

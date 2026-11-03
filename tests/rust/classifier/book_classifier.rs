@@ -14,7 +14,6 @@
 //! - `classifier::book_classifier::MAX_OPF_BYTES: usize`
 //! - `classifier::book_classifier::BookClassifierService::new(library_root: &Path, cache_file: Option<&Path>, classifier: Option<Arc<dyn classifier::Classify>>) -> Self` (구 `Option<Box<..>>`, docs/rust-test-seams.md 4.1)
 //!   - `with_delay(f64)`, `with_bookstore_cache_file(&Path)`, `with_bookstore_policy(BookstorePolicy)`, `with_bookstore_decider(Arc<dyn BookstoreDecider>)` 소비형 빌더 (3.12). 구 `for_test`, `set_bookstore_policy`를 대체한다
-//!   - `process_file(&mut self, path, source_dir, ProcessOptions) -> Value` (target_category, action)
 //!   - `classify_file`, `_decide(...)` -> `Decision { category, method, reason, model_category, confidence }`, `_decide_by_bookstore(&mut Value) -> (Option<String>, String, String)`
 //! - `classifier::Classify` 트레이트: `is_available()`, `classify_path(&Path, Option<f64>) -> Result<Prediction, String>`, `classify_document(&Value, Option<f64>) -> Result<Prediction, String>`
 //! - `classifier::model::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str)`
@@ -508,65 +507,6 @@ impl Classify for StubClassifier {
 }
 
 #[test]
-fn test_book_classifier_service_process_file() {
-    let tmp = TempDir::new().unwrap();
-    let lib_root = tmp.path().join("text");
-    let src_dir = lib_root.join("0_telegram");
-    fs::create_dir_all(&src_dir).unwrap();
-    let fpath = src_dir.join("[판타지] 나 혼자 만렙 귀환자 01.txt");
-    fs::write(&fpath, "스킬과 던전 마나 시스템 몬스터").unwrap();
-    let mut service = BookClassifierService::new(&lib_root, Some(&tmp.path().join("cache.json")), Some(Arc::new(StubClassifier::confident())));
-    let res_dry = service.process_file(&fpath, &src_dir, ProcessOptions { auto_move: true, dry_run: true, use_bookstore: false, ..Default::default() });
-    assert_eq!(res_dry["target_category"], "3_판타지");
-    assert_eq!(res_dry["action"], "classified");
-    assert!(fpath.exists());
-    let res_move = service.process_file(&fpath, &src_dir, ProcessOptions { auto_move: true, dry_run: false, use_bookstore: false, ..Default::default() });
-    assert_eq!(res_move["target_category"], "3_판타지");
-    assert_eq!(res_move["action"], "moved");
-    assert!(!fpath.exists());
-    assert!(lib_root.join("3_판타지").join(fpath.file_name().unwrap()).exists());
-}
-
-#[test]
-fn process_file_keeps_a_book_already_in_its_target_category() {
-    let tmp = TempDir::new().unwrap();
-    let library = tmp.path().join("library");
-    let source = library.join("0_telegram");
-    fs::create_dir_all(&source).unwrap();
-    let path = source.join("known.txt");
-    fs::write(&path, "content").unwrap();
-    let classifier = Arc::new(StubClassifier::new("0_telegram", 0.99));
-    let mut service = BookClassifierService::new(&library, None, Some(classifier));
-
-    let result = service.process_file(&path, &source, ProcessOptions { use_bookstore: false, ..Default::default() });
-
-    assert_eq!(result["action"], "skipped_same_category");
-    assert!(path.is_file(), "분류 결과가 현재 카테고리와 같으면 원본을 보존한다");
-}
-
-#[test]
-fn process_file_keeps_source_when_target_is_the_same_file() {
-    let tmp = TempDir::new().unwrap();
-    let library = tmp.path().join("library");
-    let source = library.join("0_telegram");
-    let target = library.join("3_판타지");
-    fs::create_dir_all(&source).unwrap();
-    fs::create_dir_all(&target).unwrap();
-    let path = source.join("known.txt");
-    fs::write(&path, "content").unwrap();
-    let target_path = target.join("known.txt");
-    fs::hard_link(&path, &target_path).unwrap();
-    let classifier = Arc::new(StubClassifier::new("3_판타지", 0.99));
-    let mut service = BookClassifierService::new(&library, None, Some(classifier));
-
-    let result = service.process_file(&path, &source, ProcessOptions { use_bookstore: false, ..Default::default() });
-
-    assert_eq!(result["action"], "skipped_same_file");
-    assert!(path.exists(), "Python samefile 경로는 원본 hard link를 지우지 않는다");
-    assert!(target_path.exists());
-}
-
-#[test]
 fn test_inspect_txt_content_cp949_and_header_genre() {
     let tmp = TempDir::new().unwrap();
     let f = tmp.path().join("test_cp949.txt");
@@ -746,26 +686,6 @@ fn test_book_classifier_service_methods_and_cache() {
     // 1209: use_bookstore=True (query_bookstores 호출)
     svc.classify_file(&f_uncached, tmp.path(), ClassifyOptions { use_bookstore: true, ..Default::default() });
 
-    // 1271: process_file - not target_cat (서점 대역이 다른 책을 돌려주므로 목적지가 없다)
-    let res_none = svc.process_file(&f_uncached, tmp.path(), ProcessOptions::default());
-    assert_eq!(res_none["action"], "none");
-
-    // 1277-1285 & 1282: dest_path.exists() 분기 (entry 포함)
-    let dest_dir = tmp.path().join("2_소설한국");
-    fs::create_dir_all(&dest_dir).unwrap();
-    let existing_in_dest = dest_dir.join(f_samguk.file_name().unwrap());
-    fs::write(&existing_in_dest, "이미 있음").unwrap();
-
-    // clean_existing = False -> skipped_already_exists (1285)
-    let res_skip = svc.process_file(&f_samguk, tmp.path(), ProcessOptions { clean_existing: false, ..Default::default() });
-    assert_eq!(res_skip["target_category"], "2_소설한국");
-    assert_eq!(res_skip["action"], "skipped_already_exists");
-
-    // clean_existing = True -> cleaned_duplicate (1282, 1283)
-    let res_clean = svc.process_file(&f_samguk, tmp.path(), ProcessOptions { clean_existing: true, ..Default::default() });
-    assert_eq!(res_clean["action"], "cleaned_duplicate");
-    assert_eq!(svc.cache()["나관중 - 삼국지 1권.txt"]["status"], "already_exists_cleaned");
-    assert!(!f_samguk.exists());
 }
 #[test]
 fn test_map_category_and_effective_filename_branches() {

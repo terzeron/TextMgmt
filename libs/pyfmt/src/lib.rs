@@ -1,7 +1,6 @@
 //! Python과 같은 모양으로 값을 쓴다. Python 원본의 출력과 맞춰야 하는 도구들이 함께 쓴다.
 //!
 //! - [`py_repr`]: JSON 값을 `repr(dict)` 모양으로 (`print("item:", item)`)
-//! - [`py_float`]: float을 `repr(float)` 모양으로 (정수값에도 `.0`)
 //! - [`py_round`]: `round(x, ndigits)`와 같은 결과(이진 값을 십진 전개해 짝수 쪽으로)
 
 use serde_json::Value;
@@ -12,7 +11,7 @@ mod unicode151;
 
 mod case;
 pub use case::{py_casefold, py_lowercase};
-pub use unicode151::py_is_assigned;
+use unicode151::py_is_assigned;
 
 /// Python `repr(str)`: 작은따옴표를 기본으로 쓰되 `'`만 있으면 큰따옴표로 감싼다.
 fn py_str_repr(s: &str) -> String {
@@ -69,11 +68,6 @@ pub fn py_repr(v: &Value) -> String {
         Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
         Value::Object(o) => format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", py_str_repr(k), py_repr(v))).collect::<Vec<_>>().join(", ")),
     }
-}
-
-/// Python의 float 표기. 정수값에도 `.0`이 붙는다.
-pub fn py_float(v: f64) -> String {
-    if v.is_finite() && v.fract() == 0.0 { format!("{v:.1}") } else { format!("{v}") }
 }
 
 /// Python `round(x, ndigits)`와 같은 결과를 낸다. 곱셈 뒤 반올림은 `0.35` 같은 값에서 어긋나므로,

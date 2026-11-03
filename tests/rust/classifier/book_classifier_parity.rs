@@ -125,23 +125,6 @@ fn service(tmp: &TempDir, category: &str, confidence: f64) -> BookClassifierServ
 }
 
 #[test]
-fn process_file_refuses_unsafe_target_category_names() {
-    for bad in ["../outside", "a/b", "..", "/abs", ""] {
-        let tmp = TempDir::new().unwrap();
-        let lib = tmp.path().join("lib");
-        fs::create_dir_all(&lib).unwrap();
-        let f = lib.join("책.txt");
-        fs::write(&f, "x").unwrap();
-        let mut svc = BookClassifierService::new(&lib, Some(&tmp.path().join("cache.json")), Some(Arc::new(Fixed(Prediction::new(Some(bad), 0.9, vec![], "stub"))))).with_delay(0.0);
-        let res = svc.process_file(&f, &lib, ProcessOptions { use_bookstore: false, ..Default::default() });
-        // 라이브러리 밖으로 새거나 파일이 사라지면 안 된다.
-        assert!(f.exists(), "{bad:?}");
-        assert!(!tmp.path().join("outside").exists(), "{bad:?}");
-        assert_ne!(res["action"], "moved", "{bad:?}");
-    }
-}
-
-#[test]
 fn cache_files_are_read_defensively_and_saved_atomically() {
     let tmp = TempDir::new().unwrap();
     // 객체가 아닌 JSON 과 심볼릭 링크는 빈 캐시로 본다.

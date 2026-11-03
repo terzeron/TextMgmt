@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -587,24 +587,6 @@ impl Default for ClassifyOptions {
     }
 }
 
-/// `process_file` 옵션.
-#[derive(Debug, Clone, Copy)]
-pub struct ProcessOptions {
-    pub auto_move: bool,
-    pub clean_existing: bool,
-    pub dry_run: bool,
-    pub trust_single_match: bool,
-    pub use_bookstore: bool,
-    pub use_content_meta: bool,
-    pub cache_only: bool,
-}
-
-impl Default for ProcessOptions {
-    fn default() -> Self {
-        Self { auto_move: true, clean_existing: true, dry_run: false, trust_single_match: true, use_bookstore: true, use_content_meta: true, cache_only: false }
-    }
-}
-
 /// 판정 결과. 모델 카테고리와 확신도는 등급 판정과 화면 설명에 쓴다.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decision {
@@ -1046,66 +1028,6 @@ impl BookClassifierService {
         names.sort();
         (None, "conflict".into(), format!("서점 판정이 갈림: [{}]", names.iter().map(|c| format!("'{c}'")).collect::<Vec<_>>().join(", ")))
     }
-
-    /// 파일을 분류하고, 목적지가 정해지면 옮기거나(이미 있으면 정리하거나) 건너뛴다.
-    pub fn process_file(&mut self, fpath: &Path, source_dir: &Path, opts: ProcessOptions) -> Value {
-        let (target_cat, method, reason, entry, key) = self.classify_file_keyed(
-            fpath,
-            source_dir,
-            ClassifyOptions { trust_single_match: opts.trust_single_match, use_bookstore: opts.use_bookstore, use_content_meta: opts.use_content_meta, cache_only: opts.cache_only, delay: None },
-        );
-        let mut result = json!({"file": fpath.to_string_lossy(), "target_category": target_cat, "method": method, "reason": reason, "action": "none"});
-        let Some(target_cat) = target_cat else { return result };
-        if source_dir == self.library_root.join(&target_cat) {
-            result["action"] = json!("skipped_same_category");
-            return result;
-        }
-        // 목적지는 라이브러리 바로 아래 디렉토리 하나여야 한다. `..` 나 경로 구분자가 든 값은 거부한다.
-        if !is_single_component(&target_cat) {
-            result["action"] = json!("none");
-            result["reason"] = json!("목적지 카테고리 이름이 안전하지 않아 옮기지 않음");
-            return result;
-        }
-        let Some(name) = fpath.file_name() else { return result };
-        let dest_dir = self.library_root.join(&target_cat);
-        let dest_path = dest_dir.join(name);
-        let has_entry = entry.as_ref().is_some_and(truthy);
-        let set_status = |svc: &mut Self, status: &str| {
-            if has_entry && let Some(e) = svc.cache.get_mut(&key) {
-                e["status"] = json!(status);
-            }
-        };
-
-        if dest_path.exists() {
-            if same_file(fpath, &dest_path) {
-                result["action"] = json!("skipped_same_file");
-                return result;
-            }
-            if opts.clean_existing {
-                if !opts.dry_run {
-                    let _ = fs::remove_file(fpath);
-                    clean_empty_parent_dirs_with(fpath.parent().unwrap_or(Path::new("")), source_dir, self.fs.as_ref());
-                    set_status(self, "already_exists_cleaned");
-                }
-                result["action"] = json!("cleaned_duplicate");
-            } else {
-                result["action"] = json!("skipped_already_exists");
-            }
-        } else {
-            if opts.auto_move && !opts.dry_run {
-                if fs::create_dir_all(&dest_dir).is_ok() && move_file(self.fs.as_ref(), fpath, &dest_path).is_ok() {
-                    clean_empty_parent_dirs_with(fpath.parent().unwrap_or(Path::new("")), source_dir, self.fs.as_ref());
-                    set_status(self, "moved");
-                } else {
-                    log::error!("파일을 옮기지 못했다");
-                    result["action"] = json!("move_failed");
-                    return result;
-                }
-            }
-            result["action"] = json!(if opts.auto_move && !opts.dry_run { "moved" } else { "classified" });
-        }
-        result
-    }
 }
 
 fn truthy(v: &Value) -> bool {
@@ -1114,40 +1036,6 @@ fn truthy(v: &Value) -> bool {
         Value::Object(o) => !o.is_empty(),
         Value::Array(a) => !a.is_empty(),
         _ => true,
-    }
-}
-
-fn same_file(left: &Path, right: &Path) -> bool {
-    let (Ok(left_metadata), Ok(right_metadata)) = (fs::metadata(left), fs::metadata(right)) else { return false };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        left_metadata.dev() == right_metadata.dev() && left_metadata.ino() == right_metadata.ino()
-    }
-    #[cfg(not(unix))]
-    {
-        match (fs::canonicalize(left), fs::canonicalize(right)) {
-            (Ok(left), Ok(right)) => left == right,
-            _ => false,
-        }
-    }
-}
-
-/// 구분자와 `.`/`..` 가 없는 이름 하나인가.
-fn is_single_component(name: &str) -> bool {
-    let mut comps = Path::new(name).components();
-    matches!((comps.next(), comps.next()), (Some(Component::Normal(_)), None)) && !name.contains(['/', '\\', '\0'])
-}
-
-/// `shutil.move`: 이름 바꾸기를 먼저 하고, 다른 파일 시스템이면 복사 뒤 지운다.
-fn move_file(fs_ops: &dyn FsOps, from: &Path, to: &Path) -> std::io::Result<()> {
-    match fs_ops.rename(from, to) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
-            fs::copy(from, to)?;
-            fs::remove_file(from)
-        }
-        Err(e) => Err(e),
     }
 }
 

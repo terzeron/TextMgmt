@@ -710,7 +710,7 @@ pub(super) const ASSIGNED_RANGES: &[(u32, u32)] = &[
     (0x100000, 0x10FFFD),
 ];
 
-pub fn py_is_assigned(character: char) -> bool {
+pub(crate) fn py_is_assigned(character: char) -> bool {
     let codepoint = character as u32;
     ASSIGNED_RANGES
         .binary_search_by(|&(start, end)| {

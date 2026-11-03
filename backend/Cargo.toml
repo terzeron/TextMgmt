@@ -64,7 +64,6 @@ async-trait = "0.1"
 base64 = "0.23.1"
 axum = { version = "0.8.9", features = ["multipart"] }
 bookstore = { path = "../libs/bookstore" }
-corpus_common = { path = "../libs/corpus_common" }
 corpus_layout = { path = "../libs/corpus_layout" }
 classifier = { path = "../libs/classifier" }
 db = { path = "../libs/db" }
