@@ -254,18 +254,28 @@ fn kill_process_group(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
+/// 실행 파일이 쓰기 중(ETXTBSY)이면 잠깐 기다렸다 다시 띄운다. 이 시간 안에 풀리지 않으면 그 오류를 돌려준다.
+const BUSY_RETRY_FOR: Duration = Duration::from_secs(1);
+
+/// 방금 쓴 실행 파일은, 다른 스레드가 fork한 자식이 exec하기 전까지 그 쓰기 설명자를 함께 쥐어 잠깐 ETXTBSY가 난다.
+/// 쥔 쪽이 곧 놓으므로 재시도하면 풀린다. 다른 오류는 바로 돌려준다.
+fn spawn_retrying_busy(cmd: &mut Command) -> io::Result<std::process::Child> {
+    let give_up = Instant::now() + BUSY_RETRY_FOR;
+    loop {
+        match cmd.spawn() {
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < give_up => thread::sleep(Duration::from_millis(10)),
+            other => return other,
+        }
+    }
+}
+
 /// 자식 프로세스를 실행하고 출력을 모은다. `SystemRunner`와 [`timeout::run_with_hard_timeout`]이 함께 쓰는 실행 엔진이다.
 ///
 /// 자식은 새 process group으로 띄우고 stdin을 닫는다. `timeout`을 넘기면 group 전체를 죽이고 `Timeout`이다.
 /// 인자는 `Command`로 받아 UTF-8이 아닌 경로도 그대로 넘긴다.
 pub(crate) fn run_child(mut cmd: Command, timeout: Option<Duration>) -> Result<std::process::Output, CommandError> {
-    let mut child = cmd
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| if e.kind() == io::ErrorKind::NotFound { CommandError::NotFound } else { CommandError::Failed(e.to_string()) })?;
+    cmd.process_group(0).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = spawn_retrying_busy(&mut cmd).map_err(|e| if e.kind() == io::ErrorKind::NotFound { CommandError::NotFound } else { CommandError::Failed(e.to_string()) })?;
     // 파이프가 가득 차서 자식이 멈추지 않게 별도 스레드에서 비운다.
     let out = drain(child.stdout.take().expect("stdout 파이프"));
     let err = drain(child.stderr.take().expect("stderr 파이프"));

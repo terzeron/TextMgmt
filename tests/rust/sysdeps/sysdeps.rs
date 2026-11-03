@@ -377,6 +377,25 @@ mod runner {
         assert!(matches!(err, CommandError::NotFound), "{err:?}");
     }
 
+    /// 방금 쓴 스크립트를 다른 스레드가 fork한 자식이 아직 쓰기용으로 쥐고 있으면 exec가 ETXTBSY로 실패한다.
+    /// 쥔 쪽이 곧 놓으므로 잠깐 기다렸다 다시 실행해야 한다.
+    #[test]
+    fn run_retries_while_the_program_file_is_busy() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("busy.sh");
+        std::fs::write(&script, "#!/bin/sh\necho ok\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let writer = std::fs::OpenOptions::new().write(true).open(&script).unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(writer);
+        });
+        let out = SystemRunner.run(&argv(&[script.to_str().unwrap()]), Some(Duration::from_secs(5))).unwrap();
+        release.join().unwrap();
+        assert_eq!(out.stdout, b"ok\n");
+    }
+
     #[test]
     fn run_rejects_an_empty_argv() {
         let err = SystemRunner.run(&[], None).unwrap_err();
