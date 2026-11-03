@@ -1,7 +1,8 @@
 //! Python tests/test_cover_status.py의 표지 판정, MySQL cache, 목록 조회 계약.
 
+#[path = "../../common/mod.rs"]
 mod common;
-#[path = "common/mysql_fixture.rs"]
+#[path = "../../common/mysql_fixture.rs"]
 mod mysql_fixture;
 
 use std::collections::VecDeque;

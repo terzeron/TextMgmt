@@ -99,10 +99,6 @@ name = "book"
 path = "../tests/rust/backend/book.rs"
 
 [[test]]
-name = "cover_status"
-path = "../tests/rust/backend/cover_status.rs"
-
-[[test]]
 name = "cover_sources"
 path = "../tests/rust/backend/cover_sources.rs"
 
@@ -224,7 +220,6 @@ path = "../tests/rust/backend/server_cli.rs"
 name = "loader_file_reader"
 path = "../tests/rust/backend/loader_file_reader.rs"
 
-
 [[test]]
 name = "main_mock"
 path = "../tests/rust/backend/main_mock.rs"
@@ -234,5 +229,5 @@ name = "epub_line_count"
 path = "../tests/rust/backend/epub_line_count.rs"
 
 [[test]]
-name = "container_integration"
-path = "../tests/rust/backend/container_integration.rs"
+name = "integration_container"
+path = "../tests/rust/backend/integration/container.rs"
