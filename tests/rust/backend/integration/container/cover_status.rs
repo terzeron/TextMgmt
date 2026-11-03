@@ -1,9 +1,8 @@
 //! Python tests/test_cover_status.py의 표지 판정, MySQL cache, 목록 조회 계약.
 
-#[path = "../../common/mod.rs"]
-mod common;
-#[path = "../../common/mysql_fixture.rs"]
-mod mysql_fixture;
+// 공통 모듈은 container.rs가 한 번만 올린다. 여기서 다시 올리면 MySQL 컨테이너·DB_LOCK이 두 벌이 되어
+// 도중에 TM_MYSQL_*가 두 번째 컨테이너로 바뀌고 다른 테스트가 엉뚱한 DB를 읽는다.
+use crate::{common, mysql_fixture};
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
