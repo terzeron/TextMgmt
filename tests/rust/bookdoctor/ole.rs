@@ -1,16 +1,16 @@
 //! ole 모듈 테스트: 읽기 코어.
 
 #[path = "ole_common.rs"]
-mod common;
+mod support;
 
-use common::{make_cfb, make_cfb_v4};
+use support::{make_cfb, make_cfb_v4};
 use bookdoctor::ole::{EntryKind, Limits, OleError, OleFile};
 
 fn bytes_of(n: usize, seed: u8) -> Vec<u8> {
     (0..n).map(|i| (i as u8).wrapping_mul(7).wrapping_add(seed)).collect()
 }
 
-fn open(cfb: &common::Cfb) -> OleFile {
+fn open(cfb: &support::Cfb) -> OleFile {
     OleFile::from_bytes(cfb.bytes.clone(), &Limits::default()).expect("opens")
 }
 

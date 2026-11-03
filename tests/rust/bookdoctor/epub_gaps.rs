@@ -1,12 +1,12 @@
 //! 분기 커버리지를 채우는 테스트: 토크나이저 가장자리, 엔티티, 손상된 ZIP 필드, CLI 오류 경로.
 
-mod common;
+mod support;
 
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use common::*;
+use support::*;
 use bookdoctor::epub::security::{Limits, scan as scan_into};
 use bookdoctor::{FileReport, Format, Severity};
 

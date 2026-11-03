@@ -1,6 +1,6 @@
 //! DOCX 구조와 확장자 위장 테스트.
 
-mod common;
+mod support;
 
 use std::fs;
 use std::path::Path;
@@ -20,7 +20,7 @@ fn finding<'a>(r: &'a FileReport, code: &str) -> &'a bookdoctor::Finding {
 fn docx_named(name: &str, remove: &[&str], add: &[(&str, &[u8])]) -> (tempfile::TempDir, std::path::PathBuf) {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join(name);
-    common::docx_with(&p, remove, add);
+    support::docx_with(&p, remove, add);
     (d, p)
 }
 
@@ -54,7 +54,7 @@ fn broken_xml_in_a_required_part_is_malformed_markup() {
 
 #[test]
 fn content_types_declaring_a_missing_part_is_reported() {
-    let types = common::DOCX_CONTENT_TYPES.replace("</Types>", r#"<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>"#);
+    let types = support::DOCX_CONTENT_TYPES.replace("</Types>", r#"<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>"#);
     let (_d, p) = docx_named("a.docx", &[], &[("[Content_Types].xml", types.as_bytes())]);
     let r = scan(&p);
     let f = finding(&r, "OOXML_PART_MISSING");
@@ -112,7 +112,7 @@ fn zip_family_extensions_with_exe_content_are_disguises_too() {
 fn docx_with_ole_content_is_a_mismatch_and_incomplete_but_not_called_encrypted() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("old.docx");
-    let mut b = common::OLE_MAGIC.to_vec();
+    let mut b = support::OLE_MAGIC.to_vec();
     b.resize(2048, 0);
     fs::write(&p, b).unwrap();
     let r = scan(&p);
@@ -128,7 +128,7 @@ fn docx_with_ole_content_is_a_mismatch_and_incomplete_but_not_called_encrypted()
 fn zip_extension_with_ole_content_is_a_mismatch() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("a.zip");
-    let mut b = common::OLE_MAGIC.to_vec();
+    let mut b = support::OLE_MAGIC.to_vec();
     b.resize(2048, 0);
     fs::write(&p, b).unwrap();
     assert!(scan(&p).has("FORMAT_MISMATCH"));

@@ -1,6 +1,6 @@
 //! DOCX 보안 테스트: 원격 참조, 매크로, OLE·ActiveX, DDE 필드, XML 공격.
 
-mod common;
+mod support;
 
 use std::path::Path;
 
@@ -34,7 +34,7 @@ fn field(segments: &[&str]) -> String {
 fn scan_named(file: &str, add: &[(&str, &[u8])]) -> (tempfile::TempDir, FileReport) {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join(file);
-    common::docx_with(&p, &[], add);
+    support::docx_with(&p, &[], add);
     let r = scan_file(&p, &Options::default());
     (d, r)
 }
@@ -93,7 +93,7 @@ fn external_image_is_medium_and_hidden_by_default() {
     let r = docx(&[("word/_rels/document.xml.rels", &rels(&[("image", "http://tracker.example/p.gif", true)]))]);
     assert_security(&r, "OOXML_EXTERNAL_IMAGE", Severity::Medium);
     let d = tempfile::tempdir().unwrap();
-    common::docx_with(&d.path().join("img.docx"), &[], &[("word/_rels/document.xml.rels", &rels(&[("image", "http://tracker.example/p.gif", true)]))]);
+    support::docx_with(&d.path().join("img.docx"), &[], &[("word/_rels/document.xml.rels", &rels(&[("image", "http://tracker.example/p.gif", true)]))]);
     let show = |extra: &[&str]| {
         let mut argv: Vec<String> = vec!["scan".into()];
         argv.extend(extra.iter().map(|s| s.to_string()));
@@ -172,7 +172,7 @@ fn part_larger_than_the_budget_is_incomplete_not_read_in_full() {
     let p = d.path().join("big.docx");
     let mut big = document("<w:p/>");
     big.extend(vec![b' '; 3 * 1024 * 1024]);
-    common::docx_with(&p, &[], &[("word/document.xml", &big)]);
+    support::docx_with(&p, &[], &[("word/document.xml", &big)]);
     let r = scan_file(&p, &Options { max_total_mb: 1, ..Options::default() });
     assert!(r.incomplete, "{:?} {:?}", r.findings, r.reasons);
 }
@@ -358,13 +358,13 @@ fn parse_failures_are_recorded_even_when_the_part_has_no_field_markup() {
 fn docx_stored(add: &[(&str, &[u8])]) -> (tempfile::TempDir, std::path::PathBuf) {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("s.docx");
-    let mut parts: Vec<(String, Vec<u8>)> = common::minimal_docx_parts();
+    let mut parts: Vec<(String, Vec<u8>)> = support::minimal_docx_parts();
     for (n, b) in add {
         parts.retain(|(x, _)| x != n);
         parts.push((n.to_string(), b.to_vec()));
     }
     let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
-    common::zip_stored(&p, &refs);
+    support::zip_stored(&p, &refs);
     (d, p)
 }
 
@@ -376,7 +376,7 @@ fn padded_dde() -> Vec<u8> {
 fn forged_declared_size_in_the_main_part_is_not_clean_in_default_mode() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("forged.docx");
-    common::docx_with(&p, &[], &[("word/document.xml", &padded_dde())]);
+    support::docx_with(&p, &[], &[("word/document.xml", &padded_dde())]);
     let mut b = std::fs::read(&p).unwrap();
     let name = b"word/document.xml";
     let local = (0..b.len() - 30).find(|&i| &b[i..i + 4] == b"PK\x03\x04" && b[i + 30..].starts_with(name)).unwrap();
@@ -392,7 +392,7 @@ fn forged_declared_size_in_the_main_part_is_not_clean_in_default_mode() {
 fn crc_error_in_the_main_part_is_reported_and_the_content_is_still_inspected() {
     let (_d, p) = docx_stored(&[("word/document.xml", &padded_dde())]);
     let mut b = std::fs::read(&p).unwrap();
-    let at = common::data_offset(&b, "word/document.xml");
+    let at = support::data_offset(&b, "word/document.xml");
     b[at + 6000] ^= 0x01; // 주석 안의 공백 하나
     std::fs::write(&p, b).unwrap();
     let r = scan_file(&p, &Options::default());
@@ -441,18 +441,18 @@ fn main_part_is_resolved_through_the_officedocument_relationship_case_insensitiv
     let (d, p) = {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("d2.docx");
-        common::docx_with(&p, &["word/document.xml"], &[("_rels/.rels", &root), ("word/document2.xml", &document("<w:p/>"))]);
+        support::docx_with(&p, &["word/document.xml"], &[("_rels/.rels", &root), ("word/document2.xml", &document("<w:p/>"))]);
         (d, p)
     };
     let r = scan_file(&p, &Options::default());
     assert!(!r.has("OOXML_NOT_DOCX"), "{:?}", r.findings);
     let root = rels(&[("officeDocument", "/WORD/Document.XML", false)]);
     let p2 = d.path().join("d3.docx");
-    common::docx_with(&p2, &[], &[("_rels/.rels", &root)]);
+    support::docx_with(&p2, &[], &[("_rels/.rels", &root)]);
     assert!(!scan_file(&p2, &Options::default()).has("OOXML_NOT_DOCX"));
     let missing = rels(&[("officeDocument", "word/gone.xml", false)]);
     let p3 = d.path().join("d4.docx");
-    common::docx_with(&p3, &[], &[("_rels/.rels", &missing)]);
+    support::docx_with(&p3, &[], &[("_rels/.rels", &missing)]);
     let r = scan_file(&p3, &Options::default());
     assert!(r.findings.iter().any(|f| f.code == "OOXML_NOT_DOCX" && f.location == "word/gone.xml"), "{:?}", r.findings);
 }
@@ -477,7 +477,7 @@ fn entries_beyond_max_files_are_not_walked_and_the_scan_is_incomplete() {
     let mut refs: Vec<(&str, &[u8])> = junk.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
     let doc = document(&field(&[" DDEAUTO cmd.exe "]));
     refs.push(("word/document.xml", &doc));
-    common::zip_of(&p, &refs);
+    support::zip_of(&p, &refs);
     let mut spent = 0u64;
     let mut r = FileReport::new(&p, None);
     inspect_security(&p, &Limits { max_files: 50, ..Limits::default() }, false, &mut spent, &mut r);
@@ -490,7 +490,7 @@ fn structure_reads_are_charged_to_the_shared_budget() {
     use bookdoctor::zipcheck::ooxml::inspect_structure;
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("s.docx");
-    common::docx_with(&p, &[], &[]);
+    support::docx_with(&p, &[], &[]);
     let mut spent = 0u64;
     let mut r = FileReport::new(&p, None);
     inspect_structure(&p, &Limits { max_total: 100, ..Limits::default() }, &mut spent, &mut r);

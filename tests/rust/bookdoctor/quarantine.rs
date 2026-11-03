@@ -1,7 +1,7 @@
 //! `quarantine`·`unquarantine`: 인코딩이 손상된 문서를 격리하고 되돌린다(옛 quarantine_broken 테스트 이식).
 //! 이동은 항상 되돌릴 수 있어야 한다. 판정에 오탐이 섞일 수 있기 때문이다.
 
-mod common;
+mod support;
 
 use std::cell::Cell;
 use std::fs;
@@ -244,9 +244,9 @@ fn run_in(root: &Path, args: &[&str]) -> (i32, String) {
 fn quarantine_scans_the_path_and_moves_only_mojibake_files() {
     let lib = library();
     let broken = lib.root.join("3_판타지/broken.txt");
-    fs::write(&broken, common::corrupted()).unwrap();
+    fs::write(&broken, support::corrupted()).unwrap();
     let clean = lib.root.join("3_판타지/clean.txt");
-    fs::write(&clean, common::clean_korean()).unwrap();
+    fs::write(&clean, support::clean_korean()).unwrap();
     let (code, out) = run_in(&lib.root, &["quarantine", lib.root.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("이동 완료 1건"), "{out}");
@@ -300,7 +300,7 @@ fn a_manifest_that_cannot_be_written_is_logged_but_the_move_stands() {
 #[test]
 fn move_and_undo_failures_are_listed_and_exit_1() {
     let lib = library();
-    fs::write(lib.root.join("3_판타지/broken.txt"), common::corrupted()).unwrap();
+    fs::write(lib.root.join("3_판타지/broken.txt"), support::corrupted()).unwrap();
     // 격리 디렉터리 자리에 파일이 있으면 하위 디렉터리를 만들 수 없다.
     fs::write(lib.root.join(BROKEN_DIR_NAME), "막힘").unwrap();
     let (code, out) = run_in(&lib.root, &["quarantine", lib.root.to_str().unwrap()]);

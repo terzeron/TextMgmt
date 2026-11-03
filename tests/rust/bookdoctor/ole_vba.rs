@@ -1,9 +1,9 @@
 //! MS-OVBA 압축 해제와 VBA 프로젝트 읽기 테스트.
 
 #[path = "ole_common.rs"]
-mod common;
+mod support;
 
-use common::{compress, dir_stream, make_cfb, module_stream, pseudo};
+use support::{compress, dir_stream, make_cfb, module_stream, pseudo};
 use bookdoctor::ole::vba::{VbaError, decompress, read_project};
 use bookdoctor::ole::{Limits, OleFile};
 

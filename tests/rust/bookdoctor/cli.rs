@@ -1,6 +1,6 @@
 //! 명령행 파싱과 `run` 종료 코드 테스트. `bookdoctor <command> [옵션] PATH...` 형태다.
 
-mod common;
+mod support;
 
 use std::path::{Path, PathBuf};
 
@@ -162,7 +162,7 @@ fn write_file(dir: &Path, name: &str, bytes: &[u8]) {
 /// `con.txt`는 LOW 1건(예약 장치 이름), `empty.txt`는 MEDIUM 1건(빈 파일)만 낸다.
 fn low_and_medium_dir() -> tempfile::TempDir {
     let d = tempfile::tempdir().unwrap();
-    write_file(d.path(), "con.txt", common::clean_korean().as_bytes());
+    write_file(d.path(), "con.txt", support::clean_korean().as_bytes());
     write_file(d.path(), "empty.txt", b"");
     d
 }
@@ -233,7 +233,7 @@ fn file_that_could_not_be_scanned_still_exits_2_under_default_filter() {
 #[test]
 fn high_findings_are_still_shown_by_default() {
     let d = tempfile::tempdir().unwrap();
-    let text = common::clean_korean();
+    let text = support::clean_korean();
     let (cp949, _, _) = encoding_rs::EUC_KR.encode(&text);
     write_file(d.path(), "old.txt", &cp949);
     let (code, out) = run_in(d.path(), &[]);
@@ -244,7 +244,7 @@ fn high_findings_are_still_shown_by_default() {
 #[test]
 fn mojibake_is_reported_as_json() {
     let d = tempfile::tempdir().unwrap();
-    write_file(d.path(), "broken.txt", common::corrupted().as_bytes());
+    write_file(d.path(), "broken.txt", support::corrupted().as_bytes());
     let (code, out) = run_in(d.path(), &["--json"]);
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("\"code\":\"MOJIBAKE\""), "{out}");

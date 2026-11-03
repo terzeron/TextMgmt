@@ -1,6 +1,6 @@
 //! 범용 ZIP 빠른 점검 테스트: 열 수 있는지, 멤버를 풀 수 있는지, 이름·압축비·내장 실행 파일을 본다.
 
-mod common;
+mod support;
 
 use std::fs;
 use std::path::Path;
@@ -29,7 +29,7 @@ fn text(n: usize) -> Vec<u8> {
 fn valid_zip_has_no_findings() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("ok.zip");
-    common::zip_of(&p, &[("a.txt", &text(50)), ("dir/b.txt", &text(10))]);
+    support::zip_of(&p, &[("a.txt", &text(50)), ("dir/b.txt", &text(10))]);
     let r = scan(&p);
     assert_eq!(r.format, Some(Format::Zip));
     assert!(r.findings.is_empty() && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
@@ -49,9 +49,9 @@ fn plain_text_with_zip_extension_is_not_a_zip() {
 fn entry_with_a_corrupt_deflate_stream_is_found_by_the_probe_without_deep() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("bad.zip");
-    common::zip_of(&p, &[("good.txt", &text(30)), ("bad.txt", &text(400))]);
+    support::zip_of(&p, &[("good.txt", &text(30)), ("bad.txt", &text(400))]);
     let mut b = fs::read(&p).unwrap();
-    let at = common::data_offset(&b, "bad.txt");
+    let at = support::data_offset(&b, "bad.txt");
     b[at] = 0xFF; // BFINAL=1, BTYPE=11(예약): 풀 수 없는 deflate 블록
     fs::write(&p, b).unwrap();
     let r = scan(&p);
@@ -65,9 +65,9 @@ fn crc_mismatch_beyond_the_probe_is_only_found_with_zip_deep() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("crc.zip");
     let body = vec![b'x'; 8192];
-    common::zip_stored(&p, &[("data.bin", &body)]);
+    support::zip_stored(&p, &[("data.bin", &body)]);
     let mut b = fs::read(&p).unwrap();
-    let at = common::data_offset(&b, "data.bin");
+    let at = support::data_offset(&b, "data.bin");
     b[at + 8191] ^= 0xFF; // 마지막 바이트: 앞 4096바이트 시험 밖
     fs::write(&p, b).unwrap();
     assert!(!scan(&p).has("ZIP_CRC_MISMATCH") && !scan(&p).has("ZIP_ENTRY_UNREADABLE"), "probe must stay shallow");
@@ -81,9 +81,9 @@ fn small_member_crc_mismatch_is_found_even_without_deep() {
     // 4096바이트 이하는 시험이 끝까지 읽으므로 CRC도 확인된다.
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("small.zip");
-    common::zip_stored(&p, &[("s.bin", &[b'y'; 100])]);
+    support::zip_stored(&p, &[("s.bin", &[b'y'; 100])]);
     let mut b = fs::read(&p).unwrap();
-    let at = common::data_offset(&b, "s.bin");
+    let at = support::data_offset(&b, "s.bin");
     b[at + 50] ^= 0xFF;
     fs::write(&p, b).unwrap();
     assert!(scan(&p).has("ZIP_CRC_MISMATCH"));
@@ -93,7 +93,7 @@ fn small_member_crc_mismatch_is_found_even_without_deep() {
 fn zip_slip_is_critical_and_named_after_the_member() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("slip.zip");
-    common::zip_of(&p, &[("../../evil.sh", b"echo hi\n"), ("ok.txt", b"ok")]);
+    support::zip_of(&p, &[("../../evil.sh", b"echo hi\n"), ("ok.txt", b"ok")]);
     let r = scan(&p);
     let f = finding(&r, "ZIP_PATH_TRAVERSAL");
     assert_eq!((f.category, f.severity), (Category::Security, Severity::Critical));
@@ -104,7 +104,7 @@ fn zip_slip_is_critical_and_named_after_the_member() {
 fn highly_compressed_member_is_flagged_without_reading_it_all() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("bomb.zip");
-    common::zip_of(&p, &[("zeros.bin", &vec![0u8; 8 * 1024 * 1024])]);
+    support::zip_of(&p, &[("zeros.bin", &vec![0u8; 8 * 1024 * 1024])]);
     let r = scan(&p);
     assert_eq!(finding(&r, "HIGH_COMPRESSION_RATIO").severity, Severity::Medium);
 }
@@ -113,7 +113,7 @@ fn highly_compressed_member_is_flagged_without_reading_it_all() {
 fn forged_small_declared_size_does_not_make_deep_scan_read_everything() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("forged.zip");
-    common::zip_of(&p, &[("zeros.bin", &vec![0u8; 32 * 1024 * 1024])]);
+    support::zip_of(&p, &[("zeros.bin", &vec![0u8; 32 * 1024 * 1024])]);
     let mut b = fs::read(&p).unwrap();
     // 중앙 디렉터리의 비압축 크기(오프셋 24)를 10으로 속인다.
     let central = (0..b.len() - 46).find(|&i| &b[i..i + 4] == b"PK\x01\x02").unwrap();
@@ -129,7 +129,7 @@ fn forged_small_declared_size_does_not_make_deep_scan_read_everything() {
 fn directory_over_the_size_limit_is_incomplete_and_not_opened() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("hugedir.zip");
-    common::zip_of(&p, &[("a.txt", b"a")]);
+    support::zip_of(&p, &[("a.txt", b"a")]);
     let mut b = fs::read(&p).unwrap();
     let eocd = (0..=b.len() - 22).rev().find(|&i| &b[i..i + 4] == b"PK\x05\x06").unwrap();
     b[eocd + 12..eocd + 16].copy_from_slice(&0x2000_0000u32.to_le_bytes()); // 512MiB
@@ -143,9 +143,9 @@ fn directory_over_the_size_limit_is_incomplete_and_not_opened() {
 fn nested_zip_is_flagged_and_recursed_unless_disabled() {
     let d = tempfile::tempdir().unwrap();
     let inner = d.path().join("inner.zip");
-    common::zip_of(&inner, &[("../../deep-evil", b"x")]);
+    support::zip_of(&inner, &[("../../deep-evil", b"x")]);
     let p = d.path().join("outer.zip");
-    common::zip_of(&p, &[("inner.dat", &fs::read(&inner).unwrap())]);
+    support::zip_of(&p, &[("inner.dat", &fs::read(&inner).unwrap())]);
     // 기본은 P4의 재귀 검사가 켜져 있다: 안쪽 ZIP의 경로 위험이 `멤버!안쪽이름` 위치로 올라온다.
     let r = scan(&p);
     assert_eq!(finding(&r, "NESTED_ARCHIVE").severity, Severity::Medium);
@@ -164,7 +164,7 @@ fn executable_member_is_flagged_by_name_and_by_magic() {
     pe[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
     pe[0x40..0x44].copy_from_slice(b"PE\0\0");
     let p = d.path().join("exe.zip");
-    common::zip_of(&p, &[("setup.exe", b"not really"), ("picture.dat", &pe), ("readme.txt", b"hi")]);
+    support::zip_of(&p, &[("setup.exe", b"not really"), ("picture.dat", &pe), ("readme.txt", b"hi")]);
     let r = scan(&p);
     let locs: Vec<&str> = r.findings.iter().filter(|f| f.code == "EMBEDDED_EXECUTABLE").map(|f| f.location.as_str()).collect();
     assert!(locs.contains(&"setup.exe") && locs.contains(&"picture.dat") && !locs.contains(&"readme.txt"), "{locs:?}");
@@ -175,8 +175,8 @@ fn executable_member_is_flagged_by_name_and_by_magic() {
 fn encrypted_member_is_incomplete_not_clean() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("enc.zip");
-    common::zip_of(&p, &[("secret.txt", &text(20)), ("open.txt", &text(5))]);
-    common::mark_encrypted(&p, "secret.txt");
+    support::zip_of(&p, &[("secret.txt", &text(20)), ("open.txt", &text(5))]);
+    support::mark_encrypted(&p, "secret.txt");
     let r = scan(&p);
     assert!(r.incomplete);
     assert!(r.reasons.iter().any(|x| x.contains("secret.txt") && FileReport::is_encrypted_reason(x)), "{:?}", r.reasons);
@@ -186,7 +186,7 @@ fn encrypted_member_is_incomplete_not_clean() {
 fn member_name_with_escape_never_reaches_the_terminal_raw() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("esc.zip");
-    common::zip_of(&p, &[("a\u{1b}[2J.exe", b"x")]);
+    support::zip_of(&p, &[("a\u{1b}[2J.exe", b"x")]);
     let mut out = Vec::new();
     run_with_env(&["scan".into(), "--min-severity".into(), "low".into(), p.to_string_lossy().into_owned()], &mut out, false, false);
     assert!(!String::from_utf8(out).unwrap().contains('\u{1b}'));
@@ -212,7 +212,7 @@ fn traversal_is_found_when_the_raw_bytes_are_not_valid_utf8() {
     // 디코딩한 이름과 원본 바이트의 손실 변환 이름을 모두 검사하므로 어느 쪽으로 읽어도 `..`를 놓치지 않는다.
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("rawname.zip");
-    common::zip_of(&p, &[("AAAA/evil.txt", b"x")]);
+    support::zip_of(&p, &[("AAAA/evil.txt", b"x")]);
     let mut b = fs::read(&p).unwrap();
     let mut from = 0;
     while let Some(at) = b[from..].windows(13).position(|w| w == b"AAAA/evil.txt") {
@@ -236,7 +236,7 @@ fn resolve_name_falls_back_to_the_raw_bytes_and_flags_a_failed_decode() {
 fn stored_member_whose_declared_size_differs_from_its_extent_is_a_size_mismatch() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("forged.zip");
-    common::zip_stored(&p, &[("a.bin", &vec![b'x'; 8192])]);
+    support::zip_stored(&p, &[("a.bin", &vec![b'x'; 8192])]);
     let mut b = fs::read(&p).unwrap();
     let central = b.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
     b[central + 24..central + 28].copy_from_slice(&10u32.to_le_bytes());
@@ -257,7 +257,7 @@ fn forge_declared_size(p: &Path, size: u32) {
 fn deflate_member_declaring_less_than_the_probe_window_is_a_size_mismatch_not_unreadable() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("forged-small.zip");
-    common::zip_of(&p, &[("zeros.bin", &vec![0u8; 8 * 1024 * 1024])]);
+    support::zip_of(&p, &[("zeros.bin", &vec![0u8; 8 * 1024 * 1024])]);
     forge_declared_size(&p, 10);
     let r = scan(&p);
     let f = finding(&r, "ZIP_SIZE_MISMATCH");
@@ -269,7 +269,7 @@ fn deflate_member_declaring_less_than_the_probe_window_is_a_size_mismatch_not_un
 fn forged_size_above_the_probe_window_is_only_seen_by_zip_deep() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("forged-big.zip");
-    common::zip_of(&p, &[("zeros.bin", &vec![0u8; 8 * 1024 * 1024])]);
+    support::zip_of(&p, &[("zeros.bin", &vec![0u8; 8 * 1024 * 1024])]);
     forge_declared_size(&p, 5000);
     assert!(!scan(&p).has("ZIP_SIZE_MISMATCH"), "probe-only reads 4096 bytes and cannot see it (documented limit)");
     let r = deep(&p);
@@ -280,8 +280,8 @@ fn forged_size_above_the_probe_window_is_only_seen_by_zip_deep() {
 fn honest_headers_never_get_a_size_mismatch() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("ok.zip");
-    common::zip_of(&p, &[("a.txt", &text(200)), ("b.bin", &vec![1u8; 10_000])]);
-    common::zip_stored(&d.path().join("ok2.zip"), &[("c.bin", &vec![2u8; 9000])]);
+    support::zip_of(&p, &[("a.txt", &text(200)), ("b.bin", &vec![1u8; 10_000])]);
+    support::zip_stored(&d.path().join("ok2.zip"), &[("c.bin", &vec![2u8; 9000])]);
     for name in ["ok.zip", "ok2.zip"] {
         let path = d.path().join(name);
         assert!(!scan(&path).has("ZIP_SIZE_MISMATCH") && !deep(&path).has("ZIP_SIZE_MISMATCH"), "{name}");
@@ -295,7 +295,7 @@ fn common_dropper_types_in_a_zip_are_flagged_by_name() {
     for name in ["invoice.js", "a.pif", "a.msc", "a.scf", "a.url", "a.iso", "a.img", "a.vhd", "a.vhdx", "a.chm", "a.xll", "a.wsc", "a.one", "a.appx", "a.msix", "a.exe", "a.lnk"] {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("z.zip");
-        common::zip_of(&p, &[(name, b"payload")]);
+        support::zip_of(&p, &[(name, b"payload")]);
         let r = scan(&p);
         assert!(r.findings.iter().any(|f| f.code == "EMBEDDED_EXECUTABLE" && f.location == name), "{name}: {:?}", r.findings);
     }
@@ -305,14 +305,14 @@ fn common_dropper_types_in_a_zip_are_flagged_by_name() {
 fn bin_members_are_data_unless_their_content_is_executable() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("z.zip");
-    common::zip_of(&p, &[("printerSettings1.bin", b"\x01\x02 plain data"), ("a.bin", b"data")]);
+    support::zip_of(&p, &[("printerSettings1.bin", b"\x01\x02 plain data"), ("a.bin", b"data")]);
     assert!(scan(&p).findings.is_empty());
     let mut pe = vec![0u8; 0x100];
     pe[..2].copy_from_slice(b"MZ");
     pe[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
     pe[0x40..0x44].copy_from_slice(b"PE\0\0");
     let q = d.path().join("pe.zip");
-    common::zip_of(&q, &[("real.bin", &pe)]);
+    support::zip_of(&q, &[("real.bin", &pe)]);
     assert!(scan(&q).has("EMBEDDED_EXECUTABLE"));
 }
 
@@ -324,7 +324,7 @@ fn duplicate_member_names_are_reported_because_the_zip_crate_hides_one_copy() {
     pe[..2].copy_from_slice(b"MZ");
     pe[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
     pe[0x40..0x44].copy_from_slice(b"PE\0\0");
-    common::zip_of(&p, &[("readmeA.txt", &pe), ("readmeB.txt", b"hello")]);
+    support::zip_of(&p, &[("readmeA.txt", &pe), ("readmeB.txt", b"hello")]);
     let mut b = fs::read(&p).unwrap();
     let mut from = 0;
     while let Some(at) = b[from..].windows(11).position(|w| w == b"readmeB.txt") {
@@ -343,6 +343,6 @@ fn duplicate_member_names_are_reported_because_the_zip_crate_hides_one_copy() {
 fn archives_without_duplicates_never_get_the_duplicate_finding() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("ok.zip");
-    common::zip_of(&p, &[("a.txt", b"a"), ("dir/", b""), ("dir/b.txt", b"b")]);
+    support::zip_of(&p, &[("a.txt", b"a"), ("dir/", b""), ("dir/b.txt", b"b")]);
     assert!(!scan(&p).has("ZIP_DUPLICATE_NAME"));
 }

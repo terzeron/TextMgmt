@@ -1,6 +1,6 @@
 //! `--sanitize`: 허용 목록으로 EPUB을 재구성한다. 마크업·CSS 정리, 멤버 제거, 검증, 휴지통 보관과 제자리 덮어쓰기.
 
-mod common;
+mod support;
 
 use std::fs;
 use std::io::{Cursor, Read};
@@ -9,7 +9,7 @@ use std::path::Path;
 
 use bookdoctor::cli::{Options, execute, parse};
 use bookdoctor::sanitize::{rebuild, strip_css, strip_markup, verify};
-use common::*;
+use support::*;
 
 fn markup(s: &str) -> String {
     strip_markup(s, false).0

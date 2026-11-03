@@ -1,6 +1,6 @@
 //! HWPX 테스트: 구조, 내장 실행 파일·OLE, XML 공격. 스크립트 탐지는 구현하지 않는다(docs/bookdoctor-hwpx-notes.md).
 
-mod common;
+mod support;
 
 use std::fs;
 
@@ -11,7 +11,7 @@ use bookdoctor::{Category, FileReport, Finding, Format, Severity};
 fn hwpx(remove: &[&str], add: &[(&str, &[u8])]) -> FileReport {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("a.hwpx");
-    common::hwpx_with(&p, remove, add);
+    support::hwpx_with(&p, remove, add);
     scan_file(&p, &Options::default())
 }
 
@@ -100,7 +100,7 @@ fn external_hyperlink_style_content_is_not_flagged() {
 fn plain_zip_with_hwpx_extension_has_no_manifest() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("a.hwpx");
-    common::zip_of(&p, &[("hello.txt", b"hi")]);
+    support::zip_of(&p, &[("hello.txt", b"hi")]);
     assert!(scan_file(&p, &Options::default()).has("HWPX_NO_MANIFEST"));
 }
 
@@ -108,7 +108,7 @@ fn plain_zip_with_hwpx_extension_has_no_manifest() {
 fn hwpx_extension_with_ole_content_is_a_mismatch_and_incomplete_without_claiming_encryption() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("old.hwpx");
-    let mut b = common::OLE_MAGIC.to_vec();
+    let mut b = support::OLE_MAGIC.to_vec();
     b.resize(2048, 0);
     fs::write(&p, b).unwrap();
     let r = scan_file(&p, &Options::default());
@@ -158,7 +158,7 @@ fn many_oversized_parts_cannot_defeat_the_total_budget() {
     let big = vec![b' '; 600 * 1024];
     let parts: Vec<(String, Vec<u8>)> = (0..6).map(|i| (format!("Contents/extra{i}.xml"), big.clone())).collect();
     let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
-    common::hwpx_with(&p, &[], &refs);
+    support::hwpx_with(&p, &[], &refs);
     let r = scan_file(&p, &Options { max_total_mb: 1, ..Options::default() });
     // 1MiB 예산에서 600KiB 부분 둘은 못 담는다: 하나는 읽고 나머지는 예산 소진·초과로 미완료다.
     assert!(r.incomplete, "{:?}", r.reasons);
@@ -184,11 +184,11 @@ fn crc_error_in_a_content_part_is_reported_not_silently_skipped() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("crc.hwpx");
     let sec = format!(r#"<?xml version="1.0"?><hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"><!-- {} --></hs:sec>"#, " ".repeat(6000));
-    let parts: Vec<(String, Vec<u8>)> = common::minimal_hwpx_parts().into_iter().map(|(n, b)| if n == "Contents/section0.xml" { (n, sec.clone().into_bytes()) } else { (n, b) }).collect();
+    let parts: Vec<(String, Vec<u8>)> = support::minimal_hwpx_parts().into_iter().map(|(n, b)| if n == "Contents/section0.xml" { (n, sec.clone().into_bytes()) } else { (n, b) }).collect();
     let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
-    common::zip_stored(&p, &refs);
+    support::zip_stored(&p, &refs);
     let mut b = fs::read(&p).unwrap();
-    let at = common::data_offset(&b, "Contents/section0.xml");
+    let at = support::data_offset(&b, "Contents/section0.xml");
     b[at + 5000] ^= 0x01;
     fs::write(&p, b).unwrap();
     let r = scan_file(&p, &Options::default());

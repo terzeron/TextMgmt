@@ -1,6 +1,6 @@
 //! EPUB 렌더링 검사 테스트. 규칙의 근거는 frontend/src/EpubDiagnose.js와 ViewEPUB.jsx다.
 
-mod common;
+mod support;
 
 use std::fs;
 use std::path::Path;
@@ -9,7 +9,7 @@ use bookdoctor::cli::Options;
 use bookdoctor::epub::render::{MAX_UNREADABLE_FINDINGS, ReadErrorKind, Selector, classify_read_error, count_hidden_elements, inspect, inspect_with, zero_size_selectors};
 use bookdoctor::epub::security::Limits;
 use bookdoctor::scan::scan_file;
-use common::*;
+use support::*;
 use bookdoctor::{Category, FileReport, Format, Severity};
 
 const OPF_NS_DECL: &str = r#" xmlns:dc="http://purl.org/dc/elements/1.1/""#;

@@ -1,6 +1,6 @@
 //! 디스패치와 파일 단위 검사 테스트.
 
-mod common;
+mod support;
 
 use std::path::Path;
 
@@ -63,7 +63,7 @@ use bookdoctor::{Category, Severity};
 fn epub_with_script(script: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("t.epub");
-    common::epub_with_chapter(&p, &common::xhtml(&format!("<p>본문</p><script>{script}</script>")));
+    support::epub_with_chapter(&p, &support::xhtml(&format!("<p>본문</p><script>{script}</script>")));
     (d, p)
 }
 
@@ -88,7 +88,7 @@ fn scan_file_fills_risk_score_and_a_clean_file_stays_below_high() {
     assert!(scan_file(&p, &Options::default()).risk_score >= 70);
     let d = tempfile::tempdir().unwrap();
     let clean = d.path().join("ok.epub");
-    common::make_epub(&clean);
+    support::make_epub(&clean);
     // make_epub의 기본형은 LOW 지표(NAV_MISSING)만 낸다. LOW는 10점이다.
     let r = scan_file(&clean, &Options::default());
     assert!(r.findings.iter().all(|f| f.severity == Severity::Low), "{:?}", r.findings);

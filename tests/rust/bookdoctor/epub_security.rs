@@ -1,12 +1,12 @@
 //! 스크립트 실행 코드·위험 구조 검출 테스트. EPUB을 직접 만들어 규칙마다 확인한다.
 
-mod common;
+mod support;
 
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use common::*;
+use support::*;
 use bookdoctor::epub::security::{Limits, Stats, guarded, scan as scan_into, scan_stats};
 use bookdoctor::{Category, FileReport, Format, Severity};
 

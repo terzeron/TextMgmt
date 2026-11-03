@@ -2,7 +2,7 @@
 //! 옛 인코딩 검사 도구 테스트에서 옮기고 단언을 `Verdict`로 바꿨다.
 //! MuPDF worker는 `FakeRunner`로 대신하므로 worker가 없어도 통과한다.
 
-mod common;
+mod support;
 
 use std::fs;
 
@@ -10,7 +10,7 @@ use bookdoctor::cli::Options;
 use bookdoctor::mojibake::{self, MIN_HANGUL_RATIO, MOJIBAKE_LIKENESS_THRESHOLD, TextSource, Verdict, classify_text};
 use bookdoctor::pdf;
 use bookdoctor::scan::scan_file;
-use common::*;
+use support::*;
 use text_extractor::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, korean_likeness, extract_document_text};
 use bookdoctor::{Category, FileReport, Severity};
 

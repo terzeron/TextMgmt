@@ -1,6 +1,6 @@
 //! 포맷과 무관한 공통 파일 검사 테스트.
 
-mod common;
+mod support;
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -23,7 +23,7 @@ fn find<'a>(r: &'a bookdoctor::FileReport, code: &str) -> &'a bookdoctor::Findin
 
 #[test]
 fn flags_empty_file() {
-    let f = common::file_with("a.txt", b"");
+    let f = support::file_with("a.txt", b"");
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     let x = find(&r, "EMPTY_FILE");
     assert_eq!((x.category, x.severity), (Category::Defect, Severity::Medium));
@@ -33,7 +33,7 @@ fn flags_empty_file() {
 
 #[test]
 fn flags_sparse_file() {
-    let f = common::file_with("a.txt", b"");
+    let f = support::file_with("a.txt", b"");
     File::options().write(true).open(f.path()).unwrap().set_len(2 * 1024 * 1024).unwrap();
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     let x = find(&r, "SPARSE_FILE");
@@ -42,7 +42,7 @@ fn flags_sparse_file() {
 
 #[test]
 fn sparse_below_one_mib_is_not_flagged() {
-    let f = common::file_with("a.txt", b"");
+    let f = support::file_with("a.txt", b"");
     File::options().write(true).open(f.path()).unwrap().set_len(1024 * 1024 - 1).unwrap();
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     assert_eq!(count(&r, "SPARSE_FILE"), 0);
@@ -50,7 +50,7 @@ fn sparse_below_one_mib_is_not_flagged() {
 
 #[test]
 fn dense_large_file_is_not_sparse() {
-    let f = common::file_with("a.txt", &vec![b'a'; 2 * 1024 * 1024]);
+    let f = support::file_with("a.txt", &vec![b'a'; 2 * 1024 * 1024]);
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     assert_eq!(count(&r, "SPARSE_FILE"), 0);
 }
@@ -64,7 +64,7 @@ fn tail_zeroed(len: usize) -> Vec<u8> {
 
 #[test]
 fn flags_zero_tail() {
-    let f = common::file_with("a.txt", &tail_zeroed(8192));
+    let f = support::file_with("a.txt", &tail_zeroed(8192));
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     let x = find(&r, "ZERO_TAIL");
     assert_eq!((x.category, x.severity), (Category::Defect, Severity::High));
@@ -72,9 +72,9 @@ fn flags_zero_tail() {
 
 #[test]
 fn zero_tail_needs_4096_bytes() {
-    let f = common::file_with("a.txt", &vec![0u8; 4095]);
+    let f = support::file_with("a.txt", &vec![0u8; 4095]);
     assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "ZERO_TAIL"), 0);
-    let f = common::file_with("a.txt", &vec![0u8; 4096]);
+    let f = support::file_with("a.txt", &vec![0u8; 4096]);
     assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "ZERO_TAIL"), 1);
 }
 
@@ -82,13 +82,13 @@ fn zero_tail_needs_4096_bytes() {
 fn nonzero_last_byte_is_not_zero_tail() {
     let mut v = tail_zeroed(8192);
     *v.last_mut().unwrap() = 1;
-    let f = common::file_with("a.txt", &v);
+    let f = support::file_with("a.txt", &v);
     assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "ZERO_TAIL"), 0);
 }
 
 #[test]
 fn flags_format_mismatch_for_pdf_that_is_really_an_epub() {
-    let f = common::epub_named("book.pdf");
+    let f = support::epub_named("book.pdf");
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     assert_eq!(r.format, Some(Format::Epub));
     assert_eq!(count(&r, "FORMAT_MISMATCH"), 1);
@@ -98,13 +98,13 @@ fn flags_format_mismatch_for_pdf_that_is_really_an_epub() {
 
 #[test]
 fn flags_format_mismatch_for_pdf_that_is_text() {
-    let f = common::file_with("a.pdf", "그냥 텍스트\n".as_bytes());
+    let f = support::file_with("a.pdf", "그냥 텍스트\n".as_bytes());
     assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "FORMAT_MISMATCH"), 1);
 }
 
 #[test]
 fn flags_format_mismatch_for_epub_that_is_not_zip() {
-    let f = common::file_with("a.epub", b"%PDF-1.4\n%%EOF\n");
+    let f = support::file_with("a.epub", b"%PDF-1.4\n%%EOF\n");
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     assert_eq!(count(&r, "FORMAT_MISMATCH"), 1);
     assert_eq!(r.format, Some(Format::Pdf));
@@ -112,15 +112,15 @@ fn flags_format_mismatch_for_epub_that_is_not_zip() {
 
 #[test]
 fn flags_format_mismatch_for_txt_that_is_a_zip() {
-    let f = common::file_with("a.txt", b"PK\x03\x04rest");
+    let f = support::file_with("a.txt", b"PK\x03\x04rest");
     assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "FORMAT_MISMATCH"), 1);
 }
 
 #[test]
 fn matching_content_has_no_format_mismatch() {
-    let f = common::epub_named("a.epub");
+    let f = support::epub_named("a.epub");
     assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "FORMAT_MISMATCH"), 0);
-    let f = common::file_with("a.pdf", b"%PDF-1.4\n");
+    let f = support::file_with("a.pdf", b"%PDF-1.4\n");
     assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "FORMAT_MISMATCH"), 0);
 }
 
@@ -129,14 +129,14 @@ fn epub_embedding_a_pdf_early_is_still_a_zip() {
     let mut bytes = b"PK\x03\x04".to_vec();
     bytes.extend_from_slice(b"....%PDF-1.4....");
     assert_eq!(sniff_head(&bytes), Sniffed::Zip);
-    let f = common::file_with("a.epub", &bytes);
+    let f = support::file_with("a.epub", &bytes);
     assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "FORMAT_MISMATCH"), 0);
 }
 
 #[test]
 fn flags_disguised_executable() {
-    for (name, head) in [("a.epub", &b"\x7fELF\x02\x01"[..]), ("a.pdf", &common::minimal_pe()[..]), ("a.txt", b"\xCF\xFA\xED\xFE")] {
-        let f = common::file_with(name, head);
+    for (name, head) in [("a.epub", &b"\x7fELF\x02\x01"[..]), ("a.pdf", &support::minimal_pe()[..]), ("a.txt", b"\xCF\xFA\xED\xFE")] {
+        let f = support::file_with(name, head);
         let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
         let x = find(&r, "DISGUISED_EXECUTABLE");
         assert_eq!((x.category, x.severity), (Category::Security, Severity::Critical), "{name}");
@@ -146,7 +146,7 @@ fn flags_disguised_executable() {
 
 #[test]
 fn flags_filename_control_char() {
-    let f = common::file_with("a\u{1}b.txt", "본문\n".as_bytes());
+    let f = support::file_with("a\u{1}b.txt", "본문\n".as_bytes());
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     let x = find(&r, "FILENAME_CONTROL_CHAR");
     assert_eq!((x.category, x.severity), (Category::Defect, Severity::Medium));
@@ -176,7 +176,7 @@ fn flags_filename_too_long() {
 
 #[test]
 fn flags_filename_reserved_name() {
-    let f = common::file_with("CON.txt", "본문\n".as_bytes());
+    let f = support::file_with("CON.txt", "본문\n".as_bytes());
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     let x = find(&r, "FILENAME_RESERVED_NAME");
     assert_eq!((x.category, x.severity), (Category::Defect, Severity::Low));
@@ -184,7 +184,7 @@ fn flags_filename_reserved_name() {
 
 #[test]
 fn clean_text_file_has_no_common_findings() {
-    let f = common::file_with("a.txt", "소림사 장로가 강호에서 수련했다.\n".as_bytes());
+    let f = support::file_with("a.txt", "소림사 장로가 강호에서 수련했다.\n".as_bytes());
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     assert!(r.findings.is_empty(), "{:?}", r.findings);
     assert!(!r.incomplete);
@@ -202,7 +202,7 @@ fn flags_unreadable() {
         eprintln!("skipped: running as root");
         return;
     }
-    let f = common::file_with("a.txt", b"hello");
+    let f = support::file_with("a.txt", b"hello");
     fs::set_permissions(f.path(), fs::Permissions::from_mode(0o000)).unwrap();
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     assert!(r.incomplete);
@@ -212,7 +212,7 @@ fn flags_unreadable() {
 
 #[test]
 fn skipped_over_limit() {
-    let f = common::file_with("a.txt", b"");
+    let f = support::file_with("a.txt", b"");
     let mut w = File::options().write(true).open(f.path()).unwrap();
     w.write_all(&vec![b'a'; 2 * 1024 * 1024]).unwrap();
     let opts = Options { max_total_mb: 1, no_pdf_worker: true, ..Options::default() };
@@ -254,21 +254,21 @@ fn fifo_returns_promptly_as_incomplete() {
 
 #[test]
 fn text_starting_with_mz_has_no_findings() {
-    let f = common::file_with("a.txt", b"MZ Software notes\n");
+    let f = support::file_with("a.txt", b"MZ Software notes\n");
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     assert!(r.findings.is_empty(), "{:?}", r.findings);
 }
 
 #[test]
 fn valid_pe_in_txt_is_disguised_executable() {
-    let f = common::file_with("a.txt", &common::minimal_pe());
+    let f = support::file_with("a.txt", &support::minimal_pe());
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     assert_eq!(find(&r, "DISGUISED_EXECUTABLE").severity, Severity::Critical);
 }
 
 #[test]
 fn file_of_exactly_max_total_mb_is_not_skipped() {
-    let f = common::file_with("a.txt", &vec![b'a'; 1024 * 1024]);
+    let f = support::file_with("a.txt", &vec![b'a'; 1024 * 1024]);
     let opts = Options { max_total_mb: 1, no_pdf_worker: true, ..Options::default() };
     let r = scan_file(f.path(), &opts);
     assert!(!r.incomplete, "{:?}", r.reasons);
@@ -288,7 +288,7 @@ fn far_pe(lfanew: u32, total: usize, sig: bool) -> Vec<u8> {
 
 #[test]
 fn far_pe_header_beyond_head_is_disguised_executable() {
-    let f = common::file_with("a.epub", &far_pe(70000, 70004, true));
+    let f = support::file_with("a.epub", &far_pe(70000, 70004, true));
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     assert_eq!(find(&r, "DISGUISED_EXECUTABLE").severity, Severity::Critical);
     assert_eq!(count(&r, "FORMAT_MISMATCH"), 1);
@@ -296,13 +296,13 @@ fn far_pe_header_beyond_head_is_disguised_executable() {
 
 #[test]
 fn far_mz_without_pe_signature_is_not_disguised() {
-    let f = common::file_with("a.epub", &far_pe(70000, 70100, false));
+    let f = support::file_with("a.epub", &far_pe(70000, 70100, false));
     assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "DISGUISED_EXECUTABLE"), 0);
 }
 
 #[test]
 fn mz_with_lfanew_past_eof_is_not_disguised() {
-    let f = common::file_with("a.epub", &far_pe(70000, 69999, false));
+    let f = support::file_with("a.epub", &far_pe(70000, 69999, false));
     let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
     assert_eq!(count(&r, "DISGUISED_EXECUTABLE"), 0);
     assert!(!r.incomplete || r.reasons.iter().all(|x| !x.starts_with("unreadable")));
@@ -311,12 +311,12 @@ fn mz_with_lfanew_past_eof_is_not_disguised() {
 #[test]
 fn flags_bidi_and_zero_width_characters_in_the_file_name() {
     for name in ["evil\u{202e}gpj.txt", "a\u{200b}b.txt", "a\u{feff}b.txt", "a\u{2066}b.txt"] {
-        let f = common::file_with(name, "본문\n".as_bytes());
+        let f = support::file_with(name, "본문\n".as_bytes());
         let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
         let x = find(&r, "FILENAME_CONTROL_CHAR");
         assert_eq!((x.category, x.severity), (Category::Defect, Severity::Medium), "{name:?}");
         assert_eq!(count(&r, "FILENAME_CONTROL_CHAR"), 1, "{name:?}");
     }
-    let ok = common::file_with("정상 이름.txt", "본문\n".as_bytes());
+    let ok = support::file_with("정상 이름.txt", "본문\n".as_bytes());
     assert_eq!(count(&scan_file(ok.path(), &Options { no_pdf_worker: true, ..Options::default() }), "FILENAME_CONTROL_CHAR"), 0);
 }

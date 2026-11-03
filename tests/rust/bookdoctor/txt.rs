@@ -1,6 +1,6 @@
 //! TXT 검사 테스트.
 
-mod common;
+mod support;
 
 use bookdoctor::cli::Options;
 use bookdoctor::scan::scan_file;
@@ -9,7 +9,7 @@ use bookdoctor::{Category, FileReport, Severity};
 const CLEAN: &str = "한글 소설입니다.\n두 번째 줄입니다.\n";
 
 fn scan_bytes(bytes: &[u8]) -> FileReport {
-    let f = common::file_with("a.txt", bytes);
+    let f = support::file_with("a.txt", bytes);
     scan_file(f.path(), &Options::default())
 }
 

@@ -1,6 +1,6 @@
 //! `--fix-xhtml`: 뷰어가 거부하는 XHTML을 고친다. 마크업 수리, 빈·깨진 멤버 처리, EPUB 재구성, 휴지통 보관과 제자리 덮어쓰기.
 
-mod common;
+mod support;
 
 use std::fs;
 use std::io::{Cursor, Read};
@@ -10,7 +10,7 @@ use std::path::Path;
 use bookdoctor::cli::{Options, execute, parse};
 use bookdoctor::epub::render::xhtml_defect;
 use bookdoctor::repair::xhtml_fix::{rebuild, repair_markup, verify, Verdict};
-use common::*;
+use support::*;
 
 fn fixed(src: &str) -> String {
     let out = repair_markup(src);

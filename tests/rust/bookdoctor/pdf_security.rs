@@ -73,7 +73,7 @@ fn pdf_with_large_object_stream(expanded_bytes: usize) -> Vec<u8> {
 }
 
 /// 옛 `print_text`와 같은 모양으로 폈다. 지표 줄은 `[등급] code (location): detail`이다.
-/// 공통 검사(`common::inspect`)가 더하는 Defect 지표는 이 이식 범위가 아니므로 Security만 편다.
+/// 공통 검사(`support::inspect`)가 더하는 Defect 지표는 이 이식 범위가 아니므로 Security만 편다.
 fn render(r: &FileReport) -> String {
     let security: Vec<_> = r.findings.iter().filter(|f| f.category == Category::Security).collect();
     let status = if !security.is_empty() {

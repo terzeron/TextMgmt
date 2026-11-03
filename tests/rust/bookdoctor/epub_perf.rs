@@ -1,6 +1,6 @@
 //! EPUB 성능 최적화 테스트: 결과는 그대로이고 낭비만 줄었는지 센다.
 
-mod common;
+mod support;
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -29,7 +29,7 @@ fn text_members_are_decoded() {
     let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("t.epub");
-    common::epub_with_chapter(&p, &common::xhtml("<p>본문</p>"));
+    support::epub_with_chapter(&p, &support::xhtml("<p>본문</p>"));
     let (_, calls) = scan_counting(&p);
     assert!(calls >= 2, "xhtml와 opf는 변환해서 검사한다: {calls}");
 }
@@ -39,14 +39,14 @@ fn non_text_members_are_not_decoded() {
     let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let d = tempfile::tempdir().unwrap();
     let plain = d.path().join("plain.epub");
-    common::epub_with_chapter(&plain, &common::xhtml("<p>본문</p>"));
+    support::epub_with_chapter(&plain, &support::xhtml("<p>본문</p>"));
     let (_, base_calls) = scan_counting(&plain);
 
     let with_media = d.path().join("media.epub");
     let jpg = binary(1 << 20, 1);
     let png = binary(1 << 19, 2);
     let ttf = binary(1 << 18, 3);
-    common::epub_with_files(&with_media, &common::clean_opf(), &common::xhtml("<p>본문</p>"), &[("OEBPS/a.jpg", &jpg), ("OEBPS/b.png", &png), ("OEBPS/c.ttf", &ttf), ("OEBPS/d.bin", &jpg)]);
+    support::epub_with_files(&with_media, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/a.jpg", &jpg), ("OEBPS/b.png", &png), ("OEBPS/c.ttf", &ttf), ("OEBPS/d.bin", &jpg)]);
     let (_, media_calls) = scan_counting(&with_media);
     assert_eq!(media_calls, base_calls, "이미지·폰트·알 수 없는 확장자 멤버는 UTF-8 변환 대상이 아니다");
 }
@@ -58,7 +58,7 @@ fn binary_member_checks_still_run_without_decoding() {
     let p = d.path().join("disguised.epub");
     let mut pe = vec![0u8; 0x100];
     pe[..2].copy_from_slice(b"MZ");
-    common::epub_with_files(&p, &common::clean_opf(), &common::xhtml("<p>본문</p>"), &[("OEBPS/cover.jpg", &pe)]);
+    support::epub_with_files(&p, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/cover.jpg", &pe)]);
     let (r, _) = scan_counting(&p);
     let f = r.findings.iter().find(|f| f.code == "PE_EXECUTABLE_CONTENT").unwrap_or_else(|| panic!("{:?}", r.findings));
     assert_eq!(f.severity, bookdoctor::Severity::Critical);
@@ -70,10 +70,10 @@ fn txt_members_are_not_decoded_either_because_other_kind_has_no_text_rules() {
     let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let d = tempfile::tempdir().unwrap();
     let plain = d.path().join("plain.epub");
-    common::epub_with_chapter(&plain, &common::xhtml("<p>본문</p>"));
+    support::epub_with_chapter(&plain, &support::xhtml("<p>본문</p>"));
     let (_, base_calls) = scan_counting(&plain);
     let with_txt = d.path().join("txt.epub");
-    common::epub_with_files(&with_txt, &common::clean_opf(), &common::xhtml("<p>본문</p>"), &[("OEBPS/notes.txt", "소림사 장로\n".as_bytes())]);
+    support::epub_with_files(&with_txt, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/notes.txt", "소림사 장로\n".as_bytes())]);
     let (r, txt_calls) = scan_counting(&with_txt);
     assert_eq!(txt_calls, base_calls);
     assert!(!r.findings.iter().any(|f| f.location.contains("notes.txt")), "{:?}", r.findings);
@@ -108,7 +108,7 @@ fn assert_same(new: &FileReport, old: &FileReport) {
 fn epub_with_media(path: &Path) {
     let jpg = binary(300_000, 1);
     let png = binary(200_000, 2);
-    common::epub_with_files(path, &common::clean_opf(), &common::xhtml("<p>본문</p>"), &[("OEBPS/a.jpg", &jpg), ("OEBPS/b.png", &png), ("OEBPS/c.ttf", &jpg)]);
+    support::epub_with_files(path, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/a.jpg", &jpg), ("OEBPS/b.png", &png), ("OEBPS/c.ttf", &jpg)]);
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn render_skips_members_the_security_pass_already_read_to_the_end() {
     let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let d = tempfile::tempdir().unwrap();
     let plain = d.path().join("plain.epub");
-    common::epub_with_chapter(&plain, &common::xhtml("<p>본문</p>"));
+    support::epub_with_chapter(&plain, &support::xhtml("<p>본문</p>"));
     let media = d.path().join("media.epub");
     epub_with_media(&media);
     let count = |p: &Path| {
@@ -152,10 +152,10 @@ fn corrupt_member_is_still_reported_by_the_render_pass() {
             x as u8
         })
         .collect();
-    common::epub_with_files(&p, &common::clean_opf(), &common::xhtml("<p>본문</p>"), &[("OEBPS/a.jpg", &jpg)]);
+    support::epub_with_files(&p, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/a.jpg", &jpg)]);
     // 압축되지 않는 데이터라 본문 한가운데를 깨뜨려도 스트림은 풀리고 CRC만 틀린다.
     let mut b = std::fs::read(&p).unwrap();
-    let at = common::data_offset(&b, "OEBPS/a.jpg");
+    let at = support::data_offset(&b, "OEBPS/a.jpg");
     b[at + 20_000] ^= 0xFF;
     std::fs::write(&p, b).unwrap();
     let (new, old, verified) = render_both_ways(&p, &Limits::default());

@@ -1,14 +1,14 @@
 //! HIGH로 남던 공격을 CRITICAL로 올리는 규칙 테스트: 번들 실행 파일, 이벤트 핸들러·javascript: URL 본문, 난독화 로더 우회,
 //! 클릭 없는 UNC·원격 file 로드, meta refresh의 exploit 스킴, PDF exploit JavaScript 변형.
 
-mod common;
+mod support;
 
 use std::fs;
 
 use bookdoctor::cli::Options;
 use bookdoctor::epub::security::{Limits, scan as scan_into};
 use bookdoctor::scan::scan_file;
-use common::*;
+use support::*;
 use bookdoctor::{FileReport, Format, Severity};
 
 fn scan_epub(chapter: &str, extra: &[(&str, &[u8])]) -> FileReport {

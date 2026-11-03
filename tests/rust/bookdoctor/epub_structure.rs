@@ -1,6 +1,6 @@
 //! EPUB 구조 검사 테스트 (옛 인코딩 검사 도구의 epub-structure 테스트를 이식).
 
-mod common;
+mod support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use bookdoctor::cli::Options;
 use bookdoctor::epub::scan_epub_file;
 use bookdoctor::epub::structure::{ISSUE_TO_CODE, inspect, inspect_with};
-use common::*;
+use support::*;
 use bookdoctor::{Category, FileReport, Format, Severity};
 
 fn write(p: &Path, text: &str) {

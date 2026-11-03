@@ -1,6 +1,6 @@
 //! 재귀 검사 테스트: 컨테이너 안의 컨테이너를 깊이·개수·바이트 상한 안에서 검사한다.
 
-mod common;
+mod support;
 
 use std::fs;
 use std::io::Write;
@@ -24,11 +24,11 @@ fn bytes_of(build: impl FnOnce(&Path)) -> Vec<u8> {
 
 /// 매크로 프로젝트가 든 `.docx`의 바이트(매크로 없는 형식에 든 `vbaProject.bin`이라 Critical).
 fn vba_docx() -> Vec<u8> {
-    bytes_of(|p| common::docx_with(p, &[], &[("word/vbaProject.bin", OLE_STUB)]))
+    bytes_of(|p| support::docx_with(p, &[], &[("word/vbaProject.bin", OLE_STUB)]))
 }
 
 fn zip_bytes(members: &[(&str, &[u8])]) -> Vec<u8> {
-    bytes_of(|p| common::zip_of(p, members))
+    bytes_of(|p| support::zip_of(p, members))
 }
 
 fn scan_bytes(name: &str, data: &[u8], opts: &Options) -> FileReport {
@@ -56,7 +56,7 @@ fn an_embedded_docx_inside_a_docx_is_scanned() {
     let inner = vba_docx();
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("outer.docx");
-    common::docx_with(&p, &[], &[("word/embeddings/e.docx", &inner)]);
+    support::docx_with(&p, &[], &[("word/embeddings/e.docx", &inner)]);
     let r = scan_file(&p, &Options::default());
     assert!(has_vba_under(&r, "word/embeddings/e.docx!") || has_vba_under(&r, "e.docx!"), "{:?} {:?}", r.findings, r.reasons);
 }
@@ -104,7 +104,7 @@ fn too_many_nested_files_is_incomplete() {
 fn the_byte_budget_is_shared_across_members() {
     // 안쪽 ZIP 둘이 각각 700KB로 선언되지만 0 채움이라 바깥 파일은 작다. 예산 1MiB는 첫째만 허용한다.
     let zeros = vec![0u8; 700_000];
-    let big = bytes_of(|p| common::zip_stored(p, &[("pad.bin", &zeros)]));
+    let big = bytes_of(|p| support::zip_stored(p, &[("pad.bin", &zeros)]));
     assert!(big.len() > 700_000);
     let outer = zip_bytes(&[("a.zip", &big), ("b.zip", &big)]);
     assert!(outer.len() < 100_000, "{}", outer.len());
@@ -233,7 +233,7 @@ fn ole_members_are_charged_to_the_budget_before_they_are_kept() {
 fn a_package_that_matches_several_formats_is_scanned_by_every_analyzer() {
     // DOCX 표지(word/document.xml)와 EPUB 표지(container.xml + mimetype)를 함께 가진 멤버. 한쪽 분석기만 쓰면 다른 쪽 지표가 가려진다.
     let poly = bytes_of(|p| {
-        common::docx_with(
+        support::docx_with(
             p,
             &[],
             &[
@@ -255,7 +255,7 @@ fn a_package_that_matches_several_formats_is_scanned_by_every_analyzer() {
 }
 
 fn hwpx_bytes(replace: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut parts: Vec<(String, Vec<u8>)> = common::minimal_hwpx_parts();
+    let mut parts: Vec<(String, Vec<u8>)> = support::minimal_hwpx_parts();
     for (name, body) in replace {
         parts.retain(|(n, _)| n != name);
         parts.push((name.to_string(), body.to_vec()));
@@ -276,7 +276,7 @@ fn a_hwpx_marker_does_not_hide_the_epub_marker() {
     assert!(r.has("PACKAGE_POLYGLOT"), "{:?}", r.findings);
     // mimetype이 없어도 container.xml이 .opf를 가리키면 EPUB으로도 본다.
     let no_mime = {
-        let mut parts: Vec<(String, Vec<u8>)> = common::minimal_hwpx_parts().into_iter().filter(|(n, _)| n != "mimetype" && n != "META-INF/container.xml").collect();
+        let mut parts: Vec<(String, Vec<u8>)> = support::minimal_hwpx_parts().into_iter().filter(|(n, _)| n != "mimetype" && n != "META-INF/container.xml").collect();
         parts.push(("META-INF/container.xml".into(), EPUB_CONTAINER.to_vec()));
         parts.push(("OEBPS/a.xhtml".into(), REMOTE_XHTML.to_vec()));
         let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();

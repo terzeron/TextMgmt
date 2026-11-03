@@ -1,6 +1,6 @@
 //! `viewer_blocked` 표 테스트. 표가 낡지 않도록 스캐너 소스와 대조한다.
 
-mod common;
+mod support;
 
 use std::collections::BTreeSet;
 
@@ -109,9 +109,9 @@ fn every_txt_security_code_is_classified() {
     assert_eq!(found.iter().map(String::as_str).collect::<BTreeSet<_>>(), table);
 }
 
-fn scripted_epub() -> common::NamedFile {
-    let f = common::epub_named("s.epub");
-    common::epub_with_chapter(f.path(), &common::xhtml("<script>eval(x)</script><p>hi</p>"));
+fn scripted_epub() -> support::NamedFile {
+    let f = support::epub_named("s.epub");
+    support::epub_with_chapter(f.path(), &support::xhtml("<script>eval(x)</script><p>hi</p>"));
     f
 }
 
@@ -131,7 +131,7 @@ fn annotate_sets_every_finding() {
             assert_eq!(f.viewer_blocked, ViewerBlocked::NotApplicable, "{}", f.code);
         }
     }
-    let t = common::file_with("a.txt", "<script>alert(1)</script>\n본문입니다.\u{202E}\n".as_bytes());
+    let t = support::file_with("a.txt", "<script>alert(1)</script>\n본문입니다.\u{202E}\n".as_bytes());
     let r = scan_file(t.path(), &opts());
     assert_eq!(value_of(&r, "HTML_IN_TEXT"), ViewerBlocked::Blocked);
     assert_eq!(value_of(&r, "BIDI_CONTROL"), ViewerBlocked::NotBlocked);
@@ -145,11 +145,11 @@ fn json_shows_viewer_blocked_values() {
     write_json_line(&r, &mut out).unwrap();
     let s = String::from_utf8(out).unwrap();
     assert!(s.contains("\"viewer_blocked\":\"blocked\""), "{s}");
-    let t = common::file_with("b.txt", "<script>x</script>\n\u{202E}한글\n".as_bytes());
+    let t = support::file_with("b.txt", "<script>x</script>\n\u{202E}한글\n".as_bytes());
     let mut out = Vec::new();
     write_json_line(&scan_file(t.path(), &opts()), &mut out).unwrap();
     assert!(String::from_utf8(out).unwrap().contains("\"viewer_blocked\":\"not_blocked\""));
-    let d = common::file_with("c.txt", b"\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD\n<p>x</p>\n");
+    let d = support::file_with("c.txt", b"\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD\n<p>x</p>\n");
     let mut out = Vec::new();
     write_json_line(&scan_file(d.path(), &opts()), &mut out).unwrap();
     assert!(String::from_utf8(out).unwrap().contains("\"viewer_blocked\":\"n/a\""));

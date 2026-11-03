@@ -1,6 +1,6 @@
 //! 규칙 매칭 통합 테스트. 명령행은 내장 규칙만 쓰므로, 여기서는 `Options.ruleset`에 시험 규칙을 넣어 매칭 동작을 본다.
 
-mod common;
+mod support;
 
 use std::fs;
 use std::sync::Arc;
@@ -67,7 +67,7 @@ fn a_rule_scan_that_hits_the_work_limit_is_incomplete() {
 fn rules_apply_to_nested_files_under_recursion() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("outer.zip");
-    common::zip_of(&p, &[("inner.rtf", b"{\\rtf1 hello EVIL_MARKER}"), ("plain.bin", b"EVIL_MARKER not a container")]);
+    support::zip_of(&p, &[("inner.rtf", b"{\\rtf1 hello EVIL_MARKER}"), ("plain.bin", b"EVIL_MARKER not a container")]);
     let r = scan_file(&p, &opts_with(MARKER_RULE));
     let nested = r.findings.iter().find(|f| f.code == "RULE_MATCH" && f.location.starts_with("inner.rtf!")).unwrap_or_else(|| panic!("{:?} {:?}", r.findings, r.reasons));
     assert_eq!(nested.severity, Severity::High);

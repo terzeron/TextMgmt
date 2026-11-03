@@ -1,13 +1,13 @@
 //! EPUB 보안 검사 하드닝(Task 9b) 테스트. 자동 보안 리뷰가 찾은 네 빈틈을 닫는다.
 //! 기존 규칙의 결과는 그대로이고 검출·상한만 늘어난다. 기존 테스트는 epub_security.rs, epub_gaps.rs에 있다.
 
-mod common;
+mod support;
 
 use std::fs;
 use std::path::Path;
 
 use bookdoctor::epub::security::{Limits, Stats, scan as scan_into, scan_stats};
-use common::*;
+use support::*;
 use bookdoctor::{FileReport, Format, Severity};
 
 fn scan_with(path: &Path, limits: &Limits) -> FileReport {
