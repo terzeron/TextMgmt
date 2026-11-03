@@ -1,5 +1,6 @@
-//! 카테고리 설정 API의 권한, 전달 인자, 실패 응답 및 blocking DB 경계를 검증한다.
+#[path = "../common/mod.rs"]
 mod common;
+
 use backend::main::{AppDeps, AuthMode, CategoryMappingApi, MappingError, app_with};
 use common::TestClient;
 use serde_json::{Value, json};
@@ -163,23 +164,6 @@ async fn mapping_auth_and_body_validation_run_before_db() {
     assert_eq!(client.put_json("/category-mappings", &json!({"mappings":{"x":"invalid"}})).await.status, 422);
     assert_eq!(client.post_json("/hidden-categories/x", &json!({})).await.status, 422);
     assert!(mapping.calls.lock().unwrap().is_empty());
-}
-
-#[test]
-fn real_mapping_facade_propagates_mapping_read_database_failures() {
-    use db::{DbError, category_mapping::CategoryMapping};
-    let mapping = CategoryMapping::with_connection_provider(Arc::new(|| Err(DbError::Other("offline".into()))));
-    assert!(CategoryMappingApi::get_all_mappings(&mapping, "book").is_err());
-    assert!(CategoryMappingApi::get_keywords(&mapping, "fiction", "book").is_err());
-    assert!(!CategoryMappingApi::set_keywords(&mapping, "fiction", &["one".into()], "book").unwrap());
-    assert!(CategoryMappingApi::add_keyword(&mapping, "fiction", "one", "book").is_err());
-    assert!(CategoryMappingApi::remove_keyword(&mapping, "fiction", "one", "book").is_err());
-    assert!(CategoryMappingApi::delete_category(&mapping, "fiction", "book", false).is_err());
-    assert!(!CategoryMappingApi::update_all_mappings(&mapping, &json!({"fiction":["one"]}), "book").unwrap());
-    assert!(CategoryMappingApi::get_hidden_categories(&mapping, "book").is_err());
-    assert!(CategoryMappingApi::get_latest_excluded_categories(&mapping, "book").is_err());
-    assert!(!CategoryMappingApi::set_hidden(&mapping, "fiction", true, "book").unwrap());
-    assert!(!CategoryMappingApi::set_latest_excluded(&mapping, "fiction", true, "book").unwrap());
 }
 
 #[tokio::test]

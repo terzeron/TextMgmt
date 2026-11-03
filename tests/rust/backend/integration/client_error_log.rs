@@ -1,15 +1,4 @@
-//! 원본: tests/test_client_error_log.py
-//!
-//! `POST /logs/client-error` 엔드포인트: 익명·로그인 사용자 기록, 검증 오류, 입력 상한과 로그 위조 방어(CWE-117, CWE-770).
-//!
-//! 가정한 API:
-//! - `backend::main::app() -> axum::Router` (common::TestClient가 쓴다)
-//! - `crate::common::session::token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String` (4인자 통일안. 이 파일은 `jwt()`로 감싼다)
-//! - `backend::auth::ACCESS_COOKIE_NAME: &str`
-//! - `backend::main::CLIENT_ERROR_FIELD_LIMITS: LazyLock<HashMap<&'static str, usize>>` (필드 이름 -> 최대 길이)
-//! - 핸들러는 `log::error!`로 `[CLIENT_ERROR] type=..., user=email(role)` 줄과 `Component Stack:`/`Stack Trace:` 줄을 남긴다.
-//!   `caplog`는 `common::log_capture::LogCapture`(스레드 로컬, `log` crate 기반)로 대신한다. 설계: docs/rust-test-seams.md 3.2, 3.10.
-
+#[path = "../common/mod.rs"]
 mod common;
 
 use backend::auth::ACCESS_COOKIE_NAME;

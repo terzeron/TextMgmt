@@ -1,13 +1,3 @@
-//! 원본: backend/comics_manager.py (전용 Python 테스트 없음. tests/test_comics.py의 2개는 comics.rs에 있다)
-//!
-//! 가정한 API (comics.rs와 같다):
-//! - `ComicsManager::from_env(env, es_factory) -> Result<ComicsManager, RuntimeError>`. `TM_COMICS_DIR`와 `TM_ES_COMICS_INDEX`가 없으면 `Err`,
-//!   `create_index` 실패도 `Err`다(Python은 `KeyError`와 ES 예외가 그대로 올라간다).
-//! - `TM_BACKFILL_CREATED_TIME_ON_STARTUP`가 1/true/yes/on(공백·대소문자 무시)이면 `ES.backfill_created_time(path_prefix)`를 데몬 스레드에서 한 번 부른다.
-//!   실패는 경고만 남기고 삼킨다. 테스트는 `join_backfill()`로 스레드를 기다린다.
-//! - `set_mismatch_cache(v)`는 캐시와 시각(0보다 큼)을 함께 정하고 `clear_mismatch_cache()`는 `None`과 0.0으로 되돌린다.
-//! - `mismatch_state_lock()`, `mismatch_scan_lock()`은 `&Mutex<()>`다.
-
 mod common;
 
 use std::collections::HashMap;

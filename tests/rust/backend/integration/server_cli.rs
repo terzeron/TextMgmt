@@ -1,4 +1,5 @@
 //! 서버 바이너리를 loopback 임시 포트에서 실행해 HTTP와 종료 코드를 검증한다.
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};

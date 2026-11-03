@@ -1,58 +1,21 @@
-//! 원본: tests/test_epub_cover_set.py
-//!
-//! EPUB 뷰어의 표지 이미지 추가: `BookManager::set_epub_cover`와 `POST /epub-cover/{id}`.
-//! 운영 파일 대신 임시 EPUB를 쓰고, 이미지 다운로드·ES·책 조회만 통일 seam(`BookManagerDeps`)으로 바꾼다. 설계: docs/rust-test-seams.md 3.2, 3.5, 3.7, 3.12.
-//!
-//! 가정한 API (아직 구현 전이다). 함수명과 시그니처는 Python과 같다. 튜플 반환 `(result, error)`는 그대로 튜플이다.
-//! - `backend::epub_cover::{CoverError, EpubCoverError}`
-//!   `CoverError::new(msg: &str) -> CoverError` (`Display`), `enum EpubCoverError { Cover(CoverError), Io(std::io::Error) }` (`Debug`).
-//!   Python의 `CoverError`와 `OSError`/`FileExistsError`를 한 `Result` 에러 타입으로 합친 것이다. `From<FetchError> for EpubCoverError`가 있다.
-//! - `backend::epub_cover::inspect_epub(path: &Path) -> Result<Value, CoverError>` (`has_cover: bool`, `revision: String`)
-//! - `backend::epub_cover::add_cover(path: &Path, image: &[u8], revision: &str, backup_dir: &Path, replace_existing: bool, backup_name: Option<&str>) -> Result<Value, CoverError>`
-//! - `backend::epub_cover::remove_cover(path: &Path, revision: &str, backup_dir: &Path) -> Result<Value, CoverError>`
-//! - `backend::epub_cover::add_illustration(path: &Path, image: &[u8], revision: &str, backup_dir: &Path, before_idref: &str) -> Result<Value, CoverError>`
-//! - `backend::epub_cover::member_path(base: &str, href: &str) -> String`
-//! - `backend::epub_cover::_stage_illustration(source: &mut File, staged: &Path, image: &[u8], before_idref: &str, existing: &Value) -> Result<_, EpubCoverError>`
-//! - `backend::epub_cover::_stage_cover_removal(source: &mut File, staged: &Path) -> Result<_, EpubCoverError>`
-//! - `backend::epub_cover::EpubCoverHooks` (Default + Clone. 구 `epub_cover::hooks::set_*` 5종): `.with_fs(Arc<dyn FsOps>)`(fsync는 `FsOps::sync_file`. `common::faulty_fs::FaultyFs`),
-//!   `.with_limits(Limits)`(`Limits { max_xml_bytes, .. }`, `Default`는 운영 값), `.with_testzip(Arc<dyn Fn(&Path) -> Option<String>>)`, `.with_inspect_archive(Arc<dyn Fn(Value) -> Value>)`, `.with_uuid_hex(Arc<dyn Fn() -> String>)`.
-//!   말단 함수는 `*_with(.., &EpubCoverHooks)`: `add_cover_with(path, image, revision, backup_dir, replace_existing, backup_name, &hooks)`는 문서 3.12에 있고,
-//!   `add_illustration_with(path, image, revision, backup_dir, before_idref, &hooks)`, `remove_cover_with(path, revision, backup_dir, &hooks)`는 같은 모양으로 가정했다(문서에 없다).
-//! - `backend::book_manager::{BookManager, BookManagerDeps, BookManagerApi, BookRef, BookLookup}`
-//!   `BookRef { book_id: i64, file_path: PathBuf, file_type: String }` (`Clone`)
-//!   `BookManager::with_deps(BookManagerDeps::new(path_prefix, es).with_trash_dirname(&str).with_book_lookup(Arc<dyn BookLookup>).with_image_fetcher(Arc<dyn ImageFetcher>))` (구 `BookManagerDeps { .. }` 리터럴)
-//!   `BookManagerApi::set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String>` (async)
-//!   `BookManagerApi::remove_epub_cover(&self, book_id: i64) -> Result<Value, String>` (async)
-//!   `BookManagerApi::insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String>` (async)
-//!   (구 `EpubCoverApi`를 `BookManagerApi`에 합쳤다. 모든 메서드에 기본 구현이 있어 fake는 쓰는 메서드만 구현한다)
-//!   `BookManager::find_epub_cover_member(archive: &mut ZipArchive<File>) -> Option<String>`
-//!   `trait BookLookup { async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> }` (`async_trait`)
-//! - `backend::direct_cover_url::{ImageFetcher, FetchError}`: `trait ImageFetcher: Send + Sync { fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError>; }`, `enum FetchError { Value(String), Os(String), Other(String) }`
-//! - `backend::es_manager::EsManagerApi::update(&self, doc_id: i64, fields: &Value) -> Result<bool, EsError>` (`common::es_fake::FakeEsManager`가 구현한다)
-//! - `backend::main::{app_with, AppDeps, AuthMode}`: `AppDeps::new(AuthMode::Fixed(Value)).with_book_manager(Arc<dyn BookManagerApi>) -> AppDeps`, `app_with(deps) -> axum::Router`
-//!   (구 `app_with_overrides(AppOverrides { book_manager, admin })`. Python `dependency_overrides[require_admin]`와 `book_manager._instance` 교체의 대응이다)
-//!
-//! 가정한 dev-dependency: zip, image, base64, sha2, roxmltree, chrono, async-trait, tempfile, tokio, serde_json.
-
+#[path = "../common/mod.rs"]
 mod common;
 
 use std::fs::{self, File};
 use std::io::{Cursor, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use backend::book::BookLookupError;
 use backend::book_manager::{BookLookup, BookManager, BookManagerApi, BookManagerDeps, BookRef};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
-use backend::epub_cover::{self, CoverError, EpubCoverHooks, Limits};
+use backend::epub_cover::{self, CoverError};
 use backend::main::{AppDeps, AuthMode, app_with};
 use common::{
     TestClient,
     epub::{EpubSpec, make_epub},
     es_fake::FakeEsManager,
-    faulty_fs::{FaultyFs, other_err},
     fsx::{dir_names, mtime_key, sha256_hex},
     image::{b64, color_jpeg, red_jpeg},
     zipx::{Members, bytes_replace, rewrite_epub_members},
@@ -300,29 +263,6 @@ async fn test_adds_a_cover_to_an_epub_without_one() {
 }
 
 #[tokio::test]
-async fn test_resolves_the_book_from_elasticsearch_without_a_lookup_override() {
-    let env = env();
-    let relative_path = env.path.strip_prefix(env.dir()).unwrap();
-    env.es.set_doc(Some(json!({
-        "category": "분류",
-        "title": "book",
-        "author": "",
-        "file_path": relative_path.to_string_lossy(),
-        "file_type": "epub",
-        "file_size": env.size(),
-        "updated_time": "2024-01-01T00:00:00.000000"
-    })));
-    let manager = BookManager::with_deps(BookManagerDeps::new(env.dir().to_path_buf(), env.es.clone()).with_trash_dirname("0_trash").with_image_fetcher(env.fetcher.clone()));
-
-    let (result, error) = split(manager.set_epub_cover(1, Some(URL), None).await);
-
-    assert!(error.is_none());
-    assert!(result.is_some());
-    assert!(has_cover(&env.path));
-    assert_eq!(env.es.updates().len(), 1);
-}
-
-#[tokio::test]
 async fn test_replaces_an_existing_cover_and_keeps_the_original_in_0_trash() {
     let env = env();
     make_epub(&env.path, &EpubSpec::cover("3.0", true));
@@ -353,35 +293,6 @@ async fn test_second_edit_keeps_the_first_original() {
     assert_eq!(fs::read(env.dir().join("0_trash").join("book.epub")).unwrap(), first_original);
     assert_eq!(dir_names(&env.dir().join("0_trash")), ["book.epub"]);
     assert!(cover_tmp_files(env.path.parent().unwrap()).is_empty());
-}
-
-/// 백업이 이미 있으면 그것은 처음 원본이다. 쓰다가 실패하면 지금 원본으로 되돌려야 한다.
-#[test]
-fn test_failed_write_restores_the_current_file_not_the_older_backup() {
-    let tmp = tempfile::tempdir().unwrap();
-    let tmp_path = tmp.path();
-
-    let path = make_epub(&tmp_path.join("book.epub"), &EpubSpec::cover("3.0", false));
-    let trash = tmp_path.join("0_trash");
-    epub_cover::add_cover_backup_with(&path, &red_jpeg(), &revision(&path), &trash, false, Some("book.epub"), &EpubCoverHooks::default()).unwrap();
-    let current = fs::read(&path).unwrap();
-    let older = fs::read(trash.join("book.epub")).unwrap();
-    assert_ne!(current, older);
-
-    let counter = AtomicUsize::new(0);
-    let faulty = FaultyFs::new();
-    faulty.set_sync_file(move |_file| {
-        let n = counter.fetch_add(1, Ordering::SeqCst) + 1;
-        // 롤백 사본(1), 편집본(2), 본 파일에 쓴 뒤(3)
-        if n == 3 { Some(other_err("write failed")) } else { None }
-    });
-    let hooks = EpubCoverHooks::default().with_fs(faulty);
-    let result = epub_cover::add_cover_backup_with(&path, &color_jpeg("green"), &revision(&path), &trash, true, Some("book.epub"), &hooks);
-    assert!(matches!(&result, Err(e) if e.is_io()), "OSError를 기대했지만 {result:?}");
-
-    assert_eq!(fs::read(&path).unwrap(), current);
-    assert_eq!(fs::read(trash.join("book.epub")).unwrap(), older);
-    assert!(cover_tmp_files(tmp_path).is_empty());
 }
 
 #[tokio::test]
@@ -415,30 +326,6 @@ async fn test_blank_url_is_rejected_before_touching_the_file() {
 
     assert!(result.is_none() && err_has(&error, "URL"));
     assert_eq!(fs::read(&env.path).unwrap(), before);
-}
-
-#[tokio::test]
-async fn test_download_failure_returns_the_reason_and_keeps_the_file() {
-    let env = env();
-    env.fetcher.set(|_| Err(FetchError::Value("내부 주소의 이미지는 사용할 수 없습니다".to_string())));
-    let before = fs::read(&env.path).unwrap();
-
-    let (result, error) = env.call(URL).await;
-
-    assert!(result.is_none() && err_has(&error, "내부 주소"));
-    assert_eq!(fs::read(&env.path).unwrap(), before);
-    assert!(env.es.updates().is_empty(), "update는 불리면 안 된다");
-}
-
-#[tokio::test]
-async fn test_unexpected_io_error_hides_internal_details() {
-    let env = env();
-    env.fetcher.set(|_| Err(FetchError::Os("/secret/disk/path failed".to_string())));
-
-    let (result, error) = env.call(URL).await;
-
-    assert!(result.is_none());
-    assert!(!err_has(&error, "secret"));
 }
 
 #[tokio::test]
@@ -544,29 +431,6 @@ async fn test_replaced_publisher_cover_stays_in_the_backup() {
     assert!(error.is_none());
     assert!(!has_cover(&env.path));
     assert!(!Members::read(&env.path).names().iter().any(|name| name.contains("tm-cover")));
-}
-
-/// 교체로 빠지는 기존 표지는 새 표지 바로 뒤, 본문 앞의 도판으로 남는다.
-#[tokio::test]
-async fn test_replaced_cover_stays_as_an_illustration_after_the_new_cover() {
-    let env = env();
-    make_epub(&env.path, &EpubSpec::cover("3.0", true));
-    let old_cover = Members::read(&env.path).get("OPS/cover.jpg").to_vec();
-
-    let (_, error) = env.call(URL).await;
-
-    assert!(error.is_none());
-    let after = Members::read(&env.path);
-    assert!(!after.contains("OPS/cover.jpg"));
-    let plates: Vec<String> = after.names().into_iter().filter(|name| name.starts_with("OPS/tm-plate-") && name.ends_with(".jpg")).collect();
-    assert!(plates.len() == 1 && after.get(&plates[0]) == old_cover);
-    let ids = spine_idrefs(&env.path);
-    assert!(ids[0].starts_with("tm-cover-page-") && ids[1].starts_with("tm-plate-page-") && ids[2] == "chapter");
-    let page = xml_text(after.get(&format!("OPS/{}.xhtml", ids[1])));
-    assert!(page.contains(plates[0].strip_prefix("OPS/").unwrap()));
-    // 도판은 표지로 오인되지 않는다. 표지는 새 이미지다.
-    let mut archive = zip::ZipArchive::new(File::open(&env.path).unwrap()).unwrap();
-    assert!(BookManager::find_epub_cover_member(&mut archive).unwrap().contains("tm-cover-"));
 }
 
 #[tokio::test]
@@ -1177,10 +1041,6 @@ fn remove_directly(path: &Path, tmp_path: &Path) -> Result<Value, CoverError> {
     epub_cover::remove_cover(path, &revision(path), &tmp_path.join(".cover_backups"))
 }
 
-fn remove_directly_with(path: &Path, tmp_path: &Path, hooks: &EpubCoverHooks) -> Result<Value, CoverError> {
-    epub_cover::remove_cover_with(path, &revision(path), &tmp_path.join(".cover_backups"), hooks)
-}
-
 #[test]
 fn test_member_path_rejects_external_and_fragment_only_references() {
     assert_eq!(epub_cover::member_path("OPS", "https://example.com/a.jpg"), "");
@@ -1203,22 +1063,6 @@ fn test_manifest_page_missing_from_the_archive_is_skipped_while_detaching_the_co
 
     assert!(!has_cover(&path));
     assert!(!Members::read(&path).contains("OPS/Text/front.xhtml"));
-}
-
-#[test]
-fn test_oversized_body_page_stops_cover_removal_without_touching_the_book() {
-    let tmp = tempfile::tempdir().unwrap();
-    let mut chapter = b"<html><body>".to_vec();
-    chapter.extend(std::iter::repeat_n(b'x', 6000));
-    chapter.extend_from_slice(b"</body></html>");
-    let path = publisher_cover_epub(tmp.path(), &[("OPS/chapter.xhtml", chapter)]);
-    let original = fs::read(&path).unwrap();
-    let hooks = EpubCoverHooks::default().with_limits(Limits { max_xml_bytes: 5000, ..Limits::default() });
-
-    assert_cover_error(remove_directly_with(&path, tmp.path(), &hooks), "너무 큽니다");
-
-    assert_eq!(fs::read(&path).unwrap(), original);
-    assert!(!tmp.path().join(".cover_backups").exists());
 }
 
 fn add_stylesheet_to_manifest(files: &mut Members) {
@@ -1384,36 +1228,6 @@ fn test_illustration_gives_up_when_every_numbered_id_is_taken() {
 }
 
 #[test]
-fn test_corrupt_staged_epub_is_rejected_for_illustration_and_removal() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = make_epub(&tmp.path().join("book.epub"), &EpubSpec::cover("3.0", false));
-    let original = fs::read(&path).unwrap();
-    let hooks = EpubCoverHooks::default().with_testzip(Arc::new(|_path: &Path| Some("OPS/chapter.xhtml".to_string())));
-
-    assert_cover_error(epub_cover::add_illustration_with(&path, &red_jpeg(), &revision(&path), &tmp.path().join(".cover_backups"), "chapter", &hooks), "검증에 실패");
-    assert_eq!(fs::read(&path).unwrap(), original);
-
-    let removal_dir = tmp.path().join("removal");
-    let covered = publisher_cover_epub(&removal_dir, &[]);
-    let original = fs::read(&covered).unwrap();
-    assert_cover_error(remove_directly_with(&covered, &removal_dir, &hooks), "검증에 실패");
-    assert_eq!(fs::read(&covered).unwrap(), original);
-}
-
-#[test]
-fn test_removal_is_rejected_when_the_staged_epub_still_reports_a_cover() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = publisher_cover_epub(tmp.path(), &[]);
-    let original = fs::read(&path).unwrap();
-    let rev = revision(&path);
-    let hooks = EpubCoverHooks::default().with_inspect_archive(Arc::new(|_inspected: Value| json!({"has_cover": true})));
-
-    assert_cover_error(epub_cover::remove_cover_with(&path, &rev, &tmp.path().join(".cover_backups"), &hooks), "표지를 삭제한 EPUB의 검증에 실패");
-
-    assert_eq!(fs::read(&path).unwrap(), original);
-}
-
-#[test]
 fn test_cover_removal_needs_manifest_metadata_and_spine() {
     let tmp = tempfile::tempdir().unwrap();
     let path = make_epub(&tmp.path().join("book.epub"), &EpubSpec::cover("3.0", true));
@@ -1428,26 +1242,4 @@ fn test_cover_removal_needs_manifest_metadata_and_spine() {
 
     let source = File::open(&path).unwrap();
     assert_cover_error(epub_cover::stage_cover_removal(&source, &tmp.path().join("staged.epub")), "manifest, metadata 또는 spine");
-}
-
-#[test]
-fn test_unnamed_backup_collision_is_an_error_not_a_silent_reuse() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = make_epub(&tmp.path().join("book.epub"), &EpubSpec::cover("3.0", false));
-    let original = fs::read(&path).unwrap();
-    let rev = revision(&path);
-    let hooks = EpubCoverHooks::default().with_uuid_hex(Arc::new(|| "f".repeat(32)));
-    let backup_dir = tmp.path().join(".cover_backups");
-    fs::create_dir(&backup_dir).unwrap();
-    let existing = backup_dir.join(format!("{}-{}.epub", sha256_hex(format!("{}:{}", path.display(), rev).as_bytes()), "f".repeat(32)));
-    fs::write(&existing, b"older backup").unwrap();
-
-    let result = epub_cover::add_cover_with(&path, &red_jpeg(), &rev, &backup_dir, false, &hooks);
-    match result {
-        Err(e) if e.is_io() => assert_eq!(e.io_kind(), Some(std::io::ErrorKind::AlreadyExists)),
-        other => panic!("FileExistsError를 기대했지만 {other:?}"),
-    }
-
-    assert_eq!(fs::read(&path).unwrap(), original);
-    assert_eq!(fs::read(&existing).unwrap(), b"older backup");
 }

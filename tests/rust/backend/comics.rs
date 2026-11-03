@@ -1,15 +1,3 @@
-//! 원본: tests/test_comics.py
-//!
-//! 가정한 API (아직 구현 전이다. Python 이름 그대로이고 비공개 `_x`는 `pub fn x`로 본다):
-//! - `backend::comics::Comics::new(book_id: i64, info: &serde_json::Value, score: f64) -> Comics` (Python의 `score=0.0` 기본값은 호출부에서 0.0으로 채운다)
-//! - `Comics`의 공개 필드: `line_count`, `page_count`, `isbn`, `summary`, `score: f64`. `dict(&self) -> Value`, `json(&self) -> String`, `impl Display`
-//! - `backend::comics::path_prefix_from_env(get: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf, String>` (import 시점 `SystemExit`에 대응)
-//! - `backend::comics_manager::ComicsManager::from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<ComicsManager, RuntimeError>`
-//!   (`RuntimeError: Display`, 메시지에 `TM_COMICS_DIR`. 설계 3.12: 구 `from_env_with_es`와 `IndexManager`를 `from_env(env, es_factory)`와 `EsManagerApi`로 통일했다)
-//!   - `backend::es_manager::EsManagerApi::create_index(&self)`: 기본 구현은 `Err(Unsupported)`다. fake는 `common::es_fake::FakeEsManager`(호출 횟수 `create_index_calls`)
-//!   - `ComicsManager::path_prefix() -> &Path`, `es_index_name() -> &str`, `mismatch_cache() -> Option<&Value>`, `mismatch_cache_time() -> f64`,
-//!     `set_mismatch_cache(Value)`, `clear_mismatch_cache()`
-
 mod common;
 
 use std::sync::{Arc, Mutex};

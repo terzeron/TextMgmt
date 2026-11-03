@@ -9,42 +9,6 @@ autotests = false
 [lib]
 path = "src/lib.rs"
 
-[[test]]
-name = "pdf_edit"
-path = "../tests/rust/backend/pdf_edit.rs"
-
-[[test]]
-name = "pdf_delete_pages"
-path = "../tests/rust/backend/pdf_delete_pages.rs"
-
-[[test]]
-name = "pdf_delete_pages_gaps"
-path = "../tests/rust/backend/pdf_delete_pages_gaps.rs"
-
-[[test]]
-name = "main_bulk_rename"
-path = "../tests/rust/backend/main_bulk_rename.rs"
-
-[[test]]
-name = "main_gaps"
-path = "../tests/rust/backend/main_gaps.rs"
-
-[[test]]
-name = "api_exploration"
-path = "../tests/rust/backend/api_exploration.rs"
-
-[[test]]
-name = "pdf_pages"
-path = "../tests/rust/backend/pdf_pages.rs"
-
-[[test]]
-name = "book_preview"
-path = "../tests/rust/backend/book_preview.rs"
-
-[[test]]
-name = "cover"
-path = "../tests/rust/backend/cover.rs"
-
 [[bin]]
 name = "backend"
 path = "src/bin/backend.rs"
@@ -90,105 +54,6 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "s
 tokio-stream = "0.1.19"
 tokio-util = { version = "0.7.20", features = ["io"] }
 jpeg-encoder = "0.7.1"
-[[test]]
-name = "common_smoke"
-path = "../tests/rust/backend/common_smoke.rs"
-
-[[test]]
-name = "book"
-path = "../tests/rust/backend/book.rs"
-
-[[test]]
-name = "cover_sources"
-path = "../tests/rust/backend/cover_sources.rs"
-
-[[test]]
-name = "direct_cover_url"
-path = "../tests/rust/backend/direct_cover_url.rs"
-
-[[test]]
-name = "es_manager"
-path = "../tests/rust/backend/es_manager.rs"
-
-[[test]]
-name = "es_manager_gaps"
-path = "../tests/rust/backend/es_manager_gaps.rs"
-
-[[test]]
-name = "es_manager_http"
-path = "../tests/rust/backend/es_manager_http.rs"
-
-[[test]]
-name = "comics"
-path = "../tests/rust/backend/comics.rs"
-
-[[test]]
-name = "comics_manager"
-path = "../tests/rust/backend/comics_manager.rs"
-
-[[test]]
-name = "auth"
-path = "../tests/rust/backend/auth.rs"
-
-[[test]]
-name = "google_verifier"
-path = "../tests/rust/backend/google_verifier.rs"
-
-[[test]]
-name = "stderr_logger"
-path = "../tests/rust/backend/stderr_logger.rs"
-
-[[test]]
-name = "client_error_log"
-path = "../tests/rust/backend/client_error_log.rs"
-
-[[test]]
-name = "main_route_parity"
-path = "../tests/rust/backend/main_route_parity.rs"
-
-[[test]]
-name = "main_schema_parity"
-path = "../tests/rust/backend/main_schema_parity.rs"
-
-[[test]]
-name = "book_manager_2"
-path = "../tests/rust/backend/book_manager_2.rs"
-
-[[test]]
-name = "book_manager_gaps"
-path = "../tests/rust/backend/book_manager_gaps.rs"
-
-[[test]]
-name = "book_manager_hwp_preview"
-path = "../tests/rust/backend/book_manager_hwp_preview.rs"
-
-[[test]]
-name = "cover_repair"
-path = "../tests/rust/backend/cover_repair.rs"
-
-[[test]]
-name = "epub_cover_set"
-path = "../tests/rust/backend/epub_cover_set.rs"
-
-[[test]]
-name = "epub_image_edit"
-path = "../tests/rust/backend/epub_image_edit.rs"
-
-[[test]]
-name = "cover_management"
-path = "../tests/rust/backend/cover_management.rs"
-
-[[test]]
-name = "html_sanitizer"
-path = "../tests/rust/backend/html_sanitizer.rs"
-
-[[test]]
-name = "auth_bookstore_gaps"
-path = "../tests/rust/backend/auth_bookstore_gaps.rs"
-
-[[test]]
-name = "book_manager_classifier"
-path = "../tests/rust/backend/book_manager_classifier.rs"
 
 [dev-dependencies]
 base64 = "0.23.1"
@@ -201,32 +66,180 @@ testcontainers-modules = { version = "0.15.0", features = ["mysql", "blocking"] 
 tower = { version = "0.5.3", features = ["util"] }
 
 [[test]]
-name = "catalog_api"
-path = "../tests/rust/backend/catalog_api.rs"
+name = "auth"
+path = "../tests/rust/backend/auth.rs"
 
 [[test]]
-name = "mapping_api"
-path = "../tests/rust/backend/mapping_api.rs"
+name = "book"
+path = "../tests/rust/backend/book.rs"
 
 [[test]]
-name = "book_admin_api"
-path = "../tests/rust/backend/book_admin_api.rs"
+name = "book_manager"
+path = "../tests/rust/backend/book_manager.rs"
 
 [[test]]
-name = "server_cli"
-path = "../tests/rust/backend/server_cli.rs"
+name = "book_manager_catalog"
+path = "../tests/rust/backend/book_manager/catalog.rs"
 
 [[test]]
-name = "loader_file_reader"
-path = "../tests/rust/backend/loader_file_reader.rs"
+name = "book_manager_cover"
+path = "../tests/rust/backend/book_manager/cover.rs"
 
 [[test]]
-name = "main_mock"
-path = "../tests/rust/backend/main_mock.rs"
+name = "book_manager_epub"
+path = "../tests/rust/backend/book_manager/epub.rs"
 
 [[test]]
-name = "epub_line_count"
-path = "../tests/rust/backend/epub_line_count.rs"
+name = "book_manager_file_reader"
+path = "../tests/rust/backend/book_manager/file_reader.rs"
+
+[[test]]
+name = "book_manager_html"
+path = "../tests/rust/backend/book_manager/html.rs"
+
+[[test]]
+name = "book_manager_pdf_edit"
+path = "../tests/rust/backend/book_manager/pdf_edit.rs"
+
+[[test]]
+name = "book_manager_preview"
+path = "../tests/rust/backend/book_manager/preview.rs"
+
+[[test]]
+name = "comics"
+path = "../tests/rust/backend/comics.rs"
+
+[[test]]
+name = "comics_manager"
+path = "../tests/rust/backend/comics_manager.rs"
+
+[[test]]
+name = "cover_management"
+path = "../tests/rust/backend/cover_management.rs"
+
+[[test]]
+name = "cover_sources"
+path = "../tests/rust/backend/cover_sources.rs"
+
+[[test]]
+name = "direct_cover_url"
+path = "../tests/rust/backend/direct_cover_url.rs"
+
+[[test]]
+name = "epub_cover"
+path = "../tests/rust/backend/epub_cover.rs"
+
+[[test]]
+name = "es_manager"
+path = "../tests/rust/backend/es_manager.rs"
+
+[[test]]
+name = "main"
+path = "../tests/rust/backend/main.rs"
+
+[[test]]
+name = "main_google"
+path = "../tests/rust/backend/main/google.rs"
+
+[[test]]
+name = "pdf"
+path = "../tests/rust/backend/pdf.rs"
+
+[[test]]
+name = "stderr_logger"
+path = "../tests/rust/backend/stderr_logger.rs"
+
+[[test]]
+name = "integration_api_exploration"
+path = "../tests/rust/backend/integration/api_exploration.rs"
+
+[[test]]
+name = "integration_auth"
+path = "../tests/rust/backend/integration/auth.rs"
+
+[[test]]
+name = "integration_book_admin_api"
+path = "../tests/rust/backend/integration/book_admin_api.rs"
+
+[[test]]
+name = "integration_book_preview"
+path = "../tests/rust/backend/integration/book_preview.rs"
+
+[[test]]
+name = "integration_catalog_api"
+path = "../tests/rust/backend/integration/catalog_api.rs"
+
+[[test]]
+name = "integration_client_error_log"
+path = "../tests/rust/backend/integration/client_error_log.rs"
+
+[[test]]
+name = "integration_common_smoke"
+path = "../tests/rust/backend/integration/common_smoke.rs"
+
+[[test]]
+name = "integration_cover"
+path = "../tests/rust/backend/integration/cover.rs"
+
+[[test]]
+name = "integration_cover_management"
+path = "../tests/rust/backend/integration/cover_management.rs"
+
+[[test]]
+name = "integration_cover_sources"
+path = "../tests/rust/backend/integration/cover_sources.rs"
+
+[[test]]
+name = "integration_direct_cover_url"
+path = "../tests/rust/backend/integration/direct_cover_url.rs"
+
+[[test]]
+name = "integration_epub_cover_set"
+path = "../tests/rust/backend/integration/epub_cover_set.rs"
+
+[[test]]
+name = "integration_epub_image_edit"
+path = "../tests/rust/backend/integration/epub_image_edit.rs"
+
+[[test]]
+name = "integration_es_manager_http"
+path = "../tests/rust/backend/integration/es_manager_http.rs"
+
+[[test]]
+name = "integration_loader_file_reader"
+path = "../tests/rust/backend/integration/loader_file_reader.rs"
+
+[[test]]
+name = "integration_main_bulk_rename"
+path = "../tests/rust/backend/integration/main_bulk_rename.rs"
+
+[[test]]
+name = "integration_main_gaps"
+path = "../tests/rust/backend/integration/main_gaps.rs"
+
+[[test]]
+name = "integration_main_mock"
+path = "../tests/rust/backend/integration/main_mock.rs"
+
+[[test]]
+name = "integration_mapping_api"
+path = "../tests/rust/backend/integration/mapping_api.rs"
+
+[[test]]
+name = "integration_pdf_delete_pages"
+path = "../tests/rust/backend/integration/pdf_delete_pages.rs"
+
+[[test]]
+name = "integration_pdf_edit"
+path = "../tests/rust/backend/integration/pdf_edit.rs"
+
+[[test]]
+name = "integration_pdf_pages"
+path = "../tests/rust/backend/integration/pdf_pages.rs"
+
+[[test]]
+name = "integration_server_cli"
+path = "../tests/rust/backend/integration/server_cli.rs"
 
 [[test]]
 name = "integration_container"

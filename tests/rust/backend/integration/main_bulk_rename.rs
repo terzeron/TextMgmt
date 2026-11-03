@@ -1,22 +1,4 @@
-//! 원본: tests/test_main_bulk_rename.py
-//!
-//! `POST /categories/bulk-rename-files` 라우트 테스트. ES/MySQL 없이 manager를 가짜로 바꾼다.
-//!
-//! 가정한 API (아직 구현 전이다. Python과 이름·시그니처가 같다고 본다):
-//! - `backend::main::{app_with(deps: AppDeps) -> axum::Router, AppDeps, AuthMode}`
-//!   - `AppDeps::new(auth: AuthMode) -> AppDeps`, `.with_book_manager(Arc<dyn BookManagerApi>) -> AppDeps`, `.with_fs(Arc<dyn sysdeps::FsOps>) -> AppDeps` (소비형 빌더, 설계 3.2)
-//!   - `AuthMode::Fixed(serde_json::Value)`: `require_auth`/`require_admin` 의존성 override에 대응한다.
-//! - `backend::book::Book { book_id: i64, category: String, author: String, file_path: PathBuf, file_type: String, .. }` (`Default + Clone`)
-//! - `#[async_trait] backend::book_manager::BookManagerApi` (모든 메서드에 기본 구현이 있다)
-//!   - `async fn get_categories(&self) -> Result<Value, String>`
-//!   - `async fn get_books_in_category_paged(&self, category: &str, size: Option<i64>, cursor: Option<&str>) -> Result<BookPage, String>`
-//!     (목록, 전체 수, 다음 커서, 오류. 설계 3.2의 통일 시그니처)
-//!   - `async fn update_book(&self, book_id: i64, new_category: &str, new_title: &str, new_author: &str, new_path: &Path, new_type: &str, force: bool) -> Result<Value, String>`
-//!   - `fn es_manager(&self) -> Arc<dyn EsManagerApi>`
-//! - `backend::es_manager::EsManagerApi::refresh(&self) -> Result<(), EsError>` (대역은 `common::es_fake::FakeEsManager`)
-//! - `sysdeps::FsOps::read_dir`: `Path.iterdir` 실패 주입은 `common::faulty_fs::FaultyFs`를 `AppDeps::with_fs`로 넣는다.
-//!   (구 `backend::main::testing::fail_next_iterdir` 전역 가드는 없다)
-
+#[path = "../common/mod.rs"]
 mod common;
 
 use std::collections::VecDeque;

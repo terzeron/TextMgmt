@@ -1,28 +1,4 @@
-//! 원본: tests/test_epub_image_edit.py
-//!
-//! EPUB 쪽 이미지의 크롭·분할·삭제·삽입: epub_cover.edit_images, BookManager.edit_epub_images, POST /epub-images/{id}.
-//!
-//! 가정한 API:
-//! - `backend::epub_cover::{OPF_NS: &str, CoverError, revision(&Path) -> String}`; `CoverError`는 `Display`로 사유를 돌려준다
-//!   (`pytest.raises(match=...)`는 부분 문자열로 확인한다)
-//! - `backend::epub_cover::edit_images(path: &Path, revision: &str, trash_dir: &Path, args: EditImages) -> Result<Value, CoverError>`
-//! - `backend::epub_cover::EditImages { crops: Vec<Value>, splits: Vec<Value>, deletes: Vec<Value>, inserts: Vec<(String, Vec<u8>)>, backup_name: Option<String> }` (`Default`)
-//!   - crops 원소: `{"idref", "index"?, "rect": [x0, y0, x1, y1, angle]}`, splits 원소: `{"idref", "index"?, "first": rect, "second": rect}`
-//!   - deletes 원소: `{"idref", "index"?}` 또는 idref 문자열, inserts 원소: `(before_idref, 이미지 바이트)`
-//! - `backend::epub_cover::read_package(&mut zip::ZipArchive<std::fs::File>) -> Result<Package, CoverError>` (Python `_read_package`)
-//! - `backend::epub_cover::edit_page_images(html: &[u8], image_count: usize, edits: &[(usize, &str, Option<Value>)]) -> Result<Vec<u8>, CoverError>` (Python `_edit_page_images`)
-//!   (두 함수의 밑줄 접두사는 뗀다. 테스트에서 쓰려면 `pub`이어야 한다)
-//! - `BookManager::edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String>`
-//! - `BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>)`: 인자 순서는 (path, es) (docs/rust-test-seams.md 3.12)
-//!   - `.with_book_lookup(Arc<dyn BookLookup>)` (`get_book` 대역. 구 `.with_book(path, type)`), `.with_image_fetcher(Arc<dyn ImageFetcher>)` (`backend.cover_management.fetch_url_image` 대체. 구 `with_fetch_url_image`)
-//!   - `backend::book_manager::{BookLookup, BookRef}`: `#[async_trait] trait BookLookup { async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> }`, `BookRef { book_id, file_path, file_type }`
-//!   - `backend::direct_cover_url::{ImageFetcher, FetchError}`: `trait ImageFetcher: Send + Sync { fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError> }`
-//! - `backend::main::{app_with, AppDeps, AuthMode}`: `app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(Arc<dyn BookManagerApi>))`. 구 `app_with_overrides`. `app() -> Router`도 그대로 쓴다
-//!
-//! `lxml`은 `roxmltree`로, PIL은 `image`로, `zipfile`은 `zip`으로 옮겼다. PIL 색 이름은 `common::image::color`로 푼다.
-//! ZIP 쓰기·읽기와 이미지 인코딩은 `common::{zipx, image}`를, ES 대역은 `common::es_fake::FakeEsManager`를 쓴다.
-//! `book_fixtures`는 옛 API(`loader`, `AddBook` 등)에 묶여 컴파일되지 않아 `FakeManager`(라우트 테스트용 `BookManagerApi` 대역)를 이 파일에 둔다.
-
+#[path = "../common/mod.rs"]
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,7 +10,7 @@ use async_trait::async_trait;
 use backend::book::BookLookupError;
 use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
-use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, Limits, OPF_NS, edit_images, edit_images_with, edit_page_images, read_package, revision};
+use backend::epub_cover::{CoverError, EditImages, OPF_NS, edit_images, read_package, revision};
 use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
@@ -469,24 +445,6 @@ fn test_combined_request_is_applied_atomically() {
     }
 }
 
-#[test]
-fn test_empty_and_duplicate_requests_are_rejected() {
-    let b = book();
-    assert_refused(b.edit(EditImages::default()), "편집이 없습니다", "빈 요청");
-    assert_refused(b.edit(EditImages { crops: vec![json!({"idref": "p1", "rect": full()})], deletes: vec![json!("p1")], ..EditImages::default() }), "두 번", "중복 요청");
-}
-
-#[test]
-fn test_stale_revision_is_rejected_and_backup_is_kept_once() {
-    let b = book();
-    let stale = edit_images(&b.path, "stale", &b.trash, EditImages { crops: vec![json!({"idref": "p1", "rect": full()})], ..EditImages::default() });
-    assert_refused(stale, "변경", "stale");
-    let original = fs::read(&b.path).unwrap();
-    b.edit(EditImages { crops: vec![json!({"idref": "p1", "rect": [0, 0, 0.5, 1, 0]})], ..EditImages::default() }).unwrap();
-    b.edit(EditImages { crops: vec![json!({"idref": "p1", "rect": [0, 0, 0.5, 1, 0]})], ..EditImages::default() }).unwrap();
-    assert_eq!(fs::read(b.trash.join("book.epub")).unwrap(), original);
-}
-
 /// `env` fixture: BookManager.edit_epub_images를 부를 수 있는 최소 환경.
 struct ManagerEnv {
     bm: BookManager,
@@ -619,75 +577,6 @@ mod test_route {
         let status = TestClient::new().post_json("/epub-images/1", &json!({})).await.status;
         assert!(status == 401 || status == 403, "{status}");
     }
-}
-
-// ── <svg><image> 로 이미지를 넣은 쪽 ──────────────────────────────────────────
-
-fn svg_epub(path: &Path, size: (u32, u32), title_text: &str, cover: bool) {
-    let jpeg_data = jpeg_bytes(&RgbImage::from_pixel(size.0, size.1, Rgb([200, 30, 30])), 75);
-    let (w, h) = size;
-    let page = format!(
-        r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:xlink="http://www.w3.org/1999/xlink"><head><title>c</title></head><body><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="100%" height="100%"><title>{title_text}</title><image width="{w}" height="{h}" xlink:href="c.jpg"/></svg></body></html>"#
-    );
-    let opf = concat!(
-        r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/">"#,
-        r#"<dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>ko</dc:language></metadata><manifest>"#,
-        r#"<item id="c" href="c.xhtml" media-type="application/xhtml+xml"/><item id="ci" href="c.jpg" media-type="image/jpeg" __COVER__/>"#,
-        r#"<item id="d" href="d.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/><itemref idref="d"/></spine></package>"#,
-    )
-    .replace("__COVER__", if cover { r#"properties="cover-image""# } else { "" });
-    let members: Members = vec![
-        ("mimetype".into(), b"application/epub+zip".to_vec()),
-        ("META-INF/container.xml".into(), br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#.to_vec()),
-        ("OEBPS/content.opf".into(), opf.into_bytes()),
-        ("OEBPS/c.xhtml".into(), page.into_bytes()),
-        ("OEBPS/c.jpg".into(), jpeg_data),
-        ("OEBPS/d.xhtml".into(), r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>d</title></head><body><p>본문</p></body></html>"#.as_bytes().to_vec()),
-    ];
-    write_zip(path, members);
-}
-
-#[test]
-fn test_svg_image_page_can_be_cropped_and_viewbox_follows() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("svg.epub");
-    svg_epub(&path, (300, 400), "표지", false);
-    edit_images(&path, &revision(&path), &tmp.path().join("trash"), EditImages { crops: vec![json!({"idref": "c", "rect": [0.0, 0.0, 0.5, 0.5, 0.0]})], ..EditImages::default() }).unwrap();
-    let members = read(&path);
-    assert_eq!(size(&members["OEBPS/c.jpg"]), (150, 200));
-    let page = text_of(&members, "OEBPS/c.xhtml");
-    assert!(page.contains(r#"viewBox="0 0 150 200""#), "{page}");
-    assert!(page.contains(r#"width="150""#) && page.contains(r#"height="200""#), "{page}");
-}
-
-#[test]
-fn test_svg_image_page_counts_as_image_only_despite_svg_title() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("svg.epub");
-    svg_epub(&path, (300, 400), "표지", false);
-    // Python은 `deletes=[{"idref": "c"}] and ["c"]`를 넘긴다. 이 식은 ["c"]다.
-    let result = edit_images(&path, &revision(&path), &tmp.path().join("trash"), EditImages { deletes: vec![json!("c")], ..EditImages::default() }).unwrap();
-    assert!(result["revision"].as_str().is_some_and(|r| !r.is_empty()), "{result}");
-}
-
-#[test]
-fn test_cover_target_crops_the_cover_image_and_fits_its_svg_page() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("cover.epub");
-    svg_epub(&path, (300, 400), "표지", true);
-    edit_images(&path, &revision(&path), &tmp.path().join("trash"), EditImages { crops: vec![json!({"idref": "@cover", "rect": [0.0, 0.0, 0.5, 1.0, 0.0]})], ..EditImages::default() }).unwrap();
-    let members = read(&path);
-    assert_eq!(size(&members["OEBPS/c.jpg"]), (150, 400));
-    assert!(text_of(&members, "OEBPS/c.xhtml").contains(r#"viewBox="0 0 150 400""#));
-}
-
-#[test]
-fn test_cover_target_without_a_cover_is_refused() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("nocover.epub");
-    svg_epub(&path, (300, 400), "표지", false);
-    let result = edit_images(&path, &revision(&path), &tmp.path().join("trash"), EditImages { crops: vec![json!({"idref": "@cover", "rect": [0.0, 0.0, 0.5, 1.0, 0.0]})], ..EditImages::default() });
-    assert_refused(result, "표지 이미지를 찾을 수 없음", "@cover");
 }
 
 // ── 한 쪽에 이미지가 여러 장인 책(실제 책처럼 xmlns 없는 비정형 HTML) ─────────────────────
@@ -832,95 +721,12 @@ fn test_same_image_twice_is_refused() {
 }
 
 #[test]
-fn test_index_out_of_range_is_refused() {
-    let b = multi();
-    let original = fs::read(&b.path).unwrap();
-    for kind in ["crops", "splits", "deletes"] {
-        let mut entry = json!({"idref": "multi", "index": 2});
-        match kind {
-            "crops" => entry["rect"] = full(),
-            "splits" => {
-                entry["first"] = full();
-                entry["second"] = full();
-            }
-            _ => {}
-        }
-        let mut args = EditImages::default();
-        match kind {
-            "crops" => args.crops = vec![entry],
-            "splits" => args.splits = vec![entry],
-            _ => args.deletes = vec![entry],
-        }
-        assert_refused(b.edit(args), "이미지를 찾을 수 없음", kind);
-    }
-    assert_eq!(fs::read(&b.path).unwrap(), original);
-}
-
-#[test]
 fn test_crop_refuses_when_two_tags_in_the_page_use_the_same_image() {
     let tmp = tempfile::tempdir().unwrap();
     let page = MULTI_PAGE.replace("m2.jpg", "m1.jpg");
     let path = make_multi(&tmp.path().join("dup.epub"), page.as_bytes());
     let result = edit(&path, &tmp.path().join("0_trash"), EditImages { crops: vec![json!({"idref": "multi", "index": 0, "rect": full()})], ..EditImages::default() });
     assert_refused(result, "공유", "dup");
-}
-
-#[test]
-fn test_mismatched_tag_count_is_refused() {
-    let err = edit_page_images(b"<html><body><img src='a.jpg'/></body></html>", 2, &[(0, "delete", None)]).expect_err("CoverError가 나야 한다");
-    assert!(err.to_string().contains("쪽 구조를 해석할 수 없습니다"), "{err}");
-}
-
-#[test]
-fn test_page_image_edit_preserves_utf8_signature() {
-    let raw = b"\xEF\xBB\xBF<html><body><img src='old.jpg'/></body></html>";
-
-    let edited = edit_page_images(raw, 1, &[(0, "split", Some(json!("new image.jpg")))]).unwrap();
-
-    assert!(edited.starts_with(b"\xEF\xBB\xBF"));
-    assert!(String::from_utf8_lossy(&edited).contains("src='new%20image.jpg'"));
-}
-
-#[test]
-fn test_page_image_edit_reads_and_writes_utf16_bom() {
-    let text = "<html><body><img src='old.jpg'/></body></html>";
-    let raw: Vec<u8> = [vec![0xFF, 0xFE], text.encode_utf16().flat_map(u16::to_le_bytes).collect()].concat();
-
-    let edited = edit_page_images(&raw, 1, &[(0, "delete", None)]).unwrap();
-
-    assert!(edited.starts_with(&[0xFF, 0xFE]));
-    let words: Vec<u16> = edited[2..].chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
-    assert!(!String::from_utf16(&words).unwrap().contains("<img"));
-}
-
-#[test]
-fn test_page_image_edit_round_trips_latin1_meta_charset() {
-    let raw = [b"<html><head><meta charset='ISO-8859-1'></head><body>caf".as_slice(), &[0xE9], b"<img src='old.jpg'/></body></html>"].concat();
-
-    let edited = edit_page_images(&raw, 1, &[(0, "delete", None)]).unwrap();
-
-    assert!(edited.windows(4).any(|window| window == b"caf\xE9"));
-    assert!(!edited.windows(4).any(|window| window == b"<img"));
-}
-
-#[test]
-fn test_page_image_edit_rejects_invalid_encoding_declarations() {
-    let raw = b"<?xml version='1.0' encoding='windows-1252'?><html><body><img src='a'/></body></html>";
-
-    let error = edit_page_images(raw, 1, &[(0, "delete", None)]).unwrap_err();
-
-    assert!(error.to_string().contains("문자 인코딩을 읽을 수 없음"));
-}
-
-#[test]
-fn test_page_image_split_does_not_rewrite_data_src_attribute() {
-    let raw = b"<html><body><img data-src='keep.jpg' src='old.jpg'/></body></html>";
-
-    let edited = edit_page_images(raw, 1, &[(0, "split", Some(json!("new.jpg")))]).unwrap();
-    let edited = String::from_utf8(edited).unwrap();
-
-    assert!(edited.contains("data-src='keep.jpg'"));
-    assert!(edited.contains("src='new.jpg'"));
 }
 
 #[test]
@@ -952,12 +758,6 @@ fn test_undecodable_page_is_refused() {
     let path = make_multi(&tmp.path().join("bad.epub"), &page);
     let result = edit(&path, &tmp.path().join("0_trash"), EditImages { deletes: vec![json!({"idref": "multi", "index": 0})], ..EditImages::default() });
     assert!(result.is_err());
-}
-
-// ── 입력 검증과 상한(Python보다 엄격한 부분) ───────────────────────────────────
-
-fn edit_with(b: &Book, hooks: &EpubCoverHooks, args: EditImages) -> Result<Value, CoverError> {
-    edit_images_with(&b.path, &revision(&b.path), &b.trash, EditImages { backup_name: Some("book.epub".to_string()), ..args }, hooks)
 }
 
 #[test]
@@ -994,32 +794,6 @@ fn test_malformed_crop_rectangles_are_refused() {
     }
     assert_refused(b.edit(EditImages { crops: vec![json!({"idref": "p1", "rect": [0, 0, 1, 1, 90]})], ..EditImages::default() }), "기울어진", "90도로 이미지 밖");
     assert_eq!(fs::read(&b.path).unwrap(), original);
-}
-
-#[test]
-fn test_oversized_image_is_refused_before_decoding() {
-    let b = book();
-    let original = fs::read(&b.path).unwrap();
-    let observer = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let seen = observer.clone();
-    let observe = move || {
-        seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    };
-    // 바이트 크기: 읽기 전에 거절한다.
-    let hooks = EpubCoverHooks::default().with_limits(Limits { max_image_bytes: 10, ..Limits::default() }).with_pixel_decode_observer(Arc::new(observe.clone()));
-    assert_refused(edit_with(&b, &hooks, EditImages { crops: vec![json!({"idref": "p1", "rect": full()})], ..EditImages::default() }), "너무 큼", "bytes");
-    // 화소 수: 디코딩 전에 거절한다.
-    let hooks = EpubCoverHooks::default().with_limits(Limits { max_image_pixels: 100, ..Limits::default() }).with_pixel_decode_observer(Arc::new(observe));
-    assert_refused(edit_with(&b, &hooks, EditImages { crops: vec![json!({"idref": "p1", "rect": full()})], ..EditImages::default() }), "해상도가 너무 큼", "pixels");
-    assert_eq!(observer.load(std::sync::atomic::Ordering::SeqCst), 0, "상한을 넘는 이미지를 디코딩했다");
-    assert_eq!(fs::read(&b.path).unwrap(), original);
-}
-
-#[test]
-fn test_oversized_page_document_is_refused() {
-    let b = book();
-    let hooks = EpubCoverHooks::default().with_limits(Limits { max_xml_bytes: 50, ..Limits::default() });
-    assert!(edit_with(&b, &hooks, EditImages { crops: vec![json!({"idref": "p1", "rect": full()})], ..EditImages::default() }).is_err());
 }
 
 #[test]

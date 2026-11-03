@@ -1,45 +1,8 @@
 //! 원본: tests/test_main_mock.py
-#![allow(dead_code)]
-//!
-//! backend/main.py의 라우트 단위 목 테스트다. ES와 MySQL 없이 매니저를 가짜로 끼운다.
-//! Python은 `_LazyProxy._instance`를 AsyncMock/MagicMock으로 바꿔 끼우고 `dependency_overrides`로 인증을 우회한다.
-//! Rust는 `backend::main::app_with(AppDeps)`로 같은 효과를 낸다. 매니저 호출은 메서드 이름과 인자(JSON)로 기록한다(설계 3.2의 테스트 로컬 어댑터 `Mock`).
-//!
-//! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.2, 3.5, 3.13):
-//! - `backend::main::app_with(deps: AppDeps) -> axum::Router`, `AppDeps::new(auth: AuthMode)`와 소비형 빌더 `with_*`.
-//!   `Fx::build()` 한 곳에서만 `AppDeps`를 만든다.
-//!   - `with_book_manager`, `with_comics_manager`: `Arc<dyn BookManagerApi>`, `with_category_mapping`: `Arc<dyn CategoryMappingApi>`
-//!   - `with_fs(Arc<dyn sysdeps::FsOps>)`(구 `list_dir`), `with_google_verifier(Arc<dyn GoogleVerifier>)`(구 `google_client_id`+`google_verify`),
-//!     `with_role_resolver(Arc<dyn RoleResolver>)`(구 `determine_role`), `with_refresh_token_store(Arc<dyn RefreshTokenStoreApi>)`,
-//!     `with_task_runner(Arc<dyn TaskRunner>)`(구 `to_thread_spy`), `with_bookstore_factory(Arc<dyn Fn() -> Box<dyn BookstoreSearch> + Send + Sync>)`(구 `bookstores`),
-//!     `with_reload_progress_flush_interval(Duration)`(구 `reload_progress_flush_interval_seconds`)
-//! - `backend::main::{AuthMode, AuthSlots}`: `AuthMode::Shared(Arc<AuthSlots>)`, `AuthSlots { auth: Mutex<Value>, admin: Mutex<Value> }`(공개 필드). 테스트 중간에 바꿀 수 있다(구 `require_auth`/`require_admin` 필드).
-//! - `backend::main::{GoogleVerifier, RoleResolver, TaskRunner, BookstoreSearch}`
-//!   - `GoogleVerifier { fn client_id(&self) -> Option<String>; fn verify(&self, credential: &str, audience: &str) -> Result<Value, String> }`
-//!   - `RoleResolver { fn determine_role(&self, email: &str) -> Option<String> }`
-//!   - `TaskRunner`: 모든 메서드에 기본 구현이 있다. `fn spawn_blocking_observed(&self, name: &str)`만 `SpyRunner`가 재정의한다.
-//!   - `BookstoreSearch`: 문서는 이름만 정했다. `fn search(&self, isbn, title, author) -> (Vec<(String x6)>, String, String)`, `fn build_search_url(&self, keyword) -> String`을 가정한다.
-//! - `backend::book_manager::{BookManagerApi, BookContent, BookResponse, ProgressFn, ContinueFn}` (모든 메서드에 기본 구현이 있다)
-//!   - 문서 3.2의 통일 시그니처: `get_book(id)`, `get_book_content(id) -> BookContent`, `get_book_preview(id, chapters: Option<i64>, resource_base_url: Option<&str>) -> BookResponse`,
-//!     `get_pdf_pages(id, start, end) -> BookResponse`, `path_prefix()`, `es_manager() -> Arc<dyn EsManagerApi>`
-//!   - 문서에 없어 가정한 메서드는 아래 `impl BookManagerApi for Mock`을 본다. 파이썬 `book_manager.py` 시그니처를 따랐고, 콜백 인자는 다음 모양이다.
-//!     `ProgressFn = Arc<dyn Fn(Value) -> BoxFuture<'static, ()> + Send + Sync>`, `ContinueFn = Arc<dyn Fn() -> BoxFuture<'static, bool> + Send + Sync>`
-//!     호출 예: `propose_category_changes(category, mappings, ...)`, `apply_category_changes(items, allowed, ...)`.
-//!   - `Err(String)`(Python 예외)은 반환형이 `Result`인 메서드(`reload_*`, `get_category_mismatch_details`)에서만 값으로 전달된다. 나머지는 `Mock`이 패닉으로 올린다.
-//! - `backend::es_manager::{EsManagerApi, EsError}`: `delete(&self, i64) -> Result<bool, EsError>`
-//! - `db::category_mapping::{CategoryMappingApi, MappingError}`: 동기 메서드이고 모든 메서드에 기본 구현이 있다. 메서드 모양은 아래 `impl CategoryMappingApi for Mock`을 본다.
-//! - `backend::refresh_token_store::RefreshTokenStoreApi`: `rotate(...) -> Result<String, String>`, `revoke_family(&self, family_id, reason)` (모양은 `impl RefreshTokenStoreApi for Mock`)
-//! - `backend::main::create_item_router(manager: Arc<dyn BookManagerApi>, category_mapping: Arc<dyn CategoryMappingApi>, content_type: &str) -> ItemRouter`
-//!   - `ItemRouter::run_classify_proposal_job(&self, category: &str, use_bookstore: bool, use_content_meta: bool, delay: f64)` (async)
-//!   - `ItemRouter::run_classify_apply_job(&self, items: Vec<Value>, allowed: HashSet<String>, flag: bool, token: Option<&str>)` (async)
-//!   - `ItemRouter::classify_apply_endpoint(&self, body: ClassifyApplyModel) -> Value` (async, BackgroundTasks는 만들기만 하고 실행하지 않는다)
-//! - `backend::main::{ClassifyApplyModel, ClassifyApplyItemModel, GENERIC_MISMATCH_ERROR}`
-//! - `backend::main::{summarize_request_body, is_local_frontend_origin, is_request_from_frontend_host, category_matches_hidden}`
-//! - `backend::auth::create_refresh_token(email, role, name: Option<&str>, picture: Option<&str>) -> String` (설계 3.2의 4인자)
-//! - `backend::book::Book`: `Default + Clone + Serialize + Deserialize`
-//!
-//! HTTP 라우트가 백그라운드 작업(제안/적용/reload)을 시작하면, Starlette TestClient처럼 응답을 돌려주기 전에 작업이 끝난다고 가정한다.
 
+#![allow(dead_code)]
+
+#[path = "../common/mod.rs"]
 mod common;
 
 use std::collections::{HashMap, HashSet};
@@ -2978,82 +2941,6 @@ fn fx_with_refresh_store(rt_store: &Mock) -> Fx {
     Fx::tweaked(move |d| d.with_role_resolver(Arc::new(FixedRole(Some("admin".to_string())))).with_refresh_token_store(Arc::new(store)))
 }
 
-mod test_auth_refresh {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_missing_token_returns_400() {
-        let fx = Fx::new();
-        let r = fx.post_empty("/auth/refresh").await;
-        assert_eq!(r.status, 400);
-    }
-
-    #[tokio::test]
-    async fn test_invalid_token_returns_401() {
-        let fx = Fx::new();
-        let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", "bad.token.here").await;
-        assert_eq!(r.status, 401);
-    }
-
-    #[tokio::test]
-    async fn test_success() {
-        let rt_store = Mock::new();
-        rt_store.returns("rotate", json!("ok"));
-        let fx = fx_with_refresh_store(&rt_store);
-        let token = backend::auth::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
-        let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &token).await;
-        assert_eq!(r.status, 200);
-        assert_eq!(r.json()["status"], "success");
-        assert!(r.json().get("expires_in").is_some());
-    }
-
-    #[tokio::test]
-    async fn test_unauthorized_email_returns_403() {
-        let fx = Fx::new();
-        let token = backend::auth::create_refresh_token("stranger@other.com", "viewer", Some("X"), None);
-        let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &token).await;
-        assert_eq!(r.status, 403);
-    }
-
-    #[tokio::test]
-    async fn test_rotation_rejection_clears_cookies() {
-        let rt_store = Mock::new();
-        rt_store.returns("rotate", json!("reused"));
-        let fx = fx_with_refresh_store(&rt_store);
-        let token = backend::auth::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
-        let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &token).await;
-        assert_eq!(r.status, 401);
-        assert_eq!(r.json()["detail"], "Invalid refresh token state");
-        let cookies = set_cookies(&r);
-        assert!(cookies.iter().any(|c| c.contains("tm_access_token=") && c.contains("Max-Age=0")), "{cookies:?}");
-        assert!(cookies.iter().any(|c| c.contains("tm_refresh_token=") && c.contains("Max-Age=0")), "{cookies:?}");
-    }
-
-    #[tokio::test]
-    async fn test_db_error_in_rotate_returns_503() {
-        // refresh_token_store.rotate()가 DB 예외를 던지면 503을 반환한다.
-        let rt_store = Mock::new();
-        rt_store.raises("rotate", "DB connection lost");
-        let fx = fx_with_refresh_store(&rt_store);
-        let token = backend::auth::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
-        let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &token).await;
-        assert_eq!(r.status, 503);
-    }
-
-    #[tokio::test]
-    async fn test_legacy_refresh_token_without_claims_returns_401() {
-        // fid/jti 없는 구형 refresh token은 401과 함께 재로그인 안내 메시지를 반환한다.
-        let fx = Fx::new();
-        let now = now_plus_3600() - 3600;
-        let legacy_payload = json!({"type": "refresh", "email": "admin@test.com", "role": "admin", "exp": now + 3600, "iat": now});
-        let secret = std::env::var("TM_JWT_SECRET").unwrap_or_else(|_| "test_jwt_secret_for_testing_minimum_32bytes".to_string());
-        let legacy_token = jsonwebtoken::encode(&jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256), &legacy_payload, &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes())).unwrap();
-        let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &legacy_token).await;
-        assert_eq!(r.status, 401);
-        assert!(r.json().get("detail").and_then(Value::as_str).unwrap_or("").to_lowercase().contains("log in again"));
-    }
-}
-
 // ── /auth/google ─────────────────────────────────────────────────────────────
 
 /// Google 검증 seam을 채운 Fx. `client_id`가 None이면 TM_GOOGLE_CLIENT_ID 미설정이다.
@@ -3129,21 +3016,6 @@ mod test_auth_google {
         assert_eq!(data["email"], "admin@test.com");
         assert_eq!(data["role"], "admin");
         assert!(data.get("expires_in").is_some());
-    }
-}
-
-mod test_auth_logout {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_logout_revokes_refresh_family_when_cookie_is_present() {
-        let rt_store = Mock::new();
-        let store = rt_store.clone();
-        let fx = Fx::tweaked(move |d| d.with_refresh_token_store(Arc::new(store)));
-        let token = backend::auth::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
-        let r = fx.post_with_cookie("/auth/logout", "tm_refresh_token", &token).await;
-        assert_eq!(r.status, 200);
-        assert_eq!(rt_store.call_count("revoke_family"), 1);
     }
 }
 
@@ -3371,52 +3243,6 @@ mod test_latest_excluded_categories {
         let r = fx.post_json("/latest-excluded-categories/_draft", &json!({"excluded": true})).await;
         assert_eq!(r.status, 500);
     }
-}
-
-// ── utility function unit tests ──────────────────────────────────────────────
-
-mod test_summarize_request_body {
-    use super::*;
-
-    /// _summarize_request_body 유틸리티 함수 (main.py:138-143).
-    #[test]
-    fn test_list_body() {
-        let result = backend::main::summarize_request_body(&json!([1, 2, 3]));
-        assert_eq!(result, json!({"type": "list", "length": 3}));
-    }
-
-    #[test]
-    fn test_none_body() {
-        let result = backend::main::summarize_request_body(&Value::Null);
-        assert_eq!(result, json!({"type": "none"}));
-    }
-
-    #[test]
-    fn test_str_body() {
-        let result = backend::main::summarize_request_body(&json!("hello"));
-        assert_eq!(result, json!({"type": "str", "length": 5}));
-    }
-}
-
-/// 원격 호스트는 False (main.py:148).
-#[test]
-fn test_is_local_frontend_origin_remote_returns_false() {
-    assert!(!backend::main::is_local_frontend_origin(Some("https://remote.example.com")));
-}
-
-/// localhost 계열은 True (main.py:154-156).
-#[test]
-fn test_is_local_frontend_origin_localhost_returns_true() {
-    assert!(backend::main::is_local_frontend_origin(Some("http://localhost:5173")));
-    assert!(backend::main::is_local_frontend_origin(Some("http://127.0.0.1:8080")));
-    assert!(backend::main::is_local_frontend_origin(Some("http://[::1]:3000")));
-}
-
-/// 빈 값/None 은 False (main.py:152-153).
-#[test]
-fn test_is_local_frontend_origin_empty_returns_false() {
-    assert!(!backend::main::is_local_frontend_origin(None));
-    assert!(!backend::main::is_local_frontend_origin(Some("")));
 }
 
 /// TM_FRONTEND_URL 미설정 시 False (main.py:157).

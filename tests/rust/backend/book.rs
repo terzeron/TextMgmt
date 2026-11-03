@@ -1,12 +1,3 @@
-//! 원본: tests/test_book.py
-//!
-//! 가정한 API (아직 구현 전이다. Python 이름 그대로이고 비공개 `_x`는 `pub fn x`로 본다):
-//! - `backend::book::Book::new(book_id: i64, info: &serde_json::Value, score: f64) -> Book` (Python의 `score=0.0` 기본값은 호출부에서 0.0으로 채운다)
-//! - `backend::book::Book::path_prefix() -> PathBuf` (`TM_BOOK_DIR`에서 한 번 읽는다)
-//! - `Book`의 공개 필드: `category`, `title`, `author`, `file_path: PathBuf`, `file_type`, `file_size`, `line_count`, `page_count`, `isbn`, `summary`, `score: f64`, `created_time`, `updated_time`
-//! - `Book::dict(&self) -> serde_json::Value`, `Book::json(&self) -> String`(Python `json.dumps` 형식, 구분자 ", "와 ": "), `impl Display for Book`
-//! - `backend::book::path_prefix_from_env(get: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf, String>` (import 시점 `SystemExit`에 대응. loader의 `Config::from_env`와 같은 방식)
-
 mod common;
 
 use std::path::PathBuf;

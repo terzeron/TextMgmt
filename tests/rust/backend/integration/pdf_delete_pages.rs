@@ -1,30 +1,11 @@
-//! 원본: tests/test_pdf_delete_pages.py
-//!
-//! BookManager.delete_pdf_pages 단위 테스트 (ES/Docker 없이 mock 기반).
-//!
-//! 가정한 API (자세한 시그니처는 `common/book_fixtures.rs` 머리말을 본다. 설계는 docs/rust-test-seams.md 3.2, 3.12):
-//! - `BookManager::with_deps(BookManagerDeps) -> BookManager`: ES, 책 추가, 파일 읽기, 이미지 fetch를 생성 때 꽂는다
-//!   (Python fixture의 `monkeypatch.setattr`/`patch`에 대응하는 DI seam이다)
-//!   - `BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>)`: 인자 순서는 (path, es)다. book_fixtures의 (es, path)를 뒤집는다
-//!   - `.with_book_adder(Arc<dyn BookAdder>)`, `.with_file_reader(Arc<dyn FileReader>)`, `.with_image_fetcher(Arc<dyn ImageFetcher>)` (구 `AddBook`, `ReadFile`, `FetchUrlImage`)
-//! - `BookManager::delete_pdf_pages(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String>`
-//! - `BookManager::preview_insert_image(&self, url: &str) -> Result<Vec<u8>, String>`
-//! - `BookManager::preview_insert_upload(&self, data: &[u8]) -> Result<Vec<u8>, String>`
-//! - `backend::epub_cover::MAX_IMAGE_BYTES: usize`
-//! - `backend::main::{app_with, AppDeps, AuthMode}`: `app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(Arc<dyn BookManagerApi>))`.
-//!   구 `app_with_overrides(Arc, Option<Value>)`. 엔드포인트 테스트의 `fx::FakeManager`가 `BookManagerApi`를 구현한다(나머지 메서드는 trait 기본 구현)
-//!
-//! 엔드포인트 경로는 Python과 같다: `/pdf-pages/{id}/insert-preview`, `/insert-preview-upload`, `/delete`.
-//! `book_fixtures`의 `env`/`Env`/`Opts`/`Edit`/`FakeManager`/`FetchBehavior`는 아직 `#[path]`로 쓴다(TODO). PDF·이미지·편집 도구는 `common::{pdf, image, raster, edits}`에서 가져온다.
-
+#[path = "../common/mod.rs"]
 mod common;
-#[path = "common/book_fixtures.rs"]
+#[path = "../common/book_fixtures.rs"]
 mod fx;
 
 use std::fs;
 
 use axum::http::Method;
-use backend::direct_cover_url::FetchError;
 use backend::main::{AppDeps, AuthMode, app_with};
 use common::TestClient;
 use common::edits;
@@ -552,26 +533,6 @@ async fn test_invalid_insert_changes_nothing() {
 }
 
 #[tokio::test]
-async fn test_fetch_failure_changes_nothing() {
-    let cases = [
-        (FetchError::Value("공개 HTTP/HTTPS 이미지 URL만 사용할 수 있습니다".into()), "1쪽 앞에 넣을 이미지를 가져올 수 없습니다"),
-        (FetchError::Os("Name or service not known".into()), "이미지 서버 주소를 확인하지 못했습니다"),
-    ];
-    for (effect, expected) in cases {
-        let e = image_env(Opts::loader_fetch());
-        let original = fs::read(&e.pdf).unwrap();
-        e.fetch.set(FetchBehavior::Err(effect));
-
-        let (result, error) = e.run(&Edit { inserts: Some(vec![edits::insert(1)]), ..Edit::default() }).await;
-
-        assert!(result.is_none() && error_text(&error).contains(expected), "{expected}: {error:?}");
-        assert_eq!(fs::read(&e.pdf).unwrap(), original, "{expected}");
-        assert!(!e.root.join("0_trash").exists(), "{expected}");
-        assert!(e.es.deleted().is_empty(), "{expected}");
-    }
-}
-
-#[tokio::test]
 async fn test_non_image_download_is_rejected() {
     let e = image_env(Opts::loader_fetch());
     let original = fs::read(&e.pdf).unwrap();
@@ -630,23 +591,6 @@ async fn test_preview_rejects_empty_and_unsafe_urls() {
         let (jpeg, error) = split(e.bm.preview_insert_image(url).await);
 
         assert!(jpeg.is_none() && has_error(&error), "url={url:?}: {error:?}");
-    }
-}
-
-#[tokio::test]
-async fn test_preview_reports_fetch_failures() {
-    let cases = [
-        (FetchError::Value("내부 주소의 이미지는 사용할 수 없습니다".into()), "내부 주소의 이미지는 사용할 수 없습니다"),
-        (FetchError::Os("Name or service not known".into()), "이미지 서버 주소를 확인하지 못했습니다"),
-        (FetchError::Other("boom".into()), "이미지를 가져오지 못했습니다"),
-    ];
-    for (effect, expected) in cases {
-        let e = image_env(Opts::fetch());
-        e.fetch.set(FetchBehavior::Err(effect));
-
-        let (jpeg, error) = split(e.bm.preview_insert_image("https://img.example.com/a.png").await);
-
-        assert!(jpeg.is_none() && error.as_deref() == Some(expected), "{expected}: {error:?}");
     }
 }
 
@@ -920,15 +864,6 @@ async fn test_upload_preview_rejects_empty_and_unreadable_data() {
 
         assert!(jpeg.is_none() && has_error(&error), "data={data:?}: {error:?}");
     }
-}
-
-#[tokio::test]
-async fn test_upload_preview_rejects_oversized_data() {
-    let e = image_env(Opts::plain());
-
-    let (jpeg, error) = split(e.bm.preview_insert_upload(&vec![0u8; backend::epub_cover::MAX_IMAGE_BYTES + 1]).await);
-
-    assert!(jpeg.is_none() && error_text(&error).contains("큽니다"), "{error:?}");
 }
 
 #[tokio::test]

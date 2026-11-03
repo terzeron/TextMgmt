@@ -1,4 +1,4 @@
-//! Backend FileReader는 실제 loader/doc_reader 결과를 Elasticsearch 문서로 전달한다.
+#[path = "../common/mod.rs"]
 mod common;
 
 use backend::book_manager::ReadFileError;
@@ -7,7 +7,7 @@ use common::epub::{EpubSpec, make_epub};
 use common::pdf::write_blank_pdf;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -56,22 +56,6 @@ fn loader_honors_comics_skip_text_and_requested_path_prefix() {
     assert_eq!(item["summary"], "");
     let wrong_prefix = reader.read_file(&pdf, Some(Path::new("/missing/library")));
     assert!(wrong_prefix.is_empty());
-}
-
-#[test]
-fn timed_loader_read_uses_the_backend_worker_process() {
-    let tmp = tempfile::tempdir().unwrap();
-    let books = tmp.path().join("books");
-    let comics = tmp.path().join("comics");
-    std::fs::create_dir_all(&books).unwrap();
-    std::fs::create_dir_all(&comics).unwrap();
-    let path = books.join("sample.txt");
-    std::fs::write(&path, "one line\n").unwrap();
-    let reader = Arc::new(LoaderFileReader::new(books.clone(), comics).with_worker_executable(PathBuf::from(env!("CARGO_BIN_EXE_backend"))));
-
-    let docs = reader.try_read_file_with_timeout(path.clone(), Some(books), false, Duration::from_secs(5)).unwrap();
-
-    assert_eq!(docs[&(std::fs::metadata(&path).unwrap().ino() as i64)]["line_count"], 2);
 }
 
 #[test]

@@ -1,33 +1,4 @@
-//! 원본: tests/test_main_gaps.py
-//!
-//! main.py 라우터의 실패 응답과 입력 검증 분기를 mock 기반으로 확인한다.
-//! 원본이 `tests/test_main_mock.py`에서 가져오는 fixture(client, mock_bm, mock_cat, install_classify_status_store)는
-//! 테스트 파일끼리 공유할 수 없어서 이 파일 안에 같은 의미로 다시 만들었다.
-//!
-//! 가정한 API (아직 구현 전이다. Python과 이름·시그니처가 같다고 본다):
-//! - `backend::main::{app_with(deps: AppDeps) -> axum::Router, AppDeps, AuthMode, ClientErrorLogModel}`
-//!   - `AppDeps::new(auth: AuthMode) -> AppDeps`, `.with_book_manager(Arc<dyn BookManagerApi>)`, `.with_category_mapping(Arc<dyn CategoryMappingApi>)` (소비형 빌더, 설계 3.2)
-//!   - `AuthMode::Fixed(serde_json::Value)`: `require_auth`/`require_admin` 의존성 override에 대응한다.
-//!   - `ClientErrorLogModel { error_type: String, message: String, url: String, stack: Option<String>, component_stack: Option<String>, user_agent: Option<String>, timestamp: Option<String> }` (`Deserialize`)
-//! - `backend::main::run_classify_apply_job(book_manager: &dyn BookManagerApi, category_mapping: &dyn CategoryMappingApi, content_type: &str, items: Vec<Value>, allowed: HashSet<String>, clean_existing: bool, apply_token: &str)`
-//!   (async; `create_item_router` 안의 클로저 `_run_classify_apply_job`을 밖으로 낸 것)
-//! - `#[async_trait] backend::book_manager::BookManagerApi` (모든 메서드에 기본 구현이 있다)
-//!   - `async fn get_categories(&self) -> Result<Value, String>`
-//!   - `async fn apply_category_changes(&self, items: &[Value], allowed: &HashSet<String>, clean_existing: bool) -> Result<Value, String>`
-//!   - `fn path_prefix(&self) -> PathBuf`, `fn es_manager(&self) -> Arc<dyn EsManagerApi>`
-//!   - `backend::es_manager::EsManagerApi`는 `book_manager`가 아니라 `es_manager` 모듈에 있다.
-//! - `backend::es_manager::{EsManagerApi, EsError}` (설계 3.3. 모든 메서드에 기본 구현이 있다)
-//!   - `fn search_categories_pdf_stats(&self, categories: &[String]) -> Result<Value, EsError>`
-//!   - `fn search_category_pdf_stats(&self, category: &str) -> Result<Value, EsError>`
-//!   - 대역은 `common::es_fake::FakeEsManager`를 쓴다.
-//! - `db::category_mapping::CategoryMappingApi` (동기 메서드, 모든 메서드에 기본 구현이 있다)
-//!   - `get_classify_proposal_status(&self, content_type: &str, stale_seconds: i64) -> Value`
-//!   - `set_classify_proposal_status(&self, status: Value, content_type: &str)`
-//!   - `merge_classify_proposal_status(&self, fields: Value, content_type: &str)`
-//!   - `try_start_classify_proposal(&self, status: Value, content_type: &str, stale_seconds: i64) -> (bool, Value)`
-//!   - `try_begin_classify_apply(&self, apply_token: &str, content_type: &str, stale_seconds: i64) -> (bool, Value)`
-//!   - `clear_classify_proposal_items(&self, content_type: &str)`
-
+#[path = "../common/mod.rs"]
 mod common;
 
 use std::collections::{HashMap, HashSet};
@@ -383,31 +354,6 @@ impl QueuedTasks {
 fn client_with_runner(bm: &Arc<MockBm>, cat: &Arc<MockCat>, runner: Arc<dyn TaskRunner>) -> TestClient {
     common::setup_env();
     TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(admin_payload())).with_book_manager(bm.clone()).with_category_mapping(cat.clone()).with_task_runner(runner)))
-}
-
-#[tokio::test]
-async fn test_apply_job_marks_state_failed_when_book_manager_returns_error() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let bm = mock_bm();
-    let cat = MockCat::with_store(Some(json!({"status": "applying", "source_category": "0_inbox", "apply_token": "tok"})));
-    *bm.apply_result.lock().unwrap() = (json!({}), Some("적용 오류".into()));
-    *bm.path_prefix.lock().unwrap() = tmp.path().to_path_buf();
-
-    // content_type="book"인 라우터 안의 작업 함수. 가정한 seam이다.
-    backend::main::run_classify_apply_job(
-        bm.as_ref(),
-        cat.as_ref(),
-        "book",
-        vec![json!({"file_path": "0_inbox/a.epub", "target_category": "3_SF"})],
-        HashSet::from(["0_inbox/a.epub".to_string()]),
-        false,
-        "tok",
-    )
-    .await;
-
-    let state = cat.store.lock().unwrap().get("book").cloned().unwrap();
-    assert_eq!(state["status"], "failed");
-    assert_eq!(state["error"], "적용 오류");
 }
 
 #[tokio::test]

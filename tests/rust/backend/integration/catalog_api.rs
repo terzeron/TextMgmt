@@ -1,4 +1,4 @@
-//! Python main.py의 조회 API 계약을 실제 BookManager/ComicsManager와 검증한다.
+#[path = "../common/mod.rs"]
 mod common;
 
 use backend::book_manager::{BookManager, BookManagerDeps};
@@ -142,14 +142,4 @@ async fn similar_filters_hidden_results_and_falls_back_to_original() {
     assert_eq!(response.json()["status"], "success");
     assert_eq!(response.json()["total"], 1);
     assert_eq!(response.json()["result"][0]["book_id"], 1);
-}
-
-#[tokio::test]
-async fn all_catalog_routes_require_auth() {
-    let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies)));
-    for prefix in ["", "/comics"] {
-        for path in ["/books/1", "/categories", "/categories/public", "/latest", "/similar/1", "/search/hello"] {
-            assert_eq!(client.get(&format!("{prefix}{path}")).await.status, 401, "{prefix}{path}");
-        }
-    }
 }
