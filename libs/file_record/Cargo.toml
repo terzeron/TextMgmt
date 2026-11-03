@@ -7,6 +7,10 @@ publish.workspace = true
 autotests = false
 
 [[test]]
+name = "layout"
+path = "../../tests/rust/file_record/layout.rs"
+
+[[test]]
 name = "file_time"
 path = "../../tests/rust/file_record/file_time.rs"
 

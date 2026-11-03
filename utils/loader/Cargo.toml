@@ -25,7 +25,6 @@ path = "../../tests/rust/loader/loader_2.rs"
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-corpus_layout = { path = "../../libs/corpus_layout" }
 doc_reader = { path = "../../libs/doc_reader" }
 es_client = { path = "../../libs/es_client" }
 file_record = { path = "../../libs/file_record" }

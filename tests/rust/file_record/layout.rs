@@ -1,4 +1,4 @@
-use corpus_layout::{IGNORED_DIR_NAMES, is_ignored_segment};
+use file_record::layout::{IGNORED_DIR_NAMES, is_ignored_segment};
 
 #[test]
 fn ignored_dir_names_match_python_original() {

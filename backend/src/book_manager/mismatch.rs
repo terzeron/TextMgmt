@@ -130,7 +130,7 @@ impl BookManager {
 
     /// FS 스캔이 들어가지 않는 디렉터리는 ES 쪽에서도 빼야 한다.
     fn is_scannable_category(category: &str) -> bool {
-        !category.split('/').any(corpus_layout::is_ignored_segment)
+        !category.split('/').any(file_record::layout::is_ignored_segment)
     }
 
     /// 디렉터리마다 (카테고리, 색인 대상 파일의 상대 경로 집합)을 깊이 제한 없이 만든다. 디렉터리 하나씩 `visit`에 넘긴다.
@@ -144,7 +144,7 @@ impl BookManager {
                 let qualified = if category == Self::ROOT_CATEGORY { name.clone() } else { format!("{category}/{name}") };
                 match entry_kind(&entry) {
                     EntryKind::Dir => {
-                        if !corpus_layout::is_ignored_segment(&name) {
+                        if !file_record::layout::is_ignored_segment(&name) {
                             stack.push((entry, qualified));
                         }
                     }

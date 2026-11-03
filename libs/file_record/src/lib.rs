@@ -5,4 +5,5 @@
 pub mod child;
 pub mod config;
 pub mod file_time;
+pub mod layout;
 pub mod record;

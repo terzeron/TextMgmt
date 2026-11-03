@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use base64::alphabet::STANDARD as STANDARD_ALPHABET;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
-use corpus_layout::IGNORED_DIR_NAMES;
+use file_record::layout::IGNORED_DIR_NAMES;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use sysdeps::{Clock, RealFs, SystemClock};

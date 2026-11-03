@@ -206,7 +206,6 @@ dependencies = [
  "bookstore",
  "chrono",
  "classifier",
- "corpus_layout",
  "db",
  "doc_reader",
  "epubveri",
@@ -721,10 +720,6 @@ dependencies = [
  "tempfile",
  "zip",
 ]
-
-[[package]]
-name = "corpus_layout"
-version = "0.1.0"
 
 [[package]]
 name = "cpubits"
@@ -2167,7 +2162,6 @@ name = "loader"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "corpus_layout",
  "doc_reader",
  "encoding_rs",
  "es_client",

@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use corpus_layout::IGNORED_DIR_NAMES;
+use file_record::layout::IGNORED_DIR_NAMES;
 use regex::Regex;
 use serde_json::Value;
 

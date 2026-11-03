@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use corpus_layout::is_ignored_segment;
+use file_record::layout::is_ignored_segment;
 use doc_reader::pdf::StageRunner;
 use es_client::EsError;
 use es_client::indexing::IndexStore;
