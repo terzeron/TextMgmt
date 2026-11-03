@@ -2,7 +2,6 @@
 //!
 //! 만화 루트와 ES 색인을 따로 보관하고 도서 처리 기능은 `BookManager`에 위임한다.
 
-use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
@@ -13,21 +12,11 @@ use sysdeps::EnvFn;
 
 use crate::book_manager::{BookManager, BookManagerDeps};
 use crate::es_manager::EsManagerApi;
-use crate::main::BookManagerApi;
+use crate::book_manager::BookManagerApi;
 
 mod api;
 
-/// Python `RuntimeError`에 대응한다.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeError(pub String);
-
-impl fmt::Display for RuntimeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for RuntimeError {}
+pub use crate::book_manager::RuntimeError;
 
 const CREATED_TIME_BACKFILL_ENV: &str = "TM_BACKFILL_CREATED_TIME_ON_STARTUP";
 

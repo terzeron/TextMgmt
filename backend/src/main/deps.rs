@@ -12,7 +12,9 @@ use serde_json::Value;
 use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 
 use super::google::GoogleIdTokenVerifier;
-use super::traits::{BookAccess, BookManagerApi, BookStub, CategoryMappingApi, GoogleVerifier, TaskRunner, ThreadRunner, UnavailableBookAccess, UnavailableBookManager, ViewHistoryApi};
+use super::traits::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, UnavailableBookAccess, ViewHistoryApi};
+use crate::book_manager::{BookManagerApi, UnavailableBookManager};
+use crate::tasks::{TaskRunner, ThreadRunner};
 use crate::auth::HTTPException;
 use crate::auth::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
 use crate::book_manager::{BookManager, LoaderFileReader};

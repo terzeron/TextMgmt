@@ -34,14 +34,27 @@ use classifier::Classify;
 use crate::es_manager::{Docs, EsManagerApi};
 use crate::pdf::{LopdfOpener, LopdfPageOps, PageCountCache, PdfOpener, PdfPageOps, PdfReaderCache};
 
-pub use crate::comics_manager::RuntimeError;
-pub use crate::main::{BookContent, BookManagerApi, BookResponse};
+/// Python `RuntimeError`에 대응한다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeError(pub String);
+
+impl std::fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for RuntimeError {}
+
+pub(crate) use contract::UNIMPLEMENTED;
+pub use contract::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
 
 mod api;
 mod backfill;
 mod catalog;
 mod category;
 mod classify;
+mod contract;
 mod cover;
 mod cover_browse;
 mod cover_list;

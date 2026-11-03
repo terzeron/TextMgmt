@@ -4,7 +4,6 @@
 //! - 검색·내려받기·시계·썸네일은 `CoverHooks`로 바꾼다. 기본값은 실제 구현이다. 설계: docs/rust-test-seams.md 3.7, 3.8, 3.12.
 //! - 취소(`check_cancelled`)는 Python `ContextVar`처럼 요청을 처리하는 스레드에 붙는다(`with_cancel_scope`).
 
-pub mod routes;
 mod text;
 
 use std::any::Any;
@@ -26,7 +25,6 @@ use sha2::{Digest, Sha256};
 use sysdeps::{Clock, RealFs, SystemClock};
 use zip::ZipArchive;
 
-use crate::book_manager::Thumbnailer;
 use crate::cover_sources::urlx::{Netloc, urlsplit};
 use crate::cover_sources::{CancelFn, GateError, STORES, SearchError, SearchHooks, StoreGate, blocked_status, build_search_url, search_candidates_with, store_hosts, store_lock_with};
 use crate::direct_cover_url::{ImageFetcher, RealImageFetcher};
@@ -1081,6 +1079,11 @@ fn remove_if_exists(path: &Path) -> std::io::Result<()> {
 fn file_inode(path: &Path) -> u64 {
     use std::os::unix::fs::MetadataExt;
     std::fs::metadata(path).map(|m| m.ino()).unwrap_or(0)
+}
+
+/// 책 파일에서 표지 썸네일(JPEG 바이트)을 만든다. `book_manager`와 표지 관리가 함께 쓴다.
+pub trait Thumbnailer: Send + Sync {
+    fn extract_cover_thumbnail(&self, path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>>;
 }
 
 /// 기본 썸네일 추출기. 표지 EPUB 이미지를 150/300px JPEG로 줄인다.

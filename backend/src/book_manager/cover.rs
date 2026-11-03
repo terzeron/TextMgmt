@@ -83,9 +83,7 @@ impl BookManagerDeps {
 type Change = Box<dyn FnOnce(&CoverManagement, &str, &str, Backup<'_>) -> Result<Value, CoverError> + Send>;
 
 /// 표지 썸네일 추출 능력. 구 `ThumbnailExtractor`.
-pub trait Thumbnailer: Send + Sync {
-    fn extract_cover_thumbnail(&self, path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>>;
-}
+pub use crate::cover_management::Thumbnailer;
 
 impl BookManager {
     pub(super) fn thumbnailer(&self) -> Option<Arc<dyn Thumbnailer>> {

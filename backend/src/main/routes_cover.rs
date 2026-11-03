@@ -18,7 +18,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ApplyCoverModel, ApplyImageModel, ApplyUrlModel, BookCoverModel, CoverHooks, CoverManagement, with_cancel_scope};
+use crate::cover_management::{ApplyCoverModel, ApplyImageModel, ApplyUrlModel, BookCoverModel, CoverHooks, CoverManagement, with_cancel_scope};
 use crate::epub_cover::{CoverError, MAX_IMAGE_BYTES};
 use crate::main::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, RequestValidationError, RequireAdmin, Routes};
 

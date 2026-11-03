@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::{BookManager, BookManagerDeps, CREATED_TIME_BACKFILL_ENV};
-use crate::main::{TaskHandle, TaskRunner, ThreadRunner};
+use crate::tasks::{TaskHandle, TaskRunner, ThreadRunner};
 use crate::pdf::{PageCountCache, PdfCacheLimits, PdfError, PdfReaderCache, PdfReaderHandle};
 use std::os::unix::fs::MetadataExt;
 

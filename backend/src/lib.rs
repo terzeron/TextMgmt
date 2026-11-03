@@ -19,4 +19,5 @@ pub mod main;
 pub mod pdf;
 pub mod refresh_token_store;
 pub mod stderr_logger;
+pub mod tasks;
 pub mod view_history_store;

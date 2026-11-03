@@ -29,6 +29,7 @@ mod google;
 mod log_routes;
 mod routes;
 mod routes_books;
+mod routes_cover;
 mod routes_bookstore;
 mod routes_epub_cover;
 mod routes_health;
@@ -52,10 +53,9 @@ pub use extract::{ApiJson, ApiQuery, OptionalAuth, RequireAdmin, RequireAuth};
 pub use google::{GoogleIdTokenVerifier, GoogleJwksFetcher};
 pub use log_routes::{CLIENT_ERROR_FIELD_LIMITS, ClientErrorLogModel};
 pub use routes::{RouteInfo, Routes};
-pub use traits::{
-    ApplyCategoryChanges, BookAccess, BookContent, BookManagerApi, BookResponse, BookStub, CategoryMappingApi, GoogleVerifier, InlineRunner, MappingError, ProposeCategoryChanges, ReloadProgress,
-    TaskHandle, TaskRunner, ThreadRunner, UnavailableBookAccess, UnavailableBookManager, UnavailableGoogleVerifier, ViewHistoryApi,
-};
+pub use crate::book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
+pub use crate::tasks::{InlineRunner, TaskHandle, TaskRunner, ThreadRunner};
+pub use traits::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, MappingError, UnavailableBookAccess, UnavailableGoogleVerifier, ViewHistoryApi};
 
 /// Python 쪽 이름. `view_history_api` 테스트가 쓴다.
 pub type HttpException = HTTPException;
@@ -72,7 +72,7 @@ fn all_routes() -> Routes {
         .merge(routes_bookstore::routes())
         .merge(routes_health::routes())
         .merge(routes_mapping::routes())
-        .merge(crate::cover_management::routes::routes())
+        .merge(routes_cover::routes())
 }
 
 /// 환경 변수로 조립한 운영용 앱.
