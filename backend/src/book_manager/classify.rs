@@ -836,5 +836,15 @@ fn default_classifier_service(library_root: &Path) -> Option<Arc<SharedBookClass
         return None;
     };
     let classifier = BookCategoryClassifier::new(Some(model as Arc<dyn CategoryModelApi>), ClassifierOptions { library_root: Some(library_root.to_path_buf()), ..Default::default() });
-    Some(Arc::new(SharedBookClassifier::new(BookClassifierService::new(library_root, None, Some(Arc::new(classifier))))))
+    let service = BookClassifierService::new(library_root, None, Some(Arc::new(classifier))).with_keyword_loader(db_keyword_loader());
+    Some(Arc::new(SharedBookClassifier::new(service)))
+}
+
+/// 서점 카테고리 매핑에 쓸 `category_keywords`를 MySQL에서 읽는 loader.
+fn db_keyword_loader() -> classifier::bookstore_policy::KeywordLoader {
+    classifier::bookstore_policy::keyword_loader(|content_type| {
+        let mapping = db::category_mapping::CategoryMapping::new().map_err(|e| e.to_string())?;
+        let all = mapping.get_all_mappings(content_type).map_err(|e| e.to_string())?;
+        Ok(serde_json::json!(all))
+    })
 }

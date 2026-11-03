@@ -19,7 +19,7 @@ use sysdeps::{FsOps, RealFs};
 
 use bookstore::stores::{AladinBookstore, BookstoreSearch, KyoboBookstore, Yes24Bookstore};
 use crate::bookstore_cache::BookstoreResponseCache;
-use crate::bookstore_policy::map_bookstore_candidates;
+use crate::bookstore_policy::{KeywordLoader, keyword_map, map_bookstore_candidates};
 use crate::model::{CategoryModelApi, Prediction, get_default_model};
 use crate::softmax::fixed;
 use crate::tokenize::{is_py_space, is_py_word};
@@ -611,6 +611,7 @@ pub struct BookClassifierService {
     title_cache: HashMap<String, Value>,
     bookstore_cache: BookstoreResponseCache,
     decider: Option<Arc<dyn BookstoreDecider>>,
+    keyword_loader: Option<KeywordLoader>,
     fs: Arc<dyn FsOps>,
     pub yes24: Box<dyn BookstoreSearch>,
     pub aladin: Box<dyn BookstoreSearch>,
@@ -638,6 +639,7 @@ impl BookClassifierService {
             title_cache: HashMap::new(),
             bookstore_cache,
             decider: None,
+            keyword_loader: None,
             fs: Arc::new(RealFs),
             yes24: Box::new(Yes24Bookstore::new(false)),
             aladin: Box::new(AladinBookstore::new(false)),
@@ -664,6 +666,12 @@ impl BookClassifierService {
 
     pub fn with_bookstore_decider(mut self, decider: Arc<dyn BookstoreDecider>) -> Self {
         self.decider = Some(decider);
+        self
+    }
+
+    /// 서점 카테고리를 옮길 때 쓸 DB 키워드 loader. 없으면 하드코딩 규칙만 쓴다.
+    pub fn with_keyword_loader(mut self, loader: KeywordLoader) -> Self {
+        self.keyword_loader = Some(loader);
         self
     }
 
@@ -770,7 +778,7 @@ impl BookClassifierService {
         }
     }
 
-    fn query_store(store: &dyn BookstoreSearch, isbn: &str, search_title: &str, raw_author: &str, raw_title: &str) -> Value {
+    fn query_store(store: &dyn BookstoreSearch, keywords: Option<&Value>, isbn: &str, search_title: &str, raw_author: &str, raw_title: &str) -> Value {
         let mut res = json!({"title": "", "author": "", "cat": "", "mapped": null, "url": "", "isbn": ""});
         // 서점 클라이언트 하나가 죽어도(패닉) 나머지 조회와 판정은 계속돼야 한다.
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.search(isbn, search_title, raw_author)));
@@ -780,7 +788,7 @@ impl BookClassifierService {
         };
         if let Some((found_title, found_author, cat_str, detail_url, _, found_isbn)) = results.into_iter().next() {
             // DB(category_keywords)가 먼저다. 한 키워드가 여러 카테고리에 붙을 수 있어 후보를 그대로 들고 가 다수결로 가른다.
-            let candidates = map_bookstore_candidates(&cat_str, raw_title, raw_author, None);
+            let candidates = map_bookstore_candidates(&cat_str, raw_title, raw_author, keywords);
             res["mapped"] = if candidates.len() == 1 { json!(candidates[0]) } else { Value::Null };
             res["candidates"] = json!(candidates);
             res["title"] = json!(found_title);
@@ -809,11 +817,13 @@ impl BookClassifierService {
             let part = |name: &str| cached.get(name).cloned().unwrap_or_else(|| json!({}));
             return (part("yes24"), part("aladin"), part("kyobo"));
         }
-        let y = Self::query_store(self.yes24.as_ref(), isbn, search_title, raw_author, raw_title);
+        let keywords = self.keyword_loader.as_deref().map(|loader| keyword_map(Some(loader), false));
+        let keywords = keywords.as_ref();
+        let y = Self::query_store(self.yes24.as_ref(), keywords, isbn, search_title, raw_author, raw_title);
         Self::pause(delay);
-        let a = Self::query_store(self.aladin.as_ref(), isbn, search_title, raw_author, raw_title);
+        let a = Self::query_store(self.aladin.as_ref(), keywords, isbn, search_title, raw_author, raw_title);
         Self::pause(delay);
-        let k = Self::query_store(self.kyobo.as_ref(), isbn, search_title, raw_author, raw_title);
+        let k = Self::query_store(self.kyobo.as_ref(), keywords, isbn, search_title, raw_author, raw_title);
         Self::pause(delay);
         self.bookstore_cache.put(&json!({"yes24": y, "aladin": a, "kyobo": k}), search_title, raw_author, isbn);
         (y, a, k)

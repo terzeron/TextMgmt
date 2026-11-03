@@ -9,6 +9,7 @@ autotests = false
 [dependencies]
 bookstore = { path = "../../libs/bookstore" }
 classifier = { path = "../../libs/classifier" }
+db = { path = "../../libs/db" }
 es_client = { path = "../../libs/es_client" }
 log.workspace = true
 serde_json.workspace = true

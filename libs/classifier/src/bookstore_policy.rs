@@ -9,7 +9,7 @@
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
@@ -53,15 +53,20 @@ pub fn _load_from_db_with(get_all_mappings: &dyn Fn(&str) -> Value) -> Value {
     Value::Object(out)
 }
 
-/// DB 에서 키워드 맵을 읽는다. 연결이나 질의가 실패하면 오류 문자열이다.
-pub fn _load_from_db() -> Result<Value, String> {
-    let mapping = db::category_mapping::CategoryMapping::new().map_err(|e| e.to_string())?;
-    let all = mapping.get_all_mappings("book").map_err(|e| e.to_string())?;
-    Ok(_load_from_db_with(&|_| Value::Object(all.iter().map(|(k, v)| (k.clone(), Value::Array(v.iter().cloned().map(Value::String).collect()))).collect())))
+/// 키워드 맵을 읽는 함수. 연결이나 질의가 실패하면 오류 문자열이다. DB는 호출하는 쪽(backend, trainer)이 붙인다.
+pub type KeywordLoader = Arc<dyn Fn() -> Result<Value, String> + Send + Sync>;
+
+/// `get_all_mappings(content_type)`(카테고리→키워드 목록)으로 도서 키워드 맵 loader를 만든다.
+pub fn keyword_loader(get_all_mappings: impl Fn(&str) -> Result<Value, String> + Send + Sync + 'static) -> KeywordLoader {
+    Arc::new(move || {
+        let all = get_all_mappings("book")?;
+        Ok(_load_from_db_with(&|_| all.clone()))
+    })
 }
 
-/// DB 키워드 맵. 5분간 캐시한다. DB 를 못 읽으면 빈 맵을 준다(하드코딩 규칙으로 넘어간다).
+/// DB 키워드 맵. 5분간 캐시한다. loader가 없거나 DB 를 못 읽으면 빈 맵을 준다(하드코딩 규칙으로 넘어간다).
 pub fn keyword_map(loader: Option<&dyn Fn() -> Result<Value, String>>, force: bool) -> Value {
+    let Some(loader) = loader else { return Value::Object(Map::new()) };
     let mut guard = KEYWORDS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((cached, at)) = guard.as_ref()
         && !force
@@ -69,11 +74,7 @@ pub fn keyword_map(loader: Option<&dyn Fn() -> Result<Value, String>>, force: bo
     {
         return cached.clone();
     }
-    let loaded = match loader {
-        Some(f) => f(),
-        None => _load_from_db(),
-    };
-    let value = match loaded {
+    let value = match loader() {
         Ok(v) => {
             log::info!("서점 매핑 키워드 {}개를 DB 에서 읽었다", v.as_object().map_or(0, Map::len));
             v
@@ -126,16 +127,13 @@ pub fn map_bookstore_category(cat_str: &str, raw_title: &str, raw_author: &str, 
 /// 서점이 준 카테고리를 내부 카테고리 후보 목록으로 옮긴다. 순서가 중요하다.
 ///
 /// 1. 저자·시리즈 전용 규칙(카테고리 문자열을 비우고 부르면 그 절만 탄다)
-/// 2. DB 키워드 - 한 키워드가 여러 카테고리에 붙을 수 있다. 후보를 전부 돌려준다.
+/// 2. DB 키워드(`keywords`가 있을 때) - 한 키워드가 여러 카테고리에 붙을 수 있다. 후보를 전부 돌려준다.
 /// 3. 하드코딩 규칙 전체 - DB 가 안 덮는 카테고리를 메운다.
 pub fn map_bookstore_candidates(cat_str: &str, raw_title: &str, raw_author: &str, keywords: Option<&Value>) -> Vec<String> {
     if let Some(specific) = map_category("", raw_title, raw_author) {
         return vec![specific];
     }
-    let hits = match keywords {
-        Some(k) => match_keyword(cat_str, k),
-        None => match_keyword(cat_str, &keyword_map(None, false)),
-    };
+    let hits = keywords.map(|k| match_keyword(cat_str, k)).unwrap_or_default();
     if !hits.is_empty() {
         return hits;
     }

@@ -572,7 +572,6 @@ dependencies = [
  "base64 0.23.1",
  "bookstore",
  "chrono",
- "db",
  "es_client",
  "fancy-regex",
  "image",
@@ -3853,6 +3852,7 @@ version = "0.1.0"
 dependencies = [
  "bookstore",
  "classifier",
+ "db",
  "es_client",
  "log",
  "serde_json",

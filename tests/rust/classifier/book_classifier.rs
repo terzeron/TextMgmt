@@ -1180,6 +1180,30 @@ mod bookstore_cache {
         service
     }
 
+    /// 주입한 DB 키워드 loader가 하드코딩 규칙보다 먼저 서점 카테고리를 옮긴다. loader가 없으면 DB를 열지 않는다.
+    #[test]
+    fn test_query_bookstores_maps_categories_with_the_injected_keyword_loader() {
+        let tmp = TempDir::new().unwrap();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut plain = service_with_stores(tmp.path(), &calls);
+        let (y, _, _) = plain.query_bookstores("달빛조각사", "남희성", "달빛조각사", "");
+        assert_ne!(y["mapped"], "9_주입");
+
+        classifier::bookstore_policy::reset_keyword_cache();
+        let tmp = TempDir::new().unwrap();
+        let loader = classifier::bookstore_policy::keyword_loader(|content_type| {
+            assert_eq!(content_type, "book");
+            Ok(serde_json::json!({"9_주입": ["판타지"]}))
+        });
+        let mut service = service_with_stores(tmp.path(), &calls).with_keyword_loader(loader);
+        let (y, a, k) = service.query_bookstores("달빛조각사", "남희성", "달빛조각사", "");
+        classifier::bookstore_policy::reset_keyword_cache();
+        for res in [y, a, k] {
+            assert_eq!(res["mapped"], "9_주입");
+            assert_eq!(res["candidates"], serde_json::json!(["9_주입"]));
+        }
+    }
+
     /// 같은 제목을 두 번 물으면 두 번째는 서점을 안 부른다. 한 건에 3.6초가 걸린다.
     #[test]
     fn test_query_bookstores_uses_the_cache_instead_of_calling_stores_again() {
