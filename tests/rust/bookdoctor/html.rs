@@ -142,3 +142,18 @@ fn legacy_encoded_pages_are_still_scanned() {
     bytes.extend_from_slice(br#"<script src="http://evil.example/a.js"></script></body></html>"#);
     assert!(scan("a.html", &bytes).has("REMOTE_SCRIPT"));
 }
+
+#[test]
+fn a_missing_or_unreadable_html_path_is_incomplete() {
+    use bookdoctor::html::scan_html_file;
+    use scan_common::FileReport;
+    use scan_common::sniff::Sniffed;
+    let d = tempfile::tempdir().unwrap();
+    let mut r = FileReport::new(&d.path().join("none.html"), None);
+    scan_html_file(&d.path().join("none.html"), Sniffed::Html, &mut r);
+    assert!(r.reasons.iter().any(|m| m == "HTML file could not be opened"), "{:?}", r.reasons);
+    // 디렉터리는 열리지만 읽지 못한다.
+    let mut r = FileReport::new(d.path(), None);
+    scan_html_file(d.path(), Sniffed::Html, &mut r);
+    assert!(r.reasons.iter().any(|m| m == "HTML file could not be read"), "{:?}", r.reasons);
+}

@@ -797,3 +797,86 @@ pub const TOKEN_CASES: &[(&str, usize, usize, &str, &[&str])] = &[
     ("char", 1, 3, "日本 語", &["日", "本", " ", "語", "日本", "本 ", " 語", "日本 ", "本 語"]),
     ("char", 2, 4, "日本 語", &["日本", "本 ", " 語", "日本 ", "本 語", "日本 語"]),
 ];
+
+// ---------------------------------------------------------------------------
+// 모델 대역의 기본 구현, 학습 계수 검증, 접근자
+// ---------------------------------------------------------------------------
+
+struct Undecided;
+
+impl CategoryModelApi for Undecided {}
+
+#[test]
+fn the_default_model_api_never_decides() {
+    let m = Undecided;
+    assert_eq!(m.min_confidence(), 1.0);
+    let p = m.predict(&[json!({}), json!({})], None);
+    assert_eq!(p.len(), 2);
+    assert!(p.iter().all(|p| p.category.is_none() && p.reason == "판정하지 않는 모델"));
+    assert_eq!(m.expected_accuracy(0.9), None);
+}
+
+#[test]
+fn training_output_is_validated_and_exposed_through_accessors() {
+    let classes = || vec!["소설".to_string()];
+    assert!(CategoryModel::from_training(Vec::new(), json!({}), json!({}), Vec::new(), Vec::new(), Vec::new()).is_err());
+    let nan = CategoryModel::from_training(classes(), json!({}), json!({}), Vec::new(), Vec::new(), vec![f64::NAN]).unwrap_err();
+    assert!(nan.to_string().contains("NaN"), "{nan}");
+    let model = CategoryModel::from_training(classes(), json!({"decision": {}}), json!({"v": 1}), Vec::new(), Vec::new(), vec![0.0]).unwrap();
+    assert_eq!(model.classes(), ["소설"]);
+    assert_eq!(model.n_features(), 0);
+    assert_eq!(model.config()["decision"], json!({}));
+    assert_eq!(model.meta()["v"], 1);
+    let api: &dyn CategoryModelApi = &model;
+    let p = api.predict(&[json!({"title": "제목"})], Some(0.0));
+    assert_eq!(p[0].ranked[0].0, "소설");
+}
+
+// ---------------------------------------------------------------------------
+// 설정 파일 읽기
+// ---------------------------------------------------------------------------
+
+mod config_file {
+    use backend::classifier::config::{CONFIG_ENV, MAX_CONFIG_BYTES, default_config, enabled_fields, load_config, load_config_from_env, merge_config};
+    use serde_json::json;
+
+    #[test]
+    fn unusable_config_files_fall_back_to_the_defaults() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(load_config(d.path()), default_config(), "디렉터리");
+        let big = d.path().join("big.json");
+        // 상한을 넘는 올바른 JSON 객체. 크기 때문에만 거부된다.
+        let mut body = br#"{"pad": ""#.to_vec();
+        body.extend(vec![b'x'; MAX_CONFIG_BYTES as usize]);
+        body.extend(br#""}"#);
+        std::fs::write(&big, body).unwrap();
+        assert_eq!(load_config(&big), default_config(), "너무 큼");
+        let array = d.path().join("array.json");
+        std::fs::write(&array, "[1, 2]").unwrap();
+        assert_eq!(load_config(&array), default_config(), "객체 아님");
+    }
+
+    #[test]
+    fn the_environment_variable_points_at_the_config_file() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("c.json");
+        std::fs::write(&p, r#"{"decision": {"temperature": 3}}"#).unwrap();
+        // SAFETY: 이 테스트 바이너리에서 CONFIG_ENV를 쓰는 테스트는 이것뿐이다.
+        unsafe { std::env::set_var(CONFIG_ENV, &p) };
+        let cfg = load_config_from_env();
+        unsafe { std::env::remove_var(CONFIG_ENV) };
+        assert_eq!(cfg["decision"]["temperature"], 3);
+    }
+
+    #[test]
+    fn merging_into_a_non_object_keeps_the_base_and_truthiness_follows_python() {
+        assert_eq!(merge_config(&json!(1), &json!({"a": 1})), json!(1));
+        let cfg = json!({"fields": {
+            "null": {"enabled": null}, "zero": {"enabled": 0}, "one": {"enabled": 1},
+            "empty": {"enabled": ""}, "text": {"enabled": "y"}, "list": {"enabled": [1]}, "nolist": {"enabled": []},
+            "obj": {"enabled": {"a": 1}}, "noobj": {"enabled": {}},
+        }});
+        let on: Vec<String> = enabled_fields(&cfg).as_object().unwrap().keys().cloned().collect();
+        assert_eq!(on, ["one", "text", "list", "obj"]);
+    }
+}

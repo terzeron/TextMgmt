@@ -3789,3 +3789,76 @@ fn test_validate_pdf_not_found() {
     assert!(result.is_none());
     assert!(err.as_deref().unwrap().to_lowercase().contains("not found"));
 }
+
+// ---- coverage: update.rs 재색인·복구·조회 오류 경로 ----
+
+/// `A/old.txt` 문서와 파일을 만들고 `A/new.txt`로 옮기는 update_book을 실행한다.
+fn update_old_to_new(es: &Arc<FakeEsManager>, tmp_path: &Path) -> (String, Option<String>) {
+    let doc = make_doc("A/old.txt", ".txt");
+    es.on_search_by_id(move |_| Ok(Some(doc.clone())));
+    mkdir(tmp_path.join("A"));
+    write(tmp_path.join("A/old.txt"), "x");
+    let manager = make_manager(tmp_path, es);
+    as_status(run(manager.update_book(1, "A", "T", "U", &tmp_path.join("A/new.txt"), ".txt")))
+}
+
+#[test]
+fn test_update_book_reindex_with_another_id_fails_and_restore_reports_it() {
+    let tmp = TempDir::new().unwrap();
+    let es = FakeEsManager::new();
+    // 재색인과 복구 모두 다른 id를 돌려준다.
+    es.on_insert(|_data: &Docs| Ok(vec![999]));
+    let (status, msg) = update_old_to_new(&es, tmp.path());
+    assert_eq!(status, "Error");
+    assert!(msg.as_deref().unwrap().contains("기존 ES 문서 복구 실패: None"), "{msg:?}");
+    assert!(tmp.path().join("A/old.txt").exists());
+}
+
+#[test]
+fn test_update_book_reindex_exception_restores_or_reports_the_old_doc() {
+    let tmp = TempDir::new().unwrap();
+    let es = FakeEsManager::new();
+    es.on_insert(|_data: &Docs| Err(EsError::Other("es fail".to_string())));
+    let (status, msg) = update_old_to_new(&es, tmp.path());
+    assert_eq!(status, "Error");
+    assert!(msg.as_deref().unwrap().contains("ES 재색인 예외, 파일 롤백 완료, 기존 ES 문서 복구 실패"), "{msg:?}");
+
+    // 첫 삽입(재색인)만 실패하고 복구 삽입은 성공한다.
+    let tmp = TempDir::new().unwrap();
+    let es = FakeEsManager::new();
+    let calls = Arc::new(Mutex::new(0));
+    es.on_insert(move |_data: &Docs| {
+        let mut n = calls.lock().unwrap();
+        *n += 1;
+        if *n == 1 { Err(EsError::Other("es fail".to_string())) } else { Ok(vec![1]) }
+    });
+    let (status, msg) = update_old_to_new(&es, tmp.path());
+    assert_eq!(status, "Error");
+    assert!(msg.as_deref().unwrap().contains("ES 재색인 예외, 파일 롤백 및 기존 ES 문서 복구 완료"), "{msg:?}");
+}
+
+#[test]
+fn test_update_and_delete_book_report_search_errors() {
+    let tmp = TempDir::new().unwrap();
+    let es = FakeEsManager::new();
+    es.on_search_by_id(|_| Err(EsError::Other("search down".to_string())));
+    let manager = make_manager(tmp.path(), &es);
+    let (status, msg) = as_status(run(manager.update_book(1, "A", "T", "U", &tmp.path().join("A/new.txt"), ".txt")));
+    assert_eq!(status, "Error");
+    assert!(msg.as_deref().unwrap().contains("search down"), "{msg:?}");
+    let (status, msg) = as_deletion(run(manager.delete_book(1)));
+    assert_eq!(status, "Error");
+    assert!(msg.as_deref().unwrap().contains("search down"), "{msg:?}");
+}
+
+#[test]
+fn test_index_single_file_reports_a_cleanup_failure() {
+    let tmp = TempDir::new().unwrap();
+    let es = FakeEsManager::new();
+    es.fail("delete_by_file_paths", "cleanup down");
+    mkdir(tmp.path().join("A"));
+    write(tmp.path().join("A/x.txt"), "본문");
+    let manager = make_manager(tmp.path(), &es);
+    let error = run(manager.index_single_file("A/x.txt")).unwrap_err();
+    assert!(error.contains("기존 ES 문서 정리 실패"), "{error}");
+}

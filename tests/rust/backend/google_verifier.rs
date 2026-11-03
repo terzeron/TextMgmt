@@ -106,3 +106,11 @@ fn zero_max_age_refetches_jwks_and_recent_unknown_key_refresh_is_throttled() {
     assert!(verifier.verify(VALID, "textmgmt-client").is_err());
     assert_eq!(rotated.calls.load(Ordering::SeqCst), 2);
 }
+
+#[test]
+fn rejects_tokens_not_signed_with_rs256() {
+    // 헤더 {"alg":"HS256","typ":"JWT"}. 서명은 확인하기 전에 알고리즘에서 거른다.
+    let hs256 = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.c2ln";
+    let (verifier, _) = verifier();
+    assert_eq!(verifier.verify(hs256, "textmgmt-client").unwrap_err(), "Google ID token must use RS256");
+}
