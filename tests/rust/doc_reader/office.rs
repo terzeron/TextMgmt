@@ -1,0 +1,68 @@
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+
+use doc_reader::office::{convert_with_libreoffice, find_libreoffice, read_from_doc, read_from_hwp, read_from_image};
+
+/// 변환기를 흉내 내는 셸 스크립트. 마지막 인자(원본)의 stem으로 `--outdir` 아래에 결과를 쓴다.
+fn fake_office(dir: &Path, body: &str) -> PathBuf {
+    let path = dir.join("fake-office");
+    fs::write(
+        &path,
+        format!("#!/bin/sh\nout=\"\"\nwhile [ $# -gt 1 ]; do if [ \"$1\" = \"--outdir\" ]; then out=\"$2\"; fi; shift; done\nsrc=\"$1\"\nname=$(basename \"$src\")\nstem=\"${{name%.*}}\"\n{body}\n"),
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[test]
+fn office_conversion_reads_the_output_file_and_reports_a_missing_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ok = fake_office(tmp.path(), "printf 'line one\\nline, two' > \"$out/$stem.txt\"");
+    let src = tmp.path().join("doc one.doc");
+    fs::write(&src, b"x").unwrap();
+    let mut errors = Vec::new();
+    assert_eq!(convert_with_libreoffice(&src, "txt:Text", &ok, &mut errors), "line one\nline, two");
+    assert!(errors.is_empty());
+
+    let (summary, lines, errors) = read_from_doc(&src, &ok);
+    assert_eq!((summary.as_str(), lines), ("line one\nline  two", 2));
+    assert!(errors.is_empty());
+
+    // 이름이 달라도 확장자로 찾는다.
+    let renamed = fake_office(tmp.path(), "printf 'other name' > \"$out/whatever.txt\"");
+    assert_eq!(convert_with_libreoffice(&src, "txt:Text", &renamed, &mut Vec::new()), "other name");
+
+    let none = fake_office(tmp.path(), "echo oops >&2; exit 3");
+    let mut errors = Vec::new();
+    assert_eq!(convert_with_libreoffice(&src, "txt:Text", &none, &mut errors), "");
+    assert!(errors[0].contains("LibreOffice produced no output") && errors[0].contains("returncode=3") && errors[0].contains("oops"), "{errors:?}");
+
+    let missing = tmp.path().join("no-such-binary");
+    let mut errors = Vec::new();
+    assert_eq!(convert_with_libreoffice(&src, "txt:Text", &missing, &mut errors), "");
+    assert!(errors[0].contains("timeout"), "{errors:?}");
+}
+
+#[test]
+fn hwp_falls_back_to_the_native_hwp3_parser_when_conversion_is_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let empty = fake_office(tmp.path(), ": > \"$out/$stem.txt\"");
+    let src = tmp.path().join("a.hwp");
+    fs::write(&src, b"not a real hwp").unwrap();
+    let (summary, lines, errors) = read_from_hwp(&src, &empty);
+    assert!(errors.is_empty());
+    // HWP3 서명이 아니므로 파서도 빈 글을 준다.
+    assert_eq!((summary.as_str(), lines), ("", 0));
+
+    let filled = fake_office(tmp.path(), "printf '한글 문서' > \"$out/$stem.txt\"");
+    let (summary, lines, _) = read_from_hwp(&src, &filled);
+    assert_eq!((summary.as_str(), lines), ("한글 문서", 1));
+}
+
+#[test]
+fn images_have_no_text() {
+    assert_eq!(read_from_image(), (String::new(), 0, 0));
+    assert!(!find_libreoffice().as_os_str().is_empty());
+}

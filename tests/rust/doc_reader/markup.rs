@@ -1,9 +1,8 @@
+mod corpus;
+
 use doc_reader::markup::{count_lines, get_body_text, get_text, read_from_html};
 use serde_json::Value;
 use std::fs;
-
-#[path = "corpus.rs"]
-mod corpus;
 
 fn cases() -> Value {
     serde_json::from_str(include_str!("markup_cases.json")).unwrap()

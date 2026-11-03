@@ -1,11 +1,10 @@
+mod corpus;
+
 use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
 
 use doc_reader::pdf::{InProcess, PDF_PAGE_LIMIT, Stage, StageError, StageRunner, fast_page_count, read_from_pdf};
-
-#[path = "corpus.rs"]
-mod corpus;
 
 type Answer<'a> = Result<(&'a str, usize), StageError>;
 type OwnedAnswer = (Stage, Result<(String, usize), StageError>);

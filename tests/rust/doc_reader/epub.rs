@@ -1,12 +1,11 @@
+mod corpus;
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use doc_reader::epub::{EpubPath, pretty_text, read_from_epub};
 use zip::write::SimpleFileOptions;
-
-#[path = "corpus.rs"]
-mod corpus;
 
 /// 이름→내용 목록으로 EPUB(ZIP)을 만든다.
 fn build(dir: &Path, name: &str, members: &[(&str, &str)]) -> PathBuf {
