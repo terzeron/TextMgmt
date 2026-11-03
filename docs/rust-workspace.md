@@ -39,14 +39,14 @@ docs/       문서
 | `update` | ES 갱신·조회·삭제 점검 |
 | `move_semi_clusters` | 준확실 클러스터 이동 및 미리보기 |
 | `classify_books_client` | REST API 감시와 직접 분류 옵션 |
-| `classify_cli` | 수집·학습·평가·보정·서점 정책·분류·재분류·모델 정보 |
+| `trainer` | 수집·학습·평가·보정·서점 정책·분류·재분류·모델 정보 |
 | `normalize_comic_directories` | 만화 경로 스캔과 이름 변경 |
 
 ## 규칙
 
 - `-h`/`--help`는 도움말을 출력한다. 각 CLI의 기본 실행과 종료 코드는 아래 계약을 따른다.
   `update`, `move_semi_clusters`, `classify_books_client`, `normalize_comic_directories`는 기본 작업을 실행하고,
-  `loader`와 `classify_cli`는 사용법을 출력하고 코드 1로 끝난다.
+  `loader`와 `trainer`는 사용법을 출력하고 코드 1로 끝난다.
 - 잘못된 인자의 출력 위치와 종료 코드는 각 CLI 계약을 따른다.
 - **테스트를 먼저 쓴다(TDD).** 정해진 동작 사례를 Rust 테스트로 먼저 옮기고 실패를 확인한 뒤 구현한다.
 - **커버리지는 100%에 가깝게 유지한다.** `cargo llvm-cov --workspace --summary-only`.
@@ -77,17 +77,17 @@ docs/       문서
 - Bearer만 사용하는 CLI는 Origin 없이 호출할 수 있다. 인증 쿠키도 보내면 Origin 또는 Referer를 지정해야 한다.
   쿠키 없는 익명 디버깅 로그에는 출처 검사를 적용하지 않는다.
 
-## 분류 CLI
+## 분류 모델 관리 (trainer)
 
-`cargo run -p classify_cli -- <명령>`으로 실행한다. 인자 없이 실행하면 도움말을 출력하고 종료 코드 1을 반환한다.
+`cargo run -p trainer -- <명령>`으로 실행한다. 인자 없이 실행하면 도움말을 출력하고 종료 코드 1을 반환한다.
 `collect`, `train`, `evaluate`, `score-calibration`, `bookstore-policy`, `classify`, `reclassify`, `info`를 지원한다.
 
 ```sh
-cargo run -p classify_cli -- collect --out tmp/classifier/corpus.jsonl
-cargo run -p classify_cli -- train --corpus tmp/classifier/corpus.jsonl --out tmp/classifier/export
-cargo run -p classify_cli -- evaluate --corpus tmp/classifier/corpus.jsonl --model tmp/classifier/export
-cargo run -p classify_cli -- classify book.txt --model tmp/classifier/export --no-es
-cargo run -p classify_cli -- reclassify 0_inbox --library-root /books --model tmp/classifier/export --no-es
+cargo run -p trainer -- collect --out tmp/classifier/corpus.jsonl
+cargo run -p trainer -- train --corpus tmp/classifier/corpus.jsonl --out tmp/classifier/export
+cargo run -p trainer -- evaluate --corpus tmp/classifier/corpus.jsonl --model tmp/classifier/export
+cargo run -p trainer -- classify book.txt --model tmp/classifier/export --no-es
+cargo run -p trainer -- reclassify 0_inbox --library-root /books --model tmp/classifier/export --no-es
 ```
 
 - `--model`과 `train --out`은 JSON·가중치 파일을 담는 **디렉토리**다. 기본값은 `TM_CLASSIFIER_MODEL_DIR`, 없으면 `backend/classifier/export`다.
@@ -101,10 +101,10 @@ cargo run -p classify_cli -- reclassify 0_inbox --library-root /books --model tm
 - `reclassify`는 기본 미리보기다. `--apply`를 붙여야 이동하며, 목적지 충돌과 카테고리 심볼릭 링크를 거부한다.
   같은 filesystem에서는 inode를 보존하고, 다른 filesystem에서는 복사 후 원본을 지운다. 파일 이동 실패를 출력·집계한 뒤 종료 코드 0을 반환한다.
 - 분류 도구는 backend가 아니라 `libs/classifier`에 의존한다. 기본 모델 경로는 전과 같이 `backend/classifier/export`다.
-- 테스트는 `tests/rust/classify_cli/cli.rs`에 등록했다. 분류기 자체 테스트는 `tests/rust/classifier/`에 있다. 기존 `tests/rust/backend/classify_cli*.rs`는 구현 전 가정 API로 작성한 미등록 테스트다.
+- 테스트는 `tests/rust/trainer/cli.rs`에 등록했다. 분류기 자체 테스트는 `tests/rust/classifier/`에 있다. 기존 `tests/rust/backend/classify_cli*.rs`는 구현 전 가정 API로 작성한 미등록 테스트다.
   새 테스트는 실제 export 모델과 현재 `EsTransport`·`CommandRunner` 계약으로 실행한다.
 
-검증: `cargo test -p classify_cli --locked`, `cargo clippy -p classify_cli --all-targets --locked -- -D warnings`.
+검증: `cargo test -p trainer --locked`, `cargo clippy -p trainer --all-targets --locked -- -D warnings`.
 
 ## 새 crate 추가
 

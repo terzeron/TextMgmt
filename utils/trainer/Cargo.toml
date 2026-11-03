@@ -1,5 +1,5 @@
 [package]
-name = "classify_cli"
+name = "trainer"
 description = "도서 분류 모델 관리: Rust 학습·추론"
 version.workspace = true
 edition.workspace = true
@@ -19,4 +19,4 @@ tempfile = "3.27.0"
 
 [[test]]
 name = "cli"
-path = "../../tests/rust/classify_cli/cli.rs"
+path = "../../tests/rust/trainer/cli.rs"

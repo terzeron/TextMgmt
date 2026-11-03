@@ -24,6 +24,6 @@ fn main() {
     let _ = log::set_logger(&LOGGER);
     log::set_max_level(if verbose { log::LevelFilter::Debug } else { log::LevelFilter::Info });
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let code = classify_cli::main_with(&refs, &mut classify_cli::CliIo { out: &mut std::io::stdout(), err: &mut std::io::stderr() }, &classify_cli::Deps::system());
+    let code = trainer::main_with(&refs, &mut trainer::CliIo { out: &mut std::io::stdout(), err: &mut std::io::stderr() }, &trainer::Deps::system());
     std::process::exit(if code < 0 { 1 } else { code });
 }

@@ -1,4 +1,4 @@
-//! 도서 분류기. backend `BookManager`와 분류 도구(`classify_cli`, `classify_books_client`)가 함께 쓴다.
+//! 도서 분류기. backend `BookManager`와 분류 모델 관리 도구(`trainer`)가 함께 쓴다.
 //!
 //! 모델 추론 코어는 `model`(내보낸 파일을 읽는다), 설정·코퍼스·교정·리더는 각 모듈에 있다. `BookCategoryClassifier` 가 모델과 ES 를
 //! 묶어 파일 하나를 판정한다. 서점 정책을 가진 `BookClassifierService` 는 [`book_classifier`]에, 서점 응답 캐시는 [`bookstore_cache`]에 있다.

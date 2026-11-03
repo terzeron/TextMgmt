@@ -2,14 +2,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use classify_cli::{CliIo, Deps, main_with};
+use trainer::{CliIo, Deps, main_with};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-#[path = "../../../utils/classify_cli/src/shuffle.rs"]
+#[path = "../../../utils/trainer/src/shuffle.rs"]
 mod shuffle;
 
-#[path = "../../../utils/classify_cli/src/move_file.rs"]
+#[path = "../../../utils/trainer/src/move_file.rs"]
 mod move_file;
 
 #[test]
@@ -66,7 +66,7 @@ fn run(args: &[&str], deps: &Deps) -> (i32, String, String) {
 #[test]
 fn every_command_prints_help_and_no_args_fail_like_python() {
     let deps = Deps::system();
-    for command in classify_cli::commands() {
+    for command in trainer::commands() {
         let (code, out, err) = run(&[command, "--help"], &deps);
         assert_eq!(code, 0, "{err}");
         assert!(out.contains(command));
@@ -107,7 +107,7 @@ fn verbose_classify_emits_debug_diagnostics() {
     let epub = dir.path().join("broken.epub");
     fs::write(&epub, b"not a zip archive").unwrap();
     let run = |verbose: bool| {
-        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_classify_cli"));
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_trainer"));
         if verbose {
             command.arg("-v");
         }
@@ -127,7 +127,7 @@ fn classify_reports_missing_invalid_and_incomplete_es_environment_without_connec
     use std::process::{Command, Output};
 
     fn run_with_es(command_name: &str, url: Option<&str>, index: Option<&str>, configure_optional_auth: bool) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_classify_cli"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_trainer"));
         if command_name == "classify" {
             command.args(["classify", "/no/such/file", "--model"]).arg(fixture());
         } else {
@@ -220,10 +220,10 @@ fn manifest_uses_exact_membership_and_rejects_invalid_or_missing_members() {
     let path = dir.path().join("holdout.json");
     let docs = vec![json!({"id":"a"}), json!({"id":"b"})];
     fs::write(&path, json!({"document_keys":["b"]}).to_string()).unwrap();
-    assert_eq!(classify_cli::load_manifest_holdout(&docs, &path).unwrap(), vec![docs[1].clone()]);
+    assert_eq!(trainer::load_manifest_holdout(&docs, &path).unwrap(), vec![docs[1].clone()]);
     for payload in [json!([]), json!({"document_keys":4}), json!({"document_keys":[4]}), json!({"document_keys":["missing"]})] {
         fs::write(&path, payload.to_string()).unwrap();
-        assert!(classify_cli::load_manifest_holdout(&docs, &path).is_err());
+        assert!(trainer::load_manifest_holdout(&docs, &path).is_err());
     }
 }
 
@@ -277,7 +277,7 @@ fn model_and_corpus(dir: &TempDir, count: usize) -> (PathBuf, PathBuf) {
         (0..count).map(|i| json!({"id":i.to_string(),"cat":"3_무협","text":"무림맹 장문인 내공 운기조식 화산파 검법 강호 협객","name":format!("무협_{i}.txt"),"type":"txt"})).collect();
     let corpus = dir.path().join("corpus.jsonl");
     classifier::corpus::write_jsonl(&docs, &corpus).unwrap();
-    fs::write(classify_cli::holdout_manifest_path(&path), json!({"document_keys":docs.iter().map(|d| d["id"].clone()).collect::<Vec<_>>()} ).to_string()).unwrap();
+    fs::write(trainer::holdout_manifest_path(&path), json!({"document_keys":docs.iter().map(|d| d["id"].clone()).collect::<Vec<_>>()} ).to_string()).unwrap();
     (path, corpus)
 }
 
@@ -364,14 +364,14 @@ fn reclassify_prints_progress_every_500_files() {
 }
 
 struct Stores;
-impl classify_cli::BookstoreQuery for Stores {
+impl trainer::BookstoreQuery for Stores {
     fn query(&self, _: &str, _: &str, _: &str, _: f64) -> (Value, Value, Value) {
         (json!({"mapped":"3_무협"}), json!({"mapped":"3_무협"}), json!({}))
     }
 }
 
 struct VoteStores([Value; 3]);
-impl classify_cli::BookstoreQuery for VoteStores {
+impl trainer::BookstoreQuery for VoteStores {
     fn query(&self, _: &str, _: &str, _: &str, _: f64) -> (Value, Value, Value) {
         (self.0[0].clone(), self.0[1].clone(), self.0[2].clone())
     }
@@ -682,7 +682,7 @@ fn train_runs_in_rust_and_writes_model_and_holdout_manifest() {
     let (expected_model, expected_report) = classifier::training::train(&mut original_docs.clone(), &model.config, classifier::training::TrainOptions::default()).unwrap();
     assert_eq!(expected_model.classes, model.classes);
     assert_eq!(model.meta["holdout"], expected_report);
-    assert!(!classify_cli::load_manifest_holdout(&classifier::corpus::read_jsonl(&corpus).unwrap(), &classify_cli::holdout_manifest_path(&out)).unwrap().is_empty());
+    assert!(!trainer::load_manifest_holdout(&classifier::corpus::read_jsonl(&corpus).unwrap(), &trainer::holdout_manifest_path(&out)).unwrap().is_empty());
 }
 
 #[test]
@@ -875,7 +875,7 @@ fn reband_separate_output_preserves_input_and_invalid_rows_fail() {
 
 #[test]
 fn executable_exit_codes_and_help_match_the_library() {
-    let binary = env!("CARGO_BIN_EXE_classify_cli");
+    let binary = env!("CARGO_BIN_EXE_trainer");
     let output = std::process::Command::new(binary).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stdout).contains("사용법"));
@@ -908,11 +908,11 @@ fn evaluate_reconstructs_missing_manifest_and_reports_partially_missing_keys() {
     let dir = TempDir::new().unwrap();
     let (model, corpus) = model_and_corpus(&dir, 20);
     let args = ["evaluate", "--model", model.to_str().unwrap(), "--corpus", corpus.to_str().unwrap()];
-    fs::remove_file(classify_cli::holdout_manifest_path(&model)).unwrap();
+    fs::remove_file(trainer::holdout_manifest_path(&model)).unwrap();
     let (code, _, err) = run(&args, &Deps::system());
     assert_eq!(code, 0, "{err}");
     assert!(err.contains("해시 분할"));
-    fs::write(classify_cli::holdout_manifest_path(&model), json!({"document_keys":["0","missing"]}).to_string()).unwrap();
+    fs::write(trainer::holdout_manifest_path(&model), json!({"document_keys":["0","missing"]}).to_string()).unwrap();
     let (code, _, err) = run(&args, &Deps::system());
     assert_eq!(code, 0, "{err}");
     assert!(err.contains("1건"));

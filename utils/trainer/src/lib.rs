@@ -1,4 +1,4 @@
-//! Python `utils/classify_cli.py`의 Rust 실행 도구.
+//! 도서 분류 모델 관리 도구(`trainer`). Python `utils/classify_cli.py`의 Rust 이식이다.
 
 mod args;
 mod commands;
@@ -75,7 +75,7 @@ pub fn commands() -> &'static [&'static str] {
 pub fn print_usage(out: &mut dyn Write, command: Option<&str>) -> std::io::Result<()> {
     writeln!(
         out,
-        "도서 자동분류 모델 관리 도구\n사용법: classify_cli <명령> [옵션]\n명령: {}\n인자가 없거나 -h/--help이면 도움말을 출력한다.\n종료 코드: 0 성공, 1 실행 실패, 2 잘못된 인자",
+        "도서 자동분류 모델 관리 도구\n사용법: trainer <명령> [옵션]\n명령: {}\n인자가 없거나 -h/--help이면 도움말을 출력한다.\n종료 코드: 0 성공, 1 실행 실패, 2 잘못된 인자",
         commands().join(", ")
     )?;
     if let Some(command) = command {
