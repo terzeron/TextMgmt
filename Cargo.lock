@@ -212,6 +212,7 @@ dependencies = [
  "epubveri",
  "es_client",
  "fancy-regex",
+ "file_record",
  "flate2",
  "htmlkit",
  "hwp3_parser",
@@ -220,7 +221,6 @@ dependencies = [
  "isbn",
  "jpeg-encoder",
  "jsonwebtoken",
- "loader",
  "log",
  "lopdf",
  "md-5",
@@ -1263,10 +1263,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "file_time"
+name = "file_record"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "corpus_common",
+ "doc_reader",
+ "isbn",
+ "lopdf",
+ "parser_timeout",
+ "serde_json",
+ "stat",
  "tempfile",
 ]
 
@@ -2161,16 +2168,14 @@ name = "loader"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "corpus_common",
  "corpus_layout",
  "doc_reader",
  "encoding_rs",
  "es_client",
- "file_time",
+ "file_record",
  "hwp3_parser",
  "hwp3_tables",
  "isbn",
- "lopdf",
  "parser_timeout",
  "serde_json",
  "stat",

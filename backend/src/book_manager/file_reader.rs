@@ -2,7 +2,7 @@
 //!
 //! `DefaultFileReader`는 `loader` crate 없이 메타데이터 문서만 만든다: 카테고리, 제목, 저자, 크기, 시각, 형식.
 //! 본문 요약은 txt만 앞부분을 담고, 쪽수·줄 수·ISBN·PDF/EPUB/DOC 본문은 채우지 않는다.
-//! 운영에서는 `loader::record::read_file`을 감싼 `FileReader`를 `BookManagerDeps::with_file_reader`로 꽂아야 한다.
+//! 운영에서는 `file_record::record::read_file`을 감싼 `FileReader`를 `BookManagerDeps::with_file_reader`로 꽂아야 한다.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use chrono::{Local, NaiveDateTime};
 use doc_reader::pdf::InProcess;
-use loader::config::Config;
-use loader::record;
+use file_record::config::Config;
+use file_record::record;
 use serde_json::{Value, json};
 use stat::Stat;
 use sysdeps::FsOps;
@@ -63,7 +63,7 @@ pub fn detect_file_type(fs: &dyn FsOps, path: &Path, declared: &str) -> Option<S
     None
 }
 
-/// `[저자] 제목` 꼴이면 둘로 나눈다. `loader::record::split_author_title`와 같다.
+/// `[저자] 제목` 꼴이면 둘로 나눈다. `file_record::record::split_author_title`와 같다.
 fn split_author_title(stem: &str) -> (String, String) {
     if let Some(rest) = stem.strip_prefix('[')
         && let Some(end) = rest.find(']')
@@ -122,9 +122,9 @@ impl FileReader for LoaderFileReader {
     }
 
     fn try_read_file_with_timeout(self: Arc<Self>, path: PathBuf, path_prefix: Option<PathBuf>, skip_text: bool, timeout: Duration) -> Result<Docs, super::ReadFileError> {
-        let outcome = loader::cli::read_file_in_child(&self.worker_executable, &self.config, &path, path_prefix.as_deref(), skip_text, timeout).map_err(|error| match error {
-            loader::cli::ChildReadError::Timeout(error) => super::ReadFileError::Timeout(error.to_string()),
-            loader::cli::ChildReadError::Other(error) => super::ReadFileError::Other(error),
+        let outcome = file_record::child::read_file_in_child(&self.worker_executable, &self.config, &path, path_prefix.as_deref(), skip_text, timeout).map_err(|error| match error {
+            file_record::child::ChildReadError::Timeout(error) => super::ReadFileError::Timeout(error.to_string()),
+            file_record::child::ChildReadError::Other(error) => super::ReadFileError::Other(error),
         })?;
         for message in outcome.messages {
             log::warn!("loader failed to read '{}': {message}", path.display());

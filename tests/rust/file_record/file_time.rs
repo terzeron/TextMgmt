@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime};
-use file_time::*;
+use file_record::file_time::*;
 
 fn local(sec: i64, micro: u32) -> NaiveDateTime {
     DateTime::from_timestamp(sec, micro * 1000).unwrap().with_timezone(&Local).naive_local()

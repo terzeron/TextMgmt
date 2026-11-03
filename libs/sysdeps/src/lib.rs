@@ -22,7 +22,7 @@ pub mod pdf;
 pub use pdf as poppler;
 mod native_pdf;
 
-/// 환경 변수 조회 함수. `loader::Config::from_env`와 같은 모양이다.
+/// 환경 변수 조회 함수. `file_record::config::Config::from_env`와 같은 모양이다.
 pub type EnvFn<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 // ---------------------------------------------------------------------------

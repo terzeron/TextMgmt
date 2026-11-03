@@ -11,7 +11,7 @@ use doc_reader::epub::{EpubPath, read_epub_publisher, read_from_epub};
 use doc_reader::pdf::{PDF_STAGE_TIMEOUT, StageRunner, fast_page_count, read_from_pdf};
 use doc_reader::text::{TextRead, read_from_text, reencode_text_file_to_utf8};
 use doc_reader::{docx, markup, office, rtf};
-use file_time::{StatResult, iso, path_created_time_with_source};
+use crate::file_time::{StatResult, iso, path_created_time_with_source};
 use serde_json::{Map, Value, json};
 use stat::Stat;
 

@@ -275,7 +275,7 @@ impl EsManagerApi for BackfillEs {
 // ---------------------------------------------------------------------------
 
 /// `Loader.read_file(path)` 대응. 기본 `FileReader`(`DefaultFileReader`)로 문서 하나를 만든다.
-/// 운영용 `loader::record::read_file`은 사용자의 미커밋 crate라 쓰지 않는다. 이 테스트는 카테고리·제목·저자·크기·형식만 확인한다.
+/// 운영용 `file_record::record::read_file`은 사용자의 미커밋 crate라 쓰지 않는다. 이 테스트는 카테고리·제목·저자·크기·형식만 확인한다.
 fn loader_read_file(path: &Path) -> Docs {
     let book_dir = PathBuf::from(std::env::var("TM_BOOK_DIR").unwrap());
     loader_read_file_from(&book_dir, path)
