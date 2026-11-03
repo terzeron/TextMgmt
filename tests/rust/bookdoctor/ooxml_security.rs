@@ -4,7 +4,7 @@ mod common;
 
 use std::path::Path;
 
-use bookdoctor::cli::{Options, run};
+use bookdoctor::cli::{Options, run_with_env};
 use bookdoctor::scan::scan_file;
 use scan_common::{Category, FileReport, Finding, Severity};
 
@@ -95,10 +95,11 @@ fn external_image_is_medium_and_hidden_by_default() {
     let d = tempfile::tempdir().unwrap();
     common::docx_with(&d.path().join("img.docx"), &[], &[("word/_rels/document.xml.rels", &rels(&[("image", "http://tracker.example/p.gif", true)]))]);
     let show = |extra: &[&str]| {
-        let mut argv: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
-        argv.extend(["--color".into(), "never".into(), "-r".into(), d.path().to_string_lossy().into_owned()]);
+        let mut argv: Vec<String> = vec!["scan".into()];
+        argv.extend(extra.iter().map(|s| s.to_string()));
+        argv.push(d.path().to_string_lossy().into_owned());
         let mut out = Vec::new();
-        run(&argv, &mut out);
+        run_with_env(&argv, &mut out, false, false);
         String::from_utf8(out).unwrap()
     };
     assert!(!show(&[]).contains("OOXML_EXTERNAL_IMAGE"));

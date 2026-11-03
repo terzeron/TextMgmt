@@ -10,12 +10,10 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
 use std::sync::LazyLock;
 
 use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
 use regex::Regex;
-use scan_common::files::collect_files;
 use scraper::{Html, Node};
 
 use crate::cli::Options;
@@ -504,8 +502,8 @@ fn rescan(bytes: &[u8], opts: &Options) -> Result<(), String> {
 
 /// `--fix-xhtml` 진입점. 종료 코드를 돌려준다(건너뜀·삭제 후보가 있어도 0, 쓰기 실패가 있으면 1).
 pub fn run(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
-    let paths = collect_files(&opts.paths, opts.recursive, |p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("epub")));
-    let scan_opts = Options { only: Vec::new(), ..opts.clone() };
+    let paths = crate::cli::collect(opts, |p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("epub")));
+    let scan_opts = opts.clone();
     let (mut done, mut untouched, mut candidates, mut skipped, mut failed) = (0usize, 0usize, 0usize, 0usize, 0usize);
     for path in &paths {
         let shown = show(&path.to_string_lossy());
@@ -543,17 +541,16 @@ pub fn run(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
             skipped += 1;
             continue;
         }
-        let head = if opts.dry_run { "WOULD" } else { "FIXED" };
-        writeln!(out, "{head} {shown}: 멤버 {}개 수정, {}개 제거", plan.edited.len(), plan.dropped.len())?;
+        writeln!(out, "FIXED {shown}: 멤버 {}개 수정, {}개 제거", plan.edited.len(), plan.dropped.len())?;
         for (name, what) in &plan.edited {
             writeln!(out, "  - 수정 {} ({})", show(name), show(what))?;
         }
         for (name, why) in &plan.dropped {
             writeln!(out, "  - 제거 {} ({})", show(name), show(why))?;
         }
-        if !opts.dry_run {
-            let trash = opts.trash_dir.as_deref().unwrap_or_else(|| Path::new("0_trash"));
-            match apply(path, &plan.bytes, trash) {
+        {
+            let trash = opts.trash_dir();
+            match apply(path, &plan.bytes, &trash) {
                 Ok(saved) => writeln!(out, "  - 원본 보관 {}", show(&saved.to_string_lossy()))?,
                 Err(e) => {
                     writeln!(out, "FAIL {shown}: {}", show(&e.to_string()))?;
@@ -564,6 +561,6 @@ pub fn run(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
         }
         done += 1;
     }
-    writeln!(out, "검사 {}건, {} {done}건, 대상 아님·변경 없음 {untouched}건, 삭제 후보 {candidates}건, 건너뜀 {skipped}건, 실패 {failed}건", paths.len(), if opts.dry_run { "수리 예정" } else { "수리" })?;
+    writeln!(out, "검사 {}건, 수리 {done}건, 대상 아님·변경 없음 {untouched}건, 삭제 후보 {candidates}건, 건너뜀 {skipped}건, 실패 {failed}건", paths.len())?;
     Ok(i32::from(failed > 0))
 }

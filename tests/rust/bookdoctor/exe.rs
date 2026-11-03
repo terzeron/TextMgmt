@@ -134,8 +134,8 @@ fn txt_with_executable_content_still_reports_disguised_executable() {
 // --- CLI ---
 
 fn run_dir(dir: &Path, extra: &[&str]) -> (i32, String) {
-    let mut argv: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
-    argv.push("-r".into());
+    let mut argv: Vec<String> = vec!["scan".into()];
+    argv.extend(extra.iter().map(|s| s.to_string()));
     argv.push(dir.to_string_lossy().into_owned());
     let mut out = Vec::new();
     let code = run(&argv, &mut out);
@@ -175,17 +175,6 @@ fn json_names_the_format_executable() {
     std::fs::write(d.path().join("a.exe"), min_pe()).unwrap();
     let (_, out) = run_dir(d.path(), &["--json"]);
     assert!(out.contains("\"format\":\"executable\""), "{out}");
-}
-
-#[test]
-fn report_file_summary_counts_executables() {
-    let d = tempfile::tempdir().unwrap();
-    std::fs::write(d.path().join("a.exe"), min_pe()).unwrap();
-    let report = d.path().join("r.json");
-    let argv: Vec<String> = ["--report".to_string(), report.to_string_lossy().into_owned(), "-r".to_string(), d.path().to_string_lossy().into_owned()].into();
-    assert_eq!(run(&argv, &mut Vec::new()), 1);
-    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();
-    assert_eq!(v["summary"]["executables"], 1, "{v}");
 }
 
 #[test]

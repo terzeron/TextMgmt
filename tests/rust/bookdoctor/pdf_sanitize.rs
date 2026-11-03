@@ -4,7 +4,7 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use bookdoctor::cli::{run_with_env, Options};
+use bookdoctor::cli::{Options, execute, parse};
 use bookdoctor::pdf::sanitize::{rebuild, verify};
 use bookdoctor::scan::scan_file;
 use lopdf::Document;
@@ -51,7 +51,7 @@ fn security_high(bytes: &[u8]) -> Vec<String> {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("t.pdf");
     fs::write(&p, bytes).unwrap();
-    let report = scan_file(&p, &Options { no_poppler: true, ..Options::default() });
+    let report = scan_file(&p, &Options { no_pdf_worker: true, ..Options::default() });
     report.findings.iter().filter(|f| f.category == Category::Security && f.severity >= Severity::High).map(|f| f.code.to_string()).collect()
 }
 
@@ -146,12 +146,16 @@ fn verify_rejects_a_rewrite_that_changes_the_pages() {
     assert!(verify(&src, &other).unwrap_err().contains("쪽"));
 }
 
-// ---- 실행: --dry-run, 적용, 휴지통 ----
+// ---- 실행: 적용, 휴지통 ----
 
-fn run(args: &[&str]) -> (i32, String) {
+/// `root`를 코퍼스 루트로 삼아 명령을 실행한다. 휴지통은 `root/0_trash`다.
+fn run_in(root: &Path, args: &[&str]) -> (i32, String) {
     let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     let mut out = Vec::new();
-    let code = run_with_env(&argv, &mut out, false, true);
+    let code = match parse(&argv) {
+        Ok(o) => execute(&Options { library_root: root.to_path_buf(), ..o }, &mut out, false, true),
+        Err(_) => 2,
+    };
     (code, String::from_utf8_lossy(&out).into_owned())
 }
 
@@ -159,17 +163,6 @@ fn infected(dir: &Path, name: &str) -> std::path::PathBuf {
     let p = dir.join(name);
     fs::write(&p, build("/OpenAction 5 0 R", "", &["<< /S /JavaScript /JS (app.alert(1)) >>"])).unwrap();
     p
-}
-
-#[test]
-fn dry_run_lists_removals_without_touching_the_file() {
-    let d = tempfile::tempdir().unwrap();
-    let p = infected(d.path(), "a.pdf");
-    let before = fs::read(&p).unwrap();
-    let (code, out) = run(&["--sanitize", "--dry-run", p.to_str().unwrap()]);
-    assert_eq!(code, 0, "{out}");
-    assert!(out.contains("WOULD") && out.contains("JavaScript"), "{out}");
-    assert_eq!(fs::read(&p).unwrap(), before);
 }
 
 #[test]
@@ -182,14 +175,14 @@ fn apply_moves_the_original_to_trash_and_overwrites_in_place() {
         let m = fs::metadata(&p).unwrap();
         (m.ino(), m.modified().unwrap())
     };
-    let (code, out) = run(&["--sanitize", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     let m = fs::metadata(&p).unwrap();
     assert_eq!((m.ino(), m.modified().unwrap()), (ino, mtime), "inode와 mtime을 유지한다");
     assert_eq!(fs::read(trash.join("a.pdf")).unwrap(), original);
     assert_eq!(security_high(&fs::read(&p).unwrap()), Vec::<String>::new());
     // 다시 돌려도 바꿀 것이 없고 휴지통에 새 사본이 늘지 않는다.
-    let (code, _) = run(&["--sanitize", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    let (code, _) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert_eq!(fs::read_dir(&trash).unwrap().count(), 1);
 }
@@ -197,12 +190,11 @@ fn apply_moves_the_original_to_trash_and_overwrites_in_place() {
 #[test]
 fn a_pdf_with_remaining_high_findings_is_left_untouched() {
     let d = tempfile::tempdir().unwrap();
-    let trash = d.path().join("0_trash");
     // 실행 파일처럼 보이는 첨부 파일 이름은 이번 정리가 지우는 대상이 아니다. 재검사에서 남으면 적용하지 않는다.
     let p = d.path().join("b.pdf");
     fs::write(&p, build("/OpenAction 5 0 R /Names << /EmbeddedFiles << /Names [(a) 6 0 R] >> >>", "", &["<< /S /JavaScript /JS (x) >>", "<< /Type /Filespec /F (evil.exe) /EF << /F 7 0 R >> >>", "<< /Length 2 >>\nstream\nMZ\nendstream"])).unwrap();
     let before = fs::read(&p).unwrap();
-    let (code, out) = run(&["--sanitize", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("SKIP"), "{out}");
     assert_eq!(fs::read(&p).unwrap(), before);
@@ -215,7 +207,7 @@ fn a_clean_pdf_is_not_touched() {
     let p = d.path().join("ok.pdf");
     fs::write(&p, build("", "", &[])).unwrap();
     let before = fs::read(&p).unwrap();
-    let (code, out) = run(&["--sanitize", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(fs::read(&p).unwrap(), before);
     assert!(!trash.exists() || fs::read_dir(&trash).unwrap().count() == 0);

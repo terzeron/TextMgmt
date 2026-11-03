@@ -1,17 +1,13 @@
-//! 출력. 텍스트 블록, NDJSON 한 줄, 리포트 파일을 쓴다. 발견도 미완료도 없는 정상 파일은 건너뛴다.
+//! 출력. 텍스트 블록, NDJSON 한 줄, 요약 줄을 쓴다. 발견도 미완료도 없는 정상 파일은 건너뛴다.
 //!
 //! JSON은 전부 `serde_json`으로 만든다. 경로·상세에는 공격자가 정한 문자열이 들어가므로 이스케이프를 손으로 쓰지 않는다.
 
-use std::collections::BTreeMap;
-use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
 
 use scan_common::text::sanitize_display;
 use scan_common::color::{Style, paint};
 use scan_common::finding::{ENCRYPTION_CODES, Suppressed};
 use scan_common::{Category, FileReport, Finding, Severity, Summary};
-use serde::Serialize;
 
 /// 출력할 내용이 있는가: 발견이 있거나 검사를 끝내지 못했다.
 fn is_flagged(r: &FileReport) -> bool {
@@ -88,13 +84,11 @@ pub fn write_summary_line(agg: &Aggregate, summary: &Summary, out: &mut dyn Writ
     writeln!(out)
 }
 
-/// 리포트 파일에 넣을 보고서를 모은다. 발견이나 미완료가 있는 `FileReport`만 보관한다.
+/// 요약 줄에 넣을 건수를 모은다. 발견이나 미완료가 있는 파일만 센다.
 #[derive(Debug, Default)]
 pub struct Aggregate {
-    files: Vec<FileReport>,
     findings: usize,
     incomplete: usize,
-    by_category: BTreeMap<&'static str, usize>,
     suppressed: Suppressed,
     executables: usize,
 }
@@ -115,15 +109,6 @@ impl Aggregate {
         }
         self.findings += r.findings.len();
         self.incomplete += usize::from(r.incomplete);
-        for f in &r.findings {
-            let name = match f.category {
-                scan_common::Category::Security => "security",
-                scan_common::Category::Defect => "defect",
-                scan_common::Category::Render => "render",
-            };
-            *self.by_category.entry(name).or_default() += 1;
-        }
-        self.files.push(r.clone());
     }
 
     /// 출력 필터가 숨긴 지표의 심각도별 건수.
@@ -145,36 +130,4 @@ impl Aggregate {
     pub fn incomplete(&self) -> usize {
         self.incomplete
     }
-}
-
-#[derive(Serialize)]
-struct SummaryOut<'a> {
-    scanned: usize,
-    by_severity: &'a BTreeMap<&'static str, usize>,
-    by_category: &'a BTreeMap<&'static str, usize>,
-    incomplete: usize,
-    suppressed: Suppressed,
-    executables: usize,
-}
-
-#[derive(Serialize)]
-struct ReportOut<'a> {
-    scanned_at: String,
-    root: &'a str,
-    summary: SummaryOut<'a>,
-    files: &'a [FileReport],
-}
-
-/// 리포트 파일을 쓴다.
-pub fn write_report_file(path: &Path, agg: &Aggregate, summary: &Summary, root: &str) -> io::Result<()> {
-    let doc = ReportOut {
-        scanned_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        root,
-        summary: SummaryOut { scanned: summary.scanned, by_severity: &summary.by_severity, by_category: &agg.by_category, incomplete: agg.incomplete, suppressed: agg.suppressed, executables: agg.executables },
-        files: &agg.files,
-    };
-    let mut f = io::BufWriter::new(fs::File::create(path)?);
-    serde_json::to_writer_pretty(&mut f, &doc).map_err(io_err)?;
-    f.write_all(b"\n")?;
-    f.flush()
 }

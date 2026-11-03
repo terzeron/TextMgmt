@@ -7,7 +7,7 @@ use std::io::{Cursor, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use bookdoctor::cli::run_with_env;
+use bookdoctor::cli::{Options, execute, parse};
 use bookdoctor::epub::render::xhtml_defect;
 use bookdoctor::xhtml_fix::{rebuild, repair_markup, verify, Verdict};
 use common::*;
@@ -246,12 +246,16 @@ fn verify_rejects_a_rewrite_that_loses_text() {
     assert!(verify(&src, &lost).unwrap_err().contains("본문"));
 }
 
-// ---- 실행: --dry-run, 적용, 휴지통 ----
+// ---- 실행: 적용, 휴지통 ----
 
-fn run(args: &[&str]) -> (i32, String) {
+/// `root`를 코퍼스 루트로 삼아 명령을 실행한다. 휴지통은 `root/0_trash`다.
+fn run_in(root: &Path, args: &[&str]) -> (i32, String) {
     let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     let mut out = Vec::new();
-    let code = run_with_env(&argv, &mut out, false, true);
+    let code = match parse(&argv) {
+        Ok(o) => execute(&Options { library_root: root.to_path_buf(), ..o }, &mut out, false, true),
+        Err(_) => 2,
+    };
     (code, String::from_utf8_lossy(&out).into_owned())
 }
 
@@ -259,25 +263,6 @@ fn broken_epub(dir: &Path, name: &str) -> std::path::PathBuf {
     let p = dir.join(name);
     epub_with_files(&p, &clean_opf(), BROKEN, &[]);
     p
-}
-
-#[test]
-fn the_option_requires_dry_run_or_a_trash_dir_and_excludes_sanitize() {
-    let (code, _) = run(&["--fix-xhtml", "x.epub"]);
-    assert_eq!(code, 2);
-    let (code, _) = run(&["--fix-xhtml", "--sanitize", "--dry-run", "x.epub"]);
-    assert_eq!(code, 2);
-}
-
-#[test]
-fn dry_run_lists_changes_without_touching_anything() {
-    let d = tempfile::tempdir().unwrap();
-    let p = broken_epub(d.path(), "a.epub");
-    let before = fs::read(&p).unwrap();
-    let (code, out) = run(&["--fix-xhtml", "--dry-run", p.to_str().unwrap()]);
-    assert_eq!(code, 0, "{out}");
-    assert!(out.contains("WOULD") && out.contains("ch1.xhtml"), "{out}");
-    assert_eq!(fs::read(&p).unwrap(), before);
 }
 
 #[test]
@@ -290,14 +275,14 @@ fn apply_moves_the_original_to_trash_and_overwrites_in_place() {
         let m = fs::metadata(&p).unwrap();
         (m.ino(), m.modified().unwrap())
     };
-    let (code, out) = run(&["--fix-xhtml", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["repair", p.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     let m = fs::metadata(&p).unwrap();
     assert_eq!((m.ino(), m.modified().unwrap()), (ino, mtime), "inode와 mtime을 유지한다");
     assert_eq!(fs::read(trash.join("a.epub")).unwrap(), original);
     assert_eq!(xhtml_defect(member(&fs::read(&p).unwrap(), "OEBPS/ch1.xhtml").as_bytes()), None);
     // 다시 돌려도 바꿀 것이 없고 휴지통에 새 사본이 늘지 않는다.
-    let (code, out) = run(&["--fix-xhtml", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["repair", p.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(fs::read_dir(&trash).unwrap().count(), 1);
 }
@@ -312,7 +297,7 @@ fn trash_name_collisions_get_a_suffix_and_healthy_files_are_left_alone() {
     let healthy = d.path().join("ok.epub");
     epub_with_chapter(&healthy, &xhtml("<p>글</p>"));
     let healthy_before = fs::read(&healthy).unwrap();
-    let (code, out) = run(&["--fix-xhtml", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap(), healthy.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["repair", p.to_str().unwrap(), healthy.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     assert!(trash.join("a.1.epub").exists());
     assert_eq!(fs::read(&healthy).unwrap(), healthy_before);
@@ -322,12 +307,11 @@ fn trash_name_collisions_get_a_suffix_and_healthy_files_are_left_alone() {
 #[test]
 fn a_deletion_candidate_is_reported_and_left_in_place() {
     let d = tempfile::tempdir().unwrap();
-    let trash = d.path().join("0_trash");
     let opf = opf_with_chapters(&[("c1", "ch1.xhtml"), ("c2", "ch2.xhtml"), ("c3", "ch3.xhtml")], "");
     let p = d.path().join("bad.epub");
     epub_with_files(&p, &opf, &xhtml("<p>글</p>"), &[("OEBPS/ch2.xhtml", GARBAGE), ("OEBPS/ch3.xhtml", GARBAGE)]);
     let before = fs::read(&p).unwrap();
-    let (code, out) = run(&["--fix-xhtml", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["repair", p.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("DELETE_CANDIDATE"), "{out}");
     assert_eq!(fs::read(&p).unwrap(), before);
@@ -341,7 +325,7 @@ fn a_file_with_security_findings_is_skipped_and_left_for_sanitize() {
     // 깨진 마크업(XHTML_PARSE_FAILED)과 스크립트가 함께 있다. 수리하면 스크립트가 되살아날 수 있으므로 먼저 --sanitize로 정리해야 한다.
     epub_with_files(&p, &clean_opf(), "<html><head></head><body><p title=\"a><script>alert(1)</script></p><br></body></html>", &[]);
     let before = fs::read(&p).unwrap();
-    let (code, out) = run(&["--fix-xhtml", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["repair", p.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("SKIP") && out.contains("--sanitize"), "{out}");
     assert_eq!(fs::read(&p).unwrap(), before);

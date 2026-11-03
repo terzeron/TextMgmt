@@ -57,7 +57,7 @@ fn hwp_is_collected_and_lookalikes_are_not() {
         fs::write(d.path().join(name), "그냥 텍스트\n".repeat(50)).unwrap();
     }
     let mut out = Vec::new();
-    run(&["-r".into(), "--min-severity".into(), "low".into(), "--json".into(), d.path().to_string_lossy().into_owned()], &mut out);
+    run(&["scan".into(), "--min-severity".into(), "low".into(), "--json".into(), d.path().to_string_lossy().into_owned()], &mut out);
     let out = String::from_utf8(out).unwrap();
     assert!(out.contains("a.hwp") && out.contains("b.HWP"), "{out}");
     assert!(!out.contains("c.hwpp"), "{out}");

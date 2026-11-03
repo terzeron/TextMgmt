@@ -32,8 +32,7 @@ docs/       문서
 
 | crate | 용도 |
 | --- | --- |
-| `bookdoctor` | epub·pdf·txt 보안 위험·파일 결함·렌더링 불가 구조 진단 |
-| `quarantine_broken` | 손상 문서를 `0_broken`으로 격리·복구 |
+| `bookdoctor` | 문서 파일 진단(`scan`), 보안 정리(`sanitize`), 결함 수리(`repair`), 손상 문서 격리·복구(`quarantine`·`unquarantine`) |
 | `cluster_hybrid_genres` | 5대 장르 비율 클러스터링 |
 | `search` | ES 제목·내용 검색 점검 |
 | `update` | ES 갱신·조회·삭제 점검 |

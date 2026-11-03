@@ -4,7 +4,7 @@ mod common;
 
 use std::path::Path;
 
-use bookdoctor::cli::run;
+use bookdoctor::cli::{run, run_with_env};
 use bookdoctor::scan::dispatch_format;
 use scan_common::Format;
 use scan_common::sniff::Sniffed;
@@ -26,7 +26,7 @@ fn missing_path_is_incomplete_exit_2() {
     let d = tempfile::tempdir().unwrap();
     let missing = d.path().join("none.epub");
     let mut out = Vec::new();
-    assert_eq!(run(&[missing.to_string_lossy().into_owned()], &mut out), 2);
+    assert_eq!(run(&["scan".into(), missing.to_string_lossy().into_owned()], &mut out), 2);
     assert!(String::from_utf8(out).unwrap().contains("unreadable"));
 }
 
@@ -43,7 +43,7 @@ fn unreadable_subdir_is_reported_incomplete() {
     std::fs::create_dir(&sub).unwrap();
     std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).unwrap();
     let mut out = Vec::new();
-    let code = run(&["-r".into(), d.path().to_string_lossy().into_owned()], &mut out);
+    let code = run(&["scan".into(), d.path().to_string_lossy().into_owned()], &mut out);
     std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(code, 2);
 }
@@ -105,15 +105,6 @@ fn risk_score_keeps_counting_findings_hidden_by_the_output_filter() {
     assert_eq!(r.risk_score, before);
 }
 
-#[test]
-fn risk_score_is_computed_before_the_only_filter() {
-    let (_d, p) = epub_with_script("var x = atob('aGk='); fetch('/x');");
-    let full = scan_file(&p, &Options::default()).risk_score;
-    let only_render = scan_file(&p, &Options { only: vec![Category::Render], ..Options::default() });
-    assert!(only_render.findings.iter().all(|f| f.category == Category::Render));
-    assert_eq!(only_render.risk_score, full);
-}
-
 // --- zip · docx · hwpx 디스패치 ---
 
 #[test]
@@ -143,7 +134,7 @@ fn directory_walk_collects_zip_docx_hwpx_but_not_lookalike_extensions() {
         std::fs::write(d.path().join(name), b"PK\x03\x04 not a real archive").unwrap();
     }
     let mut out = Vec::new();
-    run(&["-r".into(), "--min-severity".into(), "low".into(), "--color".into(), "never".into(), d.path().to_string_lossy().into_owned()], &mut out);
+    run_with_env(&["scan".into(), "--min-severity".into(), "low".into(), d.path().to_string_lossy().into_owned()], &mut out, false, false);
     let out = String::from_utf8(out).unwrap();
     for hit in ["a.zip", "b.docx", "c.hwpx"] {
         assert!(out.contains(hit), "{hit}: {out}");

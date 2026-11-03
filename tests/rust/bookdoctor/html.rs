@@ -33,7 +33,7 @@ fn html_is_collected_and_lookalikes_are_not() {
         fs::write(d.path().join(name), page).unwrap();
     }
     let mut out = Vec::new();
-    run(&["-r".into(), "--min-severity".into(), "low".into(), "--json".into(), d.path().to_string_lossy().into_owned()], &mut out);
+    run(&["scan".into(), "--min-severity".into(), "low".into(), "--json".into(), d.path().to_string_lossy().into_owned()], &mut out);
     let out = String::from_utf8(out).unwrap();
     assert!(out.contains("a.html") && out.contains("b.HTM") && out.contains("c.xhtml"), "{out}");
     assert!(!out.contains("d.htmlx"), "{out}");

@@ -95,10 +95,6 @@ name = "entropy"
 path = "../../tests/rust/bookdoctor/entropy.rs"
 
 [[test]]
-name = "isolate"
-path = "../../tests/rust/bookdoctor/isolate.rs"
-
-[[test]]
 name = "html"
 path = "../../tests/rust/bookdoctor/html.rs"
 
@@ -180,6 +176,14 @@ path = "../../tests/rust/bookdoctor/sanitize.rs"
 [[test]]
 name = "xhtml_fix"
 path = "../../tests/rust/bookdoctor/xhtml_fix.rs"
+
+[[test]]
+name = "quarantine"
+path = "../../tests/rust/bookdoctor/quarantine.rs"
+
+[[test]]
+name = "repair"
+path = "../../tests/rust/bookdoctor/repair.rs"
 
 [[test]]
 name = "pdf_sanitize"

@@ -234,14 +234,13 @@ pub(crate) fn process(path: &Path, shown: &str, opts: &Options, scan_opts: &Opti
         writeln!(out, "SKIP {shown}: 검증 실패: {}", show(&e))?;
         return Ok(Outcome::Skipped);
     }
-    let head = if opts.dry_run { "WOULD" } else { "SANITIZED" };
-    writeln!(out, "{head} {shown}: {}개 지움", plan.removed.len())?;
+    writeln!(out, "SANITIZED {shown}: {}개 지움", plan.removed.len())?;
     for (location, what) in &plan.removed {
         writeln!(out, "  - 제거 {} ({})", show(location), show(what))?;
     }
-    if !opts.dry_run {
-        let trash = opts.trash_dir.as_deref().unwrap_or_else(|| Path::new("0_trash"));
-        match apply(path, &plan.bytes, trash) {
+    {
+        let trash = opts.trash_dir();
+        match apply(path, &plan.bytes, &trash) {
             Ok(saved) => writeln!(out, "  - 원본 보관 {}", show(&saved.to_string_lossy()))?,
             Err(e) => {
                 writeln!(out, "FAIL {shown}: {}", show(&e.to_string()))?;

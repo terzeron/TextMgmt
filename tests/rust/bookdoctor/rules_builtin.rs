@@ -113,18 +113,14 @@ fn ordinary_text_matches_no_builtin_rule() {
 }
 
 #[test]
-fn builtin_rules_flag_marks_an_eicar_file_critical_end_to_end() {
+fn scan_applies_the_builtin_rules_without_any_option() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("eicar.txt");
     fs::write(&f, eicar()).unwrap();
     let mut out = Vec::new();
-    run(&["--builtin-rules".into(), "--json".into(), f.to_string_lossy().into_owned()], &mut out);
+    run(&["scan".into(), "--json".into(), f.to_string_lossy().into_owned()], &mut out);
     let out = String::from_utf8(out).unwrap();
     let v: serde_json::Value = serde_json::from_str(out.lines().next().unwrap_or_else(|| panic!("no output"))).unwrap();
     let hit = v["findings"].as_array().unwrap().iter().find(|f| f["code"] == "RULE_MATCH").unwrap_or_else(|| panic!("{out}"));
     assert_eq!((hit["severity"].as_str(), hit["location"].as_str()), (Some("CRITICAL"), Some("EICAR_TEST_FILE")));
-    // 플래그가 없으면 같은 파일에서 아무것도 나오지 않는다.
-    let mut plain = Vec::new();
-    run(&["--json".into(), f.to_string_lossy().into_owned()], &mut plain);
-    assert!(!String::from_utf8(plain).unwrap().contains("RULE_MATCH"));
 }

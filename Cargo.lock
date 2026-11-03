@@ -2836,19 +2836,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quarantine_broken"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "corpus_common",
- "indexmap 2.14.2",
- "scan_common",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

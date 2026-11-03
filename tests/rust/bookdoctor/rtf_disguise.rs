@@ -156,7 +156,7 @@ fn rtf_is_collected_and_other_content_named_rtf_is_a_mismatch() {
     fs::write(d.path().join("a.RTF"), b"{\\rtf1{\\*\\objclass X}}").unwrap();
     fs::write(d.path().join("b.rtfx"), b"{\\rtf1{\\*\\objclass X}}").unwrap();
     let mut out = Vec::new();
-    run(&["-r".into(), "--min-severity".into(), "low".into(), "--json".into(), d.path().to_string_lossy().into_owned()], &mut out);
+    run(&["scan".into(), "--min-severity".into(), "low".into(), "--json".into(), d.path().to_string_lossy().into_owned()], &mut out);
     let out = String::from_utf8(out).unwrap();
     assert!(out.contains("a.RTF"), "{out}");
     assert!(!out.contains("b.rtfx"), "{out}");

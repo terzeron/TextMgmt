@@ -1,6 +1,6 @@
 //! bookdoctor 인코딩 손상 판정 테스트(계획 Task 13). `classify_text` 관련 테스트는
 //! 옛 인코딩 검사 도구 테스트에서 옮기고 단언을 `Verdict`로 바꿨다.
-//! Poppler는 `FakeRunner`로 대신하므로 poppler가 없어도 통과한다.
+//! MuPDF worker는 `FakeRunner`로 대신하므로 worker가 없어도 통과한다.
 
 mod common;
 
@@ -25,7 +25,7 @@ fn word_list() -> String {
 }
 
 fn opts() -> Options {
-    Options { no_poppler: true, ..Options::default() }
+    Options { no_pdf_worker: true, ..Options::default() }
 }
 
 fn find<'a>(r: &'a FileReport, code: &str) -> Option<&'a scan_common::Finding> {
@@ -221,8 +221,11 @@ fn non_zip_epub_skips_the_text_check() {
 
 // ---- PDF ----
 
-fn tiny_pdf() -> Vec<u8> {
-    let bodies = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>"];
+/// `n`쪽짜리 PDF. 쪽 수는 lopdf가 읽어 본문 표본 범위를 정한다.
+fn pdf_of(n: usize) -> Vec<u8> {
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 3)).collect();
+    let mut bodies = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_owned(), format!("<< /Type /Pages /Kids [{}] /Count {n} >>", kids.join(" "))];
+    bodies.extend((0..n).map(|_| "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>".to_owned()));
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, body) in bodies.iter().enumerate() {
@@ -239,7 +242,11 @@ fn tiny_pdf() -> Vec<u8> {
 }
 
 fn pdf_report(opts: &Options, runner: &FakeRunner) -> FileReport {
-    let f = file_with("t.pdf", &tiny_pdf());
+    pdf_report_pages(1, opts, runner)
+}
+
+fn pdf_report_pages(pages: usize, opts: &Options, runner: &FakeRunner) -> FileReport {
+    let f = file_with("t.pdf", &pdf_of(pages));
     let mut r = FileReport::new(f.path(), None);
     pdf::scan_pdf_file_with(f.path(), opts, &mut r, runner);
     r
@@ -250,16 +257,16 @@ fn text_calls(runner: &FakeRunner) -> usize {
 }
 
 #[test]
-fn pdf_text_is_not_extracted_without_the_flag() {
+fn pdf_text_is_skipped_only_without_the_worker() {
     let runner = FakeRunner::text(&corrupted());
-    let r = pdf_report(&Options::default(), &runner);
+    let r = pdf_report(&opts(), &runner);
     assert_eq!(text_calls(&runner), 0, "{:?}", runner.programs());
     assert!(find(&r, "MOJIBAKE").is_none(), "{r:?}");
 }
 
 #[test]
-fn pdf_text_mojibake_is_flagged_with_the_flag() {
-    let on = Options { pdf_text: true, ..Options::default() };
+fn pdf_text_mojibake_is_flagged_by_default() {
+    let on = Options::default();
     let r = pdf_report(&on, &FakeRunner::text(&corrupted()));
     assert!(find(&r, "MOJIBAKE").is_some(), "{r:?}");
     assert!(r.likeness.unwrap() < 0.10);
@@ -270,31 +277,21 @@ fn pdf_text_mojibake_is_flagged_with_the_flag() {
 
 #[test]
 fn pdf_text_samples_first_and_last_five_pages() {
-    let on = Options { pdf_text: true, ..Options::default() };
-    let short = FakeRunner::pages_text(8, &corrupted());
-    let r = pdf_report(&on, &short);
+    let on = Options::default();
+    let short = FakeRunner::text(&corrupted());
+    let r = pdf_report_pages(8, &on, &short);
     assert!(find(&r, "MOJIBAKE").is_some());
-    // 8쪽이면 1-5쪽과 6-8쪽(겹치지 않게)이다. pdfinfo 1회 + pdftotext 2회.
-    assert_eq!(text_calls(&short), 2);
+    // 8쪽이면 1-5쪽과 6-8쪽(겹치지 않게)이다. 본문 추출 2회, 쪽 수 질의는 없다.
+    assert_eq!(short.programs(), ["text", "text"]);
 
-    let one = FakeRunner::pages_text(3, &corrupted());
-    pdf_report(&on, &one);
-    assert_eq!(text_calls(&one), 1);
-}
-
-#[test]
-fn pdf_text_with_poppler_disabled_is_incomplete_only_when_requested() {
-    let on = Options { pdf_text: true, no_poppler: true, ..Options::default() };
-    let r = pdf_report(&on, &FakeRunner::text(&corrupted()));
-    assert!(r.incomplete && r.reasons.iter().any(|x| x.contains("mojibake")), "{r:?}");
-    let r = pdf_report(&opts(), &FakeRunner::text(&corrupted()));
-    assert!(!r.reasons.iter().any(|x| x.contains("mojibake")), "{r:?}");
+    let one = FakeRunner::text(&corrupted());
+    pdf_report_pages(3, &on, &one);
+    assert_eq!(one.programs(), ["text"]);
 }
 
 #[test]
 fn pdf_text_runner_failure_is_incomplete_not_a_finding() {
-    let on = Options { pdf_text: true, ..Options::default() };
-    let r = pdf_report(&on, &FakeRunner::timeout());
+    let r = pdf_report(&Options::default(), &FakeRunner::timeout());
     assert!(r.incomplete && find(&r, "MOJIBAKE").is_none(), "{r:?}");
 }
 
@@ -343,17 +340,6 @@ fn epub_named_file_keeps_the_old_tool_verdict() {
         let r = scan_file(&path, &opts());
         assert_eq!(find(&r, "MOJIBAKE").is_some(), old == Verdict::Corrupted, "{r:?}");
     }
-}
-
-#[test]
-fn pdf_text_with_unknown_page_count_is_incomplete() {
-    let on = Options { pdf_text: true, ..Options::default() };
-    let r = pdf_report(&on, &FakeRunner::pages_text(0, "x"));
-    assert!(r.reasons.iter().any(|x| x == "pdf text not extracted: page count unknown"), "{r:?}");
-    let r = pdf_report(&on, &FakeRunner::fails("boom"));
-    assert!(r.reasons.iter().any(|x| x == "pdf text not extracted: page count unknown"), "{r:?}");
-    let r = pdf_report(&Options::default(), &FakeRunner::pages_text(0, "x"));
-    assert!(!r.reasons.iter().any(|x| x.contains("page count unknown")), "{r:?}");
 }
 
 #[test]

@@ -18,7 +18,7 @@ const PDF_SECURITY_RS: &str = include_str!("../../../utils/bookdoctor/src/pdf/se
 const TXT_RS: &str = include_str!("../../../utils/bookdoctor/src/txt.rs");
 
 fn opts() -> Options {
-    Options { no_poppler: true, ..Options::default() }
+    Options { no_pdf_worker: true, ..Options::default() }
 }
 
 #[test]
@@ -153,15 +153,6 @@ fn json_shows_viewer_blocked_values() {
     let mut out = Vec::new();
     write_json_line(&scan_file(d.path(), &opts()), &mut out).unwrap();
     assert!(String::from_utf8(out).unwrap().contains("\"viewer_blocked\":\"n/a\""));
-}
-
-#[test]
-fn only_filter_keeps_viewer_values() {
-    let e = scripted_epub();
-    let r = scan_file(e.path(), &Options { only: vec![Category::Security], ..opts() });
-    assert!(!r.findings.is_empty());
-    assert!(r.findings.iter().all(|f| f.category == Category::Security));
-    assert_eq!(value_of(&r, "SCRIPT_TAG"), ViewerBlocked::Blocked);
 }
 
 #[test]
