@@ -6,14 +6,6 @@ edition.workspace = true
 publish.workspace = true
 autotests = false
 
-[[test]]
-name = "indexing"
-path = "../../tests/rust/es_client/indexing.rs"
-
-[[test]]
-name = "es"
-path = "../../tests/rust/es_client/es.rs"
-
 [dependencies]
 serde_json = { workspace = true, features = ["preserve_order"] }
 ureq = { workspace = true, features = ["rustls"] }
@@ -21,3 +13,19 @@ ureq = { workspace = true, features = ["rustls"] }
 [dev-dependencies]
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = "1.15.1"
+
+[[test]]
+name = "es_client"
+path = "../../tests/rust/es_client/es_client.rs"
+
+[[test]]
+name = "indexing"
+path = "../../tests/rust/es_client/indexing.rs"
+
+[[test]]
+name = "integration_es"
+path = "../../tests/rust/es_client/integration/es.rs"
+
+[[test]]
+name = "integration_indexing"
+path = "../../tests/rust/es_client/integration/indexing.rs"
