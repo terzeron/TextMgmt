@@ -883,13 +883,20 @@ fn bomless_utf16(data: &[u8]) -> Option<bool> {
     }
 }
 
+thread_local! {
+    /// 이 스레드에서 `decode_text`를 부른 횟수. 스레드별이라 같은 프로세스의 다른 검사와 섞이지 않는다.
+    static DECODE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// 이 스레드에서 `decode_text`를 부른 횟수. 비텍스트 멤버를 변환하지 않는지 테스트가 센다(성능 회귀 감시용, 검사 결과와 무관).
+pub fn decode_calls() -> usize {
+    DECODE_CALLS.with(std::cell::Cell::get)
+}
+
 /// 보안 리뷰 지적(from_utf8_lossy): UTF-16 마크업은 모든 정규식을 피해 간다. BOM·NUL 교차로 UTF-16을 알아봐 변환한다.
 /// UTF-8 BOM은 호출부가 예전처럼 벗긴다.
-/// `decode_text`를 부른 횟수. 비텍스트 멤버를 변환하지 않는지 테스트가 센다(성능 회귀 감시용, 검사 결과와 무관).
-pub static DECODE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 pub(crate) fn decode_text(data: &[u8]) -> (Cow<'_, str>, TextEnc) {
-    DECODE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    DECODE_CALLS.with(|calls| calls.set(calls.get() + 1));
     if data.starts_with(&[0xFF, 0xFE, 0, 0]) || data.starts_with(&[0, 0, 0xFE, 0xFF]) {
         return (String::from_utf8_lossy(data), TextEnc::Utf32);
     }
