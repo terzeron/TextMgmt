@@ -6,7 +6,7 @@ use backend::book_manager::{ApplyOptions, BookManager};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
-/// `apply_category_changes`의 Python 키워드 인자 묶음(테스트 로컬). 구현의 `ApplyOptions`로 바꿔 부른다.
+/// `apply_category_changes`의 인자 묶음(테스트 로컬). 구현의 `ApplyOptions`로 바꿔 부른다.
 pub struct ApplyOpts {
     pub allowed: BTreeSet<String>,
     pub on_item_done: Option<Box<dyn Fn(Value) + Send + Sync>>,

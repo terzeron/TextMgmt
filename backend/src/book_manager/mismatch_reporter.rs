@@ -1,5 +1,4 @@
-//! 카테고리 불일치 요약·상세와 그 캐시. Python `get_category_mismatches`, `get_category_mismatch_details`,
-//! `_scan_category_mismatches`, `_collect_es_category_paths`, `_iter_fs_category_paths`에 대응한다.
+//! 카테고리 불일치 요약·상세와 그 캐시: ES와 파일시스템의 카테고리 경로를 비교한다.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::os::unix::fs::MetadataExt;

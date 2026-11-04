@@ -60,7 +60,7 @@ fn test_dict_rejects_paths_outside_comics_root() {
 
 #[test]
 fn test_comics_manager_missing_env() {
-    // comics_manager.py line 21: TM_COMICS_DIR가 없으면 RuntimeError. 환경 변수를 지우지 않고 조회 함수를 주입한다.
+    // TM_COMICS_DIR가 없으면 설정 오류다. 환경 변수를 지우지 않고 조회 함수를 주입한다.
     let err = ComicsManager::from_env(&|_| None, &|_| FakeEsManager::new() as Arc<dyn EsManagerApi>).err().expect("TM_COMICS_DIR 없이도 성공했다");
     assert!(err.to_string().contains("TM_COMICS_DIR"), "{err}");
 }
@@ -78,7 +78,6 @@ fn test_comics_manager_init() {
         _ => None,
     };
     let (es_in, names_in) = (es.clone(), index_names.clone());
-    // Python `DummyESManager`: 인덱스 이름을 기억하고 `create_index` 호출을 기록한다.
     let mut manager = ComicsManager::from_env(&get, &move |index_name: &str| {
         names_in.lock().unwrap().push(index_name.to_string());
         es_in.clone() as Arc<dyn EsManagerApi>
@@ -98,7 +97,7 @@ fn test_comics_manager_init() {
     assert!(manager.mismatch_cache().is_none());
 }
 
-// ---- merged from test_comics_env_guard.py ----
+// ---- 환경 변수 누락 검사 ----
 
 #[test]
 fn test_comics_requires_comics_dir() {

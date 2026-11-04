@@ -62,8 +62,8 @@ pub fn env() -> Env {
     Env { tmp, path, manager, es, books, fetcher }
 }
 
-/// `"x" in error`: error가 None이면 Python은 TypeError로 실패한다.
-/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+/// `"x" in error`: 오류가 없으면 실패로 본다.
+/// `Result`를 `(결과, 오류)` 모양으로 펼쳐 단언을 짧게 쓴다.
 pub fn split(result: Result<Value, String>) -> (Option<Value>, Option<String>) {
     match result {
         Ok(value) => (Some(value), None),

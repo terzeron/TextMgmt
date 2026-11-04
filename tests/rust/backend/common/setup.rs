@@ -10,7 +10,7 @@ pub fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().find(|p| p.join("Cargo.toml").exists() && p.join("backend").is_dir()).expect("project root").to_path_buf()
 }
 
-/// conftest.py와 같은 테스트용 환경 변수를 한 번만 설정한다.
+/// 테스트용 환경 변수를 한 번만 설정한다.
 /// `Book.path_prefix`처럼 import 시점에 읽는 값이 있어 backend를 쓰기 전에 불러야 한다.
 /// 컨테이너 fixture 가 `TM_MYSQL_*` / `TM_ES_*` 를 컨테이너 값으로 설정했다는 표식. `setup_env()` 는 이 값을 지우지 않는다.
 /// fixture 모듈(`mysql_fixture.rs`, `elasticsearch_fixture.rs`)도 같은 이름을 쓴다.

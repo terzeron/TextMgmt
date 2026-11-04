@@ -1,7 +1,6 @@
-//! 색인·파싱 통계 카운터. 원본: `utils/stat.py`.
+//! 색인·파싱 통계 카운터.
 //!
-//! Python은 클래스 속성을 전역 카운터로 쓴다. 여기서는 스레드 안전한 `Stat` 값으로 두고,
-//! 프로세스 전체가 공유하는 `Stat::global()`도 제공한다. 항목 이름은 Python 속성 이름 그대로다.
+//! 스레드 안전한 `Stat` 값이고, 프로세스 전체가 공유하는 `Stat::global()`도 제공한다.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -77,7 +76,7 @@ impl Stat {
         Stat { inner: Mutex::new(Inner::default()) }
     }
 
-    /// 프로세스 전체가 공유하는 인스턴스. Python의 클래스 속성에 해당한다.
+    /// 프로세스 전체가 공유하는 인스턴스.
     pub fn global() -> &'static Arc<Stat> {
         static GLOBAL: OnceLock<Arc<Stat>> = OnceLock::new();
         GLOBAL.get_or_init(|| Arc::new(Stat::new()))
@@ -135,7 +134,7 @@ impl Stat {
         self.lock().stage_outcome_count.get(&(stage.to_owned(), outcome.to_owned())).copied().unwrap_or(0)
     }
 
-    /// 요약을 쓴다. 형식은 Python `print()`와 같다: 건수는 7자리 0 채움, 평균 시간은 소수 4자리.
+    /// 요약을 쓴다. 형식: 건수는 7자리 0 채움, 평균 시간은 소수 4자리.
     pub fn print(&self, out: &mut dyn Write) -> io::Result<()> {
         let g = self.lock();
         let v = |name: &str| g.values.get(name).copied().unwrap_or(0.0);

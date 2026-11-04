@@ -132,7 +132,7 @@ pub fn read_from_image() -> (String, usize, usize) {
     (String::new(), 0, 0)
 }
 
-// ---- DOCX 읽기. 원본: `Loader.read_from_docx`(python-docx `Document(path).paragraphs`). ----
+// ---- DOCX 읽기: `word/document.xml`의 문단(`w:p`)을 차례로 읽는다. ----
 //
 // 본문(`w:body`)의 바로 아래 문단만 센다(표 안 문단은 제외). 문단 글은 `w:r`과 `w:hyperlink`의 런 글을 이은 것이다.
 const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";

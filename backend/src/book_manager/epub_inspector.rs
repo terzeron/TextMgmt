@@ -1,7 +1,6 @@
-//! EPUB 구조 검사·보조. Python `_find_opf_path`, `_validate_preview_epub`, `_get_epub_total_chapters`, `_downscale_epub_image`,
-//! `_evict_old_cache`, `_find_libreoffice`, `_convert_with_libreoffice`에 대응한다.
+//! EPUB 구조 검사·보조: OPF 찾기, 미리보기 검증, 챕터 수, 이미지 축소, 캐시 정리, LibreOffice 변환.
 //!
-//! XML은 `roxmltree`로 읽는다. lxml의 `recover=True`처럼 깨진 XML을 복구하지는 않는다. 대신 선언 없이 쓰인 접두사는
+//! XML은 `roxmltree`로 읽는다. 깨진 XML을 복구하지는 않는다. 대신 선언 없이 쓰인 접두사는
 //! `declare_unbound_prefixes`로 먼저 선언한다. 문서를 고쳐 쓸 때는 DOM을 직렬화하지 않고 원문에서 해당 구간만 잘라내
 //! (`Edit`) 원문 서식을 보존한다.
 
@@ -189,7 +188,7 @@ pub fn prune_dead_ncx_navpoints(ncx_bytes: &[u8], ncx_dir: &str, exists: &dyn Fn
     changed.then(|| format!("<?xml version='1.0' encoding='utf-8'?>\n{body}").into_bytes())
 }
 
-/// ZIP 멤버 이름을 저장 순서대로 돌려준다. Python `namelist()`.
+/// ZIP 멤버 이름을 저장 순서대로 돌려준다.
 pub fn zip_names<R: Read + Seek>(zin: &mut ZipArchive<R>) -> Vec<String> {
     (0..zin.len()).filter_map(|i| zin.by_index_raw(i).ok().and_then(|f| f.name().ok().map(|n| n.into_owned()))).collect()
 }
@@ -376,7 +375,7 @@ impl BookManager {
         })
     }
 
-    /// `_convert_with_libreoffice_with`의 오류 판. 실행 실패(시간 초과 포함)는 `Err`다(Python은 예외가 올라간다).
+    /// `_convert_with_libreoffice_with`의 오류 판. 실행 실패(시간 초과 포함)는 `Err`다.
     pub(crate) fn try_convert_with_libreoffice(runner: &dyn CommandRunner, lo_bin: &str, work_dir: Option<&Path>, file_path: &Path, output_format: &str) -> Result<String, CommandError> {
         let temp;
         let dir: PathBuf = match work_dir {
@@ -574,9 +573,9 @@ fn validate_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String
     })
 }
 
-// ---- XXE를 막은 XML 읽기(Python `_safe_xml_parser`, `_declare_unbound_prefixes`, `_prune_dead_ncx_navpoints`)의 모듈 수준 이름. ----
+// ---- XXE를 막은 XML 읽기와 그 도우미. ----
 //
-// `roxmltree`는 외부 엔티티를 읽지 않는다(내부 엔티티만 펼친다). lxml의 `recover=True`처럼 깨진 문서를 고쳐 읽지는 못하므로,
+// `roxmltree`는 외부 엔티티를 읽지 않는다(내부 엔티티만 펼친다). 깨진 문서를 고쳐 읽지는 못하므로,
 // 복구 모드는 DOCTYPE과 알 수 없는 엔티티 참조를 걷어낸 뒤 한 번 더 읽는 데 그친다.
 /// 읽어 낸 XML 요소. 이름은 네임스페이스를 뺀 로컬 이름이다.
 #[derive(Debug, Clone)]
@@ -598,7 +597,7 @@ impl XmlElement {
         }
     }
 
-    /// 이름이 같은 첫 직계 자식. lxml `find("a")`.
+    /// 이름이 같은 첫 직계 자식.
     pub fn find(&self, name: &str) -> Option<&XmlElement> {
         self.children.iter().find(|c| c.name == name)
     }
@@ -626,7 +625,7 @@ pub struct SafeXmlParser {
     recover: bool,
 }
 
-/// Python `_safe_xml_parser(recover)`.
+/// XXE를 막은 XML 파서. `recover`가 참이면 DOCTYPE과 모르는 엔티티를 걷어 내고 다시 읽는다.
 pub fn _safe_xml_parser(recover: bool) -> SafeXmlParser {
     SafeXmlParser { recover }
 }

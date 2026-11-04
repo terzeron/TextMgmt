@@ -1,7 +1,6 @@
 //! 저수준 ES 전송 [`EsTransport`]와 그 HTTP 구현 [`HttpTransport`]. [`crate::EsClient`]와 같은 HTTP(S) 전송 및 인증서 검증 규칙을 쓴다.
 //!
-//! `op`는 Python `Elasticsearch` 클라이언트 메서드 이름이고 `kwargs`는 같은 키워드 인자다.
-//! 이 모듈이 그것을 ES REST 요청으로 바꾼다(검증한 서버는 ES 9.1.0이다).
+//! 연산 이름(`op`, 예: `indices.exists`, `search`)과 JSON 인자를 받아 ES REST 요청으로 바꾼다(검증한 서버는 ES 9.1.0이다).
 //!
 //! | op | 요청 |
 //! |---|---|
@@ -25,7 +24,7 @@ use serde_json::{Map, Value};
 
 use crate::{EsError, base64, build_agent};
 
-/// 저수준 전송: 연산 이름과 인자(JSON)를 받아 응답 JSON을 돌려준다. Python `Elasticsearch` 클라이언트 호출 하나에 대응한다.
+/// 저수준 전송: 연산 이름과 인자(JSON)를 받아 응답 JSON을 돌려준다. ES API 호출 하나에 해당한다.
 pub trait EsTransport: Send + Sync {
     fn index_name(&self) -> &str;
     fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>;

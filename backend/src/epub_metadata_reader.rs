@@ -33,7 +33,7 @@ impl PartialEq<Value> for EpubMetadata {
     }
 }
 
-/// 잘린 태그를 닫고 lxml 복구처럼 서로 맞지 않는 종료 태그를 앞선 열린 태그에 맞춘다.
+/// 잘린 태그를 닫고 서로 맞지 않는 종료 태그를 앞선 열린 태그에 맞춘다.
 fn recover_xml_structure(xml: &str) -> String {
     let mut output = String::with_capacity(xml.len() + 64);
     let mut open = Vec::<String>::new();

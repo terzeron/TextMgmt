@@ -871,7 +871,7 @@ mod clean_title {
     use backend::cover_management::clean_title;
 
     #[test]
-    fn titles_match_the_python_cases() {
+    fn titles_match_reference_cases() {
         assert_eq!(clean_title("[랜들 개릿] 다아시 경의 모험"), "랜들 개릿 다아시 경의 모험");
         assert_eq!(clean_title("[작가] 구운몽—꿈(1) & 이야기!"), "작가 구운몽 꿈 1 이야기");
         assert_eq!(clean_title("제목.v2"), "제목 v2");

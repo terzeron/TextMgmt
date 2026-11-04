@@ -1,8 +1,8 @@
-//! 원본: tests/test_book_manager.py (전반부: 파일 처음부터 `test_validate_pdf_producer_and_creation_date` 직전까지)
+//! BookManager 통합 테스트(검증·미리보기·편집 전 단계).
 //!
 //! 설계: docs/rust-test-seams.md 3장(통일안). 공용 대역은 `tests/rust/backend/common/`(es_fake, faulty_fs, runner, zipx, epub, fsx, clock)를 쓴다.
 //!
-//! 가정한 API (backend::book_manager 등은 아직 구현 전이다. 시그니처는 Python과 같다고 본다):
+//! 가정한 API:
 //! - `backend::book_metadata::Book { book_id: i64, category: String, title: String, author: String, file_type: String, file_path: PathBuf, file_size: i64, updated_time: NaiveDateTime }`
 //! - `backend::book_manager::{BookManager, BookManagerDeps}`
 //!   - 생성: `BookManager::with_deps(BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>).with_*(..)) -> BookManager` (구 `for_test`. 전역 `Book.path_prefix`를 건드리지 않고 매니저가 들고 있는다)
@@ -76,7 +76,7 @@ use serde_json::{Value, json};
 use sysdeps::{CommandError, CommandOutput};
 use tempfile::TempDir;
 
-/// `delete_book` 결과를 Python 원본의 `("Ok" | "Warning" | "Error", 메시지)`로 펼친다.
+/// `delete_book` 결과를 `("Ok" | "Warning" | "Error", 메시지)`로 펼친다.
 fn as_deletion(result: Result<backend::book_manager::BookDeletion, String>) -> (String, Option<String>) {
     match result {
         Ok(backend::book_manager::BookDeletion::Done) => ("Ok".to_string(), None),
@@ -243,7 +243,7 @@ fn loader_read_files(book_dir: &Path, root: &Path, num_files: usize) -> Docs {
 }
 
 /// `tests/books`의 실제 파일을 옮기거나 지우는 테스트(`test_move_book`, `test_delete_book` 등)끼리 병렬로 돌지 않게 하는 잠금.
-/// ES 인덱스는 테스트마다 따로 만들지만 디스크 파일은 공유한다. Python은 순차 실행이다.
+/// ES 인덱스는 테스트마다 따로 만들지만 디스크 파일은 공유한다. 그래서 순차 실행한다.
 static BOOKS_LOCK: Mutex<()> = Mutex::new(());
 
 /// `book_manager_with_data()`가 돌려주는 값. 테스트가 끝날 때까지 `BOOKS_LOCK`을 쥔다.
@@ -529,7 +529,7 @@ mod test_book_manager {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             assert!(path1.is_file());
             assert!(!path2.is_file());
-            // Python은 (status, msg) 튜플을 assert 하므로 늘 참이다. 결과는 아래 파일 상태와 get_book으로 확인한다.
+            // 결과는 아래 파일 상태와 get_book으로 확인한다.
             let _ = run(bm.update_book(book_id, &category2, &title2, &author2, &path2, &type2));
             assert!(!path1.is_file());
             assert!(path2.is_file());
@@ -678,7 +678,7 @@ mod test_book_manager {
     }
 }
 
-// ---- merged from test_book_manager_extra.py ----
+// ---- 추가 사례 ----
 
 #[test]
 fn test_evict_old_cache() {
@@ -949,7 +949,7 @@ fn test_delete_file_and_index_single_file() {
     assert_eq!(status, "Ok");
     assert!(!ok.exists());
 
-    // Python은 여기서 Loader.read_file을 빈 dict로 바꿔치기하지만, 경로 검증이 먼저 실패하므로
+    // 경로 검증이 먼저 실패하므로
     // 결과에 영향이 없다. 그래서 seam 없이 쓴다.
     let (status_id, msg) = split(run(manager.index_single_file("../bad.txt")));
     assert!(status_id.is_none());
@@ -1195,7 +1195,7 @@ fn test_mismatch_cache_runs_one_scan_at_a_time() {
 
     assert_eq!(*scans.lock().unwrap(), vec![1]);
 }
-// ---- merged from test_book_manager_epub_pdf_extra.py ----
+// ---- EPUB·PDF 추가 사례 ----
 
 #[test]
 fn test_validate_preview_epub_ok_and_fail() {
@@ -1482,7 +1482,7 @@ fn test_validate_pdf_wrong_type_and_missing_file() {
     assert!(err.as_deref().unwrap().contains("File not found"));
 }
 
-// ---- merged from test_book_manager_preview_extra.py ----
+// ---- 미리보기 추가 사례 ----
 
 fn build_epub(epub_path: &Path) {
     write_zip(
@@ -1553,7 +1553,7 @@ fn test_get_book_preview_doc_and_unsupported() {
     assert_eq!(resp.status_code, 400);
 }
 
-// ---- merged from test_book_manager_more.py ----
+// ---- 그 밖의 사례 ----
 
 #[test]
 fn test_search_by_keyword_and_similar() {
@@ -1839,7 +1839,7 @@ fn test_get_books_in_category_empty() {
 }
 
 #[test]
-fn test_get_book_reports_missing_required_es_fields_like_python_book() {
+fn test_get_book_reports_missing_required_es_fields() {
     let tmp = TempDir::new().unwrap();
     let manager = make_manager_with_doc(tmp.path(), json!({"title": "T", "author": "U", "file_path": "A/t.txt", "file_type": ".txt", "file_size": 1, "updated_time": "2024-01-01T00:00:00"}));
     let error = run(manager.get_book(1)).expect_err("누락 필드를 빈 기본값으로 채워 Book을 반환하면 안 된다");
@@ -1925,7 +1925,7 @@ fn test_get_book_preview_epub_chapters_zero() {
     build_epub(&epub);
     let doc = make_doc("book.epub", "epub");
     let manager = make_manager_with_doc(tmp_path, doc);
-    // Python은 isinstance(resp, Response)만 본다. 타입이 BookResponse이면 충분하다.
+    // 타입이 BookResponse이면 충분하다.
     let _resp: BookResponse = run(manager.get_book_preview(1, None, Some(0)));
 }
 
@@ -3425,7 +3425,7 @@ fn test_validate_epub_no_opf() {
 fn test_validate_epub_opf_parse_error() {
     let tmp = TempDir::new().unwrap();
     let epub = tmp.path().join("test.epub");
-    // lxml은 recover=True로 대부분의 깨진 XML을 처리하지만, 복구가 불가능한 바이너리 쓰레기로 예외 경로를 시험한다.
+    // 복구가 불가능한 바이너리 쓰레기로 오류 경로를 시험한다.
     make_epub(&epub, &minimal_spec().with_opf("\u{0}\u{1}\u{2}"));
     // 복구 모드가 쓰레기를 파싱해 낼 수도 있다. 중요한 것은 죽지 않고 bool을 돌려주는 것이다.
     let (valid, _err) = verdict(BookManager::_validate_preview_epub(&epub));

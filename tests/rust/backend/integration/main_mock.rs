@@ -1,5 +1,3 @@
-//! 원본: tests/test_main_mock.py
-
 #![allow(dead_code)]
 
 #[path = "../common/mod.rs"]
@@ -57,7 +55,7 @@ macro_rules! call_args {
 }
 
 /// 서점 클래스 대역. `search`/`build_search_url`의 결과를 `Mock`이 정한다.
-/// TODO(common): `BookstoreSearch`의 메서드 모양은 설계 문서에 없다. Python `search(isbn, title, author)`와 `build_search_url(keyword)`를 가정했다.
+/// TODO(common): `BookstoreSearch`의 메서드 모양은 설계 문서에 없다.
 struct StoreProxy(Mock);
 
 impl BookstoreSearch for StoreProxy {
@@ -393,7 +391,7 @@ async fn test_browse_defaults_to_all_and_empty_display_title_for_plain_files() {
 }
 
 #[tokio::test]
-async fn test_browse_serializes_absolute_file_path_like_python_book_dict() {
+async fn test_browse_serializes_absolute_file_path() {
     let fx = Fx::new();
     let absolute_path = Book::path_prefix().join("A/book.pdf");
     let book = make_book(json!({"file_path": absolute_path.to_string_lossy()}));
@@ -624,7 +622,7 @@ async fn test_classify_proposal_batches_new_and_updated_items_in_tens() {
 
 #[tokio::test]
 async fn test_classify_proposal_database_flush_runs_off_the_request_thread() {
-    // Python은 callback DB write에 asyncio.to_thread를 쓴다. Rust는 전체 background job을
+    // background job 전체를
     // TaskRunner worker thread에서 실행하므로 동기 DB flush도 요청 runtime을 막지 않는다.
     let request_thread = std::thread::current().id();
     let fx = Fx::new();
@@ -2293,7 +2291,7 @@ mod test_latest_excluded_categories {
     }
 }
 
-/// TM_FRONTEND_URL 미설정 시 False (main.py:157).
+/// TM_FRONTEND_URL 미설정 시 false다.
 #[cfg(any())] // 현재 AppDeps/URI 계약에 없는 이전 보조 함수 테스트다.
 #[test]
 fn test_is_request_from_frontend_host_no_env_returns_false() {
@@ -2303,14 +2301,14 @@ fn test_is_request_from_frontend_host_no_env_returns_false() {
     assert!(!backend::main::is_request_from_frontend_host(&request));
 }
 
-/// 카테고리가 빈 문자열이면 False (main.py:252).
+/// 카테고리가 빈 문자열이면 false다.
 #[cfg(any())] // hidden category 필터는 공개 라우트 통합 테스트에서 검증한다.
 #[test]
 fn test_category_matches_hidden_empty_category_returns_false() {
     assert!(!backend::main::category_matches_hidden("", &["cat1", "cat2"]));
 }
 
-/// viewer 권한에서 hidden 카테고리 책이 유사도 결과에서 제외된다 (main.py:479-480).
+/// viewer 권한에서 hidden 카테고리 책이 유사도 결과에서 제외된다.
 #[tokio::test]
 async fn test_search_similar_books_filters_hidden_categories_for_viewer() {
     let fx = Fx::new();
@@ -2331,7 +2329,7 @@ async fn test_search_similar_books_filters_hidden_categories_for_viewer() {
     assert_eq!(data["total"], 1); // hidden_similar 제외, visible_similar 만 남음
 }
 
-// ── Additional edge case tests to reach 100% coverage on backend/main.py ──
+// ── 경계 사례 ──
 
 #[tokio::test]
 async fn test_get_latest_books_error() {

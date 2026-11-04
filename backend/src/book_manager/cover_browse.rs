@@ -1,4 +1,4 @@
-//! 책·만화 탭 커버 목록의 묶음 규칙. Python `backend/cover_browse.py`에 대응한다.
+//! 책·만화 탭 커버 목록의 묶음 규칙.
 //!
 //! 한 디렉토리에 권별 파일이 모여 있는 경우(만화 등)에 파일마다 커버를 그리면 같은 작품이 줄줄이
 //! 이어진다. 그래서 기준 디렉토리(scope)마다 같은 규칙을 쓴다: scope에 직접 속한 파일은 한 권씩,
@@ -101,7 +101,7 @@ fn later(current: Option<f64>, candidate: Option<f64>) -> Option<f64> {
 /// 디렉토리는 대표 한 권으로 묶는다. 묶음은 최신순으로 돌려준다.
 pub fn plan_cover_scope(category_stats: &CoverStats, scope: &str, hidden_categories: &[String]) -> (Vec<String>, Vec<CoverGroup>) {
     let mut file_categories: Vec<String> = Vec::new();
-    // Python dict처럼 처음 본 순서를 유지한 뒤 안정 정렬한다.
+    // 처음 본 순서를 유지한 뒤 안정 정렬한다.
     let mut order: Vec<String> = Vec::new();
     let mut groups: BTreeMap<String, CoverGroup> = BTreeMap::new();
     for (category, &(_count, updated, created)) in category_stats {
@@ -181,9 +181,9 @@ pub fn merge_cover_page(groups: &[CoverGroup], files: &[CoverHit], size: usize) 
 
 #[cfg(test)]
 mod tests {
-    //! 원본: tests/test_cover_browse.py
+    //! 커버 목록 묶음 규칙 테스트.
     //!
-    //! 커버 목록 묶음 규칙(backend/cover_browse.py)을 ES 없이 확인한다. 순수 함수만 쓴다.
+    //! 묶음 규칙을 ES 없이 확인한다. 순수 함수만 쓴다.
     //!
 
     use std::collections::{BTreeMap, BTreeSet};
@@ -362,7 +362,7 @@ mod tests {
     mod test_cover_group {
         use super::*;
 
-        /// Python `latest_rank(*group.cursor_values)`: 커서 값 `[수정, 생성, 경로]`을 그대로 풀어 넘긴다.
+        /// 커서 값 `[수정, 생성, 경로]`을 그대로 풀어 `latest_rank`에 넘긴다.
         fn rank_of_cursor(values: &[Value]) -> crate::book_manager::cover_browse::Rank {
             latest_rank(values[0].as_f64(), values[1].as_f64(), values[2].as_str().unwrap())
         }
@@ -423,7 +423,7 @@ mod tests {
     mod test_merge_cover_page {
         use super::*;
 
-        /// Python `(kind, value.name if kind == "group" else value[1]["title"])`.
+        /// `(종류, 묶음 이름 또는 파일 제목)`.
         fn describe(entries: &[CoverEntry]) -> Vec<(&'static str, String)> {
             entries
                 .iter()

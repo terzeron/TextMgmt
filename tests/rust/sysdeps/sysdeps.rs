@@ -174,7 +174,7 @@ mod fs {
         std::fs::write(&p, b"x").unwrap();
         assert!(RealFs.is_file(&p).unwrap());
         assert!(!RealFs.is_file(dir.path()).unwrap());
-        // Python Path.is_file()은 없는 경로에서 예외 없이 False다.
+        // 없는 경로는 오류 없이 false다.
         assert!(!RealFs.is_file(&dir.path().join("missing")).unwrap());
     }
 
@@ -380,7 +380,7 @@ mod runner {
     }
 
     #[test]
-    fn errors_have_python_compatible_display_text() {
+    fn errors_have_stable_display_text() {
         assert_eq!(CommandError::Timeout.to_string(), "명령이 시간 상한을 넘었다");
         assert_eq!(CommandError::NotFound.to_string(), "명령을 찾을 수 없다");
         assert_eq!(CommandError::Failed("broken".into()).to_string(), "명령 실행 실패: broken");

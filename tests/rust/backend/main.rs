@@ -42,8 +42,8 @@ fn normalize_path(method: &str, path: &str) -> String {
 }
 
 #[test]
-fn rust_registers_every_python_openapi_route_and_method() {
-    let expected: Vec<(String, String, Vec<String>)> = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/python_openapi_routes.json"))).unwrap();
+fn registers_every_openapi_route_and_method() {
+    let expected: Vec<(String, String, Vec<String>)> = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/openapi_routes.json"))).unwrap();
     let actual: HashSet<(String, String, Vec<String>)> = route_table()
         .into_iter()
         .flat_map(|route| {
@@ -76,7 +76,7 @@ fn real_mapping_facade_propagates_mapping_read_database_failures() {
     assert!(!CategoryMappingApi::set_latest_excluded(&mapping, "fiction", true, "book").unwrap());
 }
 
-/// 카테고리가 빈 문자열이면 False (main.py:252).
+/// 카테고리가 빈 문자열이면 false다.
 #[cfg(any())] // hidden category 필터는 공개 라우트 통합 테스트에서 검증한다.
 #[test]
 fn test_category_matches_hidden_empty_category_returns_false() {

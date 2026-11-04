@@ -7,7 +7,6 @@ use backend::es_manager::EsManagerApi;
 use std::path::Path;
 use std::sync::Arc;
 
-/// Python `make_manager(tmp_path, es)`.
 pub fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {
     BookManager::with_deps(make_deps(tmp_path, es))
 }

@@ -1,4 +1,3 @@
-//! 원본: tests/test_refresh_token_store.py
 //!
 //! refresh token 저장소 MySQL 회전·재사용 탐지·세션 집계 테스트.
 //! 빠른 동작 테스트는 메모리 MySQL 대역을 쓰고, 운영 SQL 검증은 Docker MySQL 통합 테스트로 확인한다.
@@ -18,9 +17,8 @@
 //!     - `list_sessions(&self, q: &SessionQuery) -> Result<Value, StoreError>`, `revoke_session(&self, family_id: &str) -> Result<Value, StoreError>`
 //!     - `_session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError>`
 //!   - `struct SessionQuery { status: String, current_family_id: Option<String>, page: u32, page_size: u32, email: Option<String> }`
-//!     (`Default`: status "active", page 1, page_size 50. Python 키워드 인자의 기본값에 대응한다)
 //!   - `MySQLRefreshTokenStore::{new() -> Result<Self, StoreError> (TM_MYSQL_* 환경 변수), with_connector(ConnectionProvider) -> Result<Self, StoreError> (_init_db 실행),
-//!     with_connection_provider(ConnectionProvider) -> Self (_init_db 생략, Python `__new__` + `_connect` 대입),
+//!     with_connection_provider(ConnectionProvider) -> Self,
 //!     _connect(&self) -> Result<Box<dyn DbConnection>, DbError>}` (`set_connection_provider`는 없다)
 //!   - `enum AnyRefreshTokenStore { MySql(MySQLRefreshTokenStore) }`,
 //!     `create_refresh_token_store() -> Result<AnyRefreshTokenStore, StoreError>` (TM_REFRESH_TOKEN_BACKEND),
@@ -81,7 +79,7 @@ fn items_of(page: &Value) -> Vec<Value> {
     page["items"].as_array().unwrap().clone()
 }
 
-// ---- 가짜 pymysql (Python _FakeCursor/_FakeConn/_BoomConn 대응) ----
+// ---- 가짜 pymysql ----
 
 struct ConnState {
     select_row: Option<Row>,
@@ -1282,7 +1280,7 @@ fn test_mysql_migration_skips_alter_when_columns_exist() {
 
 #[test]
 fn test_summarize_user_agent() {
-    // pytest.mark.parametrize 8건을 한 함수에서 돈다.
+    // 사례 8건을 한 함수에서 돈다.
     let cases: Vec<(&str, &str)> = vec![
         (CHROME_MAC_UA, "Chrome 131 / macOS 10.15"),
         (SAFARI_IOS_UA, "Safari 17 / iOS 17"),
@@ -1379,7 +1377,7 @@ fn test_mysql_migration_adds_columns_to_legacy_table() {
 
 #[test]
 fn test_summarize_user_agent_with_only_browser_or_only_os() {
-    // pytest.mark.parametrize 2건을 한 함수에서 돈다.
+    // 사례 2건을 한 함수에서 돈다.
     let cases = [("Mozilla/5.0 Chrome/120.0 Safari/537.36", "Chrome 120"), ("curl (iPhone OS 17_2 like)", "iOS 17")];
     for (user_agent, expected) in cases {
         assert_eq!(summarize_user_agent(user_agent), expected, "user_agent={user_agent:?}");

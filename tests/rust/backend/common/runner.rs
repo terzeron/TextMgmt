@@ -45,7 +45,7 @@ impl FakeRunner {
         Arc::new(Self { handler: Mutex::new(Box::new(f)), queue: Mutex::new(VecDeque::new()), which: Mutex::new(HashMap::new()), calls: Mutex::new(Vec::new()) })
     }
 
-    /// 항상 같은 결과. `Python subprocess.run`이 `CompletedProcess`를 돌려주는 경우다.
+    /// 항상 같은 결과를 돌려준다.
     pub fn returning(result: RunResult) -> Arc<Self> {
         Self::new(move |_| match &result {
             Ok(o) => Ok(CommandOutput { returncode: o.returncode, stdout: o.stdout.clone(), stderr: o.stderr.clone() }),

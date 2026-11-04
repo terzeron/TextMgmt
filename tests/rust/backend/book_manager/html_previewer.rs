@@ -1,5 +1,5 @@
 //! HTML 미리보기 sanitizer(`BookManager::_sanitize_html_for_viewer`)의 적대적 입력 검증.
-//! Python 테스트는 대표 사례만 확인한다. 여기서는 실행 가능한 구성요소가 출력에 남지 않는다는 보장을 여러 우회 형태로 확인한다.
+//! 실행 가능한 구성요소가 출력에 남지 않는다는 보장을 여러 우회 형태로 확인한다.
 //! 출력은 서버가 `Content-Security-Policy: sandbox`와 함께 내려주지만, sanitizer 자체도 실행 가능한 요소를 남기면 안 된다.
 
 #[path = "../common/mod.rs"]

@@ -28,7 +28,7 @@ mod loader_main {
 
     #[test]
     fn test_main_no_args() {
-        // Lines 886-888: no args. Python usage error와 같은 코드 1을 반환한다.
+        // Lines 886-888: no args.
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let (code, out) = run_main(&[], &env, &FakeStore::new());
@@ -194,7 +194,6 @@ mod loader_main {
 
     #[test]
     fn test_main_getopt_error() {
-        // Python getopt 오류는 print_usage()의 SystemExit(0)으로 끝난다.
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let (code, out) = run_main(&["--invalid-option", "book"], &env, &FakeStore::new());
@@ -205,8 +204,8 @@ mod loader_main {
 
 #[test]
 fn test_loader_module_executed_as_main() {
-    // if __name__ == '__main__' 가드 실행 (loader.py:1055).
-    // 인자 없이 실행 -> Python main()처럼 사용법을 보이고 오류 코드로 끝난다.
+    // 인자 없이 실행하는 진입점을 확인한다.
+    // 인자 없이 실행 -> 사용법을 보이고 오류 코드로 끝난다.
     let dir = tmp();
     let env = setup_loader_env(dir.path());
     let (code, out) = run_main(&[], &env, &FakeStore::new());

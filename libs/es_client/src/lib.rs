@@ -1,4 +1,4 @@
-//! Elasticsearch REST 클라이언트. `backend/es_manager.py`의 `ESManager` 중 검색 부분의 이식.
+//! Elasticsearch REST 클라이언트(검색).
 //!
 //! HTTP와 TLS 검증 HTTPS를 지원한다. 자체 CA는 `TM_ES_CA_CERT` PEM 파일로 지정한다.
 //! 연산 이름과 JSON 인자를 받는 저수준 전송은 [`transport`]에 있다. backend `ESManager`가 그것을 쓴다.
@@ -46,7 +46,7 @@ const MAX_RESULT_WINDOW: usize = 10_000;
 pub const SIMILAR_SUMMARY_MAX_QUERY_TERMS: u32 = 25;
 pub const SIMILAR_SUMMARY_MIN_DOC_FREQ: u32 = 3;
 /// 제목·확장자·크기 검색 질의. 제목 단어가 많을수록 제목 boost를 키운다.
-/// Python `title.split(" ")`처럼 공백 하나를 기준으로 센다. 빈 문자열도 1개다.
+/// 공백 하나(`" "`)를 기준으로 나눈 조각 수. 빈 문자열도 1개다.
 pub fn title_query(title: &str, file_type: &str, file_size: i64) -> Value {
     let words = title.split(' ').count() as f64;
     json!({"bool": {"should": [
@@ -118,7 +118,7 @@ impl EsError {
         matches!(self, EsError::Status { status: 404, .. })
     }
 
-    /// 연결을 만들지 못했거나 응답을 해석하지 못했다. Python `ConnectionError`, `ConnectionTimeout`, `SerializationError`에 대응한다.
+    /// 연결을 만들지 못했거나 응답을 해석하지 못했다. 연결 실패, 시간 초과, 응답 해석 실패가 여기에 든다.
     pub fn is_connection(&self) -> bool {
         matches!(self, EsError::Transport(_) | EsError::Parse(_))
     }
@@ -260,7 +260,7 @@ impl EsClient {
         rows.iter().map(|hit| to_hit(hit, max_score)).collect()
     }
 
-    /// Python `_search`처럼 10,000건을 넘는 요청은 ES scroll context로 이어 읽는다.
+    /// 10,000건을 넘는 요청은 ES scroll context로 이어 읽는다.
     fn search_scroll(&self, query: &Value, max_result_count: usize) -> Result<Vec<Hit>, EsError> {
         let mut scroll_id: Option<String> = None;
         let outcome: Result<Vec<Hit>, EsError> = (|| {

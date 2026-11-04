@@ -56,7 +56,7 @@ pub use request_extractors::{_client_ip, _request_ip_prefix, _request_user_agent
 pub use request_extractors::{ApiJson, ApiQuery, OptionalAuth, RequireAdmin, RequireAuth};
 pub use route_registry::{RouteInfo, Routes};
 
-/// Python 쪽 이름. `view_history_api` 테스트가 쓴다.
+/// `HTTPException`의 다른 이름. `view_history_api` 테스트가 쓴다.
 pub type HttpException = HTTPException;
 
 /// 앱의 모든 라우트. 새 라우트 파일은 여기에 `.merge(..)` 한 줄로 붙인다.

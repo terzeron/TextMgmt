@@ -1,4 +1,4 @@
-//! HTML 엔티티 이름 표. BeautifulSoup 4.12.3의 `EntitySubstitution.HTML_ENTITY_TO_CHARACTER`에서 생성했다
+//! HTML 엔티티 이름 표. HTML 표준 엔티티 목록에서 생성했다
 //! (2125개, 이름 순). `handle_entityref`가 이 표로 이름을 문자로 바꾼다.
 
 /// (이름, 문자열) 쌍. 이름 순으로 정렬돼 있어 이진 탐색을 쓴다.

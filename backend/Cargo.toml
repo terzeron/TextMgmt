@@ -1,6 +1,6 @@
 [package]
 name = "backend"
-description = "TextMgmt 백엔드 API (backend/*.py의 Rust 대응). axum + diesel + libs/es_client"
+description = "TextMgmt 백엔드 API. axum + diesel + libs/es_client"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

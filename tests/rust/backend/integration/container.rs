@@ -1,5 +1,5 @@
 //! All backend tests that need MySQL or Elasticsearch share one process-scoped
-//! Testcontainers fixture, matching pytest's session-scoped containers.
+//! Testcontainers fixture. 테스트 세션 동안 컨테이너를 공유한다.
 
 #[path = "../common/mod.rs"]
 mod common;

@@ -6,7 +6,7 @@ use common::es_fake::FakeEsManager;
 use common::{TestClient, setup_env};
 
 #[test]
-fn setup_env_sets_the_conftest_variables() {
+fn setup_env_sets_the_test_variables() {
     setup_env();
     assert_eq!(std::env::var("TM_FRONTEND_URL").unwrap(), "http://localhost:3000");
     assert_eq!(std::env::var("TM_ADMIN_EMAIL").unwrap(), "admin@test.com");

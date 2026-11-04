@@ -15,7 +15,7 @@ use super::{BookDeletion, CoverPage};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::es_manager::EsManagerApi;
 
-/// 라우트가 쪽 크기를 정하지 않을 때 쓰는 카테고리 목록 쪽 크기. Python `size: int = 500`.
+/// 라우트가 쪽 크기를 정하지 않을 때 쓰는 카테고리 목록 쪽 크기.
 const DEFAULT_CATEGORY_PAGE_SIZE: i64 = 500;
 
 #[async_trait]
@@ -117,7 +117,7 @@ impl BookManagerApi for BookManager {
     }
 
     async fn get_book_preview(&self, id: i64, chapters: Option<i64>, resource_base_url: Option<&str>) -> BookResponse {
-        // 음수와 0은 전체 챕터다(Python `chapters <= 0`).
+        // 음수와 0은 전체 챕터다.
         let chapters = chapters.map(|n| n.clamp(0, i64::from(u32::MAX)) as u32);
         BookManager::get_book_preview_with_base(self, id, None, chapters, resource_base_url.unwrap_or("")).await
     }

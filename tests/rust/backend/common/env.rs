@@ -17,7 +17,7 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 /// 환경을 바꾸는 테스트끼리 직렬화하고, 읽는 테스트와도 겹치지 않게 막는다.
 static ENV_LOCK: RwLock<()> = RwLock::new(());
 
-/// `monkeypatch.setenv`/`delenv`에 대응한다. drop되면 처음 값으로 되돌린다.
+/// 환경 변수를 정하거나 지운다. drop되면 처음 값으로 되돌린다.
 pub struct EnvGuard {
     saved: Vec<(String, Option<OsString>)>,
     // 필드 drop 순서상 `saved` 복원이 끝난 뒤에 잠금이 풀린다.

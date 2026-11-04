@@ -1,4 +1,4 @@
-//! ES 제목·내용 검색 점검 도구. 원본: `utils/search.py`.
+//! ES 제목·내용 검색 점검 도구.
 //!
 //! 제목(`<title>`, `<ext>`, `<size>`)으로 찾고, 내용(`<content>`)이 있으면 요약이 비슷한 문서도 찾는다.
 
@@ -35,7 +35,7 @@ fn print_hits(hits: &[Hit], separator: bool, out: &mut dyn Write) -> std::io::Re
             writeln!(out, "----------------------------------------")?;
         }
         writeln!(out, "item: {}", hit.source)?;
-        // Python은 `item["summary"][:200]`로 바로 접근하므로 누락·비문자열 값을 오류로 처리한다.
+        // summary가 없거나 문자열이 아니면 오류로 처리한다.
         let summary = hit.source.get("summary").and_then(Value::as_str).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "검색 결과에 문자열 summary가 없다"))?;
         let head: String = summary.chars().take(200).collect();
         writeln!(out, "{}", head.replace('\n', " "))?;

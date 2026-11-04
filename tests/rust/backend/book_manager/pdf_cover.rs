@@ -28,8 +28,8 @@ fn cover_blank_detection_does_not_merge_sixteen_nearby_colors_into_one_backgroun
 }
 
 #[test]
-fn cover_blank_detection_matches_pillow_on_repository_image_fixtures() {
-    // Python Pillow 10.4.0 oracle for the repository's actual RGB/GIF/JPEG fixtures.
+fn cover_blank_detection_matches_reference_on_repository_image_fixtures() {
+    // 저장소에 있는 RGB/GIF/JPEG fixture의 기록된 판정값.
     let fixtures: [(&str, &[u8], bool); 5] = [
         ("test.png", include_bytes!("../../../books/_image/test.png"), false),
         ("150.gif", include_bytes!("../../../books/_image/150.gif"), false),
@@ -44,8 +44,8 @@ fn cover_blank_detection_matches_pillow_on_repository_image_fixtures() {
 }
 
 #[test]
-fn cover_blank_detection_matches_pillow_on_synthetic_color_patterns() {
-    // Python Pillow 10.4.0 MEDIANCUT + FIND_EDGES oracle, generated from the same patterns.
+fn cover_blank_detection_matches_reference_on_synthetic_color_patterns() {
+    // median cut + 경계 검출의 기록된 판정값(같은 패턴에서 만들었다).
     let expected = [false, false, false, false, false, false, true, true];
     for seed in 0..32u32 {
         let kind = seed % 8;
@@ -76,8 +76,8 @@ fn cover_blank_detection_matches_pillow_on_synthetic_color_patterns() {
 }
 
 #[test]
-fn cover_blank_detection_matches_pillow_after_bilinear_resizing() {
-    // Pillow 10.4.0 oracle for 600x900 sources resized to 64x96 with BILINEAR.
+fn cover_blank_detection_matches_reference_after_bilinear_resizing() {
+    // 600x900 원본을 64x96으로 bilinear 축소했을 때의 기록된 판정값.
     let expected = "10001011100010111000101110001011";
     let results: String = (0..32u32)
         .map(|seed| {

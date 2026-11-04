@@ -1,4 +1,4 @@
-//! 픽셀 비교용 래스터. Python PIL 이미지에 대응한다(book_fixtures의 `Raster`를 옮겼다). `pdf.rs`의 `pixel_image`가 돌려준다.
+//! 픽셀 비교용 래스터(book_fixtures의 `Raster`를 옮겼다). `pdf.rs`의 `pixel_image`가 돌려준다.
 
 #![allow(dead_code)]
 

@@ -59,7 +59,7 @@ mod values {
     }
 
     #[test]
-    fn json_values_convert_like_python_parameters() {
+    fn json_values_convert_to_query_parameters() {
         use serde_json::json;
         assert_eq!(DbValue::from(json!(null)), DbValue::Null);
         assert_eq!(DbValue::from(json!(true)), DbValue::Int(1));
@@ -85,7 +85,7 @@ mod config {
     use super::*;
 
     #[test]
-    fn defaults_match_the_python_modules() {
+    fn defaults_match_the_documented_values() {
         let c = MysqlConfig::from_env(&env_of(&[]), "tmuser");
         assert_eq!((c.host.as_str(), c.port, c.database.as_str(), c.user.as_str(), c.password.as_str()), ("localhost", 3306, "textmanager", "tmuser", ""));
     }
@@ -156,7 +156,7 @@ mod mysql {
     use super::*;
 
     #[test]
-    fn round_trip_returns_dict_rows_with_python_like_types() {
+    fn round_trip_returns_json_rows_with_column_types() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
         let mut cur = conn.cursor();
@@ -260,7 +260,7 @@ mod mysql {
     }
 
     #[test]
-    fn remaining_mysql_column_types_match_python_values() {
+    fn remaining_mysql_column_types_convert_to_json_values() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
         let mut cur = conn.cursor();

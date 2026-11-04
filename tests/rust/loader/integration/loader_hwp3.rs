@@ -1,14 +1,14 @@
-//! 원본: `tests/test_loader.py` 후반부 HWP 단위 테스트.
+//! HWP 3 읽기 단위 테스트.
 //!
 //! 대상 클래스: `TestHwp3ParserDirect`, `TestHwp3ParserEdgeCases`, `TestHwp3StreamMethods`, `TestHncToUnicodeExtended`,
 //! `TestHandleControlCharCoverage`, `TestParseEdgeCases`, `TestHandleControlCharRecursive`, `TestSafeChr`, `TestControlCharTab`,
-//! `TestControlCharDateLine`, `TestV200BruteForce`. Python의 여러 개별 사례는 Rust 테스트에서 묶어 검증한다.
+//! `TestControlCharDateLine`, `TestV200BruteForce`. 여러 개별 사례는 묶어 검증한다.
 //!
-//! 실제 `hwp3_parser` crate의 공개 API만 쓴다. 없는 함수를 가정하지 않는다(가정한 API: 없음). Python과 다른 점은 다음과 같다.
+//! 실제 `hwp3_parser` crate의 공개 API만 쓴다. 참고:
 //! - 비공개 이름(`_HwpStream`, `_hnc_to_unicode` 등)은 밑줄 없이 공개돼 있다: `HwpStream`, `hnc_to_unicode`, `safe_chr`.
-//! - `parse_paragraph_list(stream, depth)`는 `depth`가 필수다. Python 기본값 0을 명시한다.
-//! - `_HwpStreamError` 예외는 `Result<_, StreamError>`로 바뀌었다. `pytest.raises` 자리는 `is_err()`로 검사한다.
-//! - `_MAX_TEXT_LENGTH`(1_000_000)는 crate에서 비공개 상수라 같은 값을 둔다. 재귀 제한은 Python 테스트의 depth=11 입력으로 확인한다.
+//! - `parse_paragraph_list(stream, depth)`는 `depth`가 필수다.
+//! - 스트림 오류는 `Result<_, StreamError>`다. `is_err()`로 검사한다.
+//! - `_MAX_TEXT_LENGTH`(1_000_000)는 crate에서 비공개 상수라 같은 값을 둔다. 재귀 제한은 depth=11 입력으로 확인한다.
 //!
 //! Cargo target은 `utils/loader/Cargo.toml`의 `loader_hwp3`이며, parser/table crates는 dev-dependencies로 연결한다.
 //!
@@ -574,7 +574,6 @@ mod test_handle_control_char_recursive {
         assert!(result.contains('\n')); // 첫 문단의 CR은 포함
     }
 
-    /// Python `test_recursion_depth_limit`: depth 10 초과면 즉시 빈 문자열이다.
     #[test]
     fn test_recursion_depth_limit() {
         assert_eq!(parse_paragraph_list(&mut HwpStream::new(vec![0; 100]), 11), "");

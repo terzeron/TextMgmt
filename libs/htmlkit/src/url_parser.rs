@@ -1,4 +1,4 @@
-//! `urllib.parse`의 `urlsplit`/`urljoin`/`urlencode`/`quote`에 해당하는 최소 구현. 표지 URL 검증·다운로드와 서점 검색 결과 링크 해석이 함께 쓴다.
+//! URL 나누기·잇기·인코딩(`urlsplit`/`urljoin`/`urlencode`/`quote`/`unquote`)의 최소 구현. 표지 URL 검증·다운로드와 서점 검색 결과 링크 해석이 함께 쓴다.
 
 /// `urlsplit` 결과. `netloc`은 `//`가 있을 때만 `Some`이다.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -80,7 +80,7 @@ impl Netloc {
         Netloc { username, password, hostname, port_text: port_text.filter(|p| !p.is_empty()) }
     }
 
-    /// `parsed.port`: 숫자가 아니거나 0~65535를 벗어나면 `Err`(Python `ValueError`).
+    /// `parsed.port`: 숫자가 아니거나 0~65535를 벗어나면 `Err`.
     pub fn port(&self) -> Result<Option<u16>, InvalidPort> {
         match &self.port_text {
             None => Ok(None),
@@ -137,7 +137,7 @@ fn unsplit(scheme: &str, netloc: Option<&str>, path: &str, query: &str, fragment
     out
 }
 
-/// `urllib.parse.urljoin`의 흔한 경우를 RFC 3986 규칙으로 처리한다.
+/// 기준 URL에 상대 URL을 잇는다. 흔한 경우를 RFC 3986 규칙으로 처리한다.
 pub fn urljoin(base: &str, url: &str) -> String {
     if base.is_empty() {
         return url.to_string();
@@ -186,12 +186,12 @@ fn unreserved(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'~')
 }
 
-/// `urllib.parse.quote(text)`: 기본 safe는 `/`다.
+/// 퍼센트 인코딩. 영문·숫자·`_.-~`와 `/`는 그대로 둔다.
 pub fn quote(text: &str) -> String {
     percent_encode(text, |b| unreserved(b) || b == b'/', false)
 }
 
-/// `urllib.parse.urlencode(pairs)`: 키와 값을 `quote_plus`로 인코딩한다.
+/// 질의 문자열. 키와 값을 퍼센트 인코딩하고 공백은 `+`로 쓴다.
 pub fn urlencode(pairs: &[(&str, &str)]) -> String {
     pairs.iter().map(|(k, v)| format!("{}={}", percent_encode(k, unreserved, true), percent_encode(v, unreserved, true))).collect::<Vec<_>>().join("&")
 }

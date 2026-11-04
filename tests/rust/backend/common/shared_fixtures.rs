@@ -58,7 +58,7 @@ pub fn arr(v: &Value, i: usize) -> Value {
     v.get(i).cloned().unwrap_or(Value::Null)
 }
 
-/// `Result<(), _>`를 Python 원본의 `("Ok" | "Error", 메시지)`로 펼친다.
+/// `Result<(), _>`를 `("Ok" | "Error", 메시지)`로 펼친다.
 pub fn as_status(result: Result<(), String>) -> (String, Option<String>) {
     match result {
         Ok(()) => ("Ok".to_string(), None),
@@ -66,7 +66,7 @@ pub fn as_status(result: Result<(), String>) -> (String, Option<String>) {
     }
 }
 
-/// `pytest.raises(CoverError, match=needle)`
+/// `CoverError`이고 메시지에 `needle`이 들었는지 확인한다.
 pub fn assert_cover_error<T: std::fmt::Debug>(result: Result<T, CoverError>, needle: &str) {
     match result {
         Err(e) if !e.is_io() => assert!(e.to_string().contains(needle), "CoverError 메시지에 {needle:?}가 없다: {e}"),
@@ -301,7 +301,6 @@ pub fn make_deps(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManagerDeps 
     BookManagerDeps::new(tmp_path.to_path_buf(), es)
 }
 
-/// Python `make_doc(path, file_type)`.
 pub fn make_doc(rel_path: &str, file_type: &str) -> Value {
     json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
 }
@@ -396,7 +395,7 @@ pub fn opt_string(v: Value) -> Option<String> {
     v.as_str().map(str::to_string)
 }
 
-/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
+/// `Result<Value, _>`를 `(결과, 오류)`로 펼친다. 실패하면 빈 객체다.
 pub fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
     match result {
         Ok(value) => (value, None),
@@ -477,7 +476,7 @@ pub fn read(path: &Path) -> Vec<u8> {
     std::fs::read(path).unwrap()
 }
 
-/// 현재 `revision`. Python `inspect_epub(path)["revision"]`.
+/// 현재 `revision`.
 pub fn rev(path: &Path) -> String {
     epub_cover::inspect_epub(path).unwrap()["revision"].as_str().unwrap().to_string()
 }
@@ -504,7 +503,7 @@ pub fn spine_idrefs(path: &Path) -> Vec<String> {
     elements(&doc, "spine").iter().flat_map(|s| s.children().filter(|c| c.is_element() && c.tag_name().name() == "itemref")).filter_map(|c| c.attribute("idref").map(String::from)).collect()
 }
 
-/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+/// `Result`를 `(결과, 오류)` 모양으로 펼쳐 단언을 짧게 쓴다.
 pub fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
     match result {
         Ok(value) => (Some(value), None),
@@ -533,7 +532,7 @@ pub fn titled_books(v: Value) -> Vec<(Book, String)> {
 // 공용 헬퍼 (전반부 정의를 복사)
 // ---------------------------------------------------------------------------
 
-/// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
+/// 임시 디렉터리. 반환값이 drop되면 디렉터리가 지워진다.
 pub fn tmp_dir() -> TempDir {
     tempfile::tempdir().unwrap()
 }
@@ -563,7 +562,7 @@ pub fn value_result(v: &Value) -> Result<Value, String> {
     opt_string(arr(v, 1)).map_or_else(|| Ok(arr(v, 0)), Err)
 }
 
-/// 검증 결과를 Python 원본의 `(유효 여부, 사유)`로 펼친다.
+/// 검증 결과를 `(유효 여부, 사유)`로 펼친다.
 pub fn verdict(result: Result<(), String>) -> (bool, Option<String>) {
     match result {
         Ok(()) => (true, None),
@@ -571,7 +570,7 @@ pub fn verdict(result: Result<(), String>) -> (bool, Option<String>) {
     }
 }
 
-/// mimetype(무압축)을 맨 앞에 두고 나머지를 압축해서 쓴다. Python 생성 헬퍼가 모두 이 배치다.
+/// mimetype(무압축)을 맨 앞에 두고 나머지를 압축해서 쓴다.
 pub fn write_epub(path: &Path, entries: Vec<(String, Vec<u8>)>) {
     let mimetype: &[u8] = b"application/epub+zip";
     let mut all: Vec<(&str, &[u8])> = vec![("mimetype", mimetype)];
@@ -584,7 +583,7 @@ pub fn write_zip_stored(path: &Path, entries: &[(&str, &[u8])]) {
     write_zip_with(path, entries, ZipMode::Stored);
 }
 
-// ── XML 확인 도구 (lxml xpath 대응) ────────────────────────
+// ── XML 확인 도구 ────────────────────────
 
 pub fn xml_text(data: &[u8]) -> String {
     String::from_utf8(data.to_vec()).unwrap()
@@ -617,7 +616,7 @@ pub const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   </rootfiles>
 </container>"#;
 
-/// Python 호출 하나의 기록. 위치 인자, 키워드 인자(JSON 객체), 콜백.
+/// 호출 하나의 기록. 위치 인자, 이름 붙은 인자(JSON 객체), 콜백.
 #[derive(Clone)]
 pub struct CallArgs<'a> {
     pub args: Vec<Value>,
@@ -645,7 +644,7 @@ pub type Callback<'a> = Arc<dyn Fn(Value) -> Fut<'a, Value> + Send + Sync + 'a>;
 
 pub const DEFAULT_CLIENT_HOST: &str = "192.0.2.9";
 
-/// `cm()`이 돌려주는 값. 테이블을 공유하는 테스트끼리 병렬로 돌지 않게 잠금을 쥐고 있다(Python은 순차 실행).
+/// `cm()`이 돌려주는 값. 테이블을 공유하는 테스트끼리 병렬로 돌지 않게 잠금을 쥐고 있다.
 pub struct Db {
     pub _lock: MutexGuard<'static, ()>,
     pub mapping: CategoryMapping,
@@ -705,7 +704,6 @@ impl BookLookup for FakeBooks {
     }
 }
 
-/// Python `FakeRequest`: headers/cookies 딕셔너리만 가진 요청 대역.
 pub struct FakeRequest {
     pub headers: HashMap<String, String>,
     pub cookies: HashMap<String, String>,
@@ -835,7 +833,7 @@ impl RefreshTokenStoreApi for FakeStore {
     }
 
     fn list_sessions(&self, q: &SessionQuery) -> Result<Value, StoreError> {
-        // Python 키워드 인자를 객체로 담아 둔다. 키 이름은 Python과 같다.
+        // 이름 붙은 인자를 객체로 담아 둔다.
         self.list_calls.lock().unwrap().push(json!({"status": q.status, "current_family_id": q.current_family_id, "page": q.page, "page_size": q.page_size, "email": q.email}));
         self.sessions.lock().unwrap().clone().unwrap_or_else(|| Err("unset".to_string())).map_err(StoreError::Unsupported)
     }
@@ -859,7 +857,7 @@ impl backend::direct_cover_url::ImageFetcher for FetchImage {
     }
 }
 
-/// `monkeypatch.setattr("backend.cover_management.fetch_url_image", ...)`의 대응. 테스트 중간에 바꿀 수 있다.
+/// 표지 이미지 내려받기 대역. 테스트 중간에 바꿀 수 있다.
 /// `BookManagerDeps::with_image_fetcher`로 주입한다. 오류 타입은 `FetchError`(구 `EpubCoverError`).
 pub struct FetchSlot(pub Mutex<Fetch>);
 
@@ -929,8 +927,8 @@ impl<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync> Thumbnail
 //
 // 설계 3.2: 앱에는 `AppDeps`로 `Arc<dyn BookManagerApi>`/`Arc<dyn CategoryMappingApi>`를 넣는다. `Mock`은 그 trait를 구현하는
 // 테스트 로컬 어댑터다. trait 메서드마다 호출을 `Mock::call(이름, CallArgs)`로 넘기고, 테스트가 정한 `returns`/`side_effect`의
-// JSON 결과를 trait의 반환형으로 바꿔 준다. 호출 기록 모양(위치 인자/키워드 인자)은 원본 Python 호출을 따른다.
-// 반환형이 `Result`가 아닌 메서드에서 `Err(String)`(= Python 예외)이 나오면 패닉으로 올린다.
+// JSON 결과를 trait의 반환형으로 바꿔 준다. 호출 기록은 위치 인자와 이름 붙은 인자로 나눈다.
+// 반환형이 `Result`가 아닌 메서드에서 `Err(String)`이 나오면 패닉으로 올린다.
 
 /// 비동기 결과. 콜백과 side effect가 쓴다.
 pub type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -956,12 +954,12 @@ impl Fx {
         Self::build(Guard::Read(EnvGuard::read()), |deps| deps)
     }
 
-    /// `monkeypatch.setenv`를 쓰는 테스트용.
+    /// 환경 변수를 바꾸는 테스트용.
     pub fn with_env(vars: &[(&str, Option<&str>)]) -> Self {
         Self::build(Guard::Env(EnvGuard::apply(vars)), |deps| deps)
     }
 
-    /// `monkeypatch.setenv`와 `mock.patch`를 함께 쓰는 테스트용.
+    /// 환경 변수와 대역을 함께 바꾸는 테스트용.
     pub fn with_env_tweaked(vars: &[(&str, Option<&str>)], tweak: impl FnOnce(AppDeps) -> AppDeps) -> Self {
         Self::build(Guard::Env(EnvGuard::apply(vars)), tweak)
     }
@@ -1123,7 +1121,7 @@ impl Mock {
         assert!(found, "{method}를 이 인자로 부른 적이 없다: {args} {kwargs}");
     }
 
-    /// 호출을 기록하고 side effect 또는 `returns` 값을 돌려준다. `Err`는 Python 예외다.
+    /// 호출을 기록하고 side effect 또는 `returns` 값을 돌려준다. `Err`는 실패다.
     pub fn call<'a>(&self, method: &str, args: CallArgs<'a>) -> Fut<'a, Result<Value, String>> {
         let (effect, ret) = {
             let mut s = self.0.lock().unwrap();
@@ -1337,7 +1335,7 @@ impl BookManagerApi for Mock {
     }
 }
 
-/// category_mapping 대역. 키워드 인자 모양은 라우트의 Python 호출(`content_type=...`)을 따른다.
+/// category_mapping 대역. 이름 붙은 인자(`content_type=...`)로 호출을 기록한다.
 impl CategoryMappingApi for Mock {
     fn get_all_mappings(&self, ct: &str) -> Result<Value, MappingError> {
         self.invoke_sync_try("get_all_mappings", call_args!([], {"content_type": ct})).map_err(MappingError::Other)
@@ -1456,8 +1454,8 @@ impl CategoryMappingApi for Mock {
     }
 }
 
-/// refresh token 저장소 대역. `rotate`/`revoke_family`만 쓴다. Python 키워드 인자(`*`) 모양으로 기록한다.
-/// TODO(common): `RefreshTokenStoreApi`의 시그니처는 설계 문서에 없다. 파이썬 `refresh_token_store.py`를 따랐다.
+/// refresh token 저장소 대역. `rotate`/`revoke_family`만 쓴다.
+/// TODO(common): `RefreshTokenStoreApi`의 시그니처는 설계 문서에 없다.
 impl RefreshTokenStoreApi for Mock {
     fn store_issued(&self, token_id: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64, client_ip: Option<&str>, user_agent: Option<&str>) -> Result<(), StoreError> {
         let kwargs = json!({"token_id":token_id,"family_id":family_id,"email":email,"issued_at":issued_at,"expires_at":expires_at,"client_ip":client_ip,"user_agent":user_agent});
@@ -1916,7 +1914,6 @@ pub fn file_reader(f: impl Fn(&Path) -> Result<Value, LoaderReadError> + Send + 
     Arc::new(FnFileReader(Box::new(f)))
 }
 
-/// Python autouse `setup_env` fixture: JWT 비밀키·관리자·허용 이메일을 테스트 값으로 맞춘다.
 pub fn fixture() -> EnvGuard {
     let mut env = EnvGuard::new();
     env.set("TM_JWT_SECRET", SECRET);

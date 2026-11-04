@@ -22,14 +22,14 @@ pub(crate) use crate::book_manager::UNIMPLEMENTED;
 // Google 로그인
 // ---------------------------------------------------------------------------
 
-/// Google ID 토큰 검증. Python `google_id_token.verify_oauth2_token`과 `TM_GOOGLE_CLIENT_ID`에 대응한다.
+/// Google ID 토큰 검증. `TM_GOOGLE_CLIENT_ID`를 audience로 쓴다.
 pub trait GoogleVerifier: Send + Sync {
     /// 설정된 OAuth 클라이언트 ID. 없으면 None.
     fn client_id(&self) -> Option<String> {
         std::env::var("TM_GOOGLE_CLIENT_ID").ok().filter(|v| !v.is_empty())
     }
 
-    /// 검증에 성공하면 토큰의 claims를 돌려준다. 실패 사유는 문자열이다(Python `ValueError`).
+    /// 검증에 성공하면 토큰의 claims를 돌려준다. 실패 사유는 문자열이다.
     fn verify(&self, _credential: &str, _audience: &str) -> Result<Value, String> {
         Err(UNIMPLEMENTED.to_string())
     }
@@ -307,7 +307,7 @@ pub struct BookStub {
     pub category: Option<String>,
 }
 
-/// Python `_get_book_and_ensure_viewer_access`: 책을 찾고, 없으면 404, viewer가 볼 수 없는 카테고리면 403 오류를 돌려준다.
+/// 책을 찾고, 없으면 404, viewer가 볼 수 없는 카테고리면 403 오류를 돌려준다.
 #[async_trait]
 pub trait BookAccess: Send + Sync {
     async fn get_book_and_ensure_viewer_access(&self, _book_id: i64, _payload: &Value, _content_type: &str) -> Result<BookStub, HTTPException> {

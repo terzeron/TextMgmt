@@ -175,7 +175,7 @@ impl ESManager {
         result["count"].as_i64().ok_or_else(|| parse_error("count가 없다"))
     }
 
-    /// 여러 카테고리의 문서 수를 msearch로 한 번에 조회한다. 카테고리가 없으면 호출 없이 `{}`다(Python은 빈 msearch를 보낸다).
+    /// 여러 카테고리의 문서 수를 msearch로 한 번에 조회한다. 카테고리가 없으면 호출 없이 `{}`다.
     pub fn count_by_categories(&self, categories: &[&str], prefix: bool) -> Result<Value, EsError> {
         if categories.is_empty() {
             return Ok(json!({}));

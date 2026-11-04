@@ -1,9 +1,9 @@
-//! ESManager 테스트용 가짜 저수준 ES 전송 계층. Python `tests/test_es_manager.py`의 `DummyES`/`DummyIndices`에 대응한다.
+//! ESManager 테스트용 가짜 저수준 ES 전송 계층.
 //! 설계: docs/rust-test-seams.md 3.3. 구 `EsApi`(call)와 `EsLike`(index_name/get/search)를 `EsTransport` 하나로 통일했다.
 //!
 //! 가정한 API (아직 구현 전이다):
 //! - `es_client::transport::EsTransport`: `fn index_name(&self) -> &str`, `fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>`
-//!   (`get`, `search`는 `call("get")`, `call("search")`로 가는 기본 구현이다. Python `Elasticsearch` 클라이언트의 메서드 호출을 `op`와 키워드 인자 JSON으로 옮긴 것이다. `indices.exists`처럼 점으로 하위 객체를 쓴다)
+//!   (`get`, `search`는 `call("get")`, `call("search")`로 가는 기본 구현이다. ES API 호출을 `op`와 인자 JSON으로 나타낸다. `indices.exists`처럼 점으로 하위 객체를 쓴다)
 //! - `es_client::EsError`: `MissingEnv`, `Transport(String)`, `Status { status: u16, body: String }`, `Parse`, `Unsupported`, `Other(String)`
 //!   (구 `ElasticsearchError` 매핑: ConnectionError -> Transport, NotFoundError -> Status{404}, BadRequestError{message,status} -> Status{status, body:message}, RuntimeError -> Other)
 //!
@@ -104,12 +104,12 @@ impl DummyEs {
         })
     }
 
-    /// Python에서 `es.search = fake`처럼 메서드를 갈아끼우는 일에 대응한다. 기본 동작과 상태 기록은 건너뛴다.
+    /// 메서드 하나를 대역 함수로 바꾼다. 기본 동작과 상태 기록은 건너뛴다.
     pub fn on(&self, op: &str, handler: impl Fn(&Value) -> Result<Value, EsError> + Send + Sync + 'static) {
         self.overrides.lock().unwrap().insert(op.to_string(), Arc::new(handler));
     }
 
-    /// 바꿔치기한 메서드를 기본 동작으로 되돌린다. Python `es.delete_by_query = DummyES().delete_by_query`에 대응한다.
+    /// 바꿔치기한 메서드를 기본 동작으로 되돌린다.
     pub fn reset(&self, op: &str) {
         self.overrides.lock().unwrap().remove(op);
     }
@@ -163,7 +163,7 @@ impl DummyEs {
         Ok(json!({"hits": {"max_score": 2.0, "hits": [{"_id": "1", "_source": {"a": 1}, "_score": 2.0}]}}))
     }
 
-    /// Python 하위 클래스의 `super().search(...)`처럼 기본 동작을 직접 부른다. 호출 기록은 남기지 않는다.
+    /// 기본 동작을 직접 부른다. 호출 기록은 남기지 않는다.
     pub fn base_call(&self, op: &str, kw: &Value) -> Result<Value, EsError> {
         match op {
             "info" => Ok(json!({"ok": true})),

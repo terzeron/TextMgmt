@@ -1,4 +1,4 @@
-//! 카테고리 이름 변경·삭제. Python `rename_category`, `preview_delete_category`, `delete_category`에 대응한다.
+//! 카테고리 이름 변경·삭제(삭제 미리보기 포함).
 
 use std::path::PathBuf;
 

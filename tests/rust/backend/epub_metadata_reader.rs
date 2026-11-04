@@ -89,7 +89,7 @@ fn test_inspect_epub_metadata_skips_oversized_opf() {
     assert_eq!(inspect_epub_metadata(&epub_path), empty_meta());
 }
 
-/// 주석과 처리명령이 섞여도 메타데이터를 읽어야 한다(lxml iter 회귀 방지).
+/// 주석과 처리명령이 섞여도 메타데이터를 읽어야 한다.
 #[test]
 fn test_inspect_epub_metadata_reads_opf_with_comments() {
     let opf = concat!(
@@ -108,7 +108,7 @@ fn test_inspect_epub_metadata_reads_opf_with_comments() {
     assert_eq!(meta.author, "작가");
 }
 
-/// Python의 lxml `recover=True`처럼 잘린 OPF에서도 이미 읽을 수 있는 메타데이터를 보존한다.
+/// 잘린 OPF에서도 이미 읽을 수 있는 메타데이터를 보존한다.
 #[test]
 fn test_inspect_epub_metadata_recovers_truncated_opf() {
     let opf = r#"<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>recovered</dc:title><dc:creator>Author</dc:creator></metadata>"#;
@@ -122,7 +122,6 @@ fn test_inspect_epub_metadata_recovers_truncated_opf() {
     assert_eq!(meta.author, "Author");
 }
 
-/// Python lxml은 끝부분의 불완전한 태그를 버리고 앞서 읽은 메타데이터를 보존한다.
 #[test]
 fn test_inspect_epub_metadata_recovers_before_partial_tag() {
     let opf = r#"<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>kept</dc:title><dc:creator"#;

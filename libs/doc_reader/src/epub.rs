@@ -1,10 +1,10 @@
-//! EPUB 읽기. 원본: `Loader.read_from_epub`(ebooklib)와 `read_from_epub_with_extracting_zip`(정규식 대체 경로).
+//! EPUB 읽기. OPF 패키지(매니페스트·스파인)를 따라 읽고, 실패하면 정규식으로 챕터만 읽는 대체 경로로 간다.
 //!
-//! ebooklib 경로가 예외를 내면(필수 요소 누락, 매니페스트 항목이 ZIP에 없음, NCX·nav 해석 실패 등)
+//! 패키지 경로가 실패하면(필수 요소 누락, 매니페스트 항목이 ZIP에 없음, NCX·nav 해석 실패 등)
 //! 정규식으로 챕터만 읽는 대체 경로로 간다. 두 경로는 결과가 달라서 어느 쪽으로 갔는지가 중요하다.
 //!
-//! 본문은 ebooklib처럼 `<body>`를 `etree.tostring(pretty_print=True)`로 직렬화했다가 다시 파싱한 글이다.
-//! libxml2의 들여쓰기 출력은 자식이 요소뿐인 요소에서 줄바꿈을 더한다. 그 줄바꿈을 [`pretty_text`]가 흉내 낸다.
+//! 본문은 `<body>`를 들여쓰기 직렬화했다가 다시 읽은 글이다.
+//! 들여쓰기 출력은 자식이 요소뿐인 요소에서 줄바꿈을 더한다. 그 줄바꿈을 [`pretty_text`]가 흉내 낸다.
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -32,7 +32,7 @@ const XHTML_MEDIA_TYPE: &str = "application/xhtml+xml";
 /// 어떤 경로로 읽혔나. 통계(`normal_epub_count` / `zipped_epub_count`)에 쓴다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EpubPath {
-    /// ebooklib 경로
+    /// OPF 패키지 경로
     Normal,
     /// 정규식 대체 경로
     Zipped,
@@ -105,8 +105,8 @@ fn child<'a, 'b>(node: roxmltree::Node<'a, 'b>, ns: &str, name: &str) -> Option<
     node.children().find(|c| c.is_element() && c.tag_name().name() == name && c.tag_name().namespace() == Some(ns))
 }
 
-/// ebooklib 경로. 예외가 날 상황이면 `Err`.
-fn read_with_ebooklib(path: &Path) -> Result<(String, usize), String> {
+/// OPF 패키지 경로. 패키지가 깨졌으면 `Err`.
+fn read_with_package(path: &Path) -> Result<(String, usize), String> {
     let mut zip = open_zip(path).ok_or("Bad Zip file")?;
     let names: HashSet<String> = zip.file_names().filter_map(|n| n.ok()).map(|n| n.into_owned()).collect();
 
@@ -160,7 +160,7 @@ fn read_with_ebooklib(path: &Path) -> Result<(String, usize), String> {
         let properties: Vec<&str> = r.attribute("properties").map(|p| p.split(' ').collect()).unwrap_or_default();
         let is_xhtml = media_type == Some(XHTML_MEDIA_TYPE);
         let is_nav = is_xhtml && properties.contains(&"nav");
-        // nav 항목만 href를 풀지 않은 채로 멤버를 찾는다(ebooklib의 동작).
+        // nav 항목만 href를 풀지 않은 채로 멤버를 찾는다.
         let member_name = zip_entry_name(opf_dir.join(if is_nav { href } else { file_name.as_str() })).ok_or_else(|| format!("KeyError: {href}"))?;
         if !names.contains(&member_name) {
             return Err(format!("KeyError: {member_name}"));
@@ -338,7 +338,7 @@ fn emit_pretty(node: NodeRef<Node>, format: bool, skip_leading: bool, tail: &str
     }
 }
 
-/// ebooklib `get_body_content`를 거친 뒤 `(soup.body or soup).get_text()`와 같은 글.
+/// 문서의 `<body>`(없으면 문서 전체) 본문 텍스트.
 pub fn pretty_text(markup: &str) -> Option<String> {
     pretty_text_in(&crate::markup::parse(markup), markup)
 }
@@ -351,7 +351,7 @@ fn pretty_text_in(doc: &Html, markup: &str) -> Option<String> {
     }
     let has_attrs = matches!(body.value(), Node::Element(e) if e.attrs().next().is_some());
     let mut out = String::new();
-    // `<body>` 태그가 속성 없이 `<body>`로 시작하면 ebooklib가 태그를 떼어 낸다.
+    // `<body>` 태그가 속성 없이 `<body>`로 시작하면 태그를 떼어 낸다.
     emit_pretty(body, true, !has_attrs, &crate::markup::relocated_tail(markup), &mut out);
     Some(out)
 }
@@ -364,7 +364,7 @@ pub fn document_text_and_lines(content: &[u8]) -> Result<(String, usize), String
     }
     let doc = crate::markup::parse(&markup);
     let body = doc.tree.root().descendants().find(|n| matches!(n.value(), Node::Element(e) if e.name() == "body"));
-    // lxml은 본문이 없는 문서(머리만 있는 문서)에서 body를 만들지 않아 `len(None)`에서 예외가 난다.
+    // 본문이 없는 문서(머리만 있는 문서)는 body가 없어 실패로 본다.
     let body_children = body.map_or(0, child_count);
     let has_body_text = body.is_some_and(|b| b.children().any(|c| matches!(c.value(), Node::Text(t) if !t.trim().is_empty())));
     if body_children == 0 && !has_body_text && !markup.to_ascii_lowercase().contains("<body") {
@@ -427,7 +427,7 @@ fn decode_utf8_ignore(bytes: &[u8]) -> String {
     text_extractor::decode_utf8_ignore(bytes)
 }
 
-/// EPUB 파일: (요약, 줄 수). ebooklib 경로가 실패하면 정규식 경로로 간다.
+/// EPUB 파일: (요약, 줄 수). 패키지 경로가 실패하면 정규식 경로로 간다.
 pub fn read_from_epub(path: &Path) -> EpubRead {
     read_from_epub_with(path, &EpubHooks::default())
 }
@@ -435,7 +435,7 @@ pub fn read_from_epub(path: &Path) -> EpubRead {
 /// EPUB을 읽는다. 테스트와 호출자가 normal reader 실패를 재현할 수 있다.
 pub fn read_from_epub_with(path: &Path, hooks: &EpubHooks<'_>) -> EpubRead {
     let mut errors = Vec::new();
-    let normal = hooks.read_epub.map_or_else(|| read_with_ebooklib(path), |reader| reader(path));
+    let normal = hooks.read_epub.map_or_else(|| read_with_package(path), |reader| reader(path));
     let (result, line_count, used) = match normal {
         Ok((result, lines)) => (result, lines, EpubPath::Normal),
         Err(first) => match read_with_zip_regex(path, &mut errors) {
@@ -482,7 +482,6 @@ pub fn read_from_epub_with_extracting_zip_using(path: &Path, parse: &ChapterPars
 }
 
 /// EPUB의 `dc:publisher`. OPF 하나만 풀고 본문은 읽지 않는다. 읽을 수 없으면 빈 문자열이다.
-/// 원본: `backend/classifier/reader.py`의 `read_epub_publisher`.
 pub fn read_epub_publisher(path: &Path) -> String {
     static DC_PUBLISHER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<dc:publisher[^>]*>(.*?)</dc:publisher>").unwrap());
     static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());

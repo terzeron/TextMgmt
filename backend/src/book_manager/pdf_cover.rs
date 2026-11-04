@@ -1,4 +1,4 @@
-//! PDF 표지 렌더링. Python `_extract_cover_thumbnail`의 PDF 갈래와 `_is_mostly_blank_cover`에 대응한다.
+//! PDF 표지 렌더링과 거의 빈 표지 판정.
 //!
 //! MuPDF Rust worker로 텍스트·벡터·이미지 페이지를 렌더링한다. 출력은 제한된 크기의 PPM으로 받는다.
 
@@ -158,7 +158,7 @@ impl BookManager {
         }
         let sample = image::imageops::resize(&img.to_rgb8(), 64, 96, FilterType::Triangle);
         let pixel_count = f64::from(sample.width() * sample.height());
-        // Pillow 기본 MEDIANCUT처럼 가장 큰 색상 그룹을 반복 분할한다.
+        // median cut: 가장 큰 색상 그룹을 반복 분할한다.
         let mut histogram = std::collections::HashMap::new();
         for pixel in sample.pixels() {
             *histogram.entry([pixel[0], pixel[1], pixel[2]]).or_insert(0u32) += 1;

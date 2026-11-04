@@ -1,7 +1,7 @@
 //! `HttpTransport`(실제 HTTP 전송)와 `ESManager`의 통합 테스트.
 //!
 //! - 로컬 TCP 서버 테스트: 실제 ES 없이 `op`가 어떤 REST 요청(메서드, 경로, 쿼리 문자열, 본문)이 되는지 확인한다.
-//! - Docker 테스트(fixture가 컨테이너를 띄운다): 일회용 ES 9.1.0 컨테이너(nori 분석기 설치, 보안 끔)에 붙어 Python `ESManager`의
+//! - Docker 테스트(fixture가 컨테이너를 띄운다): 일회용 ES 9.1.0 컨테이너(nori 분석기 설치, 보안 끔)에 붙어 `ESManager`의
 //!   주요 동작을 실제로 확인한다. `cargo test -p backend --test es_manager_http`
 //!   이미지는 환경 변수 `TM_TEST_ES_IMAGE`로 바꿀 수 있다(기본 `docker.elastic.co/elasticsearch/elasticsearch:9.1.0`).
 //!   컨테이너는 테스트가 끝나면(실패해도) `docker rm -f`로 지운다. 운영 ES와 `.env`는 쓰지 않는다.
@@ -97,7 +97,7 @@ fn search_becomes_post_search_with_body_fields_and_scroll_query() {
     assert_eq!(response, json!({"hits": {"hits": []}}));
     let request = rx.recv().unwrap();
     assert_eq!(request.request_line, "POST /books/_search?scroll=10m HTTP/1.1");
-    // Basic 인증과 JSON 본문. Python 클라이언트 인자 이름(`from_`, `source`)은 REST 필드(`from`, `_source`)가 된다.
+    // Basic 인증과 JSON 본문.
     assert_eq!(request.header("authorization"), Some("Basic ZWxhc3RpYzpwdw=="));
     assert!(request.header("content-type").is_some_and(|v| v.starts_with("application/json")));
     assert_eq!(request.json(), json!({"query": {"match_all": {}}, "from": 2, "size": 3, "_source": ["title"], "track_scores": true, "sort": [{"file_path": "asc"}]}));

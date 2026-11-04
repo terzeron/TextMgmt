@@ -1,7 +1,7 @@
 //! 앱 의존성 묶음 `AppDeps`와 인증 방식 `AuthMode`. 설계: docs/rust-test-seams.md 3.2.
 //!
 //! `AppDeps::new(auth)`는 실제 구현을 기본값으로 채우고, 소비형 `with_xxx`로 하나씩 대역으로 바꾼다.
-//! 무거운 의존성(DB 연결, 매니저)은 처음 쓸 때 만든다(Python `_LazyProxy`). 만들기에 실패하면 다음 호출에서 다시 시도한다.
+//! 무거운 의존성(DB 연결, 매니저)은 처음 쓸 때 만든다. 만들기에 실패하면 다음 호출에서 다시 시도한다.
 //! 라우트는 `Arc<AppDeps>`를 state로 받아 `deps.refresh_store()` 같은 접근자로 꺼내 쓴다.
 
 use std::path::PathBuf;
@@ -110,7 +110,7 @@ pub struct AppDeps {
     bookstore_factory: BookstoreFactory,
 }
 
-/// 재적재 진행 카운트를 DB에 기록하는 기본 주기(Python `RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS`).
+/// 재적재 진행 카운트를 DB에 기록하는 기본 주기.
 pub const RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS: u64 = 30;
 
 impl AppDeps {

@@ -1,4 +1,4 @@
-//! PDF 페이지 조회와 admin 전용 PDF 편집(쪽 삭제·크롭 등). Python `create_book_router`의 책·만화 경로를 함께 등록한다.
+//! PDF 페이지 조회와 admin 전용 PDF 편집(쪽 삭제·크롭 등). 책·만화 경로를 함께 등록한다.
 
 use std::sync::Arc;
 

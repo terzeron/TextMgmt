@@ -18,7 +18,7 @@ use super::app_deps::{AppDeps, AuthMode};
 use super::error_responses::{ApiError, RequestValidationError};
 use crate::auth_service::{optional_auth_with, require_admin_with, require_auth_with};
 
-/// Pydantic·FastAPI bool 문자열 해석. 대소문자를 가리지 않는다. 해석할 수 없으면 `None`.
+/// 불리언 문자열 해석. 대소문자를 가리지 않는다. 해석할 수 없으면 `None`.
 pub(crate) fn parse_py_bool(text: &str) -> Option<bool> {
     match text.to_ascii_lowercase().as_str() {
         "true" | "1" | "on" | "yes" | "t" | "y" => Some(true),
@@ -27,8 +27,8 @@ pub(crate) fn parse_py_bool(text: &str) -> Option<bool> {
     }
 }
 
-/// Pydantic bool의 JSON·쿼리 입력 규칙.
-pub(super) fn python_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+/// 불리언 입력 규칙: JSON 불리언, 0·1, `true`/`false`/`yes`/`no`/`on`/`off` 같은 문자열을 받는다.
+pub(super) fn lenient_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
     let parsed = match Value::deserialize(d)? {
         Value::Bool(v) => Some(v),
         Value::String(s) => parse_py_bool(&s),
@@ -83,7 +83,7 @@ pub struct RequireAdmin(pub Value);
 
 /// `Depends(optional_auth)`: 인증에 실패하면 None. 오류를 만들지 않는다.
 ///
-/// Python의 `optional_auth`는 `dependency_overrides`와 상관없이 항상 실제 인증을 한다. 여기서도 `AuthMode`를 무시하고 실제 인증을 한다.
+/// `optional_auth`는 `AuthMode`와 상관없이 항상 실제 인증을 한다.
 pub struct OptionalAuth(pub Option<Value>);
 
 impl FromRequestParts<Arc<AppDeps>> for RequireAuth {
@@ -153,7 +153,7 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequestParts<S> for ApiQuery<T> {
     }
 }
 
-// ---- 요청한 클라이언트의 IP와 User-Agent. Python `_client_ip`, `_request_ip_prefix`, `_request_user_agent`. ----
+// ---- 요청한 클라이언트의 IP와 User-Agent. ----
 //
 // 실제 경로는 클라이언트 -> Cloudflare -> Traefik -> 백엔드 pod다. 이 구성에서
 // - 접속 상대(peer)는 Traefik pod IP이고,

@@ -48,7 +48,7 @@ pub trait TaskRunner: Send + Sync {
         task_handle_from_spawn(name, std::thread::Builder::new().name(name.to_string()).spawn(job))
     }
 
-    /// 블로킹 풀로 넘어간 함수 이름을 알린다(Python `to_thread_spy`). 기본 구현은 아무것도 하지 않는다.
+    /// 블로킹 풀로 넘어간 함수 이름을 알린다(테스트 관측용). 기본 구현은 아무것도 하지 않는다.
     fn spawn_blocking_observed(&self, _name: &str) {}
 }
 

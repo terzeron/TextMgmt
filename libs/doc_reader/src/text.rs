@@ -18,7 +18,7 @@ pub const HIGH_BYTE_PAIRED_MIN: f64 = 0.5;
 /// 판별에 쓰는 앞부분 바이트 수.
 pub const DETECT_PREFIX: usize = 8 * 1024;
 
-/// Python 코덱 이름에 대응하는 인코딩.
+/// 텍스트 인코딩.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Enc {
     Utf8,
@@ -59,12 +59,12 @@ fn decode_with(enc: &'static encoding_rs::Encoding, raw: &[u8], replace: bool) -
     if replace { Some(enc.decode_without_bom_handling(raw).0.into_owned()) } else { enc.decode_without_bom_handling_and_without_replacement(raw).map(|c| c.into_owned()) }
 }
 
-/// Python `bytes.decode(enc)`(엄격) 또는 `errors="replace"`. 텍스트 모드 줄바꿈 번역은 하지 않는다.
+/// 엄격하게 풀거나, 못 읽는 바이트를 U+FFFD로 바꿔 푼다. 텍스트 모드 줄바꿈 번역은 하지 않는다.
 pub fn decode(enc: Enc, raw: &[u8], replace: bool) -> Option<String> {
     match enc {
         Enc::Utf8 => decode_with(encoding_rs::UTF_8, raw, replace),
         Enc::Utf8Sig => decode_with(encoding_rs::UTF_8, raw.strip_prefix(b"\xef\xbb\xbf").unwrap_or(raw), replace),
-        // 엄격 디코딩은 WHATWG euc-kr(=cp949)로 충분하다. replace는 Python 코덱처럼 안 읽히는 바이트 하나씩 바꾼다.
+        // 엄격 디코딩은 WHATWG euc-kr(=cp949)로 충분하다. replace는 안 읽히는 바이트를 하나씩 바꾼다.
         Enc::Cp949 | Enc::EucKr if replace => Some(decode_korean_with_replace(raw, enc == Enc::EucKr)),
         Enc::Cp949 | Enc::EucKr if valid_korean_bytes(raw, enc == Enc::EucKr) => decode_with(EUC_KR, raw, false),
         Enc::Cp949 | Enc::EucKr => None,
@@ -322,7 +322,7 @@ pub fn reencode_order(raw: &[u8]) -> Vec<Enc> {
 fn encode(enc: Enc, text: &str) -> Option<Vec<u8>> {
     match enc {
         Enc::Utf8 => Some(text.as_bytes().to_vec()),
-        // Python `utf-8-sig`와 `utf-16`은 인코딩할 때 항상 BOM을 붙인다.
+        // `utf-8-sig`와 `utf-16`은 인코딩할 때 항상 BOM을 붙인다.
         Enc::Utf8Sig => Some([b"\xef\xbb\xbf".as_slice(), text.as_bytes()].concat()),
         Enc::Utf16 => Some(std::iter::once(0xfeffu16).chain(text.encode_utf16()).flat_map(u16::to_le_bytes).collect()),
         Enc::Utf16Le => Some(text.encode_utf16().flat_map(u16::to_le_bytes).collect()),

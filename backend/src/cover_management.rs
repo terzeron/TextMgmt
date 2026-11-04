@@ -1,8 +1,8 @@
-//! 관리자용 EPUB 표지 목록, 후보, 이미지 cache, 저장 API. Python `backend/cover_management.py`에 대응한다.
+//! 관리자용 EPUB 표지 목록, 후보, 이미지 cache, 저장 API.
 //!
 //! - 서비스(`CoverManagement`)는 파일 시스템 위에서 동기로 동작한다. 라우트(`routes`)가 블로킹 작업으로 넘겨 부른다.
 //! - 검색·내려받기·시계·썸네일은 `CoverHooks`로 바꾼다. 기본값은 실제 구현이다. 설계: docs/rust-test-seams.md 3.7, 3.8, 3.12.
-//! - 취소(`check_cancelled`)는 Python `ContextVar`처럼 요청을 처리하는 스레드에 붙는다(`with_cancel_scope`).
+//! - 취소(`check_cancelled`)는 요청을 처리하는 스레드에 붙는다(`with_cancel_scope`).
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -266,7 +266,7 @@ fn book_key(relative: &str) -> String {
 }
 
 fn base64_engine() -> GeneralPurpose {
-    // Python `b64decode(validate=True)`: 알파벳 밖 글자와 틀린 padding은 거절하고 남는 비트는 받는다.
+    // 엄격한 base64: 알파벳 밖 글자와 틀린 padding은 거절하고 남는 비트는 받는다.
     GeneralPurpose::new(&STANDARD_ALPHABET, GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::RequireCanonical).with_decode_allow_trailing_bits(true))
 }
 
@@ -647,9 +647,9 @@ mod cover_writer;
 
 pub use cover_request_models::{ApplyCoverModel, ApplyImageModel, ApplyUrlModel, BookCoverModel, ValidationError};
 
-// ---- 파일 이름으로 표지 검색어를 만드는 도우미. Python `filename_title`의 유니코드 처리를 외부 crate 없이 옮겼다. ----
+// ---- 파일 이름으로 표지 검색어를 만드는 도우미. 유니코드 처리를 외부 crate 없이 한다. ----
 //
-// Python은 NFC로 정규화한 뒤 일반 범주가 P(구두점)나 S(기호)인 글자를 공백으로 바꾼다.
+// NFC로 정규화한 뒤 일반 범주가 P(구두점)나 S(기호)인 글자를 공백으로 바꾸는 것이 목표다.
 // 이 crate 의존성에는 유니코드 표가 없어서 다음과 같이 근사한다.
 // - NFC: 한글 자모(L+V(+T))만 음절로 합친다(macOS가 만든 NFD 이름이 대표적이다). 라틴 결합 문자는 합치지 않는다.
 // - P/S: 글자·숫자·공백·제어 문자·결합 부호가 아니면 구두점·기호로 본다.

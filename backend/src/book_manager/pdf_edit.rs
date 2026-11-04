@@ -62,7 +62,7 @@ impl BookManager {
         run_upload_preview(data, max_image_pixels, page_image_editor::normalize_upload_with_limit).await
     }
 
-    /// Python `delete_pdf_pages`. 페이지 번호와 순서는 편집 전 문서를 기준으로 한다.
+    /// PDF 쪽을 지운다. 페이지 번호와 순서는 편집 전 문서를 기준으로 한다.
     pub async fn delete_pdf_pages(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String> {
         self.edit_pdf(book_id, pages, crops, splits, inserts, order).await
     }

@@ -1,7 +1,6 @@
-//! HTML·XHTML 본문 텍스트 추출과 줄 수 세기. 원본: `BeautifulSoup(markup, "lxml")`의 `get_text()`와 `Loader._count_epub_lines`.
+//! HTML·XHTML 본문 텍스트 추출과 줄 수 세기.
 //!
-//! lxml(libxml2) 대신 html5ever(`scraper`)로 파싱한다. 정상 문서에서는 같은 글이 나오고, 심하게 깨진
-//! 문서에서는 트리가 다를 수 있다. libxml2 2.14처럼 공백뿐인 텍스트 노드는 한 글자로 줄인다.
+//! html5ever(`scraper`)로 파싱한다. 공백뿐인 텍스트 노드는 한 글자로 줄인다.
 
 use std::path::Path;
 
@@ -167,7 +166,7 @@ fn inside_pre(node: &NodeRef<Node>) -> bool {
     node.ancestors().any(|a| element_name(&a) == Some("pre"))
 }
 
-/// lxml(libxml2 2.14)은 공백뿐인 텍스트를 한 글자로 줄인다: 줄바꿈이 있으면 `\n`, 없으면 공백 하나.
+/// 공백뿐인 텍스트를 한 글자로 줄인다: 줄바꿈이 있으면 `\n`, 없으면 공백 하나.
 /// `pre` 안에서는 그대로 둔다.
 fn normalized_text<'a>(node: &NodeRef<Node>, text: &'a str) -> &'a str {
     if text.is_empty() || !is_blank(text) || inside_pre(node) {
@@ -295,7 +294,7 @@ pub fn get_body_text(markup: &str) -> String {
     collect_text(body, &relocated_tail(markup))
 }
 
-/// 문서 전체의 텍스트를 모은다. EPUB ZIP 대체 경로의 BeautifulSoup `get_text()` 대응.
+/// 문서 전체의 텍스트를 모은다. EPUB 정규식 대체 경로가 쓴다.
 pub fn get_document_text(markup: &str) -> String {
     let doc = parse(markup);
     collect_text(doc.tree.root(), &relocated_tail(markup))

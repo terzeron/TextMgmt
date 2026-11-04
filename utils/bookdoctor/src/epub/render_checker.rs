@@ -43,7 +43,7 @@ const FONT_MEDIA_TYPES: [&str; 8] = ["font/ttf", "font/otf", "font/woff", "font/
 /// 난독화 임계값. 한 XHTML 안에서 크기 0 요소 또는 U+202E가 이만큼 이상이면 난독화로 본다.
 /// 난독화 EPUB은 글자마다 숨은 더미 요소(`font-size:0%`, 메모리 노트의 eeḕ 요소)를 끼우고 RTL 오버라이드
 /// (U+202E)로 순서를 뒤집는다. 정상 책에는 거의 없고 난독화 책은 쪽당 수백 개라 20은 보수적인 하한이다.
-/// 실제 난독화 EPUB으로는 검증하지 않았다(scripts/epub_deobfuscate.py와 표본이 이 작업 트리에 없다).
+/// 실제 난독화 EPUB으로는 검증하지 않았다(난독화 해제 스크립트와 표본이 이 작업 트리에 없다).
 const OBFUSCATION_THRESHOLD: usize = 20;
 /// 문서 하나가 모을 선택자와 스타일시트의 상한. 악성 CSS가 선택자 × 요소 곱으로 시간을 쓰지 못하게 한다.
 const MAX_SELECTORS_PER_DOC: usize = 10_000;
@@ -723,7 +723,7 @@ fn analyze_xhtml(zip: &mut Zip, bytes: &[u8], member: &str, name_set: &HashSet<&
         }
     }
 
-    // 난독화 (scripts/epub_deobfuscate.py가 푸는 패턴): 크기 0 요소와 RTL 오버라이드(U+202E).
+    // 난독화 (난독화 해제 스크립트가 푸는 패턴): 크기 0 요소와 RTL 오버라이드(U+202E).
     let lower = text.to_lowercase();
     let rtl = text.matches('\u{202e}').count() + lower.matches("&#x202e;").count() + text.matches("&#8238;").count();
     let mut hidden = 0;

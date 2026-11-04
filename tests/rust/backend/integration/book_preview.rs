@@ -39,7 +39,7 @@ fn deflated() -> SimpleFileOptions {
 
 /// 앞쪽에 비선형(linear="no") 항목(nav·표지)을 둔 EPUB.
 ///
-/// build_epub.py 산출물처럼 스파인 첫머리가 nav·표지(linear="no")이고 그 뒤에
+/// EPUB 빌드 도구 산출물처럼 스파인 첫머리가 nav·표지(linear="no")이고 그 뒤에
 /// linear 본문이 이어진다. 미리보기가 비선형 항목을 세면 넘길 페이지가 거의
 /// 남지 않으므로, 미리보기는 linear 본문만 골라야 한다.
 fn create_epub_with_nonlinear_front(path: &Path, chapter_count: usize) {
@@ -329,7 +329,7 @@ fn build_epub_data(bm: &BookManager, epub_path: &Path) -> Value {
     Value::Object(data)
 }
 
-/// 등록된 책. `run`이 Python의 `try: ... finally: _cleanup_book(...)`에 대응한다.
+/// 등록된 책. `run`이 끝나면 책을 지운다.
 struct Registered<'a> {
     setup: &'a Setup,
     book_id: i64,
@@ -1134,9 +1134,9 @@ async fn test_total_chapters_missing_container_xml() {
     assert_eq!(count, 2, "Expected 2 chapters, got {count}");
 }
 
-// ── corrupted container.xml (lxml recover) ───────────
+// ── corrupted container.xml ───────────
 
-/// container.xml에 선언되지 않은 네임스페이스 프리픽스가 있어도 lxml recover로 미리보기가 생성된다.
+/// container.xml에 선언되지 않은 네임스페이스 프리픽스가 있어도 미리보기가 생성된다.
 #[tokio::test]
 async fn test_preview_corrupted_container_xml() {
     let setup = setup!();

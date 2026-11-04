@@ -1,7 +1,6 @@
-//! 원본: tests/test_api_exploration.py
 //!
 //! 원본은 테스트 파일 안에 `get_top_frequent_words`와 `run_api_exploration_test`를 직접 정의하고,
-//! `monkeypatch`로 `Okt`와 `requests`를 가짜로 바꿔서 검증한다. 그래서 대응 로직도 이 파일에 옮겨 두고,
+//! `Okt`와 HTTP 요청을 대역으로 바꿔서 검증한다. 그래서 대응 로직도 이 파일에 옮겨 두고,
 //! 바꿔치기 대신 trait 주입(`Okt`, `HttpGet`)으로 같은 효과를 낸다. 실서버를 부르는 테스트는 없다.
 //!
 //! 가정한 API (이 파일 안에서 정의한다):

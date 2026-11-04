@@ -1,6 +1,6 @@
-//! `/admin/book-covers/*` 라우트. Python `create_cover_router`에 대응한다. 앱에는 `main`의 `all_routes()`가 `routes()`를 합친다.
+//! `/admin/book-covers/*` 라우트. 앱에는 `main`의 `all_routes()`가 `routes()`를 합친다.
 //!
-//! 서비스 호출은 `deps.task_runner()`로 넘기고(Python `asyncio.to_thread`) 응답이 끝나면 취소 표시를 켠다.
+//! 서비스 호출은 `deps.task_runner()`로 블로킹 풀에 넘기고 응답이 끝나면 취소 표시를 켠다.
 //! 요청이 끊겨 핸들러가 버려져도(axum은 future를 버린다) 작업 스레드의 `check_cancelled`가 멈춘다.
 
 use std::future::Future;
@@ -96,7 +96,7 @@ impl<R: Send + 'static> Future for Pending<R> {
     }
 }
 
-/// 핸들러가 끝나거나 버려지면 취소 표시를 켠다(Python `finally: cancelled.set()`).
+/// 핸들러가 끝나거나 버려지면 취소 표시를 켠다.
 struct CancelOnDrop(Arc<AtomicBool>);
 
 impl Drop for CancelOnDrop {

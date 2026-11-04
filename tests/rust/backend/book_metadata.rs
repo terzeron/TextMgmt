@@ -134,7 +134,7 @@ fn test_dict_rejects_paths_outside_book_root() {
     Book::new(9, &info, 0.0).dict();
 }
 
-// ---- merged from test_book_env_guard.py ----
+// ---- 환경 변수 누락 검사 ----
 
 #[test]
 fn test_book_requires_book_dir() {

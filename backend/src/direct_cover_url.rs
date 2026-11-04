@@ -1,4 +1,4 @@
-//! 공개 이미지 URL을 검증한 IP에 직접 연결하여 내려받는다. Python `backend/direct_cover_url.py`에 대응한다.
+//! 공개 이미지 URL을 검증한 IP에 직접 연결하여 내려받는다.
 //!
 //! DNS 조회와 연결 풀은 [`Net`] trait 뒤에 둔다(설계: docs/rust-test-seams.md 3.7).
 //! 연결 수준 계약이라 `sysdeps::HttpSession`과 합치지 않는다. 연결은 DNS로 검증한 IP에만 하고, TLS 호스트명은 원래 호스트로 확인한다.
@@ -18,7 +18,7 @@ pub const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
 
 const MAX_REDIRECTS: usize = 5;
 
-/// 내려받기 오류. `Value`는 사용자가 고칠 수 있는 입력·서버 문제(Python `CoverError`), `Os`는 DNS 같은 운영체제 오류다.
+/// 내려받기 오류. `Value`는 사용자가 고칠 수 있는 입력·서버 문제, `Os`는 DNS 같은 운영체제 오류다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchError {
     Value(String),
@@ -260,7 +260,7 @@ impl Drop for Closing {
     }
 }
 
-/// Python `str.encode("idna")`와 같은 transitional IDNA mapping으로 hostname을 ASCII로 바꾼다.
+/// IDNA transitional mapping으로 hostname을 ASCII(punycode)로 바꾼다.
 fn idna_ascii(host: &str) -> Result<String, ()> {
     #[allow(deprecated)]
     let ascii = idna::Config::default().transitional_processing(true).to_ascii(host).map_err(|_| ())?;

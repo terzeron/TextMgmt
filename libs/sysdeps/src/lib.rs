@@ -52,7 +52,7 @@ impl Clock for SystemClock {
     }
 
     fn sleep(&self, seconds: f64) {
-        // Python time.sleep은 음수에서 예외를 내지만, 여기서는 기다리지 않는 쪽으로 단순화한다.
+        // 음수 시간은 오류로 보지 않고 기다리지 않는다.
         if seconds.is_finite() && seconds > 0.0 {
             thread::sleep(Duration::from_secs_f64(seconds));
         }
@@ -338,7 +338,7 @@ impl CommandRunner for SystemRunner {
         let output = run_child(cmd, timeout)?;
         let returncode = {
             use std::os::unix::process::ExitStatusExt;
-            // Python은 시그널로 죽으면 음수 시그널 번호를 돌려준다.
+            // 시그널로 죽은 프로세스는 음수 시그널 번호를 종료 코드로 돌려준다.
             output.status.code().unwrap_or_else(|| -output.status.signal().unwrap_or(1))
         };
         Ok(CommandOutput { returncode, stdout: output.stdout, stderr: output.stderr })

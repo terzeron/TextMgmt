@@ -1,4 +1,4 @@
-//! 책 관리자. Python `backend/book_manager.py`의 `BookManager`에 대응한다.
+//! 책 관리자 `BookManager`.
 //!
 //! # 구조
 //!
@@ -33,7 +33,7 @@ use crate::es_manager::{Docs, EsManagerApi};
 use crate::pdf_page_reader::{LopdfOpener, LopdfPageOps, PageCountCache, PdfOpener, PdfPageOps, PdfReaderCache};
 use classifier::Classify;
 
-/// Python `RuntimeError`에 대응한다.
+/// 책 관리 작업이 실패했다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeError(pub String);
 
@@ -102,14 +102,14 @@ pub const EPUB_IMAGE_MAX_EDGE: u32 = 1600;
 /// 진행 보고 콜백. 값은 JSON 객체다.
 pub type ProgressFn<'a> = &'a (dyn Fn(Value) + Send + Sync);
 
-/// 파일 하나를 읽어 ES 문서로 만든다. Python `Loader.read_file`에 대응한다(구 `ReadFile`).
+/// 파일 하나를 읽어 ES 문서로 만든다.
 ///
 /// 실제 구현은 `loader` crate의 `read_file`을 감싸야 한다. 이 crate는 `loader`에 의존하지 않으므로
 /// 조립하는 쪽(바이너리)이 `BookManagerDeps::with_file_reader`로 꽂는다. 꽂지 않으면 `DefaultFileReader`가 쓰인다.
 /// `FileReader::try_read_file`이 돌려주는 오류.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadFileError {
-    /// 파서가 시간 상한을 넘었다(Python `ParserTimeout`).
+    /// 파서가 시간 상한을 넘었다.
     Timeout(String),
     Other(String),
 }

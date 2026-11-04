@@ -167,7 +167,7 @@ pub trait DbConnection: Send {
     }
 }
 
-/// 호출할 때마다 새 연결을 연다. Python 코드가 연산마다 `pymysql.connect`를 부르는 것과 같다.
+/// 호출할 때마다 새 연결을 연다.
 pub type ConnectionProvider = Arc<dyn Fn() -> Result<Box<dyn DbConnection>, DbError> + Send + Sync>;
 
 // ---------------------------------------------------------------------------

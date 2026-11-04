@@ -1,4 +1,4 @@
-//! backend 테스트 공용 도구. Python `tests/conftest.py`의 환경 설정과 FastAPI `TestClient`에 대응한다.
+//! backend 테스트 공용 도구.
 //!
 //! 가정한 backend API (아직 구현 전이다):
 //! - `backend::main::app() -> axum::Router`

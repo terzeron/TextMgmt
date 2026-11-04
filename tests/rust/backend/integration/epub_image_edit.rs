@@ -253,7 +253,7 @@ fn test_delete_refuses_to_empty_the_book() {
     let tmp = tempfile::tempdir().unwrap();
     let path = make_book(&tmp.path().join("b.epub"), &[]);
     let mut members = read(&path);
-    // Python의 `.replace(b'<spine>', ..., 0)`은 아무것도 바꾸지 않는다.
+    // 바꿀 횟수가 0이라 아무것도 바꾸지 않는다.
     let only = b"<spine><itemref idref=\"p1\"/></spine>";
     let opf = members["OPS/book.opf"].clone();
     let start = find_bytes(&opf, b"<spine>").expect("<spine>");
@@ -354,7 +354,7 @@ fn manager_env() -> ManagerEnv {
     let tmp = tempfile::tempdir().unwrap();
     let path = make_book(&tmp.path().join("분류").join("book.epub"), &[]);
     let es = FakeEsManager::new();
-    // monkeypatch.setattr("backend.cover_management.fetch_url_image", lambda url: jpeg("red"))
+    // 표지 이미지 내려받기를 빨간 JPEG로 바꾼다.
     let fetch = Arc::new(FixedFetcher(jpeg("red")));
     let deps = BookManagerDeps::new(tmp.path().to_path_buf(), es.clone()).with_image_fetcher(fetch).with_book_lookup(Arc::new(StaticBookLookup { path: path.clone(), file_type: "epub".to_string() }));
     ManagerEnv { bm: BookManager::with_deps(deps), es, path, tmp }

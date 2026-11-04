@@ -1,4 +1,4 @@
-//! 원본: tests/test_loader.py (후반부)
+//! loader 읽기 단계 테스트(PDF·텍스트).
 //!
 //! loader 후반부: PDF 경량 쪽수 헬퍼, `main()` 분기, HWP, 재인코딩, PDF 단계 테스트. 외부 서비스 없이 실행한다.
 //! ES는 `IndexStore`를 구현한 가짜 저장소로, LibreOffice는 셸 스크립트로 바꿔 끼운다.

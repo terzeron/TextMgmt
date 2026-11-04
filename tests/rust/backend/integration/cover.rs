@@ -147,7 +147,7 @@ async fn test_cover_cache_tracks_source_file() {
     }
 }
 
-/// `/cover/{book_id}` 엔드포인트를 위한 앱. Python `TestCoverEndpoint.setup_client` fixture.
+/// `/cover/{book_id}` 엔드포인트를 위한 앱.
 struct EndpointEnv {
     _tmp: tempfile::TempDir,
     manager: Arc<BookManager>,

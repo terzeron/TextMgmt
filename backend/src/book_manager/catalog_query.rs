@@ -1,5 +1,4 @@
-//! 조회·검색·추가. Python `get_categories`, `get_books_in_category(_paged)`, `get_book`, `get_book_content`,
-//! `search_by_keyword(_paged)`, `search_similar_books(_paged)`, `add_book`에 대응한다.
+//! 조회·검색·추가: 카테고리 목록, 카테고리 안 책(쪽 나눔 포함), 책 한 권과 본문, 키워드·유사 책 검색, 책 추가.
 
 use std::collections::BTreeMap;
 
@@ -11,7 +10,7 @@ use super::{AddBookError, BookContent, BookManager, MAX_CATEGORY_PAGE_SIZE, MAX_
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::es_manager::{Docs, EsManagerApi, decode_category_cursor, encode_category_cursor};
 
-/// Python `if doc:`: 없거나 빈 객체면 문서가 없는 것이다.
+/// 없거나 빈 객체면 문서가 없는 것이다.
 fn non_empty(doc: Option<Value>) -> Option<Value> {
     doc.filter(|d| !d.is_null() && d.as_object().is_none_or(|o| !o.is_empty()))
 }
@@ -39,7 +38,7 @@ impl BookManager {
         self.blocking(move |es| es.search_by_id(book_id).map(non_empty).map_err(|e| e.to_string())).await
     }
 
-    /// `es.search_by_id`를 Python 진리값 규칙으로 읽는다. ES 오류는 문자열로 돌려준다.
+    /// `es.search_by_id` 결과를 읽는다. 비었으면 없는 문서다. ES 오류는 문자열로 돌려준다.
     pub(crate) fn find_doc(&self, book_id: i64) -> Result<Option<Value>, String> {
         self.es.search_by_id(book_id).map(non_empty).map_err(|e| e.to_string())
     }

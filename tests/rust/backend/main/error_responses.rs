@@ -4,7 +4,7 @@
 mod common;
 use serde_json::{Value, json};
 
-/// _summarize_request_body 유틸리티 함수 (main.py:138-143).
+/// 요청 본문 요약 함수.
 #[test]
 fn test_list_body() {
     let result = backend::main::summarize_request_body(&json!([1, 2, 3]));

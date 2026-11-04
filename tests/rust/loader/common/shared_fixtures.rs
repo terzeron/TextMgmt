@@ -138,13 +138,13 @@ pub fn blank_pdf() -> Vec<u8> {
     out
 }
 
-/// `Loader.path_prefix = book` 과 같다. 만화 prefix는 conftest 기본값이다.
+/// 책 prefix를 `book`으로 둔 설정. 만화 prefix는 테스트 기본값이다.
 pub fn config_with_book(book: &Path) -> Config {
     Config::new(book, tests_root().join("comics"))
 }
 
-/// conftest.py의 환경변수. 이 파일의 테스트는 프로세스 환경을 건드리지 않고 이 함수를 `Config::from_env`에 넘긴다.
-pub fn conftest_env(name: &str) -> Option<String> {
+/// 테스트용 환경 변수. 이 파일의 테스트는 프로세스 환경을 건드리지 않고 이 함수를 `Config::from_env`에 넘긴다.
+pub fn test_env(name: &str) -> Option<String> {
     match name {
         "TM_BOOK_DIR" => Some(tests_root().join("books").to_string_lossy().into_owned()),
         "TM_COMICS_DIR" => Some(tests_root().join("comics").to_string_lossy().into_owned()),
@@ -152,7 +152,7 @@ pub fn conftest_env(name: &str) -> Option<String> {
     }
 }
 
-/// conftest.py의 환경 변수 중 loader가 읽는 것. 색인 이름은 `_setup_loader_env`가 정한 값이다.
+/// 테스트용 환경 변수 중 loader가 읽는 것.
 pub fn env_for(book: &Path, comics: &Path) -> HashMap<String, String> {
     let mut env = HashMap::new();
     env.insert("TM_BOOK_DIR".to_owned(), path_str(book));
@@ -204,7 +204,7 @@ pub fn setup_loader_env(root: &Path) -> HashMap<String, String> {
 
 // ---- 공통 헬퍼 ------------------------------------------------------------------------------
 
-/// tests/conftest.py가 정하는 TM_BOOK_DIR / TM_COMICS_DIR 값.
+/// 테스트용 TM_BOOK_DIR / TM_COMICS_DIR 값.
 pub fn tests_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests")
 }

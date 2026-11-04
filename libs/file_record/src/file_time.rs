@@ -1,7 +1,7 @@
-//! 파일 생성 시각. 원본: `utils/file_time.py`.
+//! 파일 생성 시각.
 //!
 //! Linux에서는 statx의 btime(표준 라이브러리 `created()`가 같은 호출을 쓴다)을 먼저 보고, 없으면
-//! macOS의 birthtime, 그것도 없으면 ctime으로 내려간다. 시각은 Python `datetime.fromtimestamp`처럼
+//! macOS의 birthtime, 그것도 없으면 ctime으로 내려간다. 시각은
 //! 시간대 정보가 없는 로컬 시각이다.
 
 use std::io;
@@ -26,7 +26,7 @@ pub struct StatResult {
 impl StatResult {
     pub fn from_metadata(m: &std::fs::Metadata) -> Self {
         let ctime = m.ctime() as f64 + m.ctime_nsec() as f64 / 1e9;
-        // Python의 st_birthtime은 macOS 등에만 있고 Linux에는 없다.
+        // birthtime 필드는 macOS 등에만 있고 Linux에는 없다.
         #[cfg(target_os = "macos")]
         let birthtime_ns = m.created().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_nanos() as i128);
         #[cfg(not(target_os = "macos"))]
@@ -40,12 +40,12 @@ fn local_naive(sec: i64, micro: u32) -> NaiveDateTime {
     utc.with_timezone(&Local).naive_local()
 }
 
-/// Python 원본처럼 초와 나노초를 `f64`로 합친 뒤 `datetime.fromtimestamp` 방식으로 변환한다.
+/// 초와 나노초를 `f64`로 합친 뒤 로컬 시각으로 바꾼다.
 pub fn datetime_from_parts(sec: i64, nsec: u32) -> NaiveDateTime {
     datetime_from_float(sec as f64 + nsec as f64 / 1e9)
 }
 
-/// Python `datetime.fromtimestamp(float)`와 같은 변환.
+/// 유닉스 시각(초, 소수부는 마이크로초까지)을 시간대 없는 로컬 시각으로 바꾼다.
 pub fn datetime_from_float(ts: f64) -> NaiveDateTime {
     let whole = ts.trunc();
     let mut sec = whole as i64;
@@ -94,7 +94,7 @@ pub fn stat_created_time(st: &StatResult) -> NaiveDateTime {
     stat_created_time_with_source(st).0
 }
 
-/// Python `datetime.isoformat()`: 마이크로초가 0이면 소수부를 생략한다.
+/// ISO 8601 문자열. 마이크로초가 0이면 소수부를 생략한다.
 pub fn iso(dt: NaiveDateTime) -> String {
     let base = dt.format("%Y-%m-%dT%H:%M:%S").to_string();
     match dt.nanosecond() / 1000 {

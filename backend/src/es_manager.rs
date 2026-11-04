@@ -26,7 +26,7 @@ pub type PagedHits = (Vec<Hit>, i64, Option<Vec<Value>>);
 /// 커버 파일 한 페이지: ([(문서 id, 문서, 정렬값)], 전체 건수).
 pub type CoverFileHits = (Vec<(i64, Value, Vec<Value>)>, i64);
 
-/// 고수준 facade. Python `ESManager`의 공개 메서드에 대응한다.
+/// 고수준 facade. ES 검색·색인·관리 메서드를 묶는다.
 pub trait EsManagerApi: Send + Sync {
     fn create_index(&self) -> Result<Value, EsError> {
         Err(EsError::Unsupported)
@@ -144,7 +144,7 @@ pub struct ConnectOptions {
     pub ssl_show_warn: Option<bool>,
     /// ECK 같은 사설 CA 인증서 PEM 경로.
     pub ca_cert_path: Option<PathBuf>,
-    /// 사용할 색인 이름. Python은 `ESManager.index_name`으로 따로 들고 있었다.
+    /// 사용할 색인 이름.
     pub index: String,
 }
 
@@ -172,7 +172,7 @@ impl EsConnector for RealEsConnector {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ESManagerError {
-    /// 필수 환경 변수가 없다. Python은 `sys.exit(-1)`이다.
+    /// 필수 환경 변수가 없다.
     SystemExit(i32),
     Elasticsearch(EsError),
 }
@@ -202,7 +202,7 @@ const MAX_RESULT_WINDOW: i64 = 10_000;
 // 인자 묶음
 // ---------------------------------------------------------------------------
 
-/// `search_similar_docs`와 `_paged`의 인자. 기본값은 Python 시그니처와 같다.
+/// `search_similar_docs`와 `_paged`의 인자와 기본값.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SimilarDocsArgs {
     pub category: String,
@@ -309,8 +309,8 @@ impl UpdateFields {
 // 커서
 // ---------------------------------------------------------------------------
 
-/// ES sort 값을 클라이언트에 내보낼 불투명 커서 문자열로 만든다. Python `encode_category_cursor`와 같다
-/// (JSON을 URL-safe base64로 감싼다. 비ASCII는 `\u` 이스케이프 없이 UTF-8 그대로라 바이트열은 Python과 다를 수 있으나 서로 복원된다).
+/// ES sort 값을 클라이언트에 내보낼 불투명 커서 문자열로 만든다
+/// (JSON을 URL-safe base64로 감싼다. 비ASCII는 `\u` 이스케이프 없이 UTF-8 그대로다).
 pub fn encode_category_cursor(sort_values: &[Value]) -> String {
     URL_SAFE.encode(Value::Array(sort_values.to_vec()).to_string())
 }

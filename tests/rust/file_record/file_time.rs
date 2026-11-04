@@ -1,4 +1,4 @@
-//! 파일 생성 시각 테스트 (tests/test_file_time.py 이식).
+//! 파일 생성 시각 테스트.
 
 use std::io;
 use std::path::Path;
@@ -51,7 +51,7 @@ fn statx_btime_preserves_pre_epoch_timestamps() {
 fn microseconds_round_half_even_and_carry_into_the_next_second() {
     assert_eq!(datetime_from_parts(1_700_000_000, 123_456_499), local(1_700_000_000, 123_456));
     assert_eq!(datetime_from_parts(1_700_000_000, 123_456_500), local(1_700_000_000, 123_456));
-    // Python first combines seconds and nanoseconds as a float. At this magnitude,
+    // 초와 나노초를 float 하나로 합친다. 이 크기에서는,
     // the represented value is 0.1234574 seconds, so datetime.fromtimestamp yields 123457µs.
     assert_eq!(datetime_from_parts(1_700_000_000, 123_457_500), local(1_700_000_000, 123_457));
     assert_eq!(datetime_from_parts(1_700_000_000, 999_999_600), local(1_700_000_001, 0));
@@ -83,7 +83,7 @@ fn stat_created_time_keeps_platform_birthtime_priority() {
 }
 
 #[test]
-fn iso_helpers_drop_zero_microseconds_like_python() {
+fn iso_helpers_drop_zero_microseconds() {
     let stat = ctime_only(local_ts(naive(2025, 1, 2, 3, 4, 5)));
     assert_eq!(stat_created_time_iso(&stat), "2025-01-02T03:04:05");
     assert_eq!(path_created_time_iso_with(Path::new("b"), Some(&stat), &|_| None).unwrap(), "2025-01-02T03:04:05");

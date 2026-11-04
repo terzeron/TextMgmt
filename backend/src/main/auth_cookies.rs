@@ -1,4 +1,4 @@
-//! 인증 쿠키와 JSON 응답 도우미. Python `main.py`의 `_get_cookie_settings`, `_set_auth_cookies`, `CustomJSONResponse`에 대응한다.
+//! 인증 쿠키와 JSON 응답 도우미.
 //!
 //! 쿠키 속성은 환경 변수(`TM_FRONTEND_URL`, `TM_COOKIE_SECURE`, `TM_COOKIE_SAMESITE`)를 호출 시점에 읽어 정한다.
 
@@ -94,7 +94,7 @@ pub fn _clear_auth_cookies<R: ResponseHeaders>(response: &mut R) {
     headers.append(header::SET_COOKIE, set_cookie_value(REFRESH_COOKIE_NAME, "", secure, &samesite, 0));
 }
 
-/// Python `custom_jsonable_encoder`: 문자열을 건드리지 않는다(한글이 이스케이프되지 않는다). JSON 값은 이미 그 상태라 복사만 한다.
+/// 문자열을 건드리지 않는다(한글이 이스케이프되지 않는다). JSON 값은 이미 그 상태라 복사만 한다.
 pub fn custom_jsonable_encoder(value: &Value) -> Value {
     value.clone()
 }
@@ -140,7 +140,7 @@ impl Formatter for IndentedCompactColon {
     }
 }
 
-/// Python `CustomJSONResponse`: 들여쓰기 2칸, 구분자 `,`와 `:`, 한글 그대로.
+/// JSON 응답: 들여쓰기 2칸, 구분자 `,`와 `:`, 한글 그대로.
 pub struct CustomJSONResponse {
     pub status_code: u16,
     pub body: Vec<u8>,
@@ -195,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_json_matches_python_dumps_indent_2() {
+    fn custom_json_uses_two_space_indent() {
         let resp = CustomJSONResponse::new(json!({"k": "한글", "list": [1, {"x": []}], "empty": {}}));
         let expected = "{\n  \"k\":\"한글\",\n  \"list\":[\n    1,\n    {\n      \"x\":[]\n    }\n  ],\n  \"empty\":{}\n}";
         assert_eq!(String::from_utf8(resp.body.clone()).unwrap(), expected);

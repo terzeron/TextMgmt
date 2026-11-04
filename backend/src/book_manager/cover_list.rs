@@ -1,4 +1,4 @@
-//! 커버 목록과 표지 썸네일 응답. Python `get_cover_books_paged`, `get_cover`, `_extract_cover_thumbnail`, `normalize_cover_width`에 대응한다.
+//! 커버 목록과 표지 썸네일 응답.
 //!
 //! 정식 표지가 없는 책만 찾는 경로는 `uncovered` 모듈에 있다.
 

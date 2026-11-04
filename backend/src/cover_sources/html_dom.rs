@@ -1,4 +1,4 @@
-//! BeautifulSoup `html.parser`로 하던 가벼운 탐색만 담은 작은 DOM. 표지 후보 추출이 쓰는 질의만 지원한다.
+//! 표지 후보 추출이 쓰는 가벼운 탐색만 담은 작은 DOM.
 
 const VOID_ELEMENTS: [&str; 14] = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
 

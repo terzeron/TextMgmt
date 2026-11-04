@@ -1,12 +1,11 @@
-//! 온라인 서점(Yes24·알라딘·교보문고) 검색. 원본: `backend/bookstore.py`의 `AbstractBookstore`와 세 구현.
+//! 온라인 서점(Yes24·알라딘·교보문고) 검색 URL 조립과 HTML 파싱.
 //!
 //! [`stores`]는 backend가 쓰는 전체 서점(리디북스·네이버·문피아·조아라·웹툰 포함) 구현이다. 세 서점의 URL 조립과 파싱은 이 최상위 모듈을 재사용한다.
 //!
 //! 이 모듈은 검색 URL을 만들고, 검색 페이지에서 상세 페이지 링크를 뽑고(`extract_search_links`),
 //! 상세 페이지에서 제목·저자·카테고리·ISBN을 뽑는다(`extract_book_info`). 네트워크 요청과 검색 순서는 [`stores`]가 맡는다.
 //!
-//! 원본과 다른 점: BeautifulSoup `html.parser` 대신 html5ever(`scraper`)로 파싱한다. 정상 HTML에서는 같고
-//! 심하게 깨진 HTML에서는 트리가 다를 수 있다.
+//! HTML은 html5ever(`scraper`)로 파싱한다. 심하게 깨진 HTML은 브라우저처럼 트리를 고쳐 읽는다.
 
 pub mod store_clients;
 
@@ -62,7 +61,7 @@ fn attr<'a>(el: &ElementRef<'a>, name: &str) -> Option<&'a str> {
     el.value().attr(name)
 }
 
-/// `urllib.parse.quote(s)`: 영문·숫자·`_.-~/`만 그대로 둔다.
+/// 퍼센트 인코딩. 영문·숫자·`_.-~/`만 그대로 둔다.
 fn quote(value: &str) -> String {
     let mut out = String::new();
     for b in value.bytes() {
@@ -242,7 +241,7 @@ fn yes24_info(doc: &Html, html: &str) -> BookInfo {
 /// "관련분류" 글자가 든 문자열(주석 포함)의 부모 안에서 카테고리 링크를 모아 `a > b` 꼴로 만든다.
 fn yes24_category(doc: &Html) -> String {
     for node in doc.tree.nodes() {
-        // BeautifulSoup의 문자열 검색은 주석과 스크립트 안 글자도 포함한다. 실제 페이지는 주석 안 "관련분류 시작" 뒤에 링크가 있다.
+        // 주석과 스크립트 안 글자까지 검색한다. 실제 페이지는 주석 안 "관련분류 시작" 뒤에 링크가 있다.
         let text: &str = match node.value() {
             Node::Text(text) => text,
             Node::Comment(comment) => comment,

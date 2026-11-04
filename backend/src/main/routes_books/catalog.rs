@@ -155,7 +155,7 @@ async fn search(
     let mut excluded: Vec<String> = query.exclude_categories.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
     let hidden = hidden(&deps, &payload, &uri)?;
     if !hidden.is_empty() {
-        // Python dict.fromkeys: 숨긴 카테고리를 합칠 때만 중복을 제거한다.
+        // 숨긴 카테고리를 합칠 때만 처음 순서를 지키며 중복을 제거한다.
         let mut merged = Vec::new();
         for category in excluded.into_iter().chain(hidden) {
             if !merged.contains(&category) {

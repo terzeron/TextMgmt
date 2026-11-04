@@ -32,8 +32,7 @@ fn hnc_codes_map_by_range() {
 }
 
 #[test]
-fn every_hnc_code_matches_the_python_conversion_table() {
-    // Python golden: every u16 passed through _hnc_to_unicode; lone surrogates
+fn every_hnc_code_matches_the_conversion_table() {
     // are represented by the Rust parser's internal sentinel before UTF-8 hashing.
     let mut hash = 0xcbf29ce484222325u64;
     for code in 0..=u16::MAX {
@@ -51,7 +50,7 @@ fn modern_hangul_syllables_compose() {
 }
 
 #[test]
-fn partial_and_old_hangul_follow_the_python_branches() {
+fn partial_and_old_hangul_follow_the_jamo_branches() {
     // 낱자: 초성만, 중성만, 종성만.
     assert!(hnc_to_unicode(0x8000 | (2 << 10) | (2 << 5) | 1).chars().count() <= 1);
     assert!(hnc_to_unicode(0x8000 | (1 << 10) | (3 << 5) | 1).chars().count() <= 1);

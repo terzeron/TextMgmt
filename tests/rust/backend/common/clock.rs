@@ -63,7 +63,7 @@ impl Clock for FakeClock {
     }
 }
 
-/// Python `threading.Event`. 스레드 사이 순서를 맞출 때 쓴다.
+/// 한 번 켜면 계속 켜진 이벤트. 스레드 사이 순서를 맞출 때 쓴다.
 pub struct Event {
     flag: Mutex<bool>,
     condvar: Condvar,

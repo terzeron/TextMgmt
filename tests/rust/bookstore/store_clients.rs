@@ -1,20 +1,19 @@
-//! 원본: tests/test_bookstore.py
 //!
-//! 서점 크롤러(`backend/bookstore.py`) 테스트. HTML 파싱, 검색 우선순위(ISBN > 제목+저자 > 제목),
+//! 서점 크롤러 테스트. HTML 파싱, 검색 우선순위(ISBN > 제목+저자 > 제목),
 //! 검색 결과 캐시, 웹툰 서점 JSON API 응답 처리를 확인한다.
 //! 서점 HTTP는 `sysdeps::HttpSession` 대역으로 갈아 끼운다(docs/rust-test-seams.md 3.7. libs/bookstore의 `Fetcher` 대역과 같은 방식).
 //!
-//! 가정한 API (Python 이름을 그대로 쓴다. `_`로 시작하는 비공개 메서드도 같다):
+//! 가정한 API:
 //! - `bookstore::store_clients`
 //!   - `type SearchRow = (String, String, String, String, String, String)` = `(title, author, category, detail_url, search_url, isbn)`
 //!   - `const MAX_RESULTS: usize = 4` (`AbstractBookstore.MAX_RESULTS`)
-//!   - `fn _truncate_title(title: &str) -> String` (Python의 정적/인스턴스 호출을 모두 이 함수로 옮긴다)
+//!   - `fn _truncate_title(title: &str) -> String`
 //!   - `sysdeps::{HttpSession, HttpResponse, HttpError}` (구 `bookstore::{Session, HttpResponse}`)
 //!     - `trait HttpSession: Send + Sync { fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError>; }` (`requests.Session.get` 대응. 예외는 `Err`)
 //!     - `HttpResponse::from_text(status: u16, text: &str) -> HttpResponse` (fake 생성용. `.text()`/`.json()`은 본문을 소비한다)
 //!     - `HttpError::Other(String)` (문서에 변형 목록이 없어 `EsError::Other`와 같은 모양으로 가정한 것)
 //!   - `trait BookstoreSearch { fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String); }`
-//!   - `trait AbstractBookstore`: soup 인자는 BeautifulSoup 대신 HTML 문자열(`&str`)이다. 기본값이 있는 메서드는 `[기본]`으로 표시한다.
+//!   - `trait AbstractBookstore`: soup 인자는 HTML 문자열(`&str`)이다. 기본값이 있는 메서드는 `[기본]`으로 표시한다.
 //!     - 필수: `base_url(&self) -> &str`, `verbose(&self) -> bool`, `session(&self) -> &dyn HttpSession`,
 //!       `build_search_url(&self, keyword: &str) -> String`, `extract_search_links(&self, soup: &str) -> Vec<String>`,
 //!       `extract_book_info(&self, soup: &str) -> Value` (`{title, author, category, isbn}`)
@@ -40,7 +39,7 @@
 //!       `NaverShoppingBookstore::extract_book_info_soup`
 //!   - `sysdeps::FsOps` (구 `StoreFs`. 이 파일은 `disk_free`와 `write`만 쓴다. 나머지 메서드는 trait 기본 구현), `Yes24Bookstore::with_fs(self, Arc<dyn FsOps>) -> Self`
 //!     (`shutil.disk_usage`와 `open` 대응. `write`의 `data`는 UTF-8 HTML 바이트)
-//!   - 추상 메서드 본문(Python은 `None`): `abstract_build_search_url(&dyn AbstractBookstore, &str) -> Option<String>`,
+//!   - 추상 메서드 본문: `abstract_build_search_url(&dyn AbstractBookstore, &str) -> Option<String>`,
 //!     `abstract_extract_search_links(&dyn AbstractBookstore, &str) -> Option<Vec<String>>`,
 //!     `abstract_extract_book_info(&dyn AbstractBookstore, &str) -> Option<Value>`
 
@@ -159,7 +158,7 @@ fn urls(calls: &Arc<Mutex<Vec<Call>>>) -> Vec<String> {
 }
 
 /// 서브클래스를 흉내 내는 테스트 서점 구조체를 만든다. `$over`에 넘긴 메서드만 기본 구현 대신 덮어쓴다.
-/// monkeypatch로 인스턴스 메서드를 바꾸던 곳은 이 덮어쓰기와 훅 필드로 옮긴다.
+/// 인스턴스 메서드를 바꾸던 곳은 이 덮어쓰기와 훅 필드로 옮긴다.
 macro_rules! dummy_store {
     ($name:ident { $($over:item)* }) => {
         #[allow(dead_code)]
@@ -447,7 +446,7 @@ fn test_aladin_extract() {
     assert_eq!(info["title"], "Title");
 }
 
-// ---- merged from test_bookstore_extra_branches.py ----
+// ---- 추가 분기 ----
 
 #[test]
 fn test_yes24_fallback_links_and_no_category_isbn() {
@@ -617,7 +616,7 @@ fn test_save_and_load_html_cache() {
 
 #[test]
 fn test_base_build_isbn_search_and_empty_search() {
-    // 기본 `search_by_isbn`은 실제 요청을 보내므로 세션 대역이 실패를 돌려준다(Python은 네트워크 실패를 삼킨다).
+    // 기본 `search_by_isbn`은 실제 요청을 보내므로 세션 대역이 실패를 돌려준다.
     let store = Plain::new(Kind::BaseOnly).with_verbose(true);
     assert_eq!(store.build_isbn_search_url("123"), store.build_search_url("123"));
     let (results, keyword, method) = store.search("", "", "");
@@ -1338,7 +1337,7 @@ fn test_naver_shopping_soup_title_and_div_fallbacks() {
     assert_eq!(store.extract_book_info_soup(&div)["title"], "Fallback title");
 }
 
-// ---- merged from test_bookstore_unit.py ----
+// ---- 단위 사례 ----
 
 #[test]
 fn test_truncate_title() {
@@ -1432,9 +1431,7 @@ fn test_save_and_load_html_from_tmp() {
     assert_eq!(loaded.as_deref(), Some(html));
 }
 
-// ---- merged from test_bookstore_unit.py (above) ----
-
-// ---- merged from test_bookstore_parsing.py ----
+// ---- 파싱 ----
 
 #[test]
 fn test_truncate_title_separators() {
@@ -2357,7 +2354,7 @@ fn test_toptoon_lowercase_follows_rust_unicode_tables() {
 }
 
 #[test]
-fn test_toptoon_search_uses_python_request_timeouts() {
+fn test_toptoon_search_uses_request_timeouts() {
     let mut store = toptoon(false);
     let (fake, calls) =
         session(|url, _| if url.starts_with("https://toptoon.com/hashtag") { http(200, &format!("<script>fileUrl: '{CATALOG_URL}',</script>"), Value::Null) } else { http(200, "", json!([])) });
@@ -2560,9 +2557,8 @@ fn test_joara_log_without_key_keeps_message() {
     assert!(logs.text().contains("boom"));
 }
 
-/// Python `uuid.uuid5(uuid.NAMESPACE_URL, url)`와 같은 이름이어야 기존 캐시 파일을 이어 쓴다.
 #[test]
-fn test_cache_file_name_matches_python_uuid5() {
+fn test_cache_file_name_uses_uuid5() {
     assert_eq!(bookstore::store_clients::cache_file_name("https://example.com/detail/1"), "2c75ebbd-c7d8-5945-b588-d1286cf77aee.html");
     assert_eq!(bookstore::store_clients::cache_file_name("http://example.com/detail/123"), "0a5f1021-24ca-5315-aa3e-96a26387cd63.html");
     assert_eq!(bookstore::store_clients::cache_file_name(""), "1b4db7eb-4057-5ddf-91e0-36dec72071f5.html");

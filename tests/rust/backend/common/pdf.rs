@@ -91,14 +91,14 @@ pub fn make_blank_pdf(path: &Path, num_pages: usize) {
     b.save(path);
 }
 
-/// 이미지 없는 빈 한 쪽짜리 PDF. Python `PdfWriter().add_blank_page(width, height)`. cover_fixtures의 `write_blank_pdf`.
+/// 이미지 없는 빈 한 쪽짜리 PDF. cover_fixtures의 `write_blank_pdf`.
 pub fn write_blank_pdf(path: &Path, width: i64, height: i64) {
     let mut b = PdfBuilder::new();
     b.add_page(width, height);
     b.save(path);
 }
 
-/// 이미지 한 장당 한 쪽인 PDF. 쪽 크기는 픽셀 크기와 같다. Python `Image.save(path, "PDF", resolution=72)`. cover_fixtures의 `write_image_pdf`.
+/// 이미지 한 장당 한 쪽인 PDF. 쪽 크기는 픽셀 크기와 같다(72dpi). cover_fixtures의 `write_image_pdf`.
 pub fn write_image_pdf(path: &Path, pages: &[RgbImage]) {
     let mut b = PdfBuilder::new();
     for image in pages {

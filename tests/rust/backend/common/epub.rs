@@ -258,7 +258,7 @@ pub fn make_epub(path: &Path, spec: &EpubSpec) -> PathBuf {
 
 // ---- OPF/XML 편집 ----------------------------------------------------------------------------
 
-/// `//*[local-name()=local]` 중 `attr`(이름, 값)을 만족하는 요소 수. Python `package.xpath('count(...)')`.
+/// `//*[local-name()=local]` 중 `attr`(이름, 값)을 만족하는 요소 수.
 pub fn count_elements(xml: &[u8], local: &str, attr: Option<(&str, &str)>) -> usize {
     let text = std::str::from_utf8(xml).unwrap();
     let doc = roxmltree::Document::parse(text).unwrap();
@@ -272,7 +272,7 @@ pub fn attr_of_element_with_id(xml: &[u8], local: &str, id: &str, attr: &str) ->
     doc.descendants().find(|n| n.is_element() && n.tag_name().name() == local && n.attribute("id") == Some(id)).and_then(|n| n.attribute(attr)).unwrap_or("").to_string()
 }
 
-/// `<opf:manifest>` 같은 요소 하나를 통째로 지운다. Python `package.remove(package.find(...))`.
+/// `<opf:manifest>` 같은 요소 하나를 통째로 지운다.
 pub fn remove_element(xml: &[u8], local: &str) -> Vec<u8> {
     let text = std::str::from_utf8(xml).unwrap();
     let open = format!("<{local}");
@@ -283,7 +283,7 @@ pub fn remove_element(xml: &[u8], local: &str) -> Vec<u8> {
     format!("{}{}", &text[..start], &text[end..]).into_bytes()
 }
 
-/// `</parent>` 앞에 조각을 넣는다. Python `etree.SubElement(parent, ...)`.
+/// `</parent>` 앞에 조각을 넣는다.
 pub fn append_child(xml: &[u8], parent: &str, fragment: &str) -> Vec<u8> {
     let text = std::str::from_utf8(xml).unwrap();
     let close = format!("</{parent}>");

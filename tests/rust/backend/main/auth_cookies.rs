@@ -130,13 +130,13 @@ fn test_custom_jsonable_encoder_preserves_strings() {
     assert_eq!(encoded["list"][0], "테스트");
 }
 
-/// 원격 호스트는 False (main.py:148).
+/// 원격 호스트는 false다.
 #[test]
 fn test_is_local_frontend_origin_remote_returns_false() {
     assert!(!backend::main::is_local_frontend_origin(Some("https://remote.example.com")));
 }
 
-/// localhost 계열은 True (main.py:154-156).
+/// localhost 계열은 true다.
 #[test]
 fn test_is_local_frontend_origin_localhost_returns_true() {
     assert!(backend::main::is_local_frontend_origin(Some("http://localhost:5173")));
@@ -144,7 +144,7 @@ fn test_is_local_frontend_origin_localhost_returns_true() {
     assert!(backend::main::is_local_frontend_origin(Some("http://[::1]:3000")));
 }
 
-/// 빈 값/None 은 False (main.py:152-153).
+/// 빈 값/없음은 false다.
 #[test]
 fn test_is_local_frontend_origin_empty_returns_false() {
     assert!(!backend::main::is_local_frontend_origin(None));

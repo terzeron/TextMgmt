@@ -1,4 +1,4 @@
-//! 표지 전용 서점 검색. 이미지 bytes는 별도 요청에서만 내려받는다. Python `backend/cover_sources.py`에 대응한다.
+//! 표지 전용 서점 검색. 이미지 bytes는 별도 요청에서만 내려받는다.
 //!
 //! 네트워크·시계·파일시스템은 `sysdeps`(`HttpSession`, `Clock`, `FsOps`)로 받는다. 설계: docs/rust-test-seams.md 3.1, 3.5, 3.7, 3.8.
 
@@ -22,7 +22,7 @@ use htmlkit::url_parser::{Netloc, quote, urlencode, urljoin, urlsplit};
 
 pub const STORE_NAMES: [&str; 8] = ["yes24", "aladin", "kyobo", "naver", "ridi", "munpia", "naverseries", "joara"];
 
-/// Python `STORES`의 키(서점 이름 순서).
+/// 지원하는 서점 이름(검색 순서).
 pub const STORES: &[&str] = &STORE_NAMES;
 
 /// 실제 서점 페이지/API에서 확인한 origin과 CDN만 허용한다.
@@ -40,7 +40,7 @@ pub fn store_hosts(store: &str) -> &'static [&'static str] {
     }
 }
 
-/// 입력이나 서점 응답이 잘못됐을 때(Python `ValueError`).
+/// 입력이나 서점 응답이 잘못됐다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValueError(pub String);
 
@@ -770,7 +770,7 @@ impl SearchHooks {
         self
     }
 
-    /// 이 설정의 세션과 URL 검증으로 `url`을 받는다(Python `fetch_bytes`). 취소 함수도 이 설정의 것을 쓴다.
+    /// 이 설정의 세션과 URL 검증으로 `url`을 받는다. 취소 함수도 이 설정의 것을 쓴다.
     pub fn fetch_bytes(&self, store: &str, url: &str, max_bytes: Option<usize>) -> Result<Vec<u8>, SearchError> {
         let session = (self.session_factory)(store);
         fetch_bytes_cancellable(store, url, session.as_ref(), max_bytes, &*self.validate, &|| (self.cancel)())
@@ -900,7 +900,7 @@ pub fn search_candidates_with(store: &str, metadata: &Value, hooks: &SearchHooks
     Ok(json!({"status": status, "search_url": search_url, "candidates": results.into_iter().take(4).collect::<Vec<_>>()}))
 }
 
-/// 서점의 검색 화면 URL(Python `STORES[store](verbose=False).build_search_url(keyword)`). 모르는 서점이면 빈 문자열이다.
+/// 서점의 검색 화면 URL. 모르는 서점이면 빈 문자열이다.
 pub fn build_search_url(store: &str, keyword: &str) -> String {
     default_client(store).map(|client| client.build_search_url(keyword)).unwrap_or_default()
 }

@@ -410,11 +410,11 @@ mod require_admin {
     }
 }
 
-// ---- merged from test_auth_env_guard.py ----
+// ---- 환경 변수 누락 검사 ----
 
 #[test]
 fn test_auth_requires_jwt_secret_os_environ() {
-    // Python은 os.environ에서 직접 지우고 모듈을 다시 import한다. Rust는 환경 변수를 지우고 설정 로더를 호출한다.
+    // 환경 변수를 지우고 설정 로더를 다시 부른다.
     let mut env = fixture();
     env.remove("TM_JWT_SECRET");
     let result = backend::auth_service::load_jwt_secret(&process_env);

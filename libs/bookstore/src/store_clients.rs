@@ -1,4 +1,4 @@
-//! 온라인 서점 검색. 원본: `backend/bookstore.py`.
+//! 온라인 서점 검색.
 //!
 //! 서점마다 검색 URL, 검색 결과 링크, 상세 페이지 정보 추출이 다르다. 공통 흐름(ISBN > 제목+저자 > 제목 우선순위,
 //! 상세 페이지 병렬 수집, 임시 디렉터리 HTML 캐시)은 [`AbstractBookstore`]의 기본 메서드에 있다.
@@ -11,9 +11,9 @@
 //! - 조아라 API 키는 소스에 두지 않는다. 환경 변수 `TM_JOARA_API_KEY`에서 읽고, 없으면 빈 문자열이다.
 //!   로그와 오류 문장에는 키 값을 남기지 않는다.
 //!
-//! 원본과 다른 점
-//! - BeautifulSoup `html.parser` 대신 html5ever(`scraper`)로 파싱한다. 정상 HTML에서는 같다.
-//!   `<li><li>` 처럼 html5ever가 형제로 펴는 깨진 중첩은 트리가 다르다(리디북스 헤더 저자는 비어 있지 않은 첫 `li`를 쓴다).
+//! 구현 메모
+//! - HTML은 html5ever(`scraper`)로 파싱한다.
+//!   `<li><li>` 처럼 html5ever가 형제로 펴는 깨진 중첩은 형제로 읽는다(리디북스 헤더 저자는 비어 있지 않은 첫 `li`를 쓴다).
 //! - 상세 페이지용 별도 세션과 쿠키 복사는 없다. 주입한 같은 세션을 스레드에서 함께 쓴다.
 //! - 요청별 timeout(10초, 탑툰 목록 20초)은 `HttpSession::get`에 자리가 없어서 세션 구현이 정한다.
 //! - 알라딘·교보문고의 검색 링크 상한은 crate 최상위의 [`crate::MAX_RESULTS`](4)까지다. `max_results`가 더 커도 4개 넘게 뽑지 못한다.
@@ -124,7 +124,7 @@ fn title_string(doc: &Html) -> Option<String> {
     only.value().as_text().map(|t| t.to_string()).filter(|t| !t.is_empty())
 }
 
-/// `urllib.parse.quote(s, safe=...)`: 영문·숫자·`_.-~`와 `safe`에 든 글자만 그대로 둔다.
+/// 퍼센트 인코딩. 영문·숫자·`_.-~`와 `safe`에 든 글자만 그대로 둔다.
 fn quote(value: &str, safe: &str) -> String {
     let mut out = String::new();
     for b in value.bytes() {
@@ -149,7 +149,7 @@ fn truthy(value: Option<&Value>) -> bool {
     })
 }
 
-/// Python `str(value)` 대응. 문자열은 그대로, 없음은 빈 문자열, 나머지는 JSON 표기다.
+/// JSON 값의 글자 표기. 문자열은 그대로, 없음은 빈 문자열, 나머지는 JSON 표기다.
 fn json_text(v: Option<&Value>) -> String {
     match v {
         None | Some(Value::Null) => String::new(),
@@ -201,7 +201,7 @@ pub fn _truncate_title(title: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// 캐시 파일 이름: Python `uuid.uuid5(uuid.NAMESPACE_URL, url)`와 같은 이름을 만든다
+// 캐시 파일 이름: URL 이름공간 UUID v5(`NAMESPACE_URL`, url)
 // ---------------------------------------------------------------------------
 
 fn sha1(data: &[u8]) -> [u8; 20] {
@@ -266,7 +266,7 @@ pub fn cache_file_name(url: &str) -> String {
     format!("{}-{}-{}-{}-{}.html", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
 }
 
-/// 조아라가 요구하는 `deviceuid`. 값은 검증하지 않는다. 호출마다 새로 만든다(Python `uuid4().hex`).
+/// 조아라가 요구하는 `deviceuid`. 값은 검증하지 않는다. 호출마다 새 UUID v4(하이픈 없는 16진)를 만든다.
 fn random_hex32() -> String {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let mut out = String::with_capacity(32);
@@ -445,7 +445,7 @@ impl HttpSession for UreqHttpSession {
     }
 }
 
-/// BeautifulSoup 객체 대역. 조회가 예외를 던지는 soup(`Err`)을 만들 때 쓴다.
+/// 파싱한 HTML 대역. 조회가 실패하는 문서(`Err`)를 만들 때 쓴다.
 /// 반환 문자열은 태그 안쪽 텍스트다.
 pub trait SoupSource {
     fn find(&self, name: &str) -> Result<Option<String>, String>;
@@ -458,7 +458,7 @@ pub trait SoupSource {
 // AbstractBookstore
 // ---------------------------------------------------------------------------
 
-/// 서점 검색 공통 인터페이스. soup 인자는 BeautifulSoup 대신 HTML 문자열이다.
+/// 서점 검색 공통 인터페이스. soup 인자는 HTML 문자열이다.
 pub trait AbstractBookstore: Sync {
     fn base_url(&self) -> &str;
     fn verbose(&self) -> bool;
@@ -897,7 +897,7 @@ mod utility_tests {
     use super::*;
 
     #[test]
-    fn truthy_matches_python_scalar_and_container_values() {
+    fn truthy_treats_empty_and_zero_values_as_false() {
         assert!(!truthy(None));
         assert!(!truthy(Some(&Value::Null)));
         assert!(!truthy(Some(&json!(false))));

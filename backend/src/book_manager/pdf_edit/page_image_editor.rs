@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::direct_cover_url::ImageFetcher;
 use crate::epub_cover::{MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS};
-use crate::image_edit::{Rect, crop_pil};
+use crate::image_edit::{Rect, crop_rotated};
 
 pub(super) struct Edits {
     remove: BTreeSet<i64>,
@@ -236,7 +236,7 @@ fn crop_page(pdf: &mut Document, id: ObjectId, n: i64, rect: Rect) -> Result<(),
     let original_space = stream.dict.get(b"ColorSpace").ok().cloned();
     let one_bit = stream.dict.get(b"BitsPerComponent").and_then(Object::as_i64).ok() == Some(1) && rect.4.abs() < 0.01 && matches!(source, DynamicImage::ImageLuma8(_));
     let (w, h) = (source.width(), source.height());
-    let cropped = crop_pil(&source, rect).map_err(|e| fail(&e.to_string()))?;
+    let cropped = crop_rotated(&source, rect).map_err(|e| fail(&e.to_string()))?;
     let (ow, oh) = (cropped.width(), cropped.height());
     let is_jpeg = stream.filters().ok().is_some_and(|filters| filters == [b"DCTDecode".as_slice()]);
     let grayscale = matches!(cropped, DynamicImage::ImageLuma8(_));

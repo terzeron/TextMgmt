@@ -154,7 +154,7 @@ mod member_path {
     use backend::epub_cover::member_path;
 
     #[test]
-    fn member_path_resolves_like_python() {
+    fn member_path_resolves_relative_hrefs() {
         assert_eq!(member_path("OPS/Text", "../a%20b.jpg"), "OPS/a b.jpg");
         assert_eq!(member_path("OPS", "https://example.com/a.jpg"), "");
         assert_eq!(member_path("OPS", "../../x.jpg"), "");
@@ -254,7 +254,7 @@ mod image_page_cropping {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("svg.epub");
         svg_epub(&path, (300, 400), "표지", false);
-        // Python은 `deletes=[{"idref": "c"}] and ["c"]`를 넘긴다. 이 식은 ["c"]다.
+        // `deletes`에 idref "c" 하나를 넘긴다.
         let result = edit_images(&path, &revision(&path), &tmp.path().join("trash"), EditImages { deletes: vec![json!("c")], ..EditImages::default() }).unwrap();
         assert!(result["revision"].as_str().is_some_and(|r| !r.is_empty()), "{result}");
     }
@@ -451,7 +451,7 @@ fn test_saved_cover_is_at_most_600_pixels_wide_and_keeps_aspect_ratio() {
         drop(archive);
         let (saved_width, saved_height) = image_size(&read_zip_entry(&path, &member));
         assert_eq!(saved_width, width.min(600), "{width}x{height}");
-        // Python round()는 .5를 짝수로 보내지만 이 값들은 모두 정수로 나누어떨어진다.
+        // 이 값들은 모두 정수로 나누어떨어져 반올림 방식과 상관없다.
         assert_eq!(saved_height, (height as f64 * width.min(600) as f64 / width as f64).round() as u32, "{width}x{height}");
     }
 }

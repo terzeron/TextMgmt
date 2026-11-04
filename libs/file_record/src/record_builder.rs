@@ -80,7 +80,7 @@ pub fn detect_file_type_with(path: &Path, declared: &str, inspect: Option<&FileI
     None
 }
 
-/// Python `datetime.isoformat()`: 마이크로초가 0이면 소수부를 생략한다.
+/// ISO 8601 문자열. 마이크로초가 0이면 소수부를 생략한다.
 pub fn now_iso() -> String {
     iso(chrono::Local::now().naive_local())
 }

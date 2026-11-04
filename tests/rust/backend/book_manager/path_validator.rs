@@ -122,7 +122,7 @@ fn test_is_indexable_file_path_hidden() {
 
 #[test]
 fn test_iter_category_indexable_files_branches_shadowed() {
-    // 원본에는 같은 이름의 함수가 뒤에 하나 더 있어 Python에서는 이 정의가 가려진다(pytest는 뒤의 것만 실행한다).
+    // 같은 이름의 함수가 뒤에 하나 더 있어 이 정의는 쓰이지 않는다.
     // Rust는 한 모듈에 같은 이름을 둘 수 없어 앞쪽 정의에 _shadowed를 붙였다.
     // Lines 1350-1353, 1359-1360
     let tmp = tmp_dir();
@@ -286,7 +286,7 @@ fn test_clean_empty_parent_dirs_accepts_str_stop_dir() {
     let child = stop_dir.join("series");
     fs::create_dir_all(&child).unwrap();
 
-    // Python은 str을 넘긴다. Rust에서는 &str 경로도 `AsRef<Path>`로 받는다고 가정한다.
+    // `&str` 경로도 `AsRef<Path>`로 받는다.
     make_manager(tmp.path(), &FakeEsManager::new()).clean_empty_parent_dirs(&child, Path::new(stop_dir.to_str().unwrap()));
 
     assert!(stop_dir.exists());

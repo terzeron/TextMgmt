@@ -28,7 +28,7 @@ use image::ImageFormat;
 use serde_json::{Value, json};
 use zip::CompressionMethod;
 
-/// 항목마다 `keys`의 값을 배열로 묶는다. Python `[(item[a], item[b]) for item in items]`.
+/// 항목마다 `keys`의 값을 배열로 묶는다.
 fn pick(items: &Value, keys: &[&str]) -> Vec<Value> {
     items.as_array().unwrap().iter().map(|item| Value::Array(keys.iter().map(|k| item[*k].clone()).collect())).collect()
 }

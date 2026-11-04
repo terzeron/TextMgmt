@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// 요청 본문 검증 오류. `Display`는 pydantic의 오류 종류(`string_too_long` 등)를 담는다.
+/// 요청 본문 검증 오류. `Display`는 오류 종류(`string_too_long` 등)를 담는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
     pub field: &'static str,

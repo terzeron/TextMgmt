@@ -16,7 +16,7 @@ use std::os::unix::fs::MetadataExt;
 /// 문서 색인 실패. 이동·삭제 롤백은 두 경우를 다른 문구로 보고한다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddBookError {
-    /// ES 호출 자체가 실패했다(Python에서는 예외가 올라가던 경우).
+    /// ES 호출 자체가 실패했다.
     Exception(String),
     /// ES는 응답했지만 문서 하나를 넣지 못했다.
     Rejected(String),
@@ -260,7 +260,7 @@ impl BookManager {
         Ok((reader, total as i64))
     }
 
-    /// `_get_cached_pdf_reader`. 읽지 못하면 panic한다(Python은 예외가 올라간다). 서비스 코드는 `try_get_cached_pdf_reader`를 쓴다.
+    /// `_get_cached_pdf_reader`. 읽지 못하면 panic한다. 서비스 코드는 `try_get_cached_pdf_reader`를 쓴다.
     pub fn _get_cached_pdf_reader(&self, file_path: &Path) -> (Arc<PdfReaderHandle>, i64) {
         self.try_get_cached_pdf_reader(file_path).unwrap_or_else(|e| panic!("PDF를 읽지 못했다: {e}"))
     }

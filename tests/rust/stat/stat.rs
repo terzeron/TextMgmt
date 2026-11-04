@@ -1,4 +1,4 @@
-//! 통계 카운터 테스트 (tests/test_stat.py 이식).
+//! 통계 카운터 테스트.
 
 use std::sync::Arc;
 use std::thread;
@@ -18,7 +18,7 @@ fn divide_handles_zero() {
 }
 
 #[test]
-fn print_lists_every_section_with_python_formats() {
+fn print_lists_every_section_with_fixed_formats() {
     let s = Stat::new();
     s.set_value("text_count", 1.0).unwrap();
     s.set_value("text_total_time", 0.5).unwrap();
@@ -64,7 +64,7 @@ fn pdf_stages_are_sorted_and_count_outcomes() {
 }
 
 #[test]
-fn add_and_set_value_work_by_python_attribute_name() {
+fn add_and_set_value_work_by_counter_name() {
     let s = Stat::new();
     s.add("text_count", 1.0).unwrap();
     s.add("text_count", 2.0).unwrap();
@@ -83,7 +83,7 @@ fn add_requires_an_existing_counter_attribute() {
 }
 
 #[test]
-fn set_value_creates_python_style_custom_counter_attributes() {
+fn set_value_creates_custom_counters() {
     let s = Stat::new();
     s.set_value("custom_metric", 2.5).unwrap();
     assert_eq!(s.get("custom_metric").unwrap(), 2.5);
@@ -111,7 +111,7 @@ fn add_is_thread_safe() {
 }
 
 #[test]
-fn the_global_instance_is_shared_like_the_python_class_attributes() {
+fn the_global_instance_is_shared() {
     let before = Stat::global().get("image_count").unwrap();
     Stat::global().add("image_count", 1.0).unwrap();
     assert_eq!(Stat::global().get("image_count").unwrap(), before + 1.0);

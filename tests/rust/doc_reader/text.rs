@@ -74,7 +74,7 @@ fn undecodable_garbage_falls_back_to_replacement_and_a_missing_file_reports_an_e
 }
 
 #[test]
-fn decode_follows_python_codec_semantics() {
+fn decode_follows_strict_and_replace_codec_semantics() {
     assert_eq!(decode(Enc::Utf16, b"\xff\xfea\0", false).as_deref(), Some("a"));
     assert_eq!(decode(Enc::Utf16, b"\xfe\xff\0a", false).as_deref(), Some("a"));
     assert_eq!(decode(Enc::Utf16, b"a\0", false).as_deref(), Some("a"), "BOM이 없으면 리틀엔디언");
@@ -152,7 +152,7 @@ fn western_single_byte_text_is_converted_via_cp1252_not_cp949() {
 }
 
 #[test]
-fn corpus_txt_matches_python() {
+fn corpus_txt_matches_the_recorded_summaries() {
     let root = corpus::books_root();
     for rec in corpus::records(include_str!("fixtures/corpus_txt.jsonl")) {
         let path = rec["path"].as_str().unwrap();

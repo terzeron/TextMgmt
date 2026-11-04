@@ -1,6 +1,6 @@
 [package]
 name = "es_client"
-description = "Elasticsearch REST 클라이언트 (backend/es_manager.py ESManager 중 검색 부분의 Rust 대응)"
+description = "Elasticsearch REST 클라이언트(검색·색인·저수준 전송)"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

@@ -310,7 +310,7 @@ pub fn sample_files(dir: &Path) -> Vec<(String, Option<PathBuf>)> {
         .collect()
 }
 
-/// Python `Loader.get_file_list` 대응. 비재귀 모드는 각 하위 디렉터리의 첫 파일과 직속 파일을 반환한다.
+/// 읽을 파일 목록. 비재귀 모드는 각 하위 디렉터리의 첫 파일과 직속 파일을 반환한다.
 pub fn get_file_list(path: &Path, recursive: bool, num_files: Option<usize>) -> Vec<PathBuf> {
     let mut files = if path.is_dir() {
         if recursive {

@@ -1,5 +1,5 @@
-//! 파서 시간 상한 테스트 (tests/test_parser_timeout.py 이식).
-//! Python은 SIGALRM으로 실행 중인 코드에 예외를 던지고 fork한 자식을 죽인다. Rust는 같은 목적을
+//! 파서 시간 상한 테스트.
+//! 실행 중인 코드를 밖에서 멈출 수 없으므로 목적을
 //! 스레드 기반 `run_with_timeout`, 자식 프로세스 강제 종료 `run_with_hard_timeout`로 나눈다.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};

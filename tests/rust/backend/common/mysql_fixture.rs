@@ -1,4 +1,4 @@
-//! Python `tests/conftest.py`의 `mysql_container` fixture에 대응한다. 세션당 MySQL 컨테이너 하나를 띄운다.
+//! 테스트 세션당 MySQL 컨테이너 하나를 띄우는 fixture.
 //!
 //! 가정한 API (아직 구현 전이다):
 //! - `testcontainers_modules::mysql::Mysql`과 `testcontainers_modules::testcontainers::runners::SyncRunner` (blocking 기능)
@@ -35,7 +35,7 @@ extern "C" fn remove_container_at_exit() {
     });
 }
 static READY: OnceLock<bool> = OnceLock::new();
-/// `TRUNCATE`로 테이블을 비우는 테스트끼리 병렬로 돌지 않게 한다. Python은 순차 실행이다.
+/// `TRUNCATE`로 테이블을 비우는 테스트끼리 병렬로 돌지 않게 한다.
 static DB_LOCK: Mutex<()> = Mutex::new(());
 
 /// 컨테이너를 한 번만 띄우고 `TM_MYSQL_*` 환경 변수를 설정한다. 못 띄우면 panic한다. 반환값은 항상 true다(시그니처 호환용).

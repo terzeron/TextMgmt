@@ -60,7 +60,7 @@ impl HttpSession for FakeSession {
 }
 
 // ---------------------------------------------------------------------------
-// 테스트용 서점 클래스 (Python의 DummyBookstore, DummyBookstoreUnit, DummyBookstoreParsing, BaseOnlyBookstore)
+// 테스트용 서점 클래스
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq)]

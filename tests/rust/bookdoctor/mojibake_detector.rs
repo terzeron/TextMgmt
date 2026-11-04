@@ -92,7 +92,7 @@ fn likeness_threshold_boundary_is_exclusive() {
 
 #[test]
 fn check_text_rounds_likeness_to_four_places_half_even() {
-    // Python round(0.03125, 4)는 0.0312다. 원본 inspect_file 테스트(detect.rs 142행)와 같은 기대값이다.
+    // {:.4}는 0.03125를 0.0312로 쓴다. 원본 inspect_file 테스트(detect.rs 142행)와 같은 기대값이다.
     let mut r = FileReport::new(std::path::Path::new("t.txt"), None);
     mojibake_detector::check_text(&mut r, &format!("{}{}", "이", "쀍".repeat(31)).repeat(8));
     assert_eq!(r.likeness, Some(0.0312));

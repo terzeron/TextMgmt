@@ -1,4 +1,4 @@
-//! utils/search.py 테스트 이식 (tests/test_search.py).
+//! search CLI 테스트.
 
 use std::cell::RefCell;
 
@@ -75,7 +75,7 @@ fn size_parsing_trims_whitespace_and_accepts_only_ascii_integers() {
 }
 
 #[test]
-fn summary_is_cut_to_200_chars_and_missing_summary_fails_like_python() {
+fn summary_is_cut_to_200_chars_and_missing_summary_fails() {
     struct Long;
     impl BookSearch for Long {
         fn search_by_title(&self, _: &str, _: &str, _: i64) -> Result<Vec<Hit>, EsError> {
@@ -103,7 +103,7 @@ fn invalid_size_exits_one() {
 }
 
 #[test]
-fn size_parsing_rejects_digits_newer_than_python_313_unicode() {
+fn size_parsing_rejects_non_ascii_digits() {
     let es = Dummy::default();
     assert_eq!(go(&["t", "", "", "\u{10d40}"], &es).0, 1);
     assert!(es.title_calls.borrow().is_empty());

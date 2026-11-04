@@ -1,4 +1,4 @@
-//! 오류 응답과 로깅. Python `main.py`의 `exception_handler` 세 개에 대응한다.
+//! 오류 응답과 로깅.
 //!
 //! 라우트는 `Result<_, ApiError>`를 돌려준다. `ApiError`는 FastAPI가 오류를 응답으로 바꾸는 방식과 같은 JSON(`{"detail": ..}`)이 된다.
 //! 오류 로그는 요청의 메서드·경로가 필요해서 `error_middleware`가 응답을 보고 한 번만 남긴다(`http_exception_handler` 등과 같은 내용).
@@ -118,7 +118,7 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Python `_summarize_request_body`: 본문 내용 대신 모양만 남긴다(키 이름 20개, 길이).
+/// 요청 본문 요약: 내용 대신 모양만 남긴다(키 이름 20개, 길이).
 pub fn summarize_request_body(body: &Value) -> Value {
     match body {
         Value::Object(map) => {

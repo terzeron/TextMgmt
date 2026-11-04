@@ -1,4 +1,4 @@
-//! 프런트엔드 에러 로그 수집. Python `main.py`의 `POST /logs/client-error`.
+//! 프런트엔드 에러 로그 수집(`POST /logs/client-error`).
 //!
 //! 인증 없이 받으므로 본문 크기를 서버가 직접 묶는다. 상한은 프런트 `clientLogger.js`가 이미 자르는 값(message 2000,
 //! stack·component_stack 5000)과 맞췄고, 나머지는 실측에 여유를 뒀다(관측된 url은 91자, 코퍼스에서 만들 수 있는 최장 카테고리 URL이 약 422자).

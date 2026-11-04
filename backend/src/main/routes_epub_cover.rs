@@ -1,4 +1,4 @@
-//! EPUB 표지 설정·삭제와 삽화 삽입 라우트. Python `main.py`의 `set_epub_cover`, `insert_epub_illustration`, `remove_epub_cover`.
+//! EPUB 표지 설정·삭제와 삽화 삽입 라우트.
 //!
 //! 책 라우터는 루트, 만화 라우터는 `/comics` prefix에 붙으므로 경로가 둘씩이다.
 

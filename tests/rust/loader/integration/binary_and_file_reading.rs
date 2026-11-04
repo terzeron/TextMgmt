@@ -1,6 +1,6 @@
-//! 원본: tests/test_loader.py (전반부)
+//! loader 파일 읽기 테스트(이진·텍스트·EPUB·오피스).
 //!
-//! 이 파일이 가정하는 API (실제 crate에 없는 것만, 이름은 Python 원본을 따른다):
+//! 이 파일이 가정하는 API:
 //! - dev-dependency: `encoding_rs` (cp949/cp1252 바이트 만들기)
 //!
 //! 설계: docs/rust-test-seams.md 3.12, 3.13, 4.2. loader/doc_reader의 `_with`는 `*_with(args, &XxxHooks)` 구조체 하나로 통일했다(pdf_and_text_stages.rs와 같은 이름·필드).
@@ -33,7 +33,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::common::shared_fixtures::{XrefStream, config_with_book, conftest_env, tests_root, write};
+use crate::common::shared_fixtures::{XrefStream, config_with_book, test_env, tests_root, write};
 use doc_reader::TEXT_SIZE;
 use doc_reader::epub::{read_from_epub, read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using};
 use doc_reader::markup::{count_lines, read_from_html};
@@ -237,7 +237,7 @@ fn loader_isbn_pdf_worker_extracts_text_through_the_binary() {
 use zip::write::SimpleFileOptions;
 
 fn default_config() -> Config {
-    Config::from_env(&conftest_env).unwrap()
+    Config::from_env(&test_env).unwrap()
 }
 
 fn read_text(path: &Path) -> TextRead {
@@ -265,7 +265,6 @@ fn encode_cp1252(s: &str) -> Vec<u8> {
     bytes.into_owned()
 }
 
-/// Python `str.encode("latin-1")`: 코드포인트가 곧 바이트다.
 fn encode_latin1(s: &str) -> Vec<u8> {
     s.chars().map(|c| u8::try_from(u32::from(c)).expect("latin-1 범위 밖")).collect()
 }
@@ -278,7 +277,6 @@ fn decode_cp1252(raw: &[u8]) -> String {
     encoding_rs::WINDOWS_1252.decode_without_bom_handling_and_without_replacement(raw).expect("cp1252 디코딩 실패").into_owned()
 }
 
-/// Python `str.encode("utf-16")`: 리틀엔디언 BOM을 붙인다.
 fn encode_utf16_bom(s: &str) -> Vec<u8> {
     std::iter::once(0xfeffu16).chain(s.encode_utf16()).flat_map(u16::to_le_bytes).collect()
 }
@@ -453,7 +451,7 @@ mod test_read_from_text {
         let f = d.path().join("test.txt");
         write(&f, "Hello World\n안녕하세요\n테스트");
         let r = read_text(&f);
-        // Python의 isinstance(summary, str)은 타입으로 보장된다.
+        // summary가 문자열인 것은 타입으로 보장된다.
         assert_eq!(r.line_count, 3);
         assert_eq!(r.page_count, 0);
         assert!(r.raw_content.contains("Hello"));
@@ -994,7 +992,7 @@ impl FakeEnv {
         self.which_result.clone()
     }
 
-    /// `PdftotextHooks.run`. Python subprocess와 같이 전체 인자 목록을 기록한다.
+    /// `PdftotextHooks.run`.
     fn run(&self, argv: &[String]) -> Option<(i32, Vec<u8>)> {
         self.commands.lock().unwrap().push(argv.to_vec());
         Some((0, self.stdout.clone()))
@@ -1861,7 +1859,7 @@ mod test_pdf_parser_timeout {
         write(&pdf, b"%PDF-1.4 not really a pdf");
         assert!(open_fds_ending_with("leak.pdf").is_empty());
 
-        // Python의 mock.patch 대신 실제 Rust plumber 단계가 손상 파일을 읽은 뒤를 확인한다.
+        // 실제 plumber 단계가 손상 파일을 읽은 뒤를 확인한다.
         let _ = run_stage(Stage::Plumber, &pdf);
 
         let left = open_fds_ending_with("leak.pdf");
@@ -2109,7 +2107,7 @@ mod test_read_from_rtf {
         let d = tempfile::tempdir().unwrap();
         let rtf = d.path().join("broken.rtf");
         write(&rtf, b"\x80\x81\x82not rtf");
-        // Python의 isinstance(summary, str)은 타입으로 보장된다. 패닉 없이 끝나는지만 본다.
+        // summary가 문자열인 것은 타입으로 보장된다. 패닉 없이 끝나는지만 본다.
         let (_summary, _line_count, _page_count) = read_rtf(&rtf);
     }
 }
@@ -2132,8 +2130,8 @@ mod test_read_from_docx {
 
 // ---- TestCountEpubLines ---------------------------------------------------------------------
 //
-// 원본은 BeautifulSoup 트리를 직접 고치는 `_reference_count_epub_lines`와 대조한다. Rust에는 그 기준 구현이 없어,
-// 같은 입력으로 기준 구현(bs4+lxml)을 한 번 돌려 얻은 값을 기대값으로 고정했다.
+// 기준 구현이 없어,
+// 같은 입력으로 기준 구현을 한 번 돌려 얻은 값을 기대값으로 고정했다.
 
 mod test_count_epub_lines {
     use super::*;
@@ -2189,7 +2187,7 @@ mod test_count_epub_lines {
 mod test_read_from_epub_full {
     use super::*;
 
-    /// 챕터 bytes 목록으로 실제 EPUB을 만들어 읽는다. 원본의 `_read_epub_with_chapters`(ebooklib 바꿔치기)를 대신한다.
+    /// 챕터 bytes 목록으로 실제 EPUB을 만들어 읽는다.
     fn read_epub_with_chapters(chapters: &[&[u8]]) -> (String, usize) {
         let d = tempfile::tempdir().unwrap();
         let epub = d.path().join("dummy.epub");
@@ -2199,7 +2197,7 @@ mod test_read_from_epub_full {
     }
 
     #[test]
-    fn test_read_epub_ebooklib_success_path() {
+    fn test_read_epub_package_success_path() {
         let d = tempfile::tempdir().unwrap();
         let epub = d.path().join("dummy.epub");
         write_epub_with_chapters(&epub, "<dc:title>테스트 제목</dc:title><dc:creator>테스트 저자</dc:creator>", &["<html><body><p>본문 줄1</p><p>줄2</p></body></html>".as_bytes()]);
@@ -2248,8 +2246,8 @@ mod test_read_from_epub_full {
     }
 
     #[test]
-    fn test_read_epub_with_ebooklib() {
-        // read_from_epub using ebooklib or fallback
+    fn test_read_epub_with_package_path() {
+        // OPF 패키지 경로 또는 대체 경로로 읽는다
         let d = tempfile::tempdir().unwrap();
         let epub = d.path().join("test.epub");
         write_zip(
@@ -2261,7 +2259,7 @@ mod test_read_from_epub_full {
                 ("ch1.xhtml", "<html><body><p>테스트 내용</p></body></html>".as_bytes()),
             ],
         );
-        // Python의 isinstance(summary, str)은 타입으로 보장된다. 패닉 없이 읽히는지만 본다.
+        // summary가 문자열인 것은 타입으로 보장된다. 패닉 없이 읽히는지만 본다.
         let _read = read_from_epub(&epub);
     }
 
@@ -2270,7 +2268,7 @@ mod test_read_from_epub_full {
         // Lines 161-176: epub read_epub fails, fallback to zip extraction
         let d = tempfile::tempdir().unwrap();
         let epub = d.path().join("bad_epub.epub");
-        // No mimetype -> ebooklib will fail, triggering zip fallback
+        // mimetype이 없으면 패키지 경로가 실패해 zip 대체 경로로 간다
         write_zip(&epub, &[("META-INF/container.xml", CONTAINER_XML.as_bytes()), ("content.opf", SIMPLE_OPF.as_bytes()), ("ch1.xhtml", b"<html><body>Fallback content</body></html>")]);
         let _read = read_from_epub(&epub);
     }
@@ -2664,17 +2662,17 @@ mod test_read_from_epub_edge_cases {
         let epub = d.path().join("test.epub");
         // ch1.xhtml intentionally corrupt
         write_zip(&epub, &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", container.as_bytes()), ("content.opf", opf.as_bytes()), ("ch1.xhtml", b"\x00\x01\x02\x03")]);
-        // Python의 isinstance(result, str)은 타입으로 보장된다. 패닉 없이 끝나는지만 본다.
+        // 결과가 문자열인 것은 타입으로 보장된다. 패닉 없이 끝나는지만 본다.
         let _read = read_from_epub_with_extracting_zip(&epub);
     }
 
     #[test]
     fn test_epub_both_methods_fail() {
-        // Lines 171-173: both ebooklib and zip fallback fail
+        // 패키지 경로와 zip 대체 경로가 모두 실패한다
         let d = tempfile::tempdir().unwrap();
         let epub = d.path().join("test.epub");
         write(&epub, b"not a zip at all");
-        // read_from_epub tries ebooklib (fails) then zip fallback (also fails)
+        // read_from_epub은 패키지 경로(실패) 뒤 zip 대체 경로(실패)를 시도한다
         let _read = read_from_epub(&epub);
     }
 }

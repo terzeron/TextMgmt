@@ -51,7 +51,7 @@ async fn test_preview_reports_fetch_failures() {
 
 type Request = (String, String, Vec<(String, String)>);
 
-/// 응답 하나의 명세. `closed`는 같은 풀이 만든 모든 응답이 공유한다(Python `response.close.called`).
+/// 응답 하나의 명세. `closed`는 같은 풀이 만든 모든 응답이 공유한다.
 #[derive(Clone)]
 struct Spec {
     status: u16,
@@ -95,7 +95,7 @@ impl PoolResponse for FakeResponse {
     }
 }
 
-/// `urlopen` 요청을 기록하고 항상 같은 명세의 응답을 돌려주는 풀. Python `MagicMock()` 풀.
+/// `urlopen` 요청을 기록하고 항상 같은 명세의 응답을 돌려주는 풀.
 struct FakePool {
     spec: Spec,
     requests: Arc<Mutex<Vec<Request>>>,
@@ -149,7 +149,7 @@ fn addresses(list: &'static [&'static str]) -> Resolver {
     Box::new(move |_host, _port| Ok(list.iter().map(|a| a.parse().unwrap()).collect()))
 }
 
-/// Python `public_dns`: 어떤 호스트든 공인 주소 8.8.8.8 하나로 풀린다.
+/// 어떤 호스트든 공인 주소 8.8.8.8 하나로 푸는 DNS 대역.
 fn public_dns() -> Resolver {
     addresses(&["8.8.8.8"])
 }
@@ -181,7 +181,7 @@ fn test_ipv6_image_uses_bracketed_host_and_validated_address() {
 #[test]
 fn test_stream_limit_counts_chunks_instead_of_trusting_content_length() {
     let mut spec = Spec::new(200, &[b"abc", b"def"]).header("Content-Length", "1");
-    // 제한을 넘은 뒤에도 읽으면 이 오류가 나서 테스트가 실패한다(Python의 `raise AssertionError`).
+    // 제한을 넘은 뒤에도 읽으면 이 오류가 나서 테스트가 실패한다.
     spec.chunks.push(Err("읽기를 제한 뒤에 계속하면 안 된다".to_string()));
     let net = FakeNet::new(public_dns(), vec![spec.clone()]);
     let err = fetch_url_image_with("https://images.example.org/cover.jpg", &net, 5).unwrap_err().to_string();
@@ -237,7 +237,7 @@ fn test_redirect_is_revalidated_before_connecting() {
 }
 
 #[test]
-fn test_unicode_hostnames_match_python_idna_codec_before_dns_validation() {
+fn test_unicode_hostnames_use_idna_before_dns_validation() {
     for (input, expected) in [("faß.de", "fass.de"), ("Ａ.com", "a.com"), ("exa\u{00ad}mple.org", "example.org"), ("a。com", "a.com")] {
         let resolved = Arc::new(Mutex::new(Vec::new()));
         let observed = Arc::clone(&resolved);
@@ -282,13 +282,12 @@ fn test_download_limits_cleanup_and_url_validation() {
             spec = spec.header("Location", "/next");
         }
         if mode == "read_error" {
-            // urllib3 ReadTimeoutError
             spec.chunks = vec![Err("timeout".to_string())];
         }
         let resolver = if mode == "empty_dns" { addresses(&[]) } else { public_dns() };
         let net = FakeNet::new(resolver, vec![spec.clone()]);
         let max_bytes = if mode == "size" { 3 } else { MAX_IMAGE_BYTES };
-        // Python은 lone surrogate("\ud800")로 잘못된 호스트를 만든다. Rust 문자열은 surrogate를 담을 수 없어 IDNA에 맞지 않는 문자로 대신한다.
+        // IDNA에 맞지 않는 문자로 잘못된 호스트를 만든다.
         let url = match mode {
             "http" => "http://example.org",
             "bad_port" => "https://example.org:image/a",

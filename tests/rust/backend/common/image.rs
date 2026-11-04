@@ -14,7 +14,6 @@ use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 pub const RED: [u8; 3] = [255, 0, 0];
 pub const BLUE: [u8; 3] = [0, 0, 255];
 
-/// Python `base64.b64encode(data).decode()`.
 pub fn b64(data: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(data)
 }
@@ -25,7 +24,7 @@ pub fn image_size(data: &[u8]) -> (u32, u32) {
     (img.width(), img.height())
 }
 
-/// 단색 `RgbImage`. Python `Image.new("RGB", size, color)`.
+/// 단색 `RgbImage`.
 pub fn solid(width: u32, height: u32, rgb: [u8; 3]) -> RgbImage {
     RgbImage::from_pixel(width, height, Rgb(rgb))
 }
@@ -62,7 +61,7 @@ pub fn jpeg_bytes(img: &RgbImage, quality: u8) -> Vec<u8> {
     out
 }
 
-/// 120x180 빨강 JPEG. Python `image_bytes()`. cover_fixtures, epub_cover_set, book_manager_gaps가 각자 정의하던 것이다.
+/// 120x180 빨강 JPEG. cover_fixtures, epub_cover_set, book_manager_gaps가 각자 정의하던 것이다.
 pub fn red_jpeg() -> Vec<u8> {
     jpeg_solid(120, 180, RED)
 }
@@ -72,7 +71,6 @@ pub fn color_jpeg(name: &str) -> Vec<u8> {
     jpeg_solid(120, 180, color(name))
 }
 
-/// PIL 색 이름 중 테스트가 쓰는 것.
 pub fn color(name: &str) -> [u8; 3] {
     match name {
         "red" => [255, 0, 0],
@@ -85,7 +83,6 @@ pub fn color(name: &str) -> [u8; 3] {
     }
 }
 
-/// PIL `image.paste(color, (x0, y0, x1, y1))`.
 pub fn paste(image: &mut RgbImage, (x0, y0, x1, y1): (u32, u32, u32, u32), rgb: [u8; 3]) {
     for y in y0..y1 {
         for x in x0..x1 {
@@ -138,7 +135,7 @@ pub fn multipart_file(boundary: &str, field: &str, filename: &str, content_type:
     body
 }
 
-/// pytest.approx(기본 상대 오차 1e-6)에 대응한다.
+/// 기본 상대 오차 1e-6 안에서 같은가.
 pub fn assert_approx(actual: f64, expected: f64, what: &str) {
     let tolerance = (1e-6 * expected.abs()).max(1e-12);
     assert!((actual - expected).abs() <= tolerance, "{what}: {actual} != {expected}");

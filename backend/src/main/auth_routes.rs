@@ -1,5 +1,5 @@
 //! 인증 라우트: Google 로그인, 토큰 갱신, 내 정보, 로그아웃, 로그인 세션 관리(admin).
-//! Python `main.py`의 `/auth/*`에 대응한다. 라우트 파일의 작성 예시로도 쓴다(`main.rs` 머리말 참고).
+//! `/auth/*` 라우트. 라우트 파일의 작성 예시로도 쓴다(`main.rs` 머리말 참고).
 //!
 //! 로그에는 이메일·family_id·토큰·쿠키 원문을 남기지 않고 `observation_hash` 값만 남긴다.
 
@@ -41,7 +41,7 @@ fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
-/// Python 진리값: None, 빈 문자열/목록/객체, 0, false는 거짓이다.
+/// 비어 있음 판정: null, 빈 문자열/목록/객체, 0, false는 거짓이다.
 fn is_falsy(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) => true,

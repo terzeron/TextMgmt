@@ -763,7 +763,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_proposal_body_deserializes_python_defaults() {
+    fn classify_proposal_body_uses_defaults() {
         let body: ClassifyProposalBody = serde_json::from_value(json!({"category":"inbox"})).unwrap();
         assert!(body.use_bookstore);
         assert!(body.use_content_meta);

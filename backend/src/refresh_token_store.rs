@@ -1,4 +1,4 @@
-//! refresh token 저장소. Python `backend/refresh_token_store.py`의 Rust 대응이다.
+//! refresh token 저장소.
 //!
 //! 운영 factory와 저장소 API는 MySQL replica 공유 저장소만 사용한다.
 //! 회전·재사용 탐지 판정(`plan_rotation`)과 세션 집계(`build_session_page`)는 저장소 구현이 공유한다.
@@ -344,7 +344,7 @@ fn combine_sessions(members: Vec<Session>) -> Session {
     let any_active = members.iter().any(|m| m.status == "active");
     let mut primary: Option<&Session> = None;
     for member in members.iter().filter(|m| !any_active || m.status == "active") {
-        // 동률이면 먼저 나온 쪽을 유지한다(Python max 와 같다).
+        // 동률이면 먼저 나온 쪽을 유지한다.
         if primary.is_none_or(|p| member.last_seen_at > p.last_seen_at) {
             primary = Some(member);
         }
@@ -426,7 +426,7 @@ fn build_session_page(rows: &[Row], q: &SessionQuery) -> Value {
     filtered.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at));
     let total_items = filtered.len();
     let page_size = q.page_size as usize;
-    // Python 슬라이스처럼 page 0 은 빈 목록이다.
+    // page 0 은 빈 목록이다.
     let items: Vec<Value> = if q.page == 0 { Vec::new() } else { filtered.iter().skip((q.page as usize - 1) * page_size).take(page_size).map(|s| s.to_json()).collect() };
     json!({
         "items": items,
@@ -435,7 +435,7 @@ fn build_session_page(rows: &[Row], q: &SessionQuery) -> Value {
     })
 }
 
-/// `list_sessions` 인자. Python 키워드 인자의 기본값에 대응한다.
+/// `list_sessions` 인자와 기본값.
 #[derive(Debug, Clone)]
 pub struct SessionQuery {
     pub status: String,
@@ -657,7 +657,7 @@ impl MySQLRefreshTokenStore {
         Self { provider, max_session_groups: MAX_SESSION_GROUPS, clock: Arc::new(SystemClock) }
     }
 
-    /// 세션 목록 상한을 바꾼다. Python 모듈 전역 `MAX_SESSION_GROUPS` 대체.
+    /// 세션 목록 상한을 바꾼다.
     pub fn with_max_session_groups(mut self, max_session_groups: usize) -> Self {
         self.max_session_groups = max_session_groups;
         self
@@ -676,7 +676,7 @@ impl MySQLRefreshTokenStore {
         self.clock.now() as i64
     }
 
-    /// 연결을 열어 `f`를 실행하고 항상 닫는다(Python `_connect` contextmanager).
+    /// 연결을 열어 `f`를 실행하고 항상 닫는다.
     fn with_conn<T>(&self, f: impl FnOnce(&mut dyn DbConnection) -> Result<T, DbError>) -> Result<T, StoreError> {
         let mut conn = self._connect()?;
         let result = f(conn.as_mut());
@@ -684,7 +684,7 @@ impl MySQLRefreshTokenStore {
         Ok(result?)
     }
 
-    /// `with_conn`에 오류 시 rollback 을 더한다(Python `except Exception: conn.rollback(); raise`).
+    /// `with_conn`에 오류 시 rollback 을 더한다.
     fn in_transaction<T>(&self, f: impl FnOnce(&mut dyn DbConnection) -> Result<T, DbError>) -> Result<T, StoreError> {
         self.with_conn(|conn| {
             let result = f(&mut *conn);

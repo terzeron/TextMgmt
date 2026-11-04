@@ -1,4 +1,3 @@
-//! 원본: tests/test_classify_proposal_status_db.py
 //!
 //! classify_proposal_status를 실제 MySQL 8.0에 대해 검증한다. SQL 문자열이 아니라 서버가 보장하는 성질을 본다:
 //! 동시에 들어온 두 시작 요청 중 하나만 성공하는가, JSON_MERGE_PATCH가 status를 건드리지 않고 필드만 합치는가,
@@ -16,7 +15,7 @@
 //! - `CategoryMapping::try_start_classify_proposal(&self, status: &Value, content_type: &str, stale_seconds: i64) -> (bool, Value)`
 //! - `CategoryMapping::try_begin_classify_apply(&self, token: &str, content_type: &str, stale_seconds: i64) -> (bool, Value)`
 //!
-//! Python의 `content_type` 기본값 "book"은 매번 명시한다. `CategoryMapping`은 스레드마다 새로 만들어 각자 커넥션을 쓰게 한다(`Send` 가정).
+//! `content_type` 기본값 "book"은 매번 명시한다. `CategoryMapping`은 스레드마다 새로 만들어 각자 커넥션을 쓰게 한다(`Send` 가정).
 //! `cm()`이 `common/mysql_fixture.rs`로 일회용 MySQL 컨테이너를 띄우고 `TM_MYSQL_*`를 설정한다(Docker가 없으면 panic).
 //! 테이블을 공유하므로 `cm()`이 돌려주는 값이 `db_lock()`을 쥐어 테스트끼리 직렬로 돌게 한다.
 
@@ -35,7 +34,7 @@ const STALE: i64 = 300;
 /// `cm` fixture. 상태 행을 비운 CategoryMapping을 돌려준다. MySQL이 없으면 panic.
 fn cm() -> Db {
     common::setup_env();
-    // 일회용 MySQL 컨테이너를 세션당 한 번 띄우고 TM_MYSQL_*를 설정한다(Python `mysql_container` fixture). Docker가 없으면 panic한다.
+    // 일회용 MySQL 컨테이너를 세션당 한 번 띄우고 TM_MYSQL_*를 설정한다. Docker가 없으면 panic한다.
     mysql_fixture::mysql_container();
     let lock = mysql_fixture::db_lock();
     let mapping = CategoryMapping::new().expect("MySQL 연결");

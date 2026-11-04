@@ -1,5 +1,5 @@
 //! 표지 관련 보조. EPUB 표지 멤버 찾기와 썸네일은 `epub_cover`가 구현하고 여기서는 `BookManager`의 이름으로 이어 준다.
-//! Python `_find_epub_cover_member`, `_extract_cover_thumbnail`(EPUB 부분).
+//! EPUB 표지 멤버 찾기와 표지 썸네일(EPUB 부분).
 
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
@@ -15,7 +15,7 @@ use crate::cover_management::{Backup, CoverHooks, CoverManagement};
 use crate::direct_cover_url::ImageFetcher;
 use crate::epub_cover::{self, CoverError, EpubCoverHooks};
 
-/// 표지 편집이 저장 위치를 정할 때 쓰는 기본 휴지통 디렉터리 이름(Python `TRASH_DIRNAME`).
+/// 표지 편집이 저장 위치를 정할 때 쓰는 기본 휴지통 디렉터리 이름.
 pub const TRASH_DIRNAME: &str = "0_trash";
 
 const NOT_EPUB: &str = "EPUB 파일이 아닙니다";
@@ -95,7 +95,7 @@ impl BookManager {
         epub_cover::find_epub_cover_member(archive)
     }
 
-    /// `file_size`가 값을 돌려주면 ZIP 헤더 크기 대신 쓴다(Python이 `ZipInfo.file_size`를 덮어쓰는 것에 대응).
+    /// `file_size`가 값을 돌려주면 ZIP 헤더 크기 대신 쓴다(테스트가 큰 항목을 흉내 낸다).
     pub fn find_epub_cover_member_with<R: Read + Seek>(archive: &mut ZipArchive<R>, file_size: &dyn Fn(&str) -> Option<u64>) -> Option<String> {
         epub_cover::find_epub_cover_member_with(archive, file_size)
     }

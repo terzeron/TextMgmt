@@ -37,7 +37,7 @@ fn test_stale_revision_is_rejected_and_backup_is_kept_once() {
     assert_eq!(fs::read(b.trash.join("book.epub")).unwrap(), original);
 }
 
-// ── 입력 검증과 상한(Python보다 엄격한 부분) ───────────────────────────────────
+// ── 입력 검증과 상한 ───────────────────────────────────
 
 fn edit_with(b: &Book, hooks: &EpubCoverHooks, args: EditImages) -> Result<Value, CoverError> {
     edit_images_with(&b.path, &revision(&b.path), &b.trash, EditImages { backup_name: Some("book.epub".to_string()), ..args }, hooks)
@@ -79,7 +79,6 @@ fn write_epub(path: &Path, bodies: &[&str]) {
     make_epub(path, &EpubSpec::chapters(&refs));
 }
 
-/// Python `reader` fixture의 params: (이름, 읽기 함수).
 type Reader = (&'static str, fn(&Path) -> EpubRead);
 
 const READERS: [Reader; 2] = [("read_from_epub", read_from_epub), ("read_from_epub_with_extracting_zip", read_from_epub_with_extracting_zip)];
@@ -197,7 +196,7 @@ mod xml_safety_and_cursors {
         }
     }
 
-    // --- M1: lxml XXE 방지 (CWE-611) ---
+    // --- M1:
 
     #[test]
     fn test_safe_xml_parser_blocks_external_entity() {
@@ -217,7 +216,7 @@ mod xml_safety_and_cursors {
         assert_eq!(ok.find("a").unwrap().text().as_deref(), Some("hi"));
     }
 
-    // ── Additional edge case tests to reach >99% coverage on backend/book_manager.py ──
+    // ── 경계 사례 ──
 
     #[test]
     fn test_empty_epub_spine_href_is_rejected() {
@@ -613,7 +612,7 @@ mod validate_preview_epub {
         (spine_el.attribute("toc").map(String::from), idrefs)
     }
 
-    /// 빈 spine 경로는 ZIP 항목 이름으로 인정하지 않는다(Python `test_in_names_empty_path`).
+    /// 빈 spine 경로는 ZIP 항목 이름으로 인정하지 않는다.
     #[test]
     fn test_empty_spine_href_is_not_present_in_archive() {
         let tmp = tempfile::tempdir().unwrap();

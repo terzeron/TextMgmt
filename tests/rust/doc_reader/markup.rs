@@ -9,7 +9,7 @@ fn cases() -> Value {
 }
 
 #[test]
-fn get_text_and_line_counts_match_python_lxml() {
+fn get_text_and_line_counts_match_reference() {
     for case in cases().as_array().unwrap() {
         let html = case["html"].as_str().unwrap();
         assert_eq!(get_text(html), case["text"].as_str().unwrap(), "text of {html:?}");
@@ -47,13 +47,13 @@ fn read_from_html_truncates_to_4096_chars_and_reports_unreadable_files() {
 }
 
 #[test]
-fn corpus_html_matches_python() {
+fn corpus_html_matches_the_recorded_summaries() {
     let root = corpus::books_root();
     for rec in corpus::records(include_str!("fixtures/corpus_html.jsonl")) {
         let path = rec["path"].as_str().unwrap();
         let got = read_from_html(&root.join(path));
         if rec.get("error").is_some() {
-            assert!(got.is_err(), "expected Python reader error for {path}: {got:?}");
+            assert!(got.is_err(), "expected a reader error for {path}: {got:?}");
             continue;
         }
         let (summary, lines, pages) = got.unwrap_or_else(|error| panic!("Rust reader failed for {path}: {error}"));

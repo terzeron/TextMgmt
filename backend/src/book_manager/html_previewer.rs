@@ -1,5 +1,4 @@
-//! HTML 책 미리보기와 리소스. Python `_sanitize_html_for_viewer`, `_build_html_resource_url`, `_html_security_headers`,
-//! `get_html_resource`, 그리고 `get_book_content`의 HTML 첨부 헤더에 대응한다.
+//! HTML 책 미리보기와 리소스: 뷰어용 HTML 정리, 리소스 URL, 보안 헤더, 본문 첨부 헤더.
 //!
 //! 보안: 뷰어에 내보내는 HTML에서 활성 콘텐츠(script, iframe, form 등)와 이벤트 속성, 외부 URL을 모두 걷어낸다.
 //! 응답에는 `sandbox` CSP를 붙여 한 번 더 막는다. 읽기 전에 크기 상한을 확인한다.
@@ -47,7 +46,7 @@ pub fn media_type_for_suffix(suffix: &str) -> &'static str {
     }
 }
 
-/// `urllib.parse.urlparse(url).scheme`. 탭, 줄바꿈 문자는 지우고 앞쪽 제어 문자와 공백은 뗀다. 스킴이 없으면 빈 문자열이다.
+/// URL의 스킴. 탭, 줄바꿈 문자는 지우고 앞쪽 제어 문자와 공백은 뗀다. 스킴이 없으면 빈 문자열이다.
 fn url_scheme(url: &str) -> String {
     let cleaned: String = url.chars().filter(|c| !matches!(c, '\t' | '\r' | '\n')).collect();
     let cleaned = cleaned.trim_start_matches(|c: char| c <= ' ');
@@ -57,7 +56,7 @@ fn url_scheme(url: &str) -> String {
     if valid { head.to_lowercase() } else { String::new() }
 }
 
-/// `urllib.parse.quote(text, safe="")`.
+/// 모든 예약 문자를 퍼센트 인코딩한다(`/`도 인코딩).
 fn quote_all(text: &str) -> String {
     let mut out = String::new();
     for b in text.bytes() {

@@ -179,7 +179,7 @@ fn test_backfill_created_time_branches() {
 
     // 3. Lines 554-555: run_backfill raises exception
     es.fail("backfill_created_time", "backfill error");
-    drop(env); // monkeypatch.undo()
+    drop(env); // 환경 변수 복원
     let _env = EnvGuard::single(CREATED_TIME_BACKFILL_ENV, "1");
 
     // 스레드를 띄우지 않고 대상 함수를 그 자리에서 실행한다.
@@ -313,7 +313,7 @@ async fn test_propose_awaits_async_progress_callback_and_records_failures() {
     let manager = BookManager::with_deps(deps);
     let reports: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = reports.clone();
-    // 진행 보고 콜백은 동기 함수다(Python은 코루틴도 받는다).
+    // 진행 보고 콜백은 동기 함수다.
     let on_progress = move |payload: Value| sink.lock().unwrap().push(payload);
     let opts = ProposeOptions { content_type: Some("book"), delay: Some(0.0), use_bookstore: Some(false), use_content_meta: Some(false), on_progress: Some(&on_progress) };
 
@@ -339,7 +339,7 @@ async fn test_apply_awaits_async_callbacks() {
     let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| Ok(json!({"status": "moved"}))));
     let manager = BookManager::with_deps(deps);
     let (done_sink, progress_sink) = (done.clone(), progress.clone());
-    // 콜백은 동기 함수다(Python은 코루틴도 받는다).
+    // 콜백은 동기 함수다.
     let should_continue = || true;
     let on_item_done = move |payload: Value| done_sink.lock().unwrap().push(payload["apply_status"].as_str().unwrap().to_string());
     let on_progress = move |payload: Value| progress_sink.lock().unwrap().push(payload);

@@ -1,4 +1,4 @@
-//! 테스트 공용 fixture. Python 테스트의 make_epub / _corrupt_local_header 대응.
+//! 테스트 공용 fixture.
 #![allow(dead_code)]
 
 use std::fs::{self, File};
@@ -18,7 +18,7 @@ pub fn clean_korean() -> String {
 pub fn corrupted() -> String {
     let utf8 = clean_korean().repeat(4).into_bytes();
     let (text, _, _) = encoding_rs::EUC_KR.decode(&utf8);
-    // Python의 errors="ignore"처럼 읽을 수 없는 바이트는 버린다.
+    // 읽을 수 없는 바이트는 버린다.
     text.chars().filter(|&c| c != '\u{FFFD}').collect()
 }
 

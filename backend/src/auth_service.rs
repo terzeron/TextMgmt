@@ -1,7 +1,7 @@
-//! 인증. Python `backend/auth.py`에 대응한다. 설계: docs/rust-test-seams.md 3.2.
+//! 인증. 설계: docs/rust-test-seams.md 3.2.
 //!
-//! - 환경 변수(`TM_JWT_SECRET`, `TM_ADMIN_EMAIL`, `TM_ALLOWED_EMAILS`)는 호출 시점에 읽는다. Python의 `importlib.reload`가 필요 없다.
-//! - Python은 `TM_JWT_SECRET`이 없으면 import 때 프로세스를 끝낸다. Rust는 시작 때 `load_jwt_secret`으로 확인하고,
+//! - 환경 변수(`TM_JWT_SECRET`, `TM_ADMIN_EMAIL`, `TM_ALLOWED_EMAILS`)는 호출 시점에 읽는다.
+//! - 시작 때 `load_jwt_secret`으로 비밀키를 확인하고,
 //!   토큰을 만드는 함수는 비밀키가 없으면 panic한다. 비밀키가 비었을 때 토큰을 검증하는 쪽은 항상 거부한다.
 //! - 이 모듈은 HTTP 프레임워크를 모른다. 요청은 `RequestParts`로 추상화하고, axum 연결은 `main::extract`가 한다.
 
@@ -44,7 +44,7 @@ impl fmt::Display for HTTPException {
 
 impl std::error::Error for HTTPException {}
 
-/// Python `sys.exit(code)`. 프로세스를 끝내야 하는 설정 오류를 값으로 돌려준다.
+/// 프로세스를 끝내야 하는 설정 오류. 종료 코드를 담는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemExit(pub i32);
 
@@ -54,7 +54,7 @@ pub trait RequestParts {
     fn cookie(&self, name: &str) -> Option<String>;
 }
 
-/// 이메일 -> 역할. 기본 구현은 환경 변수를 본다(Python `determine_role`).
+/// 이메일 -> 역할. 기본 구현은 환경 변수를 본다.
 pub trait RoleResolver: Send + Sync {
     fn determine_role(&self, email: &str) -> Option<String> {
         determine_role(email)
@@ -66,7 +66,7 @@ pub struct EnvRoleResolver;
 
 impl RoleResolver for EnvRoleResolver {}
 
-/// 토큰 발급·해독 seam. 기본 구현은 모두 실제 JWT다. 테스트는 쓰는 메서드만 바꾼다(Python `monkeypatch.setattr(main_mod, "create_jwt_token", ..)`).
+/// 토큰 발급·해독 seam. 기본 구현은 모두 실제 JWT다. 테스트는 쓰는 메서드만 바꾼다.
 pub trait TokenIssuer: Send + Sync {
     fn create_access_token(&self, email: &str, role: &str, name: &str, picture: &str, family_id: &str) -> String {
         create_session_jwt_token(email, role, name, picture, family_id)
@@ -99,7 +99,7 @@ fn env_var(key: &str) -> String {
     std::env::var(key).unwrap_or_default()
 }
 
-/// 시작 때 한 번 부른다. 비밀키가 없으면 `SystemExit(-1)`이다(Python `sys.exit(-1)`).
+/// 시작 때 한 번 부른다. 비밀키가 없으면 `SystemExit(-1)`이다.
 pub fn load_jwt_secret(env: EnvFn) -> Result<String, SystemExit> {
     match env("TM_JWT_SECRET") {
         Some(secret) if !secret.is_empty() => Ok(secret),
@@ -125,7 +125,7 @@ fn allowed_emails() -> Vec<String> {
 
 /// 관리자 이메일이면 "admin", 허용 목록이면 "viewer", 아니면 None.
 ///
-/// Python은 `TM_ADMIN_EMAIL`이 비었을 때 빈 이메일을 admin으로 판정한다. Rust는 빈 이메일을 항상 거부한다.
+/// 빈 이메일은 `TM_ADMIN_EMAIL`이 비어 있어도 항상 거부한다.
 pub fn determine_role(email: &str) -> Option<String> {
     if email.is_empty() {
         return None;
@@ -165,7 +165,7 @@ pub fn uuid_hex() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// 관측 로그용 단방향 해시. Python `observation_hash`: `HMAC-SHA256(secret, "tm-observation|" + value)`의 hex 앞 16자.
+/// 관측 로그용 단방향 해시: `HMAC-SHA256(secret, "tm-observation|" + value)`의 hex 앞 16자.
 ///
 /// refresh 회전 실패를 "같은 브라우저의 동시 요청"과 "다른 환경에서 복사된 상태"로 나누려는 진단 신호다.
 /// 원문(이메일, family_id, jti, user-agent, IP)을 로그에 남기지 않고 같은 값끼리 상관관계만 본다. 인가 판단에는 쓰지 않는다.
@@ -400,10 +400,10 @@ mod tests {
     }
 
     #[test]
-    fn observation_hash_matches_python_hmac_sha256() {
+    fn observation_hash_matches_hmac_sha256_reference() {
         // SAFETY: 이 lib 단위 테스트 바이너리에서 TM_JWT_SECRET을 바꾸는 테스트는 이것 하나다.
         unsafe { std::env::set_var("TM_JWT_SECRET", "testsecret123") };
-        // python3: hmac.new(b"testsecret123", b"tm-observation|observed-family", hashlib.sha256).hexdigest()[:16]
+        // 기준값: HMAC-SHA256(key=b"testsecret123", msg=b"tm-observation|observed-family")의 hex 앞 16자
         assert_eq!(observation_hash("observed-family"), "f4927567f8b53241");
         assert_eq!(observation_hash(""), "");
         unsafe { std::env::remove_var("TM_JWT_SECRET") };

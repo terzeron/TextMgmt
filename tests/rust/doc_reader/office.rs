@@ -76,7 +76,7 @@ mod docx_reader {
     use serde_json::Value;
 
     #[test]
-    fn docx_matches_python_docx() {
+    fn docx_reads_paragraph_text() {
         let expected: Value = serde_json::from_str(&fs::read_to_string(fixture("docx_expected.json")).unwrap()).unwrap();
         for (name, want) in expected.as_object().unwrap() {
             let (summary, lines) = read_from_docx(&fixture(name)).unwrap();

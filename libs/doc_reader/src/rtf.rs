@@ -477,7 +477,7 @@ fn remove_pict_groups(rtf: &str) -> String {
     out
 }
 
-/// Python 코덱 이름으로 16진 바이트를 푼다. 풀 수 없는 바이트는 버린다(`errors="ignore"`).
+/// 코덱 이름으로 16진 바이트를 푼다. 풀 수 없는 바이트는 버린다(`errors="ignore"`).
 fn decode_hex_bytes(bytes: &[u8], encoding: &str) -> String {
     let label = match encoding {
         "cp949" => return text_extractor::decode_korean_ignore(bytes, false),

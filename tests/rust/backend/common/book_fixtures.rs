@@ -1,4 +1,4 @@
-//! PDF/EPUB 편집 테스트 공용 fixture. Python `tests/test_pdf_delete_pages.py`의 헬퍼와 fixture에 대응한다.
+//! PDF/EPUB 편집 테스트 공용 fixture.
 //!
 //! 사용법: 테스트 파일에서 `mod common;` 다음에 아래처럼 가져온다. (`common/mod.rs`는 수정하지 않으므로 `#[path]`를 쓴다.)
 //! ```ignore
@@ -40,7 +40,7 @@ pub use crate::common::raster::{Raster, same_pixels};
 
 pub type FakeEs = crate::common::es_fake::FakeEsManager;
 
-/// `Loader.read_file`에 대응한다. `ReadOutcome::item`이 Python의 `{id: 문서}`다.
+/// 파일 하나를 읽은 결과. `ReadOutcome::item`은 `{id: 문서}`다.
 pub struct FakeReadFile {
     pub docs: Mutex<Docs>,
 }
@@ -80,7 +80,7 @@ impl FakeFetch {
 
 // ── 환경(env, image_env, pixel_env) ──
 
-/// 어느 mock을 BookManager에 꽂을지 정한다. Python의 `loader`, `fetch` fixture 요청 여부에 대응한다.
+/// 어느 대역을 BookManager에 꽂을지 정한다(파일 읽기, 내려받기).
 #[derive(Default)]
 pub struct Opts {
     pub loader: bool,
@@ -115,7 +115,7 @@ pub struct Env {
     _tmp: TempDir,
 }
 
-/// `delete_pdf_pages`의 인자 묶음. Python 호출의 기본값(`None`)을 그대로 둔다.
+/// `delete_pdf_pages`의 인자 묶음.
 #[derive(Default, Clone)]
 pub struct Edit {
     pub pages: Vec<i64>,

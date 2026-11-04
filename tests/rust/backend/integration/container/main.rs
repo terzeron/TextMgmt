@@ -1,14 +1,13 @@
-//! 원본: tests/test_main.py
 //!
-//! backend/main.py 라우트·쿠키·인증·카테고리 매핑 테스트.
-//! 앞쪽(TestBackend ~ TestAuthMeLogout, 마지막 DB 통합 테스트)은 Python과 같은 MySQL·Nori Elasticsearch testcontainers를 쓴다.
+//! backend 라우트·쿠키·인증·카테고리 매핑 테스트.
+//! 앞쪽(TestBackend ~ TestAuthMeLogout, 마지막 DB 통합 테스트)은 MySQL·Nori Elasticsearch testcontainers를 쓴다.
 //! Docker 통합은 fixture가 컨테이너를 띄워 기본 실행에서 돈다(Docker가 없으면 panic).
 //! 나머지는 가짜 manager/category_mapping을 `AppDeps`로 주입해서 ES/MySQL 없이 돈다.
 //!
 //! 원본의 `def test_`는 95개로 세어지지만 그중 `test_book`(68행)은 fixture이고 실제 테스트는 94개다.
 //! Rust에서는 같은 이름의 헬퍼 함수(`test_book`)가 되고 `#[test]`가 아니다.
 //!
-//! 가정한 API (아직 구현 전이다. Python과 이름·시그니처가 같다고 본다):
+//! 가정한 API:
 //! - `backend::main`
 //!   - `app_with(deps: AppDeps) -> axum::Router`, `AppDeps::new(auth: AuthMode)`와 소비형 빌더 (설계 3.2):
 //!     `.with_book_manager(..)`, `.with_comics_manager(..)`, `.with_category_mapping(..)` (각각 `Arc<dyn Trait>`),
@@ -17,7 +16,7 @@
 //!     `.with_reload_progress_flush_interval(Duration)`
 //!   - `AuthMode::{Cookies, Fixed(Value), Split { auth: Value, admin: Value }}`: 실제 쿠키 인증 / `require_auth`·`require_admin` override
 //!   - `GoogleVerifier { fn client_id(&self) -> Option<String>; fn verify(&self, credential: &str, audience: &str) -> Result<Value, String> }`, `RoleResolver { fn determine_role(&self, email: &str) -> Option<String> }`
-//!   - `BookstoreSearch`: 문서 3.2는 이름만 정했다. 아래 `StubStore`가 `search`/`build_search_url` 두 메서드를 가정한다(Python `DummyStore`와 같은 모양).
+//!   - `BookstoreSearch`: 문서 3.2는 이름만 정했다. 아래 `StubStore`가 `search`/`build_search_url` 두 메서드를 가정한다.
 //!   - `LazyProxy<T: Debug>`: `new(Box<dyn Fn() -> T + Send + Sync>, name: &str)`, `lock() -> MutexGuard<T>`
 //!   - `custom_jsonable_encoder(&Value) -> Value`, `CustomJsonResponse::new(Value)` (`.body: Vec<u8>`)
 //!   - `get_cookie_settings() -> (bool, String)`, `set_auth_cookies(&mut Response, access: &str, refresh: Option<&str>)`, `clear_auth_cookies(&mut Response)`
@@ -45,7 +44,7 @@
 //! - `file_record::{env_config::Config, record_builder::read_file, record_builder::now_iso}`, `doc_reader::pdf::InProcess`, `stat::Stat` (libs/file_record/src에서 확인한 실제 API)
 //! - 개발 의존성: `jsonwebtoken`, `async-trait`, `tempfile`, `tokio`, `serde_json`
 //!
-//! ES 인덱스(`TM_ES_BOOK_INDEX`)는 conftest의 `es_index`와 같은 매핑으로 미리 만들어져 있다고 본다.
+//! ES 인덱스(`TM_ES_BOOK_INDEX`)는 테스트 공용 설정의 `es_index`와 같은 매핑으로 미리 만들어져 있다고 본다.
 //! 모듈 범위 fixture(`backend_test_setup`)는 테스트마다 새로 만든다.
 
 use crate::{common, elasticsearch_fixture, mysql_fixture};
@@ -155,7 +154,7 @@ fn real_es(_url: &str) -> Arc<dyn EsManagerApi> {
     Arc::new(ESManager::connect(&process_env, &RealEsConnector, &SystemClock).expect("실제 ES 연결"))
 }
 
-/// `backend_test_setup` fixture. Python처럼 테스트용 ES와 MySQL 컨테이너를 쓴다.
+/// `backend_test_setup` fixture. 테스트용 ES와 MySQL 컨테이너를 쓴다.
 async fn backend_test_setup() -> Setup {
     common::setup_env();
     tokio::task::spawn_blocking(|| {
@@ -1004,7 +1003,7 @@ mod test_auth_me_logout {
     }
 }
 
-// ---- merged from test_main_api_extra.py ----
+// ---- 추가 API 사례 ----
 
 fn user_payload() -> Value {
     json!({"email": "user@example.com", "role": "user"})
@@ -1098,7 +1097,7 @@ async fn test_search_bookstore_api_errors() {
     assert_eq!(resp.json()["detail"], "제목 또는 저자를 입력해주세요");
 }
 
-/// Python `DummyStore`. `search`가 정한 행을 돌려주고, `build_search_url`은 `https://example.com?q={keyword}`다.
+/// 서점 대역. `search`가 정한 행을 돌려주고, `build_search_url`은 `https://example.com?q={keyword}`다.
 /// TODO(common): `BookstoreSearch`의 메서드 모양은 문서 3.2에 없다. 두 메서드를 가정했다. 서점이 13곳이어도 factory는 하나라 모든 이름이 같은 대역을 쓴다.
 struct StubStore {
     rows: Vec<BookRow>,
@@ -1258,7 +1257,7 @@ async fn test_category_mapping_endpoints() {
     assert_eq!(resp.json()["status"], "success");
 }
 
-// ---- merged from test_main_routes_extra.py ----
+// ---- 추가 라우트 사례 ----
 
 const NOW_ISO: &str = "2024-01-01T00:00:00.000000";
 
@@ -1269,7 +1268,6 @@ fn dummy_book(book_id: i64, category: &str, title: &str, file_path: &str, file_t
         category: category.into(),
         title: title.into(),
         author: "U".into(),
-        // Python `Book.__init__` always anchors the serialized relative path under `TM_BOOK_DIR`.
         file_path: Book::path_prefix().join(file_path),
         file_type: file_type.into(),
         file_size: 1,
@@ -1287,7 +1285,7 @@ type MismatchRet = Result<Value, String>;
 type CategoryFn = Arc<dyn Fn(&str) -> (Option<Value>, Option<String>) + Send + Sync>;
 type RenameFn = Arc<dyn Fn(&str, &str) -> (Option<Value>, Option<String>) + Send + Sync>;
 
-/// DummyManager의 메서드를 테스트가 `monkeypatch.setattr`로 바꾸던 부분을 값으로 모은 것이다.
+/// DummyManager의 메서드를 테스트가 바꾸던 부분을 값으로 모은 것이다.
 #[derive(Clone, Default)]
 struct Behavior {
     /// test_main_error_branches: 13개 메서드를 오류 반환으로 바꾼다.
@@ -1827,7 +1825,7 @@ async fn test_similar_names_returns_directory_scores_out_of_100() {
     assert_eq!(results.iter().map(|item| item["kind"].clone()).collect::<Vec<_>>(), [json!("directory"), json!("directory")]);
     assert_eq!(results[0]["category"], "Novel");
     assert_eq!(results[0]["score"].as_f64(), Some(100.0));
-    // pytest.approx(70 * 5 / 6 + 3)
+    // 70 * 5 / 6 + 3 (오차 허용)
     let expected = 70.0 * 5.0 / 6.0 + 3.0;
     let actual = results[1]["score"].as_f64().unwrap();
     assert!((actual - expected).abs() <= expected * 1e-6, "score={actual}, expected={expected}");
@@ -2650,7 +2648,7 @@ async fn test_delete_category_mapping_not_deleted() {
     assert_eq!(data["result"]["mapping_deleted"], false);
 }
 
-// ---- merged from test_main_env_guard.py ----
+// ---- 환경 변수 누락 검사 ----
 
 /// 재배포로 죽은 백그라운드 작업이 화면과 재실행을 막지 않아야 한다.
 ///

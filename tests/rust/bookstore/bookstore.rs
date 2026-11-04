@@ -15,7 +15,7 @@ fn store(name: &str) -> Store {
 }
 
 #[test]
-fn search_links_match_python() {
+fn search_links_match_reference() {
     for (name, case) in expected()["links"].as_object().unwrap() {
         let links = store(case[0].as_str().unwrap()).extract_search_links(&fixture(name));
         let want: Vec<&str> = case[1].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
@@ -24,7 +24,7 @@ fn search_links_match_python() {
 }
 
 #[test]
-fn book_info_matches_python() {
+fn book_info_matches_reference() {
     for (name, case) in expected()["info"].as_object().unwrap() {
         let info = store(case[0].as_str().unwrap()).extract_book_info(&fixture(name));
         let want = &case[1];
@@ -37,7 +37,7 @@ fn book_info_matches_python() {
 }
 
 #[test]
-fn search_urls_match_python() {
+fn search_urls_match_reference() {
     for (name, urls) in expected()["urls"].as_object().unwrap() {
         let s = store(name);
         assert_eq!(s.build_search_url("원피스 1 & 저자"), urls[0].as_str().unwrap(), "{name}");
@@ -46,7 +46,7 @@ fn search_urls_match_python() {
 }
 
 #[test]
-fn title_helpers_match_python() {
+fn title_helpers_match_reference() {
     for case in expected()["truncate"].as_array().unwrap() {
         assert_eq!(truncate_title(case[0].as_str().unwrap()), case[1].as_str().unwrap());
     }

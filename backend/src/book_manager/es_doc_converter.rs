@@ -1,4 +1,4 @@
-//! ES 문서와 `Book`·시각 문자열 사이의 변환. Python `Book.__init__`, `datetime.fromisoformat`에 대응한다.
+//! ES 문서와 `Book`·시각 문자열 사이의 변환.
 
 use std::path::Path;
 
@@ -26,7 +26,7 @@ fn int_of(info: &Value, key: &str) -> i64 {
 }
 
 /// ES 문서에서 `Book`을 만든다. `Book::new`와 달리 이 매니저의 책 루트를 쓰고, 빠진 필드는 기본값으로 채운다
-/// (Python은 `KeyError`를 낸다. 문서 하나가 목록 전체를 막지 않게 한다).
+/// (문서 하나가 목록 전체를 막지 않게 한다).
 pub fn book_from_doc(path_prefix: &Path, book_id: i64, info: &Value, score: f64) -> Book {
     let updated_text = str_of(info, "updated_time");
     let created_text = info.get("created_time").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| updated_text.clone());
@@ -49,7 +49,7 @@ pub fn book_from_doc(path_prefix: &Path, book_id: i64, info: &Value, score: f64)
     }
 }
 
-/// Python `Book.__init__`가 필수로 읽는 ES 필드를 검증한다.
+/// `Book`을 만드는 데 필요한 ES 필드를 검증한다.
 pub fn try_book_from_doc(path_prefix: &Path, book_id: i64, info: &Value, score: f64) -> Result<Book, String> {
     for key in ["category", "title", "author", "file_path", "file_type", "updated_time"] {
         if info.get(key).and_then(Value::as_str).is_none() {
@@ -73,7 +73,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn parse_iso_accepts_the_python_fromisoformat_shapes() {
+    fn parse_iso_accepts_iso_8601_variants() {
         for text in ["2024-01-02T03:04:05.123456", "2024-01-02 03:04:05", "2024-01-02T03:04", "2024-01-02 03:04", "2024-01-02"] {
             assert!(parse_iso(text).is_some(), "{text}");
         }

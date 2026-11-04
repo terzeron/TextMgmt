@@ -1,11 +1,10 @@
-//! 원본: tests/test_category_mapping.py
 //!
 //! `CategoryMapping`(MySQL 기반 카테고리 키워드·숨김·재적재 락·분류 제안 테이블) 테스트.
-//! Python은 `patch.dict(sys.modules, {"pymysql": ...})`로 드라이버를 가짜로 바꾸고, 인스턴스의 `_get_connection`을 대입으로 갈아끼운다.
+//! DB 연결은 대역으로 바꾼다.
 //! Rust는 `db`의 `DbConnection`/`ConnectionProvider`로 가짜 연결을 주입한다(설계: docs/rust-test-seams.md 3.4).
 //! 생성자 세 가지: `with_connector(provider)`는 초기화(`init_db`)를 실행하고, `with_connection_provider(provider)`는 초기화를 건너뛴다.
 //!
-//! 가정한 API (아직 구현 전이다. Python과 이름·시그니처가 같다고 본다):
+//! 가정한 API:
 //! - `db`: 드라이버 추상화 (가짜 연결이 구현한다)
 //!   - `enum DbValue { Null, Int(i64), Text(String), DateTime(chrono::NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`)
 //!   - `type Row = BTreeMap<String, DbValue>`, `enum DbError { IntegrityError(String), Other(String) }`
@@ -44,7 +43,7 @@ use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering};
 
 // TODO(common): FakeCursor/FakeConn은 refresh_token_store.rs, view_history_store.rs의 가짜 DbConnection과 겹친다. common/db_fake.rs로 합친다.
 
-// ---- 가짜 DbConnection (Python FakeCursor/FakeConn 대응) ----
+// ---- 가짜 DbConnection ----
 
 type SideEffect = Arc<dyn Fn(&str, &[DbValue]) -> Result<(), DbError> + Send + Sync>;
 
@@ -89,7 +88,6 @@ impl FakeCursor {
         self
     }
 
-    /// Python `fetchone_rows or [{"cnt": 0}]`처럼 빈 목록이면 기본값을 유지한다.
     fn with_fetchone_rows(self, rows: Vec<Option<Row>>) -> Self {
         if !rows.is_empty() {
             self.st.lock().unwrap().fetchone_rows = rows;
@@ -273,7 +271,7 @@ fn lock_row(lock_key: &str, status: &str, updated_at: NaiveDateTime) -> Row {
 #[test]
 fn test_init() {
     let cursor = FakeCursor::new().with_fetchone_rows(rep(0, 3));
-    // 생성자가 패닉하지 않고 끝나면 Python의 `assert cm is not None`과 같다.
+    // 생성자가 패닉하지 않고 끝나면 된다.
     let _cm = build_cm(&cursor);
 }
 
@@ -296,7 +294,7 @@ fn test_get_all_and_keywords() {
 
 #[test]
 fn test_get_all_mappings_keeps_category_order() {
-    // 키워드 동률 판정과 /mapping 응답이 SQL의 ORDER BY category 순서를 따라야 한다(Python dict와 같다).
+    // 키워드 동률 판정과 /mapping 응답이 SQL의 ORDER BY category 순서를 따라야 한다.
     let categories = ["a", "b", "c", "d", "e", "f", "g", "h"];
     let rows = categories.iter().map(|c| row([("category", (*c).into()), ("keyword", "k".into())])).collect();
     let cursor = FakeCursor::new().with_rows(rows);
@@ -306,7 +304,7 @@ fn test_get_all_mappings_keeps_category_order() {
 }
 
 #[test]
-fn test_get_keywords_propagates_database_errors_like_python() {
+fn test_get_keywords_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("query failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
 
@@ -314,7 +312,7 @@ fn test_get_keywords_propagates_database_errors_like_python() {
 }
 
 #[test]
-fn test_get_all_mappings_propagates_database_errors_like_python() {
+fn test_get_all_mappings_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("query failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
 
@@ -322,7 +320,7 @@ fn test_get_all_mappings_propagates_database_errors_like_python() {
 }
 
 #[test]
-fn test_get_classify_proposal_items_propagates_database_errors_like_python() {
+fn test_get_classify_proposal_items_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("query failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
 
@@ -330,7 +328,7 @@ fn test_get_classify_proposal_items_propagates_database_errors_like_python() {
 }
 
 #[test]
-fn test_get_classify_proposal_items_propagates_invalid_json_like_python() {
+fn test_get_classify_proposal_items_propagates_invalid_json() {
     let cursor = FakeCursor::new().with_rows(vec![row([("payload", "{".into())])]);
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
 
@@ -346,14 +344,14 @@ fn test_add_and_remove_keyword() {
 }
 
 #[test]
-fn test_remove_keyword_propagates_database_errors_like_python() {
+fn test_remove_keyword_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("delete unavailable"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.remove_keyword("cat", "kw", "book").unwrap_err().to_string().contains("delete unavailable"));
 }
 
 #[test]
-fn test_add_keyword_propagates_non_integrity_database_errors_like_python() {
+fn test_add_keyword_propagates_non_integrity_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("insert unavailable"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.add_keyword("cat", "kw", "book").unwrap_err().to_string().contains("insert unavailable"));
@@ -444,7 +442,7 @@ fn test_categories_search_and_rename() {
 }
 
 #[test]
-fn test_mapping_category_list_reads_propagate_database_errors_like_python() {
+fn test_mapping_category_list_reads_propagate_database_errors() {
     for read in ["hidden", "latest", "search"] {
         let cursor = FakeCursor::new().with_side_effect(fail_with("query failed"));
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
@@ -472,7 +470,7 @@ fn test_set_hidden() {
 }
 
 #[test]
-fn test_unhide_propagates_database_errors_like_python() {
+fn test_unhide_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("unhide failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.set_hidden("cat", false, "book").unwrap_err().to_string().contains("unhide failed"));
@@ -487,7 +485,7 @@ fn test_set_latest_excluded_failure() {
 }
 
 #[test]
-fn test_unexclude_propagates_database_errors_like_python() {
+fn test_unexclude_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("unexclude failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.set_latest_excluded("cat", false, "book").unwrap_err().to_string().contains("unexclude failed"));
@@ -548,7 +546,7 @@ fn test_delete_category_not_found() {
 }
 
 #[test]
-fn test_delete_category_propagates_database_errors_like_python() {
+fn test_delete_category_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("delete failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.delete_category("cat", "book", false).unwrap_err().to_string().contains("delete failed"));
@@ -613,7 +611,7 @@ fn test_acquire_reload_lock_success() {
 }
 
 #[test]
-fn test_acquire_reload_lock_propagates_database_errors_like_python() {
+fn test_acquire_reload_lock_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("lock query failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.acquire_reload_lock("book", None, None).unwrap_err().to_string().contains("lock query failed"));
@@ -727,7 +725,7 @@ fn test_release_reload_lock() {
 }
 
 #[test]
-fn test_release_reload_lock_propagates_database_errors_like_python() {
+fn test_release_reload_lock_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("release failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.release_reload_lock("book", None).unwrap_err().to_string().contains("release failed"));
@@ -808,7 +806,7 @@ fn test_get_reload_status_none_when_no_row() {
 }
 
 #[test]
-fn test_get_reload_status_propagates_database_errors_like_python() {
+fn test_get_reload_status_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("query failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.get_reload_status("book", None).unwrap_err().to_string().contains("query failed"));
@@ -846,7 +844,6 @@ fn test_get_reload_status_reports_stale_running_as_failed() {
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     let status = cm.get_reload_status("book", None).unwrap().unwrap();
     assert_eq!(status["status"], DbValue::from("failed"));
-    // Python `assert status["error"]`: None이나 빈 문자열이면 실패한다.
     assert!(!matches!(&status["error"], DbValue::Null) && status["error"] != DbValue::from(""), "{:?}", status["error"]);
 }
 
@@ -881,21 +878,21 @@ fn test_get_classify_proposal_status_treats_missing_heartbeat_as_stale() {
 }
 
 #[test]
-fn test_get_classify_proposal_status_propagates_database_errors_like_python() {
+fn test_get_classify_proposal_status_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("query failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.get_classify_proposal_status("book", 300).unwrap_err().to_string().contains("query failed"));
 }
 
 #[test]
-fn test_get_classify_proposal_status_propagates_invalid_json_like_python() {
+fn test_get_classify_proposal_status_propagates_invalid_json() {
     let cursor = FakeCursor::new().with_fetchone_rows(vec![Some(row([("status", "running".into()), ("payload", "{".into()), ("age_seconds", 0.into())]))]);
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.get_classify_proposal_status("book", 300).unwrap_err().to_string().contains("payload"));
 }
 
 #[test]
-fn test_try_start_classify_proposal_propagates_database_errors_like_python() {
+fn test_try_start_classify_proposal_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("status row insert failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.try_start_classify_proposal(&serde_json::json!({"status": "running"}), "book", 300).unwrap_err().to_string().contains("status row insert failed"));
@@ -1031,7 +1028,7 @@ fn test_add_then_get_returns_items_in_insertion_order() {
     assert_eq!(many.len(), 1);
     let (sql, rows) = &many[0];
     assert!(sql.contains("INSERT INTO classify_proposal_items"));
-    // Python json.dumps(ensure_ascii=False)는 serde_json::to_string에 대응한다 (구현도 같은 직렬화를 쓴다고 본다).
+    // serde_json::to_string과 같은 직렬화다.
     let expected = vec![text_row("book", "0_inbox", "a.epub", &serde_json::to_string(&items[0]).unwrap()), text_row("book", "0_inbox", "b.epub", &serde_json::to_string(&items[1]).unwrap())];
     assert_eq!(rows, &expected);
 
@@ -1130,7 +1127,7 @@ fn test_delete_classify_proposal_item_missing_row_returns_zero() {
 }
 
 #[test]
-fn test_proposal_item_delete_methods_propagate_database_errors_like_python() {
+fn test_proposal_item_delete_methods_propagate_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("delete failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
 
@@ -1139,28 +1136,28 @@ fn test_proposal_item_delete_methods_propagate_database_errors_like_python() {
 }
 
 #[test]
-fn test_clear_classify_proposal_items_propagates_database_errors_like_python() {
+fn test_clear_classify_proposal_items_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("clear failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.clear_classify_proposal_items("book").unwrap_err().to_string().contains("clear failed"));
 }
 
 #[test]
-fn test_set_classify_proposal_status_propagates_database_errors_like_python() {
+fn test_set_classify_proposal_status_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("status write failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.set_classify_proposal_status(&json!({"status": "ready"}), "book").unwrap_err().to_string().contains("status write failed"));
 }
 
 #[test]
-fn test_merge_classify_proposal_status_propagates_database_errors_like_python() {
+fn test_merge_classify_proposal_status_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("status merge failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.merge_classify_proposal_status(&json!({"progress": 3}), "book").unwrap_err().to_string().contains("status merge failed"));
 }
 
 #[test]
-fn test_proposal_item_update_methods_propagate_database_errors_like_python() {
+fn test_proposal_item_update_methods_propagate_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("item update failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
 
@@ -1169,7 +1166,7 @@ fn test_proposal_item_update_methods_propagate_database_errors_like_python() {
 }
 
 #[test]
-fn test_add_classify_proposal_items_propagates_database_errors_like_python() {
+fn test_add_classify_proposal_items_propagates_database_errors() {
     let cursor = FakeCursor::new().with_side_effect(fail_with("item insert failed"));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     assert!(cm.add_classify_proposal_items(&[json!({"file_path": "a.epub"})], "inbox", "book").unwrap_err().to_string().contains("item insert failed"));

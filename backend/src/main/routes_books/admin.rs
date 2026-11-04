@@ -2,7 +2,7 @@
 use super::{kind, manager};
 use crate::book_manager::BookDeletion;
 use crate::book_metadata::Book;
-use crate::main::request_extractors::python_bool;
+use crate::main::request_extractors::lenient_bool;
 use crate::main::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, RequireAdmin, Routes};
 use axum::{
     Json,
@@ -294,7 +294,7 @@ async fn mapping<T: Send + 'static>(deps: Arc<AppDeps>, action: impl FnOnce(Arc<
 
 #[derive(Deserialize)]
 struct ForceQuery {
-    #[serde(default, deserialize_with = "python_bool")]
+    #[serde(default, deserialize_with = "lenient_bool")]
     force: bool,
 }
 // 사용하지 않는 BookModel 필드도 HTTP 입력 계약에 따라 검증한다.
@@ -366,7 +366,7 @@ async fn rename_category(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Orig
 #[derive(Deserialize)]
 struct Delete {
     category: String,
-    #[serde(default, deserialize_with = "python_bool")]
+    #[serde(default, deserialize_with = "lenient_bool")]
     delete_files: bool,
 }
 async fn delete_category(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<Delete>) -> ApiResult<Json<Value>> {

@@ -6,7 +6,7 @@ fn fnv(values: impl IntoIterator<Item = u64>) -> u64 {
 }
 
 #[test]
-fn small_tables_match_the_python_module() {
+fn small_tables_match_the_generated_tables() {
     let tables: [(&str, &[u16], u64); 9] = [
         ("L_MAP", &L_MAP[..], 4912895135183160142u64),
         ("V_MAP", &V_MAP[..], 12646895591070372532u64),
@@ -25,7 +25,7 @@ fn small_tables_match_the_python_module() {
 }
 
 #[test]
-fn ksc5601_table_matches_the_python_module() {
+fn ksc5601_table_matches_the_generated_table() {
     assert_eq!(KSC5601_TO_UNI.len(), 4888);
     assert_eq!(fnv(KSC5601_TO_UNI.iter().map(|v| u64::from(*v))), 13439108652521159260u64);
     assert_eq!(KSC5601_TO_UNI[0], 0x4f3d);
@@ -33,7 +33,7 @@ fn ksc5601_table_matches_the_python_module() {
 }
 
 #[test]
-fn hnc2uni_matches_the_python_module_and_is_sorted_for_binary_search() {
+fn hnc2uni_matches_the_generated_table_and_is_sorted_for_binary_search() {
     assert_eq!(HNC2UNI.len(), 11979);
     assert!(HNC2UNI.windows(2).all(|w| w[0].0 < w[1].0));
     assert_eq!(fnv(HNC2UNI.iter().flat_map(|(k, v)| [u64::from(*k), u64::from(*v)])), 2780894431007483675u64);
@@ -44,7 +44,7 @@ fn hnc2uni_matches_the_python_module_and_is_sorted_for_binary_search() {
 }
 
 #[test]
-fn markers_have_the_python_values() {
+fn markers_have_the_documented_values() {
     assert_eq!(NONE, 0xFFFD);
     assert_eq!(FILL, 0xFF);
 }

@@ -1,5 +1,5 @@
-//! ISBN 추출 테스트 (tests/test_isbn.py 이식).
-//! Python 테스트는 subprocess와 pypdfium2·pypdf를 monkeypatch로 바꾼다. Rust는 같은 자리를
+//! ISBN 추출 테스트.
+//! 외부 도구와 PDF 추출기는 `Backends`로 대역을 꽂는다. 같은 자리를
 //! `Backends`로 주입한다.
 
 use std::fs;
@@ -84,8 +84,8 @@ fn search_in_content_finds_plain_dashed_and_ocr_damaged_numbers() {
 }
 
 #[test]
-fn search_matches_the_python_results_for_ocr_and_separator_variants() {
-    // 기대값은 Python `utils.isbn.search_in_content`의 실제 출력이다.
+fn search_matches_reference_results_for_ocr_and_separator_variants() {
+    // 기대값은 기록된 search_in_content 출력이다.
     for (input, expected) in [
         ("ISBN 0-8044-2957-Ⅹ", vec![]),
         ("ISBN 89-8044-2957-Ⅹ", vec![]),

@@ -11,7 +11,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// 이름이 `prefix`로 시작하고 `suffix`로 끝나는 직속 항목 이름을 정렬해서 돌려준다.
 /// "임시 파일이 남지 않았는가"를 이 함수 하나로 검사한다. 디렉터리가 없으면 빈 목록이다.
-/// Python `sorted(p.name for p in dir.glob(f"{prefix}*{suffix}"))`.
 pub fn leftover(dir: &Path, prefix: &str, suffix: &str) -> Vec<String> {
     let mut names: Vec<String> = match std::fs::read_dir(dir) {
         Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with(prefix) && n.ends_with(suffix)).collect(),
@@ -26,17 +25,17 @@ pub fn part_files(dir: &Path) -> Vec<String> {
     leftover(dir, "", ".part")
 }
 
-/// `leftover(..).len()`. Python `len(list(dir.glob("prefix*suffix")))`.
+/// `leftover(..).len()`.
 pub fn count_matching(dir: &Path, prefix: &str, suffix: &str) -> usize {
     leftover(dir, prefix, suffix).len()
 }
 
-/// 직속 항목 이름을 정렬해서 돌려준다. Python `sorted(p.name for p in dir.iterdir())`.
+/// 직속 항목 이름을 정렬해서 돌려준다.
 pub fn dir_names(dir: &Path) -> Vec<String> {
     leftover(dir, "", "")
 }
 
-/// 하위 디렉터리까지 모든 파일(정렬). Python `dir.rglob("*")` 중 파일만.
+/// 하위 디렉터리까지 모든 파일(정렬).
 pub fn files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {
@@ -75,12 +74,12 @@ pub fn create_empty(path: impl AsRef<Path>) -> PathBuf {
     path.to_path_buf()
 }
 
-/// 접근·수정 시각을 `seconds_since_epoch`로 맞춘다. Python `os.utime(path, (t, t))`.
+/// 접근·수정 시각을 `seconds_since_epoch`로 맞춘다.
 pub fn touch(path: &Path, seconds_since_epoch: u64) {
     set_times(path, UNIX_EPOCH + Duration::from_secs(seconds_since_epoch), UNIX_EPOCH + Duration::from_secs(seconds_since_epoch));
 }
 
-/// 수정 시각만 `t`로 맞춘다. Python `os.utime(path, (t, t))`의 `SystemTime` 형태.
+/// 수정 시각만 `t`로 맞춘다.
 pub fn set_mtime(path: &Path, t: SystemTime) {
     std::fs::OpenOptions::new().write(true).open(path).unwrap().set_modified(t).unwrap();
 }
@@ -95,7 +94,7 @@ pub fn set_mtime_secs(path: &Path, seconds_since_epoch: u64) {
     set_mtime(path, UNIX_EPOCH + Duration::from_secs(seconds_since_epoch));
 }
 
-/// 접근 시각과 수정 시각을 ns 단위로 정한다. Python `os.utime(path, ns=(atime, mtime))`.
+/// 접근 시각과 수정 시각을 ns 단위로 정한다.
 pub fn set_times_ns(path: &Path, atime: u64, mtime: u64) {
     set_times(path, UNIX_EPOCH + Duration::from_nanos(atime), UNIX_EPOCH + Duration::from_nanos(mtime));
 }
@@ -111,19 +110,17 @@ pub fn times_ns(path: &Path) -> (u64, u64) {
     ((m.atime() as u64) * 1_000_000_000 + m.atime_nsec() as u64, (m.mtime() as u64) * 1_000_000_000 + m.mtime_nsec() as u64)
 }
 
-/// 수정 시각의 ns 정수. Python `stat().st_mtime`을 `_page_count_cache` 키로 쓸 때.
+/// 수정 시각의 ns 정수.
 pub fn mtime_key(path: &Path) -> i64 {
     let md = std::fs::metadata(path).unwrap();
     md.mtime() * 1_000_000_000 + md.mtime_nsec()
 }
 
-/// Python `(path.stat().st_ino, path.stat().st_mtime_ns)`.
 pub fn ino_mtime(path: &Path) -> (u64, i128) {
     let meta = std::fs::metadata(path).unwrap();
     (meta.ino(), meta.mtime() as i128 * 1_000_000_000 + meta.mtime_nsec() as i128)
 }
 
-/// Python `hashlib.sha256(data).hexdigest()`.
 pub fn sha256_hex(data: impl AsRef<[u8]>) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(data.as_ref()).iter().map(|b| format!("{b:02x}")).collect()

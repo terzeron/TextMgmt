@@ -1,4 +1,4 @@
-//! 책 이동·삭제·단일 파일 색인. Python `update_book`, `delete_book`, `delete_file`, `index_single_file`에 대응한다.
+//! 책 이동·삭제·단일 파일 색인.
 
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};

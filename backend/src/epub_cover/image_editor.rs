@@ -1,8 +1,8 @@
-//! EPUB 쪽 이미지의 크롭·분할·삭제·삽입. Python `epub_cover.edit_images`와 그 도우미에 대응한다.
+//! EPUB 쪽 이미지의 크롭·분할·삭제·삽입.
 //!
-//! 입력 검증은 Python보다 엄격하다.
+//! 입력 검증:
 //! - 편집 항목 수(크롭·분할·삭제 각 500, 삽입 100)와 쪽 안 이미지 번호(0~10000)에 상한이 있다.
-//! - 크롭 영역은 숫자 5개(x0, y0, x1, y1, angle)여야 하고 유한해야 한다. 범위는 `image_edit::crop_pil`이 확인한다.
+//! - 크롭 영역은 숫자 5개(x0, y0, x1, y1, angle)여야 하고 유한해야 한다. 범위는 `image_edit::crop_rotated`이 확인한다.
 //! - 읽는 이미지는 읽기 전에 바이트 크기(`max_image_bytes`)를, 디코딩 전에 화소 수(`max_image_pixels`)를 상한과 비교한다.
 //!   크롭 결과는 원본보다 커지지 않는다.
 //! - 편집으로 쌓는 멤버의 합이 `MAX_EDIT_OUTPUT_BYTES`를 넘으면 거절한다.
@@ -23,7 +23,7 @@ use super::inplace_replacer::rewrite_epub;
 use super::member_path;
 use super::xml_tree::{self, Element, Node};
 use super::{CoverError, EpubCoverHooks, FResult, Fail, MAX_XML_BYTES, entry_names, entry_size, has_entry, normalize_image_with, read_dimensions, read_entry, read_package_with};
-use crate::image_edit::{Rect, crop_pil};
+use crate::image_edit::{Rect, crop_rotated};
 use htmlkit::url_parser::quote;
 
 /// crops 의 idref 에 이 값을 주면 쪽이 아니라 표지 이미지를 자른다(표지 화면은 spine 항목이 아닐 수 있다).
@@ -88,7 +88,7 @@ impl PageInfo {
     }
 }
 
-/// element 안의 보이는 글. SVG의 title·desc는 화면에 그려지지 않으므로 뺀다(Python과 같게 주석 본문은 센다).
+/// element 안의 보이는 글. SVG의 title·desc는 화면에 그려지지 않으므로 뺀다(주석 본문은 센다).
 fn visible_text(element: &Element) -> String {
     const SVG_NS: &str = "http://www.w3.org/2000/svg";
     fn walk(element: &Element, out: &mut String) {
@@ -323,7 +323,7 @@ fn crop_image_bytes(data: &[u8], rect: Rect, hooks: &EpubCoverHooks) -> Result<(
     hooks.observe_decode();
     let decoded = image::ImageReader::with_format(Cursor::new(data), format).decode().map_err(|_| unreadable())?;
     let source = flatten(decoded);
-    let cropped = crop_pil(&source, rect).map_err(|e| crop_err(&e.to_string()))?;
+    let cropped = crop_rotated(&source, rect).map_err(|e| crop_err(&e.to_string()))?;
     let mut output = Vec::new();
     match format {
         ImageFormat::Jpeg => {

@@ -77,7 +77,7 @@ fn admin() -> AuthMode {
 }
 
 #[tokio::test]
-async fn keyword_routes_forward_content_type_and_return_python_contracts() {
+async fn keyword_routes_forward_content_type_and_return_the_response_contracts() {
     let mapping = Mapping::new(true, false);
     let client = client(mapping.clone(), admin());
     assert_eq!(client.get("/category-mappings?content_type=comic").await.json(), json!({"status":"success","result":{"fiction":["one"]}}));
@@ -167,7 +167,7 @@ async fn mapping_auth_and_body_validation_run_before_db() {
 }
 
 #[tokio::test]
-async fn policy_boolean_inputs_match_pydantic() {
+async fn policy_boolean_inputs_accept_lenient_values() {
     let mapping = Mapping::new(true, false);
     let client = client(mapping.clone(), admin());
     for (value, expected) in [(json!(true), true), (json!(1.0), true), (json!(-0.0), false), (json!("Y"), true), (json!("f"), false)] {

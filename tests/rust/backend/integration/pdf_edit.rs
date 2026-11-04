@@ -382,7 +382,7 @@ mod http_contract {
     use std::sync::Arc;
 
     #[tokio::test]
-    async fn http_edits_books_and_comics_with_python_response_contract() {
+    async fn http_edits_books_and_comics_with_the_response_contract() {
         use backend::main::{AppDeps, AuthMode, app_with};
         for prefix in ["", "/comics"] {
             let e = env();

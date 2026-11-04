@@ -112,7 +112,7 @@ fn test_get_books_in_category_uses_bounded_result_count() {
 
 #[test]
 fn test_get_books_in_category_warns_on_truncation() {
-    // 결과가 MAX_CATEGORY_RESULT_COUNT 에 도달하면 잘림 경고를 남긴다 (book_manager.py:372).
+    // 결과가 MAX_CATEGORY_RESULT_COUNT 에 도달하면 잘림 경고를 남긴다.
     let tmp = tmp_dir();
     // 가정한 seam: 상한 값 설정자(문서에 없는 seam, 파일 머리말 참고)와 log 캡처.
     let es = FakeEsManager::new();

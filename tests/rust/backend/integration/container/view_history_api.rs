@@ -1,11 +1,10 @@
-//! 원본: tests/test_view_history_api.py
 //!
 //! 조회 이력 엔드포인트 테스트. 스토어는 대역으로 두고 라우팅, 인증, 스냅샷 규칙을 본다.
 //! 실제 SQL 동작은 `view_history_store.rs`가 MySQL 컨테이너로 검증한다.
 //!
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.2, 3.4, 3.13):
 //! - `backend::main::MAX_RECENT_VIEWS: usize`
-//! - `backend::main::app_with(deps: AppDeps) -> axum::Router`: FastAPI `dependency_overrides`와 `monkeypatch.setattr(main_mod, ...)`의 대응 seam
+//! - `backend::main::app_with(deps: AppDeps) -> axum::Router`: 의존성을 대역으로 바꿔 끼우는 seam
 //! - `backend::main::AppDeps::new(auth: AuthMode) -> AppDeps` (나머지는 실제 구현), 소비형 빌더:
 //!   `with_view_history_store(Arc<dyn ViewHistoryApi>)`, `with_book_access(Arc<dyn BookAccess>)`, `with_task_runner(Arc<dyn TaskRunner>)`
 //!   (구 `AppDeps { view_history_store, book_access, auth_override, admin_override, ..Default::default() }` 리터럴)
@@ -17,7 +16,7 @@
 //!   `record_view(&self, email: &str, content_type: &str, book_id: i64, title: &str, category: &str) -> Result<(), ViewHistoryError>`,
 //!   `list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError>` (`ViewHistoryStore`도 구현한다)
 //! - `ViewHistoryStore::get_connection(&self) -> Result<Box<dyn DbConnection>, DbError>` (구 `_get_connection() -> mysql::Conn`), `DbConnection::execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>`
-//! - `backend::main::BookAccess` (Python `_get_book_and_ensure_viewer_access`):
+//! - `backend::main::BookAccess`:
 //!   `get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HttpException>`
 //! - `backend::main::BookStub { title: String, category: Option<String> }`, `backend::main::HttpException { status_code: u16, detail: String }`
 //! - `backend::main::route_dependencies(path: &str) -> Vec<&'static str>`: 라우트에 붙은 의존성 이름 (`route.dependant.dependencies` 대응)

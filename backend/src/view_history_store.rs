@@ -1,4 +1,4 @@
-//! 사용자별 최근 조회 이력 저장소. Python `backend/view_history_store.py`의 Rust 대응이다.
+//! 사용자별 최근 조회 이력 저장소.
 //!
 //! 운영은 k8s 멀티 replica라 pod 로컬 저장은 이력이 파편화되므로 MySQL 전용이다.
 //! 제목·카테고리는 조회 시점의 스냅샷으로 저장한다. 설계: docs/rust-test-seams.md 3.4
@@ -65,7 +65,7 @@ const SELECT_ALL_SQL: &str = "
     LIMIT %s
 ";
 
-/// Python의 `ValueError`와 DB 예외(`RuntimeError`)에 대응한다.
+/// 입력 오류와 DB 오류.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ViewHistoryError {
     ValueError(String),

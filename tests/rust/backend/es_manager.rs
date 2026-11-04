@@ -96,7 +96,7 @@ fn default_env(key: &str) -> Option<String> {
     }
 }
 
-/// `_set_es_env(monkeypatch)`: 재시도 테스트가 쓰는 환경 값.
+/// `_set_es_env`: 재시도 테스트가 쓰는 환경 값.
 fn retry_env(key: &str) -> Option<String> {
     match key {
         "TM_ES_BOOK_INDEX" => Some("test_index".to_string()),
@@ -141,7 +141,6 @@ fn contains(array: &Value, item: &Value) -> bool {
     array.as_array().expect("배열").contains(item)
 }
 
-/// Python `captured.update(kwargs)`처럼 호출 인자를 `captured`에 합치고 `response`를 돌려주는 가짜 메서드를 건다.
 fn capture(es: &DummyEs, op: &str, response: Value) -> Arc<Mutex<Value>> {
     let captured = Arc::new(Mutex::new(json!({})));
     let sink = captured.clone();
@@ -184,7 +183,7 @@ fn test_do_exist_index_get_existing_ids_and_paths() {
 }
 
 #[test]
-fn test_do_exist_index_uses_python_truthiness_for_all_json_shapes() {
+fn test_do_exist_index_uses_emptiness_for_all_json_shapes() {
     let cases = [
         (json!(null), false),
         (json!(false), false),
@@ -281,7 +280,7 @@ fn test_create_index_is_successful_when_existing_mapping_cannot_be_read() {
 fn test_create_index_includes_created_time_mapping() {
     let es = new_es();
     let manager = make_manager(&es);
-    // Python은 do_exist_index를 False로 바꾼다. DummyEs의 기본 indices.exists가 이미 False다.
+    // `indices.exists`의 기본 응답이 false라 색인이 없는 상황이다.
 
     assert_eq!(manager.create_index().unwrap()["acknowledged"], json!(true));
 
@@ -700,7 +699,7 @@ fn test_get_existing_ids_and_paths_empty() {
 fn test_delete_index_when_exists() {
     let es = new_es();
     let manager = make_manager(&es);
-    // Python은 do_exist_index를 True로 바꾼다. DummyEs의 indices.exists가 True를 돌려주게 해 같은 상황을 만든다.
+    // `indices.exists`가 true를 돌려주게 해 색인이 있는 상황을 만든다.
     es.set_mapping(json!({"exists": true}));
     manager.delete_index().unwrap();
     assert!(es.state(|s| s.deleted));
@@ -725,7 +724,7 @@ fn test_update_success_and_delete_by_file_paths_empty() {
 
 #[test]
 fn test_count_by_categories_single() {
-    // Python은 count_by_category를 7을 돌려주는 함수로 바꾼다. es.count 응답을 7로 두어 같은 위임을 확인한다.
+    // es.count 응답을 7로 두어 count_by_category 위임을 확인한다.
     let es = new_es();
     let manager = make_manager(&es);
     es.on("count", |_| Ok(json!({"count": 7})));
@@ -771,7 +770,7 @@ fn test_create_index_non_exists_bad_request() {
     let es = new_es();
     let manager = make_manager(&es);
 
-    // Python은 do_exist_index를 False로 바꾼다. DummyEs의 기본 indices.exists가 이미 False다.
+    // `indices.exists`의 기본 응답이 false라 색인이 없는 상황이다.
     es.on("indices.create", |_| Err(EsError::Status { status: 400, body: "some_other_error".to_string() }));
     assert!(matches!(manager.create_index(), Err(EsError::Status { .. })));
 }
@@ -952,7 +951,7 @@ fn test_delete_returns_false() {
     assert!(!manager.delete(1).unwrap());
 }
 
-// ---- merged from test_es_retry_check.py ----
+// ---- 연결 재시도 ----
 
 #[test]
 fn test_init_success_first_try() {
@@ -1008,9 +1007,7 @@ fn test_init_does_not_retry_non_connection_errors() {
     assert!(clock.slept().is_empty());
 }
 
-// ---- merged from test_get_all_file_paths_grouped_check.py ----
-// ---- coverage: update.py CLI tests ----
-// utils/search.py 는 Rust(utils/search)로 옮겨 이 파일의 search 테스트는 utils/search/tests 로 이식했다.
+// ---- 파일 경로 묶음 조회 ----
 // test_update_main, test_update_main_failure, test_update_main_delete_failure는
 // tests/rust/update/update.rs가 이미 옮겼으므로 여기서는 옮기지 않는다.
 
@@ -1066,7 +1063,7 @@ fn test_update_with_author() {
 
 #[test]
 fn test_search_scroll_early_return_at_max_result_count() {
-    // scroll 경로에서 max_result_count 에 도달하면 즉시 반환한다 (es_manager.py:255).
+    // scroll 경로에서 max_result_count 에 도달하면 즉시 반환한다.
     let es = new_es();
     let manager = make_manager(&es);
 

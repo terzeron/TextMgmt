@@ -1,4 +1,4 @@
-//! 원본: tests/test_loader_gaps.py (전체)
+//! loader 재적재 실패 경로 테스트.
 //!
 //! loader 재적재 경로의 드문 분기를 확인한다. ES는 `IndexStore`를 구현한 가짜 저장소로 바꾼다.
 //! 실패 코드는 Rust crate의 실제 값을 쓴다. 가정한 API는 없다(실제 crate의 공개 API만 쓴다).
@@ -50,7 +50,7 @@ fn child_runner_reports_nonzero_exit_and_invalid_json() {
     assert!(matches!(error, StageError::Failed(_)));
 }
 
-/// conftest.py/`_setup_loader_env` 대응: 책 prefix는 root, 만화 prefix는 root/comics.
+/// loader 테스트 환경: 책 prefix는 root, 만화 prefix는 root/comics.
 fn setup_loader_env(root: &Path) -> HashMap<String, String> {
     let mut env = HashMap::new();
     env.insert("TM_BOOK_DIR".to_owned(), root.to_string_lossy().into_owned());

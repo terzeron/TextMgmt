@@ -1,4 +1,4 @@
-//! 카테고리 재적재. Python `_bulk_index_files`, `_reload_category_mismatch_details`, `reload_category_mismatches`,
+//! 카테고리 재적재: 파일 일괄 색인과 불일치 상세 다시 읽기.
 //! `reload_category_mismatch_files`, `_reload_root_files`, `reload_category`에 대응한다.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};

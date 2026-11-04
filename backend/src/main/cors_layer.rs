@@ -1,4 +1,4 @@
-//! CORS. Python `CORSMiddleware(allow_origins=[TM_FRONTEND_URL], allow_credentials=True, allow_methods=[GET,POST,PUT,DELETE], allow_headers=[Content-Type])`.
+//! CORS: `TM_FRONTEND_URL` 한 곳만, 자격 증명 허용, GET·POST·PUT·DELETE, `Content-Type` 헤더.
 //!
 //! 인증은 HttpOnly 쿠키(credentials include) 기반이라 `Authorization` 헤더는 허용하지 않는다(CWE-942: 실제 쓰는 메서드·헤더만 연다).
 //! Origin이 `TM_FRONTEND_URL`과 같을 때만 허용 헤더를 붙인다. 허용 Origin은 요청 시점에 환경 변수에서 읽는다.

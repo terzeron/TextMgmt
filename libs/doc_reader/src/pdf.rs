@@ -237,7 +237,7 @@ pub type PdftotextRun<'a> = dyn Fn(&[String]) -> Option<(i32, Vec<u8>)> + 'a;
 pub struct PdftotextHooks<'a> {
     pub which: Option<&'a PdftotextWhich<'a>>,
     pub run: Option<&'a PdftotextRun<'a>>,
-    /// Python `Loader` caches the binary path. Each Rust loader/test scope owns its cache.
+    /// 실행 파일 경로 캐시. loader·테스트 범위마다 따로 가진다.
     pub path_cache: &'a std::sync::OnceLock<Option<PathBuf>>,
 }
 

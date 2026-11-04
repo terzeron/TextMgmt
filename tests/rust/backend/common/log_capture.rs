@@ -1,4 +1,4 @@
-//! pytest `caplog`에 대응하는 RAII 로그 수집기. 설계: docs/rust-test-seams.md 3.10.
+//! 테스트 동안 로그를 모으는 RAII 수집기. 설계: docs/rust-test-seams.md 3.10.
 //! 스레드마다 따로 쌓아서 병렬 테스트끼리 섞이지 않는다. 이전의 자유 함수 `capture_at_level`/`records`/`text`를 대체한다.
 //!
 //! 가정한 API: 프로덕션 코드는 `log` crate만 쓴다(`log::error!`, `log::warn!`). `backend::log_capture` 모듈은 없다.

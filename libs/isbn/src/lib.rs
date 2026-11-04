@@ -1,11 +1,11 @@
-//! 파일에서 ISBN을 찾는다. 원본: `utils/isbn.py`.
+//! 파일에서 ISBN을 찾는다.
 //!
 //! TXT는 앞뒤 8KB, EPUB은 OPF 메타데이터를 먼저 보고 없으면 spine의 첫·끝 챕터, PDF는 앞뒤 5쪽, DJVU는 앞뒤 5쪽,
 //! HWP는 `strings` 출력의 앞뒤만 본다. OCR이 망가뜨린 글자(l, I, B, O, Ⅹ)도 알아본다.
 //!
 //! 파일을 읽는 일은 [`doc_reader::head_tail_reader`]가 한다. 이 crate는 어느 부분을 어떤 순서로 볼지,
 //! PDF 단계의 시간 상한과 통계 기록, 본문 검색과 검증을 맡는다.
-//! 외부 도구와 PDF 추출기는 [`Backends`]로 주입한다. Python 원본의 monkeypatch 자리다.
+//! 외부 도구와 PDF 추출기는 [`Backends`]로 주입한다. 테스트가 대역을 꽂는 자리다.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
@@ -66,7 +66,7 @@ pub fn validate_isbn(isbn: &str) -> bool {
 // ---------------------------------------------------------------- 본문 검색
 
 // 구분자를 쓰는 패턴과 구분자가 뚜렷하지 않은 패턴. 구분자가 있으면 그룹 숫자 사이에 공백이 낄 수 있다.
-// Python 원본은 re.VERBOSE로 줄을 나눠 썼다. 여기서는 같은 조각을 이어 붙인다.
+// 정규식 조각을 줄마다 나눠 적고 이어 붙인다.
 const ISBN_PATTERN: &str = concat!(
     r"(?:[:_]?|\b)",
     r"(",
@@ -145,7 +145,7 @@ pub fn search_in_content(content: &str) -> Vec<String> {
 }
 
 pub fn search_in_content_bytes(content: &[u8]) -> Vec<String> {
-    // Python `decode(errors="ignore")`: 잘못된 바이트는 버린다.
+    // UTF-8로 읽되 잘못된 바이트는 버린다.
     search_in_content(&content.utf8_chunks().map(|c| c.valid()).collect::<String>())
 }
 // ---------------------------------------------------------------- 외부 명령·EPUB

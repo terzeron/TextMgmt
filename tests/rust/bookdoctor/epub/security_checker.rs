@@ -1008,7 +1008,7 @@ mod active_content {
     }
 
     #[test]
-    fn report_serializes_findings_with_python_compatible_severity_labels() {
+    fn report_serializes_findings_with_stable_severity_labels() {
         let r = scan_chapter("<script>1</script>");
         let v = serde_json::to_value(&r).unwrap();
         // 옛 `status` 라벨은 FileReport에 없다(요약은 Task 3·4의 report가 맡는다).

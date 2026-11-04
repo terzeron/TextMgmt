@@ -1,5 +1,5 @@
-//! `tests/conftest.py`의 Nori Elasticsearch 컨테이너 대응 fixture.
-//! 이미지를 재사용하고, 없을 때만 Python fixture와 같은 8.15.0 + analysis-nori 이미지를 만든다.
+//! Nori Elasticsearch 컨테이너 fixture.
+//! 이미지를 재사용하고, 없을 때만 8.15.0 + analysis-nori 이미지를 만든다.
 
 use std::io::Write;
 use std::process::{Command, Stdio};

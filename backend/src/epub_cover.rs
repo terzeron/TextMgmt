@@ -1,12 +1,12 @@
-//! EPUB 표지 검사와 inode를 보존하는 표지 저장. Python `backend/epub_cover.py`에 대응한다.
+//! EPUB 표지 검사와 inode를 보존하는 표지 저장.
 //!
 //! 설계: docs/rust-test-seams.md 3.5, 3.7, 3.11, 3.12.
 //! - 한도(`MAX_*`)와 `fsync`/`flock`, 개정 번호, 무결성 검사는 `EpubCoverHooks`로 바꾼다. 기본값은 운영 값이다.
-//! - `lxml`은 `xml`(고칠 수 있는 작은 트리), PIL은 `image`, `zipfile`은 `zip`으로 옮겼다.
+//! - XML은 `xml_tree`(고칠 수 있는 작은 트리), 이미지는 `image`, ZIP은 `zip` crate로 다룬다.
 //! - 쓰기는 `stage`(OPF·XHTML 편집), `rewrite`(잠금·백업·제자리 쓰기·되돌리기), `edit`(쪽 이미지 편집)에 나눴다.
 //!
-//! Python과 달라진 점:
-//! - JPEG 부분 디코딩(`draft`)이 없어 `max_image_pixels`를 원본 크기로 확인한다. 큰 JPEG는 Python보다 일찍 거절한다.
+//! 제한:
+//! - JPEG 부분 디코딩이 없어 `max_image_pixels`를 원본 크기로 확인한다. 큰 JPEG는 일찍 거절한다.
 //! - XML 문자 인코딩은 UTF-8과 UTF-16 BOM만 읽는다(`encoding=` 선언을 따르지 않는다).
 //! - 목록 검사에서 `flock(LOCK_SH)`는 실제 파일 시스템이면 공유 잠금이고, `with_fs`로 대역을 넣으면 `FsOps::lock_exclusive`를 쓴다(공유 잠금 seam이 없다).
 
@@ -53,7 +53,7 @@ pub const MAX_XML_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_EPUB_BYTES: usize = 1024 * 1024 * 1024;
 pub const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
 pub const MAX_IMAGE_PIXELS: usize = 80_000_000;
-/// ZIP 항목 수 상한(Python `_read_package`).
+/// ZIP 항목 수 상한.
 pub const MAX_ENTRIES: usize = 20_000;
 
 // ---------------------------------------------------------------------------
@@ -62,11 +62,11 @@ pub const MAX_ENTRIES: usize = 20_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
-    /// 사용자에게 보여 줄 수 있는 오류(Python `CoverError`).
+    /// 사용자에게 보여 줄 수 있는 오류.
     Message,
-    /// 운영체제 오류(Python `OSError`).
+    /// 운영체제 오류.
     Io,
-    /// 화면에서 더 필요하지 않은 요청(Python `FetchCancelled`).
+    /// 화면에서 더 필요하지 않은 요청.
     Cancelled,
 }
 
@@ -138,7 +138,7 @@ const INSPECT_FAILED: &str = "EPUB 또는 기존 표지를 검사할 수 없습�
 const SAVING: &str = "이 EPUB은 현재 저장 중입니다";
 const CHANGED: &str = "EPUB이 변경되었습니다. 목록을 새로 불러오세요";
 
-/// 내부 오류. Python에서 `CoverError`, `OSError`, 그 밖의 예외(`KeyError`, `BadZipFile`, `XMLSyntaxError` 등)를 가르던 것을 옮겼다.
+/// 내부 오류. 사용자 오류, 운영체제 오류, 그 밖의 손상(ZIP·XML 오류 등)을 가른다.
 #[derive(Debug)]
 pub(crate) enum Fail {
     Cover(CoverError),
@@ -275,7 +275,7 @@ impl EpubCoverHooks {
         self
     }
 
-    /// 이미지 전체를 디코딩할 때마다 부른다(Python `Image.Image.load` 감시).
+    /// 이미지 전체를 디코딩할 때마다 부른다(테스트 관측용).
     pub fn with_pixel_decode_observer(mut self, f: Arc<dyn Fn() + Send + Sync>) -> Self {
         self.pixel_decode_observer = Some(f);
         self
@@ -394,7 +394,7 @@ pub fn revision(path: &Path) -> String {
     }
 }
 
-/// ZIP 항목 수 상한. Python `_read_package`의 첫 검사.
+/// ZIP 항목 수 상한. 패키지를 읽을 때 처음 검사한다.
 pub fn check_entry_count(count: usize) -> Result<(), CoverError> {
     if count > MAX_ENTRIES { Err(CoverError::new("EPUB이 검사 크기 제한을 초과했습니다")) } else { Ok(()) }
 }
@@ -488,7 +488,7 @@ pub(crate) fn read_package_with<R: Read + Seek>(archive: &mut ZipArchive<R>, hoo
     Ok((opf_path, package))
 }
 
-/// Python `_read_package`.
+/// EPUB 패키지(container와 OPF)를 읽는다.
 pub fn read_package<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<Package, CoverError> {
     read_package_with(archive, &EpubCoverHooks::default()).map(|(opf_path, root)| Package { opf_path, root }).map_err(Fail::into_cover)
 }
@@ -501,13 +501,13 @@ fn read_dimensions(data: &[u8]) -> Result<(u32, u32), image::ImageError> {
     image::ImageReader::new(Cursor::new(data)).with_guessed_format()?.into_dimensions()
 }
 
-/// PIL `Image.thumbnail`이 고르는 크기. 확대하지 않고 비율을 지킨다.
+/// 썸네일 크기. 확대하지 않고 비율을 지킨다.
 fn thumbnail_size(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
     if max_width >= width && max_height >= height {
         return (width, height);
     }
     let aspect = f64::from(width) / f64::from(height);
-    // 같은 오차면 먼저 나온 값(바닥)을 고른다. Python `min(floor, ceil, key=...)`와 같다.
+    // 같은 오차면 먼저 나온 값(바닥)을 고른다.
     let pick = |number: f64, error: &dyn Fn(f64) -> f64| -> u32 {
         let (floor, ceil) = (number.floor(), number.ceil());
         let best = if error(ceil) < error(floor) { ceil } else { floor };
@@ -559,7 +559,7 @@ pub fn find_epub_cover_member<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Op
     find_epub_cover_member_with(archive, &|_| None)
 }
 
-/// `file_size`가 값을 돌려주면 ZIP 헤더의 크기 대신 쓴다(Python이 `ZipInfo.file_size`를 덮어쓰는 것에 대응한다).
+/// `file_size`가 값을 돌려주면 ZIP 헤더의 크기 대신 쓴다(테스트가 큰 항목을 흉내 낸다).
 pub fn find_epub_cover_member_with<R: Read + Seek>(archive: &mut ZipArchive<R>, file_size: &dyn Fn(&str) -> Option<u64>) -> Option<String> {
     find_cover_member_in(archive, &EpubCoverHooks::default(), file_size)
 }
@@ -758,7 +758,7 @@ fn inspect_cover_image<R: Read + Seek>(archive: &mut ZipArchive<R>, member: &str
     Ok(Value::Object(info))
 }
 
-/// Python `_inspect_archive`.
+/// 압축 파일 전체를 검사한다.
 pub(crate) fn inspect_archive<R: Read + Seek>(archive: &mut ZipArchive<R>, hooks: &EpubCoverHooks) -> FResult<Value> {
     let (_, package) = read_package_with(archive, hooks)?;
     let member = find_cover_member_in(archive, hooks, &|_| None);
@@ -829,7 +829,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn thumbnail_size_matches_pil() {
+    fn thumbnail_size_keeps_aspect_without_upscaling() {
         assert_eq!(thumbnail_size(1800, 2700, 600, 3000), (600, 900));
         assert_eq!(thumbnail_size(1200, 600, 600, 3000), (600, 300));
         assert_eq!(thumbnail_size(300, 450, 600, 3000), (300, 450));

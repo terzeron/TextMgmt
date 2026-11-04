@@ -52,7 +52,7 @@ pub fn classify_text(text: &str) -> (Verdict, Option<f64>) {
     }
 }
 
-/// 소수 넷째 자리 반올림. Rust의 `{:.4}`는 정확한 이진 값을 짝수 쪽으로 반올림하므로 Python `round(x, 4)`와 같다.
+/// 소수 넷째 자리 반올림. `{:.4}`는 정확한 이진 값을 짝수 쪽으로 반올림한다.
 fn round4(x: f64) -> f64 {
     format!("{x:.4}").parse().unwrap_or(x)
 }

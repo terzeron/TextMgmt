@@ -349,7 +349,7 @@ async fn test_directory_scan_failure_is_reported() {
     let bm = mock_bm();
     let paths = touch(tmp.path(), &["a1.txt", "ax.txt"]);
     setup(&bm, &paths[..1]);
-    // 디렉토리 열거 실패 주입. 첫 `read_dir` 호출만 실패한다(Python `mock.patch`는 한 번만 던진다).
+    // 디렉토리 열거 실패 주입. 첫 `read_dir` 호출만 실패한다.
     let fs = FaultyFs::new();
     fs.set_read_dir(fail_on_nth_path(1, "denied"));
     let resp = client_with_fs(&bm, fs).post_json(URL, &json!({"category": "cat", "pattern": "a1", "replacement": "ax"})).await;

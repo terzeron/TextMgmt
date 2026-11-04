@@ -109,7 +109,7 @@ impl BookClassifierApi for FakeClassifier {
     }
 }
 
-/// 카테고리 -> 키워드 매핑. Python dict의 삽입 순서를 지키려고 Vec로 둔다.
+/// 카테고리 -> 키워드 매핑.
 /// 키/키워드가 문자열이 아닌 경우(예: 정수)를 만들 수 있도록 값은 `Value`다.
 type Mappings = Vec<(Value, Vec<Value>)>;
 
@@ -140,7 +140,7 @@ fn candidate_categories(proposal: &Value) -> Vec<String> {
     proposal["candidates"].as_array().unwrap().iter().map(|c| c["category"].as_str().unwrap().to_string()).collect()
 }
 
-/// `propose_category_changes`의 Python 키워드 인자 묶음(테스트 로컬).
+/// `propose_category_changes`의 인자 묶음(테스트 로컬).
 struct ProposeOpts {
     use_bookstore: bool,
     use_content_meta: bool,
@@ -712,7 +712,7 @@ fn test_propose_category_candidates_capped_at_two_even_with_more_contenders() {
 #[test]
 fn test_propose_category_candidates_bookstore_majority_without_vote_data_does_not_understate_the_count() {
     // bookstore_candidates가 비어 있어도(오래된 캐시 등) certain 등급에 "서점 1곳"이라는
-    // 자기모순적인 근거를 달면 안 된다. MIN_STORE_VOTES(book_classifier.py)는 2라서
+    // 자기모순적인 근거를 달면 안 된다. MIN_STORE_VOTES는 2라서
     // bookstore_majority는 실제로 1표일 수 없는데, 근거 문구가 1곳이라고 하면 관리자가
     // "겨우 한 곳"이라는 약한 근거로 착각한 채 사전 체크된 행을 그대로 승인할 수 있다.
     let tmp = tmp_dir();
@@ -1068,7 +1068,7 @@ fn test_apply_category_changes_calls_on_item_done_per_item() {
     // 항목마다 on_item_done이 file_path/apply_status/apply_error와 함께 불린다.
     //
     // 성공(moved)/실패(파일 없음) 양쪽 다 확인한다. book_manager는 DB를 모르므로
-    // 이 콜백을 통해서만 호출자(main.py)가 건별로 기록할 수 있다.
+    // 이 콜백을 통해서만 호출자(라우트)가 건별로 기록할 수 있다.
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let manager = make_manager(tmp_path, &FakeEsManager::new());
@@ -1139,7 +1139,7 @@ fn test_apply_category_changes_retry_of_failed_row_succeeds() {
     // C1: 첫 시도에서 allowed 밖이라 거부된 행도, 재시도 때 allowed에 다시 담기면
     // 실제로 이동에 성공한다.
     //
-    // main.py의 허용 집합 계산이 apply_status == "pending"만 담던 버그를 재현한다 —
+    // 라우트의 허용 집합 계산이 apply_status == "pending"만 담던 버그를 재현한다 —
     // 거부됐던(failed) 행을 재시도해도 허용 집합에 안 들어가면 여기(book_manager)까지
     // 오지도 못하고 "제안 목록에 없는 파일입니다"만 영원히 반복된다. 이 테스트는 그
     // 행이 다시 allowed에 담기기만 하면 재시도가 실제로 동작함을 보인다.
@@ -1310,7 +1310,7 @@ mod candidate_building {
     use tempfile::TempDir;
 
     /// `BookClassifierApi` 대역. 모델 판정 하한과 보정 정확도만 정할 수 있다.
-    /// 타입이 있는 API라 Python의 "파싱할 수 없는 값"과 "보정 중 예외"는 둘 다 `None`으로 나타낸다.
+    /// "파싱할 수 없는 값"과 "보정 중 오류"는 둘 다 `None`으로 나타낸다.
     struct StubService {
         min_confidence: Option<f64>,
         accuracy: Option<Option<f64>>,
@@ -1330,14 +1330,14 @@ mod candidate_building {
 
     #[test]
     fn test_model_decision_floor_ignores_unparsable_value() {
-        // 파싱할 수 없는 값(Python의 "높음")은 타입이 있는 API에서 `None`이다
+        // 파싱할 수 없는 값은 타입이 있는 API에서 `None`이다
         let service = StubService { min_confidence: None, accuracy: None };
         assert_eq!(BookManager::_model_decision_floor(&service), 0.0);
     }
 
     #[test]
     fn test_expected_accuracy_swallows_calibration_errors() {
-        // 보정 중 예외(Python의 "보정 실패")는 타입이 있는 API에서 `None`이다
+        // 보정 중 예외는 타입이 있는 API에서 `None`이다
         let service = StubService { min_confidence: None, accuracy: None };
         assert_eq!(BookManager::_expected_accuracy(&service, 0.9), None);
     }

@@ -76,7 +76,7 @@ fn joara_and_munpia_parsers_skip_incomplete_entries_within_four_item_window() {
     assert_eq!(munpia_results[0]["title"], "");
 }
 
-/// 검색 요청 URL의 query 값. Python `parse_qs(urlparse(url).query)`.
+/// 검색 요청 URL의 query 값.
 fn query_values(url: &str) -> BTreeMap<String, Vec<String>> {
     let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -106,7 +106,7 @@ fn decode(raw: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// 요청 URL마다 `body`를 돌려주는 가짜 `HttpSession`. 구 `fetch_bytes` monkeypatch(`with_fetch`)를 대신한다.
+/// 요청 URL마다 `body`를 돌려주는 가짜 `HttpSession`. `with_fetch`로 꽂는다.
 // TODO(common): `common`에 `HttpSession` 대역이 없다(bookstore.rs의 `FakeSession`은 따로 있다). 생기면 지운다.
 type Responder = Arc<dyn Fn(&str, &str) -> Vec<u8> + Send + Sync>;
 
@@ -298,7 +298,7 @@ fn test_cancelled_and_timed_out_store_locks() {
     assert!(matches!(timed_out, Err(StoreLockError::Timeout)));
 }
 
-/// Python의 `MagicMock` 응답을 차례로 돌려주고 요청 URL을 기록하는 `HttpSession`.
+/// 정한 응답을 차례로 돌려주고 요청 URL을 기록하는 `HttpSession`.
 struct ScriptedSession {
     responses: Mutex<Vec<HttpResponse>>,
     requested: Mutex<Vec<String>>,
@@ -331,7 +331,7 @@ fn test_fetch_bytes_redirects_and_size_limit() {
 }
 
 #[test]
-fn fetch_bytes_uses_python_connect_and_read_timeouts() {
+fn fetch_bytes_uses_connect_and_read_timeouts() {
     struct TimeoutSession(Mutex<Option<HttpTimeout>>);
     impl HttpSession for TimeoutSession {
         fn get(&self, _url: &str, _params: &[(String, String)]) -> Result<HttpResponse, HttpError> {
@@ -371,7 +371,7 @@ fn test_parsers_handle_missing_fields_invalid_responses_and_limits() {
     assert_eq!(parse_munpia_candidates(&json!({"code": "M000_00000", "result": {"searchNovelTabDtos": [{"coverUrl": "a"}, {"novelId": 1}]}})).unwrap(), Vec::<Value>::new());
 }
 
-/// Python `Mock()` 클라이언트. 호출 인자와 닫힘 여부를 기록한다.
+/// 가짜 클라이언트. 호출 인자와 닫힘 여부를 기록한다.
 struct MockClient {
     supports_isbn: bool,
     no_links: bool,

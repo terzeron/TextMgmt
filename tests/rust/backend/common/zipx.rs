@@ -12,7 +12,7 @@ use std::path::Path;
 use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
 
-/// 멤버 압축 방식. Python `zipfile.ZipFile(path, "w")`의 기본은 STORED, `writestr`에 ZIP_DEFLATED를 주면 압축한다.
+/// 멤버 압축 방식.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZipMode {
     /// 모든 멤버를 저장만 한다.
@@ -70,7 +70,7 @@ pub fn write_zip_owned(path: &Path, entries: &[(String, Vec<u8>)], mode: ZipMode
     write_entries(path, entries, mode);
 }
 
-/// ZIP 멤버 하나를 읽는다. Python `archive.read(name)`.
+/// ZIP 멤버 하나를 읽는다.
 pub fn read_zip_entry(path: &Path, name: &str) -> Vec<u8> {
     let mut archive = open_zip(path);
     let mut file = archive.by_name(name).unwrap_or_else(|_| panic!("멤버 없음: {name}"));
@@ -87,7 +87,7 @@ pub fn open_zip(path: &Path) -> zip::ZipArchive<std::fs::File> {
     zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap()
 }
 
-/// ZIP 멤버 이름을 저장 순서대로 돌려준다. Python `archive.namelist()`.
+/// ZIP 멤버 이름을 저장 순서대로 돌려준다.
 pub fn member_names(path: &Path) -> Vec<String> {
     let mut archive = open_zip(path);
     (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().expect("zip 항목 이름").to_string()).collect()
@@ -102,7 +102,6 @@ pub fn zip_header_offset(path: &Path, name: &str) -> u64 {
     open_zip(path).by_name(name).unwrap().header_start()
 }
 
-/// Python `archive.testzip() is None`: 모든 멤버를 끝까지 읽어 CRC를 확인한다.
 pub fn testzip_ok(path: &Path) -> bool {
     let mut archive = match std::fs::File::open(path).ok().and_then(|f| zip::ZipArchive::new(f).ok()) {
         Some(a) => a,
@@ -121,7 +120,7 @@ pub fn testzip_ok(path: &Path) -> bool {
     true
 }
 
-/// 바이트열 안의 `from`을 모두 `to`로 바꾼다. Python `bytes.replace`.
+/// 바이트열 안의 `from`을 모두 `to`로 바꾼다.
 pub fn bytes_replace(data: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
     let mut i = 0;
@@ -137,7 +136,7 @@ pub fn bytes_replace(data: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     out
 }
 
-/// ZIP 멤버를 읽은 순서대로 담는 dict. Python `rewrite_epub_members`의 `members`.
+/// ZIP 멤버를 읽은 순서대로 담는 dict.
 /// 있는 이름은 제자리에서 바꾸고 새 이름은 뒤에 붙는다.
 pub struct Members {
     pub items: Vec<(String, Vec<u8>)>,
@@ -176,7 +175,7 @@ impl Members {
         self.items.iter().any(|(n, _)| n == name)
     }
 
-    /// 있으면 덮어쓰고 없으면 뒤에 붙인다. Python `members[name] = data`.
+    /// 있으면 덮어쓰고 없으면 뒤에 붙인다.
     pub fn set(&mut self, name: &str, data: impl Into<Vec<u8>>) {
         let data = data.into();
         match self.items.iter_mut().find(|(n, _)| n == name) {
@@ -185,13 +184,12 @@ impl Members {
         }
     }
 
-    /// Python `members.pop(name)` / `del members[name]`.
     pub fn remove(&mut self, name: &str) -> Vec<u8> {
         let at = self.items.iter().position(|(n, _)| n == name).unwrap_or_else(|| panic!("멤버 없음: {name}"));
         self.items.remove(at).1
     }
 
-    /// 멤버 안의 바이트열을 바꿔 다시 넣는다. Python `members[name] = members[name].replace(a, b)`.
+    /// 멤버 안의 바이트열을 바꿔 다시 넣는다.
     pub fn replace_in(&mut self, name: &str, from: &[u8], to: &[u8]) {
         let replaced = bytes_replace(self.get(name), from, to);
         self.set(name, replaced);

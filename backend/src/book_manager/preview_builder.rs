@@ -1,4 +1,4 @@
-//! 미리보기와 PDF 쪽 추출. Python `get_book_preview`, `get_pdf_pages`에 대응한다.
+//! 미리보기와 PDF 쪽 추출.
 //!
 //! 지원: PDF(앞 N쪽), EPUB(앞 N챕터 또는 전체), DOC/HWP(LibreOffice → HTML). 지원하지 않는 형식은 400이다.
 //! HTML 미리보기와 리소스 경로는 `html.rs`에서 처리한다. HWP3은 LibreOffice 변환이 비면 네이티브 파서로 폴백한다.
@@ -109,7 +109,7 @@ impl BookManager {
     /// CJK CMap과 서버 글꼴을 보완하기 전에 생성한 PDF를 재사용하지 않는다.
     pub const PDF_PREVIEW_CACHE_VERSION: u32 = 3;
 
-    /// Python과 같은 공개 검증 지점. EPUB 미리보기의 HTML 호환 변환을 수행한다.
+    /// 공개 검증 지점. EPUB 미리보기의 HTML 호환 변환을 수행한다.
     pub fn _expand_self_closing_rcdata(data: &[u8]) -> Vec<u8> {
         expand_self_closing_rcdata(data)
     }
@@ -482,7 +482,7 @@ impl BookManager {
             let selector = Selector::parse("img, image, link, script, source, embed, object, video, a").expect("선택자");
             for zp in &chapter_zip_paths {
                 let content = match read_member(&mut zin, zp) {
-                    // HTML 파서는 `<title/>`을 빈 요소로 보지 않아 문서 끝까지 삼킨다. BeautifulSoup `html.parser`처럼 읽도록 쌍으로 편다.
+                    // HTML 파서는 `<title/>`을 빈 요소로 보지 않아 문서 끝까지 삼킨다. 쌍으로 펴서 읽게 한다.
                     Ok(bytes) => String::from_utf8_lossy(&expand_self_closing_rcdata(&bytes)).into_owned(),
                     Err(e) => {
                         // 없거나 손상돼 읽을 수 없는 챕터는 건너뛴다(책 전체를 거부하지 않는다).
@@ -715,7 +715,7 @@ impl BookManager {
             return pdf_response(bytes);
         }
 
-        // 쪽 추출. Python `range(start - 1, end)`와 같다.
+        // 쪽 추출: 1부터 세는 [start, end] 구간.
         let reader = match reader {
             Some(reader) => reader,
             None => match self.try_get_cached_pdf_reader(&book.file_path) {

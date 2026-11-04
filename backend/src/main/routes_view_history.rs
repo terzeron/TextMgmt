@@ -1,4 +1,4 @@
-//! 조회 이력 라우트. Python `main.py`의 `record_book_view`(책·만화 라우터)와 `list_view_history`.
+//! 조회 이력 라우트: 책·만화 조회 기록과 목록.
 //!
 //! 책 라우터는 루트, 만화 라우터는 `/comics` prefix에 붙으므로 경로는 `/books/view-history/{id}`와 `/comics/view-history/{id}`다.
 

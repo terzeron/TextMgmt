@@ -2,7 +2,7 @@
 #![allow(clippy::type_complexity)]
 
 mod common;
-use crate::common::shared_fixtures::{config_with_book, conftest_env, path_str, tmp, write};
+use crate::common::shared_fixtures::{config_with_book, path_str, test_env, tmp, write};
 use doc_reader::pdf::InProcess;
 use file_record::env_config::Config;
 use file_record::record_builder::read_file;
@@ -19,7 +19,7 @@ mod loader_init {
 
     #[test]
     fn test_loader_class_exists() {
-        // Python의 hasattr(Loader, "read_file"/"read_files") 대신, 두 함수가 같은 이름으로 있음을 컴파일 시점에 확인한다.
+        // 두 함수가 같은 이름으로 있음을 컴파일 시점에 확인한다.
         let _read_file = read_file;
         let _read_files = read_files;
     }
@@ -37,7 +37,7 @@ mod loader_init {
     #[test]
     fn test_loader_requires_comics_dir() {
         let get = |name: &str| {
-            if name == "TM_BOOK_DIR" { conftest_env(name) } else { None }
+            if name == "TM_BOOK_DIR" { test_env(name) } else { None }
         };
         let err = Config::from_env(&get).unwrap_err();
         assert!(err.contains("TM_COMICS_DIR"), "{err}");

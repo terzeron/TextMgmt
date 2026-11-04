@@ -1,5 +1,4 @@
-//! 경로 검증과 파일 종류 판정. Python `BookManager`의 `_is_safe_category_name`, `_normalize_stored_file_path`,
-//! `_is_indexable_file_path` 등에 대응한다.
+//! 경로 검증과 파일 종류 판정: 안전한 카테고리 이름, 저장 경로 정규화, 색인 대상 파일 판정 등.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;

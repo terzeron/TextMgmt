@@ -30,7 +30,7 @@ fn read_from_rtf_text_cleans_and_counts() {
 }
 
 #[test]
-fn corpus_rtf_matches_python() {
+fn corpus_rtf_matches_the_recorded_summaries() {
     let root = corpus::books_root();
     for rec in corpus::records(include_str!("fixtures/corpus_rtf.jsonl")) {
         let path = rec["path"].as_str().unwrap();

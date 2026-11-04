@@ -1,7 +1,7 @@
-//! 고칠 수 있는 작은 XML 트리. Python `lxml.etree`로 OPF와 XHTML을 고치던 부분을 옮기는 데 필요한 만큼만 둔다.
+//! 고칠 수 있는 작은 XML 트리. OPF와 XHTML을 고치는 데 필요한 만큼만 둔다.
 //!
 //! 읽기는 `roxmltree`에 맡기고 결과를 이 트리로 옮긴다. 외부 엔티티는 풀지 않는다(CWE-611).
-//! lxml과 같게 본문 텍스트는 별도 노드이고, 요소를 지우면 바로 뒤의 텍스트(lxml의 tail)도 함께 지운다.
+//! 본문 텍스트는 별도 노드이고, 요소를 지우면 바로 뒤의 텍스트도 함께 지운다.
 
 use std::collections::BTreeMap;
 
@@ -142,7 +142,7 @@ impl Element {
         out
     }
 
-    /// 자식 노드(요소·주석·처리 명령) 중 `index`번째 앞에 끼운다. lxml의 `insert(index, child)`와 같다.
+    /// 자식 노드(요소·주석·처리 명령) 중 `index`번째 앞에 끼운다.
     pub fn insert_child(&mut self, index: usize, child: Element) {
         let positions: Vec<usize> = self.children.iter().enumerate().filter(|(_, n)| !matches!(n, Node::Text(_))).map(|(i, _)| i).collect();
         let at = positions.get(index).copied().unwrap_or(self.children.len());
@@ -153,12 +153,12 @@ impl Element {
         self.children.push(Node::Element(child));
     }
 
-    /// `index`번째 직계 요소의 자식 노드 번호(lxml `index`가 세는 것과 같은 순서의 위치가 아니라 요소 순번)를 돌려준다.
+    /// `index`번째 직계 요소의 자식 노드 번호를 돌려준다(텍스트 노드는 세지 않는 요소 순번).
     pub fn element_position(&self, predicate: impl Fn(&Element) -> bool) -> Option<usize> {
         self.children.iter().filter(|n| !matches!(n, Node::Text(_))).position(|n| matches!(n, Node::Element(e) if predicate(e)))
     }
 
-    /// 조건에 맞는 직계 요소를 지운다. lxml처럼 바로 뒤의 텍스트도 함께 지운다.
+    /// 조건에 맞는 직계 요소를 지운다. 바로 뒤의 텍스트도 함께 지운다.
     pub fn remove_children_where(&mut self, predicate: impl Fn(&Element) -> bool) -> usize {
         let mut removed = 0;
         let mut i = 0;
@@ -310,7 +310,7 @@ fn strip_unknown_entities(text: &str) -> String {
 }
 
 /// `etree.fromstring(data, _safe_xml_parser(recover=True))`의 일부만 대신한다. 선언 없는 접두사와 모르는 엔티티는 고쳐서 다시 읽는다.
-/// 그 밖의 구문 오류는 `None`이다(lxml은 깨진 부분을 건너뛰고 계속 읽는다).
+/// 그 밖의 구문 오류는 `None`이다.
 pub fn parse_lenient(data: &[u8]) -> Option<Element> {
     let mut text = match decode(data) {
         Ok(text) => text,
@@ -516,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_child_counts_nodes_like_lxml() {
+    fn insert_child_counts_text_and_element_nodes() {
         let mut root = parse_str("<s>\n <a/>\n <b/>\n</s>").unwrap();
         root.insert_child(0, Element::new(None, None, "n"));
         assert_eq!(to_string(&root), "<s>\n <n/><a/>\n <b/>\n</s>");

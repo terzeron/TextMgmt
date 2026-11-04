@@ -74,7 +74,7 @@ pub struct Options {
     pub positional: Vec<String>,
 }
 
-/// Python `getopt.getopt` 방식: 첫 위치 인자를 만나면 옵션 읽기를 멈추고, 긴 옵션은 유일한 접두어로 줄여 쓸 수 있다.
+/// getopt 방식: 첫 위치 인자를 만나면 옵션 읽기를 멈추고, 긴 옵션은 유일한 접두어로 줄여 쓸 수 있다.
 pub fn parse_options(args: &[String]) -> Result<Options, String> {
     let mut options = Options::default();
     let mut i = 0;

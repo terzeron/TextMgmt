@@ -231,7 +231,7 @@ impl FakeEsManager {
         });
     }
 
-    // ── 클로저 바꿔치기. Python `es.search_by_id = lambda ...` ──
+    // ── 클로저 바꿔치기.
 
     pub fn on_search_by_id(&self, f: impl Fn(i64) -> Result<Option<Value>, EsError> + Send + Sync + 'static) {
         self.hooks.lock().unwrap().search_by_id = Some(Arc::new(f));

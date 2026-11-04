@@ -107,7 +107,7 @@ impl ESManager {
         }
     }
 
-    /// 매핑을 한 번만 읽어 세 필드를 모두 점검한다(Python은 필드마다 읽었다).
+    /// 매핑을 한 번만 읽어 세 필드를 모두 점검한다.
     fn ensure_existing_index_mappings(&self) {
         match self.es.call("indices.get_mapping", &json!({"index": self.index()})) {
             Ok(mapping) => {

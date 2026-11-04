@@ -15,7 +15,7 @@ use super::{CHANGED, CoverError, EpubCoverHooks, FResult, Fail, SAVING, inspect_
 type Precheck<'a> = &'a dyn Fn(&mut ZipArchive<&File>) -> FResult<()>;
 type Stage<'a> = &'a mut dyn FnMut(&File, &Path) -> FResult<()>;
 
-/// 임시 파일. 버릴 때 지운다(Python `finally: unlink(missing_ok=True)`).
+/// 임시 파일. 버릴 때 지운다.
 struct TempFile(PathBuf);
 
 impl Drop for TempFile {

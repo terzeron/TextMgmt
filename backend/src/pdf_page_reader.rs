@@ -1,6 +1,6 @@
 //! PDF 열기·쪽수·쪽 추출 능력. 설계: docs/rust-test-seams.md 3.11.
 //!
-//! Python `pikepdf`(열기·구문 검사)와 `pypdf`(쪽 읽기·쓰기)에 대응한다. 서비스는 이 파일의 trait만 알고,
+//! 열기·구문 검사와 쪽 읽기·쓰기를 맡는다. 서비스는 이 파일의 trait만 알고,
 //! 실제 구현(`LopdfOpener`, `LopdfPageOps`)은 `lopdf`로 만든다. 테스트는 대역으로 바꿔 끼운다.
 //!
 //! 페이지 미리보기는 Rust worker에서 lopdf/MuPDF가 필요한 객체를 읽는다. reader는 경로와 쪽수만 캐시한다.
@@ -11,7 +11,7 @@ use std::path::Path;
 
 use lopdf::{Document, Object, xref::XrefRecovery};
 
-/// PDF 라이브러리 오류. `kind`는 Python 예외 클래스 이름에 대응한다(`"OpenError"`, `"RuntimeError"` 등).
+/// PDF 라이브러리 오류. `kind`는 오류 종류 이름이다(`"OpenError"`, `"RuntimeError"` 등).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdfError {
     pub kind: String,
@@ -51,7 +51,7 @@ pub trait PdfOpener: Send + Sync {
 /// `pypdf`의 `PdfReader`/`PdfWriter`.
 pub trait PdfPageOps: Send + Sync {
     fn page_count(&self, path: &Path) -> Result<usize, PdfError>;
-    /// 0부터 세는 반열린 구간 `[start, end)`의 쪽만 담은 새 PDF 바이트를 돌려준다. Python의 `range(start - 1, end)`와 같다.
+    /// 0부터 세는 반열린 구간 `[start, end)`의 쪽만 담은 새 PDF 바이트를 돌려준다.
     fn extract_pages(&self, path: &Path, start: usize, end: usize) -> Result<Vec<u8>, PdfError>;
 
     /// 재사용 가능한 reader를 연다. 대역은 기존 경로 기반 동작을 사용한다.

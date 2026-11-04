@@ -28,7 +28,7 @@ fn opf(manifest: &str, spine_attrs: &str) -> String {
 }
 
 #[test]
-fn ebooklib_path_collects_metadata_then_chapter_text() {
+fn package_path_collects_metadata_then_chapter_text() {
     let tmp = tempfile::tempdir().unwrap();
     let manifest =
         r#"<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="ch2.xhtml" media-type="application/xhtml+xml"/><item id="img" href="a.png" media-type="image/png"/>"#;
@@ -46,7 +46,7 @@ fn ebooklib_path_collects_metadata_then_chapter_text() {
     let read = read_from_epub(&path);
     assert_eq!(read.path, EpubPath::Normal);
     assert!(read.errors.is_empty(), "{:?}", read.errors);
-    // 제목, 저자 순서. 저자와 본문 사이에는 구분 공백이 없다(Python `result += text`). 자식이 요소뿐인 body는 줄바꿈이 끼어 문단이 붙지 않는다.
+    // 제목, 저자 순서. 저자와 본문 사이에는 구분 공백이 없다. 자식이 요소뿐인 body는 줄바꿈이 끼어 문단이 붙지 않는다.
     assert_eq!(read.summary, " 제목 책 저자첫째 문단 \n둘째 문단 \n다음 장 내용\n");
     assert_eq!(read.line_count, 3);
 }
@@ -125,7 +125,7 @@ fn pretty_text_adds_newlines_only_in_element_only_containers() {
     assert_eq!(pretty_text("<html><body>t<p>a</p><p>b</p></body></html>").as_deref(), Some("t\n".trim_end_matches('\n')).map(|_| "tab").or(Some("tab")));
     // 속성이 있는 body는 태그를 떼지 않으므로 앞 줄바꿈이 남는다.
     assert_eq!(pretty_text("<html><body class='c'><p>a</p></body></html>").as_deref(), Some("\na\n"));
-    // 중첩된 요소뿐인 컨테이너: 안쪽 div의 여는 태그 뒤 줄바꿈은 앞 공백이 아니므로 남는다(Python lxml 기준).
+    // 중첩된 요소뿐인 컨테이너: 안쪽 div의 여는 태그 뒤 줄바꿈은 앞 공백이 아니므로 남는다.
     assert_eq!(pretty_text("<body><div><span>a</span><span>b</span></div></body>").as_deref(), Some("\na\nb\n\n"));
     // 본문이 텍스트뿐이면 None(원본 내용을 쓴다)
     assert_eq!(pretty_text("<body>only text</body>"), None);

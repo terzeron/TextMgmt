@@ -549,7 +549,7 @@ mod cover_member_lookup {
 
         assert_eq!(image::guess_format(&data).unwrap(), image::ImageFormat::Jpeg);
         let thumb = image::load_from_memory(&data).unwrap();
-        // Python round()는 반올림 동점을 짝수로 보내지만 Rust round()는 0에서 먼 쪽이다. 동점이 나오는 비율이면 달라질 수 있다.
+        // Rust round()는 동점에서 0에서 먼 쪽으로 반올림한다.
         assert_eq!((thumb.width(), thumb.height()), (200, (200.0 / BookManager::COVER_ASPECT_RATIO).round() as u32));
     }
 
@@ -609,7 +609,6 @@ mod get_cover {
         }
     }
 
-    /// Python `book_manager_module` fixture: ESManager를 대역으로 바꾼 BookManager.
     fn env() -> Env {
         common::setup_env();
         let tmp = tempfile::tempdir().unwrap();

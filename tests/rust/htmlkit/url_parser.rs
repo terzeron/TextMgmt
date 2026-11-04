@@ -1,9 +1,9 @@
-//! `htmlkit::url_parser` 단위 테스트. 기대값은 Python `urllib.parse` 결과다.
+//! `htmlkit::url_parser` 단위 테스트.
 
 use htmlkit::url_parser::{Netloc, quote, unquote, urlencode, urljoin, urlsplit};
 
 #[test]
-fn urljoin_matches_python_for_absolute_protocol_relative_root_and_relative_refs() {
+fn urljoin_handles_absolute_protocol_relative_root_and_relative_refs() {
     let base = "https://example.com/books/list";
     assert_eq!(urljoin(base, "https://cdn.example.com/book"), "https://cdn.example.com/book");
     assert_eq!(urljoin(base, "//cdn.example.com/book"), "https://cdn.example.com/book");
@@ -42,7 +42,7 @@ fn urlsplit_and_netloc_parse_userinfo_ipv6_and_port() {
 }
 
 #[test]
-fn quote_and_urlencode_match_python() {
+fn quote_and_urlencode_match_reference() {
     assert_eq!(quote("가 b/c~"), "%EA%B0%80%20b/c~");
     assert_eq!(urlencode(&[("q", "가 나&"), ("a b", "1")]), "q=%EA%B0%80+%EB%82%98%26&a+b=1");
 }

@@ -1,4 +1,4 @@
-//! HWP V2.00/V2.10/V3.00 바이너리 포맷 텍스트 추출기. 원본: `utils/hwp3_parser.py`.
+//! HWP V1.20/V2.00/V2.10/V3.00 바이너리 포맷 텍스트 추출기.
 //!
 //! 구형 한글(HWP) 문서에서 본문 텍스트를 뽑는다. LibreOffice가 처리하지 못하는 V1.20~V3.00 파일의
 //! 대비책이다. 파싱에 실패하거나 암호화된 파일, 알아볼 수 없는 글자가 많은 결과는 빈 문자열이다.
@@ -8,8 +8,7 @@
 //! 제어 문자별 데이터 크기·글자 수(`WSIZE`)·끝 표식 확인은 teammilestone/hwarang `src/hwp30/para.rs`
 //! (MIT, Copyright (c) 2025 Lee Wonsup)를 참고했다. hwarang은 LibreOffice hwpfilter `hpara.cxx`·`hwpread.cxx`의 읽기 순서를 따른다.
 //!
-//! 내부 단계(스트림, HNC 변환, 문단 파싱)도 `pub`으로 열어 둔다. Python 원본의 비공개 함수 테스트를 그대로
-//! 옮기기 위해서다.
+//! 내부 단계(스트림, HNC 변환, 문단 파싱)도 `pub`으로 열어 두어 단계별로 테스트한다.
 
 pub mod tables;
 
@@ -97,7 +96,7 @@ fn inflate(body: &[u8]) -> Option<Vec<u8>> {
     if DeflateDecoder::new(body).take(MAX_INFLATED_BYTES).read_to_end(&mut raw).is_ok() {
         return Some(raw);
     }
-    // gzip 또는 zlib 헤더가 있는 경우(Python의 wbits=15+32).
+    // gzip 또는 zlib 헤더가 있는 경우.
     let mut out = Vec::new();
     let ok = if body.starts_with(&[0x1f, 0x8b]) {
         GzDecoder::new(body).take(MAX_INFLATED_BYTES).read_to_end(&mut out).is_ok()

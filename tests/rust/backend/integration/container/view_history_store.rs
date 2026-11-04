@@ -1,13 +1,12 @@
-//! 원본: tests/test_view_history_store.py
 //!
 //! `ViewHistoryStore`: 사용자·유형별 최근 조회 이력을 MySQL에 기록하고 되읽는다.
-//! 실제 MySQL 컨테이너가 필요한 테스트는 컨테이너를 못 띄우면 Python처럼 건너뛴다.
+//! 실제 MySQL 컨테이너가 필요한 테스트는 컨테이너를 못 띄우면 건너뛴다.
 //!
 //! 가정한 API (설계: docs/rust-test-seams.md 3.4, 3.13):
 //! - `backend::view_history_store::{MAX_RECENT_VIEWS: usize, ViewHistoryStore, ViewHistoryError, create_view_history_store}`
 //! - `ViewHistoryStore::new() -> Result<ViewHistoryStore, ViewHistoryError>`: `TM_MYSQL_*` 환경 변수로 접속하고 테이블을 만든다
 //! - `ViewHistoryStore::record_view(&self, email: &str, content_type: &str, book_id: i64, title: &str, category: &str) -> Result<(), ViewHistoryError>`
-//! - `ViewHistoryStore::list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError>` (Python 기본값은 `MAX_RECENT_VIEWS`)
+//! - `ViewHistoryStore::list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError>`
 //! - `ViewHistoryStore::get_connection(&self) -> Result<Box<dyn DbConnection>, DbError>` (구 `_get_connection() -> mysql::Conn`)
 //! - `ViewHistoryError::{ValueError(String), RuntimeError(String)}` (`DbError::Other(msg)`는 `RuntimeError(msg)`로 바뀐다)
 //! - `create_view_history_store() -> Result<ViewHistoryStore, ViewHistoryError>`

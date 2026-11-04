@@ -1,7 +1,6 @@
-//! 원본: tests/test_direct_cover_url.py
 //!
-//! 직접 표지 URL의 SSRF 차단과 제한된 다운로드를 검증한다. Python은 `socket.getaddrinfo`와 `urllib3` 연결 풀을
-//! monkeypatch로 바꿨다. Rust에서는 DNS 조회와 연결 풀을 `Net` trait로 주입한다.
+//! 직접 표지 URL의 SSRF 차단과 제한된 다운로드를 검증한다.
+//! DNS 조회와 연결 풀은 `Net` trait로 주입한다.
 //!
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.7. `Net`/`Pool`/`PoolResponse`는 연결 수준 계약이라 `HttpSession`과 합치지 않고 그대로 둔다):
 //! - `backend::direct_cover_url::fetch_url_image_with(url: &str, net: &dyn Net, max_image_bytes: usize) -> Result<Vec<u8>, FetchError>`

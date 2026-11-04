@@ -1,4 +1,4 @@
-//! Python tests/test_cover_status.py의 표지 판정, MySQL cache, 목록 조회 계약.
+//! 표지 판정, MySQL cache, 목록 조회 계약.
 
 // 공통 모듈은 container.rs가 한 번만 올린다. 여기서 다시 올리면 MySQL 컨테이너·DB_LOCK이 두 벌이 되어
 // 도중에 TM_MYSQL_*가 두 번째 컨테이너로 바뀌고 다른 테스트가 엉뚱한 DB를 읽는다.
@@ -277,7 +277,7 @@ fn unpage(result: Result<CoverPage, String>) -> Unpaged {
     }
 }
 
-/// 스크립트한 페이지를 차례로 돌려주고, 받은 커서를 기록하는 pager. Python `AsyncMock(side_effect=[...])`.
+/// 스크립트한 페이지를 차례로 돌려주고, 받은 커서를 기록하는 pager.
 fn scripted(pages: Vec<RawPage>) -> (CoverBooksPager, Arc<Mutex<Vec<Option<String>>>>) {
     let queue = Arc::new(Mutex::new(VecDeque::from(pages)));
     let cursors = Arc::new(Mutex::new(Vec::new()));

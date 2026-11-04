@@ -1,4 +1,4 @@
-//! 색인 적재에 쓰는 ES 호출. `backend/es_manager.py`의 `ESManager` 중 loader가 쓰는 부분의 이식.
+//! 색인 적재에 쓰는 ES 호출. loader가 쓴다.
 //!
 //! 인덱스 만들기·매핑 보강, 문서 대량 입력, 기존 문서 조회, 중복·고아 문서 삭제를 맡는다.
 //! HTTP와 TLS 인증서를 검증하는 HTTPS를 지원한다.

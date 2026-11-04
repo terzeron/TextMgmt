@@ -1,4 +1,4 @@
-//! HWP V3.00/V2.10/V2.00 텍스트 추출기 테스트 (tests/test_hwp3_parser.py 이식).
+//! HWP V3.00/V2.10/V2.00 텍스트 추출기 테스트.
 mod common;
 use flate2::Compression;
 use flate2::write::DeflateEncoder;
@@ -344,7 +344,7 @@ fn truncated_bodies_and_garbled_text_are_rejected_or_kept_by_the_quality_filter(
 
 #[test]
 fn lone_surrogate_codes_do_not_split_bruteforce_runs() {
-    // 0xD4C9는 음절 계산 결과가 U+D800(surrogate)이 되는 코드다. Python은 이 문자를 run에 넣은 채 이어 가고
+    // 0xD4C9는 음절 계산 결과가 U+D800(surrogate)이 되는 코드다. 이 문자를 run에 넣은 채 이어 가고
     // 마지막에 일괄 제거한다. 표시 문자로 같은 동작을 낸다.
     let code = 0xD4C9u16;
     assert_eq!(hnc_to_unicode(code), LONE_SURROGATE.to_string());

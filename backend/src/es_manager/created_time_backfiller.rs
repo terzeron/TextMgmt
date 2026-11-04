@@ -38,7 +38,7 @@ impl ESManager {
             }
         };
         let local = time.naive_local();
-        // Python `datetime.isoformat()`처럼 마이크로초가 0이면 소수부를 생략한다.
+        // ISO 8601: 마이크로초가 0이면 소수부를 생략한다.
         let micros = local.and_utc().timestamp_subsec_micros();
         let iso = if micros == 0 { local.format("%Y-%m-%dT%H:%M:%S").to_string() } else { local.format("%Y-%m-%dT%H:%M:%S%.6f").to_string() };
         Ok((iso, source))

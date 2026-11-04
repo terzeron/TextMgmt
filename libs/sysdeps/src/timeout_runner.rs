@@ -1,7 +1,6 @@
-//! 파서에 벽시계 상한을 거는 도구. 원본: `utils/parser_timeout.py`.
+//! 파서에 벽시계 상한을 거는 도구.
 //!
-//! Python은 SIGALRM으로 실행 중인 코드에 예외를 던지고, 손상 PDF처럼 시그널도 못 빠져나오는 경우는
-//! fork한 자식 프로세스를 죽인다. Rust에서는 실행 중인 코드에 예외를 던질 수 없으므로 같은 목적을 둘로 나눈다.
+//! 실행 중인 코드를 밖에서 멈출 수는 없으므로 목적에 따라 둘로 나눈다.
 //!
 //! - [`run_with_timeout`]: 작업을 별도 스레드에서 돌리고 시간이 넘으면 기다리지 않고 돌아온다.
 //!   스레드를 죽이지는 못하므로 작업은 백그라운드에서 끝까지 돈다.
@@ -33,7 +32,7 @@ impl fmt::Display for ParserTimeout {
 impl std::error::Error for ParserTimeout {}
 
 /// `f`를 별도 스레드에서 실행한다. `seconds`를 넘기면 결과를 기다리지 않고 `ParserTimeout`을 돌려준다.
-/// `f`가 panic하면 같은 panic을 호출한 스레드에서 다시 일으킨다(Python이 자식의 예외를 그대로 던지는 것과 같다).
+/// `f`가 panic하면 같은 panic을 호출한 스레드에서 다시 일으킨다.
 pub fn run_with_timeout<T: Send + 'static>(seconds: f64, message: &str, f: impl FnOnce() -> T + Send + 'static) -> Result<T, ParserTimeout> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {

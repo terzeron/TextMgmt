@@ -1,4 +1,3 @@
-//! 원본: tests/test_classify_proposal_items_db.py
 //!
 //! classify_proposal_items 테이블을 실제 MySQL 8.0에 대해 검증한다. fake cursor로는 CREATE TABLE의 JSON 컬럼/인덱스 문법,
 //! utf8mb4 한글 왕복, 100건 배치의 꼬리 유실을 증명할 수 없다.
@@ -18,7 +17,7 @@
 //! - `CategoryMapping::clear_classify_proposal_items(&self, content_type: &str)`
 //! - `CategoryMapping::delete_applied_classify_proposal_items(&self, content_type: &str).unwrap() -> u64`
 //!
-//! Python의 `content_type` 기본값 "book"은 Rust에 기본 인자가 없어 매번 명시한다.
+//! `content_type` 기본값 "book"은 기본 인자가 없어 매번 명시한다.
 //! `cm()`이 `common/mysql_fixture.rs`로 일회용 MySQL 컨테이너를 띄우고 `TM_MYSQL_*`를 설정한다(Docker가 없으면 panic).
 //! `SHOW CREATE TABLE`/`EXPLAIN`은 준비된 문장이 결과 열 정보를 주지 않아 `mysql` crate(dev-dependency)의 텍스트 프로토콜로 읽는다. 테이블을 공유하므로 `cm()`이 돌려주는 값이 `db_lock()`을 쥐어 테스트끼리 직렬로 돈다.
 
@@ -30,7 +29,7 @@ use crate::common::shared_fixtures::Db;
 use db::{DbValue, Row};
 use serde_json::{Value, json};
 
-/// 행의 `Text` 컬럼 값. Python은 dict 값을 그대로 문자열로 썼다.
+/// 행의 `Text` 컬럼 값.
 fn text(row: &Row, key: &str) -> String {
     match &row[key] {
         DbValue::Text(s) => s.clone(),
@@ -41,7 +40,7 @@ fn text(row: &Row, key: &str) -> String {
 /// `cm` fixture. 대상 테이블을 비운 CategoryMapping을 돌려준다. MySQL이 없으면 panic.
 fn cm() -> Db {
     common::setup_env();
-    // 일회용 MySQL 컨테이너를 세션당 한 번 띄우고 TM_MYSQL_*를 설정한다(Python `mysql_container` fixture). Docker가 없으면 panic한다.
+    // 일회용 MySQL 컨테이너를 세션당 한 번 띄우고 TM_MYSQL_*를 설정한다. Docker가 없으면 panic한다.
     mysql_fixture::mysql_container();
     let lock = mysql_fixture::db_lock();
     let mapping = CategoryMapping::new().expect("MySQL 연결");

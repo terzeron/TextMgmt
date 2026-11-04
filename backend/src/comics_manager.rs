@@ -1,4 +1,4 @@
-//! 만화 관리자. Python `backend/comics_manager.py`에 대응한다.
+//! 만화 관리자.
 //!
 //! 만화 루트와 ES 색인을 따로 보관하고 도서 처리 기능은 `BookManager`에 위임한다.
 
@@ -24,7 +24,7 @@ fn env_flag_enabled(env: EnvFn, name: &str) -> bool {
     matches!(env(name).unwrap_or_default().trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on")
 }
 
-/// Python `time.monotonic()`처럼 단조 증가하는 초. 0.0은 "없음"으로 쓰므로 프로세스 시작 시점에서 1초를 더한다.
+/// 단조 증가하는 초. 0.0은 "없음"으로 쓰므로 프로세스 시작 시점에서 1초를 더한다.
 fn monotonic_seconds() -> f64 {
     static ORIGIN: OnceLock<Instant> = OnceLock::new();
     ORIGIN.get_or_init(Instant::now).elapsed().as_secs_f64() + 1.0

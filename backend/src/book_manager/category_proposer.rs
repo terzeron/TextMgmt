@@ -1,4 +1,4 @@
-//! 분류 제안과 적용. Python `propose_category_changes`, `apply_category_changes`, `_move_classified_file`,
+//! 분류 제안과 적용(분류된 파일 옮기기 포함).
 //! `_match_category_by_keywords`, `_propose_category_for_file`에 대응한다.
 //!
 //! 분류 판정은 두 갈래다.
@@ -23,7 +23,7 @@ const PROPOSAL_PLACEHOLDER_CHUNK: usize = 500;
 /// 모델 단독 판정을 '확실'로 볼 최소 확신도. `BookClassifierService.MODEL_TRUST_MIN_CONFIDENCE`와 같다.
 pub const MODEL_CERTAIN_MIN_CONFIDENCE: f64 = 0.10;
 
-/// `propose_category_changes` 옵션. `None`은 Python 기본값(`use_bookstore=True`, `use_content_meta=True`)이다.
+/// `propose_category_changes` 옵션. `None`은 기본값(`use_bookstore=true`, `use_content_meta=true`)이다.
 #[derive(Default)]
 pub struct ProposeOptions<'a> {
     pub content_type: Option<&'a str>,
@@ -564,8 +564,6 @@ impl BookManager {
             report(processed_count, json!({"updated_items": [new_item]}));
         }
 
-        // Python은 제안 경로에서 분류 캐시를 저장하지 않는다(저장은 직접 분류 CLI뿐이다). 저장하면 서점 응답이 비었던 항목이
-        // 캐시에 남아 같은 파일을 다시 제안해도 서점을 재조회하지 않는다.
         Ok(json!({"content_type": content_type, "source_category": category, "total_count": total_count, "processed_count": processed_count, "items": items, "failures": failures}))
     }
 

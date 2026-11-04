@@ -56,7 +56,7 @@ const ROOT_TAG_HEAD_BYTES: usize = 4096;
 /// container.xml, OPF는 작다. 비정상적으로 큰 멤버는 읽지 않는다.
 const MAX_XML_BYTES: usize = 5 * 1024 * 1024;
 
-// Python 원본은 `<(?![?!])([^\s/>]+)`. Rust regex에는 lookahead가 없어 첫 글자 조건으로 푼다.
+// `<(?![?!])([^\s/>]+)`와 같은 뜻이다. Rust regex에는 lookahead가 없어 첫 글자 조건으로 푼다.
 static ROOT_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?-u)<([^?!\s/>][^\s/>]*)").unwrap());
 static COMMENT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s-u)<!--.*?-->").unwrap());
 

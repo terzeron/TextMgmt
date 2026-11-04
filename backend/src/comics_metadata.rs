@@ -1,4 +1,4 @@
-//! 만화 한 권의 메타데이터. Python `backend/comics.py`에 대응한다.
+//! 만화 한 권의 메타데이터.
 
 use std::fmt;
 use std::io;
@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde_json::ser::{Formatter, Serializer};
 use serde_json::{Value, json};
 
-/// `TM_COMICS_DIR`에서 만화 루트를 읽는다. 없으면 Python의 import 시점 `sys.exit(-1)`에 해당하는 오류를 돌려준다.
+/// `TM_COMICS_DIR`에서 만화 루트를 읽는다. 없으면 프로세스를 끝내야 하는 설정 오류를 돌려준다.
 pub fn path_prefix_from_env(get: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf, String> {
     match get("TM_COMICS_DIR") {
         Some(dir) => Ok(PathBuf::from(dir)),
@@ -50,7 +50,7 @@ fn optional_int(info: &Value, key: &str) -> i64 {
 }
 
 impl Comics {
-    /// 만화 루트. `TM_COMICS_DIR`을 처음 쓸 때 한 번 읽는다. 없으면 Python처럼 종료 오류로 본다.
+    /// 만화 루트. `TM_COMICS_DIR`을 처음 쓸 때 한 번 읽는다. 없으면 종료 오류로 본다.
     pub fn path_prefix() -> PathBuf {
         static PREFIX: OnceLock<PathBuf> = OnceLock::new();
         PREFIX.get_or_init(|| path_prefix_from_env(&|name| std::env::var(name).ok()).unwrap_or_else(|msg| panic!("{msg}"))).clone()
@@ -95,17 +95,17 @@ impl Comics {
         })
     }
 
-    /// Python `json.dumps` 형식: 구분자 ", "와 ": ", 비ASCII는 `\uXXXX`로 이스케이프한다.
+    /// JSON 문자열: 구분자 ", "와 ": ", 비ASCII는 `\uXXXX`로 이스케이프한다.
     pub fn json(&self) -> String {
         let mut out = Vec::new();
-        let mut ser = Serializer::with_formatter(&mut out, PythonFormatter);
+        let mut ser = Serializer::with_formatter(&mut out, SpacedAsciiFormatter);
         self.dict().serialize(&mut ser).expect("메모리에 쓰기");
         String::from_utf8(out).expect("ASCII")
     }
 }
 
-/// Python `str(datetime)`: 마이크로초가 있을 때만 소수부를 붙인다.
-fn python_datetime_str(t: &NaiveDateTime) -> String {
+/// 표시용 날짜 문자열 `YYYY-MM-DD HH:MM:SS[.ffffff]`. 마이크로초가 있을 때만 소수부를 붙인다.
+fn display_datetime(t: &NaiveDateTime) -> String {
     let micros = t.nanosecond() / 1000;
     if micros == 0 { t.format("%Y-%m-%d %H:%M:%S").to_string() } else { format!("{}.{micros:06}", t.format("%Y-%m-%d %H:%M:%S")) }
 }
@@ -121,14 +121,14 @@ impl fmt::Display for Comics {
             self.file_path.display(),
             self.file_type,
             self.file_size,
-            python_datetime_str(&self.updated_time)
+            display_datetime(&self.updated_time)
         )
     }
 }
 
-struct PythonFormatter;
+struct SpacedAsciiFormatter;
 
-impl Formatter for PythonFormatter {
+impl Formatter for SpacedAsciiFormatter {
     fn begin_array_value<W: ?Sized + io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
         if first { Ok(()) } else { writer.write_all(b", ") }
     }

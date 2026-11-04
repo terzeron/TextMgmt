@@ -112,7 +112,7 @@ fn test_mismatch_locks_are_independent() {
     let es = FakeEsManager::new();
     let m = build(&BASE, &es).unwrap();
     let _scan = m.mismatch_scan_lock().lock().unwrap();
-    // scan lock을 잡은 채로 state lock을 잡을 수 있어야 한다(Python `_refresh_mismatch_cache`의 중첩 순서).
+    // scan lock을 잡은 채로 state lock을 잡을 수 있어야 한다.
     assert!(m.mismatch_state_lock().try_lock().is_ok());
 }
 

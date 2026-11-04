@@ -1,7 +1,7 @@
 use file_record::ignore_rules::{IGNORED_DIR_NAMES, is_ignored_segment};
 
 #[test]
-fn ignored_dir_names_match_python_original() {
+fn ignored_dir_names_match_the_layout_rules() {
     let mut got: Vec<&str> = IGNORED_DIR_NAMES.to_vec();
     got.sort_unstable();
     assert_eq!(got, ["META-INF", "OEBPS", "page_images", "source_chapters", "tesseract_text"]);

@@ -1,21 +1,19 @@
-//! 원본: tests/test_auth.py
 //!
 //! JWT 발급·검증, 권한 의존성(`require_auth`/`require_admin`), 쿠키 설정, Google OAuth 로그인, refresh 회전 관측 로그,
-//! 접속 IP 추출, admin 로그인 세션 관리 API 테스트. Python의 autouse `setup_env` fixture는 `fixture()`(`common::env::EnvGuard`)로 옮겼다.
-//! Python `monkeypatch.setattr(main_mod, ...)`는 `AppDeps`의 `with_google_verifier`/`with_role_resolver`/`with_refresh_token_store`로 옮겼다.
+//! 접속 IP 추출, admin 로그인 세션 관리 API 테스트. 환경 설정은 `fixture()`(`common::env::EnvGuard`)가 한다.
 //! 토큰 발급 함수의 반환값을 고정해야 하는 `test_auth_refresh_and_logout`은 `AppDeps::with_token_issuer(Arc<dyn TokenIssuer>)` seam으로 풀었다.
 //!
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.2, 3.4, 3.9, 3.10):
-//! - `backend::auth_service` (환경 변수는 호출 시점에 읽는다. Python의 `importlib.reload` 불필요)
+//! - `backend::auth_service`
 //!   - `determine_role(email: &str) -> Option<String>`
 //!   - `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String` (4인자 통일안. None은 빈 문자열)
 //!   - `create_refresh_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`
 //!   - `decode_refresh_token(token: &str) -> Result<Value, HTTPException>`, `_extract_payload<R: RequestParts>(req: &R) -> Result<Value, HTTPException>`
 //!   - `async require_auth<R: RequestParts>(req: &R) -> Result<Value, HTTPException>`, `async require_admin<R: RequestParts>(req: &R) -> Result<Value, HTTPException>`
-//!   - `require_auth_with(req, resolver: &dyn RoleResolver)`, `require_admin_with(..)` (async, 같은 반환형. `monkeypatch.setattr(auth_mod, "determine_role", ..)` 대응)
+//!   - `require_auth_with(req, resolver: &dyn RoleResolver)`, `require_admin_with(..)` (async, 같은 반환형. 역할 판정을 대역으로 바꾼다)
 //!   - `trait RequestParts { fn header(&self, name: &str) -> Option<String>; fn cookie(&self, name: &str) -> Option<String>; }`
 //!   - `struct HTTPException { pub status_code: u16, pub detail: String }` + `HTTPException::new(u16, &str)`, `struct SystemExit(pub i32)`
-//!   - `load_jwt_secret(env: EnvFn) -> Result<String, SystemExit>` (`EnvFn = &dyn Fn(&str) -> Option<String>`. Python `import backend.auth` 시 TM_JWT_SECRET 없으면 SystemExit)
+//!   - `load_jwt_secret(env: EnvFn) -> Result<String, SystemExit>` (`EnvFn = &dyn Fn(&str) -> Option<String>`.
 //!   - `ACCESS_TOKEN_EXPIRATION_SECONDS: i64`
 //! - `backend::main`
 //!   - `app() -> axum::Router`, `app_with(deps: AppDeps) -> axum::Router`, `AppDeps::new(auth: AuthMode) -> AppDeps`
@@ -66,7 +64,6 @@ fn set_cookies(resp: &Response) -> Vec<String> {
     resp.headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("set-cookie")).map(|(_, v)| v.clone()).collect()
 }
 
-/// Python `resp.headers.get("set-cookie", "")`: 같은 헤더가 여러 개면 쉼표로 이어 붙인다.
 fn set_cookie_joined(resp: &Response) -> String {
     set_cookies(resp).join(", ")
 }
@@ -79,7 +76,6 @@ async fn post_empty(client: &TestClient, path: &str) -> Response {
     client.request(Method::POST, path, None, Vec::new()).await
 }
 
-/// Python `auth_client` fixture: require_auth/require_admin을 고정 payload로 바꾼 앱 (`AuthMode::Split`).
 fn auth_deps() -> AppDeps {
     AppDeps::new(AuthMode::Split { auth: json!({"email": "user@example.com", "role": "user"}), admin: json!({"email": "admin@example.com", "role": "admin"}) })
 }
@@ -217,7 +213,7 @@ async fn test_auth_refresh_and_logout() {
     assert_eq!(resp.status, 400);
 
     let store = FakeStore::rotating("ok");
-    // `AppDeps::with_token_issuer`가 Python의 `create_jwt_token`/`create_refresh_token`/`decode_refresh_token` 덮어쓰기를 대신한다.
+    // `AppDeps::with_token_issuer`로 토큰 발급·해독 대역을 꽂는다.
     let deps = auth_deps().with_role_resolver(role("user")).with_refresh_token_store(store.clone()).with_token_issuer(Arc::new(FixedTokens));
     let app = auth_app(deps);
     let token = crafted_refresh("e@example.com", "family1", "old-token");
@@ -232,7 +228,7 @@ async fn test_auth_refresh_and_logout() {
     assert!(refresh_data.get("expires_in").is_some());
     assert_eq!(refresh_data["expires_in"], json!(ACCESS_TOKEN_EXPIRATION_SECONDS));
 
-    // Python TestClient는 응답의 Set-Cookie를 쿠키 저장소에 보관한다. 같은 동작을 직접 옮긴다.
+    // 응답의 Set-Cookie를 쿠키 저장소에 보관한다.
     let jar = format!("{ACCESS_COOKIE_NAME}={}; {REFRESH_COOKIE_NAME}={}", cookie_value(&resp, ACCESS_COOKIE_NAME).unwrap_or_default(), cookie_value(&resp, REFRESH_COOKIE_NAME).unwrap());
 
     let resp = client(&app).header("cookie", &jar).get("/auth/me").await;

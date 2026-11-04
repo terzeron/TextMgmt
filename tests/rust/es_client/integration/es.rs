@@ -103,7 +103,7 @@ fn search_with_null_max_score_is_empty_and_zero_max_score_gives_zero() {
 }
 
 #[test]
-fn search_by_title_builds_the_python_query() {
+fn search_by_title_builds_the_expected_query() {
     let (url, rx) = serve_once(200, hits(json!(1.0), &[]));
     client(&url).search_by_title("a b c", "epub", 7, None).unwrap();
     let body = rx.recv().unwrap().body;
@@ -118,7 +118,7 @@ fn search_by_title_builds_the_python_query() {
 }
 
 #[test]
-fn title_boost_counts_single_space_separated_words_like_python_split() {
+fn title_boost_counts_single_space_separated_words() {
     // "".split(" ") -> [''] 1개, "a  b".split(" ") -> ['a','','b'] 3개.
     for (title, words) in [("", 1.0), ("a  b", 3.0)] {
         let (url, rx) = serve_once(200, hits(json!(1.0), &[]));
@@ -172,7 +172,7 @@ fn search_scrolls_above_result_window_and_clears_context() {
     let initial = rx.recv().unwrap();
     assert_eq!(initial.request_line, "POST /books/_search?scroll=10m HTTP/1.1");
     assert_eq!(initial.body["size"], 10_000);
-    assert!(initial.body.get("_source").is_none(), "Python scroll path requests full source");
+    assert!(initial.body.get("_source").is_none(), "scroll path requests full source");
     let page = rx.recv().unwrap();
     assert_eq!(page.request_line, "POST /_search/scroll HTTP/1.1");
     assert_eq!(page.body, json!({"scroll":"10m","scroll_id":"s1"}));
@@ -182,7 +182,7 @@ fn search_scrolls_above_result_window_and_clears_context() {
 }
 
 #[test]
-fn search_scroll_matches_python_empty_max_score_and_cleans_up_updated_id() {
+fn search_scroll_handles_empty_max_score_and_cleans_up_updated_id() {
     let first = json!({"_scroll_id":"s1","hits":{"max_score":1.0,"hits":[{"_id":"1","_score":1.0,"_source":{}}]}});
     let next = json!({"_scroll_id":"s2","hits":{"max_score":null,"hits":[{"_id":"2","_score":1.0,"_source":{}}]}});
     let (url, rx) = serve_sequence(vec![(200, first), (200, next), (200, json!({"succeeded":true}))]);
