@@ -49,19 +49,19 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use bookstore::store_clients::{
     AbstractBookstore, AladinBookstore, MAX_RESULTS, SearchRow, UreqHttpSession, Yes24Bookstore,
 };
 use serde_json::{Value, json};
-use sysdeps::{HttpError, HttpResponse, HttpSession, HttpTimeout};
-use crate::common::shared_fixtures::{Handler, LoadHook, SaveHook, SearchHook, between, empty_info, single_quoted_hrefs};
+use sysdeps::{HttpError, HttpSession, HttpTimeout};
+use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, empty_info, single_quoted_hrefs};
+use crate::common::shared_fixtures::{Kind, failing};
 
 #[test]
 fn ureq_session_preserves_http_status_headers_body_and_query() {
@@ -396,61 +396,6 @@ fn ureq_session_reports_a_body_that_ends_before_content_length() {
 
     assert!(matches!(result, Err(HttpError::Connection(_))), "{result:?}");
     server.join().unwrap();
-}
-
-// 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-struct Call {
-    url: String,
-    params: BTreeMap<String, String>,
-    timeout: Option<HttpTimeout>,
-}
-
-struct FakeSession {
-    handler: Handler,
-    calls: Arc<Mutex<Vec<Call>>>,
-}
-
-impl HttpSession for FakeSession {
-    fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError> {
-        self.calls.lock().unwrap().push(Call { url: url.to_owned(), params: params.iter().cloned().collect(), timeout: None });
-        (self.handler)(url, params)
-    }
-
-    fn get_with_timeout(&self, url: &str, params: &[(String, String)], timeout: HttpTimeout) -> Result<HttpResponse, HttpError> {
-        self.calls.lock().unwrap().push(Call { url: url.to_owned(), params: params.iter().cloned().collect(), timeout: Some(timeout) });
-        (self.handler)(url, params)
-    }
-}
-
-/// `session.get`을 `handler`로 바꾼 세션과, 받은 호출 기록을 돌려준다.
-fn session(handler: impl Fn(&str, &[(String, String)]) -> Result<HttpResponse, HttpError> + Send + Sync + 'static) -> (Arc<dyn HttpSession>, Arc<Mutex<Vec<Call>>>) {
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    (Arc::new(FakeSession { handler: Box::new(handler), calls: Arc::clone(&calls) }), calls)
-}
-
-/// 요청하면 `RuntimeError("boom")`을 던지는 세션.
-fn failing() -> Arc<dyn HttpSession> {
-    session(|_, _| Err(HttpError::Other("boom".to_owned()))).0
-}
-
-// ---------------------------------------------------------------------------
-// 테스트용 서점 클래스 (Python의 DummyBookstore, DummyBookstoreUnit, DummyBookstoreParsing, BaseOnlyBookstore)
-// ---------------------------------------------------------------------------
-
-// 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
-#[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    /// `DummyBookstore`/`DummyNoIsbnBookstore`: 링크 둘 고정, h1/span.author/p.category/p.isbn 파싱
-    Dummy,
-    /// `DummyBookstoreUnit`: 링크 둘 고정, 정보도 고정
-    Unit,
-    /// `DummyBookstoreParsing`: a[href] 링크, h1/span.author/div.cat/div.isbn 파싱
-    Parsing,
-    /// `BaseOnlyBookstore`: 링크 없음, 정보 비어 있음
-    BaseOnly,
 }
 
 /// 서브클래스를 흉내 내는 테스트 서점 구조체를 만든다. `$over`에 넘긴 메서드만 기본 구현 대신 덮어쓴다.

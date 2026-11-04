@@ -1,5 +1,7 @@
 //! sysdeps 테스트: 시계, 파일시스템, 외부 명령, HTTP 응답 값 객체.
 //! 설계: docs/rust-test-seams.md 3.1
+
+mod common;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
@@ -44,33 +46,8 @@ mod clock {
 }
 
 mod poppler {
+    use crate::common::shared_fixtures::runner;
     use super::*;
-
-    struct FakeRunner {
-        outputs: std::sync::Mutex<Vec<sysdeps::CommandOutput>>,
-        calls: std::sync::Mutex<Vec<Vec<String>>>,
-    }
-
-    impl CommandRunner for FakeRunner {
-        fn run(&self, argv: &[String], timeout: Option<Duration>) -> Result<sysdeps::CommandOutput, CommandError> {
-            assert_eq!(timeout, Some(Duration::from_secs(30)));
-            self.calls.lock().unwrap().push(argv.to_vec());
-            Ok(self.outputs.lock().unwrap().remove(0))
-        }
-
-        fn which(&self, program: &str) -> Option<std::path::PathBuf> {
-            Some(std::path::PathBuf::from(format!("/usr/bin/{program}")))
-        }
-    }
-
-    fn runner(outputs: &[(&str, &str, i32)]) -> FakeRunner {
-        FakeRunner {
-            outputs: std::sync::Mutex::new(
-                outputs.iter().map(|(stdout, stderr, returncode)| sysdeps::CommandOutput { stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec(), returncode: *returncode }).collect(),
-            ),
-            calls: std::sync::Mutex::new(Vec::new()),
-        }
-    }
 
     struct FailingRunner {
         missing: bool,

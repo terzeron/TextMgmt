@@ -52,7 +52,7 @@ mod common;
 mod env_helpers;
 #[path = "../backend/common/log_capture.rs"]
 mod log_capture;
-use crate::common::shared_fixtures::{Handler, LoadHook, SaveHook, SearchHook, between, empty_info, single_quoted_hrefs};
+use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, empty_info, single_quoted_hrefs};
 
 use std::collections::BTreeMap;
 use std::{fs, io};
@@ -64,6 +64,7 @@ use sysdeps::{FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout};
 use tempfile::TempDir;
 use crate::env_helpers::{empty_env, EnvGuard, map_env};
 use crate::log_capture::LogCapture;
+use crate::common::shared_fixtures::{Call, Kind, failing, session};
 
 // ---------------------------------------------------------------------------
 // 공용 도구: 구상 서점 생성, 세션 대역, 결과 행
@@ -139,45 +140,10 @@ fn http(status_code: u16, text: &str, json: Value) -> Result<HttpResponse, HttpE
     Ok(HttpResponse::from_text(status_code, &body))
 }
 
-#[derive(Clone, Debug)]
-struct Call {
-    url: String,
-    params: BTreeMap<String, String>,
-    timeout: Option<HttpTimeout>,
-}
-
-struct FakeSession {
-    handler: Handler,
-    calls: Arc<Mutex<Vec<Call>>>,
-}
-
-impl HttpSession for FakeSession {
-    fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError> {
-        self.calls.lock().unwrap().push(Call { url: url.to_owned(), params: params.iter().cloned().collect(), timeout: None });
-        (self.handler)(url, params)
-    }
-
-    fn get_with_timeout(&self, url: &str, params: &[(String, String)], timeout: HttpTimeout) -> Result<HttpResponse, HttpError> {
-        self.calls.lock().unwrap().push(Call { url: url.to_owned(), params: params.iter().cloned().collect(), timeout: Some(timeout) });
-        (self.handler)(url, params)
-    }
-}
-
-/// `session.get`을 `handler`로 바꾼 세션과, 받은 호출 기록을 돌려준다.
-fn session(handler: impl Fn(&str, &[(String, String)]) -> Result<HttpResponse, HttpError> + Send + Sync + 'static) -> (Arc<dyn HttpSession>, Arc<Mutex<Vec<Call>>>) {
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    (Arc::new(FakeSession { handler: Box::new(handler), calls: Arc::clone(&calls) }), calls)
-}
-
 /// 어떤 URL이든 같은 응답을 주는 세션. `lambda *a, **k: Resp()` 대응.
 fn constant(status_code: u16, text: &str, json: Value) -> Arc<dyn HttpSession> {
     let text = text.to_owned();
     session(move |_, _| http(status_code, &text, json.clone())).0
-}
-
-/// 요청하면 `RuntimeError("boom")`을 던지는 세션.
-fn failing() -> Arc<dyn HttpSession> {
-    session(|_, _| Err(HttpError::Other("boom".to_owned()))).0
 }
 
 fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -186,22 +152,6 @@ fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 
 fn urls(calls: &Arc<Mutex<Vec<Call>>>) -> Vec<String> {
     calls.lock().unwrap().iter().map(|c| c.url.clone()).collect()
-}
-
-// ---------------------------------------------------------------------------
-// 테스트용 서점 클래스 (Python의 DummyBookstore, DummyBookstoreUnit, DummyBookstoreParsing, BaseOnlyBookstore)
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    /// `DummyBookstore`/`DummyNoIsbnBookstore`: 링크 둘 고정, h1/span.author/p.category/p.isbn 파싱
-    Dummy,
-    /// `DummyBookstoreUnit`: 링크 둘 고정, 정보도 고정
-    Unit,
-    /// `DummyBookstoreParsing`: a[href] 링크, h1/span.author/div.cat/div.isbn 파싱
-    Parsing,
-    /// `BaseOnlyBookstore`: 링크 없음, 정보 비어 있음
-    BaseOnly,
 }
 
 /// 서브클래스를 흉내 내는 테스트 서점 구조체를 만든다. `$over`에 넘긴 메서드만 기본 구현 대신 덮어쓴다.

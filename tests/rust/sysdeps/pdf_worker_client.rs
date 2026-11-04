@@ -1,5 +1,7 @@
 //! `sysdeps::pdf_worker_client` 단위 테스트.
 
+mod common;
+
 // ---- 어댑터: worker 출력과 종료 코드를 오류로 바꾼다 ----
 
 struct Fake {
@@ -30,32 +32,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use sysdeps::pdf_worker_client::{extract_pages, extract_text, first_page_jpeg, page_count, render_page};
 use sysdeps::{CommandError, CommandOutput, CommandRunner};
-
-struct FakeRunner {
-    outputs: std::sync::Mutex<Vec<sysdeps::CommandOutput>>,
-    calls: std::sync::Mutex<Vec<Vec<String>>>,
-}
-
-impl CommandRunner for FakeRunner {
-    fn run(&self, argv: &[String], timeout: Option<Duration>) -> Result<sysdeps::CommandOutput, CommandError> {
-        assert_eq!(timeout, Some(Duration::from_secs(30)));
-        self.calls.lock().unwrap().push(argv.to_vec());
-        Ok(self.outputs.lock().unwrap().remove(0))
-    }
-
-    fn which(&self, program: &str) -> Option<std::path::PathBuf> {
-        Some(std::path::PathBuf::from(format!("/usr/bin/{program}")))
-    }
-}
-
-fn runner(outputs: &[(&str, &str, i32)]) -> FakeRunner {
-    FakeRunner {
-        outputs: std::sync::Mutex::new(
-            outputs.iter().map(|(stdout, stderr, returncode)| sysdeps::CommandOutput { stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec(), returncode: *returncode }).collect(),
-        ),
-        calls: std::sync::Mutex::new(Vec::new()),
-    }
-}
+use crate::common::shared_fixtures::runner;
 
 #[test]
 fn adapter_maps_worker_exits_to_errors() {
