@@ -22,10 +22,10 @@ use axum::body::Body;
 use axum::http::Request;
 use tokio_stream::StreamExt;
 use tower::ServiceExt;
-use crate::common::shared_fixtures::{chapter, entry, err_has, make_chapter_xhtml, make_cover_xhtml_with_svg, make_opf, namelist, ns_children, ns_nodes, split, unlink, write_epub, zip_read, zip_read_string};
+use crate::common::shared_fixtures::{chapter, entry, err_has, make_opf, namelist, ns_children, ns_nodes, split, unlink, write_epub, zip_read, zip_read_string};
 use crate::common::shared_fixtures::{CATEGORY, CONTAINER_XML, TempFile};
+use crate::common::preview_epubs::{OPF_NS, create_corrupted_epub, create_epub_with_invalid_spine, create_epub_without_spine, create_test_epub};
 
-const OPF_NS: &str = "http://www.idpf.org/2007/opf";
 const CNT_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
 const NCX_NS: &str = "http://www.daisy.org/z3986/2005/ncx/";
 
@@ -35,26 +35,6 @@ fn stored() -> SimpleFileOptions {
 
 fn deflated() -> SimpleFileOptions {
     SimpleFileOptions::default().compression_method(CompressionMethod::Deflated)
-}
-
-/// 테스트용 미니 EPUB을 생성.
-fn create_test_epub(path: &Path, chapter_count: usize, include_css: bool, include_svg_cover: bool) {
-    let mut entries = vec![entry("META-INF/container.xml", CONTAINER_XML), entry("OEBPS/content.opf", make_opf(chapter_count, include_css, include_svg_cover)), entry("OEBPS/toc.ncx", "<ncx/>")];
-    for i in 1..=chapter_count {
-        if include_svg_cover && i == 1 {
-            entries.push(entry(&format!("OEBPS/ch{i}.xhtml"), make_cover_xhtml_with_svg()));
-        } else {
-            entries.push(entry(&format!("OEBPS/ch{i}.xhtml"), make_chapter_xhtml(i, include_css)));
-        }
-    }
-    if include_css {
-        entries.push(entry("OEBPS/style.css", "body { margin: 1em; font-family: serif; }"));
-    }
-    if include_svg_cover {
-        // 1x1 JPEG placeholder
-        entries.push(entry("media/cover.jpg", b"\xff\xd8\xff\xe0\x00\x10JFIF\xff\xd9".to_vec()));
-    }
-    write_epub(path, entries);
 }
 
 /// 앞쪽에 비선형(linear="no") 항목(nav·표지)을 둔 EPUB.
@@ -139,36 +119,6 @@ fn create_epub_with_font(path: &Path, font_size: usize) {
     );
 }
 
-/// manifest에 없는 idref(coverpage)를 spine에 포함하는 EPUB.
-fn create_epub_with_invalid_spine(path: &Path) {
-    let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>Invalid Spine Test</dc:title>
-  </metadata>
-  <manifest>
-    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
-    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
-  </manifest>
-  <spine toc="toc">
-    <itemref idref="coverpage"/>
-    <itemref idref="ch1"/>
-    <itemref idref="ch2"/>
-  </spine>
-</package>"#;
-    write_epub(
-        path,
-        vec![
-            entry("META-INF/container.xml", CONTAINER_XML),
-            entry("OEBPS/content.opf", opf),
-            entry("OEBPS/toc.ncx", "<ncx/>"),
-            entry("OEBPS/ch1.xhtml", chapter(1)),
-            entry("OEBPS/ch2.xhtml", chapter(2)),
-        ],
-    );
-}
-
 /// 챕터에서 참조하지 않는 CSS(대용량 폰트 `url()` 포함)를 가진 EPUB.
 fn create_epub_with_unreferenced_css(path: &Path) {
     let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -240,31 +190,6 @@ fn create_epub_with_unbound_prefix(path: &Path) {
 fn create_epub_without_container_xml(path: &Path) {
     // container.xml 없음
     write_epub(path, vec![entry("OEBPS/content.opf", make_opf(2, false, false)), entry("OEBPS/toc.ncx", "<ncx/>"), entry("OEBPS/ch1.xhtml", chapter(1)), entry("OEBPS/ch2.xhtml", chapter(2))]);
-}
-
-/// spine 요소가 없는 OPF를 가진 EPUB.
-fn create_epub_without_spine(path: &Path) {
-    let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>No Spine Test</dc:title>
-  </metadata>
-  <manifest>
-    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
-    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
-  </manifest>
-</package>"#;
-    write_epub(
-        path,
-        vec![
-            entry("META-INF/container.xml", CONTAINER_XML),
-            entry("OEBPS/content.opf", opf),
-            entry("OEBPS/toc.ncx", "<ncx/>"),
-            entry("OEBPS/ch1.xhtml", chapter(1)),
-            entry("OEBPS/ch2.xhtml", chapter(2)),
-        ],
-    );
 }
 
 /// container.xml이 깨진 XML이지만 full-path 속성은 regex로 추출 가능한 EPUB.
@@ -346,20 +271,6 @@ fn create_epub_with_ncx_extra_refs(path: &Path, chapter_count: usize, total_ncx_
     let mut entries = vec![entry("META-INF/container.xml", CONTAINER_XML), entry("OEBPS/content.opf", make_opf(chapter_count, false, false)), entry("OEBPS/toc.ncx", ncx)];
     for i in 1..=chapter_count {
         entries.push(entry(&format!("OEBPS/ch{i}.xhtml"), chapter(i)));
-    }
-    write_epub(path, entries);
-}
-
-/// spine에 챕터가 등록되어 있지만 실제 ZIP에는 파일이 없는 손상 EPUB.
-///
-/// `missing_all`이면 모든 챕터 파일을 제거한다.
-fn create_corrupted_epub(path: &Path, chapter_count: usize, missing_all: bool) {
-    let mut entries = vec![entry("META-INF/container.xml", CONTAINER_XML), entry("OEBPS/content.opf", make_opf(chapter_count, false, false)), entry("OEBPS/toc.ncx", "<ncx/>")];
-    if !missing_all {
-        // ch1만 누락, 나머지는 포함
-        for i in 2..=chapter_count {
-            entries.push(entry(&format!("OEBPS/ch{i}.xhtml"), chapter(i)));
-        }
     }
     write_epub(path, entries);
 }
