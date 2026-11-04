@@ -60,6 +60,6 @@ fn a_title_search_runs_end_to_end_against_a_mock_server() {
     let out = bin().arg("삼국지").env("TM_ES_URL", &url).env("TM_ES_USER", "u").env("TM_ES_PASSWORD", "p").env("TM_ES_BOOK_INDEX", "books").output().unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
     let text = String::from_utf8(out.stdout).unwrap();
-    assert!(text.contains("item: {'title': '삼국지', 'summary': '요약 본문'}") && text.contains("요약 본문"), "{text}");
+    assert!(text.contains(r#"item: {"title":"삼국지","summary":"요약 본문"}"#) && text.contains("요약 본문"), "{text}");
     server.join().unwrap();
 }

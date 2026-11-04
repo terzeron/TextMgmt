@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["libs/es_client", "utils/search", "utils/bookdoctor", "libs/stat", "libs/file_record", "libs/htmlkit", "libs/isbn", "libs/hwp3_parser", "libs/pyfmt", "libs/text_extractor", "libs/bookstore", "libs/doc_reader", "utils/loader", "libs/sysdeps", "libs/db", "libs/classifier", "backend"]
+members = ["libs/es_client", "utils/search", "utils/bookdoctor", "libs/stat", "libs/file_record", "libs/htmlkit", "libs/isbn", "libs/hwp3_parser", "libs/text_extractor", "libs/bookstore", "libs/doc_reader", "utils/loader", "libs/sysdeps", "libs/db", "libs/classifier", "backend"]
 
 [workspace.package]
 version = "0.1.0"

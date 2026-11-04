@@ -339,7 +339,8 @@ fn test_filesystem_listing_includes_unindexed_epub_and_reports_errors() {
 }
 
 #[test]
-fn filesystem_listing_order_matches_python_casefold() {
+/// 이름은 소문자로 바꾼 뒤 코드포인트 순서로 정렬한다. `ß`(U+00DF)는 `z`보다 뒤다.
+fn filesystem_listing_orders_by_lowercased_name() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     std::fs::create_dir(root.join("zeta")).unwrap();
@@ -349,11 +350,11 @@ fn filesystem_listing_order_matches_python_casefold() {
 
     let manager = CoverManagement::new(root);
     let labels: Vec<String> = manager.directories("").unwrap().into_iter().map(|entry| entry["label"].as_str().unwrap().to_owned()).collect();
-    assert_eq!(labels, ["ßeta", "zeta"]);
+    assert_eq!(labels, ["zeta", "ßeta"]);
 
     let page = manager.missing("", "", 10, false).unwrap();
     let paths: Vec<&str> = page["items"].as_array().unwrap().iter().map(|item| item["file_path"].as_str().unwrap()).collect();
-    assert_eq!(paths, ["ß.epub", "z.epub"]);
+    assert_eq!(paths, ["z.epub", "ß.epub"]);
 }
 
 #[test]

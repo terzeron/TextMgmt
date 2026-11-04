@@ -309,11 +309,11 @@ async fn test_similar_names_scores_directories_against_reference_stats() {
 }
 
 #[tokio::test]
-async fn test_similar_names_uses_python_full_casefold_for_matching_and_order() {
+async fn test_similar_names_ignores_case_for_matching_and_order() {
     let (bm, cat) = (mock_bm(), MockCat::with_store(None));
     *bm.categories.lock().unwrap() = (json!(["Straße", "zza", "ßa"]), None);
 
-    let response = client(&bm, &cat).get("/similar-names?name=STRASSE").await;
+    let response = client(&bm, &cat).get("/similar-names?name=STRAßE").await;
     let results = response.json()["result"].as_array().unwrap().clone();
     assert_eq!(results[0]["category"], "Straße");
     assert_eq!(results[0]["score"], 70.0);

@@ -22,7 +22,6 @@ epubveri = "0.33.0"
 es_client = { path = "../libs/es_client" }
 file_record = { path = "../libs/file_record" }
 fancy-regex = "0.14.0"
-pyfmt = { path = "../libs/pyfmt" }
 async-trait = "0.1"
 base64 = "0.23.1"
 axum = { version = "0.8.9", features = ["multipart"] }

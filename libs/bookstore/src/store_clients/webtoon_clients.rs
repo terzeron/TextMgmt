@@ -266,7 +266,7 @@ const TOPTOON_BASE_URL: &str = "https://toptoon.com";
 impl ToptoonBookstore {
     /// 공백을 없애고 소문자로 바꿔 제목 포함 여부를 비교한다.
     fn normalize(text: &str) -> String {
-        pyfmt::py_lowercase(&text.split_whitespace().collect::<String>())
+        text.split_whitespace().collect::<String>().to_lowercase()
     }
 
     fn search_api(&self, keyword: &str) -> Vec<SearchRow> {

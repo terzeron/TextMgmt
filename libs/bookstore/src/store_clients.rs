@@ -137,9 +137,16 @@ fn quote(value: &str, safe: &str) -> String {
     out
 }
 
-/// Python 진리값. `None`, `False`, `0`, `""`, `[]`, `{}`은 거짓이다.
-fn truthy(v: Option<&Value>) -> bool {
-    v.is_some_and(pyfmt::py_truthy)
+/// JSON 값이 있고 비어 있지 않은가. null·false·0·빈 문자열·빈 배열·빈 객체는 비었다.
+fn truthy(value: Option<&Value>) -> bool {
+    value.is_some_and(|v| match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    })
 }
 
 /// Python `str(value)` 대응. 문자열은 그대로, 없음은 빈 문자열, 나머지는 JSON 표기다.

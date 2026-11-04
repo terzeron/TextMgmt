@@ -5,35 +5,7 @@
 use std::io::Write;
 
 use es_client::{BookSearch, EsError, Hit};
-use pyfmt::py_repr;
 use serde_json::Value;
-
-fn parse_python_int(text: &str) -> Option<i64> {
-    let value = text.trim_matches(|c: char| c.is_whitespace() || ('\x1c'..='\x1f').contains(&c));
-    let (sign, digits) = match value.strip_prefix('-') {
-        Some(digits) => ("-", digits),
-        None => match value.strip_prefix('+') {
-            Some(digits) => ("+", digits),
-            None => ("", value),
-        },
-    };
-    let chars: Vec<char> = digits.chars().collect();
-    if chars.is_empty() {
-        return None;
-    }
-    let mut normalized = String::with_capacity(value.len());
-    normalized.push_str(sign);
-    for (i, c) in chars.iter().copied().enumerate() {
-        if let Some(digit) = pyfmt::py_decimal_digit(c) {
-            normalized.push(char::from(b'0' + digit));
-        } else if c == '_' && i > 0 && i + 1 < chars.len() && pyfmt::py_decimal_digit(chars[i - 1]).is_some() && pyfmt::py_decimal_digit(chars[i + 1]).is_some() {
-            continue;
-        } else {
-            return None;
-        }
-    }
-    normalized.parse().ok()
-}
 
 /// 인자 없이 실행하거나 `-h`/`--help`를 주면 프로그램의 용도와 인자·옵션을 보여 준다.
 pub fn print_usage(program: &str, out: &mut dyn Write) {
@@ -62,7 +34,7 @@ fn print_hits(hits: &[Hit], separator: bool, out: &mut dyn Write) -> std::io::Re
         if separator {
             writeln!(out, "----------------------------------------")?;
         }
-        writeln!(out, "item: {}", py_repr(&hit.source))?;
+        writeln!(out, "item: {}", hit.source)?;
         // Python은 `item["summary"][:200]`로 바로 접근하므로 누락·비문자열 값을 오류로 처리한다.
         let summary = hit.source.get("summary").and_then(Value::as_str).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "검색 결과에 문자열 summary가 없다"))?;
         let head: String = summary.chars().take(200).collect();
@@ -80,7 +52,7 @@ pub fn run<'a>(program: &str, args: &[String], out: &mut dyn Write, connect: &dy
     };
     let content = args.get(1).map_or("", String::as_str);
     let ext = args.get(2).map_or("", String::as_str);
-    let size: i64 = match args.get(3).map(|s| parse_python_int(s)) {
+    let size: i64 = match args.get(3).map(|s| s.trim().parse::<i64>().ok()) {
         None => 0,
         Some(Some(n)) => n,
         Some(None) => {

@@ -47,7 +47,7 @@ fn searches_by_title_and_content() {
     assert_eq!(*es.title_calls.borrow(), [("hello".to_string(), "epub".to_string(), 7)]);
     assert_eq!(*es.similar_calls.borrow(), ["body"]);
     assert!(out.contains("----------------------------------------"));
-    assert!(out.contains("item: {'summary': 'line1\\nline2', 'title': 'hello'}"), "{out}");
+    assert!(out.contains(r#"item: {"summary":"line1\nline2","title":"hello"}"#), "{out}");
     assert!(out.contains("line1 line2") && out.contains("content summary"));
 }
 
@@ -60,18 +60,18 @@ fn title_only_uses_default_ext_and_size() {
 }
 
 #[test]
-fn size_parsing_accepts_python_integer_separators_and_surrounding_whitespace() {
+fn size_parsing_trims_whitespace_and_accepts_only_ascii_integers() {
     let es = Dummy::default();
-    assert_eq!(go(&["hello", "", "", "1_000"], &es).0, 0);
-    assert_eq!(es.title_calls.borrow()[0].2, 1_000);
+    assert_eq!(go(&["hello", "", "", "1_000"], &es).0, 1);
+    assert!(es.title_calls.borrow().is_empty());
 
     let es = Dummy::default();
     assert_eq!(go(&["hello", "", "", " \t+42\n"], &es).0, 0);
     assert_eq!(es.title_calls.borrow()[0].2, 42);
 
     let es = Dummy::default();
-    assert_eq!(go(&["hello", "", "", "１２٣"], &es).0, 0);
-    assert_eq!(es.title_calls.borrow()[0].2, 123);
+    assert_eq!(go(&["hello", "", "", "１２٣"], &es).0, 1);
+    assert!(es.title_calls.borrow().is_empty());
 }
 
 #[test]

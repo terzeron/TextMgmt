@@ -377,9 +377,7 @@ fn category_or_children(category: &str) -> Value {
     json!({"bool": {"should": [{"term": {"category": category}}, {"prefix": {"category": format!("{category}/")}}], "minimum_should_match": 1}})
 }
 
-fn truthy(value: Option<&Value>) -> bool {
-    value.is_some_and(pyfmt::py_truthy)
-}
+use crate::truthy;
 
 impl ESManager {
     pub const DEFAULT_MAX_RESULT_COUNT: i64 = 10;

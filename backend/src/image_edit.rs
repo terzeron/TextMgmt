@@ -25,9 +25,9 @@ fn fail(reason: &str) -> ImageCropError {
     ImageCropError(reason.to_string())
 }
 
-/// Python `round(value)`: 0.5는 짝수 쪽으로 보낸다.
-fn py_round(value: f64) -> i64 {
-    pyfmt::py_round(value, 0) as i64
+/// 가장 가까운 정수로 반올림한다(0.5는 0에서 먼 쪽).
+fn round_px(value: f64) -> i64 {
+    value.round() as i64
 }
 
 /// `source`에서 `rect` 영역만 잘라 새 이미지로 돌려준다 (`MIN_CROP_PIXELS` 기준).
@@ -48,10 +48,10 @@ pub fn crop_pil_min(source: &DynamicImage, rect: Rect, min_pixels: u32) -> Resul
     let (w, h) = (f64::from(width), f64::from(height));
     let straight = angle.abs() < 0.01;
     let (left, top, out_w, out_h) = if straight {
-        let (left, top, right, bottom) = (py_round(x0 * w), py_round(y0 * h), py_round(x1 * w), py_round(y1 * h));
+        let (left, top, right, bottom) = (round_px(x0 * w), round_px(y0 * h), round_px(x1 * w), round_px(y1 * h));
         (left, top, right - left, bottom - top)
     } else {
-        (0, 0, py_round((x1 - x0) * w), py_round((y1 - y0) * h))
+        (0, 0, round_px((x1 - x0) * w), round_px((y1 - y0) * h))
     };
     if out_w < i64::from(min_pixels) || out_h < i64::from(min_pixels) {
         return Err(fail("크롭 영역이 너무 작음"));

@@ -520,19 +520,20 @@ fn test_match_category_by_keywords_picks_single_best() {
 }
 
 #[test]
-fn test_match_category_by_keywords_uses_python_full_casefold() {
+fn test_match_category_by_keywords_ignores_case() {
     let tmp = TempDir::new().unwrap();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     let directory = tmp.path().join("A");
     fs::create_dir_all(&directory).unwrap();
     let target = directory.join("Straße .TXT");
+    // 소문자 비교라 `ß`는 `ss`가 아니다. 대문자 키워드 `STRAßE`가 맞는다.
     fs::write(&target, "x").unwrap();
 
-    let (category, matched, tie_reason, _) = manager._match_category_by_keywords(&target, "A", &mappings(&[("3_SF", &["STRASSE .TXT"])]));
+    let (category, matched, tie_reason, _) = manager._match_category_by_keywords(&target, "A", &mappings(&[("3_SF", &["STRAßE .TXT"])]));
 
     assert_eq!(category.as_deref(), Some("3_SF"));
-    assert_eq!(matched, ["STRASSE .TXT"]);
+    assert_eq!(matched, ["STRAßE .TXT"]);
     assert!(tie_reason.is_none());
 }
 

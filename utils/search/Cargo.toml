@@ -7,7 +7,6 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
-pyfmt = { path = "../../libs/pyfmt" }
 es_client = { path = "../../libs/es_client" }
 serde_json = { workspace = true, features = ["preserve_order"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }

@@ -2347,13 +2347,13 @@ fn test_toptoon_search_by_keyword_ranks_and_formats() {
 }
 
 #[test]
-fn test_toptoon_lowercase_matches_python_unicode_version() {
+fn test_toptoon_lowercase_follows_rust_unicode_tables() {
     let mut store = toptoon(false);
     let catalog = json!([toptoon_comic("\u{1c8a}", "new-lower", 1, &[], "작가")]);
     store = store.with_session(session(move |url, _| if url.contains("hashtag") { http(200, CATALOG_URL, Value::Null) } else { http(200, "", catalog.clone()) }).0);
 
-    // Python 3.13 leaves U+1C89 unchanged, so it does not match U+1C8A.
-    assert!(store.search_by_keyword("\u{1c89}").is_empty());
+    // Rust 표준 라이브러리의 유니코드 표에서 U+1C89의 소문자는 U+1C8A다.
+    assert!(!store.search_by_keyword("\u{1c89}").is_empty());
 }
 
 #[test]

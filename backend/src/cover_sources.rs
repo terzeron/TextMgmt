@@ -604,9 +604,7 @@ fn value_text(value: &Value) -> String {
     }
 }
 
-fn truthy(value: Option<&Value>) -> bool {
-    value.is_some_and(pyfmt::py_truthy)
-}
+use crate::truthy;
 
 pub fn extract_html_candidates(store: &str, detail_url: &str, html: &str) -> Vec<Value> {
     match default_client(store) {

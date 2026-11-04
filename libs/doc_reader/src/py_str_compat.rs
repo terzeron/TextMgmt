@@ -39,9 +39,9 @@ pub fn collapse_spaces(s: &str) -> String {
     out.trim_matches(is_space).to_owned()
 }
 
-/// Python `\w`(유니코드): 글자·숫자·밑줄.
+/// 단어 글자: 유니코드 글자·숫자·밑줄.
 pub fn is_word(c: char) -> bool {
-    pyfmt::py_isalnum(c) || c == '_'
+    c.is_alphanumeric() || c == '_'
 }
 
 /// `re.sub(r"[^\w\sㄱ-힣]", " ", s)`: 글자·숫자·밑줄·공백·한글 호환 자모 이후 한글 범위만 남긴다.

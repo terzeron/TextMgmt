@@ -132,7 +132,7 @@ fn pretty_text_adds_newlines_only_in_element_only_containers() {
 }
 
 #[test]
-fn corpus_epub_matches_python() {
+fn corpus_epub_matches_the_recorded_summaries() {
     let root = corpus::books_root();
     for rec in corpus::records(include_str!("fixtures/corpus_epub.jsonl")) {
         if rec.get("error").is_some() {

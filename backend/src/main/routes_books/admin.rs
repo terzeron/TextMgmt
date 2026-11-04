@@ -56,7 +56,7 @@ struct SimilarNamesQuery {
 }
 
 fn normalized_category_name(value: &str) -> Vec<char> {
-    pyfmt::py_casefold(value).replace(['_', '-'], " ").split_whitespace().collect::<Vec<_>>().join(" ").chars().collect()
+    value.to_lowercase().replace(['_', '-'], " ").split_whitespace().collect::<Vec<_>>().join(" ").chars().collect()
 }
 
 fn sequence_ratio(a: &[char], b: &[char]) -> f64 {
@@ -149,7 +149,7 @@ async fn similar_names(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Origin
             .as_f64()
             .unwrap_or(0.0)
             .total_cmp(&a["score"].as_f64().unwrap_or(0.0))
-            .then_with(|| pyfmt::py_casefold(a["label"].as_str().unwrap_or("")).cmp(&pyfmt::py_casefold(b["label"].as_str().unwrap_or(""))))
+            .then_with(|| a["label"].as_str().unwrap_or("").to_lowercase().cmp(&b["label"].as_str().unwrap_or("").to_lowercase()))
     });
     result.truncate(10);
     Ok(Json(json!({"status":"success","result":result})))
@@ -195,7 +195,7 @@ async fn bulk_rename_files(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Or
             }
         }
     }
-    books.sort_by(|a, b| pyfmt::py_casefold(&a.file_path.to_string_lossy()).cmp(&pyfmt::py_casefold(&b.file_path.to_string_lossy())));
+    books.sort_by(|a, b| a.file_path.to_string_lossy().to_lowercase().cmp(&b.file_path.to_string_lossy().to_lowercase()));
     let mut plans = Vec::new();
     for book in books {
         let name = book.file_path.file_name().unwrap_or_default().to_string_lossy();

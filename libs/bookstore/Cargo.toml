@@ -9,7 +9,6 @@ autotests = false
 [dependencies]
 htmlkit = { path = "../htmlkit" }
 log = "0.4.34"
-pyfmt = { path = "../pyfmt" }
 regex = "1.13.1"
 scraper = "0.29.0"
 serde_json = { workspace = true, features = ["preserve_order"] }

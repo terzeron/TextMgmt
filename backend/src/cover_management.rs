@@ -278,9 +278,7 @@ fn now_seconds() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
-fn truthy(value: Option<&Value>) -> bool {
-    value.is_some_and(pyfmt::py_truthy)
-}
+use crate::truthy;
 
 fn is_epub_name(name: &str) -> bool {
     text_extractor::path::posix_ext(name).eq_ignore_ascii_case(".epub")
@@ -416,7 +414,7 @@ impl CoverManagement {
             }
             children.push(json!({"id": self.relative_of(&entry.path()), "label": name, "fileType": "folder", "children": []}));
         }
-        children.sort_by_key(|item| (pyfmt::py_casefold(str_field(item, "label")), str_field(item, "label").to_string()));
+        children.sort_by_key(|item| (str_field(item, "label").to_lowercase(), str_field(item, "label").to_string()));
         Ok(children)
     }
 
@@ -437,7 +435,7 @@ impl CoverManagement {
                 files.push((name, path));
             }
         }
-        files.sort_by_key(|(name, _)| (pyfmt::py_casefold(name), name.clone()));
+        files.sort_by_key(|(name, _)| (name.to_lowercase(), name.clone()));
         let total = files.len();
         let mut items: Vec<Value> = Vec::new();
         for (_, path) in files.iter().skip(offset).take(limit) {

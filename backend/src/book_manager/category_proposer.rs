@@ -85,7 +85,7 @@ fn mappings_from_value(mappings: &Value) -> Vec<(Value, Vec<Value>)> {
 }
 
 fn normalize_text(value: &str) -> String {
-    let folded = pyfmt::py_casefold(value);
+    let folded = value.to_lowercase();
     folded.split(char::is_whitespace).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ")
 }
 

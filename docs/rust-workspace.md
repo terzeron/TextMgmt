@@ -19,7 +19,6 @@ docs/       문서
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. backend `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
-| `pyfmt` | 일관된 문자열·숫자 출력 형식 |
 | `stat` | 색인·파싱 통계 카운터 |
 | `db` | MySQL 접근 추상화와 카테고리 매핑 저장소(`category_mapping`) |
 | `classifier` | 도서 분류기 껍데기: backend 분류 제안이 쓰는 `Classify`·`BookClassifierApi` trait와 모델 단독 어댑터. 구현은 없어서 backend는 카테고리 매핑 키워드만으로 제안한다 |

@@ -222,7 +222,6 @@ dependencies = [
  "log",
  "lopdf",
  "md-5",
- "pyfmt",
  "regex",
  "roxmltree",
  "rustls",
@@ -421,7 +420,6 @@ version = "0.1.0"
 dependencies = [
  "htmlkit",
  "log",
- "pyfmt",
  "regex",
  "scraper",
  "serde_json",
@@ -1013,7 +1011,6 @@ dependencies = [
  "htmlkit",
  "hwp3_parser",
  "lopdf",
- "pyfmt",
  "regex",
  "roxmltree",
  "scraper",
@@ -2748,13 +2745,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
-name = "pyfmt"
-version = "0.1.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3128,7 +3118,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "es_client",
- "pyfmt",
  "serde_json",
 ]
 

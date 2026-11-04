@@ -310,7 +310,7 @@ async fn test_same_new_name_in_one_batch_gets_serials() {
 }
 
 #[tokio::test]
-async fn test_plan_order_matches_python_full_casefold() {
+async fn test_plan_orders_paths_by_lowercased_name() {
     let tmp = TempDir::new().unwrap();
     let bm = mock_bm();
     let paths = touch(tmp.path(), &["z.txt", "ß.txt"]);
@@ -319,7 +319,7 @@ async fn test_plan_order_matches_python_full_casefold() {
     let resp = client(&bm).post_json(URL, &json!({"category": "cat", "pattern": "^(.*)$", "replacement": "Q$1"})).await;
 
     assert_eq!(resp.json()["result"]["changed_count"], 2);
-    assert_eq!(bm.target_names(), ["Qß.txt", "Qz.txt"]);
+    assert_eq!(bm.target_names(), ["Qz.txt", "Qß.txt"]);
 }
 
 #[tokio::test]

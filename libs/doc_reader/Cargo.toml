@@ -14,7 +14,6 @@ flate2 = "1"
 hwp3_parser = { path = "../hwp3_parser" }
 htmlkit = { path = "../htmlkit" }
 lopdf.workspace = true
-pyfmt = { path = "../pyfmt" }
 regex = "1.13.1"
 roxmltree = "0.21"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
