@@ -266,7 +266,7 @@ fn paragraph_shape_and_char_shape_variants() {
     csi.extend([1u8; 3]);
     csi.extend(pack(&codes("ABC")));
     assert!(extract_bytes(&hwp3("V3.00", &csi, 0, 0, 0)).contains("ABC"));
-    // flag != 1이면 31바이트를 건너뛴다.
+    // flag 0이면 글자 모양 31바이트가 뒤따른다.
     let mut flag0 = vec![1u8];
     flag0.extend(le16(1));
     flag0.extend(le16(1));
@@ -276,6 +276,45 @@ fn paragraph_shape_and_char_shape_variants() {
     flag0.extend(vec![0u8; 31]);
     flag0.extend(pack(&codes("X")));
     let _ = extract_bytes(&hwp3("V3.00", &flag0, 0, 0, 0));
+}
+
+#[test]
+fn is_hwp3_checks_the_legacy_signature() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("a.hwp");
+    for (bytes, want) in [(header("V3.00"), true), (header("V1.20"), true), (vec![0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1], false), (b"HWP Document".to_vec(), false)] {
+        fs::write(&p, &bytes).unwrap();
+        assert_eq!(is_hwp3(&p), want, "{bytes:?}");
+    }
+    assert!(!is_hwp3(&d.path().join("missing.hwp")));
+}
+
+#[test]
+fn v120_uses_the_bruteforce_fallback_like_v200() {
+    // 구조 파싱이 비는 V1.20 본문도 V2.00처럼 brute-force로 뽑는다.
+    let mut body = font_style_block();
+    body.extend(pack(&codes("Version One Twenty Text")));
+    let mut file = header("V1.20");
+    file.extend(doc_info(0, 0, 0));
+    file.extend(vec![0u8; 1008]);
+    file.extend(&body);
+    assert!(extract_bytes(&file).contains("Version One Twenty Text"));
+}
+
+#[test]
+fn truncated_compressed_body_keeps_the_inflated_head() {
+    // 압축 스트림이 중간에서 잘리면 풀린 데까지의 문단을 쓴다.
+    let mut body = font_style_block();
+    body.extend(paragraph(&codes("Truncated Head Paragraph Text"), 1));
+    body.extend(paragraph(&vec![u16::from(b'z'); 20000], 1));
+    let mut enc = DeflateEncoder::new(Vec::new(), Compression::none());
+    enc.write_all(&body).unwrap();
+    let raw = enc.finish().unwrap();
+    let mut file = header("V3.00");
+    file.extend(doc_info(0, 1, 0));
+    file.extend(vec![0u8; 1008]);
+    file.extend(&raw[..raw.len() / 2]);
+    assert!(extract_bytes(&file).contains("Truncated Head Paragraph Text"));
 }
 
 #[test]
@@ -388,16 +427,56 @@ fn parse_paragraph_basics_and_limits() {
     assert_eq!(parse_paragraph(&mut para_stream(1, 5, 1, 0, &codes("Hello"), b""), 0).unwrap().as_deref(), Some("Hello"));
 }
 
+/// 제어 데이터: `before`바이트, 끝 표식(제어 코드), `after`바이트.
+fn ctl(c: u16, before: usize, after: usize) -> Vec<u8> {
+    let mut d = vec![0u8; before];
+    d.extend(le16(c));
+    d.extend(vec![0u8; after]);
+    d
+}
+
 #[test]
-fn control_characters_advance_the_character_counter_like_the_original() {
-    let cases: [(u16, u16, usize); 5] = [(9, 4, 6), (23, 5, 8), (28, 32, 62), (30, 2, 2), (24, 3, 4)];
-    for (c, n_chars, skip) in cases {
-        let mut data = raw_para(n_chars, 1);
+fn control_characters_advance_the_character_counter_by_wsize() {
+    // 문단 글자 수가 제어 문자 하나의 칸 수(WSIZE)와 같으면 그 제어 문자만 읽고 끝난다. 뒤의 표지 바이트는 남는다.
+    let cases: [(u16, Vec<u8>); 7] = [(9, ctl(9, 4, 0)), (23, ctl(23, 6, 0)), (28, ctl(28, 60, 0)), (30, ctl(30, 0, 0)), (24, ctl(24, 2, 0)), (7, ctl(7, 80, 0)), (26, ctl(26, 242, 0))];
+    for (c, payload) in cases {
+        let mut data = raw_para(WSIZE[usize::from(c)] as u16, 1);
         data.extend(vec![0u8; 14]);
         data.extend(le16(c));
-        data.extend(vec![0u8; skip]);
-        assert!(parse_paragraph(&mut HwpStream::new(data), 0).is_ok(), "{c}");
+        data.extend(payload);
+        data.extend([0xAA, 0xBB]);
+        let mut s = HwpStream::new(data);
+        assert!(parse_paragraph(&mut s, 0).unwrap().is_some(), "{c}");
+        assert_eq!(s.remaining(), 2, "{c}");
     }
+    assert_eq!((WSIZE[7], WSIZE[8], WSIZE[26], WSIZE[13]), (42, 48, 123, 1));
+}
+
+#[test]
+fn paragraph_end_stops_reading_even_if_the_count_says_more() {
+    // 글자 수는 10이지만 문단 끝(13)에서 멈추고 뒤 바이트를 읽지 않는다.
+    let mut data = raw_para(10, 0);
+    let mut chars = codes("AB");
+    chars.push(13);
+    data.extend(pack(&chars));
+    data.extend([0xAA, 0xBB]);
+    let mut s = HwpStream::new(data);
+    assert_eq!(parse_paragraph(&mut s, 0).unwrap().unwrap(), "AB\n");
+    assert_eq!(s.remaining(), 2);
+}
+
+#[test]
+fn char_shape_marker_other_than_zero_has_no_shape_body() {
+    // 표식 2는 0이 아니므로 글자 모양 본체가 없다(옛 코드는 1이 아니면 31바이트를 건너뛰었다).
+    let mut csi = vec![1u8];
+    csi.extend(le16(2));
+    csi.extend(le16(0));
+    csi.push(1);
+    csi.extend(vec![0u8; 37]);
+    csi.extend([2u8, 0]);
+    csi.extend(vec![0u8; 31]);
+    csi.extend(pack(&codes("OK")));
+    assert_eq!(parse_paragraph(&mut HwpStream::new(csi), 0).unwrap().unwrap(), "OK");
 }
 
 #[test]
@@ -438,53 +517,94 @@ fn handle(c: u16, data: Vec<u8>) -> (Result<(), StreamError>, Vec<String>) {
 #[test]
 fn simple_control_characters() {
     assert_eq!(handle(13, vec![]).1, ["\n"]);
-    assert_eq!(handle(9, vec![0; 6]).1, ["\t"]);
-    let mut field = vec![0u8; 6];
-    field.extend(4u32.to_le_bytes());
-    field.extend(vec![0u8; 6]);
-    assert!(handle(5, field).0.is_ok());
-    for (c, n) in [(6, 40), (7, 84), (8, 96), (14, 92), (23, 8), (28, 62), (15, 16), (16, 16)] {
-        assert!(handle(c, vec![0; n]).0.is_ok(), "{c}");
+    assert_eq!(handle(9, ctl(9, 4, 0)).1, ["\t"]);
+    // 필드 코드: 크기·표식·종류 36바이트 + 길이 4개 + 데이터
+    let mut field = vec![0u8; 36];
+    for len in [2u32, 0, 0, 1] {
+        field.extend(len.to_le_bytes());
+    }
+    field.extend([0u8; 3]);
+    let mut s = HwpStream::new(field);
+    assert!(handle_control_char(5, &mut s, &mut Vec::new(), 0).is_ok());
+    assert_eq!(s.remaining(), 0);
+    for (c, data) in [(6, ctl(6, 4, 34)), (7, ctl(7, 80, 0)), (14, ctl(14, 4, 84)), (23, ctl(23, 6, 0)), (28, ctl(28, 60, 0)), (22, ctl(22, 20, 0)), (26, ctl(26, 242, 0))] {
+        let n = data.len();
+        let mut s = HwpStream::new([data, vec![0xAA]].concat());
+        assert!(handle_control_char(c, &mut s, &mut Vec::new(), 0).is_ok(), "{c}");
+        assert_eq!(s.remaining(), 1, "{c}: {n}바이트만 읽는다");
     }
     for c in [18, 19, 20, 21] {
-        assert!(handle(c, vec![0; 6]).0.is_ok());
+        assert!(handle(c, ctl(c, 4, 0)).0.is_ok());
     }
-    for c in [24, 25, 26, 29] {
-        assert!(handle(c, vec![0; 4]).0.is_ok());
+    for c in [24, 25] {
+        assert!(handle(c, ctl(c, 2, 0)).0.is_ok());
     }
+    // 묶음·고정폭 빈칸은 공백이다.
     for c in [30, 31] {
-        assert!(handle(c, vec![0; 2]).0.is_ok());
+        assert_eq!(handle(c, ctl(c, 0, 0)).1, [" "]);
     }
-    // 드물게 쓰이는 제어 문자는 아무것도 읽지 않는다.
-    for c in [0, 1, 2, 3, 4, 12, 22, 27] {
-        let (r, parts) = handle(c, vec![]);
+    // 길이를 앞에 둔 제어 문자: 길이(4) + 표식 + 데이터
+    for c in [0, 1, 2, 3, 4, 12, 27, 29] {
+        let mut d = 3u32.to_le_bytes().to_vec();
+        d.extend(le16(c));
+        d.extend([0u8; 3]);
+        let (r, parts) = handle(c, d);
         assert!(r.is_ok() && parts.is_empty(), "{c}");
     }
     assert!(handle(9, vec![0; 3]).0.is_err());
 }
 
 #[test]
+fn control_marker_mismatch_is_an_error() {
+    // 끝 표식이 제어 코드와 다르면 스트림이 어긋난 것이다.
+    let (r, parts) = handle(9, ctl(8, 4, 0));
+    assert!(r.unwrap_err().to_string().contains("marker mismatch"));
+    assert!(parts.is_empty());
+}
+
+#[test]
+fn composed_characters_and_date_codes_are_written_as_text() {
+    let mut compose = Vec::new();
+    for c in [u16::from(b'A'), u16::from(b'B'), 0] {
+        compose.extend(le16(c));
+    }
+    compose.extend(le16(23));
+    assert_eq!(handle(23, compose).1, ["A", "B"]);
+    let mut date = vec![0u8; 80];
+    for v in [1996u16, 3, 1, 15, 9, 30] {
+        date.extend(le16(v));
+    }
+    date.extend(le16(8));
+    assert_eq!(handle(8, date).1, ["1996년 3월 15일"]);
+    // 연도가 0이면 아무것도 쓰지 않는다.
+    assert!(handle(8, ctl(8, 92, 0)).1.is_empty());
+}
+
+#[test]
 fn container_control_characters_read_nested_paragraph_lists() {
-    assert!(handle(17, vec![0; 20]).1.is_empty());
-    let mut picture = vec![0u8; 6];
+    assert!(handle(17, ctl(17, 4, 14)).1.is_empty());
+    let mut picture = ctl(11, 4, 0);
     picture.extend(0u32.to_le_bytes());
     picture.extend(vec![0u8; 344]);
     assert!(handle(11, picture).0.is_ok());
-    let mut table = vec![0u8; 86];
+    let mut table = ctl(10, 4, 80);
     table.extend(le16(0));
     table.extend(vec![0u8; 2]);
     assert!(handle(10, table).0.is_ok());
+    for (c, after) in [(15, 8), (16, 10)] {
+        assert!(handle(c, ctl(c, 4, after)).0.is_ok(), "{c}");
+    }
 
     // 표: 셀 1개에 문단 하나, 각주에 문단 하나가 있으면 본문에 이어 붙는다.
     let cell_text = para_stream(1, 3, 1, 0, &codes("Tbl"), b"");
-    let mut data = vec![0u8; 86];
+    let mut data = ctl(10, 4, 80);
     data.extend(le16(1));
     data.extend(vec![0u8; 2 + 27]);
     data.extend(raw_stream_bytes(&cell_text));
     let (r, parts) = handle(10, data);
     assert!(r.is_ok());
     assert_eq!(parts, ["Tbl"]);
-    let mut note = vec![0u8; 20];
+    let mut note = ctl(17, 4, 14);
     note.extend(raw_stream_bytes(&para_stream(1, 4, 1, 0, &codes("Note"), b"")));
     assert_eq!(handle(17, note).1, ["Note"]);
 }

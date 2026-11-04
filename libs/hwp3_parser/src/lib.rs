@@ -5,6 +5,8 @@
 //!
 //! 참고: 한컴 "한글 문서 파일 형식 3.0" 사양서, ddoleye/java-hwp `HwpTextExtractorV3.java`,
 //! namhyung/libhwp `ghwp-file-v3.c`.
+//! 제어 문자별 데이터 크기·글자 수(`WSIZE`)·끝 표식 확인은 teammilestone/hwarang `src/hwp30/para.rs`
+//! (MIT, Copyright (c) 2025 Lee Wonsup)를 참고했다. hwarang은 LibreOffice hwpfilter `hpara.cxx`·`hwpread.cxx`의 읽기 순서를 따른다.
 //!
 //! 내부 단계(스트림, HNC 변환, 문단 파싱)도 `pub`으로 열어 둔다. Python 원본의 비공개 함수 테스트를 그대로
 //! 옮기기 위해서다.
@@ -26,6 +28,14 @@ pub const LONE_SURROGATE: char = '\u{10FFFF}';
 const SIGNATURE_PREFIX: &[u8] = b"HWP Document File";
 const MAX_RECURSION_DEPTH: usize = 10;
 const MAX_TEXT_LENGTH: usize = 1_000_000;
+
+/// 제어 문자(0~31)가 문단 글자 수에서 차지하는 칸 수. LibreOffice hwpfilter `HBox::WSize`와 같다.
+pub const WSIZE: [usize; 32] = [
+    1, 4, 4, 4, 4, 4, 4, 42, //
+    48, 4, 4, 4, 4, 1, 4, 4, //
+    4, 4, 4, 4, 4, 4, 12, 5, //
+    3, 3, 123, 4, 32, 4, 2, 2,
+];
 
 /// 스트림 끝을 넘어 읽으려 했다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,30 +204,27 @@ pub fn parse_paragraph(stream: &mut HwpStream, depth: usize) -> Result<Option<St
 
     stream.skip(i64::from(n_lines) * 14)?; // 줄 정보
     if char_shape_included != 0 {
+        // 글자마다 표식 1바이트. 0이면 글자 모양 31바이트가 뒤따른다(hpara.cxx).
         for _ in 0..n_chars {
-            if stream.read_uint8()? != 1 {
+            if stream.read_uint8()? == 0 {
                 stream.skip(31)?;
             }
         }
     }
 
     let mut parts: Vec<String> = Vec::new();
-    let mut n_read: u32 = 0;
-    while n_read < u32::from(n_chars) {
+    let mut n_read: usize = 0;
+    while n_read < usize::from(n_chars) {
         let c = stream.read_uint16()?;
-        n_read += 1;
         if c < 32 {
+            // 제어 문자는 데이터가 글자 몇 개 분량을 차지한다(`HBox::WSize`).
+            n_read += WSIZE[usize::from(c)];
             handle_control_char(c, stream, &mut parts, depth)?;
-            // 제어 문자는 데이터가 글자 몇 개 분량을 차지한다.
-            n_read += match c {
-                5..=11 | 14..=21 => 3,
-                23 => 4,
-                24..=26 | 29 => 2,
-                28 => 31,
-                30 | 31 => 1,
-                _ => 0,
-            };
+            if c == 13 {
+                break; // 문단 끝
+            }
         } else {
+            n_read += 1;
             let ch = hnc_to_unicode(c);
             if !ch.is_empty() {
                 parts.push(ch);
@@ -227,26 +234,60 @@ pub fn parse_paragraph(stream: &mut HwpStream, depth: usize) -> Result<Option<St
     Ok(Some(parts.concat()))
 }
 
-/// 제어 문자를 처리한다.
+/// 제어 문자 `c` 뒤의 데이터를 읽는다. 대부분의 제어 데이터는 끝에 자기 코드를 한 번 더 적으므로(표식) 이를 확인해
+/// 스트림이 어긋나면 일찍 멈춘다. 크기는 LibreOffice hwpfilter `hwpread.cxx`의 읽기 순서를 따른다.
 pub fn handle_control_char(c: u16, stream: &mut HwpStream, parts: &mut Vec<String>, depth: usize) -> Result<(), StreamError> {
     match c {
         13 => parts.push("\n".into()), // 문단 끝
-        9 => {
-            stream.skip(6)?;
-            parts.push("\t".into());
+        // 예약·상호참조: 길이(4) + 표식 + 길이만큼의 데이터
+        0..=4 | 12 | 27 | 29 => {
+            let len = stream.read_uint32()?;
+            check_marker(stream, c)?;
+            stream.skip(i64::from(len))?;
         }
         5 => {
-            // 필드 코드
-            stream.skip(6)?;
-            let field_len = stream.read_uint32()?;
-            stream.skip(2)?;
-            stream.skip(i64::from(field_len))?;
+            // 필드 코드(누름틀): 크기(4) + 표식 + 종류·예약 30 + 문자열 길이 3개와 바이너리 길이 + 데이터
+            stream.skip(4 + 2 + 30)?;
+            let mut total = 0i64;
+            for _ in 0..4 {
+                total += i64::from(stream.read_uint32()?);
+            }
+            stream.skip(total)?;
         }
-        6 => stream.skip(6 + 34)?, // 책갈피
-        10 => {
-            // 표
-            stream.skip(6)?;
+        6 => {
+            // 책갈피: 길이(4) + 표식 + 34
+            stream.skip(4)?;
+            check_marker(stream, c)?;
+            stream.skip(34)?;
+        }
+        7 => {
+            // 날짜 형식: 서식 80 + 표식
             stream.skip(80)?;
+            check_marker(stream, c)?;
+        }
+        8 => {
+            // 날짜 코드: 서식 80 + [년, 월, 요일, 일, 시, 분] + 표식
+            stream.skip(80)?;
+            let mut date = [0u16; 6];
+            for d in &mut date {
+                *d = stream.read_uint16()?;
+            }
+            check_marker(stream, c)?;
+            if date[0] > 0 {
+                parts.push(format!("{}년 {}월 {}일", date[0], date[1], date[3]));
+            }
+        }
+        9 => {
+            // 탭: 너비·채움 4 + 표식
+            stream.skip(4)?;
+            check_marker(stream, c)?;
+            parts.push("\t".into());
+        }
+        10 => {
+            // 표·글상자: 예약 4 + 표식 + 배치 78 + 종류 + 칸 수 + 보호 + 칸 정보 + 칸마다 문단 리스트 + 캡션
+            stream.skip(4)?;
+            check_marker(stream, c)?;
+            stream.skip(78 + 2)?;
             let n_cells = stream.read_uint16()?;
             stream.skip(2)?;
             stream.skip(27 * i64::from(n_cells))?;
@@ -259,41 +300,95 @@ pub fn handle_control_char(c: u16, stream: &mut HwpStream, parts: &mut Vec<Strin
             parse_paragraph_list(stream, depth + 1); // 캡션
         }
         11 => {
-            // 그림
-            stream.skip(6)?;
+            // 그림: 예약 4 + 표식 + 첨부 길이 + 344 + 첨부 데이터 + 캡션
+            stream.skip(4)?;
+            check_marker(stream, c)?;
             let pic_len = stream.read_uint32()?;
             stream.skip(344)?;
             stream.skip(i64::from(pic_len))?;
             parse_paragraph_list(stream, depth + 1); // 캡션
         }
+        14 => {
+            // 선
+            stream.skip(4)?;
+            check_marker(stream, c)?;
+            stream.skip(84)?;
+        }
+        15 => {
+            // 숨은 설명: 본문에 넣지 않는다.
+            stream.skip(4)?;
+            check_marker(stream, c)?;
+            stream.skip(8)?;
+            parse_paragraph_list(stream, depth + 1);
+        }
         16 => {
-            // 머리말/꼬리말
-            stream.skip(6 + 10)?;
+            // 머리말/꼬리말: 본문에 넣지 않는다.
+            stream.skip(4)?;
+            check_marker(stream, c)?;
+            stream.skip(10)?;
             parse_paragraph_list(stream, depth + 1);
         }
         17 => {
             // 각주/미주
-            stream.skip(6 + 14)?;
+            stream.skip(4)?;
+            check_marker(stream, c)?;
+            stream.skip(14)?;
             let text = parse_paragraph_list(stream, depth + 1);
             if !text.is_empty() {
                 parts.push(text);
             }
         }
-        7 => stream.skip(6 + 78)?,  // 날짜 형식
-        8 => stream.skip(6 + 90)?,  // 날짜 코드
-        14 => stream.skip(6 + 86)?, // 선
-        15 => {
-            // 숨은 설명
-            stream.skip(6 + 10)?;
-            parse_paragraph_list(stream, depth + 1);
+        // 자동 번호, 새 번호, 쪽 번호 표시·제어
+        18..=21 => {
+            stream.skip(4)?;
+            check_marker(stream, c)?;
         }
-        18..=21 => stream.skip(6)?,
-        23 => stream.skip(8)?,           // 글자 겹침
-        24..=26 | 29 => stream.skip(4)?, // 하이픈, 차례표시, 찾아보기표시, 상호참조
-        28 => stream.skip(62)?,          // 개요 번호
-        30 | 31 => stream.skip(2)?,
-        // 0~4, 12, 22, 27은 드물게 쓰이거나 가변 길이라 데이터를 정확히 건너뛸 수 없다. 대부분 0x0000 패딩이라 무시한다.
+        22 => {
+            // 메일 머지
+            stream.skip(20)?;
+            check_marker(stream, c)?;
+        }
+        23 => {
+            // 글자 겹침: 겹친 글자를 그대로 쓴다.
+            let mut compose = [0u16; 3];
+            for ch in &mut compose {
+                *ch = stream.read_uint16()?;
+            }
+            check_marker(stream, c)?;
+            for ch in compose.into_iter().filter(|&ch| ch > 31) {
+                parts.push(hnc_to_unicode(ch));
+            }
+        }
+        // 하이픈, 차례 표시
+        24 | 25 => {
+            stream.skip(2)?;
+            check_marker(stream, c)?;
+        }
+        26 => {
+            // 찾아보기 표시: 낱말 2개 240 + 쪽 번호 + 표식
+            stream.skip(240 + 2)?;
+            check_marker(stream, c)?;
+        }
+        28 => {
+            // 개요 번호
+            stream.skip(60)?;
+            check_marker(stream, c)?;
+        }
+        30 | 31 => {
+            // 묶음 빈칸, 고정폭 빈칸
+            check_marker(stream, c)?;
+            parts.push(" ".into());
+        }
         _ => {}
+    }
+    Ok(())
+}
+
+/// 제어 데이터 끝의 표식이 제어 코드와 같은지 확인한다. 다르면 스트림이 어긋난 것이다.
+fn check_marker(stream: &mut HwpStream, c: u16) -> Result<(), StreamError> {
+    let marker = stream.read_uint16()?;
+    if marker != c {
+        return Err(StreamError(format!("control {c} marker mismatch: {marker}")));
     }
     Ok(())
 }
@@ -367,18 +462,22 @@ pub fn extract_text_bruteforce(body_data: &[u8]) -> String {
 const MAX_INFLATED_BYTES: u64 = 64 * 1024 * 1024;
 
 fn inflate(body: &[u8]) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    if DeflateDecoder::new(body).take(MAX_INFLATED_BYTES).read_to_end(&mut out).is_ok() {
-        return Some(out);
+    let mut raw = Vec::new();
+    if DeflateDecoder::new(body).take(MAX_INFLATED_BYTES).read_to_end(&mut raw).is_ok() {
+        return Some(raw);
     }
     // gzip 또는 zlib 헤더가 있는 경우(Python의 wbits=15+32).
-    out.clear();
+    let mut out = Vec::new();
     let ok = if body.starts_with(&[0x1f, 0x8b]) {
         GzDecoder::new(body).take(MAX_INFLATED_BYTES).read_to_end(&mut out).is_ok()
     } else {
         ZlibDecoder::new(body).take(MAX_INFLATED_BYTES).read_to_end(&mut out).is_ok()
     };
-    ok.then_some(out)
+    if ok {
+        return Some(out);
+    }
+    // 잘린 raw deflate: 풀린 데까지 쓴다. 문단 파싱은 스트림이 끝나는 곳에서 멈춘다.
+    (!raw.is_empty()).then_some(raw)
 }
 
 /// 글꼴 이름(7 카테고리)과 스타일을 건너뛴다.
@@ -391,7 +490,13 @@ fn skip_fonts_and_styles(stream: &mut HwpStream) -> Result<(), StreamError> {
     stream.skip(i64::from(n_styles) * 238)
 }
 
-/// HWP V2.00/V2.10/V3.00 파일에서 텍스트를 추출한다. 실패하면 빈 문자열이다.
+/// HWP 3.x 이하(`HWP Document File V` 서명) 파일인지 앞 19바이트로 판별한다. OLE인 HWP 5.x는 아니다.
+pub fn is_hwp3(path: &Path) -> bool {
+    let mut head = [0u8; 19];
+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut head)).is_ok() && head == *b"HWP Document File V"
+}
+
+/// HWP V1.20/V2.00/V2.10/V3.00 파일에서 텍스트를 추출한다. 실패하면 빈 문자열이다.
 pub fn extract_text_from_hwp3(path: &Path) -> String {
     let Ok(data) = std::fs::read(path) else { return String::new() };
 
@@ -399,7 +504,7 @@ pub fn extract_text_from_hwp3(path: &Path) -> String {
         return String::new();
     }
     let header = String::from_utf8_lossy(&data[..30]);
-    if !["V3.00", "V2.10", "V2.00"].iter().any(|v| header.contains(v)) {
+    if !["V3.00", "V2.10", "V2.00", "V1.20"].iter().any(|v| header.contains(v)) {
         return String::new();
     }
     if data.len() < 30 + 128 {
@@ -433,8 +538,8 @@ pub fn extract_text_from_hwp3(path: &Path) -> String {
         Err(_) => String::new(),
     };
 
-    // V2.00: 구조 파싱이 비면 brute-force로 뽑는다. 글꼴·스타일 뒤부터 읽어 메타데이터 쓰레기를 줄인다.
-    if py_strip(&text).is_empty() && header.contains("V2.00") {
+    // V2.00·V1.20: 구조 파싱이 비면 brute-force로 뽑는다. 글꼴·스타일 뒤부터 읽어 메타데이터 쓰레기를 줄인다.
+    if py_strip(&text).is_empty() && (header.contains("V2.00") || header.contains("V1.20")) {
         let mut skip = HwpStream::new(body.clone());
         text = match skip_fonts_and_styles(&mut skip) {
             Ok(()) => extract_text_bruteforce(&body[skip.position()..]),

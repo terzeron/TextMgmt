@@ -20,7 +20,7 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use hwp3_parser::{HwpStream, extract_text_from_hwp3, hnc_to_unicode, parse_paragraph, parse_paragraph_list, safe_chr};
+use hwp3_parser::{HwpStream, extract_text_from_hwp3, hnc_to_unicode, parse_paragraph, parse_paragraph_list, safe_chr, WSIZE};
 use hwp3_parser::tables::hnc2uni;
 use crate::common::shared_fixtures::{hwp_dir};
 
@@ -73,9 +73,9 @@ fn pack_bhhb(a: u8, b: u16, c: u16, d: u8) -> Vec<u8> {
     cat(&[&[a], &le16(b), &le16(c), &[d]])
 }
 
-/// 빈 문단(리스트 종료): 머리 6바이트 + 37 + 187.
+/// 빈 문단(리스트 종료): 머리 6바이트 + 37. 글자 수가 0이면 문단 모양(187)은 없다.
 fn empty_paragraph() -> Vec<u8> {
-    cat(&[&pack_bhhb(0, 0, 0, 0), &zeros(37), &zeros(187)])
+    cat(&[&pack_bhhb(0, 0, 0, 0), &zeros(37)])
 }
 
 /// 한글 10자 `가나다라마바사아자차`의 HNC 코드.
@@ -516,42 +516,39 @@ mod test_handle_control_char_recursive {
         cat(&[&header, &line_info, chars_data])
     }
 
-    /// 제어문자 11: 그림 (skip(6)+uint32+skip(344)+skip(len)+캡션).
+    /// 제어문자 11: 그림 (예약 4 + 표식 + uint32 + 344 + 첨부 + 캡션). 뒤의 '가'까지 읽혀야 한다.
     #[test]
     fn test_ctrl_11_picture() {
         let pic_len: u32 = 10;
-        // 제어문자 11 (n_chars_read += 3 -> 총 4)
         let ctrl = le16(11);
-        let ctrl_data = cat(&[&zeros(6), &le32(pic_len), &zeros(344), &zeros(pic_len as usize)]);
+        let ctrl_data = cat(&[&zeros(4), &le16(11), &le32(pic_len), &zeros(344), &zeros(pic_len as usize)]);
         // 캡션 = 빈 문단 리스트
         let caption = empty_paragraph();
-        let cr = le16(13);
-        let chars = cat(&[&ctrl, &ctrl_data, &caption, &cr]);
-        let para = make_paragraph(&chars, 4 + 1, 0);
+        let chars = cat(&[&ctrl, &ctrl_data, &caption, &le16(0x8861), &le16(13)]);
+        let para = make_paragraph(&chars, (WSIZE[11] + 2) as u16, 0);
         let body = cat(&[&para, &empty_paragraph()]);
         let data = build_hwp_with_paragraphs(&body);
-        let _result: String = extract_bytes("picture.hwp", &data);
+        assert!(extract_bytes("picture.hwp", &data).contains("가"));
     }
 
     /// 제어문자 16: 머리말/꼬리말.
     #[test]
     fn test_ctrl_16_header_footer() {
         let ctrl = le16(16);
-        let ctrl_data = zeros(16); // skip(6+10)
+        let ctrl_data = cat(&[&zeros(4), &le16(16), &zeros(10)]);
         let nested_end = empty_paragraph();
-        let cr = le16(13);
-        let chars = cat(&[&ctrl, &ctrl_data, &nested_end, &cr]);
-        let para = make_paragraph(&chars, 4 + 1, 0);
+        let chars = cat(&[&ctrl, &ctrl_data, &nested_end, &le16(0x8861), &le16(13)]);
+        let para = make_paragraph(&chars, (WSIZE[16] + 2) as u16, 0);
         let body = cat(&[&para, &empty_paragraph()]);
         let data = build_hwp_with_paragraphs(&body);
-        let _result: String = extract_bytes("header_footer.hwp", &data);
+        assert!(extract_bytes("header_footer.hwp", &data).contains("가"));
     }
 
     /// 제어문자 17: 각주/미주.
     #[test]
     fn test_ctrl_17_footnote() {
         let ctrl = le16(17);
-        let ctrl_data = zeros(20); // skip(6+14)
+        let ctrl_data = cat(&[&zeros(4), &le16(17), &zeros(14)]);
         // 각주 내 텍스트: '가' + CR + 빈 문단
         let ga = le16(0x8861); // '가'
         let cr = le16(13);
@@ -559,10 +556,11 @@ mod test_handle_control_char_recursive {
         let footnote_end = empty_paragraph();
         let outer_cr = le16(13);
         let chars = cat(&[&ctrl, &ctrl_data, &footnote_para, &footnote_end, &outer_cr]);
-        let para = make_paragraph(&chars, 4 + 1, 0);
+        let para = make_paragraph(&chars, (WSIZE[17] + 1) as u16, 0);
         let body = cat(&[&para, &empty_paragraph()]);
         let data = build_hwp_with_paragraphs(&body);
-        let _result: String = extract_bytes("footnote.hwp", &data);
+        // 각주 본문 '가'가 본문에 이어 붙는다.
+        assert!(extract_bytes("footnote.hwp", &data).contains("가"));
     }
 
     /// 문단 파싱 중 스트림 끝 도달 시 부분 텍스트 반환.
@@ -620,8 +618,8 @@ mod test_control_char_tab {
     /// 탭(9) 제어문자가 포함된 문단.
     #[test]
     fn test_ctrl_9_tab_in_paragraph() {
-        // 탭(9) + 6바이트 데이터 -> n_chars_read += 3+1=4
-        let tab = cat(&[&le16(9), &zeros(6)]);
+        // 탭(9) + 너비·채움 4바이트 + 표식 -> 글자 수 WSIZE[9] = 4
+        let tab = cat(&[&le16(9), &zeros(4), &le16(9)]);
         let ga = le16(0x8861); // '가'
         let cr = le16(13);
         let chars = cat(&[&ga, &tab, &ga, &cr]); // 가\t가\n, n_chars=1+4+1+1=7
@@ -641,15 +639,15 @@ mod test_control_char_tab {
 mod test_control_char_date_line {
     use super::*;
 
-    fn build_ctrl_para(ctrl_code: u16, skip_bytes: usize, n_read_add: u16, extra_nested: bool) -> String {
-        let n_chars = 1 + n_read_add + 1; // ctrl + n_read_add + CR
-        let mut ctrl = cat(&[&le16(ctrl_code), &zeros(skip_bytes)]);
+    /// 제어 문자 하나 + '가' + 문단 끝. 제어 데이터는 `before`바이트, 표식, `after`바이트다.
+    fn build_ctrl_para(ctrl_code: u16, before: usize, after: usize, extra_nested: bool) -> String {
+        let n_chars = (WSIZE[usize::from(ctrl_code)] + 2) as u16; // ctrl + '가' + CR
+        let mut ctrl = cat(&[&le16(ctrl_code), &zeros(before), &le16(ctrl_code), &zeros(after)]);
         if extra_nested {
             // 빈 문단 리스트 (종료)
             ctrl.extend(empty_paragraph());
         }
-        let cr = le16(13);
-        let chars = cat(&[&ctrl, &cr]);
+        let chars = cat(&[&ctrl, &le16(0x8861), &le16(13)]);
         let header = cat(&[&pack_bhhb(0, n_chars, 1, 0), &zeros(37), &zeros(187)]);
         let line_info = zeros(14);
         let terminator = empty_paragraph();
@@ -658,22 +656,22 @@ mod test_control_char_date_line {
 
     #[test]
     fn test_ctrl_7_date_format() {
-        let _result: String = build_ctrl_para(7, 84, 3, false);
+        assert!(build_ctrl_para(7, 80, 0, false).contains("가"));
     }
 
     #[test]
     fn test_ctrl_8_date_code() {
-        let _result: String = build_ctrl_para(8, 96, 3, false);
+        assert!(build_ctrl_para(8, 92, 0, false).contains("가"));
     }
 
     #[test]
     fn test_ctrl_14_line() {
-        let _result: String = build_ctrl_para(14, 92, 3, false);
+        assert!(build_ctrl_para(14, 4, 84, false).contains("가"));
     }
 
     #[test]
     fn test_ctrl_15_hidden_comment() {
-        let _result: String = build_ctrl_para(15, 16, 3, true);
+        assert!(build_ctrl_para(15, 4, 8, true).contains("가"));
     }
 }
 
