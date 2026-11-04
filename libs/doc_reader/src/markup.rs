@@ -9,7 +9,7 @@ use ego_tree::NodeRef;
 use scraper::{Html, Node};
 
 use crate::TEXT_SIZE;
-use crate::pytext::{head_chars, keep_word_chars, universal_newlines};
+use crate::py_str_compat::{head_chars, keep_word_chars, universal_newlines};
 
 /// EPUB 줄 수를 셀 때 앞뒤에 줄바꿈을 두는 블록 태그.
 const BLOCK_TAGS: [&str; 35] = [
@@ -305,7 +305,7 @@ fn collapse_ws(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_space = false;
     for c in text.chars() {
-        if crate::pytext::is_space(c) {
+        if crate::py_str_compat::is_space(c) {
             if !in_space {
                 out.push(' ');
             }
@@ -351,7 +351,7 @@ pub(crate) fn count_lines_in(doc: &Html) -> usize {
     let body = doc.tree.root().descendants().find(|n| element_name(n) == Some("body")).unwrap_or_else(|| doc.tree.root());
     let mut parts = Vec::new();
     walk_lines(body, false, &mut parts);
-    parts.concat().lines().filter(|l| !l.trim_matches(crate::pytext::is_space).is_empty()).count()
+    parts.concat().lines().filter(|l| !l.trim_matches(crate::py_str_compat::is_space).is_empty()).count()
 }
 
 /// HTML 파일: (요약, 줄 수, 쪽 수=0). UTF-8로 읽을 수 없으면 `Err`.

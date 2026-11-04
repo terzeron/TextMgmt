@@ -9,7 +9,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::time::Duration;
 
-use htmlkit::url::{Netloc, urljoin, urlsplit};
+use htmlkit::url_parser::{Netloc, urljoin, urlsplit};
 use crate::cover_sources::{is_global, system_resolve};
 use sysdeps::HttpTimeout;
 

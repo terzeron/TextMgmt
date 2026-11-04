@@ -3,8 +3,8 @@ mod corpus;
 use std::fs;
 use std::path::Path;
 
-use doc_reader::mojibake::{count_mojibake_runs, is_usable_text};
-use doc_reader::pytext::{collapse_spaces, head_chars, is_space, keep_ascii_hangul, keep_word_chars, universal_newlines};
+use doc_reader::mojibake_counter::{count_mojibake_runs, is_usable_text};
+use doc_reader::py_str_compat::{collapse_spaces, head_chars, is_space, keep_ascii_hangul, keep_word_chars, universal_newlines};
 use doc_reader::text::{Enc, decode, detect_hint, high_byte_paired_ratio, read_from_text, reencode_text_file_to_utf8, summarize};
 
 fn write(dir: &Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {

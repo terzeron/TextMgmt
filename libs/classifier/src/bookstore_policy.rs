@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use super::model::model_path;
-use super::tokenize::is_py_space;
+use super::inference_model::model_path;
+use super::tokenizer::is_py_space;
 use crate::book_classifier::map_category;
 
 /// DB 를 파일마다 조회하면 재분류 2만 건에 2만 번 연결한다. 캐시하고 주기적으로만 다시 읽는다.
@@ -157,7 +157,7 @@ pub fn quantile_bands_with_window(confidences: &[f64], count: usize, window: f64
     let reach = ((step * window) as usize).max(1);
     let mut cuts: Vec<f64> = Vec::new();
     for i in 1..count {
-        let center = super::training::round_half_even(i as f64 * step).max(0) as usize;
+        let center = super::model_trainer::round_half_even(i as f64 * step).max(0) as usize;
         let lo = center.saturating_sub(reach).max(1);
         let hi = (center + reach).min(n - 1);
         if lo >= hi {

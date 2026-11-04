@@ -16,8 +16,8 @@
 //!   `PdftotextHooks { which: Fn() -> Option<PathBuf>, run: Fn(&[String]) -> Option<(i32, Vec<u8>)>, path_cache: OnceLock }`. 구 `Pdftotext`/`PdftotextEnv`를 대체한다.
 //! - `doc_reader::epub::{read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using}` zip 직접 추출 경로
 //! - `doc_reader::office::find_libreoffice_with(which, exists)` PATH 조회와 파일 존재 확인 바꿔치기 자리
-//! - `loader::flow::get_file_list(path, recursive, num_files: Option<usize>) -> Vec<PathBuf>`, `loader::flow::read_files(cfg, path, runner, stat) -> HashMap<i64, Value>` 원본의 `Loader.get_file_list` / `Loader.read_files`
-//! - `file_record::record::{ReadHooks, read_file_with_hooks(cfg, path, .., &ReadHooks)}`
+//! - `loader::batch_loader::get_file_list(path, recursive, num_files: Option<usize>) -> Vec<PathBuf>`, `loader::batch_loader::read_files(cfg, path, runner, stat) -> HashMap<i64, Value>` 원본의 `Loader.get_file_list` / `Loader.read_files`
+//! - `file_record::record_builder::{ReadHooks, read_file_with_hooks(cfg, path, .., &ReadHooks)}`
 //!   `ReadHooks { fast_page_count (_fast_pdf_page_count 대체), fallback_page_count (pypdf 대체), inspect (_zip_container_type 대체, 구 detect_file_type_with) }`
 //! - `stat::Stat::{pdf_stage_count, pdf_stage_total_time, pdf_stage_outcome_count}` 단계별 통계 조회
 
@@ -35,7 +35,7 @@ use doc_reader::TEXT_SIZE;
 use doc_reader::office::read_from_docx;
 use doc_reader::epub::{read_from_epub, read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using};
 use doc_reader::markup::{count_lines, read_from_html};
-use doc_reader::mojibake::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, is_usable_text};
+use doc_reader::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, is_usable_text};
 use doc_reader::office::{convert_with_libreoffice, find_libreoffice_with, read_from_doc, read_from_hwp, read_from_image};
 use doc_reader::pdf::{
     FastCountHooks, InProcess, PDF_PAGE_LIMIT, PdftotextHooks, Stage, StageError, StageRunner, apply_png_predictor, collect_pages, fast_page_count, fast_page_count_with, find_xref_offset,
@@ -43,8 +43,8 @@ use doc_reader::pdf::{
 };
 use doc_reader::rtf::read_from_rtf_text;
 use doc_reader::text::{Enc, HIGH_BYTE_PAIRED_MIN, TextHooks, TextRead, read_from_text, read_from_text_with, reencode_text_file_to_utf8, reencode_text_file_to_utf8_with};
-use file_record::config::Config;
-use file_record::record::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
+use file_record::env_config::Config;
+use file_record::record_builder::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
 use serde_json::Value;
 use stat::Stat;
 

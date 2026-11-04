@@ -18,7 +18,7 @@ use serde_json::{Map, Value, json};
 use sysdeps::{Clock, FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout, RealFs, SystemClock};
 
 use self::soup::Soup;
-use htmlkit::url::{Netloc, quote, urlencode, urljoin, urlsplit};
+use htmlkit::url_parser::{Netloc, quote, urlencode, urljoin, urlsplit};
 
 pub const STORE_NAMES: [&str; 8] = ["yes24", "aladin", "kyobo", "naver", "ridi", "munpia", "naverseries", "joara"];
 
@@ -736,7 +736,7 @@ pub struct SearchHooks {
 impl Default for SearchHooks {
     fn default() -> Self {
         SearchHooks {
-            session_factory: Arc::new(|store| Arc::new(bookstore::stores::UreqHttpSession::for_store(store)) as Arc<dyn HttpSession>),
+            session_factory: Arc::new(|store| Arc::new(bookstore::store_clients::UreqHttpSession::for_store(store)) as Arc<dyn HttpSession>),
             client_factories: BTreeMap::new(),
             cancel: Arc::new(|| false),
             validate: Arc::new(validate_url),

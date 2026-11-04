@@ -18,13 +18,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use base64::alphabet::STANDARD as STANDARD_ALPHABET;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
-use file_record::layout::IGNORED_DIR_NAMES;
+use file_record::ignore_rules::IGNORED_DIR_NAMES;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use sysdeps::{Clock, RealFs, SystemClock};
 use zip::ZipArchive;
 
-use htmlkit::url::{Netloc, urlsplit};
+use htmlkit::url_parser::{Netloc, urlsplit};
 use crate::cover_sources::{CancelFn, GateError, STORES, SearchError, SearchHooks, StoreGate, blocked_status, build_search_url, search_candidates_with, store_hosts, store_lock_with};
 use crate::direct_cover_url::{ImageFetcher, RealImageFetcher};
 use crate::epub_cover::{self, CoverError, EpubCoverHooks, MAX_IMAGE_BYTES};

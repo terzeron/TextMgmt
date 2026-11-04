@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::TEXT_SIZE;
-use crate::pytext::{head_chars, keep_word_chars};
+use crate::py_str_compat::{head_chars, keep_word_chars};
 
 const DESTINATIONS: [&str; 292] = [
     "aftncn",

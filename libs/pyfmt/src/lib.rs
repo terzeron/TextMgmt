@@ -9,10 +9,10 @@ use serde_json::Value;
 
 mod alnum_table;
 mod decimal_table;
-mod unicode151;
+mod assigned_table;
 
 mod casefold_table;
-use unicode151::py_is_assigned;
+use assigned_table::py_is_assigned;
 
 /// Python `repr(str)`: 작은따옴표를 기본으로 쓰되 `'`만 있으면 큰따옴표로 감싼다.
 fn py_str_repr(s: &str) -> String {

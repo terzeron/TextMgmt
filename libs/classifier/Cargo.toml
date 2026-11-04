@@ -40,41 +40,41 @@ name = "bookstore_policy"
 path = "../../tests/rust/classifier/bookstore_policy.rs"
 
 [[test]]
-name = "calibration"
-path = "../../tests/rust/classifier/calibration.rs"
+name = "confidence_calibrator"
+path = "../../tests/rust/classifier/confidence_calibrator.rs"
 
 [[test]]
 name = "classifier"
 path = "../../tests/rust/classifier/classifier.rs"
 
 [[test]]
-name = "config"
-path = "../../tests/rust/classifier/config.rs"
+name = "classifier_config"
+path = "../../tests/rust/classifier/classifier_config.rs"
 
 [[test]]
-name = "corpus"
-path = "../../tests/rust/classifier/corpus.rs"
+name = "corpus_collector"
+path = "../../tests/rust/classifier/corpus_collector.rs"
 
 [[test]]
 name = "export_format"
 path = "../../tests/rust/classifier/export_format.rs"
 
 [[test]]
-name = "model"
-path = "../../tests/rust/classifier/model.rs"
+name = "inference_model"
+path = "../../tests/rust/classifier/inference_model.rs"
 
 [[test]]
-name = "reader"
-path = "../../tests/rust/classifier/reader.rs"
+name = "document_reader"
+path = "../../tests/rust/classifier/document_reader.rs"
 
 [[test]]
-name = "tokenize"
-path = "../../tests/rust/classifier/tokenize.rs"
+name = "tokenizer"
+path = "../../tests/rust/classifier/tokenizer.rs"
 
 [[test]]
-name = "training"
-path = "../../tests/rust/classifier/training.rs"
+name = "model_trainer"
+path = "../../tests/rust/classifier/model_trainer.rs"
 
 [[test]]
-name = "vectorize"
-path = "../../tests/rust/classifier/vectorize.rs"
+name = "vectorizer"
+path = "../../tests/rust/classifier/vectorizer.rs"

@@ -25,12 +25,12 @@ tempfile = "3.27.0"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [[test]]
-name = "cli"
-path = "../../tests/rust/loader/cli.rs"
+name = "cli_parser"
+path = "../../tests/rust/loader/cli_parser.rs"
 
 [[test]]
-name = "flow"
-path = "../../tests/rust/loader/flow.rs"
+name = "batch_loader"
+path = "../../tests/rust/loader/batch_loader.rs"
 
 [[test]]
 name = "integration_loader_1"

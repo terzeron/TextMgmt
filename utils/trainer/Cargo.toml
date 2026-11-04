@@ -17,12 +17,12 @@ serde_json.workspace = true
 tempfile = "3.27.0"
 
 [[test]]
-name = "commands"
-path = "../../tests/rust/trainer/commands.rs"
+name = "command_runner"
+path = "../../tests/rust/trainer/command_runner.rs"
 
 [[test]]
-name = "data"
-path = "../../tests/rust/trainer/data.rs"
+name = "data_loader"
+path = "../../tests/rust/trainer/data_loader.rs"
 
 [[test]]
 name = "trainer"

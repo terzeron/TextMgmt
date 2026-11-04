@@ -18,7 +18,7 @@ use crate::tasks::{TaskRunner, ThreadRunner};
 use crate::auth::HTTPException;
 use crate::auth::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
 use crate::book_manager::{BookManager, LoaderFileReader};
-use bookstore::stores::BookstoreSearch;
+use bookstore::store_clients::BookstoreSearch;
 use db::category_mapping::CategoryMapping;
 use crate::comics_manager::ComicsManager;
 use crate::cover_management::CoverHooks;
@@ -135,7 +135,7 @@ impl AppDeps {
             task_runtime_factory: Arc::new(|| tokio::runtime::Builder::new_current_thread().enable_all().build()),
             cover_hooks: CoverHooks::default(),
             reload_progress_flush_interval: Duration::from_secs(RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS),
-            bookstore_factory: Arc::new(bookstore::stores::create_bookstore_search),
+            bookstore_factory: Arc::new(bookstore::store_clients::create_bookstore_search),
         }
     }
 

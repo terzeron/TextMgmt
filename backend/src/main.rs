@@ -38,7 +38,7 @@ mod routes_view_history;
 mod traits;
 
 pub use crate::auth::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RoleResolver, observation_hash};
-pub use bookstore::stores::BookstoreSearch;
+pub use bookstore::store_clients::BookstoreSearch;
 pub use crate::view_history_store::MAX_RECENT_VIEWS;
 pub use extract::{_client_ip, _request_ip_prefix, _request_user_agent, ClientInfo};
 pub use cookies::{_clear_auth_cookies, _get_cookie_settings, _set_auth_cookies, CustomJSONResponse, ResponseHeaders, custom_jsonable_encoder, is_local_frontend_origin};

@@ -30,7 +30,7 @@
 //! - `backend::auth`: `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`, `create_refresh_token`(같은 인자),
 //!   `tm_admin_email() -> String`, `jwt_secret() -> String`, `JWT_ALGORITHM: jsonwebtoken::Algorithm`
 //! - `backend::book::Book` (`Default + Clone + Serialize`): `book_id, category, title, author, file_path: PathBuf, file_type, file_size, line_count, page_count, isbn, created_time: Option<String>, updated_time, score: f64`, `Book::path_prefix() -> PathBuf`
-//! - `bookstore::stores::Yes24Bookstore { verbose: bool }`
+//! - `bookstore::store_clients::Yes24Bookstore { verbose: bool }`
 //! - `backend::book_manager::{BookManager, BookManagerApi, BookContent, BookResponse}`: `BookManager::from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, _>`, `BookManager::media_type(suffix_with_dot: &str) -> &'static str`
 //!   - `bm.path_prefix() -> PathBuf`, `bm.es_manager() -> Arc<dyn EsManagerApi>` (`insert(&Docs) -> Result<Vec<i64>, EsError>`, `refresh() -> Result<(), EsError>`, `delete(i64) -> Result<bool, EsError>`, `count_by_category(&str, bool) -> Result<i64, EsError>`)
 //!   - `async add_book(BTreeMap<i64, Value>) -> Result<i64, String>`, `async get_book(i64) -> Result<Book, BookLookupError>`
@@ -42,7 +42,7 @@
 //! - `db::category_mapping::{CategoryMapping, CategoryMappingApi, MappingError}`
 //!   - `MappingError::{Http(u16, String), Other(String)}`, `CategoryMappingApi`는 동기 메서드이고 기본 구현은 `Err(Other("unimplemented"))`다.
 //!   - `CategoryMapping::new() -> Result<Self, MappingError>`(env + 실제 MySQL), `get_connection() -> Result<Box<dyn DbConnection>, DbError>`, `DbConnection::{execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>, commit(&mut self) -> Result<(), DbError>}` (설계 3.4)
-//! - `file_record::{config::Config, record::read_file, record::now_iso}`, `doc_reader::pdf::InProcess`, `stat::Stat` (libs/file_record/src에서 확인한 실제 API)
+//! - `file_record::{env_config::Config, record_builder::read_file, record_builder::now_iso}`, `doc_reader::pdf::InProcess`, `stat::Stat` (libs/file_record/src에서 확인한 실제 API)
 //! - 개발 의존성: `jsonwebtoken`, `async-trait`, `tempfile`, `tokio`, `serde_json`
 //!
 //! ES 인덱스(`TM_ES_BOOK_INDEX`)는 conftest의 `es_index`와 같은 매핑으로 미리 만들어져 있다고 본다.
@@ -149,9 +149,9 @@ struct Setup {
 /// `Loader.read_file`에 대응한다. 읽지 못하면 빈 map이다.
 fn read_file(path: &Path) -> BTreeMap<i64, Value> {
     let root = common::project_root();
-    let cfg = file_record::config::Config::new(root.join("tests/books"), root.join("tests/comics"));
+    let cfg = file_record::env_config::Config::new(root.join("tests/books"), root.join("tests/comics"));
     let stat = stat::Stat::new();
-    let out = file_record::record::read_file(&cfg, path, None, false, None, &doc_reader::pdf::InProcess, &stat);
+    let out = file_record::record_builder::read_file(&cfg, path, None, false, None, &doc_reader::pdf::InProcess, &stat);
     out.item.into_iter().collect()
 }
 
@@ -533,7 +533,7 @@ async fn insert_docs(bm: &BookManager, category: &str, count: i64, start_id: i64
             "page_count": 0,
             "isbn": "",
             "summary": summary,
-            "updated_time": file_record::record::now_iso(),
+            "updated_time": file_record::record_builder::now_iso(),
         });
         let (book_id, error) = split(bm.add_book(&BTreeMap::from([(doc_id, doc)])).await);
         ids.push(expect_id(book_id, error));
@@ -753,7 +753,7 @@ mod test_update_book_conflict {
             "page_count": 0,
             "isbn": "",
             "summary": "conflict test",
-            "updated_time": file_record::record::now_iso(),
+            "updated_time": file_record::record_builder::now_iso(),
         });
         let (book_id, error) = split(bm.add_book(&BTreeMap::from([(meta.ino() as i64, doc)])).await);
         assert!(book_id.unwrap_or(0) != 0 && error.is_none(), "Failed to register: {error:?}");
@@ -2376,8 +2376,8 @@ async fn test_auth_me() {
 /// 서점 이름 해석은 현재 registry factory를 거친다.
 #[test]
 fn test_create_bookstore_factory() {
-    assert!(bookstore::stores::create_bookstore_search("yes24").is_some());
-    assert!(bookstore::stores::create_bookstore_search("unknown").is_none());
+    assert!(bookstore::store_clients::create_bookstore_search("yes24").is_some());
+    assert!(bookstore::store_clients::create_bookstore_search("unknown").is_none());
 }
 
 #[tokio::test]

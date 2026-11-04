@@ -11,8 +11,8 @@ use std::time::Instant;
 use regex::bytes::Regex as BytesRegex;
 
 use crate::TEXT_SIZE;
-use crate::mojibake::{count_mojibake_runs, is_usable_text};
-use crate::pytext::{head_chars, is_space, keep_word_chars};
+use crate::mojibake_counter::{count_mojibake_runs, is_usable_text};
+use crate::py_str_compat::{head_chars, is_space, keep_word_chars};
 
 /// 앞에서부터 이만큼의 쪽만 훑는다(TEXT_SIZE를 채우는 데 실측 최대 27쪽).
 pub const PDF_PAGE_LIMIT: usize = 40;
@@ -95,9 +95,9 @@ pub fn collect_pages<E>(page_count: usize, mut page_text: impl FnMut(usize) -> R
 
 fn poppler_text(path: &Path) -> Result<(String, usize), String> {
     let runner = sysdeps::SystemRunner;
-    let pages = sysdeps::pdf::page_count(&runner, path)?;
+    let pages = sysdeps::pdf_worker_client::page_count(&runner, path)?;
     let last = pages.min(PDF_PAGE_LIMIT);
-    let text = if last == 0 { String::new() } else { sysdeps::pdf::extract_text(&runner, path, 1, last)? };
+    let text = if last == 0 { String::new() } else { sysdeps::pdf_worker_client::extract_text(&runner, path, 1, last)? };
     collect_pages(pages, |i| Ok::<_, String>(text.split('\u{000c}').nth(i).unwrap_or_default().to_owned()))
 }
 

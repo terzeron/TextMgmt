@@ -1,15 +1,15 @@
 //! 도서 분류 모델 관리 도구(`trainer`). Python `utils/classify_cli.py`의 Rust 이식이다.
 
-mod args;
-mod commands;
-mod data;
+mod arg_parser;
+mod command_runner;
+mod data_loader;
 
 use std::io::Write;
 use std::sync::Arc;
 
 use es_client::transport::{EsTransport, HttpTransport};
 
-pub use data::{holdout_manifest_path, load_manifest_holdout};
+pub use data_loader::{holdout_manifest_path, load_manifest_holdout};
 
 pub trait BookstoreQuery: Send + Sync {
     fn query(&self, title: &str, author: &str, raw_title: &str, delay: f64) -> (serde_json::Value, serde_json::Value, serde_json::Value);
@@ -78,7 +78,7 @@ pub fn print_usage(out: &mut dyn Write, command: Option<&str>) -> std::io::Resul
         commands().join(", ")
     )?;
     if let Some(command) = command {
-        writeln!(out, "\n{command}: {}", args::usage(command))?;
+        writeln!(out, "\n{command}: {}", arg_parser::usage(command))?;
     }
     writeln!(out, "\n--model은 Rust export 디렉토리다.")
 }
@@ -88,7 +88,7 @@ pub fn main_with(args: &[&str], io: &mut CliIo<'_>, deps: &Deps) -> i32 {
         let _ = print_usage(io.out, None);
         return 1;
     }
-    let parsed = match args::parse(args) {
+    let parsed = match arg_parser::parse(args) {
         Ok(parsed) => parsed,
         Err(e) => {
             let _ = writeln!(io.err, "{e}");
@@ -99,7 +99,7 @@ pub fn main_with(args: &[&str], io: &mut CliIo<'_>, deps: &Deps) -> i32 {
         let no_command = parsed.command.is_none() && !args.iter().any(|arg| matches!(*arg, "-h" | "--help"));
         return if print_usage(io.out, parsed.command.as_deref()).is_ok() && !no_command { 0 } else { 1 };
     }
-    match commands::execute(&parsed, io, deps) {
+    match command_runner::execute(&parsed, io, deps) {
         Ok(code) => code,
         Err(e) => {
             let _ = writeln!(io.err, "{e}");

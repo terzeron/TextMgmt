@@ -8,8 +8,8 @@ use std::{fs, io};
 
 use encoding_rs::{EUC_KR, WINDOWS_1252};
 
-use crate::pytext::{collapse_spaces, head_chars, is_all_space, keep_ascii_hangul, universal_newlines};
-use crate::{TEXT_SIZE, mojibake};
+use crate::py_str_compat::{collapse_spaces, head_chars, is_all_space, keep_ascii_hangul, universal_newlines};
+use crate::{TEXT_SIZE, mojibake_counter};
 
 /// txt 디코딩 시도 순서(원본 `TEXT_ENCODINGS`).
 pub const TEXT_ENCODINGS: [Enc; 7] = [Enc::Utf8, Enc::Cp949, Enc::EucKr, Enc::Utf16, Enc::Utf16Le, Enc::Utf16Be, Enc::Utf8Sig];
@@ -350,7 +350,7 @@ fn validated_decode(enc: Enc, raw: &[u8]) -> Option<String> {
     if !text.chars().any(|c| ('\u{ac00}'..='\u{d7a3}').contains(&c) || c.is_ascii_alphabetic() || c.is_ascii_digit() || ('\u{3400}'..='\u{9fff}').contains(&c)) {
         return None;
     }
-    if mojibake::count_mojibake_runs(&text) >= mojibake::PDF_MOJIBAKE_RUN_LIMIT {
+    if mojibake_counter::count_mojibake_runs(&text) >= mojibake_counter::PDF_MOJIBAKE_RUN_LIMIT {
         return None;
     }
     // 텍스트에는 줄바꿈이 있다. 엔디언을 잘못 고른 UTF-16은 줄바꿈이 사라진다.
@@ -373,7 +373,7 @@ fn validated_custom_decode(decode: fn(&[u8]) -> String, encode: fn(&str) -> Opti
     if !text.chars().any(|c| ('\u{ac00}'..='\u{d7a3}').contains(&c) || c.is_ascii_alphanumeric() || ('\u{3400}'..='\u{9fff}').contains(&c)) {
         return None;
     }
-    (mojibake::count_mojibake_runs(&text) < mojibake::PDF_MOJIBAKE_RUN_LIMIT).then_some(text)
+    (mojibake_counter::count_mojibake_runs(&text) < mojibake_counter::PDF_MOJIBAKE_RUN_LIMIT).then_some(text)
 }
 
 /// 재인코딩 결과.

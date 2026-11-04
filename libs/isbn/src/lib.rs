@@ -4,7 +4,7 @@
 //! HWP는 `strings` 출력의 앞뒤만 본다. OCR이 망가뜨린 글자(l, I, B, O, Ⅹ)도 알아본다.
 //!
 //! 외부 도구(`djvused`, `djvutxt`, `strings`)와 PDF 추출기는 [`Backends`]로 주입한다. Python 원본의
-//! monkeypatch 자리이고, 시간 상한([`sysdeps::timeout::run_with_timeout`])이 걸리는 단계다.
+//! monkeypatch 자리이고, 시간 상한([`sysdeps::timeout_runner::run_with_timeout`])이 걸리는 단계다.
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use text_extractor::{decode_utf8_ignore, open_zip};
 use htmlkit::{local_name, text_of, tokenize};
-use sysdeps::timeout::{run_with_hard_timeout, run_with_timeout};
+use sysdeps::timeout_runner::{run_with_hard_timeout, run_with_timeout};
 use sysdeps::{CommandError, CommandRunner, SystemRunner};
 use regex::Regex;
 use stat::Stat;
@@ -331,10 +331,10 @@ pub fn pdf_text_primary(path: &Path) -> Result<(String, usize), String> {
 /// Poppler로 앞뒤 쪽 텍스트와 전체 쪽수를 읽는다.
 pub fn pdf_text_poppler(path: &Path) -> Result<(String, usize), String> {
     let runner = SystemRunner;
-    let total = sysdeps::pdf::page_count(&runner, path)?;
+    let total = sysdeps::pdf_worker_client::page_count(&runner, path)?;
     let mut text = String::new();
     for idx in head_tail_page_indices(total, PDF_ISBN_PAGE_WINDOW) {
-        text.push_str(&sysdeps::pdf::extract_text(&runner, path, idx + 1, idx + 1)?);
+        text.push_str(&sysdeps::pdf_worker_client::extract_text(&runner, path, idx + 1, idx + 1)?);
     }
     Ok((text, total))
 }

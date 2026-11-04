@@ -5,7 +5,7 @@
 //! 서점 HTTP는 `sysdeps::HttpSession` 대역으로 갈아 끼운다(docs/rust-test-seams.md 3.7. libs/bookstore의 `Fetcher` 대역과 같은 방식).
 //!
 //! 가정한 API (Python 이름을 그대로 쓴다. `_`로 시작하는 비공개 메서드도 같다):
-//! - `bookstore::stores`
+//! - `bookstore::store_clients`
 //!   - `type SearchRow = (String, String, String, String, String, String)` = `(title, author, category, detail_url, search_url, isbn)`
 //!   - `const MAX_RESULTS: usize = 4` (`AbstractBookstore.MAX_RESULTS`)
 //!   - `fn _truncate_title(title: &str) -> String` (Python의 정적/인스턴스 호출을 모두 이 함수로 옮긴다)
@@ -57,7 +57,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use bookstore::stores::{
+use bookstore::store_clients::{
     AbstractBookstore, AladinBookstore, MAX_RESULTS, SearchRow, UreqHttpSession, Yes24Bookstore,
 };
 use serde_json::{Value, json};
@@ -300,7 +300,7 @@ fn ureq_session_rejects_a_body_over_the_size_limit() {
                 break;
             }
         }
-        let size = bookstore::stores::MAX_RESPONSE_BYTES + 1024 * 1024;
+        let size = bookstore::store_clients::MAX_RESPONSE_BYTES + 1024 * 1024;
         let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n");
         let block = vec![b'x'; 64 * 1024];
         let mut sent = 0;
@@ -566,7 +566,7 @@ macro_rules! dummy_store {
             }
 
             fn tmp_dir(&self) -> Option<PathBuf> {
-                self.tmp_dir.clone().or_else(bookstore::stores::default_cache_dir)
+                self.tmp_dir.clone().or_else(bookstore::store_clients::default_cache_dir)
             }
 
             fn build_search_url(&self, keyword: &str) -> String {

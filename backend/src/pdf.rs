@@ -144,14 +144,14 @@ pub struct LopdfPageOps;
 impl PdfPageOps for LopdfPageOps {
     fn page_count(&self, path: &Path) -> Result<usize, PdfError> {
         std::fs::metadata(path).map_err(|e| PdfError::new("OSError", e.to_string()))?;
-        sysdeps::pdf::page_count(&sysdeps::SystemRunner, path).map_err(|e| PdfError::new("RuntimeError", e))
+        sysdeps::pdf_worker_client::page_count(&sysdeps::SystemRunner, path).map_err(|e| PdfError::new("RuntimeError", e))
     }
     fn extract_pages(&self, path: &Path, start: usize, end: usize) -> Result<Vec<u8>, PdfError> {
         if start >= end {
             return Err(PdfError::new("RuntimeError", "Invalid PDF page range"));
         }
         std::fs::metadata(path).map_err(|e| PdfError::new("OSError", e.to_string()))?;
-        sysdeps::pdf::extract_pages(&sysdeps::SystemRunner, path, start + 1, end).map_err(|e| PdfError::new("RuntimeError", e))
+        sysdeps::pdf_worker_client::extract_pages(&sysdeps::SystemRunner, path, start + 1, end).map_err(|e| PdfError::new("RuntimeError", e))
     }
 }
 

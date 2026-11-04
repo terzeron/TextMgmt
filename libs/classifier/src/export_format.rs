@@ -13,8 +13,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::tokenize::{AnalyzerKind, AnalyzerSpec};
-use super::vectorize::FieldVectorizer;
+use super::tokenizer::{AnalyzerKind, AnalyzerSpec};
+use super::vectorizer::FieldVectorizer;
 
 /// 지원하는 `format_version`.
 pub const SUPPORTED_FORMAT_VERSION: u64 = 1;
@@ -344,7 +344,7 @@ fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), ModelError> 
 /// 모델을 내보내기 형식 디렉토리로 쓴다. Python `export_model` 이 쓰는 것과 같은 형식이라 `load_dir` 로 다시 읽힌다.
 /// `fields` 는 열 순서대로여야 하고, 필드 이름은 파일 이름에 쓰이므로 영문·숫자·밑줄만 허용한다.
 pub fn write_dir(dir: &Path, classes: &[String], fields: &[FieldVectorizer], coef: &[f32], intercept: &[f64], config: &Value, meta: &Value) -> Result<(), ModelError> {
-    use super::tokenize::AnalyzerKind;
+    use super::tokenizer::AnalyzerKind;
     std::fs::create_dir_all(dir).map_err(|e| io_err("model.json", e))?;
     if fields.is_empty() {
         return invalid("벡터라이저가 하나도 없다");
@@ -491,7 +491,7 @@ mod tests {
     fn exporter_filters_private_metadata_from_the_written_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let output = dir.path().join("model");
-        let spec = super::super::tokenize::AnalyzerSpec { kind: super::super::tokenize::AnalyzerKind::Word, ngram_lo: 1, ngram_hi: 1, lowercase: true };
+        let spec = super::super::tokenizer::AnalyzerSpec { kind: super::super::tokenizer::AnalyzerKind::Word, ngram_lo: 1, ngram_hi: 1, lowercase: true };
         let field = FieldVectorizer::new("title", "title", 1.0, 0, spec, true, 0, vec!["alpha".into()], vec![1.0]).unwrap();
         write_dir(&output, &["A".into()], &[field], &[1.0], &[0.0], &serde_json::json!({}), &serde_json::json!({"_private":true,"public":true})).unwrap();
         let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(output.join("model.json")).unwrap()).unwrap();

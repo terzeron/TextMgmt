@@ -17,12 +17,12 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use sysdeps::{FsOps, RealFs};
 
-use bookstore::stores::{AladinBookstore, BookstoreSearch, KyoboBookstore, Yes24Bookstore};
+use bookstore::store_clients::{AladinBookstore, BookstoreSearch, KyoboBookstore, Yes24Bookstore};
 use crate::bookstore_cache::BookstoreResponseCache;
 use crate::bookstore_policy::{KeywordLoader, keyword_map, map_bookstore_candidates};
-use crate::model::{CategoryModelApi, Prediction, get_default_model};
-use crate::model::fixed;
-use crate::tokenize::{is_py_space, is_py_word};
+use crate::inference_model::{CategoryModelApi, Prediction, get_default_model};
+use crate::inference_model::fixed;
+use crate::tokenizer::{is_py_space, is_py_word};
 use crate::{BookCategoryClassifier, BookClassifierApi, ClassifierOptions, Classify, resolve_lenient};
 
 mod map_category;
@@ -209,7 +209,7 @@ fn parse_opf(xml: &str, meta: &mut EpubMetadata) -> bool {
 pub fn inspect_epub_metadata(path: &Path) -> EpubMetadata {
     let meta = EpubMetadata::default();
     let Some(mut zip) = text_extractor::open_zip(path) else { return meta };
-    if zip.len() > crate::reader::MAX_ZIP_ENTRIES {
+    if zip.len() > crate::document_reader::MAX_ZIP_ENTRIES {
         return meta;
     }
     let Some(index) = zip.file_names().enumerate().find(|(_, n)| n.as_ref().is_ok_and(|n| n.ends_with(".opf"))).map(|(i, _)| i) else { return meta };
@@ -750,7 +750,7 @@ impl BookClassifierService {
             let parent = self.cache_file.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
             let name = self.cache_file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "cache".into());
             let tmp = parent.join(format!(".{name}.{}.tmp", std::process::id()));
-            let body = crate::pyjson::dumps_indent2(&Value::Object(self.cache.clone()));
+            let body = crate::py_json_writer::dumps_indent2(&Value::Object(self.cache.clone()));
             let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
             if let Err(e) = file.write_all(body.as_bytes()).and_then(|()| file.sync_all()).and_then(|()| self.fs.rename(&tmp, &self.cache_file)) {
                 let _ = fs::remove_file(&tmp);

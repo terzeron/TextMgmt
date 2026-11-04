@@ -13,5 +13,5 @@ name = "htmlkit"
 path = "../../tests/rust/htmlkit/htmlkit.rs"
 
 [[test]]
-name = "url"
-path = "../../tests/rust/htmlkit/url.rs"
+name = "url_parser"
+path = "../../tests/rust/htmlkit/url_parser.rs"

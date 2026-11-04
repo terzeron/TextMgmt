@@ -1,4 +1,4 @@
-//! MuPDF worker(`native_pdf`)와 어댑터(`sysdeps::pdf`) 테스트. worker는 프로세스를 띄우지 않고 `run_worker`로 직접 부른다.
+//! MuPDF worker(`native_pdf`)와 어댑터(`sysdeps::pdf_worker_client`) 테스트. worker는 프로세스를 띄우지 않고 `run_worker`로 직접 부른다.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use lopdf::{dictionary, Document, Object, Stream};
-use sysdeps::pdf::{extract_pages, extract_text, first_page_jpeg, page_count, render_page, run_worker};
+use sysdeps::pdf_worker_client::{extract_pages, extract_text, first_page_jpeg, page_count, render_page, run_worker};
 use sysdeps::{CommandError, CommandOutput, CommandRunner};
 
 /// 16×8 빨간 JPEG.

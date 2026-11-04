@@ -6,8 +6,8 @@
 use std::fs;
 
 use classifier::export_format::{ModelError, write_dir};
-use classifier::tokenize::{AnalyzerKind, AnalyzerSpec};
-use classifier::vectorize::FieldVectorizer;
+use classifier::tokenizer::{AnalyzerKind, AnalyzerSpec};
+use classifier::vectorizer::FieldVectorizer;
 use serde_json::{Value, json};
 
 fn spec(kind: &str, lo: usize, hi: usize) -> AnalyzerSpec {

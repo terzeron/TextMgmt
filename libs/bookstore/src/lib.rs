@@ -8,11 +8,11 @@
 //! 원본과 다른 점: BeautifulSoup `html.parser` 대신 html5ever(`scraper`)로 파싱한다. 정상 HTML에서는 같고
 //! 심하게 깨진 HTML에서는 트리가 다를 수 있다.
 
-pub mod stores;
+pub mod store_clients;
 
 use std::sync::LazyLock;
 
-use htmlkit::url::urljoin;
+use htmlkit::url_parser::urljoin;
 use regex::Regex;
 use scraper::{ElementRef, Html, Node, Selector};
 

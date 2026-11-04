@@ -45,7 +45,7 @@ mod bookstore_policy {
     use classifier::bookstore_policy::{
         self, BookstorePolicy, bands_from_cuts, keyword_map, map_bookstore_candidates, map_bookstore_category, match_keyword, quantile_bands, reset_keyword_cache,
     };
-    use classifier::model::Prediction;
+    use classifier::inference_model::Prediction;
     use serde_json::{Value, json};
     use tempfile::TempDir;
 

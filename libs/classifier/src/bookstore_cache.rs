@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use crate::pyjson;
-use crate::tokenize::is_py_space;
+use crate::py_json_writer;
+use crate::tokenizer::is_py_space;
 
 pub const STORE_NAMES: [&str; 3] = ["yes24", "aladin", "kyobo"];
 /// 캐시 파일 최대 크기. 11만 건이 수십 MB 다.
@@ -253,7 +253,7 @@ impl BookstoreResponseCache {
             if fs::symlink_metadata(&self.path).is_ok_and(|m| m.file_type().is_symlink()) {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, "심볼릭 링크는 따르지 않는다"));
             }
-            let mut line = pyjson::dumps(record, false);
+            let mut line = py_json_writer::dumps(record, false);
             line.push('\n');
             // 줄 하나를 한 번의 쓰기로 덧붙인다(O_APPEND). 다른 프로세스의 줄과 섞이지 않는다.
             OpenOptions::new().create(true).append(true).open(&self.path)?.write_all(line.as_bytes())

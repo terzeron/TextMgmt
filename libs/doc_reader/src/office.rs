@@ -5,11 +5,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use sysdeps::timeout::run_with_hard_timeout;
+use sysdeps::timeout_runner::run_with_hard_timeout;
 use text_extractor::open_zip;
 
 use crate::TEXT_SIZE;
-use crate::pytext::{head_chars, is_space, keep_word_chars};
+use crate::py_str_compat::{head_chars, is_space, keep_word_chars};
 
 /// 변환 한 번에 허용하는 시간(초).
 pub const LIBREOFFICE_TIMEOUT: f64 = 60.0;

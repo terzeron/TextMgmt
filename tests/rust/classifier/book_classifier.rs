@@ -21,7 +21,7 @@ mod book_classifier {
     //!   - `with_delay(f64)`, `with_bookstore_cache_file(&Path)`, `with_bookstore_policy(BookstorePolicy)`, `with_bookstore_decider(Arc<dyn BookstoreDecider>)` 소비형 빌더 (3.12). 구 `for_test`, `set_bookstore_policy`를 대체한다
     //!   - `classify_file`, `_decide(...)` -> `Decision { category, method, reason, model_category, confidence }`, `_decide_by_bookstore(&mut Value) -> (Option<String>, String, String)`
     //! - `classifier::Classify` 트레이트: `is_available()`, `classify_path(&Path, Option<f64>) -> Result<Prediction, String>`, `classify_document(&Value, Option<f64>) -> Result<Prediction, String>`
-    //! - `classifier::model::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str)`
+    //! - `classifier::inference_model::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str)`
     //! - `classifier::BookCategoryClassifier::new(model: Option<Arc<dyn CategoryModelApi>>, ClassifierOptions)`는 `Classify`를 구현한다
     //! - `classifier::book_classifier::BookstorePolicy { override_below: f64 }` (`prefers_bookstore(confidence) = confidence < override_below`)
     //!
@@ -35,7 +35,7 @@ mod book_classifier {
     use std::sync::Arc;
 
     use classifier::book_classifier::*;
-    use classifier::model::Prediction;
+    use classifier::inference_model::Prediction;
     use classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
     use common::zipx::write_zip_text;
     use serde_json::{Value, json};
@@ -563,7 +563,7 @@ mod book_classifier {
 
     /// 서점 클라이언트 대역. `BookstoreSearch` 를 구현한다. `failing` 은 조회가 예외를 던지는 서점이다(패닉).
     struct StubBookstore {
-        rows: Vec<bookstore::stores::SearchRow>,
+        rows: Vec<bookstore::store_clients::SearchRow>,
         fail: Option<&'static str>,
     }
 
@@ -577,8 +577,8 @@ mod book_classifier {
         }
     }
 
-    impl bookstore::stores::BookstoreSearch for StubBookstore {
-        fn search(&self, _isbn: &str, title: &str, _author: &str) -> (Vec<bookstore::stores::SearchRow>, String, String) {
+    impl bookstore::store_clients::BookstoreSearch for StubBookstore {
+        fn search(&self, _isbn: &str, title: &str, _author: &str) -> (Vec<bookstore::store_clients::SearchRow>, String, String) {
             if let Some(message) = self.fail {
                 panic!("{message}");
             }
@@ -969,7 +969,7 @@ mod book_classifier_parity {
 
     use classifier::book_classifier::*;
 
-    use classifier::model::Prediction;
+    use classifier::inference_model::Prediction;
     use classifier::{BookClassifierApi, Classify};
     use serde_json::{Value, json};
     use tempfile::TempDir;
@@ -1155,7 +1155,7 @@ mod bookstore_cache {
     use std::sync::{Arc, Mutex};
 
     use classifier::book_classifier::BookClassifierService;
-    use bookstore::stores::{BookstoreSearch, SearchRow};
+    use bookstore::store_clients::{BookstoreSearch, SearchRow};
 
     use tempfile::TempDir;
 

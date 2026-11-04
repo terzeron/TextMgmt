@@ -19,7 +19,7 @@ use scraper::{Html, Node};
 
 use crate::TEXT_SIZE;
 use crate::markup::{count_lines, get_body_text, is_blank_char_text};
-use crate::pytext::{head_chars, keep_word_chars};
+use crate::py_str_compat::{head_chars, keep_word_chars};
 
 const CONTAINER_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
 const OPF_NS: &str = "http://www.idpf.org/2007/opf";

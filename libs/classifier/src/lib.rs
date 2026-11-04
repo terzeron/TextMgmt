@@ -16,20 +16,20 @@ use es_client::transport::EsTransport;
 pub mod book_classifier;
 pub mod bookstore_cache;
 pub mod bookstore_policy;
-pub mod calibration;
-pub mod config;
-pub mod corpus;
+pub mod confidence_calibrator;
+pub mod classifier_config;
+pub mod corpus_collector;
 pub mod export_format;
-pub mod features;
-pub mod model;
-pub mod pyjson;
+pub mod feature_extractor;
+pub mod inference_model;
+pub mod py_json_writer;
 pub mod pyunicode_table;
-pub mod reader;
-pub mod tokenize;
-pub mod training;
-pub mod vectorize;
+pub mod document_reader;
+pub mod tokenizer;
+pub mod model_trainer;
+pub mod vectorizer;
 
-use model::{CategoryModelApi, Prediction};
+use inference_model::{CategoryModelApi, Prediction};
 
 /// 경로나 문서 하나를 분류한다. 구 `Classifier`, `Classify`.
 pub trait Classify: Send + Sync {
@@ -164,7 +164,7 @@ pub(crate) fn resolve_lenient(path: &Path) -> PathBuf {
 
 impl BookCategoryClassifier {
     pub fn new(model: Option<Arc<dyn CategoryModelApi>>, opts: ClassifierOptions) -> Self {
-        let library_root = opts.library_root.unwrap_or_else(|| PathBuf::from(config::load_config_from_env()["corpus"]["library_root"].as_str().unwrap_or("/mnt/data/text")));
+        let library_root = opts.library_root.unwrap_or_else(|| PathBuf::from(classifier_config::load_config_from_env()["corpus"]["library_root"].as_str().unwrap_or("/mnt/data/text")));
         Self { model, es: opts.es, min_confidence: opts.min_confidence, library_root }
     }
 
@@ -185,7 +185,7 @@ impl BookCategoryClassifier {
             return model.min_confidence();
         }
         // 모델이 없으면 판정 자체를 안 한다. 설정값이 있어도 쓸 곳이 없다.
-        config::load_config_from_env().pointer("/decision/min_confidence").and_then(Value::as_f64).unwrap_or(1.0)
+        classifier_config::load_config_from_env().pointer("/decision/min_confidence").and_then(Value::as_f64).unwrap_or(1.0)
     }
 
     /// 판정에 쓸 레코드를 만든다. ES 를 먼저 보고, 없으면 파일에서 읽는다.
@@ -212,9 +212,9 @@ impl BookCategoryClassifier {
         use std::os::unix::fs::MetadataExt;
         let es = self.es.as_deref()?;
         let inode = std::fs::metadata(path).ok().map(|m| m.ino());
-        let mut doc = inode.and_then(|i| corpus::fetch_by_inode(es, i, None));
+        let mut doc = inode.and_then(|i| corpus_collector::fetch_by_inode(es, i, None));
         if doc.is_none() {
-            doc = corpus::fetch_by_path(es, &self.indexed_path(path), None);
+            doc = corpus_collector::fetch_by_path(es, &self.indexed_path(path), None);
         }
         let mut doc = doc?;
         if doc.get("text").and_then(Value::as_str).is_none_or(str::is_empty) {
@@ -234,7 +234,7 @@ impl BookCategoryClassifier {
 
     /// 파일에서 본문 앞부분을 읽는다. ES summary 는 앞부분만 담으므로 뒷부분은 붙이지 않는다.
     pub fn read_text(path: &Path) -> String {
-        Self::read_text_with(path, &|p| Ok(reader::extract_document_text(p, FALLBACK_TEXT_CHARS, 0)))
+        Self::read_text_with(path, &|p| Ok(document_reader::extract_document_text(p, FALLBACK_TEXT_CHARS, 0)))
     }
 
     /// `read_text` 의 리더 주입 판. 리더가 실패해도 빈 문자열로 삼킨다.
@@ -247,7 +247,7 @@ impl BookCategoryClassifier {
 
     /// EPUB 의 publisher. EPUB 이 아니면 빈 문자열이다.
     pub fn read_publisher(path: &Path) -> String {
-        Self::read_publisher_with(path, &|p| Ok(reader::read_epub_publisher(p)))
+        Self::read_publisher_with(path, &|p| Ok(document_reader::read_epub_publisher(p)))
     }
 
     pub fn read_publisher_with(path: &Path, reader: &dyn Fn(&Path) -> Result<String, String>) -> String {

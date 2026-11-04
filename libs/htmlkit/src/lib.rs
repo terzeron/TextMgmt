@@ -3,10 +3,10 @@
 //! 토크나이저와 속성 엔티티 해석은 EPUB 보안 검사가 쓰고(`bookdoctor`), `url`은 `urllib.parse` 호환 URL 해석이다(`backend` 표지, `bookstore` 검색 결과 링크). `text_of`는 BeautifulSoup
 //! `html.parser`의 `get_text()`와 같은 텍스트를 만든다(`isbn`, 이후 `loader`).
 
-mod entities;
-pub mod url;
+mod entity_table;
+pub mod url_parser;
 
-use entities::ENTITIES;
+use entity_table::ENTITIES;
 
 #[derive(Debug)]
 pub struct Tag {

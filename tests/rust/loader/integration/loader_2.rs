@@ -23,10 +23,10 @@
 //! - `doc_reader::text::{TextHooks, Candidate, read_from_text_with(&Path, &TextHooks) -> Result<TextRead, String>,
 //!   reencode_text_file_to_utf8_with(&Path, bool, Option<&Path>, &Path, &TextHooks) -> Reencode}`
 //!   `TextHooks { detect, encodings, read_bytes, read_replace, write_backup }` (loader_1.rs는 detect, read_bytes, write_backup을 쓴다)
-//! - `doc_reader::mojibake::count_mojibake_runs_with(&str, &str) -> usize` (런 정규식 패턴을 받는다)
+//! - `doc_reader::mojibake_counter::count_mojibake_runs_with(&str, &str) -> usize` (런 정규식 패턴을 받는다)
 //! - `doc_reader::office::read_from_hwp_with(&Path, &Path, &dyn Fn(&Path) -> Result<String, String>) -> (String, usize, Vec<String>)`
-//! - `file_record::record::{ReadHooks, read_file_with_hooks(...)}`: `fast_page_count`, `fallback_page_count`, `inspect` 대체 훅 (`Default` 구현)
-//! - `loader::cli::{RunHooks, run_with_hooks(...)}`: `read_file`, `stat`, `on_worker_spawn` 대체 훅
+//! - `file_record::record_builder::{ReadHooks, read_file_with_hooks(...)}`: `fast_page_count`, `fallback_page_count`, `inspect` 대체 훅 (`Default` 구현)
+//! - `loader::cli_parser::{RunHooks, run_with_hooks(...)}`: `read_file`, `stat`, `on_worker_spawn` 대체 훅
 
 #![allow(clippy::type_complexity)]
 
@@ -41,7 +41,7 @@ use std::thread::{self, ThreadId};
 use std::time::{Duration, UNIX_EPOCH};
 
 use doc_reader::TEXT_SIZE;
-use doc_reader::mojibake::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, count_mojibake_runs_with};
+use doc_reader::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, count_mojibake_runs_with};
 use doc_reader::office::{convert_with_libreoffice, find_libreoffice, read_from_hwp_with_fallback};
 use doc_reader::pdf::{
     FastCountHooks, InProcess, PlumberDocument, Stage, StageError, StageRunner, fast_page_count, fast_page_count_with, find_xref_offset, parse_one_xref_stream, pdf_text_by_plumber_with, read_from_obj_stream, read_from_pdf, run_stage,
@@ -49,11 +49,11 @@ use doc_reader::pdf::{
 use doc_reader::text::{Candidate, Enc, TextHooks, read_from_text_with, reencode_text_file_to_utf8_with};
 use es_client::EsError;
 use es_client::indexing::IndexStore;
-use loader::cli::{RunHooks, World, run, run_with_hooks};
-use file_record::config::Config;
-use loader::flow::{recursive_files, sample_files};
-use file_record::record::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, zip_container_type};
-use sysdeps::timeout::ParserTimeout;
+use loader::cli_parser::{RunHooks, World, run, run_with_hooks};
+use file_record::env_config::Config;
+use loader::batch_loader::{recursive_files, sample_files};
+use file_record::record_builder::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, zip_container_type};
+use sysdeps::timeout_runner::ParserTimeout;
 use serde_json::{Value, json};
 use stat::Stat;
 use tempfile::TempDir;

@@ -1052,7 +1052,7 @@ mod auth_bookstore_gaps {
     use super::{common};
 
     use backend::auth;
-    use bookstore::stores::{AbstractBookstore, KyoboBookstore};
+    use bookstore::store_clients::{AbstractBookstore, KyoboBookstore};
 
     #[test]
     fn test_observation_hash_of_empty_value_is_empty_string() {

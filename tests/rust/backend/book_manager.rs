@@ -5383,8 +5383,8 @@ mod book_manager_classifier {
 
     use classifier::book_classifier::{BookClassifierService, BookstorePolicy, SharedBookClassifier};
     use backend::book_manager::{BookManager, BookManagerDeps, ProposeOptions};
-    use bookstore::stores::{BookstoreSearch, SearchRow};
-    use classifier::model::CategoryModel;
+    use bookstore::store_clients::{BookstoreSearch, SearchRow};
+    use classifier::inference_model::CategoryModel;
     use classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
     use common::env::EnvGuard;
     use common::es_fake::FakeEsManager;

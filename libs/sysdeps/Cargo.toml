@@ -29,5 +29,5 @@ name = "sysdeps"
 path = "../../tests/rust/sysdeps/sysdeps.rs"
 
 [[test]]
-name = "timeout"
-path = "../../tests/rust/sysdeps/timeout.rs"
+name = "timeout_runner"
+path = "../../tests/rust/sysdeps/timeout_runner.rs"

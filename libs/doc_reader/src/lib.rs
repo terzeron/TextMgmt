@@ -4,10 +4,10 @@
 
 pub mod epub;
 pub mod markup;
-pub mod mojibake;
+pub mod mojibake_counter;
 pub mod office;
 pub mod pdf;
-pub mod pytext;
+pub mod py_str_compat;
 pub mod rtf;
 pub mod text;
 

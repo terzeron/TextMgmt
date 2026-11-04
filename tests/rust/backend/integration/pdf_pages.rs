@@ -185,7 +185,7 @@ fn extracting_encrypted_korean_pages_keeps_readable_korean_text() {
     assert_eq!(extracted.get_pages().len(), 2);
     let output = tmp.path().join("preview.pdf");
     fs::write(&output, bytes).unwrap();
-    let text = sysdeps::pdf::extract_text(&sysdeps::SystemRunner, &output, 1, 2).unwrap();
+    let text = sysdeps::pdf_worker_client::extract_text(&sysdeps::SystemRunner, &output, 1, 2).unwrap();
     assert_eq!(text.matches("한글").count(), 2);
 }
 
@@ -324,7 +324,7 @@ fn extracting_a_page_from_a_large_tagged_pdf_does_not_rescan_each_deleted_page()
     let preview_path = tmp.path().join("preview.pdf");
     fs::write(&preview_path, &bytes).unwrap();
     let render = |path: &Path, page: usize| {
-        let pixels = sysdeps::pdf::render_page(&sysdeps::SystemRunner, path, page, 150).unwrap();
+        let pixels = sysdeps::pdf_worker_client::render_page(&sysdeps::SystemRunner, path, page, 150).unwrap();
         assert!(!pixels.is_empty());
         pixels
     };

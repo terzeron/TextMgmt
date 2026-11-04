@@ -17,13 +17,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-pub mod pdf;
+pub mod pdf_worker_client;
 // 기존 호출자의 모듈 경로는 유지하되 구현은 MuPDF Rust worker를 사용한다.
-pub use pdf as poppler;
+pub use pdf_worker_client as poppler;
 mod native_pdf;
-pub mod timeout;
+pub mod timeout_runner;
 
-/// 환경 변수 조회 함수. `file_record::config::Config::from_env`와 같은 모양이다.
+/// 환경 변수 조회 함수. `file_record::env_config::Config::from_env`와 같은 모양이다.
 pub type EnvFn<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 // ---------------------------------------------------------------------------
@@ -290,7 +290,7 @@ fn spawn_retrying_busy(cmd: &mut Command) -> io::Result<std::process::Child> {
     }
 }
 
-/// 자식 프로세스를 실행하고 출력을 모은다. `SystemRunner`와 [`timeout::run_with_hard_timeout`]이 함께 쓰는 실행 엔진이다.
+/// 자식 프로세스를 실행하고 출력을 모은다. `SystemRunner`와 [`timeout_runner::run_with_hard_timeout`]이 함께 쓰는 실행 엔진이다.
 ///
 /// 자식은 새 process group으로 띄우고 stdin을 닫는다. `timeout`을 넘기면 group 전체를 죽이고 `Timeout`이다.
 /// 인자는 `Command`로 받아 UTF-8이 아닌 경로도 그대로 넘긴다.

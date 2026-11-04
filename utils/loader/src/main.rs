@@ -3,8 +3,8 @@ use std::process::ExitCode;
 
 use es_client::EsClient;
 use es_client::indexing::IndexStore;
-use file_record::child::{ChildRunner, ISBN_PDF_STAGE_COMMAND, PDF_STAGE_COMMAND, run_isbn_pdf_stage_command, run_pdf_stage_command};
-use loader::cli::{World, run};
+use file_record::child_process_runner::{ChildRunner, ISBN_PDF_STAGE_COMMAND, PDF_STAGE_COMMAND, run_isbn_pdf_stage_command, run_pdf_stage_command};
+use loader::cli_parser::{World, run};
 
 fn connect(index: &str) -> Result<Box<dyn IndexStore>, String> {
     let client = EsClient::from_env_with_index(index).map_err(|error| error.to_string())?;

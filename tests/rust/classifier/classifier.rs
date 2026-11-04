@@ -11,12 +11,12 @@ mod classifier {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
-    use classifier::config::{config_hash, default_config, enabled_fields, load_config, merge_config, resolve_parent, save_config, series_to_parent};
-    use classifier::corpus::{absolute_path, attach_publishers, document, is_trainable, read_jsonl, write_jsonl};
-    use classifier::features::{Dtype, FeatureSpace, FitOptions, field_text, make_vectorizer, shrink_sources};
-    use classifier::model::{CategoryModel, DEFAULT_MODEL_PATH, MODEL_DIR_ENV, Prediction, get_default_model, model_path, reset_default_model, softmax_confidence};
-    use classifier::reader::read_epub_publisher;
-    use classifier::training::{TrainOptions, coverage_curve, evaluate, filter_by_size, format_report, max_coverage_at, rss_note_with, split_holdout, train};
+    use classifier::classifier_config::{config_hash, default_config, enabled_fields, load_config, merge_config, resolve_parent, save_config, series_to_parent};
+    use classifier::corpus_collector::{absolute_path, attach_publishers, document, is_trainable, read_jsonl, write_jsonl};
+    use classifier::feature_extractor::{Dtype, FeatureSpace, FitOptions, field_text, make_vectorizer, shrink_sources};
+    use classifier::inference_model::{CategoryModel, DEFAULT_MODEL_PATH, MODEL_DIR_ENV, Prediction, get_default_model, model_path, reset_default_model, softmax_confidence};
+    use classifier::document_reader::read_epub_publisher;
+    use classifier::model_trainer::{TrainOptions, coverage_curve, evaluate, filter_by_size, format_report, max_coverage_at, rss_note_with, split_holdout, train};
     use classifier::{BookCategoryClassifier, ClassifierOptions};
     use es_client::transport::EsTransport;
     use common::env::EnvGuard;
@@ -957,8 +957,8 @@ mod classifier_gaps {
     use std::sync::{Arc, Mutex};
 
     use classifier::book_classifier::{BookClassifierService, clean_empty_parent_dirs_with, inspect_epub_metadata, is_title_match_reliable};
-    use classifier::features::FeatureSpace;
-    use classifier::model::CategoryModelApi;
+    use classifier::feature_extractor::FeatureSpace;
+    use classifier::inference_model::CategoryModelApi;
     use classifier::{BookCategoryClassifier, ClassifierOptions};
     use common::faulty_fs::{FaultyFs, other_err};
     use common::zipx::write_zip;
@@ -1079,13 +1079,13 @@ mod classifier_parity {
     use std::fs;
     use std::path::Path;
 
-    use classifier::calibration::{expected_accuracy, fit_expected_accuracy, from_coverage_report};
-    use classifier::config::{config_hash, default_config};
-    use classifier::corpus::{AttachOptions, IndexedJsonl, MAX_JSONL_LINE_BYTES, absolute_path, attach_publishers_with, read_jsonl, write_jsonl};
-    use classifier::model::CategoryModel;
-    use classifier::pyjson::{dumps, float_repr};
-    use classifier::training;
-    use classifier::training::{blake2b_keyed, document_key, filter_by_size, format_report, holdout_document_keys, split_holdout};
+    use classifier::confidence_calibrator::{expected_accuracy, fit_expected_accuracy, from_coverage_report};
+    use classifier::classifier_config::{config_hash, default_config};
+    use classifier::corpus_collector::{AttachOptions, IndexedJsonl, MAX_JSONL_LINE_BYTES, absolute_path, attach_publishers_with, read_jsonl, write_jsonl};
+    use classifier::inference_model::CategoryModel;
+    use classifier::py_json_writer::{dumps, float_repr};
+    use classifier::model_trainer;
+    use classifier::model_trainer::{blake2b_keyed, document_key, filter_by_size, format_report, holdout_document_keys, split_holdout};
     use serde_json::{Value, json};
     use tempfile::TempDir;
 
@@ -1257,7 +1257,7 @@ mod classifier_parity {
         write_jsonl(&rows, &path).unwrap();
         let indexed = IndexedJsonl::open(&path).unwrap();
 
-        assert_eq!(training::holdout_document_keys_indexed(&indexed, 3, 0.25, 20261026), training::holdout_document_keys(&rows, 3, 0.25, 20261026));
+        assert_eq!(model_trainer::holdout_document_keys_indexed(&indexed, 3, 0.25, 20261026), model_trainer::holdout_document_keys(&rows, 3, 0.25, 20261026));
     }
 
     #[test]
@@ -1313,7 +1313,7 @@ mod classifier_service {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
-    use classifier::model::{CategoryModelApi, Prediction};
+    use classifier::inference_model::{CategoryModelApi, Prediction};
     use classifier::{BookCategoryClassifier, ClassifierOptions};
     use es_client::transport::EsTransport;
     use common::es_dummy::DummyEs;

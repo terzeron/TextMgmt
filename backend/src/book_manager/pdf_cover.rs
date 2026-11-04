@@ -13,7 +13,7 @@ use super::BookManager;
 
 const MAX_RENDER_DIMENSION: u32 = 1200;
 fn extract_first_page_jpeg(path: &Path) -> Option<RgbImage> {
-    let bytes = sysdeps::pdf::first_page_jpeg(&SystemRunner, path).ok()?;
+    let bytes = sysdeps::pdf_worker_client::first_page_jpeg(&SystemRunner, path).ok()?;
     if bytes.is_empty() {
         return None;
     }
@@ -83,7 +83,7 @@ fn ppm_to_rgb(bytes: &[u8]) -> Option<RgbImage> {
 
 /// Render a bounded page through the MuPDF Rust worker.
 fn render_pdf_cover_page(path: &Path, page: usize, width: u32) -> Option<RgbImage> {
-    let ppm = sysdeps::pdf::render_page(&SystemRunner, path, page, MAX_RENDER_DIMENSION).ok()?;
+    let ppm = sysdeps::pdf_worker_client::render_page(&SystemRunner, path, page, MAX_RENDER_DIMENSION).ok()?;
     crop_cover_image(&ppm_to_rgb(&ppm)?, width)
 }
 
