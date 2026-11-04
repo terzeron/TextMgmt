@@ -30,3 +30,7 @@ path = "../../tests/rust/file_record/record_builder.rs"
 [[test]]
 name = "ignore_rules"
 path = "../../tests/rust/file_record/ignore_rules.rs"
+
+[[test]]
+name = "env_config"
+path = "../../tests/rust/file_record/env_config.rs"

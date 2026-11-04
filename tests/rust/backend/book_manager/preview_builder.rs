@@ -1,5 +1,8 @@
 //! `backend::book_manager::preview_builder` 단위 테스트.
 
+#[path = "../common/book_fixtures.rs"]
+mod fx;
+
 #[path = "../common/mod.rs"]
 mod common;
 use std::fs;
@@ -126,22 +129,18 @@ async fn test_epub_unquoted_href_and_full_view() {
 }
 
 /// XHTML 자기닫힘 `<title/>` 등이 HTML 파서에서 본문을 삼키지 않게 펴는지 검증.
-mod self_closing_rcdata {
-    use super::*;
+#[test]
+fn test_expands_self_closing_rcdata_tags() {
+    assert_eq!(BookManager::_expand_self_closing_rcdata(b"<title/>"), b"<title></title>");
+    assert_eq!(BookManager::_expand_self_closing_rcdata(b"<TITLE />"), b"<TITLE ></TITLE>");
+    assert_eq!(BookManager::_expand_self_closing_rcdata(b"<script src=\"a.js\"/>"), b"<script src=\"a.js\"></script>");
+    assert_eq!(BookManager::_expand_self_closing_rcdata(b"<style/><textarea/>"), b"<style></style><textarea></textarea>");
+}
 
-    #[test]
-    fn test_expands_self_closing_rcdata_tags() {
-        assert_eq!(BookManager::_expand_self_closing_rcdata(b"<title/>"), b"<title></title>");
-        assert_eq!(BookManager::_expand_self_closing_rcdata(b"<TITLE />"), b"<TITLE ></TITLE>");
-        assert_eq!(BookManager::_expand_self_closing_rcdata(b"<script src=\"a.js\"/>"), b"<script src=\"a.js\"></script>");
-        assert_eq!(BookManager::_expand_self_closing_rcdata(b"<style/><textarea/>"), b"<style></style><textarea></textarea>");
-    }
-
-    #[test]
-    fn test_keeps_paired_and_unrelated_tags() {
-        for data in [&b"<title>keep</title>"[..], b"<br/>", b"<img src=\"a.jpg\"/>", b"<titlebar/>"] {
-            assert_eq!(BookManager::_expand_self_closing_rcdata(data), data, "data={}", String::from_utf8_lossy(data));
-        }
+#[test]
+fn test_keeps_paired_and_unrelated_tags() {
+    for data in [&b"<title>keep</title>"[..], b"<br/>", b"<img src=\"a.jpg\"/>", b"<titlebar/>"] {
+        assert_eq!(BookManager::_expand_self_closing_rcdata(data), data, "data={}", String::from_utf8_lossy(data));
     }
 }
 
@@ -205,29 +204,24 @@ fn hwp_dir() -> PathBuf {
 fn make_doc(rel_path: &str, file_type: &str) -> Value {
     json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
 }
+// book_manager HWP preview에서 빈 결과 시 안내 메시지 반환
 
-mod empty_content {
-    use super::*;
+#[tokio::test]
+async fn test_hwp_preview_empty_returns_message() {
+    // LO+hwp3 모두 빈 결과 -> '미리보기를 생성할 수 없습니다' 메시지
+    let hwp_src = hwp_dir().join("v1.20_부하의약혼녀.hwp");
+    assert!(hwp_src.exists(), "HWP 샘플 파일이 필요하다: {}", hwp_src.display());
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("A")).unwrap();
+    fs::copy(&hwp_src, dir.path().join("A").join("old.hwp")).unwrap();
 
-    // book_manager HWP preview에서 빈 결과 시 안내 메시지 반환
-
-    #[tokio::test]
-    async fn test_hwp_preview_empty_returns_message() {
-        // LO+hwp3 모두 빈 결과 -> '미리보기를 생성할 수 없습니다' 메시지
-        let hwp_src = hwp_dir().join("v1.20_부하의약혼녀.hwp");
-        assert!(hwp_src.exists(), "HWP 샘플 파일이 필요하다: {}", hwp_src.display());
-        let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join("A")).unwrap();
-        fs::copy(&hwp_src, dir.path().join("A").join("old.hwp")).unwrap();
-
-        let doc = make_doc("A/old.hwp", "hwp");
-        // libreoffice 변환기가 빈 문자열을 돌려준다
-        let deps = BookManagerDeps::new(dir.path().to_path_buf(), FakeEsManager::with_doc(doc)).with_runner(FakeRunner::office_output(""));
-        let manager = BookManager::with_deps(deps);
-        let resp = BookManagerApi::get_book_preview(&manager, 1, Some(1), None).await;
-        assert_eq!(resp.status_code, 200);
-        assert!(String::from_utf8_lossy(&resp.body).contains("미리보기를 생성할 수 없습니다"));
-    }
+    let doc = make_doc("A/old.hwp", "hwp");
+    // libreoffice 변환기가 빈 문자열을 돌려준다
+    let deps = BookManagerDeps::new(dir.path().to_path_buf(), FakeEsManager::with_doc(doc)).with_runner(FakeRunner::office_output(""));
+    let manager = BookManager::with_deps(deps);
+    let resp = BookManagerApi::get_book_preview(&manager, 1, Some(1), None).await;
+    assert_eq!(resp.status_code, 200);
+    assert!(String::from_utf8_lossy(&resp.body).contains("미리보기를 생성할 수 없습니다"));
 }
 
 mod get_pdf_pages {
@@ -514,26 +508,19 @@ mod get_pdf_pages {
 
 mod get_book_preview {
     use super::common;
-
-
     use std::{fs, io};
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};
-
     use backend::book_manager::{BookManager, BookManagerDeps};
-
     use backend::epub_cover::EpubCoverHooks;
     use backend::main::{BookManagerApi, BookResponse};
     use backend::pdf_page_reader::{PdfError, PdfPageOps};
-
-
     use common::epub::{EpubSpec, make_epub};
     use common::es_fake::FakeEsManager;
     use common::faulty_fs::FaultyFs;
     use common::fsx::{mtime_key, set_mtime};
-
     use common::runner::FakeRunner;
     use common::zipx::write_zip;
     use serde_json::{json, Value};
@@ -1479,5 +1466,191 @@ async fn test_preview_keeps_cover_image_not_referenced_by_chapters() {
         assert!(zf.file_names().any(|n| n.is_ok_and(|n| n == "OEBPS/images/front.jpg")), "case {case_id}");
         let opf_text = std::io::read_to_string(zf.by_name("OEBPS/content.opf").unwrap()).unwrap();
         assert!(opf_text.contains(r#"id="cover-img""#), "case {case_id}");
+    }
+}
+
+mod hwp_preview {
+    use super::common;
+    use std::{fs};
+    use backend::book_manager::{BookManager, BookManagerDeps};
+    use super::common::{es_fake::FakeEsManager, runner::FakeRunner};
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc};
+    use backend::main::{BookManagerApi, BookResponse};
+    use serde_json::{json, Value};
+    use tempfile::TempDir;
+
+    // ---------------------------------------------------------------------------
+    // 공용 헬퍼 (전반부 정의를 복사)
+    // ---------------------------------------------------------------------------
+
+    /// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
+    fn tmp_dir() -> TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    /// `asyncio.run(coro)`에 대응한다. 동기 테스트 안에서 future를 끝까지 돌린다.
+    fn asyncio_runner<F: std::future::Future>(fut: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
+    }
+
+    /// 기본 구성의 `BookManagerDeps`. `with_*`를 더 붙인 뒤 `BookManager::with_deps`로 만든다.
+    fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
+        common::setup_env();
+        BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
+    }
+
+    fn make_doc(rel_path: &str, file_type: &str) -> Value {
+        json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
+    }
+
+    /// `BookResponse` 읽기 도우미(테스트 로컬). `is_file`은 본문이 있으면 참이다(파일을 읽어 담은 응답).
+    trait ResponseExt {    fn body_text(&self) -> String;
+    }
+
+    impl ResponseExt for BookResponse {
+        fn body_text(&self) -> String {
+            String::from_utf8_lossy(&self.body).into_owned()
+        }
+    }
+
+    // ---- HWP3 네이티브 파서 fallback 프리뷰 테스트 ----
+
+    fn hwp_test_dir() -> PathBuf {
+        common::project_root().join("tests").join("books").join("_hwp")
+    }
+
+    /// 원본 테스트 파일을 복사하고 경로를 돌려준다. 파일이 없으면 panic한다.
+    fn copy_hwp_sample(tmp_path: &Path, sample_name: &str, dest_name: &str) -> PathBuf {
+        let hwp_src = hwp_test_dir().join(sample_name);
+        assert!(hwp_src.exists(), "테스트 파일 tests/books/_hwp/{sample_name}이 필요하다");
+        fs::create_dir_all(tmp_path.join("A")).unwrap();
+        let hwp_file = tmp_path.join("A").join(dest_name);
+        fs::copy(&hwp_src, &hwp_file).unwrap();
+        hwp_file
+    }
+
+    #[test]
+    fn test_hwp_preview_fallback_when_libreoffice_empty() {
+        // LibreOffice가 빈 문자열 반환 시 hwp3 파서로 fallback하여 HTML 생성
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        copy_hwp_sample(tmp_path, "v2.10_KYOKA.hwp", "kyoka.hwp");
+        let doc = make_doc("A/kyoka.hwp", "hwp");
+        let es = FakeEsManager::new();
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
+        es.set_doc(Some(doc));
+        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(resp.status_code, 200);
+        let body = resp.body_text();
+        assert!(body.contains("영동") || body.contains("교가"));
+        assert!(body.contains("<p>"));
+    }
+
+    #[test]
+    fn test_hwp_preview_fallback_v3_00() {
+        // V3.00 파일의 fallback 프리뷰
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        copy_hwp_sample(tmp_path, "v3.00_현대시사전.hwp", "poem.hwp");
+        let doc = make_doc("A/poem.hwp", "hwp");
+        let es = FakeEsManager::new();
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
+        es.set_doc(Some(doc));
+        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(resp.status_code, 200);
+        let body = resp.body_text();
+        assert!(body.chars().count() > 50);
+    }
+
+    #[test]
+    fn test_hwp_preview_fallback_caches_result() {
+        // fallback 결과가 캐시 파일에 저장되는지 확인
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        copy_hwp_sample(tmp_path, "v2.10_KYOKA.hwp", "kyoka.hwp");
+        let doc = make_doc("A/kyoka.hwp", "hwp");
+        let es = FakeEsManager::new();
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
+        es.set_doc(Some(doc));
+        asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let cache_file = tmp_path.join(".preview_cache").join("1.html");
+        assert!(cache_file.exists());
+        assert!(fs::read_to_string(&cache_file).unwrap().chars().count() > 50);
+    }
+
+    #[test]
+    fn test_hwp_preview_no_fallback_for_doc() {
+        // DOC 파일은 hwp3 fallback을 사용하지 않음
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        fs::create_dir_all(tmp_path.join("A")).unwrap();
+        let doc_file = tmp_path.join("A").join("test.doc");
+        fs::write(&doc_file, b"fake doc content").unwrap();
+        let doc = make_doc("A/test.doc", "doc");
+        let es = FakeEsManager::new();
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
+        es.set_doc(Some(doc));
+        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        // DOC는 빈 html_content → 캐시 안 되고 preview 없음
+        assert!([200, 400, 500].contains(&resp.status_code) || resp.status_code == 755, "status={}", resp.status_code);
+        // 빈 content면 status 755 안 나옴
+    }
+
+    #[test]
+    fn test_hwp_preview_fallback_both_fail() {
+        // LibreOffice도 실패하고 hwp3 파서도 빈 결과인 경우 (V1.20)
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        copy_hwp_sample(tmp_path, "v1.20_부하의약혼녀.hwp", "old.hwp");
+        let doc = make_doc("A/old.hwp", "hwp");
+        let es = FakeEsManager::new();
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
+        es.set_doc(Some(doc));
+        asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        // V1.20은 hwp3 파서도 빈 결과 → 캐시 미생성, 400/500 가능
+        let cache_file = tmp_path.join(".preview_cache").join("1.html");
+        assert!(!cache_file.exists());
+    }
+
+    #[test]
+    fn test_hwp_preview_libreoffice_success_no_fallback() {
+        // LibreOffice가 정상 결과 반환 시 hwp3 fallback 미사용
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        copy_hwp_sample(tmp_path, "v2.10_KYOKA.hwp", "kyoka.hwp");
+        let doc = make_doc("A/kyoka.hwp", "hwp");
+        let es = FakeEsManager::new();
+        // LibreOffice처럼 `--outdir`에 `<이름>.html`을 쓰는 변환기 대역이다(`office_output`은 stdout에만 담아 실제 변환기와 다르다).
+        let runner = FakeRunner::new(|argv| {
+            let outdir = PathBuf::from(&argv[argv.iter().position(|a| a == "--outdir").unwrap() + 1]);
+            fs::write(outdir.join("kyoka.html"), "<p>LibreOffice 결과</p>").unwrap();
+            Ok(sysdeps::CommandOutput { returncode: 0, stdout: vec![], stderr: vec![] })
+        });
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(runner));
+        es.set_doc(Some(doc));
+        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(resp.status_code, 200);
+        let body = resp.body_text();
+        assert!(body.contains("LibreOffice"));
+        assert!(!body.contains("영동")); // fallback 미사용 확인
+    }
+
+    #[test]
+    fn test_hwp_preview_html_escaping() {
+        // fallback HTML 출력에서 특수문자가 이스케이프되는지 확인
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        copy_hwp_sample(tmp_path, "v2.10_PAGER.hwp", "pager.hwp");
+        let doc = make_doc("A/pager.hwp", "hwp");
+        let es = FakeEsManager::new();
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
+        es.set_doc(Some(doc));
+        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        if resp.status_code == 200 {
+            let body = resp.body_text();
+            // XSS 방지: <script> 같은 태그가 이스케이프되어야 함
+            assert!(!body.contains("<script>"));
+        }
     }
 }

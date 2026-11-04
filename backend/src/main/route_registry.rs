@@ -70,3 +70,25 @@ impl Routes {
         self.router
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn ok() -> &'static str {
+        "ok"
+    }
+
+    #[test]
+    fn every_method_records_its_path_method_and_dependencies_and_merge_keeps_order() {
+        let first = Routes::new().get("/a", &["require_auth"], ok).post("/a", &[], ok).put("/b", &["require_admin"], ok);
+        let second = Routes::default().delete("/c", &[], ok).patch("/d", &["optional_auth"], ok);
+        let routes = first.merge(second);
+        let table: Vec<(&str, &str, Vec<&str>)> = routes.table().iter().map(|r| (r.path.as_str(), r.methods[0].as_str(), r.dependencies.iter().map(String::as_str).collect())).collect();
+        assert_eq!(
+            table,
+            vec![("/a", "GET", vec!["require_auth"]), ("/a", "POST", vec![]), ("/b", "PUT", vec!["require_admin"]), ("/c", "DELETE", vec![]), ("/d", "PATCH", vec!["optional_auth"])]
+        );
+        let _router = routes.into_router();
+    }
+}

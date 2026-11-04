@@ -39,3 +39,27 @@ impl Drop for TempDir {
         let _ = std::fs::remove_dir_all(&self.path);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokens_are_unique_and_siblings_stay_in_the_same_directory() {
+        assert_ne!(unique_token(), unique_token());
+        let sibling = temp_sibling(Path::new("/a/b/cover.jpg"));
+        assert_eq!(sibling.parent(), Some(Path::new("/a/b")));
+        let name = sibling.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with(".cover.jpg.") && name.ends_with(".tmp"), "{name}");
+    }
+
+    #[test]
+    fn temp_dir_is_created_and_removed_on_drop() {
+        let path = {
+            let dir = TempDir::new("tm-temp-file-maker-").unwrap();
+            assert!(dir.path().is_dir());
+            dir.path().to_path_buf()
+        };
+        assert!(!path.exists());
+    }
+}

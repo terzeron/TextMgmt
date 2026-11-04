@@ -126,3 +126,49 @@ pub(crate) fn parse(argv: &[&str]) -> Result<Args, String> {
     }
     Ok(args)
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn help_and_missing_command_ask_for_usage() {
+        assert!(parse(&[]).unwrap().help);
+        assert!(parse(&["-v", "--help"]).unwrap().help);
+        assert!(parse(&["train", "-h"]).unwrap().help);
+        assert_eq!(parse(&["nope"]).err().unwrap(), "알 수 없는 명령: nope");
+    }
+
+    #[test]
+    fn options_are_validated_against_the_command_usage() {
+        let args = parse(&["train", "--corpus", "c.jsonl", "--C=0.5", "--save-config", "--holdout", "0.2"]).unwrap();
+        assert_eq!((args.get("--corpus"), args.number("--C", 1.0), args.flag("--save-config")), (Some("c.jsonl"), 0.5, true));
+        assert_eq!(args.path("--out", "x"), PathBuf::from("x"));
+        assert_eq!(args.original, ["--corpus", "c.jsonl", "--C=0.5", "--save-config", "--holdout", "0.2"]);
+        for (argv, message) in [
+            (&["train", "--top", "3"][..], "train: 알 수 없는 옵션 --top"),
+            (&["train", "--save-config=yes"][..], "--save-config에는 값을 줄 수 없다"),
+            (&["train", "--corpus"][..], "--corpus 값이 없다"),
+            (&["train", "--n-jobs", "0"][..], "--n-jobs: 0은 사용할 수 없다"),
+            (&["train", "--n-jobs", "x"][..], "--n-jobs: 정수가 필요하다"),
+            (&["train", "--max-iter", "0"][..], "--max-iter: 0보다 커야 한다"),
+            (&["train", "--max-iter", "-1"][..], "--max-iter: 음수가 아닌 정수가 필요하다"),
+            (&["train", "--C", "0"][..], "--C: 범위를 벗어난 값"),
+            (&["train", "--holdout", "abc"][..], "--holdout: 숫자가 필요하다"),
+            (&["train", "--class-weight", "x"][..], "--class-weight: 잘못된 선택 값"),
+        ] {
+            assert_eq!(parse(argv).err().as_deref(), Some(message), "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn positional_arguments_depend_on_the_command() {
+        assert!(parse(&["classify"]).is_err());
+        let args = parse(&["classify", "a.epub", "--", "--odd-name.epub"]).unwrap();
+        assert_eq!(args.paths, ["a.epub", "--odd-name.epub"]);
+        assert!(parse(&["reclassify", "A", "B"]).is_err());
+        assert!(parse(&["info", "extra"]).is_err());
+        assert_eq!(usage("unknown"), "");
+    }
+}

@@ -66,3 +66,41 @@ pub fn try_book_from_doc(path_prefix: &Path, book_id: i64, info: &Value, score: 
 pub fn iso(t: NaiveDateTime) -> String {
     t.format("%Y-%m-%dT%H:%M:%S%.6f").to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_iso_accepts_the_python_fromisoformat_shapes() {
+        for text in ["2024-01-02T03:04:05.123456", "2024-01-02 03:04:05", "2024-01-02T03:04", "2024-01-02 03:04", "2024-01-02"] {
+            assert!(parse_iso(text).is_some(), "{text}");
+        }
+        assert_eq!(iso(parse_iso("2024-01-02").unwrap()), "2024-01-02T00:00:00.000000");
+        assert_eq!(parse_iso("02/01/2024"), None);
+    }
+
+    #[test]
+    fn book_from_doc_fills_missing_fields_and_falls_back_to_updated_time() {
+        let info = json!({"category": "A", "title": "t", "file_path": "A/t.epub", "file_size": 3, "updated_time": "2024-01-02T03:04:05"});
+        let book = book_from_doc(Path::new("/lib"), 7, &info, 1.5);
+        assert_eq!((book.book_id, book.category.as_str(), book.author.as_str(), book.file_size, book.score), (7, "A", "", 3, 1.5));
+        assert_eq!(book.file_path, Path::new("/lib/A/t.epub"));
+        assert_eq!(book.created_time, book.updated_time, "created_time이 없으면 updated_time을 쓴다");
+        let broken = book_from_doc(Path::new("/lib"), 1, &json!({"updated_time": "nope"}), 0.0);
+        assert_eq!(broken.updated_time, NaiveDateTime::default());
+    }
+
+    #[test]
+    fn try_book_from_doc_names_the_first_missing_required_field() {
+        let full = json!({"category": "A", "title": "t", "author": "a", "file_path": "A/t.epub", "file_type": "epub", "updated_time": "2024-01-02", "file_size": 1});
+        assert!(try_book_from_doc(Path::new("/lib"), 1, &full, 0.0).is_ok());
+        let mut no_title = full.clone();
+        no_title.as_object_mut().unwrap().remove("title");
+        assert_eq!(try_book_from_doc(Path::new("/lib"), 1, &no_title, 0.0).unwrap_err(), "'title'");
+        let mut bad_size = full;
+        bad_size["file_size"] = json!("big");
+        assert_eq!(try_book_from_doc(Path::new("/lib"), 1, &bad_size, 0.0).unwrap_err(), "'file_size'");
+    }
+}
