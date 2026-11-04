@@ -367,6 +367,9 @@ impl BookManager {
     pub const CACHE_MAX_AGE_SECONDS: u64 = CACHE_MAX_AGE_SECONDS;
     /// 이미지 축소 정책 버전. 캐시 파일 이름에 붙여 정책이 바뀌면 옛 산출물이 계속 나가지 않게 한다.
     pub const EPUB_IMAGE_POLICY_VERSION: u32 = 3;
+    /// HWP 3.x 이하 미리보기 캐시 이름에 넣는 판. 네이티브 파서 결과가 바뀌면 올려 옛 캐시를 쓰지 않게 한다.
+    /// 2: V1.20을 문단 구조로 읽는다.
+    pub const HWP3_PREVIEW_VERSION: u32 = 2;
     pub const EPUB_IMAGE_MAX_EDGE: u32 = EPUB_IMAGE_MAX_EDGE;
     /// 최상위 파일을 가리키는 카테고리 이름.
     pub const ROOT_CATEGORY: &'static str = "_root";

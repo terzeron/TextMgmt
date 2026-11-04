@@ -1360,7 +1360,7 @@ mod hwp_preview {
 
     #[test]
     fn test_hwp3_preview_caches_native_result_separately() {
-        // HWP3 네이티브 결과는 LibreOffice 캐시(1.html)와 다른 이름(1.hwp3.html)으로 저장된다
+        // HWP3 네이티브 결과는 LibreOffice 캐시(1.html)와 다른 이름(1.hwp3_v<판>.html)으로 저장된다
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         copy_hwp_sample(tmp_path, "v2.10_KYOKA.hwp", "kyoka.hwp");
@@ -1369,7 +1369,7 @@ mod hwp_preview {
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
         es.set_doc(Some(doc));
         asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
-        let cache_file = tmp_path.join(".preview_cache").join("1.hwp3.html");
+        let cache_file = tmp_path.join(".preview_cache").join(format!("1.hwp3_v{}.html", BookManager::HWP3_PREVIEW_VERSION));
         assert!(cache_file.exists());
         assert!(fs::read_to_string(&cache_file).unwrap().chars().count() > 50);
         assert!(!tmp_path.join(".preview_cache").join("1.html").exists());
@@ -1406,7 +1406,7 @@ mod hwp_preview {
         es.set_doc(Some(doc));
         asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert!(!tmp_path.join(".preview_cache").join("1.html").exists());
-        assert!(!tmp_path.join(".preview_cache").join("1.hwp3.html").exists());
+        assert!(!tmp_path.join(".preview_cache").join(format!("1.hwp3_v{}.html", BookManager::HWP3_PREVIEW_VERSION)).exists());
     }
 
     #[test]
@@ -1433,6 +1433,8 @@ mod hwp_preview {
         copy_hwp_sample(tmp_path, "v2.10_KYOKA.hwp", "kyoka.hwp");
         fs::create_dir_all(tmp_path.join(".preview_cache")).unwrap();
         fs::write(tmp_path.join(".preview_cache").join("1.html"), "<p>??깨진 캐시??</p>").unwrap();
+        // 파서 판이 낮은 옛 네이티브 캐시도 쓰지 않는다.
+        fs::write(tmp_path.join(".preview_cache").join("1.hwp3.html"), "<p>깨진 캐시 옛 판</p>").unwrap();
         let doc = make_doc("A/kyoka.hwp", "hwp");
         let es = FakeEsManager::new();
         let runner = FakeRunner::new(|argv| panic!("HWP3에 LibreOffice를 불렀다: {argv:?}"));

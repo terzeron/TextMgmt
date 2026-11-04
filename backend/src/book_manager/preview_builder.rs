@@ -279,9 +279,9 @@ impl BookManager {
     }
 
     /// HWP 3.x 이하 미리보기. 네이티브 파서 결과가 비면 `None`을 돌려 LibreOffice 경로로 넘긴다.
-    /// 캐시 이름을 LibreOffice 결과(`{book_id}.html`)와 달리 해서, 예전에 깨진 채 저장된 캐시를 쓰지 않는다.
+    /// 캐시 이름을 LibreOffice 결과(`{book_id}.html`)와 달리 하고 파서 판을 넣어, 예전에 깨진 채 저장된 캐시를 쓰지 않는다.
     fn preview_hwp3(&self, book_id: i64, file_path: &Path, cache_dir: &Path, original_mtime: SystemTime) -> Option<BookResponse> {
-        let cache_file = cache_dir.join(format!("{book_id}.hwp3.html"));
+        let cache_file = cache_dir.join(format!("{book_id}.hwp3_v{}.html", BookManager::HWP3_PREVIEW_VERSION));
         if self.cache_is_fresh(&cache_file, original_mtime) && self.fs.metadata(&cache_file).is_ok_and(|m| m.len() > 0) {
             log::debug!("Preview cache hit for book_id={book_id} (HWP3)");
             return Some(self.file_response(&cache_file, "text/html", html_security_headers()));
