@@ -1,92 +1,14 @@
 [package]
 name = "classifier"
-description = "도서 분류기: 모델 학습·추론, 코퍼스, 서점 정책. backend와 분류 도구가 함께 쓴다"
+description = "도서 분류기 껍데기: backend 분류 제안이 쓰는 Classify·BookClassifierApi trait와 모델 단독 어댑터"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 autotests = false
 
 [dependencies]
-bookstore = { path = "../bookstore" }
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-text_extractor = { path = "../text_extractor" }
-es_client = { path = "../es_client" }
-fancy-regex = "0.14.0"
-log = "0.4.34"
-pyfmt = { path = "../pyfmt" }
-regex = "1.13.1"
-roxmltree = "0.21.1"
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = { workspace = true, features = ["preserve_order"] }
-sha2 = "0.11.1"
-sysdeps = { path = "../sysdeps" }
-
-[dev-dependencies]
-base64 = "0.23.1"
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
-tempfile = "3.27.0"
-zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
-
-[[test]]
-name = "book_classifier"
-path = "../../tests/rust/classifier/book_classifier.rs"
-
-[[test]]
-name = "bookstore_cache"
-path = "../../tests/rust/classifier/bookstore_cache.rs"
-
-[[test]]
-name = "bookstore_policy"
-path = "../../tests/rust/classifier/bookstore_policy.rs"
-
-[[test]]
-name = "confidence_calibrator"
-path = "../../tests/rust/classifier/confidence_calibrator.rs"
+serde_json = { workspace = true }
 
 [[test]]
 name = "classifier"
 path = "../../tests/rust/classifier/classifier.rs"
-
-[[test]]
-name = "classifier_config"
-path = "../../tests/rust/classifier/classifier_config.rs"
-
-[[test]]
-name = "corpus_collector"
-path = "../../tests/rust/classifier/corpus_collector.rs"
-
-[[test]]
-name = "export_format"
-path = "../../tests/rust/classifier/export_format.rs"
-
-[[test]]
-name = "inference_model"
-path = "../../tests/rust/classifier/inference_model.rs"
-
-[[test]]
-name = "document_reader"
-path = "../../tests/rust/classifier/document_reader.rs"
-
-[[test]]
-name = "tokenizer"
-path = "../../tests/rust/classifier/tokenizer.rs"
-
-[[test]]
-name = "model_trainer"
-path = "../../tests/rust/classifier/model_trainer.rs"
-
-[[test]]
-name = "vectorizer"
-path = "../../tests/rust/classifier/vectorizer.rs"
-
-[[test]]
-name = "book_classifier_map_category"
-path = "../../tests/rust/classifier/book_classifier/map_category.rs"
-
-[[test]]
-name = "feature_extractor"
-path = "../../tests/rust/classifier/feature_extractor.rs"
-
-[[test]]
-name = "py_json_writer"
-path = "../../tests/rust/classifier/py_json_writer.rs"

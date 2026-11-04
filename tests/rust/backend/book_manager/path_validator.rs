@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fs, io};
 use sysdeps::{FsOps, RealFs};
+use tempfile::TempDir;
 
 type ListDirFn = dyn Fn(&Path) -> Vec<PathBuf> + Send + Sync;
 
@@ -217,4 +218,119 @@ mod stored_path_normalization {
         std::os::unix::fs::symlink(outside.path(), tmp.path().join("L")).unwrap();
         assert!(manager._iter_category_indexable_files("L", false).is_empty());
     }
+}
+
+// ---- clean_empty_parent_dirs (분류기 껍데기 정리 때 classifier 테스트에서 옮겼다) ----
+
+#[test]
+fn test_clean_empty_parent_dirs_removes_empty_dirs_until_stop_dir() {
+    let tmp = TempDir::new().unwrap();
+    let stop_dir = tmp.path().join("library");
+    let empty_child = stop_dir.join("series").join("volume");
+    fs::create_dir_all(&empty_child).unwrap();
+
+    make_manager(tmp.path(), &FakeEsManager::new()).clean_empty_parent_dirs(&empty_child, &stop_dir);
+
+    assert!(stop_dir.exists());
+    assert!(!stop_dir.join("series").exists());
+}
+
+#[test]
+fn test_clean_empty_parent_dirs_stops_when_directory_has_visible_items() {
+    let tmp = TempDir::new().unwrap();
+    let stop_dir = tmp.path().join("library");
+    let child = stop_dir.join("series");
+    fs::create_dir_all(&child).unwrap();
+    fs::write(child.join("keep.txt"), "content").unwrap();
+
+    make_manager(tmp.path(), &FakeEsManager::new()).clean_empty_parent_dirs(&child, &stop_dir);
+
+    assert!(child.exists());
+}
+
+/// rmdir은 숨김 파일까지 봐야 성공한다. 보이는 항목만 세면 코드와 실제 동작이 어긋난다.
+#[test]
+fn test_clean_empty_parent_dirs_keeps_dir_holding_only_hidden_files() {
+    let tmp = TempDir::new().unwrap();
+    let stop_dir = tmp.path().join("library");
+    let child = stop_dir.join("series");
+    fs::create_dir_all(&child).unwrap();
+    fs::write(child.join(".nomedia"), "").unwrap();
+
+    make_manager(tmp.path(), &FakeEsManager::new()).clean_empty_parent_dirs(&child, &stop_dir);
+
+    assert!(child.exists());
+}
+
+/// stop_dir를 정규화 없이 비교하면 못 알아보고 조상까지 거슬러 올라간다.
+#[test]
+fn test_clean_empty_parent_dirs_never_climbs_past_stop_dir() {
+    let tmp = TempDir::new().unwrap();
+    let stop_dir = tmp.path().join("library");
+    let child = stop_dir.join("series");
+    fs::create_dir_all(&child).unwrap();
+    // 같은 디렉토리를 '..'를 낀 다른 표기로 넘긴다.
+    let unnormalized_stop = stop_dir.join("series").join("..");
+
+    make_manager(tmp.path(), &FakeEsManager::new()).clean_empty_parent_dirs(&child, &unnormalized_stop);
+
+    assert!(stop_dir.exists());
+    assert!(tmp.path().exists());
+}
+
+/// 호출자가 문자열을 넘기면 Path와 절대 같아지지 않아 stop_dir를 지나친다.
+#[test]
+fn test_clean_empty_parent_dirs_accepts_str_stop_dir() {
+    let tmp = TempDir::new().unwrap();
+    let stop_dir = tmp.path().join("library");
+    let child = stop_dir.join("series");
+    fs::create_dir_all(&child).unwrap();
+
+    // Python은 str을 넘긴다. Rust에서는 &str 경로도 `AsRef<Path>`로 받는다고 가정한다.
+    make_manager(tmp.path(), &FakeEsManager::new()).clean_empty_parent_dirs(&child, Path::new(stop_dir.to_str().unwrap()));
+
+    assert!(stop_dir.exists());
+    assert!(!child.exists());
+}
+
+#[test]
+fn test_clean_empty_parent_dirs_ignores_unresolvable_path() {
+    let tmp = TempDir::new().unwrap();
+    let child = tmp.path().join("a");
+    fs::create_dir(&child).unwrap();
+
+    // 가정한 seam: 경로 해석(`FsOps::canonicalize`)을 `common::FaultyFs`로 실패시킨다. 해석이 실패하면 아무것도 지우지 않아야 한다.
+    let faulty = FaultyFs::new();
+    faulty.set_resolve(|_p| Some(other_err("경로 해석 실패")));
+
+    BookManager::with_deps(deps(tmp.path(), &FakeEsManager::new()).with_fs(faulty)).clean_empty_parent_dirs(&child, tmp.path());
+
+    assert!(child.exists());
+}
+
+#[test]
+fn test_clean_empty_parent_dirs_stops_when_remove_fails() {
+    let tmp = TempDir::new().unwrap();
+    let stop = tmp.path().join("source");
+    let child = stop.join("empty");
+    fs::create_dir_all(&child).unwrap();
+    let faulty = FaultyFs::new();
+    faulty.set_remove_dir(|_| Some(other_err("permission denied")));
+
+    BookManager::with_deps(deps(tmp.path(), &FakeEsManager::new()).with_fs(faulty)).clean_empty_parent_dirs(&child, &stop);
+
+    assert!(child.exists(), "failed removal must leave the directory in place");
+    assert!(stop.exists(), "cleanup must never remove the stop directory");
+}
+
+/// 디렉터리를 읽지 못하면 아무것도 지우지 않는다.
+#[test]
+fn test_clean_empty_parent_dirs_keeps_dirs_it_cannot_read() {
+    let tmp = TempDir::new().unwrap();
+    let sub = tmp.path().join("a").join("b");
+    fs::create_dir_all(&sub).unwrap();
+    let busy = FaultyFs::new();
+    busy.set_scandir(|_| Some(other_err("Busy")));
+    BookManager::with_deps(deps(tmp.path(), &FakeEsManager::new()).with_fs(busy)).clean_empty_parent_dirs(&sub, tmp.path());
+    assert!(sub.exists());
 }

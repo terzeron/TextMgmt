@@ -38,7 +38,7 @@
 //! - `sysdeps::{FsOps, CommandRunner, CommandOutput { returncode: i32, stdout: Vec<u8>, stderr: Vec<u8> }, CommandError::{Timeout, NotFound, Failed(String)}}` (문서 3.1. `FsOps`는 `common::faulty_fs::FaultyFs`, `CommandRunner`는 `common::runner::FakeRunner`가 구현한다)
 //! - `backend::pdf_page_reader::{PdfOpener { fn open(&self, &Path) -> Result<Box<dyn PdfDoc>, PdfError> }, PdfDoc (page_count/pdf_version/docinfo/check_pdf_syntax/close), PdfPageOps (page_count/extract_pages), PdfError { kind, message }}` (문서 3.11)
 //! - `classifier::Classify { fn is_available(&self) -> bool; fn classify_path(&self, &Path, Option<f64>) -> Result<Prediction, String>; fn classify_document(&self, &Value, Option<f64>) -> Result<Prediction, String> }`
-//! - `classifier::inference_model::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str) -> Prediction`
+//! - `classifier::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str) -> Prediction`
 //! - `backend::es_manager::{EsManagerApi, EsError, ESManager::connect(env, connector, clock)}` (문서 3.3. 대역은 `common::es_fake::FakeEsManager`)
 //! - 파일 읽기(`Loader.read_file`)는 `backend::book_manager::DefaultFileReader`로 대신한다(실제 ES 테스트에서만). `loader` crate에는 의존하지 않는다.
 //!
@@ -64,7 +64,7 @@ use backend::book_metadata::{Book, BookPage};
 use backend::es_manager::{ESManager, EsError, EsManagerApi};
 use backend::pdf_page_reader::{PdfDoc, PdfError, PdfOpener, PdfPageOps};
 use classifier::Classify;
-use classifier::inference_model::Prediction;
+use classifier::Prediction;
 use common::clock::Event;
 use common::epub::{EpubSpec, make_epub};
 use common::es_fake::{Docs, FakeEsManager};

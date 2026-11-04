@@ -74,6 +74,10 @@ name = "book_metadata"
 path = "../tests/rust/backend/book_metadata.rs"
 
 [[test]]
+name = "epub_metadata_reader"
+path = "../tests/rust/backend/epub_metadata_reader.rs"
+
+[[test]]
 name = "book_manager"
 path = "../tests/rust/backend/book_manager.rs"
 

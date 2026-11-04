@@ -353,10 +353,6 @@ pub fn make_source_file(tmp_path: &Path, category: &str, name: &str) -> PathBuf 
     target
 }
 
-pub fn model_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny/trained")
-}
-
 pub fn namelist<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>) -> Vec<String> {
     (0..zf.len()).map(|i| zf.by_index(i).unwrap().name().unwrap().into_owned()).collect()
 }

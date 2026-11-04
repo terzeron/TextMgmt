@@ -569,23 +569,7 @@ dependencies = [
 name = "classifier"
 version = "0.1.0"
 dependencies = [
- "base64 0.23.1",
- "bookstore",
- "chrono",
- "es_client",
- "fancy-regex",
- "image",
- "log",
- "pyfmt",
- "regex",
- "roxmltree",
- "serde",
  "serde_json",
- "sha2",
- "sysdeps",
- "tempfile",
- "text_extractor",
- "zip",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@ pub mod cover_sources;
 pub mod cover_status;
 pub mod direct_cover_url;
 pub mod epub_cover;
+pub mod epub_metadata_reader;
 pub mod es_manager;
 pub(crate) mod image_edit;
 pub mod main;

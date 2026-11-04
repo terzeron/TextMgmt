@@ -1,28 +1,22 @@
 //! 분류 제안과 적용. Python `propose_category_changes`, `apply_category_changes`, `_move_classified_file`,
 //! `_match_category_by_keywords`, `_propose_category_for_file`에 대응한다.
 //!
-//! 분류 판정은 세 갈래다. 우선순위는 위에서 아래다.
+//! 분류 판정은 두 갈래다.
 //!
-//! 1. `BookManagerDeps::with_classifier_factory` 로 꽂은 `Classify` 모델 단독 대역(`ModelOnlyClassifier`). 서점 득표는 없다.
-//! 2. `BookManagerDeps::with_classifier_service_factory` 로 꽂거나, 안 꽂으면 `TM_CLASSIFIER_MODEL_DIR` 의 모델로 만든
-//!    `BookClassifierService`(`SharedBookClassifier`). 서점 득표, 정책 경계, 보정 곡선을 모두 쓴다. 매니저가 하나를 `Arc` 로 공유하고
-//!    제안 하나가 끝날 때 캐시를 쓴다.
-//! 3. 모델 디렉토리가 없거나 읽히지 않으면 분류기 없이 키워드만 쓴다. 이유는 경고 로그로 한 번만 남긴다.
+//! 1. `BookManagerDeps::with_classifier_factory` 로 꽂은 `Classify` 모델(`ModelOnlyClassifier`).
+//! 2. 꽂지 않으면 분류기 없이 카테고리 매핑 키워드만 쓴다. `classifier` crate는 trait만 남은 껍데기라 기본 구현이 없다.
 
 use std::collections::HashSet;
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 
 use super::path_validator::relative_to;
 use super::{BookManager, ProgressFn};
 use crate::es_manager::Docs;
-use classifier::book_classifier::{BookClassifierService, SharedBookClassifier};
-use classifier::inference_model::{CategoryModelApi, get_default_model, model_path};
-use classifier::{BookCategoryClassifier, BookClassifierApi, ClassifierOptions, ModelOnlyClassifier};
+use classifier::{BookClassifierApi, ModelOnlyClassifier};
 
 /// 제안 시작 때 이름만 담은 행을 한 번에 보내는 개수.
 const PROPOSAL_PLACEHOLDER_CHUNK: usize = 500;
@@ -92,7 +86,7 @@ fn mappings_from_value(mappings: &Value) -> Vec<(Value, Vec<Value>)> {
 
 fn normalize_text(value: &str) -> String {
     let folded = pyfmt::py_casefold(value);
-    folded.split(classifier::tokenizer::is_py_space).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ")
+    folded.split(char::is_whitespace).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 fn candidate(category: &str, source: &str, detail: String) -> Value {
@@ -499,24 +493,16 @@ impl BookManager {
         }
 
         let content_type = options.content_type.unwrap_or("book");
-        let (use_bookstore, use_content_meta) = (options.use_bookstore.unwrap_or(true), options.use_content_meta.unwrap_or(true));
+        // 서점 판정은 없어졌다. `use_bookstore`는 요청 호환을 위해 받기만 한다.
+        let use_content_meta = options.use_content_meta.unwrap_or(true);
         let empty = json!({});
         let mappings = mappings.unwrap_or(&empty);
-        // Python: `use_bookstore or use_content_meta` 일 때만 서비스를 만든다. 대역 훅(`with_classifier_factory`)이 있으면 모델 단독이다.
+        // 꽂은 모델이 있고 본문·메타데이터 판정을 켰을 때만 모델을 쓴다. 서점 판정은 없다.
         let model_only: Option<ModelOnlyClassifier> = match &self.classifier_factory {
             Some(factory) if use_content_meta => Some(ModelOnlyClassifier { model: factory() }),
             _ => None,
         };
-        let service = if self.classifier_factory.is_none() && (use_bookstore || use_content_meta) { self.classifier_service() } else { None };
-        if let Some(service) = &service {
-            service.begin_request();
-        }
-        let service_call = service.as_ref().map(|s| s.call_with_delay(&self.category_dir(category), use_bookstore, use_content_meta, options.delay));
-        let classifier: Option<&dyn BookClassifierApi> = match (&model_only, &service_call) {
-            (Some(m), _) => Some(m),
-            (None, Some(c)) => Some(c),
-            _ => None,
-        };
+        let classifier: Option<&dyn BookClassifierApi> = model_only.as_ref().map(|m| m as &dyn BookClassifierApi);
         let mappings = mappings_from_value(mappings);
 
         let propose_hook = self.seams().propose_hook;
@@ -581,16 +567,6 @@ impl BookManager {
         // Python은 제안 경로에서 분류 캐시를 저장하지 않는다(저장은 직접 분류 CLI뿐이다). 저장하면 서점 응답이 비었던 항목이
         // 캐시에 남아 같은 파일을 다시 제안해도 서점을 재조회하지 않는다.
         Ok(json!({"content_type": content_type, "source_category": category, "total_count": total_count, "processed_count": processed_count, "items": items, "failures": failures}))
-    }
-
-    /// 분류 서비스. 처음 쓸 때 한 번 만든다. 꽂은 factory 가 없으면 `TM_CLASSIFIER_MODEL_DIR` 의 모델로 만들고, 못 읽으면 `None`(분류기 없음)이다.
-    fn classifier_service(&self) -> Option<Arc<SharedBookClassifier>> {
-        self.classifier_service
-            .get_or_init(|| match &self.classifier_service_factory {
-                Some(factory) => factory(),
-                None => default_classifier_service(&self.path_prefix),
-            })
-            .clone()
     }
 
     /// 승인된 항목만 실제로 옮긴다.
@@ -826,25 +802,4 @@ impl BookManager {
             }
         }
     }
-}
-
-/// 환경변수 `TM_CLASSIFIER_MODEL_DIR` 의 모델로 기본 서비스를 만든다. 모델이 없거나 읽히지 않으면 경고를 한 번 남기고 `None` 이다.
-/// 로그에는 모델 경로만 남긴다. 서비스의 캐시 파일은 Python 과 같이 라이브러리 루트 아래 `classification_cache.json` 이다.
-fn default_classifier_service(library_root: &Path) -> Option<Arc<SharedBookClassifier>> {
-    let Some(model) = get_default_model() else {
-        log::warn!("분류 모델을 읽지 못해 분류기 없이 동작한다 (TM_CLASSIFIER_MODEL_DIR={})", model_path().display());
-        return None;
-    };
-    let classifier = BookCategoryClassifier::new(Some(model as Arc<dyn CategoryModelApi>), ClassifierOptions { library_root: Some(library_root.to_path_buf()), ..Default::default() });
-    let service = BookClassifierService::new(library_root, None, Some(Arc::new(classifier))).with_keyword_loader(db_keyword_loader());
-    Some(Arc::new(SharedBookClassifier::new(service)))
-}
-
-/// 서점 카테고리 매핑에 쓸 `category_keywords`를 MySQL에서 읽는 loader.
-fn db_keyword_loader() -> classifier::bookstore_policy::KeywordLoader {
-    classifier::bookstore_policy::keyword_loader(|content_type| {
-        let mapping = db::category_mapping::CategoryMapping::new().map_err(|e| e.to_string())?;
-        let all = mapping.get_all_mappings(content_type).map_err(|e| e.to_string())?;
-        Ok(serde_json::json!(all))
-    })
 }

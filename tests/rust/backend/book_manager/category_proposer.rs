@@ -7,7 +7,7 @@ mod common;
 mod fx;
 use crate::common::category_apply::{ApplyOpts, apply_opts};
 use crate::common::shared_fixtures::manager;
-use crate::common::shared_fixtures::{allowed_set, asyncio_runner, deps, make_doc, make_manager, make_source_file, model_dir, outcome, propose, split, tmp_dir};
+use crate::common::shared_fixtures::{allowed_set, asyncio_runner, deps, make_doc, make_manager, make_source_file, outcome, propose, split, tmp_dir};
 use crate::common::shared_fixtures::{book_adder, file_reader, setup};
 use backend::book_manager::{AddBookError, BookManager, MoveOpts, ProposeOptions};
 use classifier::BookClassifierApi;
@@ -526,7 +526,7 @@ fn test_match_category_by_keywords_uses_python_full_casefold() {
     let manager = make_manager(tmp.path(), &es);
     let directory = tmp.path().join("A");
     fs::create_dir_all(&directory).unwrap();
-    let target = directory.join("Straße\u{1c}.TXT");
+    let target = directory.join("Straße .TXT");
     fs::write(&target, "x").unwrap();
 
     let (category, matched, tie_reason, _) = manager._match_category_by_keywords(&target, "A", &mappings(&[("3_SF", &["STRASSE .TXT"])]));
@@ -1442,40 +1442,30 @@ mod candidate_building {
 }
 
 // ---------------------------------------------------------------------------
-// (b) 모델이 없을 때
+// (b) 분류기를 꽂지 않았을 때
 // ---------------------------------------------------------------------------
 
 #[test]
-fn missing_model_directory_means_no_classifier_and_one_warning() {
+fn without_an_injected_classifier_proposals_use_keywords_only() {
     let s = setup(&["달빛조각사.txt", "다른책.txt"]);
-    let mut env = EnvGuard::new();
-    env.set("TM_CLASSIFIER_MODEL_DIR", s.meta.join("없는-모델").to_str().unwrap());
     let logs = LogCapture::start(log::Level::Info);
 
     let m = manager(&s, |d| d);
-    let first = propose(&m, ProposeOptions::default());
-    let second = propose(&m, ProposeOptions::default());
+    let result = propose(&m, ProposeOptions::default());
 
-    for result in [&first, &second] {
-        assert_eq!(result["items"].as_array().unwrap().len(), 2);
-        assert!(result["items"].as_array().unwrap().iter().all(|i| i["grade"] == "unknown" && i["target_category"].is_null()));
-    }
-    let warnings: Vec<String> = logs.records().iter().filter(|r| r.level == log::Level::Warn && r.message.contains("분류 모델")).map(|r| r.message.clone()).collect();
-    assert_eq!(warnings.len(), 1, "{warnings:?}");
-    // 로그에는 경로만 있고 책 이름은 없다.
-    assert!(!logs.text().contains("달빛조각사"));
-    drop(env);
+    assert_eq!(result["items"].as_array().unwrap().len(), 2);
+    assert!(result["items"].as_array().unwrap().iter().all(|i| i["grade"] == "unknown" && i["target_category"].is_null() && i["confidence"].is_null()));
+    assert!(logs.records().iter().all(|r| r.level != log::Level::Warn), "{}", logs.text());
 }
 
 #[test]
-fn a_loadable_model_directory_builds_the_service_by_default() {
+fn the_model_directory_variable_is_ignored() {
     let s = setup(&["달빛조각사.txt"]);
     let mut env = EnvGuard::new();
-    env.set("TM_CLASSIFIER_MODEL_DIR", model_dir().to_str().unwrap());
+    env.set("TM_CLASSIFIER_MODEL_DIR", s.meta.to_str().unwrap());
     let m = manager(&s, |d| d);
     let result = propose(&m, ProposeOptions { use_bookstore: Some(false), ..Default::default() });
-    // 모델이 읽혔으므로 확신도가 채워진다(서점은 끔).
-    assert!(result["items"][0]["confidence"].is_number(), "{}", result["items"][0]);
+    assert!(result["items"][0]["confidence"].is_null(), "{}", result["items"][0]);
     drop(env);
 }
 

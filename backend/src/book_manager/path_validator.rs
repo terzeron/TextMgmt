@@ -176,8 +176,48 @@ impl BookManager {
     }
 
     /// `clean_empty_parent_dirs`: 비어 있는 상위 디렉터리를 `stop_dir` 직전까지 지운다. `stop_dir` 자신과 바깥은 지우지 않는다.
-    pub(crate) fn clean_empty_parent_dirs(&self, parent_dir: &Path, stop_dir: &Path) {
-        classifier::book_classifier::clean_empty_parent_dirs_with(parent_dir, stop_dir, self.fs.as_ref());
+    pub fn clean_empty_parent_dirs(&self, parent_dir: &Path, stop_dir: &Path) {
+        clean_empty_parent_dirs_with(parent_dir, stop_dir, self.fs.as_ref());
+    }
+}
+
+/// 비어 있는 상위 디렉터리를 `stop_dir` 직전까지 지운다. 경로를 해석하지 못하거나 디렉터리를 읽거나 지우지 못하면 멈춘다.
+/// 숨김 파일만 있는 디렉터리도 비어 있지 않은 것으로 본다(rmdir과 같다).
+fn clean_empty_parent_dirs_with(parent_dir: &Path, stop_dir: &Path, fs: &dyn sysdeps::FsOps) {
+    let resolve = |p: &Path| match fs.canonicalize(p) {
+        Ok(real) => Some(real),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(resolve_lenient(p)),
+        Err(_) => None,
+    };
+    let (Some(mut curr), Some(stop)) = (resolve(parent_dir), resolve(stop_dir)) else { return };
+    while curr != stop && curr.starts_with(&stop) && fs.metadata(&curr).is_ok_and(|metadata| metadata.is_dir()) {
+        match fs.read_dir(&curr) {
+            Ok(entries) if entries.is_empty() => {}
+            _ => break,
+        }
+        if fs.remove_dir(&curr).is_err() {
+            break;
+        }
+        let Some(parent) = curr.parent() else { break };
+        curr = parent.to_path_buf();
+    }
+}
+
+/// 없는 경로도 해석한다: 존재하는 가장 가까운 조상을 실제 경로로 바꾸고 나머지 조각을 이어 붙인다(`..`는 한 단계 올라간다).
+fn resolve_lenient(path: &Path) -> std::path::PathBuf {
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path.to_path_buf();
+    loop {
+        if let Ok(real) = cur.canonicalize() {
+            return tail.iter().rev().fold(real, |acc, c| if c == ".." { acc.parent().map(Path::to_path_buf).unwrap_or(acc) } else { acc.join(c) });
+        }
+        match (cur.file_name().map(|n| n.to_os_string()), cur.parent().map(Path::to_path_buf)) {
+            (Some(name), Some(parent)) => {
+                tail.push(name);
+                cur = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
     }
 }
 
