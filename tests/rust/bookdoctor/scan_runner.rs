@@ -5,9 +5,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use bookdoctor::scan_runner::{DEFAULT_WORKERS, pool, workers_within_memory};
 use bookdoctor::scan_runner::{collect_files, has_extension};
 use bookdoctor::{Report, Severity, Summary, scan_streaming};
-use bookdoctor::scan_runner::{DEFAULT_WORKERS, pool, workers_within_memory};
 
 fn touch(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();

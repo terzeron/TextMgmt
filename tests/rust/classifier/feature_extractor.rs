@@ -1,11 +1,11 @@
 //! `classifier::feature_extractor` 단위 테스트.
 
 mod common;
-use std::fs;
+use crate::common::shared_fixtures::approx;
 use classifier::feature_extractor::{Dtype, FeatureSpace, FitOptions, make_vectorizer, shrink_sources};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use std::fs;
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{approx};
 
 fn word_field(source: &str, weight: f64) -> Value {
     json!({"source": source, "weight": weight, "analyzer": "word", "ngram": [1, 1], "min_df": 1, "max_features": 100, "max_chars": 0})

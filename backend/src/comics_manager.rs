@@ -10,9 +10,9 @@ use std::time::Instant;
 use serde_json::Value;
 use sysdeps::EnvFn;
 
+use crate::book_manager::BookManagerApi;
 use crate::book_manager::{BookManager, BookManagerDeps};
 use crate::es_manager::EsManagerApi;
-use crate::book_manager::BookManagerApi;
 
 mod api_adapter;
 

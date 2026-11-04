@@ -6,10 +6,10 @@ mod cover_fixtures;
 mod common;
 #[path = "common/book_fixtures.rs"]
 mod fx;
-use std::fs;
-use std::fs::File;
-use std::path::Path;
-use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering, Mutex};
+use crate::common::cover_env::{env, split};
+use crate::common::shared_fixtures::URL;
+use crate::common::shared_fixtures::{assert_cover_error, backups, cover_tmp_files, epub_with_cover, has_cover, hooks_with, opf_of, publisher_cover_epub, read, rev, revision, str_of, truthy};
+use crate::common::{epub::append_child, epub::attr_of_element_with_id, epub::count_elements, epub::remove_element, fsx::count_matching, image::RED, image::encode_image, image::image_size};
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::epub_cover;
 use backend::epub_cover::{CoverError, EpubCoverHooks, Limits};
@@ -18,13 +18,13 @@ use common::faulty_fs::{FaultyFs, other_err};
 use common::fsx::{ino_mtime, sha256_hex};
 use common::image::{color_jpeg, red_jpeg};
 use common::zipx::{read_zip_entry, rewrite_epub_members};
-use serde_json::{json, Value};
-use std::collections::VecDeque;
-use crate::common::{epub::append_child, epub::attr_of_element_with_id, epub::count_elements, epub::remove_element, fsx::count_matching, image::encode_image, image::image_size, image::RED};
 use image::ImageFormat;
-use crate::common::shared_fixtures::{assert_cover_error, backups, cover_tmp_files, epub_with_cover, has_cover, hooks_with, opf_of, publisher_cover_epub, read, rev, revision, str_of, truthy};
-use crate::common::shared_fixtures::URL;
-use crate::common::cover_env::{env, split};
+use serde_json::{Value, json};
+use std::collections::VecDeque;
+use std::fs;
+use std::fs::File;
+use std::path::Path;
+use std::sync::{Arc, Mutex, atomic::AtomicUsize, atomic::Ordering};
 
 #[tokio::test]
 async fn test_resolves_the_book_from_elasticsearch_without_a_lookup_override() {
@@ -200,15 +200,15 @@ fn test_unreadable_existing_cover_metadata_is_a_warning() {
 }
 
 mod image_page_cropping {
+    use super::common;
     use crate::common::epub_book::read;
     use crate::common::epub_book::{Members, write_zip};
     use crate::common::shared_fixtures::{assert_refused, size, text_of};
-    use super::common;
-    use std::path::Path;
-    use backend::epub_cover::{edit_images, EditImages, revision};
-    use common::image::{jpeg_bytes};
+    use backend::epub_cover::{EditImages, edit_images, revision};
+    use common::image::jpeg_bytes;
     use image::{Rgb, RgbImage};
-    use serde_json::{json};
+    use serde_json::json;
+    use std::path::Path;
 
     // ── <svg><image> 로 이미지를 넣은 쪽 ──────────────────────────────────────────
 
@@ -275,7 +275,8 @@ mod image_page_cropping {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("nocover.epub");
         svg_epub(&path, (300, 400), "표지", false);
-        let result = edit_images(&path, &revision(&path), &tmp.path().join("trash"), EditImages { crops: vec![json!({"idref": "@cover", "rect": [0.0, 0.0, 0.5, 1.0, 0.0]})], ..EditImages::default() });
+        let result =
+            edit_images(&path, &revision(&path), &tmp.path().join("trash"), EditImages { crops: vec![json!({"idref": "@cover", "rect": [0.0, 0.0, 0.5, 1.0, 0.0]})], ..EditImages::default() });
         assert_refused(result, "표지 이미지를 찾을 수 없음", "@cover");
     }
 }

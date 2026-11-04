@@ -5,9 +5,9 @@ mod support;
 
 use std::time::{Duration, Instant};
 
-use bookdoctor::{Format, Severity};
-use crate::support::shared_fixtures::{pe_bytes, scan};
 use crate::support::shared_fixtures::finding;
+use crate::support::shared_fixtures::{pe_bytes, scan};
+use bookdoctor::{Format, Severity};
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()

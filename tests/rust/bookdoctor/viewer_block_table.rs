@@ -2,12 +2,12 @@ mod support;
 
 use std::collections::BTreeSet;
 
-use bookdoctor::report::write_json_line;
+use crate::support::shared_fixtures::opts;
 use bookdoctor::format_dispatcher::scan_file;
+use bookdoctor::report::write_json_line;
 use bookdoctor::viewer_block_table::{EPUB_CODES, PDF_CODES, TXT_CODES, viewer_blocked};
-use regex::Regex;
 use bookdoctor::{Category, Format, ViewerBlocked};
-use crate::support::shared_fixtures::{opts};
+use regex::Regex;
 
 const EPUB_SECURITY_RS: &str = include_str!("../../../utils/bookdoctor/src/epub/security_checker.rs");
 /// EPUB의 ZIP 이름 규칙(`ZIP_PATH_TRAVERSAL` 등)은 `zipnames.rs`로 옮겨 갔다. EPUB 지표 코드의 출처는 두 파일이다.
@@ -46,7 +46,15 @@ fn txt_html_is_blocked_but_display_spoofing_is_not() {
 
 #[test]
 fn defect_is_not_applicable() {
-    for (f, code) in [(Format::Epub, "HEAD_MISSING"), (Format::Epub, "ZIP_PATH_TRAVERSAL"), (Format::Epub, "ELF_BINARY_CONTENT"), (Format::Pdf, "NO_EOF_MARKER"), (Format::Txt, "EMPTY_TEXT"), (Format::Txt, "NO_SUCH_CODE"), (Format::Epub, "MOJIBAKE")] {
+    for (f, code) in [
+        (Format::Epub, "HEAD_MISSING"),
+        (Format::Epub, "ZIP_PATH_TRAVERSAL"),
+        (Format::Epub, "ELF_BINARY_CONTENT"),
+        (Format::Pdf, "NO_EOF_MARKER"),
+        (Format::Txt, "EMPTY_TEXT"),
+        (Format::Txt, "NO_SUCH_CODE"),
+        (Format::Epub, "MOJIBAKE"),
+    ] {
         assert_eq!(viewer_blocked(f, code), ViewerBlocked::NotApplicable, "{code}");
     }
 }

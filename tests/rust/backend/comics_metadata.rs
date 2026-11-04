@@ -1,10 +1,10 @@
 mod common;
-use std::sync::{Arc, Mutex};
-use backend::comics_metadata::{Comics, path_prefix_from_env};
 use backend::comics_manager::ComicsManager;
+use backend::comics_metadata::{Comics, path_prefix_from_env};
 use backend::es_manager::EsManagerApi;
 use common::es_fake::FakeEsManager;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
 
 fn info() -> Value {
     json!({"category": "cat", "title": "title", "author": "author", "file_path": "cat/file.epub", "file_type": "epub", "file_size": 10, "updated_time": "2021-01-01T00:00:00.000000"})

@@ -11,11 +11,11 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use text_extractor::open_zip;
-use crate::ole_parser::{Limits as OleLimits, OleFile};
-use crate::{Category, FileReport, Severity};
 use crate::magic_sniffer::{Sniffed, sniff};
+use crate::ole_parser::{Limits as OleLimits, OleFile};
 use crate::output_formatter::sanitize_display;
+use crate::{Category, FileReport, Severity};
+use text_extractor::open_zip;
 
 use crate::cli_parser::Options;
 use crate::epub::security_checker::directory_limit_note;
@@ -302,7 +302,16 @@ pub fn scan_zip_members(path: &Path, opts: &Options, report: &mut FileReport) {
             }
             continue;
         }
-        if kind == Kind::Ole && with_state(|s| if s.files_left == 0 { false } else { s.files_left -= 1; true }) != Some(true) {
+        if kind == Kind::Ole
+            && with_state(|s| {
+                if s.files_left == 0 {
+                    false
+                } else {
+                    s.files_left -= 1;
+                    true
+                }
+            }) != Some(true)
+        {
             let _ = fs::remove_file(&file);
             report.mark_incomplete(&format!("{shown}: recursion file limit ({MAX_FILES}) reached; the remaining members were not scanned"));
             break;

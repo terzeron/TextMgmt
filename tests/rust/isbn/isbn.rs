@@ -13,8 +13,8 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use isbn::*;
-use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 use stat::Stat;
+use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 
 fn write(p: &Path, text: &str) {
     fs::write(p, text).unwrap();

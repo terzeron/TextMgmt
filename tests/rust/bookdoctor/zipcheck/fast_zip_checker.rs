@@ -1,12 +1,12 @@
 #[path = "../support/mod.rs"]
 mod support;
-use std::fs;
-use std::path::Path;
+use crate::support::shared_fixtures::{finding, scan_path as scan};
 use bookdoctor::cli_parser::{Options, parse};
 use bookdoctor::format_dispatcher::scan_file;
-use bookdoctor::{Category, FileReport, Format, Severity};
 use bookdoctor::zipcheck::fast_zip_checker::resolve_name;
-use crate::support::shared_fixtures::{finding, scan_path as scan};
+use bookdoctor::{Category, FileReport, Format, Severity};
+use std::fs;
+use std::path::Path;
 
 fn deep(path: &Path) -> FileReport {
     scan_file(path, &Options { zip_deep: true, ..Options::default() })
@@ -321,12 +321,12 @@ fn archives_without_duplicates_never_get_the_duplicate_finding() {
 }
 
 mod text_member_entropy {
-    use std::fs;
-    use std::io::Write;
-    use std::path::PathBuf;
     use bookdoctor::cli_parser::Options;
     use bookdoctor::format_dispatcher::scan_file;
     use bookdoctor::{FileReport, Severity};
+    use std::fs;
+    use std::io::Write;
+    use std::path::PathBuf;
 
     fn random_bytes(n: usize, mut seed: u32) -> Vec<u8> {
         (0..n)

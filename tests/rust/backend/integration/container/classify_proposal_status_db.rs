@@ -25,10 +25,10 @@ use crate::{common, mysql_fixture};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 
-use db::category_mapping::CategoryMapping;
+use crate::common::shared_fixtures::Db;
 use db::DbValue;
+use db::category_mapping::CategoryMapping;
 use serde_json::json;
-use crate::common::shared_fixtures::{Db};
 
 const STALE: i64 = 300;
 

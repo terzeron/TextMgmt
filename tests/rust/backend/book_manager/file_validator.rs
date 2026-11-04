@@ -2,9 +2,9 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::fs;
-use common::es_fake::FakeEsManager;
 use crate::common::shared_fixtures::{asyncio_runner, blank_pdf_bytes, make_doc, make_manager, tmp_dir};
+use common::es_fake::FakeEsManager;
+use std::fs;
 
 // ---------------------------------------------------------------------------
 // 테스트 본문 (원본 순서)

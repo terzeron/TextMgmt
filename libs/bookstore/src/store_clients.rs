@@ -137,7 +137,6 @@ fn quote(value: &str, safe: &str) -> String {
     out
 }
 
-
 /// Python 진리값. `None`, `False`, `0`, `""`, `[]`, `{}`은 거짓이다.
 fn truthy(v: Option<&Value>) -> bool {
     v.is_some_and(pyfmt::py_truthy)

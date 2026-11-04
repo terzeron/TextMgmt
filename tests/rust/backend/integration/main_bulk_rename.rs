@@ -6,8 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use backend::book_metadata::{Book, BookPage};
+use crate::common::shared_fixtures::now_secs;
 use backend::book_manager::BookManagerApi;
+use backend::book_metadata::{Book, BookPage};
 use backend::es_manager::EsManagerApi;
 use backend::main::{AppDeps, AuthMode, app_with};
 use common::TestClient;
@@ -15,7 +16,6 @@ use common::es_fake::FakeEsManager;
 use common::faulty_fs::{FaultyFs, fail_on_nth_path};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{now_secs};
 
 const URL: &str = "/categories/bulk-rename-files";
 

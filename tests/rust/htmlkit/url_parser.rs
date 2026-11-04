@@ -1,6 +1,6 @@
 //! `htmlkit::url_parser` 단위 테스트. 기대값은 Python `urllib.parse` 결과다.
 
-use htmlkit::url_parser::{quote, urlencode, urljoin, urlsplit, Netloc};
+use htmlkit::url_parser::{Netloc, quote, urlencode, urljoin, urlsplit};
 
 #[test]
 fn urljoin_matches_python_for_absolute_protocol_relative_root_and_relative_refs() {

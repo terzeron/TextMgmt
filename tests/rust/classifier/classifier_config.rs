@@ -4,15 +4,17 @@
 //! 실제 모델 parity 는 `TM_CLASSIFIER_EXPORT_DIR=<내보낸 디렉토리> cargo test -p backend --test classifier_model -- --ignored` 로 돌린다.
 
 mod common;
-use classifier::classifier_config::{CONFIG_ENV, config_hash, default_config, enabled_fields, load_config, load_config_from_env, MAX_CONFIG_BYTES, merge_config, resolve_parent, save_config, series_to_parent};
-use serde_json::{json, Value};
+use crate::common::shared_fixtures::{make_docs, parity, trained};
+use classifier::classifier_config::{
+    CONFIG_ENV, MAX_CONFIG_BYTES, config_hash, default_config, enabled_fields, load_config, load_config_from_env, merge_config, resolve_parent, save_config, series_to_parent,
+};
+use classifier::inference_model::CategoryModel;
+use classifier::model_trainer::{TrainOptions, train};
+use common::log_capture::LogCapture;
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
-use classifier::inference_model::CategoryModel;
-use classifier::model_trainer::{train, TrainOptions};
-use common::log_capture::LogCapture;
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{make_docs, parity, trained};
 
 #[test]
 fn unusable_config_files_fall_back_to_the_defaults() {

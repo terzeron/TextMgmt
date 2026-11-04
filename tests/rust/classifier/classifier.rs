@@ -1,20 +1,20 @@
 //! `classifier` 최상위 단위 테스트.
 
 mod common;
+use crate::common::shared_fixtures::{load_trained, trained, vocab};
+use classifier::feature_extractor::field_text;
+use classifier::inference_model::{CategoryModel, MODEL_DIR_ENV, Prediction};
+use classifier::{BookCategoryClassifier, ClassifierOptions};
+use common::env::EnvGuard;
+use common::epub::{EpubSpec, make_epub};
+use common::es_dummy::{DummyEs, not_found_error};
+use es_client::transport::EsTransport;
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use classifier::feature_extractor::field_text;
-use classifier::inference_model::{CategoryModel, MODEL_DIR_ENV, Prediction};
-use classifier::{BookCategoryClassifier, ClassifierOptions};
-use es_client::transport::EsTransport;
-use common::env::EnvGuard;
-use common::epub::{EpubSpec, make_epub};
-use common::es_dummy::{DummyEs, not_found_error};
-use serde_json::{json, Value};
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{load_trained, trained, vocab};
 
 // ---------------------------------------------------------------------------
 // features
@@ -241,10 +241,10 @@ fn test_save_and_load_use_the_environment_path() {
 }
 
 mod expected_accuracy {
-    use std::path::Path;
-    use std::sync::{Arc, Mutex};
     use classifier::inference_model::CategoryModelApi;
     use classifier::{BookCategoryClassifier, ClassifierOptions};
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
     fn classifier(tmp: &Path, model: Option<Arc<dyn CategoryModelApi>>) -> BookCategoryClassifier {
@@ -283,16 +283,16 @@ mod expected_accuracy {
 }
 
 mod build_document {
-    use crate::common::shared_fixtures::{options};
     use super::common;
+    use crate::common::shared_fixtures::options;
+    use classifier::inference_model::{CategoryModelApi, Prediction};
+    use classifier::{BookCategoryClassifier, ClassifierOptions};
+    use common::es_dummy::DummyEs;
+    use es_client::transport::EsTransport;
+    use serde_json::{Value, json};
     use std::fs;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
-    use classifier::inference_model::{CategoryModelApi, Prediction};
-    use classifier::{BookCategoryClassifier, ClassifierOptions};
-    use es_client::transport::EsTransport;
-    use common::es_dummy::DummyEs;
-    use serde_json::{json, Value};
     use tempfile::TempDir;
 
     #[derive(Default)]
@@ -366,7 +366,8 @@ mod build_document {
     #[test]
     fn test_build_document_fills_name_when_es_record_has_none() {
         // file_path 가 비면 name 도 빈다. 파일명으로 메워야 특징이 살아난다.
-        let es = fake_es(Some(Box::new(|_| json!({"_id": "1", "_source": {"category": "2_소설한국", "summary": "본문".repeat(20), "file_path": "", "file_type": "txt", "publisher": "민음사"}}))), None);
+        let es =
+            fake_es(Some(Box::new(|_| json!({"_id": "1", "_source": {"category": "2_소설한국", "summary": "본문".repeat(20), "file_path": "", "file_type": "txt", "publisher": "민음사"}}))), None);
         let tmp = TempDir::new().unwrap();
         let f = tmp.path().join("이름없는레코드.txt");
         fs::write(&f, "내용").unwrap();

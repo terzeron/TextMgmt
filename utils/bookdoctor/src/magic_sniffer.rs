@@ -1,7 +1,5 @@
 //! 바이트와 이름만 보고 판단하는 검사: 매직바이트 판별, 섀넌 엔트로피, Windows 예약 이름. 확장자는 믿지 않는다.
 
-
-
 // ---- 앞부분 바이트로 파일 종류를 가른다. 확장자는 믿지 않는다. ----
 
 /// 매직바이트로 판별한 종류.
@@ -91,10 +89,14 @@ pub fn shannon(bytes: &[u8]) -> f64 {
         counts[usize::from(b)] += 1;
     }
     let total = bytes.len() as f64;
-    counts.iter().filter(|&&c| c > 0).map(|&c| {
-        let p = c as f64 / total;
-        -p * p.log2()
-    }).sum()
+    counts
+        .iter()
+        .filter(|&&c| c > 0)
+        .map(|&c| {
+            let p = c as f64 / total;
+            -p * p.log2()
+        })
+        .sum()
 }
 
 /// 파일 이름(경로 포함 가능)이 텍스트 확장자인가. 대소문자는 가리지 않고, 줄기가 없는 `.xml`이나 확장자 없는 이름은 아니다.

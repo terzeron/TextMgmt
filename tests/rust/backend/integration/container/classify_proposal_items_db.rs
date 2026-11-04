@@ -26,9 +26,9 @@ use crate::{common, mysql_fixture};
 
 use db::category_mapping::CategoryMapping;
 
+use crate::common::shared_fixtures::Db;
 use db::{DbValue, Row};
 use serde_json::{Value, json};
-use crate::common::shared_fixtures::{Db};
 
 /// 행의 `Text` 컬럼 값. Python은 dict 값을 그대로 문자열로 썼다.
 fn text(row: &Row, key: &str) -> String {

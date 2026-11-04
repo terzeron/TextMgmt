@@ -17,13 +17,13 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use sysdeps::{FsOps, RealFs};
 
-use bookstore::store_clients::{AladinBookstore, BookstoreSearch, KyoboBookstore, Yes24Bookstore};
 use crate::bookstore_cache::BookstoreResponseCache;
 use crate::bookstore_policy::{KeywordLoader, keyword_map, map_bookstore_candidates};
-use crate::inference_model::{CategoryModelApi, Prediction, get_default_model};
 use crate::inference_model::fixed;
+use crate::inference_model::{CategoryModelApi, Prediction, get_default_model};
 use crate::tokenizer::{is_py_space, is_py_word};
 use crate::{BookCategoryClassifier, BookClassifierApi, ClassifierOptions, Classify, resolve_lenient};
+use bookstore::store_clients::{AladinBookstore, BookstoreSearch, KyoboBookstore, Yes24Bookstore};
 
 mod map_category;
 mod tables;

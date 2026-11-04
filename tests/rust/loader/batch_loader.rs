@@ -2,15 +2,15 @@
 #![allow(clippy::type_complexity)]
 
 mod common;
-use std::collections::HashMap;
-use std::fs;
+use crate::common::shared_fixtures::{config_with_book, conftest_env, path_str, tmp, write};
 use doc_reader::pdf::InProcess;
 use file_record::env_config::Config;
-use loader::batch_loader::{get_file_list, read_files, report_problems};
 use file_record::record_builder::read_file;
+use loader::batch_loader::{get_file_list, read_files, report_problems};
 use serde_json::Value;
 use stat::Stat;
-use crate::common::shared_fixtures::{config_with_book, conftest_env, path_str, tmp, write};
+use std::collections::HashMap;
+use std::fs;
 
 // ---- TestLoaderInit -------------------------------------------------------------------------
 

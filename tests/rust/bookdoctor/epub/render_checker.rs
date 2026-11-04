@@ -1,14 +1,18 @@
 #[path = "../support/mod.rs"]
 mod support;
-use std::fs;
-use std::path::Path;
+use crate::support::shared_fixtures::{binary, forge_declared_size};
 use bookdoctor::cli_parser::Options;
-use bookdoctor::epub::{render_checker::classify_read_error, render_checker::count_hidden_elements, render_checker::full_reads, render_checker::inspect, render_checker::inspect_with, render_checker::inspect_with_verified, render_checker::MAX_UNREADABLE_FINDINGS, render_checker::ReadErrorKind, render_checker::Selector, render_checker::zero_size_selectors, scan_epub_file, security_checker::Limits, security_checker::scan_verified};
+use bookdoctor::epub::{
+    render_checker::MAX_UNREADABLE_FINDINGS, render_checker::ReadErrorKind, render_checker::Selector, render_checker::classify_read_error, render_checker::count_hidden_elements,
+    render_checker::full_reads, render_checker::inspect, render_checker::inspect_with, render_checker::inspect_with_verified, render_checker::zero_size_selectors, scan_epub_file,
+    security_checker::Limits, security_checker::scan_verified,
+};
 use bookdoctor::format_dispatcher::scan_file;
-use support::*;
 use bookdoctor::{Category, FileReport, Format, Severity};
 use std::collections::HashMap;
-use crate::support::shared_fixtures::{binary, forge_declared_size};
+use std::fs;
+use std::path::Path;
+use support::*;
 
 const OPF_NS_DECL: &str = r#" xmlns:dc="http://purl.org/dc/elements/1.1/""#;
 const OPF_PATH: &str = "OEBPS/content.opf";

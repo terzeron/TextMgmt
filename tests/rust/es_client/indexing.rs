@@ -1,8 +1,8 @@
 #[path = "../common/tls_server.rs"]
 mod tls_server;
 
-use es_client::indexing::{IndexStore, index_mappings, index_settings, path_prefix_query};
 use es_client::EsClient;
+use es_client::indexing::{IndexStore, index_mappings, index_settings, path_prefix_query};
 use serde_json::json;
 
 #[test]

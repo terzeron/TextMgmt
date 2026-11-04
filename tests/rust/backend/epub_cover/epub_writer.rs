@@ -2,11 +2,11 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::fs;
+use crate::common::epub_book::multi;
+use crate::common::shared_fixtures::{assert_refused, full};
 use backend::epub_cover::EditImages;
 use serde_json::json;
-use crate::common::shared_fixtures::{assert_refused, full};
-use crate::common::epub_book::multi;
+use std::fs;
 
 #[test]
 fn test_index_out_of_range_is_refused() {

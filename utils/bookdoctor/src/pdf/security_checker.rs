@@ -9,11 +9,11 @@ use std::sync::LazyLock;
 
 use regex::bytes::Regex;
 
-use lopdf::xref::XrefEntry;
-use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 use crate::magic_sniffer::{Sniffed, sniff};
 use crate::output_formatter::sanitize as sanitize_text;
 use crate::{Category, FileReport, Severity};
+use lopdf::xref::XrefEntry;
+use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 
 use crate::epub::security_checker::guarded;
 
@@ -408,9 +408,8 @@ fn js_is_exploit(source: &[u8]) -> bool {
 static JS_STRING_CONCAT: LazyLock<Option<regex::Regex>> = LazyLock::new(|| regex::Regex::new(r#"["']\s*\+\s*["']"#).ok());
 /// 공백을 지우고 소문자로 만든 글에 쓴다. `util.printf("%45000f")`처럼 폭이 네 자리 이상이면 오버플로 시도다.
 static JS_PRINTF_OVERFLOW: LazyLock<Option<regex::Regex>> = LazyLock::new(|| regex::Regex::new(r#"util\.printf\(["'][^"']*%[0-9]{4,}"#).ok());
-static JS_ALIAS_EXEC: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
-    regex::Regex::new(r#"(?:[=,(:?]|&&|\|\||return)(?:(?:window|self|globalthis|this|top|parent)\.)?(?:eval|function)[;,)\]}]|\[["'](?:eval|function)["']\]"#).ok()
-});
+static JS_ALIAS_EXEC: LazyLock<Option<regex::Regex>> =
+    LazyLock::new(|| regex::Regex::new(r#"(?:[=,(:?]|&&|\|\||return)(?:(?:window|self|globalthis|this|top|parent)\.)?(?:eval|function)[;,)\]}]|\[["'](?:eval|function)["']\]"#).ok());
 static JS_DECODE_CALL: LazyLock<Option<regex::Regex>> = LazyLock::new(|| regex::Regex::new(r"(?:atob|unescape|decodeuricomponent)\(|string\.fromcharcode\(").ok());
 
 /// 별칭 사용 앞뒤 300바이트 안에 디코딩 호출이 있는가. 멀리 떨어져 따로 나오는 둘은 묶지 않는다.
@@ -809,9 +808,8 @@ pub fn load(data: &[u8]) -> Result<(Document, LoadInfo), String> {
     // 참조 수가 예산을 넘는 파일은 참조 배열을 남기지 않는 훅으로 읽는다. 선택은 읽기 전에 끝나므로 스레드·동시 읽기와 무관하다.
     let hook: lopdf::FilterFunc = if count_raw_references(data) > REF_FILE_BUDGET { shrink_on_load_strict } else { shrink_on_load };
     // A malformed file must not take the whole batch down.
-    let parsed = std::panic::catch_unwind(|| {
-        Document::load_mem_with_options(data, LoadOptions { filter: Some(hook), max_decompressed_size: Some(MAX_DECOMPRESSED_STREAM_BYTES), ..LoadOptions::default() })
-    });
+    let parsed =
+        std::panic::catch_unwind(|| Document::load_mem_with_options(data, LoadOptions { filter: Some(hook), max_decompressed_size: Some(MAX_DECOMPRESSED_STREAM_BYTES), ..LoadOptions::default() }));
     match parsed {
         Ok(Ok(doc)) => {
             let info = LoadInfo::from_document(&doc);

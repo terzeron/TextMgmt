@@ -15,12 +15,12 @@ use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
-use text_extractor::{decode_utf8_ignore, open_zip};
 use htmlkit::{local_name, text_of, tokenize};
-use sysdeps::timeout_runner::{run_with_hard_timeout, run_with_timeout};
-use sysdeps::{CommandError, CommandRunner, SystemRunner};
 use regex::Regex;
 use stat::Stat;
+use sysdeps::timeout_runner::{run_with_hard_timeout, run_with_timeout};
+use sysdeps::{CommandError, CommandRunner, SystemRunner};
+use text_extractor::{decode_utf8_ignore, open_zip};
 
 /// 앞뒤로 읽을 바이트 크기 (8KB).
 pub const HEAD_TAIL_SIZE: usize = 8 * 1024;

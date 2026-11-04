@@ -12,11 +12,11 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::LazyLock;
 
-use text_extractor::{Zip, open_zip};
-use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
+use crate::{Category, FileReport};
 use htmlkit::{Tag, decode_entities, local_name, tokenize};
 use regex::Regex;
-use crate::{Category, FileReport};
+use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
+use text_extractor::{Zip, open_zip};
 use zip::CompressionMethod;
 
 const MAX_TEXT: usize = 160;
@@ -232,9 +232,8 @@ static ACTIVEX: LazyLock<Regex> = LazyLock::new(|| re(r"\bActiveXObject\b"));
 /// IE용 XML 파싱·AJAX 폴백에 쓰는 ProgID. 구형 JS 라이브러리(jQuery 등)에 흔해서 호스트 API로 보지 않는다.
 static BENIGN_ACTIVEX_CALL: LazyLock<Regex> = LazyLock::new(|| re(r#"(?i)^\(\s*["'](?:microsoft|msxml2)\.(?:xmldom|xmlhttp|domdocument)(?:\.\d+(?:\.\d+)?)?["']\s*\)"#));
 /// `eval`·`Function`을 별칭에 담거나(`var e = eval;`, `(0, eval)(…)`) 대괄호로 꺼내는(`window["eval"](…)`) 모양. 문자열 결합은 `join_string_concat`으로 먼저 합친 글에 쓴다.
-static ALIAS_EXEC: LazyLock<Regex> = LazyLock::new(|| {
-    re(r#"(?:[=,(:?]|&&|\|\||\breturn\b)\s*(?:(?:window|self|globalThis|this|top|parent)\s*\.\s*)?(?:eval|Function)\s*[;,)\]}]|\[\s*["'](?:eval|Function)["']\s*\]"#)
-});
+static ALIAS_EXEC: LazyLock<Regex> =
+    LazyLock::new(|| re(r#"(?:[=,(:?]|&&|\|\||\breturn\b)\s*(?:(?:window|self|globalThis|this|top|parent)\s*\.\s*)?(?:eval|Function)\s*[;,)\]}]|\[\s*["'](?:eval|Function)["']\s*\]"#));
 /// 문자열을 코드로 되돌리는 호출.
 static DECODE_CALL: LazyLock<Regex> = LazyLock::new(|| re(r"\b(?:atob|unescape|decodeURIComponent)\s*\(|String\s*\.\s*fromCharCode\s*\("));
 static STRING_CONCAT: LazyLock<Regex> = LazyLock::new(|| re(r#"["']\s*\+\s*["']"#));
@@ -386,10 +385,8 @@ fn condition_context(before: &str) -> bool {
 fn is_active_data_url(n: &str) -> bool {
     let Some(rest) = n.strip_prefix("data:") else { return false };
     let mime = rest.split([';', ',']).next().unwrap_or("");
-    matches!(
-        mime,
-        "text/html" | "application/xhtml+xml" | "image/svg+xml" | "text/xml" | "application/xml" | "text/javascript" | "application/javascript" | "application/x-javascript"
-    ) || mime.ends_with("+xml")
+    matches!(mime, "text/html" | "application/xhtml+xml" | "image/svg+xml" | "text/xml" | "application/xml" | "text/javascript" | "application/javascript" | "application/x-javascript")
+        || mime.ends_with("+xml")
 }
 
 /// 프레임·object·embed에 넣는 `data:` URL은 알려진 이미지(svg 제외)나 폰트가 아니면 문서로 로드될 수 있다.
@@ -460,7 +457,18 @@ struct Scanner {
 
 impl Scanner {
     fn new() -> Scanner {
-        Scanner { findings: Vec::new(), notes: Vec::new(), seen: HashMap::new(), html_active: Vec::new(), html_remote: Vec::new(), manifest: HashMap::new(), budget_skipped: 0, enc: Default::default(), undecodable: Vec::new(), undecodable_extra: 0 }
+        Scanner {
+            findings: Vec::new(),
+            notes: Vec::new(),
+            seen: HashMap::new(),
+            html_active: Vec::new(),
+            html_remote: Vec::new(),
+            manifest: HashMap::new(),
+            budget_skipped: 0,
+            enc: Default::default(),
+            undecodable: Vec::new(),
+            undecodable_extra: 0,
+        }
     }
 
     /// 보안 리뷰 지적(노트 폭주): 인코딩 문제 멤버를 센다. `finding`이면 `MARKUP_UNDECODABLE` 후보로도 남긴다.
@@ -731,7 +739,18 @@ impl Scanner {
                     let target = tag.attr("content").and_then(|c| REFRESH_URL.captures(c).map(|m| m[1].to_owned()));
                     let risky = target.as_deref().is_some_and(|u| matches!(classify_url(u), UrlKind::Remote | UrlKind::Script | UrlKind::Dangerous));
                     let exploit = target.as_deref().is_some_and(|u| classify_url(u) == UrlKind::Dangerous && is_exploit_scheme(u));
-                    self.add(if exploit { Severity::Critical } else if risky { Severity::High } else { Severity::Medium }, "META_REFRESH", name, "meta refresh");
+                    self.add(
+                        if exploit {
+                            Severity::Critical
+                        } else if risky {
+                            Severity::High
+                        } else {
+                            Severity::Medium
+                        },
+                        "META_REFRESH",
+                        name,
+                        "meta refresh",
+                    );
                 }
             }
             "base" => {

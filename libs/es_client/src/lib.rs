@@ -86,7 +86,10 @@ pub enum EsError {
     /// 연결 실패나 시간 초과 같은 전송 계층 오류.
     Transport(String),
     /// ES가 오류 상태 코드를 돌려줬다.
-    Status { status: u16, body: String },
+    Status {
+        status: u16,
+        body: String,
+    },
     /// 응답 본문을 해석할 수 없다.
     Parse(String),
     /// 이 구현에 없는 연산.

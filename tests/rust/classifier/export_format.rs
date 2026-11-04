@@ -7,10 +7,10 @@ mod common;
 
 use std::fs;
 
+use crate::common::shared_fixtures::spec;
 use classifier::export_format::{ModelError, write_dir};
 use classifier::vectorizer::FieldVectorizer;
 use serde_json::{Value, json};
-use crate::common::shared_fixtures::{spec};
 
 #[test]
 fn exporter_rejects_models_without_vectorizers_like_python() {

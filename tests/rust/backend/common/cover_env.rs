@@ -1,15 +1,15 @@
 //! EPUB 표지 설정 테스트의 환경(`Env`, `env`, `split`). 여러 테스트 파일의 같은 사본을 모았다.
 #![allow(dead_code)]
 
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use backend::book_manager::{BookManager, BookManagerDeps, BookRef};
 use super::epub::{EpubSpec, make_epub};
 use super::es_fake::FakeEsManager;
 use super::image::red_jpeg;
-use serde_json::Value;
 use super::shared_fixtures::{FakeBooks, FetchSlot, URL};
+use backend::book_manager::{BookManager, BookManagerDeps, BookRef};
+use serde_json::Value;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 // 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
 #[allow(dead_code)]

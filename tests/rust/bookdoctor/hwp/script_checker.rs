@@ -3,9 +3,9 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use bookdoctor::{FileReport};
 use crate::support::shared_fixtures::{JSCRIPT_VERSION, default_jscript, finding, raw_deflate, wchars, zlib};
 use crate::support::shared_fixtures::{hwp_cfb, scan_cfb};
+use bookdoctor::FileReport;
 
 fn scan_scripts(flags: u32, script: &[u8]) -> FileReport {
     scan_cfb("a.hwp", &hwp_cfb(&[("Scripts/JScriptVersion", &JSCRIPT_VERSION[..]), ("Scripts/DefaultJScript", script)], flags))
@@ -93,7 +93,12 @@ fn malformed_script_is_still_high_incomplete_and_never_panics() {
     // 임의 바이트로 열어도 panic하지 않는다.
     let mut seed = 0x1234_5678u32;
     for _ in 0..200 {
-        let bytes: Vec<u8> = (0..64).map(|_| { seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223); (seed >> 24) as u8 }).collect();
+        let bytes: Vec<u8> = (0..64)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 24) as u8
+            })
+            .collect();
         let r = scan_scripts(0x8, &bytes);
         assert!(!r.reasons.iter().any(|m| m.contains("panic")), "{:?}", r.reasons);
     }

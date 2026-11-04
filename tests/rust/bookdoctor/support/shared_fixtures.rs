@@ -1,17 +1,17 @@
 //! 여러 테스트 파일이 함께 쓰는 준비물(helper·대역). 같은 본문의 사본을 한곳에 모았다.
 #![allow(dead_code)]
-use bookdoctor::cli_parser::Options;
-use bookdoctor::format_dispatcher::scan_file;
-use super::ole_common::{Cfb, make_cfb};
-use bookdoctor::{FileReport, Format};
 use super::epub_with_files;
-use std::fs;
-use std::path::{Path, PathBuf};
+use super::ole_common::{Cfb, make_cfb};
+use bookdoctor::cli_parser::Options;
 use bookdoctor::cli_parser::{execute, parse};
+use bookdoctor::epub::{security_checker::Limits, security_checker::Stats, security_checker::scan as scan_into, security_checker::scan_stats};
+use bookdoctor::format_dispatcher::scan_file;
+use bookdoctor::{FileReport, Format};
 use flate2::Compression;
 use flate2::write::{DeflateEncoder, ZlibEncoder};
+use std::fs;
 use std::io::{Cursor, Read, Write};
-use bookdoctor::epub::{security_checker::Limits, security_checker::scan as scan_into, security_checker::scan_stats, security_checker::Stats};
+use std::path::{Path, PathBuf};
 
 pub const HWPTAG_BEGIN: u32 = 0x010;
 
@@ -219,7 +219,14 @@ pub fn scan_with_stats(path: &Path, limits: &Limits) -> (FileReport, Stats) {
 }
 
 pub fn valid_stream() -> Vec<u8> {
-    [record(HWPTAG_BEGIN + 50, 0, &[0u8; 22]), record(HWPTAG_BEGIN + 51, 1, &[0u8; 8]), record(HWPTAG_BEGIN + 55, 1, &[0u8; 8]), record(HWPTAG_BEGIN + 56, 2, &[0u8; 4]), record(HWPTAG_BEGIN + 50, 0, &[0u8; 22])].concat()
+    [
+        record(HWPTAG_BEGIN + 50, 0, &[0u8; 22]),
+        record(HWPTAG_BEGIN + 51, 1, &[0u8; 8]),
+        record(HWPTAG_BEGIN + 55, 1, &[0u8; 8]),
+        record(HWPTAG_BEGIN + 56, 2, &[0u8; 4]),
+        record(HWPTAG_BEGIN + 50, 0, &[0u8; 22]),
+    ]
+    .concat()
 }
 
 /// 매크로 프로젝트가 든 `.docx`의 바이트(매크로 없는 형식에 든 `vbaProject.bin`이라 Critical).

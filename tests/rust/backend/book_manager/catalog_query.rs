@@ -1,15 +1,15 @@
 #[path = "../common/mod.rs"]
 mod common;
-use backend::main::{BookManagerApi};
+use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, make_manager, tmp_dir};
+use backend::book_manager::{BookContent, BookManager, MAX_CATEGORY_RESULT_COUNT};
+use backend::book_metadata::BookPage;
+use backend::main::BookManagerApi;
+use common::es_fake::FakeEsManager;
+use common::log_capture::LogCapture;
+use serde_json::json;
 use std::collections::BTreeSet;
 use std::fs;
 use std::sync::{Arc, Mutex};
-use backend::book_metadata::BookPage;
-use backend::book_manager::{BookContent, BookManager, MAX_CATEGORY_RESULT_COUNT};
-use common::es_fake::FakeEsManager;
-use common::log_capture::LogCapture;
-use serde_json::{json};
-use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, make_manager, tmp_dir};
 
 // ---- coverage: get_book_content edge case ----
 

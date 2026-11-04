@@ -35,14 +35,14 @@ use crate::common::TestClient;
 #[allow(unused_imports)]
 pub use crate::common::clock::FakeClock;
 #[allow(unused_imports)]
-pub use crate::common::epub::{append_child, attr_of_element_with_id, BODY, CONTAINER_XML, count_elements};
+pub use crate::common::epub::{BODY, CONTAINER_XML, append_child, attr_of_element_with_id, count_elements};
 #[allow(unused_imports)]
 pub use crate::common::fsx::{files_under, sha256_hex};
 #[allow(unused_imports)]
-pub use crate::common::image::{BLUE, paste, RED, solid};
-#[allow(unused_imports)]
-pub use crate::common::zipx::{bytes_replace, Members};
+pub use crate::common::image::{BLUE, RED, paste, solid};
 use crate::common::zipx::options;
+#[allow(unused_imports)]
+pub use crate::common::zipx::{Members, bytes_replace};
 
 /// 단색 이미지를 `format`으로 인코딩한다. Python `Image.new("RGB", size, color).save(buf, format)`.
 pub fn encode_image(width: u32, height: u32, rgb: [u8; 3], format: ImageFormat) -> Vec<u8> {

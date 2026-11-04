@@ -11,8 +11,8 @@ use super::strerror;
 use super::temp_file_maker::unique_token;
 use super::{BookManager, Docs};
 
-mod page_image_editor;
 mod jpeg_encoder;
+mod page_image_editor;
 use page_image_editor::Edits;
 
 struct EditResult {

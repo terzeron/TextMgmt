@@ -1,11 +1,11 @@
 //! `bookdoctor::format_dispatcher` 단위 테스트.
 
 mod support;
-use std::path::Path;
 use bookdoctor::cli_parser::{Options, run, run_with_env};
-use bookdoctor::format_dispatcher::{dispatch_format, EXEC_EXTENSIONS, is_exec_extension, scan_file};
-use bookdoctor::{Category, FileReport, Format, Severity};
+use bookdoctor::format_dispatcher::{EXEC_EXTENSIONS, dispatch_format, is_exec_extension, scan_file};
 use bookdoctor::magic_sniffer::Sniffed;
+use bookdoctor::{Category, FileReport, Format, Severity};
+use std::path::Path;
 
 #[test]
 fn dispatch_follows_content_for_pdf_that_is_a_zip() {
@@ -351,8 +351,8 @@ fn non_executable_files_keep_the_size_limit_and_zero_tail_checks() {
 }
 
 mod html_scanner {
-    use crate::support::shared_fixtures::{scan};
-    use bookdoctor::{Format};
+    use crate::support::shared_fixtures::scan;
+    use bookdoctor::Format;
 
     fn utf16le_bom(s: &str) -> Vec<u8> {
         let mut out = vec![0xFF, 0xFE];
@@ -368,7 +368,12 @@ mod html_scanner {
 
     #[test]
     fn saved_pages_that_start_with_a_comment_or_meta_are_html_not_a_mismatch() {
-        for head in ["<!-- saved from url=(0030)http://example.com/ -->\n<html><body>hi</body></html>", "<meta charset=\"utf-8\"><p>fragment only</p>", "\u{feff}  <p>bom and spaces</p>", "plain text with no tags at all"] {
+        for head in [
+            "<!-- saved from url=(0030)http://example.com/ -->\n<html><body>hi</body></html>",
+            "<meta charset=\"utf-8\"><p>fragment only</p>",
+            "\u{feff}  <p>bom and spaces</p>",
+            "plain text with no tags at all",
+        ] {
             let r = scan("a.html", head.as_bytes());
             assert_eq!(r.format, Some(Format::Html), "{head}");
             assert!(!r.has("FORMAT_MISMATCH"), "{head}: {:?}", r.findings);
@@ -465,8 +470,8 @@ mod html_scanner {
 
     #[test]
     fn a_missing_or_unreadable_html_path_is_incomplete() {
-        use bookdoctor::format_dispatcher::scan_html_file;
         use bookdoctor::FileReport;
+        use bookdoctor::format_dispatcher::scan_html_file;
         use bookdoctor::magic_sniffer::Sniffed;
         let d = tempfile::tempdir().unwrap();
         let mut r = FileReport::new(&d.path().join("none.html"), None);

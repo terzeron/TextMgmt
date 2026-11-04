@@ -12,8 +12,8 @@ fn korean_slow_path_keeps_decoding_long_text_after_an_invalid_byte() {
     assert_eq!(decode_korean_ignore(&raw, false), "안녕하세요 ".repeat(200));
 }
 use common::*;
-use text_extractor::*;
 use std::fs;
+use text_extractor::*;
 
 const KOREAN: &str = "그는 아무 말도 하지 않았다 그리고 다시 길을 걸었다 바람이 불었다 ";
 

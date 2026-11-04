@@ -3,8 +3,8 @@ mod support;
 
 use std::fs;
 
-use bookdoctor::cli_parser::{Options, run};
 use crate::support::shared_fixtures::{has_vba_under, scan_bytes, vba_docx, zip_bytes};
+use bookdoctor::cli_parser::{Options, run};
 
 #[test]
 fn no_recurse_turns_the_nested_scan_off() {

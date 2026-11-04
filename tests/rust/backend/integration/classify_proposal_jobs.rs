@@ -4,13 +4,11 @@ mod common;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use backend::main::{
-    AppDeps, AuthMode, BookstoreFactory, CategoryMappingApi, ClientErrorLogModel, TaskHandle, TaskRunner, app_with,
-};
+use crate::common::shared_fixtures::enc;
+use crate::common::shared_fixtures::{MockBm, MockCat, mock_bm};
+use backend::main::{AppDeps, AuthMode, BookstoreFactory, CategoryMappingApi, ClientErrorLogModel, TaskHandle, TaskRunner, app_with};
 use common::TestClient;
 use serde_json::{Value, json};
-use crate::common::shared_fixtures::{enc};
-use crate::common::shared_fixtures::{MockBm, MockCat, mock_bm};
 
 fn admin_payload() -> Value {
     let exp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600;

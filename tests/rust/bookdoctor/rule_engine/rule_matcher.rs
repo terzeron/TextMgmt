@@ -1,4 +1,4 @@
-use bookdoctor::rule_engine::{parse, RuleSet};
+use bookdoctor::rule_engine::{RuleSet, parse};
 use std::time::{Duration, Instant};
 
 fn set(src: &str) -> RuleSet {
@@ -126,10 +126,12 @@ fn hostile_repeated_prefix_input_hits_the_work_limit_fast() {
 fn a_thousand_rules_over_a_megabyte_is_fast() {
     let mut seed = 7u32;
     let mut word = || {
-        (0..12).map(|_| {
-            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            char::from(b'a' + ((seed >> 24) % 26) as u8)
-        }).collect::<String>()
+        (0..12)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                char::from(b'a' + ((seed >> 24) % 26) as u8)
+            })
+            .collect::<String>()
     };
     let src: String = (0..1000).map(|i| format!("rule R{i} {{ strings: $a = \"{}\" condition: $a }}\n", word())).collect();
     let set = set(&src);

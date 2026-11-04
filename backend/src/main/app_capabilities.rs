@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::auth_service::HTTPException;
-use db::category_mapping::CategoryMapping;
 use crate::view_history_store::{ViewHistoryError, ViewHistoryStore};
+use db::category_mapping::CategoryMapping;
 
 pub(crate) use crate::book_manager::UNIMPLEMENTED;
 
@@ -447,6 +447,4 @@ mod tests {
         assert!(CategoryMappingApi::update_classify_proposal_item_payloads(&mapping, &[item], "book").is_err());
         assert!(CategoryMappingApi::update_classify_proposal_item_status(&mapping, "/a", "failed", None, "book").is_err());
     }
-
-
 }

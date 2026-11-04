@@ -5,8 +5,8 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use regex::Regex;
 use crate::{Category, FileReport, Severity};
+use regex::Regex;
 
 use crate::cli_parser::Options;
 use crate::mojibake_detector;

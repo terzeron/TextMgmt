@@ -54,17 +54,21 @@ mod env_helpers;
 mod log_capture;
 use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, empty_info, single_quoted_hrefs};
 
+use crate::common::shared_fixtures::{Call, Kind, failing, session};
+use crate::env_helpers::{EnvGuard, empty_env, map_env};
+use crate::log_capture::LogCapture;
+use bookstore::store_clients::{
+    _truncate_title, AbstractBookstore, AladinBookstore, BomtoonBookstore, JoaraBookstore, KakaoWebtoonBookstore, KyoboBookstore, LezhinBookstore, MAX_RESULTS, MunpiaBookstore, NaverSeriesBookstore,
+    NaverShoppingBookstore, NaverWebtoonBookstore, RidibooksBookstore, SearchRow, SoupSource, ToptoonBookstore, Yes24Bookstore, abstract_build_search_url, abstract_extract_book_info,
+    abstract_extract_search_links,
+};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::{fs, io};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering, Mutex};
-use bookstore::store_clients::{_truncate_title, abstract_build_search_url, abstract_extract_book_info, abstract_extract_search_links, AbstractBookstore, AladinBookstore, BomtoonBookstore, JoaraBookstore, KakaoWebtoonBookstore, KyoboBookstore, LezhinBookstore, MAX_RESULTS, MunpiaBookstore, NaverSeriesBookstore, NaverShoppingBookstore, NaverWebtoonBookstore, RidibooksBookstore, SearchRow, SoupSource, ToptoonBookstore, Yes24Bookstore};
-use serde_json::{json, Value};
+use std::sync::{Arc, Mutex, atomic::AtomicUsize, atomic::Ordering};
+use std::{fs, io};
 use sysdeps::{FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout};
 use tempfile::TempDir;
-use crate::env_helpers::{empty_env, EnvGuard, map_env};
-use crate::log_capture::LogCapture;
-use crate::common::shared_fixtures::{Call, Kind, failing, session};
 
 // ---------------------------------------------------------------------------
 // 공용 도구: 구상 서점 생성, 세션 대역, 결과 행

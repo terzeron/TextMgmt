@@ -3,10 +3,10 @@ mod support;
 
 use std::fs;
 
+use crate::support::shared_fixtures::finding;
 use bookdoctor::cli_parser::Options;
 use bookdoctor::format_dispatcher::scan_file;
 use bookdoctor::{Category, FileReport, Format, Severity};
-use crate::support::shared_fixtures::finding;
 
 fn hwpx(remove: &[&str], add: &[(&str, &[u8])]) -> FileReport {
     let d = tempfile::tempdir().unwrap();

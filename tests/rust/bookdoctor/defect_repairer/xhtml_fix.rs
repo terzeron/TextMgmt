@@ -5,10 +5,10 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use bookdoctor::epub::render_checker::xhtml_defect;
-use bookdoctor::defect_repairer::xhtml_fix::{rebuild, repair_markup, verify, Verdict};
-use support::*;
 use crate::support::shared_fixtures::{epub_bytes, member, names, run_in};
+use bookdoctor::defect_repairer::xhtml_fix::{Verdict, rebuild, repair_markup, verify};
+use bookdoctor::epub::render_checker::xhtml_defect;
+use support::*;
 
 fn fixed(src: &str) -> String {
     let out = repair_markup(src);
@@ -111,7 +111,9 @@ fn xml_forbidden_characters_and_invalid_names_are_dropped() {
 
 #[test]
 fn duplicate_attributes_and_odd_doctype_are_normalized() {
-    let out = fixed("<?xml version='1.0' encoding='utf-8'?>\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head></head><body><p class=\"a\" class=\"b\">글</p></body></html>");
+    let out = fixed(
+        "<?xml version='1.0' encoding='utf-8'?>\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head></head><body><p class=\"a\" class=\"b\">글</p></body></html>",
+    );
     assert_eq!(text(&out), "글");
     assert!(out.contains("<!DOCTYPE html>") && !out.contains("xhtml11.dtd"), "{out}");
 }

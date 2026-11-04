@@ -11,11 +11,11 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use text_extractor::{Zip, open_zip};
-use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 use ego_tree::NodeRef;
 use regex::Regex;
 use scraper::{Html, Node};
+use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
+use text_extractor::{Zip, open_zip};
 
 use crate::TEXT_SIZE;
 use crate::markup::{count_lines, get_body_text, is_blank_char_text};

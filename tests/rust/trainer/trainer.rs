@@ -1,12 +1,11 @@
-
 mod common;
+use crate::common::shared_fixtures::{fixture, run};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use trainer::{CliIo, Deps, main_with};
-use serde_json::{json, Value};
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{fixture, run};
+use trainer::{CliIo, Deps, main_with};
 
 #[test]
 fn cli_keeps_exit_codes_when_standard_output_or_error_is_closed() {

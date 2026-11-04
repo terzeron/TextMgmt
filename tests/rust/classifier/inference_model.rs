@@ -1,16 +1,18 @@
 //! `classifier::inference_model` 단위 테스트.
 
 mod common;
+use crate::common::shared_fixtures::{approx, options, real_holdout, trained, vocab};
+use classifier::export_format::{ModelError, sha256_hex};
+use classifier::inference_model::{
+    CategoryModel, CategoryModelApi, DEFAULT_MODEL_PATH, MODEL_DIR_ENV, fixed, get_default_model, model_path, rank_desc, reset_default_model, softmax_confidence, softmax_confidence_row,
+};
+use classifier::{BookCategoryClassifier, ClassifierOptions, classifier_config, model_trainer};
+use common::env::EnvGuard;
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
-use classifier::export_format::{ModelError, sha256_hex};
-use classifier::inference_model::{CategoryModel, CategoryModelApi, DEFAULT_MODEL_PATH, fixed, get_default_model, MODEL_DIR_ENV, model_path, rank_desc, reset_default_model, softmax_confidence, softmax_confidence_row};
-use serde_json::{json, Value};
-use classifier::{BookCategoryClassifier, classifier_config, ClassifierOptions, model_trainer};
-use tempfile::TempDir;
 use std::sync::Arc;
-use common::env::EnvGuard;
-use crate::common::shared_fixtures::{approx, options, real_holdout, trained, vocab};
+use tempfile::TempDir;
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/classifier_tiny");
 

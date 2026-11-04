@@ -1,10 +1,10 @@
 //! 카테고리 변경 적용 테스트의 옵션(`ApplyOpts`)과 실행 helper. 여러 테스트 파일의 같은 사본을 모았다.
 #![allow(dead_code)]
 
-use std::collections::BTreeSet;
+use super::shared_fixtures::outcome;
 use backend::book_manager::{ApplyOptions, BookManager};
 use serde_json::Value;
-use super::shared_fixtures::outcome;
+use std::collections::BTreeSet;
 
 /// `apply_category_changes`의 Python 키워드 인자 묶음(테스트 로컬). 구현의 `ApplyOptions`로 바꿔 부른다.
 pub struct ApplyOpts {

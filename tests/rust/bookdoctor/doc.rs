@@ -1,16 +1,15 @@
-
 mod support;
 use support::ole_common;
 
 use std::fs;
 
+use crate::support::shared_fixtures::finding;
+use crate::support::shared_fixtures::{doc_cfb, word_stream, write};
 use bookdoctor::cli_parser::Options;
 use bookdoctor::format_dispatcher::scan_file;
 use bookdoctor::viewer_block_table::viewer_blocked;
-use ole_common::{Cfb, compress, dir_stream, make_cfb, make_cfb_v4, module_stream};
 use bookdoctor::{Category, FileReport, Format, Severity, ViewerBlocked};
-use crate::support::shared_fixtures::{doc_cfb, word_stream, write};
-use crate::support::shared_fixtures::finding;
+use ole_common::{Cfb, compress, dir_stream, make_cfb, make_cfb_v4, module_stream};
 
 fn scan_doc(extra: &[(&str, &[u8])], flags1: u16, body: &[u8]) -> FileReport {
     let (_d, p) = write("a.doc", &doc_cfb(extra, flags1, body).bytes);
@@ -334,11 +333,9 @@ fn a_native_file_name_longer_than_the_display_limit_still_has_its_extension_chec
         s
     };
     let long = |ext: &str| format!("{}.{ext}", "A".repeat(400));
-    for (name, bytes) in [
-        ("label", native(&long("exe"), "C:\\x\\a.txt", "C:\\t\\a.txt")),
-        ("src", native("n.txt", &long("scr"), "C:\\t\\a.txt")),
-        ("temp", native("n.txt", "C:\\x\\a.txt", &long("bat"))),
-    ] {
+    for (name, bytes) in
+        [("label", native(&long("exe"), "C:\\x\\a.txt", "C:\\t\\a.txt")), ("src", native("n.txt", &long("scr"), "C:\\t\\a.txt")), ("temp", native("n.txt", "C:\\x\\a.txt", &long("bat")))]
+    {
         let r = scan_doc(&[("ObjectPool/_1/\u{1}Ole10Native", &bytes)], 0, b"hi");
         assert!(r.has("EMBEDDED_EXECUTABLE"), "{name}: {:?}", r.findings);
     }

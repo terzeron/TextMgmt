@@ -2,11 +2,11 @@
 #![allow(dead_code)]
 
 mod common;
-use std::collections::{HashSet};
-use std::sync::{Arc};
-use backend::main::{CategoryMappingApi, route_table};
-use serde_json::{json};
 use crate::common::shared_fixtures::{MockCat, mock_bm};
+use backend::main::{CategoryMappingApi, route_table};
+use serde_json::json;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_apply_job_marks_state_failed_when_book_manager_returns_error() {

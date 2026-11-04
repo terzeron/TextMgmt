@@ -3,13 +3,13 @@ mod fx;
 
 #[path = "../common/mod.rs"]
 mod common;
+use crate::common::pdf_edit_env::env;
+use crate::common::shared_fixtures::FetchImage;
+use crate::common::shared_fixtures::{error_text, split};
 use backend::book_manager::{BookManager, BookManagerDeps};
+use fx::{Opts, image_env};
 use serde_json::json;
 use std::sync::Arc;
-use fx::{image_env, Opts};
-use crate::common::shared_fixtures::{error_text, split};
-use crate::common::shared_fixtures::{FetchImage};
-use crate::common::pdf_edit_env::env;
 
 #[tokio::test]
 async fn custom_trash_directory_is_used() {
@@ -51,11 +51,11 @@ async fn url_preview_reports_safe_fetch_errors() {
 }
 
 mod upload_limits {
-    use crate::common::shared_fixtures::{error_text, split};
     use super::{common, fx};
+    use crate::common::shared_fixtures::{error_text, split};
     use backend::epub_cover::{EpubCoverHooks, Limits};
     use common::image::png_solid;
-    use fx::{image_env, Opts, with_deps};
+    use fx::{Opts, image_env, with_deps};
 
     /// `fx::env`가 만든 환경의 `BookManager`를 Deps 설정을 더해 다시 만든다. `loader`가 참이면 파일 읽기 대역도 꽂는다.
     // TODO(common): `book_fixtures::Opts`가 Deps 설정 훅(`configure: Option<Box<dyn FnOnce(BookManagerDeps) -> BookManagerDeps>>`)을 받으면 이 헬퍼가 필요 없다.
@@ -81,9 +81,9 @@ async fn test_upload_preview_rejects_oversized_data() {
 }
 
 mod backup_reporting {
-    use crate::common::shared_fixtures::{error_text};
-    use backend::es_manager::{Docs};
     use super::fx;
+    use crate::common::shared_fixtures::error_text;
+    use backend::es_manager::Docs;
     use fx::Opts;
 
     // ── 재색인 실패 ──

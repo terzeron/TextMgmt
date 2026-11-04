@@ -2,10 +2,10 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::fs;
-use classifier::book_classifier::*;
-use tempfile::TempDir;
 use crate::common::shared_fixtures::{fixture, s};
+use classifier::book_classifier::*;
+use std::fs;
+use tempfile::TempDir;
 
 #[test]
 fn test_map_category_rules() {

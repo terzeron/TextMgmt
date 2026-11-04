@@ -5,8 +5,8 @@ use crate::mysql_fixture;
 
 use std::collections::BTreeMap;
 
-use db::{DbError, DbValue, MysqlConfig, Row, connect_from_env, mysql_url, to_mysql_placeholders};
 use chrono::NaiveDate;
+use db::{DbError, DbValue, MysqlConfig, Row, connect_from_env, mysql_url, to_mysql_placeholders};
 
 fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
     let map: BTreeMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();

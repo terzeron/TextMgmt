@@ -1,18 +1,18 @@
 //! `classifier::corpus_collector` 단위 테스트.
 
 mod common;
+use crate::common::shared_fixtures::{VOCAB, floats, make_docs, parity, trained};
+use classifier::confidence_calibrator::{expected_accuracy, fit_expected_accuracy, from_coverage_report};
+use classifier::corpus_collector::{AttachOptions, IndexedJsonl, MAX_JSONL_LINE_BYTES, absolute_path, attach_publishers, attach_publishers_with, document, is_trainable, read_jsonl, write_jsonl, *};
+use classifier::model_trainer;
+use common::epub::{EpubSpec, make_epub};
+use common::es_dummy::DummyEs;
+use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use classifier::corpus_collector::{*, absolute_path, attach_publishers, attach_publishers_with, AttachOptions, document, IndexedJsonl, is_trainable, MAX_JSONL_LINE_BYTES, read_jsonl, write_jsonl};
-use common::es_dummy::DummyEs;
-use serde_json::{json, Value};
 use tempfile::TempDir;
-use classifier::model_trainer;
-use std::collections::HashSet;
-use common::epub::{EpubSpec, make_epub};
-use classifier::confidence_calibrator::{expected_accuracy, fit_expected_accuracy, from_coverage_report};
-use crate::common::shared_fixtures::{VOCAB, floats, make_docs, parity, trained};
 
 /// 구 `FakeEs(get_result, search_result, raise_on)`. `common::es_dummy::DummyEs`(색인 `books`)로 같은 응답과 실패를 만든다.
 fn fake_es(get_result: Value, search_result: Value, raise_on: &str) -> Arc<DummyEs> {

@@ -7,14 +7,14 @@ pub mod script_checker;
 
 use std::path::Path;
 
+use crate::magic_sniffer::Sniffed;
 use crate::ole_parser::OleFile;
 use crate::{Category, FileReport, Severity};
-use crate::magic_sniffer::Sniffed;
 
 use crate::cli_parser::Options;
 use crate::doc::{open_ole, report_anomalies};
-use std::io::Read;
 use flate2::read::{DeflateDecoder, ZlibDecoder};
+use std::io::Read;
 
 /// `.hwp` 하나를 검사한다. 내용이 OLE면 HWP 5.x, `HWP Document File V` 서명이면 HWP 3.x 이하다.
 /// HWP 3.x는 OLE가 아니므로 서명만 확인한다(갭 분석에 적었다).
@@ -243,6 +243,10 @@ pub fn decompress_prefix(data: &[u8], n: usize) -> Result<Vec<u8>, InflateError>
         let _ = DeflateDecoder::new(data).take(n as u64).read_to_end(&mut out);
         out
     };
-    let out = if looks_like_zlib(data) { Some(try_zlib(data)).filter(|o| !o.is_empty()).or_else(|| Some(try_raw(data))) } else { Some(try_raw(data)).filter(|o| !o.is_empty()).or_else(|| Some(try_zlib(data))) };
+    let out = if looks_like_zlib(data) {
+        Some(try_zlib(data)).filter(|o| !o.is_empty()).or_else(|| Some(try_raw(data)))
+    } else {
+        Some(try_raw(data)).filter(|o| !o.is_empty()).or_else(|| Some(try_zlib(data)))
+    };
     out.filter(|o| !o.is_empty()).ok_or(InflateError::Invalid)
 }

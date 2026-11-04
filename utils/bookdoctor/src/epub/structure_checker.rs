@@ -10,12 +10,12 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::LazyLock;
 
-use regex::bytes::Regex;
 use crate::{Category, FileReport, Severity};
+use regex::bytes::Regex;
 use zip::CompressionMethod;
 
-use text_extractor::{Zip, open_zip};
 use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
+use text_extractor::{Zip, open_zip};
 
 pub const EPUB_MIMETYPE: &[u8] = b"application/epub+zip";
 pub const ISSUE_NOT_ZIP: &str = "not_zip";

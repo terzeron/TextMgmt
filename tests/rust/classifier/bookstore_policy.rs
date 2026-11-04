@@ -1,17 +1,17 @@
 //! `classifier::bookstore_policy` 단위 테스트.
 
 mod common;
+use crate::common::shared_fixtures::{fixture, s};
+use classifier::book_classifier::{BookClassifierService, BookstoreDecider, DecideOptions};
+use classifier::bookstore_policy::{BookstorePolicy, bands_from_cuts, keyword_map, map_bookstore_candidates, map_bookstore_category, match_keyword, quantile_bands, reset_keyword_cache};
+use classifier::inference_model::Prediction;
+use classifier::{Classify, bookstore_policy};
+use serde_json::{Value, json};
+use std::cell::Cell;
 use std::fs;
 use std::path::Path;
-use classifier::bookstore_policy::{bands_from_cuts, BookstorePolicy, keyword_map, map_bookstore_candidates, map_bookstore_category, match_keyword, quantile_bands, reset_keyword_cache};
-use serde_json::{json, Value};
-use std::cell::Cell;
-use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering, Mutex, MutexGuard};
-use classifier::book_classifier::{BookClassifierService, BookstoreDecider, DecideOptions};
-use classifier::{bookstore_policy, Classify};
-use classifier::inference_model::Prediction;
+use std::sync::{Arc, Mutex, MutexGuard, atomic::AtomicUsize, atomic::Ordering};
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{fixture, s};
 
 #[test]
 fn keyword_mapping_matches_python() {

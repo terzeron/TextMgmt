@@ -6,14 +6,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::common::pdf_env::{Env, env};
+use crate::common::shared_fixtures::create_test_pdf;
 use backend::book_manager::BookManagerDeps;
 use backend::main::{AppDeps, AuthMode, app_with};
 use backend::pdf_page_reader::{LopdfPageOps, PdfPageOps};
 use common::TestClient;
-use common::pdf::{page_count_bytes};
+use common::pdf::page_count_bytes;
 use serde_json::json;
-use crate::common::shared_fixtures::{create_test_pdf};
-use crate::common::pdf_env::{Env, env};
 
 /// 비내장 UHC 한글 글꼴과 쪽별 content/주석으로 원본 객체 보존을 확인한다.
 fn make_korean_annotation_pdf(path: &Path, encrypted: bool) {

@@ -36,15 +36,15 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::{common, mysql_fixture};
 
-use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
+use crate::common::shared_fixtures::now;
 use backend::refresh_token_store::{
     _rotation_grace_seconds, AnyRefreshTokenStore, DEFAULT_ROTATION_GRACE_SECONDS, MAX_USER_AGENT_LENGTH, MySQLRefreshTokenStore, RefreshTokenStoreApi, Rotation, SessionQuery,
     create_refresh_token_store, create_refresh_token_store_with, summarize_user_agent,
 };
 use common::env::EnvGuard;
 use common::log_capture::LogCapture;
+use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
 use serde_json::{Value, json};
-use crate::common::shared_fixtures::{now};
 
 fn fam(c: char) -> String {
     c.to_string().repeat(32)

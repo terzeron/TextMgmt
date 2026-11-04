@@ -15,7 +15,7 @@ use super::error_responses::{ApiError, ApiResult};
 use super::request_extractors::{ApiJson, RequireAdmin};
 use super::route_registry::Routes;
 use super::routes_books::parse_book_id;
-use crate::book_manager::{BookManagerApi};
+use crate::book_manager::BookManagerApi;
 use crate::epub_cover::MAX_IMAGE_BYTES;
 
 pub(super) fn routes() -> Routes {

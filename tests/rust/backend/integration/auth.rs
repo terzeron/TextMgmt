@@ -44,21 +44,21 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::sync::{Arc};
+use crate::common::auth_fakes::{FixedRole, access_token};
+use crate::common::shared_fixtures::now;
+use crate::common::shared_fixtures::{FakeStore, decode, encode_hs256, fixture, make_request};
 use axum::Router;
+use axum::body::Body;
 use axum::http::{Method, Request};
 use backend::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, TokenIssuer};
-use backend::main::{ACCESS_COOKIE_NAME, app_with, AppDeps, AuthMode, GoogleVerifier, observation_hash, REFRESH_COOKIE_NAME, RequestValidationError};
-use backend::refresh_token_store::{RefreshTokenStoreApi};
+use backend::main::{ACCESS_COOKIE_NAME, AppDeps, AuthMode, GoogleVerifier, REFRESH_COOKIE_NAME, RequestValidationError, app_with, observation_hash};
+use backend::refresh_token_store::RefreshTokenStoreApi;
 use common::env::EnvGuard;
 use common::log_capture::LogCapture;
 use common::{Response, TestClient};
-use serde_json::{json, Value};
-use axum::body::Body;
+use serde_json::{Value, json};
+use std::sync::Arc;
 use tower::ServiceExt;
-use crate::common::shared_fixtures::{now};
-use crate::common::shared_fixtures::{FakeStore, decode, encode_hs256, fixture, make_request};
-use crate::common::auth_fakes::{FixedRole, access_token};
 
 // ---- HTTP 응답 헬퍼 ----
 
@@ -600,8 +600,7 @@ fn with_client_headers(c: TestClient) -> TestClient {
 async fn test_google_login_records_real_client_ip() {
     let _env = fixture();
     let store = FakeStore::new();
-    let deps =
-        auth_deps().with_google_verifier(fake_google("cid", |_credential, audience| Ok(valid_google_claims(audience)))).with_role_resolver(role("user")).with_refresh_token_store(store.clone());
+    let deps = auth_deps().with_google_verifier(fake_google("cid", |_credential, audience| Ok(valid_google_claims(audience)))).with_role_resolver(role("user")).with_refresh_token_store(store.clone());
 
     let resp = with_client_headers(client(&auth_app(deps))).post_json("/auth/google", &json!({"credential": "c"})).await;
 
@@ -885,9 +884,7 @@ async fn bearer_only_cli_requests_and_anonymous_debug_logs_remain_usable() {
     assert_eq!(request(&app, Method::POST, "/auth/logout", &[("authorization", &bearer)], "").await.status(), 200);
     assert_eq!(store.revoked_families.lock().unwrap().len(), 1);
     assert_eq!(
-        request(&app, Method::POST, "/logs/client-error", &[("content-type", "application/json"), ("origin", ATTACKER)], r#"{"error_type":"CUSTOM_ERROR","message":"test","url":"/"}"#)
-            .await
-            .status(),
+        request(&app, Method::POST, "/logs/client-error", &[("content-type", "application/json"), ("origin", ATTACKER)], r#"{"error_type":"CUSTOM_ERROR","message":"test","url":"/"}"#).await.status(),
         200
     );
 }
@@ -954,8 +951,7 @@ async fn test_emits_structured_masked_event() {
     assert!(text.contains("status=reused"), "{text}");
     assert!(text.contains("replaced_by_present=true"), "{text}");
     // 모든 식별자는 HMAC 해시로만 남는다
-    for (field, raw) in [("email_hash", RAW_EMAIL), ("family_hash", "observed-family"), ("jti_hash", "observed-jti"), ("request_user_agent_hash", RAW_UA), ("request_ip_prefix_hash", "203.0.113")]
-    {
+    for (field, raw) in [("email_hash", RAW_EMAIL), ("family_hash", "observed-family"), ("jti_hash", "observed-jti"), ("request_user_agent_hash", RAW_UA), ("request_ip_prefix_hash", "203.0.113")] {
         let expected = format!("{field}={}", observation_hash(raw));
         assert!(text.contains(&expected), "{expected} not in {text}");
     }

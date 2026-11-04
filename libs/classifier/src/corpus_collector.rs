@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use fancy_regex::Regex;
 use serde_json::{Map, Value, json};
 
-use super::py_json_writer;
 use super::document_reader::read_epub_publisher;
+use super::py_json_writer;
 use es_client::transport::EsTransport;
 
 /// ES 에서 가져올 필드. `summary` 가 본문 앞부분이다.

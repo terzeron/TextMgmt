@@ -59,21 +59,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use crate::common::shared_fixtures::{BookRow, CATEGORY, ListDirFs};
+use crate::common::shared_fixtures::{enc, now_secs, process_env, split};
 use axum::http::Method;
 use axum::response::IntoResponse;
 use backend::auth_service::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
-use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::book_manager::{BookContent, BookDeletion, BookManager, BookManagerApi, BookResponse};
-use db::category_mapping::CategoryMapping;
+use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
 use backend::main::{AppDeps, AuthMode, BookstoreFactory, BookstoreSearch, CategoryMappingApi, CustomJSONResponse, GoogleVerifier, MappingError, RoleResolver, Slot, app_with};
 use common::{TestClient, env::EnvGuard, es_fake::FakeEsManager};
+use db::category_mapping::CategoryMapping;
 use serde_json::{Value, json};
 use sysdeps::{FsOps, SystemClock};
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{enc, now_secs, process_env, split};
-use crate::common::shared_fixtures::{BookRow, CATEGORY, ListDirFs};
 
 #[test]
 fn backend_binary_dispatches_the_isbn_pdf_worker_command() {

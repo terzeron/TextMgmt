@@ -3,7 +3,7 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use bookdoctor::cli_parser::{execute, parse, Options};
+use bookdoctor::cli_parser::{Options, execute, parse};
 use bookdoctor::defect_repairer::*;
 
 const OLE_AS_UTF16_CHARS: &str = "\u{cfd0}\u{e011}\u{b1a1}\u{e11a}";

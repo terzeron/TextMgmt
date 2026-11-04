@@ -1,14 +1,13 @@
-
 mod support;
-use support::ole_common;
-use std::fs;
-use bookdoctor::cli_parser::Options;
-use bookdoctor::format_dispatcher::scan_file;
-use ole_common::{compress, dir_stream, make_cfb, module_stream};
-use bookdoctor::{FileReport, Format};
-use bookdoctor::hwp::{decompress, decompress_prefix, InflateError};
 use crate::support::shared_fixtures::{JSCRIPT_VERSION, TAG_SHAPE_COMPONENT_OLE, bin_data_link, default_jscript, file_header, finding, pe_bytes, raw_deflate, record, scan, valid_stream, zlib};
 use crate::support::shared_fixtures::{hwp_cfb, scan_cfb};
+use bookdoctor::cli_parser::Options;
+use bookdoctor::format_dispatcher::scan_file;
+use bookdoctor::hwp::{InflateError, decompress, decompress_prefix};
+use bookdoctor::{FileReport, Format};
+use ole_common::{compress, dir_stream, make_cfb, module_stream};
+use std::fs;
+use support::ole_common;
 
 const HWP3_SIGNATURE: &[u8] = b"HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05";
 
@@ -143,7 +142,12 @@ fn byte_mutations_of_a_full_hwp_never_panic_or_stall() {
     ])
     .bytes;
     let clean = scan("base.hwp", &base);
-    assert!(clean.has("HWP_LINKED_FILE") && clean.has("HWP_SCRIPT_SUSPICIOUS") && clean.has("EMBEDDED_EXECUTABLE") && clean.has("HWP_OLE_OBJECT"), "the unmutated file must exercise every path: {:?} {:?}", clean.findings, clean.reasons);
+    assert!(
+        clean.has("HWP_LINKED_FILE") && clean.has("HWP_SCRIPT_SUSPICIOUS") && clean.has("EMBEDDED_EXECUTABLE") && clean.has("HWP_OLE_OBJECT"),
+        "the unmutated file must exercise every path: {:?} {:?}",
+        clean.findings,
+        clean.reasons
+    );
     let mut seed = 0xC0FF_EE11u32;
     let mut next = move || {
         seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
@@ -195,7 +199,12 @@ fn truncated_and_garbage_are_invalid() {
     assert_eq!(decompress(&[0xFF, 0xEE, 0xDD, 0xCC, 0xBB], 1 << 20), Err(InflateError::Invalid));
     let mut seed = 99u32;
     for _ in 0..200 {
-        let bytes: Vec<u8> = (0..128).map(|_| { seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223); (seed >> 24) as u8 }).collect();
+        let bytes: Vec<u8> = (0..128)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 24) as u8
+            })
+            .collect();
         let _ = decompress(&bytes, 1 << 16); // panic하지 않는다.
     }
 }

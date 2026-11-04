@@ -2,12 +2,12 @@
 
 #[path = "../common/mod.rs"]
 mod common;
+use crate::common::es_fake::FakeEsManager;
+use crate::common::shared_fixtures::outcome;
 use backend::book_manager::BookManagerDeps;
 use backend::comics_manager::ComicsManager;
 use backend::main::{ApplyCategoryChanges, BookManagerApi, ProposeCategoryChanges};
-use crate::common::es_fake::FakeEsManager;
 use serde_json::json;
-use crate::common::shared_fixtures::{outcome};
 
 #[tokio::test]
 async fn test_category_proposals_delegate_to_shared_comics_logic() {

@@ -6,7 +6,7 @@ mod rule_matcher;
 mod rule_parser;
 
 pub use rule_matcher::{Compiled, DEFAULT_WORK_BUDGET, RuleMatch, ScanOutcome, StringMatch};
-pub use rule_parser::{MAX_RULES, MAX_SOURCE, MAX_STRINGS, MAX_STRING_BYTES, MAX_TERMS, parse};
+pub use rule_parser::{MAX_RULES, MAX_SOURCE, MAX_STRING_BYTES, MAX_STRINGS, MAX_TERMS, parse};
 
 use crate::Severity;
 
@@ -65,11 +65,20 @@ pub enum Cond {
     /// `$id`: 문자열이 한 번이라도 일치한다.
     Str(String),
     /// `#id op n`: 일치 횟수를 비교한다.
-    Count { id: String, op: Cmp, n: u64 },
+    Count {
+        id: String,
+        op: Cmp,
+        n: u64,
+    },
     /// `$id at n`: 오프셋 `n`에서 일치한다.
-    At { id: String, offset: u64 },
+    At {
+        id: String,
+        offset: u64,
+    },
     /// `any|all|N of them`.
-    Of { quant: Quant },
+    Of {
+        quant: Quant,
+    },
     And(Box<Cond>, Box<Cond>),
     Or(Box<Cond>, Box<Cond>),
     Not(Box<Cond>),

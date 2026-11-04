@@ -1,11 +1,11 @@
 //! HWP V3.00/V2.10/V2.00 텍스트 추출기 테스트 (tests/test_hwp3_parser.py 이식).
 mod common;
-use std::fs;
-use std::io::Write;
 use flate2::Compression;
 use flate2::write::DeflateEncoder;
-use hwp3_parser::*;
 use hwp3_parser::tables::HNC2UNI;
+use hwp3_parser::*;
+use std::fs;
+use std::io::Write;
 
 use common::shared_fixtures::{codes, le16, pack};
 

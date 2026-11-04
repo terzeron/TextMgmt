@@ -1,14 +1,16 @@
 mod common;
-use classifier::{classifier_config, model_trainer};
+use crate::common::shared_fixtures::{approx, parity, trained, vocab};
 use classifier::corpus_collector::{IndexedJsonl, write_jsonl};
 use classifier::inference_model::CategoryModel;
-use classifier::model_trainer::{blake2b_keyed, coverage_curve, document_key, evaluate, filter_by_size, format_report, holdout_document_keys, max_coverage_at, rss_note_with, split_holdout, TrainOptions};
-use serde_json::{json, Value};
-use tempfile::TempDir;
+use classifier::model_trainer::{
+    TrainOptions, blake2b_keyed, coverage_curve, document_key, evaluate, filter_by_size, format_report, holdout_document_keys, max_coverage_at, rss_note_with, split_holdout,
+};
+use classifier::{classifier_config, model_trainer};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::common::shared_fixtures::{approx, parity, trained, vocab};
+use tempfile::TempDir;
 
 fn training_data() -> Vec<Value> {
     let mut docs = Vec::new();
@@ -155,7 +157,9 @@ fn spilled_training_releases_holdout_source_text_and_keeps_metrics() {
     let original_docs = docs.clone();
     let cfg = config();
     let held: std::collections::HashSet<String> =
-        model_trainer::holdout_document_keys(&docs, cfg["corpus"]["min_per_category"].as_u64().unwrap() as usize, cfg["holdout"].as_f64().unwrap(), cfg["seed"].as_u64().unwrap()).into_iter().collect();
+        model_trainer::holdout_document_keys(&docs, cfg["corpus"]["min_per_category"].as_u64().unwrap() as usize, cfg["holdout"].as_f64().unwrap(), cfg["seed"].as_u64().unwrap())
+            .into_iter()
+            .collect();
     let (_, expected_holdout) = model_trainer::split_holdout(&original_docs, cfg["holdout"].as_f64().unwrap(), cfg["seed"].as_u64().unwrap());
     let (expected_model, _) = model_trainer::train(&mut original_docs.clone(), &cfg, TrainOptions::default()).unwrap();
     let expected = model_trainer::evaluate(&expected_model, &expected_holdout, None);

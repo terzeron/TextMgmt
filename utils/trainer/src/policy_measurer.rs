@@ -15,11 +15,12 @@ impl LiveStores {
         use classifier::{BookCategoryClassifier, ClassifierOptions};
         let root = std::path::Path::new("/mnt/data/text");
         let classifier = std::sync::Arc::new(BookCategoryClassifier::new(None, ClassifierOptions::default()));
-        let service = classifier::book_classifier::BookClassifierService::new(root, None, Some(classifier)).with_delay(delay).with_keyword_loader(classifier::bookstore_policy::keyword_loader(|content_type| {
-            let mapping = db::category_mapping::CategoryMapping::new().map_err(|e| e.to_string())?;
-            let all = mapping.get_all_mappings(content_type).map_err(|e| e.to_string())?;
-            Ok(serde_json::json!(all))
-        }));
+        let service =
+            classifier::book_classifier::BookClassifierService::new(root, None, Some(classifier)).with_delay(delay).with_keyword_loader(classifier::bookstore_policy::keyword_loader(|content_type| {
+                let mapping = db::category_mapping::CategoryMapping::new().map_err(|e| e.to_string())?;
+                let all = mapping.get_all_mappings(content_type).map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(all))
+            }));
         Self { service: std::sync::Mutex::new(service) }
     }
 }

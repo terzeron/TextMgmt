@@ -2,22 +2,22 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use backend::epub_cover::{CoverError, edit_images, edit_images_with, EditImages, EpubCoverHooks, Limits, revision};
-use serde_json::{json, Value};
-use tempfile::TempDir;
-use common::epub::{EpubSpec, make_epub};
-use doc_reader::TEXT_SIZE;
-use doc_reader::epub::{EpubHooks, EpubPath, EpubRead, read_from_epub, read_from_epub_with, read_from_epub_with_extracting_zip};
-use std::fs::File;
-use std::time::Duration;
+use crate::common::epub_book::{Book, book};
+use crate::common::shared_fixtures::{assert_refused, full};
 use backend::book_manager::BookManager;
+use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, Limits, edit_images, edit_images_with, revision};
+use common::epub::{EpubSpec, make_epub};
 use common::faulty_fs::FaultyFs;
 use common::fsx::set_mtime_ago;
-use crate::common::shared_fixtures::{assert_refused, full};
-use crate::common::epub_book::{Book, book};
+use doc_reader::TEXT_SIZE;
+use doc_reader::epub::{EpubHooks, EpubPath, EpubRead, read_from_epub, read_from_epub_with, read_from_epub_with_extracting_zip};
+use serde_json::{Value, json};
+use std::fs;
+use std::fs::File;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tempfile::TempDir;
 
 #[test]
 fn test_empty_and_duplicate_requests_are_rejected() {
@@ -168,13 +168,12 @@ fn libreoffice_without_an_output_file_returns_empty_text_and_logs_the_directory(
 }
 
 mod xml_safety_and_cursors {
+    use super::common;
     use crate::common::shared_fixtures::epub_with_missing_page;
     use crate::common::shared_fixtures::{tmp_dir, verdict};
-    use super::common;
     use std::borrow::Cow;
 
     use std::fs;
-
 
     use backend::book_manager::{_declare_unbound_prefixes, _safe_xml_parser, BookManager, decode_category_cursor, encode_category_cursor};
 
@@ -337,7 +336,7 @@ mod xml_safety_and_cursors {
 }
 
 mod image_downscaling {
-    use crate::common::shared_fixtures::{image_bytes};
+    use crate::common::shared_fixtures::image_bytes;
 
     use backend::book_manager::BookManager;
 
@@ -352,8 +351,8 @@ mod image_downscaling {
 }
 
 mod find_opf_path {
-    use crate::common::shared_fixtures::{CONTAINER_XML};
-    use crate::common::shared_fixtures::{write_zip_stored};
+    use crate::common::shared_fixtures::CONTAINER_XML;
+    use crate::common::shared_fixtures::write_zip_stored;
 
     use std::fs::File;
 
@@ -594,7 +593,7 @@ fn test_just_written_cache_file_is_not_evicted() {
 
 mod validate_preview_epub {
     use crate::common::preview_epubs::{OPF_NS, create_corrupted_epub, create_epub_with_invalid_spine, create_epub_without_spine, create_test_epub};
-    use crate::common::shared_fixtures::{CONTAINER_XML};
+    use crate::common::shared_fixtures::CONTAINER_XML;
     use crate::common::shared_fixtures::{chapter, err_has, make_opf, ns_children, ns_nodes, verdict, write_zip_stored, zip_read_string};
     use std::fs;
     use std::fs::File;

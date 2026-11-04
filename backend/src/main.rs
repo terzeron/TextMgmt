@@ -18,43 +18,43 @@ use axum::Router;
 use axum::middleware::from_fn;
 use std::sync::Arc;
 
-mod auth_routes;
-mod auth_cookies;
-mod cors_layer;
+mod app_capabilities;
 mod app_deps;
+mod auth_cookies;
+mod auth_routes;
+mod cors_layer;
 mod error_responses;
-mod request_extractors;
 mod google_oauth;
 mod log_routes;
+mod request_extractors;
 mod route_registry;
 mod routes_books;
-mod routes_cover;
 mod routes_bookstore;
+mod routes_cover;
 mod routes_epub_cover;
 mod routes_health;
 mod routes_mapping;
 mod routes_pdf;
 mod routes_view_history;
-mod app_capabilities;
 
 pub use crate::auth_service::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RoleResolver, observation_hash};
-pub use bookstore::store_clients::BookstoreSearch;
+pub use crate::book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
+pub use crate::task_runner::{InlineRunner, TaskHandle, TaskRunner, ThreadRunner};
 pub use crate::view_history_store::MAX_RECENT_VIEWS;
-pub use request_extractors::{_client_ip, _request_ip_prefix, _request_user_agent, ClientInfo};
-pub use auth_cookies::{_clear_auth_cookies, _get_cookie_settings, _set_auth_cookies, CustomJSONResponse, ResponseHeaders, custom_jsonable_encoder, is_local_frontend_origin};
+pub use app_capabilities::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, MappingError, UnavailableBookAccess, UnavailableGoogleVerifier, ViewHistoryApi};
 pub use app_deps::{AppDeps, AuthMode, AuthSlots, BookstoreFactory, RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS, Slot};
+pub use auth_cookies::{_clear_auth_cookies, _get_cookie_settings, _set_auth_cookies, CustomJSONResponse, ResponseHeaders, custom_jsonable_encoder, is_local_frontend_origin};
+pub use bookstore::store_clients::BookstoreSearch;
 pub use error_responses::{
     ApiError, ApiResult, GENERIC_SERVER_ERROR_DETAIL, RequestValidationError, SERVICE_UNAVAILABLE_DETAIL, VALIDATION_ERROR_DETAIL, general_exception_handler, http_exception_handler, json_response,
     summarize_request_body, validation_exception_handler,
 };
-pub(crate) use request_extractors::parse_py_bool;
-pub use request_extractors::{ApiJson, ApiQuery, OptionalAuth, RequireAdmin, RequireAuth};
 pub use google_oauth::{GoogleIdTokenVerifier, GoogleJwksFetcher};
 pub use log_routes::{CLIENT_ERROR_FIELD_LIMITS, ClientErrorLogModel};
+pub(crate) use request_extractors::parse_py_bool;
+pub use request_extractors::{_client_ip, _request_ip_prefix, _request_user_agent, ClientInfo};
+pub use request_extractors::{ApiJson, ApiQuery, OptionalAuth, RequireAdmin, RequireAuth};
 pub use route_registry::{RouteInfo, Routes};
-pub use crate::book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
-pub use crate::task_runner::{InlineRunner, TaskHandle, TaskRunner, ThreadRunner};
-pub use app_capabilities::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, MappingError, UnavailableBookAccess, UnavailableGoogleVerifier, ViewHistoryApi};
 
 /// Python 쪽 이름. `view_history_api` 테스트가 쓴다.
 pub type HttpException = HTTPException;

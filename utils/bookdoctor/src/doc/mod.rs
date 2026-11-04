@@ -6,8 +6,8 @@ pub mod rtf_checker;
 use std::io::Read;
 use std::path::Path;
 
-use crate::ole_parser::{Anomaly, EntryKind, Limits as OleLimits, OleError, OleFile, vba_decoder};
 use crate::magic_sniffer::{Sniffed, sniff};
+use crate::ole_parser::{Anomaly, EntryKind, Limits as OleLimits, OleError, OleFile, vba_decoder};
 use crate::output_formatter::sanitize_display;
 use crate::{Category, FileReport, Severity};
 
@@ -115,7 +115,15 @@ fn severity_of(a: &Anomaly) -> Severity {
 
 /// 파서를 속여 무한 루프·큰 할당·범위 밖 읽기를 유도하는 데 쓰는 이상인가.
 fn abusable(a: &Anomaly) -> bool {
-    matches!(a, Anomaly::FatChainCycle { .. } | Anomaly::SectorOutOfRange { .. } | Anomaly::DirectoryCycle | Anomaly::TooManyEntries(_) | Anomaly::StreamSizeExceedsFile { .. } | Anomaly::CrossLinkedSectors { .. })
+    matches!(
+        a,
+        Anomaly::FatChainCycle { .. }
+            | Anomaly::SectorOutOfRange { .. }
+            | Anomaly::DirectoryCycle
+            | Anomaly::TooManyEntries(_)
+            | Anomaly::StreamSizeExceedsFile { .. }
+            | Anomaly::CrossLinkedSectors { .. }
+    )
 }
 
 fn push_once(report: &mut FileReport, category: Category, severity: Severity, code: &str, location: &str, detail: &str) {
@@ -144,7 +152,14 @@ pub(crate) fn report_anomalies(file: &OleFile, report: &mut FileReport) {
         report.mark_incomplete(&format!("{} structure anomalies; only the first {MAX_ANOMALY_FINDINGS} are listed", anomalies.len()));
     }
     if anomalies.iter().any(abusable) {
-        push_once(report, Category::Security, Severity::High, "OLE_MALFORMED_STRUCTURE", "", "OLE structure is malformed in ways that trigger parser bugs (loops, out-of-range sectors, shared sectors, size lies)");
+        push_once(
+            report,
+            Category::Security,
+            Severity::High,
+            "OLE_MALFORMED_STRUCTURE",
+            "",
+            "OLE structure is malformed in ways that trigger parser bugs (loops, out-of-range sectors, shared sectors, size lies)",
+        );
     }
 }
 

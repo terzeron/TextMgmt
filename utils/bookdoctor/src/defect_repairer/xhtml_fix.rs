@@ -12,18 +12,22 @@ use std::fs;
 use std::io::{self, Write};
 use std::sync::LazyLock;
 
-use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 use regex::Regex;
 use scraper::{Html, Node};
+use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 
 use crate::cli_parser::Options;
 use crate::epub::render_checker::xhtml_defect;
-use crate::epub_sanitizer::{HTML_EXTS, Member, apply, create_private_temp, dangling, decode, ext_of, has_serious_security, is_subsequence, package_names, package_text, read_members, read_members_lenient, show, visible_text, write_members};
+use crate::epub_sanitizer::{
+    HTML_EXTS, Member, apply, create_private_temp, dangling, decode, ext_of, has_serious_security, is_subsequence, package_names, package_text, read_members, read_members_lenient, show, visible_text,
+    write_members,
+};
 use crate::format_dispatcher::scan_file;
 
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 const HTML_VOID: &[&str] = &["area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input", "keygen", "link", "meta", "param", "source", "track", "wbr"];
-const SKELETON: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\n<head>\n  <title></title>\n</head>\n<body>\n  <p></p>\n</body>\n</html>\n";
+const SKELETON: &str =
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\n<head>\n  <title></title>\n</head>\n<body>\n  <p></p>\n</body>\n</html>\n";
 
 fn re(p: &str) -> Regex {
     Regex::new(p).unwrap_or_else(|e| panic!("잘못된 정규식 {p}: {e}"))
@@ -308,9 +312,7 @@ fn drop_from_ncx(text: &str, ncx_name: &str, dropped: &BTreeSet<String>) -> Stri
 /// 본문 링크 중 지운 멤버를 가리키는 `href`를 지운다(글자는 남긴다).
 fn drop_links(text: &str, member: &str, dropped: &BTreeSet<String>) -> String {
     let base = posix_dirname(member);
-    ATTR_LINK
-        .replace_all(text, |c: &regex::Captures| if dropped.contains(&resolve(&base, attr_value(c))) { String::new() } else { c[0].to_owned() })
-        .into_owned()
+    ATTR_LINK.replace_all(text, |c: &regex::Captures| if dropped.contains(&resolve(&base, attr_value(c))) { String::new() } else { c[0].to_owned() }).into_owned()
 }
 
 fn is_utf16(data: &[u8]) -> bool {

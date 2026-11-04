@@ -2,13 +2,13 @@
 
 #[path = "../support/mod.rs"]
 mod support;
-use std::path::Path;
-use bookdoctor::epub::{security_checker::decode_calls, security_checker::Limits, security_checker::scan as scan_into};
+use crate::support::shared_fixtures::{binary, has, patch_central};
+use bookdoctor::epub::{security_checker::Limits, security_checker::decode_calls, security_checker::scan as scan_into};
 use bookdoctor::{FileReport, Format, Severity};
 use std::fs;
 use std::io::Write;
+use std::path::Path;
 use support::*;
-use crate::support::shared_fixtures::{binary, has, patch_central};
 
 fn scan_counting(path: &Path) -> (FileReport, usize) {
     let before = decode_calls();
@@ -140,11 +140,11 @@ fn encrypted_and_unsupported_compression_entries_are_noted_not_read() {
 
 mod budget_and_encoding_evasion {
     use super::scan_chapter;
-    use crate::support::shared_fixtures::{codes, forge_declared_size, has, scan_with, scan_with_stats};
     use super::support;
-    use bookdoctor::epub::{security_checker::Limits};
-    use support::*;
+    use crate::support::shared_fixtures::{codes, forge_declared_size, has, scan_with, scan_with_stats};
+    use bookdoctor::epub::security_checker::Limits;
     use bookdoctor::{FileReport, Severity};
+    use support::*;
 
     fn sev(r: &FileReport, code: &str) -> Severity {
         r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} 없음: {:?}", codes(r))).severity
@@ -230,11 +230,7 @@ mod budget_and_encoding_evasion {
 
     #[test]
     fn url_attributes_with_any_namespace_prefix_are_checked() {
-        for body in [
-            r#"<a x:href="javascript:alert(1)">x</a>"#,
-            r#"<img foo:src="javascript:alert(1)"/>"#,
-            r#"<form bar:action="javascript:alert(1)"></form>"#,
-        ] {
+        for body in [r#"<a x:href="javascript:alert(1)">x</a>"#, r#"<img foo:src="javascript:alert(1)"/>"#, r#"<form bar:action="javascript:alert(1)"></form>"#] {
             let r = scan_chapter(body);
             assert_eq!(sev(&r, "JS_URL"), Severity::High, "{body}: {:?}", codes(&r));
         }
@@ -461,15 +457,15 @@ mod budget_and_encoding_evasion {
 }
 
 mod active_content {
+    use super::support;
     use super::{scan, scan_chapter};
     use crate::support::shared_fixtures::{codes, has, patch_central, scan_with, scan_with_stats};
-    use super::support;
+    use bookdoctor::epub::{security_checker::Limits, security_checker::guarded};
+    use bookdoctor::{Category, FileReport, Format, Severity};
     use std::fs;
     use std::io::Write;
     use std::path::Path;
     use support::*;
-    use bookdoctor::epub::{security_checker::guarded, security_checker::Limits};
-    use bookdoctor::{Category, FileReport, Format, Severity};
 
     fn severity_of(r: &FileReport, code: &str) -> Severity {
         r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} 없음: {:?}", codes(r))).severity
@@ -627,7 +623,8 @@ mod active_content {
 
     #[test]
     fn remote_resources_are_low_and_require_the_opf_declaration() {
-        let r = scan_chapter(r#"<img src="https://tracker.example/p.gif"><link rel="stylesheet" href="http://x.example/a.css"><video src="https://x.example/v.mp4"></video><source src="//x.example/a">"#);
+        let r =
+            scan_chapter(r#"<img src="https://tracker.example/p.gif"><link rel="stylesheet" href="http://x.example/a.css"><video src="https://x.example/v.mp4"></video><source src="//x.example/a">"#);
         assert_eq!(severity_of(&r, "REMOTE_RESOURCE"), Severity::Low);
         assert!(has(&r, "UNDECLARED_REMOTE_RESOURCES"));
 
@@ -666,8 +663,10 @@ mod active_content {
 
     #[test]
     fn css_files_are_scanned() {
-        let r =
-            scan_extra("OEBPS/a.css", b"@import url(http://evil.example/a.css); p{background:url(javascript:alert(1))} q{background:url('https://x.example/i.png')} @import 'https://y.example/b.css';");
+        let r = scan_extra(
+            "OEBPS/a.css",
+            b"@import url(http://evil.example/a.css); p{background:url(javascript:alert(1))} q{background:url('https://x.example/i.png')} @import 'https://y.example/b.css';",
+        );
         assert!(has(&r, "REMOTE_CSS_IMPORT") && has(&r, "JS_URL") && has(&r, "REMOTE_RESOURCE"));
         let clean = scan_extra("OEBPS/a.css", b"p { color: red; background: url(img/a.png); }");
         assert!(clean.findings.is_empty(), "{:?}", clean.findings);

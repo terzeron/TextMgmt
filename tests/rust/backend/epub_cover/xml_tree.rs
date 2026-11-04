@@ -2,13 +2,13 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::fs::File;
+use crate::common::cover_env::env;
+use crate::common::shared_fixtures::URL;
+use crate::common::shared_fixtures::{spine_idrefs, xml_text};
 use backend::book_manager::BookManager;
 use common::epub::{EpubSpec, make_epub};
 use common::zipx::Members;
-use crate::common::shared_fixtures::{spine_idrefs, xml_text};
-use crate::common::shared_fixtures::URL;
-use crate::common::cover_env::env;
+use std::fs::File;
 
 /// 교체로 빠지는 기존 표지는 새 표지 바로 뒤, 본문 앞의 도판으로 남는다.
 #[tokio::test]

@@ -4,16 +4,16 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::collections::{HashSet};
+use crate::common::auth_fakes::FixedRole;
+use crate::common::shared_fixtures::{BookRow, CallArgs, DeferredRunner, Fut, Fx, Mock, RecordedArgs, Store, arg, arg_or, effective, install_classify_status_store, ready, store_set};
+use crate::common::shared_fixtures::{ListDirFs, admin_payload, arr, enc, is_truthy, now_plus_3600, proposal_result};
+use backend::book_metadata::Book;
+use backend::main::{BookstoreFactory, BookstoreSearch, GoogleVerifier, TaskRunner};
+use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use backend::book_metadata::{Book};
-use backend::main::{BookstoreFactory, BookstoreSearch, GoogleVerifier, TaskRunner};
-use serde_json::{json, Value};
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{admin_payload, arr, enc, is_truthy, ListDirFs, now_plus_3600, proposal_result};
-use crate::common::shared_fixtures::{BookRow, CallArgs, DeferredRunner, Fut, Fx, Mock, RecordedArgs, Store, arg, arg_or, effective, install_classify_status_store, ready, store_set};
-use crate::common::auth_fakes::FixedRole;
 
 fn viewer_payload() -> Value {
     json!({"email": "viewer@test.com", "role": "viewer", "name": "Viewer", "picture": "", "exp": now_plus_3600()})
@@ -845,7 +845,8 @@ async fn test_classify_proposal_success_polling() {
     let fx = Fx::new();
     let tmp = TempDir::new().unwrap();
     let mappings = json!({"3_SF": ["과학소설"]});
-    let result = json!({"content_type": "book", "source_category": "0_inbox", "total_count": 2, "processed_count": 2, "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], "failures": []});
+    let result =
+        json!({"content_type": "book", "source_category": "0_inbox", "total_count": 2, "processed_count": 2, "items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}], "failures": []});
     fx.bm.set_path_prefix(tmp.path());
     fx.cat.returns("get_all_mappings", mappings);
     // 파일을 미리 idle로 채워 이 테스트가 다른 테스트의 잔여 상태에 기대지 않게 한다.
@@ -1343,10 +1344,7 @@ async fn test_classify_proposal_apply_job_updates_item_status_per_item_in_db() {
     });
 
     let response = fx
-        .post_json(
-            "/categories/classify-proposal/apply",
-            &json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/b.epub", "target_category": "3_SF"}]}),
-        )
+        .post_json("/categories/classify-proposal/apply", &json!({"items": [{"file_path": "0_inbox/a.epub", "target_category": "3_SF"}, {"file_path": "0_inbox/b.epub", "target_category": "3_SF"}]}))
         .await;
     assert_eq!(response.status, 200);
     assert_eq!(response.json()["result"]["started"], true);
@@ -2414,7 +2412,7 @@ mod auth_refresh {
     use crate::common::auth_fakes::fx_with_refresh_store;
     use crate::common::shared_fixtures::{Fx, Mock};
     use crate::common::shared_fixtures::{now_plus_3600, set_cookies};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     #[tokio::test]
     async fn test_missing_token_returns_400() {

@@ -1,9 +1,9 @@
 //! 만화 API는 동일한 도서 처리 로직을 만화 전용 의존성으로 실행한다.
 use super::ComicsManager;
-use crate::book_metadata::{Book, BookLookupError, BookPage};
-use crate::book_manager::{BookDeletion, BookManager, CoverPage};
-use crate::es_manager::EsManagerApi;
 use crate::book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress};
+use crate::book_manager::{BookDeletion, BookManager, CoverPage};
+use crate::book_metadata::{Book, BookLookupError, BookPage};
+use crate::es_manager::EsManagerApi;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

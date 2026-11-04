@@ -62,7 +62,6 @@ fn attr<'a>(el: &ElementRef<'a>, name: &str) -> Option<&'a str> {
     el.value().attr(name)
 }
 
-
 /// `urllib.parse.quote(s)`: 영문·숫자·`_.-~/`만 그대로 둔다.
 fn quote(value: &str) -> String {
     let mut out = String::new();

@@ -1,12 +1,11 @@
-
 mod common;
 mod corpus;
 
 use std::fs;
 
+use crate::common::shared_fixtures::fixture;
 use doc_reader::rtf::{read_from_rtf_text, rtf_to_text};
 use serde_json::Value;
-use crate::common::shared_fixtures::fixture;
 
 #[test]
 fn rtf_matches_striprtf() {

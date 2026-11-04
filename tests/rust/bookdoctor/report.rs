@@ -4,8 +4,8 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use bookdoctor::report::{Aggregate, finding_style, write_json_line, write_text};
 use bookdoctor::output_formatter::Style;
+use bookdoctor::report::{Aggregate, finding_style, write_json_line, write_text};
 use bookdoctor::{Category, FileReport, Format, Severity, Summary};
 
 fn flagged(path: &Path) -> FileReport {

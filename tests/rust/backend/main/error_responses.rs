@@ -2,7 +2,7 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// _summarize_request_body 유틸리티 함수 (main.py:138-143).
 #[test]

@@ -5,8 +5,8 @@ mod support;
 
 use std::fs;
 
+use crate::support::shared_fixtures::eicar;
 use bookdoctor::cli_parser::run;
-use crate::support::shared_fixtures::{eicar};
 
 #[test]
 fn scan_applies_the_builtin_rules_without_any_option() {

@@ -1,11 +1,11 @@
 mod support;
 use bookdoctor::cli_parser::Options;
-use bookdoctor::generic_checker::sniff_head;
 use bookdoctor::format_dispatcher::scan_file;
+use bookdoctor::generic_checker::sniff_head;
 use bookdoctor::magic_sniffer::Sniffed;
-use std::fs::File;
 use bookdoctor::{Category, Format, Severity};
 use std::fs;
+use std::fs::File;
 use std::io::Write;
 use std::sync::mpsc;
 use std::time::Duration;

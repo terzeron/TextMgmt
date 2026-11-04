@@ -8,8 +8,8 @@ use std::process::Command;
 use std::time::Duration;
 
 use doc_reader::pdf::{PDF_STAGE_TIMEOUT, Stage, StageError, StageRunner};
-use sysdeps::timeout_runner::run_with_hard_timeout;
 use stat::Stat;
+use sysdeps::timeout_runner::run_with_hard_timeout;
 
 use crate::env_config::Config;
 use crate::record_builder::ReadOutcome;

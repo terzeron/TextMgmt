@@ -1,11 +1,11 @@
 //! 여러 테스트 파일이 함께 쓰는 준비물(helper·대역). 같은 본문의 사본을 한곳에 모았다.
 #![allow(dead_code)]
-use std::fs;
-use std::path::Path;
-use serde_json::{json, Value};
 use classifier::ClassifierOptions;
 use classifier::inference_model::CategoryModel;
 use classifier::tokenizer::{AnalyzerKind, AnalyzerSpec};
+use serde_json::{Value, json};
+use std::fs;
+use std::path::Path;
 
 // ---------------------------------------------------------------------------
 // 시험용 데이터

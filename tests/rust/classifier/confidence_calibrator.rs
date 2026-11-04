@@ -1,7 +1,7 @@
 mod common;
-use classifier::confidence_calibrator::{expected_accuracy, fit_expected_accuracy, from_coverage_report, MIN_SAMPLES};
-use serde_json::{json};
 use crate::common::shared_fixtures::{approx, floats, real_holdout};
+use classifier::confidence_calibrator::{MIN_SAMPLES, expected_accuracy, fit_expected_accuracy, from_coverage_report};
+use serde_json::json;
 
 /// 시드 고정 난수. numpy 대신 splitmix64를 쓴다.
 struct Rng(u64);

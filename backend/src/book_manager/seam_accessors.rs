@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::{BookManager, BookManagerDeps, CREATED_TIME_BACKFILL_ENV};
-use crate::task_runner::{TaskHandle, TaskRunner, ThreadRunner};
 use crate::pdf_page_reader::{PageCountCache, PdfCacheLimits, PdfError, PdfReaderCache, PdfReaderHandle};
+use crate::task_runner::{TaskHandle, TaskRunner, ThreadRunner};
 use std::os::unix::fs::MetadataExt;
 
 /// 문서 색인 실패. 이동·삭제 롤백은 두 경우를 다른 문구로 보고한다.

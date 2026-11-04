@@ -5,6 +5,7 @@ mod fx;
 
 use std::fs;
 
+use crate::common::shared_fixtures::{error_text, split};
 use axum::http::Method;
 use backend::main::{AppDeps, AuthMode, app_with};
 use common::TestClient;
@@ -16,7 +17,6 @@ use common::pdf::{
 use common::raster::same_pixels;
 use fx::{Edit, FetchBehavior, Opts, image_env, pixel_env};
 use serde_json::{Value, json};
-use crate::common::shared_fixtures::{error_text, split};
 
 fn has_error(error: &Option<String>) -> bool {
     error.as_deref().is_some_and(|e| !e.is_empty())

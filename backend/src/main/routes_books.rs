@@ -11,14 +11,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::app_capabilities::MappingError;
 use super::app_deps::AppDeps;
 use super::error_responses::{ApiError, ApiResult, RequestValidationError};
 use super::request_extractors::{ApiQuery, RequireAuth};
 use super::route_registry::Routes;
-use super::app_capabilities::{MappingError};
+use crate::book_manager::BookManager;
 use crate::book_manager::{BookContent, BookManagerApi, BookResponse};
 use crate::book_metadata::BookLookupError;
-use crate::book_manager::BookManager;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;

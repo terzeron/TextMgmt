@@ -3,13 +3,13 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use support::ole_common;
-use bookdoctor::cli_parser::Options;
-use bookdoctor::format_dispatcher::scan_file;
 use crate::ole_common::{make_cfb, make_cfb_v4};
-use bookdoctor::{FileReport};
 use crate::support::shared_fixtures::{HWPTAG_BEGIN, TAG_SHAPE_COMPONENT_OLE, bin_data_link, file_header, finding, raw_deflate, record, scan, valid_stream, write};
 use crate::support::shared_fixtures::{hwp_cfb, scan_bindata, scan_cfb};
+use bookdoctor::FileReport;
+use bookdoctor::cli_parser::Options;
+use bookdoctor::format_dispatcher::scan_file;
+use support::ole_common;
 
 fn scan_sections(flags: u32, docinfo: Option<Vec<u8>>, section0: Vec<u8>) -> FileReport {
     let mut streams: Vec<(&str, Vec<u8>)> = vec![("BodyText/Section0", section0)];

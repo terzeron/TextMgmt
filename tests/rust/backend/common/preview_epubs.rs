@@ -1,8 +1,8 @@
 //! EPUB 미리보기 검증 테스트의 정상·손상 EPUB 준비물. 여러 테스트 파일의 같은 사본을 모았다.
 #![allow(dead_code)]
 
+use super::shared_fixtures::{CONTAINER_XML, chapter, entry, make_chapter_xhtml, make_cover_xhtml_with_svg, make_opf, write_epub};
 use std::path::Path;
-use super::shared_fixtures::{chapter, CONTAINER_XML, entry, make_chapter_xhtml, make_cover_xhtml_with_svg, make_opf, write_epub};
 
 pub const OPF_NS: &str = "http://www.idpf.org/2007/opf";
 

@@ -3,8 +3,8 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use crate::support::shared_fixtures::{HWPTAG_BEGIN, TAG_BIN_DATA, bin_data_link, finding, pe_bytes, raw_deflate, record, wstr_with_len, zlib};
 use crate::support::shared_fixtures::scan_bindata;
+use crate::support::shared_fixtures::{HWPTAG_BEGIN, TAG_BIN_DATA, bin_data_link, finding, pe_bytes, raw_deflate, record, wstr_with_len, zlib};
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR some png bytes";
 

@@ -9,7 +9,7 @@ use crate::cli_parser::Options;
 use crate::epub::security_checker::scan_html_document;
 use crate::magic_sniffer::Sniffed;
 use crate::{Category, FileReport, Format, Severity};
-use crate::{generic_checker, doc, epub, hwp, pdf, nested_scanner, rule_engine, txt_checker, viewer_block_table, zipcheck};
+use crate::{doc, epub, generic_checker, hwp, nested_scanner, pdf, rule_engine, txt_checker, viewer_block_table, zipcheck};
 
 /// 검사할 포맷을 정한다. `.pdf`·`.epub`은 내용이 PDF·ZIP이면 내용을 따르고(`.pdf`인데 ZIP이면 EPUB),
 /// 그 밖에는 확장자를 따른다. 모르는 확장자는 `None`이다.

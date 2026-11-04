@@ -2,11 +2,11 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::fs;
-use std::os::unix::fs::symlink;
+use crate::common::shared_fixtures::{asyncio_runner, make_manager, outcome, tmp_dir};
 use common::es_fake::FakeEsManager;
 use serde_json::json;
-use crate::common::shared_fixtures::{asyncio_runner, make_manager, outcome, tmp_dir};
+use std::fs;
+use std::os::unix::fs::symlink;
 
 // ---- coverage: rename_category new_category path traversal ----
 

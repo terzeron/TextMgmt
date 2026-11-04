@@ -5,14 +5,14 @@ mod common;
 
 #[path = "../common/book_fixtures.rs"]
 mod fx;
+use crate::common::shared_fixtures::{LoaderReadError, ParserTimeout, file_reader};
+use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, make_manager, outcome, tmp_dir};
+use backend::book_manager::BookManager;
+use common::es_fake::FakeEsManager;
+use serde_json::{Value, json};
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::sync::Arc;
-use backend::book_manager::{BookManager};
-use common::es_fake::{FakeEsManager};
-use serde_json::{json, Value};
-use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, make_manager, outcome, tmp_dir};
-use crate::common::shared_fixtures::{LoaderReadError, ParserTimeout, file_reader};
 
 // ---- coverage: reload_category edge cases ----
 
@@ -165,15 +165,15 @@ fn test_reload_category_mismatch_files_non_int_book_id() {
 }
 
 mod root_file_reload {
-    use crate::common::shared_fixtures::{make_deps, outcome};
     use super::common;
+    use crate::common::shared_fixtures::{make_deps, outcome};
 
     use std::fs;
 
     use std::path::Path;
     use std::sync::Arc;
 
-    use backend::book_manager::{BookManager};
+    use backend::book_manager::BookManager;
 
     use common::es_fake::FakeEsManager;
     use common::faulty_fs::FaultyFs;

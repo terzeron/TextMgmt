@@ -4,13 +4,13 @@ mod support;
 use std::fs;
 use std::path::Path;
 
+use crate::support::shared_fixtures::opts;
 use bookdoctor::cli_parser::Options;
-use bookdoctor::pdf::{self, structure_checker};
 use bookdoctor::format_dispatcher::scan_file;
-use support::{FakeRunner, file_with};
-use lopdf::{Dictionary, Document, Object};
+use bookdoctor::pdf::{self, structure_checker};
 use bookdoctor::{Category, FileReport, Severity};
-use crate::support::shared_fixtures::{opts};
+use lopdf::{Dictionary, Document, Object};
+use support::{FakeRunner, file_with};
 
 /// 객체 본문 목록으로 PDF를 만든다. 1번 객체가 Catalog다.
 fn build(bodies: &[String]) -> Vec<u8> {

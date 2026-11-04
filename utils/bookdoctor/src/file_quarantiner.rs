@@ -11,9 +11,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::output_formatter::thousands;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use crate::cli_parser::{Options, BROKEN_DIR_NAME};
+use crate::cli_parser::{BROKEN_DIR_NAME, Options};
 use crate::format_dispatcher::scan_file;
 
 /// 인코딩 손상을 뜻하는 지표 코드. 다른 코드(NOT_UTF8, FORMAT_MISMATCH 등)는 격리하지 않는다.

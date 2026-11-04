@@ -393,7 +393,6 @@ fn decode_pixels(pdf: &Document, stream: &Stream) -> Result<DynamicImage, String
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

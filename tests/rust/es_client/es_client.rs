@@ -7,8 +7,8 @@ mod tls_server;
 
 use std::path::Path;
 
-use es_client::{EsClient, EsError};
 use crate::common::shared_fixtures::client;
+use es_client::{EsClient, EsError};
 
 #[test]
 fn from_env_reports_the_first_missing_variable() {

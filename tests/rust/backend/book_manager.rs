@@ -3,23 +3,23 @@
 mod common;
 #[path = "common/book_fixtures.rs"]
 mod fx;
-use std::{fs, io};
+use crate::common::shared_fixtures::epub_with_missing_page;
+use crate::common::shared_fixtures::manager;
+use crate::common::shared_fixtures::{NCX_NS_STR, Setup, setup};
+use crate::common::shared_fixtures::{model_dir, propose, tmp_dir};
 use backend::book_manager::{_prune_dead_ncx_navpoints, ProposeOptions};
+use bookstore::store_clients::{BookstoreSearch, SearchRow};
+use classifier::book_classifier::{BookClassifierService, BookstorePolicy, SharedBookClassifier};
+use classifier::inference_model::CategoryModel;
+use classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
 use common::faulty_fs::FaultyFs;
+use common::zipx::read_zip_entry;
 use fx::{Opts, with_deps};
+use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering, Mutex};
-use classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
-use common::zipx::read_zip_entry;
-use serde_json::{Value};
-use classifier::book_classifier::{BookClassifierService, BookstorePolicy, SharedBookClassifier};
-use bookstore::store_clients::{BookstoreSearch, SearchRow};
-use classifier::inference_model::CategoryModel;
-use crate::common::shared_fixtures::{model_dir, propose, tmp_dir};
-use crate::common::shared_fixtures::{NCX_NS_STR, Setup, setup};
-use crate::common::shared_fixtures::manager;
-use crate::common::shared_fixtures::epub_with_missing_page;
+use std::sync::{Arc, Mutex, atomic::AtomicUsize, atomic::Ordering};
+use std::{fs, io};
 
 /// `fx::env`가 만든 환경의 `BookManager`를 Deps 설정을 더해 다시 만든다. `loader`가 참이면 파일 읽기 대역도 꽂는다.
 // TODO(common): `book_fixtures::Opts`가 Deps 설정 훅(`configure: Option<Box<dyn FnOnce(BookManagerDeps) -> BookManagerDeps>>`)을 받으면 이 헬퍼가 필요 없다.

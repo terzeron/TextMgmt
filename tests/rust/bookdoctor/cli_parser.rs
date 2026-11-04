@@ -1,9 +1,9 @@
 //! `bookdoctor::cli_parser` 단위 테스트.
 
 mod support;
-use std::path::{Path, PathBuf};
-use bookdoctor::cli_parser::{Command, effective_workers, execute, Options, parse, print_usage, run, run_with_env};
+use bookdoctor::cli_parser::{Command, Options, effective_workers, execute, parse, print_usage, run, run_with_env};
 use bookdoctor::{DEFAULT_LIBRARY_ROOT, Severity};
+use std::path::{Path, PathBuf};
 
 fn args(s: &str) -> Vec<String> {
     s.split_whitespace().map(String::from).collect()

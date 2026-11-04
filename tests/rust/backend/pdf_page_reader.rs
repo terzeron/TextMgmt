@@ -3,17 +3,17 @@
 mod common;
 #[path = "common/book_fixtures.rs"]
 mod fx;
-use std::fs;
+use crate::common::pdf_env::{ResponseExt, build};
+use crate::common::shared_fixtures::{create_test_pdf, error_text};
+use backend::pdf_page_reader::{LopdfPageOps, PageCountCache, PdfCacheLimits, PdfPageOps, PdfReaderCache, PdfReaderHandle};
 use common::edits;
 use common::image::assert_approx;
 use common::pdf::{edit_pdf, first_image_size, first_xobject, first_xobject_mut, load, mediabox_of, page_count_bytes, page_dict, page_dict_mut, srgb_profile};
-use fx::{Edit, image_env, Opts, pixel_env};
-use lopdf::{dictionary, Dictionary, Document, Object, Stream};
+use fx::{Edit, Opts, image_env, pixel_env};
+use lopdf::{Dictionary, Document, Object, Stream, dictionary};
+use std::fs;
 use std::path::Path;
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
-use backend::pdf_page_reader::{LopdfPageOps, PageCountCache, PdfCacheLimits, PdfPageOps, PdfReaderCache, PdfReaderHandle};
-use crate::common::shared_fixtures::{create_test_pdf, error_text};
-use crate::common::pdf_env::{ResponseExt, build};
 
 type EditFn = fn(&mut Document);
 

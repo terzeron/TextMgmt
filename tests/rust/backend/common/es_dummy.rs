@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use es_client::EsError;
 use es_client::transport::EsTransport;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub type Handler = Arc<dyn Fn(&Value) -> Result<Value, EsError> + Send + Sync>;
 
@@ -200,11 +200,7 @@ impl DummyEs {
                     s.bulk_calls += 1;
                     s.bulk_calls
                 });
-                if calls == 1 {
-                    Err(connection_error("boom"))
-                } else {
-                    Ok(json!({"errors": false}))
-                }
+                if calls == 1 { Err(connection_error("boom")) } else { Ok(json!({"errors": false})) }
             }
             "search" => self.default_search(kw),
             "scroll" => {

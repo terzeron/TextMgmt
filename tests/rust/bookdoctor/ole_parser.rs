@@ -2,8 +2,8 @@
 
 #[path = "ole_common.rs"]
 mod support;
-use support::{make_cfb, make_cfb_v4};
 use bookdoctor::ole_parser::{EntryKind, Limits, OleError, OleFile};
+use support::{make_cfb, make_cfb_v4};
 
 fn bytes_of(n: usize, seed: u8) -> Vec<u8> {
     (0..n).map(|i| (i as u8).wrapping_mul(7).wrapping_add(seed)).collect()
@@ -140,9 +140,9 @@ fn prefix_read_returns_only_the_requested_bytes() {
 
 mod anomaly_reporting {
     use super::support;
+    use bookdoctor::ole_parser::{Anomaly, Limits, OleError, OleFile};
     use std::time::{Duration, Instant};
     use support::{Cfb, make_cfb, make_cfb_v4, put32};
-    use bookdoctor::ole_parser::{Anomaly, Limits, OleError, OleFile};
 
     fn bytes_of(n: usize, seed: u8) -> Vec<u8> {
         (0..n).map(|i| (i as u8).wrapping_mul(13).wrapping_add(seed)).collect()

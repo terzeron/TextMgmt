@@ -18,14 +18,14 @@ use regex::Regex;
 use serde_json::{Value, json};
 use zip::ZipArchive;
 
-use super::member_path;
-use text_extractor::path::{posix_dirname as dirname, posix_relpath as relpath};
-use super::inplace_replacer::rewrite_epub;
 use super::epub_writer::{Added, add_image_page, add_split_image, read_previous_cover, sections, verify_staged, write_epub};
+use super::inplace_replacer::rewrite_epub;
+use super::member_path;
 use super::xml_tree::{self, Element, Node};
 use super::{CoverError, EpubCoverHooks, FResult, Fail, MAX_XML_BYTES, entry_names, entry_size, has_entry, normalize_image_with, read_dimensions, read_entry, read_package_with};
-use htmlkit::url_parser::quote;
 use crate::image_edit::{Rect, crop_pil};
+use htmlkit::url_parser::quote;
+use text_extractor::path::{posix_dirname as dirname, posix_relpath as relpath};
 
 /// crops 의 idref 에 이 값을 주면 쪽이 아니라 표지 이미지를 자른다(표지 화면은 spine 항목이 아닐 수 있다).
 pub const COVER_TARGET: &str = "@cover";
@@ -857,7 +857,8 @@ mod tests {
         assert_eq!(reference_variants("OPS/images/cover.jpg"), [b"cover.jpg".to_vec()]);
         assert_eq!(reference_variants("OPS/images/cover art.jpg"), [b"cover art.jpg".to_vec(), b"cover%20art.jpg".to_vec()]);
 
-        let result = edit_images_with(Path::new("not-opened.epub"), "unused", Path::new("unused-backups"), EditImages { crops: vec![json!("invalid")], ..Default::default() }, &EpubCoverHooks::default());
+        let result =
+            edit_images_with(Path::new("not-opened.epub"), "unused", Path::new("unused-backups"), EditImages { crops: vec![json!("invalid")], ..Default::default() }, &EpubCoverHooks::default());
         assert!(result.unwrap_err().to_string().contains("편집 항목이 올바르지 않습니다"));
     }
 

@@ -2,17 +2,17 @@
 #![allow(clippy::type_complexity)]
 
 mod common;
+use bookstore::store_clients::{BookstoreSearch, SearchRow};
+use classifier::book_classifier::{BookClassifierService, clean_empty_parent_dirs_with, inspect_epub_metadata, is_title_match_reliable, *};
+use classifier::inference_model::Prediction;
+use classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
+use common::faulty_fs::{FaultyFs, other_err};
+use common::zipx::{write_zip, write_zip_text};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use classifier::book_classifier::{*, BookClassifierService, clean_empty_parent_dirs_with, inspect_epub_metadata, is_title_match_reliable};
-use classifier::inference_model::Prediction;
-use classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
-use common::zipx::{write_zip, write_zip_text};
-use serde_json::{json, Value};
 use tempfile::TempDir;
-use bookstore::store_clients::{BookstoreSearch, SearchRow};
-use common::faulty_fs::{FaultyFs, other_err};
 
 fn empty_meta() -> EpubMetadata {
     EpubMetadata { title: String::new(), author: String::new(), subject: String::new(), description: String::new() }
@@ -826,13 +826,13 @@ fn test_decide_keeps_a_confident_model_without_consulting_bookstores() {
 
 mod python_compat {
     use crate::common::shared_fixtures::{fixture, s};
-    use std::fs;
-    use std::path::Path;
-    use std::sync::Arc;
     use classifier::book_classifier::*;
     use classifier::inference_model::Prediction;
     use classifier::{BookClassifierApi, Classify};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
+    use std::fs;
+    use std::path::Path;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     #[test]
@@ -901,8 +901,12 @@ mod python_compat {
     }
 
     fn service(tmp: &TempDir, category: &str, confidence: f64) -> BookClassifierService {
-        BookClassifierService::new(tmp.path(), Some(&tmp.path().join("cache.json")), Some(Arc::new(Fixed(Prediction::new(Some(category), confidence, vec![(category.to_string(), confidence)], "stub")))))
-            .with_delay(0.0)
+        BookClassifierService::new(
+            tmp.path(),
+            Some(&tmp.path().join("cache.json")),
+            Some(Arc::new(Fixed(Prediction::new(Some(category), confidence, vec![(category.to_string(), confidence)], "stub")))),
+        )
+        .with_delay(0.0)
     }
 
     #[test]
@@ -939,7 +943,8 @@ mod python_compat {
         let f = tmp.path().join("3_판타지").join("[남희성] 달빛조각사 1권.txt");
         fs::create_dir_all(f.parent().unwrap()).unwrap();
         fs::write(&f, "본문").unwrap();
-        let shared: Arc<dyn BookClassifierApi> = Arc::new(SharedBookClassifier::new(service(&tmp, "3_판타지", 0.9).with_bookstore_policy(BookstorePolicy { override_below: 0.08, ..Default::default() })));
+        let shared: Arc<dyn BookClassifierApi> =
+            Arc::new(SharedBookClassifier::new(service(&tmp, "3_판타지", 0.9).with_bookstore_policy(BookstorePolicy { override_below: 0.08, ..Default::default() })));
 
         let (category, method, reason, entry) = shared.classify_file(&f);
         assert_eq!((category.as_deref(), method.as_str()), (Some("3_판타지"), "model"));

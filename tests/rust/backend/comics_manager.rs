@@ -1,10 +1,10 @@
 mod common;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::EsManagerApi;
 use common::es_fake::FakeEsManager;
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
     let map: HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();

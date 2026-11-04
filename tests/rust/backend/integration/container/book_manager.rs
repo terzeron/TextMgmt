@@ -57,12 +57,14 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use backend::book_metadata::{Book, BookPage};
+use crate::common::file_reader_fakes::FnFileReader;
+use crate::common::shared_fixtures::{as_status, make_doc, outcome, run, split, verdict};
 use backend::book_manager::{BookContent, BookManager, BookManagerDeps, BookResponse, FileReader, ProposeOptions, RuntimeError};
-use classifier::Classify;
-use classifier::inference_model::Prediction;
+use backend::book_metadata::{Book, BookPage};
 use backend::es_manager::{ESManager, EsError, EsManagerApi};
 use backend::pdf_page_reader::{PdfDoc, PdfError, PdfOpener, PdfPageOps};
+use classifier::Classify;
+use classifier::inference_model::Prediction;
 use common::clock::Event;
 use common::epub::{EpubSpec, make_epub};
 use common::es_fake::{Docs, FakeEsManager};
@@ -73,8 +75,6 @@ use common::zipx::{open_zip, write_zip};
 use serde_json::{Value, json};
 use sysdeps::{CommandError, CommandOutput};
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{as_status, make_doc, outcome, run, split, verdict};
-use crate::common::file_reader_fakes::FnFileReader;
 
 /// `delete_book` 결과를 Python 원본의 `("Ok" | "Warning" | "Error", 메시지)`로 펼친다.
 fn as_deletion(result: Result<backend::book_manager::BookDeletion, String>) -> (String, Option<String>) {

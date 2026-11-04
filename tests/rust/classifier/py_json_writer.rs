@@ -1,8 +1,7 @@
-
 mod common;
+use crate::common::shared_fixtures::parity;
 use classifier::py_json_writer::{dumps, float_repr};
-use serde_json::{json};
-use crate::common::shared_fixtures::{parity};
+use serde_json::json;
 
 #[test]
 fn float_repr_and_json_dumps_match_python() {

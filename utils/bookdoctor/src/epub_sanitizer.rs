@@ -11,11 +11,11 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
-use htmlkit::{decode_entities, text_of};
-use regex::Regex;
 use crate::magic_sniffer::{Sniffed, sniff};
 use crate::{Category, Severity};
+use htmlkit::{decode_entities, text_of};
+use regex::Regex;
+use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -29,7 +29,8 @@ const MAX_TOTAL: u64 = 1024 * 1024 * 1024;
 pub(crate) const HTML_EXTS: &[&str] = &["xhtml", "html", "htm"];
 const XML_EXTS: &[&str] = &["xml", "opf", "ncx", "smil"];
 const PASSIVE_EXTS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "avif", "ico", "jp2", "jxl", "ttf", "otf", "woff", "woff2", "eot", "ttc", "mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "mp4", "m4v", "ogv", "webm",
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "avif", "ico", "jp2", "jxl", "ttf", "otf", "woff", "woff2", "eot", "ttc", "mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "mp4",
+    "m4v", "ogv", "webm",
 ];
 
 /// 시작 태그째로 지우고 끝 태그도 지우되 안쪽 내용은 남기는 요소.
@@ -703,7 +704,8 @@ fn undecodable(name: &str) -> bool {
     name.starts_with('\0')
 }
 
-const MARKUP_MEDIA: &[&str] = &["application/xhtml+xml", "text/html", "image/svg+xml", "application/xml", "text/xml", "application/x-dtbncx+xml", "application/oebps-package+xml", "application/smil+xml", "application/smil"];
+const MARKUP_MEDIA: &[&str] =
+    &["application/xhtml+xml", "text/html", "image/svg+xml", "application/xml", "text/xml", "application/x-dtbncx+xml", "application/oebps-package+xml", "application/smil+xml", "application/smil"];
 
 /// `media-type` 값을 비교할 수 있게 정규화한다: `;` 뒤의 매개변수를 떼고 앞뒤 공백을 지우고 소문자로 만든다.
 fn base_media(raw: &str) -> String {
@@ -716,7 +718,12 @@ fn is_markup_media(media: &str) -> bool {
 }
 
 fn is_script_media(media: &str) -> bool {
-    media.contains("javascript") || media.contains("ecmascript") || matches!(media, "application/java-archive" | "application/x-sh" | "application/x-msdownload" | "application/x-msdos-program" | "application/x-executable" | "application/x-bat" | "application/x-dosexec")
+    media.contains("javascript")
+        || media.contains("ecmascript")
+        || matches!(
+            media,
+            "application/java-archive" | "application/x-sh" | "application/x-msdownload" | "application/x-msdos-program" | "application/x-executable" | "application/x-bat" | "application/x-dosexec"
+        )
 }
 
 /// 내용이 마크업처럼 시작하는가(BOM·앞 공백을 건너뛴다). 이미지·글꼴·미디어는 `<`로 시작하지 않는다.
@@ -725,7 +732,8 @@ fn looks_like_markup(data: &[u8]) -> bool {
     let head = &data[..data.len().min(256)];
     let first_char = |units: Vec<u32>| units.into_iter().filter_map(char::from_u32).find(|c| !c.is_whitespace());
     let utf16 = |bytes: &[u8], le: bool| -> Vec<u32> { bytes.chunks_exact(2).map(|c| u32::from(if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })).collect() };
-    let utf32 = |bytes: &[u8], le: bool| -> Vec<u32> { bytes.chunks_exact(4).map(|c| if le { u32::from_le_bytes([c[0], c[1], c[2], c[3]]) } else { u32::from_be_bytes([c[0], c[1], c[2], c[3]]) }).collect() };
+    let utf32 =
+        |bytes: &[u8], le: bool| -> Vec<u32> { bytes.chunks_exact(4).map(|c| if le { u32::from_le_bytes([c[0], c[1], c[2], c[3]]) } else { u32::from_be_bytes([c[0], c[1], c[2], c[3]]) }).collect() };
     let decoded = if let Some(rest) = head.strip_prefix(b"\xFF\xFE\x00\x00") {
         first_char(utf32(rest, true))
     } else if let Some(rest) = head.strip_prefix(b"\x00\x00\xFE\xFF") {
@@ -764,7 +772,8 @@ pub(crate) fn package_names(members: &[Member]) -> Result<BTreeSet<String>, Stri
         }
         if m.name == "META-INF/container.xml" {
             let text = decode(&m.name, &m.data).map_err(|e| format!("container.xml의 인코딩을 읽을 수 없다: {e}"))?;
-            let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("META-INF/container.xml을 해석할 수 없다: {e}"))?;
+            let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
+                .map_err(|e| format!("META-INF/container.xml을 해석할 수 없다: {e}"))?;
             for root in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "rootfile") {
                 let raw = root.attribute("full-path").unwrap_or("");
                 let found: Vec<String> = [posix_normpath(raw), posix_normpath(&unquote(raw))].into_iter().filter(|p| existing.contains(p.as_str())).collect();
@@ -1016,10 +1025,7 @@ fn unique_trash_path(dir: &Path, file_name: &str) -> PathBuf {
         return first;
     }
     let (stem, ext) = file_name.rsplit_once('.').map_or((file_name, String::new()), |(s, e)| (s, format!(".{e}")));
-    (1..)
-        .map(|n| dir.join(format!("{stem}.{n}{ext}")))
-        .find(|p| !p.exists())
-        .unwrap_or(first)
+    (1..).map(|n| dir.join(format!("{stem}.{n}{ext}"))).find(|p| !p.exists()).unwrap_or(first)
 }
 
 /// 원본을 휴지통에 두고, 같은 inode에 새 내용을 덮어쓰고, mtime을 되돌린다.

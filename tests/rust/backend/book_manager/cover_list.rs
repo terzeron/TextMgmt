@@ -2,8 +2,8 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use common::es_fake::FakeEsManager;
 use crate::common::shared_fixtures::{asyncio_runner, make_doc, make_manager, tmp_dir};
+use common::es_fake::FakeEsManager;
 
 #[test]
 fn test_get_cover_rejects_missing_required_es_fields() {
@@ -18,24 +18,24 @@ fn test_get_cover_rejects_missing_required_es_fields() {
 }
 
 mod cover_member_lookup {
-    use crate::common::dyn_es::make_manager;
-    use crate::common::shared_fixtures::{CONTAINER};
-    use crate::common::shared_fixtures::{make_deps, make_doc};
     use super::common;
+    use crate::common::dyn_es::make_manager;
+    use crate::common::shared_fixtures::CONTAINER;
+    use crate::common::shared_fixtures::{make_deps, make_doc};
+    use backend::book_manager::{BookManager, CoverPage, CoverPageOpts, MAX_CATEGORY_PAGE_SIZE, encode_category_cursor};
+    use backend::book_metadata::Book;
     use std::collections::HashMap;
     use std::fs;
     use std::io::{Seek, SeekFrom, Write};
     use std::path::Path;
     use std::sync::{Arc, Mutex};
-    use backend::book_metadata::Book;
-    use backend::book_manager::{BookManager, CoverPage, CoverPageOpts, encode_category_cursor, MAX_CATEGORY_PAGE_SIZE};
 
     use backend::es_manager::{EsError, EsManagerApi};
     use common::es_fake::FakeEsManager;
     use common::faulty_fs::FaultyFs;
 
     use common::zipx::{open_zip, write_zip};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use tempfile::TempDir;
     use zip::ZipArchive;
 
@@ -181,7 +181,8 @@ mod cover_member_lookup {
 
     /// 쪽 크기 66x165pt인 빈 한 쪽짜리 PDF를 직접 만든다(pikepdf 대신).
     fn blank_pdf(width: u32, height: u32) -> Vec<u8> {
-        let objs = ["<< /Type /Catalog /Pages 2 0 R >>".to_string(), "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(), format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] >>")];
+        let objs =
+            ["<< /Type /Catalog /Pages 2 0 R >>".to_string(), "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(), format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] >>")];
         let mut out = String::from("%PDF-1.4\n");
         let mut offsets = Vec::new();
         for (i, obj) in objs.iter().enumerate() {
@@ -582,11 +583,9 @@ mod cover_member_lookup {
 }
 
 mod get_cover {
-    use crate::common::cover_docs::{create_test_pdf, use_doc};
-    use crate::common::shared_fixtures::{thumbnailer};
     use super::common;
-    use std::path::Path;
-    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+    use crate::common::cover_docs::{create_test_pdf, use_doc};
+    use crate::common::shared_fixtures::thumbnailer;
     use backend::book_manager::{BookManager, BookManagerDeps};
     use common::epub::{EpubSpec, make_epub};
     use common::es_fake::FakeEsManager;
@@ -595,6 +594,8 @@ mod get_cover {
     use common::pdf::write_image_pdf;
     use image::{GenericImageView, ImageFormat};
     use serde_json::json;
+    use std::path::Path;
+    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 
     struct Env {
         tmp: tempfile::TempDir,

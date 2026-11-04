@@ -3,14 +3,16 @@
 mod common;
 #[path = "common/book_fixtures.rs"]
 mod fx;
-use backend::es_manager::{ConnectOptions, decode_category_cursor, Docs, encode_category_cursor, EsConnector, EsError, ESManager, EsManagerApi, ESManagerError, EsTransport, SimilarDocsArgs, UpdateFields};
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering, Mutex};
+use backend::es_manager::{
+    ConnectOptions, Docs, ESManager, ESManagerError, EsConnector, EsError, EsManagerApi, EsTransport, SimilarDocsArgs, UpdateFields, decode_category_cursor, encode_category_cursor,
+};
 use base64::Engine;
 use common::clock::FakeClock;
 use common::es_dummy::{DummyEs, runtime_error};
-use common::faulty_fs::{fail_always, fail_if_path_contains, FaultyFs};
-use serde_json::{json, Value};
+use common::faulty_fs::{FaultyFs, fail_always, fail_if_path_contains};
+use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
 use tempfile::TempDir;
 
 /// 메서드를 하나도 구현하지 않은 대역. trait 기본 구현이 `Unsupported`인지 확인한다.
@@ -1724,12 +1726,12 @@ fn test_search_latest_docs_only_returns_cover_types() {
 
 mod api_facade {
     use super::common;
-    use std::sync::{Arc, Mutex};
-    use backend::es_manager::{EsError, ESManager, EsTransport};
+    use backend::es_manager::{ESManager, EsError, EsTransport};
     use common::es_dummy::DummyEs;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::collections::BTreeMap;
     use std::path::Path;
+    use std::sync::{Arc, Mutex};
 
     type SearchStub = Arc<dyn Fn(&Value, Option<&Value>, i64, Option<&[String]>) -> Result<Vec<(i64, Value, f64)>, backend::es_manager::EsError> + Send + Sync>;
 

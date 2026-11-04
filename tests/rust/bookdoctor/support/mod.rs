@@ -248,8 +248,8 @@ pub fn epub_members(path: &Path, members: &[(&str, &[u8])], stored_names: &[&str
 // ---------------------------------------------------------------------------
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use sysdeps::{CommandError, CommandOutput, CommandRunner};
 

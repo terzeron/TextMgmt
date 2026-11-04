@@ -1,10 +1,10 @@
 //! 표지 테스트의 문서·PDF 준비물(`make_doc`, `use_doc`, `create_test_pdf`). 여러 테스트 파일의 같은 사본을 모았다.
 #![allow(dead_code)]
 
-use std::path::Path;
 use super::es_fake::FakeEsManager;
 use super::pdf::write_blank_pdf;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use std::path::Path;
 
 pub fn create_test_pdf(output_path: &Path) {
     write_blank_pdf(output_path, 612, 792);

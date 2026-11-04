@@ -2,14 +2,14 @@
 #![allow(clippy::await_holding_lock)]
 
 mod common;
-use std::collections::HashMap;
-use backend::auth_service::{HTTPException, SystemExit};
-use serde_json::{json};
-use backend::auth_service;
-use bookstore::store_clients::{AbstractBookstore, KyoboBookstore};
-use crate::common::shared_fixtures::{now, process_env};
-use crate::common::shared_fixtures::{FakeRequest, decode, encode_hs256, fixture, make_request};
 use crate::common::auth_fakes::{FixedRole, access_token};
+use crate::common::shared_fixtures::{FakeRequest, decode, encode_hs256, fixture, make_request};
+use crate::common::shared_fixtures::{now, process_env};
+use backend::auth_service;
+use backend::auth_service::{HTTPException, SystemExit};
+use bookstore::store_clients::{AbstractBookstore, KyoboBookstore};
+use serde_json::json;
+use std::collections::HashMap;
 
 fn refresh_token(email: &str, role: &str) -> String {
     backend::auth_service::create_refresh_token(email, role, None, None)

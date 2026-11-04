@@ -2,12 +2,12 @@
 #![allow(clippy::type_complexity)]
 
 mod common;
-use loader::cli_parser::{parse_options, print_usage, RunHooks};
-use std::fs;
-use std::path::{PathBuf};
-use std::sync::{atomic::AtomicUsize, atomic::Ordering};
-use doc_reader::pdf::{pdf_text_by_pdftotext_with, PdftotextHooks};
 use crate::common::shared_fixtures::{FakeStore, env_for, path_str, run_main, run_main_with_hooks, setup_loader_env, tmp, to_args, write_blank_pdf};
+use doc_reader::pdf::{PdftotextHooks, pdf_text_by_pdftotext_with};
+use loader::cli_parser::{RunHooks, parse_options, print_usage};
+use std::fs;
+use std::path::PathBuf;
+use std::sync::{atomic::AtomicUsize, atomic::Ordering};
 
 mod print_usage {
     use super::*;

@@ -27,12 +27,12 @@ impl CommandRunner for Fake {
         None
     }
 }
+use crate::common::shared_fixtures::runner;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 use sysdeps::pdf_worker_client::{extract_pages, extract_text, first_page_jpeg, page_count, render_page};
 use sysdeps::{CommandError, CommandOutput, CommandRunner};
-use crate::common::shared_fixtures::runner;
 
 #[test]
 fn adapter_maps_worker_exits_to_errors() {

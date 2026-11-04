@@ -5,8 +5,8 @@ mod support;
 
 use std::fs;
 
-use bookdoctor::cli_parser::{run};
-use crate::support::shared_fixtures::{scan};
+use crate::support::shared_fixtures::scan;
+use bookdoctor::cli_parser::run;
 
 #[test]
 fn rtf_is_collected_and_other_content_named_rtf_is_a_mismatch() {

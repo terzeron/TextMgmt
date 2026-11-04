@@ -198,7 +198,16 @@ pub fn make_cfb_sized(streams: &[(&str, &[u8])], sector_size: usize) -> Cfb {
         let chunk: Vec<u8> = fat[k * per_fat..(k + 1) * per_fat].iter().flat_map(|v| v.to_le_bytes()).collect();
         bytes[off(*s)..off(*s) + sector_size].copy_from_slice(&chunk);
     }
-    Cfb { bytes, sector_size, dir_sector: dir_start, dir_sectors: dir_sectors as u32, fat_sectors, minifat_sector: minifat_start, mini_stream_sector: mini_start, names: nodes.iter().map(|n| n.name.clone()).collect() }
+    Cfb {
+        bytes,
+        sector_size,
+        dir_sector: dir_start,
+        dir_sectors: dir_sectors as u32,
+        fat_sectors,
+        minifat_sector: minifat_start,
+        mini_stream_sector: mini_start,
+        names: nodes.iter().map(|n| n.name.clone()).collect(),
+    }
 }
 
 pub fn make_cfb(streams: &[(&str, &[u8])]) -> Cfb {
@@ -286,4 +295,3 @@ pub fn module_stream(junk: usize, source: &str) -> Vec<u8> {
     s.extend(compress(source.as_bytes()));
     s
 }
-

@@ -25,9 +25,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::sleep;
 use std::time::Duration;
 
-use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
 use backend::view_history_store::{MAX_RECENT_VIEWS, ViewHistoryError, ViewHistoryStore, create_view_history_store};
 use common::log_capture::LogCapture;
+use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
 use log::Level;
 use serde_json::{Value, json};
 

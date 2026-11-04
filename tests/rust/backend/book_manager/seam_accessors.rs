@@ -2,11 +2,11 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::collections::HashSet;
-use std::{fs, io};
-use std::path::{Path};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use crate::common::category_apply::{ApplyOpts, apply_opts};
+use crate::common::shared_fixtures::CONTAINER;
+use crate::common::shared_fixtures::{
+    allowed_set, asyncio_runner, blank_pdf_bytes_sized, category_with_files, deps, image_bytes, make_deps, make_doc, make_manager, make_source_file, outcome, tmp_dir,
+};
 use backend::book_manager::{ApplyOptions, BackfillThread, BookManager, CREATED_TIME_BACKFILL_ENV, ProposeOptions};
 use backend::main::{BookManagerApi, InlineRunner, TaskHandle, TaskRunner};
 use backend::pdf_page_reader::PdfCacheLimits;
@@ -14,11 +14,13 @@ use common::env::EnvGuard;
 use common::es_fake::FakeEsManager;
 use common::fsx::set_mtime;
 use common::zipx::write_zip;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use std::collections::HashSet;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use std::{fs, io};
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{allowed_set, asyncio_runner, blank_pdf_bytes_sized, category_with_files, deps, image_bytes, make_deps, make_doc, make_manager, make_source_file, outcome, tmp_dir};
-use crate::common::shared_fixtures::{CONTAINER};
-use crate::common::category_apply::{ApplyOpts, apply_opts};
 
 /// `MagicMock()`으로 만든 스레드 대역. `is_alive`와 `start` 호출 횟수만 본다.
 struct FakeBackfillThread {
@@ -369,13 +371,13 @@ async fn test_apply_records_move_error_as_failed() {
 }
 
 mod pdf_reader_cache_budget {
-    use crate::common::pdf_env::build;
-    use crate::common::shared_fixtures::{create_test_pdf};
     use super::common;
+    use crate::common::pdf_env::build;
+    use crate::common::shared_fixtures::create_test_pdf;
+    use backend::pdf_page_reader::PdfCacheLimits;
     use std::fs;
     use std::sync::Arc;
     use std::time::Duration;
-    use backend::pdf_page_reader::PdfCacheLimits;
 
     /// 파일당 상한을 넘는 PDF 는 reader 를 캐시하지 않는다 (페이지 수만 캐시).
     #[test]

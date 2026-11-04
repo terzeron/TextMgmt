@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use lopdf::{Dictionary, Document, Object};
 use crate::output_formatter::sanitize;
 use crate::{Category, FileReport, Severity};
+use lopdf::{Dictionary, Document, Object};
 use sysdeps::pdf_worker_client::extract_text;
 use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 

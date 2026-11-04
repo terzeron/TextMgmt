@@ -1,4 +1,3 @@
-
 mod common;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

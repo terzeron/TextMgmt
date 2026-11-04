@@ -3,13 +3,13 @@ mod support;
 use std::fs;
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use bookdoctor::cli_parser::Options;
-use bookdoctor::nested_scanner::ScratchDir;
-use bookdoctor::format_dispatcher::scan_file;
 use crate::support::shared_fixtures::{OLE_STUB, bytes_of, has_vba_under, scan_bytes, vba_docx, zip_bytes};
+use bookdoctor::cli_parser::Options;
+use bookdoctor::format_dispatcher::scan_file;
+use bookdoctor::nested_scanner::ScratchDir;
 
 #[test]
 fn a_docx_inside_a_zip_is_scanned_with_a_path_prefix() {

@@ -3,7 +3,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 use axum::http::Method;
-use backend::main::{app_with, AppDeps, AuthMode};
+use backend::main::{AppDeps, AuthMode, app_with};
 use common::TestClient;
 use serde_json::json;
 

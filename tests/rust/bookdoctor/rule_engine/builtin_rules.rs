@@ -5,9 +5,9 @@ mod support;
 
 use std::collections::HashSet;
 
-use bookdoctor::rule_engine::{self, Compiled};
+use crate::support::shared_fixtures::eicar;
 use bookdoctor::Severity;
-use crate::support::shared_fixtures::{eicar};
+use bookdoctor::rule_engine::{self, Compiled};
 
 fn builtin() -> Compiled {
     rule_engine::builtin_compiled()

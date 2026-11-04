@@ -9,8 +9,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::time::Duration;
 
-use htmlkit::url_parser::{Netloc, urljoin, urlsplit};
 use crate::cover_sources::{is_global, system_resolve};
+use htmlkit::url_parser::{Netloc, urljoin, urlsplit};
 use sysdeps::HttpTimeout;
 
 /// `backend.epub_cover.MAX_IMAGE_BYTES`와 같다.

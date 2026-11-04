@@ -1,4 +1,4 @@
 //! 파일을 읽어 Elasticsearch 색인에 적재한다. 원본: `utils/loader.py`.
 
-pub mod cli_parser;
 pub mod batch_loader;
+pub mod cli_parser;

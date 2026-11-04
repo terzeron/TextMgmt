@@ -5,6 +5,8 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::common::cover_docs::{create_test_pdf, use_doc};
+use crate::common::shared_fixtures::thumbnailer;
 use backend::book_manager::{BookManager, BookManagerApi, BookManagerDeps};
 use backend::comics_manager::ComicsManager;
 use backend::main::{AppDeps, AuthMode, CategoryMappingApi, MappingError, app_with};
@@ -13,11 +15,8 @@ use common::{
     epub::{EpubSpec, make_epub},
     es_fake::FakeEsManager,
     fsx::{set_times_ns, times_ns},
-    
 };
 use serde_json::{Value, json};
-use crate::common::shared_fixtures::{thumbnailer};
-use crate::common::cover_docs::{create_test_pdf, use_doc};
 
 #[test]
 fn test_epubveri_cli_writes_epubcheck_compatible_json_for_valid_and_invalid_books() {

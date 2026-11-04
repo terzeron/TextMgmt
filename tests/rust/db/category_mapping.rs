@@ -35,12 +35,12 @@
 //!   - `merge_classify_proposal_status(&self, status: &Value, ct)`
 //!   - `pub const RELOAD_LOCK_HEARTBEAT_STALE_SECONDS: i64`, `struct ValueError(pub String)`
 //! - `chrono`가 dev-dependency에 있다고 본다 (`datetime.now()` 대응).
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering, Mutex};
+use chrono::{Duration, Local, NaiveDateTime};
 use db::category_mapping::{CategoryMapping, RELOAD_LOCK_HEARTBEAT_STALE_SECONDS, ValueError};
 use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
-use chrono::{Duration, Local, NaiveDateTime};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering};
 
 // TODO(common): FakeCursor/FakeConn은 refresh_token_store.rs, view_history_store.rs의 가짜 DbConnection과 겹친다. common/db_fake.rs로 합친다.
 

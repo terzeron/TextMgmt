@@ -122,9 +122,7 @@ const V120_MAX_GAP: usize = 256;
 
 /// `pos`에 번호가 `index`인 V1.20 문단 머리가 있는지.
 fn v120_head_at(data: &[u8], pos: usize, index: u16) -> bool {
-    data.get(pos..pos + V120_HEAD_LEN).is_some_and(|h| {
-        h[0] < 0x20 && h[4..9].iter().all(|&b| b == 0) && u16::from_be_bytes([h[10], h[11]]) == index && h[12..20].iter().all(|&b| b == 0)
-    })
+    data.get(pos..pos + V120_HEAD_LEN).is_some_and(|h| h[0] < 0x20 && h[4..9].iter().all(|&b| b == 0) && u16::from_be_bytes([h[10], h[11]]) == index && h[12..20].iter().all(|&b| b == 0))
 }
 
 /// HWP V1.20 본문을 문단 단위로 읽는다. 서명(30)과 문서 정보(128) 바로 뒤에서 문단이 번호 순서로 이어진다.

@@ -11,8 +11,8 @@ use std::path::Path;
 use scraper::{Html, Node, StrTendril};
 
 use super::preview_builder::{html_security_headers, text_response};
-use text_extractor::path::posix_normpath;
 use super::{BookManager, BookResponse};
+use text_extractor::path::posix_normpath;
 
 /// 뷰어가 내려줄 수 있는 리소스 확장자.
 pub const HTML_VIEWER_RESOURCE_EXTENSIONS: [&str; 21] =

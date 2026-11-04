@@ -1,14 +1,14 @@
 //! PDF 쪽 읽기·미리보기 테스트의 환경(`Env`, `build`, `make_doc`). 여러 테스트 파일의 같은 사본을 모았다.
 #![allow(dead_code)]
 
+use super::es_fake::FakeEsManager;
+use super::shared_fixtures::create_test_pdf;
+use backend::book_manager::{BookManager, BookManagerDeps};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use backend::book_manager::{BookManager, BookManagerDeps};
-use super::es_fake::FakeEsManager;
-use serde_json::{json, Value};
 use tempfile::TempDir;
-use super::shared_fixtures::create_test_pdf;
 
 // 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
 #[allow(dead_code)]

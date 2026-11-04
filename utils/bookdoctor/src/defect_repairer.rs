@@ -52,10 +52,22 @@ pub fn true_extension_with(raw: &[u8], unmangle: &dyn Fn(&[u8]) -> Option<Vec<u8
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FixResult {
-    Restored { path: String, restored_to: String, before: usize, after: usize, trash: String },
+    Restored {
+        path: String,
+        restored_to: String,
+        before: usize,
+        after: usize,
+        trash: String,
+    },
     /// 무손실로 되돌릴 수 없어 손대지 않았다.
-    Skipped { path: String, reason: String },
-    Error { path: String, error: String },
+    Skipped {
+        path: String,
+        reason: String,
+    },
+    Error {
+        path: String,
+        error: String,
+    },
 }
 
 pub fn restore_binary(path: &Path, trash_dir: &Path) -> Option<FixResult> {

@@ -6,12 +6,12 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use text_extractor::{Zip, open_zip};
-use text_extractor::path::{posix_join, posix_normpath, unquote};
-use regex::Regex;
 use crate::magic_sniffer::{Sniffed, sniff};
 use crate::output_formatter::sanitize_display;
 use crate::{Category, FileReport, Severity};
+use regex::Regex;
+use text_extractor::path::{posix_join, posix_normpath, unquote};
+use text_extractor::{Zip, open_zip};
 
 use super::fast_zip_checker::read_failure;
 use crate::epub::security_checker::{Limits, TextEnc, decode_text, read_limited};
@@ -241,7 +241,11 @@ fn check_part_names(names: &[String], macro_enabled: bool, report: &mut FileRepo
         let shown = preview(name);
         if lower.ends_with("vbaproject.bin") {
             // 매크로가 없는 형식(.docx·.dotx)에 매크로 프로젝트가 있으면 확장자로 위장한 것이다.
-            let (severity, detail) = if macro_enabled { (Severity::High, "VBA macro project in a macro-enabled document") } else { (Severity::Critical, "VBA macro project inside a macro-free format (disguised macro document)") };
+            let (severity, detail) = if macro_enabled {
+                (Severity::High, "VBA macro project in a macro-enabled document")
+            } else {
+                (Severity::Critical, "VBA macro project inside a macro-free format (disguised macro document)")
+            };
             push_once(report, severity, "OOXML_VBA_PROJECT", &shown, detail);
         } else if lower.starts_with("word/embeddings/") {
             let ext = lower.rsplit_once('.').map_or("", |(_, e)| e);
@@ -352,7 +356,11 @@ fn check_relationships(doc: &roxmltree::Document, name: &str, macro_enabled: boo
             let part = preview(&resolve_target(name, target));
             match ty {
                 "vbaProject" => {
-                    let (severity, why) = if macro_enabled { (Severity::High, "VBA macro project in a macro-enabled document") } else { (Severity::Critical, "VBA macro project inside a macro-free format (disguised macro document)") };
+                    let (severity, why) = if macro_enabled {
+                        (Severity::High, "VBA macro project in a macro-enabled document")
+                    } else {
+                        (Severity::Critical, "VBA macro project inside a macro-free format (disguised macro document)")
+                    };
                     push_once(report, severity, "OOXML_VBA_PROJECT", &part, why);
                 }
                 "oleObject" => push_once(report, Severity::High, "OOXML_OLE_OBJECT", &part, "Embedded OLE object"),

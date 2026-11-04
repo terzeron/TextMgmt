@@ -1,7 +1,7 @@
 //! 자체 규칙 엔진의 파서 테스트.
 
-use bookdoctor::rule_engine::{Cmp, Cond, Pattern, Quant, parse};
 use bookdoctor::Severity;
+use bookdoctor::rule_engine::{Cmp, Cond, Pattern, Quant, parse};
 
 fn ok(src: &str) -> bookdoctor::rule_engine::RuleSet {
     parse(src).unwrap_or_else(|e| panic!("line {}: {}\n{src}", e.line, e.message))

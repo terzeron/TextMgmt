@@ -12,32 +12,32 @@
 
 #![allow(dead_code)]
 
+pub mod auth_fakes;
+pub mod category_apply;
 pub mod clock;
+pub mod cover_docs;
+pub mod cover_env;
+pub mod dyn_es;
 pub mod edits;
 pub mod env;
 pub mod epub;
+pub mod epub_book;
 pub mod es_dummy;
 pub mod es_fake;
 pub mod faulty_fs;
+pub mod file_reader_fakes;
 pub mod fsx;
 pub mod image;
 pub mod log_capture;
 pub mod pdf;
+pub mod pdf_edit_env;
+pub mod pdf_env;
+pub mod preview_epubs;
 pub mod raster;
 pub mod runner;
 pub mod session;
-pub mod zipx;
 pub mod shared_fixtures;
-pub mod epub_book;
-pub mod cover_docs;
-pub mod cover_env;
-pub mod pdf_env;
-pub mod preview_epubs;
-pub mod auth_fakes;
-pub mod dyn_es;
-pub mod file_reader_fakes;
-pub mod pdf_edit_env;
-pub mod category_apply;
+pub mod zipx;
 
 use axum::body::Body;
 use axum::http::{Method, Request};

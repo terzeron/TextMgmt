@@ -2,14 +2,14 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::fs;
-use std::os::unix::fs::MetadataExt;
-use backend::book_manager::{BookManager};
-use backend::main::{BookManagerApi};
+use crate::common::shared_fixtures::{deps, make_doc, make_manager, tmp_dir};
+use backend::book_manager::BookManager;
+use backend::main::BookManagerApi;
 use common::es_fake::FakeEsManager;
 use common::log_capture::LogCapture;
-use serde_json::{json};
-use crate::common::shared_fixtures::{deps, make_doc, make_manager, tmp_dir};
+use serde_json::json;
+use std::fs;
+use std::os::unix::fs::MetadataExt;
 
 #[test]
 fn test_get_category_mismatch_details_reads_all_pages() {
@@ -50,10 +50,9 @@ fn test_get_category_mismatches_root_file() {
 }
 
 mod mismatch_summary {
+    use super::common;
     use crate::common::dyn_es::make_manager;
     use crate::common::shared_fixtures::category_with_files;
-    use super::common;
-
 
     use common::es_fake::FakeEsManager;
 
@@ -91,4 +90,3 @@ fn es_failure_in_mismatch_details_returns_an_empty_result_with_the_error_and_log
     assert!(details["error"].as_str().is_some_and(|e| e.contains("es down")), "{details}");
     assert!(logs.text().contains("get_category_mismatch_details 실패: A"), "{}", logs.text());
 }
-

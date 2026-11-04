@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use file_record::ignore_rules::is_ignored_segment;
 use doc_reader::pdf::StageRunner;
 use es_client::EsError;
 use es_client::indexing::IndexStore;
+use file_record::ignore_rules::is_ignored_segment;
 use serde_json::Value;
 use stat::Stat;
 

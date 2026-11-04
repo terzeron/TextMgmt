@@ -16,9 +16,9 @@ use std::path::Path;
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 
 use crate::cli_parser::Options;
-use crate::pdf::security_checker::{count_raw_references, REF_FILE_BUDGET};
 use crate::epub_sanitizer::{apply, create_private_temp_ext, has_serious_security, show};
 use crate::format_dispatcher::scan_file;
+use crate::pdf::security_checker::{REF_FILE_BUDGET, count_raw_references};
 
 /// 다시 쓰는 PDF의 크기 상한. lopdf는 객체를 모두 메모리에 올리므로 파일보다 몇 배 큰 메모리를 쓴다.
 const MAX_FILE_BYTES: usize = 128 * 1024 * 1024;
@@ -120,10 +120,13 @@ impl Stripper<'_> {
     }
 
     fn dict(&mut self, d: &mut Dictionary, id: ObjectId, depth: usize) {
-        let drop: Vec<(Vec<u8>, Option<String>)> = d.iter().filter_map(|(key, value)| {
-            let bad_value = value_bad_name(value, self.bad);
-            (BAD_KEYS.contains(&key.as_slice()) || bad_value.is_some()).then(|| (key.clone(), bad_value))
-        }).collect();
+        let drop: Vec<(Vec<u8>, Option<String>)> = d
+            .iter()
+            .filter_map(|(key, value)| {
+                let bad_value = value_bad_name(value, self.bad);
+                (BAD_KEYS.contains(&key.as_slice()) || bad_value.is_some()).then(|| (key.clone(), bad_value))
+            })
+            .collect();
         for (key, action) in drop {
             d.remove(&key);
             let what = match action {
@@ -199,11 +202,7 @@ fn rescan(bytes: &[u8], opts: &Options) -> Result<(), String> {
     let tmp = create_private_temp_ext(bytes, "pdf").map_err(|e| e.to_string())?;
     let report = scan_file(&tmp, opts);
     let _ = fs::remove_file(&tmp);
-    if has_serious_security(&report) {
-        Err("재검사에서 보안 지표가 남았다".to_owned())
-    } else {
-        Ok(())
-    }
+    if has_serious_security(&report) { Err("재검사에서 보안 지표가 남았다".to_owned()) } else { Ok(()) }
 }
 
 pub(crate) enum Outcome {

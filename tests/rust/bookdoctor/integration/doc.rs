@@ -1,14 +1,13 @@
-
 #[path = "../support/mod.rs"]
 mod support;
 
 use std::fs;
 
+use crate::support::shared_fixtures::doc_cfb;
+use crate::support::shared_fixtures::write;
+use bookdoctor::Format;
 use bookdoctor::cli_parser::{Options, run};
 use bookdoctor::format_dispatcher::scan_file;
-use bookdoctor::Format;
-use crate::support::shared_fixtures::write;
-use crate::support::shared_fixtures::doc_cfb;
 
 #[test]
 fn doc_and_dot_are_collected_and_lookalikes_are_not() {

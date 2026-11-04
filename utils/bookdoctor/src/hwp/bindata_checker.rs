@@ -1,7 +1,7 @@
 //! `BinData` 검사(명세 3.2.5, 표 17·18). `DocInfo`의 `HWPTAG_BIN_DATA`로 연결 파일을 찾고, `BinData/*` 스트림은 내용의 매직으로 본다.
 
-use crate::ole_parser::{Entry, EntryKind, OleFile};
 use crate::magic_sniffer::{Sniffed, sniff};
+use crate::ole_parser::{Entry, EntryKind, OleFile};
 use crate::output_formatter::sanitize_display;
 use crate::{Category, FileReport, Severity};
 
@@ -107,7 +107,8 @@ pub fn inspect(file: &mut OleFile, docinfos: &[Vec<u8>], report: &mut FileReport
     for bytes in docinfos {
         inspect_docinfo(bytes, report);
     }
-    let streams: Vec<(String, Entry)> = file.entries().iter().filter(|e| e.kind == EntryKind::Stream).map(|e| (file.path_of(e), e.clone())).filter(|(p, _)| p.to_lowercase().starts_with("bindata/")).collect();
+    let streams: Vec<(String, Entry)> =
+        file.entries().iter().filter(|e| e.kind == EntryKind::Stream).map(|e| (file.path_of(e), e.clone())).filter(|(p, _)| p.to_lowercase().starts_with("bindata/")).collect();
     if streams.len() > MAX_BINDATA {
         report.mark_incomplete(&format!("{} BinData streams; only the first {MAX_BINDATA} were scanned", streams.len()));
     }

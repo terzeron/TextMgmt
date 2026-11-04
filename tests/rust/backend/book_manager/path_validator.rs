@@ -2,14 +2,14 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::{fs, io};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use backend::book_manager::{BookManager};
+use crate::common::shared_fixtures::{deps, make_manager, tmp_dir};
+use backend::book_manager::BookManager;
 use common::es_fake::FakeEsManager;
 use common::faulty_fs::{FaultyFs, other_err};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::{fs, io};
 use sysdeps::{FsOps, RealFs};
-use crate::common::shared_fixtures::{deps, make_manager, tmp_dir};
 
 type ListDirFn = dyn Fn(&Path) -> Vec<PathBuf> + Send + Sync;
 
@@ -182,12 +182,11 @@ fn test_iter_category_indexable_files_branches() {
 }
 
 mod stored_path_normalization {
+    use super::common;
     use crate::common::dyn_es::make_manager;
     use crate::common::shared_fixtures::category_with_files;
-    use super::common;
 
     use std::fs;
-
 
     use common::es_fake::FakeEsManager;
 

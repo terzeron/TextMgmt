@@ -12,8 +12,8 @@ use es_client::EsError;
 use es_client::indexing::IndexStore;
 use stat::Stat;
 
-use file_record::env_config::Config;
 use crate::batch_loader::{FILE_ARGUMENT_BATCH_SIZE, Loader, ProcessHooks, direct_files, recursive_files_with_unreadable, sample_files};
+use file_record::env_config::Config;
 use file_record::record_builder::ReadOutcome;
 
 pub type ReadFileHook<'a> = dyn Fn(&Path, Option<&Metadata>, bool) -> ReadOutcome + Sync + 'a;

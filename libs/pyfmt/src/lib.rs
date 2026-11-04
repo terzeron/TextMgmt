@@ -8,8 +8,8 @@
 use serde_json::Value;
 
 mod alnum_table;
-mod decimal_table;
 mod assigned_table;
+mod decimal_table;
 
 mod casefold_table;
 use assigned_table::py_is_assigned;
@@ -57,11 +57,7 @@ pub fn py_float_repr(v: f64) -> String {
         let exp: i32 = exp.parse().unwrap_or(0);
         return format!("{mant}e{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs());
     }
-    if v.fract() == 0.0 {
-        format!("{v:.1}")
-    } else {
-        format!("{v}")
-    }
+    if v.fract() == 0.0 { format!("{v:.1}") } else { format!("{v}") }
 }
 
 /// JSON 값을 Python `repr(dict)`과 같은 모양으로 쓴다(`print("item:", item)`과 같은 출력).
@@ -107,11 +103,7 @@ pub fn py_decimal_digit(c: char) -> Option<u8> {
     let codepoint = c as u32;
     let index = decimal_table::PY_DECIMAL_RANGES.partition_point(|(_, end)| *end < codepoint);
     let (start, end) = decimal_table::PY_DECIMAL_RANGES.get(index)?;
-    if codepoint >= *start && codepoint <= *end {
-        Some(((codepoint - start) % 10) as u8)
-    } else {
-        None
-    }
+    if codepoint >= *start && codepoint <= *end { Some(((codepoint - start) % 10) as u8) } else { None }
 }
 
 // ---- Python 3.13 대소문자 변환: `str.casefold()`(생성 표 기반)와 `str.lower()`. Unicode 15.1 기준이다. ----

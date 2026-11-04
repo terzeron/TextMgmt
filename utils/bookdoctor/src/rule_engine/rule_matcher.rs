@@ -177,7 +177,13 @@ impl Compiled {
             }
             if self.eval(r, &rule.condition, &counts, data, &mut eval_work, budget) {
                 let first = self.rule_first[r];
-                let strings = rule.strings.iter().enumerate().filter(|(i, _)| counts[first + i] > 0).map(|(i, s)| StringMatch { id: s.id.clone(), count: counts[first + i], first: firsts[first + i].clone() }).collect();
+                let strings = rule
+                    .strings
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| counts[first + i] > 0)
+                    .map(|(i, s)| StringMatch { id: s.id.clone(), count: counts[first + i], first: firsts[first + i].clone() })
+                    .collect();
                 matches.push(RuleMatch { rule: r, strings });
             }
         }

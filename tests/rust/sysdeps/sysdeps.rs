@@ -46,8 +46,8 @@ mod clock {
 }
 
 mod poppler {
-    use crate::common::shared_fixtures::runner;
     use super::*;
+    use crate::common::shared_fixtures::runner;
 
     struct FailingRunner {
         missing: bool,

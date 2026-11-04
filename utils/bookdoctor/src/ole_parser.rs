@@ -242,7 +242,20 @@ impl OleFile {
             (4, _) => 4096,
             _ => 512,
         };
-        let mut file = OleFile { data, sector_size, major, fat: Vec::new(), minifat: Vec::new(), mini_stream: Vec::new(), entries: Vec::new(), siblings: Vec::new(), anomalies: Vec::new(), fat_found: 0, limits: *limits, spent: 0 };
+        let mut file = OleFile {
+            data,
+            sector_size,
+            major,
+            fat: Vec::new(),
+            minifat: Vec::new(),
+            mini_stream: Vec::new(),
+            entries: Vec::new(),
+            siblings: Vec::new(),
+            anomalies: Vec::new(),
+            fat_found: 0,
+            limits: *limits,
+            spent: 0,
+        };
         file.read_header_anomalies();
         file.read_fat();
         file.read_directory();
@@ -680,7 +693,20 @@ mod tests {
             let next = if s + 1 < sectors { (s + 1) as u32 } else { ENDOFCHAIN };
             data[base + 127 * 4..base + 128 * 4].copy_from_slice(&next.to_le_bytes());
         }
-        let mut f = OleFile { data, sector_size: 512, major: 3, fat: Vec::new(), minifat: Vec::new(), mini_stream: Vec::new(), entries: Vec::new(), siblings: Vec::new(), anomalies: Vec::new(), fat_found: 0, limits: Limits::default(), spent: 0 };
+        let mut f = OleFile {
+            data,
+            sector_size: 512,
+            major: 3,
+            fat: Vec::new(),
+            minifat: Vec::new(),
+            mini_stream: Vec::new(),
+            entries: Vec::new(),
+            siblings: Vec::new(),
+            anomalies: Vec::new(),
+            fat_found: 0,
+            limits: Limits::default(),
+            spent: 0,
+        };
         f.read_fat();
         assert_eq!(f.fat.len(), 0, "파일 밖 번호는 FAT 섹터로 모으지 않는다");
         assert_eq!(f.fat_found, 0);

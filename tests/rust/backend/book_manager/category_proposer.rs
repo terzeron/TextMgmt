@@ -5,23 +5,23 @@ mod common;
 
 #[path = "../common/book_fixtures.rs"]
 mod fx;
-use std::collections::BTreeSet;
-use std::fs;
-use std::os::unix::fs::symlink;
-use std::path::{Path};
-use std::sync::{Arc, Mutex};
+use crate::common::category_apply::{ApplyOpts, apply_opts};
+use crate::common::shared_fixtures::manager;
+use crate::common::shared_fixtures::{allowed_set, asyncio_runner, deps, make_doc, make_manager, make_source_file, model_dir, outcome, propose, split, tmp_dir};
+use crate::common::shared_fixtures::{book_adder, file_reader, setup};
 use backend::book_manager::{AddBookError, BookManager, MoveOpts, ProposeOptions};
 use classifier::BookClassifierApi;
 use common::env::EnvGuard;
-use common::es_fake::{FakeEsManager};
-use common::faulty_fs::{fail_on_nth_call, FaultyFs, other_err};
+use common::es_fake::FakeEsManager;
+use common::faulty_fs::{FaultyFs, fail_on_nth_call, other_err};
 use common::log_capture::LogCapture;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
+use std::fs;
+use std::os::unix::fs::symlink;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{allowed_set, asyncio_runner, deps, make_doc, make_manager, make_source_file, model_dir, outcome, propose, split, tmp_dir};
-use crate::common::shared_fixtures::{book_adder, file_reader, setup};
-use crate::common::shared_fixtures::manager;
-use crate::common::category_apply::{ApplyOpts, apply_opts};
 
 // ---- Task 3: 등급 판정과 제안 생성 ----
 
@@ -1298,14 +1298,14 @@ fn test_proposal_expected_accuracy_is_none_without_calibration() {
 }
 
 mod candidate_building {
+    use super::common;
     use crate::common::dyn_es::make_manager;
     use crate::common::shared_fixtures::{category_with_files, outcome, split};
-    use super::common;
-    use std::fs;
     use backend::book_manager::{BookManager, MoveOpts};
     use classifier::BookClassifierApi;
     use common::es_fake::FakeEsManager;
     use serde_json::json;
+    use std::fs;
     use tempfile::TempDir;
 
     /// `BookClassifierApi` 대역. 모델 판정 하한과 보정 정확도만 정할 수 있다.
@@ -1480,17 +1480,17 @@ fn a_loadable_model_directory_builds_the_service_by_default() {
 }
 
 mod classified_file_moves {
+    use super::common;
+    use super::common::{es_fake::FakeEsManager, faulty_fs::FaultyFs};
     use crate::common::file_reader_fakes::FnFileReader;
     use crate::common::shared_fixtures::{category_with_files, make_deps, outcome, split};
-    use std::fs;
     use backend::book_manager::{BookManager, MoveOpts};
-    use super::common::{es_fake::FakeEsManager, faulty_fs::FaultyFs};
-    use std::path::{Path};
-    use serde_json::json;
-    use tempfile::TempDir;
-    use super::common;
-    use std::collections::HashSet;
     use common::es_fake::Docs;
+    use serde_json::json;
+    use std::collections::HashSet;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_apply_rejects_file_when_resolve_raises_oserror() {

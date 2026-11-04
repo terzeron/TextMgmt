@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
 use backend::es_manager::{EsError, EsManagerApi};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub type Docs = BTreeMap<i64, Value>;
 /// (문서 ID, `_source`, 점수)
@@ -359,11 +359,7 @@ impl EsManagerApi for FakeEsManager {
         }
         self.with(|s| {
             s.inserted.push(docs.clone());
-            if s.insert_returns_empty {
-                Ok(Vec::new())
-            } else {
-                Ok(docs.keys().copied().collect())
-            }
+            if s.insert_returns_empty { Ok(Vec::new()) } else { Ok(docs.keys().copied().collect()) }
         })
     }
 

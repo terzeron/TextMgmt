@@ -24,11 +24,15 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 // 사본을 지우고 common 원본을 다시 내보낸다. 이 fixture를 쓰는 테스트 crate마다 일부만 쓴다.
 #[allow(unused_imports)]
-pub use crate::common::edits::{crop, crop_at, insert, insert_url, LEFT, RIGHT, split, upload};
+pub use crate::common::edits::{LEFT, RIGHT, crop, crop_at, insert, insert_url, split, upload};
 #[allow(unused_imports)]
 pub use crate::common::image::{assert_approx, b64, color, encode, image_size, jpeg_bytes, multipart_file, with_exif_orientation};
 #[allow(unused_imports)]
-pub use crate::common::pdf::{decoded, edit_pdf, first_image, first_image_raw, first_image_size, first_xobject, first_xobject_id, first_xobject_mut, FirstImage, FLATE_H, flate_source, FLATE_W, has_xobject, Info, load, make_blank_pdf, make_image_pdf, make_pdf, make_pixel_pdf, mediabox_of, mediabox_size, page_count, page_count_bytes, page_dict, page_dict_mut, page_id, PdfBuilder, pixel_image, png_up_filter, resources_of, srgb_profile, widths, zlib};
+pub use crate::common::pdf::{
+    FLATE_H, FLATE_W, FirstImage, Info, PdfBuilder, decoded, edit_pdf, first_image, first_image_raw, first_image_size, first_xobject, first_xobject_id, first_xobject_mut, flate_source, has_xobject,
+    load, make_blank_pdf, make_image_pdf, make_pdf, make_pixel_pdf, mediabox_of, mediabox_size, page_count, page_count_bytes, page_dict, page_dict_mut, page_id, pixel_image, png_up_filter,
+    resources_of, srgb_profile, widths, zlib,
+};
 #[allow(unused_imports)]
 pub use crate::common::raster::{Raster, same_pixels};
 

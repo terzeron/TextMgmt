@@ -5,9 +5,9 @@ use std::io::{Cursor, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
+use crate::support::shared_fixtures::{epub_bytes, member, names, run_in};
 use bookdoctor::epub_sanitizer::{rebuild, strip_css, strip_markup, verify};
 use support::*;
-use crate::support::shared_fixtures::{epub_bytes, member, names, run_in};
 
 fn markup(s: &str) -> String {
     strip_markup(s, false).0
@@ -42,7 +42,14 @@ fn dangerous_attributes_are_dropped_and_ordinary_ones_stay() {
     assert_eq!(markup(r#"<a href="\\evil\share\x">t</a>"#), "<a>t</a>");
     assert_eq!(markup(r#"<a href="weird-app://x">t</a>"#), "<a>t</a>");
     // 본문 링크는 그대로 둔다.
-    for keep in [r##"<a href="#top">t</a>"##, r#"<a href="ch2.xhtml#a">t</a>"#, r#"<a href="https://example.com/">t</a>"#, r#"<a href="mailto:a@b.c">t</a>"#, r#"<img src="images/a.png"/>"#, r#"<img src="data:image/png;base64,AAAA"/>"#] {
+    for keep in [
+        r##"<a href="#top">t</a>"##,
+        r#"<a href="ch2.xhtml#a">t</a>"#,
+        r#"<a href="https://example.com/">t</a>"#,
+        r#"<a href="mailto:a@b.c">t</a>"#,
+        r#"<img src="images/a.png"/>"#,
+        r#"<img src="data:image/png;base64,AAAA"/>"#,
+    ] {
         assert_eq!(markup(keep), keep);
     }
 }
@@ -159,15 +166,20 @@ fn css_files_drop_remote_loads_and_script_hooks() {
 // ---- 재구성 ----
 
 fn opf_with(items: &str) -> String {
-    format!(r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>{items}</manifest><spine><itemref idref="c1"/></spine></package>"#)
+    format!(
+        r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>{items}</manifest><spine><itemref idref="c1"/></spine></package>"#
+    )
 }
 
 #[test]
 fn rebuild_removes_non_rendering_members_and_their_manifest_items() {
-    let opf = opf_with(r#"<item id="exe" href="Misc/setup.exe" media-type="application/x-dosexec"/><item id="js" href="js/a.js" media-type="text/javascript"/><item id="img" href="img/a.png" media-type="image/png"/>"#);
+    let opf = opf_with(
+        r#"<item id="exe" href="Misc/setup.exe" media-type="application/x-dosexec"/><item id="js" href="js/a.js" media-type="text/javascript"/><item id="img" href="img/a.png" media-type="image/png"/>"#,
+    );
     let pe: &[u8] = b"MZ\x90\x00more";
     let png: &[u8] = b"\x89PNG\r\n\x1a\nrest";
-    let src = epub_bytes(&xhtml("<p>본문</p>"), &opf, &[("OEBPS/Misc/setup.exe", pe), ("OEBPS/js/a.js", b"alert(1)"), ("OEBPS/run.sh", b"#!/bin/sh"), ("OEBPS/img/a.png", png), ("OEBPS/x.lnk", b"L\0\0\0")]);
+    let src =
+        epub_bytes(&xhtml("<p>본문</p>"), &opf, &[("OEBPS/Misc/setup.exe", pe), ("OEBPS/js/a.js", b"alert(1)"), ("OEBPS/run.sh", b"#!/bin/sh"), ("OEBPS/img/a.png", png), ("OEBPS/x.lnk", b"L\0\0\0")]);
     let plan = rebuild(&src).unwrap();
     let kept = names(&plan.bytes);
     for gone in ["OEBPS/Misc/setup.exe", "OEBPS/js/a.js", "OEBPS/run.sh", "OEBPS/x.lnk"] {
@@ -267,7 +279,9 @@ fn self_closing_script_does_not_hide_the_chapter_from_verification() {
 // ---- 보안 리뷰: 형식 판정, URL 슬래시, CSS 이스케이프, 출력 ----
 
 fn opf_declaring(href: &str, media: &str) -> String {
-    format!(r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="x" href="{href}" media-type="{media}"/></manifest><spine><itemref idref="c1"/></spine></package>"#)
+    format!(
+        r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="x" href="{href}" media-type="{media}"/></manifest><spine><itemref idref="c1"/></spine></package>"#
+    )
 }
 
 #[test]
@@ -350,7 +364,8 @@ fn a_file_with_security_findings_left_after_rebuild_is_not_applied() {
 
 #[test]
 fn css_escape_followed_by_any_line_break_is_still_decoded() {
-    for css in ["p{background:\\75\r\nrl(http://evil/a.png)}", "p{background:\\75\x0crl(http://evil/a.png)}", "p{background:\\75\nrl(http://evil/a.png)}", "p{background:\\75\trl(http://evil/a.png)}"] {
+    for css in ["p{background:\\75\r\nrl(http://evil/a.png)}", "p{background:\\75\x0crl(http://evil/a.png)}", "p{background:\\75\nrl(http://evil/a.png)}", "p{background:\\75\trl(http://evil/a.png)}"]
+    {
         let out = strip_css(css);
         assert!(!out.contains("evil"), "{css:?} -> {out:?}");
     }
@@ -378,7 +393,11 @@ fn markup_in_utf16_or_utf32_is_recognized_in_binary_extensions() {
     let utf16be: Vec<u8> = [&[0xFE, 0xFF][..], &"  <svg onload='x'/>".encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>()].concat();
     let utf16_bomless: Vec<u8> = "<html/>".encode_utf16().flat_map(u16::to_le_bytes).collect();
     let utf32le: Vec<u8> = [&[0xFF, 0xFE, 0, 0][..], &"<html/>".chars().flat_map(|c| (c as u32).to_le_bytes()).collect::<Vec<u8>>()].concat();
-    let src = epub_bytes(&xhtml("<p>본문</p>"), &clean_opf(), &[("OEBPS/a.png", &utf16le), ("OEBPS/b.jpg", &utf16be), ("OEBPS/c.gif", &utf16_bomless), ("OEBPS/d.webp", &utf32le), ("OEBPS/e.png", b"\x89PNG\r\n\x1a\nrest")]);
+    let src = epub_bytes(
+        &xhtml("<p>본문</p>"),
+        &clean_opf(),
+        &[("OEBPS/a.png", &utf16le), ("OEBPS/b.jpg", &utf16be), ("OEBPS/c.gif", &utf16_bomless), ("OEBPS/d.webp", &utf32le), ("OEBPS/e.png", b"\x89PNG\r\n\x1a\nrest")],
+    );
     let kept = names(&rebuild(&src).unwrap().bytes);
     assert!(kept.contains(&"OEBPS/e.png".to_string()), "{kept:?}");
     for gone in ["a.png", "b.jpg", "c.gif", "d.webp"] {
@@ -397,7 +416,9 @@ fn the_package_document_is_found_through_container_xml_not_the_extension() {
     let deflated = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     z.start_file("mimetype", stored).unwrap();
     z.write_all(b"application/epub+zip").unwrap();
-    for (name, data) in [("META-INF/container.xml", container.as_bytes()), ("OEBPS/package.xml", package.as_bytes()), ("OEBPS/ch1.xhtml", xhtml("<p>본문</p>").as_bytes()), ("OEBPS/Misc/setup.exe", b"MZ\x90\x00more")] {
+    for (name, data) in
+        [("META-INF/container.xml", container.as_bytes()), ("OEBPS/package.xml", package.as_bytes()), ("OEBPS/ch1.xhtml", xhtml("<p>본문</p>").as_bytes()), ("OEBPS/Misc/setup.exe", b"MZ\x90\x00more")]
+    {
         z.start_file(name, deflated).unwrap();
         z.write_all(data).unwrap();
     }
@@ -419,7 +440,8 @@ fn epub_with_container(container: &[u8], package_name: &str) -> Vec<u8> {
     let deflated = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     z.start_file("mimetype", stored).unwrap();
     z.write_all(b"application/epub+zip").unwrap();
-    for (name, data) in [("META-INF/container.xml", container), (package_name, package.as_bytes()), ("OEBPS/ch1.xhtml", xhtml("<p>본문</p>").as_bytes()), ("OEBPS/Misc/setup.exe", b"MZ\x90\x00more")] {
+    for (name, data) in [("META-INF/container.xml", container), (package_name, package.as_bytes()), ("OEBPS/ch1.xhtml", xhtml("<p>본문</p>").as_bytes()), ("OEBPS/Misc/setup.exe", b"MZ\x90\x00more")]
+    {
         z.start_file(name, deflated).unwrap();
         z.write_all(data).unwrap();
     }
@@ -427,7 +449,9 @@ fn epub_with_container(container: &[u8], package_name: &str) -> Vec<u8> {
 }
 
 fn container_for(full_path: &str) -> String {
-    format!(r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="{full_path}" media-type="application/oebps-package+xml"/></rootfiles></container>"#)
+    format!(
+        r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="{full_path}" media-type="application/oebps-package+xml"/></rootfiles></container>"#
+    )
 }
 
 #[test]

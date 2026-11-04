@@ -42,21 +42,22 @@ use std::sync::{Barrier, Mutex};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, UNIX_EPOCH};
 
+use crate::common::shared_fixtures::{FakeStore, XrefStream, hwp_dir, path_str, run_main, run_main_with, run_main_with_hooks, setup_loader_env, tmp, write_blank_pdf};
 use doc_reader::TEXT_SIZE;
 use doc_reader::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, count_mojibake_runs_with};
 use doc_reader::office::{convert_with_libreoffice, find_libreoffice, read_from_hwp_with_fallback};
 use doc_reader::pdf::{
-    FastCountHooks, InProcess, PlumberDocument, Stage, StageError, StageRunner, fast_page_count, fast_page_count_with, find_xref_offset, parse_one_xref_stream, pdf_text_by_plumber_with, read_from_obj_stream, read_from_pdf, run_stage,
+    FastCountHooks, InProcess, PlumberDocument, Stage, StageError, StageRunner, fast_page_count, fast_page_count_with, find_xref_offset, parse_one_xref_stream, pdf_text_by_plumber_with,
+    read_from_obj_stream, read_from_pdf, run_stage,
 };
 use doc_reader::text::{Candidate, Enc, TextHooks, read_from_text_with, reencode_text_file_to_utf8_with};
-use loader::cli_parser::{RunHooks};
 use file_record::env_config::Config;
-use loader::batch_loader::{recursive_files, sample_files};
 use file_record::record_builder::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, zip_container_type};
-use sysdeps::timeout_runner::ParserTimeout;
+use loader::batch_loader::{recursive_files, sample_files};
+use loader::cli_parser::RunHooks;
 use serde_json::{Value, json};
 use stat::Stat;
-use crate::common::shared_fixtures::{FakeStore, XrefStream, hwp_dir, path_str, run_main, run_main_with, run_main_with_hooks, setup_loader_env, tmp, write_blank_pdf};
+use sysdeps::timeout_runner::ParserTimeout;
 
 /// zlib.compress 대응. 압축하지 않는(stored) deflate 블록이라 64KiB 미만 입력만 다룬다.
 fn zlib_compress(data: &[u8]) -> Vec<u8> {

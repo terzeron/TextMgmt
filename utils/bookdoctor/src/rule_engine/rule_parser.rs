@@ -17,7 +17,8 @@ pub const MAX_TERMS: usize = 1000;
 /// 조건식 중첩(괄호, `not`)의 최대 깊이.
 const MAX_DEPTH: usize = 32;
 /// 지원하지 않는 YARA 문법의 키워드. 만나면 "unsupported syntax"다.
-const UNSUPPORTED: &[&str] = &["import", "include", "private", "global", "for", "filesize", "entrypoint", "uint8", "uint16", "uint32", "int8", "int16", "int32", "matches", "contains", "defined", "in", "xor", "base64"];
+const UNSUPPORTED: &[&str] =
+    &["import", "include", "private", "global", "for", "filesize", "entrypoint", "uint8", "uint16", "uint32", "int8", "int16", "int32", "matches", "contains", "defined", "in", "xor", "base64"];
 
 struct Parser<'a> {
     src: &'a [u8],
@@ -179,16 +180,14 @@ impl<'a> Parser<'a> {
                         return self.unsupported("nibble wildcard (use ??)");
                     }
                 }
-                Some(b) if b.is_ascii_hexdigit() => {
-                    match self.src.get(self.pos + 1) {
-                        Some(n) if n.is_ascii_hexdigit() => {
-                            out.push(Some(u8::from_str_radix(std::str::from_utf8(&self.src[self.pos..self.pos + 2]).unwrap_or("00"), 16).unwrap_or(0)));
-                            self.pos += 2;
-                        }
-                        Some(b'?') => return self.unsupported("nibble wildcard (use ??)"),
-                        _ => return self.fail("invalid hex string: bytes need two hex digits"),
+                Some(b) if b.is_ascii_hexdigit() => match self.src.get(self.pos + 1) {
+                    Some(n) if n.is_ascii_hexdigit() => {
+                        out.push(Some(u8::from_str_radix(std::str::from_utf8(&self.src[self.pos..self.pos + 2]).unwrap_or("00"), 16).unwrap_or(0)));
+                        self.pos += 2;
                     }
-                }
+                    Some(b'?') => return self.unsupported("nibble wildcard (use ??)"),
+                    _ => return self.fail("invalid hex string: bytes need two hex digits"),
+                },
                 Some(_) => return self.fail("invalid hex string"),
             }
             if out.len() > MAX_STRING_BYTES {

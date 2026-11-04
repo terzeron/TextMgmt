@@ -25,7 +25,6 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-
 use std::fs;
 use std::io::{self, Write as _};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -34,11 +33,12 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::common::shared_fixtures::{XrefStream, config_with_book, conftest_env, tests_root, write};
 use doc_reader::TEXT_SIZE;
-use doc_reader::office::read_from_docx;
 use doc_reader::epub::{read_from_epub, read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using};
 use doc_reader::markup::{count_lines, read_from_html};
 use doc_reader::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, is_usable_text};
+use doc_reader::office::read_from_docx;
 use doc_reader::office::{convert_with_libreoffice, find_libreoffice_with, read_from_doc, read_from_hwp, read_from_image};
 use doc_reader::pdf::{
     FastCountHooks, InProcess, PDF_PAGE_LIMIT, PdftotextHooks, Stage, StageError, StageRunner, apply_png_predictor, collect_pages, fast_page_count, fast_page_count_with, find_xref_offset,
@@ -50,7 +50,6 @@ use file_record::env_config::Config;
 use file_record::record_builder::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
 use serde_json::Value;
 use stat::Stat;
-use crate::common::shared_fixtures::{XrefStream, config_with_book, conftest_env, tests_root, write};
 
 #[test]
 fn loader_binary_dispatches_the_isbn_pdf_worker_command() {

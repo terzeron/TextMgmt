@@ -1,10 +1,9 @@
-
 #[path = "../common/mod.rs"]
 mod common;
 use std::fs;
 
-use tempfile::TempDir;
 use crate::common::shared_fixtures::fixture;
+use tempfile::TempDir;
 
 #[test]
 fn verbose_classify_emits_debug_diagnostics() {

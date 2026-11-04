@@ -21,9 +21,9 @@ use zip::result::ZipError;
 use super::BookManager;
 use super::path_validator::{clean_href, zip_path};
 use super::temp_file_maker::TempDir;
-use text_extractor::path::{posix_dirname, unquote};
-use std::borrow::Cow;
 use serde_json::Value;
+use std::borrow::Cow;
+use text_extractor::path::{posix_dirname, unquote};
 
 pub const OPF_NS: &str = "http://www.idpf.org/2007/opf";
 pub const CONTAINER_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";

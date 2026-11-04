@@ -1,13 +1,12 @@
-
 #[path = "../support/mod.rs"]
 mod support;
 
 use std::fs;
 
-use bookdoctor::cli_parser::{run};
-use bookdoctor::{Format};
-use crate::support::shared_fixtures::scan;
 use crate::support::shared_fixtures::hwp_cfb;
+use crate::support::shared_fixtures::scan;
+use bookdoctor::Format;
+use bookdoctor::cli_parser::run;
 
 #[test]
 fn hwp_is_collected_and_lookalikes_are_not() {
@@ -25,4 +24,3 @@ fn hwp_is_collected_and_lookalikes_are_not() {
 }
 
 // --- 압축 해제 ---
-

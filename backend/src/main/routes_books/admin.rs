@@ -1,7 +1,7 @@
 //! 도서·만화 수정과 카테고리 관리. 실제 파일 작업은 BookManager에 위임한다.
 use super::{kind, manager};
-use crate::book_metadata::Book;
 use crate::book_manager::BookDeletion;
+use crate::book_metadata::Book;
 use crate::main::request_extractors::python_bool;
 use crate::main::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, RequireAdmin, Routes};
 use axum::{

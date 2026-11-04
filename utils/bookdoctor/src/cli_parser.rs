@@ -13,12 +13,12 @@ use crate::scan_runner::{DEFAULT_WORKERS, pool, workers_within_memory};
 use crate::scan_runner::collect_files;
 use crate::{Severity, scan_streaming};
 
-use crate::format_dispatcher::is_exec_extension;
-use crate::pdf::security_checker::MAX_PARALLEL_INPUT_MB;
 use crate::file_prefetcher::Prefetcher;
-use crate::report::{write_json_line, write_summary_line, write_text, Aggregate};
-use crate::rule_engine::Compiled;
+use crate::format_dispatcher::is_exec_extension;
 use crate::format_dispatcher::scan_file;
+use crate::pdf::security_checker::MAX_PARALLEL_INPUT_MB;
+use crate::report::{Aggregate, write_json_line, write_summary_line, write_text};
+use crate::rule_engine::Compiled;
 
 const USAGE: &str = "usage: bookdoctor scan [--json] [--min-severity low|medium|high|critical] PATH... | sanitize PATH... | repair PATH... | quarantine PATH... | unquarantine";
 

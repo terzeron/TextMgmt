@@ -1,12 +1,12 @@
 //! 표지·이미지 편집 테스트의 EPUB 책 준비물(`Book`, `make_book`, `multi` 등). 여러 테스트 파일의 같은 사본을 모았다.
 #![allow(dead_code)]
 
-use std::path::{Path, PathBuf};
+use super::shared_fixtures::{MULTI_PAGE, edit, gif, jpeg, png};
+use super::zipx::{Members as ZipMembers, ZipMode, write_zip_with};
 use backend::epub_cover::{CoverError, EditImages, OPF_NS};
-use super::zipx::{Members as ZipMembers, write_zip_with, ZipMode};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use super::shared_fixtures::{edit, gif, jpeg, MULTI_PAGE, png};
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// `book` fixture: (책 경로, 휴지통 경로)

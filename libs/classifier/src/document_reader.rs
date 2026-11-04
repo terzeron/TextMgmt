@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use text_extractor::{MAX_MEMBER_BYTES, open_zip};
-pub use text_extractor::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, decode_best, korean_likeness, extract_document_text, extract_epub_text, extract_txt_text};
+pub use text_extractor::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, decode_best, extract_document_text, extract_epub_text, extract_txt_text, korean_likeness};
 
 /// 훑어 볼 ZIP 항목 수 상한. 정상 EPUB 은 수백 개다.
 pub const MAX_ZIP_ENTRIES: usize = 100_000;

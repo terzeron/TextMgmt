@@ -8,11 +8,11 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::common::shared_fixtures::spec;
 use classifier::export_format::{ModelError, write_dir};
 use classifier::tokenizer::{AnalyzerSpec, analyze, collapse_whitespace, is_py_digit, is_py_space, is_py_word};
 use classifier::vectorizer::FieldVectorizer;
 use serde_json::{Value, json};
-use crate::common::shared_fixtures::{spec};
 
 fn terms(kind: &str, lo: usize, hi: usize, text: &str) -> Vec<String> {
     analyze(text, &spec(kind, lo, hi))
@@ -124,7 +124,8 @@ fn exporter_rejects_nonfinite_weights_idf_coefficients_and_intercepts_like_pytho
 
 #[test]
 fn analyzers_match_sklearn_on_random_strings() {
-    let path = std::env::var_os("TM_CLASSIFIER_FUZZ_FILE").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/classifier_analyzer_fuzz.json")));
+    let path =
+        std::env::var_os("TM_CLASSIFIER_FUZZ_FILE").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/classifier_analyzer_fuzz.json")));
     let cases: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     let mut bad = 0;
     let mut total = 0;

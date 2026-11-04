@@ -55,13 +55,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bookstore::store_clients::{
-    AbstractBookstore, AladinBookstore, MAX_RESULTS, SearchRow, UreqHttpSession, Yes24Bookstore,
-};
+use crate::common::shared_fixtures::{Kind, failing};
+use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, empty_info, single_quoted_hrefs};
+use bookstore::store_clients::{AbstractBookstore, AladinBookstore, MAX_RESULTS, SearchRow, UreqHttpSession, Yes24Bookstore};
 use serde_json::{Value, json};
 use sysdeps::{HttpError, HttpSession, HttpTimeout};
-use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, empty_info, single_quoted_hrefs};
-use crate::common::shared_fixtures::{Kind, failing};
 
 #[test]
 fn ureq_session_preserves_http_status_headers_body_and_query() {

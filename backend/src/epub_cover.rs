@@ -22,13 +22,15 @@ use sysdeps::FsOps;
 use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote, urlparse_path};
 use zip::ZipArchive;
 
+mod epub_writer;
 pub mod image_editor;
 mod inplace_replacer;
-mod epub_writer;
 pub mod xml_tree;
 
 pub use image_editor::{EditImages, edit_images, edit_images_with, edit_page_images};
-pub use inplace_replacer::{add_cover, add_cover_backup_with, add_cover_with, add_illustration, add_illustration_backup_with, add_illustration_with, remove_cover, remove_cover_backup_with, remove_cover_with};
+pub use inplace_replacer::{
+    add_cover, add_cover_backup_with, add_cover_with, add_illustration, add_illustration_backup_with, add_illustration_with, remove_cover, remove_cover_backup_with, remove_cover_with,
+};
 
 use xml_tree::Element;
 

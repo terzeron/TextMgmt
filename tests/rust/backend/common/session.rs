@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use db::Row;
 use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, StoreError};
+use db::Row;
 use serde_json::Value;
 
 const ADMIN_FAMILY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

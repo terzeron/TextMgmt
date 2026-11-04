@@ -5,9 +5,9 @@ mod support;
 
 use std::fs;
 
-use bookdoctor::cli_parser::{run};
-use bookdoctor::{Format};
-use crate::support::shared_fixtures::{scan};
+use crate::support::shared_fixtures::scan;
+use bookdoctor::Format;
+use bookdoctor::cli_parser::run;
 
 #[test]
 fn html_is_collected_and_lookalikes_are_not() {

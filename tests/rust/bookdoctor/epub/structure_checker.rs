@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use bookdoctor::cli_parser::Options;
 use bookdoctor::epub::scan_epub_file;
 use bookdoctor::epub::structure_checker::{ISSUE_TO_CODE, inspect, inspect_with};
-use support::*;
 use bookdoctor::{Category, FileReport, Format, Severity};
+use support::*;
 
 fn write(p: &Path, text: &str) {
     fs::write(p, text).unwrap();

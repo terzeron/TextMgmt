@@ -2,11 +2,11 @@
 
 #[path = "../support/mod.rs"]
 mod support;
-use std::path::Path;
+use crate::support::shared_fixtures::finding;
 use bookdoctor::cli_parser::{Options, run_with_env};
 use bookdoctor::format_dispatcher::scan_file;
 use bookdoctor::{Category, FileReport, Severity};
-use crate::support::shared_fixtures::finding;
+use std::path::Path;
 
 const REL_NS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
 
@@ -581,11 +581,11 @@ fn a_huge_simple_field_instruction_is_capped_and_scanned_in_linear_time() {
 }
 
 mod package_structure {
-    use crate::support::shared_fixtures::{finding};
     use super::support;
-    use std::fs;
+    use crate::support::shared_fixtures::finding;
     use crate::support::shared_fixtures::scan_path as scan;
     use bookdoctor::{Category, FileReport, Format, Severity};
+    use std::fs;
 
     fn docx_named(name: &str, remove: &[&str], add: &[(&str, &[u8])]) -> (tempfile::TempDir, std::path::PathBuf) {
         let d = tempfile::tempdir().unwrap();
@@ -624,7 +624,8 @@ mod package_structure {
 
     #[test]
     fn content_types_declaring_a_missing_part_is_reported() {
-        let types = support::DOCX_CONTENT_TYPES.replace("</Types>", r#"<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>"#);
+        let types = support::DOCX_CONTENT_TYPES
+            .replace("</Types>", r#"<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>"#);
         let (_d, p) = docx_named("a.docx", &[], &[("[Content_Types].xml", types.as_bytes())]);
         let r = scan(&p);
         let f = finding(&r, "OOXML_PART_MISSING");

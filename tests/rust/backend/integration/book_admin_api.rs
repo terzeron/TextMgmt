@@ -1,10 +1,10 @@
 #[path = "../common/mod.rs"]
 mod common;
 use backend::book_manager::{BookManager, BookManagerDeps};
-use backend::main::{app_with, AppDeps, AuthMode, BookManagerApi, CategoryMappingApi, MappingError};
+use backend::main::{AppDeps, AuthMode, BookManagerApi, CategoryMappingApi, MappingError, app_with};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 

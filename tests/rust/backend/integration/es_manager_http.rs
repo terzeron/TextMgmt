@@ -15,15 +15,15 @@ mod common;
 
 #[path = "../../common/tls_server.rs"]
 mod tls_server;
+use crate::common::shared_fixtures::transport;
+use backend::es_manager::{ESManager, EsError, EsTransport, HttpTransport, RealEsConnector};
+use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
-use backend::es_manager::{EsError, ESManager, EsTransport, HttpTransport, RealEsConnector};
-use serde_json::{json, Value};
 use sysdeps::SystemClock;
-use crate::common::shared_fixtures::{transport};
 
 // ---------------------------------------------------------------------------
 // 로컬 서버
@@ -251,13 +251,13 @@ fn real_connector_connects_through_http_and_uses_env_index() {
 }
 
 mod real_transport {
-    use crate::common::shared_fixtures::{transport};
-    use backend::es_manager::{EsError, ESManager, EsTransport, HttpTransport, SimilarDocsArgs, UpdateFields};
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use serde_json::{json, Value};
     use super::tls_server;
+    use crate::common::shared_fixtures::transport;
+    use backend::es_manager::{ESManager, EsError, EsTransport, HttpTransport, SimilarDocsArgs, UpdateFields};
+    use serde_json::{Value, json};
+    use std::collections::HashMap;
     use std::process::Command;
+    use std::sync::Arc;
     use std::thread;
     use std::time::{Duration, Instant};
 

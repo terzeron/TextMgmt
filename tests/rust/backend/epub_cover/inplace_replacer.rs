@@ -5,14 +5,14 @@ mod common;
 
 #[path = "../common/cover_fixtures.rs"]
 mod cover_fixtures;
-use std::fs::File;
-use std::path::{Path};
+use crate::common::shared_fixtures::{backups, opf_of, read, rev, str_of};
+use crate::common::{epub::BODY, epub::EpubSpec, epub::count_elements, epub::make_epub, fsx::ino_mtime, image::BLUE, image::encode_image, image::red_jpeg, zipx::member_names, zipx::read_zip_entry};
 use backend::book_manager::BookManager;
 use backend::epub_cover;
-use crate::common::{epub::BODY, epub::count_elements, epub::EpubSpec, epub::make_epub, fsx::ino_mtime, image::BLUE, image::encode_image, image::red_jpeg, zipx::member_names, zipx::read_zip_entry};
 use image::ImageFormat;
 use serde_json::Value;
-use crate::common::shared_fixtures::{backups, opf_of, read, rev, str_of};
+use std::fs::File;
+use std::path::Path;
 
 #[test]
 fn test_cover_replacement_preserves_content_and_has_one_generated_cover() {

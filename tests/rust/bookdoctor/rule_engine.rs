@@ -1,12 +1,12 @@
 //! `bookdoctor::rule_engine` 단위 테스트.
 
 mod support;
+use bookdoctor::cli_parser::Options;
+use bookdoctor::format_dispatcher::scan_file;
+use bookdoctor::rule_engine::parse;
+use bookdoctor::{FileReport, Severity, rule_engine};
 use std::fs;
 use std::sync::Arc;
-use bookdoctor::cli_parser::Options;
-use bookdoctor::{FileReport, rule_engine, Severity};
-use bookdoctor::rule_engine::{parse};
-use bookdoctor::format_dispatcher::scan_file;
 use std::time::{Duration, Instant};
 
 const MARKER_RULE: &str = "rule Marker { meta: severity = \"high\" description = \"시험 표지\" strings: $a = \"EVIL_MARKER\" nocase condition: $a }";

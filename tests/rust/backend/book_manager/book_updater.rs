@@ -5,14 +5,14 @@ mod common;
 
 #[path = "../common/book_fixtures.rs"]
 mod fx;
-use std::fs;
-use backend::book_manager::{AddBookError, BookManager};
-use backend::main::{BookManagerApi};
-use common::es_fake::{FakeEsManager};
-use common::faulty_fs::{fail_on_nth_call, FaultyFs, other_err};
-use serde_json::{json};
-use crate::common::shared_fixtures::{as_status, asyncio_runner, deps, make_doc, make_manager, split, tmp_dir};
 use crate::common::shared_fixtures::{LoaderReadError, book_adder, file_reader};
+use crate::common::shared_fixtures::{as_status, asyncio_runner, deps, make_doc, make_manager, split, tmp_dir};
+use backend::book_manager::{AddBookError, BookManager};
+use backend::main::BookManagerApi;
+use common::es_fake::FakeEsManager;
+use common::faulty_fs::{FaultyFs, fail_on_nth_call, other_err};
+use serde_json::json;
+use std::fs;
 
 // ---- coverage: index_single_file unsupported format ----
 

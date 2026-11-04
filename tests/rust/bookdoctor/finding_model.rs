@@ -1,9 +1,9 @@
 //! `bookdoctor::finding_model` 단위 테스트.
 
 mod support;
-use std::path::Path;
-use bookdoctor::finding_model::{COMBINATIONS, escalate, risk_score, Suppressed};
+use bookdoctor::finding_model::{COMBINATIONS, Suppressed, escalate, risk_score};
 use bookdoctor::{Category, FileReport, Finding, Format, Report, Severity};
+use std::path::Path;
 
 #[test]
 fn push_records_a_finding_and_report_trait_sees_it() {

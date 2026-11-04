@@ -4,14 +4,14 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use backend::book_manager::{BookManager};
-use std::{fs, io};
+use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, make_manager, tmp_dir};
+use backend::book_manager::BookManager;
+use backend::main::BookResponse;
+use common::es_fake::FakeEsManager;
 use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::sync::Arc;
-use backend::main::{BookResponse};
-use common::es_fake::FakeEsManager;
-use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, make_manager, tmp_dir};
+use std::{fs, io};
 
 const BASE: &str = "/api/books/1/html-resource";
 

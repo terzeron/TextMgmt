@@ -127,7 +127,6 @@ pub(crate) fn parse(argv: &[&str]) -> Result<Args, String> {
     Ok(args)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

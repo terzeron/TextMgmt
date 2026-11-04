@@ -6,22 +6,22 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::common::epub_book::read;
+use crate::common::epub_book::{book, make_book, make_multi, multi, page, write_zip};
+use crate::common::shared_fixtures::MULTI_PAGE;
+use crate::common::shared_fixtures::{assert_refused, edit, full, jpeg, size, text_of};
 use async_trait::async_trait;
-use backend::book_metadata::BookLookupError;
 use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
+use backend::book_metadata::BookLookupError;
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover::{EditImages, OPF_NS, read_package};
 use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
-use common::image::{b64};
+use common::image::b64;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use zip::ZipArchive;
-use crate::common::shared_fixtures::{assert_refused, edit, full, jpeg, size, text_of};
-use crate::common::shared_fixtures::{MULTI_PAGE};
-use crate::common::epub_book::{book, make_book, make_multi, multi, page, write_zip};
-use crate::common::epub_book::read;
 
 fn opf_ids(path: &Path, opf: &str, tag: &str, attr: &str) -> Vec<String> {
     let text = String::from_utf8(read(path)[opf].clone()).unwrap();

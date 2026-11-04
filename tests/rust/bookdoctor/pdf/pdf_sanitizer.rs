@@ -7,12 +7,12 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use bookdoctor::cli_parser::{Options};
-use bookdoctor::pdf::pdf_sanitizer::{rebuild, verify};
-use bookdoctor::format_dispatcher::scan_file;
-use lopdf::Document;
-use bookdoctor::{Category, Severity};
 use crate::support::shared_fixtures::{pdf, run_in};
+use bookdoctor::cli_parser::Options;
+use bookdoctor::format_dispatcher::scan_file;
+use bookdoctor::pdf::pdf_sanitizer::{rebuild, verify};
+use bookdoctor::{Category, Severity};
+use lopdf::Document;
 
 const CONTENT: &str = "BT /F1 12 Tf 10 20 Td (Hello world) Tj ET";
 
@@ -166,7 +166,15 @@ fn a_pdf_with_remaining_high_findings_is_left_untouched() {
     let d = tempfile::tempdir().unwrap();
     // 실행 파일처럼 보이는 첨부 파일 이름은 이번 정리가 지우는 대상이 아니다. 재검사에서 남으면 적용하지 않는다.
     let p = d.path().join("b.pdf");
-    fs::write(&p, build("/OpenAction 5 0 R /Names << /EmbeddedFiles << /Names [(a) 6 0 R] >> >>", "", &["<< /S /JavaScript /JS (x) >>", "<< /Type /Filespec /F (evil.exe) /EF << /F 7 0 R >> >>", "<< /Length 2 >>\nstream\nMZ\nendstream"])).unwrap();
+    fs::write(
+        &p,
+        build(
+            "/OpenAction 5 0 R /Names << /EmbeddedFiles << /Names [(a) 6 0 R] >> >>",
+            "",
+            &["<< /S /JavaScript /JS (x) >>", "<< /Type /Filespec /F (evil.exe) /EF << /F 7 0 R >> >>", "<< /Length 2 >>\nstream\nMZ\nendstream"],
+        ),
+    )
+    .unwrap();
     let before = fs::read(&p).unwrap();
     let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");

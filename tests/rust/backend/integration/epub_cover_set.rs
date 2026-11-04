@@ -7,21 +7,20 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use crate::common::cover_env::{env, split};
+use crate::common::shared_fixtures::URL;
+use crate::common::shared_fixtures::{assert_cover_error, attach_publisher_cover_page, cover_tmp_files, elements, err_has, has_cover, publisher_cover_epub, revision, spine_idrefs, xml_text};
 use backend::book_manager::BookManagerApi;
 use backend::epub_cover::{self, CoverError};
 use backend::main::{AppDeps, AuthMode, app_with};
 use common::{
     TestClient,
     epub::{EpubSpec, make_epub},
-    
     fsx::{dir_names, mtime_key, sha256_hex},
     image::{b64, color_jpeg, red_jpeg},
     zipx::{Members, bytes_replace, rewrite_epub_members},
 };
 use serde_json::{Value, json};
-use crate::common::shared_fixtures::{assert_cover_error, attach_publisher_cover_page, cover_tmp_files, elements, err_has, has_cover, publisher_cover_epub, revision, spine_idrefs, xml_text};
-use crate::common::shared_fixtures::URL;
-use crate::common::cover_env::{env, split};
 
 // ── 도구 ───────────────────────────────────────────────────
 

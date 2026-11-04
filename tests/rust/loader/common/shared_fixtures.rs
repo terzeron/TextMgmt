@@ -2,17 +2,17 @@
 #![allow(dead_code)]
 #![allow(clippy::type_complexity)]
 
+use doc_reader::pdf::{InProcess, StageRunner};
+use es_client::EsError;
+use es_client::indexing::IndexStore;
+use file_record::env_config::Config;
 use loader::cli_parser::{RunHooks, World, run, run_with_hooks};
+use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use doc_reader::pdf::{InProcess, StageRunner};
-use es_client::EsError;
-use es_client::indexing::IndexStore;
-use serde_json::Value;
 use tempfile::TempDir;
-use file_record::env_config::Config;
 
 #[derive(Clone)]
 pub struct FakeStore {

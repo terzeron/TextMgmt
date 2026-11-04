@@ -1,12 +1,12 @@
 #[path = "../common/mod.rs"]
 mod common;
+use crate::common::pdf_edit_env::env;
+use crate::common::shared_fixtures::split;
 use base64::Engine;
 use common::pdf::widths;
 use serde_json::json;
 use std::fs;
 use std::sync::Arc;
-use crate::common::shared_fixtures::{split};
-use crate::common::pdf_edit_env::env;
 
 #[tokio::test]
 async fn removes_original_page_numbers_and_reindexes_same_id() {
@@ -372,11 +372,11 @@ async fn jpeg_crop_preserves_quantization_sampling_progressive_and_grayscale() {
 }
 
 mod http_contract {
-    use crate::common::pdf_edit_env::env;
-    use crate::common::shared_fixtures::{FetchImage};
     use super::common;
+    use super::common::pdf::widths;
+    use crate::common::pdf_edit_env::env;
+    use crate::common::shared_fixtures::FetchImage;
     use backend::book_manager::{BookManager, BookManagerDeps};
-    use super::common::{pdf::widths};
     use serde_json::json;
     use std::fs;
     use std::sync::Arc;
@@ -428,8 +428,11 @@ mod http_contract {
     async fn http_url_preview_returns_uncached_jpeg() {
         use backend::main::{AppDeps, AuthMode, app_with};
         let e = env();
-        let bm =
-            Arc::new(BookManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()).with_image_fetcher(Arc::new(FetchImage(Ok(common::image::png_solid(80, 160, [10, 20, 30])))))));
+        let bm = Arc::new(BookManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()).with_image_fetcher(Arc::new(FetchImage(Ok(common::image::png_solid(
+            80,
+            160,
+            [10, 20, 30],
+        )))))));
         let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager(bm.clone()).with_comics_manager(bm)));
         for prefix in ["", "/comics"] {
             let path = format!("{prefix}/pdf-pages/1/insert-preview");

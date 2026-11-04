@@ -4,7 +4,6 @@
 //! - 검색·내려받기·시계·썸네일은 `CoverHooks`로 바꾼다. 기본값은 실제 구현이다. 설계: docs/rust-test-seams.md 3.7, 3.8, 3.12.
 //! - 취소(`check_cancelled`)는 Python `ContextVar`처럼 요청을 처리하는 스레드에 붙는다(`with_cancel_scope`).
 
-
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -24,11 +23,10 @@ use sha2::{Digest, Sha256};
 use sysdeps::{Clock, RealFs, SystemClock};
 use zip::ZipArchive;
 
-use htmlkit::url_parser::{Netloc, urlsplit};
 use crate::cover_sources::{CancelFn, GateError, STORES, SearchError, SearchHooks, StoreGate, blocked_status, build_search_url, search_candidates_with, store_hosts, store_lock_with};
 use crate::direct_cover_url::{ImageFetcher, RealImageFetcher};
 use crate::epub_cover::{self, CoverError, EpubCoverHooks, MAX_IMAGE_BYTES};
-
+use htmlkit::url_parser::{Netloc, urlsplit};
 
 const BOOK_CHANGED: &str = "EPUB이 변경되었습니다. 목록을 새로 불러오세요";
 const ALREADY_COVERED: &str = "EPUB에 이미 표지가 있습니다";

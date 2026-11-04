@@ -1,14 +1,11 @@
 mod common;
 #[path = "common/cover_fixtures.rs"]
 mod cover_fixtures;
-use std::collections::{BTreeMap, VecDeque};
-use std::fs::File;
-use std::path::{PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::common::shared_fixtures::{backups, epub_with_cover, hooks_with, read, rev, str_of, truthy};
+use crate::common::shared_fixtures::{fetcher, thumbnailer};
 use backend::book_manager::{BookManager, Thumbnailer};
 use backend::cover_management::{ApplyImageModel, Backup, CoverHooks, CoverManagement, EpubThumbnailer};
-use backend::cover_sources::{SearchError, SearchHooks, STORES};
+use backend::cover_sources::{STORES, SearchError, SearchHooks};
 use backend::epub_cover;
 use backend::epub_cover::{CoverError, Limits, MAX_IMAGE_BYTES};
 use common::clock::{Event, FakeClock};
@@ -18,9 +15,12 @@ use common::image::{b64, red_jpeg};
 use common::log_capture::LogCapture;
 use common::zipx::rewrite_epub_members;
 use cover_fixtures::cached_candidates;
-use serde_json::{json, Value};
-use crate::common::shared_fixtures::{backups, epub_with_cover, hooks_with, read, rev, str_of, truthy};
-use crate::common::shared_fixtures::{fetcher, thumbnailer};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, VecDeque};
+use std::fs::File;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn first_item(service: &CoverManagement) -> Value {
     service.missing("", "", 60, false).unwrap()["items"][0].clone()
@@ -887,8 +887,8 @@ mod clean_title {
 }
 
 mod cover_repair {
-    use crate::common::shared_fixtures::{broken_cover, first_item, truthy};
     use super::common;
+    use crate::common::shared_fixtures::{broken_cover, first_item, truthy};
 
     use backend::cover_management::CoverManagement;
 

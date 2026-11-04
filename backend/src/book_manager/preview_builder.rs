@@ -17,8 +17,8 @@ use zip::result::ZipError;
 
 use super::epub_inspector::{Edit, NCX_NS, OPF_NS, XML_DECLARATION, apply_edits, children_named, declare_unbound_prefixes, find_el, parse_xml, read_member, xml_text, zip_names};
 use super::path_validator::{clean_href, zip_path};
-use text_extractor::path::posix_dirname;
 use super::{BookManager, BookResponse};
+use text_extractor::path::posix_dirname;
 
 const HTML_VIEWER_CSP: &str = "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' blob:;";
 /// 뷰어 이미지 축소를 시도하는 최소 크기(바이트).
@@ -754,7 +754,6 @@ fn filter_ncx(raw: &[u8], zp: &str, files_to_include: &BTreeSet<String>) -> Opti
     }
     Some(format!("{XML_DECLARATION}{}", apply_edits(&text, doc.root_element().range(), edits)).into_bytes())
 }
-
 
 /// 평문을 문단(`<p>`)으로 나눈 미리보기 HTML. 빈 줄은 버린다.
 fn plain_text_html(plain_text: &str) -> String {

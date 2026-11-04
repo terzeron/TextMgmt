@@ -10,8 +10,7 @@ use crate::scan_runner::Report;
 ///
 /// `Critical`은 알려진 공격 수법이거나 정상 문서에 있을 이유가 없는 구조다. `High`는 "실행 가능한 구조가 있다"까지만 뜻하고
 /// 정상 인터랙티브 문서에도 흔하다. 둘을 섞으면 `High` 수천 건 속에서 실제 공격이 묻힌다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Severity {
     Low,
@@ -46,8 +45,7 @@ impl Severity {
 // ---- 파일 하나의 진단 결과 모델. bookdoctor가 채우고 출력한다. ----
 
 /// 파일 포맷.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Epub,
@@ -67,8 +65,7 @@ pub enum Format {
 }
 
 /// 지표의 분류.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Category {
     Security,
@@ -77,8 +74,7 @@ pub enum Category {
 }
 
 /// 뷰어가 이 지표를 막는지. 판정하기 전이거나 해당 없으면 `NotApplicable`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ViewerBlocked {
     #[serde(rename = "blocked")]
     Blocked,
@@ -89,8 +85,7 @@ pub enum ViewerBlocked {
 }
 
 /// 지표 한 건.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Finding {
     pub category: Category,
     pub severity: Severity,
@@ -108,8 +103,7 @@ pub const ENCRYPTION_CODES: &[&str] = &["ENCRYPTED"];
 const ENCRYPTED_REASON_MARKERS: &[&str] = &["encrypted: ", "ZIP-encrypted entry"];
 
 /// 출력 필터가 지운 지표의 심각도별 건수. 점수·요약에서 "숨겼을 뿐 있었다"를 남기려고 센다.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Suppressed {
     pub low: usize,
     pub medium: usize,
@@ -129,8 +123,7 @@ impl Suppressed {
 }
 
 /// 파일 하나의 보고서.
-#[derive(Debug, Clone, PartialEq)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FileReport {
     pub path: String,
     pub format: Option<Format>,
@@ -158,14 +151,7 @@ impl FileReport {
 
     /// 지표를 더한다. `viewer_blocked`는 나중에 채우므로 `NotApplicable`로 둔다.
     pub fn push(&mut self, category: Category, severity: Severity, code: &str, location: &str, detail: &str) {
-        self.findings.push(Finding {
-            category,
-            severity,
-            code: code.to_string(),
-            location: location.to_string(),
-            detail: detail.to_string(),
-            viewer_blocked: ViewerBlocked::NotApplicable,
-        });
+        self.findings.push(Finding { category, severity, code: code.to_string(), location: location.to_string(), detail: detail.to_string(), viewer_blocked: ViewerBlocked::NotApplicable });
     }
 
     /// 전체를 검사하지 못했다고 표시하고 이유를 남긴다.

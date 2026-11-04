@@ -1,8 +1,8 @@
 mod corpus;
+use doc_reader::py_str_compat::is_space;
+use doc_reader::text::{Enc, decode, detect_hint, high_byte_paired_ratio, read_from_text, reencode_text_file_to_utf8, summarize};
 use std::fs;
 use std::path::Path;
-use doc_reader::py_str_compat::is_space;
-use doc_reader::text::{decode, detect_hint, Enc, high_byte_paired_ratio, read_from_text, reencode_text_file_to_utf8, summarize};
 
 fn write(dir: &Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
     let path = dir.join(name);

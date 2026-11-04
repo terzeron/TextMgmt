@@ -5,20 +5,20 @@ mod fx;
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::fs;
-use std::fs::File;
-use std::io::{Cursor};
+use crate::common::dyn_es::make_manager;
+use crate::common::shared_fixtures::{CONTAINER, CONTAINER_XML, TempFile};
+use crate::common::shared_fixtures::{image_bytes, make_doc, namelist, write_zip_stored, zip_read_string};
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::BookManagerApi;
 use common::es_fake::FakeEsManager;
-use common::zipx::{write_zip};
-use serde_json::{json};
-use zip::ZipArchive;
 use common::runner::FakeRunner;
+use common::zipx::write_zip;
+use serde_json::json;
+use std::fs;
+use std::fs::File;
+use std::io::Cursor;
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{image_bytes, make_doc, namelist, write_zip_stored, zip_read_string};
-use crate::common::shared_fixtures::{CONTAINER, CONTAINER_XML, TempFile};
-use crate::common::dyn_es::make_manager;
+use zip::ZipArchive;
 
 /// URL 인코딩된 href 항목 및 전체보기(chapters=0) 시 EPUB 구조가 완전 보존되는지 검증.
 #[tokio::test]
@@ -173,16 +173,16 @@ async fn test_hwp_preview_empty_returns_message() {
 }
 
 mod get_pdf_pages {
-    use crate::common::pdf_env::{ResponseExt, build, env, make_doc};
-    use crate::common::shared_fixtures::{create_test_pdf};
     use super::common;
-    use std::fs;
-    use std::path::Path;
-    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+    use crate::common::pdf_env::{ResponseExt, build, env, make_doc};
+    use crate::common::shared_fixtures::create_test_pdf;
     use backend::book_manager::BookManager;
     use backend::pdf_page_reader::{PdfError, PdfPageOps, PdfReaderHandle};
     use common::faulty_fs::FaultyFs;
-    use common::pdf::{page_count_bytes};
+    use common::pdf::page_count_bytes;
+    use std::fs;
+    use std::path::Path;
+    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 
     impl ResponseExt for backend::main::BookResponse {
         fn header(&self, name: &str) -> Option<&str> {
@@ -412,13 +412,8 @@ mod get_pdf_pages {
 }
 
 mod get_book_preview {
-    use crate::common::shared_fixtures::{asyncio_runner, blank_pdf_bytes, blank_pdf_bytes_sized, deps, make_doc, make_manager, tmp_dir};
     use super::common;
-    use std::{fs, io};
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::Path;
-    use std::sync::Arc;
-    use std::time::{Duration, SystemTime};
+    use crate::common::shared_fixtures::{asyncio_runner, blank_pdf_bytes, blank_pdf_bytes_sized, deps, make_doc, make_manager, tmp_dir};
     use backend::book_manager::BookManager;
     use backend::epub_cover::EpubCoverHooks;
     use backend::main::{BookManagerApi, BookResponse};
@@ -429,6 +424,11 @@ mod get_book_preview {
     use common::fsx::{mtime_key, set_mtime};
     use common::runner::FakeRunner;
     use common::zipx::write_zip;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime};
+    use std::{fs, io};
     use sysdeps::CommandError;
 
     /// `BookResponse` 읽기 도우미(테스트 로컬). `is_file`은 본문이 있으면 참이다(파일을 읽어 담은 응답).
@@ -695,7 +695,10 @@ mod get_book_preview {
         let epub = tmp_path.join("A").join("test.epub");
         fs::create_dir_all(epub.parent().unwrap()).unwrap();
         // style.css는 zip에 없다.
-        write_zip(&epub, &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML_CONTENT_OPF.as_bytes()), ("content.opf", opf.as_bytes()), ("ch1.xhtml", chapter.as_bytes())]);
+        write_zip(
+            &epub,
+            &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML_CONTENT_OPF.as_bytes()), ("content.opf", opf.as_bytes()), ("ch1.xhtml", chapter.as_bytes())],
+        );
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
@@ -877,7 +880,10 @@ mod get_book_preview {
         let epub = tmp_path.join("A").join("test.epub");
         fs::create_dir_all(epub.parent().unwrap()).unwrap();
         // cover.png는 zip에 없다. manifest에 있고 HTML에서 참조한다.
-        write_zip(&epub, &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML_CONTENT_OPF.as_bytes()), ("content.opf", opf.as_bytes()), ("ch1.xhtml", chapter.as_bytes())]);
+        write_zip(
+            &epub,
+            &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML_CONTENT_OPF.as_bytes()), ("content.opf", opf.as_bytes()), ("ch1.xhtml", chapter.as_bytes())],
+        );
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
@@ -1291,16 +1297,17 @@ async fn test_preview_keeps_cover_image_not_referenced_by_chapters() {
 }
 
 mod hwp_preview {
-    use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, tmp_dir};
     use super::common;
-    use std::{fs};
-    use backend::book_manager::BookManager;
     use super::common::{es_fake::FakeEsManager, runner::FakeRunner};
-    use std::path::{Path, PathBuf};
+    use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, tmp_dir};
+    use backend::book_manager::BookManager;
     use backend::main::{BookManagerApi, BookResponse};
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     /// `BookResponse` 읽기 도우미(테스트 로컬). `is_file`은 본문이 있으면 참이다(파일을 읽어 담은 응답).
-    trait ResponseExt {    fn body_text(&self) -> String;
+    trait ResponseExt {
+        fn body_text(&self) -> String;
     }
 
     impl ResponseExt for BookResponse {

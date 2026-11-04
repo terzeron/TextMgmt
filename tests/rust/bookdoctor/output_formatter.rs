@@ -14,7 +14,10 @@ fn sanitize_replaces_c0_and_c1_controls_and_cuts_at_the_limit() {
 
 #[test]
 fn sanitize_display_also_replaces_bidi_and_zero_width_characters() {
-    for c in ['\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{200E}', '\u{200F}', '\u{061C}', '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}'] {
+    for c in [
+        '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{200E}', '\u{200F}', '\u{061C}', '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}',
+        '\u{FEFF}',
+    ] {
         assert!(is_hidden_format_char(c), "{c:?}");
         assert_eq!(sanitize_display(&format!("a{c}b"), 100, None), "a.b", "{c:?}");
     }

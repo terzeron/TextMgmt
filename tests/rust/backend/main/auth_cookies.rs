@@ -2,9 +2,9 @@
 
 #[path = "../common/mod.rs"]
 mod common;
+use crate::common::shared_fixtures::fixture;
 use backend::main::{ACCESS_COOKIE_NAME, CustomJSONResponse, REFRESH_COOKIE_NAME};
 use serde_json::json;
-use crate::common::shared_fixtures::{fixture};
 
 #[test]
 fn test_default_values() {

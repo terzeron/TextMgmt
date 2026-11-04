@@ -1,11 +1,12 @@
 //! ZIP 멤버 이름 규칙. EPUB 보안 검사(`epub::security`)와 ZIP·DOCX·HWPX 검사가 같은 규칙을 쓰도록 순수 함수로 둔다.
 //! 이름이 가리키는 위험은 압축을 푸는 쪽(추출기)이 입는다: 경로 탈출(Zip Slip), 절대 경로, Windows 장치 이름, NTFS 스트림.
 
-use text_extractor::path::unquote;
 use crate::Severity;
+use text_extractor::path::unquote;
 
 /// Windows 예약 장치 이름. 확장자를 떼고 소문자로 비교한다.
-pub const WIN_RESERVED: &[&str] = &["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"];
+pub const WIN_RESERVED: &[&str] =
+    &["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"];
 
 /// 이름 하나에서 나온 지표. 위치(멤버 이름)는 호출자가 붙인다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

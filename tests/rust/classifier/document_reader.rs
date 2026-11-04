@@ -1,13 +1,13 @@
 mod common;
+use classifier::document_reader::read_epub_publisher;
+use common::epub::{EpubSpec, make_epub};
+use common::zipx::write_zip;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use classifier::document_reader::read_epub_publisher;
 use tempfile::TempDir;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
-use common::epub::{EpubSpec, make_epub};
-use common::zipx::write_zip;
 
 /// Python `_make_epub(path, docs, opf)` 대응. `opf`가 있으면 `content.opf`로 넣는다.
 fn make_opf_epub(path: &Path, docs: &[(&str, &str)], opf: Option<&str>) {

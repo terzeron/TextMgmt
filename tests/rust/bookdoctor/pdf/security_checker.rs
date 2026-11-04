@@ -2,13 +2,13 @@
 
 #[path = "../support/mod.rs"]
 mod support;
-use std::fs;
+use crate::support::shared_fixtures::pdf;
 use bookdoctor::cli_parser::Options;
-use bookdoctor::pdf::security_checker;
 use bookdoctor::format_dispatcher::scan_file;
-use lopdf::{Dictionary, Document, Object, StringFormat};
+use bookdoctor::pdf::security_checker;
 use bookdoctor::{Category, FileReport, Severity};
-use crate::support::shared_fixtures::{pdf};
+use lopdf::{Dictionary, Document, Object, StringFormat};
+use std::fs;
 
 const PAGES: &str = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
 
@@ -628,9 +628,9 @@ fn scan_on_bytes_without_header_marks_incomplete_only() {
 }
 
 mod action_and_stream_abuse {
-    use std::path::Path;
     use bookdoctor::pdf::security_checker;
     use bookdoctor::{Category, FileReport, Severity};
+    use std::path::Path;
 
     /// 객체 본문 목록으로 PDF를 만든다. 1번 Catalog, 2번 Pages, 3번 Page, 4번부터 `more`다. 본문은 바이트라 스트림을 담을 수 있다.
     fn pdf(catalog_extra: &str, more: &[Vec<u8>]) -> Vec<u8> {

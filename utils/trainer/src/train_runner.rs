@@ -128,7 +128,8 @@ pub(super) fn run(args: &Args, io: &mut CliIo<'_>, deps: &Deps) -> Result<i32, S
         classifier_config::save_config(&cfg, &config_path).map_err(|e| e.to_string())?;
         writeln!(io.out, "설정 저장: {}", config_path.display()).map_err(|e| e.to_string())?;
     }
-    writeln!(io.out, "{}\nRust 모델 저장: {}\n홀드아웃 명단 저장: {}", model_trainer::format_report(&report), out.display(), data_loader::holdout_manifest_path(&out).display()).map_err(|e| e.to_string())?;
+    writeln!(io.out, "{}\nRust 모델 저장: {}\n홀드아웃 명단 저장: {}", model_trainer::format_report(&report), out.display(), data_loader::holdout_manifest_path(&out).display())
+        .map_err(|e| e.to_string())?;
     Ok(0)
 }
 

@@ -1,8 +1,8 @@
 //! 인증 테스트 대역(`FixedRole`)과 토큰·앱 준비물. 여러 테스트 파일의 같은 사본을 모았다.
 #![allow(dead_code)]
 
-use backend::main::RoleResolver;
 use super::shared_fixtures::{Fx, Mock};
+use backend::main::RoleResolver;
 use std::sync::Arc;
 
 // TODO(common): FakeGoogle, FakeStore는 main_mock, view_history_api도 쓴다. 이 파일로 옮긴다.

@@ -7,13 +7,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::book_manager::{BookDeletion, CoverPage};
+use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::es_manager::EsManagerApi;
 
 /// 사용 가능한 구현이 없을 때 쓰는 사유 문구. 각 trait의 기본 구현이 돌려준다.
 pub const UNIMPLEMENTED: &str = "unimplemented";
-
 
 // ---------------------------------------------------------------------------
 // 책 관리자

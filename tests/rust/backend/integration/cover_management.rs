@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::common::shared_fixtures::fetcher;
+use crate::common::shared_fixtures::{backups, opf_of, read, rev, str_of, truthy};
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::cover_management::{CoverHooks, CoverManagement, check_cancelled};
 use backend::epub_cover::{self, CoverError, OPF_NS};
@@ -16,7 +18,6 @@ use common::{
     TestClient,
     clock::Event,
     epub::{BODY, EpubSpec, append_child, count_elements, make_epub},
-
     es_fake::FakeEsManager,
     fsx::{count_matching, dir_names, ino_mtime},
     image::{BLUE, b64, encode_image, image_size, red_jpeg},
@@ -26,8 +27,6 @@ use cover_fixtures::{cached_candidates, cover_api};
 use image::ImageFormat;
 use serde_json::{Value, json};
 use zip::CompressionMethod;
-use crate::common::shared_fixtures::{backups, opf_of, read, rev, str_of, truthy};
-use crate::common::shared_fixtures::{fetcher};
 
 /// 항목마다 `keys`의 값을 배열로 묶는다. Python `[(item[a], item[b]) for item in items]`.
 fn pick(items: &Value, keys: &[&str]) -> Vec<Value> {

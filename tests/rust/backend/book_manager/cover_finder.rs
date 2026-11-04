@@ -5,20 +5,20 @@ mod fx;
 
 #[path = "../common/mod.rs"]
 mod common;
+use crate::common::cover_docs::{create_test_pdf, use_doc};
+use crate::common::shared_fixtures::{broken_cover, error_text, first_item, truthy};
+use crate::common::shared_fixtures::{fetcher, thumbnailer};
 use backend::book_manager::{BookManager, BookManagerDeps};
-use common::epub::{BODY};
-use common::es_fake::FakeEsManager;
-use common::fsx::ino_mtime;
-use common::image::{b64, red_jpeg};
-use serde_json::{json, Value};
 use backend::cover_management::CoverManagement;
 use backend::epub_cover;
 use backend::epub_cover::{CoverError, MAX_IMAGE_BYTES};
-use common::zipx::{read_zip_entry};
+use common::epub::BODY;
+use common::es_fake::FakeEsManager;
+use common::fsx::ino_mtime;
+use common::image::{b64, red_jpeg};
+use common::zipx::read_zip_entry;
 use fx::{Edit, Opts};
-use crate::common::shared_fixtures::{broken_cover, error_text, first_item, truthy};
-use crate::common::shared_fixtures::{fetcher, thumbnailer};
-use crate::common::cover_docs::{create_test_pdf, use_doc};
+use serde_json::{Value, json};
 
 #[tokio::test]
 async fn test_cover_ignores_legacy_id_only_cache() {
@@ -73,14 +73,14 @@ fn test_broken_cover_search_and_replacement_preserve_body_and_backup() {
 }
 
 mod upload_limits {
-    use crate::common::shared_fixtures::{error_text};
     use super::{common, fx};
-    use std::fs;
+    use crate::common::shared_fixtures::error_text;
     use backend::epub_cover::{EpubCoverHooks, Limits};
     use common::edits;
+    use std::fs;
 
     use common::image::png_solid;
-    use fx::{Edit, image_env, Opts, with_deps};
+    use fx::{Edit, Opts, image_env, with_deps};
 
     /// `fx::env`가 만든 환경의 `BookManager`를 Deps 설정을 더해 다시 만든다. `loader`가 참이면 파일 읽기 대역도 꽂는다.
     // TODO(common): `book_fixtures::Opts`가 Deps 설정 훅(`configure: Option<Box<dyn FnOnce(BookManagerDeps) -> BookManagerDeps>>`)을 받으면 이 헬퍼가 필요 없다.
@@ -110,10 +110,10 @@ async fn test_upload_rejects_encoded_data_over_byte_limit_before_decoding() {
 mod download_failures {
     use crate::common::cover_env::env;
     use crate::common::shared_fixtures::URL;
-    use crate::common::shared_fixtures::{err_has};
+    use crate::common::shared_fixtures::err_has;
     use std::fs;
 
-    use backend::direct_cover_url::{FetchError};
+    use backend::direct_cover_url::FetchError;
 
     #[tokio::test]
     async fn test_download_failure_returns_the_reason_and_keeps_the_file() {

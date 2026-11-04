@@ -1,13 +1,12 @@
-
 mod common;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use trainer::Deps;
+use crate::common::shared_fixtures::{fixture, run};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{fixture, run};
+use trainer::Deps;
 
 #[test]
 fn manifest_uses_exact_membership_and_rejects_invalid_or_missing_members() {
