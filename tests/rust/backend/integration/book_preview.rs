@@ -1482,7 +1482,7 @@ async fn test_download_with_path_returns_404() {
 async fn test_download_nonexistent_book() {
     let setup = setup!();
     let response = setup.client.get("/download/999999999").await;
-    // get_book_content는 doc 못 찾으면 빈 문자열 반환 (FastAPI가 JSON "\"\"" 또는 "" 직렬화)
+    // get_book_content는 doc 못 찾으면 빈 문자열 반환
     assert_eq!(response.status, 200);
     assert_eq!(response.text().trim_matches('"'), "");
 }
@@ -1725,7 +1725,7 @@ enum Behavior {
     TimesOut,
 }
 
-/// `patch("asyncio.create_subprocess_exec", side_effect=...)` 대역.
+/// 외부 명령 실행 대역.
 struct FakeSpawner {
     behavior: Behavior,
     probe: Arc<ProcProbe>,
@@ -2129,9 +2129,9 @@ async fn test_multiple_messages_parsed() {
     assert_eq!(result["messages"][1]["location"]["path"], "ch2.xhtml");
 }
 
-// ── tests: validate_pdf 단위 테스트 (pikepdf mock) ────────
+// ── tests: validate_pdf 단위 테스트 (PDF 열기 대역) ────────
 
-/// `MagicMock` pikepdf 문서. `close` 호출 횟수는 `close_calls`로 확인한다.
+/// PDF 문서 대역. `close` 호출 횟수는 `close_calls`로 확인한다.
 struct MockPdf {
     issues: Result<Vec<String>, String>,
     docinfo: HashMap<String, String>,
@@ -2163,12 +2163,12 @@ impl PdfDoc for MockPdf {
     }
 }
 
-/// `patch("pikepdf.open", return_value=mock_pdf)` 또는 `side_effect=Exception(...)`.
+/// PDF 열기 대역. 정한 문서나 오류를 한 번 돌려준다.
 struct FakeOpener(Mutex<Option<Result<MockPdf, String>>>);
 
 impl PdfOpener for FakeOpener {
     fn open(&self, _path: &Path) -> Result<Box<dyn PdfDoc>, PdfError> {
-        self.0.lock().unwrap().take().expect("pikepdf.open이 두 번 불렸다").map(|pdf| Box::new(pdf) as Box<dyn PdfDoc>).map_err(|message| PdfError { kind: "Exception".to_string(), message })
+        self.0.lock().unwrap().take().expect("PDF 열기가 두 번 불렸다").map(|pdf| Box::new(pdf) as Box<dyn PdfDoc>).map_err(|message| PdfError { kind: "Exception".to_string(), message })
     }
 }
 
@@ -2190,12 +2190,12 @@ fn make_mock_pdf_book(tmp_path: &Path, file_type: &str) -> BookRef {
     BookRef { book_id: 1, file_type: file_type.to_string(), file_path: pdf_path }
 }
 
-/// pikepdf 대역을 끼운 manager로 `validate_pdf(1)`을 부른다.
+/// PDF 열기 대역을 끼운 manager로 `validate_pdf(1)`을 부른다.
 async fn validate_pdf_with(bm: &UnitSetup, opened: Result<MockPdf, String>) -> (Option<Value>, Option<String>) {
     split(bm.manager(|d| d.with_pdf_opener(Arc::new(FakeOpener(Mutex::new(Some(opened)))))).validate_pdf(1).await)
 }
 
-/// `validate_pdf` 메서드의 단위 테스트 (pikepdf mock).
+/// `validate_pdf` 메서드의 단위 테스트(PDF 열기 대역).
 /// 정상 PDF → valid=True, messages 비어있음.
 #[tokio::test]
 async fn test_valid_pdf() {

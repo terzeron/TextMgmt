@@ -101,7 +101,7 @@ fn issue_auth_tokens(deps: &AppDeps, email: &str, role: &str, name: &str, pictur
 }
 
 async fn verify_google_token(State(deps): State<Arc<AppDeps>>, client: ClientInfo, ApiJson(body): ApiJson<Value>) -> ApiResult<Response> {
-    // `request_body: dict`: 객체가 아니면 FastAPI가 422로 거부한다.
+    // 본문이 JSON 객체가 아니면 422로 거부한다.
     if !body.is_object() {
         return Err(super::error_responses::RequestValidationError::single(&["body"], "Input should be a valid dictionary", body.clone()).into());
     }

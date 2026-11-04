@@ -24,7 +24,7 @@ pub(super) fn routes() -> Routes {
     )
 }
 
-/// FastAPI의 `book_id: int` 검증. 정수가 아니면 422다.
+/// `book_id` 경로 값 검증. 정수가 아니면 422다.
 async fn record_book_view(State(deps): State<Arc<AppDeps>>, RequireAuth(payload): RequireAuth, Path(book_id): Path<String>) -> ApiResult<Json<Value>> {
     record_view(&deps, &payload, parse_book_id(&book_id)?, "book").await
 }

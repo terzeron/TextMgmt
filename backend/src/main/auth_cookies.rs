@@ -71,7 +71,7 @@ pub fn get_cookie_settings() -> (bool, String) {
 }
 
 fn set_cookie_value(name: &str, value: &str, secure: bool, samesite: &str, max_age: i64) -> HeaderValue {
-    // 속성 순서는 Starlette(`http.cookies`)가 만드는 순서와 같다.
+    // 속성 순서를 고정한다.
     let text = format!("{name}={value}; HttpOnly; Max-Age={max_age}; Path=/; SameSite={samesite}{}", if secure { "; Secure" } else { "" });
     HeaderValue::from_str(&text).unwrap_or_else(|_| HeaderValue::from_static(""))
 }
@@ -203,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn set_cookie_attribute_order_matches_starlette() {
+    fn set_cookie_attribute_order_is_fixed() {
         let v = set_cookie_value("tm_access_token", "t", true, "lax", 7200);
         assert_eq!(v.to_str().unwrap(), "tm_access_token=t; HttpOnly; Max-Age=7200; Path=/; SameSite=lax; Secure");
     }

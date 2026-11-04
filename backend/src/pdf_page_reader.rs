@@ -11,7 +11,7 @@ use std::path::Path;
 
 use lopdf::{Document, Object, xref::XrefRecovery};
 
-/// PDF 라이브러리 오류. `kind`는 오류 종류 이름이다(`"OpenError"`, `"RuntimeError"` 등).
+/// PDF 라이브러리 오류. `kind`는 오류 종류 이름이다(`"OpenError"`, `"ReadError"` 등).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdfError {
     pub kind: String,
@@ -32,7 +32,7 @@ impl fmt::Display for PdfError {
 
 impl std::error::Error for PdfError {}
 
-/// 열린 PDF 한 건. `pikepdf.Pdf`에 대응한다.
+/// 열린 PDF 한 건.
 pub trait PdfDoc: Send {
     fn page_count(&self) -> usize;
     fn pdf_version(&self) -> String;
@@ -43,12 +43,12 @@ pub trait PdfDoc: Send {
     fn close(&self);
 }
 
-/// `pikepdf.open`.
+/// PDF를 연다.
 pub trait PdfOpener: Send + Sync {
     fn open(&self, path: &Path) -> Result<Box<dyn PdfDoc>, PdfError>;
 }
 
-/// `pypdf`의 `PdfReader`/`PdfWriter`.
+/// PDF 쪽 읽기·쓰기.
 pub trait PdfPageOps: Send + Sync {
     fn page_count(&self, path: &Path) -> Result<usize, PdfError>;
     /// 0부터 세는 반열린 구간 `[start, end)`의 쪽만 담은 새 PDF 바이트를 돌려준다.
@@ -144,14 +144,14 @@ pub struct LopdfPageOps;
 impl PdfPageOps for LopdfPageOps {
     fn page_count(&self, path: &Path) -> Result<usize, PdfError> {
         std::fs::metadata(path).map_err(|e| PdfError::new("OSError", e.to_string()))?;
-        sysdeps::pdf_worker_client::page_count(&sysdeps::SystemRunner, path).map_err(|e| PdfError::new("RuntimeError", e))
+        sysdeps::pdf_worker_client::page_count(&sysdeps::SystemRunner, path).map_err(|e| PdfError::new("ReadError", e))
     }
     fn extract_pages(&self, path: &Path, start: usize, end: usize) -> Result<Vec<u8>, PdfError> {
         if start >= end {
-            return Err(PdfError::new("RuntimeError", "Invalid PDF page range"));
+            return Err(PdfError::new("ReadError", "Invalid PDF page range"));
         }
         std::fs::metadata(path).map_err(|e| PdfError::new("OSError", e.to_string()))?;
-        sysdeps::pdf_worker_client::extract_pages(&sysdeps::SystemRunner, path, start + 1, end).map_err(|e| PdfError::new("RuntimeError", e))
+        sysdeps::pdf_worker_client::extract_pages(&sysdeps::SystemRunner, path, start + 1, end).map_err(|e| PdfError::new("ReadError", e))
     }
 }
 

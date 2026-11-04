@@ -413,13 +413,13 @@ pub(crate) fn entry_names<R: Read + Seek>(archive: &ZipArchive<R>) -> Vec<String
 
 /// `archive.getinfo(name).file_size`. 없으면 `KeyError`다.
 pub(crate) fn entry_size<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> FResult<u64> {
-    let index = archive.index_for_name(name).ok_or_else(|| Fail::Lib(format!("KeyError: {name}")))?;
+    let index = archive.index_for_name(name).ok_or_else(|| Fail::Lib(format!("ZIP 항목이 없다: {name}")))?;
     Ok(archive.by_index_raw(index)?.size())
 }
 
 /// `archive.read(name)`. 헤더가 밝힌 크기보다 많이 풀리면 거절한다(zip bomb).
 pub(crate) fn read_entry<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> FResult<Vec<u8>> {
-    let index = archive.index_for_name(name).ok_or_else(|| Fail::Lib(format!("KeyError: {name}")))?;
+    let index = archive.index_for_name(name).ok_or_else(|| Fail::Lib(format!("ZIP 항목이 없다: {name}")))?;
     let mut entry = archive.by_index(index)?;
     let declared = entry.size();
     let mut data = Vec::with_capacity(declared.min(MAX_IMAGE_BYTES as u64 * 2) as usize);

@@ -6,7 +6,7 @@
 //! - `backend::book_metadata::Book { book_id: i64, category: String, title: String, author: String, file_type: String, file_path: PathBuf, file_size: i64, updated_time: NaiveDateTime }`
 //! - `backend::book_manager::{BookManager, BookManagerDeps}`
 //!   - 생성: `BookManager::with_deps(BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>).with_*(..)) -> BookManager` (구 `for_test`. 전역 `Book.path_prefix`를 건드리지 않고 매니저가 들고 있는다)
-//!   - 생성: `BookManager::from_env(env: &dyn Fn(&str) -> Option<String>, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, RuntimeError>` (구 `new_from_env`/`new_with`/`with_es_url`)
+//!   - 생성: `BookManager::from_env(env: &dyn Fn(&str) -> Option<String>, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, BookManagerError>` (구 `new_from_env`/`new_with`/`with_es_url`)
 //!   - `BookManagerDeps` 빌더(소비형, 3.12): `with_fs(Arc<dyn FsOps>)`, `with_runner(Arc<dyn CommandRunner>)`, `with_pdf_opener(Arc<dyn PdfOpener>)`, `with_pdf_pages(Arc<dyn PdfPageOps>)`,
 //!     `with_file_reader(Arc<dyn FileReader>)`, `with_bulk_reindex_batch_size(usize)`, `with_scan_observer(Arc<dyn Fn() + Send + Sync>)`, `with_classifier_factory(Arc<dyn Fn() -> Arc<dyn Classify> + Send + Sync>)`
 //!   - 문서 3.12에 없는 seam(3.0 규칙대로 `with_*`로 옮겨 가정한 것. 확정 필요): `with_get_category_mismatches_override(Arc<dyn Fn(bool) -> Value + Send + Sync>)`,
@@ -34,7 +34,7 @@
 //!     `get_epub_total_chapters(&Path) -> i64`, `downscale_epub_image(&[u8]) -> Vec<u8>`, `book_id_for_path(&Path) -> Option<i64>`,
 //!     `convert_with_libreoffice_with(&dyn CommandRunner, bin: &str, work_dir: Option<&Path>, &Path, fmt: &str) -> String`, `find_libreoffice_with(which: &dyn Fn(&str) -> Option<String>, exists: &dyn Fn(&Path) -> bool) -> String`,
 //!     `validate_preview_epub_with(&dyn FsOps, &Path) -> Result<(), String>`, `evict_old_cache_with(&dyn FsOps, &Path)`, `join_created_time_backfill_thread(Duration)`
-//! - `backend::book_manager::{BookContent::{File(PathBuf), Text(String)}, BookResponse { status_code: u16, body: Vec<u8> }, RuntimeError(String), ProposeOptions { use_bookstore: Option<bool>, use_content_meta: Option<bool>, on_progress: Option<&dyn Fn(Value)> }: Default}`
+//! - `backend::book_manager::{BookContent::{File(PathBuf), Text(String)}, BookResponse { status_code: u16, body: Vec<u8> }, BookManagerError(String), ProposeOptions { use_bookstore: Option<bool>, use_content_meta: Option<bool>, on_progress: Option<&dyn Fn(Value)> }: Default}`
 //! - `sysdeps::{FsOps, CommandRunner, CommandOutput { returncode: i32, stdout: Vec<u8>, stderr: Vec<u8> }, CommandError::{Timeout, NotFound, Failed(String)}}` (문서 3.1. `FsOps`는 `common::faulty_fs::FaultyFs`, `CommandRunner`는 `common::runner::FakeRunner`가 구현한다)
 //! - `backend::pdf_page_reader::{PdfOpener { fn open(&self, &Path) -> Result<Box<dyn PdfDoc>, PdfError> }, PdfDoc (page_count/pdf_version/docinfo/check_pdf_syntax/close), PdfPageOps (page_count/extract_pages), PdfError { kind, message }}` (문서 3.11)
 //! - `classifier::Classify { fn is_available(&self) -> bool; fn classify_path(&self, &Path, Option<f64>) -> Result<Prediction, String>; fn classify_document(&self, &Value, Option<f64>) -> Result<Prediction, String> }`
@@ -59,9 +59,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::common::file_reader_fakes::FnFileReader;
 use crate::common::shared_fixtures::{as_status, make_doc, outcome, run, split, verdict};
-use backend::book_manager::{BookContent, BookManager, BookManagerDeps, BookResponse, FileReader, ProposeOptions, RuntimeError};
+use backend::book_manager::{BookContent, BookManager, BookManagerDeps, BookManagerError, BookResponse, FileReader, ProposeOptions};
 use backend::book_metadata::{Book, BookPage};
-use backend::es_manager::{ESManager, EsError, EsManagerApi};
+use backend::es_manager::{ESManager, EsError, EsManagerApi, Hit, PagedHits};
 use backend::pdf_page_reader::{PdfDoc, PdfError, PdfOpener, PdfPageOps};
 use classifier::Classify;
 use classifier::Prediction;
@@ -117,7 +117,7 @@ fn minimal_spec() -> EpubSpec {
     spec
 }
 
-/// `pikepdf` 대역이 돌려주는 PDF 한 건. 구 `PdfInfo`를 `PdfDoc`으로 흡수했다(3.11 `StaticPdfDoc`).
+/// PDF 열기 대역이 돌려주는 PDF 한 건. 구 `PdfInfo`를 `PdfDoc`으로 흡수했다(3.11 `StaticPdfDoc`).
 #[derive(Clone)]
 struct StaticPdfDoc {
     docinfo: HashMap<String, String>,
@@ -146,7 +146,7 @@ impl PdfDoc for StaticPdfDoc {
     fn close(&self) {}
 }
 
-/// `pikepdf.open` 대역.
+/// PDF 열기 대역.
 enum FakePdfOpener {
     Ok(StaticPdfDoc),
     OpenError(String),
@@ -161,7 +161,7 @@ impl PdfOpener for FakePdfOpener {
     }
 }
 
-/// `pypdf`(PdfReader/PdfWriter) 대역.
+/// PDF 쪽 읽기·쓰기 대역.
 enum FakePdfPageOps {
     Ok { page_count: usize, output: Vec<u8> },
     ReaderError { kind: String, message: String },
@@ -642,7 +642,7 @@ mod test_book_manager {
         assert!(!categories.is_empty(), "테스트 인덱스에 문서가 없다");
 
         let category = categories.keys().next().unwrap().clone();
-        let (page, total, _next_cursor) = bm.es_manager().search_by_category_paged(&category, 5, None).unwrap();
+        let PagedHits { hits: page, total, .. } = bm.es_manager().search_by_category_paged(&category, 5, None).unwrap();
         assert!(total > 0);
         assert!(!page.is_empty());
     }
@@ -981,7 +981,7 @@ fn test_category_mismatches_cache_and_details() {
     let inode = tmp_path.join("A/dup.txt");
     write(&inode, "z");
     let inode_id = fs::metadata(&inode).unwrap().ino() as i64;
-    es.with(|s| s.category_docs = vec![(inode_id, make_doc("A/dup.txt", ".txt"), 1.0), (999999, make_doc("A/dup.txt", ".txt"), 1.0)]);
+    es.with(|s| s.category_docs = vec![Hit::new(inode_id, make_doc("A/dup.txt", ".txt"), 1.0), Hit::new(999999, make_doc("A/dup.txt", ".txt"), 1.0)]);
     let details = manager.get_category_mismatch_details("A");
     assert!(!details["duplicates"].as_array().unwrap().is_empty());
     assert!(details["fs_count"].as_i64().unwrap() >= 1);
@@ -996,7 +996,7 @@ fn test_category_mismatch_details_root() {
     let root_file = tmp_path.join("root.txt");
     write(&root_file, "x");
     let ino = fs::metadata(&root_file).unwrap().ino() as i64;
-    es.with(|s| s.category_docs = vec![(ino, make_doc("root.txt", ".txt"), 1.0)]);
+    es.with(|s| s.category_docs = vec![Hit::new(ino, make_doc("root.txt", ".txt"), 1.0)]);
     let details = manager.get_category_mismatch_details("_root");
     assert!(details["fs_count"].as_i64().unwrap() >= 1);
 }
@@ -1560,13 +1560,13 @@ fn test_search_by_keyword_and_similar() {
     let tmp = TempDir::new().unwrap();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
-    es.with(|s| s.keyword = vec![(1, make_doc("a.txt", ".txt"), 1.0)]);
+    es.with(|s| s.keyword = vec![Hit::new(1, make_doc("a.txt", ".txt"), 1.0)]);
     assert!(!run(manager.search_by_keyword("k", -1)).unwrap().is_empty());
 
     es.with(|s| s.keyword = vec![]);
     assert!(run(manager.search_by_keyword("k", -1)).is_err());
 
-    es.with(|s| s.similar = vec![(2, make_doc("b.txt", ".txt"), 1.0)]);
+    es.with(|s| s.similar = vec![Hit::new(2, make_doc("b.txt", ".txt"), 1.0)]);
     let es_doc = make_doc("a.txt", ".txt");
     es.on_search_by_id(move |_| Ok(Some(es_doc.clone())));
     assert!(!run(manager.search_similar_books(1, -1)).unwrap().is_empty());
@@ -1580,7 +1580,7 @@ fn test_search_similar_books_paged_and_add_book() {
     let tmp = TempDir::new().unwrap();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
-    es.with(|s| s.similar_paged = (vec![(2, make_doc("b.txt", ".txt"), 10.0)], 1));
+    es.with(|s| s.similar_paged = (vec![Hit::new(2, make_doc("b.txt", ".txt"), 10.0)], 1));
     es.on_search_by_id(|_| Ok(Some(make_doc("a.txt", ".txt"))));
     assert_eq!(run(manager.search_similar_books_paged(1, 10, 0)).unwrap().total, 1);
 
@@ -1596,7 +1596,7 @@ fn test_search_by_keyword_paged() {
     let tmp = TempDir::new().unwrap();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
-    es.with(|s| s.keyword_paged = (vec![(1, make_doc("a.txt", ".txt"), 1.0)], 1));
+    es.with(|s| s.keyword_paged = (vec![Hit::new(1, make_doc("a.txt", ".txt"), 1.0)], 1));
     let BookPage { books, total, .. } = run(manager.search_by_keyword_paged("k", 10, 0, None, None)).unwrap();
     assert_eq!(total, 1);
     assert!(!books.is_empty());
@@ -1762,7 +1762,7 @@ fn test_book_manager_init_requires_env() {
     // TM_BOOK_DIR을 지운 환경을 흉내낸다. 프로세스 환경을 바꾸지 않도록 조회 함수를 주입한다.
     let get_env = |_name: &str| -> Option<String> { None };
     let result = BookManager::from_env(&get_env, &|_url: &str| -> Arc<dyn EsManagerApi> { FakeEsManager::new() });
-    assert!(matches!(result, Err(RuntimeError(_))));
+    assert!(matches!(result, Err(BookManagerError(_))));
 }
 
 #[test]
@@ -1852,7 +1852,7 @@ fn test_catalog_search_paths_report_missing_required_es_fields() {
     let malformed = json!({"title": "T", "author": "U", "file_path": "A/t.txt", "file_type": ".txt", "file_size": 1, "updated_time": "2024-01-01T00:00:00"});
     let es = FakeEsManager::with_doc(make_doc("A/base.txt", ".txt"));
     es.with(|state| {
-        state.category_docs = vec![(2, malformed.clone(), 1.0)];
+        state.category_docs = vec![Hit::new(2, malformed.clone(), 1.0)];
         state.keyword = state.category_docs.clone();
         state.keyword_paged = (state.category_docs.clone(), 1);
         state.similar = state.category_docs.clone();
@@ -2577,7 +2577,7 @@ fn test_propose_category_changes_rejects_invalid_category() {
     assert!(err2.as_deref().unwrap().contains("디렉토리를 찾을 수 없습니다"));
 }
 
-/// 스캔된 경로가 corpus 밖이면(ValueError) 그 항목만 실패로 남기고 계속한다.
+/// 스캔된 경로가 corpus 밖이면(CoverSourceError) 그 항목만 실패로 남기고 계속한다.
 #[test]
 fn test_propose_category_changes_records_value_error() {
     let tmp = TempDir::new().unwrap();
@@ -2774,7 +2774,7 @@ fn test_get_book_preview_pdf_exception() {
     write(tmp_path.join("A/a.pdf"), b"%PDF");
     es.on_search_by_id(|_| Ok(Some(make_doc("A/a.pdf", "pdf"))));
 
-    deps = deps.with_pdf_pages(Arc::new(FakePdfPageOps::ReaderError { kind: "RuntimeError".to_string(), message: "boom".to_string() }));
+    deps = deps.with_pdf_pages(Arc::new(FakePdfPageOps::ReaderError { kind: "ReadError".to_string(), message: "boom".to_string() }));
     let manager = BookManager::with_deps(deps);
     let resp = run(manager.get_book_preview(1, None, None));
     assert_eq!(resp.status_code, 500);
@@ -2907,7 +2907,7 @@ fn test_category_mismatch_details_es_only() {
     let tmp = TempDir::new().unwrap();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
-    es.with(|s| s.category_docs = vec![(1, make_doc("A/missing.txt", ".txt"), 1.0)]);
+    es.with(|s| s.category_docs = vec![Hit::new(1, make_doc("A/missing.txt", ".txt"), 1.0)]);
     mkdir(tmp.path().join("A"));
     let details = manager.get_category_mismatch_details("A");
     assert!(!details["es_only"].as_array().unwrap().is_empty());
@@ -2925,7 +2925,7 @@ fn test_category_mismatch_details_normalizes_absolute_es_paths() {
     write(&file_path, "x");
 
     let ino = fs::metadata(&file_path).unwrap().ino() as i64;
-    es.with(|s| s.category_docs = vec![(ino, make_doc(file_path.to_str().unwrap(), ".txt"), 1.0)]);
+    es.with(|s| s.category_docs = vec![Hit::new(ino, make_doc(file_path.to_str().unwrap(), ".txt"), 1.0)]);
 
     let details = manager.get_category_mismatch_details("A");
 
@@ -2941,7 +2941,7 @@ fn test_category_mismatch_details_stat_error() {
     let es = FakeEsManager::new();
     let mut deps = make_deps(tmp_path, &es);
     write(tmp_path.join("dup.txt"), "x");
-    es.with(|s| s.category_docs = vec![(1, make_doc("dup.txt", ".txt"), 1.0), (2, make_doc("dup.txt", ".txt"), 1.0)]);
+    es.with(|s| s.category_docs = vec![Hit::new(1, make_doc("dup.txt", ".txt"), 1.0), Hit::new(2, make_doc("dup.txt", ".txt"), 1.0)]);
 
     let fs_ops = FaultyFs::new();
     fs_ops.set_metadata(|_path| Some(io::Error::other("no stat")));
@@ -3281,12 +3281,12 @@ fn test_get_pdf_pages_exception() {
     write(tmp_path.join("A/a.pdf"), b"%PDF");
     es.on_search_by_id(|_| Ok(Some(make_doc("A/a.pdf", "pdf"))));
 
-    deps = deps.with_pdf_pages(Arc::new(FakePdfPageOps::ReaderError { kind: "RuntimeError".to_string(), message: "boom".to_string() }));
+    deps = deps.with_pdf_pages(Arc::new(FakePdfPageOps::ReaderError { kind: "ReadError".to_string(), message: "boom".to_string() }));
     let manager = BookManager::with_deps(deps);
     let resp = run(manager.get_pdf_pages(1, 1, 1));
     assert_eq!(resp.status_code, 500);
     // 원인 파악이 가능하도록 예외 타입과 메시지를 본문에 포함한다
-    assert_eq!(String::from_utf8(resp.body).unwrap(), "PDF pages extraction failed (RuntimeError): boom");
+    assert_eq!(String::from_utf8(resp.body).unwrap(), "PDF pages extraction failed (ReadError): boom");
 }
 
 /// Lines 1147, 1149: rename_category path traversal

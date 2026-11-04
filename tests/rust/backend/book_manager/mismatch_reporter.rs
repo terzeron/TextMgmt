@@ -5,7 +5,7 @@ mod common;
 use crate::common::shared_fixtures::{deps, make_doc, make_manager, tmp_dir};
 use backend::book_manager::BookManager;
 use backend::main::BookManagerApi;
-use common::es_fake::FakeEsManager;
+use common::es_fake::{FakeEsManager, Hit};
 use common::log_capture::LogCapture;
 use serde_json::json;
 use std::fs;
@@ -23,8 +23,8 @@ fn test_get_category_mismatch_details_reads_all_pages() {
     fs::write(&first, "x").unwrap();
     fs::write(&second, "y").unwrap();
     es.set_category_docs(vec![
-        (fs::metadata(&first).unwrap().ino() as i64, make_doc("A/first.txt", ".txt"), 1.0),
-        (fs::metadata(&second).unwrap().ino() as i64, make_doc("A/second.txt", ".txt"), 1.0),
+        Hit::new(fs::metadata(&first).unwrap().ino() as i64, make_doc("A/first.txt", ".txt"), 1.0),
+        Hit::new(fs::metadata(&second).unwrap().ino() as i64, make_doc("A/second.txt", ".txt"), 1.0),
     ]);
     // 상한을 1로 줄인다(문서에 없는 seam, 파일 머리말 참고).
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_max_category_result_count(1));

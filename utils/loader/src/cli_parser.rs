@@ -12,7 +12,7 @@ use es_client::EsError;
 use es_client::indexing::IndexStore;
 use stat::Stat;
 
-use crate::batch_loader::{FILE_ARGUMENT_BATCH_SIZE, Loader, ProcessHooks, direct_files, recursive_files_with_unreadable, sample_files};
+use crate::batch_loader::{BatchCounts, FILE_ARGUMENT_BATCH_SIZE, Loader, ProcessHooks, direct_files, recursive_files_with_unreadable, sample_files};
 use file_record::env_config::Config;
 use file_record::record_builder::ReadOutcome;
 
@@ -233,7 +233,7 @@ pub fn run_with_hooks(program: &str, args: &[String], world: &World, out: &mut d
         if pending.is_empty() {
             return Ok(());
         }
-        let (processed, _, _) = loader.process_file_iter_with_hooks(out, pending.clone(), true, skip_text, None, &process_hooks)?;
+        let BatchCounts { processed, .. } = loader.process_file_iter_with_hooks(out, pending.clone(), true, skip_text, None, &process_hooks)?;
         let _ = writeln!(out, "  argument 파일 {}개 중 {processed}개 적재 완료", pending.len());
         pending.clear();
         Ok(())
@@ -293,7 +293,7 @@ pub fn run_with_hooks(program: &str, args: &[String], world: &World, out: &mut d
         if options.recursive {
             let (files, unreadable) = recursive_files_with_unreadable(&target);
             let mut seen: Option<HashSet<i64>> = options.reload.then(HashSet::new);
-            let (processed, skipped, synced) = process_batch_or_fail!(loader.process_file_iter_with_hooks(out, files, options.reload, skip_text, seen.as_mut(), &process_hooks));
+            let BatchCounts { processed, skipped, synced } = process_batch_or_fail!(loader.process_file_iter_with_hooks(out, files, options.reload, skip_text, seen.as_mut(), &process_hooks));
             let _ = writeln!(out, "  총 {processed}개 파일 처리됨");
             if skipped > 0 {
                 let _ = writeln!(out, "  총 {skipped}개 중복 파일 건너뜀");
@@ -356,7 +356,7 @@ pub fn run_with_hooks(program: &str, args: &[String], world: &World, out: &mut d
                         let _ = writeln!(out, "      {name}/ -> {}", file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default());
                     }
                     let paths: Vec<PathBuf> = chosen.into_iter().map(|(_, f)| f).collect();
-                    let (processed, skipped, synced) = process_batch_or_fail!(loader.process_file_iter_with_hooks(out, paths, options.reload, skip_text, None, &process_hooks));
+                    let BatchCounts { processed, skipped, synced } = process_batch_or_fail!(loader.process_file_iter_with_hooks(out, paths, options.reload, skip_text, None, &process_hooks));
                     let _ = writeln!(out, "    {processed}개 카테고리 샘플 저장, {skipped}개 중복 건너뜀");
                     if synced > 0 {
                         let _ = writeln!(out, "    {synced}개 경로 동기화");
@@ -368,7 +368,7 @@ pub fn run_with_hooks(program: &str, args: &[String], world: &World, out: &mut d
             }
             let current = direct_files(&target);
             let _ = writeln!(out, "    {}개 파일 발견", current.len());
-            let (_, skipped, synced) = process_batch_or_fail!(loader.process_file_iter_with_hooks(out, current, options.reload, skip_text, None, &process_hooks));
+            let BatchCounts { skipped, synced, .. } = process_batch_or_fail!(loader.process_file_iter_with_hooks(out, current, options.reload, skip_text, None, &process_hooks));
             if skipped > 0 {
                 let _ = writeln!(out, "    {skipped}개 중복 파일 건너뜀");
             }

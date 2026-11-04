@@ -63,7 +63,7 @@ fn trait_defaults_report_unsupported() {
     check(bare.search_group_representatives(&categories, &excluded).map(|_| ()));
 }
 
-type Hit = (i64, Value, f64);
+use backend::es_manager::{CoverFileHit, CoverFileHits, Hit, PagedHits};
 
 /// `with_search_stub`이 받은 호출 하나: (query, sort, max_result_count).
 type SearchCall = (Value, Option<Value>, i64);
@@ -405,7 +405,7 @@ fn test_search_and_scroll_and_paged() {
     let es = new_es();
     let manager = make_manager(&es);
     let results = manager.search(&json!({"match": {"title": "a"}}), None, 5, None).unwrap();
-    assert_eq!(results, vec![(1, json!({"a": 1}), 100.0)]);
+    assert_eq!(results, vec![Hit::new(1, json!({"a": 1}), 100.0)]);
 
     let results = manager.search(&json!({"match": {"title": "a"}}), None, 20000, None).unwrap();
     assert!(!results.is_empty());
@@ -413,7 +413,7 @@ fn test_search_and_scroll_and_paged() {
 
     let (paged, total) = manager.search_paged(&json!({"match": {"title": "a"}}), None, 10, 0, 0.0, None).unwrap();
     assert_eq!(total, 2);
-    assert_eq!(paged[0].2, 100.0);
+    assert_eq!(paged[0].score, 100.0);
 }
 
 #[test]
@@ -422,7 +422,7 @@ fn test_search_paged_with_self_score_and_get_self_score() {
     let manager = make_manager(&es);
     let (results, total) = manager.search_paged_with_self_score(&[json!({"match": {"title": {"query": "a"}}})], 1, 10, 0).unwrap();
     assert_eq!(total, 1);
-    assert_eq!(results[0].2, 50.0);
+    assert_eq!(results[0].score, 50.0);
 }
 
 #[test]
@@ -517,7 +517,7 @@ fn test_search_similar_docs_paged_without_exclude() {
     let args = SimilarDocsArgs { title: "t".into(), author: "a".into(), file_size: 100, summary: "s".into(), size: 3, offset: 1, ..Default::default() };
     let (results, total) = manager.search_similar_docs_paged(&args).unwrap();
     assert_eq!(total, 2);
-    assert_eq!(results, vec![(1, json!({"a": 1}), 10.0)]);
+    assert_eq!(results, vec![Hit::new(1, json!({"a": 1}), 10.0)]);
 }
 
 #[test]
@@ -528,7 +528,7 @@ fn test_search_builders_delegate_to__search() {
     let sink = captured.clone();
     let stub: SearchStub = Arc::new(move |query, sort, max_result_count, _fields| {
         sink.lock().unwrap().push((query.clone(), sort.cloned(), max_result_count));
-        Ok(vec![(1, json!({"ok": true}), 100.0)])
+        Ok(vec![Hit::new(1, json!({"ok": true}), 100.0)])
     });
     let manager = make_manager(&es).with_search_stub(stub);
     assert!(!manager.search_by_title("hello", "epub", 123, 5).unwrap().is_empty());
@@ -759,7 +759,7 @@ fn test_init_missing_env_var() {
     let env = |key: &str| if key == "TM_ES_BOOK_INDEX" { None } else { default_env(key) };
     let clock = FakeClock::new(0.0);
     match connect_with(&env, &new_es(), &clock) {
-        Err(ESManagerError::SystemExit(_)) => {}
+        Err(ESManagerError::FatalConfigError(_)) => {}
         other => panic!("SystemExit를 기대했다: {:?}", other.map(|_| ())),
     }
 }
@@ -837,7 +837,7 @@ fn test_search_by_keyword_negative_max() {
 fn test_search_similar_docs_negative_max() {
     // Line 335: search_similar_docs with negative max_result_count
     let es = new_es();
-    let stub: SearchStub = Arc::new(|_query, _sort, _max, _fields| Ok(vec![(1, json!({"a": 1}), 100.0)]));
+    let stub: SearchStub = Arc::new(|_query, _sort, _max, _fields| Ok(vec![Hit::new(1, json!({"a": 1}), 100.0)]));
     let manager = make_manager(&es).with_search_stub(stub);
     let args = SimilarDocsArgs { title: "t".into(), author: "a".into(), summary: "s".into(), file_size: 10, max_result_count: -1, ..Default::default() };
     let results: Vec<Hit> = manager.search_similar_docs(&args).unwrap();
@@ -1207,8 +1207,8 @@ fn test_search_by_category_paged_returns_cursor_and_total() {
     let captured = capture(&es, "search", response);
 
     // size와 hit 수가 같으므로 다음 페이지가 있다고 본다
-    let (result, total, next_after) = manager.search_by_category_paged("A", 2, None);
-    let ids: Vec<i64> = result.iter().map(|(doc_id, _src, _score)| *doc_id).collect();
+    let PagedHits { hits: result, total, search_after: next_after } = manager.search_by_category_paged("A", 2, None);
+    let ids: Vec<i64> = result.iter().map(|hit| hit.id).collect();
     assert_eq!(ids, vec![1, 2]);
     assert_eq!(total, 32355);
     assert_eq!(next_after, Some(vec![json!("나"), json!("/2.epub")]));
@@ -1219,8 +1219,7 @@ fn test_search_by_category_paged_returns_cursor_and_total() {
     assert!(!captured.as_object().unwrap().contains_key("search_after"));
 
     // hit 수가 size보다 적으면 마지막 페이지
-    let (_result, _total, next_after) = manager.search_by_category_paged("A", 10, None);
-    assert_eq!(next_after, None);
+    assert_eq!(manager.search_by_category_paged("A", 10, None).search_after, None);
 }
 
 #[test]
@@ -1232,7 +1231,7 @@ fn test_search_by_category_paged_passes_search_after_and_handles_error() {
     assert_eq!(captured.lock().unwrap()["search_after"], json!(["가", "/1.epub"]));
 
     es.on("search", |_| Err(runtime("es down")));
-    assert_eq!(manager.search_by_category_paged("A", 5, None), (vec![], 0, None));
+    assert_eq!(manager.search_by_category_paged("A", 5, None), PagedHits::default());
 }
 
 #[test]
@@ -1262,7 +1261,7 @@ fn test_search_latest_docs_sorts_by_updated_time_and_excludes_hidden_categories(
     let (result, total) = manager.search_latest_docs(100, Some(&["A"]));
 
     assert_eq!(total, 1);
-    assert_eq!(result[0].0, 7);
+    assert_eq!(result[0].id, 7);
     let captured = captured.lock().unwrap().clone();
     assert_eq!(captured["size"], json!(100));
     assert_eq!(captured["track_total_hits"], json!(true));
@@ -1526,8 +1525,8 @@ fn test_search_similar_docs_paged_with_exclude_id() {
     let (results, total) = manager.search_similar_docs_paged(&args).unwrap();
     assert_eq!(total, 1);
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].0, 2);
-    assert_eq!(results[0].2, 80.0);
+    assert_eq!(results[0].id, 2);
+    assert_eq!(results[0].score, 80.0);
 }
 
 #[test]
@@ -1654,9 +1653,9 @@ fn test_search_cover_files_paged_filters_types_and_categories_and_returns_sort_v
     let manager = make_manager(&es);
     let captured = capture(&es, "search", json!({"hits": {"total": {"value": 9}, "hits": [{"_id": "1", "_source": {"title": "가"}, "sort": ["가", "/1.epub"]}]}}));
 
-    let (hits, total) = manager.search_cover_files_paged(&["A", "B"], 1, Some(&[json!("x"), json!("y")]), Some(&["secret"]));
+    let CoverFileHits { hits, total } = manager.search_cover_files_paged(&["A", "B"], 1, Some(&[json!("x"), json!("y")]), Some(&["secret"]));
 
-    assert_eq!(hits, vec![(1, json!({"title": "가"}), vec![json!("가"), json!("/1.epub")])]);
+    assert_eq!(hits, vec![CoverFileHit::new(1, json!({"title": "가"}), vec![json!("가"), json!("/1.epub")])]);
     assert_eq!(total, 9);
     let captured = captured.lock().unwrap().clone();
     assert_eq!(captured["query"]["bool"]["filter"], json!([{"terms": {"file_type": ["epub", "pdf"]}}, {"terms": {"category": ["A", "B"]}}]));
@@ -1671,10 +1670,10 @@ fn test_search_cover_files_paged_skips_search_without_categories_and_handles_err
     let es = new_es();
     let manager = make_manager(&es);
     es.on("search", |_| panic!("검색하면 안 된다"));
-    assert_eq!(manager.search_cover_files_paged(&[], 60, None, None), (vec![], 0));
+    assert_eq!(manager.search_cover_files_paged(&[], 60, None, None), CoverFileHits::default());
 
     es.on("search", |_| Err(runtime("es down")));
-    assert_eq!(manager.search_cover_files_paged(&["A"], 60, None, None), (vec![], 0));
+    assert_eq!(manager.search_cover_files_paged(&["A"], 60, None, None), CoverFileHits::default());
 }
 
 #[test]
@@ -1730,7 +1729,7 @@ mod api_facade {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
-    type SearchStub = Arc<dyn Fn(&Value, Option<&Value>, i64, Option<&[String]>) -> Result<Vec<(i64, Value, f64)>, backend::es_manager::EsError> + Send + Sync>;
+    type SearchStub = Arc<dyn Fn(&Value, Option<&Value>, i64, Option<&[String]>) -> Result<Vec<backend::es_manager::Hit>, backend::es_manager::EsError> + Send + Sync>;
 
     /// `_manager()`: 가짜 ES와 인덱스 이름 `idx`를 가진 매니저.
     fn manager() -> (ESManager, Arc<DummyEs>) {

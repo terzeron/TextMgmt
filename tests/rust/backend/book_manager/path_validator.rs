@@ -161,7 +161,7 @@ fn test_iter_category_indexable_files_branches() {
     // Line 1353: hidden file
     fs::write(cat_dir.join(".hidden.txt"), "x").unwrap();
 
-    // 1. Lines 1350-1351: relative_to raises ValueError
+    // 1. Lines 1350-1351: relative_to raises CoverSourceError
     // 2. Line 1358: resolve not relative to root
     let outside_file = PathBuf::from("/tmp/outside_dummy.txt");
     let hidden = cat_dir.join(".hidden.txt");

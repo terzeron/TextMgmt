@@ -2,7 +2,7 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use crate::common::shared_fixtures::{asyncio_runner, blank_pdf_bytes, make_doc, make_manager, tmp_dir};
+use crate::common::shared_fixtures::{blank_pdf_bytes, block_on, make_doc, make_manager, tmp_dir};
 use common::es_fake::FakeEsManager;
 use std::fs;
 
@@ -26,7 +26,7 @@ fn test_validate_pdf_producer_and_creation_date() {
 
     es.set_doc(Some(make_doc("A/test.pdf", "pdf")));
 
-    let result = asyncio_runner(manager.validate_pdf(1)).expect("result is not None");
+    let result = block_on(manager.validate_pdf(1)).expect("result is not None");
     assert!(result["publication"].get("producer").is_some());
     assert!(result["publication"].get("creation_date").is_some());
 }

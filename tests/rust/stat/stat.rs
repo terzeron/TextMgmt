@@ -51,16 +51,16 @@ fn pdf_stages_are_sorted_and_count_outcomes() {
     s.record_pdf_stage("pdfium", 0.5, "ok");
     s.record_pdf_stage("pdfium", 1.5, "timeout");
     s.record_pdf_stage("isbn_pdfium", 0.25, "empty");
-    s.record_pdf_stage("pypdf", 0.0, "damaged");
-    s.record_pdf_stage("pypdf", 0.0, "error");
+    s.record_pdf_stage("isbn_fallback", 0.0, "damaged");
+    s.record_pdf_stage("isbn_fallback", 0.0, "error");
     let out = printed(&s);
     let lines: Vec<&str> = out.lines().filter(|l| l.starts_with("  - ")).collect();
     assert_eq!(lines.len(), 3);
-    assert!(lines[0].starts_with("  - isbn_pdfium"), "{lines:?}");
-    assert!(lines[1].starts_with("  - pdfium"));
-    assert!(lines[2].starts_with("  - pypdf"));
-    assert_eq!(lines[1], format!("  - {:<24} 0000002 / 1.0000 / ok=1 empty=0 damaged=0 timeout=1 error=0", "pdfium"));
-    assert!(lines[2].ends_with("ok=0 empty=0 damaged=1 timeout=0 error=1"));
+    assert!(lines[0].starts_with("  - isbn_fallback"), "{lines:?}");
+    assert!(lines[1].starts_with("  - isbn_pdfium"));
+    assert!(lines[2].starts_with("  - pdfium"));
+    assert_eq!(lines[2], format!("  - {:<24} 0000002 / 1.0000 / ok=1 empty=0 damaged=0 timeout=1 error=0", "pdfium"));
+    assert!(lines[0].ends_with("ok=0 empty=0 damaged=1 timeout=0 error=1"));
 }
 
 #[test]

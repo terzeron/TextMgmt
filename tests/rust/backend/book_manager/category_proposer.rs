@@ -7,7 +7,7 @@ mod common;
 mod fx;
 use crate::common::category_apply::{ApplyOpts, apply_opts};
 use crate::common::shared_fixtures::manager;
-use crate::common::shared_fixtures::{allowed_set, asyncio_runner, deps, make_doc, make_manager, make_source_file, outcome, propose, split, tmp_dir};
+use crate::common::shared_fixtures::{allowed_set, block_on, deps, make_doc, make_manager, make_source_file, outcome, propose, split, tmp_dir};
 use crate::common::shared_fixtures::{book_adder, file_reader, setup};
 use backend::book_manager::{AddBookError, BookManager, KeywordMatch, MoveOpts, ProposeOptions};
 use classifier::BookClassifierApi;
@@ -161,12 +161,12 @@ async fn propose_opts(manager: &BookManager, category: &str, mappings: &Mappings
 }
 
 fn manager_propose(manager: &BookManager, category: &str, mappings: &Mappings) -> (Value, Option<String>) {
-    asyncio_runner(propose_opts(manager, category, mappings, ProposeOpts { use_bookstore: false, use_content_meta: false, on_progress: None }))
+    block_on(propose_opts(manager, category, mappings, ProposeOpts { use_bookstore: false, use_content_meta: false, on_progress: None }))
 }
 
 #[test]
 fn test_classification_haystack_relative_to_error() {
-    // Lines 1275-1276: ValueError in classification_haystack
+    // Lines 1275-1276: CoverSourceError in classification_haystack
     let tmp = tmp_dir();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
     let outside_file = Path::new("/tmp/outside/nested/book.epub");
@@ -188,7 +188,7 @@ fn test_move_classified_file_keeps_both_when_content_differs() {
     fs::create_dir_all(existing.parent().unwrap()).unwrap();
     fs::write(&existing, "기존 파일 내용은 다르다").unwrap();
 
-    let (result, err) = split(asyncio_runner(manager.move_classified_file(&src, "B", "book", MoveOpts { clean_existing: true, ..Default::default() })));
+    let (result, err) = split(block_on(manager.move_classified_file(&src, "B", "book", MoveOpts { clean_existing: true, ..Default::default() })));
 
     assert!(err.is_none());
     assert_eq!(result.unwrap()["to"], "B/book (1).txt");
@@ -210,7 +210,7 @@ fn test_move_classified_file_numbers_up_when_bracket_name_taken() {
     fs::write(tmp_path.join("B").join("book.txt"), "첫 번째").unwrap();
     fs::write(tmp_path.join("B").join("book (1).txt"), "두 번째").unwrap();
 
-    let (result, err) = split(asyncio_runner(manager.move_classified_file(&src, "B", "book", MoveOpts::default())));
+    let (result, err) = split(block_on(manager.move_classified_file(&src, "B", "book", MoveOpts::default())));
 
     assert!(err.is_none());
     assert_eq!(result.unwrap()["to"], "B/book (2).txt");
@@ -229,7 +229,7 @@ fn test_move_classified_file_same_size_different_content_keeps_both() {
     fs::create_dir(tmp_path.join("B")).unwrap();
     fs::write(tmp_path.join("B").join("book.txt"), "BBBB").unwrap();
 
-    let (result, err) = split(asyncio_runner(manager.move_classified_file(&src, "B", "book", MoveOpts { clean_existing: true, ..Default::default() })));
+    let (result, err) = split(block_on(manager.move_classified_file(&src, "B", "book", MoveOpts { clean_existing: true, ..Default::default() })));
 
     assert!(err.is_none());
     assert_eq!(result.unwrap()["to"], "B/book (1).txt");
@@ -243,9 +243,9 @@ fn test_move_classified_file_edge_cases() {
     let tmp_path = tmp.path();
     let manager = make_manager(tmp_path, &FakeEsManager::new());
 
-    // 1. 1379-1380: old_rel_path ValueError
+    // 1. 1379-1380: old_rel_path CoverSourceError
     let outside_file = Path::new("/tmp/outside/file.txt");
-    let (res, err) = split(asyncio_runner(manager.move_classified_file(outside_file, "B", "book", MoveOpts::default())));
+    let (res, err) = split(block_on(manager.move_classified_file(outside_file, "B", "book", MoveOpts::default())));
     assert!(res.is_none());
     assert_eq!(err.as_deref(), Some("잘못된 파일 경로입니다"));
 
@@ -257,7 +257,7 @@ fn test_move_classified_file_edge_cases() {
     let faulty_resolve = FaultyFs::new();
     faulty_resolve.set_canonicalize(|p| p.to_string_lossy().contains("bad_target").then(|| other_err("target path resolve error")));
     let manager_resolve = BookManager::with_deps(deps(tmp_path, &FakeEsManager::new()).with_fs(faulty_resolve));
-    let (res2, err2) = split(asyncio_runner(manager_resolve.move_classified_file(&f1, "bad_target", "book", MoveOpts::default())));
+    let (res2, err2) = split(block_on(manager_resolve.move_classified_file(&f1, "bad_target", "book", MoveOpts::default())));
     assert!(res2.is_none());
     assert_eq!(err2.as_deref(), Some("잘못된 대상 경로입니다"));
 
@@ -269,7 +269,7 @@ fn test_move_classified_file_edge_cases() {
     let faulty_dup = FaultyFs::new();
     faulty_dup.set_same_file(|_a, _b| Some(other_err("samefile failed")));
     let manager_dup = BookManager::with_deps(deps(tmp_path, &FakeEsManager::new()).with_fs(faulty_dup.clone()));
-    let (res3, err3) = split(asyncio_runner(manager_dup.move_classified_file(&f1, "B", "book", MoveOpts { dry_run: true, clean_existing: true, ..Default::default() })));
+    let (res3, err3) = split(block_on(manager_dup.move_classified_file(&f1, "B", "book", MoveOpts { dry_run: true, clean_existing: true, ..Default::default() })));
     let res3 = res3.expect("res3");
     assert_eq!(res3["action"], "duplicate_clean");
     assert_eq!(res3["status"], "dry_run");
@@ -278,7 +278,7 @@ fn test_move_classified_file_edge_cases() {
     // 4. 1420-1421: clean_existing exception
     // samefile 실패는 그대로 두고 unlink(remove_file)만 더 실패시킨다.
     faulty_dup.set_remove_file(|_p| Some(other_err("delete duplicate failed")));
-    let (res4, err4) = split(asyncio_runner(manager_dup.move_classified_file(&f1, "B", "book", MoveOpts { dry_run: false, clean_existing: true, ..Default::default() })));
+    let (res4, err4) = split(block_on(manager_dup.move_classified_file(&f1, "B", "book", MoveOpts { dry_run: false, clean_existing: true, ..Default::default() })));
     assert!(res4.is_none());
     assert!(err4.expect("err4").contains("중복 파일 정리 실패"));
 
@@ -291,7 +291,7 @@ fn test_move_classified_file_edge_cases() {
     let faulty_move = FaultyFs::new();
     faulty_move.set_rename(|_src, _dst| Some(other_err("cross-device link failed")));
     let manager_err = BookManager::with_deps(deps(tmp_path, &err_es).with_fs(faulty_move));
-    let (res5, err5) = split(asyncio_runner(manager_err.move_classified_file(&f1, "B", "book", MoveOpts::default())));
+    let (res5, err5) = split(block_on(manager_err.move_classified_file(&f1, "B", "book", MoveOpts::default())));
     assert!(res5.is_none());
     assert!(err5.expect("err5").contains("파일 이동 실패"));
 
@@ -306,7 +306,7 @@ fn test_move_classified_file_edge_cases() {
     faulty_rollback.set_rename(fail_on_nth_call(2, "rollback move error"));
     let manager_add_err = BookManager::with_deps(deps(tmp_path, &add_err_es).with_book_adder(book_adder(|| Err(AddBookError::Rejected("ES add error".to_string())))).with_fs(faulty_rollback));
 
-    let (res6, err6) = split(asyncio_runner(manager_add_err.move_classified_file(&f2, "B", "book", MoveOpts::default())));
+    let (res6, err6) = split(block_on(manager_add_err.move_classified_file(&f2, "B", "book", MoveOpts::default())));
     assert!(res6.is_none());
     let err6 = err6.expect("err6");
     assert!(err6.contains("ES add error"));
@@ -329,7 +329,7 @@ fn test_move_classified_file_is_a_noop_when_already_in_target_category() {
     let book = category_dir.join("제자리 도서.txt");
     fs::write(&book, "내용").unwrap();
 
-    let (result, err) = split(asyncio_runner(manager.move_classified_file(&book, "2_science", "book", MoveOpts::default())));
+    let (result, err) = split(block_on(manager.move_classified_file(&book, "2_science", "book", MoveOpts::default())));
 
     assert!(err.is_none());
     let result = result.expect("result");
@@ -360,7 +360,7 @@ fn test_move_classified_file_does_not_orphan_a_hardlink() {
     fs::create_dir(&target_dir).unwrap();
     fs::hard_link(&source, target_dir.join(source.file_name().unwrap())).unwrap();
 
-    let (result, err) = split(asyncio_runner(manager.move_classified_file(&source, "2_science", "book", MoveOpts { clean_existing: false, ..Default::default() })));
+    let (result, err) = split(block_on(manager.move_classified_file(&source, "2_science", "book", MoveOpts { clean_existing: false, ..Default::default() })));
 
     assert!(result.is_none());
     assert!(err.expect("err").contains("대상 경로에 파일이 이미 존재합니다"));
@@ -383,7 +383,7 @@ fn test_move_classified_file_rejects_existing_duplicate_without_clean() {
     fs::create_dir(&target_dir).unwrap();
     fs::write(target_dir.join(conflict.file_name().unwrap()), "같은 내용").unwrap();
 
-    let (result, err) = split(asyncio_runner(manager.move_classified_file(&conflict, "2_science", "book", MoveOpts { clean_existing: false, ..Default::default() })));
+    let (result, err) = split(block_on(manager.move_classified_file(&conflict, "2_science", "book", MoveOpts { clean_existing: false, ..Default::default() })));
 
     assert!(result.is_none());
     assert!(err.expect("err").contains("대상 경로에 파일이 이미 존재합니다"));
@@ -408,7 +408,7 @@ fn test_move_classified_file_preserves_existing_es_metadata() {
     // Loader::read_file 교체 훅. 호출되면 테스트를 실패시킨다.
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_file_reader(file_reader(|_path| panic!("existing ES metadata should be reused"))));
 
-    let (result, err) = split(asyncio_runner(manager.move_classified_file(&source_file, "2_science", "book", MoveOpts::default())));
+    let (result, err) = split(block_on(manager.move_classified_file(&source_file, "2_science", "book", MoveOpts::default())));
 
     assert!(err.is_none());
     assert_eq!(result.expect("result")["status"], "moved");
@@ -432,7 +432,7 @@ fn test_move_classified_file_logs_a_failed_lookup_of_the_existing_es_document_an
     let manager = BookManager::with_deps(deps(tmp.path(), &es).with_file_reader(file_reader(|_path| Ok(json!({"1": make_doc("2_science/조회 실패.txt", "txt")})))));
     let logs = common::log_capture::LogCapture::start(log::Level::Warn);
 
-    let (result, err) = split(asyncio_runner(manager.move_classified_file(&source_file, "2_science", "book", MoveOpts::default())));
+    let (result, err) = split(block_on(manager.move_classified_file(&source_file, "2_science", "book", MoveOpts::default())));
 
     assert!(err.is_none(), "{err:?}");
     assert_eq!(result.expect("result")["status"], "moved");
@@ -549,7 +549,7 @@ fn test_move_classified_file_target_traversal_and_restore_err() {
     fs::write(&f, "data").unwrap();
 
     // 1. Line 1385: target_path not relative to root
-    let (_res1, err1) = split(asyncio_runner(manager.move_classified_file(&f, "../outside", "txt", MoveOpts::default())));
+    let (_res1, err1) = split(block_on(manager.move_classified_file(&f, "../outside", "txt", MoveOpts::default())));
     assert_eq!(err1.as_deref(), Some("잘못된 대상 경로입니다"));
 
     // 2. Lines 1498-1499: ES reindex fails, rollback add_book raises exception
@@ -559,7 +559,7 @@ fn test_move_classified_file_target_traversal_and_restore_err() {
 
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_book_adder(book_adder(|| Err(AddBookError::Exception("restore add_book boom".to_string())))));
     fs::create_dir_all(tmp_path.join("target")).unwrap();
-    let (_res2, err2) = split(asyncio_runner(manager.move_classified_file(&f, "target", "txt", MoveOpts::default())));
+    let (_res2, err2) = split(block_on(manager.move_classified_file(&f, "target", "txt", MoveOpts::default())));
     let err2 = err2.expect("err2 is not None");
     assert!(err2.contains("기존 ES 문서 복구 실패"));
 }
@@ -861,7 +861,7 @@ fn test_propose_category_changes_preserves_requested_content_type() {
     let tmp = tmp_dir();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
     make_source_file(tmp.path(), "A", "과학소설 모음.epub");
-    let (result, error) = outcome(asyncio_runner(manager.propose_category_changes(
+    let (result, error) = outcome(block_on(manager.propose_category_changes(
         "A",
         Some(&json!({})),
         ProposeOptions { content_type: Some("comic"), delay: Some(0.0), use_bookstore: Some(false), use_content_meta: Some(false), on_progress: None },
@@ -885,7 +885,7 @@ fn test_propose_category_changes_progress_reports_new_items_only() {
 
     let progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = progress.clone();
-    let (result, error) = asyncio_runner(propose_opts(
+    let (result, error) = block_on(propose_opts(
         &manager,
         "A",
         &mappings(&[("3_SF", &["과학소설"])]),
@@ -920,12 +920,7 @@ fn test_propose_category_changes_lists_every_target_before_classifying() {
 
     let progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = progress.clone();
-    asyncio_runner(propose_opts(
-        &manager,
-        "A",
-        &mappings(&[]),
-        ProposeOpts { use_bookstore: false, use_content_meta: false, on_progress: Some(Box::new(move |call| sink.lock().unwrap().push(call))) },
-    ));
+    block_on(propose_opts(&manager, "A", &mappings(&[]), ProposeOpts { use_bookstore: false, use_content_meta: false, on_progress: Some(Box::new(move |call| sink.lock().unwrap().push(call))) }));
 
     let progress = progress.lock().unwrap();
     let first = &progress[0];
@@ -966,7 +961,7 @@ fn test_apply_category_changes_rejects_unknown_file() {
     let manager = make_manager(tmp_path, &FakeEsManager::new());
     make_source_file(tmp_path, "A", "book.epub");
 
-    let (result, error) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "3_SF"})], ApplyOpts::new(BTreeSet::new())));
+    let (result, error) = block_on(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "3_SF"})], ApplyOpts::new(BTreeSet::new())));
 
     assert!(error.is_none());
     assert_eq!(result["applied_count"], 0);
@@ -982,7 +977,7 @@ fn test_apply_category_changes_rejects_unsafe_target() {
     make_source_file(tmp_path, "A", "book.epub");
     let allowed = allowed_set(&["A/book.epub"]);
 
-    let (result, _error) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "../밖"})], ApplyOpts::new(allowed)));
+    let (result, _error) = block_on(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "../밖"})], ApplyOpts::new(allowed)));
 
     assert_eq!(result["applied_count"], 0);
     assert!(result["results"][0]["apply_error"].as_str().unwrap().contains("카테고리"));
@@ -998,7 +993,7 @@ fn test_apply_category_changes_uses_user_chosen_target() {
     make_source_file(tmp_path, "A", "book.epub");
     let allowed = allowed_set(&["A/book.epub"]);
 
-    let (result, _error) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed)));
+    let (result, _error) = block_on(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed)));
 
     assert_eq!(result["applied_count"], 1);
     assert!(tmp_path.join("5_음악").join("book.epub").is_file());
@@ -1013,7 +1008,7 @@ fn test_apply_category_changes_records_missing_file() {
     fs::create_dir(tmp_path.join("A")).unwrap();
     let allowed = allowed_set(&["A/사라진책.epub"]);
 
-    let (result, _error) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/사라진책.epub", "target_category": "3_SF"})], ApplyOpts::new(allowed)));
+    let (result, _error) = block_on(apply_opts(&manager, &[json!({"file_path": "A/사라진책.epub", "target_category": "3_SF"})], ApplyOpts::new(allowed)));
 
     assert_eq!(result["failed_count"], 1);
     assert!(result["results"][0]["apply_error"].as_str().unwrap().contains("파일"));
@@ -1031,7 +1026,7 @@ fn test_apply_category_changes_rejects_top_level_but_unsafe_target() {
     make_source_file(tmp_path, "A", "book.epub");
     let allowed = allowed_set(&["A/book.epub"]);
 
-    let (result, _error) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": ".."})], ApplyOpts::new(allowed)));
+    let (result, _error) = block_on(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": ".."})], ApplyOpts::new(allowed)));
 
     assert_eq!(result["applied_count"], 0);
     assert!(result["results"][0]["apply_error"].as_str().unwrap().contains("카테고리"));
@@ -1053,7 +1048,7 @@ fn test_apply_category_changes_rejects_symlinked_source() {
     symlink(&outside, &link_path).unwrap();
     let allowed = allowed_set(&["A/book.epub"]);
 
-    let (result, _error) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "3_SF"})], ApplyOpts::new(allowed)));
+    let (result, _error) = block_on(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "3_SF"})], ApplyOpts::new(allowed)));
 
     assert_eq!(result["applied_count"], 0);
     assert!(result["results"][0]["apply_error"].as_str().unwrap().contains("링크"));
@@ -1078,7 +1073,7 @@ fn test_apply_category_changes_calls_on_item_done_per_item() {
     let done_calls: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = done_calls.clone();
 
-    let (result, _error) = asyncio_runner(apply_opts(
+    let (result, _error) = block_on(apply_opts(
         &manager,
         &[json!({"file_path": "A/ok.epub", "target_category": "5_음악"}), json!({"file_path": "A/missing.epub", "target_category": "5_음악"})],
         ApplyOpts::new(allowed).on_item_done(Box::new(move |call| sink.lock().unwrap().push(call))),
@@ -1114,7 +1109,7 @@ fn test_apply_category_changes_stops_before_next_item_when_should_continue_is_fa
     let calls = Arc::new(Mutex::new(0usize));
     let counter = calls.clone();
 
-    let (result, _error) = asyncio_runner(apply_opts(
+    let (result, _error) = block_on(apply_opts(
         &manager,
         &[json!({"file_path": "A/first.epub", "target_category": "5_음악"}), json!({"file_path": "A/second.epub", "target_category": "5_음악"})],
         ApplyOpts::new(allowed).should_continue(Box::new(move || {
@@ -1150,13 +1145,13 @@ fn test_apply_category_changes_retry_of_failed_row_succeeds() {
     make_source_file(tmp_path, "A", "book.epub");
 
     // 1차 시도: allowed에 없어 거부된다(버그가 있던 상태를 재현).
-    let (first, _) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(BTreeSet::new())));
+    let (first, _) = block_on(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(BTreeSet::new())));
     assert_eq!(first["results"][0]["apply_status"], "failed");
     assert_eq!(first["results"][0]["apply_error"], "제안 목록에 없는 파일입니다");
     assert!(tmp_path.join("A").join("book.epub").is_file());
 
     // 재시도: failed 행이 allowed에 다시 담기면(고친 뒤 동작) 실제로 이동한다.
-    let (second, _) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed_set(&["A/book.epub"]))));
+    let (second, _) = block_on(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed_set(&["A/book.epub"]))));
     assert_eq!(second["results"][0]["apply_status"], "moved");
     assert!(!tmp_path.join("A").join("book.epub").exists());
     assert!(tmp_path.join("5_음악").join("book.epub").is_file());
@@ -1177,7 +1172,7 @@ fn test_apply_category_changes_retrying_moving_row_when_file_already_moved() {
     // 원본은 이미 없고(실제로는 이동이 끝남), 목적지에만 파일이 있다.
     fs::write(tmp_path.join("5_음악").join("book.epub"), "x").unwrap();
 
-    let (result, _) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed_set(&["A/book.epub"]))));
+    let (result, _) = block_on(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed_set(&["A/book.epub"]))));
 
     assert_eq!(result["results"][0]["apply_status"], "failed");
     assert!(result["results"][0]["apply_error"].as_str().unwrap().contains("파일을 찾을 수 없습니다"));
@@ -1195,7 +1190,7 @@ fn test_apply_category_changes_retrying_moving_row_when_move_never_happened() {
     fs::create_dir(tmp_path.join("5_음악")).unwrap();
     make_source_file(tmp_path, "A", "book.epub");
 
-    let (result, _) = asyncio_runner(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed_set(&["A/book.epub"]))));
+    let (result, _) = block_on(apply_opts(&manager, &[json!({"file_path": "A/book.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed_set(&["A/book.epub"]))));
 
     assert_eq!(result["results"][0]["apply_status"], "moved");
     assert!(!tmp_path.join("A").join("book.epub").exists());

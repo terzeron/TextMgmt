@@ -5,43 +5,40 @@
 //!
 //! 가정한 API:
 //! - `bookstore::store_clients`
-//!   - `type SearchRow = (String, String, String, String, String, String)` = `(title, author, category, detail_url, search_url, isbn)`
-//!   - `const MAX_RESULTS: usize = 4` (`AbstractBookstore.MAX_RESULTS`)
+//!   - `struct SearchRow { title, author, category, detail_url, search_url, isbn }`
+//!   - `const MAX_RESULTS: usize = 4` (`Bookstore.MAX_RESULTS`)
 //!   - `fn truncate_title(title: &str) -> String`
 //!   - `sysdeps::{HttpSession, HttpResponse, HttpError}` (구 `bookstore::{Session, HttpResponse}`)
 //!     - `trait HttpSession: Send + Sync { fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError>; }` (`requests.Session.get` 대응. 예외는 `Err`)
 //!     - `HttpResponse::from_text(status: u16, text: &str) -> HttpResponse` (fake 생성용. `.text()`/`.json()`은 본문을 소비한다)
 //!     - `HttpError::Other(String)` (문서에 변형 목록이 없어 `EsError::Other`와 같은 모양으로 가정한 것)
 //!   - `trait BookstoreSearch { fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String); }`
-//!   - `trait AbstractBookstore`: soup 인자는 HTML 문자열(`&str`)이다. 기본값이 있는 메서드는 `[기본]`으로 표시한다.
+//!   - `trait Bookstore`: markup 인자는 HTML 문자열(`&str`)이다. 기본값이 있는 메서드는 `[기본]`으로 표시한다.
 //!     - 필수: `base_url(&self) -> &str`, `verbose(&self) -> bool`, `session(&self) -> &dyn HttpSession`,
-//!       `build_search_url(&self, keyword: &str) -> String`, `extract_search_links(&self, soup: &str) -> Vec<String>`,
-//!       `extract_book_info(&self, soup: &str) -> Value` (`{title, author, category, isbn}`)
+//!       `build_search_url(&self, keyword: &str) -> String`, `extract_search_links(&self, markup: &str) -> Vec<String>`,
+//!       `extract_book_info(&self, markup: &str) -> Value` (`{title, author, category, isbn}`)
 //!     - `[기본]` `supports_isbn_search() -> bool`(false), `author_first_search() -> bool`(false), `max_results() -> usize`(`MAX_RESULTS`)
 //!     - `[기본]` `build_isbn_search_url(isbn)`(= `build_search_url(isbn)`), `search_by_keyword(keyword)`, `search_by_isbn(isbn)`
 //!     - `[기본]` `search(isbn, title, author) -> (Vec<SearchRow>, String, String)` (결과, 실제 검색어, 방식 `isbn`/`title_author`/`title`/`unknown`)
-//!     - `[기본]` `_fetch_search_results(url) -> Vec<SearchRow>`, `_load_html_from_tmp(url) -> Option<String>`, `_save_html_to_tmp(html, url)`
+//!     - `[기본]` `fetch_search_results(url) -> Vec<SearchRow>`, `load_html_from_tmp(url) -> Option<String>`, `save_html_to_tmp(html, url)`
 //!     - `[기본]` `tmp_dir() -> Option<PathBuf>`(`default_cache_dir()`, 사용자 전용 0700 디렉터리)
 //!       (구 `new_detail_session()`은 없앴다. 상세 페이지 스레드도 `with_session`으로 주입한 같은 `Arc<dyn HttpSession>`을 쓴다)
 //!   - 구상 클래스 `Yes24Bookstore`, `AladinBookstore`, `KyoboBookstore`, `RidibooksBookstore`, `NaverShoppingBookstore`,
 //!     `NaverSeriesBookstore`, `MunpiaBookstore`, `JoaraBookstore`, `NaverWebtoonBookstore`, `KakaoWebtoonBookstore`,
 //!     `BomtoonBookstore`, `LezhinBookstore`, `ToptoonBookstore`: `new(verbose: bool) -> Self`,
 //!     `with_session(self, Arc<dyn HttpSession>) -> Self` (구 pub 필드 `session`), pub 필드 `max_results: usize`, `supports_isbn_search: bool`
-//!   - `Yes24Bookstore::extract_yes24_category(&self, soup: &str) -> String`, `extract_yes24_isbn`,
+//!   - `Yes24Bookstore::extract_yes24_category(&self, markup: &str) -> String`, `extract_yes24_isbn`,
 //!     `AladinBookstore::extract_aladin_isbn`, `strip_trailing_number(&self, title: &str) -> String`,
 //!     `RidibooksBookstore::extract_ridi_isbn`
 //!   - 대역 주입 seam(mock.patch 대응, 구상 클래스 공통): `with_fetch_search_results(self, ..) -> Self`, `with_search_by_keyword(self, ..) -> Self`
 //!     (`Box<dyn Fn(&str) -> Vec<SearchRow> + Send + Sync>`. 구 `set_*`)
-//!   - `trait SoupSource`: `find(&self, name: &str) -> Result<Option<String>, String>`, `find_all(&self, name: &str) -> Result<Vec<String>, String>`,
-//!     `get_text(&self) -> Result<String, String>`, `select(&self, css: &str) -> Result<Vec<String>, String>` (예외를 던지는 soup 대역용)
-//!     - `Yes24Bookstore::extract_yes24_category_soup/_extract_yes24_isbn_soup/extract_book_info_soup(&self, &dyn SoupSource)`,
-//!       `AladinBookstore::extract_aladin_isbn_soup`, `RidibooksBookstore::extract_ridi_isbn_soup`,
-//!       `NaverShoppingBookstore::extract_book_info_soup`
+//!   - `trait MarkupSource`: `find(&self, name: &str) -> Result<Option<String>, String>`, `find_all(&self, name: &str) -> Result<Vec<String>, String>`,
+//!     `get_text(&self) -> Result<String, String>`, `select(&self, css: &str) -> Result<Vec<String>, String>` (예외를 던지는 markup 대역용)
+//!     - `Yes24Bookstore::extract_yes24_category_from_source/_extract_yes24_isbn_from_source/extract_book_info_from_source(&self, &dyn MarkupSource)`,
+//!       `AladinBookstore::extract_aladin_isbn_from_source`, `RidibooksBookstore::extract_ridi_isbn_from_source`,
+//!       `NaverShoppingBookstore::extract_book_info_from_source`
 //!   - `sysdeps::FsOps` (구 `StoreFs`. 이 파일은 `disk_free`와 `write`만 쓴다. 나머지 메서드는 trait 기본 구현), `Yes24Bookstore::with_fs(self, Arc<dyn FsOps>) -> Self`
 //!     (`shutil.disk_usage`와 `open` 대응. `write`의 `data`는 UTF-8 HTML 바이트)
-//!   - 추상 메서드 본문: `abstract_build_search_url(&dyn AbstractBookstore, &str) -> Option<String>`,
-//!     `abstract_extract_search_links(&dyn AbstractBookstore, &str) -> Option<Vec<String>>`,
-//!     `abstract_extract_book_info(&dyn AbstractBookstore, &str) -> Option<Value>`
 
 #![allow(clippy::type_complexity)]
 
@@ -57,9 +54,8 @@ use crate::common::shared_fixtures::{Call, Kind, failing, session};
 use crate::env_helpers::{EnvGuard, empty_env, map_env};
 use crate::log_capture::LogCapture;
 use bookstore::store_clients::{
-    AbstractBookstore, AladinBookstore, BomtoonBookstore, JoaraBookstore, KakaoWebtoonBookstore, KyoboBookstore, LezhinBookstore, MAX_RESULTS, MunpiaBookstore, NaverSeriesBookstore,
-    NaverShoppingBookstore, NaverWebtoonBookstore, RidibooksBookstore, SearchRow, SoupSource, ToptoonBookstore, Yes24Bookstore, abstract_build_search_url, abstract_extract_book_info,
-    abstract_extract_search_links, truncate_title,
+    AladinBookstore, BomtoonBookstore, Bookstore, JoaraBookstore, KakaoWebtoonBookstore, KyoboBookstore, LezhinBookstore, MAX_RESULTS, MarkupSource, MunpiaBookstore, NaverSeriesBookstore,
+    NaverShoppingBookstore, NaverWebtoonBookstore, RidibooksBookstore, SearchRow, ToptoonBookstore, Yes24Bookstore, truncate_title,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -125,9 +121,9 @@ fn toptoon(verbose: bool) -> ToptoonBookstore {
     ToptoonBookstore::new(verbose)
 }
 
-/// 검색 결과 한 줄. `(title, author, category, detail_url, search_url, isbn)`.
+/// 검색 결과 한 줄.
 fn row(title: &str, author: &str, category: &str, detail_url: &str, search_url: &str, isbn: &str) -> SearchRow {
-    (title.into(), author.into(), category.into(), detail_url.into(), search_url.into(), isbn.into())
+    SearchRow { title: title.into(), author: author.into(), category: category.into(), detail_url: detail_url.into(), search_url: search_url.into(), isbn: isbn.into() }
 }
 
 /// `requests.Response` 대역. `Resp(status_code, text)`와 `json()` 반환값을 한 번에 만든다.
@@ -157,7 +153,7 @@ fn urls(calls: &Arc<Mutex<Vec<Call>>>) -> Vec<String> {
     calls.lock().unwrap().iter().map(|c| c.url.clone()).collect()
 }
 
-/// 서브클래스를 흉내 내는 테스트 서점 구조체를 만든다. `$over`에 넘긴 메서드만 기본 구현 대신 덮어쓴다.
+/// 테스트 서점 구조체를 만든다. `$over`에 넘긴 메서드만 기본 구현 대신 덮어쓴다.
 /// 인스턴스 메서드를 바꾸던 곳은 이 덮어쓰기와 훅 필드로 옮긴다.
 macro_rules! dummy_store {
     ($name:ident { $($over:item)* }) => {
@@ -218,7 +214,7 @@ macro_rules! dummy_store {
             }
         }
 
-        impl AbstractBookstore for $name {
+        impl Bookstore for $name {
             fn base_url(&self) -> &str {
                 &self.base_url
             }
@@ -251,31 +247,31 @@ macro_rules! dummy_store {
                 format!("{}/search?q={}", self.base_url, keyword)
             }
 
-            fn extract_search_links(&self, soup: &str) -> Vec<String> {
+            fn extract_search_links(&self, markup: &str) -> Vec<String> {
                 if let Some(links) = &self.links {
                     return links.clone();
                 }
                 match self.kind {
                     Kind::Dummy | Kind::Unit => vec![format!("{}/detail/1", self.base_url), format!("{}/detail/2", self.base_url)],
-                    Kind::Parsing => single_quoted_hrefs(soup),
+                    Kind::Parsing => single_quoted_hrefs(markup),
                     Kind::BaseOnly => vec![],
                 }
             }
 
-            fn extract_book_info(&self, soup: &str) -> Value {
+            fn extract_book_info(&self, markup: &str) -> Value {
                 match self.kind {
                     Kind::Dummy => json!({
-                        "title": between(soup, "<h1>", "</h1>"),
-                        "author": between(soup, "<span class='author'>", "</span>"),
-                        "category": between(soup, "<p class='category'>", "</p>"),
-                        "isbn": between(soup, "<p class='isbn'>", "</p>"),
+                        "title": between(markup, "<h1>", "</h1>"),
+                        "author": between(markup, "<span class='author'>", "</span>"),
+                        "category": between(markup, "<p class='category'>", "</p>"),
+                        "isbn": between(markup, "<p class='isbn'>", "</p>"),
                     }),
                     Kind::Unit => json!({"title": "T", "author": "A", "category": "A > B > C > D", "isbn": "I"}),
                     Kind::Parsing => json!({
-                        "title": between(soup, "<h1>", "</h1>"),
-                        "author": between(soup, "<span class='author'>", "</span>"),
-                        "category": between(soup, "<div class='cat'>", "</div>"),
-                        "isbn": between(soup, "<div class='isbn'>", "</div>"),
+                        "title": between(markup, "<h1>", "</h1>"),
+                        "author": between(markup, "<span class='author'>", "</span>"),
+                        "category": between(markup, "<div class='cat'>", "</div>"),
+                        "isbn": between(markup, "<div class='isbn'>", "</div>"),
                     }),
                     Kind::BaseOnly => empty_info(),
                 }
@@ -289,51 +285,51 @@ macro_rules! dummy_store {
 // 기본 구현을 그대로 쓰는 서점
 dummy_store!(Plain {});
 
-// `_load_html_from_tmp`/`_save_html_to_tmp`만 바꾼 서점
+// `load_html_from_tmp`/`save_html_to_tmp`만 바꾼 서점
 dummy_store!(Cached {
-    fn _load_html_from_tmp(&self, url: &str) -> Option<String> {
+    fn load_html_from_tmp(&self, url: &str) -> Option<String> {
         self.load.as_ref().and_then(|f| f(url))
     }
 
-    fn _save_html_to_tmp(&self, html: &str, url: &str) {
+    fn save_html_to_tmp(&self, html: &str, url: &str) {
         if let Some(f) = &self.save {
             f(html, url);
         }
     }
 });
 
-// `_fetch_search_results`/`search_by_keyword`/`search_by_isbn`을 바꾼 서점. 훅이 없으면 기본 동작을 따른다.
+// `fetch_search_results`/`search_by_keyword`/`search_by_isbn`을 바꾼 서점. 훅이 없으면 기본 동작을 따른다.
 dummy_store!(Hooked {
     fn build_isbn_search_url(&self, isbn: &str) -> String {
         if self.kind == Kind::Dummy { format!("{}/isbn/{}", self.base_url, isbn) } else { self.build_search_url(isbn) }
     }
 
-    fn _fetch_search_results(&self, url: &str) -> Vec<SearchRow> {
-        (self.fetch.as_ref().expect("_fetch_search_results 훅이 필요하다"))(url)
+    fn fetch_search_results(&self, url: &str) -> Vec<SearchRow> {
+        (self.fetch.as_ref().expect("fetch_search_results 훅이 필요하다"))(url)
     }
 
     fn search_by_keyword(&self, keyword: &str) -> Vec<SearchRow> {
         match &self.keyword {
             Some(f) => f(keyword),
-            None => self._fetch_search_results(&self.build_search_url(keyword)),
+            None => self.fetch_search_results(&self.build_search_url(keyword)),
         }
     }
 
     fn search_by_isbn(&self, isbn: &str) -> Vec<SearchRow> {
         match &self.isbn {
             Some(f) => f(isbn),
-            None => self._fetch_search_results(&self.build_isbn_search_url(isbn)),
+            None => self.fetch_search_results(&self.build_isbn_search_url(isbn)),
         }
     }
 });
 
-/// `soup.find`가 특정 태그에서 예외를 던지게 바꾼 soup 대역. 나머지는 원본 `find`처럼 동작한다.
-struct RaisingSoup {
+/// `markup.find`가 특정 태그에서 예외를 던지게 바꾼 markup 대역. 나머지는 원본 `find`처럼 동작한다.
+struct RaisingMarkup {
     html: &'static str,
     raise_on: &'static str,
 }
 
-impl SoupSource for RaisingSoup {
+impl MarkupSource for RaisingMarkup {
     fn find(&self, name: &str) -> Result<Option<String>, String> {
         if name == self.raise_on {
             return Err("parse error".to_owned());
@@ -355,10 +351,10 @@ impl SoupSource for RaisingSoup {
     }
 }
 
-/// 모든 조회에서 `RuntimeError("boom")`을 던지는 soup 대역 (`BadSoup`, `BadText`).
-struct BadSoup;
+/// 모든 조회에서 `RuntimeError("boom")`을 던지는 markup 대역 (`BadMarkup`, `BadText`).
+struct BadMarkup;
 
-impl SoupSource for BadSoup {
+impl MarkupSource for BadMarkup {
     fn find(&self, _name: &str) -> Result<Option<String>, String> {
         Err("boom".to_owned())
     }
@@ -376,9 +372,9 @@ impl SoupSource for BadSoup {
     }
 }
 
-struct TextSoup(&'static str);
+struct TextMarkup(&'static str);
 
-impl SoupSource for TextSoup {
+impl MarkupSource for TextMarkup {
     fn find(&self, _name: &str) -> Result<Option<String>, String> {
         Ok(None)
     }
@@ -393,12 +389,12 @@ impl SoupSource for TextSoup {
     }
 }
 
-struct AladinIsbnSoup {
+struct AladinIsbnMarkup {
     primary: Result<Vec<String>, String>,
     fallback: Result<Vec<String>, String>,
 }
 
-impl SoupSource for AladinIsbnSoup {
+impl MarkupSource for AladinIsbnMarkup {
     fn find(&self, _name: &str) -> Result<Option<String>, String> {
         Ok(None)
     }
@@ -413,9 +409,9 @@ impl SoupSource for AladinIsbnSoup {
     }
 }
 
-struct DivSoup(Result<Vec<String>, String>);
+struct DivMarkup(Result<Vec<String>, String>);
 
-impl SoupSource for DivSoup {
+impl MarkupSource for DivMarkup {
     fn find(&self, _name: &str) -> Result<Option<String>, String> {
         Ok(None)
     }
@@ -580,7 +576,7 @@ fn test_fetch_search_results_cached_and_trimmed() {
     store.load = Some(Box::new(move |url| cached.get(url).map(|s| s.to_string())));
     store.save = Some(Box::new(|_, _| {}));
 
-    let results = store._fetch_search_results("https://example.com/search?q=x");
+    let results = store.fetch_search_results("https://example.com/search?q=x");
     assert_eq!(results, vec![row("Title1", "Auth", "A > B > C", "https://example.com/detail/1", "https://example.com/search?q=x", "123")]);
 }
 
@@ -588,7 +584,7 @@ fn test_fetch_search_results_cached_and_trimmed() {
 fn test_fetch_search_results_request_error() {
     let mut store = Plain::new(Kind::Dummy);
     store = store.with_session(failing());
-    assert!(store._fetch_search_results("https://example.com/search?q=x").is_empty());
+    assert!(store.fetch_search_results("https://example.com/search?q=x").is_empty());
 }
 
 #[test]
@@ -609,8 +605,8 @@ fn test_save_and_load_html_cache() {
     store.tmp_dir = Some(tmp.path().to_path_buf());
     let url = "https://example.com/detail/1";
     let html = "<html>ok</html>";
-    store._save_html_to_tmp(html, url);
-    let loaded = store._load_html_from_tmp(url);
+    store.save_html_to_tmp(html, url);
+    let loaded = store.load_html_from_tmp(url);
     assert_eq!(loaded.as_deref(), Some(html));
 }
 
@@ -624,14 +620,6 @@ fn test_base_build_isbn_search_and_empty_search() {
     assert_eq!(keyword, "");
     assert_eq!(method, "unknown");
     assert!(store.search_by_isbn("123").is_empty());
-}
-
-#[test]
-fn test_base_class_abstract_methods_are_callable() {
-    let store = Plain::new(Kind::BaseOnly);
-    assert_eq!(abstract_build_search_url(&store, "x"), None);
-    assert_eq!(abstract_extract_search_links(&store, "<html></html>"), None);
-    assert_eq!(abstract_extract_book_info(&store, "<html></html>"), None);
 }
 
 #[test]
@@ -659,7 +647,7 @@ fn bookstore_search_trait_default_api_url_is_empty() {
 #[test]
 fn html_cache_is_skipped_when_no_private_cache_dir_is_available() {
     struct NoCache;
-    impl AbstractBookstore for NoCache {
+    impl Bookstore for NoCache {
         fn base_url(&self) -> &str {
             "https://default.example"
         }
@@ -685,15 +673,15 @@ fn html_cache_is_skipped_when_no_private_cache_dir_is_available() {
     }
 
     let url = format!("https://default.example/no-cache-{}", std::process::id());
-    NoCache._save_html_to_tmp("<html>x</html>", &url);
-    assert_eq!(NoCache._load_html_from_tmp(&url), None);
+    NoCache.save_html_to_tmp("<html>x</html>", &url);
+    assert_eq!(NoCache.load_html_from_tmp(&url), None);
     assert!(!std::env::temp_dir().join(bookstore::store_clients::cache_file_name(&url)).exists());
 }
 
 #[test]
-fn abstract_bookstore_defaults_work_without_overrides() {
+fn bookstore_defaults_work_without_overrides() {
     struct Defaults;
-    impl AbstractBookstore for Defaults {
+    impl Bookstore for Defaults {
         fn base_url(&self) -> &str {
             "https://default.example"
         }
@@ -728,9 +716,9 @@ fn abstract_bookstore_defaults_work_without_overrides() {
     assert_eq!(store.search("", "작품", ""), (Vec::new(), "작품".into(), "title".into()));
 
     let cache_url = format!("https://default.example/cache-test-{}", std::process::id());
-    assert_eq!(store._load_html_from_tmp(&cache_url), None);
-    store._save_html_to_tmp("<html>cached</html>", &cache_url);
-    assert_eq!(store._load_html_from_tmp(&cache_url).as_deref(), Some("<html>cached</html>"));
+    assert_eq!(store.load_html_from_tmp(&cache_url), None);
+    store.save_html_to_tmp("<html>cached</html>", &cache_url);
+    assert_eq!(store.load_html_from_tmp(&cache_url).as_deref(), Some("<html>cached</html>"));
     let cache_path = store.tmp_dir().unwrap().join(bookstore::store_clients::cache_file_name(&cache_url));
     std::fs::remove_file(cache_path).unwrap();
 }
@@ -768,7 +756,7 @@ fn test_fetch_search_results_threaded_cache_miss() {
         .0,
     );
 
-    let results = store._fetch_search_results("https://example.com/search?q=x");
+    let results = store.fetch_search_results("https://example.com/search?q=x");
     assert_eq!(results, vec![row("T", "A", "A > B > C", "https://example.com/detail/1", "https://example.com/search?q=x", "I")]);
     assert_eq!(saved.load(Ordering::SeqCst), 1);
 }
@@ -779,11 +767,11 @@ fn test_fetch_search_results_empty_links_and_blank_html() {
     store = store.with_session(constant(200, "<html></html>", Value::Null));
 
     store.links = Some(vec![]);
-    assert!(store._fetch_search_results("https://example.com/search?q=x").is_empty());
+    assert!(store.fetch_search_results("https://example.com/search?q=x").is_empty());
 
     store.links = Some(vec!["https://example.com/detail/1".to_owned()]);
     store.load = Some(Box::new(|_| Some("   ".to_owned())));
-    assert!(store._fetch_search_results("https://example.com/search?q=x").is_empty());
+    assert!(store.fetch_search_results("https://example.com/search?q=x").is_empty());
 }
 
 #[test]
@@ -795,9 +783,9 @@ fn test_save_and_load_html_cache_errors() {
     let mut store = Cached::new(Kind::Dummy).with_verbose(true);
     store.tmp_dir = Some(blocked);
 
-    store._save_html_to_tmp("<html></html>", "https://example.com/detail/1");
+    store.save_html_to_tmp("<html></html>", "https://example.com/detail/1");
 
-    assert_eq!(store._load_html_from_tmp("https://example.com/detail/1"), None);
+    assert_eq!(store.load_html_from_tmp("https://example.com/detail/1"), None);
 }
 
 #[test]
@@ -845,19 +833,19 @@ fn test_yes24_author_text_and_isbn10() {
 #[test]
 fn yes24_isbn_text_parser_checks_each_fallback_pattern() {
     let store = yes24(false);
-    assert_eq!(store.extract_yes24_isbn_soup(&TextSoup("ISBN13 9781234567890 ISBN10 1234567890")), "9781234567890");
-    assert_eq!(store.extract_yes24_isbn_soup(&TextSoup("ISBN10 1234567890")), "1234567890");
-    assert_eq!(store.extract_yes24_isbn_soup(&TextSoup("ISBN 9781234567890")), "9781234567890");
-    assert_eq!(store.extract_yes24_isbn_soup(&TextSoup("other 1234567890")), "1234567890");
-    assert_eq!(store.extract_yes24_isbn_soup(&TextSoup("no identifier")), "");
+    assert_eq!(store.extract_yes24_isbn_from_source(&TextMarkup("ISBN13 9781234567890 ISBN10 1234567890")), "9781234567890");
+    assert_eq!(store.extract_yes24_isbn_from_source(&TextMarkup("ISBN10 1234567890")), "1234567890");
+    assert_eq!(store.extract_yes24_isbn_from_source(&TextMarkup("ISBN 9781234567890")), "9781234567890");
+    assert_eq!(store.extract_yes24_isbn_from_source(&TextMarkup("other 1234567890")), "1234567890");
+    assert_eq!(store.extract_yes24_isbn_from_source(&TextMarkup("no identifier")), "");
 }
 
 #[test]
 fn test_yes24_category_and_isbn_exception_paths() {
     let store = yes24(false);
 
-    assert_eq!(store.extract_yes24_category_soup(&BadSoup), "");
-    assert_eq!(store.extract_yes24_isbn_soup(&BadSoup), "");
+    assert_eq!(store.extract_yes24_category_from_source(&BadMarkup), "");
+    assert_eq!(store.extract_yes24_isbn_from_source(&BadMarkup), "");
 }
 
 #[test]
@@ -886,18 +874,18 @@ fn test_aladin_extract_links_and_isbn_paths() {
 }
 
 #[test]
-fn aladin_isbn_soup_uses_primary_and_fallback_layouts() {
+fn aladin_isbn_markup_uses_primary_and_fallback_layouts() {
     let store = aladin(false);
-    let primary = AladinIsbnSoup { primary: Ok(vec!["ISBN 9781234567890".into()]), fallback: Ok(vec![]) };
-    assert_eq!(store.extract_aladin_isbn_soup(&primary), "9781234567890");
+    let primary = AladinIsbnMarkup { primary: Ok(vec!["ISBN 9781234567890".into()]), fallback: Ok(vec![]) };
+    assert_eq!(store.extract_aladin_isbn_from_source(&primary), "9781234567890");
 
-    let fallback = AladinIsbnSoup { primary: Ok(vec!["출판일 2024".into()]), fallback: Ok(vec!["ISBN 1234567890".into()]) };
-    assert_eq!(store.extract_aladin_isbn_soup(&fallback), "1234567890");
+    let fallback = AladinIsbnMarkup { primary: Ok(vec!["출판일 2024".into()]), fallback: Ok(vec!["ISBN 1234567890".into()]) };
+    assert_eq!(store.extract_aladin_isbn_from_source(&fallback), "1234567890");
 
-    let absent = AladinIsbnSoup { primary: Ok(vec!["출판일 2024".into()]), fallback: Ok(vec!["ISBN 없음".into()]) };
-    assert_eq!(store.extract_aladin_isbn_soup(&absent), "");
-    let fallback_error = AladinIsbnSoup { primary: Ok(vec![]), fallback: Err("fallback failed".into()) };
-    assert_eq!(store.extract_aladin_isbn_soup(&fallback_error), "");
+    let absent = AladinIsbnMarkup { primary: Ok(vec!["출판일 2024".into()]), fallback: Ok(vec!["ISBN 없음".into()]) };
+    assert_eq!(store.extract_aladin_isbn_from_source(&absent), "");
+    let fallback_error = AladinIsbnMarkup { primary: Ok(vec![]), fallback: Err("fallback failed".into()) };
+    assert_eq!(store.extract_aladin_isbn_from_source(&fallback_error), "");
 }
 
 #[test]
@@ -932,9 +920,9 @@ fn ridibooks_isbn_extractors_accept_only_a_thirteen_digit_value_after_label() {
     let store = ridibooks(false);
     assert_eq!(store.extract_ridi_isbn("<div>ISBN</div><div>9781234567890</div>"), "9781234567890");
     assert_eq!(store.extract_ridi_isbn("<div>ISBN</div><div>1234567890</div>"), "");
-    assert_eq!(store.extract_ridi_isbn_soup(&DivSoup(Ok(vec!["ISBN".into(), "9781234567890".into()]))), "9781234567890");
-    assert_eq!(store.extract_ridi_isbn_soup(&DivSoup(Ok(vec!["ISBN".into(), "1234567890".into()]))), "");
-    assert_eq!(store.extract_ridi_isbn_soup(&DivSoup(Err("parse failed".into()))), "");
+    assert_eq!(store.extract_ridi_isbn_from_source(&DivMarkup(Ok(vec!["ISBN".into(), "9781234567890".into()]))), "9781234567890");
+    assert_eq!(store.extract_ridi_isbn_from_source(&DivMarkup(Ok(vec!["ISBN".into(), "1234567890".into()]))), "");
+    assert_eq!(store.extract_ridi_isbn_from_source(&DivMarkup(Err("parse failed".into()))), "");
 }
 
 #[test]
@@ -993,7 +981,7 @@ fn test_aladin_isbn_fallback_and_exception() {
     "#;
     assert_eq!(store.extract_aladin_isbn(html), "1234567890123");
 
-    assert_eq!(store.extract_aladin_isbn_soup(&BadSoup), "");
+    assert_eq!(store.extract_aladin_isbn_from_source(&BadMarkup), "");
 }
 
 #[test]
@@ -1089,7 +1077,7 @@ fn test_ridibooks_search_success_and_extract() {
 fn test_ridibooks_isbn_exception() {
     let store = ridibooks(false);
 
-    assert_eq!(store.extract_ridi_isbn_soup(&BadSoup), "");
+    assert_eq!(store.extract_ridi_isbn_from_source(&BadMarkup), "");
 }
 
 #[test]
@@ -1202,9 +1190,9 @@ fn test_yes24_extract_search_links_fallback_verbose() {
 #[test]
 fn test_yes24_extract_book_info_exception() {
     let store = yes24(false);
-    let soup = RaisingSoup { html: "<html><h2 class='gd_name'>Title</h2></html>", raise_on: "span" };
+    let markup = RaisingMarkup { html: "<html><h2 class='gd_name'>Title</h2></html>", raise_on: "span" };
 
-    let info = store.extract_book_info_soup(&soup);
+    let info = store.extract_book_info_from_source(&markup);
     // Should not raise, returns partial info
     assert!(info.is_object());
 }
@@ -1321,20 +1309,20 @@ fn test_naver_shopping_json_parse_error_verbose() {
 #[test]
 fn test_naver_shopping_extract_book_info_exception() {
     let store = naver_shopping(false);
-    let soup = RaisingSoup { html: "<html><body>normal</body></html>", raise_on: "h2" };
+    let markup = RaisingMarkup { html: "<html><body>normal</body></html>", raise_on: "h2" };
 
-    let info = store.extract_book_info_soup(&soup);
+    let info = store.extract_book_info_from_source(&markup);
     assert!(info.is_object());
 }
 
 #[test]
-fn test_naver_shopping_soup_title_and_div_fallbacks() {
+fn test_naver_shopping_markup_title_and_div_fallbacks() {
     let store = naver_shopping(false);
-    let h2 = RaisingSoup { html: "<h2Primary title</h2>", raise_on: "never" };
-    assert_eq!(store.extract_book_info_soup(&h2)["title"], "Primary title");
+    let h2 = RaisingMarkup { html: "<h2Primary title</h2>", raise_on: "never" };
+    assert_eq!(store.extract_book_info_from_source(&h2)["title"], "Primary title");
 
-    let div = RaisingSoup { html: "<divFallback title</div>", raise_on: "never" };
-    assert_eq!(store.extract_book_info_soup(&div)["title"], "Fallback title");
+    let div = RaisingMarkup { html: "<divFallback title</div>", raise_on: "never" };
+    assert_eq!(store.extract_book_info_from_source(&div)["title"], "Fallback title");
 }
 
 // ---- 단위 사례 ----
@@ -1416,9 +1404,9 @@ fn test_fetch_search_results_uses_cached_html() {
     bs = bs.with_session(constant(200, "<html></html>", Value::Null));
     bs.load = Some(Box::new(|_| Some("<html></html>".to_owned())));
 
-    let results = bs._fetch_search_results(&bs.build_search_url("k"));
+    let results = bs.fetch_search_results(&bs.build_search_url("k"));
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0].2, "A > B > C");
+    assert_eq!(results[0].category, "A > B > C");
 }
 
 #[test]
@@ -1426,8 +1414,8 @@ fn test_save_and_load_html_from_tmp() {
     let bs = Plain::new(Kind::Unit);
     let url = "http://example.com/detail/123";
     let html = "<html>cached</html>";
-    bs._save_html_to_tmp(html, url);
-    let loaded = bs._load_html_from_tmp(url);
+    bs.save_html_to_tmp(html, url);
+    let loaded = bs.load_html_from_tmp(url);
     assert_eq!(loaded.as_deref(), Some(html));
 }
 
@@ -1485,7 +1473,7 @@ fn test_fetch_search_results_uses_cached_html_parsing() {
     store = store.with_session(constant(200, search_html, Value::Null));
     store.load = Some(Box::new(move |_| Some(detail_html.to_owned())));
 
-    let results = store._fetch_search_results("https://example.com/search?q=x");
+    let results = store.fetch_search_results("https://example.com/search?q=x");
     assert_eq!(results, vec![row("Book", "Auth", "A > B > C", "https://example.com/detail/1", "https://example.com/search?q=x", "123")]);
 }
 
@@ -1496,8 +1484,8 @@ fn test_save_and_load_html_cache_parsing() {
     store.tmp_dir = Some(tmp.path().to_path_buf());
     let url = "https://example.com/detail/1";
     let html = "<html>cached</html>";
-    store._save_html_to_tmp(html, url);
-    let loaded = store._load_html_from_tmp(url);
+    store.save_html_to_tmp(html, url);
+    let loaded = store.load_html_from_tmp(url);
     assert_eq!(loaded.as_deref(), Some(html));
 }
 
@@ -1764,24 +1752,24 @@ fn test_save_html_to_tmp_disk_and_exception_branches() {
     // 202: free < 500MB -> 저장 건너뜀
     let (fs_low, writes) = probe(Ok(100 * 1024 * 1024), None);
     let store = yes24(true).with_fs(fs_low);
-    store._save_html_to_tmp("<html></html>", "https://example.com/1");
+    store.save_html_to_tmp("<html></html>", "https://example.com/1");
     assert_eq!(writes.load(Ordering::SeqCst), 0, "여유 공간이 500MB 미만이면 쓰지 않는다");
 
     // 203-204: disk_usage 예외 발생 시 pass
     let (fs_check_fails, writes) = probe(Err("Disk check failed".to_owned()), None);
     let store = yes24(true).with_fs(fs_check_fails);
-    store._save_html_to_tmp("<html></html>", "https://example.com/2");
+    store.save_html_to_tmp("<html></html>", "https://example.com/2");
     assert_eq!(writes.load(Ordering::SeqCst), 1, "여유 공간을 못 재도 쓰기는 시도한다");
 
     // 214-215: OSError(errno=28, No space left on device)
     let (fs_full, _) = probe(Ok(u64::MAX), Some(|| io::Error::from_raw_os_error(28)));
     let store = yes24(true).with_fs(fs_full);
-    store._save_html_to_tmp("<html></html>", "https://example.com/3");
+    store.save_html_to_tmp("<html></html>", "https://example.com/3");
 
     // 218-219: 기타 Exception
     let (fs_other, _) = probe(Ok(u64::MAX), Some(|| io::Error::other("Unexpected")));
     let store = yes24(true).with_fs(fs_other);
-    store._save_html_to_tmp("<html></html>", "https://example.com/4");
+    store.save_html_to_tmp("<html></html>", "https://example.com/4");
 }
 
 #[test]
@@ -1808,7 +1796,7 @@ fn test_kyobo_urls_and_fallback_links_and_title() {
     let links = store.extract_search_links(html_fallback);
     assert_eq!(links.len(), 2);
 
-    // 903-904: extract_book_info title from soup.title.string
+    // 903-904: extract_book_info title from markup.title.string
     let html_title_only = r#"
     <html>
       <head>
@@ -1882,7 +1870,7 @@ fn test_joara_search_url_and_author_is_ignored() {
     assert_eq!(*seen.lock().unwrap(), ["데미안"]);
     assert_eq!(keyword, "데미안");
     assert_eq!(method, "title");
-    assert_eq!(results[0].0, "데미안");
+    assert_eq!(results[0].title, "데미안");
 }
 
 #[test]
@@ -1932,9 +1920,9 @@ fn test_joara_search_by_keyword_failure_paths() {
 #[test]
 fn test_joara_unused_html_hooks_are_inert() {
     let store = joara(false);
-    let soup = "<html><body><a href='/book/1'>x</a></body></html>";
-    assert!(store.extract_search_links(soup).is_empty());
-    assert_eq!(store.extract_book_info(soup), empty_info());
+    let markup = "<html><body><a href='/book/1'>x</a></body></html>";
+    assert!(store.extract_search_links(markup).is_empty());
+    assert_eq!(store.extract_book_info(markup), empty_info());
 }
 
 /// 네이버 웹툰은 '제목 저자' 키워드가 늘 0건이다. 제목만 한 번 부른다.
@@ -1956,7 +1944,7 @@ fn test_naver_webtoon_search_url_and_author_is_ignored() {
     assert_eq!(*seen.lock().unwrap(), ["유미의 세포들"]);
     assert_eq!(keyword, "유미의 세포들");
     assert_eq!(method, "title");
-    assert_eq!(results[0].0, "유미의 세포들");
+    assert_eq!(results[0].title, "유미의 세포들");
 }
 
 #[test]
@@ -2032,7 +2020,7 @@ fn test_kakao_webtoon_search_url_and_author_is_ignored() {
     assert_eq!(*seen.lock().unwrap(), ["이태원 클라쓰"]);
     assert_eq!(keyword, "이태원 클라쓰");
     assert_eq!(method, "title");
-    assert_eq!(results[0].0, "이태원 클라쓰");
+    assert_eq!(results[0].title, "이태원 클라쓰");
 }
 
 /// 저자는 글·그림·원작만 모으고 중복·출판사를 뺀다. seoId 가 없으면 제목으로 URL 을 만든다.
@@ -2115,7 +2103,7 @@ fn test_kakao_and_lezhin_non_verbose_failure_branches() {
     kakao = kakao.with_session(constant(200, "", json!({"data":{"content":[]}})));
     assert!(kakao.search_by_keyword("x").is_empty());
     kakao = kakao.with_session(constant(200, "", json!({"data":{"content":[{"id":1,"title":"result"}]}})));
-    assert_eq!(kakao.search_by_keyword("x")[0].0, "result");
+    assert_eq!(kakao.search_by_keyword("x")[0].title, "result");
 
     let mut lezhin = lezhin(false);
     lezhin = lezhin.with_session(constant(500, "", json!({})));
@@ -2129,8 +2117,8 @@ fn test_kakao_and_lezhin_non_verbose_failure_branches() {
 /// 웹툰 서점은 API 를 직접 부르므로 HTML 훅은 호출되지 않는다.
 #[test]
 fn test_webtoon_unused_html_hooks_are_inert() {
-    let soup = "<html><body><a href='/x/1'>x</a></body></html>";
-    let stores: Vec<(&str, Box<dyn AbstractBookstore>)> = vec![
+    let markup = "<html><body><a href='/x/1'>x</a></body></html>";
+    let stores: Vec<(&str, Box<dyn Bookstore>)> = vec![
         ("NaverWebtoonBookstore", Box::new(naver_webtoon(false))),
         ("KakaoWebtoonBookstore", Box::new(kakao_webtoon(false))),
         ("BomtoonBookstore", Box::new(bomtoon(false))),
@@ -2138,8 +2126,8 @@ fn test_webtoon_unused_html_hooks_are_inert() {
         ("ToptoonBookstore", Box::new(toptoon(false))),
     ];
     for (name, store) in &stores {
-        assert!(store.extract_search_links(soup).is_empty(), "{name}");
-        assert_eq!(store.extract_book_info(soup), empty_info(), "{name}");
+        assert!(store.extract_search_links(markup).is_empty(), "{name}");
+        assert_eq!(store.extract_book_info(markup), empty_info(), "{name}");
     }
 }
 
@@ -2168,7 +2156,7 @@ fn test_new_webtoon_stores_ignore_author_and_isbn() {
             let (results, keyword, method) = $store.search("9788934900011", "작품", "작가");
             assert_eq!(*seen.lock().unwrap(), ["작품"], "{}", $name);
             assert_eq!((keyword.as_str(), method.as_str()), ("작품", "title"), "{}", $name);
-            assert_eq!(results[0].0, "작품", "{}", $name);
+            assert_eq!(results[0].title, "작품", "{}", $name);
         }};
     }
     check!("BomtoonBookstore", bomtoon_store);
@@ -2339,7 +2327,7 @@ fn test_toptoon_search_by_keyword_ranks_and_formats() {
 
     // 같은 순위끼리는 조회수가 많은 쪽이 먼저다.
     *catalog.lock().unwrap() = json!([toptoon_comic("네크로 하나", "low", 1, &["판타지"], "작가"), toptoon_comic("네크로 둘", "high", 500, &["판타지"], "작가")]);
-    let titles: Vec<String> = store.search_by_keyword("네크로").into_iter().map(|r| r.0).collect();
+    let titles: Vec<String> = store.search_by_keyword("네크로").into_iter().map(|r| r.title).collect();
     assert_eq!(titles, ["네크로 둘", "네크로 하나"]);
 }
 
@@ -2376,7 +2364,7 @@ fn test_toptoon_search_by_keyword_falls_back_to_author_string() {
     comic["meta"]["author"] = json!({"authorString": "MONNMONN"});
 
     store = store.with_session(session(move |url, _| if url.contains("hashtag") { http(200, CATALOG_URL, Value::Null) } else { http(200, "", json!([comic.clone()])) }).0);
-    assert_eq!(store.search_by_keyword("크로스오버")[0].1, "MONNMONN");
+    assert_eq!(store.search_by_keyword("크로스오버")[0].author, "MONNMONN");
 }
 
 #[test]
@@ -2441,14 +2429,14 @@ fn toptoon_search_skips_incomplete_catalog_entries_and_uses_metadata_fallbacks()
     let rows = store.search_by_keyword("네크로");
 
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].0, "네크로 중간");
-    assert_eq!(rows[0].1, "대체 작가");
-    assert_eq!(rows[0].2, "판타지");
-    assert_eq!(rows[0].3, "https://toptoon.com/comic/middle");
-    assert_eq!(rows[1].0, "앞 네크로 뒤");
-    assert_eq!(rows[1].1, "");
-    assert_eq!(rows[1].2, "");
-    assert_eq!(rows[1].3, "https://toptoon.com/comic/contains");
+    assert_eq!(rows[0].title, "네크로 중간");
+    assert_eq!(rows[0].author, "대체 작가");
+    assert_eq!(rows[0].category, "판타지");
+    assert_eq!(rows[0].detail_url, "https://toptoon.com/comic/middle");
+    assert_eq!(rows[1].title, "앞 네크로 뒤");
+    assert_eq!(rows[1].author, "");
+    assert_eq!(rows[1].category, "");
+    assert_eq!(rows[1].detail_url, "https://toptoon.com/comic/contains");
 }
 
 /// 서점 하나가 돌려주는 결과는 기본 최대 4개다.
@@ -2460,7 +2448,7 @@ fn test_bookstore_default_max_results_is_four() {
 
     let list: Vec<Value> = (1..6).map(|i| json!({"titleId": i, "titleName": format!("작품 {i}"), "displayAuthor": "", "genreList": []})).collect();
     store = store.with_session(constant(200, "", json!({"searchList": list})));
-    let titles: Vec<String> = store.search_by_keyword("작품").into_iter().map(|r| r.0).collect();
+    let titles: Vec<String> = store.search_by_keyword("작품").into_iter().map(|r| r.title).collect();
     assert_eq!(titles, ["작품 1", "작품 2", "작품 3", "작품 4"]);
 }
 
@@ -2568,7 +2556,7 @@ fn test_cache_file_name_uses_uuid5() {
 fn test_save_html_writes_uuid5_named_file() {
     let tmp = TempDir::new().unwrap();
     let store = yes24(false).with_tmp_dir(tmp.path().to_path_buf());
-    store._save_html_to_tmp("<html>x</html>", "https://example.com/detail/1");
+    store.save_html_to_tmp("<html>x</html>", "https://example.com/detail/1");
     let written = fs::read_to_string(tmp.path().join("2c75ebbd-c7d8-5945-b588-d1286cf77aee.html")).unwrap();
     assert_eq!(written, "<html>x</html>");
 }

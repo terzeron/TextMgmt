@@ -34,22 +34,22 @@ fn p() -> &'static Path {
 
 #[test]
 fn the_first_usable_stage_wins_and_stops_the_chain() {
-    let fake = Fake::new(vec![(Stage::Pdfium, Ok(("Hello, 세계!", 7))), (Stage::Plumber, Ok(("다른 글", 7)))]);
+    let fake = Fake::new(vec![(Stage::Poppler, Ok(("Hello, 세계!", 7))), (Stage::Lopdf, Ok(("다른 글", 7)))]);
     let read = read_from_pdf(p(), &fake);
     assert_eq!(read.summary, "Hello  세계 ");
     assert_eq!(read.page_count, 7);
-    assert_eq!(*fake.calls.borrow(), [Stage::Pdfium]);
+    assert_eq!(*fake.calls.borrow(), [Stage::Poppler]);
     assert_eq!(read.records.len(), 1);
-    assert_eq!((read.records[0].stage, read.records[0].outcome), (Stage::Pdfium, "ok"));
+    assert_eq!((read.records[0].stage, read.records[0].outcome), (Stage::Poppler, "ok"));
     assert!(read.logs.is_empty());
 }
 
 #[test]
 fn an_empty_first_stage_on_an_opened_document_means_a_scan_and_stops() {
-    let fake = Fake::new(vec![(Stage::Pdfium, Ok(("  \n", 12))), (Stage::Plumber, Ok(("글", 12)))]);
+    let fake = Fake::new(vec![(Stage::Poppler, Ok(("  \n", 12))), (Stage::Lopdf, Ok(("글", 12)))]);
     let read = read_from_pdf(p(), &fake);
     assert_eq!((read.summary.as_str(), read.page_count), ("", 12));
-    assert_eq!(*fake.calls.borrow(), [Stage::Pdfium]);
+    assert_eq!(*fake.calls.borrow(), [Stage::Poppler]);
     assert_eq!(read.records[0].outcome, "empty");
 }
 
@@ -59,7 +59,7 @@ fn damaged_text_falls_through_and_the_least_damaged_result_is_kept() {
     let mojibake: String = bytes.iter().map(|&b| b as char).collect();
     let damaged3 = format!("{mojibake} a {mojibake} b {mojibake}");
     let damaged4 = format!("{mojibake} a {mojibake} b {mojibake} c {mojibake}");
-    let fake = Fake::new(vec![(Stage::Pdfium, Ok((&damaged4, 3))), (Stage::Plumber, Ok((&damaged3, 3)))]);
+    let fake = Fake::new(vec![(Stage::Poppler, Ok((&damaged4, 3))), (Stage::Lopdf, Ok((&damaged3, 3)))]);
     let read = read_from_pdf(p(), &fake);
     assert_eq!(read.records.iter().map(|r| r.outcome).collect::<Vec<_>>(), ["damaged", "damaged"]);
     assert_eq!(read.summary.matches('a').count(), 1, "구간이 적은 두 번째 결과를 쓴다");
@@ -68,7 +68,7 @@ fn damaged_text_falls_through_and_the_least_damaged_result_is_kept() {
 
 #[test]
 fn errors_move_on_and_a_second_stage_can_succeed() {
-    let fake = Fake::new(vec![(Stage::Pdfium, Err(StageError::Failed("깨짐".into()))), (Stage::Plumber, Ok(("복구된 글", 4)))]);
+    let fake = Fake::new(vec![(Stage::Poppler, Err(StageError::Failed("깨짐".into()))), (Stage::Lopdf, Ok(("복구된 글", 4)))]);
     let read = read_from_pdf(p(), &fake);
     assert_eq!((read.summary.as_str(), read.page_count), ("복구된 글", 4));
     assert_eq!(read.records.iter().map(|r| r.outcome).collect::<Vec<_>>(), ["error", "ok"]);
@@ -76,26 +76,26 @@ fn errors_move_on_and_a_second_stage_can_succeed() {
 
 #[test]
 fn timeouts_are_reported_per_file() {
-    let fake = Fake::new(vec![(Stage::Pdfium, Err(StageError::Timeout)), (Stage::Plumber, Err(StageError::Timeout)), (Stage::Repair, Err(StageError::Timeout))]);
+    let fake = Fake::new(vec![(Stage::Poppler, Err(StageError::Timeout)), (Stage::Lopdf, Err(StageError::Timeout)), (Stage::Repair, Err(StageError::Timeout))]);
     let read = read_from_pdf(p(), &fake);
     assert_eq!(read.summary, "");
-    assert_eq!(*fake.calls.borrow(), [Stage::Pdfium, Stage::Plumber, Stage::Repair], "쪽을 하나도 못 열면 구조 복구를 시도한다");
+    assert_eq!(*fake.calls.borrow(), [Stage::Poppler, Stage::Lopdf, Stage::Repair], "쪽을 하나도 못 열면 구조 복구를 시도한다");
     let messages: Vec<&str> = read.logs.iter().map(|(_, m)| m.as_str()).collect();
-    assert!(messages.iter().any(|m| m.contains("PDF 파서 타임아웃(30초 초과): _pdf_text_by_poppler")), "{messages:?}");
+    assert!(messages.iter().any(|m| m.contains("PDF 파서 타임아웃(30초 초과): pdf_text_poppler")), "{messages:?}");
     assert!(messages.iter().any(|m| m.contains("PDF 구조 복구 타임아웃")));
-    assert!(messages.iter().any(|m| m.contains("모든 파서가 타임아웃 또는 오류") && m.contains("_pdf_text_by_pikepdf_repair")), "{messages:?}");
+    assert!(messages.iter().any(|m| m.contains("모든 파서가 타임아웃 또는 오류") && m.contains("pdf_text_repair")), "{messages:?}");
     assert_eq!(read.records.iter().map(|r| r.outcome).collect::<Vec<_>>(), ["timeout", "timeout", "timeout"]);
 }
 
 #[test]
 fn structure_repair_runs_only_when_no_page_was_opened() {
-    let fake = Fake::new(vec![(Stage::Pdfium, Err(StageError::Failed("x".into()))), (Stage::Plumber, Err(StageError::Failed("y".into()))), (Stage::Repair, Ok(("복구 뒤 본문", 9)))]);
+    let fake = Fake::new(vec![(Stage::Poppler, Err(StageError::Failed("x".into()))), (Stage::Lopdf, Err(StageError::Failed("y".into()))), (Stage::Repair, Ok(("복구 뒤 본문", 9)))]);
     let read = read_from_pdf(p(), &fake);
     assert_eq!((read.summary.as_str(), read.page_count), ("복구 뒤 본문", 9));
     assert!(read.logs.iter().any(|(level, m)| *level == "WARNING" && m.contains("PDF 구조 복구 후 적재 (9쪽)")));
 
     // 쪽을 열었으면(텍스트가 비어도) 복구하지 않는다.
-    let fake = Fake::new(vec![(Stage::Pdfium, Err(StageError::Failed("x".into()))), (Stage::Plumber, Ok(("", 5)))]);
+    let fake = Fake::new(vec![(Stage::Poppler, Err(StageError::Failed("x".into()))), (Stage::Lopdf, Ok(("", 5)))]);
     read_from_pdf(p(), &fake);
     assert!(!fake.calls.borrow().contains(&Stage::Repair));
 

@@ -17,7 +17,7 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use sysdeps::{Clock, FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout, RealFs, SystemClock};
 
-use self::html_dom::Soup;
+use self::html_dom::HtmlDom;
 use htmlkit::url_parser::{Netloc, quote, urlencode, urljoin, urlsplit};
 
 pub const STORE_NAMES: [&str; 8] = ["yes24", "aladin", "kyobo", "naver", "ridi", "munpia", "naverseries", "joara"];
@@ -42,18 +42,18 @@ pub fn store_hosts(store: &str) -> &'static [&'static str] {
 
 /// 입력이나 서점 응답이 잘못됐다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValueError(pub String);
+pub struct CoverSourceError(pub String);
 
-impl fmt::Display for ValueError {
+impl fmt::Display for CoverSourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-impl std::error::Error for ValueError {}
+impl std::error::Error for CoverSourceError {}
 
-fn value_err<T>(message: &str) -> Result<T, ValueError> {
-    Err(ValueError(message.to_string()))
+fn value_err<T>(message: &str) -> Result<T, CoverSourceError> {
+    Err(CoverSourceError(message.to_string()))
 }
 
 /// 검색·내려받기 오류. `Http`는 `raise_for_status`의 `HTTPError`, `Cancelled`는 `FetchCancelled`에 해당한다.
@@ -81,8 +81,8 @@ impl fmt::Display for SearchError {
 
 impl std::error::Error for SearchError {}
 
-impl From<ValueError> for SearchError {
-    fn from(err: ValueError) -> Self {
+impl From<CoverSourceError> for SearchError {
+    fn from(err: CoverSourceError) -> Self {
         SearchError::Value(err.0)
     }
 }
@@ -347,12 +347,12 @@ pub fn system_resolve(host: &str, port: u16) -> io::Result<Vec<IpAddr>> {
     Ok((host, port).to_socket_addrs()?.map(|a| a.ip()).collect())
 }
 
-pub fn validate_url(store: &str, url: &str) -> Result<String, ValueError> {
+pub fn validate_url(store: &str, url: &str) -> Result<String, CoverSourceError> {
     validate_url_with(store, url, &system_resolve)
 }
 
 /// DNS 조회(`resolve`)를 주입할 수 있는 `validate_url`.
-pub fn validate_url_with(store: &str, url: &str, resolve: &dyn Fn(&str, u16) -> io::Result<Vec<IpAddr>>) -> Result<String, ValueError> {
+pub fn validate_url_with(store: &str, url: &str, resolve: &dyn Fn(&str, u16) -> io::Result<Vec<IpAddr>>) -> Result<String, CoverSourceError> {
     let parsed = urlsplit(url);
     let netloc = Netloc::parse(parsed.netloc.as_deref().unwrap_or(""));
     let host = netloc.hostname.clone().unwrap_or_default();
@@ -371,7 +371,7 @@ pub fn validate_url_with(store: &str, url: &str, resolve: &dyn Fn(&str, u16) -> 
     }
 }
 
-pub type ValidateFn = dyn Fn(&str, &str) -> Result<String, ValueError>;
+pub type ValidateFn = dyn Fn(&str, &str) -> Result<String, CoverSourceError>;
 
 const MAX_STORE_BYTES: usize = 4 * 1024 * 1024;
 
@@ -461,16 +461,16 @@ impl DefaultClient {
     }
 
     fn ridi_info(html: &str) -> Value {
-        let soup = Soup::parse(html);
-        let meta = soup.meta_content("property", "og:title").filter(|c| !c.is_empty()).or_else(|| soup.meta_content("name", "title").filter(|c| !c.is_empty()));
+        let dom = HtmlDom::parse(html);
+        let meta = dom.meta_content("property", "og:title").filter(|c| !c.is_empty()).or_else(|| dom.meta_content("name", "title").filter(|c| !c.is_empty()));
         let title = match meta {
             Some(content) => content.trim().to_string(),
-            None => soup.find_all(soup.root(), "h1").first().map(|h1| soup.text_strip(*h1)).unwrap_or_default(),
+            None => dom.find_all(dom.root(), "h1").first().map(|h1| dom.text_strip(*h1)).unwrap_or_default(),
         };
         let mut author = String::new();
         // 'li' 중 '저자'로 끝나는 요소의 앞쪽 글자를 저자로 본다.
-        for li in soup.find_all(soup.root(), "li") {
-            let text = soup.text_strip_sep(li);
+        for li in dom.find_all(dom.root(), "li") {
+            let text = dom.text_strip_sep(li);
             if let Some(raw) = text.strip_suffix("저자").filter(|r| !r.is_empty()) {
                 let spaced = RIDI_MORE_AUTHORS.replace_all(raw, " 외 $1");
                 author = spaced.trim().to_string();
@@ -478,33 +478,33 @@ impl DefaultClient {
             }
         }
         if author.is_empty() {
-            let link = soup.find_all(soup.root(), "a").into_iter().find(|a| soup.attr(*a, "href").is_some_and(|h| h.contains("/author")));
+            let link = dom.find_all(dom.root(), "a").into_iter().find(|a| dom.attr(*a, "href").is_some_and(|h| h.contains("/author")));
             if let Some(link) = link {
-                author = soup.text_strip(link);
+                author = dom.text_strip(link);
             }
         }
         book_info(&title, &author)
     }
 
     fn naverseries_info(html: &str) -> Value {
-        let soup = Soup::parse(html);
-        let title = soup.find_all(soup.root(), "title").first().map(|t| soup.text(*t).trim().to_string()).unwrap_or_default();
+        let dom = HtmlDom::parse(html);
+        let title = dom.find_all(dom.root(), "title").first().map(|t| dom.text(*t).trim().to_string()).unwrap_or_default();
         let mut author = String::new();
-        let container = soup.find_all(soup.root(), "div").into_iter().find(|d| soup.attr(*d, "id") == Some("_otherProductByPerson"));
+        let container = dom.find_all(dom.root(), "div").into_iter().find(|d| dom.attr(*d, "id") == Some("_otherProductByPerson"));
         if let Some(container) = container {
-            let strongs = soup.find_all(container, "strong");
+            let strongs = dom.find_all(container, "strong");
             if strongs.len() >= 2 {
-                author = soup.text_strip(strongs[1]);
+                author = dom.text_strip(strongs[1]);
             }
         }
         if author.is_empty()
-            && let Some(desc) = soup.meta_content("name", "description").filter(|d| !d.is_empty())
+            && let Some(desc) = dom.meta_content("name", "description").filter(|d| !d.is_empty())
             && let Some(m) = SERIES_AUTHOR.captures(&desc)
         {
             author = m[1].trim().to_string();
         }
         if author.is_empty()
-            && let Some(desc) = soup.meta_content("property", "og:description").filter(|d| !d.is_empty())
+            && let Some(desc) = dom.meta_content("property", "og:description").filter(|d| !d.is_empty())
             && let Some(m) = SERIES_OG_AUTHOR.captures(&desc)
         {
             author = m[1].trim().to_string();
@@ -513,15 +513,15 @@ impl DefaultClient {
     }
 
     fn naverseries_links(html: &str) -> Vec<String> {
-        let soup = Soup::parse(html);
+        let dom = HtmlDom::parse(html);
         let mut links: Vec<String> = Vec::new();
-        for a in soup.find_all(soup.root(), "a") {
-            let in_list = soup.attr(a, "class").is_some_and(|c| c.starts_with("N=a:"))
-                && soup.has_ancestor(a, |s, p| s.tag(p) == "li" && s.has_ancestor(p, |s2, q| s2.tag(q) == "ul" && s2.has_class(q, "lst_list")));
+        for a in dom.find_all(dom.root(), "a") {
+            let in_list = dom.attr(a, "class").is_some_and(|c| c.starts_with("N=a:"))
+                && dom.has_ancestor(a, |s, p| s.tag(p) == "li" && s.has_ancestor(p, |s2, q| s2.tag(q) == "ul" && s2.has_class(q, "lst_list")));
             if !in_list {
                 continue;
             }
-            if let Some(href) = soup.attr(a, "href").filter(|h| !h.is_empty()) {
+            if let Some(href) = dom.attr(a, "href").filter(|h| !h.is_empty()) {
                 let full = urljoin(base_for("naverseries"), href);
                 if !links.contains(&full) {
                     links.push(full);
@@ -615,19 +615,19 @@ pub fn extract_html_candidates(store: &str, detail_url: &str, html: &str) -> Vec
 
 /// `client`로 상세 페이지를 해석해 후보 한 건을 만든다. 제목이나 이미지가 없으면 후보가 없다.
 pub fn extract_html_candidates_with(client: &dyn StoreClient, store: &str, detail_url: &str, html: &str) -> Vec<Value> {
-    let soup = Soup::parse(html);
+    let dom = HtmlDom::parse(html);
     let info = client.extract_book_info(html);
     let info_title = info.get("title").map(value_text).unwrap_or_default();
-    let title = if info_title.is_empty() { soup.meta_content("property", "og:title").unwrap_or_default() } else { info_title };
-    let mut image_url = soup.meta_content("property", "og:image").unwrap_or_default();
+    let title = if info_title.is_empty() { dom.meta_content("property", "og:title").unwrap_or_default() } else { info_title };
+    let mut image_url = dom.meta_content("property", "og:image").unwrap_or_default();
     if store == "aladin" && urlsplit(&image_url).path.ends_with("/img_no.jpg") {
         return Vec::new();
     }
     if store == "naverseries" {
         // og:image는 600x314 공유용 crop이다. 실제 책의 173x260 이미지를 사용한다.
-        let portrait = soup.find_all(soup.root(), "img").into_iter().find(|img| soup.has_ancestor(*img, |s, p| s.tag(p) == "a" && s.has_class(p, "pic_area")));
+        let portrait = dom.find_all(dom.root(), "img").into_iter().find(|img| dom.has_ancestor(*img, |s, p| s.tag(p) == "a" && s.has_class(p, "pic_area")));
         if let Some(img) = portrait {
-            image_url = soup.attr(img, "src").unwrap_or("").to_string();
+            image_url = dom.attr(img, "src").unwrap_or("").to_string();
         }
     }
     if title.is_empty() || image_url.is_empty() {
@@ -639,25 +639,25 @@ pub fn extract_html_candidates_with(client: &dyn StoreClient, store: &str, detai
 
 pub fn parse_naver_candidates(html: &str) -> Vec<Value> {
     // 2026-10 페이지는 Next flight와 bookListItem DOM을 사용한다.
-    let soup = Soup::parse(html);
+    let dom = HtmlDom::parse(html);
     let mut candidates = Vec::new();
-    for link in soup.find_all(soup.root(), "a") {
-        if !soup.attr(link, "class").is_some_and(|c| c.contains("bookListItem_info_top")) {
+    for link in dom.find_all(dom.root(), "a") {
+        if !dom.attr(link, "class").is_some_and(|c| c.contains("bookListItem_info_top")) {
             continue;
         }
-        let Some(image) = soup.find_all(link, "img").first().copied() else { continue };
-        let Some(src) = soup.attr(image, "src").filter(|s| !s.is_empty()) else { continue };
+        let Some(image) = dom.find_all(link, "img").first().copied() else { continue };
+        let Some(src) = dom.attr(image, "src").filter(|s| !s.is_empty()) else { continue };
         let mut author = String::new();
-        for field in soup.descendants(link) {
-            if !soup.attr(field, "class").is_some_and(|c| c.contains("bookListItem_define_item")) {
+        for field in dom.descendants(link) {
+            if !dom.attr(field, "class").is_some_and(|c| c.contains("bookListItem_define_item")) {
                 continue;
             }
-            let spans = soup.find_all(field, "span");
-            if spans.len() >= 2 && soup.text_strip(spans[0]) == "저자" {
-                author = soup.text_strip(spans[1]);
+            let spans = dom.find_all(field, "span");
+            if spans.len() >= 2 && dom.text_strip(spans[0]) == "저자" {
+                author = dom.text_strip(spans[1]);
             }
         }
-        candidates.push(json!({"title": soup.attr(image, "alt").unwrap_or(""), "author": author, "detail_url": soup.attr(link, "href").unwrap_or(""), "image_url": src}));
+        candidates.push(json!({"title": dom.attr(image, "alt").unwrap_or(""), "author": author, "detail_url": dom.attr(link, "href").unwrap_or(""), "image_url": src}));
         if candidates.len() == 4 {
             break;
         }
@@ -677,7 +677,7 @@ fn status_is_one(value: Option<&Value>) -> bool {
     }
 }
 
-pub fn parse_joara_candidates(data: &Value) -> Result<Vec<Value>, ValueError> {
+pub fn parse_joara_candidates(data: &Value) -> Result<Vec<Value>, CoverSourceError> {
     if !status_is_one(data.get("status")) {
         return value_err("조아라 검색 요청을 처리하지 못했습니다");
     }
@@ -695,7 +695,7 @@ pub fn parse_joara_candidates(data: &Value) -> Result<Vec<Value>, ValueError> {
     Ok(results)
 }
 
-pub fn parse_munpia_candidates(data: &Value) -> Result<Vec<Value>, ValueError> {
+pub fn parse_munpia_candidates(data: &Value) -> Result<Vec<Value>, CoverSourceError> {
     if data.get("code").and_then(Value::as_str) != Some("M000_00000") {
         return value_err("문피아 검색 요청을 처리하지 못했습니다");
     }
@@ -720,7 +720,7 @@ pub fn parse_munpia_candidates(data: &Value) -> Result<Vec<Value>, ValueError> {
 /// 서점 이름으로 HTTP 세션을 만드는 함수.
 pub type SessionFactory = Arc<dyn Fn(&str) -> Arc<dyn HttpSession> + Send + Sync>;
 type ClientFactory = Arc<dyn Fn() -> Box<dyn StoreClient> + Send + Sync>;
-type ValidateHook = Arc<dyn Fn(&str, &str) -> Result<String, ValueError> + Send + Sync>;
+type ValidateHook = Arc<dyn Fn(&str, &str) -> Result<String, CoverSourceError> + Send + Sync>;
 
 /// 검색이 쓰는 바깥 의존성(세션, 클라이언트, 취소, URL 검증). 기본값은 실제 구현이다.
 #[derive(Clone)]
@@ -750,8 +750,8 @@ impl SearchHooks {
         self
     }
 
-    /// 이 설정으로 URL을 검증한다. 허용하면 정규화한 URL을, 막으면 `ValueError`를 돌려준다.
-    pub fn validate(&self, store: &str, url: &str) -> Result<String, ValueError> {
+    /// 이 설정으로 URL을 검증한다. 허용하면 정규화한 URL을, 막으면 `CoverSourceError`를 돌려준다.
+    pub fn validate(&self, store: &str, url: &str) -> Result<String, CoverSourceError> {
         (self.validate)(store, url)
     }
 
@@ -765,7 +765,7 @@ impl SearchHooks {
         self
     }
 
-    pub fn with_validate(mut self, validate: impl Fn(&str, &str) -> Result<String, ValueError> + Send + Sync + 'static) -> Self {
+    pub fn with_validate(mut self, validate: impl Fn(&str, &str) -> Result<String, CoverSourceError> + Send + Sync + 'static) -> Self {
         self.validate = Arc::new(validate);
         self
     }
@@ -867,14 +867,14 @@ pub fn search_candidates_with(store: &str, metadata: &Value, hooks: &SearchHooks
         }
         _ => {
             let html = text(fetch(&search_url)?);
-            let soup = Soup::parse(&html);
+            let dom = HtmlDom::parse(&html);
             let results = if store == "naver" {
                 parse_naver_candidates(&html)
             } else {
                 let mut links = client.extract_search_links(&html);
                 if store == "ridi" && links.is_empty() {
-                    for a in soup.find_all(soup.root(), "a") {
-                        if let Some(href) = soup.attr(a, "href").filter(|h| h.starts_with("/books/")) {
+                    for a in dom.find_all(dom.root(), "a") {
+                        if let Some(href) = dom.attr(a, "href").filter(|h| h.starts_with("/books/")) {
                             let full = urljoin(&client.base_url(), href);
                             if !links.contains(&full) {
                                 links.push(full);
@@ -890,7 +890,7 @@ pub fn search_candidates_with(store: &str, metadata: &Value, hooks: &SearchHooks
                 }
                 results
             };
-            if results.is_empty() && (html.contains("Just a moment") || !soup.text(soup.root()).contains("검색")) {
+            if results.is_empty() && (html.contains("Just a moment") || !dom.text(dom.root()).contains("검색")) {
                 return Err(SearchError::Value("서점 검색 페이지에 접근하지 못했습니다".to_string()));
             }
             results
@@ -907,7 +907,7 @@ pub fn build_search_url(store: &str, keyword: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{DefaultClient, GateError, SearchError, StoreBlocked, StoreClient, StoreLockError, ValueError, base_for, build_search_url, store_hosts};
+    use super::{CoverSourceError, DefaultClient, GateError, SearchError, StoreBlocked, StoreClient, StoreLockError, base_for, build_search_url, store_hosts};
 
     #[test]
     fn default_client_builds_search_urls_for_non_bookstore_sites() {
@@ -969,7 +969,7 @@ mod tests {
 
     #[test]
     fn public_error_types_have_stable_display_messages() {
-        assert_eq!(ValueError("invalid".into()).to_string(), "invalid");
+        assert_eq!(CoverSourceError("invalid".into()).to_string(), "invalid");
         assert_eq!(SearchError::Value("bad input".into()).to_string(), "bad input");
         assert_eq!(SearchError::Http { status: 503 }.to_string(), "서점 응답 오류: HTTP 503");
         assert_eq!(SearchError::Cancelled.to_string(), "서점 요청이 취소되었습니다");

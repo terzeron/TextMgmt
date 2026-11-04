@@ -13,7 +13,7 @@ bookstore_struct!(
 
 const MUNPIA_BASE_URL: &str = "https://novel.munpia.com";
 
-impl AbstractBookstore for MunpiaBookstore {
+impl Bookstore for MunpiaBookstore {
     bookstore_common!(MUNPIA_BASE_URL, author_first = true);
     default_keyword_search!();
 
@@ -22,8 +22,8 @@ impl AbstractBookstore for MunpiaBookstore {
         format!("{MUNPIA_BASE_URL}/page/hd.platinum/view/search/keyword/{}/order/search_result", quote(keyword, ""))
     }
 
-    fn extract_search_links(&self, soup: &str) -> Vec<String> {
-        let doc = Html::parse_document(soup);
+    fn extract_search_links(&self, markup: &str) -> Vec<String> {
+        let doc = Html::parse_document(markup);
         let mut links: Vec<String> = Vec::new();
         for a in doc.select(sel!("div#SEARCH-BOX.section2 > div.ebook_lists > div.article_wrap > div.article > dl.detail > dt > a")) {
             let Some(href) = attr(&a, "href").filter(|h| !h.is_empty()) else { continue };
@@ -38,8 +38,8 @@ impl AbstractBookstore for MunpiaBookstore {
         links
     }
 
-    fn extract_book_info(&self, soup: &str) -> Value {
-        let doc = Html::parse_document(soup);
+    fn extract_book_info(&self, markup: &str) -> Value {
+        let doc = Html::parse_document(markup);
         let mut title = String::new();
         let mut author = String::new();
         let mut category = String::new();
@@ -70,7 +70,7 @@ bookstore_struct!(
 
 const NAVER_SERIES_BASE_URL: &str = "https://series.naver.com";
 
-impl AbstractBookstore for NaverSeriesBookstore {
+impl Bookstore for NaverSeriesBookstore {
     bookstore_common!(NAVER_SERIES_BASE_URL, author_first = false);
     default_keyword_search!();
 
@@ -79,8 +79,8 @@ impl AbstractBookstore for NaverSeriesBookstore {
     }
 
     /// 웹소설은 `nov.title`, 만화는 `com.title` 링크다.
-    fn extract_search_links(&self, soup: &str) -> Vec<String> {
-        let doc = Html::parse_document(soup);
+    fn extract_search_links(&self, markup: &str) -> Vec<String> {
+        let doc = Html::parse_document(markup);
         let mut links: Vec<String> = Vec::new();
         for a in doc.select(sel!(r#"ul.lst_list li a[class^="N=a:"]"#)) {
             if let Some(href) = attr(&a, "href").filter(|h| !h.is_empty()) {
@@ -96,8 +96,8 @@ impl AbstractBookstore for NaverSeriesBookstore {
         links
     }
 
-    fn extract_book_info(&self, soup: &str) -> Value {
-        let doc = Html::parse_document(soup);
+    fn extract_book_info(&self, markup: &str) -> Value {
+        let doc = Html::parse_document(markup);
         let title = title_string(&doc).map(|t| t.trim().to_owned()).unwrap_or_default();
         let mut author = String::new();
         // 작가 정보 컨테이너의 <strong>
@@ -198,7 +198,7 @@ impl JoaraBookstore {
             let (title, author, category) = (str_field(book, "subject"), str_field(book, "member_name"), str_field(book, "category_name"));
             let detail_url = if code.is_empty() { String::new() } else { format!("{JOARA_BASE_URL}/book/{code}") };
             if !title.is_empty() && !detail_url.is_empty() {
-                results.push((title, author, category, detail_url, search_url.clone(), String::new()));
+                results.push(SearchRow { title, author, category, detail_url, search_url: search_url.clone(), isbn: String::new() });
             }
         }
         if self.verbose {
@@ -208,7 +208,7 @@ impl JoaraBookstore {
     }
 }
 
-impl AbstractBookstore for JoaraBookstore {
+impl Bookstore for JoaraBookstore {
     bookstore_common!(JOARA_BASE_URL, author_first = false);
     api_keyword_search!(search_api);
 

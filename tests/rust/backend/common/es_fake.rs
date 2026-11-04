@@ -18,12 +18,11 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
-use backend::es_manager::{EsError, EsManagerApi};
+pub use backend::es_manager::Hit;
+use backend::es_manager::{EsError, EsManagerApi, PagedHits};
 use serde_json::{Value, json};
 
 pub type Docs = BTreeMap<i64, Value>;
-/// (문서 ID, `_source`, 점수)
-pub type Hit = (i64, Value, f64);
 
 type Fault = Arc<dyn Fn() -> EsError + Send + Sync>;
 type SearchByIdHook = Arc<dyn Fn(i64) -> Result<Option<Value>, EsError> + Send + Sync>;
@@ -435,7 +434,7 @@ impl EsManagerApi for FakeEsManager {
     }
 
     /// `search_after`의 첫 값을 시작 위치로 읽는 단순 페이지 나누기. 다음 쪽이 있으면 `[다음 시작 위치]`를 돌려준다.
-    fn search_by_category_paged(&self, category: &str, size: i64, search_after: Option<&[Value]>) -> Result<(Vec<Hit>, i64, Option<Vec<Value>>), EsError> {
+    fn search_by_category_paged(&self, category: &str, size: i64, search_after: Option<&[Value]>) -> Result<PagedHits, EsError> {
         self.enter("search_by_category_paged", json!([category, size, search_after]))?;
         Ok(self.with(|s| {
             let start = search_after.and_then(|a| a.first()).and_then(Value::as_u64).unwrap_or(0) as usize;
@@ -444,7 +443,7 @@ impl EsManagerApi for FakeEsManager {
             let page: Vec<Hit> = s.category_docs.get(start..end).unwrap_or(&[]).to_vec();
             let next_start = start + page.len();
             let next = if page.len() == size && next_start < s.category_docs.len() { Some(vec![json!(next_start)]) } else { None };
-            (page, s.category_docs.len() as i64, next)
+            PagedHits { hits: page, total: s.category_docs.len() as i64, search_after: next }
         }))
     }
 

@@ -8,7 +8,7 @@ use std::time::Instant;
 use serde_json::{Map, Value, json};
 
 use super::BookManager;
-use crate::es_manager::Hit;
+use crate::es_manager::{Hit, PagedHits};
 
 /// ES 쪽 카테고리 하나의 경로 집합.
 #[derive(Default)]
@@ -98,7 +98,7 @@ impl BookManager {
         let mut result: Vec<Hit> = Vec::new();
         let mut search_after: Option<Vec<Value>> = None;
         loop {
-            let (page, _total, next) = self.es.search_by_category_paged(category, self.max_category_result_count, search_after.as_deref()).map_err(|e| e.to_string())?;
+            let PagedHits { hits: page, search_after: next, .. } = self.es.search_by_category_paged(category, self.max_category_result_count, search_after.as_deref()).map_err(|e| e.to_string())?;
             result.extend(page);
             match next {
                 Some(next) => search_after = Some(next),
@@ -261,7 +261,7 @@ impl BookManager {
         let doc_list = self.search_all_docs_by_category(category)?;
         let mut es_files: BTreeMap<String, Value> = BTreeMap::new();
         let mut path_docs: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-        for (book_id, doc, _score) in &doc_list {
+        for Hit { id: book_id, source: doc, .. } in &doc_list {
             let rel_path = self.normalize_stored_file_path(str_of(doc, "file_path"));
             let mut with_id = Map::new();
             with_id.insert("book_id".to_string(), json!(book_id));

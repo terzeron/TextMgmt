@@ -8,7 +8,7 @@
 //! - `ViewHistoryStore::record_view(&self, email: &str, content_type: &str, book_id: i64, title: &str, category: &str) -> Result<(), ViewHistoryError>`
 //! - `ViewHistoryStore::list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError>`
 //! - `ViewHistoryStore::get_connection(&self) -> Result<Box<dyn DbConnection>, DbError>` (구 `_get_connection() -> mysql::Conn`)
-//! - `ViewHistoryError::{ValueError(String), RuntimeError(String)}` (`DbError::Other(msg)`는 `RuntimeError(msg)`로 바뀐다)
+//! - `ViewHistoryError::{CoverSourceError(String), BookManagerError(String)}` (`DbError::Other(msg)`는 `BookManagerError(msg)`로 바뀐다)
 //! - `create_view_history_store() -> Result<ViewHistoryStore, ViewHistoryError>`
 //! - `db::{DbConnection, DbCursor, DbValue, DbError, Row, ConnectionProvider}`: 구 `StoreConnection`은 `DbConnection`이다.
 //!   - `DbConnection: Send { cursor() -> Box<dyn DbCursor>; commit(); rollback(); close(); execute(sql, &[DbValue]) -> Result<u64, DbError>; fetch_one(sql, &[DbValue]) -> Result<Option<Row>, DbError> }` (뒤 둘은 기본 구현)
@@ -193,7 +193,7 @@ fn test_snapshot_survives_when_source_book_is_gone() {
 fn test_rejects_unknown_content_type() {
     let (store, _guard) = fixture();
     match store.record_view("a@example.com", "magazine", 1, "x", "") {
-        Err(ViewHistoryError::ValueError(message)) => assert!(message.contains("content_type"), "{message}"),
+        Err(ViewHistoryError::InvalidInput(message)) => assert!(message.contains("content_type"), "{message}"),
         other => panic!("ValueError(content_type)를 기대했다: {other:?}"),
     }
 }
@@ -271,7 +271,7 @@ fn test_record_view_rolls_back_and_reraises_on_db_error() {
     let store = ViewHistoryStore::with_connection_provider(provider);
 
     match store.record_view("a@example.com", "book", 1, "책", "") {
-        Err(ViewHistoryError::RuntimeError(message)) => assert!(message.contains("trim failed"), "{message}"),
+        Err(ViewHistoryError::Storage(message)) => assert!(message.contains("trim failed"), "{message}"),
         other => panic!("RuntimeError(trim failed)를 기대했다: {other:?}"),
     }
 

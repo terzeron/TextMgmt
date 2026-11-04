@@ -23,14 +23,14 @@ pub const READ_FILE_COMMAND: &str = "__read-file";
 
 fn stage_key(stage: Stage) -> &'static str {
     match stage {
-        Stage::Pdfium => "poppler",
-        Stage::Plumber => "plumber",
+        Stage::Poppler => "poppler",
+        Stage::Lopdf => "lopdf",
         Stage::Repair => "repair",
     }
 }
 
 fn stage_from_key(key: &str) -> Option<Stage> {
-    [Stage::Pdfium, Stage::Plumber, Stage::Repair].into_iter().find(|s| stage_key(*s) == key)
+    [Stage::Poppler, Stage::Lopdf, Stage::Repair].into_iter().find(|s| stage_key(*s) == key)
 }
 
 /// PDF 단계를 자식 프로세스(이 실행 파일의 숨은 부명령)로 돌리고 시간 상한이 넘으면 강제 종료한다.

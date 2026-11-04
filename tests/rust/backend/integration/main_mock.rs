@@ -3,10 +3,11 @@
 #[path = "../common/mod.rs"]
 mod common;
 use crate::common::auth_fakes::FixedRole;
-use crate::common::shared_fixtures::{BookRow, CallArgs, DeferredRunner, Fut, Fx, Mock, RecordedArgs, Store, arg, arg_or, effective, install_classify_status_store, ready, store_set};
+use crate::common::shared_fixtures::{CallArgs, DeferredRunner, Fut, Fx, Mock, RecordedArgs, Store, arg, arg_or, effective, install_classify_status_store, ready, store_set};
 use crate::common::shared_fixtures::{ListDirFs, admin_payload, arr, enc, is_truthy, now_plus_3600, proposal_result};
 use backend::book_metadata::Book;
 use backend::main::{BookstoreFactory, BookstoreSearch, GoogleVerifier, TaskRunner};
+use bookstore::store_clients::SearchRow;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -34,7 +35,7 @@ fn make_book(overrides: Value) -> Value {
     d
 }
 
-/// fastapi `Response(content=..., media_type=...)`에 대응한다.
+/// 본문과 media type을 가진 응답.
 fn raw_response(content: &str, media_type: Option<&str>) -> Value {
     json!({"__response__": {"content": content, "media_type": media_type}})
 }
@@ -59,10 +60,16 @@ macro_rules! call_args {
 struct StoreProxy(Mock);
 
 impl BookstoreSearch for StoreProxy {
-    fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<BookRow>, String, String) {
+    fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String) {
         let v = self.0.invoke_sync("search", call_args!([isbn, title, author], {}));
         let cell = |row: &Value, i: usize| row.get(i).and_then(Value::as_str).unwrap_or("").to_string();
-        let rows = arr(&v, 0).as_array().cloned().unwrap_or_default().iter().map(|r| (cell(r, 0), cell(r, 1), cell(r, 2), cell(r, 3), cell(r, 4), cell(r, 5))).collect();
+        let rows = arr(&v, 0)
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|r| SearchRow { title: cell(r, 0), author: cell(r, 1), category: cell(r, 2), detail_url: cell(r, 3), search_url: cell(r, 4), isbn: cell(r, 5) })
+            .collect();
         (rows, arr(&v, 1).as_str().unwrap_or("").to_string(), arr(&v, 2).as_str().unwrap_or("").to_string())
     }
 
@@ -96,7 +103,7 @@ impl GoogleVerifier for FixedVerifier {
     }
 }
 
-/// `asyncio.to_thread` spy. 블로킹 풀로 넘어간 함수 이름을 기록한다.
+/// 블로킹 풀 실행 기록기. 블로킹 풀로 넘어간 함수 이름을 기록한다.
 struct SpyRunner(Arc<Mutex<Vec<String>>>);
 
 impl TaskRunner for SpyRunner {
@@ -1014,8 +1021,8 @@ async fn test_classify_proposal_job_batch_size_10_makes_small_categories_visible
 #[cfg(any())] // 이전 내부 ItemRouter seam은 현재 HTTP API로 대체한다.
 #[tokio::test]
 async fn test_classify_proposal_flush_routes_db_write_through_to_thread() {
-    // I5: 제안 진행 중 DB flush(add_classify_proposal_items)가 asyncio.to_thread를 거쳐 실행된다.
-    // pymysql 호출은 블로킹이라 이벤트 루프 위에서 직접 부르면 단일 워커가 매 10건마다 멈춘다.
+    // I5: 제안 진행 중 DB flush(add_classify_proposal_items)가 블로킹 풀에서 실행된다.
+    // DB 호출은 블로킹이라 비동기 런타임 위에서 직접 부르면 단일 워커가 매 10건마다 멈춘다.
     // Rust에서는 `TaskRunner::spawn_blocking_observed`가 블로킹 풀로 넘어간 함수 이름을 기록한다(`with_task_runner`).
     let to_thread_funcs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let spy = to_thread_funcs.clone();
@@ -1852,7 +1859,7 @@ async fn test_reload_failure() {
 async fn test_get_details_success() {
     let fx = Fx::new();
     let details = json!({"es": ["a.epub"], "fs": ["b.epub"]});
-    // get_category_mismatch_details는 asyncio.to_thread로 부르므로 동기 함수여야 한다.
+    // get_category_mismatch_details는 블로킹 풀에서 부르므로 동기 함수여야 한다.
     fx.bm.returns("get_category_mismatch_details", details.clone());
     let r = fx.get("/category-mismatches/_epub").await;
     assert_eq!(r.status, 200);

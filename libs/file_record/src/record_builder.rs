@@ -96,7 +96,7 @@ fn page_count_by_lopdf(path: &Path, messages: &mut Vec<String>) -> usize {
     }
 }
 
-/// PDF 쪽수만: 경량 방식 먼저, 실패하면 lopdf(원본의 pypdf 대응).
+/// PDF 쪽수만: 경량 방식 먼저, 실패하면 lopdf.
 fn page_count_only(path: &Path, messages: &mut Vec<String>, hooks: &ReadHooks<'_>) -> usize {
     let fast = match hooks.fast_page_count {
         Some(count) => count(path),

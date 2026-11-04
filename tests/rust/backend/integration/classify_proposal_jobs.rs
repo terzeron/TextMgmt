@@ -496,7 +496,14 @@ impl bookstore::store_clients::BookstoreSearch for MockOnlineBookstore {
         }
         assert_eq!((isbn, title, author), ("9781", "Book", "Author"));
         let rows = (0..6)
-            .map(|index| (format!("Title {index}"), "Author".into(), "Category".into(), format!("https://book/{index}"), String::new(), if index == 0 { "9781".into() } else { String::new() }))
+            .map(|index| bookstore::store_clients::SearchRow {
+                title: format!("Title {index}"),
+                author: "Author".into(),
+                category: "Category".into(),
+                detail_url: format!("https://book/{index}"),
+                search_url: String::new(),
+                isbn: if index == 0 { "9781".into() } else { String::new() },
+            })
             .collect();
         (rows, "Book Author".into(), "title_author".into())
     }

@@ -253,7 +253,7 @@ fn real_connector_connects_through_http_and_uses_env_index() {
 mod real_transport {
     use super::tls_server;
     use crate::common::shared_fixtures::transport;
-    use backend::es_manager::{ESManager, EsError, EsTransport, HttpTransport, SimilarDocsArgs, UpdateFields};
+    use backend::es_manager::{CoverFileHits, ESManager, EsError, EsTransport, Hit, HttpTransport, PagedHits, SimilarDocsArgs, UpdateFields};
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::process::Command;
@@ -350,8 +350,8 @@ mod real_transport {
                "summary": format!("{title}에 대한 한국어 요약이다. {author}가 썼다."), "updated_time": updated})
     }
 
-    fn ids(hits: &[(i64, Value, f64)]) -> Vec<i64> {
-        hits.iter().map(|h| h.0).collect()
+    fn ids(hits: &[Hit]) -> Vec<i64> {
+        hits.iter().map(|h| h.id).collect()
     }
 
     #[test]
@@ -427,14 +427,14 @@ mod real_transport {
         // 6. 키워드 검색(nori 분석기)과 정규화 점수
         let hits = manager.search_by_keyword("코스모스", 10).unwrap();
         assert_eq!(ids(&hits), vec![3]);
-        assert_eq!(hits[0].2, 100.0);
-        assert!(hits[0].1.get("summary").is_none(), "목록 검색은 summary를 받지 않는다");
+        assert_eq!(hits[0].score, 100.0);
+        assert!(hits[0].source.get("summary").is_none(), "목록 검색은 summary를 받지 않는다");
         let (paged, total) = manager.search_by_keyword_paged("한국어", 2, 0, None, None).unwrap();
         assert_eq!(total, 5);
         assert_eq!(paged.len(), 2);
         let (filtered, total) = manager.search_by_keyword_paged("한국어", 10, 0, Some(&["과학"]), None).unwrap();
         assert_eq!((filtered.len(), total), (2, 2));
-        assert_eq!(manager.search_by_title("토지 제1권", "epub", 1000, 5).unwrap()[0].0, 1);
+        assert_eq!(manager.search_by_title("토지 제1권", "epub", 1000, 5).unwrap()[0].id, 1);
         assert_eq!(ids(&manager.search_by_category("과학", 10).unwrap()), vec![4, 3]);
         assert_eq!(ids(&manager.search_similar_names("코스모스", "", 5).unwrap()), vec![3]);
         let similar =
@@ -443,7 +443,7 @@ mod real_transport {
             };
         let (similar_hits, similar_total) = manager.search_similar_docs_paged(&similar).unwrap();
         assert!(similar_total >= 1 && !ids(&similar_hits).contains(&3));
-        assert!(similar_hits.iter().all(|h| h.2 <= 100.0));
+        assert!(similar_hits.iter().all(|h| h.score <= 100.0));
         assert!(manager.search_similar_docs(&similar).is_ok());
         // 10,000건 초과 요청은 scroll 경로이고, 끝나면 scroll을 지운다.
         assert_eq!(manager.search_by_keyword("한국어", 10_001).unwrap().len(), 5);
@@ -452,7 +452,7 @@ mod real_transport {
         let mut seen = Vec::new();
         let mut cursor: Option<Vec<Value>> = None;
         for _ in 0..4 {
-            let (page, total, next) = manager.search_by_category_paged("과학", 1, cursor.as_deref());
+            let PagedHits { hits: page, total, search_after: next } = manager.search_by_category_paged("과학", 1, cursor.as_deref());
             assert_eq!(total, 2);
             seen.extend(ids(&page));
             cursor = next;
@@ -461,13 +461,13 @@ mod real_transport {
             }
         }
         assert_eq!(seen, vec![4, 3], "title.keyword 오름차순: 엘러건트, 코스모스");
-        assert!(cursor.is_none() || manager.search_by_category_paged("과학", 1, cursor.as_deref()).0.is_empty());
+        assert!(cursor.is_none() || manager.search_by_category_paged("과학", 1, cursor.as_deref()).hits.is_empty());
         let (latest, latest_total) = manager.search_latest_docs(10, Some(&["소설"]));
         assert_eq!((ids(&latest), latest_total), (vec![4, 3], 2), "txt와 제외 카테고리는 빠진다");
-        let (cover_files, cover_total) = manager.search_cover_files_paged(&["과학", "소설/한국"], 10, None, None);
+        let CoverFileHits { hits: cover_files, total: cover_total } = manager.search_cover_files_paged(&["과학", "소설/한국"], 10, None, None);
         assert_eq!(cover_total, 3);
-        assert_eq!(cover_files.iter().map(|f| f.0).collect::<Vec<_>>(), vec![1, 4, 3], "updated_time 내림차순");
-        assert!(!cover_files[0].2.is_empty());
+        assert_eq!(cover_files.iter().map(|f| f.id).collect::<Vec<_>>(), vec![1, 4, 3], "updated_time 내림차순");
+        assert!(!cover_files[0].sort.is_empty());
         let reps = manager.search_group_representatives(&["소설", "과학"], None);
         assert_eq!(reps["소설"].iter().map(|r| r.0).collect::<Vec<_>>(), vec![1, 2], "file_path 오름차순");
         assert_eq!(reps["과학"].iter().map(|r| r.0).collect::<Vec<_>>(), vec![4, 3]);

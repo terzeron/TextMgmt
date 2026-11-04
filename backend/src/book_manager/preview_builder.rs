@@ -32,7 +32,7 @@ const EPUB_IMAGE_SUFFIXES: [&str; 3] = [".jpg", ".jpeg", ".png"];
 const DEFAULT_PREVIEW_PAGES: u32 = 5;
 const DEFAULT_PREVIEW_CHAPTERS: u32 = 10;
 
-/// 본문이 문자열인 응답. FastAPI `Response(content=..., status_code=...)`.
+/// 본문이 문자열인 응답.
 pub(super) fn text_response(status_code: u16, content: impl Into<String>) -> BookResponse {
     BookResponse { status_code, media_type: None, headers: Vec::new(), body: content.into().into_bytes() }
 }
@@ -656,7 +656,7 @@ impl BookManager {
         let doc = match self.find_doc(book_id) {
             Ok(Some(doc)) => doc,
             Ok(None) => return text_response(404, format!("Book not found: {book_id}")),
-            Err(e) => return text_response(500, format!("PDF pages extraction failed (RuntimeError): {e}")),
+            Err(e) => return text_response(500, format!("PDF pages extraction failed (ReadError): {e}")),
         };
         let book = match self.try_make_book(book_id, &doc, 0.0) {
             Ok(book) => book,

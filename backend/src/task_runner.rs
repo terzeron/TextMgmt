@@ -41,7 +41,7 @@ fn task_handle_from_spawn(name: &str, result: std::io::Result<JoinHandle<()>>) -
     }
 }
 
-/// 백그라운드 작업 실행기. Starlette `BackgroundTasks`와 `asyncio.to_thread`에 대응한다.
+/// 백그라운드 작업 실행기. 응답 뒤 작업과 블로킹 풀 실행을 맡는다.
 pub trait TaskRunner: Send + Sync {
     /// 기본 구현은 새 스레드에서 실행한다.
     fn spawn(&self, name: &str, job: Box<dyn FnOnce() + Send>) -> Box<dyn TaskHandle> {
@@ -57,7 +57,7 @@ pub struct ThreadRunner;
 
 impl TaskRunner for ThreadRunner {}
 
-/// 응답을 돌려주기 전에 같은 스레드에서 작업을 끝낸다(Starlette `TestClient` 가정). 스레드 로컬 로그 수집에 필요하다.
+/// 응답을 돌려주기 전에 같은 스레드에서 작업을 끝낸다(테스트용). 스레드 로컬 로그 수집에 필요하다.
 pub struct InlineRunner;
 
 impl TaskRunner for InlineRunner {

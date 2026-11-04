@@ -4,8 +4,22 @@ use std::fmt;
 
 use image::{DynamicImage, GenericImageView, GrayImage, RgbImage, RgbaImage};
 
-/// x0, y0, x1, y1(이미지 크기 대비 0~1, 원점은 좌상단), angle(도, 시계 방향, 박스 중심 기준).
-pub type Rect = (f64, f64, f64, f64, f64);
+/// 크롭 영역. 좌표는 이미지 크기 대비 0~1이고 원점은 좌상단이다.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rect {
+    pub x0: f64,
+    pub y0: f64,
+    pub x1: f64,
+    pub y1: f64,
+    /// 도 단위, 시계 방향, 박스 중심 기준
+    pub angle: f64,
+}
+
+impl Rect {
+    pub const fn new(x0: f64, y0: f64, x1: f64, y1: f64, angle: f64) -> Self {
+        Self { x0, y0, x1, y1, angle }
+    }
+}
 
 pub const MIN_CROP_PIXELS: u32 = 8;
 
@@ -35,11 +49,11 @@ fn round_px(value: f64) -> i64 {
 /// angle이 0이 아니면 기울어진 영역을 곧게 펴서 잘라내며(재샘플링), 네 꼭짓점이 이미지 안에 있어야 한다.
 /// 영역이 이미지 밖이거나 비어 있거나 한 변이 최소 픽셀 미만이면 `ImageCropError`를 돌려준다.
 pub fn crop_rotated(source: &DynamicImage, rect: Rect) -> Result<DynamicImage, ImageCropError> {
-    crop_pil_min(source, rect, MIN_CROP_PIXELS)
+    crop_with_min_pixels(source, rect, MIN_CROP_PIXELS)
 }
 
-pub fn crop_pil_min(source: &DynamicImage, rect: Rect, min_pixels: u32) -> Result<DynamicImage, ImageCropError> {
-    let (x0, y0, x1, y1, angle) = rect;
+fn crop_with_min_pixels(source: &DynamicImage, rect: Rect, min_pixels: u32) -> Result<DynamicImage, ImageCropError> {
+    let Rect { x0, y0, x1, y1, angle } = rect;
     let valid = [x0, y0, x1, y1, angle].iter().all(|v| v.is_finite()) && 0.0 <= x0 && x0 < x1 && x1 <= 1.0 && 0.0 <= y0 && y0 < y1 && y1 <= 1.0 && angle.abs() <= 360.0;
     if !valid {
         return Err(fail("크롭 영역이 쪽 밖이거나 비어 있음"));
@@ -136,7 +150,7 @@ mod tests {
     //! `image` crate에는 1비트 모드가 없다. 1비트 이미지는 값이 전부 255인 `ImageLuma8`로 대신하고
     //! 결과가 8비트 회색(`ColorType::L8`)인지 확인한다.
 
-    use super::{ImageCropError, crop_rotated};
+    use super::{ImageCropError, Rect, crop_rotated};
     use image::{ColorType, DynamicImage, GenericImageView, ImageBuffer, Luma, Rgb, RgbImage};
 
     fn rgb(width: u32, height: u32) -> DynamicImage {
@@ -145,21 +159,21 @@ mod tests {
 
     #[test]
     fn test_axis_aligned_crop_uses_fractions_of_the_image() {
-        let out = crop_rotated(&rgb(200, 100), (0.25, 0.1, 0.75, 0.9, 0.0)).unwrap();
+        let out = crop_rotated(&rgb(200, 100), Rect::new(0.25, 0.1, 0.75, 0.9, 0.0)).unwrap();
         assert_eq!(out.dimensions(), (100, 80));
     }
 
     #[test]
     fn test_tilted_crop_straightens_the_region() {
         let source = DynamicImage::ImageRgb8(RgbImage::from_pixel(200, 200, Rgb([255, 255, 255])));
-        let out = crop_rotated(&source, (0.3, 0.3, 0.7, 0.7, 10.0)).unwrap();
+        let out = crop_rotated(&source, Rect::new(0.3, 0.3, 0.7, 0.7, 10.0)).unwrap();
         assert_eq!(out.dimensions(), (80, 80));
     }
 
     #[test]
     fn test_tilted_grayscale_pixels_match_reference_values() {
         let source = DynamicImage::ImageLuma8(ImageBuffer::from_fn(16, 16, |x, y| Luma([((x * 13 + y * 7) % 256) as u8])));
-        let out = crop_rotated(&source, (0.25, 0.25, 0.75, 0.75, 10.0)).unwrap();
+        let out = crop_rotated(&source, Rect::new(0.25, 0.25, 0.75, 0.75, 10.0)).unwrap();
         let expected = [
             83, 97, 111, 125, 140, 154, 168, 181, 89, 103, 116, 131, 146, 160, 174, 187, 95, 108, 122, 136, 151, 165, 179, 192, 100, 113, 126, 141, 155, 170, 183, 196, 103, 116, 129, 144, 158, 173,
             186, 199, 107, 120, 134, 148, 163, 177, 191, 204, 112, 125, 139, 153, 168, 183, 196, 210, 118, 131, 145, 159, 174, 188, 202, 216,
@@ -170,20 +184,20 @@ mod tests {
     #[test]
     fn test_one_bit_image_is_rotated_as_grey() {
         let source = DynamicImage::ImageLuma8(ImageBuffer::<Luma<u8>, _>::from_pixel(200, 200, Luma([255])));
-        let out = crop_rotated(&source, (0.3, 0.3, 0.7, 0.7, 5.0)).unwrap();
+        let out = crop_rotated(&source, Rect::new(0.3, 0.3, 0.7, 0.7, 5.0)).unwrap();
         assert_eq!(out.color(), ColorType::L8);
     }
 
-    type Case = ((f64, f64, f64, f64, f64), &'static str);
+    type Case = (Rect, &'static str);
 
     #[test]
     fn test_invalid_regions_raise_with_a_reason() {
         let cases: [Case; 5] = [
-            ((0.5, 0.1, 0.4, 0.9, 0.0), "밖이거나 비어"),
-            ((0.0, 0.0, 1.2, 1.0, 0.0), "밖이거나 비어"),
-            ((0.0, 0.0, f64::NAN, 1.0, 0.0), "밖이거나 비어"),
-            ((0.0, 0.0, 0.01, 1.0, 0.0), "너무 작음"),
-            ((0.0, 0.0, 1.0, 1.0, 30.0), "쪽 밖으로 나감"),
+            (Rect::new(0.5, 0.1, 0.4, 0.9, 0.0), "밖이거나 비어"),
+            (Rect::new(0.0, 0.0, 1.2, 1.0, 0.0), "밖이거나 비어"),
+            (Rect::new(0.0, 0.0, f64::NAN, 1.0, 0.0), "밖이거나 비어"),
+            (Rect::new(0.0, 0.0, 0.01, 1.0, 0.0), "너무 작음"),
+            (Rect::new(0.0, 0.0, 1.0, 1.0, 30.0), "쪽 밖으로 나감"),
         ];
         for (rect, reason) in cases {
             let err: ImageCropError = crop_rotated(&rgb(200, 200), rect).expect_err(&format!("rect={rect:?}: 오류가 나야 한다"));

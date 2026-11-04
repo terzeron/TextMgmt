@@ -5,43 +5,40 @@
 //!
 //! 가정한 API:
 //! - `bookstore::store_clients`
-//!   - `type SearchRow = (String, String, String, String, String, String)` = `(title, author, category, detail_url, search_url, isbn)`
-//!   - `const MAX_RESULTS: usize = 4` (`AbstractBookstore.MAX_RESULTS`)
+//!   - `struct SearchRow { title, author, category, detail_url, search_url, isbn }`
+//!   - `const MAX_RESULTS: usize = 4` (`Bookstore.MAX_RESULTS`)
 //!   - `fn truncate_title(title: &str) -> String`
 //!   - `sysdeps::{HttpSession, HttpResponse, HttpError}` (구 `bookstore::{Session, HttpResponse}`)
 //!     - `trait HttpSession: Send + Sync { fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError>; }` (`requests.Session.get` 대응. 예외는 `Err`)
 //!     - `HttpResponse::from_text(status: u16, text: &str) -> HttpResponse` (fake 생성용. `.text()`/`.json()`은 본문을 소비한다)
 //!     - `HttpError::Other(String)` (문서에 변형 목록이 없어 `EsError::Other`와 같은 모양으로 가정한 것)
 //!   - `trait BookstoreSearch { fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String); }`
-//!   - `trait AbstractBookstore`: soup 인자는 HTML 문자열(`&str`)이다. 기본값이 있는 메서드는 `[기본]`으로 표시한다.
+//!   - `trait Bookstore`: markup 인자는 HTML 문자열(`&str`)이다. 기본값이 있는 메서드는 `[기본]`으로 표시한다.
 //!     - 필수: `base_url(&self) -> &str`, `verbose(&self) -> bool`, `session(&self) -> &dyn HttpSession`,
-//!       `build_search_url(&self, keyword: &str) -> String`, `extract_search_links(&self, soup: &str) -> Vec<String>`,
-//!       `extract_book_info(&self, soup: &str) -> Value` (`{title, author, category, isbn}`)
+//!       `build_search_url(&self, keyword: &str) -> String`, `extract_search_links(&self, markup: &str) -> Vec<String>`,
+//!       `extract_book_info(&self, markup: &str) -> Value` (`{title, author, category, isbn}`)
 //!     - `[기본]` `supports_isbn_search() -> bool`(false), `author_first_search() -> bool`(false), `max_results() -> usize`(`MAX_RESULTS`)
 //!     - `[기본]` `build_isbn_search_url(isbn)`(= `build_search_url(isbn)`), `search_by_keyword(keyword)`, `search_by_isbn(isbn)`
 //!     - `[기본]` `search(isbn, title, author) -> (Vec<SearchRow>, String, String)` (결과, 실제 검색어, 방식 `isbn`/`title_author`/`title`/`unknown`)
-//!     - `[기본]` `_fetch_search_results(url) -> Vec<SearchRow>`, `_load_html_from_tmp(url) -> Option<String>`, `_save_html_to_tmp(html, url)`
+//!     - `[기본]` `fetch_search_results(url) -> Vec<SearchRow>`, `load_html_from_tmp(url) -> Option<String>`, `save_html_to_tmp(html, url)`
 //!     - `[기본]` `tmp_dir() -> Option<PathBuf>`(`default_cache_dir()`, 사용자 전용 0700 디렉터리)
 //!       (구 `new_detail_session()`은 없앴다. 상세 페이지 스레드도 `with_session`으로 주입한 같은 `Arc<dyn HttpSession>`을 쓴다)
 //!   - 구상 클래스 `Yes24Bookstore`, `AladinBookstore`, `KyoboBookstore`, `RidibooksBookstore`, `NaverShoppingBookstore`,
 //!     `NaverSeriesBookstore`, `MunpiaBookstore`, `JoaraBookstore`, `NaverWebtoonBookstore`, `KakaoWebtoonBookstore`,
 //!     `BomtoonBookstore`, `LezhinBookstore`, `ToptoonBookstore`: `new(verbose: bool) -> Self`,
 //!     `with_session(self, Arc<dyn HttpSession>) -> Self` (구 pub 필드 `session`), pub 필드 `max_results: usize`, `supports_isbn_search: bool`
-//!   - `Yes24Bookstore::extract_yes24_category(&self, soup: &str) -> String`, `extract_yes24_isbn`,
+//!   - `Yes24Bookstore::extract_yes24_category(&self, markup: &str) -> String`, `extract_yes24_isbn`,
 //!     `AladinBookstore::extract_aladin_isbn`, `strip_trailing_number(&self, title: &str) -> String`,
 //!     `RidibooksBookstore::extract_ridi_isbn`
 //!   - 대역 주입 seam(mock.patch 대응, 구상 클래스 공통): `with_fetch_search_results(self, ..) -> Self`, `with_search_by_keyword(self, ..) -> Self`
 //!     (`Box<dyn Fn(&str) -> Vec<SearchRow> + Send + Sync>`. 구 `set_*`)
-//!   - `trait SoupSource`: `find(&self, name: &str) -> Result<Option<String>, String>`, `find_all(&self, name: &str) -> Result<Vec<String>, String>`,
-//!     `get_text(&self) -> Result<String, String>`, `select(&self, css: &str) -> Result<Vec<String>, String>` (예외를 던지는 soup 대역용)
-//!     - `Yes24Bookstore::extract_yes24_category_soup/_extract_yes24_isbn_soup/extract_book_info_soup(&self, &dyn SoupSource)`,
-//!       `AladinBookstore::extract_aladin_isbn_soup`, `RidibooksBookstore::extract_ridi_isbn_soup`,
-//!       `NaverShoppingBookstore::extract_book_info_soup`
+//!   - `trait MarkupSource`: `find(&self, name: &str) -> Result<Option<String>, String>`, `find_all(&self, name: &str) -> Result<Vec<String>, String>`,
+//!     `get_text(&self) -> Result<String, String>`, `select(&self, css: &str) -> Result<Vec<String>, String>` (예외를 던지는 markup 대역용)
+//!     - `Yes24Bookstore::extract_yes24_category_from_source/_extract_yes24_isbn_from_source/extract_book_info_from_source(&self, &dyn MarkupSource)`,
+//!       `AladinBookstore::extract_aladin_isbn_from_source`, `RidibooksBookstore::extract_ridi_isbn_from_source`,
+//!       `NaverShoppingBookstore::extract_book_info_from_source`
 //!   - `sysdeps::FsOps` (구 `StoreFs`. 이 파일은 `disk_free`와 `write`만 쓴다. 나머지 메서드는 trait 기본 구현), `Yes24Bookstore::with_fs(self, Arc<dyn FsOps>) -> Self`
 //!     (`shutil.disk_usage`와 `open` 대응. `write`의 `data`는 UTF-8 HTML 바이트)
-//!   - 추상 메서드 본문: `abstract_build_search_url(&dyn AbstractBookstore, &str) -> Option<String>`,
-//!     `abstract_extract_search_links(&dyn AbstractBookstore, &str) -> Option<Vec<String>>`,
-//!     `abstract_extract_book_info(&dyn AbstractBookstore, &str) -> Option<Value>`
 
 #![allow(clippy::type_complexity)]
 
@@ -56,7 +53,7 @@ use std::time::Duration;
 
 use crate::common::shared_fixtures::{Kind, failing};
 use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, empty_info, single_quoted_hrefs};
-use bookstore::store_clients::{AbstractBookstore, AladinBookstore, MAX_RESULTS, SearchRow, UreqHttpSession, Yes24Bookstore};
+use bookstore::store_clients::{AladinBookstore, Bookstore, MAX_RESULTS, SearchRow, UreqHttpSession, Yes24Bookstore};
 use serde_json::{Value, json};
 use sysdeps::{HttpError, HttpSession, HttpTimeout};
 
@@ -395,7 +392,7 @@ fn ureq_session_reports_a_body_that_ends_before_content_length() {
     server.join().unwrap();
 }
 
-/// 서브클래스를 흉내 내는 테스트 서점 구조체를 만든다. `$over`에 넘긴 메서드만 기본 구현 대신 덮어쓴다.
+/// 테스트 서점 구조체를 만든다. `$over`에 넘긴 메서드만 기본 구현 대신 덮어쓴다.
 /// 인스턴스 메서드를 바꾸던 곳은 이 덮어쓰기와 훅 필드로 옮긴다.
 macro_rules! dummy_store {
     ($name:ident { $($over:item)* }) => {
@@ -456,7 +453,7 @@ macro_rules! dummy_store {
             }
         }
 
-        impl AbstractBookstore for $name {
+        impl Bookstore for $name {
             fn base_url(&self) -> &str {
                 &self.base_url
             }
@@ -489,31 +486,31 @@ macro_rules! dummy_store {
                 format!("{}/search?q={}", self.base_url, keyword)
             }
 
-            fn extract_search_links(&self, soup: &str) -> Vec<String> {
+            fn extract_search_links(&self, markup: &str) -> Vec<String> {
                 if let Some(links) = &self.links {
                     return links.clone();
                 }
                 match self.kind {
                     Kind::Dummy | Kind::Unit => vec![format!("{}/detail/1", self.base_url), format!("{}/detail/2", self.base_url)],
-                    Kind::Parsing => single_quoted_hrefs(soup),
+                    Kind::Parsing => single_quoted_hrefs(markup),
                     Kind::BaseOnly => vec![],
                 }
             }
 
-            fn extract_book_info(&self, soup: &str) -> Value {
+            fn extract_book_info(&self, markup: &str) -> Value {
                 match self.kind {
                     Kind::Dummy => json!({
-                        "title": between(soup, "<h1>", "</h1>"),
-                        "author": between(soup, "<span class='author'>", "</span>"),
-                        "category": between(soup, "<p class='category'>", "</p>"),
-                        "isbn": between(soup, "<p class='isbn'>", "</p>"),
+                        "title": between(markup, "<h1>", "</h1>"),
+                        "author": between(markup, "<span class='author'>", "</span>"),
+                        "category": between(markup, "<p class='category'>", "</p>"),
+                        "isbn": between(markup, "<p class='isbn'>", "</p>"),
                     }),
                     Kind::Unit => json!({"title": "T", "author": "A", "category": "A > B > C > D", "isbn": "I"}),
                     Kind::Parsing => json!({
-                        "title": between(soup, "<h1>", "</h1>"),
-                        "author": between(soup, "<span class='author'>", "</span>"),
-                        "category": between(soup, "<div class='cat'>", "</div>"),
-                        "isbn": between(soup, "<div class='isbn'>", "</div>"),
+                        "title": between(markup, "<h1>", "</h1>"),
+                        "author": between(markup, "<span class='author'>", "</span>"),
+                        "category": between(markup, "<div class='cat'>", "</div>"),
+                        "isbn": between(markup, "<div class='isbn'>", "</div>"),
                     }),
                     Kind::BaseOnly => empty_info(),
                 }
@@ -527,40 +524,40 @@ macro_rules! dummy_store {
 // 기본 구현을 그대로 쓰는 서점
 dummy_store!(Plain {});
 
-// `_load_html_from_tmp`/`_save_html_to_tmp`만 바꾼 서점
+// `load_html_from_tmp`/`save_html_to_tmp`만 바꾼 서점
 dummy_store!(Cached {
-    fn _load_html_from_tmp(&self, url: &str) -> Option<String> {
+    fn load_html_from_tmp(&self, url: &str) -> Option<String> {
         self.load.as_ref().and_then(|f| f(url))
     }
 
-    fn _save_html_to_tmp(&self, html: &str, url: &str) {
+    fn save_html_to_tmp(&self, html: &str, url: &str) {
         if let Some(f) = &self.save {
             f(html, url);
         }
     }
 });
 
-// `_fetch_search_results`/`search_by_keyword`/`search_by_isbn`을 바꾼 서점. 훅이 없으면 기본 동작을 따른다.
+// `fetch_search_results`/`search_by_keyword`/`search_by_isbn`을 바꾼 서점. 훅이 없으면 기본 동작을 따른다.
 dummy_store!(Hooked {
     fn build_isbn_search_url(&self, isbn: &str) -> String {
         if self.kind == Kind::Dummy { format!("{}/isbn/{}", self.base_url, isbn) } else { self.build_search_url(isbn) }
     }
 
-    fn _fetch_search_results(&self, url: &str) -> Vec<SearchRow> {
-        (self.fetch.as_ref().expect("_fetch_search_results 훅이 필요하다"))(url)
+    fn fetch_search_results(&self, url: &str) -> Vec<SearchRow> {
+        (self.fetch.as_ref().expect("fetch_search_results 훅이 필요하다"))(url)
     }
 
     fn search_by_keyword(&self, keyword: &str) -> Vec<SearchRow> {
         match &self.keyword {
             Some(f) => f(keyword),
-            None => self._fetch_search_results(&self.build_search_url(keyword)),
+            None => self.fetch_search_results(&self.build_search_url(keyword)),
         }
     }
 
     fn search_by_isbn(&self, isbn: &str) -> Vec<SearchRow> {
         match &self.isbn {
             Some(f) => f(isbn),
-            None => self._fetch_search_results(&self.build_isbn_search_url(isbn)),
+            None => self.fetch_search_results(&self.build_isbn_search_url(isbn)),
         }
     }
 });

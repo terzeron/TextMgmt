@@ -1,4 +1,4 @@
-//! `db` 테스트: pymysql `DictCursor` 의미를 Diesel(MySQL) 위에서 재현하는 드라이버 추상화.
+//! `db` 테스트: Diesel(MySQL) 위의 드라이버 추상화(열 이름 맵 행, `%s` 자리표시자).
 //! 단위 테스트는 서버 없이 돈다. 통합 테스트는 일회용 MySQL 컨테이너를 fixture가 띄운다(Docker 필요).
 
 use crate::mysql_fixture;
@@ -110,8 +110,8 @@ mod config {
     }
 
     #[test]
-    fn localhost_uses_tcp_like_pymysql() {
-        // libmysqlclient는 호스트가 "localhost"이면 유닉스 소켓을 쓴다. pymysql은 항상 TCP라서 같게 맞춘다.
+    fn localhost_uses_tcp() {
+        // libmysqlclient는 호스트가 "localhost"이면 유닉스 소켓을 쓴다. 항상 TCP로 붙게 맞춘다.
         let c = MysqlConfig { host: "localhost".into(), port: 3306, database: "d".into(), user: "u".into(), password: "p".into() };
         assert_eq!(mysql_url(&c), "mysql://u:p@127.0.0.1:3306/d");
         let other = MysqlConfig { host: "db.internal".into(), ..c };
@@ -137,7 +137,7 @@ mod errors {
 
     #[test]
     fn display_distinguishes_integrity_and_other_errors() {
-        assert_eq!(DbError::IntegrityError("duplicate".into()).to_string(), "무결성 오류: duplicate");
+        assert_eq!(DbError::Constraint("duplicate".into()).to_string(), "무결성 오류: duplicate");
         assert_eq!(DbError::Other("offline".into()).to_string(), "DB 오류: offline");
     }
 }
@@ -197,7 +197,7 @@ mod mysql {
         cur.execute("CREATE TABLE db_dup (k VARCHAR(10) PRIMARY KEY)", &[]).unwrap();
         cur.execute("INSERT INTO db_dup VALUES (%s)", &["a".into()]).unwrap();
         let err = cur.execute("INSERT INTO db_dup VALUES (%s)", &["a".into()]).unwrap_err();
-        assert!(matches!(err, DbError::IntegrityError(_)), "{err:?}");
+        assert!(matches!(err, DbError::Constraint(_)), "{err:?}");
         conn.rollback().unwrap();
     }
 
@@ -249,8 +249,8 @@ mod mysql {
     }
 
     #[test]
-    fn session_time_zone_follows_the_server_like_pymysql() {
-        // Diesel은 연결할 때 time_zone을 +00:00으로 바꾼다. pymysql은 서버 값을 그대로 쓰므로 TIMESTAMP를 읽는 결과가 달라진다.
+    fn session_time_zone_follows_the_server() {
+        // Diesel은 연결할 때 time_zone을 +00:00으로 바꾼다. 서버 값을 따라야 TIMESTAMP를 읽는 결과가 맞다.
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
         let mut cur = conn.cursor();

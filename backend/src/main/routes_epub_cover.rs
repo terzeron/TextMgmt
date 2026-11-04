@@ -34,7 +34,7 @@ pub(super) fn routes() -> Routes {
         .post("/comics/epub-images/{book_id}", &["require_admin"], comic_edit_images.layer(edit_limit()))
 }
 
-/// FastAPI의 `book_id: int` 검증. 정수가 아니면 422다.
+/// `book_id` 경로 값 검증. 정수가 아니면 422다.
 /// 이미지 출처: 공개 URL(`url`)이거나 올린 이미지(`image_data`, base64)다. 하나만 받는다.
 #[derive(Debug, Deserialize)]
 #[serde(try_from = "RawSource")]

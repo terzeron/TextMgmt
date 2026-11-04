@@ -1,7 +1,7 @@
 //! 온라인 서점 검색.
 //!
 //! 서점마다 검색 URL, 검색 결과 링크, 상세 페이지 정보 추출이 다르다. 공통 흐름(ISBN > 제목+저자 > 제목 우선순위,
-//! 상세 페이지 병렬 수집, 임시 디렉터리 HTML 캐시)은 [`AbstractBookstore`]의 기본 메서드에 있다.
+//! 상세 페이지 병렬 수집, 임시 디렉터리 HTML 캐시)은 [`Bookstore`]의 기본 메서드에 있다.
 //!
 //! - Yes24·알라딘·교보문고의 URL 조립과 HTML 파싱은 이 crate 최상위의 [`crate::Store`]를 재사용한다.
 //! - 리디북스·네이버쇼핑·네이버시리즈·문피아는 `scraper`로 새로 포팅했다.
@@ -36,8 +36,18 @@ use scraper::{ElementRef, Html, Selector};
 use serde_json::{Value, json};
 use sysdeps::{FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout, RealFs};
 
-/// `(title, author, category, detail_url, search_url, isbn)`
-pub type SearchRow = (String, String, String, String, String, String);
+/// 서점 검색 결과 한 줄.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchRow {
+    pub title: String,
+    pub author: String,
+    pub category: String,
+    /// 상세 페이지 URL
+    pub detail_url: String,
+    /// 이 결과를 찾은 검색 페이지 URL
+    pub search_url: String,
+    pub isbn: String,
+}
 
 /// 서점 하나가 돌려주는 검색 결과의 기본 최대 개수.
 pub const MAX_RESULTS: usize = 4;
@@ -92,7 +102,7 @@ fn attr<'a>(el: &ElementRef<'a>, name: &str) -> Option<&'a str> {
     el.value().attr(name)
 }
 
-/// `soup.find("meta", attrs={key: value})`. 첫 번째 일치 태그다.
+/// `markup.find("meta", attrs={key: value})`. 첫 번째 일치 태그다.
 fn first_meta<'a>(doc: &'a Html, key: &str, value: &str) -> Option<ElementRef<'a>> {
     doc.select(sel!("meta")).find(|m| m.value().attr(key) == Some(value))
 }
@@ -280,7 +290,7 @@ fn random_hex32() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// 기본 세션, soup 대역 trait
+// 기본 세션, markup 대역 trait
 // ---------------------------------------------------------------------------
 
 /// HTTP를 사용할 수 없는 테스트 경로에서 쓴다.
@@ -447,7 +457,7 @@ impl HttpSession for UreqHttpSession {
 
 /// 파싱한 HTML 대역. 조회가 실패하는 문서(`Err`)를 만들 때 쓴다.
 /// 반환 문자열은 태그 안쪽 텍스트다.
-pub trait SoupSource {
+pub trait MarkupSource {
     fn find(&self, name: &str) -> Result<Option<String>, String>;
     fn find_all(&self, name: &str) -> Result<Vec<String>, String>;
     fn get_text(&self) -> Result<String, String>;
@@ -455,19 +465,19 @@ pub trait SoupSource {
 }
 
 // ---------------------------------------------------------------------------
-// AbstractBookstore
+// Bookstore
 // ---------------------------------------------------------------------------
 
-/// 서점 검색 공통 인터페이스. soup 인자는 HTML 문자열이다.
-pub trait AbstractBookstore: Sync {
+/// 서점 검색 공통 인터페이스. markup 인자는 HTML 문자열이다.
+pub trait Bookstore: Sync {
     fn base_url(&self) -> &str;
     fn verbose(&self) -> bool;
     fn session(&self) -> &dyn HttpSession;
     fn build_search_url(&self, keyword: &str) -> String;
     /// 검색 결과 페이지에서 상세 페이지 링크를 뽑는다.
-    fn extract_search_links(&self, soup: &str) -> Vec<String>;
+    fn extract_search_links(&self, markup: &str) -> Vec<String>;
     /// 상세 페이지에서 `{title, author, category, isbn}`을 뽑는다. 못 뽑은 값은 빈 문자열이다.
-    fn extract_book_info(&self, soup: &str) -> Value;
+    fn extract_book_info(&self, markup: &str) -> Value;
 
     /// ISBN 검색 지원 여부
     fn supports_isbn_search(&self) -> bool {
@@ -504,7 +514,7 @@ pub trait AbstractBookstore: Sync {
     }
 
     fn search_by_keyword(&self, keyword: &str) -> Vec<SearchRow> {
-        self._fetch_search_results(&self.build_search_url(keyword))
+        self.fetch_search_results(&self.build_search_url(keyword))
     }
 
     fn search_by_isbn(&self, isbn: &str) -> Vec<SearchRow> {
@@ -514,7 +524,7 @@ pub trait AbstractBookstore: Sync {
             }
             return Vec::new();
         }
-        self._fetch_search_results(&self.build_isbn_search_url(isbn))
+        self.fetch_search_results(&self.build_isbn_search_url(isbn))
     }
 
     /// ISBN, 제목, 저자를 선택적으로 써서 검색한다. 우선순위는 ISBN > 제목+저자 > 제목이다.
@@ -524,11 +534,11 @@ pub trait AbstractBookstore: Sync {
     }
 
     /// 검색 URL에서 결과를 가져오는 공통 로직. 상세 페이지는 병렬로 받고 순서는 링크 순서다.
-    fn _fetch_search_results(&self, url: &str) -> Vec<SearchRow> {
+    fn fetch_search_results(&self, url: &str) -> Vec<SearchRow> {
         default_fetch_search_results(self, url)
     }
 
-    fn _save_html_to_tmp(&self, html: &str, url: &str) {
+    fn save_html_to_tmp(&self, html: &str, url: &str) {
         let Some(dir) = self.tmp_dir() else { return };
         match self.fs().disk_free(&dir) {
             Ok(free) if free < MIN_FREE_BYTES => return,
@@ -549,7 +559,7 @@ pub trait AbstractBookstore: Sync {
     }
 
     /// URL에 해당하는 임시 저장 HTML. 없거나 읽지 못하면 `None`이다.
-    fn _load_html_from_tmp(&self, url: &str) -> Option<String> {
+    fn load_html_from_tmp(&self, url: &str) -> Option<String> {
         let path = self.tmp_dir()?.join(cache_file_name(url));
         let result = (|| {
             if !self.fs().is_file(&path)? {
@@ -569,8 +579,8 @@ pub trait AbstractBookstore: Sync {
     }
 }
 
-/// `AbstractBookstore.search`의 본문. 서브클래스가 `super().search(...)`를 부르던 곳에서 쓴다.
-pub fn default_search<S: AbstractBookstore + ?Sized>(store: &S, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String) {
+/// `Bookstore::search`의 기본 흐름. 구현이 `search`를 덮어쓴 뒤에도 기본 흐름을 부를 때 쓴다.
+pub fn default_search<S: Bookstore + ?Sized>(store: &S, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String) {
     let title = if title.is_empty() { String::new() } else { truncate_title(title) };
     let combined = || if store.author_first_search() { format!("{author} {title}") } else { format!("{title} {author}") };
     let found = |rows: Vec<SearchRow>, keyword: &str, method: &str| (rows, keyword.to_owned(), method.to_owned());
@@ -607,8 +617,8 @@ pub fn default_search<S: AbstractBookstore + ?Sized>(store: &S, isbn: &str, titl
     found(Vec::new(), "", "unknown")
 }
 
-/// `AbstractBookstore._fetch_search_results`의 본문.
-pub fn default_fetch_search_results<S: AbstractBookstore + ?Sized>(store: &S, url: &str) -> Vec<SearchRow> {
+/// `Bookstore.fetch_search_results`의 본문.
+pub fn default_fetch_search_results<S: Bookstore + ?Sized>(store: &S, url: &str) -> Vec<SearchRow> {
     let html = match store.session().get_with_timeout(url, &[], HttpTimeout::from_secs(10, 10)) {
         Ok(resp) => resp.text(),
         Err(e) => {
@@ -638,19 +648,26 @@ pub fn default_fetch_search_results<S: AbstractBookstore + ?Sized>(store: &S, ur
         let info = store.extract_book_info(&html);
         let category = str_field(&info, "category");
         let category = if category.is_empty() { category } else { category.split('>').map(str::trim).take(3).collect::<Vec<_>>().join(" > ") };
-        results.push((str_field(&info, "title"), str_field(&info, "author"), category, (*detail_url).clone(), url.to_owned(), str_field(&info, "isbn")));
+        results.push(SearchRow {
+            title: str_field(&info, "title"),
+            author: str_field(&info, "author"),
+            category,
+            detail_url: (*detail_url).clone(),
+            search_url: url.to_owned(),
+            isbn: str_field(&info, "isbn"),
+        });
     }
     results
 }
 
-fn fetch_detail<S: AbstractBookstore + ?Sized>(store: &S, detail_url: &str) -> Option<String> {
-    if let Some(html) = store._load_html_from_tmp(detail_url) {
+fn fetch_detail<S: Bookstore + ?Sized>(store: &S, detail_url: &str) -> Option<String> {
+    if let Some(html) = store.load_html_from_tmp(detail_url) {
         return Some(html);
     }
     match store.session().get_with_timeout(detail_url, &[], HttpTimeout::from_secs(10, 10)) {
         Ok(resp) => {
             let html = resp.text();
-            store._save_html_to_tmp(&html, detail_url);
+            store.save_html_to_tmp(&html, detail_url);
             Some(html)
         }
         Err(e) => {
@@ -658,22 +675,6 @@ fn fetch_detail<S: AbstractBookstore + ?Sized>(store: &S, detail_url: &str) -> O
             None
         }
     }
-}
-
-/// 추상 메서드의 본문. Python은 `pass`라서 `None`을 돌려준다. Rust trait의 필수 메서드는 본문이 없어서
-/// 어떤 서점을 넘겨도 항상 `None`이다. 테스트가 이름을 가져오는 용도로만 남겼다.
-pub fn abstract_build_search_url(_store: &dyn AbstractBookstore, _keyword: &str) -> Option<String> {
-    None
-}
-
-/// [`abstract_build_search_url`]과 같다.
-pub fn abstract_extract_search_links(_store: &dyn AbstractBookstore, _soup: &str) -> Option<Vec<String>> {
-    None
-}
-
-/// [`abstract_build_search_url`]과 같다.
-pub fn abstract_extract_book_info(_store: &dyn AbstractBookstore, _soup: &str) -> Option<Value> {
-    None
 }
 
 /// 서점 조회 하나. 분류 서비스가 서점 세 곳을 이 모양으로만 안다. 시험에서는 대역으로 바꾼다.
@@ -691,17 +692,17 @@ pub trait BookstoreSearch: Send + Sync {
     }
 }
 
-impl<T: AbstractBookstore + Send> BookstoreSearch for T {
+impl<T: Bookstore + Send> BookstoreSearch for T {
     fn blocked(&self) -> bool {
         self.request_blocked()
     }
 
     fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String) {
-        AbstractBookstore::search(self, isbn, title, author)
+        Bookstore::search(self, isbn, title, author)
     }
 
     fn api_search_url(&self, keyword: &str) -> String {
-        AbstractBookstore::build_search_url(self, keyword)
+        Bookstore::build_search_url(self, keyword)
     }
 }
 
@@ -779,7 +780,7 @@ macro_rules! bookstore_struct {
                 self
             }
 
-            /// `_fetch_search_results`를 대체한다 (`mock.patch.object` 대응).
+            /// `fetch_search_results`를 대체한다 (`mock.patch.object` 대응).
             pub fn with_fetch_search_results(mut self, hook: SearchHook) -> Self {
                 self.fetch_hook = Some(hook);
                 self
@@ -794,7 +795,7 @@ macro_rules! bookstore_struct {
     };
 }
 
-/// `impl AbstractBookstore` 안에서 서점 공통 접근자를 채운다.
+/// `impl Bookstore` 안에서 서점 공통 접근자를 채운다.
 macro_rules! bookstore_common {
     ($base:expr, author_first = $author_first:expr) => {
         fn base_url(&self) -> &str {
@@ -829,7 +830,7 @@ macro_rules! bookstore_common {
             self.max_results
         }
 
-        fn _fetch_search_results(&self, url: &str) -> Vec<SearchRow> {
+        fn fetch_search_results(&self, url: &str) -> Vec<SearchRow> {
             match &self.fetch_hook {
                 Some(hook) => hook(url),
                 None => default_fetch_search_results(self, url),
@@ -844,7 +845,7 @@ macro_rules! default_keyword_search {
         fn search_by_keyword(&self, keyword: &str) -> Vec<SearchRow> {
             match &self.keyword_hook {
                 Some(hook) => hook(keyword),
-                None => self._fetch_search_results(&self.build_search_url(keyword)),
+                None => self.fetch_search_results(&self.build_search_url(keyword)),
             }
         }
     };
@@ -874,11 +875,11 @@ macro_rules! title_only_search {
 /// API를 직접 부르는 서점의 HTML 훅. 호출되지 않는다.
 macro_rules! unused_html_hooks {
     () => {
-        fn extract_search_links(&self, _soup: &str) -> Vec<String> {
+        fn extract_search_links(&self, _markup: &str) -> Vec<String> {
             Vec::new()
         }
 
-        fn extract_book_info(&self, _soup: &str) -> Value {
+        fn extract_book_info(&self, _markup: &str) -> Value {
             empty_info()
         }
     };

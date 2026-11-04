@@ -34,7 +34,7 @@ fn child_runner_parses_successful_json_and_reports_its_executable() {
     let (_dir, executable) = executable_script("printf '%s' '{\"text\":\"parsed\",\"pages\":3}'");
     let runner = ChildRunner::new(executable.clone());
 
-    assert_eq!(runner.run(Stage::Pdfium, Path::new("sample.pdf")).unwrap(), ("parsed".into(), 3));
+    assert_eq!(runner.run(Stage::Poppler, Path::new("sample.pdf")).unwrap(), ("parsed".into(), 3));
     assert_eq!(runner.worker_executable(), Some(executable.as_path()));
 }
 
@@ -46,7 +46,7 @@ fn child_runner_reports_nonzero_exit_and_invalid_json() {
     assert!(matches!(error, StageError::Failed(message) if message == "worker failed"));
 
     let (_dir, malformed) = executable_script("printf 'not-json'");
-    let error = ChildRunner::new(malformed).run(Stage::Plumber, Path::new("sample.pdf")).unwrap_err();
+    let error = ChildRunner::new(malformed).run(Stage::Lopdf, Path::new("sample.pdf")).unwrap_err();
     assert!(matches!(error, StageError::Failed(_)));
 }
 

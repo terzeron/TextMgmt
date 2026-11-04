@@ -112,11 +112,25 @@ pub fn remove_tool_covers(opf_path: &str, manifest: &mut Element, metadata: &Ele
     obsolete
 }
 
-/// 떼어 낸 멤버 경로와 고쳐 쓸 문서(이름, 내용).
-pub type Detached = (BTreeSet<String>, Vec<(String, Vec<u8>)>);
+/// 출판사 표지를 떼어 낸 결과.
+#[derive(Debug, Default)]
+pub struct Detached {
+    /// 아카이브에서 뺄 멤버 경로
+    pub removed: BTreeSet<String>,
+    /// 고쳐 쓸 문서(멤버 경로, 내용)
+    pub rewritten: Vec<(String, Vec<u8>)>,
+}
 
-/// 교체 전 표지: (멤버 경로, 바이트, media-type, 확장자).
-pub type PreviousCover = (String, Vec<u8>, String, String);
+/// 교체 전 표지 이미지.
+#[derive(Debug, Clone)]
+pub struct PreviousCover {
+    /// 멤버 경로
+    pub member: String,
+    pub data: Vec<u8>,
+    pub media_type: String,
+    /// 점을 포함한 소문자 확장자(예: `.jpg`)
+    pub suffix: String,
+}
 
 /// manifest 항목의 읽기용 사본.
 struct ItemInfo {
@@ -275,7 +289,7 @@ fn rename_to_xhtml_span(element: &mut Element) {
 /// 새 표지 페이지로 다시 잇지 않는다. 도구가 넣은 표지는 삭제·교체로 사라지므로 다시 끊어진다.
 /// 링크 말고 다른 방식의 참조는 지울 수 없어 거부한다.
 pub fn detach_publisher_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_path: &str, package: &mut Element, removing: bool, hooks: &EpubCoverHooks) -> FResult<Detached> {
-    let empty = || Ok((BTreeSet::new(), Vec::new()));
+    let empty = || Ok(Detached::default());
     let Some(member) = find_cover_member_in(archive, hooks, &|_| None).filter(|m| !m.is_empty()) else { return empty() };
     let base = Path::new(opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     let (items, cover_ids, first_id, cover_pages) = {
@@ -420,7 +434,7 @@ pub fn detach_publisher_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_p
     if !shared {
         obsolete.insert(member);
     }
-    Ok((obsolete, updates))
+    Ok(Detached { removed: obsolete, rewritten: updates })
 }
 
 fn now_zip_time() -> DateTime {
@@ -496,7 +510,7 @@ pub fn read_previous_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_path
     static SUFFIX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\.[a-z0-9]{1,5}$").expect("정규식"));
     let suffix = if SUFFIX.is_match(&suffix) { suffix } else { ".jpg".to_string() };
     let data = read_entry(archive, &member)?;
-    Ok(Some((member, data, media_type, suffix)))
+    Ok(Some(PreviousCover { member, data, media_type, suffix }))
 }
 
 fn xhtml_page(title: &str, alt: &str, href: &str) -> Vec<u8> {
@@ -538,7 +552,7 @@ pub fn stage_cover(source: &File, destination: &Path, image: &[u8], hooks: &Epub
             let (Some(manifest), Some(metadata), Some(spine)) = (parts.manifest, parts.metadata, parts.spine) else { return Err(missing()) };
             remove_tool_covers(&opf_path, manifest, metadata, spine)
         };
-        let (detached, updates) = detach_publisher_cover(&mut original, &opf_path, &mut package, false, hooks)?;
+        let Detached { removed: detached, rewritten: updates } = detach_publisher_cover(&mut original, &opf_path, &mut package, false, hooks)?;
         obsolete.extend(detached);
         let digest = digest16(image);
         let (cover_id, page_id) = (format!("tm-cover-{digest}"), format!("tm-cover-page-{digest}"));
@@ -582,7 +596,7 @@ pub fn stage_cover(source: &File, destination: &Path, image: &[u8], hooks: &Epub
         added.insert(&page_member, xhtml_page("표지", "표지", &cover_href));
         // 교체로 빠지는 기존 표지는 새 표지 바로 뒤의 도판으로 남긴다. 본문에서도 쓰여 파일이 그대로 남는 표지는 이미 본문에 있다.
         // 이름에 cover를 넣지 않는다. 표지 탐색이 id·href의 cover로 이미지를 고르므로 표지로 오인된다.
-        if let Some((_, previous_data, media_type, suffix)) = previous.filter(|p| obsolete.contains(&p.0)) {
+        if let Some(PreviousCover { data: previous_data, media_type, suffix, .. }) = previous.filter(|p| obsolete.contains(&p.member)) {
             let plate_digest = digest16(&previous_data);
             let (plate_id, plate_page_id) = (format!("tm-plate-{plate_digest}"), format!("tm-plate-page-{plate_digest}"));
             let (plate_href, plate_page_href) = (format!("{plate_id}{suffix}"), format!("{plate_page_id}.xhtml"));
@@ -699,7 +713,7 @@ pub fn stage_cover_removal(source: &File, destination: &Path, hooks: &EpubCoverH
             let (Some(manifest), Some(metadata), Some(spine)) = (parts.manifest, parts.metadata, parts.spine) else { return Err(missing()) };
             remove_tool_covers(&opf_path, manifest, metadata, spine)
         };
-        let (detached, updates) = detach_publisher_cover(&mut original, &opf_path, &mut package, true, hooks)?;
+        let Detached { removed: detached, rewritten: updates } = detach_publisher_cover(&mut original, &opf_path, &mut package, true, hooks)?;
         obsolete.extend(detached);
         {
             let parts = sections(&mut package);

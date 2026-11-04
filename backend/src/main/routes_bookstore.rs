@@ -4,6 +4,7 @@ use axum::{
     Json,
     extract::{Path, State},
 };
+use bookstore::store_clients::SearchRow;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -48,7 +49,7 @@ async fn search_bookstore(_: RequireAuth, State(deps): State<Arc<AppDeps>>, Path
     let result: Vec<Value> = rows
         .into_iter()
         .take(4)
-        .map(|(title, author, category, book_url, _, isbn)| {
+        .map(|SearchRow { title, author, category, detail_url: book_url, isbn, .. }| {
             let mut item = json!({"title":title,"author":author,"category":category,"book_url":book_url});
             if !isbn.is_empty() {
                 item["isbn"] = json!(isbn);

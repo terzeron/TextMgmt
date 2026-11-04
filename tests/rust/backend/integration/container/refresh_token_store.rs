@@ -4,7 +4,7 @@
 //!
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.4, 3.9, 3.10):
 //! - `db`: `DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`From<&str>`, `From<i64>`, `Clone + PartialEq + Debug`),
-//!   `type Row = BTreeMap<String, DbValue>`, `enum DbError { IntegrityError(String), Other(String) }`,
+//!   `type Row = BTreeMap<String, DbValue>`, `enum DbError { Constraint(String), Other(String) }`,
 //!   `trait DbCursor { execute(&mut self, &str, &[DbValue]) -> Result<(), DbError>; executemany(..); fetchall(&mut self) -> Option<Vec<Row>>; fetchone(&mut self) -> Option<Row>; rowcount(&self) -> u64 }`,
 //!   `trait DbConnection { cursor(&mut self) -> Box<dyn DbCursor>; commit(&mut self) -> Result<(), DbError>; rollback(&mut self) -> Result<(), DbError>; close(&mut self) }`,
 //!   `type ConnectionProvider = Arc<dyn Fn() -> Result<Box<dyn DbConnection>, DbError> + Send + Sync>`
@@ -79,7 +79,7 @@ fn items_of(page: &Value) -> Vec<Value> {
     page["items"].as_array().unwrap().clone()
 }
 
-// ---- 가짜 pymysql ----
+// ---- 가짜 DB 연결 ----
 
 struct ConnState {
     select_row: Option<Row>,
@@ -92,7 +92,7 @@ struct ConnState {
     fetchall_none: bool,
 }
 
-/// rotate 상태머신 검증용 pymysql 연결 대역. 복제본이 상태를 공유한다.
+/// rotate 상태머신 검증용 DB 연결 대역. 복제본이 상태를 공유한다.
 #[derive(Clone)]
 struct FakeConn {
     st: Arc<Mutex<ConnState>>,
@@ -222,7 +222,7 @@ fn provider_of(conn: &FakeConn) -> ConnectionProvider {
     Arc::new(move || Ok(Box::new(conn.clone()) as Box<dyn DbConnection>))
 }
 
-/// pymysql.connect가 호출마다 새 FakeConn을 반환하도록 한다(_init_db와 rotate 분리).
+/// 연결 요청마다 새 FakeConn을 돌려준다(초기화와 rotate 분리).
 fn install_fresh_conns(select_row: Option<Row>) -> (ConnectionProvider, Arc<Mutex<Vec<FakeConn>>>) {
     install_fresh_conns_with_columns(select_row, 1)
 }
@@ -432,7 +432,7 @@ impl DbCursor for MemCursor {
             let mut rows = self.db.rows.lock().unwrap();
             match rows.iter_mut().find(|t| t.jti == tok.jti) {
                 Some(existing) if sql.contains("ON DUPLICATE KEY UPDATE") => *existing = tok,
-                Some(_) => return Err(DbError::IntegrityError("중복 jti".to_string())),
+                Some(_) => return Err(DbError::Constraint("중복 jti".to_string())),
                 None => rows.push(tok),
             }
         } else if sql.starts_with("UPDATE refresh_tokens SET replaced_by") {

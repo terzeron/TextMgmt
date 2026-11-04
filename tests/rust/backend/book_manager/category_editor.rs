@@ -2,7 +2,7 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use crate::common::shared_fixtures::{asyncio_runner, make_manager, outcome, tmp_dir};
+use crate::common::shared_fixtures::{block_on, make_manager, outcome, tmp_dir};
 use common::es_fake::FakeEsManager;
 use serde_json::json;
 use std::fs;
@@ -20,7 +20,7 @@ fn test_rename_category_new_path_traversal() {
     es.set_counts(&[("old", 1)]);
     let evil = tmp_path.join("evil");
     symlink("/tmp", &evil).unwrap();
-    let (_result, err) = outcome(asyncio_runner(manager.rename_category("old", "evil")));
+    let (_result, err) = outcome(block_on(manager.rename_category("old", "evil")));
     assert!(err.is_some());
 }
 
@@ -33,7 +33,7 @@ fn test_rename_category_old_count_zero() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.set_counts(&[("old", 0), ("new", 0)]);
-    let (_result, err) = outcome(asyncio_runner(manager.rename_category("old", "new")));
+    let (_result, err) = outcome(block_on(manager.rename_category("old", "new")));
     assert!(err.expect("err").contains("문서가 없습니다"));
 }
 
@@ -44,7 +44,7 @@ fn test_rename_category_new_count_nonzero() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.set_counts(&[("old", 1), ("new", 5)]);
-    let (_result, err) = outcome(asyncio_runner(manager.rename_category("old", "new")));
+    let (_result, err) = outcome(block_on(manager.rename_category("old", "new")));
     let err = err.expect("err");
     assert!(err.contains("이미"));
     assert!(err.contains('5'));
@@ -60,7 +60,7 @@ fn test_rename_category_counts_subcategory_documents() {
     fs::create_dir(tmp_path.join("A")).unwrap();
     es.set_counts(&[("A/sub", 3)]);
 
-    let result = asyncio_runner(manager.rename_category("A", "B")).unwrap();
+    let result = block_on(manager.rename_category("A", "B")).unwrap();
 
     assert_eq!(result["fs_renamed"], json!(true));
     assert!(tmp_path.join("B").is_dir());
@@ -76,7 +76,7 @@ fn test_rename_category_blocks_target_with_subcategory_documents() {
     fs::create_dir(tmp_path.join("A")).unwrap();
     es.set_counts(&[("A", 2), ("B/sub", 5)]);
 
-    let (result, err) = outcome(asyncio_runner(manager.rename_category("A", "B")));
+    let (result, err) = outcome(block_on(manager.rename_category("A", "B")));
 
     assert_eq!(result, json!({}));
     assert!(err.expect("err").contains("이미"));
@@ -93,7 +93,7 @@ fn test_delete_category_success() {
     fs::create_dir_all(tmp_path.join("test_cat")).unwrap();
     es.set_counts(&[("test_cat", 5)]);
     es.with(|s| s.deleted_by_category = json!({"deleted": 5, "failures": []}));
-    let res = asyncio_runner(manager.delete_category("test_cat", false)).unwrap();
+    let res = block_on(manager.delete_category("test_cat", false)).unwrap();
     assert_eq!(res["deleted_count"], 5);
     assert_eq!(res["category"], "test_cat");
 }

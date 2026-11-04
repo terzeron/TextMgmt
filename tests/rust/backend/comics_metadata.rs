@@ -90,7 +90,7 @@ fn test_comics_manager_init() {
     assert_eq!(es.with(|s| s.create_index_calls), 1);
     assert!(manager.mismatch_cache().is_none());
     assert_eq!(manager.mismatch_cache_time(), 0.0);
-    // 부모 __init__을 부르지 않으므로 불일치 캐시 lock도 직접 만들어야 한다.
+    // 생성자를 거치지 않으므로 불일치 캐시 lock도 직접 만들어야 한다.
     // 빠지면 만화 카테고리 관리의 /comics/category-mismatches가 AttributeError로 실패한다.
     manager.set_mismatch_cache(json!({"stale": true}));
     manager.clear_mismatch_cache();

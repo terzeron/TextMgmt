@@ -29,7 +29,7 @@ fn rect(value: &Value) -> Result<Rect, String> {
         None => 0.0,
         Some(value) => value.as_f64().ok_or_else(|| "회전 각도가 올바르지 않습니다".to_string())?,
     };
-    Ok((number("x0")?, number("y0")?, number("x1")?, number("y1")?, angle))
+    Ok(Rect::new(number("x0")?, number("y0")?, number("x1")?, number("y1")?, angle))
 }
 
 impl Edits {
@@ -234,7 +234,7 @@ fn crop_page(pdf: &mut Document, id: ObjectId, n: i64, rect: Rect) -> Result<(),
     let stream = object.as_stream().map_err(|_| fail("이미지를 찾을 수 없음"))?;
     let source = decode_pixels(pdf, stream).map_err(|reason| fail(&reason))?;
     let original_space = stream.dict.get(b"ColorSpace").ok().cloned();
-    let one_bit = stream.dict.get(b"BitsPerComponent").and_then(Object::as_i64).ok() == Some(1) && rect.4.abs() < 0.01 && matches!(source, DynamicImage::ImageLuma8(_));
+    let one_bit = stream.dict.get(b"BitsPerComponent").and_then(Object::as_i64).ok() == Some(1) && rect.angle.abs() < 0.01 && matches!(source, DynamicImage::ImageLuma8(_));
     let (w, h) = (source.width(), source.height());
     let cropped = crop_rotated(&source, rect).map_err(|e| fail(&e.to_string()))?;
     let (ow, oh) = (cropped.width(), cropped.height());
@@ -406,8 +406,8 @@ mod tests {
 
     #[test]
     fn rect_reads_the_four_edges_and_an_optional_angle() {
-        assert_eq!(rect(&json!({"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4})).unwrap(), (0.1, 0.2, 0.3, 0.4, 0.0));
-        assert_eq!(rect(&json!({"x0": 0, "y0": 0, "x1": 1, "y1": 1, "angle": 90})).unwrap().4, 90.0);
+        assert_eq!(rect(&json!({"x0": 0.1, "y0": 0.2, "x1": 0.3, "y1": 0.4})).unwrap(), Rect::new(0.1, 0.2, 0.3, 0.4, 0.0));
+        assert_eq!(rect(&json!({"x0": 0, "y0": 0, "x1": 1, "y1": 1, "angle": 90})).unwrap().angle, 90.0);
         assert_eq!(rect(&json!({"x0": 0, "y0": 0, "x1": 1})).unwrap_err(), "크롭 영역이 쪽 밖이거나 비어 있음");
         assert_eq!(rect(&json!({"x0": 0, "y0": 0, "x1": 1, "y1": 1, "angle": "x"})).unwrap_err(), "회전 각도가 올바르지 않습니다");
     }

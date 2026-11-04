@@ -23,32 +23,32 @@ pub const ACCESS_COOKIE_NAME: &str = "tm_access_token";
 pub const REFRESH_COOKIE_NAME: &str = "tm_refresh_token";
 pub const OBSERVATION_HASH_LENGTH: usize = 16;
 
-/// FastAPI `HTTPException`.
+/// HTTP 상태 코드와 응답 detail을 담은 오류.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HTTPException {
+pub struct HttpStatusError {
     pub status_code: u16,
     pub detail: String,
 }
 
-impl HTTPException {
+impl HttpStatusError {
     pub fn new(status_code: u16, detail: &str) -> Self {
         Self { status_code, detail: detail.to_string() }
     }
 }
 
-impl fmt::Display for HTTPException {
+impl fmt::Display for HttpStatusError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self.status_code, self.detail)
     }
 }
 
-impl std::error::Error for HTTPException {}
+impl std::error::Error for HttpStatusError {}
 
 /// 프로세스를 끝내야 하는 설정 오류. 종료 코드를 담는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SystemExit(pub i32);
+pub struct FatalConfigError(pub i32);
 
-/// 요청에서 인증에 필요한 부분만 읽는 능력. FastAPI `Request`의 `headers`/`cookies`에 대응한다.
+/// 요청에서 인증에 필요한 부분(헤더, 쿠키)만 읽는 능력.
 pub trait RequestParts {
     fn header(&self, name: &str) -> Option<String>;
     fn cookie(&self, name: &str) -> Option<String>;
@@ -76,7 +76,7 @@ pub trait TokenIssuer: Send + Sync {
         create_refresh_token_with(email, role, Some(name), Some(picture), Some(family_id), Some(token_id))
     }
 
-    fn decode_refresh_token(&self, token: &str) -> Result<Value, HTTPException> {
+    fn decode_refresh_token(&self, token: &str) -> Result<Value, HttpStatusError> {
         decode_refresh_token(token)
     }
 
@@ -99,13 +99,13 @@ fn env_var(key: &str) -> String {
     std::env::var(key).unwrap_or_default()
 }
 
-/// 시작 때 한 번 부른다. 비밀키가 없으면 `SystemExit(-1)`이다.
-pub fn load_jwt_secret(env: EnvFn) -> Result<String, SystemExit> {
+/// 시작 때 한 번 부른다. 비밀키가 없으면 `FatalConfigError(-1)`이다.
+pub fn load_jwt_secret(env: EnvFn) -> Result<String, FatalConfigError> {
     match env("TM_JWT_SECRET") {
         Some(secret) if !secret.is_empty() => Ok(secret),
         _ => {
             log::error!("The environment variable TM_JWT_SECRET is not set.");
-            Err(SystemExit(-1))
+            Err(FatalConfigError(-1))
         }
     }
 }
@@ -245,16 +245,16 @@ fn claim_present(payload: &Value, key: &str) -> bool {
     }
 }
 
-pub fn decode_refresh_token(token: &str) -> Result<Value, HTTPException> {
+pub fn decode_refresh_token(token: &str) -> Result<Value, HttpStatusError> {
     let payload = decode_claims(token).map_err(|kind| match kind {
-        ErrorKind::ExpiredSignature => HTTPException::new(401, "Refresh token expired"),
-        _ => HTTPException::new(401, "Invalid refresh token"),
+        ErrorKind::ExpiredSignature => HttpStatusError::new(401, "Refresh token expired"),
+        _ => HttpStatusError::new(401, "Invalid refresh token"),
     })?;
     if payload.get("type").and_then(Value::as_str) != Some("refresh") {
-        return Err(HTTPException::new(401, "Invalid token type"));
+        return Err(HttpStatusError::new(401, "Invalid token type"));
     }
     if !claim_present(&payload, "fid") || !claim_present(&payload, "jti") {
-        return Err(HTTPException::new(401, "Refresh token missing required claims. Please log in again."));
+        return Err(HttpStatusError::new(401, "Refresh token missing required claims. Please log in again."));
     }
     Ok(payload)
 }
@@ -264,33 +264,33 @@ pub fn decode_refresh_token(token: &str) -> Result<Value, HTTPException> {
 // ---------------------------------------------------------------------------
 
 /// `Authorization: Bearer`가 있으면 그것을, 비었으면 접근 쿠키를 쓴다.
-pub fn extract_payload<R: RequestParts + ?Sized>(req: &R) -> Result<Value, HTTPException> {
+pub fn extract_payload<R: RequestParts + ?Sized>(req: &R) -> Result<Value, HttpStatusError> {
     let header = req.header("Authorization").unwrap_or_default();
     let mut token = header.strip_prefix("Bearer ").unwrap_or("").to_string();
     if token.is_empty() {
         token = req.cookie(ACCESS_COOKIE_NAME).unwrap_or_default();
     }
     if token.is_empty() {
-        return Err(HTTPException::new(401, "Missing authentication token"));
+        return Err(HttpStatusError::new(401, "Missing authentication token"));
     }
     let payload = decode_claims(&token).map_err(|kind| match kind {
-        ErrorKind::ExpiredSignature => HTTPException::new(401, "Token expired"),
-        _ => HTTPException::new(401, "Invalid token"),
+        ErrorKind::ExpiredSignature => HttpStatusError::new(401, "Token expired"),
+        _ => HttpStatusError::new(401, "Invalid token"),
     })?;
     if payload.get("type").and_then(Value::as_str) != Some("access") {
-        return Err(HTTPException::new(401, "Invalid token type"));
+        return Err(HttpStatusError::new(401, "Invalid token type"));
     }
     Ok(payload)
 }
 
 /// 토큰의 역할이 지금 정책과 같아야 한다. 허용 목록에서 빠진 사용자와 강등된 관리자는 토큰이 살아 있어도 거부한다.
-fn resolve_current_role(payload: &Value, resolver: &dyn RoleResolver) -> Result<String, HTTPException> {
+fn resolve_current_role(payload: &Value, resolver: &dyn RoleResolver) -> Result<String, HttpStatusError> {
     let email = payload.get("email").and_then(Value::as_str).unwrap_or("");
     let current = resolver.determine_role(email);
     let token_role = payload.get("role").and_then(Value::as_str);
     match current {
         Some(role) if token_role == Some(role.as_str()) => Ok(role),
-        _ => Err(HTTPException::new(403, "Access denied")),
+        _ => Err(HttpStatusError::new(403, "Access denied")),
     }
 }
 
@@ -299,29 +299,29 @@ fn with_role(mut payload: Value, role: &str) -> Value {
     payload
 }
 
-pub async fn require_auth_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn RoleResolver) -> Result<Value, HTTPException> {
+pub async fn require_auth_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn RoleResolver) -> Result<Value, HttpStatusError> {
     let payload = extract_payload(req)?;
     let role = resolve_current_role(&payload, resolver)?;
     if role != "admin" && role != "viewer" {
-        return Err(HTTPException::new(403, "Insufficient permissions"));
+        return Err(HttpStatusError::new(403, "Insufficient permissions"));
     }
     Ok(with_role(payload, &role))
 }
 
-pub async fn require_admin_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn RoleResolver) -> Result<Value, HTTPException> {
+pub async fn require_admin_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn RoleResolver) -> Result<Value, HttpStatusError> {
     let payload = extract_payload(req)?;
     let role = resolve_current_role(&payload, resolver)?;
     if role != "admin" {
-        return Err(HTTPException::new(403, "Admin access required"));
+        return Err(HttpStatusError::new(403, "Admin access required"));
     }
     Ok(with_role(payload, &role))
 }
 
-pub async fn require_auth<R: RequestParts + ?Sized>(req: &R) -> Result<Value, HTTPException> {
+pub async fn require_auth<R: RequestParts + ?Sized>(req: &R) -> Result<Value, HttpStatusError> {
     require_auth_with(req, &EnvRoleResolver).await
 }
 
-pub async fn require_admin<R: RequestParts + ?Sized>(req: &R) -> Result<Value, HTTPException> {
+pub async fn require_admin<R: RequestParts + ?Sized>(req: &R) -> Result<Value, HttpStatusError> {
     require_admin_with(req, &EnvRoleResolver).await
 }
 
@@ -338,7 +338,7 @@ pub async fn optional_auth<R: RequestParts + ?Sized>(req: &R) -> Option<Value> {
 // axum 요청 연결
 // ---------------------------------------------------------------------------
 
-/// `Cookie` 헤더(여러 개 가능)에서 `name`의 값을 찾는다. 같은 이름이 여러 번이면 뒤의 것이 이긴다(Starlette와 같다).
+/// `Cookie` 헤더(여러 개 가능)에서 `name`의 값을 찾는다. 같은 이름이 여러 번이면 뒤의 것이 이긴다.
 fn cookie_from_headers(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
     let mut found = None;
     for value in headers.get_all("cookie") {

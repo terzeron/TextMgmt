@@ -18,7 +18,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 use zip::ZipArchive;
 
-use super::epub_writer::{Added, add_image_page, add_split_image, read_previous_cover, sections, verify_staged, write_epub};
+use super::epub_writer::{Added, PreviousCover, add_image_page, add_split_image, read_previous_cover, sections, verify_staged, write_epub};
 use super::inplace_replacer::rewrite_epub;
 use super::member_path;
 use super::xml_tree::{self, Element, Node};
@@ -271,8 +271,8 @@ fn parse_rect(value: Option<&Value>) -> Result<Rect, CoverError> {
     let array = value.and_then(Value::as_array).ok_or_else(bad)?;
     let numbers: Vec<f64> = array.iter().map(|v| v.as_f64().filter(|f| f.is_finite()).ok_or_else(bad)).collect::<Result<_, _>>()?;
     match numbers[..] {
-        [x0, y0, x1, y1] => Ok((x0, y0, x1, y1, 0.0)),
-        [x0, y0, x1, y1, angle] => Ok((x0, y0, x1, y1, angle)),
+        [x0, y0, x1, y1] => Ok(Rect::new(x0, y0, x1, y1, 0.0)),
+        [x0, y0, x1, y1, angle] => Ok(Rect::new(x0, y0, x1, y1, angle)),
         _ => Err(bad()),
     }
 }
@@ -558,7 +558,7 @@ fn stage_image_edits(
                     let manifest = package.find(super::OPF_NS, "manifest").ok_or_else(missing)?;
                     read_previous_cover(&mut *stager.original, &opf_path, manifest, hooks)?
                 };
-                let Some((cover_member, cover_data, _, _)) = previous else { return Err(crop_err("표지 이미지를 찾을 수 없음").into()) };
+                let Some(PreviousCover { member: cover_member, data: cover_data, .. }) = previous else { return Err(crop_err("표지 이미지를 찾을 수 없음").into()) };
                 let (data, _) = crop_image_bytes(&cover_data, rect, hooks)?;
                 put(&mut added, &cover_member, data.clone())?;
                 // 표지 쪽이 <svg><image> 로 이 이미지를 그리면 크기를 새 이미지에 맞춘다.
@@ -826,8 +826,8 @@ mod tests {
 
     #[test]
     fn crop_rect_and_format_helpers_cover_valid_and_invalid_shapes() {
-        assert_eq!(parse_rect(Some(&json!([0, 1, 2, 3]))).unwrap(), (0.0, 1.0, 2.0, 3.0, 0.0));
-        assert_eq!(parse_rect(Some(&json!([0, 1, 2, 3, 45]))).unwrap(), (0.0, 1.0, 2.0, 3.0, 45.0));
+        assert_eq!(parse_rect(Some(&json!([0, 1, 2, 3]))).unwrap(), Rect::new(0.0, 1.0, 2.0, 3.0, 0.0));
+        assert_eq!(parse_rect(Some(&json!([0, 1, 2, 3, 45]))).unwrap(), Rect::new(0.0, 1.0, 2.0, 3.0, 45.0));
         for value in [None, Some(&json!(null)), Some(&json!([0, 1, 2])), Some(&json!([0, 1, 2, 3, 4, 5])), Some(&json!([0, 1, 2, "bad"]))] {
             assert!(parse_rect(value).is_err());
         }
@@ -892,7 +892,7 @@ mod tests {
 
     #[test]
     fn crop_image_bytes_enforces_limits_formats_and_round_trips_png() {
-        let rect = (0.0, 0.0, 1.0, 1.0, 0.0);
+        let rect = Rect::new(0.0, 0.0, 1.0, 1.0, 0.0);
         assert!(crop_image_bytes(b"invalid", rect, &EpubCoverHooks::default()).is_err());
 
         let mut gif = Cursor::new(Vec::new());

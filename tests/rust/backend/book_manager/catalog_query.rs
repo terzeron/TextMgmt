@@ -1,10 +1,10 @@
 #[path = "../common/mod.rs"]
 mod common;
-use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, make_manager, tmp_dir};
+use crate::common::shared_fixtures::{block_on, deps, make_doc, make_manager, tmp_dir};
 use backend::book_manager::{BookContent, BookManager, MAX_CATEGORY_RESULT_COUNT};
 use backend::book_metadata::BookPage;
 use backend::main::BookManagerApi;
-use common::es_fake::FakeEsManager;
+use common::es_fake::{FakeEsManager, Hit};
 use common::log_capture::LogCapture;
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -20,7 +20,7 @@ fn test_get_book_content_not_found() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.set_doc(None);
-    let result = asyncio_runner(manager.get_book_content(999));
+    let result = block_on(manager.get_book_content(999));
     assert_eq!(result, BookContent::Text(String::new()));
 }
 
@@ -31,7 +31,7 @@ fn test_get_book_content_reports_malformed_es_book() {
     doc.as_object_mut().unwrap().remove("category");
     let manager = make_manager(tmp.path(), &FakeEsManager::with_doc(doc));
 
-    let result = asyncio_runner(manager.get_book_content(1));
+    let result = block_on(manager.get_book_content(1));
     assert!(matches!(result, BookContent::Error(error) if error.contains("category")));
 }
 
@@ -44,7 +44,7 @@ fn test_get_categories_unit() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     es.set_aggregate(&[("Cat1", 3), ("Cat2", 5)]);
-    let cats = asyncio_runner(BookManagerApi::get_categories(&manager)).unwrap();
+    let cats = block_on(BookManagerApi::get_categories(&manager)).unwrap();
     assert_eq!(cats, json!({"Cat1": 3, "Cat2": 5}));
 }
 
@@ -56,10 +56,10 @@ fn test_get_books_in_category_unit() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp_path, &es);
     let doc = make_doc("A/test.txt", ".txt");
-    es.set_category_docs(vec![(1, doc, 1.0)]);
+    es.set_category_docs(vec![Hit::new(1, doc, 1.0)]);
     fs::create_dir_all(tmp_path.join("A")).unwrap();
     fs::write(tmp_path.join("A").join("test.txt"), "x").unwrap();
-    let books = asyncio_runner(manager.get_books_in_category("A")).unwrap();
+    let books = block_on(manager.get_books_in_category("A")).unwrap();
     assert_eq!(books.len(), 1);
 }
 
@@ -76,7 +76,7 @@ fn test_get_book_content_html_forces_attachment() {
     es.set_doc(Some(doc));
 
     // 응답 헤더는 라우트가 `file_response_meta`로 만든다(`BookContent::File`은 경로만 담는다).
-    let path = match asyncio_runner(manager.get_book_content(1)) {
+    let path = match block_on(manager.get_book_content(1)) {
         BookContent::File(path) => path,
         other => panic!("FileResponse가 아님: {other:?}"),
     };
@@ -102,7 +102,7 @@ fn test_get_books_in_category_uses_bounded_result_count() {
     });
     let manager = make_manager(tmp.path(), &es);
 
-    let _ = asyncio_runner(manager.get_books_in_category("A"));
+    let _ = block_on(manager.get_books_in_category("A"));
 
     let got = captured.lock().unwrap().expect("search_by_category가 호출되지 않음");
     assert_eq!(got, MAX_CATEGORY_RESULT_COUNT);
@@ -116,11 +116,11 @@ fn test_get_books_in_category_warns_on_truncation() {
     let tmp = tmp_dir();
     // 가정한 seam: 상한 값 설정자(문서에 없는 seam, 파일 머리말 참고)와 log 캡처.
     let es = FakeEsManager::new();
-    es.set_category_docs(vec![(1, make_doc("A/x.txt", ".txt"), 1.0)]);
+    es.set_category_docs(vec![Hit::new(1, make_doc("A/x.txt", ".txt"), 1.0)]);
     let manager = BookManager::with_deps(deps(tmp.path(), &es).with_max_category_result_count(1));
     let logs = LogCapture::start(log::Level::Warn);
 
-    let books = asyncio_runner(manager.get_books_in_category("A")).unwrap();
+    let books = block_on(manager.get_books_in_category("A")).unwrap();
     let records = logs.messages();
 
     assert_eq!(books.len(), 1);
@@ -132,9 +132,9 @@ fn test_get_latest_books_delegation() {
     // Lines 538, 540-541: get_latest_books
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
-    es.set_latest_docs(vec![(10, make_doc("A/test.txt", ".txt"), 1.0)], 1);
+    es.set_latest_docs(vec![Hit::new(10, make_doc("A/test.txt", ".txt"), 1.0)], 1);
     let manager = make_manager(tmp.path(), &es);
-    let BookPage { books, total, .. } = asyncio_runner(manager.get_latest_books(5, Some(vec!["hidden".to_string()]))).unwrap();
+    let BookPage { books, total, .. } = block_on(manager.get_latest_books(5, Some(vec!["hidden".to_string()]))).unwrap();
     assert_eq!(total, 1);
     assert_eq!(books.len(), 1);
     assert_eq!(books[0].book_id, 10);
@@ -147,19 +147,19 @@ fn test_get_books_in_category_paged() {
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     let doc = make_doc("A/test.txt", ".txt");
-    es.set_category_docs(vec![(1, doc.clone(), 1.0), (2, doc, 1.0)]);
+    es.set_category_docs(vec![Hit::new(1, doc.clone(), 1.0), Hit::new(2, doc, 1.0)]);
 
     // 1. Invalid cursor (line 524)
-    let error = asyncio_runner(BookManagerApi::get_books_in_category_paged(&manager, "A", None, Some("bad_cursor!!!"))).unwrap_err();
+    let error = block_on(BookManagerApi::get_books_in_category_paged(&manager, "A", None, Some("bad_cursor!!!"))).unwrap_err();
     assert_eq!(error, "invalid cursor");
 
     // 2. Success first page with next cursor (lines 525-528)
-    let BookPage { books, next_cursor: next_cur, .. } = asyncio_runner(BookManagerApi::get_books_in_category_paged(&manager, "A", Some(1), None)).unwrap();
+    let BookPage { books, next_cursor: next_cur, .. } = block_on(BookManagerApi::get_books_in_category_paged(&manager, "A", Some(1), None)).unwrap();
     assert_eq!(books.len(), 1);
     assert!(next_cur.is_some());
 
     // 3. Next page using cursor
-    let page2 = asyncio_runner(BookManagerApi::get_books_in_category_paged(&manager, "A", Some(1), next_cur.as_deref())).unwrap();
+    let page2 = block_on(BookManagerApi::get_books_in_category_paged(&manager, "A", Some(1), next_cur.as_deref())).unwrap();
     assert_eq!(page2.books.len(), 1);
 }
 

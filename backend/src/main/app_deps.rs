@@ -13,7 +13,7 @@ use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 
 use super::app_capabilities::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, UnavailableBookAccess, ViewHistoryApi};
 use super::google_oauth::GoogleIdTokenVerifier;
-use crate::auth_service::HTTPException;
+use crate::auth_service::HttpStatusError;
 use crate::auth_service::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
 use crate::book_manager::{BookManager, LoaderFileReader};
 use crate::book_manager::{BookManagerApi, UnavailableBookManager};
@@ -40,7 +40,7 @@ impl AuthSlots {
     }
 }
 
-/// `require_auth`/`require_admin` 의존성을 어떻게 풀지(FastAPI `dependency_overrides`에 대응한다).
+/// `require_auth`/`require_admin` 의존성을 어떻게 풀지(테스트가 실제 인증을 대역으로 바꿀 때 쓴다).
 pub enum AuthMode {
     /// 실제 쿠키/Bearer 토큰 인증.
     Cookies,
@@ -327,16 +327,16 @@ impl RuntimeBookAccess {
 
 #[async_trait::async_trait]
 impl BookAccess for RuntimeBookAccess {
-    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HTTPException> {
+    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HttpStatusError> {
         let manager = if content_type == "comic" { &self.comics } else { &self.books };
-        let manager = manager.get().map_err(|error| HTTPException::new(503, &error))?;
-        let book = manager.get_book(book_id).await.map_err(|error| HTTPException::new(404, &error.to_string()))?;
+        let manager = manager.get().map_err(|error| HttpStatusError::new(503, &error))?;
+        let book = manager.get_book(book_id).await.map_err(|error| HttpStatusError::new(404, &error.to_string()))?;
 
         if payload.get("role").and_then(Value::as_str) == Some("viewer") {
-            let categories = self.categories.get().map_err(|error| HTTPException::new(503, &error))?;
-            let hidden = categories.get_hidden_categories(content_type).map_err(|error| HTTPException::new(500, &error.to_string()))?;
+            let categories = self.categories.get().map_err(|error| HttpStatusError::new(503, &error))?;
+            let hidden = categories.get_hidden_categories(content_type).map_err(|error| HttpStatusError::new(500, &error.to_string()))?;
             if super::routes_books::is_hidden(&book.category, &hidden) {
-                return Err(HTTPException::new(403, "접근 권한이 없는 카테고리입니다."));
+                return Err(HttpStatusError::new(403, "접근 권한이 없는 카테고리입니다."));
             }
         }
 

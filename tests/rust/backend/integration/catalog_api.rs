@@ -3,7 +3,7 @@ mod common;
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::{AppDeps, AuthMode, CategoryMappingApi, MappingError, app_with};
 use common::TestClient;
-use common::es_fake::FakeEsManager;
+use common::es_fake::{FakeEsManager, Hit};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -80,7 +80,7 @@ async fn categories_filter_only_hidden_trees_for_viewers() {
 #[tokio::test]
 async fn category_list_supports_legacy_and_cursor_contracts() {
     let es = FakeEsManager::new();
-    es.with(|s| s.category_docs = vec![(1, doc("public/sub"), 0.0)]);
+    es.with(|s| s.category_docs = vec![Hit::new(1, doc("public/sub"), 0.0)]);
     let client = client(es.clone(), "viewer", false);
     let legacy = client.get("/categories/public/sub").await;
     assert_eq!(legacy.status, 200);
@@ -98,7 +98,7 @@ async fn category_list_supports_legacy_and_cursor_contracts() {
 async fn latest_merges_hidden_and_latest_exclusions_and_validates_limit() {
     for (prefix, kind, comics) in [("", "book", false), ("/comics", "comic", true)] {
         let es = FakeEsManager::new();
-        es.with(|s| s.latest_docs = (vec![(1, doc("public"), 0.0)], 12));
+        es.with(|s| s.latest_docs = (vec![Hit::new(1, doc("public"), 0.0)], 12));
         let client = client(es.clone(), "viewer", comics);
         let response = client.get(&format!("{prefix}/latest?limit=20")).await;
         assert_eq!(response.status, 200);
@@ -114,7 +114,7 @@ async fn latest_merges_hidden_and_latest_exclusions_and_validates_limit() {
 async fn search_forwards_filters_and_preserves_total_score_and_errors() {
     for (prefix, kind, comics) in [("", "book", false), ("/comics", "comic", true)] {
         let es = FakeEsManager::new();
-        es.with(|s| s.keyword_paged = (vec![(1, doc("public"), 2.5)], 42));
+        es.with(|s| s.keyword_paged = (vec![Hit::new(1, doc("public"), 2.5)], 42));
         let client = client(es.clone(), "viewer", comics);
         let response = client.get(&format!("{prefix}/search/hello?limit=7&offset=14&category=public&exclude_categories=old,%20hidden-{kind},,")).await;
         assert_eq!(response.status, 200);
@@ -128,7 +128,7 @@ async fn search_forwards_filters_and_preserves_total_score_and_errors() {
 #[tokio::test]
 async fn similar_filters_hidden_results_and_falls_back_to_original() {
     let es = FakeEsManager::with_doc(doc("public"));
-    es.with(|s| s.similar_paged = (vec![(2, doc("hidden-book/child"), 1.0), (3, doc("public"), 1.0)], 99));
+    es.with(|s| s.similar_paged = (vec![Hit::new(2, doc("hidden-book/child"), 1.0), Hit::new(3, doc("public"), 1.0)], 99));
     let client = client(es.clone(), "viewer", false);
     let response = client.get("/similar/1?offset=10&limit=5").await;
     assert_eq!(response.status, 200);

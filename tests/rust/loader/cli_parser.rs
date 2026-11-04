@@ -89,7 +89,7 @@ mod loader_main {
 
     #[test]
     fn test_main_ping_failure() {
-        // Lines 907-913: ES ping fails. 원본은 SystemExit, Rust는 접속 실패 종료 코드 255.
+        // Lines 907-913: ES ping fails. 원본은 FatalConfigError, Rust는 접속 실패 종료 코드 255.
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let mut store = FakeStore::new();

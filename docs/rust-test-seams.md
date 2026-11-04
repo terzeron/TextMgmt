@@ -196,7 +196,7 @@ test binary가 파일마다 하나라서 V1은 파일 간 충돌이 없다. 한 
 | epub_cover 훅       | cover_management `Hooks{limits, find_opf_path, fsync, flock, revision, testzip, inspect_archive}` ≈ epub_cover_set `hooks::{set_fsync, set_max_xml_bytes, set_zip_test, set_inspect_archive, set_uuid_hex}` ≈ pdf_delete_pages_gaps `set_max_image_pixels` ≈ cover_repair `Limits`+`set_pixel_decode_hook` |
 | EPUB 에러           | `CoverError`, `EpubCoverError{Cover,Io}`, `FetchError{Value,Os,Other}`, `ValueError`, `SearchError`                                                                                                                                                                                                        |
 | loader `doc_reader` | `read_from_text_with(path, detect)`(loader*1) vs `read_from_text_with(path, &TextHooks)`(loader_2). `fast_page_count_with(.., XrefOps)` vs `(.., &FastCountHooks)`. `reencode*\*\_with_detect / \_with_io / \_with(&TextHooks)`3종.`read_file_with_fast_count`vs`read_file_with_hooks(ReadHooks)`          |
-| 서점 대역           | `SoupSource`(예외 던지는 soup), `BookstoreSearch`, `set_fetch_search_results`                                                                                                                                                                                                                              |
+| 서점 대역           | `MarkupSource`(조회가 실패하는 HTML 대역), `BookstoreSearch`, `set_fetch_search_results`                                                                                                                                                                                                                              |
 
 ---
 

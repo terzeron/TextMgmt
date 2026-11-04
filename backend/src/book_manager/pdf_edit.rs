@@ -83,7 +83,7 @@ impl BookManager {
         let (fs, source, trash) = (self.fs.clone(), path.clone(), self.path_prefix.join(trash_name));
         let result = tokio::task::spawn_blocking(move || edit_file(fs, &source, &trash, &edits, fetcher.as_ref(), max_image_pixels))
             .await
-            .map_err(|error| if error.is_panic() { "PDF 페이지 삭제 실패 (RuntimeError)".to_string() } else { error.to_string() })??;
+            .map_err(|error| if error.is_panic() { "PDF 페이지 삭제 실패 (InternalError)".to_string() } else { error.to_string() })??;
 
         // 파일 교체가 끝나면 색인 실패와 무관하게 이전 미리보기를 폐기한다.
         self.pdf_cache().clear();

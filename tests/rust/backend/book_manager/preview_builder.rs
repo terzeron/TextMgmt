@@ -148,9 +148,9 @@ async fn test_preview_expands_self_closing_title() {
     assert!(chapter.contains("<title></title>"));
     assert!(!chapter.contains("<title/>"));
     // HTML 파서로 읽어도 본문이 title 안으로 삼켜지지 않는다
-    let soup = scraper::Html::parse_document(&chapter);
+    let dom = scraper::Html::parse_document(&chapter);
     let body_selector = scraper::Selector::parse("body").unwrap();
-    let body = soup.select(&body_selector).next().expect("body 요소");
+    let body = dom.select(&body_selector).next().expect("body 요소");
     assert!(body.text().collect::<String>().contains("본문이 보여야 한다"));
 }
 
@@ -413,7 +413,7 @@ mod get_pdf_pages {
 
 mod get_book_preview {
     use super::common;
-    use crate::common::shared_fixtures::{asyncio_runner, blank_pdf_bytes, blank_pdf_bytes_sized, deps, make_doc, make_manager, tmp_dir};
+    use crate::common::shared_fixtures::{blank_pdf_bytes, blank_pdf_bytes_sized, block_on, deps, make_doc, make_manager, tmp_dir};
     use backend::book_manager::BookManager;
     use backend::epub_cover::EpubCoverHooks;
     use backend::main::{BookManagerApi, BookResponse};
@@ -491,7 +491,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp.path(), &es);
         es.set_doc(None);
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 999, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 999, None, None));
         assert_eq!(result.status_code, 404);
     }
 
@@ -502,7 +502,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp.path(), &es);
         es.set_doc(Some(make_doc("A/missing.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert_eq!(result.status_code, 404);
     }
 
@@ -527,7 +527,7 @@ mod get_book_preview {
 
         set_mtime(&cache_file, SystemTime::now() + Duration::from_secs(1000));
 
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, Some(3), None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, Some(3), None));
         assert_eq!(result.status_code, 200);
     }
 
@@ -544,7 +544,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert_eq!(result.status_code, 422);
     }
 
@@ -574,7 +574,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         // 크래시하지 않아야 한다. 네임스페이스가 주입된다.
         assert!([200, 422, 500].contains(&result.status_code), "status={}", result.status_code);
     }
@@ -599,7 +599,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
     }
 
@@ -629,7 +629,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, Some(5), None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, Some(5), None));
         assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
     }
 
@@ -669,7 +669,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
     }
 
@@ -702,7 +702,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
     }
 
@@ -746,7 +746,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
     }
 
@@ -777,7 +777,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
     }
 
@@ -815,7 +815,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
     }
 
@@ -854,7 +854,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
     }
 
@@ -887,7 +887,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
     }
 
@@ -903,7 +903,7 @@ mod get_book_preview {
         // 가정한 seam: 미리보기 EPUB 검증 함수를 교체한다. 문서에 없는 seam이다(파일 머리말 참고).
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_preview_epub_validator(Arc::new(|_path| Err("bad epub".to_string()))));
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert_eq!(result.status_code, 422);
         assert!(result.body_text().contains("bad epub"));
     }
@@ -919,7 +919,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert_eq!(result.status_code, 422);
     }
 
@@ -932,11 +932,11 @@ mod get_book_preview {
         fs::create_dir_all(epub.parent().unwrap()).unwrap();
         make_epub(&epub, &minimal_spec());
         let es = FakeEsManager::new();
-        // TODO(common): `EpubCoverHooks::with_find_opf_path`는 `Fn() -> String`이라 `RuntimeError("boom")`을 돌려줄 수 없다. 문서가 `Result`를 받도록 정해지면 고친다. 지금은 panic으로 대신한다.
+        // TODO(common): `EpubCoverHooks::with_find_opf_path`는 `Fn() -> String`이라 `BookManagerError("boom")`을 돌려줄 수 없다. 문서가 `Result`를 받도록 정해지면 고친다. 지금은 panic으로 대신한다.
         let hooks = EpubCoverHooks::default().with_find_opf_path(Arc::new(|| panic!("boom")));
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_epub_hooks(hooks));
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert_eq!(result.status_code, 500);
         assert_eq!(result.body_text(), "EPUB preview failed");
     }
@@ -953,7 +953,7 @@ mod get_book_preview {
         let runner = FakeRunner::returning(Err(CommandError::Failed("boom".to_string())));
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(runner));
         es.set_doc(Some(make_doc("A/test.doc", "doc")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert_eq!(result.status_code, 500);
         assert_eq!(result.body_text(), ".DOC preview failed");
     }
@@ -967,7 +967,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp.path(), &es);
         es.set_doc(None);
-        let result = asyncio_runner(manager.get_pdf_pages(999, 1, 1));
+        let result = block_on(manager.get_pdf_pages(999, 1, 1));
         assert_eq!(result.status_code, 404);
     }
 
@@ -982,7 +982,7 @@ mod get_book_preview {
         fs::create_dir_all(txt.parent().unwrap()).unwrap();
         fs::write(&txt, "hello").unwrap();
         es.set_doc(Some(make_doc("A/test.txt", "txt")));
-        let result = asyncio_runner(manager.get_pdf_pages(1, 1, 1));
+        let result = block_on(manager.get_pdf_pages(1, 1, 1));
         assert_eq!(result.status_code, 400);
     }
 
@@ -1000,12 +1000,12 @@ mod get_book_preview {
         es.set_doc(Some(make_doc("A/test.pdf", "pdf")));
 
         // 첫 호출: 생성하고 캐시한다.
-        let result = asyncio_runner(manager.get_pdf_pages(1, 1, 1));
+        let result = block_on(manager.get_pdf_pages(1, 1, 1));
         assert_eq!(result.status_code, 200);
         assert_eq!(result.header("x-total-pages"), Some("2"));
 
         // 두 번째 호출: 캐시 적중.
-        let result2 = asyncio_runner(manager.get_pdf_pages(1, 1, 1));
+        let result2 = block_on(manager.get_pdf_pages(1, 1, 1));
         assert_eq!(result2.status_code, 200);
     }
 
@@ -1022,7 +1022,7 @@ mod get_book_preview {
 
         es.set_doc(Some(make_doc("A/test.pdf", "pdf")));
 
-        let result = asyncio_runner(manager.get_pdf_pages(1, 100, 200));
+        let result = block_on(manager.get_pdf_pages(1, 100, 200));
         assert_eq!(result.status_code, 400);
         assert!(result.body_text().contains("exceeds total pages"));
     }
@@ -1066,7 +1066,7 @@ mod get_book_preview {
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
         // 2개 챕터만 요청한다. ch3-ch5는 spine에서 빠져야 한다.
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, Some(2), None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, Some(2), None));
         assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
     }
 
@@ -1103,7 +1103,7 @@ mod get_book_preview {
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(doc));
 
-        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, Some("/html-resource/1")));
+        let resp = block_on(BookManagerApi::get_book_preview(&manager, 1, None, Some("/html-resource/1")));
         let body = resp.body_text();
 
         assert_eq!(resp.status_code, 200);
@@ -1137,7 +1137,7 @@ mod get_book_preview {
 
         // 읽기 권한을 없애 PermissionError를 흉내 낸다.
         fs::set_permissions(&html_file, fs::Permissions::from_mode(0o000)).unwrap();
-        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let resp = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         fs::set_permissions(&html_file, fs::Permissions::from_mode(0o644)).unwrap();
 
         assert_eq!(resp.status_code, 500);
@@ -1153,7 +1153,7 @@ mod get_book_preview {
         let mut doc = make_doc("A/book.html", "html");
         doc.as_object_mut().unwrap().remove("category");
         let manager = make_manager(tmp.path(), &FakeEsManager::with_doc(doc));
-        let resp = asyncio_runner(manager.get_book_preview(1, Some(5), Some(10)));
+        let resp = block_on(manager.get_book_preview(1, Some(5), Some(10)));
 
         assert_eq!(resp.status_code, 500);
     }
@@ -1164,7 +1164,7 @@ mod get_book_preview {
         let mut doc = make_doc("A/book.pdf", "pdf");
         doc.as_object_mut().unwrap().remove("category");
         let manager = make_manager(tmp.path(), &FakeEsManager::with_doc(doc));
-        let resp = asyncio_runner(manager.get_pdf_pages(1, 1, 1));
+        let resp = block_on(manager.get_pdf_pages(1, 1, 1));
 
         assert_eq!(resp.status_code, 500);
     }
@@ -1182,7 +1182,7 @@ mod get_book_preview {
         pdf_es.set_doc(Some(make_doc("A/sample.pdf", ".pdf")));
         // 쪽수 조회가 ENOSPC로 실패하게 한다(`PdfPageOps` 대역, TODO 주석 참고).
         let manager = BookManager::with_deps(deps(tmp_path, &pdf_es).with_pdf_pages(Arc::new(NoSpacePdfPages)));
-        let resp = asyncio_runner(manager.get_pdf_pages(777, 1, 5));
+        let resp = block_on(manager.get_pdf_pages(777, 1, 5));
         assert_eq!(resp.status_code, 503);
         assert!(resp.body_text().contains("Storage access error"));
     }
@@ -1222,7 +1222,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         let manager = make_manager(tmp_path, &es);
         es.set_doc(Some(make_doc("A/test.epub", "epub")));
-        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let result = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
     }
 
@@ -1242,7 +1242,7 @@ mod get_book_preview {
         let faulty = FaultyFs::new();
         faulty.set_is_file(|_p| Some(io::Error::from_raw_os_error(5)));
         let manager_fault = BookManager::with_deps(deps(tmp_path, &es).with_fs(faulty));
-        let resp1 = asyncio_runner(manager_fault.get_pdf_pages(1, 1, 2));
+        let resp1 = block_on(manager_fault.get_pdf_pages(1, 1, 2));
         assert_eq!(resp1.status_code, 503);
         assert!(resp1.body_text().contains("Storage access error"));
 
@@ -1251,7 +1251,7 @@ mod get_book_preview {
         let manager = make_manager(tmp_path, &es);
         manager.page_count_cache().insert((pdf_file.to_string_lossy().into_owned(), mtime_key(&pdf_file)), 2);
 
-        let resp2 = asyncio_runner(manager.get_pdf_pages(1, 1, 2));
+        let resp2 = block_on(manager.get_pdf_pages(1, 1, 2));
         assert_eq!(resp2.status_code, 200);
     }
 }
@@ -1299,7 +1299,7 @@ async fn test_preview_keeps_cover_image_not_referenced_by_chapters() {
 mod hwp_preview {
     use super::common;
     use super::common::{es_fake::FakeEsManager, runner::FakeRunner};
-    use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, tmp_dir};
+    use crate::common::shared_fixtures::{block_on, deps, make_doc, tmp_dir};
     use backend::book_manager::BookManager;
     use backend::main::{BookManagerApi, BookResponse};
     use std::fs;
@@ -1342,7 +1342,7 @@ mod hwp_preview {
         let es = FakeEsManager::new();
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
         es.set_doc(Some(doc));
-        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let resp = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert_eq!(resp.status_code, 200);
         let body = resp.body_text();
         assert!(body.contains("영동") || body.contains("교가"));
@@ -1359,7 +1359,7 @@ mod hwp_preview {
         let es = FakeEsManager::new();
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
         es.set_doc(Some(doc));
-        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let resp = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert_eq!(resp.status_code, 200);
         let body = resp.body_text();
         assert!(body.chars().count() > 50);
@@ -1375,7 +1375,7 @@ mod hwp_preview {
         let es = FakeEsManager::new();
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
         es.set_doc(Some(doc));
-        asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         let cache_file = tmp_path.join(".preview_cache").join(format!("1.hwp3_v{}.html", BookManager::HWP3_PREVIEW_VERSION));
         assert!(cache_file.exists());
         assert!(fs::read_to_string(&cache_file).unwrap().chars().count() > 50);
@@ -1394,7 +1394,7 @@ mod hwp_preview {
         let es = FakeEsManager::new();
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
         es.set_doc(Some(doc));
-        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let resp = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         // DOC는 빈 html_content → 캐시 안 되고 preview 없음
         assert!([200, 400, 500].contains(&resp.status_code) || resp.status_code == 755, "status={}", resp.status_code);
         // 빈 content면 status 755 안 나옴
@@ -1411,7 +1411,7 @@ mod hwp_preview {
         let es = FakeEsManager::new();
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
         es.set_doc(Some(doc));
-        asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert!(!tmp_path.join(".preview_cache").join("1.html").exists());
         assert!(!tmp_path.join(".preview_cache").join(format!("1.hwp3_v{}.html", BookManager::HWP3_PREVIEW_VERSION)).exists());
     }
@@ -1426,7 +1426,7 @@ mod hwp_preview {
         let es = FakeEsManager::new();
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
         es.set_doc(Some(doc));
-        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let resp = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert_eq!(resp.status_code, 200);
         assert!(!resp.body_text().contains("미리보기를 생성할 수 없습니다"));
     }
@@ -1447,7 +1447,7 @@ mod hwp_preview {
         let runner = FakeRunner::new(|argv| panic!("HWP3에 LibreOffice를 불렀다: {argv:?}"));
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(runner));
         es.set_doc(Some(doc));
-        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let resp = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert_eq!(resp.status_code, 200);
         let body = resp.body_text();
         assert!(body.contains("영동") || body.contains("교가"), "{body}");
@@ -1471,7 +1471,7 @@ mod hwp_preview {
         });
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(runner));
         es.set_doc(Some(doc));
-        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let resp = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         assert_eq!(resp.status_code, 200);
         let body = resp.body_text();
         assert!(body.contains("LibreOffice"));
@@ -1488,7 +1488,7 @@ mod hwp_preview {
         let es = FakeEsManager::new();
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
         es.set_doc(Some(doc));
-        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let resp = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
         if resp.status_code == 200 {
             let body = resp.body_text();
             // XSS 방지: <script> 같은 태그가 이스케이프되어야 함

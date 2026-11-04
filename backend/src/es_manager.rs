@@ -18,13 +18,57 @@ use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 pub use es_client::EsError;
 pub use es_client::transport::{EsTransport, HttpTransport};
 
-/// (문서 ID, `_source`, 점수)
-pub type Hit = (i64, Value, f64);
+/// 검색 결과 한 건.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hit {
+    /// 문서 ID
+    pub id: i64,
+    /// `_source`
+    pub source: Value,
+    pub score: f64,
+}
+
+impl Hit {
+    pub fn new(id: i64, source: Value, score: f64) -> Self {
+        Self { id, source, score }
+    }
+}
+
 pub type Docs = BTreeMap<i64, Value>;
-/// (히트, 전체 건수, 다음 `search_after`)
-pub type PagedHits = (Vec<Hit>, i64, Option<Vec<Value>>);
-/// 커버 파일 한 페이지: ([(문서 id, 문서, 정렬값)], 전체 건수).
-pub type CoverFileHits = (Vec<(i64, Value, Vec<Value>)>, i64);
+
+/// `search_after`로 넘기는 검색 결과 한 페이지.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PagedHits {
+    pub hits: Vec<Hit>,
+    /// 전체 건수
+    pub total: i64,
+    /// 다음 페이지의 `search_after` 값
+    pub search_after: Option<Vec<Value>>,
+}
+
+/// 정렬값을 함께 받은 커버 파일 문서 한 건.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoverFileHit {
+    /// 문서 ID
+    pub id: i64,
+    pub source: Value,
+    /// ES `sort` 값 `[수정, 생성, 경로]`
+    pub sort: Vec<Value>,
+}
+
+impl CoverFileHit {
+    pub fn new(id: i64, source: Value, sort: Vec<Value>) -> Self {
+        Self { id, source, sort }
+    }
+}
+
+/// 커버 파일 한 페이지.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CoverFileHits {
+    pub hits: Vec<CoverFileHit>,
+    /// 전체 건수
+    pub total: i64,
+}
 
 /// 고수준 facade. ES 검색·색인·관리 메서드를 묶는다.
 pub trait EsManagerApi: Send + Sync {
@@ -173,14 +217,14 @@ impl EsConnector for RealEsConnector {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ESManagerError {
     /// 필수 환경 변수가 없다.
-    SystemExit(i32),
+    FatalConfigError(i32),
     Elasticsearch(EsError),
 }
 
 impl fmt::Display for ESManagerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ESManagerError::SystemExit(code) => write!(f, "종료 코드 {code}"),
+            ESManagerError::FatalConfigError(code) => write!(f, "종료 코드 {code}"),
             ESManagerError::Elasticsearch(e) => write!(f, "{e}"),
         }
     }
@@ -432,7 +476,7 @@ impl ESManager {
         for key in ENV_KEYS {
             if env(key).is_none() {
                 log::error!("The environment variable {key} is not set.");
-                return Err(ESManagerError::SystemExit(-1));
+                return Err(ESManagerError::FatalConfigError(-1));
             }
         }
         let get = |key: &str| env(key).unwrap_or_default();

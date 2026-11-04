@@ -118,9 +118,7 @@ pub struct State {
 
 // ---- TestFastPdfPageCount -------------------------------------------------------------------
 
-pub type XrefStream = (Vec<u8>, [usize; 3], Vec<i64>, Option<i64>);
-
-/// pypdf로 만든 72x72 빈 한 쪽짜리 PDF 대응.
+/// 72x72 빈 한 쪽짜리 PDF.
 pub fn blank_pdf() -> Vec<u8> {
     let objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] >>"];
     let mut out = b"%PDF-1.4\n".to_vec();

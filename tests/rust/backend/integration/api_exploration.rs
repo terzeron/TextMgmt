@@ -6,7 +6,7 @@
 //! 가정한 API (이 파일 안에서 정의한다):
 //! - `trait Okt { fn nouns(&self, text: &str) -> Vec<String>; }`
 //! - `trait HttpGet { fn get(&self, url: &str) -> Result<Value, RequestException>; }`
-//! - `fn get_top_frequent_words(okt: Option<&dyn Okt>, text: &str, top_n: usize) -> Result<Vec<(String, usize)>, RuntimeError>`
+//! - `fn get_top_frequent_words(okt: Option<&dyn Okt>, text: &str, top_n: usize) -> Result<Vec<(String, usize)>, BookManagerError>`
 //! - `fn run_api_exploration_test(http: &dyn HttpGet, okt: Option<&dyn Okt>)`
 
 use std::fmt;
@@ -25,11 +25,11 @@ impl fmt::Display for RequestException {
     }
 }
 
-/// `RuntimeError`에 대응한다. konlpy가 없을 때 던진다.
+/// `BookManagerError`에 대응한다. konlpy가 없을 때 던진다.
 #[derive(Debug)]
-struct RuntimeError(String);
+struct BookManagerError(String);
 
-impl fmt::Display for RuntimeError {
+impl fmt::Display for BookManagerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
@@ -43,12 +43,12 @@ trait HttpGet {
     fn get(&self, url: &str) -> Result<Value, RequestException>;
 }
 
-fn get_top_frequent_words(okt: Option<&dyn Okt>, text: &str, top_n: usize) -> Result<Vec<(String, usize)>, RuntimeError> {
+fn get_top_frequent_words(okt: Option<&dyn Okt>, text: &str, top_n: usize) -> Result<Vec<(String, usize)>, BookManagerError> {
     if text.is_empty() {
         return Ok(vec![]);
     }
 
-    let okt = okt.ok_or_else(|| RuntimeError("konlpy가 설치되어 있지 않습니다. 라이브 탐색 실행에는 konlpy가 필요합니다.".to_string()))?;
+    let okt = okt.ok_or_else(|| BookManagerError("konlpy가 설치되어 있지 않습니다. 라이브 탐색 실행에는 konlpy가 필요합니다.".to_string()))?;
 
     let meaningful_words: Vec<String> = okt.nouns(text).into_iter().filter(|w| w.chars().count() > 1).collect();
     if meaningful_words.is_empty() {

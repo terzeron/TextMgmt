@@ -38,7 +38,7 @@ async fn test_unexpected_error_while_saving_does_not_leak_panic_details() {
 
     let (result, error) = e.run_pages(&[1]).await;
 
-    assert!(result.is_none() && error.as_deref() == Some("PDF 페이지 삭제 실패 (RuntimeError)"), "{error:?}");
+    assert!(result.is_none() && error.as_deref() == Some("PDF 페이지 삭제 실패 (InternalError)"), "{error:?}");
     e.assert_nothing_changed(&original);
 }
 

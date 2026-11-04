@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::{AddBookError, BookContent, BookManager, MAX_CATEGORY_PAGE_SIZE, MAX_LATEST_BOOK_COUNT};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
-use crate::es_manager::{Docs, EsManagerApi, decode_category_cursor, encode_category_cursor};
+use crate::es_manager::{Docs, EsManagerApi, Hit, PagedHits, decode_category_cursor, encode_category_cursor};
 
 /// 없거나 빈 객체면 문서가 없는 것이다.
 fn non_empty(doc: Option<Value>) -> Option<Value> {
@@ -19,8 +19,8 @@ fn non_empty(doc: Option<Value>) -> Option<Value> {
 const SIMILAR_SUMMARY_CHARS: usize = 3500;
 
 impl BookManager {
-    fn books_from_hits(&self, hits: &[(i64, Value, f64)], keep_score: bool) -> Result<Vec<Book>, String> {
-        hits.iter().map(|(id, doc, score)| self.try_make_book(*id, doc, if keep_score { *score } else { 0.0 })).collect()
+    fn books_from_hits(&self, hits: &[Hit], keep_score: bool) -> Result<Vec<Book>, String> {
+        hits.iter().map(|hit| self.try_make_book(hit.id, &hit.source, if keep_score { hit.score } else { 0.0 })).collect()
     }
 
     /// 동기 ES 호출을 워커 스레드로 넘겨 이벤트 루프를 막지 않는다(동기 클라이언트를 루프에서 부르면 같은 워커의 다른 요청이 멈춘다).
@@ -69,7 +69,7 @@ impl BookManager {
             return Err("invalid cursor".to_string());
         }
         let category_owned = category.to_string();
-        let (hits, total, next) = self.blocking(move |es| es.search_by_category_paged(&category_owned, size, search_after.as_deref())).await.map_err(|e| e.to_string())?;
+        let PagedHits { hits, total, search_after: next } = self.blocking(move |es| es.search_by_category_paged(&category_owned, size, search_after.as_deref())).await.map_err(|e| e.to_string())?;
         let books = self.books_from_hits(&hits, false)?;
         let next_cursor = next.filter(|n| !n.is_empty()).map(|n| encode_category_cursor(&n));
         Ok(BookPage { books, total, next_cursor })

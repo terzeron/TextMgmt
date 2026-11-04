@@ -3,7 +3,7 @@ mod common;
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::{AppDeps, AuthMode, BookManagerApi, CategoryMappingApi, MappingError, app_with};
 use common::TestClient;
-use common::es_fake::FakeEsManager;
+use common::es_fake::{FakeEsManager, Hit};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -165,7 +165,7 @@ async fn category_preview_and_pdf_stats_use_real_manager_and_mask_stats_errors()
 async fn category_named_rename_remains_readable_after_admin_route_registration() {
     let tmp = tempfile::tempdir().unwrap();
     let es = FakeEsManager::new();
-    es.with(|s| s.category_docs = vec![(1, doc(), 0.0)]);
+    es.with(|s| s.category_docs = vec![Hit::new(1, doc(), 0.0)]);
     let client = client(tmp.path(), es, Arc::new(Policy::default()), false);
     for category in ["rename", "delete"] {
         assert_eq!(client.get(&format!("/categories/{category}")).await.json()["status"], "success");

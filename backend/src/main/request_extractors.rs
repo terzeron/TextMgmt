@@ -1,7 +1,7 @@
-//! 라우트 핸들러가 쓰는 추출기. 인증 의존성(`RequireAuth`, `RequireAdmin`, `OptionalAuth`)과 검증 오류를 FastAPI 형식으로 바꾸는 `ApiJson`, `ApiQuery`,
+//! 라우트 핸들러가 쓰는 추출기. 인증 의존성(`RequireAuth`, `RequireAdmin`, `OptionalAuth`)과 검증 오류를 `{"detail": [...]}` 형식으로 바꾸는 `ApiJson`, `ApiQuery`,
 //! 요청한 클라이언트의 IP·User-Agent(`ClientInfo`).
 //!
-//! 인증 추출기는 핸들러 인자 맨 앞에 둔다. FastAPI도 의존성을 입력 검증보다 먼저 풀어서, 인증 실패(401/403)가 검증 실패(422)보다 먼저 나간다.
+//! 인증 추출기는 핸들러 인자 맨 앞에 둔다. 그래서 인증 실패(401/403)가 검증 실패(422)보다 먼저 나간다.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -116,7 +116,7 @@ impl FromRequestParts<Arc<AppDeps>> for OptionalAuth {
     }
 }
 
-/// JSON 본문. 형식이 틀리면 FastAPI처럼 422(`RequestValidationError`)다.
+/// JSON 본문. 형식이 틀리면 422(검증 오류)다.
 pub struct ApiJson<T>(pub T);
 
 impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for ApiJson<T> {

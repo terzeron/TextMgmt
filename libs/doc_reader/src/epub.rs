@@ -83,7 +83,7 @@ fn xml_doc(text: &str) -> Result<roxmltree::Document<'_>, String> {
 }
 
 fn read_member(zip: &mut Zip, name: &str) -> Result<Vec<u8>, String> {
-    let file = zip.by_name(name).map_err(|_| format!("KeyError: {name}"))?;
+    let file = zip.by_name(name).map_err(|_| format!("ZIP 항목이 없다: {name}"))?;
     // 헤더의 선언 크기는 믿지 않는다(zip bomb). 미리 할당하지 않고 상한까지만 푼다.
     let mut buf = Vec::new();
     file.take(sysdeps::zip_opener::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
@@ -117,7 +117,7 @@ fn read_with_package(path: &Path) -> Result<(String, usize), String> {
     let mut opf_file = String::new();
     for rootfile in container.descendants().filter(|n| n.is_element() && n.tag_name().name() == "rootfile" && n.tag_name().namespace() == Some(CONTAINER_NS)) {
         if rootfile.attribute("media-type") == Some(OEBPS_MEDIA_TYPE) {
-            opf_file = rootfile.attribute("full-path").ok_or("TypeError: full-path 없음")?.to_owned();
+            opf_file = rootfile.attribute("full-path").ok_or("rootfile에 full-path가 없다")?.to_owned();
         }
     }
     let opf_dir = Path::new(&opf_file).parent().map(Path::to_path_buf).unwrap_or_default();
@@ -130,7 +130,7 @@ fn read_with_package(path: &Path) -> Result<(String, usize), String> {
     let root = opf.root_element();
 
     // 메타데이터: 요소마다 네임스페이스가 있어야 한다(없으면 KeyError).
-    let metadata = child(root, OPF_NS, "metadata").ok_or("AttributeError: metadata 없음")?;
+    let metadata = child(root, OPF_NS, "metadata").ok_or("OPF에 metadata가 없다")?;
     let mut titles: Vec<Option<String>> = Vec::new();
     let mut creators: Vec<Option<String>> = Vec::new();
     for t in metadata.children().filter(|c| c.is_element()) {
@@ -139,7 +139,7 @@ fn read_with_package(path: &Path) -> Result<(String, usize), String> {
         if is_meta {
             continue;
         }
-        let ns = t.tag_name().namespace().ok_or("KeyError: 네임스페이스 없는 메타데이터 요소")?;
+        let ns = t.tag_name().namespace().ok_or("메타데이터 요소에 네임스페이스가 없다")?;
         if ns == DC_NS {
             let text = t.first_child().filter(|c| c.is_text()).and_then(|c| c.text()).map(str::to_owned);
             match t.tag_name().name() {
@@ -151,28 +151,28 @@ fn read_with_package(path: &Path) -> Result<(String, usize), String> {
     }
 
     // 매니페스트: 모든 항목의 멤버가 ZIP에 있어야 한다.
-    let manifest = child(root, OPF_NS, "manifest").ok_or("TypeError: manifest 없음")?;
+    let manifest = child(root, OPF_NS, "manifest").ok_or("OPF에 manifest가 없다")?;
     let mut items: Vec<Item> = Vec::new();
     for r in manifest.children().filter(|c| c.is_element() && c.tag_name().name() == "item" && c.tag_name().namespace() == Some(OPF_NS)) {
         let media_type = r.attribute("media-type");
-        let href = r.attribute("href").ok_or("TypeError: href 없음")?;
+        let href = r.attribute("href").ok_or("href가 없다")?;
         let file_name = unquote(href);
         let properties: Vec<&str> = r.attribute("properties").map(|p| p.split(' ').collect()).unwrap_or_default();
         let is_xhtml = media_type == Some(XHTML_MEDIA_TYPE);
         let is_nav = is_xhtml && properties.contains(&"nav");
         // nav 항목만 href를 풀지 않은 채로 멤버를 찾는다.
-        let member_name = zip_entry_name(opf_dir.join(if is_nav { href } else { file_name.as_str() })).ok_or_else(|| format!("KeyError: {href}"))?;
+        let member_name = zip_entry_name(opf_dir.join(if is_nav { href } else { file_name.as_str() })).ok_or_else(|| format!("ZIP 밖을 가리키는 href: {href}"))?;
         if !names.contains(&member_name) {
-            return Err(format!("KeyError: {member_name}"));
+            return Err(format!("ZIP 항목이 없다: {member_name}"));
         }
         items.push(Item { id: r.attribute("id").map(str::to_owned), file_name, member: member_name, is_document: is_xhtml, is_nav });
     }
 
     // 스파인과 목차
-    let spine = child(root, OPF_NS, "spine").ok_or("TypeError: spine 없음")?;
+    let spine = child(root, OPF_NS, "spine").ok_or("OPF에 spine이 없다")?;
     let nav_item = items.iter().find(|i| i.is_nav);
     if let Some(toc) = spine.attribute("toc").filter(|t| !t.is_empty()) {
-        let item = items.iter().find(|i| i.id.as_deref() == Some(toc)).ok_or("AttributeError: ncx 항목 없음")?;
+        let item = items.iter().find(|i| i.id.as_deref() == Some(toc)).ok_or("spine의 toc가 가리키는 ncx 항목이 없다")?;
         let ncx_name = zip_entry_name(opf_dir.join(&item.file_name)).ok_or("Can not find ncx file.")?;
         let ncx_bytes = read_member(&mut zip, &ncx_name).map_err(|_| "Can not find ncx file.".to_owned())?;
         validate_ncx(&ncx_bytes)?;
@@ -213,7 +213,7 @@ fn read_with_package(path: &Path) -> Result<(String, usize), String> {
 fn validate_ncx(bytes: &[u8]) -> Result<(), String> {
     let (text, ()) = parse_xml(bytes)?;
     let doc = xml_doc(&text)?;
-    let nav_map = child(doc.root_element(), DAISY_NS, "navMap").ok_or("AttributeError: navMap 없음")?;
+    let nav_map = child(doc.root_element(), DAISY_NS, "navMap").ok_or("NCX에 navMap이 없다")?;
     fn walk(node: roxmltree::Node) -> Result<(), String> {
         for a in node.children().filter(|c| c.is_element()) {
             if a.tag_name().namespace() != Some(DAISY_NS) {
@@ -247,7 +247,7 @@ fn validate_nav(markup: &str, kind: &str) -> Result<(), String> {
     let Some(nav) = nav else {
         return if kind == "toc" { Err("IndexError: nav toc 없음".into()) } else { Ok(()) };
     };
-    let ol = element_children(nav, "ol").into_iter().next().ok_or("AttributeError: nav에 ol 없음")?;
+    let ol = element_children(nav, "ol").into_iter().next().ok_or("nav에 ol이 없다")?;
     fn parse_list(list: NodeRef<Node>) -> Result<(), String> {
         for li in element_children(list, "li") {
             let sublist = element_children(li, "ol").into_iter().next();
@@ -258,12 +258,12 @@ fn validate_nav(markup: &str, kind: &str) -> Result<(), String> {
                 if let Some(link) = link
                     && !href_ok(link)
                 {
-                    return Err("TypeError: href 없음".into());
+                    return Err("href가 없다".into());
                 }
             } else if let Some(link) = link
                 && !href_ok(link)
             {
-                return Err("TypeError: href 없음".into());
+                return Err("href가 없다".into());
             }
         }
         Ok(())
@@ -368,7 +368,7 @@ pub fn document_text_and_lines(content: &[u8]) -> Result<(String, usize), String
     let body_children = body.map_or(0, child_count);
     let has_body_text = body.is_some_and(|b| b.children().any(|c| matches!(c.value(), Node::Text(t) if !t.trim().is_empty())));
     if body_children == 0 && !has_body_text && !markup.to_ascii_lowercase().contains("<body") {
-        return Err("TypeError: object of type 'NoneType' has no len()".into());
+        return Err("문서에 body가 없다".into());
     }
     let lines = crate::markup::count_lines_in(&doc);
     let text = pretty_text_in(&doc, &markup).unwrap_or_else(|| get_body_text(&markup));

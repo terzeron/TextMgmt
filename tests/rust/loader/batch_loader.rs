@@ -26,7 +26,7 @@ mod loader_init {
 
     #[test]
     fn test_loader_requires_book_dir() {
-        // 원본은 import 시점 SystemExit. Rust는 Config::from_env가 빠진 변수 이름을 담은 오류를 돌려준다.
+        // 원본은 import 시점 FatalConfigError. Rust는 Config::from_env가 빠진 변수 이름을 담은 오류를 돌려준다.
         let get = |name: &str| {
             if name == "TM_COMICS_DIR" { Some("/tmp/comics".to_owned()) } else { None }
         };
@@ -174,9 +174,8 @@ mod report_problems {
 
 mod loader_module_import_guards {
     #[test]
-    fn test_pypdf_read_warning_filter_failure_is_ignored() {
-        // pypdf가 PdfReadWarning을 더 이상 노출하지 않아도 import는 살아 있어야 한다 (55-56).
-        // Rust에는 import 시점 경고 필터가 없으므로 crate 공개 상수에 접근되는지만 확인한다.
+    fn test_batch_size_constant_is_public() {
+        // 한 번에 색인하는 파일 수 상수가 공개돼 있다.
         assert_eq!(loader::batch_loader::BATCH_SIZE, 100);
     }
 }

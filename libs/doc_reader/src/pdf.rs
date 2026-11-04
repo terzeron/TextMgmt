@@ -22,20 +22,20 @@ pub const PDF_STAGE_TIMEOUT: u64 = 30;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     /// Poppler 텍스트 추출
-    Pdfium,
-    /// pdfplumber에 대응(lopdf)
-    Plumber,
+    Poppler,
+    /// lopdf 텍스트 추출
+    Lopdf,
     /// lopdf로 다시 저장한 뒤 Poppler 대신 lopdf로 읽는다.
     Repair,
 }
 
 impl Stage {
-    /// 통계에 쓰는 이름. 원본의 함수 이름 그대로다.
+    /// 통계에 쓰는 이름.
     pub fn name(self) -> &'static str {
         match self {
-            Stage::Pdfium => "_pdf_text_by_poppler",
-            Stage::Plumber => "_pdf_text_by_pdfplumber",
-            Stage::Repair => "_pdf_text_by_pikepdf_repair",
+            Stage::Poppler => "pdf_text_poppler",
+            Stage::Lopdf => "pdf_text_lopdf",
+            Stage::Repair => "pdf_text_repair",
         }
     }
 }
@@ -68,8 +68,8 @@ impl StageRunner for InProcess {
 /// 단계의 실제 작업.
 pub fn run_stage(stage: Stage, path: &Path) -> Result<(String, usize), String> {
     match stage {
-        Stage::Pdfium => poppler_text(path),
-        Stage::Plumber => lopdf_text(path),
+        Stage::Poppler => poppler_text(path),
+        Stage::Lopdf => lopdf_text(path),
         Stage::Repair => {
             let mut doc = lopdf::Document::load(path).map_err(|e| e.to_string())?;
             let mut buffer = Vec::new();
@@ -145,7 +145,7 @@ pub fn read_from_pdf(path: &Path, runner: &dyn StageRunner) -> PdfRead {
     let mut logs: Vec<(&'static str, String)> = Vec::new();
     let mut timed_out: Vec<&'static str> = Vec::new();
 
-    for (stage_no, stage) in [Stage::Pdfium, Stage::Plumber].into_iter().enumerate() {
+    for (stage_no, stage) in [Stage::Poppler, Stage::Lopdf].into_iter().enumerate() {
         let started = Instant::now();
         let mut outcome = "error";
         let mut stop = false;
@@ -456,7 +456,18 @@ pub fn read_from_obj_stream(file: &mut std::fs::File, stream_offset: i64, target
     raw.get(start..next_offset.min(raw.len())).map(<[u8]>::to_vec)
 }
 
-pub type XrefStream = (Vec<u8>, [usize; 3], Vec<i64>, Option<i64>);
+/// xref 스트림 하나를 읽은 결과.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XrefStream {
+    /// 압축을 풀고 PNG 예측을 되돌린 항목 데이터.
+    pub entries: Vec<u8>,
+    /// 항목 필드 너비(`/W`).
+    pub widths: [usize; 3],
+    /// 객체 번호 범위(`/Index`): (시작, 개수) 쌍을 이어 붙인 목록.
+    pub index_ranges: Vec<i64>,
+    /// 이전 xref 위치(`/Prev`).
+    pub prev: Option<i64>,
+}
 
 pub fn parse_one_xref_stream(file: &mut std::fs::File, xref_offset: i64) -> Option<XrefStream> {
     static W: LazyLock<BytesRegex> = LazyLock::new(|| bre(r"/W\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s*\]"));
@@ -507,7 +518,7 @@ pub fn parse_one_xref_stream(file: &mut std::fs::File, xref_offset: i64) -> Opti
         }
     }
     let prev = PREV.captures(&data).and_then(|c| num(&c[1]));
-    Some((decompressed, w, index_ranges, prev))
+    Some(XrefStream { entries: decompressed, widths: w, index_ranges, prev })
 }
 
 enum Lookup {
@@ -576,7 +587,7 @@ pub fn fast_page_count_with(path: &Path, hooks: &FastCountHooks<'_>) -> Option<u
             }))
             .ok()
             .flatten();
-            let Some((decompressed, w, index_ranges, prev)) = parsed else { break };
+            let Some(XrefStream { entries: decompressed, widths: w, index_ranges, prev }) = parsed else { break };
             lookups.push(Lookup::Stream(decompressed, w, index_ranges));
             xref_offset = prev;
         }

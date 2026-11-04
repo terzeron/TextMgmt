@@ -4,7 +4,7 @@ use super::*;
 
 impl ESManager {
     fn normalized_hits(response: &Value, max_score: f64) -> Result<Vec<Hit>, EsError> {
-        hits_of(response).iter().map(|hit| Ok((hit_id(hit)?, source_of(hit), normalize(hit["_score"].as_f64().unwrap_or(0.0), max_score, false)))).collect()
+        hits_of(response).iter().map(|hit| Ok(Hit { id: hit_id(hit)?, source: source_of(hit), score: normalize(hit["_score"].as_f64().unwrap_or(0.0), max_score, false) })).collect()
     }
 
     /// 질의를 실행하고 점수를 최고점 기준 0~100으로 정규화한다. `max_score`가 없으면 빈 결과다.
@@ -57,7 +57,7 @@ impl ESManager {
         let mut result: Vec<Hit> = Vec::new();
         let Some(max_score) = response["hits"]["max_score"].as_f64() else { return Ok(Vec::new()) };
         for hit in hits_of(&response) {
-            result.push((hit_id(hit)?, source_of(hit), normalize(hit["_score"].as_f64().unwrap_or(0.0), max_score, false)));
+            result.push(Hit { id: hit_id(hit)?, source: source_of(hit), score: normalize(hit["_score"].as_f64().unwrap_or(0.0), max_score, false) });
             if result.len() >= limit {
                 return Ok(result);
             }
@@ -69,7 +69,7 @@ impl ESManager {
             }
             let Some(max_score) = response["hits"]["max_score"].as_f64() else { return Ok(Vec::new()) };
             for hit in hits_of(&response) {
-                result.push((hit_id(hit)?, source_of(hit), normalize(hit["_score"].as_f64().unwrap_or(0.0), max_score, false)));
+                result.push(Hit { id: hit_id(hit)?, source: source_of(hit), score: normalize(hit["_score"].as_f64().unwrap_or(0.0), max_score, false) });
                 if result.len() >= limit {
                     return Ok(result);
                 }
@@ -96,8 +96,10 @@ impl ESManager {
         if base_score <= 0.0 {
             return Ok((Vec::new(), total));
         }
-        let result =
-            hits_of(&response).iter().map(|hit| Ok((hit_id(hit)?, source_of(hit), normalize(hit["_score"].as_f64().unwrap_or(0.0), base_score, true)))).collect::<Result<Vec<Hit>, EsError>>()?;
+        let result = hits_of(&response)
+            .iter()
+            .map(|hit| Ok(Hit { id: hit_id(hit)?, source: source_of(hit), score: normalize(hit["_score"].as_f64().unwrap_or(0.0), base_score, true) }))
+            .collect::<Result<Vec<Hit>, EsError>>()?;
         Ok((result, total))
     }
 
@@ -116,7 +118,7 @@ impl ESManager {
 
     /// 카테고리 내 문서를 search_after 커서로 한 페이지 조회한다. 오류는 삼키고 빈 결과를 돌려준다.
     /// 반환: (문서 목록, 전체 건수, 다음 커서 | None)
-    pub fn search_by_category_paged(&self, category: &str, size: i64, search_after: Option<&[Value]>) -> (Vec<Hit>, i64, Option<Vec<Value>>) {
+    pub fn search_by_category_paged(&self, category: &str, size: i64, search_after: Option<&[Value]>) -> PagedHits {
         log::debug!("search_by_category_paged(category='{category}', size={size}, search_after={search_after:?})");
         let mut kwargs =
             json!({"index": self.index(), "query": {"term": {"category": category}}, "sort": Self::category_sort(), "size": size, "track_total_hits": true, "source": Self::LIST_SOURCE_FIELDS});
@@ -126,14 +128,14 @@ impl ESManager {
         let parsed = self.es.call("search", &kwargs).and_then(|response| {
             let hits = hits_of(&response);
             let total = total_of(&response)?;
-            let result = hits.iter().map(|hit| Ok((hit_id(hit)?, source_of(hit), 0.0))).collect::<Result<Vec<Hit>, EsError>>()?;
+            let result = hits.iter().map(|hit| Ok(Hit { id: hit_id(hit)?, source: source_of(hit), score: 0.0 })).collect::<Result<Vec<Hit>, EsError>>()?;
             // 마지막 페이지(요청 크기 미만)면 다음 커서를 주지 않는다.
             let next = if hits.len() as i64 == size { hits.last().and_then(|hit| hit["sort"].as_array().cloned()) } else { None };
-            Ok((result, total, next))
+            Ok(PagedHits { hits: result, total, search_after: next })
         });
         parsed.unwrap_or_else(|e| {
             log::error!("search_by_category_paged error: {e}");
-            (Vec::new(), 0, None)
+            PagedHits::default()
         })
     }
 
@@ -179,9 +181,9 @@ impl ESManager {
 
     /// 주어진 카테고리에 직접 속한 커버 형식 파일을 최신순으로 한 페이지 조회한다. 오류는 삼키고 빈 결과를 돌려준다.
     /// 반환: ([(문서 id, 문서, 정렬값)], 전체 건수). 전체 건수는 search_after와 무관하다.
-    pub fn search_cover_files_paged(&self, categories: &[&str], size: i64, search_after: Option<&[Value]>, exclude_categories: Option<&[&str]>) -> (Vec<(i64, Value, Vec<Value>)>, i64) {
+    pub fn search_cover_files_paged(&self, categories: &[&str], size: i64, search_after: Option<&[Value]>, exclude_categories: Option<&[&str]>) -> CoverFileHits {
         if categories.is_empty() {
-            return (Vec::new(), 0);
+            return CoverFileHits::default();
         }
         log::debug!("search_cover_files_paged(categories={}, size={size}, search_after={search_after:?})", categories.len());
         let mut query = json!({"bool": {"filter": [Self::cover_type_filter(), {"terms": {"category": categories}}]}});
@@ -194,12 +196,15 @@ impl ESManager {
             kwargs["search_after"] = json!(after);
         }
         let parsed = self.es.call("search", &kwargs).and_then(|response| {
-            let hits = hits_of(&response).iter().map(|hit| Ok((hit_id(hit)?, source_of(hit), hit["sort"].as_array().cloned().unwrap_or_default()))).collect::<Result<Vec<_>, EsError>>()?;
-            Ok((hits, total_of(&response)?))
+            let hits = hits_of(&response)
+                .iter()
+                .map(|hit| Ok(CoverFileHit { id: hit_id(hit)?, source: source_of(hit), sort: hit["sort"].as_array().cloned().unwrap_or_default() }))
+                .collect::<Result<Vec<_>, EsError>>()?;
+            Ok(CoverFileHits { hits, total: total_of(&response)? })
         });
         parsed.unwrap_or_else(|e| {
             log::error!("search_cover_files_paged error: {e}");
-            (Vec::new(), 0)
+            CoverFileHits::default()
         })
     }
 
@@ -291,7 +296,7 @@ impl ESManager {
         }
         let kwargs = json!({"index": self.index(), "query": query, "sort": Self::latest_sort(), "size": size, "track_total_hits": true, "source": Self::LIST_SOURCE_FIELDS});
         let parsed = self.es.call("search", &kwargs).and_then(|response| {
-            let hits = hits_of(&response).iter().map(|hit| Ok((hit_id(hit)?, source_of(hit), 0.0))).collect::<Result<Vec<Hit>, EsError>>()?;
+            let hits = hits_of(&response).iter().map(|hit| Ok(Hit { id: hit_id(hit)?, source: source_of(hit), score: 0.0 })).collect::<Result<Vec<Hit>, EsError>>()?;
             Ok((hits, total_of(&response)?))
         });
         parsed.unwrap_or_else(|e| {
@@ -353,8 +358,10 @@ impl ESManager {
         if base_score <= 0.0 {
             return Ok((Vec::new(), total));
         }
-        let result =
-            hits_of(search_resp).iter().map(|hit| Ok((hit_id(hit)?, source_of(hit), normalize(hit["_score"].as_f64().unwrap_or(0.0), base_score, true)))).collect::<Result<Vec<Hit>, EsError>>()?;
+        let result = hits_of(search_resp)
+            .iter()
+            .map(|hit| Ok(Hit { id: hit_id(hit)?, source: source_of(hit), score: normalize(hit["_score"].as_f64().unwrap_or(0.0), base_score, true) }))
+            .collect::<Result<Vec<Hit>, EsError>>()?;
         Ok((result, total))
     }
 

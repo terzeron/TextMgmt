@@ -1,6 +1,6 @@
 //! 오류 응답과 로깅.
 //!
-//! 라우트는 `Result<_, ApiError>`를 돌려준다. `ApiError`는 FastAPI가 오류를 응답으로 바꾸는 방식과 같은 JSON(`{"detail": ..}`)이 된다.
+//! 라우트는 `Result<_, ApiError>`를 돌려준다. `ApiError`는 JSON(`{"detail": ..}`) 응답이 된다.
 //! 오류 로그는 요청의 메서드·경로가 필요해서 `error_middleware`가 응답을 보고 한 번만 남긴다(`http_exception_handler` 등과 같은 내용).
 
 use std::error::Error;
@@ -16,14 +16,14 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
-pub use crate::auth_service::HTTPException;
+pub use crate::auth_service::HttpStatusError;
 
 pub const GENERIC_SERVER_ERROR_DETAIL: &str = "서버 내부 오류가 발생했습니다";
 pub const VALIDATION_ERROR_DETAIL: &str = "입력값이 올바르지 않습니다";
 /// 저장소(DB)를 쓸 수 없을 때 503에 쓰는 문구.
 pub const SERVICE_UNAVAILABLE_DETAIL: &str = "서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.";
 
-/// FastAPI `RequestValidationError`: 검증 오류 목록과 받은 본문.
+/// 요청 검증 오류: 검증 오류 목록과 받은 본문.
 #[derive(Debug, Clone)]
 pub struct RequestValidationError {
     errors: Vec<Value>,
@@ -60,8 +60,8 @@ impl Error for RequestValidationError {}
 /// 라우트가 돌려주는 오류.
 #[derive(Debug, Clone)]
 pub enum ApiError {
-    /// `HTTPException`: 상태 코드와 `detail`을 그대로 응답한다.
-    Http(HTTPException),
+    /// `HttpStatusError`: 상태 코드와 `detail`을 그대로 응답한다.
+    Http(HttpStatusError),
     /// 422
     Validation(RequestValidationError),
     /// 예상하지 못한 오류. 500과 일반 문구로 응답하고 사유는 로그에만 남긴다.
@@ -72,7 +72,7 @@ pub type ApiResult<T> = Result<T, ApiError>;
 
 impl ApiError {
     pub fn http(status_code: u16, detail: &str) -> Self {
-        ApiError::Http(HTTPException::new(status_code, detail))
+        ApiError::Http(HttpStatusError::new(status_code, detail))
     }
 
     /// 저장소 오류를 503으로 바꾼다. 사유는 호출한 쪽이 먼저 로그에 남긴다.
@@ -81,8 +81,8 @@ impl ApiError {
     }
 }
 
-impl From<HTTPException> for ApiError {
-    fn from(e: HTTPException) -> Self {
+impl From<HttpStatusError> for ApiError {
+    fn from(e: HttpStatusError) -> Self {
         ApiError::Http(e)
     }
 }
@@ -93,7 +93,7 @@ impl From<RequestValidationError> for ApiError {
     }
 }
 
-/// 상태 코드와 JSON 본문. Starlette `JSONResponse`처럼 공백 없이 쓰고 한글을 이스케이프하지 않는다.
+/// 상태 코드와 JSON 본문. 공백 없이 쓰고 한글을 이스케이프하지 않는다.
 pub fn json_response(status: u16, content: &Value) -> Response {
     let mut resp = Response::new(Body::from(serde_json::to_vec(content).unwrap_or_default()));
     *resp.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -142,7 +142,7 @@ fn log_validation(method: &Method, path: &str, exc: &RequestValidationError) {
     log::error!("Request body summary: {}", summarize_request_body(exc.body()));
 }
 
-fn log_http(method: &Method, path: &str, exc: &HTTPException) {
+fn log_http(method: &Method, path: &str, exc: &HttpStatusError) {
     log::error!("[{}] {method} {path} - {}", exc.status_code, exc.detail);
 }
 
@@ -157,8 +157,8 @@ pub async fn validation_exception_handler(parts: &Parts, exc: &RequestValidation
     render(&ApiError::Validation(exc.clone()))
 }
 
-/// `HTTPException`을 기록하고 같은 상태 코드의 응답을 만든다.
-pub async fn http_exception_handler(parts: &Parts, exc: &HTTPException) -> Response {
+/// `HttpStatusError`을 기록하고 같은 상태 코드의 응답을 만든다.
+pub async fn http_exception_handler(parts: &Parts, exc: &HttpStatusError) -> Response {
     log_http(&parts.method, parts.uri.path(), exc);
     render(&ApiError::Http(exc.clone()))
 }
@@ -184,7 +184,7 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".to_string())
 }
 
-/// 핸들러가 panic해도 연결을 끊지 않고 500 응답을 돌려준다(Starlette `ServerErrorMiddleware`).
+/// 핸들러가 panic해도 연결을 끊지 않고 500 응답을 돌려준다.
 pub async fn error_middleware(req: Request, next: Next) -> Response {
     let (method, path) = (req.method().clone(), req.uri().path().to_string());
     let mut fut = Box::pin(next.run(req));
@@ -206,8 +206,8 @@ pub async fn error_middleware(req: Request, next: Next) -> Response {
         Some(ApiError::Validation(e)) => log_validation(&method, &path, &e),
         Some(ApiError::Internal(msg)) => log_general(&method, &path, &PanicError(msg)),
         None if resp.status() == StatusCode::METHOD_NOT_ALLOWED && resp.headers().get(header::CONTENT_TYPE).is_none() => {
-            // axum의 기본 405는 본문이 없다. FastAPI와 같은 JSON으로 바꾼다.
-            let e = HTTPException::new(405, "Method Not Allowed");
+            // axum의 기본 405는 본문이 없다. `{"detail": ..}` JSON으로 바꾼다.
+            let e = HttpStatusError::new(405, "Method Not Allowed");
             log_http(&method, &path, &e);
             let mut replaced = render(&ApiError::Http(e));
             if let Some(allow) = resp.headers().get(header::ALLOW) {
@@ -220,7 +220,7 @@ pub async fn error_middleware(req: Request, next: Next) -> Response {
     resp
 }
 
-/// 없는 경로. FastAPI의 404와 같은 `{"detail": "Not Found"}`다.
+/// 없는 경로. `{"detail": "Not Found"}`다.
 pub async fn not_found() -> ApiError {
     ApiError::http(404, "Not Found")
 }

@@ -4,9 +4,7 @@
 mod common;
 use crate::common::category_apply::{ApplyOpts, apply_opts};
 use crate::common::shared_fixtures::CONTAINER;
-use crate::common::shared_fixtures::{
-    allowed_set, asyncio_runner, blank_pdf_bytes_sized, category_with_files, deps, image_bytes, make_deps, make_doc, make_manager, make_source_file, outcome, tmp_dir,
-};
+use crate::common::shared_fixtures::{allowed_set, blank_pdf_bytes_sized, block_on, category_with_files, deps, image_bytes, make_deps, make_doc, make_manager, make_source_file, outcome, tmp_dir};
 use backend::book_manager::{ApplyOptions, BackfillThread, BookManager, CREATED_TIME_BACKFILL_ENV, ProposeOptions};
 use backend::main::{BookManagerApi, InlineRunner, TaskHandle, TaskRunner};
 use backend::pdf_page_reader::PdfCacheLimits;
@@ -211,7 +209,7 @@ fn test_apply_category_changes_on_item_done_already_called_for_items_before_exce
     let done_calls: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = done_calls.clone();
 
-    let (result, _error) = asyncio_runner(apply_opts(
+    let (result, _error) = block_on(apply_opts(
         &manager,
         &[json!({"file_path": "A/boom.epub", "target_category": "5_음악"}), json!({"file_path": "A/ok.epub", "target_category": "5_음악"})],
         ApplyOpts::new(allowed).on_item_done(Box::new(move |call| sink.lock().unwrap().push(call))),
@@ -247,11 +245,8 @@ fn test_apply_category_changes_continues_after_one_item_raises() {
         if *n == 1 { Err(io::Error::other("예상치 못한 파일시스템 오류")) } else { Ok(original(category)) }
     })));
 
-    let (result, _error) = asyncio_runner(apply_opts(
-        &manager,
-        &[json!({"file_path": "A/boom.epub", "target_category": "5_음악"}), json!({"file_path": "A/ok.epub", "target_category": "5_음악"})],
-        ApplyOpts::new(allowed),
-    ));
+    let (result, _error) =
+        block_on(apply_opts(&manager, &[json!({"file_path": "A/boom.epub", "target_category": "5_음악"}), json!({"file_path": "A/ok.epub", "target_category": "5_음악"})], ApplyOpts::new(allowed)));
 
     assert_eq!(result["total_count"], 2);
     assert_eq!(result["results"].as_array().unwrap().len(), 2);

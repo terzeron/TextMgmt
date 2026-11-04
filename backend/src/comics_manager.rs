@@ -16,7 +16,7 @@ use crate::es_manager::EsManagerApi;
 
 mod api_adapter;
 
-pub use crate::book_manager::RuntimeError;
+pub use crate::book_manager::BookManagerError;
 
 const CREATED_TIME_BACKFILL_ENV: &str = "TM_BACKFILL_CREATED_TIME_ON_STARTUP";
 
@@ -59,22 +59,22 @@ impl ComicsManager {
         }
     }
 
-    pub fn from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<ComicsManager, RuntimeError> {
+    pub fn from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<ComicsManager, BookManagerError> {
         Self::from_env_with(env, es_factory, |deps| deps)
     }
 
     /// `from_env`와 같고, 운영용 reader 등 manager 의존성을 구성할 때 꽂는다.
-    pub fn from_env_with(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<ComicsManager, RuntimeError> {
+    pub fn from_env_with(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<ComicsManager, BookManagerError> {
         let Some(dir) = env("TM_COMICS_DIR") else {
-            return Err(RuntimeError("The environment variable TM_COMICS_DIR is not set.".to_string()));
+            return Err(BookManagerError("The environment variable TM_COMICS_DIR is not set.".to_string()));
         };
         let Some(index_name) = env("TM_ES_COMICS_INDEX") else {
-            return Err(RuntimeError("The environment variable TM_ES_COMICS_INDEX is not set.".to_string()));
+            return Err(BookManagerError("The environment variable TM_ES_COMICS_INDEX is not set.".to_string()));
         };
         let path_prefix = PathBuf::from(dir);
         log::debug!("{}", path_prefix.display());
         let es_manager = es_factory(&index_name);
-        es_manager.create_index().map_err(|e| RuntimeError(format!("create_index failed: {e}")))?;
+        es_manager.create_index().map_err(|e| BookManagerError(format!("create_index failed: {e}")))?;
         let mut manager = Self::with_deps(customize(BookManagerDeps::new(path_prefix, es_manager)));
         manager.es_index_name = index_name;
         manager.backfill_created_time_if_enabled(env);
@@ -82,16 +82,16 @@ impl ComicsManager {
     }
 
     /// 이미 연결한 ES manager로 운영 인스턴스를 만든다.
-    pub fn from_env_with_es(env: EnvFn, es_manager: Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<ComicsManager, RuntimeError> {
+    pub fn from_env_with_es(env: EnvFn, es_manager: Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<ComicsManager, BookManagerError> {
         let Some(dir) = env("TM_COMICS_DIR") else {
-            return Err(RuntimeError("The environment variable TM_COMICS_DIR is not set.".to_string()));
+            return Err(BookManagerError("The environment variable TM_COMICS_DIR is not set.".to_string()));
         };
         let Some(index_name) = env("TM_ES_COMICS_INDEX") else {
-            return Err(RuntimeError("The environment variable TM_ES_COMICS_INDEX is not set.".to_string()));
+            return Err(BookManagerError("The environment variable TM_ES_COMICS_INDEX is not set.".to_string()));
         };
         let path_prefix = PathBuf::from(dir);
         log::debug!("{}", path_prefix.display());
-        es_manager.create_index().map_err(|e| RuntimeError(format!("create_index failed: {e}")))?;
+        es_manager.create_index().map_err(|e| BookManagerError(format!("create_index failed: {e}")))?;
         let mut deps = BookManagerDeps::new(path_prefix, es_manager);
         if let Some(program) = env("TM_LOADER_BIN").filter(|p| !p.is_empty()) {
             deps = deps.with_loader_program(&program);

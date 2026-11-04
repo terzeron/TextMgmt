@@ -25,7 +25,7 @@
 //!   - `create_bookstore() -> Yes24Bookstore`
 //!   - 상수: `ERR_MISSING_INPUT`, `GENERIC_MISMATCH_ERROR`, `GENERIC_MAPPING_ERROR_DETAIL`, `GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL`, `GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL`
 //!   - 구 `backend::main::testing::*` 전역 가드는 없다. `RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS` 패치는 `AppDeps::with_reload_progress_flush_interval`, `os.listdir` 패치는 `AppDeps::with_fs`가 대신한다.
-//!   - 백그라운드 작업(reload-*)은 Starlette `BackgroundTasks`처럼 응답을 돌려주기 전에 끝난다.
+//!   - 백그라운드 작업(reload-*)은 응답을 돌려주기 전에 끝난다.
 //! - `backend::auth_service`: `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`, `create_refresh_token`(같은 인자),
 //!   `tm_admin_email() -> String`, `jwt_secret() -> String`, `JWT_ALGORITHM: jsonwebtoken::Algorithm`
 //! - `backend::book_metadata::Book` (`Default + Clone + Serialize`): `book_id, category, title, author, file_path: PathBuf, file_type, file_size, line_count, page_count, isbn, created_time: Option<String>, updated_time, score: f64`, `Book::path_prefix() -> PathBuf`
@@ -58,7 +58,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use crate::common::shared_fixtures::{BookRow, CATEGORY, ListDirFs};
+use crate::common::shared_fixtures::{CATEGORY, ListDirFs};
 use crate::common::shared_fixtures::{enc, now_secs, process_env, split};
 use axum::http::Method;
 use axum::response::IntoResponse;
@@ -68,6 +68,7 @@ use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
 use backend::main::{AppDeps, AuthMode, BookstoreFactory, BookstoreSearch, CategoryMappingApi, CustomJSONResponse, GoogleVerifier, MappingError, RoleResolver, Slot, app_with};
+use bookstore::store_clients::SearchRow;
 use common::{TestClient, env::EnvGuard, es_fake::FakeEsManager};
 use db::category_mapping::CategoryMapping;
 use serde_json::{Value, json};
@@ -1100,13 +1101,13 @@ async fn test_search_bookstore_api_errors() {
 /// 서점 대역. `search`가 정한 행을 돌려주고, `build_search_url`은 `https://example.com?q={keyword}`다.
 /// TODO(common): `BookstoreSearch`의 메서드 모양은 문서 3.2에 없다. 두 메서드를 가정했다. 서점이 13곳이어도 factory는 하나라 모든 이름이 같은 대역을 쓴다.
 struct StubStore {
-    rows: Vec<BookRow>,
+    rows: Vec<SearchRow>,
     keyword: String,
     kind: String,
 }
 
 impl BookstoreSearch for StubStore {
-    fn search(&self, _isbn: &str, _title: &str, _author: &str) -> (Vec<BookRow>, String, String) {
+    fn search(&self, _isbn: &str, _title: &str, _author: &str) -> (Vec<SearchRow>, String, String) {
         (self.rows.clone(), self.keyword.clone(), self.kind.clone())
     }
 
@@ -1130,7 +1131,11 @@ fn client_with_store(store: Arc<StubStore>) -> TestClient {
 #[tokio::test]
 async fn test_search_bookstore_api_success() {
     // DummyStore: search -> ([("T","A","C","U","S","ISBN")], "kw", "title"), build_search_url -> "https://example.com?q={keyword}"
-    let store = Arc::new(StubStore { rows: vec![("T".into(), "A".into(), "C".into(), "U".into(), "S".into(), "ISBN".into())], keyword: "kw".into(), kind: "title".into() });
+    let store = Arc::new(StubStore {
+        rows: vec![SearchRow { title: "T".into(), author: "A".into(), category: "C".into(), detail_url: "U".into(), search_url: "S".into(), isbn: "ISBN".into() }],
+        keyword: "kw".into(),
+        kind: "title".into(),
+    });
     let resp = client_with_store(store).get("/search/bookstore/yes24?title=Hello").await;
     assert_eq!(resp.status, 200);
     let body = resp.json();
@@ -1141,7 +1146,8 @@ async fn test_search_bookstore_api_success() {
 
 #[tokio::test]
 async fn test_search_bookstore_api_limits_results_to_four() {
-    let rows: Vec<BookRow> = (0..6).map(|i| (format!("T{i}"), "A".into(), "C".into(), format!("U{i}"), "S".into(), String::new())).collect();
+    let rows: Vec<SearchRow> =
+        (0..6).map(|i| SearchRow { title: format!("T{i}"), author: "A".into(), category: "C".into(), detail_url: format!("U{i}"), search_url: "S".into(), isbn: String::new() }).collect();
     let store = Arc::new(StubStore { rows, keyword: "kw".into(), kind: "title".into() });
     let resp = client_with_store(store).get("/search/bookstore/yes24?title=Hello").await;
     assert_eq!(resp.status, 200);
@@ -1290,7 +1296,7 @@ type RenameFn = Arc<dyn Fn(&str, &str) -> (Option<Value>, Option<String>) + Send
 struct Behavior {
     /// test_main_error_branches: 13개 메서드를 오류 반환으로 바꾼다.
     errors: bool,
-    /// reload_category_mismatch_files가 RuntimeError("mismatch boom")을 던진다.
+    /// reload_category_mismatch_files가 BookManagerError("mismatch boom")을 던진다.
     mismatch_files_raise: bool,
     /// search_similar_books_paged를 search_similar_books_paged_ok로 바꾼다.
     similar_ok: bool,
@@ -2488,7 +2494,7 @@ impl CategoryMappingApi for SetKeywordsRaises {
     }
 }
 
-/// Lines 673-675: set_category_keywords non-HTTPException error
+/// Lines 673-675: set_category_keywords non-HttpStatusError error
 #[tokio::test]
 async fn test_set_category_keywords_unexpected_exception() {
     let tmp = TempDir::new().unwrap();
@@ -2525,7 +2531,7 @@ async fn test_update_all_category_mappings_failure() {
     assert!(resp.json()["detail"].as_str().unwrap().contains("Failed to update mappings"), "{}", resp.json());
 }
 
-/// Line 741: update_all_category_mappings HTTPException re-raise
+/// Line 741: update_all_category_mappings HttpStatusError re-raise
 #[tokio::test]
 async fn test_update_all_category_mappings_http_exception_reraise() {
     let tmp = TempDir::new().unwrap();
@@ -2561,7 +2567,7 @@ async fn test_set_hidden_category_failure() {
     assert!(resp.json()["detail"].as_str().unwrap().contains("Failed to update hidden category"), "{}", resp.json());
 }
 
-/// Line 777: set_hidden_category HTTPException re-raise
+/// Line 777: set_hidden_category HttpStatusError re-raise
 #[tokio::test]
 async fn test_set_hidden_category_http_exception_reraise() {
     let tmp = TempDir::new().unwrap();

@@ -11,7 +11,7 @@ use axum::routing::{delete, get, patch, post, put};
 
 use super::app_deps::AppDeps;
 
-/// FastAPI `route.path`, `route.methods`, `route.dependant.dependencies`에 대응한다.
+/// 라우트 하나의 경로, 메서드, 인증 의존성.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteInfo {
     pub path: String,

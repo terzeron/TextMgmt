@@ -27,17 +27,17 @@ const PROGRESS_COUNT_FIELDS: [&str; 5] = ["indexed_count", "deleted_count", "fai
 const STALE_ERROR_MESSAGE: &str = "응답 없이 중단된 것으로 보입니다.";
 const STALE_CLASSIFY_PROPOSAL_ERROR_MESSAGE: &str = "백엔드가 다시 시작되어 진행 중이던 작업이 중단되었습니다. 남은 항목을 확인한 뒤 진행하세요.";
 
-/// Python `ValueError`에 대응한다. 알 수 없는 진행 카운트 필드나, 락 갱신 중 DB 오류를 담는다.
+/// 카테고리 매핑 저장소 오류. 알 수 없는 진행 카운트 필드나, 락 갱신 중 DB 오류를 담는다.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ValueError(pub String);
+pub struct CategoryMappingError(pub String);
 
-impl fmt::Display for ValueError {
+impl fmt::Display for CategoryMappingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-impl std::error::Error for ValueError {}
+impl std::error::Error for CategoryMappingError {}
 
 /// `get_connection`이 돌려주는 연결. 커서를 직접 다루지 않고 문장 단위로 실행한다. 버릴 때 닫는다.
 pub struct MappingConnection {
@@ -124,18 +124,18 @@ fn lock_key_of(category: Option<&str>) -> &str {
     category.filter(|c| !c.is_empty()).unwrap_or(BULK_LOCK_KEY)
 }
 
-fn validate_counts(counts: &[(&str, i64)]) -> Result<(), ValueError> {
+fn validate_counts(counts: &[(&str, i64)]) -> Result<(), CategoryMappingError> {
     let unknown: Vec<&str> = counts.iter().map(|(k, _)| *k).filter(|k| !PROGRESS_COUNT_FIELDS.contains(k)).collect();
-    if unknown.is_empty() { Ok(()) } else { Err(ValueError(format!("알 수 없는 진행 카운트 필드: {unknown:?}"))) }
+    if unknown.is_empty() { Ok(()) } else { Err(CategoryMappingError(format!("알 수 없는 진행 카운트 필드: {unknown:?}"))) }
 }
 
 fn count_set_clause(counts: &[(&str, i64)]) -> String {
     counts.iter().map(|(field, _)| format!(", {field} = %s")).collect()
 }
 
-fn db_error_to_value_error(op: &str, e: DbError) -> ValueError {
+fn db_error_to_value_error(op: &str, e: DbError) -> CategoryMappingError {
     log::error!("{op} failed: {e}");
-    ValueError(e.to_string())
+    CategoryMappingError(e.to_string())
 }
 
 impl CategoryMapping {
@@ -387,7 +387,7 @@ impl CategoryMapping {
                 log::info!("add_keyword({category}, {keyword}, {content_type}): success");
                 Ok(true)
             }
-            Err(DbError::IntegrityError(_)) => {
+            Err(DbError::Constraint(_)) => {
                 log::warn!("add_keyword({category}, {keyword}, {content_type}): already exists");
                 Ok(false)
             }
@@ -645,7 +645,7 @@ impl CategoryMapping {
     }
 
     /// 진행 중 heartbeat(updated_at)와 진행 카운트를 갱신한다. 알 수 없는 카운트 필드나 DB 오류면 `Err`다.
-    pub fn heartbeat_reload_lock(&self, content_type: &str, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), ValueError> {
+    pub fn heartbeat_reload_lock(&self, content_type: &str, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), CategoryMappingError> {
         validate_counts(counts)?;
         let lock_key = lock_key_of(category);
         let sql = format!("UPDATE reload_locks SET updated_at = NOW(){} WHERE content_type = %s AND lock_key = %s", count_set_clause(counts));
@@ -655,7 +655,7 @@ impl CategoryMapping {
     }
 
     /// 재적재 완료(성공/실패)를 기록한다. 행은 지우지 않아 새로고침 뒤에도 마지막 결과를 볼 수 있다. 다음 `acquire_reload_lock`이 덮어쓴다.
-    pub fn complete_reload_lock(&self, content_type: &str, status: &str, error: Option<&str>, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), ValueError> {
+    pub fn complete_reload_lock(&self, content_type: &str, status: &str, error: Option<&str>, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), CategoryMappingError> {
         validate_counts(counts)?;
         let lock_key = lock_key_of(category);
         let sql = format!("UPDATE reload_locks SET status = %s, updated_at = NOW(), error = %s{} WHERE content_type = %s AND lock_key = %s", count_set_clause(counts));
@@ -778,7 +778,7 @@ impl CategoryMapping {
 
     // ---- 분류 제안 작업 상태 ----
     //
-    // 여러 프로세스(uvicorn workers x replicas)가 같이 쓰므로 DB 행 + SELECT ... FOR UPDATE로 판단과 쓰기를 묶는다. reload_locks와 같은 방식이다.
+    // 여러 프로세스(웹 서버 worker x replica)가 같이 쓰므로 DB 행 + SELECT ... FOR UPDATE로 판단과 쓰기를 묶는다. reload_locks와 같은 방식이다.
 
     /// 저장된 상태에 '갱신이 끊겼는가'를 반영해 돌려준다. 행은 고치지 않는다(조회가 쓰기가 되면 폴링끼리 경합한다).
     /// 낡음은 앱이 아니라 SQL이 센다(`TIMESTAMPDIFF ... NOW(3)`). 앱(KST)과 DB(UTC)의 시간대 차이를 피하려는 것이다.

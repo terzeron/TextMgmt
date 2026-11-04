@@ -70,7 +70,7 @@ impl Response {
     }
 }
 
-/// FastAPI `TestClient(app)`에 대응한다. 요청마다 새 `Router`를 만들지 않고 복제해서 쓴다.
+/// 앱에 요청을 보내는 테스트 클라이언트. 요청마다 새 `Router`를 만들지 않고 복제해서 쓴다.
 pub struct TestClient {
     app: axum::Router,
     headers: Vec<(String, String)>,

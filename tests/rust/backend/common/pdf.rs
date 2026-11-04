@@ -37,7 +37,7 @@ impl PdfBuilder {
         Self { doc, pages_id, kids: Vec::new() }
     }
 
-    /// 빈 `Resources`를 가진 쪽을 더한다. pikepdf `add_blank_page`와 같다.
+    /// 빈 `Resources`를 가진 쪽을 더한다.
     pub fn add_page(&mut self, w: i64, h: i64) -> ObjectId {
         let page = dictionary! {"Type" => "Page", "Parent" => self.pages_id, "MediaBox" => mediabox_obj(w, h), "Resources" => Dictionary::new()};
         let id = self.doc.add_object(page);
@@ -255,7 +255,7 @@ pub fn make_pixel_pdf(path: &Path, kinds: &[&str]) {
     b.save(path);
 }
 
-// ── PDF 읽기 (pikepdf/pypdf 대응) ──
+// ── PDF 읽기 ──
 
 pub fn load(path: &Path) -> Document {
     Document::load(path).unwrap()

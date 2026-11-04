@@ -17,8 +17,8 @@
 //!   `list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError>` (`ViewHistoryStore`도 구현한다)
 //! - `ViewHistoryStore::get_connection(&self) -> Result<Box<dyn DbConnection>, DbError>` (구 `_get_connection() -> mysql::Conn`), `DbConnection::execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>`
 //! - `backend::main::BookAccess`:
-//!   `get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HttpException>`
-//! - `backend::main::BookStub { title: String, category: Option<String> }`, `backend::main::HttpException { status_code: u16, detail: String }`
+//!   `get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HttpStatusError>`
+//! - `backend::main::BookStub { title: String, category: Option<String> }`, `backend::main::HttpStatusError { status_code: u16, detail: String }`
 //! - `backend::main::route_dependencies(path: &str) -> Vec<&'static str>`: 라우트에 붙은 의존성 이름 (`route.dependant.dependencies` 대응)
 //! - 인증 없는 요청은 401을 돌려준다.
 //! - 로그는 `log::warn!`로 남기고 `common::log_capture::LogCapture`로 수집한다.
@@ -30,7 +30,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use axum::http::Method;
-use backend::main::{AppDeps, AuthMode, BookAccess, BookStub, HttpException, InlineRunner, MAX_RECENT_VIEWS, ViewHistoryApi, app_with, route_dependencies};
+use backend::main::{AppDeps, AuthMode, BookAccess, BookStub, HttpStatusError, InlineRunner, MAX_RECENT_VIEWS, ViewHistoryApi, app_with, route_dependencies};
 use backend::view_history_store::{ViewHistoryError, ViewHistoryStore};
 use common::TestClient;
 use common::log_capture::LogCapture;
@@ -78,7 +78,7 @@ impl FakeStore {
 impl ViewHistoryApi for FakeStore {
     fn record_view(&self, email: &str, content_type: &str, book_id: i64, title: &str, category: &str) -> Result<(), ViewHistoryError> {
         if let Some(message) = self.record_error.lock().unwrap().clone() {
-            return Err(ViewHistoryError::RuntimeError(message));
+            return Err(ViewHistoryError::Storage(message));
         }
         self.recorded.lock().unwrap().push(json!({"email": email, "content_type": content_type, "book_id": book_id, "title": title, "category": category}));
         Ok(())
@@ -87,20 +87,20 @@ impl ViewHistoryApi for FakeStore {
     fn list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError> {
         self.list_calls.lock().unwrap().push(limit);
         if let Some(message) = self.list_error.lock().unwrap().clone() {
-            return Err(ViewHistoryError::RuntimeError(message));
+            return Err(ViewHistoryError::Storage(message));
         }
         Ok(self.list_result.lock().unwrap().clone())
     }
 }
 
-type AccessFn = dyn Fn(i64, &Value, &str) -> Result<BookStub, HttpException> + Send + Sync;
+type AccessFn = dyn Fn(i64, &Value, &str) -> Result<BookStub, HttpStatusError> + Send + Sync;
 
 /// `_get_book_and_ensure_viewer_access` 대역. 클로저가 결과를 정한다.
 struct FnAccess(Box<AccessFn>);
 
 #[async_trait]
 impl BookAccess for FnAccess {
-    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HttpException> {
+    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HttpStatusError> {
         (self.0)(book_id, payload, content_type)
     }
 }
@@ -190,7 +190,7 @@ mod test_record_book_view {
     #[tokio::test]
     async fn test_viewer_without_access_is_rejected_and_nothing_recorded() {
         let store = FakeStore::new();
-        let forbidden = FnAccess(Box::new(|_, _, _| Err(HttpException { status_code: 403, detail: "Access denied".to_string() })));
+        let forbidden = FnAccess(Box::new(|_, _, _| Err(HttpStatusError { status_code: 403, detail: "Access denied".to_string() })));
         let deps = AppDeps::new(AuthMode::AuthOnly(viewer_payload())).with_view_history_store(store.clone()).with_book_access(Arc::new(forbidden));
         let client = TestClient::with_app(app_with(deps));
 
@@ -203,7 +203,7 @@ mod test_record_book_view {
     #[tokio::test]
     async fn test_unknown_book_returns_404_and_records_nothing() {
         let store = FakeStore::new();
-        let missing = FnAccess(Box::new(|_, _, _| Err(HttpException { status_code: 404, detail: "Book not found".to_string() })));
+        let missing = FnAccess(Box::new(|_, _, _| Err(HttpStatusError { status_code: 404, detail: "Book not found".to_string() })));
         let client = admin_client(store.clone(), Some(Arc::new(missing)));
 
         let resp = client.request(Method::POST, "/books/view-history/999", None, Vec::new()).await;
@@ -214,7 +214,7 @@ mod test_record_book_view {
 
     #[tokio::test]
     async fn test_requires_authentication() {
-        // dependency_overrides를 비운 실제 앱이다.
+        // 인증 대역 없이 실제 앱이다.
         let client = TestClient::new();
         assert_eq!(client.request(Method::POST, "/books/view-history/1", None, Vec::new()).await.status, 401);
         assert_eq!(client.request(Method::POST, "/comics/view-history/1", None, Vec::new()).await.status, 401);
@@ -322,7 +322,7 @@ mod test_list_view_history {
 
     #[tokio::test]
     async fn test_unauthenticated_is_rejected() {
-        // dependency_overrides를 비운 실제 앱이다. 인증 검사가 스토어보다 먼저라 스토어 대역은 필요 없다.
+        // 인증 대역 없이 실제 앱이다. 인증 검사가 스토어보다 먼저라 스토어 대역은 필요 없다.
         let client = TestClient::new();
         assert_eq!(client.get("/view-history").await.status, 401);
     }

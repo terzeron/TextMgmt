@@ -197,7 +197,7 @@ pub fn pdf_text_auto(path: &Path) -> Result<(String, usize), String> {
     pdf_text_poppler(path).or_else(|_| pdf_text_primary(path))
 }
 
-/// 문서 구조를 못 여는 손상 PDF용 대비책(pypdf 대응): 스트림을 직접 훑어 글자열을 모은다.
+/// 문서 구조를 못 여는 손상 PDF용 대비책: 스트림을 직접 훑어 글자열을 모은다.
 pub fn pdf_text_fallback(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     let blocks = stream_blocks(&bytes);

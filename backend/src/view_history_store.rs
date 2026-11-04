@@ -68,14 +68,14 @@ const SELECT_ALL_SQL: &str = "
 /// 입력 오류와 DB 오류.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ViewHistoryError {
-    ValueError(String),
-    RuntimeError(String),
+    InvalidInput(String),
+    Storage(String),
 }
 
 impl fmt::Display for ViewHistoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ViewHistoryError::ValueError(msg) | ViewHistoryError::RuntimeError(msg) => f.write_str(msg),
+            ViewHistoryError::InvalidInput(msg) | ViewHistoryError::Storage(msg) => f.write_str(msg),
         }
     }
 }
@@ -85,7 +85,7 @@ impl std::error::Error for ViewHistoryError {}
 impl From<DbError> for ViewHistoryError {
     fn from(e: DbError) -> Self {
         match e {
-            DbError::IntegrityError(msg) | DbError::Other(msg) => ViewHistoryError::RuntimeError(msg),
+            DbError::Constraint(msg) | DbError::Other(msg) => ViewHistoryError::Storage(msg),
         }
     }
 }
@@ -140,7 +140,7 @@ impl ViewHistoryStore {
     /// 조회 1건을 기록하고 사용자·유형별 보관 상한을 유지한다. 실패하면 롤백하고 오류를 돌려준다.
     pub fn record_view(&self, email: &str, content_type: &str, book_id: i64, title: &str, category: &str) -> Result<(), ViewHistoryError> {
         if !CONTENT_TYPES.contains(&content_type) {
-            return Err(ViewHistoryError::ValueError(format!("unknown content_type: {content_type}")));
+            return Err(ViewHistoryError::InvalidInput(format!("unknown content_type: {content_type}")));
         }
         let now = self.clock.now() as i64;
         let mut conn = self.get_connection()?;

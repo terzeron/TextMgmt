@@ -13,18 +13,18 @@ bookstore_struct!(
 
 impl Yes24Bookstore {
     /// 상세 페이지 카테고리. `관련분류` 아래 카테고리 링크를 `a > b`로 잇는다.
-    pub fn extract_yes24_category(&self, soup: &str) -> String {
-        Store::Yes24.extract_book_info(soup).category
+    pub fn extract_yes24_category(&self, markup: &str) -> String {
+        Store::Yes24.extract_book_info(markup).category
     }
 
     /// 상세 페이지 ISBN. ISBN13, ISBN10, ISBN, 숫자 10~13자리 순으로 찾는다.
-    pub fn extract_yes24_isbn(&self, soup: &str) -> String {
-        Store::Yes24.extract_book_info(soup).isbn
+    pub fn extract_yes24_isbn(&self, markup: &str) -> String {
+        Store::Yes24.extract_book_info(markup).isbn
     }
 
-    /// 조회가 실패할 수 있는 soup용. 실패하면 빈 문자열이다.
-    pub fn extract_yes24_category_soup(&self, soup: &dyn SoupSource) -> String {
-        match soup.select(r#"a[href*="/product/category/display/"]"#) {
+    /// 조회가 실패할 수 있는 markup용. 실패하면 빈 문자열이다.
+    pub fn extract_yes24_category_from_source(&self, markup: &dyn MarkupSource) -> String {
+        match markup.select(r#"a[href*="/product/category/display/"]"#) {
             Ok(labels) => join_unique(labels.into_iter().map(|l| l.trim().to_owned()).filter(|l| !l.is_empty()), " > "),
             Err(e) => {
                 log::error!("카테고리 추출 중 오류: {e}");
@@ -33,9 +33,9 @@ impl Yes24Bookstore {
         }
     }
 
-    /// 조회가 실패할 수 있는 soup용. 실패하면 빈 문자열이다.
-    pub fn extract_yes24_isbn_soup(&self, soup: &dyn SoupSource) -> String {
-        match soup.get_text() {
+    /// 조회가 실패할 수 있는 markup용. 실패하면 빈 문자열이다.
+    pub fn extract_yes24_isbn_from_source(&self, markup: &dyn MarkupSource) -> String {
+        match markup.get_text() {
             Ok(text) => isbn_from_text(&text),
             Err(e) => {
                 log::error!("ISBN 추출 중 오류: {e}");
@@ -44,18 +44,18 @@ impl Yes24Bookstore {
         }
     }
 
-    /// 조회가 실패할 수 있는 soup용. 도중에 실패하면 거기까지 뽑은 부분 결과를 돌려준다.
-    pub fn extract_book_info_soup(&self, soup: &dyn SoupSource) -> Value {
+    /// 조회가 실패할 수 있는 markup용. 도중에 실패하면 거기까지 뽑은 부분 결과를 돌려준다.
+    pub fn extract_book_info_from_source(&self, markup: &dyn MarkupSource) -> Value {
         let mut title = String::new();
         let mut author = String::new();
         let partial = (|| -> Result<(String, String), String> {
-            if let Some(t) = soup.find("h2")? {
+            if let Some(t) = markup.find("h2")? {
                 title = t.trim().to_owned();
             }
-            if let Some(a) = soup.find("span")? {
+            if let Some(a) = markup.find("span")? {
                 author = a.trim().to_owned();
             }
-            Ok((self.extract_yes24_category_soup(soup), self.extract_yes24_isbn_soup(soup)))
+            Ok((self.extract_yes24_category_from_source(markup), self.extract_yes24_isbn_from_source(markup)))
         })();
         match partial {
             Ok((category, isbn)) => info_value(&title, &author, &category, &isbn),
@@ -77,7 +77,7 @@ fn isbn_from_text(text: &str) -> String {
     String::new()
 }
 
-impl AbstractBookstore for Yes24Bookstore {
+impl Bookstore for Yes24Bookstore {
     bookstore_common!(Store::Yes24.base_url(), author_first = false);
     default_keyword_search!();
 
@@ -89,16 +89,16 @@ impl AbstractBookstore for Yes24Bookstore {
         Store::Yes24.build_isbn_search_url(isbn)
     }
 
-    fn extract_search_links(&self, soup: &str) -> Vec<String> {
-        let links = Store::Yes24.extract_search_links(soup);
+    fn extract_search_links(&self, markup: &str) -> Vec<String> {
+        let links = Store::Yes24.extract_search_links(markup);
         if self.verbose {
             log::info!("yes24에서 {}개의 상세 페이지 링크를 찾았습니다", links.len());
         }
         links
     }
 
-    fn extract_book_info(&self, soup: &str) -> Value {
-        lib_info(Store::Yes24.extract_book_info(soup))
+    fn extract_book_info(&self, markup: &str) -> Value {
+        lib_info(Store::Yes24.extract_book_info(markup))
     }
 }
 
@@ -117,14 +117,14 @@ impl AladinBookstore {
         crate::strip_trailing_number(title)
     }
 
-    pub fn extract_aladin_isbn(&self, soup: &str) -> String {
-        Store::Aladin.extract_book_info(soup).isbn
+    pub fn extract_aladin_isbn(&self, markup: &str) -> String {
+        Store::Aladin.extract_book_info(markup).isbn
     }
 
-    /// 조회가 실패할 수 있는 soup용. 실패하면 빈 문자열이다.
-    pub fn extract_aladin_isbn_soup(&self, soup: &dyn SoupSource) -> String {
+    /// 조회가 실패할 수 있는 markup용. 실패하면 빈 문자열이다.
+    pub fn extract_aladin_isbn_from_source(&self, markup: &dyn MarkupSource) -> String {
         let find = || -> Result<String, String> {
-            for text in soup.select("#Ere_prod_allwrap div.Ere_prod_mconts_R > div.conts_info_list1 > ul li")? {
+            for text in markup.select("#Ere_prod_allwrap div.Ere_prod_mconts_R > div.conts_info_list1 > ul li")? {
                 let text = text.trim();
                 if text.starts_with("ISBN")
                     && let Some(m) = rx!(r"(\d{13})").captures(text)
@@ -132,7 +132,7 @@ impl AladinBookstore {
                     return Ok(m[1].to_owned());
                 }
             }
-            for text in soup.select("#Ere_prod_allwrap > div.Ere_prod_middlewrap div.Ere_prod_mconts_R ul > li")? {
+            for text in markup.select("#Ere_prod_allwrap > div.Ere_prod_middlewrap div.Ere_prod_mconts_R ul > li")? {
                 let text = text.trim();
                 if text.contains("ISBN")
                     && let Some(m) = rx!(r"(\d{10,13})").captures(text)
@@ -149,7 +149,7 @@ impl AladinBookstore {
     }
 }
 
-impl AbstractBookstore for AladinBookstore {
+impl Bookstore for AladinBookstore {
     bookstore_common!(Store::Aladin.base_url(), author_first = true);
     default_keyword_search!();
 
@@ -166,8 +166,8 @@ impl AbstractBookstore for AladinBookstore {
         Store::Aladin.build_isbn_search_url(isbn)
     }
 
-    fn extract_search_links(&self, soup: &str) -> Vec<String> {
-        let mut links = Store::Aladin.extract_search_links(soup);
+    fn extract_search_links(&self, markup: &str) -> Vec<String> {
+        let mut links = Store::Aladin.extract_search_links(markup);
         links.truncate(self.max_results);
         if self.verbose {
             log::info!("알라딘에서 {}개의 상세 페이지 링크를 찾았습니다.", links.len());
@@ -175,8 +175,8 @@ impl AbstractBookstore for AladinBookstore {
         links
     }
 
-    fn extract_book_info(&self, soup: &str) -> Value {
-        lib_info(Store::Aladin.extract_book_info(soup))
+    fn extract_book_info(&self, markup: &str) -> Value {
+        lib_info(Store::Aladin.extract_book_info(markup))
     }
 }
 
@@ -189,7 +189,7 @@ bookstore_struct!(
     KyoboBookstore, supports_isbn = true
 );
 
-impl AbstractBookstore for KyoboBookstore {
+impl Bookstore for KyoboBookstore {
     bookstore_common!(Store::Kyobo.base_url(), author_first = false);
     default_keyword_search!();
 
@@ -201,8 +201,8 @@ impl AbstractBookstore for KyoboBookstore {
         Store::Kyobo.build_isbn_search_url(isbn)
     }
 
-    fn extract_search_links(&self, soup: &str) -> Vec<String> {
-        let mut links = Store::Kyobo.extract_search_links(soup);
+    fn extract_search_links(&self, markup: &str) -> Vec<String> {
+        let mut links = Store::Kyobo.extract_search_links(markup);
         links.truncate(self.max_results);
         if self.verbose {
             log::info!("Kyobo에서 {}개의 상세 페이지 링크를 찾았습니다", links.len());
@@ -210,8 +210,8 @@ impl AbstractBookstore for KyoboBookstore {
         links
     }
 
-    fn extract_book_info(&self, soup: &str) -> Value {
-        lib_info(Store::Kyobo.extract_book_info(soup))
+    fn extract_book_info(&self, markup: &str) -> Value {
+        lib_info(Store::Kyobo.extract_book_info(markup))
     }
 }
 
@@ -232,8 +232,8 @@ const RIDI_BLOCK_STATUSES: [u16; 3] = [403, 418, 429];
 
 impl RidibooksBookstore {
     /// 첫 `ISBN` 라벨 `div` 다음 형제 `div`에서 13자리 코드를 뽑는다.
-    pub fn extract_ridi_isbn(&self, soup: &str) -> String {
-        let doc = Html::parse_document(soup);
+    pub fn extract_ridi_isbn(&self, markup: &str) -> String {
+        let doc = Html::parse_document(markup);
         for label in doc.select(sel!("div")) {
             if text_strip(label) != "ISBN" {
                 continue;
@@ -248,10 +248,10 @@ impl RidibooksBookstore {
         String::new()
     }
 
-    /// 조회가 실패할 수 있는 soup용. 실패하면 빈 문자열이다.
+    /// 조회가 실패할 수 있는 markup용. 실패하면 빈 문자열이다.
     /// 형제 관계를 알 수 없어서 `find_all("div")` 목록에서 `ISBN` 바로 다음 항목을 본다.
-    pub fn extract_ridi_isbn_soup(&self, soup: &dyn SoupSource) -> String {
-        match soup.find_all("div") {
+    pub fn extract_ridi_isbn_from_source(&self, markup: &dyn MarkupSource) -> String {
+        match markup.find_all("div") {
             Ok(divs) => {
                 let texts: Vec<&str> = divs.iter().map(|d| d.trim()).collect();
                 texts.windows(2).find(|w| w[0] == "ISBN" && rx!(r"^\d{13}$").is_match(w[1])).map_or_else(String::new, |w| w[1].to_owned())
@@ -310,7 +310,7 @@ impl RidibooksBookstore {
             let paths: Vec<String> = [pair("parent_category_name", "category_name"), pair("parent_category_name2", "category_name2")].into_iter().flatten().collect();
             let detail_url = if truthy(book_id) { format!("{RIDI_BASE_URL}/books/{}", json_text(book_id)) } else { String::new() };
             if !title.is_empty() && !detail_url.is_empty() {
-                results.push((title, author, paths.join(" || "), detail_url, search_url.clone(), String::new()));
+                results.push(SearchRow { title, author, category: paths.join(" || "), detail_url, search_url: search_url.clone(), isbn: String::new() });
             }
         }
         if self.verbose {
@@ -320,7 +320,7 @@ impl RidibooksBookstore {
     }
 }
 
-impl AbstractBookstore for RidibooksBookstore {
+impl Bookstore for RidibooksBookstore {
     bookstore_common!(RIDI_BASE_URL, author_first = true);
     api_keyword_search!(search_api);
 
@@ -333,12 +333,12 @@ impl AbstractBookstore for RidibooksBookstore {
     }
 
     /// RIDI는 `search_by_keyword`를 대체하므로 쓰이지 않는다.
-    fn extract_search_links(&self, _soup: &str) -> Vec<String> {
+    fn extract_search_links(&self, _markup: &str) -> Vec<String> {
         Vec::new()
     }
 
-    fn extract_book_info(&self, soup: &str) -> Value {
-        let doc = Html::parse_document(soup);
+    fn extract_book_info(&self, markup: &str) -> Value {
+        let doc = Html::parse_document(markup);
         let (mut title, mut author, mut category) = (String::new(), String::new(), String::new());
 
         // 제목: og:title 메타 우선, 실패하면 <h1>
@@ -401,7 +401,7 @@ impl AbstractBookstore for RidibooksBookstore {
             category = paths.join(" || ");
         }
 
-        info_value(&title, &author, &category, &self.extract_ridi_isbn(soup))
+        info_value(&title, &author, &category, &self.extract_ridi_isbn(markup))
     }
 }
 
@@ -417,12 +417,12 @@ bookstore_struct!(
 const NAVER_SHOPPING_BASE_URL: &str = "https://search.shopping.naver.com";
 
 impl NaverShoppingBookstore {
-    /// 조회가 실패할 수 있는 soup용. 도중에 실패하면 거기까지 뽑은 부분 결과를 돌려준다.
-    pub fn extract_book_info_soup(&self, soup: &dyn SoupSource) -> Value {
+    /// 조회가 실패할 수 있는 markup용. 도중에 실패하면 거기까지 뽑은 부분 결과를 돌려준다.
+    pub fn extract_book_info_from_source(&self, markup: &dyn MarkupSource) -> Value {
         let find_title = || -> Result<String, String> {
-            let found = match soup.find("h2")? {
+            let found = match markup.find("h2")? {
                 Some(t) => Some(t),
-                None => soup.find("div")?,
+                None => markup.find("div")?,
             };
             Ok(found.map(|t| t.trim().to_owned()).unwrap_or_default())
         };
@@ -436,7 +436,7 @@ impl NaverShoppingBookstore {
     }
 }
 
-impl AbstractBookstore for NaverShoppingBookstore {
+impl Bookstore for NaverShoppingBookstore {
     bookstore_common!(NAVER_SHOPPING_BASE_URL, author_first = false);
     default_keyword_search!();
 
@@ -444,9 +444,9 @@ impl AbstractBookstore for NaverShoppingBookstore {
         format!("{NAVER_SHOPPING_BASE_URL}/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&query={}&sort=REL", quote(keyword, "/"))
     }
 
-    fn extract_search_links(&self, soup: &str) -> Vec<String> {
+    fn extract_search_links(&self, markup: &str) -> Vec<String> {
         let mut links = Vec::new();
-        let doc = Html::parse_document(soup);
+        let doc = Html::parse_document(markup);
         // 모든 <script>에서 JSON 텍스트를 찾는다
         let raw = doc.select(sel!("script")).map(text_raw).find(|t| t.trim().starts_with('{') && t.contains("SearchAll"));
         let Some(raw) = raw else {
@@ -496,8 +496,8 @@ impl AbstractBookstore for NaverShoppingBookstore {
     }
 
     /// CSS 클래스에 해시 접미사가 붙어서 접두사로 찾는다.
-    fn extract_book_info(&self, soup: &str) -> Value {
-        let doc = Html::parse_document(soup);
+    fn extract_book_info(&self, markup: &str) -> Value {
+        let doc = Html::parse_document(markup);
         let title_prefix = "bookTitle_book_name__";
         let title = find_by_class_prefix(&doc, sel!("h2"), title_prefix).or_else(|| find_by_class_prefix(&doc, sel!("div"), title_prefix)).map(text_strip).unwrap_or_default();
 

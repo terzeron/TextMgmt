@@ -35,15 +35,15 @@ use classifier::Classify;
 
 /// 책 관리 작업이 실패했다.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeError(pub String);
+pub struct BookManagerError(pub String);
 
-impl std::fmt::Display for RuntimeError {
+impl std::fmt::Display for BookManagerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-impl std::error::Error for RuntimeError {}
+impl std::error::Error for BookManagerError {}
 
 pub(crate) use api_contract::UNIMPLEMENTED;
 pub use api_contract::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
@@ -392,20 +392,20 @@ impl BookManager {
     }
 
     /// 환경 변수로 만든다. `TM_BOOK_DIR`이 없으면 오류다. `es_factory`는 색인 이름(`TM_ES_BOOK_INDEX`, 없으면 빈 문자열)을 받는다.
-    pub fn from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, RuntimeError> {
+    pub fn from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, BookManagerError> {
         Self::from_env_with(env, es_factory, |deps| deps)
     }
 
     /// `from_env`와 같으나, 기본 대역 묶음을 `customize`로 고쳐 쓴다(예: loader 기반 `FileReader`를 꽂는다).
-    pub fn from_env_with(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<BookManager, RuntimeError> {
+    pub fn from_env_with(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<BookManager, BookManagerError> {
         let Some(dir) = env("TM_BOOK_DIR") else {
-            return Err(RuntimeError("The environment variable TM_BOOK_DIR is not set.".to_string()));
+            return Err(BookManagerError("The environment variable TM_BOOK_DIR is not set.".to_string()));
         };
         let path_prefix = PathBuf::from(dir);
         log::debug!("{}", path_prefix.display());
         let index_name = env("TM_ES_BOOK_INDEX").unwrap_or_default();
         let es = es_factory(&index_name);
-        es.create_index().map_err(|e| RuntimeError(format!("create_index failed: {e}")))?;
+        es.create_index().map_err(|e| BookManagerError(format!("create_index failed: {e}")))?;
         let mut deps = BookManagerDeps::new(path_prefix, es);
         if let Some(program) = env("TM_LOADER_BIN").filter(|p| !p.is_empty()) {
             deps = deps.with_loader_program(&program);
@@ -416,14 +416,14 @@ impl BookManager {
     }
 
     /// 이미 연결한 ES manager로 운영 인스턴스를 만든다.
-    pub fn from_env_with_es(env: EnvFn, es: Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<BookManager, RuntimeError> {
+    pub fn from_env_with_es(env: EnvFn, es: Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<BookManager, BookManagerError> {
         let Some(dir) = env("TM_BOOK_DIR") else {
-            return Err(RuntimeError("The environment variable TM_BOOK_DIR is not set.".to_string()));
+            return Err(BookManagerError("The environment variable TM_BOOK_DIR is not set.".to_string()));
         };
         let path_prefix = PathBuf::from(dir);
         log::debug!("{}", path_prefix.display());
         let index_name = env("TM_ES_BOOK_INDEX").unwrap_or_default();
-        es.create_index().map_err(|e| RuntimeError(format!("create_index failed: {e}")))?;
+        es.create_index().map_err(|e| BookManagerError(format!("create_index failed: {e}")))?;
         let mut deps = BookManagerDeps::new(path_prefix, es);
         if let Some(program) = env("TM_LOADER_BIN").filter(|p| !p.is_empty()) {
             deps = deps.with_loader_program(&program);

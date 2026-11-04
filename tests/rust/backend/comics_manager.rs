@@ -11,7 +11,7 @@ fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
     move |key: &str| map.get(key).cloned()
 }
 
-fn build(pairs: &[(&str, &str)], es: &Arc<FakeEsManager>) -> Result<ComicsManager, backend::comics_manager::RuntimeError> {
+fn build(pairs: &[(&str, &str)], es: &Arc<FakeEsManager>) -> Result<ComicsManager, backend::comics_manager::BookManagerError> {
     let env = env_of(pairs);
     let es = es.clone();
     ComicsManager::from_env(&env, &move |_| es.clone() as Arc<dyn EsManagerApi>)

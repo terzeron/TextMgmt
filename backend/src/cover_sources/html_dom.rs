@@ -16,7 +16,7 @@ struct Node {
     children: Vec<Child>,
 }
 
-pub struct Soup {
+pub struct HtmlDom {
     nodes: Vec<Node>,
 }
 
@@ -84,8 +84,8 @@ fn read_tag(text: &str, start: usize) -> (String, Vec<(String, String)>, bool, b
     (name, attrs, closing, self_closing, (i + 1).min(bytes.len()))
 }
 
-impl Soup {
-    pub fn parse(html: &str) -> Soup {
+impl HtmlDom {
+    pub fn parse(html: &str) -> HtmlDom {
         let mut nodes = vec![Node { tag: String::new(), attrs: Vec::new(), parent: None, children: Vec::new() }];
         let mut current = 0usize;
         let bytes = html.as_bytes();
@@ -134,7 +134,7 @@ impl Soup {
                 i += 1;
             }
         }
-        Soup { nodes }
+        HtmlDom { nodes }
     }
 
     pub fn root(&self) -> usize {
@@ -173,7 +173,7 @@ impl Soup {
         self.nodes[idx].parent.filter(|p| *p != 0)
     }
 
-    pub fn has_ancestor(&self, idx: usize, pred: impl Fn(&Soup, usize) -> bool) -> bool {
+    pub fn has_ancestor(&self, idx: usize, pred: impl Fn(&HtmlDom, usize) -> bool) -> bool {
         let mut walk = self.parent(idx);
         while let Some(p) = walk {
             if pred(self, p) {

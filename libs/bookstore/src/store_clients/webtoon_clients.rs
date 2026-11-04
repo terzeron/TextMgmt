@@ -36,7 +36,7 @@ impl NaverWebtoonBookstore {
             let category = array_field(webtoon, "genreList").iter().map(|g| str_field(g, "description")).filter(|d| !d.is_empty()).collect::<Vec<_>>().join("/");
             let detail_url = if truthy(title_id) { format!("{NAVER_WEBTOON_BASE_URL}/webtoon/list?titleId={}", json_text(title_id)) } else { String::new() };
             if !title.is_empty() && !detail_url.is_empty() {
-                results.push((title, author, category, detail_url, search_url.clone(), String::new()));
+                results.push(SearchRow { title, author, category, detail_url, search_url: search_url.clone(), isbn: String::new() });
             }
         }
         if self.verbose {
@@ -46,7 +46,7 @@ impl NaverWebtoonBookstore {
     }
 }
 
-impl AbstractBookstore for NaverWebtoonBookstore {
+impl Bookstore for NaverWebtoonBookstore {
     bookstore_common!(NAVER_WEBTOON_BASE_URL, author_first = false);
     api_keyword_search!(search_api);
 
@@ -103,7 +103,7 @@ impl KakaoWebtoonBookstore {
             let slug = if seo_id.is_empty() { &title } else { &seo_id };
             let detail_url = if truthy(content_id) { format!("{KAKAO_WEBTOON_BASE_URL}/content/{}/{}", quote(slug, "/"), json_text(content_id)) } else { String::new() };
             if !title.is_empty() && !detail_url.is_empty() {
-                results.push((title, author, str_field(content, "genre"), detail_url, search_url.clone(), String::new()));
+                results.push(SearchRow { title, author, category: str_field(content, "genre"), detail_url, search_url: search_url.clone(), isbn: String::new() });
             }
         }
         if self.verbose {
@@ -113,7 +113,7 @@ impl KakaoWebtoonBookstore {
     }
 }
 
-impl AbstractBookstore for KakaoWebtoonBookstore {
+impl Bookstore for KakaoWebtoonBookstore {
     bookstore_common!(KAKAO_WEBTOON_BASE_URL, author_first = false);
     api_keyword_search!(search_api);
 
@@ -170,7 +170,7 @@ impl BomtoonBookstore {
             let category = array_field(content, "tags").iter().take(BOMTOON_CATEGORY_TAG_COUNT).map(|t| json_text(Some(t))).collect::<Vec<_>>().join("/");
             let detail_url = if alias.is_empty() { String::new() } else { format!("{BOMTOON_BASE_URL}/detail/{}", quote(&alias, "/")) };
             if !title.is_empty() && !detail_url.is_empty() {
-                results.push((title, author, category, detail_url, search_url.clone(), String::new()));
+                results.push(SearchRow { title, author, category, detail_url, search_url: search_url.clone(), isbn: String::new() });
             }
             if results.len() >= self.max_results {
                 break;
@@ -183,7 +183,7 @@ impl BomtoonBookstore {
     }
 }
 
-impl AbstractBookstore for BomtoonBookstore {
+impl Bookstore for BomtoonBookstore {
     bookstore_common!(BOMTOON_BASE_URL, author_first = false);
     api_keyword_search!(search_api);
 
@@ -228,7 +228,7 @@ impl LezhinBookstore {
             let category = array_field(content, "genres").iter().map(|g| json_text(Some(g))).collect::<Vec<_>>().join("/");
             let detail_url = if alias.is_empty() { String::new() } else { format!("{LEZHIN_BASE_URL}/ko/comic/{}", quote(&alias, "/")) };
             if !title.is_empty() && !detail_url.is_empty() {
-                results.push((title, author, category, detail_url, search_url.clone(), String::new()));
+                results.push(SearchRow { title, author, category, detail_url, search_url: search_url.clone(), isbn: String::new() });
             }
         }
         if self.verbose {
@@ -238,7 +238,7 @@ impl LezhinBookstore {
     }
 }
 
-impl AbstractBookstore for LezhinBookstore {
+impl Bookstore for LezhinBookstore {
     bookstore_common!(LEZHIN_BASE_URL, author_first = false);
     api_keyword_search!(search_api);
 
@@ -336,7 +336,14 @@ impl ToptoonBookstore {
             let meta = &comic["meta"];
             let author = [meta.pointer("/authorList/authorStr"), meta.pointer("/author/authorString")].into_iter().find(|v| truthy(*v)).map(|v| json_text(v)).unwrap_or_default();
             let category = array_field(meta, "genre").iter().map(|g| str_field(g, "name")).filter(|n| !n.is_empty()).collect::<Vec<_>>().join("/");
-            results.push((str_field(meta, "title"), author, category, format!("{TOPTOON_BASE_URL}{}", str_field(meta, "comicsListUrl")), search_url.clone(), String::new()));
+            results.push(SearchRow {
+                title: str_field(meta, "title"),
+                author,
+                category,
+                detail_url: format!("{TOPTOON_BASE_URL}{}", str_field(meta, "comicsListUrl")),
+                search_url: search_url.clone(),
+                isbn: String::new(),
+            });
         }
         if self.verbose {
             log::info!("탑툰에서 {}개의 검색 결과를 찾았습니다", results.len());
@@ -345,7 +352,7 @@ impl ToptoonBookstore {
     }
 }
 
-impl AbstractBookstore for ToptoonBookstore {
+impl Bookstore for ToptoonBookstore {
     bookstore_common!(TOPTOON_BASE_URL, author_first = false);
     api_keyword_search!(search_api);
 

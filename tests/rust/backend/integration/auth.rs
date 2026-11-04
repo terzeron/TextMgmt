@@ -8,16 +8,16 @@
 //!   - `determine_role(email: &str) -> Option<String>`
 //!   - `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String` (4인자 통일안. None은 빈 문자열)
 //!   - `create_refresh_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`
-//!   - `decode_refresh_token(token: &str) -> Result<Value, HTTPException>`, `extract_payload<R: RequestParts>(req: &R) -> Result<Value, HTTPException>`
-//!   - `async require_auth<R: RequestParts>(req: &R) -> Result<Value, HTTPException>`, `async require_admin<R: RequestParts>(req: &R) -> Result<Value, HTTPException>`
+//!   - `decode_refresh_token(token: &str) -> Result<Value, HttpStatusError>`, `extract_payload<R: RequestParts>(req: &R) -> Result<Value, HttpStatusError>`
+//!   - `async require_auth<R: RequestParts>(req: &R) -> Result<Value, HttpStatusError>`, `async require_admin<R: RequestParts>(req: &R) -> Result<Value, HttpStatusError>`
 //!   - `require_auth_with(req, resolver: &dyn RoleResolver)`, `require_admin_with(..)` (async, 같은 반환형. 역할 판정을 대역으로 바꾼다)
 //!   - `trait RequestParts { fn header(&self, name: &str) -> Option<String>; fn cookie(&self, name: &str) -> Option<String>; }`
-//!   - `struct HTTPException { pub status_code: u16, pub detail: String }` + `HTTPException::new(u16, &str)`, `struct SystemExit(pub i32)`
-//!   - `load_jwt_secret(env: EnvFn) -> Result<String, SystemExit>` (`EnvFn = &dyn Fn(&str) -> Option<String>`.
+//!   - `struct HttpStatusError { pub status_code: u16, pub detail: String }` + `HttpStatusError::new(u16, &str)`, `struct FatalConfigError(pub i32)`
+//!   - `load_jwt_secret(env: EnvFn) -> Result<String, FatalConfigError>` (`EnvFn = &dyn Fn(&str) -> Option<String>`.
 //!   - `ACCESS_TOKEN_EXPIRATION_SECONDS: i64`
 //! - `backend::main`
 //!   - `app() -> axum::Router`, `app_with(deps: AppDeps) -> axum::Router`, `AppDeps::new(auth: AuthMode) -> AppDeps`
-//!   - `AuthMode::{Cookies, Fixed(Value), Split { auth: Value, admin: Value }, AuthOnly(Value), Shared(..)}`: `require_auth`/`require_admin` dependency_overrides 대응
+//!   - `AuthMode::{Cookies, Fixed(Value), Split { auth: Value, admin: Value }, AuthOnly(Value), Shared(..)}`: `require_auth`/`require_admin` 인증 대역
 //!     (`AuthOnly`는 require_auth만 고정하고 require_admin은 실제 구현을 쓴다. 구 `Real`/`Overrides`는 `Cookies`/`Split`)
 //!   - `AppDeps` 소비형 빌더: `.with_google_verifier(Arc<dyn GoogleVerifier>)`, `.with_role_resolver(Arc<dyn RoleResolver>)`, `.with_refresh_token_store(Arc<dyn RefreshTokenStoreApi>)`
 //!   - `trait GoogleVerifier { fn client_id(&self) -> Option<String>; fn verify(&self, credential: &str, audience: &str) -> Result<Value, String>; }`
@@ -28,9 +28,9 @@
 //!   - `get_cookie_settings() -> (bool, String)`, `set_auth_cookies(&mut CustomJSONResponse, &str, &str)`, `clear_auth_cookies(&mut CustomJSONResponse)`
 //!   - `CustomJSONResponse::{new(Value) -> Self, headers(&self) -> &HeaderMap}`, `custom_jsonable_encoder(&Value) -> Value`
 //!   - `client_ip(headers: &HeaderMap, client_host: Option<&str>) -> String`, `request_ip_prefix(headers: &HeaderMap, client_host: Option<&str>) -> String`
-//!   - `async validation_exception_handler(&Parts, &RequestValidationError) -> Response`, `async http_exception_handler(&Parts, &HTTPException) -> Response`,
+//!   - `async validation_exception_handler(&Parts, &RequestValidationError) -> Response`, `async http_exception_handler(&Parts, &HttpStatusError) -> Response`,
 //!     `async general_exception_handler(&Parts, &(dyn Error + Send + Sync)) -> Response`, `RequestValidationError::new(Vec<Value>, Value /*body*/)`
-//!   - `route_table() -> Vec<RouteInfo>`, `struct RouteInfo { path: String, methods: Vec<String>, dependencies: Vec<String> }` (FastAPI `route.dependant.dependencies` 대응)
+//!   - `route_table() -> Vec<RouteInfo>`, `struct RouteInfo { path: String, methods: Vec<String>, dependencies: Vec<String> }`
 //! - `backend::refresh_token_store`: `trait RefreshTokenStoreApi`(store_issued, rotate, revoke_family, get_token_observation, list_sessions, revoke_session),
 //!   `SessionQuery { status, current_family_id, page, page_size, email }`, `StoreError::Unsupported(String)`
 //! - 로그 캡처는 `common::log_capture::LogCapture`(`log` crate 기반), 환경 변수는 `common::env::EnvGuard`.
@@ -48,7 +48,7 @@ use crate::common::shared_fixtures::{FakeStore, decode, encode_hs256, fixture, m
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request};
-use backend::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, TokenIssuer};
+use backend::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, HttpStatusError, TokenIssuer};
 use backend::main::{ACCESS_COOKIE_NAME, AppDeps, AuthMode, GoogleVerifier, REFRESH_COOKIE_NAME, RequestValidationError, app_with, observation_hash};
 use backend::refresh_token_store::RefreshTokenStoreApi;
 use common::env::EnvGuard;
@@ -140,7 +140,7 @@ impl TokenIssuer for FixedTokens {
         "rjwt".to_string()
     }
 
-    fn decode_refresh_token(&self, token: &str) -> Result<Value, HTTPException> {
+    fn decode_refresh_token(&self, token: &str) -> Result<Value, HttpStatusError> {
         if token == "rjwt" {
             return Ok(json!({"type": "refresh", "email": "e@example.com", "fid": "family1", "jti": "new-token"}));
         }
@@ -911,7 +911,7 @@ async fn test_handlers_direct() {
     assert_eq!(resp.status().as_u16(), 422);
     assert!(!logs.text().contains(secret));
 
-    let http_exc = HTTPException::new(404, "no");
+    let http_exc = HttpStatusError::new(404, "no");
     let resp = backend::main::http_exception_handler(&parts, &http_exc).await;
     assert_eq!(resp.status().as_u16(), 404);
 

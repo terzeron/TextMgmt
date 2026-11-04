@@ -1,7 +1,7 @@
-//! MySQL 접근 추상화. pymysql `DictCursor`의 의미(`%s` 자리표시자, 열 이름 맵 행, 수동 커밋, IntegrityError)를 Diesel 위에서 재현한다.
+//! MySQL 접근 추상화. Diesel 위에서 `%s` 자리표시자, 열 이름 맵 행, 수동 커밋, 제약 위반 오류를 제공한다.
 //! 서비스 코드는 `DbConnection`/`ConnectionProvider`만 알고, 테스트는 가짜 연결을 주입한다. 설계: docs/rust-test-seams.md 3.4
 //!
-//! 시간대: Diesel은 연결을 열 때 `time_zone`을 `+00:00`으로 바꾸므로, `connect`가 서버 전역 설정으로 되돌려 pymysql과 맞춘다.
+//! 시간대: Diesel은 연결을 열 때 `time_zone`을 `+00:00`으로 바꾸므로, `connect`가 서버 전역 설정으로 되돌린다.
 
 pub mod category_mapping;
 
@@ -116,15 +116,15 @@ pub type Row = BTreeMap<String, DbValue>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DbError {
-    /// `pymysql.IntegrityError`: 키 중복, 외래 키, NOT NULL 위반.
-    IntegrityError(String),
+    /// 제약 위반: 키 중복, 외래 키, NOT NULL 위반.
+    Constraint(String),
     Other(String),
 }
 
 impl fmt::Display for DbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DbError::IntegrityError(msg) => write!(f, "무결성 오류: {msg}"),
+            DbError::Constraint(msg) => write!(f, "무결성 오류: {msg}"),
             DbError::Other(msg) => write!(f, "DB 오류: {msg}"),
         }
     }
@@ -215,12 +215,12 @@ fn percent_encode(s: &str) -> String {
 }
 
 pub fn mysql_url(c: &MysqlConfig) -> String {
-    // libmysqlclient는 "localhost"를 유닉스 소켓으로 해석한다. pymysql처럼 항상 TCP로 붙게 루프백 주소로 바꾼다.
+    // libmysqlclient는 "localhost"를 유닉스 소켓으로 해석한다. 항상 TCP로 붙게 루프백 주소로 바꾼다.
     let host = if c.host == "localhost" { "127.0.0.1" } else { c.host.as_str() };
     format!("mysql://{}:{}@{}:{}/{}", percent_encode(&c.user), percent_encode(&c.password), host, c.port, c.database)
 }
 
-/// pymysql의 `%s`를 MySQL 준비된 문장의 `?`로 바꾼다. `%%`는 `%` 한 글자다.
+/// SQL의 `%s` 자리표시자를 MySQL 준비된 문장의 `?`로 바꾼다. `%%`는 `%` 한 글자다.
 pub fn to_mysql_placeholders(sql: &str) -> String {
     let mut out = String::with_capacity(sql.len());
     let mut chars = sql.chars().peekable();
@@ -251,7 +251,7 @@ pub fn to_mysql_placeholders(sql: &str) -> String {
 fn map_error(e: DieselError) -> DbError {
     match e {
         DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation | DatabaseErrorKind::ForeignKeyViolation | DatabaseErrorKind::NotNullViolation | DatabaseErrorKind::CheckViolation, info) => {
-            DbError::IntegrityError(info.message().to_string())
+            DbError::Constraint(info.message().to_string())
         }
         DieselError::DatabaseError(_, info) => DbError::Other(info.message().to_string()),
         other => DbError::Other(other.to_string()),
@@ -401,10 +401,10 @@ impl DbConnection for MysqlDbConnection {
     }
 }
 
-/// 새 연결을 연다. pymysql 기본값처럼 자동 커밋을 끄고(`autocommit=0`), 커밋은 `commit()`으로 명시한다.
+/// 새 연결을 연다. 자동 커밋을 끄고(`autocommit=0`), 커밋은 `commit()`으로 명시한다.
 pub fn connect(config: &MysqlConfig) -> Result<Box<dyn DbConnection>, DbError> {
     let mut conn = MysqlConnection::establish(&mysql_url(config)).map_err(|e| DbError::Other(format!("MySQL 연결 실패 ({}:{}): {e}", config.host, config.port)))?;
-    // Diesel은 연결할 때 time_zone을 +00:00으로 바꾼다. pymysql처럼 서버 설정을 따르게 되돌린다.
+    // Diesel은 연결할 때 time_zone을 +00:00으로 바꾼다. 서버 설정을 따르게 되돌린다.
     conn.batch_execute("SET autocommit=0, time_zone=@@global.time_zone").map_err(map_error)?;
     Ok(Box::new(MysqlDbConnection { conn: Arc::new(Mutex::new(conn)), closed: false }))
 }

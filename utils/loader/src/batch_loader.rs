@@ -72,8 +72,16 @@ pub struct Loader<'a> {
     pub stat: &'a Stat,
 }
 
-/// 배치 처리 결과: (적재한 수, 건너뛴 수, 경로 동기화 수).
-pub type BatchCounts = (usize, usize, usize);
+/// 배치 처리 결과.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BatchCounts {
+    /// 적재한 파일 수
+    pub processed: usize,
+    /// 이미 적재되어 건너뛴 파일 수
+    pub skipped: usize,
+    /// 경로가 바뀌어 다시 적재한 파일 수
+    pub synced: usize,
+}
 
 impl Loader<'_> {
     /// PDF는 멈출 수 있어 메인 스레드에서 읽고, 나머지는 작업 스레드에서 읽는다.
@@ -192,7 +200,7 @@ impl Loader<'_> {
                 let outcome = results.remove(inode).unwrap_or_default();
                 report_problems(out, &stat_map[inode].0, &outcome.messages, outcome.item.is_some());
                 if let Some((id, doc)) = outcome.item {
-                    // 같은 inode가 두 번 나오면 나중 것이 이긴다(dict.update).
+                    // 같은 inode가 두 번 나오면 나중 것이 이긴다.
                     if let Some(slot) = batch_data.iter_mut().find(|(i, _)| *i == id) {
                         slot.1 = doc;
                     } else {
@@ -241,7 +249,7 @@ impl Loader<'_> {
                 }
             }
         }
-        Ok((processed_count, skipped_count, synced_count))
+        Ok(BatchCounts { processed: processed_count, skipped: skipped_count, synced: synced_count })
     }
 }
 

@@ -37,7 +37,7 @@ mod routes_mapping;
 mod routes_pdf;
 mod routes_view_history;
 
-pub use crate::auth_service::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RoleResolver, observation_hash};
+pub use crate::auth_service::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, HttpStatusError, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RoleResolver, observation_hash};
 pub use crate::book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
 pub use crate::task_runner::{InlineRunner, TaskHandle, TaskRunner, ThreadRunner};
 pub use crate::view_history_store::MAX_RECENT_VIEWS;
@@ -55,9 +55,6 @@ pub(crate) use request_extractors::parse_py_bool;
 pub use request_extractors::{ApiJson, ApiQuery, OptionalAuth, RequireAdmin, RequireAuth};
 pub use request_extractors::{ClientInfo, client_ip, request_ip_prefix, request_user_agent};
 pub use route_registry::{RouteInfo, Routes};
-
-/// `HTTPException`의 다른 이름. `view_history_api` 테스트가 쓴다.
-pub type HttpException = HTTPException;
 
 /// 앱의 모든 라우트. 새 라우트 파일은 여기에 `.merge(..)` 한 줄로 붙인다.
 fn all_routes() -> Routes {
@@ -84,7 +81,7 @@ pub fn app_with(deps: AppDeps) -> Router {
     all_routes().into_router().fallback(error_responses::not_found).with_state(Arc::new(deps)).layer(from_fn(error_responses::error_middleware)).layer(from_fn(cors_layer::cors_middleware))
 }
 
-/// 등록된 라우트 목록(경로, 메서드, 의존성). FastAPI `app.routes`의 `route.dependant.dependencies`에 대응한다.
+/// 등록된 라우트 목록(경로, 메서드, 인증 의존성).
 pub fn route_table() -> Vec<RouteInfo> {
     all_routes().table().to_vec()
 }

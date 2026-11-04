@@ -192,7 +192,7 @@ pub struct Backends {
     pub runner: Rc<dyn CommandRunner>,
     pub stat: Arc<Stat>,
     pub pdf_timeout: f64,
-    /// 지정하면 Poppler/pypdf 대응 단계를 별도 프로세스에서 실행해 멈춘 작업을 종료한다.
+    /// 지정하면 Poppler·대비책 단계를 별도 프로세스에서 실행해 멈춘 작업을 종료한다.
     pub pdf_worker_executable: Option<std::path::PathBuf>,
 }
 
@@ -280,19 +280,19 @@ fn extract_pdf(path: &Path, content: Option<&str>, b: &Backends) -> Vec<String> 
     let owned = path.to_path_buf();
     let fallback_result = match b.pdf_worker_executable.as_deref() {
         Some(executable) => run_pdf_worker(executable, "fallback", path, b.pdf_timeout).map(|(text, _)| text),
-        None => run_stage(b.pdf_timeout, "isbn/pypdf", move || fallback(&owned)),
+        None => run_stage(b.pdf_timeout, "isbn/fallback", move || fallback(&owned)),
     };
     match fallback_result {
         Ok(t) => {
-            b.stat.record_pdf_stage("isbn_pypdf", start.elapsed().as_secs_f64(), outcome(&t));
+            b.stat.record_pdf_stage("isbn_fallback", start.elapsed().as_secs_f64(), outcome(&t));
             search_in_content(&t)
         }
         Err(StageError::Timeout) => {
-            b.stat.record_pdf_stage("isbn_pypdf", start.elapsed().as_secs_f64(), "timeout");
+            b.stat.record_pdf_stage("isbn_fallback", start.elapsed().as_secs_f64(), "timeout");
             Vec::new()
         }
         Err(StageError::Failed) => {
-            b.stat.record_pdf_stage("isbn_pypdf", start.elapsed().as_secs_f64(), "error");
+            b.stat.record_pdf_stage("isbn_fallback", start.elapsed().as_secs_f64(), "error");
             Vec::new()
         }
     }

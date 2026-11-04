@@ -11,7 +11,7 @@
 //! - `backend::cover_management::CoverHooks` (Clone + Default): `with_search(Fn(&str, &Value) -> Result<Value, SearchError>)`, `with_fetch_bytes(Fn(&str, &str) -> Result<Vec<u8>, String>)`,
 //!   `with_fetch_url_image(Fn(&str) -> Result<Vec<u8>, CoverError>)`, `with_clock(Arc<dyn Clock>)`. 테스트가 대역을 꽂는 주입 지점이다.
 //! - `backend::cover_management::{AdminGate, BookIndex, create_cover_router}`
-//!   - `AdminGate::default()` 실제 인증, `.allow(Value)`, `.deny(status: u16, detail: &str)`, `.clear()` (FastAPI `dependency_overrides`)
+//!   - `AdminGate::default()` 실제 인증, `.allow(Value)`, `.deny(status: u16, detail: &str)`, `.clear()`
 //!   - `trait BookIndex: Send + Sync { fn search_by_id(&self, book_id: i64) -> Result<Option<Value>, String>; fn update(&self, book_id: i64, fields: &Value) -> Result<bool, String>; }`
 //!   - `create_cover_router(get_manager: Arc<dyn Fn() -> Arc<dyn BookIndex> + Send + Sync>, gate: AdminGate, hooks: CoverHooks) -> axum::Router`
 //! - `backend::cover_sources::Clock` (`fn now(&self) -> f64`, `fn sleep(&self, seconds: f64)`)
@@ -287,7 +287,7 @@ impl MockManager {
         *self.search.lock().unwrap() = Ok(value);
     }
 
-    /// `search_by_id.side_effect = RuntimeError(message)`
+    /// `search_by_id.side_effect = BookManagerError(message)`
     pub fn set_search_error(&self, message: &str) {
         *self.search.lock().unwrap() = Err(message.to_string());
     }

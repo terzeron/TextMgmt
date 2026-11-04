@@ -5,7 +5,7 @@
 //! - `es_client::transport::EsTransport`: `fn index_name(&self) -> &str`, `fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>`
 //!   (`get`, `search`는 `call("get")`, `call("search")`로 가는 기본 구현이다. ES API 호출을 `op`와 인자 JSON으로 나타낸다. `indices.exists`처럼 점으로 하위 객체를 쓴다)
 //! - `es_client::EsError`: `MissingEnv`, `Transport(String)`, `Status { status: u16, body: String }`, `Parse`, `Unsupported`, `Other(String)`
-//!   (구 `ElasticsearchError` 매핑: ConnectionError -> Transport, NotFoundError -> Status{404}, BadRequestError{message,status} -> Status{status, body:message}, RuntimeError -> Other)
+//!   (구 `ElasticsearchError` 매핑: ConnectionError -> Transport, NotFoundError -> Status{404}, BadRequestError{message,status} -> Status{status, body:message}, BookManagerError -> Other)
 //!
 //! 사용: `use common::es_dummy::{DummyEs, runtime_error};` `ESManager::with_transport(DummyEs::new())`
 //! 고수준 `EsManagerApi` 대역이 필요하면 `es_fake.rs`의 `FakeEsManager`를 쓴다.
@@ -45,7 +45,7 @@ pub struct DummyEs {
     state: Mutex<State>,
 }
 
-/// 구 `RuntimeError`.
+/// 구 `BookManagerError`.
 pub fn runtime_error(message: &str) -> EsError {
     EsError::Other(message.to_string())
 }

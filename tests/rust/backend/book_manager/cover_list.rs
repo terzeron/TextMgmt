@@ -2,7 +2,7 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use crate::common::shared_fixtures::{asyncio_runner, make_doc, make_manager, tmp_dir};
+use crate::common::shared_fixtures::{block_on, make_doc, make_manager, tmp_dir};
 use common::es_fake::FakeEsManager;
 
 #[test]
@@ -12,7 +12,7 @@ fn test_get_cover_rejects_missing_required_es_fields() {
     doc.as_object_mut().unwrap().remove("category");
     let manager = make_manager(tmp.path(), &FakeEsManager::with_doc(doc));
 
-    let resp = asyncio_runner(manager.get_cover(1, None));
+    let resp = block_on(manager.get_cover(1, None));
 
     assert_eq!(resp.status_code, 500);
 }
@@ -30,7 +30,7 @@ mod cover_member_lookup {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
-    use backend::es_manager::{EsError, EsManagerApi};
+    use backend::es_manager::{CoverFileHit, CoverFileHits, EsError, EsManagerApi};
     use common::es_fake::FakeEsManager;
     use common::faulty_fs::FaultyFs;
 
@@ -81,7 +81,7 @@ mod cover_member_lookup {
 
     /// 커버 목록 조회용 ES 대역. `FakeEsManager`에 커버 목록 메서드가 없어 이 세 메서드만 가진 로컬 대역을 쓴다.
     /// 나머지 `EsManagerApi` 메서드는 기본 구현(`Unsupported`)이다. TODO(common): `FakeEsManager`에 커버 목록 훅이 생기면 지운다.
-    type CoverFilesFn = dyn Fn(&[String], i64, Option<(i64, i64, String)>, &[String]) -> (Vec<(i64, Value, Vec<Value>)>, i64) + Send + Sync;
+    type CoverFilesFn = dyn Fn(&[String], i64, Option<(i64, i64, String)>, &[String]) -> CoverFileHits + Send + Sync;
 
     type CoverRepsFn = dyn Fn(&[String], &[String]) -> HashMap<String, Vec<(i64, Value)>> + Send + Sync;
 
@@ -92,7 +92,7 @@ mod cover_member_lookup {
     }
 
     impl EsManagerApi for CoverEs {
-        fn search_cover_files_paged(&self, categories: &[String], size: i64, search_after: Option<(i64, i64, String)>, exclude: &[String]) -> Result<(Vec<(i64, Value, Vec<Value>)>, i64), EsError> {
+        fn search_cover_files_paged(&self, categories: &[String], size: i64, search_after: Option<(i64, i64, String)>, exclude: &[String]) -> Result<CoverFileHits, EsError> {
             Ok((self.files)(categories, size, search_after, exclude))
         }
 
@@ -118,16 +118,16 @@ mod cover_member_lookup {
             let size = size as usize;
             files_calls.lock().unwrap().files.push(FileCall { categories: categories.to_vec(), size, exclude: exclude.to_vec() });
             let eligible: Vec<&CoverEntry> = entries.iter().filter(|item| categories.iter().any(|c| c == item.1["category"].as_str().unwrap())).collect();
-            let window: Vec<(i64, Value, Vec<Value>)> = eligible
+            let window: Vec<CoverFileHit> = eligible
                 .iter()
                 .filter(|item| match &search_after {
                     None => true,
                     Some(sa) => key(item) > (-sa.0, -sa.1, sa.2.clone()),
                 })
                 .take(size)
-                .map(|item| (item.0, item.1.clone(), vec![json!(item.2.0), json!(item.2.1), json!(item.2.2)]))
+                .map(|item| CoverFileHit::new(item.0, item.1.clone(), vec![json!(item.2.0), json!(item.2.1), json!(item.2.2)]))
                 .collect();
-            (window, eligible.len() as i64)
+            CoverFileHits { hits: window, total: eligible.len() as i64 }
         };
         let rep_calls = calls.clone();
         let reps = reps.clone();
@@ -179,7 +179,7 @@ mod cover_member_lookup {
         }
     }
 
-    /// 쪽 크기 66x165pt인 빈 한 쪽짜리 PDF를 직접 만든다(pikepdf 대신).
+    /// 쪽 크기 66x165pt인 빈 한 쪽짜리 PDF를 직접 만든다.
     fn blank_pdf(width: u32, height: u32) -> Vec<u8> {
         let objs =
             ["<< /Type /Catalog /Pages 2 0 R >>".to_string(), "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(), format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] >>")];
@@ -369,7 +369,7 @@ mod cover_member_lookup {
         doc.as_object_mut().unwrap().remove("category");
         let es = Arc::new(CoverEs {
             stats: HashMap::from([("A".to_string(), (1, 10.0, 0.0))]),
-            files: Box::new(move |_, _, _, _| (vec![(1, doc.clone(), vec![json!(10), json!(0), json!("A/bad.epub")])], 1)),
+            files: Box::new(move |_, _, _, _| CoverFileHits { hits: vec![CoverFileHit::new(1, doc.clone(), vec![json!(10), json!(0), json!("A/bad.epub")])], total: 1 }),
             reps: Box::new(|_, _| HashMap::new()),
         });
         let manager = make_manager(tmp.path(), es);
@@ -771,7 +771,7 @@ mod get_cover {
 
     #[tokio::test]
     async fn test_pdf_pixel_stream_formats_and_decode_errors() {
-        // pypdfium2 renders malformed Flate data as black and ignores mismatched image dimensions.
+        // 깨진 Flate 데이터는 검게 그리고, 이미지 크기 불일치는 무시한다.
         for (kind, expected_status) in [("rgb", 200), ("gray", 200), ("rgb_png", 200), ("corrupt", 200), ("cmyk", 200), ("smask", 200)] {
             let e = env();
             let path = e.dir().join("pixels.pdf");

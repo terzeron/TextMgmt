@@ -17,6 +17,8 @@ use file_record::ignore_rules::IGNORED_DIR_NAMES;
 use regex::Regex;
 use serde_json::Value;
 
+use crate::es_manager::CoverFileHit;
+
 /// 최신 만화 탭의 FIRST_INSTALLMENT_PATTERN과 같다. "1권", "01화"는 1권으로 본다.
 /// Rust `regex`는 lookahead가 없어서 뒤쪽 경계를 소비하는 그룹으로 바꿨다(일치 여부만 쓰므로 결과가 같다).
 static FIRST_INSTALLMENT_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|[^\d])0*1\s*(?:권|화)(?:$|[^\d])").expect("정규식"));
@@ -27,8 +29,6 @@ pub const MISSING_TIME: f64 = -9_223_372_036_854_775_808.0;
 
 /// 카테고리 -> (문서 수, 가장 최근 수정 시각, 가장 최근 생성 시각). 시각이 없으면 None.
 pub type CoverStats = BTreeMap<String, (u64, Option<f64>, Option<f64>)>;
-/// (book_id, _source, ES sort 값 `[수정, 생성, 경로]`)
-pub type CoverHit = (i64, Value, Vec<Value>);
 
 /// 최신순 비교 키. 오름차순으로 비교하면 가장 최근 것이 먼저 온다.
 /// `-(-2^63)`이 i64를 넘으므로 i128로 담는다.
@@ -154,19 +154,19 @@ pub fn pick_representative(hits: &[(i64, Value)]) -> Option<(i64, Value)> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoverEntry {
     Group(CoverGroup),
-    File(CoverHit),
+    File(CoverFileHit),
 }
 
 /// 최신순으로 정렬된 묶음과 파일을 합쳐 `size`개만 고른다.
 ///
 /// 순서가 같으면 묶음이 먼저다. 반환: (항목 목록, 쓴 묶음 수, 쓴 파일 수).
-pub fn merge_cover_page(groups: &[CoverGroup], files: &[CoverHit], size: usize) -> (Vec<CoverEntry>, usize, usize) {
+pub fn merge_cover_page(groups: &[CoverGroup], files: &[CoverFileHit], size: usize) -> (Vec<CoverEntry>, usize, usize) {
     let mut entries = Vec::new();
     let (mut group_index, mut file_index) = (0, 0);
     while entries.len() < size && (group_index < groups.len() || file_index < files.len()) {
         let mut take_group = file_index >= files.len();
         if !take_group && group_index < groups.len() {
-            take_group = groups[group_index].rank() <= file_rank(&files[file_index].2);
+            take_group = groups[group_index].rank() <= file_rank(&files[file_index].sort);
         }
         if take_group {
             entries.push(CoverEntry::Group(groups[group_index].clone()));
@@ -188,7 +188,7 @@ mod tests {
 
     use std::collections::{BTreeMap, BTreeSet};
 
-    use super::{CoverEntry, CoverGroup, CoverHit, CoverStats, MISSING_TIME, file_rank, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
+    use super::{CoverEntry, CoverFileHit, CoverGroup, CoverStats, MISSING_TIME, file_rank, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
     use serde_json::{Value, json};
 
     /// {카테고리: 문서 수}를 ES 집계 결과 모양 (수, 수정 시각, 생성 시각)으로 바꾼다.
@@ -197,9 +197,9 @@ mod tests {
         counts.iter().map(|(c, n)| (c.to_string(), (*n, find(updated, c), find(created, c)))).collect::<BTreeMap<_, _>>()
     }
 
-    fn hit(book_id: i64, title: &str, updated: Option<f64>, created: Option<f64>, path: &str) -> CoverHit {
+    fn hit(book_id: i64, title: &str, updated: Option<f64>, created: Option<f64>, path: &str) -> CoverFileHit {
         let path = if path.is_empty() { format!("{title}.epub") } else { path.to_string() };
-        (book_id, json!({"title": title, "file_path": path}), vec![json!(updated.unwrap_or(MISSING_TIME)), json!(created.unwrap_or(MISSING_TIME)), json!(path)])
+        CoverFileHit { id: book_id, source: json!({"title": title, "file_path": path}), sort: vec![json!(updated.unwrap_or(MISSING_TIME)), json!(created.unwrap_or(MISSING_TIME)), json!(path)] }
     }
 
     fn group(name: &str, key: &str, updated: Option<f64>, created: Option<f64>) -> CoverGroup {
@@ -429,7 +429,7 @@ mod tests {
                 .iter()
                 .map(|e| match e {
                     CoverEntry::Group(g) => ("group", g.name.clone()),
-                    CoverEntry::File(f) => ("file", f.1["title"].as_str().unwrap().to_string()),
+                    CoverEntry::File(f) => ("file", f.source["title"].as_str().unwrap().to_string()),
                 })
                 .collect()
         }

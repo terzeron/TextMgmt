@@ -12,7 +12,7 @@ use std::fmt;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::auth_service::HTTPException;
+use crate::auth_service::HttpStatusError;
 use crate::view_history_store::{ViewHistoryError, ViewHistoryStore};
 use db::category_mapping::CategoryMapping;
 
@@ -52,11 +52,11 @@ impl GoogleVerifier for UnavailableGoogleVerifier {
 /// 사용자별 조회 이력 저장소 facade. `ViewHistoryStore`가 구현한다.
 pub trait ViewHistoryApi: Send + Sync {
     fn record_view(&self, _email: &str, _content_type: &str, _book_id: i64, _title: &str, _category: &str) -> Result<(), ViewHistoryError> {
-        Err(ViewHistoryError::RuntimeError(UNIMPLEMENTED.to_string()))
+        Err(ViewHistoryError::Storage(UNIMPLEMENTED.to_string()))
     }
 
     fn list_recent_views(&self, _limit: usize) -> Result<Value, ViewHistoryError> {
-        Err(ViewHistoryError::RuntimeError(UNIMPLEMENTED.to_string()))
+        Err(ViewHistoryError::Storage(UNIMPLEMENTED.to_string()))
     }
 }
 
@@ -310,8 +310,8 @@ pub struct BookStub {
 /// 책을 찾고, 없으면 404, viewer가 볼 수 없는 카테고리면 403 오류를 돌려준다.
 #[async_trait]
 pub trait BookAccess: Send + Sync {
-    async fn get_book_and_ensure_viewer_access(&self, _book_id: i64, _payload: &Value, _content_type: &str) -> Result<BookStub, HTTPException> {
-        Err(HTTPException::new(500, UNIMPLEMENTED))
+    async fn get_book_and_ensure_viewer_access(&self, _book_id: i64, _payload: &Value, _content_type: &str) -> Result<BookStub, HttpStatusError> {
+        Err(HttpStatusError::new(500, UNIMPLEMENTED))
     }
 }
 

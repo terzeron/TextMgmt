@@ -18,7 +18,7 @@
 //! - `doc_reader::office::find_libreoffice_with(which, exists)` PATH 조회와 파일 존재 확인 바꿔치기 자리
 //! - `loader::batch_loader::get_file_list(path, recursive, num_files: Option<usize>) -> Vec<PathBuf>`, `loader::batch_loader::read_files(cfg, path, runner, stat) -> HashMap<i64, Value>` 원본의 `Loader.get_file_list` / `Loader.read_files`
 //! - `file_record::record_builder::{ReadHooks, read_file_with_hooks(cfg, path, .., &ReadHooks)}`
-//!   `ReadHooks { fast_page_count (_fast_pdf_page_count 대체), fallback_page_count (pypdf 대체), inspect (_zip_container_type 대체, 구 detect_file_type_with) }`
+//!   `ReadHooks { fast_page_count (_fast_pdf_page_count 대체), fallback_page_count (lopdf 쪽 수), inspect (_zip_container_type 대체, 구 detect_file_type_with) }`
 //! - `stat::Stat::{pdf_stage_count, pdf_stage_total_time, pdf_stage_outcome_count}` 단계별 통계 조회
 
 #![allow(clippy::type_complexity)]
@@ -33,13 +33,14 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::common::shared_fixtures::{XrefStream, config_with_book, test_env, tests_root, write};
+use crate::common::shared_fixtures::{config_with_book, test_env, tests_root, write};
 use doc_reader::TEXT_SIZE;
 use doc_reader::epub::{read_from_epub, read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using};
 use doc_reader::markup::{count_lines, read_from_html};
 use doc_reader::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, is_usable_text};
 use doc_reader::office::read_from_docx;
 use doc_reader::office::{convert_with_libreoffice, find_libreoffice_with, read_from_doc, read_from_hwp, read_from_image};
+use doc_reader::pdf::XrefStream;
 use doc_reader::pdf::{
     FastCountHooks, InProcess, PDF_PAGE_LIMIT, PdftotextHooks, Stage, StageError, StageRunner, apply_png_predictor, collect_pages, fast_page_count, fast_page_count_with, find_xref_offset,
     pdf_text_by_pdftotext_with, read_from_pdf, run_stage, xref_stream_find_entry,
@@ -338,7 +339,7 @@ fn write_docx(path: &Path, paragraphs: &[&str]) {
     write_zip(path, &[("_rels/.rels", rels.as_bytes()), ("word/document.xml", document.as_bytes())]);
 }
 
-/// pypdf.PdfWriter로 빈 쪽을 `pages`개 만든 것과 같은 최소 PDF.
+/// 빈 쪽 `pages`개짜리 최소 PDF.
 fn minimal_pdf(pages: usize) -> Vec<u8> {
     let mut objs: Vec<String> = Vec::new();
     let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 3 + i)).collect();
@@ -362,7 +363,7 @@ fn minimal_pdf(pages: usize) -> Vec<u8> {
     out
 }
 
-/// 단계별로 준비한 답을 돌려주고 부른 순서를 기록하는 PDF 단계 실행기. 원본의 pypdfium2/pdfplumber/pikepdf 바꿔치기를 대신한다.
+/// 단계별로 준비한 답을 돌려주고 부른 순서를 기록하는 PDF 단계 실행기.
 struct Fake {
     answers: Vec<(Stage, Result<(String, usize), StageError>)>,
     calls: Mutex<Vec<Stage>>,
@@ -385,7 +386,7 @@ impl StageRunner for Fake {
     }
 }
 
-/// 원본 `_mock_pypdfium2`: pdfium 단계가 `collect_pages`로 페이지 목록을 훑고, 어느 페이지를 읽었는지 기록한다.
+/// poppler 단계 대역: `collect_pages`로 페이지 목록을 훑고, 어느 페이지를 읽었는지 기록한다.
 struct CollectRunner {
     page_texts: Vec<String>,
     visited: Mutex<Vec<usize>>,
@@ -403,7 +404,7 @@ impl CollectRunner {
 impl StageRunner for CollectRunner {
     fn run(&self, stage: Stage, _path: &Path) -> Result<(String, usize), StageError> {
         self.calls.lock().unwrap().push(stage);
-        if stage != Stage::Pdfium {
+        if stage != Stage::Poppler {
             return self.other.clone().ok_or(StageError::Failed("없음".into()));
         }
         collect_pages(self.page_texts.len(), |i| {
@@ -1030,27 +1031,27 @@ mod test_read_from_pdf {
     }
 
     #[test]
-    fn test_read_pdf_pypdfium2_primary() {
+    fn test_read_pdf_poppler_primary() {
         let d = tempfile::tempdir().unwrap();
-        let pdf = d.path().join("pypdfium2_test.pdf");
+        let pdf = d.path().join("poppler_test.pdf");
         write(&pdf, b"%PDF-1.4 mock pdf content");
-        let fake = Fake::new(vec![(Stage::Pdfium, Ok(("pypdfium2 추출 텍스트", 1)))]);
+        let fake = Fake::new(vec![(Stage::Poppler, Ok(("poppler 추출 텍스트", 1)))]);
 
         let read = read_from_pdf(&pdf, &fake);
-        assert!(read.summary.contains("pypdfium2"), "{}", read.summary);
+        assert!(read.summary.contains("poppler"), "{}", read.summary);
         assert_eq!(read.page_count, 1);
     }
 
     #[test]
-    fn test_read_pdf_pdfplumber_fallback() {
+    fn test_read_pdf_lopdf_fallback() {
         let d = tempfile::tempdir().unwrap();
-        let pdf = d.path().join("pdfplumber_test.pdf");
+        let pdf = d.path().join("lopdf_test.pdf");
         write(&pdf, b"%PDF-1.4 mock pdf content");
-        // pypdfium2 단계가 실패하면 다음 단계(pdfplumber)로 내려온다.
-        let fake = Fake::new(vec![(Stage::Pdfium, Err(StageError::Failed("pypdfium2 fail".into()))), (Stage::Plumber, Ok(("pdfplumber 추출 텍스트", 1)))]);
+        // poppler 단계가 실패하면 다음 단계(lopdf)로 내려온다.
+        let fake = Fake::new(vec![(Stage::Poppler, Err(StageError::Failed("poppler fail".into()))), (Stage::Lopdf, Ok(("lopdf 추출 텍스트", 1)))]);
 
         let read = read_from_pdf(&pdf, &fake);
-        assert!(read.summary.contains("pdfplumber"), "{}", read.summary);
+        assert!(read.summary.contains("lopdf"), "{}", read.summary);
         assert_eq!(read.page_count, 1);
     }
 
@@ -1074,7 +1075,7 @@ mod test_read_from_pdf {
         write(&pdf, b"%PDF-1.4 mock pdf content");
 
         let broken = mojibake("맥(麥) 김남천 조은커뮤니티").repeat(8);
-        let fake = Fake::new(vec![(Stage::Pdfium, Ok((broken.as_str(), 1))), (Stage::Plumber, Ok(("정상 추출된 한글 본문", 1)))]);
+        let fake = Fake::new(vec![(Stage::Poppler, Ok((broken.as_str(), 1))), (Stage::Lopdf, Ok(("정상 추출된 한글 본문", 1)))]);
 
         let read = read_from_pdf(&pdf, &fake);
         assert!(read.summary.contains("정상 추출된 한글 본문"), "{}", read.summary);
@@ -1646,7 +1647,7 @@ mod test_pdf_extraction_cost {
 
     #[test]
     fn test_scanned_pdf_skips_remaining_parsers() {
-        // 텍스트 레이어가 없으면 pdfplumber 이후 단계를 아예 호출하지 않아야 한다.
+        // 텍스트 레이어가 없으면 lopdf 이후 단계를 아예 호출하지 않아야 한다.
         let d = tempfile::tempdir().unwrap();
         let pdf = d.path().join("scanned.pdf");
         write(&pdf, b"%PDF-1.4 mock pdf content");
@@ -1654,7 +1655,7 @@ mod test_pdf_extraction_cost {
         let runner = CollectRunner::new(vec![String::new(); 500]);
         let read = read_from_pdf(&pdf, &runner);
         let called = runner.calls.lock().unwrap().clone();
-        assert_eq!(called, vec![Stage::Pdfium], "스캔본인데 후속 파서가 호출됨: {called:?}");
+        assert_eq!(called, vec![Stage::Poppler], "스캔본인데 후속 파서가 호출됨: {called:?}");
         assert_eq!(read.page_count, 500);
         assert!(read.summary.trim().is_empty());
     }
@@ -1718,18 +1719,18 @@ mod test_pdf_extraction_cost {
     }
 
     #[test]
-    fn test_damaged_text_falls_back_directly_to_pdfplumber() {
-        // 손상 시 기본 fallback은 pdftotext process를 건너뛰고 pdfplumber로 간다.
+    fn test_damaged_text_falls_back_directly_to_lopdf() {
+        // 손상 시 기본 fallback은 pdftotext process를 건너뛰고 lopdf로 간다.
         let d = tempfile::tempdir().unwrap();
         let pdf = d.path().join("damaged.pdf");
         write(&pdf, b"%PDF-1.4 mock pdf content");
 
         let broken: String = ["즐기는", "들어서", "필요한", "함께"].iter().map(|w| format!(" {} 정상 본문 ", mojibake(w))).collect();
         // Poppler 결과가 손상되면 lopdf 기반 대체 단계로 내려간다.
-        let fake = Fake::new(vec![(Stage::Pdfium, Ok((broken.as_str(), 1))), (Stage::Plumber, Ok(("정상 한글 본문입니다", 1)))]);
+        let fake = Fake::new(vec![(Stage::Poppler, Ok((broken.as_str(), 1))), (Stage::Lopdf, Ok(("정상 한글 본문입니다", 1)))]);
 
         let read = read_from_pdf(&pdf, &fake);
-        assert_eq!(fake.calls(), vec![Stage::Pdfium, Stage::Plumber]);
+        assert_eq!(fake.calls(), vec![Stage::Poppler, Stage::Lopdf]);
         assert!(read.summary.contains("정상 한글 본문입니다"), "{}", read.summary);
     }
 
@@ -1740,13 +1741,13 @@ mod test_pdf_extraction_cost {
         let cfg = config_with_book(d.path());
         let pdf = d.path().join("metric.pdf");
         write(&pdf, b"%PDF-1.4 mock pdf content");
-        let fake = Fake::new(vec![(Stage::Pdfium, Ok(("정상 본문입니다", 1)))]);
+        let fake = Fake::new(vec![(Stage::Poppler, Ok(("정상 본문입니다", 1)))]);
         let stat = Stat::new();
 
         // Rust에서는 단계 기록을 read_file이 Stat에 옮긴다.
         read_file(&cfg, &pdf, None, false, None, &fake, &stat);
 
-        let name = "_pdf_text_by_poppler";
+        let name = "pdf_text_poppler";
         assert_eq!(stat.pdf_stage_count(name), 1);
         assert!(stat.pdf_stage_total_time(name) >= 0.0);
         assert_eq!(stat.pdf_stage_outcome_count(name, "ok"), 1);
@@ -1806,7 +1807,7 @@ mod test_pdf_mojibake_detection {
 
         let heavy = scatter(&["즐기는", "들어서", "필요한", "함께", "그리고", "사람은"], "정상 본문");
         let light = format!("{} LIGHT_DAMAGE_MARKER", scatter(&["즐기는", "들어서", "필요한"], "정상 본문"));
-        let fake = Fake::new(vec![(Stage::Pdfium, Ok((heavy.as_str(), 7))), (Stage::Plumber, Ok((light.as_str(), 7)))]);
+        let fake = Fake::new(vec![(Stage::Poppler, Ok((heavy.as_str(), 7))), (Stage::Lopdf, Ok((light.as_str(), 7)))]);
 
         let read = read_from_pdf(&pdf, &fake);
         assert!(read.summary.contains("LIGHT_DAMAGE_MARKER"), "{}", read.summary);
@@ -1828,7 +1829,7 @@ mod test_pdf_parser_timeout {
         let d = tempfile::tempdir().unwrap();
         let pdf = d.path().join("hang.pdf");
         write(&pdf, b"%PDF-1.4 mock pdf content");
-        let fake = Fake::new(vec![(Stage::Pdfium, Err(StageError::Timeout)), (Stage::Plumber, Ok(("정상적으로 추출된 본문입니다", 5)))]);
+        let fake = Fake::new(vec![(Stage::Poppler, Err(StageError::Timeout)), (Stage::Lopdf, Ok(("정상적으로 추출된 본문입니다", 5)))]);
 
         let read = read_from_pdf(&pdf, &fake);
         assert!(read.summary.contains("정상적으로"), "{}", read.summary);
@@ -1841,7 +1842,7 @@ mod test_pdf_parser_timeout {
         let d = tempfile::tempdir().unwrap();
         let pdf = d.path().join("hang_all.pdf");
         write(&pdf, b"%PDF-1.4 mock pdf content");
-        let fake = Fake::new(vec![(Stage::Pdfium, Err(StageError::Timeout)), (Stage::Plumber, Err(StageError::Timeout))]);
+        let fake = Fake::new(vec![(Stage::Poppler, Err(StageError::Timeout)), (Stage::Lopdf, Err(StageError::Timeout))]);
 
         let read = read_from_pdf(&pdf, &fake);
         assert!(read.summary.trim().is_empty());
@@ -1852,7 +1853,7 @@ mod test_pdf_parser_timeout {
     }
 
     #[test]
-    fn test_pdfplumber_leaves_no_open_handle_after_parse_failure() {
+    fn test_lopdf_leaves_no_open_handle_after_parse_failure() {
         // parser 실패 뒤 fd가 GC까지 남으면 안 된다.
         let d = tempfile::tempdir().unwrap();
         let pdf = d.path().join("leak.pdf");
@@ -1860,27 +1861,27 @@ mod test_pdf_parser_timeout {
         assert!(open_fds_ending_with("leak.pdf").is_empty());
 
         // 실제 plumber 단계가 손상 파일을 읽은 뒤를 확인한다.
-        let _ = run_stage(Stage::Plumber, &pdf);
+        let _ = run_stage(Stage::Lopdf, &pdf);
 
         let left = open_fds_ending_with("leak.pdf");
         assert!(left.is_empty(), "parser 실패 뒤 파일 핸들이 남아 있음: {left:?}");
     }
 
     #[test]
-    fn test_pypdfium2_leaves_no_open_handle_when_load_fails() {
+    fn test_poppler_leaves_no_open_handle_when_load_fails() {
         // 문서 로드 실패 시 pdfium이 쥔 fd가 남으면 안 된다.
         // 경로를 넘기면 로드 실패한 fd가 닫히지 않고 GC로도 회수되지 않아,
         // 손상 PDF를 만날 때마다 fd가 1개씩 영구 누적됐다(실측).
         let d = tempfile::tempdir().unwrap();
-        let pdf = d.path().join("broken_pypdfium.pdf");
+        let pdf = d.path().join("broken_poppler.pdf");
         // 헤더는 PDF지만 본문이 없어 pdfium이 문서 로드에 실패한다
         write(&pdf, b"%PDF-1.4\n%%EOF\n");
-        assert!(open_fds_ending_with("broken_pypdfium.pdf").is_empty());
+        assert!(open_fds_ending_with("broken_poppler.pdf").is_empty());
 
-        let _ = run_stage(Stage::Pdfium, &pdf);
+        let _ = run_stage(Stage::Poppler, &pdf);
 
         // Rust에는 GC가 없으므로 반환 직후 곧바로 닫혀 있어야 한다
-        let left = open_fds_ending_with("broken_pypdfium.pdf");
+        let left = open_fds_ending_with("broken_poppler.pdf");
         assert!(left.is_empty(), "문서 로드 실패 후 fd가 남아 있음: {left:?}");
     }
 }
@@ -1972,7 +1973,7 @@ mod test_file_type_detection {
         let cfg = config_with_book(d.path());
         let f = d.path().join("normal.pdf");
         write(&f, b"%PDF-1.4 mock pdf content");
-        let fake = Fake::new(vec![(Stage::Pdfium, Ok(("정상 본문입니다", 10)))]);
+        let fake = Fake::new(vec![(Stage::Poppler, Ok(("정상 본문입니다", 10)))]);
 
         let (_, record) = read_file(&cfg, &f, None, false, None, &fake, &Stat::new()).item.unwrap();
         assert_eq!(record["file_type"], "pdf");
@@ -1984,7 +1985,7 @@ mod test_file_type_detection {
 
 /// 기본 파서(pdfium, plumber)가 모두 문서를 열지 못한 상태(구조 손상)의 답.
 fn all_stages_fail() -> Vec<(Stage, Result<(&'static str, usize), StageError>)> {
-    vec![(Stage::Pdfium, Ok(("", 0))), (Stage::Plumber, Ok(("", 0)))]
+    vec![(Stage::Poppler, Ok(("", 0))), (Stage::Lopdf, Ok(("", 0)))]
 }
 
 mod test_pdf_structure_repair {
@@ -2011,7 +2012,7 @@ mod test_pdf_structure_repair {
         let pdf = d.path().join("mojibake.pdf");
         write(&pdf, b"%PDF-1.6 mock");
         let damaged: String = ["즐기는", "들어서", "필요한", "함께"].iter().map(|w| format!(" {} 본문 ", mojibake(w))).collect();
-        let fake = Fake::new(vec![(Stage::Pdfium, Ok((damaged.as_str(), 12))), (Stage::Plumber, Ok(("", 0))), (Stage::Repair, Ok(("", 0)))]);
+        let fake = Fake::new(vec![(Stage::Poppler, Ok((damaged.as_str(), 12))), (Stage::Lopdf, Ok(("", 0))), (Stage::Repair, Ok(("", 0)))]);
 
         read_from_pdf(&pdf, &fake);
         assert!(!fake.calls().contains(&Stage::Repair), "텍스트가 이미 나왔는데 복구를 시도함");
@@ -2023,7 +2024,7 @@ mod test_pdf_structure_repair {
         let d = tempfile::tempdir().unwrap();
         let pdf = d.path().join("scanned.pdf");
         write(&pdf, b"%PDF-1.6 mock");
-        let fake = Fake::new(vec![(Stage::Pdfium, Ok(("", 300))), (Stage::Repair, Ok(("", 0)))]);
+        let fake = Fake::new(vec![(Stage::Poppler, Ok(("", 300))), (Stage::Repair, Ok(("", 0)))]);
 
         let read = read_from_pdf(&pdf, &fake);
         assert!(!fake.calls().contains(&Stage::Repair), "스캔본에 복구를 시도함");
@@ -2078,7 +2079,7 @@ mod test_pdf_structure_repair {
 
 // ---- TestIsbnPdfTimeout ---------------------------------------------------------------------
 //
-// 원본 `test_isbn_pdf_extraction_has_time_limit` 1개는 utils.isbn 단위 테스트(PDF_ISBN_TIMEOUT, pypdf.PdfReader 바꿔치기)라
+// 원본 `test_isbn_pdf_extraction_has_time_limit` 1개는 utils.isbn 단위 테스트(PDF_ISBN_TIMEOUT, 쪽 읽기 대역)라
 // tests/rust/isbn/ 에 대응 범위가 있어 옮기지 않았다.
 // ---- TestReadFromRtf ------------------------------------------------------------------------
 
@@ -2171,7 +2172,7 @@ mod test_count_epub_lines {
     }
 
     #[test]
-    fn test_does_not_mutate_soup() {
+    fn test_does_not_mutate_markup() {
         // 입력을 `&str`로 받으므로 고쳐 쓸 수 없다. 같은 입력을 두 번 세어도 같은 값이 나오고 입력이 그대로인지 본다.
         let html = String::from("<html><head><title>t</title></head><body><script>s</script><p>a  b</p></body></html>");
         let before = html.clone();
@@ -2421,7 +2422,7 @@ mod test_read_file_branches {
 
     #[test]
     fn test_read_pdf_skip_text_fallback() {
-        // Lines 705-712: skip_text PDF fast count fails, pypdf fallback
+        // Lines 705-712: skip_text PDF fast count fails, lopdf fallback
         let d = tempfile::tempdir().unwrap();
         let cfg = config_with_book(d.path());
         let pdf = d.path().join("book.pdf");
@@ -2523,7 +2524,7 @@ mod test_find_libreoffice {
 
 /// 원본의 `_parse_one_xref_stream` / `_xref_stream_find_entry` / `_read_from_obj_stream` 바꿔치기. `FastCountHooks`의 훅으로 끼운다.
 struct FakeXref {
-    parsed: Option<(Vec<u8>, [usize; 3], Vec<i64>, Option<i64>)>,
+    parsed: Option<XrefStream>,
     /// 객체 번호별 (type, offset, gen)
     entries: Vec<(i64, (i64, i64, i64))>,
     /// 객체 번호와 무관하게 항상 돌려주는 항목
@@ -2567,8 +2568,8 @@ fn padded_pdf(parts: &[(usize, &[u8])]) -> Vec<u8> {
 }
 
 const XREF_DICT: &[u8] = b"<< /Type /XRef /Root 1 0 R >>";
-fn parsed(index: &[i64]) -> Option<(Vec<u8>, [usize; 3], Vec<i64>, Option<i64>)> {
-    Some((b"decoded".to_vec(), [1, 2, 1], index.to_vec(), None))
+fn parsed(index: &[i64]) -> Option<XrefStream> {
+    Some(XrefStream { entries: b"decoded".to_vec(), widths: [1, 2, 1], index_ranges: index.to_vec(), prev: None })
 }
 
 mod test_fast_pdf_page_count {
@@ -2688,7 +2689,7 @@ mod test_read_from_pdf_edge_cases {
         let d = tempfile::tempdir().unwrap();
         let pdf = d.path().join("big.pdf");
         write(&pdf, minimal_pdf(3));
-        // 원본은 pypdf.PdfReader를 세 쪽짜리 가짜로 바꾼다. 같은 내용을 pdfium 단계의 쪽 목록으로 준다.
+        // 세 쪽짜리 문서를 pdfium 단계의 쪽 목록으로 준다.
         let runner = CollectRunner::new(vec!["x".repeat(3000); 3]);
         let read = read_from_pdf(&pdf, &runner);
         // TEXT_SIZE is 4096, so with 3000*2=6000 > 4096, should break early

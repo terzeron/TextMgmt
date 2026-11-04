@@ -565,12 +565,12 @@ pub fn rtf_to_text(text: &str) -> Result<String, String> {
                 } else if let Some(s) = special(word) {
                     out.push_str(s);
                 } else if word == "uc" {
-                    ucskip = arg.ok_or("TypeError: \\uc에 인수가 없다")?.parse().map_err(|_| "ValueError: \\uc 인수".to_owned())?;
+                    ucskip = arg.ok_or("\\uc에 인수가 없다")?.parse().map_err(|_| "\\uc 인수가 숫자가 아니다".to_owned())?;
                 } else if word == "u" {
                     match arg {
                         None => curskip = ucskip,
                         Some(a) => {
-                            let mut c: i64 = a.parse().map_err(|_| "ValueError: \\u 인수".to_owned())?;
+                            let mut c: i64 = a.parse().map_err(|_| "\\u 인수가 숫자가 아니다".to_owned())?;
                             if c < 0 {
                                 c += 0x10000;
                             }

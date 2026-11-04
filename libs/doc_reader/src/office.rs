@@ -179,7 +179,7 @@ pub fn paragraph_text(p: roxmltree::Node) -> String {
 }
 
 fn read_member(zip: &mut sysdeps::zip_opener::Zip, name: &str) -> Result<String, String> {
-    let file = zip.by_name(name).map_err(|_| format!("KeyError: {name}"))?;
+    let file = zip.by_name(name).map_err(|_| format!("ZIP 항목이 없다: {name}"))?;
     let mut buf = Vec::new();
     file.take(sysdeps::zip_opener::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| e.to_string())?;
     if buf.starts_with(b"\xef\xbb\xbf") {

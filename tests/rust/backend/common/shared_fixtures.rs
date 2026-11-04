@@ -79,8 +79,8 @@ pub fn assert_refused(result: Result<Value, CoverError>, reason: &str, label: &s
     assert!(text.contains(reason), "{label}: {text:?} 에 {reason:?}가 없다");
 }
 
-/// `asyncio.run(coro)`에 대응한다. 동기 테스트 안에서 future를 끝까지 돌린다.
-pub fn asyncio_runner<F: std::future::Future>(fut: F) -> F::Output {
+/// 동기 테스트 안에서 future를 끝까지 돌린다.
+pub fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
 }
 
@@ -409,7 +409,7 @@ pub fn page(v: &Value) -> Result<BookPage, String> {
 }
 
 // TODO(common): lopdf가 아니라 /Info 사전을 직접 쓰는 최소 PDF 생성기. super::pdf::PdfBuilder에 `info` 지원이 생기면 지운다.
-/// pypdf `PdfWriter.add_blank_page`로 만든 PDF에 대응한다. `info`는 /Info 사전의 (키, 값)이다.
+/// 빈 쪽 PDF. `info`는 /Info 사전의 (키, 값)이다.
 pub fn pdf_bytes(pages: usize, width: u32, height: u32, info: &[(&str, &str)]) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
     let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 3 + i)).collect();
@@ -591,7 +591,7 @@ pub fn xml_text(data: &[u8]) -> String {
 
 pub fn zip_read<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &str) -> Vec<u8> {
     let mut data = Vec::new();
-    zf.by_name(name).unwrap_or_else(|_| panic!("KeyError: {name}")).read_to_end(&mut data).unwrap();
+    zf.by_name(name).unwrap_or_else(|_| panic!("ZIP 항목이 없다: {name}")).read_to_end(&mut data).unwrap();
     data
 }
 
@@ -600,8 +600,6 @@ pub fn zip_read_string<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &s
 }
 
 pub type AddBookFn = dyn Fn() -> Result<i64, AddBookError> + Send + Sync;
-
-pub type BookRow = (String, String, String, String, String, String);
 
 pub const CATEGORY: &str = "_epub";
 
@@ -984,7 +982,7 @@ impl Fx {
         Self { app: backend::main::app_with(tweak(deps)), slots, bm, cm, cat, store, _guard: guard }
     }
 
-    /// `dependency_overrides[require_auth] = lambda: payload`에 대응한다.
+    /// 인증 결과를 `payload`로 고정한다.
     pub fn set_auth(&self, payload: Value) {
         *self.slots.auth.lock().unwrap() = payload;
     }
@@ -1078,7 +1076,7 @@ impl Mock {
         self.0.lock().unwrap().side_effects.insert(method.to_string(), Arc::new(f));
     }
 
-    /// `side_effect=RuntimeError(msg)`에 대응한다.
+    /// `side_effect=BookManagerError(msg)`에 대응한다.
     pub fn raises(&self, method: &str, msg: &str) {
         let msg = msg.to_string();
         self.side_effect(method, move |_| {

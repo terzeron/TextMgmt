@@ -6,8 +6,8 @@ use crate::common::auth_fakes::{FixedRole, access_token};
 use crate::common::shared_fixtures::{FakeRequest, decode, encode_hs256, fixture, make_request};
 use crate::common::shared_fixtures::{now, process_env};
 use backend::auth_service;
-use backend::auth_service::{HTTPException, SystemExit};
-use bookstore::store_clients::{AbstractBookstore, KyoboBookstore};
+use backend::auth_service::{FatalConfigError, HttpStatusError};
+use bookstore::store_clients::{Bookstore, KyoboBookstore};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -15,7 +15,7 @@ fn refresh_token(email: &str, role: &str) -> String {
     backend::auth_service::create_refresh_token(email, role, None, None)
 }
 
-fn detail_of(err: &HTTPException) -> String {
+fn detail_of(err: &HttpStatusError) -> String {
     err.detail.to_lowercase()
 }
 
@@ -66,7 +66,7 @@ fn test_auth_requires_jwt_secret() {
     let mut env = fixture();
     env.remove("TM_JWT_SECRET");
     let result = backend::auth_service::load_jwt_secret(&process_env);
-    assert!(matches!(result, Err(SystemExit(_))), "{result:?}");
+    assert!(matches!(result, Err(FatalConfigError(_))), "{result:?}");
 }
 
 // ========== 토큰 발급 ==========
@@ -418,7 +418,7 @@ fn test_auth_requires_jwt_secret_os_environ() {
     let mut env = fixture();
     env.remove("TM_JWT_SECRET");
     let result = backend::auth_service::load_jwt_secret(&process_env);
-    assert!(matches!(result, Err(SystemExit(_))), "{result:?}");
+    assert!(matches!(result, Err(FatalConfigError(_))), "{result:?}");
 }
 
 /// determine_role 이 "admin"/"viewer" 이외 역할을 반환할 때 require_auth 가 403 을 올린다 (line 101).
@@ -444,9 +444,9 @@ fn test_kyobo_fallback_links_stop_at_max_results() {
     common::setup_env();
     let store = KyoboBookstore::new(false);
     let anchors: String = (0..store.max_results + 5).map(|n| format!(r#"<a href="/detail/{n}">책 {n}</a>"#)).collect();
-    let soup = format!("<html><body>{anchors}</body></html>");
+    let dom = format!("<html><body>{anchors}</body></html>");
 
-    let links = store.extract_search_links(&soup);
+    let links = store.extract_search_links(&dom);
 
     let expected: Vec<String> = (0..store.max_results).map(|n| format!("/detail/{n}")).collect();
     assert_eq!(links, expected);

@@ -30,7 +30,7 @@ pub fn output(returncode: i32, stdout: impl AsRef<[u8]>, stderr: impl AsRef<[u8]
     CommandOutput { returncode, stdout: stdout.as_ref().to_vec(), stderr: stderr.as_ref().to_vec() }
 }
 
-/// `subprocess.run` / `asyncio.create_subprocess_exec` 대역. 인자 목록을 받아 결과나 오류를 돌려준다.
+/// 외부 명령 실행 대역. 인자 목록을 받아 결과나 오류를 돌려준다.
 /// 호출한 `(argv, timeout)`을 모두 기록한다.
 pub struct FakeRunner {
     handler: Mutex<Handler>,

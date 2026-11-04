@@ -4,7 +4,7 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, make_manager, tmp_dir};
+use crate::common::shared_fixtures::{block_on, deps, make_doc, make_manager, tmp_dir};
 use backend::book_manager::BookManager;
 use backend::main::BookResponse;
 use common::es_fake::FakeEsManager;
@@ -253,18 +253,18 @@ fn test_get_html_resource_allows_local_whitelisted_files_only() {
     let manager = make_manager(tmp_path, &es);
     es.set_doc(Some(doc));
 
-    let resp = asyncio_runner(manager.get_html_resource(1, "style.css"));
+    let resp = block_on(manager.get_html_resource(1, "style.css"));
     assert!(resp.is_file());
     assert_eq!(resp.status_code, 200);
     assert!(resp.header("content-security-policy").expect("csp").starts_with("sandbox;"));
     assert_eq!(resp.header("x-content-type-options"), Some("nosniff"));
 
-    let bad = asyncio_runner(manager.get_html_resource(1, "../secret.txt"));
+    let bad = block_on(manager.get_html_resource(1, "../secret.txt"));
     assert_eq!(bad.status_code, 400);
 
     let unsupported = tmp_path.join("A").join("script.js");
     fs::write(&unsupported, "alert(1)").unwrap();
-    let resp2 = asyncio_runner(manager.get_html_resource(1, "script.js"));
+    let resp2 = block_on(manager.get_html_resource(1, "script.js"));
     assert_eq!(resp2.status_code, 400);
 }
 
@@ -287,9 +287,9 @@ fn test_sanitize_html_external_src_attribute_removed() {
     // 외부 URL src 는 build_html_resource_url 이 None 을 반환하므로 속성이 제거된다.
     let html = r#"<html><body><img src="http://external.com/img.png"></body></html>"#;
     let result = BookManager::sanitize_html_for_viewer(html, "/base");
-    let soup = scraper::Html::parse_document(&result);
+    let dom = scraper::Html::parse_document(&result);
     let sel = scraper::Selector::parse("img").unwrap();
-    let img = soup.select(&sel).next();
+    let img = dom.select(&sel).next();
     assert!(img.is_none() || img.unwrap().value().attr("src").is_none());
 }
 
@@ -336,7 +336,7 @@ fn test_missing_required_es_fields_returns_server_error() {
     let mut doc = make_doc("A/book.html", "html");
     doc.as_object_mut().unwrap().remove("category");
     let manager = make_manager(tmp.path(), &FakeEsManager::with_doc(doc));
-    let resp = asyncio_runner(manager.get_html_resource(1, "style.css"));
+    let resp = block_on(manager.get_html_resource(1, "style.css"));
 
     assert_eq!(resp.status_code, 500);
 }
@@ -346,7 +346,7 @@ fn test_book_not_found_returns_404() {
     // ES 에 책이 없으면 404 (line 859).
     let tmp = tmp_dir();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
-    let resp = asyncio_runner(manager.get_html_resource(99, "image.jpg"));
+    let resp = block_on(manager.get_html_resource(99, "image.jpg"));
     assert_eq!(resp.status_code, 404);
 }
 
@@ -356,7 +356,7 @@ fn test_non_html_file_returns_400() {
     let tmp = tmp_dir();
     let doc = make_doc("A/book.epub", "epub");
     let manager = make_manager(tmp.path(), &FakeEsManager::with_doc(doc));
-    let resp = asyncio_runner(manager.get_html_resource(1, "image.jpg"));
+    let resp = block_on(manager.get_html_resource(1, "image.jpg"));
     assert_eq!(resp.status_code, 400);
 }
 
@@ -377,7 +377,7 @@ fn test_path_traversal_via_symlink_returns_400() {
 
     let doc = make_doc("A/book.html", "html");
     let manager = make_manager(tmp_path, &FakeEsManager::with_doc(doc));
-    let resp = asyncio_runner(manager.get_html_resource(1, "evil.jpg"));
+    let resp = block_on(manager.get_html_resource(1, "evil.jpg"));
     assert_eq!(resp.status_code, 400);
 }
 
@@ -392,7 +392,7 @@ fn test_resource_file_not_found_returns_404() {
 
     let doc = make_doc("A/book.html", "html");
     let manager = make_manager(tmp_path, &FakeEsManager::with_doc(doc));
-    let resp = asyncio_runner(manager.get_html_resource(1, "nonexistent.jpg"));
+    let resp = block_on(manager.get_html_resource(1, "nonexistent.jpg"));
     assert_eq!(resp.status_code, 404);
 }
 
@@ -410,6 +410,6 @@ fn test_is_relative_to_oserror_returns_400() {
     let doc = make_doc("A/book.html", "html");
     let es = FakeEsManager::with_doc(doc);
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_path_is_relative_to(Arc::new(|_path, _other| Err(io::Error::other("path too long")))));
-    let resp = asyncio_runner(manager.get_html_resource(1, "image.jpg"));
+    let resp = block_on(manager.get_html_resource(1, "image.jpg"));
     assert_eq!(resp.status_code, 400);
 }

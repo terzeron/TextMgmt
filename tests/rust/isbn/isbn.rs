@@ -346,7 +346,7 @@ fn pdf_falls_back_when_the_primary_extractor_cannot_open_the_document() {
     let b = backends(&stat, Arc::new(|_| Err("Poppler fail".into())), Arc::new(|_| Ok("ISBN 9788994492032".into())));
     assert_eq!(extract(Path::new("book.pdf"), None, &b), ["9788994492032"]);
     assert!(stage_line(&stat, "isbn_poppler").contains("error=1"));
-    assert!(stage_line(&stat, "isbn_pypdf").contains("ok=1"));
+    assert!(stage_line(&stat, "isbn_fallback").contains("ok=1"));
 }
 
 #[test]
@@ -443,9 +443,9 @@ fn pdf_fallback_outcomes_are_recorded() {
     let stat = Arc::new(Stat::new());
     let none: Primary = Arc::new(|_| Ok((String::new(), 0)));
     assert!(extract(Path::new("a.pdf"), None, &backends(&stat, none.clone(), Arc::new(|_| Ok(String::new())))).is_empty());
-    assert!(stage_line(&stat, "isbn_pypdf").contains("empty=1"));
+    assert!(stage_line(&stat, "isbn_fallback").contains("empty=1"));
     assert!(extract(Path::new("a.pdf"), None, &backends(&stat, none.clone(), Arc::new(|_| Err("boom".into())))).is_empty());
-    assert!(stage_line(&stat, "isbn_pypdf").contains("error=1"));
+    assert!(stage_line(&stat, "isbn_fallback").contains("error=1"));
     let mut slow = backends(
         &stat,
         none,
@@ -456,7 +456,7 @@ fn pdf_fallback_outcomes_are_recorded() {
     );
     slow.pdf_timeout = 0.05;
     assert!(extract(Path::new("a.pdf"), None, &slow).is_empty());
-    assert!(stage_line(&stat, "isbn_pypdf").contains("timeout=1"));
+    assert!(stage_line(&stat, "isbn_fallback").contains("timeout=1"));
 }
 
 #[test]

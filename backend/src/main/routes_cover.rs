@@ -168,7 +168,7 @@ fn success(result: Value) -> Json<Value> {
 }
 
 // ---------------------------------------------------------------------------
-// 쿼리 검증 (FastAPI Query)
+// 쿼리 검증
 // ---------------------------------------------------------------------------
 
 fn invalid(loc: &[&str], msg: &str) -> ApiError {
@@ -183,7 +183,7 @@ fn min_length(name: &'static str, value: &str) -> ApiResult<()> {
     if value.is_empty() { Err(invalid(&["query", name], "String should have at least 1 character")) } else { Ok(()) }
 }
 
-/// FastAPI의 bool 쿼리 해석.
+/// 불리언 쿼리 해석.
 fn parse_bool(name: &'static str, value: Option<&str>) -> ApiResult<bool> {
     value.map_or(Some(false), crate::main::parse_py_bool).ok_or_else(|| invalid(&["query", name], "Input should be a valid boolean, unable to interpret input"))
 }

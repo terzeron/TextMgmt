@@ -42,10 +42,11 @@ use std::sync::{Barrier, Mutex};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, UNIX_EPOCH};
 
-use crate::common::shared_fixtures::{FakeStore, XrefStream, hwp_dir, path_str, run_main, run_main_with, run_main_with_hooks, setup_loader_env, tmp, write_blank_pdf};
+use crate::common::shared_fixtures::{FakeStore, hwp_dir, path_str, run_main, run_main_with, run_main_with_hooks, setup_loader_env, tmp, write_blank_pdf};
 use doc_reader::TEXT_SIZE;
 use doc_reader::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, count_mojibake_runs_with};
 use doc_reader::office::{convert_with_libreoffice, find_libreoffice, read_from_hwp_with_fallback};
+use doc_reader::pdf::XrefStream;
 use doc_reader::pdf::{
     FastCountHooks, InProcess, PlumberDocument, Stage, StageError, StageRunner, fast_page_count, fast_page_count_with, find_xref_offset, parse_one_xref_stream, pdf_text_by_plumber_with,
     read_from_obj_stream, read_from_pdf, run_stage,
@@ -323,8 +324,8 @@ mod test_parse_one_xref_stream {
         stream_data.extend_from_slice(&entry_data);
         stream_data.extend_from_slice(b"\nendstream");
         let result = xref_stream(&stream_data);
-        let (_decompressed, w, _index_ranges, _prev_offset) = result.expect("xref stream을 읽어야 한다");
-        assert_eq!(w, [1, 2, 1]);
+        let parsed = result.expect("xref stream을 읽어야 한다");
+        assert_eq!(parsed.widths, [1, 2, 1]);
     }
 
     #[test]
@@ -348,7 +349,7 @@ mod test_read_file_edge_cases {
 
     #[test]
     fn test_read_file_skip_text_pdf_fast_fails() {
-        // Lines 710-712: skip_text PDF, fast count None, pypdf also fails
+        // Lines 710-712: skip_text PDF, fast count None, lopdf also fails
         // 원본은 _fast_pdf_page_count를 None으로 바꾼다. "not a pdf"는 실제로도 경량 읽기가 실패하므로 바꿔치기 없이 같은 경로를 탄다.
         let dir = tmp();
         let pdf = dir.path().join("cat").join("test.pdf");
@@ -697,8 +698,8 @@ mod test_read_file_comics_pdf {
     use super::*;
 
     #[test]
-    fn test_comics_pdf_fast_count_none_falls_back_to_pypdf() {
-        // _fast_pdf_page_count 가 None 을 반환하면 pypdf.PdfReader 로 페이지 수를 구한다 (lines 726-729).
+    fn test_comics_pdf_fast_count_none_falls_back_to_lopdf() {
+        // _fast_pdf_page_count 가 None 을 반환하면 lopdf로 페이지 수를 구한다 (lines 726-729).
         // comics_path_prefix 를 tmp_path 로 설정
         let dir = tmp();
         let cfg = config_for(dir.path(), dir.path());
@@ -715,8 +716,8 @@ mod test_read_file_comics_pdf {
     }
 
     #[test]
-    fn test_comics_pdf_fast_count_none_pypdf_exception() {
-        // pypdf.PdfReader 도 실패하면 page_count=0 으로 처리한다 (lines 726-732).
+    fn test_comics_pdf_fast_count_none_lopdf_error() {
+        // lopdf도 실패하면 page_count=0 으로 처리한다 (lines 726-732).
         // 원본은 두 함수를 바꿔치기한다. 깨진 PDF는 실제로도 경량 읽기와 lopdf가 모두 실패하므로 같은 경로를 탄다.
         let dir = tmp();
         let cfg = config_for(dir.path(), dir.path());
@@ -771,7 +772,7 @@ mod test_fast_pdf_page_count_branches {
         // traditional lookup: obj 1만 offset 100, 나머지는 None
         let find_offset = |_xd: &[u8], obj: i64| -> Option<i64> { if obj == 1 { Some(100) } else { None } };
         // 단일 stream xref (prev 없음)
-        let parse = |_: &mut File, _: u64| -> Option<XrefStream> { Some((b"d".to_vec(), [1, 2, 1], vec![0, 3], None)) };
+        let parse = |_: &mut File, _: u64| -> Option<XrefStream> { Some(XrefStream { entries: b"d".to_vec(), widths: [1, 2, 1], index_ranges: vec![0, 3], prev: None }) };
         let find_entry = |_d: &[u8], _w: [usize; 3], _ir: &[i64], obj_num: i64| -> Option<(i64, i64, i64)> {
             match obj_num {
                 2 => Some((2, 9, 0)),   // type 2 -> object stream(컨테이너 obj 9)
@@ -1226,12 +1227,12 @@ mod test_zip_container_type {
     }
 }
 
-mod test_pikepdf_repair_round_trip {
+mod test_repair_round_trip {
     use super::*;
 
     #[test]
     fn test_repair_reopens_rewritten_buffer() {
-        // pikepdf 재작성 결과를 메모리에서 그대로 다시 읽는다 (627-629).
+        // 복구 재작성 결과를 메모리에서 그대로 다시 읽는다 (627-629).
         let dir = tmp();
         let pdf = dir.path().join("valid.pdf");
         write_blank_pdf(&pdf);
@@ -1242,7 +1243,7 @@ mod test_pikepdf_repair_round_trip {
     }
 }
 
-mod test_pdfplumber_text_size_limit {
+mod test_lopdf_text_size_limit {
     use super::*;
     use std::cell::RefCell;
 
@@ -1280,7 +1281,7 @@ mod test_pdf_repair_outcomes {
 
     // 구조 복구가 성공도 타임아웃도 아닌 나머지 결과 (735-738).
 
-    /// pypdfium2/pdfplumber(/pdftotext) 단계는 빈 결과로 끝나고, 복구 단계만 준비한 답을 돌려준다.
+    /// poppler/lopdf(/pdftotext) 단계는 빈 결과로 끝나고, 복구 단계만 준비한 답을 돌려준다.
     struct RepairOnly {
         repair: (String, usize),
     }
@@ -1309,7 +1310,7 @@ mod test_pdf_repair_outcomes {
         let read = read_from_pdf(&pdf, &runner);
         assert_eq!(read.page_count, 7);
         let recorded: Vec<(&str, &str)> = read.records.iter().map(|r| (r.stage.name(), r.outcome)).collect();
-        assert!(recorded.contains(&("_pdf_text_by_pikepdf_repair", "damaged")), "{recorded:?}");
+        assert!(recorded.contains(&("pdf_text_repair", "damaged")), "{recorded:?}");
     }
 
     #[test]
@@ -1325,29 +1326,29 @@ mod test_pdf_repair_outcomes {
         assert!(read.summary.trim().is_empty());
         assert_eq!(read.page_count, 12);
         let recorded: Vec<(&str, &str)> = read.records.iter().map(|r| (r.stage.name(), r.outcome)).collect();
-        assert!(recorded.contains(&("_pdf_text_by_pikepdf_repair", "empty")), "{recorded:?}");
+        assert!(recorded.contains(&("pdf_text_repair", "empty")), "{recorded:?}");
     }
 }
 
 mod test_read_file_page_count_timeout {
     use super::*;
 
-    // 페이지 수만 뽑는 경로에서도 pypdf가 무한히 돌면 안 된다.
+    // 페이지 수만 뽑는 경로에서도 쪽 수 읽기가 무한히 돌면 안 된다.
 
-    fn pypdf_times_out(_: &Path) -> Result<usize, ParserTimeout> {
-        Err(ParserTimeout { message: "pypdf/page_count".to_owned() })
+    fn fallback_times_out(_: &Path) -> Result<usize, ParserTimeout> {
+        Err(ParserTimeout { message: "fallback/page_count".to_owned() })
     }
 
     #[test]
     fn test_skip_text_pdf_page_count_timeout() {
-        // skip_text 경로의 pypdf 타임아웃 (1267-1268).
+        // skip_text 경로의 쪽 수 읽기 타임아웃 (1267-1268).
         let dir = tmp();
         let cfg = config_for(dir.path(), &dir.path().join("comics"));
 
         let pdf = dir.path().join("hang.pdf");
         fs::write(&pdf, b"%PDF-1.4 mock").unwrap();
         let fast_none = |_: &Path| -> Option<usize> { None };
-        let hooks = ReadHooks { fast_page_count: Some(&fast_none), fallback_page_count: Some(&pypdf_times_out), ..Default::default() };
+        let hooks = ReadHooks { fast_page_count: Some(&fast_none), fallback_page_count: Some(&fallback_times_out), ..Default::default() };
 
         let data = read_file_with_hooks(&cfg, &pdf, None, true, None, &InProcess, &Stat::new(), &hooks);
 
@@ -1357,14 +1358,14 @@ mod test_read_file_page_count_timeout {
 
     #[test]
     fn test_comics_pdf_page_count_timeout() {
-        // comics 경로의 pypdf 타임아웃 (1312-1313).
+        // comics 경로의 쪽 수 읽기 타임아웃 (1312-1313).
         let dir = tmp();
         let cfg = config_for(dir.path(), dir.path());
 
         let pdf = dir.path().join("comic.pdf");
         fs::write(&pdf, b"%PDF-1.4 mock").unwrap();
         let fast_none = |_: &Path| -> Option<usize> { None };
-        let hooks = ReadHooks { fast_page_count: Some(&fast_none), fallback_page_count: Some(&pypdf_times_out), ..Default::default() };
+        let hooks = ReadHooks { fast_page_count: Some(&fast_none), fallback_page_count: Some(&fallback_times_out), ..Default::default() };
 
         let data = read_file_with_hooks(&cfg, &pdf, None, false, None, &InProcess, &Stat::new(), &hooks);
 

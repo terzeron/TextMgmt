@@ -7,7 +7,7 @@
 //! 가정한 API:
 //! - `db`: 드라이버 추상화 (가짜 연결이 구현한다)
 //!   - `enum DbValue { Null, Int(i64), Text(String), DateTime(chrono::NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`)
-//!   - `type Row = BTreeMap<String, DbValue>`, `enum DbError { IntegrityError(String), Other(String) }`
+//!   - `type Row = BTreeMap<String, DbValue>`, `enum DbError { Constraint(String), Other(String) }`
 //!   - `trait DbCursor { fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError>;
 //!      fn executemany(&mut self, sql: &str, seq: &[Vec<DbValue>]) -> Result<(), DbError>;
 //!      fn fetchall(&mut self) -> Option<Vec<Row>>; fn fetchone(&mut self) -> Option<Row>; fn rowcount(&self) -> u64; }`
@@ -26,16 +26,16 @@
 //!   - `search_by_keyword(&self, &str, ct) -> Vec<String>`
 //!   - `acquire_reload_lock(&self, content_type: &str, category: Option<&str>, reload_source: Option<&str>) -> (bool, Option<String>, Option<Row>)`
 //!   - `release_reload_lock(&self, content_type: &str, category: Option<&str>)`
-//!   - `heartbeat_reload_lock(&self, content_type: &str, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), ValueError>`
-//!   - `complete_reload_lock(&self, content_type: &str, status: &str, error: Option<&str>, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), ValueError>`
+//!   - `heartbeat_reload_lock(&self, content_type: &str, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), CategoryMappingError>`
+//!   - `complete_reload_lock(&self, content_type: &str, status: &str, error: Option<&str>, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), CategoryMappingError>`
 //!   - `get_reload_status(&self, content_type: &str, category: Option<&str>) -> Option<Row>`
 //!   - `add_classify_proposal_items(&self, items: &[Value], category: &str, ct)`, `get_classify_proposal_items(&self, ct).unwrap() -> Vec<Value>`
 //!   - `clear_classify_proposal_items(&self, ct)`, `delete_classify_proposal_item(&self, file_path: &str, ct).unwrap() -> u64`
 //!   - `merge_classify_proposal_status(&self, status: &Value, ct)`
-//!   - `pub const RELOAD_LOCK_HEARTBEAT_STALE_SECONDS: i64`, `struct ValueError(pub String)`
+//!   - `pub const RELOAD_LOCK_HEARTBEAT_STALE_SECONDS: i64`, `struct CategoryMappingError(pub String)`
 //! - `chrono`가 dev-dependency에 있다고 본다 (`datetime.now()` 대응).
 use chrono::{Duration, Local, NaiveDateTime};
-use db::category_mapping::{CategoryMapping, RELOAD_LOCK_HEARTBEAT_STALE_SECONDS, ValueError};
+use db::category_mapping::{CategoryMapping, CategoryMappingError, RELOAD_LOCK_HEARTBEAT_STALE_SECONDS};
 use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
@@ -366,7 +366,7 @@ fn test_add_keyword_empty() {
 
 #[test]
 fn test_add_keyword_duplicate() {
-    let cursor_fail = FakeCursor::new().with_side_effect(|_sql, _params| Err(DbError::IntegrityError("dup".to_string())));
+    let cursor_fail = FakeCursor::new().with_side_effect(|_sql, _params| Err(DbError::Constraint("dup".to_string())));
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor_fail));
     assert!(!cm.add_keyword("cat", "kw", "book").unwrap());
 }
@@ -766,7 +766,7 @@ fn test_heartbeat_reload_lock_updates_counts() {
 fn test_heartbeat_reload_lock_rejects_unknown_field() {
     let cm = build_cm(&FakeCursor::new());
     let result = cm.heartbeat_reload_lock("book", None, &[("bogus_count", 1)]);
-    assert!(matches!(result, Err(ValueError(_))), "{result:?}");
+    assert!(matches!(result, Err(CategoryMappingError(_))), "{result:?}");
 }
 
 #[test]
@@ -795,7 +795,7 @@ fn test_complete_reload_lock_scopes_to_category() {
 fn test_complete_reload_lock_rejects_unknown_field() {
     let cm = build_cm(&FakeCursor::new());
     let result = cm.complete_reload_lock("book", "done", None, None, &[("bogus_count", 1)]);
-    assert!(matches!(result, Err(ValueError(_))), "{result:?}");
+    assert!(matches!(result, Err(CategoryMappingError(_))), "{result:?}");
 }
 
 #[test]
