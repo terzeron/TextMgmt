@@ -51,8 +51,8 @@ name = "text"
 path = "../../tests/rust/doc_reader/text.rs"
 
 [[test]]
-name = "py_str_compat"
-path = "../../tests/rust/doc_reader/py_str_compat.rs"
+name = "text_normalizer"
+path = "../../tests/rust/doc_reader/text_normalizer.rs"
 
 [[test]]
 name = "mojibake_counter"

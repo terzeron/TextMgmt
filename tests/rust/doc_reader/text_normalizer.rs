@@ -1,8 +1,7 @@
-use doc_reader::py_str_compat::{collapse_spaces, head_chars, is_space, keep_ascii_hangul, keep_word_chars, universal_newlines};
+use doc_reader::text_normalizer::{collapse_spaces, head_chars, keep_ascii_hangul, keep_word_chars, universal_newlines};
 
 #[test]
-fn python_string_helpers() {
-    assert!(is_space('\u{1c}') && is_space('\u{a0}') && is_space('\u{3000}') && !is_space('a'));
+fn string_helpers() {
     assert_eq!(head_chars("가나다라", 2), "가나");
     assert_eq!(head_chars("ab", 5), "ab");
     assert_eq!(collapse_spaces("  a \t\n b\u{a0}c  "), "a b c");

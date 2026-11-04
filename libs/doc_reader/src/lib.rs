@@ -8,9 +8,9 @@ pub mod markup;
 pub mod mojibake_counter;
 pub mod office;
 pub mod pdf;
-pub mod py_str_compat;
 pub mod rtf;
 pub mod text;
+pub mod text_normalizer;
 
 /// 요약 길이(문자 수). 원본 `Loader.TEXT_SIZE`.
 pub const TEXT_SIZE: usize = 4096;

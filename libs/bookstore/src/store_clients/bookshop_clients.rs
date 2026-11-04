@@ -308,7 +308,7 @@ impl RidibooksBookstore {
                 }
             };
             let paths: Vec<String> = [pair("parent_category_name", "category_name"), pair("parent_category_name2", "category_name2")].into_iter().flatten().collect();
-            let detail_url = if truthy(book_id) { format!("{RIDI_BASE_URL}/books/{}", py_str(book_id)) } else { String::new() };
+            let detail_url = if truthy(book_id) { format!("{RIDI_BASE_URL}/books/{}", json_text(book_id)) } else { String::new() };
             if !title.is_empty() && !detail_url.is_empty() {
                 results.push((title, author, paths.join(" || "), detail_url, search_url.clone(), String::new()));
             }
@@ -481,7 +481,7 @@ impl AbstractBookstore for NaverShoppingBookstore {
                             && !seen.contains(&id)
                         {
                             seen.push(id);
-                            links.push(format!("{NAVER_SHOPPING_BASE_URL}/book/catalog/{}", py_str(Some(id))));
+                            links.push(format!("{NAVER_SHOPPING_BASE_URL}/book/catalog/{}", json_text(Some(id))));
                         }
                     }
                 }

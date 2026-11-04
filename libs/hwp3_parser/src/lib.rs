@@ -28,19 +28,15 @@ use paragraph_parser::skip_fonts_and_styles;
 
 const SIGNATURE_PREFIX: &[u8] = b"HWP Document File";
 
-/// Python `str.isspace()`: 유니코드 공백에 `\x1c`~`\x1f`가 더해진다.
-fn py_isspace(c: char) -> bool {
-    c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
-}
-
-fn py_strip(s: &str) -> &str {
-    s.trim_matches(py_isspace)
-}
-
 /// 읽을 수 있는 글자인지: 공백, 영숫자, 한글 음절, 한자, 옛한글 자모.
 fn readable_char(c: char, with_compat_jamo: bool) -> bool {
     let n = c as u32;
-    py_isspace(c) || c.is_alphanumeric() || (0xAC00..=0xD7A3).contains(&n) || (with_compat_jamo && (0x3131..=0x318E).contains(&n)) || (0x4E00..=0x9FFF).contains(&n) || (0x1100..=0x11FF).contains(&n)
+    c.is_whitespace()
+        || c.is_alphanumeric()
+        || (0xAC00..=0xD7A3).contains(&n)
+        || (with_compat_jamo && (0x3131..=0x318E).contains(&n))
+        || (0x4E00..=0x9FFF).contains(&n)
+        || (0x1100..=0x11FF).contains(&n)
 }
 
 /// 바이트 스트림에서 HNC 텍스트를 brute-force로 뽑는다(V2.00 대비책).
@@ -76,7 +72,7 @@ pub fn extract_text_bruteforce(body_data: &[u8]) -> String {
     // 품질 필터: 읽을 수 있는 글자가 70% 이상이고 8자 이상인 run만 남긴다.
     let mut clean: Vec<&str> = Vec::new();
     for part in &parts {
-        let stripped = py_strip(part);
+        let stripped = part.trim();
         let len = stripped.chars().count();
         if len < 8 {
             continue;
@@ -194,7 +190,7 @@ pub fn extract_text_from_hwp3(path: &Path) -> String {
     // V1.20은 문서 정보 구조가 달라 문단을 따로 읽는다. 못 읽으면 아래 brute-force로 간다.
     if header.contains("V1.20") {
         let text = extract_text_v120(&data);
-        if !py_strip(&text).is_empty() {
+        if !text.trim().is_empty() {
             return finish_text(text);
         }
     }
@@ -227,7 +223,7 @@ pub fn extract_text_from_hwp3(path: &Path) -> String {
     };
 
     // V2.00·V1.20: 구조 파싱이 비면 brute-force로 뽑는다. 글꼴·스타일 뒤부터 읽어 메타데이터 쓰레기를 줄인다.
-    if py_strip(&text).is_empty() && (header.contains("V2.00") || header.contains("V1.20")) {
+    if text.trim().is_empty() && (header.contains("V2.00") || header.contains("V1.20")) {
         let mut skip = HwpStream::new(body.clone());
         text = match skip_fonts_and_styles(&mut skip) {
             Ok(()) => extract_text_bruteforce(&body[skip.position()..]),
@@ -251,5 +247,5 @@ fn finish_text(mut text: String) -> String {
             return String::new();
         }
     }
-    py_strip(&text).to_owned()
+    text.trim().to_owned()
 }

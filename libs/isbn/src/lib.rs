@@ -120,23 +120,14 @@ fn strip_to_isbn_chars(s: &str) -> String {
     s.chars().filter(|c| decimal_digit_value(*c).is_some() || *c == 'X').collect()
 }
 
-/// Python `int()`이 읽는 Unicode DecimalNumber 문자를 숫자값으로 바꾼다.
+/// ASCII 숫자와 전각 숫자를 숫자값으로 바꾼다.
 fn decimal_digit_value(c: char) -> Option<u32> {
-    use unicode_general_category::{GeneralCategory::DecimalNumber, get_general_category};
-
-    let code = c as u32;
-    if get_general_category(c) != DecimalNumber {
-        return None;
+    match c {
+        '0'..='9' => c.to_digit(10),
+        // 전각 숫자(０~９). 한국어 문서의 ISBN에 가끔 쓰인다.
+        '０'..='９' => Some(c as u32 - '０' as u32),
+        _ => None,
     }
-    let mut zero = code;
-    while zero > 0 {
-        let previous = char::from_u32(zero - 1)?;
-        if get_general_category(previous) != DecimalNumber {
-            break;
-        }
-        zero -= 1;
-    }
-    Some((code - zero) % 10)
 }
 
 pub fn search_in_content(content: &str) -> Vec<String> {

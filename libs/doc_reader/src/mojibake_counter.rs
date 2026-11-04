@@ -3,7 +3,7 @@
 use text_extractor::{decode_korean_ignore, is_hangul_syllable};
 
 use crate::TEXT_SIZE;
-use crate::py_str_compat::head_chars;
+use crate::text_normalizer::head_chars;
 
 /// 이 개수 이상의 mojibake 구간이 나오면 추출 실패로 본다.
 pub const PDF_MOJIBAKE_RUN_LIMIT: usize = 3;
@@ -54,7 +54,7 @@ pub fn count_mojibake_runs_with(text: &str, pattern: &str) -> usize {
 
 /// 비어 있거나 mojibake면 쓸 수 없다. `mojibake_runs`를 넘기면 같은 텍스트를 두 번 훑지 않는다.
 pub fn is_usable_text(text: &str, mojibake_runs: Option<usize>) -> bool {
-    if head_chars(text, TEXT_SIZE).trim_matches(crate::py_str_compat::is_space).is_empty() {
+    if head_chars(text, TEXT_SIZE).trim_matches(char::is_whitespace).is_empty() {
         return false;
     }
     mojibake_runs.unwrap_or_else(|| count_mojibake_runs(text)) < PDF_MOJIBAKE_RUN_LIMIT

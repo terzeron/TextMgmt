@@ -58,10 +58,15 @@ fn validate_isbn_dispatches_on_length() {
 }
 
 #[test]
-fn validators_accept_unicode_decimal_digits_like_python() {
-    assert!(validate_isbn13("9788٩94492032"));
-    assert!(validate_isbn10("030640615٢"));
-    assert_eq!(search_in_content("9788994٩42032"), ["9788994٩42032"]);
+/// 숫자는 ASCII와 전각(０~９)만 받는다. 아랍-인도 숫자 같은 다른 유니코드 숫자는 받지 않는다.
+fn validators_accept_ascii_and_fullwidth_digits_only() {
+    assert!(validate_isbn13("9788９94492032"));
+    assert!(validate_isbn10("030640615２"));
+    assert_eq!(search_in_content("9788994９42032"), ["9788994９42032"]);
+
+    assert!(!validate_isbn13("9788٩94492032"));
+    assert!(!validate_isbn10("030640615٢"));
+    assert!(search_in_content("9788994٩42032").is_empty());
 }
 
 // ---- 본문 검색 ----

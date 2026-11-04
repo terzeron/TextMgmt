@@ -11,7 +11,6 @@ doc_reader = { path = "../doc_reader" }
 sysdeps = { path = "../sysdeps" }
 regex = "1.13.1"
 stat = { path = "../stat" }
-unicode-general-category = "1.1.0"
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -358,7 +358,7 @@ pub fn split_author_title(stem: &str) -> (String, String) {
         && let Some(end) = rest.find(']')
     {
         let author = &rest[..end];
-        let title = rest[end + 1..].trim_start_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c));
+        let title = rest[end + 1..].trim_start();
         if !author.is_empty() && !title.is_empty() && !title.contains('\n') && !author.contains('\n') {
             return (author.to_owned(), title.to_owned());
         }

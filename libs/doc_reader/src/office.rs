@@ -9,7 +9,7 @@ use sysdeps::timeout_runner::run_with_hard_timeout;
 use sysdeps::zip_opener::open_zip;
 
 use crate::TEXT_SIZE;
-use crate::py_str_compat::{head_chars, is_space, keep_word_chars};
+use crate::text_normalizer::{head_chars, keep_word_chars};
 
 /// 변환 한 번에 허용하는 시간(초).
 pub const LIBREOFFICE_TIMEOUT: f64 = 60.0;
@@ -99,7 +99,7 @@ fn read_hwp3_natively(path: &Path, extract: &dyn Fn(&Path) -> Result<String, Str
     if !hwp3_parser::is_hwp3(path) {
         return None;
     }
-    let raw = extract(path).ok().filter(|text| !text.trim_matches(is_space).is_empty())?;
+    let raw = extract(path).ok().filter(|text| !text.trim_matches(char::is_whitespace).is_empty())?;
     let (summary, lines) = finish(&raw);
     Some((summary, lines, Vec::new()))
 }

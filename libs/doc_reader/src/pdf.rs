@@ -12,7 +12,7 @@ use regex::bytes::Regex as BytesRegex;
 
 use crate::TEXT_SIZE;
 use crate::mojibake_counter::{count_mojibake_runs, is_usable_text};
-use crate::py_str_compat::{head_chars, is_space, keep_word_chars};
+use crate::text_normalizer::{head_chars, keep_word_chars};
 
 /// 앞에서부터 이만큼의 쪽만 훑는다(TEXT_SIZE를 채우는 데 실측 최대 27쪽).
 pub const PDF_PAGE_LIMIT: usize = 40;
@@ -133,7 +133,7 @@ pub struct PdfRead {
 }
 
 fn blank(text: &str) -> bool {
-    text.trim_matches(is_space).is_empty()
+    text.trim_matches(char::is_whitespace).is_empty()
 }
 
 /// PDF에서 요약과 쪽수를 읽는다.

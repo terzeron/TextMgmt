@@ -194,7 +194,7 @@ impl JoaraBookstore {
 
         let mut results = Vec::new();
         for book in books.iter().take(self.max_results) {
-            let code = if truthy(book.get("book_code")) { py_str(book.get("book_code")) } else { String::new() };
+            let code = if truthy(book.get("book_code")) { json_text(book.get("book_code")) } else { String::new() };
             let (title, author, category) = (str_field(book, "subject"), str_field(book, "member_name"), str_field(book, "category_name"));
             let detail_url = if code.is_empty() { String::new() } else { format!("{JOARA_BASE_URL}/book/{code}") };
             if !title.is_empty() && !detail_url.is_empty() {

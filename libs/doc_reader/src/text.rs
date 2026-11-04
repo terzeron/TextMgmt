@@ -8,7 +8,7 @@ use std::{fs, io};
 
 use encoding_rs::{EUC_KR, WINDOWS_1252};
 
-use crate::py_str_compat::{collapse_spaces, head_chars, is_all_space, keep_ascii_hangul, universal_newlines};
+use crate::text_normalizer::{collapse_spaces, head_chars, is_all_space, keep_ascii_hangul, universal_newlines};
 use crate::{TEXT_SIZE, mojibake_counter};
 
 /// txt 디코딩 시도 순서(원본 `TEXT_ENCODINGS`).

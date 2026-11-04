@@ -150,7 +150,7 @@ fn truthy(value: Option<&Value>) -> bool {
 }
 
 /// Python `str(value)` 대응. 문자열은 그대로, 없음은 빈 문자열, 나머지는 JSON 표기다.
-fn py_str(v: Option<&Value>) -> String {
+fn json_text(v: Option<&Value>) -> String {
     match v {
         None | Some(Value::Null) => String::new(),
         Some(Value::String(s)) => s.clone(),
@@ -160,7 +160,7 @@ fn py_str(v: Option<&Value>) -> String {
 
 /// `obj.get(key) or ""`
 fn str_field(obj: &Value, key: &str) -> String {
-    py_str(obj.get(key))
+    json_text(obj.get(key))
 }
 
 /// `obj.get(key) or []`을 배열로. 배열이 아니면 빈 목록이다.

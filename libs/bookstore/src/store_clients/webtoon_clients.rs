@@ -34,7 +34,7 @@ impl NaverWebtoonBookstore {
             let title_id = webtoon.get("titleId");
             let (title, author) = (str_field(webtoon, "titleName"), str_field(webtoon, "displayAuthor"));
             let category = array_field(webtoon, "genreList").iter().map(|g| str_field(g, "description")).filter(|d| !d.is_empty()).collect::<Vec<_>>().join("/");
-            let detail_url = if truthy(title_id) { format!("{NAVER_WEBTOON_BASE_URL}/webtoon/list?titleId={}", py_str(title_id)) } else { String::new() };
+            let detail_url = if truthy(title_id) { format!("{NAVER_WEBTOON_BASE_URL}/webtoon/list?titleId={}", json_text(title_id)) } else { String::new() };
             if !title.is_empty() && !detail_url.is_empty() {
                 results.push((title, author, category, detail_url, search_url.clone(), String::new()));
             }
@@ -101,7 +101,7 @@ impl KakaoWebtoonBookstore {
             let author = join_unique(names, ", ");
             let seo_id = str_field(content, "seoId");
             let slug = if seo_id.is_empty() { &title } else { &seo_id };
-            let detail_url = if truthy(content_id) { format!("{KAKAO_WEBTOON_BASE_URL}/content/{}/{}", quote(slug, "/"), py_str(content_id)) } else { String::new() };
+            let detail_url = if truthy(content_id) { format!("{KAKAO_WEBTOON_BASE_URL}/content/{}/{}", quote(slug, "/"), json_text(content_id)) } else { String::new() };
             if !title.is_empty() && !detail_url.is_empty() {
                 results.push((title, author, str_field(content, "genre"), detail_url, search_url.clone(), String::new()));
             }
@@ -166,8 +166,8 @@ impl BomtoonBookstore {
             }
             let alias = str_field(content, "alias");
             let title = str_field(content, "title");
-            let author = join_unique(array_field(content, "author").iter().map(|a| py_str(Some(a))), ", ");
-            let category = array_field(content, "tags").iter().take(BOMTOON_CATEGORY_TAG_COUNT).map(|t| py_str(Some(t))).collect::<Vec<_>>().join("/");
+            let author = join_unique(array_field(content, "author").iter().map(|a| json_text(Some(a))), ", ");
+            let category = array_field(content, "tags").iter().take(BOMTOON_CATEGORY_TAG_COUNT).map(|t| json_text(Some(t))).collect::<Vec<_>>().join("/");
             let detail_url = if alias.is_empty() { String::new() } else { format!("{BOMTOON_BASE_URL}/detail/{}", quote(&alias, "/")) };
             if !title.is_empty() && !detail_url.is_empty() {
                 results.push((title, author, category, detail_url, search_url.clone(), String::new()));
@@ -225,7 +225,7 @@ impl LezhinBookstore {
             let title = str_field(content, "title");
             let names = array_field(content, "artists").iter().filter(|a| LEZHIN_AUTHOR_ROLES.contains(&str_field(a, "role").as_str())).map(|a| str_field(a, "name")).filter(|n| !n.is_empty());
             let author = join_unique(names, ", ");
-            let category = array_field(content, "genres").iter().map(|g| py_str(Some(g))).collect::<Vec<_>>().join("/");
+            let category = array_field(content, "genres").iter().map(|g| json_text(Some(g))).collect::<Vec<_>>().join("/");
             let detail_url = if alias.is_empty() { String::new() } else { format!("{LEZHIN_BASE_URL}/ko/comic/{}", quote(&alias, "/")) };
             if !title.is_empty() && !detail_url.is_empty() {
                 results.push((title, author, category, detail_url, search_url.clone(), String::new()));
@@ -334,7 +334,7 @@ impl ToptoonBookstore {
         let mut results = Vec::new();
         for (_, _, comic) in matches.into_iter().take(self.max_results) {
             let meta = &comic["meta"];
-            let author = [meta.pointer("/authorList/authorStr"), meta.pointer("/author/authorString")].into_iter().find(|v| truthy(*v)).map(|v| py_str(v)).unwrap_or_default();
+            let author = [meta.pointer("/authorList/authorStr"), meta.pointer("/author/authorString")].into_iter().find(|v| truthy(*v)).map(|v| json_text(v)).unwrap_or_default();
             let category = array_field(meta, "genre").iter().map(|g| str_field(g, "name")).filter(|n| !n.is_empty()).collect::<Vec<_>>().join("/");
             results.push((str_field(meta, "title"), author, category, format!("{TOPTOON_BASE_URL}{}", str_field(meta, "comicsListUrl")), search_url.clone(), String::new()));
         }

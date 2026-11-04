@@ -1,5 +1,4 @@
 mod corpus;
-use doc_reader::py_str_compat::is_space;
 use doc_reader::text::{Enc, decode, detect_hint, high_byte_paired_ratio, read_from_text, reencode_text_file_to_utf8, summarize};
 use std::fs;
 use std::path::Path;
@@ -8,18 +7,6 @@ fn write(dir: &Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
     let path = dir.join(name);
     fs::write(&path, bytes).unwrap();
     path
-}
-
-#[test]
-fn python_313_isspace_matches_unicode_151_for_all_codepoints() {
-    // Python 3.13.7 / Unicode 15.1.0 `chr(cp).isspace()` oracle.
-    const RANGES: [(u32, u32); 10] =
-        [(0x0009, 0x000d), (0x001c, 0x0020), (0x0085, 0x0085), (0x00a0, 0x00a0), (0x1680, 0x1680), (0x2000, 0x200a), (0x2028, 0x2029), (0x202f, 0x202f), (0x205f, 0x205f), (0x3000, 0x3000)];
-    for codepoint in 0..=0x10ffff {
-        let expected = RANGES.iter().any(|(start, end)| codepoint >= *start && codepoint <= *end);
-        let actual = char::from_u32(codepoint).is_some_and(is_space);
-        assert_eq!(actual, expected, "U+{codepoint:04X}");
-    }
 }
 
 #[test]
