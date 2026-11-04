@@ -648,7 +648,7 @@ fn run(zip: &mut Zip, limits: &Limits, verified: &HashMap<usize, u64>, sink: &mu
             ctx.budget.remaining -= n;
             continue;
         }
-        FULL_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        FULL_READS.with(|reads| reads.set(reads.get() + 1));
         let mut cap = Capture { n: 0, buf: keep.then(Vec::new) };
         // ZIP은 끝까지 읽어야 CRC를 검증한다. limit+1바이트까지 읽으면 limit 이하 멤버는 항상 끝에 닿는다.
         let result = io::copy(&mut (&mut entry).take(limit + 1), &mut cap);
@@ -719,8 +719,15 @@ pub fn inspect_with(path: &Path, report: &mut FileReport, limits: &Limits) {
     inspect_with_verified(path, report, limits, &HashMap::new());
 }
 
-/// 전체 읽기 단계에서 실제로 `io::copy`로 읽은 멤버 수. 보안 단계가 검증한 멤버를 건너뛰는지 테스트가 센다(성능 회귀 감시용).
-pub static FULL_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+thread_local! {
+    /// 이 스레드의 전체 읽기 단계에서 실제로 `io::copy`로 읽은 멤버 수. 스레드별이라 같은 프로세스의 다른 검사와 섞이지 않는다.
+    static FULL_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// 이 스레드에서 전체 읽기 단계가 실제로 읽은 멤버 수. 보안 단계가 검증한 멤버를 건너뛰는지 테스트가 센다(성능 회귀 감시용).
+pub fn full_reads() -> usize {
+    FULL_READS.with(std::cell::Cell::get)
+}
 
 /// `inspect_with`와 같되, 보안 단계가 이미 끝까지 읽어 CRC를 통과한 멤버(ZIP 인덱스 → 읽은 바이트)는 다시 풀지 않는다.
 /// 읽은 것으로 치고 예산에서 같은 바이트만 뺀다. 내용이 필요한 spine 문서·NCX는 `verified`에 있어도 읽는다.

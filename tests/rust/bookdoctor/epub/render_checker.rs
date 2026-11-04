@@ -1,15 +1,13 @@
 #[path = "../support/mod.rs"]
 mod support;
-
 use std::fs;
 use std::path::Path;
-
 use bookdoctor::cli_parser::Options;
-use bookdoctor::epub::render_checker::{MAX_UNREADABLE_FINDINGS, ReadErrorKind, Selector, classify_read_error, count_hidden_elements, inspect, inspect_with, zero_size_selectors};
-use bookdoctor::epub::security_checker::Limits;
+use bookdoctor::epub::{render_checker::classify_read_error, render_checker::count_hidden_elements, render_checker::full_reads, render_checker::inspect, render_checker::inspect_with, render_checker::inspect_with_verified, render_checker::MAX_UNREADABLE_FINDINGS, render_checker::ReadErrorKind, render_checker::Selector, render_checker::zero_size_selectors, scan_epub_file, security_checker::Limits, security_checker::scan_verified};
 use bookdoctor::format_dispatcher::scan_file;
 use support::*;
 use bookdoctor::{Category, FileReport, Format, Severity};
+use std::collections::HashMap;
 
 const OPF_NS_DECL: &str = r#" xmlns:dc="http://purl.org/dc/elements/1.1/""#;
 const OPF_PATH: &str = "OEBPS/content.opf";
@@ -755,4 +753,96 @@ fn scan_file_skips_render_when_not_a_zip() {
     let f = file_with("a.epub", b"PK\x03\x04 truncated");
     let r = scan_file(f.path(), &Options::default());
     assert!(!r.findings.iter().any(|x| x.code == "HEAD_MISSING" || x.code == "MANIFEST_EMPTY"), "{:?}", r.findings);
+}
+
+fn binary(len: usize, seed: u8) -> Vec<u8> {
+    // UTF-8로 유효하지 않은 바이트가 많이 든 데이터(이미지·폰트처럼).
+    (0..len).map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed) | 0x80).collect()
+}
+
+fn epub_with_media(path: &Path) {
+    let jpg = binary(300_000, 1);
+    let png = binary(200_000, 2);
+    support::epub_with_files(path, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/a.jpg", &jpg), ("OEBPS/b.png", &png), ("OEBPS/c.ttf", &jpg)]);
+}
+
+/// 같은 보안 단계 결과 위에서 렌더링을 새 방식(검증된 멤버 건너뜀)과 옛 방식으로 돌려 결과를 견준다.
+fn render_both_ways(path: &Path, limits: &Limits) -> (FileReport, FileReport, HashMap<usize, u64>) {
+    let mut base = FileReport::new(path, Some(Format::Epub));
+    let (_, verified) = scan_verified(path, limits, &mut base);
+    let mut new = base.clone();
+    inspect_with_verified(path, &mut new, limits, &verified);
+    let mut old = base.clone();
+    inspect_with(path, &mut old, limits);
+    (new, old, verified)
+}
+
+fn assert_same(new: &FileReport, old: &FileReport) {
+    assert_eq!(new.findings, old.findings);
+    assert_eq!(new.reasons, old.reasons);
+    assert_eq!(new.incomplete, old.incomplete);
+}
+
+#[test]
+fn render_skips_members_the_security_pass_already_read_to_the_end() {
+    let d = tempfile::tempdir().unwrap();
+    let plain = d.path().join("plain.epub");
+    support::epub_with_chapter(&plain, &support::xhtml("<p>본문</p>"));
+    let media = d.path().join("media.epub");
+    epub_with_media(&media);
+    let count = |p: &Path| {
+        let before = full_reads();
+        scan_epub_file(p, &Options::default(), &mut FileReport::new(p, Some(Format::Epub)));
+        full_reads() - before
+    };
+    assert_eq!(count(&media), count(&plain), "이미지·폰트 멤버는 보안 단계가 이미 끝까지 읽었으므로 렌더링이 다시 읽지 않는다");
+}
+
+#[test]
+fn skipping_verified_members_does_not_change_render_results() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("media.epub");
+    epub_with_media(&p);
+    let (new, old, verified) = render_both_ways(&p, &Limits::default());
+    assert_same(&new, &old);
+    assert!(verified.len() >= 3, "{verified:?}");
+}
+
+#[test]
+fn corrupt_member_is_still_reported_by_the_render_pass() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("crc.epub");
+    let mut x = 0x2545_F491_4F6C_DD1Du64;
+    let jpg: Vec<u8> = (0..50_000)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x as u8
+        })
+        .collect();
+    support::epub_with_files(&p, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/a.jpg", &jpg)]);
+    // 압축되지 않는 데이터라 본문 한가운데를 깨뜨려도 스트림은 풀리고 CRC만 틀린다.
+    let mut b = std::fs::read(&p).unwrap();
+    let at = support::data_offset(&b, "OEBPS/a.jpg");
+    b[at + 20_000] ^= 0xFF;
+    std::fs::write(&p, b).unwrap();
+    let (new, old, verified) = render_both_ways(&p, &Limits::default());
+    assert_same(&new, &old);
+    assert!(new.has("ZIP_CRC_MISMATCH"), "{:?}", new.findings);
+    // 손상 멤버는 보안 단계의 읽기가 실패하므로 검증 목록에 없다(그래서 렌더링이 읽어 보고한다).
+    let names = ["mimetype", "META-INF/container.xml", "OEBPS/content.opf", "OEBPS/ch1.xhtml", "OEBPS/a.jpg"];
+    assert!(!verified.contains_key(&names.iter().position(|n| *n == "OEBPS/a.jpg").unwrap()), "{verified:?}");
+}
+
+#[test]
+fn budget_exhaustion_is_judged_the_same_with_or_without_skipping() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("big.epub");
+    epub_with_media(&p);
+    for max_total in [200_000u64, 450_000, 600_000, 2_000_000] {
+        let limits = Limits { max_total, ..Limits::default() };
+        let (new, old, _) = render_both_ways(&p, &limits);
+        assert_same(&new, &old);
+    }
 }

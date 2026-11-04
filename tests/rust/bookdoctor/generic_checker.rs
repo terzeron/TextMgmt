@@ -1,9 +1,14 @@
 mod support;
-
 use bookdoctor::cli_parser::Options;
 use bookdoctor::generic_checker::sniff_head;
 use bookdoctor::format_dispatcher::scan_file;
 use bookdoctor::magic_sniffer::Sniffed;
+use std::fs::File;
+use bookdoctor::{Category, Format, Severity};
+use std::fs;
+use std::io::Write;
+use std::sync::mpsc;
+use std::time::Duration;
 
 fn count(r: &bookdoctor::FileReport, code: &str) -> usize {
     r.findings.iter().filter(|f| f.code == code).count()
@@ -16,4 +21,299 @@ fn epub_embedding_a_pdf_early_is_still_a_zip() {
     assert_eq!(sniff_head(&bytes), Sniffed::Zip);
     let f = support::file_with("a.epub", &bytes);
     assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "FORMAT_MISMATCH"), 0);
+}
+
+fn find<'a>(r: &'a bookdoctor::FileReport, code: &str) -> &'a bookdoctor::Finding {
+    r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} 없음: {:?}", r.findings))
+}
+
+fn tail_zeroed(len: usize) -> Vec<u8> {
+    let mut v = vec![1u8; len];
+    let from = len.saturating_sub(4096);
+    v[from..].fill(0);
+    v
+}
+
+/// MZ + e_lfanew=`lfanew`인 머리 뒤를 0으로 채워 `total` 바이트로 만든다. `sig`가 있으면 `lfanew`에 쓴다.
+fn far_pe(lfanew: u32, total: usize, sig: bool) -> Vec<u8> {
+    let mut v = vec![0u8; total];
+    v[..2].copy_from_slice(b"MZ");
+    v[0x3C..0x40].copy_from_slice(&lfanew.to_le_bytes());
+    if sig {
+        v[lfanew as usize..lfanew as usize + 4].copy_from_slice(b"PE\0\0");
+    }
+    v
+}
+
+#[test]
+fn flags_empty_file() {
+    let f = support::file_with("a.txt", b"");
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    let x = find(&r, "EMPTY_FILE");
+    assert_eq!((x.category, x.severity), (Category::Defect, Severity::Medium));
+    assert!(!r.incomplete);
+    assert_eq!(r.format, None);
+}
+
+#[test]
+fn flags_sparse_file() {
+    let f = support::file_with("a.txt", b"");
+    File::options().write(true).open(f.path()).unwrap().set_len(2 * 1024 * 1024).unwrap();
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    let x = find(&r, "SPARSE_FILE");
+    assert_eq!((x.category, x.severity), (Category::Defect, Severity::High));
+}
+
+#[test]
+fn flags_zero_tail() {
+    let f = support::file_with("a.txt", &tail_zeroed(8192));
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    let x = find(&r, "ZERO_TAIL");
+    assert_eq!((x.category, x.severity), (Category::Defect, Severity::High));
+}
+
+#[test]
+fn flags_format_mismatch_for_pdf_that_is_really_an_epub() {
+    let f = support::epub_named("book.pdf");
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    assert_eq!(r.format, Some(Format::Epub));
+    assert_eq!(count(&r, "FORMAT_MISMATCH"), 1);
+    let x = find(&r, "FORMAT_MISMATCH");
+    assert_eq!((x.category, x.severity), (Category::Defect, Severity::Medium));
+}
+
+#[test]
+fn flags_disguised_executable() {
+    for (name, head) in [("a.epub", &b"\x7fELF\x02\x01"[..]), ("a.pdf", &support::minimal_pe()[..]), ("a.txt", b"\xCF\xFA\xED\xFE")] {
+        let f = support::file_with(name, head);
+        let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+        let x = find(&r, "DISGUISED_EXECUTABLE");
+        assert_eq!((x.category, x.severity), (Category::Security, Severity::Critical), "{name}");
+        assert_eq!(count(&r, "FORMAT_MISMATCH"), 1, "{name}");
+    }
+}
+
+#[test]
+fn flags_filename_control_char() {
+    let f = support::file_with("a\u{1}b.txt", "본문\n".as_bytes());
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    let x = find(&r, "FILENAME_CONTROL_CHAR");
+    assert_eq!((x.category, x.severity), (Category::Defect, Severity::Medium));
+}
+
+#[test]
+fn flags_filename_reserved_name() {
+    let f = support::file_with("CON.txt", "본문\n".as_bytes());
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    let x = find(&r, "FILENAME_RESERVED_NAME");
+    assert_eq!((x.category, x.severity), (Category::Defect, Severity::Low));
+}
+
+#[test]
+fn sparse_below_one_mib_is_not_flagged() {
+    let f = support::file_with("a.txt", b"");
+    File::options().write(true).open(f.path()).unwrap().set_len(1024 * 1024 - 1).unwrap();
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    assert_eq!(count(&r, "SPARSE_FILE"), 0);
+}
+
+#[test]
+fn dense_large_file_is_not_sparse() {
+    let f = support::file_with("a.txt", &vec![b'a'; 2 * 1024 * 1024]);
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    assert_eq!(count(&r, "SPARSE_FILE"), 0);
+}
+
+#[test]
+fn zero_tail_needs_4096_bytes() {
+    let f = support::file_with("a.txt", &vec![0u8; 4095]);
+    assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "ZERO_TAIL"), 0);
+    let f = support::file_with("a.txt", &vec![0u8; 4096]);
+    assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "ZERO_TAIL"), 1);
+}
+
+#[test]
+fn nonzero_last_byte_is_not_zero_tail() {
+    let mut v = tail_zeroed(8192);
+    *v.last_mut().unwrap() = 1;
+    let f = support::file_with("a.txt", &v);
+    assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "ZERO_TAIL"), 0);
+}
+
+#[test]
+fn flags_format_mismatch_for_pdf_that_is_text() {
+    let f = support::file_with("a.pdf", "그냥 텍스트\n".as_bytes());
+    assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "FORMAT_MISMATCH"), 1);
+}
+
+#[test]
+fn flags_format_mismatch_for_epub_that_is_not_zip() {
+    let f = support::file_with("a.epub", b"%PDF-1.4\n%%EOF\n");
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    assert_eq!(count(&r, "FORMAT_MISMATCH"), 1);
+    assert_eq!(r.format, Some(Format::Pdf));
+}
+
+#[test]
+fn flags_format_mismatch_for_txt_that_is_a_zip() {
+    let f = support::file_with("a.txt", b"PK\x03\x04rest");
+    assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "FORMAT_MISMATCH"), 1);
+}
+
+#[test]
+fn matching_content_has_no_format_mismatch() {
+    let f = support::epub_named("a.epub");
+    assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "FORMAT_MISMATCH"), 0);
+    let f = support::file_with("a.pdf", b"%PDF-1.4\n");
+    assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "FORMAT_MISMATCH"), 0);
+}
+
+#[test]
+fn flags_filename_control_char_in_non_utf8_name() {
+    use std::os::unix::ffi::OsStrExt;
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join(std::ffi::OsStr::from_bytes(b"\xff\x07.txt"));
+    fs::write(&p, "본문\n").unwrap();
+    assert_eq!(count(&scan_file(&p, &Options { no_pdf_worker: true, ..Options::default() }), "FILENAME_CONTROL_CHAR"), 1);
+}
+
+#[test]
+fn flags_filename_too_long() {
+    // 파일시스템이 255바이트 초과 이름을 만들지 못하므로 없는 경로로 검사한다. 이름 검사는 파일을 열기 전에 한다.
+    let d = tempfile::tempdir().unwrap();
+    let long = d.path().join(format!("{}.txt", "a".repeat(252)));
+    assert_eq!(long.file_name().unwrap().len(), 256);
+    let r = scan_file(&long, &Options { no_pdf_worker: true, ..Options::default() });
+    let x = find(&r, "FILENAME_TOO_LONG");
+    assert_eq!((x.category, x.severity), (Category::Defect, Severity::Low));
+    let ok = d.path().join(format!("{}.txt", "a".repeat(251)));
+    assert_eq!(count(&scan_file(&ok, &Options { no_pdf_worker: true, ..Options::default() }), "FILENAME_TOO_LONG"), 0);
+}
+
+#[test]
+fn clean_text_file_has_no_common_findings() {
+    let f = support::file_with("a.txt", "소림사 장로가 강호에서 수련했다.\n".as_bytes());
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    assert!(r.findings.is_empty(), "{:?}", r.findings);
+    assert!(!r.incomplete);
+    assert_eq!(r.format, Some(Format::Txt));
+}
+
+#[test]
+fn flags_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+    unsafe extern "C" {
+        #[link_name = "geteuid"]
+        fn libc_geteuid() -> u32;
+    }
+    if unsafe { libc_geteuid() } == 0 {
+        eprintln!("skipped: running as root");
+        return;
+    }
+    let f = support::file_with("a.txt", b"hello");
+    fs::set_permissions(f.path(), fs::Permissions::from_mode(0o000)).unwrap();
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    assert!(r.incomplete);
+    assert!(r.reasons[0].starts_with("unreadable:"), "{:?}", r.reasons);
+    assert!(r.findings.is_empty());
+}
+
+#[test]
+fn skipped_over_limit() {
+    let f = support::file_with("a.txt", b"");
+    let mut w = File::options().write(true).open(f.path()).unwrap();
+    w.write_all(&vec![b'a'; 2 * 1024 * 1024]).unwrap();
+    let opts = Options { max_total_mb: 1, no_pdf_worker: true, ..Options::default() };
+    let r = scan_file(f.path(), &opts);
+    assert!(r.incomplete);
+    assert!(r.reasons[0].starts_with("skipped:"), "{:?}", r.reasons);
+    assert!(r.reasons[0].contains("exceeds --max-total-mb"));
+    assert_eq!(r.format, None);
+}
+
+#[test]
+fn directory_is_not_a_regular_file() {
+    let d = tempfile::tempdir().unwrap();
+    let r = scan_file(d.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    assert!(r.incomplete);
+    assert_eq!(r.reasons[0], "unreadable: not a regular file");
+}
+
+#[test]
+fn fifo_returns_promptly_as_incomplete() {
+    let d = tempfile::tempdir().unwrap();
+    let fifo = d.path().join("pipe.txt");
+    match std::process::Command::new("mkfifo").arg(&fifo).status() {
+        Ok(s) if s.success() => {}
+        _ => {
+            eprintln!("skipped: mkfifo unavailable");
+            return;
+        }
+    }
+    let (tx, rx) = mpsc::channel();
+    let p = fifo.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(scan_file(&p, &Options { no_pdf_worker: true, ..Options::default() }));
+    });
+    let r = rx.recv_timeout(Duration::from_secs(5)).expect("FIFO 검사가 멈췄다");
+    assert!(r.incomplete);
+    assert_eq!(r.reasons[0], "unreadable: not a regular file");
+}
+
+#[test]
+fn text_starting_with_mz_has_no_findings() {
+    let f = support::file_with("a.txt", b"MZ Software notes\n");
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    assert!(r.findings.is_empty(), "{:?}", r.findings);
+}
+
+#[test]
+fn valid_pe_in_txt_is_disguised_executable() {
+    let f = support::file_with("a.txt", &support::minimal_pe());
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    assert_eq!(find(&r, "DISGUISED_EXECUTABLE").severity, Severity::Critical);
+}
+
+#[test]
+fn file_of_exactly_max_total_mb_is_not_skipped() {
+    let f = support::file_with("a.txt", &vec![b'a'; 1024 * 1024]);
+    let opts = Options { max_total_mb: 1, no_pdf_worker: true, ..Options::default() };
+    let r = scan_file(f.path(), &opts);
+    assert!(!r.incomplete, "{:?}", r.reasons);
+    assert_eq!(r.format, Some(Format::Txt));
+}
+
+#[test]
+fn far_pe_header_beyond_head_is_disguised_executable() {
+    let f = support::file_with("a.epub", &far_pe(70000, 70004, true));
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    assert_eq!(find(&r, "DISGUISED_EXECUTABLE").severity, Severity::Critical);
+    assert_eq!(count(&r, "FORMAT_MISMATCH"), 1);
+}
+
+#[test]
+fn far_mz_without_pe_signature_is_not_disguised() {
+    let f = support::file_with("a.epub", &far_pe(70000, 70100, false));
+    assert_eq!(count(&scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() }), "DISGUISED_EXECUTABLE"), 0);
+}
+
+#[test]
+fn mz_with_lfanew_past_eof_is_not_disguised() {
+    let f = support::file_with("a.epub", &far_pe(70000, 69999, false));
+    let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+    assert_eq!(count(&r, "DISGUISED_EXECUTABLE"), 0);
+    assert!(!r.incomplete || r.reasons.iter().all(|x| !x.starts_with("unreadable")));
+}
+
+#[test]
+fn flags_bidi_and_zero_width_characters_in_the_file_name() {
+    for name in ["evil\u{202e}gpj.txt", "a\u{200b}b.txt", "a\u{feff}b.txt", "a\u{2066}b.txt"] {
+        let f = support::file_with(name, "본문\n".as_bytes());
+        let r = scan_file(f.path(), &Options { no_pdf_worker: true, ..Options::default() });
+        let x = find(&r, "FILENAME_CONTROL_CHAR");
+        assert_eq!((x.category, x.severity), (Category::Defect, Severity::Medium), "{name:?}");
+        assert_eq!(count(&r, "FILENAME_CONTROL_CHAR"), 1, "{name:?}");
+    }
+    let ok = support::file_with("정상 이름.txt", "본문\n".as_bytes());
+    assert_eq!(count(&scan_file(ok.path(), &Options { no_pdf_worker: true, ..Options::default() }), "FILENAME_CONTROL_CHAR"), 0);
 }

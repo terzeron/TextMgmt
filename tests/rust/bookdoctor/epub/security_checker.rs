@@ -1,189 +1,167 @@
-//! `bookdoctor::epub::security_checker` 단위 테스트. 원본 테스트 파일마다 하위 모듈로 나눠 둔다.
+//! `bookdoctor::epub::security_checker` 단위 테스트.
 
 #[path = "../support/mod.rs"]
 mod support;
+use std::path::Path;
+use bookdoctor::epub::{security_checker::decode_calls, security_checker::Limits, security_checker::scan as scan_into};
+use bookdoctor::{FileReport, Format, Severity};
+use std::fs;
+use std::io::Write;
+use support::*;
 
-// `tests/rust/bookdoctor/epub_perf.rs`에서 옮긴 테스트.
-mod epub_perf {
-    use super::{support};
-
-    use std::path::Path;
-
-    use bookdoctor::epub::security_checker::{Limits, decode_calls, scan};
-    use bookdoctor::{FileReport, Format};
-
-    fn scan_counting(path: &Path) -> (FileReport, usize) {
-        let before = decode_calls();
-        let mut r = FileReport::new(path, Some(Format::Epub));
-        scan(path, &Limits::default(), &mut r);
-        (r, decode_calls() - before)
-    }
-
-    fn binary(len: usize, seed: u8) -> Vec<u8> {
-        // UTF-8로 유효하지 않은 바이트가 많이 든 데이터(이미지·폰트처럼).
-        (0..len).map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed) | 0x80).collect()
-    }
-
-    #[test]
-    fn text_members_are_decoded() {
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("t.epub");
-        support::epub_with_chapter(&p, &support::xhtml("<p>본문</p>"));
-        let (_, calls) = scan_counting(&p);
-        assert!(calls >= 2, "xhtml와 opf는 변환해서 검사한다: {calls}");
-    }
-
-    #[test]
-    fn non_text_members_are_not_decoded() {
-        let d = tempfile::tempdir().unwrap();
-        let plain = d.path().join("plain.epub");
-        support::epub_with_chapter(&plain, &support::xhtml("<p>본문</p>"));
-        let (_, base_calls) = scan_counting(&plain);
-
-        let with_media = d.path().join("media.epub");
-        let jpg = binary(1 << 20, 1);
-        let png = binary(1 << 19, 2);
-        let ttf = binary(1 << 18, 3);
-        support::epub_with_files(&with_media, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/a.jpg", &jpg), ("OEBPS/b.png", &png), ("OEBPS/c.ttf", &ttf), ("OEBPS/d.bin", &jpg)]);
-        let (_, media_calls) = scan_counting(&with_media);
-        assert_eq!(media_calls, base_calls, "이미지·폰트·알 수 없는 확장자 멤버는 UTF-8 변환 대상이 아니다");
-    }
-
-    #[test]
-    fn binary_member_checks_still_run_without_decoding() {
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("disguised.epub");
-        let mut pe = vec![0u8; 0x100];
-        pe[..2].copy_from_slice(b"MZ");
-        support::epub_with_files(&p, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/cover.jpg", &pe)]);
-        let (r, _) = scan_counting(&p);
-        let f = r.findings.iter().find(|f| f.code == "PE_EXECUTABLE_CONTENT").unwrap_or_else(|| panic!("{:?}", r.findings));
-        assert_eq!(f.severity, bookdoctor::Severity::Critical);
-    }
-
-    #[test]
-    fn txt_members_are_not_decoded_either_because_other_kind_has_no_text_rules() {
-        // Kind::Other의 txt에는 텍스트 규칙이 없다(scan_text가 아무것도 하지 않는다). 변환해도 결과가 달라지지 않는다.
-        let d = tempfile::tempdir().unwrap();
-        let plain = d.path().join("plain.epub");
-        support::epub_with_chapter(&plain, &support::xhtml("<p>본문</p>"));
-        let (_, base_calls) = scan_counting(&plain);
-        let with_txt = d.path().join("txt.epub");
-        support::epub_with_files(&with_txt, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/notes.txt", "소림사 장로\n".as_bytes())]);
-        let (r, txt_calls) = scan_counting(&with_txt);
-        assert_eq!(txt_calls, base_calls);
-        assert!(!r.findings.iter().any(|f| f.location.contains("notes.txt")), "{:?}", r.findings);
-    }
-
-    // --- 렌더링 단계의 중복 압축 해제 제거 ---
+fn scan_counting(path: &Path) -> (FileReport, usize) {
+    let before = decode_calls();
+    let mut r = FileReport::new(path, Some(Format::Epub));
+    scan_into(path, &Limits::default(), &mut r);
+    (r, decode_calls() - before)
 }
 
-// `tests/rust/bookdoctor/epub_gaps.rs`에서 옮긴 테스트.
-mod epub_gaps {
-    use super::{support};
+fn binary(len: usize, seed: u8) -> Vec<u8> {
+    // UTF-8로 유효하지 않은 바이트가 많이 든 데이터(이미지·폰트처럼).
+    (0..len).map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed) | 0x80).collect()
+}
 
-    use std::fs;
-    use std::io::Write;
-    use std::path::Path;
+#[test]
+fn text_members_are_decoded() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    support::epub_with_chapter(&p, &support::xhtml("<p>본문</p>"));
+    let (_, calls) = scan_counting(&p);
+    assert!(calls >= 2, "xhtml와 opf는 변환해서 검사한다: {calls}");
+}
 
-    use support::*;
-    use bookdoctor::epub::security_checker::{Limits, scan as scan_into};
-    use bookdoctor::{FileReport, Format};
+#[test]
+fn non_text_members_are_not_decoded() {
+    let d = tempfile::tempdir().unwrap();
+    let plain = d.path().join("plain.epub");
+    support::epub_with_chapter(&plain, &support::xhtml("<p>본문</p>"));
+    let (_, base_calls) = scan_counting(&plain);
 
-    fn scan(path: &Path) -> FileReport {
-        let mut r = FileReport::new(path, Some(Format::Epub));
-        scan_into(path, &Limits::default(), &mut r);
-        r
-    }
+    let with_media = d.path().join("media.epub");
+    let jpg = binary(1 << 20, 1);
+    let png = binary(1 << 19, 2);
+    let ttf = binary(1 << 18, 3);
+    support::epub_with_files(&with_media, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/a.jpg", &jpg), ("OEBPS/b.png", &png), ("OEBPS/c.ttf", &ttf), ("OEBPS/d.bin", &jpg)]);
+    let (_, media_calls) = scan_counting(&with_media);
+    assert_eq!(media_calls, base_calls, "이미지·폰트·알 수 없는 확장자 멤버는 UTF-8 변환 대상이 아니다");
+}
 
-    fn has(r: &FileReport, code: &str) -> bool {
-        r.findings.iter().any(|f| f.code == code)
-    }
+#[test]
+fn binary_member_checks_still_run_without_decoding() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("disguised.epub");
+    let mut pe = vec![0u8; 0x100];
+    pe[..2].copy_from_slice(b"MZ");
+    support::epub_with_files(&p, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/cover.jpg", &pe)]);
+    let (r, _) = scan_counting(&p);
+    let f = r.findings.iter().find(|f| f.code == "PE_EXECUTABLE_CONTENT").unwrap_or_else(|| panic!("{:?}", r.findings));
+    assert_eq!(f.severity, bookdoctor::Severity::Critical);
+}
 
-    // ---- 매니페스트와 매직 ----
+#[test]
+fn txt_members_are_not_decoded_either_because_other_kind_has_no_text_rules() {
+    // Kind::Other의 txt에는 텍스트 규칙이 없다(scan_text가 아무것도 하지 않는다). 변환해도 결과가 달라지지 않는다.
+    let d = tempfile::tempdir().unwrap();
+    let plain = d.path().join("plain.epub");
+    support::epub_with_chapter(&plain, &support::xhtml("<p>본문</p>"));
+    let (_, base_calls) = scan_counting(&plain);
+    let with_txt = d.path().join("txt.epub");
+    support::epub_with_files(&with_txt, &support::clean_opf(), &support::xhtml("<p>본문</p>"), &[("OEBPS/notes.txt", "소림사 장로\n".as_bytes())]);
+    let (r, txt_calls) = scan_counting(&with_txt);
+    assert_eq!(txt_calls, base_calls);
+    assert!(!r.findings.iter().any(|f| f.location.contains("notes.txt")), "{:?}", r.findings);
+}
 
-    #[test]
-    fn manifest_items_with_script_unc_and_unknown_schemes_are_flagged() {
-        let items = [
-            opf_item("c1", "ch1.xhtml", "application/xhtml+xml", ""),
-            opf_item("a", "javascript:alert(1)", "text/plain", ""),
-            opf_item("b", "\\\\host\\share\\x", "text/plain", ""),
-            opf_item("c", "weird-app://x", "text/plain", ""),
-        ]
-        .concat();
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("t.epub");
-        epub_with_files(&p, &opf(&items), &xhtml("<p>x</p>"), &[]);
-        let r = scan(&p);
-        for code in ["JS_URL", "UNC_PATH", "UNKNOWN_URI_SCHEME"] {
-            assert!(has(&r, code), "{code}");
-        }
-    }
+fn scan(path: &Path) -> FileReport {
+    let mut r = FileReport::new(path, Some(Format::Epub));
+    scan_into(path, &Limits::default(), &mut r);
+    r
+}
 
-    #[test]
-    fn mach_o_universal_binaries_are_told_apart_from_java_classes() {
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("t.epub");
-        epub_with_files(&p, &clean_opf(), &xhtml("<p>x</p>"), &[("OEBPS/a.bin2", b"\xca\xfe\xba\xbe\x00\x00\x00\x02rest")]);
-        assert!(has(&scan(&p), "MACHO_BINARY_CONTENT"));
-    }
+fn has(r: &FileReport, code: &str) -> bool {
+    r.findings.iter().any(|f| f.code == code)
+}
 
-    #[test]
-    fn directory_entries_and_very_long_names_are_handled() {
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("t.epub");
-        {
-            let mut z = zip::ZipWriter::new(fs::File::create(&p).unwrap());
-            let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-            z.start_file("mimetype", o).unwrap();
-            z.write_all(b"application/epub+zip").unwrap();
-            z.add_directory("OEBPS/", o).unwrap();
-            let long = format!("OEBPS/{}", ["dd"; 600].join("/"));
-            z.start_file(format!("{long}/f.txt"), o).unwrap();
-            z.write_all(b"x").unwrap();
-            z.finish().unwrap();
-        }
-        let r = scan(&p);
-        assert!(has(&r, "ZIP_NAME_TOO_LONG"), "{:?}", r.findings);
-    }
+// ---- 매니페스트와 매직 ----
 
-    // ---- 손상된 ZIP 필드 ----
-
-    /// 중앙 디렉토리 항목의 오프셋 필드를 고친다. `field`는 항목 시작 기준 오프셋이다.
-    fn patch_central(path: &Path, member: &str, field: usize, bytes: &[u8]) {
-        let mut data = fs::read(path).unwrap();
-        let name = member.as_bytes();
-        let at = (0..data.len() - 46 - name.len()).find(|&i| &data[i..i + 4] == b"PK\x01\x02" && &data[i + 46..i + 46 + name.len()] == name).expect("central header");
-        data[at + field..at + field + bytes.len()].copy_from_slice(bytes);
-        fs::write(path, data).unwrap();
-    }
-
-    #[test]
-    fn encrypted_and_unsupported_compression_entries_are_noted_not_read() {
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("t.epub");
-        epub_with_chapter(&p, &xhtml("<p>x</p>"));
-        patch_central(&p, "OEBPS/ch1.xhtml", 8, &[0x01, 0x00]); // 일반 목적 비트 0: 암호화
-        let r = scan(&p);
-        assert!(r.incomplete);
-        assert!(r.reasons.iter().any(|n| n.contains("ZIP-encrypted")), "{:?}", r.reasons);
-
-        let q = d.path().join("u.epub");
-        epub_with_chapter(&q, &xhtml("<p>x</p>"));
-        patch_central(&q, "OEBPS/ch1.xhtml", 10, &[12, 0]); // bzip2
-        let r = scan(&q);
-        assert!(r.reasons.iter().any(|n| n.contains("unsupported ZIP compression")), "{:?}", r.reasons);
+#[test]
+fn manifest_items_with_script_unc_and_unknown_schemes_are_flagged() {
+    let items = [
+        opf_item("c1", "ch1.xhtml", "application/xhtml+xml", ""),
+        opf_item("a", "javascript:alert(1)", "text/plain", ""),
+        opf_item("b", "\\\\host\\share\\x", "text/plain", ""),
+        opf_item("c", "weird-app://x", "text/plain", ""),
+    ]
+    .concat();
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    epub_with_files(&p, &opf(&items), &xhtml("<p>x</p>"), &[]);
+    let r = scan(&p);
+    for code in ["JS_URL", "UNC_PATH", "UNKNOWN_URI_SCHEME"] {
+        assert!(has(&r, code), "{code}");
     }
 }
 
-// `tests/rust/bookdoctor/epub_security_hardening.rs`에서 옮긴 테스트.
-mod epub_security_hardening {
-    use super::{support};
+#[test]
+fn mach_o_universal_binaries_are_told_apart_from_java_classes() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    epub_with_files(&p, &clean_opf(), &xhtml("<p>x</p>"), &[("OEBPS/a.bin2", b"\xca\xfe\xba\xbe\x00\x00\x00\x02rest")]);
+    assert!(has(&scan(&p), "MACHO_BINARY_CONTENT"));
+}
 
+#[test]
+fn directory_entries_and_very_long_names_are_handled() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    {
+        let mut z = zip::ZipWriter::new(fs::File::create(&p).unwrap());
+        let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        z.start_file("mimetype", o).unwrap();
+        z.write_all(b"application/epub+zip").unwrap();
+        z.add_directory("OEBPS/", o).unwrap();
+        let long = format!("OEBPS/{}", ["dd"; 600].join("/"));
+        z.start_file(format!("{long}/f.txt"), o).unwrap();
+        z.write_all(b"x").unwrap();
+        z.finish().unwrap();
+    }
+    let r = scan(&p);
+    assert!(has(&r, "ZIP_NAME_TOO_LONG"), "{:?}", r.findings);
+}
+
+// ---- 손상된 ZIP 필드 ----
+
+/// 중앙 디렉토리 항목의 오프셋 필드를 고친다. `field`는 항목 시작 기준 오프셋이다.
+fn patch_central(path: &Path, member: &str, field: usize, bytes: &[u8]) {
+    let mut data = fs::read(path).unwrap();
+    let name = member.as_bytes();
+    let at = (0..data.len() - 46 - name.len()).find(|&i| &data[i..i + 4] == b"PK\x01\x02" && &data[i + 46..i + 46 + name.len()] == name).expect("central header");
+    data[at + field..at + field + bytes.len()].copy_from_slice(bytes);
+    fs::write(path, data).unwrap();
+}
+
+#[test]
+fn encrypted_and_unsupported_compression_entries_are_noted_not_read() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    epub_with_chapter(&p, &xhtml("<p>x</p>"));
+    patch_central(&p, "OEBPS/ch1.xhtml", 8, &[0x01, 0x00]); // 일반 목적 비트 0: 암호화
+    let r = scan(&p);
+    assert!(r.incomplete);
+    assert!(r.reasons.iter().any(|n| n.contains("ZIP-encrypted")), "{:?}", r.reasons);
+
+    let q = d.path().join("u.epub");
+    epub_with_chapter(&q, &xhtml("<p>x</p>"));
+    patch_central(&q, "OEBPS/ch1.xhtml", 10, &[12, 0]); // bzip2
+    let r = scan(&q);
+    assert!(r.reasons.iter().any(|n| n.contains("unsupported ZIP compression")), "{:?}", r.reasons);
+}
+
+mod budget_and_encoding_evasion {
+    use super::support;
     use std::fs;
     use std::path::Path;
-
-    use bookdoctor::epub::security_checker::{Limits, Stats, scan as scan_into, scan_stats};
+    use bookdoctor::epub::{security_checker::Limits, security_checker::scan as scan_into, security_checker::scan_stats, security_checker::Stats};
     use support::*;
     use bookdoctor::{FileReport, Format, Severity};
 
@@ -539,16 +517,13 @@ mod epub_security_hardening {
     }
 }
 
-// `tests/rust/bookdoctor/epub_security.rs`에서 옮긴 테스트.
-mod epub_security {
-    use super::{support};
-
+mod active_content {
+    use super::support;
     use std::fs;
     use std::io::Write;
     use std::path::Path;
-
     use support::*;
-    use bookdoctor::epub::security_checker::{Limits, Stats, guarded, scan as scan_into, scan_stats};
+    use bookdoctor::epub::{security_checker::guarded, security_checker::Limits, security_checker::scan as scan_into, security_checker::scan_stats, security_checker::Stats};
     use bookdoctor::{Category, FileReport, Format, Severity};
 
     fn scan_with(path: &Path, limits: &Limits) -> FileReport {
@@ -1495,4 +1470,249 @@ mod epub_security {
         assert_eq!(notes.len(), 1, "{:?}", r.reasons);
         assert!(notes[0].contains("entries not inspected"));
     }
+}
+
+fn scan_chapter(body: &str) -> FileReport {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    epub_with_chapter(&p, &xhtml(body));
+    scan(&p)
+}
+
+fn scan_epub(chapter: &str, extra: &[(&str, &[u8])]) -> FileReport {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("t.epub");
+    epub_with_files(&p, &clean_opf(), &xhtml(chapter), extra);
+    let mut r = FileReport::new(&p, Some(Format::Epub));
+    scan_into(&p, &Limits::default(), &mut r);
+    r
+}
+
+fn sev(r: &FileReport, code: &str) -> Option<Severity> {
+    r.findings.iter().filter(|f| f.code == code).map(|f| f.severity).max()
+}
+
+fn js(body: &str) -> FileReport {
+    scan_epub(&format!("<script>{body}</script>"), &[])
+}
+
+// ---- 토크나이저 가장자리 ----
+
+#[test]
+fn truncated_and_odd_markup_never_panics_and_still_finds_what_is_there() {
+    for body in [
+        "<a href=\"x",
+        "<p class=a/>",
+        "<img src=x onerror=1",
+        "<",
+        "<1>",
+        "x < y",
+        "</",
+        "<a",
+        "<!doctype",
+        "<?xml",
+        "<p =x>",
+        "<p a= >",
+        "<p a='b>",
+        "<p a=b c>",
+        "&",
+        "&#",
+        "&#x",
+        "&unknown; &#xZZ; &#99999999;",
+    ] {
+        let _ = scan_chapter(body);
+    }
+    // 따옴표 없는 속성값과 값 없는 속성이 섞여도 핸들러를 잡는다.
+    assert!(has(&scan_chapter("<p hidden onclick=alert(1)>x</p>"), "EVENT_HANDLER_ATTR"));
+    assert!(has(&scan_chapter("<script></script"), "SCRIPT_TAG"));
+    assert!(has(&scan_chapter("<script>alert(1)"), "SCRIPT_TAG"));
+}
+
+#[test]
+fn named_and_numeric_entities_are_decoded_before_scheme_checks() {
+    for href in ["javascript&colon;alert(1)", "java&Tab;script:alert(1)", "java&NewLine;script:alert(1)", "javascript&#58;alert(1)", "&#x6A;avascript:alert(1)", "&bsol;&bsol;host\\share"] {
+        let r = scan_chapter(&format!(r#"<a href="{href}">x</a>"#));
+        assert!(has(&r, "JS_URL") || has(&r, "UNC_PATH") || has(&r, "UNKNOWN_URI_SCHEME"), "{href}");
+    }
+    // 괄호 엔티티는 스킴으로 이어지지 않는다(`javascript(1):x`는 JS URL이 아니다).
+    assert!(!has(&scan_chapter(r#"<a href="javascript&lpar;1&rpar;:x">x</a>"#), "JS_URL"));
+    // 그 밖의 이름 있는 엔티티는 그대로 두되 스킴 판정에는 영향이 없다.
+    for ent in ["amp", "lt", "gt", "quot", "apos", "sol", "nbsp"] {
+        let r = scan_chapter(&format!(r#"<a href="a&{ent};b">x</a>"#));
+        assert!(!has(&r, "JS_URL"), "{ent}");
+    }
+}
+
+#[test]
+fn script_src_with_a_local_or_dangerous_url_is_classified() {
+    assert!(has(&scan_chapter(r#"<script src="javascript:alert(1)"></script>"#), "JS_URL"));
+    assert!(!has(&scan_chapter(r#"<script src="a.js"></script>"#), "REMOTE_SCRIPT"));
+}
+
+#[test]
+fn svg_animation_values_with_script_urls_are_flagged() {
+    let r = scan_chapter(r#"<svg xmlns="http://www.w3.org/2000/svg"><animate attributeName="href" values="javascript:alert(1)"/><set attributeName="xlink:href" from="vbscript:x" to="ok"/></svg>"#);
+    assert!(has(&r, "JS_URL") && has(&r, "SVG_ANIMATE_HREF"));
+    // href가 아닌 속성을 바꾸는 애니메이션은 무시한다.
+    assert!(!has(&scan_chapter(r#"<svg xmlns="http://www.w3.org/2000/svg"><animate attributeName="opacity" values="0;1"/></svg>"#), "SVG_ANIMATE_HREF"));
+}
+
+#[test]
+fn meta_without_refresh_and_base_without_href_are_ignored() {
+    let r = scan_chapter(r#"<meta name="viewport" content="x"><base target="_blank"><meta http-equiv="refresh" content="5">"#);
+    assert!(!has(&r, "BASE_HREF"));
+    assert_eq!(r.findings.iter().find(|f| f.code == "META_REFRESH").map(|f| f.severity), Some(Severity::Medium));
+}
+
+// ---- 번들 실행 파일은 무조건 CRITICAL ----
+
+#[test]
+fn bundled_executables_are_always_critical() {
+    for name in ["OEBPS/Misc/setup.exe", "OEBPS/a.dll", "OEBPS/run.sh", "OEBPS/x.lnk", "OEBPS/a.bat", "OEBPS/a.jar"] {
+        let r = scan_epub("<p>t</p>", &[(name, b"hello")]);
+        assert_eq!(sev(&r, "EMBEDDED_EXECUTABLE"), Some(Severity::Critical), "{name}");
+    }
+    let r = scan_epub("<p>t</p>", &[("OEBPS/Misc/a.exe", b"MZ\x90\x00more")]);
+    assert_eq!(sev(&r, "PE_EXECUTABLE_CONTENT"), Some(Severity::Critical));
+    let r = scan_epub("<p>t</p>", &[("OEBPS/a.so", b"\x7fELF\x02\x01")]);
+    assert_eq!(sev(&r, "ELF_BINARY_CONTENT"), Some(Severity::Critical));
+    let r = scan_epub("<p>t</p>", &[("OEBPS/a.dylib", b"\xcf\xfa\xed\xfe\x07")]);
+    assert_eq!(sev(&r, "MACHO_BINARY_CONTENT"), Some(Severity::Critical));
+    // 실행 확장자가 아니고 내용도 실행 코드가 아니면 지표가 없다.
+    assert!(scan_epub("<p>t</p>", &[("OEBPS/a.png", b"\x89PNG\r\n\x1a\nrest")]).findings.is_empty());
+}
+
+// ---- 이벤트 핸들러·javascript: URL 본문 ----
+
+#[test]
+fn event_handler_bodies_are_scanned_like_scripts() {
+    let r = scan_epub(r#"<div onclick="eval(atob('YWxlcnQoMSk='))">x</div>"#, &[]);
+    assert_eq!(sev(&r, "OBFUSCATED_LOADER"), Some(Severity::Critical), "{:?}", r.findings);
+    let r = scan_epub(r#"<div onclick="go()">x</div>"#, &[]);
+    assert_eq!(sev(&r, "EVENT_HANDLER_ATTR"), Some(Severity::High));
+    assert_eq!(sev(&r, "OBFUSCATED_LOADER"), None);
+}
+
+#[test]
+fn javascript_url_bodies_are_scanned_like_scripts() {
+    for href in ["javascript:eval(atob('YWxlcnQoMSk='))", "JaVa\tScRiPt:eval(atob('x'))", "javascript:document.write(atob('PHNjcmlwdD4='))"] {
+        let r = scan_epub(&format!(r#"<a href="{href}">x</a>"#), &[]);
+        assert_eq!(sev(&r, "OBFUSCATED_LOADER"), Some(Severity::Critical), "{href}: {:?}", r.findings);
+    }
+    let r = scan_epub(r#"<a href="javascript:void(0)">x</a>"#, &[]);
+    assert_eq!(sev(&r, "JS_URL"), Some(Severity::High));
+    assert_eq!(sev(&r, "OBFUSCATED_LOADER"), None);
+}
+
+// ---- 난독화 로더 우회 ----
+
+#[test]
+fn decoded_payload_loaders_are_critical_in_every_shape() {
+    for body in [
+        "eval(atob('YWxlcnQoMSk='))",
+        "setTimeout(atob('YWxlcnQoMSk='),1)",
+        "setInterval(unescape('%61%6c'),1)",
+        "document.writeln(atob('PHNjcmlwdD4='))",
+        "document.write(String.fromCharCode(60,115))",
+        "var e=eval; var p=atob('YWxlcnQoMSk='); e(p);",
+        "var f=window.Function; f(String.fromCharCode(97,108))()",
+        "window['ev'+'al'](atob('YWxlcnQoMSk='))",
+        "self[\"ev\"+\"al\"](decodeURIComponent('%61'))",
+        "(0,eval)(atob('YWxlcnQoMSk='))",
+    ] {
+        assert_eq!(sev(&js(body), "OBFUSCATED_LOADER"), Some(Severity::Critical), "{body}");
+    }
+}
+
+#[test]
+fn analytics_style_document_write_unescape_and_distant_decode_calls_are_not_critical() {
+    // Google Analytics 방식 로더: High로만 남는다.
+    let r = js("document.write(unescape('%3Cscript src=\"' + document.location.protocol + '//x.example/a.js\"%3E%3C/script%3E'))");
+    assert_eq!(sev(&r, "OBFUSCATED_LOADER"), Some(Severity::High), "{:?}", r.findings);
+    // jQuery의 globalEval과 멀리 떨어진 decodeURIComponent는 한 로더로 묶지 않는다.
+    let filler = " ".repeat(2000);
+    let r = js(&format!("function g(d){{ window[ \"eval\" ].call( window, d ); }}{filler} var q = decodeURIComponent(location.search);"));
+    assert_eq!(sev(&r, "OBFUSCATED_LOADER"), None, "{:?}", r.findings);
+    assert_eq!(sev(&r, "DYNAMIC_CODE_EXEC"), Some(Severity::High));
+}
+
+#[test]
+fn aliased_exec_without_decoding_is_high_and_ordinary_code_is_not_critical() {
+    let r = js("window['ev'+'al']('1+1')");
+    assert_eq!(sev(&r, "DYNAMIC_CODE_EXEC"), Some(Severity::High), "{:?}", r.findings);
+    assert_eq!(sev(&r, "OBFUSCATED_LOADER"), None);
+    for body in [
+        "document.write('hello')",
+        "var s = unescape('%41');",
+        "var x = atob('YQ==');",
+        "function evaluate(a){return a}; var retrieval = 2;",
+        "var o = {eval: 1}; o.evaluate = 2;",
+        "var s = 'a' + 'b'; var t = s + atob('YQ==');",
+    ] {
+        assert_ne!(sev(&js(body), "OBFUSCATED_LOADER"), Some(Severity::Critical), "{body}");
+    }
+}
+
+// ---- 클릭 없는 UNC·원격 file 로드, meta refresh ----
+
+#[test]
+fn zero_click_network_resource_loads_are_critical() {
+    for tag in [
+        r#"<img src="\\evil\share\x.png">"#,
+        r#"<img src="smb://evil/share/x.png">"#,
+        r#"<img src="file://evil/share/x.png">"#,
+        r#"<link rel="stylesheet" href="\\evil\share\a.css">"#,
+        r#"<iframe src="smb://evil/s/a.html"></iframe>"#,
+    ] {
+        let r = scan_epub(tag, &[]);
+        let worst = r.findings.iter().filter(|f| matches!(f.code.as_str(), "UNC_PATH" | "DANGEROUS_URI_SCHEME")).map(|f| f.severity).max();
+        assert_eq!(worst, Some(Severity::Critical), "{tag}: {:?}", r.findings);
+    }
+}
+
+#[test]
+fn clicked_links_and_local_file_loads_stay_high() {
+    for tag in [
+        r#"<a href="\\evil\share\x.png">x</a>"#,
+        r#"<a href="smb://evil/share/x">x</a>"#,
+        r#"<a href="file://evil/share/x">x</a>"#,
+        r#"<img src="file:///C:/Users/a/x.png">"#,
+        r#"<img src="file://localhost/C:/x.png">"#,
+    ] {
+        let r = scan_epub(tag, &[]);
+        let worst = r.findings.iter().filter(|f| matches!(f.code.as_str(), "UNC_PATH" | "DANGEROUS_URI_SCHEME")).map(|f| f.severity).max();
+        assert_eq!(worst, Some(Severity::High), "{tag}: {:?}", r.findings);
+    }
+}
+
+#[test]
+fn meta_refresh_to_an_exploit_scheme_is_critical() {
+    let r = scan_epub(r#"<meta http-equiv="refresh" content="0;url=ms-msdt:/id PCWDiagnostic">"#, &[]);
+    assert_eq!(sev(&r, "META_REFRESH"), Some(Severity::Critical));
+    let r = scan_epub(r#"<meta http-equiv="refresh" content="0;url=search-ms:query=x">"#, &[]);
+    assert_eq!(sev(&r, "META_REFRESH"), Some(Severity::Critical));
+    // 일반 원격 이동과 그 밖의 위험 스킴은 High로 남는다.
+    let r = scan_epub(r#"<meta http-equiv="refresh" content="0;url=https://evil.example/">"#, &[]);
+    assert_eq!(sev(&r, "META_REFRESH"), Some(Severity::High));
+    let r = scan_epub(r#"<meta http-equiv="refresh" content="0;url=file:///etc/passwd">"#, &[]);
+    assert_eq!(sev(&r, "META_REFRESH"), Some(Severity::High));
+}
+
+// ---- 번들 실행 파일의 SHA-256 ----
+
+#[test]
+fn bundled_executable_findings_carry_the_sha256_of_the_member() {
+    // sha256("hello")
+    let hello = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+    let r = scan_epub("<p>t</p>", &[("OEBPS/Misc/setup.exe", b"hello")]);
+    let f = r.findings.iter().find(|f| f.code == "EMBEDDED_EXECUTABLE").unwrap();
+    assert!(f.detail.contains(&format!("sha256={hello}")), "{}", f.detail);
+    let mut pe = b"MZ\x90\x00".to_vec();
+    pe.extend(b"hello");
+    let r = scan_epub("<p>t</p>", &[("OEBPS/Misc/a.exe", &pe)]);
+    let f = r.findings.iter().find(|f| f.code == "PE_EXECUTABLE_CONTENT").unwrap();
+    assert!(f.detail.contains("sha256=") && f.detail.len() > 64, "{}", f.detail);
+    // 실행 파일이 아닌 멤버에는 붙지 않는다.
+    let r = scan_epub("<p>t</p>", &[("OEBPS/a.png", b"\x89PNG\r\n\x1a\nrest")]);
+    assert!(r.findings.iter().all(|f| !f.detail.contains("sha256=")));
 }
