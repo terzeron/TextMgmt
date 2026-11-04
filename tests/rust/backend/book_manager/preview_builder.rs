@@ -486,7 +486,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_not_found() {
-        // Lines 443-444: book not in ES
+        // book not in ES
         let tmp = tmp_dir();
         let es = FakeEsManager::new();
         let manager = make_manager(tmp.path(), &es);
@@ -497,7 +497,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_file_not_found() {
-        // Lines 447-448: file not found on disk
+        // file not found on disk
         let tmp = tmp_dir();
         let es = FakeEsManager::new();
         let manager = make_manager(tmp.path(), &es);
@@ -508,7 +508,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_cache_hit() {
-        // Lines 493-494: EPUB preview cache hit
+        // EPUB preview cache hit
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         let es = FakeEsManager::new();
@@ -533,7 +533,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_opf_keyerror() {
-        // Lines 516-518: OPF file in container.xml but missing from archive
+        // OPF file in container.xml but missing from archive
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         let epub = tmp_path.join("A").join("test.epub");
@@ -550,7 +550,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_opf_namespace_fix() {
-        // Lines 523-524: OPF with opf: prefix but no xmlns:opf declaration
+        // OPF with opf: prefix but no xmlns:opf declaration
         let opf_ns = "http://www.idpf.org/2007/opf";
         let opf = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -581,7 +581,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_no_spine() {
-        // Lines 540-547: EPUB without spine element → fallback to manifest order
+        // EPUB without spine element → fallback to manifest order
         let opf_ns = "http://www.idpf.org/2007/opf";
         let opf = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -605,7 +605,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_chapter_missing_from_zip() {
-        // Lines 580-582: chapter file missing from ZIP archive
+        // chapter file missing from ZIP archive
         let opf_ns = "http://www.idpf.org/2007/opf";
         let opf = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -635,7 +635,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_svg_image_tag() {
-        // Lines 591-593: chapter with SVG <image> tags
+        // chapter with SVG <image> tags
         let opf_ns = "http://www.idpf.org/2007/opf";
         let opf = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -675,7 +675,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_css_missing() {
-        // Lines 613-614: CSS file missing from ZIP
+        // CSS file missing from ZIP
         let opf_ns = "http://www.idpf.org/2007/opf";
         let opf = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -708,7 +708,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_large_font_skip() {
-        // Lines 626-633: large font file skipped, missing font skipped
+        // large font file skipped, missing font skipped
         let opf_ns = "http://www.idpf.org/2007/opf";
         let opf = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -752,7 +752,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_guide_element() {
-        // Lines 648, 653-657: EPUB with guide element
+        // EPUB with guide element
         let opf_ns = "http://www.idpf.org/2007/opf";
         let opf = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -783,7 +783,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_ncx_navpoint_filtering() {
-        // Lines 686-694: NCX navPoint filtering removes missing file references
+        // NCX navPoint filtering removes missing file references
         let opf_ns = "http://www.idpf.org/2007/opf";
         let ncx_ns = "http://www.daisy.org/z3986/2005/ncx/";
         let opf = format!(
@@ -821,7 +821,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_css_font_face_strip() {
-        // Line 712: CSS @font-face block removed when font not in files_to_include
+        // CSS @font-face block removed when font not in files_to_include
         let opf_ns = "http://www.idpf.org/2007/opf";
         let opf = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -860,7 +860,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_file_missing_in_write() {
-        // Lines 717-718: file missing when writing output EPUB
+        // file missing when writing output EPUB
         let opf_ns = "http://www.idpf.org/2007/opf";
         let opf = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -893,7 +893,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_validation_fail() {
-        // Lines 723-725: generated EPUB fails validation
+        // generated EPUB fails validation
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         let epub = tmp_path.join("A").join("test.epub");
@@ -910,7 +910,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_bad_zip() {
-        // Lines 730-732: corrupted ZIP
+        // corrupted ZIP
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         let epub = tmp_path.join("A").join("test.epub");
@@ -925,7 +925,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_epub_general_exception() {
-        // Lines 733-735: general exception during EPUB processing
+        // general exception during EPUB processing
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         let epub = tmp_path.join("A").join("test.epub");
@@ -943,7 +943,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_book_preview_doc_exception() {
-        // Lines 750-752: .doc conversion exception
+        // .doc conversion exception
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         let doc = tmp_path.join("A").join("test.doc");
@@ -962,7 +962,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_pdf_pages_not_found() {
-        // Line 1080: book not in ES
+        // book not in ES
         let tmp = tmp_dir();
         let es = FakeEsManager::new();
         let manager = make_manager(tmp.path(), &es);
@@ -973,7 +973,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_pdf_pages_not_pdf() {
-        // Line 1085: file is not a PDF
+        // file is not a PDF
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         let es = FakeEsManager::new();
@@ -988,7 +988,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_pdf_pages_happy_path_and_cache() {
-        // Lines 1091-1122: happy path + cache hit
+        // happy path + cache hit
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         let es = FakeEsManager::new();
@@ -1011,7 +1011,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_pdf_pages_start_exceeds_total() {
-        // Lines 1096-1097: start page exceeds total pages
+        // start page exceeds total pages
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         let es = FakeEsManager::new();
@@ -1027,11 +1027,11 @@ mod get_book_preview {
         assert!(result.body_text().contains("exceeds total pages"));
     }
 
-    // ---- coverage: get_book_preview epub with many spine items (line 648) ----
+    // ---- coverage: get_book_preview epub with many spine items ----
 
     #[test]
     fn test_get_book_preview_epub_spine_trimmed() {
-        // Line 648: spine refs not in chapter_idrefs are removed
+        // spine refs not in chapter_idrefs are removed
         let opf_ns = "http://www.idpf.org/2007/opf";
         let opf = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1119,7 +1119,7 @@ mod get_book_preview {
         assert!(!body.contains(r#"href="chapter2.html""#));
     }
 
-    // ── get_book_preview: HTML read_text 예외 → 500 (lines 818-820) ─────────────
+    // ── get_book_preview: HTML read_text 예외 → 500 ─────────────
 
     #[test]
     fn test_get_book_preview_html_read_exception() {
@@ -1171,7 +1171,7 @@ mod get_book_preview {
 
     #[test]
     fn test_get_pdf_pages_oserror() {
-        // Lines 2209-2210: OSError in get_pdf_pages
+        // OSError in get_pdf_pages
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         let pdf_file = tmp_path.join("A").join("sample.pdf");
@@ -1189,7 +1189,6 @@ mod get_book_preview {
 
     #[test]
     fn test_epub_preview_raw_zip_and_ncx_branches() {
-        // Lines 799, 959
         let opf_ns = "http://www.idpf.org/2007/opf";
         let ncx_ns = "http://www.daisy.org/z3986/2005/ncx/";
         let opf = format!(
@@ -1228,7 +1227,6 @@ mod get_book_preview {
 
     #[test]
     fn test_get_pdf_pages_storage_oserror_and_cached_reader_none() {
-        // Lines 2159-2161, 2192
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         let pdf_file = tmp_path.join("A").join("sample.pdf");
@@ -1238,7 +1236,7 @@ mod get_book_preview {
         let es = FakeEsManager::new();
         es.set_doc(Some(make_doc("A/sample.pdf", ".pdf")));
 
-        // 1. Lines 2159-2161: book.file_path.is_file() raises OSError
+        // 1. book.file_path.is_file() raises OSError
         let faulty = FaultyFs::new();
         faulty.set_is_file(|_p| Some(io::Error::from_raw_os_error(5)));
         let manager_fault = BookManager::with_deps(deps(tmp_path, &es).with_fs(faulty));
@@ -1246,7 +1244,7 @@ mod get_book_preview {
         assert_eq!(resp1.status_code, 503);
         assert!(resp1.body_text().contains("Storage access error"));
 
-        // 2. Line 2192: reader is None (page count cached, but reader cache miss)
+        // 2. reader is None (page count cached, but reader cache miss)
         // 쪽수 캐시 접근자는 문서에 없는 seam이다(파일 머리말 참고). 새 매니저의 reader 캐시는 비어 있어 `_pdf_reader_cache_remove`가 필요 없다.
         let manager = make_manager(tmp_path, &es);
         manager.page_count_cache().insert((pdf_file.to_string_lossy().into_owned(), mtime_key(&pdf_file)), 2);

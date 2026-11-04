@@ -1,4 +1,4 @@
-//! 파일 하나를 읽어 ES 문서로 만든다. 원본: `Loader.read_file`, `detect_file_type`, `_zip_container_type`.
+//! 파일 하나를 읽어 ES 문서로 만든다. 파일 형식 판별과 ZIP 컨테이너 형식 판별을 포함한다.
 
 use std::fs::Metadata;
 use std::io::Read;

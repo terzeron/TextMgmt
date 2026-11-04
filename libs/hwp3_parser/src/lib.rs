@@ -235,7 +235,7 @@ pub fn extract_text_from_hwp3(path: &Path) -> String {
 
 /// 추출 결과를 마무리한다: surrogate 표시 제거, 품질 검사, 앞뒤 공백 정리.
 fn finish_text(mut text: String) -> String {
-    // surrogate 문자 제거(UTF-8 인코딩 오류 방지). 품질 검사 전에 지운다(원본과 같은 순서).
+    // surrogate 문자 제거(UTF-8 인코딩 오류 방지). 품질 검사 전에 지운다.
     text.retain(|c| c != LONE_SURROGATE);
 
     // 쓰레기 문자 비율이 높으면 파싱 실패로 본다. 앞 500자만 센다.

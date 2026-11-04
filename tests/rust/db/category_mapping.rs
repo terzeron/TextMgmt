@@ -8,10 +8,7 @@
 //! - `db`: 드라이버 추상화 (가짜 연결이 구현한다)
 //!   - `enum DbValue { Null, Int(i64), Text(String), DateTime(chrono::NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`)
 //!   - `type Row = BTreeMap<String, DbValue>`, `enum DbError { Constraint(String), Other(String) }`
-//!   - `trait DbCursor { fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError>;
-//!      fn executemany(&mut self, sql: &str, seq: &[Vec<DbValue>]) -> Result<(), DbError>;
-//!      fn fetchall(&mut self) -> Option<Vec<Row>>; fn fetchone(&mut self) -> Option<Row>; fn rowcount(&self) -> u64; }`
-//!   - `trait DbConnection: Send { fn cursor(&mut self) -> Box<dyn DbCursor>; fn commit(&mut self) -> Result<(), DbError>; fn rollback(&mut self) -> Result<(), DbError>; fn close(&mut self); }`
+//!   - `trait DbConnection: Send { execute(sql, &[DbValue]) -> Result<u64, DbError>; fetch_all(..) -> Result<Vec<Row>, DbError>; fetch_one(..) -> Result<Option<Row>, DbError>; execute_batch(sql, &[Vec<DbValue>]) -> Result<u64, DbError>; commit(); rollback(); close(); }`
 //!   - `type ConnectionProvider = Arc<dyn Fn() -> Result<Box<dyn DbConnection>, DbError> + Send + Sync>`
 //! - `db::category_mapping::CategoryMapping`
 //!   - `with_connector(provider: ConnectionProvider) -> Result<CategoryMapping, DbError>` (`init_db` 실행. 마이그레이션의 인덱스 삭제 예외는 삼킨다)
@@ -36,7 +33,7 @@
 //! - `chrono`가 dev-dependency에 있다고 본다 (`datetime.now()` 대응).
 use chrono::{Duration, Local, NaiveDateTime};
 use db::category_mapping::{CategoryMapping, CategoryMappingError, RELOAD_LOCK_HEARTBEAT_STALE_SECONDS};
-use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
+use db::{ConnectionProvider, DbConnection, DbError, DbValue, Row};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering};
@@ -113,8 +110,8 @@ impl FakeCursor {
     }
 }
 
-impl DbCursor for FakeCursor {
-    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError> {
+impl FakeCursor {
+    fn run(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError> {
         let effect = {
             let mut st = self.st.lock().unwrap();
             st.executed.push((sql.to_string(), params.to_vec()));
@@ -126,7 +123,7 @@ impl DbCursor for FakeCursor {
         }
     }
 
-    fn executemany(&mut self, sql: &str, seq: &[Vec<DbValue>]) -> Result<(), DbError> {
+    fn run_batch(&mut self, sql: &str, seq: &[Vec<DbValue>]) -> Result<(), DbError> {
         let effect = {
             let mut st = self.st.lock().unwrap();
             st.executed_many.push((sql.to_string(), seq.to_vec()));
@@ -140,11 +137,11 @@ impl DbCursor for FakeCursor {
         Ok(())
     }
 
-    fn fetchall(&mut self) -> Option<Vec<Row>> {
+    fn take_all(&mut self) -> Option<Vec<Row>> {
         Some(self.st.lock().unwrap().rows.clone())
     }
 
-    fn fetchone(&mut self) -> Option<Row> {
+    fn take_one(&mut self) -> Option<Row> {
         let mut st = self.st.lock().unwrap();
         if st.fetchone_index < st.fetchone_rows.len() {
             let found = st.fetchone_rows[st.fetchone_index].clone();
@@ -180,9 +177,36 @@ impl FakeConn {
     }
 }
 
+impl FakeConn {
+    /// 문장 하나를 실행할 cursor 대역.
+    fn open_cursor(&mut self) -> FakeCursor {
+        self.cursor.clone()
+    }
+}
+
 impl DbConnection for FakeConn {
-    fn cursor(&mut self) -> Box<dyn DbCursor> {
-        Box::new(self.cursor.clone())
+    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run(sql, params)?;
+        Ok(cursor.rowcount())
+    }
+
+    fn fetch_all(&mut self, sql: &str, params: &[DbValue]) -> Result<Vec<Row>, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run(sql, params)?;
+        Ok(cursor.take_all().unwrap_or_default())
+    }
+
+    fn fetch_one(&mut self, sql: &str, params: &[DbValue]) -> Result<Option<Row>, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run(sql, params)?;
+        Ok(cursor.take_one())
+    }
+
+    fn execute_batch(&mut self, sql: &str, rows: &[Vec<DbValue>]) -> Result<u64, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run_batch(sql, rows)?;
+        Ok(cursor.rowcount())
     }
 
     fn commit(&mut self) -> Result<(), DbError> {
@@ -206,7 +230,7 @@ fn strs(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
 
-/// `{"cnt": n}`을 `times`번 반복한 fetchone 응답.
+/// `{"cnt": n}`을 `times`번 반복한 fetch_one 응답.
 fn rep(n: i64, times: usize) -> Vec<Option<Row>> {
     (0..times).map(|_| Some(row([("cnt", n.into())]))).collect()
 }
@@ -584,7 +608,7 @@ fn test_migrate_reload_locks_adds_reload_source() {
     let cursor = FakeCursor::new().with_fetchone_rows(rows);
     let _cm = build_cm(&cursor);
     assert!(cursor.ran("ADD COLUMN reload_source"));
-    assert!(cursor.ran("SET reload_source = %s WHERE category IS NOT NULL"));
+    assert!(cursor.ran("SET reload_source = ? WHERE category IS NOT NULL"));
 }
 
 #[test]
@@ -689,7 +713,7 @@ fn test_acquire_reload_lock_different_categories_are_independent() {
     assert!(error.is_none());
     assert!(blocking.is_none());
     let select_sql = cursor.executed().into_iter().map(|(sql, _)| sql).find(|sql| sql.trim().to_uppercase().starts_with("SELECT")).unwrap();
-    assert!(select_sql.contains("IN (%s, %s)"), "{select_sql}");
+    assert!(select_sql.contains("IN (?, ?)"), "{select_sql}");
 }
 
 #[test]
@@ -757,8 +781,8 @@ fn test_heartbeat_reload_lock_updates_counts() {
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     cm.heartbeat_reload_lock("book", None, &[("indexed_count", 3), ("deleted_count", 1)]).unwrap();
     let (sql, params) = cursor.executed().last().cloned().unwrap();
-    assert!(sql.contains("indexed_count = %s"));
-    assert!(sql.contains("deleted_count = %s"));
+    assert!(sql.contains("indexed_count = ?"));
+    assert!(sql.contains("deleted_count = ?"));
     assert_eq!(params, vec![DbValue::from(3_i64), DbValue::from(1_i64), DbValue::from("book"), DbValue::from("__all__")]);
 }
 
@@ -775,7 +799,7 @@ fn test_complete_reload_lock_records_final_status() {
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     cm.complete_reload_lock("book", "done", None, None, &[("indexed_count", 5), ("deleted_count", 2), ("failed_count", 0), ("before_count", 7), ("after_count", 0)]).unwrap();
     let (sql, params) = cursor.executed().last().cloned().unwrap();
-    assert!(sql.contains("status = %s"));
+    assert!(sql.contains("status = ?"));
     assert_eq!(params[0], DbValue::from("done"));
     assert_eq!(params[params.len() - 2], DbValue::from("book"));
     assert_eq!(params[params.len() - 1], DbValue::from("__all__"));
@@ -924,7 +948,7 @@ fn test_get_classify_proposal_status_leaves_recent_and_terminal_states_untouched
 
 // ---- classify_proposal_items 전용 인메모리 대역 ----
 
-/// classify_proposal_items에 대해 INSERT(executemany)/DELETE/SELECT를 흉내내는 인메모리 저장소.
+/// classify_proposal_items에 대해 INSERT(execute_batch)/DELETE/SELECT를 흉내내는 인메모리 저장소.
 /// 공용 FakeCursor는 고정된 rows만 돌려줘, "여러 번 나눠 넣어도 get이 전체를 순서대로 돌려준다"는
 /// 시나리오(테일 플러시 검증 포함)를 표현할 수 없어서 별도로 둔다.
 #[derive(Clone)]
@@ -939,8 +963,8 @@ impl ClassifyItemsFakeCursor {
     }
 }
 
-impl DbCursor for ClassifyItemsFakeCursor {
-    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError> {
+impl ClassifyItemsFakeCursor {
+    fn run(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError> {
         if sql.starts_with("DELETE FROM classify_proposal_items") {
             let content_type = &params[0];
             self.store.lock().unwrap().retain(|r| &r[0] != content_type);
@@ -961,16 +985,16 @@ impl DbCursor for ClassifyItemsFakeCursor {
         Ok(())
     }
 
-    fn executemany(&mut self, _sql: &str, seq: &[Vec<DbValue>]) -> Result<(), DbError> {
+    fn run_batch(&mut self, _sql: &str, seq: &[Vec<DbValue>]) -> Result<(), DbError> {
         self.store.lock().unwrap().extend(seq.iter().cloned());
         Ok(())
     }
 
-    fn fetchall(&mut self) -> Option<Vec<Row>> {
+    fn take_all(&mut self) -> Option<Vec<Row>> {
         Some(self.result.lock().unwrap().clone())
     }
 
-    fn fetchone(&mut self) -> Option<Row> {
+    fn take_one(&mut self) -> Option<Row> {
         Some(row([("cnt", 0_i64.into())]))
     }
 
@@ -983,9 +1007,36 @@ struct ClassifyItemsFakeConn {
     cursor: ClassifyItemsFakeCursor,
 }
 
+impl ClassifyItemsFakeConn {
+    /// 문장 하나를 실행할 cursor 대역.
+    fn open_cursor(&mut self) -> ClassifyItemsFakeCursor {
+        self.cursor.clone()
+    }
+}
+
 impl DbConnection for ClassifyItemsFakeConn {
-    fn cursor(&mut self) -> Box<dyn DbCursor> {
-        Box::new(self.cursor.clone())
+    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run(sql, params)?;
+        Ok(cursor.rowcount())
+    }
+
+    fn fetch_all(&mut self, sql: &str, params: &[DbValue]) -> Result<Vec<Row>, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run(sql, params)?;
+        Ok(cursor.take_all().unwrap_or_default())
+    }
+
+    fn fetch_one(&mut self, sql: &str, params: &[DbValue]) -> Result<Option<Row>, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run(sql, params)?;
+        Ok(cursor.take_one())
+    }
+
+    fn execute_batch(&mut self, sql: &str, rows: &[Vec<DbValue>]) -> Result<u64, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run_batch(sql, rows)?;
+        Ok(cursor.rowcount())
     }
 
     fn commit(&mut self) -> Result<(), DbError> {
@@ -1063,7 +1114,7 @@ fn test_clear_scopes_delete_to_given_content_type() {
 
     assert!(conn.committed());
     let (sql, params) = cursor.executed().last().cloned().unwrap();
-    assert!(sql.contains("DELETE FROM classify_proposal_items WHERE content_type = %s"));
+    assert!(sql.contains("DELETE FROM classify_proposal_items WHERE content_type = ?"));
     assert_eq!(params, vec![DbValue::from("comic")]);
 }
 

@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 
 pub use es_client::EsError;
-pub use es_client::transport::{EsTransport, HttpTransport};
+pub use es_client::transport::{Conflicts, EsRequest, EsTransport, HttpTransport};
 
 /// 검색 결과 한 건.
 #[derive(Debug, Clone, PartialEq)]
@@ -137,13 +137,13 @@ pub trait EsManagerApi: Send + Sync {
     fn search_by_keyword(&self, _keyword: &str, _max_result_count: i64) -> Result<Vec<Hit>, EsError> {
         Err(EsError::Unsupported)
     }
-    fn search_by_keyword_paged(&self, _args: &Value) -> Result<(Vec<Hit>, i64), EsError> {
+    fn search_by_keyword_paged(&self, _args: &KeywordSearchArgs) -> Result<(Vec<Hit>, i64), EsError> {
         Err(EsError::Unsupported)
     }
-    fn search_similar_docs(&self, _args: &Value) -> Result<Vec<Hit>, EsError> {
+    fn search_similar_docs(&self, _args: &SimilarDocsArgs) -> Result<Vec<Hit>, EsError> {
         Err(EsError::Unsupported)
     }
-    fn search_similar_docs_paged(&self, _args: &Value) -> Result<(Vec<Hit>, i64), EsError> {
+    fn search_similar_docs_paged(&self, _args: &SimilarDocsArgs) -> Result<(Vec<Hit>, i64), EsError> {
         Err(EsError::Unsupported)
     }
     fn search_latest_docs(&self, _max_result_count: i64, _exclude_categories: Option<&[String]>) -> Result<(Vec<Hit>, i64), EsError> {
@@ -247,7 +247,7 @@ const MAX_RESULT_WINDOW: i64 = 10_000;
 // ---------------------------------------------------------------------------
 
 /// `search_similar_docs`와 `_paged`의 인자와 기본값.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SimilarDocsArgs {
     pub category: String,
     pub title: String,
@@ -280,24 +280,20 @@ impl Default for SimilarDocsArgs {
     }
 }
 
-impl SimilarDocsArgs {
-    /// `EsManagerApi`가 받는 JSON 인자에서 만든다. 없는 키는 기본값이다.
-    pub fn from_value(args: &Value) -> Self {
-        let d = SimilarDocsArgs::default();
-        let text = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("").to_string();
-        let int = |key: &str, default: i64| args.get(key).and_then(Value::as_i64).unwrap_or(default);
-        SimilarDocsArgs {
-            category: text("category"),
-            title: text("title"),
-            author: text("author"),
-            file_type: text("file_type"),
-            file_size: int("file_size", d.file_size),
-            summary: text("summary"),
-            max_result_count: int("max_result_count", d.max_result_count),
-            exclude_id: args.get("exclude_id").and_then(Value::as_i64),
-            size: int("size", d.size),
-            offset: int("offset", d.offset),
-        }
+/// 키워드 검색 한 쪽의 인자.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct KeywordSearchArgs {
+    pub keyword: String,
+    pub size: i64,
+    pub offset: i64,
+    pub exclude_categories: Option<Vec<String>>,
+    /// 이 카테고리 안에서만 찾는다.
+    pub category: Option<String>,
+}
+
+impl Default for KeywordSearchArgs {
+    fn default() -> Self {
+        KeywordSearchArgs { keyword: String::new(), size: 10, offset: 0, exclude_categories: None, category: None }
     }
 }
 
@@ -421,7 +417,7 @@ fn category_or_children(category: &str) -> Value {
     json!({"bool": {"should": [{"term": {"category": category}}, {"prefix": {"category": format!("{category}/")}}], "minimum_should_match": 1}})
 }
 
-use crate::truthy;
+use crate::has_content;
 
 impl ESManager {
     pub const DEFAULT_MAX_RESULT_COUNT: i64 = 10;
@@ -496,7 +492,7 @@ impl ESManager {
         };
         let es = connector.connect(&options);
         for attempt in 0..CONNECT_MAX_RETRIES {
-            match es.call("info", &json!({})) {
+            match es.send(&EsRequest::Info) {
                 Ok(_) => {
                     log::info!("Elasticsearch 연결 성공");
                     break;
@@ -599,7 +595,7 @@ impl EsManagerApi for ESManager {
 
     /// 문서 3.3의 `EsLookup::search_by_path`에 대응한다. file_path 정확 일치 첫 문서의 `_source`다.
     fn search_by_path_source(&self, path: &str) -> Result<Option<Value>, EsError> {
-        let response = self.es.call("search", &json!({"index": self.index(), "query": {"term": {"file_path": path}}, "size": 1}))?;
+        let response = self.es.send(&EsRequest::search(json!({"query": {"term": {"file_path": path}}, "size": 1})))?;
         Ok(hits_of(&response).first().map(source_of))
     }
 
@@ -632,26 +628,17 @@ impl EsManagerApi for ESManager {
         ESManager::search_by_keyword(self, keyword, max_result_count)
     }
 
-    /// 인자 키: `keyword`, `size`(기본 10), `offset`(기본 0), `exclude_categories`(문자열 배열), `category`.
-    fn search_by_keyword_paged(&self, args: &Value) -> Result<(Vec<Hit>, i64), EsError> {
-        let exclude: Option<Vec<&str>> = args.get("exclude_categories").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect());
-        ESManager::search_by_keyword_paged(
-            self,
-            args.get("keyword").and_then(Value::as_str).unwrap_or(""),
-            args.get("size").and_then(Value::as_i64).unwrap_or(10),
-            args.get("offset").and_then(Value::as_i64).unwrap_or(0),
-            exclude.as_deref(),
-            args.get("category").and_then(Value::as_str),
-        )
+    fn search_by_keyword_paged(&self, args: &KeywordSearchArgs) -> Result<(Vec<Hit>, i64), EsError> {
+        let exclude = args.exclude_categories.as_deref().map(texts);
+        ESManager::search_by_keyword_paged(self, &args.keyword, args.size, args.offset, exclude.as_deref(), args.category.as_deref())
     }
 
-    /// 인자 키는 `SimilarDocsArgs`의 필드 이름이다.
-    fn search_similar_docs(&self, args: &Value) -> Result<Vec<Hit>, EsError> {
-        ESManager::search_similar_docs(self, &SimilarDocsArgs::from_value(args))
+    fn search_similar_docs(&self, args: &SimilarDocsArgs) -> Result<Vec<Hit>, EsError> {
+        ESManager::search_similar_docs(self, args)
     }
 
-    fn search_similar_docs_paged(&self, args: &Value) -> Result<(Vec<Hit>, i64), EsError> {
-        ESManager::search_similar_docs_paged(self, &SimilarDocsArgs::from_value(args))
+    fn search_similar_docs_paged(&self, args: &SimilarDocsArgs) -> Result<(Vec<Hit>, i64), EsError> {
+        ESManager::search_similar_docs_paged(self, args)
     }
 
     fn search_latest_docs(&self, max_result_count: i64, exclude_categories: Option<&[String]>) -> Result<(Vec<Hit>, i64), EsError> {

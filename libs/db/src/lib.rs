@@ -1,4 +1,4 @@
-//! MySQL 접근 추상화. Diesel 위에서 `%s` 자리표시자, 열 이름 맵 행, 수동 커밋, 제약 위반 오류를 제공한다.
+//! MySQL 접근 추상화. Diesel 위에서 `?` 자리표시자, 열 이름 맵 행, 수동 커밋, 제약 위반 오류를 제공한다.
 //! 서비스 코드는 `DbConnection`/`ConnectionProvider`만 알고, 테스트는 가짜 연결을 주입한다. 설계: docs/rust-test-seams.md 3.4
 //!
 //! 시간대: Diesel은 연결을 열 때 `time_zone`을 `+00:00`으로 바꾸므로, `connect`가 서버 전역 설정으로 되돌린다.
@@ -111,7 +111,7 @@ impl From<serde_json::Value> for DbValue {
     }
 }
 
-/// 열 이름 → 값. `DictCursor`가 돌려주는 dict에 대응한다.
+/// 열 구조를 미리 정하지 않은 SELECT 결과 한 행: 열 이름 → 값.
 pub type Row = BTreeMap<String, DbValue>;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -136,34 +136,24 @@ impl std::error::Error for DbError {}
 // 추상화
 // ---------------------------------------------------------------------------
 
-pub trait DbCursor {
-    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError>;
-    fn executemany(&mut self, sql: &str, seq: &[Vec<DbValue>]) -> Result<(), DbError>;
-    /// 남은 행을 모두 돌려준다. 결과 집합이 없는 문장(INSERT 등) 뒤에는 `None`이다.
-    fn fetchall(&mut self) -> Option<Vec<Row>>;
-    fn fetchone(&mut self) -> Option<Row>;
-    /// SELECT는 읽은 행 수, 그 밖의 문장은 영향받은 행 수다.
-    fn rowcount(&self) -> u64;
-}
-
+/// 연결 하나. SQL 자리표시자는 `?`다.
 pub trait DbConnection: Send {
-    fn cursor(&mut self) -> Box<dyn DbCursor>;
+    /// 문장을 실행하고 영향받은 행 수를 돌려준다. SELECT면 읽은 행 수다.
+    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError>;
+    /// SELECT를 실행하고 모든 행을 돌려준다.
+    fn fetch_all(&mut self, sql: &str, params: &[DbValue]) -> Result<Vec<Row>, DbError>;
     fn commit(&mut self) -> Result<(), DbError>;
     fn rollback(&mut self) -> Result<(), DbError>;
     fn close(&mut self);
 
-    /// 커서 하나로 문장을 실행하고 영향받은(SELECT는 읽은) 행 수를 돌려준다.
-    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError> {
-        let mut cur = self.cursor();
-        cur.execute(sql, params)?;
-        Ok(cur.rowcount())
+    /// SELECT를 실행하고 첫 행을 돌려준다. 행이 없으면 `None`이다.
+    fn fetch_one(&mut self, sql: &str, params: &[DbValue]) -> Result<Option<Row>, DbError> {
+        Ok(self.fetch_all(sql, params)?.into_iter().next())
     }
 
-    /// 커서 하나로 문장을 실행하고 첫 행을 돌려준다. 행이 없으면 `None`이다.
-    fn fetch_one(&mut self, sql: &str, params: &[DbValue]) -> Result<Option<Row>, DbError> {
-        let mut cur = self.cursor();
-        cur.execute(sql, params)?;
-        Ok(cur.fetchone())
+    /// 같은 문장을 인자 묶음마다 실행하고 영향받은 행 수의 합을 돌려준다.
+    fn execute_batch(&mut self, sql: &str, rows: &[Vec<DbValue>]) -> Result<u64, DbError> {
+        rows.iter().try_fold(0, |total, params| Ok(total + self.execute(sql, params)?))
     }
 }
 
@@ -218,30 +208,6 @@ pub fn mysql_url(c: &MysqlConfig) -> String {
     // libmysqlclient는 "localhost"를 유닉스 소켓으로 해석한다. 항상 TCP로 붙게 루프백 주소로 바꾼다.
     let host = if c.host == "localhost" { "127.0.0.1" } else { c.host.as_str() };
     format!("mysql://{}:{}@{}:{}/{}", percent_encode(&c.user), percent_encode(&c.password), host, c.port, c.database)
-}
-
-/// SQL의 `%s` 자리표시자를 MySQL 준비된 문장의 `?`로 바꾼다. `%%`는 `%` 한 글자다.
-pub fn to_mysql_placeholders(sql: &str) -> String {
-    let mut out = String::with_capacity(sql.len());
-    let mut chars = sql.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            match chars.peek() {
-                Some('s') => {
-                    chars.next();
-                    out.push('?');
-                }
-                Some('%') => {
-                    chars.next();
-                    out.push('%');
-                }
-                _ => out.push('%'),
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -305,70 +271,6 @@ fn returns_rows(sql: &str) -> bool {
     matches!(first.as_str(), "SELECT" | "SHOW" | "DESCRIBE" | "DESC" | "EXPLAIN" | "WITH")
 }
 
-struct MysqlCursor {
-    conn: SharedConn,
-    rows: std::vec::IntoIter<Row>,
-    has_result: bool,
-    rowcount: u64,
-}
-
-impl MysqlCursor {
-    fn run(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError> {
-        let sql = to_mysql_placeholders(sql);
-        let is_query = returns_rows(&sql);
-        let mut q = sql_query(sql).into_boxed::<Mysql>();
-        for p in params {
-            q = match p {
-                DbValue::Null => q.bind::<Nullable<Text>, _>(None::<String>),
-                DbValue::Int(n) => q.bind::<BigInt, _>(*n),
-                DbValue::Text(s) => q.bind::<Text, _>(s.clone()),
-                DbValue::DateTime(d) => q.bind::<Timestamp, _>(*d),
-            };
-        }
-        let mut guard = lock(&self.conn);
-        if is_query {
-            let rows: Vec<DynRow> = q.load(&mut *guard).map_err(map_error)?;
-            self.rowcount = rows.len() as u64;
-            self.rows = rows.into_iter().map(|r| r.0).collect::<Vec<_>>().into_iter();
-            self.has_result = true;
-        } else {
-            let n = q.execute(&mut *guard).map_err(map_error)?;
-            self.rowcount = n as u64;
-            self.rows = Vec::new().into_iter();
-            self.has_result = false;
-        }
-        Ok(())
-    }
-}
-
-impl DbCursor for MysqlCursor {
-    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError> {
-        self.run(sql, params)
-    }
-
-    fn executemany(&mut self, sql: &str, seq: &[Vec<DbValue>]) -> Result<(), DbError> {
-        let mut total = 0;
-        for params in seq {
-            self.run(sql, params)?;
-            total += self.rowcount;
-        }
-        self.rowcount = total;
-        Ok(())
-    }
-
-    fn fetchall(&mut self) -> Option<Vec<Row>> {
-        self.has_result.then(|| self.rows.by_ref().collect())
-    }
-
-    fn fetchone(&mut self) -> Option<Row> {
-        self.rows.next()
-    }
-
-    fn rowcount(&self) -> u64 {
-        self.rowcount
-    }
-}
-
 struct MysqlDbConnection {
     conn: SharedConn,
     closed: bool,
@@ -381,11 +283,33 @@ impl MysqlDbConnection {
         }
         lock(&self.conn).batch_execute(sql).map_err(map_error)
     }
+
+    fn query(sql: &str, params: &[DbValue]) -> diesel::query_builder::BoxedSqlQuery<'static, Mysql, diesel::query_builder::SqlQuery> {
+        let mut q = sql_query(sql.to_string()).into_boxed::<Mysql>();
+        for p in params {
+            q = match p {
+                DbValue::Null => q.bind::<Nullable<Text>, _>(None::<String>),
+                DbValue::Int(n) => q.bind::<BigInt, _>(*n),
+                DbValue::Text(s) => q.bind::<Text, _>(s.clone()),
+                DbValue::DateTime(d) => q.bind::<Timestamp, _>(*d),
+            };
+        }
+        q
+    }
 }
 
 impl DbConnection for MysqlDbConnection {
-    fn cursor(&mut self) -> Box<dyn DbCursor> {
-        Box::new(MysqlCursor { conn: self.conn.clone(), rows: Vec::new().into_iter(), has_result: false, rowcount: 0 })
+    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError> {
+        if returns_rows(sql) {
+            return Ok(self.fetch_all(sql, params)?.len() as u64);
+        }
+        let n = Self::query(sql, params).execute(&mut *lock(&self.conn)).map_err(map_error)?;
+        Ok(n as u64)
+    }
+
+    fn fetch_all(&mut self, sql: &str, params: &[DbValue]) -> Result<Vec<Row>, DbError> {
+        let rows: Vec<DynRow> = Self::query(sql, params).load(&mut *lock(&self.conn)).map_err(map_error)?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
     fn commit(&mut self) -> Result<(), DbError> {

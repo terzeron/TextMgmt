@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 #[test]
 fn test_reload_category_empty_name() {
-    // Line 1032: empty category name
+    // empty category name
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
@@ -29,7 +29,7 @@ fn test_reload_category_empty_name() {
 
 #[test]
 fn test_reload_category_path_traversal() {
-    // Line 1034: category with '..'
+    // category with '..'
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
@@ -39,7 +39,7 @@ fn test_reload_category_path_traversal() {
 
 #[test]
 fn test_reload_category_path_escape() {
-    // Line 1038: resolved path escapes path_prefix
+    // resolved path escapes path_prefix
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();
@@ -52,7 +52,7 @@ fn test_reload_category_path_escape() {
 
 #[test]
 fn test_reload_category_not_a_directory() {
-    // Lines 1040-1041: path is not a directory
+    // path is not a directory
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();
@@ -65,7 +65,6 @@ fn test_reload_category_not_a_directory() {
 
 #[test]
 fn test_mismatch_and_reload_more_edge_cases() {
-    // Lines 1780-1781, 1905-1906, 1909-1912, 1921, 1935, 1951-1952, 1964-1965, 1989, 1995, 2012, 2029-2030, 2042-2043, 2063, 2065, 2087-2088
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let manager = make_manager(tmp_path, &FakeEsManager::new());
@@ -151,7 +150,6 @@ fn test_mismatch_and_reload_more_edge_cases() {
 
 #[test]
 fn test_reload_category_mismatch_files_non_int_book_id() {
-    // Line 1995
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();

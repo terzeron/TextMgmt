@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
 pub use backend::es_manager::Hit;
-use backend::es_manager::{EsError, EsManagerApi, PagedHits};
+use backend::es_manager::{EsError, EsManagerApi, KeywordSearchArgs, PagedHits, SimilarDocsArgs};
 use serde_json::{Value, json};
 
 pub type Docs = BTreeMap<i64, Value>;
@@ -481,18 +481,18 @@ impl EsManagerApi for FakeEsManager {
     }
 
     /// 인자는 `{keyword, size, offset, exclude_categories, category}` 형태의 JSON으로 받는다고 가정한다.
-    fn search_by_keyword_paged(&self, args: &Value) -> Result<(Vec<Hit>, i64), EsError> {
-        self.enter("search_by_keyword_paged", args.clone())?;
+    fn search_by_keyword_paged(&self, args: &KeywordSearchArgs) -> Result<(Vec<Hit>, i64), EsError> {
+        self.enter("search_by_keyword_paged", json!(args))?;
         Ok(self.with(|s| s.keyword_paged.clone()))
     }
 
-    fn search_similar_docs(&self, args: &Value) -> Result<Vec<Hit>, EsError> {
-        self.enter("search_similar_docs", args.clone())?;
+    fn search_similar_docs(&self, args: &SimilarDocsArgs) -> Result<Vec<Hit>, EsError> {
+        self.enter("search_similar_docs", json!(args))?;
         Ok(self.with(|s| s.similar.clone()))
     }
 
-    fn search_similar_docs_paged(&self, args: &Value) -> Result<(Vec<Hit>, i64), EsError> {
-        self.enter("search_similar_docs_paged", args.clone())?;
+    fn search_similar_docs_paged(&self, args: &SimilarDocsArgs) -> Result<(Vec<Hit>, i64), EsError> {
+        self.enter("search_similar_docs_paged", json!(args))?;
         Ok(self.with(|s| s.similar_paged.clone()))
     }
 

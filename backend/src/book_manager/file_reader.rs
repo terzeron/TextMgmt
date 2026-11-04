@@ -27,7 +27,7 @@ const IMAGE_SUFFIXES: [&str; 6] = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".b
 /// 요약에 담는 본문 길이(문자).
 const SUMMARY_CHARS: usize = 3500;
 
-/// ZIP 컨테이너의 실제 종류를 내용물로 판별한다. `Loader._zip_container_type`.
+/// ZIP 컨테이너의 실제 종류를 내용물로 판별한다.
 fn zip_container_type<R: Read + Seek>(reader: R) -> Option<&'static str> {
     let mut zip = zip::ZipArchive::new(reader).ok()?;
     let names = super::epub_inspector::zip_names(&mut zip);

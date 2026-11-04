@@ -278,7 +278,7 @@ fn now_seconds() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
-use crate::truthy;
+use crate::has_content;
 
 fn is_epub_name(name: &str) -> bool {
     Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case("epub"))
@@ -447,8 +447,8 @@ impl CoverManagement {
             let identity = json!({"file_path": relative, "book_id": file_inode(path), "category": category, "title": filename_title(path)});
             match self.inspect(path) {
                 Ok(metadata) => {
-                    let has_cover = truthy(metadata.get("has_cover"));
-                    if has_cover != covered && !truthy(metadata.get("cover_error")) {
+                    let has_cover = metadata.get("has_cover").and_then(Value::as_bool) == Some(true);
+                    if has_cover != covered && !has_content(metadata.get("cover_error")) {
                         continue;
                     }
                     let mut item = metadata;
@@ -568,11 +568,11 @@ impl CoverManagement {
         let path = self.resolve(relative, false)?;
         // 저장 중인 파일을 읽지 않도록 표지 검사에서 공유 잠금을 확인한다.
         let info = self.inspect(&path)?;
-        if !truthy(info.get("has_cover")) {
+        if info.get("has_cover").and_then(Value::as_bool) != Some(true) {
             return Err(CoverError::new("EPUB에 표지가 없습니다"));
         }
         // 검사가 표지 이미지를 읽지 못했다고 보고하면(크기 상한 초과 등) 썸네일도 만들지 않는다.
-        if truthy(info.get("cover_error")) {
+        if has_content(info.get("cover_error")) {
             return Err(CoverError::new(UNREADABLE_COVER));
         }
         if original {

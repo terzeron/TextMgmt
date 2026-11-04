@@ -1,5 +1,4 @@
 //! 오피스 문서와 이미지 읽기. DOCX는 직접 읽고, DOC·HWP·이미지는 LibreOffice로 변환해 읽는다.
-//! 원본: `Loader.read_from_docx/doc/hwp/image`, `_convert_with_libreoffice`.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};

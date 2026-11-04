@@ -18,7 +18,7 @@ use std::fs;
 
 #[test]
 fn test_index_single_file_unsupported() {
-    // Line 1011: Loader.read_file returns falsy
+    // Loader.read_file returns falsy
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();
@@ -36,7 +36,7 @@ fn test_index_single_file_unsupported() {
 
 #[test]
 fn test_update_book_ioerror_on_rename() {
-    // Lines 829-830: IOError during file rename
+    // IOError during file rename
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();
@@ -56,7 +56,7 @@ fn test_update_book_ioerror_on_rename() {
 
 #[test]
 fn test_update_book_force_overwrite() {
-    // Line 824: force overwrite when destination exists
+    // force overwrite when destination exists
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();
@@ -74,7 +74,7 @@ fn test_update_book_force_overwrite() {
     assert_eq!(fs::read_to_string(&dst).unwrap(), "source");
 }
 
-// ── update_book: 책이 없을 때 Error 반환 (line 978) ─────────────────────────
+// ── update_book: 책이 없을 때 Error 반환 ─────────────────────────
 
 #[test]
 fn test_update_book_no_such_book_returns_error() {
@@ -91,7 +91,6 @@ fn test_update_book_no_such_book_returns_error() {
 
 #[test]
 fn test_update_book_reindex_and_rollback_branches() {
-    // Lines 1169, 1182-1184, 1188-1190, 1192-1193, 1204-1206, 1208-1211
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let src_file = tmp_path.join("A").join("book.txt");

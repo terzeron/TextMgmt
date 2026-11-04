@@ -214,7 +214,7 @@ enum StageError {
     Failed,
 }
 
-/// 한 추출 단계를 시간 상한 안에서 실행한다. panic도 실패로 본다(원본의 `except Exception`).
+/// 한 추출 단계를 시간 상한 안에서 실행한다. panic도 실패로 본다.
 fn run_stage<T: Send + 'static>(seconds: f64, message: &str, f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, StageError> {
     match run_with_timeout(seconds, message, move || catch_unwind(AssertUnwindSafe(f))) {
         Err(_) => Err(StageError::Timeout),

@@ -87,7 +87,7 @@ impl CoverManagement {
         if str_field(&metadata, "revision") != expected_revision {
             return Err(CoverError::new(BOOK_CHANGED));
         }
-        if truthy(metadata.get("has_cover")) && !replace_existing {
+        if metadata.get("has_cover").and_then(Value::as_bool) == Some(true) && !replace_existing {
             return Err(CoverError::new(ALREADY_COVERED));
         }
         let data = self.download_image(url)?;
@@ -218,7 +218,7 @@ impl CoverManagement {
         }
         response.insert("backup_path".to_string(), json!(backup_relative));
         for key in ["warning", "idref", "idrefs"] {
-            if truthy(result.get(key)) {
+            if has_content(result.get(key)) {
                 response.insert(key.to_string(), result[key].clone());
             }
         }

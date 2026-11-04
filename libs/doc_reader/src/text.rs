@@ -1,4 +1,4 @@
-//! TXT 읽기. 원본: `Loader.read_from_text`, `Loader.reencode_text_file_to_utf8`.
+//! TXT 읽기와 UTF-8 재인코딩.
 //!
 //! 원본은 chardet으로 후보 순서를 정한다. chardet은 옮기지 않았고, 같은 목적의 간단한 판별
 //! ([`detect_hint`])으로 대신한다. 엄격 UTF-8로 읽히는 파일(코퍼스 표본 거의 전부)에서는 같은 길을 탄다.
@@ -11,7 +11,7 @@ use encoding_rs::{EUC_KR, WINDOWS_1252};
 use crate::text_normalizer::{collapse_spaces, head_chars, is_all_space, keep_ascii_hangul, universal_newlines};
 use crate::{TEXT_SIZE, mojibake_counter};
 
-/// txt 디코딩 시도 순서(원본 `TEXT_ENCODINGS`).
+/// txt 디코딩 시도 순서.
 pub const TEXT_ENCODINGS: [Enc; 7] = [Enc::Utf8, Enc::Cp949, Enc::EucKr, Enc::Utf16, Enc::Utf16Le, Enc::Utf16Be, Enc::Utf8Sig];
 /// 상위바이트가 고립되어 나타나면 서양어 단일바이트로 본다. 인접 비율 기준.
 pub const HIGH_BYTE_PAIRED_MIN: f64 = 0.5;

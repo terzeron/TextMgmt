@@ -1,11 +1,8 @@
 //! ESManager 테스트용 가짜 저수준 ES 전송 계층.
 //! 설계: docs/rust-test-seams.md 3.3. 구 `EsApi`(call)와 `EsLike`(index_name/get/search)를 `EsTransport` 하나로 통일했다.
 //!
-//! 가정한 API (아직 구현 전이다):
-//! - `es_client::transport::EsTransport`: `fn index_name(&self) -> &str`, `fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>`
-//!   (`get`, `search`는 `call("get")`, `call("search")`로 가는 기본 구현이다. ES API 호출을 `op`와 인자 JSON으로 나타낸다. `indices.exists`처럼 점으로 하위 객체를 쓴다)
-//! - `es_client::EsError`: `MissingEnv`, `Transport(String)`, `Status { status: u16, body: String }`, `Parse`, `Unsupported`, `Other(String)`
-//!   (구 `ElasticsearchError` 매핑: ConnectionError -> Transport, NotFoundError -> Status{404}, BadRequestError{message,status} -> Status{status, body:message}, BookManagerError -> Other)
+//! - `es_client::transport::EsTransport`: `fn index_name(&self) -> &str`, `fn send(&self, request: &EsRequest) -> Result<Value, EsError>`
+//!   대역은 `request.name()`(예: `search`, `indices.exists`)으로 가로채고 `request.params()`(본문을 펼친 JSON)를 기록한다.
 //!
 //! 사용: `use common::es_dummy::{DummyEs, runtime_error};` `ESManager::with_transport(DummyEs::new())`
 //! 고수준 `EsManagerApi` 대역이 필요하면 `es_fake.rs`의 `FakeEsManager`를 쓴다.
@@ -16,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use es_client::EsError;
-use es_client::transport::EsTransport;
+use es_client::transport::{EsRequest, EsTransport};
 use serde_json::{Value, json};
 
 pub type Handler = Arc<dyn Fn(&Value) -> Result<Value, EsError> + Send + Sync>;
@@ -35,7 +32,7 @@ pub struct State {
     pub put_mapping_properties: Value,
     /// `DummyIndices.mapping`. `exists` 키는 `indices.exists`의 응답이다.
     pub mapping: Value,
-    /// 호출 순서대로 `(op, kwargs)`를 쌓는다. `MagicMock`의 `assert_called*`를 대신한다.
+    /// 호출 순서대로 `(요청 이름, params)`를 쌓는다.
     pub calls: Vec<(String, Value)>,
 }
 
@@ -133,21 +130,15 @@ impl DummyEs {
         self.state(|s| s.mapping = mapping);
     }
 
-    /// 해당 `op`로 들어온 키워드 인자를 호출 순서대로 돌려준다.
+    /// 해당 이름으로 들어온 요청의 params를 호출 순서대로 돌려준다.
     pub fn calls_of(&self, op: &str) -> Vec<Value> {
         self.state(|s| s.calls.iter().filter(|(o, _)| o == op).map(|(_, kw)| kw.clone()).collect())
     }
 
     fn default_search(&self, kw: &Value) -> Result<Value, EsError> {
         self.state(|s| s.search_calls += 1);
-        let body = kw.get("body").filter(|b| !b.is_null());
-        if let Some(body) = body {
-            if truthy(body.get("aggs")) {
-                return Ok(json!({"aggregations": {"unique_values": {"buckets": [{"key": "A", "doc_count": 2}]}}}));
-            }
-            if body.get("query").and_then(|q| q.get("match_all")).is_some_and(|v| !v.is_null()) {
-                return Ok(json!({"_scroll_id": "scroll1", "hits": {"hits": [{"_source": {"category": "A", "file_path": "/a"}}, {"_source": {"category": "A", "file_path": "/b"}}]}}));
-            }
+        if kw.get("aggs").and_then(|a| a.get("unique_values")).is_some() {
+            return Ok(json!({"aggregations": {"unique_values": {"buckets": [{"key": "A", "doc_count": 2}]}}}));
         }
         if kw.get("scroll").is_some_and(|v| !v.is_null()) {
             return Ok(json!({"_scroll_id": "scroll1", "hits": {"max_score": 2.0, "hits": [{"_id": "1", "_source": {"a": 1}, "_score": 2.0}]}}));
@@ -228,12 +219,13 @@ impl EsTransport for DummyEs {
         &self.index
     }
 
-    fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError> {
-        self.state(|s| s.calls.push((op.to_string(), kwargs.clone())));
+    fn send(&self, request: &EsRequest) -> Result<Value, EsError> {
+        let (op, params) = (request.name(), request.params());
+        self.state(|s| s.calls.push((op.to_string(), params.clone())));
         let handler = self.overrides.lock().unwrap().get(op).cloned();
         match handler {
-            Some(h) => h(kwargs),
-            None => self.base_call(op, kwargs),
+            Some(h) => h(&params),
+            None => self.base_call(op, &params),
         }
     }
 }

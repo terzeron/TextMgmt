@@ -200,7 +200,7 @@ fn run_api_exploration_test(http: &dyn HttpGet, okt: Option<&dyn Okt>) {
 
 // ---- tests ----
 
-/// 고정 명사 목록을 돌려주는 가짜 Okt. 원본의 `FakeOkt`에 대응한다.
+/// 고정 명사 목록을 돌려주는 가짜 Okt.
 struct FakeOkt(Vec<&'static str>);
 
 impl Okt for FakeOkt {

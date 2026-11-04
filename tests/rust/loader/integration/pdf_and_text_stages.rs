@@ -205,39 +205,39 @@ mod test_read_from_obj_stream {
 
     #[test]
     fn test_missing_first_or_length() {
-        // Lines 443-446: /First or /Length missing
+        // /First or /Length missing
         assert!(obj_stream(b"1 0 obj\n<< /Type /ObjStm >>\nstream\ndata\nendstream", 1).is_none());
     }
 
     #[test]
     fn test_indirect_length() {
-        // Lines 447-448: /Length is indirect reference
+        // /Length is indirect reference
         assert!(obj_stream(b"1 0 obj\n<< /First 10 /Length 5 0 R >>\nstream\ndata\nendstream", 1).is_none());
     }
 
     #[test]
     fn test_no_stream_marker() {
-        // Lines 453-455: no stream marker
+        // no stream marker
         assert!(obj_stream(b"1 0 obj\n<< /First 10 /Length 20 >>\nendobj", 1).is_none());
     }
 
     #[test]
     fn test_non_flatedecode_filter() {
-        // Lines 462-463: unsupported filter
+        // unsupported filter
         let data = b"1 0 obj\n<< /First 10 /Length 5 /Filter /ASCIIHexDecode >>\nstream\nhello\nendstream";
         assert!(obj_stream(data, 1).is_none());
     }
 
     #[test]
     fn test_zlib_decompress_failure() {
-        // Lines 466-467: zlib decompression fails
+        // zlib decompression fails
         let data = b"1 0 obj\n<< /First 10 /Length 5 /Filter /FlateDecode >>\nstream\nhello\nendstream";
         assert!(obj_stream(data, 1).is_none());
     }
 
     #[test]
     fn test_target_found() {
-        // Lines 476-480: target object found in stream
+        // target object found in stream
         // Object stream: header "5 0 6 20" means obj 5 at offset 0, obj 6 at offset 20
         let header = b"5 0 6 20 ";
         let obj_data = b"<< /Type /Catalog >>";
@@ -256,7 +256,7 @@ mod test_read_from_obj_stream {
 
     #[test]
     fn test_target_not_found() {
-        // Lines 482-484: target object not in stream
+        // target object not in stream
         let header = b"5 0 ";
         let obj_data = b"<< /Type /Catalog >>";
         let mut raw = header.to_vec();
@@ -275,13 +275,13 @@ mod test_parse_one_xref_stream {
 
     #[test]
     fn test_missing_w() {
-        // Lines 493-495: /W missing
+        // /W missing
         assert!(xref_stream(b"1 0 obj\n<< /Size 10 /Length 20 >>\nstream\ndata").is_none());
     }
 
     #[test]
     fn test_missing_size() {
-        // Lines 498-500: /Size missing
+        // /Size missing
         assert!(xref_stream(b"1 0 obj\n<< /W [1 2 1] /Length 20 >>\nstream\ndata").is_none());
     }
 
@@ -292,31 +292,31 @@ mod test_parse_one_xref_stream {
 
     #[test]
     fn test_indirect_length() {
-        // Lines 507-508: /Length is indirect reference
+        // /Length is indirect reference
         assert!(xref_stream(b"1 0 obj\n<< /W [1 2 1] /Size 10 /Length 5 0 R >>\nstream\ndata").is_none());
     }
 
     #[test]
     fn test_no_stream_marker() {
-        // Lines 514-516: no stream marker
+        // no stream marker
         assert!(xref_stream(b"1 0 obj\n<< /W [1 2 1] /Size 10 /Length 20 >>\nendobj").is_none());
     }
 
     #[test]
     fn test_non_flatedecode() {
-        // Lines 524-525: unsupported filter
+        // unsupported filter
         assert!(xref_stream(b"1 0 obj\n<< /W [1 2 1] /Size 10 /Length 5 /Filter /LZW >>\nstream\nhello\nendstream").is_none());
     }
 
     #[test]
     fn test_zlib_failure() {
-        // Lines 528-529: zlib decompression fails
+        // zlib decompression fails
         assert!(xref_stream(b"1 0 obj\n<< /W [1 2 1] /Size 10 /Length 5 /Filter /FlateDecode >>\nstream\nhello\nendstream").is_none());
     }
 
     #[test]
     fn test_uncompressed_stream() {
-        // Lines 530-531: no filter -> raw data
+        // no filter -> raw data
         // Create an uncompressed xref stream: W=[1,2,1], Size=2, 2 entries of 4 bytes each
         let mut entry_data = vec![1u8, 0, 100, 0];
         entry_data.extend_from_slice(&[1, 0, 200, 0]); // type=1, offset=100/200, gen=0
@@ -330,7 +330,7 @@ mod test_parse_one_xref_stream {
 
     #[test]
     fn test_with_decode_parms() {
-        // Lines 534-540: PNG predictor with /DecodeParms
+        // PNG predictor with /DecodeParms
         // Each row: 1 filter byte + 4 data bytes (W=[1,2,1] -> 4 bytes per entry)
         // Filter byte 0 = None predictor
         let row1 = [0u8, 1, 0, 100, 0]; // type=1, offset=100, gen=0
@@ -349,8 +349,8 @@ mod test_read_file_edge_cases {
 
     #[test]
     fn test_read_file_skip_text_pdf_fast_fails() {
-        // Lines 710-712: skip_text PDF, fast count None, lopdf also fails
-        // 원본은 _fast_pdf_page_count를 None으로 바꾼다. "not a pdf"는 실제로도 경량 읽기가 실패하므로 바꿔치기 없이 같은 경로를 탄다.
+        // skip_text PDF, fast count None, lopdf also fails
+        // "not a pdf"는 경량 쪽수 읽기가 실패하므로 바꿔치기 없이 lopdf 경로를 탄다.
         let dir = tmp();
         let pdf = dir.path().join("cat").join("test.pdf");
         fs::create_dir(pdf.parent().unwrap()).unwrap();
@@ -363,7 +363,7 @@ mod test_read_file_edge_cases {
 
     #[test]
     fn test_read_file_comics_pdf() {
-        // Lines 749-759: PDF in comics prefix (text extraction skipped)
+        // PDF in comics prefix (text extraction skipped)
         let dir = tmp();
         let pdf = dir.path().join("comics_cat").join("test.pdf");
         fs::create_dir(pdf.parent().unwrap()).unwrap();
@@ -376,7 +376,7 @@ mod test_read_file_edge_cases {
 
     #[test]
     fn test_convert_with_libreoffice_glob_fallback() {
-        // Line 305: output file stem doesn't match, falls back to glob
+        // output file stem doesn't match, falls back to glob
         let dir = tmp();
         // 원본 fake_run: 다른 이름의 출력 파일을 만든다.
         let office = fake_office(dir.path(), "printf 'converted' > \"$out/different_name.txt\"");
@@ -661,7 +661,7 @@ mod test_find_xref_offset_branches {
 
     #[test]
     fn test_trailer_break_and_end_return_none() {
-        // obj 가 범위 밖 -> i += 1+sub_count -> trailer break -> return None (lines 366, 378-379, 381).
+        // obj 가 범위 밖 -> i += 1+sub_count -> trailer break -> return None.
         // obj_num=5 는 [0,3) 범위 밖 -> skip subsection -> trailer -> None
         let xref = b"xref\n0 3\n0000000000 65535 f \n0000000100 00000 n \n0000000200 00000 n \ntrailer\n<< /Size 3 >>";
         assert_eq!(find_xref_offset(xref, 5), None);
@@ -669,7 +669,7 @@ mod test_find_xref_offset_branches {
 
     #[test]
     fn test_entry_idx_out_of_range_returns_none() {
-        // entry_idx >= len(lines) 이면 return None (line 377).
+        // entry_idx >= len(lines) 이면 return None.
         // sub_count=2 이지만 entry 가 1개만 존재 -> obj_num=1 의 entry_idx 가 범위 밖
         let xref = b"xref\n0 2\n0000000009 00000 n \n";
         assert_eq!(find_xref_offset(xref, 1), None);
@@ -677,7 +677,7 @@ mod test_find_xref_offset_branches {
 
     #[test]
     fn test_non_matching_line_increments_i() {
-        // digits 2개가 아닌 줄은 i += 1 로 건너뛴다 (line 380-381).
+        // digits 2개가 아닌 줄은 i += 1 로 건너뛴다.
         // "junk" 줄은 2-digit 패턴 불일치 -> i += 1; 그 다음 "0 1" 을 처리 -> obj 0 발견
         let xref = b"xref\njunk\n0 1\n0000000009 00000 n \ntrailer\n";
         assert_eq!(find_xref_offset(xref, 0), Some(9));
@@ -685,7 +685,7 @@ mod test_find_xref_offset_branches {
 
     #[test]
     fn test_multiple_subsections_skips_first() {
-        // 첫 subsection 에 obj 없음 -> i += 1+sub_count (lines 378-379); 두 번째에서 발견.
+        // 첫 subsection 에 obj 없음 -> i += 1+sub_count; 두 번째에서 발견.
         let xref = b"xref\n0 1\n0000000009 00000 n \n5 1\n0000000100 00000 n \ntrailer\n";
         // obj_num=5 는 첫 subsection [0,1) 에 없음 -> skip -> 두 번째 [5,6) 에서 발견
         assert_eq!(find_xref_offset(xref, 5), Some(100));
@@ -699,14 +699,14 @@ mod test_read_file_comics_pdf {
 
     #[test]
     fn test_comics_pdf_fast_count_none_falls_back_to_lopdf() {
-        // _fast_pdf_page_count 가 None 을 반환하면 lopdf로 페이지 수를 구한다 (lines 726-729).
+        // 경량 쪽수 읽기가 None을 돌려주면 lopdf로 쪽수를 구한다.
         // comics_path_prefix 를 tmp_path 로 설정
         let dir = tmp();
         let cfg = config_for(dir.path(), dir.path());
         let pdf_file = dir.path().join("book.pdf");
         write_blank_pdf(&pdf_file);
 
-        // _fast_pdf_page_count 가 None 을 반환하도록 강제
+        // 경량 쪽수 읽기가 None을 돌려주게 한다
         let fast_none = |_: &Path| -> Option<usize> { None };
         let hooks = ReadHooks { fast_page_count: Some(&fast_none), ..Default::default() };
         let data = read_file_with_hooks(&cfg, &pdf_file, None, false, None, &InProcess, &Stat::new(), &hooks);
@@ -717,7 +717,7 @@ mod test_read_file_comics_pdf {
 
     #[test]
     fn test_comics_pdf_fast_count_none_lopdf_error() {
-        // lopdf도 실패하면 page_count=0 으로 처리한다 (lines 726-732).
+        // lopdf도 실패하면 page_count=0 으로 처리한다.
         // 원본은 두 함수를 바꿔치기한다. 깨진 PDF는 실제로도 경량 읽기와 lopdf가 모두 실패하므로 같은 경로를 탄다.
         let dir = tmp();
         let cfg = config_for(dir.path(), dir.path());
@@ -1027,7 +1027,6 @@ mod test_loader_main_branches {
                 "category": "_root", "title": stem, "author": "", "file_path": file_path.strip_prefix(&root).unwrap().to_string_lossy(), "file_type": "txt",
                 "file_size": st.len(), "line_count": 1, "page_count": 0, "isbn": "", "summary": stem, "updated_time": "2026-08-11T00:00:00",
             });
-            // 원본은 logging.warning("problem:%s")으로 사유를 남긴다.
             ReadOutcome { item: Some((st.ino() as i64, doc)), messages: vec![format!("problem:{name}")] }
         };
         let hooks = RunHooks { read_file: Some(&read_file_fake), ..Default::default() };

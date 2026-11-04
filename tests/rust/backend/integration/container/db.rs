@@ -1,4 +1,4 @@
-//! `db` 테스트: Diesel(MySQL) 위의 드라이버 추상화(열 이름 맵 행, `%s` 자리표시자).
+//! `db` 테스트: Diesel(MySQL) 위의 드라이버 추상화(열 이름 맵 행, `?` 자리표시자).
 //! 단위 테스트는 서버 없이 돈다. 통합 테스트는 일회용 MySQL 컨테이너를 fixture가 띄운다(Docker 필요).
 
 use crate::mysql_fixture;
@@ -6,41 +6,11 @@ use crate::mysql_fixture;
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
-use db::{DbError, DbValue, MysqlConfig, Row, connect_from_env, mysql_url, to_mysql_placeholders};
+use db::{DbError, DbValue, MysqlConfig, Row, connect_from_env, mysql_url};
 
 fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
     let map: BTreeMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     move |k| map.get(k).cloned()
-}
-
-mod placeholders {
-    use super::*;
-
-    #[test]
-    fn percent_s_becomes_question_mark() {
-        assert_eq!(to_mysql_placeholders("SELECT * FROM t WHERE a=%s AND b=%s"), "SELECT * FROM t WHERE a=? AND b=?");
-    }
-
-    #[test]
-    fn doubled_percent_is_a_literal_percent() {
-        assert_eq!(to_mysql_placeholders("SELECT * FROM t WHERE a LIKE 'x%%'"), "SELECT * FROM t WHERE a LIKE 'x%'");
-    }
-
-    #[test]
-    fn sql_without_placeholders_is_unchanged() {
-        assert_eq!(to_mysql_placeholders("CREATE TABLE IF NOT EXISTS t (id INT)"), "CREATE TABLE IF NOT EXISTS t (id INT)");
-    }
-
-    #[test]
-    fn a_literal_question_mark_inside_a_string_is_left_alone() {
-        // `%s`만 자리표시자다. 문자열 안의 `?`는 건드리지 않는다.
-        assert_eq!(to_mysql_placeholders("SELECT '?' , %s"), "SELECT '?' , ?");
-    }
-
-    #[test]
-    fn unknown_and_trailing_percent_sequences_are_preserved() {
-        assert_eq!(to_mysql_placeholders("SELECT 10 % 3, %x, %"), "SELECT 10 % 3, %x, %");
-    }
 }
 
 mod values {
@@ -159,32 +129,25 @@ mod mysql {
     fn round_trip_returns_json_rows_with_column_types() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
-        let mut cur = conn.cursor();
-        cur.execute("DROP TABLE IF EXISTS db_rt", &[]).unwrap();
-        cur.execute("CREATE TABLE db_rt (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(50), note TEXT NULL, at DATETIME NULL)", &[]).unwrap();
+        conn.execute("DROP TABLE IF EXISTS db_rt", &[]).unwrap();
+        conn.execute("CREATE TABLE db_rt (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(50), note TEXT NULL, at DATETIME NULL)", &[]).unwrap();
         let at = NaiveDate::from_ymd_opt(2024, 5, 6).unwrap().and_hms_opt(7, 8, 9).unwrap();
-        cur.execute("INSERT INTO db_rt (name, note, at) VALUES (%s, %s, %s)", &["한글 이름".into(), DbValue::Null, at.into()]).unwrap();
-        assert_eq!(cur.rowcount(), 1);
-        cur.execute("SELECT id, name, note, at FROM db_rt", &[]).unwrap();
-        let rows = cur.fetchall().expect("행");
+        assert_eq!(conn.execute("INSERT INTO db_rt (name, note, at) VALUES (?, ?, ?)", &["한글 이름".into(), DbValue::Null, at.into()]).unwrap(), 1);
+        let rows = conn.fetch_all("SELECT id, name, note, at FROM db_rt", &[]).unwrap();
         assert_eq!(rows, vec![row(&[("id", DbValue::Int(1)), ("name", "한글 이름".into()), ("note", DbValue::Null), ("at", DbValue::DateTime(at))])]);
         conn.commit().unwrap();
         conn.close();
     }
 
     #[test]
-    fn fetchone_walks_rows_then_returns_none() {
+    fn execute_batch_sums_rows_and_fetch_one_takes_the_first_row() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
-        let mut cur = conn.cursor();
-        cur.execute("DROP TABLE IF EXISTS db_one", &[]).unwrap();
-        cur.execute("CREATE TABLE db_one (n INT)", &[]).unwrap();
-        cur.executemany("INSERT INTO db_one (n) VALUES (%s)", &[vec![1.into()], vec![2.into()]]).unwrap();
-        assert_eq!(cur.rowcount(), 2);
-        cur.execute("SELECT n FROM db_one ORDER BY n", &[]).unwrap();
-        assert_eq!(cur.fetchone(), Some(row(&[("n", DbValue::Int(1))])));
-        assert_eq!(cur.fetchone(), Some(row(&[("n", DbValue::Int(2))])));
-        assert_eq!(cur.fetchone(), None);
+        conn.execute("DROP TABLE IF EXISTS db_one", &[]).unwrap();
+        conn.execute("CREATE TABLE db_one (n INT)", &[]).unwrap();
+        assert_eq!(conn.execute_batch("INSERT INTO db_one (n) VALUES (?)", &[vec![1.into()], vec![2.into()]]).unwrap(), 2);
+        assert_eq!(conn.fetch_one("SELECT n FROM db_one ORDER BY n", &[]).unwrap(), Some(row(&[("n", DbValue::Int(1))])));
+        assert_eq!(conn.fetch_one("SELECT n FROM db_one WHERE n > 5", &[]).unwrap(), None);
         conn.commit().unwrap();
     }
 
@@ -192,11 +155,10 @@ mod mysql {
     fn duplicate_key_is_an_integrity_error() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
-        let mut cur = conn.cursor();
-        cur.execute("DROP TABLE IF EXISTS db_dup", &[]).unwrap();
-        cur.execute("CREATE TABLE db_dup (k VARCHAR(10) PRIMARY KEY)", &[]).unwrap();
-        cur.execute("INSERT INTO db_dup VALUES (%s)", &["a".into()]).unwrap();
-        let err = cur.execute("INSERT INTO db_dup VALUES (%s)", &["a".into()]).unwrap_err();
+        conn.execute("DROP TABLE IF EXISTS db_dup", &[]).unwrap();
+        conn.execute("CREATE TABLE db_dup (k VARCHAR(10) PRIMARY KEY)", &[]).unwrap();
+        conn.execute("INSERT INTO db_dup VALUES (?)", &["a".into()]).unwrap();
+        let err = conn.execute("INSERT INTO db_dup VALUES (?)", &["a".into()]).unwrap_err();
         assert!(matches!(err, DbError::Constraint(_)), "{err:?}");
         conn.rollback().unwrap();
     }
@@ -205,33 +167,23 @@ mod mysql {
     fn rollback_discards_uncommitted_rows_and_commit_keeps_them() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
-        {
-            let mut cur = conn.cursor();
-            cur.execute("DROP TABLE IF EXISTS db_tx", &[]).unwrap();
-            cur.execute("CREATE TABLE db_tx (n INT)", &[]).unwrap();
-            cur.execute("INSERT INTO db_tx VALUES (1)", &[]).unwrap();
-        }
+        conn.execute("DROP TABLE IF EXISTS db_tx", &[]).unwrap();
+        conn.execute("CREATE TABLE db_tx (n INT)", &[]).unwrap();
+        conn.execute("INSERT INTO db_tx VALUES (1)", &[]).unwrap();
         conn.rollback().unwrap();
-        {
-            let mut cur = conn.cursor();
-            cur.execute("SELECT COUNT(*) AS c FROM db_tx", &[]).unwrap();
-            assert_eq!(cur.fetchone(), Some(row(&[("c", DbValue::Int(0))])));
-            cur.execute("INSERT INTO db_tx VALUES (2)", &[]).unwrap();
-        }
+        assert_eq!(conn.fetch_one("SELECT COUNT(*) AS c FROM db_tx", &[]).unwrap(), Some(row(&[("c", DbValue::Int(0))])));
+        conn.execute("INSERT INTO db_tx VALUES (2)", &[]).unwrap();
         conn.commit().unwrap();
         // 새 연결에서도 보여야 커밋된 것이다.
         let mut other = container_conn();
-        let mut cur = other.cursor();
-        cur.execute("SELECT n FROM db_tx", &[]).unwrap();
-        assert_eq!(cur.fetchall(), Some(vec![row(&[("n", DbValue::Int(2))])]));
+        assert_eq!(other.fetch_all("SELECT n FROM db_tx", &[]).unwrap(), vec![row(&[("n", DbValue::Int(2))])]);
     }
 
     #[test]
     fn a_bad_statement_is_a_db_error() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
-        let mut cur = conn.cursor();
-        let err = cur.execute("SELECT * FROM no_such_table_xyz", &[]).unwrap_err();
+        let err = conn.fetch_all("SELECT * FROM no_such_table_xyz", &[]).unwrap_err();
         assert!(matches!(err, DbError::Other(_)), "{err:?}");
     }
 
@@ -239,12 +191,10 @@ mod mysql {
     fn update_reports_matched_row_count() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
-        let mut cur = conn.cursor();
-        cur.execute("DROP TABLE IF EXISTS db_upd", &[]).unwrap();
-        cur.execute("CREATE TABLE db_upd (n INT)", &[]).unwrap();
-        cur.executemany("INSERT INTO db_upd VALUES (%s)", &[vec![1.into()], vec![1.into()], vec![2.into()]]).unwrap();
-        cur.execute("DELETE FROM db_upd WHERE n=%s", &[1.into()]).unwrap();
-        assert_eq!(cur.rowcount(), 2);
+        conn.execute("DROP TABLE IF EXISTS db_upd", &[]).unwrap();
+        conn.execute("CREATE TABLE db_upd (n INT)", &[]).unwrap();
+        conn.execute_batch("INSERT INTO db_upd VALUES (?)", &[vec![1.into()], vec![1.into()], vec![2.into()]]).unwrap();
+        assert_eq!(conn.execute("DELETE FROM db_upd WHERE n=?", &[1.into()]).unwrap(), 2);
         conn.commit().unwrap();
     }
 
@@ -253,9 +203,7 @@ mod mysql {
         // Diesel은 연결할 때 time_zone을 +00:00으로 바꾼다. 서버 값을 따라야 TIMESTAMP를 읽는 결과가 맞다.
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
-        let mut cur = conn.cursor();
-        cur.execute("SELECT @@session.time_zone AS s, @@global.time_zone AS g", &[]).unwrap();
-        let r = cur.fetchone().unwrap();
+        let r = conn.fetch_one("SELECT @@session.time_zone AS s, @@global.time_zone AS g", &[]).unwrap().unwrap();
         assert_eq!(r["s"], r["g"]);
     }
 
@@ -263,15 +211,13 @@ mod mysql {
     fn remaining_mysql_column_types_convert_to_json_values() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
-        let mut cur = conn.cursor();
-        cur.execute("DROP TABLE IF EXISTS db_types", &[]).unwrap();
-        cur.execute("CREATE TABLE db_types (real_value DOUBLE, timestamp_value TIMESTAMP, date_value DATE, time_value TIME, decimal_value DECIMAL(10,2))", &[]).unwrap();
-        cur.execute("INSERT INTO db_types VALUES (1.25, '2024-05-06 07:08:09', '2024-05-06', '07:08:09', 12.34)", &[]).unwrap();
-        cur.execute("SELECT * FROM db_types", &[]).unwrap();
+        conn.execute("DROP TABLE IF EXISTS db_types", &[]).unwrap();
+        conn.execute("CREATE TABLE db_types (real_value DOUBLE, timestamp_value TIMESTAMP, date_value DATE, time_value TIME, decimal_value DECIMAL(10,2))", &[]).unwrap();
+        conn.execute("INSERT INTO db_types VALUES (1.25, '2024-05-06 07:08:09', '2024-05-06', '07:08:09', 12.34)", &[]).unwrap();
         let date_time = NaiveDate::from_ymd_opt(2024, 5, 6).unwrap().and_hms_opt(0, 0, 0).unwrap();
         let timestamp = NaiveDate::from_ymd_opt(2024, 5, 6).unwrap().and_hms_opt(7, 8, 9).unwrap();
         assert_eq!(
-            cur.fetchone(),
+            conn.fetch_one("SELECT * FROM db_types", &[]).unwrap(),
             Some(row(&[
                 ("real_value", DbValue::Text("1.25".into())),
                 ("timestamp_value", DbValue::DateTime(timestamp)),
@@ -292,14 +238,14 @@ mod mysql {
     }
 
     #[test]
-    fn connection_execute_and_fetch_one_wrap_a_cursor() {
+    fn connection_execute_and_fetch_one() {
         let _g = mysql_fixture::db_lock();
         let mut conn = container_conn();
         conn.execute("DROP TABLE IF EXISTS db_conn_helpers", &[]).unwrap();
         conn.execute("CREATE TABLE db_conn_helpers (n INT)", &[]).unwrap();
-        assert_eq!(conn.execute("INSERT INTO db_conn_helpers VALUES (%s), (%s)", &[1.into(), 2.into()]).unwrap(), 2);
+        assert_eq!(conn.execute("INSERT INTO db_conn_helpers VALUES (?), (?)", &[1.into(), 2.into()]).unwrap(), 2);
         assert_eq!(conn.fetch_one("SELECT n FROM db_conn_helpers ORDER BY n DESC", &[]).unwrap(), Some(row(&[("n", DbValue::Int(2))])));
-        assert_eq!(conn.fetch_one("SELECT n FROM db_conn_helpers WHERE n=%s", &[99.into()]).unwrap(), None);
+        assert_eq!(conn.fetch_one("SELECT n FROM db_conn_helpers WHERE n=?", &[99.into()]).unwrap(), None);
         conn.commit().unwrap();
     }
 }

@@ -10,9 +10,8 @@
 //! - `ViewHistoryStore::get_connection(&self) -> Result<Box<dyn DbConnection>, DbError>` (구 `_get_connection() -> mysql::Conn`)
 //! - `ViewHistoryError::{CoverSourceError(String), BookManagerError(String)}` (`DbError::Other(msg)`는 `BookManagerError(msg)`로 바뀐다)
 //! - `create_view_history_store() -> Result<ViewHistoryStore, ViewHistoryError>`
-//! - `db::{DbConnection, DbCursor, DbValue, DbError, Row, ConnectionProvider}`: 구 `StoreConnection`은 `DbConnection`이다.
-//!   - `DbConnection: Send { cursor() -> Box<dyn DbCursor>; commit(); rollback(); close(); execute(sql, &[DbValue]) -> Result<u64, DbError>; fetch_one(sql, &[DbValue]) -> Result<Option<Row>, DbError> }` (뒤 둘은 기본 구현)
-//!   - `DbCursor { execute(sql, &[DbValue]); executemany; fetchall() -> Option<Vec<Row>>; fetchone(); rowcount() }`, `Row = BTreeMap<String, DbValue>`
+//! - `db::{DbConnection, DbValue, DbError, Row, ConnectionProvider}`: 구 `StoreConnection`은 `DbConnection`이다.
+//!   - `trait DbConnection: Send { execute(sql, &[DbValue]) -> Result<u64, DbError>; fetch_all(..) -> Result<Vec<Row>, DbError>; fetch_one(..) -> Result<Option<Row>, DbError>; execute_batch(sql, &[Vec<DbValue>]) -> Result<u64, DbError>; commit(); rollback(); close(); }`
 //!   - `DbValue::{Null, Int(i64), Text(String), DateTime(NaiveDateTime)}`는 `PartialEq + Debug`이고 `From<&str>`, `From<i64>`, `From<Value>`를 가진다
 //! - (mock seam) `ViewHistoryStore::with_connection_provider(ConnectionProvider) -> ViewHistoryStore`(init_db를 건너뛴다. 구 `with_connection_factory`),
 //!   `ViewHistoryStore::with_max_history_rows(self, usize) -> ViewHistoryStore`(구 `set_max_history_rows`)
@@ -26,7 +25,7 @@ use std::time::Duration;
 
 use backend::view_history_store::{MAX_RECENT_VIEWS, ViewHistoryError, ViewHistoryStore, create_view_history_store};
 use common::log_capture::LogCapture;
-use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
+use db::{ConnectionProvider, DbConnection, DbError, DbValue, Row};
 use log::Level;
 use serde_json::{Value, json};
 
@@ -218,8 +217,8 @@ fn test_record_view_rolls_back_and_reraises_on_db_error() {
         calls: Arc<Mutex<usize>>,
     }
 
-    impl DbCursor for FailingCursor {
-        fn execute(&mut self, _sql: &str, _params: &[DbValue]) -> Result<(), DbError> {
+    impl FailingCursor {
+        fn run(&mut self, _sql: &str, _params: &[DbValue]) -> Result<(), DbError> {
             let mut calls = self.calls.lock().unwrap();
             *calls += 1;
             if *calls == 2 {
@@ -228,15 +227,15 @@ fn test_record_view_rolls_back_and_reraises_on_db_error() {
             Ok(())
         }
 
-        fn executemany(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
-            unreachable!("record_view는 executemany를 쓰지 않는다")
+        fn run_batch(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
+            unreachable!("record_view는 execute_batch를 쓰지 않는다")
         }
 
-        fn fetchall(&mut self) -> Option<Vec<Row>> {
+        fn take_all(&mut self) -> Option<Vec<Row>> {
             unreachable!("record_view는 행을 읽지 않는다")
         }
 
-        fn fetchone(&mut self) -> Option<Row> {
+        fn take_one(&mut self) -> Option<Row> {
             unreachable!("record_view는 행을 읽지 않는다")
         }
 
@@ -245,11 +244,38 @@ fn test_record_view_rolls_back_and_reraises_on_db_error() {
         }
     }
 
-    impl DbConnection for FailingConn {
-        fn cursor(&mut self) -> Box<dyn DbCursor> {
+    impl FailingConn {
+        /// 문장 하나를 실행할 cursor 대역.
+        fn open_cursor(&mut self) -> FailingCursor {
             // DbConnection에는 begin이 없다. 트랜잭션은 첫 커서를 얻을 때 시작한다고 본다.
             self.flags.lock().unwrap().began = true;
-            Box::new(FailingCursor { calls: self.calls.clone() })
+            FailingCursor { calls: self.calls.clone() }
+        }
+    }
+
+    impl DbConnection for FailingConn {
+        fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError> {
+            let mut cursor = self.open_cursor();
+            cursor.run(sql, params)?;
+            Ok(cursor.rowcount())
+        }
+
+        fn fetch_all(&mut self, sql: &str, params: &[DbValue]) -> Result<Vec<Row>, DbError> {
+            let mut cursor = self.open_cursor();
+            cursor.run(sql, params)?;
+            Ok(cursor.take_all().unwrap_or_default())
+        }
+
+        fn fetch_one(&mut self, sql: &str, params: &[DbValue]) -> Result<Option<Row>, DbError> {
+            let mut cursor = self.open_cursor();
+            cursor.run(sql, params)?;
+            Ok(cursor.take_one())
+        }
+
+        fn execute_batch(&mut self, sql: &str, rows: &[Vec<DbValue>]) -> Result<u64, DbError> {
+            let mut cursor = self.open_cursor();
+            cursor.run_batch(sql, rows)?;
+            Ok(cursor.rowcount())
         }
 
         fn commit(&mut self) -> Result<(), DbError> {
@@ -296,21 +322,21 @@ fn test_list_recent_views_warns_and_skips_unknown_content_type() {
         executed: Executed,
     }
 
-    impl DbCursor for RowsCursor {
-        fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError> {
+    impl RowsCursor {
+        fn run(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError> {
             self.executed.lock().unwrap().push((sql.to_string(), params.to_vec()));
             Ok(())
         }
 
-        fn executemany(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
+        fn run_batch(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
             unreachable!()
         }
 
-        fn fetchall(&mut self) -> Option<Vec<Row>> {
+        fn take_all(&mut self) -> Option<Vec<Row>> {
             Some(self.rows.clone())
         }
 
-        fn fetchone(&mut self) -> Option<Row> {
+        fn take_one(&mut self) -> Option<Row> {
             unreachable!()
         }
 
@@ -319,9 +345,36 @@ fn test_list_recent_views_warns_and_skips_unknown_content_type() {
         }
     }
 
+    impl RowsConn {
+        /// 문장 하나를 실행할 cursor 대역.
+        fn open_cursor(&mut self) -> RowsCursor {
+            RowsCursor { rows: self.rows.clone(), executed: self.executed.clone() }
+        }
+    }
+
     impl DbConnection for RowsConn {
-        fn cursor(&mut self) -> Box<dyn DbCursor> {
-            Box::new(RowsCursor { rows: self.rows.clone(), executed: self.executed.clone() })
+        fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError> {
+            let mut cursor = self.open_cursor();
+            cursor.run(sql, params)?;
+            Ok(cursor.rowcount())
+        }
+
+        fn fetch_all(&mut self, sql: &str, params: &[DbValue]) -> Result<Vec<Row>, DbError> {
+            let mut cursor = self.open_cursor();
+            cursor.run(sql, params)?;
+            Ok(cursor.take_all().unwrap_or_default())
+        }
+
+        fn fetch_one(&mut self, sql: &str, params: &[DbValue]) -> Result<Option<Row>, DbError> {
+            let mut cursor = self.open_cursor();
+            cursor.run(sql, params)?;
+            Ok(cursor.take_one())
+        }
+
+        fn execute_batch(&mut self, sql: &str, rows: &[Vec<DbValue>]) -> Result<u64, DbError> {
+            let mut cursor = self.open_cursor();
+            cursor.run_batch(sql, rows)?;
+            Ok(cursor.rowcount())
         }
 
         fn commit(&mut self) -> Result<(), DbError> {

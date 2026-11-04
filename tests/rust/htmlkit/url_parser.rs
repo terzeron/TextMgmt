@@ -1,6 +1,6 @@
 //! `htmlkit::url_parser` 단위 테스트.
 
-use htmlkit::url_parser::{Netloc, quote, unquote, urlencode, urljoin, urlsplit};
+use htmlkit::url_parser::{Netloc, quote, quote_component, unquote, urlencode, urljoin, urlsplit};
 
 #[test]
 fn urljoin_handles_absolute_protocol_relative_root_and_relative_refs() {
@@ -44,6 +44,7 @@ fn urlsplit_and_netloc_parse_userinfo_ipv6_and_port() {
 #[test]
 fn quote_and_urlencode_match_reference() {
     assert_eq!(quote("가 b/c~"), "%EA%B0%80%20b/c~");
+    assert_eq!(quote_component("가 b/c~"), "%EA%B0%80%20b%2Fc~");
     assert_eq!(urlencode(&[("q", "가 나&"), ("a b", "1")]), "q=%EA%B0%80+%EB%82%98%26&a+b=1");
 }
 

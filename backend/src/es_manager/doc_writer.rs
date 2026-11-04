@@ -12,7 +12,7 @@ impl ESManager {
         if let Some(ids) = exclude_ids.filter(|ids| !ids.is_empty()) {
             query["bool"]["must_not"] = json!([{"ids": {"values": ids.iter().map(i64::to_string).collect::<Vec<_>>()}}]);
         }
-        match self.es.call("delete_by_query", &json!({"index": self.index(), "body": {"query": query}, "conflicts": "proceed", "refresh": false})) {
+        match self.es.send(&EsRequest::DeleteByQuery { index: None, body: json!({"query": query}), conflicts: Some(Conflicts::Proceed), refresh: Some(false) }) {
             Ok(result) => {
                 let deleted = result["deleted"].as_i64().unwrap_or(0);
                 if deleted > 0 {
@@ -49,7 +49,7 @@ impl ESManager {
     }
 
     fn collect_ids(&self, query: &Value, ids: &mut HashSet<i64>, scroll_id: &mut Option<String>) -> Result<(), EsError> {
-        let mut response = self.es.call("search", &json!({"index": self.index(), "query": query, "scroll": "10m", "size": 5000, "source": false}))?;
+        let mut response = self.es.send(&EsRequest::scroll_search(json!({"query": query, "size": 5000, "_source": false}), "10m"))?;
         loop {
             if let Some(id) = response["_scroll_id"].as_str() {
                 *scroll_id = Some(id.to_string());
@@ -61,13 +61,13 @@ impl ESManager {
             for hit in hits {
                 ids.insert(hit_id(hit)?);
             }
-            response = self.es.call("scroll", &json!({"scroll_id": scroll_id.clone().unwrap_or_default(), "scroll": "10m"}))?;
+            response = self.es.send(&EsRequest::Scroll { scroll_id: scroll_id.clone().unwrap_or_default(), scroll: "10m".to_string() })?;
         }
     }
 
     pub(super) fn clear_scroll_quietly(&self, scroll_id: Option<String>) {
         if let Some(id) = scroll_id
-            && let Err(e) = self.es.call("clear_scroll", &json!({"scroll_id": id}))
+            && let Err(e) = self.es.send(&EsRequest::ClearScroll { scroll_id: id })
         {
             log::debug!("Failed to clear scroll: {e}");
         }
@@ -81,7 +81,7 @@ impl ESManager {
         let mut deleted = 0;
         for chunk in ids.chunks(chunk_size.max(1)) {
             let query = json!({"ids": {"values": chunk.iter().map(i64::to_string).collect::<Vec<_>>()}});
-            match self.es.call("delete_by_query", &json!({"index": self.index(), "body": {"query": query}, "conflicts": "proceed", "refresh": false})) {
+            match self.es.send(&EsRequest::DeleteByQuery { index: None, body: json!({"query": query}), conflicts: Some(Conflicts::Proceed), refresh: Some(false) }) {
                 Ok(result) => deleted += result["deleted"].as_i64().unwrap_or(0),
                 Err(e) => {
                     log::error!("delete_by_ids error: {e}");
@@ -112,9 +112,9 @@ impl ESManager {
                 data_count += 1;
             }
             log::info!("{} items inserted", body.len() / 2);
-            let kwargs = json!({"body": body, "timeout": "60s", "refresh": false});
+            let request = EsRequest::Bulk { lines: body, timeout: Some("60s".to_string()), refresh: Some(false) };
             for attempt in 0..max_retries {
-                match self.es.call("bulk", &kwargs) {
+                match self.es.send(&request) {
                     Ok(response) => {
                         if response["errors"].as_bool().unwrap_or(false) {
                             log::warn!("ES bulk 응답에 항목 오류가 있다");
@@ -152,13 +152,13 @@ impl ESManager {
             fields.file_size,
             fields.category
         );
-        let result = self.es.call("update", &json!({"index": self.index(), "id": doc_id.to_string(), "body": {"doc": fields.to_doc()}, "refresh": true}))?;
+        let result = self.es.send(&EsRequest::Update { index: None, id: doc_id.to_string(), body: json!({"doc": fields.to_doc()}), refresh: Some(true) })?;
         Ok(result["_shards"]["failed"].as_i64().is_none_or(|failed| failed <= 0))
     }
 
     pub fn delete(&self, doc_id: i64) -> Result<bool, EsError> {
         log::debug!("delete(doc_id={doc_id})");
-        let result = self.es.call("delete", &json!({"index": self.index(), "id": doc_id.to_string(), "refresh": true}))?;
+        let result = self.es.send(&EsRequest::Delete { index: None, id: doc_id.to_string(), refresh: Some(true) })?;
         Ok(result["result"] == "deleted")
     }
 
@@ -171,7 +171,7 @@ impl ESManager {
     /// 특정 카테고리의 문서 수. `prefix`이면 하위 카테고리(`category/*`)도 센다.
     pub fn count_by_category(&self, category: &str, prefix: bool) -> Result<i64, EsError> {
         log::debug!("count_by_category(category='{category}', prefix={prefix})");
-        let result = self.es.call("count", &json!({"index": self.index(), "query": Self::category_query(category, prefix)}))?;
+        let result = self.es.send(&EsRequest::Count { index: None, body: json!({"query": Self::category_query(category, prefix)}) })?;
         result["count"].as_i64().ok_or_else(|| parse_error("count가 없다"))
     }
 
@@ -189,7 +189,7 @@ impl ESManager {
             searches.push(json!({"index": self.index()}));
             searches.push(json!({"size": 0, "track_total_hits": true, "query": Self::category_query(category, prefix)}));
         }
-        let response = self.es.call("msearch", &json!({"searches": searches}))?;
+        let response = self.es.send(&EsRequest::MultiSearch { index: None, searches })?;
         let responses = response["responses"].as_array().ok_or_else(|| parse_error("msearch responses가 없다"))?;
         let mut result = Map::new();
         for (category, item) in categories.iter().zip(responses) {
@@ -225,14 +225,14 @@ impl ESManager {
             "params": {"old_category": old_category, "new_category": new_category, "old_prefix": old_prefix, "new_prefix": new_prefix},
         });
         let query = json!({"bool": {"should": [{"term": {"category": old_category}}, {"prefix": {"category": old_prefix}}], "minimum_should_match": 1}});
-        let result = self.es.call("update_by_query", &json!({"index": self.index(), "query": query, "script": script, "conflicts": "abort", "refresh": true}))?;
+        let result = self.es.send(&EsRequest::UpdateByQuery { index: None, body: json!({"query": query, "script": script}), conflicts: Some(Conflicts::Abort), refresh: Some(true) })?;
         Ok(json!({"updated": result["updated"].as_i64().unwrap_or(0), "failures": result.get("failures").cloned().unwrap_or_else(|| json!([]))}))
     }
 
     /// 특정 카테고리의 모든 문서를 삭제한다. `prefix`이면 하위 카테고리도 지운다. 반환: `{"deleted": n, "failures": [...]}`
     pub fn delete_by_category(&self, category: &str, prefix: bool) -> Result<Value, EsError> {
         log::debug!("delete_by_category(category='{category}', prefix={prefix})");
-        let result = self.es.call("delete_by_query", &json!({"index": self.index(), "query": Self::category_query(category, prefix), "conflicts": "abort", "refresh": true}))?;
+        let result = self.es.send(&EsRequest::DeleteByQuery { index: None, body: json!({"query": Self::category_query(category, prefix)}), conflicts: Some(Conflicts::Abort), refresh: Some(true) })?;
         Ok(json!({"deleted": result["deleted"].as_i64().unwrap_or(0), "failures": result.get("failures").cloned().unwrap_or_else(|| json!([]))}))
     }
 }

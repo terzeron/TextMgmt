@@ -109,7 +109,7 @@ impl CoverManagement {
         let _book = self.book_lock(&relative, false)?;
         let mut metadata = self.inspect(&path)?;
         metadata["title"] = json!(filename_title(&path));
-        if truthy(metadata.get("has_cover")) && !include_covered {
+        if metadata.get("has_cover").and_then(Value::as_bool) == Some(true) && !include_covered {
             return Err(CoverError::new(ALREADY_COVERED));
         }
         let cache_key = sha256_hex(&format!("{store}:{relative}:{}:filename-v1", str_field(&metadata, "revision")));

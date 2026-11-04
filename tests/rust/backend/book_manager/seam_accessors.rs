@@ -63,7 +63,7 @@ impl TaskRunner for FailingStartRunner {
 
 #[test]
 fn test_page_count_cache_eviction() {
-    // Line 386: page_count_cache eviction when max exceeded
+    // page_count_cache eviction when max exceeded
     // 캐시를 인스턴스가 갖는다(3.11). 상한과 캐시 접근자는 문서에 없는 seam이다(파일 머리말 참고).
     let tmp = tmp_dir();
     let manager = BookManager::with_deps(deps(tmp.path(), &FakeEsManager::new()).with_page_count_cache_max(2));
@@ -82,7 +82,7 @@ fn test_page_count_cache_eviction() {
 
 #[test]
 fn test_backfill_created_time_thread_states() {
-    // Lines 549, 561-563: thread is alive and start exception
+    // thread is alive and start exception
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
@@ -104,7 +104,6 @@ fn test_backfill_created_time_thread_states() {
 
 #[test]
 fn test_pdf_reader_cache_eviction_and_branches() {
-    // Lines 333-334, 375-376, 386, 389, 395
     // 캐시를 인스턴스가 갖는다(3.11). 한도는 `with_pdf_cache_limits`, 쪽수 캐시 상한은 문서에 없는 seam이다(파일 머리말 참고).
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
@@ -116,18 +115,18 @@ fn test_pdf_reader_cache_eviction_and_branches() {
     let (reader1, pages1) = manager.get_cached_pdf_reader(&pdf_path);
     assert_eq!(pages1, 1);
 
-    // 2. Lines 375-376: Cache hit with matching mtime
+    // 2. Cache hit with matching mtime
     let (reader2, pages2) = manager.get_cached_pdf_reader(&pdf_path);
     assert!(Arc::ptr_eq(&reader2, &reader1));
     assert_eq!(pages2, 1);
 
-    // 3. Line 389: Cache item exists, but mtime changed -> del cache[key]
+    // 3. Cache item exists, but mtime changed -> del cache[key]
     let new_mtime = fs::metadata(&pdf_path).unwrap().modified().unwrap() + Duration::from_secs(5);
     set_mtime(&pdf_path, new_mtime);
     let (_reader3, pages3) = manager.get_cached_pdf_reader(&pdf_path);
     assert_eq!(pages3, 1);
 
-    // 4. Line 386: page_cache exceeds PAGE_COUNT_CACHE_MAX
+    // 4. page_cache exceeds PAGE_COUNT_CACHE_MAX
     {
         let manager = BookManager::with_deps(deps(tmp.path(), &es).with_page_count_cache_max(1));
         manager.pdf_cache().clear();
@@ -137,7 +136,7 @@ fn test_pdf_reader_cache_eviction_and_branches() {
         assert!(manager.page_count_cache().len() <= 2);
     }
 
-    // 5. Lines 333-334: _evict_pdf_readers eviction loop
+    // 5. _evict_pdf_readers eviction loop
     {
         let limits = PdfCacheLimits { max_file_bytes: None, max_bytes: Some(10), max_entries: Some(1) };
         let manager = BookManager::with_deps(deps(tmp.path(), &es).with_pdf_cache_limits(limits));
@@ -147,7 +146,7 @@ fn test_pdf_reader_cache_eviction_and_branches() {
         assert!(manager.pdf_cache().len() <= 1);
     }
 
-    // 6. Line 395: size > PDF_READER_CACHE_MAX_FILE_BYTES
+    // 6. size > PDF_READER_CACHE_MAX_FILE_BYTES
     {
         let limits = PdfCacheLimits { max_file_bytes: Some(0), max_bytes: None, max_entries: None };
         let manager = BookManager::with_deps(deps(tmp.path(), &es).with_pdf_cache_limits(limits));
@@ -158,24 +157,23 @@ fn test_pdf_reader_cache_eviction_and_branches() {
 
 #[test]
 fn test_backfill_created_time_branches() {
-    // Lines 545, 549, 554-555, 561-563
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
 
-    // 1. Line 549: thread is alive -> returns early
+    // 1. thread is alive -> returns early
     manager.set_created_time_backfill_thread(Some(Arc::new(FakeBackfillThread::alive())));
     let env = EnvGuard::single(CREATED_TIME_BACKFILL_ENV, "1");
     manager.backfill_created_time_if_enabled();
 
-    // 2. Lines 561-563: thread.start() raises exception
+    // 2. thread.start() raises exception
     // 가정한 seam: 스레드 시작이 실패하는 실행기(TODO 주석 참고).
     let manager = BookManager::with_deps(deps(tmp.path(), &es).with_task_runner(Arc::new(FailingStartRunner { message: "start failed" })));
     manager.set_created_time_backfill_thread(None);
     manager.backfill_created_time_if_enabled();
     assert!(manager.created_time_backfill_thread().is_none());
 
-    // 3. Lines 554-555: run_backfill raises exception
+    // 3. run_backfill raises exception
     es.fail("backfill_created_time", "backfill error");
     drop(env); // 환경 변수 복원
     let _env = EnvGuard::single(CREATED_TIME_BACKFILL_ENV, "1");

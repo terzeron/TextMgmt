@@ -5,8 +5,7 @@
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.4, 3.9, 3.10):
 //! - `db`: `DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`From<&str>`, `From<i64>`, `Clone + PartialEq + Debug`),
 //!   `type Row = BTreeMap<String, DbValue>`, `enum DbError { Constraint(String), Other(String) }`,
-//!   `trait DbCursor { execute(&mut self, &str, &[DbValue]) -> Result<(), DbError>; executemany(..); fetchall(&mut self) -> Option<Vec<Row>>; fetchone(&mut self) -> Option<Row>; rowcount(&self) -> u64 }`,
-//!   `trait DbConnection { cursor(&mut self) -> Box<dyn DbCursor>; commit(&mut self) -> Result<(), DbError>; rollback(&mut self) -> Result<(), DbError>; close(&mut self) }`,
+//!   `trait DbConnection: Send { execute(sql, &[DbValue]) -> Result<u64, DbError>; fetch_all(..) -> Result<Vec<Row>, DbError>; fetch_one(..) -> Result<Option<Row>, DbError>; execute_batch(sql, &[Vec<DbValue>]) -> Result<u64, DbError>; commit(); rollback(); close(); }`
 //!   `type ConnectionProvider = Arc<dyn Fn() -> Result<Box<dyn DbConnection>, DbError> + Send + Sync>`
 //! - `backend::refresh_token_store`
 //!   - `trait RefreshTokenStoreApi`
@@ -15,7 +14,7 @@
 //!     - `revoke_family(&self, family_id: &str, reason: &str) -> Result<(), StoreError>`
 //!     - `get_token_observation(&self, token_id: &str) -> Result<Option<Value>, StoreError>`
 //!     - `list_sessions(&self, q: &SessionQuery) -> Result<Value, StoreError>`, `revoke_session(&self, family_id: &str) -> Result<Value, StoreError>`
-//!     - `_session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError>`
+//!     - `session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError>`
 //!   - `struct SessionQuery { status: String, current_family_id: Option<String>, page: u32, page_size: u32, email: Option<String> }`
 //!   - `MySQLRefreshTokenStore::{new() -> Result<Self, StoreError> (TM_MYSQL_* 환경 변수), with_connector(ConnectionProvider) -> Result<Self, StoreError> (_init_db 실행),
 //!     with_connection_provider(ConnectionProvider) -> Self,
@@ -41,7 +40,7 @@ use backend::refresh_token_store::{
 };
 use common::env::EnvGuard;
 use common::log_capture::LogCapture;
-use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
+use db::{ConnectionProvider, DbConnection, DbError, DbValue, Row};
 use serde_json::{Value, json};
 
 fn fam(c: char) -> String {
@@ -157,8 +156,8 @@ struct FakeCursor {
     st: Arc<Mutex<ConnState>>,
 }
 
-impl DbCursor for FakeCursor {
-    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError> {
+impl FakeCursor {
+    fn run(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError> {
         let mut st = self.st.lock().unwrap();
         if st.boom {
             return Err(DbError::Other("db down".to_string()));
@@ -168,11 +167,11 @@ impl DbCursor for FakeCursor {
         Ok(())
     }
 
-    fn executemany(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
+    fn run_batch(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
         Ok(())
     }
 
-    fn fetchall(&mut self) -> Option<Vec<Row>> {
+    fn take_all(&mut self) -> Option<Vec<Row>> {
         let st = self.st.lock().unwrap();
         if st.fetchall_none {
             return None;
@@ -181,7 +180,7 @@ impl DbCursor for FakeCursor {
         Some(st.select_row.iter().cloned().collect())
     }
 
-    fn fetchone(&mut self) -> Option<Row> {
+    fn take_one(&mut self) -> Option<Row> {
         let st = self.st.lock().unwrap();
         // 컬럼 존재 확인(information_schema)은 마이그레이션 전용 질의라 응답 모양이 다르다.
         if st.last_sql.contains("information_schema.columns") {
@@ -195,9 +194,36 @@ impl DbCursor for FakeCursor {
     }
 }
 
+impl FakeConn {
+    /// 문장 하나를 실행할 cursor 대역.
+    fn open_cursor(&mut self) -> FakeCursor {
+        FakeCursor { st: self.st.clone() }
+    }
+}
+
 impl DbConnection for FakeConn {
-    fn cursor(&mut self) -> Box<dyn DbCursor> {
-        Box::new(FakeCursor { st: self.st.clone() })
+    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run(sql, params)?;
+        Ok(cursor.rowcount())
+    }
+
+    fn fetch_all(&mut self, sql: &str, params: &[DbValue]) -> Result<Vec<Row>, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run(sql, params)?;
+        Ok(cursor.take_all().unwrap_or_default())
+    }
+
+    fn fetch_one(&mut self, sql: &str, params: &[DbValue]) -> Result<Option<Row>, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run(sql, params)?;
+        Ok(cursor.take_one())
+    }
+
+    fn execute_batch(&mut self, sql: &str, rows: &[Vec<DbValue>]) -> Result<u64, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run_batch(sql, rows)?;
+        Ok(cursor.rowcount())
     }
 
     fn commit(&mut self) -> Result<(), DbError> {
@@ -324,11 +350,11 @@ impl MemDb {
         let mut next = 2;
         let mut email = None;
         let mut family = None;
-        if sql.contains("email = %s") {
+        if sql.contains("email = ?") {
             email = p_text(p, next);
             next += 1;
         }
-        if sql.contains("family_id = %s") {
+        if sql.contains("family_id = ?") {
             family = p_text(p, next);
         }
         let limit: usize = sql.rsplit("LIMIT").next().unwrap().trim().parse().unwrap();
@@ -378,8 +404,8 @@ struct MemCursor {
     result: Option<Vec<Row>>,
 }
 
-impl DbCursor for MemCursor {
-    fn execute(&mut self, sql: &str, p: &[DbValue]) -> Result<(), DbError> {
+impl MemCursor {
+    fn run(&mut self, sql: &str, p: &[DbValue]) -> Result<(), DbError> {
         let sql = sql.trim_start();
         self.result = None;
         if sql.starts_with("CREATE") || sql.starts_with("ALTER") {
@@ -456,15 +482,15 @@ impl DbCursor for MemCursor {
         Ok(())
     }
 
-    fn executemany(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
+    fn run_batch(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
         Ok(())
     }
 
-    fn fetchall(&mut self) -> Option<Vec<Row>> {
+    fn take_all(&mut self) -> Option<Vec<Row>> {
         self.result.take()
     }
 
-    fn fetchone(&mut self) -> Option<Row> {
+    fn take_one(&mut self) -> Option<Row> {
         self.result.as_mut().and_then(|r| (!r.is_empty()).then(|| r.remove(0)))
     }
 
@@ -473,9 +499,36 @@ impl DbCursor for MemCursor {
     }
 }
 
+impl MemConn {
+    /// 문장 하나를 실행할 cursor 대역.
+    fn open_cursor(&mut self) -> MemCursor {
+        MemCursor { db: self.db.clone(), result: None }
+    }
+}
+
 impl DbConnection for MemConn {
-    fn cursor(&mut self) -> Box<dyn DbCursor> {
-        Box::new(MemCursor { db: self.db.clone(), result: None })
+    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run(sql, params)?;
+        Ok(cursor.rowcount())
+    }
+
+    fn fetch_all(&mut self, sql: &str, params: &[DbValue]) -> Result<Vec<Row>, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run(sql, params)?;
+        Ok(cursor.take_all().unwrap_or_default())
+    }
+
+    fn fetch_one(&mut self, sql: &str, params: &[DbValue]) -> Result<Option<Row>, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run(sql, params)?;
+        Ok(cursor.take_one())
+    }
+
+    fn execute_batch(&mut self, sql: &str, rows: &[Vec<DbValue>]) -> Result<u64, DbError> {
+        let mut cursor = self.open_cursor();
+        cursor.run_batch(sql, rows)?;
+        Ok(cursor.rowcount())
     }
 
     fn commit(&mut self) -> Result<(), DbError> {
@@ -723,7 +776,7 @@ fn test_mysql_rotate_missing_rolls_back() {
 
 #[test]
 fn test_rotation_grace_seconds_invalid_env_falls_back() {
-    // TM_REFRESH_ROTATION_GRACE_SECONDS 가 정수가 아니면 기본값으로 폴백한다 (line 20-21).
+    // TM_REFRESH_ROTATION_GRACE_SECONDS 가 정수가 아니면 기본값으로 폴백한다.
     let mut env = EnvGuard::new();
     env.set("TM_REFRESH_ROTATION_GRACE_SECONDS", "not-an-int");
     assert_eq!(rotation_grace_seconds(), DEFAULT_ROTATION_GRACE_SECONDS);
@@ -731,7 +784,7 @@ fn test_rotation_grace_seconds_invalid_env_falls_back() {
 
 #[test]
 fn test_mysql_store_issued_inserts_and_commits() {
-    // MySQLRefreshTokenStore.store_issued 는 INSERT 후 commit 한다 (line 211-225).
+    // MySQLRefreshTokenStore.store_issued 는 INSERT 후 commit 한다.
     let (provider, conns) = install_fresh_conns(None);
     let store = MySQLRefreshTokenStore::with_connector(provider).unwrap();
 
@@ -744,7 +797,7 @@ fn test_mysql_store_issued_inserts_and_commits() {
 
 #[test]
 fn test_mysql_rotate_mismatch_rolls_back() {
-    // family/email 불일치 시 rollback 하고 mismatch 를 반환한다 (line 240-241).
+    // family/email 불일치 시 rollback 하고 mismatch 를 반환한다.
     let (provider, conns) = install_fresh_conns(Some(mysql_row_for_rotate("OTHER", now() + 1000, DbValue::Null, DbValue::Null, None)));
     let store = MySQLRefreshTokenStore::with_connector(provider).unwrap();
 
@@ -758,7 +811,7 @@ fn test_mysql_rotate_mismatch_rolls_back() {
 
 #[test]
 fn test_mysql_rotate_expired_rolls_back() {
-    // 만료된 토큰은 rollback 하고 expired 를 반환한다 (line 243-244).
+    // 만료된 토큰은 rollback 하고 expired 를 반환한다.
     let (provider, conns) = install_fresh_conns(Some(mysql_row_for_rotate("F", now() - 1, DbValue::Null, DbValue::Null, None)));
     let store = MySQLRefreshTokenStore::with_connector(provider).unwrap();
 
@@ -772,7 +825,7 @@ fn test_mysql_rotate_expired_rolls_back() {
 
 #[test]
 fn test_mysql_rotate_revoked_token_revokes_family() {
-    // 이미 폐기된(revoked_at 설정, replaced_by 없음) 토큰 재제출 시 family 를 폐기하고 revoked 를 반환한다 (line 262-264).
+    // 이미 폐기된(revoked_at 설정, replaced_by 없음) 토큰 재제출 시 family 를 폐기하고 revoked 를 반환한다.
     let now = now();
     let (provider, conns) = install_fresh_conns(Some(mysql_row_for_rotate("F", now + 1000, DbValue::Null, (now - 10).into(), Some("manual"))));
     let store = MySQLRefreshTokenStore::with_connector(provider).unwrap();
@@ -788,7 +841,7 @@ fn test_mysql_rotate_revoked_token_revokes_family() {
 
 #[test]
 fn test_mysql_rotate_exception_rolls_back_and_raises() {
-    // rotate 중 예외가 나면 rollback 후 예외를 재전파한다 (line 277-279).
+    // rotate 중 예외가 나면 rollback 후 예외를 재전파한다.
     let (store, boom) = install_init_then_boom();
 
     let err = store.rotate("old", "new", "F", "e", 1, 2, None, None).unwrap_err();
@@ -799,7 +852,7 @@ fn test_mysql_rotate_exception_rolls_back_and_raises() {
 
 #[test]
 fn test_mysql_revoke_family_commits() {
-    // MySQLRefreshTokenStore.revoke_family 는 UPDATE 후 commit 한다 (line 282-291).
+    // MySQLRefreshTokenStore.revoke_family 는 UPDATE 후 commit 한다.
     let (provider, conns) = install_fresh_conns(None);
     let store = MySQLRefreshTokenStore::with_connector(provider).unwrap();
 
@@ -812,7 +865,7 @@ fn test_mysql_revoke_family_commits() {
 
 #[test]
 fn test_mysql_revoke_family_exception_rolls_back_and_raises() {
-    // revoke_family 중 예외가 나면 rollback 후 예외를 재전파한다 (line 289-291).
+    // revoke_family 중 예외가 나면 rollback 후 예외를 재전파한다.
     let (store, boom) = install_init_then_boom();
 
     let err = store.revoke_family("F", "logout").unwrap_err();
@@ -1306,7 +1359,7 @@ fn mysql_store() -> (MutexGuard<'static, ()>, MySQLRefreshTokenStore) {
     let guard = mysql_fixture::db_lock();
     let store = MySQLRefreshTokenStore::new().unwrap();
     let mut conn = store.connect().unwrap();
-    conn.cursor().execute("TRUNCATE TABLE refresh_tokens", &[]).unwrap();
+    conn.execute("TRUNCATE TABLE refresh_tokens", &[]).unwrap();
     conn.commit().unwrap();
     (guard, store)
 }
@@ -1353,20 +1406,18 @@ fn test_mysql_migration_adds_columns_to_legacy_table() {
     let bootstrap = MySQLRefreshTokenStore::new().unwrap();
     {
         let mut conn = bootstrap.connect().unwrap();
-        let mut cur = conn.cursor();
-        cur.execute("DROP TABLE IF EXISTS refresh_tokens", &[]).unwrap();
-        cur.execute(
+        conn.execute("DROP TABLE IF EXISTS refresh_tokens", &[]).unwrap();
+        conn.execute(
             "CREATE TABLE refresh_tokens (jti VARCHAR(64) PRIMARY KEY, family_id VARCHAR(64) NOT NULL, email VARCHAR(320) NOT NULL, issued_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, replaced_by VARCHAR(64), revoked_at BIGINT, revoke_reason VARCHAR(64), INDEX idx_refresh_tokens_family (family_id)) ENGINE=InnoDB",
             &[],
         )
         .unwrap();
         let now = now();
-        cur.execute("INSERT INTO refresh_tokens VALUES ('t1', %s, 'admin@example.com', %s, %s, NULL, NULL, NULL)", &[fam('a').as_str().into(), now.into(), (now + 1000).into()]).unwrap();
-        drop(cur);
+        conn.execute("INSERT INTO refresh_tokens VALUES ('t1', ?, 'admin@example.com', ?, ?, NULL, NULL, NULL)", &[fam('a').as_str().into(), now.into(), (now + 1000).into()]).unwrap();
         conn.commit().unwrap();
     }
 
-    let store = MySQLRefreshTokenStore::new().unwrap(); // _init_db 가 마이그레이션을 수행한다
+    let store = MySQLRefreshTokenStore::new().unwrap(); // init_db 가 마이그레이션을 수행한다
 
     let item = items_of(&store.list_sessions(&all()).unwrap()).remove(0);
     assert_eq!(item["client_ip"], json!(""));
@@ -1395,18 +1446,18 @@ fn test_mysql_session_rows_warns_and_limits_in_memory_store() {
     let (store, _) = session_fixture();
     let store = store.with_max_session_groups(1);
     let logs = LogCapture::start(log::Level::Warn);
-    let rows = store._session_rows(None, None).unwrap();
+    let rows = store.session_rows(None, None).unwrap();
     assert_eq!(rows.len(), 1);
     assert!(logs.messages().iter().any(|m| m.contains("상한")), "{:?}", logs.messages());
 }
 
 #[test]
 fn test_mysql_session_rows_warns_when_limit_is_reached() {
-    // MagicMock 커서 대신 FakeConn을 쓴다. fetchall은 [{"family_id": "F"}]를 돌려준다.
+    // FakeConn의 fetch_all은 [{"family_id": "F"}]를 돌려준다.
     let conn = FakeConn::new(Some(row([("family_id", "F".into())])));
     let store = MySQLRefreshTokenStore::with_connection_provider(provider_of(&conn)).with_max_session_groups(1);
     let logs = LogCapture::start(log::Level::Warn);
-    let rows = store._session_rows(Some("e"), Some("F")).unwrap();
+    let rows = store.session_rows(Some("e"), Some("F")).unwrap();
     assert_eq!(rows, vec![row([("family_id", "F".into())])]);
     assert!(logs.messages().iter().any(|m| m.contains("상한")), "{:?}", logs.messages());
     // now 두 번 + email + family_id
@@ -1417,7 +1468,7 @@ fn test_mysql_session_rows_warns_when_limit_is_reached() {
 fn test_mysql_session_rows_treats_none_result_as_empty() {
     let conn = FakeConn::fetchall_none();
     let store = MySQLRefreshTokenStore::with_connection_provider(provider_of(&conn));
-    assert!(store._session_rows(None, None).unwrap().is_empty());
+    assert!(store.session_rows(None, None).unwrap().is_empty());
 }
 
 #[test]

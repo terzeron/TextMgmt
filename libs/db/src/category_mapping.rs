@@ -1,5 +1,5 @@
 //! 카테고리별 키워드 매핑, 숨김 카테고리, 재적재 락, 분류 제안 항목·상태를 MySQL에 보관한다.
-//! 연결은 `db::ConnectionProvider`가 연산마다 새로 열어 준다(원본의 `_get_connection`).
+//! 연결은 `db::ConnectionProvider`가 연산마다 새로 열어 준다.
 //!
 //! 원본과 다른 점:
 //! - `content_type` 기본값("book")이 없다. 호출자가 매번 넘긴다.
@@ -13,7 +13,7 @@ use std::fmt;
 use chrono::{Local, NaiveDateTime};
 use serde_json::{Map, Value};
 
-use crate::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, MysqlConfig, Row, mysql_provider};
+use crate::{ConnectionProvider, DbConnection, DbError, DbValue, MysqlConfig, Row, mysql_provider};
 
 /// 재적재 락의 heartbeat(updated_at)가 이 시간 이상 갱신되지 않으면 죽은 작업으로 본다.
 /// 총 소요 시간이 아니라 "최근에 살아있다는 신호"로 판정해야, 오래 걸리는 정상 재적재와 안 풀리는 죽은 락을 구분한다.
@@ -47,21 +47,15 @@ pub struct MappingConnection {
 impl MappingConnection {
     /// 문장을 실행하고 영향받은 행 수를 돌려준다.
     pub fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError> {
-        let mut cursor = self.inner.cursor();
-        cursor.execute(sql, params)?;
-        Ok(cursor.rowcount())
+        self.inner.execute(sql, params)
     }
 
     pub fn fetch_all(&mut self, sql: &str, params: &[DbValue]) -> Result<Vec<Row>, DbError> {
-        let mut cursor = self.inner.cursor();
-        cursor.execute(sql, params)?;
-        Ok(cursor.fetchall().unwrap_or_default())
+        self.inner.fetch_all(sql, params)
     }
 
     pub fn fetch_one(&mut self, sql: &str, params: &[DbValue]) -> Result<Option<Row>, DbError> {
-        let mut cursor = self.inner.cursor();
-        cursor.execute(sql, params)?;
-        Ok(cursor.fetchone())
+        self.inner.fetch_one(sql, params)
     }
 
     pub fn commit(&mut self) -> Result<(), DbError> {
@@ -130,7 +124,7 @@ fn validate_counts(counts: &[(&str, i64)]) -> Result<(), CategoryMappingError> {
 }
 
 fn count_set_clause(counts: &[(&str, i64)]) -> String {
-    counts.iter().map(|(field, _)| format!(", {field} = %s")).collect()
+    counts.iter().map(|(field, _)| format!(", {field} = ?")).collect()
 }
 
 fn db_error_to_value_error(op: &str, e: DbError) -> CategoryMappingError {
@@ -170,19 +164,18 @@ impl CategoryMapping {
 
     // ---- 내부 도우미 ----
 
-    /// 새 연결과 커서로 `f`를 실행하고 연결을 닫는다. 커밋은 `f`가 한다.
-    fn run<T>(&self, f: impl FnOnce(&mut dyn DbConnection, &mut dyn DbCursor) -> Result<T, DbError>) -> Result<T, DbError> {
+    /// 새 연결로 `f`를 실행하고 연결을 닫는다. 커밋은 `f`가 한다.
+    fn run<T>(&self, f: impl FnOnce(&mut dyn DbConnection) -> Result<T, DbError>) -> Result<T, DbError> {
         let mut conn = (self.provider)()?;
-        let mut cursor = conn.cursor();
-        let result = f(conn.as_mut(), cursor.as_mut());
+        let result = f(conn.as_mut());
         conn.close();
         result
     }
 
     /// `f`를 실행하고 커밋한다. 어느 단계든 실패하면 롤백한다.
-    fn tx<T>(&self, f: impl FnOnce(&mut dyn DbCursor) -> Result<T, DbError>) -> Result<T, DbError> {
-        self.run(|conn, cursor| {
-            let result = f(cursor).and_then(|value| conn.commit().map(|()| value));
+    fn tx<T>(&self, f: impl FnOnce(&mut dyn DbConnection) -> Result<T, DbError>) -> Result<T, DbError> {
+        self.run(|conn| {
+            let result = f(&mut *conn).and_then(|value| conn.commit().map(|()| value));
             if result.is_err() {
                 let _ = conn.rollback();
             }
@@ -192,10 +185,7 @@ impl CategoryMapping {
 
     /// 읽기 전용 SELECT 한 번.
     fn select(&self, sql: &str, params: &[DbValue]) -> Result<Vec<Row>, DbError> {
-        self.run(|_conn, cursor| {
-            cursor.execute(sql, params)?;
-            Ok(cursor.fetchall().unwrap_or_default())
-        })
+        self.run(|conn| conn.fetch_all(sql, params))
     }
 
     fn select_strings(&self, op: &str, sql: &str, params: &[DbValue], column: &str) -> Result<Vec<String>, DbError> {
@@ -208,38 +198,38 @@ impl CategoryMapping {
     // ---- 초기화와 마이그레이션 ----
 
     fn init_db(&self) -> Result<(), DbError> {
-        self.run(|conn, cursor| {
-            cursor.execute(
+        self.run(|conn| {
+            conn.execute(
                 "CREATE TABLE IF NOT EXISTS category_keywords (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(255) NOT NULL, keyword VARCHAR(255) NOT NULL, content_type VARCHAR(10) NOT NULL DEFAULT 'book', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY unique_category_keyword (category, keyword, content_type), INDEX idx_category (category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
                 &[],
             )?;
-            cursor.execute(
+            conn.execute(
                 "CREATE TABLE IF NOT EXISTS hidden_categories (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(255) NOT NULL, content_type VARCHAR(10) NOT NULL DEFAULT 'book', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY unique_category_content_type (category, content_type), INDEX idx_category (category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
                 &[],
             )?;
-            cursor.execute(
+            conn.execute(
                 "CREATE TABLE IF NOT EXISTS latest_excluded_categories (id INT AUTO_INCREMENT PRIMARY KEY, category VARCHAR(255) NOT NULL, content_type VARCHAR(10) NOT NULL DEFAULT 'book', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY unique_latest_excluded_category_content_type (category, content_type), INDEX idx_category (category), INDEX idx_content_type (content_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
                 &[],
             )?;
-            cursor.execute("CREATE TABLE IF NOT EXISTS reload_locks (content_type VARCHAR(10) NOT NULL PRIMARY KEY, started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci", &[])?;
+            conn.execute("CREATE TABLE IF NOT EXISTS reload_locks (content_type VARCHAR(10) NOT NULL PRIMARY KEY, started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci", &[])?;
             // 분류 제안 항목은 행 단위로 쌓는다. JSON 상태 파일 하나에 담으면 한 권 기록할 때마다 전체를 다시 직렬화해 비용이 책 수의 제곱으로 늘었다.
             // file_path는 1024자라 UNIQUE를 걸면 인덱스 길이 제한에 걸린다. 중복은 clear로 관리한다.
             // 항목 필드가 늘 수 있어 payload 하나에 JSON으로 담는다. apply_status/apply_error는 인덱스를 타도록 컬럼으로 뺐다.
-            cursor.execute(
+            conn.execute(
                 "CREATE TABLE IF NOT EXISTS classify_proposal_items (id INT AUTO_INCREMENT PRIMARY KEY, content_type VARCHAR(10) NOT NULL DEFAULT 'book', source_category VARCHAR(255) NOT NULL, file_path VARCHAR(1024) NOT NULL, payload JSON NOT NULL, apply_status VARCHAR(20) NOT NULL DEFAULT 'pending', apply_error TEXT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX idx_content_source (content_type, source_category), INDEX idx_content_file (content_type, file_path(255)), INDEX idx_apply_status (content_type, apply_status)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
                 &[],
             )?;
-            Self::migrate_add_content_type(cursor)?;
-            Self::migrate_add_apply_status(cursor)?;
+            Self::migrate_add_content_type(conn)?;
+            Self::migrate_add_apply_status(conn)?;
             // 분류 제안 작업의 상태. 여러 프로세스가 잠금 없이 JSON 파일을 같이 쓰던 것을 DB 행 + FOR UPDATE로 옮겼다.
             // status는 FOR UPDATE로 판단해야 해서 컬럼으로 뺐고, updated_at은 하트비트다. 갱신이 끊기면 죽은 작업으로 본다.
-            cursor.execute(
+            conn.execute(
                 "CREATE TABLE IF NOT EXISTS classify_proposal_status (content_type VARCHAR(10) NOT NULL PRIMARY KEY, status VARCHAR(20) NOT NULL DEFAULT 'idle', payload JSON NOT NULL, updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
                 &[],
             )?;
-            Self::migrate_classify_proposal_item_indexes(cursor)?;
-            Self::migrate_reload_locks(cursor)?;
-            Self::migrate_reload_locks_lock_key(cursor)?;
+            Self::migrate_classify_proposal_item_indexes(conn)?;
+            Self::migrate_reload_locks(conn)?;
+            Self::migrate_reload_locks_lock_key(conn)?;
             conn.commit()
         })?;
         log::debug!("Database initialized");
@@ -247,32 +237,32 @@ impl CategoryMapping {
     }
 
     /// `SELECT COUNT(*) AS cnt ...`의 결과가 0인가. 행이 없으면 거짓이다.
-    fn count_is_zero(cursor: &mut dyn DbCursor) -> bool {
-        cursor.fetchone().is_some_and(|row| row.get("cnt").and_then(DbValue::as_i64) == Some(0))
+    fn count_is_zero(conn: &mut dyn DbConnection, sql: &str, params: &[DbValue]) -> Result<bool, DbError> {
+        Ok(conn.fetch_one(sql, params)?.is_some_and(|row| row.get("cnt").and_then(DbValue::as_i64) == Some(0)))
     }
 
-    fn count_is_positive(cursor: &mut dyn DbCursor) -> bool {
-        cursor.fetchone().is_some_and(|row| row.get("cnt").and_then(DbValue::as_i64).is_some_and(|n| n > 0))
+    fn count_is_positive(conn: &mut dyn DbConnection, sql: &str, params: &[DbValue]) -> Result<bool, DbError> {
+        Ok(conn.fetch_one(sql, params)?.is_some_and(|row| row.get("cnt").and_then(DbValue::as_i64).is_some_and(|n| n > 0)))
     }
 
-    fn migrate_add_content_type(cursor: &mut dyn DbCursor) -> Result<(), DbError> {
+    fn migrate_add_content_type(conn: &mut dyn DbConnection) -> Result<(), DbError> {
         let table_unique_indexes =
             [("category_keywords", "unique_category_keyword"), ("hidden_categories", "unique_category_content_type"), ("latest_excluded_categories", "unique_latest_excluded_category_content_type")];
         for (table, unique_index) in table_unique_indexes {
-            cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = %s AND column_name = 'content_type'", &[table.into()])?;
-            if Self::count_is_zero(cursor) {
+            if Self::count_is_zero(conn, "SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = 'content_type'", &[table.into()])?
+            {
                 log::info!("Migrating table {table}: adding content_type column");
-                cursor.execute(&format!("ALTER TABLE {table} ADD COLUMN content_type VARCHAR(10) NOT NULL DEFAULT 'book'"), &[])?;
+                conn.execute(&format!("ALTER TABLE {table} ADD COLUMN content_type VARCHAR(10) NOT NULL DEFAULT 'book'"), &[])?;
                 if table == "category_keywords" {
-                    if let Err(e) = cursor.execute(&format!("ALTER TABLE {table} DROP INDEX unique_category_keyword"), &[]) {
+                    if let Err(e) = conn.execute(&format!("ALTER TABLE {table} DROP INDEX unique_category_keyword"), &[]) {
                         log::debug!("Index unique_category_keyword not found, skipping: {e}");
                     }
-                    cursor.execute(&format!("ALTER TABLE {table} ADD UNIQUE KEY unique_category_keyword (category, keyword, content_type)"), &[])?;
+                    conn.execute(&format!("ALTER TABLE {table} ADD UNIQUE KEY unique_category_keyword (category, keyword, content_type)"), &[])?;
                 } else {
-                    if let Err(e) = cursor.execute(&format!("ALTER TABLE {table} DROP INDEX category"), &[]) {
+                    if let Err(e) = conn.execute(&format!("ALTER TABLE {table} DROP INDEX category"), &[]) {
                         log::debug!("Index category not found, skipping: {e}");
                     }
-                    cursor.execute(&format!("ALTER TABLE {table} ADD UNIQUE KEY {unique_index} (category, content_type)"), &[])?;
+                    conn.execute(&format!("ALTER TABLE {table} ADD UNIQUE KEY {unique_index} (category, content_type)"), &[])?;
                 }
             }
         }
@@ -280,39 +270,46 @@ impl CategoryMapping {
     }
 
     /// 기존 `classify_proposal_items`에 apply_status/apply_error 컬럼과 인덱스를 더한다. 컬럼이 없을 때만 ALTER한다.
-    fn migrate_add_apply_status(cursor: &mut dyn DbCursor) -> Result<(), DbError> {
-        cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'classify_proposal_items' AND column_name = 'apply_status'", &[])?;
-        if Self::count_is_zero(cursor) {
+    fn migrate_add_apply_status(conn: &mut dyn DbConnection) -> Result<(), DbError> {
+        if Self::count_is_zero(
+            conn,
+            "SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'classify_proposal_items' AND column_name = 'apply_status'",
+            &[],
+        )? {
             log::info!("Migrating table classify_proposal_items: adding apply_status/apply_error columns");
-            cursor.execute("ALTER TABLE classify_proposal_items ADD COLUMN apply_status VARCHAR(20) NOT NULL DEFAULT 'pending'", &[])?;
-            cursor.execute("ALTER TABLE classify_proposal_items ADD COLUMN apply_error TEXT NULL", &[])?;
-            cursor.execute("ALTER TABLE classify_proposal_items ADD INDEX idx_apply_status (content_type, apply_status)", &[])?;
+            conn.execute("ALTER TABLE classify_proposal_items ADD COLUMN apply_status VARCHAR(20) NOT NULL DEFAULT 'pending'", &[])?;
+            conn.execute("ALTER TABLE classify_proposal_items ADD COLUMN apply_error TEXT NULL", &[])?;
+            conn.execute("ALTER TABLE classify_proposal_items ADD INDEX idx_apply_status (content_type, apply_status)", &[])?;
         }
         Ok(())
     }
 
     /// `classify_proposal_items`의 인덱스를 (content_type, file_path) 기준으로 맞춘다.
-    /// 승인 작업이 책 한 권마다 `WHERE content_type = %s AND file_path = %s`로 갱신하므로 이 인덱스가 없으면 매번 전수 훑기가 된다.
+    /// 승인 작업이 책 한 권마다 `WHERE content_type = ? AND file_path = ?`로 갱신하므로 이 인덱스가 없으면 매번 전수 훑기가 된다.
     /// file_path는 1024자라 앞 255자만 인덱스에 쓴다. `idx_content_type`은 `idx_content_source`의 왼쪽 접두사와 같아 함께 지운다.
-    fn migrate_classify_proposal_item_indexes(cursor: &mut dyn DbCursor) -> Result<(), DbError> {
-        cursor
-            .execute("SELECT COUNT(*) AS cnt FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'classify_proposal_items' AND index_name = 'idx_content_file'", &[])?;
-        if Self::count_is_zero(cursor) {
+    fn migrate_classify_proposal_item_indexes(conn: &mut dyn DbConnection) -> Result<(), DbError> {
+        if Self::count_is_zero(
+            conn,
+            "SELECT COUNT(*) AS cnt FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'classify_proposal_items' AND index_name = 'idx_content_file'",
+            &[],
+        )? {
             log::info!("Migrating table classify_proposal_items: adding idx_content_file");
-            cursor.execute("ALTER TABLE classify_proposal_items ADD INDEX idx_content_file (content_type, file_path(255))", &[])?;
+            conn.execute("ALTER TABLE classify_proposal_items ADD INDEX idx_content_file (content_type, file_path(255))", &[])?;
         }
 
-        cursor
-            .execute("SELECT COUNT(*) AS cnt FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'classify_proposal_items' AND index_name = 'idx_content_type'", &[])?;
-        if Self::count_is_positive(cursor) {
+        if Self::count_is_positive(
+            conn,
+            "SELECT COUNT(*) AS cnt FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'classify_proposal_items' AND index_name = 'idx_content_type'",
+            &[],
+        )? {
             log::info!("Migrating table classify_proposal_items: dropping redundant idx_content_type");
-            cursor.execute("ALTER TABLE classify_proposal_items DROP INDEX idx_content_type", &[])?;
+            conn.execute("ALTER TABLE classify_proposal_items DROP INDEX idx_content_type", &[])?;
         }
         Ok(())
     }
 
     /// `reload_locks`를 진행 상황(heartbeat·카운트)까지 담는 공유 작업 상태 테이블로 넓힌다.
-    fn migrate_reload_locks(cursor: &mut dyn DbCursor) -> Result<(), DbError> {
+    fn migrate_reload_locks(conn: &mut dyn DbConnection) -> Result<(), DbError> {
         let new_columns = [
             ("category", "ALTER TABLE reload_locks ADD COLUMN category VARCHAR(255) NULL"),
             ("status", "ALTER TABLE reload_locks ADD COLUMN status VARCHAR(10) NOT NULL DEFAULT 'running'"),
@@ -326,12 +323,15 @@ impl CategoryMapping {
             ("reload_source", "ALTER TABLE reload_locks ADD COLUMN reload_source VARCHAR(20) NOT NULL DEFAULT 'bulk'"),
         ];
         for (column, alter_sql) in new_columns {
-            cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'reload_locks' AND column_name = %s", &[column.into()])?;
-            if Self::count_is_zero(cursor) {
+            if Self::count_is_zero(
+                conn,
+                "SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'reload_locks' AND column_name = ?",
+                &[column.into()],
+            )? {
                 log::info!("Migrating table reload_locks: adding {column} column");
-                cursor.execute(alter_sql, &[])?;
+                conn.execute(alter_sql, &[])?;
                 if column == "reload_source" {
-                    cursor.execute("UPDATE reload_locks SET reload_source = %s WHERE category IS NOT NULL", &[RELOAD_SOURCE_MISMATCH.into()])?;
+                    conn.execute("UPDATE reload_locks SET reload_source = ? WHERE category IS NOT NULL", &[RELOAD_SOURCE_MISMATCH.into()])?;
                 }
             }
         }
@@ -340,16 +340,15 @@ impl CategoryMapping {
 
     /// `reload_locks`를 content_type 단일 락에서 (content_type, lock_key) 복합 락으로 넓힌다.
     /// 기존 행은 category가 있으면 그 카테고리를, 없으면 `BULK_LOCK_KEY`를 lock_key로 채워 보존한다.
-    fn migrate_reload_locks_lock_key(cursor: &mut dyn DbCursor) -> Result<(), DbError> {
-        cursor.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'reload_locks' AND column_name = 'lock_key'", &[])?;
-        if Self::count_is_positive(cursor) {
+    fn migrate_reload_locks_lock_key(conn: &mut dyn DbConnection) -> Result<(), DbError> {
+        if Self::count_is_positive(conn, "SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'reload_locks' AND column_name = 'lock_key'", &[])? {
             return Ok(());
         }
         log::info!("Migrating table reload_locks: adding lock_key column and switching primary key to (content_type, lock_key)");
         // DDL의 DEFAULT 절은 바인드 파라미터를 지원하지 않아 상수 BULK_LOCK_KEY를 직접 넣는다.
-        cursor.execute(&format!("ALTER TABLE reload_locks ADD COLUMN lock_key VARCHAR(255) NOT NULL DEFAULT '{BULK_LOCK_KEY}'"), &[])?;
-        cursor.execute("UPDATE reload_locks SET lock_key = COALESCE(category, %s)", &[BULK_LOCK_KEY.into()])?;
-        cursor.execute("ALTER TABLE reload_locks DROP PRIMARY KEY, ADD PRIMARY KEY (content_type, lock_key)", &[])?;
+        conn.execute(&format!("ALTER TABLE reload_locks ADD COLUMN lock_key VARCHAR(255) NOT NULL DEFAULT '{BULK_LOCK_KEY}'"), &[])?;
+        conn.execute("UPDATE reload_locks SET lock_key = COALESCE(category, ?)", &[BULK_LOCK_KEY.into()])?;
+        conn.execute("ALTER TABLE reload_locks DROP PRIMARY KEY, ADD PRIMARY KEY (content_type, lock_key)", &[])?;
         Ok(())
     }
 
@@ -357,7 +356,7 @@ impl CategoryMapping {
 
     /// `{category: [keyword, ...]}`. 카테고리 순서는 결정적이다. 키워드 동률 판정과 API 응답 순서가 이 순서를 따른다.
     pub fn get_all_mappings(&self, content_type: &str) -> Result<BTreeMap<String, Vec<String>>, DbError> {
-        let rows = self.select("SELECT category, keyword FROM category_keywords WHERE content_type = %s ORDER BY category, keyword", &[content_type.into()])?;
+        let rows = self.select("SELECT category, keyword FROM category_keywords WHERE content_type = ? ORDER BY category, keyword", &[content_type.into()])?;
         let mut mappings: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for row in &rows {
             if let (Some(category), Some(keyword)) = (text_of(row, "category"), text_of(row, "keyword")) {
@@ -369,7 +368,7 @@ impl CategoryMapping {
     }
 
     pub fn get_keywords(&self, category: &str, content_type: &str) -> Result<Vec<String>, DbError> {
-        let rows = self.select("SELECT keyword FROM category_keywords WHERE category = %s AND content_type = %s ORDER BY keyword", &[category.into(), content_type.into()])?;
+        let rows = self.select("SELECT keyword FROM category_keywords WHERE category = ? AND content_type = ? ORDER BY keyword", &[category.into(), content_type.into()])?;
         let keywords: Vec<String> = rows.iter().filter_map(|row| text_of(row, "keyword").map(str::to_string)).collect();
         log::debug!("get_keywords({category}, {content_type}): {} rows", keywords.len());
         Ok(keywords)
@@ -382,8 +381,8 @@ impl CategoryMapping {
             log::warn!("add_keyword: empty keyword");
             return Ok(false);
         }
-        match self.tx(|cursor| cursor.execute("INSERT INTO category_keywords (category, keyword, content_type) VALUES (%s, %s, %s)", &[category.into(), keyword.into(), content_type.into()])) {
-            Ok(()) => {
+        match self.tx(|conn| conn.execute("INSERT INTO category_keywords (category, keyword, content_type) VALUES (?, ?, ?)", &[category.into(), keyword.into(), content_type.into()])) {
+            Ok(_) => {
                 log::info!("add_keyword({category}, {keyword}, {content_type}): success");
                 Ok(true)
             }
@@ -399,10 +398,8 @@ impl CategoryMapping {
     }
 
     pub fn remove_keyword(&self, category: &str, keyword: &str, content_type: &str) -> Result<bool, DbError> {
-        let deleted = self.tx(|cursor| {
-            cursor.execute("DELETE FROM category_keywords WHERE category = %s AND keyword = %s AND content_type = %s", &[category.into(), keyword.into(), content_type.into()])?;
-            Ok(cursor.rowcount() > 0)
-        })?;
+        let deleted =
+            self.tx(|conn| Ok(conn.execute("DELETE FROM category_keywords WHERE category = ? AND keyword = ? AND content_type = ?", &[category.into(), keyword.into(), content_type.into()])? > 0))?;
         log::info!("remove_keyword({category}, {keyword}, {content_type}): {}", if deleted { "success" } else { "not found" });
         Ok(deleted)
     }
@@ -411,11 +408,11 @@ impl CategoryMapping {
     pub fn set_keywords(&self, category: &str, keywords: &[&str], content_type: &str) -> bool {
         let mut seen = HashSet::new();
         let keywords: Vec<&str> = keywords.iter().map(|k| k.trim()).filter(|k| !k.is_empty() && seen.insert(*k)).collect();
-        let result = self.tx(|cursor| {
-            cursor.execute("DELETE FROM category_keywords WHERE category = %s AND content_type = %s", &[category.into(), content_type.into()])?;
+        let result = self.tx(|conn| {
+            conn.execute("DELETE FROM category_keywords WHERE category = ? AND content_type = ?", &[category.into(), content_type.into()])?;
             if !keywords.is_empty() {
                 let rows: Vec<Vec<DbValue>> = keywords.iter().map(|kw| vec![category.into(), (*kw).into(), content_type.into()]).collect();
-                cursor.executemany("INSERT INTO category_keywords (category, keyword, content_type) VALUES (%s, %s, %s)", &rows)?;
+                conn.execute_batch("INSERT INTO category_keywords (category, keyword, content_type) VALUES (?, ?, ?)", &rows)?;
             }
             Ok(())
         });
@@ -433,8 +430,8 @@ impl CategoryMapping {
 
     /// 해당 content_type의 매핑을 전부 지우고 새로 넣는다.
     pub fn update_all_mappings(&self, mappings: &HashMap<String, Vec<String>>, content_type: &str) -> bool {
-        let result = self.tx(|cursor| {
-            cursor.execute("DELETE FROM category_keywords WHERE content_type = %s", &[content_type.into()])?;
+        let result = self.tx(|conn| {
+            conn.execute("DELETE FROM category_keywords WHERE content_type = ?", &[content_type.into()])?;
             let mut rows: Vec<Vec<DbValue>> = Vec::new();
             for (category, keywords) in mappings {
                 for keyword in keywords {
@@ -445,7 +442,7 @@ impl CategoryMapping {
                 }
             }
             if !rows.is_empty() {
-                cursor.executemany("INSERT IGNORE INTO category_keywords (category, keyword, content_type) VALUES (%s, %s, %s)", &rows)?;
+                conn.execute_batch("INSERT IGNORE INTO category_keywords (category, keyword, content_type) VALUES (?, ?, ?)", &rows)?;
             }
             Ok(())
         });
@@ -463,16 +460,13 @@ impl CategoryMapping {
 
     /// `prefix`가 참이면 하위 카테고리(`category/*`)도 지운다.
     pub fn delete_category(&self, category: &str, content_type: &str, prefix: bool) -> Result<bool, DbError> {
-        let deleted = self.tx(|cursor| {
-            if prefix {
-                cursor.execute(
-                    "DELETE FROM category_keywords WHERE (category = %s OR category LIKE %s) AND content_type = %s",
-                    &[category.into(), format!("{category}/%").into(), content_type.into()],
-                )?;
+        let deleted = self.tx(|conn| {
+            let deleted = if prefix {
+                conn.execute("DELETE FROM category_keywords WHERE (category = ? OR category LIKE ?) AND content_type = ?", &[category.into(), format!("{category}/%").into(), content_type.into()])?
             } else {
-                cursor.execute("DELETE FROM category_keywords WHERE category = %s AND content_type = %s", &[category.into(), content_type.into()])?;
-            }
-            Ok(cursor.rowcount() > 0)
+                conn.execute("DELETE FROM category_keywords WHERE category = ? AND content_type = ?", &[category.into(), content_type.into()])?
+            };
+            Ok(deleted > 0)
         })?;
         log::info!("delete_category({category}, {content_type}, prefix={prefix}): {}", if deleted { "success" } else { "not found" });
         Ok(deleted)
@@ -482,7 +476,7 @@ impl CategoryMapping {
     pub fn search_by_keyword(&self, keyword: &str, content_type: &str) -> Result<Vec<String>, DbError> {
         self.select_strings(
             &format!("search_by_keyword({keyword}, {content_type})"),
-            "SELECT DISTINCT category FROM category_keywords WHERE keyword LIKE %s AND content_type = %s ORDER BY category",
+            "SELECT DISTINCT category FROM category_keywords WHERE keyword LIKE ? AND content_type = ? ORDER BY category",
             &[format!("%{keyword}%").into(), content_type.into()],
             "category",
         )
@@ -491,19 +485,19 @@ impl CategoryMapping {
     // ---- 숨김·최신 제외 카테고리 ----
 
     pub fn get_hidden_categories(&self, content_type: &str) -> Result<Vec<String>, DbError> {
-        self.select_strings(&format!("get_hidden_categories({content_type})"), "SELECT category FROM hidden_categories WHERE content_type = %s ORDER BY category", &[content_type.into()], "category")
+        self.select_strings(&format!("get_hidden_categories({content_type})"), "SELECT category FROM hidden_categories WHERE content_type = ? ORDER BY category", &[content_type.into()], "category")
     }
 
     pub fn set_hidden(&self, category: &str, hidden: bool, content_type: &str) -> Result<bool, DbError> {
-        let result = self.tx(|cursor| {
+        let result = self.tx(|conn| {
             if hidden {
-                cursor.execute("INSERT IGNORE INTO hidden_categories (category, content_type) VALUES (%s, %s)", &[category.into(), content_type.into()])
+                conn.execute("INSERT IGNORE INTO hidden_categories (category, content_type) VALUES (?, ?)", &[category.into(), content_type.into()])
             } else {
-                cursor.execute("DELETE FROM hidden_categories WHERE category = %s AND content_type = %s", &[category.into(), content_type.into()])
+                conn.execute("DELETE FROM hidden_categories WHERE category = ? AND content_type = ?", &[category.into(), content_type.into()])
             }
         });
         match (hidden, result) {
-            (_, Ok(())) => {
+            (_, Ok(_)) => {
                 log::info!("set_hidden({category}, {hidden}, {content_type}): success");
                 Ok(true)
             }
@@ -522,22 +516,22 @@ impl CategoryMapping {
     pub fn get_latest_excluded_categories(&self, content_type: &str) -> Result<Vec<String>, DbError> {
         self.select_strings(
             &format!("get_latest_excluded_categories({content_type})"),
-            "SELECT category FROM latest_excluded_categories WHERE content_type = %s ORDER BY category",
+            "SELECT category FROM latest_excluded_categories WHERE content_type = ? ORDER BY category",
             &[content_type.into()],
             "category",
         )
     }
 
     pub fn set_latest_excluded(&self, category: &str, excluded: bool, content_type: &str) -> Result<bool, DbError> {
-        let result = self.tx(|cursor| {
+        let result = self.tx(|conn| {
             if excluded {
-                cursor.execute("INSERT IGNORE INTO latest_excluded_categories (category, content_type) VALUES (%s, %s)", &[category.into(), content_type.into()])
+                conn.execute("INSERT IGNORE INTO latest_excluded_categories (category, content_type) VALUES (?, ?)", &[category.into(), content_type.into()])
             } else {
-                cursor.execute("DELETE FROM latest_excluded_categories WHERE category = %s AND content_type = %s", &[category.into(), content_type.into()])
+                conn.execute("DELETE FROM latest_excluded_categories WHERE category = ? AND content_type = ?", &[category.into(), content_type.into()])
             }
         });
         match (excluded, result) {
-            (_, Ok(())) => {
+            (_, Ok(_)) => {
                 log::info!("set_latest_excluded({category}, {excluded}, {content_type}): success");
                 Ok(true)
             }
@@ -554,9 +548,9 @@ impl CategoryMapping {
 
     /// 카테고리명을 바꾼다. 키워드·숨김·최신 제외 테이블을 한 트랜잭션으로 갱신한다.
     pub fn rename_category(&self, old_category: &str, new_category: &str, content_type: &str) -> bool {
-        let result = self.tx(|cursor| {
+        let result = self.tx(|conn| {
             for table in ["category_keywords", "hidden_categories", "latest_excluded_categories"] {
-                cursor.execute(&format!("UPDATE {table} SET category = %s WHERE category = %s AND content_type = %s"), &[new_category.into(), old_category.into(), content_type.into()])?;
+                conn.execute(&format!("UPDATE {table} SET category = ? WHERE category = ? AND content_type = ?"), &[new_category.into(), old_category.into(), content_type.into()])?;
             }
             Ok(())
         });
@@ -594,13 +588,12 @@ impl CategoryMapping {
         let category = category.filter(|c| !c.is_empty());
         let lock_key = lock_key_of(category);
         let normalized_reload_source = Self::normalize_reload_source(reload_source, category);
-        let outcome = self.run(|conn, cursor| {
-            if lock_key == BULK_LOCK_KEY {
-                cursor.execute("SELECT lock_key, status, updated_at FROM reload_locks WHERE content_type = %s FOR UPDATE", &[content_type.into()])?;
+        let outcome = self.run(|conn| {
+            let rows = if lock_key == BULK_LOCK_KEY {
+                conn.fetch_all("SELECT lock_key, status, updated_at FROM reload_locks WHERE content_type = ? FOR UPDATE", &[content_type.into()])?
             } else {
-                cursor.execute("SELECT lock_key, status, updated_at FROM reload_locks WHERE content_type = %s AND lock_key IN (%s, %s) FOR UPDATE", &[content_type.into(), lock_key.into(), BULK_LOCK_KEY.into()])?;
-            }
-            let rows = cursor.fetchall().unwrap_or_default();
+                conn.fetch_all("SELECT lock_key, status, updated_at FROM reload_locks WHERE content_type = ? AND lock_key IN (?, ?) FOR UPDATE", &[content_type.into(), lock_key.into(), BULK_LOCK_KEY.into()])?
+            };
 
             let mut blocking_key: Option<String> = None;
             for row in &rows {
@@ -619,9 +612,9 @@ impl CategoryMapping {
                 return Ok(Some(blocking_key));
             }
 
-            cursor.execute(
+            conn.execute(
                 "INSERT INTO reload_locks (content_type, lock_key, category, reload_source, status, started_at, updated_at, indexed_count, deleted_count, failed_count, before_count, after_count, error) \
-                 VALUES (%s, %s, %s, %s, 'running', NOW(), NOW(), 0, 0, 0, 0, 0, NULL) \
+                 VALUES (?, ?, ?, ?, 'running', NOW(), NOW(), 0, 0, 0, 0, 0, NULL) \
                  ON DUPLICATE KEY UPDATE category = VALUES(category), status = 'running', started_at = NOW(), updated_at = NOW(), \
                  reload_source = VALUES(reload_source), indexed_count = 0, deleted_count = 0, failed_count = 0, before_count = 0, after_count = 0, error = NULL",
                 &[content_type.into(), lock_key.into(), category.into(), normalized_reload_source.into()],
@@ -648,21 +641,21 @@ impl CategoryMapping {
     pub fn heartbeat_reload_lock(&self, content_type: &str, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), CategoryMappingError> {
         validate_counts(counts)?;
         let lock_key = lock_key_of(category);
-        let sql = format!("UPDATE reload_locks SET updated_at = NOW(){} WHERE content_type = %s AND lock_key = %s", count_set_clause(counts));
+        let sql = format!("UPDATE reload_locks SET updated_at = NOW(){} WHERE content_type = ? AND lock_key = ?", count_set_clause(counts));
         let mut params: Vec<DbValue> = counts.iter().map(|(_, n)| (*n).into()).collect();
         params.extend([content_type.into(), lock_key.into()]);
-        self.tx(|cursor| cursor.execute(&sql, &params)).map_err(|e| db_error_to_value_error("heartbeat_reload_lock", e))
+        self.tx(|conn| conn.execute(&sql, &params).map(drop)).map_err(|e| db_error_to_value_error("heartbeat_reload_lock", e))
     }
 
     /// 재적재 완료(성공/실패)를 기록한다. 행은 지우지 않아 새로고침 뒤에도 마지막 결과를 볼 수 있다. 다음 `acquire_reload_lock`이 덮어쓴다.
     pub fn complete_reload_lock(&self, content_type: &str, status: &str, error: Option<&str>, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), CategoryMappingError> {
         validate_counts(counts)?;
         let lock_key = lock_key_of(category);
-        let sql = format!("UPDATE reload_locks SET status = %s, updated_at = NOW(), error = %s{} WHERE content_type = %s AND lock_key = %s", count_set_clause(counts));
+        let sql = format!("UPDATE reload_locks SET status = ?, updated_at = NOW(), error = ?{} WHERE content_type = ? AND lock_key = ?", count_set_clause(counts));
         let mut params: Vec<DbValue> = vec![status.into(), error.into()];
         params.extend(counts.iter().map(|(_, n)| DbValue::from(*n)));
         params.extend([content_type.into(), lock_key.into()]);
-        self.tx(|cursor| cursor.execute(&sql, &params)).map_err(|e| db_error_to_value_error("complete_reload_lock", e))
+        self.tx(|conn| conn.execute(&sql, &params).map(drop)).map_err(|e| db_error_to_value_error("complete_reload_lock", e))
     }
 
     /// 재적재 작업 상태. 카테고리가 있으면 그 락, 없으면 전체 락을 본다. 이력이 없으면 `None`이다.
@@ -670,12 +663,11 @@ impl CategoryMapping {
     /// 'running'인데 heartbeat가 끊겼으면 행은 두고 조회 결과에서만 'failed'로 보여준다. 정리는 다음 `acquire_reload_lock`이 한다.
     pub fn get_reload_status(&self, content_type: &str, category: Option<&str>) -> Result<Option<Row>, DbError> {
         let lock_key = lock_key_of(category);
-        let fetched = self.run(|_conn, cursor| {
-            cursor.execute(
-                "SELECT category, reload_source, status, started_at, updated_at, indexed_count, deleted_count, failed_count, before_count, after_count, error FROM reload_locks WHERE content_type = %s AND lock_key = %s",
+        let fetched = self.run(|conn| {
+            conn.fetch_one(
+                "SELECT category, reload_source, status, started_at, updated_at, indexed_count, deleted_count, failed_count, before_count, after_count, error FROM reload_locks WHERE content_type = ? AND lock_key = ?",
                 &[content_type.into(), lock_key.into()],
-            )?;
-            Ok(cursor.fetchone())
+            )
         });
         let row = match fetched? {
             Some(row) => row,
@@ -706,29 +698,29 @@ impl CategoryMapping {
     /// 락 행을 완전히 지운다. 일반 완료 경로는 `complete_reload_lock`이다.
     pub fn release_reload_lock(&self, content_type: &str, category: Option<&str>) -> Result<(), DbError> {
         let lock_key = lock_key_of(category);
-        self.tx(|cursor| cursor.execute("DELETE FROM reload_locks WHERE content_type = %s AND lock_key = %s", &[content_type.into(), lock_key.into()]))
+        self.tx(|conn| conn.execute("DELETE FROM reload_locks WHERE content_type = ? AND lock_key = ?", &[content_type.into(), lock_key.into()]).map(drop))
     }
 
     // ---- 분류 제안 항목 ----
 
     /// 새 분류 제안을 시작할 때 이 content_type의 기존 항목을 모두 지운다. 이전 제안의 행이 섞여 승인되는 일을 막는다.
     pub fn clear_classify_proposal_items(&self, content_type: &str) -> Result<(), DbError> {
-        self.tx(|cursor| cursor.execute("DELETE FROM classify_proposal_items WHERE content_type = %s", &[content_type.into()]))
+        self.tx(|conn| conn.execute("DELETE FROM classify_proposal_items WHERE content_type = ?", &[content_type.into()]).map(drop))
     }
 
-    /// 분류된 항목을 `executemany` 한 번과 커밋 한 번으로 적재한다. 비어 있으면 DB에 가지 않는다.
+    /// 분류된 항목을 `execute_batch` 한 번과 커밋 한 번으로 적재한다. 비어 있으면 DB에 가지 않는다.
     pub fn add_classify_proposal_items(&self, items: &[Value], source_category: &str, content_type: &str) -> Result<(), DbError> {
         if items.is_empty() {
             return Ok(());
         }
         let rows: Vec<Vec<DbValue>> =
             items.iter().map(|item| vec![content_type.into(), source_category.into(), item.get("file_path").and_then(Value::as_str).into(), json_string(item).into()]).collect();
-        self.tx(|cursor| cursor.executemany("INSERT INTO classify_proposal_items (content_type, source_category, file_path, payload) VALUES (%s, %s, %s, %s)", &rows))
+        self.tx(|conn| conn.execute_batch("INSERT INTO classify_proposal_items (content_type, source_category, file_path, payload) VALUES (?, ?, ?, ?)", &rows).map(drop))
     }
 
     /// 항목을 분류가 끝난 순서(id 오름차순)로 돌려준다. `apply_status`/`apply_error`는 컬럼 값을 payload 위에 덮어 싣는다.
     pub fn get_classify_proposal_items(&self, content_type: &str) -> Result<Vec<Value>, DbError> {
-        let rows = self.select("SELECT payload, apply_status, apply_error FROM classify_proposal_items WHERE content_type = %s ORDER BY id ASC", &[content_type.into()])?;
+        let rows = self.select("SELECT payload, apply_status, apply_error FROM classify_proposal_items WHERE content_type = ? ORDER BY id ASC", &[content_type.into()])?;
         let mut items = Vec::with_capacity(rows.len());
         for row in &rows {
             let payload = text_of(row, "payload").ok_or_else(|| DbError::Other("classify proposal payload is missing".into()))?;
@@ -747,33 +739,28 @@ impl CategoryMapping {
             return Ok(());
         }
         let rows: Vec<Vec<DbValue>> = items.iter().map(|item| vec![json_string(item).into(), content_type.into(), item.get("file_path").and_then(Value::as_str).into()]).collect();
-        self.tx(|cursor| cursor.executemany("UPDATE classify_proposal_items SET payload = %s WHERE content_type = %s AND file_path = %s", &rows))
+        self.tx(|conn| conn.execute_batch("UPDATE classify_proposal_items SET payload = ? WHERE content_type = ? AND file_path = ?", &rows).map(drop))
     }
 
     /// 파일 하나를 옮긴 직후 그 행의 이동 상태만 바로 기록한다. 중단 후 재개하려면 건별 기록이 필요하다.
     pub fn update_classify_proposal_item_status(&self, file_path: &str, apply_status: &str, apply_error: Option<&str>, content_type: &str) -> Result<(), DbError> {
-        self.tx(|cursor| {
-            cursor.execute(
-                "UPDATE classify_proposal_items SET apply_status = %s, apply_error = %s WHERE content_type = %s AND file_path = %s",
+        self.tx(|conn| {
+            conn.execute(
+                "UPDATE classify_proposal_items SET apply_status = ?, apply_error = ? WHERE content_type = ? AND file_path = ?",
                 &[apply_status.into(), apply_error.into(), content_type.into(), file_path.into()],
             )
         })
+        .map(drop)
     }
 
     /// 이동이 끝난(`apply_status = 'moved'`) 행만 지우고 지운 개수를 돌려준다. 대기·실패 행은 재시도를 위해 남긴다.
     pub fn delete_applied_classify_proposal_items(&self, content_type: &str) -> Result<u64, DbError> {
-        self.tx(|cursor| {
-            cursor.execute("DELETE FROM classify_proposal_items WHERE content_type = %s AND apply_status = 'moved'", &[content_type.into()])?;
-            Ok(cursor.rowcount())
-        })
+        self.tx(|conn| conn.execute("DELETE FROM classify_proposal_items WHERE content_type = ? AND apply_status = 'moved'", &[content_type.into()]))
     }
 
     /// 제안 항목 한 건을 지우고 지운 개수를 돌려준다. 표에서 책을 지우면 그 행도 없애야 이미 없는 파일의 행이 되살아나지 않는다.
     pub fn delete_classify_proposal_item(&self, file_path: &str, content_type: &str) -> Result<u64, DbError> {
-        self.tx(|cursor| {
-            cursor.execute("DELETE FROM classify_proposal_items WHERE content_type = %s AND file_path = %s", &[content_type.into(), file_path.into()])?;
-            Ok(cursor.rowcount())
-        })
+        self.tx(|conn| conn.execute("DELETE FROM classify_proposal_items WHERE content_type = ? AND file_path = ?", &[content_type.into(), file_path.into()]))
     }
 
     // ---- 분류 제안 작업 상태 ----
@@ -795,9 +782,8 @@ impl CategoryMapping {
         Value::Object(payload)
     }
 
-    fn read_classify_proposal_status_row(cursor: &mut dyn DbCursor, sql: &str, content_type: &str) -> Result<Option<(String, Value, i64)>, DbError> {
-        cursor.execute(sql, &[content_type.into()])?;
-        match cursor.fetchone() {
+    fn read_classify_proposal_status_row(conn: &mut dyn DbConnection, sql: &str, content_type: &str) -> Result<Option<(String, Value, i64)>, DbError> {
+        match conn.fetch_one(sql, &[content_type.into()])? {
             Some(row) => {
                 let status = text_of(&row, "status").unwrap_or("idle").to_string();
                 let payload = match text_of(&row, "payload") {
@@ -814,10 +800,10 @@ impl CategoryMapping {
 
     /// 분류 제안 작업의 현재 상태. 작업이 없으면 `{"status": "idle", "content_type": ...}`다.
     pub fn get_classify_proposal_status(&self, content_type: &str, stale_seconds: i64) -> Result<Value, DbError> {
-        let fetched = self.run(|_conn, cursor| {
+        let fetched = self.run(|conn| {
             Self::read_classify_proposal_status_row(
-                cursor,
-                "SELECT status, payload, TIMESTAMPDIFF(SECOND, updated_at, NOW(3)) AS age_seconds FROM classify_proposal_status WHERE content_type = %s",
+                conn,
+                "SELECT status, payload, TIMESTAMPDIFF(SECOND, updated_at, NOW(3)) AS age_seconds FROM classify_proposal_status WHERE content_type = ?",
                 content_type,
             )
         });
@@ -833,12 +819,12 @@ impl CategoryMapping {
         payload.insert("content_type".into(), content_type.into());
         let column_status = payload.get("status").and_then(Value::as_str).unwrap_or("idle").to_string();
         let payload_json = json_string(&Value::Object(payload));
-        self.tx(|cursor| {
-            cursor.execute(
-                "INSERT INTO classify_proposal_status (content_type, status, payload, updated_at) VALUES (%s, %s, %s, NOW(3)) ON DUPLICATE KEY UPDATE status = VALUES(status), payload = VALUES(payload), updated_at = NOW(3)",
+        self.tx(|conn| {
+            conn.execute(
+                "INSERT INTO classify_proposal_status (content_type, status, payload, updated_at) VALUES (?, ?, ?, NOW(3)) ON DUPLICATE KEY UPDATE status = VALUES(status), payload = VALUES(payload), updated_at = NOW(3)",
                 &[content_type.into(), column_status.as_str().into(), payload_json.as_str().into()],
             )
-        })
+        }).map(drop)
     }
 
     /// 진행률처럼 일부 필드만 갱신한다. `status`는 절대 바꾸지 않는다. 서버가 `JSON_MERGE_PATCH`로 합치므로 읽기-쓰기 창이 없다.
@@ -848,10 +834,10 @@ impl CategoryMapping {
             return Ok(());
         }
         let patch_json = json_string(&Value::Object(patch));
-        self.tx(|cursor| {
-            cursor
-                .execute("UPDATE classify_proposal_status SET payload = JSON_MERGE_PATCH(payload, %s), updated_at = NOW(3) WHERE content_type = %s", &[patch_json.as_str().into(), content_type.into()])
+        self.tx(|conn| {
+            conn.execute("UPDATE classify_proposal_status SET payload = JSON_MERGE_PATCH(payload, ?), updated_at = NOW(3) WHERE content_type = ?", &[patch_json.as_str().into(), content_type.into()])
         })
+        .map(drop)
     }
 
     /// 이미 도는 작업이 없을 때만 새 제안 작업을 시작 상태로 만든다. `(시작했는가, 현재 상태)`.
@@ -892,15 +878,15 @@ impl CategoryMapping {
     /// 같은 트랜잭션에서 `INSERT IGNORE` 직후 `SELECT ... FOR UPDATE`를 하면 두 프로세스가 공유 잠금을 쥔 채 배타 잠금으로 올리려다 InnoDB 데드락이 난다.
     fn ensure_classify_proposal_status_row(&self, content_type: &str) -> Result<(), DbError> {
         let initial = json_string(&serde_json::json!({"status": "idle", "content_type": content_type}));
-        self.tx(|cursor| cursor.execute("INSERT IGNORE INTO classify_proposal_status (content_type, status, payload) VALUES (%s, 'idle', %s)", &[content_type.into(), initial.as_str().into()]))
+        self.tx(|conn| conn.execute("INSERT IGNORE INTO classify_proposal_status (content_type, status, payload) VALUES (?, 'idle', ?)", &[content_type.into(), initial.as_str().into()])).map(drop)
     }
 
     fn try_transition_classify_proposal(&self, next_status: impl FnOnce(&str) -> Option<Value>, content_type: &str, stale_seconds: i64, merge_into_current: bool) -> Result<(bool, Value), DbError> {
         self.ensure_classify_proposal_status_row(content_type)?;
-        self.run(|conn, cursor| {
+        self.run(|conn| {
             let row = Self::read_classify_proposal_status_row(
-                cursor,
-                "SELECT status, payload, TIMESTAMPDIFF(SECOND, updated_at, NOW(3)) AS age_seconds FROM classify_proposal_status WHERE content_type = %s FOR UPDATE",
+                conn,
+                "SELECT status, payload, TIMESTAMPDIFF(SECOND, updated_at, NOW(3)) AS age_seconds FROM classify_proposal_status WHERE content_type = ? FOR UPDATE",
                 content_type,
             )?;
             let (status, payload, age) = row.unwrap_or_else(|| ("idle".to_string(), Value::Null, 0));
@@ -923,8 +909,8 @@ impl CategoryMapping {
             next.insert("content_type".into(), content_type.into());
             let next_status_column = next.get("status").and_then(Value::as_str).unwrap_or("idle").to_string();
             let next_json = json_string(&Value::Object(next.clone()));
-            cursor.execute(
-                "UPDATE classify_proposal_status SET status = %s, payload = %s, updated_at = NOW(3) WHERE content_type = %s",
+            conn.execute(
+                "UPDATE classify_proposal_status SET status = ?, payload = ?, updated_at = NOW(3) WHERE content_type = ?",
                 &[next_status_column.as_str().into(), next_json.as_str().into(), content_type.into()],
             )?;
             conn.commit()?;

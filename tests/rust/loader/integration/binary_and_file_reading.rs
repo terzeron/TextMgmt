@@ -16,9 +16,9 @@
 //!   `PdftotextHooks { which: Fn() -> Option<PathBuf>, run: Fn(&[String]) -> Option<(i32, Vec<u8>)>, path_cache: OnceLock }`. 구 `Pdftotext`/`PdftotextEnv`를 대체한다.
 //! - `doc_reader::epub::{read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using}` zip 직접 추출 경로
 //! - `doc_reader::office::find_libreoffice_with(which, exists)` PATH 조회와 파일 존재 확인 바꿔치기 자리
-//! - `loader::batch_loader::get_file_list(path, recursive, num_files: Option<usize>) -> Vec<PathBuf>`, `loader::batch_loader::read_files(cfg, path, runner, stat) -> HashMap<i64, Value>` 원본의 `Loader.get_file_list` / `Loader.read_files`
+//! - `loader::batch_loader::get_file_list(path, recursive, num_files: Option<usize>) -> Vec<PathBuf>`, `loader::batch_loader::read_files(cfg, path, runner, stat) -> HashMap<i64, Value>`
 //! - `file_record::record_builder::{ReadHooks, read_file_with_hooks(cfg, path, .., &ReadHooks)}`
-//!   `ReadHooks { fast_page_count (_fast_pdf_page_count 대체), fallback_page_count (lopdf 쪽 수), inspect (_zip_container_type 대체, 구 detect_file_type_with) }`
+//!   `ReadHooks { fast_page_count, fallback_page_count (lopdf 쪽 수), inspect }`
 //! - `stat::Stat::{pdf_stage_count, pdf_stage_total_time, pdf_stage_outcome_count}` 단계별 통계 조회
 
 #![allow(clippy::type_complexity)]
@@ -245,7 +245,7 @@ fn read_text(path: &Path) -> TextRead {
     read_from_text(path).unwrap_or_default()
 }
 
-/// `Loader.read_file(path, skip_text=..., path_prefix=...)`의 결과. 원본의 `{inode: doc}` 중 첫 항목을 돌려준다.
+/// `read_file` 결과 중 첫 항목을 돌려준다.
 fn read_doc(cfg: &Config, path: &Path, skip_text: bool, prefix: Option<&Path>) -> Option<(i64, Value)> {
     read_file(cfg, path, None, skip_text, prefix, &InProcess, &Stat::new()).item
 }
@@ -967,7 +967,7 @@ mod test_xref_stream_find_entry {
 }
 // ---- TestReadFromPdf ------------------------------------------------------------------------
 
-/// 원본의 `shutil.which` / `subprocess.run` 바꿔치기를 대신하는 pdftotext 실행 환경. `PdftotextHooks`의 두 훅으로 바꿔 끼운다.
+/// pdftotext 실행 환경 대역. `PdftotextHooks`의 두 훅으로 바꿔 끼운다.
 struct FakeEnv {
     which_result: Option<PathBuf>,
     stdout: Vec<u8>,
@@ -1353,7 +1353,7 @@ mod test_reencode_text_file_to_utf8 {
         let backup = d.path().join("backup");
 
         let detect = |_: &[u8]| -> Option<Enc> { None };
-        // 백업 디렉터리에 쓰는 바이트를 5바이트로 잘라 쓴다(원본의 `Path.write_bytes` 바꿔치기).
+        // 백업 디렉터리에 쓰는 바이트를 5바이트로 잘라 쓴다.
         let truncating_write = |dest: &Path, data: &[u8]| -> io::Result<()> { fs::write(dest, &data[..data.len().min(5)]) };
         let hooks = TextHooks { detect: Some(&detect), write_backup: Some(&truncating_write), ..Default::default() };
         let r = reencode_text_file_to_utf8_with(&f, false, Some(&backup), Path::new("novel.txt"), &hooks);
@@ -1394,7 +1394,7 @@ mod test_reencode_text_file_to_utf8 {
         write(&f, &raw);
 
         let detect = |_: &[u8]| -> Option<Enc> { None };
-        // 1회차는 원본 읽기, 2회차(저장 후 재읽기)에서만 내용 뒤에 유효한 UTF-8을 덧붙인다(원본의 `Path.read_bytes` 바꿔치기).
+        // 1회차는 원본 읽기, 2회차(저장 후 재읽기)에서만 내용 뒤에 유효한 UTF-8을 덧붙인다.
         let calls = AtomicUsize::new(0);
         let flaky_read_bytes = |path: &Path| -> io::Result<Vec<u8>> {
             let mut data = fs::read(path)?;
@@ -2077,10 +2077,6 @@ mod test_pdf_structure_repair {
     }
 }
 
-// ---- TestIsbnPdfTimeout ---------------------------------------------------------------------
-//
-// 원본 `test_isbn_pdf_extraction_has_time_limit` 1개는 utils.isbn 단위 테스트(PDF_ISBN_TIMEOUT, 쪽 읽기 대역)라
-// tests/rust/isbn/ 에 대응 범위가 있어 옮기지 않았다.
 // ---- TestReadFromRtf ------------------------------------------------------------------------
 
 /// `Loader.read_from_rtf(path)`: 읽거나 해석하지 못하면 빈 결과다. 원본의 예외 처리와 같다.
@@ -2266,7 +2262,7 @@ mod test_read_from_epub_full {
 
     #[test]
     fn test_read_epub_exception_zip_fallback() {
-        // Lines 161-176: epub read_epub fails, fallback to zip extraction
+        // epub read_epub fails, fallback to zip extraction
         let d = tempfile::tempdir().unwrap();
         let epub = d.path().join("bad_epub.epub");
         // mimetype이 없으면 패키지 경로가 실패해 zip 대체 경로로 간다
@@ -2296,7 +2292,7 @@ mod test_read_from_doc_hwp {
         let d = tempfile::tempdir().unwrap();
         let doc_file = d.path().join("test.doc");
         write(&doc_file, "doc content");
-        // 원본의 `_convert_with_libreoffice` 바꿔치기 대신 가짜 LibreOffice 실행 파일을 쓴다.
+        // 가짜 LibreOffice 실행 파일을 쓴다.
         let binary = fake_libreoffice(d.path(), Some("converted text\nline2"));
         let (summary, line_count, _errors) = read_from_doc(&doc_file, &binary);
         assert!(summary.contains("converted"), "{summary}");
@@ -2407,7 +2403,7 @@ mod test_read_file_branches {
 
     #[test]
     fn test_read_pdf_skip_text() {
-        // Lines 703-713: skip_text with PDF (fast page count)
+        // skip_text with PDF (fast page count)
         let d = tempfile::tempdir().unwrap();
         let cfg = config_with_book(d.path());
         let pdf = d.path().join("book.pdf");
@@ -2422,7 +2418,7 @@ mod test_read_file_branches {
 
     #[test]
     fn test_read_pdf_skip_text_fallback() {
-        // Lines 705-712: skip_text PDF fast count fails, lopdf fallback
+        // skip_text PDF fast count fails, lopdf fallback
         let d = tempfile::tempdir().unwrap();
         let cfg = config_with_book(d.path());
         let pdf = d.path().join("book.pdf");
@@ -2522,7 +2518,7 @@ mod test_find_libreoffice {
     }
 }
 
-/// 원본의 `_parse_one_xref_stream` / `_xref_stream_find_entry` / `_read_from_obj_stream` 바꿔치기. `FastCountHooks`의 훅으로 끼운다.
+/// xref 스트림 읽기 대역. `FastCountHooks`의 훅으로 끼운다.
 struct FakeXref {
     parsed: Option<XrefStream>,
     /// 객체 번호별 (type, offset, gen)
@@ -2646,7 +2642,7 @@ mod test_read_from_epub_edge_cases {
 
     #[test]
     fn test_epub_chapter_read_exception() {
-        // Lines 118-119: chapter read raises exception
+        // chapter read raises exception
         let opf = r#"<?xml version="1.0"?>
 <package xmlns="http://www.idpf.org/2007/opf">
   <metadata/>
@@ -2685,7 +2681,7 @@ mod test_read_from_pdf_edge_cases {
 
     #[test]
     fn test_pdf_text_exceeds_limit() {
-        // Line 198: break when text exceeds TEXT_SIZE
+        // break when text exceeds TEXT_SIZE
         let d = tempfile::tempdir().unwrap();
         let pdf = d.path().join("big.pdf");
         write(&pdf, minimal_pdf(3));
@@ -2704,7 +2700,7 @@ mod test_read_from_hwp_edge_cases {
 
     #[test]
     fn test_hwp_conversion_exception() {
-        // Lines 345-346: LibreOffice conversion raises
+        // LibreOffice conversion raises
         let d = tempfile::tempdir().unwrap();
         let hwp = d.path().join("test.hwp");
         write(&hwp, b"fake hwp");
@@ -2721,21 +2717,21 @@ mod test_find_xref_offset_extra {
 
     #[test]
     fn test_leading_lines_before_xref() {
-        // Line 365: lines before 'xref' keyword
+        // lines before 'xref' keyword
         let xref_data = b"some garbage\nmore garbage\nxref\n0 2\n0000000000 65535 f \n0000000100 00000 n \ntrailer\n";
         assert_eq!(find_xref_offset(xref_data, 1), Some(100));
     }
 
     #[test]
     fn test_empty_lines_in_xref() {
-        // Lines 371-372: empty lines in xref block
+        // empty lines in xref block
         let xref_data = b"xref\n\n0 2\n0000000000 65535 f \n0000000200 00000 n \ntrailer\n";
         assert_eq!(find_xref_offset(xref_data, 1), Some(200));
     }
 
     #[test]
     fn test_malformed_line_in_xref() {
-        // Line 388: non-subsection, non-trailer line
+        // non-subsection, non-trailer line
         let xref_data = b"xref\ngarbage_line\n0 2\n0000000000 65535 f \n0000000300 00000 n \ntrailer\n";
         assert_eq!(find_xref_offset(xref_data, 1), Some(300));
     }

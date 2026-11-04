@@ -421,7 +421,7 @@ fn test_auth_requires_jwt_secret_os_environ() {
     assert!(matches!(result, Err(FatalConfigError(_))), "{result:?}");
 }
 
-/// determine_role 이 "admin"/"viewer" 이외 역할을 반환할 때 require_auth 가 403 을 올린다 (line 101).
+/// determine_role 이 "admin"/"viewer" 이외 역할을 반환할 때 require_auth 가 403 을 올린다.
 #[tokio::test]
 async fn test_require_auth_non_standard_role_raises_403() {
     let _env = fixture();

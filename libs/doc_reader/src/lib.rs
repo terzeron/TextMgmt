@@ -12,5 +12,5 @@ pub mod rtf;
 pub mod text;
 pub mod text_normalizer;
 
-/// 요약 길이(문자 수). 원본 `Loader.TEXT_SIZE`.
+/// 요약 길이(문자 수).
 pub const TEXT_SIZE: usize = 4096;

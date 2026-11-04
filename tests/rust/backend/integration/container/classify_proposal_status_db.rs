@@ -48,7 +48,7 @@ fn cm() -> Db {
 /// DB 서버의 시계로 민다. 로컬 시간을 쓰면 앱(KST)과 DB(UTC)의 시간대 차이가 섞여 의도와 다른 나이가 된다.
 fn age_the_heartbeat(mapping: &CategoryMapping, seconds: i64, content_type: &str) {
     let mut conn = mapping.get_connection().unwrap();
-    conn.execute("UPDATE classify_proposal_status SET updated_at = DATE_SUB(NOW(3), INTERVAL %s SECOND) WHERE content_type = %s", &[DbValue::from(seconds), DbValue::from(content_type)]).unwrap();
+    conn.execute("UPDATE classify_proposal_status SET updated_at = DATE_SUB(NOW(3), INTERVAL ? SECOND) WHERE content_type = ?", &[DbValue::from(seconds), DbValue::from(content_type)]).unwrap();
     conn.commit().unwrap();
 }
 

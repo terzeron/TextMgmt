@@ -2729,7 +2729,7 @@ fn test_delete_book_es_failure() {
 }
 // ---- coverage: book_manager additional uncovered lines ----
 
-/// Lines 433-436: get_book_content returns FileResponse when file exists
+/// get_book_content returns FileResponse when file exists
 #[test]
 fn test_get_book_content_existing_file() {
     let tmp = TempDir::new().unwrap();
@@ -2743,7 +2743,7 @@ fn test_get_book_content_existing_file() {
     assert!(matches!(result, BookContent::File(_)), "{result:?}");
 }
 
-/// Lines 458-459: PDF preview cache hit
+/// PDF preview cache hit
 #[test]
 fn test_get_book_preview_pdf_cache_hit() {
     let tmp = TempDir::new().unwrap();
@@ -2763,7 +2763,7 @@ fn test_get_book_preview_pdf_cache_hit() {
     assert_eq!(resp.status_code, 200);
 }
 
-/// Lines 476-478: PDF preview generation exception
+/// PDF preview generation exception
 #[test]
 fn test_get_book_preview_pdf_exception() {
     let tmp = TempDir::new().unwrap();
@@ -2781,7 +2781,7 @@ fn test_get_book_preview_pdf_exception() {
     assert_eq!(String::from_utf8(resp.body).unwrap(), "PDF preview failed");
 }
 
-/// Lines 805-806: OSError during path resolution
+/// OSError during path resolution
 #[test]
 fn test_update_book_os_error_on_resolve() {
     let tmp = TempDir::new().unwrap();
@@ -2830,7 +2830,7 @@ fn test_update_book_reindex_exception_rollback_failure() {
     assert!(msg.as_deref().unwrap().contains("롤백"));
 }
 
-/// Lines 875-876: PermissionError in count_files helper
+/// PermissionError in count_files helper
 #[test]
 fn test_category_mismatch_count_files_permission_error() {
     let tmp = TempDir::new().unwrap();
@@ -2857,7 +2857,7 @@ fn test_category_mismatch_count_files_permission_error() {
     assert!(result.is_object());
 }
 
-/// Lines 899-900: PermissionError during L2 scandir
+/// PermissionError during L2 scandir
 #[test]
 fn test_category_mismatch_l2_scandir_error() {
     let tmp = TempDir::new().unwrap();
@@ -2885,7 +2885,7 @@ fn test_category_mismatch_l2_scandir_error() {
     assert!(result.is_object());
 }
 
-/// Lines 910-911: PermissionError scanning base directory
+/// PermissionError scanning base directory
 #[test]
 fn test_category_mismatch_top_level_error() {
     let tmp = TempDir::new().unwrap();
@@ -2901,7 +2901,7 @@ fn test_category_mismatch_top_level_error() {
     assert_eq!(result["mismatches"], json!([]));
 }
 
-/// Lines 970-971: ES-only file detection
+/// ES-only file detection
 #[test]
 fn test_category_mismatch_details_es_only() {
     let tmp = TempDir::new().unwrap();
@@ -2933,7 +2933,7 @@ fn test_category_mismatch_details_normalizes_absolute_es_paths() {
     assert_eq!(details["fs_only"], json!([]));
 }
 
-/// Lines 991-992: OSError during stat for duplicates
+/// OSError during stat for duplicates
 #[test]
 fn test_category_mismatch_details_stat_error() {
     let tmp = TempDir::new().unwrap();
@@ -2951,7 +2951,7 @@ fn test_category_mismatch_details_stat_error() {
     assert!(!details["duplicates"].as_array().unwrap().is_empty());
 }
 
-/// Lines 1024-1025: IOError during file deletion
+/// IOError during file deletion
 #[test]
 fn test_delete_file_io_error() {
     let tmp = TempDir::new().unwrap();
@@ -2970,7 +2970,7 @@ fn test_delete_file_io_error() {
     assert!(msg.as_deref().unwrap().contains("파일 삭제 실패"));
 }
 
-/// Lines 1029-1073: reload_category subprocess flow
+/// reload_category subprocess flow
 #[test]
 fn test_reload_category_full_flow() {
     let tmp = TempDir::new().unwrap();
@@ -3259,7 +3259,7 @@ fn test_reload_category_root_reloads_top_level_files_only() {
     });
 }
 
-/// Line 1083: get_pdf_pages file not found
+/// get_pdf_pages file not found
 #[test]
 fn test_get_pdf_pages_file_not_found() {
     let tmp = TempDir::new().unwrap();
@@ -3270,7 +3270,7 @@ fn test_get_pdf_pages_file_not_found() {
     assert_eq!(resp.status_code, 404);
 }
 
-/// Lines 1123-1125: PDF pages extraction exception
+/// PDF pages extraction exception
 #[test]
 fn test_get_pdf_pages_exception() {
     let tmp = TempDir::new().unwrap();
@@ -3289,7 +3289,7 @@ fn test_get_pdf_pages_exception() {
     assert_eq!(String::from_utf8(resp.body).unwrap(), "PDF pages extraction failed (ReadError): boom");
 }
 
-/// Lines 1147, 1149: rename_category path traversal
+/// rename_category path traversal
 #[test]
 fn test_rename_category_path_traversal() {
     let tmp = TempDir::new().unwrap();
@@ -3303,7 +3303,7 @@ fn test_rename_category_path_traversal() {
     assert!(err.is_some());
 }
 
-/// Lines 1173-1174: OSError during directory rename
+/// OSError during directory rename
 #[test]
 fn test_rename_category_os_error_rename() {
     let tmp = TempDir::new().unwrap();
@@ -3321,7 +3321,7 @@ fn test_rename_category_os_error_rename() {
     assert!(err.as_deref().unwrap().contains("이름 변경 실패"));
 }
 
-/// Lines 1187-1189: ES exception + FS rollback failure
+/// ES exception + FS rollback failure
 #[test]
 fn test_rename_category_es_failure_rollback_fail() {
     let tmp = TempDir::new().unwrap();
@@ -3340,7 +3340,7 @@ fn test_rename_category_es_failure_rollback_fail() {
     assert!(err.as_deref().unwrap().contains("수동 복구 필요"));
 }
 
-/// Lines 1198-1200: partial ES failure + rollback failure
+/// partial ES failure + rollback failure
 #[test]
 fn test_rename_category_partial_es_rollback_fail() {
     let tmp = TempDir::new().unwrap();
@@ -3358,7 +3358,7 @@ fn test_rename_category_partial_es_rollback_fail() {
     assert!(err.as_deref().unwrap().contains("수동 복구 필요"));
 }
 
-/// Line 1222: delete_category path traversal
+/// delete_category path traversal
 #[test]
 fn test_delete_category_path_traversal() {
     let tmp = TempDir::new().unwrap();
@@ -3371,7 +3371,7 @@ fn test_delete_category_path_traversal() {
     assert!(err.is_some());
 }
 
-/// Lines 1232-1233: ES delete exception
+/// ES delete exception
 #[test]
 fn test_delete_category_es_exception() {
     let tmp = TempDir::new().unwrap();
@@ -3384,7 +3384,7 @@ fn test_delete_category_es_exception() {
     assert!(err.as_deref().unwrap().contains("ES 삭제 실패"));
 }
 
-/// Line 1265: delete_book returns warning when file already deleted
+/// delete_book returns warning when file already deleted
 #[test]
 fn test_delete_book_warning_message() {
     let tmp = TempDir::new().unwrap();
@@ -3398,7 +3398,7 @@ fn test_delete_book_warning_message() {
 
 // ---- coverage: validate_preview_epub edge cases ----
 
-/// Line 67: mimetype content is not application/epub+zip
+/// mimetype content is not application/epub+zip
 #[test]
 fn test_validate_epub_invalid_mimetype() {
     let tmp = TempDir::new().unwrap();
@@ -3409,7 +3409,7 @@ fn test_validate_epub_invalid_mimetype() {
     assert!(err.as_deref().unwrap().contains("invalid mimetype"));
 }
 
-/// Line 72: OPF file not found
+/// OPF file not found
 #[test]
 fn test_validate_epub_no_opf() {
     let tmp = TempDir::new().unwrap();
@@ -3420,7 +3420,7 @@ fn test_validate_epub_no_opf() {
     assert!(err.as_deref().unwrap().contains("OPF file not found"));
 }
 
-/// Lines 79-80: OPF parse error (severely malformed XML)
+/// OPF parse error (severely malformed XML)
 #[test]
 fn test_validate_epub_opf_parse_error() {
     let tmp = TempDir::new().unwrap();
@@ -3432,7 +3432,7 @@ fn test_validate_epub_opf_parse_error() {
     let _ = valid;
 }
 
-/// Lines 103-105: spine idref not in manifest -> removal + rewrite
+/// spine idref not in manifest -> removal + rewrite
 #[test]
 fn test_validate_epub_spine_idref_not_in_manifest() {
     let opf_ns = "http://www.idpf.org/2007/opf";
@@ -3456,7 +3456,7 @@ fn test_validate_epub_spine_idref_not_in_manifest() {
     assert!(err.is_none());
 }
 
-/// Lines 113-121: spine item's file missing from ZIP
+/// spine item's file missing from ZIP
 #[test]
 fn test_validate_epub_spine_file_missing_from_zip() {
     let opf_ns = "http://www.idpf.org/2007/opf";
@@ -3482,7 +3482,7 @@ fn test_validate_epub_spine_file_missing_from_zip() {
     assert!(err.is_none());
 }
 
-/// Line 126: all spine chapters removed -> no valid chapters
+/// all spine chapters removed -> no valid chapters
 #[test]
 fn test_validate_epub_no_valid_spine_chapters() {
     let opf_ns = "http://www.idpf.org/2007/opf";
@@ -3506,7 +3506,7 @@ fn test_validate_epub_no_valid_spine_chapters() {
     assert!(err.as_deref().unwrap().contains("no valid spine chapters"));
 }
 
-/// Lines 132-134: toc id not in manifest
+/// toc id not in manifest
 #[test]
 fn test_validate_epub_toc_not_in_manifest() {
     let opf_ns = "http://www.idpf.org/2007/opf";
@@ -3528,7 +3528,7 @@ fn test_validate_epub_toc_not_in_manifest() {
     assert!(valid);
 }
 
-/// Lines 139-141: toc NCX in manifest but missing from ZIP
+/// toc NCX in manifest but missing from ZIP
 #[test]
 fn test_validate_epub_toc_ncx_missing_from_zip() {
     let opf_ns = "http://www.idpf.org/2007/opf";
@@ -3552,7 +3552,7 @@ fn test_validate_epub_toc_ncx_missing_from_zip() {
     assert!(valid);
 }
 
-/// Lines 159-160: corrupted ZIP
+/// corrupted ZIP
 #[test]
 fn test_validate_epub_corrupted_zip() {
     let tmp = TempDir::new().unwrap();
@@ -3563,7 +3563,7 @@ fn test_validate_epub_corrupted_zip() {
     assert!(err.as_deref().unwrap().contains("corrupted ZIP"));
 }
 
-/// Lines 161-162: general exception during validation
+/// general exception during validation
 #[test]
 fn test_validate_epub_general_exception() {
     let tmp = TempDir::new().unwrap();
@@ -3580,7 +3580,7 @@ fn test_validate_epub_general_exception() {
 
 // ---- coverage: evict_old_cache exception paths ----
 
-/// Lines 176-177: per-file exception during eviction
+/// per-file exception during eviction
 #[test]
 fn test_evict_old_cache_file_exception() {
     let tmp = TempDir::new().unwrap();
@@ -3597,7 +3597,7 @@ fn test_evict_old_cache_file_exception() {
     assert!(old_file.exists());
 }
 
-/// Lines 178-179: iterdir exception
+/// iterdir exception
 #[test]
 fn test_evict_old_cache_iterdir_exception() {
     let tmp = TempDir::new().unwrap();
@@ -3609,7 +3609,7 @@ fn test_evict_old_cache_iterdir_exception() {
 
 // ---- coverage: get_epub_total_chapters edge cases ----
 
-/// Line 241: spine not found in OPF
+/// spine not found in OPF
 #[test]
 fn test_get_epub_total_chapters_no_spine() {
     let opf_ns = "http://www.idpf.org/2007/opf";
@@ -3627,7 +3627,7 @@ fn test_get_epub_total_chapters_no_spine() {
     assert_eq!(BookManager::get_epub_total_chapters(&epub), 0);
 }
 
-/// Lines 243-245: exception during chapter counting
+/// exception during chapter counting
 #[test]
 fn test_get_epub_total_chapters_exception() {
     let tmp = TempDir::new().unwrap();
@@ -3638,7 +3638,7 @@ fn test_get_epub_total_chapters_exception() {
 
 // ---- coverage: validate_epub (epubcheck) edge cases ----
 
-/// Lines 339-340: os.unlink in finally fails
+/// os.unlink in finally fails
 #[test]
 fn test_validate_epub_epubcheck_json_unlink_oserror() {
     let tmp = TempDir::new().unwrap();
@@ -3679,7 +3679,7 @@ fn test_validate_epub_epubcheck_json_unlink_oserror() {
     assert!(!unlink_calls.lock().unwrap().is_empty());
 }
 
-/// Lines 345-347, 353, 361: messages with empty locations + publication metadata
+/// messages with empty locations + publication metadata
 #[test]
 fn test_validate_epub_message_empty_locations() {
     let tmp = TempDir::new().unwrap();
@@ -3712,7 +3712,7 @@ fn test_validate_epub_message_empty_locations() {
 
 // ---- coverage: validate_pdf edge cases ----
 
-/// Line 372: book not found in ES
+/// book not found in ES
 #[test]
 fn test_validate_pdf_not_found() {
     let tmp = TempDir::new().unwrap();

@@ -11,7 +11,7 @@ pub mod store_clients;
 
 use std::sync::LazyLock;
 
-use htmlkit::url_parser::urljoin;
+use htmlkit::url_parser::{quote, urljoin};
 use regex::Regex;
 use scraper::{ElementRef, Html, Node, Selector};
 
@@ -59,19 +59,6 @@ fn text_strip(el: ElementRef) -> String {
 
 fn attr<'a>(el: &ElementRef<'a>, name: &str) -> Option<&'a str> {
     el.value().attr(name)
-}
-
-/// 퍼센트 인코딩. 영문·숫자·`_.-~/`만 그대로 둔다.
-fn quote(value: &str) -> String {
-    let mut out = String::new();
-    for b in value.bytes() {
-        if b.is_ascii_alphanumeric() || b"_.-~/".contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
 }
 
 /// 제목에서 부제 구분자(` - `, `－`, `-`, `：`) 왼쪽만 남긴다.

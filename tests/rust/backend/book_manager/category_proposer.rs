@@ -166,7 +166,7 @@ fn manager_propose(manager: &BookManager, category: &str, mappings: &Mappings) -
 
 #[test]
 fn test_classification_haystack_relative_to_error() {
-    // Lines 1275-1276: CoverSourceError in classification_haystack
+    // CoverSourceError in classification_haystack
     let tmp = tmp_dir();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
     let outside_file = Path::new("/tmp/outside/nested/book.epub");
@@ -238,7 +238,6 @@ fn test_move_classified_file_same_size_different_content_keeps_both() {
 
 #[test]
 fn test_move_classified_file_edge_cases() {
-    // Lines 1379-1380, 1385-1387, 1393-1394, 1398, 1420-1421, 1440-1441, 1450, 1473, 1490-1491, 1494-1499, 1503
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let manager = make_manager(tmp_path, &FakeEsManager::new());
@@ -539,7 +538,6 @@ fn test_match_category_by_keywords_ignores_case() {
 
 #[test]
 fn test_move_classified_file_target_traversal_and_restore_err() {
-    // Lines 1385, 1498-1499
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();
@@ -548,11 +546,11 @@ fn test_move_classified_file_target_traversal_and_restore_err() {
     let f = tmp_path.join("cat").join("a.txt");
     fs::write(&f, "data").unwrap();
 
-    // 1. Line 1385: target_path not relative to root
+    // 1. target_path not relative to root
     let (_res1, err1) = split(block_on(manager.move_classified_file(&f, "../outside", "txt", MoveOpts::default())));
     assert_eq!(err1.as_deref(), Some("잘못된 대상 경로입니다"));
 
-    // 2. Lines 1498-1499: ES reindex fails, rollback add_book raises exception
+    // 2. ES reindex fails, rollback add_book raises exception
     let doc = make_doc("cat/a.txt", ".txt");
     es.set_doc(Some(doc));
     es.fail("insert", "insert boom");

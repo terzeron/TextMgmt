@@ -191,6 +191,11 @@ pub fn quote(text: &str) -> String {
     percent_encode(text, |b| unreserved(b) || b == b'/', false)
 }
 
+/// 경로 조각 하나의 퍼센트 인코딩. `quote`와 같고 `/`도 인코딩한다.
+pub fn quote_component(text: &str) -> String {
+    percent_encode(text, unreserved, false)
+}
+
 /// 질의 문자열. 키와 값을 퍼센트 인코딩하고 공백은 `+`로 쓴다.
 pub fn urlencode(pairs: &[(&str, &str)]) -> String {
     pairs.iter().map(|(k, v)| format!("{}={}", percent_encode(k, unreserved, true), percent_encode(v, unreserved, true))).collect::<Vec<_>>().join("&")

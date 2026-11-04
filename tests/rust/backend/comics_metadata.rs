@@ -24,7 +24,7 @@ fn test_init_and_dict() {
 fn test_json_and_str() {
     common::setup_env();
     let c = Comics::new(2, &info(), 0.0);
-    assert!(c.json().contains("category"), "{}", c.json());
+    assert!(c.dict().get("category").is_some(), "{}", c.dict());
     assert!(c.to_string().contains("title"), "{c}");
 }
 

@@ -308,7 +308,7 @@ impl RidibooksBookstore {
                 }
             };
             let paths: Vec<String> = [pair("parent_category_name", "category_name"), pair("parent_category_name2", "category_name2")].into_iter().flatten().collect();
-            let detail_url = if truthy(book_id) { format!("{RIDI_BASE_URL}/books/{}", json_text(book_id)) } else { String::new() };
+            let detail_url = if has_content(book_id) { format!("{RIDI_BASE_URL}/books/{}", json_text(book_id)) } else { String::new() };
             if !title.is_empty() && !detail_url.is_empty() {
                 results.push(SearchRow { title, author, category: paths.join(" || "), detail_url, search_url: search_url.clone(), isbn: String::new() });
             }
@@ -329,7 +329,7 @@ impl Bookstore for RidibooksBookstore {
     }
 
     fn build_search_url(&self, keyword: &str) -> String {
-        format!("{RIDI_BASE_URL}/search?q={}&adult_exclude=n", quote(keyword, "/"))
+        format!("{RIDI_BASE_URL}/search?q={}&adult_exclude=n", quote(keyword))
     }
 
     /// RIDI는 `search_by_keyword`를 대체하므로 쓰이지 않는다.
@@ -441,7 +441,7 @@ impl Bookstore for NaverShoppingBookstore {
     default_keyword_search!();
 
     fn build_search_url(&self, keyword: &str) -> String {
-        format!("{NAVER_SHOPPING_BASE_URL}/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&query={}&sort=REL", quote(keyword, "/"))
+        format!("{NAVER_SHOPPING_BASE_URL}/book/search?bookTabType=ALL&pageIndex=1&pageSize=40&query={}&sort=REL", quote(keyword))
     }
 
     fn extract_search_links(&self, markup: &str) -> Vec<String> {
@@ -477,7 +477,7 @@ impl Bookstore for NaverShoppingBookstore {
                 Some(Value::Array(items)) => {
                     for item in items {
                         let id = item.get("id");
-                        if let Some(id) = id.filter(|_| truthy(id))
+                        if let Some(id) = id.filter(|_| has_content(id))
                             && !seen.contains(&id)
                         {
                             seen.push(id);

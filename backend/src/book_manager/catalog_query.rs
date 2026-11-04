@@ -2,13 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use std::sync::Arc;
 
 use super::{AddBookError, BookContent, BookManager, MAX_CATEGORY_PAGE_SIZE, MAX_LATEST_BOOK_COUNT};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
-use crate::es_manager::{Docs, EsManagerApi, Hit, PagedHits, decode_category_cursor, encode_category_cursor};
+use crate::es_manager::{Docs, EsManagerApi, Hit, KeywordSearchArgs, PagedHits, SimilarDocsArgs, decode_category_cursor, encode_category_cursor};
 
 /// 없거나 빈 객체면 문서가 없는 것이다.
 fn non_empty(doc: Option<Value>) -> Option<Value> {
@@ -111,26 +111,36 @@ impl BookManager {
 
     pub async fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, exclude_categories: Option<&[String]>, category: Option<&str>) -> Result<BookPage, String> {
         log::debug!("# search_by_keyword_paged(keyword='{keyword}', size={size}, offset={offset}, exclude_categories={exclude_categories:?}, category={category:?})");
-        let args = json!({"keyword": keyword, "size": size, "offset": offset, "exclude_categories": exclude_categories, "category": category.filter(|c| !c.is_empty())});
+        let args = KeywordSearchArgs {
+            keyword: keyword.to_string(),
+            size,
+            offset,
+            exclude_categories: exclude_categories.map(<[String]>::to_vec),
+            category: category.filter(|c| !c.is_empty()).map(str::to_string),
+        };
         let (hits, total) = self.blocking(move |es| es.search_by_keyword_paged(&args)).await.map_err(|e| e.to_string())?;
         Ok(BookPage { books: self.books_from_hits(&hits, false)?, total, next_cursor: None })
     }
 
     /// 유사 문서 검색 인자. 요약은 앞 3500자만 쓴다.
-    fn similar_args(book_id: i64, doc: &Value) -> Value {
+    fn similar_args(book_id: i64, doc: &Value) -> SimilarDocsArgs {
         let text = |key: &str| doc.get(key).and_then(Value::as_str).unwrap_or("").to_string();
-        let summary: String = text("summary").chars().take(SIMILAR_SUMMARY_CHARS).collect();
-        json!({
-            "category": text("category"), "title": text("title"), "author": text("author"), "file_type": text("file_type"),
-            "file_size": doc.get("file_size").and_then(Value::as_i64).unwrap_or(0), "summary": summary, "exclude_id": book_id,
-        })
+        SimilarDocsArgs {
+            category: text("category"),
+            title: text("title"),
+            author: text("author"),
+            file_type: text("file_type"),
+            file_size: doc.get("file_size").and_then(Value::as_i64).unwrap_or(0),
+            summary: text("summary").chars().take(SIMILAR_SUMMARY_CHARS).collect(),
+            exclude_id: Some(book_id),
+            ..SimilarDocsArgs::default()
+        }
     }
 
     pub async fn search_similar_books(&self, book_id: i64, max_result_count: i64) -> Result<Vec<Book>, String> {
         log::debug!("# search_similar_books(book_id={book_id})");
         let doc = self.find_doc_async(book_id).await?.ok_or_else(|| format!("No book found with id '{book_id}'"))?;
-        let mut args = Self::similar_args(book_id, &doc);
-        args["max_result_count"] = json!(max_result_count);
+        let args = SimilarDocsArgs { max_result_count, ..Self::similar_args(book_id, &doc) };
         let hits = self.blocking(move |es| es.search_similar_docs(&args)).await.map_err(|e| e.to_string())?;
         if hits.is_empty() {
             return Err("No similar books found".to_string());
@@ -141,9 +151,7 @@ impl BookManager {
     pub async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> Result<BookPage, String> {
         log::debug!("# search_similar_books_paged(book_id={book_id}, size={size}, offset={offset})");
         let doc = self.find_doc_async(book_id).await?.ok_or_else(|| format!("No book found with id '{book_id}'"))?;
-        let mut args = Self::similar_args(book_id, &doc);
-        args["size"] = json!(size);
-        args["offset"] = json!(offset);
+        let args = SimilarDocsArgs { size, offset, ..Self::similar_args(book_id, &doc) };
         let (hits, total) = self.blocking(move |es| es.search_similar_docs_paged(&args)).await.map_err(|e| e.to_string())?;
         if hits.is_empty() {
             return Err("No similar books found".to_string());

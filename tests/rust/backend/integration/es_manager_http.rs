@@ -16,7 +16,7 @@ mod common;
 #[path = "../../common/tls_server.rs"]
 mod tls_server;
 use crate::common::shared_fixtures::transport;
-use backend::es_manager::{ESManager, EsError, EsTransport, HttpTransport, RealEsConnector};
+use backend::es_manager::{Conflicts, ESManager, EsError, EsRequest, EsTransport, HttpTransport, RealEsConnector};
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -90,9 +90,9 @@ fn serve(responses: Vec<(u16, String)>) -> (String, mpsc::Receiver<Captured>) {
 #[test]
 fn search_becomes_post_search_with_body_fields_and_scroll_query() {
     let (url, rx) = serve(vec![(200, json!({"hits": {"hits": []}}).to_string())]);
-    let kwargs = json!({"index": "books", "query": {"match_all": {}}, "from_": 2, "size": 3, "source": ["title"], "scroll": "10m", "track_scores": true, "sort": [{"file_path": "asc"}]});
+    let body = json!({"query": {"match_all": {}}, "from": 2, "size": 3, "_source": ["title"], "track_scores": true, "sort": [{"file_path": "asc"}]});
 
-    let response = transport(&url).call("search", &kwargs).unwrap();
+    let response = transport(&url).send(&EsRequest::Search { index: Some("books".into()), body, scroll: Some("10m".into()) }).unwrap();
 
     assert_eq!(response, json!({"hits": {"hits": []}}));
     let request = rx.recv().unwrap();
@@ -104,9 +104,9 @@ fn search_becomes_post_search_with_body_fields_and_scroll_query() {
 }
 
 #[test]
-fn search_with_body_kwarg_sends_that_body() {
+fn search_without_scroll_has_no_query_string() {
     let (url, rx) = serve(vec![(200, "{}".to_string())]);
-    transport(&url).call("search", &json!({"index": "books", "body": {"size": 1, "aggs": {"a": {"terms": {"field": "category"}}}}})).unwrap();
+    transport(&url).send(&EsRequest::Search { index: Some("books".into()), body: json!({"size": 1, "aggs": {"a": {"terms": {"field": "category"}}}}), scroll: None }).unwrap();
     let request = rx.recv().unwrap();
     assert_eq!(request.request_line, "POST /books/_search HTTP/1.1");
     assert_eq!(request.json(), json!({"size": 1, "aggs": {"a": {"terms": {"field": "category"}}}}));
@@ -117,7 +117,7 @@ fn bulk_becomes_ndjson_post() {
     let (url, rx) = serve(vec![(200, json!({"errors": false, "items": []}).to_string())]);
     let body = json!([{"index": {"_index": "books", "_id": "1"}}, {"title": "한글 제목"}]);
 
-    transport(&url).call("bulk", &json!({"body": body, "timeout": "60s", "refresh": false})).unwrap();
+    transport(&url).send(&EsRequest::Bulk { lines: body.as_array().unwrap().clone(), timeout: Some("60s".into()), refresh: Some(false) }).unwrap();
 
     let request = rx.recv().unwrap();
     assert_eq!(request.request_line, "POST /_bulk?timeout=60s&refresh=false HTTP/1.1");
@@ -130,8 +130,9 @@ fn msearch_becomes_ndjson_post() {
     let (url, rx) = serve(vec![(200, json!({"responses": []}).to_string()), (200, json!({"responses": []}).to_string())]);
     let searches = json!([{}, {"query": {"match_all": {}}, "size": 1}]);
 
-    transport(&url).call("msearch", &json!({"index": "books", "searches": searches.clone()})).unwrap();
-    transport(&url).call("msearch", &json!({"searches": searches})).unwrap();
+    let searches = searches.as_array().unwrap().clone();
+    transport(&url).send(&EsRequest::MultiSearch { index: Some("books".into()), searches: searches.clone() }).unwrap();
+    transport(&url).send(&EsRequest::MultiSearch { index: None, searches }).unwrap();
 
     let with_index = rx.recv().unwrap();
     assert_eq!(with_index.request_line, "POST /books/_msearch HTTP/1.1");
@@ -145,17 +146,19 @@ fn single_document_and_index_ops_map_to_rest_paths() {
     let (url, rx) = serve(vec![ok(json!({})), ok(json!({})), ok(json!({})), ok(json!({})), ok(json!({})), ok(json!({})), ok(json!({})), ok(json!({})), ok(json!({})), ok(json!({})), ok(json!({}))]);
     let t = transport(&url);
 
-    t.call("get", &json!({"index": "books", "id": "42"})).unwrap();
-    t.call("update", &json!({"index": "books", "id": "42", "body": {"doc": {"title": "t"}}, "refresh": true})).unwrap();
-    t.call("delete", &json!({"index": "books", "id": "42", "refresh": true})).unwrap();
-    t.call("count", &json!({"index": "books", "query": {"term": {"category": "A"}}})).unwrap();
-    t.call("delete_by_query", &json!({"index": "books", "body": {"query": {"ids": {"values": ["1"]}}}, "conflicts": "proceed", "refresh": false})).unwrap();
-    t.call("update_by_query", &json!({"index": "books", "query": {"match_all": {}}, "script": {"source": "ctx.op='noop'"}, "conflicts": "abort", "refresh": true})).unwrap();
-    t.call("indices.refresh", &json!({"index": "books"})).unwrap();
-    t.call("indices.get_mapping", &json!({"index": "books"})).unwrap();
-    t.call("indices.put_mapping", &json!({"index": "books", "properties": {"publisher": {"type": "keyword"}}})).unwrap();
-    t.call("mget", &json!({"docs": [{"_index": "books", "_id": "1"}], "source": ["file_path", "title"]})).unwrap();
-    t.call("scroll", &json!({"scroll_id": "abc", "scroll": "10m"})).unwrap();
+    let books = || Some("books".into());
+    t.send(&EsRequest::Get { index: books(), id: "42".into() }).unwrap();
+    t.send(&EsRequest::Update { index: books(), id: "42".into(), body: json!({"doc": {"title": "t"}}), refresh: Some(true) }).unwrap();
+    t.send(&EsRequest::Delete { index: books(), id: "42".into(), refresh: Some(true) }).unwrap();
+    t.send(&EsRequest::Count { index: books(), body: json!({"query": {"term": {"category": "A"}}}) }).unwrap();
+    t.send(&EsRequest::DeleteByQuery { index: books(), body: json!({"query": {"ids": {"values": ["1"]}}}), conflicts: Some(Conflicts::Proceed), refresh: Some(false) }).unwrap();
+    t.send(&EsRequest::UpdateByQuery { index: books(), body: json!({"query": {"match_all": {}}, "script": {"source": "ctx.op='noop'"}}), conflicts: Some(Conflicts::Abort), refresh: Some(true) })
+        .unwrap();
+    t.send(&EsRequest::RefreshIndex { index: books() }).unwrap();
+    t.send(&EsRequest::GetMapping { index: books() }).unwrap();
+    t.send(&EsRequest::PutMapping { index: books(), properties: json!({"publisher": {"type": "keyword"}}) }).unwrap();
+    t.send(&EsRequest::MultiGet { docs: vec![json!({"_index": "books", "_id": "1"})], source: Some(vec!["file_path".into(), "title".into()]) }).unwrap();
+    t.send(&EsRequest::Scroll { scroll_id: "abc".into(), scroll: "10m".into() }).unwrap();
 
     let lines: Vec<(String, Value)> = (0..11).map(|_| rx.recv().unwrap()).map(|c| (c.request_line.clone(), c.json())).collect();
     let line = |i: usize| lines[i].0.as_str();
@@ -182,7 +185,7 @@ fn single_document_and_index_ops_map_to_rest_paths() {
 #[test]
 fn clear_scroll_is_delete_with_body() {
     let (url, rx) = serve(vec![(200, json!({"succeeded": true}).to_string())]);
-    transport(&url).call("clear_scroll", &json!({"scroll_id": "abc"})).unwrap();
+    transport(&url).send(&EsRequest::ClearScroll { scroll_id: "abc".into() }).unwrap();
     let request = rx.recv().unwrap();
     assert_eq!(request.request_line, "DELETE /_search/scroll HTTP/1.1");
     assert_eq!(request.json(), json!({"scroll_id": "abc"}));
@@ -192,8 +195,8 @@ fn clear_scroll_is_delete_with_body() {
 fn indices_exists_uses_head_and_maps_404_to_false() {
     let (url, rx) = serve(vec![(200, String::new()), (404, String::new())]);
     let t = transport(&url);
-    assert_eq!(t.call("indices.exists", &json!({"index": "books"})).unwrap(), json!(true));
-    assert_eq!(t.call("indices.exists", &json!({"index": "books"})).unwrap(), json!(false));
+    assert_eq!(t.send(&EsRequest::IndexExists { index: Some("books".into()) }).unwrap(), json!(true));
+    assert_eq!(t.send(&EsRequest::IndexExists { index: Some("books".into()) }).unwrap(), json!(false));
     assert_eq!(rx.recv().unwrap().request_line, "HEAD /books HTTP/1.1");
 }
 
@@ -201,11 +204,11 @@ fn indices_exists_uses_head_and_maps_404_to_false() {
 fn error_status_becomes_status_error_with_body() {
     let (url, _rx) = serve(vec![(404, json!({"found": false}).to_string()), (400, json!({"error": {"type": "parsing_exception"}}).to_string())]);
     let t = transport(&url);
-    match t.call("get", &json!({"index": "books", "id": "1"})) {
+    match t.send(&EsRequest::Get { index: Some("books".into()), id: "1".into() }) {
         Err(EsError::Status { status: 404, body }) => assert!(body.contains("found")),
         other => panic!("404를 기대했다: {other:?}"),
     }
-    match t.call("search", &json!({"index": "books", "query": {"bad": {}}})) {
+    match t.send(&EsRequest::Search { index: Some("books".into()), body: json!({"query": {"bad": {}}}), scroll: None }) {
         Err(e @ EsError::Status { status: 400, .. }) => assert!(!e.is_not_found()),
         other => panic!("400을 기대했다: {other:?}"),
     }
@@ -214,14 +217,14 @@ fn error_status_becomes_status_error_with_body() {
 #[test]
 fn non_json_response_is_parse_error_and_refused_connection_is_transport_error() {
     let (url, _rx) = serve(vec![(200, "<html>proxy</html>".to_string())]);
-    assert!(matches!(transport(&url).call("info", &json!({})), Err(EsError::Parse(_))));
+    assert!(matches!(transport(&url).send(&EsRequest::Info), Err(EsError::Parse(_))));
 
     // 방금 닫은 포트로 연결한다.
     let closed = {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         format!("http://{}", listener.local_addr().unwrap())
     };
-    assert!(matches!(transport(&closed).call("info", &json!({})), Err(EsError::Transport(_))));
+    assert!(matches!(transport(&closed).send(&EsRequest::Info), Err(EsError::Transport(_))));
 }
 
 #[test]
@@ -229,7 +232,7 @@ fn index_name_comes_from_constructor_and_trailing_slash_is_trimmed() {
     let (url, rx) = serve(vec![(200, "{}".to_string())]);
     let t = HttpTransport::new(&format!("{url}/"), "", "", "my_books", Duration::from_secs(5));
     assert_eq!(t.index_name(), "my_books");
-    t.call("info", &json!({})).unwrap();
+    t.send(&EsRequest::Info).unwrap();
     let request = rx.recv().unwrap();
     assert_eq!(request.request_line, "GET / HTTP/1.1");
     assert_eq!(request.header("authorization"), None, "사용자가 비어 있으면 인증 헤더를 보내지 않는다");
@@ -253,7 +256,7 @@ fn real_connector_connects_through_http_and_uses_env_index() {
 mod real_transport {
     use super::tls_server;
     use crate::common::shared_fixtures::transport;
-    use backend::es_manager::{CoverFileHits, ESManager, EsError, EsTransport, Hit, HttpTransport, PagedHits, SimilarDocsArgs, UpdateFields};
+    use backend::es_manager::{CoverFileHits, ESManager, EsError, EsRequest, EsTransport, Hit, HttpTransport, PagedHits, SimilarDocsArgs, UpdateFields};
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::process::Command;
@@ -335,7 +338,7 @@ mod real_transport {
         let probe = transport(&container.url);
         let deadline = Instant::now() + Duration::from_secs(240);
         while Instant::now() < deadline {
-            if probe.call("info", &json!({})).is_ok() {
+            if probe.send(&EsRequest::Info).is_ok() {
                 return container;
             }
             thread::sleep(Duration::from_millis(250));
@@ -355,18 +358,17 @@ mod real_transport {
     }
 
     #[test]
-    fn https_uses_the_configured_ca_and_unknown_op_is_unsupported() {
+    fn https_uses_the_configured_ca() {
         let (url, server) = tls_server::serve_tls_once();
         let ca_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/rust/common/tls/local-es.crt");
         let t = HttpTransport::new_with_ca(&url, "u", "p", "books", Duration::from_secs(1), Some(&ca_path));
-        assert_eq!(t.call("info", &json!({})).unwrap()["version"]["number"], "9.1.0");
+        assert_eq!(t.send(&EsRequest::Info).unwrap()["version"]["number"], "9.1.0");
         server.join().unwrap();
 
         let (untrusted_url, untrusted_server) = tls_server::serve_tls_once();
         let untrusted = HttpTransport::new(&untrusted_url, "u", "p", "books", Duration::from_secs(1));
-        assert!(matches!(untrusted.call("info", &json!({})), Err(EsError::Transport(_))));
+        assert!(matches!(untrusted.send(&EsRequest::Info), Err(EsError::Transport(_))));
         untrusted_server.join().unwrap();
-        assert_eq!(transport("http://127.0.0.1:1").call("no.such_op", &json!({})), Err(EsError::Unsupported));
     }
 
     #[test]
@@ -379,7 +381,7 @@ mod real_transport {
         assert!(!manager.do_exist_index().unwrap());
         assert_eq!(manager.create_index().unwrap()["acknowledged"], json!(true));
         assert!(manager.do_exist_index().unwrap());
-        let mapping = es.call("indices.get_mapping", &json!({"index": "tm_books"})).unwrap();
+        let mapping = es.send(&EsRequest::GetMapping { index: Some("tm_books".into()) }).unwrap();
         let props = &mapping["tm_books"]["mappings"]["properties"];
         assert_eq!(props["category"]["fields"]["nori"]["analyzer"], json!("nori_analyzer"));
         assert_eq!(props["title"]["analyzer"], json!("nori_analyzer"));
@@ -407,7 +409,7 @@ mod real_transport {
         assert_eq!(manager.search_by_id(1).unwrap()["title"], json!("토지 제1권"));
         assert!(matches!(manager.update(999, &UpdateFields { title: "x".into(), ..Default::default() }), Err(EsError::Status { status: 404, .. })));
         assert!(matches!(manager.delete(999), Err(EsError::Status { status: 404, .. })));
-        assert!(matches!(es.call("search", &json!({"index": "tm_books", "query": {"no_such_query": {}}})), Err(EsError::Status { status: 400, .. })));
+        assert!(matches!(es.send(&EsRequest::Search { index: Some("tm_books".into()), body: json!({"query": {"no_such_query": {}}}), scroll: None }), Err(EsError::Status { status: 400, .. })));
 
         // 5. 카테고리 집계와 건수
         let aggregated = manager.search_and_aggregate_by_category().unwrap();

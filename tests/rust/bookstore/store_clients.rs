@@ -323,7 +323,7 @@ dummy_store!(Hooked {
     }
 });
 
-/// `markup.find`가 특정 태그에서 예외를 던지게 바꾼 markup 대역. 나머지는 원본 `find`처럼 동작한다.
+/// `markup.find`가 특정 태그에서 예외를 던지게 바꾼 markup 대역. 나머지는 실제 `find`처럼 동작한다.
 struct RaisingMarkup {
     html: &'static str,
     raise_on: &'static str,
@@ -1176,7 +1176,7 @@ fn test_naver_series_meta_og_fallback() {
 
 // ---- coverage: uncovered lines ----
 
-/// Line 238: hierarchical selector가 실패했을 때 verbose 대체 경로 로그
+/// hierarchical selector가 실패했을 때 verbose 대체 경로 로그
 #[test]
 fn test_yes24_extract_search_links_fallback_verbose() {
     let store = yes24(true);
@@ -1186,7 +1186,7 @@ fn test_yes24_extract_search_links_fallback_verbose() {
     assert!(links[0].contains("/product/goods/12345"));
 }
 
-/// Lines 287-288: 책 정보를 뽑다가 예외가 나도 부분 결과를 돌려준다
+/// 책 정보를 뽑다가 예외가 나도 부분 결과를 돌려준다
 #[test]
 fn test_yes24_extract_book_info_exception() {
     let store = yes24(false);
@@ -1197,7 +1197,7 @@ fn test_yes24_extract_book_info_exception() {
     assert!(info.is_object());
 }
 
-/// Line 383: AladinBookstore.build_isbn_search_url
+/// AladinBookstore.build_isbn_search_url
 #[test]
 fn test_aladin_build_isbn_search_url() {
     let store = aladin(false);
@@ -1206,7 +1206,7 @@ fn test_aladin_build_isbn_search_url() {
     assert!(url.contains("SearchWord"));
 }
 
-/// Line 394: len(links) >= MAX_RESULTS 이면 멈춘다
+/// len(links) >= MAX_RESULTS 이면 멈춘다
 #[test]
 fn test_aladin_extract_search_links_break_at_max() {
     let store = aladin(false);
@@ -1217,7 +1217,7 @@ fn test_aladin_extract_search_links_break_at_max() {
     assert!(links.len() <= store.max_results);
 }
 
-/// Line 442: Aladin ISBN 추출
+/// Aladin ISBN 추출
 #[test]
 fn test_aladin_extract_isbn() {
     let store = aladin(false);
@@ -1235,7 +1235,7 @@ fn test_aladin_extract_isbn() {
     assert_eq!(info["isbn"], "9781234567890");
 }
 
-/// Line 516: verbose 상태에서 RIDI API 응답 실패
+/// verbose 상태에서 RIDI API 응답 실패
 #[test]
 fn test_ridibooks_api_failure_verbose() {
     let mut store = ridibooks(true);
@@ -1245,7 +1245,7 @@ fn test_ridibooks_api_failure_verbose() {
     assert!(results.is_empty());
 }
 
-/// Line 564: RidibooksBookstore.extract_search_links는 빈 목록을 돌려준다
+/// RidibooksBookstore.extract_search_links는 빈 목록을 돌려준다
 #[test]
 fn test_ridibooks_extract_search_links() {
     let store = ridibooks(false);
@@ -1254,7 +1254,7 @@ fn test_ridibooks_extract_search_links() {
     assert!(links.is_empty());
 }
 
-/// Lines 600-602: Ridibooks meta author 대체 경로
+/// Ridibooks meta author 대체 경로
 #[test]
 fn test_ridibooks_author_meta_fallback() {
     let store = ridibooks(false);
@@ -1266,7 +1266,7 @@ fn test_ridibooks_author_meta_fallback() {
     assert_eq!(info["author"], "Meta Author");
 }
 
-/// Lines 605-610: Ridibooks meta description 에서 저자 추출
+/// Ridibooks meta description 에서 저자 추출
 #[test]
 fn test_ridibooks_author_description_fallback() {
     let store = ridibooks(false);
@@ -1278,7 +1278,7 @@ fn test_ridibooks_author_description_fallback() {
     assert_eq!(info["author"], "설명작가");
 }
 
-/// Lines 631-632: NaverShoppingBookstore.build_search_url
+/// NaverShoppingBookstore.build_search_url
 #[test]
 fn test_naver_shopping_build_search_url() {
     let store = naver_shopping(false);
@@ -1287,7 +1287,7 @@ fn test_naver_shopping_build_search_url() {
     assert!(url.contains("query="));
 }
 
-/// Line 646: verbose 상태에서 NaverShopping JSON script 를 못 찾음
+/// verbose 상태에서 NaverShopping JSON script 를 못 찾음
 #[test]
 fn test_naver_shopping_json_not_found_verbose() {
     let store = naver_shopping(true);
@@ -1296,7 +1296,7 @@ fn test_naver_shopping_json_not_found_verbose() {
     assert!(links.is_empty());
 }
 
-/// Lines 651-654: verbose 상태에서 NaverShopping JSON 파싱 오류
+/// verbose 상태에서 NaverShopping JSON 파싱 오류
 #[test]
 fn test_naver_shopping_json_parse_error_verbose() {
     let store = naver_shopping(true);
@@ -1305,7 +1305,7 @@ fn test_naver_shopping_json_parse_error_verbose() {
     assert!(links.is_empty());
 }
 
-/// Lines 708-709: NaverShopping extract_book_info 예외
+/// NaverShopping extract_book_info 예외
 #[test]
 fn test_naver_shopping_extract_book_info_exception() {
     let store = naver_shopping(false);

@@ -5,7 +5,7 @@ use super::*;
 impl ESManager {
     pub fn do_exist_index(&self) -> Result<bool, EsError> {
         log::debug!("do_exist_index()");
-        Ok(truthy(Some(&self.es.call("indices.exists", &json!({"index": self.index()}))?)))
+        Ok(self.es.send(&EsRequest::IndexExists { index: None })?.as_bool() == Some(true))
     }
 
     /// 주어진 ID 목록의 기존 file_path를 조회한다. 반환: {inode: file_path}
@@ -14,7 +14,7 @@ impl ESManager {
             return Ok(HashMap::new());
         }
         log::debug!("get_existing_paths({} ids)", doc_ids.len());
-        let response = self.es.call("mget", &json!({"docs": self.mget_docs(doc_ids), "source": ["file_path"]}))?;
+        let response = self.es.send(&EsRequest::MultiGet { docs: self.mget_docs(doc_ids), source: Some(vec!["file_path".to_string()]) })?;
         let mut result = HashMap::new();
         for doc in response["docs"].as_array().ok_or_else(|| parse_error("docs가 없다"))? {
             if doc["found"].as_bool().unwrap_or(false) {
@@ -31,7 +31,7 @@ impl ESManager {
             return Ok(HashMap::new());
         }
         log::debug!("get_existing_created_time_metadata({} ids)", doc_ids.len());
-        let response = self.es.call("mget", &json!({"docs": self.mget_docs(doc_ids), "source": ["created_time", "created_time_source", "updated_time"]}))?;
+        let response = self.es.send(&EsRequest::MultiGet { docs: self.mget_docs(doc_ids), source: Some(["created_time", "created_time_source", "updated_time"].map(String::from).to_vec()) })?;
         let mut result = HashMap::new();
         for doc in response["docs"].as_array().ok_or_else(|| parse_error("docs가 없다"))? {
             if !doc["found"].as_bool().unwrap_or(false) {
@@ -97,7 +97,7 @@ impl ESManager {
             self.ensure_existing_index_mappings();
             return Ok(json!({"acknowledged": true}));
         }
-        match self.es.call("indices.create", &json!({"index": self.index(), "body": {"settings": settings, "mappings": mappings}})) {
+        match self.es.send(&EsRequest::CreateIndex { index: None, body: json!({"settings": settings, "mappings": mappings}) }) {
             Err(EsError::Status { status: 400, body }) if body.contains("resource_already_exists_exception") => {
                 log::info!("Index {} already exists, skipping creation", self.index());
                 self.ensure_existing_index_mappings();
@@ -109,7 +109,7 @@ impl ESManager {
 
     /// 매핑을 한 번만 읽어 세 필드를 모두 점검한다.
     fn ensure_existing_index_mappings(&self) {
-        match self.es.call("indices.get_mapping", &json!({"index": self.index()})) {
+        match self.es.send(&EsRequest::GetMapping { index: None }) {
             Ok(mapping) => {
                 self.apply_category_nori(&mapping);
                 self.apply_created_time(&mapping);
@@ -124,12 +124,12 @@ impl ESManager {
     }
 
     fn put_properties(&self, properties: Value) -> Result<(), EsError> {
-        self.es.call("indices.put_mapping", &json!({"index": self.index(), "properties": properties})).map(|_| ())
+        self.es.send(&EsRequest::PutMapping { index: None, properties: properties.clone() }).map(|_| ())
     }
 
     /// 기존 인덱스에 category.nori 서브필드가 없으면 추가한다. 오류는 삼킨다.
     pub fn ensure_category_nori_subfield(&self) {
-        match self.es.call("indices.get_mapping", &json!({"index": self.index()})) {
+        match self.es.send(&EsRequest::GetMapping { index: None }) {
             Ok(mapping) => self.apply_category_nori(&mapping),
             Err(e) => log::warn!("Failed to add category.nori sub-field: {e}"),
         }
@@ -152,7 +152,7 @@ impl ESManager {
 
     /// 기존 인덱스에 created_time 관련 필드가 없으면 추가한다. 오류는 삼킨다.
     pub fn ensure_created_time_field(&self) {
-        match self.es.call("indices.get_mapping", &json!({"index": self.index()})) {
+        match self.es.send(&EsRequest::GetMapping { index: None }) {
             Ok(mapping) => self.apply_created_time(&mapping),
             Err(e) => log::warn!("Failed to add created_time fields: {e}"),
         }
@@ -184,7 +184,7 @@ impl ESManager {
 
     /// 기존 인덱스에 publisher 필드가 없으면 추가한다. 오류는 삼킨다.
     pub fn ensure_publisher_field(&self) {
-        match self.es.call("indices.get_mapping", &json!({"index": self.index()})) {
+        match self.es.send(&EsRequest::GetMapping { index: None }) {
             Ok(mapping) => self.apply_publisher(&mapping),
             Err(e) => log::warn!("Failed to add publisher field: {e}"),
         }
@@ -208,7 +208,7 @@ impl ESManager {
     pub fn delete_index(&self) -> Result<(), EsError> {
         log::debug!("delete_index()");
         if self.do_exist_index()? {
-            self.es.call("indices.delete", &json!({"index": self.index()}))?;
+            self.es.send(&EsRequest::DeleteIndex { index: None })?;
         }
         Ok(())
     }
@@ -216,6 +216,6 @@ impl ESManager {
     /// 인덱스를 refresh해 최근 변경사항을 검색 가능하게 한다.
     pub fn refresh(&self) -> Result<(), EsError> {
         log::debug!("refresh()");
-        self.es.call("indices.refresh", &json!({"index": self.index()})).map(|_| ())
+        self.es.send(&EsRequest::RefreshIndex { index: None }).map(|_| ())
     }
 }

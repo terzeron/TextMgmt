@@ -1,4 +1,4 @@
-//! PDF 읽기. 원본: `Loader.read_from_pdf`와 `_fast_pdf_page_count`.
+//! PDF 읽기: 본문 텍스트 추출과 빠른 쪽수 세기.
 //!
 //! Poppler -> lopdf -> lopdf 재저장 복구 단계를 순서대로 시도한다.
 //! 단계 실행은 [`StageRunner`] 뒤에 두어 멈춘 외부 명령을 자식 프로세스와 timeout으로 격리한다.

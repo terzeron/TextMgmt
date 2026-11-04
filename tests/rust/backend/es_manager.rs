@@ -29,7 +29,7 @@ fn trait_defaults_report_unsupported() {
     let paths: Vec<String> = Vec::new();
     let ids: Vec<i64> = Vec::new();
     let excluded: Vec<String> = Vec::new();
-    let args = serde_json::json!({});
+    let (keyword_args, similar_args) = (KeywordSearchArgs::default(), SimilarDocsArgs::default());
     let check = |result: Result<(), EsError>| assert_eq!(result.unwrap_err(), EsError::Unsupported);
 
     check(bare.create_index().map(|_| ()));
@@ -53,9 +53,9 @@ fn trait_defaults_report_unsupported() {
     check(bare.rename_category("old", "new").map(|_| ()));
     check(bare.delete_by_category("cat", false).map(|_| ()));
     check(bare.search_by_keyword("word", 10).map(|_| ()));
-    check(bare.search_by_keyword_paged(&args).map(|_| ()));
-    check(bare.search_similar_docs(&args).map(|_| ()));
-    check(bare.search_similar_docs_paged(&args).map(|_| ()));
+    check(bare.search_by_keyword_paged(&keyword_args).map(|_| ()));
+    check(bare.search_similar_docs(&similar_args).map(|_| ()));
+    check(bare.search_similar_docs_paged(&similar_args).map(|_| ()));
     check(bare.search_latest_docs(10, None).map(|_| ()));
     check(bare.backfill_created_time(std::path::Path::new("/x")).map(|_| ()));
     check(bare.aggregate_cover_categories().map(|_| ()));
@@ -63,7 +63,7 @@ fn trait_defaults_report_unsupported() {
     check(bare.search_group_representatives(&categories, &excluded).map(|_| ()));
 }
 
-use backend::es_manager::{CoverFileHit, CoverFileHits, Hit, PagedHits};
+use backend::es_manager::{CoverFileHit, CoverFileHits, Hit, KeywordSearchArgs, PagedHits};
 
 /// `with_search_stub`이 받은 호출 하나: (query, sort, max_result_count).
 type SearchCall = (Value, Option<Value>, i64);
@@ -183,19 +183,14 @@ fn test_do_exist_index_get_existing_ids_and_paths() {
 }
 
 #[test]
-fn test_do_exist_index_uses_emptiness_for_all_json_shapes() {
+fn test_do_exist_index_is_true_only_for_a_true_response() {
     let cases = [
-        (json!(null), false),
-        (json!(false), false),
-        (json!(0), false),
-        (json!(""), false),
-        (json!([]), false),
-        (json!({}), false),
         (json!(true), true),
-        (json!(-1), true),
-        (json!("present"), true),
-        (json!([0]), true),
-        (json!({"index": true}), true),
+        (json!(false), false),
+        (json!(null), false),
+        (json!(1), false),
+        (json!("present"), false),
+        (json!({"index": true}), false),
     ];
 
     for (response, expected) in cases {
@@ -220,7 +215,7 @@ fn test_get_existing_created_time_metadata_returns_stored_values() {
 
     es.on("mget", |kw| {
         assert_eq!(kw["docs"], json!([{"_index": "idx", "_id": "1"}, {"_index": "idx", "_id": "2"}]));
-        assert_eq!(kw["source"], json!(["created_time", "created_time_source", "updated_time"]));
+        assert_eq!(kw["_source"], json!(["created_time", "created_time_source", "updated_time"]));
         Ok(json!({
             "docs": [
                 {
@@ -640,7 +635,7 @@ fn test_delete_by_file_paths_with_exclude_ids() {
     let last_body = Arc::new(Mutex::new(Value::Null));
     let sink = last_body.clone();
     es.on("delete_by_query", move |kw| {
-        *sink.lock().unwrap() = kw["body"].clone();
+        *sink.lock().unwrap() = kw.clone();
         Ok(json!({"deleted": 3}))
     });
     let manager = make_manager(&es);
@@ -755,7 +750,7 @@ fn test_category_file_path_iterator_yields_an_error_once_then_stops() {
 
 #[test]
 fn test_init_missing_env_var() {
-    // Lines 26-27: missing env var -> sys.exit. 환경 변수를 지우지 않고 조회 함수를 주입한다.
+    // missing env var -> sys.exit. 환경 변수를 지우지 않고 조회 함수를 주입한다.
     let env = |key: &str| if key == "TM_ES_BOOK_INDEX" { None } else { default_env(key) };
     let clock = FakeClock::new(0.0);
     match connect_with(&env, &new_es(), &clock) {
@@ -766,7 +761,7 @@ fn test_init_missing_env_var() {
 
 #[test]
 fn test_create_index_non_exists_bad_request() {
-    // Line 191: BadRequestError without resource_already_exists -> re-raise
+    // BadRequestError without resource_already_exists -> re-raise
     let es = new_es();
     let manager = make_manager(&es);
 
@@ -777,7 +772,7 @@ fn test_create_index_non_exists_bad_request() {
 
 #[test]
 fn test_search_default_max_result_count() {
-    // Line 220: search with max_result_count < 0 uses default
+    // search with max_result_count < 0 uses default
     let es = new_es();
     let manager = make_manager(&es);
     let results = manager.search(&json!({"match": {"title": "a"}}), None, -1, None).unwrap();
@@ -786,7 +781,7 @@ fn test_search_default_max_result_count() {
 
 #[test]
 fn test_search_scroll_early_exit_on_max() {
-    // Lines 248, 255, 264-268: scroll path with result_count >= max_result_count
+    // scroll path with result_count >= max_result_count
     let es = new_es();
     let base = es.clone();
     es.on("search", move |kw| {
@@ -808,7 +803,7 @@ fn test_search_scroll_early_exit_on_max() {
 
 #[test]
 fn test_search_by_title_negative_max() {
-    // Lines 295-299: search_by_title with negative max_result_count
+    // search_by_title with negative max_result_count
     let es = new_es();
     let manager = make_manager(&es);
     let results: Vec<Hit> = manager.search_by_title("t", "", 0, -1).unwrap();
@@ -817,7 +812,7 @@ fn test_search_by_title_negative_max() {
 
 #[test]
 fn test_search_by_category_negative_max() {
-    // Line 310: search_by_category with negative max_result_count
+    // search_by_category with negative max_result_count
     let es = new_es();
     let manager = make_manager(&es);
     let results: Vec<Hit> = manager.search_by_category("c", -1).unwrap();
@@ -826,7 +821,7 @@ fn test_search_by_category_negative_max() {
 
 #[test]
 fn test_search_by_keyword_negative_max() {
-    // Line 319: search_by_keyword with negative max_result_count
+    // search_by_keyword with negative max_result_count
     let es = new_es();
     let manager = make_manager(&es);
     let results: Vec<Hit> = manager.search_by_keyword("k", -1).unwrap();
@@ -835,7 +830,7 @@ fn test_search_by_keyword_negative_max() {
 
 #[test]
 fn test_search_similar_docs_negative_max() {
-    // Line 335: search_similar_docs with negative max_result_count
+    // search_similar_docs with negative max_result_count
     let es = new_es();
     let stub: SearchStub = Arc::new(|_query, _sort, _max, _fields| Ok(vec![Hit::new(1, json!({"a": 1}), 100.0)]));
     let manager = make_manager(&es).with_search_stub(stub);
@@ -846,7 +841,7 @@ fn test_search_similar_docs_negative_max() {
 
 #[test]
 fn test_insert_final_failure() {
-    // Lines 502-503: insert bulk retries exhausted -> raise
+    // insert bulk retries exhausted -> raise
     let es = new_es();
     es.on("bulk", |_| Err(EsError::Transport("persistent failure".to_string())));
     // 재시도 사이의 sleep은 FakeClock이 건너뛴다. 시계는 `connect`로만 주입하므로 매니저를 `connect_with`로 만든다.
@@ -880,7 +875,7 @@ fn test_insert_uses_injected_clock_and_preserves_bulk_failure_modes() {
 
 #[test]
 fn test_insert_num_docs_limit() {
-    // Line 507: insert stops when data_count >= num_docs
+    // insert stops when data_count >= num_docs
     let es = new_es();
     es.on("bulk", |_| Ok(json!({"errors": false})));
     let manager = make_manager(&es);
@@ -892,12 +887,12 @@ fn test_insert_num_docs_limit() {
 
 #[test]
 fn test_update_with_file_size_and_summary() {
-    // Lines 529, 531: update with file_size and summary
+    // update with file_size and summary
     let es = new_es();
     let last_body = Arc::new(Mutex::new(Value::Null));
     let sink = last_body.clone();
     es.on("update", move |kw| {
-        *sink.lock().unwrap() = kw["body"].clone();
+        *sink.lock().unwrap() = kw.clone();
         Ok(json!({"_shards": {"failed": 0}}))
     });
     let manager = make_manager(&es);
@@ -915,7 +910,7 @@ fn test_update_with_updated_time() {
     let bodies = Arc::new(Mutex::new(Vec::<Value>::new()));
     let sink = bodies.clone();
     es.on("update", move |kw| {
-        sink.lock().unwrap().push(kw["body"].clone());
+        sink.lock().unwrap().push(kw.clone());
         Ok(json!({"_shards": {"failed": 0}}))
     });
     let manager = make_manager(&es);
@@ -928,7 +923,7 @@ fn test_update_with_updated_time() {
 
 #[test]
 fn test_delete_by_category_no_prefix() {
-    // Line 612: delete_by_category with prefix=False
+    // delete_by_category with prefix=False
     let es = new_es();
     let last_query = Arc::new(Mutex::new(Value::Null));
     let sink = last_query.clone();
@@ -944,7 +939,7 @@ fn test_delete_by_category_no_prefix() {
 
 #[test]
 fn test_delete_returns_false() {
-    // Line 622: delete when result != 'deleted'
+    // delete when result != 'deleted'
     let es = new_es();
     es.on("delete", |_| Ok(json!({"result": "not_found"})));
     let manager = make_manager(&es);
@@ -1015,7 +1010,7 @@ fn test_init_does_not_retry_non_connection_errors() {
 
 #[test]
 fn test_search_scroll_initial_max_score_none() {
-    // Line 248: initial scroll response has max_score=None (requires max_result_count > 10000)
+    // initial scroll response has max_score=None (requires max_result_count > 10000)
     let es = new_es();
     let base = es.clone();
     es.on("search", move |kw| {
@@ -1032,7 +1027,7 @@ fn test_search_scroll_initial_max_score_none() {
 
 #[test]
 fn test_search_scroll_early_exit_first_batch() {
-    // Line 255: result_count >= max_result_count in first scroll batch
+    // result_count >= max_result_count in first scroll batch
     let es = new_es();
     let base = es.clone();
     es.on("search", move |kw| {
@@ -1052,7 +1047,7 @@ fn test_search_scroll_early_exit_first_batch() {
 
 #[test]
 fn test_update_with_author() {
-    // Line 523: update with author field
+    // update with author field
     let es = new_es();
     es.on("update", |_| Ok(json!({"_shards": {"failed": 0}})));
     let manager = make_manager(&es);
@@ -1165,7 +1160,7 @@ fn test_delete_by_ids_empty_and_chunked() {
     // CountES: 요청한 ID 수만큼 deleted를 돌려준다.
     let es = new_es();
     es.on("delete_by_query", |kw| {
-        let count = kw["body"]["query"]["ids"]["values"].as_array().unwrap().len();
+        let count = kw["query"]["ids"]["values"].as_array().unwrap().len();
         Ok(json!({"deleted": count}))
     });
     let manager = make_manager(&es);
@@ -1571,7 +1566,7 @@ fn test_category_paged_requests_only_list_source_fields() {
     let es = new_es();
     let manager = make_manager(&es);
     manager.search_by_category_paged("A", 2, None);
-    assert_eq!(last_search(&es)["source"], json!(ESManager::LIST_SOURCE_FIELDS));
+    assert_eq!(last_search(&es)["_source"], json!(ESManager::LIST_SOURCE_FIELDS));
 }
 
 #[test]
@@ -1579,7 +1574,7 @@ fn test_keyword_paged_requests_only_list_source_fields() {
     let es = new_es();
     let manager = make_manager(&es);
     manager.search_by_keyword_paged("k", 2, 0, None, None).unwrap();
-    assert_eq!(last_search(&es)["source"], json!(ESManager::LIST_SOURCE_FIELDS));
+    assert_eq!(last_search(&es)["_source"], json!(ESManager::LIST_SOURCE_FIELDS));
 }
 
 #[test]
@@ -1587,7 +1582,7 @@ fn test_latest_docs_requests_only_list_source_fields() {
     let es = new_es();
     let manager = make_manager(&es);
     manager.search_latest_docs(2, None);
-    assert_eq!(last_search(&es)["source"], json!(ESManager::LIST_SOURCE_FIELDS));
+    assert_eq!(last_search(&es)["_source"], json!(ESManager::LIST_SOURCE_FIELDS));
 }
 
 #[test]
@@ -1762,7 +1757,7 @@ mod api_facade {
         let manager = UnsupportedManager;
         let docs = BTreeMap::new();
         let strings = vec!["A".to_owned()];
-        let similar = json!({});
+        let similar = backend::es_manager::SimilarDocsArgs::default();
         unsupported!(backend::es_manager::EsManagerApi::create_index(&manager));
         unsupported!(backend::es_manager::EsManagerApi::search_by_id(&manager, 1));
         unsupported!(backend::es_manager::EsManagerApi::update(&manager, 1, &Value::Null));
@@ -1784,7 +1779,7 @@ mod api_facade {
         unsupported!(backend::es_manager::EsManagerApi::rename_category(&manager, "A", "B"));
         unsupported!(backend::es_manager::EsManagerApi::delete_by_category(&manager, "A", false));
         unsupported!(backend::es_manager::EsManagerApi::search_by_keyword(&manager, "q", 10));
-        unsupported!(backend::es_manager::EsManagerApi::search_by_keyword_paged(&manager, &json!({})));
+        unsupported!(backend::es_manager::EsManagerApi::search_by_keyword_paged(&manager, &backend::es_manager::KeywordSearchArgs::default()));
         unsupported!(backend::es_manager::EsManagerApi::search_similar_docs(&manager, &similar));
         unsupported!(backend::es_manager::EsManagerApi::search_similar_docs_paged(&manager, &similar));
         unsupported!(backend::es_manager::EsManagerApi::search_latest_docs(&manager, 10, None));
@@ -1852,9 +1847,10 @@ mod api_facade {
         let _ = api.rename_category("A", "B");
         let _ = api.delete_by_category("A", false);
         let _ = api.search_by_keyword("sample", 10);
-        let _ = api.search_by_keyword_paged(&json!({"keyword": "sample", "exclude_categories": ["hidden"]}));
-        let _ = api.search_similar_docs(&json!({"title": "sample"}));
-        let _ = api.search_similar_docs_paged(&json!({"title": "sample"}));
+        let _ = api.search_by_keyword_paged(&backend::es_manager::KeywordSearchArgs { keyword: "sample".into(), exclude_categories: Some(vec!["hidden".into()]), ..Default::default() });
+        let similar = backend::es_manager::SimilarDocsArgs { title: "sample".into(), ..Default::default() };
+        let _ = api.search_similar_docs(&similar);
+        let _ = api.search_similar_docs_paged(&similar);
         let _ = api.search_latest_docs(10, Some(&exclude));
         let _ = api.backfill_created_time(Path::new("/books"));
         let aggregate = api.aggregate_cover_categories().unwrap();

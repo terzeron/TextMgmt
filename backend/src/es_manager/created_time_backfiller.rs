@@ -80,13 +80,13 @@ impl ESManager {
             if bulk_body.is_empty() {
                 return;
             }
-            match self.es.call("bulk", &json!({"body": bulk_body, "timeout": "60s", "refresh": false})) {
+            match self.es.send(&EsRequest::Bulk { lines: bulk_body.clone(), timeout: Some("60s".to_string()), refresh: Some(false) }) {
                 Err(e) => {
                     log::error!("backfill_created_time bulk error: {e}");
                     failed += pending;
                 }
                 Ok(bulk_result) if bulk_result["errors"].as_bool().unwrap_or(false) => {
-                    let item_failures = bulk_result["items"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().filter(|item| truthy(item["update"].get("error"))).count() as i64;
+                    let item_failures = bulk_result["items"].as_array().map(Vec::as_slice).unwrap_or(&[]).iter().filter(|item| has_content(item["update"].get("error"))).count() as i64;
                     failed += item_failures;
                     updated += pending - item_failures;
                 }
@@ -96,11 +96,11 @@ impl ESManager {
 
         let mut scroll_id: Option<String> = None;
         let scan = (|| -> Result<(), EsError> {
-            let mut response = self.es.call("search", &json!({"index": self.index(), "query": query, "scroll": "10m", "size": batch_size, "source": ["file_path"]}))?;
+            let mut response = self.es.send(&EsRequest::scroll_search(json!({"query": query, "size": batch_size, "_source": ["file_path"]}), "10m"))?;
             scroll_id = response["_scroll_id"].as_str().map(str::to_string);
             while !hits_of(&response).is_empty() {
                 update_hits(hits_of(&response));
-                response = self.es.call("scroll", &json!({"scroll_id": scroll_id.clone().unwrap_or_default(), "scroll": "10m"}))?;
+                response = self.es.send(&EsRequest::Scroll { scroll_id: scroll_id.clone().unwrap_or_default(), scroll: "10m".to_string() })?;
                 scroll_id = response["_scroll_id"].as_str().map(str::to_string);
             }
             Ok(())

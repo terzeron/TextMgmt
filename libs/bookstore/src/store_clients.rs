@@ -30,7 +30,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{BookInfo, Store};
-use htmlkit::url_parser::urljoin;
+use htmlkit::url_parser::{quote, quote_component, urljoin};
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
 use serde_json::{Value, json};
@@ -134,28 +134,14 @@ fn title_string(doc: &Html) -> Option<String> {
     only.value().as_text().map(|t| t.to_string()).filter(|t| !t.is_empty())
 }
 
-/// 퍼센트 인코딩. 영문·숫자·`_.-~`와 `safe`에 든 글자만 그대로 둔다.
-fn quote(value: &str, safe: &str) -> String {
-    let mut out = String::new();
-    for b in value.bytes() {
-        if b.is_ascii_alphanumeric() || b"_.-~".contains(&b) || safe.as_bytes().contains(&b) {
-            out.push(b as char);
-        } else {
-            let _ = write!(out, "%{b:02X}");
-        }
-    }
-    out
-}
-
-/// JSON 값이 있고 비어 있지 않은가. null·false·0·빈 문자열·빈 배열·빈 객체는 비었다.
-fn truthy(value: Option<&Value>) -> bool {
+/// 값이 있고 내용이 있는가: null과 빈 문자열·빈 배열·빈 객체만 없는 것으로 본다. 숫자와 불리언은 값이 있다.
+fn has_content(value: Option<&Value>) -> bool {
     value.is_some_and(|v| match v {
         Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
         Value::String(s) => !s.is_empty(),
         Value::Array(a) => !a.is_empty(),
         Value::Object(o) => !o.is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
     })
 }
 
@@ -898,19 +884,17 @@ mod utility_tests {
     use super::*;
 
     #[test]
-    fn truthy_treats_empty_and_zero_values_as_false() {
-        assert!(!truthy(None));
-        assert!(!truthy(Some(&Value::Null)));
-        assert!(!truthy(Some(&json!(false))));
-        assert!(truthy(Some(&json!(true))));
-        assert!(!truthy(Some(&json!(0))));
-        assert!(truthy(Some(&json!(-1))));
-        assert!(!truthy(Some(&json!(""))));
-        assert!(truthy(Some(&json!("x"))));
-        assert!(!truthy(Some(&json!([]))));
-        assert!(truthy(Some(&json!([1]))));
-        assert!(!truthy(Some(&json!({}))));
-        assert!(truthy(Some(&json!({"x": 1}))));
+    fn has_content_treats_only_null_and_empty_containers_as_missing() {
+        assert!(!has_content(None));
+        assert!(!has_content(Some(&Value::Null)));
+        assert!(!has_content(Some(&json!(""))));
+        assert!(!has_content(Some(&json!([]))));
+        assert!(!has_content(Some(&json!({}))));
+        assert!(has_content(Some(&json!(0))));
+        assert!(has_content(Some(&json!(false))));
+        assert!(has_content(Some(&json!("x"))));
+        assert!(has_content(Some(&json!([1]))));
+        assert!(has_content(Some(&json!({"x": 1}))));
     }
 
     #[test]

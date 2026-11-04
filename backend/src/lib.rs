@@ -25,14 +25,13 @@ pub mod view_history_store;
 
 use serde_json::Value;
 
-/// JSON 값이 있고 비어 있지 않은가. null·false·0·빈 문자열·빈 배열·빈 객체는 비었다.
-pub(crate) fn truthy(value: Option<&Value>) -> bool {
+/// 값이 있고 내용이 있는가: null과 빈 문자열·빈 배열·빈 객체만 없는 것으로 본다. 숫자와 불리언은 값이 있다.
+pub(crate) fn has_content(value: Option<&Value>) -> bool {
     value.is_some_and(|v| match v {
         Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
         Value::String(s) => !s.is_empty(),
         Value::Array(a) => !a.is_empty(),
         Value::Object(o) => !o.is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
     })
 }

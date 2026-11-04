@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use doc_reader::office::find_libreoffice;
 
-/// loader 실행 설정. 원본의 `Loader` 클래스 속성에 해당한다.
+/// loader 실행 설정.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// `TM_BOOK_DIR`

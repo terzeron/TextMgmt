@@ -34,7 +34,7 @@ impl NaverWebtoonBookstore {
             let title_id = webtoon.get("titleId");
             let (title, author) = (str_field(webtoon, "titleName"), str_field(webtoon, "displayAuthor"));
             let category = array_field(webtoon, "genreList").iter().map(|g| str_field(g, "description")).filter(|d| !d.is_empty()).collect::<Vec<_>>().join("/");
-            let detail_url = if truthy(title_id) { format!("{NAVER_WEBTOON_BASE_URL}/webtoon/list?titleId={}", json_text(title_id)) } else { String::new() };
+            let detail_url = if has_content(title_id) { format!("{NAVER_WEBTOON_BASE_URL}/webtoon/list?titleId={}", json_text(title_id)) } else { String::new() };
             if !title.is_empty() && !detail_url.is_empty() {
                 results.push(SearchRow { title, author, category, detail_url, search_url: search_url.clone(), isbn: String::new() });
             }
@@ -52,7 +52,7 @@ impl Bookstore for NaverWebtoonBookstore {
 
     /// 사용자가 눌러 볼 수 있는 네이버 웹툰 검색 결과 페이지 URL
     fn build_search_url(&self, keyword: &str) -> String {
-        format!("{NAVER_WEBTOON_BASE_URL}/search?keyword={}", quote(keyword, "/"))
+        format!("{NAVER_WEBTOON_BASE_URL}/search?keyword={}", quote(keyword))
     }
 
     // 제목에 저자를 붙인 키워드는 늘 0건이다. 제목만 넘긴다.
@@ -101,7 +101,7 @@ impl KakaoWebtoonBookstore {
             let author = join_unique(names, ", ");
             let seo_id = str_field(content, "seoId");
             let slug = if seo_id.is_empty() { &title } else { &seo_id };
-            let detail_url = if truthy(content_id) { format!("{KAKAO_WEBTOON_BASE_URL}/content/{}/{}", quote(slug, "/"), json_text(content_id)) } else { String::new() };
+            let detail_url = if has_content(content_id) { format!("{KAKAO_WEBTOON_BASE_URL}/content/{}/{}", quote(slug), json_text(content_id)) } else { String::new() };
             if !title.is_empty() && !detail_url.is_empty() {
                 results.push(SearchRow { title, author, category: str_field(content, "genre"), detail_url, search_url: search_url.clone(), isbn: String::new() });
             }
@@ -119,7 +119,7 @@ impl Bookstore for KakaoWebtoonBookstore {
 
     /// 사용자가 눌러 볼 수 있는 카카오웹툰 검색 결과 페이지 URL
     fn build_search_url(&self, keyword: &str) -> String {
-        format!("{KAKAO_WEBTOON_BASE_URL}/search?keyword={}", quote(keyword, "/"))
+        format!("{KAKAO_WEBTOON_BASE_URL}/search?keyword={}", quote(keyword))
     }
 
     // 제목에 저자를 붙인 키워드는 0건이다. 제목만 넘긴다.
@@ -168,7 +168,7 @@ impl BomtoonBookstore {
             let title = str_field(content, "title");
             let author = join_unique(array_field(content, "author").iter().map(|a| json_text(Some(a))), ", ");
             let category = array_field(content, "tags").iter().take(BOMTOON_CATEGORY_TAG_COUNT).map(|t| json_text(Some(t))).collect::<Vec<_>>().join("/");
-            let detail_url = if alias.is_empty() { String::new() } else { format!("{BOMTOON_BASE_URL}/detail/{}", quote(&alias, "/")) };
+            let detail_url = if alias.is_empty() { String::new() } else { format!("{BOMTOON_BASE_URL}/detail/{}", quote(&alias)) };
             if !title.is_empty() && !detail_url.is_empty() {
                 results.push(SearchRow { title, author, category, detail_url, search_url: search_url.clone(), isbn: String::new() });
             }
@@ -189,7 +189,7 @@ impl Bookstore for BomtoonBookstore {
 
     /// 사용자가 눌러 볼 수 있는 봄툰 검색 결과 페이지 URL
     fn build_search_url(&self, keyword: &str) -> String {
-        format!("{BOMTOON_BASE_URL}/search?q={}&ref=input", quote(keyword, "/"))
+        format!("{BOMTOON_BASE_URL}/search?q={}&ref=input", quote(keyword))
     }
 
     title_only_search!();
@@ -226,7 +226,7 @@ impl LezhinBookstore {
             let names = array_field(content, "artists").iter().filter(|a| LEZHIN_AUTHOR_ROLES.contains(&str_field(a, "role").as_str())).map(|a| str_field(a, "name")).filter(|n| !n.is_empty());
             let author = join_unique(names, ", ");
             let category = array_field(content, "genres").iter().map(|g| json_text(Some(g))).collect::<Vec<_>>().join("/");
-            let detail_url = if alias.is_empty() { String::new() } else { format!("{LEZHIN_BASE_URL}/ko/comic/{}", quote(&alias, "/")) };
+            let detail_url = if alias.is_empty() { String::new() } else { format!("{LEZHIN_BASE_URL}/ko/comic/{}", quote(&alias)) };
             if !title.is_empty() && !detail_url.is_empty() {
                 results.push(SearchRow { title, author, category, detail_url, search_url: search_url.clone(), isbn: String::new() });
             }
@@ -244,7 +244,7 @@ impl Bookstore for LezhinBookstore {
 
     /// 사용자가 눌러 볼 수 있는 레진코믹스 검색 결과 페이지 URL
     fn build_search_url(&self, keyword: &str) -> String {
-        format!("{LEZHIN_BASE_URL}/ko/search?t=all&q={}", quote(keyword, "/"))
+        format!("{LEZHIN_BASE_URL}/ko/search?t=all&q={}", quote(keyword))
     }
 
     title_only_search!();
@@ -317,7 +317,7 @@ impl ToptoonBookstore {
         for comic in catalog.as_array().map_or(&[][..], Vec::as_slice) {
             let Some(meta) = comic.get("meta") else { continue };
             let normalized = Self::normalize(&str_field(meta, "title"));
-            if !normalized.contains(&needle) || !truthy(meta.get("comicsListUrl")) {
+            if !normalized.contains(&needle) || !has_content(meta.get("comicsListUrl")) {
                 continue;
             }
             let rank = if normalized == needle {
@@ -334,7 +334,7 @@ impl ToptoonBookstore {
         let mut results = Vec::new();
         for (_, _, comic) in matches.into_iter().take(self.max_results) {
             let meta = &comic["meta"];
-            let author = [meta.pointer("/authorList/authorStr"), meta.pointer("/author/authorString")].into_iter().find(|v| truthy(*v)).map(|v| json_text(v)).unwrap_or_default();
+            let author = [meta.pointer("/authorList/authorStr"), meta.pointer("/author/authorString")].into_iter().find(|v| has_content(*v)).map(|v| json_text(v)).unwrap_or_default();
             let category = array_field(meta, "genre").iter().map(|g| str_field(g, "name")).filter(|n| !n.is_empty()).collect::<Vec<_>>().join("/");
             results.push(SearchRow {
                 title: str_field(meta, "title"),
@@ -358,7 +358,7 @@ impl Bookstore for ToptoonBookstore {
 
     /// 사용자가 눌러 볼 수 있는 탑툰 검색 결과 페이지 URL
     fn build_search_url(&self, keyword: &str) -> String {
-        format!("{TOPTOON_BASE_URL}/hashtag?keyword={}", quote(keyword, "/"))
+        format!("{TOPTOON_BASE_URL}/hashtag?keyword={}", quote(keyword))
     }
 
     title_only_search!();

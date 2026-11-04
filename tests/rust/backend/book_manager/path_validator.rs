@@ -83,7 +83,6 @@ impl FsOps for ListDirFs {
 
 #[test]
 fn test_normalize_stored_file_path_all_branches() {
-    // Lines 1217, 1223-1224, 1228, 1230
     let tmp = tmp_dir();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
 
@@ -103,7 +102,7 @@ fn test_normalize_stored_file_path_all_branches() {
 
 #[test]
 fn test_is_safe_category_name_oserror() {
-    // Lines 1244-1245: OSError in is_safe_category_name
+    // OSError in is_safe_category_name
     let tmp = tmp_dir();
     // 경로 정규화(resolve = canonicalize) 실패 훅. 이름에 "bad_oserror"가 든 경로만 실패한다.
     let faulty = FaultyFs::new();
@@ -114,7 +113,7 @@ fn test_is_safe_category_name_oserror() {
 
 #[test]
 fn test_is_indexable_file_path_hidden() {
-    // Line 1249: dot file
+    // dot file
     let tmp = tmp_dir();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
     assert!(!manager.is_indexable_file_path(Path::new(".hidden.epub")));
@@ -124,7 +123,6 @@ fn test_is_indexable_file_path_hidden() {
 fn test_iter_category_indexable_files_branches_shadowed() {
     // 같은 이름의 함수가 뒤에 하나 더 있어 이 정의는 쓰이지 않는다.
     // Rust는 한 모듈에 같은 이름을 둘 수 없어 앞쪽 정의에 _shadowed를 붙였다.
-    // Lines 1350-1353, 1359-1360
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let faulty = FaultyFs::new();
@@ -143,7 +141,6 @@ fn test_iter_category_indexable_files_branches_shadowed() {
 
 #[test]
 fn test_normalize_stored_file_path_dot_slash() {
-    // Line 1230
     let tmp = tmp_dir();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
     assert_eq!(manager.normalize_stored_file_path("./foo/bar.txt"), "foo/bar.txt");
@@ -151,18 +148,17 @@ fn test_normalize_stored_file_path_dot_slash() {
 
 #[test]
 fn test_iter_category_indexable_files_branches() {
-    // Lines 1350-1351, 1353, 1358, 1359-1360
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();
     let cat_dir = tmp_path.join("cat");
     fs::create_dir_all(&cat_dir).unwrap();
 
-    // Line 1353: hidden file
+    // hidden file
     fs::write(cat_dir.join(".hidden.txt"), "x").unwrap();
 
-    // 1. Lines 1350-1351: relative_to raises CoverSourceError
-    // 2. Line 1358: resolve not relative to root
+    // 1. relative_to raises CoverSourceError
+    // 2. resolve not relative to root
     let outside_file = PathBuf::from("/tmp/outside_dummy.txt");
     let hidden = cat_dir.join(".hidden.txt");
     // iterdir 결과를 고정한 `FsOps`(구 `fs_iterdir_override`). 단계마다 다른 목록이라 매니저를 새로 만든다.
@@ -170,7 +166,7 @@ fn test_iter_category_indexable_files_branches() {
     let files = manager.iter_category_indexable_files("cat", false);
     assert_eq!(files, Vec::<PathBuf>::new());
 
-    // Lines 1359-1360: resolve raises OSError
+    // resolve raises OSError
     let normal_file = cat_dir.join("normal.txt");
     fs::write(&normal_file, "x").unwrap();
     let nf = normal_file.clone();

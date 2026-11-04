@@ -236,7 +236,6 @@ mod xml_safety_and_cursors {
 
     #[test]
     fn test_encode_decode_category_cursor() {
-        // Lines 55, 60-64
         let cur = encode_category_cursor(&json!([1, "val"]));
         assert_eq!(decode_category_cursor(&cur), Some(json!([1, "val"])));
         assert_eq!(decode_category_cursor("invalid_base64!!!"), None);

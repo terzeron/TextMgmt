@@ -4,8 +4,7 @@
 //! Docker 통합은 fixture가 컨테이너를 띄워 기본 실행에서 돈다(Docker가 없으면 panic).
 //! 나머지는 가짜 manager/category_mapping을 `AppDeps`로 주입해서 ES/MySQL 없이 돈다.
 //!
-//! 원본의 `def test_`는 95개로 세어지지만 그중 `test_book`(68행)은 fixture이고 실제 테스트는 94개다.
-//! Rust에서는 같은 이름의 헬퍼 함수(`test_book`)가 되고 `#[test]`가 아니다.
+//! `test_book`은 헬퍼 함수이고 `#[test]`가 아니다.
 //!
 //! 가정한 API:
 //! - `backend::main`
@@ -2253,7 +2252,7 @@ impl backend::refresh_token_store::RefreshTokenStoreApi for AuthRefreshStore {
     fn get_token_observation(&self, _: &str) -> Result<Option<Value>, backend::refresh_token_store::StoreError> {
         Err(backend::refresh_token_store::StoreError::Unsupported("test store".into()))
     }
-    fn _session_rows(&self, email: Option<&str>, family: Option<&str>) -> Result<Vec<db::Row>, backend::refresh_token_store::StoreError> {
+    fn session_rows(&self, email: Option<&str>, family: Option<&str>) -> Result<Vec<db::Row>, backend::refresh_token_store::StoreError> {
         Ok(self
             .0
             .lock()
@@ -2403,7 +2402,7 @@ impl CategoryMappingApi for RenameMapping {
     }
 }
 
-/// Line 309: rename_category MySQL mapping update failure
+/// rename_category MySQL mapping update failure
 #[tokio::test]
 async fn test_rename_category_mysql_mapping_failure() {
     let tmp = TempDir::new().unwrap();
@@ -2494,7 +2493,7 @@ impl CategoryMappingApi for SetKeywordsRaises {
     }
 }
 
-/// Lines 673-675: set_category_keywords non-HttpStatusError error
+/// set_category_keywords non-HttpStatusError error
 #[tokio::test]
 async fn test_set_category_keywords_unexpected_exception() {
     let tmp = TempDir::new().unwrap();
@@ -2519,7 +2518,7 @@ impl CategoryMappingApi for UpdateAllMapping {
     }
 }
 
-/// Line 739: update_all_category_mappings returns False
+/// update_all_category_mappings returns False
 #[tokio::test]
 async fn test_update_all_category_mappings_failure() {
     let tmp = TempDir::new().unwrap();
@@ -2531,7 +2530,7 @@ async fn test_update_all_category_mappings_failure() {
     assert!(resp.json()["detail"].as_str().unwrap().contains("Failed to update mappings"), "{}", resp.json());
 }
 
-/// Line 741: update_all_category_mappings HttpStatusError re-raise
+/// update_all_category_mappings HttpStatusError re-raise
 #[tokio::test]
 async fn test_update_all_category_mappings_http_exception_reraise() {
     let tmp = TempDir::new().unwrap();
@@ -2555,7 +2554,7 @@ impl CategoryMappingApi for SetHiddenMapping {
     }
 }
 
-/// Line 775: set_hidden_category returns False
+/// set_hidden_category returns False
 #[tokio::test]
 async fn test_set_hidden_category_failure() {
     let tmp = TempDir::new().unwrap();
@@ -2567,7 +2566,7 @@ async fn test_set_hidden_category_failure() {
     assert!(resp.json()["detail"].as_str().unwrap().contains("Failed to update hidden category"), "{}", resp.json());
 }
 
-/// Line 777: set_hidden_category HttpStatusError re-raise
+/// set_hidden_category HttpStatusError re-raise
 #[tokio::test]
 async fn test_set_hidden_category_http_exception_reraise() {
     let tmp = TempDir::new().unwrap();
@@ -2578,7 +2577,7 @@ async fn test_set_hidden_category_http_exception_reraise() {
     assert_eq!(resp.status, 422);
 }
 
-/// Lines 238-239: delete_book 'Ok' 경로
+/// delete_book 'Ok' 경로
 #[tokio::test]
 async fn test_delete_book_ok_path() {
     let tmp = TempDir::new().unwrap();
@@ -2591,7 +2590,7 @@ async fn test_delete_book_ok_path() {
     assert_eq!(data["result"], "Ok");
 }
 
-/// Lines 270-271: validate_book 책 없음 경로
+/// validate_book 책 없음 경로
 #[tokio::test]
 async fn test_validate_book_not_found() {
     let tmp = TempDir::new().unwrap();
@@ -2604,7 +2603,7 @@ async fn test_validate_book_not_found() {
     assert!(data["error"].as_str().unwrap().contains("Book not found"), "{data}");
 }
 
-/// Lines 278-279: validate_book 지원하지 않는 파일 타입
+/// validate_book 지원하지 않는 파일 타입
 #[tokio::test]
 async fn test_validate_book_unsupported_type() {
     let tmp = TempDir::new().unwrap();
@@ -2617,7 +2616,7 @@ async fn test_validate_book_unsupported_type() {
     assert!(data["error"].as_str().unwrap().contains("not supported"), "{data}");
 }
 
-/// Line 285: validate_book 에러 경로
+/// validate_book 에러 경로
 #[tokio::test]
 async fn test_validate_book_error_result() {
     let tmp = TempDir::new().unwrap();
@@ -2633,7 +2632,7 @@ async fn test_validate_book_error_result() {
     assert_eq!(data["error"], "validation failed");
 }
 
-/// Line 333: delete_category mapping_deleted=False 경로
+/// delete_category mapping_deleted=False 경로
 #[tokio::test]
 async fn test_delete_category_mapping_not_deleted() {
     let tmp = TempDir::new().unwrap();

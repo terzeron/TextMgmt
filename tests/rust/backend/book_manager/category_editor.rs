@@ -12,7 +12,7 @@ use std::os::unix::fs::symlink;
 
 #[test]
 fn test_rename_category_new_path_traversal() {
-    // Line 1149: new_category resolved path escapes path_prefix
+    // new_category resolved path escapes path_prefix
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();
@@ -28,7 +28,7 @@ fn test_rename_category_new_path_traversal() {
 
 #[test]
 fn test_rename_category_old_count_zero() {
-    // Line 1155: old_category has 0 documents
+    // old_category has 0 documents
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
@@ -39,7 +39,7 @@ fn test_rename_category_old_count_zero() {
 
 #[test]
 fn test_rename_category_new_count_nonzero() {
-    // Line 1159: new_category already has documents
+    // new_category already has documents
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
@@ -85,7 +85,6 @@ fn test_rename_category_blocks_target_with_subcategory_documents() {
 
 #[test]
 fn test_delete_category_success() {
-    // Lines 2326-2328
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();

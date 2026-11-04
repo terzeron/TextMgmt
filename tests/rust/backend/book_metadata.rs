@@ -43,7 +43,7 @@ fn test_json_and_str() {
     let book_id = 4;
     let info = info_with_path(prefix().join("category1").join("book.txt"), "txt", 10);
     let book = Book::new(book_id, &info, 0.0);
-    assert!(book.json().contains("\"title\": \"title1\""), "{}", book.json());
+    assert_eq!(book.dict()["title"], "title1");
     assert!(book.to_string().contains("category: category1"), "{book}");
 }
 

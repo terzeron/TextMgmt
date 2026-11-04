@@ -604,7 +604,7 @@ fn value_text(value: &Value) -> String {
     }
 }
 
-use crate::truthy;
+use crate::has_content;
 
 pub fn extract_html_candidates(store: &str, detail_url: &str, html: &str) -> Vec<Value> {
     match default_client(store) {
@@ -683,7 +683,7 @@ pub fn parse_joara_candidates(data: &Value) -> Result<Vec<Value>, CoverSourceErr
     }
     let mut results = Vec::new();
     for book in list_of(data, "data", "list") {
-        if truthy(book.get("cover")) && truthy(book.get("book_code")) {
+        if has_content(book.get("cover")) && has_content(book.get("book_code")) {
             results.push(json!({
                 "title": book.get("subject").cloned().unwrap_or(json!("")),
                 "author": book.get("member_name").cloned().unwrap_or(json!("")),
@@ -701,7 +701,7 @@ pub fn parse_munpia_candidates(data: &Value) -> Result<Vec<Value>, CoverSourceEr
     }
     let mut results = Vec::new();
     for book in list_of(data, "result", "searchNovelTabDtos") {
-        if truthy(book.get("coverUrl")) && truthy(book.get("novelId")) {
+        if has_content(book.get("coverUrl")) && has_content(book.get("novelId")) {
             results.push(json!({
                 "title": book.get("title").cloned().unwrap_or(json!("")),
                 "author": book.get("author").cloned().unwrap_or(json!("")),

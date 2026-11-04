@@ -1,4 +1,4 @@
-//! EUC-KR 바이트를 latin-1로 잘못 읽은 구간 세기. 원본: `Loader._count_mojibake_runs`.
+//! EUC-KR 바이트를 latin-1로 잘못 읽은 구간 세기.
 
 use text_extractor::{decode_korean_ignore, is_hangul_syllable};
 

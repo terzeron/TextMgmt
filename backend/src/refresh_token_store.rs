@@ -87,10 +87,6 @@ fn truncate(value: Option<&str>, limit: usize) -> Option<String> {
     value.filter(|v| !v.is_empty()).map(|v| v.chars().take(limit).collect())
 }
 
-fn sql_with(template: &str, placeholder: &str) -> String {
-    template.replace("{p}", placeholder)
-}
-
 // ---------------------------------------------------------------------------
 // User-Agent 요약
 // ---------------------------------------------------------------------------
@@ -178,9 +174,9 @@ fn parse_browser_name_version(user_agent: &str) -> Option<(String, i64)> {
 // 세션 집계
 // ---------------------------------------------------------------------------
 
-// family 단위 집계. `{p}` 는 저장소별 placeholder(?, %s)로 치환한다.
+// family 단위 집계.
 // 접속 IP/UA 는 family 안에서 가장 최근에 발급된 토큰(= 마지막 refresh 갱신) 값을 쓴다.
-// `{p}` 두 개가 서브쿼리의 {where} 보다 앞서 나오므로 파라미터 순서는 (now, now, ...) 다.
+// `?` 두 개가 서브쿼리의 {where} 보다 앞서 나오므로 파라미터 순서는 (now, now, ...) 다.
 const SESSION_AGGREGATE_SQL: &str = "
     SELECT family_id,
            email,
@@ -188,8 +184,8 @@ const SESSION_AGGREGATE_SQL: &str = "
            MAX(issued_at) AS last_seen_at,
            MAX(expires_at) AS max_expires_at,
            COUNT(*) AS token_count,
-           SUM(CASE WHEN revoked_at IS NULL AND expires_at >= {p} THEN 1 ELSE 0 END) AS valid_token_count,
-           MAX(CASE WHEN revoked_at IS NULL AND expires_at >= {p} THEN expires_at ELSE 0 END) AS active_expires_at,
+           SUM(CASE WHEN revoked_at IS NULL AND expires_at >= ? THEN 1 ELSE 0 END) AS valid_token_count,
+           MAX(CASE WHEN revoked_at IS NULL AND expires_at >= ? THEN expires_at ELSE 0 END) AS active_expires_at,
            MAX(CASE WHEN revoke_reason IS NOT NULL AND revoke_reason <> 'rotated' THEN revoke_reason END) AS terminal_reason,
            MAX(revoked_at) AS revoked_at,
            MAX(CASE WHEN recency_rank = 1 THEN client_ip END) AS client_ip,
@@ -212,16 +208,16 @@ const SESSION_AGGREGATE_SQL: &str = "
     LIMIT {limit}
 ";
 
-fn session_aggregate_sql(placeholder: &str, by_email: bool, by_family: bool, limit: usize) -> String {
+fn session_aggregate_sql(by_email: bool, by_family: bool, limit: usize) -> String {
     let mut conditions = Vec::new();
     if by_email {
-        conditions.push(format!("email = {placeholder}"));
+        conditions.push("email = ?");
     }
     if by_family {
-        conditions.push(format!("family_id = {placeholder}"));
+        conditions.push("family_id = ?");
     }
     let where_clause = if conditions.is_empty() { String::new() } else { format!("WHERE {}", conditions.join(" AND ")) };
-    sql_with(SESSION_AGGREGATE_SQL, placeholder).replace("{where}", &where_clause).replace("{limit}", &limit.to_string())
+    SESSION_AGGREGATE_SQL.replace("{where}", &where_clause).replace("{limit}", &limit.to_string())
 }
 
 static NULL: DbValue = DbValue::Null;
@@ -457,21 +453,21 @@ impl Default for SessionQuery {
 
 const INSERT_TOKEN_SQL: &str = "INSERT INTO refresh_tokens
     (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason, client_ip, user_agent)
-VALUES ({p}, {p}, {p}, {p}, {p}, NULL, NULL, NULL, {p}, {p})";
+VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)";
 
-const SELECT_TOKEN_SQL: &str = "SELECT family_id, email, expires_at, replaced_by, revoked_at, revoke_reason FROM refresh_tokens WHERE jti = {p}";
+const SELECT_TOKEN_SQL: &str = "SELECT family_id, email, expires_at, replaced_by, revoked_at, revoke_reason FROM refresh_tokens WHERE jti = ?";
 
-const MARK_ROTATED_SQL: &str = "UPDATE refresh_tokens SET replaced_by = {p}, revoked_at = {p}, revoke_reason = {p} WHERE jti = {p}";
+const MARK_ROTATED_SQL: &str = "UPDATE refresh_tokens SET replaced_by = ?, revoked_at = ?, revoke_reason = ? WHERE jti = ?";
 
 const REVOKE_FAMILY_SQL: &str = "UPDATE refresh_tokens
-SET revoked_at = COALESCE(revoked_at, {p}),
+SET revoked_at = COALESCE(revoked_at, ?),
     revoke_reason = CASE
-        WHEN revoke_reason IS NULL OR revoke_reason = 'rotated' THEN {p}
+        WHEN revoke_reason IS NULL OR revoke_reason = 'rotated' THEN ?
         ELSE revoke_reason
     END
-WHERE family_id = {p}";
+WHERE family_id = ?";
 
-const OBSERVATION_SQL: &str = "SELECT replaced_by, revoked_at, revoke_reason FROM refresh_tokens WHERE jti = {p}";
+const OBSERVATION_SQL: &str = "SELECT replaced_by, revoked_at, revoke_reason FROM refresh_tokens WHERE jti = ?";
 
 struct TokenRow {
     family_id: String,
@@ -585,28 +581,28 @@ pub trait RefreshTokenStoreApi: Send + Sync {
     /// 관측 로깅 전용 읽기 조회. 토큰 상태 판정이나 인가에 사용하지 않는다.
     fn get_token_observation(&self, token_id: &str) -> Result<Option<Value>, StoreError>;
 
-    fn _session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError>;
+    fn session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError>;
 
     /// 회전된 개별 토큰 대신 family의 유효 토큰을 확인해 갱신 중에도 접근을 유지한다.
     fn is_session_active(&self, family_id: &str, email: &str) -> Result<bool, StoreError> {
-        let rows = self._session_rows(Some(email), Some(family_id))?;
+        let rows = self.session_rows(Some(email), Some(family_id))?;
         Ok(rows.iter().any(|row| text_of(cell(row, "family_id")) == family_id && text_of(cell(row, "email")) == email && int_of(cell(row, "valid_token_count")) > 0))
     }
 
     fn list_sessions(&self, q: &SessionQuery) -> Result<Value, StoreError> {
-        let rows = self._session_rows(q.email.as_deref(), None)?;
+        let rows = self.session_rows(q.email.as_deref(), None)?;
         Ok(build_session_page(&rows, q))
     }
 
     /// 관리자 요청으로 family 하나를 폐기한다. 존재하지 않으면 found=false.
     fn revoke_session(&self, family_id: &str) -> Result<Value, StoreError> {
-        let before = self._session_rows(None, Some(family_id))?;
+        let before = self.session_rows(None, Some(family_id))?;
         let Some(first) = before.first() else {
             return Ok(json!({"found": false, "revoked": false, "session": null}));
         };
         let had_active = int_of(cell(first, "valid_token_count")) > 0;
         self.revoke_family(family_id, ADMIN_REVOKE_REASON)?;
-        let after = self._session_rows(None, Some(family_id))?;
+        let after = self.session_rows(None, Some(family_id))?;
         Ok(json!({"found": true, "revoked": had_active, "session": after.first().map(|r| derive_session(r).to_json())}))
     }
 }
@@ -698,8 +694,7 @@ impl MySQLRefreshTokenStore {
 
     fn init_db(&self) -> Result<(), StoreError> {
         self.with_conn(|conn| {
-            let mut cur = conn.cursor();
-            cur.execute(
+            conn.execute(
                 "CREATE TABLE IF NOT EXISTS refresh_tokens (
                     jti VARCHAR(64) PRIMARY KEY,
                     family_id VARCHAR(64) NOT NULL,
@@ -715,26 +710,26 @@ impl MySQLRefreshTokenStore {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
                 &[],
             )?;
-            Self::migrate_add_client_columns(cur.as_mut())?;
-            drop(cur);
+            Self::migrate_add_client_columns(conn)?;
             conn.commit()
         })
     }
 
     /// 컬럼 추가 이전에 만들어진 테이블에 client_ip/user_agent 를 붙인다.
-    fn migrate_add_client_columns(cur: &mut dyn db::DbCursor) -> Result<(), DbError> {
+    fn migrate_add_client_columns(conn: &mut dyn DbConnection) -> Result<(), DbError> {
         for (column, definition) in [("client_ip", "VARCHAR(45)"), ("user_agent", "VARCHAR(512)")] {
-            cur.execute("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'refresh_tokens' AND column_name = %s", &[column.into()])?;
-            if cur.fetchone().is_some_and(|row| int_of(cell(&row, "cnt")) == 0) {
+            let count =
+                conn.fetch_one("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'refresh_tokens' AND column_name = ?", &[column.into()])?;
+            if count.is_some_and(|row| int_of(cell(&row, "cnt")) == 0) {
                 log::info!("Migrating refresh_tokens: adding {column} column");
-                cur.execute(&format!("ALTER TABLE refresh_tokens ADD COLUMN {column} {definition}"), &[])?;
+                conn.execute(&format!("ALTER TABLE refresh_tokens ADD COLUMN {column} {definition}"), &[])?;
             }
         }
         Ok(())
     }
 
-    fn revoke_family_in(cur: &mut dyn db::DbCursor, family_id: &str, reason: &str, revoked_at: i64) -> Result<(), DbError> {
-        cur.execute(&sql_with(REVOKE_FAMILY_SQL, "%s"), &[revoked_at.into(), reason.into(), family_id.into()])
+    fn revoke_family_in(conn: &mut dyn DbConnection, family_id: &str, reason: &str, revoked_at: i64) -> Result<(), DbError> {
+        conn.execute(REVOKE_FAMILY_SQL, &[revoked_at.into(), reason.into(), family_id.into()]).map(drop)
     }
 }
 
@@ -751,10 +746,10 @@ impl RefreshTokenStoreApi for MySQLRefreshTokenStore {
             truncate(user_agent, MAX_USER_AGENT_LENGTH).into(),
         ];
         self.with_conn(|conn| {
-            conn.cursor().execute(
+            conn.execute(
                 &format!(
                     "INSERT INTO refresh_tokens ({TABLE_COLUMNS})
-                    VALUES (%s, %s, %s, %s, %s, NULL, NULL, NULL, %s, %s)
+                    VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
                     ON DUPLICATE KEY UPDATE
                         family_id = VALUES(family_id), email = VALUES(email),
                         issued_at = VALUES(issued_at), expires_at = VALUES(expires_at),
@@ -788,30 +783,27 @@ impl RefreshTokenStoreApi for MySQLRefreshTokenStore {
             truncate(client_ip, MAX_CLIENT_IP_LENGTH).into(),
             truncate(user_agent, MAX_USER_AGENT_LENGTH).into(),
         ];
-        let insert_sql = sql_with(INSERT_TOKEN_SQL, "%s");
         // autocommit=0 연결이라 첫 문장(SELECT ... FOR UPDATE)이 트랜잭션을 연다.
         self.in_transaction(|conn| {
-            let mut cur = conn.cursor();
-            cur.execute(&format!("{} FOR UPDATE", sql_with(SELECT_TOKEN_SQL, "%s")), &[current_token_id.into()])?;
-            let row = cur.fetchone().map(|r| TokenRow::from_db_row(&r));
+            let row = conn.fetch_one(&format!("{SELECT_TOKEN_SQL} FOR UPDATE"), &[current_token_id.into()])?.map(|r| TokenRow::from_db_row(&r));
             match plan_rotation(row.as_ref(), family_id, email, now) {
                 Plan::Reject(result) => {
                     conn.rollback()?;
                     Ok(result)
                 }
                 Plan::InsertOnly => {
-                    cur.execute(&insert_sql, &insert_params)?;
+                    conn.execute(INSERT_TOKEN_SQL, &insert_params)?;
                     conn.commit()?;
                     Ok(Rotation::Ok)
                 }
                 Plan::RevokeFamily { reason, result } => {
-                    Self::revoke_family_in(cur.as_mut(), family_id, reason, now)?;
+                    Self::revoke_family_in(conn, family_id, reason, now)?;
                     conn.commit()?;
                     Ok(result)
                 }
                 Plan::Rotate => {
-                    cur.execute(&insert_sql, &insert_params)?;
-                    cur.execute(&sql_with(MARK_ROTATED_SQL, "%s"), &[new_token_id.into(), issued_at.into(), "rotated".into(), current_token_id.into()])?;
+                    conn.execute(INSERT_TOKEN_SQL, &insert_params)?;
+                    conn.execute(MARK_ROTATED_SQL, &[new_token_id.into(), issued_at.into(), "rotated".into(), current_token_id.into()])?;
                     conn.commit()?;
                     Ok(Rotation::Ok)
                 }
@@ -822,32 +814,24 @@ impl RefreshTokenStoreApi for MySQLRefreshTokenStore {
     fn revoke_family(&self, family_id: &str, reason: &str) -> Result<(), StoreError> {
         let now = self.now();
         self.in_transaction(|conn| {
-            Self::revoke_family_in(conn.cursor().as_mut(), family_id, reason, now)?;
+            Self::revoke_family_in(conn, family_id, reason, now)?;
             conn.commit()
         })
     }
 
     fn get_token_observation(&self, token_id: &str) -> Result<Option<Value>, StoreError> {
-        let row = self.with_conn(|conn| {
-            let mut cur = conn.cursor();
-            cur.execute(&sql_with(OBSERVATION_SQL, "%s"), &[token_id.into()])?;
-            Ok(cur.fetchone())
-        })?;
+        let row = self.with_conn(|conn| conn.fetch_one(OBSERVATION_SQL, &[token_id.into()]))?;
         Ok(row.map(|r| observation_json(cell(&r, "replaced_by"), cell(&r, "revoked_at"), cell(&r, "revoke_reason"))))
     }
 
-    fn _session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
+    fn session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
         let now = self.now();
-        let sql = session_aggregate_sql("%s", email.is_some(), family_id.is_some(), self.max_session_groups);
+        let sql = session_aggregate_sql(email.is_some(), family_id.is_some(), self.max_session_groups);
         // SQL 안에서 `now` placeholder 는 두 CASE 식에 각각 한 번씩 쓰인다.
         let mut params: Vec<DbValue> = vec![now.into(), now.into()];
         params.extend(email.map(DbValue::from));
         params.extend(family_id.map(DbValue::from));
-        let rows = self.with_conn(|conn| {
-            let mut cur = conn.cursor();
-            cur.execute(&sql, &params)?;
-            Ok(cur.fetchall().unwrap_or_default())
-        })?;
+        let rows = self.with_conn(|conn| conn.fetch_all(&sql, &params))?;
         warn_if_truncated(rows.len(), self.max_session_groups);
         Ok(rows)
     }
@@ -897,8 +881,8 @@ impl RefreshTokenStoreApi for AnyRefreshTokenStore {
         self.inner().get_token_observation(token_id)
     }
 
-    fn _session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
-        self.inner()._session_rows(email, family_id)
+    fn session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
+        self.inner().session_rows(email, family_id)
     }
 }
 

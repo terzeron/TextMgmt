@@ -37,7 +37,6 @@ fn test_get_category_mismatch_details_reads_all_pages() {
 
 #[test]
 fn test_get_category_mismatches_root_file() {
-    // Line 1722
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();

@@ -1,4 +1,4 @@
-//! 적재 흐름: 배치로 파일을 읽어 ES에 넣는다. 원본: `main()` 안의 `process_file_iter`와 인자 처리.
+//! 적재 흐름: 배치로 파일을 읽어 ES에 넣는다.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::Metadata;
@@ -235,7 +235,7 @@ impl Loader<'_> {
                         let _ = writeln!(out, "  [중복 제거: {cleaned}개 기존 문서 삭제]");
                     }
                     Ok(_) => {}
-                    // 원본처럼 중복 정리 실패는 적재를 멈추지 않는다.
+                    // 중복 정리 실패는 적재를 멈추지 않는다.
                     Err(e) => eprintln!("ERROR delete_by_file_paths error: {e}"),
                 }
                 self.es.insert(&batch_data)?;

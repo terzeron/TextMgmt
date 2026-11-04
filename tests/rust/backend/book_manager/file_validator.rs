@@ -13,7 +13,7 @@ use std::fs;
 
 #[test]
 fn test_validate_pdf_producer_and_creation_date() {
-    // Lines 395, 397: PDF with Producer and CreationDate metadata
+    // PDF with Producer and CreationDate metadata
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();

@@ -44,7 +44,7 @@ fn print_hits(hits: &[Hit], separator: bool, out: &mut dyn Write) -> std::io::Re
 }
 
 /// 진입점. `connect`는 ES 접속을 만든다. 제목 인자가 없으면 접속하지 않고 사용법만 보인다.
-/// 종료 코드: 정상 0, 환경변수 누락 255(원본 `sys.exit(-1)`), 그 밖의 실패 1.
+/// 종료 코드: 정상 0, 환경변수 누락 255, 그 밖의 실패 1.
 pub fn run<'a>(program: &str, args: &[String], out: &mut dyn Write, connect: &dyn Fn() -> Result<&'a dyn BookSearch, EsError>) -> i32 {
     let Some(title) = args.first().filter(|a| !matches!(a.as_str(), "-h" | "--help")) else {
         print_usage(program, out);

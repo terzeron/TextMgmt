@@ -496,7 +496,7 @@ mod test_pdf_pages {
 
 // ── /category-mismatches admin endpoints ─────────────────────────────────────
 
-/// 원본의 `fake_propose(*args, on_progress=None, **kwargs)`에 대응한다.
+/// 분류 제안 대역.
 /// `on_progress`로 이벤트를 차례로 보내고(돌려받은 awaitable은 await), 이벤트마다 `after_event(번호)`를 부른 뒤 최종 결과를 돌려준다.
 fn fake_propose(
     events: Vec<Value>,

@@ -280,7 +280,7 @@ fn test_svg_download_blocks_active_content() {
     }
 }
 
-// ── sanitize_html_for_viewer: external src 속성 제거 (line 116) ─────────────
+// ── sanitize_html_for_viewer: external src 속성 제거 ─────────────
 
 #[test]
 fn test_sanitize_html_external_src_attribute_removed() {
@@ -343,7 +343,7 @@ fn test_missing_required_es_fields_returns_server_error() {
 
 #[test]
 fn test_book_not_found_returns_404() {
-    // ES 에 책이 없으면 404 (line 859).
+    // ES 에 책이 없으면 404.
     let tmp = tmp_dir();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
     let resp = block_on(manager.get_html_resource(99, "image.jpg"));
@@ -352,7 +352,7 @@ fn test_book_not_found_returns_404() {
 
 #[test]
 fn test_non_html_file_returns_400() {
-    // HTML 이 아닌 파일(.epub)은 400 (line 862).
+    // HTML 이 아닌 파일(.epub)은 400.
     let tmp = tmp_dir();
     let doc = make_doc("A/book.epub", "epub");
     let manager = make_manager(tmp.path(), &FakeEsManager::with_doc(doc));
@@ -362,7 +362,7 @@ fn test_non_html_file_returns_400() {
 
 #[test]
 fn test_path_traversal_via_symlink_returns_400() {
-    // html_dir 밖을 가리키는 심볼릭 링크는 400 (line 872).
+    // html_dir 밖을 가리키는 심볼릭 링크는 400.
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let html_file = tmp_path.join("A").join("book.html");
@@ -383,7 +383,7 @@ fn test_path_traversal_via_symlink_returns_400() {
 
 #[test]
 fn test_resource_file_not_found_returns_404() {
-    // html_dir 내 존재하지 않는 리소스는 404 (line 876).
+    // html_dir 내 존재하지 않는 리소스는 404.
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let html_file = tmp_path.join("A").join("book.html");
@@ -398,7 +398,7 @@ fn test_resource_file_not_found_returns_404() {
 
 #[test]
 fn test_is_relative_to_oserror_returns_400() {
-    // is_relative_to 가 OSError 를 던지면 400 (lines 873-874).
+    // is_relative_to 가 OSError 를 던지면 400.
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let html_file = tmp_path.join("A").join("book.html");

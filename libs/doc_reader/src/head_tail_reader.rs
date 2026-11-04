@@ -108,7 +108,7 @@ impl EpubPackage {
     pub fn open(path: &Path) -> Option<Self> {
         let mut zip = open_zip(path)?;
         let names: Vec<String> = zip.file_names().filter_map(|n| n.ok().map(|n| n.into_owned())).collect();
-        // 확장자 비교는 대소문자를 가리고 첫 번째 것만 쓴다(원본과 같다).
+        // 확장자 비교는 대소문자를 가리고 첫 번째 것만 쓴다.
         let opf_path = names.iter().find(|n| n.ends_with(".opf"))?.clone();
         let opf = read_member(&mut zip, &opf_path).ok()??;
         Some(EpubPackage { zip, opf_path, opf })

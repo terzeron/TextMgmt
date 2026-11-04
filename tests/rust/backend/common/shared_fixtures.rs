@@ -810,7 +810,7 @@ impl RefreshTokenStoreApi for FakeStore {
         }
     }
 
-    fn _session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
+    fn session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
         if let Some(Err(error)) = self.sessions.lock().unwrap().as_ref() {
             return Err(StoreError::Unsupported(error.clone()));
         }
@@ -933,7 +933,7 @@ pub type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 // ── fixture: client / mock_bm / mock_cm / mock_cat / override_auth ───────────
 
-/// 원본의 `client`, `mock_bm`, `mock_cm`, `mock_cat`, `override_auth` fixture를 한데 묶는다.
+/// 테스트 client와 manager 대역, 인증 우회를 한데 묶는다.
 /// 인증 우회는 기본이 관리자이고, 테스트가 `set_auth`로 viewer로 바꾼다.
 /// 원본에서 이 fixture들을 요청하지 않은 테스트도 같은 가짜 매니저를 쓴다. 그 테스트들은 매니저를 호출하지 않는다.
 pub struct Fx {
@@ -1483,8 +1483,8 @@ impl RefreshTokenStoreApi for Mock {
         self.invoke_sync_try("get_token_observation", call_args!([token_id], {})).map(opt_json).map_err(StoreError::Unsupported)
     }
 
-    fn _session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
-        let value = self.invoke_sync_try("_session_rows", call_args!([email, family_id], {})).map_err(StoreError::Unsupported)?;
+    fn session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
+        let value = self.invoke_sync_try("session_rows", call_args!([email, family_id], {})).map_err(StoreError::Unsupported)?;
         let rows = value
             .as_array()
             .cloned()

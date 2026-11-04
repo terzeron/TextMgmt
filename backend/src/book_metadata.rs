@@ -1,13 +1,10 @@
 //! 책 한 권의 메타데이터.
 
 use std::fmt;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, Timelike};
-use serde::Serialize;
-use serde_json::ser::{Formatter, Serializer};
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime};
 use serde_json::{Value, json};
 
 /// `TM_BOOK_DIR`에서 책 루트를 읽는다. 없으면 프로세스를 끝내야 하는 설정 오류를 돌려준다.
@@ -155,20 +152,6 @@ impl Book {
             "score": self.score,
         })
     }
-
-    /// JSON 문자열: 구분자 ", "와 ": ", 비ASCII는 `\uXXXX`로 이스케이프한다.
-    pub fn json(&self) -> String {
-        let mut out = Vec::new();
-        let mut ser = Serializer::with_formatter(&mut out, SpacedAsciiFormatter);
-        self.dict().serialize(&mut ser).expect("메모리에 쓰기");
-        String::from_utf8(out).expect("ASCII")
-    }
-}
-
-/// 표시용 날짜 문자열 `YYYY-MM-DD HH:MM:SS[.ffffff]`. 마이크로초가 있을 때만 소수부를 붙인다.
-fn display_datetime(t: &NaiveDateTime) -> String {
-    let micros = t.nanosecond() / 1000;
-    if micros == 0 { t.format("%Y-%m-%d %H:%M:%S").to_string() } else { format!("{}.{micros:06}", t.format("%Y-%m-%d %H:%M:%S")) }
 }
 
 impl fmt::Display for Book {
@@ -182,37 +165,7 @@ impl fmt::Display for Book {
             self.file_path.display(),
             self.file_type,
             self.file_size,
-            display_datetime(&self.updated_time)
+            self.updated_time
         )
-    }
-}
-
-struct SpacedAsciiFormatter;
-
-impl Formatter for SpacedAsciiFormatter {
-    fn begin_array_value<W: ?Sized + io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
-        if first { Ok(()) } else { writer.write_all(b", ") }
-    }
-
-    fn begin_object_key<W: ?Sized + io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
-        if first { Ok(()) } else { writer.write_all(b", ") }
-    }
-
-    fn begin_object_value<W: ?Sized + io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(b": ")
-    }
-
-    fn write_string_fragment<W: ?Sized + io::Write>(&mut self, writer: &mut W, fragment: &str) -> io::Result<()> {
-        let mut units = [0u16; 2];
-        for ch in fragment.chars() {
-            if ch.is_ascii() {
-                writer.write_all(&[ch as u8])?;
-            } else {
-                for unit in ch.encode_utf16(&mut units) {
-                    write!(writer, "\\u{unit:04x}")?;
-                }
-            }
-        }
-        Ok(())
     }
 }

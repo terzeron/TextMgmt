@@ -370,12 +370,10 @@ pub enum EsError {              // 실제 es_client::EsError에 변형 3개를 �
 impl EsError { pub fn is_not_found(&self) -> bool; pub fn is_connection(&self) -> bool; }
 // 구 ElasticsearchError 매핑: ConnectionError -> Transport, NotFoundError -> Status{404}, BadRequestError{message,status} -> Status{status, body:message}, RuntimeError -> Other
 
-// 저수준: ESManager 단위 테스트와 분류기 corpus가 쓴다. 구 EsApi(call), EsLike
+// 저수준: ESManager 단위 테스트가 쓴다. EsRequest variant 하나가 ES REST 호출 하나다.
 pub trait EsTransport: Send + Sync {
     fn index_name(&self) -> &str;
-    fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>;          // "indices.exists" 등
-    fn get(&self, kwargs: &Value) -> Result<Value, EsError> { self.call("get", kwargs) }
-    fn search(&self, kwargs: &Value) -> Result<Value, EsError> { self.call("search", kwargs) }
+    fn send(&self, request: &EsRequest) -> Result<Value, EsError>;              // EsRequest::Search { .. } 등
 }
 
 // 고수준: BookManager, 라우트, 분류기 조회가 쓴다. 모든 메서드 기본 구현 = Err(EsError::Unsupported)
@@ -404,7 +402,7 @@ impl ESManager {
 // ESManager는 EsManagerApi를 구현한다. BookManager는 Arc<dyn EsManagerApi>만 안다.
 ```
 
-- `ESManager` 자기 비공개 메서드 바꿔치기(`set_search_override` 등 6종, 15개 테스트)는 trait로 올리지 않는다. 대신 `EsTransport`에 `call("search")` 응답을 스크립트하는 `DummyEs::on(op, handler)`(common/es_dummy에 이미 있음)로 같은 분기를 만든다. `_search` 반환을 직접 주입해야 하는 3~4개 테스트만 `ESManager::with_search_stub(Arc<dyn Fn>)` 한 개를 남긴다(미결정 아님, 구현 시 판단).
+- `ESManager` 자기 비공개 메서드 바꿔치기(`set_search_override` 등 6종, 15개 테스트)는 trait로 올리지 않는다. 대신 `EsTransport`의 `EsRequest::Search` 응답을 스크립트하는 `DummyEs::on(op, handler)`(common/es_dummy에 이미 있음)로 같은 분기를 만든다. `_search` 반환을 직접 주입해야 하는 3~4개 테스트만 `ESManager::with_search_stub(Arc<dyn Fn>)` 한 개를 남긴다(미결정 아님, 구현 시 판단).
 - 분류기: `EsLookup`/`EsLike`는 없앤다. `ClassifierOptions.es: Option<Arc<dyn EsTransport>>`로 `get`/`search`를 직접 쓰고, 상위 `_source` 조회가 필요하면 `EsManagerApi::get_by_id_source`를 쓴다(미결정 아님).
 - `BookIndex`(cover)는 `EsManagerApi`의 부분집합이라 없앤다. 기본 구현 덕분에 `search_by_id`와 `update`만 구현한 fake가 그대로 `EsManagerApi`가 된다.
 - `loader`의 `IndexStore`, `es_client::BookStore/BookSearch`는 그대로 둔다.

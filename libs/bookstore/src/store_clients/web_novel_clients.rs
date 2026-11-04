@@ -19,7 +19,7 @@ impl Bookstore for MunpiaBookstore {
 
     /// 공백은 `%20`으로 인코딩한다.
     fn build_search_url(&self, keyword: &str) -> String {
-        format!("{MUNPIA_BASE_URL}/page/hd.platinum/view/search/keyword/{}/order/search_result", quote(keyword, ""))
+        format!("{MUNPIA_BASE_URL}/page/hd.platinum/view/search/keyword/{}/order/search_result", quote_component(keyword))
     }
 
     fn extract_search_links(&self, markup: &str) -> Vec<String> {
@@ -75,7 +75,7 @@ impl Bookstore for NaverSeriesBookstore {
     default_keyword_search!();
 
     fn build_search_url(&self, keyword: &str) -> String {
-        format!("{NAVER_SERIES_BASE_URL}/search/search.series?t=all&q={}", quote(keyword, "/"))
+        format!("{NAVER_SERIES_BASE_URL}/search/search.series?t=all&q={}", quote(keyword))
     }
 
     /// 웹소설은 `nov.title`, 만화는 `com.title` 링크다.
@@ -194,7 +194,7 @@ impl JoaraBookstore {
 
         let mut results = Vec::new();
         for book in books.iter().take(self.max_results) {
-            let code = if truthy(book.get("book_code")) { json_text(book.get("book_code")) } else { String::new() };
+            let code = if has_content(book.get("book_code")) { json_text(book.get("book_code")) } else { String::new() };
             let (title, author, category) = (str_field(book, "subject"), str_field(book, "member_name"), str_field(book, "category_name"));
             let detail_url = if code.is_empty() { String::new() } else { format!("{JOARA_BASE_URL}/book/{code}") };
             if !title.is_empty() && !detail_url.is_empty() {
@@ -214,7 +214,7 @@ impl Bookstore for JoaraBookstore {
 
     /// 사용자가 눌러 볼 수 있는 조아라 검색 결과 페이지 URL
     fn build_search_url(&self, keyword: &str) -> String {
-        format!("{JOARA_BASE_URL}/search?target=subject&word={}&search=", quote(keyword, "/"))
+        format!("{JOARA_BASE_URL}/search?target=subject&word={}&search=", quote(keyword))
     }
 
     // 조아라 검색은 제목(target=subject)만 본다. 저자를 붙이면 늘 0건이라 제목만 넘긴다.

@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-/// 목록 응답에 필요한 필드만 받는다. summary는 단건 조회에만 쓴다(원본 `LIST_SOURCE_FIELDS`).
+/// 목록 응답에 필요한 필드만 받는다. summary는 단건 조회에만 쓴다.
 pub const LIST_SOURCE_FIELDS: [&str; 11] = ["category", "title", "author", "file_path", "file_type", "file_size", "line_count", "page_count", "isbn", "created_time", "updated_time"];
 
 /// HTTP(S) agent를 만든다. CA를 지정하면 그 인증서를 TLS trust root로 사용한다.
@@ -186,7 +186,7 @@ impl EsClient {
 
     pub fn from_env() -> Result<Self, EsError> {
         let get = |k: &str| std::env::var(k).map_err(|_| EsError::MissingEnv(k.to_owned()));
-        // 원본과 같은 순서로 확인해 처음 빠진 변수를 알린다.
+        // 정해진 순서로 확인해 처음 빠진 변수를 알린다.
         for key in ENV_KEYS {
             get(key)?;
         }

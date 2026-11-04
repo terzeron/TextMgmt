@@ -42,7 +42,7 @@ impl RefreshTokenStoreApi for ContentSessions {
         Err(unsupported())
     }
 
-    fn _session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
+    fn session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
         Ok([(ADMIN_FAMILY, "admin@test.com"), (VIEWER_FAMILY, "viewer@test.com")]
             .into_iter()
             .filter(|(fid, owner)| email.is_none_or(|e| e == *owner) && family_id.is_none_or(|f| f == *fid))

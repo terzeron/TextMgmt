@@ -17,17 +17,17 @@ impl ESManager {
         let max_result_count = resolve_count(max_result_count);
         // max_result_window 오류를 피하려고 크기를 자른다.
         let size = max_result_count.min(MAX_RESULT_WINDOW);
-        log::debug!("_search(max_result_count={max_result_count}, size={size}, query='{query}')");
+        log::debug!("search(max_result_count={max_result_count}, size={size}, query='{query}')");
 
         if max_result_count <= MAX_RESULT_WINDOW {
-            let mut kwargs = json!({"index": self.index(), "query": query, "size": size, "track_scores": true});
+            let mut body = json!({"query": query, "size": size, "track_scores": true});
             if let Some(sort) = sort {
-                kwargs["sort"] = sort.clone();
+                body["sort"] = sort.clone();
             }
             if let Some(fields) = source_fields {
-                kwargs["source"] = json!(fields);
+                body["_source"] = json!(fields);
             }
-            let response = self.es.call("search", &kwargs)?;
+            let response = self.es.send(&EsRequest::search(body))?;
             let Some(max_score) = response["hits"]["max_score"].as_f64() else { return Ok(Vec::new()) };
             let mut result = Self::normalized_hits(&response, max_score)?;
             result.truncate(max_result_count as usize);
@@ -37,7 +37,7 @@ impl ESManager {
         let mut scroll_id: Option<String> = None;
         let outcome = self.scroll_search(query, sort, size, max_result_count, &mut scroll_id);
         if let Some(id) = scroll_id
-            && let Err(e) = self.es.call("clear_scroll", &json!({"scroll_id": id}))
+            && let Err(e) = self.es.send(&EsRequest::ClearScroll { scroll_id: id })
         {
             log::debug!("Failed to clear scroll: {e}");
         }
@@ -45,11 +45,11 @@ impl ESManager {
     }
 
     fn scroll_search(&self, query: &Value, sort: Option<&Value>, size: i64, max_result_count: i64, scroll_id: &mut Option<String>) -> Result<Vec<Hit>, EsError> {
-        let mut kwargs = json!({"index": self.index(), "query": query, "scroll": "10m", "track_scores": true, "size": size});
+        let mut body = json!({"query": query, "track_scores": true, "size": size});
         if let Some(sort) = sort {
-            kwargs["sort"] = sort.clone();
+            body["sort"] = sort.clone();
         }
-        let mut response = self.es.call("search", &kwargs)?;
+        let mut response = self.es.send(&EsRequest::scroll_search(body, "10m"))?;
         if let Some(id) = response["_scroll_id"].as_str() {
             *scroll_id = Some(id.to_string());
         }
@@ -63,7 +63,7 @@ impl ESManager {
             }
         }
         while !hits_of(&response).is_empty() {
-            response = self.es.call("scroll", &json!({"scroll_id": scroll_id.clone().unwrap_or_default(), "scroll": "10m"}))?;
+            response = self.es.send(&EsRequest::Scroll { scroll_id: scroll_id.clone().unwrap_or_default(), scroll: "10m".to_string() })?;
             if let Some(id) = response["_scroll_id"].as_str() {
                 *scroll_id = Some(id.to_string());
             }
@@ -82,15 +82,15 @@ impl ESManager {
     /// `(결과, 전체 건수)`를 돌려주는 from/size 페이지 검색. `ref_score`가 0이면 결과 안의 max_score를 기준으로 쓴다.
     pub fn search_paged(&self, query: &Value, sort: Option<&Value>, size: i64, offset: i64, ref_score: f64, source_fields: Option<&[&str]>) -> Result<(Vec<Hit>, i64), EsError> {
         let size = size.min(MAX_RESULT_WINDOW);
-        log::debug!("_search_paged(size={size}, offset={offset}, query='{query}')");
-        let mut kwargs = json!({"index": self.index(), "query": query, "from_": offset, "size": size, "track_scores": true, "track_total_hits": true});
+        log::debug!("search_paged(size={size}, offset={offset}, query='{query}')");
+        let mut body = json!({"query": query, "from": offset, "size": size, "track_scores": true, "track_total_hits": true});
         if let Some(sort) = sort {
-            kwargs["sort"] = sort.clone();
+            body["sort"] = sort.clone();
         }
         if let Some(fields) = source_fields {
-            kwargs["source"] = json!(fields);
+            body["_source"] = json!(fields);
         }
-        let response = self.es.call("search", &kwargs)?;
+        let response = self.es.send(&EsRequest::search(body))?;
         let total = total_of(&response)?;
         let base_score = if ref_score > 0.0 { ref_score } else { response["hits"]["max_score"].as_f64().unwrap_or(0.0) };
         if base_score <= 0.0 {
@@ -120,12 +120,11 @@ impl ESManager {
     /// 반환: (문서 목록, 전체 건수, 다음 커서 | None)
     pub fn search_by_category_paged(&self, category: &str, size: i64, search_after: Option<&[Value]>) -> PagedHits {
         log::debug!("search_by_category_paged(category='{category}', size={size}, search_after={search_after:?})");
-        let mut kwargs =
-            json!({"index": self.index(), "query": {"term": {"category": category}}, "sort": Self::category_sort(), "size": size, "track_total_hits": true, "source": Self::LIST_SOURCE_FIELDS});
+        let mut body = json!({"query": {"term": {"category": category}}, "sort": Self::category_sort(), "size": size, "track_total_hits": true, "_source": Self::LIST_SOURCE_FIELDS});
         if let Some(after) = search_after.filter(|a| !a.is_empty()) {
-            kwargs["search_after"] = json!(after);
+            body["search_after"] = json!(after);
         }
-        let parsed = self.es.call("search", &kwargs).and_then(|response| {
+        let parsed = self.es.send(&EsRequest::search(body)).and_then(|response| {
             let hits = hits_of(&response);
             let total = total_of(&response)?;
             let result = hits.iter().map(|hit| Ok(Hit { id: hit_id(hit)?, source: source_of(hit), score: 0.0 })).collect::<Result<Vec<Hit>, EsError>>()?;
@@ -154,8 +153,8 @@ impl ESManager {
                 composite["after"] = after.clone();
             }
             let sub_aggs = json!({"updated": {"max": {"field": "updated_time"}}, "created": {"max": {"field": "created_time"}}});
-            let kwargs = json!({"index": self.index(), "size": 0, "query": {"bool": {"filter": [Self::cover_type_filter()]}}, "aggs": {"categories": {"composite": composite, "aggs": sub_aggs}}, "track_total_hits": false});
-            let response = match self.es.call("search", &kwargs) {
+            let body = json!({"size": 0, "query": {"bool": {"filter": [Self::cover_type_filter()]}}, "aggs": {"categories": {"composite": composite, "aggs": sub_aggs}}, "track_total_hits": false});
+            let response = match self.es.send(&EsRequest::search(body)) {
                 Ok(response) => response,
                 Err(e) => {
                     log::error!("aggregate_cover_categories error: {e}");
@@ -168,7 +167,7 @@ impl ESManager {
                 let Some(category) = bucket["key"]["category"].as_str() else { continue };
                 stats.insert(category.to_string(), (bucket["doc_count"].as_i64().unwrap_or(0), bucket["updated"]["value"].as_f64(), bucket["created"]["value"].as_f64()));
             }
-            after = aggregation.get("after_key").filter(|k| truthy(Some(k))).cloned();
+            after = aggregation.get("after_key").filter(|k| has_content(Some(k))).cloned();
             if buckets.is_empty() || after.is_none() {
                 return stats;
             }
@@ -191,11 +190,11 @@ impl ESManager {
         if !excluded.is_empty() {
             query["bool"]["must_not"] = json!(excluded);
         }
-        let mut kwargs = json!({"index": self.index(), "query": query, "sort": Self::latest_sort(), "size": size, "track_total_hits": true, "source": Self::LIST_SOURCE_FIELDS});
+        let mut body = json!({"query": query, "sort": Self::latest_sort(), "size": size, "track_total_hits": true, "_source": Self::LIST_SOURCE_FIELDS});
         if let Some(after) = search_after.filter(|a| !a.is_empty()) {
-            kwargs["search_after"] = json!(after);
+            body["search_after"] = json!(after);
         }
-        let parsed = self.es.call("search", &kwargs).and_then(|response| {
+        let parsed = self.es.send(&EsRequest::search(body)).and_then(|response| {
             let hits = hits_of(&response)
                 .iter()
                 .map(|hit| Ok(CoverFileHit { id: hit_id(hit)?, source: source_of(hit), sort: hit["sort"].as_array().cloned().unwrap_or_default() }))
@@ -223,7 +222,7 @@ impl ESManager {
             searches.push(json!({}));
             searches.push(json!({"query": query, "sort": [{"file_path": "asc"}], "size": Self::REPRESENTATIVE_CANDIDATES, "_source": Self::LIST_SOURCE_FIELDS}));
         }
-        let response = match self.es.call("msearch", &json!({"index": self.index(), "searches": searches})) {
+        let response = match self.es.send(&EsRequest::MultiSearch { index: Some(self.index().to_string()), searches }) {
             Ok(response) => response,
             Err(e) => {
                 log::error!("search_group_representatives error: {e}");
@@ -294,8 +293,8 @@ impl ESManager {
         if !excluded.is_empty() {
             query["bool"]["must_not"] = json!(excluded);
         }
-        let kwargs = json!({"index": self.index(), "query": query, "sort": Self::latest_sort(), "size": size, "track_total_hits": true, "source": Self::LIST_SOURCE_FIELDS});
-        let parsed = self.es.call("search", &kwargs).and_then(|response| {
+        let body = json!({"query": query, "sort": Self::latest_sort(), "size": size, "track_total_hits": true, "_source": Self::LIST_SOURCE_FIELDS});
+        let parsed = self.es.send(&EsRequest::search(body)).and_then(|response| {
             let hits = hits_of(&response).iter().map(|hit| Ok(Hit { id: hit_id(hit)?, source: source_of(hit), score: 0.0 })).collect::<Result<Vec<Hit>, EsError>>()?;
             Ok((hits, total_of(&response)?))
         });
@@ -333,13 +332,13 @@ impl ESManager {
         let self_score_query = json!({"bool": {"should": should_clauses, "filter": [{"term": {"_id": exclude_id.to_string()}}]}});
         // 본 검색 쿼리: 원본은 제외한다.
         let search_query = json!({"bool": {"should": should_clauses, "minimum_should_match": 1, "must_not": [{"term": {"_id": exclude_id.to_string()}}]}});
-        let searches = json!([
-            {"index": self.index()},
-            {"size": 1, "query": self_score_query, "_source": false},
-            {"index": self.index()},
-            {"size": size, "from": offset, "query": search_query, "track_scores": true, "track_total_hits": true, "_source": Self::LIST_SOURCE_FIELDS},
-        ]);
-        let response = self.es.call("msearch", &json!({"searches": searches}))?;
+        let searches = vec![
+            json!({"index": self.index()}),
+            json!({"size": 1, "query": self_score_query, "_source": false}),
+            json!({"index": self.index()}),
+            json!({"size": size, "from": offset, "query": search_query, "track_scores": true, "track_total_hits": true, "_source": Self::LIST_SOURCE_FIELDS}),
+        ];
+        let response = self.es.send(&EsRequest::MultiSearch { index: None, searches })?;
         let responses = response["responses"].as_array().filter(|r| r.len() >= 2).ok_or_else(|| parse_error("msearch responses가 2개 미만이다"))?;
 
         let base_score = if responses[0].get("error").is_some() {
@@ -369,7 +368,7 @@ impl ESManager {
 
     /// `_source`를 읽는다. 없으면 `None`이다.
     pub(super) fn get_source(&self, id: &str) -> Result<Option<Value>, EsError> {
-        match self.es.call("get", &json!({"index": self.index(), "id": id})) {
+        match self.es.send(&EsRequest::Get { index: None, id: id.to_string() }) {
             Ok(response) => Ok(Some(source_of(&response))),
             Err(e) if e.is_not_found() => Ok(None),
             Err(e) => Err(e),
@@ -385,7 +384,7 @@ impl ESManager {
     pub fn search_and_aggregate_by_category(&self) -> Result<Value, EsError> {
         log::debug!("search_and_aggregate_by_category()");
         let body = json!({"size": 1, "aggs": {"unique_values": {"terms": {"field": "category", "size": 10000}}}});
-        let result = self.es.call("search", &json!({"index": self.index(), "body": body}))?;
+        let result = self.es.send(&EsRequest::search(body))?;
         let buckets = result["aggregations"]["unique_values"]["buckets"].as_array().ok_or_else(|| parse_error("aggregations.unique_values.buckets가 없다"))?;
         let mut counts = Map::new();
         for bucket in buckets {
@@ -407,7 +406,7 @@ impl ESManager {
     /// 카테고리와 하위 카테고리의 PDF 수, 페이지 합계, 파일 크기를 계산한다.
     pub fn search_category_pdf_stats(&self, category: &str) -> Result<Value, EsError> {
         let query = json!({"bool": {"filter": [category_or_children(category)]}});
-        let response = self.es.call("search", &json!({"index": self.index(), "query": query, "size": 0, "aggs": {"pdfs": Self::pdf_aggs()}}))?;
+        let response = self.es.send(&EsRequest::search(json!({"query": query, "size": 0, "aggs": {"pdfs": Self::pdf_aggs()}})))?;
         Ok(Self::pdf_stats_of(&response["aggregations"]["pdfs"]))
     }
 
@@ -418,7 +417,7 @@ impl ESManager {
         }
         let filters: Map<String, Value> = categories.iter().map(|c| (c.to_string(), category_or_children(c))).collect();
         let aggs = json!({"by_category": {"filters": {"filters": filters}, "aggs": {"pdfs": Self::pdf_aggs()}}});
-        let response = self.es.call("search", &json!({"index": self.index(), "query": {"match_all": {}}, "size": 0, "aggs": aggs}))?;
+        let response = self.es.send(&EsRequest::search(json!({"query": {"match_all": {}}, "size": 0, "aggs": aggs})))?;
         let buckets = response["aggregations"]["by_category"]["buckets"].as_object().ok_or_else(|| parse_error("aggregations.by_category.buckets가 없다"))?;
         Ok(Value::Object(buckets.iter().map(|(category, bucket)| (category.clone(), Self::pdf_stats_of(&bucket["pdfs"]))).collect()))
     }
@@ -450,7 +449,7 @@ impl CategoryFilePaths<'_> {
         if let Some(after) = &self.after {
             composite["after"] = after.clone();
         }
-        let response = self.manager.es.call("search", &json!({"index": self.manager.index(), "size": 0, "aggs": {"paths": {"composite": composite}}}))?;
+        let response = self.manager.es.send(&EsRequest::search(json!({"size": 0, "aggs": {"paths": {"composite": composite}}})))?;
         let aggregation = &response["aggregations"]["paths"];
         let buckets = aggregation["buckets"].as_array().ok_or_else(|| parse_error("aggregations.paths.buckets가 없다"))?;
         if buckets.is_empty() {
@@ -461,7 +460,7 @@ impl CategoryFilePaths<'_> {
             let key = &bucket["key"];
             self.buffer.push_back((key["category"].as_str().unwrap_or("").to_string(), key["file_path"].as_str().unwrap_or("").to_string(), bucket["doc_count"].as_i64().unwrap_or(0)));
         }
-        self.after = aggregation.get("after_key").filter(|k| truthy(Some(k))).cloned();
+        self.after = aggregation.get("after_key").filter(|k| has_content(Some(k))).cloned();
         self.done = self.after.is_none();
         Ok(())
     }

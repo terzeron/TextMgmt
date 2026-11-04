@@ -38,7 +38,7 @@ const CREATE_TABLE_SQL: &str = "
 /// 같은 책을 다시 열면 새 row를 만들지 않고 조회 시각과 스냅샷만 갱신한다.
 const UPSERT_SQL: &str = "
     INSERT INTO view_history (email, content_type, book_id, title, category, viewed_at)
-    VALUES (%s, %s, %s, %s, %s, %s)
+    VALUES (?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
         title = VALUES(title),
         category = VALUES(category),
@@ -48,12 +48,12 @@ const UPSERT_SQL: &str = "
 /// 최신 N건만 남기고 나머지를 지운다. MySQL은 IN 서브쿼리에 LIMIT을 직접 쓸 수 없어 파생 테이블로 한 번 감싼다.
 const TRIM_SQL: &str = "
     DELETE FROM view_history
-    WHERE email = %s AND content_type = %s AND id NOT IN (
+    WHERE email = ? AND content_type = ? AND id NOT IN (
         SELECT id FROM (
             SELECT id FROM view_history
-            WHERE email = %s AND content_type = %s
+            WHERE email = ? AND content_type = ?
             ORDER BY viewed_at DESC, id DESC
-            LIMIT %s
+            LIMIT ?
         ) AS keep
     )
 ";
@@ -62,7 +62,7 @@ const SELECT_ALL_SQL: &str = "
     SELECT email, content_type, book_id, title, category, viewed_at
     FROM view_history
     ORDER BY viewed_at DESC, id DESC
-    LIMIT %s
+    LIMIT ?
 ";
 
 /// 입력 오류와 DB 오류.
@@ -130,7 +130,7 @@ impl ViewHistoryStore {
     fn init_db(&self) -> Result<(), ViewHistoryError> {
         let mut conn = self.get_connection()?;
         let result = (|| {
-            conn.cursor().execute(CREATE_TABLE_SQL, &[])?;
+            conn.execute(CREATE_TABLE_SQL, &[])?;
             conn.commit()
         })();
         conn.close();
@@ -145,10 +145,8 @@ impl ViewHistoryStore {
         let now = self.clock.now() as i64;
         let mut conn = self.get_connection()?;
         let result = (|| {
-            let mut cur = conn.cursor();
-            cur.execute(UPSERT_SQL, &[email.into(), content_type.into(), book_id.into(), title.into(), category.into(), now.into()])?;
-            cur.execute(TRIM_SQL, &[email.into(), content_type.into(), email.into(), content_type.into(), (MAX_RECENT_VIEWS as i64).into()])?;
-            drop(cur);
+            conn.execute(UPSERT_SQL, &[email.into(), content_type.into(), book_id.into(), title.into(), category.into(), now.into()])?;
+            conn.execute(TRIM_SQL, &[email.into(), content_type.into(), email.into(), content_type.into(), (MAX_RECENT_VIEWS as i64).into()])?;
             conn.commit()
         })();
         if result.is_err() {
@@ -162,11 +160,7 @@ impl ViewHistoryStore {
     /// 사용자별로 책/만화 최근 조회 목록을 돌려준다. 사용자는 마지막 조회가 최근인 순서다.
     pub fn list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError> {
         let mut conn = self.get_connection()?;
-        let result = (|| {
-            let mut cur = conn.cursor();
-            cur.execute(SELECT_ALL_SQL, &[(self.max_history_rows as i64).into()])?;
-            Ok::<_, DbError>(cur.fetchall().unwrap_or_default())
-        })();
+        let result = conn.fetch_all(SELECT_ALL_SQL, &[(self.max_history_rows as i64).into()]);
         conn.close();
         let rows = result?;
         if rows.len() >= self.max_history_rows {

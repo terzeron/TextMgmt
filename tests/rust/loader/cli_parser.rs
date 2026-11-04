@@ -28,7 +28,7 @@ mod loader_main {
 
     #[test]
     fn test_main_no_args() {
-        // Lines 886-888: no args.
+        // no args.
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let (code, out) = run_main(&[], &env, &FakeStore::new());
@@ -38,7 +38,7 @@ mod loader_main {
 
     #[test]
     fn test_main_invalid_index() {
-        // Lines 891-894: invalid index name. 원본은 1, Rust는 2.
+        // invalid index name. 원본은 1, Rust는 2.
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let (code, _) = run_main(&["invalid_index", &path_str(dir.path())], &env, &FakeStore::new());
@@ -47,7 +47,7 @@ mod loader_main {
 
     #[test]
     fn test_main_no_file_args() {
-        // Lines 898-900: no file args without --delete. 원본은 1, Rust는 2.
+        // no file args without --delete. 원본은 1, Rust는 2.
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let (code, _) = run_main(&["book"], &env, &FakeStore::new());
@@ -56,7 +56,7 @@ mod loader_main {
 
     #[test]
     fn test_main_delete_mode() {
-        // Lines 917-927: --delete mode
+        // --delete mode
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let store = FakeStore::new();
@@ -67,7 +67,7 @@ mod loader_main {
 
     #[test]
     fn test_main_delete_index_not_exist() {
-        // Lines 922-923: delete but index doesn't exist
+        // delete but index doesn't exist
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let store = FakeStore::new();
@@ -78,7 +78,7 @@ mod loader_main {
 
     #[test]
     fn test_main_delete_exception() {
-        // Lines 924-926: delete raises exception. 원본은 -1, Rust는 255.
+        // delete raises exception. 원본은 -1, Rust는 255.
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let store = FakeStore::new();
@@ -89,7 +89,7 @@ mod loader_main {
 
     #[test]
     fn test_main_ping_failure() {
-        // Lines 907-913: ES ping fails. 원본은 FatalConfigError, Rust는 접속 실패 종료 코드 255.
+        // ES ping fails. 원본은 FatalConfigError, Rust는 접속 실패 종료 코드 255.
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let mut store = FakeStore::new();
@@ -100,7 +100,7 @@ mod loader_main {
 
     #[test]
     fn test_main_file_not_found() {
-        // Lines 1007-1009: file not found
+        // file not found
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let (code, _) = run_main(&["book", &path_str(&dir.path().join("nonexistent"))], &env, &FakeStore::new());
@@ -109,7 +109,7 @@ mod loader_main {
 
     #[test]
     fn test_main_single_file() {
-        // Lines 1019-1025: single file force reload
+        // single file force reload
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let cat_dir = dir.path().join("cat");
@@ -141,7 +141,7 @@ mod loader_main {
 
     #[test]
     fn test_main_recursive() {
-        // Lines 1026-1038: recursive directory processing
+        // recursive directory processing
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let sub = dir.path().join("sub");
@@ -153,7 +153,7 @@ mod loader_main {
 
     #[test]
     fn test_main_directory_non_recursive() {
-        // Lines 1039-1074: directory without --recursive (2-stage)
+        // directory without --recursive (2-stage)
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         let sub1 = dir.path().join("sub1");
@@ -169,7 +169,7 @@ mod loader_main {
 
     #[test]
     fn test_main_recursive_reload() {
-        // Lines 1032-1033: --recursive --reload (skip_check=True)
+        // --recursive --reload (skip_check=True)
         let dir = tmp();
         let env = setup_loader_env(dir.path());
         fs::write(dir.path().join("[auth] book.txt"), "content").unwrap();
@@ -179,7 +179,7 @@ mod loader_main {
 
     #[test]
     fn test_main_path_not_in_prefix() {
-        // Lines 1010-1012: path not in book/comics prefix
+        // path not in book/comics prefix
         let dir = tmp();
         let outside = dir.path().join("outside");
         fs::create_dir(&outside).unwrap();

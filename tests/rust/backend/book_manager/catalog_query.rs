@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 #[test]
 fn test_get_book_content_not_found() {
-    // Line 429: book not in ES
+    // book not in ES
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
@@ -39,7 +39,7 @@ fn test_get_book_content_reports_malformed_es_book() {
 
 #[test]
 fn test_get_categories_unit() {
-    // Lines 282-284: get_categories returns aggregation
+    // get_categories returns aggregation
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
@@ -50,7 +50,7 @@ fn test_get_categories_unit() {
 
 #[test]
 fn test_get_books_in_category_unit() {
-    // Line 289: get_books_in_category returns books
+    // get_books_in_category returns books
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let es = FakeEsManager::new();
@@ -129,7 +129,7 @@ fn test_get_books_in_category_warns_on_truncation() {
 
 #[test]
 fn test_get_latest_books_delegation() {
-    // Lines 538, 540-541: get_latest_books
+    // get_latest_books
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     es.set_latest_docs(vec![Hit::new(10, make_doc("A/test.txt", ".txt"), 1.0)], 1);
@@ -142,18 +142,17 @@ fn test_get_latest_books_delegation() {
 
 #[test]
 fn test_get_books_in_category_paged() {
-    // Lines 520-528
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
     let doc = make_doc("A/test.txt", ".txt");
     es.set_category_docs(vec![Hit::new(1, doc.clone(), 1.0), Hit::new(2, doc, 1.0)]);
 
-    // 1. Invalid cursor (line 524)
+    // 1. Invalid cursor
     let error = block_on(BookManagerApi::get_books_in_category_paged(&manager, "A", None, Some("bad_cursor!!!"))).unwrap_err();
     assert_eq!(error, "invalid cursor");
 
-    // 2. Success first page with next cursor (lines 525-528)
+    // 2. Success first page with next cursor
     let BookPage { books, next_cursor: next_cur, .. } = block_on(BookManagerApi::get_books_in_category_paged(&manager, "A", Some(1), None)).unwrap();
     assert_eq!(books.len(), 1);
     assert!(next_cur.is_some());

@@ -103,7 +103,7 @@ impl CoverStatusCache {
         let modified = metadata.mtime().checked_mul(1_000_000_000).and_then(|n| n.checked_add(metadata.mtime_nsec())).ok_or("파일 시각이 범위를 벗어났습니다")?;
         let size = i64::try_from(metadata.len()).map_err(|e| e.to_string())?;
         let mut connection = self.connect()?;
-        let row = connection.fetch_one("SELECT mtime_ns,size,has_cover FROM cover_status WHERE file_path_hash=SHA2(%s,256)", &[DbValue::from(key)]).map_err(|e| e.to_string())?;
+        let row = connection.fetch_one("SELECT mtime_ns,size,has_cover FROM cover_status WHERE file_path_hash=SHA2(?,256)", &[DbValue::from(key)]).map_err(|e| e.to_string())?;
         if let Some(row) = row
             && let (Some(mtime), Some(bytes), Some(covered)) =
                 (row.get("mtime_ns").and_then(DbValue::as_i64), row.get("size").and_then(DbValue::as_i64), row.get("has_cover").and_then(DbValue::as_i64))
@@ -115,7 +115,7 @@ impl CoverStatusCache {
         let covered = compute()?;
         connection
             .execute(
-                "INSERT INTO cover_status (file_path_hash,file_path,mtime_ns,size,has_cover) VALUES (SHA2(%s,256),%s,%s,%s,%s) ON DUPLICATE KEY UPDATE file_path=VALUES(file_path),mtime_ns=VALUES(mtime_ns),size=VALUES(size),has_cover=VALUES(has_cover)",
+                "INSERT INTO cover_status (file_path_hash,file_path,mtime_ns,size,has_cover) VALUES (SHA2(?,256),?,?,?,?) ON DUPLICATE KEY UPDATE file_path=VALUES(file_path),mtime_ns=VALUES(mtime_ns),size=VALUES(size),has_cover=VALUES(has_cover)",
                 &[DbValue::from(key), DbValue::from(key), DbValue::from(modified), DbValue::from(size), DbValue::from(i64::from(covered))],
             )
             .map_err(|e| e.to_string())?;
@@ -133,7 +133,7 @@ impl Default for CoverStatusCache {
 #[cfg(test)]
 mod tests {
     use super::{CoverStatusCache, pdf_first_image_size};
-    use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
+    use db::{ConnectionProvider, DbConnection, DbError, DbValue, Row};
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone, Copy)]
@@ -147,9 +147,25 @@ mod tests {
 
     struct EmptyConnection(Failure);
 
+    impl EmptyConnection {
+        fn check(&self, sql: &str) -> Result<(), DbError> {
+            let message = match (self.0, sql.trim_start()) {
+                (Failure::Create, sql) if sql.starts_with("CREATE TABLE") => Some("create failed"),
+                (Failure::Select, sql) if sql.starts_with("SELECT") => Some("select failed"),
+                (Failure::Insert, sql) if sql.starts_with("INSERT") => Some("insert failed"),
+                _ => None,
+            };
+            message.map_or(Ok(()), |message| Err(DbError::Other(message.into())))
+        }
+    }
+
     impl DbConnection for EmptyConnection {
-        fn cursor(&mut self) -> Box<dyn DbCursor> {
-            Box::new(EmptyCursor(self.0))
+        fn execute(&mut self, sql: &str, _params: &[DbValue]) -> Result<u64, DbError> {
+            self.check(sql).map(|()| 0)
+        }
+
+        fn fetch_all(&mut self, sql: &str, _params: &[DbValue]) -> Result<Vec<Row>, DbError> {
+            self.check(sql).map(|()| Vec::new())
         }
 
         fn commit(&mut self) -> Result<(), DbError> {
@@ -163,36 +179,6 @@ mod tests {
         fn close(&mut self) {}
     }
 
-    struct EmptyCursor(Failure);
-
-    impl DbCursor for EmptyCursor {
-        fn execute(&mut self, sql: &str, _params: &[DbValue]) -> Result<(), DbError> {
-            let message = match (self.0, sql.trim_start()) {
-                (Failure::Create, sql) if sql.starts_with("CREATE TABLE") => Some("create failed"),
-                (Failure::Select, sql) if sql.starts_with("SELECT") => Some("select failed"),
-                (Failure::Insert, sql) if sql.starts_with("INSERT") => Some("insert failed"),
-                _ => None,
-            };
-            message.map_or(Ok(()), |message| Err(DbError::Other(message.into())))
-        }
-
-        fn executemany(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
-            Ok(())
-        }
-
-        fn fetchall(&mut self) -> Option<Vec<Row>> {
-            Some(vec![])
-        }
-
-        fn fetchone(&mut self) -> Option<Row> {
-            None
-        }
-
-        fn rowcount(&self) -> u64 {
-            0
-        }
-    }
-
     fn file() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("book.pdf"), b"pdf").unwrap();
@@ -202,8 +188,12 @@ mod tests {
     struct CachedConnection(Row);
 
     impl DbConnection for CachedConnection {
-        fn cursor(&mut self) -> Box<dyn DbCursor> {
-            Box::new(CachedCursor(self.0.clone()))
+        fn execute(&mut self, _sql: &str, _params: &[DbValue]) -> Result<u64, DbError> {
+            Ok(0)
+        }
+
+        fn fetch_all(&mut self, _sql: &str, _params: &[DbValue]) -> Result<Vec<Row>, DbError> {
+            Ok(vec![self.0.clone()])
         }
 
         fn commit(&mut self) -> Result<(), DbError> {
@@ -215,30 +205,6 @@ mod tests {
         }
 
         fn close(&mut self) {}
-    }
-
-    struct CachedCursor(Row);
-
-    impl DbCursor for CachedCursor {
-        fn execute(&mut self, _sql: &str, _params: &[DbValue]) -> Result<(), DbError> {
-            Ok(())
-        }
-
-        fn executemany(&mut self, _sql: &str, _seq: &[Vec<DbValue>]) -> Result<(), DbError> {
-            Ok(())
-        }
-
-        fn fetchall(&mut self) -> Option<Vec<Row>> {
-            Some(vec![])
-        }
-
-        fn fetchone(&mut self) -> Option<Row> {
-            Some(self.0.clone())
-        }
-
-        fn rowcount(&self) -> u64 {
-            0
-        }
     }
 
     #[test]
