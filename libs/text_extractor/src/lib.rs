@@ -2,13 +2,11 @@
 //! `doc_reader`(형식별로 문서 전체를 읽는 상위 계층)와 분류기, bookdoctor가 아래 계층으로 쓴다.
 //!
 //! - 본문 발췌: [`extract_txt_text`], [`extract_epub_text`], [`extract_epub_text_limited`], [`extract_document_text`]
-//! - 인코딩 판별·디코딩: [`decode_best`], [`decode_korean_ignore`], [`decode_utf8_ignore`]
+//! - 인코딩 판별·디코딩: [`decode_best`], [`decode_korean_ignore`], [`decode_utf8_ignore`]. 텍스트 인코딩을 추정하는 휴리스틱 로직이다
 //! - 한국어 판정: [`korean_likeness`]
 //! - [`path`]: EPUB·OOXML 내부 경로용 Python `posixpath`/`urllib` 호환 도구
 //!
-//! 원본: backend/classifier/reader.py 중 탐지기가 쓰는 부분.
-//!
-//! 인코딩 판별은 네 번 고쳐 잡은 로직이다. 다시 쓰지 말 것:
+//! 인코딩 판별은 실제 코퍼스의 오판 사례로 네 번 고쳐 잡은 휴리스틱이다. 다시 쓰지 말 것:
 //!   - "한글이 하나라도 나오면 그 인코딩 채택"은 정상 CP949 소설 1,856건을 오판했다
 //!   - 한글 비율 하한이 없으면 영문 OCR 문서를 한글 잡음 60자로 판정한다
 //!   - UTF-16을 빼면 97건을 못 읽는다
@@ -51,7 +49,7 @@ pub fn korean_likeness(text: &str) -> Option<f64> {
     (total >= MIN_SYLLABLES_FOR_LIKENESS).then(|| hits as f64 / total as f64)
 }
 
-/// Python의 `decode(errors="ignore")`: 잘못된 바이트는 버린다.
+/// UTF-8로 읽되 잘못된 바이트는 버린다.
 pub fn decode_utf8_ignore(raw: &[u8]) -> String {
     raw.utf8_chunks().map(|c| c.valid()).collect()
 }
@@ -67,12 +65,12 @@ fn decode_cp949_strict(raw: &[u8]) -> Option<String> {
     encoding_rs::EUC_KR.decode_without_bom_handling_and_without_replacement(raw).map(|c| c.into_owned())
 }
 
-/// CP949 / EUC-KR을 Python 코덱처럼 `errors="ignore"`로 푼다.
+/// CP949 / EUC-KR을 읽되 잘못된 바이트는 버린다. 인코딩 판별 휴리스틱의 마지막 단계가 쓰는 관대한 디코더다.
 ///
-/// Python 코덱은 해석할 수 없는 선두 바이트를 1바이트만 버리고 다음 바이트부터 다시 읽는다.
-/// encoding_rs는 비ASCII 후행 바이트까지 함께 소비해서 어긋나는 위치가 달라지고, 중문·일문
+/// 해석할 수 없는 선두 바이트는 1바이트만 버리고 바로 다음 바이트부터 다시 읽어, 손상 구간 뒤에서 빨리 정상 위치를 되찾는다.
+/// encoding_rs의 기본 동작은 비ASCII 후행 바이트까지 함께 버려 다시 읽는 위치가 달라지고, 중문·일문
 /// 텍스트를 이 경로로 읽을 때 판정이 바뀐다(실측: 표본 400건 중 7건).
-/// `ksx1001_only`가 참이면 확장 완성형(UHC)을 빼고 KS X 1001 영역만 받아들인다(Python `euc-kr`).
+/// `ksx1001_only`가 참이면 확장 완성형(UHC)을 빼고 KS X 1001 영역만 받아들인다.
 pub fn decode_korean_ignore(raw: &[u8], ksx1001_only: bool) -> String {
     // 흔한 경우: 전부 유효하면 한 번에 푼다. 잘못된 바이트가 있을 때만 아래 느린 경로를 탄다.
     if !ksx1001_only && let Some(all) = decode_cp949_strict(raw) {
