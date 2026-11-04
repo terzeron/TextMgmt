@@ -78,8 +78,12 @@ pub fn read_from_doc(path: &Path, binary: &Path) -> (String, usize, Vec<String>)
     (summary, lines, errors)
 }
 
-/// HWP 파일: LibreOffice 변환이 비면 HWP3 파서로 대신한다.
+/// HWP 파일: HWP 3.x 이하는 네이티브 HWP3 파서를 먼저 쓴다(LibreOffice는 한자를 `?`로 깨뜨린다).
+/// 그 결과가 비거나 HWP 5.x면 LibreOffice로 변환하고, 변환 결과가 비면 HWP3 파서로 대신한다.
 pub fn read_from_hwp(path: &Path, binary: &Path) -> (String, usize, Vec<String>) {
+    if let Some(done) = read_hwp3_natively(path, &|path| Ok(hwp3_parser::extract_text_from_hwp3(path))) {
+        return done;
+    }
     let mut errors = Vec::new();
     let mut raw = convert_with_libreoffice(path, "txt:Text", binary, &mut errors);
     if errors.is_empty() && raw.trim_matches(is_space).is_empty() {
@@ -93,12 +97,25 @@ pub fn read_from_hwp_with(path: &Path, _binary: &Path, convert: &dyn Fn(&Path) -
     read_from_hwp_with_fallback(path, _binary, convert, &|path| Ok(hwp3_parser::extract_text_from_hwp3(path)))
 }
 
+/// HWP 3.x 이하이고 네이티브 추출 결과가 있으면 그것으로 끝낸다.
+fn read_hwp3_natively(path: &Path, extract: &dyn Fn(&Path) -> Result<String, String>) -> Option<(String, usize, Vec<String>)> {
+    if !hwp3_parser::is_hwp3(path) {
+        return None;
+    }
+    let raw = extract(path).ok().filter(|text| !text.trim_matches(is_space).is_empty())?;
+    let (summary, lines) = finish(&raw);
+    Some((summary, lines, Vec::new()))
+}
+
 pub fn read_from_hwp_with_fallback(
     path: &Path,
     _binary: &Path,
     convert: &dyn Fn(&Path) -> Result<String, String>,
     extract_fallback: &dyn Fn(&Path) -> Result<String, String>,
 ) -> (String, usize, Vec<String>) {
+    if let Some(done) = read_hwp3_natively(path, extract_fallback) {
+        return done;
+    }
     let mut errors = Vec::new();
     let converted = match convert(path) {
         Ok(text) => text,

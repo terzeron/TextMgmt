@@ -232,6 +232,13 @@ impl BookManager {
     }
 
     fn preview_office(&self, book_id: i64, file_path: &Path, cache_dir: &Path, original_mtime: SystemTime, suffix: &str) -> BookResponse {
+        // HWP 3.x 이하는 LibreOffice가 한자를 `?`로 깨뜨리므로 네이티브 파서를 먼저 쓴다.
+        if suffix == ".hwp"
+            && hwp3_parser::is_hwp3(file_path)
+            && let Some(response) = self.preview_hwp3(book_id, file_path, cache_dir, original_mtime)
+        {
+            return response;
+        }
         let cache_file = cache_dir.join(format!("{book_id}.html"));
         if self.cache_is_fresh(&cache_file, original_mtime) && self.fs.metadata(&cache_file).is_ok_and(|m| m.len() > 0) {
             log::debug!("Preview cache hit for book_id={book_id} ({suffix})");
@@ -250,8 +257,7 @@ impl BookManager {
             // LibreOffice 변환 실패 - 네이티브 HWP3 파서로 폴백한다.
             let plain_text = hwp3_parser::extract_text_from_hwp3(file_path);
             if !plain_text.is_empty() {
-                let paragraphs: String = escape_html(&plain_text).split('\n').filter(|line| !line.trim().is_empty()).map(|line| format!("<p>{line}</p>")).collect::<Vec<_>>().join("\n");
-                html_content = format!("<html><body style=\"font-family:sans-serif;padding:1em;line-height:1.8\">{paragraphs}</body></html>");
+                html_content = plain_text_html(&plain_text);
             }
         }
         if !html_content.is_empty() {
@@ -270,6 +276,28 @@ impl BookManager {
             headers: html_security_headers(),
             body: "<html><body><p>미리보기를 생성할 수 없습니다.</p></body></html>".as_bytes().to_vec(),
         }
+    }
+
+    /// HWP 3.x 이하 미리보기. 네이티브 파서 결과가 비면 `None`을 돌려 LibreOffice 경로로 넘긴다.
+    /// 캐시 이름을 LibreOffice 결과(`{book_id}.html`)와 달리 해서, 예전에 깨진 채 저장된 캐시를 쓰지 않는다.
+    fn preview_hwp3(&self, book_id: i64, file_path: &Path, cache_dir: &Path, original_mtime: SystemTime) -> Option<BookResponse> {
+        let cache_file = cache_dir.join(format!("{book_id}.hwp3.html"));
+        if self.cache_is_fresh(&cache_file, original_mtime) && self.fs.metadata(&cache_file).is_ok_and(|m| m.len() > 0) {
+            log::debug!("Preview cache hit for book_id={book_id} (HWP3)");
+            return Some(self.file_response(&cache_file, "text/html", html_security_headers()));
+        }
+        let plain_text = hwp3_parser::extract_text_from_hwp3(file_path);
+        if plain_text.trim().is_empty() {
+            return None;
+        }
+        let html_content = plain_text_html(&plain_text);
+        if let Err(e) = self.write_cache(&cache_file, html_content.as_bytes()) {
+            log::error!("HWP3 preview cache write failed for book_id={book_id}: {e}");
+            return Some(text_response(500, "HWP preview failed"));
+        }
+        Self::_evict_old_cache_with(&*self.fs, cache_dir);
+        log::debug!("Preview generated for book_id={book_id} (HWP3 native)");
+        Some(BookResponse { status_code: 200, media_type: Some("text/html".to_string()), headers: html_security_headers(), body: html_content.into_bytes() })
     }
 
     fn preview_epub(&self, book_id: i64, file_path: &Path, cache_dir: &Path, original_mtime: SystemTime, requested_chapters: u32) -> BookResponse {
@@ -733,6 +761,13 @@ fn filter_ncx(raw: &[u8], zp: &str, files_to_include: &BTreeSet<String>) -> Opti
         }
     }
     Some(format!("{XML_DECLARATION}{}", apply_edits(&text, doc.root_element().range(), edits)).into_bytes())
+}
+
+
+/// 평문을 문단(`<p>`)으로 나눈 미리보기 HTML. 빈 줄은 버린다.
+fn plain_text_html(plain_text: &str) -> String {
+    let paragraphs: String = escape_html(plain_text).split('\n').filter(|line| !line.trim().is_empty()).map(|line| format!("<p>{line}</p>")).collect::<Vec<_>>().join("\n");
+    format!("<html><body style=\"font-family:sans-serif;padding:1em;line-height:1.8\">{paragraphs}</body></html>")
 }
 
 #[cfg(test)]

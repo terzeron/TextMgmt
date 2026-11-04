@@ -497,45 +497,60 @@ mod test_read_from_hwp_real_files {
 mod test_read_from_hwp_with_mocked_libreoffice {
     use super::*;
 
-    // LibreOffice 변환 결과를 시뮬레이션하여 버전별 동작 검증
+    // HWP 3.x 이하는 LibreOffice보다 네이티브 파서를 먼저 쓴다(LibreOffice는 한자를 `?`로 깨뜨린다).
+    // LibreOffice 경로 자체는 HWP 5.x(OLE 서명) 가짜 파일로 확인한다.
+
+    /// OLE 서명만 있는 HWP 5.x 가짜 파일. 네이티브 HWP3 파서 대상이 아니라 LibreOffice 경로로 간다.
+    pub(super) fn ole_hwp(dir: &Path) -> PathBuf {
+        let p = dir.join("ole.hwp");
+        fs::write(&p, [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]).unwrap();
+        p
+    }
 
     #[test]
-    fn test_v1_20_libreoffice_returns_empty() {
-        // V1.20 파일: LibreOffice가 빈 결과를 반환하는 경우
+    fn test_v1_20_reads_natively_even_if_libreoffice_returns_empty() {
         let f = hwp_fixture("v1.20_부하의약혼녀.hwp");
         let dir = tmp();
         let office = fake_office(dir.path(), ": > \"$out/$stem.txt\"");
         let (summary, line_count, _page_count) = read_from_hwp(&office, &f);
-        assert_eq!(summary, "");
-        assert_eq!(line_count, 0);
+        assert!(!summary.is_empty());
+        assert!(line_count > 0);
     }
 
     #[test]
-    fn test_v2_10_libreoffice_returns_text() {
-        // V2.10 파일: LibreOffice가 텍스트를 반환하는 경우
+    fn test_v2_10_native_text_wins_over_libreoffice() {
         let f = hwp_fixture("v2.10_KYOKA.hwp");
         let dir = tmp();
         let office = fake_office(dir.path(), "printf '교카 시집\\n첫 번째 시\\n두 번째 시' > \"$out/$stem.txt\"");
-        let (summary, line_count, _page_count) = read_from_hwp(&office, &f);
-        assert!(summary.contains("교카"));
-        assert_eq!(line_count, 3);
+        let (summary, _line_count, _page_count) = read_from_hwp(&office, &f);
+        assert!(!summary.contains("교카"));
+        assert!(summary.contains("영동") || summary.contains("교가"));
     }
 
     #[test]
-    fn test_v3_00_libreoffice_raises() {
-        // V3.00 파일: LibreOffice 변환 시 예외 발생. 변환기 실패(종료 코드 3)는 Rust에서 HWP3 fallback으로 이어지므로 예외 주입 seam이 필요하다.
+    fn test_v3_00_reads_natively_even_if_libreoffice_raises() {
         let f = hwp_fixture("v3.00_현대시사전.hwp");
         let dir = tmp();
         let office = fake_office(dir.path(), "echo '변환 실패' >&2; exit 3");
         let (summary, line_count, _page_count) = read_from_hwp(&office, &f);
+        assert!(!summary.is_empty());
+        assert!(line_count > 0);
+    }
+
+    #[test]
+    fn test_libreoffice_failure_on_hwp5_returns_empty() {
+        let dir = tmp();
+        let office = fake_office(dir.path(), "echo '변환 실패' >&2; exit 3");
+        let (summary, line_count, _page_count) = read_from_hwp(&office, &ole_hwp(dir.path()));
         assert_eq!(summary, "");
         assert_eq!(line_count, 0);
     }
 
     #[test]
     fn test_special_chars_cleaned() {
-        // 변환 결과의 특수문자가 정리되는지 확인
-        let f = hwp_fixture("v2.10_PAGER.hwp");
+        // LibreOffice 변환 결과의 특수문자가 정리되는지 확인
+        let dir_f = tmp();
+        let f = ole_hwp(dir_f.path());
         let dir = tmp();
         let office = fake_office(dir.path(), "printf '텍스트★내용♣특수◆문자' > \"$out/$stem.txt\"");
         let (summary, _line_count, _page_count) = read_from_hwp(&office, &f);
@@ -573,8 +588,9 @@ mod test_hwp3_fallback_integration {
 
     #[test]
     fn test_no_fallback_when_libreoffice_succeeds() {
-        // LibreOffice가 텍스트 반환 -> fallback 사용 안 함
-        let f = hwp_fixture("v2.10_KYOKA.hwp");
+        // HWP 5.x에서 LibreOffice가 텍스트 반환 -> fallback 사용 안 함
+        let dir_f = tmp();
+        let f = super::test_read_from_hwp_with_mocked_libreoffice::ole_hwp(dir_f.path());
         let dir = tmp();
         let office = fake_office(dir.path(), "printf 'LO 결과' > \"$out/$stem.txt\"");
         let (summary, _line_count, _page_count) = read_from_hwp(&office, &f);

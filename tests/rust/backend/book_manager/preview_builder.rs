@@ -8,7 +8,6 @@ mod common;
 use std::fs;
 use std::fs::File;
 use std::io::{Cursor};
-use std::path::{Path, PathBuf};
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::BookManagerApi;
 use common::es_fake::FakeEsManager;
@@ -155,19 +154,14 @@ async fn test_preview_expands_self_closing_title() {
     assert!(body.text().collect::<String>().contains("본문이 보여야 한다"));
 }
 
-fn hwp_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().map(|a| a.join("tests/books/_hwp")).find(|p| p.exists()).unwrap_or_else(|| PathBuf::from("tests/books/_hwp"))
-}
 // book_manager HWP preview에서 빈 결과 시 안내 메시지 반환
 
 #[tokio::test]
 async fn test_hwp_preview_empty_returns_message() {
-    // LO+hwp3 모두 빈 결과 -> '미리보기를 생성할 수 없습니다' 메시지
-    let hwp_src = hwp_dir().join("v1.20_부하의약혼녀.hwp");
-    assert!(hwp_src.exists(), "HWP 샘플 파일이 필요하다: {}", hwp_src.display());
+    // HWP 5.x(OLE)에서 LibreOffice가 빈 결과 -> '미리보기를 생성할 수 없습니다' 메시지
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("A")).unwrap();
-    fs::copy(&hwp_src, dir.path().join("A").join("old.hwp")).unwrap();
+    fs::write(dir.path().join("A").join("old.hwp"), [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]).unwrap();
 
     let doc = make_doc("A/old.hwp", "hwp");
     // libreoffice 변환기가 빈 문자열을 돌려준다
@@ -1365,8 +1359,8 @@ mod hwp_preview {
     }
 
     #[test]
-    fn test_hwp_preview_fallback_caches_result() {
-        // fallback 결과가 캐시 파일에 저장되는지 확인
+    fn test_hwp3_preview_caches_native_result_separately() {
+        // HWP3 네이티브 결과는 LibreOffice 캐시(1.html)와 다른 이름(1.hwp3.html)으로 저장된다
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         copy_hwp_sample(tmp_path, "v2.10_KYOKA.hwp", "kyoka.hwp");
@@ -1375,9 +1369,10 @@ mod hwp_preview {
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
         es.set_doc(Some(doc));
         asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
-        let cache_file = tmp_path.join(".preview_cache").join("1.html");
+        let cache_file = tmp_path.join(".preview_cache").join("1.hwp3.html");
         assert!(cache_file.exists());
         assert!(fs::read_to_string(&cache_file).unwrap().chars().count() > 50);
+        assert!(!tmp_path.join(".preview_cache").join("1.html").exists());
     }
 
     #[test]
@@ -1400,7 +1395,23 @@ mod hwp_preview {
 
     #[test]
     fn test_hwp_preview_fallback_both_fail() {
-        // LibreOffice도 실패하고 hwp3 파서도 빈 결과인 경우 (V1.20)
+        // HWP 5.x(OLE)에서 LibreOffice도 빈 결과이고 HWP3 파서 대상도 아니면 캐시를 만들지 않는다
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        fs::create_dir_all(tmp_path.join("A")).unwrap();
+        fs::write(tmp_path.join("A").join("old.hwp"), [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]).unwrap();
+        let doc = make_doc("A/old.hwp", "hwp");
+        let es = FakeEsManager::new();
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
+        es.set_doc(Some(doc));
+        asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert!(!tmp_path.join(".preview_cache").join("1.html").exists());
+        assert!(!tmp_path.join(".preview_cache").join("1.hwp3.html").exists());
+    }
+
+    #[test]
+    fn test_hwp_preview_v120_reads_natively() {
+        // V1.20은 LibreOffice가 못 읽지만 네이티브 brute-force 결과로 미리보기를 만든다
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         copy_hwp_sample(tmp_path, "v1.20_부하의약혼녀.hwp", "old.hwp");
@@ -1408,18 +1419,39 @@ mod hwp_preview {
         let es = FakeEsManager::new();
         let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
         es.set_doc(Some(doc));
-        asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
-        // V1.20은 hwp3 파서도 빈 결과 → 캐시 미생성, 400/500 가능
-        let cache_file = tmp_path.join(".preview_cache").join("1.html");
-        assert!(!cache_file.exists());
+        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(resp.status_code, 200);
+        assert!(!resp.body_text().contains("미리보기를 생성할 수 없습니다"));
+    }
+
+    #[test]
+    fn test_hwp3_preview_uses_native_parser_before_libreoffice() {
+        // HWP3는 LibreOffice를 부르지 않고 네이티브 결과를 쓴다(LibreOffice는 한자를 `?`로 깨뜨린다).
+        // 예전에 LibreOffice로 만든 캐시(1.html)가 더 새것이어도 쓰지 않는다.
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        copy_hwp_sample(tmp_path, "v2.10_KYOKA.hwp", "kyoka.hwp");
+        fs::create_dir_all(tmp_path.join(".preview_cache")).unwrap();
+        fs::write(tmp_path.join(".preview_cache").join("1.html"), "<p>??깨진 캐시??</p>").unwrap();
+        let doc = make_doc("A/kyoka.hwp", "hwp");
+        let es = FakeEsManager::new();
+        let runner = FakeRunner::new(|argv| panic!("HWP3에 LibreOffice를 불렀다: {argv:?}"));
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(runner));
+        es.set_doc(Some(doc));
+        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(resp.status_code, 200);
+        let body = resp.body_text();
+        assert!(body.contains("영동") || body.contains("교가"), "{body}");
+        assert!(!body.contains("깨진 캐시"));
     }
 
     #[test]
     fn test_hwp_preview_libreoffice_success_no_fallback() {
-        // LibreOffice가 정상 결과 반환 시 hwp3 fallback 미사용
+        // HWP 5.x(OLE)에서 LibreOffice가 정상 결과 반환 시 그 결과를 쓴다
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
-        copy_hwp_sample(tmp_path, "v2.10_KYOKA.hwp", "kyoka.hwp");
+        fs::create_dir_all(tmp_path.join("A")).unwrap();
+        fs::write(tmp_path.join("A").join("kyoka.hwp"), [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]).unwrap();
         let doc = make_doc("A/kyoka.hwp", "hwp");
         let es = FakeEsManager::new();
         // LibreOffice처럼 `--outdir`에 `<이름>.html`을 쓰는 변환기 대역이다(`office_output`은 stdout에만 담아 실제 변환기와 다르다).
