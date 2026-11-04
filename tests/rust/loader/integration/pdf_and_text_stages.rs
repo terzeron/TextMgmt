@@ -29,6 +29,8 @@
 //! - `loader::cli_parser::{RunHooks, run_with_hooks(...)}`: `read_file`, `stat`, `on_worker_spawn` 대체 훅
 
 #![allow(clippy::type_complexity)]
+#[path = "../common/mod.rs"]
+mod common;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, Metadata};
@@ -36,7 +38,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Barrier, Mutex};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -47,26 +49,14 @@ use doc_reader::pdf::{
     FastCountHooks, InProcess, PlumberDocument, Stage, StageError, StageRunner, fast_page_count, fast_page_count_with, find_xref_offset, parse_one_xref_stream, pdf_text_by_plumber_with, read_from_obj_stream, read_from_pdf, run_stage,
 };
 use doc_reader::text::{Candidate, Enc, TextHooks, read_from_text_with, reencode_text_file_to_utf8_with};
-use es_client::EsError;
-use es_client::indexing::IndexStore;
-use loader::cli_parser::{RunHooks, World, run, run_with_hooks};
+use loader::cli_parser::{RunHooks};
 use file_record::env_config::Config;
 use loader::batch_loader::{recursive_files, sample_files};
 use file_record::record_builder::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, zip_container_type};
 use sysdeps::timeout_runner::ParserTimeout;
 use serde_json::{Value, json};
 use stat::Stat;
-use tempfile::TempDir;
-
-// ---- 공통 헬퍼 ----
-
-fn tmp() -> TempDir {
-    tempfile::tempdir().unwrap()
-}
-
-fn path_str(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
-}
+use crate::common::shared_fixtures::{FakeStore, XrefStream, hwp_dir, path_str, run_main, run_main_with, run_main_with_hooks, setup_loader_env, tmp, write_blank_pdf};
 
 /// zlib.compress 대응. 압축하지 않는(stored) deflate 블록이라 64KiB 미만 입력만 다룬다.
 fn zlib_compress(data: &[u8]) -> Vec<u8> {
@@ -82,43 +72,6 @@ fn zlib_compress(data: &[u8]) -> Vec<u8> {
     }
     out.extend_from_slice(&((b << 16) | a).to_be_bytes());
     out
-}
-
-/// pypdf로 만든 72x72 빈 한 쪽짜리 PDF 대응.
-fn blank_pdf() -> Vec<u8> {
-    let objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] >>"];
-    let mut out = b"%PDF-1.4\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, body) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in &offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    out
-}
-
-fn write_blank_pdf(path: &Path) {
-    fs::write(path, blank_pdf()).unwrap();
-}
-
-/// conftest.py의 환경 변수 중 loader가 읽는 것. 색인 이름은 `_setup_loader_env`가 정한 값이다.
-fn env_for(book: &Path, comics: &Path) -> HashMap<String, String> {
-    let mut env = HashMap::new();
-    env.insert("TM_BOOK_DIR".to_owned(), path_str(book));
-    env.insert("TM_COMICS_DIR".to_owned(), path_str(comics));
-    env.insert("TM_ES_BOOK_INDEX".to_owned(), "test_books".to_owned());
-    env.insert("TM_ES_COMICS_INDEX".to_owned(), "test_comics".to_owned());
-    env
-}
-
-/// `_setup_loader_env`: 책 prefix는 root, 만화 prefix는 root/comics.
-fn setup_loader_env(root: &Path) -> HashMap<String, String> {
-    env_for(root, &root.join("comics"))
 }
 
 fn config_for(book: &Path, comics: &Path) -> Config {
@@ -154,143 +107,6 @@ fn set_mtime(path: &Path, secs: u64) {
 
 fn meta(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
-}
-
-// ---- ES 가짜 저장소 (MagicMock/ESManager 대체) ----
-
-#[derive(Default)]
-struct State {
-    index_exists: bool,
-    exists_error: Option<String>,
-    deleted_index: bool,
-    existing_paths: Option<Box<dyn Fn(&[i64]) -> HashMap<i64, String> + Send>>,
-    created_meta: HashMap<i64, BTreeMap<String, String>>,
-    delete_by_paths_result: i64,
-    inserted: Vec<Vec<(i64, Value)>>,
-    orphan_ids: HashSet<i64>,
-    prefix_lookup_error: bool,
-    deleted_ids: Option<Vec<i64>>,
-}
-
-#[derive(Clone)]
-struct FakeStore {
-    state: Arc<Mutex<State>>,
-    ping_ok: bool,
-    name: String,
-}
-
-// 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
-#[allow(dead_code)]
-impl FakeStore {
-    fn new() -> Self {
-        FakeStore { state: Arc::new(Mutex::new(State::default())), ping_ok: true, name: "test_books".to_owned() }
-    }
-
-    fn update(&self, f: impl FnOnce(&mut State)) {
-        f(&mut self.state.lock().unwrap());
-    }
-
-    fn set_existing_paths(&self, f: impl Fn(&[i64]) -> HashMap<i64, String> + Send + 'static) {
-        self.update(|s| s.existing_paths = Some(Box::new(f)));
-    }
-
-    /// insert 호출 전체를 합친 `{inode: 문서}`. 같은 inode는 나중 것이 이긴다.
-    fn inserted_docs(&self) -> HashMap<i64, Value> {
-        self.state.lock().unwrap().inserted.iter().flatten().cloned().collect()
-    }
-
-    fn batch_sizes(&self) -> Vec<usize> {
-        self.state.lock().unwrap().inserted.iter().map(Vec::len).collect()
-    }
-}
-
-impl IndexStore for FakeStore {
-    fn index_name(&self) -> &str {
-        &self.name
-    }
-    fn ping(&self) -> Result<(), EsError> {
-        if self.ping_ok { Ok(()) } else { Err(EsError::Transport("ping 실패".to_owned())) }
-    }
-    fn index_exists(&self) -> Result<bool, EsError> {
-        let s = self.state.lock().unwrap();
-        match &s.exists_error {
-            Some(msg) => Err(EsError::Transport(msg.clone())),
-            None => Ok(s.index_exists),
-        }
-    }
-    fn create_index(&self) -> Result<(), EsError> {
-        Ok(())
-    }
-    fn delete_index(&self) -> Result<(), EsError> {
-        self.state.lock().unwrap().deleted_index = true;
-        Ok(())
-    }
-    fn get_existing_paths(&self, doc_ids: &[i64]) -> Result<HashMap<i64, String>, EsError> {
-        let s = self.state.lock().unwrap();
-        Ok(s.existing_paths.as_ref().map(|f| f(doc_ids)).unwrap_or_default())
-    }
-    fn get_existing_created_time_metadata(&self, _doc_ids: &[i64]) -> Result<HashMap<i64, BTreeMap<String, String>>, EsError> {
-        Ok(self.state.lock().unwrap().created_meta.clone())
-    }
-    fn delete_by_file_paths(&self, _file_paths: &[String], _exclude_ids: &[i64]) -> Result<i64, EsError> {
-        Ok(self.state.lock().unwrap().delete_by_paths_result)
-    }
-    fn get_doc_ids_by_path_prefix(&self, _path_prefix: &str) -> Result<HashSet<i64>, EsError> {
-        // 실제 적재된 inode + 디스크에 없는 orphan
-        let s = self.state.lock().unwrap();
-        if s.prefix_lookup_error {
-            return Err(EsError::Transport("scroll failed".to_owned()));
-        }
-        Ok(s.inserted.iter().flatten().map(|(id, _)| *id).chain(s.orphan_ids.iter().copied()).collect())
-    }
-    fn delete_by_ids(&self, ids: &[i64]) -> Result<i64, EsError> {
-        let mut sorted = ids.to_vec();
-        sorted.sort_unstable();
-        self.state.lock().unwrap().deleted_ids = Some(sorted);
-        Ok(ids.len() as i64)
-    }
-    fn insert(&self, docs: &[(i64, Value)]) -> Result<(), EsError> {
-        self.state.lock().unwrap().inserted.push(docs.to_vec());
-        Ok(())
-    }
-    fn refresh(&self) -> Result<(), EsError> {
-        Ok(())
-    }
-}
-
-fn to_args(parts: &[&str]) -> Vec<String> {
-    parts.iter().map(|s| s.to_string()).collect()
-}
-
-/// `main()` 실행. (종료 코드, 표준 출력)
-fn run_main(args: &[&str], env: &HashMap<String, String>, store: &FakeStore) -> (i32, String) {
-    run_main_with(args, env, store, &InProcess)
-}
-
-fn run_main_with(args: &[&str], env: &HashMap<String, String>, store: &FakeStore, runner: &(dyn StageRunner + Sync)) -> (i32, String) {
-    let args = to_args(args);
-    let get = |k: &str| env.get(k).cloned();
-    let connect = |_index: &str| -> Result<Box<dyn IndexStore>, String> { if store.ping_ok { Ok(Box::new(store.clone())) } else { Err("ES ping 실패".to_owned()) } };
-    let world = World { env: &get, connect: &connect, runner };
-    let mut out = Vec::new();
-    let code = run("loader", &args, &world, &mut out);
-    (code, String::from_utf8(out).unwrap())
-}
-
-fn run_main_with_hooks(args: &[&str], env: &HashMap<String, String>, store: &FakeStore, hooks: &RunHooks) -> (i32, String) {
-    let args = to_args(args);
-    let get = |k: &str| env.get(k).cloned();
-    let connect = |_index: &str| -> Result<Box<dyn IndexStore>, String> { Ok(Box::new(store.clone())) };
-    let world = World { env: &get, connect: &connect, runner: &InProcess };
-    let mut out = Vec::new();
-    let code = run_with_hooks("loader", &args, &world, &mut out, hooks);
-    (code, String::from_utf8(out).unwrap())
-}
-
-// ---- HWP 헬퍼 ----
-
-fn hwp_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/books/_hwp")
 }
 
 /// 샘플 파일이 없으면 panic한다.
@@ -361,8 +177,6 @@ fn obj_stream(bytes: &[u8], obj_num: i64) -> Option<Vec<u8>> {
     let mut fh = File::open(&f).unwrap();
     read_from_obj_stream(&mut fh, 0, obj_num)
 }
-
-type XrefStream = (Vec<u8>, [usize; 3], Vec<i64>, Option<i64>);
 
 fn xref_stream(bytes: &[u8]) -> Option<XrefStream> {
     let dir = tmp();

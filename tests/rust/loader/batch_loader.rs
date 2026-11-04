@@ -1,40 +1,16 @@
 //! `loader::batch_loader` 단위 테스트.
 #![allow(clippy::type_complexity)]
+
+mod common;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
 use doc_reader::pdf::InProcess;
 use file_record::env_config::Config;
 use loader::batch_loader::{get_file_list, read_files, report_problems};
 use file_record::record_builder::read_file;
 use serde_json::Value;
 use stat::Stat;
-use tempfile::TempDir;
-
-// ---- 공통 헬퍼 ------------------------------------------------------------------------------
-
-/// tests/conftest.py가 정하는 TM_BOOK_DIR / TM_COMICS_DIR 값.
-fn tests_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests")
-}
-
-/// conftest.py의 환경변수. 이 파일의 테스트는 프로세스 환경을 건드리지 않고 이 함수를 `Config::from_env`에 넘긴다.
-fn conftest_env(name: &str) -> Option<String> {
-    match name {
-        "TM_BOOK_DIR" => Some(tests_root().join("books").to_string_lossy().into_owned()),
-        "TM_COMICS_DIR" => Some(tests_root().join("comics").to_string_lossy().into_owned()),
-        _ => None,
-    }
-}
-
-/// `Loader.path_prefix = book` 과 같다. 만화 prefix는 conftest 기본값이다.
-fn config_with_book(book: &Path) -> Config {
-    Config::new(book, tests_root().join("comics"))
-}
-
-fn write(path: &Path, data: impl AsRef<[u8]>) {
-    fs::write(path, data).unwrap();
-}
+use crate::common::shared_fixtures::{config_with_book, conftest_env, path_str, tmp, write};
 
 // ---- TestLoaderInit -------------------------------------------------------------------------
 
@@ -153,16 +129,6 @@ mod read_files {
         let result: HashMap<i64, Value> = read_files(&cfg, d.path(), &InProcess, &Stat::new());
         assert!(result.len() >= 2, "{}", result.len());
     }
-}
-
-// ---- 공통 헬퍼 ----
-
-fn tmp() -> TempDir {
-    tempfile::tempdir().unwrap()
-}
-
-fn path_str(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
 }
 
 mod report_problems {

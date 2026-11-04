@@ -22,6 +22,9 @@
 //! - `stat::Stat::{pdf_stage_count, pdf_stage_total_time, pdf_stage_outcome_count}` 단계별 통계 조회
 
 #![allow(clippy::type_complexity)]
+#[path = "../common/mod.rs"]
+mod common;
+
 
 use std::fs;
 use std::io::{self, Write as _};
@@ -47,6 +50,7 @@ use file_record::env_config::Config;
 use file_record::record_builder::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
 use serde_json::Value;
 use stat::Stat;
+use crate::common::shared_fixtures::{XrefStream, config_with_book, conftest_env, tests_root, write};
 
 #[test]
 fn loader_binary_dispatches_the_isbn_pdf_worker_command() {
@@ -233,33 +237,8 @@ fn loader_isbn_pdf_worker_extracts_text_through_the_binary() {
 }
 use zip::write::SimpleFileOptions;
 
-// ---- 공통 헬퍼 ------------------------------------------------------------------------------
-
-/// tests/conftest.py가 정하는 TM_BOOK_DIR / TM_COMICS_DIR 값.
-fn tests_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests")
-}
-
-/// conftest.py의 환경변수. 이 파일의 테스트는 프로세스 환경을 건드리지 않고 이 함수를 `Config::from_env`에 넘긴다.
-fn conftest_env(name: &str) -> Option<String> {
-    match name {
-        "TM_BOOK_DIR" => Some(tests_root().join("books").to_string_lossy().into_owned()),
-        "TM_COMICS_DIR" => Some(tests_root().join("comics").to_string_lossy().into_owned()),
-        _ => None,
-    }
-}
-
 fn default_config() -> Config {
     Config::from_env(&conftest_env).unwrap()
-}
-
-/// `Loader.path_prefix = book` 과 같다. 만화 prefix는 conftest 기본값이다.
-fn config_with_book(book: &Path) -> Config {
-    Config::new(book, tests_root().join("comics"))
-}
-
-fn write(path: &Path, data: impl AsRef<[u8]>) {
-    fs::write(path, data).unwrap();
 }
 
 fn read_text(path: &Path) -> TextRead {
@@ -2544,10 +2523,6 @@ mod test_find_libreoffice {
         assert_eq!(find_libreoffice_with(&which, &exists), PathBuf::from("libreoffice"));
     }
 }
-
-// ---- TestFastPdfPageCount -------------------------------------------------------------------
-
-type XrefStream = (Vec<u8>, [usize; 3], Vec<i64>, Option<i64>);
 
 /// 원본의 `_parse_one_xref_stream` / `_xref_stream_find_entry` / `_read_from_obj_stream` 바꿔치기. `FastCountHooks`의 훅으로 끼운다.
 struct FakeXref {

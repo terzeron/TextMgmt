@@ -14,20 +14,18 @@
 //!
 //! 샘플 파일(tests/books/_hwp)을 사용하며, 파일이 없으면 헬퍼가 panic한다.
 
+#[path = "../common/mod.rs"]
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use hwp3_parser::{HwpStream, extract_text_from_hwp3, hnc_to_unicode, parse_paragraph, parse_paragraph_list, safe_chr};
 use hwp3_parser::tables::hnc2uni;
+use crate::common::shared_fixtures::{hwp_dir};
 
 /// `_MAX_TEXT_LENGTH`. crate에서 비공개라 같은 값을 둔다.
 const MAX_TEXT_LENGTH: usize = 1_000_000;
-
-// ---- 헬퍼 ----
-
-fn hwp_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/books/_hwp")
-}
 
 /// 샘플 파일 경로. 파일이 없으면 panic한다.
 fn hwp_fixture(name: &str) -> PathBuf {
