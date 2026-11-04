@@ -1,7 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -15,18 +15,13 @@ use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use common::image::{b64};
-use common::zipx::{Members as ZipMembers};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use zip::ZipArchive;
 use crate::common::shared_fixtures::{assert_refused, edit, full, jpeg, size, text_of};
 use crate::common::shared_fixtures::{MULTI_PAGE};
 use crate::common::epub_book::{book, make_book, make_multi, multi, page, write_zip};
-
-fn read(path: &Path) -> BTreeMap<String, Vec<u8>> {
-    let members = ZipMembers::read(path);
-    members.names().into_iter().map(|name| (name.clone(), members.get(&name).to_vec())).collect()
-}
+use crate::common::epub_book::read;
 
 fn opf_ids(path: &Path, opf: &str, tag: &str, attr: &str) -> Vec<String> {
     let text = String::from_utf8(read(path)[opf].clone()).unwrap();

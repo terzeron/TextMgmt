@@ -18,6 +18,7 @@ fn test_get_cover_rejects_missing_required_es_fields() {
 }
 
 mod cover_member_lookup {
+    use crate::common::dyn_es::make_manager;
     use crate::common::shared_fixtures::{CONTAINER};
     use crate::common::shared_fixtures::{make_deps, make_doc};
     use super::common;
@@ -45,11 +46,6 @@ mod cover_member_lookup {
         let owned: Vec<(&str, &[u8])> = members.iter().map(|(n, c)| (*n, c.as_bytes())).collect();
         write_zip(&path, &owned);
         open_zip(&path)
-    }
-
-    /// Python `make_manager(tmp_path, es)`.
-    fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {
-        BookManager::with_deps(make_deps(tmp_path, es))
     }
 
     // ---- 커버 목록(작품 묶음 + 커서) ----

@@ -182,26 +182,16 @@ fn test_iter_category_indexable_files_branches() {
 }
 
 mod stored_path_normalization {
-    use crate::common::shared_fixtures::{category_with_files, make_deps};
+    use crate::common::dyn_es::make_manager;
+    use crate::common::shared_fixtures::category_with_files;
     use super::common;
 
     use std::fs;
 
-    use std::path::Path;
-    use std::sync::Arc;
-
-    use backend::book_manager::{BookManager};
-
-    use backend::es_manager::EsManagerApi;
 
     use common::es_fake::FakeEsManager;
 
     use tempfile::TempDir;
-
-    /// Python `make_manager(tmp_path, es)`.
-    fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {
-        BookManager::with_deps(make_deps(tmp_path, es))
-    }
 
     #[test]
     fn test_normalize_stored_file_path_strips_leading_dot_slash() {

@@ -1328,14 +1328,12 @@ fn test_proposal_expected_accuracy_is_none_without_calibration() {
 }
 
 mod candidate_building {
-    use crate::common::shared_fixtures::{category_with_files, make_deps, outcome, split};
+    use crate::common::dyn_es::make_manager;
+    use crate::common::shared_fixtures::{category_with_files, outcome, split};
     use super::common;
     use std::fs;
-    use std::path::Path;
-    use std::sync::Arc;
     use backend::book_manager::{BookManager, MoveOpts};
     use classifier::BookClassifierApi;
-    use backend::es_manager::EsManagerApi;
     use common::es_fake::FakeEsManager;
     use serde_json::json;
     use tempfile::TempDir;
@@ -1355,11 +1353,6 @@ mod candidate_building {
         fn expected_accuracy(&self, _confidence: Option<f64>) -> Option<Option<f64>> {
             self.accuracy
         }
-    }
-
-    /// Python `make_manager(tmp_path, es)`.
-    fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {
-        BookManager::with_deps(make_deps(tmp_path, es))
     }
 
     // ---- 분류 후보 조립 ----
@@ -1522,36 +1515,17 @@ fn a_loadable_model_directory_builds_the_service_by_default() {
 }
 
 mod classified_file_moves {
+    use crate::common::file_reader_fakes::FnFileReader;
     use crate::common::shared_fixtures::{category_with_files, make_deps, outcome, split};
     use std::fs;
-    use backend::book_manager::{BookManager, FileReader, MoveOpts};
+    use backend::book_manager::{BookManager, MoveOpts};
     use super::common::{es_fake::FakeEsManager, faulty_fs::FaultyFs};
     use std::path::{Path};
-    use std::sync::Arc;
     use serde_json::json;
     use tempfile::TempDir;
     use super::common;
     use std::collections::HashSet;
     use common::es_fake::Docs;
-
-    type ReadFileFn = Box<dyn Fn(&Path, Option<&Path>) -> Docs + Send + Sync>;
-
-    /// `Loader.read_file` 대역. 클로저 하나가 경로와 `path_prefix`를 받아 문서 묶음을 돌려준다.
-    struct FnFileReader {
-        f: ReadFileFn,
-    }
-
-    impl FnFileReader {
-        fn new(f: impl Fn(&Path, Option<&Path>) -> Docs + Send + Sync + 'static) -> Arc<Self> {
-            Arc::new(Self { f: Box::new(f) })
-        }
-    }
-
-    impl FileReader for FnFileReader {
-        fn read_file(&self, path: &Path, path_prefix: Option<&Path>) -> Docs {
-            (self.f)(path, path_prefix)
-        }
-    }
 
     #[tokio::test]
     async fn test_apply_rejects_file_when_resolve_raises_oserror() {

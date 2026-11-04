@@ -3,10 +3,11 @@
 
 use std::path::{Path, PathBuf};
 use backend::epub_cover::{CoverError, EditImages, OPF_NS};
-use super::zipx::{write_zip_with, ZipMode};
+use super::zipx::{Members as ZipMembers, write_zip_with, ZipMode};
 use serde_json::Value;
-use tempfile::TempDir;
+use std::collections::BTreeMap;
 use super::shared_fixtures::{edit, gif, jpeg, MULTI_PAGE, png};
+use tempfile::TempDir;
 
 /// `book` fixture: (책 경로, 휴지통 경로)
 pub struct Book {
@@ -124,4 +125,9 @@ pub fn write_zip(path: &Path, mut members: Members) {
     members.insert(0, mimetype);
     let entries: Vec<(&str, &[u8])> = members.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
     write_zip_with(path, &entries, ZipMode::Stored);
+}
+
+pub fn read(path: &Path) -> BTreeMap<String, Vec<u8>> {
+    let members = ZipMembers::read(path);
+    members.names().into_iter().map(|name| (name.clone(), members.get(&name).to_vec())).collect()
 }

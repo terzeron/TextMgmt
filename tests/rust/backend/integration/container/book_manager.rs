@@ -74,6 +74,7 @@ use serde_json::{Value, json};
 use sysdeps::{CommandError, CommandOutput};
 use tempfile::TempDir;
 use crate::common::shared_fixtures::{as_status, make_doc, outcome, run, split, verdict};
+use crate::common::file_reader_fakes::FnFileReader;
 
 /// `delete_book` 결과를 Python 원본의 `("Ok" | "Warning" | "Error", 메시지)`로 펼친다.
 fn as_deletion(result: Result<backend::book_manager::BookDeletion, String>) -> (String, Option<String>) {
@@ -114,29 +115,6 @@ fn minimal_spec() -> EpubSpec {
     let mut spec = EpubSpec::minimal();
     spec.chapters = vec![("ch1.xhtml".to_string(), "<html><body><p>Hello</p></body></html>".to_string())];
     spec
-}
-
-// ---------------------------------------------------------------------------
-// 로컬 대역 (TODO(common): common에 생기면 지운다)
-// ---------------------------------------------------------------------------
-
-type ReadFileFn = Box<dyn Fn(&Path, Option<&Path>) -> Docs + Send + Sync>;
-
-/// `Loader.read_file` 대역. 클로저 하나가 경로와 `path_prefix`를 받아 문서 묶음을 돌려준다.
-struct FnFileReader {
-    f: ReadFileFn,
-}
-
-impl FnFileReader {
-    fn new(f: impl Fn(&Path, Option<&Path>) -> Docs + Send + Sync + 'static) -> Arc<Self> {
-        Arc::new(Self { f: Box::new(f) })
-    }
-}
-
-impl FileReader for FnFileReader {
-    fn read_file(&self, path: &Path, path_prefix: Option<&Path>) -> Docs {
-        (self.f)(path, path_prefix)
-    }
 }
 
 /// `pikepdf` 대역이 돌려주는 PDF 한 건. 구 `PdfInfo`를 `PdfDoc`으로 흡수했다(3.11 `StaticPdfDoc`).

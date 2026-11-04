@@ -9,7 +9,6 @@ use std::fs;
 use std::fs::File;
 use std::io::{Cursor};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::BookManagerApi;
 use common::es_fake::FakeEsManager;
@@ -17,10 +16,10 @@ use common::zipx::{write_zip};
 use serde_json::{json};
 use zip::ZipArchive;
 use common::runner::FakeRunner;
-use backend::es_manager::EsManagerApi;
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{image_bytes, make_deps, make_doc, namelist, write_zip_stored, zip_read_string};
+use crate::common::shared_fixtures::{image_bytes, make_doc, namelist, write_zip_stored, zip_read_string};
 use crate::common::shared_fixtures::{CONTAINER, CONTAINER_XML, TempFile};
+use crate::common::dyn_es::make_manager;
 
 /// URL 인코딩된 href 항목 및 전체보기(chapters=0) 시 EPUB 구조가 완전 보존되는지 검증.
 #[tokio::test]
@@ -1255,11 +1254,6 @@ mod get_book_preview {
         let resp2 = asyncio_runner(manager.get_pdf_pages(1, 1, 2));
         assert_eq!(resp2.status_code, 200);
     }
-}
-
-/// Python `make_manager(tmp_path, es)`.
-fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {
-    BookManager::with_deps(make_deps(tmp_path, es))
 }
 
 #[tokio::test]

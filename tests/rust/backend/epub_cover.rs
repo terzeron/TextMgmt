@@ -200,21 +200,15 @@ fn test_unreadable_existing_cover_metadata_is_a_warning() {
 }
 
 mod image_page_cropping {
+    use crate::common::epub_book::read;
     use crate::common::epub_book::{Members, write_zip};
     use crate::common::shared_fixtures::{assert_refused, size, text_of};
     use super::common;
-    use std::collections::BTreeMap;
     use std::path::Path;
     use backend::epub_cover::{edit_images, EditImages, revision};
     use common::image::{jpeg_bytes};
-    use common::zipx::{Members as ZipMembers};
     use image::{Rgb, RgbImage};
     use serde_json::{json};
-
-    fn read(path: &Path) -> BTreeMap<String, Vec<u8>> {
-        let members = ZipMembers::read(path);
-        members.names().into_iter().map(|name| (name.clone(), members.get(&name).to_vec())).collect()
-    }
 
     // ── <svg><image> 로 이미지를 넣은 쪽 ──────────────────────────────────────────
 
