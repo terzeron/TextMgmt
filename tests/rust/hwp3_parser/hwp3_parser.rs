@@ -301,6 +301,68 @@ fn v120_uses_the_bruteforce_fallback_like_v200() {
     assert!(extract_bytes(&file).contains("Version One Twenty Text"));
 }
 
+// ---- V1.20 ----
+
+/// V1.20 문단: 머리 20바이트(글자 수 BE, 2바이트, 0×5, 모양, 번호 BE, 0×8) + 기록 `records` + 본문(문단 끝 포함).
+fn v120_para(index: u16, chars: &[u16], records: &[u8]) -> Vec<u8> {
+    let mut all = chars.to_vec();
+    all.push(13);
+    let mut b = (all.len() as u16).to_be_bytes().to_vec();
+    b.extend([0u8, 0]);
+    b.extend([0u8; 5]);
+    b.push(0xfe);
+    b.extend(index.to_be_bytes());
+    b.extend([0u8; 8]);
+    b.extend(records);
+    b.extend(pack(&all));
+    b
+}
+
+fn v120_file(paras: &[Vec<u8>], trailer: &[u8]) -> Vec<u8> {
+    let mut b = header("V1.20");
+    b.extend(vec![0u8; 128]);
+    for p in paras {
+        b.extend(p);
+    }
+    b.extend(trailer);
+    b
+}
+
+#[test]
+fn v120_paragraphs_are_read_in_order_with_variable_record_lengths() {
+    let rec7 = [0x05, 0, 0, 1, 0, 0x80, 0];
+    let rec4 = [1, 0, 0x80, 0];
+    let long: Vec<u16> = vec![u16::from(b'x'); 300]; // 255자를 넘는 문단은 글자 수 상위 바이트가 1이다.
+    let data = v120_file(&[v120_para(0, &codes("Hello"), &rec7), v120_para(1, &[], &rec4), v120_para(2, &long, &[rec7, rec7].concat()), v120_para(3, &codes("End"), &rec7)], &[0xEE; 40]);
+    let text = extract_text_v120(&data);
+    assert_eq!(text, format!("Hello\n\n{}\nEnd\n", "x".repeat(300)));
+}
+
+#[test]
+fn v120_symbols_are_mapped_or_dropped() {
+    let chars = [0x0102, u16::from(b'A'), 0x0103, 0x0107, u16::from(b'B'), 0x0108, 0x0437];
+    let data = v120_file(&[v120_para(0, &chars, &[1, 0, 0x80, 0])], &[]);
+    assert_eq!(extract_text_v120(&data), "“A”‘B’\n");
+}
+
+#[test]
+fn v120_stops_where_the_structure_breaks() {
+    // 두 번째 문단 번호가 틀리면 첫 문단은 마지막 문단으로 읽히고 거기서 멈춘다.
+    let data = v120_file(&[v120_para(0, &codes("First"), &[1, 0, 0x80, 0]), v120_para(5, &codes("Lost"), &[1, 0, 0x80, 0])], &[]);
+    assert_eq!(extract_text_v120(&data), "First\n");
+    assert_eq!(extract_text_v120(&header("V1.20")), "");
+}
+
+#[test]
+fn v120_sample_reads_clean_paragraphs() {
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().map(|a| a.join("tests/books/_hwp/v1.20_부하의약혼녀.hwp")).find(|p| p.exists()).expect("V1.20 표본");
+    let text = extract_text_from_hwp3(&p);
+    assert!(text.starts_with("<  부하의 약혼녀 >"), "{}", &text[..80.min(text.len())]);
+    assert!(text.contains("호텔 방은 상당히 취향을 살리어 꾸며져 있었다."));
+    // 예전 brute-force 결과에 섞이던 머리 바이트(0x80·0x100)가 글자로 나오지 않는다.
+    assert!(!text.contains('€') && !text.contains('Ā'));
+}
+
 #[test]
 fn truncated_compressed_body_keeps_the_inflated_head() {
     // 압축 스트림이 중간에서 잘리면 풀린 데까지의 문단을 쓴다.

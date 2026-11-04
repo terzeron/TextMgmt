@@ -490,6 +490,64 @@ fn skip_fonts_and_styles(stream: &mut HwpStream) -> Result<(), StreamError> {
     stream.skip(i64::from(n_styles) * 238)
 }
 
+/// V1.20 문단 머리 길이: 글자 수(BE u16), 2바이트, 0 다섯 바이트, 모양, 문단 번호(BE u16), 0 여덟 바이트.
+const V120_HEAD_LEN: usize = 20;
+/// V1.20 문단 머리와 본문 사이 기록(줄·글자 모양 정보로 보인다)의 최대 길이. 길이가 문단마다 달라 바이트 단위로 찾는다.
+const V120_MAX_GAP: usize = 256;
+
+/// `pos`에 번호가 `index`인 V1.20 문단 머리가 있는지.
+fn v120_head_at(data: &[u8], pos: usize, index: u16) -> bool {
+    data.get(pos..pos + V120_HEAD_LEN).is_some_and(|h| {
+        h[0] < 0x20 && h[4..9].iter().all(|&b| b == 0) && u16::from_be_bytes([h[10], h[11]]) == index && h[12..20].iter().all(|&b| b == 0)
+    })
+}
+
+/// HWP V1.20 본문을 문단 단위로 읽는다. 서명(30)과 문서 정보(128) 바로 뒤에서 문단이 번호 순서로 이어진다.
+/// 각 문단 본문은 머리와 가변 길이 기록 뒤의 `글자 수 × 2`바이트이고 문단 끝(13)으로 끝난다.
+/// 기록 길이는 본문 끝이 13이고 바로 뒤에 다음 번호의 머리가 오는(또는 파일이 끝나는) 값으로 정한다.
+/// 구조가 맞지 않는 곳에서 멈추고 그때까지 읽은 텍스트를 돌려준다.
+pub fn extract_text_v120(data: &[u8]) -> String {
+    let mut text = String::new();
+    let (mut pos, mut index) = (30 + 128, 0u16);
+    while v120_head_at(data, pos, index) {
+        let n_chars = usize::from(u16::from_be_bytes([data[pos], data[pos + 1]]));
+        let next = index.wrapping_add(1);
+        let span = |gap: usize| {
+            let start = pos + V120_HEAD_LEN + gap;
+            let end = start + 2 * n_chars;
+            (n_chars > 0 && data.get(end - 2..end) == Some(&[13, 0][..])).then_some((start, end))
+        };
+        // 다음 머리가 바로 뒤에 오는 간격을 찾는다. 없으면 마지막 문단이다(뒤에 꼬리 데이터가 붙는다).
+        let followed = (0..=V120_MAX_GAP).find_map(|gap| span(gap).filter(|&(_, end)| v120_head_at(data, end, next)));
+        let (body, last) = match followed {
+            Some(b) => (Some(b), false),
+            None => ((0..=V120_MAX_GAP).find_map(span), true),
+        };
+        let Some((start, end)) = body else { break };
+        for pair in data[start..end].chunks_exact(2) {
+            match u16::from_le_bytes([pair[0], pair[1]]) {
+                13 => text.push('\n'),
+                9 => text.push('\t'),
+                c if c < 32 => {}
+                // V1.20 기호 코드. 사양서를 찾지 못해 코퍼스의 짝 사용에서 추정했다:
+                // 0x0102/0x0103은 대사를, 0x0107/0x0108은 지명을 감싼다. 뜻을 모르는 나머지 기호는 뺀다.
+                0x0102 => text.push('“'),
+                0x0103 => text.push('”'),
+                0x0107 => text.push('‘'),
+                0x0108 => text.push('’'),
+                c if (0x80..0x8000).contains(&c) => {}
+                c => text.push_str(&hnc_to_unicode(c)),
+            }
+        }
+        if last {
+            break;
+        }
+        pos = end;
+        index = next;
+    }
+    text
+}
+
 /// HWP 3.x 이하(`HWP Document File V` 서명) 파일인지 앞 19바이트로 판별한다. OLE인 HWP 5.x는 아니다.
 pub fn is_hwp3(path: &Path) -> bool {
     let mut head = [0u8; 19];
@@ -509,6 +567,13 @@ pub fn extract_text_from_hwp3(path: &Path) -> String {
     }
     if data.len() < 30 + 128 {
         return String::new();
+    }
+    // V1.20은 문서 정보 구조가 달라 문단을 따로 읽는다. 못 읽으면 아래 brute-force로 간다.
+    if header.contains("V1.20") {
+        let text = extract_text_v120(&data);
+        if !py_strip(&text).is_empty() {
+            return finish_text(text);
+        }
     }
 
     // 문서 정보 (offset 30, 128바이트)
@@ -547,6 +612,11 @@ pub fn extract_text_from_hwp3(path: &Path) -> String {
         };
     }
 
+    finish_text(text)
+}
+
+/// 추출 결과를 마무리한다: surrogate 표시 제거, 품질 검사, 앞뒤 공백 정리.
+fn finish_text(mut text: String) -> String {
     // surrogate 문자 제거(UTF-8 인코딩 오류 방지). 품질 검사 전에 지운다(원본과 같은 순서).
     text.retain(|c| c != LONE_SURROGATE);
 
