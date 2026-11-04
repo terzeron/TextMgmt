@@ -9,12 +9,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use backend::book_metadata::{Book};
-use backend::main::{BookstoreFactory, BookstoreSearch, GoogleVerifier, RoleResolver, TaskRunner};
+use backend::main::{BookstoreFactory, BookstoreSearch, GoogleVerifier, TaskRunner};
 use serde_json::{json, Value};
 use sysdeps::FsOps;
 use tempfile::TempDir;
 use crate::common::shared_fixtures::{admin_payload, arr, enc, is_truthy, now_plus_3600, proposal_result};
 use crate::common::shared_fixtures::{BookRow, CallArgs, DeferredRunner, Fut, Fx, Mock, RecordedArgs, Store, arg, arg_or, effective, install_classify_status_store, ready, store_set};
+use crate::common::auth_fakes::FixedRole;
 
 fn viewer_payload() -> Value {
     json!({"email": "viewer@test.com", "role": "viewer", "name": "Viewer", "picture": "", "exp": now_plus_3600()})
@@ -81,16 +82,6 @@ impl BookstoreSearch for StoreProxy {
 /// `with_bookstore_factory`에 넘길 factory. 서점 이름과 상관없이 같은 대역을 돌려준다(설계 3.2의 factory는 인자가 없다).
 fn store_factory(store: Mock) -> BookstoreFactory {
     Arc::new(move |_| Some(Box::new(StoreProxy(store.clone())) as Box<dyn BookstoreSearch>))
-}
-
-/// `determine_role` 대역. 항상 같은 역할(또는 `None`)을 돌려준다.
-/// TODO(common): main.rs에도 같은 모양의 대역이 있다(`ScriptedRole`). binary가 달라 공유하지 못해 따로 둔다.
-struct FixedRole(Option<String>);
-
-impl RoleResolver for FixedRole {
-    fn determine_role(&self, _email: &str) -> Option<String> {
-        self.0.clone()
-    }
 }
 
 /// `TM_GOOGLE_CLIENT_ID`와 `google_id_token.verify_oauth2_token` 대역.
@@ -2022,14 +2013,6 @@ async fn test_auth_me_returns_payload() {
     assert!(data["result"].get("expires_in").is_some());
 }
 
-// ── /auth/refresh ────────────────────────────────────────────────────────────
-
-/// `refresh_token_store`를 가짜로 끼운 Fx를 돌려준다. `determine_role`은 항상 "admin"이다.
-fn fx_with_refresh_store(rt_store: &Mock) -> Fx {
-    let store = rt_store.clone();
-    Fx::tweaked(move |d| d.with_role_resolver(Arc::new(FixedRole(Some("admin".to_string())))).with_refresh_token_store(Arc::new(store)))
-}
-
 // ── /auth/google ─────────────────────────────────────────────────────────────
 
 /// Google 검증 seam을 채운 Fx. `client_id`가 None이면 TM_GOOGLE_CLIENT_ID 미설정이다.
@@ -2440,29 +2423,10 @@ async fn test_classify_proposal_restarts_when_the_previous_run_died() {
 }
 
 mod auth_refresh {
+    use crate::common::auth_fakes::fx_with_refresh_store;
     use crate::common::shared_fixtures::{Fx, Mock};
     use crate::common::shared_fixtures::{now_plus_3600, set_cookies};
-    use std::sync::{Arc};
-    use backend::main::{RoleResolver};
     use serde_json::{json, Value};
-
-    /// `determine_role` 대역. 항상 같은 역할(또는 `None`)을 돌려준다.
-    /// TODO(common): main.rs에도 같은 모양의 대역이 있다(`ScriptedRole`). binary가 달라 공유하지 못해 따로 둔다.
-    struct FixedRole(Option<String>);
-
-    impl RoleResolver for FixedRole {
-        fn determine_role(&self, _email: &str) -> Option<String> {
-            self.0.clone()
-        }
-    }
-
-    // ── /auth/refresh ────────────────────────────────────────────────────────────
-
-    /// `refresh_token_store`를 가짜로 끼운 Fx를 돌려준다. `determine_role`은 항상 "admin"이다.
-    fn fx_with_refresh_store(rt_store: &Mock) -> Fx {
-        let store = rt_store.clone();
-        Fx::tweaked(move |d| d.with_role_resolver(Arc::new(FixedRole(Some("admin".to_string())))).with_refresh_token_store(Arc::new(store)))
-    }
 
     #[tokio::test]
     async fn test_missing_token_returns_400() {

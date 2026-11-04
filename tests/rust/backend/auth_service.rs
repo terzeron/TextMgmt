@@ -4,16 +4,12 @@
 mod common;
 use std::collections::HashMap;
 use backend::auth_service::{HTTPException, SystemExit};
-use backend::main::RoleResolver;
 use serde_json::{json};
 use backend::auth_service;
 use bookstore::store_clients::{AbstractBookstore, KyoboBookstore};
 use crate::common::shared_fixtures::{now, process_env};
 use crate::common::shared_fixtures::{FakeRequest, decode, encode_hs256, fixture, make_request};
-
-fn access_token(email: &str, role: &str) -> String {
-    backend::auth_service::create_jwt_token(email, role, None, None)
-}
+use crate::common::auth_fakes::{FixedRole, access_token};
 
 fn refresh_token(email: &str, role: &str) -> String {
     backend::auth_service::create_refresh_token(email, role, None, None)
@@ -21,17 +17,6 @@ fn refresh_token(email: &str, role: &str) -> String {
 
 fn detail_of(err: &HTTPException) -> String {
     err.detail.to_lowercase()
-}
-
-// TODO(common): FixedRole, FakeGoogle, FakeStore는 main_mock, view_history_api도 쓴다. common/auth_fakes.rs로 옮긴다.
-
-/// `RoleResolver` fake. 어떤 이메일이든 같은 역할을 돌려준다 (구 `.determine_role(|_| ..)` 클로저).
-struct FixedRole(Option<String>);
-
-impl RoleResolver for FixedRole {
-    fn determine_role(&self, _email: &str) -> Option<String> {
-        self.0.clone()
-    }
 }
 
 // ========== determine_role ==========

@@ -48,7 +48,7 @@ use std::sync::{Arc};
 use axum::Router;
 use axum::http::{Method, Request};
 use backend::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, TokenIssuer};
-use backend::main::{ACCESS_COOKIE_NAME, app_with, AppDeps, AuthMode, GoogleVerifier, observation_hash, REFRESH_COOKIE_NAME, RequestValidationError, RoleResolver};
+use backend::main::{ACCESS_COOKIE_NAME, app_with, AppDeps, AuthMode, GoogleVerifier, observation_hash, REFRESH_COOKIE_NAME, RequestValidationError};
 use backend::refresh_token_store::{RefreshTokenStoreApi};
 use common::env::EnvGuard;
 use common::log_capture::LogCapture;
@@ -58,10 +58,7 @@ use axum::body::Body;
 use tower::ServiceExt;
 use crate::common::shared_fixtures::{now};
 use crate::common::shared_fixtures::{FakeStore, decode, encode_hs256, fixture, make_request};
-
-fn access_token(email: &str, role: &str) -> String {
-    backend::auth_service::create_jwt_token(email, role, None, None)
-}
+use crate::common::auth_fakes::{FixedRole, access_token};
 
 // ---- HTTP 응답 헬퍼 ----
 
@@ -102,17 +99,6 @@ fn refresh_client(app: &Router, token: &str) -> TestClient {
 /// `decode_refresh_token`을 가로채는 seam이 없으므로 같은 비밀키로 서명한 실제 refresh 토큰을 쓴다.
 fn crafted_refresh(email: &str, fid: &str, jti: &str) -> String {
     encode_hs256(&json!({"type": "refresh", "email": email, "role": "user", "name": "n", "picture": "p", "fid": fid, "jti": jti, "iat": now(), "exp": now() + 3600}))
-}
-
-// TODO(common): FixedRole, FakeGoogle, FakeStore는 main_mock, view_history_api도 쓴다. common/auth_fakes.rs로 옮긴다.
-
-/// `RoleResolver` fake. 어떤 이메일이든 같은 역할을 돌려준다 (구 `.determine_role(|_| ..)` 클로저).
-struct FixedRole(Option<String>);
-
-impl RoleResolver for FixedRole {
-    fn determine_role(&self, _email: &str) -> Option<String> {
-        self.0.clone()
-    }
 }
 
 fn role(r: &str) -> Arc<FixedRole> {

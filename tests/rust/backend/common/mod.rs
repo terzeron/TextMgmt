@@ -33,6 +33,7 @@ pub mod cover_docs;
 pub mod cover_env;
 pub mod pdf_env;
 pub mod preview_epubs;
+pub mod auth_fakes;
 
 use axum::body::Body;
 use axum::http::{Method, Request};
