@@ -5,10 +5,7 @@ use std::fs;
 use classifier::feature_extractor::{Dtype, FeatureSpace, FitOptions, make_vectorizer, shrink_sources};
 use serde_json::{json, Value};
 use tempfile::TempDir;
-
-fn approx(a: f64, b: f64, abs: f64) -> bool {
-    (a - b).abs() <= abs
-}
+use crate::common::shared_fixtures::{approx};
 
 fn word_field(source: &str, weight: f64) -> Value {
     json!({"source": source, "weight": weight, "analyzer": "word", "ngram": [1, 1], "min_df": 1, "max_features": 100, "max_chars": 0})

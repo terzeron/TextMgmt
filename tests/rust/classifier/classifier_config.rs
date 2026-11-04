@@ -12,6 +12,7 @@ use classifier::inference_model::CategoryModel;
 use classifier::model_trainer::{train, TrainOptions};
 use common::log_capture::LogCapture;
 use tempfile::TempDir;
+use crate::common::shared_fixtures::{make_docs, parity, trained};
 
 #[test]
 fn unusable_config_files_fall_back_to_the_defaults() {
@@ -53,47 +54,6 @@ fn merging_into_a_non_object_keeps_the_base_and_truthiness_follows_python() {
     assert_eq!(on, ["one", "text", "list", "obj"]);
 }
 
-// ---------------------------------------------------------------------------
-// 시험용 데이터
-//
-// 카테고리마다 어휘를 확실히 갈라 둔다. 선형 모델이 배울 신호가 있어야
-// 학습 경로 전체를 실제로 통과시킬 수 있다.
-// ---------------------------------------------------------------------------
-
-const VOCAB: [(&str, &str); 3] =
-    [("3_무협", "무림맹 장문인 내공 운기조식 화산파 검법 강호 협객"), ("3_판타지", "드래곤 마나 던전 길드 마법사 레벨업 소환 마왕"), ("5_수학과학일반", "미분 적분 함수 벡터 행렬 확률 통계 방정식")];
-
-fn make_docs(per_category: usize) -> Vec<Value> {
-    let mut docs = Vec::new();
-    for (cat, words) in VOCAB {
-        let tokens: Vec<&str> = words.split_whitespace().collect();
-        for i in 0..per_category {
-            // 문서마다 어순을 바꿔 같은 문자열이 반복되지 않게 한다.
-            let k = i % tokens.len();
-            let shifted: Vec<&str> = tokens[k..].iter().chain(tokens[..k].iter()).copied().collect();
-            let text = shifted.repeat(3).join(" ");
-            docs.push(json!({
-                "id": format!("{cat}-{i}"), "cat": cat, "text": text, "title": format!("{} 이야기 {i}", tokens[k]), "author": format!("작가{}", i % 5),
-                "publisher": "테스트출판사", "type": if i % 2 == 0 { "epub" } else { "txt" }, "name": format!("{}_{i}.epub", tokens[k]), "path": format!("/mnt/data/text/{cat}/{i}.epub"),
-            }));
-        }
-    }
-    docs
-}
-
-/// pytest fixture `trained`에 대응한다. Python sklearn 학습 결과와 비교하는 parity oracle을 읽는다
-/// (`python tests/test_classifier_export.py trained` 로 다시 쓴다).
-fn load_trained(name: &str) -> (CategoryModel, Value) {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny").join(name);
-    let model = CategoryModel::load(Some(&dir)).expect("학습 결과 픽스처를 읽어야 한다");
-    let report: Value = serde_json::from_slice(&fs::read(dir.join("report.json")).unwrap()).unwrap();
-    (model, report)
-}
-
-fn trained() -> (CategoryModel, Value) {
-    load_trained("trained")
-}
-
 fn train_opts() -> TrainOptions {
     TrainOptions { accept_parent: Some(series_to_parent()), spill_dir: None, release_holdout_text: false }
 }
@@ -107,11 +67,6 @@ fn spill_train_config() -> Value {
 
 fn small_fields() -> Value {
     json!({"body_word": {"min_df": 1, "max_features": 5000}, "body_char": {"enabled": false}, "filename": {"min_df": 1}, "title": {"min_df": 1}, "author": {"min_df": 1}, "publisher": {"min_df": 1}, "file_type": {"min_df": 1}})
-}
-
-fn parity() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/parity.json");
-    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
 
 // ---------------------------------------------------------------------------

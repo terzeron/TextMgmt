@@ -1,3 +1,5 @@
+//! sysdeps 테스트: 시계, 파일시스템, 외부 명령, HTTP 응답 값 객체.
+//! 설계: docs/rust-test-seams.md 3.1
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};

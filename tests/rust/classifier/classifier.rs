@@ -14,33 +14,7 @@ use common::epub::{EpubSpec, make_epub};
 use common::es_dummy::{DummyEs, not_found_error};
 use serde_json::{json, Value};
 use tempfile::TempDir;
-
-// ---------------------------------------------------------------------------
-// 시험용 데이터
-//
-// 카테고리마다 어휘를 확실히 갈라 둔다. 선형 모델이 배울 신호가 있어야
-// 학습 경로 전체를 실제로 통과시킬 수 있다.
-// ---------------------------------------------------------------------------
-
-const VOCAB: [(&str, &str); 3] =
-    [("3_무협", "무림맹 장문인 내공 운기조식 화산파 검법 강호 협객"), ("3_판타지", "드래곤 마나 던전 길드 마법사 레벨업 소환 마왕"), ("5_수학과학일반", "미분 적분 함수 벡터 행렬 확률 통계 방정식")];
-
-fn vocab(cat: &str) -> &'static str {
-    VOCAB.iter().find(|(c, _)| *c == cat).unwrap().1
-}
-
-/// pytest fixture `trained`에 대응한다. Python sklearn 학습 결과와 비교하는 parity oracle을 읽는다
-/// (`python tests/test_classifier_export.py trained` 로 다시 쓴다).
-fn load_trained(name: &str) -> (CategoryModel, Value) {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny").join(name);
-    let model = CategoryModel::load(Some(&dir)).expect("학습 결과 픽스처를 읽어야 한다");
-    let report: Value = serde_json::from_slice(&fs::read(dir.join("report.json")).unwrap()).unwrap();
-    (model, report)
-}
-
-fn trained() -> (CategoryModel, Value) {
-    load_trained("trained")
-}
+use crate::common::shared_fixtures::{load_trained, trained, vocab};
 
 // ---------------------------------------------------------------------------
 // features
@@ -309,6 +283,7 @@ mod expected_accuracy {
 }
 
 mod build_document {
+    use crate::common::shared_fixtures::{options};
     use super::common;
     use std::fs;
     use std::path::Path;
@@ -365,10 +340,6 @@ mod build_document {
         es.on("get", move |params| Ok((get.as_ref().expect("get 을 부르면 안 된다"))(params)));
         es.on("search", move |params| Ok((search.as_ref().expect("search 를 부르면 안 된다"))(params)));
         es
-    }
-
-    fn options(root: &Path) -> ClassifierOptions {
-        ClassifierOptions { library_root: Some(root.to_path_buf()), ..Default::default() }
     }
 
     fn classifier(root: &Path, es: Option<Arc<DummyEs>>, model: Option<FakeModel>) -> BookCategoryClassifier {

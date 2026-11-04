@@ -1,3 +1,4 @@
+//! `loader::cli_parser` 단위 테스트.
 #![allow(clippy::type_complexity)]
 use loader::cli_parser::{parse_options, print_usage, run, run_with_hooks, RunHooks, World};
 use std::collections::{BTreeMap, HashMap, HashSet};

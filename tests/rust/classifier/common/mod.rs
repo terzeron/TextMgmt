@@ -18,5 +18,6 @@ pub mod log_capture;
 mod setup;
 #[path = "../../backend/common/zipx.rs"]
 pub mod zipx;
+pub mod shared_fixtures;
 
 pub use setup::setup_env;

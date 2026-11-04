@@ -1,3 +1,40 @@
+//! 원본: tests/test_category_mapping.py
+//!
+//! `CategoryMapping`(MySQL 기반 카테고리 키워드·숨김·재적재 락·분류 제안 테이블) 테스트.
+//! Python은 `patch.dict(sys.modules, {"pymysql": ...})`로 드라이버를 가짜로 바꾸고, 인스턴스의 `_get_connection`을 대입으로 갈아끼운다.
+//! Rust는 `db`의 `DbConnection`/`ConnectionProvider`로 가짜 연결을 주입한다(설계: docs/rust-test-seams.md 3.4).
+//! 생성자 세 가지: `with_connector(provider)`는 초기화(`init_db`)를 실행하고, `with_connection_provider(provider)`는 초기화를 건너뛴다.
+//!
+//! 가정한 API (아직 구현 전이다. Python과 이름·시그니처가 같다고 본다):
+//! - `db`: 드라이버 추상화 (가짜 연결이 구현한다)
+//!   - `enum DbValue { Null, Int(i64), Text(String), DateTime(chrono::NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`)
+//!   - `type Row = BTreeMap<String, DbValue>`, `enum DbError { IntegrityError(String), Other(String) }`
+//!   - `trait DbCursor { fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError>;
+//!      fn executemany(&mut self, sql: &str, seq: &[Vec<DbValue>]) -> Result<(), DbError>;
+//!      fn fetchall(&mut self) -> Option<Vec<Row>>; fn fetchone(&mut self) -> Option<Row>; fn rowcount(&self) -> u64; }`
+//!   - `trait DbConnection: Send { fn cursor(&mut self) -> Box<dyn DbCursor>; fn commit(&mut self) -> Result<(), DbError>; fn rollback(&mut self) -> Result<(), DbError>; fn close(&mut self); }`
+//!   - `type ConnectionProvider = Arc<dyn Fn() -> Result<Box<dyn DbConnection>, DbError> + Send + Sync>`
+//! - `db::category_mapping::CategoryMapping`
+//!   - `with_connector(provider: ConnectionProvider) -> Result<CategoryMapping, DbError>` (`init_db` 실행. 마이그레이션의 인덱스 삭제 예외는 삼킨다)
+//!   - `with_connection_provider(provider: ConnectionProvider) -> CategoryMapping` (`init_db` 생략)
+//!   - `content_type`은 기본값이 없어 매번 마지막 인자로 넘긴다(`delete_category`만 `(category, content_type, prefix)`). 아래 목록은 `"book"`을 넘기는 모양이다.
+//!   - `get_all_mappings(&self, ct) -> Result<HashMap<String, Vec<String>>, DbError>`, `get_keywords(&self, &str, ct) -> Result<Vec<String>, DbError>`
+//!   - `add_keyword(&self, &str, &str, ct) -> bool`, `remove_keyword(&self, &str, &str, ct) -> bool`, `set_keywords(&self, &str, &[&str], ct) -> bool`
+//!   - `update_all_mappings(&self, &HashMap<String, Vec<String>>, ct) -> bool`
+//!   - `delete_category(&self, &str, ct, prefix: bool) -> bool`, `rename_category(&self, &str, &str, ct) -> bool`
+//!   - `get_hidden_categories(&self, ct) -> Vec<String>`, `set_hidden(&self, &str, bool, ct) -> bool`
+//!   - `get_latest_excluded_categories(&self, ct) -> Vec<String>`, `set_latest_excluded(&self, &str, bool, ct) -> bool`
+//!   - `search_by_keyword(&self, &str, ct) -> Vec<String>`
+//!   - `acquire_reload_lock(&self, content_type: &str, category: Option<&str>, reload_source: Option<&str>) -> (bool, Option<String>, Option<Row>)`
+//!   - `release_reload_lock(&self, content_type: &str, category: Option<&str>)`
+//!   - `heartbeat_reload_lock(&self, content_type: &str, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), ValueError>`
+//!   - `complete_reload_lock(&self, content_type: &str, status: &str, error: Option<&str>, category: Option<&str>, counts: &[(&str, i64)]) -> Result<(), ValueError>`
+//!   - `get_reload_status(&self, content_type: &str, category: Option<&str>) -> Option<Row>`
+//!   - `add_classify_proposal_items(&self, items: &[Value], category: &str, ct)`, `get_classify_proposal_items(&self, ct).unwrap() -> Vec<Value>`
+//!   - `clear_classify_proposal_items(&self, ct)`, `delete_classify_proposal_item(&self, file_path: &str, ct).unwrap() -> u64`
+//!   - `merge_classify_proposal_status(&self, status: &Value, ct)`
+//!   - `pub const RELOAD_LOCK_HEARTBEAT_STALE_SECONDS: i64`, `struct ValueError(pub String)`
+//! - `chrono`가 dev-dependency에 있다고 본다 (`datetime.now()` 대응).
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering, Mutex};
 use db::category_mapping::{CategoryMapping, RELOAD_LOCK_HEARTBEAT_STALE_SECONDS, ValueError};

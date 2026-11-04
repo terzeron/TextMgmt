@@ -1,6 +1,7 @@
 mod common;
 use classifier::confidence_calibrator::{expected_accuracy, fit_expected_accuracy, from_coverage_report, MIN_SAMPLES};
-use serde_json::{json, Value};
+use serde_json::{json};
+use crate::common::shared_fixtures::{approx, floats, real_holdout};
 
 /// 시드 고정 난수. numpy 대신 splitmix64를 쓴다.
 struct Rng(u64);
@@ -23,14 +24,6 @@ fn sample(n: usize, seed: u64) -> (Vec<f64>, Vec<bool>) {
     // 0.013 에서 약 40%, 0.15 에서 약 99%
     let correct = conf.iter().map(|c| rng.next_f64() < (0.4 + (c - 0.013) * 4.3).clamp(0.0, 0.99)).collect();
     (conf, correct)
-}
-
-fn approx(a: f64, b: f64, abs: f64) -> bool {
-    (a - b).abs() <= abs
-}
-
-fn floats(v: &Value) -> Vec<f64> {
-    v.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()
 }
 
 fn is_sorted(v: &[f64]) -> bool {
@@ -114,28 +107,6 @@ fn test_values_outside_the_measured_range_are_clipped() {
 #[test]
 fn test_mismatched_lengths_are_rejected() {
     assert!(fit_expected_accuracy(&[0.1, 0.2], &[true]).is_err());
-}
-
-// ---------------------------------------------------------------------------
-// 학습 기록(판정률-정답률 곡선)에서 만드는 눈금
-// ---------------------------------------------------------------------------
-
-/// 실제 모델의 meta["holdout"] 모양. 누적 곡선이다.
-fn real_holdout() -> Value {
-    json!({
-        "n": 47008,
-        "top1_accuracy": 0.864788972089857,
-        "curve": [
-            {"coverage": 0.5, "precision": 0.974004424778761, "threshold": 0.1281779488151631},
-            {"coverage": 0.7, "precision": 0.942136453426531, "threshold": 0.10072196828305498},
-            {"coverage": 0.8, "precision": 0.9265010902515556, "threshold": 0.08265990361070291},
-            {"coverage": 0.9, "precision": 0.9044602548041695, "threshold": 0.060971974205370344},
-            {"coverage": 0.95, "precision": 0.8889759724119399, "threshold": 0.04635731124736481},
-            {"coverage": 1.0, "precision": 0.864788972089857, "threshold": 0.019518310797334633},
-        ],
-        "at_precision_90": {"coverage": 0.917290673927842, "precision": 0.9, "threshold": 0.056374553813004144},
-        "at_precision_95": {"coverage": 0.6435287610619469, "precision": 0.9500181812171499, "threshold": 0.10885944805582125},
-    })
 }
 
 #[test]

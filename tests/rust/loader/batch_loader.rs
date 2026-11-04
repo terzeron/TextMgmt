@@ -1,3 +1,4 @@
+//! `loader::batch_loader` 단위 테스트.
 #![allow(clippy::type_complexity)]
 use std::collections::HashMap;
 use std::fs;

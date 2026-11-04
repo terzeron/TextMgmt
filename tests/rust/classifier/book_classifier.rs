@@ -825,6 +825,7 @@ fn test_decide_keeps_a_confident_model_without_consulting_bookstores() {
 }
 
 mod python_compat {
+    use crate::common::shared_fixtures::{fixture, s};
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -833,15 +834,6 @@ mod python_compat {
     use classifier::{BookClassifierApi, Classify};
     use serde_json::{json, Value};
     use tempfile::TempDir;
-
-    fn fixture() -> Value {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/book_classifier_parity.json");
-        serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-    }
-
-    fn s(v: &Value) -> &str {
-        v.as_str().unwrap()
-    }
 
     #[test]
     fn filename_parsing_matches_python() {

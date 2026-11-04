@@ -1,12 +1,8 @@
-use std::fs;
-use std::path::Path;
-use classifier::py_json_writer::{dumps, float_repr};
-use serde_json::{json, Value};
 
-fn parity() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/parity.json");
-    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-}
+mod common;
+use classifier::py_json_writer::{dumps, float_repr};
+use serde_json::{json};
+use crate::common::shared_fixtures::{parity};
 
 #[test]
 fn float_repr_and_json_dumps_match_python() {

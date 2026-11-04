@@ -3,16 +3,14 @@
 //! fixture 는 `tests/fixtures/classifier_tiny/` 이고 `python tests/test_classifier_export.py` 가 다시 쓴다.
 //! 실제 모델 parity 는 `TM_CLASSIFIER_EXPORT_DIR=<내보낸 디렉토리> cargo test -p backend --test classifier_model -- --ignored` 로 돌린다.
 
+mod common;
+
 use std::fs;
 
 use classifier::export_format::{ModelError, write_dir};
-use classifier::tokenizer::{AnalyzerKind, AnalyzerSpec};
 use classifier::vectorizer::FieldVectorizer;
 use serde_json::{Value, json};
-
-fn spec(kind: &str, lo: usize, hi: usize) -> AnalyzerSpec {
-    AnalyzerSpec { kind: AnalyzerKind::parse(kind).unwrap(), ngram_lo: lo, ngram_hi: hi, lowercase: true }
-}
+use crate::common::shared_fixtures::{spec};
 
 #[test]
 fn exporter_rejects_models_without_vectorizers_like_python() {

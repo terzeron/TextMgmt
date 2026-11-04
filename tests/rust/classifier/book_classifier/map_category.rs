@@ -3,19 +3,9 @@
 #[path = "../common/mod.rs"]
 mod common;
 use std::fs;
-use std::path::Path;
 use classifier::book_classifier::*;
-use serde_json::Value;
 use tempfile::TempDir;
-
-fn fixture() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/book_classifier_parity.json");
-    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-}
-
-fn s(v: &Value) -> &str {
-    v.as_str().unwrap()
-}
+use crate::common::shared_fixtures::{fixture, s};
 
 #[test]
 fn test_map_category_rules() {

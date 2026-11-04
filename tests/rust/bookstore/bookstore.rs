@@ -1,3 +1,4 @@
+//! `bookstore` 최상위 단위 테스트.
 use bookstore::{Store, strip_trailing_number, truncate_title};
 use serde_json::Value;
 

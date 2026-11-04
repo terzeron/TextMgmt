@@ -1,3 +1,4 @@
+//! HWP V3.00/V2.10/V2.00 텍스트 추출기 테스트 (tests/test_hwp3_parser.py 이식).
 use std::fs;
 use std::io::Write;
 use flate2::Compression;

@@ -1,3 +1,4 @@
+//! MuPDF worker(`native_pdf`)와 어댑터(`sysdeps::pdf_worker_client`) 테스트. worker는 프로세스를 띄우지 않고 `run_worker`로 직접 부른다.
 use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};

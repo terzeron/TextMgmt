@@ -11,15 +11,7 @@ use classifier::book_classifier::{BookClassifierService, BookstoreDecider, Decid
 use classifier::{bookstore_policy, Classify};
 use classifier::inference_model::Prediction;
 use tempfile::TempDir;
-
-fn fixture() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/book_classifier_parity.json");
-    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-}
-
-fn s(v: &Value) -> &str {
-    v.as_str().unwrap()
-}
+use crate::common::shared_fixtures::{fixture, s};
 
 #[test]
 fn keyword_mapping_matches_python() {

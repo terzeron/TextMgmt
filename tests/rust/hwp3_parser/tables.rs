@@ -1,3 +1,4 @@
+//! `hwp3_parser::tables` 단위 테스트.
 use hwp3_parser::tables::*;
 
 fn fnv(values: impl IntoIterator<Item = u64>) -> u64 {

@@ -8,6 +8,7 @@ use tempfile::TempDir;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use crate::common::shared_fixtures::{approx, parity, trained, vocab};
 
 fn training_data() -> Vec<Value> {
     let mut docs = Vec::new();
@@ -235,37 +236,6 @@ fn rust_training_matches_python_ninety_five_percent_fixture() {
     assert!(max_score_error <= 3e-4, "decision score parity error: {max_score_error}");
 }
 
-fn approx(a: f64, b: f64, abs: f64) -> bool {
-    (a - b).abs() <= abs
-}
-
-// ---------------------------------------------------------------------------
-// 시험용 데이터
-//
-// 카테고리마다 어휘를 확실히 갈라 둔다. 선형 모델이 배울 신호가 있어야
-// 학습 경로 전체를 실제로 통과시킬 수 있다.
-// ---------------------------------------------------------------------------
-
-const VOCAB: [(&str, &str); 3] =
-    [("3_무협", "무림맹 장문인 내공 운기조식 화산파 검법 강호 협객"), ("3_판타지", "드래곤 마나 던전 길드 마법사 레벨업 소환 마왕"), ("5_수학과학일반", "미분 적분 함수 벡터 행렬 확률 통계 방정식")];
-
-fn vocab(cat: &str) -> &'static str {
-    VOCAB.iter().find(|(c, _)| *c == cat).unwrap().1
-}
-
-/// pytest fixture `trained`에 대응한다. Python sklearn 학습 결과와 비교하는 parity oracle을 읽는다
-/// (`python tests/test_classifier_export.py trained` 로 다시 쓴다).
-fn load_trained(name: &str) -> (CategoryModel, Value) {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny").join(name);
-    let model = CategoryModel::load(Some(&dir)).expect("학습 결과 픽스처를 읽어야 한다");
-    let report: Value = serde_json::from_slice(&fs::read(dir.join("report.json")).unwrap()).unwrap();
-    (model, report)
-}
-
-fn trained() -> (CategoryModel, Value) {
-    load_trained("trained")
-}
-
 fn ids(docs: &[Value]) -> HashSet<String> {
     docs.iter().map(|d| d["id"].as_str().unwrap().to_string()).collect()
 }
@@ -276,11 +246,6 @@ fn ids(docs: &[Value]) -> HashSet<String> {
 
 fn docs_n(n: usize, cat: &str, start: usize) -> Vec<Value> {
     (start..start + n).map(|i| json!({"id": i.to_string(), "cat": cat, "text": "x", "name": format!("{i}.txt")})).collect()
-}
-
-fn parity() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/parity.json");
-    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
 
 // ---------------------------------------------------------------------------

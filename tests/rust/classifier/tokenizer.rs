@@ -3,17 +3,16 @@
 //! fixture 는 `tests/fixtures/classifier_tiny/` 이고 `python tests/test_classifier_export.py` 가 다시 쓴다.
 //! 실제 모델 parity 는 `TM_CLASSIFIER_EXPORT_DIR=<내보낸 디렉토리> cargo test -p backend --test classifier_model -- --ignored` 로 돌린다.
 
+mod common;
+
 use std::fs;
 use std::path::PathBuf;
 
 use classifier::export_format::{ModelError, write_dir};
-use classifier::tokenizer::{AnalyzerKind, AnalyzerSpec, analyze, collapse_whitespace, is_py_digit, is_py_space, is_py_word};
+use classifier::tokenizer::{AnalyzerSpec, analyze, collapse_whitespace, is_py_digit, is_py_space, is_py_word};
 use classifier::vectorizer::FieldVectorizer;
 use serde_json::{Value, json};
-
-fn spec(kind: &str, lo: usize, hi: usize) -> AnalyzerSpec {
-    AnalyzerSpec { kind: AnalyzerKind::parse(kind).unwrap(), ngram_lo: lo, ngram_hi: hi, lowercase: true }
-}
+use crate::common::shared_fixtures::{spec};
 
 fn terms(kind: &str, lo: usize, hi: usize, text: &str) -> Vec<String> {
     analyze(text, &spec(kind, lo, hi))

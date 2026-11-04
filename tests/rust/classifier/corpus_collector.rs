@@ -10,9 +10,9 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use classifier::model_trainer;
 use std::collections::HashSet;
-use classifier::inference_model::CategoryModel;
 use common::epub::{EpubSpec, make_epub};
 use classifier::confidence_calibrator::{expected_accuracy, fit_expected_accuracy, from_coverage_report};
+use crate::common::shared_fixtures::{VOCAB, floats, make_docs, parity, trained};
 
 /// 구 `FakeEs(get_result, search_result, raise_on)`. `common::es_dummy::DummyEs`(색인 `books`)로 같은 응답과 실패를 만든다.
 fn fake_es(get_result: Value, search_result: Value, raise_on: &str) -> Arc<DummyEs> {
@@ -326,56 +326,6 @@ fn indexed_holdout_indices_match_materialized_selection_when_keys_repeat() {
     let expected: Vec<usize> = expected_docs.iter().map(|expected| docs.iter().position(|doc| doc == expected).unwrap()).collect();
 
     assert_eq!(model_trainer::holdout_indices_indexed(&indexed, 2, 0.5, 42), expected);
-}
-
-// ---------------------------------------------------------------------------
-// 시험용 데이터
-//
-// 카테고리마다 어휘를 확실히 갈라 둔다. 선형 모델이 배울 신호가 있어야
-// 학습 경로 전체를 실제로 통과시킬 수 있다.
-// ---------------------------------------------------------------------------
-
-const VOCAB: [(&str, &str); 3] =
-    [("3_무협", "무림맹 장문인 내공 운기조식 화산파 검법 강호 협객"), ("3_판타지", "드래곤 마나 던전 길드 마법사 레벨업 소환 마왕"), ("5_수학과학일반", "미분 적분 함수 벡터 행렬 확률 통계 방정식")];
-
-fn make_docs(per_category: usize) -> Vec<Value> {
-    let mut docs = Vec::new();
-    for (cat, words) in VOCAB {
-        let tokens: Vec<&str> = words.split_whitespace().collect();
-        for i in 0..per_category {
-            // 문서마다 어순을 바꿔 같은 문자열이 반복되지 않게 한다.
-            let k = i % tokens.len();
-            let shifted: Vec<&str> = tokens[k..].iter().chain(tokens[..k].iter()).copied().collect();
-            let text = shifted.repeat(3).join(" ");
-            docs.push(json!({
-                "id": format!("{cat}-{i}"), "cat": cat, "text": text, "title": format!("{} 이야기 {i}", tokens[k]), "author": format!("작가{}", i % 5),
-                "publisher": "테스트출판사", "type": if i % 2 == 0 { "epub" } else { "txt" }, "name": format!("{}_{i}.epub", tokens[k]), "path": format!("/mnt/data/text/{cat}/{i}.epub"),
-            }));
-        }
-    }
-    docs
-}
-
-/// pytest fixture `trained`에 대응한다. Python sklearn 학습 결과와 비교하는 parity oracle을 읽는다
-/// (`python tests/test_classifier_export.py trained` 로 다시 쓴다).
-fn load_trained(name: &str) -> (CategoryModel, Value) {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny").join(name);
-    let model = CategoryModel::load(Some(&dir)).expect("학습 결과 픽스처를 읽어야 한다");
-    let report: Value = serde_json::from_slice(&fs::read(dir.join("report.json")).unwrap()).unwrap();
-    (model, report)
-}
-
-fn trained() -> (CategoryModel, Value) {
-    load_trained("trained")
-}
-
-fn parity() -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/parity.json");
-    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-}
-
-fn floats(v: &Value) -> Vec<f64> {
-    v.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()
 }
 
 /// Python 테스트 생성기와 같은 LCG.
