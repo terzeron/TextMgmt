@@ -205,3 +205,27 @@ path = "../../tests/rust/bookdoctor/integration/scan.rs"
 [[test]]
 name = "integration_zip_fast"
 path = "../../tests/rust/bookdoctor/integration/zip_fast.rs"
+
+[[test]]
+name = "hwp_script_checker"
+path = "../../tests/rust/bookdoctor/hwp/script_checker.rs"
+
+[[test]]
+name = "hwp_bindata_checker"
+path = "../../tests/rust/bookdoctor/hwp/bindata_checker.rs"
+
+[[test]]
+name = "hwp_record_reader"
+path = "../../tests/rust/bookdoctor/hwp/record_reader.rs"
+
+[[test]]
+name = "rule_engine_rule_matcher"
+path = "../../tests/rust/bookdoctor/rule_engine/rule_matcher.rs"
+
+[[test]]
+name = "pdf"
+path = "../../tests/rust/bookdoctor/pdf.rs"
+
+[[test]]
+name = "zipcheck"
+path = "../../tests/rust/bookdoctor/zipcheck.rs"
