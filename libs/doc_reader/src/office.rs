@@ -79,16 +79,13 @@ pub fn read_from_doc(path: &Path, binary: &Path) -> (String, usize, Vec<String>)
 }
 
 /// HWP 파일: HWP 3.x 이하는 네이티브 HWP3 파서를 먼저 쓴다(LibreOffice는 한자를 `?`로 깨뜨린다).
-/// 그 결과가 비거나 HWP 5.x면 LibreOffice로 변환하고, 변환 결과가 비면 HWP3 파서로 대신한다.
+/// 그 결과가 비거나 HWP 5.x면 LibreOffice로 변환한다. 네이티브 파서는 이미 실패했으므로 다시 부르지 않는다.
 pub fn read_from_hwp(path: &Path, binary: &Path) -> (String, usize, Vec<String>) {
     if let Some(done) = read_hwp3_natively(path, &|path| Ok(hwp3_parser::extract_text_from_hwp3(path))) {
         return done;
     }
     let mut errors = Vec::new();
-    let mut raw = convert_with_libreoffice(path, "txt:Text", binary, &mut errors);
-    if errors.is_empty() && raw.trim_matches(is_space).is_empty() {
-        raw = hwp3_parser::extract_text_from_hwp3(path);
-    }
+    let raw = convert_with_libreoffice(path, "txt:Text", binary, &mut errors);
     let (summary, lines) = finish(&raw);
     (summary, lines, errors)
 }
@@ -107,13 +104,14 @@ fn read_hwp3_natively(path: &Path, extract: &dyn Fn(&Path) -> Result<String, Str
     Some((summary, lines, Vec::new()))
 }
 
+/// [`read_from_hwp`]와 같은 순서이되 LibreOffice 변환(`convert`)과 HWP3 추출(`extract_native`)을 주입한다.
 pub fn read_from_hwp_with_fallback(
     path: &Path,
     _binary: &Path,
     convert: &dyn Fn(&Path) -> Result<String, String>,
-    extract_fallback: &dyn Fn(&Path) -> Result<String, String>,
+    extract_native: &dyn Fn(&Path) -> Result<String, String>,
 ) -> (String, usize, Vec<String>) {
-    if let Some(done) = read_hwp3_natively(path, extract_fallback) {
+    if let Some(done) = read_hwp3_natively(path, extract_native) {
         return done;
     }
     let mut errors = Vec::new();
@@ -125,17 +123,7 @@ pub fn read_from_hwp_with_fallback(
             return (summary, lines, errors);
         }
     };
-    let mut raw = converted;
-    if raw.trim_matches(is_space).is_empty() {
-        raw = match extract_fallback(path) {
-            Ok(text) => text,
-            Err(error) => {
-                errors.push(error);
-                String::new()
-            }
-        };
-    }
-    let (summary, lines) = finish(&raw);
+    let (summary, lines) = finish(&converted);
     (summary, lines, errors)
 }
 

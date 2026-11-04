@@ -252,14 +252,6 @@ impl BookManager {
                 return text_response(500, format!("{} preview failed", suffix.to_uppercase()));
             }
         };
-        let mut html_content = html_content;
-        if html_content.trim().is_empty() && suffix == ".hwp" {
-            // LibreOffice 변환 실패 - 네이티브 HWP3 파서로 폴백한다.
-            let plain_text = hwp3_parser::extract_text_from_hwp3(file_path);
-            if !plain_text.is_empty() {
-                html_content = plain_text_html(&plain_text);
-            }
-        }
         if !html_content.is_empty() {
             if let Err(e) = self.write_cache(&cache_file, html_content.as_bytes()) {
                 log::error!("{} preview cache write failed for book_id={book_id}: {e}", suffix.to_uppercase());
