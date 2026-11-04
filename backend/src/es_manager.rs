@@ -384,13 +384,13 @@ fn truthy(value: Option<&Value>) -> bool {
 impl ESManager {
     pub const DEFAULT_MAX_RESULT_COUNT: i64 = 10;
     /// 목록 응답에는 summary가 없으므로 받아오지 않는다. summary는 `search_by_id`(단건)만 쓴다.
-    pub const LIST_SOURCE_FIELDS: [&'static str; 11] = ["category", "title", "author", "file_path", "file_type", "file_size", "line_count", "page_count", "isbn", "created_time", "updated_time"];
+    pub const LIST_SOURCE_FIELDS: [&'static str; 11] = es_client::LIST_SOURCE_FIELDS;
     /// 커버를 그릴 수 있는 형식.
     pub const COVER_FILE_TYPES: [&'static str; 2] = ["epub", "pdf"];
     pub const REPRESENTATIVE_CANDIDATES: i64 = 5;
-    /// summary 원문을 match로 넣으면 느려서 more_like_this로 상위 용어만 쓴다.
-    pub const SIMILAR_SUMMARY_MAX_QUERY_TERMS: u32 = 25;
-    pub const SIMILAR_SUMMARY_MIN_DOC_FREQ: u32 = 3;
+    /// summary 원문을 match로 넣으면 느려서 more_like_this로 상위 용어만 쓴다. 질의는 `es_client`가 만든다.
+    pub const SIMILAR_SUMMARY_MAX_QUERY_TERMS: u32 = es_client::SIMILAR_SUMMARY_MAX_QUERY_TERMS;
+    pub const SIMILAR_SUMMARY_MIN_DOC_FREQ: u32 = es_client::SIMILAR_SUMMARY_MIN_DOC_FREQ;
 
     /// 카테고리 목록의 전순서 정렬. `_id`를 tie-breaker로 쓰면 이 클러스터에서 질의가 통째로 실패한다.
     pub fn category_sort() -> Value {
@@ -805,14 +805,7 @@ impl ESManager {
     pub fn search_by_title(&self, title: &str, file_type: &str, file_size: i64, max_result_count: i64) -> Result<Vec<Hit>, EsError> {
         let max_result_count = resolve_count(max_result_count);
         log::debug!("search_by_title(max_result_count={max_result_count}, title='{title}', file_type='{file_type}', file_size={file_size})");
-        // Python `title.split(" ")`처럼 공백 하나를 기준으로 센다. 빈 문자열도 1개다.
-        let words = title.split(' ').count() as f64;
-        let query = json!({"bool": {"should": [
-            {"match": {"title": {"query": title, "boost": 1.2 + words.log2()}}},
-            {"match": {"file_type": {"query": file_type, "boost": 1}}},
-            {"match": {"file_size": {"query": file_size, "boost": 1}}},
-        ]}});
-        self._search(&query, None, max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
+        self._search(&es_client::title_query(title, file_type, file_size), None, max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
     }
 
     pub fn search_by_category(&self, category: &str, max_result_count: i64) -> Result<Vec<Hit>, EsError> {
@@ -1010,31 +1003,16 @@ impl ESManager {
 
     // ---- 유사 문서 ----
 
-    /// 유사 문서 검색의 should 절. `search_similar_docs`와 `_paged`가 공유한다.
-    /// summary 원문을 match로 넣으면 nori가 토큰 1,000여 개로 쪼개 3.5초 걸려서 more_like_this로 상위 용어만 쓴다.
-    fn similar_should_clauses(title: &str, author: &str, file_size: i64, summary: &str) -> Vec<Value> {
-        let size = file_size as f64;
-        vec![
-            json!({"match": {"title": {"query": title, "boost": 20}}}),
-            json!({"match": {"author": {"query": author, "boost": 15}}}),
-            json!({"more_like_this": {"fields": ["summary"], "like": summary, "max_query_terms": Self::SIMILAR_SUMMARY_MAX_QUERY_TERMS, "min_term_freq": 1, "min_doc_freq": Self::SIMILAR_SUMMARY_MIN_DOC_FREQ, "boost": 3}}),
-            json!({"range": {"file_size": {"gte": size * 0.9, "lte": size * 1.1, "boost": 1}}}),
-        ]
-    }
-
     pub fn search_similar_docs(&self, args: &SimilarDocsArgs) -> Result<Vec<Hit>, EsError> {
         let max_result_count = resolve_count(args.max_result_count);
         log::debug!("search_similar_docs(title='{}', author='{}', size={}, max_result_count={max_result_count})", args.title, args.author, args.file_size);
-        let mut query = json!({"bool": {"should": Self::similar_should_clauses(&args.title, &args.author, args.file_size, &args.summary), "minimum_should_match": 1}});
-        if let Some(exclude_id) = args.exclude_id {
-            query["bool"]["must_not"] = json!([{"term": {"_id": exclude_id.to_string()}}]);
-        }
+        let query = es_client::similar_query(&args.title, &args.author, args.file_size, &args.summary, args.exclude_id);
         self._search(&query, None, max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
     }
 
     pub fn search_similar_docs_paged(&self, args: &SimilarDocsArgs) -> Result<(Vec<Hit>, i64), EsError> {
         log::debug!("search_similar_docs_paged(title='{}', author='{}', size={}, offset={})", args.title, args.author, args.size, args.offset);
-        let should_clauses = Self::similar_should_clauses(&args.title, &args.author, args.file_size, &args.summary);
+        let should_clauses = es_client::similar_should_clauses(&args.title, &args.author, args.file_size, &args.summary);
         // exclude_id가 있으면 msearch로 self-score와 본 검색을 한 번의 왕복으로 실행한다.
         if let Some(exclude_id) = args.exclude_id {
             return self._search_paged_with_self_score(&should_clauses, exclude_id, args.size, args.offset);

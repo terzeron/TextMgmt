@@ -67,3 +67,33 @@ fn error_messages_are_readable() {
     assert!(EsError::Unsupported.to_string().contains("지원하지 않는"));
     assert!(EsError::MissingEnv("K".into()).to_string().contains("K"));
 }
+
+mod query {
+    use es_client::{similar_query, title_query};
+    use serde_json::json;
+
+    /// backend `ESManager`와 `EsClient`가 같은 질의를 보내도록 모양을 고정한다(합치기 전 두 구현의 본문).
+    #[test]
+    fn title_query_boosts_title_by_word_count() {
+        assert_eq!(
+            title_query("a b c d", "epub", 123),
+            json!({"bool": {"should": [
+                {"match": {"title": {"query": "a b c d", "boost": 3.2}}},
+                {"match": {"file_type": {"query": "epub", "boost": 1}}},
+                {"match": {"file_size": {"query": 123, "boost": 1}}},
+            ]}})
+        );
+    }
+
+    #[test]
+    fn similar_query_combines_four_clauses_and_excludes_the_source_document() {
+        let should = json!([
+            {"match": {"title": {"query": "t", "boost": 20}}},
+            {"match": {"author": {"query": "a", "boost": 15}}},
+            {"more_like_this": {"fields": ["summary"], "like": "s", "max_query_terms": 25, "min_term_freq": 1, "min_doc_freq": 3, "boost": 3}},
+            {"range": {"file_size": {"gte": 900.0, "lte": 1100.0, "boost": 1}}},
+        ]);
+        assert_eq!(similar_query("t", "a", 1000, "s", None), json!({"bool": {"should": should, "minimum_should_match": 1}}));
+        assert_eq!(similar_query("t", "a", 1000, "s", Some(7)), json!({"bool": {"should": should, "minimum_should_match": 1, "must_not": [{"term": {"_id": "7"}}]}}));
+    }
+}

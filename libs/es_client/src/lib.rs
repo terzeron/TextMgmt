@@ -43,8 +43,40 @@ pub fn build_agent(timeout: Duration, ca_cert_path: Option<&Path>) -> Result<ure
 const DEFAULT_MAX_RESULT_COUNT: usize = 10;
 /// ES `max_result_window` 기본값. 이 이하는 scroll 없이 한 번에 받는다.
 const MAX_RESULT_WINDOW: usize = 10_000;
-const SIMILAR_SUMMARY_MAX_QUERY_TERMS: u32 = 25;
-const SIMILAR_SUMMARY_MIN_DOC_FREQ: u32 = 3;
+pub const SIMILAR_SUMMARY_MAX_QUERY_TERMS: u32 = 25;
+pub const SIMILAR_SUMMARY_MIN_DOC_FREQ: u32 = 3;
+/// 제목·확장자·크기 검색 질의. 제목 단어가 많을수록 제목 boost를 키운다.
+/// Python `title.split(" ")`처럼 공백 하나를 기준으로 센다. 빈 문자열도 1개다.
+pub fn title_query(title: &str, file_type: &str, file_size: i64) -> Value {
+    let words = title.split(' ').count() as f64;
+    json!({"bool": {"should": [
+        {"match": {"title": {"query": title, "boost": 1.2 + words.log2()}}},
+        {"match": {"file_type": {"query": file_type, "boost": 1}}},
+        {"match": {"file_size": {"query": file_size, "boost": 1}}},
+    ]}})
+}
+
+/// 유사 문서 검색의 should 절.
+/// summary 원문을 match로 넣으면 nori가 토큰 1,000여 개로 쪼개 3.5초 걸려서 more_like_this로 상위 용어만 쓴다.
+pub fn similar_should_clauses(title: &str, author: &str, file_size: i64, summary: &str) -> Vec<Value> {
+    let size = file_size as f64;
+    vec![
+        json!({"match": {"title": {"query": title, "boost": 20}}}),
+        json!({"match": {"author": {"query": author, "boost": 15}}}),
+        json!({"more_like_this": {"fields": ["summary"], "like": summary, "max_query_terms": SIMILAR_SUMMARY_MAX_QUERY_TERMS, "min_term_freq": 1, "min_doc_freq": SIMILAR_SUMMARY_MIN_DOC_FREQ, "boost": 3}}),
+        json!({"range": {"file_size": {"gte": size * 0.9, "lte": size * 1.1, "boost": 1}}}),
+    ]
+}
+
+/// 유사 문서 검색 질의. `exclude_id`가 있으면 그 문서를 결과에서 뺀다.
+pub fn similar_query(title: &str, author: &str, file_size: i64, summary: &str, exclude_id: Option<i64>) -> Value {
+    let mut query = json!({"bool": {"should": similar_should_clauses(title, author, file_size, summary), "minimum_should_match": 1}});
+    if let Some(id) = exclude_id {
+        query["bool"]["must_not"] = json!([{"term": {"_id": id.to_string()}}]);
+    }
+    query
+}
+
 const ENV_KEYS: [&str; 4] = ["TM_ES_BOOK_INDEX", "TM_ES_URL", "TM_ES_USER", "TM_ES_PASSWORD"];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -266,32 +298,12 @@ impl EsClient {
     /// 제목·확장자·크기로 찾는다. 기본 건수는 10건이다.
     pub fn search_by_title(&self, title: &str, file_type: &str, file_size: i64, max_result_count: Option<usize>) -> Result<Vec<Hit>, EsError> {
         let n = max_result_count.unwrap_or(DEFAULT_MAX_RESULT_COUNT);
-        // Python `title.split(" ")`처럼 공백 하나를 기준으로 센다. 빈 문자열도 1개다.
-        let words = title.split(' ').count() as f64;
-        let query = json!({"bool": {"should": [
-            {"match": {"title": {"query": title, "boost": 1.2 + words.log2()}}},
-            {"match": {"file_type": {"query": file_type, "boost": 1}}},
-            {"match": {"file_size": {"query": file_size, "boost": 1}}},
-        ]}});
-        self.search(query, n, Some(&LIST_SOURCE_FIELDS))
+        self.search(title_query(title, file_type, file_size), n, Some(&LIST_SOURCE_FIELDS))
     }
 
     pub fn search_similar_docs(&self, title: &str, author: &str, file_size: i64, summary: &str, max_result_count: Option<usize>, exclude_id: Option<i64>) -> Result<Vec<Hit>, EsError> {
         let n = max_result_count.unwrap_or(DEFAULT_MAX_RESULT_COUNT);
-        let size = file_size as f64;
-        let mut query = json!({"bool": {
-            "should": [
-                {"match": {"title": {"query": title, "boost": 20}}},
-                {"match": {"author": {"query": author, "boost": 15}}},
-                {"more_like_this": {"fields": ["summary"], "like": summary, "max_query_terms": SIMILAR_SUMMARY_MAX_QUERY_TERMS, "min_term_freq": 1, "min_doc_freq": SIMILAR_SUMMARY_MIN_DOC_FREQ, "boost": 3}},
-                {"range": {"file_size": {"gte": size * 0.9, "lte": size * 1.1, "boost": 1}}},
-            ],
-            "minimum_should_match": 1,
-        }});
-        if let Some(id) = exclude_id {
-            query["bool"]["must_not"] = json!([{"term": {"_id": id.to_string()}}]);
-        }
-        self.search(query, n, Some(&LIST_SOURCE_FIELDS))
+        self.search(similar_query(title, author, file_size, summary, exclude_id), n, Some(&LIST_SOURCE_FIELDS))
     }
 }
 
