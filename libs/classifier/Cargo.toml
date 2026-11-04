@@ -78,3 +78,15 @@ path = "../../tests/rust/classifier/model_trainer.rs"
 [[test]]
 name = "vectorizer"
 path = "../../tests/rust/classifier/vectorizer.rs"
+
+[[test]]
+name = "book_classifier_map_category"
+path = "../../tests/rust/classifier/book_classifier/map_category.rs"
+
+[[test]]
+name = "feature_extractor"
+path = "../../tests/rust/classifier/feature_extractor.rs"
+
+[[test]]
+name = "py_json_writer"
+path = "../../tests/rust/classifier/py_json_writer.rs"

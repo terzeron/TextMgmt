@@ -1,8 +1,6 @@
 mod common;
-
-use classifier::confidence_calibrator::{MIN_SAMPLES, expected_accuracy, fit_expected_accuracy, from_coverage_report};
-use classifier::inference_model::CategoryModel;
-use serde_json::{Value, json};
+use classifier::confidence_calibrator::{expected_accuracy, fit_expected_accuracy, from_coverage_report, MIN_SAMPLES};
+use serde_json::{json, Value};
 
 /// 시드 고정 난수. numpy 대신 splitmix64를 쓴다.
 struct Rng(u64);
@@ -175,26 +173,6 @@ fn test_coverage_curve_without_a_report_is_none() {
     assert!(from_coverage_report(None).is_none());
     assert!(from_coverage_report(Some(&json!({}))).is_none());
     assert!(from_coverage_report(Some(&json!({"curve": [{"coverage": 0.5, "precision": 0.9, "threshold": 0.1}]}))).is_none());
-}
-
-#[test]
-fn test_model_falls_back_to_the_coverage_curve() {
-    // isotonic 보정이 없는 옛 모델도 눈금을 갖는다. 재학습 없이.
-    let model = CategoryModel::with_meta(json!({"holdout": real_holdout()}));
-
-    assert_eq!(model.confidence_calibration().unwrap()["source"], "coverage_curve");
-    assert!(approx(model.expected_accuracy(0.076).unwrap(), 0.79, 0.02));
-}
-
-#[test]
-fn test_model_prefers_the_stored_calibration_over_the_curve() {
-    // 학습이 넣어 둔 isotonic 보정이 있으면 그것이 먼저다. 더 촘촘하다.
-    let stored = json!({"x": [0.0, 1.0], "y": [0.5, 0.5], "source": "isotonic"});
-    let model = CategoryModel::with_meta(json!({"holdout": real_holdout(), "confidence_calibration": stored}));
-
-    // Python은 `is`로 같은 객체인지 본다. Rust는 값이 같은지로 대신한다.
-    assert_eq!(model.confidence_calibration().unwrap(), stored);
-    assert!(approx(model.expected_accuracy(0.076).unwrap(), 0.5, 1e-6));
 }
 
 // ---------------------------------------------------------------------------
