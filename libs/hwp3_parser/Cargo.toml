@@ -17,5 +17,13 @@ name = "hwp3_parser"
 path = "../../tests/rust/hwp3_parser/hwp3_parser.rs"
 
 [[test]]
+name = "char_converter"
+path = "../../tests/rust/hwp3_parser/char_converter.rs"
+
+[[test]]
+name = "paragraph_parser"
+path = "../../tests/rust/hwp3_parser/paragraph_parser.rs"
+
+[[test]]
 name = "tables"
 path = "../../tests/rust/hwp3_parser/tables.rs"
