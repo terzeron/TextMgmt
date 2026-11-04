@@ -34,7 +34,7 @@ impl ZipMode {
     }
 }
 
-fn options(method: CompressionMethod) -> SimpleFileOptions {
+pub fn options(method: CompressionMethod) -> SimpleFileOptions {
     SimpleFileOptions::default().compression_method(method)
 }
 
@@ -140,7 +140,7 @@ pub fn bytes_replace(data: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
 /// ZIP 멤버를 읽은 순서대로 담는 dict. Python `rewrite_epub_members`의 `members`.
 /// 있는 이름은 제자리에서 바꾸고 새 이름은 뒤에 붙는다.
 pub struct Members {
-    items: Vec<(String, Vec<u8>)>,
+    pub items: Vec<(String, Vec<u8>)>,
 }
 
 impl Members {

@@ -16,11 +16,11 @@ use lopdf::{dictionary, Dictionary, Document, Object, ObjectId, Stream, StringFo
 use super::image::jpeg_bytes;
 use super::raster::Raster;
 
-fn name(s: &str) -> Object {
+pub fn name(s: &str) -> Object {
     Object::Name(s.as_bytes().to_vec())
 }
 
-fn mediabox_obj(w: i64, h: i64) -> Object {
+pub fn mediabox_obj(w: i64, h: i64) -> Object {
     Object::Array(vec![Object::Integer(0), Object::Integer(0), Object::Integer(w), Object::Integer(h)])
 }
 
@@ -110,7 +110,7 @@ pub fn write_image_pdf(path: &Path, pages: &[RgbImage]) {
     b.save_with(path, true);
 }
 
-fn image_stream(w: i64, h: i64, color_space: Object, bpc: i64, filter: Option<&str>, data: Vec<u8>) -> Stream {
+pub fn image_stream(w: i64, h: i64, color_space: Object, bpc: i64, filter: Option<&str>, data: Vec<u8>) -> Stream {
     let mut dict = dictionary! {"Type" => "XObject", "Subtype" => "Image", "Width" => w, "Height" => h, "ColorSpace" => color_space, "BitsPerComponent" => bpc};
     if let Some(f) = filter {
         dict.set("Filter", name(f));
@@ -120,7 +120,7 @@ fn image_stream(w: i64, h: i64, color_space: Object, bpc: i64, filter: Option<&s
     stream
 }
 
-fn attach_image(b: &mut PdfBuilder, page: ObjectId, image: Stream, w: i64, h: i64) {
+pub fn attach_image(b: &mut PdfBuilder, page: ObjectId, image: Stream, w: i64, h: i64) {
     let image_id = b.doc.add_object(image);
     let resources = dictionary! {"XObject" => dictionary! {"Im0" => Object::Reference(image_id)}};
     b.page_mut(page).set("Resources", Object::Dictionary(resources));
@@ -165,7 +165,7 @@ pub fn flate_source(kind: &str) -> Raster {
 }
 
 /// `Image.tobytes()`에 대응하는 원본 바이트.
-fn flate_raw(kind: &str) -> Vec<u8> {
+pub fn flate_raw(kind: &str) -> Vec<u8> {
     let src = flate_source(kind);
     match src.mode {
         "RGB" => src.rgb.iter().flatten().copied().collect(),
@@ -261,7 +261,7 @@ pub fn load(path: &Path) -> Document {
     Document::load(path).unwrap()
 }
 
-fn deref<'a>(doc: &'a Document, obj: &'a Object) -> &'a Object {
+pub fn deref<'a>(doc: &'a Document, obj: &'a Object) -> &'a Object {
     doc.dereference(obj).map(|(_, o)| o).unwrap_or(obj)
 }
 
@@ -311,7 +311,7 @@ pub fn first_xobject(doc: &Document, page_no: usize) -> &Stream {
     deref(doc, value).as_stream().unwrap()
 }
 
-fn decode_jpeg(data: &[u8]) -> RgbImage {
+pub fn decode_jpeg(data: &[u8]) -> RgbImage {
     image::load_from_memory_with_format(data, ImageFormat::Jpeg).expect("JPEG 해독").to_rgb8()
 }
 
@@ -359,7 +359,7 @@ pub struct Info {
     pub cs: String,
 }
 
-fn name_str(obj: &Object) -> String {
+pub fn name_str(obj: &Object) -> String {
     match obj {
         Object::Name(n) => format!("/{}", String::from_utf8_lossy(n)),
         Object::Array(items) => format!("[{}]", items.iter().map(name_str).collect::<Vec<_>>().join(", ")),
@@ -367,7 +367,7 @@ fn name_str(obj: &Object) -> String {
     }
 }
 
-fn unpredict(data: Vec<u8>, predictor: i64, colors: usize, bpc: usize, columns: usize) -> Vec<u8> {
+pub fn unpredict(data: Vec<u8>, predictor: i64, colors: usize, bpc: usize, columns: usize) -> Vec<u8> {
     if predictor < 10 {
         return data;
     }

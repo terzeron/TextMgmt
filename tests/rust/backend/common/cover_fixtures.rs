@@ -28,18 +28,21 @@ use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
 use image::{ImageFormat, Rgb, RgbImage};
 use lopdf::{Document, Object, Stream, dictionary};
 use serde_json::{Value, json};
-use sysdeps::Clock;
 use zip::CompressionMethod;
-use zip::write::SimpleFileOptions;
 
 use crate::common::TestClient;
-
-pub const RED: [u8; 3] = [255, 0, 0];
-pub const BLUE: [u8; 3] = [0, 0, 255];
-
-pub const CONTAINER_XML: &str = r#"<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>"#;
-
-pub const BODY: &str = "<html><body>본문을 보존한다.</body></html>";
+// 사본을 지우고 common 원본을 다시 내보낸다. 이 fixture를 쓰는 테스트 crate마다 일부만 쓴다.
+#[allow(unused_imports)]
+pub use crate::common::clock::FakeClock;
+#[allow(unused_imports)]
+pub use crate::common::epub::{append_child, attr_of_element_with_id, BODY, CONTAINER_XML, count_elements};
+#[allow(unused_imports)]
+pub use crate::common::fsx::{files_under, sha256_hex};
+#[allow(unused_imports)]
+pub use crate::common::image::{BLUE, paste, RED, solid};
+#[allow(unused_imports)]
+pub use crate::common::zipx::{bytes_replace, Members};
+use crate::common::zipx::options;
 
 /// 단색 이미지를 `format`으로 인코딩한다. Python `Image.new("RGB", size, color).save(buf, format)`.
 pub fn encode_image(width: u32, height: u32, rgb: [u8; 3], format: ImageFormat) -> Vec<u8> {
@@ -58,24 +61,6 @@ pub fn image_bytes() -> Vec<u8> {
 pub fn image_size(data: &[u8]) -> (u32, u32) {
     let image = image::load_from_memory(data).unwrap();
     (image.width(), image.height())
-}
-
-pub fn solid(width: u32, height: u32, rgb: [u8; 3]) -> RgbImage {
-    RgbImage::from_pixel(width, height, Rgb(rgb))
-}
-
-/// PIL `image.paste(color, (x0, y0, x1, y1))`.
-pub fn paste(image: &mut RgbImage, (x0, y0, x1, y1): (u32, u32, u32, u32), rgb: [u8; 3]) {
-    for y in y0..y1 {
-        for x in x0..x1 {
-            image.put_pixel(x, y, Rgb(rgb));
-        }
-    }
-}
-
-/// 압축 방식만 다른 ZIP 멤버 옵션.
-fn options(method: CompressionMethod) -> SimpleFileOptions {
-    SimpleFileOptions::default().compression_method(method)
 }
 
 /// 임시 EPUB을 만든다. 표지가 있으면 `OPS/cover.jpg`를 `cover-image`로 선언한다. Python `make_epub(path, version, cover)`.
@@ -104,58 +89,6 @@ pub fn make_epub(path: &Path, version: &str, cover: bool) -> PathBuf {
     }
     archive.finish().unwrap();
     path.to_path_buf()
-}
-
-/// 바이트열 안의 `from`을 모두 `to`로 바꾼다. Python `bytes.replace`.
-pub fn bytes_replace(data: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len());
-    let mut i = 0;
-    while i < data.len() {
-        if !from.is_empty() && data[i..].starts_with(from) {
-            out.extend_from_slice(to);
-            i += from.len();
-        } else {
-            out.push(data[i]);
-            i += 1;
-        }
-    }
-    out
-}
-
-/// EPUB 멤버를 이름 순서대로 담는 dict. Python `rewrite_epub_members`의 `members`.
-pub struct Members {
-    items: Vec<(String, Vec<u8>)>,
-}
-
-impl Members {
-    pub fn get(&self, name: &str) -> &[u8] {
-        &self.items.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("멤버 없음: {name}")).1
-    }
-
-    pub fn contains(&self, name: &str) -> bool {
-        self.items.iter().any(|(n, _)| n == name)
-    }
-
-    /// 있으면 덮어쓰고 없으면 뒤에 붙인다. Python `members[name] = data`.
-    pub fn set(&mut self, name: &str, data: impl Into<Vec<u8>>) {
-        let data = data.into();
-        match self.items.iter_mut().find(|(n, _)| n == name) {
-            Some(slot) => slot.1 = data,
-            None => self.items.push((name.to_string(), data)),
-        }
-    }
-
-    /// Python `members.pop(name)` / `del members[name]`.
-    pub fn remove(&mut self, name: &str) -> Vec<u8> {
-        let at = self.items.iter().position(|(n, _)| n == name).unwrap_or_else(|| panic!("멤버 없음: {name}"));
-        self.items.remove(at).1
-    }
-
-    /// 멤버 안의 바이트열을 바꿔 다시 넣는다. Python `members[name] = members[name].replace(a, b)`.
-    pub fn replace_in(&mut self, name: &str, from: &[u8], to: &[u8]) {
-        let replaced = bytes_replace(self.get(name), from, to);
-        self.set(name, replaced);
-    }
 }
 
 /// 작은 fixture의 멤버를 중복 entry 없이 바꾼다. `mimetype`만 STORED, 나머지는 DEFLATED.
@@ -196,20 +129,6 @@ pub fn member_names(path: &Path) -> Vec<String> {
     archive.file_names().map(|n| n.unwrap().into_owned()).collect()
 }
 
-/// `//*[local-name()=local]` 중 `attr`(이름, 값)을 만족하는 요소 수. Python `package.xpath('count(...)')`.
-pub fn count_elements(xml: &[u8], local: &str, attr: Option<(&str, &str)>) -> usize {
-    let text = std::str::from_utf8(xml).unwrap();
-    let doc = roxmltree::Document::parse(text).unwrap();
-    doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == local).filter(|n| attr.is_none_or(|(k, v)| n.attribute(k) == Some(v))).count()
-}
-
-/// `//*[local-name()=local and @id=id]/@attr`. 없으면 빈 문자열.
-pub fn attr_of_element_with_id(xml: &[u8], local: &str, id: &str, attr: &str) -> String {
-    let text = std::str::from_utf8(xml).unwrap();
-    let doc = roxmltree::Document::parse(text).unwrap();
-    doc.descendants().find(|n| n.is_element() && n.tag_name().name() == local && n.attribute("id") == Some(id)).and_then(|n| n.attribute(attr)).unwrap_or("").to_string()
-}
-
 /// `<opf:manifest>` 같은 자식 요소 하나를 통째로 지운다. Python `package.remove(package.find(...))`.
 pub fn remove_element(xml: &[u8], local: &str) -> Vec<u8> {
     let text = std::str::from_utf8(xml).unwrap();
@@ -221,55 +140,6 @@ pub fn remove_element(xml: &[u8], local: &str) -> Vec<u8> {
         start + text[start..].find("/>").unwrap() + 2
     });
     format!("{}{}", &text[..start], &text[end..]).into_bytes()
-}
-
-/// `</parent>` 앞에 조각을 넣는다. Python `etree.SubElement(parent, ...)`.
-pub fn append_child(xml: &[u8], parent: &str, fragment: &str) -> Vec<u8> {
-    let text = std::str::from_utf8(xml).unwrap();
-    let close = format!("</{parent}>");
-    let at = text.find(&close).unwrap_or_else(|| panic!("요소 없음: {parent}"));
-    format!("{}{}{}", &text[..at], fragment, &text[at..]).into_bytes()
-}
-
-// ---- 가짜 시계 -------------------------------------------------------------------------------
-
-/// Python `_clock`/`fake_clock`: `_now`와 `_sleep`을 바꿔 시간을 직접 움직인다.
-pub struct FakeClock {
-    now: Mutex<f64>,
-    slept: Mutex<Vec<f64>>,
-}
-
-impl FakeClock {
-    pub fn new(start: f64) -> Arc<Self> {
-        Arc::new(Self { now: Mutex::new(start), slept: Mutex::new(Vec::new()) })
-    }
-
-    pub fn advance(&self, seconds: f64) {
-        *self.now.lock().unwrap() += seconds;
-    }
-
-    pub fn slept(&self) -> Vec<f64> {
-        self.slept.lock().unwrap().clone()
-    }
-
-    pub fn clear_slept(&self) {
-        self.slept.lock().unwrap().clear();
-    }
-}
-
-impl Clock for FakeClock {
-    fn now(&self) -> f64 {
-        *self.now.lock().unwrap()
-    }
-
-    fn monotonic(&self) -> f64 {
-        *self.now.lock().unwrap()
-    }
-
-    fn sleep(&self, seconds: f64) {
-        self.slept.lock().unwrap().push(seconds);
-        *self.now.lock().unwrap() += seconds;
-    }
 }
 
 // ---- cached_candidates -----------------------------------------------------------------------
@@ -535,12 +405,6 @@ pub fn truthy(value: &Value) -> bool {
     }
 }
 
-/// Python `hashlib.sha256(text.encode()).hexdigest()`.
-pub fn sha256_hex(data: impl AsRef<[u8]>) -> String {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(data.as_ref()).iter().map(|b| format!("{b:02x}")).collect()
-}
-
 /// Python `archive.testzip() is None`: 모든 멤버를 끝까지 읽어 CRC를 확인한다.
 pub fn testzip_ok(path: &Path) -> bool {
     let mut archive = match zip::ZipArchive::new(std::fs::File::open(path).unwrap()) {
@@ -570,23 +434,6 @@ pub fn dir_names(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
     names.sort();
     names
-}
-
-/// 하위 디렉터리까지 모든 파일. Python `dir.rglob("*")` 중 파일만.
-pub fn files_under(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for entry in rd.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.is_dir() {
-                out.extend(files_under(&path));
-            } else {
-                out.push(path);
-            }
-        }
-    }
-    out.sort();
-    out
 }
 
 /// 접근·수정 시각을 `seconds_since_epoch`로 맞춘다. Python `os.utime(path, (t, t))`.
