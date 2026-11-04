@@ -9,6 +9,7 @@ use bookdoctor::format_dispatcher::scan_file;
 use support::*;
 use text_extractor::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, korean_likeness, extract_document_text};
 use bookdoctor::{Category, FileReport, Severity};
+use crate::support::shared_fixtures::{opts};
 
 fn hanja() -> String {
     HANJA_CLASSIC_UNIT.repeat(20)
@@ -18,10 +19,6 @@ fn english() -> String {
 }
 fn word_list() -> String {
     KOREAN_WORD_LIST_UNIT.repeat(20)
-}
-
-fn opts() -> Options {
-    Options { no_pdf_worker: true, ..Options::default() }
 }
 
 fn find<'a>(r: &'a FileReport, code: &str) -> Option<&'a bookdoctor::Finding> {

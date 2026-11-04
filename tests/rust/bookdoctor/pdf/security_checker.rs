@@ -8,23 +8,7 @@ use bookdoctor::pdf::security_checker;
 use bookdoctor::format_dispatcher::scan_file;
 use lopdf::{Dictionary, Document, Object, StringFormat};
 use bookdoctor::{Category, FileReport, Severity};
-
-/// 객체 본문 목록으로 PDF를 만든다. 1번 객체가 Catalog, 2번이 Pages, 3번이 Page다.
-fn pdf(objects: &[&str]) -> Vec<u8> {
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, body) in objects.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend(format!("{} 0 obj\n{body}\nendobj\n", i + 1).bytes());
-    }
-    let xref = out.len();
-    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
-    for o in offsets {
-        out.extend(format!("{o:010} 00000 n \n").bytes());
-    }
-    out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
-    out
-}
+use crate::support::shared_fixtures::{pdf};
 
 const PAGES: &str = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
 

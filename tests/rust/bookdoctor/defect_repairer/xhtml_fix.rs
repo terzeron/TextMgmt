@@ -2,14 +2,13 @@
 mod support;
 
 use std::fs;
-use std::io::{Cursor, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use bookdoctor::cli_parser::{Options, execute, parse};
 use bookdoctor::epub::render_checker::xhtml_defect;
 use bookdoctor::defect_repairer::xhtml_fix::{rebuild, repair_markup, verify, Verdict};
 use support::*;
+use crate::support::shared_fixtures::{epub_bytes, member, names, run_in};
 
 fn fixed(src: &str) -> String {
     let out = repair_markup(src);
@@ -125,24 +124,6 @@ fn opf_with_chapters(items: &[(&str, &str)], extra_manifest: &str) -> String {
     format!(r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest>{manifest}{extra_manifest}</manifest><spine>{spine}</spine></package>"#)
 }
 
-fn epub_bytes(chapter: &str, opf: &str, extra: &[(&str, &[u8])]) -> Vec<u8> {
-    let d = tempfile::tempdir().unwrap();
-    let p = d.path().join("t.epub");
-    epub_with_files(&p, opf, chapter, extra);
-    fs::read(p).unwrap()
-}
-
-fn member(bytes: &[u8], name: &str) -> String {
-    let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
-    let mut s = String::new();
-    z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
-    s
-}
-
-fn names(bytes: &[u8]) -> Vec<String> {
-    zip::ZipArchive::new(Cursor::new(bytes)).unwrap().file_names().map(|n| n.unwrap().into_owned()).collect()
-}
-
 fn plan(v: Verdict) -> bookdoctor::defect_repairer::xhtml_fix::Plan {
     match v {
         Verdict::Fix(p) => p,
@@ -243,19 +224,6 @@ fn verify_rejects_a_rewrite_that_loses_text() {
     let src = epub_bytes(BROKEN, &clean_opf(), &[]);
     let lost = epub_bytes(&xhtml("<p>다른 글</p>"), &clean_opf(), &[]);
     assert!(verify(&src, &lost).unwrap_err().contains("본문"));
-}
-
-// ---- 실행: 적용, 휴지통 ----
-
-/// `root`를 코퍼스 루트로 삼아 명령을 실행한다. 휴지통은 `root/0_trash`다.
-fn run_in(root: &Path, args: &[&str]) -> (i32, String) {
-    let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    let mut out = Vec::new();
-    let code = match parse(&argv) {
-        Ok(o) => execute(&Options { library_root: root.to_path_buf(), ..o }, &mut out, false, true),
-        Err(_) => 2,
-    };
-    (code, String::from_utf8_lossy(&out).into_owned())
 }
 
 fn broken_epub(dir: &Path, name: &str) -> std::path::PathBuf {

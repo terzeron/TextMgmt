@@ -2,40 +2,9 @@
 mod support;
 
 use std::fs;
-use std::path::Path;
 
 use bookdoctor::cli_parser::{Options, run};
-use bookdoctor::format_dispatcher::scan_file;
-use bookdoctor::FileReport;
-
-const OLE_STUB: &[u8] = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1 macro";
-
-fn bytes_of(build: impl FnOnce(&Path)) -> Vec<u8> {
-    let d = tempfile::tempdir().unwrap();
-    let p = d.path().join("x");
-    build(&p);
-    fs::read(&p).unwrap()
-}
-
-/// 매크로 프로젝트가 든 `.docx`의 바이트(매크로 없는 형식에 든 `vbaProject.bin`이라 Critical).
-fn vba_docx() -> Vec<u8> {
-    bytes_of(|p| support::docx_with(p, &[], &[("word/vbaProject.bin", OLE_STUB)]))
-}
-
-fn zip_bytes(members: &[(&str, &[u8])]) -> Vec<u8> {
-    bytes_of(|p| support::zip_of(p, members))
-}
-
-fn scan_bytes(name: &str, data: &[u8], opts: &Options) -> FileReport {
-    let d = tempfile::tempdir().unwrap();
-    let p = d.path().join(name);
-    fs::write(&p, data).unwrap();
-    scan_file(&p, opts)
-}
-
-fn has_vba_under(r: &FileReport, prefix: &str) -> bool {
-    r.findings.iter().any(|f| f.code == "OOXML_VBA_PROJECT" && f.location.starts_with(prefix) && f.location.contains("vbaProject.bin"))
-}
+use crate::support::shared_fixtures::{has_vba_under, scan_bytes, vba_docx, zip_bytes};
 
 #[test]
 fn no_recurse_turns_the_nested_scan_off() {

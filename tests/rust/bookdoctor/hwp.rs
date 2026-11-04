@@ -1,23 +1,13 @@
+
+mod support;
 mod ole_common;
 use std::fs;
-use std::path::PathBuf;
 use bookdoctor::cli_parser::Options;
 use bookdoctor::format_dispatcher::scan_file;
 use ole_common::{Cfb, compress, dir_stream, make_cfb, module_stream};
 use bookdoctor::{FileReport, Format};
-use flate2::Compression;
-use flate2::write::{DeflateEncoder, ZlibEncoder};
-use std::io::Write;
 use bookdoctor::hwp::{decompress, decompress_prefix, InflateError};
-
-/// `FileHeader` 스트림: 서명 32, 버전 4, 속성1 4, 속성2 4, EncryptVersion 4, KOGL 1, 예약 207 = 256바이트(명세 표 3).
-fn file_header(flags: u32) -> Vec<u8> {
-    let mut h = vec![0u8; 256];
-    h[..17].copy_from_slice(b"HWP Document File");
-    h[32..36].copy_from_slice(&0x0500_0300u32.to_le_bytes());
-    h[36..40].copy_from_slice(&flags.to_le_bytes());
-    h
-}
+use crate::support::shared_fixtures::{JSCRIPT_VERSION, TAG_SHAPE_COMPONENT_OLE, bin_data_link, default_jscript, file_header, finding, pe_bytes, raw_deflate, record, scan, valid_stream, zlib};
 
 fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
     let header = file_header(flags);
@@ -26,27 +16,7 @@ fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
     make_cfb(&streams)
 }
 
-fn write(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
-    let d = tempfile::tempdir().unwrap();
-    let p = d.path().join(name);
-    fs::write(&p, bytes).unwrap();
-    (d, p)
-}
-
-fn scan(name: &str, bytes: &[u8]) -> FileReport {
-    let (_d, p) = write(name, bytes);
-    scan_file(&p, &Options::default())
-}
-
 const HWP3_SIGNATURE: &[u8] = b"HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05";
-
-fn pe_bytes() -> Vec<u8> {
-    let mut pe = vec![0u8; 0x100];
-    pe[..2].copy_from_slice(b"MZ");
-    pe[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
-    pe[0x40..0x44].copy_from_slice(b"PE\0\0");
-    pe
-}
 
 #[test]
 fn hwp3_signature_is_recognized_and_not_incomplete() {
@@ -91,10 +61,6 @@ fn hwpx_named_ole_with_a_fileheader_is_analyzed_as_hwp() {
 
 fn scan_cfb(name: &str, cfb: &Cfb) -> FileReport {
     scan(name, &cfb.bytes)
-}
-
-fn finding<'a>(r: &'a FileReport, code: &str) -> &'a bookdoctor::Finding {
-    r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
 }
 
 #[test]
@@ -168,77 +134,6 @@ fn a_word_document_named_hwp_is_analyzed_as_doc() {
     // 암호화 OOXML 패키지도 같다.
     let enc = make_cfb(&[("EncryptionInfo", &[4u8, 0, 4, 0][..]), ("EncryptedPackage", &[0u8; 64][..])]);
     assert!(scan_cfb("a.hwp", &enc).reasons.iter().any(|m| FileReport::is_encrypted_reason(m)));
-}
-
-// --- Scripts (명세 표 8, 9) ---
-
-fn wchars(s: &str) -> Vec<u8> {
-    s.encode_utf16().flat_map(u16::to_le_bytes).collect()
-}
-
-/// `DefaultJScript`: 헤더·소스·Pre·Post 각각 DWORD 길이(글자 수) + WCHAR 배열, 끝에 DWORD `-1`.
-fn default_jscript(parts: [&str; 4]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for p in parts {
-        out.extend_from_slice(&(p.encode_utf16().count() as u32).to_le_bytes());
-        out.extend_from_slice(&wchars(p));
-    }
-    out.extend_from_slice(&u32::MAX.to_le_bytes());
-    out
-}
-
-const JSCRIPT_VERSION: [u8; 8] = [0u8; 8];
-
-fn raw_deflate(data: &[u8]) -> Vec<u8> {
-    let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
-fn zlib(data: &[u8]) -> Vec<u8> {
-    let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
-// --- BinData (명세 표 17, 18) ---
-
-/// 레코드 하나: 헤더 32비트(TagID 10, Level 10, Size 12), Size가 0xFFF 이상이면 뒤에 DWORD 길이(명세 4.1).
-fn record(tag: u32, level: u32, data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    if data.len() >= 0xFFF {
-        out.extend_from_slice(&(tag | level << 10 | 0xFFF << 20).to_le_bytes());
-        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-    } else {
-        out.extend_from_slice(&(tag | level << 10 | (data.len() as u32) << 20).to_le_bytes());
-    }
-    out.extend_from_slice(data);
-    out
-}
-
-const HWPTAG_BEGIN: u32 = 0x010;
-const TAG_BIN_DATA: u32 = HWPTAG_BEGIN + 2;
-
-fn wstr_with_len(s: &str) -> Vec<u8> {
-    let mut out = (s.encode_utf16().count() as u16).to_le_bytes().to_vec();
-    out.extend_from_slice(&wchars(s));
-    out
-}
-
-/// `HWPTAG_BIN_DATA` LINK(Type 0): 속성, 절대 경로, 상대 경로.
-fn bin_data_link(absolute: &str, relative: &str) -> Vec<u8> {
-    let mut d = 0u16.to_le_bytes().to_vec();
-    d.extend_from_slice(&wstr_with_len(absolute));
-    d.extend_from_slice(&wstr_with_len(relative));
-    record(TAG_BIN_DATA, 1, &d)
-}
-
-// --- 레코드 검증 (명세 4.1) ---
-
-const TAG_SHAPE_COMPONENT_OLE: u32 = HWPTAG_BEGIN + 68;
-
-fn valid_stream() -> Vec<u8> {
-    [record(HWPTAG_BEGIN + 50, 0, &[0u8; 22]), record(HWPTAG_BEGIN + 51, 1, &[0u8; 8]), record(HWPTAG_BEGIN + 55, 1, &[0u8; 8]), record(HWPTAG_BEGIN + 56, 2, &[0u8; 4]), record(HWPTAG_BEGIN + 50, 0, &[0u8; 22])].concat()
 }
 
 #[test]

@@ -438,3 +438,4 @@ pub fn hwpx_with(path: &Path, remove: &[&str], add: &[(&str, &[u8])]) {
     let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
     zip_of(path, &refs);
 }
+pub mod shared_fixtures;

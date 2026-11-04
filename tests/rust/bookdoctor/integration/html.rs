@@ -1,23 +1,13 @@
 //! 독립 HTML 테스트. 규칙은 EPUB의 HTML 규칙을 재사용한다.
 
+#[path = "../support/mod.rs"]
+mod support;
+
 use std::fs;
-use std::path::PathBuf;
 
-use bookdoctor::cli_parser::{Options, run};
-use bookdoctor::format_dispatcher::scan_file;
-use bookdoctor::{FileReport, Format};
-
-fn write(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
-    let d = tempfile::tempdir().unwrap();
-    let p = d.path().join(name);
-    fs::write(&p, bytes).unwrap();
-    (d, p)
-}
-
-fn scan(name: &str, bytes: &[u8]) -> FileReport {
-    let (_d, p) = write(name, bytes);
-    scan_file(&p, &Options::default())
-}
+use bookdoctor::cli_parser::{run};
+use bookdoctor::{Format};
+use crate::support::shared_fixtures::{scan};
 
 #[test]
 fn html_is_collected_and_lookalikes_are_not() {

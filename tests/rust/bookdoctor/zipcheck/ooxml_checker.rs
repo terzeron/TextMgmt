@@ -584,6 +584,7 @@ fn a_huge_simple_field_instruction_is_capped_and_scanned_in_linear_time() {
 }
 
 mod package_structure {
+    use crate::support::shared_fixtures::{finding};
     use super::support;
     use std::fs;
     use std::path::Path;
@@ -593,10 +594,6 @@ mod package_structure {
 
     fn scan(path: &Path) -> FileReport {
         scan_file(path, &Options::default())
-    }
-
-    fn finding<'a>(r: &'a FileReport, code: &str) -> &'a bookdoctor::Finding {
-        r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
     }
 
     fn docx_named(name: &str, remove: &[&str], add: &[(&str, &[u8])]) -> (tempfile::TempDir, std::path::PathBuf) {

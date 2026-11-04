@@ -8,17 +8,13 @@ use bookdoctor::{FileReport, Format, Severity};
 use std::fs;
 use std::io::Write;
 use support::*;
+use crate::support::shared_fixtures::{binary, has, patch_central};
 
 fn scan_counting(path: &Path) -> (FileReport, usize) {
     let before = decode_calls();
     let mut r = FileReport::new(path, Some(Format::Epub));
     scan_into(path, &Limits::default(), &mut r);
     (r, decode_calls() - before)
-}
-
-fn binary(len: usize, seed: u8) -> Vec<u8> {
-    // UTF-8로 유효하지 않은 바이트가 많이 든 데이터(이미지·폰트처럼).
-    (0..len).map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed) | 0x80).collect()
 }
 
 #[test]
@@ -78,10 +74,6 @@ fn scan(path: &Path) -> FileReport {
     r
 }
 
-fn has(r: &FileReport, code: &str) -> bool {
-    r.findings.iter().any(|f| f.code == code)
-}
-
 // ---- 매니페스트와 매직 ----
 
 #[test]
@@ -129,17 +121,6 @@ fn directory_entries_and_very_long_names_are_handled() {
     assert!(has(&r, "ZIP_NAME_TOO_LONG"), "{:?}", r.findings);
 }
 
-// ---- 손상된 ZIP 필드 ----
-
-/// 중앙 디렉토리 항목의 오프셋 필드를 고친다. `field`는 항목 시작 기준 오프셋이다.
-fn patch_central(path: &Path, member: &str, field: usize, bytes: &[u8]) {
-    let mut data = fs::read(path).unwrap();
-    let name = member.as_bytes();
-    let at = (0..data.len() - 46 - name.len()).find(|&i| &data[i..i + 4] == b"PK\x01\x02" && &data[i + 46..i + 46 + name.len()] == name).expect("central header");
-    data[at + field..at + field + bytes.len()].copy_from_slice(bytes);
-    fs::write(path, data).unwrap();
-}
-
 #[test]
 fn encrypted_and_unsupported_compression_entries_are_noted_not_read() {
     let d = tempfile::tempdir().unwrap();
@@ -158,32 +139,11 @@ fn encrypted_and_unsupported_compression_entries_are_noted_not_read() {
 }
 
 mod budget_and_encoding_evasion {
+    use crate::support::shared_fixtures::{codes, forge_declared_size, has, scan_with, scan_with_stats};
     use super::support;
-    use std::fs;
-    use std::path::Path;
-    use bookdoctor::epub::{security_checker::Limits, security_checker::scan as scan_into, security_checker::scan_stats, security_checker::Stats};
+    use bookdoctor::epub::{security_checker::Limits};
     use support::*;
-    use bookdoctor::{FileReport, Format, Severity};
-
-    fn scan_with(path: &Path, limits: &Limits) -> FileReport {
-        let mut r = FileReport::new(path, Some(Format::Epub));
-        scan_into(path, limits, &mut r);
-        r
-    }
-
-    fn scan_with_stats(path: &Path, limits: &Limits) -> (FileReport, Stats) {
-        let mut r = FileReport::new(path, Some(Format::Epub));
-        let stats = scan_stats(path, limits, &mut r);
-        (r, stats)
-    }
-
-    fn codes(r: &FileReport) -> Vec<&str> {
-        r.findings.iter().map(|f| f.code.as_str()).collect()
-    }
-
-    fn has(r: &FileReport, code: &str) -> bool {
-        r.findings.iter().any(|f| f.code == code)
-    }
+    use bookdoctor::{FileReport, Severity};
 
     fn sev(r: &FileReport, code: &str) -> Severity {
         r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} 없음: {:?}", codes(r))).severity
@@ -240,17 +200,6 @@ mod budget_and_encoding_evasion {
         // 음성: 범위 안이면 검출된다.
         let r = scan_with(&p, &Limits { max_files: 5, ..Limits::default() });
         assert!(has(&r, "REMOTE_MANIFEST_ITEM"), "{:?}", codes(&r));
-    }
-
-    /// 중앙 디렉터리와 로컬 헤더의 선언 크기(비압축)를 `declared`로 바꾼다.
-    fn forge_declared_size(path: &Path, member: &str, declared: u32) {
-        let mut data = fs::read(path).unwrap();
-        let name = member.as_bytes();
-        let local = (0..data.len() - 30).find(|&i| &data[i..i + 4] == b"PK\x03\x04" && &data[i + 30..i + 30 + name.len()] == name).unwrap();
-        data[local + 22..local + 26].copy_from_slice(&declared.to_le_bytes());
-        let central = (0..data.len() - 46).find(|&i| &data[i..i + 4] == b"PK\x01\x02" && &data[i + 46..i + 46 + name.len()] == name).unwrap();
-        data[central + 24..central + 28].copy_from_slice(&declared.to_le_bytes());
-        fs::write(path, data).unwrap();
     }
 
     // 이 테스트는 zip 크레이트의 선언 크기 강제를 지키는 가드다. 실제 RED 근거는 위의 OPF 선검사 테스트다.
@@ -518,36 +467,17 @@ mod budget_and_encoding_evasion {
 }
 
 mod active_content {
+    use crate::support::shared_fixtures::{codes, has, patch_central, scan_with, scan_with_stats};
     use super::support;
     use std::fs;
     use std::io::Write;
     use std::path::Path;
     use support::*;
-    use bookdoctor::epub::{security_checker::guarded, security_checker::Limits, security_checker::scan as scan_into, security_checker::scan_stats, security_checker::Stats};
+    use bookdoctor::epub::{security_checker::guarded, security_checker::Limits};
     use bookdoctor::{Category, FileReport, Format, Severity};
-
-    fn scan_with(path: &Path, limits: &Limits) -> FileReport {
-        let mut r = FileReport::new(path, Some(Format::Epub));
-        scan_into(path, limits, &mut r);
-        r
-    }
-
-    fn scan_with_stats(path: &Path, limits: &Limits) -> (FileReport, Stats) {
-        let mut r = FileReport::new(path, Some(Format::Epub));
-        let stats = scan_stats(path, limits, &mut r);
-        (r, stats)
-    }
 
     fn scan(path: &Path) -> FileReport {
         scan_with(path, &Limits::default())
-    }
-
-    fn codes(r: &FileReport) -> Vec<&str> {
-        r.findings.iter().map(|f| f.code.as_str()).collect()
-    }
-
-    fn has(r: &FileReport, code: &str) -> bool {
-        r.findings.iter().any(|f| f.code == code)
     }
 
     fn severity_of(r: &FileReport, code: &str) -> Severity {
@@ -901,14 +831,6 @@ mod active_content {
         epub_with_chapter(&q, &xhtml("<p>x</p>"));
         mangle_local_name(&q, "OEBPS/ch1.xhtml");
         assert_eq!(severity_of(&scan(&q), "ZIP_HEADER_NAME_MISMATCH"), Severity::High);
-    }
-
-    fn patch_central(path: &Path, member: &str, field: usize, bytes: &[u8]) {
-        let mut data = fs::read(path).unwrap();
-        let name = member.as_bytes();
-        let at = (0..data.len() - 46 - name.len()).find(|&i| &data[i..i + 4] == b"PK\x01\x02" && &data[i + 46..i + 46 + name.len()] == name).expect("central header");
-        data[at + field..at + field + bytes.len()].copy_from_slice(bytes);
-        fs::write(path, data).unwrap();
     }
 
     #[test]

@@ -1,25 +1,13 @@
 //! `bookdoctor::hwp::bindata_checker` 단위 테스트.
 
+#[path = "../support/mod.rs"]
+mod support;
+
 #[path = "../ole_common.rs"]
 mod ole_common;
-use std::fs;
-use std::path::PathBuf;
-use bookdoctor::cli_parser::Options;
-use bookdoctor::format_dispatcher::scan_file;
 use crate::ole_common::{Cfb, make_cfb};
 use bookdoctor::{FileReport};
-use flate2::Compression;
-use flate2::write::{DeflateEncoder, ZlibEncoder};
-use std::io::Write;
-
-/// `FileHeader` 스트림: 서명 32, 버전 4, 속성1 4, 속성2 4, EncryptVersion 4, KOGL 1, 예약 207 = 256바이트(명세 표 3).
-fn file_header(flags: u32) -> Vec<u8> {
-    let mut h = vec![0u8; 256];
-    h[..17].copy_from_slice(b"HWP Document File");
-    h[32..36].copy_from_slice(&0x0500_0300u32.to_le_bytes());
-    h[36..40].copy_from_slice(&flags.to_le_bytes());
-    h
-}
+use crate::support::shared_fixtures::{HWPTAG_BEGIN, TAG_BIN_DATA, bin_data_link, file_header, finding, pe_bytes, raw_deflate, record, scan, wstr_with_len, zlib};
 
 fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
     let header = file_header(flags);
@@ -28,63 +16,8 @@ fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
     make_cfb(&streams)
 }
 
-fn write(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
-    let d = tempfile::tempdir().unwrap();
-    let p = d.path().join(name);
-    fs::write(&p, bytes).unwrap();
-    (d, p)
-}
-
-fn scan(name: &str, bytes: &[u8]) -> FileReport {
-    let (_d, p) = write(name, bytes);
-    scan_file(&p, &Options::default())
-}
-
 fn scan_cfb(name: &str, cfb: &Cfb) -> FileReport {
     scan(name, &cfb.bytes)
-}
-
-fn finding<'a>(r: &'a FileReport, code: &str) -> &'a bookdoctor::Finding {
-    r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
-}
-
-// --- Scripts (명세 표 8, 9) ---
-
-fn wchars(s: &str) -> Vec<u8> {
-    s.encode_utf16().flat_map(u16::to_le_bytes).collect()
-}
-
-// --- BinData (명세 표 17, 18) ---
-
-/// 레코드 하나: 헤더 32비트(TagID 10, Level 10, Size 12), Size가 0xFFF 이상이면 뒤에 DWORD 길이(명세 4.1).
-fn record(tag: u32, level: u32, data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    if data.len() >= 0xFFF {
-        out.extend_from_slice(&(tag | level << 10 | 0xFFF << 20).to_le_bytes());
-        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-    } else {
-        out.extend_from_slice(&(tag | level << 10 | (data.len() as u32) << 20).to_le_bytes());
-    }
-    out.extend_from_slice(data);
-    out
-}
-
-const HWPTAG_BEGIN: u32 = 0x010;
-
-const TAG_BIN_DATA: u32 = HWPTAG_BEGIN + 2;
-
-fn wstr_with_len(s: &str) -> Vec<u8> {
-    let mut out = (s.encode_utf16().count() as u16).to_le_bytes().to_vec();
-    out.extend_from_slice(&wchars(s));
-    out
-}
-
-/// `HWPTAG_BIN_DATA` LINK(Type 0): 속성, 절대 경로, 상대 경로.
-fn bin_data_link(absolute: &str, relative: &str) -> Vec<u8> {
-    let mut d = 0u16.to_le_bytes().to_vec();
-    d.extend_from_slice(&wstr_with_len(absolute));
-    d.extend_from_slice(&wstr_with_len(relative));
-    record(TAG_BIN_DATA, 1, &d)
 }
 
 fn scan_bindata(flags: u32, docinfo: Option<Vec<u8>>, bins: &[(&str, Vec<u8>)]) -> FileReport {
@@ -97,26 +30,6 @@ fn scan_bindata(flags: u32, docinfo: Option<Vec<u8>>, bins: &[(&str, Vec<u8>)]) 
     }
     let refs: Vec<(&str, &[u8])> = streams.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
     scan_cfb("a.hwp", &hwp_cfb(&refs, flags))
-}
-
-fn raw_deflate(data: &[u8]) -> Vec<u8> {
-    let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
-fn pe_bytes() -> Vec<u8> {
-    let mut pe = vec![0u8; 0x100];
-    pe[..2].copy_from_slice(b"MZ");
-    pe[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
-    pe[0x40..0x44].copy_from_slice(b"PE\0\0");
-    pe
-}
-
-fn zlib(data: &[u8]) -> Vec<u8> {
-    let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
 }
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR some png bytes";

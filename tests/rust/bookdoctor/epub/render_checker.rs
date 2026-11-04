@@ -8,6 +8,7 @@ use bookdoctor::format_dispatcher::scan_file;
 use support::*;
 use bookdoctor::{Category, FileReport, Format, Severity};
 use std::collections::HashMap;
+use crate::support::shared_fixtures::{binary, forge_declared_size};
 
 const OPF_NS_DECL: &str = r#" xmlns:dc="http://purl.org/dc/elements/1.1/""#;
 const OPF_PATH: &str = "OEBPS/content.opf";
@@ -474,17 +475,6 @@ fn total_budget_marks_incomplete_when_sum_exceeds() {
     assert!(r.reasons.iter().any(|m| m.contains("budget")), "{:?}", r.reasons);
 }
 
-/// 중앙 디렉터리와 로컬 헤더의 선언 크기(비압축)를 `declared`로 바꾼다.
-fn forge_declared_size(path: &Path, member: &str, declared: u32) {
-    let mut data = fs::read(path).unwrap();
-    let name = member.as_bytes();
-    let local = (0..data.len() - 30).find(|&i| &data[i..i + 4] == b"PK\x03\x04" && &data[i + 30..i + 30 + name.len()] == name).unwrap();
-    data[local + 22..local + 26].copy_from_slice(&declared.to_le_bytes());
-    let central = (0..data.len() - 46).find(|&i| &data[i..i + 4] == b"PK\x01\x02" && &data[i + 46..i + 46 + name.len()] == name).unwrap();
-    data[central + 24..central + 28].copy_from_slice(&declared.to_le_bytes());
-    fs::write(path, data).unwrap();
-}
-
 #[test]
 fn total_budget_is_enforced_by_actual_bytes_not_declared_size() {
     // 예산은 선언 크기의 합이 아니라 읽은 바이트로 센다. 선언 크기는 각 멤버가 max_member 이하인지 거르는 데만 쓴다.
@@ -753,11 +743,6 @@ fn scan_file_skips_render_when_not_a_zip() {
     let f = file_with("a.epub", b"PK\x03\x04 truncated");
     let r = scan_file(f.path(), &Options::default());
     assert!(!r.findings.iter().any(|x| x.code == "HEAD_MISSING" || x.code == "MANIFEST_EMPTY"), "{:?}", r.findings);
-}
-
-fn binary(len: usize, seed: u8) -> Vec<u8> {
-    // UTF-8로 유효하지 않은 바이트가 많이 든 데이터(이미지·폰트처럼).
-    (0..len).map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed) | 0x80).collect()
 }
 
 fn epub_with_media(path: &Path) {

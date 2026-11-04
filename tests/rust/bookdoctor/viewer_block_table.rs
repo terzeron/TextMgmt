@@ -2,22 +2,18 @@ mod support;
 
 use std::collections::BTreeSet;
 
-use bookdoctor::cli_parser::Options;
 use bookdoctor::report::write_json_line;
 use bookdoctor::format_dispatcher::scan_file;
 use bookdoctor::viewer_block_table::{EPUB_CODES, PDF_CODES, TXT_CODES, viewer_blocked};
 use regex::Regex;
 use bookdoctor::{Category, Format, ViewerBlocked};
+use crate::support::shared_fixtures::{opts};
 
 const EPUB_SECURITY_RS: &str = include_str!("../../../utils/bookdoctor/src/epub/security_checker.rs");
 /// EPUB의 ZIP 이름 규칙(`ZIP_PATH_TRAVERSAL` 등)은 `zipnames.rs`로 옮겨 갔다. EPUB 지표 코드의 출처는 두 파일이다.
 const ZIPNAMES_RS: &str = include_str!("../../../utils/bookdoctor/src/zip_name_rules.rs");
 const PDF_SECURITY_RS: &str = include_str!("../../../utils/bookdoctor/src/pdf/security_checker.rs");
 const TXT_RS: &str = include_str!("../../../utils/bookdoctor/src/txt_checker.rs");
-
-fn opts() -> Options {
-    Options { no_pdf_worker: true, ..Options::default() }
-}
 
 #[test]
 fn epub_script_is_blocked() {

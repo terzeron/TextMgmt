@@ -10,6 +10,7 @@ use bookdoctor::format_dispatcher::scan_file;
 use support::{FakeRunner, file_with};
 use lopdf::{Dictionary, Document, Object};
 use bookdoctor::{Category, FileReport, Severity};
+use crate::support::shared_fixtures::{opts};
 
 /// 객체 본문 목록으로 PDF를 만든다. 1번 객체가 Catalog다.
 fn build(bodies: &[String]) -> Vec<u8> {
@@ -46,10 +47,6 @@ fn pdf_with_mediabox(b: [f32; 4]) -> Vec<u8> {
 /// 4번 객체가 FontDescriptor인 PDF.
 fn pdf_with_descriptor(descriptor_body: &str) -> Vec<u8> {
     pdf_with("/MediaBox [0 0 612 792]", "", &[format!("<< /Type /FontDescriptor {descriptor_body} >>")])
-}
-
-fn opts() -> Options {
-    Options { no_pdf_worker: true, ..Options::default() }
 }
 
 fn run(bytes: &[u8], opts: &Options, runner: &FakeRunner) -> FileReport {

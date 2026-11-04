@@ -1,25 +1,13 @@
 //! `bookdoctor::hwp::script_checker` 단위 테스트.
 
+#[path = "../support/mod.rs"]
+mod support;
+
 #[path = "../ole_common.rs"]
 mod ole_common;
-use std::fs;
-use std::path::PathBuf;
-use bookdoctor::cli_parser::Options;
-use bookdoctor::format_dispatcher::scan_file;
 use crate::ole_common::{Cfb, make_cfb};
 use bookdoctor::{FileReport};
-use flate2::Compression;
-use flate2::write::{DeflateEncoder, ZlibEncoder};
-use std::io::Write;
-
-/// `FileHeader` 스트림: 서명 32, 버전 4, 속성1 4, 속성2 4, EncryptVersion 4, KOGL 1, 예약 207 = 256바이트(명세 표 3).
-fn file_header(flags: u32) -> Vec<u8> {
-    let mut h = vec![0u8; 256];
-    h[..17].copy_from_slice(b"HWP Document File");
-    h[32..36].copy_from_slice(&0x0500_0300u32.to_le_bytes());
-    h[36..40].copy_from_slice(&flags.to_le_bytes());
-    h
-}
+use crate::support::shared_fixtures::{JSCRIPT_VERSION, default_jscript, file_header, finding, raw_deflate, scan, wchars, zlib};
 
 fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
     let header = file_header(flags);
@@ -28,59 +16,12 @@ fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
     make_cfb(&streams)
 }
 
-fn write(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
-    let d = tempfile::tempdir().unwrap();
-    let p = d.path().join(name);
-    fs::write(&p, bytes).unwrap();
-    (d, p)
-}
-
-fn scan(name: &str, bytes: &[u8]) -> FileReport {
-    let (_d, p) = write(name, bytes);
-    scan_file(&p, &Options::default())
-}
-
 fn scan_cfb(name: &str, cfb: &Cfb) -> FileReport {
     scan(name, &cfb.bytes)
 }
 
-// --- Scripts (명세 표 8, 9) ---
-
-fn wchars(s: &str) -> Vec<u8> {
-    s.encode_utf16().flat_map(u16::to_le_bytes).collect()
-}
-
-/// `DefaultJScript`: 헤더·소스·Pre·Post 각각 DWORD 길이(글자 수) + WCHAR 배열, 끝에 DWORD `-1`.
-fn default_jscript(parts: [&str; 4]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for p in parts {
-        out.extend_from_slice(&(p.encode_utf16().count() as u32).to_le_bytes());
-        out.extend_from_slice(&wchars(p));
-    }
-    out.extend_from_slice(&u32::MAX.to_le_bytes());
-    out
-}
-
-const JSCRIPT_VERSION: [u8; 8] = [0u8; 8];
-
 fn scan_scripts(flags: u32, script: &[u8]) -> FileReport {
     scan_cfb("a.hwp", &hwp_cfb(&[("Scripts/JScriptVersion", &JSCRIPT_VERSION[..]), ("Scripts/DefaultJScript", script)], flags))
-}
-
-fn raw_deflate(data: &[u8]) -> Vec<u8> {
-    let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
-fn zlib(data: &[u8]) -> Vec<u8> {
-    let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
-fn finding<'a>(r: &'a FileReport, code: &str) -> &'a bookdoctor::Finding {
-    r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
 }
 
 #[test]

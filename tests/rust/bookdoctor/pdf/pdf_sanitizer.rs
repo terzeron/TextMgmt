@@ -1,31 +1,18 @@
 //! PDF `--sanitize`: 위험한 동작과 스크립트를 지우고 다시 쓴다. 쪽 수와 쪽 내용 보존, 보안 재검사, 휴지통 보관과 제자리 덮어쓰기.
 
+#[path = "../support/mod.rs"]
+mod support;
+
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use bookdoctor::cli_parser::{Options, execute, parse};
+use bookdoctor::cli_parser::{Options};
 use bookdoctor::pdf::pdf_sanitizer::{rebuild, verify};
 use bookdoctor::format_dispatcher::scan_file;
 use lopdf::Document;
 use bookdoctor::{Category, Severity};
-
-/// 객체 본문 목록으로 PDF를 만든다. 1번 객체가 Catalog, 2번이 Pages, 3번이 Page, 4번이 쪽 내용이다.
-fn pdf(objects: &[&str]) -> Vec<u8> {
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, body) in objects.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend(format!("{} 0 obj\n{body}\nendobj\n", i + 1).bytes());
-    }
-    let xref = out.len();
-    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
-    for o in offsets {
-        out.extend(format!("{o:010} 00000 n \n").bytes());
-    }
-    out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
-    out
-}
+use crate::support::shared_fixtures::{pdf, run_in};
 
 const CONTENT: &str = "BT /F1 12 Tf 10 20 Td (Hello world) Tj ET";
 
@@ -144,19 +131,6 @@ fn verify_rejects_a_rewrite_that_changes_the_pages() {
         "<< /Length 21 >>\nstream\nBT (Other text) Tj ET\nendstream",
     ]);
     assert!(verify(&src, &other).unwrap_err().contains("쪽"));
-}
-
-// ---- 실행: 적용, 휴지통 ----
-
-/// `root`를 코퍼스 루트로 삼아 명령을 실행한다. 휴지통은 `root/0_trash`다.
-fn run_in(root: &Path, args: &[&str]) -> (i32, String) {
-    let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    let mut out = Vec::new();
-    let code = match parse(&argv) {
-        Ok(o) => execute(&Options { library_root: root.to_path_buf(), ..o }, &mut out, false, true),
-        Err(_) => 2,
-    };
-    (code, String::from_utf8_lossy(&out).into_owned())
 }
 
 fn infected(dir: &Path, name: &str) -> std::path::PathBuf {

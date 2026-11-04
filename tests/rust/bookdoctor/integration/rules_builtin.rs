@@ -1,13 +1,12 @@
 //! 내장 규칙 테스트. 규칙마다 양성과 음성 두 가지를 확인한다.
 
+#[path = "../support/mod.rs"]
+mod support;
+
 use std::fs;
 
 use bookdoctor::cli_parser::run;
-
-/// EICAR 표준 시험 문자열(악성 코드가 아니다). 저장소 파일이 백신에 걸리지 않도록 두 조각으로 둔다.
-fn eicar() -> Vec<u8> {
-    [&b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$"[..], &b"EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"[..]].concat()
-}
+use crate::support::shared_fixtures::{eicar};
 
 #[test]
 fn scan_applies_the_builtin_rules_without_any_option() {

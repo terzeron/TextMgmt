@@ -1,40 +1,21 @@
+
+#[path = "../support/mod.rs"]
+mod support;
 #[path = "../ole_common.rs"]
 mod ole_common;
 
 use std::fs;
-use std::path::PathBuf;
 
-use bookdoctor::cli_parser::{Options, run};
-use bookdoctor::format_dispatcher::scan_file;
+use bookdoctor::cli_parser::{run};
 use ole_common::{Cfb, make_cfb};
-use bookdoctor::{FileReport, Format};
-
-/// `FileHeader` 스트림: 서명 32, 버전 4, 속성1 4, 속성2 4, EncryptVersion 4, KOGL 1, 예약 207 = 256바이트(명세 표 3).
-fn file_header(flags: u32) -> Vec<u8> {
-    let mut h = vec![0u8; 256];
-    h[..17].copy_from_slice(b"HWP Document File");
-    h[32..36].copy_from_slice(&0x0500_0300u32.to_le_bytes());
-    h[36..40].copy_from_slice(&flags.to_le_bytes());
-    h
-}
+use bookdoctor::{Format};
+use crate::support::shared_fixtures::{file_header, scan};
 
 fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
     let header = file_header(flags);
     let mut streams: Vec<(&str, &[u8])> = vec![("FileHeader", &header)];
     streams.extend_from_slice(extra);
     make_cfb(&streams)
-}
-
-fn write(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
-    let d = tempfile::tempdir().unwrap();
-    let p = d.path().join(name);
-    fs::write(&p, bytes).unwrap();
-    (d, p)
-}
-
-fn scan(name: &str, bytes: &[u8]) -> FileReport {
-    let (_d, p) = write(name, bytes);
-    scan_file(&p, &Options::default())
 }
 
 #[test]

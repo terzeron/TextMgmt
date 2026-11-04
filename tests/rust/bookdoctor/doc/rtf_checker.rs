@@ -1,24 +1,12 @@
 //! RTF 위장 테스트. fixture는 합성이다. 이름은 Word 문서인데 내용이 RTF인 파일과 `.rtf` 파일을 본다.
 
-use std::fs;
-use std::path::PathBuf;
+#[path = "../support/mod.rs"]
+mod support;
+
 use std::time::{Duration, Instant};
 
-use bookdoctor::cli_parser::Options;
-use bookdoctor::format_dispatcher::scan_file;
 use bookdoctor::{FileReport, Finding, Format, Severity};
-
-fn write(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
-    let d = tempfile::tempdir().unwrap();
-    let p = d.path().join(name);
-    fs::write(&p, bytes).unwrap();
-    (d, p)
-}
-
-fn scan(name: &str, bytes: &[u8]) -> FileReport {
-    let (_d, p) = write(name, bytes);
-    scan_file(&p, &Options::default())
-}
+use crate::support::shared_fixtures::{pe_bytes, scan};
 
 fn finding<'a>(r: &'a FileReport, code: &str) -> &'a Finding {
     r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
@@ -29,14 +17,6 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
-
-fn pe_bytes() -> Vec<u8> {
-    let mut pe = vec![0u8; 0x100];
-    pe[..2].copy_from_slice(b"MZ");
-    pe[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
-    pe[0x40..0x44].copy_from_slice(b"PE\0\0");
-    pe
-}
 
 fn rtf_with_objdata(control: &str, payload: &[u8]) -> Vec<u8> {
     format!("{{\\rtf1\\ansi{{\\object\\objemb{{\\*\\objclass Word.Document.8}}{{\\*\\{control} {}}}}}}}", hex(payload)).into_bytes()

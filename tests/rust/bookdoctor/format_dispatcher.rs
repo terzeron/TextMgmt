@@ -351,23 +351,8 @@ fn non_executable_files_keep_the_size_limit_and_zero_tail_checks() {
 }
 
 mod html_scanner {
-    use std::fs;
-    use std::path::PathBuf;
-    use bookdoctor::cli_parser::Options;
-    use bookdoctor::format_dispatcher::scan_file;
-    use bookdoctor::{FileReport, Format};
-
-    fn write(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join(name);
-        fs::write(&p, bytes).unwrap();
-        (d, p)
-    }
-
-    fn scan(name: &str, bytes: &[u8]) -> FileReport {
-        let (_d, p) = write(name, bytes);
-        scan_file(&p, &Options::default())
-    }
+    use crate::support::shared_fixtures::{scan};
+    use bookdoctor::{Format};
 
     fn utf16le_bom(s: &str) -> Vec<u8> {
         let mut out = vec![0xFF, 0xFE];

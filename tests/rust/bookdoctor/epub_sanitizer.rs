@@ -5,30 +5,12 @@ use std::io::{Cursor, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use bookdoctor::cli_parser::{Options, execute, parse};
 use bookdoctor::epub_sanitizer::{rebuild, strip_css, strip_markup, verify};
 use support::*;
+use crate::support::shared_fixtures::{epub_bytes, member, names, run_in};
 
 fn markup(s: &str) -> String {
     strip_markup(s, false).0
-}
-
-fn names(bytes: &[u8]) -> Vec<String> {
-    zip::ZipArchive::new(Cursor::new(bytes)).unwrap().file_names().map(|n| n.unwrap().into_owned()).collect()
-}
-
-fn member(bytes: &[u8], name: &str) -> String {
-    let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
-    let mut s = String::new();
-    z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
-    s
-}
-
-fn epub_bytes(chapter: &str, opf: &str, extra: &[(&str, &[u8])]) -> Vec<u8> {
-    let d = tempfile::tempdir().unwrap();
-    let p = d.path().join("t.epub");
-    epub_with_files(&p, opf, chapter, extra);
-    fs::read(p).unwrap()
 }
 
 // ---- 마크업 ----
@@ -538,19 +520,6 @@ fn only_a_real_package_document_is_exempt_from_the_extension_allowlist() {
     // 진짜 패키지면 `.dat` 확장자여도 남긴다.
     let src = epub_with_package("OEBPS/package.dat", PACKAGE_DECLARING_CSS_AS_XHTML.as_bytes());
     assert!(names(&rebuild(&src).unwrap().bytes).contains(&"OEBPS/package.dat".to_string()));
-}
-
-// ---- 실행: 적용, 휴지통 ----
-
-/// `root`를 코퍼스 루트로 삼아 명령을 실행한다. 휴지통은 `root/0_trash`다.
-fn run_in(root: &Path, args: &[&str]) -> (i32, String) {
-    let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    let mut out = Vec::new();
-    let code = match parse(&argv) {
-        Ok(o) => execute(&Options { library_root: root.to_path_buf(), ..o }, &mut out, false, true),
-        Err(_) => 2,
-    };
-    (code, String::from_utf8_lossy(&out).into_owned())
 }
 
 fn infected(dir: &Path, name: &str) -> std::path::PathBuf {

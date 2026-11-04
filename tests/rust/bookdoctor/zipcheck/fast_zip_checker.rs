@@ -6,6 +6,7 @@ use bookdoctor::cli_parser::{Options, parse};
 use bookdoctor::format_dispatcher::scan_file;
 use bookdoctor::{Category, FileReport, Format, Severity};
 use bookdoctor::zipcheck::fast_zip_checker::resolve_name;
+use crate::support::shared_fixtures::{finding};
 
 fn scan(path: &Path) -> FileReport {
     scan_file(path, &Options::default())
@@ -13,10 +14,6 @@ fn scan(path: &Path) -> FileReport {
 
 fn deep(path: &Path) -> FileReport {
     scan_file(path, &Options { zip_deep: true, ..Options::default() })
-}
-
-fn finding<'a>(r: &'a FileReport, code: &str) -> &'a bookdoctor::Finding {
-    r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
 }
 
 fn text(n: usize) -> Vec<u8> {
