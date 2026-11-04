@@ -1,14 +1,12 @@
+
+mod common;
 mod corpus;
 
 use std::fs;
-use std::path::{Path, PathBuf};
 
 use doc_reader::rtf::{read_from_rtf_text, rtf_to_text};
 use serde_json::Value;
-
-fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/rust/doc_reader/fixtures").join(name)
-}
+use crate::common::shared_fixtures::fixture;
 
 #[test]
 fn rtf_matches_striprtf() {

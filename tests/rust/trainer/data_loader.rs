@@ -1,20 +1,13 @@
+
+mod common;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use trainer::{CliIo, Deps, main_with};
+use trainer::Deps;
 use serde_json::{Value, json};
 use tempfile::TempDir;
-
-fn fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/trained")
-}
-
-fn run(args: &[&str], deps: &Deps) -> (i32, String, String) {
-    let (mut out, mut err) = (Vec::new(), Vec::new());
-    let code = main_with(args, &mut CliIo { out: &mut out, err: &mut err }, deps);
-    (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
-}
+use crate::common::shared_fixtures::{fixture, run};
 
 #[test]
 fn manifest_uses_exact_membership_and_rejects_invalid_or_missing_members() {

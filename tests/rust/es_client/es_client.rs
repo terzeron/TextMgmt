@@ -1,15 +1,14 @@
 //! ES REST 클라이언트 테스트. 실제 ES 대신 한 번만 응답하는 로컬 HTTP 서버를 쓴다.
 
+mod common;
+
 #[path = "../common/tls_server.rs"]
 mod tls_server;
 
 use std::path::Path;
 
 use es_client::{EsClient, EsError};
-
-fn client(url: &str) -> EsClient {
-    EsClient::new(url, "elastic", "pw", "books")
-}
+use crate::common::shared_fixtures::client;
 
 #[test]
 fn from_env_reports_the_first_missing_variable() {

@@ -1,13 +1,17 @@
 //! ES REST 클라이언트 테스트. 실제 ES 대신 한 번만 응답하는 로컬 HTTP 서버를 쓴다.
 
+#[path = "../common/mod.rs"]
+mod common;
+
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use es_client::{EsClient, EsError};
+use es_client::EsError;
 use serde_json::{Value, json};
+use crate::common::shared_fixtures::client;
 
 struct Captured {
     request_line: String,
@@ -59,10 +63,6 @@ fn serve_sequence(responses: Vec<(u16, Value)>) -> (String, mpsc::Receiver<Captu
         }
     });
     (url, rx)
-}
-
-fn client(url: &str) -> EsClient {
-    EsClient::new(url, "elastic", "pw", "books")
 }
 
 fn hits(max_score: Value, rows: &[(&str, f64, Value)]) -> Value {

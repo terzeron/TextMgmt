@@ -1,19 +1,12 @@
+
+mod common;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use trainer::{CliIo, Deps, main_with};
 use serde_json::{json, Value};
 use tempfile::TempDir;
-
-fn fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/trained")
-}
-
-fn run(args: &[&str], deps: &Deps) -> (i32, String, String) {
-    let (mut out, mut err) = (Vec::new(), Vec::new());
-    let code = main_with(args, &mut CliIo { out: &mut out, err: &mut err }, deps);
-    (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
-}
+use crate::common::shared_fixtures::{fixture, run};
 
 #[test]
 fn cli_keeps_exit_codes_when_standard_output_or_error_is_closed() {

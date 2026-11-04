@@ -1,3 +1,5 @@
+
+mod common;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -68,15 +70,11 @@ fn images_have_no_text() {
 }
 
 mod docx_reader {
+    use crate::common::shared_fixtures::fixture;
     use std::fs;
-    use std::path::{Path, PathBuf};
 
     use doc_reader::office::read_from_docx;
     use serde_json::Value;
-
-    fn fixture(name: &str) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/rust/doc_reader/fixtures").join(name)
-    }
 
     #[test]
     fn docx_matches_python_docx() {

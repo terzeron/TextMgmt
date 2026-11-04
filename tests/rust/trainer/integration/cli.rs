@@ -1,11 +1,10 @@
+
+#[path = "../common/mod.rs"]
+mod common;
 use std::fs;
-use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
-
-fn fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/trained")
-}
+use crate::common::shared_fixtures::fixture;
 
 #[test]
 fn verbose_classify_emits_debug_diagnostics() {
