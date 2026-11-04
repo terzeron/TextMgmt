@@ -273,26 +273,16 @@ fn test_unreadable_existing_cover_metadata_is_a_warning() {
 }
 
 mod image_page_cropping {
+    use crate::common::epub_book::{Members, write_zip};
     use crate::common::shared_fixtures::{assert_refused, size, text_of};
     use super::common;
     use std::collections::BTreeMap;
     use std::path::Path;
     use backend::epub_cover::{edit_images, EditImages, revision};
     use common::image::{jpeg_bytes};
-    use common::zipx::{Members as ZipMembers, write_zip_with, ZipMode};
+    use common::zipx::{Members as ZipMembers};
     use image::{Rgb, RgbImage};
     use serde_json::{json};
-
-    type Members = Vec<(String, Vec<u8>)>;
-
-    /// mimetype을 맨 앞에 두고 나머지 순서는 그대로 둔다. 멤버는 모두 무압축으로 쓴다.
-    fn write_zip(path: &Path, mut members: Members) {
-        let pos = members.iter().position(|(n, _)| n == "mimetype").expect("mimetype");
-        let mimetype = members.remove(pos);
-        members.insert(0, mimetype);
-        let entries: Vec<(&str, &[u8])> = members.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
-        write_zip_with(path, &entries, ZipMode::Stored);
-    }
 
     fn read(path: &Path) -> BTreeMap<String, Vec<u8>> {
         let members = ZipMembers::read(path);
