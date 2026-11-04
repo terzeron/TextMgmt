@@ -36,6 +36,8 @@ pub mod preview_epubs;
 pub mod auth_fakes;
 pub mod dyn_es;
 pub mod file_reader_fakes;
+pub mod pdf_edit_env;
+pub mod category_apply;
 
 use axum::body::Body;
 use axum::http::{Method, Request};

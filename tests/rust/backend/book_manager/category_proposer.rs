@@ -10,7 +10,7 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path};
 use std::sync::{Arc, Mutex};
-use backend::book_manager::{AddBookError, ApplyOptions, BookManager, BookManagerDeps, MoveOpts, ProposeOptions};
+use backend::book_manager::{AddBookError, BookManager, MoveOpts, ProposeOptions};
 use classifier::BookClassifierApi;
 use common::env::EnvGuard;
 use common::es_fake::{FakeEsManager};
@@ -19,30 +19,9 @@ use common::log_capture::LogCapture;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use crate::common::shared_fixtures::{allowed_set, asyncio_runner, deps, make_doc, make_manager, make_source_file, model_dir, outcome, propose, split, tmp_dir};
-use crate::common::shared_fixtures::{Setup, book_adder, file_reader, setup};
-
-/// `apply_category_changes`의 Python 키워드 인자 묶음(테스트 로컬). 구현의 `ApplyOptions`로 바꿔 부른다.
-struct ApplyOpts {
-    allowed: BTreeSet<String>,
-    on_item_done: Option<Box<dyn Fn(Value) + Send + Sync>>,
-    should_continue: Option<Box<dyn Fn() -> bool + Send + Sync>>,
-}
-
-impl ApplyOpts {
-    fn new(allowed: BTreeSet<String>) -> Self {
-        Self { allowed, on_item_done: None, should_continue: None }
-    }
-
-    fn on_item_done(mut self, f: Box<dyn Fn(Value) + Send + Sync>) -> Self {
-        self.on_item_done = Some(f);
-        self
-    }
-
-    fn should_continue(mut self, f: Box<dyn Fn() -> bool + Send + Sync>) -> Self {
-        self.should_continue = Some(f);
-        self
-    }
-}
+use crate::common::shared_fixtures::{book_adder, file_reader, setup};
+use crate::common::shared_fixtures::manager;
+use crate::common::category_apply::{ApplyOpts, apply_opts};
 
 // ---- Task 3: 등급 판정과 제안 생성 ----
 
@@ -183,15 +162,6 @@ async fn propose_opts(manager: &BookManager, category: &str, mappings: &Mappings
 
 fn manager_propose(manager: &BookManager, category: &str, mappings: &Mappings) -> (Value, Option<String>) {
     asyncio_runner(propose_opts(manager, category, mappings, ProposeOpts { use_bookstore: false, use_content_meta: false, on_progress: None }))
-}
-
-async fn apply_opts(manager: &BookManager, items: &[Value], opts: ApplyOpts) -> (Value, Option<String>) {
-    let allowed: std::collections::HashSet<String> = opts.allowed.iter().cloned().collect();
-    outcome(
-        manager
-            .apply_category_changes_with(items, &allowed, ApplyOptions { on_item_done: opts.on_item_done.as_deref(), should_continue: opts.should_continue.as_deref(), ..ApplyOptions::default() })
-            .await,
-    )
 }
 
 #[test]
@@ -1469,11 +1439,6 @@ mod candidate_building {
         assert_eq!(result.unwrap()["action"], "move");
         assert!(tmp.path().join("A").join("book.txt").exists());
     }
-}
-
-fn manager(s: &Setup, deps: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> BookManager {
-    common::setup_env();
-    BookManager::with_deps(deps(BookManagerDeps::new(s.books.clone(), FakeEsManager::new())))
 }
 
 // ---------------------------------------------------------------------------

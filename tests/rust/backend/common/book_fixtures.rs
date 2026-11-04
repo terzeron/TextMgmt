@@ -858,3 +858,13 @@ impl backend::main::BookManagerApi for FakeManager {
         error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 }
+
+/// `env`가 만든 환경의 `BookManager`를 Deps 설정을 더해 다시 만든다. `loader`가 참이면 파일 읽기 대역도 꽂는다.
+pub fn with_deps(mut e: Env, loader: bool, configure: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Env {
+    let mut deps = BookManagerDeps::new(e.root.clone(), e.es.clone());
+    if loader {
+        deps = deps.with_file_reader(e.reader.clone());
+    }
+    e.bm = BookManager::with_deps(configure(deps));
+    e
+}

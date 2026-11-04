@@ -76,24 +76,14 @@ mod upload_limits {
     use crate::common::shared_fixtures::{error_text};
     use super::{common, fx};
     use std::fs;
-    use backend::book_manager::{BookManager, BookManagerDeps};
     use backend::epub_cover::{EpubCoverHooks, Limits};
     use common::edits;
 
     use common::image::png_solid;
-    use fx::{Edit, Env, image_env, Opts};
+    use fx::{Edit, image_env, Opts, with_deps};
 
     /// `fx::env`가 만든 환경의 `BookManager`를 Deps 설정을 더해 다시 만든다. `loader`가 참이면 파일 읽기 대역도 꽂는다.
     // TODO(common): `book_fixtures::Opts`가 Deps 설정 훅(`configure: Option<Box<dyn FnOnce(BookManagerDeps) -> BookManagerDeps>>`)을 받으면 이 헬퍼가 필요 없다.
-    fn with_deps(mut e: Env, loader: bool, configure: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Env {
-        let mut deps = BookManagerDeps::new(e.root.clone(), e.es.clone());
-        if loader {
-            deps = deps.with_file_reader(e.reader.clone());
-        }
-        e.bm = BookManager::with_deps(configure(deps));
-        e
-    }
-
     #[tokio::test]
     async fn test_upload_insert_with_too_many_pixels_changes_nothing() {
         let e = with_deps(image_env(Opts::loader()), true, |d| d.with_epub_hooks(EpubCoverHooks::default().with_limits(Limits { max_image_pixels: 100, ..Limits::default() })));

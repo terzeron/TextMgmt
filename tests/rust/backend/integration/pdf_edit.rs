@@ -1,52 +1,12 @@
 #[path = "../common/mod.rs"]
 mod common;
-use backend::book_manager::{BookManager, BookManagerDeps};
 use base64::Engine;
-use common::es_fake::FakeEsManager;
-use common::faulty_fs::FaultyFs;
-use common::pdf::{make_pdf, widths};
-use serde_json::{json, Value};
+use common::pdf::widths;
+use serde_json::json;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 use crate::common::shared_fixtures::{split};
-
-struct Env {
-    bm: BookManager,
-    es: Arc<FakeEsManager>,
-    fs: Arc<FaultyFs>,
-    pdf: PathBuf,
-    root: tempfile::TempDir,
-}
-
-fn env() -> Env {
-    common::setup_env();
-    let root = tempfile::tempdir().unwrap();
-    let pdf = root.path().join("cat/book.pdf");
-    make_pdf(&pdf, 5);
-    let es = FakeEsManager::with_doc(
-        json!({"category":"cat", "title":"Title", "author":"Author", "file_path":"cat/book.pdf", "file_type":"pdf", "file_size": 0, "page_count":5, "updated_time":"2024-01-01T00:00:00.000000"}),
-    );
-    let fs = FaultyFs::new();
-    let bm = BookManager::with_deps(BookManagerDeps::new(root.path().to_path_buf(), es.clone()).with_fs(fs.clone()));
-    Env { bm, es, fs, pdf, root }
-}
-
-impl Env {
-    async fn edit(&self, pages: &[i64], order: Option<&[i64]>) -> (Option<Value>, Option<String>) {
-        split(self.bm.delete_pdf_pages(1, pages, None, None, None, order).await)
-    }
-    fn backup(&self) -> PathBuf {
-        self.root.path().join("0_trash/book.pdf")
-    }
-    fn assert_no_parts(&self) {
-        for dir in [self.pdf.parent().unwrap().to_path_buf(), self.root.path().join("0_trash")] {
-            if let Ok(entries) = fs::read_dir(dir) {
-                assert!(entries.flatten().all(|e| !e.file_name().to_string_lossy().ends_with(".part")));
-            }
-        }
-    }
-}
+use crate::common::pdf_edit_env::env;
 
 #[tokio::test]
 async fn removes_original_page_numbers_and_reindexes_same_id() {
@@ -412,56 +372,14 @@ async fn jpeg_crop_preserves_quantization_sampling_progressive_and_grayscale() {
 }
 
 mod http_contract {
+    use crate::common::pdf_edit_env::env;
     use crate::common::shared_fixtures::{FetchImage};
-    use crate::common::shared_fixtures::{split};
     use super::common;
     use backend::book_manager::{BookManager, BookManagerDeps};
-    use super::common::{es_fake::FakeEsManager, faulty_fs::FaultyFs, pdf::make_pdf, pdf::widths};
-    use serde_json::{json, Value};
+    use super::common::{pdf::widths};
+    use serde_json::json;
     use std::fs;
-    use std::path::PathBuf;
     use std::sync::Arc;
-
-    // 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
-    #[allow(dead_code)]
-    struct Env {
-        bm: BookManager,
-        es: Arc<FakeEsManager>,
-        fs: Arc<FaultyFs>,
-        pdf: PathBuf,
-        root: tempfile::TempDir,
-    }
-
-    fn env() -> Env {
-        common::setup_env();
-        let root = tempfile::tempdir().unwrap();
-        let pdf = root.path().join("cat/book.pdf");
-        make_pdf(&pdf, 5);
-        let es = FakeEsManager::with_doc(
-            json!({"category":"cat", "title":"Title", "author":"Author", "file_path":"cat/book.pdf", "file_type":"pdf", "file_size": 0, "page_count":5, "updated_time":"2024-01-01T00:00:00.000000"}),
-        );
-        let fs = FaultyFs::new();
-        let bm = BookManager::with_deps(BookManagerDeps::new(root.path().to_path_buf(), es.clone()).with_fs(fs.clone()));
-        Env { bm, es, fs, pdf, root }
-    }
-
-    // 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
-    #[allow(dead_code)]
-    impl Env {
-        async fn edit(&self, pages: &[i64], order: Option<&[i64]>) -> (Option<Value>, Option<String>) {
-            split(self.bm.delete_pdf_pages(1, pages, None, None, None, order).await)
-        }
-        fn backup(&self) -> PathBuf {
-            self.root.path().join("0_trash/book.pdf")
-        }
-        fn assert_no_parts(&self) {
-            for dir in [self.pdf.parent().unwrap().to_path_buf(), self.root.path().join("0_trash")] {
-                if let Ok(entries) = fs::read_dir(dir) {
-                    assert!(entries.flatten().all(|e| !e.file_name().to_string_lossy().ends_with(".part")));
-                }
-            }
-        }
-    }
 
     #[tokio::test]
     async fn http_edits_books_and_comics_with_python_response_contract() {

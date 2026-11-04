@@ -1,12 +1,14 @@
 //! 여러 테스트 파일이 함께 쓰는 준비물(helper·대역). 같은 본문의 사본을 한곳에 모았다.
 #![allow(dead_code)]
 use std::{fs};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering, Mutex, MutexGuard};
 use backend::book_manager::{AddBookError, BookAdder, BookContent, BookLookup, BookManager, BookManagerDeps, BookRef, BookResponse, CoverPage, FileReader, ProposeOptions, ReadFileError, Thumbnailer};
-use backend::main::{AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, ReloadProgress, TaskHandle, TaskRunner};
-use super::es_fake::{Docs, FakeEsManager};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering, Mutex, MutexGuard};
+use super::es_fake::{Docs, FakeEsManager};
+use super::zipx::{Members, read_zip_entry, rewrite_epub_members, write_zip_with, ZipMode};
+use serde_json::{json, Map, Value};
+use std::path::{Path, PathBuf};
+use backend::main::{AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, ReloadProgress, TaskHandle, TaskRunner};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
@@ -18,23 +20,21 @@ use backend::es_manager::{EsError, EsManagerApi, HttpTransport};
 use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, SessionQuery, StoreError};
 use super::env::{EnvGuard, EnvReadGuard};
 use super::{es_dummy, Response, TestClient};
-use serde_json::{json, Map, Value};
-use std::io::{Read};
-use zip::{ZipArchive};
-use super::fsx::{dir_names};
-use super::zipx::{Members, read_zip_entry, rewrite_epub_members, write_zip_with, ZipMode};
+use std::io::Read;
+use zip::ZipArchive;
+use super::fsx::dir_names;
 use std::ops::Deref;
 use db::category_mapping::CategoryMapping;
 use backend::direct_cover_url::{FetchError, ImageFetcher};
-use backend::{epub_cover};
+use backend::epub_cover;
 use backend::epub_cover::{CoverError, edit_images, EditImages, EpubCoverHooks, Limits};
 use super::image::{BLUE, color, encode, encode_image, image_size, jpeg_bytes};
 use super::epub::{EpubSpec, make_epub};
 use image::{DynamicImage, ImageFormat, Rgb, RgbaImage, RgbImage};
-use backend::auth_service::{RequestParts};
+use backend::auth_service::RequestParts;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use super::pdf::{make_blank_pdf};
-use backend::cover_management::{CoverManagement};
+use super::pdf::make_blank_pdf;
+use backend::cover_management::CoverManagement;
 use tempfile::TempDir;
 
 /// `CallArgs`를 위치 인자 배열과 키워드 인자 객체로 만든다.
@@ -2066,4 +2066,9 @@ pub fn store_set(store: &Store, status: &Value, content_type: &str) {
 
 pub fn thumbnailer<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync + 'static>(f: F) -> Arc<dyn Thumbnailer> {
     Arc::new(FnThumbnailer(f))
+}
+
+pub fn manager(s: &Setup, deps: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> BookManager {
+    super::setup_env();
+    BookManager::with_deps(deps(BookManagerDeps::new(s.books.clone(), FakeEsManager::new())))
 }

@@ -2,7 +2,7 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::{fs, io};
 use std::path::{Path};
 use std::sync::{Arc, Mutex};
@@ -18,24 +18,7 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use crate::common::shared_fixtures::{allowed_set, asyncio_runner, blank_pdf_bytes_sized, category_with_files, deps, image_bytes, make_deps, make_doc, make_manager, make_source_file, outcome, tmp_dir};
 use crate::common::shared_fixtures::{CONTAINER};
-
-/// `apply_category_changes`의 Python 키워드 인자 묶음(테스트 로컬). 구현의 `ApplyOptions`로 바꿔 부른다.
-struct ApplyOpts {
-    allowed: BTreeSet<String>,
-    on_item_done: Option<Box<dyn Fn(Value) + Send + Sync>>,
-    should_continue: Option<Box<dyn Fn() -> bool + Send + Sync>>,
-}
-
-impl ApplyOpts {
-    fn new(allowed: BTreeSet<String>) -> Self {
-        Self { allowed, on_item_done: None, should_continue: None }
-    }
-
-    fn on_item_done(mut self, f: Box<dyn Fn(Value) + Send + Sync>) -> Self {
-        self.on_item_done = Some(f);
-        self
-    }
-}
+use crate::common::category_apply::{ApplyOpts, apply_opts};
 
 /// `MagicMock()`으로 만든 스레드 대역. `is_alive`와 `start` 호출 횟수만 본다.
 struct FakeBackfillThread {
@@ -76,15 +59,6 @@ impl TaskRunner for FailingStartRunner {
     }
 
     fn spawn_blocking_observed(&self, _name: &str) {}
-}
-
-async fn apply_opts(manager: &BookManager, items: &[Value], opts: ApplyOpts) -> (Value, Option<String>) {
-    let allowed: std::collections::HashSet<String> = opts.allowed.iter().cloned().collect();
-    outcome(
-        manager
-            .apply_category_changes_with(items, &allowed, ApplyOptions { on_item_done: opts.on_item_done.as_deref(), should_continue: opts.should_continue.as_deref(), ..ApplyOptions::default() })
-            .await,
-    )
 }
 
 #[test]

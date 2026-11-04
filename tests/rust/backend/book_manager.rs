@@ -4,14 +4,13 @@ mod common;
 #[path = "common/book_fixtures.rs"]
 mod fx;
 use std::{fs, io};
-use backend::book_manager::{_prune_dead_ncx_navpoints, BookManager, BookManagerDeps, ProposeOptions};
+use backend::book_manager::{_prune_dead_ncx_navpoints, ProposeOptions};
 use common::faulty_fs::FaultyFs;
-use fx::{Env, Opts};
+use fx::{Opts, with_deps};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering, Mutex};
 use classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
-use common::es_fake::FakeEsManager;
 use common::zipx::{read_zip_entry, write_zip};
 use serde_json::{Value};
 use classifier::book_classifier::{BookClassifierService, BookstorePolicy, SharedBookClassifier};
@@ -19,18 +18,10 @@ use bookstore::store_clients::{BookstoreSearch, SearchRow};
 use classifier::inference_model::CategoryModel;
 use crate::common::shared_fixtures::{model_dir, propose, tmp_dir};
 use crate::common::shared_fixtures::{NCX_NS_STR, Setup, setup};
+use crate::common::shared_fixtures::manager;
 
 /// `fx::env`가 만든 환경의 `BookManager`를 Deps 설정을 더해 다시 만든다. `loader`가 참이면 파일 읽기 대역도 꽂는다.
 // TODO(common): `book_fixtures::Opts`가 Deps 설정 훅(`configure: Option<Box<dyn FnOnce(BookManagerDeps) -> BookManagerDeps>>`)을 받으면 이 헬퍼가 필요 없다.
-fn with_deps(mut e: Env, loader: bool, configure: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Env {
-    let mut deps = BookManagerDeps::new(e.root.clone(), e.es.clone());
-    if loader {
-        deps = deps.with_file_reader(e.reader.clone());
-    }
-    e.bm = BookManager::with_deps(configure(deps));
-    e
-}
-
 #[tokio::test]
 async fn test_os_error_while_saving_reports_the_system_reason() {
     let faulty = FaultyFs::new();
@@ -140,11 +131,6 @@ fn service(s: &Setup, categories: [&'static str; 3], calls: &Arc<AtomicUsize>) -
     svc.aladin = Box::new(Store { category: categories[1], calls: Arc::clone(calls) });
     svc.kyobo = Box::new(Store { category: categories[2], calls: Arc::clone(calls) });
     svc
-}
-
-fn manager(s: &Setup, deps: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> BookManager {
-    common::setup_env();
-    BookManager::with_deps(deps(BookManagerDeps::new(s.books.clone(), FakeEsManager::new())))
 }
 
 // ---------------------------------------------------------------------------
