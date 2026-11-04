@@ -55,22 +55,16 @@ mod log_capture;
 mod common {
     pub fn setup_env() {}
 }
-
 use std::collections::BTreeMap;
-use std::fs;
-use std::io;
+use std::{fs, io};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-
-use bookstore::store_clients::{
-    _truncate_title, AbstractBookstore, AladinBookstore, BomtoonBookstore, JoaraBookstore, KakaoWebtoonBookstore, KyoboBookstore, LezhinBookstore, MAX_RESULTS, MunpiaBookstore, NaverSeriesBookstore,
-    NaverShoppingBookstore, NaverWebtoonBookstore, RidibooksBookstore, SearchRow, SoupSource, ToptoonBookstore, Yes24Bookstore, abstract_build_search_url, abstract_extract_book_info,
-    abstract_extract_search_links,
-};
-use serde_json::{Value, json};
+use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering, Mutex};
+use bookstore::store_clients::{_truncate_title, abstract_build_search_url, abstract_extract_book_info, abstract_extract_search_links, AbstractBookstore, AladinBookstore, BomtoonBookstore, JoaraBookstore, KakaoWebtoonBookstore, KyoboBookstore, LezhinBookstore, MAX_RESULTS, MunpiaBookstore, NaverSeriesBookstore, NaverShoppingBookstore, NaverWebtoonBookstore, RidibooksBookstore, SearchRow, SoupSource, ToptoonBookstore, Yes24Bookstore};
+use serde_json::{json, Value};
 use sysdeps::{FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout};
 use tempfile::TempDir;
+use crate::env_helpers::{empty_env, EnvGuard, map_env};
+use crate::log_capture::LogCapture;
 
 // ---------------------------------------------------------------------------
 // 공용 도구: 구상 서점 생성, 세션 대역, 결과 행
@@ -510,28 +504,20 @@ impl SoupSource for DivSoup {
     }
 }
 
-// ---------------------------------------------------------------------------
-// class TestBookstore(unittest.TestCase)
-// ---------------------------------------------------------------------------
+#[test]
+fn test_yes24_extract() {
+    let store = yes24(false);
+    let html = "<html><h2 class='gd_name'>Title</h2><span class='gd_auth'>Author</span></html>";
+    let info = store.extract_book_info(html);
+    assert_eq!(info["title"], "Title");
+}
 
-mod test_bookstore {
-    use super::*;
-
-    #[test]
-    fn test_yes24_extract() {
-        let store = yes24(false);
-        let html = "<html><h2 class='gd_name'>Title</h2><span class='gd_auth'>Author</span></html>";
-        let info = store.extract_book_info(html);
-        assert_eq!(info["title"], "Title");
-    }
-
-    #[test]
-    fn test_aladin_extract() {
-        let store = aladin(false);
-        let html = "<html><title>Title | Author | Aladin</title></html>";
-        let info = store.extract_book_info(html);
-        assert_eq!(info["title"], "Title");
-    }
+#[test]
+fn test_aladin_extract() {
+    let store = aladin(false);
+    let html = "<html><title>Title | Author | Aladin</title></html>";
+    let info = store.extract_book_info(html);
+    assert_eq!(info["title"], "Title");
 }
 
 // ---- merged from test_bookstore_extra_branches.py ----
@@ -2554,124 +2540,112 @@ fn test_bookstore_default_max_results_is_four() {
     assert_eq!(titles, ["작품 1", "작품 2", "작품 3", "작품 4"]);
 }
 
-// ---------------------------------------------------------------------------
-// 새 테스트 (Python 원본에 없음): 조아라 API 키 환경 변수, 캐시 파일 이름
-// 키는 소스에 두지 않고 `TM_JOARA_API_KEY`에서 읽는다. 아래 값은 모두 더미다.
-// ---------------------------------------------------------------------------
+const DUMMY_KEY: &str = "dummy-joara-key-0000";
 
-mod added_joara_key_and_cache_name {
-    use super::*;
-    use crate::env_helpers::{EnvGuard, empty_env, map_env};
-    use crate::log_capture::LogCapture;
-    use std::sync::Arc;
+fn ok_payload() -> Value {
+    json!({"status": 1, "data": {"list": [{"book_code": 1, "subject": "데미안", "member_name": "A", "category_name": "C"}]}})
+}
 
-    const DUMMY_KEY: &str = "dummy-joara-key-0000";
+#[test]
+fn test_joara_api_key_is_sent_from_injected_env() {
+    let (fake, calls) = session(|_, _| http(200, "", ok_payload()));
+    let store = joara(false).with_env(Arc::new(map_env(&[("TM_JOARA_API_KEY", DUMMY_KEY)]))).with_session(fake);
+    assert_eq!(store.search_by_keyword("데미안").len(), 1);
 
-    fn ok_payload() -> Value {
-        json!({"status": 1, "data": {"list": [{"book_code": 1, "subject": "데미안", "member_name": "A", "category_name": "C"}]}})
-    }
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls[0].url, "https://api.joara.com/v2/search/query");
+    assert_eq!(calls[0].params["api_key"], DUMMY_KEY);
+    assert_eq!(calls[0].params["query"], "데미안");
+    assert_eq!(calls[0].params["offset"], "4");
+    let uid = &calls[0].params["deviceuid"];
+    assert!(uid.len() == 32 && uid.bytes().all(|b| b.is_ascii_hexdigit()), "deviceuid는 32자리 16진수");
+}
 
-    #[test]
-    fn test_joara_api_key_is_sent_from_injected_env() {
-        let (fake, calls) = session(|_, _| http(200, "", ok_payload()));
-        let store = joara(false).with_env(Arc::new(map_env(&[("TM_JOARA_API_KEY", DUMMY_KEY)]))).with_session(fake);
-        assert_eq!(store.search_by_keyword("데미안").len(), 1);
+#[test]
+fn test_joara_device_uid_changes_per_call() {
+    let (fake, calls) = session(|_, _| http(200, "", ok_payload()));
+    let store = joara(false).with_env(Arc::new(empty_env())).with_session(fake);
+    store.search_by_keyword("a");
+    store.search_by_keyword("a");
+    let calls = calls.lock().unwrap();
+    assert_ne!(calls[0].params["deviceuid"], calls[1].params["deviceuid"]);
+}
 
-        let calls = calls.lock().unwrap();
-        assert_eq!(calls[0].url, "https://api.joara.com/v2/search/query");
-        assert_eq!(calls[0].params["api_key"], DUMMY_KEY);
-        assert_eq!(calls[0].params["query"], "데미안");
-        assert_eq!(calls[0].params["offset"], "4");
-        let uid = &calls[0].params["deviceuid"];
-        assert!(uid.len() == 32 && uid.bytes().all(|b| b.is_ascii_hexdigit()), "deviceuid는 32자리 16진수");
-    }
+#[test]
+fn test_joara_api_key_is_empty_when_env_missing() {
+    let (fake, calls) = session(|_, _| http(200, "", ok_payload()));
+    let store = joara(false).with_env(Arc::new(empty_env())).with_session(fake);
+    store.search_by_keyword("데미안");
+    assert_eq!(calls.lock().unwrap()[0].params["api_key"], "");
+}
 
-    #[test]
-    fn test_joara_device_uid_changes_per_call() {
-        let (fake, calls) = session(|_, _| http(200, "", ok_payload()));
-        let store = joara(false).with_env(Arc::new(empty_env())).with_session(fake);
-        store.search_by_keyword("a");
-        store.search_by_keyword("a");
-        let calls = calls.lock().unwrap();
-        assert_ne!(calls[0].params["deviceuid"], calls[1].params["deviceuid"]);
-    }
+#[test]
+fn test_joara_default_env_reads_process_environment() {
+    let mut env = EnvGuard::new();
+    env.set("TM_JOARA_API_KEY", DUMMY_KEY);
+    let (fake, calls) = session(|_, _| http(200, "", ok_payload()));
+    let store = joara(false).with_session(fake);
+    store.search_by_keyword("a");
+    assert_eq!(calls.lock().unwrap()[0].params["api_key"], DUMMY_KEY);
 
-    #[test]
-    fn test_joara_api_key_is_empty_when_env_missing() {
-        let (fake, calls) = session(|_, _| http(200, "", ok_payload()));
-        let store = joara(false).with_env(Arc::new(empty_env())).with_session(fake);
-        store.search_by_keyword("데미안");
-        assert_eq!(calls.lock().unwrap()[0].params["api_key"], "");
-    }
+    env.remove("TM_JOARA_API_KEY");
+    store.search_by_keyword("a");
+    assert_eq!(calls.lock().unwrap()[1].params["api_key"], "");
+}
 
-    #[test]
-    fn test_joara_default_env_reads_process_environment() {
-        let mut env = EnvGuard::new();
-        env.set("TM_JOARA_API_KEY", DUMMY_KEY);
-        let (fake, calls) = session(|_, _| http(200, "", ok_payload()));
-        let store = joara(false).with_session(fake);
-        store.search_by_keyword("a");
-        assert_eq!(calls.lock().unwrap()[0].params["api_key"], DUMMY_KEY);
+/// 세션 오류 문장이나 API 메시지에 키가 들어 와도 로그에는 가려서 남긴다.
+#[test]
+fn test_joara_logs_and_errors_do_not_contain_key() {
+    let logs = LogCapture::start(log::Level::Trace);
+    let env = || Arc::new(map_env(&[("TM_JOARA_API_KEY", DUMMY_KEY)]));
 
-        env.remove("TM_JOARA_API_KEY");
-        store.search_by_keyword("a");
-        assert_eq!(calls.lock().unwrap()[1].params["api_key"], "");
-    }
+    // 요청 실패: 오류 문장에 요청 주소(키 포함)가 들어 있는 경우
+    let leaky = session(|_, params| {
+        let key = params.iter().find(|(k, _)| k == "api_key").map(|(_, v)| v.clone()).unwrap_or_default();
+        Err(HttpError::Connection(format!("GET https://api.joara.com/v2/search/query?api_key={key} 실패")))
+    })
+    .0;
+    let mut store = joara(true).with_env(env()).with_session(leaky);
+    assert!(store.search_by_keyword("데미안").is_empty());
 
-    /// 세션 오류 문장이나 API 메시지에 키가 들어 와도 로그에는 가려서 남긴다.
-    #[test]
-    fn test_joara_logs_and_errors_do_not_contain_key() {
-        let logs = LogCapture::start(log::Level::Trace);
-        let env = || Arc::new(map_env(&[("TM_JOARA_API_KEY", DUMMY_KEY)]));
+    // status != 1: 메시지에 키가 들어 있는 경우
+    let message = format!("잘못된 키 {DUMMY_KEY}");
+    store = store.with_session(constant(200, "", json!({"status": 0, "message": message})));
+    assert!(store.search_by_keyword("데미안").is_empty());
 
-        // 요청 실패: 오류 문장에 요청 주소(키 포함)가 들어 있는 경우
-        let leaky = session(|_, params| {
-            let key = params.iter().find(|(k, _)| k == "api_key").map(|(_, v)| v.clone()).unwrap_or_default();
-            Err(HttpError::Connection(format!("GET https://api.joara.com/v2/search/query?api_key={key} 실패")))
-        })
-        .0;
-        let mut store = joara(true).with_env(env()).with_session(leaky);
-        assert!(store.search_by_keyword("데미안").is_empty());
+    // 성공과 HTTP 오류 경로
+    store = store.with_session(constant(200, "", ok_payload()));
+    assert_eq!(store.search_by_keyword("데미안").len(), 1);
+    store = store.with_session(constant(500, "", json!({})));
+    assert!(store.search_by_keyword("데미안").is_empty());
 
-        // status != 1: 메시지에 키가 들어 있는 경우
-        let message = format!("잘못된 키 {DUMMY_KEY}");
-        store = store.with_session(constant(200, "", json!({"status": 0, "message": message})));
-        assert!(store.search_by_keyword("데미안").is_empty());
+    let text = logs.text();
+    assert!(!text.is_empty(), "verbose 로그가 남아야 한다");
+    assert!(!text.contains(DUMMY_KEY), "로그에 키가 나오면 안 된다: {text}");
+    assert!(text.contains("****"), "가린 자리가 보여야 한다: {text}");
+}
 
-        // 성공과 HTTP 오류 경로
-        store = store.with_session(constant(200, "", ok_payload()));
-        assert_eq!(store.search_by_keyword("데미안").len(), 1);
-        store = store.with_session(constant(500, "", json!({})));
-        assert!(store.search_by_keyword("데미안").is_empty());
+#[test]
+fn test_joara_log_without_key_keeps_message() {
+    let logs = LogCapture::start(log::Level::Trace);
+    let store = joara(true).with_env(Arc::new(empty_env())).with_session(failing());
+    assert!(store.search_by_keyword("데미안").is_empty());
+    assert!(logs.text().contains("boom"));
+}
 
-        let text = logs.text();
-        assert!(!text.is_empty(), "verbose 로그가 남아야 한다");
-        assert!(!text.contains(DUMMY_KEY), "로그에 키가 나오면 안 된다: {text}");
-        assert!(text.contains("****"), "가린 자리가 보여야 한다: {text}");
-    }
+/// Python `uuid.uuid5(uuid.NAMESPACE_URL, url)`와 같은 이름이어야 기존 캐시 파일을 이어 쓴다.
+#[test]
+fn test_cache_file_name_matches_python_uuid5() {
+    assert_eq!(bookstore::store_clients::cache_file_name("https://example.com/detail/1"), "2c75ebbd-c7d8-5945-b588-d1286cf77aee.html");
+    assert_eq!(bookstore::store_clients::cache_file_name("http://example.com/detail/123"), "0a5f1021-24ca-5315-aa3e-96a26387cd63.html");
+    assert_eq!(bookstore::store_clients::cache_file_name(""), "1b4db7eb-4057-5ddf-91e0-36dec72071f5.html");
+}
 
-    #[test]
-    fn test_joara_log_without_key_keeps_message() {
-        let logs = LogCapture::start(log::Level::Trace);
-        let store = joara(true).with_env(Arc::new(empty_env())).with_session(failing());
-        assert!(store.search_by_keyword("데미안").is_empty());
-        assert!(logs.text().contains("boom"));
-    }
-
-    /// Python `uuid.uuid5(uuid.NAMESPACE_URL, url)`와 같은 이름이어야 기존 캐시 파일을 이어 쓴다.
-    #[test]
-    fn test_cache_file_name_matches_python_uuid5() {
-        assert_eq!(bookstore::store_clients::cache_file_name("https://example.com/detail/1"), "2c75ebbd-c7d8-5945-b588-d1286cf77aee.html");
-        assert_eq!(bookstore::store_clients::cache_file_name("http://example.com/detail/123"), "0a5f1021-24ca-5315-aa3e-96a26387cd63.html");
-        assert_eq!(bookstore::store_clients::cache_file_name(""), "1b4db7eb-4057-5ddf-91e0-36dec72071f5.html");
-    }
-
-    #[test]
-    fn test_save_html_writes_uuid5_named_file() {
-        let tmp = TempDir::new().unwrap();
-        let store = yes24(false).with_tmp_dir(tmp.path().to_path_buf());
-        store._save_html_to_tmp("<html>x</html>", "https://example.com/detail/1");
-        let written = fs::read_to_string(tmp.path().join("2c75ebbd-c7d8-5945-b588-d1286cf77aee.html")).unwrap();
-        assert_eq!(written, "<html>x</html>");
-    }
+#[test]
+fn test_save_html_writes_uuid5_named_file() {
+    let tmp = TempDir::new().unwrap();
+    let store = yes24(false).with_tmp_dir(tmp.path().to_path_buf());
+    store._save_html_to_tmp("<html>x</html>", "https://example.com/detail/1");
+    let written = fs::read_to_string(tmp.path().join("2c75ebbd-c7d8-5945-b588-d1286cf77aee.html")).unwrap();
+    assert_eq!(written, "<html>x</html>");
 }

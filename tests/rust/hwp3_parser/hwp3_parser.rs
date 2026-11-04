@@ -1,11 +1,9 @@
-//! HWP V3.00/V2.10/V2.00 텍스트 추출기 테스트 (tests/test_hwp3_parser.py 이식).
-
 use std::fs;
 use std::io::Write;
-
 use flate2::Compression;
 use flate2::write::DeflateEncoder;
 use hwp3_parser::*;
+use hwp3_parser::tables::{HNC2UNI, KSC5601_TO_UNI};
 
 fn le16(v: u16) -> Vec<u8> {
     v.to_le_bytes().to_vec()
@@ -517,4 +515,33 @@ fn lone_surrogate_codes_do_not_split_bruteforce_runs() {
     file.extend(vec![0u8; 1008]);
     file.extend(body);
     assert_eq!(extract_bytes(&file), "Hello there  World Test");
+}
+
+#[test]
+fn table_ranges_use_ksc5601_and_hnc2uni() {
+    let known = HNC2UNI.iter().map(|(k, _)| *k).find(|k| (0x7F..=0x3FFF).contains(k)).unwrap();
+    assert!(hnc_to_unicode(known).chars().count() <= 1);
+    let high = HNC2UNI.iter().map(|(k, _)| *k).find(|k| (0x5318..=0x7FFF).contains(k)).unwrap();
+    assert!(hnc_to_unicode(high).chars().count() <= 1);
+    let unknown = (0x80u16..0x200).find(|c| HNC2UNI.binary_search_by_key(c, |(k, _)| *k).is_err()).unwrap();
+    assert_eq!(hnc_to_unicode(unknown), "");
+    if let Some(i) = KSC5601_TO_UNI.iter().position(|v| *v == 0) {
+        assert_eq!(hnc_to_unicode(0x4000 + i as u16), "");
+    }
+    let mapped = KSC5601_TO_UNI.iter().position(|v| *v != 0).unwrap();
+    assert_eq!(hnc_to_unicode(0x4000 + mapped as u16), char::from_u32(u32::from(KSC5601_TO_UNI[mapped])).unwrap().to_string());
+}
+
+#[test]
+fn bruteforce_flushes_runs_at_unknown_and_control_codes() {
+    let mut a = codes("Hello World Test");
+    let unknown = (0x100u16..0x400).find(|c| HNC2UNI.binary_search_by_key(c, |(k, _)| *k).is_err()).unwrap();
+    a.push(unknown);
+    a.extend(codes("Second Readable Run"));
+    let out = extract_text_bruteforce(&pack(&a));
+    assert_eq!(out, "Hello World Test\nSecond Readable Run");
+    let mut b = codes("Hello World Test");
+    b.push(4);
+    b.extend(codes("After Control Code"));
+    assert_eq!(extract_text_bruteforce(&pack(&b)), "Hello World Test\nAfter Control Code");
 }

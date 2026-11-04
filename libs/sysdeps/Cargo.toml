@@ -31,3 +31,7 @@ path = "../../tests/rust/sysdeps/sysdeps.rs"
 [[test]]
 name = "timeout_runner"
 path = "../../tests/rust/sysdeps/timeout_runner.rs"
+
+[[test]]
+name = "pdf_worker_client"
+path = "../../tests/rust/sysdeps/pdf_worker_client.rs"

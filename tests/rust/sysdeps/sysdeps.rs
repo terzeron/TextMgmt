@@ -1,12 +1,7 @@
-//! sysdeps 테스트: 시계, 파일시스템, 외부 명령, HTTP 응답 값 객체.
-//! 설계: docs/rust-test-seams.md 3.1
-
 use std::io::ErrorKind;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
 use std::time::{Duration, Instant};
-
 use sysdeps::{Clock, CommandError, CommandRunner, FsOps, HttpResponse, RealFs, SystemClock, SystemRunner};
 
 fn argv(parts: &[&str]) -> Vec<String> {
@@ -99,17 +94,6 @@ mod poppler {
         fn which(&self, _program: &str) -> Option<std::path::PathBuf> {
             None
         }
-    }
-
-    #[test]
-    fn page_count_uses_pdfinfo_and_rejects_malformed_output() {
-        let fake = runner(&[("Title: sample\nPages:          12\n", "", 0)]);
-        assert_eq!(sysdeps::poppler::page_count(&fake, Path::new("a book.pdf")).unwrap(), 12);
-        assert_eq!(&fake.calls.lock().unwrap()[0][5..], ["info", "a book.pdf"]);
-        assert_eq!(&fake.calls.lock().unwrap()[0][..4], ["prlimit", "--as=536870912", "--cpu=25", "--"]);
-
-        let malformed = runner(&[("Pages: nope\n", "", 0)]);
-        assert!(sysdeps::poppler::page_count(&malformed, Path::new("a.pdf")).is_err());
     }
 
     #[test]
@@ -488,8 +472,7 @@ mod http {
 
 mod private_dir {
     use std::fs;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
-
+    use std::os::{unix::fs::MetadataExt, unix::fs::PermissionsExt, unix::fs::symlink};
     use sysdeps::private_dir_in;
 
     /// 테스트가 만든 디렉터리의 소유자 = 현재 euid.

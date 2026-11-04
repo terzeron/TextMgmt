@@ -1,9 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
 use trainer::{CliIo, Deps, main_with};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tempfile::TempDir;
 
 fn fixture() -> PathBuf {
@@ -635,4 +634,16 @@ fn reclassify_limits_skips_refused_and_reports_move_failure() {
     assert_eq!(code, 0, "Python CLI returns success after reporting per-file move failures: {err}");
     assert!(out.contains("실패 2건"));
     assert!(source.join("a.txt").exists());
+}
+
+#[test]
+fn every_command_prints_help_and_no_args_fail_like_python() {
+    let deps = Deps::system();
+    for command in trainer::commands() {
+        let (code, out, err) = run(&[command, "--help"], &deps);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains(command));
+    }
+    assert_eq!(run(&[], &deps).0, 1);
+    assert_eq!(run(&["-v"], &deps).0, 1);
 }

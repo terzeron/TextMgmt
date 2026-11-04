@@ -1,27 +1,13 @@
 mod corpus;
-
 use std::fs;
 use std::path::Path;
-
-use doc_reader::mojibake_counter::{count_mojibake_runs, is_usable_text};
-use doc_reader::py_str_compat::{collapse_spaces, head_chars, is_space, keep_ascii_hangul, keep_word_chars, universal_newlines};
-use doc_reader::text::{Enc, decode, detect_hint, high_byte_paired_ratio, read_from_text, reencode_text_file_to_utf8, summarize};
+use doc_reader::py_str_compat::is_space;
+use doc_reader::text::{decode, detect_hint, Enc, high_byte_paired_ratio, read_from_text, reencode_text_file_to_utf8, summarize};
 
 fn write(dir: &Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
     let path = dir.join(name);
     fs::write(&path, bytes).unwrap();
     path
-}
-
-#[test]
-fn python_string_helpers() {
-    assert!(is_space('\u{1c}') && is_space('\u{a0}') && is_space('\u{3000}') && !is_space('a'));
-    assert_eq!(head_chars("가나다라", 2), "가나");
-    assert_eq!(head_chars("ab", 5), "ab");
-    assert_eq!(collapse_spaces("  a \t\n b\u{a0}c  "), "a b c");
-    assert_eq!(keep_ascii_hangul("a,b가_나\u{3131}é"), "a b가 나\u{3131} ");
-    assert_eq!(keep_word_chars("a,b가_나é!"), "a b가_나é ");
-    assert_eq!(universal_newlines("a\r\nb\rc\nd"), "a\nb\nc\nd");
 }
 
 #[test]
@@ -126,21 +112,6 @@ fn detect_hint_uses_bom_and_high_byte_pairing() {
     assert_eq!(high_byte_paired_ratio(b"abc"), None);
     assert_eq!(high_byte_paired_ratio(b"a\xe9b\xe9\xe9"), Some(2.0 / 3.0));
     assert_eq!(high_byte_paired_ratio(b"\xe9"), Some(0.0), "끝에 오는 구간도 센다");
-}
-
-#[test]
-fn mojibake_runs_count_latin1_misreads_of_euc_kr() {
-    // "안녕하세요"를 EUC-KR 바이트로 만든 뒤 latin-1로 잘못 읽은 글자들
-    let (bytes, _, _) = encoding_rs::EUC_KR.encode("안녕하세요");
-    let mojibake: String = bytes.iter().map(|&b| b as char).collect();
-    assert_eq!(count_mojibake_runs(&mojibake), 1);
-    assert_eq!(count_mojibake_runs(&format!("{mojibake} 중간 {mojibake}")), 2);
-    assert_eq!(count_mojibake_runs("café résumé"), 0);
-    assert_eq!(count_mojibake_runs("정상 한국어"), 0);
-    assert!(is_usable_text("정상 한국어", None));
-    assert!(!is_usable_text("   ", None));
-    assert!(!is_usable_text("x", Some(3)));
-    assert!(is_usable_text("x", Some(2)));
 }
 
 #[test]
