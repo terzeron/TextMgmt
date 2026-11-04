@@ -2,7 +2,17 @@
 //! Python 테스트는 대표 사례만 확인한다. 여기서는 실행 가능한 구성요소가 출력에 남지 않는다는 보장을 여러 우회 형태로 확인한다.
 //! 출력은 서버가 `Content-Security-Policy: sandbox`와 함께 내려주지만, sanitizer 자체도 실행 가능한 요소를 남기면 안 된다.
 
-use backend::book_manager::BookManager;
+#[path = "../common/mod.rs"]
+mod common;
+use backend::book_manager::{BookManager, BookManagerDeps};
+use std::{fs, io};
+use std::os::unix::fs::symlink;
+use std::path::Path;
+use std::sync::Arc;
+use backend::main::{BookResponse};
+use common::es_fake::FakeEsManager;
+use serde_json::{json, Value};
+use tempfile::TempDir;
 
 const BASE: &str = "/api/books/1/html-resource";
 
@@ -212,4 +222,223 @@ fn ordinary_book_markup_survives() {
         assert!(out.contains(text), "{text} 이(가) 사라졌다: {out}");
     }
     assert_eq!(danger(&out), None);
+}
+
+// ---------------------------------------------------------------------------
+// 공용 헬퍼 (전반부 정의를 복사)
+// ---------------------------------------------------------------------------
+
+/// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
+fn tmp_dir() -> TempDir {
+    tempfile::tempdir().unwrap()
+}
+
+/// `asyncio.run(coro)`에 대응한다. 동기 테스트 안에서 future를 끝까지 돌린다.
+fn asyncio_runner<F: std::future::Future>(fut: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
+}
+
+/// 기본 구성의 `BookManagerDeps`. `with_*`를 더 붙인 뒤 `BookManager::with_deps`로 만든다.
+fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
+    common::setup_env();
+    BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
+}
+
+fn make_manager(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManager {
+    BookManager::with_deps(deps(tmp_path, es))
+}
+
+fn make_doc(rel_path: &str, file_type: &str) -> Value {
+    json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
+}
+
+/// `BookResponse` 읽기 도우미(테스트 로컬). `is_file`은 본문이 있으면 참이다(파일을 읽어 담은 응답).
+trait ResponseExt {
+    fn header(&self, name: &str) -> Option<&str>;
+    fn is_file(&self) -> bool;
+}
+
+impl ResponseExt for BookResponse {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+    }
+
+    fn is_file(&self) -> bool {
+        !self.body.is_empty()
+    }
+}
+
+#[test]
+fn test_get_html_resource_allows_local_whitelisted_files_only() {
+    let tmp = tmp_dir();
+    let tmp_path = tmp.path();
+    fs::create_dir_all(tmp_path.join("A")).unwrap();
+    let html_file = tmp_path.join("A").join("test.html");
+    fs::write(&html_file, "<html></html>").unwrap();
+    let css_file = tmp_path.join("A").join("style.css");
+    fs::write(&css_file, "body{}").unwrap();
+    let doc = make_doc("A/test.html", "html");
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp_path, &es);
+    es.set_doc(Some(doc));
+
+    let resp = asyncio_runner(manager.get_html_resource(1, "style.css"));
+    assert!(resp.is_file());
+    assert_eq!(resp.status_code, 200);
+    assert!(resp.header("content-security-policy").expect("csp").starts_with("sandbox;"));
+    assert_eq!(resp.header("x-content-type-options"), Some("nosniff"));
+
+    let bad = asyncio_runner(manager.get_html_resource(1, "../secret.txt"));
+    assert_eq!(bad.status_code, 400);
+
+    let unsupported = tmp_path.join("A").join("script.js");
+    fs::write(&unsupported, "alert(1)").unwrap();
+    let resp2 = asyncio_runner(manager.get_html_resource(1, "script.js"));
+    assert_eq!(resp2.status_code, 400);
+}
+
+#[test]
+fn test_svg_download_blocks_active_content() {
+    for name in ["untrusted.svg", "untrusted.SVG", "한글 표지.svg"] {
+        let (media_type, headers) = BookManager::file_response_meta(Path::new(name));
+        assert_eq!(media_type, "image/svg+xml");
+        let header = |name: &str| headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str());
+        assert!(header("Content-Disposition").is_some_and(|v| v.starts_with("attachment;")));
+        assert!(header("Content-Security-Policy").is_some_and(|v| v.starts_with("sandbox;") && v.contains("script-src 'none'")));
+        assert_eq!(header("X-Content-Type-Options"), Some("nosniff"));
+    }
+}
+
+// ── _sanitize_html_for_viewer: external src 속성 제거 (line 116) ─────────────
+
+#[test]
+fn test_sanitize_html_external_src_attribute_removed() {
+    // 외부 URL src 는 _build_html_resource_url 이 None 을 반환하므로 속성이 제거된다.
+    let html = r#"<html><body><img src="http://external.com/img.png"></body></html>"#;
+    let result = BookManager::_sanitize_html_for_viewer(html, "/base");
+    let soup = scraper::Html::parse_document(&result);
+    let sel = scraper::Selector::parse("img").unwrap();
+    let img = soup.select(&sel).next();
+    assert!(img.is_none() || img.unwrap().value().attr("src").is_none());
+}
+
+#[test]
+fn test_empty_string_returns_none() {
+    assert_eq!(BookManager::_build_html_resource_url("/base", ""), None);
+}
+
+#[test]
+fn test_whitespace_only_returns_none() {
+    assert_eq!(BookManager::_build_html_resource_url("/base", "   "), None);
+}
+
+#[test]
+fn test_data_uri_returned_as_is() {
+    let uri = "data:image/png;base64,abc123";
+    assert_eq!(BookManager::_build_html_resource_url("/base", uri), Some(uri.to_string()));
+}
+
+#[test]
+fn test_blob_uri_returned_as_is() {
+    let uri = "blob:http://example.com/uuid";
+    assert_eq!(BookManager::_build_html_resource_url("/base", uri), Some(uri.to_string()));
+}
+
+#[test]
+fn test_external_http_url_returns_none() {
+    assert_eq!(BookManager::_build_html_resource_url("/base", "http://external.com/img.png"), None);
+}
+
+#[test]
+fn test_protocol_relative_url_returns_none() {
+    assert_eq!(BookManager::_build_html_resource_url("/base", "//cdn.example.com/img.png"), None);
+}
+
+#[test]
+fn test_missing_required_es_fields_returns_server_error() {
+    let tmp = tmp_dir();
+    let html = tmp.path().join("A/book.html");
+    fs::create_dir_all(html.parent().unwrap()).unwrap();
+    fs::write(&html, "<html/>").unwrap();
+    fs::write(html.parent().unwrap().join("style.css"), "body{}").unwrap();
+
+    let mut doc = make_doc("A/book.html", "html");
+    doc.as_object_mut().unwrap().remove("category");
+    let manager = make_manager(tmp.path(), &FakeEsManager::with_doc(doc));
+    let resp = asyncio_runner(manager.get_html_resource(1, "style.css"));
+
+    assert_eq!(resp.status_code, 500);
+}
+
+#[test]
+fn test_book_not_found_returns_404() {
+    // ES 에 책이 없으면 404 (line 859).
+    let tmp = tmp_dir();
+    let manager = make_manager(tmp.path(), &FakeEsManager::new());
+    let resp = asyncio_runner(manager.get_html_resource(99, "image.jpg"));
+    assert_eq!(resp.status_code, 404);
+}
+
+#[test]
+fn test_non_html_file_returns_400() {
+    // HTML 이 아닌 파일(.epub)은 400 (line 862).
+    let tmp = tmp_dir();
+    let doc = make_doc("A/book.epub", "epub");
+    let manager = make_manager(tmp.path(), &FakeEsManager::with_doc(doc));
+    let resp = asyncio_runner(manager.get_html_resource(1, "image.jpg"));
+    assert_eq!(resp.status_code, 400);
+}
+
+#[test]
+fn test_path_traversal_via_symlink_returns_400() {
+    // html_dir 밖을 가리키는 심볼릭 링크는 400 (line 872).
+    let tmp = tmp_dir();
+    let tmp_path = tmp.path();
+    let html_file = tmp_path.join("A").join("book.html");
+    fs::create_dir_all(html_file.parent().unwrap()).unwrap();
+    fs::write(&html_file, "<html/>").unwrap();
+
+    // html_dir 밖 파일을 가리키는 심볼릭 링크 생성
+    let outside = tmp_path.join("secret.jpg");
+    fs::File::create(&outside).unwrap();
+    let link = html_file.parent().unwrap().join("evil.jpg");
+    symlink(&outside, &link).unwrap();
+
+    let doc = make_doc("A/book.html", "html");
+    let manager = make_manager(tmp_path, &FakeEsManager::with_doc(doc));
+    let resp = asyncio_runner(manager.get_html_resource(1, "evil.jpg"));
+    assert_eq!(resp.status_code, 400);
+}
+
+#[test]
+fn test_resource_file_not_found_returns_404() {
+    // html_dir 내 존재하지 않는 리소스는 404 (line 876).
+    let tmp = tmp_dir();
+    let tmp_path = tmp.path();
+    let html_file = tmp_path.join("A").join("book.html");
+    fs::create_dir_all(html_file.parent().unwrap()).unwrap();
+    fs::write(&html_file, "<html/>").unwrap();
+
+    let doc = make_doc("A/book.html", "html");
+    let manager = make_manager(tmp_path, &FakeEsManager::with_doc(doc));
+    let resp = asyncio_runner(manager.get_html_resource(1, "nonexistent.jpg"));
+    assert_eq!(resp.status_code, 404);
+}
+
+#[test]
+fn test_is_relative_to_oserror_returns_400() {
+    // is_relative_to 가 OSError 를 던지면 400 (lines 873-874).
+    let tmp = tmp_dir();
+    let tmp_path = tmp.path();
+    let html_file = tmp_path.join("A").join("book.html");
+    fs::create_dir_all(html_file.parent().unwrap()).unwrap();
+    fs::write(&html_file, "<html/>").unwrap();
+    fs::File::create(html_file.parent().unwrap().join("image.jpg")).unwrap();
+
+    // 가정한 seam: 경로 포함 관계 검사(is_relative_to)를 실패시키는 훅. 문서에 없는 seam이다(파일 머리말 참고).
+    let doc = make_doc("A/book.html", "html");
+    let es = FakeEsManager::with_doc(doc);
+    let manager = BookManager::with_deps(deps(tmp_path, &es).with_path_is_relative_to(Arc::new(|_path, _other| Err(io::Error::other("path too long")))));
+    let resp = asyncio_runner(manager.get_html_resource(1, "image.jpg"));
+    assert_eq!(resp.status_code, 400);
 }

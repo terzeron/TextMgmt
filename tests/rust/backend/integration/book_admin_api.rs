@@ -1,16 +1,12 @@
 #[path = "../common/mod.rs"]
 mod common;
-
-use backend::{
-    book_manager::{BookManager, BookManagerDeps},
-    main::{AppDeps, AuthMode, BookManagerApi, CategoryMappingApi, MappingError, app_with},
-};
-use common::{TestClient, es_fake::FakeEsManager};
-use serde_json::{Value, json};
-use std::{
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-};
+use backend::book_manager::{BookManager, BookManagerDeps};
+use backend::main::{app_with, AppDeps, AuthMode, BookManagerApi, CategoryMappingApi, MappingError};
+use common::TestClient;
+use common::es_fake::FakeEsManager;
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct Policy(Mutex<Vec<Value>>);
@@ -191,4 +187,25 @@ async fn real_update_rejects_a_destination_outside_the_library() {
     assert_eq!(response.json(), json!({"status":"failure","error":"잘못된 경로입니다"}));
     assert_eq!(std::fs::read(&target).unwrap(), b"keep");
     assert!(es.calls_of("delete").is_empty());
+}
+
+#[tokio::test]
+async fn admin_operations_reject_real_viewer_token_before_touching_managers() {
+    common::setup_env();
+    // 같은 바이너리의 auth 테스트가 TM_JWT_SECRET 등을 잠깐 바꾼다. 바꾸는 동안 토큰을 만들지 않게 읽기 잠금을 쥔다.
+    let _env = common::env::EnvGuard::read();
+    let token = backend::auth_service::create_jwt_token("viewer@test.com", "viewer", None, None);
+    let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies))).bearer(&token);
+    for prefix in ["", "/comics"] {
+        for (method, path, body) in [
+            (axum::http::Method::PUT, "/books/1", doc()),
+            (axum::http::Method::DELETE, "/books/1", Value::Null),
+            (axum::http::Method::PUT, "/categories/rename", json!({"old_category":"A","new_category":"B"})),
+            (axum::http::Method::POST, "/categories/delete", json!({"category":"A"})),
+            (axum::http::Method::GET, "/category-delete-preview?category=A", Value::Null),
+            (axum::http::Method::GET, "/category-pdf-stats?category=A", Value::Null),
+        ] {
+            assert_eq!(client.request(method, &format!("{prefix}{path}"), Some("application/json"), serde_json::to_vec(&body).unwrap()).await.status, 403, "{prefix}{path}");
+        }
+    }
 }

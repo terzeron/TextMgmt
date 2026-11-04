@@ -1,32 +1,27 @@
 mod common;
 #[path = "common/cover_fixtures.rs"]
 mod cover_fixtures;
-
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-
 use backend::book_manager::{BookManager, Thumbnailer};
 use backend::cover_management::{ApplyImageModel, Backup, CoverHooks, CoverManagement, EpubThumbnailer};
-use backend::cover_sources::{STORES, SearchError, SearchHooks};
+use backend::cover_sources::{SearchError, SearchHooks, STORES};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
-use backend::epub_cover::{self, CoverError, EpubCoverHooks, Limits, MAX_IMAGE_BYTES};
-use common::{
-    clock::{Event, FakeClock},
-    epub::{BODY, EpubSpec, append_child, attr_of_element_with_id, count_elements, make_epub, remove_element},
-    es_dummy,
-    faulty_fs::{FaultyFs, other_err},
-    fsx::{count_matching, files_under, ino_mtime, sha256_hex, touch},
-    image::{BLUE, RED, b64, encode_image, image_size, red_jpeg},
-    log_capture::LogCapture,
-    zipx::{member_names, read_zip_entry, rewrite_epub_members},
-};
+use backend::epub_cover;
+use backend::epub_cover::{CoverError, EpubCoverHooks, Limits, MAX_IMAGE_BYTES};
+use common::clock::{Event, FakeClock};
+use common::epub::{EpubSpec, make_epub};
+use common::es_dummy;
+use common::fsx::{files_under, ino_mtime, sha256_hex, touch};
+use common::image::{b64, BLUE, encode_image, red_jpeg};
+use common::log_capture::LogCapture;
+use common::zipx::rewrite_epub_members;
 use cover_fixtures::cached_candidates;
 use image::ImageFormat;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 fn read(path: &Path) -> Vec<u8> {
     std::fs::read(path).unwrap()
@@ -51,10 +46,6 @@ fn not_found(_store: &str, _metadata: &Value) -> Result<Value, SearchError> {
 
 fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
     value[key].as_str().unwrap()
-}
-
-fn opf_of(path: &Path) -> Vec<u8> {
-    read_zip_entry(path, "OPS/book.opf")
 }
 
 // TODO(common): `es_dummy::truthy(Option<&Value>)`를 `&Value`로 받는 얇은 래퍼. cover_fixtures::truthy를 대신한다.
@@ -252,44 +243,6 @@ fn test_apply_image_payload_limit_is_validated_before_decoding() {
 }
 
 #[test]
-fn test_cover_replacement_preserves_content_and_has_one_generated_cover() {
-    for version in ["2.0", "3.0"] {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let path = make_epub(&root.join("book.epub"), &EpubSpec::cover(version, false));
-        let stat = ino_mtime(&path);
-        let first = epub_cover::add_cover(&path, &red_jpeg(), &rev(&path), &backups(root), false).unwrap();
-        let mut before = read(&path);
-        // 600px 축소 경로만 지나면 된다. 크게 만들면 디버그 빌드에서 Lanczos 축소가 수 초씩 걸린다.
-        let png = encode_image(900, 1350, BLUE, ImageFormat::Png);
-        let mut plates: Vec<usize> = Vec::new();
-        let mut result = Value::Null;
-        for data in [png.clone(), png.clone(), red_jpeg()] {
-            result = epub_cover::add_cover(&path, &data, &rev(&path), &backups(root), true).unwrap();
-            assert_eq!(read(Path::new(str_of(&result, "backup_path"))), before, "version={version}");
-            assert_eq!(ino_mtime(&path), stat, "version={version}");
-            let mut archive = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
-            let member = BookManager::find_epub_cover_member(&mut archive).unwrap();
-            drop(archive);
-            assert_eq!(read_zip_entry(&path, &member), epub_cover::normalize_image(&data, Some(600)).unwrap(), "version={version}");
-            let names = member_names(&path);
-            assert_eq!(names.iter().filter(|name| name.contains("tm-cover-")).count(), 2, "version={version}");
-            // 표지 페이지와 본문 1쪽에, 교체로 밀려난 이전 표지가 도판 페이지로 남는다.
-            let plate_pages = names.iter().filter(|name| name.contains("tm-plate-page-")).count();
-            assert_eq!(count_elements(&opf_of(&path), "itemref", None), 2 + plate_pages, "version={version}");
-            plates.push(plate_pages);
-            assert_eq!(read_zip_entry(&path, "OPS/chapter.xhtml"), BODY.as_bytes(), "version={version}");
-            assert_eq!(read_zip_entry(&path, "OPS/style.css"), b"body { color: red; }", "version={version}");
-            assert_eq!(names.len(), names.iter().collect::<std::collections::BTreeSet<_>>().len(), "version={version}");
-            before = read(&path);
-        }
-        // 같은 이미지로 다시 교체하면 도판이 늘지 않고, 다른 이미지로 바꿀 때만 늘어난다.
-        assert_eq!(plates, [1, 1, 2], "version={version}");
-        assert_ne!(first["revision"], result["revision"], "version={version}");
-    }
-}
-
-#[test]
 fn test_browser_image_replaces_cover_after_server_candidates_are_deleted() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -346,23 +299,6 @@ fn test_retry_bypasses_error_cache_and_aladin_old_results() {
     service.write(&service.book_cache("book.epub").join(format!("search-{key}.json")), br#"{"status":"not_found","candidates":[]}"#);
     assert_eq!(service.candidates("aladin", "book.epub", false, false).unwrap()["status"], "error");
     assert_eq!(calls.lock().unwrap().last().unwrap(), "aladin");
-}
-
-#[test]
-fn test_failed_replacement_restores_previous_cover() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
-    let path = make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", true));
-    let original = read(&path);
-    let stat = ino_mtime(&path);
-    let calls = AtomicUsize::new(0);
-    let fs = FaultyFs::new();
-    fs.set_sync_file(move |_file| if calls.fetch_add(1, Ordering::SeqCst) + 1 == 3 { Some(other_err("write failed")) } else { None });
-    let hooks = EpubCoverHooks::default().with_fs(fs);
-    let err = epub_cover::add_cover_with(&path, &red_jpeg(), &epub_cover::revision(&path), &backups(root), true, &hooks).unwrap_err();
-    assert!(err.is_io(), "{err}");
-    assert_eq!(read(&path), original);
-    assert_eq!(ino_mtime(&path), stat);
 }
 
 #[test]
@@ -427,22 +363,6 @@ fn test_clear_cache_is_book_scoped_and_revision_checked() {
     service.clear_cache("book.epub", &rev(&path)).unwrap();
     assert!(!service.candidate_path(cached.id(0)).exists());
     assert!(service.candidate_path(other.id(0)).exists());
-    assert_eq!(read(&path), original);
-}
-
-#[test]
-fn test_failed_write_restores_original() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
-    let path = make_epub(&root.join("test.epub"), &EpubSpec::cover("3.0", false));
-    let original = read(&path);
-    let revision = epub_cover::inspect_epub(&path).unwrap()["revision"].as_str().unwrap().to_string();
-    let calls = AtomicUsize::new(0);
-    let fs = FaultyFs::new();
-    fs.set_sync_file(move |_file| if calls.fetch_add(1, Ordering::SeqCst) + 1 == 3 { Some(other_err("write failed")) } else { None });
-    let hooks = EpubCoverHooks::default().with_fs(fs);
-    let err = epub_cover::add_cover_with(&path, &red_jpeg(), &revision, &backups(root), false, &hooks).unwrap_err();
-    assert!(err.is_io(), "{err}");
     assert_eq!(read(&path), original);
 }
 
@@ -817,122 +737,6 @@ fn test_invalid_listing_cursor_is_rejected() {
 }
 
 #[test]
-fn test_epub_validation_limits_and_svg_cover() {
-    let modes = ["size", "container", "opf", "package", "opf_path", "count", "pixels", "empty_image", "large_image", "svg", "large_existing"];
-    for mode in modes {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = make_epub(&tmp.path().join("book.epub"), &EpubSpec::cover("3.0", mode == "svg" || mode == "large_existing"));
-        let mut hooks = EpubCoverHooks::default();
-        let mut limits = Limits::default();
-        match mode {
-            "size" => limits.max_epub_bytes = 1,
-            "container" => limits.max_xml_bytes = 1,
-            "opf" => limits.max_xml_bytes = 300,
-            "package" => rewrite_epub_members(&path, |members| members.set("OPS/book.opf", &b"<wrong/>"[..])),
-            "opf_path" => hooks = hooks.with_find_opf_path(Arc::new(|| "../outside.opf".to_string())),
-            "count" => {
-                assert!(epub_cover::check_entry_count(20001).is_err(), "mode={mode}");
-                continue;
-            }
-            "pixels" | "empty_image" | "large_image" => {
-                if mode == "pixels" {
-                    limits.max_image_pixels = 1;
-                } else if mode == "large_image" {
-                    limits.max_image_bytes = 1;
-                }
-                let data = if mode == "empty_image" { Vec::new() } else { red_jpeg() };
-                assert!(epub_cover::normalize_image_with(&data, None, &hooks.with_limits(limits)).is_err(), "mode={mode}");
-                continue;
-            }
-            "svg" => {
-                rewrite_epub_members(&path, |members| {
-                    members.replace_in("OPS/book.opf", b"cover.jpg", b"cover.svg");
-                    members.replace_in("OPS/book.opf", b"image/jpeg", b"image/svg+xml");
-                    members.set("OPS/cover.svg", &br#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>"#[..]);
-                    members.remove("OPS/cover.jpg");
-                });
-                assert!(truthy(&epub_cover::inspect_epub(&path).unwrap()["has_cover"]), "mode={mode}");
-                continue;
-            }
-            _ => {
-                limits.max_image_bytes = 1;
-                let result = epub_cover::inspect_epub_with(&path, &hooks.with_limits(limits)).unwrap();
-                assert!(truthy(&result["has_cover"]), "mode={mode}");
-                assert!(result["cover_image"].is_null(), "mode={mode}");
-                assert!(str_of(&result, "cover_error").contains("크기 제한"), "mode={mode}: {result}");
-                continue;
-            }
-        }
-        assert!(epub_cover::inspect_epub_with(&path, &hooks.with_limits(limits)).is_err(), "mode={mode}");
-    }
-}
-
-#[test]
-fn test_cover_rebuild_guards_and_old_declaration_cleanup() {
-    let modes = ["manifest", "metadata", "spine", "id", "path", "old_declarations", "revision", "invalid_stage", "no_staged_cover", "locked"];
-    for mode in modes {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let path = make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", false));
-        let image = epub_cover::normalize_image(&red_jpeg(), None).unwrap();
-        let cover_id = format!("tm-cover-{}", &sha256_hex(&image)[..16]);
-        rewrite_epub_members(&path, |members| {
-            let mut opf = members.get("OPS/book.opf").to_vec();
-            match mode {
-                "manifest" | "metadata" | "spine" => opf = remove_element(&opf, mode),
-                "id" => opf = append_child(&opf, "manifest", &format!(r#"<item id="{cover_id}" href="chapter.xhtml" media-type="application/xhtml+xml"/>"#)),
-                "path" => members.set(&format!("OPS/{cover_id}.jpg"), &b"unused member"[..]),
-                "old_declarations" => {
-                    let mut items = String::new();
-                    for (index, properties) in ["cover-image", "cover-image other"].iter().enumerate() {
-                        items += &format!(r#"<item id="stale{index}" href="missing{index}.jpg" properties="{properties}" media-type="image/jpeg"/>"#);
-                    }
-                    opf = append_child(&opf, "manifest", &items);
-                    opf = append_child(&opf, "metadata", r#"<meta name="cover" content="stale0"/><meta name="other" content="preserve"/>"#);
-                }
-                _ => {}
-            }
-            members.set("OPS/book.opf", opf);
-        });
-        let original = read(&path);
-        let revision = epub_cover::revision(&path);
-        let mut hooks = EpubCoverHooks::default();
-        match mode {
-            "locked" => {
-                let fs = FaultyFs::new();
-                fs.set_lock_exclusive(|_file, _nonblocking| Some(std::io::ErrorKind::WouldBlock.into()));
-                hooks = hooks.with_fs(fs);
-                let err = epub_cover::inspect_epub_with(&path, &hooks).unwrap_err();
-                assert!(err.to_string().contains("저장 중"), "mode={mode}: {err}");
-            }
-            "revision" => {
-                let values = Mutex::new(VecDeque::from([revision.clone(), "changed".to_string()]));
-                hooks = hooks.with_revision(Arc::new(move |_path: &Path| values.lock().unwrap().pop_front().expect("revision을 두 번만 부른다")));
-            }
-            "invalid_stage" => hooks = hooks.with_testzip(Arc::new(|_path: &Path| Some("corrupt".to_string()))),
-            "no_staged_cover" => {
-                hooks = hooks.with_inspect_archive(Arc::new(|mut inspected: Value| {
-                    inspected["has_cover"] = json!(false);
-                    inspected
-                }))
-            }
-            _ => {}
-        }
-        if mode == "old_declarations" {
-            epub_cover::add_cover_with(&path, &red_jpeg(), &revision, &backups(root), false, &hooks).unwrap();
-            let opf = opf_of(&path);
-            assert_eq!(count_elements(&opf, "meta", Some(("name", "cover"))), 1, "mode={mode}");
-            assert_eq!(attr_of_element_with_id(&opf, "item", "stale1", "properties"), "other", "mode={mode}");
-            assert!(truthy(&epub_cover::inspect_epub(&path).unwrap()["has_cover"]), "mode={mode}");
-        } else {
-            assert!(epub_cover::add_cover_with(&path, &red_jpeg(), &revision, &backups(root), false, &hooks).is_err(), "mode={mode}");
-            assert_eq!(read(&path), original, "mode={mode}");
-            assert_eq!(count_matching(root, ".cover-", ".tmp"), 0, "mode={mode}");
-        }
-    }
-}
-
-#[test]
 fn test_resolved_escape_and_incomplete_legacy_cache_are_safe() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -985,32 +789,6 @@ fn test_guide_missing_cover_page_is_ignored() {
     rewrite_epub_members(&path, |members| members.replace_in("OPS/book.opf", b"</package>", br#"<guide><reference type="cover" href="missing.xhtml"/></guide></package>"#));
     let mut archive = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
     assert_eq!(BookManager::find_epub_cover_member(&mut archive), None);
-}
-
-#[test]
-fn test_saved_cover_is_at_most_600_pixels_wide_and_keeps_aspect_ratio() {
-    // 마지막 항목은 가로 2000 제한을 넘는 이미지다. 디버그 빌드에서는 축소 시간이 화소 수에 비례해
-    // (2400x3200 은 약 3초) 가로만 2000을 넘는 납작한 2100x700 을 쓴다. 2000 제한과 600px 저장 경로를 모두 지난다.
-    for (width, height, format) in [(900, 1350, ImageFormat::Jpeg), (1200, 600, ImageFormat::Png), (300, 450, ImageFormat::Png), (2100, 700, ImageFormat::Jpeg)] {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let raw = encode_image(width, height, RED, format);
-        let candidate = epub_cover::normalize_image(&raw, None).unwrap();
-        let (candidate_width, _) = image_size(&candidate);
-        assert!(candidate_width <= 2000, "{width}x{height}");
-        if width > 600 {
-            assert!(candidate_width > 600, "{width}x{height}");
-        }
-        let path = make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", false));
-        epub_cover::add_cover(&path, &raw, &rev(&path), &backups(root), false).unwrap();
-        let mut archive = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
-        let member = BookManager::find_epub_cover_member(&mut archive).unwrap();
-        drop(archive);
-        let (saved_width, saved_height) = image_size(&read_zip_entry(&path, &member));
-        assert_eq!(saved_width, width.min(600), "{width}x{height}");
-        // Python round()는 .5를 짝수로 보내지만 이 값들은 모두 정수로 나누어떨어진다.
-        assert_eq!(saved_height, (height as f64 * width.min(600) as f64 / width as f64).round() as u32, "{width}x{height}");
-    }
 }
 
 #[test]
@@ -1124,76 +902,31 @@ fn test_insert_illustration_rejects_malformed_base64_without_changing_book() {
 }
 
 /// 보안 검토 지적: 썸네일 경로가 표지 크기·화소 상한을 보지 않고 읽고 디코딩했다. 상한을 넘으면 읽거나 디코딩하기 전에 거부해야 한다.
-mod added_thumbnail_limits {
-    use super::*;
+fn epub_with_cover(root: &Path, width: u32, height: u32) -> PathBuf {
+    let path = make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", true));
+    let data = encode_image(width, height, BLUE, ImageFormat::Jpeg);
+    rewrite_epub_members(&path, |members| members.set("OPS/cover.jpg", data.clone()));
+    path
+}
 
-    fn epub_with_cover(root: &Path, width: u32, height: u32) -> PathBuf {
-        let path = make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", true));
-        let data = encode_image(width, height, BLUE, ImageFormat::Jpeg);
-        rewrite_epub_members(&path, |members| members.set("OPS/cover.jpg", data.clone()));
-        path
-    }
+fn hooks_with(limits: Limits) -> EpubCoverHooks {
+    EpubCoverHooks::default().with_limits(limits)
+}
 
-    fn hooks_with(limits: Limits) -> EpubCoverHooks {
-        EpubCoverHooks::default().with_limits(limits)
-    }
-
-    #[test]
-    fn thumbnail_is_made_within_the_default_limits() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = epub_with_cover(tmp.path(), 40, 60);
-        let thumbnail = epub_cover::extract_epub_thumbnail_with(&path, Some(150), &EpubCoverHooks::default()).expect("기본 상한 안에서는 만든다");
-        assert_eq!(image_size(&thumbnail), (40, 60));
-    }
-
-    #[test]
-    fn thumbnail_decodes_lossy_webp_cover() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = make_epub(
-            &tmp.path().join("webp-cover.epub"),
-            &EpubSpec::cover("3.0", false)
-                .with_opf(r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/><manifest><item id="cover" href="cover.webp" media-type="image/webp" properties="cover-image"/></manifest><spine/></package>"#)
-                .with_extra("OPS/cover.webp", include_bytes!("fixtures/cover.webp").to_vec()),
-        );
-
-        let thumbnail = epub_cover::extract_epub_thumbnail(&path, Some(150)).expect("WebP 표지를 JPEG 썸네일로 만든다");
-
-        assert_eq!(image_size(&thumbnail), (64, 96));
-    }
-
-    #[test]
-    fn thumbnail_refuses_an_image_over_the_byte_limit() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = epub_with_cover(tmp.path(), 40, 60);
-        let hooks = hooks_with(Limits { max_image_bytes: 10, ..Limits::default() });
-        assert!(epub_cover::extract_epub_thumbnail_with(&path, Some(150), &hooks).is_none());
-    }
-
-    #[test]
-    fn thumbnail_refuses_an_image_over_the_pixel_limit_and_accepts_the_boundary() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = epub_with_cover(tmp.path(), 20, 20);
-        let over = hooks_with(Limits { max_image_pixels: 399, ..Limits::default() });
-        assert!(epub_cover::extract_epub_thumbnail_with(&path, Some(150), &over).is_none(), "400화소가 399 상한을 넘었는데 만들었다");
-        let boundary = hooks_with(Limits { max_image_pixels: 400, ..Limits::default() });
-        assert!(epub_cover::extract_epub_thumbnail_with(&path, Some(150), &boundary).is_some(), "상한과 같은 400화소는 허용한다");
-    }
-
-    #[test]
-    fn preview_refuses_when_the_cover_inspection_reported_an_error() {
-        // 검사가 표지 이미지를 읽지 못했다고 보고하면(`cover_error`) 썸네일도 만들지 않는다.
-        // 썸네일러를 항상 성공하는 가짜로 바꿔, 다른 상한 검사가 아니라 이 분기가 막는지 따로 확인한다.
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        epub_with_cover(root, 40, 60);
-        let fake = thumbnailer(|_path, _kind, _width| Some(b"fake thumbnail".to_vec()));
-        let inspected = CoverHooks::default().with_thumbnailer(fake.clone()).with_epub_hooks(hooks_with(Limits { max_image_bytes: 10, ..Limits::default() }));
-        let outcome = CoverManagement::with_hooks(root, inspected).preview("book.epub", false);
-        assert!(outcome.is_err(), "표지 검사가 실패했는데 썸네일을 돌려줬다");
-        // 같은 가짜 썸네일러도 검사가 성공하면 그대로 쓴다(위 거부가 가짜 때문이 아님을 확인한다).
-        let healthy = CoverHooks::default().with_thumbnailer(fake);
-        assert_eq!(CoverManagement::with_hooks(root, healthy).preview("book.epub", false).unwrap(), b"fake thumbnail");
-    }
+#[test]
+fn preview_refuses_when_the_cover_inspection_reported_an_error() {
+    // 검사가 표지 이미지를 읽지 못했다고 보고하면(`cover_error`) 썸네일도 만들지 않는다.
+    // 썸네일러를 항상 성공하는 가짜로 바꿔, 다른 상한 검사가 아니라 이 분기가 막는지 따로 확인한다.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    epub_with_cover(root, 40, 60);
+    let fake = thumbnailer(|_path, _kind, _width| Some(b"fake thumbnail".to_vec()));
+    let inspected = CoverHooks::default().with_thumbnailer(fake.clone()).with_epub_hooks(hooks_with(Limits { max_image_bytes: 10, ..Limits::default() }));
+    let outcome = CoverManagement::with_hooks(root, inspected).preview("book.epub", false);
+    assert!(outcome.is_err(), "표지 검사가 실패했는데 썸네일을 돌려줬다");
+    // 같은 가짜 썸네일러도 검사가 성공하면 그대로 쓴다(위 거부가 가짜 때문이 아님을 확인한다).
+    let healthy = CoverHooks::default().with_thumbnailer(fake);
+    assert_eq!(CoverManagement::with_hooks(root, healthy).preview("book.epub", false).unwrap(), b"fake thumbnail");
 }
 
 mod clean_title {
@@ -1213,5 +946,61 @@ mod clean_title {
     fn nfd_hangul_is_composed() {
         let nfd = "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF}";
         assert_eq!(clean_title(nfd), "한글");
+    }
+}
+
+mod cover_repair {
+    use super::common;
+    use std::path::{Path, PathBuf};
+
+    use backend::cover_management::CoverManagement;
+
+
+
+    use common::epub::{EpubSpec, make_epub};
+    use common::es_dummy;
+
+
+    use common::zipx::rewrite_epub_members;
+    use serde_json::Value;
+
+    // TODO(common): `es_dummy::truthy(Option<&Value>)`를 `&Value`로 받는 얇은 래퍼. cover_fixtures::truthy를 대신한다.
+    fn truthy(value: &Value) -> bool {
+        es_dummy::truthy(Some(value))
+    }
+
+    fn broken_cover(tmp: &Path) -> PathBuf {
+        let path = make_epub(&tmp.join("book.epub"), &EpubSpec::cover("3.0", true));
+        rewrite_epub_members(&path, |members| members.set("OPS/cover.jpg", &b"not a JPEG"[..]));
+        path
+    }
+
+    fn first_item(service: &CoverManagement, covered: bool) -> Value {
+        service.missing("", "", 60, covered).unwrap()["items"][0].clone()
+    }
+
+    #[test]
+    fn test_broken_cover_is_repairable_in_both_listing_modes() {
+        for covered in [false, true] {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = broken_cover(tmp.path());
+            let original = std::fs::read(&path).unwrap();
+            let item = first_item(&CoverManagement::new(tmp.path()), covered);
+            assert_eq!(item["status"], "covered", "covered={covered}");
+            assert_eq!(item["has_cover"], true, "covered={covered}");
+            assert!(truthy(&item["cover_error"]), "covered={covered}");
+            assert!(item["cover_image"].is_null(), "covered={covered}");
+            assert_eq!(std::fs::read(&path).unwrap(), original, "covered={covered}");
+        }
+    }
+
+    #[test]
+    fn test_broken_package_remains_a_fatal_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = broken_cover(tmp.path());
+        rewrite_epub_members(&path, |members| members.set("OPS/book.opf", &b"not XML"[..]));
+        let item = first_item(&CoverManagement::new(tmp.path()), false);
+        assert_eq!(item["status"], "error");
+        assert!(!item.as_object().unwrap().contains_key("cover_error"), "{item}");
     }
 }

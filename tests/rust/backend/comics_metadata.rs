@@ -1,68 +1,61 @@
 mod common;
-
 use std::sync::{Arc, Mutex};
-
 use backend::comics_metadata::{Comics, path_prefix_from_env};
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::EsManagerApi;
 use common::es_fake::FakeEsManager;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 fn info() -> Value {
     json!({"category": "cat", "title": "title", "author": "author", "file_path": "cat/file.epub", "file_type": "epub", "file_size": 10, "updated_time": "2021-01-01T00:00:00.000000"})
 }
+#[test]
+fn test_init_and_dict() {
+    common::setup_env();
+    let c = Comics::new(1, &info(), 1.5);
+    let data = c.dict();
+    assert_eq!(data["book_id"], 1);
+    assert_eq!(data["category"], "cat");
+    assert_eq!(data["file_path"], "cat/file.epub");
+    assert_eq!(data["score"], 1.5);
+}
 
-mod test_comics {
-    use super::*;
+#[test]
+fn test_json_and_str() {
+    common::setup_env();
+    let c = Comics::new(2, &info(), 0.0);
+    assert!(c.json().contains("category"), "{}", c.json());
+    assert!(c.to_string().contains("title"), "{c}");
+}
 
-    #[test]
-    fn test_init_and_dict() {
-        common::setup_env();
-        let c = Comics::new(1, &info(), 1.5);
-        let data = c.dict();
-        assert_eq!(data["book_id"], 1);
-        assert_eq!(data["category"], "cat");
-        assert_eq!(data["file_path"], "cat/file.epub");
-        assert_eq!(data["score"], 1.5);
-    }
+#[test]
+fn test_init_uses_optional_defaults_and_score() {
+    common::setup_env();
+    let info = json!({
+        "category": "cat2",
+        "title": "title2",
+        "author": "author2",
+        "file_path": "cat2/file.pdf",
+        "file_type": "pdf",
+        "file_size": 20,
+        "updated_time": "2022-02-02T00:00:00.000000",
+    });
+    let c = Comics::new(3, &info, 2.5);
+    assert_eq!(c.line_count, 0);
+    assert_eq!(c.page_count, 0);
+    assert_eq!(c.isbn, "");
+    assert_eq!(c.summary, "");
+    assert_eq!(c.score, 2.5);
+    assert_eq!(c.dict()["file_path"], "cat2/file.pdf");
+}
 
-    #[test]
-    fn test_json_and_str() {
-        common::setup_env();
-        let c = Comics::new(2, &info(), 0.0);
-        assert!(c.json().contains("category"), "{}", c.json());
-        assert!(c.to_string().contains("title"), "{c}");
-    }
-
-    #[test]
-    fn test_init_uses_optional_defaults_and_score() {
-        common::setup_env();
-        let info = json!({
-            "category": "cat2",
-            "title": "title2",
-            "author": "author2",
-            "file_path": "cat2/file.pdf",
-            "file_type": "pdf",
-            "file_size": 20,
-            "updated_time": "2022-02-02T00:00:00.000000",
-        });
-        let c = Comics::new(3, &info, 2.5);
-        assert_eq!(c.line_count, 0);
-        assert_eq!(c.page_count, 0);
-        assert_eq!(c.isbn, "");
-        assert_eq!(c.summary, "");
-        assert_eq!(c.score, 2.5);
-        assert_eq!(c.dict()["file_path"], "cat2/file.pdf");
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_dict_rejects_paths_outside_comics_root() {
-        common::setup_env();
-        let mut value = info();
-        value["file_path"] = json!("/outside/book.epub");
-        Comics::new(4, &value, 0.0).dict();
-    }
+#[test]
+#[should_panic]
+fn test_dict_rejects_paths_outside_comics_root() {
+    common::setup_env();
+    let mut value = info();
+    value["file_path"] = json!("/outside/book.epub");
+    Comics::new(4, &value, 0.0).dict();
 }
 
 #[test]

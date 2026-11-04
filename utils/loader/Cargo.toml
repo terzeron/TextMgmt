@@ -6,7 +6,7 @@ edition.workspace = true
 publish.workspace = true
 autotests = false
 
-# loader_1, loader_2는 doc_reader/loader에 *_with(&XxxHooks) API를 만든 뒤 등록한다.
+# binary_and_file_reading, pdf_and_text_stages는 doc_reader/loader에 *_with(&XxxHooks) API를 만든 뒤 등록한다.
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
@@ -33,16 +33,16 @@ name = "batch_loader"
 path = "../../tests/rust/loader/batch_loader.rs"
 
 [[test]]
-name = "integration_loader_1"
-path = "../../tests/rust/loader/integration/loader_1.rs"
+name = "integration_binary_and_file_reading"
+path = "../../tests/rust/loader/integration/binary_and_file_reading.rs"
 
 [[test]]
-name = "integration_loader_2"
-path = "../../tests/rust/loader/integration/loader_2.rs"
+name = "integration_pdf_and_text_stages"
+path = "../../tests/rust/loader/integration/pdf_and_text_stages.rs"
 
 [[test]]
-name = "integration_loader_gaps"
-path = "../../tests/rust/loader/integration/loader_gaps.rs"
+name = "integration_reload_failures"
+path = "../../tests/rust/loader/integration/reload_failures.rs"
 
 [[test]]
 name = "integration_loader_hwp3"

@@ -14,7 +14,7 @@
 //!   parse_one_xref_stream(&mut File, u64) -> Option<(Vec<u8>, [usize; 3], Vec<i64>, Option<i64>)>,
 //!   find_xref_offset(&[u8], i64) -> Option<i64>}` (현재 비공개 함수를 공개)
 //!
-//! 설계: docs/rust-test-seams.md 3.12, 3.13, 4.2. loader_1.rs와 같은 Hooks 이름·필드를 쓴다. 훅은 모두 `Option<&dyn Fn(..)>` 필드이고 `Default` 구현이 있다.
+//! 설계: docs/rust-test-seams.md 3.12, 3.13, 4.2. binary_and_file_reading.rs와 같은 Hooks 이름·필드를 쓴다. 훅은 모두 `Option<&dyn Fn(..)>` 필드이고 `Default` 구현이 있다.
 //! - `doc_reader::pdf::{FastCountHooks, fast_page_count_with(&Path, &FastCountHooks) -> Option<usize>}`:
 //!   `find_xref_offset`, `parse_one_xref_stream`, `xref_stream_find_entry`, `read_from_obj_stream` 대체 훅(`Option<&dyn Fn>`), `Default` 구현
 //! - `doc_reader::pdf::{PlumberDocument, pdf_text_by_plumber_with(&Path, &dyn PlumberDocument) -> Result<(String, usize), String>,
@@ -22,7 +22,7 @@
 //!   `PdftotextHooks { which: Fn() -> Option<PathBuf>, run: Fn(&[String]) -> Option<(i32, Vec<u8>)>, path_cache: OnceLock }`
 //! - `doc_reader::text::{TextHooks, Candidate, read_from_text_with(&Path, &TextHooks) -> Result<TextRead, String>,
 //!   reencode_text_file_to_utf8_with(&Path, bool, Option<&Path>, &Path, &TextHooks) -> Reencode}`
-//!   `TextHooks { detect, encodings, read_bytes, read_replace, write_backup }` (loader_1.rs는 detect, read_bytes, write_backup을 쓴다)
+//!   `TextHooks { detect, encodings, read_bytes, read_replace, write_backup }` (binary_and_file_reading.rs는 detect, read_bytes, write_backup을 쓴다)
 //! - `doc_reader::mojibake_counter::count_mojibake_runs_with(&str, &str) -> usize` (런 정규식 패턴을 받는다)
 //! - `doc_reader::office::read_from_hwp_with(&Path, &Path, &dyn Fn(&Path) -> Result<String, String>) -> (String, usize, Vec<String>)`
 //! - `file_record::record_builder::{ReadHooks, read_file_with_hooks(...)}`: `fast_page_count`, `fallback_page_count`, `inspect` 대체 훅 (`Default` 구현)

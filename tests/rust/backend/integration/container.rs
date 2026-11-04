@@ -8,8 +8,8 @@ mod elasticsearch_fixture;
 #[path = "../common/mysql_fixture.rs"]
 mod mysql_fixture;
 
-#[path = "container/book_manager_1.rs"]
-mod book_manager_1;
+#[path = "container/book_manager.rs"]
+mod book_manager;
 #[path = "container/classify_proposal_items_db.rs"]
 mod classify_proposal_items_db;
 #[path = "container/classify_proposal_status_db.rs"]

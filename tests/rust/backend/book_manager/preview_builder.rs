@@ -1,783 +1,74 @@
-//! `backend::book_manager::preview_builder` 단위 테스트. 원본 테스트 파일마다 하위 모듈로 나눠 둔다.
+//! `backend::book_manager::preview_builder` 단위 테스트.
 
 #[path = "../common/mod.rs"]
 mod common;
+use std::fs;
+use std::fs::File;
+use std::io::{Cursor, Read};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use backend::book_manager::{BookManager, BookManagerDeps};
+use backend::main::BookManagerApi;
+use common::es_fake::FakeEsManager;
+use common::zipx::{write_zip, write_zip_with, ZipMode};
+use serde_json::{json, Value};
+use zip::ZipArchive;
+use common::runner::FakeRunner;
+use backend::es_manager::EsManagerApi;
+use common::image::encode_image;
+use tempfile::TempDir;
 
-// `tests/rust/backend/book_preview.rs`에서 옮긴 테스트.
-mod book_preview {
-    use super::{common};
+// ── EPUB 생성 헬퍼 ────────────────────────────────────────
 
-    use std::fs::{self, File};
-
-    use std::io::Read;
-    use std::path::{Path, PathBuf};
-
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-
-    use backend::book_manager::{BookManager, BookManagerDeps};
-    use backend::main::{AppDeps, AuthMode, app_with};
-    use common::TestClient;
-    use common::es_fake::FakeEsManager;
-    use common::faulty_fs::FaultyFs;
-    use common::fsx::set_mtime_ago;
-    use common::zipx::{ZipMode, write_zip_with};
-    use serde_json::json;
-
-    use zip::ZipArchive;
-
-    /// 검증 결과를 Python 원본의 `(유효 여부, 사유)`로 펼친다.
-    fn verdict(result: Result<(), String>) -> (bool, Option<String>) {
-        match result {
-            Ok(()) => (true, None),
-            Err(reason) => (false, Some(reason)),
-        }
-    }
-    const OPF_NS: &str = "http://www.idpf.org/2007/opf";
-
-    #[tokio::test]
-    async fn test_html_routes_preserve_comics_prefix_and_download_attachment() {
-        common::setup_env();
-        let tmp = tempfile::tempdir().unwrap();
-        fs::write(tmp.path().join("page.html"), r#"<html><body><script>alert(1)</script><img src="cover.png"><p>본문</p></body></html>"#).unwrap();
-        let image = common::image::png_bytes(2, 2);
-        fs::write(tmp.path().join("cover.png"), &image).unwrap();
-        let es = FakeEsManager::with_doc(json!({"category":"test", "title":"HTML", "author":"", "file_path":"page.html", "file_type":"html", "file_size":100, "updated_time":"2024-01-01T00:00:00"}));
-        let deps = BookManagerDeps::new(tmp.path().to_path_buf(), es);
-        let app = app_with(
-            AppDeps::new(AuthMode::Fixed(json!({"role":"admin"})))
-                .with_book_manager(Arc::new(BookManager::with_deps(deps.clone())))
-                .with_comics_manager(Arc::new(backend::comics_manager::ComicsManager::with_deps(deps))),
-        );
-        let client = TestClient::with_app(app);
-        for prefix in ["", "/comics"] {
-            let preview = client.get(&format!("{prefix}/preview/1")).await;
-            assert_eq!(preview.status, 200);
-            assert!(preview.text().contains(&format!("{prefix}/html-resource/1?path=cover.png")));
-            assert!(!preview.text().contains("alert(1)"));
-            let resource = client.get(&format!("{prefix}/html-resource/1?path=cover.png")).await;
-            assert_eq!(resource.status, 200);
-            assert_eq!(resource.body, image);
-            assert_eq!(client.get(&format!("{prefix}/html-resource/1")).await.status, 422);
-            assert_eq!(client.get(&format!("{prefix}/html-resource/1?path=../outside.png")).await.status, 400);
-            let download = client.get(&format!("{prefix}/download/1")).await;
-            assert_eq!(download.status, 200);
-            assert_eq!(download.header("content-disposition"), Some("attachment; filename=\"page.html\""));
-            assert_eq!(download.body, fs::read(tmp.path().join("page.html")).unwrap());
-        }
-    }
-
-    // ── EPUB 생성 헬퍼 ────────────────────────────────────────
-
-    const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles>
     <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
   </rootfiles>
 </container>"#;
 
-    /// 챕터 N개를 포함한 OPF XML을 생성.
-    fn make_opf(chapter_count: usize, include_css: bool, include_svg_cover: bool) -> String {
-        let mut items = Vec::new();
-        let mut spine_refs = Vec::new();
-        for i in 1..=chapter_count {
-            items.push(format!(r#"    <item id="ch{i}" href="ch{i}.xhtml" media-type="application/xhtml+xml"/>"#));
-            spine_refs.push(format!(r#"    <itemref idref="ch{i}"/>"#));
-        }
-        if include_css {
-            items.push(r#"    <item id="style" href="style.css" media-type="text/css"/>"#.to_string());
-        }
-        if include_svg_cover {
-            items.push(r#"    <item id="cover-image" href="../media/cover.jpg" media-type="image/jpeg"/>"#.to_string());
-        }
-        let items = items.join("\n");
-        let spine_refs = spine_refs.join("\n");
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>Test Book</dc:title>
-    <dc:creator>Test Author</dc:creator>
-  </metadata>
-  <manifest>
-    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-{items}
-  </manifest>
-  <spine toc="toc">
-{spine_refs}
-  </spine>
-</package>"#
-        )
+/// `zipfile.ZipFile(path, "w")`: 압축 인자가 없으면 ZIP_STORED다.
+fn write_zip_stored(path: &Path, entries: &[(&str, &[u8])]) {
+    write_zip_with(path, entries, ZipMode::Stored);
+}
+
+fn unlink(path: &Path) {
+    let _ = fs::remove_file(path);
+}
+
+/// 임시 파일 정리(`finally: path.unlink(missing_ok=True)`). panic이 나도 Drop에서 지운다.
+struct TempFile(PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        unlink(&self.0);
     }
-
-    /// SVG `<image>` 태그로 커버 이미지를 참조하는 커버 페이지.
-    fn make_cover_xhtml_with_svg() -> String {
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-<head><title>Cover</title></head>
-<body>
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
-     width="100%" height="100%" viewBox="0 0 600 800">
-  <image xlink:href="../media/cover.jpg" width="600" height="800"/>
-</svg>
-</body>
-</html>"#
-            .to_string()
-    }
-
-    fn make_chapter_xhtml(index: usize, link_css: bool) -> String {
-        let css_link = if link_css { r#"<link rel="stylesheet" href="style.css"/>"# } else { "" };
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>Chapter {index}</title>{css_link}</head>
-<body><h1>Chapter {index}</h1><p>Content of chapter {index}.</p></body>
-</html>"#
-        )
-    }
-
-    fn chapter(index: usize) -> String {
-        make_chapter_xhtml(index, false)
-    }
-
-    /// mimetype(무압축)을 맨 앞에 두고 나머지를 압축해서 쓴다. Python 생성 헬퍼가 모두 이 배치다.
-    fn write_epub(path: &Path, entries: Vec<(String, Vec<u8>)>) {
-        let mimetype: &[u8] = b"application/epub+zip";
-        let mut all: Vec<(&str, &[u8])> = vec![("mimetype", mimetype)];
-        all.extend(entries.iter().map(|(n, d)| (n.as_str(), d.as_slice())));
-        write_zip_with(path, &all, ZipMode::EpubStyle);
-    }
-
-    /// `zipfile.ZipFile(path, "w")`: 압축 인자가 없으면 ZIP_STORED다.
-    fn write_zip_stored(path: &Path, entries: &[(&str, &[u8])]) {
-        write_zip_with(path, entries, ZipMode::Stored);
-    }
-
-    fn entry(name: &str, data: impl Into<Vec<u8>>) -> (String, Vec<u8>) {
-        (name.to_string(), data.into())
-    }
-
-    /// 테스트용 미니 EPUB을 생성.
-    fn create_test_epub(path: &Path, chapter_count: usize, include_css: bool, include_svg_cover: bool) {
-        let mut entries = vec![entry("META-INF/container.xml", CONTAINER_XML), entry("OEBPS/content.opf", make_opf(chapter_count, include_css, include_svg_cover)), entry("OEBPS/toc.ncx", "<ncx/>")];
-        for i in 1..=chapter_count {
-            if include_svg_cover && i == 1 {
-                entries.push(entry(&format!("OEBPS/ch{i}.xhtml"), make_cover_xhtml_with_svg()));
-            } else {
-                entries.push(entry(&format!("OEBPS/ch{i}.xhtml"), make_chapter_xhtml(i, include_css)));
-            }
-        }
-        if include_css {
-            entries.push(entry("OEBPS/style.css", "body { margin: 1em; font-family: serif; }"));
-        }
-        if include_svg_cover {
-            // 1x1 JPEG placeholder
-            entries.push(entry("media/cover.jpg", b"\xff\xd8\xff\xe0\x00\x10JFIF\xff\xd9".to_vec()));
-        }
-        write_epub(path, entries);
-    }
-
-    /// manifest에 없는 idref(coverpage)를 spine에 포함하는 EPUB.
-    fn create_epub_with_invalid_spine(path: &Path) {
-        let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>Invalid Spine Test</dc:title>
-  </metadata>
-  <manifest>
-    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
-    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
-  </manifest>
-  <spine toc="toc">
-    <itemref idref="coverpage"/>
-    <itemref idref="ch1"/>
-    <itemref idref="ch2"/>
-  </spine>
-</package>"#;
-        write_epub(
-            path,
-            vec![
-                entry("META-INF/container.xml", CONTAINER_XML),
-                entry("OEBPS/content.opf", opf),
-                entry("OEBPS/toc.ncx", "<ncx/>"),
-                entry("OEBPS/ch1.xhtml", chapter(1)),
-                entry("OEBPS/ch2.xhtml", chapter(2)),
-            ],
-        );
-    }
-
-    /// spine 요소가 없는 OPF를 가진 EPUB.
-    fn create_epub_without_spine(path: &Path) {
-        let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>No Spine Test</dc:title>
-  </metadata>
-  <manifest>
-    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
-    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
-  </manifest>
-</package>"#;
-        write_epub(
-            path,
-            vec![
-                entry("META-INF/container.xml", CONTAINER_XML),
-                entry("OEBPS/content.opf", opf),
-                entry("OEBPS/toc.ncx", "<ncx/>"),
-                entry("OEBPS/ch1.xhtml", chapter(1)),
-                entry("OEBPS/ch2.xhtml", chapter(2)),
-            ],
-        );
-    }
-
-    /// spine에 챕터가 등록되어 있지만 실제 ZIP에는 파일이 없는 손상 EPUB.
-    ///
-    /// `missing_all`이면 모든 챕터 파일을 제거한다.
-    fn create_corrupted_epub(path: &Path, chapter_count: usize, missing_all: bool) {
-        let mut entries = vec![entry("META-INF/container.xml", CONTAINER_XML), entry("OEBPS/content.opf", make_opf(chapter_count, false, false)), entry("OEBPS/toc.ncx", "<ncx/>")];
-        if !missing_all {
-            // ch1만 누락, 나머지는 포함
-            for i in 2..=chapter_count {
-                entries.push(entry(&format!("OEBPS/ch{i}.xhtml"), chapter(i)));
-            }
-        }
-        write_epub(path, entries);
-    }
-
-    fn unlink(path: &Path) {
-        let _ = fs::remove_file(path);
-    }
-
-    /// 임시 파일 정리(`finally: path.unlink(missing_ok=True)`). panic이 나도 Drop에서 지운다.
-    struct TempFile(PathBuf);
-
-    impl Drop for TempFile {
-        fn drop(&mut self) {
-            unlink(&self.0);
-        }
-    }
-
-    fn namelist<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>) -> Vec<String> {
-        (0..zf.len()).map(|i| zf.by_index(i).unwrap().name().unwrap().into_owned()).collect()
-    }
-
-    fn zip_read<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &str) -> Vec<u8> {
-        let mut data = Vec::new();
-        zf.by_name(name).unwrap_or_else(|_| panic!("KeyError: {name}")).read_to_end(&mut data).unwrap();
-        data
-    }
-
-    fn zip_read_string<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &str) -> String {
-        String::from_utf8(zip_read(zf, name)).unwrap()
-    }
-
-    /// ElementTree의 `.//{ns}name`처럼 네임스페이스까지 맞는 요소를 문서 순서로 돌려준다.
-    fn ns_nodes<'a, 'i>(doc: &'a roxmltree::Document<'i>, ns: &str, name: &str) -> Vec<roxmltree::Node<'a, 'i>> {
-        doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == name && n.tag_name().namespace() == Some(ns)).collect()
-    }
-
-    fn ns_children<'a, 'i>(node: roxmltree::Node<'a, 'i>, ns: &str, name: &str) -> Vec<roxmltree::Node<'a, 'i>> {
-        node.children().filter(|n| n.is_element() && n.tag_name().name() == name && n.tag_name().namespace() == Some(ns)).collect()
-    }
-
-    /// 파일 안 OPF의 `(spine toc 속성, spine itemref idref 목록)`.
-    fn spine_of(path: &Path, opf_member: &str) -> (Option<String>, Vec<String>) {
-        let mut zf = ZipArchive::new(File::open(path).unwrap()).unwrap();
-        let text = zip_read_string(&mut zf, opf_member);
-        let opf = roxmltree::Document::parse(&text).unwrap();
-        let spine_el = ns_nodes(&opf, OPF_NS, "spine")[0];
-        let idrefs = ns_children(spine_el, OPF_NS, "itemref").iter().map(|r| r.attribute("idref").unwrap().to_string()).collect();
-        (spine_el.attribute("toc").map(String::from), idrefs)
-    }
-
-    fn err_has(error: &Option<String>, needle: &str) -> bool {
-        error.as_deref().unwrap_or_else(|| panic!("error가 None이다 (기대: {needle:?} 포함)")).contains(needle)
-    }
-
-    // ── tests: _find_opf_path 단위 테스트 ────────────────────
-
-    /// `BookManager::_find_opf_path` 헬퍼 단위 테스트.
-    mod test_find_opf_path {
-        use super::*;
-
-        fn find_opf_path(epub_path: &Path) -> String {
-            let mut zin = ZipArchive::new(File::open(epub_path).unwrap()).unwrap();
-            BookManager::_find_opf_path(&mut zin).unwrap_or_default()
-        }
-
-        /// 정상 container.xml에서 OPF 경로를 추출한다.
-        #[test]
-        fn test_normal_container_xml() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub_path = tmp.path().join("test.epub");
-            write_zip_stored(&epub_path, &[("META-INF/container.xml", CONTAINER_XML.as_bytes()), ("OEBPS/content.opf", b"<package/>")]);
-            assert_eq!(find_opf_path(&epub_path), "OEBPS/content.opf");
-        }
-
-        /// container.xml이 없으면 ZIP 내 .opf 파일을 직접 찾는다.
-        #[test]
-        fn test_missing_container_xml_finds_opf() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub_path = tmp.path().join("test.epub");
-            write_zip_stored(&epub_path, &[("content.opf", b"<package/>")]);
-            assert_eq!(find_opf_path(&epub_path), "content.opf");
-        }
-
-        /// container.xml이 깨진 XML이면 regex로 full-path를 추출한다.
-        #[test]
-        fn test_corrupted_container_xml_regex_fallback() {
-            let tmp = tempfile::tempdir().unwrap();
-            let bad_container = br#"<container><rootfiles><rootfile full-path="OEBPS/pkg.opf" broken:attr="x"/></rootfiles></container>"#;
-            let epub_path = tmp.path().join("test.epub");
-            write_zip_stored(&epub_path, &[("META-INF/container.xml", bad_container), ("OEBPS/pkg.opf", b"<package/>")]);
-            let result = find_opf_path(&epub_path);
-            assert_eq!(result, "OEBPS/pkg.opf", "Regex fallback should find OPF, got '{result}'");
-        }
-
-        /// container.xml도 .opf 파일도 없으면 빈 문자열을 반환한다.
-        #[test]
-        fn test_no_opf_returns_empty() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub_path = tmp.path().join("test.epub");
-            write_zip_stored(&epub_path, &[("mimetype", b"application/epub+zip")]);
-            assert_eq!(find_opf_path(&epub_path), "");
-        }
-
-        /// container.xml에 rootfile이 있지만 full-path가 비어있으면 .opf 직접 탐색으로 폴백.
-        #[test]
-        fn test_container_xml_empty_rootfile() {
-            let tmp = tempfile::tempdir().unwrap();
-            let container = r#"<?xml version="1.0"?>
-<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles><rootfile full-path="" media-type="application/oebps-package+xml"/></rootfiles>
-</container>"#;
-            let epub_path = tmp.path().join("test.epub");
-            write_zip_stored(&epub_path, &[("META-INF/container.xml", container.as_bytes()), ("OPS/book.opf", b"<package/>")]);
-            let result = find_opf_path(&epub_path);
-            assert_eq!(result, "OPS/book.opf", "Should fallback to direct scan, got '{result}'");
-        }
-
-        /// container.xml이 완전한 바이너리 쓰레기여도 regex로 full-path를 추출한다.
-        #[test]
-        fn test_binary_garbage_container_regex_fallback() {
-            let tmp = tempfile::tempdir().unwrap();
-            let garbage = b"\x89PNG\r\n not XML at all full-path=\"OPS/pkg.opf\" end";
-            let epub_path = tmp.path().join("test.epub");
-            write_zip_stored(&epub_path, &[("META-INF/container.xml", garbage), ("OPS/pkg.opf", b"<package/>")]);
-            let result = find_opf_path(&epub_path);
-            assert_eq!(result, "OPS/pkg.opf", "Binary garbage regex fallback should find OPF, got '{result}'");
-        }
-    }
-
-    // ── tests: 캐시 정리 (eviction) ────────────────────────────
-
-    /// `BookManager::_evict_old_cache` 단위 테스트.
-    mod test_cache_eviction {
-        use super::*;
-
-        const DAY: u64 = 86400;
-
-        /// 1일 이상 된 파일이 삭제된다.
-        #[test]
-        fn test_old_files_are_deleted() {
-            let tmp = tempfile::tempdir().unwrap();
-            let tmp_path = tmp.path();
-
-            let old_file = tmp_path.join("old.epub");
-            fs::write(&old_file, "old").unwrap();
-            // mtime을 2일 전으로 설정
-            set_mtime_ago(&old_file, 2 * DAY);
-
-            let new_file = tmp_path.join("new.epub");
-            fs::write(&new_file, "new").unwrap();
-
-            BookManager::_evict_old_cache(tmp_path);
-
-            assert!(!old_file.exists());
-            assert!(new_file.exists());
-        }
-
-        /// 1일 미만 파일은 보존된다.
-        #[test]
-        fn test_recent_files_are_kept() {
-            let tmp = tempfile::tempdir().unwrap();
-
-            let recent = tmp.path().join("recent.pdf");
-            fs::write(&recent, "recent").unwrap();
-
-            BookManager::_evict_old_cache(tmp.path());
-
-            assert!(recent.exists());
-        }
-
-        /// 정확히 1일 된 파일도 삭제된다.
-        #[test]
-        fn test_exactly_one_day_old_is_deleted() {
-            let tmp = tempfile::tempdir().unwrap();
-
-            let edge_file = tmp.path().join("edge.html");
-            fs::write(&edge_file, "edge").unwrap();
-            set_mtime_ago(&edge_file, DAY + 1); // 1일 + 1초
-
-            BookManager::_evict_old_cache(tmp.path());
-
-            assert!(!edge_file.exists());
-        }
-
-        /// 하위 디렉토리는 삭제하지 않는다.
-        #[test]
-        fn test_subdirectories_are_not_deleted() {
-            let tmp = tempfile::tempdir().unwrap();
-
-            let sub_dir = tmp.path().join("subdir");
-            fs::create_dir(&sub_dir).unwrap();
-            File::open(&sub_dir).unwrap().set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::now() - Duration::from_secs(2 * DAY))).unwrap();
-
-            BookManager::_evict_old_cache(tmp.path());
-
-            assert!(sub_dir.exists());
-        }
-
-        /// 빈 디렉토리에서 에러 없이 동작한다.
-        #[test]
-        fn test_empty_directory_no_error() {
-            let tmp = tempfile::tempdir().unwrap();
-
-            BookManager::_evict_old_cache(tmp.path()); // 에러 없이 완료
-        }
-
-        /// 존재하지 않는 디렉토리에서 에러 없이 동작한다.
-        #[test]
-        fn test_nonexistent_directory_no_error() {
-            let tmp = tempfile::tempdir().unwrap();
-
-            let fake_dir = tmp.path().join("nonexistent");
-            BookManager::_evict_old_cache(&fake_dir); // 에러 없이 완료
-        }
-
-        /// 오래된 파일이 여러 개일 때 모두 삭제된다.
-        #[test]
-        fn test_multiple_old_files_all_deleted() {
-            let tmp = tempfile::tempdir().unwrap();
-
-            let mut old_files = Vec::new();
-            for i in 0..5 {
-                let f = tmp.path().join(format!("old_{i}.epub"));
-                fs::write(&f, format!("old_{i}")).unwrap();
-                set_mtime_ago(&f, 2 * DAY);
-                old_files.push(f);
-            }
-
-            let new_file = tmp.path().join("new.pdf");
-            fs::write(&new_file, "new").unwrap();
-
-            BookManager::_evict_old_cache(tmp.path());
-
-            for f in &old_files {
-                assert!(!f.exists(), "{} should have been evicted", f.display());
-            }
-            assert!(new_file.exists());
-        }
-
-        /// 개별 파일 삭제 실패 시 나머지 파일 처리가 계속된다.
-        #[test]
-        fn test_deletion_failure_continues_processing() {
-            let tmp = tempfile::tempdir().unwrap();
-
-            let mut files = Vec::new();
-            for i in 0..3 {
-                let f = tmp.path().join(format!("old_{i}.epub"));
-                fs::write(&f, format!("old_{i}")).unwrap();
-                set_mtime_ago(&f, 2 * DAY);
-                files.push(f);
-            }
-
-            // 첫 `remove_file`만 PermissionError로 실패한다. 나머지는 안쪽 RealFs가 실제로 지운다.
-            let first_call = Arc::new(Mutex::new(true));
-            let faulty = FaultyFs::new();
-            faulty.set_remove_file(move |_path: &Path| {
-                let mut first = first_call.lock().unwrap();
-                if *first {
-                    *first = false;
-                    return Some(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "mocked deletion failure"));
-                }
-                None
-            });
-            BookManager::_evict_old_cache_with(faulty.as_ref(), tmp.path());
-
-            // 1개는 실패로 남고, 나머지 2개는 삭제됨
-            let remaining: Vec<&PathBuf> = files.iter().filter(|f| f.exists()).collect();
-            assert_eq!(remaining.len(), 1);
-        }
-
-        /// 방금 쓴 캐시 파일과 오래된 파일이 공존할 때, 새 파일만 보존된다.
-        #[test]
-        fn test_just_written_cache_file_is_not_evicted() {
-            let tmp = tempfile::tempdir().unwrap();
-
-            let mut old_files = Vec::new();
-            for name in ["1.pdf", "2_ch5.epub", "3.html", "4_p1-3.pdf"] {
-                let f = tmp.path().join(name);
-                fs::write(&f, "old").unwrap();
-                set_mtime_ago(&f, 3 * DAY);
-                old_files.push(f);
-            }
-
-            // 방금 생성된 파일
-            let just_written = tmp.path().join("5_ch10.epub");
-            fs::write(&just_written, "fresh").unwrap();
-
-            BookManager::_evict_old_cache(tmp.path());
-
-            for f in &old_files {
-                assert!(!f.exists(), "{} should have been evicted", f.file_name().unwrap().to_string_lossy());
-            }
-            assert!(just_written.exists());
-        }
-    }
-
-    /// `BookManager::_validate_preview_epub` 단위 테스트.
-    mod test_validate_preview_epub {
-        use super::*;
-
-        /// 빈 spine 경로는 ZIP 항목 이름으로 인정하지 않는다(Python `test_in_names_empty_path`).
-        #[test]
-        fn test_empty_spine_href_is_not_present_in_archive() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub = tmp.path().join("empty_href.epub");
-            let opf = make_opf(1, false, false).replace("href=\"ch1.xhtml\"", "href=\"\"");
-            let container =
-                r#"<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
-            write_zip_stored(
-                &epub,
-                &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", container.as_bytes()), ("content.opf", opf.as_bytes()), ("toc.ncx", b"<ncx/>"), ("ch1.xhtml", chapter(1).as_bytes())],
-            );
-
-            let (valid, error) = verdict(BookManager::_validate_preview_epub(&epub));
-
-            assert!(!valid);
-            assert!(err_has(&error, "no valid spine chapters"));
-        }
-
-        /// 정상 EPUB은 (True, None)을 반환한다.
-        #[test]
-        fn test_valid_epub_passes() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub = tmp.path().join("valid.epub");
-            create_test_epub(&epub, 3, false, false);
-
-            let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
-            assert!(valid);
-            assert!(err.is_none());
-        }
-
-        /// mimetype 파일이 없으면 거부된다.
-        #[test]
-        fn test_missing_mimetype_rejected() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub = tmp.path().join("no_mimetype.epub");
-            write_zip_stored(
-                &epub,
-                &[
-                    ("META-INF/container.xml", CONTAINER_XML.as_bytes()),
-                    ("OEBPS/content.opf", make_opf(1, false, false).as_bytes()),
-                    ("OEBPS/toc.ncx", b"<ncx/>"),
-                    ("OEBPS/ch1.xhtml", chapter(1).as_bytes()),
-                ],
-            );
-
-            let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
-            assert!(!valid);
-            assert!(err_has(&err, "mimetype"));
-        }
-
-        /// mimetype 내용이 잘못되면 거부된다.
-        #[test]
-        fn test_invalid_mimetype_rejected() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub = tmp.path().join("bad_mimetype.epub");
-            write_zip_stored(
-                &epub,
-                &[
-                    ("mimetype", b"text/plain"),
-                    ("META-INF/container.xml", CONTAINER_XML.as_bytes()),
-                    ("OEBPS/content.opf", make_opf(1, false, false).as_bytes()),
-                    ("OEBPS/toc.ncx", b"<ncx/>"),
-                    ("OEBPS/ch1.xhtml", chapter(1).as_bytes()),
-                ],
-            );
-
-            let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
-            assert!(!valid);
-            assert!(err_has(&err, "invalid mimetype"));
-        }
-
-        /// OPF 파일이 없으면 거부된다.
-        #[test]
-        fn test_missing_opf_rejected() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub = tmp.path().join("no_opf.epub");
-            write_zip_stored(&epub, &[("mimetype", b"application/epub+zip"), ("OEBPS/ch1.xhtml", chapter(1).as_bytes())]);
-
-            let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
-            assert!(!valid);
-            assert!(err_has(&err, "OPF"));
-        }
-
-        /// 유효한 spine 챕터가 0개이면 거부된다.
-        #[test]
-        fn test_no_valid_spine_chapters_rejected() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub = tmp.path().join("empty_spine.epub");
-            create_corrupted_epub(&epub, 2, true);
-
-            let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
-            assert!(!valid);
-            assert!(err_has(&err, "no valid spine chapters"));
-        }
-
-        /// NCX 파일이 ZIP에 없으면 toc 속성이 제거되고 통과한다.
-        #[test]
-        fn test_missing_ncx_toc_attribute_removed() {
-            let tmp = tempfile::tempdir().unwrap();
-            // toc="toc"이 있지만 toc.ncx 파일 없는 EPUB
-            let epub = tmp.path().join("no_ncx.epub");
-            // toc.ncx 파일 생략
-            write_zip_stored(
-                &epub,
-                &[
-                    ("mimetype", b"application/epub+zip"),
-                    ("META-INF/container.xml", CONTAINER_XML.as_bytes()),
-                    ("OEBPS/content.opf", make_opf(2, false, false).as_bytes()),
-                    ("OEBPS/ch1.xhtml", chapter(1).as_bytes()),
-                    ("OEBPS/ch2.xhtml", chapter(2).as_bytes()),
-                ],
-            );
-
-            let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
-            assert!(valid, "Expected valid, got: {err:?}");
-
-            // 수정된 EPUB에서 toc 속성이 제거되었는지 확인
-            let (toc, _) = spine_of(&epub, "OEBPS/content.opf");
-            assert!(toc.is_none(), "toc attribute should be removed");
-        }
-
-        /// manifest에 없는 spine idref가 자동 제거되고 통과한다.
-        #[test]
-        fn test_invalid_spine_idref_removed() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub = tmp.path().join("bad_idref.epub");
-            create_epub_with_invalid_spine(&epub);
-
-            let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
-            assert!(valid, "Expected valid, got: {err:?}");
-
-            // 수정된 EPUB에서 coverpage idref가 제거되었는지 확인
-            let (_, idrefs) = spine_of(&epub, "OEBPS/content.opf");
-            assert!(!idrefs.contains(&"coverpage".to_string()), "invalid idref should be removed");
-            assert!(idrefs.contains(&"ch1".to_string()));
-            assert!(idrefs.contains(&"ch2".to_string()));
-        }
-
-        /// manifest에는 있지만 ZIP에 파일이 없는 spine 항목이 자동 제거된다.
-        #[test]
-        fn test_spine_item_missing_from_zip_removed() {
-            let tmp = tempfile::tempdir().unwrap();
-            // ch1이 누락된 EPUB (ch2, ch3은 존재)
-            let epub = tmp.path().join("missing_ch1.epub");
-            create_corrupted_epub(&epub, 3, false);
-
-            let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
-            assert!(valid, "Expected valid, got: {err:?}");
-
-            // ch1이 spine에서 제거되었는지 확인
-            let (_, idrefs) = spine_of(&epub, "OEBPS/content.opf");
-            assert!(!idrefs.contains(&"ch1".to_string()), "missing ch1 should be removed from spine");
-            assert!(idrefs.contains(&"ch2".to_string()));
-            assert!(idrefs.contains(&"ch3".to_string()));
-        }
-
-        /// 손상된 ZIP 파일은 거부된다.
-        #[test]
-        fn test_corrupted_zip_rejected() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub = tmp.path().join("corrupted.epub");
-            fs::write(&epub, b"this is not a zip file").unwrap();
-
-            let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
-            assert!(!valid);
-            assert!(err_has(&err, "corrupted ZIP"));
-        }
-
-        /// spine 요소가 없는 OPF는 거부된다.
-        #[test]
-        fn test_missing_spine_element_rejected() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub = tmp.path().join("no_spine.epub");
-            create_epub_without_spine(&epub);
-
-            let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
-            assert!(!valid);
-            assert!(err_has(&err, "spine"));
-        }
-
-        /// toc 속성이 manifest에 없는 ID를 참조하면 제거된다.
-        #[test]
-        fn test_toc_id_not_in_manifest_removed() {
-            let tmp = tempfile::tempdir().unwrap();
-            let opf_content = r#"<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>Test</dc:title>
-  </metadata>
-  <manifest>
-    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
-  </manifest>
-  <spine toc="nonexistent_toc">
-    <itemref idref="ch1"/>
-  </spine>
-</package>"#;
-
-            let epub = tmp.path().join("bad_toc_id.epub");
-            write_zip_stored(
-                &epub,
-                &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML.as_bytes()), ("OEBPS/content.opf", opf_content.as_bytes()), ("OEBPS/ch1.xhtml", chapter(1).as_bytes())],
-            );
-
-            let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
-            assert!(valid, "Expected valid, got: {err:?}");
-
-            let (toc, _) = spine_of(&epub, "OEBPS/content.opf");
-            assert!(toc.is_none());
-        }
-
-        /// 문제가 없는 EPUB은 재작성하지 않는다 (mtime 불변).
-        #[test]
-        fn test_no_rewrite_when_clean() {
-            let tmp = tempfile::tempdir().unwrap();
-            let epub = tmp.path().join("clean.epub");
-            create_test_epub(&epub, 2, false, false);
-            let mtime_before = fs::metadata(&epub).unwrap().modified().unwrap();
-
-            let (valid, _err) = verdict(BookManager::_validate_preview_epub(&epub));
-            assert!(valid);
-            let mtime_after = fs::metadata(&epub).unwrap().modified().unwrap();
-            assert_eq!(mtime_before, mtime_after, "clean EPUB should not be rewritten");
-        }
-    }
-
-    /// URL 인코딩된 href 항목 및 전체보기(chapters=0) 시 EPUB 구조가 완전 보존되는지 검증.
-    #[tokio::test]
-    async fn test_epub_unquoted_href_and_full_view() {
-        common::setup_env();
-        let tmp = tempfile::tempdir().unwrap();
-        let tmp_path = tmp.path();
-
-        let epub_file = tmp_path.join("encoded_book.epub");
-        fs::create_dir_all(epub_file.parent().unwrap()).unwrap();
-        let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
+}
+
+fn namelist<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>) -> Vec<String> {
+    (0..zf.len()).map(|i| zf.by_index(i).unwrap().name().unwrap().into_owned()).collect()
+}
+
+fn zip_read<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &str) -> Vec<u8> {
+    let mut data = Vec::new();
+    zf.by_name(name).unwrap_or_else(|_| panic!("KeyError: {name}")).read_to_end(&mut data).unwrap();
+    data
+}
+
+fn zip_read_string<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &str) -> String {
+    String::from_utf8(zip_read(zf, name)).unwrap()
+}
+
+/// URL 인코딩된 href 항목 및 전체보기(chapters=0) 시 EPUB 구조가 완전 보존되는지 검증.
+#[tokio::test]
+async fn test_epub_unquoted_href_and_full_view() {
+    common::setup_env();
+    let tmp = tempfile::tempdir().unwrap();
+    let tmp_path = tmp.path();
+
+    let epub_file = tmp_path.join("encoded_book.epub");
+    fs::create_dir_all(epub_file.parent().unwrap()).unwrap();
+    let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:title>Encoded Book</dc:title>
@@ -793,77 +84,77 @@ mod book_preview {
     <reference type="cover" title="Cover Page" href="cover%20page.xhtml"/>
   </guide>
 </package>"#;
-        let ch1 = r#"<?xml version="1.0" encoding="UTF-8"?>
+    let ch1 = r#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head><title>Ch1</title></head>
 <body><img src="img%201.jpg"/></body>
 </html>"#;
-        let cover = r#"<?xml version="1.0" encoding="UTF-8"?>
+    let cover = r#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head><title>Cover</title></head>
 <body><h1>Cover</h1></body>
 </html>"#;
-        write_zip_stored(
-            &epub_file,
-            &[
-                ("mimetype", b"application/epub+zip"),
-                ("OEBPS/content.opf", opf.as_bytes()),
-                ("OEBPS/ch 1.xhtml", ch1.as_bytes()),
-                ("OEBPS/cover page.xhtml", cover.as_bytes()),
-                ("OEBPS/img 1.jpg", b"fake_image_data"),
-            ],
-        );
-        let _cleanup = TempFile(epub_file.clone());
+    write_zip_stored(
+        &epub_file,
+        &[
+            ("mimetype", b"application/epub+zip"),
+            ("OEBPS/content.opf", opf.as_bytes()),
+            ("OEBPS/ch 1.xhtml", ch1.as_bytes()),
+            ("OEBPS/cover page.xhtml", cover.as_bytes()),
+            ("OEBPS/img 1.jpg", b"fake_image_data"),
+        ],
+    );
+    let _cleanup = TempFile(epub_file.clone());
 
-        let es = FakeEsManager::with_doc(
-            json!({"category": "test", "title": "Test Book", "author": "Author", "file_path": "encoded_book.epub", "file_type": "epub", "file_size": 1000, "updated_time": "2026-01-01T00:00:00.000000"}),
-        );
-        let bm = BookManager::with_deps(BookManagerDeps::new(tmp_path.to_path_buf(), es));
+    let es = FakeEsManager::with_doc(
+        json!({"category": "test", "title": "Test Book", "author": "Author", "file_path": "encoded_book.epub", "file_type": "epub", "file_size": 1000, "updated_time": "2026-01-01T00:00:00.000000"}),
+    );
+    let bm = BookManager::with_deps(BookManagerDeps::new(tmp_path.to_path_buf(), es));
 
-        let resp = bm.get_book_preview(1, None, Some(0)).await;
-        assert_eq!(resp.status_code, 200);
+    let resp = bm.get_book_preview(1, None, Some(0)).await;
+    assert_eq!(resp.status_code, 200);
 
-        let cache_file = tmp_path.join(".preview_cache").join(format!("1_ch1_v{}.epub", BookManager::EPUB_IMAGE_POLICY_VERSION));
-        assert!(cache_file.exists());
+    let cache_file = tmp_path.join(".preview_cache").join(format!("1_ch1_v{}.epub", BookManager::EPUB_IMAGE_POLICY_VERSION));
+    assert!(cache_file.exists());
 
-        let mut zout = ZipArchive::new(File::open(&cache_file).unwrap()).unwrap();
-        let names = namelist(&mut zout);
-        assert!(names.contains(&"OEBPS/cover page.xhtml".to_string()));
-        assert!(names.contains(&"OEBPS/img 1.jpg".to_string()));
-        let opf_data = zip_read_string(&mut zout, "OEBPS/content.opf");
-        assert!(opf_data.contains("id=\"cover\""));
+    let mut zout = ZipArchive::new(File::open(&cache_file).unwrap()).unwrap();
+    let names = namelist(&mut zout);
+    assert!(names.contains(&"OEBPS/cover page.xhtml".to_string()));
+    assert!(names.contains(&"OEBPS/img 1.jpg".to_string()));
+    let opf_data = zip_read_string(&mut zout, "OEBPS/content.opf");
+    assert!(opf_data.contains("id=\"cover\""));
+}
+
+/// XHTML 자기닫힘 `<title/>` 등이 HTML 파서에서 본문을 삼키지 않게 펴는지 검증.
+mod self_closing_rcdata {
+    use super::*;
+
+    #[test]
+    fn test_expands_self_closing_rcdata_tags() {
+        assert_eq!(BookManager::_expand_self_closing_rcdata(b"<title/>"), b"<title></title>");
+        assert_eq!(BookManager::_expand_self_closing_rcdata(b"<TITLE />"), b"<TITLE ></TITLE>");
+        assert_eq!(BookManager::_expand_self_closing_rcdata(b"<script src=\"a.js\"/>"), b"<script src=\"a.js\"></script>");
+        assert_eq!(BookManager::_expand_self_closing_rcdata(b"<style/><textarea/>"), b"<style></style><textarea></textarea>");
     }
 
-    /// XHTML 자기닫힘 `<title/>` 등이 HTML 파서에서 본문을 삼키지 않게 펴는지 검증.
-    mod test_self_closing_rcdata {
-        use super::*;
-
-        #[test]
-        fn test_expands_self_closing_rcdata_tags() {
-            assert_eq!(BookManager::_expand_self_closing_rcdata(b"<title/>"), b"<title></title>");
-            assert_eq!(BookManager::_expand_self_closing_rcdata(b"<TITLE />"), b"<TITLE ></TITLE>");
-            assert_eq!(BookManager::_expand_self_closing_rcdata(b"<script src=\"a.js\"/>"), b"<script src=\"a.js\"></script>");
-            assert_eq!(BookManager::_expand_self_closing_rcdata(b"<style/><textarea/>"), b"<style></style><textarea></textarea>");
-        }
-
-        #[test]
-        fn test_keeps_paired_and_unrelated_tags() {
-            for data in [&b"<title>keep</title>"[..], b"<br/>", b"<img src=\"a.jpg\"/>", b"<titlebar/>"] {
-                assert_eq!(BookManager::_expand_self_closing_rcdata(data), data, "data={}", String::from_utf8_lossy(data));
-            }
+    #[test]
+    fn test_keeps_paired_and_unrelated_tags() {
+        for data in [&b"<title>keep</title>"[..], b"<br/>", b"<img src=\"a.jpg\"/>", b"<titlebar/>"] {
+            assert_eq!(BookManager::_expand_self_closing_rcdata(data), data, "data={}", String::from_utf8_lossy(data));
         }
     }
+}
 
-    /// `<title/>`을 쓴 EPUB의 프리뷰 산출물에서 본문이 살아남는지 검증.
-    #[tokio::test]
-    async fn test_preview_expands_self_closing_title() {
-        common::setup_env();
-        let tmp = tempfile::tempdir().unwrap();
-        let tmp_path = tmp.path();
+/// `<title/>`을 쓴 EPUB의 프리뷰 산출물에서 본문이 살아남는지 검증.
+#[tokio::test]
+async fn test_preview_expands_self_closing_title() {
+    common::setup_env();
+    let tmp = tempfile::tempdir().unwrap();
+    let tmp_path = tmp.path();
 
-        let epub_file = tmp_path.join("self_closing_title.epub");
-        fs::create_dir_all(epub_file.parent().unwrap()).unwrap();
-        let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
+    let epub_file = tmp_path.join("self_closing_title.epub");
+    fs::create_dir_all(epub_file.parent().unwrap()).unwrap();
+    let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="2.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:title>Self Closing Title</dc:title>
@@ -875,81 +166,1318 @@ mod book_preview {
     <itemref idref="ch1"/>
   </spine>
 </package>"#;
-        let ch1 = r#"<html xmlns="http://www.w3.org/1999/xhtml">
+    let ch1 = r#"<html xmlns="http://www.w3.org/1999/xhtml">
 <head><title/></head>
 <body><p>본문이 보여야 한다</p></body>
 </html>"#;
-        write_zip_stored(
-            &epub_file,
-            &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML.as_bytes()), ("OEBPS/content.opf", opf.as_bytes()), ("OEBPS/ch1.html", ch1.as_bytes())],
-        );
-        let _cleanup = TempFile(epub_file.clone());
+    write_zip_stored(
+        &epub_file,
+        &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML.as_bytes()), ("OEBPS/content.opf", opf.as_bytes()), ("OEBPS/ch1.html", ch1.as_bytes())],
+    );
+    let _cleanup = TempFile(epub_file.clone());
 
-        let es = FakeEsManager::with_doc(
-            json!({"category": "test", "title": "Self Closing Title", "author": "Author", "file_path": "self_closing_title.epub", "file_type": "epub", "file_size": 1000, "updated_time": "2026-01-01T00:00:00.000000"}),
-        );
-        let bm = BookManager::with_deps(BookManagerDeps::new(tmp_path.to_path_buf(), es));
+    let es = FakeEsManager::with_doc(
+        json!({"category": "test", "title": "Self Closing Title", "author": "Author", "file_path": "self_closing_title.epub", "file_type": "epub", "file_size": 1000, "updated_time": "2026-01-01T00:00:00.000000"}),
+    );
+    let bm = BookManager::with_deps(BookManagerDeps::new(tmp_path.to_path_buf(), es));
 
-        let resp = bm.get_book_preview(2, None, Some(0)).await;
+    let resp = bm.get_book_preview(2, None, Some(0)).await;
+    assert_eq!(resp.status_code, 200);
+
+    let cache_file = tmp_path.join(".preview_cache").join(format!("2_ch1_v{}.epub", BookManager::EPUB_IMAGE_POLICY_VERSION));
+    let mut zout = ZipArchive::new(File::open(&cache_file).unwrap()).unwrap();
+    let chapter = zip_read_string(&mut zout, "OEBPS/ch1.html");
+
+    assert!(chapter.contains("<title></title>"));
+    assert!(!chapter.contains("<title/>"));
+    // HTML 파서로 읽어도 본문이 title 안으로 삼켜지지 않는다
+    let soup = scraper::Html::parse_document(&chapter);
+    let body_selector = scraper::Selector::parse("body").unwrap();
+    let body = soup.select(&body_selector).next().expect("body 요소");
+    assert!(body.text().collect::<String>().contains("본문이 보여야 한다"));
+}
+
+fn hwp_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().map(|a| a.join("tests/books/_hwp")).find(|p| p.exists()).unwrap_or_else(|| PathBuf::from("tests/books/_hwp"))
+}
+
+/// Python `make_doc(path, file_type)`.
+fn make_doc(rel_path: &str, file_type: &str) -> Value {
+    json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
+}
+
+mod empty_content {
+    use super::*;
+
+    // book_manager HWP preview에서 빈 결과 시 안내 메시지 반환
+
+    #[tokio::test]
+    async fn test_hwp_preview_empty_returns_message() {
+        // LO+hwp3 모두 빈 결과 -> '미리보기를 생성할 수 없습니다' 메시지
+        let hwp_src = hwp_dir().join("v1.20_부하의약혼녀.hwp");
+        assert!(hwp_src.exists(), "HWP 샘플 파일이 필요하다: {}", hwp_src.display());
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("A")).unwrap();
+        fs::copy(&hwp_src, dir.path().join("A").join("old.hwp")).unwrap();
+
+        let doc = make_doc("A/old.hwp", "hwp");
+        // libreoffice 변환기가 빈 문자열을 돌려준다
+        let deps = BookManagerDeps::new(dir.path().to_path_buf(), FakeEsManager::with_doc(doc)).with_runner(FakeRunner::office_output(""));
+        let manager = BookManager::with_deps(deps);
+        let resp = BookManagerApi::get_book_preview(&manager, 1, Some(1), None).await;
         assert_eq!(resp.status_code, 200);
-
-        let cache_file = tmp_path.join(".preview_cache").join(format!("2_ch1_v{}.epub", BookManager::EPUB_IMAGE_POLICY_VERSION));
-        let mut zout = ZipArchive::new(File::open(&cache_file).unwrap()).unwrap();
-        let chapter = zip_read_string(&mut zout, "OEBPS/ch1.html");
-
-        assert!(chapter.contains("<title></title>"));
-        assert!(!chapter.contains("<title/>"));
-        // HTML 파서로 읽어도 본문이 title 안으로 삼켜지지 않는다
-        let soup = scraper::Html::parse_document(&chapter);
-        let body_selector = scraper::Selector::parse("body").unwrap();
-        let body = soup.select(&body_selector).next().expect("body 요소");
-        assert!(body.text().collect::<String>().contains("본문이 보여야 한다"));
+        assert!(String::from_utf8_lossy(&resp.body).contains("미리보기를 생성할 수 없습니다"));
     }
 }
 
-// `tests/rust/backend/book_manager_hwp_preview.rs`에서 옮긴 테스트.
-mod book_manager_hwp_preview {
-    use super::{common};
-
+mod get_pdf_pages {
+    use super::common;
     use std::fs;
     use std::path::{Path, PathBuf};
-
+    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
     use backend::book_manager::{BookManager, BookManagerDeps};
-    use backend::main::BookManagerApi;
+    use backend::pdf_page_reader::{PdfError, PdfPageOps, PdfReaderHandle};
     use common::es_fake::FakeEsManager;
-    use common::runner::FakeRunner;
-    use serde_json::{Value, json};
+    use common::faulty_fs::FaultyFs;
+    use common::pdf::{make_blank_pdf, page_count_bytes};
+    use serde_json::{json, Value};
+    use tempfile::TempDir;
 
-    fn hwp_dir() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().map(|a| a.join("tests/books/_hwp")).find(|p| p.exists()).unwrap_or_else(|| PathBuf::from("tests/books/_hwp"))
+    trait ResponseExt {
+        fn header(&self, name: &str) -> Option<&str>;
     }
 
-    /// Python `make_doc(path, file_type)`.
+    impl ResponseExt for backend::main::BookResponse {
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str())
+        }
+    }
+
+    /// `create_test_pdf`
+    fn create_test_pdf(num_pages: usize, output_path: &Path) {
+        make_blank_pdf(output_path, num_pages);
+    }
+
+    /// ES 문서 dict 생성 헬퍼.
+    fn make_doc(relative_path: &str, file_size: u64, page_count: i64, file_type: &str) -> Value {
+        json!({
+            "category": "test_category", "title": "Test Book", "author": "Author", "file_path": relative_path, "file_type": file_type,
+            "file_size": file_size, "line_count": 0, "page_count": page_count, "isbn": "", "summary": "test", "updated_time": "2024-01-01T00:00:00.000000"
+        })
+    }
+
+    struct Env {
+        bm: Arc<BookManager>,
+        es: Arc<FakeEsManager>,
+        temp_dir: PathBuf,
+        _tmp: TempDir,
+    }
+
+    /// `configure`는 임시 디렉터리와 기본 Deps를 받는다. 캐시 한도처럼 만들어 둔 파일 크기가 필요한 설정에 쓴다.
+    fn build(configure: impl FnOnce(&Path, BookManagerDeps) -> BookManagerDeps) -> Env {
+        common::setup_env();
+        let tmp = tempfile::tempdir().unwrap();
+        let temp_dir = tmp.path().to_path_buf();
+        let pdf = temp_dir.join("test_category").join("test_book.pdf");
+        fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+        create_test_pdf(5, &pdf);
+        let default_doc = make_doc("test_category/test_book.pdf", fs::metadata(&pdf).unwrap().len(), 5, "pdf");
+        let es = FakeEsManager::with_doc(default_doc.clone());
+        let deps = configure(&temp_dir, BookManagerDeps::new(temp_dir.clone(), es.clone()));
+        Env { bm: Arc::new(BookManager::with_deps(deps)), es, temp_dir, _tmp: tmp }
+    }
+
+    fn env() -> Env {
+        build(|_, d| d)
+    }
+
+    struct CountingPdfPages {
+        opens: Arc<AtomicUsize>,
+        cached_extracts: Arc<AtomicUsize>,
+    }
+
+    impl PdfPageOps for CountingPdfPages {
+        fn page_count(&self, _path: &Path) -> Result<usize, PdfError> {
+            Ok(5)
+        }
+
+        fn extract_pages(&self, _path: &Path, _start: usize, _end: usize) -> Result<Vec<u8>, PdfError> {
+            panic!("cached reader path should be used")
+        }
+
+        fn open_reader(&self, path: &Path) -> Result<PdfReaderHandle, PdfError> {
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            Ok(PdfReaderHandle::new(path.to_path_buf(), 5))
+        }
+
+        fn extract_pages_from_reader(&self, _reader: &PdfReaderHandle, _start: usize, _end: usize) -> Result<Vec<u8>, PdfError> {
+            self.cached_extracts.fetch_add(1, Ordering::SeqCst);
+            Ok(b"cached PDF pages".to_vec())
+        }
+    }
+
+    fn body_contains(body: &[u8], needle: &str) -> bool {
+        String::from_utf8_lossy(body).contains(needle)
+    }
+
+    #[tokio::test]
+    async fn test_returns_single_page() {
+        let e = env();
+        let response = e.bm.get_pdf_pages(1, 1, 1).await;
+
+        assert_eq!(response.status_code, 200);
+        assert_eq!(response.header("X-Total-Pages"), Some("5"));
+        assert_eq!(response.media_type.as_deref(), Some("application/pdf"));
+        assert_eq!(response.header("Content-Encoding"), Some("identity"));
+
+        assert_eq!(page_count_bytes(&response.body), 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_pdf_caches_are_regenerated_after_korean_font_support_changes() {
+        let e = env();
+        let cache_dir = e.temp_dir.join(".preview_cache");
+        fs::create_dir_all(&cache_dir).unwrap();
+        // 이전 서버가 만든 캐시는 최신 mtime이어도 한글이 이미 빠져 있을 수 있다.
+        for name in ["1_p1-1.pdf", "1_n5.pdf"] {
+            fs::write(cache_dir.join(name), b"LEGACY PDF WITHOUT KOREAN").unwrap();
+        }
+        let pages = e.bm.get_pdf_pages(1, 1, 1).await;
+        assert_eq!(pages.status_code, 200);
+        assert_eq!(page_count_bytes(&pages.body), 1);
+        let preview = e.bm.get_book_preview(1, None, None).await;
+        assert_eq!(preview.status_code, 200);
+        assert_eq!(page_count_bytes(&preview.body), 5);
+    }
+
+    #[tokio::test]
+    async fn get_pdf_pages_reuses_the_cached_reader_for_different_ranges() {
+        let opens = Arc::new(AtomicUsize::new(0));
+        let cached_extracts = Arc::new(AtomicUsize::new(0));
+        let pages = Arc::new(CountingPdfPages { opens: opens.clone(), cached_extracts: cached_extracts.clone() });
+        let e = build(|_, deps| deps.with_pdf_pages(pages));
+
+        assert_eq!(e.bm.get_pdf_pages(1, 1, 1).await.status_code, 200);
+        assert_eq!(e.bm.get_pdf_pages(1, 2, 2).await.status_code, 200);
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+        assert_eq!(cached_extracts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_returns_page_range() {
+        let e = env();
+        let response = e.bm.get_pdf_pages(1, 2, 4).await;
+
+        assert_eq!(response.status_code, 200);
+        assert_eq!(response.header("X-Total-Pages"), Some("5"));
+
+        assert_eq!(page_count_bytes(&response.body), 3); // 2, 3, 4
+    }
+
+    #[tokio::test]
+    async fn test_returns_all_pages() {
+        let e = env();
+        let response = e.bm.get_pdf_pages(1, 1, 5).await;
+
+        assert_eq!(response.status_code, 200);
+        assert_eq!(page_count_bytes(&response.body), 5);
+    }
+
+    #[tokio::test]
+    async fn test_end_clamped_to_total_pages() {
+        let e = env();
+        let response = e.bm.get_pdf_pages(1, 3, 100).await;
+
+        assert_eq!(response.status_code, 200);
+        assert_eq!(page_count_bytes(&response.body), 3); // 3, 4, 5
+    }
+
+    #[tokio::test]
+    async fn test_start_exceeds_total_pages() {
+        let e = env();
+        let response = e.bm.get_pdf_pages(1, 100, 200).await;
+
+        assert_eq!(response.status_code, 400);
+    }
+
+    #[tokio::test]
+    async fn test_end_before_start_is_rejected() {
+        let e = env();
+        assert_eq!(e.bm.get_pdf_pages(1, 3, 2).await.status_code, 400);
+        assert!(!e.temp_dir.join(".preview_cache").join(format!("1_p3-2_v{}.pdf", BookManager::PDF_PREVIEW_CACHE_VERSION)).exists());
+    }
+
+    #[tokio::test]
+    async fn test_range_over_the_page_limit_is_rejected() {
+        // 범위마다 캐시 파일이 생기므로 한 요청의 쪽 수를 제한한다. 뷰어는 11쪽씩 요청한다.
+        let e = env();
+        create_test_pdf(60, &e.temp_dir.join("test_category").join("test_book.pdf"));
+        assert_eq!(e.bm.get_pdf_pages(1, 1, 50).await.status_code, 200);
+        assert_eq!(e.bm.get_pdf_pages(1, 1, 51).await.status_code, 400);
+    }
+
+    #[tokio::test]
+    async fn test_preview_cache_is_keyed_by_page_count() {
+        // 큰 pages 요청이 캐시를 덮어 다른 사용자의 기본 미리보기가 전체 책이 되면 안 된다.
+        let e = env();
+        let cache_dir = e.temp_dir.join(".preview_cache");
+
+        let two = e.bm.get_book_preview(1, Some(2), None).await;
+        assert_eq!(page_count_bytes(&two.body), 2);
+        let four = e.bm.get_book_preview(1, Some(4), None).await;
+        assert_eq!(page_count_bytes(&four.body), 4);
+        let two_again = e.bm.get_book_preview(1, Some(2), None).await;
+        assert_eq!(page_count_bytes(&two_again.body), 2);
+
+        assert!(cache_dir.join(format!("1_n2_v{}.pdf", BookManager::PDF_PREVIEW_CACHE_VERSION)).exists());
+        assert!(!cache_dir.join(format!("1_n4_v{}.pdf", BookManager::PDF_PREVIEW_CACHE_VERSION)).exists(), "같은 책의 다른 쪽 수 캐시는 하나만 남긴다");
+        assert!(!cache_dir.join("1.pdf").exists());
+    }
+
+    #[tokio::test]
+    async fn test_cache_writes_leave_no_temp_files() {
+        let e = env();
+        assert_eq!(e.bm.get_book_preview(1, Some(2), None).await.status_code, 200);
+        assert_eq!(e.bm.get_pdf_pages(1, 1, 2).await.status_code, 200);
+        let names: Vec<String> = fs::read_dir(e.temp_dir.join(".preview_cache")).unwrap().map(|x| x.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert!(names.iter().all(|n| !n.ends_with(".tmp")), "{names:?}");
+    }
+
+    #[tokio::test]
+    async fn test_book_not_found() {
+        let e = env();
+        e.es.set_doc(None);
+
+        let response = e.bm.get_pdf_pages(999, 1, 1).await;
+        assert_eq!(response.status_code, 404);
+    }
+
+    #[tokio::test]
+    async fn test_cache_hit() {
+        let e = env();
+
+        // 첫 번째 호출: 캐시 생성
+        let response1 = e.bm.get_pdf_pages(1, 1, 2).await;
+        assert_eq!(response1.status_code, 200);
+
+        // 캐시 파일 존재 확인
+        let cache_file = e.temp_dir.join(".preview_cache").join(format!("1_p1-2_v{}.pdf", BookManager::PDF_PREVIEW_CACHE_VERSION));
+        assert!(cache_file.exists());
+
+        // 두 번째 호출: 캐시 히트 (같은 결과)
+        let response2 = e.bm.get_pdf_pages(1, 1, 2).await;
+        assert_eq!(response2.status_code, 200);
+        assert_eq!(response2.header("X-Total-Pages"), Some("5"));
+    }
+
+    #[tokio::test]
+    async fn test_not_a_pdf_file() {
+        let e = env();
+
+        let txt_path = e.temp_dir.join("test_category").join("test.txt");
+        fs::write(&txt_path, "hello").unwrap();
+
+        e.es.set_doc(Some(make_doc("test_category/test.txt", fs::metadata(&txt_path).unwrap().len(), 5, "txt")));
+
+        let response = e.bm.get_pdf_pages(1, 1, 1).await;
+        assert_eq!(response.status_code, 400);
+    }
+
+    #[tokio::test]
+    async fn test_missing_file_returns_404() {
+        let e = env();
+        e.es.set_doc(Some(make_doc("test_category/gone.pdf", 1234, 5, "pdf")));
+
+        let response = e.bm.get_pdf_pages(1, 1, 1).await;
+        assert_eq!(response.status_code, 404);
+        assert!(body_contains(&response.body, "File not found"));
+    }
+
+    /// 스토리지 마운트가 끊겨 stat()이 EIO를 내면 사유를 담은 503을 반환해야 한다.
+    ///
+    /// 예전에는 이 OSError가 그대로 escape해 CORSMiddleware를 우회한 500이 나갔고,
+    /// 브라우저에는 "Failed to fetch"로만 보여 원인을 알 수 없었다.
+    #[tokio::test]
+    async fn test_storage_io_error_returns_503_with_reason() {
+        // errno.EIO(5)와 os.strerror(EIO)
+        let faulty = FaultyFs::new();
+        faulty.set_is_file(|_| Some(std::io::Error::from_raw_os_error(5)));
+        let e = build(|_, d| d.with_fs(faulty));
+
+        let response = e.bm.get_pdf_pages(1, 1, 1).await;
+
+        assert_eq!(response.status_code, 503);
+        assert!(body_contains(&response.body, "Storage access error"));
+        assert!(body_contains(&response.body, "Input/output error"));
+    }
+}
+
+mod get_book_preview {
+    use super::common;
+
+
+    use std::{fs, io};
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime};
+
+    use backend::book_manager::{BookManager, BookManagerDeps};
+
+    use backend::epub_cover::EpubCoverHooks;
+    use backend::main::{BookManagerApi, BookResponse};
+    use backend::pdf_page_reader::{PdfError, PdfPageOps};
+
+
+    use common::epub::{EpubSpec, make_epub};
+    use common::es_fake::FakeEsManager;
+    use common::faulty_fs::FaultyFs;
+    use common::fsx::{mtime_key, set_mtime};
+
+    use common::runner::FakeRunner;
+    use common::zipx::write_zip;
+    use serde_json::{json, Value};
+    use sysdeps::CommandError;
+    use tempfile::TempDir;
+
+    // ---------------------------------------------------------------------------
+    // 공용 헬퍼 (전반부 정의를 복사)
+    // ---------------------------------------------------------------------------
+
+    /// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
+    fn tmp_dir() -> TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    /// `asyncio.run(coro)`에 대응한다. 동기 테스트 안에서 future를 끝까지 돌린다.
+    fn asyncio_runner<F: std::future::Future>(fut: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
+    }
+
+    /// 기본 구성의 `BookManagerDeps`. `with_*`를 더 붙인 뒤 `BookManager::with_deps`로 만든다.
+    fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
+        common::setup_env();
+        BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
+    }
+
+    fn make_manager(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManager {
+        BookManager::with_deps(deps(tmp_path, es))
+    }
+
+    /// `BookResponse` 읽기 도우미(테스트 로컬). `is_file`은 본문이 있으면 참이다(파일을 읽어 담은 응답).
+    trait ResponseExt {
+        fn header(&self, name: &str) -> Option<&str>;
+        fn body_text(&self) -> String;
+    }
+
+    impl ResponseExt for BookResponse {
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+        }
+
+        fn body_text(&self) -> String {
+            String::from_utf8_lossy(&self.body).into_owned()
+        }
+    }
+
     fn make_doc(rel_path: &str, file_type: &str) -> Value {
         json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
     }
 
-    mod test_book_manager_preview_empty_content {
-        use super::*;
+    /// `_make_minimal_epub`의 기본 OPF.
+    const MINIMAL_OPF: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
 
-        // book_manager HWP preview에서 빈 결과 시 안내 메시지 반환
+    /// `_make_minimal_epub`의 뼈대. OPF는 루트의 `content.opf`, 챕터는 `ch1.xhtml` 하나다.
+    /// OPF를 바꾸려면 `.with_opf(..)`, 멤버를 더하려면 `.with_extra(..)`를 붙인다.
+    fn minimal_spec() -> EpubSpec {
+        let mut spec = EpubSpec::minimal();
+        spec.chapters = vec![("ch1.xhtml".to_string(), "<html><body><p>Hello</p></body></html>".to_string())];
+        spec.with_opf(MINIMAL_OPF)
+    }
 
-        #[tokio::test]
-        async fn test_hwp_preview_empty_returns_message() {
-            // LO+hwp3 모두 빈 결과 -> '미리보기를 생성할 수 없습니다' 메시지
-            let hwp_src = hwp_dir().join("v1.20_부하의약혼녀.hwp");
-            assert!(hwp_src.exists(), "HWP 샘플 파일이 필요하다: {}", hwp_src.display());
-            let dir = tempfile::tempdir().unwrap();
-            fs::create_dir_all(dir.path().join("A")).unwrap();
-            fs::copy(&hwp_src, dir.path().join("A").join("old.hwp")).unwrap();
+    const CONTAINER_XML_CONTENT_OPF: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
 
-            let doc = make_doc("A/old.hwp", "hwp");
-            // libreoffice 변환기가 빈 문자열을 돌려준다
-            let deps = BookManagerDeps::new(dir.path().to_path_buf(), FakeEsManager::with_doc(doc)).with_runner(FakeRunner::office_output(""));
-            let manager = BookManager::with_deps(deps);
-            let resp = BookManagerApi::get_book_preview(&manager, 1, Some(1), None).await;
-            assert_eq!(resp.status_code, 200);
-            assert!(String::from_utf8_lossy(&resp.body).contains("미리보기를 생성할 수 없습니다"));
+    // TODO(common): lopdf가 아니라 /Info 사전을 직접 쓰는 최소 PDF 생성기. common::pdf::PdfBuilder에 `info` 지원이 생기면 지운다.
+    /// pypdf `PdfWriter.add_blank_page`로 만든 PDF에 대응한다. `info`는 /Info 사전의 (키, 값)이다.
+    fn pdf_bytes(pages: usize, width: u32, height: u32, info: &[(&str, &str)]) -> Vec<u8> {
+        let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
+        let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 3 + i)).collect();
+        objs.push(format!("<< /Type /Pages /Kids [{}] /Count {pages} >>", kids.join(" ")));
+        for _ in 0..pages {
+            objs.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] >>"));
         }
+        if !info.is_empty() {
+            let body: String = info.iter().map(|(k, v)| format!("/{k} ({v}) ")).collect();
+            objs.push(format!("<< {body}>>"));
+        }
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, obj) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{obj}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref_pos = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for off in &offsets {
+            out.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
+        }
+        let info_ref = if info.is_empty() { String::new() } else { format!(" /Info {} 0 R", 3 + pages) };
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R{info_ref} >>\nstartxref\n{xref_pos}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// 612x792 빈 페이지 `pages`장짜리 PDF.
+    fn blank_pdf_bytes(pages: usize, info: &[(&str, &str)]) -> Vec<u8> {
+        pdf_bytes(pages, 612, 792, info)
+    }
+
+    // TODO(common): `common::fake_pdf`(다음 단계)에 `PdfPageOps` 대역이 생기면 지운다.
+    /// 구 `override_get_cached_page_count(|_| Err(OSError(28)))`: 쪽수 조회가 항상 실패하는 `PdfPageOps`.
+    struct NoSpacePdfPages;
+
+    impl PdfPageOps for NoSpacePdfPages {
+        fn page_count(&self, _path: &Path) -> Result<usize, PdfError> {
+            Err(PdfError { kind: "OSError".to_string(), message: "[Errno 28] No space left on device".to_string() })
+        }
+
+        fn extract_pages(&self, _path: &Path, _start: usize, _end: usize) -> Result<Vec<u8>, PdfError> {
+            Err(PdfError { kind: "OSError".to_string(), message: "[Errno 28] No space left on device".to_string() })
+        }
+    }
+
+    fn blank_pdf_bytes_sized(pages: usize, width: u32, height: u32) -> Vec<u8> {
+        pdf_bytes(pages, width, height, &[])
+    }
+
+    // ---- coverage: get_book_preview edge cases ----
+
+    #[test]
+    fn test_get_book_preview_not_found() {
+        // Lines 443-444: book not in ES
+        let tmp = tmp_dir();
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp.path(), &es);
+        es.set_doc(None);
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 999, None, None));
+        assert_eq!(result.status_code, 404);
+    }
+
+    #[test]
+    fn test_get_book_preview_file_not_found() {
+        // Lines 447-448: file not found on disk
+        let tmp = tmp_dir();
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp.path(), &es);
+        es.set_doc(Some(make_doc("A/missing.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(result.status_code, 404);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_cache_hit() {
+        // Lines 493-494: EPUB preview cache hit
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        make_epub(&epub, &minimal_spec());
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+
+        // 더 최근 mtime을 가진 캐시 파일을 만든다.
+        let cache_dir = tmp_path.join(".preview_cache");
+        fs::create_dir_all(&cache_dir).unwrap();
+        BookManager::_get_epub_total_chapters(&epub);
+        let cache_file = cache_dir.join(format!("1_ch3_v{}.epub", BookManager::EPUB_IMAGE_POLICY_VERSION));
+        make_epub(&cache_file, &minimal_spec());
+
+        set_mtime(&cache_file, SystemTime::now() + Duration::from_secs(1000));
+
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, Some(3), None));
+        assert_eq!(result.status_code, 200);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_opf_keyerror() {
+        // Lines 516-518: OPF file in container.xml but missing from archive
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        let container_xml = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="MISSING.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+        write_zip(&epub, &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", container_xml.as_bytes())]);
+        // zip 안에 MISSING.opf는 없다.
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(result.status_code, 422);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_opf_namespace_fix() {
+        // Lines 523-524: OPF with opf: prefix but no xmlns:opf declaration
+        let opf_ns = "http://www.idpf.org/2007/opf";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <metadata>
+    <opf:meta name="cover" content="cover-image"/>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+        );
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        make_epub(&epub, &minimal_spec().with_opf(&opf));
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        // 크래시하지 않아야 한다. 네임스페이스가 주입된다.
+        assert!([200, 422, 500].contains(&result.status_code), "status={}", result.status_code);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_no_spine() {
+        // Lines 540-547: EPUB without spine element → fallback to manifest order
+        let opf_ns = "http://www.idpf.org/2007/opf";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+</package>"#
+        );
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        make_epub(&epub, &minimal_spec().with_opf(&opf));
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_chapter_missing_from_zip() {
+        // Lines 580-582: chapter file missing from ZIP archive
+        let opf_ns = "http://www.idpf.org/2007/opf";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>"#
+        );
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        // ch2.xhtml은 zip에 없다.
+        make_epub(&epub, &minimal_spec().with_opf(&opf));
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, Some(5), None));
+        assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_svg_image_tag() {
+        // Lines 591-593: chapter with SVG <image> tags
+        let opf_ns = "http://www.idpf.org/2007/opf";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="img1" href="cover.png" media-type="image/png"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+        );
+        let chapter = r#"<html><body><svg><image xlink:href="cover.png"/></svg></body></html>"#;
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend(vec![0u8; 100]);
+        write_zip(
+            &epub,
+            &[
+                ("mimetype", b"application/epub+zip"),
+                ("META-INF/container.xml", CONTAINER_XML_CONTENT_OPF.as_bytes()),
+                ("content.opf", opf.as_bytes()),
+                ("ch1.xhtml", chapter.as_bytes()),
+                ("cover.png", &png),
+            ],
+        );
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_css_missing() {
+        // Lines 613-614: CSS file missing from ZIP
+        let opf_ns = "http://www.idpf.org/2007/opf";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="css1" href="style.css" media-type="text/css"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+        );
+        let chapter = r#"<html><head><link href="style.css" rel="stylesheet"/></head><body><p>Hello</p></body></html>"#;
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        // style.css는 zip에 없다.
+        write_zip(&epub, &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML_CONTENT_OPF.as_bytes()), ("content.opf", opf.as_bytes()), ("ch1.xhtml", chapter.as_bytes())]);
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_large_font_skip() {
+        // Lines 626-633: large font file skipped, missing font skipped
+        let opf_ns = "http://www.idpf.org/2007/opf";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="css1" href="style.css" media-type="text/css"/>
+    <item id="font1" href="big.ttf" media-type="font/ttf"/>
+    <item id="font2" href="missing.woff" media-type="font/woff"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+        );
+        let chapter = r#"<html><head><link href="style.css" rel="stylesheet"/></head><body><p>Hello</p></body></html>"#;
+        let css = "@font-face { font-family: \"Big\"; src: url(\"big.ttf\"); }\n@font-face { font-family: \"Missing\"; src: url(\"missing.woff\"); }\nbody { font-family: serif; }";
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        // big.ttf는 500KB를 넘는다. missing.woff는 zip에 없다.
+        let big = vec![0u8; 600 * 1024];
+        write_zip(
+            &epub,
+            &[
+                ("mimetype", b"application/epub+zip"),
+                ("META-INF/container.xml", CONTAINER_XML_CONTENT_OPF.as_bytes()),
+                ("content.opf", opf.as_bytes()),
+                ("ch1.xhtml", chapter.as_bytes()),
+                ("style.css", css.as_bytes()),
+                ("big.ttf", &big),
+            ],
+        );
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_guide_element() {
+        // Lines 648, 653-657: EPUB with guide element
+        let opf_ns = "http://www.idpf.org/2007/opf";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+  <guide>
+    <reference type="toc" href="toc.xhtml"/>
+    <reference type="text" href="ch1.xhtml"/>
+  </guide>
+</package>"#
+        );
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        make_epub(&epub, &minimal_spec().with_opf(&opf));
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_ncx_navpoint_filtering() {
+        // Lines 686-694: NCX navPoint filtering removes missing file references
+        let opf_ns = "http://www.idpf.org/2007/opf";
+        let ncx_ns = "http://www.daisy.org/z3986/2005/ncx/";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+        );
+        let ncx = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="{ncx_ns}">
+  <navMap>
+    <navPoint id="np1"><navLabel><text>Ch1</text></navLabel><content src="ch1.xhtml"/></navPoint>
+    <navPoint id="np2"><navLabel><text>Ch99</text></navLabel><content src="missing.xhtml"/></navPoint>
+  </navMap>
+</ncx>"#
+        );
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        make_epub(&epub, &minimal_spec().with_opf(&opf).with_extra("toc.ncx", ncx.into_bytes()));
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_css_font_face_strip() {
+        // Line 712: CSS @font-face block removed when font not in files_to_include
+        let opf_ns = "http://www.idpf.org/2007/opf";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="css1" href="style.css" media-type="text/css"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+        );
+        let chapter = r#"<html><head><link href="style.css" rel="stylesheet"/></head><body><p>Hello</p></body></html>"#;
+        let css = "@font-face { font-family: \"Missing\"; src: url(\"nothere.woff\"); }\nbody { color: red; }";
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        write_zip(
+            &epub,
+            &[
+                ("mimetype", b"application/epub+zip"),
+                ("META-INF/container.xml", CONTAINER_XML_CONTENT_OPF.as_bytes()),
+                ("content.opf", opf.as_bytes()),
+                ("ch1.xhtml", chapter.as_bytes()),
+                ("style.css", css.as_bytes()),
+            ],
+        );
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_file_missing_in_write() {
+        // Lines 717-718: file missing when writing output EPUB
+        let opf_ns = "http://www.idpf.org/2007/opf";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="img1" href="cover.png" media-type="image/png"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+        );
+        let chapter = r#"<html><body><img src="cover.png"/></body></html>"#;
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        // cover.png는 zip에 없다. manifest에 있고 HTML에서 참조한다.
+        write_zip(&epub, &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML_CONTENT_OPF.as_bytes()), ("content.opf", opf.as_bytes()), ("ch1.xhtml", chapter.as_bytes())]);
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_validation_fail() {
+        // Lines 723-725: generated EPUB fails validation
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        make_epub(&epub, &minimal_spec());
+        let es = FakeEsManager::new();
+        // 가정한 seam: 미리보기 EPUB 검증 함수를 교체한다. 문서에 없는 seam이다(파일 머리말 참고).
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_preview_epub_validator(Arc::new(|_path| Err("bad epub".to_string()))));
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(result.status_code, 422);
+        assert!(result.body_text().contains("bad epub"));
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_bad_zip() {
+        // Lines 730-732: corrupted ZIP
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        fs::write(&epub, b"not a zip file").unwrap();
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(result.status_code, 422);
+    }
+
+    #[test]
+    fn test_get_book_preview_epub_general_exception() {
+        // Lines 733-735: general exception during EPUB processing
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        make_epub(&epub, &minimal_spec());
+        let es = FakeEsManager::new();
+        // TODO(common): `EpubCoverHooks::with_find_opf_path`는 `Fn() -> String`이라 `RuntimeError("boom")`을 돌려줄 수 없다. 문서가 `Result`를 받도록 정해지면 고친다. 지금은 panic으로 대신한다.
+        let hooks = EpubCoverHooks::default().with_find_opf_path(Arc::new(|| panic!("boom")));
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_epub_hooks(hooks));
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(result.status_code, 500);
+        assert_eq!(result.body_text(), "EPUB preview failed");
+    }
+
+    #[test]
+    fn test_get_book_preview_doc_exception() {
+        // Lines 750-752: .doc conversion exception
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let doc = tmp_path.join("A").join("test.doc");
+        fs::create_dir_all(doc.parent().unwrap()).unwrap();
+        fs::write(&doc, b"fake doc content").unwrap();
+        let es = FakeEsManager::new();
+        let runner = FakeRunner::returning(Err(CommandError::Failed("boom".to_string())));
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(runner));
+        es.set_doc(Some(make_doc("A/test.doc", "doc")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(result.status_code, 500);
+        assert_eq!(result.body_text(), ".DOC preview failed");
+    }
+
+    // ---- coverage: get_pdf_pages edge cases ----
+
+    #[test]
+    fn test_get_pdf_pages_not_found() {
+        // Line 1080: book not in ES
+        let tmp = tmp_dir();
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp.path(), &es);
+        es.set_doc(None);
+        let result = asyncio_runner(manager.get_pdf_pages(999, 1, 1));
+        assert_eq!(result.status_code, 404);
+    }
+
+    #[test]
+    fn test_get_pdf_pages_not_pdf() {
+        // Line 1085: file is not a PDF
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        let txt = tmp_path.join("A").join("test.txt");
+        fs::create_dir_all(txt.parent().unwrap()).unwrap();
+        fs::write(&txt, "hello").unwrap();
+        es.set_doc(Some(make_doc("A/test.txt", "txt")));
+        let result = asyncio_runner(manager.get_pdf_pages(1, 1, 1));
+        assert_eq!(result.status_code, 400);
+    }
+
+    #[test]
+    fn test_get_pdf_pages_happy_path_and_cache() {
+        // Lines 1091-1122: happy path + cache hit
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        let pdf = tmp_path.join("A").join("test.pdf");
+        fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+        fs::write(&pdf, blank_pdf_bytes(2, &[])).unwrap();
+
+        es.set_doc(Some(make_doc("A/test.pdf", "pdf")));
+
+        // 첫 호출: 생성하고 캐시한다.
+        let result = asyncio_runner(manager.get_pdf_pages(1, 1, 1));
+        assert_eq!(result.status_code, 200);
+        assert_eq!(result.header("x-total-pages"), Some("2"));
+
+        // 두 번째 호출: 캐시 적중.
+        let result2 = asyncio_runner(manager.get_pdf_pages(1, 1, 1));
+        assert_eq!(result2.status_code, 200);
+    }
+
+    #[test]
+    fn test_get_pdf_pages_start_exceeds_total() {
+        // Lines 1096-1097: start page exceeds total pages
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        let pdf = tmp_path.join("A").join("test.pdf");
+        fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+        fs::write(&pdf, blank_pdf_bytes(1, &[])).unwrap();
+
+        es.set_doc(Some(make_doc("A/test.pdf", "pdf")));
+
+        let result = asyncio_runner(manager.get_pdf_pages(1, 100, 200));
+        assert_eq!(result.status_code, 400);
+        assert!(result.body_text().contains("exceeds total pages"));
+    }
+
+    // ---- coverage: get_book_preview epub with many spine items (line 648) ----
+
+    #[test]
+    fn test_get_book_preview_epub_spine_trimmed() {
+        // Line 648: spine refs not in chapter_idrefs are removed
+        let opf_ns = "http://www.idpf.org/2007/opf";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch3" href="ch3.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch4" href="ch4.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch5" href="ch5.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+    <itemref idref="ch3"/>
+    <itemref idref="ch4"/>
+    <itemref idref="ch5"/>
+  </spine>
+</package>"#
+        );
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        let chapters: Vec<(String, String)> = (1..6).map(|i| (format!("ch{i}.xhtml"), format!("<html><body><p>Chapter {i}</p></body></html>"))).collect();
+        let mut entries: Vec<(&str, &[u8])> = vec![("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML_CONTENT_OPF.as_bytes()), ("content.opf", opf.as_bytes())];
+        for (name, body) in &chapters {
+            entries.push((name.as_str(), body.as_bytes()));
+        }
+        write_zip(&epub, &entries);
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        // 2개 챕터만 요청한다. ch3-ch5는 spine에서 빠져야 한다.
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, Some(2), None));
+        assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
+    }
+
+    #[test]
+    fn test_get_book_preview_html_sanitizes_active_content_and_rewrites_resources() {
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        fs::create_dir_all(tmp_path.join("A")).unwrap();
+        let html_file = tmp_path.join("A").join("test.html");
+        fs::write(
+            &html_file,
+            r##"
+        <html>
+          <head>
+            <meta http-equiv="refresh" content="0;url=https://evil.example.com" />
+            <script>alert(1)</script>
+            <link rel="stylesheet" href="style.css" />
+            <link rel="preload" href="evil.js" />
+          </head>
+          <body onload="steal()">
+            <iframe src="https://evil.example.com/embed"></iframe>
+            <img src="cover.png" onclick="hack()" />
+            <a href="chapter2.html">next</a>
+            <a href="#section1">toc</a>
+          </body>
+        </html>
+        "##,
+        )
+        .unwrap();
+        fs::write(tmp_path.join("A").join("style.css"), "body { color: red; }").unwrap();
+        fs::write(tmp_path.join("A").join("cover.png"), b"png").unwrap();
+        let doc = make_doc("A/test.html", "html");
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(doc));
+
+        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, Some("/html-resource/1")));
+        let body = resp.body_text();
+
+        assert_eq!(resp.status_code, 200);
+        assert!(resp.header("content-security-policy").expect("csp").starts_with("sandbox;"));
+        assert!(!body.contains("<script"));
+        assert!(!body.contains("<iframe"));
+        assert!(!body.contains("onload="));
+        assert!(!body.contains("onclick="));
+        assert!(!body.contains("http-equiv"));
+        assert!(body.contains(r#"href="/html-resource/1?path=style.css""#));
+        assert!(body.contains(r#"src="/html-resource/1?path=cover.png""#));
+        assert!(body.contains(r##"href="#section1""##));
+        assert!(!body.contains(r#"href="chapter2.html""#));
+    }
+
+    // ── get_book_preview: HTML read_text 예외 → 500 (lines 818-820) ─────────────
+
+    #[test]
+    fn test_get_book_preview_html_read_exception() {
+        // HTML 파일 read_text 가 예외를 올리면 500 응답을 반환한다.
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let html_file = tmp_path.join("A").join("book.html");
+        fs::create_dir_all(html_file.parent().unwrap()).unwrap();
+        fs::write(&html_file, "<html/>").unwrap();
+
+        let doc = make_doc("A/book.html", "html");
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(doc));
+
+        // 읽기 권한을 없애 PermissionError를 흉내 낸다.
+        fs::set_permissions(&html_file, fs::Permissions::from_mode(0o000)).unwrap();
+        let resp = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        fs::set_permissions(&html_file, fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(resp.status_code, 500);
+    }
+
+    #[test]
+    fn test_book_preview_rejects_missing_required_es_fields() {
+        let tmp = tmp_dir();
+        let html = tmp.path().join("A/book.html");
+        fs::create_dir_all(html.parent().unwrap()).unwrap();
+        fs::write(&html, "<html><body>preview</body></html>").unwrap();
+
+        let mut doc = make_doc("A/book.html", "html");
+        doc.as_object_mut().unwrap().remove("category");
+        let manager = make_manager(tmp.path(), &FakeEsManager::with_doc(doc));
+        let resp = asyncio_runner(manager.get_book_preview(1, Some(5), Some(10)));
+
+        assert_eq!(resp.status_code, 500);
+    }
+
+    #[test]
+    fn test_pdf_pages_rejects_missing_required_es_fields() {
+        let tmp = tmp_dir();
+        let mut doc = make_doc("A/book.pdf", "pdf");
+        doc.as_object_mut().unwrap().remove("category");
+        let manager = make_manager(tmp.path(), &FakeEsManager::with_doc(doc));
+        let resp = asyncio_runner(manager.get_pdf_pages(1, 1, 1));
+
+        assert_eq!(resp.status_code, 500);
+    }
+
+    #[test]
+    fn test_get_pdf_pages_oserror() {
+        // Lines 2209-2210: OSError in get_pdf_pages
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let pdf_file = tmp_path.join("A").join("sample.pdf");
+        fs::create_dir_all(pdf_file.parent().unwrap()).unwrap();
+        fs::write(&pdf_file, b"%PDF-1.4 dummy").unwrap();
+
+        let pdf_es = FakeEsManager::new();
+        pdf_es.set_doc(Some(make_doc("A/sample.pdf", ".pdf")));
+        // 쪽수 조회가 ENOSPC로 실패하게 한다(`PdfPageOps` 대역, TODO 주석 참고).
+        let manager = BookManager::with_deps(deps(tmp_path, &pdf_es).with_pdf_pages(Arc::new(NoSpacePdfPages)));
+        let resp = asyncio_runner(manager.get_pdf_pages(777, 1, 5));
+        assert_eq!(resp.status_code, 503);
+        assert!(resp.body_text().contains("Storage access error"));
+    }
+
+    #[test]
+    fn test_epub_preview_raw_zip_and_ncx_branches() {
+        // Lines 799, 959
+        let opf_ns = "http://www.idpf.org/2007/opf";
+        let ncx_ns = "http://www.daisy.org/z3986/2005/ncx/";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{opf_ns}" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="raw" href="ch%20raw.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#
+        );
+        let ncx = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="{ncx_ns}">
+  <navMap>
+    <navPoint id="np1"><navLabel><text>Ch1</text></navLabel><content src="ch1.xhtml"/></navPoint>
+    <navPoint id="np2"><navLabel><text>Empty</text></navLabel><content src=""/></navPoint>
+  </navMap>
+</ncx>"#
+        );
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let epub = tmp_path.join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        make_epub(&epub, &minimal_spec().with_opf(&opf).with_extra("toc.ncx", ncx.into_bytes()).with_extra("ch raw.xhtml", b"<html><body>raw</body></html>".to_vec()));
+        let es = FakeEsManager::new();
+        let manager = make_manager(tmp_path, &es);
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let result = asyncio_runner(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert!([200, 422].contains(&result.status_code), "status={}", result.status_code);
+    }
+
+    #[test]
+    fn test_get_pdf_pages_storage_oserror_and_cached_reader_none() {
+        // Lines 2159-2161, 2192
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        let pdf_file = tmp_path.join("A").join("sample.pdf");
+        fs::create_dir_all(pdf_file.parent().unwrap()).unwrap();
+        fs::write(&pdf_file, blank_pdf_bytes_sized(2, 100, 100)).unwrap();
+
+        let es = FakeEsManager::new();
+        es.set_doc(Some(make_doc("A/sample.pdf", ".pdf")));
+
+        // 1. Lines 2159-2161: book.file_path.is_file() raises OSError
+        let faulty = FaultyFs::new();
+        faulty.set_is_file(|_p| Some(io::Error::from_raw_os_error(5)));
+        let manager_fault = BookManager::with_deps(deps(tmp_path, &es).with_fs(faulty));
+        let resp1 = asyncio_runner(manager_fault.get_pdf_pages(1, 1, 2));
+        assert_eq!(resp1.status_code, 503);
+        assert!(resp1.body_text().contains("Storage access error"));
+
+        // 2. Line 2192: reader is None (page count cached, but reader cache miss)
+        // 쪽수 캐시 접근자는 문서에 없는 seam이다(파일 머리말 참고). 새 매니저의 reader 캐시는 비어 있어 `_pdf_reader_cache_remove`가 필요 없다.
+        let manager = make_manager(tmp_path, &es);
+        manager.page_count_cache().insert((pdf_file.to_string_lossy().into_owned(), mtime_key(&pdf_file)), 2);
+
+        let resp2 = asyncio_runner(manager.get_pdf_pages(1, 1, 2));
+        assert_eq!(resp2.status_code, 200);
+    }
+}
+
+const CONTAINER: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#;
+
+/// ES 대역을 쓰는 `BookManagerDeps`. 대역(`with_*`)을 꽂을 테스트는 이걸로 시작한다.
+fn make_deps(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManagerDeps {
+    BookManagerDeps::new(tmp_path.to_path_buf(), es)
+}
+
+/// Python `make_manager(tmp_path, es)`.
+fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {
+    BookManager::with_deps(make_deps(tmp_path, es))
+}
+
+/// 이미지 한 장의 바이트. 색은 고정이다.
+fn image_bytes(fmt: image::ImageFormat, size: (u32, u32)) -> Vec<u8> {
+    encode_image(size.0, size.1, [10, 120, 200], fmt)
+}
+
+#[tokio::test]
+async fn test_preview_keeps_cover_image_not_referenced_by_chapters() {
+    // parametrize: meta-cover, cover-image-property
+    let cases = [("meta-cover", r#"<meta name="cover" content="cover-img"/>"#), ("cover-image-property", "")];
+    for (case_id, cover_decl) in cases {
+        let properties = if cover_decl.is_empty() { r#" properties="cover-image""# } else { "" };
+        let tmp = TempDir::new().unwrap();
+        let opf = format!(
+            r#"<?xml version="1.0"?>
+            <package xmlns="http://www.idpf.org/2007/opf">
+              <metadata>{cover_decl}</metadata>
+              <manifest>
+                <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+                <item id="cover-img" href="images/front.jpg" media-type="image/jpeg"{properties}/>
+              </manifest>
+              <spine><itemref idref="c1"/></spine>
+            </package>"#
+        );
+        write_zip(
+            &tmp.path().join("cov.epub"),
+            &[
+                ("mimetype", b"application/epub+zip"),
+                ("META-INF/container.xml", CONTAINER.as_bytes()),
+                ("OEBPS/ch1.xhtml", "<html><body><p>본문</p></body></html>".as_bytes()),
+                ("OEBPS/images/front.jpg", &image_bytes(image::ImageFormat::Jpeg, (64, 64))),
+                ("OEBPS/content.opf", opf.as_bytes()),
+            ],
+        );
+        let manager = make_manager(tmp.path(), FakeEsManager::with_doc(make_doc("cov.epub", "epub")));
+
+        let resp = BookManagerApi::get_book_preview(&manager, 1, Some(1), None).await;
+
+        assert_eq!(resp.status_code, 200, "case {case_id}");
+        let mut zf = ZipArchive::new(Cursor::new(resp.body)).unwrap();
+        assert!(zf.file_names().any(|n| n.is_ok_and(|n| n == "OEBPS/images/front.jpg")), "case {case_id}");
+        let opf_text = std::io::read_to_string(zf.by_name("OEBPS/content.opf").unwrap()).unwrap();
+        assert!(opf_text.contains(r#"id="cover-img""#), "case {case_id}");
     }
 }

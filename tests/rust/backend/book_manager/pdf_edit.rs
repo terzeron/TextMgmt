@@ -1,14 +1,17 @@
+#[path = "../common/book_fixtures.rs"]
+mod fx;
+
 #[path = "../common/mod.rs"]
 mod common;
-
 use backend::book_manager::{BookManager, BookManagerDeps};
-use common::{
-    es_fake::FakeEsManager,
-    faulty_fs::FaultyFs,
-    pdf::{make_pdf, widths},
-};
-use serde_json::{Value, json};
-use std::{fs, path::PathBuf, sync::Arc};
+use common::es_fake::FakeEsManager;
+use common::faulty_fs::FaultyFs;
+use common::pdf::make_pdf;
+use serde_json::{json, Value};
+use std::fs;
+use std::path::PathBuf;
+use std::sync::Arc;
+use fx::{image_env, Opts};
 
 /// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
 fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
@@ -60,49 +63,6 @@ impl Env {
 }
 
 #[tokio::test]
-async fn http_edits_books_and_comics_with_python_response_contract() {
-    use backend::main::{AppDeps, AuthMode, app_with};
-    for prefix in ["", "/comics"] {
-        let e = env();
-        let mut deps = AppDeps::new(AuthMode::Fixed(json!({"role":"admin"})));
-        if prefix.is_empty() {
-            deps = deps.with_book_manager(Arc::new(e.bm));
-        } else {
-            deps = deps.with_comics_manager(Arc::new(backend::comics_manager::ComicsManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()))));
-        }
-        let client = common::TestClient::with_app(app_with(deps));
-        let response = client.post_json(&format!("{prefix}/pdf-pages/1/delete"), &json!({"pages":[2,4]})).await;
-        assert_eq!(response.status, 200, "{}", response.text());
-        assert_eq!(response.json()["status"], "success");
-        assert_eq!(response.json()["result"]["remaining_pages"], 3);
-        assert_eq!(widths(&e.pdf), [100, 102, 104]);
-        let response = client.post_json(&format!("{prefix}/pdf-pages/1/delete"), &json!({"pages":[99]})).await;
-        assert_eq!(response.status, 200);
-        assert_eq!(response.json()["status"], "failure");
-    }
-}
-
-#[tokio::test]
-async fn http_rejects_non_admin_before_editing_or_body_validation() {
-    use backend::main::{AppDeps, AuthMode, app_with};
-    for prefix in ["", "/comics"] {
-        for viewer in [false, true] {
-            let e = env();
-            let original = fs::read(&e.pdf).unwrap();
-            let bm = Arc::new(e.bm);
-            let mut client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(bm.clone()).with_comics_manager(bm)));
-            if viewer {
-                let jwt = backend::auth_service::create_jwt_token("viewer@test.com", "viewer", None, None);
-                client = client.cookie("tm_access_token", &jwt);
-            }
-            let response = client.post_json(&format!("{prefix}/pdf-pages/1/delete"), &json!({"pages":"invalid"})).await;
-            assert_eq!(response.status, if viewer { 403 } else { 401 }, "{}", response.text());
-            assert_eq!(fs::read(&e.pdf).unwrap(), original);
-        }
-    }
-}
-
-#[tokio::test]
 async fn custom_trash_directory_is_used() {
     let e = env();
     let bm = BookManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()).with_trash_dirname("backup"));
@@ -149,21 +109,83 @@ async fn url_preview_reports_safe_fetch_errors() {
     }
 }
 
+mod upload_limits {
+    use super::{common, fx};
+    use backend::book_manager::{BookManager, BookManagerDeps};
+    use backend::epub_cover::{EpubCoverHooks, Limits};
+    use common::image::png_solid;
+    use fx::{Env, image_env, Opts};
+
+    /// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
+    fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
+        match result {
+            Ok(value) => (Some(value), None),
+            Err(error) => (None, Some(error)),
+        }
+    }
+
+    /// `fx::env`가 만든 환경의 `BookManager`를 Deps 설정을 더해 다시 만든다. `loader`가 참이면 파일 읽기 대역도 꽂는다.
+    // TODO(common): `book_fixtures::Opts`가 Deps 설정 훅(`configure: Option<Box<dyn FnOnce(BookManagerDeps) -> BookManagerDeps>>`)을 받으면 이 헬퍼가 필요 없다.
+    fn with_deps(mut e: Env, loader: bool, configure: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Env {
+        let mut deps = BookManagerDeps::new(e.root.clone(), e.es.clone());
+        if loader {
+            deps = deps.with_file_reader(e.reader.clone());
+        }
+        e.bm = BookManager::with_deps(configure(deps));
+        e
+    }
+
+    fn error_text(error: &Option<String>) -> &str {
+        error.as_deref().unwrap_or("")
+    }
+
+    // ── 올린 이미지 ──
+
+    #[tokio::test]
+    async fn test_upload_preview_rejects_too_many_pixels() {
+        let e = with_deps(image_env(Opts::plain()), false, |d| d.with_epub_hooks(EpubCoverHooks::default().with_limits(Limits { max_image_pixels: 100, ..Limits::default() })));
+
+        let (jpeg, error) = split(e.bm.preview_insert_upload(&png_solid(20, 20, [10, 120, 200])).await);
+
+        assert!(jpeg.is_none() && error_text(&error).contains("해상도가 너무 큽니다"), "{error:?}");
+    }
+}
+
+fn error_text(error: &Option<String>) -> &str {
+    error.as_deref().unwrap_or("")
+}
+
 #[tokio::test]
-async fn http_url_preview_returns_uncached_jpeg() {
-    use backend::main::{AppDeps, AuthMode, app_with};
-    let e = env();
-    let bm =
-        Arc::new(BookManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()).with_image_fetcher(Arc::new(FetchImage(Ok(common::image::png_solid(80, 160, [10, 20, 30])))))));
-    let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager(bm.clone()).with_comics_manager(bm)));
-    for prefix in ["", "/comics"] {
-        let path = format!("{prefix}/pdf-pages/1/insert-preview");
-        let response = client.post_json(&path, &json!({"url":"https://example.com/image.png"})).await;
-        assert_eq!(response.status, 200, "{}", response.text());
-        assert_eq!(response.header("content-type"), Some("image/jpeg"));
-        assert_eq!(response.header("cache-control"), Some("private, no-store"));
-        assert_eq!(common::image::image_size(&response.body), (80, 160));
-        assert_eq!(client.post_json(&path, &json!({"url":""})).await.status, 422);
-        assert_eq!(client.post_json(&path, &json!({"url":"  "})).await.status, 400);
+async fn test_upload_preview_rejects_oversized_data() {
+    let e = image_env(Opts::plain());
+
+    let (jpeg, error) = split(e.bm.preview_insert_upload(&vec![0u8; backend::epub_cover::MAX_IMAGE_BYTES + 1]).await);
+
+    assert!(jpeg.is_none() && error_text(&error).contains("큽니다"), "{error:?}");
+}
+
+mod backup_reporting {
+    use backend::es_manager::{Docs};
+    use super::fx;
+    use fx::Opts;
+
+    fn error_text(error: &Option<String>) -> &str {
+        error.as_deref().unwrap_or("")
+    }
+
+    // ── 재색인 실패 ──
+
+    #[tokio::test]
+    async fn test_unreadable_saved_file_reports_backup_location() {
+        let e = fx::env(Opts::loader());
+        // patch("utils.loader.Loader.read_file", return_value={})
+        *e.reader.docs.lock().unwrap() = Docs::new();
+
+        let (result, error) = e.run_pages(&[3]).await;
+
+        assert!(result.is_none());
+        assert!(error_text(&error).contains("재색인할 문서를 읽지 못했습니다") && error_text(&error).contains("0_trash/book.pdf"), "{error:?}");
+        assert!(e.es.inserted().is_empty());
+        assert!(e.root.join("0_trash").join("book.pdf").is_file());
     }
 }
