@@ -7,12 +7,13 @@ use lopdf::{Document, Object, ObjectId, dictionary};
 use serde_json::{Value, json};
 use sysdeps::FsOps;
 
-use super::util::{strerror, unique_token};
+use super::strerror;
+use super::temp_file_maker::unique_token;
 use super::{BookManager, Docs};
 
-mod images;
-mod jpeg;
-use images::Edits;
+mod page_image_editor;
+mod jpeg_encoder;
+use page_image_editor::Edits;
 
 struct EditResult {
     remaining: usize,
@@ -45,7 +46,7 @@ impl BookManager {
         }
         let (_, fetcher) = self.pdf_edit_settings();
         let max_image_pixels = self.image_pixel_limit();
-        match tokio::task::spawn_blocking(move || images::download_image(fetcher.as_ref(), &url, max_image_pixels)).await {
+        match tokio::task::spawn_blocking(move || page_image_editor::download_image(fetcher.as_ref(), &url, max_image_pixels)).await {
             Ok(Ok(jpeg)) => Ok(jpeg),
             Ok(Err(error)) => Err(error),
             Err(error) => {
@@ -58,7 +59,7 @@ impl BookManager {
     pub async fn preview_insert_upload(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         let data = data.to_vec();
         let max_image_pixels = self.image_pixel_limit();
-        run_upload_preview(data, max_image_pixels, images::normalize_upload_with_limit).await
+        run_upload_preview(data, max_image_pixels, page_image_editor::normalize_upload_with_limit).await
     }
 
     /// Python `delete_pdf_pages`. 페이지 번호와 순서는 편집 전 문서를 기준으로 한다.

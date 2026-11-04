@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use backend::book::BookLookupError;
+use backend::book_metadata::BookLookupError;
 use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover::{CoverError, EditImages, OPF_NS, edit_images, read_package, revision};

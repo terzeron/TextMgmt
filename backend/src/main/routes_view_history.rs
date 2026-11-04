@@ -9,10 +9,10 @@ use axum::extract::{Path, State};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::deps::AppDeps;
-use super::errors::{ApiError, ApiResult, RequestValidationError};
-use super::extract::{ApiQuery, RequireAdmin, RequireAuth};
-use super::routes::Routes;
+use super::app_deps::AppDeps;
+use super::error_responses::{ApiError, ApiResult, RequestValidationError};
+use super::request_extractors::{ApiQuery, RequireAdmin, RequireAuth};
+use super::route_registry::Routes;
 use super::routes_books::parse_book_id;
 use crate::view_history_store::MAX_RECENT_VIEWS;
 

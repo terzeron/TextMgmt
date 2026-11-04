@@ -27,9 +27,9 @@
 //!   - 상수: `ERR_MISSING_INPUT`, `GENERIC_MISMATCH_ERROR`, `GENERIC_MAPPING_ERROR_DETAIL`, `GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL`, `GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL`
 //!   - 구 `backend::main::testing::*` 전역 가드는 없다. `RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS` 패치는 `AppDeps::with_reload_progress_flush_interval`, `os.listdir` 패치는 `AppDeps::with_fs`가 대신한다.
 //!   - 백그라운드 작업(reload-*)은 Starlette `BackgroundTasks`처럼 응답을 돌려주기 전에 끝난다.
-//! - `backend::auth`: `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`, `create_refresh_token`(같은 인자),
+//! - `backend::auth_service`: `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`, `create_refresh_token`(같은 인자),
 //!   `tm_admin_email() -> String`, `jwt_secret() -> String`, `JWT_ALGORITHM: jsonwebtoken::Algorithm`
-//! - `backend::book::Book` (`Default + Clone + Serialize`): `book_id, category, title, author, file_path: PathBuf, file_type, file_size, line_count, page_count, isbn, created_time: Option<String>, updated_time, score: f64`, `Book::path_prefix() -> PathBuf`
+//! - `backend::book_metadata::Book` (`Default + Clone + Serialize`): `book_id, category, title, author, file_path: PathBuf, file_type, file_size, line_count, page_count, isbn, created_time: Option<String>, updated_time, score: f64`, `Book::path_prefix() -> PathBuf`
 //! - `bookstore::store_clients::Yes24Bookstore { verbose: bool }`
 //! - `backend::book_manager::{BookManager, BookManagerApi, BookContent, BookResponse}`: `BookManager::from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, _>`, `BookManager::media_type(suffix_with_dot: &str) -> &'static str`
 //!   - `bm.path_prefix() -> PathBuf`, `bm.es_manager() -> Arc<dyn EsManagerApi>` (`insert(&Docs) -> Result<Vec<i64>, EsError>`, `refresh() -> Result<(), EsError>`, `delete(i64) -> Result<bool, EsError>`, `count_by_category(&str, bool) -> Result<i64, EsError>`)
@@ -61,8 +61,8 @@ use std::time::Duration;
 
 use axum::http::Method;
 use axum::response::IntoResponse;
-use backend::auth::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
-use backend::book::{Book, BookLookupError, BookPage};
+use backend::auth_service::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
+use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::book_manager::{BookContent, BookDeletion, BookManager, BookManagerApi, BookResponse};
 use db::category_mapping::CategoryMapping;
 use backend::comics_manager::ComicsManager;

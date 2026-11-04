@@ -762,7 +762,7 @@ async fn bulk_rename_treats_unexpected_categories_shape_as_empty() {
 async fn bulk_rename_returns_unavailable_when_runtime_book_manager_cannot_initialize() {
     let deps = AppDeps::new(AuthMode::Fixed(admin_payload())).with_book_manager_factory(|| Err("injected BookManager initialization failure".into())).with_category_mapping(MockCat::with_store(None));
     let app = app_with(deps);
-    let token = backend::auth::create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
+    let token = backend::auth_service::create_jwt_token("admin@test.com", "admin", Some("Test Admin"), None);
 
     let response = TestClient::with_app(app).cookie("tm_access_token", &token).post_json("/categories/bulk-rename-files", &json!({"category":"0_inbox","pattern":"a","replacement":"b"})).await;
 

@@ -10,10 +10,10 @@ use std::sync::Arc;
 use super::{ensure_allowed, hidden_categories, kind, manager_for};
 use crate::book_manager::{CoverPage, MAX_CATEGORY_PAGE_SIZE};
 use crate::main::{
-    deps::AppDeps,
-    errors::ApiResult,
-    extract::{ApiQuery, RequireAuth, parse_py_bool},
-    routes::Routes,
+    app_deps::AppDeps,
+    error_responses::ApiResult,
+    request_extractors::{ApiQuery, RequireAuth, parse_py_bool},
+    route_registry::Routes,
 };
 
 pub(super) fn routes() -> Routes {

@@ -22,15 +22,15 @@ use sysdeps::FsOps;
 use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote, urlparse_path};
 use zip::ZipArchive;
 
-pub mod edit;
-mod rewrite;
-mod stage;
-pub mod xml;
+pub mod image_editor;
+mod inplace_replacer;
+mod epub_writer;
+pub mod xml_tree;
 
-pub use edit::{EditImages, edit_images, edit_images_with, edit_page_images};
-pub use rewrite::{add_cover, add_cover_backup_with, add_cover_with, add_illustration, add_illustration_backup_with, add_illustration_with, remove_cover, remove_cover_backup_with, remove_cover_with};
+pub use image_editor::{EditImages, edit_images, edit_images_with, edit_page_images};
+pub use inplace_replacer::{add_cover, add_cover_backup_with, add_cover_with, add_illustration, add_illustration_backup_with, add_illustration_with, remove_cover, remove_cover_backup_with, remove_cover_with};
 
-use xml::Element;
+use xml_tree::Element;
 
 /// Python `_member_path(base, href)`: 상대 `href`를 ZIP 멤버 이름으로 푼다. 바깥을 가리키거나 URL이면 빈 문자열이다.
 pub fn member_path(base: &str, href: &str) -> String {
@@ -163,8 +163,8 @@ impl From<zip::result::ZipError> for Fail {
     }
 }
 
-impl From<xml::XmlError> for Fail {
-    fn from(err: xml::XmlError) -> Self {
+impl From<xml_tree::XmlError> for Fail {
+    fn from(err: xml_tree::XmlError) -> Self {
         Fail::Lib(err.to_string())
     }
 }
@@ -428,7 +428,7 @@ pub(crate) fn read_entry<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str
 pub fn find_opf_path<R: Read + Seek>(archive: &mut ZipArchive<R>) -> String {
     const CONTAINER_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
     if let Ok(data) = read_entry(archive, "META-INF/container.xml") {
-        if let Some(container) = xml::parse_lenient(&data) {
+        if let Some(container) = xml_tree::parse_lenient(&data) {
             let found = container.descendants().into_iter().find(|e| e.is(CONTAINER_NS, "rootfile")).map(|e| e.attr_or("full-path", "").to_string()).unwrap_or_default();
             if !found.is_empty() {
                 return found;
@@ -475,7 +475,7 @@ pub(crate) fn read_package_with<R: Read + Seek>(archive: &mut ZipArchive<R>, hoo
         return Err(CoverError::new("EPUB package를 찾거나 읽을 수 없습니다").into());
     }
     let data = read_entry(archive, &opf_path)?;
-    let package = xml::parse_package(&data)?;
+    let package = xml_tree::parse_package(&data)?;
     if package.name != "package" {
         return Err(CoverError::new("올바른 EPUB package가 아닙니다").into());
     }
@@ -563,7 +563,7 @@ pub(crate) fn find_cover_member_in<R: Read + Seek>(archive: &mut ZipArchive<R>, 
     if opf_path.is_empty() {
         return None;
     }
-    let opf = xml::parse_lenient(&read_entry(archive, &opf_path).ok()?)?;
+    let opf = xml_tree::parse_lenient(&read_entry(archive, &opf_path).ok()?)?;
     let (mut image_items, mut page_items, mut cover_pages) = (Vec::new(), Vec::new(), Vec::<String>::new());
     let (mut meta_cover_id, mut first_spine_id) = (String::new(), String::new());
     for element in opf.descendants() {
@@ -624,11 +624,11 @@ fn first_image_in_page<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_dir: &st
     if size.is_none_or(|s| s > MAX_XML_BYTES as u64) {
         return None;
     }
-    let page = read_entry(archive, &page_member).ok().and_then(|data| xml::parse_lenient(&data))?;
+    let page = read_entry(archive, &page_member).ok().and_then(|data| xml_tree::parse_lenient(&data))?;
     for el in page.descendants() {
         let href = match el.name.as_str() {
             "img" => el.attr_or("src", "").to_string(),
-            "image" => el.attr("href").filter(|h| !h.is_empty()).or_else(|| el.attr_ns(xml::XLINK_NS, "href")).unwrap_or("").to_string(),
+            "image" => el.attr("href").filter(|h| !h.is_empty()).or_else(|| el.attr_ns(xml_tree::XLINK_NS, "href")).unwrap_or("").to_string(),
             _ => continue,
         };
         if let Some(member) = existing_member_path(archive, &posix_dirname(&page_member), &href) {
@@ -649,7 +649,7 @@ fn find_first_spine_image<R: Read + Seek>(archive: &mut ZipArchive<R>, hooks: &E
     if opf_path.is_empty() {
         return None;
     }
-    let opf = xml::parse_lenient(&read_entry(archive, &opf_path).ok()?)?;
+    let opf = xml_tree::parse_lenient(&read_entry(archive, &opf_path).ok()?)?;
     let mut pages: HashMap<&str, &str> = HashMap::new();
     let mut spine_ids: Vec<&str> = Vec::new();
     for element in opf.descendants() {
@@ -709,7 +709,7 @@ fn first_text(package: &Element, local: &str) -> String {
         if element.name != local {
             continue;
         }
-        if let Some(xml::Node::Text(text)) = element.children.iter().find(|n| matches!(n, xml::Node::Text(_))) {
+        if let Some(xml_tree::Node::Text(text)) = element.children.iter().find(|n| matches!(n, xml_tree::Node::Text(_))) {
             return text.trim().to_string();
         }
     }
@@ -728,7 +728,7 @@ fn inspect_cover_image<R: Read + Seek>(archive: &mut ZipArchive<R>, member: &str
     info.insert("byte_size".to_string(), json!(byte_size));
     if member.to_lowercase().ends_with(".svg") {
         let data = read_entry(archive, member).map_err(|_| unreadable())?;
-        xml::parse(&data).map_err(|_| unreadable())?;
+        xml_tree::parse(&data).map_err(|_| unreadable())?;
         return Ok(Value::Object(info));
     }
     // 목록에서는 머리글만 읽는다. 픽셀 디코딩과 변환은 미리보기·저장에서 검증한다.
@@ -785,12 +785,12 @@ pub(crate) fn inspect_archive<R: Read + Seek>(archive: &mut ZipArchive<R>, hooks
 
 /// 임시 경로에 도판을 끼운 EPUB를 만든다(원본은 건드리지 않는다). 새 쪽의 idref를 돌려준다.
 pub fn stage_illustration(source: &File, destination: &Path, image: &[u8], before_idref: &str) -> Result<String, CoverError> {
-    stage::stage_illustration(source, destination, image, before_idref, &EpubCoverHooks::default()).map_err(Fail::into_cover)
+    epub_writer::stage_illustration(source, destination, image, before_idref, &EpubCoverHooks::default()).map_err(Fail::into_cover)
 }
 
 /// 임시 경로에 표지를 뺀 EPUB를 만든다(원본은 건드리지 않는다).
 pub fn stage_cover_removal(source: &File, destination: &Path) -> Result<(), CoverError> {
-    stage::stage_cover_removal(source, destination, &EpubCoverHooks::default()).map_err(Fail::into_cover)
+    epub_writer::stage_cover_removal(source, destination, &EpubCoverHooks::default()).map_err(Fail::into_cover)
 }
 
 pub fn inspect_epub(path: &Path) -> Result<Value, CoverError> {

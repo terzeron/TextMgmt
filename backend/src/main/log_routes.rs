@@ -10,9 +10,9 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::errors::{ApiResult, RequestValidationError};
-use super::extract::{ApiJson, OptionalAuth};
-use super::routes::Routes;
+use super::error_responses::{ApiResult, RequestValidationError};
+use super::request_extractors::{ApiJson, OptionalAuth};
+use super::route_registry::Routes;
 
 /// 필드별 최대 글자 수.
 pub static CLIENT_ERROR_FIELD_LIMITS: LazyLock<HashMap<&'static str, usize>> =

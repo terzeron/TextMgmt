@@ -1,8 +1,8 @@
 //! 도서·만화 수정과 카테고리 관리. 실제 파일 작업은 BookManager에 위임한다.
 use super::{kind, manager};
-use crate::book::Book;
+use crate::book_metadata::Book;
 use crate::book_manager::BookDeletion;
-use crate::main::extract::python_bool;
+use crate::main::request_extractors::python_bool;
 use crate::main::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, RequireAdmin, Routes};
 use axum::{
     Json,
@@ -119,7 +119,7 @@ async fn apply_classify_proposal(_: RequireAdmin, State(deps): State<Arc<AppDeps
     let content_type = kind(&uri).to_string();
     let manager = manager(&deps, &uri)?;
     let mapping = deps.category_mapping().map_err(|_| ApiError::unavailable())?;
-    let token = crate::auth::uuid_hex();
+    let token = crate::auth_service::uuid_hex();
     let claim_mapping = mapping.clone();
     let claim_type = content_type.clone();
     let claim_token = token.clone();

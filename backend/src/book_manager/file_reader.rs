@@ -16,8 +16,9 @@ use file_record::record_builder;
 use serde_json::{Value, json};
 use sysdeps::FsOps;
 
-use super::paths::{declared_type, is_indexable_type};
-use super::util::{iso, relative_to};
+use super::path_validator::{declared_type, is_indexable_type};
+use super::es_doc_converter::iso;
+use super::path_validator::relative_to;
 use super::{Docs, FileReader};
 
 /// ZIP 기반으로 선언된 형식. 선언이 이 안이면 내용물을 열어보지 않는다.
@@ -29,7 +30,7 @@ const SUMMARY_CHARS: usize = 3500;
 /// ZIP 컨테이너의 실제 종류를 내용물로 판별한다. `Loader._zip_container_type`.
 fn zip_container_type<R: Read + Seek>(reader: R) -> Option<&'static str> {
     let mut zip = zip::ZipArchive::new(reader).ok()?;
-    let names = super::epub::zip_names(&mut zip);
+    let names = super::epub_inspector::zip_names(&mut zip);
     if names.iter().any(|n| n.ends_with(".opf")) || names.iter().any(|n| n == "META-INF/container.xml") {
         return Some("epub");
     }

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::{AppDeps, AuthMode, app_with};
-use backend::pdf::{LopdfPageOps, PdfPageOps};
+use backend::pdf_page_reader::{LopdfPageOps, PdfPageOps};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use common::pdf::{make_blank_pdf, page_count_bytes};

@@ -11,7 +11,7 @@ const VIEWER_FAMILY: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 pub fn token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String {
     let family = if role == "admin" { ADMIN_FAMILY } else { VIEWER_FAMILY };
-    backend::auth::create_session_jwt_token(email, role, name.unwrap_or_default(), picture.unwrap_or_default(), family)
+    backend::auth_service::create_session_jwt_token(email, role, name.unwrap_or_default(), picture.unwrap_or_default(), family)
 }
 
 pub fn store() -> Arc<dyn RefreshTokenStoreApi> {

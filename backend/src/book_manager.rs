@@ -28,11 +28,11 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use sysdeps::{CommandRunner, EnvFn, FsOps, RealFs, SystemRunner};
 
-use crate::book::Book;
+use crate::book_metadata::Book;
 use classifier::book_classifier::SharedBookClassifier;
 use classifier::Classify;
 use crate::es_manager::{Docs, EsManagerApi};
-use crate::pdf::{LopdfOpener, LopdfPageOps, PageCountCache, PdfOpener, PdfPageOps, PdfReaderCache};
+use crate::pdf_page_reader::{LopdfOpener, LopdfPageOps, PageCountCache, PdfOpener, PdfPageOps, PdfReaderCache};
 
 /// Python `RuntimeError`에 대응한다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,40 +46,41 @@ impl std::fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
-pub(crate) use contract::UNIMPLEMENTED;
-pub use contract::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
+pub(crate) use api_contract::UNIMPLEMENTED;
+pub use api_contract::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
 
-mod api;
-mod catalog;
-mod category;
-mod classify;
-mod contract;
-mod cover;
+mod api_adapter;
+mod catalog_query;
+mod category_editor;
+mod category_proposer;
+mod api_contract;
+mod cover_finder;
 mod cover_browse;
 mod cover_list;
-mod epub;
+mod epub_inspector;
 mod file_reader;
-mod html;
-mod mismatch;
-mod paths;
+mod html_previewer;
+mod mismatch_reporter;
+mod path_validator;
 mod pdf_cover;
 mod pdf_edit;
-mod preview;
-mod reload;
-mod seams;
-mod uncovered;
-mod update;
-mod util;
-mod validate;
+mod preview_builder;
+mod category_reloader;
+mod seam_accessors;
+mod uncovered_book_finder;
+mod book_updater;
+mod es_doc_converter;
+mod temp_file_maker;
+mod file_validator;
 
-pub use classify::{ApplyOptions, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, ProposeOptions};
-pub use cover::{BookLookup, BookRef, Thumbnailer};
+pub use category_proposer::{ApplyOptions, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, ProposeOptions};
+pub use cover_finder::{BookLookup, BookRef, Thumbnailer};
 pub use cover_list::CoverPageOpts;
 pub use file_reader::{DefaultFileReader, LoaderFileReader};
-pub use seams::{AddBookError, BackfillThread, BookAdder, CategoryNameCheck, PathIsRelativeTo, PreviewEpubValidator};
-pub use uncovered::{CoverBooksPager, CoverPage};
-pub use update::BookDeletion;
-pub use epub::{_declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, SafeXmlParser, XmlElement, decode_category_cursor, encode_category_cursor};
+pub use seam_accessors::{AddBookError, BackfillThread, BookAdder, CategoryNameCheck, PathIsRelativeTo, PreviewEpubValidator};
+pub use uncovered_book_finder::{CoverBooksPager, CoverPage};
+pub use book_updater::BookDeletion;
+pub use epub_inspector::{_declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, SafeXmlParser, XmlElement, decode_category_cursor, encode_category_cursor};
 
 /// 카테고리 단위 ES 조회 상한. ES `max_result_window`(기본 10000)와 같다.
 pub const MAX_CATEGORY_RESULT_COUNT: i64 = 10000;
@@ -480,6 +481,15 @@ impl BookManager {
     }
 
     fn try_make_book(&self, book_id: i64, info: &Value, score: f64) -> Result<Book, String> {
-        util::try_book_from_doc(&self.path_prefix, book_id, info, score)
+        es_doc_converter::try_book_from_doc(&self.path_prefix, book_id, info, score)
+    }
+}
+
+/// `OSError.strerror`에 가까운 문구: `"... (os error N)"` 꼬리를 뗀다.
+fn strerror(e: &std::io::Error) -> String {
+    let text = e.to_string();
+    match text.rfind(" (os error ") {
+        Some(i) => text[..i].to_string(),
+        None => text,
     }
 }

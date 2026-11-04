@@ -7,7 +7,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use backend::book::BookLookupError;
+use backend::book_metadata::BookLookupError;
 use backend::book_manager::{BookLookup, BookManager, BookManagerApi, BookManagerDeps, BookRef};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover::{self, CoverError};

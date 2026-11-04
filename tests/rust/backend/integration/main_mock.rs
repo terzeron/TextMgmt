@@ -14,7 +14,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use axum::http::Method;
-use backend::book::{Book, BookLookupError, BookPage};
+use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::book_manager::{BookContent, BookManagerApi, BookResponse, CoverPage};
 use db::{DbValue, Row};
 use backend::es_manager::{EsError, EsManagerApi};

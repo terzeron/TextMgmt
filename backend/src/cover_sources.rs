@@ -2,7 +2,7 @@
 //!
 //! 네트워크·시계·파일시스템은 `sysdeps`(`HttpSession`, `Clock`, `FsOps`)로 받는다. 설계: docs/rust-test-seams.md 3.1, 3.5, 3.7, 3.8.
 
-pub mod soup;
+pub mod html_dom;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -17,7 +17,7 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use sysdeps::{Clock, FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout, RealFs, SystemClock};
 
-use self::soup::Soup;
+use self::html_dom::Soup;
 use htmlkit::url_parser::{Netloc, quote, urlencode, urljoin, urlsplit};
 
 pub const STORE_NAMES: [&str; 8] = ["yes24", "aladin", "kyobo", "naver", "ridi", "munpia", "naverseries", "joara"];

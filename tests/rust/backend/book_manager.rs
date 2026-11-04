@@ -104,7 +104,7 @@ mod pdf_pages {
 
     use backend::book_manager::{BookManager, BookManagerDeps};
 
-    use backend::pdf::{PdfError, PdfPageOps, PdfReaderHandle};
+    use backend::pdf_page_reader::{PdfError, PdfPageOps, PdfReaderHandle};
 
     use common::es_fake::FakeEsManager;
     use common::faulty_fs::FaultyFs;
@@ -398,7 +398,7 @@ mod book_manager_2 {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, SystemTime};
 
-    use backend::book::BookPage;
+    use backend::book_metadata::BookPage;
     use backend::book_manager::{
         _declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, AddBookError, ApplyOptions, BackfillThread, BookAdder, BookContent, BookManager, BookManagerDeps,
         CREATED_TIME_BACKFILL_ENV, FileReader, MAX_CATEGORY_RESULT_COUNT, MoveOpts, ProposeOptions, ReadFileError, decode_category_cursor, encode_category_cursor,
@@ -406,7 +406,7 @@ mod book_manager_2 {
     use classifier::BookClassifierApi;
     use backend::epub_cover::EpubCoverHooks;
     use backend::main::{BookManagerApi, BookResponse, InlineRunner, TaskHandle, TaskRunner};
-    use backend::pdf::{PdfCacheLimits, PdfError, PdfPageOps};
+    use backend::pdf_page_reader::{PdfCacheLimits, PdfError, PdfPageOps};
     use base64::Engine;
     use common::{
         env::EnvGuard,
@@ -4318,7 +4318,7 @@ mod book_manager_gaps {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
-    use backend::book::Book;
+    use backend::book_metadata::Book;
     use backend::book_manager::{ApplyOptions, BookManager, BookManagerDeps, CoverPage, CoverPageOpts, FileReader, MAX_CATEGORY_PAGE_SIZE, MoveOpts, ProposeOptions, encode_category_cursor};
     use classifier::BookClassifierApi;
     use backend::es_manager::{EsError, EsManagerApi};

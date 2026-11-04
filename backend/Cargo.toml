@@ -66,48 +66,48 @@ testcontainers-modules = { version = "0.15.0", features = ["mysql", "blocking"] 
 tower = { version = "0.5.3", features = ["util"] }
 
 [[test]]
-name = "auth"
-path = "../tests/rust/backend/auth.rs"
+name = "auth_service"
+path = "../tests/rust/backend/auth_service.rs"
 
 [[test]]
-name = "book"
-path = "../tests/rust/backend/book.rs"
+name = "book_metadata"
+path = "../tests/rust/backend/book_metadata.rs"
 
 [[test]]
 name = "book_manager"
 path = "../tests/rust/backend/book_manager.rs"
 
 [[test]]
-name = "book_manager_catalog"
-path = "../tests/rust/backend/book_manager/catalog.rs"
+name = "book_manager_catalog_query"
+path = "../tests/rust/backend/book_manager/catalog_query.rs"
 
 [[test]]
-name = "book_manager_cover"
-path = "../tests/rust/backend/book_manager/cover.rs"
+name = "book_manager_cover_finder"
+path = "../tests/rust/backend/book_manager/cover_finder.rs"
 
 [[test]]
-name = "book_manager_epub"
-path = "../tests/rust/backend/book_manager/epub.rs"
+name = "book_manager_epub_inspector"
+path = "../tests/rust/backend/book_manager/epub_inspector.rs"
 
 [[test]]
 name = "book_manager_file_reader"
 path = "../tests/rust/backend/book_manager/file_reader.rs"
 
 [[test]]
-name = "book_manager_html"
-path = "../tests/rust/backend/book_manager/html.rs"
+name = "book_manager_html_previewer"
+path = "../tests/rust/backend/book_manager/html_previewer.rs"
 
 [[test]]
 name = "book_manager_pdf_edit"
 path = "../tests/rust/backend/book_manager/pdf_edit.rs"
 
 [[test]]
-name = "book_manager_preview"
-path = "../tests/rust/backend/book_manager/preview.rs"
+name = "book_manager_preview_builder"
+path = "../tests/rust/backend/book_manager/preview_builder.rs"
 
 [[test]]
-name = "comics"
-path = "../tests/rust/backend/comics.rs"
+name = "comics_metadata"
+path = "../tests/rust/backend/comics_metadata.rs"
 
 [[test]]
 name = "comics_manager"
@@ -138,12 +138,12 @@ name = "main"
 path = "../tests/rust/backend/main.rs"
 
 [[test]]
-name = "main_google"
-path = "../tests/rust/backend/main/google.rs"
+name = "main_google_oauth"
+path = "../tests/rust/backend/main/google_oauth.rs"
 
 [[test]]
-name = "pdf"
-path = "../tests/rust/backend/pdf.rs"
+name = "pdf_page_reader"
+path = "../tests/rust/backend/pdf_page_reader.rs"
 
 [[test]]
 name = "stderr_logger"

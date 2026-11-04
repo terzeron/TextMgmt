@@ -92,7 +92,7 @@ async fn http_rejects_non_admin_before_editing_or_body_validation() {
             let bm = Arc::new(e.bm);
             let mut client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies).with_book_manager(bm.clone()).with_comics_manager(bm)));
             if viewer {
-                let jwt = backend::auth::create_jwt_token("viewer@test.com", "viewer", None, None);
+                let jwt = backend::auth_service::create_jwt_token("viewer@test.com", "viewer", None, None);
                 client = client.cookie("tm_access_token", &jwt);
             }
             let response = client.post_json(&format!("{prefix}/pdf-pages/1/delete"), &json!({"pages":"invalid"})).await;

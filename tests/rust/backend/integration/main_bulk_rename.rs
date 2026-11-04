@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use backend::book::{Book, BookPage};
+use backend::book_metadata::{Book, BookPage};
 use backend::book_manager::BookManagerApi;
 use backend::es_manager::EsManagerApi;
 use backend::main::{AppDeps, AuthMode, app_with};

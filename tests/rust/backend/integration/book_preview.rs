@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use backend::book_manager::{BookManager, BookManagerDeps, BookRef};
 use backend::main::{AppDeps, AuthMode, app_with};
-use backend::pdf::{LopdfOpener, PdfDoc, PdfError, PdfOpener};
+use backend::pdf_page_reader::{LopdfOpener, PdfDoc, PdfError, PdfOpener};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use common::faulty_fs::FaultyFs;

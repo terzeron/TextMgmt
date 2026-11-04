@@ -15,9 +15,9 @@ use image::{DynamicImage, RgbImage};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::preview::text_response;
+use super::preview_builder::text_response;
 use super::{BookManager, BookResponse, CoverPage, MAX_CATEGORY_PAGE_SIZE};
-use crate::book::Book;
+use crate::book_metadata::Book;
 use super::cover_browse::{CoverEntry, CoverGroup, CoverStats, MISSING_TIME, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
 use crate::es_manager::{decode_category_cursor, encode_category_cursor};
 
@@ -148,7 +148,7 @@ impl BookManager {
             Ok(None) => return text_response(404, format!("File not found: {}", book.file_path.display())),
             Err(e) => {
                 log::error!("Cover file access failed for book_id={book_id} ({}): {e}", book.file_path.display());
-                return text_response(503, format!("Storage access error ({}): {}", super::util::strerror(&e), book.file_path.display()));
+                return text_response(503, format!("Storage access error ({}): {}", super::strerror(&e), book.file_path.display()));
             }
         };
 

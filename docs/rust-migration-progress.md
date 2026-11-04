@@ -1211,7 +1211,7 @@ Python `backend/classifier/export.py`는 기준 구현과 fixture 생성용으�
   Rust 테스트를 추가했다. `test_runner_rs -f tests/rust/backend/epub_cover_set.rs`는
   71개 테스트가 통과했고 Python `tests/test_epub_cover_set.py` 78개도 통과했다.
   Python 테스트 함수 70개 모두 Rust의 이름이 같은 대응 테스트를 가진다.
-  `book_manager/cover.rs` coverage는 line/function/region 86.59/83.64/89.16%다.
+  `book_manager/cover_finder.rs` coverage는 line/function/region 86.59/83.64/89.16%다.
   전체 회귀는 실행하지 않았다.
 - classifier spill이 각 field의 sparse rows 전체를 쌓은 뒤 파일로 쓰던 경로를 행 단위 기록으로 바꿨다.
   다음 행을 생성하기 전에 이전 행이 파일에 기록되는지 확인하는 RED/GREEN 단위 테스트를 추가했다.
@@ -1285,7 +1285,7 @@ Python `backend/classifier/export.py`는 기준 구현과 fixture 생성용으�
   Clippy와 rustfmt가 통과했다.
 - `Book` 시각 파서에서 Python `datetime.fromisoformat`은 소수 초의 쉼표 구분자도 받지만 Rust는 거부했다.
   Python 런타임으로 입력 형식을 확인하고 Rust 회귀 테스트에서 실패를 재현한 뒤 쉼표를 소수점으로 정규화했다.
-  `test_runner_rs -f tests/rust/backend/book.rs`의 대상 8개가 통과했다. Python 테스트는 실행 환경의
+  `test_runner_rs -f tests/rust/backend/book_metadata.rs`의 대상 8개가 통과했다. Python 테스트는 실행 환경의
   pytest shim 오류가 있어 `.venv/bin/python -m pytest tests/test_book.py -q`로 실행해 6개가 통과했다.
 - `Comics::dict`는 만화 루트 밖의 절대 `file_path`를 Rust에서 그대로 반환했지만 Python `relative_to`는 오류를 낸다.
   경로 밖 입력 회귀가 수정 전 실패하는 것을 확인하고 루트 밖 경로를 거부하도록 맞췄다.

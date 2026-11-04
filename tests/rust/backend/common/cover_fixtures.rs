@@ -6,7 +6,7 @@
 //! `#[path = "common/cover_fixtures.rs"] mod cover_fixtures;`로 가져온다.
 //!
 //! 가정한 API (아직 구현 전이다):
-//! - `backend::book::Book::override_path_prefix(path: &Path) -> PathPrefixGuard` (drop 시 원래 값 복원. Python `monkeypatch.setattr(Book, "path_prefix", ...)`)
+//! - `backend::book_metadata::Book::override_path_prefix(path: &Path) -> PathPrefixGuard` (drop 시 원래 값 복원. Python `monkeypatch.setattr(Book, "path_prefix", ...)`)
 //! - `backend::cover_management::CoverManagement::{new(root: &Path), with_hooks(root: &Path, hooks: CoverHooks), hooks(&self) -> &CoverHooks, set_hooks(&mut self, hooks: CoverHooks)}`
 //! - `backend::cover_management::CoverHooks` (Clone + Default): `with_search(Fn(&str, &Value) -> Result<Value, SearchError>)`, `with_fetch_bytes(Fn(&str, &str) -> Result<Vec<u8>, String>)`,
 //!   `with_fetch_url_image(Fn(&str) -> Result<Vec<u8>, CoverError>)`, `with_clock(Arc<dyn Clock>)`. Python의 모듈 함수 monkeypatch를 대신하는 주입 지점이다.

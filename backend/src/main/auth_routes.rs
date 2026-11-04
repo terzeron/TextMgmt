@@ -12,14 +12,14 @@ use axum::response::Response;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::extract::ClientInfo;
-use super::cookies::{_clear_auth_cookies, _set_auth_cookies};
-use super::deps::AppDeps;
-use super::errors::{ApiError, ApiResult, json_response};
-use super::extract::{ApiJson, ApiQuery, RequireAdmin, RequireAuth};
-use super::google::GOOGLE_ISSUERS;
-use super::routes::Routes;
-use crate::auth::{ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RequestParts, observation_hash};
+use super::request_extractors::ClientInfo;
+use super::auth_cookies::{_clear_auth_cookies, _set_auth_cookies};
+use super::app_deps::AppDeps;
+use super::error_responses::{ApiError, ApiResult, json_response};
+use super::request_extractors::{ApiJson, ApiQuery, RequireAdmin, RequireAuth};
+use super::google_oauth::GOOGLE_ISSUERS;
+use super::route_registry::Routes;
+use crate::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RequestParts, observation_hash};
 use crate::refresh_token_store::Rotation;
 
 /// family_id는 `uuid4().hex`라서 32자 소문자 hex다.
@@ -103,7 +103,7 @@ fn issue_auth_tokens(deps: &AppDeps, email: &str, role: &str, name: &str, pictur
 async fn verify_google_token(State(deps): State<Arc<AppDeps>>, client: ClientInfo, ApiJson(body): ApiJson<Value>) -> ApiResult<Response> {
     // `request_body: dict`: 객체가 아니면 FastAPI가 422로 거부한다.
     if !body.is_object() {
-        return Err(super::errors::RequestValidationError::single(&["body"], "Input should be a valid dictionary", body.clone()).into());
+        return Err(super::error_responses::RequestValidationError::single(&["body"], "Input should be a valid dictionary", body.clone()).into());
     }
     let credential = body.get("credential");
     if is_falsy(credential) {
@@ -213,7 +213,7 @@ async fn logout(State(deps): State<Arc<AppDeps>>, headers: HeaderMap) -> ApiResu
         }
     }
     // refresh 쿠키가 없어도 서명된 access 토큰이 가리키는 세션을 폐기한다.
-    if let Ok(payload) = crate::auth::_extract_payload(&headers) {
+    if let Ok(payload) = crate::auth_service::_extract_payload(&headers) {
         let family = str_of(&payload, "fid");
         if !family.is_empty() && !families.iter().any(|fid| fid == family) {
             families.push(family.to_string());
@@ -242,7 +242,7 @@ struct SessionsQuery {
 }
 
 fn out_of_range(name: &str, bound: &str) -> ApiError {
-    super::errors::RequestValidationError::single(&["query", name], bound, Value::Null).into()
+    super::error_responses::RequestValidationError::single(&["query", name], bound, Value::Null).into()
 }
 
 /// 서버 쪽 refresh 세션(family) 목록. jti·토큰 값은 노출하지 않는다.

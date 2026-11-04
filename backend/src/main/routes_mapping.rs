@@ -1,5 +1,5 @@
 //! 카테고리 설정. 동기 DB 작업과 lazy 초기화는 blocking pool에서 실행한다.
-use super::extract::python_bool;
+use super::request_extractors::python_bool;
 use super::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, CategoryMappingApi, MappingError, RequireAdmin, RequireAuth, Routes};
 use axum::{
     Json,

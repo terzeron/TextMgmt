@@ -14,7 +14,7 @@ use crate::book_manager::{BookManager, BookManagerDeps};
 use crate::es_manager::EsManagerApi;
 use crate::book_manager::BookManagerApi;
 
-mod api;
+mod api_adapter;
 
 pub use crate::book_manager::RuntimeError;
 

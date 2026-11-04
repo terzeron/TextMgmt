@@ -3,7 +3,7 @@
 //! 설계: docs/rust-test-seams.md 3장(통일안). 공용 대역은 `tests/rust/backend/common/`(es_fake, faulty_fs, runner, zipx, epub, fsx, clock)를 쓴다.
 //!
 //! 가정한 API (backend::book_manager 등은 아직 구현 전이다. 시그니처는 Python과 같다고 본다):
-//! - `backend::book::Book { book_id: i64, category: String, title: String, author: String, file_type: String, file_path: PathBuf, file_size: i64, updated_time: NaiveDateTime }`
+//! - `backend::book_metadata::Book { book_id: i64, category: String, title: String, author: String, file_type: String, file_path: PathBuf, file_size: i64, updated_time: NaiveDateTime }`
 //! - `backend::book_manager::{BookManager, BookManagerDeps}`
 //!   - 생성: `BookManager::with_deps(BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>).with_*(..)) -> BookManager` (구 `for_test`. 전역 `Book.path_prefix`를 건드리지 않고 매니저가 들고 있는다)
 //!   - 생성: `BookManager::from_env(env: &dyn Fn(&str) -> Option<String>, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, RuntimeError>` (구 `new_from_env`/`new_with`/`with_es_url`)
@@ -36,7 +36,7 @@
 //!     `_validate_preview_epub_with(&dyn FsOps, &Path) -> Result<(), String>`, `_evict_old_cache_with(&dyn FsOps, &Path)`, `join_created_time_backfill_thread(Duration)`
 //! - `backend::book_manager::{BookContent::{File(PathBuf), Text(String)}, BookResponse { status_code: u16, body: Vec<u8> }, RuntimeError(String), ProposeOptions { use_bookstore: Option<bool>, use_content_meta: Option<bool>, on_progress: Option<&dyn Fn(Value)> }: Default}`
 //! - `sysdeps::{FsOps, CommandRunner, CommandOutput { returncode: i32, stdout: Vec<u8>, stderr: Vec<u8> }, CommandError::{Timeout, NotFound, Failed(String)}}` (문서 3.1. `FsOps`는 `common::faulty_fs::FaultyFs`, `CommandRunner`는 `common::runner::FakeRunner`가 구현한다)
-//! - `backend::pdf::{PdfOpener { fn open(&self, &Path) -> Result<Box<dyn PdfDoc>, PdfError> }, PdfDoc (page_count/pdf_version/docinfo/check_pdf_syntax/close), PdfPageOps (page_count/extract_pages), PdfError { kind, message }}` (문서 3.11)
+//! - `backend::pdf_page_reader::{PdfOpener { fn open(&self, &Path) -> Result<Box<dyn PdfDoc>, PdfError> }, PdfDoc (page_count/pdf_version/docinfo/check_pdf_syntax/close), PdfPageOps (page_count/extract_pages), PdfError { kind, message }}` (문서 3.11)
 //! - `classifier::Classify { fn is_available(&self) -> bool; fn classify_path(&self, &Path, Option<f64>) -> Result<Prediction, String>; fn classify_document(&self, &Value, Option<f64>) -> Result<Prediction, String> }`
 //! - `classifier::inference_model::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str) -> Prediction`
 //! - `backend::es_manager::{EsManagerApi, EsError, ESManager::connect(env, connector, clock)}` (문서 3.3. 대역은 `common::es_fake::FakeEsManager`)
@@ -57,12 +57,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use backend::book::{Book, BookPage};
+use backend::book_metadata::{Book, BookPage};
 use backend::book_manager::{BookContent, BookManager, BookManagerDeps, BookResponse, FileReader, ProposeOptions, RuntimeError};
 use classifier::Classify;
 use classifier::inference_model::Prediction;
 use backend::es_manager::{ESManager, EsError, EsManagerApi};
-use backend::pdf::{PdfDoc, PdfError, PdfOpener, PdfPageOps};
+use backend::pdf_page_reader::{PdfDoc, PdfError, PdfOpener, PdfPageOps};
 use common::clock::Event;
 use common::epub::{EpubSpec, make_epub};
 use common::es_fake::{Docs, FakeEsManager};

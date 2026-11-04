@@ -65,7 +65,7 @@ mod epub_cover_set {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use backend::book::BookLookupError;
+    use backend::book_metadata::BookLookupError;
     use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
     use backend::direct_cover_url::{FetchError, ImageFetcher};
     use backend::epub_cover::{self, CoverError, EpubCoverHooks, Limits};

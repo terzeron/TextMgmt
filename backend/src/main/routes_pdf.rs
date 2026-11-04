@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::BookResponse;
-use super::deps::AppDeps;
-use super::errors::{ApiError, ApiResult, RequestValidationError};
-use super::extract::{ApiJson, ApiQuery, RequireAdmin, RequireAuth};
-use super::routes::Routes;
+use super::app_deps::AppDeps;
+use super::error_responses::{ApiError, ApiResult, RequestValidationError};
+use super::request_extractors::{ApiJson, ApiQuery, RequireAdmin, RequireAuth};
+use super::route_registry::Routes;
 use super::routes_books::{book_response, checked_manager, parse_book_id, run_blocking};
 use crate::epub_cover::MAX_IMAGE_BYTES;
 

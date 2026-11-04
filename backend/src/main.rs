@@ -19,14 +19,14 @@ use axum::middleware::from_fn;
 use std::sync::Arc;
 
 mod auth_routes;
-mod cookies;
-mod cors;
-mod deps;
-mod errors;
-mod extract;
-mod google;
+mod auth_cookies;
+mod cors_layer;
+mod app_deps;
+mod error_responses;
+mod request_extractors;
+mod google_oauth;
 mod log_routes;
-mod routes;
+mod route_registry;
 mod routes_books;
 mod routes_cover;
 mod routes_bookstore;
@@ -35,26 +35,26 @@ mod routes_health;
 mod routes_mapping;
 mod routes_pdf;
 mod routes_view_history;
-mod traits;
+mod app_capabilities;
 
-pub use crate::auth::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RoleResolver, observation_hash};
+pub use crate::auth_service::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RoleResolver, observation_hash};
 pub use bookstore::store_clients::BookstoreSearch;
 pub use crate::view_history_store::MAX_RECENT_VIEWS;
-pub use extract::{_client_ip, _request_ip_prefix, _request_user_agent, ClientInfo};
-pub use cookies::{_clear_auth_cookies, _get_cookie_settings, _set_auth_cookies, CustomJSONResponse, ResponseHeaders, custom_jsonable_encoder, is_local_frontend_origin};
-pub use deps::{AppDeps, AuthMode, AuthSlots, BookstoreFactory, RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS, Slot};
-pub use errors::{
+pub use request_extractors::{_client_ip, _request_ip_prefix, _request_user_agent, ClientInfo};
+pub use auth_cookies::{_clear_auth_cookies, _get_cookie_settings, _set_auth_cookies, CustomJSONResponse, ResponseHeaders, custom_jsonable_encoder, is_local_frontend_origin};
+pub use app_deps::{AppDeps, AuthMode, AuthSlots, BookstoreFactory, RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS, Slot};
+pub use error_responses::{
     ApiError, ApiResult, GENERIC_SERVER_ERROR_DETAIL, RequestValidationError, SERVICE_UNAVAILABLE_DETAIL, VALIDATION_ERROR_DETAIL, general_exception_handler, http_exception_handler, json_response,
     summarize_request_body, validation_exception_handler,
 };
-pub(crate) use extract::parse_py_bool;
-pub use extract::{ApiJson, ApiQuery, OptionalAuth, RequireAdmin, RequireAuth};
-pub use google::{GoogleIdTokenVerifier, GoogleJwksFetcher};
+pub(crate) use request_extractors::parse_py_bool;
+pub use request_extractors::{ApiJson, ApiQuery, OptionalAuth, RequireAdmin, RequireAuth};
+pub use google_oauth::{GoogleIdTokenVerifier, GoogleJwksFetcher};
 pub use log_routes::{CLIENT_ERROR_FIELD_LIMITS, ClientErrorLogModel};
-pub use routes::{RouteInfo, Routes};
+pub use route_registry::{RouteInfo, Routes};
 pub use crate::book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
-pub use crate::tasks::{InlineRunner, TaskHandle, TaskRunner, ThreadRunner};
-pub use traits::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, MappingError, UnavailableBookAccess, UnavailableGoogleVerifier, ViewHistoryApi};
+pub use crate::task_runner::{InlineRunner, TaskHandle, TaskRunner, ThreadRunner};
+pub use app_capabilities::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, MappingError, UnavailableBookAccess, UnavailableGoogleVerifier, ViewHistoryApi};
 
 /// Python 쪽 이름. `view_history_api` 테스트가 쓴다.
 pub type HttpException = HTTPException;
@@ -81,7 +81,7 @@ pub fn app() -> Router {
 
 /// 주입한 의존성으로 앱을 만든다. 테스트는 `AppDeps::new(..).with_xxx(..)`로 대역을 끼운다.
 pub fn app_with(deps: AppDeps) -> Router {
-    all_routes().into_router().fallback(errors::not_found).with_state(Arc::new(deps)).layer(from_fn(errors::error_middleware)).layer(from_fn(cors::cors_middleware))
+    all_routes().into_router().fallback(error_responses::not_found).with_state(Arc::new(deps)).layer(from_fn(error_responses::error_middleware)).layer(from_fn(cors_layer::cors_middleware))
 }
 
 /// 등록된 라우트 목록(경로, 메서드, 의존성). FastAPI `app.routes`의 `route.dependant.dependencies`에 대응한다.
@@ -166,7 +166,7 @@ mod tests {
     #[tokio::test]
     async fn handler_panic_becomes_generic_500() {
         let routes = Routes::new().get("/boom", &[], || async { panic!("kaboom") as &'static str });
-        let app = routes.into_router().with_state(Arc::new(AppDeps::new(AuthMode::Cookies))).layer(from_fn(errors::error_middleware));
+        let app = routes.into_router().with_state(Arc::new(AppDeps::new(AuthMode::Cookies))).layer(from_fn(error_responses::error_middleware));
         let resp = send(app, Request::get("/boom").body(Body::empty()).unwrap()).await;
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();

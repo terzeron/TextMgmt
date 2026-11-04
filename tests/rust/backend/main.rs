@@ -463,7 +463,7 @@ mod main_mock {
     use std::task::{Context, Poll, Waker};
 
     use axum::http::Method;
-    use backend::book::{Book, BookLookupError, BookPage};
+    use backend::book_metadata::{Book, BookLookupError, BookPage};
     use backend::book_manager::{BookContent, BookManagerApi, BookResponse, CoverPage};
     use db::{DbValue, Row};
     use backend::es_manager::{EsError, EsManagerApi};
@@ -1548,7 +1548,7 @@ mod main_mock {
             let rt_store = Mock::new();
             rt_store.returns("rotate", json!("ok"));
             let fx = fx_with_refresh_store(&rt_store);
-            let token = backend::auth::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
+            let token = backend::auth_service::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
             let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &token).await;
             assert_eq!(r.status, 200);
             assert_eq!(r.json()["status"], "success");
@@ -1558,7 +1558,7 @@ mod main_mock {
         #[tokio::test]
         async fn test_unauthorized_email_returns_403() {
             let fx = Fx::new();
-            let token = backend::auth::create_refresh_token("stranger@other.com", "viewer", Some("X"), None);
+            let token = backend::auth_service::create_refresh_token("stranger@other.com", "viewer", Some("X"), None);
             let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &token).await;
             assert_eq!(r.status, 403);
         }
@@ -1568,7 +1568,7 @@ mod main_mock {
             let rt_store = Mock::new();
             rt_store.returns("rotate", json!("reused"));
             let fx = fx_with_refresh_store(&rt_store);
-            let token = backend::auth::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
+            let token = backend::auth_service::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
             let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &token).await;
             assert_eq!(r.status, 401);
             assert_eq!(r.json()["detail"], "Invalid refresh token state");
@@ -1583,7 +1583,7 @@ mod main_mock {
             let rt_store = Mock::new();
             rt_store.raises("rotate", "DB connection lost");
             let fx = fx_with_refresh_store(&rt_store);
-            let token = backend::auth::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
+            let token = backend::auth_service::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
             let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &token).await;
             assert_eq!(r.status, 503);
         }
@@ -1626,7 +1626,7 @@ mod main_mock {
             let rt_store = Mock::new();
             let store = rt_store.clone();
             let fx = Fx::tweaked(move |d| d.with_refresh_token_store(Arc::new(store)));
-            let token = backend::auth::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
+            let token = backend::auth_service::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
             let r = fx.post_with_cookie("/auth/logout", "tm_refresh_token", &token).await;
             assert_eq!(r.status, 200);
             assert_eq!(rt_store.call_count("revoke_family"), 1);
