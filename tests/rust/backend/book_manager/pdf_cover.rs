@@ -9,7 +9,7 @@ use image::{DynamicImage, Rgb, RgbImage};
 fn test_blank_cover_check_returns_false_when_image_has_no_colors() {
     // 색 목록을 얻지 못하는 이미지를 흉내 낼 수 없어 크기 0 이미지를 쓴다.
     let image = image::DynamicImage::new_rgb8(0, 0);
-    assert!(!BookManager::_is_mostly_blank_cover(&image));
+    assert!(!BookManager::is_mostly_blank_cover(&image));
 }
 
 #[test]
@@ -24,7 +24,7 @@ fn cover_blank_detection_does_not_merge_sixteen_nearby_colors_into_one_backgroun
         }
     });
 
-    assert!(!BookManager::_is_mostly_blank_cover(&DynamicImage::ImageRgb8(image)));
+    assert!(!BookManager::is_mostly_blank_cover(&DynamicImage::ImageRgb8(image)));
 }
 
 #[test]
@@ -39,7 +39,7 @@ fn cover_blank_detection_matches_reference_on_repository_image_fixtures() {
     ];
     for (name, bytes, expected) in fixtures {
         let image = image::load_from_memory(bytes).unwrap();
-        assert_eq!(BookManager::_is_mostly_blank_cover(&image), expected, "fixture={name}");
+        assert_eq!(BookManager::is_mostly_blank_cover(&image), expected, "fixture={name}");
     }
 }
 
@@ -71,7 +71,7 @@ fn cover_blank_detection_matches_reference_on_synthetic_color_patterns() {
             6 => Rgb([0, 0, 0]),
             _ => Rgb([(seed * 31 % 256) as u8, (seed * 17 % 256) as u8, (seed * 7 % 256) as u8]),
         });
-        assert_eq!(BookManager::_is_mostly_blank_cover(&DynamicImage::ImageRgb8(image)), expected[kind as usize], "seed={seed}");
+        assert_eq!(BookManager::is_mostly_blank_cover(&DynamicImage::ImageRgb8(image)), expected[kind as usize], "seed={seed}");
     }
 }
 
@@ -108,7 +108,7 @@ fn cover_blank_detection_matches_reference_after_bilinear_resizing() {
                     _ => Rgb([(seed * 31 % 256) as u8, (seed * 17 % 256) as u8, (seed * 7 % 256) as u8]),
                 }
             });
-            if BookManager::_is_mostly_blank_cover(&DynamicImage::ImageRgb8(image)) { '1' } else { '0' }
+            if BookManager::is_mostly_blank_cover(&DynamicImage::ImageRgb8(image)) { '1' } else { '0' }
         })
         .collect();
     assert_eq!(results, expected);

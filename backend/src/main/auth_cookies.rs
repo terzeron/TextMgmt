@@ -55,7 +55,7 @@ fn resolve_cookie_secure() -> bool {
 }
 
 /// (Secure 여부, SameSite). SameSite는 "lax" | "strict" | "none"이다.
-pub fn _get_cookie_settings() -> (bool, String) {
+pub fn get_cookie_settings() -> (bool, String) {
     let secure = resolve_cookie_secure();
     let mut samesite = match env_var("TM_COOKIE_SAMESITE").unwrap_or_else(|| "lax".to_string()).to_lowercase().as_str() {
         "strict" => "strict",
@@ -77,8 +77,8 @@ fn set_cookie_value(name: &str, value: &str, secure: bool, samesite: &str, max_a
 }
 
 /// 접근 쿠키(와 있으면 갱신 쿠키)를 응답에 붙인다. 둘 다 HttpOnly, Path=/다.
-pub fn _set_auth_cookies<'a, R: ResponseHeaders>(response: &mut R, access_token: &str, refresh_token: impl Into<Option<&'a str>>) {
-    let (secure, samesite) = _get_cookie_settings();
+pub fn set_auth_cookies<'a, R: ResponseHeaders>(response: &mut R, access_token: &str, refresh_token: impl Into<Option<&'a str>>) {
+    let (secure, samesite) = get_cookie_settings();
     let headers = response.headers_mut();
     headers.append(header::SET_COOKIE, set_cookie_value(ACCESS_COOKIE_NAME, access_token, secure, &samesite, ACCESS_TOKEN_EXPIRATION_SECONDS));
     if let Some(refresh) = refresh_token.into() {
@@ -87,8 +87,8 @@ pub fn _set_auth_cookies<'a, R: ResponseHeaders>(response: &mut R, access_token:
 }
 
 /// 두 쿠키를 `Max-Age=0`으로 지운다.
-pub fn _clear_auth_cookies<R: ResponseHeaders>(response: &mut R) {
-    let (secure, samesite) = _get_cookie_settings();
+pub fn clear_auth_cookies<R: ResponseHeaders>(response: &mut R) {
+    let (secure, samesite) = get_cookie_settings();
     let headers = response.headers_mut();
     headers.append(header::SET_COOKIE, set_cookie_value(ACCESS_COOKIE_NAME, "", secure, &samesite, 0));
     headers.append(header::SET_COOKIE, set_cookie_value(REFRESH_COOKIE_NAME, "", secure, &samesite, 0));

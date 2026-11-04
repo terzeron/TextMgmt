@@ -7,7 +7,7 @@
 //! - `bookstore::store_clients`
 //!   - `type SearchRow = (String, String, String, String, String, String)` = `(title, author, category, detail_url, search_url, isbn)`
 //!   - `const MAX_RESULTS: usize = 4` (`AbstractBookstore.MAX_RESULTS`)
-//!   - `fn _truncate_title(title: &str) -> String`
+//!   - `fn truncate_title(title: &str) -> String`
 //!   - `sysdeps::{HttpSession, HttpResponse, HttpError}` (구 `bookstore::{Session, HttpResponse}`)
 //!     - `trait HttpSession: Send + Sync { fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError>; }` (`requests.Session.get` 대응. 예외는 `Err`)
 //!     - `HttpResponse::from_text(status: u16, text: &str) -> HttpResponse` (fake 생성용. `.text()`/`.json()`은 본문을 소비한다)
@@ -27,15 +27,15 @@
 //!     `NaverSeriesBookstore`, `MunpiaBookstore`, `JoaraBookstore`, `NaverWebtoonBookstore`, `KakaoWebtoonBookstore`,
 //!     `BomtoonBookstore`, `LezhinBookstore`, `ToptoonBookstore`: `new(verbose: bool) -> Self`,
 //!     `with_session(self, Arc<dyn HttpSession>) -> Self` (구 pub 필드 `session`), pub 필드 `max_results: usize`, `supports_isbn_search: bool`
-//!   - `Yes24Bookstore::_extract_yes24_category(&self, soup: &str) -> String`, `_extract_yes24_isbn`,
-//!     `AladinBookstore::_extract_aladin_isbn`, `_strip_trailing_number(&self, title: &str) -> String`,
-//!     `RidibooksBookstore::_extract_ridi_isbn`
+//!   - `Yes24Bookstore::extract_yes24_category(&self, soup: &str) -> String`, `extract_yes24_isbn`,
+//!     `AladinBookstore::extract_aladin_isbn`, `strip_trailing_number(&self, title: &str) -> String`,
+//!     `RidibooksBookstore::extract_ridi_isbn`
 //!   - 대역 주입 seam(mock.patch 대응, 구상 클래스 공통): `with_fetch_search_results(self, ..) -> Self`, `with_search_by_keyword(self, ..) -> Self`
 //!     (`Box<dyn Fn(&str) -> Vec<SearchRow> + Send + Sync>`. 구 `set_*`)
 //!   - `trait SoupSource`: `find(&self, name: &str) -> Result<Option<String>, String>`, `find_all(&self, name: &str) -> Result<Vec<String>, String>`,
 //!     `get_text(&self) -> Result<String, String>`, `select(&self, css: &str) -> Result<Vec<String>, String>` (예외를 던지는 soup 대역용)
-//!     - `Yes24Bookstore::_extract_yes24_category_soup/_extract_yes24_isbn_soup/extract_book_info_soup(&self, &dyn SoupSource)`,
-//!       `AladinBookstore::_extract_aladin_isbn_soup`, `RidibooksBookstore::_extract_ridi_isbn_soup`,
+//!     - `Yes24Bookstore::extract_yes24_category_soup/_extract_yes24_isbn_soup/extract_book_info_soup(&self, &dyn SoupSource)`,
+//!       `AladinBookstore::extract_aladin_isbn_soup`, `RidibooksBookstore::extract_ridi_isbn_soup`,
 //!       `NaverShoppingBookstore::extract_book_info_soup`
 //!   - `sysdeps::FsOps` (구 `StoreFs`. 이 파일은 `disk_free`와 `write`만 쓴다. 나머지 메서드는 trait 기본 구현), `Yes24Bookstore::with_fs(self, Arc<dyn FsOps>) -> Self`
 //!     (`shutil.disk_usage`와 `open` 대응. `write`의 `data`는 UTF-8 HTML 바이트)
@@ -57,9 +57,9 @@ use crate::common::shared_fixtures::{Call, Kind, failing, session};
 use crate::env_helpers::{EnvGuard, empty_env, map_env};
 use crate::log_capture::LogCapture;
 use bookstore::store_clients::{
-    _truncate_title, AbstractBookstore, AladinBookstore, BomtoonBookstore, JoaraBookstore, KakaoWebtoonBookstore, KyoboBookstore, LezhinBookstore, MAX_RESULTS, MunpiaBookstore, NaverSeriesBookstore,
+    AbstractBookstore, AladinBookstore, BomtoonBookstore, JoaraBookstore, KakaoWebtoonBookstore, KyoboBookstore, LezhinBookstore, MAX_RESULTS, MunpiaBookstore, NaverSeriesBookstore,
     NaverShoppingBookstore, NaverWebtoonBookstore, RidibooksBookstore, SearchRow, SoupSource, ToptoonBookstore, Yes24Bookstore, abstract_build_search_url, abstract_extract_book_info,
-    abstract_extract_search_links,
+    abstract_extract_search_links, truncate_title,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -454,8 +454,8 @@ fn test_yes24_fallback_links_and_no_category_isbn() {
     let html = r#"<html><a class="gd_name" href="/product/goods/1">X</a></html>"#;
     let links = store.extract_search_links(html);
     assert_eq!(links, ["https://www.yes24.com/product/goods/1"]);
-    assert_eq!(store._extract_yes24_category(html), "");
-    assert_eq!(store._extract_yes24_isbn(html), "");
+    assert_eq!(store.extract_yes24_category(html), "");
+    assert_eq!(store.extract_yes24_isbn(html), "");
 }
 
 #[test]
@@ -472,7 +472,7 @@ fn test_aladin_meta_fallbacks_and_no_isbn() {
     let info = store.extract_book_info(html);
     assert_eq!(info["title"], "OT");
     assert_eq!(info["author"], "OA");
-    assert_eq!(store._extract_aladin_isbn("<html></html>"), "");
+    assert_eq!(store.extract_aladin_isbn("<html></html>"), "");
 }
 
 #[test]
@@ -533,10 +533,10 @@ fn test_munpia_fallback_author() {
 
 #[test]
 fn test_truncate_title_variants() {
-    assert_eq!(_truncate_title("A - B"), "A");
-    assert_eq!(_truncate_title("A－B"), "A");
-    assert_eq!(_truncate_title("A - B - C"), "A");
-    assert_eq!(_truncate_title("A：B"), "A");
+    assert_eq!(truncate_title("A - B"), "A");
+    assert_eq!(truncate_title("A－B"), "A");
+    assert_eq!(truncate_title("A - B - C"), "A");
+    assert_eq!(truncate_title("A：B"), "A");
 }
 
 #[test]
@@ -845,19 +845,19 @@ fn test_yes24_author_text_and_isbn10() {
 #[test]
 fn yes24_isbn_text_parser_checks_each_fallback_pattern() {
     let store = yes24(false);
-    assert_eq!(store._extract_yes24_isbn_soup(&TextSoup("ISBN13 9781234567890 ISBN10 1234567890")), "9781234567890");
-    assert_eq!(store._extract_yes24_isbn_soup(&TextSoup("ISBN10 1234567890")), "1234567890");
-    assert_eq!(store._extract_yes24_isbn_soup(&TextSoup("ISBN 9781234567890")), "9781234567890");
-    assert_eq!(store._extract_yes24_isbn_soup(&TextSoup("other 1234567890")), "1234567890");
-    assert_eq!(store._extract_yes24_isbn_soup(&TextSoup("no identifier")), "");
+    assert_eq!(store.extract_yes24_isbn_soup(&TextSoup("ISBN13 9781234567890 ISBN10 1234567890")), "9781234567890");
+    assert_eq!(store.extract_yes24_isbn_soup(&TextSoup("ISBN10 1234567890")), "1234567890");
+    assert_eq!(store.extract_yes24_isbn_soup(&TextSoup("ISBN 9781234567890")), "9781234567890");
+    assert_eq!(store.extract_yes24_isbn_soup(&TextSoup("other 1234567890")), "1234567890");
+    assert_eq!(store.extract_yes24_isbn_soup(&TextSoup("no identifier")), "");
 }
 
 #[test]
 fn test_yes24_category_and_isbn_exception_paths() {
     let store = yes24(false);
 
-    assert_eq!(store._extract_yes24_category_soup(&BadSoup), "");
-    assert_eq!(store._extract_yes24_isbn_soup(&BadSoup), "");
+    assert_eq!(store.extract_yes24_category_soup(&BadSoup), "");
+    assert_eq!(store.extract_yes24_isbn_soup(&BadSoup), "");
 }
 
 #[test]
@@ -882,28 +882,28 @@ fn test_aladin_extract_links_and_isbn_paths() {
     "#;
     let links = store.extract_search_links(html);
     assert_eq!(links, ["https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=1", "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=3"]);
-    assert_eq!(store._extract_aladin_isbn(html), "9781234567890");
+    assert_eq!(store.extract_aladin_isbn(html), "9781234567890");
 }
 
 #[test]
 fn aladin_isbn_soup_uses_primary_and_fallback_layouts() {
     let store = aladin(false);
     let primary = AladinIsbnSoup { primary: Ok(vec!["ISBN 9781234567890".into()]), fallback: Ok(vec![]) };
-    assert_eq!(store._extract_aladin_isbn_soup(&primary), "9781234567890");
+    assert_eq!(store.extract_aladin_isbn_soup(&primary), "9781234567890");
 
     let fallback = AladinIsbnSoup { primary: Ok(vec!["출판일 2024".into()]), fallback: Ok(vec!["ISBN 1234567890".into()]) };
-    assert_eq!(store._extract_aladin_isbn_soup(&fallback), "1234567890");
+    assert_eq!(store.extract_aladin_isbn_soup(&fallback), "1234567890");
 
     let absent = AladinIsbnSoup { primary: Ok(vec!["출판일 2024".into()]), fallback: Ok(vec!["ISBN 없음".into()]) };
-    assert_eq!(store._extract_aladin_isbn_soup(&absent), "");
+    assert_eq!(store.extract_aladin_isbn_soup(&absent), "");
     let fallback_error = AladinIsbnSoup { primary: Ok(vec![]), fallback: Err("fallback failed".into()) };
-    assert_eq!(store._extract_aladin_isbn_soup(&fallback_error), "");
+    assert_eq!(store.extract_aladin_isbn_soup(&fallback_error), "");
 }
 
 #[test]
 fn test_aladin_strip_trailing_number_and_search_order() {
     let mut store = aladin(false);
-    assert_eq!(store._strip_trailing_number("마왕의 딸 3"), "마왕의 딸");
+    assert_eq!(store.strip_trailing_number("마왕의 딸 3"), "마왕의 딸");
 
     store = store.with_fetch_search_results(Box::new(|url| vec![row("T", "A", "C", url, url, "")]));
     let (results, keyword, method) = store.search("", "마왕의 딸 3", "작가");
@@ -930,11 +930,11 @@ fn test_ridibooks_extract_fallbacks_meta_and_author_link() {
 #[test]
 fn ridibooks_isbn_extractors_accept_only_a_thirteen_digit_value_after_label() {
     let store = ridibooks(false);
-    assert_eq!(store._extract_ridi_isbn("<div>ISBN</div><div>9781234567890</div>"), "9781234567890");
-    assert_eq!(store._extract_ridi_isbn("<div>ISBN</div><div>1234567890</div>"), "");
-    assert_eq!(store._extract_ridi_isbn_soup(&DivSoup(Ok(vec!["ISBN".into(), "9781234567890".into()]))), "9781234567890");
-    assert_eq!(store._extract_ridi_isbn_soup(&DivSoup(Ok(vec!["ISBN".into(), "1234567890".into()]))), "");
-    assert_eq!(store._extract_ridi_isbn_soup(&DivSoup(Err("parse failed".into()))), "");
+    assert_eq!(store.extract_ridi_isbn("<div>ISBN</div><div>9781234567890</div>"), "9781234567890");
+    assert_eq!(store.extract_ridi_isbn("<div>ISBN</div><div>1234567890</div>"), "");
+    assert_eq!(store.extract_ridi_isbn_soup(&DivSoup(Ok(vec!["ISBN".into(), "9781234567890".into()]))), "9781234567890");
+    assert_eq!(store.extract_ridi_isbn_soup(&DivSoup(Ok(vec!["ISBN".into(), "1234567890".into()]))), "");
+    assert_eq!(store.extract_ridi_isbn_soup(&DivSoup(Err("parse failed".into()))), "");
 }
 
 #[test]
@@ -991,9 +991,9 @@ fn test_aladin_isbn_fallback_and_exception() {
       </div>
     </html>
     "#;
-    assert_eq!(store._extract_aladin_isbn(html), "1234567890123");
+    assert_eq!(store.extract_aladin_isbn(html), "1234567890123");
 
-    assert_eq!(store._extract_aladin_isbn_soup(&BadSoup), "");
+    assert_eq!(store.extract_aladin_isbn_soup(&BadSoup), "");
 }
 
 #[test]
@@ -1089,7 +1089,7 @@ fn test_ridibooks_search_success_and_extract() {
 fn test_ridibooks_isbn_exception() {
     let store = ridibooks(false);
 
-    assert_eq!(store._extract_ridi_isbn_soup(&BadSoup), "");
+    assert_eq!(store.extract_ridi_isbn_soup(&BadSoup), "");
 }
 
 #[test]
@@ -1341,10 +1341,10 @@ fn test_naver_shopping_soup_title_and_div_fallbacks() {
 
 #[test]
 fn test_truncate_title() {
-    assert_eq!(_truncate_title("A - B"), "A");
-    assert_eq!(_truncate_title("A－B"), "A");
-    assert_eq!(_truncate_title("A: B"), "A: B");
-    assert_eq!(_truncate_title("A：B"), "A");
+    assert_eq!(truncate_title("A - B"), "A");
+    assert_eq!(truncate_title("A－B"), "A");
+    assert_eq!(truncate_title("A: B"), "A: B");
+    assert_eq!(truncate_title("A：B"), "A");
 }
 
 #[test]
@@ -1435,10 +1435,10 @@ fn test_save_and_load_html_from_tmp() {
 
 #[test]
 fn test_truncate_title_separators() {
-    assert_eq!(_truncate_title("A - B"), "A");
-    assert_eq!(_truncate_title("A－B"), "A");
-    assert_eq!(_truncate_title("A：B"), "A");
-    assert_eq!(_truncate_title("A-B"), "A");
+    assert_eq!(truncate_title("A - B"), "A");
+    assert_eq!(truncate_title("A－B"), "A");
+    assert_eq!(truncate_title("A：B"), "A");
+    assert_eq!(truncate_title("A-B"), "A");
 }
 
 #[test]
@@ -1520,8 +1520,8 @@ fn test_yes24_extract_search_links_and_category_and_isbn() {
     "#;
     let links = store.extract_search_links(html);
     assert_eq!(links, ["https://www.yes24.com/product/goods/123"]);
-    assert_eq!(store._extract_yes24_category(html), "국내도서 > 소설");
-    assert_eq!(store._extract_yes24_isbn(html), "9781234567890");
+    assert_eq!(store.extract_yes24_category(html), "국내도서 > 소설");
+    assert_eq!(store.extract_yes24_isbn(html), "9781234567890");
 }
 
 #[test]
@@ -1589,7 +1589,7 @@ fn test_aladin_extract_isbn_fallback() {
       </div>
     </html>
     "#;
-    assert_eq!(store._extract_aladin_isbn(html), "9781234567890");
+    assert_eq!(store.extract_aladin_isbn(html), "9781234567890");
 }
 
 #[test]

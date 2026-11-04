@@ -93,14 +93,14 @@ fn test_backfill_created_time_thread_states() {
     // 549: thread is already alive
     let mock_thread = Arc::new(FakeBackfillThread::alive());
     manager.set_created_time_backfill_thread(Some(mock_thread.clone()));
-    manager._backfill_created_time_if_enabled();
+    manager.backfill_created_time_if_enabled();
     assert_eq!(mock_thread.start_calls(), 0, "start가 호출되지 않아야 한다");
 
     // 561-563: thread.start() raises exception
     // 가정한 seam: 스레드 시작이 실패하는 실행기(TODO 주석 참고).
     let manager = BookManager::with_deps(deps(tmp.path(), &es).with_task_runner(Arc::new(FailingStartRunner { message: "thread pool exhausted" })));
     manager.set_created_time_backfill_thread(None);
-    manager._backfill_created_time_if_enabled();
+    manager.backfill_created_time_if_enabled();
     assert!(manager.created_time_backfill_thread().is_none());
 }
 
@@ -115,18 +115,18 @@ fn test_pdf_reader_cache_eviction_and_branches() {
     let manager = make_manager(tmp.path(), &es);
 
     // 1. First get: cache miss
-    let (reader1, pages1) = manager._get_cached_pdf_reader(&pdf_path);
+    let (reader1, pages1) = manager.get_cached_pdf_reader(&pdf_path);
     assert_eq!(pages1, 1);
 
     // 2. Lines 375-376: Cache hit with matching mtime
-    let (reader2, pages2) = manager._get_cached_pdf_reader(&pdf_path);
+    let (reader2, pages2) = manager.get_cached_pdf_reader(&pdf_path);
     assert!(Arc::ptr_eq(&reader2, &reader1));
     assert_eq!(pages2, 1);
 
     // 3. Line 389: Cache item exists, but mtime changed -> del cache[key]
     let new_mtime = fs::metadata(&pdf_path).unwrap().modified().unwrap() + Duration::from_secs(5);
     set_mtime(&pdf_path, new_mtime);
-    let (_reader3, pages3) = manager._get_cached_pdf_reader(&pdf_path);
+    let (_reader3, pages3) = manager.get_cached_pdf_reader(&pdf_path);
     assert_eq!(pages3, 1);
 
     // 4. Line 386: page_cache exceeds PAGE_COUNT_CACHE_MAX
@@ -135,7 +135,7 @@ fn test_pdf_reader_cache_eviction_and_branches() {
         manager.pdf_cache().clear();
         manager.page_count_cache().insert(("dummy1".to_string(), 0), 1);
         manager.page_count_cache().insert(("dummy2".to_string(), 0), 2);
-        manager._get_cached_pdf_reader(&pdf_path);
+        manager.get_cached_pdf_reader(&pdf_path);
         assert!(manager.page_count_cache().len() <= 2);
     }
 
@@ -153,7 +153,7 @@ fn test_pdf_reader_cache_eviction_and_branches() {
     {
         let limits = PdfCacheLimits { max_file_bytes: Some(0), max_bytes: None, max_entries: None };
         let manager = BookManager::with_deps(deps(tmp.path(), &es).with_pdf_cache_limits(limits));
-        let (_r, p) = manager._get_cached_pdf_reader(&pdf_path);
+        let (_r, p) = manager.get_cached_pdf_reader(&pdf_path);
         assert_eq!(p, 1);
     }
 }
@@ -168,13 +168,13 @@ fn test_backfill_created_time_branches() {
     // 1. Line 549: thread is alive -> returns early
     manager.set_created_time_backfill_thread(Some(Arc::new(FakeBackfillThread::alive())));
     let env = EnvGuard::single(CREATED_TIME_BACKFILL_ENV, "1");
-    manager._backfill_created_time_if_enabled();
+    manager.backfill_created_time_if_enabled();
 
     // 2. Lines 561-563: thread.start() raises exception
     // 가정한 seam: 스레드 시작이 실패하는 실행기(TODO 주석 참고).
     let manager = BookManager::with_deps(deps(tmp.path(), &es).with_task_runner(Arc::new(FailingStartRunner { message: "start failed" })));
     manager.set_created_time_backfill_thread(None);
-    manager._backfill_created_time_if_enabled();
+    manager.backfill_created_time_if_enabled();
     assert!(manager.created_time_backfill_thread().is_none());
 
     // 3. Lines 554-555: run_backfill raises exception
@@ -185,7 +185,7 @@ fn test_backfill_created_time_branches() {
     // 스레드를 띄우지 않고 대상 함수를 그 자리에서 실행한다.
     let manager = BookManager::with_deps(deps(tmp.path(), &es).with_task_runner(Arc::new(InlineRunner)));
     manager.set_created_time_backfill_thread(None);
-    manager._backfill_created_time_if_enabled();
+    manager.backfill_created_time_if_enabled();
 }
 
 #[test]
@@ -288,7 +288,7 @@ async fn test_preview_downscales_large_epub_images() {
     );
     let deps = make_deps(tmp.path(), FakeEsManager::with_doc(make_doc("pic.epub", "epub"))).with_epub_image_min_bytes(0).with_downscale_epub_image_hook(Arc::new(move |data: &[u8]| {
         spy.lock().unwrap().push(data.len());
-        BookManager::_downscale_epub_image(data)
+        BookManager::downscale_epub_image(data)
     }));
     let manager = BookManager::with_deps(deps);
 
@@ -390,7 +390,7 @@ mod pdf_reader_cache_budget {
         });
         let pdf = e.temp_dir.join("test_category").join("budget_large.pdf");
 
-        let (reader, total_pages) = e.bm._get_cached_pdf_reader(&pdf);
+        let (reader, total_pages) = e.bm.get_cached_pdf_reader(&pdf);
 
         assert_eq!(total_pages, 3);
         assert!(Arc::strong_count(&reader) >= 1); // reader 자체는 정상 반환되어야 한다
@@ -409,9 +409,9 @@ mod pdf_reader_cache_budget {
         });
         let pdf = e.temp_dir.join("test_category").join("budget_small.pdf");
 
-        let (reader1, _) = e.bm._get_cached_pdf_reader(&pdf);
+        let (reader1, _) = e.bm.get_cached_pdf_reader(&pdf);
         assert!(e.bm.pdf_cache().contains(&pdf.to_string_lossy()));
-        let (reader2, _) = e.bm._get_cached_pdf_reader(&pdf);
+        let (reader2, _) = e.bm.get_cached_pdf_reader(&pdf);
         assert!(Arc::ptr_eq(&reader1, &reader2)); // 같은 객체를 재사용 (재파싱 없음)
     }
 
@@ -421,7 +421,7 @@ mod pdf_reader_cache_budget {
         let pdf = e.temp_dir.join("test_category").join("budget_mtime.pdf");
         create_test_pdf(2, &pdf);
 
-        let (reader1, pages1) = e.bm._get_cached_pdf_reader(&pdf);
+        let (reader1, pages1) = e.bm.get_cached_pdf_reader(&pdf);
         assert_eq!(pages1, 2);
 
         create_test_pdf(4, &pdf); // 내용 교체
@@ -429,7 +429,7 @@ mod pdf_reader_cache_budget {
         let times = fs::FileTimes::new().set_accessed(meta.accessed().unwrap() + Duration::from_secs(10)).set_modified(meta.modified().unwrap() + Duration::from_secs(10));
         fs::OpenOptions::new().write(true).open(&pdf).unwrap().set_times(times).unwrap();
 
-        let (reader2, pages2) = e.bm._get_cached_pdf_reader(&pdf);
+        let (reader2, pages2) = e.bm.get_cached_pdf_reader(&pdf);
         assert!(!Arc::ptr_eq(&reader2, &reader1));
         assert_eq!(pages2, 4);
         assert_eq!(e.bm.pdf_cache().len(), 1); // 낡은 항목이 남지 않는다

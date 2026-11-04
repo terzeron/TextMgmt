@@ -8,7 +8,7 @@
 //!   - `determine_role(email: &str) -> Option<String>`
 //!   - `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String` (4인자 통일안. None은 빈 문자열)
 //!   - `create_refresh_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`
-//!   - `decode_refresh_token(token: &str) -> Result<Value, HTTPException>`, `_extract_payload<R: RequestParts>(req: &R) -> Result<Value, HTTPException>`
+//!   - `decode_refresh_token(token: &str) -> Result<Value, HTTPException>`, `extract_payload<R: RequestParts>(req: &R) -> Result<Value, HTTPException>`
 //!   - `async require_auth<R: RequestParts>(req: &R) -> Result<Value, HTTPException>`, `async require_admin<R: RequestParts>(req: &R) -> Result<Value, HTTPException>`
 //!   - `require_auth_with(req, resolver: &dyn RoleResolver)`, `require_admin_with(..)` (async, 같은 반환형. 역할 판정을 대역으로 바꾼다)
 //!   - `trait RequestParts { fn header(&self, name: &str) -> Option<String>; fn cookie(&self, name: &str) -> Option<String>; }`
@@ -25,9 +25,9 @@
 //!   - (모든 trait 메서드에 기본 구현이 있다. fake는 쓰는 메서드만 구현한다)
 //!   - `trait TokenIssuer` (`backend::auth_service`, 모든 메서드에 기본 구현): `create_access_token`, `create_refresh_token`, `decode_refresh_token`, `new_id`. `AppDeps::with_token_issuer(Arc<dyn TokenIssuer>)`
 //!   - `ACCESS_COOKIE_NAME`, `REFRESH_COOKIE_NAME: &str`, `observation_hash(&str) -> String`
-//!   - `_get_cookie_settings() -> (bool, String)`, `_set_auth_cookies(&mut CustomJSONResponse, &str, &str)`, `_clear_auth_cookies(&mut CustomJSONResponse)`
+//!   - `get_cookie_settings() -> (bool, String)`, `set_auth_cookies(&mut CustomJSONResponse, &str, &str)`, `clear_auth_cookies(&mut CustomJSONResponse)`
 //!   - `CustomJSONResponse::{new(Value) -> Self, headers(&self) -> &HeaderMap}`, `custom_jsonable_encoder(&Value) -> Value`
-//!   - `_client_ip(headers: &HeaderMap, client_host: Option<&str>) -> String`, `_request_ip_prefix(headers: &HeaderMap, client_host: Option<&str>) -> String`
+//!   - `client_ip(headers: &HeaderMap, client_host: Option<&str>) -> String`, `request_ip_prefix(headers: &HeaderMap, client_host: Option<&str>) -> String`
 //!   - `async validation_exception_handler(&Parts, &RequestValidationError) -> Response`, `async http_exception_handler(&Parts, &HTTPException) -> Response`,
 //!     `async general_exception_handler(&Parts, &(dyn Error + Send + Sync)) -> Response`, `RequestValidationError::new(Vec<Value>, Value /*body*/)`
 //!   - `route_table() -> Vec<RouteInfo>`, `struct RouteInfo { path: String, methods: Vec<String>, dependencies: Vec<String> }` (FastAPI `route.dependant.dependencies` 대응)
@@ -740,7 +740,7 @@ async fn test_session_access_refresh_keeps_family_and_prior_access_valid() {
     let response = post_empty(&client(&app).cookie(REFRESH_COOKIE_NAME, &refresh), "/auth/refresh").await;
     assert_eq!(response.status, 200);
     let next_access = cookie_value(&response, ACCESS_COOKIE_NAME).unwrap();
-    let payload = backend::auth_service::_extract_payload(&make_request(Some(&next_access), None)).unwrap();
+    let payload = backend::auth_service::extract_payload(&make_request(Some(&next_access), None)).unwrap();
     assert_eq!(payload["fid"], fid);
     for token in [access, next_access] {
         assert_eq!(client(&app).cookie(ACCESS_COOKIE_NAME, &token).get("/auth/me").await.status, 200);

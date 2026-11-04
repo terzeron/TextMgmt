@@ -328,7 +328,7 @@ pub fn decode_category_cursor(cursor: &str) -> Option<Vec<Value>> {
 // ESManager
 // ---------------------------------------------------------------------------
 
-/// `_search`를 대신하는 함수. `(query, sort, max_result_count, source_fields)`를 받아 히트를 돌려준다.
+/// `search`를 대신하는 함수. `(query, sort, max_result_count, source_fields)`를 받아 히트를 돌려준다.
 pub type SearchStub = Arc<dyn Fn(&Value, Option<&Value>, i64, Option<&[String]>) -> Result<Vec<Hit>, EsError> + Send + Sync>;
 
 pub struct ESManager {
@@ -416,7 +416,7 @@ impl ESManager {
         self
     }
 
-    /// `_search` 반환을 직접 주입한다. `_search`를 거치는 검색 메서드(`search_by_title` 등)에만 영향을 준다.
+    /// `search` 반환을 직접 주입한다. `search`를 거치는 검색 메서드(`search_by_title` 등)에만 영향을 준다.
     pub fn with_search_stub(mut self, stub: SearchStub) -> ESManager {
         self.search_stub = Some(stub);
         self

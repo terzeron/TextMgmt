@@ -227,7 +227,7 @@ fn map_error(err: roxmltree::Error) -> XmlError {
     }
 }
 
-/// 엄격하게 읽는다(`etree.fromstring(data, _safe_xml_parser())`). DTD는 읽되 외부 엔티티는 풀지 않는다.
+/// 엄격하게 읽는다(`etree.fromstring(data, safe_xml_parser())`). DTD는 읽되 외부 엔티티는 풀지 않는다.
 pub fn parse(data: &[u8]) -> Result<Element, XmlError> {
     let text = decode(data)?;
     parse_str(&text)
@@ -309,7 +309,7 @@ fn strip_unknown_entities(text: &str) -> String {
     NAMED_ENTITY.replace_all(text, |caps: &regex::Captures| if matches!(&caps[1], "amp" | "lt" | "gt" | "quot" | "apos") { caps[0].to_string() } else { String::new() }).into_owned()
 }
 
-/// `etree.fromstring(data, _safe_xml_parser(recover=True))`의 일부만 대신한다. 선언 없는 접두사와 모르는 엔티티는 고쳐서 다시 읽는다.
+/// `etree.fromstring(data, safe_xml_parser(recover=True))`의 일부만 대신한다. 선언 없는 접두사와 모르는 엔티티는 고쳐서 다시 읽는다.
 /// 그 밖의 구문 오류는 `None`이다.
 pub fn parse_lenient(data: &[u8]) -> Option<Element> {
     let mut text = match decode(data) {

@@ -1,5 +1,5 @@
 //! 카테고리 재적재: 파일 일괄 색인과 불일치 상세 다시 읽기.
-//! `reload_category_mismatch_files`, `_reload_root_files`, `reload_category`에 대응한다.
+//! `reload_category_mismatch_files`, `reload_book_root_files`, `reload_category`에 대응한다.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -35,12 +35,12 @@ impl BookManager {
     }
 
     /// 여러 파일을 배치로 파싱해 ES에 한 번에 색인한다. 반환: (file_path -> 새 book_id, 실패 목록).
-    pub async fn _bulk_index_files(&self, file_paths: &[&str], clean_existing: bool) -> (BTreeMap<String, i64>, Vec<Value>) {
-        self._bulk_index_files_with(file_paths, clean_existing, None, None).await
+    pub async fn bulk_index_files(&self, file_paths: &[&str], clean_existing: bool) -> (BTreeMap<String, i64>, Vec<Value>) {
+        self.bulk_index_files_with(file_paths, clean_existing, None, None).await
     }
 
-    /// `_bulk_index_files`에 진행 보고를 붙인 판. `progress_base`는 이 배치 이전까지 확정된 누적 카운트다.
-    pub async fn _bulk_index_files_with(&self, file_paths: &[&str], clean_existing: bool, on_progress: Option<ProgressFn<'_>>, progress_base: Option<&Value>) -> (BTreeMap<String, i64>, Vec<Value>) {
+    /// `bulk_index_files`에 진행 보고를 붙인 판. `progress_base`는 이 배치 이전까지 확정된 누적 카운트다.
+    pub async fn bulk_index_files_with(&self, file_paths: &[&str], clean_existing: bool, on_progress: Option<ProgressFn<'_>>, progress_base: Option<&Value>) -> (BTreeMap<String, i64>, Vec<Value>) {
         if let Some(hook) = self.seams().bulk_index_hook {
             let names: Vec<String> = file_paths.iter().map(|p| p.to_string()).collect();
             return hook(&names, clean_existing);
@@ -115,13 +115,13 @@ impl BookManager {
         (indexed, failures)
     }
 
-    pub async fn _reload_category_mismatch_details(&self, category: &str, details: &Value) -> Value {
-        self._reload_category_mismatch_details_with(category, details, None, None).await
+    pub async fn reload_category_mismatch_details(&self, category: &str, details: &Value) -> Value {
+        self.reload_category_mismatch_details_with(category, details, None, None).await
     }
 
     /// 카테고리 하나의 불일치(`fs_only`, `duplicates`, `es_only`)를 재적재·정리한다.
     /// `progress_base`는 이전 카테고리까지 확정된 누적 카운트로, 보고에는 항상 이 값을 더한 전역 누적치를 싣는다.
-    pub async fn _reload_category_mismatch_details_with(&self, category: &str, details: &Value, on_progress: Option<ProgressFn<'_>>, progress_base: Option<&Value>) -> Value {
+    pub async fn reload_category_mismatch_details_with(&self, category: &str, details: &Value, on_progress: Option<ProgressFn<'_>>, progress_base: Option<&Value>) -> Value {
         let mut indexed_count = 0i64;
         let mut deleted_count = 0i64;
         let mut failures: Vec<Value> = Vec::new();
@@ -164,7 +164,7 @@ impl BookManager {
             for batch in paths.chunks(self.bulk_reindex_batch_size) {
                 let batch_refs: Vec<&str> = batch.iter().map(String::as_str).collect();
                 let base = json!({"indexed_count": running_indexed, "deleted_count": running_deleted});
-                let (indexed, batch_failures) = self._bulk_index_files_with(&batch_refs, clean_existing, on_progress, Some(&base)).await;
+                let (indexed, batch_failures) = self.bulk_index_files_with(&batch_refs, clean_existing, on_progress, Some(&base)).await;
                 indexed_count += indexed.len() as i64;
                 indexed_book_id_by_path.extend(indexed.iter().map(|(k, v)| (k.clone(), *v)));
                 failures.extend(batch_failures);
@@ -233,8 +233,8 @@ impl BookManager {
             Ok(v) => v,
             Err(e) => return Err(format!("불일치 조회 실패: {e}")),
         };
-        let categories = self._mismatch_categories(&before);
-        let before_count = self._mismatch_item_count(&before);
+        let categories = self.mismatch_categories(&before);
+        let before_count = self.mismatch_item_count(&before);
         let (mut indexed_total, mut deleted_total) = (0i64, 0i64);
         let mut failures: Vec<Value> = Vec::new();
         let mut category_results: Vec<Value> = Vec::new();
@@ -253,7 +253,7 @@ impl BookManager {
                 continue;
             }
             let base = json!({"indexed_count": indexed_total, "deleted_count": deleted_total});
-            let category_result = self._reload_category_mismatch_details_with(category, &details, on_progress, Some(&base)).await;
+            let category_result = self.reload_category_mismatch_details_with(category, &details, on_progress, Some(&base)).await;
             indexed_total += category_result["indexed_count"].as_i64().unwrap_or(0);
             deleted_total += category_result["deleted_count"].as_i64().unwrap_or(0);
             category_results.push(category_result);
@@ -266,7 +266,7 @@ impl BookManager {
             failures.push(json!({"error": format!("ES refresh 실패: {e}")}));
         }
 
-        let after_count = self.try_get_category_mismatches(true).map(|v| self._mismatch_item_count(&v)).unwrap_or(0);
+        let after_count = self.try_get_category_mismatches(true).map(|v| self.mismatch_item_count(&v)).unwrap_or(0);
         let mut failed_count = failures.len() as i64;
         for category_result in &category_results {
             let list = category_result["failures"].as_array().cloned().unwrap_or_default();
@@ -306,7 +306,7 @@ impl BookManager {
         if let Some(report) = on_progress {
             report(json!({"before_count": before_count}));
         }
-        let category_result = self._reload_category_mismatch_details_with(category, &before_details, on_progress, None).await;
+        let category_result = self.reload_category_mismatch_details_with(category, &before_details, on_progress, None).await;
         let mut failures: Vec<Value> = Vec::new();
         if let Err(e) = self.es.refresh() {
             failures.push(json!({"error": format!("ES refresh 실패: {e}")}));
@@ -324,8 +324,8 @@ impl BookManager {
     }
 
     /// `_root`는 실제 디렉터리가 아니라 최상위 파일 묶음이라, loader 대신 최상위 파일만 직접 색인한다.
-    /// `_reload_root_files`: 최상위 파일만 다시 색인한다.
-    pub async fn _reload_root_files(&self) -> Result<Value, String> {
+    /// 책 루트의 최상위 파일만 다시 색인한다.
+    pub async fn reload_book_root_files(&self) -> Result<Value, String> {
         self.reload_root_files("book").await
     }
 
@@ -346,7 +346,7 @@ impl BookManager {
         let mut failures: Vec<Value> = Vec::new();
         for batch in file_names.chunks(self.bulk_reindex_batch_size) {
             let refs: Vec<&str> = batch.iter().map(String::as_str).collect();
-            let (indexed, batch_failures) = self._bulk_index_files(&refs, true).await;
+            let (indexed, batch_failures) = self.bulk_index_files(&refs, true).await;
             processed += indexed.len();
             failures.extend(batch_failures);
         }

@@ -9,7 +9,7 @@ use crate::common::category_apply::{ApplyOpts, apply_opts};
 use crate::common::shared_fixtures::manager;
 use crate::common::shared_fixtures::{allowed_set, asyncio_runner, deps, make_doc, make_manager, make_source_file, outcome, propose, split, tmp_dir};
 use crate::common::shared_fixtures::{book_adder, file_reader, setup};
-use backend::book_manager::{AddBookError, BookManager, MoveOpts, ProposeOptions};
+use backend::book_manager::{AddBookError, BookManager, KeywordMatch, MoveOpts, ProposeOptions};
 use classifier::BookClassifierApi;
 use common::env::EnvGuard;
 use common::es_fake::FakeEsManager;
@@ -166,11 +166,11 @@ fn manager_propose(manager: &BookManager, category: &str, mappings: &Mappings) -
 
 #[test]
 fn test_classification_haystack_relative_to_error() {
-    // Lines 1275-1276: ValueError in _classification_haystack
+    // Lines 1275-1276: ValueError in classification_haystack
     let tmp = tmp_dir();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
     let outside_file = Path::new("/tmp/outside/nested/book.epub");
-    let haystack = manager._classification_haystack(outside_file);
+    let haystack = manager.classification_haystack(outside_file);
     assert!(haystack.contains("nested"));
     assert!(haystack.contains("book"));
 }
@@ -188,7 +188,7 @@ fn test_move_classified_file_keeps_both_when_content_differs() {
     fs::create_dir_all(existing.parent().unwrap()).unwrap();
     fs::write(&existing, "기존 파일 내용은 다르다").unwrap();
 
-    let (result, err) = split(asyncio_runner(manager._move_classified_file(&src, "B", "book", MoveOpts { clean_existing: true, ..Default::default() })));
+    let (result, err) = split(asyncio_runner(manager.move_classified_file(&src, "B", "book", MoveOpts { clean_existing: true, ..Default::default() })));
 
     assert!(err.is_none());
     assert_eq!(result.unwrap()["to"], "B/book (1).txt");
@@ -210,7 +210,7 @@ fn test_move_classified_file_numbers_up_when_bracket_name_taken() {
     fs::write(tmp_path.join("B").join("book.txt"), "첫 번째").unwrap();
     fs::write(tmp_path.join("B").join("book (1).txt"), "두 번째").unwrap();
 
-    let (result, err) = split(asyncio_runner(manager._move_classified_file(&src, "B", "book", MoveOpts::default())));
+    let (result, err) = split(asyncio_runner(manager.move_classified_file(&src, "B", "book", MoveOpts::default())));
 
     assert!(err.is_none());
     assert_eq!(result.unwrap()["to"], "B/book (2).txt");
@@ -229,7 +229,7 @@ fn test_move_classified_file_same_size_different_content_keeps_both() {
     fs::create_dir(tmp_path.join("B")).unwrap();
     fs::write(tmp_path.join("B").join("book.txt"), "BBBB").unwrap();
 
-    let (result, err) = split(asyncio_runner(manager._move_classified_file(&src, "B", "book", MoveOpts { clean_existing: true, ..Default::default() })));
+    let (result, err) = split(asyncio_runner(manager.move_classified_file(&src, "B", "book", MoveOpts { clean_existing: true, ..Default::default() })));
 
     assert!(err.is_none());
     assert_eq!(result.unwrap()["to"], "B/book (1).txt");
@@ -245,7 +245,7 @@ fn test_move_classified_file_edge_cases() {
 
     // 1. 1379-1380: old_rel_path ValueError
     let outside_file = Path::new("/tmp/outside/file.txt");
-    let (res, err) = split(asyncio_runner(manager._move_classified_file(outside_file, "B", "book", MoveOpts::default())));
+    let (res, err) = split(asyncio_runner(manager.move_classified_file(outside_file, "B", "book", MoveOpts::default())));
     assert!(res.is_none());
     assert_eq!(err.as_deref(), Some("잘못된 파일 경로입니다"));
 
@@ -257,7 +257,7 @@ fn test_move_classified_file_edge_cases() {
     let faulty_resolve = FaultyFs::new();
     faulty_resolve.set_canonicalize(|p| p.to_string_lossy().contains("bad_target").then(|| other_err("target path resolve error")));
     let manager_resolve = BookManager::with_deps(deps(tmp_path, &FakeEsManager::new()).with_fs(faulty_resolve));
-    let (res2, err2) = split(asyncio_runner(manager_resolve._move_classified_file(&f1, "bad_target", "book", MoveOpts::default())));
+    let (res2, err2) = split(asyncio_runner(manager_resolve.move_classified_file(&f1, "bad_target", "book", MoveOpts::default())));
     assert!(res2.is_none());
     assert_eq!(err2.as_deref(), Some("잘못된 대상 경로입니다"));
 
@@ -269,7 +269,7 @@ fn test_move_classified_file_edge_cases() {
     let faulty_dup = FaultyFs::new();
     faulty_dup.set_same_file(|_a, _b| Some(other_err("samefile failed")));
     let manager_dup = BookManager::with_deps(deps(tmp_path, &FakeEsManager::new()).with_fs(faulty_dup.clone()));
-    let (res3, err3) = split(asyncio_runner(manager_dup._move_classified_file(&f1, "B", "book", MoveOpts { dry_run: true, clean_existing: true, ..Default::default() })));
+    let (res3, err3) = split(asyncio_runner(manager_dup.move_classified_file(&f1, "B", "book", MoveOpts { dry_run: true, clean_existing: true, ..Default::default() })));
     let res3 = res3.expect("res3");
     assert_eq!(res3["action"], "duplicate_clean");
     assert_eq!(res3["status"], "dry_run");
@@ -278,7 +278,7 @@ fn test_move_classified_file_edge_cases() {
     // 4. 1420-1421: clean_existing exception
     // samefile 실패는 그대로 두고 unlink(remove_file)만 더 실패시킨다.
     faulty_dup.set_remove_file(|_p| Some(other_err("delete duplicate failed")));
-    let (res4, err4) = split(asyncio_runner(manager_dup._move_classified_file(&f1, "B", "book", MoveOpts { dry_run: false, clean_existing: true, ..Default::default() })));
+    let (res4, err4) = split(asyncio_runner(manager_dup.move_classified_file(&f1, "B", "book", MoveOpts { dry_run: false, clean_existing: true, ..Default::default() })));
     assert!(res4.is_none());
     assert!(err4.expect("err4").contains("중복 파일 정리 실패"));
 
@@ -291,7 +291,7 @@ fn test_move_classified_file_edge_cases() {
     let faulty_move = FaultyFs::new();
     faulty_move.set_rename(|_src, _dst| Some(other_err("cross-device link failed")));
     let manager_err = BookManager::with_deps(deps(tmp_path, &err_es).with_fs(faulty_move));
-    let (res5, err5) = split(asyncio_runner(manager_err._move_classified_file(&f1, "B", "book", MoveOpts::default())));
+    let (res5, err5) = split(asyncio_runner(manager_err.move_classified_file(&f1, "B", "book", MoveOpts::default())));
     assert!(res5.is_none());
     assert!(err5.expect("err5").contains("파일 이동 실패"));
 
@@ -306,7 +306,7 @@ fn test_move_classified_file_edge_cases() {
     faulty_rollback.set_rename(fail_on_nth_call(2, "rollback move error"));
     let manager_add_err = BookManager::with_deps(deps(tmp_path, &add_err_es).with_book_adder(book_adder(|| Err(AddBookError::Rejected("ES add error".to_string())))).with_fs(faulty_rollback));
 
-    let (res6, err6) = split(asyncio_runner(manager_add_err._move_classified_file(&f2, "B", "book", MoveOpts::default())));
+    let (res6, err6) = split(asyncio_runner(manager_add_err.move_classified_file(&f2, "B", "book", MoveOpts::default())));
     assert!(res6.is_none());
     let err6 = err6.expect("err6");
     assert!(err6.contains("ES add error"));
@@ -329,7 +329,7 @@ fn test_move_classified_file_is_a_noop_when_already_in_target_category() {
     let book = category_dir.join("제자리 도서.txt");
     fs::write(&book, "내용").unwrap();
 
-    let (result, err) = split(asyncio_runner(manager._move_classified_file(&book, "2_science", "book", MoveOpts::default())));
+    let (result, err) = split(asyncio_runner(manager.move_classified_file(&book, "2_science", "book", MoveOpts::default())));
 
     assert!(err.is_none());
     let result = result.expect("result");
@@ -360,7 +360,7 @@ fn test_move_classified_file_does_not_orphan_a_hardlink() {
     fs::create_dir(&target_dir).unwrap();
     fs::hard_link(&source, target_dir.join(source.file_name().unwrap())).unwrap();
 
-    let (result, err) = split(asyncio_runner(manager._move_classified_file(&source, "2_science", "book", MoveOpts { clean_existing: false, ..Default::default() })));
+    let (result, err) = split(asyncio_runner(manager.move_classified_file(&source, "2_science", "book", MoveOpts { clean_existing: false, ..Default::default() })));
 
     assert!(result.is_none());
     assert!(err.expect("err").contains("대상 경로에 파일이 이미 존재합니다"));
@@ -383,7 +383,7 @@ fn test_move_classified_file_rejects_existing_duplicate_without_clean() {
     fs::create_dir(&target_dir).unwrap();
     fs::write(target_dir.join(conflict.file_name().unwrap()), "같은 내용").unwrap();
 
-    let (result, err) = split(asyncio_runner(manager._move_classified_file(&conflict, "2_science", "book", MoveOpts { clean_existing: false, ..Default::default() })));
+    let (result, err) = split(asyncio_runner(manager.move_classified_file(&conflict, "2_science", "book", MoveOpts { clean_existing: false, ..Default::default() })));
 
     assert!(result.is_none());
     assert!(err.expect("err").contains("대상 경로에 파일이 이미 존재합니다"));
@@ -408,7 +408,7 @@ fn test_move_classified_file_preserves_existing_es_metadata() {
     // Loader::read_file 교체 훅. 호출되면 테스트를 실패시킨다.
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_file_reader(file_reader(|_path| panic!("existing ES metadata should be reused"))));
 
-    let (result, err) = split(asyncio_runner(manager._move_classified_file(&source_file, "2_science", "book", MoveOpts::default())));
+    let (result, err) = split(asyncio_runner(manager.move_classified_file(&source_file, "2_science", "book", MoveOpts::default())));
 
     assert!(err.is_none());
     assert_eq!(result.expect("result")["status"], "moved");
@@ -432,7 +432,7 @@ fn test_move_classified_file_logs_a_failed_lookup_of_the_existing_es_document_an
     let manager = BookManager::with_deps(deps(tmp.path(), &es).with_file_reader(file_reader(|_path| Ok(json!({"1": make_doc("2_science/조회 실패.txt", "txt")})))));
     let logs = common::log_capture::LogCapture::start(log::Level::Warn);
 
-    let (result, err) = split(asyncio_runner(manager._move_classified_file(&source_file, "2_science", "book", MoveOpts::default())));
+    let (result, err) = split(asyncio_runner(manager.move_classified_file(&source_file, "2_science", "book", MoveOpts::default())));
 
     assert!(err.is_none(), "{err:?}");
     assert_eq!(result.expect("result")["status"], "moved");
@@ -456,7 +456,7 @@ fn test_match_category_by_keywords_skips_invalid_mapping_entries() {
         (json!("safe_target"), vec![json!(999), json!("  "), json!("dup"), json!("dup"), json!("sample")]), // 키워드가 문자열이 아니거나 비었거나 중복이면 건너뛴다
         (json!("../unsafe"), vec![json!("kw")]),                                                            // 안전하지 않은 카테고리 이름은 건너뛴다
     ];
-    let (category, matched, reason, _ranked) = manager._match_category_by_keywords(&test_file, "A", &mappings);
+    let KeywordMatch { category, keywords: matched, tie_reason: reason, ranked: _ranked } = manager.match_category_by_keywords(&test_file, "A", &mappings);
     assert_eq!(category.as_deref(), Some("safe_target"));
     assert!(matched.iter().any(|k| k == "sample"));
     assert!(reason.is_none());
@@ -470,7 +470,7 @@ fn test_match_category_by_keywords_rejects_control_char_category() {
     let file_path = tmp_path.join("test.txt");
     fs::write(&file_path, "hello").unwrap();
 
-    let (category, matched, reason, _ranked) = manager._match_category_by_keywords(&file_path, "0_inbox", &mappings(&[("unsafe\x00cat", &["test"])]));
+    let KeywordMatch { category, keywords: matched, tie_reason: reason, ranked: _ranked } = manager.match_category_by_keywords(&file_path, "0_inbox", &mappings(&[("unsafe\x00cat", &["test"])]));
 
     assert!(category.is_none());
     assert!(matched.is_empty());
@@ -488,7 +488,7 @@ fn test_match_category_by_keywords_reports_tie() {
     fs::write(&target, "x").unwrap();
     let mappings = mappings(&[("3_SF", &["SF"]), ("5_음악", &["음악"])]);
 
-    let (category, keywords, tie_reason, ranked) = manager._match_category_by_keywords(&target, "A", &mappings);
+    let KeywordMatch { category, keywords, tie_reason, ranked } = manager.match_category_by_keywords(&target, "A", &mappings);
 
     assert!(category.is_none());
     assert!(tie_reason.is_some());
@@ -510,7 +510,7 @@ fn test_match_category_by_keywords_picks_single_best() {
     fs::write(&target, "x").unwrap();
     let mappings = mappings(&[("3_SF", &["과학소설"]), ("5_음악", &["음악"])]);
 
-    let (category, keywords, tie_reason, ranked) = manager._match_category_by_keywords(&target, "A", &mappings);
+    let KeywordMatch { category, keywords, tie_reason, ranked } = manager.match_category_by_keywords(&target, "A", &mappings);
 
     assert_eq!(category.as_deref(), Some("3_SF"));
     assert_eq!(keywords, vec!["과학소설".to_string()]);
@@ -530,7 +530,7 @@ fn test_match_category_by_keywords_ignores_case() {
     // 소문자 비교라 `ß`는 `ss`가 아니다. 대문자 키워드 `STRAßE`가 맞는다.
     fs::write(&target, "x").unwrap();
 
-    let (category, matched, tie_reason, _) = manager._match_category_by_keywords(&target, "A", &mappings(&[("3_SF", &["STRAßE .TXT"])]));
+    let KeywordMatch { category, keywords: matched, tie_reason, ranked: _ } = manager.match_category_by_keywords(&target, "A", &mappings(&[("3_SF", &["STRAßE .TXT"])]));
 
     assert_eq!(category.as_deref(), Some("3_SF"));
     assert_eq!(matched, ["STRAßE .TXT"]);
@@ -549,7 +549,7 @@ fn test_move_classified_file_target_traversal_and_restore_err() {
     fs::write(&f, "data").unwrap();
 
     // 1. Line 1385: target_path not relative to root
-    let (_res1, err1) = split(asyncio_runner(manager._move_classified_file(&f, "../outside", "txt", MoveOpts::default())));
+    let (_res1, err1) = split(asyncio_runner(manager.move_classified_file(&f, "../outside", "txt", MoveOpts::default())));
     assert_eq!(err1.as_deref(), Some("잘못된 대상 경로입니다"));
 
     // 2. Lines 1498-1499: ES reindex fails, rollback add_book raises exception
@@ -559,7 +559,7 @@ fn test_move_classified_file_target_traversal_and_restore_err() {
 
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_book_adder(book_adder(|| Err(AddBookError::Exception("restore add_book boom".to_string())))));
     fs::create_dir_all(tmp_path.join("target")).unwrap();
-    let (_res2, err2) = split(asyncio_runner(manager._move_classified_file(&f, "target", "txt", MoveOpts::default())));
+    let (_res2, err2) = split(asyncio_runner(manager.move_classified_file(&f, "target", "txt", MoveOpts::default())));
     let err2 = err2.expect("err2 is not None");
     assert!(err2.contains("기존 ES 문서 복구 실패"));
 }
@@ -572,7 +572,7 @@ fn test_propose_category_grades() {
         let manager = make_manager(tmp_path, &FakeEsManager::new());
         let target = make_source_file(tmp_path, "A", "과학소설 모음.epub");
 
-        let proposal = manager._propose_category_for_file(&target, "A", &mappings, &fake, true, true);
+        let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
 
         assert_eq!(proposal["target_category"], json!(expected_target), "case {i}: target_category");
         assert_eq!(proposal["grade"], json!(expected_grade), "case {i}: grade");
@@ -591,7 +591,7 @@ fn test_propose_category_candidates_first_matches_target_when_decided() {
         let manager = make_manager(tmp_path, &FakeEsManager::new());
         let target = make_source_file(tmp_path, "A", "과학소설 모음.epub");
 
-        let proposal = manager._propose_category_for_file(&target, "A", &mappings, &fake, true, true);
+        let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
 
         assert_eq!(proposal["target_category"], json!(expected_target), "case {i}: target_category");
         if let Some(expected) = expected_target {
@@ -612,7 +612,7 @@ fn test_propose_category_candidates_keyword_top_with_runner_up() {
     let mappings = mappings(&[("3_SF", &["과학소설"]), ("5_음악", &["클래식"])]);
     let fake = FakeClassifier::new(None, "not_found", "r", None, None);
 
-    let proposal = manager._propose_category_for_file(&target, "A", &mappings, &fake, true, true);
+    let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
 
     assert_eq!(proposal["target_category"], "3_SF");
     assert_eq!(candidate_categories(&proposal), ["3_SF", "5_음악"]);
@@ -633,8 +633,8 @@ fn test_propose_category_item_always_carries_matched_keywords() {
     let unmatched = make_source_file(tmp_path, "A", "제목 없음.epub");
     let fake = FakeClassifier::new(None, "not_found", "r", None, None);
 
-    let hit = manager._propose_category_for_file(&matched, "A", &mappings(&[("3_SF", &["과학소설"])]), &fake, true, true);
-    let miss = manager._propose_category_for_file(&unmatched, "A", &mappings(&[("3_SF", &["과학소설"])]), &fake, true, true);
+    let hit = manager.propose_category_for_file(&matched, "A", &mappings(&[("3_SF", &["과학소설"])]), Some(&fake));
+    let miss = manager.propose_category_for_file(&unmatched, "A", &mappings(&[("3_SF", &["과학소설"])]), Some(&fake));
 
     assert_eq!(hit["matched_keywords"], json!(["과학소설"]));
     assert_eq!(miss["matched_keywords"], json!([]));
@@ -653,7 +653,7 @@ fn test_propose_category_candidates_keyword_tie() {
     let mappings = mappings(&[("3_SF", &["SF"]), ("5_음악", &["음악"])]);
     let fake = FakeClassifier::new(None, "not_found", "r", None, None);
 
-    let proposal = manager._propose_category_for_file(&target, "A", &mappings, &fake, true, true);
+    let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
 
     assert!(proposal["target_category"].is_null());
     assert_eq!(proposal["grade"], "unknown");
@@ -671,7 +671,7 @@ fn test_propose_category_candidates_bookstore_conflict() {
     let target = make_source_file(tmp_path, "A", "달빛조각사.epub");
     let fake = FakeClassifier::new(None, "conflict", "r", None, None).bookstore_candidates(&[("3_무협", 1), ("3_판타지", 1)]);
 
-    let proposal = manager._propose_category_for_file(&target, "A", &mappings(&[]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&target, "A", &mappings(&[]), Some(&fake));
 
     assert!(proposal["target_category"].is_null());
     assert_eq!(proposal["grade"], "unknown");
@@ -687,7 +687,7 @@ fn test_propose_category_candidates_model_only_has_length_one() {
     let target = make_source_file(tmp_path, "A", "book.epub");
     let fake = FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.9));
 
-    let proposal = manager._propose_category_for_file(&target, "A", &mappings(&[]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&target, "A", &mappings(&[]), Some(&fake));
 
     assert_eq!(proposal["target_category"], "3_SF");
     assert_eq!(proposal["candidates"].as_array().unwrap().len(), 1);
@@ -704,7 +704,7 @@ fn test_propose_category_candidates_capped_at_two_even_with_more_contenders() {
     let mappings = mappings(&[("3_SF", &["과학"]), ("5_음악", &["음악"]), ("7_역사", &["역사"])]);
     let fake = FakeClassifier::new(None, "not_found", "r", None, None);
 
-    let proposal = manager._propose_category_for_file(&target, "A", &mappings, &fake, true, true);
+    let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
 
     assert!(proposal["candidates"].as_array().unwrap().len() <= 2);
 }
@@ -721,7 +721,7 @@ fn test_propose_category_candidates_bookstore_majority_without_vote_data_does_no
     let target = make_source_file(tmp_path, "A", "book.epub");
     let fake = FakeClassifier::new(Some("3_SF"), "bookstore_majority", "r", None, Some(0.1));
 
-    let proposal = manager._propose_category_for_file(&target, "A", &mappings(&[]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&target, "A", &mappings(&[]), Some(&fake));
 
     assert_eq!(proposal["target_category"], "3_SF");
     assert_eq!(proposal["grade"], "certain");
@@ -735,7 +735,7 @@ fn test_high_confidence_needs_a_calibrated_boundary() {
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
     let fake = FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.9)).override_below(0.0);
 
-    assert!(!manager._is_high_confidence(&fake, 0.9));
+    assert!(!manager.is_high_confidence(&fake, 0.9));
 }
 
 #[test]
@@ -751,8 +751,8 @@ fn test_high_confidence_needs_more_than_the_bookstore_boundary() {
     let fake = FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.07)).override_below(0.056);
 
     // 서점 경계(0.056)는 넘지만 확실 경계(0.10)는 못 넘는다.
-    assert!(!manager._is_high_confidence(&fake, 0.07));
-    assert!(manager._is_high_confidence(&fake, 0.12));
+    assert!(!manager.is_high_confidence(&fake, 0.07));
+    assert!(manager.is_high_confidence(&fake, 0.12));
 }
 
 #[test]
@@ -767,7 +767,7 @@ fn test_low_confidence_model_answer_is_not_pre_checked() {
     let book = make_source_file(tmp_path, "9_성인", "어떤 웹소설.epub");
     let fake = FakeClassifier::new(Some("2_수필서간일기"), "model", "모델 판정", Some("2_수필서간일기"), Some(0.076)).override_below(0.056);
 
-    let proposal = manager._propose_category_for_file(&book, "9_성인", &mappings(&[]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&book, "9_성인", &mappings(&[]), Some(&fake));
 
     assert_eq!(proposal["grade"], BookManager::GRADE_UNKNOWN, "동전 던지기 점수가 미리 체크됐다");
     assert!(proposal["target_category"].is_null(), "점수가 낮은 답을 목적지로 썼다");
@@ -788,7 +788,7 @@ fn test_single_keyword_match_still_offers_a_second_choice() {
     let book = make_source_file(tmp_path, "9_어린이육아", "고생을 위한 철학에세이.txt");
     let fake = FakeClassifier::new(Some("9_어린이육아"), "model", "r", Some("9_어린이육아"), Some(0.116)).model_candidates(&[("9_어린이육아", 0.116), ("4_철학윤리", 0.04)]);
 
-    let proposal = manager._propose_category_for_file(&book, "9_어린이육아", &mappings(&[("2_수필서간일기", &["에세이"])]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&book, "9_어린이육아", &mappings(&[("2_수필서간일기", &["에세이"])]), Some(&fake));
 
     assert_eq!(proposal["target_category"], "2_수필서간일기");
     let categories = candidate_categories(&proposal);
@@ -805,7 +805,7 @@ fn test_model_path_offers_its_runner_up_as_the_second_choice() {
     let book = make_source_file(tmp_path, "A", "제목.txt");
     let fake = FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.3)).model_candidates(&[("3_SF", 0.3), ("5_음악", 0.08)]);
 
-    let proposal = manager._propose_category_for_file(&book, "A", &mappings(&[]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
 
     assert_eq!(candidate_categories(&proposal), ["3_SF", "5_음악"]);
 }
@@ -819,7 +819,7 @@ fn test_model_alternative_is_not_added_when_two_candidates_already_exist() {
     let book = make_source_file(tmp_path, "A", "과학소설 클래식 모음.txt");
     let fake = FakeClassifier::new(None, "not_found", "r", None, None).model_candidates(&[("9_성인", 0.2)]);
 
-    let proposal = manager._propose_category_for_file(&book, "A", &mappings(&[("3_SF", &["과학소설"]), ("5_음악", &["클래식"])]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[("3_SF", &["과학소설"]), ("5_음악", &["클래식"])]), Some(&fake));
 
     let categories = candidate_categories(&proposal);
     assert_eq!(categories.len(), 2);
@@ -835,7 +835,7 @@ fn test_model_alternative_never_repeats_the_destination() {
     let book = make_source_file(tmp_path, "A", "과학소설 모음.txt");
     let fake = FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.3)).model_candidates(&[("3_SF", 0.3)]);
 
-    let proposal = manager._propose_category_for_file(&book, "A", &mappings(&[("3_SF", &["과학소설"])]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[("3_SF", &["과학소설"])]), Some(&fake));
 
     assert_eq!(candidate_categories(&proposal), ["3_SF"]);
 }
@@ -1221,7 +1221,7 @@ fn test_model_alternative_below_the_decision_floor_is_not_offered() {
         .bookstore_candidates(&[("2_소설외국", 3)])
         .model_candidates(&[("2_소설외국", 0.076), ("2_수필서간일기", 0.046)]);
 
-    let proposal = manager._propose_category_for_file(&book, "A", &mappings(&[]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
 
     assert_eq!(candidate_categories(&proposal), ["2_소설외국"]);
 }
@@ -1238,7 +1238,7 @@ fn test_model_alternative_at_or_above_the_decision_floor_is_offered() {
         .bookstore_candidates(&[("2_소설외국", 3)])
         .model_candidates(&[("2_소설외국", 0.2), ("3_스릴러", 0.09)]);
 
-    let proposal = manager._propose_category_for_file(&book, "A", &mappings(&[]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
 
     assert_eq!(candidate_categories(&proposal), ["2_소설외국", "3_스릴러"]);
 }
@@ -1258,7 +1258,7 @@ fn test_bookstore_votes_beat_a_model_alternative_when_no_destination_was_chosen(
         .bookstore_candidates(&[("8_건강일반", 1)])
         .model_candidates(&[("2_소설외국", 0.076), ("2_수필서간일기", 0.046)]);
 
-    let proposal = manager._propose_category_for_file(&book, "A", &mappings(&[]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
 
     assert!(proposal["target_category"].is_null());
     assert_eq!(candidate_categories(&proposal), ["2_소설외국", "8_건강일반"]);
@@ -1278,7 +1278,7 @@ fn test_proposal_carries_expected_accuracy() {
     let book = make_source_file(tmp_path, "A", "제목.txt");
     let fake = FakeClassifier::new(Some("2_소설외국"), "bookstore_majority", "r", None, Some(0.076)).with_calibration(0.93).bookstore_candidates(&[("2_소설외국", 3)]);
 
-    let proposal = manager._propose_category_for_file(&book, "A", &mappings(&[]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
 
     assert_eq!(proposal["confidence"], 0.076);
     assert_eq!(proposal["expected_accuracy"], 0.93);
@@ -1293,7 +1293,7 @@ fn test_proposal_expected_accuracy_is_none_without_calibration() {
     let book = make_source_file(tmp_path, "A", "제목.txt");
     let fake = FakeClassifier::new(Some("2_소설외국"), "bookstore_majority", "r", None, Some(0.076)).with_floor().bookstore_candidates(&[("2_소설외국", 3)]);
 
-    let proposal = manager._propose_category_for_file(&book, "A", &mappings(&[]), &fake, true, true);
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
 
     assert!(proposal["expected_accuracy"].is_null());
 }
@@ -1332,14 +1332,14 @@ mod candidate_building {
     fn test_model_decision_floor_ignores_unparsable_value() {
         // 파싱할 수 없는 값은 타입이 있는 API에서 `None`이다
         let service = StubService { min_confidence: None, accuracy: None };
-        assert_eq!(BookManager::_model_decision_floor(&service), 0.0);
+        assert_eq!(BookManager::model_decision_floor(&service), 0.0);
     }
 
     #[test]
     fn test_expected_accuracy_swallows_calibration_errors() {
         // 보정 중 예외는 타입이 있는 API에서 `None`이다
         let service = StubService { min_confidence: None, accuracy: None };
-        assert_eq!(BookManager::_expected_accuracy(&service, 0.9), None);
+        assert_eq!(BookManager::expected_accuracy(&service, 0.9), None);
     }
 
     #[test]
@@ -1347,7 +1347,7 @@ mod candidate_building {
         let tmp = TempDir::new().unwrap();
         let manager = make_manager(tmp.path(), FakeEsManager::new());
         let candidates = vec![json!({"category": "A"}), json!({"category": "B"})];
-        assert_eq!(manager._fill_second_with_model(candidates, &[("C".to_string(), 0.9)]), vec![json!({"category": "A"}), json!({"category": "B"})]);
+        assert_eq!(manager.fill_second_with_model(candidates, &[("C".to_string(), 0.9)]), vec![json!({"category": "A"}), json!({"category": "B"})]);
     }
 
     #[test]
@@ -1355,7 +1355,7 @@ mod candidate_building {
         let tmp = TempDir::new().unwrap();
         let manager = make_manager(tmp.path(), FakeEsManager::new());
         let votes = [("A".to_string(), 3), ("B".to_string(), 2), ("C".to_string(), 1)];
-        let result = manager._build_candidates(None, "not_found", None, &votes);
+        let result = manager.build_candidates(None, "not_found", None, &votes);
         let categories: Vec<&str> = result.iter().map(|c| c["category"].as_str().unwrap()).collect();
         assert_eq!(categories, vec!["A", "B"]);
     }
@@ -1365,17 +1365,17 @@ mod candidate_building {
         let tmp = TempDir::new().unwrap();
         let manager = make_manager(tmp.path(), FakeEsManager::new());
         let candidates = vec![json!({"category": "A"}), json!({"category": "B"})];
-        assert_eq!(manager._fill_second_with_bookstore(candidates, &[("C".to_string(), 3)]), vec![json!({"category": "A"}), json!({"category": "B"})]);
+        assert_eq!(manager.fill_second_with_bookstore(candidates, &[("C".to_string(), 3)]), vec![json!({"category": "A"}), json!({"category": "B"})]);
     }
 
     #[test]
     fn test_vote_count_returns_recorded_votes_for_known_category() {
-        assert_eq!(BookManager::_vote_count_for("A", &[("B".to_string(), 5), ("A".to_string(), 3)]), 3);
+        assert_eq!(BookManager::vote_count_for("A", &[("B".to_string(), 5), ("A".to_string(), 3)]), 3);
     }
 
     #[test]
     fn test_vote_count_defaults_to_one_when_category_has_no_votes() {
-        assert_eq!(BookManager::_vote_count_for("Z", &[("A".to_string(), 3)]), 1);
+        assert_eq!(BookManager::vote_count_for("Z", &[("A".to_string(), 3)]), 1);
     }
 
     // ---- 분류 제안 ----
@@ -1396,16 +1396,16 @@ mod candidate_building {
         let tmp = TempDir::new().unwrap();
         let source = tmp.path().join("a.txt");
         fs::write(&source, "x").unwrap();
-        assert!(!BookManager::_is_duplicate_content(&source, &tmp.path().join("없음.txt")));
+        assert!(!BookManager::is_duplicate_content(&source, &tmp.path().join("없음.txt")));
     }
 
     #[test]
     fn test_next_numbered_path_gives_up_when_all_slots_taken() {
-        // 상수 재정의 setter 대신 상한을 인자로 받는 `_next_numbered_path_with`를 쓴다.
+        // 상수 재정의 setter 대신 상한을 인자로 받는 `next_numbered_path_with`를 쓴다.
         let tmp = TempDir::new().unwrap();
         let target = tmp.path().join("book.txt");
         fs::write(tmp.path().join("book (1).txt"), "x").unwrap();
-        let result = BookManager::_next_numbered_path_with(&target, 1);
+        let result = BookManager::next_numbered_path_with(&target, 1);
         assert!(result.is_none());
     }
 
@@ -1418,7 +1418,7 @@ mod candidate_building {
         category_with_files(tmp.path(), "B", &["book.txt"]);
 
         let opts = MoveOpts { clean_existing: true, source_category: Some("A".to_string()), ..Default::default() };
-        let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
+        let (result, err) = split(manager.move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
 
         assert_eq!(err, None);
         assert_eq!(result.unwrap()["status"], "duplicate_cleaned");
@@ -1434,7 +1434,7 @@ mod candidate_building {
         fs::create_dir(tmp.path().join("B")).unwrap();
 
         let opts = MoveOpts { dry_run: true, ..Default::default() };
-        let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
+        let (result, err) = split(manager.move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
 
         assert_eq!(err, None);
         assert_eq!(result.unwrap()["action"], "move");
@@ -1510,7 +1510,7 @@ mod classified_file_moves {
         category_with_files(tmp.path(), "B", &["book.txt", "book (1).txt"]);
         fs::write(tmp.path().join("A").join("book.txt"), "다른 내용입니다").unwrap();
 
-        let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", Default::default()).await);
+        let (result, err) = split(manager.move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", Default::default()).await);
 
         assert!(result.is_none());
         assert!(err.unwrap().contains("너무 많습니다"));
@@ -1528,7 +1528,7 @@ mod classified_file_moves {
         let manager = BookManager::with_deps(make_deps(tmp.path(), FakeEsManager::new()).with_fs(fs_ops));
 
         let opts = MoveOpts { clean_existing: true, ..Default::default() };
-        let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
+        let (result, err) = split(manager.move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
 
         assert!(result.is_none());
         assert!(err.unwrap().starts_with("중복 파일 정리 실패"));
@@ -1542,7 +1542,7 @@ mod classified_file_moves {
         category_with_files(tmp.path(), "A", &["book.txt"]);
         fs::create_dir(tmp.path().join("B")).unwrap();
 
-        let (result, err) = split(manager._move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", Default::default()).await);
+        let (result, err) = split(manager.move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", Default::default()).await);
 
         assert!(result.is_none());
         assert!(err.unwrap().contains("지원하지 않는 파일 형식"));

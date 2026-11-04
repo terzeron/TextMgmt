@@ -1,4 +1,4 @@
-//! HTML 미리보기 sanitizer(`BookManager::_sanitize_html_for_viewer`)의 적대적 입력 검증.
+//! HTML 미리보기 sanitizer(`BookManager::sanitize_html_for_viewer`)의 적대적 입력 검증.
 //! 실행 가능한 구성요소가 출력에 남지 않는다는 보장을 여러 우회 형태로 확인한다.
 //! 출력은 서버가 `Content-Security-Policy: sandbox`와 함께 내려주지만, sanitizer 자체도 실행 가능한 요소를 남기면 안 된다.
 
@@ -16,7 +16,7 @@ use std::{fs, io};
 const BASE: &str = "/api/books/1/html-resource";
 
 fn sanitize(html: &str) -> String {
-    BookManager::_sanitize_html_for_viewer(html, BASE)
+    BookManager::sanitize_html_for_viewer(html, BASE)
 }
 
 /// 출력의 모든 태그에서 (태그 이름, 속성 이름 목록)을 뽑는다. 속성 값은 따옴표를 존중해서 건너뛴다(값 안의 텍스트는 속성이 아니다).
@@ -280,13 +280,13 @@ fn test_svg_download_blocks_active_content() {
     }
 }
 
-// ── _sanitize_html_for_viewer: external src 속성 제거 (line 116) ─────────────
+// ── sanitize_html_for_viewer: external src 속성 제거 (line 116) ─────────────
 
 #[test]
 fn test_sanitize_html_external_src_attribute_removed() {
-    // 외부 URL src 는 _build_html_resource_url 이 None 을 반환하므로 속성이 제거된다.
+    // 외부 URL src 는 build_html_resource_url 이 None 을 반환하므로 속성이 제거된다.
     let html = r#"<html><body><img src="http://external.com/img.png"></body></html>"#;
-    let result = BookManager::_sanitize_html_for_viewer(html, "/base");
+    let result = BookManager::sanitize_html_for_viewer(html, "/base");
     let soup = scraper::Html::parse_document(&result);
     let sel = scraper::Selector::parse("img").unwrap();
     let img = soup.select(&sel).next();
@@ -295,34 +295,34 @@ fn test_sanitize_html_external_src_attribute_removed() {
 
 #[test]
 fn test_empty_string_returns_none() {
-    assert_eq!(BookManager::_build_html_resource_url("/base", ""), None);
+    assert_eq!(BookManager::build_html_resource_url("/base", ""), None);
 }
 
 #[test]
 fn test_whitespace_only_returns_none() {
-    assert_eq!(BookManager::_build_html_resource_url("/base", "   "), None);
+    assert_eq!(BookManager::build_html_resource_url("/base", "   "), None);
 }
 
 #[test]
 fn test_data_uri_returned_as_is() {
     let uri = "data:image/png;base64,abc123";
-    assert_eq!(BookManager::_build_html_resource_url("/base", uri), Some(uri.to_string()));
+    assert_eq!(BookManager::build_html_resource_url("/base", uri), Some(uri.to_string()));
 }
 
 #[test]
 fn test_blob_uri_returned_as_is() {
     let uri = "blob:http://example.com/uuid";
-    assert_eq!(BookManager::_build_html_resource_url("/base", uri), Some(uri.to_string()));
+    assert_eq!(BookManager::build_html_resource_url("/base", uri), Some(uri.to_string()));
 }
 
 #[test]
 fn test_external_http_url_returns_none() {
-    assert_eq!(BookManager::_build_html_resource_url("/base", "http://external.com/img.png"), None);
+    assert_eq!(BookManager::build_html_resource_url("/base", "http://external.com/img.png"), None);
 }
 
 #[test]
 fn test_protocol_relative_url_returns_none() {
-    assert_eq!(BookManager::_build_html_resource_url("/base", "//cdn.example.com/img.png"), None);
+    assert_eq!(BookManager::build_html_resource_url("/base", "//cdn.example.com/img.png"), None);
 }
 
 #[test]

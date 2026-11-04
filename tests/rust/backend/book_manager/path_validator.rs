@@ -88,28 +88,28 @@ fn test_normalize_stored_file_path_all_branches() {
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
 
     // 1217: empty
-    assert_eq!(manager._normalize_stored_file_path(""), "");
+    assert_eq!(manager.normalize_stored_file_path(""), "");
 
     // 1223-1224: absolute path outside prefix
-    let res = manager._normalize_stored_file_path("/some/other/non_relative_root/file.txt");
+    let res = manager.normalize_stored_file_path("/some/other/non_relative_root/file.txt");
     assert_eq!(res, "some/other/non_relative_root/file.txt");
 
     // 1228: normalized == "."
-    assert_eq!(manager._normalize_stored_file_path("."), "");
+    assert_eq!(manager.normalize_stored_file_path("."), "");
 
     // 1230: normalized starts with ./
-    assert_eq!(manager._normalize_stored_file_path("./A/file.txt"), "A/file.txt");
+    assert_eq!(manager.normalize_stored_file_path("./A/file.txt"), "A/file.txt");
 }
 
 #[test]
 fn test_is_safe_category_name_oserror() {
-    // Lines 1244-1245: OSError in _is_safe_category_name
+    // Lines 1244-1245: OSError in is_safe_category_name
     let tmp = tmp_dir();
     // 경로 정규화(resolve = canonicalize) 실패 훅. 이름에 "bad_oserror"가 든 경로만 실패한다.
     let faulty = FaultyFs::new();
     faulty.set_canonicalize(|p| p.to_string_lossy().contains("bad_oserror").then(|| other_err("permission denied")));
     let manager = BookManager::with_deps(deps(tmp.path(), &FakeEsManager::new()).with_fs(faulty));
-    assert!(!manager._is_safe_category_name("bad_oserror"));
+    assert!(!manager.is_safe_category_name("bad_oserror"));
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn test_is_indexable_file_path_hidden() {
     // Line 1249: dot file
     let tmp = tmp_dir();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
-    assert!(!manager._is_indexable_file_path(Path::new(".hidden.epub")));
+    assert!(!manager.is_indexable_file_path(Path::new(".hidden.epub")));
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn test_iter_category_indexable_files_branches_shadowed() {
     let normal_file = cat_dir.join("valid.txt");
     fs::write(&normal_file, "y").unwrap();
 
-    let files = manager._iter_category_indexable_files("A", true);
+    let files = manager.iter_category_indexable_files("A", true);
     assert_eq!(files.len(), 0); // .hidden_dir ignored (1353), valid.txt resolve OSError (1359-1360)
 }
 
@@ -146,7 +146,7 @@ fn test_normalize_stored_file_path_dot_slash() {
     // Line 1230
     let tmp = tmp_dir();
     let manager = make_manager(tmp.path(), &FakeEsManager::new());
-    assert_eq!(manager._normalize_stored_file_path("./foo/bar.txt"), "foo/bar.txt");
+    assert_eq!(manager.normalize_stored_file_path("./foo/bar.txt"), "foo/bar.txt");
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn test_iter_category_indexable_files_branches() {
     let hidden = cat_dir.join(".hidden.txt");
     // iterdir 결과를 고정한 `FsOps`(구 `fs_iterdir_override`). 단계마다 다른 목록이라 매니저를 새로 만든다.
     let manager = BookManager::with_deps(deps(tmp_path, &es).with_fs(ListDirFs::new(move |_dir| vec![outside_file.clone(), hidden.clone()])));
-    let files = manager._iter_category_indexable_files("cat", false);
+    let files = manager.iter_category_indexable_files("cat", false);
     assert_eq!(files, Vec::<PathBuf>::new());
 
     // Lines 1359-1360: resolve raises OSError
@@ -178,7 +178,7 @@ fn test_iter_category_indexable_files_branches() {
     let faulty = FaultyFs::wrapping(ListDirFs::new(move |_dir| vec![nf2.clone()]));
     faulty.set_canonicalize(move |p| (p == nf).then(|| other_err("resolve failed")));
     let manager2 = BookManager::with_deps(deps(tmp_path, &es).with_fs(faulty));
-    let files2 = manager2._iter_category_indexable_files("cat", false);
+    let files2 = manager2.iter_category_indexable_files("cat", false);
     assert_eq!(files2, Vec::<PathBuf>::new());
 }
 
@@ -197,7 +197,7 @@ mod stored_path_normalization {
     fn test_normalize_stored_file_path_strips_leading_dot_slash() {
         let tmp = TempDir::new().unwrap();
         let manager = make_manager(tmp.path(), FakeEsManager::new());
-        assert_eq!(manager._normalize_stored_file_path("./A/x.txt"), "A/x.txt");
+        assert_eq!(manager.normalize_stored_file_path("./A/x.txt"), "A/x.txt");
     }
 
     // ---- 카테고리 파일 열거 ----
@@ -209,14 +209,14 @@ mod stored_path_normalization {
         category_with_files(tmp.path(), "A", &["keep.txt"]);
         fs::create_dir(tmp.path().join("A").join("sub")).unwrap();
 
-        let names: Vec<String> = manager._iter_category_indexable_files("A", false).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        let names: Vec<String> = manager.iter_category_indexable_files("A", false).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
         assert_eq!(names, vec!["keep.txt"]);
 
         // 같은 부모 디렉토리 아래에 corpus 밖 디렉토리를 만든다(부모는 별도 TempDir로 둔다).
         let outside = TempDir::new().unwrap();
         fs::write(outside.path().join("leak.txt"), "밖").unwrap();
         std::os::unix::fs::symlink(outside.path(), tmp.path().join("L")).unwrap();
-        assert!(manager._iter_category_indexable_files("L", false).is_empty());
+        assert!(manager.iter_category_indexable_files("L", false).is_empty());
     }
 }
 

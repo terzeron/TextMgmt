@@ -158,7 +158,7 @@ fn libreoffice_without_an_output_file_returns_empty_text_and_logs_the_directory(
     let runner = common::runner::FakeRunner::returning(Ok(common::runner::output(0, "", "warn: nothing written")));
     let logs = common::log_capture::LogCapture::start(log::Level::Error);
 
-    let text = BookManager::_convert_with_libreoffice_with(&*runner, "soffice", Some(dir.path()), Path::new("/books/book.hwp"), "txt:Text");
+    let text = BookManager::convert_with_libreoffice_with(&*runner, "soffice", Some(dir.path()), Path::new("/books/book.hwp"), "txt:Text");
 
     assert_eq!(text, "");
     let logged = logs.text();
@@ -174,7 +174,7 @@ mod xml_safety_and_cursors {
 
     use std::fs;
 
-    use backend::book_manager::{_declare_unbound_prefixes, _safe_xml_parser, BookManager, decode_category_cursor, encode_category_cursor};
+    use backend::book_manager::{BookManager, declare_unbound_prefixes_bytes, decode_category_cursor, encode_category_cursor, safe_xml_parser};
 
     use base64::Engine;
 
@@ -200,7 +200,7 @@ mod xml_safety_and_cursors {
 
     #[test]
     fn test_safe_xml_parser_blocks_external_entity() {
-        // _safe_xml_parser 는 외부 엔티티(file://)를 해석하지 않아야 한다.
+        // safe_xml_parser 는 외부 엔티티(file://)를 해석하지 않아야 한다.
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
         let secret = tmp_path.join("canary.txt");
@@ -208,11 +208,11 @@ mod xml_safety_and_cursors {
         let payload = format!(r#"<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM "file://{}">]><r>&xxe;</r>"#, secret.display());
 
         // recover=True (book_manager의 4개 호출부 모드): 엔티티 미해석 → 파일 내용 미노출
-        let tree = _safe_xml_parser(true).fromstring(payload.as_bytes()).expect("recover 모드는 파싱을 포기하지 않는다");
+        let tree = safe_xml_parser(true).fromstring(payload.as_bytes()).expect("recover 모드는 파싱을 포기하지 않는다");
         assert!(!tree.tostring().contains("XXE_CANARY_VALUE"));
 
         // 정상 XML 은 그대로 파싱되어야 한다 (기능 회귀 방지)
-        let ok = _safe_xml_parser(false).fromstring(b"<r><a>hi</a></r>").unwrap();
+        let ok = safe_xml_parser(false).fromstring(b"<r><a>hi</a></r>").unwrap();
         assert_eq!(ok.find("a").unwrap().text().as_deref(), Some("hi"));
     }
 
@@ -230,7 +230,7 @@ mod xml_safety_and_cursors {
                 ("content.opf", br#"<?xml version="1.0"?><package version="2.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId"><manifest><item id="item1" href="" media-type="text/html"/></manifest><spine toc="ncx"><itemref idref="item1"/></spine></package>"#),
             ],
         );
-        let (valid, _msg) = verdict(BookManager::_validate_preview_epub(&epub_path));
+        let (valid, _msg) = verdict(BookManager::validate_preview_epub(&epub_path));
         assert!(!valid);
     }
 
@@ -248,7 +248,7 @@ mod xml_safety_and_cursors {
     fn test_declare_unbound_prefixes_handles_any_whitespace_after_package() {
         for sep in [" ", "\n  ", "\t"] {
             let data = opf(sep, r#"opf:role="aut""#, "");
-            let fixed = _declare_unbound_prefixes(&data);
+            let fixed = declare_unbound_prefixes_bytes(&data);
             assert!(strict_parses(&fixed), "sep={sep:?}");
             assert!(String::from_utf8_lossy(&fixed).contains(&format!(r#"xmlns:opf="{OPF_NS_STR}""#)), "sep={sep:?}");
         }
@@ -258,7 +258,7 @@ mod xml_safety_and_cursors {
     fn test_declare_unbound_prefixes_handles_prefixes_other_than_opf() {
         for (attr, prefix) in [(r#"xsi:type="x""#, "xsi"), (r#"calibre:series="s""#, "calibre")] {
             let data = opf(" ", attr, "");
-            let fixed = _declare_unbound_prefixes(&data);
+            let fixed = declare_unbound_prefixes_bytes(&data);
             assert!(strict_parses(&fixed), "attr={attr}");
             assert!(String::from_utf8_lossy(&fixed).contains(&format!("xmlns:{prefix}=")), "attr={attr}, prefix={prefix}");
         }
@@ -267,11 +267,11 @@ mod xml_safety_and_cursors {
     #[test]
     fn test_declare_unbound_prefixes_returns_input_unchanged_when_nothing_is_missing() {
         let clean = opf(" ", r#"id="a""#, "");
-        let out = _declare_unbound_prefixes(&clean);
+        let out = declare_unbound_prefixes_bytes(&clean);
         assert!(matches!(out, Cow::Borrowed(_)));
         assert!(std::ptr::eq(out.as_ptr(), clean.as_ptr()));
         let declared = opf(" ", r#"opf:role="aut""#, &format!(r#" xmlns:opf="{OPF_NS_STR}""#));
-        let out = _declare_unbound_prefixes(&declared);
+        let out = declare_unbound_prefixes_bytes(&declared);
         assert!(matches!(out, Cow::Borrowed(_)));
         assert!(std::ptr::eq(out.as_ptr(), declared.as_ptr()));
     }
@@ -279,7 +279,7 @@ mod xml_safety_and_cursors {
     #[test]
     fn test_declare_unbound_prefixes_ignores_prefixes_that_only_appear_in_values_and_text() {
         let data = br#"<?xml version="1.0"?><!-- <fake:tag a:b="1"/> --><package xmlns="http://www.idpf.org/2007/opf"><meta property="dcterms:modified">urn:uuid:x</meta></package>"#;
-        let out = _declare_unbound_prefixes(data);
+        let out = declare_unbound_prefixes_bytes(data);
         assert!(matches!(out, Cow::Borrowed(_)));
         assert!(std::ptr::eq(out.as_ptr(), data.as_ptr()));
     }
@@ -287,14 +287,14 @@ mod xml_safety_and_cursors {
     #[test]
     fn test_declare_unbound_prefixes_keeps_xml_prefix_and_declares_each_prefix_once() {
         let data = br#"<package xmlns="http://www.idpf.org/2007/opf" xml:lang="ko"><a opf:x="1" opf:y="2"/><b xsi:z="1"/></package>"#;
-        let fixed = String::from_utf8(_declare_unbound_prefixes(data).into_owned()).unwrap();
+        let fixed = String::from_utf8(declare_unbound_prefixes_bytes(data).into_owned()).unwrap();
         assert!(fixed.matches("xmlns:opf=").count() == 1 && !fixed.contains("xmlns:xml="));
         assert!(strict_parses(fixed.as_bytes()));
     }
 
     #[test]
     fn test_declare_unbound_prefixes_without_root_element_is_unchanged() {
-        assert_eq!(_declare_unbound_prefixes(b"not xml").as_ref(), b"not xml");
+        assert_eq!(declare_unbound_prefixes_bytes(b"not xml").as_ref(), b"not xml");
     }
 
     #[test]
@@ -302,8 +302,8 @@ mod xml_safety_and_cursors {
         // manifest 에 없는 idref 와 ZIP 에 없는 문서는 뷰어가 보여 줄 수 없으므로 세지 않는다.
         let tmp = tmp_dir();
         let tmp_path = tmp.path();
-        assert_eq!(BookManager::_get_epub_total_chapters(&epub_with_missing_page(&tmp_path.join("missing.epub"), false)), 1);
-        assert_eq!(BookManager::_get_epub_total_chapters(&epub_with_missing_page(&tmp_path.join("full.epub"), true)), 2);
+        assert_eq!(BookManager::get_epub_total_chapters(&epub_with_missing_page(&tmp_path.join("missing.epub"), false)), 1);
+        assert_eq!(BookManager::get_epub_total_chapters(&epub_with_missing_page(&tmp_path.join("full.epub"), true)), 2);
     }
 
     #[test]
@@ -319,7 +319,7 @@ mod xml_safety_and_cursors {
                 ("a%20b.xhtml", b"<html/>"),
             ],
         );
-        assert_eq!(BookManager::_get_epub_total_chapters(&epub), 1);
+        assert_eq!(BookManager::get_epub_total_chapters(&epub), 1);
     }
 
     #[test]
@@ -330,7 +330,7 @@ mod xml_safety_and_cursors {
         let mut data = fs::read(&epub).unwrap();
         data[offset..offset + 4].copy_from_slice(&[0, 0, 0, 0]);
         fs::write(&epub, &data).unwrap();
-        assert_eq!(BookManager::_get_epub_total_chapters(&epub), 1);
+        assert_eq!(BookManager::get_epub_total_chapters(&epub), 1);
     }
 }
 
@@ -345,7 +345,7 @@ mod image_downscaling {
     fn test_downscale_epub_image_keeps_non_jpeg_png_format() {
         // GIF 같은 형식은 확장자와 실제 형식이 어긋나지 않게 그대로 돌려준다.
         let data = image_bytes(image::ImageFormat::Gif, (3000, 3000));
-        assert_eq!(BookManager::_downscale_epub_image(&data), data);
+        assert_eq!(BookManager::downscale_epub_image(&data), data);
     }
 }
 
@@ -363,7 +363,7 @@ mod find_opf_path {
 
     fn find_opf_path(epub_path: &Path) -> String {
         let mut zin = ZipArchive::new(File::open(epub_path).unwrap()).unwrap();
-        BookManager::_find_opf_path(&mut zin).unwrap_or_default()
+        BookManager::find_opf_path(&mut zin).unwrap_or_default()
     }
 
     /// 정상 container.xml에서 OPF 경로를 추출한다.
@@ -446,7 +446,7 @@ fn test_old_files_are_deleted() {
     let new_file = tmp_path.join("new.epub");
     fs::write(&new_file, "new").unwrap();
 
-    BookManager::_evict_old_cache(tmp_path);
+    BookManager::evict_old_cache(tmp_path);
 
     assert!(!old_file.exists());
     assert!(new_file.exists());
@@ -460,7 +460,7 @@ fn test_recent_files_are_kept() {
     let recent = tmp.path().join("recent.pdf");
     fs::write(&recent, "recent").unwrap();
 
-    BookManager::_evict_old_cache(tmp.path());
+    BookManager::evict_old_cache(tmp.path());
 
     assert!(recent.exists());
 }
@@ -474,7 +474,7 @@ fn test_exactly_one_day_old_is_deleted() {
     fs::write(&edge_file, "edge").unwrap();
     set_mtime_ago(&edge_file, DAY + 1); // 1일 + 1초
 
-    BookManager::_evict_old_cache(tmp.path());
+    BookManager::evict_old_cache(tmp.path());
 
     assert!(!edge_file.exists());
 }
@@ -488,7 +488,7 @@ fn test_subdirectories_are_not_deleted() {
     fs::create_dir(&sub_dir).unwrap();
     File::open(&sub_dir).unwrap().set_times(fs::FileTimes::new().set_modified(std::time::SystemTime::now() - Duration::from_secs(2 * DAY))).unwrap();
 
-    BookManager::_evict_old_cache(tmp.path());
+    BookManager::evict_old_cache(tmp.path());
 
     assert!(sub_dir.exists());
 }
@@ -498,7 +498,7 @@ fn test_subdirectories_are_not_deleted() {
 fn test_empty_directory_no_error() {
     let tmp = tempfile::tempdir().unwrap();
 
-    BookManager::_evict_old_cache(tmp.path()); // 에러 없이 완료
+    BookManager::evict_old_cache(tmp.path()); // 에러 없이 완료
 }
 
 /// 존재하지 않는 디렉토리에서 에러 없이 동작한다.
@@ -507,7 +507,7 @@ fn test_nonexistent_directory_no_error() {
     let tmp = tempfile::tempdir().unwrap();
 
     let fake_dir = tmp.path().join("nonexistent");
-    BookManager::_evict_old_cache(&fake_dir); // 에러 없이 완료
+    BookManager::evict_old_cache(&fake_dir); // 에러 없이 완료
 }
 
 /// 오래된 파일이 여러 개일 때 모두 삭제된다.
@@ -526,7 +526,7 @@ fn test_multiple_old_files_all_deleted() {
     let new_file = tmp.path().join("new.pdf");
     fs::write(&new_file, "new").unwrap();
 
-    BookManager::_evict_old_cache(tmp.path());
+    BookManager::evict_old_cache(tmp.path());
 
     for f in &old_files {
         assert!(!f.exists(), "{} should have been evicted", f.display());
@@ -558,7 +558,7 @@ fn test_deletion_failure_continues_processing() {
         }
         None
     });
-    BookManager::_evict_old_cache_with(faulty.as_ref(), tmp.path());
+    BookManager::evict_old_cache_with(faulty.as_ref(), tmp.path());
 
     // 1개는 실패로 남고, 나머지 2개는 삭제됨
     let remaining: Vec<&PathBuf> = files.iter().filter(|f| f.exists()).collect();
@@ -582,7 +582,7 @@ fn test_just_written_cache_file_is_not_evicted() {
     let just_written = tmp.path().join("5_ch10.epub");
     fs::write(&just_written, "fresh").unwrap();
 
-    BookManager::_evict_old_cache(tmp.path());
+    BookManager::evict_old_cache(tmp.path());
 
     for f in &old_files {
         assert!(!f.exists(), "{} should have been evicted", f.file_name().unwrap().to_string_lossy());
@@ -625,7 +625,7 @@ mod validate_preview_epub {
             &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", container.as_bytes()), ("content.opf", opf.as_bytes()), ("toc.ncx", b"<ncx/>"), ("ch1.xhtml", chapter(1).as_bytes())],
         );
 
-        let (valid, error) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, error) = verdict(BookManager::validate_preview_epub(&epub));
 
         assert!(!valid);
         assert!(err_has(&error, "no valid spine chapters"));
@@ -638,7 +638,7 @@ mod validate_preview_epub {
         let epub = tmp.path().join("valid.epub");
         create_test_epub(&epub, 3, false, false);
 
-        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, err) = verdict(BookManager::validate_preview_epub(&epub));
         assert!(valid);
         assert!(err.is_none());
     }
@@ -658,7 +658,7 @@ mod validate_preview_epub {
             ],
         );
 
-        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, err) = verdict(BookManager::validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "mimetype"));
     }
@@ -679,7 +679,7 @@ mod validate_preview_epub {
             ],
         );
 
-        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, err) = verdict(BookManager::validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "invalid mimetype"));
     }
@@ -691,7 +691,7 @@ mod validate_preview_epub {
         let epub = tmp.path().join("no_opf.epub");
         write_zip_stored(&epub, &[("mimetype", b"application/epub+zip"), ("OEBPS/ch1.xhtml", chapter(1).as_bytes())]);
 
-        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, err) = verdict(BookManager::validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "OPF"));
     }
@@ -703,7 +703,7 @@ mod validate_preview_epub {
         let epub = tmp.path().join("empty_spine.epub");
         create_corrupted_epub(&epub, 2, true);
 
-        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, err) = verdict(BookManager::validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "no valid spine chapters"));
     }
@@ -726,7 +726,7 @@ mod validate_preview_epub {
             ],
         );
 
-        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, err) = verdict(BookManager::validate_preview_epub(&epub));
         assert!(valid, "Expected valid, got: {err:?}");
 
         // 수정된 EPUB에서 toc 속성이 제거되었는지 확인
@@ -741,7 +741,7 @@ mod validate_preview_epub {
         let epub = tmp.path().join("bad_idref.epub");
         create_epub_with_invalid_spine(&epub);
 
-        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, err) = verdict(BookManager::validate_preview_epub(&epub));
         assert!(valid, "Expected valid, got: {err:?}");
 
         // 수정된 EPUB에서 coverpage idref가 제거되었는지 확인
@@ -759,7 +759,7 @@ mod validate_preview_epub {
         let epub = tmp.path().join("missing_ch1.epub");
         create_corrupted_epub(&epub, 3, false);
 
-        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, err) = verdict(BookManager::validate_preview_epub(&epub));
         assert!(valid, "Expected valid, got: {err:?}");
 
         // ch1이 spine에서 제거되었는지 확인
@@ -776,7 +776,7 @@ mod validate_preview_epub {
         let epub = tmp.path().join("corrupted.epub");
         fs::write(&epub, b"this is not a zip file").unwrap();
 
-        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, err) = verdict(BookManager::validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "corrupted ZIP"));
     }
@@ -788,7 +788,7 @@ mod validate_preview_epub {
         let epub = tmp.path().join("no_spine.epub");
         create_epub_without_spine(&epub);
 
-        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, err) = verdict(BookManager::validate_preview_epub(&epub));
         assert!(!valid);
         assert!(err_has(&err, "spine"));
     }
@@ -816,7 +816,7 @@ mod validate_preview_epub {
             &[("mimetype", b"application/epub+zip"), ("META-INF/container.xml", CONTAINER_XML.as_bytes()), ("OEBPS/content.opf", opf_content.as_bytes()), ("OEBPS/ch1.xhtml", chapter(1).as_bytes())],
         );
 
-        let (valid, err) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, err) = verdict(BookManager::validate_preview_epub(&epub));
         assert!(valid, "Expected valid, got: {err:?}");
 
         let (toc, _) = spine_of(&epub, "OEBPS/content.opf");
@@ -831,7 +831,7 @@ mod validate_preview_epub {
         create_test_epub(&epub, 2, false, false);
         let mtime_before = fs::metadata(&epub).unwrap().modified().unwrap();
 
-        let (valid, _err) = verdict(BookManager::_validate_preview_epub(&epub));
+        let (valid, _err) = verdict(BookManager::validate_preview_epub(&epub));
         assert!(valid);
         let mtime_after = fs::metadata(&epub).unwrap().modified().unwrap();
         assert_eq!(mtime_before, mtime_after, "clean EPUB should not be rewritten");

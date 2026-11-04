@@ -69,8 +69,8 @@ impl BookManager {
         Ok(resolved.starts_with(root))
     }
 
-    /// `_normalize_stored_file_path`: ES에 저장된 경로를 책 루트 기준 상대 경로로 맞춘다.
-    pub(crate) fn normalize_stored_file_path(&self, file_path: &str) -> String {
+    /// `normalize_stored_file_path`: ES에 저장된 경로를 책 루트 기준 상대 경로로 맞춘다.
+    pub fn normalize_stored_file_path(&self, file_path: &str) -> String {
         if file_path.is_empty() {
             return String::new();
         }
@@ -92,28 +92,8 @@ impl BookManager {
         }
     }
 
-    /// `_is_safe_category_name`.
-    pub fn _is_safe_category_name(&self, category: &str) -> bool {
-        self.is_safe_category_name(category)
-    }
-
-    /// `_normalize_stored_file_path`.
-    pub fn _normalize_stored_file_path(&self, file_path: &str) -> String {
-        self.normalize_stored_file_path(file_path)
-    }
-
-    /// `_is_indexable_file_path`.
-    pub fn _is_indexable_file_path(&self, file_path: &Path) -> bool {
-        self.is_indexable_file_path(file_path)
-    }
-
-    /// `_iter_category_indexable_files`.
-    pub fn _iter_category_indexable_files(&self, category: &str, recursive: bool) -> Vec<PathBuf> {
-        self.iter_category_indexable_files(category, recursive)
-    }
-
-    /// `_is_safe_category_name`.
-    pub(crate) fn is_safe_category_name(&self, category: &str) -> bool {
+    /// 카테고리 이름이 안전한가. 루트 카테고리는 늘 안전하다. 그 밖에는 비어 있지 않고 `..`·NUL이 없으며, 실제 경로가 책 루트 안이어야 한다.
+    pub fn is_safe_category_name(&self, category: &str) -> bool {
         if category == Self::ROOT_CATEGORY {
             return true;
         }
@@ -126,8 +106,8 @@ impl BookManager {
         }
     }
 
-    /// `_is_indexable_file_path`: 확장자로 판정하고, 안 되면 매직바이트로 판정한다(로더와 같은 규칙).
-    pub(crate) fn is_indexable_file_path(&self, file_path: &Path) -> bool {
+    /// `is_indexable_file_path`: 확장자로 판정하고, 안 되면 매직바이트로 판정한다(로더와 같은 규칙).
+    pub fn is_indexable_file_path(&self, file_path: &Path) -> bool {
         let name = file_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         if name.starts_with('.') {
             return false;

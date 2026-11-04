@@ -74,10 +74,10 @@ fn test_mismatch_and_reload_more_edge_cases() {
     let details = manager.get_category_mismatch_details("../unsafe");
     assert_eq!(details, json!({"es_only": [], "fs_only": [], "duplicates": [], "fs_count": 0}));
 
-    // 1905-1906, 1909-1912, 1921, 1935: _bulk_index_files edge cases
+    // 1905-1906, 1909-1912, 1921, 1935: bulk_index_files edge cases
 
     // non-existent file (1905-1906)
-    let (_idx1, fail1) = asyncio_runner(manager._bulk_index_files(&["A/non_existent.txt"], true));
+    let (_idx1, fail1) = asyncio_runner(manager.bulk_index_files(&["A/non_existent.txt"], true));
     assert_eq!(fail1.len(), 1);
     assert!(fail1[0]["error"].as_str().unwrap().contains("파일을 찾을 수 없습니다"));
 
@@ -89,13 +89,13 @@ fn test_mismatch_and_reload_more_edge_cases() {
     // 단계마다 `with_file_reader`가 달라 매니저를 새로 만든다(구 전역 가드의 생명주기).
     let manager_timeout =
         BookManager::with_deps(deps(tmp_path, &FakeEsManager::new()).with_file_reader(file_reader(|_path| Err(LoaderReadError::Timeout(ParserTimeout { message: "read timed out".to_string() })))));
-    let (_idx2, fail2) = asyncio_runner(manager_timeout._bulk_index_files(&["A/timeout.txt"], true));
+    let (_idx2, fail2) = asyncio_runner(manager_timeout.bulk_index_files(&["A/timeout.txt"], true));
     assert_eq!(fail2.len(), 1);
     assert!(fail2[0]["error"].as_str().unwrap().contains("파싱 시간 초과"));
 
     // merged is empty (1921)
     let manager_empty = BookManager::with_deps(deps(tmp_path, &FakeEsManager::new()).with_file_reader(file_reader(|_path| Ok(json!({})))));
-    let (idx3, _fail3) = asyncio_runner(manager_empty._bulk_index_files(&["A/timeout.txt"], true));
+    let (idx3, _fail3) = asyncio_runner(manager_empty.bulk_index_files(&["A/timeout.txt"], true));
     assert!(idx3.is_empty());
 
     // ES insert failure (1935)
@@ -105,11 +105,11 @@ fn test_mismatch_and_reload_more_edge_cases() {
     let fail_insert_es = FakeEsManager::new();
     fail_insert_es.with(|s| s.insert_returns_empty = true); // 999 not in indexed_ids
     let manager_fail_ins = BookManager::with_deps(deps(tmp_path, &fail_insert_es).with_file_reader(file_reader(|_path| Ok(json!({"999": make_doc("A/ok.txt", ".txt")})))));
-    let (_idx4, fail4) = asyncio_runner(manager_fail_ins._bulk_index_files(&["A/ok.txt"], true));
+    let (_idx4, fail4) = asyncio_runner(manager_fail_ins.bulk_index_files(&["A/ok.txt"], true));
     assert_eq!(fail4.len(), 1);
     assert!(fail4[0]["error"].as_str().unwrap().contains("ES 적재 실패"));
 
-    // 1951-1952, 1964-1965, 1989, 1995, 2012: _reload_category_mismatch_details branches
+    // 1951-1952, 1964-1965, 1989, 1995, 2012: reload_category_mismatch_details branches
     let bad_details = json!({
         "fs_only": [{"file_path": ""}], // 1951-1952: empty file_path
         "duplicates": [
@@ -122,7 +122,7 @@ fn test_mismatch_and_reload_more_edge_cases() {
     let partial_del_es = FakeEsManager::new();
     partial_del_es.with(|s| s.delete_by_ids_returns = Some(0)); // deleted < len(ids_to_delete) -> 2012
     let manager_partial_del = make_manager(tmp_path, &partial_del_es);
-    let res_bad = asyncio_runner(manager_partial_del._reload_category_mismatch_details("A", &bad_details));
+    let res_bad = asyncio_runner(manager_partial_del.reload_category_mismatch_details("A", &bad_details));
     let failures = res_bad["failures"].as_array().unwrap();
     assert!(failures.iter().any(|f| f.get("error").and_then(Value::as_str).unwrap_or("").contains("file_path가 비어있습니다")));
     assert!(failures.iter().any(|f| f.get("error").and_then(Value::as_str).unwrap_or("").contains("삭제됨")));
@@ -191,7 +191,7 @@ mod root_file_reload {
         fs_ops.set_read_dir(|_p: &Path| Some(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "읽기 거부")));
         let manager = BookManager::with_deps(make_deps(tmp.path(), FakeEsManager::new()).with_fs(fs_ops));
 
-        let (result, err) = outcome(manager._reload_root_files().await);
+        let (result, err) = outcome(manager.reload_book_root_files().await);
 
         assert_eq!(result, json!({}));
         assert!(err.unwrap().contains("최상위 디렉토리를 읽을 수 없습니다"));
@@ -208,7 +208,7 @@ mod root_file_reload {
         let deps = make_deps(tmp.path(), es).with_bulk_index_files_hook(Arc::new(|_names: &[String], _clean_existing: bool| (std::collections::BTreeMap::new(), vec![json!({"error": "색인 실패"})])));
         let manager = BookManager::with_deps(deps);
 
-        let (result, err) = outcome(manager._reload_root_files().await);
+        let (result, err) = outcome(manager.reload_book_root_files().await);
 
         assert_eq!(result, json!({}));
         assert_eq!(err.as_deref(), Some("최상위 파일 재적재 실패 2건: 색인 실패"));

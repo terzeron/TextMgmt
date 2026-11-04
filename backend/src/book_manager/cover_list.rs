@@ -95,13 +95,9 @@ impl BookManager {
         }
     }
 
-    /// EPUB 표지 멤버 찾기(`_find_epub_cover_member`).
-    pub fn _find_epub_cover_member<R: std::io::Read + std::io::Seek>(archive: &mut zip::ZipArchive<R>) -> Option<String> {
-        Self::find_epub_cover_member(archive)
-    }
-
+    /// EPUB 표지 멤버 찾기(`find_epub_cover_member`).
     /// EPUB 표지 이미지나 PDF 앞쪽 표지 쪽을 JPEG 썸네일로 만든다. 만들 수 없으면 `None`이다.
-    pub fn _extract_cover_thumbnail(file_path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>> {
+    pub fn extract_cover_thumbnail(file_path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>> {
         let width = Self::normalize_cover_width(width.map(i64::from));
         match file_type {
             "epub" => crate::epub_cover::extract_epub_thumbnail(file_path, Some(width)),
@@ -185,7 +181,7 @@ impl BookManager {
             }
             let data = match thumbnailer {
                 Some(extractor) => extractor.extract_cover_thumbnail(&path, &file_type, Some(width)),
-                None => Self::_extract_cover_thumbnail(&path, &file_type, Some(width)),
+                None => Self::extract_cover_thumbnail(&path, &file_type, Some(width)),
             };
             if let Some(bytes) = &data
                 && let Err(error) = std::fs::write(&cache_file, bytes)

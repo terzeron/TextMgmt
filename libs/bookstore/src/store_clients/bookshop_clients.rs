@@ -13,17 +13,17 @@ bookstore_struct!(
 
 impl Yes24Bookstore {
     /// 상세 페이지 카테고리. `관련분류` 아래 카테고리 링크를 `a > b`로 잇는다.
-    pub fn _extract_yes24_category(&self, soup: &str) -> String {
+    pub fn extract_yes24_category(&self, soup: &str) -> String {
         Store::Yes24.extract_book_info(soup).category
     }
 
     /// 상세 페이지 ISBN. ISBN13, ISBN10, ISBN, 숫자 10~13자리 순으로 찾는다.
-    pub fn _extract_yes24_isbn(&self, soup: &str) -> String {
+    pub fn extract_yes24_isbn(&self, soup: &str) -> String {
         Store::Yes24.extract_book_info(soup).isbn
     }
 
     /// 조회가 실패할 수 있는 soup용. 실패하면 빈 문자열이다.
-    pub fn _extract_yes24_category_soup(&self, soup: &dyn SoupSource) -> String {
+    pub fn extract_yes24_category_soup(&self, soup: &dyn SoupSource) -> String {
         match soup.select(r#"a[href*="/product/category/display/"]"#) {
             Ok(labels) => join_unique(labels.into_iter().map(|l| l.trim().to_owned()).filter(|l| !l.is_empty()), " > "),
             Err(e) => {
@@ -34,7 +34,7 @@ impl Yes24Bookstore {
     }
 
     /// 조회가 실패할 수 있는 soup용. 실패하면 빈 문자열이다.
-    pub fn _extract_yes24_isbn_soup(&self, soup: &dyn SoupSource) -> String {
+    pub fn extract_yes24_isbn_soup(&self, soup: &dyn SoupSource) -> String {
         match soup.get_text() {
             Ok(text) => isbn_from_text(&text),
             Err(e) => {
@@ -55,7 +55,7 @@ impl Yes24Bookstore {
             if let Some(a) = soup.find("span")? {
                 author = a.trim().to_owned();
             }
-            Ok((self._extract_yes24_category_soup(soup), self._extract_yes24_isbn_soup(soup)))
+            Ok((self.extract_yes24_category_soup(soup), self.extract_yes24_isbn_soup(soup)))
         })();
         match partial {
             Ok((category, isbn)) => info_value(&title, &author, &category, &isbn),
@@ -113,16 +113,16 @@ bookstore_struct!(
 
 impl AladinBookstore {
     /// 제목 끝의 권수 번호를 뗀다. 예: `마왕의 딸 3` -> `마왕의 딸`.
-    pub fn _strip_trailing_number(&self, title: &str) -> String {
+    pub fn strip_trailing_number(&self, title: &str) -> String {
         crate::strip_trailing_number(title)
     }
 
-    pub fn _extract_aladin_isbn(&self, soup: &str) -> String {
+    pub fn extract_aladin_isbn(&self, soup: &str) -> String {
         Store::Aladin.extract_book_info(soup).isbn
     }
 
     /// 조회가 실패할 수 있는 soup용. 실패하면 빈 문자열이다.
-    pub fn _extract_aladin_isbn_soup(&self, soup: &dyn SoupSource) -> String {
+    pub fn extract_aladin_isbn_soup(&self, soup: &dyn SoupSource) -> String {
         let find = || -> Result<String, String> {
             for text in soup.select("#Ere_prod_allwrap div.Ere_prod_mconts_R > div.conts_info_list1 > ul li")? {
                 let text = text.trim();
@@ -154,7 +154,7 @@ impl AbstractBookstore for AladinBookstore {
     default_keyword_search!();
 
     fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String) {
-        let title = if title.is_empty() { String::new() } else { self._strip_trailing_number(title) };
+        let title = if title.is_empty() { String::new() } else { self.strip_trailing_number(title) };
         default_search(self, isbn, &title, author)
     }
 
@@ -232,7 +232,7 @@ const RIDI_BLOCK_STATUSES: [u16; 3] = [403, 418, 429];
 
 impl RidibooksBookstore {
     /// 첫 `ISBN` 라벨 `div` 다음 형제 `div`에서 13자리 코드를 뽑는다.
-    pub fn _extract_ridi_isbn(&self, soup: &str) -> String {
+    pub fn extract_ridi_isbn(&self, soup: &str) -> String {
         let doc = Html::parse_document(soup);
         for label in doc.select(sel!("div")) {
             if text_strip(label) != "ISBN" {
@@ -250,7 +250,7 @@ impl RidibooksBookstore {
 
     /// 조회가 실패할 수 있는 soup용. 실패하면 빈 문자열이다.
     /// 형제 관계를 알 수 없어서 `find_all("div")` 목록에서 `ISBN` 바로 다음 항목을 본다.
-    pub fn _extract_ridi_isbn_soup(&self, soup: &dyn SoupSource) -> String {
+    pub fn extract_ridi_isbn_soup(&self, soup: &dyn SoupSource) -> String {
         match soup.find_all("div") {
             Ok(divs) => {
                 let texts: Vec<&str> = divs.iter().map(|d| d.trim()).collect();
@@ -401,7 +401,7 @@ impl AbstractBookstore for RidibooksBookstore {
             category = paths.join(" || ");
         }
 
-        info_value(&title, &author, &category, &self._extract_ridi_isbn(soup))
+        info_value(&title, &author, &category, &self.extract_ridi_isbn(soup))
     }
 }
 

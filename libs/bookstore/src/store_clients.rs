@@ -196,7 +196,7 @@ fn lib_info(info: BookInfo) -> Value {
 }
 
 /// 제목에서 부제 구분자(` - `, `－`, `-`, `：`) 왼쪽 부분만 남긴다.
-pub fn _truncate_title(title: &str) -> String {
+pub fn truncate_title(title: &str) -> String {
     crate::truncate_title(title)
 }
 
@@ -571,7 +571,7 @@ pub trait AbstractBookstore: Sync {
 
 /// `AbstractBookstore.search`의 본문. 서브클래스가 `super().search(...)`를 부르던 곳에서 쓴다.
 pub fn default_search<S: AbstractBookstore + ?Sized>(store: &S, isbn: &str, title: &str, author: &str) -> (Vec<SearchRow>, String, String) {
-    let title = if title.is_empty() { String::new() } else { _truncate_title(title) };
+    let title = if title.is_empty() { String::new() } else { truncate_title(title) };
     let combined = || if store.author_first_search() { format!("{author} {title}") } else { format!("{title} {author}") };
     let found = |rows: Vec<SearchRow>, keyword: &str, method: &str| (rows, keyword.to_owned(), method.to_owned());
 

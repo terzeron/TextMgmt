@@ -54,19 +54,15 @@ impl BookManager {
         state.time = Some(at);
     }
 
-    pub(crate) fn clear_mismatch_cache(&self) {
+    /// 불일치 요약 캐시를 비운다.
+    pub fn clear_mismatch_cache(&self) {
         let mut state = self.mismatch.lock().unwrap_or_else(|e| e.into_inner());
         state.cache = None;
         state.time = None;
     }
 
-    /// 불일치 요약 캐시를 비운다.
-    pub fn _clear_mismatch_cache(&self) {
-        self.clear_mismatch_cache();
-    }
-
     /// 요약 응답의 이상 항목 총 건수. `anomaly_count`가 없으면 건수 비교만 하던 옛 응답으로 본다.
-    pub fn _mismatch_item_count(&self, mismatch_data: &Value) -> i64 {
+    pub fn mismatch_item_count(&self, mismatch_data: &Value) -> i64 {
         let mut total = 0;
         for (key, legacy_field) in [("mismatches", "diff"), ("es_only", "es_count"), ("fs_only", "fs_count")] {
             for item in mismatch_data.get(key).and_then(Value::as_array).into_iter().flatten() {
@@ -78,7 +74,7 @@ impl BookManager {
     }
 
     /// 요약 응답에 나온 카테고리 이름들(중복 없이, 나온 순서대로).
-    pub fn _mismatch_categories(&self, mismatch_data: &Value) -> Vec<String> {
+    pub fn mismatch_categories(&self, mismatch_data: &Value) -> Vec<String> {
         let mut categories: Vec<String> = Vec::new();
         for key in ["mismatches", "es_only", "fs_only"] {
             for item in mismatch_data.get(key).and_then(Value::as_array).into_iter().flatten() {
@@ -215,7 +211,7 @@ impl BookManager {
         }
         mismatches.sort_by_key(|item| std::cmp::Reverse(item["anomaly_count"].as_i64().unwrap_or(0)));
         let result = json!({"mismatches": mismatches, "es_only": es_only, "fs_only": fs_only});
-        log::info!("get_category_mismatches: 이상 카테고리 {}개, 이상 항목 {}건", mismatches_len(&result), self._mismatch_item_count(&result));
+        log::info!("get_category_mismatches: 이상 카테고리 {}개, 이상 항목 {}건", mismatches_len(&result), self.mismatch_item_count(&result));
         Ok(result)
     }
 

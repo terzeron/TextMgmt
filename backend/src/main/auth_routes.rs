@@ -13,7 +13,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::app_deps::AppDeps;
-use super::auth_cookies::{_clear_auth_cookies, _set_auth_cookies};
+use super::auth_cookies::{clear_auth_cookies, set_auth_cookies};
 use super::error_responses::{ApiError, ApiResult, json_response};
 use super::google_oauth::GOOGLE_ISSUERS;
 use super::request_extractors::ClientInfo;
@@ -150,7 +150,7 @@ async fn verify_google_token(State(deps): State<Arc<AppDeps>>, client: ClientInf
 
     let (access, refresh) = issue_auth_tokens(&deps, email, &role, name, picture, &client)?;
     let mut response = json_response(200, &json!({"status": "success", "email": email, "name": name, "picture": picture, "role": role, "expires_in": ACCESS_TOKEN_EXPIRATION_SECONDS}));
-    _set_auth_cookies(&mut response, &access, refresh.as_str());
+    set_auth_cookies(&mut response, &access, refresh.as_str());
     Ok(response)
 }
 
@@ -183,14 +183,14 @@ async fn refresh_access_token(State(deps): State<Arc<AppDeps>>, headers: HeaderM
     if rotation != Rotation::Ok {
         log_refresh_rotation_rejected(&deps, &client, rotation.as_str(), email, family_id, current_token_id);
         let mut response = json_response(401, &json!({"detail": "Invalid refresh token state"}));
-        _clear_auth_cookies(&mut response);
+        clear_auth_cookies(&mut response);
         return Ok(response);
     }
 
     let access = deps.tokens().create_access_token(email, &role, name, picture, family_id);
     let new_refresh = deps.tokens().create_refresh_token(email, &role, name, picture, family_id, &new_token_id);
     let mut response = json_response(200, &json!({"status": "success", "expires_in": ACCESS_TOKEN_EXPIRATION_SECONDS}));
-    _set_auth_cookies(&mut response, &access, new_refresh.as_str());
+    set_auth_cookies(&mut response, &access, new_refresh.as_str());
     Ok(response)
 }
 
@@ -213,7 +213,7 @@ async fn logout(State(deps): State<Arc<AppDeps>>, headers: HeaderMap) -> ApiResu
         }
     }
     // refresh 쿠키가 없어도 서명된 access 토큰이 가리키는 세션을 폐기한다.
-    if let Ok(payload) = crate::auth_service::_extract_payload(&headers) {
+    if let Ok(payload) = crate::auth_service::extract_payload(&headers) {
         let family = str_of(&payload, "fid");
         if !family.is_empty() && !families.iter().any(|fid| fid == family) {
             families.push(family.to_string());
@@ -226,7 +226,7 @@ async fn logout(State(deps): State<Arc<AppDeps>>, headers: HeaderMap) -> ApiResu
         }
     }
     let mut response = json_response(200, &json!({"status": "success"}));
-    _clear_auth_cookies(&mut response);
+    clear_auth_cookies(&mut response);
     Ok(response)
 }
 
@@ -314,7 +314,7 @@ async fn revoke_login_session(State(deps): State<Arc<AppDeps>>, RequireAdmin(adm
     );
     if revoked_current {
         // 본인 세션을 폐기했으면 쿠키도 지워 프런트가 미인증 흐름으로 넘어가게 한다.
-        _clear_auth_cookies(&mut response);
+        clear_auth_cookies(&mut response);
     }
     Ok(response)
 }

@@ -117,7 +117,7 @@ fn connect_with(env: &dyn Fn(&str) -> Option<String>, es: &Arc<DummyEs>, clock: 
     ESManager::connect(env, &FnConnector(move |_: &ConnectOptions| es.clone() as Arc<dyn EsTransport>), clock)
 }
 
-/// 구 `set_search_paged_override`: `_search_paged`가 부르는 `search` 응답을 스크립트한다.
+/// 구 `set_search_paged_override`: `search_paged`가 부르는 `search` 응답을 스크립트한다.
 /// 페이지 검색 응답은 점수 10.0, 기준 점수 100.0(정규화해도 10.0)이고 `size == 1`인 기준 점수 조회에는 100.0을 준다.
 /// 마지막 페이지 검색의 `query`를 돌려준다.
 fn script_paged_search(es: &DummyEs, total: i64) -> Arc<Mutex<Value>> {
@@ -294,7 +294,7 @@ fn test_ensure_category_nori_subfield_adds() {
     let es = new_es();
     let manager = make_manager(&es);
     es.set_mapping(json!({"idx": {"mappings": {"properties": {"category": {}}}}}));
-    manager._ensure_category_nori_subfield();
+    manager.ensure_category_nori_subfield();
     assert!(es.state(|s| s.put_mapping_called));
 }
 
@@ -304,7 +304,7 @@ fn test_ensure_created_time_field_adds_missing_created_time_fields() {
     let manager = make_manager(&es);
     es.set_mapping(json!({"idx": {"mappings": {"properties": {"category": {}}}}}));
 
-    manager._ensure_created_time_field();
+    manager.ensure_created_time_field();
 
     assert!(es.state(|s| s.put_mapping_called));
     assert_eq!(es.state(|s| s.put_mapping_properties.clone()), json!({"created_time": {"type": "date"}, "created_time_source": {"type": "keyword"}}));
@@ -315,7 +315,7 @@ fn test_ensure_created_time_field_swallows_mapping_read_error() {
     let es = new_es();
     es.on("indices.get_mapping", |_| Err(runtime("mapping unavailable")));
 
-    make_manager(&es)._ensure_created_time_field();
+    make_manager(&es).ensure_created_time_field();
 
     assert!(!es.state(|s| s.put_mapping_called));
 }
@@ -326,7 +326,7 @@ fn test_ensure_publisher_field_adds_it_when_missing() {
     let manager = make_manager(&es);
     es.set_mapping(json!({"idx": {"mappings": {"properties": {"title": {}}}}}));
 
-    manager._ensure_publisher_field();
+    manager.ensure_publisher_field();
 
     assert!(es.state(|s| s.put_mapping_called));
     // 자동분류가 전집을 가르는 데 쓰는 필드다. title/author 와 같은 모양으로 둔다.
@@ -339,7 +339,7 @@ fn test_ensure_publisher_field_is_a_no_op_when_already_present() {
     let manager = make_manager(&es);
     es.set_mapping(json!({"idx": {"mappings": {"properties": {"publisher": {"type": "text"}}}}}));
 
-    manager._ensure_publisher_field();
+    manager.ensure_publisher_field();
 
     assert!(!es.state(|s| s.put_mapping_called));
 }
@@ -351,7 +351,7 @@ fn test_ensure_publisher_field_swallows_errors() {
 
     es.on("indices.get_mapping", |_| Err(runtime("ES 가 응답하지 않는다")));
     // 매핑 추가에 실패해도 색인 생성 자체를 막으면 안 된다
-    manager._ensure_publisher_field();
+    manager.ensure_publisher_field();
     assert!(!es.state(|s| s.put_mapping_called));
 }
 
@@ -361,11 +361,11 @@ fn test_ensure_mapping_helpers_skip_incomplete_mapping_shapes() {
     let manager = make_manager(&es);
 
     es.set_mapping(json!({"idx": {"mappings": {}}}));
-    manager._ensure_category_nori_subfield();
+    manager.ensure_category_nori_subfield();
 
     es.set_mapping(json!({"idx": {}}));
-    manager._ensure_created_time_field();
-    manager._ensure_publisher_field();
+    manager.ensure_created_time_field();
+    manager.ensure_publisher_field();
 
     assert!(!es.state(|s| s.put_mapping_called));
 }
@@ -374,7 +374,7 @@ fn test_ensure_mapping_helpers_skip_incomplete_mapping_shapes() {
 fn test_ensure_mapping_helpers_swallow_put_mapping_errors() {
     let cases =
         [json!({"idx": {"mappings": {"properties": {"category": {}}}}}), json!({"idx": {"mappings": {"properties": {"title": {}}}}}), json!({"idx": {"mappings": {"properties": {"title": {}}}}})];
-    let ensure: [fn(&ESManager); 3] = [ESManager::_ensure_category_nori_subfield, ESManager::_ensure_created_time_field, ESManager::_ensure_publisher_field];
+    let ensure: [fn(&ESManager); 3] = [ESManager::ensure_category_nori_subfield, ESManager::ensure_created_time_field, ESManager::ensure_publisher_field];
 
     for (mapping, ensure) in cases.into_iter().zip(ensure) {
         let es = new_es();
@@ -394,7 +394,7 @@ fn test_ensure_created_time_field_adds_missing_source_only() {
     let manager = make_manager(&es);
     es.set_mapping(json!({"idx": {"mappings": {"properties": {"created_time": {"type": "date"}}}}}));
 
-    manager._ensure_created_time_field();
+    manager.ensure_created_time_field();
 
     assert!(es.state(|s| s.put_mapping_called));
     assert_eq!(es.state(|s| s.put_mapping_properties.clone()), json!({"created_time_source": {"type": "keyword"}}));
@@ -404,14 +404,14 @@ fn test_ensure_created_time_field_adds_missing_source_only() {
 fn test_search_and_scroll_and_paged() {
     let es = new_es();
     let manager = make_manager(&es);
-    let results = manager._search(&json!({"match": {"title": "a"}}), None, 5, None).unwrap();
+    let results = manager.search(&json!({"match": {"title": "a"}}), None, 5, None).unwrap();
     assert_eq!(results, vec![(1, json!({"a": 1}), 100.0)]);
 
-    let results = manager._search(&json!({"match": {"title": "a"}}), None, 20000, None).unwrap();
+    let results = manager.search(&json!({"match": {"title": "a"}}), None, 20000, None).unwrap();
     assert!(!results.is_empty());
     assert!(es.state(|s| s.cleared_scroll));
 
-    let (paged, total) = manager._search_paged(&json!({"match": {"title": "a"}}), None, 10, 0, 0.0, None).unwrap();
+    let (paged, total) = manager.search_paged(&json!({"match": {"title": "a"}}), None, 10, 0, 0.0, None).unwrap();
     assert_eq!(total, 2);
     assert_eq!(paged[0].2, 100.0);
 }
@@ -420,7 +420,7 @@ fn test_search_and_scroll_and_paged() {
 fn test_search_paged_with_self_score_and_get_self_score() {
     let es = new_es();
     let manager = make_manager(&es);
-    let (results, total) = manager._search_paged_with_self_score(&[json!({"match": {"title": {"query": "a"}}})], 1, 10, 0).unwrap();
+    let (results, total) = manager.search_paged_with_self_score(&[json!({"match": {"title": {"query": "a"}}})], 1, 10, 0).unwrap();
     assert_eq!(total, 1);
     assert_eq!(results[0].2, 50.0);
 }
@@ -549,7 +549,7 @@ fn test_search_paged_returns_empty_when_base_score_non_positive() {
     let manager = make_manager(&es);
 
     es.on("search", |_| Ok(json!({"hits": {"total": {"value": 3}, "max_score": 0, "hits": []}})));
-    assert_eq!(manager._search_paged(&json!({"match_all": {}}), None, 10, 0, 0.0, None).unwrap(), (vec![], 3));
+    assert_eq!(manager.search_paged(&json!({"match_all": {}}), None, 10, 0, 0.0, None).unwrap(), (vec![], 3));
 }
 
 #[test]
@@ -582,7 +582,7 @@ fn test_search_max_score_none_returns_empty() {
     let es = new_es();
     es.on("search", |_| Ok(json!({"hits": {"max_score": null, "hits": []}})));
     let manager = make_manager(&es);
-    assert_eq!(manager._search(&json!({"match": {"title": "a"}}), None, 10, None).unwrap(), vec![]);
+    assert_eq!(manager.search(&json!({"match": {"title": "a"}}), None, 10, None).unwrap(), vec![]);
 }
 
 #[test]
@@ -591,7 +591,7 @@ fn test_search_paged_base_score_zero() {
     let es = new_es();
     es.on("search", |_| Ok(json!({"hits": {"total": {"value": 3}, "max_score": 0.0, "hits": []}})));
     let manager = make_manager(&es);
-    let (results, total) = manager._search_paged(&json!({"match": {"title": "a"}}), None, 10, 0, 0.0, None).unwrap();
+    let (results, total) = manager.search_paged(&json!({"match": {"title": "a"}}), None, 10, 0, 0.0, None).unwrap();
     assert_eq!(results, vec![]);
     assert_eq!(total, 3);
 }
@@ -602,7 +602,7 @@ fn test_search_paged_with_self_score_errors() {
     let es = new_es();
     es.on("msearch", |_| Ok(json!({"responses": [{"error": {"reason": "bad"}}, {"error": {"reason": "bad2"}}]})));
     let manager = make_manager(&es);
-    let (results, total) = manager._search_paged_with_self_score(&[json!({"match": {"title": {"query": "a"}}})], 1, 10, 0).unwrap();
+    let (results, total) = manager.search_paged_with_self_score(&[json!({"match": {"title": {"query": "a"}}})], 1, 10, 0).unwrap();
     assert_eq!(results, vec![]);
     assert_eq!(total, 0);
 
@@ -610,7 +610,7 @@ fn test_search_paged_with_self_score_errors() {
     let es = new_es();
     es.on("msearch", |_| Ok(json!({"responses": [{"hits": {"hits": []}}, {"hits": {"total": {"value": 2}, "hits": [{"_id": "1", "_source": {"a": 1}, "_score": 5.0}]}}]})));
     let manager = make_manager(&es);
-    let (results, total) = manager._search_paged_with_self_score(&[json!({"match": {"title": {"query": "a"}}})], 1, 10, 0).unwrap();
+    let (results, total) = manager.search_paged_with_self_score(&[json!({"match": {"title": {"query": "a"}}})], 1, 10, 0).unwrap();
     assert_eq!(results, vec![]);
     assert_eq!(total, 2);
 }
@@ -630,7 +630,7 @@ fn test_ensure_category_nori_subfield_exception() {
     let manager = make_manager(&es);
 
     es.on("indices.get_mapping", |_| Err(runtime("boom")));
-    manager._ensure_category_nori_subfield();
+    manager.ensure_category_nori_subfield();
 }
 
 #[test]
@@ -657,7 +657,7 @@ fn test_search_scroll_max_score_none() {
     es.on("search", |_| Ok(json!({"_scroll_id": "scroll1", "hits": {"max_score": 1.0, "hits": [{"_id": "1", "_source": {"a": 1}, "_score": 1.0}]}})));
     es.on("scroll", |_| Ok(json!({"_scroll_id": "scroll1", "hits": {"max_score": null, "hits": [{"_id": "2", "_source": {"a": 2}, "_score": 1.0}]}})));
     let manager = make_manager(&es);
-    assert_eq!(manager._search(&json!({"match": {"title": "a"}}), None, 20000, None).unwrap(), vec![]);
+    assert_eq!(manager.search(&json!({"match": {"title": "a"}}), None, 20000, None).unwrap(), vec![]);
 }
 
 #[test]
@@ -666,7 +666,7 @@ fn test_search_scroll_clear_scroll_error() {
     es.on("search", |_| Ok(json!({"_scroll_id": "scroll1", "hits": {"max_score": 1.0, "hits": []}})));
     es.on("clear_scroll", |_| Err(runtime("boom")));
     let manager = make_manager(&es);
-    assert_eq!(manager._search(&json!({"match": {"title": "a"}}), None, 20000, None).unwrap(), vec![]);
+    assert_eq!(manager.search(&json!({"match": {"title": "a"}}), None, 20000, None).unwrap(), vec![]);
 }
 
 #[test]
@@ -683,7 +683,7 @@ fn test_search_paged_with_zero_score() {
     let es = new_es();
     let manager = make_manager(&es);
     es.on("search", |_| Ok(json!({"hits": {"total": {"value": 1}, "max_score": 0, "hits": [{"_id": "1", "_source": {"a": 1}, "_score": 0}]}})));
-    let (results, total) = manager._search_paged(&json!({"match": {"title": "a"}}), None, 10, 0, 0.0, None).unwrap();
+    let (results, total) = manager.search_paged(&json!({"match": {"title": "a"}}), None, 10, 0, 0.0, None).unwrap();
     assert_eq!(results, vec![]);
     assert_eq!(total, 1);
 }
@@ -777,10 +777,10 @@ fn test_create_index_non_exists_bad_request() {
 
 #[test]
 fn test_search_default_max_result_count() {
-    // Line 220: _search with max_result_count < 0 uses default
+    // Line 220: search with max_result_count < 0 uses default
     let es = new_es();
     let manager = make_manager(&es);
-    let results = manager._search(&json!({"match": {"title": "a"}}), None, -1, None).unwrap();
+    let results = manager.search(&json!({"match": {"title": "a"}}), None, -1, None).unwrap();
     assert!(results.len() as i64 <= ESManager::DEFAULT_MAX_RESULT_COUNT);
 }
 
@@ -802,7 +802,7 @@ fn test_search_scroll_early_exit_on_max() {
     });
     let manager = make_manager(&es);
     // max_result_count > 10000 forces scroll, but cap at 3
-    let results = manager._search(&json!({"match": {"title": "a"}}), None, 10001, None).unwrap();
+    let results = manager.search(&json!({"match": {"title": "a"}}), None, 10001, None).unwrap();
     assert!(!results.is_empty());
 }
 
@@ -1011,7 +1011,7 @@ fn test_init_does_not_retry_non_connection_errors() {
 // test_update_main, test_update_main_failure, test_update_main_delete_failure는
 // tests/rust/update/update.rs가 이미 옮겼으므로 여기서는 옮기지 않는다.
 
-// ---- coverage: _search scroll edge cases ----
+// ---- coverage: search scroll edge cases ----
 
 #[test]
 fn test_search_scroll_initial_max_score_none() {
@@ -1026,7 +1026,7 @@ fn test_search_scroll_initial_max_score_none() {
     });
     let manager = make_manager(&es);
     // max_result_count > 10000 triggers scroll path
-    let result = manager._search(&json!({"match_all": {}}), None, 20000, None).unwrap();
+    let result = manager.search(&json!({"match_all": {}}), None, 20000, None).unwrap();
     assert_eq!(result, vec![]);
 }
 
@@ -1044,7 +1044,7 @@ fn test_search_scroll_early_exit_first_batch() {
     });
     let manager = make_manager(&es);
     // max_result_count > 10000 but small enough to early exit in first batch
-    let result = manager._search(&json!({"match_all": {}}), None, 10001, None).unwrap();
+    let result = manager.search(&json!({"match_all": {}}), None, 10001, None).unwrap();
     assert_eq!(result.len(), 10);
 }
 
@@ -1123,9 +1123,9 @@ fn test_http_url_does_not_set_ssl_kwargs() {
 #[test]
 fn test_path_prefix_query_variants() {
     for empty in ["", ".", "/"] {
-        assert_eq!(ESManager::_path_prefix_query(empty), json!({"match_all": {}}), "빈 접두사: {empty:?}");
+        assert_eq!(ESManager::path_prefix_query(empty), json!({"match_all": {}}), "빈 접두사: {empty:?}");
     }
-    let q = ESManager::_path_prefix_query("foo/bar/");
+    let q = ESManager::path_prefix_query("foo/bar/");
     assert_eq!(q["bool"]["should"], json!([{"term": {"file_path": "foo/bar"}}, {"prefix": {"file_path": "foo/bar/"}}]));
 }
 
@@ -1348,9 +1348,9 @@ fn test_search_latest_docs_edge_cases() {
     let manager = make_manager(&es);
 
     // 342: None categories
-    assert_eq!(ESManager::_exclude_category_queries(None), Vec::<Value>::new());
+    assert_eq!(ESManager::exclude_category_queries(None), Vec::<Value>::new());
     // 346: empty category string skipped
-    let queries = ESManager::_exclude_category_queries(Some(&["", "valid_cat"]));
+    let queries = ESManager::exclude_category_queries(Some(&["", "valid_cat"]));
     assert_eq!(queries.len(), 1);
 
     // 359-361: es.search exception
@@ -1488,9 +1488,9 @@ fn test_ensure_category_nori_and_created_time_fields_already_present() {
         }
     }));
     let manager = make_manager(&es);
-    manager._ensure_category_nori_subfield();
+    manager.ensure_category_nori_subfield();
     assert!(!es.state(|s| s.put_mapping_called));
-    manager._ensure_created_time_field();
+    manager.ensure_created_time_field();
     assert!(!es.state(|s| s.put_mapping_called));
 }
 
@@ -1660,7 +1660,7 @@ fn test_search_cover_files_paged_filters_types_and_categories_and_returns_sort_v
     assert_eq!(total, 9);
     let captured = captured.lock().unwrap().clone();
     assert_eq!(captured["query"]["bool"]["filter"], json!([{"terms": {"file_type": ["epub", "pdf"]}}, {"terms": {"category": ["A", "B"]}}]));
-    assert_eq!(captured["query"]["bool"]["must_not"], json!(ESManager::_exclude_category_queries(Some(&["secret"]))));
+    assert_eq!(captured["query"]["bool"]["must_not"], json!(ESManager::exclude_category_queries(Some(&["secret"]))));
     // 최신 탭과 같은 최신순이다.
     assert_eq!(captured["sort"], ESManager::latest_sort());
     assert_eq!(captured["search_after"], json!(["x", "y"]));
@@ -1693,7 +1693,7 @@ fn test_search_group_representatives_queries_each_work_directory_by_file_path() 
     assert_eq!(first_query["size"], json!(ESManager::REPRESENTATIVE_CANDIDATES));
     assert_eq!(first_query["query"]["bool"]["should"], json!([{"term": {"category": "a/작품"}}, {"prefix": {"category": "a/작품/"}}]));
     assert_eq!(first_query["query"]["bool"]["filter"], json!([{"terms": {"file_type": ["epub", "pdf"]}}]));
-    assert_eq!(first_query["query"]["bool"]["must_not"], json!(ESManager::_exclude_category_queries(Some(&["secret"]))));
+    assert_eq!(first_query["query"]["bool"]["must_not"], json!(ESManager::exclude_category_queries(Some(&["secret"]))));
 }
 
 #[test]
@@ -1717,7 +1717,7 @@ fn test_search_latest_docs_only_returns_cover_types() {
 
     manager.search_latest_docs(5, Some(&["secret"]));
     let captured = captured.lock().unwrap().clone();
-    assert_eq!(captured["query"]["bool"]["must_not"], json!(ESManager::_exclude_category_queries(Some(&["secret"]))));
+    assert_eq!(captured["query"]["bool"]["must_not"], json!(ESManager::exclude_category_queries(Some(&["secret"]))));
     assert_eq!(captured["query"]["bool"]["filter"], json!([{"terms": {"file_type": ["epub", "pdf"]}}]));
 }
 
@@ -1738,7 +1738,7 @@ mod api_facade {
         (ESManager::with_transport(es.clone() as Arc<dyn EsTransport>), es)
     }
 
-    /// `manager._search = fake_search`: 넘어온 쿼리를 `captured`에 담고 빈 결과를 돌려주는 `_search` 대역.
+    /// `search` 대역: 넘어온 쿼리를 `captured`에 담고 빈 결과를 돌려주는 `search` 대역.
     fn capture_search() -> (SearchStub, Arc<Mutex<Value>>) {
         let captured = Arc::new(Mutex::new(Value::Null));
         let sink = captured.clone();

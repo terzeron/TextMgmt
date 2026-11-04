@@ -73,13 +73,13 @@ fn env_var(key: &str) -> Option<String> {
 }
 
 /// 정수가 아니면 기본값으로 폴백한다.
-pub fn _rotation_grace_seconds() -> i64 {
+pub fn rotation_grace_seconds() -> i64 {
     env_var("TM_REFRESH_ROTATION_GRACE_SECONDS").and_then(|v| v.trim().parse().ok()).unwrap_or(DEFAULT_ROTATION_GRACE_SECONDS)
 }
 
 /// 방금 정상 회전(reason='rotated')되었고 grace window 안이면 true.
 fn is_within_rotation_grace(revoke_reason: Option<&str>, revoked_at: Option<i64>, now: i64) -> bool {
-    revoke_reason == Some("rotated") && revoked_at.is_some_and(|at| now - at <= _rotation_grace_seconds())
+    revoke_reason == Some("rotated") && revoked_at.is_some_and(|at| now - at <= rotation_grace_seconds())
 }
 
 /// 빈 값은 NULL 로, 긴 값은 컬럼 폭(문자 수)에 맞게 자른다.
@@ -156,7 +156,7 @@ pub fn summarize_user_agent(user_agent: &str) -> String {
 
 /// 브라우저 이름과 메이저 버전을 분리해서 뽑는다. 세션 병합에서 버전 인접 여부(±1)를 비교하려면 정수 버전이 필요하다.
 /// 첫 번째로 맞는 패턴에 버전 그룹이 없거나 정수가 아니면 `None`이다.
-pub fn _parse_browser_name_version_with(user_agent: &str, patterns: &[(Regex, &str)]) -> Option<(String, i64)> {
+pub fn parse_browser_name_version_with(user_agent: &str, patterns: &[(Regex, &str)]) -> Option<(String, i64)> {
     if user_agent.is_empty() {
         return None;
     }
@@ -171,7 +171,7 @@ pub fn _parse_browser_name_version_with(user_agent: &str, patterns: &[(Regex, &s
 }
 
 fn parse_browser_name_version(user_agent: &str) -> Option<(String, i64)> {
-    _parse_browser_name_version_with(user_agent, &UA_BROWSER_PATTERNS)
+    parse_browser_name_version_with(user_agent, &UA_BROWSER_PATTERNS)
 }
 
 // ---------------------------------------------------------------------------
@@ -668,7 +668,7 @@ impl MySQLRefreshTokenStore {
         self
     }
 
-    pub fn _connect(&self) -> Result<Box<dyn DbConnection>, DbError> {
+    pub fn connect(&self) -> Result<Box<dyn DbConnection>, DbError> {
         (self.provider)()
     }
 
@@ -678,7 +678,7 @@ impl MySQLRefreshTokenStore {
 
     /// 연결을 열어 `f`를 실행하고 항상 닫는다.
     fn with_conn<T>(&self, f: impl FnOnce(&mut dyn DbConnection) -> Result<T, DbError>) -> Result<T, StoreError> {
-        let mut conn = self._connect()?;
+        let mut conn = self.connect()?;
         let result = f(conn.as_mut());
         conn.close();
         Ok(result?)

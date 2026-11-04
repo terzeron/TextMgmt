@@ -28,7 +28,7 @@ impl ESManager {
     }
 
     /// 경로 prefix 하위(자기 자신 포함) 문서를 매칭하는 쿼리. prefix가 ""/"."/"/"이면 전체(match_all)다.
-    pub fn _path_prefix_query(path_prefix: &str) -> Value {
+    pub fn path_prefix_query(path_prefix: &str) -> Value {
         let p = path_prefix.trim_matches('/');
         if p.is_empty() || p == "." {
             return json!({"match_all": {}});
@@ -38,7 +38,7 @@ impl ESManager {
 
     /// 경로 prefix 하위 문서의 `_id`(inode) 집합. scroll로 읽고 `_source`는 받지 않는다. 오류는 삼키고 읽은 만큼 돌려준다.
     pub fn get_doc_ids_by_path_prefix(&self, path_prefix: &str) -> HashSet<i64> {
-        let query = Self::_path_prefix_query(path_prefix);
+        let query = Self::path_prefix_query(path_prefix);
         let mut ids = HashSet::new();
         let mut scroll_id: Option<String> = None;
         if let Err(e) = self.collect_ids(&query, &mut ids, &mut scroll_id) {

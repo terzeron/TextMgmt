@@ -89,16 +89,16 @@ async fn test_epub_unquoted_href_and_full_view() {
 /// XHTML 자기닫힘 `<title/>` 등이 HTML 파서에서 본문을 삼키지 않게 펴는지 검증.
 #[test]
 fn test_expands_self_closing_rcdata_tags() {
-    assert_eq!(BookManager::_expand_self_closing_rcdata(b"<title/>"), b"<title></title>");
-    assert_eq!(BookManager::_expand_self_closing_rcdata(b"<TITLE />"), b"<TITLE ></TITLE>");
-    assert_eq!(BookManager::_expand_self_closing_rcdata(b"<script src=\"a.js\"/>"), b"<script src=\"a.js\"></script>");
-    assert_eq!(BookManager::_expand_self_closing_rcdata(b"<style/><textarea/>"), b"<style></style><textarea></textarea>");
+    assert_eq!(BookManager::expand_self_closing_rcdata(b"<title/>"), b"<title></title>");
+    assert_eq!(BookManager::expand_self_closing_rcdata(b"<TITLE />"), b"<TITLE ></TITLE>");
+    assert_eq!(BookManager::expand_self_closing_rcdata(b"<script src=\"a.js\"/>"), b"<script src=\"a.js\"></script>");
+    assert_eq!(BookManager::expand_self_closing_rcdata(b"<style/><textarea/>"), b"<style></style><textarea></textarea>");
 }
 
 #[test]
 fn test_keeps_paired_and_unrelated_tags() {
     for data in [&b"<title>keep</title>"[..], b"<br/>", b"<img src=\"a.jpg\"/>", b"<titlebar/>"] {
-        assert_eq!(BookManager::_expand_self_closing_rcdata(data), data, "data={}", String::from_utf8_lossy(data));
+        assert_eq!(BookManager::expand_self_closing_rcdata(data), data, "data={}", String::from_utf8_lossy(data));
     }
 }
 
@@ -521,7 +521,7 @@ mod get_book_preview {
         // 더 최근 mtime을 가진 캐시 파일을 만든다.
         let cache_dir = tmp_path.join(".preview_cache");
         fs::create_dir_all(&cache_dir).unwrap();
-        BookManager::_get_epub_total_chapters(&epub);
+        BookManager::get_epub_total_chapters(&epub);
         let cache_file = cache_dir.join(format!("1_ch3_v{}.epub", BookManager::EPUB_IMAGE_POLICY_VERSION));
         make_epub(&cache_file, &minimal_spec());
 

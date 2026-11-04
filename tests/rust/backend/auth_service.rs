@@ -208,7 +208,7 @@ mod extract_payload {
     fn test_missing_header() {
         let _env = fixture();
         let req = make_request(None, None);
-        let err = backend::auth_service::_extract_payload(&req).unwrap_err();
+        let err = backend::auth_service::extract_payload(&req).unwrap_err();
         assert_eq!(err.status_code, 401);
     }
 
@@ -217,7 +217,7 @@ mod extract_payload {
         let _env = fixture();
         let token = access_token("admin@example.com", "admin");
         let req = make_request(Some(&token), None);
-        let payload = backend::auth_service::_extract_payload(&req).unwrap();
+        let payload = backend::auth_service::extract_payload(&req).unwrap();
         assert_eq!(payload["email"], "admin@example.com");
         assert_eq!(payload["role"], "admin");
     }
@@ -227,7 +227,7 @@ mod extract_payload {
         let _env = fixture();
         let token = access_token("admin@example.com", "admin");
         let req = make_request(None, Some(&token));
-        let payload = backend::auth_service::_extract_payload(&req).unwrap();
+        let payload = backend::auth_service::extract_payload(&req).unwrap();
         assert_eq!(payload["email"], "admin@example.com");
         assert_eq!(payload["role"], "admin");
     }
@@ -238,7 +238,7 @@ mod extract_payload {
         let expired_payload = json!({"type": "access", "email": "admin@example.com", "role": "admin", "exp": now() - 100, "iat": now() - 200});
         let token = encode_hs256(&expired_payload);
         let req = make_request(Some(&token), None);
-        let err = backend::auth_service::_extract_payload(&req).unwrap_err();
+        let err = backend::auth_service::extract_payload(&req).unwrap_err();
         assert_eq!(err.status_code, 401);
         assert!(detail_of(&err).contains("expired"), "{}", err.detail);
     }
@@ -247,7 +247,7 @@ mod extract_payload {
     fn test_invalid_token() {
         let _env = fixture();
         let req = make_request(Some("invalid.token.value"), None);
-        let err = backend::auth_service::_extract_payload(&req).unwrap_err();
+        let err = backend::auth_service::extract_payload(&req).unwrap_err();
         assert_eq!(err.status_code, 401);
     }
 
@@ -256,7 +256,7 @@ mod extract_payload {
         let _env = fixture();
         let token = refresh_token("admin@example.com", "admin");
         let req = make_request(Some(&token), None);
-        let err = backend::auth_service::_extract_payload(&req).unwrap_err();
+        let err = backend::auth_service::extract_payload(&req).unwrap_err();
         assert_eq!(err.status_code, 401);
         assert!(detail_of(&err).contains("type"), "{}", err.detail);
     }
@@ -267,7 +267,7 @@ mod extract_payload {
         let header_token = access_token("admin@example.com", "admin");
         let cookie_token = access_token("viewer1@example.com", "viewer");
         let req = make_request(Some(&header_token), Some(&cookie_token));
-        let payload = backend::auth_service::_extract_payload(&req).unwrap();
+        let payload = backend::auth_service::extract_payload(&req).unwrap();
         assert_eq!(payload["email"], "admin@example.com");
     }
 
@@ -277,7 +277,7 @@ mod extract_payload {
         let cookie_token = access_token("viewer1@example.com", "viewer");
         let req = FakeRequest { headers: HashMap::from([("Authorization".to_string(), "Bearer ".to_string())]), cookies: HashMap::from([("tm_access_token".to_string(), cookie_token)]) };
 
-        let payload = backend::auth_service::_extract_payload(&req).unwrap();
+        let payload = backend::auth_service::extract_payload(&req).unwrap();
         assert_eq!(payload["email"], "viewer1@example.com");
     }
 }

@@ -394,7 +394,7 @@ pub(super) async fn get_classify_proposal(_: RequireAdmin, State(deps): State<Ar
             if item.get("book_id").is_none_or(Value::is_null)
                 && let Some(file_path) = item.get("file_path").and_then(Value::as_str)
             {
-                item["book_id"] = crate::book_manager::BookManager::_book_id_for_path(&path_prefix.join(file_path)).map_or(Value::Null, |id| json!(id));
+                item["book_id"] = crate::book_manager::BookManager::book_id_for_path(&path_prefix.join(file_path)).map_or(Value::Null, |id| json!(id));
             }
             item
         })

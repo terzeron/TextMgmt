@@ -12,7 +12,7 @@ fn test_default_values() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.remove("TM_COOKIE_SECURE");
     env.remove("TM_COOKIE_SAMESITE");
-    let (secure, samesite) = backend::main::_get_cookie_settings();
+    let (secure, samesite) = backend::main::get_cookie_settings();
     assert!(!secure);
     assert_eq!(samesite, "lax");
 }
@@ -23,7 +23,7 @@ fn test_secure_true() {
     env.set("TM_FRONTEND_URL", "https://app.example.com");
     env.set("TM_COOKIE_SECURE", "true");
     env.remove("TM_COOKIE_SAMESITE");
-    let (secure, samesite) = backend::main::_get_cookie_settings();
+    let (secure, samesite) = backend::main::get_cookie_settings();
     assert!(secure);
     assert_eq!(samesite, "lax");
 }
@@ -34,7 +34,7 @@ fn test_samesite_strict() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.remove("TM_COOKIE_SECURE");
     env.set("TM_COOKIE_SAMESITE", "strict");
-    let (_secure, samesite) = backend::main::_get_cookie_settings();
+    let (_secure, samesite) = backend::main::get_cookie_settings();
     assert_eq!(samesite, "strict");
 }
 
@@ -44,7 +44,7 @@ fn test_invalid_samesite_falls_back_to_lax() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.remove("TM_COOKIE_SECURE");
     env.set("TM_COOKIE_SAMESITE", "invalid_value");
-    let (_secure, samesite) = backend::main::_get_cookie_settings();
+    let (_secure, samesite) = backend::main::get_cookie_settings();
     assert_eq!(samesite, "lax");
 }
 
@@ -54,7 +54,7 @@ fn test_samesite_none_with_secure_true() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.set("TM_COOKIE_SECURE", "true");
     env.set("TM_COOKIE_SAMESITE", "none");
-    let (secure, samesite) = backend::main::_get_cookie_settings();
+    let (secure, samesite) = backend::main::get_cookie_settings();
     assert!(secure);
     assert_eq!(samesite, "none");
 }
@@ -65,7 +65,7 @@ fn test_samesite_none_without_secure_falls_back_to_lax() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.set("TM_COOKIE_SECURE", "false");
     env.set("TM_COOKIE_SAMESITE", "none");
-    let (secure, samesite) = backend::main::_get_cookie_settings();
+    let (secure, samesite) = backend::main::get_cookie_settings();
     assert!(!secure);
     assert_eq!(samesite, "lax");
 }
@@ -76,7 +76,7 @@ fn test_non_local_origin_forces_secure_even_when_disabled() {
     env.set("TM_FRONTEND_URL", "https://app.example.com");
     env.set("TM_COOKIE_SECURE", "false");
     env.remove("TM_COOKIE_SAMESITE");
-    let (secure, samesite) = backend::main::_get_cookie_settings();
+    let (secure, samesite) = backend::main::get_cookie_settings();
     assert!(secure);
     assert_eq!(samesite, "lax");
 }
@@ -87,7 +87,7 @@ fn test_cookie_settings_defaults() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.remove("TM_COOKIE_SECURE");
     env.remove("TM_COOKIE_SAMESITE");
-    let (secure, samesite) = backend::main::_get_cookie_settings();
+    let (secure, samesite) = backend::main::get_cookie_settings();
     assert!(!secure);
     assert_eq!(samesite, "lax");
 }
@@ -98,7 +98,7 @@ fn test_cookie_settings_none_requires_secure() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.set("TM_COOKIE_SECURE", "false");
     env.set("TM_COOKIE_SAMESITE", "none");
-    let (secure, samesite) = backend::main::_get_cookie_settings();
+    let (secure, samesite) = backend::main::get_cookie_settings();
     assert!(!secure);
     assert_eq!(samesite, "lax");
 }
@@ -109,13 +109,13 @@ fn test_set_and_clear_auth_cookies() {
     env.set("TM_COOKIE_SECURE", "true");
     env.set("TM_COOKIE_SAMESITE", "strict");
     let mut response = CustomJSONResponse::new(json!({"ok": true}));
-    backend::main::_set_auth_cookies(&mut response, "access-token", "refresh-token");
+    backend::main::set_auth_cookies(&mut response, "access-token", "refresh-token");
     let cookies: Vec<String> = response.headers().get_all("set-cookie").iter().map(|v| v.to_str().unwrap().to_string()).collect();
     assert!(cookies.iter().any(|cookie| cookie.contains(ACCESS_COOKIE_NAME)), "{cookies:?}");
     assert!(cookies.iter().any(|cookie| cookie.contains(REFRESH_COOKIE_NAME)), "{cookies:?}");
 
     let mut response2 = CustomJSONResponse::new(json!({"ok": true}));
-    backend::main::_clear_auth_cookies(&mut response2);
+    backend::main::clear_auth_cookies(&mut response2);
     let cookies2: Vec<String> = response2.headers().get_all("set-cookie").iter().map(|v| v.to_str().unwrap().to_string()).collect();
     assert!(cookies2.iter().any(|cookie| cookie.contains(&format!("{ACCESS_COOKIE_NAME}="))), "{cookies2:?}");
     assert!(cookies2.iter().any(|cookie| cookie.contains(&format!("{REFRESH_COOKIE_NAME}="))), "{cookies2:?}");

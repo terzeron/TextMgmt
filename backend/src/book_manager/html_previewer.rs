@@ -71,13 +71,13 @@ fn quote_all(text: &str) -> String {
 
 impl BookManager {
     /// 뷰어 HTML에 붙이는 보안 헤더.
-    pub fn _html_security_headers() -> Vec<(String, String)> {
+    pub fn html_security_headers() -> Vec<(String, String)> {
         html_security_headers()
     }
 
     /// HTML 안의 URL을 뷰어가 안전하게 열 수 있는 주소로 바꾼다. 쪽 안 이동(`#`)과 `data:`, `blob:`은 그대로 두고,
     /// 상대 경로는 리소스 엔드포인트로 돌리고, 외부 주소(스킴이나 `//`로 시작)는 `None`이다.
-    pub fn _build_html_resource_url(resource_base_url: &str, raw_path: &str) -> Option<String> {
+    pub fn build_html_resource_url(resource_base_url: &str, raw_path: &str) -> Option<String> {
         let trimmed = raw_path.trim();
         if trimmed.is_empty() {
             return None;
@@ -96,7 +96,7 @@ impl BookManager {
     }
 
     /// 뷰어에 내보낼 HTML에서 활성 콘텐츠를 걷어내고 리소스 주소를 엔드포인트로 돌린다.
-    pub fn _sanitize_html_for_viewer(html_content: &str, resource_base_url: &str) -> String {
+    pub fn sanitize_html_for_viewer(html_content: &str, resource_base_url: &str) -> String {
         let mut html = Html::parse_document(html_content);
 
         // 1) 지울 노드: 활성 콘텐츠 태그, http-equiv가 있는 meta, 스타일시트가 아닌 link
@@ -135,7 +135,7 @@ impl BookManager {
                 if is_anchor {
                     if lowered == "href" {
                         // 링크는 쪽 안 이동(`#`)만 남긴다.
-                        match Self::_build_html_resource_url(resource_base_url, &value) {
+                        match Self::build_html_resource_url(resource_base_url, &value) {
                             Some(safe) if safe.starts_with('#') => kept.push((name, StrTendril::from(safe.as_str()))),
                             _ => {}
                         }
@@ -145,7 +145,7 @@ impl BookManager {
                         continue;
                     }
                 } else if URL_ATTRS.contains(&lowered.as_str()) && !value.is_empty() {
-                    if let Some(safe) = Self::_build_html_resource_url(resource_base_url, &value) {
+                    if let Some(safe) = Self::build_html_resource_url(resource_base_url, &value) {
                         kept.push((name, StrTendril::from(safe.as_str())));
                     }
                     continue;
@@ -174,7 +174,7 @@ impl BookManager {
         match read() {
             Ok(Some(content)) => {
                 let base = if resource_base_url.is_empty() { format!("/html-resource/{book_id}") } else { resource_base_url.to_string() };
-                BookResponse { status_code: 200, media_type: Some("text/html".to_string()), headers: html_security_headers(), body: Self::_sanitize_html_for_viewer(&content, &base).into_bytes() }
+                BookResponse { status_code: 200, media_type: Some("text/html".to_string()), headers: html_security_headers(), body: Self::sanitize_html_for_viewer(&content, &base).into_bytes() }
             }
             Ok(None) => text_response(413, "HTML file too large"),
             Err(e) => {

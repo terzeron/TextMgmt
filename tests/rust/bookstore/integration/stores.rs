@@ -7,7 +7,7 @@
 //! - `bookstore::store_clients`
 //!   - `type SearchRow = (String, String, String, String, String, String)` = `(title, author, category, detail_url, search_url, isbn)`
 //!   - `const MAX_RESULTS: usize = 4` (`AbstractBookstore.MAX_RESULTS`)
-//!   - `fn _truncate_title(title: &str) -> String`
+//!   - `fn truncate_title(title: &str) -> String`
 //!   - `sysdeps::{HttpSession, HttpResponse, HttpError}` (구 `bookstore::{Session, HttpResponse}`)
 //!     - `trait HttpSession: Send + Sync { fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError>; }` (`requests.Session.get` 대응. 예외는 `Err`)
 //!     - `HttpResponse::from_text(status: u16, text: &str) -> HttpResponse` (fake 생성용. `.text()`/`.json()`은 본문을 소비한다)
@@ -27,15 +27,15 @@
 //!     `NaverSeriesBookstore`, `MunpiaBookstore`, `JoaraBookstore`, `NaverWebtoonBookstore`, `KakaoWebtoonBookstore`,
 //!     `BomtoonBookstore`, `LezhinBookstore`, `ToptoonBookstore`: `new(verbose: bool) -> Self`,
 //!     `with_session(self, Arc<dyn HttpSession>) -> Self` (구 pub 필드 `session`), pub 필드 `max_results: usize`, `supports_isbn_search: bool`
-//!   - `Yes24Bookstore::_extract_yes24_category(&self, soup: &str) -> String`, `_extract_yes24_isbn`,
-//!     `AladinBookstore::_extract_aladin_isbn`, `_strip_trailing_number(&self, title: &str) -> String`,
-//!     `RidibooksBookstore::_extract_ridi_isbn`
+//!   - `Yes24Bookstore::extract_yes24_category(&self, soup: &str) -> String`, `extract_yes24_isbn`,
+//!     `AladinBookstore::extract_aladin_isbn`, `strip_trailing_number(&self, title: &str) -> String`,
+//!     `RidibooksBookstore::extract_ridi_isbn`
 //!   - 대역 주입 seam(mock.patch 대응, 구상 클래스 공통): `with_fetch_search_results(self, ..) -> Self`, `with_search_by_keyword(self, ..) -> Self`
 //!     (`Box<dyn Fn(&str) -> Vec<SearchRow> + Send + Sync>`. 구 `set_*`)
 //!   - `trait SoupSource`: `find(&self, name: &str) -> Result<Option<String>, String>`, `find_all(&self, name: &str) -> Result<Vec<String>, String>`,
 //!     `get_text(&self) -> Result<String, String>`, `select(&self, css: &str) -> Result<Vec<String>, String>` (예외를 던지는 soup 대역용)
-//!     - `Yes24Bookstore::_extract_yes24_category_soup/_extract_yes24_isbn_soup/extract_book_info_soup(&self, &dyn SoupSource)`,
-//!       `AladinBookstore::_extract_aladin_isbn_soup`, `RidibooksBookstore::_extract_ridi_isbn_soup`,
+//!     - `Yes24Bookstore::extract_yes24_category_soup/_extract_yes24_isbn_soup/extract_book_info_soup(&self, &dyn SoupSource)`,
+//!       `AladinBookstore::extract_aladin_isbn_soup`, `RidibooksBookstore::extract_ridi_isbn_soup`,
 //!       `NaverShoppingBookstore::extract_book_info_soup`
 //!   - `sysdeps::FsOps` (구 `StoreFs`. 이 파일은 `disk_free`와 `write`만 쓴다. 나머지 메서드는 trait 기본 구현), `Yes24Bookstore::with_fs(self, Arc<dyn FsOps>) -> Self`
 //!     (`shutil.disk_usage`와 `open` 대응. `write`의 `data`는 UTF-8 HTML 바이트)

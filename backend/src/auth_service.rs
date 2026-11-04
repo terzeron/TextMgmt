@@ -264,7 +264,7 @@ pub fn decode_refresh_token(token: &str) -> Result<Value, HTTPException> {
 // ---------------------------------------------------------------------------
 
 /// `Authorization: Bearer`가 있으면 그것을, 비었으면 접근 쿠키를 쓴다.
-pub fn _extract_payload<R: RequestParts + ?Sized>(req: &R) -> Result<Value, HTTPException> {
+pub fn extract_payload<R: RequestParts + ?Sized>(req: &R) -> Result<Value, HTTPException> {
     let header = req.header("Authorization").unwrap_or_default();
     let mut token = header.strip_prefix("Bearer ").unwrap_or("").to_string();
     if token.is_empty() {
@@ -300,7 +300,7 @@ fn with_role(mut payload: Value, role: &str) -> Value {
 }
 
 pub async fn require_auth_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn RoleResolver) -> Result<Value, HTTPException> {
-    let payload = _extract_payload(req)?;
+    let payload = extract_payload(req)?;
     let role = resolve_current_role(&payload, resolver)?;
     if role != "admin" && role != "viewer" {
         return Err(HTTPException::new(403, "Insufficient permissions"));
@@ -309,7 +309,7 @@ pub async fn require_auth_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn
 }
 
 pub async fn require_admin_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn RoleResolver) -> Result<Value, HTTPException> {
-    let payload = _extract_payload(req)?;
+    let payload = extract_payload(req)?;
     let role = resolve_current_role(&payload, resolver)?;
     if role != "admin" {
         return Err(HTTPException::new(403, "Admin access required"));

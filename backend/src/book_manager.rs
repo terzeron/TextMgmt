@@ -73,10 +73,10 @@ mod temp_file_maker;
 mod uncovered_book_finder;
 
 pub use book_updater::BookDeletion;
-pub use category_proposer::{ApplyOptions, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, ProposeOptions};
+pub use category_proposer::{ApplyOptions, KeywordMatch, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, ProposeOptions, Ranked};
 pub use cover_finder::{BookLookup, BookRef, Thumbnailer};
 pub use cover_list::CoverPageOpts;
-pub use epub_inspector::{_declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, SafeXmlParser, XmlElement, decode_category_cursor, encode_category_cursor};
+pub use epub_inspector::{_prune_dead_ncx_navpoints, SafeXmlParser, XmlElement, declare_unbound_prefixes_bytes, decode_category_cursor, encode_category_cursor, safe_xml_parser};
 pub use file_reader::{DefaultFileReader, LoaderFileReader};
 pub use seam_accessors::{AddBookError, BackfillThread, BookAdder, CategoryNameCheck, PathIsRelativeTo, PreviewEpubValidator};
 pub use uncovered_book_finder::{CoverBooksPager, CoverPage};

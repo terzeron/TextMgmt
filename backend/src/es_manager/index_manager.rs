@@ -128,7 +128,7 @@ impl ESManager {
     }
 
     /// 기존 인덱스에 category.nori 서브필드가 없으면 추가한다. 오류는 삼킨다.
-    pub fn _ensure_category_nori_subfield(&self) {
+    pub fn ensure_category_nori_subfield(&self) {
         match self.es.call("indices.get_mapping", &json!({"index": self.index()})) {
             Ok(mapping) => self.apply_category_nori(&mapping),
             Err(e) => log::warn!("Failed to add category.nori sub-field: {e}"),
@@ -151,7 +151,7 @@ impl ESManager {
     }
 
     /// 기존 인덱스에 created_time 관련 필드가 없으면 추가한다. 오류는 삼킨다.
-    pub fn _ensure_created_time_field(&self) {
+    pub fn ensure_created_time_field(&self) {
         match self.es.call("indices.get_mapping", &json!({"index": self.index()})) {
             Ok(mapping) => self.apply_created_time(&mapping),
             Err(e) => log::warn!("Failed to add created_time fields: {e}"),
@@ -183,7 +183,7 @@ impl ESManager {
     }
 
     /// 기존 인덱스에 publisher 필드가 없으면 추가한다. 오류는 삼킨다.
-    pub fn _ensure_publisher_field(&self) {
+    pub fn ensure_publisher_field(&self) {
         match self.es.call("indices.get_mapping", &json!({"index": self.index()})) {
             Ok(mapping) => self.apply_publisher(&mapping),
             Err(e) => log::warn!("Failed to add publisher field: {e}"),

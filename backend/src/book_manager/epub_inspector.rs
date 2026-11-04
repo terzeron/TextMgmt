@@ -219,7 +219,7 @@ fn read_member_limited<R: Read + Seek>(zin: &mut ZipArchive<R>, name: &str, limi
 
 impl BookManager {
     /// ZIP 안 OPF 경로를 찾는다. container.xml, 정규식 폴백, `.opf` 직접 탐색 순으로 시도한다.
-    pub fn _find_opf_path<R: Read + Seek>(zin: &mut ZipArchive<R>) -> Option<String> {
+    pub fn find_opf_path<R: Read + Seek>(zin: &mut ZipArchive<R>) -> Option<String> {
         if let Ok(container_xml) = read_member(zin, "META-INF/container.xml") {
             let text = xml_text(&container_xml);
             if let Ok(doc) = parse_xml(&text)
@@ -239,11 +239,11 @@ impl BookManager {
     }
 
     /// EPUB 총 챕터 수. manifest에 없거나 ZIP에 없는 spine 문서는 뷰어가 보여 줄 수 없어 세지 않는다.
-    pub fn _get_epub_total_chapters(file_path: &Path) -> i64 {
+    pub fn get_epub_total_chapters(file_path: &Path) -> i64 {
         let count = || -> Result<i64, String> {
             let file = std::fs::File::open(file_path).map_err(|e| e.to_string())?;
             let mut zin = ZipArchive::new(file).map_err(|e| e.to_string())?;
-            let Some(opf_path) = Self::_find_opf_path(&mut zin) else { return Ok(0) };
+            let Some(opf_path) = Self::find_opf_path(&mut zin) else { return Ok(0) };
             let opf_bytes = read_member(&mut zin, &opf_path).map_err(|e| e.to_string())?;
             let text = declare_unbound_prefixes(&xml_text(&opf_bytes));
             let doc = parse_xml(&text).map_err(|e| e.to_string())?;
@@ -279,7 +279,7 @@ impl BookManager {
     }
 
     /// EPUB 뷰어용으로 큰 이미지를 줄여 재압축한다. 실패하면 원본 바이트를 돌려준다. 형식은 유지한다(JPEG는 JPEG, PNG는 PNG).
-    pub fn _downscale_epub_image(data: &[u8]) -> Vec<u8> {
+    pub fn downscale_epub_image(data: &[u8]) -> Vec<u8> {
         Self::try_downscale_epub_image(data).unwrap_or_else(|| data.to_vec())
     }
 
@@ -308,20 +308,20 @@ impl BookManager {
     }
 
     /// 생성된 미리보기 EPUB의 구조적 유효성을 검증하고 경미한 문제는 자동으로 고친다.
-    pub fn _validate_preview_epub(cache_file: &Path) -> Result<(), String> {
+    pub fn validate_preview_epub(cache_file: &Path) -> Result<(), String> {
         validate_preview_epub(&RealFs, cache_file)
     }
 
-    pub fn _validate_preview_epub_with(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String> {
+    pub fn validate_preview_epub_with(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String> {
         validate_preview_epub(fs, cache_file)
     }
 
     /// 1일 넘은 캐시 파일을 지운다.
-    pub fn _evict_old_cache(cache_dir: &Path) {
-        Self::_evict_old_cache_with(&RealFs, cache_dir);
+    pub fn evict_old_cache(cache_dir: &Path) {
+        Self::evict_old_cache_with(&RealFs, cache_dir);
     }
 
-    pub fn _evict_old_cache_with(fs: &dyn FsOps, cache_dir: &Path) {
+    pub fn evict_old_cache_with(fs: &dyn FsOps, cache_dir: &Path) {
         let entries = match fs.read_dir(cache_dir) {
             Ok(entries) => entries,
             Err(e) => {
@@ -348,7 +348,7 @@ impl BookManager {
     }
 
     /// LibreOffice 실행 파일 경로. `which`로 못 찾으면 맥 경로, 그것도 없으면 `libreoffice`다.
-    pub fn _find_libreoffice_with(which: &dyn Fn(&str) -> Option<String>, exists: &dyn Fn(&Path) -> bool) -> String {
+    pub fn find_libreoffice_with(which: &dyn Fn(&str) -> Option<String>, exists: &dyn Fn(&Path) -> bool) -> String {
         for command in ["libreoffice", "soffice"] {
             if let Some(path) = which(command) {
                 return path;
@@ -363,19 +363,19 @@ impl BookManager {
 
     /// 이 매니저의 외부 명령 대역으로 LibreOffice를 찾는다.
     pub(crate) fn find_libreoffice(&self) -> String {
-        Self::_find_libreoffice_with(&|command| self.runner.which(command).map(|p| p.to_string_lossy().into_owned()), &|p| p.exists())
+        Self::find_libreoffice_with(&|command| self.runner.which(command).map(|p| p.to_string_lossy().into_owned()), &|p| p.exists())
     }
 
     /// LibreOffice로 파일을 변환하고 결과 텍스트를 돌려준다. 변환 결과가 없으면 빈 문자열이다.
     /// `work_dir`가 없으면 임시 디렉터리를 만들어 쓰고 지운다.
-    pub fn _convert_with_libreoffice_with(runner: &dyn CommandRunner, lo_bin: &str, work_dir: Option<&Path>, file_path: &Path, output_format: &str) -> String {
+    pub fn convert_with_libreoffice_with(runner: &dyn CommandRunner, lo_bin: &str, work_dir: Option<&Path>, file_path: &Path, output_format: &str) -> String {
         Self::try_convert_with_libreoffice(runner, lo_bin, work_dir, file_path, output_format).unwrap_or_else(|e| {
             log::error!("LibreOffice 실행 실패: file='{}', format='{output_format}': {e}", file_path.display());
             String::new()
         })
     }
 
-    /// `_convert_with_libreoffice_with`의 오류 판. 실행 실패(시간 초과 포함)는 `Err`다.
+    /// `convert_with_libreoffice_with`의 오류 판. 실행 실패(시간 초과 포함)는 `Err`다.
     pub(crate) fn try_convert_with_libreoffice(runner: &dyn CommandRunner, lo_bin: &str, work_dir: Option<&Path>, file_path: &Path, output_format: &str) -> Result<String, CommandError> {
         let temp;
         let dir: PathBuf = match work_dir {
@@ -420,7 +420,7 @@ impl BookManager {
     }
 }
 
-/// `_validate_preview_epub`의 본체. 문제가 있으면 사유를 `Err`로 돌려준다.
+/// `validate_preview_epub`의 본체. 문제가 있으면 사유를 `Err`로 돌려준다.
 fn validate_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String> {
     let file = fs.open(cache_file).map_err(|e| format!("validation error: {e}"))?;
     let mut zin = match ZipArchive::new(file) {
@@ -452,7 +452,7 @@ fn validate_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String
     }
 
     // 2) OPF 찾기 및 파싱
-    let Some(opf_path) = BookManager::_find_opf_path(&mut zin) else { return Err("OPF file not found".to_string()) };
+    let Some(opf_path) = BookManager::find_opf_path(&mut zin) else { return Err("OPF file not found".to_string()) };
     let opf_bytes = match read_member(&mut zin, &opf_path) {
         Ok(bytes) => bytes,
         Err(ZipError::FileNotFound) => return Err(format!("OPF file missing in archive: {opf_path}")),
@@ -626,7 +626,7 @@ pub struct SafeXmlParser {
 }
 
 /// XXE를 막은 XML 파서. `recover`가 참이면 DOCTYPE과 모르는 엔티티를 걷어 내고 다시 읽는다.
-pub fn _safe_xml_parser(recover: bool) -> SafeXmlParser {
+pub fn safe_xml_parser(recover: bool) -> SafeXmlParser {
     SafeXmlParser { recover }
 }
 
@@ -653,7 +653,7 @@ impl SafeXmlParser {
 }
 
 /// 선언 없이 쓰인 접두사를 루트 요소에 선언한다. 빠진 선언이 없으면 입력을 그대로(`Borrowed`) 돌려준다.
-pub fn _declare_unbound_prefixes(xml_bytes: &[u8]) -> Cow<'_, [u8]> {
+pub fn declare_unbound_prefixes_bytes(xml_bytes: &[u8]) -> Cow<'_, [u8]> {
     let text = String::from_utf8_lossy(xml_bytes);
     let fixed = declare_unbound_prefixes(&text);
     if fixed == text { Cow::Borrowed(xml_bytes) } else { Cow::Owned(fixed.into_bytes()) }

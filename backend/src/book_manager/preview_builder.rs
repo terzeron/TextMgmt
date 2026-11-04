@@ -46,7 +46,7 @@ fn no_transform_headers() -> Vec<(String, String)> {
     vec![("Content-Encoding".to_string(), "identity".to_string()), ("Cache-Control".to_string(), "no-transform".to_string())]
 }
 
-/// 뷰어 HTML에 붙이는 보안 헤더. `BookManager._html_security_headers`.
+/// 뷰어 HTML에 붙이는 보안 헤더.
 pub fn html_security_headers() -> Vec<(String, String)> {
     [
         ("Content-Security-Policy", HTML_VIEWER_CSP),
@@ -110,7 +110,7 @@ impl BookManager {
     pub const PDF_PREVIEW_CACHE_VERSION: u32 = 3;
 
     /// 공개 검증 지점. EPUB 미리보기의 HTML 호환 변환을 수행한다.
-    pub fn _expand_self_closing_rcdata(data: &[u8]) -> Vec<u8> {
+    pub fn expand_self_closing_rcdata(data: &[u8]) -> Vec<u8> {
         expand_self_closing_rcdata(data)
     }
 
@@ -220,7 +220,7 @@ impl BookManager {
         };
         match generate() {
             Ok(bytes) => {
-                Self::_evict_old_cache_with(&*self.fs, cache_dir);
+                Self::evict_old_cache_with(&*self.fs, cache_dir);
                 BookResponse { status_code: 200, media_type: Some("application/pdf".to_string()), headers: no_transform_headers(), body: bytes }
             }
             Err(e) => {
@@ -256,7 +256,7 @@ impl BookManager {
                 log::error!("{} preview cache write failed for book_id={book_id}: {e}", suffix.to_uppercase());
                 return text_response(500, format!("{} preview failed", suffix.to_uppercase()));
             }
-            Self::_evict_old_cache_with(&*self.fs, cache_dir);
+            Self::evict_old_cache_with(&*self.fs, cache_dir);
             log::debug!("Preview generated for book_id={book_id} ({suffix})");
             return BookResponse { status_code: 200, media_type: Some("text/html".to_string()), headers: html_security_headers(), body: html_content.into_bytes() };
         }
@@ -286,13 +286,13 @@ impl BookManager {
             log::error!("HWP3 preview cache write failed for book_id={book_id}: {e}");
             return Some(text_response(500, "HWP preview failed"));
         }
-        Self::_evict_old_cache_with(&*self.fs, cache_dir);
+        Self::evict_old_cache_with(&*self.fs, cache_dir);
         log::debug!("Preview generated for book_id={book_id} (HWP3 native)");
         Some(BookResponse { status_code: 200, media_type: Some("text/html".to_string()), headers: html_security_headers(), body: html_content.into_bytes() })
     }
 
     fn preview_epub(&self, book_id: i64, file_path: &Path, cache_dir: &Path, original_mtime: SystemTime, requested_chapters: u32) -> BookResponse {
-        let total_chapters = Self::_get_epub_total_chapters(file_path);
+        let total_chapters = Self::get_epub_total_chapters(file_path);
         // chapters<=0: 전체 챕터 포함(대용량 폰트 제거, 대형 이미지 축소)
         let chapters = if requested_chapters == 0 { total_chapters } else { i64::from(requested_chapters) };
         let cache_name = format!("{book_id}_ch{chapters}_v{}.epub", BookManager::EPUB_IMAGE_POLICY_VERSION);
@@ -328,7 +328,7 @@ impl BookManager {
                 // 생성된 EPUB 유효성 검증
                 let validated = match self.seams().preview_epub_validator {
                     Some(validator) => validator(&tmp_file),
-                    None => Self::_validate_preview_epub_with(&*self.fs, &tmp_file),
+                    None => Self::validate_preview_epub_with(&*self.fs, &tmp_file),
                 };
                 if let Err(err) = validated {
                     let _ = self.fs.remove_file(&tmp_file);
@@ -340,7 +340,7 @@ impl BookManager {
                     log::error!("EPUB preview cache write failed for book_id={book_id}: {e}");
                     return text_response(500, "EPUB preview failed");
                 }
-                Self::_evict_old_cache_with(&*self.fs, cache_dir);
+                Self::evict_old_cache_with(&*self.fs, cache_dir);
                 log::debug!("Preview generated for book_id={book_id} (EPUB, {chapter_count} chapters)");
                 self.file_response(&cache_file, "application/epub+zip", extra_headers)
             }
@@ -367,7 +367,7 @@ impl BookManager {
 
         // OPF 경로 찾기(container.xml -> regex -> 직접 탐색)
         let opf_override = self.opf_path_override().filter(|p| !p.is_empty());
-        let Some(opf_path) = opf_override.or_else(|| Self::_find_opf_path(&mut zin)) else {
+        let Some(opf_path) = opf_override.or_else(|| Self::find_opf_path(&mut zin)) else {
             log::warn!("EPUB preview: OPF file not found for book_id={book_id}");
             return Err(PreviewFailure::Response(text_response(422, "EPUB structure error: OPF file not found")));
         };
@@ -627,7 +627,7 @@ impl BookManager {
                 } else if EPUB_IMAGE_SUFFIXES.iter().any(|s| lower.ends_with(s)) && data.len() > seams.epub_image_min_bytes.unwrap_or(EPUB_IMAGE_MIN_BYTES) {
                     data = match &seams.downscale_hook {
                         Some(hook) => hook(&data),
-                        None => Self::_downscale_epub_image(&data),
+                        None => Self::downscale_epub_image(&data),
                     };
                 }
                 data
@@ -731,7 +731,7 @@ impl BookManager {
             log::error!("PDF pages extraction failed for book_id={book_id} ({}): {e}", book.file_path.display());
             return storage_error(&e);
         }
-        Self::_evict_old_cache_with(&*self.fs, &cache_dir);
+        Self::evict_old_cache_with(&*self.fs, &cache_dir);
         log::debug!("PDF pages extracted for book_id={book_id} (p{start}-{end}, total={total_pages})");
         pdf_response(pdf_bytes)
     }

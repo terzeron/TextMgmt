@@ -166,7 +166,7 @@ fn header_text<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
 }
 
 /// 실제 접속 클라이언트 IP. 알 수 없으면 빈 문자열이다.
-pub fn _client_ip(headers: &HeaderMap, client_host: Option<&str>) -> String {
+pub fn client_ip(headers: &HeaderMap, client_host: Option<&str>) -> String {
     for name in ["CF-Connecting-IP", "True-Client-IP"] {
         let value = header_text(headers, name).trim();
         if !value.is_empty() {
@@ -184,8 +184,8 @@ pub fn _client_ip(headers: &HeaderMap, client_host: Option<&str>) -> String {
 }
 
 /// 관측 로그용 IP 프리픽스. IPv4는 /24, IPv6는 /48까지만 남긴다.
-pub fn _request_ip_prefix(headers: &HeaderMap, client_host: Option<&str>) -> String {
-    let ip = _client_ip(headers, client_host);
+pub fn request_ip_prefix(headers: &HeaderMap, client_host: Option<&str>) -> String {
+    let ip = client_ip(headers, client_host);
     if ip.is_empty() {
         return String::new();
     }
@@ -193,7 +193,7 @@ pub fn _request_ip_prefix(headers: &HeaderMap, client_host: Option<&str>) -> Str
     ip.split(sep).take(keep).collect::<Vec<_>>().join(&sep.to_string())
 }
 
-pub fn _request_user_agent(headers: &HeaderMap) -> String {
+pub fn request_user_agent(headers: &HeaderMap) -> String {
     header_text(headers, "User-Agent").to_string()
 }
 
@@ -207,7 +207,7 @@ pub struct ClientInfo {
 
 impl ClientInfo {
     pub fn from_request(headers: &HeaderMap, client_host: Option<&str>) -> Self {
-        Self { ip: _client_ip(headers, client_host), user_agent: _request_user_agent(headers), ip_prefix: _request_ip_prefix(headers, client_host) }
+        Self { ip: client_ip(headers, client_host), user_agent: request_user_agent(headers), ip_prefix: request_ip_prefix(headers, client_host) }
     }
 }
 

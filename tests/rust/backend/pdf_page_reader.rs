@@ -365,7 +365,7 @@ mod pdf_reader_cache_budget {
         }
 
         for p in &pdfs {
-            e.bm._get_cached_pdf_reader(p);
+            e.bm.get_cached_pdf_reader(p);
         }
 
         assert_eq!(e.bm.pdf_cache().len(), 2);

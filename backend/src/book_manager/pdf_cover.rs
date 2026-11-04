@@ -143,7 +143,7 @@ impl BookManager {
         static SLOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _slot = SLOT.lock().unwrap_or_else(|error| error.into_inner());
         let first = extract_first_page_jpeg(path).and_then(|image| crop_cover_image(&image, width)).or_else(|| render_pdf_cover_page(path, 1, width))?;
-        if Self::_is_mostly_blank_cover(&DynamicImage::ImageRgb8(first.clone()))
+        if Self::is_mostly_blank_cover(&DynamicImage::ImageRgb8(first.clone()))
             && let Some(second) = render_pdf_cover_page(path, 2, width)
         {
             return Some(second);
@@ -152,7 +152,7 @@ impl BookManager {
     }
 
     /// 작은 단색 영역만 있는 이미지를 빈 표지로 판정한다. 64x96으로 줄여 가장 큰 색 덩어리의 비율과 윤곽선 화소 비율을 본다.
-    pub fn _is_mostly_blank_cover(img: &DynamicImage) -> bool {
+    pub fn is_mostly_blank_cover(img: &DynamicImage) -> bool {
         if img.width() == 0 || img.height() == 0 {
             return false;
         }

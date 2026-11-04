@@ -9,7 +9,7 @@ impl ESManager {
 
     /// 질의를 실행하고 점수를 최고점 기준 0~100으로 정규화한다. `max_score`가 없으면 빈 결과다.
     /// 1만 건 이하는 scroll 없이 한 번에, 초과하면 scroll로 읽는다.
-    pub fn _search(&self, query: &Value, sort: Option<&Value>, max_result_count: i64, source_fields: Option<&[&str]>) -> Result<Vec<Hit>, EsError> {
+    pub fn search(&self, query: &Value, sort: Option<&Value>, max_result_count: i64, source_fields: Option<&[&str]>) -> Result<Vec<Hit>, EsError> {
         if let Some(stub) = &self.search_stub {
             let owned: Option<Vec<String>> = source_fields.map(|fields| fields.iter().map(|f| f.to_string()).collect());
             return stub(query, sort, max_result_count, owned.as_deref());
@@ -80,7 +80,7 @@ impl ESManager {
     }
 
     /// `(결과, 전체 건수)`를 돌려주는 from/size 페이지 검색. `ref_score`가 0이면 결과 안의 max_score를 기준으로 쓴다.
-    pub fn _search_paged(&self, query: &Value, sort: Option<&Value>, size: i64, offset: i64, ref_score: f64, source_fields: Option<&[&str]>) -> Result<(Vec<Hit>, i64), EsError> {
+    pub fn search_paged(&self, query: &Value, sort: Option<&Value>, size: i64, offset: i64, ref_score: f64, source_fields: Option<&[&str]>) -> Result<(Vec<Hit>, i64), EsError> {
         let size = size.min(MAX_RESULT_WINDOW);
         log::debug!("_search_paged(size={size}, offset={offset}, query='{query}')");
         let mut kwargs = json!({"index": self.index(), "query": query, "from_": offset, "size": size, "track_scores": true, "track_total_hits": true});
@@ -104,14 +104,14 @@ impl ESManager {
     pub fn search_by_title(&self, title: &str, file_type: &str, file_size: i64, max_result_count: i64) -> Result<Vec<Hit>, EsError> {
         let max_result_count = resolve_count(max_result_count);
         log::debug!("search_by_title(max_result_count={max_result_count}, title='{title}', file_type='{file_type}', file_size={file_size})");
-        self._search(&es_client::title_query(title, file_type, file_size), None, max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
+        self.search(&es_client::title_query(title, file_type, file_size), None, max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
     }
 
     pub fn search_by_category(&self, category: &str, max_result_count: i64) -> Result<Vec<Hit>, EsError> {
         let max_result_count = resolve_count(max_result_count);
         log::debug!("search_by_category(category='{category}')");
         let sort = json!(["author.keyword", "title.keyword"]);
-        self._search(&json!({"term": {"category": category}}), Some(&sort), max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
+        self.search(&json!({"term": {"category": category}}), Some(&sort), max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
     }
 
     /// 카테고리 내 문서를 search_after 커서로 한 페이지 조회한다. 오류는 삼키고 빈 결과를 돌려준다.
@@ -173,7 +173,7 @@ impl ESManager {
         }
     }
 
-    pub fn _exclude_category_queries(categories: Option<&[&str]>) -> Vec<Value> {
+    pub fn exclude_category_queries(categories: Option<&[&str]>) -> Vec<Value> {
         categories.unwrap_or(&[]).iter().filter(|c| !c.is_empty()).map(|c| category_or_children(c)).collect()
     }
 
@@ -185,7 +185,7 @@ impl ESManager {
         }
         log::debug!("search_cover_files_paged(categories={}, size={size}, search_after={search_after:?})", categories.len());
         let mut query = json!({"bool": {"filter": [Self::cover_type_filter(), {"terms": {"category": categories}}]}});
-        let excluded = Self::_exclude_category_queries(exclude_categories);
+        let excluded = Self::exclude_category_queries(exclude_categories);
         if !excluded.is_empty() {
             query["bool"]["must_not"] = json!(excluded);
         }
@@ -208,7 +208,7 @@ impl ESManager {
         if group_keys.is_empty() {
             return HashMap::new();
         }
-        let excluded = Self::_exclude_category_queries(exclude_categories);
+        let excluded = Self::exclude_category_queries(exclude_categories);
         let mut searches: Vec<Value> = Vec::new();
         for key in group_keys {
             let mut query = json!({"bool": {"filter": [Self::cover_type_filter()], "should": [{"term": {"category": key}}, {"prefix": {"category": format!("{key}/")}}], "minimum_should_match": 1}});
@@ -254,7 +254,7 @@ impl ESManager {
     pub fn search_by_keyword(&self, keyword: &str, max_result_count: i64) -> Result<Vec<Hit>, EsError> {
         let max_result_count = resolve_count(max_result_count);
         log::debug!("search_by_keyword(keyword='{keyword}', max_result_count={max_result_count})");
-        self._search(&Self::keyword_query(keyword), None, max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
+        self.search(&Self::keyword_query(keyword), None, max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
     }
 
     /// 이름과 추출한 저자만 사용해 유사 파일을 찾는다.
@@ -265,7 +265,7 @@ impl ESManager {
             should.push(json!({"match": {"author": {"query": author, "fuzziness": "AUTO", "boost": 10}}}));
         }
         let query = json!({"bool": {"should": should, "minimum_should_match": 1}});
-        self._search(&query, None, max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
+        self.search(&query, None, max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
     }
 
     pub fn search_by_keyword_paged(&self, keyword: &str, size: i64, offset: i64, exclude_categories: Option<&[&str]>, category: Option<&str>) -> Result<(Vec<Hit>, i64), EsError> {
@@ -277,7 +277,7 @@ impl ESManager {
         if let Some(category) = category.filter(|c| !c.is_empty()) {
             query["bool"]["filter"] = json!([{"term": {"category": category}}]);
         }
-        self._search_paged(&query, None, size, offset, 0.0, Some(&Self::LIST_SOURCE_FIELDS[..]))
+        self.search_paged(&query, None, size, offset, 0.0, Some(&Self::LIST_SOURCE_FIELDS[..]))
     }
 
     /// 커버 형식 문서를 최신순으로 조회한다. 오류는 삼키고 빈 결과를 돌려준다.
@@ -285,7 +285,7 @@ impl ESManager {
         log::debug!("search_latest_docs(max_result_count={max_result_count}, exclude_categories={exclude_categories:?})");
         let size = max_result_count.clamp(1, MAX_RESULT_WINDOW);
         let mut query = json!({"bool": {"must": [{"match_all": {}}], "filter": [Self::cover_type_filter()]}});
-        let excluded = Self::_exclude_category_queries(exclude_categories);
+        let excluded = Self::exclude_category_queries(exclude_categories);
         if !excluded.is_empty() {
             query["bool"]["must_not"] = json!(excluded);
         }
@@ -306,7 +306,7 @@ impl ESManager {
         let max_result_count = resolve_count(args.max_result_count);
         log::debug!("search_similar_docs(title='{}', author='{}', size={}, max_result_count={max_result_count})", args.title, args.author, args.file_size);
         let query = es_client::similar_query(&args.title, &args.author, args.file_size, &args.summary, args.exclude_id);
-        self._search(&query, None, max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
+        self.search(&query, None, max_result_count, Some(&Self::LIST_SOURCE_FIELDS[..]))
     }
 
     pub fn search_similar_docs_paged(&self, args: &SimilarDocsArgs) -> Result<(Vec<Hit>, i64), EsError> {
@@ -314,14 +314,14 @@ impl ESManager {
         let should_clauses = es_client::similar_should_clauses(&args.title, &args.author, args.file_size, &args.summary);
         // exclude_id가 있으면 msearch로 self-score와 본 검색을 한 번의 왕복으로 실행한다.
         if let Some(exclude_id) = args.exclude_id {
-            return self._search_paged_with_self_score(&should_clauses, exclude_id, args.size, args.offset);
+            return self.search_paged_with_self_score(&should_clauses, exclude_id, args.size, args.offset);
         }
         let query = json!({"bool": {"should": should_clauses, "minimum_should_match": 1}});
-        self._search_paged(&query, None, args.size, args.offset, 0.0, None)
+        self.search_paged(&query, None, args.size, args.offset, 0.0, None)
     }
 
     /// msearch로 self-score 쿼리와 본 검색을 한 번의 왕복으로 실행한다. 점수는 원본 문서의 self-score 기준이다.
-    pub fn _search_paged_with_self_score(&self, should_clauses: &[Value], exclude_id: i64, size: i64, offset: i64) -> Result<(Vec<Hit>, i64), EsError> {
+    pub fn search_paged_with_self_score(&self, should_clauses: &[Value], exclude_id: i64, size: i64, offset: i64) -> Result<(Vec<Hit>, i64), EsError> {
         log::debug!("_search_paged_with_self_score(exclude_id={exclude_id}, size={size}, offset={offset})");
         let size = size.min(MAX_RESULT_WINDOW);
         // self-score 쿼리: 원본 문서만 매칭한다. 점수만 쓰고 본문을 버리므로 _source를 통째로 끈다.

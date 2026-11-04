@@ -57,14 +57,18 @@ pub struct MoveOpts {
     pub source_category: Option<String>,
 }
 
-type Ranked = Vec<(String, Vec<String>)>;
+/// 키워드 점수 순위: (카테고리, 맞은 키워드들).
+pub type Ranked = Vec<(String, Vec<String>)>;
 
 /// `_match_category_by_keywords`의 결과.
-struct KeywordMatch {
-    category: Option<String>,
-    keywords: Vec<String>,
-    tie_reason: Option<String>,
-    ranked: Ranked,
+pub struct KeywordMatch {
+    /// 고른 카테고리. 동점이거나 맞은 키워드가 없으면 `None`.
+    pub category: Option<String>,
+    /// 고른 카테고리에서 맞은 키워드.
+    pub keywords: Vec<String>,
+    /// 동점이라 고르지 못한 이유.
+    pub tie_reason: Option<String>,
+    pub ranked: Ranked,
 }
 
 /// 분류 판정 한 건(모델 단독).
@@ -231,7 +235,7 @@ impl BookManager {
     pub const GRADE_UNKNOWN: &'static str = "unknown";
 
     /// 편집 화면으로 보낼 book_id. 이 저장소에서 book_id는 파일의 inode 번호다. 파일이 사라졌으면 `None`.
-    pub fn _book_id_for_path(file_path: &Path) -> Option<i64> {
+    pub fn book_id_for_path(file_path: &Path) -> Option<i64> {
         std::fs::metadata(file_path).ok().map(|m| m.ino() as i64)
     }
 
@@ -242,13 +246,13 @@ impl BookManager {
                 continue;
             }
             let Some(rel_path) = item.get("file_path").and_then(Value::as_str).filter(|p| !p.is_empty()) else { continue };
-            item["book_id"] = json!(Self::_book_id_for_path(&path_prefix.join(rel_path)));
+            item["book_id"] = json!(Self::book_id_for_path(&path_prefix.join(rel_path)));
         }
         items
     }
 
     /// 카테고리 직하위(또는 하위 전체)의 색인 대상 파일을 정렬해서 돌려준다.
-    pub(crate) fn iter_category_indexable_files(&self, category: &str, recursive: bool) -> Vec<PathBuf> {
+    pub fn iter_category_indexable_files(&self, category: &str, recursive: bool) -> Vec<PathBuf> {
         if let Some(f) = &self.iter_category_indexable_files_override {
             return f(category, recursive);
         }
@@ -286,7 +290,7 @@ impl BookManager {
     }
 
     /// 파일 이름, 확장자 없는 이름, 책 루트 기준 상위 디렉터리 이름을 이어 정규화한 문자열. 책 루트 밖이면 전체 상위 경로를 쓴다.
-    pub fn _classification_haystack(&self, file_path: &Path) -> String {
+    pub fn classification_haystack(&self, file_path: &Path) -> String {
         let name = file_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let stem = file_path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let parent = file_path.parent().unwrap_or(Path::new(""));
@@ -299,15 +303,8 @@ impl BookManager {
         normalize_text(&parts.join(" "))
     }
 
-    /// 등록된 키워드로 목적지를 고른다. 동점이면 고르지 않고 사유를 돌려준다.
-    /// 반환: (목적지, 맞은 키워드, 동점 사유, 상위 2개 순위). 카테고리나 키워드가 문자열이 아니면 건너뛴다.
-    pub fn _match_category_by_keywords(&self, file_path: &Path, source_category: &str, mappings: &[(Value, Vec<Value>)]) -> (Option<String>, Vec<String>, Option<String>, Ranked) {
-        let m = self.match_category_by_keywords(file_path, source_category, mappings);
-        (m.category, m.keywords, m.tie_reason, m.ranked)
-    }
-
-    fn match_category_by_keywords(&self, file_path: &Path, source_category: &str, mappings: &[(Value, Vec<Value>)]) -> KeywordMatch {
-        let haystack = self._classification_haystack(file_path);
+    pub fn match_category_by_keywords(&self, file_path: &Path, source_category: &str, mappings: &[(Value, Vec<Value>)]) -> KeywordMatch {
+        let haystack = self.classification_haystack(file_path);
         let mut scored: Vec<(i64, usize, String, Vec<String>)> = Vec::new();
         for (raw_category, raw_keywords) in mappings {
             let Some(raw_category) = raw_category.as_str() else { continue };
@@ -349,7 +346,7 @@ impl BookManager {
 
     /// 모델 점수가 '확실'이라고 부를 만큼 높은가. 서점 정책의 경계와 `MODEL_CERTAIN_MIN_CONFIDENCE`를 둘 다 넘어야 한다.
     /// 정책이 없으면(경계가 0 이하) 근거가 없으므로 낮음이다.
-    pub fn _is_high_confidence(&self, classifier: &dyn BookClassifierApi, confidence: f64) -> bool {
+    pub fn is_high_confidence(&self, classifier: &dyn BookClassifierApi, confidence: f64) -> bool {
         if let Some(f) = &self.is_high_confidence_override {
             return f(classifier.as_any(), confidence);
         }
@@ -360,12 +357,12 @@ impl BookManager {
     }
 
     /// 모델이 "이 점수 미만이면 판정하지 않는다"고 정한 값. 읽지 못하면 0이다.
-    pub fn _model_decision_floor(classifier: &dyn BookClassifierApi) -> f64 {
+    pub fn model_decision_floor(classifier: &dyn BookClassifierApi) -> f64 {
         classifier.min_confidence().filter(|v| v.is_finite()).unwrap_or(0.0)
     }
 
     /// 확신도를 예상 정답률로 옮긴다. 보정이 없으면 `None`이다.
-    pub fn _expected_accuracy(classifier: &dyn BookClassifierApi, confidence: f64) -> Option<f64> {
+    pub fn expected_accuracy(classifier: &dyn BookClassifierApi, confidence: f64) -> Option<f64> {
         Self::expected_accuracy_of(classifier, Some(confidence))
     }
 
@@ -374,20 +371,20 @@ impl BookManager {
     }
 
     /// 2순위가 빈 채로 나가지 않도록 모델이 매긴 다음 후보를 붙인다(하한 없음).
-    pub fn _fill_second_with_model(&self, candidates: Vec<Value>, model_candidates: &[(String, f64)]) -> Vec<Value> {
+    pub fn fill_second_with_model(&self, candidates: Vec<Value>, model_candidates: &[(String, f64)]) -> Vec<Value> {
         fill_second_with_model(candidates, model_candidates, 0.0)
     }
 
-    pub fn _fill_second_with_bookstore(&self, candidates: Vec<Value>, bookstore_candidates: &[(String, i64)]) -> Vec<Value> {
+    pub fn fill_second_with_bookstore(&self, candidates: Vec<Value>, bookstore_candidates: &[(String, i64)]) -> Vec<Value> {
         fill_second_with_bookstore(candidates, bookstore_candidates)
     }
 
-    pub fn _vote_count_for(category: &str, bookstore_candidates: &[(String, i64)]) -> i64 {
+    pub fn vote_count_for(category: &str, bookstore_candidates: &[(String, i64)]) -> i64 {
         vote_count_for(category, bookstore_candidates)
     }
 
     /// 키워드가 정하지 못했을 때 `candidates`를 만든다.
-    pub fn _build_candidates(&self, target: Option<&str>, method: &str, model_category: Option<&str>, bookstore_candidates: &[(String, i64)]) -> Vec<Value> {
+    pub fn build_candidates(&self, target: Option<&str>, method: &str, model_category: Option<&str>, bookstore_candidates: &[(String, i64)]) -> Vec<Value> {
         build_candidates(target, method, model_category, bookstore_candidates, &[], 0.0)
     }
 
@@ -408,19 +405,7 @@ impl BookManager {
     }
 
     /// 한 파일의 제안 목적지와 등급을 만든다. 파일을 옮기지 않는다. `classifier`가 없으면 키워드만 쓴다.
-    pub fn _propose_category_for_file(
-        &self,
-        file_path: &Path,
-        source_category: &str,
-        mappings: &[(Value, Vec<Value>)],
-        classifier: &dyn BookClassifierApi,
-        _use_bookstore: bool,
-        _use_content_meta: bool,
-    ) -> Value {
-        self.propose_category_for_file(file_path, source_category, mappings, Some(classifier))
-    }
-
-    fn propose_category_for_file(&self, file_path: &Path, source_category: &str, mappings: &[(Value, Vec<Value>)], classifier: Option<&dyn BookClassifierApi>) -> Value {
+    pub fn propose_category_for_file(&self, file_path: &Path, source_category: &str, mappings: &[(Value, Vec<Value>)], classifier: Option<&dyn BookClassifierApi>) -> Value {
         let keyword = self.match_category_by_keywords(file_path, source_category, mappings);
         let tie_reason = keyword.tie_reason.clone();
         let mut classification = Classification { method: "not_found".to_string(), ..Classification::default() };
@@ -432,9 +417,9 @@ impl BookManager {
             }
         }
         let confidence = classification.confidence;
-        let high = classifier.is_some_and(|c| confidence.is_some_and(|conf| self._is_high_confidence(c, conf)));
+        let high = classifier.is_some_and(|c| confidence.is_some_and(|conf| self.is_high_confidence(c, conf)));
         // 모델이 스스로 버린 점수를 추천 칸에 올리지 않기 위한 하한.
-        let min_score = classifier.map_or(0.0, Self::_model_decision_floor);
+        let min_score = classifier.map_or(0.0, Self::model_decision_floor);
         // 확신도는 클래스가 많은 softmax라 점수 차이를 화면에서 읽을 수 없다. 보정한 예상 정답률을 함께 보낸다.
         let accuracy = classifier.and_then(|c| Self::expected_accuracy_of(c, confidence));
         let model_category = classification.model_category.clone();
@@ -528,7 +513,7 @@ impl BookManager {
         for file_path in &file_paths {
             let Some(rel_path) = relative_to(file_path, &self.path_prefix) else { continue };
             placeholders.push(json!({
-                "file_path": rel_path, "book_id": Self::_book_id_for_path(file_path), "title": file_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+                "file_path": rel_path, "book_id": Self::book_id_for_path(file_path), "title": file_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
                 "current_category": category, "target_category": Value::Null, "grade": Value::Null, "confidence": Value::Null, "expected_accuracy": Value::Null,
                 "source": Value::Null, "matched_keywords": [], "model_category": Value::Null, "reason": "", "candidates": [], "apply_status": "pending", "apply_error": Value::Null,
             }));
@@ -553,7 +538,7 @@ impl BookManager {
                 continue;
             };
             let mut new_item = json!({
-                "file_path": rel_path, "book_id": Self::_book_id_for_path(file_path), "title": file_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+                "file_path": rel_path, "book_id": Self::book_id_for_path(file_path), "title": file_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
                 "current_category": category, "apply_status": "pending", "apply_error": Value::Null,
             });
             if let (Some(target), Some(extra)) = (new_item.as_object_mut(), proposal.as_object()) {
@@ -622,7 +607,15 @@ impl BookManager {
                         notify(json!({"file_path": file_path, "apply_status": "moving", "apply_error": Value::Null}));
                         let moved = match &move_hook {
                             Some(hook) => hook(&absolute_path, target),
-                            None => self.move_classified_file(&absolute_path, target, content_type, false, options.clean_existing, Some(source_category)).await,
+                            None => {
+                                self.move_classified_file(
+                                    &absolute_path,
+                                    target,
+                                    content_type,
+                                    MoveOpts { dry_run: false, clean_existing: options.clean_existing, source_category: Some(source_category.to_owned()) },
+                                )
+                                .await
+                            }
                         };
                         match moved {
                             Ok(_) => apply_status = "moved",
@@ -648,34 +641,24 @@ impl BookManager {
         Ok(json!({"content_type": content_type, "total_count": items.len(), "applied_count": applied_count, "failed_count": failed_count, "results": results}))
     }
 
-    /// 파일 하나를 목적지 카테고리로 옮기고 ES를 맞춘다. 실패하면 파일과 ES 문서를 되돌린다.
-    pub async fn _move_classified_file(&self, file_path: &Path, target_category: &str, content_type: &str, opts: MoveOpts) -> Result<Value, String> {
-        self.move_classified_file(file_path, target_category, content_type, opts.dry_run, opts.clean_existing, opts.source_category.as_deref()).await
-    }
-
     /// 같은 책의 사본인지 판정한다. 크기가 다르면 즉시 다른 파일이다. 읽기에 실패하면 중복이 아니라고 보수적으로 판정한다.
-    pub fn _is_duplicate_content(source: &Path, target: &Path) -> bool {
+    pub fn is_duplicate_content(source: &Path, target: &Path) -> bool {
         same_content(source, target)
     }
 
     /// `name.ext`가 이미 있을 때 `name (1).ext`, `name (2).ext` 순으로 빈 자리를 찾는다. `max_index`까지 다 차면 `None`이다.
-    pub fn _next_numbered_path_with(target: &Path, max_index: usize) -> Option<PathBuf> {
+    pub fn next_numbered_path_with(target: &Path, max_index: usize) -> Option<PathBuf> {
         next_numbered_path(target, max_index)
     }
 
-    pub fn _next_numbered_path(target: &Path) -> Option<PathBuf> {
+    pub fn next_numbered_path(target: &Path) -> Option<PathBuf> {
         next_numbered_path(target, super::DUPLICATE_NAME_MAX_INDEX)
     }
 
-    pub(crate) async fn move_classified_file(
-        &self,
-        file_path: &Path,
-        target_category: &str,
-        content_type: &str,
-        dry_run: bool,
-        clean_existing: bool,
-        source_category: Option<&str>,
-    ) -> Result<Value, String> {
+    /// 분류된 파일을 대상 카테고리로 옮긴다. `opts`로 미리보기·중복 정리·빈 디렉터리 기준을 정한다.
+    pub async fn move_classified_file(&self, file_path: &Path, target_category: &str, content_type: &str, opts: MoveOpts) -> Result<Value, String> {
+        let MoveOpts { dry_run, clean_existing, source_category } = opts;
+        let source_category = source_category.as_deref();
         let root = self.resolved_root().unwrap_or_else(|_| self.path_prefix.clone());
         let Some(old_rel_path) = relative_to(file_path, &self.path_prefix) else { return Err("잘못된 파일 경로입니다".to_string()) };
 

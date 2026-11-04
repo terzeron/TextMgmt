@@ -19,12 +19,12 @@
 //!   - `struct SessionQuery { status: String, current_family_id: Option<String>, page: u32, page_size: u32, email: Option<String> }`
 //!   - `MySQLRefreshTokenStore::{new() -> Result<Self, StoreError> (TM_MYSQL_* 환경 변수), with_connector(ConnectionProvider) -> Result<Self, StoreError> (_init_db 실행),
 //!     with_connection_provider(ConnectionProvider) -> Self,
-//!     _connect(&self) -> Result<Box<dyn DbConnection>, DbError>}` (`set_connection_provider`는 없다)
+//!     connect(&self) -> Result<Box<dyn DbConnection>, DbError>}` (`set_connection_provider`는 없다)
 //!   - `enum AnyRefreshTokenStore { MySql(MySQLRefreshTokenStore) }`,
 //!     `create_refresh_token_store() -> Result<AnyRefreshTokenStore, StoreError>` (TM_REFRESH_TOKEN_BACKEND),
 //!     `create_refresh_token_store_with(ConnectionProvider) -> Result<AnyRefreshTokenStore, StoreError>`
-//!   - `DEFAULT_ROTATION_GRACE_SECONDS: i64`, `_rotation_grace_seconds() -> i64`, `MAX_USER_AGENT_LENGTH: usize`
-//!   - `summarize_user_agent(&str) -> String`, `_parse_browser_name_version_with(ua: &str, patterns: &[(regex::Regex, &str)]) -> Option<String>` (`_UA_BROWSER_PATTERNS` 대체)
+//!   - `DEFAULT_ROTATION_GRACE_SECONDS: i64`, `rotation_grace_seconds() -> i64`, `MAX_USER_AGENT_LENGTH: usize`
+//!   - `summarize_user_agent(&str) -> String`, `parse_browser_name_version_with(ua: &str, patterns: &[(regex::Regex, &str)]) -> Option<String>` (`_UA_BROWSER_PATTERNS` 대체)
 //!   - `StoreError: Display`
 //! - 로그 캡처는 `common::log_capture::LogCapture`(`log` crate 기반), 환경 변수는 `common::env::EnvGuard`, 실제 MySQL 컨테이너는 `common/mysql_fixture.rs`.
 //! - dev-dependency: `tempfile`, `regex`, `testcontainers-modules`(mysql, blocking)
@@ -36,8 +36,8 @@ use crate::{common, mysql_fixture};
 
 use crate::common::shared_fixtures::now;
 use backend::refresh_token_store::{
-    _rotation_grace_seconds, AnyRefreshTokenStore, DEFAULT_ROTATION_GRACE_SECONDS, MAX_USER_AGENT_LENGTH, MySQLRefreshTokenStore, RefreshTokenStoreApi, Rotation, SessionQuery,
-    create_refresh_token_store, create_refresh_token_store_with, summarize_user_agent,
+    AnyRefreshTokenStore, DEFAULT_ROTATION_GRACE_SECONDS, MAX_USER_AGENT_LENGTH, MySQLRefreshTokenStore, RefreshTokenStoreApi, Rotation, SessionQuery, create_refresh_token_store,
+    create_refresh_token_store_with, rotation_grace_seconds, summarize_user_agent,
 };
 use common::env::EnvGuard;
 use common::log_capture::LogCapture;
@@ -726,7 +726,7 @@ fn test_rotation_grace_seconds_invalid_env_falls_back() {
     // TM_REFRESH_ROTATION_GRACE_SECONDS 가 정수가 아니면 기본값으로 폴백한다 (line 20-21).
     let mut env = EnvGuard::new();
     env.set("TM_REFRESH_ROTATION_GRACE_SECONDS", "not-an-int");
-    assert_eq!(_rotation_grace_seconds(), DEFAULT_ROTATION_GRACE_SECONDS);
+    assert_eq!(rotation_grace_seconds(), DEFAULT_ROTATION_GRACE_SECONDS);
 }
 
 #[test]
@@ -1305,7 +1305,7 @@ fn mysql_store() -> (MutexGuard<'static, ()>, MySQLRefreshTokenStore) {
     mysql_fixture::mysql_container();
     let guard = mysql_fixture::db_lock();
     let store = MySQLRefreshTokenStore::new().unwrap();
-    let mut conn = store._connect().unwrap();
+    let mut conn = store.connect().unwrap();
     conn.cursor().execute("TRUNCATE TABLE refresh_tokens", &[]).unwrap();
     conn.commit().unwrap();
     (guard, store)
@@ -1352,7 +1352,7 @@ fn test_mysql_migration_adds_columns_to_legacy_table() {
     let _guard = mysql_fixture::db_lock();
     let bootstrap = MySQLRefreshTokenStore::new().unwrap();
     {
-        let mut conn = bootstrap._connect().unwrap();
+        let mut conn = bootstrap.connect().unwrap();
         let mut cur = conn.cursor();
         cur.execute("DROP TABLE IF EXISTS refresh_tokens", &[]).unwrap();
         cur.execute(
@@ -1387,7 +1387,7 @@ fn test_summarize_user_agent_with_only_browser_or_only_os() {
 #[test]
 fn test_parse_browser_name_version_returns_none_when_pattern_has_no_version() {
     let patterns = [(regex::Regex::new("Foo").unwrap(), "Foo {0}")];
-    assert!(backend::refresh_token_store::_parse_browser_name_version_with("Foo/1", &patterns).is_none());
+    assert!(backend::refresh_token_store::parse_browser_name_version_with("Foo/1", &patterns).is_none());
 }
 
 #[test]

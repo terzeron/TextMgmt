@@ -211,7 +211,7 @@ impl BookManager {
     }
 
     /// 환경 변수(`TM_BACKFILL_CREATED_TIME_ON_STARTUP`)가 켜져 있으면 백필을 시작한다. 이미 도는 스레드가 있으면 아무것도 안 한다.
-    pub fn _backfill_created_time_if_enabled(&self) {
+    pub fn backfill_created_time_if_enabled(&self) {
         self.start_created_time_backfill(env_flag(std::env::var(CREATED_TIME_BACKFILL_ENV).ok()), "");
     }
 
@@ -260,8 +260,8 @@ impl BookManager {
         Ok((reader, total as i64))
     }
 
-    /// `_get_cached_pdf_reader`. 읽지 못하면 panic한다. 서비스 코드는 `try_get_cached_pdf_reader`를 쓴다.
-    pub fn _get_cached_pdf_reader(&self, file_path: &Path) -> (Arc<PdfReaderHandle>, i64) {
+    /// `get_cached_pdf_reader`. 읽지 못하면 panic한다. 서비스 코드는 `try_get_cached_pdf_reader`를 쓴다.
+    pub fn get_cached_pdf_reader(&self, file_path: &Path) -> (Arc<PdfReaderHandle>, i64) {
         self.try_get_cached_pdf_reader(file_path).unwrap_or_else(|e| panic!("PDF를 읽지 못했다: {e}"))
     }
 

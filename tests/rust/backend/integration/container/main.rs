@@ -2141,13 +2141,13 @@ fn test_cookie_settings_variants() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.set("TM_COOKIE_SECURE", "false");
     env.set("TM_COOKIE_SAMESITE", "none");
-    let (secure, samesite) = backend::main::_get_cookie_settings();
+    let (secure, samesite) = backend::main::get_cookie_settings();
     assert!(!secure);
     assert_eq!(samesite, "lax");
 
     env.set("TM_COOKIE_SECURE", "true");
     env.set("TM_COOKIE_SAMESITE", "strict");
-    let (secure, samesite) = backend::main::_get_cookie_settings();
+    let (secure, samesite) = backend::main::get_cookie_settings();
     assert!(secure);
     assert_eq!(samesite, "strict");
 }
@@ -2159,12 +2159,12 @@ fn test_set_and_clear_auth_cookies() {
     env.set("TM_COOKIE_SAMESITE", "lax");
 
     let mut resp = axum::Json(json!({"ok": true})).into_response();
-    backend::main::_set_auth_cookies(&mut resp, "access", Some("refresh"));
+    backend::main::set_auth_cookies(&mut resp, "access", Some("refresh"));
     let headers = resp.headers().get("set-cookie").map(|v| v.to_str().unwrap().to_string()).unwrap_or_default();
     assert!(headers.contains("tm_access_token"), "{headers}");
 
     let mut resp2 = axum::Json(json!({"ok": true})).into_response();
-    backend::main::_clear_auth_cookies(&mut resp2);
+    backend::main::clear_auth_cookies(&mut resp2);
     let headers2 = resp2.headers().get("set-cookie").map(|v| v.to_str().unwrap().to_string()).unwrap_or_default();
     assert!(headers2.contains("Max-Age=0"), "{headers2}");
 }
@@ -2175,7 +2175,7 @@ fn test_cookie_settings_defaults_to_lax_for_unknown_value() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.set("TM_COOKIE_SECURE", "false");
     env.set("TM_COOKIE_SAMESITE", "unexpected");
-    let (secure, samesite) = backend::main::_get_cookie_settings();
+    let (secure, samesite) = backend::main::get_cookie_settings();
     assert!(!secure);
     assert_eq!(samesite, "lax");
 }
@@ -2187,7 +2187,7 @@ fn test_set_auth_cookies_without_refresh_token() {
     env.set("TM_COOKIE_SAMESITE", "lax");
 
     let mut resp = axum::Json(json!({"ok": true})).into_response();
-    backend::main::_set_auth_cookies(&mut resp, "access-only", None);
+    backend::main::set_auth_cookies(&mut resp, "access-only", None);
     let headers: Vec<String> = resp.headers().get_all("set-cookie").iter().map(|v| v.to_str().unwrap().to_string()).collect();
     assert_eq!(headers.len(), 1);
     assert!(headers[0].contains("tm_access_token=access-only"), "{}", headers[0]);

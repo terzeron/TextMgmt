@@ -2,7 +2,7 @@
 //! EPUB 표지 멤버 찾기와 표지 썸네일(EPUB 부분).
 
 use std::io::{Read, Seek};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -98,11 +98,6 @@ impl BookManager {
     /// `file_size`가 값을 돌려주면 ZIP 헤더 크기 대신 쓴다(테스트가 큰 항목을 흉내 낸다).
     pub fn find_epub_cover_member_with<R: Read + Seek>(archive: &mut ZipArchive<R>, file_size: &dyn Fn(&str) -> Option<u64>) -> Option<String> {
         epub_cover::find_epub_cover_member_with(archive, file_size)
-    }
-
-    /// EPUB 표지를 JPEG 썸네일로 만든다. PDF는 아직 연결하지 않았다.
-    pub fn extract_cover_thumbnail(path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>> {
-        if file_type == "epub" { epub_cover::extract_epub_thumbnail(path, width) } else { None }
     }
 }
 
