@@ -13,10 +13,11 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::{Category, FileReport};
+use htmlkit::url_parser::unquote;
 use htmlkit::{Tag, decode_entities, local_name, tokenize};
 use regex::Regex;
+use sysdeps::zip_opener::zip_entry_name;
 use sysdeps::zip_opener::{Zip, open_zip};
-use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 use zip::CompressionMethod;
 
 const MAX_TEXT: usize = 160;
@@ -797,7 +798,7 @@ impl Scanner {
             self.partial(name, "OPF is not well-formed XML");
             return;
         };
-        let base = posix_dirname(name);
+        let base = Path::new(name).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         for item in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "item") {
             let Some(href) = item.attribute("href") else { continue };
             let media = item.attribute("media-type").unwrap_or("").to_lowercase();
@@ -809,10 +810,17 @@ impl Scanner {
                 UrlKind::Unc => self.add(Severity::High, "UNC_PATH", name, "manifest item uses a UNC path"),
                 UrlKind::UnknownScheme => self.add(Severity::Low, "UNKNOWN_URI_SCHEME", name, &format!("manifest item {href}")),
                 UrlKind::Plain => {
-                    let resolved = posix_normpath(&posix_join(&base, unquote(href).split('#').next().unwrap_or("")));
-                    if resolved == ".." || resolved.starts_with("../") || resolved.starts_with('/') {
-                        self.add(Severity::High, "MANIFEST_PATH_ESCAPE", name, &format!("manifest href leaves the archive: {href}"));
-                    }
+                    let target = unquote(href);
+                    let target = target.split('#').next().unwrap_or("");
+                    let joined = Path::new(&base).join(target);
+                    // 맨 앞 `/`이거나 `..`이 압축 파일 루트를 넘으면 밖을 가리킨다. 그런 항목은 어떤 ZIP 항목과도 맞지 않게 원문을 키로 둔다.
+                    let resolved = match zip_entry_name(&joined) {
+                        Some(name) if !target.starts_with('/') => name,
+                        _ => {
+                            self.add(Severity::High, "MANIFEST_PATH_ESCAPE", name, &format!("manifest href leaves the archive: {href}"));
+                            joined.to_string_lossy().into_owned()
+                        }
+                    };
                     self.manifest.insert(resolved, ManifestEntry { media: media.clone(), scripted: props.contains(&"scripted"), remote_resources: props.contains(&"remote-resources") });
                 }
             }
@@ -969,7 +977,7 @@ fn package_documents(zip: &mut Zip, names: &[String], limits: &Limits, spent: &m
         && let Ok(doc) = roxmltree::Document::parse_with_options(&decode_text(&data).0, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
     {
         for root in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "rootfile") {
-            let path = posix_normpath(&unquote(root.attribute("full-path").unwrap_or("")));
+            let path = zip_entry_name(unquote(root.attribute("full-path").unwrap_or(""))).unwrap_or_default();
             if names.contains(&path) {
                 found.insert(path);
             }
@@ -1095,7 +1103,7 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
         s.add(Severity::Critical, "EMBEDDED_EXECUTABLE", name, &with_hash(&format!("Executable/script file type: .{ext}"), &data, actual <= bound));
     }
     let ext_kind = kind_of_ext(&ext);
-    let declared = s.manifest.get(&posix_normpath(name)).map(|e| (e.media.clone(), kind_of_media(&e.media))).filter(|(_, k)| *k != Kind::Other);
+    let declared = s.manifest.get(&zip_entry_name(name).unwrap_or_default()).map(|e| (e.media.clone(), kind_of_media(&e.media))).filter(|(_, k)| *k != Kind::Other);
     if let Some((media, k)) = &declared
         && k.class() != ext_kind.class()
     {

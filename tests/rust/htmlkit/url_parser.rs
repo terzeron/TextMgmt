@@ -1,6 +1,6 @@
 //! `htmlkit::url_parser` 단위 테스트. 기대값은 Python `urllib.parse` 결과다.
 
-use htmlkit::url_parser::{Netloc, quote, urlencode, urljoin, urlsplit};
+use htmlkit::url_parser::{Netloc, quote, unquote, urlencode, urljoin, urlsplit};
 
 #[test]
 fn urljoin_matches_python_for_absolute_protocol_relative_root_and_relative_refs() {
@@ -45,4 +45,13 @@ fn urlsplit_and_netloc_parse_userinfo_ipv6_and_port() {
 fn quote_and_urlencode_match_python() {
     assert_eq!(quote("가 b/c~"), "%EA%B0%80%20b/c~");
     assert_eq!(urlencode(&[("q", "가 나&"), ("a b", "1")]), "q=%EA%B0%80+%EB%82%98%26&a+b=1");
+}
+
+#[test]
+fn unquote_decodes_percent_escapes_and_keeps_broken_ones() {
+    assert_eq!(unquote("a%20b%zz%2"), "a b%zz%2");
+    assert_eq!(unquote("%ED%95%9C"), "한");
+    assert_eq!(unquote("100%"), "100%");
+    assert_eq!(unquote("%28a%29"), "(a)");
+    assert_eq!(unquote("%FF"), "\u{fffd}");
 }

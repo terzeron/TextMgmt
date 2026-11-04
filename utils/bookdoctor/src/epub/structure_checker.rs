@@ -14,8 +14,9 @@ use crate::{Category, FileReport, Severity};
 use regex::bytes::Regex;
 use zip::CompressionMethod;
 
+use htmlkit::url_parser::unquote;
+use sysdeps::zip_opener::zip_entry_name;
 use sysdeps::zip_opener::{Zip, open_zip};
-use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 
 pub const EPUB_MIMETYPE: &[u8] = b"application/epub+zip";
 pub const ISSUE_NOT_ZIP: &str = "not_zip";
@@ -86,7 +87,7 @@ fn read_head(zip: &mut Zip, name: &str, size: usize) -> Option<Vec<u8>> {
 pub(crate) fn rootfile_path(container: &[u8]) -> Option<String> {
     let doc = parse_xml(container)?;
     let rootfile = doc.descendants().find(|n| n.is_element() && n.tag_name().name() == "rootfile")?;
-    Some(posix_normpath(&unquote(rootfile.attribute("full-path").unwrap_or(""))))
+    zip_entry_name(unquote(rootfile.attribute("full-path").unwrap_or("")))
 }
 
 pub fn parse_xml(bytes: &[u8]) -> Option<roxmltree::Document<'_>> {
@@ -120,13 +121,13 @@ pub fn spine_members(opf: &roxmltree::Document, opf_path: &str) -> Vec<(String, 
             manifest.insert(el.attribute("id").map(str::to_owned), (href.to_owned(), el.attribute("media-type").unwrap_or("").to_owned()));
         }
     }
-    let base = posix_dirname(opf_path);
+    let base = Path::new(opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     let mut members = Vec::new();
     for el in opf.descendants().filter(|n| n.is_element() && n.tag_name().name() == "itemref") {
         if let Some((href, media)) = manifest.get(&el.attribute("idref").map(str::to_owned)) {
             let target = unquote(href);
             let target = target.split('#').next().unwrap_or("");
-            members.push((posix_normpath(&posix_join(&base, target)), media.clone()));
+            members.push((zip_entry_name(Path::new(&base).join(target)).unwrap_or_default(), media.clone()));
         }
     }
     members

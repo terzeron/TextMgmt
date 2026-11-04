@@ -12,9 +12,12 @@ use std::fs;
 use std::io::{self, Write};
 use std::sync::LazyLock;
 
+use std::path::Path;
+
+use htmlkit::url_parser::unquote;
 use regex::Regex;
 use scraper::{Html, Node};
-use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
+use sysdeps::zip_opener::zip_entry_name;
 
 use crate::cli_parser::Options;
 use crate::epub::render_checker::xhtml_defect;
@@ -241,8 +244,9 @@ pub fn repair_markup(src: &str) -> String {
 
 // ---------------------------------------------------------------- 참조 정리
 
+/// `base` 기준 href의 ZIP 항목 이름. 압축 파일 밖을 가리키면 빈 이름이다.
 fn resolve(base: &str, href: &str) -> String {
-    posix_normpath(&posix_join(base, unquote(href).split('#').next().unwrap_or("")))
+    zip_entry_name(Path::new(base).join(unquote(href).split('#').next().unwrap_or(""))).unwrap_or_default()
 }
 
 fn attr_value<'a>(caps: &regex::Captures<'a>) -> &'a str {
@@ -251,7 +255,7 @@ fn attr_value<'a>(caps: &regex::Captures<'a>) -> &'a str {
 
 /// OPF에서 지운 멤버의 manifest 항목, 그 id를 가리키는 spine 항목, 지운 멤버를 가리키는 guide 참조를 지운다.
 fn drop_from_opf(text: &str, opf_name: &str, dropped: &BTreeSet<String>) -> String {
-    let base = posix_dirname(opf_name);
+    let base = Path::new(opf_name).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     let mut ids: BTreeSet<String> = BTreeSet::new();
     let pruned = OPF_ITEM.replace_all(text, |c: &regex::Captures| {
         let item = &c[0];
@@ -278,7 +282,7 @@ fn drop_from_opf(text: &str, opf_name: &str, dropped: &BTreeSet<String>) -> Stri
 
 /// NCX에서 자식이 없고 지운 멤버를 가리키는 `navPoint`를 지운다.
 fn drop_from_ncx(text: &str, ncx_name: &str, dropped: &BTreeSet<String>) -> String {
-    let base = posix_dirname(ncx_name);
+    let base = Path::new(ncx_name).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     let mut stack: Vec<(usize, bool)> = Vec::new();
     let mut cuts: Vec<(usize, usize)> = Vec::new();
     for m in NAV_TAG.find_iter(text) {
@@ -311,7 +315,7 @@ fn drop_from_ncx(text: &str, ncx_name: &str, dropped: &BTreeSet<String>) -> Stri
 
 /// 본문 링크 중 지운 멤버를 가리키는 `href`를 지운다(글자는 남긴다).
 fn drop_links(text: &str, member: &str, dropped: &BTreeSet<String>) -> String {
-    let base = posix_dirname(member);
+    let base = Path::new(member).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     ATTR_LINK.replace_all(text, |c: &regex::Captures| if dropped.contains(&resolve(&base, attr_value(c))) { String::new() } else { c[0].to_owned() }).into_owned()
 }
 

@@ -17,8 +17,9 @@ use crate::{Category, FileReport, Severity};
 use regex::Regex;
 use roxmltree::{Document, Node};
 
+use htmlkit::url_parser::unquote;
+use sysdeps::zip_opener::zip_entry_name;
 use sysdeps::zip_opener::{Zip, open_zip};
-use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 
 use super::security_checker::Limits;
 use super::structure_checker::{ISSUE_MEMBER_UNREADABLE, ISSUE_TO_CODE, is_markup, parse_xml, rootfile_path, spine_members};
@@ -120,11 +121,11 @@ fn elements<'a, 'i: 'a>(doc: &'a Document<'i>, ns: &'static str, name: &'static 
     doc.descendants().filter(move |n| n.is_element() && n.tag_name().name() == name && n.tag_name().namespace() == Some(ns))
 }
 
-/// OPF 디렉토리 기준으로 href를 ZIP 멤버 이름으로 바꾼다. 조각(`#…`)은 뗀다. 파일 부분이 없으면 None.
+/// OPF 디렉토리 기준으로 href를 ZIP 멤버 이름으로 바꾼다. 조각(`#…`)은 뗀다. 파일 부분이 없거나 압축 파일 밖이면 None.
 fn resolve(opf_dir: &str, href: &str) -> Option<String> {
     let target = unquote(href);
     let file = target.split('#').next().unwrap_or("");
-    (!file.is_empty()).then(|| posix_normpath(&posix_join(opf_dir, file)))
+    if file.is_empty() { None } else { zip_entry_name(Path::new(opf_dir).join(file)) }
 }
 
 /// EpubDiagnose.js `findUndeclaredPrefixes`: 쓰였지만 `xmlns:`로 선언되지 않은 접두사.
@@ -143,7 +144,7 @@ fn undeclared_prefixes(text: &str) -> Vec<String> {
 
 /// OPF를 읽어 규칙을 적용하고, 이어질 ZIP 읽기에 필요한 계획을 돌려준다.
 fn analyze_opf(opf_bytes: &[u8], opf_path: &str, name_set: &HashSet<&str>, sink: &mut Sink) -> OpfPlan {
-    let mut plan = OpfPlan { opf_dir: posix_dirname(opf_path), ..OpfPlan::default() };
+    let mut plan = OpfPlan { opf_dir: Path::new(opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned(), ..OpfPlan::default() };
     let text = String::from_utf8_lossy(opf_bytes);
 
     // EpubDiagnose.js `checkOpf`(findUndeclaredPrefixes 호출): 파싱 성공 여부와 무관하게 적용한다.
@@ -727,7 +728,7 @@ fn analyze_xhtml(zip: &mut Zip, bytes: &[u8], member: &str, name_set: &HashSet<&
     let rtl = text.matches('\u{202e}').count() + lower.matches("&#x202e;").count() + text.matches("&#8238;").count();
     let mut hidden = 0;
     if let Some(doc) = &doc {
-        let dir = posix_dirname(member);
+        let dir = Path::new(member).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         let mut selectors: Vec<Selector> = Vec::new();
         // 같은 스타일시트는 문서마다 한 번만 더한다.
         let mut seen_css: HashSet<String> = HashSet::new();

@@ -17,9 +17,10 @@ use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 use std::sync::Arc;
 
+use htmlkit::url_parser::{unquote, urlsplit};
 use serde_json::{Map, Value, json};
 use sysdeps::FsOps;
-use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote, urlparse_path};
+use sysdeps::zip_opener::zip_entry_name;
 use zip::ZipArchive;
 
 mod epub_writer;
@@ -34,14 +35,17 @@ pub use inplace_replacer::{
 
 use xml_tree::Element;
 
-/// Python `_member_path(base, href)`: 상대 `href`를 ZIP 멤버 이름으로 푼다. 바깥을 가리키거나 URL이면 빈 문자열이다.
+/// 상대 `href`를 ZIP 멤버 이름으로 푼다. URL이거나 압축 파일 밖(맨 앞 `/`, 루트를 넘는 `..`)을 가리키면 빈 문자열이다.
 pub fn member_path(base: &str, href: &str) -> String {
-    let (scheme, netloc, path) = urlparse_path(href);
-    if !scheme.is_empty() || !netloc.is_empty() || path.is_empty() {
+    let split = urlsplit(href);
+    if !split.scheme.is_empty() || split.netloc.as_deref().is_some_and(|n| !n.is_empty()) || split.path.is_empty() {
         return String::new();
     }
-    let member = posix_normpath(&posix_join(base, &unquote(&path)));
-    if member.starts_with('/') || member.starts_with("../") { String::new() } else { member }
+    let path = unquote(&split.path);
+    if path.starts_with('/') {
+        return String::new();
+    }
+    zip_entry_name(Path::new(base).join(path)).unwrap_or_default()
 }
 
 pub const OPF_NS: &str = "http://www.idpf.org/2007/opf";
@@ -472,7 +476,7 @@ pub(crate) fn read_package_with<R: Read + Seek>(archive: &mut ZipArchive<R>, hoo
         return Err(CoverError::new("EPUB container가 너무 큽니다").into());
     }
     let opf_path = resolve_opf_path(archive, hooks);
-    let unsafe_path = opf_path.is_empty() || opf_path.starts_with('/') || posix_normpath(&opf_path).starts_with("../");
+    let unsafe_path = opf_path.is_empty() || opf_path.starts_with('/') || zip_entry_name(&opf_path).is_none();
     if unsafe_path || entry_size(archive, &opf_path)? > limits.max_xml_bytes as u64 {
         return Err(CoverError::new("EPUB package를 찾거나 읽을 수 없습니다").into());
     }
@@ -587,11 +591,11 @@ pub(crate) fn find_cover_member_in<R: Read + Seek>(archive: &mut ZipArchive<R>, 
         // 파일명이 정확히 cover인 이미지를 먼저 본다. 부분 일치만 쓰면 incover(속표지)가 OPF 순서상 앞서 표지로 뽑힌다.
         .or_else(|| image_items.iter().find(|el| is_exact_cover_name(el.attr_or("href", ""))))
         .or_else(|| image_items.iter().find(|el| id_href(el).contains("cover")));
-    let opf_dir = posix_dirname(&opf_path);
+    let opf_dir = Path::new(&opf_path).parent().unwrap_or(Path::new(""));
     if let Some(chosen) = chosen {
         let unquoted = unquote(chosen.attr_or("href", ""));
         let href = unquoted.split('#').next().unwrap_or("").split('?').next().unwrap_or("");
-        return Some(if opf_dir.is_empty() { posix_normpath(href) } else { posix_normpath(&posix_join(&opf_dir, href)) });
+        return zip_entry_name(opf_dir.join(href));
     }
     cover_pages.extend(
         page_items.iter().filter(|el| (!meta_cover_id.is_empty() && el.attr("id") == Some(meta_cover_id.as_str())) || id_href(el).contains("cover")).map(|el| el.attr_or("href", "").to_string()),
@@ -606,7 +610,7 @@ pub(crate) fn find_cover_member_in<R: Read + Seek>(archive: &mut ZipArchive<R>, 
             continue;
         }
         seen.push(page_href.clone());
-        if let Some(member) = first_image_in_page(archive, &opf_dir, &page_href, file_size) {
+        if let Some(member) = first_image_in_page(archive, opf_dir.to_str().unwrap_or(""), &page_href, file_size) {
             return Some(member);
         }
     }
@@ -633,7 +637,7 @@ fn first_image_in_page<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_dir: &st
             "image" => el.attr("href").filter(|h| !h.is_empty()).or_else(|| el.attr_ns(xml_tree::XLINK_NS, "href")).unwrap_or("").to_string(),
             _ => continue,
         };
-        if let Some(member) = existing_member_path(archive, &posix_dirname(&page_member), &href) {
+        if let Some(member) = existing_member_path(archive, Path::new(&page_member).parent().and_then(Path::to_str).unwrap_or(""), &href) {
             return Some(member);
         }
     }
@@ -663,8 +667,8 @@ fn find_first_spine_image<R: Read + Seek>(archive: &mut ZipArchive<R>, hooks: &E
             _ => {}
         }
     }
-    let opf_dir = posix_dirname(&opf_path);
-    spine_ids.into_iter().filter_map(|id| pages.get(id).copied()).take(FALLBACK_COVER_PAGES).find_map(|href| first_image_in_page(archive, &opf_dir, href, &|_| None))
+    let opf_dir = Path::new(&opf_path).parent().and_then(Path::to_str).unwrap_or("");
+    spine_ids.into_iter().filter_map(|id| pages.get(id).copied()).take(FALLBACK_COVER_PAGES).find_map(|href| first_image_in_page(archive, opf_dir, href, &|_| None))
 }
 
 /// `member_path`에 더해 ZIP에 실제로 있는 멤버만 돌려준다.

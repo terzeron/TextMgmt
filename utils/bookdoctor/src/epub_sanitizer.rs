@@ -13,9 +13,10 @@ use std::sync::LazyLock;
 
 use crate::magic_sniffer::{Sniffed, sniff};
 use crate::{Category, Severity};
+use htmlkit::url_parser::unquote;
 use htmlkit::{decode_entities, text_of};
 use regex::Regex;
-use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
+use sysdeps::zip_opener::zip_entry_name;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -776,7 +777,7 @@ pub(crate) fn package_names(members: &[Member]) -> Result<BTreeSet<String>, Stri
                 .map_err(|e| format!("META-INF/container.xml을 해석할 수 없다: {e}"))?;
             for root in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "rootfile") {
                 let raw = root.attribute("full-path").unwrap_or("");
-                let found: Vec<String> = [posix_normpath(raw), posix_normpath(&unquote(raw))].into_iter().filter(|p| existing.contains(p.as_str())).collect();
+                let found: Vec<String> = [zip_entry_name(raw), zip_entry_name(unquote(raw))].into_iter().flatten().filter(|p| existing.contains(p.as_str())).collect();
                 if found.is_empty() {
                     return Err(format!("container.xml이 가리키는 패키지 문서가 없다: {raw}"));
                 }
@@ -815,10 +816,10 @@ fn declared_media(members: &[Member], packages: &BTreeSet<String>) -> Result<BTr
     for m in members.iter().filter(|m| packages.contains(&m.name)) {
         let text = package_text(m)?;
         let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("{}: {e}", m.name))?;
-        let base = posix_dirname(&m.name);
+        let base = Path::new(&m.name).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         for item in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "item") {
             let (Some(href), Some(media)) = (item.attribute("href"), item.attribute("media-type")) else { continue };
-            map.insert(posix_normpath(&posix_join(&base, unquote(href).split('#').next().unwrap_or(""))), base_media(media));
+            map.insert(zip_entry_name(Path::new(&base).join(unquote(href).split('#').next().unwrap_or(""))).unwrap_or_default(), base_media(media));
         }
     }
     Ok(map)
@@ -854,12 +855,12 @@ fn classify(name: &str, data: &[u8], media: Option<&str>, is_package: bool) -> O
 
 /// OPF에서 지운 멤버의 manifest 항목, 원격·위험 항목, 낡은 `scripted`·`remote-resources` 선언을 지운다.
 fn rewrite_opf(text: &str, opf_name: &str, removed: &BTreeSet<String>, changes: &mut Changes) -> String {
-    let base = posix_dirname(opf_name);
+    let base = Path::new(opf_name).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     let pruned = OPF_ITEM.replace_all(text, |c: &regex::Captures| {
         let item = &c[0];
         let Some(h) = ATTR_HREF.captures(item) else { return item.to_owned() };
         let href = h.get(1).or_else(|| h.get(2)).map_or("", |m| m.as_str());
-        let resolved = posix_normpath(&posix_join(&base, unquote(href).split('#').next().unwrap_or("")));
+        let resolved = zip_entry_name(Path::new(&base).join(unquote(href).split('#').next().unwrap_or(""))).unwrap_or_default();
         if removed.contains(&resolved) || !keep_url(href, true) {
             changes.add("manifest 항목");
             String::new()
@@ -975,13 +976,13 @@ pub(crate) fn dangling(members: &[Member]) -> Result<(usize, usize), String> {
     for m in members.iter().filter(|m| packages.contains(&m.name)) {
         let text = package_text(m)?;
         let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("{}: OPF를 해석할 수 없다: {e}", m.name))?;
-        let base = posix_dirname(&m.name);
+        let base = Path::new(&m.name).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         let mut ids = BTreeSet::new();
         for item in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "item") {
             ids.insert(item.attribute("id").unwrap_or("").to_owned());
             let href = item.attribute("href").unwrap_or("");
             if keep_url(href, true) && scheme_of(&normalize_url(href)).is_none() {
-                let resolved = posix_normpath(&posix_join(&base, unquote(href).split('#').next().unwrap_or("")));
+                let resolved = zip_entry_name(Path::new(&base).join(unquote(href).split('#').next().unwrap_or(""))).unwrap_or_default();
                 if !names.contains(resolved.as_str()) {
                     missing += 1;
                 }

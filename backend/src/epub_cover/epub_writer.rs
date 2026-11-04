@@ -14,7 +14,7 @@ use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 use super::member_path;
 use super::xml_tree::{self, Element, Node, XHTML_NS};
 use super::{CoverError, EpubCoverHooks, FResult, Fail, OPF_NS, entry_names, entry_size, find_cover_member_in, has_entry, inspect_archive, read_entry, read_package_with};
-use text_extractor::path::{posix_dirname as dirname, posix_ext as ext, posix_join as join};
+use sysdeps::zip_opener::zip_entry_name;
 
 /// 추가·교체할 멤버. 넣은 순서를 지킨다(Python `dict`).
 #[derive(Default, Debug)]
@@ -103,7 +103,7 @@ pub fn remove_tool_covers(opf_path: &str, manifest: &mut Element, metadata: &Ele
             let href = format!("{identifier}{suffix}");
             let matches = |e: &Element| e.attr("id") == Some(identifier.as_str()) && e.attr("href") == Some(href.as_str());
             if manifest.child_elements().any(matches) {
-                obsolete.insert(join(&dirname(opf_path), &href));
+                obsolete.insert(zip_entry_name(Path::new(opf_path).parent().unwrap_or(Path::new("")).join(&href)).unwrap_or_default());
                 manifest.remove_children_where(matches);
                 spine.remove_children_where(|r| r.attr("idref") == Some(identifier.as_str()));
             }
@@ -148,7 +148,7 @@ static CSS_URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"url\(\s*['"]?([
 
 /// 문서가 가리키는 멤버 경로(`references`). 모든 속성값과 CSS `url()`을 본다.
 fn references(name: &str, document: Option<&Element>, data: &[u8]) -> BTreeSet<String> {
-    let base = dirname(name);
+    let base = Path::new(name).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     let mut hrefs: Vec<String> = Vec::new();
     if let Some(document) = document {
         for element in document.descendants() {
@@ -277,7 +277,7 @@ fn rename_to_xhtml_span(element: &mut Element) {
 pub fn detach_publisher_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_path: &str, package: &mut Element, removing: bool, hooks: &EpubCoverHooks) -> FResult<Detached> {
     let empty = || Ok((BTreeSet::new(), Vec::new()));
     let Some(member) = find_cover_member_in(archive, hooks, &|_| None).filter(|m| !m.is_empty()) else { return empty() };
-    let base = dirname(opf_path);
+    let base = Path::new(opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     let (items, cover_ids, first_id, cover_pages) = {
         let manifest = package.find(OPF_NS, "manifest").ok_or_else(|| Fail::lib("manifest 없음"))?;
         let metadata = package.find(OPF_NS, "metadata").ok_or_else(|| Fail::lib("metadata 없음"))?;
@@ -328,7 +328,7 @@ pub fn detach_publisher_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_p
         }
         let all = document.descendants();
         let body = all.iter().copied().find(|e| local_is(e, "body")).unwrap_or(document);
-        let page_dir = dirname(&doc.name);
+        let page_dir = Path::new(&doc.name).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         let image_refs: Vec<String> = body
             .descendants()
             .into_iter()
@@ -356,7 +356,7 @@ pub fn detach_publisher_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_p
             continue;
         }
         let Some(document) = doc.document.as_mut() else { return Err(CoverError::new(SHARED_PAGE).into()) };
-        let page_dir = dirname(&doc.name);
+        let page_dir = Path::new(&doc.name).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         let mut has_links = false;
         for element in document.descendants() {
             for attr in &element.attrs {
@@ -402,7 +402,7 @@ pub fn detach_publisher_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_p
         if !is_ncx && !is_nav {
             continue;
         }
-        let page_dir = dirname(&doc.name);
+        let page_dir = Path::new(&doc.name).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         let mut changed = false;
         if is_ncx {
             // 문서 요소 아래로 내려가며 정리한다. 루트 자신은 목차 항목이 아니다.
@@ -487,12 +487,12 @@ pub fn read_previous_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_path
     if entry_size(archive, &member)? > hooks.limits().max_image_bytes as u64 {
         return Ok(None);
     }
-    let base = dirname(opf_path);
+    let base = Path::new(opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     let media_type = manifest.child_elements().find(|e| member_path(&base, e.attr_or("href", "")) == member).map(|e| e.attr_or("media-type", "").to_string()).unwrap_or_default();
     if !media_type.starts_with("image/") {
         return Ok(None);
     }
-    let suffix = ext(&member).to_lowercase();
+    let suffix = Path::new(&member).extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default().to_lowercase();
     static SUFFIX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\.[a-z0-9]{1,5}$").expect("정규식"));
     let suffix = if SUFFIX.is_match(&suffix) { suffix } else { ".jpg".to_string() };
     let data = read_entry(archive, &member)?;
@@ -526,7 +526,7 @@ pub fn stage_cover(source: &File, destination: &Path, image: &[u8], hooks: &Epub
     {
         let mut original = ZipArchive::new(source)?;
         let (opf_path, mut package) = read_package_with(&mut original, hooks)?;
-        let base = dirname(&opf_path);
+        let base = Path::new(&opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         let missing = || Fail::from(CoverError::new("EPUB manifest, metadata 또는 spine이 없습니다"));
         let version3 = package.attr_or("version", "").starts_with('3');
         let previous = {
@@ -543,7 +543,7 @@ pub fn stage_cover(source: &File, destination: &Path, image: &[u8], hooks: &Epub
         let digest = digest16(image);
         let (cover_id, page_id) = (format!("tm-cover-{digest}"), format!("tm-cover-page-{digest}"));
         let (cover_href, page_href) = (format!("{cover_id}.jpg"), format!("{page_id}.xhtml"));
-        let (cover_member, page_member) = (join(&base, &cover_href), join(&base, &page_href));
+        let (cover_member, page_member) = (zip_entry_name(Path::new(&base).join(&cover_href)).unwrap_or_default(), zip_entry_name(Path::new(&base).join(&page_href)).unwrap_or_default());
         let existing_names: BTreeSet<String> = entry_names(&original).into_iter().filter(|n| !obsolete.contains(n)).collect();
         let parts = sections(&mut package);
         let (Some(manifest), Some(metadata), Some(spine)) = (parts.manifest, parts.metadata, parts.spine) else { return Err(missing()) };
@@ -586,7 +586,8 @@ pub fn stage_cover(source: &File, destination: &Path, image: &[u8], hooks: &Epub
             let plate_digest = digest16(&previous_data);
             let (plate_id, plate_page_id) = (format!("tm-plate-{plate_digest}"), format!("tm-plate-page-{plate_digest}"));
             let (plate_href, plate_page_href) = (format!("{plate_id}{suffix}"), format!("{plate_page_id}.xhtml"));
-            let (plate_member, plate_page_member) = (join(&base, &plate_href), join(&base, &plate_page_href));
+            let (plate_member, plate_page_member) =
+                (zip_entry_name(Path::new(&base).join(&plate_href)).unwrap_or_default(), zip_entry_name(Path::new(&base).join(&plate_page_href)).unwrap_or_default());
             let mut taken: BTreeSet<String> = existing_ids;
             taken.extend(existing_names);
             taken.extend([cover_id.clone(), page_id.clone(), cover_member.clone(), page_member.clone()]);
@@ -631,14 +632,14 @@ pub fn add_image_page(
     let existing_ids: BTreeSet<String> = manifest.child_elements().filter_map(|i| i.attr("id").map(str::to_string)).collect();
     let mut existing_names = original_names.clone();
     existing_names.extend(added.names());
-    let base = dirname(opf_path);
+    let base = Path::new(opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     // 같은 이미지를 여러 곳에 넣을 수 있도록 겹치면 번호를 붙인다.
     let mut chosen: Option<(String, String, String, String, String, String)> = None;
     for serial in 1..1000 {
         let token = if serial == 1 { digest.clone() } else { format!("{digest}-{serial}") };
         let (image_id, page_id) = (format!("{prefix}-{token}"), format!("{prefix}-page-{token}"));
         let (image_href, page_href) = (format!("{image_id}{suffix}"), format!("{page_id}.xhtml"));
-        let (image_member, page_member) = (join(&base, &image_href), join(&base, &page_href));
+        let (image_member, page_member) = (zip_entry_name(Path::new(&base).join(&image_href)).unwrap_or_default(), zip_entry_name(Path::new(&base).join(&page_href)).unwrap_or_default());
         if !existing_ids.contains(&image_id) && !existing_ids.contains(&page_id) && !existing_names.contains(&image_member) && !existing_names.contains(&page_member) {
             chosen = Some((image_id, page_id, image_href, page_href, image_member, page_member));
             break;
@@ -729,11 +730,11 @@ pub fn add_split_image(opf_path: &str, manifest: &mut Element, original_names: &
     let existing_ids: BTreeSet<String> = manifest.child_elements().filter_map(|i| i.attr("id").map(str::to_string)).collect();
     let mut existing_names = original_names.clone();
     existing_names.extend(added.names());
-    let base = dirname(opf_path);
+    let base = Path::new(opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     for serial in 1..1000 {
         let token = if serial == 1 { digest.clone() } else { format!("{digest}-{serial}") };
         let image_id = format!("tm-split-{token}");
-        let image_member = join(&base, &format!("{image_id}{suffix}"));
+        let image_member = zip_entry_name(Path::new(&base).join(format!("{image_id}{suffix}"))).unwrap_or_default();
         if !existing_ids.contains(&image_id) && !existing_names.contains(&image_member) {
             manifest.push_child(new_item(manifest, &[("id", &image_id), ("href", &format!("{image_id}{suffix}")), ("media-type", media_type)]));
             added.insert(&image_member, image.to_vec());

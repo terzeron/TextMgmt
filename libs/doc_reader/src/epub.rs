@@ -12,10 +12,11 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use ego_tree::NodeRef;
+use htmlkit::url_parser::unquote;
 use regex::Regex;
 use scraper::{Html, Node};
+use sysdeps::zip_opener::zip_entry_name;
 use sysdeps::zip_opener::{Zip, open_zip};
-use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
 
 use crate::TEXT_SIZE;
 use crate::markup::{count_lines, get_body_text, is_blank_char_text};
@@ -119,10 +120,11 @@ fn read_with_ebooklib(path: &Path) -> Result<(String, usize), String> {
             opf_file = rootfile.attribute("full-path").ok_or("TypeError: full-path 없음")?.to_owned();
         }
     }
-    let opf_dir = posix_dirname(&opf_file);
+    let opf_dir = Path::new(&opf_file).parent().map(Path::to_path_buf).unwrap_or_default();
 
     // OPF
-    let opf_bytes = read_member(&mut zip, &posix_normpath(&opf_file)).map_err(|_| "Can not find container file".to_owned())?;
+    let opf_name = zip_entry_name(&opf_file).ok_or("Can not find container file")?;
+    let opf_bytes = read_member(&mut zip, &opf_name).map_err(|_| "Can not find container file".to_owned())?;
     let (opf_text, ()) = parse_xml(&opf_bytes)?;
     let opf = xml_doc(&opf_text)?;
     let root = opf.root_element();
@@ -159,7 +161,7 @@ fn read_with_ebooklib(path: &Path) -> Result<(String, usize), String> {
         let is_xhtml = media_type == Some(XHTML_MEDIA_TYPE);
         let is_nav = is_xhtml && properties.contains(&"nav");
         // nav 항목만 href를 풀지 않은 채로 멤버를 찾는다(ebooklib의 동작).
-        let member_name = if is_nav { posix_normpath(&posix_join(&opf_dir, href)) } else { posix_normpath(&posix_join(&opf_dir, &file_name)) };
+        let member_name = zip_entry_name(opf_dir.join(if is_nav { href } else { file_name.as_str() })).ok_or_else(|| format!("KeyError: {href}"))?;
         if !names.contains(&member_name) {
             return Err(format!("KeyError: {member_name}"));
         }
@@ -171,7 +173,7 @@ fn read_with_ebooklib(path: &Path) -> Result<(String, usize), String> {
     let nav_item = items.iter().find(|i| i.is_nav);
     if let Some(toc) = spine.attribute("toc").filter(|t| !t.is_empty()) {
         let item = items.iter().find(|i| i.id.as_deref() == Some(toc)).ok_or("AttributeError: ncx 항목 없음")?;
-        let ncx_name = posix_normpath(&posix_join(&opf_dir, &item.file_name));
+        let ncx_name = zip_entry_name(opf_dir.join(&item.file_name)).ok_or("Can not find ncx file.")?;
         let ncx_bytes = read_member(&mut zip, &ncx_name).map_err(|_| "Can not find ncx file.".to_owned())?;
         validate_ncx(&ncx_bytes)?;
     }
@@ -179,11 +181,10 @@ fn read_with_ebooklib(path: &Path) -> Result<(String, usize), String> {
         let nav_bytes = read_member(&mut zip, &nav.member)?;
         let toc_parsed = spine.attribute("toc").is_some_and(|t| !t.is_empty());
         let nav_text = String::from_utf8_lossy(&nav_bytes).into_owned();
-        let base = posix_dirname(&nav.file_name);
         if !toc_parsed {
-            validate_nav(&nav_text, &base, "toc")?;
+            validate_nav(&nav_text, "toc")?;
         }
-        validate_nav(&nav_text, &base, "page-list")?;
+        validate_nav(&nav_text, "page-list")?;
     }
 
     // 본문
@@ -237,7 +238,7 @@ fn element_children<'a>(node: NodeRef<'a, Node>, name: &str) -> Vec<NodeRef<'a, 
 }
 
 /// nav 문서를 읽다 예외가 날 상황인지 본다(`_parse_nav`). `kind`는 `toc` 또는 `page-list`.
-fn validate_nav(markup: &str, _base: &str, kind: &str) -> Result<(), String> {
+fn validate_nav(markup: &str, kind: &str) -> Result<(), String> {
     if markup.trim().is_empty() {
         return Err("ParserError: Document is empty".into());
     }

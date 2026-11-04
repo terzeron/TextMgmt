@@ -8,7 +8,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 use super::BookManager;
-use text_extractor::path::{posix_join, posix_normpath, unquote};
+use htmlkit::url_parser::unquote;
+use sysdeps::zip_opener::zip_entry_name;
 
 /// 색인 대상 확장자.
 pub const INDEXABLE_FILE_TYPES: [&str; 17] = ["txt", "epub", "pdf", "docx", "doc", "hwp", "rtf", "html", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg", "cbz"];
@@ -79,8 +80,9 @@ impl BookManager {
             let relative = self.resolve_path(path).and_then(|p| self.resolved_root().map(|root| (p, root))).ok().and_then(|(p, root)| relative_to(&p, &root));
             return relative.unwrap_or_else(|| file_path.trim_start_matches('/').to_string());
         }
-        let normalized = posix_normpath(&file_path.replace('\\', "/"));
-        if normalized == "." { String::new() } else { normalized }
+        // 책 루트 기준 상대 경로라 zip 항목 이름과 같은 규칙으로 정규화한다. 루트 밖으로 나가면 원문을 남겨 어떤 파일과도 맞지 않게 한다.
+        let slashed = file_path.replace('\\', "/");
+        zip_entry_name(&slashed).unwrap_or(slashed)
     }
 
     /// 카테고리 이름 검사. `with_category_name_check`로 바꾼 검사가 파일시스템 오류를 내면 `Err`다.
@@ -221,16 +223,16 @@ fn resolve_lenient(path: &Path) -> std::path::PathBuf {
     }
 }
 
-/// `unquote(href).split("#")[0].split("?")[0]`.
+/// 퍼센트 인코딩을 풀고 `#` 조각과 `?` 질의를 뗀 href.
 pub fn clean_href(href: &str) -> String {
     let decoded = unquote(href);
     let no_fragment = decoded.split('#').next().unwrap_or("");
     no_fragment.split('?').next().unwrap_or("").to_string()
 }
 
-/// ZIP 안 경로: `normpath(join(dir, href))`, `dir`이 비면 `normpath(href)`.
+/// `dir` 기준 `href`의 ZIP 항목 이름. 압축 파일 밖을 가리키면 빈 문자열이라 어떤 항목과도 맞지 않는다.
 pub fn zip_path(dir: &str, href: &str) -> String {
-    if dir.is_empty() { posix_normpath(href) } else { posix_normpath(&posix_join(dir, href)) }
+    zip_entry_name(Path::new(dir).join(href)).unwrap_or_default()
 }
 
 /// 상대 경로 문자열. 접두사를 못 떼면 `None`.

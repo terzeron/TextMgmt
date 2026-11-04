@@ -195,3 +195,27 @@ pub fn quote(text: &str) -> String {
 pub fn urlencode(pairs: &[(&str, &str)]) -> String {
     pairs.iter().map(|(k, v)| format!("{}={}", percent_encode(k, unreserved, true), percent_encode(v, unreserved, true))).collect::<Vec<_>>().join("&")
 }
+
+/// 퍼센트 인코딩을 푼다. 잘못된 `%` 조각은 그대로 두고, 풀린 바이트가 UTF-8이 아니면 U+FFFD로 바꾼다.
+pub fn unquote(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2]))
+        {
+            out.push(high * 16 + low);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(c: u8) -> Option<u8> {
+    (c as char).to_digit(16).map(|d| d as u8)
+}

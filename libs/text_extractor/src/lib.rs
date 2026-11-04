@@ -4,15 +4,12 @@
 //! - 본문 발췌: [`extract_txt_text`], [`extract_epub_text`], [`extract_epub_text_limited`], [`extract_document_text`]
 //! - 인코딩 판별·디코딩: [`decode_best`], [`decode_korean_ignore`], [`decode_utf8_ignore`]. 텍스트 인코딩을 추정하는 휴리스틱 로직이다
 //! - 한국어 판정: [`korean_likeness`]
-//! - [`path`]: EPUB·OOXML 내부 경로용 Python `posixpath`/`urllib` 호환 도구
 //!
 //! 인코딩 판별은 실제 코퍼스의 오판 사례로 네 번 고쳐 잡은 휴리스틱이다. 다시 쓰지 말 것:
 //!   - "한글이 하나라도 나오면 그 인코딩 채택"은 정상 CP949 소설 1,856건을 오판했다
 //!   - 한글 비율 하한이 없으면 영문 OCR 문서를 한글 잡음 60자로 판정한다
 //!   - UTF-16을 빼면 97건을 못 읽는다
 //!   - EPUB은 첫 문서가 목차인 경우가 있어 건너뛰어야 한다
-
-pub mod path;
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};

@@ -5,8 +5,8 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::{Category, FileReport, Severity};
+use htmlkit::url_parser::unquote;
 use sysdeps::zip_opener::open_zip;
-use text_extractor::path::unquote;
 
 use super::ooxml_checker::{Member, check_xml_attacks, classify_member, parse, preview, push_once, read_xml_part};
 use crate::epub::security_checker::{Limits, read_limited};

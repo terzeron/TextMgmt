@@ -15,7 +15,7 @@ docs/       문서
 
 | crate | 용도 |
 | --- | --- |
-| `text_extractor` | 책 파일(TXT·EPUB) 본문 앞뒤 발췌(`extract_*`), 인코딩 판별, 한국어 판정, EPUB 내부 경로 도구(`path`). `doc_reader`의 아래 계층이다 |
+| `text_extractor` | 책 파일(TXT·EPUB) 본문 앞뒤 발췌(`extract_*`), 인코딩 판별 휴리스틱, 한국어 판정. `doc_reader`의 아래 계층이다 |
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. backend `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
@@ -23,7 +23,7 @@ docs/       문서
 | `db` | MySQL 접근 추상화와 카테고리 매핑 저장소(`category_mapping`) |
 | `classifier` | 도서 분류기 껍데기: backend 분류 제안이 쓰는 `Classify`·`BookClassifierApi` trait와 모델 단독 어댑터. 구현은 없어서 backend는 카테고리 매핑 키워드만으로 제안한다 |
 | `file_record` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리, 색인 제외 디렉토리 규칙(`layout`). loader와 backend가 함께 쓴다 |
-| `sysdeps` | 시계, 파일시스템, 외부 명령, HTTP 같은 시스템 능력의 trait와 실제 구현, ZIP 열기(`zip_opener`). 파서 시간 상한(`timeout`)과 PDF worker(`tm-pdf-worker`)를 포함한다 |
+| `sysdeps` | 시계, 파일시스템, 외부 명령, HTTP 같은 시스템 능력의 trait와 실제 구현, ZIP 열기와 항목 이름 정규화(`zip_opener`). 파서 시간 상한(`timeout`)과 PDF worker(`tm-pdf-worker`)를 포함한다 |
 | `isbn` | 파일에서 ISBN 추출(TXT·EPUB·PDF·DJVU·HWP) |
 | `hwp3_parser` | HWP 3.x 텍스트 추출. 생성된 HNC→유니코드 매핑 표(`tables`)를 포함한다 |
 
@@ -48,6 +48,7 @@ docs/       문서
 - **라이브러리와 backend는 도구에 의존하지 않는다.** 공유할 코드는 `libs/`로 올린다.
 - **한 crate만 쓰는 코드는 그 crate 안에 둔다.** 사용자가 둘 이상이 될 때 `libs/`로 올린다.
 - `bookstore`는 공개 서점 HTTPS를 사용한다. ES client도 HTTP와 인증서 검증 HTTPS를 지원하며, 사설 CA는 `TM_ES_CA_CERT` PEM 경로로 지정한다. 인증서 검증을 끄는 우회로는 두지 않는다.
+- ZIP 안 경로는 zip crate 규칙을 따른다. `std::path::Path`로 잇고 `sysdeps::zip_opener::zip_entry_name`으로 항목 이름을 만든다(`.` 무시, `..`은 앞 조각 제거, 루트 밖이면 `None`). 별도 경로 모듈은 두지 않는다.
 - ZIP은 `sysdeps::zip_opener::open_zip`으로 연다. `zip` 크레이트 기본 설정(`Detect`)은 파일 전체를 훑어 느리다
   (1.5MB EPUB 하나에 읽기 1만 3천 번, 48ms). `open_zip`은 `Known(0)`으로 먼저 열고(0.2ms) 실패하면 `Detect`로 다시 연다.
 

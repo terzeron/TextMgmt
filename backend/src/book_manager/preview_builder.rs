@@ -18,7 +18,6 @@ use zip::result::ZipError;
 use super::epub_inspector::{Edit, NCX_NS, OPF_NS, XML_DECLARATION, apply_edits, children_named, declare_unbound_prefixes, find_el, parse_xml, read_member, xml_text, zip_names};
 use super::path_validator::{clean_href, zip_path};
 use super::{BookManager, BookResponse};
-use text_extractor::path::posix_dirname;
 
 const HTML_VIEWER_CSP: &str = "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' blob:;";
 /// 뷰어 이미지 축소를 시도하는 최소 크기(바이트).
@@ -372,7 +371,7 @@ impl BookManager {
             log::warn!("EPUB preview: OPF file not found for book_id={book_id}");
             return Err(PreviewFailure::Response(text_response(422, "EPUB structure error: OPF file not found")));
         };
-        let opf_dir = posix_dirname(&opf_path);
+        let opf_dir = Path::new(&opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         let opf_bytes = match read_member(&mut zin, &opf_path) {
             Ok(bytes) => bytes,
             Err(ZipError::FileNotFound) => {
@@ -491,7 +490,7 @@ impl BookManager {
                         continue;
                     }
                 };
-                let item_dir = posix_dirname(zp);
+                let item_dir = Path::new(zp).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
                 let html = Html::parse_document(&content);
                 for element in html.select(&selector) {
                     let value = element.value();
@@ -520,7 +519,7 @@ impl BookManager {
                 match read_member(&mut zin, zp) {
                     Ok(bytes) => {
                         let css = String::from_utf8_lossy(&bytes).into_owned();
-                        let css_dir = posix_dirname(zp);
+                        let css_dir = Path::new(zp).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
                         for m in css_url_pattern().captures_iter(&css) {
                             if !m[1].starts_with("data:") {
                                 let clean = clean_href(&m[1]);
@@ -617,7 +616,7 @@ impl BookManager {
                 let lower = zp.to_lowercase();
                 if zp.ends_with(".css") && !excluded_fonts.is_empty() {
                     let css = String::from_utf8_lossy(&data).into_owned();
-                    let css_dir = posix_dirname(zp);
+                    let css_dir = Path::new(zp).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
                     let stripped = font_face_pattern().replace_all(&css, |m: &regex::Captures| {
                         let missing = css_url_pattern().captures_iter(&m[0]).any(|u| !files_to_include.contains(&zip_path(&css_dir, &clean_href(&u[1]))));
                         if missing { String::new() } else { m[0].to_string() }
@@ -742,7 +741,7 @@ impl BookManager {
 fn filter_ncx(raw: &[u8], zp: &str, files_to_include: &BTreeSet<String>) -> Option<Vec<u8>> {
     let text = xml_text(raw);
     let doc = parse_xml(&text).ok()?;
-    let ncx_dir = posix_dirname(zp);
+    let ncx_dir = Path::new(zp).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     let mut edits: Vec<Edit> = Vec::new();
     for nav in doc.descendants().filter(|n| n.is_element() && n.tag_name().namespace() == Some(NCX_NS) && n.tag_name().name() == "navPoint") {
         if let Some(content) = children_named(nav, NCX_NS, "content").next() {

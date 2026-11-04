@@ -21,9 +21,9 @@ use zip::result::ZipError;
 use super::BookManager;
 use super::path_validator::{clean_href, zip_path};
 use super::temp_file_maker::TempDir;
+use htmlkit::url_parser::unquote;
 use serde_json::Value;
 use std::borrow::Cow;
-use text_extractor::path::{posix_dirname, unquote};
 
 pub const OPF_NS: &str = "http://www.idpf.org/2007/opf";
 pub const CONTAINER_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
@@ -254,7 +254,7 @@ impl BookManager {
                 .filter(|n| n.is_element() && n.tag_name().namespace() == Some(OPF_NS) && n.tag_name().name() == "item")
                 .filter_map(|n| Some((n.attribute("id")?, n.attribute("href").unwrap_or(""))))
                 .collect();
-            let base = posix_dirname(&opf_path);
+            let base = Path::new(&opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
             let names = zip_names(&mut zin);
             let mut count = 0;
             for itemref in children_named(spine, OPF_NS, "itemref") {
@@ -461,7 +461,7 @@ fn validate_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String
     };
     let opf_text = declare_unbound_prefixes(&xml_text(&opf_bytes));
     let doc = parse_xml(&opf_text).map_err(|e| format!("OPF parse error: {e}"))?;
-    let opf_dir = posix_dirname(&opf_path);
+    let opf_dir = Path::new(&opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
 
     // 3) manifest / spine 존재 확인
     let manifest_el = find_el(&doc, OPF_NS, "manifest");
@@ -528,7 +528,7 @@ fn validate_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String
                     edits.extend(toc_attr_range().map(Edit::remove));
                 } else {
                     let ncx = read_member(&mut zin, &toc_zp).map_err(validation)?;
-                    if let Some(pruned) = prune_dead_ncx_navpoints(&ncx, &posix_dirname(&toc_zp), &in_names) {
+                    if let Some(pruned) = prune_dead_ncx_navpoints(&ncx, Path::new(&toc_zp).parent().and_then(Path::to_str).unwrap_or_default(), &in_names) {
                         log::warn!("EPUB validate: removing NCX entries that point to missing documents in {toc_zp}");
                         ncx_replacement = Some((toc_zp, pruned));
                     }

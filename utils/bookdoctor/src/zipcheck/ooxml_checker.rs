@@ -9,9 +9,10 @@ use std::sync::LazyLock;
 use crate::magic_sniffer::{Sniffed, sniff};
 use crate::output_formatter::sanitize_display;
 use crate::{Category, FileReport, Severity};
+use htmlkit::url_parser::unquote;
 use regex::Regex;
+use sysdeps::zip_opener::zip_entry_name;
 use sysdeps::zip_opener::{Zip, open_zip};
-use text_extractor::path::{posix_join, posix_normpath, unquote};
 
 use super::fast_zip_checker::read_failure;
 use crate::epub::security_checker::{Limits, TextEnc, decode_text, read_limited};
@@ -337,10 +338,11 @@ fn resolve_target(rels_name: &str, target: &str) -> String {
     // 소문자 변환은 바이트 길이를 바꿀 수 있으므로(`İ` 등) 길이를 보존하는 ASCII 변환으로 찾고, 원본은 `get`으로 자른다.
     let base = rels_name.to_ascii_lowercase().rfind("/_rels/").and_then(|i| rels_name.get(..i)).map_or(String::new(), str::to_string);
     let target = unquote(target);
+    // 맨 앞 `/`는 패키지 루트 기준이다. 압축 파일 밖을 가리키면 빈 이름이라 어떤 부분과도 맞지 않는다.
     if let Some(rooted) = target.strip_prefix('/') {
-        return posix_normpath(rooted);
+        return zip_entry_name(rooted).unwrap_or_default();
     }
-    posix_normpath(&posix_join(&base, &target))
+    zip_entry_name(Path::new(&base).join(&target)).unwrap_or_default()
 }
 
 /// 관계 파일(`.rels`)을 본다. 외부 참조(원격 템플릿, 외부 객체, UNC)와 내부 관계의 종류(매크로 프로젝트, OLE, ActiveX, 패키지)를 종류로 정한다.

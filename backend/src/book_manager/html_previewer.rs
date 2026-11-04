@@ -12,7 +12,7 @@ use scraper::{Html, Node, StrTendril};
 
 use super::preview_builder::{html_security_headers, text_response};
 use super::{BookManager, BookResponse};
-use text_extractor::path::posix_normpath;
+use sysdeps::zip_opener::zip_entry_name;
 
 /// 뷰어가 내려줄 수 있는 리소스 확장자.
 pub const HTML_VIEWER_RESOURCE_EXTENSIONS: [&str; 21] =
@@ -201,11 +201,11 @@ impl BookManager {
             return text_response(400, "HTML resource preview is only supported for HTML files");
         }
 
-        let normalized = posix_normpath(resource_path);
-        // `normpath("")`은 "."이다. 비었거나 위로 올라가는 경로는 거부한다.
-        if resource_path.is_empty() || normalized == "." || normalized == ".." || normalized.starts_with("../") || resource_path.contains('\0') {
-            return text_response(400, "Invalid resource path");
-        }
+        // 비었거나 HTML 디렉터리 위로 올라가는 경로는 거부한다.
+        let normalized = match zip_entry_name(resource_path) {
+            Some(n) if !n.is_empty() && !resource_path.contains('\0') => n,
+            _ => return text_response(400, "Invalid resource path"),
+        };
         let html_dir = match book.file_path.parent().map(|p| self.resolve_path(p)) {
             Some(Ok(dir)) => dir,
             _ => return text_response(400, "Invalid resource path"),

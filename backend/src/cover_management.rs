@@ -281,7 +281,7 @@ fn now_seconds() -> f64 {
 use crate::truthy;
 
 fn is_epub_name(name: &str) -> bool {
-    text_extractor::path::posix_ext(name).eq_ignore_ascii_case(".epub")
+    Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case("epub"))
 }
 
 fn is_symlink(path: &Path) -> bool {

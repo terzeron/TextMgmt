@@ -2,7 +2,7 @@
 //! 이름이 가리키는 위험은 압축을 푸는 쪽(추출기)이 입는다: 경로 탈출(Zip Slip), 절대 경로, Windows 장치 이름, NTFS 스트림.
 
 use crate::Severity;
-use text_extractor::path::unquote;
+use htmlkit::url_parser::unquote;
 
 /// Windows 예약 장치 이름. 확장자를 떼고 소문자로 비교한다.
 pub const WIN_RESERVED: &[&str] =

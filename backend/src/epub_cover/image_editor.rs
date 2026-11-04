@@ -25,7 +25,6 @@ use super::xml_tree::{self, Element, Node};
 use super::{CoverError, EpubCoverHooks, FResult, Fail, MAX_XML_BYTES, entry_names, entry_size, has_entry, normalize_image_with, read_dimensions, read_entry, read_package_with};
 use crate::image_edit::{Rect, crop_pil};
 use htmlkit::url_parser::quote;
-use text_extractor::path::{posix_dirname as dirname, posix_relpath as relpath};
 
 /// crops 의 idref 에 이 값을 주면 쪽이 아니라 표지 이미지를 자른다(표지 화면은 spine 항목이 아닐 수 있다).
 pub const COVER_TARGET: &str = "@cover";
@@ -132,7 +131,7 @@ fn page_info<R: Read + Seek>(archive: &mut ZipArchive<R>, base: &str, items: &BT
     if index >= images.len() {
         return Err(crop_err(&format!("이미지를 찾을 수 없음: 이 쪽의 {}번째 이미지, 전체 {}개", index + 1, images.len())).into());
     }
-    let page_dir = dirname(&page_member);
+    let page_dir = Path::new(&page_member).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
     let refs: Vec<String> = images.iter().map(|e| member_path(&page_dir, &image_href(e))).collect();
     let image_member = refs[index].clone();
     if image_member.is_empty() || !has_entry(archive, &image_member) {
@@ -503,7 +502,7 @@ fn stage_image_edits(
     {
         let mut original = ZipArchive::new(source)?;
         let (opf_path, mut package) = read_package_with(&mut original, hooks)?;
-        let base = dirname(&opf_path);
+        let base = Path::new(&opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         let missing = || Fail::from(err("EPUB manifest 또는 spine이 없습니다"));
         // 읽기 전용 사본: id → href, spine idref, spine 멤버, 목차·스타일 멤버
         let (items, spine_ids, css_members, toc_members) = {
@@ -615,7 +614,7 @@ fn stage_image_edits(
                 let parts = sections(&mut package);
                 let Some(manifest) = parts.manifest else { return Err(missing()) };
                 let new_member = add_split_image(&opf_path, manifest, &original_names, &mut added, &second, suffix, media_type)?;
-                add_page_edit(&info, "split", Some(relpath(&new_member, &dirname(&info.page_member))));
+                add_page_edit(&info, "split", Some(relative_href(&new_member, Path::new(&info.page_member).parent().unwrap_or(Path::new("")))));
             }
         }
 
@@ -762,6 +761,16 @@ pub fn edit_images_with(path: &Path, expected_revision: &str, backup_dir: &Path,
     result["cover_image"] = Value::Null;
     result["idrefs"] = created;
     Ok(result)
+}
+
+/// `base_dir`에 있는 문서에서 ZIP 항목 `target`을 가리키는 상대 href. 둘 다 ZIP 루트 기준 경로다.
+fn relative_href(target: &str, base_dir: &Path) -> String {
+    let target: Vec<_> = Path::new(target).components().collect();
+    let base: Vec<_> = base_dir.components().collect();
+    let common = target.iter().zip(&base).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<String> = vec!["..".to_owned(); base.len() - common];
+    parts.extend(target[common..].iter().map(|c| c.as_os_str().to_string_lossy().into_owned()));
+    if parts.is_empty() { ".".to_owned() } else { parts.join("/") }
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::BufReader;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use zip::ZipArchive;
 use zip::read::{ArchiveOffset, Config};
@@ -27,3 +27,20 @@ pub fn open_zip(path: &Path) -> Option<Zip> {
 
 /// 멤버 하나에서 읽는 압축 해제 바이트 상한. 작게 압축된 거대 멤버(zip bomb)가 메모리를 먹지 못하게 한다.
 pub const MAX_MEMBER_BYTES: u64 = 16 * 1024 * 1024;
+
+/// 경로를 zip 항목 이름으로 바꾼다. zip crate의 `enclosed_name` 규칙을 따른다:
+/// 조각은 `/`로 잇고, `.`은 버리고, `..`은 앞 조각을 지우고, 맨 앞 `/`는 뗀다.
+/// `..`이 루트 밖으로 나가거나 UTF-8이 아닌 조각이 있으면 `None`이다(압축 파일 밖을 가리키는 경로).
+pub fn zip_entry_name(path: impl AsRef<Path>) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for component in path.as_ref().components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_str()?),
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
+        }
+    }
+    Some(parts.join("/"))
+}
