@@ -9,6 +9,7 @@ use std::sync::Arc;
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::{BookManagerApi};
 use common::es_fake::FakeEsManager;
+use common::log_capture::LogCapture;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -124,3 +125,21 @@ mod mismatch_summary {
         assert!(result["mismatches"].as_array().unwrap().iter().all(|item| item["category"] != "A"));
     }
 }
+
+#[test]
+fn es_failure_in_mismatch_details_returns_an_empty_result_with_the_error_and_logs_it() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    fs::create_dir_all(tmp.path().join("A")).unwrap();
+    es.fail("search_by_category_paged", "es down");
+    let manager = make_manager(tmp.path(), &es);
+    let logs = LogCapture::start(log::Level::Error);
+
+    let details = manager.get_category_mismatch_details("A");
+
+    assert_eq!(details["es_only"], json!([]));
+    assert_eq!(details["fs_count"], json!(0));
+    assert!(details["error"].as_str().is_some_and(|e| e.contains("es down")), "{details}");
+    assert!(logs.text().contains("get_category_mismatch_details 실패: A"), "{}", logs.text());
+}
+

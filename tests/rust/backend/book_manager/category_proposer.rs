@@ -567,6 +567,26 @@ fn test_move_classified_file_preserves_existing_es_metadata() {
 }
 
 #[test]
+fn test_move_classified_file_logs_a_failed_lookup_of_the_existing_es_document_and_still_moves() {
+    let tmp = tmp_dir();
+    let source_dir = tmp.path().join("0_inbox");
+    fs::create_dir_all(&source_dir).unwrap();
+    let source_file = source_dir.join("조회 실패.txt");
+    fs::write(&source_file, "hello").unwrap();
+    let es = FakeEsManager::new();
+    es.fail("search_by_id", "es lookup down");
+    let manager = BookManager::with_deps(deps(tmp.path(), &es).with_file_reader(file_reader(|_path| Ok(json!({"1": make_doc("2_science/조회 실패.txt", "txt")})))));
+    let logs = common::log_capture::LogCapture::start(log::Level::Warn);
+
+    let (result, err) = split(asyncio_runner(manager._move_classified_file(&source_file, "2_science", "book", MoveOpts::default())));
+
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(result.expect("result")["status"], "moved");
+    let logged = logs.text();
+    assert!(logged.contains("기존 ES 문서 조회 실패 (0_inbox/조회 실패.txt)") && logged.contains("es lookup down"), "{logged}");
+}
+
+#[test]
 fn test_match_category_by_keywords_skips_invalid_mapping_entries() {
     // _classify_file_to_top_category가 사라진 뒤에도 이 검증 분기들은 _match_category_by_keywords에
     // 그대로 남아 있다: 문자열이 아닌 카테고리/키워드, 안전하지 않은 카테고리 이름, 빈/중복 키워드.
