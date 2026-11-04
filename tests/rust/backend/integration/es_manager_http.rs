@@ -71,6 +71,11 @@ fn serve(responses: Vec<(u16, String)>) -> (String, mpsc::Receiver<Captured>) {
             let content_length = if request_line.starts_with("HEAD") { String::new() } else { format!("Content-Length: {}\r\n", payload.len()) };
             let payload = if request_line.starts_with("HEAD") { String::new() } else { payload };
             write!(stream, "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n{content_length}Connection: close\r\n\r\n{payload}").unwrap();
+            // 읽지 않은 입력(예: 본문 없는 POST의 chunked 끝 표시)을 남긴 채 닫으면 커널이 RST를 보내 클라이언트가
+            // 응답 대신 "Connection reset"을 받는다. 쓰기를 닫고 상대가 닫을 때까지 남은 입력을 비운다.
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            stream.set_read_timeout(Some(Duration::from_millis(500))).unwrap();
+            while matches!(stream.read(&mut chunk), Ok(n) if n > 0) {}
             tx.send(Captured { request_line, headers, body }).unwrap();
         }
     });
