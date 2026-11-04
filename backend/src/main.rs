@@ -3,7 +3,7 @@
 //! # 구성
 //! - `deps.rs`: `AppDeps`(주입 묶음), `AuthMode`. `traits.rs`: 주입하는 trait와 실제 구현.
 //! - `routes.rs`: 라우트 등록부 `Routes`. `extract.rs`: 인증·JSON·쿼리 추출기. `errors.rs`: 오류 응답과 로깅.
-//! - `auth_routes.rs`, `log_routes.rs`: 라우트 파일 예시. `cors.rs`, `cookies.rs`, `client_info.rs`: 공용 도우미.
+//! - `auth_routes.rs`, `log_routes.rs`: 라우트 파일 예시. `cors.rs`, `cookies.rs`, `extract.rs`: 공용 도우미.
 //!
 //! # 라우트를 붙이는 방법
 //! 1. `src/main/routes_xxx.rs`를 만들고 `pub(super) fn routes() -> Routes`를 하나 둔다.
@@ -19,7 +19,6 @@ use axum::middleware::from_fn;
 use std::sync::Arc;
 
 mod auth_routes;
-mod client_info;
 mod cookies;
 mod cors;
 mod deps;
@@ -41,7 +40,7 @@ mod traits;
 pub use crate::auth::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RoleResolver, observation_hash};
 pub use bookstore::stores::BookstoreSearch;
 pub use crate::view_history_store::MAX_RECENT_VIEWS;
-pub use client_info::{_client_ip, _request_ip_prefix, _request_user_agent, ClientInfo};
+pub use extract::{_client_ip, _request_ip_prefix, _request_user_agent, ClientInfo};
 pub use cookies::{_clear_auth_cookies, _get_cookie_settings, _set_auth_cookies, CustomJSONResponse, ResponseHeaders, custom_jsonable_encoder, is_local_frontend_origin};
 pub use deps::{AppDeps, AuthMode, AuthSlots, BookstoreFactory, RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS, Slot};
 pub use errors::{

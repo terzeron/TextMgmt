@@ -11,8 +11,7 @@ mod alnum_table;
 mod decimal_table;
 mod unicode151;
 
-mod case;
-pub use case::{py_casefold, py_lowercase};
+mod casefold_table;
 use unicode151::py_is_assigned;
 
 /// Python `repr(str)`: 작은따옴표를 기본으로 쓰되 `'`만 있으면 큰따옴표로 감싼다.
@@ -113,4 +112,36 @@ pub fn py_decimal_digit(c: char) -> Option<u8> {
     } else {
         None
     }
+}
+
+// ---- Python 3.13 대소문자 변환: `str.casefold()`(생성 표 기반)와 `str.lower()`. Unicode 15.1 기준이다. ----
+pub fn py_casefold(value: &str) -> String {
+    let mut folded = String::with_capacity(value.len());
+    for character in value.chars() {
+        match casefold_table::CASE_FOLD.binary_search_by_key(&(character as u32), |(codepoint, _)| *codepoint) {
+            Ok(index) => {
+                for &codepoint in casefold_table::CASE_FOLD[index].1 {
+                    folded.push(char::from_u32(codepoint).expect("generated casefold data contains Unicode scalar values"));
+                }
+            }
+            Err(_) => folded.push(character),
+        }
+    }
+    folded
+}
+
+pub fn py_lowercase(value: &str) -> String {
+    let mut lowered = String::with_capacity(value.len());
+    let mut assigned = String::new();
+    for character in value.chars() {
+        if py_is_assigned(character) {
+            assigned.push(character);
+        } else {
+            lowered.push_str(&assigned.to_lowercase());
+            assigned.clear();
+            lowered.push(character);
+        }
+    }
+    lowered.push_str(&assigned.to_lowercase());
+    lowered
 }

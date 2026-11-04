@@ -12,7 +12,6 @@ use serde_json::Value;
 
 use super::calibration;
 use super::export_format::{self, ModelError};
-use super::softmax::{fixed, rank_desc};
 use super::vectorize::{FieldVectorizer, field_text};
 
 /// 분류 모델의 판정 한 건. 설계: docs/rust-test-seams.md 3.12 `Prediction::new(category, confidence, top, reason)`.
@@ -74,7 +73,7 @@ pub fn reset_default_model() {
 
 /// 결정값을 확률로 바꾼다(문서마다 한 행). 온도가 크면 평탄해져 확신도가 내려간다.
 pub fn softmax_confidence(scores: &[Vec<f64>], temperature: f64) -> Vec<Vec<f64>> {
-    scores.iter().map(|row| super::softmax::softmax_confidence(row, temperature)).collect()
+    scores.iter().map(|row| softmax_confidence_row(row, temperature)).collect()
 }
 
 /// 분류기가 모델에 요구하는 능력. 시험에서는 대역으로 바꾼다.
@@ -253,7 +252,7 @@ impl CategoryModel {
     }
 
     fn predict_scores(&self, scores: &[f64], floor: f64, temperature: f64, top_k: usize) -> Prediction {
-        let prob = super::softmax::softmax_confidence(scores, temperature);
+        let prob = softmax_confidence_row(scores, temperature);
         let ranked: Vec<(String, f64)> = rank_desc(scores).into_iter().take(top_k).map(|j| (self.classes[j].clone(), prob[j])).collect();
         let (best_cat, best_p) = ranked[0].clone();
         if best_p < floor {
@@ -284,4 +283,27 @@ impl CategoryModelApi for CategoryModel {
     fn expected_accuracy(&self, confidence: f64) -> Option<f64> {
         CategoryModel::expected_accuracy(self, confidence)
     }
+}
+
+// ---- 결정값 → 확신도. Python `softmax_confidence` 대응. ----
+/// 결정값을 온도로 나눠 softmax 한다. 온도가 1e-6 보다 작으면 1e-6 으로 본다.
+pub fn softmax_confidence_row(scores: &[f64], temperature: f64) -> Vec<f64> {
+    let t = temperature.max(1e-6);
+    let z: Vec<f64> = scores.iter().map(|s| s / t).collect();
+    let max = z.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let e: Vec<f64> = z.iter().map(|v| (v - max).exp()).collect();
+    let sum: f64 = e.iter().sum();
+    e.iter().map(|v| v / sum).collect()
+}
+
+/// 내림차순 순위(동점이면 클래스 번호가 작은 쪽이 앞). Python `np.argsort(-d)` 의 안정 판이다.
+pub fn rank_desc(scores: &[f64]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..scores.len()).collect();
+    order.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]).then(a.cmp(&b)));
+    order
+}
+
+/// Python `f"{x:.{digits}f}"`. 정확히 반으로 갈리는 값은 짝수 쪽으로 반올림한다.
+pub fn fixed(x: f64, digits: usize) -> String {
+    format!("{x:.digits$}")
 }

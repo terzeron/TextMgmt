@@ -60,8 +60,7 @@ use crate::ole::{Entry, EntryKind, OleFile};
 use crate::display::sanitize_display;
 use crate::{Category, FileReport, Severity};
 
-use super::header::FileHeader;
-use super::inflate::{InflateError, decompress};
+use super::{FileHeader, InflateError, decompress};
 
 /// `DocInfo`를 읽는 최대 바이트(압축 입력과 풀린 출력 각각).
 pub const MAX_DOCINFO: usize = 16 * 1024 * 1024;

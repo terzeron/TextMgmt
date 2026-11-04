@@ -52,7 +52,7 @@ pub(super) fn run(args: &Args, io: &mut CliIo<'_>, deps: &Deps) -> Result<i32, S
             model.config["seed"].as_u64().unwrap_or(42),
             io.err,
         )?;
-        crate::shuffle::shuffle(&mut hold, model.config["seed"].as_u64().unwrap_or(42));
+        shuffle(&mut hold, model.config["seed"].as_u64().unwrap_or(42));
         let size = args.number("--sample", 2000.0) as usize;
         hold.truncate(size.saturating_mul(20));
         let source = args.get("--sample-from").unwrap_or("refused");
@@ -141,9 +141,83 @@ fn summarize(rows: &[Value], count: usize, io: &mut CliIo<'_>) -> Result<Value, 
     Ok(json!({"sample":rows.len(),"measured_max_confidence":max,"bands":report,"bookstore_override_below":threshold,"rows":rows}))
 }
 
+// ---- Python random.Random(integer).shuffle와 같은 MT19937 순서. 표본을 바꾸지 않기 위해 사용한다. ----
+struct Random {
+    mt: [u32; 624],
+    index: usize,
+}
+impl Random {
+    fn new(seed: u64) -> Self {
+        let mut r = Self { mt: [0; 624], index: 624 };
+        r.mt[0] = 19650218;
+        for i in 1..624 {
+            r.mt[i] = 1812433253u32.wrapping_mul(r.mt[i - 1] ^ (r.mt[i - 1] >> 30)).wrapping_add(i as u32);
+        }
+        let mut key = vec![seed as u32];
+        if seed >> 32 != 0 {
+            key.push((seed >> 32) as u32);
+        }
+        let (mut i, mut j) = (1, 0);
+        for _ in 0..624 {
+            r.mt[i] = (r.mt[i] ^ (r.mt[i - 1] ^ (r.mt[i - 1] >> 30)).wrapping_mul(1664525)).wrapping_add(key[j]).wrapping_add(j as u32);
+            i += 1;
+            j += 1;
+            if i >= 624 {
+                r.mt[0] = r.mt[623];
+                i = 1;
+            }
+            if j >= key.len() {
+                j = 0;
+            }
+        }
+        for _ in 0..623 {
+            r.mt[i] = (r.mt[i] ^ (r.mt[i - 1] ^ (r.mt[i - 1] >> 30)).wrapping_mul(1566083941)).wrapping_sub(i as u32);
+            i += 1;
+            if i >= 624 {
+                r.mt[0] = r.mt[623];
+                i = 1;
+            }
+        }
+        r.mt[0] = 0x80000000;
+        r
+    }
+    fn next(&mut self) -> u32 {
+        if self.index == 624 {
+            for i in 0..624 {
+                let y = (self.mt[i] & 0x80000000) | (self.mt[(i + 1) % 624] & 0x7fffffff);
+                self.mt[i] = self.mt[(i + 397) % 624] ^ (y >> 1) ^ if y & 1 != 0 { 0x9908b0df } else { 0 };
+            }
+            self.index = 0;
+        }
+        let mut y = self.mt[self.index];
+        self.index += 1;
+        y ^= y >> 11;
+        y ^= (y << 7) & 0x9d2c5680;
+        y ^= (y << 15) & 0xefc60000;
+        y ^= y >> 18;
+        y
+    }
+    fn below(&mut self, n: usize) -> usize {
+        let bits = usize::BITS - n.leading_zeros();
+        loop {
+            let value = if bits <= 32 { (self.next() >> (32 - bits)) as u64 } else { u64::from(self.next()) | (u64::from(self.next() >> (64 - bits)) << 32) };
+            if value < n as u64 {
+                return value as usize;
+            }
+        }
+    }
+}
+fn shuffle<T>(values: &mut [T], seed: u64) {
+    let mut random = Random::new(seed);
+    for i in (1..values.len()).rev() {
+        let j = random.below(i + 1);
+        values.swap(i, j);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::summarize;
+    use super::{Random, shuffle, summarize};
     use crate::CliIo;
     use serde_json::{Value, json};
 
@@ -217,5 +291,28 @@ mod tests {
         assert_eq!(answered["store_coverage"], 1.0);
         assert_eq!(answered["store_accuracy"], 1.0);
         assert_eq!(report["bookstore_override_below"], 0.9);
+    }
+
+    #[test]
+    fn shuffle_matches_python_random_integer_seeds() {
+        // Python 3.13 random.Random(seed).shuffle(list(range(20)))로 생성했다.
+        for (seed, expected) in [
+            (0, [10, 18, 16, 14, 0, 17, 11, 2, 3, 9, 5, 7, 4, 19, 6, 15, 8, 1, 13, 12]),
+            (42, [19, 5, 14, 4, 9, 13, 15, 18, 6, 12, 17, 10, 1, 11, 2, 16, 7, 8, 0, 3]),
+            (20260914, [7, 9, 6, 5, 1, 2, 16, 19, 12, 3, 8, 4, 10, 18, 15, 17, 0, 11, 14, 13]),
+            (1099511627783, [17, 0, 10, 3, 1, 2, 9, 12, 7, 13, 5, 11, 14, 6, 16, 4, 8, 15, 18, 19]),
+        ] {
+            let mut values: Vec<_> = (0..20).collect();
+            shuffle(&mut values, seed);
+            assert_eq!(values, expected);
+        }
+    }
+
+    #[test]
+    fn random_range_matches_python_seeded_draws() {
+        let mut random = Random::new(42);
+        assert_eq!(random.below(41), 40);
+        assert_eq!(random.below(3), 0);
+        assert_eq!(10 + random.below(99_999_990), 3_356_896);
     }
 }

@@ -450,3 +450,18 @@ mod epub_cover_set {
         assert_eq!(fs::read(&existing).unwrap(), b"older backup");
     }
 }
+
+mod member_path {
+    use backend::epub_cover::member_path;
+
+    #[test]
+    fn member_path_resolves_like_python() {
+        assert_eq!(member_path("OPS/Text", "../a%20b.jpg"), "OPS/a b.jpg");
+        assert_eq!(member_path("OPS", "https://example.com/a.jpg"), "");
+        assert_eq!(member_path("OPS", "../../x.jpg"), "");
+        assert_eq!(member_path("OPS", "#top"), "");
+        assert_eq!(member_path("OPS", ""), "");
+        assert_eq!(member_path("OPS", "a.xhtml#frag"), "OPS/a.xhtml");
+        assert_eq!(member_path("", "a.jpg?x=1"), "a.jpg");
+    }
+}

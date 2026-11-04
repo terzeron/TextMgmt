@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::path::{Component, Path};
 use std::sync::Arc;
 use std::time::Instant;
@@ -12,8 +13,6 @@ use crate::{CliIo, Deps, args::Args, data};
 #[path = "policy.rs"]
 mod policy;
 
-#[path = "move_file.rs"]
-mod move_file;
 #[path = "train.rs"]
 mod train;
 
@@ -251,7 +250,7 @@ fn reclassify(args: &Args, io: &mut CliIo<'_>, root: &Path, clf: &BookCategoryCl
                 }
                 let result = (|| -> std::io::Result<()> {
                     fs::create_dir_all(&dir)?;
-                    move_file::move_file(path, &dest)
+                    move_file(path, &dest)
                 })();
                 if let Err(e) = result {
                     failed += 1;
@@ -291,4 +290,91 @@ fn reclassify(args: &Args, io: &mut CliIo<'_>, root: &Path, clf: &BookCategoryCl
     }
     // Python reports each failed move but keeps the command's success exit code.
     Ok(0)
+}
+
+/// 목적지를 덮어쓰지 않고 옮긴다. 같은 filesystem에서는 inode와 시각을 보존한다.
+pub(crate) fn move_file(source: &Path, destination: &Path) -> io::Result<()> {
+    match fs::hard_link(source, destination) {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
+            let mut input = fs::File::open(source)?;
+            let metadata = input.metadata()?;
+            let mut output = fs::OpenOptions::new().write(true).create_new(true).open(destination)?;
+            let copy = (|| {
+                io::copy(&mut input, &mut output)?;
+                output.set_permissions(metadata.permissions())?;
+                output.set_times(fs::FileTimes::new().set_modified(metadata.modified()?).set_accessed(metadata.accessed()?))?;
+                output.sync_all()
+            })();
+            if let Err(e) = copy {
+                let _ = fs::remove_file(destination);
+                return Err(e);
+            }
+        }
+        Err(e) => return Err(e),
+    }
+    if let Err(e) = fs::remove_file(source) {
+        let _ = fs::remove_file(destination);
+        return Err(e);
+    }
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::move_file;
+
+    #[test]
+    fn copies_and_preserves_metadata_when_moving_across_filesystems() {
+        use std::os::unix::fs::MetadataExt;
+
+        let source_dir = tempfile::tempdir().unwrap();
+        let destination_dir = tempfile::tempdir_in("/dev/shm").unwrap();
+        if std::fs::metadata(source_dir.path()).unwrap().dev() == std::fs::metadata(destination_dir.path()).unwrap().dev() {
+            return;
+        }
+        let source = source_dir.path().join("source.bin");
+        let destination = destination_dir.path().join("destination.bin");
+        std::fs::write(&source, b"cross-device payload").unwrap();
+        let modified = std::fs::metadata(&source).unwrap().modified().unwrap();
+
+        move_file(&source, &destination).unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"cross-device payload");
+        assert_eq!(std::fs::metadata(&destination).unwrap().modified().unwrap(), modified);
+    }
+
+    #[test]
+    fn refuses_existing_destination_without_removing_source_or_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        let destination = dir.path().join("destination.bin");
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&destination, b"destination").unwrap();
+
+        let error = move_file(&source, &destination).unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&source).unwrap(), b"source");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"destination");
+    }
+
+    #[test]
+    fn move_file_preserves_content_time_and_collisions_across_filesystems() {
+        let source = tempfile::TempDir::new().unwrap();
+        let destination = tempfile::tempdir_in("/dev/shm").unwrap();
+        let from = source.path().join("book.txt");
+        let to = destination.path().join("book.txt");
+        std::fs::write(&from, "본문").unwrap();
+        let time = std::fs::metadata(&from).unwrap().modified().unwrap();
+        move_file(&from, &to).unwrap();
+        assert!(!from.exists());
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "본문");
+        assert_eq!(std::fs::metadata(&to).unwrap().modified().unwrap(), time);
+        std::fs::write(&from, "새 본문").unwrap();
+        assert!(move_file(&from, &to).is_err());
+        assert_eq!(std::fs::read_to_string(&from).unwrap(), "새 본문");
+        assert_eq!(std::fs::read_to_string(&to).unwrap(), "본문");
+    }
 }

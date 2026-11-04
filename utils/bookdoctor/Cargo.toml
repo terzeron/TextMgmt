@@ -63,24 +63,12 @@ name = "epub_structure"
 path = "../../tests/rust/bookdoctor/epub/structure.rs"
 
 [[test]]
-name = "exe"
-path = "../../tests/rust/bookdoctor/exe.rs"
-
-[[test]]
 name = "finding"
 path = "../../tests/rust/bookdoctor/finding.rs"
 
 [[test]]
-name = "html"
-path = "../../tests/rust/bookdoctor/html.rs"
-
-[[test]]
 name = "hwp"
 path = "../../tests/rust/bookdoctor/hwp.rs"
-
-[[test]]
-name = "hwp_inflate"
-path = "../../tests/rust/bookdoctor/hwp/inflate.rs"
 
 [[test]]
 name = "mojibake"

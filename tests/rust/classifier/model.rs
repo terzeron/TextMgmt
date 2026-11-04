@@ -378,3 +378,29 @@ mod classifier_training {
         assert!(training::fit_confidence_calibration(&model, &docs[..199], Some(&parents)).unwrap().is_none());
     }
 }
+
+mod softmax {
+    use classifier::model::{fixed, rank_desc, softmax_confidence_row};
+
+    #[test]
+    fn softmax_and_ranking_follow_python() {
+        let p = softmax_confidence_row(&[1.0, 2.0, 3.0], 1.0);
+        assert!((p.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!((p[2] - 0.665_240_955_774_642).abs() < 1e-12);
+        // 온도 하한 1e-6, 오버플로 없이 계산한다.
+        let sharp = softmax_confidence_row(&[0.0, 1.0], 0.0);
+        assert!((sharp[1] - 1.0).abs() < 1e-12);
+        // 동점이면 클래스 번호가 작은 쪽이 먼저다.
+        assert_eq!(rank_desc(&[0.5, 0.9, 0.9, 0.1]), [1, 2, 0, 3]);
+    }
+
+    #[test]
+    fn fixed_rounds_like_python_format() {
+        // Python: f"{0.0625:.3f}"='0.062', f"{0.375:.2f}"='0.38', f"{0.125:.2f}"='0.12', f"{0.3345:.3f}"='0.335'
+        assert_eq!(fixed(0.0625, 3), "0.062");
+        assert_eq!(fixed(0.375, 2), "0.38");
+        assert_eq!(fixed(0.125, 2), "0.12");
+        assert_eq!(fixed(0.3345, 3), "0.335");
+        assert_eq!(fixed(1.0, 2), "1.00");
+    }
+}

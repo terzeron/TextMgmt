@@ -19,19 +19,28 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 use sysdeps::FsOps;
+use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote, urlparse_path};
 use zip::ZipArchive;
 
 pub mod edit;
-pub mod pathx;
 mod rewrite;
 mod stage;
 pub mod xml;
 
 pub use edit::{EditImages, edit_images, edit_images_with, edit_page_images};
-pub use pathx::member_path;
 pub use rewrite::{add_cover, add_cover_backup_with, add_cover_with, add_illustration, add_illustration_backup_with, add_illustration_with, remove_cover, remove_cover_backup_with, remove_cover_with};
 
 use xml::Element;
+
+/// Python `_member_path(base, href)`: 상대 `href`를 ZIP 멤버 이름으로 푼다. 바깥을 가리키거나 URL이면 빈 문자열이다.
+pub fn member_path(base: &str, href: &str) -> String {
+    let (scheme, netloc, path) = urlparse_path(href);
+    if !scheme.is_empty() || !netloc.is_empty() || path.is_empty() {
+        return String::new();
+    }
+    let member = posix_normpath(&posix_join(base, &unquote(&path)));
+    if member.starts_with('/') || member.starts_with("../") { String::new() } else { member }
+}
 
 pub const OPF_NS: &str = "http://www.idpf.org/2007/opf";
 pub const MAX_XML_BYTES: usize = 4 * 1024 * 1024;
@@ -461,7 +470,7 @@ pub(crate) fn read_package_with<R: Read + Seek>(archive: &mut ZipArchive<R>, hoo
         return Err(CoverError::new("EPUB container가 너무 큽니다").into());
     }
     let opf_path = resolve_opf_path(archive, hooks);
-    let unsafe_path = opf_path.is_empty() || opf_path.starts_with('/') || pathx::normpath(&opf_path).starts_with("../");
+    let unsafe_path = opf_path.is_empty() || opf_path.starts_with('/') || posix_normpath(&opf_path).starts_with("../");
     if unsafe_path || entry_size(archive, &opf_path)? > limits.max_xml_bytes as u64 {
         return Err(CoverError::new("EPUB package를 찾거나 읽을 수 없습니다").into());
     }
@@ -576,11 +585,11 @@ pub(crate) fn find_cover_member_in<R: Read + Seek>(archive: &mut ZipArchive<R>, 
         // 파일명이 정확히 cover인 이미지를 먼저 본다. 부분 일치만 쓰면 incover(속표지)가 OPF 순서상 앞서 표지로 뽑힌다.
         .or_else(|| image_items.iter().find(|el| is_exact_cover_name(el.attr_or("href", ""))))
         .or_else(|| image_items.iter().find(|el| id_href(el).contains("cover")));
-    let opf_dir = pathx::dirname(&opf_path);
+    let opf_dir = posix_dirname(&opf_path);
     if let Some(chosen) = chosen {
-        let unquoted = pathx::unquote(chosen.attr_or("href", ""));
+        let unquoted = unquote(chosen.attr_or("href", ""));
         let href = unquoted.split('#').next().unwrap_or("").split('?').next().unwrap_or("");
-        return Some(if opf_dir.is_empty() { pathx::normpath(href) } else { pathx::normpath(&pathx::join(&opf_dir, href)) });
+        return Some(if opf_dir.is_empty() { posix_normpath(href) } else { posix_normpath(&posix_join(&opf_dir, href)) });
     }
     cover_pages.extend(
         page_items.iter().filter(|el| (!meta_cover_id.is_empty() && el.attr("id") == Some(meta_cover_id.as_str())) || id_href(el).contains("cover")).map(|el| el.attr_or("href", "").to_string()),
@@ -622,7 +631,7 @@ fn first_image_in_page<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_dir: &st
             "image" => el.attr("href").filter(|h| !h.is_empty()).or_else(|| el.attr_ns(xml::XLINK_NS, "href")).unwrap_or("").to_string(),
             _ => continue,
         };
-        if let Some(member) = existing_member_path(archive, &pathx::dirname(&page_member), &href) {
+        if let Some(member) = existing_member_path(archive, &posix_dirname(&page_member), &href) {
             return Some(member);
         }
     }
@@ -652,7 +661,7 @@ fn find_first_spine_image<R: Read + Seek>(archive: &mut ZipArchive<R>, hooks: &E
             _ => {}
         }
     }
-    let opf_dir = pathx::dirname(&opf_path);
+    let opf_dir = posix_dirname(&opf_path);
     spine_ids.into_iter().filter_map(|id| pages.get(id).copied()).take(FALLBACK_COVER_PAGES).find_map(|href| first_image_in_page(archive, &opf_dir, href, &|_| None))
 }
 

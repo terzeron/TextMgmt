@@ -25,7 +25,6 @@ pub mod model;
 pub mod pyjson;
 pub mod pyunicode_table;
 pub mod reader;
-pub mod softmax;
 pub mod tokenize;
 pub mod training;
 pub mod vectorize;

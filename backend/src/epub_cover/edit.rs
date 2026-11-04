@@ -18,7 +18,8 @@ use regex::Regex;
 use serde_json::{Value, json};
 use zip::ZipArchive;
 
-use super::pathx::{dirname, member_path, relpath};
+use super::member_path;
+use text_extractor::path::{posix_dirname as dirname, posix_relpath as relpath};
 use super::rewrite::rewrite_epub;
 use super::stage::{Added, add_image_page, add_split_image, read_previous_cover, sections, verify_staged, write_epub};
 use super::xml::{self, Element, Node};

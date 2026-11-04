@@ -3,7 +3,6 @@
 mod args;
 mod commands;
 mod data;
-mod shuffle;
 
 use std::io::Write;
 use std::sync::Arc;

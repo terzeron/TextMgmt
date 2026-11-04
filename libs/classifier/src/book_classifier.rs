@@ -21,7 +21,7 @@ use bookstore::stores::{AladinBookstore, BookstoreSearch, KyoboBookstore, Yes24B
 use crate::bookstore_cache::BookstoreResponseCache;
 use crate::bookstore_policy::{KeywordLoader, keyword_map, map_bookstore_candidates};
 use crate::model::{CategoryModelApi, Prediction, get_default_model};
-use crate::softmax::fixed;
+use crate::model::fixed;
 use crate::tokenize::{is_py_space, is_py_word};
 use crate::{BookCategoryClassifier, BookClassifierApi, ClassifierOptions, Classify, resolve_lenient};
 

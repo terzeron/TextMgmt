@@ -5,8 +5,7 @@ use crate::{Category, FileReport, Severity};
 
 use crate::display::sanitize_display;
 
-use super::header::FileHeader;
-use super::inflate::{InflateError, decompress};
+use super::{FileHeader, InflateError, decompress};
 
 /// 스크립트 스트림에서 읽는 최대 바이트.
 const MAX_SCRIPT: usize = 4 * 1024 * 1024;

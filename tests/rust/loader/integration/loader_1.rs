@@ -32,7 +32,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use doc_reader::TEXT_SIZE;
-use doc_reader::docx::read_from_docx;
+use doc_reader::office::read_from_docx;
 use doc_reader::epub::{read_from_epub, read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using};
 use doc_reader::markup::{count_lines, read_from_html};
 use doc_reader::mojibake::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, is_usable_text};

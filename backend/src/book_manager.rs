@@ -50,7 +50,6 @@ pub(crate) use contract::UNIMPLEMENTED;
 pub use contract::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
 
 mod api;
-mod backfill;
 mod catalog;
 mod category;
 mod classify;
@@ -72,7 +71,6 @@ mod uncovered;
 mod update;
 mod util;
 mod validate;
-mod xml_safe;
 
 pub use classify::{ApplyOptions, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, ProposeOptions};
 pub use cover::{BookLookup, BookRef, Thumbnailer};
@@ -81,7 +79,7 @@ pub use file_reader::{DefaultFileReader, LoaderFileReader};
 pub use seams::{AddBookError, BackfillThread, BookAdder, CategoryNameCheck, PathIsRelativeTo, PreviewEpubValidator};
 pub use uncovered::{CoverBooksPager, CoverPage};
 pub use update::BookDeletion;
-pub use xml_safe::{_declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, SafeXmlParser, XmlElement, decode_category_cursor, encode_category_cursor};
+pub use epub::{_declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, SafeXmlParser, XmlElement, decode_category_cursor, encode_category_cursor};
 
 /// 카테고리 단위 ES 조회 상한. ES `max_result_window`(기본 10000)와 같다.
 pub const MAX_CATEGORY_RESULT_COUNT: i64 = 10000;

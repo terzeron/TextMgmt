@@ -58,3 +58,56 @@ pub fn unquote(s: &str) -> String {
 fn hex(c: u8) -> Option<u8> {
     (c as char).to_digit(16).map(|d| d as u8)
 }
+/// `posixpath.splitext(path)[1]`. 파일 이름 앞쪽의 점은 확장자로 보지 않는다.
+pub fn posix_ext(path: &str) -> String {
+    let base_start = path.rfind('/').map_or(0, |i| i + 1);
+    let base = &path[base_start..];
+    let leading = base.len() - base.trim_start_matches('.').len();
+    match base[leading..].rfind('.') {
+        Some(i) => base[leading + i..].to_string(),
+        None => String::new(),
+    }
+}
+/// `posixpath.relpath(path, start)`(현재 디렉터리를 쓰지 않고 둘 다 상대 경로라고 본다).
+pub fn posix_relpath(path: &str, start: &str) -> String {
+    let normal = |p: &str| -> Vec<String> { posix_normpath(p).split('/').filter(|c| !c.is_empty() && *c != ".").map(str::to_string).collect() };
+    let (target, base) = (normal(path), normal(start));
+    let common = target.iter().zip(&base).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<String> = vec!["..".to_string(); base.len() - common];
+    parts.extend(target[common..].iter().cloned());
+    if parts.is_empty() { ".".to_string() } else { parts.join("/") }
+}
+/// `urlparse(href)`가 돌려주는 `(scheme, netloc, path)`. 질의·조각·`;params`는 path에서 뺀다.
+pub fn urlparse_path(href: &str) -> (String, String, String) {
+    let mut rest = href.trim_start_matches(|c: char| c.is_ascii_control() || c == ' ').to_string();
+    let mut scheme = String::new();
+    if let Some(colon) = rest.find(':') {
+        let candidate = &rest[..colon];
+        let mut chars = candidate.chars();
+        let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic()) && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+        if valid {
+            scheme = candidate.to_ascii_lowercase();
+            rest = rest[colon + 1..].to_string();
+        }
+    }
+    let mut netloc = String::new();
+    if let Some(after) = rest.strip_prefix("//") {
+        let end = after.find(['/', '?', '#']).unwrap_or(after.len());
+        netloc = after[..end].to_string();
+        rest = after[end..].to_string();
+    }
+    if let Some(i) = rest.find('#') {
+        rest.truncate(i);
+    }
+    if let Some(i) = rest.find('?') {
+        rest.truncate(i);
+    }
+    // `urlparse`는 마지막 경로 조각의 `;params`를 path에서 뺀다.
+    if rest.contains(';') {
+        let start = rest.rfind('/').unwrap_or(0);
+        if let Some(i) = rest[start..].find(';') {
+            rest.truncate(start + i);
+        }
+    }
+    (scheme, netloc, rest)
+}

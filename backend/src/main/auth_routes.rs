@@ -12,7 +12,7 @@ use axum::response::Response;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::client_info::ClientInfo;
+use super::extract::ClientInfo;
 use super::cookies::{_clear_auth_cookies, _set_auth_cookies};
 use super::deps::AppDeps;
 use super::errors::{ApiError, ApiResult, json_response};

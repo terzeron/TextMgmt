@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bookdoctor::runner::{collect_files, has_extension};
 use bookdoctor::{Report, Severity, Summary, scan_streaming};
-use bookdoctor::workers::pool;
+use bookdoctor::runner::{DEFAULT_WORKERS, pool, workers_within_memory};
 
 fn touch(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -207,4 +207,21 @@ fn scan_streaming_with_no_paths_returns_an_empty_summary() {
     // window가 0이어도 멈추지 않는다.
     let s = scan_streaming(&paths(3), &pool(1), 0, fake, |_| Ok(())).unwrap();
     assert_eq!(s.scanned, 3);
+}
+
+#[test]
+fn workers_within_memory_never_goes_below_one_and_never_above_the_request() {
+    assert_eq!(workers_within_memory(2, 20, 2048), 2);
+    assert_eq!(workers_within_memory(64, 440, 2048), 4);
+    assert_eq!(workers_within_memory(64, 1, 2048), 64);
+    assert_eq!(workers_within_memory(8, 100_000, 2048), 1);
+    assert_eq!(workers_within_memory(0, 20, 2048), 1);
+    assert_eq!(workers_within_memory(3, 0, 2048), 3);
+}
+
+#[test]
+fn pool_has_at_least_one_thread_and_the_default_is_two() {
+    assert_eq!(DEFAULT_WORKERS, 2);
+    assert_eq!(pool(0).current_num_threads(), 1);
+    assert_eq!(pool(3).current_num_threads(), 3);
 }

@@ -1,8 +1,3 @@
-#[path = "../../../utils/trainer/src/shuffle.rs"]
-mod shuffle;
-#[path = "../../../utils/trainer/src/move_file.rs"]
-mod move_file;
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,47 +5,6 @@ use std::sync::Arc;
 use trainer::{CliIo, Deps, main_with};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-
-#[test]
-fn move_file_preserves_content_time_and_collisions_across_filesystems() {
-    let source = TempDir::new().unwrap();
-    let destination = tempfile::tempdir_in("/dev/shm").unwrap();
-    let from = source.path().join("book.txt");
-    let to = destination.path().join("book.txt");
-    fs::write(&from, "본문").unwrap();
-    let time = fs::metadata(&from).unwrap().modified().unwrap();
-    move_file::move_file(&from, &to).unwrap();
-    assert!(!from.exists());
-    assert_eq!(fs::read_to_string(&to).unwrap(), "본문");
-    assert_eq!(fs::metadata(&to).unwrap().modified().unwrap(), time);
-    fs::write(&from, "새 본문").unwrap();
-    assert!(move_file::move_file(&from, &to).is_err());
-    assert_eq!(fs::read_to_string(&from).unwrap(), "새 본문");
-    assert_eq!(fs::read_to_string(&to).unwrap(), "본문");
-}
-
-#[test]
-fn shuffle_matches_python_random_integer_seeds() {
-    // Python 3.13 random.Random(seed).shuffle(list(range(20)))로 생성했다.
-    for (seed, expected) in [
-        (0, [10, 18, 16, 14, 0, 17, 11, 2, 3, 9, 5, 7, 4, 19, 6, 15, 8, 1, 13, 12]),
-        (42, [19, 5, 14, 4, 9, 13, 15, 18, 6, 12, 17, 10, 1, 11, 2, 16, 7, 8, 0, 3]),
-        (20260914, [7, 9, 6, 5, 1, 2, 16, 19, 12, 3, 8, 4, 10, 18, 15, 17, 0, 11, 14, 13]),
-        (1099511627783, [17, 0, 10, 3, 1, 2, 9, 12, 7, 13, 5, 11, 14, 6, 16, 4, 8, 15, 18, 19]),
-    ] {
-        let mut values: Vec<_> = (0..20).collect();
-        shuffle::shuffle(&mut values, seed);
-        assert_eq!(values, expected);
-    }
-}
-
-#[test]
-fn random_range_matches_python_seeded_draws() {
-    let mut random = shuffle::Random::new(42);
-    assert_eq!(random.below(41), 40);
-    assert_eq!(random.below(3), 0);
-    assert_eq!(10 + random.below(99_999_990), 3_356_896);
-}
 
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/classifier_tiny/trained")

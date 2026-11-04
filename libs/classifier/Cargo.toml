@@ -68,10 +68,6 @@ name = "reader"
 path = "../../tests/rust/classifier/reader.rs"
 
 [[test]]
-name = "softmax"
-path = "../../tests/rust/classifier/softmax.rs"
-
-[[test]]
 name = "tokenize"
 path = "../../tests/rust/classifier/tokenize.rs"
 

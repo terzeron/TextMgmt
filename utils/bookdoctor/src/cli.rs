@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::DEFAULT_LIBRARY_ROOT;
-use crate::workers::{DEFAULT_WORKERS, pool, workers_within_memory};
+use crate::runner::{DEFAULT_WORKERS, pool, workers_within_memory};
 
 use crate::runner::collect_files;
 use crate::{Severity, scan_streaming};
 
-use crate::exe::is_exec_extension;
+use crate::scan::is_exec_extension;
 use crate::pdf::security::MAX_PARALLEL_INPUT_MB;
 use crate::prefetch::Prefetcher;
 use crate::report::{write_json_line, write_summary_line, write_text, Aggregate};

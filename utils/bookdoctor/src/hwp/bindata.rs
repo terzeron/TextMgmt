@@ -5,7 +5,7 @@ use crate::sniff::{Sniffed, sniff};
 use crate::display::sanitize_display;
 use crate::{Category, FileReport, Severity};
 
-use super::inflate::decompress_prefix;
+use super::decompress_prefix;
 use super::records::walk;
 use crate::zipcheck::fast::ZIP_EXEC_EXTS;
 

@@ -2,7 +2,6 @@
 //!
 //! 각 읽기 함수는 (요약, 줄 수, 쪽 수)를 만든다. 요약은 앞 [`TEXT_SIZE`]자만 남긴다.
 
-pub mod docx;
 pub mod epub;
 pub mod markup;
 pub mod mojibake;

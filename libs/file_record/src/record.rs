@@ -10,7 +10,7 @@ use text_extractor::open_zip;
 use doc_reader::epub::{EpubPath, read_epub_publisher, read_from_epub};
 use doc_reader::pdf::{PDF_STAGE_TIMEOUT, StageRunner, fast_page_count, read_from_pdf};
 use doc_reader::text::{TextRead, read_from_text, reencode_text_file_to_utf8};
-use doc_reader::{docx, markup, office, rtf};
+use doc_reader::{markup, office, rtf};
 use crate::file_time::{StatResult, iso, path_created_time_with_source};
 use serde_json::{Map, Value, json};
 use stat::Stat;
@@ -267,7 +267,7 @@ pub fn read_file_with_hooks(
         }
         "docx" => {
             let t = Timed::start(stat, "docx");
-            match docx::read_from_docx(path) {
+            match office::read_from_docx(path) {
                 Ok((s, l)) => (summary, line_count) = (s, l),
                 Err(e) => out.messages.push(format!("can't read docx file '{}': {e}", path.display())),
             }

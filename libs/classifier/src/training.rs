@@ -15,8 +15,7 @@ use serde_json::{Value, json};
 use super::ValueError;
 use super::corpus::IndexedJsonl;
 use super::features::{Dtype, FeatureSpace, FitOptions, SparseMatrix};
-use super::model::{CategoryModel, softmax_confidence};
-use super::softmax::fixed;
+use super::model::{CategoryModel, fixed, softmax_confidence};
 
 // sklearn LinearSVC's default projected-gradient threshold. Golden fixtures guard
 // decision-score parity when the solver stops at this tolerance.

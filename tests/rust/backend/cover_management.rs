@@ -1195,3 +1195,23 @@ mod added_thumbnail_limits {
         assert_eq!(CoverManagement::with_hooks(root, healthy).preview("book.epub", false).unwrap(), b"fake thumbnail");
     }
 }
+
+mod clean_title {
+    use backend::cover_management::clean_title;
+
+    #[test]
+    fn titles_match_the_python_cases() {
+        assert_eq!(clean_title("[랜들 개릿] 다아시 경의 모험"), "랜들 개릿 다아시 경의 모험");
+        assert_eq!(clean_title("[작가] 구운몽—꿈(1) & 이야기!"), "작가 구운몽 꿈 1 이야기");
+        assert_eq!(clean_title("제목.v2"), "제목 v2");
+        assert_eq!(clean_title("  책\t 이름   "), "책 이름");
+        assert_eq!(clean_title("【作者】中文_タイトル〈第2巻〉"), "作者 中文 タイトル 第2巻");
+        assert_eq!(clean_title("★[!]★"), "제목 없음");
+    }
+
+    #[test]
+    fn nfd_hangul_is_composed() {
+        let nfd = "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF}";
+        assert_eq!(clean_title(nfd), "한글");
+    }
+}

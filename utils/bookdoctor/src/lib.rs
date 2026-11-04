@@ -4,10 +4,8 @@ pub mod cli;
 pub mod common;
 pub mod display;
 pub mod doc;
-pub mod html;
 pub mod hwp;
 pub mod epub;
-pub mod exe;
 pub mod finding;
 pub mod mojibake;
 pub mod ole;
@@ -24,7 +22,6 @@ pub mod scan;
 pub mod sniff;
 pub mod txt;
 pub mod viewer;
-pub mod workers;
 pub mod zipcheck;
 pub mod zipnames;
 

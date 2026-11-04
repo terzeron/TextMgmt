@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
-use super::pathx::{dirname, ext, join, member_path};
+use super::member_path;
+use text_extractor::path::{posix_dirname as dirname, posix_ext as ext, posix_join as join};
 use super::xml::{self, Element, Node, XHTML_NS};
 use super::{CoverError, EpubCoverHooks, FResult, Fail, OPF_NS, entry_names, entry_size, find_cover_member_in, has_entry, inspect_archive, read_entry, read_package_with};
 

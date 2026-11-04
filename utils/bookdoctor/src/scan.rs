@@ -1,13 +1,15 @@
 //! 파일 하나를 포맷별 검사기로 보낸다. 포맷은 확장자가 아니라 내용(매직바이트)을 우선한다.
+//! 다른 모듈로 나눌 만큼 크지 않은 실행 파일·독립 HTML 검사기도 여기 둔다.
 
+use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
-use crate::sniff::Sniffed;
-use crate::{FileReport, Format};
-
 use crate::cli::Options;
-use crate::{common, doc, html, hwp, recurse, rules, epub, exe, pdf, txt, viewer, zipcheck};
+use crate::epub::security::scan_html_document;
+use crate::sniff::Sniffed;
+use crate::{Category, FileReport, Format, Severity};
+use crate::{common, doc, epub, hwp, pdf, recurse, rules, txt, viewer, zipcheck};
 
 /// 검사할 포맷을 정한다. `.pdf`·`.epub`은 내용이 PDF·ZIP이면 내용을 따르고(`.pdf`인데 ZIP이면 EPUB),
 /// 그 밖에는 확장자를 따른다. 모르는 확장자는 `None`이다.
@@ -54,7 +56,7 @@ pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
         "doc" | "dot" | "rtf" => Some(Format::Doc),
         "hwp" => Some(Format::Hwp),
         "html" | "htm" | "xhtml" => Some(Format::Html),
-        e if exe::is_exec_extension(e) => Some(Format::Executable),
+        e if is_exec_extension(e) => Some(Format::Executable),
         _ => None,
     }
 }
@@ -71,13 +73,13 @@ fn scan_inner(path: &Path, opts: &Options, report: &mut FileReport) {
         Some(Format::Epub) => epub::scan_epub_file(path, opts, report),
         Some(Format::Pdf) => pdf::scan_pdf_file(path, opts, report),
         Some(Format::Txt) => txt::scan_txt_file(path, opts, report),
-        Some(Format::Executable) => exe::scan_exe_file(sniffed, report),
+        Some(Format::Executable) => scan_exe_file(sniffed, report),
         Some(Format::Zip) => zipcheck::scan_zip_file(path, opts, report),
         Some(Format::Docx) => zipcheck::scan_docx_file(path, opts, sniffed, report),
         Some(Format::Hwpx) => zipcheck::scan_hwpx_file(path, opts, sniffed, report),
         Some(Format::Doc) => doc::scan_doc_file(path, opts, sniffed, report),
         Some(Format::Hwp) => hwp::scan_hwp_file(path, opts, sniffed, report),
-        Some(Format::Html) => html::scan_html_file(path, sniffed, report),
+        Some(Format::Html) => scan_html_file(path, sniffed, report),
         None => report.mark_incomplete("unsupported format"),
     }
     // ZIP 안의 컨테이너(중첩 ZIP·PDF·RTF·Word·HWP)를 깊이·개수·바이트 상한 안에서 재귀 검사한다.
@@ -106,4 +108,67 @@ pub fn scan_file(path: &Path, opts: &Options) -> FileReport {
     report.risk_score = crate::finding::risk_score(&report.findings);
     viewer::annotate(&mut report);
     report
+}
+
+// ---- 실행 파일 이중 확인. 확장자가 실행 파일이고 매직바이트도 실행 파일(ELF·Mach-O·PE)이어야 "확정"이다. ----
+// 확장자만 맞고 내용이 다르면 확정하지 않고 낮은 심각도의 결함으로 남긴다.
+/// 실행 파일로 보는 확장자. 디렉토리를 훑을 때 이 확장자도 모은다.
+pub const EXEC_EXTENSIONS: &[&str] = &["exe", "dll", "sys", "scr", "ocx", "cpl", "drv", "efi", "so", "elf", "ko", "dylib", "bundle", "bin", "out"];
+
+/// 실행 파일 확장자인가(대소문자 무시).
+pub fn is_exec_extension(ext: &str) -> bool {
+    EXEC_EXTENSIONS.iter().any(|e| e.eq_ignore_ascii_case(ext))
+}
+
+fn kind(sniffed: Sniffed) -> Option<&'static str> {
+    match sniffed {
+        Sniffed::Elf => Some("ELF"),
+        Sniffed::MachO => Some("Mach-O"),
+        Sniffed::Pe => Some("PE"),
+        _ => None,
+    }
+}
+
+/// 실행 파일 확장자인 파일을 검사한다. `sniffed`는 `common::inspect_with_sniff`가 정한 매직바이트 판별이다.
+pub fn scan_exe_file(sniffed: Sniffed, report: &mut FileReport) {
+    match kind(sniffed) {
+        Some(k) => {
+            report.confirmed_executable = true;
+            report.push(Category::Security, Severity::High, "EXECUTABLE_FILE", "", &format!("실행 파일 확정: {k}"));
+        }
+        None => report.push(Category::Defect, Severity::Low, "EXECUTABLE_EXTENSION_NO_MAGIC", "", &format!("확장자는 실행 파일인데 매직바이트가 실행 파일이 아니다({sniffed:?})")),
+    }
+}
+
+// ---- 독립 HTML 검사. 규칙은 EPUB의 HTML 규칙(`epub::security`)을 그대로 쓴다. ----
+/// 읽는 최대 바이트. 넘으면 앞부분만 보고 미완료로 남긴다.
+const MAX_HTML: u64 = 16 * 1024 * 1024;
+
+/// `.html`·`.htm`·`.xhtml` 하나를 검사한다. 텍스트는 시작이 `<!DOCTYPE`이 아니어도 받는다(저장한 웹 페이지는 주석이나 `<meta>`로 시작하는 일이 흔하다).
+pub fn scan_html_file(path: &Path, sniffed: Sniffed, report: &mut FileReport) {
+    match sniffed {
+        // 실행 파일은 `common`이 이미 Critical로 알렸다.
+        Sniffed::Elf | Sniffed::MachO | Sniffed::Pe => return,
+        // PDF·ZIP은 내용에 맞는 분석기로 넘어가므로 여기 오지 않는다. 그 밖의 바이너리는 분석하지 못한다.
+        Sniffed::Ole | Sniffed::Rtf | Sniffed::Hwp3 | Sniffed::Pdf | Sniffed::Zip => {
+            report.mark_incomplete(&format!("content is not HTML ({sniffed:?}); not analyzed"));
+            return;
+        }
+        Sniffed::Html | Sniffed::Unknown => {}
+    }
+    let Ok(file) = std::fs::File::open(path) else {
+        report.mark_incomplete("HTML file could not be opened");
+        return;
+    };
+    let mut bytes = Vec::new();
+    if file.take(MAX_HTML + 1).read_to_end(&mut bytes).is_err() {
+        report.mark_incomplete("HTML file could not be read");
+        return;
+    }
+    if bytes.len() as u64 > MAX_HTML {
+        bytes.truncate(MAX_HTML as usize);
+        report.mark_incomplete(&format!("skipped: HTML larger than the {} MiB read limit; only the first part was inspected", MAX_HTML / (1024 * 1024)));
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    scan_html_document(&bytes, &name, report);
 }
