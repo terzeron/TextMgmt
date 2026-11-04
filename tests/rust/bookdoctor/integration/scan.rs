@@ -1,7 +1,7 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use bookdoctor::cli::run;
+use bookdoctor::cli_parser::run;
 
 #[test]
 fn missing_path_is_incomplete_exit_2() {

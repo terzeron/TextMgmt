@@ -4,8 +4,8 @@ mod support;
 use std::fs;
 use std::path::Path;
 
-use bookdoctor::cli::{Options, run};
-use bookdoctor::scan::scan_file;
+use bookdoctor::cli_parser::{Options, run};
+use bookdoctor::format_dispatcher::scan_file;
 use bookdoctor::FileReport;
 
 const OLE_STUB: &[u8] = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1 macro";

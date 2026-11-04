@@ -3,8 +3,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use bookdoctor::cli::{Options, run};
-use bookdoctor::scan::scan_file;
+use bookdoctor::cli_parser::{Options, run};
+use bookdoctor::format_dispatcher::scan_file;
 use bookdoctor::FileReport;
 
 fn write(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {

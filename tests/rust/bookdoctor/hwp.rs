@@ -3,8 +3,8 @@ mod ole_common;
 use std::fs;
 use std::path::PathBuf;
 
-use bookdoctor::cli::Options;
-use bookdoctor::scan::scan_file;
+use bookdoctor::cli_parser::Options;
+use bookdoctor::format_dispatcher::scan_file;
 use ole_common::{Cfb, compress, dir_stream, make_cfb, make_cfb_v4, module_stream};
 use bookdoctor::{FileReport, Format};
 

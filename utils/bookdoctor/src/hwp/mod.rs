@@ -1,17 +1,17 @@
 //! HWP 5.x(OLE 복합 파일) 검사. 포맷 사실은 `docs/bookdoctor-hwp5-notes.md`에 있다.
 //! 파일을 실행하거나 렌더링하지 않는다.
 
-pub mod bindata;
-pub mod records;
-pub mod script;
+pub mod bindata_checker;
+pub mod record_reader;
+pub mod script_checker;
 
 use std::path::Path;
 
-use crate::ole::OleFile;
+use crate::ole_parser::OleFile;
 use crate::{Category, FileReport, Severity};
-use crate::sniff::Sniffed;
+use crate::magic_sniffer::Sniffed;
 
-use crate::cli::Options;
+use crate::cli_parser::Options;
 use crate::doc::{open_ole, report_anomalies};
 use std::io::Read;
 use flate2::read::{DeflateDecoder, ZlibDecoder};
@@ -75,14 +75,14 @@ fn inspect(file: &mut OleFile, report: &mut FileReport) {
     if header.distributable() && file.find("BodyText").is_none() && file.find("ViewText").is_some() {
         report.mark_incomplete("distribution document: ViewText not analyzed");
     }
-    script::inspect(file, &header, report);
+    script_checker::inspect(file, &header, report);
     // DocInfo는 한 번만 읽고 푼다. 레코드 검증과 BinData 연결 파일 검사가 같은 바이트를 쓴다.
-    let docinfos = records::load_docinfos(file, &header, report);
+    let docinfos = record_reader::load_docinfos(file, &header, report);
     for bytes in &docinfos {
-        records::validate(bytes, "DocInfo", report);
+        record_reader::validate(bytes, "DocInfo", report);
     }
-    bindata::inspect(file, &docinfos, report);
-    records::inspect_sections(file, &header, report);
+    bindata_checker::inspect(file, &docinfos, report);
+    record_reader::inspect_sections(file, &header, report);
 }
 
 // ---- `FileHeader` 스트림(256바이트, 명세 표 3). ----

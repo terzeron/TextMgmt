@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use bookdoctor::cli::run;
+use bookdoctor::cli_parser::run;
 
 /// EICAR 표준 시험 문자열(악성 코드가 아니다). 저장소 파일이 백신에 걸리지 않도록 두 조각으로 둔다.
 fn eicar() -> Vec<u8> {

@@ -3,9 +3,9 @@ mod ole_common;
 use std::fs;
 use std::path::PathBuf;
 
-use bookdoctor::cli::Options;
-use bookdoctor::scan::scan_file;
-use bookdoctor::viewer::viewer_blocked;
+use bookdoctor::cli_parser::Options;
+use bookdoctor::format_dispatcher::scan_file;
+use bookdoctor::viewer_block_table::viewer_blocked;
 use ole_common::{Cfb, compress, dir_stream, make_cfb, make_cfb_v4, module_stream};
 use bookdoctor::{Category, FileReport, Finding, Format, Severity, ViewerBlocked};
 
@@ -184,7 +184,7 @@ fn a_giant_unterminated_field_is_bounded() {
 fn structural_damage_is_reported_with_ole_codes_and_a_security_summary() {
     let cfb = doc_cfb(&[("Data", &[7u8; 5000][..])], 0, b"hi");
     let bytes = cfb.bytes.clone();
-    let start = bookdoctor::ole::OleFile::from_bytes(bytes.clone(), &bookdoctor::ole::Limits::default()).unwrap().find("Data").unwrap().start;
+    let start = bookdoctor::ole_parser::OleFile::from_bytes(bytes.clone(), &bookdoctor::ole_parser::Limits::default()).unwrap().find("Data").unwrap().start;
     let mut b = bytes;
     let at = cfb.fat_entry_offset(start);
     b[at..at + 4].copy_from_slice(&start.to_le_bytes());

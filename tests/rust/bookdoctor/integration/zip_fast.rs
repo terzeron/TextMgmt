@@ -1,7 +1,7 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use bookdoctor::cli::{run, run_with_env};
+use bookdoctor::cli_parser::{run, run_with_env};
 
 #[test]
 fn member_name_with_escape_never_reaches_the_terminal_raw() {

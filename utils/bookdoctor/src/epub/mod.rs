@@ -1,28 +1,28 @@
 //! EPUB 검사. 이후 task가 하위 모듈을 더한다.
 
-pub mod render;
-pub mod security;
-pub mod structure;
+pub mod render_checker;
+pub mod security_checker;
+pub mod structure_checker;
 
 use std::collections::HashSet;
 use std::path::Path;
 
 use crate::FileReport;
 
-use crate::cli::Options;
+use crate::cli_parser::Options;
 
 /// EPUB 파일 하나를 검사해 `report`에 더한다.
 pub fn scan_epub_file(path: &Path, opts: &Options, report: &mut FileReport) {
-    let limits = security::Limits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..security::Limits::default() };
+    let limits = security_checker::Limits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..security_checker::Limits::default() };
     // 중앙 디렉터리가 한도를 넘으면 어느 단계도 ZIP을 열지 않는다. 구조·렌더링·손상 검사는 한도를 따로 보지 않는다.
-    if security::directory_limit_note(path).is_some() {
-        security::scan(path, &limits, report);
+    if security_checker::directory_limit_note(path).is_some() {
+        security_checker::scan(path, &limits, report);
         return;
     }
-    structure::inspect(path, report);
+    structure_checker::inspect(path, report);
     let structure_len = report.findings.len();
     let structure_codes: HashSet<String> = report.findings.iter().map(|f| f.code.clone()).collect();
-    let (_stats, verified) = security::scan_verified(path, &limits, report);
+    let (_stats, verified) = security_checker::scan_verified(path, &limits, report);
     // 같은 코드(옛 BAD_MIMETYPE처럼 두 검사에 모두 있는 것)는 구조 검사 쪽 하나만 남긴다.
     let mut index = 0;
     report.findings.retain(|f| {
@@ -31,13 +31,13 @@ pub fn scan_epub_file(path: &Path, opts: &Options, report: &mut FileReport) {
     });
     // ZIP으로 열렸을 때만 렌더링·손상 검사를 한다. NOT_ZIP이면 읽을 멤버가 없다.
     if !report.has("NOT_ZIP") {
-        render::inspect_with_verified(path, report, &limits, &verified);
+        render_checker::inspect_with_verified(path, report, &limits, &verified);
         // 옛 인코딩 검사 도구와 같은 표본(`extract_epub_text`, 확장자와 무관)으로 인코딩 손상을 판정한다.
         // 보안 검사가 압축 폭탄이나 예산 소진을 이미 보고했다면 같은 멤버를 다시 풀지 않는다.
         if bomb_reported(report) {
             report.mark_incomplete("mojibake sampling skipped: decompression bomb or budget exhaustion already reported");
         } else {
-            crate::mojibake::check_file_limited(path, report, crate::mojibake::TextSource::Epub, limits.max_total, crate::mojibake::SAMPLE_MAX_MEMBERS);
+            crate::mojibake_detector::check_file_limited(path, report, crate::mojibake_detector::TextSource::Epub, limits.max_total, crate::mojibake_detector::SAMPLE_MAX_MEMBERS);
         }
     }
 }

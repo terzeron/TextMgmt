@@ -19,8 +19,8 @@ mod epub_perf {
 
     // --- 렌더링 단계의 중복 압축 해제 제거 ---
 
-    use bookdoctor::cli::Options;
-    use bookdoctor::epub::render::FULL_READS;
+    use bookdoctor::cli_parser::Options;
+    use bookdoctor::epub::render_checker::FULL_READS;
     use bookdoctor::epub::scan_epub_file;
 
     fn epub_with_media(path: &Path) {
@@ -52,7 +52,7 @@ mod epub_gaps {
     use std::path::Path;
 
     use support::*;
-    use bookdoctor::epub::security::{Limits, scan as scan_into};
+    use bookdoctor::epub::security_checker::{Limits, scan as scan_into};
     use bookdoctor::{FileReport, Format, Severity};
 
     fn scan(path: &Path) -> FileReport {

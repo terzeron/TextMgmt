@@ -1,19 +1,19 @@
 //! 구형 DOC(OLE 복합 파일) 검사. `ole` 모듈로 구조를 읽고 손상, 암호화, VBA 매크로, 내장 OLE 객체, DDE·필드를 본다.
 //! 파일을 실행하거나 렌더링하지 않는다. 매크로는 텍스트로만 읽는다.
 
-pub mod rtf;
+pub mod rtf_checker;
 
 use std::io::Read;
 use std::path::Path;
 
-use crate::ole::{Anomaly, EntryKind, Limits as OleLimits, OleError, OleFile, vba};
-use crate::sniff::{Sniffed, sniff};
-use crate::display::sanitize_display;
+use crate::ole_parser::{Anomaly, EntryKind, Limits as OleLimits, OleError, OleFile, vba_decoder};
+use crate::magic_sniffer::{Sniffed, sniff};
+use crate::output_formatter::sanitize_display;
 use crate::{Category, FileReport, Severity};
 
-use crate::cli::Options;
-use crate::zipcheck::fast::ZIP_EXEC_EXTS;
-use crate::zipcheck::ooxml::classify_field;
+use crate::cli_parser::Options;
+use crate::zipcheck::fast_zip_checker::ZIP_EXEC_EXTS;
+use crate::zipcheck::ooxml_checker::classify_field;
 
 /// 자동 실행 진입점. 문서를 열거나 닫을 때 Word가 부른다.
 const AUTOEXEC: &[&str] = &["autoopen", "autoexec", "autoclose", "auto_open", "document_open", "document_close", "documentopen", "workbook_open"];
@@ -80,7 +80,7 @@ pub(crate) fn open_ole(path: &Path, opts: &Options, report: &mut FileReport) -> 
     }
 }
 
-/// RTF 파일을 한도까지 읽어 `rtf::inspect`에 넘긴다. 한도를 넘으면 앞부분만 보고 미완료로 남긴다.
+/// RTF 파일을 한도까지 읽어 `rtf_checker::inspect`에 넘긴다. 한도를 넘으면 앞부분만 보고 미완료로 남긴다.
 fn scan_rtf_file(path: &Path, report: &mut FileReport) {
     let Ok(file) = std::fs::File::open(path) else {
         report.mark_incomplete("RTF file could not be opened");
@@ -95,7 +95,7 @@ fn scan_rtf_file(path: &Path, report: &mut FileReport) {
         bytes.truncate(RTF_READ_MAX as usize);
         report.mark_incomplete("skipped: RTF larger than the read limit; only the first part was inspected");
     }
-    rtf::inspect(&bytes, report);
+    rtf_checker::inspect(&bytes, report);
 }
 
 fn severity_of(a: &Anomaly) -> Severity {
@@ -174,7 +174,7 @@ fn check_vba(file: &mut OleFile, report: &mut FileReport) {
     for root in roots {
         let shown = sanitize_display(&root, 120, Some('…'));
         push_once(report, Category::Security, Severity::High, "DOC_VBA_MACRO", &shown, "VBA macro project");
-        match vba::read_project(file, &root, VBA_BUDGET) {
+        match vba_decoder::read_project(file, &root, VBA_BUDGET) {
             Err(e) => report.mark_incomplete(&format!("VBA project {shown} could not be read: {e:?}")),
             Ok(project) => {
                 if let Some(first) = project.errors.first() {

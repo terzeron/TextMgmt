@@ -4,9 +4,9 @@
 
 use std::io::{self, Write};
 
-use crate::display::sanitize_display;
-use crate::display::{Style, paint};
-use crate::finding::{ENCRYPTION_CODES, Suppressed};
+use crate::output_formatter::sanitize_display;
+use crate::output_formatter::{Style, paint};
+use crate::finding_model::{ENCRYPTION_CODES, Suppressed};
 use crate::{Category, FileReport, Finding, Severity, Summary};
 
 /// 출력할 내용이 있는가: 발견이 있거나 검사를 끝내지 못했다.

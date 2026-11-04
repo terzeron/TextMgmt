@@ -5,7 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use bookdoctor::report::{Aggregate, finding_style, write_json_line, write_text};
-use bookdoctor::display::Style;
+use bookdoctor::output_formatter::Style;
 use bookdoctor::{Category, FileReport, Format, Severity, Summary};
 
 fn flagged(path: &Path) -> FileReport {
@@ -90,8 +90,8 @@ fn bidi_file_name_is_hidden_in_text_but_kept_in_json() {
 
 #[test]
 fn escape_and_bidi_in_the_path_are_hidden_in_text_but_the_real_file_is_found() {
-    use bookdoctor::cli::Options;
-    use bookdoctor::scan::scan_file;
+    use bookdoctor::cli_parser::Options;
+    use bookdoctor::format_dispatcher::scan_file;
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("ev\u{1b}[31m\u{202e}il.txt");
     std::fs::write(&p, [0u8; 4096]).unwrap();
