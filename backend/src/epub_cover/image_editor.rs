@@ -810,9 +810,9 @@ mod tests {
         let first = &text[tags[0].0..tags[0].1];
         assert_eq!(split_tag_copy(first, "new image.jpg"), "<img src='new%20image.jpg' data-src='lazy.jpg'>");
         assert_eq!(split_tag_copy("<image href=\"old.svg\"/>", "new.svg"), "<image href=\"new.svg\"/>");
-        assert_eq!(is_word('_'), true);
-        assert_eq!(is_word('한'), true);
-        assert_eq!(is_word('-'), false);
+        assert!(is_word('_'));
+        assert!(is_word('한'));
+        assert!(!is_word('-'));
     }
 
     #[test]

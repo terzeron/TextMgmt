@@ -258,16 +258,6 @@ fn map_error(e: DieselError) -> DbError {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{DbError, DieselError, map_error};
-
-    #[test]
-    fn non_database_diesel_errors_become_other_db_errors() {
-        assert!(matches!(map_error(DieselError::NotFound), DbError::Other(message) if !message.is_empty()));
-    }
-}
-
 /// 열 구조를 미리 모르는 SELECT 결과 한 행.
 struct DynRow(Row);
 
@@ -426,4 +416,14 @@ pub fn connect_from_env(env: &dyn Fn(&str) -> Option<String>, default_user: &str
 /// 설정을 고정한 제공자. 서비스에 주입해서 연산마다 새 연결을 얻게 한다.
 pub fn mysql_provider(config: MysqlConfig) -> ConnectionProvider {
     Arc::new(move || connect(&config))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DbError, DieselError, map_error};
+
+    #[test]
+    fn non_database_diesel_errors_become_other_db_errors() {
+        assert!(matches!(map_error(DieselError::NotFound), DbError::Other(message) if !message.is_empty()));
+    }
 }
