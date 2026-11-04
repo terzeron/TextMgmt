@@ -9,14 +9,11 @@ use common::image::assert_approx;
 use common::pdf::{edit_pdf, first_image_size, first_xobject, first_xobject_mut, load, mediabox_of, page_count_bytes, page_dict, page_dict_mut, srgb_profile};
 use fx::{Edit, image_env, Opts, pixel_env};
 use lopdf::{dictionary, Dictionary, Document, Object, Stream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
-use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::pdf_page_reader::{LopdfPageOps, PageCountCache, PdfCacheLimits, PdfPageOps, PdfReaderCache, PdfReaderHandle};
-use common::es_fake::FakeEsManager;
-use serde_json::{json, Value};
-use tempfile::TempDir;
 use crate::common::shared_fixtures::{create_test_pdf, error_text};
+use crate::common::pdf_env::{ResponseExt, build};
 
 type EditFn = fn(&mut Document);
 
@@ -294,45 +291,10 @@ async fn test_es_delete_failure_stops_before_reindexing() {
     assert!(e.es.inserted().is_empty());
 }
 
-trait ResponseExt {
-    fn header(&self, name: &str) -> Option<&str>;
-}
-
 impl ResponseExt for backend::main::BookResponse {
     fn header(&self, name: &str) -> Option<&str> {
         self.headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str())
     }
-}
-
-/// ES 문서 dict 생성 헬퍼.
-fn make_doc(relative_path: &str, file_size: u64, page_count: i64, file_type: &str) -> Value {
-    json!({
-        "category": "test_category", "title": "Test Book", "author": "Author", "file_path": relative_path, "file_type": file_type,
-        "file_size": file_size, "line_count": 0, "page_count": page_count, "isbn": "", "summary": "test", "updated_time": "2024-01-01T00:00:00.000000"
-    })
-}
-
-// 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
-#[allow(dead_code)]
-struct Env {
-    bm: Arc<BookManager>,
-    es: Arc<FakeEsManager>,
-    temp_dir: PathBuf,
-    _tmp: TempDir,
-}
-
-/// `configure`는 임시 디렉터리와 기본 Deps를 받는다. 캐시 한도처럼 만들어 둔 파일 크기가 필요한 설정에 쓴다.
-fn build(configure: impl FnOnce(&Path, BookManagerDeps) -> BookManagerDeps) -> Env {
-    common::setup_env();
-    let tmp = tempfile::tempdir().unwrap();
-    let temp_dir = tmp.path().to_path_buf();
-    let pdf = temp_dir.join("test_category").join("test_book.pdf");
-    fs::create_dir_all(pdf.parent().unwrap()).unwrap();
-    create_test_pdf(5, &pdf);
-    let default_doc = make_doc("test_category/test_book.pdf", fs::metadata(&pdf).unwrap().len(), 5, "pdf");
-    let es = FakeEsManager::with_doc(default_doc.clone());
-    let deps = configure(&temp_dir, BookManagerDeps::new(temp_dir.clone(), es.clone()));
-    Env { bm: Arc::new(BookManager::with_deps(deps)), es, temp_dir, _tmp: tmp }
 }
 
 #[test]

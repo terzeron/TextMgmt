@@ -31,6 +31,7 @@ pub mod shared_fixtures;
 pub mod epub_book;
 pub mod cover_docs;
 pub mod cover_env;
+pub mod pdf_env;
 
 use axum::body::Body;
 use axum::http::{Method, Request};

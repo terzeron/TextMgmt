@@ -180,60 +180,21 @@ async fn test_hwp_preview_empty_returns_message() {
 }
 
 mod get_pdf_pages {
+    use crate::common::pdf_env::{ResponseExt, build, env, make_doc};
     use crate::common::shared_fixtures::{create_test_pdf};
     use super::common;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
-    use backend::book_manager::{BookManager, BookManagerDeps};
+    use backend::book_manager::BookManager;
     use backend::pdf_page_reader::{PdfError, PdfPageOps, PdfReaderHandle};
-    use common::es_fake::FakeEsManager;
     use common::faulty_fs::FaultyFs;
     use common::pdf::{page_count_bytes};
-    use serde_json::{json, Value};
-    use tempfile::TempDir;
-
-    trait ResponseExt {
-        fn header(&self, name: &str) -> Option<&str>;
-    }
 
     impl ResponseExt for backend::main::BookResponse {
         fn header(&self, name: &str) -> Option<&str> {
             self.headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str())
         }
-    }
-
-    /// ES 문서 dict 생성 헬퍼.
-    fn make_doc(relative_path: &str, file_size: u64, page_count: i64, file_type: &str) -> Value {
-        json!({
-            "category": "test_category", "title": "Test Book", "author": "Author", "file_path": relative_path, "file_type": file_type,
-            "file_size": file_size, "line_count": 0, "page_count": page_count, "isbn": "", "summary": "test", "updated_time": "2024-01-01T00:00:00.000000"
-        })
-    }
-
-    struct Env {
-        bm: Arc<BookManager>,
-        es: Arc<FakeEsManager>,
-        temp_dir: PathBuf,
-        _tmp: TempDir,
-    }
-
-    /// `configure`는 임시 디렉터리와 기본 Deps를 받는다. 캐시 한도처럼 만들어 둔 파일 크기가 필요한 설정에 쓴다.
-    fn build(configure: impl FnOnce(&Path, BookManagerDeps) -> BookManagerDeps) -> Env {
-        common::setup_env();
-        let tmp = tempfile::tempdir().unwrap();
-        let temp_dir = tmp.path().to_path_buf();
-        let pdf = temp_dir.join("test_category").join("test_book.pdf");
-        fs::create_dir_all(pdf.parent().unwrap()).unwrap();
-        create_test_pdf(5, &pdf);
-        let default_doc = make_doc("test_category/test_book.pdf", fs::metadata(&pdf).unwrap().len(), 5, "pdf");
-        let es = FakeEsManager::with_doc(default_doc.clone());
-        let deps = configure(&temp_dir, BookManagerDeps::new(temp_dir.clone(), es.clone()));
-        Env { bm: Arc::new(BookManager::with_deps(deps)), es, temp_dir, _tmp: tmp }
-    }
-
-    fn env() -> Env {
-        build(|_, d| d)
     }
 
     struct CountingPdfPages {
@@ -465,7 +426,7 @@ mod get_book_preview {
     use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};
-    use backend::book_manager::{BookManager};
+    use backend::book_manager::BookManager;
     use backend::epub_cover::EpubCoverHooks;
     use backend::main::{BookManagerApi, BookResponse};
     use backend::pdf_page_reader::{PdfError, PdfPageOps};
@@ -1345,7 +1306,7 @@ mod hwp_preview {
     use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, tmp_dir};
     use super::common;
     use std::{fs};
-    use backend::book_manager::{BookManager};
+    use backend::book_manager::BookManager;
     use super::common::{es_fake::FakeEsManager, runner::FakeRunner};
     use std::path::{Path, PathBuf};
     use backend::main::{BookManagerApi, BookResponse};
