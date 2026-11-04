@@ -1,7 +1,6 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,10 +13,11 @@ use common::{
     epub::{EpubSpec, make_epub},
     es_fake::FakeEsManager,
     fsx::{set_times_ns, times_ns},
-    pdf::write_blank_pdf,
+    
 };
 use serde_json::{Value, json};
 use crate::common::shared_fixtures::{thumbnailer};
+use crate::common::cover_docs::{create_test_pdf, use_doc};
 
 #[test]
 fn test_epubveri_cli_writes_epubcheck_compatible_json_for_valid_and_invalid_books() {
@@ -77,18 +77,6 @@ fn test_epubveri_cli_exits_2_on_bad_arguments_unreadable_books_and_unwritable_re
     let o = run(&[b, j, tmp.path().as_os_str()]);
     assert_eq!(o.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&o.stderr).contains("failed to write JSON report"));
-}
-
-fn create_test_pdf(output_path: &Path) {
-    write_blank_pdf(output_path, 612, 792);
-}
-
-fn make_doc(relative_path: &str, file_type: &str) -> Value {
-    json!({"category": "test_category", "title": "Test Book", "author": "Author", "file_path": relative_path, "file_type": file_type, "file_size": 1, "line_count": 0, "page_count": 1, "isbn": "", "summary": "test", "updated_time": "2024-01-01T00:00:00.000000"})
-}
-
-fn use_doc(es: &FakeEsManager, relative_path: &str, file_type: &str) {
-    es.set_doc(Some(make_doc(relative_path, file_type)));
 }
 
 /// 한 콘텐츠 종류(책/만화)에 대해 표지 캐시가 원본 파일을 따라가는지 확인한다.

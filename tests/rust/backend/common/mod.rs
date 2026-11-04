@@ -29,6 +29,7 @@ pub mod session;
 pub mod zipx;
 pub mod shared_fixtures;
 pub mod epub_book;
+pub mod cover_docs;
 
 use axum::body::Body;
 use axum::http::{Method, Request};

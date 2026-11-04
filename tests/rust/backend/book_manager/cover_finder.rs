@@ -5,13 +5,11 @@ mod fx;
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::path::{Path};
 use backend::book_manager::{BookManager, BookManagerDeps};
 use common::epub::{BODY};
 use common::es_fake::FakeEsManager;
 use common::fsx::ino_mtime;
 use common::image::{b64, red_jpeg};
-use common::pdf::write_blank_pdf;
 use serde_json::{json, Value};
 use backend::cover_management::CoverManagement;
 use backend::epub_cover;
@@ -20,18 +18,7 @@ use common::zipx::{read_zip_entry};
 use fx::{Edit, Opts};
 use crate::common::shared_fixtures::{broken_cover, error_text, first_item, truthy};
 use crate::common::shared_fixtures::{fetcher, thumbnailer};
-
-fn create_test_pdf(output_path: &Path) {
-    write_blank_pdf(output_path, 612, 792);
-}
-
-fn make_doc(relative_path: &str, file_type: &str) -> Value {
-    json!({"category": "test_category", "title": "Test Book", "author": "Author", "file_path": relative_path, "file_type": file_type, "file_size": 1, "line_count": 0, "page_count": 1, "isbn": "", "summary": "test", "updated_time": "2024-01-01T00:00:00.000000"})
-}
-
-fn use_doc(es: &FakeEsManager, relative_path: &str, file_type: &str) {
-    es.set_doc(Some(make_doc(relative_path, file_type)));
-}
+use crate::common::cover_docs::{create_test_pdf, use_doc};
 
 #[tokio::test]
 async fn test_cover_ignores_legacy_id_only_cache() {

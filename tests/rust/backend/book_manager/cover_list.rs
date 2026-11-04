@@ -586,6 +586,7 @@ mod cover_member_lookup {
 }
 
 mod get_cover {
+    use crate::common::cover_docs::{create_test_pdf, use_doc};
     use crate::common::shared_fixtures::{thumbnailer};
     use super::common;
     use std::path::Path;
@@ -595,17 +596,9 @@ mod get_cover {
     use common::es_fake::FakeEsManager;
     use common::fsx::count_matching;
     use common::image::{paste, png_bytes, solid};
-    use common::pdf::{write_blank_pdf, write_image_pdf};
+    use common::pdf::write_image_pdf;
     use image::{GenericImageView, ImageFormat};
-    use serde_json::{json, Value};
-
-    fn make_doc(relative_path: &str, file_type: &str) -> Value {
-        json!({"category": "test_category", "title": "Test Book", "author": "Author", "file_path": relative_path, "file_type": file_type, "file_size": 1, "line_count": 0, "page_count": 1, "isbn": "", "summary": "test", "updated_time": "2024-01-01T00:00:00.000000"})
-    }
-
-    fn use_doc(es: &FakeEsManager, relative_path: &str, file_type: &str) {
-        es.set_doc(Some(make_doc(relative_path, file_type)));
-    }
+    use serde_json::json;
 
     struct Env {
         tmp: tempfile::TempDir,
@@ -672,10 +665,6 @@ mod get_cover {
     const FIGURE_PAGE: &str = r#"<html><body><img src="fig.png"/></body></html>"#;
 
     const TEXT_PAGE: &str = "<html><body><p>x</p></body></html>";
-
-    fn create_test_pdf(output_path: &Path) {
-        write_blank_pdf(output_path, 612, 792);
-    }
 
     fn create_test_spread_pdf(output_path: &Path) {
         let mut spread = solid(1200, 800, [30, 30, 200]);
