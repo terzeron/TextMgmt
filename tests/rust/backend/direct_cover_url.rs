@@ -10,18 +10,7 @@ use fx::{Edit, FetchBehavior, image_env, Opts};
 use std::net::IpAddr;
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering, Mutex};
 use sysdeps::HttpTimeout;
-
-/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-    match result {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error)),
-    }
-}
-
-fn error_text(error: &Option<String>) -> &str {
-    error.as_deref().unwrap_or("")
-}
+use crate::common::shared_fixtures::{error_text, split};
 
 #[tokio::test]
 async fn test_fetch_failure_changes_nothing() {

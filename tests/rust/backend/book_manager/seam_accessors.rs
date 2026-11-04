@@ -4,10 +4,10 @@
 mod common;
 use std::collections::{BTreeSet, HashSet};
 use std::{fs, io};
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use backend::book_manager::{ApplyOptions, BackfillThread, BookManager, BookManagerDeps, CREATED_TIME_BACKFILL_ENV, ProposeOptions};
+use backend::book_manager::{ApplyOptions, BackfillThread, BookManager, CREATED_TIME_BACKFILL_ENV, ProposeOptions};
 use backend::main::{BookManagerApi, InlineRunner, TaskHandle, TaskRunner};
 use backend::pdf_page_reader::PdfCacheLimits;
 use common::env::EnvGuard;
@@ -16,23 +16,7 @@ use common::fsx::set_mtime;
 use common::zipx::write_zip;
 use serde_json::{json, Value};
 use tempfile::TempDir;
-use backend::es_manager::EsManagerApi;
-use common::image::encode_image;
-
-// ---------------------------------------------------------------------------
-// 공용 헬퍼 (전반부 정의를 복사)
-// ---------------------------------------------------------------------------
-
-/// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
-fn tmp_dir() -> TempDir {
-    tempfile::tempdir().unwrap()
-}
-
-/// 기본 구성의 `BookManagerDeps`. `with_*`를 더 붙인 뒤 `BookManager::with_deps`로 만든다.
-fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
-    common::setup_env();
-    BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
-}
+use crate::common::shared_fixtures::{allowed_set, asyncio_runner, blank_pdf_bytes_sized, category_with_files, deps, image_bytes, make_deps, make_doc, make_manager, make_source_file, outcome, tmp_dir};
 
 /// `apply_category_changes`의 Python 키워드 인자 묶음(테스트 로컬). 구현의 `ApplyOptions`로 바꿔 부른다.
 struct ApplyOpts {
@@ -50,10 +34,6 @@ impl ApplyOpts {
         self.on_item_done = Some(f);
         self
     }
-}
-
-fn make_manager(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManager {
-    BookManager::with_deps(deps(tmp_path, es))
 }
 
 /// `MagicMock()`으로 만든 스레드 대역. `is_alive`와 `start` 호출 횟수만 본다.
@@ -97,56 +77,6 @@ impl TaskRunner for FailingStartRunner {
     fn spawn_blocking_observed(&self, _name: &str) {}
 }
 
-// TODO(common): lopdf가 아니라 /Info 사전을 직접 쓰는 최소 PDF 생성기. common::pdf::PdfBuilder에 `info` 지원이 생기면 지운다.
-/// pypdf `PdfWriter.add_blank_page`로 만든 PDF에 대응한다. `info`는 /Info 사전의 (키, 값)이다.
-fn pdf_bytes(pages: usize, width: u32, height: u32, info: &[(&str, &str)]) -> Vec<u8> {
-    let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
-    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 3 + i)).collect();
-    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {pages} >>", kids.join(" ")));
-    for _ in 0..pages {
-        objs.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] >>"));
-    }
-    if !info.is_empty() {
-        let body: String = info.iter().map(|(k, v)| format!("/{k} ({v}) ")).collect();
-        objs.push(format!("<< {body}>>"));
-    }
-    let mut out = b"%PDF-1.4\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, obj) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{obj}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref_pos = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for off in &offsets {
-        out.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
-    }
-    let info_ref = if info.is_empty() { String::new() } else { format!(" /Info {} 0 R", 3 + pages) };
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R{info_ref} >>\nstartxref\n{xref_pos}\n%%EOF\n", objs.len() + 1).as_bytes());
-    out
-}
-
-fn blank_pdf_bytes_sized(pages: usize, width: u32, height: u32) -> Vec<u8> {
-    pdf_bytes(pages, width, height, &[])
-}
-
-/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
-fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
-    match result {
-        Ok(value) => (value, None),
-        Err(error) => (serde_json::json!({}), Some(error)),
-    }
-}
-
-/// `asyncio.run(coro)`에 대응한다. 동기 테스트 안에서 future를 끝까지 돌린다.
-fn asyncio_runner<F: std::future::Future>(fut: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
-}
-
-fn allowed_set(paths: &[&str]) -> BTreeSet<String> {
-    paths.iter().map(|p| p.to_string()).collect()
-}
-
 async fn apply_opts(manager: &BookManager, items: &[Value], opts: ApplyOpts) -> (Value, Option<String>) {
     let allowed: std::collections::HashSet<String> = opts.allowed.iter().cloned().collect();
     outcome(
@@ -154,15 +84,6 @@ async fn apply_opts(manager: &BookManager, items: &[Value], opts: ApplyOpts) -> 
             .apply_category_changes_with(items, &allowed, ApplyOptions { on_item_done: opts.on_item_done.as_deref(), should_continue: opts.should_continue.as_deref(), ..ApplyOptions::default() })
             .await,
     )
-}
-
-/// 임시 디렉토리 `A/<name>`을 만들어 내용 "x"인 파일 경로를 돌려준다.
-fn make_source_file(tmp_path: &Path, category: &str, name: &str) -> PathBuf {
-    let source = tmp_path.join(category);
-    fs::create_dir_all(&source).unwrap();
-    let target = source.join(name);
-    fs::write(&target, "x").unwrap();
-    target
 }
 
 #[test]
@@ -365,28 +286,6 @@ fn test_apply_category_changes_continues_after_one_item_raises() {
 
 const CONTAINER: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#;
 
-/// ES 대역을 쓰는 `BookManagerDeps`. 대역(`with_*`)을 꽂을 테스트는 이걸로 시작한다.
-fn make_deps(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManagerDeps {
-    BookManagerDeps::new(tmp_path.to_path_buf(), es)
-}
-
-/// Python `make_doc(path, file_type)`.
-fn make_doc(rel_path: &str, file_type: &str) -> Value {
-    json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
-}
-
-/// 이미지 한 장의 바이트. 색은 고정이다.
-fn image_bytes(fmt: image::ImageFormat, size: (u32, u32)) -> Vec<u8> {
-    encode_image(size.0, size.1, [10, 120, 200], fmt)
-}
-
-fn category_with_files(root: &Path, category: &str, names: &[&str]) {
-    fs::create_dir_all(root.join(category)).unwrap();
-    for name in names {
-        fs::write(root.join(category).join(name), "본문").unwrap();
-    }
-}
-
 #[tokio::test]
 async fn test_preview_downscales_large_epub_images() {
     // 가정한 seam(문서 3.12에 없음. 3.0 규칙대로 Deps 빌더로 옮겼다): 최소 바이트 값을 0으로 두고 축소 함수 호출 길이를 기록하는 훅
@@ -497,6 +396,7 @@ async fn test_apply_records_move_error_as_failed() {
 }
 
 mod pdf_reader_cache_budget {
+    use crate::common::shared_fixtures::{create_test_pdf};
     use super::common;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -505,14 +405,8 @@ mod pdf_reader_cache_budget {
     use backend::book_manager::{BookManager, BookManagerDeps};
     use backend::pdf_page_reader::PdfCacheLimits;
     use common::es_fake::FakeEsManager;
-    use common::pdf::make_blank_pdf;
     use serde_json::{json, Value};
     use tempfile::TempDir;
-
-    /// `create_test_pdf`
-    fn create_test_pdf(num_pages: usize, output_path: &Path) {
-        make_blank_pdf(output_path, num_pages);
-    }
 
     /// ES 문서 dict 생성 헬퍼.
     fn make_doc(relative_path: &str, file_size: u64, page_count: i64, file_type: &str) -> Value {

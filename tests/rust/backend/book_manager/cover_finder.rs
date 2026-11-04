@@ -5,10 +5,10 @@ mod fx;
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::sync::Arc;
 use backend::book_manager::{BookManager, BookManagerDeps, Thumbnailer};
-use common::epub::{BODY, EpubSpec, make_epub};
+use common::epub::{BODY};
 use common::es_fake::FakeEsManager;
 use common::fsx::ino_mtime;
 use common::image::{b64, red_jpeg};
@@ -18,9 +18,9 @@ use backend::cover_management::CoverManagement;
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover;
 use backend::epub_cover::{CoverError, MAX_IMAGE_BYTES};
-use common::es_dummy;
-use common::zipx::{read_zip_entry, rewrite_epub_members};
+use common::zipx::{read_zip_entry};
 use fx::{Edit, Opts};
+use crate::common::shared_fixtures::{broken_cover, error_text, first_item, truthy};
 
 fn create_test_pdf(output_path: &Path) {
     write_blank_pdf(output_path, 612, 792);
@@ -81,21 +81,6 @@ fn fetcher<F: Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync + 'static>(f
     Arc::new(FnFetcher(f))
 }
 
-// TODO(common): `es_dummy::truthy(Option<&Value>)`를 `&Value`로 받는 얇은 래퍼. cover_fixtures::truthy를 대신한다.
-fn truthy(value: &Value) -> bool {
-    es_dummy::truthy(Some(value))
-}
-
-fn broken_cover(tmp: &Path) -> PathBuf {
-    let path = make_epub(&tmp.join("book.epub"), &EpubSpec::cover("3.0", true));
-    rewrite_epub_members(&path, |members| members.set("OPS/cover.jpg", &b"not a JPEG"[..]));
-    path
-}
-
-fn first_item(service: &CoverManagement, covered: bool) -> Value {
-    service.missing("", "", 60, covered).unwrap()["items"][0].clone()
-}
-
 #[test]
 fn test_broken_cover_search_and_replacement_preserve_body_and_backup() {
     for method in ["image", "url"] {
@@ -130,6 +115,7 @@ fn test_broken_cover_search_and_replacement_preserve_body_and_backup() {
 }
 
 mod upload_limits {
+    use crate::common::shared_fixtures::{error_text};
     use super::{common, fx};
     use std::fs;
     use backend::book_manager::{BookManager, BookManagerDeps};
@@ -150,10 +136,6 @@ mod upload_limits {
         e
     }
 
-    fn error_text(error: &Option<String>) -> &str {
-        error.as_deref().unwrap_or("")
-    }
-
     #[tokio::test]
     async fn test_upload_insert_with_too_many_pixels_changes_nothing() {
         let e = with_deps(image_env(Opts::loader()), true, |d| d.with_epub_hooks(EpubCoverHooks::default().with_limits(Limits { max_image_pixels: 100, ..Limits::default() })));
@@ -164,10 +146,6 @@ mod upload_limits {
         assert!(result.is_none() && error_text(&error).contains("해상도가 너무 큽니다"), "{error:?}");
         e.assert_nothing_changed(&original);
     }
-}
-
-fn error_text(error: &Option<String>) -> &str {
-    error.as_deref().unwrap_or("")
 }
 
 #[tokio::test]
@@ -182,6 +160,7 @@ async fn test_upload_rejects_encoded_data_over_byte_limit_before_decoding() {
 }
 
 mod download_failures {
+    use crate::common::shared_fixtures::{err_has};
     use super::common;
     use std::fs;
 
@@ -191,10 +170,8 @@ mod download_failures {
     use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
     use backend::direct_cover_url::{FetchError, ImageFetcher};
 
-
     use common::epub::{EpubSpec, make_epub};
     use common::es_fake::FakeEsManager;
-
 
     use common::image::red_jpeg;
 
@@ -306,10 +283,6 @@ mod download_failures {
             Ok(value) => (Some(value), None),
             Err(error) => (None, Some(error)),
         }
-    }
-
-    fn err_has(error: &Option<String>, needle: &str) -> bool {
-        error.as_deref().unwrap_or_else(|| panic!("error가 None이다 (기대: {needle:?} 포함)")).contains(needle)
     }
 
     #[tokio::test]

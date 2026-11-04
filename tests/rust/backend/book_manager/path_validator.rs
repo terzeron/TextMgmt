@@ -5,30 +5,11 @@ mod common;
 use std::{fs, io};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use backend::book_manager::{BookManager, BookManagerDeps};
+use backend::book_manager::{BookManager};
 use common::es_fake::FakeEsManager;
 use common::faulty_fs::{FaultyFs, other_err};
 use sysdeps::{FsOps, RealFs};
-use tempfile::TempDir;
-
-// ---------------------------------------------------------------------------
-// 공용 헬퍼 (전반부 정의를 복사)
-// ---------------------------------------------------------------------------
-
-/// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
-fn tmp_dir() -> TempDir {
-    tempfile::tempdir().unwrap()
-}
-
-/// 기본 구성의 `BookManagerDeps`. `with_*`를 더 붙인 뒤 `BookManager::with_deps`로 만든다.
-fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
-    common::setup_env();
-    BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
-}
-
-fn make_manager(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManager {
-    BookManager::with_deps(deps(tmp_path, es))
-}
+use crate::common::shared_fixtures::{deps, make_manager, tmp_dir};
 
 type ListDirFn = dyn Fn(&Path) -> Vec<PathBuf> + Send + Sync;
 
@@ -201,6 +182,7 @@ fn test_iter_category_indexable_files_branches() {
 }
 
 mod stored_path_normalization {
+    use crate::common::shared_fixtures::{category_with_files, make_deps};
     use super::common;
 
     use std::fs;
@@ -208,33 +190,17 @@ mod stored_path_normalization {
     use std::path::Path;
     use std::sync::Arc;
 
-    use backend::book_manager::{BookManager, BookManagerDeps};
+    use backend::book_manager::{BookManager};
 
     use backend::es_manager::EsManagerApi;
 
     use common::es_fake::FakeEsManager;
 
-
-
-
     use tempfile::TempDir;
-
-
-    /// ES 대역을 쓰는 `BookManagerDeps`. 대역(`with_*`)을 꽂을 테스트는 이걸로 시작한다.
-    fn make_deps(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManagerDeps {
-        BookManagerDeps::new(tmp_path.to_path_buf(), es)
-    }
 
     /// Python `make_manager(tmp_path, es)`.
     fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {
         BookManager::with_deps(make_deps(tmp_path, es))
-    }
-
-    fn category_with_files(root: &Path, category: &str, names: &[&str]) {
-        fs::create_dir_all(root.join(category)).unwrap();
-        for name in names {
-            fs::write(root.join(category).join(name), "본문").unwrap();
-        }
     }
 
     #[test]

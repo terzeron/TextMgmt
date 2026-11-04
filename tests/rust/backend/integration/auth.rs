@@ -46,7 +46,6 @@
 mod common;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 use axum::Router;
 use axum::http::{Method, Request};
 use backend::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, RequestParts, TokenIssuer};
@@ -60,6 +59,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde_json::{json, Value};
 use axum::body::Body;
 use tower::ServiceExt;
+use crate::common::shared_fixtures::{now};
 
 // ---- 환경 변수 / 토큰 / 요청 헬퍼 ----
 
@@ -72,10 +72,6 @@ fn fixture() -> EnvGuard {
     env.set("TM_ADMIN_EMAIL", "admin@example.com");
     env.set("TM_ALLOWED_EMAILS", "viewer1@example.com,viewer2@example.com");
     env
-}
-
-fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
 }
 
 fn decode(token: &str) -> Value {

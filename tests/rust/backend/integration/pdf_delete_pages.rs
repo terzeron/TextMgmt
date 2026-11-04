@@ -16,21 +16,10 @@ use common::pdf::{
 use common::raster::same_pixels;
 use fx::{Edit, FetchBehavior, Opts, image_env, pixel_env};
 use serde_json::{Value, json};
-
-/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-    match result {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error)),
-    }
-}
+use crate::common::shared_fixtures::{error_text, split};
 
 fn has_error(error: &Option<String>) -> bool {
     error.as_deref().is_some_and(|e| !e.is_empty())
-}
-
-fn error_text(error: &Option<String>) -> &str {
-    error.as_deref().unwrap_or("")
 }
 
 #[tokio::test]

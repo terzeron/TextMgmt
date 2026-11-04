@@ -3,10 +3,10 @@
 #[path = "../common/mod.rs"]
 mod common;
 use std::sync::{Arc, Mutex};
-use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use db::Row;
 use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, SessionQuery, StoreError};
 use serde_json::{json, Value};
+use crate::common::shared_fixtures::{ip_headers};
 
 /// `RefreshTokenStoreApi` fake. 호출 인자를 기록하고 정해 둔 결과를 돌려준다.
 /// 안 정한 메서드는 trait의 기본 구현(Unimplemented 오류)을 쓴다.
@@ -133,14 +133,6 @@ impl RefreshTokenStoreApi for FakeStore {
     }
 }
 
-fn ip_headers(headers: &[(&str, &str)]) -> HeaderMap {
-    let mut map = HeaderMap::new();
-    for (k, v) in headers {
-        map.insert(HeaderName::from_bytes(k.to_lowercase().as_bytes()).unwrap(), HeaderValue::from_str(v).unwrap());
-    }
-    map
-}
-
 // ========== 접속 IP ==========
 
 const DEFAULT_CLIENT_HOST: &str = "192.0.2.9";
@@ -188,19 +180,14 @@ fn test_keeps_full_ipv6() {
 }
 
 mod request_ip_prefix {
-
+    use crate::common::shared_fixtures::{ip_headers};
 
     use std::sync::{Arc, Mutex};
 
 
-    use axum::http::{HeaderMap, HeaderName, HeaderValue};
-
     use db::Row;
 
     use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, SessionQuery, StoreError};
-
-
-
 
     use serde_json::{json, Value};
 
@@ -332,14 +319,6 @@ mod request_ip_prefix {
     // ========== 접속 IP ==========
 
     const DEFAULT_CLIENT_HOST: &str = "192.0.2.9";
-
-    fn ip_headers(headers: &[(&str, &str)]) -> HeaderMap {
-        let mut map = HeaderMap::new();
-        for (k, v) in headers {
-            map.insert(HeaderName::from_bytes(k.to_lowercase().as_bytes()).unwrap(), HeaderValue::from_str(v).unwrap());
-        }
-        map
-    }
 
     #[test]
     fn test_masks_cf_connecting_ip() {

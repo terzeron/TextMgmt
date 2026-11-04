@@ -13,11 +13,12 @@ use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering, Mutex};
 use classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
 use common::es_fake::FakeEsManager;
 use common::zipx::{read_zip_entry, write_zip};
-use serde_json::{json, Value};
+use serde_json::{Value};
 use tempfile::TempDir;
 use classifier::book_classifier::{BookClassifierService, BookstorePolicy, SharedBookClassifier};
 use bookstore::store_clients::{BookstoreSearch, SearchRow};
 use classifier::inference_model::CategoryModel;
+use crate::common::shared_fixtures::{model_dir, propose, tmp_dir};
 
 /// `fx::env`가 만든 환경의 `BookManager`를 Deps 설정을 더해 다시 만든다. `loader`가 참이면 파일 읽기 대역도 꽂는다.
 // TODO(common): `book_fixtures::Opts`가 Deps 설정 훅(`configure: Option<Box<dyn FnOnce(BookManagerDeps) -> BookManagerDeps>>`)을 받으면 이 헬퍼가 필요 없다.
@@ -55,23 +56,6 @@ async fn test_unexpected_error_while_saving_does_not_leak_panic_details() {
 
     assert!(result.is_none() && error.as_deref() == Some("PDF 페이지 삭제 실패 (RuntimeError)"), "{error:?}");
     e.assert_nothing_changed(&original);
-}
-
-/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
-fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
-    match result {
-        Ok(value) => (value, None),
-        Err(error) => (serde_json::json!({}), Some(error)),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 공용 헬퍼 (전반부 정의를 복사)
-// ---------------------------------------------------------------------------
-
-/// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
-fn tmp_dir() -> TempDir {
-    tempfile::tempdir().unwrap()
 }
 
 // --- 누락된 spine 문서: 총 챕터 수와 NCX 목차 ---
@@ -133,14 +117,6 @@ fn test_prune_dead_ncx_navpoints_ignores_unparsable_ncx_and_empty_src() {
     assert!(_prune_dead_ncx_navpoints(&no_src, "", &|_path| false).is_none());
 }
 
-fn run<F: std::future::Future>(fut: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
-}
-
-fn model_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny/trained")
-}
-
 /// 책 루트(`books`)와 서비스 파일(`meta`)을 나눠 둔다. 캐시 파일이 책으로 스캔되면 안 된다.
 struct Setup {
     _tmp: TempDir,
@@ -192,12 +168,6 @@ fn service(s: &Setup, categories: [&'static str; 3], calls: &Arc<AtomicUsize>) -
 fn manager(s: &Setup, deps: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> BookManager {
     common::setup_env();
     BookManager::with_deps(deps(BookManagerDeps::new(s.books.clone(), FakeEsManager::new())))
-}
-
-fn propose(m: &BookManager, opts: ProposeOptions<'_>) -> Value {
-    let (result, err) = outcome(run(m.propose_category_changes("0_inbox", Some(&json!({})), opts)));
-    assert!(err.is_none(), "{err:?}");
-    result
 }
 
 // ---------------------------------------------------------------------------

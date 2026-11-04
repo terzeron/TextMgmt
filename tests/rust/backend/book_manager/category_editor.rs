@@ -4,44 +4,9 @@
 mod common;
 use std::fs;
 use std::os::unix::fs::symlink;
-use std::path::Path;
-use std::sync::Arc;
-use backend::book_manager::{BookManager, BookManagerDeps};
 use common::es_fake::FakeEsManager;
 use serde_json::json;
-use tempfile::TempDir;
-
-/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
-fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
-    match result {
-        Ok(value) => (value, None),
-        Err(error) => (serde_json::json!({}), Some(error)),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 공용 헬퍼 (전반부 정의를 복사)
-// ---------------------------------------------------------------------------
-
-/// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
-fn tmp_dir() -> TempDir {
-    tempfile::tempdir().unwrap()
-}
-
-/// `asyncio.run(coro)`에 대응한다. 동기 테스트 안에서 future를 끝까지 돌린다.
-fn asyncio_runner<F: std::future::Future>(fut: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
-}
-
-/// 기본 구성의 `BookManagerDeps`. `with_*`를 더 붙인 뒤 `BookManager::with_deps`로 만든다.
-fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
-    common::setup_env();
-    BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
-}
-
-fn make_manager(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManager {
-    BookManager::with_deps(deps(tmp_path, es))
-}
+use crate::common::shared_fixtures::{asyncio_runner, make_manager, outcome, tmp_dir};
 
 // ---- coverage: rename_category new_category path traversal ----
 

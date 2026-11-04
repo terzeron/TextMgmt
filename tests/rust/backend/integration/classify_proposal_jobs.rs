@@ -14,11 +14,7 @@ use backend::main::{
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use serde_json::{Value, json};
-
-/// 쿼리 값을 퍼센트 인코딩한다. `params={...}`에 대응한다.
-fn enc(s: &str) -> String {
-    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
-}
+use crate::common::shared_fixtures::{enc};
 
 fn admin_payload() -> Value {
     let exp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600;

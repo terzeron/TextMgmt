@@ -23,6 +23,7 @@ use std::time::Duration;
 use backend::es_manager::{EsError, ESManager, EsTransport, HttpTransport, RealEsConnector};
 use serde_json::{json, Value};
 use sysdeps::SystemClock;
+use crate::common::shared_fixtures::{transport};
 
 // ---------------------------------------------------------------------------
 // 로컬 서버
@@ -84,10 +85,6 @@ fn serve(responses: Vec<(u16, String)>) -> (String, mpsc::Receiver<Captured>) {
         }
     });
     (url, rx)
-}
-
-fn transport(url: &str) -> HttpTransport {
-    HttpTransport::new(url, "elastic", "pw", "books", Duration::from_secs(5))
 }
 
 #[test]
@@ -254,6 +251,7 @@ fn real_connector_connects_through_http_and_uses_env_index() {
 }
 
 mod real_transport {
+    use crate::common::shared_fixtures::{transport};
     use backend::es_manager::{EsError, ESManager, EsTransport, HttpTransport, SimilarDocsArgs, UpdateFields};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -262,10 +260,6 @@ mod real_transport {
     use std::process::Command;
     use std::thread;
     use std::time::{Duration, Instant};
-
-    fn transport(url: &str) -> HttpTransport {
-        HttpTransport::new(url, "elastic", "pw", "books", Duration::from_secs(5))
-    }
 
     // ---------------------------------------------------------------------------
     // Docker: 일회용 ES 9.1.0

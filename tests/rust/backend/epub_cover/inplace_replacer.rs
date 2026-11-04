@@ -6,33 +6,13 @@ mod common;
 #[path = "../common/cover_fixtures.rs"]
 mod cover_fixtures;
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use backend::book_manager::BookManager;
 use backend::epub_cover;
 use crate::common::{epub::BODY, epub::count_elements, epub::EpubSpec, epub::make_epub, fsx::ino_mtime, image::BLUE, image::encode_image, image::red_jpeg, zipx::member_names, zipx::read_zip_entry};
 use image::ImageFormat;
 use serde_json::Value;
-
-fn read(path: &Path) -> Vec<u8> {
-    std::fs::read(path).unwrap()
-}
-
-fn backups(root: &Path) -> PathBuf {
-    root.join(".cover_backups")
-}
-
-/// 현재 `revision`. Python `inspect_epub(path)["revision"]`.
-fn rev(path: &Path) -> String {
-    epub_cover::inspect_epub(path).unwrap()["revision"].as_str().unwrap().to_string()
-}
-
-fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
-    value[key].as_str().unwrap()
-}
-
-fn opf_of(path: &Path) -> Vec<u8> {
-    read_zip_entry(path, "OPS/book.opf")
-}
+use crate::common::shared_fixtures::{backups, opf_of, read, rev, str_of};
 
 #[test]
 fn test_cover_replacement_preserves_content_and_has_one_generated_cover() {

@@ -16,6 +16,7 @@ use std::task::{Context, Poll, Waker};
 use backend::book_metadata::{Book, BookLookupError, BookPage};
 use db::{DbValue, Row};
 use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, StoreError};
+use crate::common::shared_fixtures::{arr, books, count, cover_page, flag, is_truthy, opt_book, opt_json, opt_string, page, strings, to_response, value_result};
 
 /// 분류 제안 작업 상태를 메모리로 흉내 낸 category_mapping mock. 전이 규칙까지 흉내 낸다.
 /// 항목에 `_age_seconds`를 넣으면 '갱신이 그만큼 끊긴 작업'이 된다.
@@ -387,17 +388,6 @@ fn real_mapping_facade_propagates_mapping_read_database_failures() {
     assert!(!CategoryMappingApi::set_latest_excluded(&mapping, "fiction", true, "book").unwrap());
 }
 
-fn is_truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(true),
-    }
-}
-
 // ── 목 매니저: AsyncMock/MagicMock 대응 ──────────────────────────────────────
 //
 // 설계 3.2: 앱에는 `AppDeps`로 `Arc<dyn BookManagerApi>`/`Arc<dyn CategoryMappingApi>`를 넣는다. `Mock`은 그 trait를 구현하는
@@ -563,68 +553,6 @@ fn poll_ready<T>(mut fut: Fut<'_, T>) -> T {
         Poll::Ready(v) => v,
         Poll::Pending => panic!("동기 trait 메서드의 side effect는 바로 끝나는 future여야 한다"),
     }
-}
-
-// JSON -> trait 반환형 변환.
-
-fn arr(v: &Value, i: usize) -> Value {
-    v.get(i).cloned().unwrap_or(Value::Null)
-}
-
-fn opt_string(v: Value) -> Option<String> {
-    v.as_str().map(str::to_string)
-}
-
-fn opt_json(v: Value) -> Option<Value> {
-    if v.is_null() { None } else { Some(v) }
-}
-
-fn strings(v: Value) -> Vec<String> {
-    v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default()
-}
-
-fn flag(v: &Value) -> bool {
-    v.as_bool().unwrap_or(false)
-}
-
-fn count(v: &Value) -> i64 {
-    v.as_i64().unwrap_or(0)
-}
-
-/// `[항목, 전체 수, 다음 커서, 오류]`를 `Result<CoverPage, _>`로 바꾼다. 전체 수가 null이면 모르는 것이다.
-fn cover_page(v: &Value) -> Result<CoverPage, String> {
-    let total = arr(v, 1).as_u64().map(|n| n as usize);
-    opt_string(arr(v, 3)).map_or_else(|| Ok(CoverPage { items: titled_books(arr(v, 0)), total, next_cursor: opt_string(arr(v, 2)) }), Err)
-}
-
-/// `[책 목록, 전체 수, 오류]`를 `Result<BookPage, _>`로 바꾼다.
-fn page(v: &Value) -> Result<BookPage, String> {
-    opt_string(arr(v, 2)).map_or_else(|| Ok(BookPage { books: books(arr(v, 0)), total: count(&arr(v, 1)), next_cursor: None }), Err)
-}
-
-fn opt_book(v: Value) -> Option<Book> {
-    if v.is_null() { None } else { Some(Book::new(v["book_id"].as_i64().unwrap_or_default(), &v, v["score"].as_f64().unwrap_or_default())) }
-}
-
-fn books(v: Value) -> Vec<Book> {
-    v.as_array().map(|a| a.iter().cloned().map(|b| opt_book(b).expect("Book JSON")).collect()).unwrap_or_default()
-}
-
-/// `[[book, display_title], ...]`
-fn titled_books(v: Value) -> Vec<(Book, String)> {
-    v.as_array().map(|a| a.iter().map(|row| (opt_book(arr(row, 0)).expect("Book JSON"), arr(row, 1).as_str().unwrap_or("").to_string())).collect()).unwrap_or_default()
-}
-
-/// `{"__response__": {"content": .., "media_type": ..}}` -> 200 응답.
-fn to_response(v: Value) -> BookResponse {
-    let r = v.get("__response__").cloned().unwrap_or(Value::Null);
-    BookResponse { status_code: 200, media_type: r["media_type"].as_str().map(str::to_string), headers: Vec::new(), body: r["content"].as_str().unwrap_or("").as_bytes().to_vec() }
-}
-
-/// `(Option<Value>, Option<String>)` 쌍. `[결과, 오류]`
-/// `[값, 오류]`를 `Result`로 바꾼다. 오류가 있으면 값은 보지 않는다.
-fn value_result(v: &Value) -> Result<Value, String> {
-    opt_string(arr(v, 1)).map_or_else(|| Ok(arr(v, 0)), Err)
 }
 
 fn progress_callback<'a>(f: Option<&'a (dyn Fn(Value) + Send + Sync)>) -> Option<Callback<'a>> {
@@ -1025,10 +953,6 @@ fn effective(store: &Store, content_type: &str, stale_seconds: f64) -> Value {
         obj.insert("error".into(), error);
     }
     current
-}
-
-fn proposal_result(total: usize, items: &[Value]) -> Value {
-    json!({"content_type": "book", "source_category": "0_inbox", "total_count": total, "processed_count": total, "items": items, "failures": []})
 }
 
 /// 카테고리가 빈 문자열이면 False (main.py:252).

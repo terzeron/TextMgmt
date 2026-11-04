@@ -72,14 +72,7 @@ use common::{TestClient, env::EnvGuard, es_fake::FakeEsManager};
 use serde_json::{Value, json};
 use sysdeps::{FsOps, SystemClock};
 use tempfile::TempDir;
-
-/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-    match result {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error)),
-    }
-}
+use crate::common::shared_fixtures::{enc, now_secs, process_env, split};
 
 #[test]
 fn backend_binary_dispatches_the_isbn_pdf_worker_command() {
@@ -95,20 +88,9 @@ fn backend_binary_dispatches_the_isbn_pdf_worker_command() {
 
 const CATEGORY: &str = "_epub";
 
-// ── 공용 헬퍼 ──────────────────────────────────────────────────────────────
-
-/// 쿼리 값을 퍼센트 인코딩한다.
-fn enc(s: &str) -> String {
-    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
-}
-
 /// 경로 조각을 인코딩한다. `/`는 그대로 둔다.
 fn enc_path(s: &str) -> String {
     s.split('/').map(enc).collect::<Vec<_>>().join("/")
-}
-
-fn now_secs() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
 }
 
 /// `finally` 블록에 대응한다. 패닉이 나도 정리가 돈다.
@@ -166,10 +148,6 @@ fn direct_files(dir: &Path) -> Vec<PathBuf> {
 /// `Loader.read_files(path, num_files=n)`에 대응한다.
 fn read_files(dir: &Path, num_files: usize) -> BTreeMap<i64, Value> {
     direct_files(dir).into_iter().take(num_files).flat_map(|p| read_file(&p)).collect()
-}
-
-fn process_env(key: &str) -> Option<String> {
-    std::env::var(key).ok()
 }
 
 /// 실제 ES에 연결하는 `es_factory`. 실제 ES가 필요한 통합 테스트만 쓴다.

@@ -33,7 +33,6 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{common, mysql_fixture};
 
@@ -45,12 +44,7 @@ use backend::refresh_token_store::{
 use common::env::EnvGuard;
 use common::log_capture::LogCapture;
 use serde_json::{Value, json};
-
-// ---- 시간 / 저장소 헬퍼 ----
-
-fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
-}
+use crate::common::shared_fixtures::{now};
 
 fn fam(c: char) -> String {
     c.to_string().repeat(32)

@@ -9,14 +9,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-    match result {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error)),
-    }
-}
+use crate::common::shared_fixtures::{split};
 
 struct Env {
     bm: BookManager,
@@ -419,6 +412,7 @@ async fn jpeg_crop_preserves_quantization_sampling_progressive_and_grayscale() {
 }
 
 mod http_contract {
+    use crate::common::shared_fixtures::{split};
     use super::common;
     use backend::book_manager::{BookManager, BookManagerDeps};
     use super::common::{es_fake::FakeEsManager, faulty_fs::FaultyFs, pdf::make_pdf, pdf::widths};
@@ -426,14 +420,6 @@ mod http_contract {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
-
-    /// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-    fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-        match result {
-            Ok(value) => (Some(value), None),
-            Err(error) => (None, Some(error)),
-        }
-    }
 
     // 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
     #[allow(dead_code)]

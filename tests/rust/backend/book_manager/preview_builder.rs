@@ -7,19 +7,19 @@ mod fx;
 mod common;
 use std::fs;
 use std::fs::File;
-use std::io::{Cursor, Read};
+use std::io::{Cursor};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::BookManagerApi;
 use common::es_fake::FakeEsManager;
-use common::zipx::{write_zip, write_zip_with, ZipMode};
-use serde_json::{json, Value};
+use common::zipx::{write_zip};
+use serde_json::{json};
 use zip::ZipArchive;
 use common::runner::FakeRunner;
 use backend::es_manager::EsManagerApi;
-use common::image::encode_image;
 use tempfile::TempDir;
+use crate::common::shared_fixtures::{image_bytes, make_deps, make_doc, namelist, unlink, write_zip_stored, zip_read_string};
 
 // ── EPUB 생성 헬퍼 ────────────────────────────────────────
 
@@ -30,15 +30,6 @@ const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   </rootfiles>
 </container>"#;
 
-/// `zipfile.ZipFile(path, "w")`: 압축 인자가 없으면 ZIP_STORED다.
-fn write_zip_stored(path: &Path, entries: &[(&str, &[u8])]) {
-    write_zip_with(path, entries, ZipMode::Stored);
-}
-
-fn unlink(path: &Path) {
-    let _ = fs::remove_file(path);
-}
-
 /// 임시 파일 정리(`finally: path.unlink(missing_ok=True)`). panic이 나도 Drop에서 지운다.
 struct TempFile(PathBuf);
 
@@ -46,20 +37,6 @@ impl Drop for TempFile {
     fn drop(&mut self) {
         unlink(&self.0);
     }
-}
-
-fn namelist<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>) -> Vec<String> {
-    (0..zf.len()).map(|i| zf.by_index(i).unwrap().name().unwrap().into_owned()).collect()
-}
-
-fn zip_read<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &str) -> Vec<u8> {
-    let mut data = Vec::new();
-    zf.by_name(name).unwrap_or_else(|_| panic!("KeyError: {name}")).read_to_end(&mut data).unwrap();
-    data
-}
-
-fn zip_read_string<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &str) -> String {
-    String::from_utf8(zip_read(zf, name)).unwrap()
 }
 
 /// URL 인코딩된 href 항목 및 전체보기(chapters=0) 시 EPUB 구조가 완전 보존되는지 검증.
@@ -199,11 +176,6 @@ async fn test_preview_expands_self_closing_title() {
 fn hwp_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().map(|a| a.join("tests/books/_hwp")).find(|p| p.exists()).unwrap_or_else(|| PathBuf::from("tests/books/_hwp"))
 }
-
-/// Python `make_doc(path, file_type)`.
-fn make_doc(rel_path: &str, file_type: &str) -> Value {
-    json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
-}
 // book_manager HWP preview에서 빈 결과 시 안내 메시지 반환
 
 #[tokio::test]
@@ -225,6 +197,7 @@ async fn test_hwp_preview_empty_returns_message() {
 }
 
 mod get_pdf_pages {
+    use crate::common::shared_fixtures::{create_test_pdf};
     use super::common;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -233,7 +206,7 @@ mod get_pdf_pages {
     use backend::pdf_page_reader::{PdfError, PdfPageOps, PdfReaderHandle};
     use common::es_fake::FakeEsManager;
     use common::faulty_fs::FaultyFs;
-    use common::pdf::{make_blank_pdf, page_count_bytes};
+    use common::pdf::{page_count_bytes};
     use serde_json::{json, Value};
     use tempfile::TempDir;
 
@@ -245,11 +218,6 @@ mod get_pdf_pages {
         fn header(&self, name: &str) -> Option<&str> {
             self.headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str())
         }
-    }
-
-    /// `create_test_pdf`
-    fn create_test_pdf(num_pages: usize, output_path: &Path) {
-        make_blank_pdf(output_path, num_pages);
     }
 
     /// ES 문서 dict 생성 헬퍼.
@@ -507,13 +475,14 @@ mod get_pdf_pages {
 }
 
 mod get_book_preview {
+    use crate::common::shared_fixtures::{asyncio_runner, blank_pdf_bytes, blank_pdf_bytes_sized, deps, make_doc, make_manager, tmp_dir};
     use super::common;
     use std::{fs, io};
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, SystemTime};
-    use backend::book_manager::{BookManager, BookManagerDeps};
+    use backend::book_manager::{BookManager};
     use backend::epub_cover::EpubCoverHooks;
     use backend::main::{BookManagerApi, BookResponse};
     use backend::pdf_page_reader::{PdfError, PdfPageOps};
@@ -523,33 +492,7 @@ mod get_book_preview {
     use common::fsx::{mtime_key, set_mtime};
     use common::runner::FakeRunner;
     use common::zipx::write_zip;
-    use serde_json::{json, Value};
     use sysdeps::CommandError;
-    use tempfile::TempDir;
-
-    // ---------------------------------------------------------------------------
-    // 공용 헬퍼 (전반부 정의를 복사)
-    // ---------------------------------------------------------------------------
-
-    /// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
-    fn tmp_dir() -> TempDir {
-        tempfile::tempdir().unwrap()
-    }
-
-    /// `asyncio.run(coro)`에 대응한다. 동기 테스트 안에서 future를 끝까지 돌린다.
-    fn asyncio_runner<F: std::future::Future>(fut: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
-    }
-
-    /// 기본 구성의 `BookManagerDeps`. `with_*`를 더 붙인 뒤 `BookManager::with_deps`로 만든다.
-    fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
-        common::setup_env();
-        BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
-    }
-
-    fn make_manager(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManager {
-        BookManager::with_deps(deps(tmp_path, es))
-    }
 
     /// `BookResponse` 읽기 도우미(테스트 로컬). `is_file`은 본문이 있으면 참이다(파일을 읽어 담은 응답).
     trait ResponseExt {
@@ -565,10 +508,6 @@ mod get_book_preview {
         fn body_text(&self) -> String {
             String::from_utf8_lossy(&self.body).into_owned()
         }
-    }
-
-    fn make_doc(rel_path: &str, file_type: &str) -> Value {
-        json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
     }
 
     /// `_make_minimal_epub`의 기본 OPF.
@@ -592,40 +531,6 @@ mod get_book_preview {
 
     const CONTAINER_XML_CONTENT_OPF: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
 
-    // TODO(common): lopdf가 아니라 /Info 사전을 직접 쓰는 최소 PDF 생성기. common::pdf::PdfBuilder에 `info` 지원이 생기면 지운다.
-    /// pypdf `PdfWriter.add_blank_page`로 만든 PDF에 대응한다. `info`는 /Info 사전의 (키, 값)이다.
-    fn pdf_bytes(pages: usize, width: u32, height: u32, info: &[(&str, &str)]) -> Vec<u8> {
-        let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
-        let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 3 + i)).collect();
-        objs.push(format!("<< /Type /Pages /Kids [{}] /Count {pages} >>", kids.join(" ")));
-        for _ in 0..pages {
-            objs.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] >>"));
-        }
-        if !info.is_empty() {
-            let body: String = info.iter().map(|(k, v)| format!("/{k} ({v}) ")).collect();
-            objs.push(format!("<< {body}>>"));
-        }
-        let mut out = b"%PDF-1.4\n".to_vec();
-        let mut offsets = Vec::new();
-        for (i, obj) in objs.iter().enumerate() {
-            offsets.push(out.len());
-            out.extend_from_slice(format!("{} 0 obj\n{obj}\nendobj\n", i + 1).as_bytes());
-        }
-        let xref_pos = out.len();
-        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-        for off in &offsets {
-            out.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
-        }
-        let info_ref = if info.is_empty() { String::new() } else { format!(" /Info {} 0 R", 3 + pages) };
-        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R{info_ref} >>\nstartxref\n{xref_pos}\n%%EOF\n", objs.len() + 1).as_bytes());
-        out
-    }
-
-    /// 612x792 빈 페이지 `pages`장짜리 PDF.
-    fn blank_pdf_bytes(pages: usize, info: &[(&str, &str)]) -> Vec<u8> {
-        pdf_bytes(pages, 612, 792, info)
-    }
-
     // TODO(common): `common::fake_pdf`(다음 단계)에 `PdfPageOps` 대역이 생기면 지운다.
     /// 구 `override_get_cached_page_count(|_| Err(OSError(28)))`: 쪽수 조회가 항상 실패하는 `PdfPageOps`.
     struct NoSpacePdfPages;
@@ -638,10 +543,6 @@ mod get_book_preview {
         fn extract_pages(&self, _path: &Path, _start: usize, _end: usize) -> Result<Vec<u8>, PdfError> {
             Err(PdfError { kind: "OSError".to_string(), message: "[Errno 28] No space left on device".to_string() })
         }
-    }
-
-    fn blank_pdf_bytes_sized(pages: usize, width: u32, height: u32) -> Vec<u8> {
-        pdf_bytes(pages, width, height, &[])
     }
 
     // ---- coverage: get_book_preview edge cases ----
@@ -1414,19 +1315,9 @@ mod get_book_preview {
 
 const CONTAINER: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#;
 
-/// ES 대역을 쓰는 `BookManagerDeps`. 대역(`with_*`)을 꽂을 테스트는 이걸로 시작한다.
-fn make_deps(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManagerDeps {
-    BookManagerDeps::new(tmp_path.to_path_buf(), es)
-}
-
 /// Python `make_manager(tmp_path, es)`.
 fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {
     BookManager::with_deps(make_deps(tmp_path, es))
-}
-
-/// 이미지 한 장의 바이트. 색은 고정이다.
-fn image_bytes(fmt: image::ImageFormat, size: (u32, u32)) -> Vec<u8> {
-    encode_image(size.0, size.1, [10, 120, 200], fmt)
 }
 
 #[tokio::test]
@@ -1470,39 +1361,13 @@ async fn test_preview_keeps_cover_image_not_referenced_by_chapters() {
 }
 
 mod hwp_preview {
+    use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, tmp_dir};
     use super::common;
     use std::{fs};
-    use backend::book_manager::{BookManager, BookManagerDeps};
+    use backend::book_manager::{BookManager};
     use super::common::{es_fake::FakeEsManager, runner::FakeRunner};
     use std::path::{Path, PathBuf};
-    use std::sync::{Arc};
     use backend::main::{BookManagerApi, BookResponse};
-    use serde_json::{json, Value};
-    use tempfile::TempDir;
-
-    // ---------------------------------------------------------------------------
-    // 공용 헬퍼 (전반부 정의를 복사)
-    // ---------------------------------------------------------------------------
-
-    /// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
-    fn tmp_dir() -> TempDir {
-        tempfile::tempdir().unwrap()
-    }
-
-    /// `asyncio.run(coro)`에 대응한다. 동기 테스트 안에서 future를 끝까지 돌린다.
-    fn asyncio_runner<F: std::future::Future>(fut: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
-    }
-
-    /// 기본 구성의 `BookManagerDeps`. `with_*`를 더 붙인 뒤 `BookManager::with_deps`로 만든다.
-    fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
-        common::setup_env();
-        BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
-    }
-
-    fn make_doc(rel_path: &str, file_type: &str) -> Value {
-        json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
-    }
 
     /// `BookResponse` 읽기 도우미(테스트 로컬). `is_file`은 본문이 있으면 참이다(파일을 읽어 담은 응답).
     trait ResponseExt {    fn body_text(&self) -> String;

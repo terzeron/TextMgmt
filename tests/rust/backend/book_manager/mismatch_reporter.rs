@@ -4,37 +4,12 @@
 mod common;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
-use std::path::Path;
-use std::sync::Arc;
-use backend::book_manager::{BookManager, BookManagerDeps};
+use backend::book_manager::{BookManager};
 use backend::main::{BookManagerApi};
 use common::es_fake::FakeEsManager;
 use common::log_capture::LogCapture;
-use serde_json::{json, Value};
-use tempfile::TempDir;
-
-// ---------------------------------------------------------------------------
-// 공용 헬퍼 (전반부 정의를 복사)
-// ---------------------------------------------------------------------------
-
-/// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
-fn tmp_dir() -> TempDir {
-    tempfile::tempdir().unwrap()
-}
-
-/// 기본 구성의 `BookManagerDeps`. `with_*`를 더 붙인 뒤 `BookManager::with_deps`로 만든다.
-fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
-    common::setup_env();
-    BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
-}
-
-fn make_doc(rel_path: &str, file_type: &str) -> Value {
-    json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
-}
-
-fn make_manager(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManager {
-    BookManager::with_deps(deps(tmp_path, es))
-}
+use serde_json::{json};
+use crate::common::shared_fixtures::{deps, make_doc, make_manager, tmp_dir};
 
 #[test]
 fn test_get_category_mismatch_details_reads_all_pages() {
@@ -75,35 +50,18 @@ fn test_get_category_mismatches_root_file() {
 }
 
 mod mismatch_summary {
+    use crate::common::shared_fixtures::{category_with_files, make_deps};
     use super::common;
-
-    use std::fs;
 
     use std::path::Path;
     use std::sync::Arc;
 
-    use backend::book_manager::{BookManager, BookManagerDeps};
+    use backend::book_manager::{BookManager};
 
     use backend::es_manager::EsManagerApi;
     use common::es_fake::FakeEsManager;
 
-
-
-
     use tempfile::TempDir;
-
-
-    fn category_with_files(root: &Path, category: &str, names: &[&str]) {
-        fs::create_dir_all(root.join(category)).unwrap();
-        for name in names {
-            fs::write(root.join(category).join(name), "본문").unwrap();
-        }
-    }
-
-    /// ES 대역을 쓰는 `BookManagerDeps`. 대역(`with_*`)을 꽂을 테스트는 이걸로 시작한다.
-    fn make_deps(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManagerDeps {
-        BookManagerDeps::new(tmp_path.to_path_buf(), es)
-    }
 
     /// Python `make_manager(tmp_path, es)`.
     fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {

@@ -3,7 +3,6 @@
 
 mod common;
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 use backend::auth_service::{HTTPException, RequestParts, SystemExit};
 use backend::main::RoleResolver;
 use common::env::EnvGuard;
@@ -11,6 +10,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde_json::{json, Value};
 use backend::auth_service;
 use bookstore::store_clients::{AbstractBookstore, KyoboBookstore};
+use crate::common::shared_fixtures::{now, process_env};
 
 // ---- 환경 변수 / 토큰 / 요청 헬퍼 ----
 
@@ -23,15 +23,6 @@ fn fixture() -> EnvGuard {
     env.set("TM_ADMIN_EMAIL", "admin@example.com");
     env.set("TM_ALLOWED_EMAILS", "viewer1@example.com,viewer2@example.com");
     env
-}
-
-/// `load_jwt_secret(env: EnvFn)`에 넘기는 실제 프로세스 환경.
-fn process_env(key: &str) -> Option<String> {
-    std::env::var(key).ok()
-}
-
-fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
 }
 
 fn decode(token: &str) -> Value {

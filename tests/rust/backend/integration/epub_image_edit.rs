@@ -10,36 +10,16 @@ use async_trait::async_trait;
 use backend::book_metadata::BookLookupError;
 use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
-use backend::epub_cover::{CoverError, EditImages, OPF_NS, edit_images, read_package, revision};
+use backend::epub_cover::{CoverError, EditImages, OPF_NS, read_package};
 use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
-use common::image::{b64, color, encode, image_size, jpeg_bytes};
+use common::image::{b64};
 use common::zipx::{Members as ZipMembers, ZipMode, write_zip_with};
-use image::{DynamicImage, ImageFormat, Rgb, RgbImage, RgbaImage};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use zip::ZipArchive;
-
-fn full() -> Value {
-    json!([0, 0, 1, 1, 0])
-}
-
-fn jpeg_sized(c: &str, size: (u32, u32)) -> Vec<u8> {
-    jpeg_bytes(&RgbImage::from_pixel(size.0, size.1, Rgb(color(c))), 75)
-}
-
-fn jpeg(c: &str) -> Vec<u8> {
-    jpeg_sized(c, (200, 100))
-}
-
-fn png(c: &str) -> Vec<u8> {
-    encode(DynamicImage::ImageRgb8(RgbImage::from_pixel(200, 100, Rgb(color(c)))), ImageFormat::Png)
-}
-
-fn gif() -> Vec<u8> {
-    encode(DynamicImage::ImageRgba8(RgbaImage::new(20, 20)), ImageFormat::Gif)
-}
+use crate::common::shared_fixtures::{assert_refused, edit, full, gif, jpeg, png, size, text_of};
 
 fn page(images: &[&str], text: &str) -> String {
     let body: String = images.iter().map(|src| format!(r#"<div><img src="{src}"/></div>"#)).collect();
@@ -128,14 +108,6 @@ fn manifest_ids_of(path: &Path, opf: &str) -> BTreeSet<String> {
     opf_ids(path, opf, "item", "id").into_iter().collect()
 }
 
-fn size(data: &[u8]) -> (u32, u32) {
-    image_size(data)
-}
-
-fn text_of(members: &BTreeMap<String, Vec<u8>>, name: &str) -> String {
-    String::from_utf8(members[name].clone()).unwrap()
-}
-
 /// `MagicMock` book_manager. 호출 인자를 기록하고 정해 둔 `(result, error)`를 돌려준다.
 struct FakeManager {
     edit_epub_images: Mutex<(Option<Value>, Option<String>)>,
@@ -176,23 +148,10 @@ fn book() -> Book {
     Book { path, trash, _tmp: tmp }
 }
 
-fn edit(path: &Path, trash: &Path, args: EditImages) -> Result<Value, CoverError> {
-    edit_images(path, &revision(path), trash, EditImages { backup_name: Some("book.epub".to_string()), ..args })
-}
-
 impl Book {
     fn edit(&self, args: EditImages) -> Result<Value, CoverError> {
         edit(&self.path, &self.trash, args)
     }
-}
-
-fn err_of(result: Result<Value, CoverError>) -> String {
-    result.expect_err("CoverError가 나야 한다").to_string()
-}
-
-fn assert_refused(result: Result<Value, CoverError>, reason: &str, label: &str) {
-    let text = err_of(result);
-    assert!(text.contains(reason), "{label}: {text:?} 에 {reason:?}가 없다");
 }
 
 #[test]

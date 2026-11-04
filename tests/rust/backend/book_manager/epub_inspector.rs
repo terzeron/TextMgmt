@@ -6,9 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use backend::epub_cover::{CoverError, edit_images, edit_images_with, EditImages, EpubCoverHooks, Limits, OPF_NS, revision};
-use common::image::{color, encode, jpeg_bytes};
 use common::zipx::{write_zip_with, ZipMode};
-use image::{DynamicImage, ImageFormat, Rgb, RgbaImage, RgbImage};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use common::epub::{EpubSpec, make_epub};
@@ -19,26 +17,7 @@ use std::time::Duration;
 use backend::book_manager::BookManager;
 use common::faulty_fs::FaultyFs;
 use common::fsx::set_mtime_ago;
-
-fn full() -> Value {
-    json!([0, 0, 1, 1, 0])
-}
-
-fn jpeg_sized(c: &str, size: (u32, u32)) -> Vec<u8> {
-    jpeg_bytes(&RgbImage::from_pixel(size.0, size.1, Rgb(color(c))), 75)
-}
-
-fn jpeg(c: &str) -> Vec<u8> {
-    jpeg_sized(c, (200, 100))
-}
-
-fn png(c: &str) -> Vec<u8> {
-    encode(DynamicImage::ImageRgb8(RgbImage::from_pixel(200, 100, Rgb(color(c)))), ImageFormat::Png)
-}
-
-fn gif() -> Vec<u8> {
-    encode(DynamicImage::ImageRgba8(RgbaImage::new(20, 20)), ImageFormat::Gif)
-}
+use crate::common::shared_fixtures::{assert_refused, edit, full, gif, jpeg, png};
 
 fn page(images: &[&str], text: &str) -> String {
     let body: String = images.iter().map(|src| format!(r#"<div><img src="{src}"/></div>"#)).collect();
@@ -118,23 +97,10 @@ fn book() -> Book {
     Book { path, trash, _tmp: tmp }
 }
 
-fn edit(path: &Path, trash: &Path, args: EditImages) -> Result<Value, CoverError> {
-    edit_images(path, &revision(path), trash, EditImages { backup_name: Some("book.epub".to_string()), ..args })
-}
-
 impl Book {
     fn edit(&self, args: EditImages) -> Result<Value, CoverError> {
         edit(&self.path, &self.trash, args)
     }
-}
-
-fn err_of(result: Result<Value, CoverError>) -> String {
-    result.expect_err("CoverError가 나야 한다").to_string()
-}
-
-fn assert_refused(result: Result<Value, CoverError>, reason: &str, label: &str) {
-    let text = err_of(result);
-    assert!(text.contains(reason), "{label}: {text:?} 에 {reason:?}가 없다");
 }
 
 #[test]
@@ -286,6 +252,7 @@ fn libreoffice_without_an_output_file_returns_empty_text_and_logs_the_directory(
 }
 
 mod xml_safety_and_cursors {
+    use crate::common::shared_fixtures::{tmp_dir, verdict};
     use super::common;
     use std::borrow::Cow;
 
@@ -293,41 +260,12 @@ mod xml_safety_and_cursors {
 
     use std::path::{Path, PathBuf};
 
-
-
     use backend::book_manager::{_declare_unbound_prefixes, _safe_xml_parser, BookManager, decode_category_cursor, encode_category_cursor};
-
-
 
     use base64::Engine;
 
-
-
-
-
-
-
     use common::zipx::{write_zip, zip_header_offset};
     use serde_json::json;
-
-    use tempfile::TempDir;
-
-    // ---------------------------------------------------------------------------
-    // 공용 헬퍼 (전반부 정의를 복사)
-    // ---------------------------------------------------------------------------
-
-    /// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
-    fn tmp_dir() -> TempDir {
-        tempfile::tempdir().unwrap()
-    }
-
-    /// 검증 결과를 Python 원본의 `(유효 여부, 사유)`로 펼친다.
-    fn verdict(result: Result<(), String>) -> (bool, Option<String>) {
-        match result {
-            Ok(()) => (true, None),
-            Err(reason) => (false, Some(reason)),
-        }
-    }
 
     // --- 미선언 네임스페이스 접두사 보정 ---
 
@@ -509,29 +447,9 @@ mod xml_safety_and_cursors {
 }
 
 mod image_downscaling {
-    use super::common;
-
-
-
-
-
+    use crate::common::shared_fixtures::{image_bytes};
 
     use backend::book_manager::BookManager;
-
-
-
-
-
-    use common::image::encode_image;
-
-
-
-
-
-    /// 이미지 한 장의 바이트. 색은 고정이다.
-    fn image_bytes(fmt: image::ImageFormat, size: (u32, u32)) -> Vec<u8> {
-        encode_image(size.0, size.1, [10, 120, 200], fmt)
-    }
 
     // ---- 이미지/EPUB 미리보기 ----
 
@@ -544,20 +462,13 @@ mod image_downscaling {
 }
 
 mod find_opf_path {
-    use super::common;
+    use crate::common::shared_fixtures::{write_zip_stored};
 
     use std::fs::File;
 
     use std::path::Path;
 
-
     use backend::book_manager::BookManager;
-
-
-
-
-
-    use common::zipx::{write_zip_with, ZipMode};
 
     use zip::ZipArchive;
 
@@ -569,11 +480,6 @@ mod find_opf_path {
     <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
   </rootfiles>
 </container>"#;
-
-    /// `zipfile.ZipFile(path, "w")`: 압축 인자가 없으면 ZIP_STORED다.
-    fn write_zip_stored(path: &Path, entries: &[(&str, &[u8])]) {
-        write_zip_with(path, entries, ZipMode::Stored);
-    }
 
     fn find_opf_path(epub_path: &Path) -> String {
         let mut zin = ZipArchive::new(File::open(epub_path).unwrap()).unwrap();
@@ -805,88 +711,14 @@ fn test_just_written_cache_file_is_not_evicted() {
 }
 
 mod validate_preview_epub {
-    use super::common;
+    use crate::common::shared_fixtures::{chapter, entry, err_has, make_chapter_xhtml, make_cover_xhtml_with_svg, make_opf, ns_children, ns_nodes, verdict, write_epub, write_zip_stored, zip_read_string};
     use std::fs;
     use std::fs::File;
-    use std::io::Read;
     use std::path::Path;
-
 
     use backend::book_manager::BookManager;
 
-
-
-
-
-    use common::zipx::{write_zip_with, ZipMode};
-
     use zip::ZipArchive;
-
-    /// 검증 결과를 Python 원본의 `(유효 여부, 사유)`로 펼친다.
-    fn verdict(result: Result<(), String>) -> (bool, Option<String>) {
-        match result {
-            Ok(()) => (true, None),
-            Err(reason) => (false, Some(reason)),
-        }
-    }
-
-    /// 챕터 N개를 포함한 OPF XML을 생성.
-    fn make_opf(chapter_count: usize, include_css: bool, include_svg_cover: bool) -> String {
-        let mut items = Vec::new();
-        let mut spine_refs = Vec::new();
-        for i in 1..=chapter_count {
-            items.push(format!(r#"    <item id="ch{i}" href="ch{i}.xhtml" media-type="application/xhtml+xml"/>"#));
-            spine_refs.push(format!(r#"    <itemref idref="ch{i}"/>"#));
-        }
-        if include_css {
-            items.push(r#"    <item id="style" href="style.css" media-type="text/css"/>"#.to_string());
-        }
-        if include_svg_cover {
-            items.push(r#"    <item id="cover-image" href="../media/cover.jpg" media-type="image/jpeg"/>"#.to_string());
-        }
-        let items = items.join("\n");
-        let spine_refs = spine_refs.join("\n");
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>Test Book</dc:title>
-    <dc:creator>Test Author</dc:creator>
-  </metadata>
-  <manifest>
-    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-{items}
-  </manifest>
-  <spine toc="toc">
-{spine_refs}
-  </spine>
-</package>"#
-        )
-    }
-
-    fn make_chapter_xhtml(index: usize, link_css: bool) -> String {
-        let css_link = if link_css { r#"<link rel="stylesheet" href="style.css"/>"# } else { "" };
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>Chapter {index}</title>{css_link}</head>
-<body><h1>Chapter {index}</h1><p>Content of chapter {index}.</p></body>
-</html>"#
-        )
-    }
-
-    fn chapter(index: usize) -> String {
-        make_chapter_xhtml(index, false)
-    }
-
-    /// `zipfile.ZipFile(path, "w")`: 압축 인자가 없으면 ZIP_STORED다.
-    fn write_zip_stored(path: &Path, entries: &[(&str, &[u8])]) {
-        write_zip_with(path, entries, ZipMode::Stored);
-    }
-
-    fn err_has(error: &Option<String>, needle: &str) -> bool {
-        error.as_deref().unwrap_or_else(|| panic!("error가 None이다 (기대: {needle:?} 포함)")).contains(needle)
-    }
 
     // ── EPUB 생성 헬퍼 ────────────────────────────────────────
 
@@ -896,33 +728,6 @@ mod validate_preview_epub {
     <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
   </rootfiles>
 </container>"#;
-
-    /// SVG `<image>` 태그로 커버 이미지를 참조하는 커버 페이지.
-    fn make_cover_xhtml_with_svg() -> String {
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-<head><title>Cover</title></head>
-<body>
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
-     width="100%" height="100%" viewBox="0 0 600 800">
-  <image xlink:href="../media/cover.jpg" width="600" height="800"/>
-</svg>
-</body>
-</html>"#
-            .to_string()
-    }
-
-    /// mimetype(무압축)을 맨 앞에 두고 나머지를 압축해서 쓴다. Python 생성 헬퍼가 모두 이 배치다.
-    fn write_epub(path: &Path, entries: Vec<(String, Vec<u8>)>) {
-        let mimetype: &[u8] = b"application/epub+zip";
-        let mut all: Vec<(&str, &[u8])> = vec![("mimetype", mimetype)];
-        all.extend(entries.iter().map(|(n, d)| (n.as_str(), d.as_slice())));
-        write_zip_with(path, &all, ZipMode::EpubStyle);
-    }
-
-    fn entry(name: &str, data: impl Into<Vec<u8>>) -> (String, Vec<u8>) {
-        (name.to_string(), data.into())
-    }
 
     /// 테스트용 미니 EPUB을 생성.
     fn create_test_epub(path: &Path, chapter_count: usize, include_css: bool, include_svg_cover: bool) {
@@ -959,25 +764,6 @@ mod validate_preview_epub {
     }
 
     const OPF_NS: &str = "http://www.idpf.org/2007/opf";
-
-    fn zip_read<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &str) -> Vec<u8> {
-        let mut data = Vec::new();
-        zf.by_name(name).unwrap_or_else(|_| panic!("KeyError: {name}")).read_to_end(&mut data).unwrap();
-        data
-    }
-
-    fn zip_read_string<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &str) -> String {
-        String::from_utf8(zip_read(zf, name)).unwrap()
-    }
-
-    /// ElementTree의 `.//{ns}name`처럼 네임스페이스까지 맞는 요소를 문서 순서로 돌려준다.
-    fn ns_nodes<'a, 'i>(doc: &'a roxmltree::Document<'i>, ns: &str, name: &str) -> Vec<roxmltree::Node<'a, 'i>> {
-        doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == name && n.tag_name().namespace() == Some(ns)).collect()
-    }
-
-    fn ns_children<'a, 'i>(node: roxmltree::Node<'a, 'i>, ns: &str, name: &str) -> Vec<roxmltree::Node<'a, 'i>> {
-        node.children().filter(|n| n.is_element() && n.tag_name().name() == name && n.tag_name().namespace() == Some(ns)).collect()
-    }
 
     /// 파일 안 OPF의 `(spine toc 속성, spine itemref idref 목록)`.
     fn spine_of(path: &Path, opf_member: &str) -> (Option<String>, Vec<String>) {

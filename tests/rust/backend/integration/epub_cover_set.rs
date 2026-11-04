@@ -21,6 +21,7 @@ use common::{
     zipx::{Members, bytes_replace, rewrite_epub_members},
 };
 use serde_json::{Value, json};
+use crate::common::shared_fixtures::{assert_cover_error, attach_publisher_cover_page, cover_tmp_files, elements, err_has, has_cover, publisher_cover_epub, revision, spine_idrefs, xml_text};
 
 const URL: &str = "https://img.example.com/cover.jpg";
 
@@ -44,14 +45,6 @@ fn entries(members: &Members) -> Vec<(String, Vec<u8>)> {
     members.names().into_iter().map(|name| (members.get(&name).to_vec(), name)).map(|(data, name)| (name, data)).collect()
 }
 
-fn has_cover(path: &Path) -> bool {
-    epub_cover::inspect_epub(path).unwrap()["has_cover"].as_bool().unwrap()
-}
-
-fn revision(path: &Path) -> String {
-    epub_cover::inspect_epub(path).unwrap()["revision"].as_str().unwrap().to_string()
-}
-
 /// `datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%f")`: 소수부가 없거나 6자리를 넘으면 실패한다.
 fn parse_updated_time(value: &str) -> chrono::NaiveDateTime {
     let (head, fraction) = value.split_once('.').unwrap_or_else(|| panic!("updated_time 형식 오류: {value}"));
@@ -61,67 +54,12 @@ fn parse_updated_time(value: &str) -> chrono::NaiveDateTime {
     stamp + chrono::Duration::microseconds(micros as i64)
 }
 
-/// `path.parent.glob(".cover-*.tmp")`
-fn cover_tmp_files(dir: &Path) -> Vec<String> {
-    (if dir.exists() { dir_names(dir) } else { Vec::new() }).into_iter().filter(|n| n.starts_with(".cover-") && n.ends_with(".tmp")).collect()
-}
-
-// ── XML 확인 도구 (lxml xpath 대응) ────────────────────────
-
-fn xml_text(data: &[u8]) -> String {
-    String::from_utf8(data.to_vec()).unwrap()
-}
-
-/// local-name이 `name`인 모든 요소를 문서 순서로 돌려준다.
-fn elements<'a, 'i>(doc: &'a roxmltree::Document<'i>, name: &str) -> Vec<roxmltree::Node<'a, 'i>> {
-    doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == name).collect()
-}
-
-fn spine_idrefs(path: &Path) -> Vec<String> {
-    let text = xml_text(Members::read(path).get("OPS/book.opf"));
-    let doc = roxmltree::Document::parse(&text).unwrap();
-    elements(&doc, "spine").iter().flat_map(|s| s.children().filter(|c| c.is_element() && c.tag_name().name() == "itemref")).filter_map(|c| c.attribute("idref").map(String::from)).collect()
-}
-
 fn ncx_doc(nav_map: &str, extra: &str) -> String {
     format!(r#"<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap>{nav_map}</navMap>{extra}</ncx>"#)
 }
 
 fn nav_doc(body: &str) -> String {
     format!(r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc">{body}</nav></body></html>"#)
-}
-
-/// 형님 EPUB과 같은 SVG 표지, guide, NCX 구조를 만든다.
-fn attach_publisher_cover_page(path: &Path, shared: bool) {
-    rewrite_epub_members(path, |files| {
-        let mut opf = xml_text(files.get("OPS/book.opf"));
-        let version3 = opf.contains(r#"version="3.0""#);
-        let mut items = String::from(r#"<item id="titlepage" href="Text/front.xhtml" media-type="application/xhtml+xml"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#);
-        if version3 {
-            items.push_str(r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#);
-        }
-        opf = opf.replace("</manifest>", &format!("{items}</manifest>"));
-        opf = opf.replace("<spine>", r#"<spine toc="ncx"><itemref idref="titlepage"/>"#);
-        opf = opf.replace("</package>", r#"<guide><reference type="cover" href="Text/front.xhtml#cover"/></guide></package>"#);
-        files.set("OPS/book.opf", opf.into_bytes());
-        files.set(
-            "OPS/Text/front.xhtml",
-            br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Cover</title></head><body><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="../cover.jpg"/></svg></body></html>"#.to_vec(),
-        );
-        files.set(
-            "OPS/toc.ncx",
-            br#"<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap><navPoint id="cover" playOrder="1"><navLabel><text>Cover</text></navLabel><content src="Text/front.xhtml#cover"/></navPoint><navPoint id="chapter" playOrder="2"><navLabel><text>Chapter</text></navLabel><content src="chapter.xhtml"/></navPoint></navMap></ncx>"#.to_vec(),
-        );
-        if version3 {
-            files.set(
-                "OPS/nav.xhtml",
-                br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="Text/front.xhtml#cover">Cover</a></li><li><a href="chapter.xhtml">Chapter</a></li></ol></nav></body></html>"#.to_vec(),
-            );
-        }
-        if shared {
-            files.set("OPS/chapter.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Keep this chapter.</p><img src="cover.jpg"/></body></html>"#.to_vec());
-        }
-    });
 }
 
 // ── 대역 (env fixture) ─────────────────────────────────────
@@ -224,21 +162,9 @@ fn split(result: Result<Value, String>) -> (Option<Value>, Option<String>) {
     }
 }
 
-fn err_has(error: &Option<String>, needle: &str) -> bool {
-    error.as_deref().unwrap_or_else(|| panic!("error가 None이다 (기대: {needle:?} 포함)")).contains(needle)
-}
-
 /// `assert error` (None이나 빈 문자열이면 실패)
 fn err_truthy(error: &Option<String>) -> bool {
     error.as_deref().is_some_and(|e| !e.is_empty())
-}
-
-/// `pytest.raises(CoverError, match=needle)`
-fn assert_cover_error<T: std::fmt::Debug>(result: Result<T, CoverError>, needle: &str) {
-    match result {
-        Err(e) if !e.is_io() => assert!(e.to_string().contains(needle), "CoverError 메시지에 {needle:?}가 없다: {e}"),
-        other => panic!("CoverError({needle:?})를 기대했지만 {other:?}"),
-    }
 }
 
 #[tokio::test]
@@ -1019,22 +945,6 @@ mod test_epub_cover_upload_endpoint {
             assert!(fake.calls().is_empty(), "body={body}: set_epub_cover가 호출되면 안 된다");
         }
     }
-}
-
-// ── epub_cover 방어 경로: 표지 분리, 교체 전 표지 보존, 검증 실패 ──
-
-/// SVG 표지 페이지(Text/front.xhtml)를 가진 EPUB 3. `files`로 멤버를 덮어쓴다.
-fn publisher_cover_epub(tmp_path: &Path, files: &[(&str, Vec<u8>)]) -> PathBuf {
-    let path = make_epub(&tmp_path.join("book.epub"), &EpubSpec::cover("3.0", true));
-    attach_publisher_cover_page(&path, false);
-    if !files.is_empty() {
-        rewrite_epub_members(&path, |members_| {
-            for (name, data) in files {
-                members_.set(name, data.clone());
-            }
-        });
-    }
-    path
 }
 
 fn remove_directly(path: &Path, tmp_path: &Path) -> Result<Value, CoverError> {

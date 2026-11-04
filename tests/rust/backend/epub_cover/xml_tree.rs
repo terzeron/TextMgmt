@@ -14,25 +14,9 @@ use common::es_fake::FakeEsManager;
 use common::image::red_jpeg;
 use common::zipx::Members;
 use serde_json::Value;
+use crate::common::shared_fixtures::{spine_idrefs, xml_text};
 
 const URL: &str = "https://img.example.com/cover.jpg";
-
-// ── XML 확인 도구 (lxml xpath 대응) ────────────────────────
-
-fn xml_text(data: &[u8]) -> String {
-    String::from_utf8(data.to_vec()).unwrap()
-}
-
-/// local-name이 `name`인 모든 요소를 문서 순서로 돌려준다.
-fn elements<'a, 'i>(doc: &'a roxmltree::Document<'i>, name: &str) -> Vec<roxmltree::Node<'a, 'i>> {
-    doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == name).collect()
-}
-
-fn spine_idrefs(path: &Path) -> Vec<String> {
-    let text = xml_text(Members::read(path).get("OPS/book.opf"));
-    let doc = roxmltree::Document::parse(&text).unwrap();
-    elements(&doc, "spine").iter().flat_map(|s| s.children().filter(|c| c.is_element() && c.tag_name().name() == "itemref")).filter_map(|c| c.attribute("idref").map(String::from)).collect()
-}
 
 // ── 대역 (env fixture) ─────────────────────────────────────
 

@@ -15,6 +15,7 @@ use common::es_fake::FakeEsManager;
 use common::faulty_fs::{FaultyFs, fail_on_nth_path};
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use crate::common::shared_fixtures::{now_secs};
 
 const URL: &str = "/categories/bulk-rename-files";
 
@@ -67,10 +68,6 @@ impl MockBm {
 
 fn admin_payload() -> Value {
     json!({"email": "admin@test.com", "role": "admin", "name": "Admin", "picture": "", "exp": now_secs() + 3600})
-}
-
-fn now_secs() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
 }
 
 fn client(bm: &Arc<MockBm>) -> TestClient {

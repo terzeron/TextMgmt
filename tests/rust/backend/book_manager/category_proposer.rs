@@ -18,25 +18,7 @@ use common::faulty_fs::{fail_on_nth_call, FaultyFs, other_err};
 use common::log_capture::LogCapture;
 use serde_json::{json, Value};
 use tempfile::TempDir;
-
-// ---------------------------------------------------------------------------
-// 공용 헬퍼 (전반부 정의를 복사)
-// ---------------------------------------------------------------------------
-
-/// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
-fn tmp_dir() -> TempDir {
-    tempfile::tempdir().unwrap()
-}
-
-/// 기본 구성의 `BookManagerDeps`. `with_*`를 더 붙인 뒤 `BookManager::with_deps`로 만든다.
-fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
-    common::setup_env();
-    BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
-}
-
-fn make_manager(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManager {
-    BookManager::with_deps(deps(tmp_path, es))
-}
+use crate::common::shared_fixtures::{allowed_set, asyncio_runner, deps, make_doc, make_manager, make_source_file, model_dir, outcome, propose, split, tmp_dir};
 
 /// `apply_category_changes`의 Python 키워드 인자 묶음(테스트 로컬). 구현의 `ApplyOptions`로 바꿔 부른다.
 struct ApplyOpts {
@@ -147,19 +129,6 @@ impl BookClassifierApi for FakeClassifier {
     }
 }
 
-/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-    match result {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error)),
-    }
-}
-
-/// `asyncio.run(coro)`에 대응한다. 동기 테스트 안에서 future를 끝까지 돌린다.
-fn asyncio_runner<F: std::future::Future>(fut: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
-}
-
 type AddBookFn = dyn Fn() -> Result<i64, AddBookError> + Send + Sync;
 
 // TODO(common): 클로저를 `BookAdder`로 감싸는 어댑터.
@@ -174,10 +143,6 @@ impl BookAdder for FnBookAdder {
 /// 구 `manager.override_add_book(closure)`.
 fn book_adder(f: impl Fn() -> Result<i64, AddBookError> + Send + Sync + 'static) -> Arc<dyn BookAdder> {
     Arc::new(FnBookAdder(Box::new(f)))
-}
-
-fn make_doc(rel_path: &str, file_type: &str) -> Value {
-    json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
 }
 
 // ---- seam 어댑터 (공용 모듈에 아직 없는 것만 이 파일에 둔다) ----
@@ -251,26 +216,9 @@ fn propose_category_grade_cases() -> Vec<(Mappings, FakeClassifier, Option<&'sta
     ]
 }
 
-/// 임시 디렉토리 `A/<name>`을 만들어 내용 "x"인 파일 경로를 돌려준다.
-fn make_source_file(tmp_path: &Path, category: &str, name: &str) -> PathBuf {
-    let source = tmp_path.join(category);
-    fs::create_dir_all(&source).unwrap();
-    let target = source.join(name);
-    fs::write(&target, "x").unwrap();
-    target
-}
-
 /// proposal["candidates"]의 category만 뽑는다.
 fn candidate_categories(proposal: &Value) -> Vec<String> {
     proposal["candidates"].as_array().unwrap().iter().map(|c| c["category"].as_str().unwrap().to_string()).collect()
-}
-
-/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
-fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
-    match result {
-        Ok(value) => (value, None),
-        Err(error) => (serde_json::json!({}), Some(error)),
-    }
 }
 
 /// `propose_category_changes`의 Python 키워드 인자 묶음(테스트 로컬).
@@ -304,10 +252,6 @@ async fn apply_opts(manager: &BookManager, items: &[Value], opts: ApplyOpts) -> 
             .apply_category_changes_with(items, &allowed, ApplyOptions { on_item_done: opts.on_item_done.as_deref(), should_continue: opts.should_continue.as_deref(), ..ApplyOptions::default() })
             .await,
     )
-}
-
-fn allowed_set(paths: &[&str]) -> BTreeSet<String> {
-    paths.iter().map(|p| p.to_string()).collect()
 }
 
 #[test]
@@ -1444,11 +1388,12 @@ fn test_proposal_expected_accuracy_is_none_without_calibration() {
 }
 
 mod candidate_building {
+    use crate::common::shared_fixtures::{category_with_files, make_deps, outcome, split};
     use super::common;
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
-    use backend::book_manager::{BookManager, BookManagerDeps, MoveOpts};
+    use backend::book_manager::{BookManager, MoveOpts};
     use classifier::BookClassifierApi;
     use backend::es_manager::EsManagerApi;
     use common::es_fake::FakeEsManager;
@@ -1472,37 +1417,9 @@ mod candidate_building {
         }
     }
 
-    /// ES 대역을 쓰는 `BookManagerDeps`. 대역(`with_*`)을 꽂을 테스트는 이걸로 시작한다.
-    fn make_deps(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManagerDeps {
-        BookManagerDeps::new(tmp_path.to_path_buf(), es)
-    }
-
     /// Python `make_manager(tmp_path, es)`.
     fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {
         BookManager::with_deps(make_deps(tmp_path, es))
-    }
-
-    /// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
-    fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
-        match result {
-            Ok(value) => (value, None),
-            Err(error) => (serde_json::json!({}), Some(error)),
-        }
-    }
-
-    /// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-    fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-        match result {
-            Ok(value) => (Some(value), None),
-            Err(error) => (None, Some(error)),
-        }
-    }
-
-    fn category_with_files(root: &Path, category: &str, names: &[&str]) {
-        fs::create_dir_all(root.join(category)).unwrap();
-        for name in names {
-            fs::write(root.join(category).join(name), "본문").unwrap();
-        }
     }
 
     // ---- 분류 후보 조립 ----
@@ -1621,10 +1538,6 @@ mod candidate_building {
     }
 }
 
-fn run<F: std::future::Future>(fut: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
-}
-
 /// 책 루트(`books`)와 서비스 파일(`meta`)을 나눠 둔다. 캐시 파일이 책으로 스캔되면 안 된다.
 struct Setup {
     _tmp: TempDir,
@@ -1647,16 +1560,6 @@ fn setup(files: &[&str]) -> Setup {
 fn manager(s: &Setup, deps: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> BookManager {
     common::setup_env();
     BookManager::with_deps(deps(BookManagerDeps::new(s.books.clone(), FakeEsManager::new())))
-}
-
-fn propose(m: &BookManager, opts: ProposeOptions<'_>) -> Value {
-    let (result, err) = outcome(run(m.propose_category_changes("0_inbox", Some(&json!({})), opts)));
-    assert!(err.is_none(), "{err:?}");
-    result
-}
-
-fn model_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/classifier_tiny/trained")
 }
 
 // ---------------------------------------------------------------------------
@@ -1698,8 +1601,9 @@ fn a_loadable_model_directory_builds_the_service_by_default() {
 }
 
 mod classified_file_moves {
+    use crate::common::shared_fixtures::{category_with_files, make_deps, outcome, split};
     use std::fs;
-    use backend::book_manager::{BookManager, BookManagerDeps, FileReader, MoveOpts};
+    use backend::book_manager::{BookManager, FileReader, MoveOpts};
     use super::common::{es_fake::FakeEsManager, faulty_fs::FaultyFs};
     use std::path::{Path};
     use std::sync::Arc;
@@ -1707,28 +1611,7 @@ mod classified_file_moves {
     use tempfile::TempDir;
     use super::common;
     use std::collections::HashSet;
-    use backend::es_manager::EsManagerApi;
     use common::es_fake::Docs;
-
-    /// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
-    fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
-        match result {
-            Ok(value) => (value, None),
-            Err(error) => (serde_json::json!({}), Some(error)),
-        }
-    }
-
-    fn category_with_files(root: &Path, category: &str, names: &[&str]) {
-        fs::create_dir_all(root.join(category)).unwrap();
-        for name in names {
-            fs::write(root.join(category).join(name), "본문").unwrap();
-        }
-    }
-
-    /// ES 대역을 쓰는 `BookManagerDeps`. 대역(`with_*`)을 꽂을 테스트는 이걸로 시작한다.
-    fn make_deps(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManagerDeps {
-        BookManagerDeps::new(tmp_path.to_path_buf(), es)
-    }
 
     type ReadFileFn = Box<dyn Fn(&Path, Option<&Path>) -> Docs + Send + Sync>;
 
@@ -1746,14 +1629,6 @@ mod classified_file_moves {
     impl FileReader for FnFileReader {
         fn read_file(&self, path: &Path, path_prefix: Option<&Path>) -> Docs {
             (self.f)(path, path_prefix)
-        }
-    }
-
-    /// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-    fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-        match result {
-            Ok(value) => (Some(value), None),
-            Err(error) => (None, Some(error)),
         }
     }
 

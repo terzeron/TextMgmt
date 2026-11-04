@@ -3,42 +3,13 @@ mod common;
 use backend::main::{BookManagerApi};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use backend::book_metadata::BookPage;
-use backend::book_manager::{BookContent, BookManager, BookManagerDeps, MAX_CATEGORY_RESULT_COUNT};
+use backend::book_manager::{BookContent, BookManager, MAX_CATEGORY_RESULT_COUNT};
 use common::es_fake::FakeEsManager;
 use common::log_capture::LogCapture;
-use serde_json::{json, Value};
-use tempfile::TempDir;
-
-// ---------------------------------------------------------------------------
-// 공용 헬퍼 (전반부 정의를 복사)
-// ---------------------------------------------------------------------------
-
-/// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
-fn tmp_dir() -> TempDir {
-    tempfile::tempdir().unwrap()
-}
-
-/// `asyncio.run(coro)`에 대응한다. 동기 테스트 안에서 future를 끝까지 돌린다.
-fn asyncio_runner<F: std::future::Future>(fut: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
-}
-
-/// 기본 구성의 `BookManagerDeps`. `with_*`를 더 붙인 뒤 `BookManager::with_deps`로 만든다.
-fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
-    common::setup_env();
-    BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
-}
-
-fn make_manager(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManager {
-    BookManager::with_deps(deps(tmp_path, es))
-}
-
-fn make_doc(rel_path: &str, file_type: &str) -> Value {
-    json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
-}
+use serde_json::{json};
+use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, make_manager, tmp_dir};
 
 // ---- coverage: get_book_content edge case ----
 

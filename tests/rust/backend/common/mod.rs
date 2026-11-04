@@ -27,6 +27,7 @@ pub mod raster;
 pub mod runner;
 pub mod session;
 pub mod zipx;
+pub mod shared_fixtures;
 
 use axum::body::Body;
 use axum::http::{Method, Request};

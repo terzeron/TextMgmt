@@ -11,30 +11,16 @@ use backend::cover_management::{ApplyImageModel, Backup, CoverHooks, CoverManage
 use backend::cover_sources::{SearchError, SearchHooks, STORES};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover;
-use backend::epub_cover::{CoverError, EpubCoverHooks, Limits, MAX_IMAGE_BYTES};
+use backend::epub_cover::{CoverError, Limits, MAX_IMAGE_BYTES};
 use common::clock::{Event, FakeClock};
 use common::epub::{EpubSpec, make_epub};
-use common::es_dummy;
 use common::fsx::{files_under, ino_mtime, sha256_hex, touch};
-use common::image::{b64, BLUE, encode_image, red_jpeg};
+use common::image::{b64, red_jpeg};
 use common::log_capture::LogCapture;
 use common::zipx::rewrite_epub_members;
 use cover_fixtures::cached_candidates;
-use image::ImageFormat;
 use serde_json::{json, Value};
-
-fn read(path: &Path) -> Vec<u8> {
-    std::fs::read(path).unwrap()
-}
-
-fn backups(root: &Path) -> PathBuf {
-    root.join(".cover_backups")
-}
-
-/// 현재 `revision`. Python `inspect_epub(path)["revision"]`.
-fn rev(path: &Path) -> String {
-    epub_cover::inspect_epub(path).unwrap()["revision"].as_str().unwrap().to_string()
-}
+use crate::common::shared_fixtures::{backups, epub_with_cover, hooks_with, read, rev, str_of, truthy};
 
 fn first_item(service: &CoverManagement) -> Value {
     service.missing("", "", 60, false).unwrap()["items"][0].clone()
@@ -42,15 +28,6 @@ fn first_item(service: &CoverManagement) -> Value {
 
 fn not_found(_store: &str, _metadata: &Value) -> Result<Value, SearchError> {
     Ok(json!({"status": "not_found", "candidates": []}))
-}
-
-fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
-    value[key].as_str().unwrap()
-}
-
-// TODO(common): `es_dummy::truthy(Option<&Value>)`를 `&Value`로 받는 얇은 래퍼. cover_fixtures::truthy를 대신한다.
-fn truthy(value: &Value) -> bool {
-    es_dummy::truthy(Some(value))
 }
 
 /// 클로저를 `ImageFetcher`로 감싼다.
@@ -901,18 +878,6 @@ fn test_insert_illustration_rejects_malformed_base64_without_changing_book() {
     }
 }
 
-/// 보안 검토 지적: 썸네일 경로가 표지 크기·화소 상한을 보지 않고 읽고 디코딩했다. 상한을 넘으면 읽거나 디코딩하기 전에 거부해야 한다.
-fn epub_with_cover(root: &Path, width: u32, height: u32) -> PathBuf {
-    let path = make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", true));
-    let data = encode_image(width, height, BLUE, ImageFormat::Jpeg);
-    rewrite_epub_members(&path, |members| members.set("OPS/cover.jpg", data.clone()));
-    path
-}
-
-fn hooks_with(limits: Limits) -> EpubCoverHooks {
-    EpubCoverHooks::default().with_limits(limits)
-}
-
 #[test]
 fn preview_refuses_when_the_cover_inspection_reported_an_error() {
     // 검사가 표지 이미지를 읽지 못했다고 보고하면(`cover_error`) 썸네일도 만들지 않는다.
@@ -950,34 +915,13 @@ mod clean_title {
 }
 
 mod cover_repair {
+    use crate::common::shared_fixtures::{broken_cover, first_item, truthy};
     use super::common;
-    use std::path::{Path, PathBuf};
 
     use backend::cover_management::CoverManagement;
 
 
-
-    use common::epub::{EpubSpec, make_epub};
-    use common::es_dummy;
-
-
     use common::zipx::rewrite_epub_members;
-    use serde_json::Value;
-
-    // TODO(common): `es_dummy::truthy(Option<&Value>)`를 `&Value`로 받는 얇은 래퍼. cover_fixtures::truthy를 대신한다.
-    fn truthy(value: &Value) -> bool {
-        es_dummy::truthy(Some(value))
-    }
-
-    fn broken_cover(tmp: &Path) -> PathBuf {
-        let path = make_epub(&tmp.join("book.epub"), &EpubSpec::cover("3.0", true));
-        rewrite_epub_members(&path, |members| members.set("OPS/cover.jpg", &b"not a JPEG"[..]));
-        path
-    }
-
-    fn first_item(service: &CoverManagement, covered: bool) -> Value {
-        service.missing("", "", 60, covered).unwrap()["items"][0].clone()
-    }
 
     #[test]
     fn test_broken_cover_is_repairable_in_both_listing_modes() {

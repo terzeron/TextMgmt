@@ -12,14 +12,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use fx::{image_env, Opts};
-
-/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-    match result {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error)),
-    }
-}
+use crate::common::shared_fixtures::{error_text, split};
 
 // 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
 #[allow(dead_code)]
@@ -110,19 +103,12 @@ async fn url_preview_reports_safe_fetch_errors() {
 }
 
 mod upload_limits {
+    use crate::common::shared_fixtures::{error_text, split};
     use super::{common, fx};
     use backend::book_manager::{BookManager, BookManagerDeps};
     use backend::epub_cover::{EpubCoverHooks, Limits};
     use common::image::png_solid;
     use fx::{Env, image_env, Opts};
-
-    /// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-    fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-        match result {
-            Ok(value) => (Some(value), None),
-            Err(error) => (None, Some(error)),
-        }
-    }
 
     /// `fx::env`가 만든 환경의 `BookManager`를 Deps 설정을 더해 다시 만든다. `loader`가 참이면 파일 읽기 대역도 꽂는다.
     // TODO(common): `book_fixtures::Opts`가 Deps 설정 훅(`configure: Option<Box<dyn FnOnce(BookManagerDeps) -> BookManagerDeps>>`)을 받으면 이 헬퍼가 필요 없다.
@@ -133,10 +119,6 @@ mod upload_limits {
         }
         e.bm = BookManager::with_deps(configure(deps));
         e
-    }
-
-    fn error_text(error: &Option<String>) -> &str {
-        error.as_deref().unwrap_or("")
     }
 
     // ── 올린 이미지 ──
@@ -151,10 +133,6 @@ mod upload_limits {
     }
 }
 
-fn error_text(error: &Option<String>) -> &str {
-    error.as_deref().unwrap_or("")
-}
-
 #[tokio::test]
 async fn test_upload_preview_rejects_oversized_data() {
     let e = image_env(Opts::plain());
@@ -165,13 +143,10 @@ async fn test_upload_preview_rejects_oversized_data() {
 }
 
 mod backup_reporting {
+    use crate::common::shared_fixtures::{error_text};
     use backend::es_manager::{Docs};
     use super::fx;
     use fx::Opts;
-
-    fn error_text(error: &Option<String>) -> &str {
-        error.as_deref().unwrap_or("")
-    }
 
     // ── 재색인 실패 ──
 

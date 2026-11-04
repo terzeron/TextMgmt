@@ -18,68 +18,16 @@ use backend::epub_cover::{CoverError, EpubCoverHooks, Limits};
 use common::epub::{EpubSpec, make_epub};
 use common::es_fake::FakeEsManager;
 use common::faulty_fs::{FaultyFs, other_err};
-use common::fsx::{dir_names, ino_mtime, sha256_hex};
+use common::fsx::{ino_mtime, sha256_hex};
 use common::image::{color_jpeg, red_jpeg};
 use common::zipx::{read_zip_entry, rewrite_epub_members};
 use serde_json::{json, Value};
-use common::es_dummy;
 use std::collections::VecDeque;
-use crate::common::{epub::append_child, epub::attr_of_element_with_id, epub::count_elements, epub::remove_element, fsx::count_matching, image::BLUE, image::encode_image, image::image_size, image::RED};
+use crate::common::{epub::append_child, epub::attr_of_element_with_id, epub::count_elements, epub::remove_element, fsx::count_matching, image::encode_image, image::image_size, image::RED};
 use image::ImageFormat;
+use crate::common::shared_fixtures::{assert_cover_error, backups, cover_tmp_files, epub_with_cover, has_cover, hooks_with, opf_of, publisher_cover_epub, read, rev, revision, str_of, truthy};
 
 const URL: &str = "https://img.example.com/cover.jpg";
-
-fn has_cover(path: &Path) -> bool {
-    epub_cover::inspect_epub(path).unwrap()["has_cover"].as_bool().unwrap()
-}
-
-fn revision(path: &Path) -> String {
-    epub_cover::inspect_epub(path).unwrap()["revision"].as_str().unwrap().to_string()
-}
-
-/// `path.parent.glob(".cover-*.tmp")`
-fn cover_tmp_files(dir: &Path) -> Vec<String> {
-    (if dir.exists() { dir_names(dir) } else { Vec::new() }).into_iter().filter(|n| n.starts_with(".cover-") && n.ends_with(".tmp")).collect()
-}
-
-// ── XML 확인 도구 (lxml xpath 대응) ────────────────────────
-
-fn xml_text(data: &[u8]) -> String {
-    String::from_utf8(data.to_vec()).unwrap()
-}
-
-/// 형님 EPUB과 같은 SVG 표지, guide, NCX 구조를 만든다.
-fn attach_publisher_cover_page(path: &Path, shared: bool) {
-    rewrite_epub_members(path, |files| {
-        let mut opf = xml_text(files.get("OPS/book.opf"));
-        let version3 = opf.contains(r#"version="3.0""#);
-        let mut items = String::from(r#"<item id="titlepage" href="Text/front.xhtml" media-type="application/xhtml+xml"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#);
-        if version3 {
-            items.push_str(r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#);
-        }
-        opf = opf.replace("</manifest>", &format!("{items}</manifest>"));
-        opf = opf.replace("<spine>", r#"<spine toc="ncx"><itemref idref="titlepage"/>"#);
-        opf = opf.replace("</package>", r#"<guide><reference type="cover" href="Text/front.xhtml#cover"/></guide></package>"#);
-        files.set("OPS/book.opf", opf.into_bytes());
-        files.set(
-            "OPS/Text/front.xhtml",
-            br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Cover</title></head><body><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="../cover.jpg"/></svg></body></html>"#.to_vec(),
-        );
-        files.set(
-            "OPS/toc.ncx",
-            br#"<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap><navPoint id="cover" playOrder="1"><navLabel><text>Cover</text></navLabel><content src="Text/front.xhtml#cover"/></navPoint><navPoint id="chapter" playOrder="2"><navLabel><text>Chapter</text></navLabel><content src="chapter.xhtml"/></navPoint></navMap></ncx>"#.to_vec(),
-        );
-        if version3 {
-            files.set(
-                "OPS/nav.xhtml",
-                br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="Text/front.xhtml#cover">Cover</a></li><li><a href="chapter.xhtml">Chapter</a></li></ol></nav></body></html>"#.to_vec(),
-            );
-        }
-        if shared {
-            files.set("OPS/chapter.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Keep this chapter.</p><img src="cover.jpg"/></body></html>"#.to_vec());
-        }
-    });
-}
 
 // ── 대역 (env fixture) ─────────────────────────────────────
 
@@ -183,14 +131,6 @@ fn split(result: Result<Value, String>) -> (Option<Value>, Option<String>) {
     }
 }
 
-/// `pytest.raises(CoverError, match=needle)`
-fn assert_cover_error<T: std::fmt::Debug>(result: Result<T, CoverError>, needle: &str) {
-    match result {
-        Err(e) if !e.is_io() => assert!(e.to_string().contains(needle), "CoverError 메시지에 {needle:?}가 없다: {e}"),
-        other => panic!("CoverError({needle:?})를 기대했지만 {other:?}"),
-    }
-}
-
 #[tokio::test]
 async fn test_resolves_the_book_from_elasticsearch_without_a_lookup_override() {
     let env = env();
@@ -241,22 +181,6 @@ fn test_failed_write_restores_the_current_file_not_the_older_backup() {
     assert_eq!(fs::read(&path).unwrap(), current);
     assert_eq!(fs::read(trash.join("book.epub")).unwrap(), older);
     assert!(cover_tmp_files(tmp_path).is_empty());
-}
-
-// ── epub_cover 방어 경로: 표지 분리, 교체 전 표지 보존, 검증 실패 ──
-
-/// SVG 표지 페이지(Text/front.xhtml)를 가진 EPUB 3. `files`로 멤버를 덮어쓴다.
-fn publisher_cover_epub(tmp_path: &Path, files: &[(&str, Vec<u8>)]) -> PathBuf {
-    let path = make_epub(&tmp_path.join("book.epub"), &EpubSpec::cover("3.0", true));
-    attach_publisher_cover_page(&path, false);
-    if !files.is_empty() {
-        rewrite_epub_members(&path, |members_| {
-            for (name, data) in files {
-                members_.set(name, data.clone());
-            }
-        });
-    }
-    path
 }
 
 fn remove_directly_with(path: &Path, tmp_path: &Path, hooks: &EpubCoverHooks) -> Result<Value, CoverError> {
@@ -346,11 +270,6 @@ mod member_path {
     }
 }
 
-// TODO(common): `es_dummy::truthy(Option<&Value>)`를 `&Value`로 받는 얇은 래퍼. cover_fixtures::truthy를 대신한다.
-fn truthy(value: &Value) -> bool {
-    es_dummy::truthy(Some(value))
-}
-
 #[test]
 fn test_inspection_reads_headers_without_decoding_pixels() {
     let tmp = tempfile::tempdir().unwrap();
@@ -386,14 +305,15 @@ fn test_unreadable_existing_cover_metadata_is_a_warning() {
 }
 
 mod image_page_cropping {
+    use crate::common::shared_fixtures::{assert_refused, size, text_of};
     use super::common;
     use std::collections::BTreeMap;
     use std::path::Path;
-    use backend::epub_cover::{CoverError, edit_images, EditImages, revision};
-    use common::image::{image_size, jpeg_bytes};
+    use backend::epub_cover::{edit_images, EditImages, revision};
+    use common::image::{jpeg_bytes};
     use common::zipx::{Members as ZipMembers, write_zip_with, ZipMode};
     use image::{Rgb, RgbImage};
-    use serde_json::{json, Value};
+    use serde_json::{json};
 
     type Members = Vec<(String, Vec<u8>)>;
 
@@ -409,14 +329,6 @@ mod image_page_cropping {
     fn read(path: &Path) -> BTreeMap<String, Vec<u8>> {
         let members = ZipMembers::read(path);
         members.names().into_iter().map(|name| (name.clone(), members.get(&name).to_vec())).collect()
-    }
-
-    fn size(data: &[u8]) -> (u32, u32) {
-        image_size(data)
-    }
-
-    fn text_of(members: &BTreeMap<String, Vec<u8>>, name: &str) -> String {
-        String::from_utf8(members[name].clone()).unwrap()
     }
 
     // ── <svg><image> 로 이미지를 넣은 쪽 ──────────────────────────────────────────
@@ -443,15 +355,6 @@ mod image_page_cropping {
             ("OEBPS/d.xhtml".into(), r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>d</title></head><body><p>본문</p></body></html>"#.as_bytes().to_vec()),
         ];
         write_zip(path, members);
-    }
-
-    fn err_of(result: Result<Value, CoverError>) -> String {
-        result.expect_err("CoverError가 나야 한다").to_string()
-    }
-
-    fn assert_refused(result: Result<Value, CoverError>, reason: &str, label: &str) {
-        let text = err_of(result);
-        assert!(text.contains(reason), "{label}: {text:?} 에 {reason:?}가 없다");
     }
 
     #[test]
@@ -496,27 +399,6 @@ mod image_page_cropping {
         let result = edit_images(&path, &revision(&path), &tmp.path().join("trash"), EditImages { crops: vec![json!({"idref": "@cover", "rect": [0.0, 0.0, 0.5, 1.0, 0.0]})], ..EditImages::default() });
         assert_refused(result, "표지 이미지를 찾을 수 없음", "@cover");
     }
-}
-
-fn read(path: &Path) -> Vec<u8> {
-    std::fs::read(path).unwrap()
-}
-
-fn backups(root: &Path) -> PathBuf {
-    root.join(".cover_backups")
-}
-
-fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
-    value[key].as_str().unwrap()
-}
-
-fn opf_of(path: &Path) -> Vec<u8> {
-    read_zip_entry(path, "OPS/book.opf")
-}
-
-/// 현재 `revision`. Python `inspect_epub(path)["revision"]`.
-fn rev(path: &Path) -> String {
-    epub_cover::inspect_epub(path).unwrap()["revision"].as_str().unwrap().to_string()
 }
 
 #[test]
@@ -692,17 +574,6 @@ fn test_saved_cover_is_at_most_600_pixels_wide_and_keeps_aspect_ratio() {
         // Python round()는 .5를 짝수로 보내지만 이 값들은 모두 정수로 나누어떨어진다.
         assert_eq!(saved_height, (height as f64 * width.min(600) as f64 / width as f64).round() as u32, "{width}x{height}");
     }
-}
-
-fn epub_with_cover(root: &Path, width: u32, height: u32) -> PathBuf {
-    let path = make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", true));
-    let data = encode_image(width, height, BLUE, ImageFormat::Jpeg);
-    rewrite_epub_members(&path, |members| members.set("OPS/cover.jpg", data.clone()));
-    path
-}
-
-fn hooks_with(limits: Limits) -> EpubCoverHooks {
-    EpubCoverHooks::default().with_limits(limits)
 }
 
 #[test]

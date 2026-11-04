@@ -4,24 +4,11 @@
 mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
-use backend::epub_cover::{CoverError, edit_images, EditImages, OPF_NS, revision};
-use common::image::{color, jpeg_bytes};
+use backend::epub_cover::{CoverError, EditImages, OPF_NS};
 use common::zipx::{write_zip_with, ZipMode};
-use image::{Rgb, RgbImage};
 use serde_json::{json, Value};
 use tempfile::TempDir;
-
-fn full() -> Value {
-    json!([0, 0, 1, 1, 0])
-}
-
-fn jpeg_sized(c: &str, size: (u32, u32)) -> Vec<u8> {
-    jpeg_bytes(&RgbImage::from_pixel(size.0, size.1, Rgb(color(c))), 75)
-}
-
-fn jpeg(c: &str) -> Vec<u8> {
-    jpeg_sized(c, (200, 100))
-}
+use crate::common::shared_fixtures::{assert_refused, edit, full, jpeg};
 
 type Members = Vec<(String, Vec<u8>)>;
 
@@ -41,23 +28,10 @@ struct Book {
     _tmp: TempDir,
 }
 
-fn edit(path: &Path, trash: &Path, args: EditImages) -> Result<Value, CoverError> {
-    edit_images(path, &revision(path), trash, EditImages { backup_name: Some("book.epub".to_string()), ..args })
-}
-
 impl Book {
     fn edit(&self, args: EditImages) -> Result<Value, CoverError> {
         edit(&self.path, &self.trash, args)
     }
-}
-
-fn err_of(result: Result<Value, CoverError>) -> String {
-    result.expect_err("CoverError가 나야 한다").to_string()
-}
-
-fn assert_refused(result: Result<Value, CoverError>, reason: &str, label: &str) {
-    let text = err_of(result);
-    assert!(text.contains(reason), "{label}: {text:?} 에 {reason:?}가 없다");
 }
 
 // ── 한 쪽에 이미지가 여러 장인 책(실제 책처럼 xmlns 없는 비정형 HTML) ─────────────────────

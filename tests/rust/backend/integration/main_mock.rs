@@ -23,16 +23,7 @@ use common::{Response, TestClient};
 use serde_json::{json, Map, Value};
 use sysdeps::FsOps;
 use tempfile::TempDir;
-
-// ── 공용 상수와 헬퍼 ─────────────────────────────────────────────────────────
-
-fn now_plus_3600() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600
-}
-
-fn admin_payload() -> Value {
-    json!({"email": "admin@test.com", "role": "admin", "name": "Admin", "picture": "", "exp": now_plus_3600()})
-}
+use crate::common::shared_fixtures::{admin_payload, arr, books, count, cover_page, enc, flag, is_truthy, now_plus_3600, opt_book, opt_json, opt_string, page, proposal_result, strings, to_response, value_result};
 
 fn viewer_payload() -> Value {
     json!({"email": "viewer@test.com", "role": "viewer", "name": "Viewer", "picture": "", "exp": now_plus_3600()})
@@ -58,26 +49,6 @@ fn make_book(overrides: Value) -> Value {
 /// fastapi `Response(content=..., media_type=...)`에 대응한다.
 fn raw_response(content: &str, media_type: Option<&str>) -> Value {
     json!({"__response__": {"content": content, "media_type": media_type}})
-}
-
-/// URL 경로와 쿼리에 들어가는 한글을 퍼센트 인코딩한다. `requests`가 하는 일과 같다.
-fn enc(s: &str) -> String {
-    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
-}
-
-fn is_truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(true),
-    }
-}
-
-fn set_cookies(r: &Response) -> Vec<String> {
-    r.headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("set-cookie")).map(|(_, v)| v.clone()).collect()
 }
 
 fn path_set(v: &Value) -> HashSet<String> {
@@ -253,68 +224,6 @@ fn poll_ready<T>(mut fut: Fut<'_, T>) -> T {
         Poll::Ready(v) => v,
         Poll::Pending => panic!("동기 trait 메서드의 side effect는 바로 끝나는 future여야 한다"),
     }
-}
-
-// JSON -> trait 반환형 변환.
-
-fn arr(v: &Value, i: usize) -> Value {
-    v.get(i).cloned().unwrap_or(Value::Null)
-}
-
-fn opt_string(v: Value) -> Option<String> {
-    v.as_str().map(str::to_string)
-}
-
-fn opt_json(v: Value) -> Option<Value> {
-    if v.is_null() { None } else { Some(v) }
-}
-
-fn strings(v: Value) -> Vec<String> {
-    v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default()
-}
-
-fn flag(v: &Value) -> bool {
-    v.as_bool().unwrap_or(false)
-}
-
-fn count(v: &Value) -> i64 {
-    v.as_i64().unwrap_or(0)
-}
-
-/// `[항목, 전체 수, 다음 커서, 오류]`를 `Result<CoverPage, _>`로 바꾼다. 전체 수가 null이면 모르는 것이다.
-fn cover_page(v: &Value) -> Result<CoverPage, String> {
-    let total = arr(v, 1).as_u64().map(|n| n as usize);
-    opt_string(arr(v, 3)).map_or_else(|| Ok(CoverPage { items: titled_books(arr(v, 0)), total, next_cursor: opt_string(arr(v, 2)) }), Err)
-}
-
-/// `[책 목록, 전체 수, 오류]`를 `Result<BookPage, _>`로 바꾼다.
-fn page(v: &Value) -> Result<BookPage, String> {
-    opt_string(arr(v, 2)).map_or_else(|| Ok(BookPage { books: books(arr(v, 0)), total: count(&arr(v, 1)), next_cursor: None }), Err)
-}
-
-fn opt_book(v: Value) -> Option<Book> {
-    if v.is_null() { None } else { Some(Book::new(v["book_id"].as_i64().unwrap_or_default(), &v, v["score"].as_f64().unwrap_or_default())) }
-}
-
-fn books(v: Value) -> Vec<Book> {
-    v.as_array().map(|a| a.iter().cloned().map(|b| opt_book(b).expect("Book JSON")).collect()).unwrap_or_default()
-}
-
-/// `[[book, display_title], ...]`
-fn titled_books(v: Value) -> Vec<(Book, String)> {
-    v.as_array().map(|a| a.iter().map(|row| (opt_book(arr(row, 0)).expect("Book JSON"), arr(row, 1).as_str().unwrap_or("").to_string())).collect()).unwrap_or_default()
-}
-
-/// `{"__response__": {"content": .., "media_type": ..}}` -> 200 응답.
-fn to_response(v: Value) -> BookResponse {
-    let r = v.get("__response__").cloned().unwrap_or(Value::Null);
-    BookResponse { status_code: 200, media_type: r["media_type"].as_str().map(str::to_string), headers: Vec::new(), body: r["content"].as_str().unwrap_or("").as_bytes().to_vec() }
-}
-
-/// `(Option<Value>, Option<String>)` 쌍. `[결과, 오류]`
-/// `[값, 오류]`를 `Result`로 바꾼다. 오류가 있으면 값은 보지 않는다.
-fn value_result(v: &Value) -> Result<Value, String> {
-    opt_string(arr(v, 1)).map_or_else(|| Ok(arr(v, 0)), Err)
 }
 
 fn progress_callback<'a>(f: Option<&'a (dyn Fn(Value) + Send + Sync)>) -> Option<Callback<'a>> {
@@ -1401,10 +1310,6 @@ fn fake_propose(
             Ok(json!([final_result, null]))
         })
     }
-}
-
-fn proposal_result(total: usize, items: &[Value]) -> Value {
-    json!({"content_type": "book", "source_category": "0_inbox", "total_count": total, "processed_count": total, "items": items, "failures": []})
 }
 
 fn epub_items(n: usize, extra: Value) -> Vec<Value> {
@@ -3311,6 +3216,7 @@ async fn test_classify_proposal_restarts_when_the_previous_run_died() {
 }
 
 mod auth_refresh {
+    use crate::common::shared_fixtures::{admin_payload, arr, books, count, cover_page, flag, is_truthy, now_plus_3600, opt_book, opt_json, opt_string, page, set_cookies, strings, to_response, value_result};
     use super::common;
     use std::collections::{HashMap, HashSet};
     use std::future::Future;
@@ -3328,28 +3234,6 @@ mod auth_refresh {
     use common::env::{EnvGuard, EnvReadGuard};
     use common::{Response, TestClient};
     use serde_json::{json, Map, Value};
-
-
-    // ── 공용 상수와 헬퍼 ─────────────────────────────────────────────────────────
-
-    fn now_plus_3600() -> u64 {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600
-    }
-
-    fn admin_payload() -> Value {
-        json!({"email": "admin@test.com", "role": "admin", "name": "Admin", "picture": "", "exp": now_plus_3600()})
-    }
-
-    fn is_truthy(v: &Value) -> bool {
-        match v {
-            Value::Null => false,
-            Value::Bool(b) => *b,
-            Value::String(s) => !s.is_empty(),
-            Value::Array(a) => !a.is_empty(),
-            Value::Object(o) => !o.is_empty(),
-            Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(true),
-        }
-    }
 
     // ── 목 매니저: AsyncMock/MagicMock 대응 ──────────────────────────────────────
     //
@@ -3509,68 +3393,6 @@ mod auth_refresh {
             Poll::Ready(v) => v,
             Poll::Pending => panic!("동기 trait 메서드의 side effect는 바로 끝나는 future여야 한다"),
         }
-    }
-
-    // JSON -> trait 반환형 변환.
-
-    fn arr(v: &Value, i: usize) -> Value {
-        v.get(i).cloned().unwrap_or(Value::Null)
-    }
-
-    fn opt_string(v: Value) -> Option<String> {
-        v.as_str().map(str::to_string)
-    }
-
-    fn opt_json(v: Value) -> Option<Value> {
-        if v.is_null() { None } else { Some(v) }
-    }
-
-    fn strings(v: Value) -> Vec<String> {
-        v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default()
-    }
-
-    fn flag(v: &Value) -> bool {
-        v.as_bool().unwrap_or(false)
-    }
-
-    fn count(v: &Value) -> i64 {
-        v.as_i64().unwrap_or(0)
-    }
-
-    /// `[항목, 전체 수, 다음 커서, 오류]`를 `Result<CoverPage, _>`로 바꾼다. 전체 수가 null이면 모르는 것이다.
-    fn cover_page(v: &Value) -> Result<CoverPage, String> {
-        let total = arr(v, 1).as_u64().map(|n| n as usize);
-        opt_string(arr(v, 3)).map_or_else(|| Ok(CoverPage { items: titled_books(arr(v, 0)), total, next_cursor: opt_string(arr(v, 2)) }), Err)
-    }
-
-    /// `[책 목록, 전체 수, 오류]`를 `Result<BookPage, _>`로 바꾼다.
-    fn page(v: &Value) -> Result<BookPage, String> {
-        opt_string(arr(v, 2)).map_or_else(|| Ok(BookPage { books: books(arr(v, 0)), total: count(&arr(v, 1)), next_cursor: None }), Err)
-    }
-
-    fn opt_book(v: Value) -> Option<Book> {
-        if v.is_null() { None } else { Some(Book::new(v["book_id"].as_i64().unwrap_or_default(), &v, v["score"].as_f64().unwrap_or_default())) }
-    }
-
-    fn books(v: Value) -> Vec<Book> {
-        v.as_array().map(|a| a.iter().cloned().map(|b| opt_book(b).expect("Book JSON")).collect()).unwrap_or_default()
-    }
-
-    /// `[[book, display_title], ...]`
-    fn titled_books(v: Value) -> Vec<(Book, String)> {
-        v.as_array().map(|a| a.iter().map(|row| (opt_book(arr(row, 0)).expect("Book JSON"), arr(row, 1).as_str().unwrap_or("").to_string())).collect()).unwrap_or_default()
-    }
-
-    /// `{"__response__": {"content": .., "media_type": ..}}` -> 200 응답.
-    fn to_response(v: Value) -> BookResponse {
-        let r = v.get("__response__").cloned().unwrap_or(Value::Null);
-        BookResponse { status_code: 200, media_type: r["media_type"].as_str().map(str::to_string), headers: Vec::new(), body: r["content"].as_str().unwrap_or("").as_bytes().to_vec() }
-    }
-
-    /// `(Option<Value>, Option<String>)` 쌍. `[결과, 오류]`
-    /// `[값, 오류]`를 `Result`로 바꾼다. 오류가 있으면 값은 보지 않는다.
-    fn value_result(v: &Value) -> Result<Value, String> {
-        opt_string(arr(v, 1)).map_or_else(|| Ok(arr(v, 0)), Err)
     }
 
     fn progress_callback<'a>(f: Option<&'a (dyn Fn(Value) + Send + Sync)>) -> Option<Callback<'a>> {
@@ -4198,10 +4020,6 @@ mod auth_refresh {
     fn fx_with_refresh_store(rt_store: &Mock) -> Fx {
         let store = rt_store.clone();
         Fx::tweaked(move |d| d.with_role_resolver(Arc::new(FixedRole(Some("admin".to_string())))).with_refresh_token_store(Arc::new(store)))
-    }
-
-    fn set_cookies(r: &Response) -> Vec<String> {
-        r.headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("set-cookie")).map(|(_, v)| v.clone()).collect()
     }
 
     #[tokio::test]

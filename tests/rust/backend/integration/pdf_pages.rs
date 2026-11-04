@@ -11,14 +11,10 @@ use backend::main::{AppDeps, AuthMode, app_with};
 use backend::pdf_page_reader::{LopdfPageOps, PdfPageOps};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
-use common::pdf::{make_blank_pdf, page_count_bytes};
+use common::pdf::{page_count_bytes};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-
-/// `create_test_pdf`
-fn create_test_pdf(num_pages: usize, output_path: &Path) {
-    make_blank_pdf(output_path, num_pages);
-}
+use crate::common::shared_fixtures::{create_test_pdf};
 
 /// ES 문서 dict 생성 헬퍼.
 fn make_doc(relative_path: &str, file_size: u64, page_count: i64, file_type: &str) -> Value {

@@ -7,14 +7,7 @@ use backend::comics_manager::ComicsManager;
 use backend::main::{ApplyCategoryChanges, BookManagerApi, ProposeCategoryChanges};
 use crate::common::es_fake::FakeEsManager;
 use serde_json::json;
-
-/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
-fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
-    match result {
-        Ok(value) => (value, None),
-        Err(error) => (serde_json::json!({}), Some(error)),
-    }
-}
+use crate::common::shared_fixtures::{outcome};
 
 #[tokio::test]
 async fn test_category_proposals_delegate_to_shared_comics_logic() {

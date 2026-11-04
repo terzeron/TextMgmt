@@ -17,7 +17,7 @@ use common::{
     TestClient,
     clock::Event,
     epub::{BODY, EpubSpec, append_child, count_elements, make_epub},
-    es_dummy,
+
     es_fake::FakeEsManager,
     fsx::{count_matching, dir_names, ino_mtime},
     image::{BLUE, b64, encode_image, image_size, red_jpeg},
@@ -27,36 +27,11 @@ use cover_fixtures::{cached_candidates, cover_api};
 use image::ImageFormat;
 use serde_json::{Value, json};
 use zip::CompressionMethod;
-
-fn read(path: &Path) -> Vec<u8> {
-    std::fs::read(path).unwrap()
-}
-
-fn backups(root: &Path) -> PathBuf {
-    root.join(".cover_backups")
-}
-
-/// 현재 `revision`. Python `inspect_epub(path)["revision"]`.
-fn rev(path: &Path) -> String {
-    epub_cover::inspect_epub(path).unwrap()["revision"].as_str().unwrap().to_string()
-}
-
-fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
-    value[key].as_str().unwrap()
-}
+use crate::common::shared_fixtures::{backups, opf_of, read, rev, str_of, truthy};
 
 /// 항목마다 `keys`의 값을 배열로 묶는다. Python `[(item[a], item[b]) for item in items]`.
 fn pick(items: &Value, keys: &[&str]) -> Vec<Value> {
     items.as_array().unwrap().iter().map(|item| Value::Array(keys.iter().map(|k| item[*k].clone()).collect())).collect()
-}
-
-fn opf_of(path: &Path) -> Vec<u8> {
-    read_zip_entry(path, "OPS/book.opf")
-}
-
-// TODO(common): `es_dummy::truthy(Option<&Value>)`를 `&Value`로 받는 얇은 래퍼. cover_fixtures::truthy를 대신한다.
-fn truthy(value: &Value) -> bool {
-    es_dummy::truthy(Some(value))
 }
 
 /// 클로저를 `ImageFetcher`로 감싼다.

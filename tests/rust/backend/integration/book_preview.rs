@@ -14,7 +14,6 @@ use backend::pdf_page_reader::{LopdfOpener, PdfDoc, PdfError, PdfOpener};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use common::faulty_fs::FaultyFs;
-use common::zipx::{write_zip_with, ZipMode};
 use serde_json::{json, Value};
 use sysdeps::{CommandError, CommandOutput, CommandRunner};
 use zip::write::SimpleFileOptions;
@@ -23,14 +22,7 @@ use axum::body::Body;
 use axum::http::Request;
 use tokio_stream::StreamExt;
 use tower::ServiceExt;
-
-/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-    match result {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error)),
-    }
-}
+use crate::common::shared_fixtures::{chapter, entry, err_has, make_chapter_xhtml, make_cover_xhtml_with_svg, make_opf, namelist, ns_children, ns_nodes, split, unlink, write_epub, zip_read, zip_read_string};
 
 const CATEGORY: &str = "_epub";
 const OPF_NS: &str = "http://www.idpf.org/2007/opf";
@@ -46,88 +38,12 @@ const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   </rootfiles>
 </container>"#;
 
-/// 챕터 N개를 포함한 OPF XML을 생성.
-fn make_opf(chapter_count: usize, include_css: bool, include_svg_cover: bool) -> String {
-    let mut items = Vec::new();
-    let mut spine_refs = Vec::new();
-    for i in 1..=chapter_count {
-        items.push(format!(r#"    <item id="ch{i}" href="ch{i}.xhtml" media-type="application/xhtml+xml"/>"#));
-        spine_refs.push(format!(r#"    <itemref idref="ch{i}"/>"#));
-    }
-    if include_css {
-        items.push(r#"    <item id="style" href="style.css" media-type="text/css"/>"#.to_string());
-    }
-    if include_svg_cover {
-        items.push(r#"    <item id="cover-image" href="../media/cover.jpg" media-type="image/jpeg"/>"#.to_string());
-    }
-    let items = items.join("\n");
-    let spine_refs = spine_refs.join("\n");
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>Test Book</dc:title>
-    <dc:creator>Test Author</dc:creator>
-  </metadata>
-  <manifest>
-    <item id="toc" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-{items}
-  </manifest>
-  <spine toc="toc">
-{spine_refs}
-  </spine>
-</package>"#
-    )
-}
-
-/// SVG `<image>` 태그로 커버 이미지를 참조하는 커버 페이지.
-fn make_cover_xhtml_with_svg() -> String {
-    r#"<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-<head><title>Cover</title></head>
-<body>
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
-     width="100%" height="100%" viewBox="0 0 600 800">
-  <image xlink:href="../media/cover.jpg" width="600" height="800"/>
-</svg>
-</body>
-</html>"#
-        .to_string()
-}
-
-fn make_chapter_xhtml(index: usize, link_css: bool) -> String {
-    let css_link = if link_css { r#"<link rel="stylesheet" href="style.css"/>"# } else { "" };
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>Chapter {index}</title>{css_link}</head>
-<body><h1>Chapter {index}</h1><p>Content of chapter {index}.</p></body>
-</html>"#
-    )
-}
-
-fn chapter(index: usize) -> String {
-    make_chapter_xhtml(index, false)
-}
-
 fn stored() -> SimpleFileOptions {
     SimpleFileOptions::default().compression_method(CompressionMethod::Stored)
 }
 
 fn deflated() -> SimpleFileOptions {
     SimpleFileOptions::default().compression_method(CompressionMethod::Deflated)
-}
-
-/// mimetype(무압축)을 맨 앞에 두고 나머지를 압축해서 쓴다. Python 생성 헬퍼가 모두 이 배치다.
-fn write_epub(path: &Path, entries: Vec<(String, Vec<u8>)>) {
-    let mimetype: &[u8] = b"application/epub+zip";
-    let mut all: Vec<(&str, &[u8])> = vec![("mimetype", mimetype)];
-    all.extend(entries.iter().map(|(n, d)| (n.as_str(), d.as_slice())));
-    write_zip_with(path, &all, ZipMode::EpubStyle);
-}
-
-fn entry(name: &str, data: impl Into<Vec<u8>>) -> (String, Vec<u8>) {
-    (name.to_string(), data.into())
 }
 
 /// 테스트용 미니 EPUB을 생성.
@@ -495,10 +411,6 @@ macro_rules! setup {
     };
 }
 
-fn unlink(path: &Path) {
-    let _ = fs::remove_file(path);
-}
-
 /// 임시 파일 정리(`finally: path.unlink(missing_ok=True)`). panic이 나도 Drop에서 지운다.
 struct TempFile(PathBuf);
 
@@ -631,29 +543,6 @@ fn parse_epub_zip(content: &[u8]) -> Zip {
     ZipArchive::new(Cursor::new(content.to_vec())).unwrap()
 }
 
-fn namelist<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>) -> Vec<String> {
-    (0..zf.len()).map(|i| zf.by_index(i).unwrap().name().unwrap().into_owned()).collect()
-}
-
-fn zip_read<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &str) -> Vec<u8> {
-    let mut data = Vec::new();
-    zf.by_name(name).unwrap_or_else(|_| panic!("KeyError: {name}")).read_to_end(&mut data).unwrap();
-    data
-}
-
-fn zip_read_string<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>, name: &str) -> String {
-    String::from_utf8(zip_read(zf, name)).unwrap()
-}
-
-/// ElementTree의 `.//{ns}name`처럼 네임스페이스까지 맞는 요소를 문서 순서로 돌려준다.
-fn ns_nodes<'a, 'i>(doc: &'a roxmltree::Document<'i>, ns: &str, name: &str) -> Vec<roxmltree::Node<'a, 'i>> {
-    doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == name && n.tag_name().namespace() == Some(ns)).collect()
-}
-
-fn ns_children<'a, 'i>(node: roxmltree::Node<'a, 'i>, ns: &str, name: &str) -> Vec<roxmltree::Node<'a, 'i>> {
-    node.children().filter(|n| n.is_element() && n.tag_name().name() == name && n.tag_name().namespace() == Some(ns)).collect()
-}
-
 fn opf_path_of<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>) -> String {
     let text = zip_read_string(zf, "META-INF/container.xml");
     let container = roxmltree::Document::parse(&text).unwrap();
@@ -677,10 +566,6 @@ fn get_manifest_items<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>) -> Vec<(S
         .iter()
         .map(|i| (i.attribute("id").unwrap_or("").to_string(), i.attribute("href").unwrap_or("").to_string(), i.attribute("media-type").unwrap_or("").to_string()))
         .collect()
-}
-
-fn err_has(error: &Option<String>, needle: &str) -> bool {
-    error.as_deref().unwrap_or_else(|| panic!("error가 None이다 (기대: {needle:?} 포함)")).contains(needle)
 }
 
 // ── tests: preview 엔드포인트 ─────────────────────────────

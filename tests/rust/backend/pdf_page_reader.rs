@@ -6,7 +6,7 @@ mod fx;
 use std::fs;
 use common::edits;
 use common::image::assert_approx;
-use common::pdf::{edit_pdf, first_image_size, first_xobject, first_xobject_mut, load, make_blank_pdf, mediabox_of, page_count_bytes, page_dict, page_dict_mut, srgb_profile};
+use common::pdf::{edit_pdf, first_image_size, first_xobject, first_xobject_mut, load, mediabox_of, page_count_bytes, page_dict, page_dict_mut, srgb_profile};
 use fx::{Edit, image_env, Opts, pixel_env};
 use lopdf::{dictionary, Dictionary, Document, Object, Stream};
 use std::path::{Path, PathBuf};
@@ -16,6 +16,7 @@ use backend::pdf_page_reader::{LopdfPageOps, PageCountCache, PdfCacheLimits, Pdf
 use common::es_fake::FakeEsManager;
 use serde_json::{json, Value};
 use tempfile::TempDir;
+use crate::common::shared_fixtures::{create_test_pdf, error_text};
 
 type EditFn = fn(&mut Document);
 
@@ -38,10 +39,6 @@ async fn test_delete_pdf_pages_rejects_malformed_es_book_before_edit() {
 
 fn name(s: &str) -> Object {
     Object::Name(s.as_bytes().to_vec())
-}
-
-fn error_text(error: &Option<String>) -> &str {
-    error.as_deref().unwrap_or("")
 }
 
 // ── 크롭할 수 없는 PDF 구조 ──
@@ -305,11 +302,6 @@ impl ResponseExt for backend::main::BookResponse {
     fn header(&self, name: &str) -> Option<&str> {
         self.headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str())
     }
-}
-
-/// `create_test_pdf`
-fn create_test_pdf(num_pages: usize, output_path: &Path) {
-    make_blank_pdf(output_path, num_pages);
 }
 
 /// ES 문서 dict 생성 헬퍼.

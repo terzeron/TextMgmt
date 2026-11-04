@@ -73,22 +73,7 @@ use common::zipx::{open_zip, write_zip};
 use serde_json::{Value, json};
 use sysdeps::{CommandError, CommandOutput};
 use tempfile::TempDir;
-
-/// 검증 결과를 Python 원본의 `(유효 여부, 사유)`로 펼친다.
-fn verdict(result: Result<(), String>) -> (bool, Option<String>) {
-    match result {
-        Ok(()) => (true, None),
-        Err(reason) => (false, Some(reason)),
-    }
-}
-
-/// `Result<Value, _>`를 Python 원본의 `(결과, 오류)`로 펼친다. 실패하면 원본처럼 빈 객체다.
-fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
-    match result {
-        Ok(value) => (value, None),
-        Err(error) => (serde_json::json!({}), Some(error)),
-    }
-}
+use crate::common::shared_fixtures::{as_status, make_doc, outcome, run, split, verdict};
 
 /// `delete_book` 결과를 Python 원본의 `("Ok" | "Warning" | "Error", 메시지)`로 펼친다.
 fn as_deletion(result: Result<backend::book_manager::BookDeletion, String>) -> (String, Option<String>) {
@@ -99,42 +84,13 @@ fn as_deletion(result: Result<backend::book_manager::BookDeletion, String>) -> (
     }
 }
 
-/// `Result<(), _>`를 Python 원본의 `("Ok" | "Error", 메시지)`로 펼친다.
-fn as_status(result: Result<(), String>) -> (String, Option<String>) {
-    match result {
-        Ok(()) => ("Ok".to_string(), None),
-        Err(error) => ("Error".to_string(), Some(error)),
-    }
-}
-
-/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-    match result {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error)),
-    }
-}
-
 const CATEGORY1: &str = "_epub";
 const CATEGORY2: &str = "_txt";
 
 const CONTAINER_OEBPS: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#;
 
-// ---------------------------------------------------------------------------
-// 공용 헬퍼
-// ---------------------------------------------------------------------------
-
-/// `asyncio_runner`: 코루틴 하나를 끝까지 돌린다.
-fn run<F: std::future::Future>(fut: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
-}
-
 fn is_int(v: &Value) -> bool {
     v.is_i64() || v.is_u64()
-}
-
-fn make_doc(rel_path: &str, file_type: &str) -> Value {
-    json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
 }
 
 /// `make_manager(tmp_path, es)`의 앞 절반: ES 대역을 쓰는 `BookManagerDeps`를 만든다. 대역(`with_*`)을 꽂을 테스트는 이걸로 시작한다.

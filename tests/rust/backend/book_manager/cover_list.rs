@@ -2,40 +2,8 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use std::path::Path;
-use std::sync::Arc;
-use backend::book_manager::{BookManager, BookManagerDeps};
 use common::es_fake::FakeEsManager;
-use serde_json::{json, Value};
-use tempfile::TempDir;
-
-// ---------------------------------------------------------------------------
-// 공용 헬퍼 (전반부 정의를 복사)
-// ---------------------------------------------------------------------------
-
-/// pytest `tmp_path`에 대응한다. 반환값이 drop되면 디렉토리가 지워진다.
-fn tmp_dir() -> TempDir {
-    tempfile::tempdir().unwrap()
-}
-
-/// `asyncio.run(coro)`에 대응한다. 동기 테스트 안에서 future를 끝까지 돌린다.
-fn asyncio_runner<F: std::future::Future>(fut: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
-}
-
-/// 기본 구성의 `BookManagerDeps`. `with_*`를 더 붙인 뒤 `BookManager::with_deps`로 만든다.
-fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
-    common::setup_env();
-    BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
-}
-
-fn make_manager(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManager {
-    BookManager::with_deps(deps(tmp_path, es))
-}
-
-fn make_doc(rel_path: &str, file_type: &str) -> Value {
-    json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
-}
+use crate::common::shared_fixtures::{asyncio_runner, make_doc, make_manager, tmp_dir};
 
 #[test]
 fn test_get_cover_rejects_missing_required_es_fields() {
@@ -50,6 +18,7 @@ fn test_get_cover_rejects_missing_required_es_fields() {
 }
 
 mod cover_member_lookup {
+    use crate::common::shared_fixtures::{make_deps, make_doc};
     use super::common;
     use std::collections::HashMap;
     use std::fs;
@@ -57,7 +26,7 @@ mod cover_member_lookup {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
     use backend::book_metadata::Book;
-    use backend::book_manager::{BookManager, BookManagerDeps, CoverPage, CoverPageOpts, encode_category_cursor, MAX_CATEGORY_PAGE_SIZE};
+    use backend::book_manager::{BookManager, CoverPage, CoverPageOpts, encode_category_cursor, MAX_CATEGORY_PAGE_SIZE};
 
     use backend::es_manager::{EsError, EsManagerApi};
     use common::es_fake::FakeEsManager;
@@ -79,19 +48,9 @@ mod cover_member_lookup {
 
     const CONTAINER: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#;
 
-    /// ES 대역을 쓰는 `BookManagerDeps`. 대역(`with_*`)을 꽂을 테스트는 이걸로 시작한다.
-    fn make_deps(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManagerDeps {
-        BookManagerDeps::new(tmp_path.to_path_buf(), es)
-    }
-
     /// Python `make_manager(tmp_path, es)`.
     fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {
         BookManager::with_deps(make_deps(tmp_path, es))
-    }
-
-    /// Python `make_doc(path, file_type)`.
-    fn make_doc(rel_path: &str, file_type: &str) -> Value {
-        json!({"category": "A", "title": "T", "author": "U", "file_path": rel_path, "file_type": file_type, "file_size": 1, "updated_time": "2024-01-01T00:00:00.000000", "summary": "S"})
     }
 
     // ---- 커버 목록(작품 묶음 + 커서) ----
