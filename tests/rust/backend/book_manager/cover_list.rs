@@ -18,6 +18,7 @@ fn test_get_cover_rejects_missing_required_es_fields() {
 }
 
 mod cover_member_lookup {
+    use crate::common::shared_fixtures::{CONTAINER};
     use crate::common::shared_fixtures::{make_deps, make_doc};
     use super::common;
     use std::collections::HashMap;
@@ -45,8 +46,6 @@ mod cover_member_lookup {
         write_zip(&path, &owned);
         open_zip(&path)
     }
-
-    const CONTAINER: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#;
 
     /// Python `make_manager(tmp_path, es)`.
     fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {
@@ -587,10 +586,11 @@ mod cover_member_lookup {
 }
 
 mod get_cover {
+    use crate::common::shared_fixtures::{thumbnailer};
     use super::common;
     use std::path::Path;
     use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
-    use backend::book_manager::{BookManager, BookManagerDeps, Thumbnailer};
+    use backend::book_manager::{BookManager, BookManagerDeps};
     use common::epub::{EpubSpec, make_epub};
     use common::es_fake::FakeEsManager;
     use common::fsx::count_matching;
@@ -601,20 +601,6 @@ mod get_cover {
 
     fn make_doc(relative_path: &str, file_type: &str) -> Value {
         json!({"category": "test_category", "title": "Test Book", "author": "Author", "file_path": relative_path, "file_type": file_type, "file_size": 1, "line_count": 0, "page_count": 1, "isbn": "", "summary": "test", "updated_time": "2024-01-01T00:00:00.000000"})
-    }
-
-    /// 클로저를 `Thumbnailer`로 감싼다.
-    // TODO(common): `common`에 `Thumbnailer` 클로저 어댑터가 없다(docs/rust-test-seams.md 3.12는 trait 이름만 정한다). 생기면 지운다.
-    struct FnThumbnailer<F>(F);
-
-    impl<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync> Thumbnailer for FnThumbnailer<F> {
-        fn extract_cover_thumbnail(&self, path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>> {
-            (self.0)(path, file_type, width)
-        }
-    }
-
-    fn thumbnailer<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync + 'static>(f: F) -> Arc<dyn Thumbnailer> {
-        Arc::new(FnThumbnailer(f))
     }
 
     fn use_doc(es: &FakeEsManager, relative_path: &str, file_type: &str) {

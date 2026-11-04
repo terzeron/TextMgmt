@@ -6,8 +6,7 @@ mod fx;
 #[path = "../common/mod.rs"]
 mod common;
 use std::path::{Path};
-use std::sync::Arc;
-use backend::book_manager::{BookManager, BookManagerDeps, Thumbnailer};
+use backend::book_manager::{BookManager, BookManagerDeps};
 use common::epub::{BODY};
 use common::es_fake::FakeEsManager;
 use common::fsx::ino_mtime;
@@ -15,12 +14,12 @@ use common::image::{b64, red_jpeg};
 use common::pdf::write_blank_pdf;
 use serde_json::{json, Value};
 use backend::cover_management::CoverManagement;
-use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover;
 use backend::epub_cover::{CoverError, MAX_IMAGE_BYTES};
 use common::zipx::{read_zip_entry};
 use fx::{Edit, Opts};
 use crate::common::shared_fixtures::{broken_cover, error_text, first_item, truthy};
+use crate::common::shared_fixtures::{fetcher, thumbnailer};
 
 fn create_test_pdf(output_path: &Path) {
     write_blank_pdf(output_path, 612, 792);
@@ -28,20 +27,6 @@ fn create_test_pdf(output_path: &Path) {
 
 fn make_doc(relative_path: &str, file_type: &str) -> Value {
     json!({"category": "test_category", "title": "Test Book", "author": "Author", "file_path": relative_path, "file_type": file_type, "file_size": 1, "line_count": 0, "page_count": 1, "isbn": "", "summary": "test", "updated_time": "2024-01-01T00:00:00.000000"})
-}
-
-/// 클로저를 `Thumbnailer`로 감싼다.
-// TODO(common): `common`에 `Thumbnailer` 클로저 어댑터가 없다(docs/rust-test-seams.md 3.12는 trait 이름만 정한다). 생기면 지운다.
-struct FnThumbnailer<F>(F);
-
-impl<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync> Thumbnailer for FnThumbnailer<F> {
-    fn extract_cover_thumbnail(&self, path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>> {
-        (self.0)(path, file_type, width)
-    }
-}
-
-fn thumbnailer<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync + 'static>(f: F) -> Arc<dyn Thumbnailer> {
-    Arc::new(FnThumbnailer(f))
 }
 
 fn use_doc(es: &FakeEsManager, relative_path: &str, file_type: &str) {
@@ -65,20 +50,6 @@ async fn test_cover_ignores_legacy_id_only_cache() {
     let response = manager.get_cover(124, None).await;
 
     assert_eq!(response.body, b"correct cover");
-}
-
-/// `common::fx::fetcher`가 생기면 지운다. 클로저를 `ImageFetcher`로 감싼다.
-// TODO(common): `common::fx::fetcher(|url| ...)` (docs/rust-test-seams.md 3.7). 아직 없어 로컬로 둔다.
-struct FnFetcher<F>(F);
-
-impl<F: Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync> ImageFetcher for FnFetcher<F> {
-    fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError> {
-        (self.0)(url)
-    }
-}
-
-fn fetcher<F: Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync + 'static>(f: F) -> Arc<dyn ImageFetcher> {
-    Arc::new(FnFetcher(f))
 }
 
 #[test]
@@ -160,15 +131,15 @@ async fn test_upload_rejects_encoded_data_over_byte_limit_before_decoding() {
 }
 
 mod download_failures {
+    use crate::common::shared_fixtures::{FakeBooks, FetchSlot, URL};
     use crate::common::shared_fixtures::{err_has};
     use super::common;
     use std::fs;
 
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
-    use backend::book_metadata::BookLookupError;
-    use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
-    use backend::direct_cover_url::{FetchError, ImageFetcher};
+    use backend::book_manager::{BookManager, BookManagerDeps, BookRef};
+    use backend::direct_cover_url::{FetchError};
 
     use common::epub::{EpubSpec, make_epub};
     use common::es_fake::FakeEsManager;
@@ -176,54 +147,6 @@ mod download_failures {
     use common::image::red_jpeg;
 
     use serde_json::Value;
-
-    const URL: &str = "https://img.example.com/cover.jpg";
-
-    // ── 대역 (env fixture) ─────────────────────────────────────
-
-    type Fetch = Box<dyn Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync>;
-
-    /// `monkeypatch.setattr("backend.cover_management.fetch_url_image", ...)`의 대응. 테스트 중간에 바꿀 수 있다.
-    /// `BookManagerDeps::with_image_fetcher`로 주입한다. 오류 타입은 `FetchError`(구 `EpubCoverError`).
-    struct FetchSlot(Mutex<Fetch>);
-
-    impl FetchSlot {
-        fn set(&self, f: impl Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync + 'static) {
-            *self.0.lock().unwrap() = Box::new(f);
-        }
-    }
-
-    impl ImageFetcher for FetchSlot {
-        fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError> {
-            (self.0.lock().unwrap())(url)
-        }
-    }
-
-    /// `AsyncMock(return_value=(book, None))` get_book.
-    struct FakeBooks(Mutex<(Option<BookRef>, Option<String>)>);
-
-    // 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
-    #[allow(dead_code)]
-    impl FakeBooks {
-        fn set_file_type(&self, file_type: &str) {
-            self.0.lock().unwrap().0.as_mut().unwrap().file_type = file_type.to_string();
-        }
-
-        fn set_missing(&self, message: &str) {
-            *self.0.lock().unwrap() = (None, Some(message.to_string()));
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl BookLookup for FakeBooks {
-        async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> {
-            match self.0.lock().unwrap().clone() {
-                (Some(book), _) => Ok(book),
-                (None, Some(error)) => Err(BookLookupError::Failed(error)),
-                (None, None) => Err(BookLookupError::NotFound(book_id)),
-            }
-        }
-    }
 
     // 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
     #[allow(dead_code)]

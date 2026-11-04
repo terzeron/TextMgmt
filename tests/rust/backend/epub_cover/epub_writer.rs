@@ -9,6 +9,7 @@ use common::zipx::{write_zip_with, ZipMode};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use crate::common::shared_fixtures::{assert_refused, edit, full, jpeg};
+use crate::common::shared_fixtures::{MULTI_PAGE};
 
 type Members = Vec<(String, Vec<u8>)>;
 
@@ -33,15 +34,6 @@ impl Book {
         edit(&self.path, &self.trash, args)
     }
 }
-
-// ── 한 쪽에 이미지가 여러 장인 책(실제 책처럼 xmlns 없는 비정형 HTML) ─────────────────────
-
-const MULTI_PAGE: &str = concat!(
-    "<html>\n  <head>\n    <title>엄마의 말뚝</title>\n  </head>\n    <body><li class=\"chapter\">\n",
-    "<p><img alt=\"image\" height=\"597\" src=\"../Images/m1.jpg\" width=\"412\"/></p>\n",
-    "<p><img alt=\"image\" height=\"597\" src=\"../Images/m2.jpg\" width=\"412\"/></p>\n",
-    "</li></body></html>"
-);
 
 fn make_multi(path: &Path, page: &[u8]) -> PathBuf {
     let opf = format!(

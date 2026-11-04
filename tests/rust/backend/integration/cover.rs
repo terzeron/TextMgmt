@@ -6,7 +6,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use backend::book_manager::{BookManager, BookManagerApi, BookManagerDeps, Thumbnailer};
+use backend::book_manager::{BookManager, BookManagerApi, BookManagerDeps};
 use backend::comics_manager::ComicsManager;
 use backend::main::{AppDeps, AuthMode, CategoryMappingApi, MappingError, app_with};
 use common::{
@@ -17,6 +17,7 @@ use common::{
     pdf::write_blank_pdf,
 };
 use serde_json::{Value, json};
+use crate::common::shared_fixtures::{thumbnailer};
 
 #[test]
 fn test_epubveri_cli_writes_epubcheck_compatible_json_for_valid_and_invalid_books() {
@@ -84,20 +85,6 @@ fn create_test_pdf(output_path: &Path) {
 
 fn make_doc(relative_path: &str, file_type: &str) -> Value {
     json!({"category": "test_category", "title": "Test Book", "author": "Author", "file_path": relative_path, "file_type": file_type, "file_size": 1, "line_count": 0, "page_count": 1, "isbn": "", "summary": "test", "updated_time": "2024-01-01T00:00:00.000000"})
-}
-
-/// 클로저를 `Thumbnailer`로 감싼다.
-// TODO(common): `common`에 `Thumbnailer` 클로저 어댑터가 없다(docs/rust-test-seams.md 3.12는 trait 이름만 정한다). 생기면 지운다.
-struct FnThumbnailer<F>(F);
-
-impl<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync> Thumbnailer for FnThumbnailer<F> {
-    fn extract_cover_thumbnail(&self, path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>> {
-        (self.0)(path, file_type, width)
-    }
-}
-
-fn thumbnailer<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync + 'static>(f: F) -> Arc<dyn Thumbnailer> {
-    Arc::new(FnThumbnailer(f))
 }
 
 fn use_doc(es: &FakeEsManager, relative_path: &str, file_type: &str) {

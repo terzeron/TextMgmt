@@ -73,6 +73,7 @@ use serde_json::{Value, json};
 use sysdeps::{FsOps, SystemClock};
 use tempfile::TempDir;
 use crate::common::shared_fixtures::{enc, now_secs, process_env, split};
+use crate::common::shared_fixtures::{BookRow, CATEGORY};
 
 #[test]
 fn backend_binary_dispatches_the_isbn_pdf_worker_command() {
@@ -85,8 +86,6 @@ fn backend_binary_dispatches_the_isbn_pdf_worker_command() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "0\n\n");
 }
-
-const CATEGORY: &str = "_epub";
 
 /// 경로 조각을 인코딩한다. `/`는 그대로 둔다.
 fn enc_path(s: &str) -> String {
@@ -1118,8 +1117,6 @@ async fn test_search_bookstore_api_errors() {
     assert_eq!(resp.status, 400);
     assert_eq!(resp.json()["detail"], "제목 또는 저자를 입력해주세요");
 }
-
-type BookRow = (String, String, String, String, String, String);
 
 /// Python `DummyStore`. `search`가 정한 행을 돌려주고, `build_search_url`은 `https://example.com?q={keyword}`다.
 /// TODO(common): `BookstoreSearch`의 메서드 모양은 문서 3.2에 없다. 두 메서드를 가정했다. 서점이 13곳이어도 factory는 하나라 모든 이름이 같은 대역을 쓴다.

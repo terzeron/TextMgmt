@@ -14,11 +14,11 @@ use classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
 use common::es_fake::FakeEsManager;
 use common::zipx::{read_zip_entry, write_zip};
 use serde_json::{Value};
-use tempfile::TempDir;
 use classifier::book_classifier::{BookClassifierService, BookstorePolicy, SharedBookClassifier};
 use bookstore::store_clients::{BookstoreSearch, SearchRow};
 use classifier::inference_model::CategoryModel;
 use crate::common::shared_fixtures::{model_dir, propose, tmp_dir};
+use crate::common::shared_fixtures::{NCX_NS_STR, Setup, setup};
 
 /// `fx::env`가 만든 환경의 `BookManager`를 Deps 설정을 더해 다시 만든다. `loader`가 참이면 파일 읽기 대역도 꽂는다.
 // TODO(common): `book_fixtures::Opts`가 Deps 설정 훅(`configure: Option<Box<dyn FnOnce(BookManagerDeps) -> BookManagerDeps>>`)을 받으면 이 헬퍼가 필요 없다.
@@ -57,10 +57,6 @@ async fn test_unexpected_error_while_saving_does_not_leak_panic_details() {
     assert!(result.is_none() && error.as_deref() == Some("PDF 페이지 삭제 실패 (RuntimeError)"), "{error:?}");
     e.assert_nothing_changed(&original);
 }
-
-// --- 누락된 spine 문서: 총 챕터 수와 NCX 목차 ---
-
-const NCX_NS_STR: &str = "http://www.daisy.org/z3986/2005/ncx/";
 
 fn epub_with_missing_page(path: &Path, include_page: bool) -> PathBuf {
     let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
@@ -115,25 +111,6 @@ fn test_prune_dead_ncx_navpoints_ignores_unparsable_ncx_and_empty_src() {
     assert!(_prune_dead_ncx_navpoints(b"<ncx", "OEBPS", &|_path| false).is_none());
     let no_src = format!(r#"<ncx xmlns="{NCX_NS_STR}"><navMap><navPoint id="x"><content src=""/></navPoint><navPoint id="y"/></navMap></ncx>"#).into_bytes();
     assert!(_prune_dead_ncx_navpoints(&no_src, "", &|_path| false).is_none());
-}
-
-/// 책 루트(`books`)와 서비스 파일(`meta`)을 나눠 둔다. 캐시 파일이 책으로 스캔되면 안 된다.
-struct Setup {
-    _tmp: TempDir,
-    books: PathBuf,
-    meta: PathBuf,
-}
-
-fn setup(files: &[&str]) -> Setup {
-    let tmp = TempDir::new().unwrap();
-    let books = tmp.path().join("books");
-    let meta = tmp.path().join("meta");
-    fs::create_dir_all(books.join("0_inbox")).unwrap();
-    fs::create_dir_all(&meta).unwrap();
-    for name in files {
-        fs::write(books.join("0_inbox").join(name), "본문 내용 ".repeat(20)).unwrap();
-    }
-    Setup { books, meta, _tmp: tmp }
 }
 
 /// 항상 같은 행을 돌려주는 서점. 부른 횟수를 센다.

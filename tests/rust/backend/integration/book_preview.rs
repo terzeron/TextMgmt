@@ -23,20 +23,11 @@ use axum::http::Request;
 use tokio_stream::StreamExt;
 use tower::ServiceExt;
 use crate::common::shared_fixtures::{chapter, entry, err_has, make_chapter_xhtml, make_cover_xhtml_with_svg, make_opf, namelist, ns_children, ns_nodes, split, unlink, write_epub, zip_read, zip_read_string};
+use crate::common::shared_fixtures::{CATEGORY, CONTAINER_XML, TempFile};
 
-const CATEGORY: &str = "_epub";
 const OPF_NS: &str = "http://www.idpf.org/2007/opf";
 const CNT_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
 const NCX_NS: &str = "http://www.daisy.org/z3986/2005/ncx/";
-
-// ── EPUB 생성 헬퍼 ────────────────────────────────────────
-
-const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
 
 fn stored() -> SimpleFileOptions {
     SimpleFileOptions::default().compression_method(CompressionMethod::Stored)
@@ -409,15 +400,6 @@ macro_rules! setup {
     () => {
         backend_test_setup().await
     };
-}
-
-/// 임시 파일 정리(`finally: path.unlink(missing_ok=True)`). panic이 나도 Drop에서 지운다.
-struct TempFile(PathBuf);
-
-impl Drop for TempFile {
-    fn drop(&mut self) {
-        unlink(&self.0);
-    }
 }
 
 /// EPUB 파일의 ES 등록용 데이터를 생성.

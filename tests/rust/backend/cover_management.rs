@@ -3,13 +3,12 @@ mod common;
 mod cover_fixtures;
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use backend::book_manager::{BookManager, Thumbnailer};
 use backend::cover_management::{ApplyImageModel, Backup, CoverHooks, CoverManagement, EpubThumbnailer};
 use backend::cover_sources::{SearchError, SearchHooks, STORES};
-use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover;
 use backend::epub_cover::{CoverError, Limits, MAX_IMAGE_BYTES};
 use common::clock::{Event, FakeClock};
@@ -21,6 +20,7 @@ use common::zipx::rewrite_epub_members;
 use cover_fixtures::cached_candidates;
 use serde_json::{json, Value};
 use crate::common::shared_fixtures::{backups, epub_with_cover, hooks_with, read, rev, str_of, truthy};
+use crate::common::shared_fixtures::{fetcher, thumbnailer};
 
 fn first_item(service: &CoverManagement) -> Value {
     service.missing("", "", 60, false).unwrap()["items"][0].clone()
@@ -28,34 +28,6 @@ fn first_item(service: &CoverManagement) -> Value {
 
 fn not_found(_store: &str, _metadata: &Value) -> Result<Value, SearchError> {
     Ok(json!({"status": "not_found", "candidates": []}))
-}
-
-/// 클로저를 `ImageFetcher`로 감싼다.
-// TODO(common): `common::fx::fetcher(|url| ...)` (docs/rust-test-seams.md 3.7). 아직 없어 로컬로 둔다.
-struct FnFetcher<F>(F);
-
-impl<F: Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync> ImageFetcher for FnFetcher<F> {
-    fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError> {
-        (self.0)(url)
-    }
-}
-
-fn fetcher<F: Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync + 'static>(f: F) -> Arc<dyn ImageFetcher> {
-    Arc::new(FnFetcher(f))
-}
-
-/// 클로저를 `Thumbnailer`로 감싼다.
-// TODO(common): `Thumbnailer` 클로저 어댑터가 `common`에 없다(docs/rust-test-seams.md 3.12는 trait 이름만 정한다).
-struct FnThumbnailer<F>(F);
-
-impl<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync> Thumbnailer for FnThumbnailer<F> {
-    fn extract_cover_thumbnail(&self, path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>> {
-        (self.0)(path, file_type, width)
-    }
-}
-
-fn thumbnailer<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync + 'static>(f: F) -> Arc<dyn Thumbnailer> {
-    Arc::new(FnThumbnailer(f))
 }
 
 #[test]
@@ -919,7 +891,6 @@ mod cover_repair {
     use super::common;
 
     use backend::cover_management::CoverManagement;
-
 
     use common::zipx::rewrite_epub_members;
 

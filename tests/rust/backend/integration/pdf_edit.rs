@@ -412,6 +412,7 @@ async fn jpeg_crop_preserves_quantization_sampling_progressive_and_grayscale() {
 }
 
 mod http_contract {
+    use crate::common::shared_fixtures::{FetchImage};
     use crate::common::shared_fixtures::{split};
     use super::common;
     use backend::book_manager::{BookManager, BookManagerDeps};
@@ -459,15 +460,6 @@ mod http_contract {
                     assert!(entries.flatten().all(|e| !e.file_name().to_string_lossy().ends_with(".part")));
                 }
             }
-        }
-    }
-
-    struct FetchImage(Result<Vec<u8>, backend::direct_cover_url::FetchError>);
-
-    impl backend::direct_cover_url::ImageFetcher for FetchImage {
-        fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, backend::direct_cover_url::FetchError> {
-            assert_eq!(url, "https://example.com/image.png");
-            self.0.clone()
         }
     }
 

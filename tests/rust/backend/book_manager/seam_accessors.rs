@@ -17,6 +17,7 @@ use common::zipx::write_zip;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use crate::common::shared_fixtures::{allowed_set, asyncio_runner, blank_pdf_bytes_sized, category_with_files, deps, image_bytes, make_deps, make_doc, make_manager, make_source_file, outcome, tmp_dir};
+use crate::common::shared_fixtures::{CONTAINER};
 
 /// `apply_category_changes`의 Python 키워드 인자 묶음(테스트 로컬). 구현의 `ApplyOptions`로 바꿔 부른다.
 struct ApplyOpts {
@@ -283,8 +284,6 @@ fn test_apply_category_changes_continues_after_one_item_raises() {
     assert_eq!(result["applied_count"], 1);
     assert_eq!(result["failed_count"], 1);
 }
-
-const CONTAINER: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#;
 
 #[tokio::test]
 async fn test_preview_downscales_large_epub_images() {

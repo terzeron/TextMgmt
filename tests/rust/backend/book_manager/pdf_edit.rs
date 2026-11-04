@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use fx::{image_env, Opts};
 use crate::common::shared_fixtures::{error_text, split};
+use crate::common::shared_fixtures::{FetchImage};
 
 // 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
 #[allow(dead_code)]
@@ -62,14 +63,6 @@ async fn custom_trash_directory_is_used() {
     let result = bm.delete_pdf_pages(1, &[1], None, None, None, None).await.unwrap();
     assert_eq!(result["backup"], "backup/book.pdf");
     assert!(e.root.path().join("backup/book.pdf").is_file());
-}
-
-struct FetchImage(Result<Vec<u8>, backend::direct_cover_url::FetchError>);
-impl backend::direct_cover_url::ImageFetcher for FetchImage {
-    fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, backend::direct_cover_url::FetchError> {
-        assert_eq!(url, "https://example.com/image.png");
-        self.0.clone()
-    }
 }
 
 #[tokio::test]

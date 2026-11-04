@@ -19,25 +19,8 @@ use zip::ZipArchive;
 use common::runner::FakeRunner;
 use backend::es_manager::EsManagerApi;
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{image_bytes, make_deps, make_doc, namelist, unlink, write_zip_stored, zip_read_string};
-
-// ── EPUB 생성 헬퍼 ────────────────────────────────────────
-
-const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
-/// 임시 파일 정리(`finally: path.unlink(missing_ok=True)`). panic이 나도 Drop에서 지운다.
-struct TempFile(PathBuf);
-
-impl Drop for TempFile {
-    fn drop(&mut self) {
-        unlink(&self.0);
-    }
-}
+use crate::common::shared_fixtures::{image_bytes, make_deps, make_doc, namelist, write_zip_stored, zip_read_string};
+use crate::common::shared_fixtures::{CONTAINER, CONTAINER_XML, TempFile};
 
 /// URL 인코딩된 href 항목 및 전체보기(chapters=0) 시 EPUB 구조가 완전 보존되는지 검증.
 #[tokio::test]
@@ -1312,8 +1295,6 @@ mod get_book_preview {
         assert_eq!(resp2.status_code, 200);
     }
 }
-
-const CONTAINER: &str = r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#;
 
 /// Python `make_manager(tmp_path, es)`.
 fn make_manager(tmp_path: &Path, es: Arc<dyn EsManagerApi>) -> BookManager {

@@ -7,57 +7,12 @@ mod common;
 mod fx;
 use std::fs;
 use std::os::unix::fs::symlink;
-use std::path::Path;
 use std::sync::Arc;
-use backend::book_manager::{BookManager, FileReader, ReadFileError};
-use common::es_fake::{Docs, FakeEsManager};
+use backend::book_manager::{BookManager};
+use common::es_fake::{FakeEsManager};
 use serde_json::{json, Value};
 use crate::common::shared_fixtures::{asyncio_runner, deps, make_doc, make_manager, outcome, tmp_dir};
-
-// ---- seam 어댑터 (공용 모듈에 아직 없는 것만 이 파일에 둔다) ----
-
-/// 구 `utils.parser_timeout.ParserTimeout`. `FileReader`는 오류를 돌려주지 못해(빈 묶음이 곧 실패다) 이 값은 어댑터가 빈 묶음으로 바꾼다.
-#[derive(Debug)]
-#[allow(dead_code)]
-struct ParserTimeout {
-    message: String,
-}
-
-/// 구 `Loader.read_file`이 던지는 오류.
-#[derive(Debug)]
-#[allow(dead_code)]
-enum LoaderReadError {
-    Timeout(ParserTimeout),
-    Other(String),
-}
-
-type ReadFileFn = dyn Fn(&Path) -> Result<Value, LoaderReadError> + Send + Sync;
-
-// TODO(common): 클로저를 `FileReader`로 감싸는 어댑터. 문서 3.7의 `fx::fetcher`처럼 `common::fx`에 두면 된다.
-struct FnFileReader(Box<ReadFileFn>);
-
-impl FileReader for FnFileReader {
-    /// 객체 `{"<book_id>": doc}`를 문서 묶음으로 바꾼다. 오류와 객체가 아닌 값은 빈 묶음이다.
-    fn read_file(&self, path: &Path, _path_prefix: Option<&Path>) -> Docs {
-        match (self.0)(path) {
-            Ok(Value::Object(map)) => map.into_iter().filter_map(|(k, v)| Some((k.parse().ok()?, v))).collect(),
-            _ => Docs::new(),
-        }
-    }
-
-    fn try_read_file(&self, path: &Path, path_prefix: Option<&Path>, _skip_text: bool) -> Result<Docs, ReadFileError> {
-        match (self.0)(path) {
-            Err(LoaderReadError::Timeout(timeout)) => Err(ReadFileError::Timeout(timeout.message)),
-            Err(LoaderReadError::Other(message)) => Err(ReadFileError::Other(message)),
-            Ok(_) => Ok(self.read_file(path, path_prefix)),
-        }
-    }
-}
-
-/// 구 `loader_read_file_override(closure)`.
-fn file_reader(f: impl Fn(&Path) -> Result<Value, LoaderReadError> + Send + Sync + 'static) -> Arc<dyn FileReader> {
-    Arc::new(FnFileReader(Box::new(f)))
-}
+use crate::common::shared_fixtures::{LoaderReadError, ParserTimeout, file_reader};
 
 // ---- coverage: reload_category edge cases ----
 

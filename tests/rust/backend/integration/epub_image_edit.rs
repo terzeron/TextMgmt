@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use zip::ZipArchive;
 use crate::common::shared_fixtures::{assert_refused, edit, full, gif, jpeg, png, size, text_of};
+use crate::common::shared_fixtures::{MULTI_PAGE};
 
 fn page(images: &[&str], text: &str) -> String {
     let body: String = images.iter().map(|src| format!(r#"<div><img src="{src}"/></div>"#)).collect();
@@ -537,15 +538,6 @@ mod test_route {
         assert!(status == 401 || status == 403, "{status}");
     }
 }
-
-// ── 한 쪽에 이미지가 여러 장인 책(실제 책처럼 xmlns 없는 비정형 HTML) ─────────────────────
-
-const MULTI_PAGE: &str = concat!(
-    "<html>\n  <head>\n    <title>엄마의 말뚝</title>\n  </head>\n    <body><li class=\"chapter\">\n",
-    "<p><img alt=\"image\" height=\"597\" src=\"../Images/m1.jpg\" width=\"412\"/></p>\n",
-    "<p><img alt=\"image\" height=\"597\" src=\"../Images/m2.jpg\" width=\"412\"/></p>\n",
-    "</li></body></html>"
-);
 
 fn make_multi(path: &Path, page: &[u8]) -> PathBuf {
     let opf = format!(

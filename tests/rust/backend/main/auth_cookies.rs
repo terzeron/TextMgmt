@@ -3,21 +3,8 @@
 #[path = "../common/mod.rs"]
 mod common;
 use backend::main::{ACCESS_COOKIE_NAME, CustomJSONResponse, REFRESH_COOKIE_NAME};
-use common::env::EnvGuard;
 use serde_json::json;
-
-// ---- 환경 변수 / 토큰 / 요청 헬퍼 ----
-
-const SECRET: &str = "testsecret123";
-
-/// Python autouse `setup_env` fixture: JWT 비밀키·관리자·허용 이메일을 테스트 값으로 맞춘다.
-fn fixture() -> EnvGuard {
-    let mut env = EnvGuard::new();
-    env.set("TM_JWT_SECRET", SECRET);
-    env.set("TM_ADMIN_EMAIL", "admin@example.com");
-    env.set("TM_ALLOWED_EMAILS", "viewer1@example.com,viewer2@example.com");
-    env
-}
+use crate::common::shared_fixtures::{fixture};
 
 #[test]
 fn test_default_values() {

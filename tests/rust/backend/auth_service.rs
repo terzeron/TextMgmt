@@ -3,35 +3,13 @@
 
 mod common;
 use std::collections::HashMap;
-use backend::auth_service::{HTTPException, RequestParts, SystemExit};
+use backend::auth_service::{HTTPException, SystemExit};
 use backend::main::RoleResolver;
-use common::env::EnvGuard;
-use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use serde_json::{json, Value};
+use serde_json::{json};
 use backend::auth_service;
 use bookstore::store_clients::{AbstractBookstore, KyoboBookstore};
 use crate::common::shared_fixtures::{now, process_env};
-
-// ---- 환경 변수 / 토큰 / 요청 헬퍼 ----
-
-const SECRET: &str = "testsecret123";
-
-/// Python autouse `setup_env` fixture: JWT 비밀키·관리자·허용 이메일을 테스트 값으로 맞춘다.
-fn fixture() -> EnvGuard {
-    let mut env = EnvGuard::new();
-    env.set("TM_JWT_SECRET", SECRET);
-    env.set("TM_ADMIN_EMAIL", "admin@example.com");
-    env.set("TM_ALLOWED_EMAILS", "viewer1@example.com,viewer2@example.com");
-    env
-}
-
-fn decode(token: &str) -> Value {
-    jsonwebtoken::decode::<Value>(token, &DecodingKey::from_secret(SECRET.as_bytes()), &Validation::new(Algorithm::HS256)).unwrap().claims
-}
-
-fn encode_hs256(payload: &Value) -> String {
-    jsonwebtoken::encode(&Header::new(Algorithm::HS256), payload, &EncodingKey::from_secret(SECRET.as_bytes())).unwrap()
-}
+use crate::common::shared_fixtures::{FakeRequest, decode, encode_hs256, fixture, make_request};
 
 fn access_token(email: &str, role: &str) -> String {
     backend::auth_service::create_jwt_token(email, role, None, None)
@@ -39,34 +17,6 @@ fn access_token(email: &str, role: &str) -> String {
 
 fn refresh_token(email: &str, role: &str) -> String {
     backend::auth_service::create_refresh_token(email, role, None, None)
-}
-
-/// Python `FakeRequest`: headers/cookies 딕셔너리만 가진 요청 대역.
-struct FakeRequest {
-    headers: HashMap<String, String>,
-    cookies: HashMap<String, String>,
-}
-
-impl RequestParts for FakeRequest {
-    fn header(&self, name: &str) -> Option<String> {
-        self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone())
-    }
-
-    fn cookie(&self, name: &str) -> Option<String> {
-        self.cookies.get(name).cloned()
-    }
-}
-
-fn make_request(token: Option<&str>, cookie_token: Option<&str>) -> FakeRequest {
-    let mut headers = HashMap::new();
-    let mut cookies = HashMap::new();
-    if let Some(t) = token.filter(|t| !t.is_empty()) {
-        headers.insert("Authorization".to_string(), format!("Bearer {t}"));
-    }
-    if let Some(c) = cookie_token.filter(|c| !c.is_empty()) {
-        cookies.insert("tm_access_token".to_string(), c.to_string());
-    }
-    FakeRequest { headers, cookies }
 }
 
 fn detail_of(err: &HTTPException) -> String {

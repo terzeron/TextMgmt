@@ -252,6 +252,7 @@ fn libreoffice_without_an_output_file_returns_empty_text_and_logs_the_directory(
 }
 
 mod xml_safety_and_cursors {
+    use crate::common::shared_fixtures::{NCX_NS_STR};
     use crate::common::shared_fixtures::{tmp_dir, verdict};
     use super::common;
     use std::borrow::Cow;
@@ -281,10 +282,6 @@ mod xml_safety_and_cursors {
             Err(_) => false,
         }
     }
-
-    // --- 누락된 spine 문서: 총 챕터 수와 NCX 목차 ---
-
-    const NCX_NS_STR: &str = "http://www.daisy.org/z3986/2005/ncx/";
 
     fn epub_with_missing_page(path: &Path, include_page: bool) -> PathBuf {
         let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
@@ -462,6 +459,7 @@ mod image_downscaling {
 }
 
 mod find_opf_path {
+    use crate::common::shared_fixtures::{CONTAINER_XML};
     use crate::common::shared_fixtures::{write_zip_stored};
 
     use std::fs::File;
@@ -471,15 +469,6 @@ mod find_opf_path {
     use backend::book_manager::BookManager;
 
     use zip::ZipArchive;
-
-    // ── EPUB 생성 헬퍼 ────────────────────────────────────────
-
-    const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
 
     fn find_opf_path(epub_path: &Path) -> String {
         let mut zin = ZipArchive::new(File::open(epub_path).unwrap()).unwrap();
@@ -711,6 +700,7 @@ fn test_just_written_cache_file_is_not_evicted() {
 }
 
 mod validate_preview_epub {
+    use crate::common::shared_fixtures::{CONTAINER_XML};
     use crate::common::shared_fixtures::{chapter, entry, err_has, make_chapter_xhtml, make_cover_xhtml_with_svg, make_opf, ns_children, ns_nodes, verdict, write_epub, write_zip_stored, zip_read_string};
     use std::fs;
     use std::fs::File;
@@ -719,15 +709,6 @@ mod validate_preview_epub {
     use backend::book_manager::BookManager;
 
     use zip::ZipArchive;
-
-    // ── EPUB 생성 헬퍼 ────────────────────────────────────────
-
-    const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
 
     /// 테스트용 미니 EPUB을 생성.
     fn create_test_epub(path: &Path, chapter_count: usize, include_css: bool, include_svg_cover: bool) {

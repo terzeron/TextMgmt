@@ -6,75 +6,13 @@ mod common;
 #[path = "../common/book_fixtures.rs"]
 mod fx;
 use std::fs;
-use std::path::Path;
-use std::sync::Arc;
-use backend::book_manager::{AddBookError, BookAdder, BookManager, FileReader, ReadFileError};
+use backend::book_manager::{AddBookError, BookManager};
 use backend::main::{BookManagerApi};
-use common::es_fake::{Docs, FakeEsManager};
+use common::es_fake::{FakeEsManager};
 use common::faulty_fs::{fail_on_nth_call, FaultyFs, other_err};
-use serde_json::{json, Value};
+use serde_json::{json};
 use crate::common::shared_fixtures::{as_status, asyncio_runner, deps, make_doc, make_manager, split, tmp_dir};
-
-// ---- seam 어댑터 (공용 모듈에 아직 없는 것만 이 파일에 둔다) ----
-
-/// 구 `utils.parser_timeout.ParserTimeout`. `FileReader`는 오류를 돌려주지 못해(빈 묶음이 곧 실패다) 이 값은 어댑터가 빈 묶음으로 바꾼다.
-#[derive(Debug)]
-#[allow(dead_code)]
-struct ParserTimeout {
-    message: String,
-}
-
-/// 구 `Loader.read_file`이 던지는 오류.
-#[derive(Debug)]
-#[allow(dead_code)]
-enum LoaderReadError {
-    Timeout(ParserTimeout),
-    Other(String),
-}
-
-type ReadFileFn = dyn Fn(&Path) -> Result<Value, LoaderReadError> + Send + Sync;
-
-// TODO(common): 클로저를 `FileReader`로 감싸는 어댑터. 문서 3.7의 `fx::fetcher`처럼 `common::fx`에 두면 된다.
-struct FnFileReader(Box<ReadFileFn>);
-
-impl FileReader for FnFileReader {
-    /// 객체 `{"<book_id>": doc}`를 문서 묶음으로 바꾼다. 오류와 객체가 아닌 값은 빈 묶음이다.
-    fn read_file(&self, path: &Path, _path_prefix: Option<&Path>) -> Docs {
-        match (self.0)(path) {
-            Ok(Value::Object(map)) => map.into_iter().filter_map(|(k, v)| Some((k.parse().ok()?, v))).collect(),
-            _ => Docs::new(),
-        }
-    }
-
-    fn try_read_file(&self, path: &Path, path_prefix: Option<&Path>, _skip_text: bool) -> Result<Docs, ReadFileError> {
-        match (self.0)(path) {
-            Err(LoaderReadError::Timeout(timeout)) => Err(ReadFileError::Timeout(timeout.message)),
-            Err(LoaderReadError::Other(message)) => Err(ReadFileError::Other(message)),
-            Ok(_) => Ok(self.read_file(path, path_prefix)),
-        }
-    }
-}
-
-/// 구 `loader_read_file_override(closure)`.
-fn file_reader(f: impl Fn(&Path) -> Result<Value, LoaderReadError> + Send + Sync + 'static) -> Arc<dyn FileReader> {
-    Arc::new(FnFileReader(Box::new(f)))
-}
-
-type AddBookFn = dyn Fn() -> Result<i64, AddBookError> + Send + Sync;
-
-// TODO(common): 클로저를 `BookAdder`로 감싸는 어댑터.
-struct FnBookAdder(Box<AddBookFn>);
-
-impl BookAdder for FnBookAdder {
-    fn add_book(&self) -> Result<i64, AddBookError> {
-        (self.0)()
-    }
-}
-
-/// 구 `manager.override_add_book(closure)`.
-fn book_adder(f: impl Fn() -> Result<i64, AddBookError> + Send + Sync + 'static) -> Arc<dyn BookAdder> {
-    Arc::new(FnBookAdder(Box::new(f)))
-}
+use crate::common::shared_fixtures::{LoaderReadError, book_adder, file_reader};
 
 // ---- coverage: index_single_file unsupported format ----
 

@@ -22,28 +22,15 @@
 
 use crate::{common, mysql_fixture};
 
-use std::ops::Deref;
-use std::sync::{Arc, Barrier, Mutex, MutexGuard};
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 
 use db::category_mapping::CategoryMapping;
 use db::DbValue;
 use serde_json::json;
+use crate::common::shared_fixtures::{Db};
 
 const STALE: i64 = 300;
-
-/// `cm()`이 돌려주는 값. 테이블을 공유하는 테스트끼리 병렬로 돌지 않게 잠금을 쥐고 있다(Python은 순차 실행).
-struct Db {
-    _lock: MutexGuard<'static, ()>,
-    mapping: CategoryMapping,
-}
-
-impl Deref for Db {
-    type Target = CategoryMapping;
-    fn deref(&self) -> &CategoryMapping {
-        &self.mapping
-    }
-}
 
 /// `cm` fixture. 상태 행을 비운 CategoryMapping을 돌려준다. MySQL이 없으면 panic.
 fn cm() -> Db {

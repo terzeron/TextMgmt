@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::cover_management::{CoverHooks, CoverManagement, check_cancelled};
-use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover::{self, CoverError, OPF_NS};
 use backend::main::{AppDeps, AuthMode, app_with};
 use common::{
@@ -28,24 +27,11 @@ use image::ImageFormat;
 use serde_json::{Value, json};
 use zip::CompressionMethod;
 use crate::common::shared_fixtures::{backups, opf_of, read, rev, str_of, truthy};
+use crate::common::shared_fixtures::{fetcher};
 
 /// 항목마다 `keys`의 값을 배열로 묶는다. Python `[(item[a], item[b]) for item in items]`.
 fn pick(items: &Value, keys: &[&str]) -> Vec<Value> {
     items.as_array().unwrap().iter().map(|item| Value::Array(keys.iter().map(|k| item[*k].clone()).collect())).collect()
-}
-
-/// 클로저를 `ImageFetcher`로 감싼다.
-// TODO(common): `common::fx::fetcher(|url| ...)` (docs/rust-test-seams.md 3.7). 아직 없어 로컬로 둔다.
-struct FnFetcher<F>(F);
-
-impl<F: Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync> ImageFetcher for FnFetcher<F> {
-    fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError> {
-        (self.0)(url)
-    }
-}
-
-fn fetcher<F: Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync + 'static>(f: F) -> Arc<dyn ImageFetcher> {
-    Arc::new(FnFetcher(f))
 }
 
 /// 실제 쿠키 인증으로 표지 라우터를 올린 앱. 구 `create_cover_router` + `AdminGate` 조립을 `AppDeps`가 대신한다.

@@ -6,8 +6,7 @@ use std::fs;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use backend::book_metadata::BookLookupError;
-use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
+use backend::book_manager::{BookManager, BookManagerDeps, BookRef};
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use common::epub::{EpubSpec, make_epub};
 use common::es_fake::FakeEsManager;
@@ -15,12 +14,7 @@ use common::image::red_jpeg;
 use common::zipx::Members;
 use serde_json::Value;
 use crate::common::shared_fixtures::{spine_idrefs, xml_text};
-
-const URL: &str = "https://img.example.com/cover.jpg";
-
-// ── 대역 (env fixture) ─────────────────────────────────────
-
-type Fetch = Box<dyn Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync>;
+use crate::common::shared_fixtures::{FakeBooks, Fetch, URL};
 
 /// `monkeypatch.setattr("backend.cover_management.fetch_url_image", ...)`의 대응. 테스트 중간에 바꿀 수 있다.
 /// `BookManagerDeps::with_image_fetcher`로 주입한다. 오류 타입은 `FetchError`(구 `EpubCoverError`).
@@ -31,32 +25,6 @@ impl FetchSlot {    }
 impl ImageFetcher for FetchSlot {
     fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError> {
         (self.0.lock().unwrap())(url)
-    }
-}
-
-/// `AsyncMock(return_value=(book, None))` get_book.
-struct FakeBooks(Mutex<(Option<BookRef>, Option<String>)>);
-
-// 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
-#[allow(dead_code)]
-impl FakeBooks {
-    fn set_file_type(&self, file_type: &str) {
-        self.0.lock().unwrap().0.as_mut().unwrap().file_type = file_type.to_string();
-    }
-
-    fn set_missing(&self, message: &str) {
-        *self.0.lock().unwrap() = (None, Some(message.to_string()));
-    }
-}
-
-#[async_trait::async_trait]
-impl BookLookup for FakeBooks {
-    async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> {
-        match self.0.lock().unwrap().clone() {
-            (Some(book), _) => Ok(book),
-            (None, Some(error)) => Err(BookLookupError::Failed(error)),
-            (None, None) => Err(BookLookupError::NotFound(book_id)),
-        }
     }
 }
 

@@ -8,17 +8,18 @@ mod fx;
 use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::symlink;
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::sync::{Arc, Mutex};
-use backend::book_manager::{AddBookError, ApplyOptions, BookAdder, BookManager, BookManagerDeps, FileReader, MoveOpts, ProposeOptions, ReadFileError};
+use backend::book_manager::{AddBookError, ApplyOptions, BookManager, BookManagerDeps, MoveOpts, ProposeOptions};
 use classifier::BookClassifierApi;
 use common::env::EnvGuard;
-use common::es_fake::{Docs, FakeEsManager};
+use common::es_fake::{FakeEsManager};
 use common::faulty_fs::{fail_on_nth_call, FaultyFs, other_err};
 use common::log_capture::LogCapture;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use crate::common::shared_fixtures::{allowed_set, asyncio_runner, deps, make_doc, make_manager, make_source_file, model_dir, outcome, propose, split, tmp_dir};
+use crate::common::shared_fixtures::{Setup, book_adder, file_reader, setup};
 
 /// `apply_category_changes`의 Python 키워드 인자 묶음(테스트 로컬). 구현의 `ApplyOptions`로 바꿔 부른다.
 struct ApplyOpts {
@@ -127,67 +128,6 @@ impl BookClassifierApi for FakeClassifier {
         }
         Some(confidence.and(model.expected_accuracy))
     }
-}
-
-type AddBookFn = dyn Fn() -> Result<i64, AddBookError> + Send + Sync;
-
-// TODO(common): 클로저를 `BookAdder`로 감싸는 어댑터.
-struct FnBookAdder(Box<AddBookFn>);
-
-impl BookAdder for FnBookAdder {
-    fn add_book(&self) -> Result<i64, AddBookError> {
-        (self.0)()
-    }
-}
-
-/// 구 `manager.override_add_book(closure)`.
-fn book_adder(f: impl Fn() -> Result<i64, AddBookError> + Send + Sync + 'static) -> Arc<dyn BookAdder> {
-    Arc::new(FnBookAdder(Box::new(f)))
-}
-
-// ---- seam 어댑터 (공용 모듈에 아직 없는 것만 이 파일에 둔다) ----
-
-/// 구 `utils.parser_timeout.ParserTimeout`. `FileReader`는 오류를 돌려주지 못해(빈 묶음이 곧 실패다) 이 값은 어댑터가 빈 묶음으로 바꾼다.
-#[derive(Debug)]
-#[allow(dead_code)]
-struct ParserTimeout {
-    message: String,
-}
-
-/// 구 `Loader.read_file`이 던지는 오류.
-#[derive(Debug)]
-#[allow(dead_code)]
-enum LoaderReadError {
-    Timeout(ParserTimeout),
-    Other(String),
-}
-
-type ReadFileFn = dyn Fn(&Path) -> Result<Value, LoaderReadError> + Send + Sync;
-
-// TODO(common): 클로저를 `FileReader`로 감싸는 어댑터. 문서 3.7의 `fx::fetcher`처럼 `common::fx`에 두면 된다.
-struct FnFileReader(Box<ReadFileFn>);
-
-impl FileReader for FnFileReader {
-    /// 객체 `{"<book_id>": doc}`를 문서 묶음으로 바꾼다. 오류와 객체가 아닌 값은 빈 묶음이다.
-    fn read_file(&self, path: &Path, _path_prefix: Option<&Path>) -> Docs {
-        match (self.0)(path) {
-            Ok(Value::Object(map)) => map.into_iter().filter_map(|(k, v)| Some((k.parse().ok()?, v))).collect(),
-            _ => Docs::new(),
-        }
-    }
-
-    fn try_read_file(&self, path: &Path, path_prefix: Option<&Path>, _skip_text: bool) -> Result<Docs, ReadFileError> {
-        match (self.0)(path) {
-            Err(LoaderReadError::Timeout(timeout)) => Err(ReadFileError::Timeout(timeout.message)),
-            Err(LoaderReadError::Other(message)) => Err(ReadFileError::Other(message)),
-            Ok(_) => Ok(self.read_file(path, path_prefix)),
-        }
-    }
-}
-
-/// 구 `loader_read_file_override(closure)`.
-fn file_reader(f: impl Fn(&Path) -> Result<Value, LoaderReadError> + Send + Sync + 'static) -> Arc<dyn FileReader> {
-    Arc::new(FnFileReader(Box::new(f)))
 }
 
 /// 카테고리 -> 키워드 매핑. Python dict의 삽입 순서를 지키려고 Vec로 둔다.
@@ -1536,25 +1476,6 @@ mod candidate_building {
         assert_eq!(result.unwrap()["action"], "move");
         assert!(tmp.path().join("A").join("book.txt").exists());
     }
-}
-
-/// 책 루트(`books`)와 서비스 파일(`meta`)을 나눠 둔다. 캐시 파일이 책으로 스캔되면 안 된다.
-struct Setup {
-    _tmp: TempDir,
-    books: PathBuf,
-    meta: PathBuf,
-}
-
-fn setup(files: &[&str]) -> Setup {
-    let tmp = TempDir::new().unwrap();
-    let books = tmp.path().join("books");
-    let meta = tmp.path().join("meta");
-    fs::create_dir_all(books.join("0_inbox")).unwrap();
-    fs::create_dir_all(&meta).unwrap();
-    for name in files {
-        fs::write(books.join("0_inbox").join(name), "본문 내용 ".repeat(20)).unwrap();
-    }
-    Setup { books, meta, _tmp: tmp }
 }
 
 fn manager(s: &Setup, deps: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> BookManager {

@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 
 use backend::book_metadata::BookLookupError;
 use backend::book_manager::{BookLookup, BookManager, BookManagerApi, BookManagerDeps, BookRef};
-use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover::{self, CoverError};
 use backend::main::{AppDeps, AuthMode, app_with};
 use common::{
@@ -22,8 +21,7 @@ use common::{
 };
 use serde_json::{Value, json};
 use crate::common::shared_fixtures::{assert_cover_error, attach_publisher_cover_page, cover_tmp_files, elements, err_has, has_cover, publisher_cover_epub, revision, spine_idrefs, xml_text};
-
-const URL: &str = "https://img.example.com/cover.jpg";
+use crate::common::shared_fixtures::{FetchSlot, URL};
 
 // ── 도구 ───────────────────────────────────────────────────
 
@@ -60,26 +58,6 @@ fn ncx_doc(nav_map: &str, extra: &str) -> String {
 
 fn nav_doc(body: &str) -> String {
     format!(r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc">{body}</nav></body></html>"#)
-}
-
-// ── 대역 (env fixture) ─────────────────────────────────────
-
-type Fetch = Box<dyn Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync>;
-
-/// `monkeypatch.setattr("backend.cover_management.fetch_url_image", ...)`의 대응. 테스트 중간에 바꿀 수 있다.
-/// `BookManagerDeps::with_image_fetcher`로 주입한다. 오류 타입은 `FetchError`(구 `EpubCoverError`).
-struct FetchSlot(Mutex<Fetch>);
-
-impl FetchSlot {
-    fn set(&self, f: impl Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync + 'static) {
-        *self.0.lock().unwrap() = Box::new(f);
-    }
-}
-
-impl ImageFetcher for FetchSlot {
-    fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError> {
-        (self.0.lock().unwrap())(url)
-    }
 }
 
 /// `AsyncMock(return_value=(book, None))` get_book.
