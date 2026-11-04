@@ -168,14 +168,13 @@ fn libreoffice_without_an_output_file_returns_empty_text_and_logs_the_directory(
 }
 
 mod xml_safety_and_cursors {
-    use crate::common::shared_fixtures::{NCX_NS_STR};
+    use crate::common::shared_fixtures::epub_with_missing_page;
     use crate::common::shared_fixtures::{tmp_dir, verdict};
     use super::common;
     use std::borrow::Cow;
 
     use std::fs;
 
-    use std::path::{Path, PathBuf};
 
     use backend::book_manager::{_declare_unbound_prefixes, _safe_xml_parser, BookManager, decode_category_cursor, encode_category_cursor};
 
@@ -197,28 +196,6 @@ mod xml_safety_and_cursors {
             Ok(text) => roxmltree::Document::parse(text).is_ok(),
             Err(_) => false,
         }
-    }
-
-    fn epub_with_missing_page(path: &Path, include_page: bool) -> PathBuf {
-        let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
-        let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0"><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="a" href="Text/a.xhtml" media-type="application/xhtml+xml"/><item id="colophon" href="Text/colophon%20page.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="a"/><itemref idref="colophon"/><itemref idref="ghost"/></spine></package>"#;
-        let ncx = format!(
-            r#"<?xml version="1.0"?><ncx xmlns="{NCX_NS_STR}"><navMap><navPoint id="n1"><navLabel><text>A</text></navLabel><content src="Text/a.xhtml#top"/></navPoint><navPoint id="n2"><navLabel><text>판권</text></navLabel><content src="Text/colophon%20page.xhtml"/><navPoint id="n3"><navLabel><text>자식</text></navLabel><content src="Text/a.xhtml#kid"/></navPoint></navPoint></navMap></ncx>"#
-        );
-        let a = "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>본문</p></body></html>";
-        let colophon = "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>판권</p></body></html>";
-        let mut entries: Vec<(&str, &[u8])> = vec![
-            ("mimetype", b"application/epub+zip"),
-            ("META-INF/container.xml", container.as_bytes()),
-            ("OEBPS/content.opf", opf.as_bytes()),
-            ("OEBPS/toc.ncx", ncx.as_bytes()),
-            ("OEBPS/Text/a.xhtml", a.as_bytes()),
-        ];
-        if include_page {
-            entries.push(("OEBPS/Text/colophon page.xhtml", colophon.as_bytes()));
-        }
-        write_zip(path, &entries);
-        path.to_path_buf()
     }
 
     // --- M1: lxml XXE 방지 (CWE-611) ---

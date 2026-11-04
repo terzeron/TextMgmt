@@ -5,15 +5,13 @@
 #[path = "../common/mod.rs"]
 mod common;
 use std::collections::{HashSet};
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use backend::book_metadata::{Book};
 use backend::main::{BookstoreFactory, BookstoreSearch, GoogleVerifier, TaskRunner};
 use serde_json::{json, Value};
-use sysdeps::FsOps;
 use tempfile::TempDir;
-use crate::common::shared_fixtures::{admin_payload, arr, enc, is_truthy, now_plus_3600, proposal_result};
+use crate::common::shared_fixtures::{admin_payload, arr, enc, is_truthy, ListDirFs, now_plus_3600, proposal_result};
 use crate::common::shared_fixtures::{BookRow, CallArgs, DeferredRunner, Fut, Fx, Mock, RecordedArgs, Store, arg, arg_or, effective, install_classify_status_store, ready, store_set};
 use crate::common::auth_fakes::FixedRole;
 
@@ -97,16 +95,6 @@ impl GoogleVerifier for FixedVerifier {
 
     fn verify(&self, _credential: &str, _audience: &str) -> Result<Value, String> {
         self.result.clone()
-    }
-}
-
-/// `os.listdir` 대역. 열거 결과(또는 오류)를 테스트가 정한다.
-/// TODO(common): `FaultyFs`에는 읽기 결과를 바꾸는 훅이 없어 로컬로 정의했다(main.rs의 `ListDirFs`와 같다). 나머지 `FsOps` 메서드는 trait 기본 구현(설계 3.0 규칙 4)에 맡긴다.
-struct ListDirFs(Result<Vec<PathBuf>, String>);
-
-impl FsOps for ListDirFs {
-    fn read_dir(&self, _p: &Path) -> std::io::Result<Vec<PathBuf>> {
-        self.0.clone().map_err(std::io::Error::other)
     }
 }
 

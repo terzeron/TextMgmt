@@ -8,10 +8,10 @@ use backend::book_manager::{_prune_dead_ncx_navpoints, ProposeOptions};
 use common::faulty_fs::FaultyFs;
 use fx::{Opts, with_deps};
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering, Mutex};
 use classifier::{BookCategoryClassifier, ClassifierOptions, Classify};
-use common::zipx::{read_zip_entry, write_zip};
+use common::zipx::read_zip_entry;
 use serde_json::{Value};
 use classifier::book_classifier::{BookClassifierService, BookstorePolicy, SharedBookClassifier};
 use bookstore::store_clients::{BookstoreSearch, SearchRow};
@@ -19,6 +19,7 @@ use classifier::inference_model::CategoryModel;
 use crate::common::shared_fixtures::{model_dir, propose, tmp_dir};
 use crate::common::shared_fixtures::{NCX_NS_STR, Setup, setup};
 use crate::common::shared_fixtures::manager;
+use crate::common::shared_fixtures::epub_with_missing_page;
 
 /// `fx::env`가 만든 환경의 `BookManager`를 Deps 설정을 더해 다시 만든다. `loader`가 참이면 파일 읽기 대역도 꽂는다.
 // TODO(common): `book_fixtures::Opts`가 Deps 설정 훅(`configure: Option<Box<dyn FnOnce(BookManagerDeps) -> BookManagerDeps>>`)을 받으면 이 헬퍼가 필요 없다.
@@ -47,28 +48,6 @@ async fn test_unexpected_error_while_saving_does_not_leak_panic_details() {
 
     assert!(result.is_none() && error.as_deref() == Some("PDF 페이지 삭제 실패 (RuntimeError)"), "{error:?}");
     e.assert_nothing_changed(&original);
-}
-
-fn epub_with_missing_page(path: &Path, include_page: bool) -> PathBuf {
-    let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
-    let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0"><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="a" href="Text/a.xhtml" media-type="application/xhtml+xml"/><item id="colophon" href="Text/colophon%20page.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="a"/><itemref idref="colophon"/><itemref idref="ghost"/></spine></package>"#;
-    let ncx = format!(
-        r#"<?xml version="1.0"?><ncx xmlns="{NCX_NS_STR}"><navMap><navPoint id="n1"><navLabel><text>A</text></navLabel><content src="Text/a.xhtml#top"/></navPoint><navPoint id="n2"><navLabel><text>판권</text></navLabel><content src="Text/colophon%20page.xhtml"/><navPoint id="n3"><navLabel><text>자식</text></navLabel><content src="Text/a.xhtml#kid"/></navPoint></navPoint></navMap></ncx>"#
-    );
-    let a = "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>본문</p></body></html>";
-    let colophon = "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>판권</p></body></html>";
-    let mut entries: Vec<(&str, &[u8])> = vec![
-        ("mimetype", b"application/epub+zip"),
-        ("META-INF/container.xml", container.as_bytes()),
-        ("OEBPS/content.opf", opf.as_bytes()),
-        ("OEBPS/toc.ncx", ncx.as_bytes()),
-        ("OEBPS/Text/a.xhtml", a.as_bytes()),
-    ];
-    if include_page {
-        entries.push(("OEBPS/Text/colophon page.xhtml", colophon.as_bytes()));
-    }
-    write_zip(path, &entries);
-    path.to_path_buf()
 }
 
 fn ncx_srcs(data: &[u8]) -> Vec<String> {

@@ -594,14 +594,14 @@ async fn test_preview_rejects_non_image_download() {
 }
 
 /// POST /pdf-pages/{id}/insert-preview: 관리자만 호출할 수 있고, 성공하면 JPEG, 실패하면 400 과 사유를 돌려준다.
+fn client() -> (TestClient, std::sync::Arc<fx::FakeManager>) {
+    let fake = fx::FakeManager::new();
+    let app = app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(fake.clone()));
+    (TestClient::with_app(app), fake)
+}
+
 mod test_insert_preview_endpoint {
     use super::*;
-
-    fn client() -> (TestClient, std::sync::Arc<fx::FakeManager>) {
-        let fake = fx::FakeManager::new();
-        let app = app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(fake.clone()));
-        (TestClient::with_app(app), fake)
-    }
 
     #[tokio::test]
     async fn test_success_returns_jpeg_without_caching() {
@@ -892,12 +892,6 @@ async fn test_two_sources_for_the_same_page_are_rejected() {
 /// POST /pdf-pages/{id}/insert-preview-upload 와 image_data 를 받는 저장 엔드포인트.
 mod test_insert_upload_endpoint {
     use super::*;
-
-    fn client() -> (TestClient, std::sync::Arc<fx::FakeManager>) {
-        let fake = fx::FakeManager::new();
-        let app = app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(fake.clone()));
-        (TestClient::with_app(app), fake)
-    }
 
     #[tokio::test]
     async fn test_upload_returns_jpeg_without_caching() {

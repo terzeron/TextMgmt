@@ -4,9 +4,9 @@ use std::{fs};
 use backend::book_manager::{AddBookError, BookAdder, BookContent, BookLookup, BookManager, BookManagerDeps, BookRef, BookResponse, CoverPage, FileReader, ProposeOptions, ReadFileError, Thumbnailer};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering, Mutex, MutexGuard};
-use super::es_fake::{Docs, FakeEsManager};
-use super::zipx::{Members, read_zip_entry, rewrite_epub_members, write_zip_with, ZipMode};
+use super::zipx::{Members, read_zip_entry, rewrite_epub_members, write_zip, write_zip_with, ZipMode};
 use serde_json::{json, Map, Value};
+use super::es_fake::{Docs, FakeEsManager};
 use std::path::{Path, PathBuf};
 use backend::main::{AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, ReloadProgress, TaskHandle, TaskRunner};
 use std::future::Future;
@@ -2071,4 +2071,46 @@ pub fn thumbnailer<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + S
 pub fn manager(s: &Setup, deps: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> BookManager {
     super::setup_env();
     BookManager::with_deps(deps(BookManagerDeps::new(s.books.clone(), FakeEsManager::new())))
+}
+
+pub fn epub_with_missing_page(path: &Path, include_page: bool) -> PathBuf {
+    let container = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+    let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0"><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="a" href="Text/a.xhtml" media-type="application/xhtml+xml"/><item id="colophon" href="Text/colophon%20page.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="a"/><itemref idref="colophon"/><itemref idref="ghost"/></spine></package>"#;
+    let ncx = format!(
+        r#"<?xml version="1.0"?><ncx xmlns="{NCX_NS_STR}"><navMap><navPoint id="n1"><navLabel><text>A</text></navLabel><content src="Text/a.xhtml#top"/></navPoint><navPoint id="n2"><navLabel><text>판권</text></navLabel><content src="Text/colophon%20page.xhtml"/><navPoint id="n3"><navLabel><text>자식</text></navLabel><content src="Text/a.xhtml#kid"/></navPoint></navPoint></navMap></ncx>"#
+    );
+    let a = "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>본문</p></body></html>";
+    let colophon = "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>판권</p></body></html>";
+    let mut entries: Vec<(&str, &[u8])> = vec![
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container.as_bytes()),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/toc.ncx", ncx.as_bytes()),
+        ("OEBPS/Text/a.xhtml", a.as_bytes()),
+    ];
+    if include_page {
+        entries.push(("OEBPS/Text/colophon page.xhtml", colophon.as_bytes()));
+    }
+    write_zip(path, &entries);
+    path.to_path_buf()
+}
+
+/// `os.listdir` 대역. 열거 결과(또는 오류)를 테스트가 정한다.
+/// TODO(common): `FaultyFs`에는 읽기 결과를 바꾸는 훅이 없어 따로 둔다. 나머지 `FsOps` 메서드는 trait 기본 구현(설계 3.0 규칙 4)에 맡긴다.
+pub struct ListDirFs(pub Result<Vec<PathBuf>, String>);
+
+impl ListDirFs {
+    pub fn ok(names: &[&str]) -> Arc<Self> {
+        Arc::new(Self(Ok(names.iter().map(PathBuf::from).collect())))
+    }
+
+    pub fn err(message: &str) -> Arc<Self> {
+        Arc::new(Self(Err(message.to_string())))
+    }
+}
+
+impl sysdeps::FsOps for ListDirFs {
+    fn read_dir(&self, _p: &Path) -> std::io::Result<Vec<PathBuf>> {
+        self.0.clone().map_err(std::io::Error::other)
+    }
 }

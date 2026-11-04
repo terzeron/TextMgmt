@@ -73,7 +73,7 @@ use serde_json::{Value, json};
 use sysdeps::{FsOps, SystemClock};
 use tempfile::TempDir;
 use crate::common::shared_fixtures::{enc, now_secs, process_env, split};
-use crate::common::shared_fixtures::{BookRow, CATEGORY};
+use crate::common::shared_fixtures::{BookRow, CATEGORY, ListDirFs};
 
 #[test]
 fn backend_binary_dispatches_the_isbn_pdf_worker_command() {
@@ -1055,26 +1055,6 @@ fn test_custom_json_response_render_preserves_unicode() {
     let response = CustomJSONResponse::new(json!({"message": "테스트"}));
     assert!(!contains_bytes(&response.body, b"\\u"));
     assert!(contains_bytes(&response.body, "테스트".as_bytes()));
-}
-
-/// `os.listdir` 대역. 열거 결과(또는 오류)를 테스트가 정한다.
-/// TODO(common): `FaultyFs`에는 읽기 결과를 바꾸는 훅이 없어 로컬로 정의했다. 나머지 `FsOps` 메서드는 trait 기본 구현(설계 3.0 규칙 4)에 맡긴다.
-struct ListDirFs(Result<Vec<PathBuf>, String>);
-
-impl ListDirFs {
-    fn ok(names: &[&str]) -> Arc<Self> {
-        Arc::new(Self(Ok(names.iter().map(PathBuf::from).collect())))
-    }
-
-    fn err(message: &str) -> Arc<Self> {
-        Arc::new(Self(Err(message.to_string())))
-    }
-}
-
-impl FsOps for ListDirFs {
-    fn read_dir(&self, _p: &Path) -> std::io::Result<Vec<PathBuf>> {
-        self.0.clone().map_err(std::io::Error::other)
-    }
 }
 
 /// `client` fixture에 저장소 열거 대역만 바꾼 TestClient.
