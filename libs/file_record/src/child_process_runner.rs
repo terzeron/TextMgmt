@@ -87,8 +87,8 @@ pub fn run_isbn_pdf_stage_command(args: &[String], out: &mut dyn Write) -> i32 {
         return 2;
     };
     let result = match stage {
-        "poppler" => isbn::pdf_text_auto(Path::new(path)),
-        "fallback" => isbn::pdf_text_fallback(Path::new(path)).map(|text| (text, 0)),
+        "poppler" => doc_reader::head_tail_reader::pdf_text_auto(Path::new(path)),
+        "fallback" => doc_reader::head_tail_reader::pdf_text_fallback(Path::new(path)).map(|text| (text, 0)),
         _ => {
             eprintln!("unknown ISBN PDF stage: {stage}");
             return 2;

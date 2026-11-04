@@ -1026,6 +1026,7 @@ dependencies = [
  "ego-tree",
  "encoding_rs",
  "flate2",
+ "htmlkit",
  "hwp3_parser",
  "lopdf",
  "pyfmt",
@@ -1944,14 +1945,11 @@ dependencies = [
 name = "isbn"
 version = "0.1.0"
 dependencies = [
- "flate2",
- "htmlkit",
- "lopdf",
+ "doc_reader",
  "regex",
  "stat",
  "sysdeps",
  "tempfile",
- "text_extractor",
  "unicode-general-category",
  "zip",
 ]

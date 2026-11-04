@@ -12,6 +12,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+use doc_reader::head_tail_reader::pdf_text_fallback;
 use isbn::*;
 use stat::Stat;
 use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
@@ -102,26 +103,6 @@ fn bytes_are_decoded_leniently() {
 }
 
 // ---- 앞뒤 읽기 ----
-
-#[test]
-fn head_and_tail_of_a_file_and_of_a_string() {
-    let d = tempfile::tempdir().unwrap();
-    let small = d.path().join("small.txt");
-    write(&small, "hello world");
-    assert_eq!(read_head_tail_from_file(&small, HEAD_TAIL_SIZE).unwrap(), "hello world");
-
-    let large = d.path().join("large.txt");
-    write(&large, &"A".repeat(20_000));
-    let r = read_head_tail_from_file(&large, 100).unwrap();
-    assert_eq!(r.len(), 200);
-    assert!(r.chars().all(|c| c == 'A'));
-    assert!(read_head_tail_from_file(&d.path().join("none.txt"), 100).is_err());
-
-    assert_eq!(read_head_tail_from_content("hello", HEAD_TAIL_SIZE), "hello");
-    assert_eq!(read_head_tail_from_content(&"A".repeat(20_000), 100).len(), 200);
-    // 문자 수 기준으로 자른다.
-    assert_eq!(read_head_tail_from_content(&"가".repeat(500), 100).chars().count(), 200);
-}
 
 // ---- EPUB ----
 
@@ -481,14 +462,6 @@ fn a_panicking_extractor_counts_as_an_error_and_never_escapes() {
     assert!(stage_line(&stat, "isbn_poppler").contains("error=1"));
 }
 
-#[test]
-fn head_and_tail_page_windows() {
-    assert_eq!(head_tail_page_indices(3, 5), [0, 1, 2]);
-    assert_eq!(head_tail_page_indices(6, 5), [0, 1, 2, 3, 4, 5]);
-    assert_eq!(head_tail_page_indices(20, 5), [0, 1, 2, 3, 4, 15, 16, 17, 18, 19]);
-    assert!(head_tail_page_indices(0, 5).is_empty());
-}
-
 // ---- 실제 PDF ----
 
 /// 텍스트 한 줄을 그리는 1쪽짜리 PDF.
@@ -548,55 +521,9 @@ fn the_fallback_scanner_reads_text_from_a_pdf_whose_xref_is_broken() {
     assert!(extract_default(&f, None).contains(&"9788994492032".to_string()));
 }
 
-#[test]
-fn the_fallback_scanner_inflates_streams_and_reads_text_arrays_and_hex_strings() {
-    use flate2::{Compression, write::ZlibEncoder};
-    let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
-    enc.write_all(b"BT [(ISBN ) -20 (978) 5 (8994492032)] TJ <49534244> Tj (esc \\(x\\) \\101 \\n) Tj ET").unwrap();
-    let body = enc.finish().unwrap();
-    let mut pdf = b"%PDF-1.4\n1 0 obj\n<< /Filter /FlateDecode >>\nstream\n".to_vec();
-    pdf.extend(&body);
-    pdf.extend(b"\nendstream\nendobj\n2 0 obj\n<< >>\nstream\nBT (plain) Tj ET\nendstream\nendobj\n");
-    let d = tempfile::tempdir().unwrap();
-    let f = d.path().join("c.pdf");
-    fs::write(&f, pdf).unwrap();
-    let text = pdf_text_fallback(&f).unwrap();
-    assert!(text.contains("ISBN 9788994492032"), "{text:?}");
-    assert!(text.contains("ISBD"), "{text:?}");
-    assert!(text.contains("esc (x) A \n"), "{text:?}");
-    assert!(text.contains("plain"));
-    assert!(pdf_text_fallback(&d.path().join("none.pdf")).is_err());
-}
-
 // ---- Poppler ----
 
-#[test]
-fn the_poppler_backend_reads_text_and_reports_page_count() {
-    let d = tempfile::tempdir().unwrap();
-    let f = d.path().join("book.pdf");
-    fs::write(&f, text_pdf("ISBN 9788994492032")).unwrap();
-    let (text, pages) = pdf_text_poppler(&f).unwrap();
-    assert_eq!(pages, 1);
-    assert!(text.contains("9788994492032"), "{text:?}");
-    assert!(pdf_text_auto(&f).unwrap().0.contains("9788994492032"));
-    assert!(pdf_text_poppler(&d.path().join("none.pdf")).is_err());
-    let junk = d.path().join("junk.pdf");
-    write(&junk, "not a pdf");
-    assert!(pdf_text_poppler(&junk).is_err());
-}
-
 // ---- 분기 보강 ----
-
-#[test]
-fn the_pure_rust_pdf_extractor_remains_available_as_fallback() {
-    let d = tempfile::tempdir().unwrap();
-    let f = d.path().join("book.pdf");
-    fs::write(&f, text_pdf("ISBN 9788994492032")).unwrap();
-    let (text, pages) = pdf_text_primary(&f).unwrap();
-    assert_eq!(pages, 1);
-    assert!(text.contains("9788994492032"), "{text:?}");
-    assert!(pdf_text_primary(&d.path().join("none.pdf")).is_err());
-}
 
 #[test]
 fn a_corrupt_chapter_makes_the_epub_give_up_but_a_missing_one_is_skipped() {
@@ -612,19 +539,4 @@ fn a_corrupt_chapter_makes_the_epub_give_up_but_a_missing_one_is_skipped() {
     }
     fs::write(&p, data).unwrap();
     assert!(extract_from_epub(&p).is_empty());
-}
-
-#[test]
-fn the_fallback_scanner_handles_odd_stream_and_string_syntax() {
-    let d = tempfile::tempdir().unwrap();
-    let f = d.path().join("odd.pdf");
-    let mut pdf = b"%PDF-1.4\n1 0 obj\n<< >>\nstream\r\n".to_vec();
-    // 중첩 괄호, \r \t 이스케이프, 8진수 한 자리, 딕셔너리 `<<`, 홀수 길이 16진수, 끝에서 끊긴 이스케이프.
-    pdf.extend(br"BT (a(b)c\r\t\1x\) ) Tj << /K 1 >> [(p) (q)] TJ <41 42 4> Tj (tail \");
-    pdf.extend(b"\nendstream\n2 0 obj\n<< >>\nstream\n(unterminated");
-    fs::write(&f, pdf).unwrap();
-    let text = pdf_text_fallback(&f).unwrap();
-    assert!(text.contains("a(b)c\r\t\u{1}x) "), "{text:?}");
-    assert!(text.contains("pq"), "{text:?}");
-    assert!(text.contains("AB"), "{text:?}");
 }

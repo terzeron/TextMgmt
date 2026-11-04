@@ -7,18 +7,15 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
-text_extractor = { path = "../text_extractor" }
-flate2 = "1"
-htmlkit = { path = "../htmlkit" }
-lopdf.workspace = true
+doc_reader = { path = "../doc_reader" }
 sysdeps = { path = "../sysdeps" }
 regex = "1.13.1"
 stat = { path = "../stat" }
 unicode-general-category = "1.1.0"
-zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [[test]]
 name = "isbn"

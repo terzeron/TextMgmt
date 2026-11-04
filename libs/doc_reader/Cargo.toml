@@ -12,6 +12,7 @@ ego-tree = "0.11"
 encoding_rs = "0.8.42"
 flate2 = "1"
 hwp3_parser = { path = "../hwp3_parser" }
+htmlkit = { path = "../htmlkit" }
 lopdf.workspace = true
 pyfmt = { path = "../pyfmt" }
 regex = "1.13.1"
@@ -21,6 +22,10 @@ scraper = "0.29.0"
 sysdeps = { path = "../sysdeps" }
 serde_json = { workspace = true }
 tempfile = "3.27.0"
+
+[[test]]
+name = "head_tail_reader"
+path = "../../tests/rust/doc_reader/head_tail_reader.rs"
 
 [[test]]
 name = "epub"
