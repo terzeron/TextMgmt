@@ -3,34 +3,8 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-#[path = "../ole_common.rs"]
-mod ole_common;
-use crate::ole_common::{Cfb, make_cfb};
-use bookdoctor::{FileReport};
-use crate::support::shared_fixtures::{HWPTAG_BEGIN, TAG_BIN_DATA, bin_data_link, file_header, finding, pe_bytes, raw_deflate, record, scan, wstr_with_len, zlib};
-
-fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
-    let header = file_header(flags);
-    let mut streams: Vec<(&str, &[u8])> = vec![("FileHeader", &header)];
-    streams.extend_from_slice(extra);
-    make_cfb(&streams)
-}
-
-fn scan_cfb(name: &str, cfb: &Cfb) -> FileReport {
-    scan(name, &cfb.bytes)
-}
-
-fn scan_bindata(flags: u32, docinfo: Option<Vec<u8>>, bins: &[(&str, Vec<u8>)]) -> FileReport {
-    let mut streams: Vec<(String, Vec<u8>)> = Vec::new();
-    if let Some(d) = docinfo {
-        streams.push(("DocInfo".to_string(), d));
-    }
-    for (name, data) in bins {
-        streams.push((format!("BinData/{name}"), data.clone()));
-    }
-    let refs: Vec<(&str, &[u8])> = streams.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
-    scan_cfb("a.hwp", &hwp_cfb(&refs, flags))
-}
+use crate::support::shared_fixtures::{HWPTAG_BEGIN, TAG_BIN_DATA, bin_data_link, finding, pe_bytes, raw_deflate, record, wstr_with_len, zlib};
+use crate::support::shared_fixtures::scan_bindata;
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR some png bytes";
 

@@ -1,22 +1,13 @@
 
 #[path = "../support/mod.rs"]
 mod support;
-#[path = "../ole_common.rs"]
-mod ole_common;
 
 use std::fs;
 
 use bookdoctor::cli_parser::{run};
-use ole_common::{Cfb, make_cfb};
 use bookdoctor::{Format};
-use crate::support::shared_fixtures::{file_header, scan};
-
-fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
-    let header = file_header(flags);
-    let mut streams: Vec<(&str, &[u8])> = vec![("FileHeader", &header)];
-    streams.extend_from_slice(extra);
-    make_cfb(&streams)
-}
+use crate::support::shared_fixtures::scan;
+use crate::support::shared_fixtures::hwp_cfb;
 
 #[test]
 fn hwp_is_collected_and_lookalikes_are_not() {

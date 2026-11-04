@@ -6,11 +6,7 @@ use bookdoctor::cli_parser::{Options, parse};
 use bookdoctor::format_dispatcher::scan_file;
 use bookdoctor::{Category, FileReport, Format, Severity};
 use bookdoctor::zipcheck::fast_zip_checker::resolve_name;
-use crate::support::shared_fixtures::{finding};
-
-fn scan(path: &Path) -> FileReport {
-    scan_file(path, &Options::default())
-}
+use crate::support::shared_fixtures::{finding, scan_path as scan};
 
 fn deep(path: &Path) -> FileReport {
     scan_file(path, &Options { zip_deep: true, ..Options::default() })

@@ -139,6 +139,7 @@ fn encrypted_and_unsupported_compression_entries_are_noted_not_read() {
 }
 
 mod budget_and_encoding_evasion {
+    use super::scan_chapter;
     use crate::support::shared_fixtures::{codes, forge_declared_size, has, scan_with, scan_with_stats};
     use super::support;
     use bookdoctor::epub::{security_checker::Limits};
@@ -147,13 +148,6 @@ mod budget_and_encoding_evasion {
 
     fn sev(r: &FileReport, code: &str) -> Severity {
         r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} 없음: {:?}", codes(r))).severity
-    }
-
-    fn scan_chapter(body: &str) -> FileReport {
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("t.epub");
-        epub_with_chapter(&p, &xhtml(body));
-        scan_with(&p, &Limits::default())
     }
 
     fn scan_extra(name: &str, data: &[u8]) -> FileReport {
@@ -467,6 +461,7 @@ mod budget_and_encoding_evasion {
 }
 
 mod active_content {
+    use super::{scan, scan_chapter};
     use crate::support::shared_fixtures::{codes, has, patch_central, scan_with, scan_with_stats};
     use super::support;
     use std::fs;
@@ -476,20 +471,8 @@ mod active_content {
     use bookdoctor::epub::{security_checker::guarded, security_checker::Limits};
     use bookdoctor::{Category, FileReport, Format, Severity};
 
-    fn scan(path: &Path) -> FileReport {
-        scan_with(path, &Limits::default())
-    }
-
     fn severity_of(r: &FileReport, code: &str) -> Severity {
         r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} 없음: {:?}", codes(r))).severity
-    }
-
-    /// 본문 한 장짜리 EPUB을 만들어 검사한다. OPF는 scripted 선언이 없는 기본형이다.
-    fn scan_chapter(body: &str) -> FileReport {
-        let d = tempfile::tempdir().unwrap();
-        let p = d.path().join("t.epub");
-        epub_with_chapter(&p, &xhtml(body));
-        scan(&p)
     }
 
     fn scan_extra(name: &str, data: &[u8]) -> FileReport {
@@ -1394,6 +1377,7 @@ mod active_content {
     }
 }
 
+/// 본문 한 장짜리 EPUB을 만들어 검사한다. OPF는 scripted 선언이 없는 기본형이다.
 fn scan_chapter(body: &str) -> FileReport {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("t.epub");

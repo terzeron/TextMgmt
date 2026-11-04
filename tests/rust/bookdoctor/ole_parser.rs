@@ -141,7 +141,7 @@ fn prefix_read_returns_only_the_requested_bytes() {
 mod anomaly_reporting {
     use super::support;
     use std::time::{Duration, Instant};
-    use support::{Cfb, make_cfb, make_cfb_v4};
+    use support::{Cfb, make_cfb, make_cfb_v4, put32};
     use bookdoctor::ole_parser::{Anomaly, Limits, OleError, OleFile};
 
     fn bytes_of(n: usize, seed: u8) -> Vec<u8> {
@@ -154,10 +154,6 @@ mod anomaly_reporting {
         let big = bytes_of(5000, 3);
         let big2 = bytes_of(6000, 4);
         make_cfb(&[("small", &small), ("mid", &mid), ("big", &big), ("big2", &big2), ("Macros/VBA/dir", &small)])
-    }
-
-    fn put32(b: &mut [u8], at: usize, v: u32) {
-        b[at..at + 4].copy_from_slice(&v.to_le_bytes());
     }
 
     /// 구조를 망가뜨린 바이트를 열어 (결과, 걸린 시간)을 돌려준다. 어떤 입력도 2초를 넘기면 안 된다.

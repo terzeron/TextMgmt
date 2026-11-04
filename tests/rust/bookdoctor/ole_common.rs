@@ -36,7 +36,7 @@ impl Cfb {
     }
 }
 
-fn put32(b: &mut [u8], at: usize, v: u32) {
+pub fn put32(b: &mut [u8], at: usize, v: u32) {
     b[at..at + 4].copy_from_slice(&v.to_le_bytes());
 }
 

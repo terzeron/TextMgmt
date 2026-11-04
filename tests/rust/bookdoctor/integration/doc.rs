@@ -1,23 +1,14 @@
 
 #[path = "../support/mod.rs"]
 mod support;
-#[path = "../ole_common.rs"]
-mod ole_common;
 
 use std::fs;
 
 use bookdoctor::cli_parser::{Options, run};
 use bookdoctor::format_dispatcher::scan_file;
-use ole_common::{Cfb, make_cfb};
 use bookdoctor::Format;
-use crate::support::shared_fixtures::{word_stream, write};
-
-fn doc_cfb(extra: &[(&str, &[u8])], flags1: u16, body: &[u8]) -> Cfb {
-    let word = word_stream(flags1, body);
-    let mut streams: Vec<(&str, &[u8])> = vec![("WordDocument", &word)];
-    streams.extend_from_slice(extra);
-    make_cfb(&streams)
-}
+use crate::support::shared_fixtures::write;
+use crate::support::shared_fixtures::doc_cfb;
 
 #[test]
 fn doc_and_dot_are_collected_and_lookalikes_are_not() {

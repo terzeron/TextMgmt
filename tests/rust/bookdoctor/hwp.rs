@@ -1,20 +1,14 @@
 
 mod support;
-mod ole_common;
+use support::ole_common;
 use std::fs;
 use bookdoctor::cli_parser::Options;
 use bookdoctor::format_dispatcher::scan_file;
-use ole_common::{Cfb, compress, dir_stream, make_cfb, module_stream};
+use ole_common::{compress, dir_stream, make_cfb, module_stream};
 use bookdoctor::{FileReport, Format};
 use bookdoctor::hwp::{decompress, decompress_prefix, InflateError};
 use crate::support::shared_fixtures::{JSCRIPT_VERSION, TAG_SHAPE_COMPONENT_OLE, bin_data_link, default_jscript, file_header, finding, pe_bytes, raw_deflate, record, scan, valid_stream, zlib};
-
-fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
-    let header = file_header(flags);
-    let mut streams: Vec<(&str, &[u8])> = vec![("FileHeader", &header)];
-    streams.extend_from_slice(extra);
-    make_cfb(&streams)
-}
+use crate::support::shared_fixtures::{hwp_cfb, scan_cfb};
 
 const HWP3_SIGNATURE: &[u8] = b"HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05";
 
@@ -57,10 +51,6 @@ fn hwpx_named_ole_with_a_fileheader_is_analyzed_as_hwp() {
     // FileHeader가 없는 OLE는 HWP인지 알 수 없으므로 P1처럼 일반 미완료다.
     let r = scan("odd.hwpx", &make_cfb(&[("Something", &[1u8, 2, 3][..])]).bytes);
     assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("OLE")), "{:?}", r.reasons);
-}
-
-fn scan_cfb(name: &str, cfb: &Cfb) -> FileReport {
-    scan(name, &cfb.bytes)
 }
 
 #[test]

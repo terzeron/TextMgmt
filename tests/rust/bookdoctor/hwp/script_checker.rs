@@ -3,22 +3,9 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-#[path = "../ole_common.rs"]
-mod ole_common;
-use crate::ole_common::{Cfb, make_cfb};
 use bookdoctor::{FileReport};
-use crate::support::shared_fixtures::{JSCRIPT_VERSION, default_jscript, file_header, finding, raw_deflate, scan, wchars, zlib};
-
-fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
-    let header = file_header(flags);
-    let mut streams: Vec<(&str, &[u8])> = vec![("FileHeader", &header)];
-    streams.extend_from_slice(extra);
-    make_cfb(&streams)
-}
-
-fn scan_cfb(name: &str, cfb: &Cfb) -> FileReport {
-    scan(name, &cfb.bytes)
-}
+use crate::support::shared_fixtures::{JSCRIPT_VERSION, default_jscript, finding, raw_deflate, wchars, zlib};
+use crate::support::shared_fixtures::{hwp_cfb, scan_cfb};
 
 fn scan_scripts(flags: u32, script: &[u8]) -> FileReport {
     scan_cfb("a.hwp", &hwp_cfb(&[("Scripts/JScriptVersion", &JSCRIPT_VERSION[..]), ("Scripts/DefaultJScript", script)], flags))

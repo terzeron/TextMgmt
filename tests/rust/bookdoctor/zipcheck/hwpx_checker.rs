@@ -5,17 +5,14 @@ use std::fs;
 
 use bookdoctor::cli_parser::Options;
 use bookdoctor::format_dispatcher::scan_file;
-use bookdoctor::{Category, FileReport, Finding, Format, Severity};
+use bookdoctor::{Category, FileReport, Format, Severity};
+use crate::support::shared_fixtures::finding;
 
 fn hwpx(remove: &[&str], add: &[(&str, &[u8])]) -> FileReport {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("a.hwpx");
     support::hwpx_with(&p, remove, add);
     scan_file(&p, &Options::default())
-}
-
-fn finding<'a>(r: &'a FileReport, code: &str) -> &'a Finding {
-    r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
 }
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";

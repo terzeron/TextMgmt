@@ -1,11 +1,13 @@
 //! 여러 테스트 파일이 함께 쓰는 준비물(helper·대역). 같은 본문의 사본을 한곳에 모았다.
 #![allow(dead_code)]
+use bookdoctor::cli_parser::Options;
+use bookdoctor::format_dispatcher::scan_file;
+use super::ole_common::{Cfb, make_cfb};
+use bookdoctor::{FileReport, Format};
 use super::epub_with_files;
 use std::fs;
 use std::path::{Path, PathBuf};
-use bookdoctor::cli_parser::{execute, Options, parse};
-use bookdoctor::format_dispatcher::{scan_file};
-use bookdoctor::{FileReport, Format};
+use bookdoctor::cli_parser::{execute, parse};
 use flate2::Compression;
 use flate2::write::{DeflateEncoder, ZlibEncoder};
 use std::io::{Cursor, Read, Write};
@@ -187,6 +189,11 @@ pub fn run_in(root: &Path, args: &[&str]) -> (i32, String) {
     (code, String::from_utf8_lossy(&out).into_owned())
 }
 
+/// 경로의 파일을 기본 옵션으로 검사한다.
+pub fn scan_path(path: &Path) -> FileReport {
+    scan_file(path, &Options::default())
+}
+
 pub fn scan(name: &str, bytes: &[u8]) -> FileReport {
     let (_d, p) = write(name, bytes);
     scan_file(&p, &Options::default())
@@ -257,4 +264,34 @@ pub fn zlib(data: &[u8]) -> Vec<u8> {
     let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
     e.write_all(data).unwrap();
     e.finish().unwrap()
+}
+
+pub fn doc_cfb(extra: &[(&str, &[u8])], flags1: u16, body: &[u8]) -> Cfb {
+    let word = word_stream(flags1, body);
+    let mut streams: Vec<(&str, &[u8])> = vec![("WordDocument", &word)];
+    streams.extend_from_slice(extra);
+    make_cfb(&streams)
+}
+
+pub fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
+    let header = file_header(flags);
+    let mut streams: Vec<(&str, &[u8])> = vec![("FileHeader", &header)];
+    streams.extend_from_slice(extra);
+    make_cfb(&streams)
+}
+
+pub fn scan_bindata(flags: u32, docinfo: Option<Vec<u8>>, bins: &[(&str, Vec<u8>)]) -> FileReport {
+    let mut streams: Vec<(String, Vec<u8>)> = Vec::new();
+    if let Some(d) = docinfo {
+        streams.push(("DocInfo".to_string(), d));
+    }
+    for (name, data) in bins {
+        streams.push((format!("BinData/{name}"), data.clone()));
+    }
+    let refs: Vec<(&str, &[u8])> = streams.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    scan_cfb("a.hwp", &hwp_cfb(&refs, flags))
+}
+
+pub fn scan_cfb(name: &str, cfb: &Cfb) -> FileReport {
+    scan(name, &cfb.bytes)
 }

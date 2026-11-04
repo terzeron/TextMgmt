@@ -5,7 +5,8 @@ mod support;
 use std::path::Path;
 use bookdoctor::cli_parser::{Options, run_with_env};
 use bookdoctor::format_dispatcher::scan_file;
-use bookdoctor::{Category, FileReport, Finding, Severity};
+use bookdoctor::{Category, FileReport, Severity};
+use crate::support::shared_fixtures::finding;
 
 const REL_NS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
 
@@ -41,10 +42,6 @@ fn scan_named(file: &str, add: &[(&str, &[u8])]) -> (tempfile::TempDir, FileRepo
 
 fn docx(add: &[(&str, &[u8])]) -> FileReport {
     scan_named("a.docx", add).1
-}
-
-fn finding<'a>(r: &'a FileReport, code: &str) -> &'a Finding {
-    r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
 }
 
 fn assert_security(r: &FileReport, code: &str, severity: Severity) {
@@ -587,14 +584,8 @@ mod package_structure {
     use crate::support::shared_fixtures::{finding};
     use super::support;
     use std::fs;
-    use std::path::Path;
-    use bookdoctor::cli_parser::Options;
-    use bookdoctor::format_dispatcher::scan_file;
+    use crate::support::shared_fixtures::scan_path as scan;
     use bookdoctor::{Category, FileReport, Format, Severity};
-
-    fn scan(path: &Path) -> FileReport {
-        scan_file(path, &Options::default())
-    }
 
     fn docx_named(name: &str, remove: &[&str], add: &[(&str, &[u8])]) -> (tempfile::TempDir, std::path::PathBuf) {
         let d = tempfile::tempdir().unwrap();

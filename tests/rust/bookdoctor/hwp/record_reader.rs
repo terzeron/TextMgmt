@@ -3,36 +3,13 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-#[path = "../ole_common.rs"]
-mod ole_common;
+use support::ole_common;
 use bookdoctor::cli_parser::Options;
 use bookdoctor::format_dispatcher::scan_file;
-use crate::ole_common::{Cfb, make_cfb, make_cfb_v4};
+use crate::ole_common::{make_cfb, make_cfb_v4};
 use bookdoctor::{FileReport};
 use crate::support::shared_fixtures::{HWPTAG_BEGIN, TAG_SHAPE_COMPONENT_OLE, bin_data_link, file_header, finding, raw_deflate, record, scan, valid_stream, write};
-
-fn hwp_cfb(extra: &[(&str, &[u8])], flags: u32) -> Cfb {
-    let header = file_header(flags);
-    let mut streams: Vec<(&str, &[u8])> = vec![("FileHeader", &header)];
-    streams.extend_from_slice(extra);
-    make_cfb(&streams)
-}
-
-fn scan_cfb(name: &str, cfb: &Cfb) -> FileReport {
-    scan(name, &cfb.bytes)
-}
-
-fn scan_bindata(flags: u32, docinfo: Option<Vec<u8>>, bins: &[(&str, Vec<u8>)]) -> FileReport {
-    let mut streams: Vec<(String, Vec<u8>)> = Vec::new();
-    if let Some(d) = docinfo {
-        streams.push(("DocInfo".to_string(), d));
-    }
-    for (name, data) in bins {
-        streams.push((format!("BinData/{name}"), data.clone()));
-    }
-    let refs: Vec<(&str, &[u8])> = streams.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
-    scan_cfb("a.hwp", &hwp_cfb(&refs, flags))
-}
+use crate::support::shared_fixtures::{hwp_cfb, scan_bindata, scan_cfb};
 
 fn scan_sections(flags: u32, docinfo: Option<Vec<u8>>, section0: Vec<u8>) -> FileReport {
     let mut streams: Vec<(&str, Vec<u8>)> = vec![("BodyText/Section0", section0)];

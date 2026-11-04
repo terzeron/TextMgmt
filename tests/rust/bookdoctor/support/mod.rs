@@ -1,6 +1,9 @@
 //! 테스트 공용 fixture. Python 테스트의 make_epub / _corrupt_local_header 대응.
 #![allow(dead_code)]
 
+#[path = "../ole_common.rs"]
+pub mod ole_common;
+
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;

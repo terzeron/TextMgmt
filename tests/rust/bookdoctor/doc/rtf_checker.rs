@@ -5,12 +5,9 @@ mod support;
 
 use std::time::{Duration, Instant};
 
-use bookdoctor::{FileReport, Finding, Format, Severity};
+use bookdoctor::{Format, Severity};
 use crate::support::shared_fixtures::{pe_bytes, scan};
-
-fn finding<'a>(r: &'a FileReport, code: &str) -> &'a Finding {
-    r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
-}
+use crate::support::shared_fixtures::finding;
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()

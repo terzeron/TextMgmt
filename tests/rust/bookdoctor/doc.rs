@@ -1,6 +1,6 @@
 
 mod support;
-mod ole_common;
+use support::ole_common;
 
 use std::fs;
 
@@ -8,23 +8,13 @@ use bookdoctor::cli_parser::Options;
 use bookdoctor::format_dispatcher::scan_file;
 use bookdoctor::viewer_block_table::viewer_blocked;
 use ole_common::{Cfb, compress, dir_stream, make_cfb, make_cfb_v4, module_stream};
-use bookdoctor::{Category, FileReport, Finding, Format, Severity, ViewerBlocked};
-use crate::support::shared_fixtures::{word_stream, write};
-
-fn doc_cfb(extra: &[(&str, &[u8])], flags1: u16, body: &[u8]) -> Cfb {
-    let word = word_stream(flags1, body);
-    let mut streams: Vec<(&str, &[u8])> = vec![("WordDocument", &word)];
-    streams.extend_from_slice(extra);
-    make_cfb(&streams)
-}
+use bookdoctor::{Category, FileReport, Format, Severity, ViewerBlocked};
+use crate::support::shared_fixtures::{doc_cfb, word_stream, write};
+use crate::support::shared_fixtures::finding;
 
 fn scan_doc(extra: &[(&str, &[u8])], flags1: u16, body: &[u8]) -> FileReport {
     let (_d, p) = write("a.doc", &doc_cfb(extra, flags1, body).bytes);
     scan_file(&p, &Options::default())
-}
-
-fn finding<'a>(r: &'a FileReport, code: &str) -> &'a Finding {
-    r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
 }
 
 fn vba_streams(source: &str) -> Vec<(String, Vec<u8>)> {
