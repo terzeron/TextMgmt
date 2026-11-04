@@ -7,7 +7,6 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
-bookstore = { path = "../../libs/bookstore" }
 classifier = { path = "../../libs/classifier" }
 db = { path = "../../libs/db" }
 es_client = { path = "../../libs/es_client" }

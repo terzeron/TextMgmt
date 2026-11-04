@@ -3850,7 +3850,6 @@ dependencies = [
 name = "trainer"
 version = "0.1.0"
 dependencies = [
- "bookstore",
  "classifier",
  "db",
  "es_client",

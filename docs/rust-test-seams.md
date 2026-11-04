@@ -12,7 +12,7 @@
 - seam 방식은 세 갈래다. (a) 생성자 주입(`Deps` 빌더), (b) 인스턴스 `set_*` 변경자, (c) 전역 `override_*`/`hooks::set_*`/`testing::*` 가드. (c)는 같은 test binary 안에서 병렬 테스트와 충돌한다. 저장소 규칙(전역 상태 금지)에도 어긋난다.
 - 전체 테스트는 약 2,174개다. 그중 `#[ignore]`가 769개이고, 약 600개는 사유가 `monkeypatch`/`mock.patch`/seam 부재다. seam을 통일하면 이 600개가 열린다.
 - 통일 원칙은 네 줄이다.
-  1. 서비스 전체를 바꾸는 facade는 `XxxApi`(예: `BookManagerApi`, `EsManagerApi`). 좁은 능력은 역할 명사(예: `FsOps`, `Clock`, `CommandRunner`). 기존 crate(`isbn::CommandRunner`, `es_client::IndexStore`, `bookstore::Fetcher`, `doc_reader::StageRunner`)가 이미 이 규칙이다.
+  1. 서비스 전체를 바꾸는 facade는 `XxxApi`(예: `BookManagerApi`, `EsManagerApi`). 좁은 능력은 역할 명사(예: `FsOps`, `Clock`, `CommandRunner`). 기존 crate(`isbn::CommandRunner`, `es_client::IndexStore`, `doc_reader::StageRunner`)가 이미 이 규칙이다.
   2. 주입은 생성자 `XxxDeps` + 소비형 `with_*` 빌더 하나로 한다. `set_*`, 전역 가드, `backend::*::testing` 모듈은 쓰지 않는다.
   3. 말단 순수 함수만 `*_with(args, &XxxHooks)`를 쓴다(`doc_reader`, `epub_cover`, `cover_sources`가 이미 이 방식).
   4. 공용 능력(`Clock`, `FsOps`, `CommandRunner`, `HttpSession`)은 새 lib crate `libs/sysdeps`에 두고 backend, loader, doc_reader가 함께 쓴다.
@@ -807,7 +807,7 @@ loader::cli::RunHooks { read_file, stat, on_worker_spawn }
    - `sysdeps`(권장): `loader`, `doc_reader`, `isbn`이 이미 같은 목적의 trait(`CommandRunner`, `StageRunner`, `find_libreoffice_with`)를 따로 갖고 있다. 저장소 규칙("공유할 코드는 libs/")과도 맞는다. 대신 workspace 멤버와 문서(`docs/rust-workspace.md`)가 늘고, `isbn::CommandRunner`를 나중에 옮겨야 한다.
    - backend 안: crate 하나 덜 만든다. 대신 loader/doc_reader가 backend에 의존하거나 같은 trait를 다시 만들게 된다.
 2. **인증 대역을 `AuthMode`에 모을지, 별도 `AuthProvider` trait로 뺄지.** 지금 안은 enum 5변형(`Cookies`, `Fixed`, `Split`, `AuthOnly`, `Shared`)이다. 쿠키 만료·거부(401/403) 같은 동작 테스트가 더 필요하면 `AuthMode::Denied{status, detail}` 추가나 `trait AuthProvider`로 가야 한다. 변형 추가는 쉽지만 trait로 가면 main.rs의 `Fixed/Split` 119개 호출을 다시 고쳐야 한다. 권장은 enum 유지.
-3. **trait 이름 규칙 `XxxApi`를 어디까지 쓸지.** 요청안은 `XxxApi`를 일괄 규칙으로 보지만, 기존 crate는 `CommandRunner`, `IndexStore`, `Fetcher`, `StageRunner`처럼 역할 명사다. 이 문서는 "facade만 `Api`, 좁은 능력은 명사"로 정했다. 일괄 `Api` 접미사로 가면 `ClockApi`, `FsOpsApi`처럼 어색한 이름이 생기고 기존 crate 4곳과 어긋난다. 권장은 현재 안.
+3. **trait 이름 규칙 `XxxApi`를 어디까지 쓸지.** 요청안은 `XxxApi`를 일괄 규칙으로 보지만, 기존 crate는 `CommandRunner`, `IndexStore`, `StageRunner`처럼 역할 명사다. 이 문서는 "facade만 `Api`, 좁은 능력은 명사"로 정했다. 일괄 `Api` 접미사로 가면 `ClockApi`, `FsOpsApi`처럼 어색한 이름이 생기고 기존 crate 3곳과 어긋난다. 권장은 현재 안.
 
 그 밖에 구현 때 판단해도 되는 사항은 다음과 같다. ES `_search` 같은 비공개 메서드 스텁 3~4개의 처리, `scandir`/`read_dir` 통합 시 경로 필터 방식, `LogCapture`의 스레드 로컬 한계(워커 스레드 로그 미수집), `i64` 통일로 인한 `usize` 파라미터 테스트 수정.
 

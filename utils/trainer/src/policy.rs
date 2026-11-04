@@ -5,21 +5,9 @@ use classifier::{
 };
 use serde_json::{Value, json};
 
-/// 기존 HTTPS 클라이언트를 재사용한다. 인증서 검증은 libs/bookstore의 기본값이다.
+/// backend와 같은 서점 검색(`bookstore::stores`의 기본 구현)을 쓴다. 인증서 검증은 libs/bookstore의 기본값이다.
 struct LiveStores {
     service: std::sync::Mutex<classifier::book_classifier::BookClassifierService>,
-}
-
-struct StoreClient {
-    store: bookstore::Store,
-    fetcher: bookstore::HttpFetcher,
-}
-
-impl bookstore::stores::BookstoreSearch for StoreClient {
-    fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<bookstore::stores::SearchRow>, String, String) {
-        let outcome = bookstore::search(self.store, &self.fetcher, isbn, title, author);
-        (outcome.rows.into_iter().map(|r| (r.title, r.author, r.category, r.detail_url, r.search_url, r.isbn)).collect(), outcome.keyword, outcome.method.into())
-    }
 }
 
 impl LiveStores {
@@ -27,15 +15,11 @@ impl LiveStores {
         use classifier::{BookCategoryClassifier, ClassifierOptions};
         let root = std::path::Path::new("/mnt/data/text");
         let classifier = std::sync::Arc::new(BookCategoryClassifier::new(None, ClassifierOptions::default()));
-        let mut service = classifier::book_classifier::BookClassifierService::new(root, None, Some(classifier)).with_delay(delay).with_keyword_loader(classifier::bookstore_policy::keyword_loader(|content_type| {
+        let service = classifier::book_classifier::BookClassifierService::new(root, None, Some(classifier)).with_delay(delay).with_keyword_loader(classifier::bookstore_policy::keyword_loader(|content_type| {
             let mapping = db::category_mapping::CategoryMapping::new().map_err(|e| e.to_string())?;
             let all = mapping.get_all_mappings(content_type).map_err(|e| e.to_string())?;
             Ok(serde_json::json!(all))
         }));
-        let client = |store| Box::new(StoreClient { store, fetcher: bookstore::HttpFetcher::new() });
-        service.yes24 = client(bookstore::Store::Yes24);
-        service.aladin = client(bookstore::Store::Aladin);
-        service.kyobo = client(bookstore::Store::Kyobo);
         Self { service: std::sync::Mutex::new(service) }
     }
 }

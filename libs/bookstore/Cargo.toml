@@ -29,9 +29,5 @@ name = "stores"
 path = "../../tests/rust/bookstore/stores.rs"
 
 [[test]]
-name = "integration_search"
-path = "../../tests/rust/bookstore/integration/search.rs"
-
-[[test]]
 name = "integration_stores"
 path = "../../tests/rust/bookstore/integration/stores.rs"
