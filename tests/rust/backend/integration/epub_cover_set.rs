@@ -4,24 +4,24 @@ mod common;
 use std::fs::{self, File};
 use std::io::{Cursor, Read};
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use backend::book_metadata::BookLookupError;
-use backend::book_manager::{BookLookup, BookManager, BookManagerApi, BookManagerDeps, BookRef};
+use backend::book_manager::BookManagerApi;
 use backend::epub_cover::{self, CoverError};
 use backend::main::{AppDeps, AuthMode, app_with};
 use common::{
     TestClient,
     epub::{EpubSpec, make_epub},
-    es_fake::FakeEsManager,
+    
     fsx::{dir_names, mtime_key, sha256_hex},
     image::{b64, color_jpeg, red_jpeg},
     zipx::{Members, bytes_replace, rewrite_epub_members},
 };
 use serde_json::{Value, json};
 use crate::common::shared_fixtures::{assert_cover_error, attach_publisher_cover_page, cover_tmp_files, elements, err_has, has_cover, publisher_cover_epub, revision, spine_idrefs, xml_text};
-use crate::common::shared_fixtures::{FetchSlot, URL};
+use crate::common::shared_fixtures::URL;
+use crate::common::cover_env::{env, split};
 
 // ── 도구 ───────────────────────────────────────────────────
 
@@ -58,86 +58,6 @@ fn ncx_doc(nav_map: &str, extra: &str) -> String {
 
 fn nav_doc(body: &str) -> String {
     format!(r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc">{body}</nav></body></html>"#)
-}
-
-/// `AsyncMock(return_value=(book, None))` get_book.
-struct FakeBooks(Mutex<(Option<BookRef>, Option<String>)>);
-
-impl FakeBooks {
-    fn set_file_type(&self, file_type: &str) {
-        self.0.lock().unwrap().0.as_mut().unwrap().file_type = file_type.to_string();
-    }
-
-    fn set_missing(&self, message: &str) {
-        *self.0.lock().unwrap() = (None, Some(message.to_string()));
-    }
-}
-
-#[async_trait::async_trait]
-impl BookLookup for FakeBooks {
-    async fn get_book(&self, book_id: i64) -> Result<BookRef, BookLookupError> {
-        match self.0.lock().unwrap().clone() {
-            (Some(book), _) => Ok(book),
-            (None, Some(error)) => Err(BookLookupError::Failed(error)),
-            (None, None) => Err(BookLookupError::NotFound(book_id)),
-        }
-    }
-}
-
-/// (manager 대역, EPUB 경로, 책). get_book은 이 EPUB를 가리키는 책을 돌려준다.
-struct Env {
-    tmp: tempfile::TempDir,
-    path: PathBuf,
-    manager: BookManager,
-    es: Arc<FakeEsManager>,
-    books: Arc<FakeBooks>,
-    fetcher: Arc<FetchSlot>,
-}
-
-fn env() -> Env {
-    common::setup_env();
-    let tmp = tempfile::tempdir().unwrap();
-    let fetcher = Arc::new(FetchSlot(Mutex::new(Box::new(|_| Ok(red_jpeg())))));
-    let path = make_epub(&tmp.path().join("분류").join("book.epub"), &EpubSpec::cover("3.0", false));
-    let es = FakeEsManager::new();
-    let books = Arc::new(FakeBooks(Mutex::new((Some(BookRef { book_id: 1, file_path: path.clone(), file_type: "epub".into() }), None))));
-    let manager = BookManager::with_deps(BookManagerDeps::new(tmp.path().to_path_buf(), es.clone()).with_trash_dirname("0_trash").with_book_lookup(books.clone()).with_image_fetcher(fetcher.clone()));
-    Env { tmp, path, manager, es, books, fetcher }
-}
-
-impl Env {
-    fn dir(&self) -> &Path {
-        self.tmp.path()
-    }
-
-    async fn call(&self, url: &str) -> (Option<Value>, Option<String>) {
-        split(self.manager.set_epub_cover(1, Some(url), None).await)
-    }
-
-    async fn upload(&self, image_data: &str) -> (Option<Value>, Option<String>) {
-        split(self.manager.set_epub_cover(1, None, Some(image_data)).await)
-    }
-
-    async fn remove(&self) -> (Option<Value>, Option<String>) {
-        split(self.manager.remove_epub_cover(1).await)
-    }
-
-    async fn illustrate(&self, before: &str) -> (Option<Value>, Option<String>) {
-        split(self.manager.insert_epub_illustration(1, before, Some(URL), None).await)
-    }
-
-    fn size(&self) -> u64 {
-        fs::metadata(&self.path).unwrap().len()
-    }
-}
-
-/// `"x" in error`: error가 None이면 Python은 TypeError로 실패한다.
-/// `Result`를 Python 원본 테스트의 `(결과, 오류)` 모양으로 펼친다. 단언을 원본과 나란히 읽게 한다.
-fn split(result: Result<Value, String>) -> (Option<Value>, Option<String>) {
-    match result {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error)),
-    }
 }
 
 /// `assert error` (None이나 빈 문자열이면 실패)
