@@ -51,7 +51,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::Router;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
 use backend::auth::{ACCESS_TOKEN_EXPIRATION_SECONDS, HTTPException, RequestParts, SystemExit, TokenIssuer};
-use backend::db::Row;
+use db::Row;
 use backend::main::{ACCESS_COOKIE_NAME, AppDeps, AuthMode, CustomJSONResponse, GoogleVerifier, REFRESH_COOKIE_NAME, RequestValidationError, RoleResolver, app_with, observation_hash};
 use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, SessionQuery, StoreError};
 use common::env::EnvGuard;

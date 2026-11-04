@@ -4,7 +4,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::db::{ConnectionProvider, DbValue, MysqlConfig, mysql_provider};
+use db::{ConnectionProvider, DbValue, MysqlConfig, mysql_provider};
 use lopdf::{Document, Object};
 
 pub const STANDARD_COVER_SIZES: &[(u32, u32)] = &[(480, 623), (750, 824), (202, 164)];
@@ -81,7 +81,7 @@ impl CoverStatusCache {
         Self { provider, ready: Mutex::new(false) }
     }
 
-    fn connect(&self) -> Result<Box<dyn crate::db::DbConnection>, String> {
+    fn connect(&self) -> Result<Box<dyn db::DbConnection>, String> {
         let mut ready = self.ready.lock().map_err(|e| e.to_string())?;
         let mut connection = (self.provider)().map_err(|e| e.to_string())?;
         if !*ready {
@@ -133,7 +133,7 @@ impl Default for CoverStatusCache {
 #[cfg(test)]
 mod tests {
     use super::{CoverStatusCache, pdf_first_image_size};
-    use crate::db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
+    use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone, Copy)]

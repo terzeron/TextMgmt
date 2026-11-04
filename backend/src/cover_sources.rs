@@ -457,8 +457,8 @@ struct DefaultClient {
 }
 
 impl DefaultClient {
-    fn bookstore(&self) -> Option<bookstore_lib::Store> {
-        bookstore_lib::Store::from_name(&self.store)
+    fn bookstore(&self) -> Option<bookstore::Store> {
+        bookstore::Store::from_name(&self.store)
     }
 
     fn ridi_info(html: &str) -> Value {
@@ -535,7 +535,7 @@ impl DefaultClient {
 
 impl StoreClient for DefaultClient {
     fn supports_isbn_search(&self) -> bool {
-        self.bookstore().is_some_and(bookstore_lib::Store::supports_isbn_search)
+        self.bookstore().is_some_and(bookstore::Store::supports_isbn_search)
     }
 
     /// 조아라 API 키는 소스에 두지 않고 환경 변수 `TM_JOARA_API_KEY`에서 읽는다.
@@ -744,7 +744,7 @@ pub struct SearchHooks {
 impl Default for SearchHooks {
     fn default() -> Self {
         SearchHooks {
-            session_factory: Arc::new(|store| Arc::new(crate::bookstore::UreqHttpSession::for_store(store)) as Arc<dyn HttpSession>),
+            session_factory: Arc::new(|store| Arc::new(bookstore::stores::UreqHttpSession::for_store(store)) as Arc<dyn HttpSession>),
             client_factories: BTreeMap::new(),
             cancel: Arc::new(|| false),
             validate: Arc::new(validate_url),

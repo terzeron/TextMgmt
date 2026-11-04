@@ -5,9 +5,9 @@ mod common;
 use std::fs;
 use std::path::Path;
 
-use bookdoctor::cli::{Options, parse, print_usage, run};
+use bookdoctor::cli::{Options, parse, run, run_with_env};
 use bookdoctor::scan::scan_file;
-use scan_common::{Category, FileReport, Format, Severity};
+use bookdoctor::{Category, FileReport, Format, Severity};
 
 fn scan(path: &Path) -> FileReport {
     scan_file(path, &Options::default())
@@ -17,7 +17,7 @@ fn deep(path: &Path) -> FileReport {
     scan_file(path, &Options { zip_deep: true, ..Options::default() })
 }
 
-fn finding<'a>(r: &'a FileReport, code: &str) -> &'a scan_common::Finding {
+fn finding<'a>(r: &'a FileReport, code: &str) -> &'a bookdoctor::Finding {
     r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} missing: {:?} / {:?}", r.findings, r.reasons))
 }
 
@@ -188,22 +188,18 @@ fn member_name_with_escape_never_reaches_the_terminal_raw() {
     let p = d.path().join("esc.zip");
     common::zip_of(&p, &[("a\u{1b}[2J.exe", b"x")]);
     let mut out = Vec::new();
-    run(&["--min-severity".into(), "low".into(), "--color".into(), "never".into(), p.to_string_lossy().into_owned()], &mut out);
+    run_with_env(&["scan".into(), "--min-severity".into(), "low".into(), p.to_string_lossy().into_owned()], &mut out, false, false);
     assert!(!String::from_utf8(out).unwrap().contains('\u{1b}'));
     let mut json = Vec::new();
-    run(&["--json".into(), "--min-severity".into(), "low".into(), p.to_string_lossy().into_owned()], &mut json);
+    run(&["scan".into(), "--json".into(), "--min-severity".into(), "low".into(), p.to_string_lossy().into_owned()], &mut json);
     let json = String::from_utf8(json).unwrap();
     assert!(!json.contains("\\u001b") && !json.contains('\u{1b}'), "{json}");
 }
 
 #[test]
-fn zip_deep_option_is_parsed_and_documented() {
-    assert!(!parse(&["a.zip".to_string()]).unwrap().zip_deep);
-    assert!(parse(&["--zip-deep".to_string(), "a.zip".to_string()]).unwrap().zip_deep);
-    let mut out = Vec::new();
-    print_usage(&mut out).unwrap();
-    let usage = String::from_utf8(out).unwrap();
-    assert!(usage.contains("--zip-deep") && usage.contains("zip"), "{usage}");
+fn zip_deep_is_off_by_default() {
+    assert!(!Options::default().zip_deep);
+    assert!(!parse(&["scan".to_string(), "a.zip".to_string()]).unwrap().zip_deep);
 }
 
 // --- 보안 검토 반영: 이름 디코딩 차이, 선언 크기 위조 ---

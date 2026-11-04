@@ -16,8 +16,8 @@ use super::traits::{BookAccess, BookManagerApi, BookStub, CategoryMappingApi, Go
 use crate::auth::HTTPException;
 use crate::auth::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
 use crate::book_manager::{BookManager, LoaderFileReader};
-use crate::bookstore::BookstoreSearch;
-use crate::category_mapping::CategoryMapping;
+use bookstore::stores::BookstoreSearch;
+use db::category_mapping::CategoryMapping;
 use crate::comics_manager::ComicsManager;
 use crate::cover_management::CoverHooks;
 use crate::es_manager::{ESManager, EsManagerApi, RealEsConnector};
@@ -133,7 +133,7 @@ impl AppDeps {
             task_runtime_factory: Arc::new(|| tokio::runtime::Builder::new_current_thread().enable_all().build()),
             cover_hooks: CoverHooks::default(),
             reload_progress_flush_interval: Duration::from_secs(RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS),
-            bookstore_factory: Arc::new(crate::bookstore::create_bookstore_search),
+            bookstore_factory: Arc::new(bookstore::stores::create_bookstore_search),
         }
     }
 

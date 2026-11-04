@@ -30,7 +30,7 @@
 //! - `backend::auth`: `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`, `create_refresh_token`(같은 인자),
 //!   `tm_admin_email() -> String`, `jwt_secret() -> String`, `JWT_ALGORITHM: jsonwebtoken::Algorithm`
 //! - `backend::book::Book` (`Default + Clone + Serialize`): `book_id, category, title, author, file_path: PathBuf, file_type, file_size, line_count, page_count, isbn, created_time: Option<String>, updated_time, score: f64`, `Book::path_prefix() -> PathBuf`
-//! - `backend::bookstore::Yes24Bookstore { verbose: bool }`
+//! - `bookstore::stores::Yes24Bookstore { verbose: bool }`
 //! - `backend::book_manager::{BookManager, BookManagerApi, BookContent, BookResponse}`: `BookManager::from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, _>`, `BookManager::media_type(suffix_with_dot: &str) -> &'static str`
 //!   - `bm.path_prefix() -> PathBuf`, `bm.es_manager() -> Arc<dyn EsManagerApi>` (`insert(&Docs) -> Result<Vec<i64>, EsError>`, `refresh() -> Result<(), EsError>`, `delete(i64) -> Result<bool, EsError>`, `count_by_category(&str, bool) -> Result<i64, EsError>`)
 //!   - `async add_book(BTreeMap<i64, Value>) -> Result<i64, String>`, `async get_book(i64) -> Result<Book, BookLookupError>`
@@ -39,10 +39,10 @@
 //! - `backend::es_manager::{EsManagerApi, EsError, ESManager}`: `delete(&self, i64) -> Result<bool, EsError>`, `search_categories_pdf_stats(&self, &[String]) -> Result<Value, EsError>`. 대역은 `common::es_fake::FakeEsManager`다.
 //!   (실제 ES 통합 테스트만 `ESManager::connect(env, &RealEsConnector, &SystemClock)`를 가정한다. 커넥터 이름은 문서에 없다.)
 //! - `backend::comics_manager::ComicsManager::from_env(env, es_factory)` (`BookManagerApi` 구현)
-//! - `backend::category_mapping::{CategoryMapping, CategoryMappingApi, MappingError}`
+//! - `db::category_mapping::{CategoryMapping, CategoryMappingApi, MappingError}`
 //!   - `MappingError::{Http(u16, String), Other(String)}`, `CategoryMappingApi`는 동기 메서드이고 기본 구현은 `Err(Other("unimplemented"))`다.
 //!   - `CategoryMapping::new() -> Result<Self, MappingError>`(env + 실제 MySQL), `get_connection() -> Result<Box<dyn DbConnection>, DbError>`, `DbConnection::{execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>, commit(&mut self) -> Result<(), DbError>}` (설계 3.4)
-//! - `loader::{config::Config, record::read_file, record::now_iso, flow::direct_files}`, `doc_reader::pdf::InProcess`, `stat::Stat` (utils/loader/src에서 확인한 실제 API)
+//! - `file_record::{config::Config, record::read_file, record::now_iso}`, `doc_reader::pdf::InProcess`, `stat::Stat` (libs/file_record/src에서 확인한 실제 API)
 //! - 개발 의존성: `jsonwebtoken`, `async-trait`, `tempfile`, `tokio`, `serde_json`
 //!
 //! ES 인덱스(`TM_ES_BOOK_INDEX`)는 conftest의 `es_index`와 같은 매핑으로 미리 만들어져 있다고 본다.
@@ -64,7 +64,7 @@ use axum::response::IntoResponse;
 use backend::auth::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
 use backend::book::{Book, BookLookupError, BookPage};
 use backend::book_manager::{BookContent, BookDeletion, BookManager, BookManagerApi, BookResponse};
-use backend::category_mapping::CategoryMapping;
+use db::category_mapping::CategoryMapping;
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
 use backend::main::{AppDeps, AuthMode, BookstoreFactory, BookstoreSearch, CategoryMappingApi, CustomJSONResponse, GoogleVerifier, MappingError, RoleResolver, Slot, app_with};
@@ -149,15 +149,23 @@ struct Setup {
 /// `Loader.read_file`에 대응한다. 읽지 못하면 빈 map이다.
 fn read_file(path: &Path) -> BTreeMap<i64, Value> {
     let root = common::project_root();
-    let cfg = loader::config::Config::new(root.join("tests/books"), root.join("tests/comics"));
+    let cfg = file_record::config::Config::new(root.join("tests/books"), root.join("tests/comics"));
     let stat = stat::Stat::new();
-    let out = loader::record::read_file(&cfg, path, None, false, None, &doc_reader::pdf::InProcess, &stat);
+    let out = file_record::record::read_file(&cfg, path, None, false, None, &doc_reader::pdf::InProcess, &stat);
     out.item.into_iter().collect()
+}
+
+/// `dir` 바로 아래의 숨김이 아닌 일반 파일을 이름순으로 돌려준다(loader의 `flow::direct_files`와 같은 규칙).
+fn direct_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    let mut files: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_file() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).collect();
+    files.sort();
+    files
 }
 
 /// `Loader.read_files(path, num_files=n)`에 대응한다.
 fn read_files(dir: &Path, num_files: usize) -> BTreeMap<i64, Value> {
-    loader::flow::direct_files(dir).into_iter().take(num_files).flat_map(|p| read_file(&p)).collect()
+    direct_files(dir).into_iter().take(num_files).flat_map(|p| read_file(&p)).collect()
 }
 
 fn process_env(key: &str) -> Option<String> {
@@ -525,7 +533,7 @@ async fn insert_docs(bm: &BookManager, category: &str, count: i64, start_id: i64
             "page_count": 0,
             "isbn": "",
             "summary": summary,
-            "updated_time": loader::record::now_iso(),
+            "updated_time": file_record::record::now_iso(),
         });
         let (book_id, error) = split(bm.add_book(&BTreeMap::from([(doc_id, doc)])).await);
         ids.push(expect_id(book_id, error));
@@ -745,7 +753,7 @@ mod test_update_book_conflict {
             "page_count": 0,
             "isbn": "",
             "summary": "conflict test",
-            "updated_time": loader::record::now_iso(),
+            "updated_time": file_record::record::now_iso(),
         });
         let (book_id, error) = split(bm.add_book(&BTreeMap::from([(meta.ino() as i64, doc)])).await);
         assert!(book_id.unwrap_or(0) != 0 && error.is_none(), "Failed to register: {error:?}");
@@ -2286,14 +2294,14 @@ impl backend::refresh_token_store::RefreshTokenStoreApi for AuthRefreshStore {
     fn get_token_observation(&self, _: &str) -> Result<Option<Value>, backend::refresh_token_store::StoreError> {
         Err(backend::refresh_token_store::StoreError::Unsupported("test store".into()))
     }
-    fn _session_rows(&self, email: Option<&str>, family: Option<&str>) -> Result<Vec<backend::db::Row>, backend::refresh_token_store::StoreError> {
+    fn _session_rows(&self, email: Option<&str>, family: Option<&str>) -> Result<Vec<db::Row>, backend::refresh_token_store::StoreError> {
         Ok(self
             .0
             .lock()
             .unwrap()
             .iter()
             .filter(|(fid, owner)| email.is_none_or(|e| e == owner.as_str()) && family.is_none_or(|f| f == fid.as_str()))
-            .map(|(fid, owner)| backend::db::Row::from([("family_id".into(), fid.as_str().into()), ("email".into(), owner.as_str().into()), ("valid_token_count".into(), 1_i64.into())]))
+            .map(|(fid, owner)| db::Row::from([("family_id".into(), fid.as_str().into()), ("email".into(), owner.as_str().into()), ("valid_token_count".into(), 1_i64.into())]))
             .collect())
     }
 }
@@ -2368,8 +2376,8 @@ async fn test_auth_me() {
 /// 서점 이름 해석은 현재 registry factory를 거친다.
 #[test]
 fn test_create_bookstore_factory() {
-    assert!(backend::bookstore::create_bookstore_search("yes24").is_some());
-    assert!(backend::bookstore::create_bookstore_search("unknown").is_none());
+    assert!(bookstore::stores::create_bookstore_search("yes24").is_some());
+    assert!(bookstore::stores::create_bookstore_search("unknown").is_none());
 }
 
 #[tokio::test]

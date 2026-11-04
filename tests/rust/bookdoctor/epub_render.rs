@@ -10,7 +10,7 @@ use bookdoctor::epub::render::{MAX_UNREADABLE_FINDINGS, ReadErrorKind, Selector,
 use bookdoctor::epub::security::Limits;
 use bookdoctor::scan::scan_file;
 use common::*;
-use scan_common::{Category, FileReport, Format, Severity};
+use bookdoctor::{Category, FileReport, Format, Severity};
 
 const OPF_NS_DECL: &str = r#" xmlns:dc="http://purl.org/dc/elements/1.1/""#;
 const OPF_PATH: &str = "OEBPS/content.opf";

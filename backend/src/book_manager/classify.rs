@@ -19,9 +19,9 @@ use serde_json::{Map, Value, json};
 
 use super::util::relative_to;
 use super::{BookManager, ProgressFn};
-use crate::book_classifier::{BookClassifierService, SharedBookClassifier};
-use crate::classifier::model::{CategoryModelApi, get_default_model, model_path};
-use crate::classifier::{BookCategoryClassifier, BookClassifierApi, ClassifierOptions, ModelOnlyClassifier};
+use classifier::book_classifier::{BookClassifierService, SharedBookClassifier};
+use classifier::model::{CategoryModelApi, get_default_model, model_path};
+use classifier::{BookCategoryClassifier, BookClassifierApi, ClassifierOptions, ModelOnlyClassifier};
 use crate::es_manager::Docs;
 
 /// 제안 시작 때 이름만 담은 행을 한 번에 보내는 개수.
@@ -92,7 +92,7 @@ fn mappings_from_value(mappings: &Value) -> Vec<(Value, Vec<Value>)> {
 
 fn normalize_text(value: &str) -> String {
     let folded = pyfmt::py_casefold(value);
-    folded.split(crate::classifier::tokenize::is_py_space).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ")
+    folded.split(classifier::tokenize::is_py_space).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
 fn candidate(category: &str, source: &str, detail: String) -> Value {

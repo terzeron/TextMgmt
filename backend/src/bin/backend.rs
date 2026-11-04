@@ -21,21 +21,21 @@ fn validate_frontend_url(frontend_url: Option<&str>) -> Result<(), &'static str>
 #[tokio::main]
 async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some(loader::cli::PDF_STAGE_COMMAND) {
+    if args.first().map(String::as_str) == Some(file_record::child::PDF_STAGE_COMMAND) {
         let mut out = std::io::stdout().lock();
-        let code = loader::cli::run_pdf_stage_command(&args[1..], &mut out);
+        let code = file_record::child::run_pdf_stage_command(&args[1..], &mut out);
         let _ = std::io::Write::flush(&mut out);
         return ExitCode::from(code as u8);
     }
-    if args.first().map(String::as_str) == Some(loader::cli::ISBN_PDF_STAGE_COMMAND) {
+    if args.first().map(String::as_str) == Some(file_record::child::ISBN_PDF_STAGE_COMMAND) {
         let mut out = std::io::stdout().lock();
-        let code = loader::cli::run_isbn_pdf_stage_command(&args[1..], &mut out);
+        let code = file_record::child::run_isbn_pdf_stage_command(&args[1..], &mut out);
         let _ = std::io::Write::flush(&mut out);
         return ExitCode::from(code as u8);
     }
-    if args.first().map(String::as_str) == Some(loader::cli::READ_FILE_COMMAND) {
+    if args.first().map(String::as_str) == Some(file_record::child::READ_FILE_COMMAND) {
         let mut out = std::io::stdout().lock();
-        let code = loader::cli::run_read_file_command(&args[1..], &mut out);
+        let code = file_record::child::run_read_file_command(&args[1..], &mut out);
         let _ = std::io::Write::flush(&mut out);
         return ExitCode::from(code as u8);
     }

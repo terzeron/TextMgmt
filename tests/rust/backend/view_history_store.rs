@@ -11,7 +11,7 @@
 //! - `ViewHistoryStore::get_connection(&self) -> Result<Box<dyn DbConnection>, DbError>` (구 `_get_connection() -> mysql::Conn`)
 //! - `ViewHistoryError::{ValueError(String), RuntimeError(String)}` (`DbError::Other(msg)`는 `RuntimeError(msg)`로 바뀐다)
 //! - `create_view_history_store() -> Result<ViewHistoryStore, ViewHistoryError>`
-//! - `backend::db::{DbConnection, DbCursor, DbValue, DbError, Row, ConnectionProvider}`: 구 `StoreConnection`은 `DbConnection`이다.
+//! - `db::{DbConnection, DbCursor, DbValue, DbError, Row, ConnectionProvider}`: 구 `StoreConnection`은 `DbConnection`이다.
 //!   - `DbConnection: Send { cursor() -> Box<dyn DbCursor>; commit(); rollback(); close(); execute(sql, &[DbValue]) -> Result<u64, DbError>; fetch_one(sql, &[DbValue]) -> Result<Option<Row>, DbError> }` (뒤 둘은 기본 구현)
 //!   - `DbCursor { execute(sql, &[DbValue]); executemany; fetchall() -> Option<Vec<Row>>; fetchone(); rowcount() }`, `Row = BTreeMap<String, DbValue>`
 //!   - `DbValue::{Null, Int(i64), Text(String), DateTime(NaiveDateTime)}`는 `PartialEq + Debug`이고 `From<&str>`, `From<i64>`, `From<Value>`를 가진다
@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::sleep;
 use std::time::Duration;
 
-use backend::db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
+use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
 use backend::view_history_store::{MAX_RECENT_VIEWS, ViewHistoryError, ViewHistoryStore, create_view_history_store};
 use common::log_capture::LogCapture;
 use log::Level;

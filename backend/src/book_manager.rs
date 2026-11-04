@@ -29,8 +29,8 @@ use serde_json::Value;
 use sysdeps::{CommandRunner, EnvFn, FsOps, RealFs, SystemRunner};
 
 use crate::book::Book;
-use crate::book_classifier::SharedBookClassifier;
-use crate::classifier::Classify;
+use classifier::book_classifier::SharedBookClassifier;
+use classifier::Classify;
 use crate::es_manager::{Docs, EsManagerApi};
 use crate::pdf::{LopdfOpener, LopdfPageOps, PageCountCache, PdfOpener, PdfPageOps, PdfReaderCache};
 
@@ -43,6 +43,7 @@ mod catalog;
 mod category;
 mod classify;
 mod cover;
+mod cover_browse;
 mod cover_list;
 mod epub;
 mod file_reader;

@@ -4,12 +4,12 @@
 //! utf8mb4 한글 왕복, 100건 배치의 꼬리 유실을 증명할 수 없다.
 //!
 //! 가정한 API (아직 구현 전이다. docs/rust-test-seams.md 3.4, 3.13):
-//! - `backend::category_mapping::CategoryMapping::new() -> Result<CategoryMapping, DbError>`  (생성자가 `_init_db`로 테이블을 만들고 마이그레이션한다)
+//! - `db::category_mapping::CategoryMapping::new() -> Result<CategoryMapping, DbError>`  (생성자가 `_init_db`로 테이블을 만들고 마이그레이션한다)
 //! - `CategoryMapping::get_connection(&self) -> Result<MappingConnection, DbError>` (`execute`/`fetch_all`/`fetch_one`/`commit`을 가진 래퍼)  (`_get_connection`. 구 `Connection`/`mysql::Conn`을 `DbConnection`으로 통일)
 //! - `MappingConnection` 편의 메서드:
 //!   `execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError>`, `fetch_all(.., &[DbValue]) -> Result<Vec<Row>, DbError>`,
 //!   `fetch_one(.., &[DbValue]) -> Result<Option<Row>, DbError>`, `commit(&mut self) -> Result<(), DbError>`
-//! - `backend::db::{DbValue, Row}`: `enum DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`, `From<Value>`),
+//! - `db::{DbValue, Row}`: `enum DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`, `From<Value>`),
 //!   `type Row = BTreeMap<String, DbValue>`. 구 `serde_json::Value` 파라미터는 `DbValue`로 쓰고, 행 값은 `DbValue::Text`로 읽는다.
 //! - `CategoryMapping::add_classify_proposal_items(&self, items: &[Value], source_category: &str, content_type: &str)`
 //! - `CategoryMapping::get_classify_proposal_items(&self, content_type: &str).unwrap() -> Vec<Value>`
@@ -27,9 +27,9 @@ use crate::{common, mysql_fixture};
 use std::ops::Deref;
 use std::sync::MutexGuard;
 
-use backend::category_mapping::CategoryMapping;
+use db::category_mapping::CategoryMapping;
 
-use backend::db::{DbValue, Row};
+use db::{DbValue, Row};
 use serde_json::{Value, json};
 
 /// 행의 `Text` 컬럼 값. Python은 dict 값을 그대로 문자열로 썼다.

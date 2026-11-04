@@ -19,9 +19,8 @@ pub const DEFAULT_LIBRARY_ROOT: &str = "/mnt/data/text";
 
 const TEXT_EXTS: [&str; 2] = ["txt", "epub"];
 
-// 병렬 풀, 앞에서 N건만 처리, 기본 워커 수는 코퍼스와 무관한 파일 스캐너 공용 코드라 `scan_common`에 있다.
-// 이 crate를 쓰는 쪽이 경로를 바꾸지 않도록 같은 이름으로 다시 내보낸다.
-pub use scan_common::{DEFAULT_WORKERS, limited, pool};
+mod workers;
+pub use workers::{DEFAULT_WORKERS, limited, pool, workers_within_memory};
 
 /// 로그 한 줄을 받는 쪽. 메시지 앞에 `INFO`/`ERROR` 수준이 붙어 있다.
 pub type Log<'a> = &'a (dyn Fn(&str) + Sync);

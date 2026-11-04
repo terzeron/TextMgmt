@@ -1,5 +1,6 @@
 //! PDF 검사: 보안(`security`)과 구조·렌더링(`structure`).
 
+pub mod sanitize;
 pub mod security;
 pub mod structure;
 
@@ -7,7 +8,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use scan_common::FileReport;
+use crate::FileReport;
 use sysdeps::{CommandRunner, SystemRunner};
 
 use crate::cli::Options;
@@ -17,7 +18,7 @@ pub fn scan_pdf_file(path: &Path, opts: &Options, report: &mut FileReport) {
     scan_pdf_file_with(path, opts, report, &SystemRunner);
 }
 
-/// `scan_pdf_file`에 Poppler 실행기를 주입한다. 테스트는 가짜 실행기를 넘긴다.
+/// `scan_pdf_file`에 MuPDF worker 실행기를 주입한다. 테스트는 가짜 실행기를 넘긴다.
 pub fn scan_pdf_file_with(path: &Path, opts: &Options, report: &mut FileReport, runner: &dyn CommandRunner) {
     // 크기 확인(`common::inspect`)과 읽기 사이에 파일이 자랄 수 있으므로 한도+1바이트까지만 읽는다.
     let limit = opts.max_total_mb.saturating_mul(1024 * 1024);

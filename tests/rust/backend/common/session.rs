@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use backend::db::Row;
+use db::Row;
 use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, StoreError};
 use serde_json::Value;
 

@@ -1,9 +1,11 @@
 //! Elasticsearch REST 클라이언트. `backend/es_manager.py`의 `ESManager` 중 검색 부분의 이식.
 //!
 //! HTTP와 TLS 검증 HTTPS를 지원한다. 자체 CA는 `TM_ES_CA_CERT` PEM 파일로 지정한다.
+//! 연산 이름과 JSON 인자를 받는 저수준 전송은 [`transport`]에 있다. backend `ESManager`가 그것을 쓴다.
 //! 접속 정보는 환경변수 `TM_ES_BOOK_INDEX`, `TM_ES_URL`, `TM_ES_USER`, `TM_ES_PASSWORD`에서 읽는다.
 
 pub mod indexing;
+pub mod transport;
 
 use std::fmt;
 use std::fs;
@@ -45,33 +47,47 @@ const SIMILAR_SUMMARY_MAX_QUERY_TERMS: u32 = 25;
 const SIMILAR_SUMMARY_MIN_DOC_FREQ: u32 = 3;
 const ENV_KEYS: [&str; 4] = ["TM_ES_BOOK_INDEX", "TM_ES_URL", "TM_ES_USER", "TM_ES_PASSWORD"];
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EsError {
-    /// 필요한 환경변수가 없다.
+    /// 필수 환경 변수가 없다.
     MissingEnv(String),
-    /// 연결·전송 실패.
+    /// 연결 실패나 시간 초과 같은 전송 계층 오류.
     Transport(String),
-    /// ES가 오류 상태로 응답했다.
+    /// ES가 오류 상태 코드를 돌려줬다.
     Status { status: u16, body: String },
-    /// 응답 형식이 예상과 다르다.
+    /// 응답 본문을 해석할 수 없다.
     Parse(String),
-    /// 아직 옮기지 않은 경로.
-    Unsupported(String),
+    /// 이 구현에 없는 연산.
+    Unsupported,
+    Other(String),
 }
 
 impl fmt::Display for EsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EsError::MissingEnv(k) => write!(f, "The environment variable {k} is not set."),
-            EsError::Transport(m) => write!(f, "ES 연결 실패: {m}"),
+            EsError::MissingEnv(name) => write!(f, "환경 변수 {name}이(가) 없다"),
+            EsError::Transport(msg) => write!(f, "ES 연결 오류: {msg}"),
             EsError::Status { status, body } => write!(f, "ES 응답 오류 {status}: {body}"),
-            EsError::Parse(m) => write!(f, "ES 응답 해석 실패: {m}"),
-            EsError::Unsupported(m) => write!(f, "지원하지 않는 요청: {m}"),
+            EsError::Parse(msg) => write!(f, "ES 응답 해석 실패: {msg}"),
+            EsError::Unsupported => write!(f, "지원하지 않는 연산"),
+            EsError::Other(msg) => write!(f, "{msg}"),
         }
     }
 }
 
 impl std::error::Error for EsError {}
+
+impl EsError {
+    /// 문서나 색인이 없다(404).
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, EsError::Status { status: 404, .. })
+    }
+
+    /// 연결을 만들지 못했거나 응답을 해석하지 못했다. Python `ConnectionError`, `ConnectionTimeout`, `SerializationError`에 대응한다.
+    pub fn is_connection(&self) -> bool {
+        matches!(self, EsError::Transport(_) | EsError::Parse(_))
+    }
+}
 
 /// 검색 결과 한 건. `score`는 최고점을 100으로 맞춘 값이다.
 #[derive(Debug, Clone, PartialEq)]
@@ -85,46 +101,6 @@ pub struct Hit {
 pub trait BookSearch {
     fn search_by_title(&self, title: &str, file_type: &str, file_size: i64) -> Result<Vec<Hit>, EsError>;
     fn search_similar_docs(&self, summary: &str) -> Result<Vec<Hit>, EsError>;
-}
-
-/// 문서 갱신에 쓰는 필드. 비어 있거나 0인 값은 보내지 않는다(원본 `ESManager.update`와 같다).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct UpdateFields {
-    pub category: String,
-    pub title: String,
-    pub author: String,
-    pub file_path: String,
-    pub file_type: String,
-    pub file_size: i64,
-    pub summary: String,
-    pub updated_time: String,
-}
-
-impl UpdateFields {
-    fn to_doc(&self) -> Value {
-        let mut doc = serde_json::Map::new();
-        for (key, value) in [("category", &self.category), ("title", &self.title), ("author", &self.author), ("file_path", &self.file_path), ("file_type", &self.file_type)] {
-            if !value.is_empty() {
-                doc.insert(key.into(), json!(value));
-            }
-        }
-        if self.file_size != 0 {
-            doc.insert("file_size".into(), json!(self.file_size));
-        }
-        for (key, value) in [("summary", &self.summary), ("updated_time", &self.updated_time)] {
-            if !value.is_empty() {
-                doc.insert(key.into(), json!(value));
-            }
-        }
-        Value::Object(doc)
-    }
-}
-
-/// 문서 쓰기·조회·삭제. 테스트가 실제 ES 없이 CLI를 확인할 수 있게 분리했다.
-pub trait BookStore {
-    fn update(&self, doc_id: i64, fields: &UpdateFields) -> Result<bool, EsError>;
-    fn search_by_id(&self, doc_id: i64) -> Result<Value, EsError>;
-    fn delete(&self, doc_id: i64) -> Result<bool, EsError>;
 }
 
 /// ES REST 호출의 HTTP 메서드.
@@ -143,7 +119,7 @@ pub struct EsClient {
     pub index: String,
 }
 
-fn base64(input: &[u8]) -> String {
+pub(crate) fn base64(input: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for c in input.chunks(3) {
@@ -319,49 +295,11 @@ impl EsClient {
     }
 }
 
-impl EsClient {
-    /// 문서의 일부 필드를 갱신한다(`refresh=true`). 샤드 실패가 있으면 `false`다. 없는 문서는 오류다.
-    pub fn update(&self, doc_id: i64, fields: &UpdateFields) -> Result<bool, EsError> {
-        let body = json!({"doc": fields.to_doc()});
-        let response = self.call(Method::Post, &format!("/{}/_update/{doc_id}?refresh=true", self.index), Some(&body))?;
-        Ok(response["_shards"]["failed"].as_i64().is_none_or(|failed| failed <= 0))
-    }
-
-    /// 문서 하나의 `_source`. 없으면 빈 객체다.
-    pub fn search_by_id(&self, doc_id: i64) -> Result<Value, EsError> {
-        match self.call(Method::Get, &format!("/{}/_doc/{doc_id}", self.index), None) {
-            Ok(response) => Ok(response["_source"].clone()),
-            Err(EsError::Status { status: 404, .. }) => Ok(json!({})),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// 문서를 지운다(`refresh=true`). 결과가 `deleted`일 때만 `true`다. 없는 문서는 오류다.
-    pub fn delete(&self, doc_id: i64) -> Result<bool, EsError> {
-        let response = self.call(Method::Delete, &format!("/{}/_doc/{doc_id}?refresh=true", self.index), None)?;
-        Ok(response["result"] == "deleted")
-    }
-}
-
 /// 검색 hit 하나를 읽고 점수를 `max_score` 기준 0~100으로 정규화한다.
 fn to_hit(hit: &Value, max_score: f64) -> Result<Hit, EsError> {
     let id = hit["_id"].as_str().and_then(|s| s.parse().ok()).ok_or_else(|| EsError::Parse(format!("_id를 정수로 읽지 못했다: {}", hit["_id"])))?;
     let score = hit["_score"].as_f64().unwrap_or(0.0);
     Ok(Hit { id, source: hit["_source"].clone(), score: if max_score > 0.0 { score * 100.0 / max_score } else { 0.0 } })
-}
-
-impl BookStore for EsClient {
-    fn update(&self, doc_id: i64, fields: &UpdateFields) -> Result<bool, EsError> {
-        EsClient::update(self, doc_id, fields)
-    }
-
-    fn search_by_id(&self, doc_id: i64) -> Result<Value, EsError> {
-        EsClient::search_by_id(self, doc_id)
-    }
-
-    fn delete(&self, doc_id: i64) -> Result<bool, EsError> {
-        EsClient::delete(self, doc_id)
-    }
 }
 
 impl BookSearch for EsClient {

@@ -114,7 +114,7 @@ fn connection_setup_failure_exits_255_for_missing_env_and_one_otherwise() {
     let args = vec!["t".to_string()];
     let mut out = Vec::new();
     assert_eq!(run("search", &args, &mut out, &|| Err(EsError::MissingEnv("TM_ES_URL".into()))), 255);
-    assert_eq!(run("search", &args, &mut out, &|| Err(EsError::Unsupported("x".into()))), 1);
+    assert_eq!(run("search", &args, &mut out, &|| Err(EsError::Other("x".into()))), 1);
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn search_failure_exits_one() {
     struct Down;
     impl BookSearch for Down {
         fn search_by_title(&self, _: &str, _: &str, _: i64) -> Result<Vec<Hit>, EsError> {
-            Err(EsError::Unsupported("down".into()))
+            Err(EsError::Other("down".into()))
         }
         fn search_similar_docs(&self, _: &str) -> Result<Vec<Hit>, EsError> {
             Ok(vec![])
@@ -151,7 +151,7 @@ fn similar_search_failure_exits_one() {
             Ok(vec![])
         }
         fn search_similar_docs(&self, _: &str) -> Result<Vec<Hit>, EsError> {
-            Err(EsError::Unsupported("down".into()))
+            Err(EsError::Other("down".into()))
         }
     }
     let mut out = Vec::new();

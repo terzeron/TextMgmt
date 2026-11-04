@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use bookdoctor::cli::{Options, run};
 use bookdoctor::recurse::ScratchDir;
 use bookdoctor::scan::scan_file;
-use scan_common::FileReport;
+use bookdoctor::FileReport;
 
 const OLE_STUB: &[u8] = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1 macro";
 
@@ -215,7 +215,7 @@ fn a_nested_docx_with_an_unrelated_member_name_is_scanned_as_docx() {
     let r = scan_bytes("a.zip", &zip_bytes(&[("payload.dat", &vba_docx())]), &Options::default());
     let f = r.findings.iter().find(|f| f.code == "OOXML_VBA_PROJECT").unwrap_or_else(|| panic!("{:?} {:?}", r.findings, r.reasons));
     assert!(f.location.starts_with("payload.dat!"), "{}", f.location);
-    assert_eq!(f.severity, scan_common::Severity::Critical);
+    assert_eq!(f.severity, bookdoctor::Severity::Critical);
 }
 
 #[test]
@@ -248,7 +248,7 @@ fn a_package_that_matches_several_formats_is_scanned_by_every_analyzer() {
     assert!(has_vba_under(&r, "poly.dat!"), "docx analyzer missing: {:?} {:?}", r.findings, r.reasons);
     assert!(r.findings.iter().any(|f| f.code == "REMOTE_SCRIPT" && f.location.starts_with("poly.dat!")), "epub analyzer missing: {:?}", r.findings);
     let f = r.findings.iter().find(|f| f.code == "PACKAGE_POLYGLOT").unwrap_or_else(|| panic!("{:?}", r.findings));
-    assert_eq!(f.severity, scan_common::Severity::High);
+    assert_eq!(f.severity, bookdoctor::Severity::High);
     // 한 형식만 가진 멤버는 폴리글롯이 아니다.
     let r = scan_bytes("b.zip", &zip_bytes(&[("inner.docx", &vba_docx())]), &Options::default());
     assert!(!r.has("PACKAGE_POLYGLOT"), "{:?}", r.findings);

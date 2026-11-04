@@ -27,7 +27,7 @@
 //!   `TextHooks { detect, encodings, read_bytes, read_replace, write_backup }` (loader_1.rs는 detect, read_bytes, write_backup을 쓴다)
 //! - `doc_reader::mojibake::count_mojibake_runs_with(&str, &str) -> usize` (런 정규식 패턴을 받는다)
 //! - `doc_reader::office::read_from_hwp_with(&Path, &Path, &dyn Fn(&Path) -> Result<String, String>) -> (String, usize, Vec<String>)`
-//! - `loader::record::{ReadHooks, read_file_with_hooks(...)}`: `fast_page_count`, `fallback_page_count`, `inspect` 대체 훅 (`Default` 구현)
+//! - `file_record::record::{ReadHooks, read_file_with_hooks(...)}`: `fast_page_count`, `fallback_page_count`, `inspect` 대체 훅 (`Default` 구현)
 //! - `loader::cli::{RunHooks, run_with_hooks(...)}`: `read_file`, `stat`, `on_worker_spawn` 대체 훅
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -51,9 +51,9 @@ use doc_reader::text::{Candidate, Enc, TextHooks, read_from_text_with, reencode_
 use es_client::EsError;
 use es_client::indexing::IndexStore;
 use loader::cli::{RunHooks, World, parse_options, run, run_with_hooks};
-use loader::config::Config;
+use file_record::config::Config;
 use loader::flow::{recursive_files, report_problems, sample_files};
-use loader::record::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, zip_container_type};
+use file_record::record::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, zip_container_type};
 use parser_timeout::ParserTimeout;
 use serde_json::{Value, json};
 use stat::Stat;

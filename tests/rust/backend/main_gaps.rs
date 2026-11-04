@@ -20,7 +20,7 @@
 //!   - `fn search_categories_pdf_stats(&self, categories: &[String]) -> Result<Value, EsError>`
 //!   - `fn search_category_pdf_stats(&self, category: &str) -> Result<Value, EsError>`
 //!   - 대역은 `common::es_fake::FakeEsManager`를 쓴다.
-//! - `backend::category_mapping::CategoryMappingApi` (동기 메서드, 모든 메서드에 기본 구현이 있다)
+//! - `db::category_mapping::CategoryMappingApi` (동기 메서드, 모든 메서드에 기본 구현이 있다)
 //!   - `get_classify_proposal_status(&self, content_type: &str, stale_seconds: i64) -> Value`
 //!   - `set_classify_proposal_status(&self, status: Value, content_type: &str)`
 //!   - `merge_classify_proposal_status(&self, fields: Value, content_type: &str)`
@@ -852,8 +852,8 @@ async fn wake_only_reads_storage_for_the_configured_frontend_host() {
 
 struct MockOnlineBookstore;
 
-impl backend::bookstore::BookstoreSearch for MockOnlineBookstore {
-    fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<backend::bookstore::SearchRow>, String, String) {
+impl bookstore::stores::BookstoreSearch for MockOnlineBookstore {
+    fn search(&self, isbn: &str, title: &str, author: &str) -> (Vec<bookstore::stores::SearchRow>, String, String) {
         if isbn.is_empty() && title.is_empty() && author.is_empty() {
             return (Vec::new(), String::new(), "unknown".into());
         }
@@ -875,7 +875,7 @@ impl backend::bookstore::BookstoreSearch for MockOnlineBookstore {
 #[tokio::test]
 async fn bookstore_search_validates_inputs_and_limits_results() {
     let (bm, cat) = (mock_bm(), MockCat::with_store(None));
-    let factory: BookstoreFactory = Arc::new(|name| (name == "yes24").then(|| Box::new(MockOnlineBookstore) as Box<dyn backend::bookstore::BookstoreSearch>));
+    let factory: BookstoreFactory = Arc::new(|name| (name == "yes24").then(|| Box::new(MockOnlineBookstore) as Box<dyn bookstore::stores::BookstoreSearch>));
     let app = app_with(AppDeps::new(AuthMode::Fixed(admin_payload())).with_book_manager(bm).with_category_mapping(cat).with_bookstore_factory(factory));
     let client = TestClient::with_app(app);
 
@@ -899,7 +899,7 @@ async fn bookstore_search_validates_inputs_and_limits_results() {
 #[test]
 fn bookstore_search_factory_covers_every_supported_store() {
     for store in ["yes24", "aladin", "kyobo", "ridi", "naver", "naverseries", "munpia", "joara", "naverwebtoon", "kakaowebtoon", "bomtoon", "lezhin", "toptoon"] {
-        assert!(backend::bookstore::create_bookstore_search(store).is_some(), "store={store}");
+        assert!(bookstore::stores::create_bookstore_search(store).is_some(), "store={store}");
     }
-    assert!(backend::bookstore::create_bookstore_search("unknown").is_none());
+    assert!(bookstore::stores::create_bookstore_search("unknown").is_none());
 }

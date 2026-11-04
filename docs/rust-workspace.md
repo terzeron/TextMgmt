@@ -17,40 +17,35 @@ docs/       문서
 | --- | --- |
 | `corpus_common` | 본문 표본 읽기, 인코딩 판별, ZIP 열기, 경로·URL 도구, 빈 디렉토리 청소, 병렬 풀 |
 | `corpus_layout` | 색인 제외 디렉토리 상수 |
-| `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제 |
+| `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. backend `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
-| `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출 |
+| `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
 | `pyfmt` | 일관된 문자열·숫자 출력 형식 |
 | `stat` | 색인·파싱 통계 카운터 |
-| `file_time` | 파일 생성 시각 |
+| `db` | MySQL 접근 추상화와 카테고리 매핑 저장소(`category_mapping`) |
+| `classifier` | 도서 분류기: 모델 학습·추론, 코퍼스, 서점 정책, 서점 응답 캐시. backend와 분류 도구가 함께 쓴다 |
+| `file_record` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리. loader와 backend가 함께 쓴다 |
 | `parser_timeout` | 파서 시간 상한, 스레드 제한, 자식 프로세스 종료 |
 | `isbn` | 파일에서 ISBN 추출(TXT·EPUB·PDF·DJVU·HWP) |
 | `hwp3_tables`, `hwp3_parser` | HWP 3.x 텍스트 추출 |
-| `ole_reader` | OLE 복합 파일(CFB)을 관대하게 읽는 파서와 MS-OVBA 압축 해제. 손상 구조를 오류 대신 `Anomaly`로 알린다 |
 
 ## utils (도구)
 
 | crate | 용도 |
 | --- | --- |
-| `bookdoctor` | epub·pdf·txt 보안 위험·파일 결함·렌더링 불가 구조 진단 |
-| `quarantine_broken` | 손상 문서를 `0_broken`으로 격리·복구 |
-| `cluster_hybrid_genres` | 5대 장르 비율 클러스터링 |
+| `bookdoctor` | 문서 파일 진단(`scan`), 보안 정리(`sanitize`), 결함 수리(`repair`), 손상 문서 격리·복구(`quarantine`·`unquarantine`). OLE 복합 파일 파서(`ole`)를 포함한다 |
+| `loader` | 책·만화 디렉토리의 파일을 읽어 ES 색인을 만들고 맞춘다 |
 | `search` | ES 제목·내용 검색 점검 |
-| `update` | ES 갱신·조회·삭제 점검 |
-| `move_semi_clusters` | 준확실 클러스터 이동 및 미리보기 |
-| `classify_books_client` | REST API 감시와 직접 분류 옵션 |
-| `classify_cli` | 수집·학습·평가·보정·서점 정책·분류·재분류·모델 정보 |
-| `normalize_comic_directories` | 만화 경로 스캔과 이름 변경 |
+| `trainer` | 수집·학습·평가·보정·서점 정책·분류·재분류·모델 정보 |
 
 ## 규칙
 
-- `-h`/`--help`는 도움말을 출력한다. 각 CLI의 기본 실행과 종료 코드는 아래 계약을 따른다.
-  `update`, `move_semi_clusters`, `classify_books_client`, `normalize_comic_directories`는 기본 작업을 실행하고,
-  `loader`와 `classify_cli`는 사용법을 출력하고 코드 1로 끝난다.
+- `-h`/`--help`는 도움말을 출력한다. `loader`와 `trainer`는 인자 없이 실행하면 사용법을 출력하고 코드 1로 끝난다.
 - 잘못된 인자의 출력 위치와 종료 코드는 각 CLI 계약을 따른다.
 - **테스트를 먼저 쓴다(TDD).** 정해진 동작 사례를 Rust 테스트로 먼저 옮기고 실패를 확인한 뒤 구현한다.
 - **커버리지는 100%에 가깝게 유지한다.** `cargo llvm-cov --workspace --summary-only`.
-- **라이브러리는 도구에 의존하지 않는다.** 공유할 코드는 `libs/`로 올린다.
+- **라이브러리와 backend는 도구에 의존하지 않는다.** 공유할 코드는 `libs/`로 올린다.
+- **한 crate만 쓰는 코드는 그 crate 안에 둔다.** 사용자가 둘 이상이 될 때 `libs/`로 올린다.
 - `bookstore`는 공개 서점 HTTPS를 사용한다. ES client도 HTTP와 인증서 검증 HTTPS를 지원하며, 사설 CA는 `TM_ES_CA_CERT` PEM 경로로 지정한다. 인증서 검증을 끄는 우회로는 두지 않는다.
 - ZIP은 `corpus_common::reader::open_zip`으로 연다. `zip` 크레이트 기본 설정(`Detect`)은 파일 전체를 훑어 느리다
   (1.5MB EPUB 하나에 읽기 1만 3천 번, 48ms). `open_zip`은 `Known(0)`으로 먼저 열고(0.2ms) 실패하면 `Detect`로 다시 연다.
@@ -76,17 +71,17 @@ docs/       문서
 - Bearer만 사용하는 CLI는 Origin 없이 호출할 수 있다. 인증 쿠키도 보내면 Origin 또는 Referer를 지정해야 한다.
   쿠키 없는 익명 디버깅 로그에는 출처 검사를 적용하지 않는다.
 
-## 분류 CLI
+## 분류 모델 관리 (trainer)
 
-`cargo run -p classify_cli -- <명령>`으로 실행한다. 인자 없이 실행하면 도움말을 출력하고 종료 코드 1을 반환한다.
+`cargo run -p trainer -- <명령>`으로 실행한다. 인자 없이 실행하면 도움말을 출력하고 종료 코드 1을 반환한다.
 `collect`, `train`, `evaluate`, `score-calibration`, `bookstore-policy`, `classify`, `reclassify`, `info`를 지원한다.
 
 ```sh
-cargo run -p classify_cli -- collect --out tmp/classifier/corpus.jsonl
-cargo run -p classify_cli -- train --corpus tmp/classifier/corpus.jsonl --out tmp/classifier/export
-cargo run -p classify_cli -- evaluate --corpus tmp/classifier/corpus.jsonl --model tmp/classifier/export
-cargo run -p classify_cli -- classify book.txt --model tmp/classifier/export --no-es
-cargo run -p classify_cli -- reclassify 0_inbox --library-root /books --model tmp/classifier/export --no-es
+cargo run -p trainer -- collect --out tmp/classifier/corpus.jsonl
+cargo run -p trainer -- train --corpus tmp/classifier/corpus.jsonl --out tmp/classifier/export
+cargo run -p trainer -- evaluate --corpus tmp/classifier/corpus.jsonl --model tmp/classifier/export
+cargo run -p trainer -- classify book.txt --model tmp/classifier/export --no-es
+cargo run -p trainer -- reclassify 0_inbox --library-root /books --model tmp/classifier/export --no-es
 ```
 
 - `--model`과 `train --out`은 JSON·가중치 파일을 담는 **디렉토리**다. 기본값은 `TM_CLASSIFIER_MODEL_DIR`, 없으면 `backend/classifier/export`다.
@@ -99,10 +94,11 @@ cargo run -p classify_cli -- reclassify 0_inbox --library-root /books --model tm
   `--reband PATH`는 서점 접속 없이 저장된 행을 다시 집계한다. 실서점 응답의 정확성은 네트워크와 HTML 상태에 달려 있다.
 - `reclassify`는 기본 미리보기다. `--apply`를 붙여야 이동하며, 목적지 충돌과 카테고리 심볼릭 링크를 거부한다.
   같은 filesystem에서는 inode를 보존하고, 다른 filesystem에서는 복사 후 원본을 지운다. 파일 이동 실패를 출력·집계한 뒤 종료 코드 0을 반환한다.
-- 테스트는 `tests/rust/classify_cli/cli.rs`에 등록했다. 기존 `tests/rust/backend/classify_cli*.rs`는 구현 전 가정 API로 작성한 미등록 테스트다.
+- 분류 도구는 backend가 아니라 `libs/classifier`에 의존한다. 기본 모델 경로는 전과 같이 `backend/classifier/export`다.
+- 테스트는 `tests/rust/trainer/cli.rs`에 등록했다. 분류기 자체 테스트는 `tests/rust/classifier/`에 있다. 기존 `tests/rust/backend/classify_cli*.rs`는 구현 전 가정 API로 작성한 미등록 테스트다.
   새 테스트는 실제 export 모델과 현재 `EsTransport`·`CommandRunner` 계약으로 실행한다.
 
-검증: `cargo test -p classify_cli --locked`, `cargo clippy -p classify_cli --all-targets --locked -- -D warnings`.
+검증: `cargo test -p trainer --locked`, `cargo clippy -p trainer --all-targets --locked -- -D warnings`.
 
 ## 새 crate 추가
 

@@ -1,6 +1,6 @@
 //! 구형 DOC(OLE 복합 파일) 분석 테스트. fixture는 합성이다: 코퍼스에 .doc가 없다.
 
-#[path = "../ole_reader/common.rs"]
+#[path = "ole_common.rs"]
 mod ole_common;
 
 use std::fs;
@@ -10,7 +10,7 @@ use bookdoctor::cli::{Options, run};
 use bookdoctor::scan::scan_file;
 use bookdoctor::viewer::viewer_blocked;
 use ole_common::{Cfb, compress, dir_stream, make_cfb, make_cfb_v4, module_stream};
-use scan_common::{Category, FileReport, Finding, Format, Severity, ViewerBlocked};
+use bookdoctor::{Category, FileReport, Finding, Format, Severity, ViewerBlocked};
 
 /// `WordDocument` 스트림: FIB 32바이트(wIdent, nFib, flags1)를 512바이트로 채우고 본문을 붙인다.
 fn word_stream(flags1: u16, body: &[u8]) -> Vec<u8> {
@@ -187,7 +187,7 @@ fn a_giant_unterminated_field_is_bounded() {
 fn structural_damage_is_reported_with_ole_codes_and_a_security_summary() {
     let cfb = doc_cfb(&[("Data", &[7u8; 5000][..])], 0, b"hi");
     let bytes = cfb.bytes.clone();
-    let start = ole_reader::OleFile::from_bytes(bytes.clone(), &ole_reader::Limits::default()).unwrap().find("Data").unwrap().start;
+    let start = bookdoctor::ole::OleFile::from_bytes(bytes.clone(), &bookdoctor::ole::Limits::default()).unwrap().find("Data").unwrap().start;
     let mut b = bytes;
     let at = cfb.fat_entry_offset(start);
     b[at..at + 4].copy_from_slice(&start.to_le_bytes());

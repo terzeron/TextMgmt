@@ -37,8 +37,8 @@
 //! - `backend::book_manager::{BookContent::{File(PathBuf), Text(String)}, BookResponse { status_code: u16, body: Vec<u8> }, RuntimeError(String), ProposeOptions { use_bookstore: Option<bool>, use_content_meta: Option<bool>, on_progress: Option<&dyn Fn(Value)> }: Default}`
 //! - `sysdeps::{FsOps, CommandRunner, CommandOutput { returncode: i32, stdout: Vec<u8>, stderr: Vec<u8> }, CommandError::{Timeout, NotFound, Failed(String)}}` (문서 3.1. `FsOps`는 `common::faulty_fs::FaultyFs`, `CommandRunner`는 `common::runner::FakeRunner`가 구현한다)
 //! - `backend::pdf::{PdfOpener { fn open(&self, &Path) -> Result<Box<dyn PdfDoc>, PdfError> }, PdfDoc (page_count/pdf_version/docinfo/check_pdf_syntax/close), PdfPageOps (page_count/extract_pages), PdfError { kind, message }}` (문서 3.11)
-//! - `backend::classifier::Classify { fn is_available(&self) -> bool; fn classify_path(&self, &Path, Option<f64>) -> Result<Prediction, String>; fn classify_document(&self, &Value, Option<f64>) -> Result<Prediction, String> }`
-//! - `backend::classifier::model::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str) -> Prediction`
+//! - `classifier::Classify { fn is_available(&self) -> bool; fn classify_path(&self, &Path, Option<f64>) -> Result<Prediction, String>; fn classify_document(&self, &Value, Option<f64>) -> Result<Prediction, String> }`
+//! - `classifier::model::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str) -> Prediction`
 //! - `backend::es_manager::{EsManagerApi, EsError, ESManager::connect(env, connector, clock)}` (문서 3.3. 대역은 `common::es_fake::FakeEsManager`)
 //! - 파일 읽기(`Loader.read_file`)는 `backend::book_manager::DefaultFileReader`로 대신한다(실제 ES 테스트에서만). `loader` crate에는 의존하지 않는다.
 //!
@@ -59,8 +59,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use backend::book::{Book, BookPage};
 use backend::book_manager::{BookContent, BookManager, BookManagerDeps, BookResponse, FileReader, ProposeOptions, RuntimeError};
-use backend::classifier::Classify;
-use backend::classifier::model::Prediction;
+use classifier::Classify;
+use classifier::model::Prediction;
 use backend::es_manager::{ESManager, EsError, EsManagerApi};
 use backend::pdf::{PdfDoc, PdfError, PdfOpener, PdfPageOps};
 use common::clock::Event;
@@ -275,7 +275,7 @@ impl EsManagerApi for BackfillEs {
 // ---------------------------------------------------------------------------
 
 /// `Loader.read_file(path)` 대응. 기본 `FileReader`(`DefaultFileReader`)로 문서 하나를 만든다.
-/// 운영용 `loader::record::read_file`은 사용자의 미커밋 crate라 쓰지 않는다. 이 테스트는 카테고리·제목·저자·크기·형식만 확인한다.
+/// 운영용 `file_record::record::read_file`은 사용자의 미커밋 crate라 쓰지 않는다. 이 테스트는 카테고리·제목·저자·크기·형식만 확인한다.
 fn loader_read_file(path: &Path) -> Docs {
     let book_dir = PathBuf::from(std::env::var("TM_BOOK_DIR").unwrap());
     loader_read_file_from(&book_dir, path)
@@ -3788,4 +3788,77 @@ fn test_validate_pdf_not_found() {
     let (result, err) = split(run(manager.validate_pdf(999)));
     assert!(result.is_none());
     assert!(err.as_deref().unwrap().to_lowercase().contains("not found"));
+}
+
+// ---- coverage: update.rs 재색인·복구·조회 오류 경로 ----
+
+/// `A/old.txt` 문서와 파일을 만들고 `A/new.txt`로 옮기는 update_book을 실행한다.
+fn update_old_to_new(es: &Arc<FakeEsManager>, tmp_path: &Path) -> (String, Option<String>) {
+    let doc = make_doc("A/old.txt", ".txt");
+    es.on_search_by_id(move |_| Ok(Some(doc.clone())));
+    mkdir(tmp_path.join("A"));
+    write(tmp_path.join("A/old.txt"), "x");
+    let manager = make_manager(tmp_path, es);
+    as_status(run(manager.update_book(1, "A", "T", "U", &tmp_path.join("A/new.txt"), ".txt")))
+}
+
+#[test]
+fn test_update_book_reindex_with_another_id_fails_and_restore_reports_it() {
+    let tmp = TempDir::new().unwrap();
+    let es = FakeEsManager::new();
+    // 재색인과 복구 모두 다른 id를 돌려준다.
+    es.on_insert(|_data: &Docs| Ok(vec![999]));
+    let (status, msg) = update_old_to_new(&es, tmp.path());
+    assert_eq!(status, "Error");
+    assert!(msg.as_deref().unwrap().contains("기존 ES 문서 복구 실패: None"), "{msg:?}");
+    assert!(tmp.path().join("A/old.txt").exists());
+}
+
+#[test]
+fn test_update_book_reindex_exception_restores_or_reports_the_old_doc() {
+    let tmp = TempDir::new().unwrap();
+    let es = FakeEsManager::new();
+    es.on_insert(|_data: &Docs| Err(EsError::Other("es fail".to_string())));
+    let (status, msg) = update_old_to_new(&es, tmp.path());
+    assert_eq!(status, "Error");
+    assert!(msg.as_deref().unwrap().contains("ES 재색인 예외, 파일 롤백 완료, 기존 ES 문서 복구 실패"), "{msg:?}");
+
+    // 첫 삽입(재색인)만 실패하고 복구 삽입은 성공한다.
+    let tmp = TempDir::new().unwrap();
+    let es = FakeEsManager::new();
+    let calls = Arc::new(Mutex::new(0));
+    es.on_insert(move |_data: &Docs| {
+        let mut n = calls.lock().unwrap();
+        *n += 1;
+        if *n == 1 { Err(EsError::Other("es fail".to_string())) } else { Ok(vec![1]) }
+    });
+    let (status, msg) = update_old_to_new(&es, tmp.path());
+    assert_eq!(status, "Error");
+    assert!(msg.as_deref().unwrap().contains("ES 재색인 예외, 파일 롤백 및 기존 ES 문서 복구 완료"), "{msg:?}");
+}
+
+#[test]
+fn test_update_and_delete_book_report_search_errors() {
+    let tmp = TempDir::new().unwrap();
+    let es = FakeEsManager::new();
+    es.on_search_by_id(|_| Err(EsError::Other("search down".to_string())));
+    let manager = make_manager(tmp.path(), &es);
+    let (status, msg) = as_status(run(manager.update_book(1, "A", "T", "U", &tmp.path().join("A/new.txt"), ".txt")));
+    assert_eq!(status, "Error");
+    assert!(msg.as_deref().unwrap().contains("search down"), "{msg:?}");
+    let (status, msg) = as_deletion(run(manager.delete_book(1)));
+    assert_eq!(status, "Error");
+    assert!(msg.as_deref().unwrap().contains("search down"), "{msg:?}");
+}
+
+#[test]
+fn test_index_single_file_reports_a_cleanup_failure() {
+    let tmp = TempDir::new().unwrap();
+    let es = FakeEsManager::new();
+    es.fail("delete_by_file_paths", "cleanup down");
+    mkdir(tmp.path().join("A"));
+    write(tmp.path().join("A/x.txt"), "본문");
+    let manager = make_manager(tmp.path(), &es);
+    let error = run(manager.index_single_file("A/x.txt")).unwrap_err();
+    assert!(error.contains("기존 ES 문서 정리 실패"), "{error}");
 }

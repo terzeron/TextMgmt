@@ -4,14 +4,14 @@
 //!
 //! 가정한 API:
 //! - `backend::auth::observation_hash(value: &str) -> String`
-//! - `backend::bookstore::KyoboBookstore::new(verbose: bool) -> Self` (pub 필드 `max_results: usize`)
-//! - `backend::bookstore::AbstractBookstore::extract_search_links(&self, soup: &str) -> Vec<String>` (BeautifulSoup 대신 HTML 문자열)
-//! - `backend::bookstore::MAX_RESULTS: usize` (서점 하나가 돌려주는 결과 수 기본 상한)
+//! - `bookstore::stores::KyoboBookstore::new(verbose: bool) -> Self` (pub 필드 `max_results: usize`)
+//! - `bookstore::stores::AbstractBookstore::extract_search_links(&self, soup: &str) -> Vec<String>` (BeautifulSoup 대신 HTML 문자열)
+//! - `bookstore::stores::MAX_RESULTS: usize` (서점 하나가 돌려주는 결과 수 기본 상한)
 
 mod common;
 
 use backend::auth;
-use backend::bookstore::{AbstractBookstore, KyoboBookstore};
+use bookstore::stores::{AbstractBookstore, KyoboBookstore};
 
 #[test]
 fn test_observation_hash_of_empty_value_is_empty_string() {

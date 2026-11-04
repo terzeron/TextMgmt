@@ -27,7 +27,7 @@
 //!     호출 예: `propose_category_changes(category, mappings, ...)`, `apply_category_changes(items, allowed, ...)`.
 //!   - `Err(String)`(Python 예외)은 반환형이 `Result`인 메서드(`reload_*`, `get_category_mismatch_details`)에서만 값으로 전달된다. 나머지는 `Mock`이 패닉으로 올린다.
 //! - `backend::es_manager::{EsManagerApi, EsError}`: `delete(&self, i64) -> Result<bool, EsError>`
-//! - `backend::category_mapping::{CategoryMappingApi, MappingError}`: 동기 메서드이고 모든 메서드에 기본 구현이 있다. 메서드 모양은 아래 `impl CategoryMappingApi for Mock`을 본다.
+//! - `db::category_mapping::{CategoryMappingApi, MappingError}`: 동기 메서드이고 모든 메서드에 기본 구현이 있다. 메서드 모양은 아래 `impl CategoryMappingApi for Mock`을 본다.
 //! - `backend::refresh_token_store::RefreshTokenStoreApi`: `rotate(...) -> Result<String, String>`, `revoke_family(&self, family_id, reason)` (모양은 `impl RefreshTokenStoreApi for Mock`)
 //! - `backend::main::create_item_router(manager: Arc<dyn BookManagerApi>, category_mapping: Arc<dyn CategoryMappingApi>, content_type: &str) -> ItemRouter`
 //!   - `ItemRouter::run_classify_proposal_job(&self, category: &str, use_bookstore: bool, use_content_meta: bool, delay: f64)` (async)
@@ -53,7 +53,7 @@ use std::time::Duration;
 use axum::http::Method;
 use backend::book::{Book, BookLookupError, BookPage};
 use backend::book_manager::{BookContent, BookManagerApi, BookResponse, CoverPage};
-use backend::db::{DbValue, Row};
+use db::{DbValue, Row};
 use backend::es_manager::{EsError, EsManagerApi};
 use backend::main::{
     AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookstoreFactory, BookstoreSearch, CategoryMappingApi, GoogleVerifier, MappingError, ProposeCategoryChanges, ReloadProgress, RoleResolver,

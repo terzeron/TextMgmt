@@ -9,7 +9,7 @@ use bookdoctor::report::write_json_line;
 use bookdoctor::scan::scan_file;
 use bookdoctor::viewer::{EPUB_CODES, PDF_CODES, TXT_CODES, viewer_blocked};
 use regex::Regex;
-use scan_common::{Category, Format, ViewerBlocked};
+use bookdoctor::{Category, Format, ViewerBlocked};
 
 const EPUB_SECURITY_RS: &str = include_str!("../../../utils/bookdoctor/src/epub/security.rs");
 /// EPUB의 ZIP 이름 규칙(`ZIP_PATH_TRAVERSAL` 등)은 `zipnames.rs`로 옮겨 갔다. EPUB 지표 코드의 출처는 두 파일이다.
@@ -18,7 +18,7 @@ const PDF_SECURITY_RS: &str = include_str!("../../../utils/bookdoctor/src/pdf/se
 const TXT_RS: &str = include_str!("../../../utils/bookdoctor/src/txt.rs");
 
 fn opts() -> Options {
-    Options { no_poppler: true, ..Options::default() }
+    Options { no_pdf_worker: true, ..Options::default() }
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn scripted_epub() -> common::NamedFile {
     f
 }
 
-fn value_of(r: &scan_common::FileReport, code: &str) -> ViewerBlocked {
+fn value_of(r: &bookdoctor::FileReport, code: &str) -> ViewerBlocked {
     r.findings.iter().find(|f| f.code == code).unwrap_or_else(|| panic!("{code} 없음: {:?}", r.findings)).viewer_blocked
 }
 
@@ -153,15 +153,6 @@ fn json_shows_viewer_blocked_values() {
     let mut out = Vec::new();
     write_json_line(&scan_file(d.path(), &opts()), &mut out).unwrap();
     assert!(String::from_utf8(out).unwrap().contains("\"viewer_blocked\":\"n/a\""));
-}
-
-#[test]
-fn only_filter_keeps_viewer_values() {
-    let e = scripted_epub();
-    let r = scan_file(e.path(), &Options { only: vec![Category::Security], ..opts() });
-    assert!(!r.findings.is_empty());
-    assert!(r.findings.iter().all(|f| f.category == Category::Security));
-    assert_eq!(value_of(&r, "SCRIPT_TAG"), ViewerBlocked::Blocked);
 }
 
 #[test]

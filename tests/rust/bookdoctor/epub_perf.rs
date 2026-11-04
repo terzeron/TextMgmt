@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 
 use bookdoctor::epub::security::{DECODE_CALLS, Limits, scan};
-use scan_common::{FileReport, Format};
+use bookdoctor::{FileReport, Format};
 
 /// `DECODE_CALLS`는 프로세스 전체 카운터라서 읽는 테스트끼리 순서를 세운다.
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -61,7 +61,7 @@ fn binary_member_checks_still_run_without_decoding() {
     common::epub_with_files(&p, &common::clean_opf(), &common::xhtml("<p>본문</p>"), &[("OEBPS/cover.jpg", &pe)]);
     let (r, _) = scan_counting(&p);
     let f = r.findings.iter().find(|f| f.code == "PE_EXECUTABLE_CONTENT").unwrap_or_else(|| panic!("{:?}", r.findings));
-    assert_eq!(f.severity, scan_common::Severity::Critical);
+    assert_eq!(f.severity, bookdoctor::Severity::Critical);
 }
 
 #[test]

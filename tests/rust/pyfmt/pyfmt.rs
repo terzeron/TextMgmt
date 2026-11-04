@@ -24,13 +24,6 @@ fn python_repr_escapes_control_characters_and_formats_floats_like_python() {
 }
 
 #[test]
-fn py_float_matches_python_repr() {
-    assert_eq!(py_float(100.0), "100.0");
-    assert_eq!(py_float(66.7), "66.7");
-    assert_eq!(py_float(0.0), "0.0");
-}
-
-#[test]
 fn py_round_matches_python_round_half_even_on_the_binary_value() {
     // Python round(0.03125, 4) == 0.0312 (정확히 표현되는 동점은 짝수 쪽), round(0.35, 1) == 0.3
     assert_eq!(py_round(0.03125, 4), 0.0312);

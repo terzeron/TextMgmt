@@ -9,9 +9,9 @@ use std::sync::LazyLock;
 use corpus_common::reader::{Zip, open_zip};
 use corpus_common::util::{posix_join, posix_normpath, unquote};
 use regex::Regex;
-use scan_common::sniff::{Sniffed, sniff};
-use scan_common::text::sanitize_display;
-use scan_common::{Category, FileReport, Severity};
+use crate::sniff::{Sniffed, sniff};
+use crate::display::sanitize_display;
+use crate::{Category, FileReport, Severity};
 
 use super::fast::read_failure;
 use crate::epub::security::{Limits, TextEnc, decode_text, read_limited};

@@ -205,13 +205,14 @@ dependencies = [
  "base64 0.23.1",
  "bookstore",
  "chrono",
- "corpus_common",
+ "classifier",
  "corpus_layout",
- "diesel",
+ "db",
  "doc_reader",
  "epubveri",
  "es_client",
  "fancy-regex",
+ "file_record",
  "flate2",
  "htmlkit",
  "hwp3_parser",
@@ -220,11 +221,9 @@ dependencies = [
  "isbn",
  "jpeg-encoder",
  "jsonwebtoken",
- "loader",
  "log",
  "lopdf",
  "md-5",
- "mysqlclient-sys",
  "pyfmt",
  "regex",
  "roxmltree",
@@ -406,11 +405,10 @@ dependencies = [
  "flate2",
  "htmlkit",
  "lopdf",
- "ole_reader",
  "rayon",
  "regex",
  "roxmltree",
- "scan_common",
+ "scraper",
  "serde",
  "serde_json",
  "sha2",
@@ -424,9 +422,13 @@ name = "bookstore"
 version = "0.1.0"
 dependencies = [
  "htmlkit",
+ "log",
+ "pyfmt",
  "regex",
  "scraper",
  "serde_json",
+ "sysdeps",
+ "tempfile",
  "ureq",
 ]
 
@@ -566,38 +568,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "classify_books_client"
+name = "classifier"
 version = "0.1.0"
 dependencies = [
- "backend",
- "chrono",
- "serde_json",
- "ureq",
-]
-
-[[package]]
-name = "classify_cli"
-version = "0.1.0"
-dependencies = [
- "backend",
+ "base64 0.23.1",
  "bookstore",
- "log",
- "regex",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "cluster_hybrid_genres"
-version = "0.1.0"
-dependencies = [
+ "chrono",
  "corpus_common",
- "encoding_rs",
+ "db",
+ "es_client",
  "fancy-regex",
- "indexmap 2.14.2",
+ "image",
+ "log",
  "pyfmt",
+ "regex",
+ "roxmltree",
  "serde",
  "serde_json",
+ "sha2",
+ "sysdeps",
  "tempfile",
  "zip",
 ]
@@ -727,8 +716,8 @@ dependencies = [
  "chrono",
  "encoding_rs",
  "pyfmt",
+ "rayon",
  "regex",
- "scan_common",
  "tempfile",
  "zip",
 ]
@@ -885,6 +874,17 @@ dependencies = [
  "darling_core 0.24.1",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "db"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "diesel",
+ "log",
+ "mysqlclient-sys",
+ "serde_json",
 ]
 
 [[package]]
@@ -1264,10 +1264,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "file_time"
+name = "file_record"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "corpus_common",
+ "doc_reader",
+ "isbn",
+ "lopdf",
+ "parser_timeout",
+ "serde_json",
+ "stat",
  "tempfile",
 ]
 
@@ -2162,16 +2169,14 @@ name = "loader"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "corpus_common",
  "corpus_layout",
  "doc_reader",
  "encoding_rs",
  "es_client",
- "file_time",
+ "file_record",
  "hwp3_parser",
  "hwp3_tables",
  "isbn",
- "lopdf",
  "parser_timeout",
  "serde_json",
  "stat",
@@ -2300,15 +2305,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "move_semi_clusters"
-version = "0.1.0"
-dependencies = [
- "corpus_common",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2430,19 +2426,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "normalize_comic_directories"
-version = "0.1.0"
-dependencies = [
- "bookstore",
- "chrono",
- "fancy-regex",
- "pyfmt",
- "serde_json",
- "tempfile",
- "unicode-normalization",
-]
-
-[[package]]
 name = "num"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2518,13 +2501,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "ole_reader"
-version = "0.1.0"
-dependencies = [
- "tempfile",
 ]
 
 [[package]]
@@ -2835,19 +2811,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quarantine_broken"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "corpus_common",
- "indexmap 2.14.2",
- "scan_common",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3151,16 +3114,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "scan_common"
-version = "0.1.0"
-dependencies = [
- "rayon",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -3921,6 +3874,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "trainer"
+version = "0.1.0"
+dependencies = [
+ "bookstore",
+ "classifier",
+ "es_client",
+ "log",
+ "regex",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3988,16 +3954,6 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
-
-[[package]]
-name = "update"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "es_client",
- "pyfmt",
- "serde_json",
-]
 
 [[package]]
 name = "ureq"

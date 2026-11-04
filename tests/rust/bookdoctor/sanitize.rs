@@ -7,7 +7,7 @@ use std::io::{Cursor, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use bookdoctor::cli::run_with_env;
+use bookdoctor::cli::{Options, execute, parse};
 use bookdoctor::sanitize::{rebuild, strip_css, strip_markup, verify};
 use common::*;
 
@@ -348,7 +348,7 @@ fn output_never_carries_terminal_escapes_from_member_names() {
     let opf = opf_with(r#"<item id="e" href="Misc/a%1B%5B31mred.exe" media-type="application/x-dosexec"/>"#);
     let p = d.path().join("a.epub");
     epub_with_files(&p, &opf, &xhtml("<script>x</script><p>t</p>"), &[("OEBPS/Misc/a\u{1b}[31mred.exe", b"MZ\x90\x00more")]);
-    let (code, out) = run(&["--sanitize", "--dry-run", p.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
     assert_eq!(code, 0, "{out:?}");
     assert!(!out.contains('\u{1b}'), "{out:?}");
 }
@@ -357,11 +357,10 @@ fn output_never_carries_terminal_escapes_from_member_names() {
 fn a_file_with_security_findings_left_after_rebuild_is_not_applied() {
     // manifest가 압축 밖을 가리키는 항목은 허용 목록으로 고치지 못한다. 남은 보안 지표가 있으면 적용하지 않는다.
     let d = tempfile::tempdir().unwrap();
-    let trash = d.path().join("0_trash");
     let p = d.path().join("a.epub");
     epub_with_files(&p, &opf_with(r#"<item id="esc" href="../../outside.xhtml" media-type="application/xhtml+xml"/>"#), &xhtml("<p>본문</p><script>alert(1)</script>"), &[]);
     let before = fs::read(&p).unwrap();
-    let (code, out) = run(&["--sanitize", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("SKIP"), "{out}");
     assert_eq!(fs::read(&p).unwrap(), before);
@@ -543,12 +542,16 @@ fn only_a_real_package_document_is_exempt_from_the_extension_allowlist() {
     assert!(names(&rebuild(&src).unwrap().bytes).contains(&"OEBPS/package.dat".to_string()));
 }
 
-// ---- 실행: --dry-run, 적용, 휴지통 ----
+// ---- 실행: 적용, 휴지통 ----
 
-fn run(args: &[&str]) -> (i32, String) {
+/// `root`를 코퍼스 루트로 삼아 명령을 실행한다. 휴지통은 `root/0_trash`다.
+fn run_in(root: &Path, args: &[&str]) -> (i32, String) {
     let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     let mut out = Vec::new();
-    let code = run_with_env(&argv, &mut out, false, true);
+    let code = match parse(&argv) {
+        Ok(o) => execute(&Options { library_root: root.to_path_buf(), ..o }, &mut out, false, true),
+        Err(_) => 2,
+    };
     (code, String::from_utf8_lossy(&out).into_owned())
 }
 
@@ -557,17 +560,6 @@ fn infected(dir: &Path, name: &str) -> std::path::PathBuf {
     let p = dir.join(name);
     epub_with_files(&p, &opf, &xhtml("<p>본문</p><script>alert(1)</script>"), &[("OEBPS/Misc/setup.exe", b"MZ\x90\x00more")]);
     p
-}
-
-#[test]
-fn dry_run_lists_changes_without_touching_anything() {
-    let d = tempfile::tempdir().unwrap();
-    let p = infected(d.path(), "a.epub");
-    let before = fs::read(&p).unwrap();
-    let (code, out) = run(&["--sanitize", "--dry-run", p.to_str().unwrap()]);
-    assert_eq!(code, 0, "{out}");
-    assert!(out.contains("setup.exe") && out.contains("ch1.xhtml"), "{out}");
-    assert_eq!(fs::read(&p).unwrap(), before);
 }
 
 #[test]
@@ -580,7 +572,7 @@ fn apply_moves_the_original_to_trash_and_overwrites_in_place() {
         let m = fs::metadata(&p).unwrap();
         (m.ino(), m.modified().unwrap())
     };
-    let (code, out) = run(&["--sanitize", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     let m = fs::metadata(&p).unwrap();
     assert_eq!((m.ino(), m.modified().unwrap()), (ino, mtime), "inode와 mtime을 유지한다");
@@ -589,7 +581,7 @@ fn apply_moves_the_original_to_trash_and_overwrites_in_place() {
     assert!(!names(&now).iter().any(|n| n.ends_with("setup.exe")));
     assert!(!member(&now, "OEBPS/ch1.xhtml").contains("script"));
     // 다시 돌려도 더 바꿀 것이 없고 휴지통에 새 사본이 늘지 않는다.
-    let (code, out) = run(&["--sanitize", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(fs::read_dir(&trash).unwrap().count(), 1);
 }
@@ -604,19 +596,9 @@ fn trash_name_collisions_get_a_suffix_and_clean_files_are_left_alone() {
     let clean = d.path().join("clean.epub");
     epub_with_chapter(&clean, &xhtml("<p>본문</p>"));
     let clean_before = fs::read(&clean).unwrap();
-    let (code, out) = run(&["--sanitize", "--trash-dir", trash.to_str().unwrap(), p.to_str().unwrap(), clean.to_str().unwrap()]);
+    let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap(), clean.to_str().unwrap()]);
     assert_eq!(code, 0, "{out}");
     assert_eq!(fs::read(trash.join("a.epub")).unwrap(), b"older");
     assert_eq!(fs::read_dir(&trash).unwrap().count(), 2);
     assert_eq!(fs::read(&clean).unwrap(), clean_before);
-}
-
-#[test]
-fn sanitize_needs_a_destination_or_dry_run() {
-    let d = tempfile::tempdir().unwrap();
-    let p = infected(d.path(), "a.epub");
-    let before = fs::read(&p).unwrap();
-    let (code, _) = run(&["--sanitize", p.to_str().unwrap()]);
-    assert_eq!(code, 2);
-    assert_eq!(fs::read(&p).unwrap(), before);
 }

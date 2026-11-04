@@ -2,21 +2,30 @@
 
 pub mod cli;
 pub mod common;
+pub mod display;
 pub mod doc;
 pub mod html;
-pub mod isolate;
 pub mod hwp;
 pub mod epub;
 pub mod exe;
+pub mod finding;
 pub mod mojibake;
+pub mod ole;
 pub mod pdf;
 pub mod prefetch;
+pub mod quarantine;
 pub mod recurse;
+pub mod repair;
 pub mod report;
 pub mod rules;
+pub mod runner;
 pub mod sanitize;
 pub mod scan;
+pub mod sniff;
 pub mod txt;
 pub mod viewer;
 pub mod zipcheck;
 pub mod zipnames;
+
+pub use finding::{Category, FileReport, Finding, Format, Severity, ViewerBlocked};
+pub use runner::{Report, Summary, scan_streaming};

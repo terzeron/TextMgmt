@@ -11,9 +11,9 @@ use regex::bytes::Regex;
 
 use lopdf::xref::XrefEntry;
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
-use scan_common::sniff::{Sniffed, sniff};
-use scan_common::text::sanitize as sanitize_text;
-use scan_common::{Category, FileReport, Severity};
+use crate::sniff::{Sniffed, sniff};
+use crate::display::sanitize as sanitize_text;
+use crate::{Category, FileReport, Severity};
 
 use crate::epub::security::guarded;
 
@@ -37,7 +37,7 @@ const REF_ARRAY_KEEP_LEN: usize = 20_000;
 /// 배열 하나는 2만 개 x 120B = 약 2.4MB다. 배열 수는 파일 크기가 막지만 크기 한도(`--max-total-mb`)만으로는 참조 폭탄이
 /// 한도 x 20배를 쓸 수 있어 안전하지 않다. 그래서 읽기 전에 원본 참조 수를 세어 이 예산을 넘으면 참조 배열도 비우는 훅을 쓴다.
 /// 예산 안이면 참조 노드는 최대 50만 x 120B = 약 60MB다. 읽은 뒤 센 "남긴 참조 노드" 합계가 이를 넘으면 쪽 트리 판정을 믿지 않고 `incomplete`로 알린다. 표본 최대 쪽 수의 약 180배(노드 약 60MB)다.
-const REF_FILE_BUDGET: usize = 500_000;
+pub(crate) const REF_FILE_BUDGET: usize = 500_000;
 /// 훅이 비운 참조 배열이 들어 있던 자리에 남기는 표지 이름. 진짜 빈 배열과 구별해 읽은 뒤에 찾는다.
 const EMPTIED_REF_ARRAY_MARK: &[u8] = b"PdfscanEmptiedRefArray";
 /// Bound the amount of input PDF data held by concurrent scans. `lopdf` may
@@ -249,7 +249,7 @@ fn shrink_on_load_strict(id: ObjectId, obj: &mut Object) -> Option<(ObjectId, Ob
 /// 수명 내내 유지되고 `/ObjStm` 개수 상한이 없으므로 최악은 약 200MB × ObjStm 개수이며, 프로세스 안에는 이를 막는 한도가 없다. 이는 예전 PDF 검사 도구와 같은 동작이다(Ruling R20).
 /// 작업자 수 상한은 문서 하나의 메모리를 막지 못하고, 외부 메모리 한도(cgroup/ulimit)만 막는다. `/ObjStm` 개수로 훅을 고르면
 /// ObjStm를 쓰는 현대 PDF 대부분이 엄격 훅이 되어 긴 /Kids가 모두 비워지므로(오탐성 incomplete) 하지 않는다.
-fn count_raw_references(data: &[u8]) -> usize {
+pub(crate) fn count_raw_references(data: &[u8]) -> usize {
     static RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"(?-u)[0-9]+(?:[ \t\r\n\x0c\x00]|%[^\r\n]*[\r\n])+[0-9]+(?:[ \t\r\n\x0c\x00]|%[^\r\n]*[\r\n])*R").ok());
     RE.as_ref().map_or(0, |re| re.find_iter(data).count())
 }

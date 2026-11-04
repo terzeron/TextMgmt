@@ -2,9 +2,9 @@
 //! 설계: docs/rust-test-seams.md 3.3. 구 `EsApi`(call)와 `EsLike`(index_name/get/search)를 `EsTransport` 하나로 통일했다.
 //!
 //! 가정한 API (아직 구현 전이다):
-//! - `backend::es_manager::EsTransport`: `fn index_name(&self) -> &str`, `fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>`
+//! - `es_client::transport::EsTransport`: `fn index_name(&self) -> &str`, `fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>`
 //!   (`get`, `search`는 `call("get")`, `call("search")`로 가는 기본 구현이다. Python `Elasticsearch` 클라이언트의 메서드 호출을 `op`와 키워드 인자 JSON으로 옮긴 것이다. `indices.exists`처럼 점으로 하위 객체를 쓴다)
-//! - `backend::es_manager::EsError`: `MissingEnv`, `Transport(String)`, `Status { status: u16, body: String }`, `Parse`, `Unsupported`, `Other(String)`
+//! - `es_client::EsError`: `MissingEnv`, `Transport(String)`, `Status { status: u16, body: String }`, `Parse`, `Unsupported`, `Other(String)`
 //!   (구 `ElasticsearchError` 매핑: ConnectionError -> Transport, NotFoundError -> Status{404}, BadRequestError{message,status} -> Status{status, body:message}, RuntimeError -> Other)
 //!
 //! 사용: `use common::es_dummy::{DummyEs, runtime_error};` `ESManager::with_transport(DummyEs::new())`
@@ -15,7 +15,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use backend::es_manager::{EsError, EsTransport};
+use es_client::EsError;
+use es_client::transport::EsTransport;
 use serde_json::{json, Value};
 
 pub type Handler = Arc<dyn Fn(&Value) -> Result<Value, EsError> + Send + Sync>;

@@ -1,9 +1,9 @@
 //! RTF 검사. RTF는 텍스트 형식이라 Word가 `.doc`·`.docx`라는 이름으로도 연다. 내장 OLE 객체를 심는 공격의 통로다.
 //! 구조를 해석하지 않고 바이트를 선형으로 훑는다(중첩 깊이를 세지 않으므로 깊이 폭탄이 통하지 않는다).
 
-use scan_common::sniff::{Sniffed, sniff};
-use scan_common::text::sanitize_display;
-use scan_common::{Category, FileReport, Severity};
+use crate::sniff::{Sniffed, sniff};
+use crate::display::sanitize_display;
+use crate::{Category, FileReport, Severity};
 
 /// 객체를 뜻하는 제어어. 하나라도 있으면 내장 객체가 있다.
 /// `\datastore`는 뺀다: Word가 저장한 RTF는 모두 customXml용 `\datastore`를 가지므로 이것만으로는 신호가 못 된다.

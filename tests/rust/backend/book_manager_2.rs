@@ -71,7 +71,7 @@ use backend::book_manager::{
     _declare_unbound_prefixes, _prune_dead_ncx_navpoints, _safe_xml_parser, AddBookError, ApplyOptions, BackfillThread, BookAdder, BookContent, BookManager, BookManagerDeps,
     CREATED_TIME_BACKFILL_ENV, FileReader, MAX_CATEGORY_RESULT_COUNT, MoveOpts, ProposeOptions, ReadFileError, decode_category_cursor, encode_category_cursor,
 };
-use backend::classifier::BookClassifierApi;
+use classifier::BookClassifierApi;
 use backend::epub_cover::EpubCoverHooks;
 use backend::main::{BookManagerApi, BookResponse, InlineRunner, TaskHandle, TaskRunner};
 use backend::pdf::{PdfCacheLimits, PdfError, PdfPageOps};

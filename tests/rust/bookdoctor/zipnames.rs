@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use bookdoctor::zipnames::check;
-use scan_common::Severity;
-use scan_common::Severity::{Critical, High, Low, Medium};
+use bookdoctor::Severity;
+use bookdoctor::Severity::{Critical, High, Low, Medium};
 
 /// 같은 (코드, 심각도)가 두 번 나와도 하나로 본다. 호출자(`Scanner::add`)가 (코드, 위치)로 합친다.
 fn got(name: &str) -> BTreeSet<(&'static str, Severity)> {

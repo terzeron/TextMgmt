@@ -13,7 +13,8 @@ use doc_reader::pdf::InProcess;
 use doc_reader::pdf::{Stage, StageError, StageRunner};
 use es_client::EsError;
 use es_client::indexing::IndexStore;
-use loader::cli::{ChildRunner, World, run};
+use file_record::child::ChildRunner;
+use loader::cli::{World, run};
 use serde_json::Value;
 
 #[cfg(unix)]

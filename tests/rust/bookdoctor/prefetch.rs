@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use bookdoctor::cli::{Options, parse, print_usage, run};
+use bookdoctor::cli::{Options, execute, parse};
 use bookdoctor::prefetch::Prefetcher;
 
 const MIB: usize = 1024 * 1024;
@@ -112,20 +112,6 @@ fn empty_path_list_is_fine() {
 
 // --- CLI ---
 
-fn args(s: &str) -> Vec<String> {
-    s.split_whitespace().map(String::from).collect()
-}
-
-#[test]
-fn no_prefetch_option_is_parsed_and_documented() {
-    assert!(parse(&args("a")).unwrap().prefetch);
-    assert!(Options::default().prefetch);
-    assert!(!parse(&args("--no-prefetch a")).unwrap().prefetch);
-    let mut out = Vec::new();
-    print_usage(&mut out).unwrap();
-    assert!(String::from_utf8(out).unwrap().contains("--no-prefetch"));
-}
-
 #[test]
 fn output_is_the_same_with_and_without_prefetch() {
     let d = tempfile::tempdir().unwrap();
@@ -133,15 +119,15 @@ fn output_is_the_same_with_and_without_prefetch() {
         let body = if i % 3 == 0 { String::new() } else { "소림사 장로가 강호에서 내공을 운기조식했다.\n".repeat(10 + i) };
         fs::write(d.path().join(format!("t{i:02}.txt")), body).unwrap();
     }
-    let run_with = |extra: &[&str]| {
-        let mut argv: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
-        argv.extend(["-r".into(), "--json".into(), "--min-severity".into(), "low".into(), d.path().to_string_lossy().into_owned()]);
+    let run_with = |prefetch: bool| {
+        let argv: Vec<String> = vec!["scan".into(), "--json".into(), "--min-severity".into(), "low".into(), d.path().to_string_lossy().into_owned()];
+        let opts = Options { prefetch, ..parse(&argv).unwrap() };
         let mut out = Vec::new();
-        let code = run(&argv, &mut out);
+        let code = execute(&opts, &mut out, false, false);
         (code, String::from_utf8(out).unwrap())
     };
-    let (c1, o1) = run_with(&[]);
-    let (c2, o2) = run_with(&["--no-prefetch"]);
+    let (c1, o1) = run_with(true);
+    let (c2, o2) = run_with(false);
     assert_eq!((c1, &o1), (c2, &o2));
     assert!(o1.contains("EMPTY_FILE"));
 }

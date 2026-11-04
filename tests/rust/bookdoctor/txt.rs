@@ -4,7 +4,7 @@ mod common;
 
 use bookdoctor::cli::Options;
 use bookdoctor::scan::scan_file;
-use scan_common::{Category, FileReport, Severity};
+use bookdoctor::{Category, FileReport, Severity};
 
 const CLEAN: &str = "한글 소설입니다.\n두 번째 줄입니다.\n";
 
@@ -17,7 +17,7 @@ fn scan_str(s: &str) -> FileReport {
     scan_bytes(s.as_bytes())
 }
 
-fn find<'a>(r: &'a FileReport, code: &str) -> &'a scan_common::Finding {
+fn find<'a>(r: &'a FileReport, code: &str) -> &'a bookdoctor::Finding {
     r.findings.iter().find(|x| x.code == code).unwrap_or_else(|| panic!("{code} 없음: {:?}", r.findings))
 }
 

@@ -8,10 +8,10 @@ use std::io::Read;
 use std::path::Path;
 
 use corpus_common::reader::open_zip;
-use scan_common::entropy::{is_text_name, shannon};
-use scan_common::sniff::{Sniffed, sniff};
-use scan_common::text::sanitize_display;
-use scan_common::{Category, FileReport, Severity};
+use crate::sniff::{is_text_name, shannon};
+use crate::sniff::{Sniffed, sniff};
+use crate::display::sanitize_display;
+use crate::{Category, FileReport, Severity};
 use zip::CompressionMethod;
 
 use crate::epub::security::{Limits, directory_limit_note, read_limited, zip_directory_bounds};

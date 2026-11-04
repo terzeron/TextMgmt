@@ -1,8 +1,8 @@
-//! PDF 구조·렌더링 검사. lopdf로 구조를 보고, MuPDF Rust worker로 실제 열리는지 확인한다.
+//! PDF 구조·렌더링 검사. lopdf로 구조를 보고, MuPDF Rust worker로 본문 표본을 뽑는다.
 //!
-//! Poppler 호출 정책: 비싼 외부 프로세스라서 파일당 `pdfinfo`는 최대 한 번이다. `--no-poppler`이거나 `%PDF-` 머리가 없으면
-//! 부르지 않는다. lopdf가 못 읽은 파일도 부른다(lopdf는 못 읽어도 뷰어는 여는 파일을 가려내는 것이 목적이다).
-//! 값싼 구조 검사를 모두 끝낸 뒤에 부르고, 시간 상한은 `sysdeps::pdf`의 30초다.
+//! worker 호출 정책: 비싼 외부 프로세스라서 파일당 본문 추출을 최대 두 번(앞쪽·끝쪽) 한다. 열림만 확인하는 호출은 따로 하지 않고
+//! 앞쪽 추출의 실패를 열림 실패로 본다. `%PDF-` 머리가 없으면 부르지 않는다. lopdf가 못 읽은 파일도 부른다(lopdf는 못 읽어도
+//! 뷰어는 여는 파일을 가려내는 것이 목적이다). 값싼 구조 검사를 모두 끝낸 뒤에 부르고, 시간 상한은 `sysdeps::pdf`의 30초다.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -10,9 +10,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use lopdf::{Dictionary, Document, Object};
-use scan_common::text::sanitize;
-use scan_common::{Category, FileReport, Severity};
-use sysdeps::pdf::{extract_text, page_count};
+use crate::display::sanitize;
+use crate::{Category, FileReport, Severity};
+use sysdeps::pdf::extract_text;
 use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 
 use crate::cli::Options;
@@ -25,14 +25,12 @@ const MARKER_WINDOW: usize = 1024;
 /// frontend/src/ViewPDF.jsx 35행 주석, frontend/src/pdfRenderScale.js 21행 주석.
 const MIN_PAGE_POINTS: f32 = 1.0;
 /// `NO_TEXT_LAYER`는 앞 몇 쪽만 본다. 표지만 그림인 책을 결함으로 몰지 않는다.
-const TEXT_PROBE_PAGES: usize = 5;
+pub const TEXT_PROBE_PAGES: usize = 5;
 /// 상속 사슬(Parent)을 따라가는 최대 깊이. 순환 PDF에서 멈추기 위한 상한이다.
 const MAX_PARENT_DEPTH: usize = 64;
 /// 지표에 이름을 나열할 최대 개수.
 const LIST_LIMIT: usize = 5;
-/// `--pdf-text`인데 쪽수를 몰라 본문(NO_TEXT_LAYER·MOJIBAKE 검사)을 뽑지 못했다.
-const PAGE_COUNT_UNKNOWN: &str = "pdf text not extracted: page count unknown";
-const POPPLER_MISSING: &str = "PDF worker not installed";
+const WORKER_MISSING: &str = "PDF worker not installed";
 
 /// PDF 32000-1:2008 9.6.2.2 "Standard Type 1 Fonts (Standard 14 Fonts)". 이 글꼴은 뷰어가 내장하므로 임베드하지 않아도 된다.
 const BASE_14: [&str; 14] = [
@@ -53,7 +51,7 @@ const BASE_14: [&str; 14] = [
 ];
 
 /// 실행기가 낸 `CommandError`의 종류. `sysdeps::pdf`는 오류를 문자열로 뭉개므로 래퍼가 직접 기록한다.
-/// 0이 아닌 종료 코드는 `CommandError`가 아니므로 여기에 남지 않는다(그것만 `POPPLER_OPEN_FAILED`다).
+/// 0이 아닌 종료 코드는 `CommandError`가 아니므로 여기에 남지 않는다(그것만 `PDF_OPEN_FAILED`다).
 enum Failure {
     NotFound,
     Timeout,
@@ -98,7 +96,7 @@ fn note_runner_failure(failure: Option<Failure>, report: &mut FileReport) -> boo
     match failure {
         None => false,
         Some(Failure::NotFound) => {
-            report.mark_incomplete(POPPLER_MISSING);
+            report.mark_incomplete(WORKER_MISSING);
             true
         }
         // 시간 초과와 실행 실패는 파일 결함의 증거가 아니다. 부하가 큰 디스크에서 멀쩡한 파일도 시간을 넘길 수 있다.
@@ -113,20 +111,19 @@ fn note_runner_failure(failure: Option<Failure>, report: &mut FileReport) -> boo
     }
 }
 
-/// pdfinfo가 암호 때문에 못 열 때 stderr에 쓰는 문구. 실제 출력(qpdf 256비트로 암호화한 파일):
-/// `Command Line Error: Incorrect password`.
+/// worker가 암호 때문에 못 열 때 내는 문구(`PDF password required`)를 알아본다.
 fn mentions_password(msg: &str) -> bool {
     let lower = msg.to_ascii_lowercase();
     lower.contains("password") || lower.contains("encrypted")
 }
 
-/// 운영용 진입점. `SystemRunner`로 Poppler를 부른다.
+/// 운영용 진입점. `SystemRunner`로 MuPDF worker를 부른다.
 pub fn inspect(data: &[u8], doc: Option<&Document>, info: LoadInfo, parse_error: Option<&str>, path: &Path, opts: &Options, report: &mut FileReport) {
     inspect_with(data, doc, info, parse_error, path, opts, report, &SystemRunner);
 }
 
-/// `inspect`에 Poppler 실행기를 주입한다.
-#[allow(clippy::too_many_arguments, reason = "Poppler 실행기 주입과 읽기 정보를 함께 받는 한 곳뿐인 진입점이라 묶음 타입을 만들지 않았다")]
+/// `inspect`에 worker 실행기를 주입한다.
+#[allow(clippy::too_many_arguments, reason = "worker 실행기 주입과 읽기 정보를 함께 받는 한 곳뿐인 진입점이라 묶음 타입을 만들지 않았다")]
 pub fn inspect_with(data: &[u8], doc: Option<&Document>, info: LoadInfo, parse_error: Option<&str>, path: &Path, opts: &Options, report: &mut FileReport, runner: &dyn CommandRunner) {
     let header = has_header(data);
     if !header {
@@ -144,7 +141,7 @@ pub fn inspect_with(data: &[u8], doc: Option<&Document>, info: LoadInfo, parse_e
         guarded(report, |r| document_checks(doc, info, r));
     }
     if header {
-        poppler_checks(path, opts, doc, report, runner);
+        text_checks(path, opts, doc, report, runner);
     }
 }
 
@@ -261,49 +258,36 @@ fn unembedded_fonts(doc: &Document, report: &mut FileReport) {
     }
 }
 
-fn poppler_checks(path: &Path, opts: &Options, doc: Option<&Document>, report: &mut FileReport, runner: &dyn CommandRunner) {
-    if opts.no_poppler {
-        if opts.pdf_text {
-            report.mark_incomplete("mojibake check skipped: poppler disabled");
-        }
+/// MuPDF worker가 내는 오류 중 파일 결함의 증거가 아닌 것(worker 없음·자원 한도·범위 불일치).
+fn worker_limitation(e: &str) -> bool {
+    ["PDF worker unavailable", "PDF worker terminated", "PDF worker resource limit:"].iter().any(|prefix| e.starts_with(prefix)) || e.contains("invalid PDF page range")
+}
+
+/// 본문 표본(앞·끝 `TEXT_PROBE_PAGES`쪽)을 MuPDF worker로 뽑아 글자층 없음과 글자 깨짐을 본다.
+/// 열림만 확인하는 호출은 따로 하지 않는다. 앞쪽 추출이 실패하면 그것을 `PDF_OPEN_FAILED`로 알린다.
+/// 쪽 수는 lopdf가 읽은 값을 쓴다. lopdf가 쪽을 못 읽었으면 1쪽만 뽑는다(그 이상은 범위 오류가 날 수 있다).
+fn text_checks(path: &Path, opts: &Options, doc: Option<&Document>, report: &mut FileReport, runner: &dyn CommandRunner) {
+    if opts.no_pdf_worker {
         return;
     }
     let watching = Watching { inner: runner, failure: Mutex::new(None) };
-    let pages = match page_count(&watching, path) {
-        Ok(n) => n,
+    let pages = doc.map_or(0, |d| d.get_pages().len());
+    let head_last = if pages == 0 { 1 } else { pages.min(TEXT_PROBE_PAGES) };
+    let head = match extract_text(&watching, path, 1, head_last) {
+        Ok(text) => text,
         Err(e) => {
             if note_runner_failure(watching.take(), report) {
                 return;
             }
-            if ["PDF worker unavailable", "PDF worker terminated", "PDF worker resource limit:"].iter().any(|prefix| e.starts_with(prefix)) {
+            if worker_limitation(&e) {
                 report.mark_incomplete(&sanitize(&e, 200, Some('…')));
                 return;
             }
-            // 암호화 파일은 pdfinfo가 비밀번호를 요구하며 실패한다. 이미 ENCRYPTED로 알렸으므로 중복 지표를 내지 않는다.
+            // 암호화 파일은 worker가 비밀번호를 요구하며 실패한다. 이미 ENCRYPTED로 알렸으므로 중복 지표를 내지 않는다.
             if doc.is_some_and(|d| d.trailer.has(b"Encrypt")) && mentions_password(&e) {
                 return;
             }
-            report.push(Category::Render, Severity::High, "POPPLER_OPEN_FAILED", "", &sanitize(&e, 200, Some('…')));
-            if opts.pdf_text {
-                report.mark_incomplete(PAGE_COUNT_UNKNOWN);
-            }
-            return;
-        }
-    };
-    if !opts.pdf_text {
-        return;
-    }
-    if pages == 0 {
-        report.mark_incomplete(PAGE_COUNT_UNKNOWN);
-        return;
-    }
-    let head_last = pages.min(TEXT_PROBE_PAGES);
-    let head = match extract_text(&watching, path, 1, head_last) {
-        Ok(text) => text,
-        Err(e) => {
-            if !note_runner_failure(watching.take(), report) {
-                report.mark_incomplete(&format!("pdftotext failed: {}", sanitize(&e, 200, Some('…'))));
-            }
+            report.push(Category::Render, Severity::High, "PDF_OPEN_FAILED", "", &sanitize(&e, 200, Some('…')));
             return;
         }
     };
@@ -321,7 +305,7 @@ fn poppler_checks(path: &Path, opts: &Options, doc: Option<&Document>, report: &
             }
             Err(e) => {
                 if !note_runner_failure(watching.take(), report) {
-                    report.mark_incomplete(&format!("pdftotext failed: {}", sanitize(&e, 200, Some('…'))));
+                    report.mark_incomplete(&format!("PDF text extraction failed: {}", sanitize(&e, 200, Some('…'))));
                 }
                 return;
             }

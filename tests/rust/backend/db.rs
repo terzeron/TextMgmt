@@ -1,11 +1,11 @@
-//! `backend::db` 테스트: pymysql `DictCursor` 의미를 Diesel(MySQL) 위에서 재현하는 드라이버 추상화.
+//! `db` 테스트: pymysql `DictCursor` 의미를 Diesel(MySQL) 위에서 재현하는 드라이버 추상화.
 //! 단위 테스트는 서버 없이 돈다. 통합 테스트는 일회용 MySQL 컨테이너를 fixture가 띄운다(Docker 필요).
 
 use crate::mysql_fixture;
 
 use std::collections::BTreeMap;
 
-use backend::db::{DbError, DbValue, MysqlConfig, Row, connect_from_env, mysql_url, to_mysql_placeholders};
+use db::{DbError, DbValue, MysqlConfig, Row, connect_from_env, mysql_url, to_mysql_placeholders};
 use chrono::NaiveDate;
 
 fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -143,7 +143,7 @@ mod errors {
 }
 
 /// 컨테이너에 접속하는 환경을 만든다.
-fn container_conn() -> Box<dyn backend::db::DbConnection> {
+fn container_conn() -> Box<dyn db::DbConnection> {
     mysql_fixture::mysql_container();
     connect_from_env(&|k| std::env::var(k).ok(), "testuser").expect("컨테이너 접속")
 }

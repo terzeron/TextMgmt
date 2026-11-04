@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use corpus_common::reader::open_zip;
-use ole_reader::{Limits as OleLimits, OleFile};
-use scan_common::{Category, FileReport, Severity};
-use scan_common::sniff::{Sniffed, sniff};
-use scan_common::text::sanitize_display;
+use crate::ole::{Limits as OleLimits, OleFile};
+use crate::{Category, FileReport, Severity};
+use crate::sniff::{Sniffed, sniff};
+use crate::display::sanitize_display;
 
 use crate::cli::Options;
 use crate::epub::security::directory_limit_note;
@@ -312,7 +312,7 @@ pub fn scan_zip_members(path: &Path, opts: &Options, report: &mut FileReport) {
         }
         // 안쪽 파일에는 남은 바이트 예산을 `--max-total-mb`로 넘긴다.
         let remaining_mb = with_state(|s| s.bytes_left / (1024 * 1024)).unwrap_or(0).max(1);
-        let nested_opts = Options { only: Vec::new(), max_total_mb: remaining_mb.min(opts.max_total_mb), ..opts.clone() };
+        let nested_opts = Options { max_total_mb: remaining_mb.min(opts.max_total_mb), ..opts.clone() };
         // 맞는 분석기마다 한 번씩 본다. 같은 지표가 두 번 합쳐지지 않게 (코드, 위치, 설명)으로 거른다.
         let mut seen: HashSet<(String, String, String)> = HashSet::new();
         for ext in final_exts {

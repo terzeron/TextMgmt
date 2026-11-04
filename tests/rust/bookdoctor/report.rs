@@ -4,9 +4,9 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use bookdoctor::report::{Aggregate, finding_style, write_json_line, write_report_file, write_text};
-use scan_common::color::Style;
-use scan_common::{Category, FileReport, Format, Severity, Summary};
+use bookdoctor::report::{Aggregate, finding_style, write_json_line, write_text};
+use bookdoctor::display::Style;
+use bookdoctor::{Category, FileReport, Format, Severity, Summary};
 
 fn flagged(path: &Path) -> FileReport {
     let mut r = FileReport::new(path, Some(Format::Epub));
@@ -56,28 +56,6 @@ fn non_utf8_file_name_is_lossy_not_a_panic() {
 }
 
 #[test]
-fn report_file_contains_only_flagged_files_and_summary() {
-    let clean = FileReport::new(Path::new("ok.epub"), Some(Format::Epub));
-    let bad = flagged(Path::new("bad.epub"));
-    let mut agg = Aggregate::new();
-    agg.add(&clean);
-    agg.add(&bad);
-    let mut summary = Summary { scanned: 2, has_findings: true, ..Summary::default() };
-    summary.by_severity.insert("HIGH", 1);
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("r.json");
-    write_report_file(&path, &agg, &summary, "/books").unwrap();
-    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(v["files"].as_array().unwrap().len(), 1);
-    assert_eq!(v["summary"]["scanned"], 2);
-    assert_eq!(v["summary"]["by_severity"]["HIGH"], 1);
-    assert_eq!(v["summary"]["by_category"]["security"], 1);
-    assert_eq!(v["summary"]["incomplete"], 0);
-    assert_eq!(v["root"], "/books");
-    assert!(v["scanned_at"].as_str().is_some_and(|s| !s.is_empty()));
-}
-
-#[test]
 fn clean_file_prints_nothing() {
     let clean = FileReport::new(Path::new("ok.epub"), Some(Format::Epub));
     let (mut t, mut j) = (Vec::new(), Vec::new());
@@ -117,7 +95,7 @@ fn escape_and_bidi_in_the_path_are_hidden_in_text_but_the_real_file_is_found() {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("ev\u{1b}[31m\u{202e}il.txt");
     std::fs::write(&p, [0u8; 4096]).unwrap();
-    let r = scan_file(&p, &Options { no_poppler: true, ..Options::default() });
+    let r = scan_file(&p, &Options { no_pdf_worker: true, ..Options::default() });
     // 열고 옮기는 쪽이 쓰는 경로는 원문이다.
     assert_eq!(Path::new(&r.path), p.as_path());
     assert!(Path::new(&r.path).exists());
@@ -172,7 +150,7 @@ fn summary_line_lists_only_nonzero_suppressed_severities() {
 
 // --- 색 ---
 
-fn finding_of(category: Category, severity: Severity, code: &str) -> scan_common::Finding {
+fn finding_of(category: Category, severity: Severity, code: &str) -> bookdoctor::Finding {
     let mut r = FileReport::new(Path::new("a"), None);
     r.push(category, severity, code, "", "");
     r.findings.remove(0)

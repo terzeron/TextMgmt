@@ -4,7 +4,7 @@
 //! 빠른 동작 테스트는 메모리 MySQL 대역을 쓰고, 운영 SQL 검증은 Docker MySQL 통합 테스트로 확인한다.
 //!
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.4, 3.9, 3.10):
-//! - `backend::db`: `DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`From<&str>`, `From<i64>`, `Clone + PartialEq + Debug`),
+//! - `db`: `DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`From<&str>`, `From<i64>`, `Clone + PartialEq + Debug`),
 //!   `type Row = BTreeMap<String, DbValue>`, `enum DbError { IntegrityError(String), Other(String) }`,
 //!   `trait DbCursor { execute(&mut self, &str, &[DbValue]) -> Result<(), DbError>; executemany(..); fetchall(&mut self) -> Option<Vec<Row>>; fetchone(&mut self) -> Option<Row>; rowcount(&self) -> u64 }`,
 //!   `trait DbConnection { cursor(&mut self) -> Box<dyn DbCursor>; commit(&mut self) -> Result<(), DbError>; rollback(&mut self) -> Result<(), DbError>; close(&mut self) }`,
@@ -37,7 +37,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{common, mysql_fixture};
 
-use backend::db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
+use db::{ConnectionProvider, DbConnection, DbCursor, DbError, DbValue, Row};
 use backend::refresh_token_store::{
     _rotation_grace_seconds, AnyRefreshTokenStore, DEFAULT_ROTATION_GRACE_SECONDS, MAX_USER_AGENT_LENGTH, MySQLRefreshTokenStore, RefreshTokenStoreApi, Rotation, SessionQuery,
     create_refresh_token_store, create_refresh_token_store_with, summarize_user_agent,

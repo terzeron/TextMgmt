@@ -19,7 +19,7 @@
 //! - `doc_reader::epub::{read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using}` zip 직접 추출 경로
 //! - `doc_reader::office::find_libreoffice_with(which, exists)` PATH 조회와 파일 존재 확인 바꿔치기 자리
 //! - `loader::flow::get_file_list(path, recursive, num_files: Option<usize>) -> Vec<PathBuf>`, `loader::flow::read_files(cfg, path, runner, stat) -> HashMap<i64, Value>` 원본의 `Loader.get_file_list` / `Loader.read_files`
-//! - `loader::record::{ReadHooks, read_file_with_hooks(cfg, path, .., &ReadHooks)}`
+//! - `file_record::record::{ReadHooks, read_file_with_hooks(cfg, path, .., &ReadHooks)}`
 //!   `ReadHooks { fast_page_count (_fast_pdf_page_count 대체), fallback_page_count (pypdf 대체), inspect (_zip_container_type 대체, 구 detect_file_type_with) }`
 //! - `stat::Stat::{pdf_stage_count, pdf_stage_total_time, pdf_stage_outcome_count}` 단계별 통계 조회
 
@@ -45,9 +45,9 @@ use doc_reader::pdf::{
 use doc_reader::rtf::read_from_rtf_text;
 use doc_reader::text::{Enc, HIGH_BYTE_PAIRED_MIN, TextHooks, TextRead, read_from_text, read_from_text_with, reencode_text_file_to_utf8, reencode_text_file_to_utf8_with};
 use loader::cli::print_usage;
-use loader::config::Config;
+use file_record::config::Config;
 use loader::flow::{get_file_list, read_files};
-use loader::record::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
+use file_record::record::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
 use serde_json::Value;
 use stat::Stat;
 

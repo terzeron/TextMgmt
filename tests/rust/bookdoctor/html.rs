@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use bookdoctor::cli::{Options, run};
 use bookdoctor::scan::scan_file;
-use scan_common::{FileReport, Format};
+use bookdoctor::{FileReport, Format};
 
 fn write(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
     let d = tempfile::tempdir().unwrap();
@@ -33,7 +33,7 @@ fn html_is_collected_and_lookalikes_are_not() {
         fs::write(d.path().join(name), page).unwrap();
     }
     let mut out = Vec::new();
-    run(&["-r".into(), "--min-severity".into(), "low".into(), "--json".into(), d.path().to_string_lossy().into_owned()], &mut out);
+    run(&["scan".into(), "--min-severity".into(), "low".into(), "--json".into(), d.path().to_string_lossy().into_owned()], &mut out);
     let out = String::from_utf8(out).unwrap();
     assert!(out.contains("a.html") && out.contains("b.HTM") && out.contains("c.xhtml"), "{out}");
     assert!(!out.contains("d.htmlx"), "{out}");
@@ -141,4 +141,19 @@ fn legacy_encoded_pages_are_still_scanned() {
     bytes.extend_from_slice(&[0xB0, 0xA1, 0xB3, 0xAA]);
     bytes.extend_from_slice(br#"<script src="http://evil.example/a.js"></script></body></html>"#);
     assert!(scan("a.html", &bytes).has("REMOTE_SCRIPT"));
+}
+
+#[test]
+fn a_missing_or_unreadable_html_path_is_incomplete() {
+    use bookdoctor::html::scan_html_file;
+    use bookdoctor::FileReport;
+    use bookdoctor::sniff::Sniffed;
+    let d = tempfile::tempdir().unwrap();
+    let mut r = FileReport::new(&d.path().join("none.html"), None);
+    scan_html_file(&d.path().join("none.html"), Sniffed::Html, &mut r);
+    assert!(r.reasons.iter().any(|m| m == "HTML file could not be opened"), "{:?}", r.reasons);
+    // 디렉터리는 열리지만 읽지 못한다.
+    let mut r = FileReport::new(d.path(), None);
+    scan_html_file(d.path(), Sniffed::Html, &mut r);
+    assert!(r.reasons.iter().any(|m| m == "HTML file could not be read"), "{:?}", r.reasons);
 }

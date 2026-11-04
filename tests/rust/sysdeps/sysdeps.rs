@@ -317,7 +317,16 @@ mod fs {
         let err = RealFs.lock_exclusive(&second, true).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::WouldBlock);
         drop(first);
-        RealFs.lock_exclusive(&second, true).unwrap();
+        // flock 은 열린 파일 설명(open file description)에 붙는다. 같은 테스트 바이너리의 다른 테스트가 그 사이
+        // 자식 프로세스를 띄우면, 자식이 exec 하기 전까지 설명자를 함께 쥐어 lock 이 잠깐 남는다. 그래서 다시 잡기만 재시도한다.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match RealFs.lock_exclusive(&second, true) {
+                Ok(()) => break,
+                Err(e) if e.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+                Err(e) => panic!("lock 을 다시 잡지 못했다: {e}"),
+            }
+        }
     }
 }
 

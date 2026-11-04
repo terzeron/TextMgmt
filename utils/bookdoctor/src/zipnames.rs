@@ -2,7 +2,7 @@
 //! 이름이 가리키는 위험은 압축을 푸는 쪽(추출기)이 입는다: 경로 탈출(Zip Slip), 절대 경로, Windows 장치 이름, NTFS 스트림.
 
 use corpus_common::util::unquote;
-use scan_common::Severity;
+use crate::Severity;
 
 /// Windows 예약 장치 이름. 확장자를 떼고 소문자로 비교한다.
 pub const WIN_RESERVED: &[&str] = &["con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"];

@@ -7,8 +7,8 @@ pub mod ooxml;
 
 use std::path::Path;
 
-use scan_common::FileReport;
-use scan_common::sniff::Sniffed;
+use crate::FileReport;
+use crate::sniff::Sniffed;
 
 use crate::cli::Options;
 use crate::epub::security::Limits;

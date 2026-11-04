@@ -15,8 +15,8 @@ use es_client::indexing::IndexStore;
 use serde_json::Value;
 use stat::Stat;
 
-use crate::config::Config;
-use crate::record::{ReadOutcome, detect_file_type, read_file};
+use file_record::config::Config;
+use file_record::record::{ReadOutcome, detect_file_type, read_file};
 
 pub type BatchReadHook<'a> = dyn Fn(&Path, Option<&Metadata>, bool) -> ReadOutcome + Sync + 'a;
 pub type BatchStatHook<'a> = dyn Fn(&Path) -> std::io::Result<Metadata> + Sync + 'a;
@@ -333,7 +333,7 @@ pub fn get_file_list(path: &Path, recursive: bool, num_files: Option<usize>) -> 
 pub fn read_files(cfg: &Config, path: &Path, runner: &(dyn StageRunner + Sync), stat: &Stat) -> HashMap<i64, Value> {
     let mut data = HashMap::new();
     for file in get_file_list(path, false, None) {
-        let outcome = crate::record::read_file(cfg, &file, None, false, None, runner, stat);
+        let outcome = file_record::record::read_file(cfg, &file, None, false, None, runner, stat);
         if let Some((inode, doc)) = outcome.item {
             data.insert(inode, doc);
         }

@@ -1,8 +1,8 @@
 //! 실행 파일 이중 확인. 확장자가 실행 파일이고 매직바이트도 실행 파일(ELF·Mach-O·PE)이어야 "확정"이다.
 //! 확장자만 맞고 내용이 다르면 확정하지 않고 낮은 심각도의 결함으로 남긴다.
 
-use scan_common::sniff::Sniffed;
-use scan_common::{Category, FileReport, Severity};
+use crate::sniff::Sniffed;
+use crate::{Category, FileReport, Severity};
 
 /// 실행 파일로 보는 확장자. 디렉토리를 훑을 때 이 확장자도 모은다.
 pub const EXEC_EXTENSIONS: &[&str] = &["exe", "dll", "sys", "scr", "ocx", "cpl", "drv", "efi", "so", "elf", "ko", "dylib", "bundle", "bin", "out"];

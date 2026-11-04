@@ -65,6 +65,28 @@ fn test_epubveri_cli_writes_epubcheck_compatible_json_for_valid_and_invalid_book
     assert!(messages.iter().all(|message| message.get("ID").is_some()));
 }
 
+#[test]
+fn test_epubveri_cli_exits_2_on_bad_arguments_unreadable_books_and_unwritable_reports() {
+    let tmp = tempfile::tempdir().unwrap();
+    let book = tmp.path().join("book.epub");
+    make_epub(&book, &EpubSpec::minimal());
+    let run = |args: &[&std::ffi::OsStr]| Command::new(env!("CARGO_BIN_EXE_epubveri")).args(args).output().unwrap();
+    let (b, j) = (book.as_os_str(), std::ffi::OsStr::new("--json"));
+    let out = tmp.path().join("r.json");
+    for args in [vec![], vec![b], vec![b, std::ffi::OsStr::new("--yaml"), out.as_os_str()], vec![b, j], vec![b, j, out.as_os_str(), b]] {
+        let o = run(&args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}");
+        assert!(String::from_utf8_lossy(&o.stderr).contains("usage: epubveri"), "{args:?}");
+    }
+    let o = run(&[tmp.path().join("none.epub").as_os_str(), j, out.as_os_str()]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("epubveri validation failed"));
+    // 리포트 경로가 디렉터리면 쓰지 못한다.
+    let o = run(&[b, j, tmp.path().as_os_str()]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("failed to write JSON report"));
+}
+
 /// OPF metadata/manifest 조각과 이미지 멤버를 받아 최소 EPUB을 만든다.
 fn create_test_epub(output_path: &Path, metadata: &str, manifest_items: &str, images: &[(&str, Vec<u8>)]) {
     create_test_epub_with_chapters(output_path, metadata, manifest_items, &["<html><body><p>x</p></body></html>"], images);

@@ -8,7 +8,7 @@
 //!
 //! 표가 낡지 않도록 `tests/rust/bookdoctor/viewer.rs`가 스캐너 소스의 코드 집합과 대조한다.
 
-use scan_common::{FileReport, Format, ViewerBlocked};
+use crate::{FileReport, Format, ViewerBlocked};
 use ViewerBlocked::{Blocked, NotApplicable, NotBlocked};
 
 /// EPUB 보안 코드. 근거는 `frontend/src/ViewEPUB.jsx`다.

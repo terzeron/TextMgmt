@@ -241,12 +241,12 @@ pub fn epub_members(path: &Path, members: &[(&str, &[u8])], stored_names: &[&str
 }
 
 // ---------------------------------------------------------------------------
-// Poppler 가짜 실행기
+// MuPDF worker 가짜 실행기
 // ---------------------------------------------------------------------------
 
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 use sysdeps::{CommandError, CommandOutput, CommandRunner};
 
@@ -258,7 +258,7 @@ enum Info {
     Spawn(String),
 }
 
-/// 미리 정한 `pdfinfo`·`pdftotext` 결과를 돌려주고 호출을 기록한다. 실제 Poppler를 부르지 않는다.
+/// 미리 정한 worker 결과(쪽 수·본문)를 돌려주고 호출을 기록한다. 실제 worker를 부르지 않는다.
 pub struct FakeRunner {
     info: Info,
     text: String,
@@ -271,17 +271,17 @@ impl FakeRunner {
         FakeRunner { info, text: text.to_owned(), calls: AtomicUsize::new(0), programs: Mutex::new(Vec::new()) }
     }
 
-    /// `pdfinfo`가 `n`쪽이라고 답하고 `pdftotext`는 본문이 있다고 답한다.
+    /// worker가 `n`쪽이라고 답하고 본문 추출은 본문이 있다고 답한다.
     pub fn pages(n: usize) -> Self {
         Self::new(Info::Pages(n), "본문 텍스트")
     }
 
-    /// Poppler 실행 파일이 없다.
+    /// worker 실행 파일이 없다.
     pub fn not_found() -> Self {
         Self::new(Info::NotFound, "")
     }
 
-    /// `pdfinfo`가 0이 아닌 종료 코드로 끝난다.
+    /// worker가 0이 아닌 종료 코드로 끝난다(본문 추출도 실패한다).
     pub fn fails(msg: &str) -> Self {
         Self::new(Info::Fails(msg.to_owned()), "")
     }
@@ -296,12 +296,12 @@ impl FakeRunner {
         Self::new(Info::Spawn(msg.to_owned()), "")
     }
 
-    /// 1쪽이고 `pdftotext`가 `s`를 돌려준다.
+    /// 1쪽이고 본문 추출이 `s`를 돌려준다.
     pub fn text(s: &str) -> Self {
         Self::new(Info::Pages(1), s)
     }
 
-    /// `n`쪽이고 `pdftotext`가 `s`를 돌려준다.
+    /// `n`쪽이고 본문 추출이 `s`를 돌려준다.
     pub fn pages_text(n: usize, s: &str) -> Self {
         Self::new(Info::Pages(n), s)
     }
@@ -320,10 +320,8 @@ impl CommandRunner for FakeRunner {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let program = argv.get(5).cloned().unwrap_or_default();
         self.programs.lock().unwrap().push(program.clone());
-        if program == "text" {
-            return Ok(CommandOutput { returncode: 0, stdout: self.text.clone().into_bytes(), stderr: Vec::new() });
-        }
         match &self.info {
+            Info::Pages(_) if program == "text" => Ok(CommandOutput { returncode: 0, stdout: self.text.clone().into_bytes(), stderr: Vec::new() }),
             Info::Pages(n) => Ok(CommandOutput { returncode: 0, stdout: format!("Title: x\nPages:          {n}\n").into_bytes(), stderr: Vec::new() }),
             Info::NotFound => Err(CommandError::NotFound),
             Info::Timeout => Err(CommandError::Timeout),

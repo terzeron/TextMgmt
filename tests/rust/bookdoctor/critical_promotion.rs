@@ -9,7 +9,7 @@ use bookdoctor::cli::Options;
 use bookdoctor::epub::security::{Limits, scan as scan_into};
 use bookdoctor::scan::scan_file;
 use common::*;
-use scan_common::{FileReport, Format, Severity};
+use bookdoctor::{FileReport, Format, Severity};
 
 fn scan_epub(chapter: &str, extra: &[(&str, &[u8])]) -> FileReport {
     let d = tempfile::tempdir().unwrap();
@@ -190,7 +190,7 @@ fn scan_pdf_js(js: &str) -> FileReport {
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("t.pdf");
     fs::write(&p, pdf_bytes(&objs)).unwrap();
-    scan_file(&p, &Options { no_poppler: true, ..Options::default() })
+    scan_file(&p, &Options { no_pdf_worker: true, ..Options::default() })
 }
 
 fn pdf_worst(r: &FileReport) -> Option<Severity> {

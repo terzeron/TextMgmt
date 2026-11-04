@@ -3,8 +3,8 @@
 use std::io::Read;
 use std::path::Path;
 
-use scan_common::FileReport;
-use scan_common::sniff::Sniffed;
+use crate::FileReport;
+use crate::sniff::Sniffed;
 
 use crate::epub::security::scan_html_document;
 
