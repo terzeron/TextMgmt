@@ -46,15 +46,14 @@
 
 #![allow(clippy::type_complexity)]
 
+mod common;
+
 #[path = "../backend/common/env.rs"]
 mod env_helpers;
 #[path = "../backend/common/log_capture.rs"]
 mod log_capture;
+use crate::common::shared_fixtures::{Handler, LoadHook, SaveHook, SearchHook, between, empty_info, single_quoted_hrefs};
 
-/// `env_helpers`가 부르는 자리. 서점 코드는 backend 환경 변수(`TM_BOOK_DIR`, MySQL, ES)를 읽지 않으므로 맞출 값이 없다.
-mod common {
-    pub fn setup_env() {}
-}
 use std::collections::BTreeMap;
 use std::{fs, io};
 use std::path::{Path, PathBuf};
@@ -147,8 +146,6 @@ struct Call {
     timeout: Option<HttpTimeout>,
 }
 
-type Handler = Box<dyn Fn(&str, &[(String, String)]) -> Result<HttpResponse, HttpError> + Send + Sync>;
-
 struct FakeSession {
     handler: Handler,
     calls: Arc<Mutex<Vec<Call>>>,
@@ -191,26 +188,6 @@ fn urls(calls: &Arc<Mutex<Vec<Call>>>) -> Vec<String> {
     calls.lock().unwrap().iter().map(|c| c.url.clone()).collect()
 }
 
-/// `open_tag`와 `close_tag` 사이 텍스트. bs4 `find(...).text` 대신 쓰는 단순 파서다. 없으면 빈 문자열.
-fn between(html: &str, open_tag: &str, close_tag: &str) -> String {
-    match html.find(open_tag) {
-        Some(start) => {
-            let rest = &html[start + open_tag.len()..];
-            rest.find(close_tag).map_or(String::new(), |end| rest[..end].to_owned())
-        }
-        None => String::new(),
-    }
-}
-
-/// `<a href='...'>`의 href 값을 문서 순서대로 모은다.
-fn single_quoted_hrefs(html: &str) -> Vec<String> {
-    html.split("href='").skip(1).filter_map(|rest| rest.split('\'').next()).map(str::to_owned).collect()
-}
-
-fn empty_info() -> Value {
-    json!({"title": "", "author": "", "category": "", "isbn": ""})
-}
-
 // ---------------------------------------------------------------------------
 // 테스트용 서점 클래스 (Python의 DummyBookstore, DummyBookstoreUnit, DummyBookstoreParsing, BaseOnlyBookstore)
 // ---------------------------------------------------------------------------
@@ -226,10 +203,6 @@ enum Kind {
     /// `BaseOnlyBookstore`: 링크 없음, 정보 비어 있음
     BaseOnly,
 }
-
-type SearchHook = Box<dyn Fn(&str) -> Vec<SearchRow> + Send + Sync>;
-type LoadHook = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
-type SaveHook = Box<dyn Fn(&str, &str) + Send + Sync>;
 
 /// 서브클래스를 흉내 내는 테스트 서점 구조체를 만든다. `$over`에 넘긴 메서드만 기본 구현 대신 덮어쓴다.
 /// monkeypatch로 인스턴스 메서드를 바꾸던 곳은 이 덮어쓰기와 훅 필드로 옮긴다.
