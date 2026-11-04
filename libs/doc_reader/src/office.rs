@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use sysdeps::timeout_runner::run_with_hard_timeout;
-use text_extractor::open_zip;
+use sysdeps::zip_opener::open_zip;
 
 use crate::TEXT_SIZE;
 use crate::py_str_compat::{head_chars, is_space, keep_word_chars};
@@ -178,10 +178,10 @@ pub fn paragraph_text(p: roxmltree::Node) -> String {
     out
 }
 
-fn read_member(zip: &mut text_extractor::Zip, name: &str) -> Result<String, String> {
+fn read_member(zip: &mut sysdeps::zip_opener::Zip, name: &str) -> Result<String, String> {
     let file = zip.by_name(name).map_err(|_| format!("KeyError: {name}"))?;
     let mut buf = Vec::new();
-    file.take(text_extractor::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    file.take(sysdeps::zip_opener::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| e.to_string())?;
     if buf.starts_with(b"\xef\xbb\xbf") {
         buf.drain(..3);
     }
@@ -189,7 +189,7 @@ fn read_member(zip: &mut text_extractor::Zip, name: &str) -> Result<String, Stri
 }
 
 /// 주 문서 파트 이름. `_rels/.rels`의 officeDocument 관계를 따르고, 없으면 `word/document.xml`.
-fn main_part(zip: &mut text_extractor::Zip) -> Result<String, String> {
+fn main_part(zip: &mut sysdeps::zip_opener::Zip) -> Result<String, String> {
     let rels = read_member(zip, "_rels/.rels")?;
     let doc = roxmltree::Document::parse(&rels).map_err(|e| format!("XML 해석 실패: {e}"))?;
     let target = doc

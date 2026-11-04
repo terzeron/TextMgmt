@@ -13,7 +13,7 @@ use doc_reader::text::{TextRead, read_from_text, reencode_text_file_to_utf8};
 use doc_reader::{markup, office, rtf};
 use serde_json::{Map, Value, json};
 use stat::Stat;
-use text_extractor::open_zip;
+use sysdeps::zip_opener::open_zip;
 
 use crate::env_config::Config;
 

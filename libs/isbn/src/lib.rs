@@ -19,8 +19,9 @@ use htmlkit::{local_name, text_of, tokenize};
 use regex::Regex;
 use stat::Stat;
 use sysdeps::timeout_runner::{run_with_hard_timeout, run_with_timeout};
+use sysdeps::zip_opener::open_zip;
 use sysdeps::{CommandError, CommandRunner, SystemRunner};
-use text_extractor::{decode_utf8_ignore, open_zip};
+use text_extractor::decode_utf8_ignore;
 
 /// 앞뒤로 읽을 바이트 크기 (8KB).
 pub const HEAD_TAIL_SIZE: usize = 8 * 1024;
@@ -238,11 +239,11 @@ pub fn extract_from_hwp(path: &Path, runner: &dyn CommandRunner) -> Vec<String> 
 
 // ---------------------------------------------------------------- EPUB
 
-fn read_member(zip: &mut text_extractor::Zip, name: &str) -> Result<Option<String>, ()> {
+fn read_member(zip: &mut sysdeps::zip_opener::Zip, name: &str) -> Result<Option<String>, ()> {
     use std::io::Read as _;
     let Ok(entry) = zip.by_name(name) else { return Ok(None) };
     let mut data = Vec::new();
-    entry.take(text_extractor::MAX_MEMBER_BYTES).read_to_end(&mut data).map_err(|_| ())?;
+    entry.take(sysdeps::zip_opener::MAX_MEMBER_BYTES).read_to_end(&mut data).map_err(|_| ())?;
     Ok(Some(decode_utf8_ignore(&data)))
 }
 
@@ -354,7 +355,7 @@ pub fn pdf_text_fallback(path: &Path) -> Result<String, String> {
         let raw = blocks[idx];
         let mut inflated = Vec::new();
         // 압축 폭탄 스트림이 메모리를 다 쓰지 않도록 상한까지만 푼다.
-        let content = match flate2::read::ZlibDecoder::new(raw).take(text_extractor::MAX_MEMBER_BYTES).read_to_end(&mut inflated) {
+        let content = match flate2::read::ZlibDecoder::new(raw).take(sysdeps::zip_opener::MAX_MEMBER_BYTES).read_to_end(&mut inflated) {
             Ok(_) => &inflated[..],
             Err(_) => raw,
         };

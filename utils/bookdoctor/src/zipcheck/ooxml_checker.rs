@@ -10,8 +10,8 @@ use crate::magic_sniffer::{Sniffed, sniff};
 use crate::output_formatter::sanitize_display;
 use crate::{Category, FileReport, Severity};
 use regex::Regex;
+use sysdeps::zip_opener::{Zip, open_zip};
 use text_extractor::path::{posix_join, posix_normpath, unquote};
-use text_extractor::{Zip, open_zip};
 
 use super::fast_zip_checker::read_failure;
 use crate::epub::security_checker::{Limits, TextEnc, decode_text, read_limited};

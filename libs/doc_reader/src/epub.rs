@@ -14,8 +14,8 @@ use std::sync::LazyLock;
 use ego_tree::NodeRef;
 use regex::Regex;
 use scraper::{Html, Node};
+use sysdeps::zip_opener::{Zip, open_zip};
 use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
-use text_extractor::{Zip, open_zip};
 
 use crate::TEXT_SIZE;
 use crate::markup::{count_lines, get_body_text, is_blank_char_text};
@@ -85,7 +85,7 @@ fn read_member(zip: &mut Zip, name: &str) -> Result<Vec<u8>, String> {
     let file = zip.by_name(name).map_err(|_| format!("KeyError: {name}"))?;
     // 헤더의 선언 크기는 믿지 않는다(zip bomb). 미리 할당하지 않고 상한까지만 푼다.
     let mut buf = Vec::new();
-    file.take(text_extractor::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
+    file.take(sysdeps::zip_opener::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
     Ok(buf)
 }
 

@@ -1253,7 +1253,6 @@ dependencies = [
  "stat",
  "sysdeps",
  "tempfile",
- "text_extractor",
 ]
 
 [[package]]
@@ -3541,6 +3540,7 @@ dependencies = [
  "mupdf",
  "serde_json",
  "tempfile",
+ "zip",
 ]
 
 [[package]]
@@ -3611,6 +3611,7 @@ version = "0.1.0"
 dependencies = [
  "encoding_rs",
  "regex",
+ "sysdeps",
  "tempfile",
  "zip",
 ]

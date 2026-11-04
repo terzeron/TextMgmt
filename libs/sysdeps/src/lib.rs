@@ -22,6 +22,7 @@ pub mod pdf_worker_client;
 pub use pdf_worker_client as poppler;
 mod native_pdf;
 pub mod timeout_runner;
+pub mod zip_opener;
 
 /// 환경 변수 조회 함수. `file_record::env_config::Config::from_env`와 같은 모양이다.
 pub type EnvFn<'a> = &'a dyn Fn(&str) -> Option<String>;

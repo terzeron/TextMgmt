@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::{Category, FileReport, Severity};
-use text_extractor::open_zip;
+use sysdeps::zip_opener::open_zip;
 use text_extractor::path::unquote;
 
 use super::ooxml_checker::{Member, check_xml_attacks, classify_member, parse, preview, push_once, read_xml_part};

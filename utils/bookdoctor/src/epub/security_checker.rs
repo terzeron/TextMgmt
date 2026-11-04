@@ -15,8 +15,8 @@ use std::sync::LazyLock;
 use crate::{Category, FileReport};
 use htmlkit::{Tag, decode_entities, local_name, tokenize};
 use regex::Regex;
+use sysdeps::zip_opener::{Zip, open_zip};
 use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
-use text_extractor::{Zip, open_zip};
 use zip::CompressionMethod;
 
 const MAX_TEXT: usize = 160;

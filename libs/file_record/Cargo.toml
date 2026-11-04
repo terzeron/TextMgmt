@@ -8,7 +8,6 @@ autotests = false
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-text_extractor = { path = "../text_extractor" }
 doc_reader = { path = "../doc_reader" }
 isbn = { path = "../isbn" }
 lopdf.workspace = true

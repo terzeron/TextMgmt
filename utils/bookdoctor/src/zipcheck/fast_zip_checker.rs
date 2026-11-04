@@ -11,7 +11,7 @@ use crate::magic_sniffer::{Sniffed, sniff};
 use crate::magic_sniffer::{is_text_name, shannon};
 use crate::output_formatter::sanitize_display;
 use crate::{Category, FileReport, Severity};
-use text_extractor::open_zip;
+use sysdeps::zip_opener::open_zip;
 use zip::CompressionMethod;
 
 use crate::epub::security_checker::{Limits, directory_limit_note, read_limited, zip_directory_bounds};

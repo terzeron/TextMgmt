@@ -17,8 +17,8 @@ use crate::{Category, FileReport, Severity};
 use regex::Regex;
 use roxmltree::{Document, Node};
 
+use sysdeps::zip_opener::{Zip, open_zip};
 use text_extractor::path::{posix_dirname, posix_join, posix_normpath, unquote};
-use text_extractor::{Zip, open_zip};
 
 use super::security_checker::Limits;
 use super::structure_checker::{ISSUE_MEMBER_UNREADABLE, ISSUE_TO_CODE, is_markup, parse_xml, rootfile_path, spine_members};
