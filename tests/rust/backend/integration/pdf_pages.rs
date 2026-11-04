@@ -243,9 +243,10 @@ fn sparse_pdf_preview_reads_only_needed_ranges() {
     write!(file, "\nstartxref\n{xref}\n%%EOF\n").unwrap();
     drop(file);
 
-    // 1GiB 파일을 256MiB 제한에서 처리해 전체 read_to_end 경로의 재발을 잡는다.
+    // 1GiB 파일을 320MiB 제한에서 처리해 전체 read_to_end 경로의 재발을 잡는다.
+    // 256MiB는 테스트 바이너리 자체의 주소 공간만으로 경계에 걸려, 코드가 조금 늘면 PDF worker 생성이 ENOMEM으로 실패했다.
     let output = std::process::Command::new("prlimit")
-        .args(["--as=268435456:536870912", "--"])
+        .args(["--as=335544320:536870912", "--"])
         .arg(std::env::current_exe().unwrap())
         .args(["--exact", "sparse_pdf_preview_reads_only_needed_ranges", "--nocapture"])
         .env(PROBE_PATH, &path)
