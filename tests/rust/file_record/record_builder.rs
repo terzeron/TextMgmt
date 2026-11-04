@@ -4,7 +4,7 @@ use std::fs;
 
 use doc_reader::pdf::InProcess;
 use file_record::env_config::Config;
-use file_record::record_builder::{read_file, read_file_in_process};
+use file_record::record_builder::{read_file, read_file_in_process, split_author_title};
 use stat::Stat;
 
 #[test]
@@ -31,4 +31,13 @@ fn reading_in_process_matches_read_file_with_the_in_process_runner_and_global_st
     assert!(direct.item.is_some(), "TXT는 문서가 된다: {:?}", direct.messages);
     assert_eq!(in_process.messages, direct.messages);
     assert_eq!(without_read_time(in_process), without_read_time(direct));
+}
+
+/// `[저자] 제목` 꼴만 나눈다. 저자와 제목이 모두 있고 한 줄이어야 한다. backend 파일 읽기도 이 함수를 쓴다.
+#[test]
+fn author_title_split_needs_both_parts_on_one_line() {
+    assert_eq!(split_author_title("[저자] 제목"), ("저자".into(), "제목".into()));
+    for stem in ["[저자]", "[] 제목", "[저자] 제\n목", "[저자 제목"] {
+        assert_eq!(split_author_title(stem), (String::new(), stem.to_string()), "{stem:?}");
+    }
 }

@@ -62,20 +62,6 @@ pub fn detect_file_type(fs: &dyn FsOps, path: &Path, declared: &str) -> Option<S
     None
 }
 
-/// `[저자] 제목` 꼴이면 둘로 나눈다. `file_record::record_builder::split_author_title`와 같다.
-fn split_author_title(stem: &str) -> (String, String) {
-    if let Some(rest) = stem.strip_prefix('[')
-        && let Some(end) = rest.find(']')
-    {
-        let author = &rest[..end];
-        let title = rest[end + 1..].trim_start_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c));
-        if !author.is_empty() && !title.is_empty() && !title.contains('\n') && !author.contains('\n') {
-            return (author.to_string(), title.to_string());
-        }
-    }
-    (String::new(), stem.to_string())
-}
-
 fn local_naive(time: std::time::SystemTime) -> NaiveDateTime {
     chrono::DateTime::<Local>::from(time).naive_local()
 }
@@ -149,7 +135,7 @@ impl DefaultFileReader {
         };
         let category = if parent_rel.is_empty() { "_root".to_string() } else { parent_rel };
         let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let (author, title) = split_author_title(&stem);
+        let (author, title) = record_builder::split_author_title(&stem);
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let mut file_type = declared_type(&name);
         if let Some(detected) = detect_file_type(&sysdeps::RealFs, path, &file_type)
@@ -226,14 +212,6 @@ mod tests {
             let p = d.path().join("a.zip");
             zip_with(&p, names);
             assert_eq!(detect_file_type(&sysdeps::RealFs, &p, "zip").as_deref(), want, "{names:?}");
-        }
-    }
-
-    #[test]
-    fn author_title_split_needs_both_parts_on_one_line() {
-        assert_eq!(split_author_title("[저자] 제목"), ("저자".into(), "제목".into()));
-        for stem in ["[저자]", "[] 제목", "[저자] 제\n목", "[저자 제목"] {
-            assert_eq!(split_author_title(stem), (String::new(), stem.to_string()), "{stem:?}");
         }
     }
 
