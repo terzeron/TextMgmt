@@ -1,11 +1,12 @@
-//! `book_manager::epub_metadata_reader` 단위 테스트. 분류기 껍데기 정리 때 `classifier::book_classifier`에서 옮겼다.
+//! `doc_reader::epub_metadata_reader` 단위 테스트.
 
-mod common;
-use book_manager::epub_metadata_reader::*;
-use common::zipx::{write_zip, write_zip_text};
+#[path = "../shared/zipx.rs"]
+mod zipx;
+use doc_reader::epub_metadata_reader::*;
 use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
+use zipx::{write_zip, write_zip_text};
 
 fn empty_meta() -> EpubMetadata {
     EpubMetadata { title: String::new(), author: String::new(), subject: String::new(), description: String::new() }

@@ -1122,6 +1122,7 @@ dependencies = [
  "flate2",
  "htmlkit",
  "hwp3_parser",
+ "log",
  "lopdf",
  "regex",
  "roxmltree",
@@ -1130,6 +1131,7 @@ dependencies = [
  "sysdeps",
  "tempfile",
  "text_decoder",
+ "xml_recoverer",
  "zip",
 ]
 

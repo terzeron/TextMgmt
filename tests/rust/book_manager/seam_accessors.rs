@@ -8,7 +8,7 @@ use crate::common::shared_fixtures::{
     allowed_set, blank_pdf_bytes_sized, block_on, category_with_files, deps, image_bytes, make_deps, make_doc, make_manager, make_source_file, outcome_or_default, tmp_dir,
 };
 use book_manager::BookManagerApi;
-use book_manager::pdf_page_reader::PdfCacheLimits;
+use book_manager::pdf_reader_cache::PdfCacheLimits;
 use book_manager::{ApplyOptions, BackfillThread, BookManager, CREATED_TIME_BACKFILL_ENV, ItemFailure, MoveOutcome, Proposal, ProposalGrade, ProposeOptions};
 use common::env::EnvGuard;
 use common::es_fake::FakeEsManager;
@@ -370,7 +370,7 @@ mod pdf_reader_cache_budget {
     use super::common;
     use crate::common::pdf_env::build;
     use crate::common::shared_fixtures::create_test_pdf;
-    use book_manager::pdf_page_reader::PdfCacheLimits;
+    use book_manager::pdf_reader_cache::PdfCacheLimits;
     use std::fs;
     use std::sync::Arc;
     use std::time::Duration;

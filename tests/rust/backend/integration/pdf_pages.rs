@@ -11,9 +11,9 @@ use crate::common::pdf_env::{Env, env};
 use crate::common::shared_fixtures::create_test_pdf;
 use backend::api_router::{AppDeps, AuthMode, app_with};
 use book_manager::BookManagerDeps;
-use book_manager::pdf_page_reader::{LopdfPageOps, PdfPageOps};
 use common::TestClient;
 use common::pdf::page_count_bytes;
+use doc_reader::pdf_page_reader::{LopdfPageOps, PdfPageOps};
 use serde_json::json;
 
 /// 비내장 UHC 한글 글꼴과 쪽별 content/주석으로 원본 객체 보존을 확인한다.

@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::{BookManager, BookManagerDeps, CREATED_TIME_BACKFILL_ENV};
-use crate::pdf_page_reader::{PageCountCache, PdfCacheLimits, PdfError, PdfReaderCache, PdfReaderHandle};
+use crate::pdf_reader_cache::{PageCountCache, PdfCacheLimits, PdfReaderCache};
+use doc_reader::pdf_page_reader::{PdfError, PdfReaderHandle};
 use std::os::unix::fs::MetadataExt;
 use sysdeps::task_runner::{TaskHandle, TaskRunner, ThreadRunner};
 

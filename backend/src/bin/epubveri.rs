@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;
 
-use book_manager::epub_metadata_reader::inspect_epub_metadata;
+use doc_reader::epub_metadata_reader::inspect_epub_metadata;
 use serde_json::{Value, json};
 
 fn report(path: &std::path::Path) -> Result<(Value, bool), String> {

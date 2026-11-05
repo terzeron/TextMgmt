@@ -9,7 +9,14 @@ use std::io::Cursor;
 use std::path::Path;
 use sysdeps::SystemRunner;
 
-use super::BookManager;
+/// 표지 가로:세로 비율.
+pub const COVER_ASPECT_RATIO: f64 = 2.0 / 3.0;
+/// 쪽 높이가 폭의 이 배 이상이면 위쪽만 표지로 자른다.
+pub const COVER_TALL_RATIO: f64 = 2.0;
+/// 가장 큰 색 덩어리가 이 비율 이상이고
+pub const COVER_BACKGROUND_RATIO_THRESHOLD: f64 = 0.60;
+/// 윤곽선 화소가 이 비율 이하이면 빈 표지로 본다.
+pub const COVER_DETAIL_RATIO_THRESHOLD: f64 = 0.15;
 
 const MAX_RENDER_DIMENSION: u32 = 1200;
 fn extract_first_page_jpeg(path: &Path) -> Option<RgbImage> {
@@ -23,8 +30,8 @@ fn extract_first_page_jpeg(path: &Path) -> Option<RgbImage> {
 
 fn crop_cover_image(rendered: &RgbImage, width: u32) -> Option<RgbImage> {
     let (render_width, render_height) = rendered.dimensions();
-    let (crop_width, crop_height) = if f64::from(render_height) >= f64::from(render_width) * BookManager::COVER_TALL_RATIO {
-        (render_width.min(width), ((f64::from(width) / BookManager::COVER_ASPECT_RATIO).round() as u32).min(render_height))
+    let (crop_width, crop_height) = if f64::from(render_height) >= f64::from(render_width) * COVER_TALL_RATIO {
+        (render_width.min(width), ((f64::from(width) / COVER_ASPECT_RATIO).round() as u32).min(render_height))
     } else if render_width > render_height {
         (render_width / 2, render_height)
     } else {
@@ -137,78 +144,76 @@ fn median_cut_palette(mut colors: Vec<([u8; 3], u32)>) -> Vec<[u8; 3]> {
         .collect()
 }
 
-impl BookManager {
-    /// PDF 첫 쪽(거의 빈 쪽이면 둘째 쪽)을 표지로 그린다. 그리지 못하면 `None`이다.
-    pub(super) fn render_pdf_cover(path: &Path, width: u32) -> Option<RgbImage> {
-        static SLOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _slot = SLOT.lock().unwrap_or_else(|error| error.into_inner());
-        let first = extract_first_page_jpeg(path).and_then(|image| crop_cover_image(&image, width)).or_else(|| render_pdf_cover_page(path, 1, width))?;
-        if Self::is_mostly_blank_cover(&DynamicImage::ImageRgb8(first.clone()))
-            && let Some(second) = render_pdf_cover_page(path, 2, width)
-        {
-            return Some(second);
-        }
-        Some(first)
+/// PDF 첫 쪽(거의 빈 쪽이면 둘째 쪽)을 표지로 그린다. 그리지 못하면 `None`이다.
+pub fn render_pdf_cover(path: &Path, width: u32) -> Option<RgbImage> {
+    static SLOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _slot = SLOT.lock().unwrap_or_else(|error| error.into_inner());
+    let first = extract_first_page_jpeg(path).and_then(|image| crop_cover_image(&image, width)).or_else(|| render_pdf_cover_page(path, 1, width))?;
+    if is_mostly_blank_cover(&DynamicImage::ImageRgb8(first.clone()))
+        && let Some(second) = render_pdf_cover_page(path, 2, width)
+    {
+        return Some(second);
     }
+    Some(first)
+}
 
-    /// 작은 단색 영역만 있는 이미지를 빈 표지로 판정한다. 64x96으로 줄여 가장 큰 색 덩어리의 비율과 윤곽선 화소 비율을 본다.
-    pub fn is_mostly_blank_cover(img: &DynamicImage) -> bool {
-        if img.width() == 0 || img.height() == 0 {
-            return false;
-        }
-        let sample = image::imageops::resize(&img.to_rgb8(), 64, 96, FilterType::Triangle);
-        let pixel_count = f64::from(sample.width() * sample.height());
-        // median cut: 가장 큰 색상 그룹을 반복 분할한다.
-        let mut histogram = std::collections::HashMap::new();
-        for pixel in sample.pixels() {
-            *histogram.entry([pixel[0], pixel[1], pixel[2]]).or_insert(0u32) += 1;
-        }
-        let colors = histogram.iter().map(|(rgb, count)| (*rgb, *count)).collect();
-        let palette = median_cut_palette(colors);
-        let mut quantized_counts = vec![0u32; palette.len()];
-        for (rgb, count) in &histogram {
-            let closest = palette
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, color)| (0..3).map(|channel| (i32::from(rgb[channel]) - i32::from(color[channel])).pow(2) as u32).sum::<u32>())
-                .map(|(index, _)| index)
-                .unwrap_or(0);
-            quantized_counts[closest] += count;
-        }
-        let largest = quantized_counts.into_iter().max().unwrap_or(0);
-        let background_ratio = f64::from(largest) / pixel_count;
-        // FIND_EDGES: 가장자리 한 줄은 원본을 그대로 두고 안쪽만 커널(-1 ... 8 ... -1)을 적용한다. L로 바꿔 24를 넘는 화소를 센다.
-        let (w, h) = (sample.width() as usize, sample.height() as usize);
-        let luma = |p: &Rgb<u8>| (u32::from(p[0]) * 299 + u32::from(p[1]) * 587 + u32::from(p[2]) * 114) / 1000;
-        let mut detail = 0u32;
-        for y in 0..h {
-            for x in 0..w {
-                let center = sample.get_pixel(x as u32, y as u32);
-                let value = if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
-                    luma(center)
-                } else {
-                    let mut channels = [0i32; 3];
-                    for (c, slot) in channels.iter_mut().enumerate() {
-                        let mut sum = 8 * i32::from(center[c]);
-                        for dy in -1i32..=1 {
-                            for dx in -1i32..=1 {
-                                if dx != 0 || dy != 0 {
-                                    sum -= i32::from(sample.get_pixel((x as i32 + dx) as u32, (y as i32 + dy) as u32)[c]);
-                                }
+/// 작은 단색 영역만 있는 이미지를 빈 표지로 판정한다. 64x96으로 줄여 가장 큰 색 덩어리의 비율과 윤곽선 화소 비율을 본다.
+pub fn is_mostly_blank_cover(img: &DynamicImage) -> bool {
+    if img.width() == 0 || img.height() == 0 {
+        return false;
+    }
+    let sample = image::imageops::resize(&img.to_rgb8(), 64, 96, FilterType::Triangle);
+    let pixel_count = f64::from(sample.width() * sample.height());
+    // median cut: 가장 큰 색상 그룹을 반복 분할한다.
+    let mut histogram = std::collections::HashMap::new();
+    for pixel in sample.pixels() {
+        *histogram.entry([pixel[0], pixel[1], pixel[2]]).or_insert(0u32) += 1;
+    }
+    let colors = histogram.iter().map(|(rgb, count)| (*rgb, *count)).collect();
+    let palette = median_cut_palette(colors);
+    let mut quantized_counts = vec![0u32; palette.len()];
+    for (rgb, count) in &histogram {
+        let closest = palette
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, color)| (0..3).map(|channel| (i32::from(rgb[channel]) - i32::from(color[channel])).pow(2) as u32).sum::<u32>())
+            .map(|(index, _)| index)
+            .unwrap_or(0);
+        quantized_counts[closest] += count;
+    }
+    let largest = quantized_counts.into_iter().max().unwrap_or(0);
+    let background_ratio = f64::from(largest) / pixel_count;
+    // FIND_EDGES: 가장자리 한 줄은 원본을 그대로 두고 안쪽만 커널(-1 ... 8 ... -1)을 적용한다. L로 바꿔 24를 넘는 화소를 센다.
+    let (w, h) = (sample.width() as usize, sample.height() as usize);
+    let luma = |p: &Rgb<u8>| (u32::from(p[0]) * 299 + u32::from(p[1]) * 587 + u32::from(p[2]) * 114) / 1000;
+    let mut detail = 0u32;
+    for y in 0..h {
+        for x in 0..w {
+            let center = sample.get_pixel(x as u32, y as u32);
+            let value = if x == 0 || y == 0 || x == w - 1 || y == h - 1 {
+                luma(center)
+            } else {
+                let mut channels = [0i32; 3];
+                for (c, slot) in channels.iter_mut().enumerate() {
+                    let mut sum = 8 * i32::from(center[c]);
+                    for dy in -1i32..=1 {
+                        for dx in -1i32..=1 {
+                            if dx != 0 || dy != 0 {
+                                sum -= i32::from(sample.get_pixel((x as i32 + dx) as u32, (y as i32 + dy) as u32)[c]);
                             }
                         }
-                        *slot = sum.clamp(0, 255);
                     }
-                    luma(&Rgb([channels[0] as u8, channels[1] as u8, channels[2] as u8]))
-                };
-                if value > 24 {
-                    detail += 1;
+                    *slot = sum.clamp(0, 255);
                 }
+                luma(&Rgb([channels[0] as u8, channels[1] as u8, channels[2] as u8]))
+            };
+            if value > 24 {
+                detail += 1;
             }
         }
-        let detail_ratio = f64::from(detail) / pixel_count;
-        background_ratio >= Self::COVER_BACKGROUND_RATIO_THRESHOLD && detail_ratio <= Self::COVER_DETAIL_RATIO_THRESHOLD
     }
+    let detail_ratio = f64::from(detail) / pixel_count;
+    background_ratio >= COVER_BACKGROUND_RATIO_THRESHOLD && detail_ratio <= COVER_DETAIL_RATIO_THRESHOLD
 }
 
 #[cfg(test)]

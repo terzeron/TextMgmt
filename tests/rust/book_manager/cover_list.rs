@@ -550,7 +550,7 @@ mod cover_member_lookup {
         assert_eq!(image::guess_format(&data).unwrap(), image::ImageFormat::Jpeg);
         let thumb = image::load_from_memory(&data).unwrap();
         // Rust round()는 동점에서 0에서 먼 쪽으로 반올림한다.
-        assert_eq!((thumb.width(), thumb.height()), (200, (200.0 / BookManager::COVER_ASPECT_RATIO).round() as u32));
+        assert_eq!((thumb.width(), thumb.height()), (200, (200.0 / cover_manager::pdf_cover::COVER_ASPECT_RATIO).round() as u32));
     }
 
     #[test]

@@ -637,7 +637,7 @@ impl BookManager {
     }
 
     /// PDF 쪽 추출 실패 응답. 저장소 오류(`OSError`)는 503, 그 밖은 500이다. 원인을 알 수 있게 오류 종류와 메시지를 본문에 담는다.
-    fn pdf_pages_failure(&self, book_id: i64, path: &Path, e: &crate::pdf_page_reader::PdfError) -> BookResponse {
+    fn pdf_pages_failure(&self, book_id: i64, path: &Path, e: &doc_reader::pdf_page_reader::PdfError) -> BookResponse {
         log::error!("PDF pages extraction failed for book_id={book_id} ({}): {e}", path.display());
         if e.kind == "OSError" {
             // "[Errno 28] No space left on device"에서 사람이 읽을 부분만 쓴다.

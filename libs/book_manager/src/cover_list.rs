@@ -82,10 +82,6 @@ impl BookManager {
     pub const COVER_THUMBNAIL_WIDTH: u32 = 200;
     pub const COVER_JPEG_QUALITY: u8 = 85;
     pub const COVER_CACHE_VERSION: u32 = 8;
-    pub const COVER_ASPECT_RATIO: f64 = 2.0 / 3.0;
-    pub const COVER_TALL_RATIO: f64 = 2.0;
-    pub const COVER_BACKGROUND_RATIO_THRESHOLD: f64 = 0.60;
-    pub const COVER_DETAIL_RATIO_THRESHOLD: f64 = 0.15;
 
     /// 허용한 썸네일 폭만 통과시킨다. 임의 값이 캐시 파일을 무한히 늘리지 못하게 한다.
     pub fn normalize_cover_width(width: Option<i64>) -> u32 {
@@ -101,7 +97,7 @@ impl BookManager {
         let width = Self::normalize_cover_width(width.map(i64::from));
         match file_type {
             "epub" => cover_manager::epub_cover::extract_epub_thumbnail(file_path, Some(width)),
-            "pdf" => Self::render_pdf_cover(file_path, width).and_then(|img| Self::encode_cover_jpeg(&img, width)),
+            "pdf" => cover_manager::pdf_cover::render_pdf_cover(file_path, width).and_then(|img| Self::encode_cover_jpeg(&img, width)),
             _ => None,
         }
     }

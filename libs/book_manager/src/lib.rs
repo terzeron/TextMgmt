@@ -29,8 +29,9 @@ use serde_json::Value;
 use sysdeps::{CommandRunner, EnvFn, FsOps, RealFs, SystemRunner};
 
 use crate::book_metadata::Book;
-use crate::pdf_page_reader::{LopdfOpener, LopdfPageOps, PageCountCache, PdfOpener, PdfPageOps, PdfReaderCache};
+use crate::pdf_reader_cache::{PageCountCache, PdfReaderCache};
 use classifier::Classify;
+use doc_reader::pdf_page_reader::{LopdfOpener, LopdfPageOps, PdfOpener, PdfPageOps};
 use search_manager::{Docs, EsManagerApi};
 
 /// 책 관리 작업이 실패했다.
@@ -50,8 +51,7 @@ pub use api_contract::{ApplyCategoryChanges, BookContent, BookManagerApi, BookRe
 
 pub mod book_metadata;
 pub mod comics_manager;
-pub mod epub_metadata_reader;
-pub mod pdf_page_reader;
+pub mod pdf_reader_cache;
 
 mod api_adapter;
 mod api_contract;
@@ -75,7 +75,6 @@ pub use category_proposer::{AppliedItem, ApplyResult, ApplyStatus, CategoryCandi
 pub use category_reloader::{CategoryReload, MismatchReload, ReloadCounts, ReloadFailure, ReloadProgressFn, ReloadedFiles};
 pub use mismatch_reporter::{CategoryMismatch, DuplicateDoc, DuplicatePath, EsOnlyFile, FsOnlyFile, MismatchDetails, MismatchSummary};
 mod path_validator;
-mod pdf_cover;
 mod pdf_edit;
 pub use pdf_edit::PdfEditResult;
 mod preview_builder;

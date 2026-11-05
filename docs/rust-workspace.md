@@ -17,11 +17,11 @@ docs/       문서
 | --- | --- |
 | `text_decoder` | 바이트를 텍스트로 푼다: 잘못된 바이트를 버리는 UTF-8·CP949 디코딩과 한글 음절 판정, 인코딩 이름과 코덱(`text_transcoder`), 인코딩 추정 휴리스틱 `detect_hint`·`decode_best`와 `korean_likeness`(`encoding_guesser`), 추출한 글의 손상 구간 세기(`mojibake_counter`). 파일을 읽지 않고 바이트와 글만 본다. `doc_reader`와 `doc_checker`의 아래 계층이다 |
 | `xml_recoverer` | 깨진 XML을 엄격한 파서(`roxmltree`)가 다시 읽을 수 있게 고치는 문자열 변환: 선언 없는 접두사 선언, DOCTYPE·모르는 엔티티 제거, 잘린 태그 닫기. 파싱은 하지 않고 변환 순서는 호출자가 정한다. backend의 EPUB 메타데이터·검사·표지 편집이 쓴다 |
-| `doc_reader` | 문서 읽기: 본문 요약 추출(TXT·EPUB·HTML·RTF·DOCX·PDF·HWP), 파일 앞뒤 읽기, 인코딩 손상 판정용 본문 표본(`text_sampler`). 판정은 하지 않는다. `doc_checker`의 아래 계층이다 |
+| `doc_reader` | 문서 읽기: 본문 요약 추출(TXT·EPUB·HTML·RTF·DOCX·PDF·HWP), 파일 앞뒤 읽기, 인코딩 손상 판정용 본문 표본(`text_sampler`), EPUB OPF 메타데이터(`epub_metadata_reader`), PDF 열기·쪽 추출 능력(`pdf_page_reader`). 판정은 하지 않는다. `doc_checker`의 아래 계층이다 |
 | `search_manager` | 책·만화 검색 색인 관리: ES 문서 검색·갱신·카테고리 집계(`ESManager`)와 그 trait(`EsManagerApi`). 전송은 `es_client`를 쓴다. backend 도메인 crate다 |
 | `auth_manager` | 인증: JWT 발급·검증과 역할 판정(`auth_service`), refresh token 저장·회전·세션 관리(`refresh_token_store`). 요청은 `http` crate 타입으로만 받고 axum을 모른다. backend 도메인 crate다 |
-| `book_manager` | 책·만화 관리: 목록·검색·미리보기·편집·재적재·카테고리 제안(`BookManager`, crate 루트), 만화(`comics_manager`), 책 메타데이터(`book_metadata`), EPUB 메타데이터(`epub_metadata_reader`)·PDF 쪽 읽기(`pdf_page_reader`). `cover_manager`·`search_manager`를 쓴다. backend 도메인 crate다 |
-| `cover_manager` | 책 표지: 서점 표지 후보 검색·캐시·저장(`cover_management`, `cover_sources`), URL 이미지 받기(`direct_cover_url`), EPUB 표지 교체·이미지 편집(`epub_cover`), 표지 유무 판정(`cover_status`), 크롭 기하(`image_edit`). backend 도메인 crate다 |
+| `book_manager` | 책·만화 관리: 목록·검색·미리보기·편집·재적재·카테고리 제안(`BookManager`, crate 루트), 만화(`comics_manager`), 책 메타데이터(`book_metadata`), PDF 리더·쪽 수 캐시(`pdf_reader_cache`). `cover_manager`·`search_manager`를 쓴다. backend 도메인 crate다 |
+| `cover_manager` | 책 표지: 서점 표지 후보 검색·캐시·저장(`cover_management`, `cover_sources`), URL 이미지 받기(`direct_cover_url`), EPUB 표지 교체·이미지 편집(`epub_cover`), 표지 유무 판정(`cover_status`), PDF 표지 렌더링·빈 표지 판정(`pdf_cover`), 크롭 기하(`image_edit`). backend 도메인 crate다 |
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. `search_manager`의 `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
 | `doc_checker` | 문서 파일 검사와 교정 기법. EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표(`format_dispatcher::scan_file`), 보안 정리(`epub_sanitizer`, `pdf::pdf_sanitizer`)와 결함 수리(`defect_repairer`)의 재구성·검증, TXT의 UTF-8 재인코딩(`encoding_repairer`), 인코딩 손상 판정(`mojibake_detector`, 표본은 `doc_reader::text_sampler`). OLE 복합 파일 파서(`ole_parser`)를 포함한다. 파일 하나를 받아 보고서나 고친 바이트를 돌려줄 뿐, 파일 순회·적용·출력은 하지 않는다. 검사 설정은 `CheckOptions`다 |

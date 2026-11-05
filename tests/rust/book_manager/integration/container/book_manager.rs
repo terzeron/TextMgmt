@@ -36,7 +36,7 @@
 //!     `validate_preview_epub_with(&dyn FsOps, &Path) -> Result<(), String>`, `evict_old_cache_with(&dyn FsOps, &Path)`, `join_created_time_backfill_thread(Duration)`
 //! - `book_manager::{BookContent::{File(PathBuf), Text(String)}, BookResponse { status_code: u16, body: Vec<u8> }, BookManagerError(String), ProposeOptions { use_bookstore: Option<bool>, use_content_meta: Option<bool>, on_progress: Option<&dyn Fn(Value)> }: Default}`
 //! - `sysdeps::{FsOps, CommandRunner, CommandOutput { returncode: i32, stdout: Vec<u8>, stderr: Vec<u8> }, CommandError::{Timeout, NotFound, Failed(String)}}` (문서 3.1. `FsOps`는 `common::faulty_fs::FaultyFs`, `CommandRunner`는 `common::runner::FakeRunner`가 구현한다)
-//! - `book_manager::pdf_page_reader::{PdfOpener { fn open(&self, &Path) -> Result<Box<dyn PdfDoc>, PdfError> }, PdfDoc (page_count/pdf_version/docinfo/check_pdf_syntax/close), PdfPageOps (page_count/extract_pages), PdfError { kind, message }}` (문서 3.11)
+//! - `doc_reader::pdf_page_reader::{PdfOpener { fn open(&self, &Path) -> Result<Box<dyn PdfDoc>, PdfError> }, PdfDoc (page_count/pdf_version/docinfo/check_pdf_syntax/close), PdfPageOps (page_count/extract_pages), PdfError { kind, message }}` (문서 3.11)
 //! - `classifier::Classify { fn is_available(&self) -> bool; fn classify_path(&self, &Path, Option<f64>) -> Result<Prediction, String>; fn classify_document(&self, &Value, Option<f64>) -> Result<Prediction, String> }`
 //! - `classifier::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str) -> Prediction`
 //! - `search_manager::{EsManagerApi, EsError, ESManager::connect(env, connector, clock)}` (문서 3.3. 대역은 `common::es_fake::FakeEsManager`)
@@ -60,7 +60,6 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::common::file_reader_fakes::FnFileReader;
 use crate::common::shared_fixtures::{as_status, make_doc, outcome, outcome_or_default, run, split, verdict};
 use book_manager::book_metadata::{Book, BookPage};
-use book_manager::pdf_page_reader::{PdfDoc, PdfError, PdfOpener, PdfPageOps};
 use book_manager::{BookContent, BookManager, BookManagerDeps, BookManagerError, BookResponse, FileReader, ProposeOptions};
 use book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, FsOnlyFile, MismatchDetails, MismatchSummary, ReloadCounts};
 use classifier::Classify;
@@ -72,6 +71,7 @@ use common::faulty_fs::{FaultyFs, fail_on_nth_call};
 use common::fsx::{mkdir, set_mtime, write_file as write};
 use common::runner::FakeRunner;
 use common::zipx::{open_zip, write_zip};
+use doc_reader::pdf_page_reader::{PdfDoc, PdfError, PdfOpener, PdfPageOps};
 use search_manager::{BackfillReport, DeleteByQueryResult, UpdateByQueryResult};
 use search_manager::{ESManager, EsError, EsManagerApi, Hit, PagedHits};
 use serde_json::{Value, json};

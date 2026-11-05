@@ -177,9 +177,9 @@ mod get_pdf_pages {
     use crate::common::pdf_env::{ResponseExt, build, env, make_doc};
     use crate::common::shared_fixtures::create_test_pdf;
     use book_manager::BookManager;
-    use book_manager::pdf_page_reader::{PdfError, PdfPageOps, PdfReaderHandle};
     use common::faulty_fs::FaultyFs;
     use common::pdf::page_count_bytes;
+    use doc_reader::pdf_page_reader::{PdfError, PdfPageOps, PdfReaderHandle};
     use std::fs;
     use std::path::Path;
     use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
@@ -415,7 +415,6 @@ mod get_book_preview {
     use super::common;
     use crate::common::shared_fixtures::{blank_pdf_bytes, blank_pdf_bytes_sized, block_on, deps, make_doc, make_manager, tmp_dir};
     use book_manager::BookManager;
-    use book_manager::pdf_page_reader::{PdfError, PdfPageOps};
     use book_manager::{BookManagerApi, BookResponse};
     use common::epub::{EpubSpec, make_epub};
     use common::es_fake::FakeEsManager;
@@ -424,6 +423,7 @@ mod get_book_preview {
     use common::runner::FakeRunner;
     use common::zipx::write_zip;
     use cover_manager::epub_cover::EpubCoverHooks;
+    use doc_reader::pdf_page_reader::{PdfError, PdfPageOps};
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::sync::Arc;

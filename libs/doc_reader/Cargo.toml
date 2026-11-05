@@ -7,6 +7,8 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
+log = "0.4.34"
+xml_recoverer = { path = "../xml_recoverer" }
 common = { path = "../common", default-features = false, features = ["xml_parser", "zip_reader"] }
 text_decoder = { path = "../text_decoder" }
 ego-tree = "0.11"
@@ -58,3 +60,11 @@ path = "../../tests/rust/doc_reader/text_normalizer.rs"
 [[test]]
 name = "text_sampler"
 path = "../../tests/rust/doc_reader/text_sampler.rs"
+
+[[test]]
+name = "epub_metadata_reader"
+path = "../../tests/rust/doc_reader/epub_metadata_reader.rs"
+
+[[test]]
+name = "pdf_page_reader"
+path = "../../tests/rust/doc_reader/pdf_page_reader.rs"

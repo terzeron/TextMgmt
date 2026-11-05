@@ -71,3 +71,7 @@ path = "../../tests/rust/cover_manager/epub_cover.rs"
 [[test]]
 name = "direct_cover_url"
 path = "../../tests/rust/cover_manager/direct_cover_url.rs"
+
+[[test]]
+name = "pdf_cover"
+path = "../../tests/rust/cover_manager/pdf_cover.rs"
