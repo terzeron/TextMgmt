@@ -16,8 +16,8 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
+use ::common::http_client::HttpTimeout;
 use backend::direct_cover_url::{ConnectRequest, Net, SystemNet};
-use sysdeps::HttpTimeout;
 
 #[test]
 fn test_system_net_uses_pinned_socket_and_streams_http_response() {

@@ -1,10 +1,9 @@
 //! HTML/XML 마크업 토큰화와 텍스트 추출.
 //!
-//! 토크나이저와 속성 엔티티 해석은 EPUB 보안 검사가 쓰고(`bookdoctor`), `url_parser`는 URL 해석이다(`backend` 표지, `bookstore` 검색 결과 링크). `text_of`는 태그를 걷어 낸
+//! 토크나이저와 속성 엔티티 해석은 EPUB 보안 검사가 쓰고(`bookdoctor`), `text_of`는 태그를 걷어 낸
 //! 본문 텍스트를 만든다(`doc_reader`).
 
 mod entity_table;
-pub mod url_parser;
 
 use entity_table::ENTITIES;
 

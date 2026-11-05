@@ -18,12 +18,13 @@ docs/       문서
 | `text_decoder` | 잘못된 바이트를 버리는 UTF-8·CP949 디코딩과 한글 음절 판정. `doc_reader`의 아래 계층이다. 본문 표본 추출과 인코딩 추정은 bookdoctor `text_sampler`에 있다 |
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. backend `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
+| `common` | 여러 crate가 함께 쓰는 기능: HTTP 요청·응답과 `ureq` 구현(`http_client`), URL 나누기·잇기·인코딩(`url_parser`), JSON 필드 읽기(`json_field_reader`). 시스템 능력이나 특정 문서 형식에 속하지 않고 두 crate 이상이 쓰는 것만 둔다. 네트워크가 필요 없는 crate는 `default-features = false`로 `http_client`를 끈다 |
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
 | `stat` | 색인·파싱 통계 카운터 |
 | `db` | MySQL 접근 추상화와 카테고리 매핑 저장소(`category_mapping`) |
 | `classifier` | 도서 분류기 껍데기: backend 분류 제안이 쓰는 `Classify`·`BookClassifierApi` trait와 모델 단독 어댑터. 구현은 없어서 backend는 카테고리 매핑 키워드만으로 제안한다 |
 | `file_record` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리, 색인 제외 디렉토리 규칙(`layout`). loader와 backend가 함께 쓴다 |
-| `sysdeps` | 시계, 파일시스템, 외부 명령, HTTP 같은 시스템 능력의 trait와 실제 구현, ZIP 열기와 항목 이름 정규화(`zip_opener`). 파서 시간 상한(`timeout`)과 PDF worker(`tm-pdf-worker`)를 포함한다 |
+| `sysdeps` | 시계, 파일시스템, 외부 명령 같은 시스템 능력의 trait와 실제 구현, ZIP 열기와 항목 이름 정규화(`zip_opener`). 파서 시간 상한(`timeout`)과 PDF worker(`tm-pdf-worker`)를 포함한다 |
 | `isbn` | 파일에서 ISBN 추출(TXT·EPUB·PDF·DJVU·HWP) |
 | `hwp3_parser` | HWP 3.x 텍스트 추출. 생성된 HNC→유니코드 매핑 표(`tables`)를 포함한다 |
 
@@ -42,6 +43,8 @@ docs/       문서
 - **테스트 파일은 소스 모듈과 1:1로 둔다.** `tests/rust/<crate>/<모듈 경로>.rs` 하나가 `src/<모듈 경로>.rs` 하나를 검증한다(예: `bookdoctor/epub/security.rs`).
   HTTP 라우트, CLI 진입점, 실행 파일, 소켓, 컨테이너를 거치는 테스트는 `tests/rust/<crate>/integration/<시나리오>.rs`에 두고 target 이름을 `integration_<시나리오>`로 한다.
   `*_gaps`, `*_parity`, `*_1`처럼 작업 이력을 따르는 파일 이름은 쓰지 않는다.
+  여러 crate 테스트가 함께 쓰는 helper(TLS 테스트 서버와 인증서)는 `tests/rust/shared/`에 둔다. `tests/rust/common/`은 `common` crate의 테스트다.
+  `mod common;`으로 helper 모듈을 둔 테스트 파일에서는 `common` crate를 `::common::`으로 부른다.
   private 항목을 검증하는 테스트는 그 소스 파일 안의 `#[cfg(test)] mod tests`에 둔다. `#[path]`로 `tests/` 밑 파일을 끌어오지 않는다.
 - **테스트를 먼저 쓴다(TDD).** 정해진 동작 사례를 Rust 테스트로 먼저 옮기고 실패를 확인한 뒤 구현한다.
 - **커버리지는 100%에 가깝게 유지한다.** `cargo llvm-cov --workspace --summary-only`.

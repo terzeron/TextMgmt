@@ -17,7 +17,7 @@ use crate::{Category, FileReport, Severity};
 use regex::Regex;
 use roxmltree::{Document, Node};
 
-use htmlkit::url_parser::unquote;
+use common::url_parser::unquote;
 use sysdeps::zip_opener::zip_entry_name;
 use sysdeps::zip_opener::{Zip, open_zip};
 

@@ -2,7 +2,7 @@
 
 mod common;
 
-#[path = "../common/tls_server.rs"]
+#[path = "../shared/tls_server.rs"]
 mod tls_server;
 
 use std::path::Path;
@@ -30,7 +30,7 @@ fn from_env_reports_the_first_missing_variable() {
 #[test]
 fn https_uses_the_configured_ca_and_verifies_the_server_certificate() {
     let (url, server) = tls_server::serve_tls_once();
-    let ca_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/rust/common/tls/local-es.crt");
+    let ca_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/rust/shared/tls/local-es.crt");
     let client = EsClient::new_with_ca(&url, "u", "p", "books", Some(&ca_path)).unwrap();
 
     assert_eq!(client.connect_with_retry(1, &|_| panic!("one successful TLS request should not retry")).unwrap()["version"]["number"], "9.1.0");

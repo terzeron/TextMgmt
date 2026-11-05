@@ -206,6 +206,7 @@ dependencies = [
  "bookstore",
  "chrono",
  "classifier",
+ "common",
  "db",
  "doc_reader",
  "epubveri",
@@ -396,6 +397,7 @@ name = "bookdoctor"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "common",
  "encoding_rs",
  "flate2",
  "htmlkit",
@@ -417,6 +419,7 @@ dependencies = [
 name = "bookstore"
 version = "0.1.0"
 dependencies = [
+ "common",
  "htmlkit",
  "log",
  "regex",
@@ -424,7 +427,6 @@ dependencies = [
  "serde_json",
  "sysdeps",
  "tempfile",
- "ureq",
 ]
 
 [[package]]
@@ -583,6 +585,15 @@ name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
+
+[[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "ureq",
+]
 
 [[package]]
 name = "const-oid"
@@ -842,6 +853,7 @@ name = "db"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "common",
  "diesel",
  "log",
  "mysqlclient-sys",
@@ -1004,6 +1016,7 @@ dependencies = [
 name = "doc_reader"
 version = "0.1.0"
 dependencies = [
+ "common",
  "ego-tree",
  "encoding_rs",
  "flate2",
@@ -1169,6 +1182,7 @@ dependencies = [
 name = "es_client"
 version = "0.1.0"
 dependencies = [
+ "common",
  "rustls",
  "rustls-pki-types",
  "serde_json",
@@ -3507,7 +3521,6 @@ dependencies = [
  "libc",
  "lopdf",
  "mupdf",
- "serde_json",
  "tempfile",
  "zip",
 ]

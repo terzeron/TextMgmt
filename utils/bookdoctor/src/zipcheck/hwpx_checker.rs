@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::{Category, FileReport, Severity};
-use htmlkit::url_parser::unquote;
+use common::url_parser::unquote;
 use sysdeps::zip_opener::open_zip;
 
 use super::ooxml_checker::{Member, check_xml_attacks, classify_member, parse, preview, push_once, read_xml_part};

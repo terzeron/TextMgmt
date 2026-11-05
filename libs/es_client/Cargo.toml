@@ -7,6 +7,7 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
+common = { path = "../common" }
 serde_json = { workspace = true, features = ["preserve_order"] }
 ureq = { workspace = true, features = ["rustls"] }
 

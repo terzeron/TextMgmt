@@ -79,7 +79,7 @@ impl BookManager {
         if !scheme.is_empty() || trimmed.starts_with("//") {
             return None;
         }
-        Some(format!("{resource_base_url}?path={}", htmlkit::url_parser::quote_component(trimmed)))
+        Some(format!("{resource_base_url}?path={}", common::url_parser::quote_component(trimmed)))
     }
 
     /// 뷰어에 내보낼 HTML에서 활성 콘텐츠를 걷어내고 리소스 주소를 엔드포인트로 돌린다.
@@ -242,7 +242,7 @@ impl BookManager {
             let disposition = if name.is_ascii() && !name.contains('"') && !name.contains('\\') {
                 format!("attachment; filename=\"{name}\"")
             } else {
-                format!("attachment; filename*=utf-8''{}", htmlkit::url_parser::quote_component(&name))
+                format!("attachment; filename*=utf-8''{}", common::url_parser::quote_component(&name))
             };
             headers.push(("Content-Disposition".to_string(), disposition));
         }

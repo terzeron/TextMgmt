@@ -17,7 +17,7 @@ use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 use std::sync::Arc;
 
-use htmlkit::url_parser::{unquote, urlsplit};
+use common::url_parser::{unquote, urlsplit};
 use serde::{Deserialize, Serialize};
 use sysdeps::FsOps;
 use sysdeps::zip_opener::zip_entry_name;

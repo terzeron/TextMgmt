@@ -1,14 +1,14 @@
 //!
 //! 서점 크롤러 테스트. HTML 파싱, 검색 우선순위(ISBN > 제목+저자 > 제목),
 //! 검색 결과 캐시, 웹툰 서점 JSON API 응답 처리를 확인한다.
-//! 서점 HTTP는 `sysdeps::HttpSession` 대역으로 갈아 끼운다(docs/rust-test-seams.md 3.7. libs/bookstore의 `Fetcher` 대역과 같은 방식).
+//! 서점 HTTP는 `common::http_client::HttpSession` 대역으로 갈아 끼운다(docs/rust-test-seams.md 3.7. libs/bookstore의 `Fetcher` 대역과 같은 방식).
 //!
 //! 가정한 API:
 //! - `bookstore::store_clients`
 //!   - `struct SearchRow { title, author, category, detail_url, search_url, isbn }`
 //!   - `const MAX_RESULTS: usize = 4` (`Bookstore.MAX_RESULTS`)
 //!   - `fn truncate_title(title: &str) -> String`
-//!   - `sysdeps::{HttpSession, HttpResponse, HttpError}` (구 `bookstore::{Session, HttpResponse}`)
+//!   - `common::http_client::{HttpSession, HttpResponse, HttpError}` (구 `bookstore::{Session, HttpResponse}`)
 //!     - `trait HttpSession: Send + Sync { fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError>; }` (`requests.Session.get` 대응. 예외는 `Err`)
 //!     - `HttpResponse::from_text(status: u16, text: &str) -> HttpResponse` (fake 생성용. `.text()`/`.json()`은 본문을 소비한다)
 //!     - `HttpError::Other(String)` (문서에 변형 목록이 없어 `EsError::Other`와 같은 모양으로 가정한 것)
@@ -49,13 +49,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::common::shared_fixtures::{Kind, failing};
 use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, single_quoted_hrefs};
+use ::common::http_client::HttpSession;
 use bookstore::BookInfo;
-use bookstore::store_clients::{AladinBookstore, Bookstore, MAX_RESULTS, SearchRow, UreqHttpSession, Yes24Bookstore};
-use sysdeps::{HttpError, HttpSession, HttpTimeout};
+use bookstore::store_clients::{AladinBookstore, Bookstore, MAX_RESULTS, SearchRow, Yes24Bookstore, store_session};
 
 #[test]
 fn ureq_session_preserves_http_status_headers_body_and_query() {
@@ -118,7 +117,7 @@ fn yes24_sessions_send_a_non_browser_user_agent() {
         Yes24Bookstore::new(false).session().get(url, &[]).unwrap();
     });
     let cover = user_agent_sent_by(|url| {
-        UreqHttpSession::for_store("yes24").get(url, &[]).unwrap();
+        store_session("yes24").get(url, &[]).unwrap();
     });
 
     assert_eq!(search, "curl/7.79.1");
@@ -131,7 +130,7 @@ fn other_store_sessions_keep_the_browser_user_agent() {
         AladinBookstore::new(false).session().get(url, &[]).unwrap();
     });
     let ridi = user_agent_sent_by(|url| {
-        UreqHttpSession::for_store("ridi").get(url, &[]).unwrap();
+        store_session("ridi").get(url, &[]).unwrap();
     });
 
     assert!(aladin.starts_with("Mozilla/5.0"), "{aladin}");
@@ -163,232 +162,10 @@ fn ridi_session_sends_store_headers_and_preserves_redirect_responses() {
         stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: /target\r\nContent-Length: 5\r\nConnection: close\r\n\r\nmoved").unwrap();
     });
 
-    let response = UreqHttpSession::for_store("ridi").get(&format!("http://{address}/redirect"), &[]).unwrap();
+    let response = store_session("ridi").get(&format!("http://{address}/redirect"), &[]).unwrap();
 
     assert_eq!(response.status_code, 302);
     assert_eq!(response.text(), "moved");
-    server.join().unwrap();
-}
-
-#[test]
-fn ureq_session_maps_connection_refusal_to_connection_error() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    drop(listener);
-
-    let error = UreqHttpSession::new().get(&format!("http://{address}/refused"), &[]).unwrap_err();
-
-    assert!(matches!(error, HttpError::Connection(_)));
-}
-
-#[test]
-fn ureq_session_applies_request_body_timeout() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                break;
-            }
-        }
-        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n").unwrap();
-        stream.flush().unwrap();
-        std::thread::sleep(Duration::from_millis(250));
-        let _ = stream.write_all(b"late");
-    });
-
-    let timeout = HttpTimeout { connect: Duration::from_secs(1), read: Duration::from_millis(40) };
-    let result = UreqHttpSession::new().get_with_timeout(&format!("http://{address}/slow"), &[], timeout);
-
-    assert!(matches!(result, Err(HttpError::Timeout)), "{result:?}");
-    server.join().unwrap();
-}
-
-#[test]
-fn ureq_session_recovers_after_an_idle_body_timeout() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut slow, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(slow.try_clone().unwrap());
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                break;
-            }
-        }
-        slow.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n").unwrap();
-        slow.flush().unwrap();
-        std::thread::sleep(Duration::from_millis(250));
-        let _ = slow.write_all(b"late");
-
-        let (mut fast, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(fast.try_clone().unwrap());
-        line.clear();
-        reader.read_line(&mut line).unwrap();
-        assert!(line.starts_with("GET /fast HTTP/1.1"), "{line}");
-        loop {
-            line.clear();
-            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                break;
-            }
-        }
-        fast.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").unwrap();
-    });
-
-    let session = UreqHttpSession::new();
-    let slow_timeout = HttpTimeout { connect: Duration::from_secs(1), read: Duration::from_millis(40) };
-    assert!(matches!(session.get_with_timeout(&format!("http://{address}/slow"), &[], slow_timeout), Err(HttpError::Timeout)));
-    let response = session.get_with_timeout(&format!("http://{address}/fast"), &[], HttpTimeout::from_secs(1, 1)).unwrap();
-    assert_eq!(response.text(), "ok");
-    server.join().unwrap();
-}
-
-#[test]
-fn ureq_session_resets_body_timeout_for_each_received_chunk() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                break;
-            }
-        }
-        stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").unwrap();
-        for chunk in [b"a".as_slice(), b"b".as_slice(), b"c".as_slice()] {
-            std::thread::sleep(Duration::from_millis(60));
-            write!(stream, "1\r\n{}\r\n", chunk[0] as char).unwrap();
-            stream.flush().unwrap();
-        }
-        stream.write_all(b"0\r\n\r\n").unwrap();
-    });
-
-    let timeout = HttpTimeout { connect: Duration::from_secs(1), read: Duration::from_millis(100) };
-    let response = UreqHttpSession::new().get_with_timeout(&format!("http://{address}/slow-stream"), &[], timeout);
-
-    assert_eq!(response.unwrap().text(), "abc");
-    server.join().unwrap();
-}
-
-#[test]
-fn ureq_session_rejects_a_body_over_the_size_limit() {
-    // 다 읽은 뒤가 아니라 읽는 도중에 끊어야 메모리를 지킨다.
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                break;
-            }
-        }
-        let size = bookstore::store_clients::MAX_RESPONSE_BYTES + 1024 * 1024;
-        let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n");
-        let block = vec![b'x'; 64 * 1024];
-        let mut sent = 0;
-        while sent < size {
-            if stream.write_all(&block).is_err() {
-                return;
-            }
-            sent += block.len();
-        }
-    });
-
-    let error = UreqHttpSession::new().get(&format!("http://{address}/huge"), &[]).unwrap_err();
-
-    assert!(error.to_string().contains("상한"), "{error}");
-    server.join().unwrap();
-}
-
-#[test]
-fn ureq_session_reuses_a_connection_after_a_complete_response() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        for _ in 0..2 {
-            let mut request = String::new();
-            reader.read_line(&mut request).unwrap();
-            assert!(request.starts_with("GET / HTTP/1.1"), "{request}");
-            let mut line = String::new();
-            loop {
-                line.clear();
-                if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                    break;
-                }
-            }
-            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").unwrap();
-            stream.flush().unwrap();
-        }
-    });
-
-    let session = UreqHttpSession::new();
-    for _ in 0..2 {
-        let response = session.get_with_timeout(&format!("http://{address}/"), &[], HttpTimeout::from_secs(1, 1)).unwrap();
-        assert_eq!(response.text(), "ok");
-    }
-    server.join().unwrap();
-}
-
-#[test]
-fn ureq_session_applies_response_timeout() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(250));
-        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-    });
-
-    let timeout = HttpTimeout { connect: Duration::from_secs(1), read: Duration::from_millis(40) };
-    let result = UreqHttpSession::new().get_with_timeout(&format!("http://{address}/slow"), &[], timeout);
-
-    assert!(matches!(result, Err(HttpError::Timeout)), "{result:?}");
-    server.join().unwrap();
-}
-
-#[test]
-fn ureq_session_reports_a_body_that_ends_before_content_length() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
-                break;
-            }
-        }
-        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nabc").unwrap();
-        stream.flush().unwrap();
-    });
-
-    let result = UreqHttpSession::new().get_with_timeout(&format!("http://{address}/short"), &[], HttpTimeout::from_secs(1, 1));
-
-    assert!(matches!(result, Err(HttpError::Connection(_))), "{result:?}");
     server.join().unwrap();
 }
 

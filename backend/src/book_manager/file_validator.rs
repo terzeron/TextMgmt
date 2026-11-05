@@ -3,6 +3,7 @@
 use std::io;
 use std::time::Duration;
 
+use common::json_field_reader::str_field;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sysdeps::CommandError;
@@ -107,10 +108,6 @@ pub struct PdfValidation {
     pub publication: PdfPublication,
 }
 
-fn text_of(value: &Value, key: &str) -> String {
-    value.get(key).and_then(Value::as_str).unwrap_or("").to_string()
-}
-
 fn number_of(value: &Value, key: &str, missing: i64) -> i64 {
     value.get(key).and_then(Value::as_i64).unwrap_or(missing)
 }
@@ -146,12 +143,17 @@ impl BookManager {
         let mut messages: Vec<EpubMessage> = Vec::new();
         for msg in data.get("messages").and_then(Value::as_array).into_iter().flatten() {
             let loc = msg.get("locations").and_then(Value::as_array).and_then(|l| l.first()).filter(|l| l.as_object().is_none_or(|o| !o.is_empty()));
-            let location = loc.map(|loc| MessageLocation { path: text_of(loc, "path"), line: number_of(loc, "line", -1), column: number_of(loc, "column", -1) });
-            messages.push(EpubMessage { severity: text_of(msg, "severity"), id: text_of(msg, "ID"), message: text_of(msg, "message"), location });
+            let location = loc.map(|loc| MessageLocation { path: str_field(loc, "path").to_string(), line: number_of(loc, "line", -1), column: number_of(loc, "column", -1) });
+            messages.push(EpubMessage { severity: str_field(msg, "severity").to_string(), id: str_field(msg, "ID").to_string(), message: str_field(msg, "message").to_string(), location });
         }
 
         let pub_raw = data.get("publication").filter(|p| p.as_object().is_some_and(|o| !o.is_empty()));
-        let publication = pub_raw.map(|p| EpubPublication { title: text_of(p, "title"), creator: text_of(p, "creator"), date: text_of(p, "date"), publisher: text_of(p, "publisher") });
+        let publication = pub_raw.map(|p| EpubPublication {
+            title: str_field(p, "title").to_string(),
+            creator: str_field(p, "creator").to_string(),
+            date: str_field(p, "date").to_string(),
+            publisher: str_field(p, "publisher").to_string(),
+        });
 
         // checker는 nFatal/nError/nWarning/nUsage만 준다. INFO 건수는 메시지에서 직접 센다.
         let checker = data.get("checker").cloned().unwrap_or(Value::Null);

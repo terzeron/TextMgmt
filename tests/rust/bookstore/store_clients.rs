@@ -1,14 +1,14 @@
 //!
 //! 서점 크롤러 테스트. HTML 파싱, 검색 우선순위(ISBN > 제목+저자 > 제목),
 //! 검색 결과 캐시, 웹툰 서점 JSON API 응답 처리를 확인한다.
-//! 서점 HTTP는 `sysdeps::HttpSession` 대역으로 갈아 끼운다(docs/rust-test-seams.md 3.7. libs/bookstore의 `Fetcher` 대역과 같은 방식).
+//! 서점 HTTP는 `common::http_client::HttpSession` 대역으로 갈아 끼운다(docs/rust-test-seams.md 3.7. libs/bookstore의 `Fetcher` 대역과 같은 방식).
 //!
 //! 가정한 API:
 //! - `bookstore::store_clients`
 //!   - `struct SearchRow { title, author, category, detail_url, search_url, isbn }`
 //!   - `const MAX_RESULTS: usize = 4` (`Bookstore.MAX_RESULTS`)
 //!   - `fn truncate_title(title: &str) -> String`
-//!   - `sysdeps::{HttpSession, HttpResponse, HttpError}` (구 `bookstore::{Session, HttpResponse}`)
+//!   - `common::http_client::{HttpSession, HttpResponse, HttpError}` (구 `bookstore::{Session, HttpResponse}`)
 //!     - `trait HttpSession: Send + Sync { fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError>; }` (`requests.Session.get` 대응. 예외는 `Err`)
 //!     - `HttpResponse::from_text(status: u16, text: &str) -> HttpResponse` (fake 생성용. `.text()`/`.json()`은 본문을 소비한다)
 //!     - `HttpError::Other(String)` (문서에 변형 목록이 없어 `EsError::Other`와 같은 모양으로 가정한 것)
@@ -53,6 +53,7 @@ use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, si
 use crate::common::shared_fixtures::{Call, Kind, failing, session};
 use crate::env_helpers::{EnvGuard, empty_env, map_env};
 use crate::log_capture::LogCapture;
+use ::common::http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout};
 use bookstore::BookInfo;
 use bookstore::store_clients::{
     AladinBookstore, BomtoonBookstore, Bookstore, JoaraBookstore, KakaoWebtoonBookstore, KyoboBookstore, LezhinBookstore, MAX_RESULTS, MarkupSource, MunpiaBookstore, NaverSeriesBookstore,
@@ -63,7 +64,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, atomic::AtomicUsize, atomic::Ordering};
 use std::{fs, io};
-use sysdeps::{FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout};
+use sysdeps::FsOps;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------

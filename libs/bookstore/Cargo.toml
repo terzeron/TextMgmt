@@ -7,14 +7,13 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
+common = { path = "../common" }
 htmlkit = { path = "../htmlkit" }
 log = "0.4.34"
 regex = "1.13.1"
 scraper = "0.29.0"
 serde_json = { workspace = true, features = ["preserve_order"] }
 sysdeps = { path = "../sysdeps" }
-# 공개 서점은 HTTPS라 이 crate에서만 TLS(rustls)를 켠다. 인증서 검증은 기본값(켬)을 그대로 쓴다.
-ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

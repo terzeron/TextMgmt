@@ -1,4 +1,4 @@
-//! 시계, 파일시스템, 외부 명령, HTTP 응답 같은 시스템 능력.
+//! 시계, 파일시스템, 외부 명령 같은 시스템 능력.
 //! 서비스 코드는 구체 타입 대신 이 trait를 받고, 테스트는 대역으로 바꿔 끼운다.
 //! 설계: docs/rust-test-seams.md 3.1
 
@@ -10,12 +10,9 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-use serde_json::Value;
 
 pub mod pdf_worker_client;
 // 기존 호출자의 모듈 경로는 유지하되 구현은 MuPDF Rust worker를 사용한다.
@@ -370,149 +367,6 @@ pub trait ChildProcess: Send {
 
 pub trait ProcessSpawner: Send + Sync {
     fn spawn(&self, argv: &[String]) -> io::Result<Box<dyn ChildProcess>>;
-}
-
-// ---------------------------------------------------------------------------
-// HTTP
-// ---------------------------------------------------------------------------
-
-#[derive(Debug)]
-pub enum HttpError {
-    Timeout,
-    Connection(String),
-    Other(String),
-}
-
-impl fmt::Display for HttpError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            HttpError::Timeout => write!(f, "HTTP 요청 시간 초과"),
-            HttpError::Connection(msg) => write!(f, "HTTP 연결 실패: {msg}"),
-            HttpError::Other(msg) => write!(f, "HTTP 오류: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for HttpError {}
-
-pub trait BodyStream: Send {
-    fn next_chunk(&mut self) -> Option<Result<Vec<u8>, HttpError>>;
-    /// 여러 번 불러도 안전해야 한다.
-    fn close(&mut self);
-}
-
-pub struct HttpResponse {
-    pub status_code: u16,
-    pub headers: Vec<(String, String)>,
-    body: Box<dyn BodyStream>,
-}
-
-struct ChunkBody {
-    chunks: std::vec::IntoIter<Vec<u8>>,
-    closed: Arc<AtomicBool>,
-}
-
-impl BodyStream for ChunkBody {
-    fn next_chunk(&mut self) -> Option<Result<Vec<u8>, HttpError>> {
-        self.chunks.next().map(Ok)
-    }
-
-    fn close(&mut self) {
-        self.closed.store(true, Ordering::SeqCst);
-    }
-}
-
-impl HttpResponse {
-    pub fn new(status_code: u16, headers: Vec<(String, String)>, body: Box<dyn BodyStream>) -> Self {
-        Self { status_code, headers, body }
-    }
-
-    /// fake 생성용: 본문이 한 덩어리인 응답.
-    pub fn from_text(status: u16, text: &str) -> Self {
-        Self::from_chunks(status, Vec::new(), vec![text.as_bytes().to_vec()], Arc::new(AtomicBool::new(false)))
-    }
-
-    /// fake 생성용: 청크 본문. 본문을 닫으면 `closed`가 `true`가 된다.
-    pub fn from_chunks(status: u16, headers: Vec<(String, String)>, chunks: Vec<Vec<u8>>, closed: Arc<AtomicBool>) -> Self {
-        Self::new(status, headers, Box::new(ChunkBody { chunks: chunks.into_iter(), closed }))
-    }
-
-    pub fn next_chunk(&mut self) -> Option<Result<Vec<u8>, HttpError>> {
-        self.body.next_chunk()
-    }
-
-    /// 본문 전체를 UTF-8로 읽는다(잘못된 바이트는 대체 문자). 읽은 뒤 본문을 닫는다.
-    pub fn text(mut self) -> String {
-        let mut buf = Vec::new();
-        while let Some(Ok(chunk)) = self.body.next_chunk() {
-            buf.extend_from_slice(&chunk);
-        }
-        self.body.close();
-        String::from_utf8_lossy(&buf).into_owned()
-    }
-
-    /// 본문을 JSON으로 해석한다. 해석할 수 없으면 `Null`이다.
-    pub fn json(self) -> Value {
-        serde_json::from_str(&self.text()).unwrap_or(Value::Null)
-    }
-
-    pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
-    }
-
-    pub fn is_redirect(&self) -> bool {
-        matches!(self.status_code, 301 | 302 | 303 | 307 | 308)
-    }
-
-    pub fn location(&self) -> Option<&str> {
-        self.header("location")
-    }
-}
-
-impl Drop for HttpResponse {
-    fn drop(&mut self) {
-        self.body.close();
-    }
-}
-
-impl fmt::Debug for HttpResponse {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("HttpResponse").field("status_code", &self.status_code).field("headers", &self.headers).finish_non_exhaustive()
-    }
-}
-
-/// Per-request network timeouts. `read` bounds response-header and per-read body inactivity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HttpTimeout {
-    pub connect: Duration,
-    pub read: Duration,
-}
-
-impl HttpTimeout {
-    pub const fn from_secs(connect: u64, read: u64) -> Self {
-        Self { connect: Duration::from_secs(connect), read: Duration::from_secs(read) }
-    }
-}
-
-pub trait HttpSession: Send + Sync {
-    fn get(&self, url: &str, params: &[(String, String)]) -> Result<HttpResponse, HttpError>;
-
-    /// Request with explicit timeouts. Implementors may keep the existing `get` behavior.
-    fn get_with_timeout(&self, url: &str, params: &[(String, String)], _timeout: HttpTimeout) -> Result<HttpResponse, HttpError> {
-        self.get(url, params)
-    }
-}
-
-/// 값이 있고 내용이 있는가: null과 빈 문자열·빈 배열·빈 객체만 없는 것으로 본다. 숫자와 불리언은 값이 있다.
-/// 외부 API 응답과 ES 문서를 읽는 쪽이 함께 쓴다.
-pub fn has_content(value: Option<&Value>) -> bool {
-    value.is_some_and(|v| match v {
-        Value::Null => false,
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-        Value::Bool(_) | Value::Number(_) => true,
-    })
 }
 
 /// panic 페이로드의 메시지. `panic!`이 넘긴 `&str`이나 `String`이 아니면 `None`이다. 없을 때의 문구는 호출자가 정한다.

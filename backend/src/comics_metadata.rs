@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use chrono::NaiveDateTime;
+use common::json_field_reader::str_field;
 use serde_json::Value;
 
 use crate::book_metadata::{BookView, iso_micros};
@@ -40,10 +41,6 @@ fn required_str(info: &Value, key: &str) -> String {
     info.get(key).and_then(Value::as_str).unwrap_or_else(|| panic!("info에 문자열 {key}가 없다")).to_string()
 }
 
-fn optional_str(info: &Value, key: &str) -> String {
-    info.get(key).and_then(Value::as_str).unwrap_or("").to_string()
-}
-
 fn optional_int(info: &Value, key: &str) -> i64 {
     info.get(key).and_then(Value::as_i64).unwrap_or(0)
 }
@@ -68,8 +65,8 @@ impl Comics {
             file_size: info.get("file_size").and_then(Value::as_i64).expect("info에 정수 file_size가 없다"),
             line_count: optional_int(info, "line_count"),
             page_count: optional_int(info, "page_count"),
-            isbn: optional_str(info, "isbn"),
-            summary: optional_str(info, "summary"),
+            isbn: str_field(info, "isbn").to_string(),
+            summary: str_field(info, "summary").to_string(),
             updated_time,
             score,
         }

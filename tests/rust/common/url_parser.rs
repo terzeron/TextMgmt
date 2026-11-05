@@ -1,6 +1,6 @@
-//! `htmlkit::url_parser` 단위 테스트.
+//! `common::url_parser` 단위 테스트.
 
-use htmlkit::url_parser::{Netloc, quote, quote_component, unquote, urlencode, urljoin, urlsplit};
+use common::url_parser::{Netloc, quote, quote_component, unquote, urlencode, urljoin, urlsplit};
 
 #[test]
 fn urljoin_handles_absolute_protocol_relative_root_and_relative_refs() {

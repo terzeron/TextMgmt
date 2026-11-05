@@ -13,7 +13,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-#[path = "../../common/tls_server.rs"]
+#[path = "../../shared/tls_server.rs"]
 mod tls_server;
 use crate::common::shared_fixtures::transport;
 use backend::es_manager::{Conflicts, ESManager, EsError, EsRequest, EsTransport, HttpTransport, RealEsConnector};
@@ -362,7 +362,7 @@ mod real_transport {
     #[test]
     fn https_uses_the_configured_ca() {
         let (url, server) = tls_server::serve_tls_once();
-        let ca_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/rust/common/tls/local-es.crt");
+        let ca_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/rust/shared/tls/local-es.crt");
         let t = HttpTransport::new_with_ca(&url, "u", "p", "books", Duration::from_secs(1), Some(&ca_path));
         assert_eq!(t.send(&EsRequest::Info).unwrap()["version"]["number"], "9.1.0");
         server.join().unwrap();

@@ -452,7 +452,7 @@ fn category_or_children(category: &str) -> Value {
     json!({"bool": {"should": [{"term": {"category": category}}, {"prefix": {"category": format!("{category}/")}}], "minimum_should_match": 1}})
 }
 
-use sysdeps::has_content;
+use common::json_field_reader::has_content;
 
 impl ESManager {
     pub const DEFAULT_MAX_RESULT_COUNT: i64 = 10;

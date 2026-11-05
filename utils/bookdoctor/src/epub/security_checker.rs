@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::{Category, FileReport};
-use htmlkit::url_parser::unquote;
+use common::url_parser::unquote;
 use htmlkit::{Tag, decode_entities, local_name, tokenize};
 use regex::Regex;
 use sysdeps::zip_opener::zip_entry_name;

@@ -1,12 +1,11 @@
-//! sysdeps 테스트: 시계, 파일시스템, 외부 명령, HTTP 응답 값 객체.
+//! sysdeps 테스트: 시계, 파일시스템, 외부 명령.
 //! 설계: docs/rust-test-seams.md 3.1
 
 mod common;
 use std::io::ErrorKind;
 use std::path::Path;
-use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
 use std::time::{Duration, Instant};
-use sysdeps::{Clock, CommandError, CommandRunner, FsOps, HttpResponse, RealFs, SystemClock, SystemRunner};
+use sysdeps::{Clock, CommandError, CommandRunner, FsOps, RealFs, SystemClock, SystemRunner};
 
 fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| s.to_string()).collect()
@@ -384,68 +383,6 @@ mod runner {
         assert_eq!(CommandError::Timeout.to_string(), "명령이 시간 상한을 넘었다");
         assert_eq!(CommandError::NotFound.to_string(), "명령을 찾을 수 없다");
         assert_eq!(CommandError::Failed("broken".into()).to_string(), "명령 실행 실패: broken");
-        assert_eq!(sysdeps::HttpError::Timeout.to_string(), "HTTP 요청 시간 초과");
-        assert_eq!(sysdeps::HttpError::Connection("closed".into()).to_string(), "HTTP 연결 실패: closed");
-        assert_eq!(sysdeps::HttpError::Other("bad status".into()).to_string(), "HTTP 오류: bad status");
-    }
-}
-
-mod http {
-    use super::*;
-
-    #[test]
-    fn from_text_exposes_status_text_and_json() {
-        let r = HttpResponse::from_text(200, "{\"a\": 1}");
-        assert_eq!(r.status_code, 200);
-        assert_eq!(r.json()["a"], 1);
-        assert_eq!(HttpResponse::from_text(200, "한글").text(), "한글");
-    }
-
-    #[test]
-    fn debug_output_contains_response_metadata() {
-        let r = HttpResponse::from_text(204, "");
-        let debug = format!("{r:?}");
-        assert!(debug.contains("status_code: 204"));
-        assert!(debug.contains("headers: []"));
-    }
-
-    #[test]
-    fn from_chunks_concatenates_chunks_and_marks_the_body_closed() {
-        let closed = Arc::new(AtomicBool::new(false));
-        let r = HttpResponse::from_chunks(200, vec![], vec![b"ab".to_vec(), b"cd".to_vec()], closed.clone());
-        assert!(!closed.load(Ordering::SeqCst));
-        assert_eq!(r.text(), "abcd");
-        assert!(closed.load(Ordering::SeqCst), "본문을 다 읽으면 닫아야 한다");
-    }
-
-    #[test]
-    fn dropping_an_unread_response_closes_the_body() {
-        let closed = Arc::new(AtomicBool::new(false));
-        let r = HttpResponse::from_chunks(200, vec![], vec![b"ab".to_vec()], closed.clone());
-        drop(r);
-        assert!(closed.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn next_chunk_streams_until_exhausted() {
-        let closed = Arc::new(AtomicBool::new(false));
-        let mut r = HttpResponse::from_chunks(200, vec![], vec![b"ab".to_vec(), b"cd".to_vec()], closed);
-        assert_eq!(r.next_chunk().unwrap().unwrap(), b"ab");
-        assert_eq!(r.next_chunk().unwrap().unwrap(), b"cd");
-        assert!(r.next_chunk().is_none());
-    }
-
-    #[test]
-    fn redirect_statuses_expose_the_location_header_case_insensitively() {
-        for status in [301u16, 302, 303, 307, 308] {
-            let r = HttpResponse::from_chunks(status, vec![("Location".into(), "https://x.test/a".into())], vec![], Arc::new(AtomicBool::new(false)));
-            assert!(r.is_redirect(), "status={status}");
-            assert_eq!(r.location(), Some("https://x.test/a"));
-        }
-        let ok = HttpResponse::from_text(200, "");
-        assert!(!ok.is_redirect());
-        assert_eq!(ok.location(), None);
-        assert_eq!(ok.header("Content-Type"), None);
     }
 }
 
@@ -494,22 +431,6 @@ mod private_dir {
         assert_eq!(private_dir_in(parent.path(), "cache"), None);
         assert_eq!(private_dir_in(&parent.path().join("missing"), "cache"), None);
     }
-}
-
-#[test]
-fn has_content_treats_only_null_and_empty_containers_as_missing() {
-    use serde_json::{Value, json};
-    use sysdeps::has_content;
-    assert!(!has_content(None));
-    assert!(!has_content(Some(&Value::Null)));
-    assert!(!has_content(Some(&json!(""))));
-    assert!(!has_content(Some(&json!([]))));
-    assert!(!has_content(Some(&json!({}))));
-    assert!(has_content(Some(&json!(0))));
-    assert!(has_content(Some(&json!(false))));
-    assert!(has_content(Some(&json!("x"))));
-    assert!(has_content(Some(&json!([1]))));
-    assert!(has_content(Some(&json!({"x": 1}))));
 }
 
 #[test]

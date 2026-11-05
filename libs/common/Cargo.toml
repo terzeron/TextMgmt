@@ -1,0 +1,36 @@
+[package]
+name = "common"
+description = "여러 crate가 함께 쓰는 기능: HTTP 요청(http_client), URL 해석(url_parser), JSON 필드 읽기(json_field_reader)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+# 네트워크 스택이 필요 없는 crate는 `default-features = false`로 HTTP 기능을 끈다.
+[features]
+default = ["http_client"]
+http_client = ["dep:ureq"]
+
+[dependencies]
+serde_json.workspace = true
+# 공개 서점과 ES는 HTTPS라 TLS(rustls)를 켠다. 인증서 검증은 기본값(켬)을 그대로 쓴다.
+ureq = { workspace = true, features = ["rustls"], optional = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[[test]]
+name = "url_parser"
+path = "../../tests/rust/common/url_parser.rs"
+
+[[test]]
+name = "json_field_reader"
+path = "../../tests/rust/common/json_field_reader.rs"
+
+[[test]]
+name = "http_client"
+path = "../../tests/rust/common/http_client.rs"
+
+[[test]]
+name = "integration_http_client"
+path = "../../tests/rust/common/integration/http_client.rs"

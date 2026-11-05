@@ -11,7 +11,7 @@ pub mod store_clients;
 
 use std::sync::LazyLock;
 
-use htmlkit::url_parser::{quote, urljoin};
+use common::url_parser::{quote, urljoin};
 use regex::Regex;
 use scraper::{ElementRef, Html, Node, Selector};
 

@@ -20,7 +20,7 @@ use zip::result::ZipError;
 use super::BookManager;
 use super::path_validator::{clean_href, zip_path};
 use super::temp_file_maker::TempDir;
-use htmlkit::url_parser::unquote;
+use common::url_parser::unquote;
 use serde_json::Value;
 use std::borrow::Cow;
 

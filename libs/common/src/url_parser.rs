@@ -1,4 +1,4 @@
-//! URL 나누기·잇기·인코딩(`urlsplit`/`urljoin`/`urlencode`/`quote`/`unquote`)의 최소 구현. 표지 URL 검증·다운로드와 서점 검색 결과 링크 해석이 함께 쓴다.
+//! URL 나누기·잇기·인코딩(`urlsplit`/`urljoin`/`urlencode`/`quote`/`unquote`)의 최소 구현. 표지 URL 검증·다운로드, 서점 검색 결과 링크, ES 요청 경로, MySQL 접속 URL이 함께 쓴다.
 
 /// `urlsplit` 결과. `netloc`은 `//`가 있을 때만 `Some`이다.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

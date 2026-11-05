@@ -13,13 +13,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
+use common::http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use sysdeps::{Clock, FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout, RealFs, SystemClock};
+use sysdeps::{Clock, FsOps, RealFs, SystemClock};
 
 use self::html_dom::HtmlDom;
-use htmlkit::url_parser::{Netloc, quote, urlencode, urljoin, urlsplit};
+use common::url_parser::{Netloc, quote, urlencode, urljoin, urlsplit};
 
 pub const STORE_NAMES: [&str; 8] = ["yes24", "aladin", "kyobo", "naver", "ridi", "munpia", "naverseries", "joara"];
 
@@ -609,7 +610,7 @@ fn value_text(value: &Value) -> String {
 
 use crate::epub_cover::EpubInspection;
 use bookstore::BookInfo;
-use sysdeps::has_content;
+use common::json_field_reader::has_content;
 
 /// 서점이 찾은 표지 후보 하나. `image_url`은 서버만 쓴다.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -765,7 +766,7 @@ pub struct SearchHooks {
 impl Default for SearchHooks {
     fn default() -> Self {
         SearchHooks {
-            session_factory: Arc::new(|store| Arc::new(bookstore::store_clients::UreqHttpSession::for_store(store)) as Arc<dyn HttpSession>),
+            session_factory: Arc::new(|store| Arc::new(bookstore::store_clients::store_session(store)) as Arc<dyn HttpSession>),
             client_factories: BTreeMap::new(),
             cancel: Arc::new(|| false),
             validate: Arc::new(validate_url),

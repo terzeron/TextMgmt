@@ -1,17 +1,15 @@
 //! 공개 이미지 URL을 검증한 IP에 직접 연결하여 내려받는다.
 //!
 //! DNS 조회와 연결 풀은 [`Net`] trait 뒤에 둔다(설계: docs/rust-test-seams.md 3.7).
-//! 연결 수준 계약이라 `sysdeps::HttpSession`과 합치지 않는다. 연결은 DNS로 검증한 IP에만 하고, TLS 호스트명은 원래 호스트로 확인한다.
+//! 연결 수준 계약이라 `common::http_client::HttpSession`과 합치지 않는다. 본문 읽기는 `BodyChunks`를 함께 쓴다. 연결은 DNS로 검증한 IP에만 하고, TLS 호스트명은 원래 호스트로 확인한다.
 
 use std::fmt;
-use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::time::Duration;
 
 use crate::cover_sources::{is_global, system_resolve};
-use htmlkit::url_parser::{Netloc, urljoin, urlsplit};
-use sysdeps::HttpTimeout;
+use common::http_client::{BodyChunks, HttpTimeout};
+use common::url_parser::{Netloc, urljoin, urlsplit};
 
 /// `backend.epub_cover.MAX_IMAGE_BYTES`와 같다.
 pub const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
@@ -104,70 +102,6 @@ struct UreqResponse {
     read_timeout: Duration,
 }
 
-/// ureq body deadline is total duration; this bounded reader channel resets an idle timeout per read.
-struct BodyChunks {
-    receiver: Receiver<Result<Vec<u8>, String>>,
-    agent: Option<ureq::Agent>,
-    read_timeout: Duration,
-    finished: bool,
-}
-
-impl BodyChunks {
-    fn new(body: ureq::BodyReader<'static>, agent: ureq::Agent, read_timeout: Duration) -> Self {
-        let (sender, receiver) = sync_channel(1);
-        std::thread::spawn(move || read_body_chunks(body, sender));
-        Self { receiver, agent: Some(agent), read_timeout, finished: false }
-    }
-}
-
-fn read_body_chunks(mut body: ureq::BodyReader<'static>, sender: SyncSender<Result<Vec<u8>, String>>) {
-    loop {
-        let mut chunk = vec![0; 8192];
-        match body.read(&mut chunk) {
-            Ok(0) => return,
-            Ok(size) => {
-                chunk.truncate(size);
-                if sender.send(Ok(chunk)).is_err() {
-                    return;
-                }
-            }
-            Err(error) => {
-                let _ = sender.send(Err(error.to_string()));
-                return;
-            }
-        }
-    }
-}
-
-impl Iterator for BodyChunks {
-    type Item = Result<Vec<u8>, String>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
-            return None;
-        }
-        match self.receiver.recv_timeout(self.read_timeout) {
-            Ok(chunk) => {
-                if chunk.is_err() {
-                    self.finished = true;
-                }
-                Some(chunk)
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                self.finished = true;
-                None
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                self.finished = true;
-                if let Some(agent) = self.agent.take() {
-                    agent.shutdown();
-                }
-                Some(Err("response body read timed out".to_string()))
-            }
-        }
-    }
-}
-
 impl PoolResponse for UreqResponse {
     fn status(&self) -> u16 {
         self.status
@@ -178,11 +112,9 @@ impl PoolResponse for UreqResponse {
     }
 
     fn stream(&mut self) -> Box<dyn Iterator<Item = Result<Vec<u8>, String>>> {
-        Box::new(BodyChunks::new(
-            self.body.take().expect("response stream can only be consumed once"),
-            self.agent.as_ref().expect("response agent is available until close").clone(),
-            self.read_timeout,
-        ))
+        let chunks =
+            BodyChunks::new(self.body.take().expect("response stream can only be consumed once"), self.agent.as_ref().expect("response agent is available until close").clone(), self.read_timeout);
+        Box::new(chunks.map(|chunk| chunk.map_err(|error| error.to_string())))
     }
 
     fn close(&mut self) {

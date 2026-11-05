@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use crate::magic_sniffer::{Sniffed, sniff};
 use crate::output_formatter::sanitize_display;
 use crate::{Category, FileReport, Severity};
-use htmlkit::url_parser::unquote;
+use common::url_parser::unquote;
 use regex::Regex;
 use sysdeps::zip_opener::zip_entry_name;
 use sysdeps::zip_opener::{Zip, open_zip};

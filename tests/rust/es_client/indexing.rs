@@ -1,4 +1,4 @@
-#[path = "../common/tls_server.rs"]
+#[path = "../shared/tls_server.rs"]
 mod tls_server;
 
 use es_client::EsClient;
@@ -30,7 +30,7 @@ fn path_prefix_query_matches_the_path_itself_and_everything_below() {
 #[test]
 fn bulk_insert_uses_verified_https_with_configured_ca() {
     let (url, server) = tls_server::serve_tls_once();
-    let ca = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/rust/common/tls/local-es.crt");
+    let ca = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/rust/shared/tls/local-es.crt");
     let client = EsClient::new_with_ca(&url, "u", "p", "books", Some(&ca)).unwrap();
     client.insert(&[(1, json!({"title": "책"}))]).unwrap();
     server.join().unwrap();

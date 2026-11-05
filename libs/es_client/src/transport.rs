@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
+use common::url_parser::quote_component;
+
 use crate::{EsError, base64, build_agent};
 
 /// 저수준 전송: 요청 하나를 보내고 응답 JSON을 돌려준다.
@@ -221,19 +223,6 @@ impl Request {
     }
 }
 
-/// RFC 3986 unreserved 문자만 그대로 두고 나머지는 퍼센트 인코딩한다.
-fn encode(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
-
 impl HttpTransport {
     /// HTTP 또는 HTTPS endpoint를 쓴다. HTTPS는 기본 WebPKI roots로 검증한다.
     pub fn new(url: &str, user: &str, password: &str, index: &str, timeout: Duration) -> Self {
@@ -256,7 +245,7 @@ impl HttpTransport {
     }
 
     fn index_path(&self, index: &Option<String>) -> String {
-        encode(index.as_deref().unwrap_or(&self.index))
+        quote_component(index.as_deref().unwrap_or(&self.index))
     }
 
     fn plan(&self, request: &EsRequest) -> Request {
@@ -291,15 +280,15 @@ impl HttpTransport {
                 r.query = query(&[("_source", source.as_ref().map(|fields| fields.join(",")))]);
                 r
             }
-            EsRequest::Get { index, id } => Request::new("GET", format!("/{}/_doc/{}", self.index_path(index), encode(id))),
+            EsRequest::Get { index, id } => Request::new("GET", format!("/{}/_doc/{}", self.index_path(index), quote_component(id))),
             EsRequest::Count { index, body } => Request::new("POST", format!("/{}/_count", self.index_path(index))).json(body.clone()),
             EsRequest::Update { index, id, body, refresh } => {
-                let mut r = Request::new("POST", format!("/{}/_update/{}", self.index_path(index), encode(id))).json(body.clone());
+                let mut r = Request::new("POST", format!("/{}/_update/{}", self.index_path(index), quote_component(id))).json(body.clone());
                 r.query = query(&[("refresh", flag(refresh))]);
                 r
             }
             EsRequest::Delete { index, id, refresh } => {
-                let mut r = Request::new("DELETE", format!("/{}/_doc/{}", self.index_path(index), encode(id)));
+                let mut r = Request::new("DELETE", format!("/{}/_doc/{}", self.index_path(index), quote_component(id)));
                 r.query = query(&[("refresh", flag(refresh))]);
                 r
             }
@@ -323,7 +312,7 @@ impl HttpTransport {
         let agent = self.agent.as_ref().map_err(Clone::clone)?;
         let mut url = format!("{}{}", self.base, request.path);
         if !request.query.is_empty() {
-            let pairs: Vec<String> = request.query.iter().map(|(k, v)| format!("{k}={}", encode(v))).collect();
+            let pairs: Vec<String> = request.query.iter().map(|(k, v)| format!("{k}={}", quote_component(v))).collect();
             url.push('?');
             url.push_str(&pairs.join("&"));
         }

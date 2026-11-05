@@ -26,7 +26,7 @@ use super::{
     CoverError, CreatedIdrefs, EpubCoverHooks, EpubRewrite, FResult, Fail, MAX_XML_BYTES, entry_names, entry_size, has_entry, normalize_image_with, read_dimensions, read_entry, read_package_with,
 };
 use crate::image_edit::{Rect, crop_rotated};
-use htmlkit::url_parser::quote;
+use common::url_parser::quote;
 
 /// crops 의 idref 에 이 값을 주면 쪽이 아니라 표지 이미지를 자른다(표지 화면은 spine 항목이 아닐 수 있다).
 pub const COVER_TARGET: &str = "@cover";

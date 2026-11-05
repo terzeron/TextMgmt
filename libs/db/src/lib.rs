@@ -10,6 +10,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use common::url_parser::quote_component;
 use diesel::connection::SimpleConnection;
 use diesel::deserialize::{self, FromSql, QueryableByName};
 use diesel::mysql::{Mysql, MysqlConnection, MysqlType};
@@ -192,22 +193,10 @@ impl fmt::Debug for MysqlConfig {
     }
 }
 
-fn percent_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
-}
-
 pub fn mysql_url(c: &MysqlConfig) -> String {
     // libmysqlclient는 "localhost"를 유닉스 소켓으로 해석한다. 항상 TCP로 붙게 루프백 주소로 바꾼다.
     let host = if c.host == "localhost" { "127.0.0.1" } else { c.host.as_str() };
-    format!("mysql://{}:{}@{}:{}/{}", percent_encode(&c.user), percent_encode(&c.password), host, c.port, c.database)
+    format!("mysql://{}:{}@{}:{}/{}", quote_component(&c.user), quote_component(&c.password), host, c.port, c.database)
 }
 
 // ---------------------------------------------------------------------------

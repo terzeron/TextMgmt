@@ -9,6 +9,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
+use common::json_field_reader::str_field;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -35,10 +36,6 @@ pub(super) fn routes() -> Routes {
         .post("/auth/logout", &[], logout)
         .get("/auth/sessions", &["require_admin"], list_login_sessions)
         .delete("/auth/sessions/{session_id}", &["require_admin"], revoke_login_session)
-}
-
-fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
-    value.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
 /// 비어 있음 판정: null, 빈 문자열/목록/객체, 0, false는 거짓이다.
@@ -129,17 +126,17 @@ async fn verify_google_token(State(deps): State<Arc<AppDeps>>, client: ClientInf
         }
     };
 
-    let issuer = str_of(&result, "iss");
+    let issuer = str_field(&result, "iss");
     if !GOOGLE_ISSUERS.contains(&issuer) {
         log::error!("Google token issuer mismatch: {issuer}");
         return Err(ApiError::http(401, "Invalid token issuer"));
     }
-    let email = str_of(&result, "email");
+    let email = str_field(&result, "email");
     if is_falsy(result.get("email_verified")) {
         log::warn!("Google login rejected because email is not verified: email_hash={}", observation_hash(email));
         return Err(ApiError::http(401, "Email is not verified"));
     }
-    let (name, picture) = (str_of(&result, "name"), str_of(&result, "picture"));
+    let (name, picture) = (str_field(&result, "name"), str_field(&result, "picture"));
 
     // 서버 쪽에서 역할을 정한다.
     let Some(role) = deps.role_resolver().determine_role(email) else {

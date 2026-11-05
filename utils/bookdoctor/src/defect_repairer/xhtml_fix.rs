@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 
 use std::path::Path;
 
-use htmlkit::url_parser::unquote;
+use common::url_parser::unquote;
 use regex::Regex;
 use scraper::{Html, Node};
 use sysdeps::zip_opener::zip_entry_name;

@@ -15,7 +15,7 @@ use std::sync::LazyLock;
 
 use crate::magic_sniffer::{Sniffed, sniff};
 use crate::{Category, Severity};
-use htmlkit::url_parser::unquote;
+use common::url_parser::unquote;
 use htmlkit::{decode_entities, text_of};
 use regex::Regex;
 use sysdeps::zip_opener::zip_entry_name;

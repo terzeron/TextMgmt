@@ -21,13 +21,16 @@ struct HttpGoogleJwksFetcher {
 
 impl Default for HttpGoogleJwksFetcher {
     fn default() -> Self {
-        Self { agent: ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(10))).build().into() }
+        Self { agent: common::http_client::http_client_with_timeout(Duration::from_secs(10), None).expect("CA를 지정하지 않으면 agent 생성은 실패하지 않는다") }
     }
 }
 
 impl GoogleJwksFetcher for HttpGoogleJwksFetcher {
     fn fetch(&self) -> Result<(Value, Duration), String> {
         let mut response = self.agent.get(GOOGLE_JWKS_URL).call().map_err(|e| e.to_string())?;
+        if response.status() != 200 {
+            return Err(format!("Google JWKS HTTP status {}", response.status().as_u16()));
+        }
         let max_age = response.headers().get("cache-control").and_then(|value| value.to_str().ok()).and_then(parse_max_age).unwrap_or(Duration::from_secs(300));
         let bytes = response.body_mut().read_to_vec().map_err(|e| e.to_string())?;
         if bytes.len() > 1024 * 1024 {

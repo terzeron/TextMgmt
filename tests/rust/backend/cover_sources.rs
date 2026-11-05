@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ::common::http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout};
 use backend::cover_sources::{
     GateError, SearchError, SearchHooks, StoreBlocked, StoreClient, StoreGate, StoreLockError, blocked_status, extract_html_candidates, fetch_bytes_with, parse_joara_candidates,
     parse_munpia_candidates, parse_naver_candidates, search_candidates_with, store_lock, store_lock_with, validate_url, validate_url_with,
@@ -19,7 +20,7 @@ use common::{
     faulty_fs::{FaultyFs, other_err},
 };
 use serde_json::json;
-use sysdeps::{HttpError, HttpResponse, HttpSession, HttpTimeout, RealFs, SystemClock};
+use sysdeps::{RealFs, SystemClock};
 
 #[test]
 fn test_html_candidates_use_real_page_images() {

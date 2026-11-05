@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use chrono::{NaiveDate, NaiveDateTime};
+use common::json_field_reader::str_field;
 use serde_json::Value;
 
 use crate::book_metadata::Book;
@@ -17,10 +18,6 @@ pub fn parse_iso(text: &str) -> Option<NaiveDateTime> {
     NaiveDate::parse_from_str(text, "%Y-%m-%d").ok().and_then(|d| d.and_hms_opt(0, 0, 0))
 }
 
-fn str_of(info: &Value, key: &str) -> String {
-    info.get(key).and_then(Value::as_str).unwrap_or("").to_string()
-}
-
 fn int_of(info: &Value, key: &str) -> i64 {
     info.get(key).and_then(Value::as_i64).unwrap_or(0)
 }
@@ -28,21 +25,21 @@ fn int_of(info: &Value, key: &str) -> i64 {
 /// ES 문서에서 `Book`을 만든다. `Book::new`와 달리 이 매니저의 책 루트를 쓰고, 빠진 필드는 기본값으로 채운다
 /// (문서 하나가 목록 전체를 막지 않게 한다).
 pub fn book_from_doc(path_prefix: &Path, book_id: i64, info: &Value, score: f64) -> Book {
-    let updated_text = str_of(info, "updated_time");
+    let updated_text = str_field(info, "updated_time").to_string();
     let created_text = info.get("created_time").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| updated_text.clone());
     let epoch = NaiveDateTime::default();
     Book {
         book_id,
-        category: str_of(info, "category"),
-        title: str_of(info, "title"),
-        author: str_of(info, "author"),
-        file_path: path_prefix.join(str_of(info, "file_path")),
-        file_type: str_of(info, "file_type"),
+        category: str_field(info, "category").to_string(),
+        title: str_field(info, "title").to_string(),
+        author: str_field(info, "author").to_string(),
+        file_path: path_prefix.join(str_field(info, "file_path")),
+        file_type: str_field(info, "file_type").to_string(),
         file_size: int_of(info, "file_size"),
         line_count: int_of(info, "line_count"),
         page_count: int_of(info, "page_count"),
-        isbn: str_of(info, "isbn"),
-        summary: str_of(info, "summary"),
+        isbn: str_field(info, "isbn").to_string(),
+        summary: str_field(info, "summary").to_string(),
         created_time: parse_iso(&created_text).unwrap_or(epoch),
         updated_time: parse_iso(&updated_text).unwrap_or(epoch),
         score,

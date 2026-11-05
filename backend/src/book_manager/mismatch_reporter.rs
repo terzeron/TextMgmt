@@ -5,6 +5,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use common::json_field_reader::str_field;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -41,10 +42,6 @@ fn entry_kind(path: &std::path::Path) -> EntryKind {
         Ok(m) if m.file_type().is_file() => EntryKind::File,
         _ => EntryKind::Other,
     }
-}
-
-fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
-    value.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
 /// 카테고리 하나의 ES·파일시스템 건수 비교.
@@ -341,7 +338,7 @@ impl BookManager {
         let mut es_files: BTreeMap<String, &Hit> = BTreeMap::new();
         let mut path_docs: BTreeMap<String, Vec<&Hit>> = BTreeMap::new();
         for hit in &doc_list {
-            let rel_path = self.normalize_stored_file_path(str_of(&hit.source, "file_path"));
+            let rel_path = self.normalize_stored_file_path(str_field(&hit.source, "file_path"));
             path_docs.entry(rel_path.clone()).or_default().push(hit);
             es_files.insert(rel_path, hit);
         }
@@ -361,7 +358,7 @@ impl BookManager {
         let es_only: Vec<EsOnlyFile> = es_files
             .iter()
             .filter(|(path, _)| !fs_files.contains(path.as_str()))
-            .map(|(path, hit)| EsOnlyFile { book_id: hit.id, title: str_of(&hit.source, "title").to_string(), file_type: str_of(&hit.source, "file_type").to_string(), file_path: path.clone() })
+            .map(|(path, hit)| EsOnlyFile { book_id: hit.id, title: str_field(&hit.source, "title").to_string(), file_type: str_field(&hit.source, "file_type").to_string(), file_path: path.clone() })
             .collect();
         let fs_only: Vec<FsOnlyFile> =
             fs_files.iter().filter(|p| !es_files.contains_key(p.as_str())).map(|path| FsOnlyFile { file_name: path.rsplit('/').next().unwrap_or(path).to_string(), file_path: path.clone() }).collect();
@@ -379,9 +376,9 @@ impl BookManager {
                 .iter()
                 .map(|hit| DuplicateDoc {
                     book_id: hit.id,
-                    title: str_of(&hit.source, "title").to_string(),
-                    author: str_of(&hit.source, "author").to_string(),
-                    file_type: str_of(&hit.source, "file_type").to_string(),
+                    title: str_field(&hit.source, "title").to_string(),
+                    author: str_field(&hit.source, "author").to_string(),
+                    file_type: str_field(&hit.source, "file_type").to_string(),
                     file_linked: linked_id == Some(hit.id),
                 })
                 .collect();

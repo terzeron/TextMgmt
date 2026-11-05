@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use base64::alphabet::STANDARD as STANDARD_ALPHABET;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
+use common::json_field_reader::str_field;
 use file_record::ignore_rules::IGNORED_DIR_NAMES;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -28,7 +29,7 @@ use crate::cover_sources::{
 };
 use crate::direct_cover_url::{ImageFetcher, RealImageFetcher};
 use crate::epub_cover::{self, CoverError, CoverImageInfo, CreatedIdrefs, EpubCoverHooks, EpubInspection, EpubRewrite, MAX_IMAGE_BYTES};
-use htmlkit::url_parser::{Netloc, urlsplit};
+use common::url_parser::{Netloc, urlsplit};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -411,10 +412,6 @@ fn is_symlink(path: &Path) -> bool {
 
 fn host_of(url: &str) -> String {
     urlsplit(url).netloc.map(|netloc| Netloc::parse(&netloc).hostname.unwrap_or_default().to_lowercase()).unwrap_or_default()
-}
-
-fn str_field<'a>(value: &'a Value, key: &str) -> &'a str {
-    value.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
 // ---------------------------------------------------------------------------

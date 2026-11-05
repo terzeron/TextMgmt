@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 use super::BookManager;
-use htmlkit::url_parser::unquote;
+use common::url_parser::unquote;
 use sysdeps::zip_opener::zip_entry_name;
 
 /// 색인 대상 확장자.

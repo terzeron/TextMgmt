@@ -16,6 +16,7 @@
   2. 주입은 생성자 `XxxDeps` + 소비형 `with_*` 빌더 하나로 한다. `set_*`, 전역 가드, `backend::*::testing` 모듈은 쓰지 않는다.
   3. 말단 순수 함수만 `*_with(args, &XxxHooks)`를 쓴다(`doc_reader`, `epub_cover`, `cover_sources`가 이미 이 방식).
   4. 공용 능력(`Clock`, `FsOps`, `CommandRunner`, `HttpSession`)은 새 lib crate `libs/sysdeps`에 두고 backend, loader, doc_reader가 함께 쓴다.
+     `HttpSession`과 `HttpResponse`는 이후 `libs/common`의 `http_client`로 옮겼다. 시스템 능력이 아니라서다.
 - 재작성 규모: 테스트 본문 수정 약 410개(19%, 41개 파일). 그중 기계적 치환 약 190개, 수작업 약 220개. 대역(fake) 구현을 고치는 헬퍼 수정은 별도로 약 25개 파일이다. 본문·헬퍼 모두 안 고치는 파일은 약 11개다.
 
 ---

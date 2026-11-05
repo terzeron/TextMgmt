@@ -4,13 +4,13 @@ mod common;
 #[path = "common/book_fixtures.rs"]
 mod fx;
 use crate::common::shared_fixtures::{error_text, split};
+use ::common::http_client::HttpTimeout;
 use backend::direct_cover_url::{ConnectRequest, FetchError, MAX_IMAGE_BYTES, Net, Pool, PoolResponse, fetch_url_image_with};
 use common::edits;
 use fx::{Edit, FetchBehavior, Opts, image_env};
 use std::fs;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering};
-use sysdeps::HttpTimeout;
 
 #[tokio::test]
 async fn test_fetch_failure_changes_nothing() {

@@ -9,7 +9,6 @@ pub mod indexing;
 pub mod transport;
 
 use std::fmt;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,25 +22,7 @@ pub const LIST_SOURCE_FIELDS: [&str; 11] = ["category", "title", "author", "file
 
 /// HTTP(S) agent를 만든다. CA를 지정하면 그 인증서를 TLS trust root로 사용한다.
 pub fn build_agent(timeout: Duration, ca_cert_path: Option<&Path>) -> Result<ureq::Agent, String> {
-    let mut builder = ureq::Agent::config_builder().timeout_global(Some(timeout)).http_status_as_error(false);
-    if let Some(path) = ca_cert_path {
-        let pem = fs::read(path).map_err(|error| format!("ES CA 인증서를 읽지 못했다 ({}): {error}", path.display()))?;
-        let certs = ureq::tls::parse_pem(&pem)
-            .filter_map(|item| match item {
-                Ok(ureq::tls::PemItem::Certificate(cert)) => Some(Ok(cert)),
-                Ok(ureq::tls::PemItem::PrivateKey(_)) => None,
-                Err(error) => Some(Err(error)),
-                _ => None,
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("ES CA 인증서 PEM을 해석하지 못했다: {error}"))?;
-        if certs.is_empty() {
-            return Err(format!("ES CA 인증서 PEM에 X.509 certificate가 없다: {}", path.display()));
-        }
-        let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::new_with_certs(&certs)).build();
-        builder = builder.tls_config(tls);
-    }
-    Ok(builder.build().into())
+    common::http_client::http_client_with_timeout(timeout, ca_cert_path).map_err(|error| format!("ES {error}"))
 }
 
 const DEFAULT_MAX_RESULT_COUNT: usize = 10;
