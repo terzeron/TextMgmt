@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::book_manager::{BookDeletion, CoverPage};
+use crate::book_manager::{MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
@@ -60,7 +61,7 @@ pub struct ApplyCategoryChanges<'a> {
     pub should_continue: Option<&'a (dyn Fn() -> bool + Send + Sync)>,
 }
 
-pub type ReloadProgress = Arc<dyn Fn(Value) + Send + Sync>;
+pub type ReloadProgress = Arc<dyn Fn(crate::book_manager::ReloadCounts) + Send + Sync>;
 
 /// 책/만화 관리자 facade. 책과 만화가 같은 trait를 쓴다. 지금은 문서 3.2의 통일 시그니처 일부만 있다.
 #[async_trait]
@@ -83,13 +84,13 @@ pub trait BookManagerApi: Send + Sync {
     async fn delete_file(&self, _file_path: &str) -> Result<(), String> {
         Err(UNIMPLEMENTED.to_string())
     }
-    async fn reload_category(&self, _category: &str, _content_type: &str) -> Result<Value, String> {
+    async fn reload_category(&self, _category: &str, _content_type: &str) -> Result<ReloadedFiles, String> {
         Err(UNIMPLEMENTED.to_string())
     }
-    async fn reload_category_mismatch_files(&self, _category: &str, _content_type: &str, _on_progress: Option<ReloadProgress>) -> Result<Value, String> {
+    async fn reload_category_mismatch_files(&self, _category: &str, _content_type: &str, _on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         Err(UNIMPLEMENTED.to_string())
     }
-    async fn reload_category_mismatches(&self, _content_type: &str, _on_progress: Option<ReloadProgress>) -> Result<Value, String> {
+    async fn reload_category_mismatches(&self, _content_type: &str, _on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         Err(UNIMPLEMENTED.to_string())
     }
     async fn rename_category(&self, _old: &str, _new: &str) -> Result<Value, String> {
@@ -190,10 +191,10 @@ pub trait BookManagerApi: Send + Sync {
         Err(UNIMPLEMENTED.to_string())
     }
 
-    fn get_category_mismatches(&self, _force_refresh: bool) -> Result<Value, String> {
+    fn get_category_mismatches(&self, _force_refresh: bool) -> Result<MismatchSummary, String> {
         Err(UNIMPLEMENTED.to_string())
     }
-    fn get_category_mismatch_details(&self, _category: &str) -> Result<Value, String> {
+    fn get_category_mismatch_details(&self, _category: &str) -> Result<MismatchDetails, String> {
         Err(UNIMPLEMENTED.to_string())
     }
 

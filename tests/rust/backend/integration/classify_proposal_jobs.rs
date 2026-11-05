@@ -1,6 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use backend::book_manager::ReloadedFiles;
 use backend::auth_service::Claims;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -393,11 +394,11 @@ async fn test_category_mismatch_detail_and_reload_routes() {
     let client = client(&bm, &cat);
 
     let details = client.get("/category-mismatches/A/B").await;
-    assert_eq!(details.json(), json!({"status":"success","result":{"fs_only":[{"file_path":"A/a.txt"}]}}));
+    assert_eq!(details.json(), json!({"status":"success","result":bm.mismatch_details.lock().unwrap().clone()}));
     assert_eq!(bm.mismatch_categories.lock().unwrap().as_slice(), &["A/B"]);
 
     let reloaded = client.post_json("/category-mismatches/reload", &json!({"category":"A"})).await;
-    assert_eq!(reloaded.json(), json!({"status":"success","result":{"category":"A","content_type":"book","processed":3}}));
+    assert_eq!(reloaded.json(), json!({"status":"success","result":ReloadedFiles { category: "A".into(), processed_count: 3 }}));
 
     let status = client.get("/category-mismatches/reload-status").await;
     assert_eq!(status.json(), json!({"status":"success","result":{"status":"idle"}}));

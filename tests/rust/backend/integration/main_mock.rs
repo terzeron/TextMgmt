@@ -1840,10 +1840,10 @@ async fn test_delete_es_doc_failure() {
 #[tokio::test]
 async fn test_reload_success() {
     let fx = Fx::new();
-    fx.bm.returns("reload_category", json!([{"reloaded": 3}, null]));
+    fx.bm.returns("reload_category", json!([{"category": "_epub", "processed_count": 3}, null]));
     let r = fx.post_json("/category-mismatches/reload", &json!({"category": "_epub"})).await;
     assert_eq!(r.status, 200);
-    assert_eq!(r.json(), json!({"status": "success", "result": {"reloaded": 3}}));
+    assert_eq!(r.json(), json!({"status": "success", "result": {"category": "_epub", "processed_count": 3}}));
 }
 
 #[tokio::test]
@@ -1859,7 +1859,12 @@ async fn test_reload_failure() {
 #[tokio::test]
 async fn test_get_details_success() {
     let fx = Fx::new();
-    let details = json!({"es": ["a.epub"], "fs": ["b.epub"]});
+    let details = json!({
+        "es_only": [{"book_id": 1, "title": "A", "file_type": "epub", "file_path": "_epub/a.epub"}],
+        "fs_only": [{"file_name": "b.epub", "file_path": "_epub/b.epub"}],
+        "duplicates": [],
+        "fs_count": 1,
+    });
     // get_category_mismatch_details는 블로킹 풀에서 부르므로 동기 함수여야 한다.
     fx.bm.returns("get_category_mismatch_details", details.clone());
     let r = fx.get("/category-mismatches/_epub").await;

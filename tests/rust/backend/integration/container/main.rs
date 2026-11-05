@@ -64,6 +64,7 @@ use axum::http::Method;
 use axum::response::IntoResponse;
 use backend::auth_service::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
 use backend::book_manager::{BookContent, BookDeletion, BookManager, BookManagerApi, BookResponse};
+use backend::book_manager::{FsOnlyFile, MismatchDetails, MismatchReload, MismatchSummary, ReloadCounts, ReloadedFiles};
 use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
@@ -1287,7 +1288,6 @@ fn dummy_book(book_id: i64, category: &str, title: &str, file_path: &str, file_t
     }
 }
 
-type MismatchRet = Result<Value, String>;
 type CategoryFn = Arc<dyn Fn(&str) -> (Option<Value>, Option<String>) + Send + Sync>;
 type RenameFn = Arc<dyn Fn(&str, &str) -> (Option<Value>, Option<String>) + Send + Sync>;
 
@@ -1456,18 +1456,18 @@ impl BookManagerApi for DummyManager {
         Ok(BookPage { books: vec![dummy_book(4, "A", "T4", "d.txt", "txt", 0.0, Some("2023-12-31T00:00:00.000000"))], total: 1, next_cursor: None })
     }
 
-    fn get_category_mismatches(&self, _force_refresh: bool) -> Result<Value, String> {
+    fn get_category_mismatches(&self, _force_refresh: bool) -> Result<MismatchSummary, String> {
         if self.b().errors {
             return Err("boom".into());
         }
-        Ok(json!({"mismatches": []}))
+        Ok(MismatchSummary::default())
     }
 
-    fn get_category_mismatch_details(&self, category: &str) -> Result<Value, String> {
+    fn get_category_mismatch_details(&self, category: &str) -> Result<MismatchDetails, String> {
         if self.b().errors {
             return Err("boom2".into());
         }
-        Ok(json!({"category": category}))
+        Ok(MismatchDetails { fs_only: vec![FsOnlyFile { file_name: category.to_string(), file_path: category.to_string() }], ..MismatchDetails::default() })
     }
 
     async fn index_single_file(&self, _file_path: &str) -> Result<i64, String> {
@@ -1484,14 +1484,14 @@ impl BookManagerApi for DummyManager {
         Ok(())
     }
 
-    async fn reload_category(&self, category: &str, _content_type: &str) -> MismatchRet {
+    async fn reload_category(&self, category: &str, _content_type: &str) -> Result<ReloadedFiles, String> {
         if self.b().errors {
             return Err("fail".into());
         }
-        Ok(json!({"category": category, "processed_count": 1}))
+        Ok(ReloadedFiles { category: category.to_string(), processed_count: 1 })
     }
 
-    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<backend::main::ReloadProgress>) -> MismatchRet {
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<backend::main::ReloadProgress>) -> Result<MismatchReload, String> {
         let b = self.b();
         if b.errors {
             return Err("bulk fail".into());
@@ -1500,19 +1500,19 @@ impl BookManagerApi for DummyManager {
             // 콜백 없는 전체 스캔 구간
             tokio::time::sleep(std::time::Duration::from_millis(b.scan_delay_ms)).await;
             if let Some(cb) = on_progress.as_deref() {
-                cb(json!({"before_count": 10}));
+                cb(ReloadCounts { before_count: Some(10), ..ReloadCounts::default() });
             }
             // 콜백 없는 refresh/재스캔 구간
             tokio::time::sleep(std::time::Duration::from_millis(b.scan_delay_ms)).await;
-            return Ok(json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 10, "after_count": 0}));
+            return Ok(MismatchReload { content_type: content_type.to_string(), category_count: 1, indexed_count: 2, deleted_count: 3, before_count: 10, ..MismatchReload::default() });
         }
         if let Some(cb) = on_progress.as_deref() {
-            cb(json!({"indexed_count": 2, "deleted_count": 3}));
+            cb(ReloadCounts { indexed_count: Some(2), deleted_count: Some(3), ..ReloadCounts::default() });
         }
-        Ok(json!({"content_type": content_type, "category_count": 1, "indexed_count": 2, "deleted_count": 3, "failed_count": 0, "before_count": 5, "after_count": 0}))
+        Ok(MismatchReload { content_type: content_type.to_string(), category_count: 1, indexed_count: 2, deleted_count: 3, before_count: 5, ..MismatchReload::default() })
     }
 
-    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<backend::main::ReloadProgress>) -> MismatchRet {
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<backend::main::ReloadProgress>) -> Result<MismatchReload, String> {
         let b = self.b();
         if b.mismatch_files_raise {
             panic!("mismatch boom");
@@ -1521,9 +1521,9 @@ impl BookManagerApi for DummyManager {
             return Err("mismatch fail".into());
         }
         if let Some(cb) = on_progress.as_deref() {
-            cb(json!({"indexed_count": 1, "deleted_count": 1}));
+            cb(ReloadCounts { indexed_count: Some(1), deleted_count: Some(1), ..ReloadCounts::default() });
         }
-        Ok(json!({"content_type": content_type, "category": category, "indexed_count": 1, "deleted_count": 1, "failed_count": 0, "before_count": 2, "after_count": 0}))
+        Ok(MismatchReload { content_type: content_type.to_string(), category: Some(category.to_string()), indexed_count: 1, deleted_count: 1, before_count: 2, ..MismatchReload::default() })
     }
 
     async fn rename_category(&self, old_category: &str, new_category: &str) -> Result<Value, String> {

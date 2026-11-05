@@ -2,6 +2,7 @@
 use super::ComicsManager;
 use crate::book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress};
 use crate::book_manager::{BookDeletion, BookManager, CoverPage};
+use crate::book_manager::{MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
@@ -20,13 +21,13 @@ impl BookManagerApi for ComicsManager {
     async fn delete_file(&self, file_path: &str) -> Result<(), String> {
         BookManagerApi::delete_file(&self.inner, file_path).await
     }
-    async fn reload_category(&self, category: &str, _content_type: &str) -> Result<Value, String> {
+    async fn reload_category(&self, category: &str, _content_type: &str) -> Result<ReloadedFiles, String> {
         BookManager::reload_category(&self.inner, category, Some("comic")).await
     }
-    async fn reload_category_mismatch_files(&self, category: &str, _content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
+    async fn reload_category_mismatch_files(&self, category: &str, _content_type: &str, on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         BookManager::reload_category_mismatch_files_for(&self.inner, category, "comic", on_progress.as_deref()).await
     }
-    async fn reload_category_mismatches(&self, _content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
+    async fn reload_category_mismatches(&self, _content_type: &str, on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         BookManager::reload_category_mismatches_for(&self.inner, "comic", on_progress.as_deref()).await
     }
     async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &std::collections::HashSet<String>, clean_existing: bool) -> Result<Value, String> {
@@ -131,11 +132,11 @@ impl BookManagerApi for ComicsManager {
         BookManagerApi::get_cover_books_paged(&self.inner, category, size, cursor, exclude_categories).await
     }
 
-    fn get_category_mismatches(&self, force_refresh: bool) -> Result<Value, String> {
+    fn get_category_mismatches(&self, force_refresh: bool) -> Result<MismatchSummary, String> {
         BookManagerApi::get_category_mismatches(&self.inner, force_refresh)
     }
 
-    fn get_category_mismatch_details(&self, category: &str) -> Result<Value, String> {
+    fn get_category_mismatch_details(&self, category: &str) -> Result<MismatchDetails, String> {
         BookManagerApi::get_category_mismatch_details(&self.inner, category)
     }
 

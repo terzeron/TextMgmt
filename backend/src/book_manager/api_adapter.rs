@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use super::{ApplyCategoryChanges, ProposeCategoryChanges, ReloadProgress};
 use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
 use super::{BookDeletion, CoverPage};
+use crate::book_manager::{MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
@@ -63,13 +64,13 @@ impl BookManagerApi for BookManager {
     async fn delete_file(&self, file_path: &str) -> Result<(), String> {
         BookManager::delete_file(self, file_path).await
     }
-    async fn reload_category(&self, category: &str, content_type: &str) -> Result<Value, String> {
+    async fn reload_category(&self, category: &str, content_type: &str) -> Result<ReloadedFiles, String> {
         BookManager::reload_category(self, category, Some(content_type)).await
     }
-    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         BookManager::reload_category_mismatch_files_for(self, category, content_type, on_progress.as_deref()).await
     }
-    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         BookManager::reload_category_mismatches_for(self, content_type, on_progress.as_deref()).await
     }
     async fn rename_category(&self, old: &str, new: &str) -> Result<Value, String> {
@@ -175,11 +176,11 @@ impl BookManagerApi for BookManager {
         BookManager::get_cover_books_paged(self, opts).await
     }
 
-    fn get_category_mismatches(&self, force_refresh: bool) -> Result<Value, String> {
+    fn get_category_mismatches(&self, force_refresh: bool) -> Result<MismatchSummary, String> {
         self.try_get_category_mismatches(force_refresh)
     }
 
-    fn get_category_mismatch_details(&self, category: &str) -> Result<Value, String> {
+    fn get_category_mismatch_details(&self, category: &str) -> Result<MismatchDetails, String> {
         self.try_get_category_mismatch_details(category)
     }
 

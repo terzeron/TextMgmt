@@ -5,7 +5,8 @@ use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use serde_json::{Map, Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::BookManager;
 use crate::es_manager::{Hit, PagedHits};
@@ -46,9 +47,115 @@ fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
+/// 카테고리 하나의 ES·파일시스템 건수 비교.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CategoryMismatch {
+    pub category: String,
+    pub es_count: i64,
+    pub fs_count: i64,
+    pub es_only_count: i64,
+    pub fs_only_count: i64,
+    pub duplicate_count: i64,
+    /// 경로 단위 이상 항목 수. 건수 차이(`diff`)는 서로 상쇄될 수 있어 이 값으로 판단한다.
+    pub anomaly_count: i64,
+    pub diff: i64,
+}
+
+/// 카테고리별 불일치 요약. 디렉터리가 없으면 `es_only`, ES 문서가 없으면 `fs_only`, 둘 다 있으면 `mismatches`다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MismatchSummary {
+    pub mismatches: Vec<CategoryMismatch>,
+    pub es_only: Vec<CategoryMismatch>,
+    pub fs_only: Vec<CategoryMismatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl MismatchSummary {
+    fn all(&self) -> impl Iterator<Item = &CategoryMismatch> {
+        self.mismatches.iter().chain(&self.es_only).chain(&self.fs_only)
+    }
+
+    /// 이상 항목 총 건수.
+    pub fn item_count(&self) -> i64 {
+        self.all().map(|item| item.anomaly_count.abs()).sum()
+    }
+
+    /// 요약에 나온 카테고리 이름들(중복 없이, 나온 순서대로).
+    pub fn categories(&self) -> Vec<String> {
+        let mut categories: Vec<String> = Vec::new();
+        for item in self.all() {
+            if !item.category.is_empty() && !categories.contains(&item.category) {
+                categories.push(item.category.clone());
+            }
+        }
+        categories
+    }
+}
+
+/// ES에만 있는 문서. 파일이 사라졌다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EsOnlyFile {
+    pub book_id: i64,
+    pub title: String,
+    pub file_type: String,
+    pub file_path: String,
+}
+
+/// 파일시스템에만 있는 파일. 색인되지 않았다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FsOnlyFile {
+    pub file_name: String,
+    pub file_path: String,
+}
+
+/// 같은 경로를 가리키는 ES 문서 하나.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DuplicateDoc {
+    pub book_id: i64,
+    pub title: String,
+    pub author: String,
+    pub file_type: String,
+    /// 문서 ID가 지금 파일의 inode와 같다.
+    pub file_linked: bool,
+}
+
+/// ES 문서가 여럿 가리키는 경로.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DuplicatePath {
+    pub file_path: String,
+    pub file_exists: bool,
+    pub docs: Vec<DuplicateDoc>,
+}
+
+/// 카테고리 하나의 불일치 상세.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MismatchDetails {
+    pub es_only: Vec<EsOnlyFile>,
+    pub fs_only: Vec<FsOnlyFile>,
+    pub duplicates: Vec<DuplicatePath>,
+    pub fs_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl MismatchDetails {
+    /// 고칠 항목 수.
+    pub fn item_count(&self) -> i64 {
+        (self.fs_only.len() + self.es_only.len() + self.duplicates.len()) as i64
+    }
+}
+
 impl BookManager {
     /// 캐시를 직접 정한다(값 설정). 테스트가 TTL 안의 캐시를 만들 때 쓴다.
-    pub fn set_mismatch_cache(&self, cache: Option<Value>, at: Instant) {
+    pub fn set_mismatch_cache(&self, cache: Option<MismatchSummary>, at: Instant) {
         let mut state = self.mismatch.lock().unwrap_or_else(|e| e.into_inner());
         state.cache = cache;
         state.time = Some(at);
@@ -59,38 +166,6 @@ impl BookManager {
         let mut state = self.mismatch.lock().unwrap_or_else(|e| e.into_inner());
         state.cache = None;
         state.time = None;
-    }
-
-    /// 요약 응답의 이상 항목 총 건수. `anomaly_count`가 없으면 건수 비교만 하던 옛 응답으로 본다.
-    pub fn mismatch_item_count(&self, mismatch_data: &Value) -> i64 {
-        let mut total = 0;
-        for (key, legacy_field) in [("mismatches", "diff"), ("es_only", "es_count"), ("fs_only", "fs_count")] {
-            for item in mismatch_data.get(key).and_then(Value::as_array).into_iter().flatten() {
-                let count = item.get("anomaly_count").filter(|v| !v.is_null()).or_else(|| item.get(legacy_field)).and_then(Value::as_i64).unwrap_or(0);
-                total += count.abs();
-            }
-        }
-        total
-    }
-
-    /// 요약 응답에 나온 카테고리 이름들(중복 없이, 나온 순서대로).
-    pub fn mismatch_categories(&self, mismatch_data: &Value) -> Vec<String> {
-        let mut categories: Vec<String> = Vec::new();
-        for key in ["mismatches", "es_only", "fs_only"] {
-            for item in mismatch_data.get(key).and_then(Value::as_array).into_iter().flatten() {
-                if let Some(category) = item.get("category").and_then(Value::as_str)
-                    && !category.is_empty()
-                    && !categories.iter().any(|c| c == category)
-                {
-                    categories.push(category.to_string());
-                }
-            }
-        }
-        categories
-    }
-
-    pub(crate) fn mismatch_detail_item_count(details: &Value) -> i64 {
-        ["fs_only", "es_only", "duplicates"].iter().map(|key| details.get(*key).and_then(Value::as_array).map_or(0, |a| a.len() as i64)).sum()
     }
 
     /// 카테고리의 ES 문서를 모두 모은다(커서를 따라 끝까지).
@@ -156,7 +231,7 @@ impl BookManager {
     }
 
     /// ES 문서와 파일시스템 파일을 경로 단위로 비교해 카테고리별 이상 항목 수를 센다.
-    fn scan_category_mismatches(&self) -> Result<Value, String> {
+    fn scan_category_mismatches(&self) -> Result<MismatchSummary, String> {
         if let Some(observer) = &self.scan_observer {
             observer();
         }
@@ -190,33 +265,38 @@ impl BookManager {
             stats.insert(category, Stat { es_count: entry.doc_count, fs_count: 0, es_only_count: entry.paths.len() as i64, fs_only_count: 0, duplicate_count: entry.duplicate_paths.len() as i64 });
         }
 
-        let (mut mismatches, mut es_only, mut fs_only) = (Vec::new(), Vec::new(), Vec::new());
-        for (category, stat) in &stats {
+        let mut result = MismatchSummary::default();
+        for (category, stat) in stats {
             let anomaly_count = stat.es_only_count + stat.fs_only_count + stat.duplicate_count;
             if anomaly_count == 0 {
                 continue;
             }
-            let item = json!({
-                "category": category, "es_count": stat.es_count, "fs_count": stat.fs_count, "es_only_count": stat.es_only_count,
-                "fs_only_count": stat.fs_only_count, "duplicate_count": stat.duplicate_count, "anomaly_count": anomaly_count,
-                "diff": (stat.es_count - stat.fs_count).abs(),
-            });
-            if stat.fs_count == 0 {
-                es_only.push(item);
+            let item = CategoryMismatch {
+                category,
+                es_count: stat.es_count,
+                fs_count: stat.fs_count,
+                es_only_count: stat.es_only_count,
+                fs_only_count: stat.fs_only_count,
+                duplicate_count: stat.duplicate_count,
+                anomaly_count,
+                diff: (stat.es_count - stat.fs_count).abs(),
+            };
+            let list = if stat.fs_count == 0 {
+                &mut result.es_only
             } else if stat.es_count == 0 {
-                fs_only.push(item);
+                &mut result.fs_only
             } else {
-                mismatches.push(item);
-            }
+                &mut result.mismatches
+            };
+            list.push(item);
         }
-        mismatches.sort_by_key(|item| std::cmp::Reverse(item["anomaly_count"].as_i64().unwrap_or(0)));
-        let result = json!({"mismatches": mismatches, "es_only": es_only, "fs_only": fs_only});
-        log::info!("get_category_mismatches: 이상 카테고리 {}개, 이상 항목 {}건", mismatches_len(&result), self.mismatch_item_count(&result));
+        result.mismatches.sort_by_key(|item| std::cmp::Reverse(item.anomaly_count));
+        log::info!("get_category_mismatches: 이상 카테고리 {}개, 이상 항목 {}건", result.all().count(), result.item_count());
         Ok(result)
     }
 
     /// 요약 스캔을 돌려 캐시를 갱신한다. 스캔은 동시에 하나만 돈다.
-    fn refresh_mismatch_cache(&self) -> Result<Value, String> {
+    fn refresh_mismatch_cache(&self) -> Result<MismatchSummary, String> {
         let _scan = self.scan_lock.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(cached) = self.mismatch.lock().unwrap_or_else(|e| e.into_inner()).fresh().cloned() {
             return Ok(cached);
@@ -229,7 +309,7 @@ impl BookManager {
     }
 
     /// 카테고리별 이상 항목 요약. ES 오류는 `Err`다. TTL 안이면 캐시를 쓴다. `force_refresh`는 오래된 값을 쓰면 안 되는 호출자용이다.
-    pub fn try_get_category_mismatches(&self, force_refresh: bool) -> Result<Value, String> {
+    pub fn try_get_category_mismatches(&self, force_refresh: bool) -> Result<MismatchSummary, String> {
         if let Some(f) = &self.get_category_mismatches_override {
             return Ok(f(force_refresh));
         }
@@ -242,35 +322,28 @@ impl BookManager {
     }
 
     /// `try_get_category_mismatches`의 값 판. ES 오류는 빈 요약에 `error`를 담아 돌려준다(캐시하지 않는다).
-    pub fn get_category_mismatches(&self, force_refresh: bool) -> Value {
+    pub fn get_category_mismatches(&self, force_refresh: bool) -> MismatchSummary {
         self.try_get_category_mismatches(force_refresh).unwrap_or_else(|e| {
             log::error!("get_category_mismatches 실패: {e}");
-            json!({"mismatches": [], "es_only": [], "fs_only": [], "error": e})
+            MismatchSummary { error: Some(e), ..MismatchSummary::default() }
         })
     }
 
     /// 특정 카테고리의 ES 문서와 파일시스템 파일을 비교해 불일치 항목을 돌려준다. ES 오류는 `Err`다.
-    pub fn try_get_category_mismatch_details(&self, category: &str) -> Result<Value, String> {
-        let empty_result = json!({"es_only": [], "fs_only": [], "duplicates": [], "fs_count": 0});
+    pub fn try_get_category_mismatch_details(&self, category: &str) -> Result<MismatchDetails, String> {
         if !self.is_safe_category_name(category) {
             log::warn!("get_category_mismatch_details: unsafe category ignored: {category:?}");
-            return Ok(empty_result);
+            return Ok(MismatchDetails::default());
         }
 
         // 1. ES 문서 목록(file_path 기준, 중복 감지 포함)
         let doc_list = self.search_all_docs_by_category(category)?;
-        let mut es_files: BTreeMap<String, Value> = BTreeMap::new();
-        let mut path_docs: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-        for Hit { id: book_id, source: doc, .. } in &doc_list {
-            let rel_path = self.normalize_stored_file_path(str_of(doc, "file_path"));
-            let mut with_id = Map::new();
-            with_id.insert("book_id".to_string(), json!(book_id));
-            if let Some(fields) = doc.as_object() {
-                with_id.extend(fields.iter().map(|(k, v)| (k.clone(), v.clone())));
-            }
-            let with_id = Value::Object(with_id);
-            path_docs.entry(rel_path.clone()).or_default().push(with_id.clone());
-            es_files.insert(rel_path, with_id);
+        let mut es_files: BTreeMap<String, &Hit> = BTreeMap::new();
+        let mut path_docs: BTreeMap<String, Vec<&Hit>> = BTreeMap::new();
+        for hit in &doc_list {
+            let rel_path = self.normalize_stored_file_path(str_of(&hit.source, "file_path"));
+            path_docs.entry(rel_path.clone()).or_default().push(hit);
+            es_files.insert(rel_path, hit);
         }
 
         // 2. 파일시스템 파일 목록
@@ -285,16 +358,13 @@ impl BookManager {
         }
 
         // 3. 비교
-        let es_paths: BTreeSet<&String> = es_files.keys().collect();
-        let es_only: Vec<Value> = es_paths
+        let es_only: Vec<EsOnlyFile> = es_files
             .iter()
-            .filter(|p| !fs_files.contains(p.as_str()))
-            .map(|path| {
-                let info = &es_files[path.as_str()];
-                json!({"book_id": info["book_id"], "title": str_of(info, "title"), "file_type": str_of(info, "file_type"), "file_path": path})
-            })
+            .filter(|(path, _)| !fs_files.contains(path.as_str()))
+            .map(|(path, hit)| EsOnlyFile { book_id: hit.id, title: str_of(&hit.source, "title").to_string(), file_type: str_of(&hit.source, "file_type").to_string(), file_path: path.clone() })
             .collect();
-        let fs_only: Vec<Value> = fs_files.iter().filter(|p| !es_files.contains_key(p.as_str())).map(|path| json!({"file_name": path.rsplit('/').next().unwrap_or(path), "file_path": path})).collect();
+        let fs_only: Vec<FsOnlyFile> =
+            fs_files.iter().filter(|p| !es_files.contains_key(p.as_str())).map(|path| FsOnlyFile { file_name: path.rsplit('/').next().unwrap_or(path).to_string(), file_path: path.clone() }).collect();
 
         // 4. 중복 ES 문서 감지(같은 file_path에 여러 book_id)
         let mut duplicates = Vec::new();
@@ -305,27 +375,29 @@ impl BookManager {
             let file_exists = fs_files.contains(path);
             // 파일의 실제 inode를 조회해 ES 문서 _id(=inode)와 비교한다.
             let linked_id: Option<i64> = if file_exists { self.fs.metadata(&self.path_prefix.join(path)).ok().map(|m| m.ino() as i64) } else { None };
-            let dup_docs: Vec<Value> = docs
+            let docs = docs
                 .iter()
-                .map(|d| json!({"book_id": d["book_id"], "title": str_of(d, "title"), "author": str_of(d, "author"), "file_type": str_of(d, "file_type"), "file_linked": d["book_id"].as_i64() == linked_id && linked_id.is_some()}))
+                .map(|hit| DuplicateDoc {
+                    book_id: hit.id,
+                    title: str_of(&hit.source, "title").to_string(),
+                    author: str_of(&hit.source, "author").to_string(),
+                    file_type: str_of(&hit.source, "file_type").to_string(),
+                    file_linked: linked_id == Some(hit.id),
+                })
                 .collect();
-            duplicates.push(json!({"file_path": path, "file_exists": file_exists, "docs": dup_docs}));
+            duplicates.push(DuplicatePath { file_path: path.clone(), file_exists, docs });
         }
-        Ok(json!({"es_only": es_only, "fs_only": fs_only, "duplicates": duplicates, "fs_count": fs_files.len()}))
+        Ok(MismatchDetails { es_only, fs_only, duplicates, fs_count: fs_files.len(), error: None })
     }
 
     /// `try_get_category_mismatch_details`의 값 판. ES 오류는 빈 상세에 `error`를 담아 돌려준다.
-    pub fn get_category_mismatch_details(&self, category: &str) -> Value {
+    pub fn get_category_mismatch_details(&self, category: &str) -> MismatchDetails {
         if let Some(f) = &self.get_category_mismatch_details_override {
             return f(category);
         }
         self.try_get_category_mismatch_details(category).unwrap_or_else(|e| {
             log::error!("get_category_mismatch_details 실패: {category}: {e}");
-            json!({"es_only": [], "fs_only": [], "duplicates": [], "fs_count": 0, "error": e})
+            MismatchDetails { error: Some(e), ..MismatchDetails::default() }
         })
     }
-}
-
-fn mismatches_len(result: &Value) -> usize {
-    ["mismatches", "es_only", "fs_only"].iter().map(|k| result[*k].as_array().map_or(0, Vec::len)).sum()
 }

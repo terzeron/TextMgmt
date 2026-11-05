@@ -7,7 +7,6 @@ use backend::book_manager::BookManager;
 use backend::main::BookManagerApi;
 use common::es_fake::{FakeEsManager, Hit};
 use common::log_capture::LogCapture;
-use serde_json::json;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 
@@ -31,8 +30,8 @@ fn test_get_category_mismatch_details_reads_all_pages() {
 
     let details = manager.get_category_mismatch_details("A");
 
-    assert_eq!(details["es_only"], json!([]));
-    assert_eq!(details["fs_only"], json!([]));
+    assert!(details.es_only.is_empty());
+    assert!(details.fs_only.is_empty());
 }
 
 #[test]
@@ -43,9 +42,8 @@ fn test_get_category_mismatches_root_file() {
     let manager = make_manager(tmp_path, &es);
     es.set_aggregate(&[]);
     fs::write(tmp_path.join("root_file.txt"), "sample").unwrap();
-    // 3.2 `BookManagerApi`가 `Result<Value, String>`을 돌려주므로 풀어서 읽는다.
     let result = BookManagerApi::get_category_mismatches(&manager, false).expect("get_category_mismatches");
-    assert!(result["fs_only"].as_array().unwrap().iter().any(|m| m["category"] == "_root"));
+    assert!(result.fs_only.iter().any(|m| m.category == "_root"));
 }
 
 mod mismatch_summary {
@@ -69,7 +67,7 @@ mod mismatch_summary {
 
         let result = manager.get_category_mismatches(true);
 
-        assert!(result["mismatches"].as_array().unwrap().iter().all(|item| item["category"] != "A"));
+        assert!(result.mismatches.iter().all(|item| item.category != "A"));
     }
 }
 
@@ -84,8 +82,8 @@ fn es_failure_in_mismatch_details_returns_an_empty_result_with_the_error_and_log
 
     let details = manager.get_category_mismatch_details("A");
 
-    assert_eq!(details["es_only"], json!([]));
-    assert_eq!(details["fs_count"], json!(0));
-    assert!(details["error"].as_str().is_some_and(|e| e.contains("es down")), "{details}");
+    assert!(details.es_only.is_empty());
+    assert_eq!(details.fs_count, 0);
+    assert!(details.error.as_deref().is_some_and(|e| e.contains("es down")), "{details:?}");
     assert!(logs.text().contains("get_category_mismatch_details 실패: A"), "{}", logs.text());
 }

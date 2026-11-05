@@ -64,6 +64,8 @@ mod file_reader;
 mod file_validator;
 mod html_previewer;
 mod mismatch_reporter;
+pub use category_reloader::{CategoryReload, MismatchReload, ReloadCounts, ReloadFailure, ReloadProgressFn, ReloadedFiles};
+pub use mismatch_reporter::{CategoryMismatch, DuplicateDoc, DuplicatePath, EsOnlyFile, FsOnlyFile, MismatchDetails, MismatchSummary};
 mod path_validator;
 mod pdf_cover;
 mod pdf_edit;
@@ -147,8 +149,8 @@ pub trait FileReader: Send + Sync + 'static {
 }
 
 pub type ClassifierFactory = Arc<dyn Fn() -> Arc<dyn Classify> + Send + Sync>;
-pub type MismatchOverride = Arc<dyn Fn(bool) -> Value + Send + Sync>;
-pub type DetailsOverride = Arc<dyn Fn(&str) -> Value + Send + Sync>;
+pub type MismatchOverride = Arc<dyn Fn(bool) -> MismatchSummary + Send + Sync>;
+pub type DetailsOverride = Arc<dyn Fn(&str) -> MismatchDetails + Send + Sync>;
 pub type IterFilesOverride = Arc<dyn Fn(&str, bool) -> Vec<PathBuf> + Send + Sync>;
 pub type HighConfidenceOverride = Arc<dyn Fn(&dyn Any, f64) -> bool + Send + Sync>;
 
@@ -308,12 +310,12 @@ impl BookManagerDeps {
 /// 불일치 요약 캐시. `time`이 없으면 캐시가 없는 것과 같다.
 #[derive(Default)]
 struct MismatchState {
-    cache: Option<Value>,
+    cache: Option<MismatchSummary>,
     time: Option<Instant>,
 }
 
 impl MismatchState {
-    fn fresh(&self) -> Option<&Value> {
+    fn fresh(&self) -> Option<&MismatchSummary> {
         match (&self.cache, self.time) {
             (Some(cache), Some(time)) if time.elapsed() < Duration::from_secs(MISMATCH_CACHE_TTL_SECONDS) => Some(cache),
             _ => None,

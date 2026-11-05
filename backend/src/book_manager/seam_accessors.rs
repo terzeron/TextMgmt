@@ -57,7 +57,7 @@ pub type ProposeHook = Arc<dyn Fn(&Path) -> Result<serde_json::Value, String> + 
 /// 파일 이동 대체. 인자는 (원본 경로, 목적지 카테고리). 반환은 파일 이동 함수와 같다.
 pub type MoveHook = Arc<dyn Fn(&Path, &str) -> Result<serde_json::Value, String> + Send + Sync>;
 /// 여러 파일 색인 대체. 인자는 (상대 경로 목록, clean_existing). 반환은 (경로 -> 새 book_id, 실패 목록).
-pub type BulkIndexHook = Arc<dyn Fn(&[String], bool) -> (std::collections::BTreeMap<String, i64>, Vec<serde_json::Value>) + Send + Sync>;
+pub type BulkIndexHook = Arc<dyn Fn(&[String], bool) -> (std::collections::BTreeMap<String, i64>, Vec<super::ReloadFailure>) + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub(crate) struct Seams {

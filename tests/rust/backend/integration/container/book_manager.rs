@@ -58,8 +58,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::common::file_reader_fakes::FnFileReader;
-use crate::common::shared_fixtures::{as_status, make_doc, outcome, run, split, verdict};
+use crate::common::shared_fixtures::{as_status, make_doc, outcome, outcome_or_default, run, split, verdict};
 use backend::book_manager::{BookContent, BookManager, BookManagerDeps, BookManagerError, BookResponse, FileReader, ProposeOptions};
+use backend::book_manager::{FsOnlyFile, MismatchDetails, MismatchSummary, ReloadCounts};
 use backend::book_metadata::{Book, BookPage};
 use backend::es_manager::{ESManager, EsError, EsManagerApi, Hit, PagedHits};
 use backend::pdf_page_reader::{PdfDoc, PdfError, PdfOpener, PdfPageOps};
@@ -582,7 +583,8 @@ mod test_book_manager {
         write(tmp_path.join("_txt/test.txt"), "test");
 
         bm.set_path_prefix(tmp_path);
-        let result = bm.get_category_mismatches(false);
+        // 응답 JSON 모양을 검사한다.
+        let result = serde_json::to_value(bm.get_category_mismatches(false)).unwrap();
         bm.set_path_prefix(&original_prefix);
 
         // 반환 구조 검증
@@ -971,11 +973,12 @@ fn test_category_mismatches_cache_and_details() {
 
     es.set_aggregate(&[("A", 2), ("B", 1)]);
     let result = manager.get_category_mismatches(false);
-    assert!(result.get("mismatches").is_some());
+    assert_eq!(result.error, None);
 
-    manager.set_mismatch_cache(Some(json!({"cached": true})), Instant::now());
+    let cached = MismatchSummary { error: Some("cached".into()), ..MismatchSummary::default() };
+    manager.set_mismatch_cache(Some(cached.clone()), Instant::now());
     es.set_aggregate(&[("A", 0)]);
-    assert_eq!(manager.get_category_mismatches(false), json!({"cached": true}));
+    assert_eq!(manager.get_category_mismatches(false), cached);
 
     // 중복 문서가 있는 mismatch 상세
     let inode = tmp_path.join("A/dup.txt");
@@ -983,8 +986,8 @@ fn test_category_mismatches_cache_and_details() {
     let inode_id = fs::metadata(&inode).unwrap().ino() as i64;
     es.with(|s| s.category_docs = vec![Hit::new(inode_id, make_doc("A/dup.txt", ".txt"), 1.0), Hit::new(999999, make_doc("A/dup.txt", ".txt"), 1.0)]);
     let details = manager.get_category_mismatch_details("A");
-    assert!(!details["duplicates"].as_array().unwrap().is_empty());
-    assert!(details["fs_count"].as_i64().unwrap() >= 1);
+    assert!(!details.duplicates.is_empty());
+    assert!(details.fs_count >= 1);
 }
 
 #[test]
@@ -998,7 +1001,7 @@ fn test_category_mismatch_details_root() {
     let ino = fs::metadata(&root_file).unwrap().ino() as i64;
     es.with(|s| s.category_docs = vec![Hit::new(ino, make_doc("root.txt", ".txt"), 1.0)]);
     let details = manager.get_category_mismatch_details("_root");
-    assert!(details["fs_count"].as_i64().unwrap() >= 1);
+    assert!(details.fs_count >= 1);
 }
 
 #[test]
@@ -1013,9 +1016,9 @@ fn test_category_mismatches_ignore_non_indexable_files() {
     write(tmp_path.join("A/count.sh"), "#!/bin/sh\n");
 
     let result = manager.get_category_mismatches(false);
-    assert_eq!(result, json!({"mismatches": [], "es_only": [], "fs_only": []}));
-    assert_eq!(manager.get_category_mismatch_details("_root")["fs_count"], 0);
-    assert_eq!(manager.get_category_mismatch_details("A")["fs_only"], json!([]));
+    assert_eq!(result, MismatchSummary::default());
+    assert_eq!(manager.get_category_mismatch_details("_root").fs_count, 0);
+    assert_eq!(manager.get_category_mismatch_details("A").fs_only, vec![]);
 }
 
 #[test]
@@ -1030,16 +1033,11 @@ fn test_category_mismatches_include_detected_indexable_files() {
     write_zip(&epub_with_wrong_extension, &[("META-INF/container.xml", b"<container/>")]);
 
     let result = manager.get_category_mismatches(false);
-    let fs_only: Vec<(String, i64, i64)> = result["fs_only"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|item| (item["category"].as_str().unwrap().to_string(), item["fs_count"].as_i64().unwrap(), item["anomaly_count"].as_i64().unwrap()))
-        .collect();
+    let fs_only: Vec<(String, i64, i64)> = result.fs_only.iter().map(|item| (item.category.clone(), item.fs_count, item.anomaly_count)).collect();
     assert_eq!(fs_only, vec![("A".to_string(), 1, 1)]);
     let details = manager.get_category_mismatch_details("A");
-    assert_eq!(details["fs_count"], 1);
-    assert_eq!(details["fs_only"], json!([{"file_name": "book.bak", "file_path": "A/book.bak"}]));
+    assert_eq!(details.fs_count, 1);
+    assert_eq!(details.fs_only, vec![FsOnlyFile { file_name: "book.bak".into(), file_path: "A/book.bak".into() }]);
 }
 
 /// 고아 문서 1건과 미색인 파일 1건은 건수가 같아도 서로 상쇄되면 안 된다.
@@ -1053,11 +1051,11 @@ fn test_category_mismatches_do_not_cancel_out() {
     write(tmp_path.join("A/present.txt"), "x");
     es.with(|s| s.all_file_paths = vec![("A".into(), "A/gone.txt".into())]);
 
-    let item = manager.get_category_mismatches(false)["mismatches"][0].clone();
-    assert_eq!(item["category"], "A");
-    assert_eq!(item["diff"], 0);
-    assert_eq!((item["es_only_count"].as_i64().unwrap(), item["fs_only_count"].as_i64().unwrap()), (1, 1));
-    assert_eq!(item["anomaly_count"], 2);
+    let item = manager.get_category_mismatches(false).mismatches[0].clone();
+    assert_eq!(item.category, "A");
+    assert_eq!(item.diff, 0);
+    assert_eq!((item.es_only_count, item.fs_only_count), (1, 1));
+    assert_eq!(item.anomaly_count, 2);
 }
 
 /// 2레벨까지만 보던 이전 구현이 통째로 빠뜨리던 3레벨 이하 카테고리도 검사한다.
@@ -1073,7 +1071,7 @@ fn test_category_mismatches_scan_deep_categories() {
     es.with(|s| s.all_file_paths = vec![]);
 
     let result = manager.get_category_mismatches(false);
-    let fs_only: Vec<(String, i64)> = result["fs_only"].as_array().unwrap().iter().map(|item| (item["category"].as_str().unwrap().to_string(), item["anomaly_count"].as_i64().unwrap())).collect();
+    let fs_only: Vec<(String, i64)> = result.fs_only.iter().map(|item| (item.category.clone(), item.anomaly_count)).collect();
     assert_eq!(fs_only, vec![("A/B/C".to_string(), 1)]);
 }
 
@@ -1092,7 +1090,7 @@ fn test_category_mismatches_skip_ignored_dirs() {
     write(intermediate.join("page_0001.png"), "x");
     es.with(|s| s.all_file_paths = vec![("A/page_images".into(), "A/page_images/page_0001.png".into())]);
 
-    assert_eq!(manager.mismatch_categories(&manager.get_category_mismatches(false)), Vec::<String>::new());
+    assert_eq!(manager.get_category_mismatches(false).categories(), Vec::<String>::new());
 }
 
 /// 숨김 디렉토리는 FS 스캔에서 제외하므로 ES 문서만 남아도 이상으로 보고하지 않는다.
@@ -1107,7 +1105,7 @@ fn test_category_mismatches_skip_hidden_categories() {
     write(hidden.join("cached.txt"), "x");
     es.with(|s| s.all_file_paths = vec![(".preview_cache".into(), ".preview_cache/gone.txt".into())]);
 
-    assert_eq!(manager.mismatch_categories(&manager.get_category_mismatches(false)), Vec::<String>::new());
+    assert_eq!(manager.get_category_mismatches(false).categories(), Vec::<String>::new());
 }
 
 /// 같은 파일을 가리키는 ES 문서가 둘이면 경로 1건을 중복으로 센다.
@@ -1121,9 +1119,19 @@ fn test_category_mismatches_count_duplicate_docs() {
     write(tmp_path.join("A/book.txt"), "x");
     es.with(|s| s.all_file_paths = vec![("A".into(), "A/book.txt".into()), ("A".into(), "A/book.txt".into())]);
 
-    let item = manager.get_category_mismatches(false)["mismatches"][0].clone();
-    assert_eq!((item["es_only_count"].as_i64().unwrap(), item["fs_only_count"].as_i64().unwrap(), item["duplicate_count"].as_i64().unwrap()), (0, 0, 1));
-    assert_eq!(item["anomaly_count"], 1);
+    let item = manager.get_category_mismatches(false).mismatches[0].clone();
+    assert_eq!((item.es_only_count, item.fs_only_count, item.duplicate_count), (0, 0, 1));
+    assert_eq!(item.anomaly_count, 1);
+}
+
+/// 불일치 상세 테스트 데이터. 빠진 필드는 기본값이다.
+fn details_of(value: Value) -> MismatchDetails {
+    serde_json::from_value(value).unwrap()
+}
+
+/// 불일치 요약 테스트 데이터. 빠진 필드는 기본값이다.
+fn summary_of(value: Value) -> MismatchSummary {
+    serde_json::from_value(value).unwrap()
 }
 
 fn _manager_with_one_anomaly(tmp_path: &Path) -> BookManager {
@@ -1144,13 +1152,13 @@ fn test_mismatch_cache_reuses_result_until_invalidated() {
     let tmp = TempDir::new().unwrap();
     let tmp_path = tmp.path();
     let manager = _manager_with_one_anomaly(tmp_path);
-    assert_eq!(manager.mismatch_item_count(&manager.get_category_mismatches(false)), 1);
+    assert_eq!(manager.get_category_mismatches(false).item_count(), 1);
 
     write(tmp_path.join("A/two.txt"), "y");
-    assert_eq!(manager.mismatch_item_count(&manager.get_category_mismatches(false)), 1);
+    assert_eq!(manager.get_category_mismatches(false).item_count(), 1);
 
     manager.clear_mismatch_cache();
-    assert_eq!(manager.mismatch_item_count(&manager.get_category_mismatches(false)), 2);
+    assert_eq!(manager.get_category_mismatches(false).item_count(), 2);
 }
 
 /// 일괄 재적재의 전후 건수는 오래된 값을 쓰면 안 되므로 강제로 다시 센다.
@@ -1162,8 +1170,8 @@ fn test_mismatch_cache_force_refresh_rescans() {
     manager.get_category_mismatches(false);
     write(tmp_path.join("A/two.txt"), "y");
 
-    assert_eq!(manager.mismatch_item_count(&manager.get_category_mismatches(false)), 1);
-    assert_eq!(manager.mismatch_item_count(&manager.get_category_mismatches(true)), 2);
+    assert_eq!(manager.get_category_mismatches(false).item_count(), 1);
+    assert_eq!(manager.get_category_mismatches(true).item_count(), 2);
 }
 
 /// 동시 조회가 겹쳐도 ES를 두 번 훑지 않는다.
@@ -2092,7 +2100,7 @@ fn test_category_mismatch_details_scandir_error() {
     deps = deps.with_fs(fs_ops);
     let manager = BookManager::with_deps(deps);
     let details = manager.get_category_mismatch_details("A");
-    assert_eq!(details["fs_count"], 0);
+    assert_eq!(details.fs_count, 0);
 }
 
 #[test]
@@ -2170,7 +2178,7 @@ fn test_bulk_index_files_merges_multiple_files_into_one_insert_call() {
 
     assert_eq!(indexed, BTreeMap::from([("A/one.txt".to_string(), 501), ("A/two.txt".to_string(), 502)]));
     assert_eq!(failures.len(), 1);
-    assert_eq!(failures[0]["file_path"], "A/bad.txt");
+    assert_eq!(failures[0].file_path.as_deref(), Some("A/bad.txt"));
     es.with(|s| {
         // 파일마다 insert하지 않고 여러 파일이 insert 1번으로 묶여 나간다
         assert_eq!(s.inserted.len(), 1);
@@ -2204,11 +2212,11 @@ fn test_reload_category_mismatch_details_batches_large_fs_only_list() {
     }));
     let manager = BookManager::with_deps(deps);
 
-    let details = json!({"fs_only": rel_paths.iter().map(|p| json!({"file_path": p})).collect::<Vec<_>>(), "es_only": [], "duplicates": []});
+    let details = details_of(json!({"fs_only": rel_paths.iter().map(|p| json!({"file_path": p})).collect::<Vec<_>>(), "es_only": [], "duplicates": []}));
     let category_result = run(manager.reload_category_mismatch_details("A", &details));
 
-    assert_eq!(category_result["indexed_count"], 3);
-    assert_eq!(category_result["failures"], json!([]));
+    assert_eq!(category_result.indexed_count, 3);
+    assert_eq!(category_result.failures, vec![]);
     // 배치 크기를 2로 바꿨으므로 파일 3개가 2건(2+1)의 insert 호출로 나뉜다
     es.with(|s| assert_eq!(s.inserted.iter().map(|b| b.len()).collect::<Vec<_>>(), vec![2, 1]));
 }
@@ -2229,25 +2237,25 @@ fn test_reload_category_mismatches_indexes_missing_files_and_deletes_stale_docs(
         abs_to_relpath.insert(file_path.canonicalize().unwrap(), rel_path);
     }
 
-    let details_by_category: HashMap<&str, Value> = HashMap::from([
+    let details_by_category: HashMap<&str, MismatchDetails> = HashMap::from([
         (
             "A",
-            json!({
+            details_of(json!({
                 "fs_only": [{"file_path": "A/new.txt"}],
                 "es_only": [{"book_id": 10}],
                 "duplicates": [
                     {"file_path": "A/dup.txt", "file_exists": true, "docs": [{"book_id": 20, "file_linked": false}, {"book_id": 21, "file_linked": false}]},
                     {"file_path": "A/linked.txt", "file_exists": true, "docs": [{"book_id": 22, "file_linked": true}, {"book_id": 23, "file_linked": false}]},
                 ],
-            }),
+            })),
         ),
-        ("B", json!({"fs_only": [], "es_only": [{"book_id": 30}], "duplicates": []})),
-        ("C", json!({"fs_only": [{"file_path": "C/new.txt"}], "es_only": [], "duplicates": []})),
+        ("B", details_of(json!({"fs_only": [], "es_only": [{"book_id": 30}], "duplicates": []}))),
+        ("C", details_of(json!({"fs_only": [{"file_path": "C/new.txt"}], "es_only": [], "duplicates": []}))),
     ]);
 
-    deps = deps.with_get_category_mismatches_override(Arc::new(
-        |_force_refresh: bool| json!({"mismatches": [{"category": "A", "diff": 3}], "es_only": [{"category": "B", "es_count": 1}], "fs_only": [{"category": "C", "fs_count": 1}]}),
-    ));
+    deps = deps.with_get_category_mismatches_override(Arc::new(|_force_refresh: bool| {
+        summary_of(json!({"mismatches": [{"category": "A", "diff": 3}], "es_only": [{"category": "B", "es_count": 1}], "fs_only": [{"category": "C", "fs_count": 1}]}))
+    }));
     deps = deps.with_get_category_mismatch_details_override(Arc::new(move |category: &str| details_by_category[category].clone()));
     deps = deps.with_file_reader(FnFileReader::new(move |abs_path: &Path, _prefix: Option<&Path>| {
         let rel_path = abs_to_relpath[abs_path];
@@ -2266,10 +2274,10 @@ fn test_reload_category_mismatches_indexes_missing_files_and_deletes_stale_docs(
         assert_eq!(s.deleted_file_paths, vec![(vec!["A/new.txt".to_string()], vec![1001]), (vec!["C/new.txt".to_string()], vec![1003])]);
         assert_eq!(s.deleted_ids, vec![10, 20, 21, 23, 30]);
     });
-    assert_eq!(result["category_count"], 3);
-    assert_eq!(result["indexed_count"], 3);
-    assert_eq!(result["deleted_count"], 5);
-    assert_eq!(result["failed_count"], 0);
+    assert_eq!(result.category_count, 3);
+    assert_eq!(result.indexed_count, 3);
+    assert_eq!(result.deleted_count, 5);
+    assert_eq!(result.failed_count, 0);
 }
 
 #[test]
@@ -2280,8 +2288,10 @@ fn test_reload_category_mismatch_files_limits_to_selected_category() {
     let mut deps = make_deps(tmp_path, &es);
     let detail_calls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
     let details = Arc::new(Mutex::new(VecDeque::from(vec![
-        json!({"fs_only": [{"file_path": "A/new.txt"}], "es_only": [{"book_id": 10}], "duplicates": [{"file_path": "A/dup.txt", "file_exists": true, "docs": [{"book_id": 20, "file_linked": false}, {"book_id": 21, "file_linked": false}]}]}),
-        json!({"fs_only": [], "es_only": [], "duplicates": []}),
+        details_of(
+            json!({"fs_only": [{"file_path": "A/new.txt"}], "es_only": [{"book_id": 10}], "duplicates": [{"file_path": "A/dup.txt", "file_exists": true, "docs": [{"book_id": 20, "file_linked": false}, {"book_id": 21, "file_linked": false}]}]}),
+        ),
+        details_of(json!({"fs_only": [], "es_only": [], "duplicates": []})),
     ])));
 
     let book_id_by_relpath: HashMap<&str, i64> = HashMap::from([("A/new.txt", 1001), ("A/dup.txt", 1002)]);
@@ -2317,13 +2327,13 @@ fn test_reload_category_mismatch_files_limits_to_selected_category() {
         assert_eq!(inserted_ids, vec![1001, 1002]);
         assert_eq!(s.deleted_ids, vec![10, 20, 21]);
     });
-    assert_eq!(result["category"], "A");
-    assert_eq!(result["category_count"], 1);
-    assert_eq!(result["before_count"], 3);
-    assert_eq!(result["after_count"], 0);
-    assert_eq!(result["indexed_count"], 2);
-    assert_eq!(result["deleted_count"], 3);
-    assert_eq!(result["failed_count"], 0);
+    assert_eq!(result.category.as_deref(), Some("A"));
+    assert_eq!(result.category_count, 1);
+    assert_eq!(result.before_count, 3);
+    assert_eq!(result.after_count, 0);
+    assert_eq!(result.indexed_count, 2);
+    assert_eq!(result.deleted_count, 3);
+    assert_eq!(result.failed_count, 0);
 }
 
 /// 카테고리 전용 재적재도 진행 중에 indexed_count/deleted_count를 올려야 한다.
@@ -2337,8 +2347,8 @@ fn test_reload_category_mismatch_files_reports_progress_during_run() {
     let es = FakeEsManager::new();
     let mut deps = make_deps(tmp_path, &es);
     let details = Arc::new(Mutex::new(VecDeque::from(vec![
-        json!({"fs_only": [{"file_path": "A/f1.txt"}, {"file_path": "A/f2.txt"}, {"file_path": "A/f3.txt"}], "es_only": [{"book_id": 10}], "duplicates": []}),
-        json!({"fs_only": [], "es_only": [], "duplicates": []}),
+        details_of(json!({"fs_only": [{"file_path": "A/f1.txt"}, {"file_path": "A/f2.txt"}, {"file_path": "A/f3.txt"}], "es_only": [{"book_id": 10}], "duplicates": []})),
+        details_of(json!({"fs_only": [], "es_only": [], "duplicates": []})),
     ])));
 
     let mut abs_to_relpath: HashMap<PathBuf, (&str, i64)> = HashMap::new();
@@ -2356,19 +2366,19 @@ fn test_reload_category_mismatch_files_reports_progress_during_run() {
     }));
     let manager = BookManager::with_deps(deps);
 
-    let progress_updates: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(vec![]));
-    let (result, err) = outcome({
+    let progress_updates: Arc<Mutex<Vec<ReloadCounts>>> = Arc::new(Mutex::new(vec![]));
+    let (result, err) = outcome_or_default({
         let sink = progress_updates.clone();
-        run(manager.reload_category_mismatch_files("A", Some(&move |u: Value| sink.lock().unwrap().push(u))))
+        run(manager.reload_category_mismatch_files("A", Some(&move |u: ReloadCounts| sink.lock().unwrap().push(u))))
     });
 
     assert!(err.is_none());
-    assert_eq!(result["indexed_count"], 3);
-    assert_eq!(result["deleted_count"], 1);
+    assert_eq!(result.indexed_count, 3);
+    assert_eq!(result.deleted_count, 1);
 
     // 파일 단위로 indexed_count가 단조 증가하며 보고돼야 한다
     let updates = progress_updates.lock().unwrap();
-    let indexed_series: Vec<i64> = updates.iter().filter_map(|u| u.get("indexed_count").and_then(|v| v.as_i64())).collect();
+    let indexed_series: Vec<i64> = updates.iter().filter_map(|u| u.indexed_count).collect();
     assert!(!indexed_series.is_empty(), "진행 중 indexed_count가 한 번도 보고되지 않았다");
     let mut sorted = indexed_series.clone();
     sorted.sort();
@@ -2376,7 +2386,7 @@ fn test_reload_category_mismatch_files_reports_progress_during_run() {
     assert_eq!(*indexed_series.iter().max().unwrap(), 3);
     // 파일 3건이므로 중간 보고가 최소 3회는 있어야 한다 (끝에 1회만 몰리면 안 됨)
     assert!(indexed_series.len() >= 3);
-    let deleted_series: Vec<i64> = updates.iter().filter_map(|u| u.get("deleted_count").and_then(|v| v.as_i64())).collect();
+    let deleted_series: Vec<i64> = updates.iter().filter_map(|u| u.deleted_count).collect();
     assert_eq!(*deleted_series.iter().max().unwrap(), 1);
 }
 
@@ -2402,23 +2412,23 @@ fn test_reload_category_mismatches_reports_progress_within_category() {
         Docs::from([(book_id, make_doc(rel_path, ".txt"))])
     }));
     let n = rel_paths.len();
-    deps = deps.with_get_category_mismatches_override(Arc::new(move |_force_refresh: bool| json!({"mismatches": [], "es_only": [], "fs_only": [{"category": "A", "fs_count": n}]})));
-    deps = deps.with_get_category_mismatch_details_override(Arc::new(
-        move |_category: &str| json!({"fs_only": rel_paths.iter().map(|p| json!({"file_path": p})).collect::<Vec<_>>(), "es_only": [], "duplicates": []}),
-    ));
+    deps = deps.with_get_category_mismatches_override(Arc::new(move |_force_refresh: bool| summary_of(json!({"mismatches": [], "es_only": [], "fs_only": [{"category": "A", "fs_count": n}]}))));
+    deps = deps.with_get_category_mismatch_details_override(Arc::new(move |_category: &str| {
+        details_of(json!({"fs_only": rel_paths.iter().map(|p| json!({"file_path": p})).collect::<Vec<_>>(), "es_only": [], "duplicates": []}))
+    }));
     let manager = BookManager::with_deps(deps);
 
-    let progress_updates: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(vec![]));
-    let (result, err) = outcome({
+    let progress_updates: Arc<Mutex<Vec<ReloadCounts>>> = Arc::new(Mutex::new(vec![]));
+    let (result, err) = outcome_or_default({
         let sink = progress_updates.clone();
-        run(manager.reload_category_mismatches(Some(&move |u: Value| sink.lock().unwrap().push(u))))
+        run(manager.reload_category_mismatches(Some(&move |u: ReloadCounts| sink.lock().unwrap().push(u))))
     });
 
     assert!(err.is_none());
-    assert_eq!(result["indexed_count"], 4);
+    assert_eq!(result.indexed_count, 4);
 
     let updates = progress_updates.lock().unwrap();
-    let indexed_series: Vec<i64> = updates.iter().filter_map(|u| u.get("indexed_count").and_then(|v| v.as_i64())).collect();
+    let indexed_series: Vec<i64> = updates.iter().filter_map(|u| u.indexed_count).collect();
     let mut sorted = indexed_series.clone();
     sorted.sort();
     assert_eq!(indexed_series, sorted);
@@ -2854,7 +2864,7 @@ fn test_category_mismatch_count_files_permission_error() {
     deps = deps.with_fs(fs_ops);
     let manager = BookManager::with_deps(deps);
     let result = manager.get_category_mismatches(false);
-    assert!(result.is_object());
+    assert_eq!(result.error, None);
 }
 
 /// PermissionError during L2 scandir
@@ -2882,7 +2892,7 @@ fn test_category_mismatch_l2_scandir_error() {
     deps = deps.with_fs(fs_ops);
     let manager = BookManager::with_deps(deps);
     let result = manager.get_category_mismatches(false);
-    assert!(result.is_object());
+    assert_eq!(result.error, None);
 }
 
 /// PermissionError scanning base directory
@@ -2898,7 +2908,7 @@ fn test_category_mismatch_top_level_error() {
     deps = deps.with_fs(fs_ops);
     let manager = BookManager::with_deps(deps);
     let result = manager.get_category_mismatches(false);
-    assert_eq!(result["mismatches"], json!([]));
+    assert_eq!(result.mismatches, vec![]);
 }
 
 /// ES-only file detection
@@ -2910,7 +2920,7 @@ fn test_category_mismatch_details_es_only() {
     es.with(|s| s.category_docs = vec![Hit::new(1, make_doc("A/missing.txt", ".txt"), 1.0)]);
     mkdir(tmp.path().join("A"));
     let details = manager.get_category_mismatch_details("A");
-    assert!(!details["es_only"].as_array().unwrap().is_empty());
+    assert!(!details.es_only.is_empty());
 }
 
 #[test]
@@ -2929,8 +2939,8 @@ fn test_category_mismatch_details_normalizes_absolute_es_paths() {
 
     let details = manager.get_category_mismatch_details("A");
 
-    assert_eq!(details["es_only"], json!([]));
-    assert_eq!(details["fs_only"], json!([]));
+    assert_eq!(details.es_only, vec![]);
+    assert_eq!(details.fs_only, vec![]);
 }
 
 /// OSError during stat for duplicates
@@ -2948,7 +2958,7 @@ fn test_category_mismatch_details_stat_error() {
     deps = deps.with_fs(fs_ops);
     let manager = BookManager::with_deps(deps);
     let details = manager.get_category_mismatch_details("_root");
-    assert!(!details["duplicates"].as_array().unwrap().is_empty());
+    assert!(!details.duplicates.is_empty());
 }
 
 /// IOError during file deletion
@@ -2982,23 +2992,23 @@ fn test_reload_category_full_flow() {
 
     // 시간 초과
     let manager = manager_with(FakeRunner::new(|_argv| Err(CommandError::Timeout)));
-    let (_result, err) = outcome(run(manager.reload_category("A", None)));
+    let (_result, err) = outcome_or_default(run(manager.reload_category("A", None)));
     assert!(err.as_deref().unwrap().contains("초과"));
 
     // 실행 오류
     let manager = manager_with(FakeRunner::new(|_argv| Err(CommandError::Failed("boom".to_string()))));
-    let (_result, err) = outcome(run(manager.reload_category("A", None)));
+    let (_result, err) = outcome_or_default(run(manager.reload_category("A", None)));
     assert!(err.as_deref().unwrap().contains("재적재 실행 실패"));
 
     // 0이 아닌 종료 코드
     let manager = manager_with(FakeRunner::new(|_argv| Ok(CommandOutput { returncode: 2, stdout: vec![], stderr: b"error message".to_vec() })));
-    let (_result, err) = outcome(run(manager.reload_category("A", None)));
+    let (_result, err) = outcome_or_default(run(manager.reload_category("A", None)));
     assert!(err.as_deref().unwrap().contains("exit 2"));
 
     // 성공
     let manager = manager_with(FakeRunner::new(|_argv| Ok(CommandOutput { returncode: 0, stdout: "총 5개 파일 처리됨".as_bytes().to_vec(), stderr: b"warn".to_vec() })));
     let result = run(manager.reload_category("A", Some("comic"))).unwrap();
-    assert_eq!(result["processed_count"], 5);
+    assert_eq!(result.processed_count, 5);
 }
 
 /// '_root'는 실제 카테고리가 아니라 최상위 파일 묶음이라 삭제 대상이 될 수 없다.
@@ -3251,8 +3261,8 @@ fn test_reload_category_root_reloads_top_level_files_only() {
     let manager = BookManager::with_deps(deps);
 
     let result = run(manager.reload_category("_root", None)).unwrap();
-    assert_eq!(result["category"], "_root");
-    assert_eq!(result["processed_count"], 1);
+    assert_eq!(result.category, "_root");
+    assert_eq!(result.processed_count, 1);
     es.with(|s| {
         let indexed_paths: Vec<String> = s.inserted.iter().flat_map(|batch| batch.values().map(|doc| doc["file_path"].as_str().unwrap().to_string())).collect();
         assert_eq!(indexed_paths, vec!["root.txt".to_string()]);

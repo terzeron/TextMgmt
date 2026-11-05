@@ -12,6 +12,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
 use backend::auth_service::Claims;
 use backend::auth_service::RequestParts;
 use backend::book_manager::{AddBookError, BookAdder, BookContent, BookLookup, BookManager, BookManagerDeps, BookRef, BookResponse, CoverPage, FileReader, ProposeOptions, ReadFileError, Thumbnailer};
+use backend::book_manager::{FsOnlyFile, MismatchDetails, MismatchReload, ReloadCounts, ReloadedFiles};
 use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::cover_management::CoverManagement;
 use backend::direct_cover_url::{FetchError, ImageFetcher};
@@ -405,6 +406,14 @@ pub fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value,
     }
 }
 
+/// struct 결과를 `(결과, 오류)`로 펼친다. 실패하면 결과는 기본값이다.
+pub fn outcome_or_default<T: Default>(result: Result<T, String>) -> (T, Option<String>) {
+    match result {
+        Ok(value) => (value, None),
+        Err(error) => (T::default(), Some(error)),
+    }
+}
+
 /// `[책 목록, 전체 수, 오류]`를 `Result<BookPage, _>`로 바꾼다.
 pub fn page(v: &Value) -> Result<BookPage, String> {
     opt_string(arr(v, 2)).map_or_else(|| Ok(BookPage { books: books(arr(v, 0)), total: count(&arr(v, 1)), next_cursor: None }), Err)
@@ -562,6 +571,11 @@ pub fn unlink(path: &Path) {
 /// `[값, 오류]`를 `Result`로 바꾼다. 오류가 있으면 값은 보지 않는다.
 pub fn value_result(v: &Value) -> Result<Value, String> {
     opt_string(arr(v, 1)).map_or_else(|| Ok(arr(v, 0)), Err)
+}
+
+/// `value_result`를 struct로 읽는다. 빠진 필드는 기본값이다.
+pub fn typed_result<T: serde::de::DeserializeOwned>(v: &Value) -> Result<T, String> {
+    value_result(v).and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()))
 }
 
 /// 검증 결과를 `(유효 여부, 사유)`로 펼친다.
@@ -1285,53 +1299,53 @@ impl BookManagerApi for Mock {
         if arr(&v, 0).as_str() == Some("Ok") { Ok(()) } else { Err(opt_string(arr(&v, 1)).unwrap_or_default()) }
     }
 
-    async fn reload_category(&self, category: &str, content_type: &str) -> Result<Value, String> {
+    async fn reload_category(&self, category: &str, content_type: &str) -> Result<ReloadedFiles, String> {
         match self.call("reload_category", call_args!([category, content_type], {})).await {
-            Ok(v) => value_result(&v),
+            Ok(v) => typed_result(&v),
             Err(e) => Err(e),
         }
     }
 
-    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         let args = call_args!([content_type], {}).with_callback(
             "on_progress",
             on_progress.map(|f| {
                 Arc::new(move |event| -> Fut<'_, Value> {
                     let f = f.clone();
                     Box::pin(async move {
-                        f(event);
+                        f(serde_json::from_value(event).unwrap_or_default());
                         Value::Null
                     })
                 }) as Callback<'_>
             }),
         );
         match self.call("reload_category_mismatches", args).await {
-            Ok(v) => value_result(&v),
+            Ok(v) => typed_result(&v),
             Err(e) => Err(e),
         }
     }
 
-    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         let args = call_args!([category, content_type], {}).with_callback(
             "on_progress",
             on_progress.map(|f| {
                 Arc::new(move |event| -> Fut<'_, Value> {
                     let f = f.clone();
                     Box::pin(async move {
-                        f(event);
+                        f(serde_json::from_value(event).unwrap_or_default());
                         Value::Null
                     })
                 }) as Callback<'_>
             }),
         );
         match self.call("reload_category_mismatch_files", args).await {
-            Ok(v) => value_result(&v),
+            Ok(v) => typed_result(&v),
             Err(e) => Err(e),
         }
     }
 
-    fn get_category_mismatch_details(&self, category: &str) -> Result<Value, String> {
-        self.invoke_sync_try("get_category_mismatch_details", call_args!([category], {}))
+    fn get_category_mismatch_details(&self, category: &str) -> Result<MismatchDetails, String> {
+        self.invoke_sync_try("get_category_mismatch_details", call_args!([category], {})).and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string()))
     }
 }
 
@@ -1523,33 +1537,33 @@ pub struct MockBm {
     pub proposal_result: Mutex<Option<Value>>,
     pub apply_result: Mutex<(Value, Option<String>)>,
     pub path_prefix: Mutex<PathBuf>,
-    pub mismatch_details: Mutex<Value>,
+    pub mismatch_details: Mutex<MismatchDetails>,
     pub mismatch_categories: Mutex<Vec<String>>,
 }
 
 #[async_trait::async_trait]
 impl BookManagerApi for MockBm {
-    fn get_category_mismatch_details(&self, category: &str) -> Result<Value, String> {
+    fn get_category_mismatch_details(&self, category: &str) -> Result<MismatchDetails, String> {
         self.mismatch_categories.lock().unwrap().push(category.to_string());
         Ok(self.mismatch_details.lock().unwrap().clone())
     }
 
-    async fn reload_category(&self, category: &str, content_type: &str) -> Result<Value, String> {
-        Ok(json!({"category":category,"content_type":content_type,"processed":3}))
+    async fn reload_category(&self, category: &str, _content_type: &str) -> Result<ReloadedFiles, String> {
+        Ok(ReloadedFiles { category: category.to_string(), processed_count: 3 })
     }
 
-    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         if let Some(report) = on_progress {
-            report(json!({"before_count":2,"indexed_count":1}));
+            report(ReloadCounts { before_count: Some(2), indexed_count: Some(1), deleted_count: None });
         }
-        Ok(json!({"content_type":content_type,"category":category,"indexed_count":1,"deleted_count":0,"failed_count":0,"before_count":2,"after_count":1}))
+        Ok(MismatchReload { content_type: content_type.to_string(), category: Some(category.to_string()), indexed_count: 1, before_count: 2, after_count: 1, ..MismatchReload::default() })
     }
 
-    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<Value, String> {
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         if let Some(report) = on_progress {
-            report(json!({"before_count":2,"indexed_count":1}));
+            report(ReloadCounts { before_count: Some(2), indexed_count: Some(1), deleted_count: None });
         }
-        Ok(json!({"content_type":content_type,"indexed_count":1,"deleted_count":0,"failed_count":0,"before_count":2,"after_count":1}))
+        Ok(MismatchReload { content_type: content_type.to_string(), indexed_count: 1, before_count: 2, after_count: 1, ..MismatchReload::default() })
     }
 
     async fn index_single_file(&self, _file_path: &str) -> Result<i64, String> {
@@ -2012,7 +2026,7 @@ pub fn mock_bm() -> Arc<MockBm> {
         proposal_result: Mutex::new(None),
         apply_result: Mutex::new((json!({}), None)),
         path_prefix: Mutex::new(PathBuf::new()),
-        mismatch_details: Mutex::new(json!({"fs_only":[{"file_path":"A/a.txt"}]})),
+        mismatch_details: Mutex::new(MismatchDetails { fs_only: vec![FsOnlyFile { file_path: "A/a.txt".into(), ..FsOnlyFile::default() }], ..MismatchDetails::default() }),
         mismatch_categories: Mutex::new(Vec::new()),
     })
 }

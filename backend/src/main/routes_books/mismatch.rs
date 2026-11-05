@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use super::super::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, ReloadProgress, RequestValidationError, RequireAdmin, Routes};
 use super::manager;
+use crate::book_manager::{MismatchReload, ReloadCounts};
 
 pub(super) fn routes() -> Routes {
     let mut routes = Routes::new();
@@ -188,13 +189,11 @@ fn spawn_reload_job(deps: &AppDeps, manager: Arc<dyn BookManagerApi>, mapping: A
             let failure_category = category.clone();
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 runtime.block_on(async move {
-                    let latest_counts = Arc::new(Mutex::new(json!({})));
+                    let latest_counts = Arc::new(Mutex::new(ReloadCounts::default()));
                     let progress_counts = latest_counts.clone();
                     let progress: ReloadProgress = Arc::new(move |counts| {
-                        if let Ok(mut latest) = progress_counts.lock()
-                            && let (Some(target), Some(source)) = (latest.as_object_mut(), counts.as_object())
-                        {
-                            target.extend(source.clone());
+                        if let Ok(mut latest) = progress_counts.lock() {
+                            latest.merge(counts);
                         }
                     });
                     let heartbeat_mapping = mapping.clone();
@@ -204,8 +203,8 @@ fn spawn_reload_job(deps: &AppDeps, manager: Arc<dyn BookManagerApi>, mapping: A
                     let flusher = tokio::spawn(async move {
                         loop {
                             tokio::time::sleep(flush_interval).await;
-                            let counts = heartbeat_counts.lock().map(|value| value.clone()).unwrap_or_else(|_| json!({}));
-                            if let Err(error) = heartbeat_mapping.heartbeat_reload_lock(&heartbeat_type, heartbeat_category.as_deref(), &counts) {
+                            let counts = heartbeat_counts.lock().map(|value| *value).unwrap_or_default();
+                            if let Err(error) = heartbeat_mapping.heartbeat_reload_lock(&heartbeat_type, heartbeat_category.as_deref(), &json!(counts)) {
                                 log::warn!("재적재 heartbeat 갱신 실패: {error}");
                             }
                         }
@@ -218,14 +217,14 @@ fn spawn_reload_job(deps: &AppDeps, manager: Arc<dyn BookManagerApi>, mapping: A
                     // 실패하면 건수는 0이다. 구현은 실패 때 부분 건수를 내지 않는다.
                     let (result, error) = match reloaded {
                         Ok(result) => (result, None),
-                        Err(error) => (Value::Null, Some(error)),
+                        Err(error) => (MismatchReload::default(), Some(error)),
                     };
                     let counts = json!({
-                        "indexed_count": result["indexed_count"].as_i64().unwrap_or(0),
-                        "deleted_count": result["deleted_count"].as_i64().unwrap_or(0),
-                        "failed_count": result["failed_count"].as_i64().unwrap_or(0),
-                        "before_count": result["before_count"].as_i64().unwrap_or(0),
-                        "after_count": result["after_count"].as_i64().unwrap_or(0),
+                        "indexed_count": result.indexed_count,
+                        "deleted_count": result.deleted_count,
+                        "failed_count": result.failed_count,
+                        "before_count": result.before_count,
+                        "after_count": result.after_count,
                     });
                     let status = if error.is_some() { "failed" } else { "done" };
                     if let Err(store_error) = mapping.complete_reload_lock(&content_type, status, error.as_deref(), category.as_deref(), &counts) {
