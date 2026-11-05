@@ -45,6 +45,7 @@ sha2 = "0.11.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 sysdeps = { path = "../libs/sysdeps" }
+xml_recoverer = { path = "../libs/xml_recoverer" }
 ureq = { workspace = true, features = ["rustls"] }
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util"] }

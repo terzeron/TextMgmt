@@ -1,0 +1,17 @@
+[package]
+name = "xml_recoverer"
+description = "깨진 XML을 엄격한 파서가 다시 읽을 수 있게 고치는 문자열 변환: 접두사 선언, DOCTYPE·모르는 엔티티 제거, 잘린 태그 닫기"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[dependencies]
+regex = "1.13.1"
+
+[dev-dependencies]
+roxmltree = "0.21.1"
+
+[[test]]
+name = "xml_recoverer"
+path = "../../tests/rust/xml_recoverer/xml_recoverer.rs"

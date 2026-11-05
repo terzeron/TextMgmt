@@ -5,8 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use regex::Regex;
-use std::sync::LazyLock;
+use xml_recoverer::{declare_prefix, strip_unknown_entities};
 
 pub const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 pub const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
@@ -279,34 +278,6 @@ fn element_prefix(node: roxmltree::Node, src: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 // 너그럽게 읽기
 // ---------------------------------------------------------------------------
-
-/// OPF에서 선언 없이 자주 쓰는 접두사. 모르는 접두사는 자리표시 URN으로 선언한다(값은 읽지 않는다).
-const KNOWN_PREFIXES: [(&str, &str); 6] = [
-    ("opf", "http://www.idpf.org/2007/opf"),
-    ("dc", "http://purl.org/dc/elements/1.1/"),
-    ("dcterms", "http://purl.org/dc/terms/"),
-    ("xsi", "http://www.w3.org/2001/XMLSchema-instance"),
-    ("xlink", XLINK_NS),
-    ("epub", "http://www.idpf.org/2007/ops"),
-];
-
-static ROOT_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)\A(?:\s|<\?.*?\?>|<!--.*?-->|<!DOCTYPE(?:[^\[>]|\[.*?\])*>)*<([^\s/>!?]+)").expect("정규식"));
-static NAMED_ENTITY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"&([A-Za-z_][A-Za-z0-9_.-]*);").expect("정규식"));
-
-fn declare_prefix(text: &str, prefix: &str) -> Option<String> {
-    let caps = ROOT_TAG.captures(text)?;
-    let name = caps.get(1)?;
-    let uri = KNOWN_PREFIXES.iter().find(|(p, _)| *p == prefix).map(|(_, u)| (*u).to_string()).unwrap_or_else(|| format!("urn:unknown-prefix:{prefix}"));
-    let mut out = String::with_capacity(text.len() + 64);
-    out.push_str(&text[..name.end()]);
-    out.push_str(&format!(" xmlns:{prefix}=\"{uri}\""));
-    out.push_str(&text[name.end()..]);
-    Some(out)
-}
-
-fn strip_unknown_entities(text: &str) -> String {
-    NAMED_ENTITY.replace_all(text, |caps: &regex::Captures| if matches!(&caps[1], "amp" | "lt" | "gt" | "quot" | "apos") { caps[0].to_string() } else { String::new() }).into_owned()
-}
 
 /// `etree.fromstring(data, safe_xml_parser(recover=True))`의 일부만 대신한다. 선언 없는 접두사와 모르는 엔티티는 고쳐서 다시 읽는다.
 /// 그 밖의 구문 오류는 `None`이다.

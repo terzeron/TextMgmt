@@ -1,7 +1,7 @@
 //! EPUB 구조 검사·보조: OPF 찾기, 미리보기 검증, 챕터 수, 이미지 축소, 캐시 정리, LibreOffice 변환.
 //!
 //! XML은 `roxmltree`로 읽는다. 깨진 XML을 복구하지는 않는다. 대신 선언 없이 쓰인 접두사는
-//! `declare_unbound_prefixes`로 먼저 선언한다. 문서를 고쳐 쓸 때는 DOM을 직렬화하지 않고 원문에서 해당 구간만 잘라내
+//! `xml_recoverer::declare_unbound_prefixes`로 먼저 선언한다. 문서를 고쳐 쓸 때는 DOM을 직렬화하지 않고 원문에서 해당 구간만 잘라내
 //! (`Edit`) 원문 서식을 보존한다.
 
 use common::xml_parser::parse_xml;
@@ -9,13 +9,13 @@ use common::zip_reader::{self, MemberError};
 use std::io::{Read, Seek, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use image::{ImageFormat, imageops::FilterType};
 use regex::Regex;
 use roxmltree::{Document, Node};
 use sysdeps::{CommandError, CommandRunner, FsOps, RealFs};
+use xml_recoverer::{declare_unbound_prefixes, strip_doctype, strip_unknown_entities};
 use zip::ZipArchive;
 use zip::result::ZipError;
 
@@ -34,63 +34,6 @@ pub const NCX_NS: &str = "http://www.daisy.org/z3986/2005/ncx/";
 const EPUB_IMAGE_JPEG_QUALITY: u8 = 80;
 /// LibreOffice 변환 시간 상한.
 const LIBREOFFICE_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// OPF에서 선언 없이 자주 쓰이는 접두사. 모르는 접두사는 자리표시 URN으로 선언한다(값은 읽지 않는다).
-fn known_prefix_uri(prefix: &str) -> String {
-    match prefix {
-        "opf" => "http://www.idpf.org/2007/opf",
-        "dc" => "http://purl.org/dc/elements/1.1/",
-        "dcterms" => "http://purl.org/dc/terms/",
-        "xsi" => "http://www.w3.org/2001/XMLSchema-instance",
-        "xlink" => "http://www.w3.org/1999/xlink",
-        "epub" => "http://www.idpf.org/2007/ops",
-        other => return format!("urn:unbound-prefix:{other}"),
-    }
-    .to_string()
-}
-
-fn regexes() -> &'static (Regex, Regex, Regex, Regex, Regex) {
-    static RE: OnceLock<(Regex, Regex, Regex, Regex, Regex)> = OnceLock::new();
-    RE.get_or_init(|| {
-        (
-            Regex::new(r"(?s)<!--.*?-->|<\?.*?\?>|<!DOCTYPE[^>]*>").expect("정규식"),
-            Regex::new(r"(?s)<(/?)([^\s/>!?][^>]*)>").expect("정규식"),
-            Regex::new(r"^([A-Za-z_][\w.-]*):").expect("정규식"),
-            Regex::new(r"\s([A-Za-z_][\w.-]*):[\w.-]+\s*=").expect("정규식"),
-            Regex::new(r"xmlns:([A-Za-z_][\w.-]*)\s*=").expect("정규식"),
-        )
-    })
-}
-
-/// 요소·속성 이름에 쓰였지만 선언되지 않은 접두사를 루트 요소에 선언한다. 빠진 선언이 없으면 입력을 그대로 돌려준다.
-pub fn declare_unbound_prefixes(xml: &str) -> String {
-    let (skip_re, tag_re, element_re, attr_re, declared_re) = regexes();
-    let masked = skip_re.replace_all(xml, |m: &regex::Captures| " ".repeat(m[0].len())).into_owned();
-    let Some(root) = tag_re.captures(&masked) else { return xml.to_string() };
-    let declared: Vec<String> = declared_re.captures_iter(&masked).map(|c| c[1].to_string()).collect();
-    let mut used: Vec<String> = Vec::new();
-    for tag in tag_re.captures_iter(&masked) {
-        let body = &tag[2];
-        let mut names: Vec<String> = Vec::new();
-        if let Some(c) = element_re.captures(body) {
-            names.push(c[1].to_string());
-        }
-        names.extend(attr_re.captures_iter(body).map(|c| c[1].to_string()));
-        for name in names {
-            if !declared.contains(&name) && name != "xml" && name != "xmlns" && !used.contains(&name) {
-                used.push(name);
-            }
-        }
-    }
-    if used.is_empty() {
-        return xml.to_string();
-    }
-    let declarations: String = used.iter().map(|n| format!(" xmlns:{n}=\"{}\"", known_prefix_uri(n))).collect();
-    let body = root.get(2).expect("그룹 2");
-    let name_len = body.as_str().find(|c: char| c.is_whitespace() || c == '/' || c == '>').unwrap_or(body.as_str().len());
-    let name_end = body.start() + name_len;
-    format!("{}{declarations}{}", &xml[..name_end], &xml[name_end..])
-}
 
 /// XML 바이트를 문자열로 바꾼다(UTF-8 BOM 제거, 잘못된 바이트는 대체 문자).
 pub fn xml_text(bytes: &[u8]) -> String {
@@ -617,11 +560,6 @@ pub fn safe_xml_parser(recover: bool) -> SafeXmlParser {
     SafeXmlParser { recover }
 }
 
-fn doctype_and_entities() -> &'static (Regex, Regex) {
-    static RE: OnceLock<(Regex, Regex)> = OnceLock::new();
-    RE.get_or_init(|| (Regex::new(r"(?s)<!DOCTYPE[^>\[]*(\[.*?\])?\s*>").expect("정규식"), Regex::new(r"&[A-Za-z_][\w.-]*;").expect("정규식")))
-}
-
 impl SafeXmlParser {
     pub fn fromstring(&self, data: &[u8]) -> Result<XmlElement, String> {
         let text = xml_text(data);
@@ -631,9 +569,7 @@ impl SafeXmlParser {
             Err(_) => {}
         }
         // 복구: DOCTYPE과 알 수 없는 엔티티 참조(외부 엔티티 포함)를 걷어내고 다시 읽는다. 엔티티 내용은 읽지 않는다.
-        let (doctype, entity) = doctype_and_entities();
-        let cleaned = doctype.replace_all(&text, "");
-        let cleaned = entity.replace_all(&cleaned, |m: &regex::Captures| if matches!(&m[0], "&amp;" | "&lt;" | "&gt;" | "&quot;" | "&apos;") { m[0].to_string() } else { String::new() }).into_owned();
+        let cleaned = strip_unknown_entities(&strip_doctype(&text));
         let doc = parse_xml(&cleaned).map_err(|e| e.to_string())?;
         Ok(XmlElement::from_node(doc.root_element()))
     }

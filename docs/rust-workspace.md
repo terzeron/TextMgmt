@@ -16,6 +16,7 @@ docs/       문서
 | crate | 용도 |
 | --- | --- |
 | `text_decoder` | 바이트를 텍스트로 푼다: 잘못된 바이트를 버리는 UTF-8·CP949 디코딩과 한글 음절 판정, 인코딩 이름과 코덱(`text_transcoder`), 인코딩 추정 휴리스틱 `detect_hint`·`decode_best`와 `korean_likeness`(`encoding_guesser`). `doc_checker`와 `doc_reader`의 아래 계층이다 |
+| `xml_recoverer` | 깨진 XML을 엄격한 파서(`roxmltree`)가 다시 읽을 수 있게 고치는 문자열 변환: 선언 없는 접두사 선언, DOCTYPE·모르는 엔티티 제거, 잘린 태그 닫기. 파싱은 하지 않고 변환 순서는 호출자가 정한다. backend의 EPUB 메타데이터·검사·표지 편집이 쓴다 |
 | `doc_reader` | 문서 본문 요약 추출(TXT·EPUB·HTML·RTF·DOCX·PDF·HWP)과 파일 앞뒤 읽기. 인코딩 손상 판정은 `doc_checker::mojibake_detector`를 쓴다 |
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. backend `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
