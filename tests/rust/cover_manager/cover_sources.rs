@@ -8,17 +8,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ::common::http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout};
-use backend::cover_sources::{
-    GateError, SearchError, SearchHooks, StoreBlocked, StoreClient, StoreGate, StoreLockError, blocked_status, extract_html_candidates, fetch_bytes_with, parse_joara_candidates,
-    parse_munpia_candidates, parse_naver_candidates, search_candidates_with, store_lock, store_lock_with, validate_url, validate_url_with,
-};
-use backend::cover_sources::{SearchStatus, StoreCandidate};
-use backend::epub_cover::EpubInspection;
 use bookstore::BookInfo;
 use common::{
     clock::FakeClock,
     faulty_fs::{FaultyFs, other_err},
 };
+use cover_manager::cover_sources::{
+    GateError, SearchError, SearchHooks, StoreBlocked, StoreClient, StoreGate, StoreLockError, blocked_status, extract_html_candidates, fetch_bytes_with, parse_joara_candidates,
+    parse_munpia_candidates, parse_naver_candidates, search_candidates_with, store_lock, store_lock_with, validate_url, validate_url_with,
+};
+use cover_manager::cover_sources::{SearchStatus, StoreCandidate};
+use cover_manager::epub_cover::EpubInspection;
 use serde_json::json;
 use sysdeps::{RealFs, SystemClock};
 
@@ -126,19 +126,19 @@ impl HttpSession for BodySession {
 }
 
 /// `respond(store, url)`이 본문을 정하는 세션 factory. 모든 store가 같은 함수를 쓴다.
-fn session_factory(respond: impl Fn(&str, &str) -> Vec<u8> + Send + Sync + 'static) -> backend::cover_sources::SessionFactory {
+fn session_factory(respond: impl Fn(&str, &str) -> Vec<u8> + Send + Sync + 'static) -> cover_manager::cover_sources::SessionFactory {
     let respond: Responder = Arc::new(respond);
     Arc::new(move |store| Arc::new(BodySession { store: store.to_string(), respond: respond.clone() }) as Arc<dyn HttpSession>)
 }
 
 /// 테스트용 URL 검증: 스킴·호스트·사설 IP 규칙은 그대로 돌리고 DNS 조회만 공인 IP를 돌려주는 가짜로 바꾼다.
-fn validate_with_fake_dns(store: &str, url: &str) -> Result<String, backend::cover_sources::CoverSourceError> {
-    backend::cover_sources::validate_url_with(store, url, &|_host, _port| Ok(vec!["93.184.216.34".parse().unwrap()]))
+fn validate_with_fake_dns(store: &str, url: &str) -> Result<String, cover_manager::cover_sources::CoverSourceError> {
+    cover_manager::cover_sources::validate_url_with(store, url, &|_host, _port| Ok(vec!["93.184.216.34".parse().unwrap()]))
 }
 
 /// 검증을 명시적으로 끈다. 서점 허용 목록 밖의 호스트(`image.example.org`)를 가짜 세션으로 받는 테스트만 쓴다.
 /// 세션 주입(`with_session_factory`)은 검증을 끄지 않으므로, 끄는 곳이 테스트 본문에 드러나야 한다.
-fn skip_validation(_store: &str, url: &str) -> Result<String, backend::cover_sources::CoverSourceError> {
+fn skip_validation(_store: &str, url: &str) -> Result<String, cover_manager::cover_sources::CoverSourceError> {
     Ok(url.to_string())
 }
 
@@ -323,7 +323,7 @@ fn test_fetch_bytes_redirects_and_size_limit() {
         let last = HttpResponse::from_chunks(200, Vec::new(), vec![b"im".to_vec(), b"age".to_vec()], final_closed.clone());
         let responses = if mode == "redirect_limit" { (0..5).map(|_| first()).collect() } else { vec![first(), last] };
         let session = ScriptedSession { responses: Mutex::new(responses), requested: Mutex::new(Vec::new()) };
-        let identity = |_store: &str, url: &str| -> Result<String, backend::cover_sources::CoverSourceError> { Ok(url.to_string()) };
+        let identity = |_store: &str, url: &str| -> Result<String, cover_manager::cover_sources::CoverSourceError> { Ok(url.to_string()) };
         if mode == "success" {
             assert_eq!(fetch_bytes_with("yes24", "https://image.yes24.com/start", &session, None, &identity).unwrap(), b"image", "mode={mode}");
             assert_eq!(session.requested.lock().unwrap().last().unwrap(), "https://image.yes24.com/image.jpg", "mode={mode}");

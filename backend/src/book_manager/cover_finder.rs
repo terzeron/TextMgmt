@@ -11,9 +11,9 @@ use zip::ZipArchive;
 
 use super::{BookManager, BookManagerDeps};
 use crate::book_metadata::BookLookupError;
-use crate::cover_management::{Backup, CoverHooks, CoverManagement, CoverSave};
-use crate::direct_cover_url::ImageFetcher;
-use crate::epub_cover::{self, CoverError, EpubCoverHooks};
+use cover_manager::cover_management::{Backup, CoverHooks, CoverManagement, CoverSave};
+use cover_manager::direct_cover_url::ImageFetcher;
+use cover_manager::epub_cover::{self, CoverError, EpubCoverHooks};
 
 /// 표지 편집이 저장 위치를 정할 때 쓰는 기본 휴지통 디렉터리 이름.
 pub const TRASH_DIRNAME: &str = "0_trash";
@@ -83,7 +83,7 @@ impl BookManagerDeps {
 type Change = Box<dyn FnOnce(&CoverManagement, &str, &str, Backup<'_>) -> Result<CoverSave, CoverError> + Send>;
 
 /// 표지 썸네일 추출 능력. 구 `ThumbnailExtractor`.
-pub use crate::cover_management::Thumbnailer;
+pub use cover_manager::cover_management::Thumbnailer;
 
 impl BookManager {
     pub(super) fn thumbnailer(&self) -> Option<Arc<dyn Thumbnailer>> {
@@ -104,11 +104,11 @@ impl BookManager {
 impl BookManager {
     pub(super) fn pdf_edit_settings(&self) -> (String, Arc<dyn ImageFetcher>) {
         let ext = self.cover_ext();
-        (ext.trash_dirname.unwrap_or_else(|| TRASH_DIRNAME.into()), ext.image_fetcher.unwrap_or_else(|| Arc::new(crate::direct_cover_url::RealImageFetcher)))
+        (ext.trash_dirname.unwrap_or_else(|| TRASH_DIRNAME.into()), ext.image_fetcher.unwrap_or_else(|| Arc::new(cover_manager::direct_cover_url::RealImageFetcher)))
     }
 
     pub(super) fn image_pixel_limit(&self) -> usize {
-        self.cover_ext().epub_hooks.as_ref().map(|hooks| hooks.limits().max_image_pixels).unwrap_or(crate::epub_cover::MAX_IMAGE_PIXELS)
+        self.cover_ext().epub_hooks.as_ref().map(|hooks| hooks.limits().max_image_pixels).unwrap_or(cover_manager::epub_cover::MAX_IMAGE_PIXELS)
     }
 
     /// 훅이 정한 OPF 경로(구 `override_find_opf_path`). 훅이 없으면 `None`.

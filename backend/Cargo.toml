@@ -20,6 +20,7 @@ path = "src/bin/epubveri.rs"
 [dependencies]
 auth_manager = { path = "../libs/auth_manager" }
 common = { path = "../libs/common" }
+cover_manager = { path = "../libs/cover_manager" }
 epubveri = "0.33.0"
 search_manager = { path = "../libs/search_manager" }
 file_indexer = { path = "../libs/file_indexer" }
@@ -33,7 +34,6 @@ db = { path = "../libs/db" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 htmlkit = { path = "../libs/htmlkit" }
 hwp3_parser = { path = "../libs/hwp3_parser" }
-idna = "1.1.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 log = "0.4.34"
@@ -113,13 +113,7 @@ path = "../tests/rust/backend/book_manager/preview_builder.rs"
 name = "comics_manager"
 path = "../tests/rust/backend/comics_manager.rs"
 
-[[test]]
-name = "cover_management"
-path = "../tests/rust/backend/cover_management.rs"
 
-[[test]]
-name = "cover_sources"
-path = "../tests/rust/backend/cover_sources.rs"
 
 [[test]]
 name = "direct_cover_url"
@@ -182,13 +176,7 @@ path = "../tests/rust/backend/integration/cover.rs"
 name = "integration_cover_management"
 path = "../tests/rust/backend/integration/cover_management.rs"
 
-[[test]]
-name = "integration_cover_sources"
-path = "../tests/rust/backend/integration/cover_sources.rs"
 
-[[test]]
-name = "integration_direct_cover_url"
-path = "../tests/rust/backend/integration/direct_cover_url.rs"
 
 [[test]]
 name = "integration_epub_cover_set"
@@ -287,17 +275,8 @@ path = "../tests/rust/backend/book_manager/category_proposer.rs"
 name = "book_manager_pdf_cover"
 path = "../tests/rust/backend/book_manager/pdf_cover.rs"
 
-[[test]]
-name = "epub_cover_epub_writer"
-path = "../tests/rust/backend/epub_cover/epub_writer.rs"
 
-[[test]]
-name = "epub_cover_image_editor"
-path = "../tests/rust/backend/epub_cover/image_editor.rs"
 
-[[test]]
-name = "epub_cover_inplace_replacer"
-path = "../tests/rust/backend/epub_cover/inplace_replacer.rs"
 
 [[test]]
 name = "epub_cover_xml_tree"
@@ -311,9 +290,6 @@ path = "../tests/rust/backend/integration/request_schema.rs"
 name = "api_router_error_responses"
 path = "../tests/rust/backend/api_router/error_responses.rs"
 
-[[test]]
-name = "cover_sources_html_dom"
-path = "../tests/rust/backend/cover_sources/html_dom.rs"
 
 [[test]]
 name = "comics_manager_api_adapter"

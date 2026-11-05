@@ -1,4 +1,4 @@
-//! `backend::epub_cover` 단위 테스트.
+//! `cover_manager::epub_cover` 단위 테스트.
 
 #[path = "common/cover_fixtures.rs"]
 mod cover_fixtures;
@@ -11,13 +11,13 @@ use crate::common::shared_fixtures::URL;
 use crate::common::shared_fixtures::{assert_cover_error, backups, cover_tmp_files, epub_with_cover, has_cover, hooks_with, opf_of, publisher_cover_epub, read, rev, revision};
 use crate::common::{epub::append_child, epub::attr_of_element_with_id, epub::count_elements, epub::remove_element, fsx::count_matching, image::RED, image::encode_image, image::image_size};
 use backend::book_manager::{BookManager, BookManagerDeps};
-use backend::epub_cover;
-use backend::epub_cover::{CoverError, CoverImageInfo, EpubCoverHooks, EpubInspection, EpubRewrite, Limits};
 use common::epub::{EpubSpec, make_epub};
 use common::faulty_fs::{FaultyFs, other_err};
 use common::fsx::{ino_mtime, sha256_hex};
 use common::image::{color_jpeg, red_jpeg};
 use common::zipx::{read_zip_entry, rewrite_epub_members};
+use cover_manager::epub_cover;
+use cover_manager::epub_cover::{CoverError, CoverImageInfo, EpubCoverHooks, EpubInspection, EpubRewrite, Limits};
 use image::ImageFormat;
 use serde_json::json;
 use std::collections::VecDeque;
@@ -151,7 +151,7 @@ fn test_unnamed_backup_collision_is_an_error_not_a_silent_reuse() {
 }
 
 mod member_path {
-    use backend::epub_cover::member_path;
+    use cover_manager::epub_cover::member_path;
 
     #[test]
     fn member_path_resolves_relative_hrefs() {
@@ -204,8 +204,8 @@ mod image_page_cropping {
     use crate::common::epub_book::read;
     use crate::common::epub_book::{Members, write_zip};
     use crate::common::shared_fixtures::{assert_refused, size, text_of};
-    use backend::epub_cover::{EditImages, edit_images, revision};
     use common::image::jpeg_bytes;
+    use cover_manager::epub_cover::{EditImages, edit_images, revision};
     use image::{Rgb, RgbImage};
     use serde_json::json;
     use std::path::Path;

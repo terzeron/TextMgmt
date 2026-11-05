@@ -6,7 +6,7 @@ use super::es_fake::FakeEsManager;
 use super::image::red_jpeg;
 use super::shared_fixtures::{FakeBooks, FetchSlot, URL};
 use backend::book_manager::{BookManager, BookManagerDeps, BookRef};
-use backend::cover_management::CoverSave;
+use cover_manager::cover_management::CoverSave;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

@@ -327,19 +327,19 @@ impl CoverHooks {
         self
     }
 
-    pub(crate) fn directories_hook(&self) -> Option<&DirectoriesFn> {
+    pub fn directories_hook(&self) -> Option<&DirectoriesFn> {
         self.directories.as_ref()
     }
 
-    pub(crate) fn candidates_hook(&self) -> Option<&CandidatesFn> {
+    pub fn candidates_hook(&self) -> Option<&CandidatesFn> {
         self.candidates.as_ref()
     }
 
-    pub(crate) fn is_disconnected(&self) -> bool {
+    pub fn is_disconnected(&self) -> bool {
         self.is_disconnected.as_ref().is_some_and(|f| f())
     }
 
-    pub(crate) fn has_disconnect_probe(&self) -> bool {
+    pub fn has_disconnect_probe(&self) -> bool {
         self.is_disconnected.is_some()
     }
 

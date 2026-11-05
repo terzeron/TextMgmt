@@ -33,7 +33,7 @@ async fn url_preview_is_the_same_jpeg_that_gets_inserted() {
 
 #[tokio::test]
 async fn url_preview_reports_safe_fetch_errors() {
-    use backend::direct_cover_url::FetchError;
+    use cover_manager::direct_cover_url::FetchError;
     for (effect, expected) in [
         (FetchError::Value("내부 주소의 이미지는 사용할 수 없습니다".into()), "내부 주소의 이미지는 사용할 수 없습니다"),
         (FetchError::Os("dns error".into()), "이미지 서버 주소를 확인하지 못했습니다"),
@@ -53,8 +53,8 @@ async fn url_preview_reports_safe_fetch_errors() {
 mod upload_limits {
     use super::{common, fx};
     use crate::common::shared_fixtures::{error_text, split};
-    use backend::epub_cover::{EpubCoverHooks, Limits};
     use common::image::png_solid;
+    use cover_manager::epub_cover::{EpubCoverHooks, Limits};
     use fx::{Opts, image_env, with_deps};
 
     /// `fx::env`가 만든 환경의 `BookManager`를 Deps 설정을 더해 다시 만든다. `loader`가 참이면 파일 읽기 대역도 꽂는다.
@@ -75,7 +75,7 @@ mod upload_limits {
 async fn test_upload_preview_rejects_oversized_data() {
     let e = image_env(Opts::plain());
 
-    let (jpeg, error) = split(e.bm.preview_insert_upload(&vec![0u8; backend::epub_cover::MAX_IMAGE_BYTES + 1]).await);
+    let (jpeg, error) = split(e.bm.preview_insert_upload(&vec![0u8; cover_manager::epub_cover::MAX_IMAGE_BYTES + 1]).await);
 
     assert!(jpeg.is_none() && error_text(&error).contains("큽니다"), "{error:?}");
 }

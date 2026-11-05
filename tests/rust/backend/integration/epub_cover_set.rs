@@ -13,8 +13,6 @@ use crate::common::shared_fixtures::URL;
 use crate::common::shared_fixtures::{assert_cover_error, attach_publisher_cover_page, cover_tmp_files, elements, err_has, has_cover, publisher_cover_epub, revision, spine_idrefs, xml_text};
 use backend::api_router::{AppDeps, AuthMode, app_with};
 use backend::book_manager::BookManagerApi;
-use backend::cover_management::CoverSave;
-use backend::epub_cover::{self, CoverError, EpubRewrite};
 use common::{
     TestClient,
     epub::{EpubSpec, make_epub},
@@ -22,6 +20,8 @@ use common::{
     image::{b64, color_jpeg, red_jpeg},
     zipx::{Members, bytes_replace, rewrite_epub_members},
 };
+use cover_manager::cover_management::CoverSave;
+use cover_manager::epub_cover::{self, CoverError, EpubRewrite};
 use serde_json::json;
 
 // ── 도구 ───────────────────────────────────────────────────

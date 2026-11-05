@@ -368,7 +368,7 @@ impl EpubCoverHooks {
         }
     }
 
-    pub(crate) fn opf_path_override(&self) -> Option<String> {
+    pub fn opf_path_override(&self) -> Option<String> {
         self.find_opf_path.as_ref().map(|f| f())
     }
 

@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 
-use backend::cover_sources::SearchHooks;
+use cover_manager::cover_sources::SearchHooks;
 
 #[test]
 fn default_search_hooks_fetch_cover_bytes_over_http() {
@@ -40,7 +40,7 @@ fn default_cover_session_returns_redirect_for_each_target_to_be_validated() {
     let checked_by_validator = checked.clone();
     let hooks = SearchHooks::default().with_validate(move |_store, url| {
         checked_by_validator.lock().unwrap().push(url.to_string());
-        if url == initial { Ok(url.to_string()) } else { Err(backend::cover_sources::CoverSourceError("redirect target blocked".into())) }
+        if url == initial { Ok(url.to_string()) } else { Err(cover_manager::cover_sources::CoverSourceError("redirect target blocked".into())) }
     });
     assert!(hooks.fetch_bytes("yes24", &format!("http://{address}/redirect"), Some(16)).is_err());
     assert_eq!(checked.lock().unwrap().len(), 2, "redirect target bypassed URL validation");

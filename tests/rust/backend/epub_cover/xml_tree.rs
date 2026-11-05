@@ -1,4 +1,4 @@
-//! `backend::epub_cover::xml_tree` 단위 테스트.
+//! `cover_manager::epub_cover::xml_tree` 단위 테스트.
 
 #[path = "../common/mod.rs"]
 mod common;

@@ -416,7 +416,6 @@ mod get_book_preview {
     use crate::common::shared_fixtures::{blank_pdf_bytes, blank_pdf_bytes_sized, block_on, deps, make_doc, make_manager, tmp_dir};
     use backend::api_router::{BookManagerApi, BookResponse};
     use backend::book_manager::BookManager;
-    use backend::epub_cover::EpubCoverHooks;
     use backend::pdf_page_reader::{PdfError, PdfPageOps};
     use common::epub::{EpubSpec, make_epub};
     use common::es_fake::FakeEsManager;
@@ -424,6 +423,7 @@ mod get_book_preview {
     use common::fsx::{mtime_key, set_mtime};
     use common::runner::FakeRunner;
     use common::zipx::write_zip;
+    use cover_manager::epub_cover::EpubCoverHooks;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::sync::Arc;

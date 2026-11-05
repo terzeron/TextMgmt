@@ -3,21 +3,21 @@
 //! DNS 조회와 연결 풀은 `Net` trait로 주입한다.
 //!
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.7. `Net`/`Pool`/`PoolResponse`는 연결 수준 계약이라 `HttpSession`과 합치지 않고 그대로 둔다):
-//! - `backend::direct_cover_url::fetch_url_image_with(url: &str, net: &dyn Net, max_image_bytes: usize) -> Result<Vec<u8>, FetchError>`
-//! - `backend::direct_cover_url::MAX_IMAGE_BYTES: usize`
-//! - `backend::direct_cover_url::ConnectRequest { https, address, port, server_hostname, assert_hostname, cert_reqs, timeout: HttpTimeout }`
+//! - `cover_manager::direct_cover_url::fetch_url_image_with(url: &str, net: &dyn Net, max_image_bytes: usize) -> Result<Vec<u8>, FetchError>`
+//! - `cover_manager::direct_cover_url::MAX_IMAGE_BYTES: usize`
+//! - `cover_manager::direct_cover_url::ConnectRequest { https, address, port, server_hostname, assert_hostname, cert_reqs, timeout: HttpTimeout }`
 //!   (Clone + Debug. 검증된 IP로만 연결하고, TLS 호스트명은 원래 호스트로 확인한다)
 //! - `trait Net { fn resolve(&self, host: &str, port: u16) -> std::io::Result<Vec<IpAddr>>; fn connect(&self, request: &ConnectRequest) -> Box<dyn Pool>; }`
 //! - `trait Pool { fn urlopen(&mut self, method: &str, target: &str, headers: &[(String, String)]) -> Result<Box<dyn PoolResponse>, String>; }`
 //! - `trait PoolResponse { fn status(&self) -> u16; fn header(&self, name: &str) -> Option<String>; fn stream(&mut self) -> Box<dyn Iterator<Item = Result<Vec<u8>, String>>>; fn close(&mut self); }`
-//! - `backend::direct_cover_url::FetchError { Value(String), Os(String), Other(String) }` (`impl Display`. 구 `CoverError`)
+//! - `cover_manager::direct_cover_url::FetchError { Value(String), Os(String), Other(String) }` (`impl Display`. 구 `CoverError`)
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
 use ::common::http_client::HttpTimeout;
-use backend::direct_cover_url::{ConnectRequest, Net, SystemNet};
+use cover_manager::direct_cover_url::{ConnectRequest, Net, SystemNet};
 
 #[test]
 fn test_system_net_uses_pinned_socket_and_streams_http_response() {

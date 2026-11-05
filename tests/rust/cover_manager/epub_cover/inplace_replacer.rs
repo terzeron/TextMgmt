@@ -1,15 +1,12 @@
-//! `backend::epub_cover::inplace_replacer` 단위 테스트.
+//! `cover_manager::epub_cover::inplace_replacer` 단위 테스트.
 
 #[path = "../common/mod.rs"]
 mod common;
 
-#[path = "../common/cover_fixtures.rs"]
-mod cover_fixtures;
-use crate::common::shared_fixtures::{backups, opf_of, read, rev};
+use crate::common::epub_fixtures::{backups, opf_of, read, rev};
 use crate::common::{epub::BODY, epub::EpubSpec, epub::count_elements, epub::make_epub, fsx::ino_mtime, image::BLUE, image::encode_image, image::red_jpeg, zipx::member_names, zipx::read_zip_entry};
-use backend::book_manager::BookManager;
-use backend::epub_cover;
-use backend::epub_cover::EpubRewrite;
+use cover_manager::epub_cover;
+use cover_manager::epub_cover::EpubRewrite;
 use image::ImageFormat;
 use std::fs::File;
 use std::path::Path;
@@ -32,7 +29,7 @@ fn test_cover_replacement_preserves_content_and_has_one_generated_cover() {
             assert_eq!(read(Path::new(&result.backup_path)), before, "version={version}");
             assert_eq!(ino_mtime(&path), stat, "version={version}");
             let mut archive = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
-            let member = BookManager::find_epub_cover_member(&mut archive).unwrap();
+            let member = cover_manager::epub_cover::find_epub_cover_member(&mut archive).unwrap();
             drop(archive);
             assert_eq!(read_zip_entry(&path, &member), epub_cover::normalize_image(&data, Some(600)).unwrap(), "version={version}");
             let names = member_names(&path);

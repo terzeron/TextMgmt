@@ -19,8 +19,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::api_router::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, RequestValidationError, RequireAdmin, Routes};
-use crate::cover_management::{ApplyCoverModel, ApplyImageModel, ApplyUrlModel, BookCoverModel, CoverHooks, CoverManagement, CoverSave, with_cancel_scope};
-use crate::epub_cover::{CoverError, MAX_IMAGE_BYTES};
+use cover_manager::cover_management::{ApplyCoverModel, ApplyImageModel, ApplyUrlModel, BookCoverModel, CoverHooks, CoverManagement, CoverSave, with_cancel_scope};
+use cover_manager::epub_cover::{CoverError, MAX_IMAGE_BYTES};
 
 const FAILED_DETAIL: &str = "표지 작업을 완료하지 못했습니다. 다시 시도하세요";
 

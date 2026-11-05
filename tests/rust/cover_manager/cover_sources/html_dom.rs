@@ -1,6 +1,6 @@
-//! `backend::cover_sources::html_dom` 단위 테스트. 표지 후보 추출이 쓰는 작은 DOM 질의를 본다.
+//! `cover_manager::cover_sources::html_dom` 단위 테스트. 표지 후보 추출이 쓰는 작은 DOM 질의를 본다.
 
-use backend::cover_sources::html_dom::HtmlDom;
+use cover_manager::cover_sources::html_dom::HtmlDom;
 
 const PAGE: &str = r#"<html><head>
 <meta property="og:image" content="https://img.example/cover.jpg">

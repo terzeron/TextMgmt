@@ -1,0 +1,65 @@
+[package]
+name = "cover_manager"
+description = "책 표지 관리: 서점 표지 후보 검색·저장(cover_management, cover_sources), URL 이미지 받기(direct_cover_url), EPUB 표지 교체·이미지 편집(epub_cover), 표지 상태 판정(cover_status)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[dependencies]
+base64 = "0.23.1"
+bookstore = { path = "../bookstore" }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+common = { path = "../common" }
+db = { path = "../db" }
+file_indexer = { path = "../file_indexer" }
+htmlkit = { path = "../htmlkit" }
+idna = "1.1.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+log = "0.4.34"
+lopdf.workspace = true
+regex = "1.13.1"
+roxmltree = "0.21.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+sha2 = "0.11.1"
+sysdeps = { path = "../sysdeps" }
+ureq = { workspace = true, features = ["rustls"] }
+xml_recoverer = { path = "../xml_recoverer" }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+es_client = { path = "../es_client" }
+tempfile = "3.27.0"
+
+[[test]]
+name = "cover_management"
+path = "../../tests/rust/cover_manager/cover_management.rs"
+
+[[test]]
+name = "cover_sources"
+path = "../../tests/rust/cover_manager/cover_sources.rs"
+
+[[test]]
+name = "cover_sources_html_dom"
+path = "../../tests/rust/cover_manager/cover_sources/html_dom.rs"
+
+[[test]]
+name = "epub_cover_epub_writer"
+path = "../../tests/rust/cover_manager/epub_cover/epub_writer.rs"
+
+[[test]]
+name = "epub_cover_image_editor"
+path = "../../tests/rust/cover_manager/epub_cover/image_editor.rs"
+
+[[test]]
+name = "epub_cover_inplace_replacer"
+path = "../../tests/rust/cover_manager/epub_cover/inplace_replacer.rs"
+
+[[test]]
+name = "integration_cover_sources"
+path = "../../tests/rust/cover_manager/integration/cover_sources.rs"
+
+[[test]]
+name = "integration_direct_cover_url"
+path = "../../tests/rust/cover_manager/integration/direct_cover_url.rs"

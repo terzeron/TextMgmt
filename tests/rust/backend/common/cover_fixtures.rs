@@ -7,26 +7,26 @@
 //!
 //! 가정한 API (아직 구현 전이다):
 //! - `backend::book_metadata::Book::override_path_prefix(path: &Path) -> PathPrefixGuard` (drop 시 원래 값 복원.
-//! - `backend::cover_management::CoverManagement::{new(root: &Path), with_hooks(root: &Path, hooks: CoverHooks), hooks(&self) -> &CoverHooks, set_hooks(&mut self, hooks: CoverHooks)}`
-//! - `backend::cover_management::CoverHooks` (Clone + Default): `with_search(Fn(&str, &EpubInspection) -> Result<StoreSearch, SearchError>)`, `with_fetch_bytes(Fn(&str, &str) -> Result<Vec<u8>, String>)`,
+//! - `cover_manager::cover_management::CoverManagement::{new(root: &Path), with_hooks(root: &Path, hooks: CoverHooks), hooks(&self) -> &CoverHooks, set_hooks(&mut self, hooks: CoverHooks)}`
+//! - `cover_manager::cover_management::CoverHooks` (Clone + Default): `with_search(Fn(&str, &EpubInspection) -> Result<StoreSearch, SearchError>)`, `with_fetch_bytes(Fn(&str, &str) -> Result<Vec<u8>, String>)`,
 //!   `with_fetch_url_image(Fn(&str) -> Result<Vec<u8>, CoverError>)`, `with_clock(Arc<dyn Clock>)`. 테스트가 대역을 꽂는 주입 지점이다.
-//! - `backend::cover_management::{AdminGate, BookIndex, create_cover_router}`
+//! - `cover_manager::cover_management::{AdminGate, BookIndex, create_cover_router}`
 //!   - `AdminGate::default()` 실제 인증, `.allow(Value)`, `.deny(status: u16, detail: &str)`, `.clear()`
 //!   - `trait BookIndex: Send + Sync { fn search_by_id(&self, book_id: i64) -> Result<Option<Value>, String>; fn update(&self, book_id: i64, fields: &Value) -> Result<bool, String>; }`
 //!   - `create_cover_router(get_manager: Arc<dyn Fn() -> Arc<dyn BookIndex> + Send + Sync>, gate: AdminGate, hooks: CoverHooks) -> axum::Router`
-//! - `backend::cover_sources::Clock` (`fn now(&self) -> f64`, `fn sleep(&self, seconds: f64)`)
+//! - `cover_manager::cover_sources::Clock` (`fn now(&self) -> f64`, `fn sleep(&self, seconds: f64)`)
 
 #![allow(dead_code)]
 
-use backend::cover_management::CandidateView;
-use backend::cover_sources::{SearchStatus, StoreCandidate, StoreSearch};
-use std::io::{Cursor, Read, Write};
+#[allow(unused_imports)]
+pub use crate::common::cover_candidates::{Cached, cached_candidates, encode_image, image_bytes};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use backend::api_router::{AppDeps, AuthMode, BookManagerApi, app_with};
-use backend::cover_management::{CoverHooks, CoverManagement};
-use image::{ImageFormat, Rgb, RgbImage};
+use cover_manager::cover_management::CoverHooks;
+use image::RgbImage;
 use lopdf::{Document, Object, Stream, dictionary};
 use search_manager::{EsError, EsManagerApi};
 use serde_json::{Value, json};
@@ -45,19 +45,6 @@ pub use crate::common::image::{BLUE, RED, paste, solid};
 use crate::common::zipx::options;
 #[allow(unused_imports)]
 pub use crate::common::zipx::{Members, bytes_replace};
-
-/// 단색 이미지를 `format`으로 인코딩한다.
-pub fn encode_image(width: u32, height: u32, rgb: [u8; 3], format: ImageFormat) -> Vec<u8> {
-    let image = RgbImage::from_pixel(width, height, Rgb(rgb));
-    let mut out = Cursor::new(Vec::new());
-    image.write_to(&mut out, format).unwrap();
-    out.into_inner()
-}
-
-/// 120x180 빨강 JPEG.
-pub fn image_bytes() -> Vec<u8> {
-    encode_image(120, 180, RED, ImageFormat::Jpeg)
-}
 
 /// 인코딩된 이미지의 (너비, 높이).
 pub fn image_size(data: &[u8]) -> (u32, u32) {
@@ -144,50 +131,6 @@ pub fn remove_element(xml: &[u8], local: &str) -> Vec<u8> {
 }
 
 // ---- cached_candidates -----------------------------------------------------------------------
-
-pub struct Cached {
-    pub candidates: Vec<CandidateView>,
-    pub fetches: Arc<Mutex<Vec<String>>>,
-}
-
-impl Cached {
-    pub fn id(&self, index: usize) -> &str {
-        &self.candidates[index].candidate_id
-    }
-}
-
-/// 검색과 이미지 내려받기를 가짜로 바꾸고 후보와 이미지를 캐시에 채운다.
-pub fn cached_candidates(service: &mut CoverManagement, relative: &str, stores: &[&str]) -> Cached {
-    let fetches = Arc::new(Mutex::new(Vec::<String>::new()));
-    let seen = fetches.clone();
-    let hooks = service
-        .hooks()
-        .clone()
-        .with_search(|store, metadata| {
-            let candidates = (0..2)
-                .map(|index| StoreCandidate {
-                    title: metadata.title.clone(),
-                    author: "저자".into(),
-                    detail_url: "https://www.yes24.com/".into(),
-                    image_url: format!("https://image.yes24.com/{store}-{index}.jpg"),
-                })
-                .collect();
-            Ok(StoreSearch { status: SearchStatus::Success, search_url: String::new(), candidates })
-        })
-        .with_fetch_bytes(move |_store, url| {
-            seen.lock().unwrap().push(url.to_string());
-            Ok(image_bytes())
-        });
-    service.set_hooks(hooks);
-    let mut candidates = Vec::new();
-    for store in stores {
-        candidates.extend(service.candidates(store, relative, false, false).unwrap().candidates);
-    }
-    for candidate in &candidates {
-        service.image(&candidate.candidate_id).unwrap();
-    }
-    Cached { candidates, fetches }
-}
 
 // ---- cover_api -------------------------------------------------------------------------------
 

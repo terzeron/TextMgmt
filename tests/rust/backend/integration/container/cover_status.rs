@@ -13,13 +13,13 @@ use std::time::Duration;
 
 use backend::book_manager::{BookManager, BookManagerDeps, CoverBooksPager, CoverPage, CoverPageOpts};
 use backend::book_metadata::Book as CoverBook;
-use backend::cover_status::{CoverStatusCache, STANDARD_COVER_SIZES, has_official_cover, pdf_first_image_size};
 use common::{
     epub::{EpubSpec, make_epub},
     es_fake::FakeEsManager,
     image::solid,
     pdf::{write_blank_pdf, write_image_pdf},
 };
+use cover_manager::cover_status::{CoverStatusCache, STANDARD_COVER_SIZES, has_official_cover, pdf_first_image_size};
 use serde_json::json;
 
 static LOCK: Mutex<()> = Mutex::new(());

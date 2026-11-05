@@ -164,7 +164,7 @@ impl Drop for Parts {
     }
 }
 
-fn edit_file(fs: Arc<dyn FsOps>, path: &Path, trash: &Path, edits: &Edits, fetcher: &dyn crate::direct_cover_url::ImageFetcher, max_image_pixels: usize) -> Result<PdfEditResult, String> {
+fn edit_file(fs: Arc<dyn FsOps>, path: &Path, trash: &Path, edits: &Edits, fetcher: &dyn cover_manager::direct_cover_url::ImageFetcher, max_image_pixels: usize) -> Result<PdfEditResult, String> {
     let mut pdf = Document::load(path).map_err(|e| format!("PDF 페이지 삭제 실패: {e}"))?;
     let original = pdf.get_pages();
     edits.validate(original.len())?;

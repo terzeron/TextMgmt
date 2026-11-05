@@ -1,12 +1,12 @@
-//! `backend::direct_cover_url` 단위 테스트.
+//! `cover_manager::direct_cover_url` 단위 테스트.
 
 mod common;
 #[path = "common/book_fixtures.rs"]
 mod fx;
 use crate::common::shared_fixtures::{error_text, split};
 use ::common::http_client::HttpTimeout;
-use backend::direct_cover_url::{ConnectRequest, FetchError, MAX_IMAGE_BYTES, Net, Pool, PoolResponse, fetch_url_image_with};
 use common::edits;
+use cover_manager::direct_cover_url::{ConnectRequest, FetchError, MAX_IMAGE_BYTES, Net, Pool, PoolResponse, fetch_url_image_with};
 use fx::{Edit, FetchBehavior, Opts, image_env};
 use std::fs;
 use std::net::IpAddr;

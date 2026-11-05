@@ -225,6 +225,7 @@ dependencies = [
  "chrono",
  "classifier",
  "common",
+ "cover_manager",
  "db",
  "doc_reader",
  "epubveri",
@@ -234,7 +235,6 @@ dependencies = [
  "flate2",
  "htmlkit",
  "hwp3_parser",
- "idna",
  "image",
  "jpeg-encoder",
  "jsonwebtoken",
@@ -713,6 +713,34 @@ name = "core_detect"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
+
+[[package]]
+name = "cover_manager"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "bookstore",
+ "chrono",
+ "common",
+ "db",
+ "es_client",
+ "file_indexer",
+ "htmlkit",
+ "idna",
+ "image",
+ "log",
+ "lopdf",
+ "regex",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sysdeps",
+ "tempfile",
+ "ureq",
+ "xml_recoverer",
+ "zip",
+]
 
 [[package]]
 name = "cpubits"

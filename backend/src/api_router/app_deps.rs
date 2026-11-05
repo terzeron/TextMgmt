@@ -15,12 +15,12 @@ use super::google_oauth::GoogleIdTokenVerifier;
 use crate::book_manager::{BookManager, LoaderFileReader};
 use crate::book_manager::{BookManagerApi, UnavailableBookManager};
 use crate::comics_manager::ComicsManager;
-use crate::cover_management::CoverHooks;
 use crate::task_runner::{TaskRunner, ThreadRunner};
 use auth_manager::auth_service::{Claims, HttpStatusError};
 use auth_manager::auth_service::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
 use auth_manager::refresh_token_store::{RefreshTokenStoreApi, create_refresh_token_store};
 use bookstore::store_clients::BookstoreSearch;
+use cover_manager::cover_management::CoverHooks;
 use db::category_mapping::CategoryMapping;
 use search_manager::{ESManager, EsManagerApi, RealEsConnector};
 

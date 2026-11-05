@@ -3,8 +3,8 @@ mod common;
 #[path = "../common/cover_fixtures.rs"]
 mod cover_fixtures;
 
-use backend::cover_management::CandidateSearch;
-use backend::cover_sources::{SearchStatus, StoreCandidate, StoreSearch};
+use cover_manager::cover_management::CandidateSearch;
+use cover_manager::cover_sources::{SearchStatus, StoreCandidate, StoreSearch};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -14,8 +14,6 @@ use crate::common::shared_fixtures::fetcher;
 use crate::common::shared_fixtures::{backups, opf_of, read, rev, str_of, truthy};
 use backend::api_router::{AppDeps, AuthMode, app_with};
 use backend::book_manager::{BookManager, BookManagerDeps};
-use backend::cover_management::{CoverHooks, CoverManagement, check_cancelled};
-use backend::epub_cover::{self, CoverError, EpubRewrite, OPF_NS};
 use common::{
     TestClient,
     clock::Event,
@@ -26,6 +24,8 @@ use common::{
     zipx::{member_names, read_zip_entry, rewrite_epub_members, testzip_ok},
 };
 use cover_fixtures::{cached_candidates, cover_api};
+use cover_manager::cover_management::{CoverHooks, CoverManagement, check_cancelled};
+use cover_manager::epub_cover::{self, CoverError, EpubRewrite, OPF_NS};
 use image::ImageFormat;
 use serde_json::{Value, json};
 use zip::CompressionMethod;

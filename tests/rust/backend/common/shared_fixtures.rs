@@ -9,27 +9,30 @@ pub use super::clock::now;
 pub use super::env::process_env;
 use super::env::{EnvGuard, EnvReadGuard};
 use super::epub::{EpubSpec, make_epub};
+#[allow(unused_imports)]
+pub use super::epub_fixtures::{
+    FnFetcher, FnThumbnailer, MULTI_PAGE, assert_refused, backups, broken_cover, chapter, edit, epub_with_cover, err_of, error_text, fetcher, first_item, full, gif, hooks_with, jpeg, jpeg_sized,
+    make_chapter_xhtml, opf_of, png, read, rev, revision, size, split, str_of, thumbnailer, truthy,
+};
 use super::es_fake::{Docs, FakeEsManager};
 use super::fsx::dir_names;
-use super::image::{BLUE, color, encode, encode_image, image_size, jpeg_bytes};
+use super::image::encode_image;
 use super::pdf::make_blank_pdf;
-use super::zipx::{Members, ZipMode, read_zip_entry, rewrite_epub_members, write_zip, write_zip_with};
-use super::{Response, TestClient, es_dummy};
+use super::zipx::{Members, ZipMode, rewrite_epub_members, write_zip, write_zip_with};
+use super::{Response, TestClient};
 use auth_manager::auth_service::Claims;
 use auth_manager::refresh_token_store::{RefreshTokenStoreApi, Rotation, SessionPage, SessionQuery, SessionRevocation, StoreError};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
 use backend::api_router::{AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, ReloadProgress, TaskHandle, TaskRunner};
-use backend::book_manager::{AddBookError, BookAdder, BookContent, BookLookup, BookManager, BookManagerDeps, BookRef, BookResponse, CoverPage, FileReader, ProposeOptions, ReadFileError, Thumbnailer};
+use backend::book_manager::{AddBookError, BookAdder, BookContent, BookLookup, BookManager, BookManagerDeps, BookRef, BookResponse, CoverPage, FileReader, ProposeOptions, ReadFileError};
 use backend::book_manager::{ApplyResult, EpubValidation, PdfValidation, ProposeResult};
 use backend::book_manager::{FsOnlyFile, MismatchDetails, MismatchReload, ReloadCounts, ReloadedFiles};
 use backend::book_metadata::{Book, BookLookupError, BookPage};
-use backend::cover_management::CoverManagement;
-use backend::direct_cover_url::{FetchError, ImageFetcher};
-use backend::epub_cover;
-use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, EpubRewrite, Limits, edit_images};
+use cover_manager::direct_cover_url::{FetchError, ImageFetcher};
+use cover_manager::epub_cover;
+use cover_manager::epub_cover::CoverError;
 use db::category_mapping::CategoryMapping;
 use db::{DbValue, Row};
-use image::{DynamicImage, ImageFormat, Rgb, RgbImage, RgbaImage};
 use search_manager::{EsError, EsManagerApi};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -81,11 +84,6 @@ pub fn assert_cover_error<T: std::fmt::Debug>(result: Result<T, CoverError>, nee
     }
 }
 
-pub fn assert_refused<T: std::fmt::Debug>(result: Result<T, CoverError>, reason: &str, label: &str) {
-    let text = err_of(result);
-    assert!(text.contains(reason), "{label}: {text:?} 에 {reason:?}가 없다");
-}
-
 /// 동기 테스트 안에서 future를 끝까지 돌린다.
 pub fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
@@ -124,10 +122,6 @@ pub fn attach_publisher_cover_page(path: &Path, shared: bool) {
     });
 }
 
-pub fn backups(root: &Path) -> PathBuf {
-    root.join(".cover_backups")
-}
-
 /// 612x792 빈 페이지 `pages`장짜리 PDF.
 pub fn blank_pdf_bytes(pages: usize, info: &[(&str, &str)]) -> Vec<u8> {
     pdf_bytes(pages, 612, 792, info)
@@ -141,21 +135,11 @@ pub fn books(v: Value) -> Vec<Book> {
     v.as_array().map(|a| a.iter().cloned().map(|b| opt_book(b).expect("Book JSON")).collect()).unwrap_or_default()
 }
 
-pub fn broken_cover(tmp: &Path) -> PathBuf {
-    let path = make_epub(&tmp.join("book.epub"), &EpubSpec::cover("3.0", true));
-    rewrite_epub_members(&path, |members| members.set("OPS/cover.jpg", &b"not a JPEG"[..]));
-    path
-}
-
 pub fn category_with_files(root: &Path, category: &str, names: &[&str]) {
     fs::create_dir_all(root.join(category)).unwrap();
     for name in names {
         fs::write(root.join(category).join(name), "본문").unwrap();
     }
-}
-
-pub fn chapter(index: usize) -> String {
-    make_chapter_xhtml(index, false)
 }
 
 pub fn count(v: &Value) -> i64 {
@@ -184,10 +168,6 @@ pub fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
     BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
 }
 
-pub fn edit(path: &Path, trash: &Path, args: EditImages) -> Result<EpubRewrite, CoverError> {
-    edit_images(path, &revision(path), trash, EditImages { backup_name: Some("book.epub".to_string()), ..args })
-}
-
 /// local-name이 `name`인 모든 요소를 문서 순서로 돌려준다.
 pub fn elements<'a, 'i>(doc: &'a roxmltree::Document<'i>, name: &str) -> Vec<roxmltree::Node<'a, 'i>> {
     doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == name).collect()
@@ -202,48 +182,16 @@ pub fn entry(name: &str, data: impl Into<Vec<u8>>) -> (String, Vec<u8>) {
     (name.to_string(), data.into())
 }
 
-pub fn epub_with_cover(root: &Path, width: u32, height: u32) -> PathBuf {
-    let path = make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", true));
-    let data = encode_image(width, height, BLUE, ImageFormat::Jpeg);
-    rewrite_epub_members(&path, |members| members.set("OPS/cover.jpg", data.clone()));
-    path
-}
-
 pub fn err_has(error: &Option<String>, needle: &str) -> bool {
     error.as_deref().unwrap_or_else(|| panic!("error가 None이다 (기대: {needle:?} 포함)")).contains(needle)
-}
-
-pub fn err_of<T: std::fmt::Debug>(result: Result<T, CoverError>) -> String {
-    result.expect_err("CoverError가 나야 한다").to_string()
-}
-
-pub fn error_text(error: &Option<String>) -> &str {
-    error.as_deref().unwrap_or("")
-}
-
-/// 표지 목록 첫 항목의 JSON 모양.
-pub fn first_item(service: &CoverManagement, covered: bool) -> Value {
-    serde_json::to_value(service.missing("", "", 60, covered).unwrap()).unwrap()["items"][0].clone()
 }
 
 pub fn flag(v: &Value) -> bool {
     v.as_bool().unwrap_or(false)
 }
 
-pub fn full() -> Value {
-    json!([0, 0, 1, 1, 0])
-}
-
-pub fn gif() -> Vec<u8> {
-    encode(DynamicImage::ImageRgba8(RgbaImage::new(20, 20)), ImageFormat::Gif)
-}
-
 pub fn has_cover(path: &Path) -> bool {
     epub_cover::inspect_epub(path).unwrap().has_cover
-}
-
-pub fn hooks_with(limits: Limits) -> EpubCoverHooks {
-    EpubCoverHooks::default().with_limits(limits)
 }
 
 /// 이미지 한 장의 바이트. 색은 고정이다.
@@ -268,25 +216,6 @@ pub fn is_truthy(v: &Value) -> bool {
         Value::Object(o) => !o.is_empty(),
         Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(true),
     }
-}
-
-pub fn jpeg(c: &str) -> Vec<u8> {
-    jpeg_sized(c, (200, 100))
-}
-
-pub fn jpeg_sized(c: &str, size: (u32, u32)) -> Vec<u8> {
-    jpeg_bytes(&RgbImage::from_pixel(size.0, size.1, Rgb(color(c))), 75)
-}
-
-pub fn make_chapter_xhtml(index: usize, link_css: bool) -> String {
-    let css_link = if link_css { r#"<link rel="stylesheet" href="style.css"/>"# } else { "" };
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>Chapter {index}</title>{css_link}</head>
-<body><h1>Chapter {index}</h1><p>Content of chapter {index}.</p></body>
-</html>"#
-    )
 }
 
 /// SVG `<image>` 태그로 커버 이미지를 참조하는 커버 페이지.
@@ -383,10 +312,6 @@ pub fn ns_nodes<'a, 'i>(doc: &'a roxmltree::Document<'i>, ns: &str, name: &str) 
     doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == name && n.tag_name().namespace() == Some(ns)).collect()
 }
 
-pub fn opf_of(path: &Path) -> Vec<u8> {
-    read_zip_entry(path, "OPS/book.opf")
-}
-
 pub fn opt_book(v: Value) -> Option<Book> {
     if v.is_null() { None } else { Some(Book::new(v["book_id"].as_i64().unwrap_or_default(), &v, v["score"].as_f64().unwrap_or_default())) }
 }
@@ -450,10 +375,6 @@ pub fn pdf_bytes(pages: usize, width: u32, height: u32, info: &[(&str, &str)]) -
     out
 }
 
-pub fn png(c: &str) -> Vec<u8> {
-    encode(DynamicImage::ImageRgb8(RgbImage::from_pixel(200, 100, Rgb(color(c)))), ImageFormat::Png)
-}
-
 pub fn proposal_result(total: usize, items: &[Value]) -> Value {
     json!({"content_type": "book", "source_category": "0_inbox", "total_count": total, "processed_count": total, "items": items, "failures": []})
 }
@@ -480,19 +401,6 @@ pub fn publisher_cover_epub(tmp_path: &Path, files: &[(&str, Vec<u8>)]) -> PathB
     path
 }
 
-pub fn read(path: &Path) -> Vec<u8> {
-    std::fs::read(path).unwrap()
-}
-
-/// 현재 `revision`.
-pub fn rev(path: &Path) -> String {
-    epub_cover::inspect_epub(path).unwrap().revision
-}
-
-pub fn revision(path: &Path) -> String {
-    epub_cover::inspect_epub(path).unwrap().revision
-}
-
 pub fn run<F: std::future::Future>(fut: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut)
 }
@@ -501,26 +409,10 @@ pub fn set_cookies(r: &Response) -> Vec<String> {
     r.headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("set-cookie")).map(|(_, v)| v.clone()).collect()
 }
 
-pub fn size(data: &[u8]) -> (u32, u32) {
-    image_size(data)
-}
-
 pub fn spine_idrefs(path: &Path) -> Vec<String> {
     let text = xml_text(Members::read(path).get("OPS/book.opf"));
     let doc = roxmltree::Document::parse(&text).unwrap();
     elements(&doc, "spine").iter().flat_map(|s| s.children().filter(|c| c.is_element() && c.tag_name().name() == "itemref")).filter_map(|c| c.attribute("idref").map(String::from)).collect()
-}
-
-/// `Result`를 `(결과, 오류)` 모양으로 펼쳐 단언을 짧게 쓴다.
-pub fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
-    match result {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error)),
-    }
-}
-
-pub fn str_of<'a>(value: &'a Value, key: &str) -> &'a str {
-    value[key].as_str().unwrap()
 }
 
 pub fn strings(v: Value) -> Vec<String> {
@@ -552,9 +444,6 @@ pub fn to_response(v: Value) -> BookResponse {
 }
 
 // TODO(common): `es_dummy::truthy(Option<&Value>)`를 `&Value`로 받는 얇은 래퍼. cover_fixtures::truthy를 대신한다.
-pub fn truthy(value: &Value) -> bool {
-    es_dummy::truthy(Some(value))
-}
 
 pub fn unlink(path: &Path) {
     let _ = fs::remove_file(path);
@@ -842,10 +731,10 @@ impl RefreshTokenStoreApi for FakeStore {
 
 pub type Fetch = Box<dyn Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync>;
 
-pub struct FetchImage(pub Result<Vec<u8>, backend::direct_cover_url::FetchError>);
+pub struct FetchImage(pub Result<Vec<u8>, cover_manager::direct_cover_url::FetchError>);
 
-impl backend::direct_cover_url::ImageFetcher for FetchImage {
-    fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, backend::direct_cover_url::FetchError> {
+impl cover_manager::direct_cover_url::ImageFetcher for FetchImage {
+    fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, cover_manager::direct_cover_url::FetchError> {
         assert_eq!(url, "https://example.com/image.png");
         self.0.clone()
     }
@@ -876,16 +765,6 @@ impl BookAdder for FnBookAdder {
     }
 }
 
-/// 클로저를 `ImageFetcher`로 감싼다.
-// TODO(common): `super::fx::fetcher(|url| ...)` (docs/rust-test-seams.md 3.7). 아직 없어 로컬로 둔다.
-pub struct FnFetcher<F>(pub F);
-
-impl<F: Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync> ImageFetcher for FnFetcher<F> {
-    fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError> {
-        (self.0)(url)
-    }
-}
-
 // TODO(common): 클로저를 `FileReader`로 감싸는 어댑터. 문서 3.7의 `fx::fetcher`처럼 `super::fx`에 두면 된다.
 pub struct FnFileReader(pub Box<ReadFileFn>);
 
@@ -904,16 +783,6 @@ impl FileReader for FnFileReader {
             Err(LoaderReadError::Other(message)) => Err(ReadFileError::Other(message)),
             Ok(_) => Ok(self.read_file(path, path_prefix)),
         }
-    }
-}
-
-/// 클로저를 `Thumbnailer`로 감싼다.
-// TODO(common): `Thumbnailer` 클로저 어댑터가 `common`에 없다(docs/rust-test-seams.md 3.12는 trait 이름만 정한다).
-pub struct FnThumbnailer<F>(pub F);
-
-impl<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync> Thumbnailer for FnThumbnailer<F> {
-    fn extract_cover_thumbnail(&self, path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>> {
-        (self.0)(path, file_type, width)
     }
 }
 
@@ -1045,13 +914,6 @@ pub enum LoaderReadError {
 }
 
 // ── 한 쪽에 이미지가 여러 장인 책(실제 책처럼 xmlns 없는 비정형 HTML) ─────────────────────
-
-pub const MULTI_PAGE: &str = concat!(
-    "<html>\n  <head>\n    <title>엄마의 말뚝</title>\n  </head>\n    <body><li class=\"chapter\">\n",
-    "<p><img alt=\"image\" height=\"597\" src=\"../Images/m1.jpg\" width=\"412\"/></p>\n",
-    "<p><img alt=\"image\" height=\"597\" src=\"../Images/m2.jpg\" width=\"412\"/></p>\n",
-    "</li></body></html>"
-);
 
 /// 메서드별 `return_value`/`side_effect`를 정하고 호출을 기록한다. 설정이 없는 메서드는 null을 돌려준다.
 #[derive(Clone, Default)]
@@ -1889,10 +1751,6 @@ pub fn effective(store: &Store, content_type: &str, stale_seconds: f64) -> Value
     current
 }
 
-pub fn fetcher<F: Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync + 'static>(f: F) -> Arc<dyn ImageFetcher> {
-    Arc::new(FnFetcher(f))
-}
-
 /// 구 `loader_read_file_override(closure)`.
 pub fn file_reader(f: impl Fn(&Path) -> Result<Value, LoaderReadError> + Send + Sync + 'static) -> Arc<dyn FileReader> {
     Arc::new(FnFileReader(Box::new(f)))
@@ -2019,10 +1877,6 @@ pub fn store_set(store: &Store, status: &Value, content_type: &str) {
     let mut m: Map<String, Value> = status.as_object().cloned().unwrap_or_default();
     m.insert("content_type".into(), json!(content_type));
     store.lock().unwrap().insert(content_type.to_string(), Value::Object(m));
-}
-
-pub fn thumbnailer<F: Fn(&Path, &str, Option<u32>) -> Option<Vec<u8>> + Send + Sync + 'static>(f: F) -> Arc<dyn Thumbnailer> {
-    Arc::new(FnThumbnailer(f))
 }
 
 pub fn manager(s: &Setup, deps: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> BookManager {

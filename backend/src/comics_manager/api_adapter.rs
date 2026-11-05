@@ -5,7 +5,7 @@ use crate::book_manager::{ApplyResult, EpubValidation, PdfEditResult, PdfValidat
 use crate::book_manager::{BookDeletion, BookManager, CoverPage};
 use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
-use crate::cover_management::CoverSave;
+use cover_manager::cover_management::CoverSave;
 use search_manager::EsManagerApi;
 use serde_json::Value;
 use std::path::{Path, PathBuf};

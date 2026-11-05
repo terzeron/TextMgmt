@@ -18,9 +18,9 @@ use std::sync::{Arc, Mutex};
 
 use backend::book_manager::PdfEditResult;
 use backend::book_manager::{BookManager, BookManagerDeps, FileReader};
-use backend::cover_management::CoverSave;
-use backend::direct_cover_url::{FetchError, ImageFetcher};
-use backend::epub_cover::CreatedIdrefs;
+use cover_manager::cover_management::CoverSave;
+use cover_manager::direct_cover_url::{FetchError, ImageFetcher};
+use cover_manager::epub_cover::CreatedIdrefs;
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use search_manager::Docs;
 use serde_json::{Value, json};

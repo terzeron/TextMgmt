@@ -18,21 +18,29 @@ pub mod auth_fixtures;
 pub mod category_apply;
 #[path = "../../shared/clock.rs"]
 pub mod clock;
+#[path = "../../shared/cover_candidates.rs"]
+pub mod cover_candidates;
 pub mod cover_docs;
 pub mod cover_env;
 pub mod dyn_es;
 pub mod edits;
 #[path = "../../shared/env.rs"]
 pub mod env;
+#[path = "../../shared/epub.rs"]
 pub mod epub;
+#[path = "../../shared/epub_book.rs"]
 pub mod epub_book;
+#[path = "../../shared/epub_fixtures.rs"]
+pub mod epub_fixtures;
 #[path = "../../shared/es_dummy.rs"]
 pub mod es_dummy;
 pub mod es_fake;
 #[path = "../../shared/faulty_fs.rs"]
 pub mod faulty_fs;
 pub mod file_reader_fakes;
+#[path = "../../shared/fsx.rs"]
 pub mod fsx;
+#[path = "../../shared/image.rs"]
 pub mod image;
 #[path = "../../shared/log_capture.rs"]
 pub mod log_capture;
@@ -44,6 +52,7 @@ pub mod raster;
 pub mod runner;
 pub mod session;
 pub mod shared_fixtures;
+#[path = "../../shared/zipx.rs"]
 pub mod zipx;
 
 use axum::body::Body;

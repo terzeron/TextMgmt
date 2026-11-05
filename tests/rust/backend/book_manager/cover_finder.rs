@@ -9,15 +9,15 @@ use crate::common::cover_docs::{create_test_pdf, use_doc};
 use crate::common::shared_fixtures::{broken_cover, error_text, first_item};
 use crate::common::shared_fixtures::{fetcher, thumbnailer};
 use backend::book_manager::{BookManager, BookManagerDeps};
-use backend::cover_management::{CoverManagement, CoverSave};
-use backend::cover_sources::{SearchStatus, StoreSearch};
-use backend::epub_cover;
-use backend::epub_cover::{CoverError, MAX_IMAGE_BYTES};
 use common::epub::BODY;
 use common::es_fake::FakeEsManager;
 use common::fsx::ino_mtime;
 use common::image::{b64, red_jpeg};
 use common::zipx::read_zip_entry;
+use cover_manager::cover_management::{CoverManagement, CoverSave};
+use cover_manager::cover_sources::{SearchStatus, StoreSearch};
+use cover_manager::epub_cover;
+use cover_manager::epub_cover::{CoverError, MAX_IMAGE_BYTES};
 use fx::{Edit, Opts};
 
 #[tokio::test]
@@ -75,8 +75,8 @@ fn test_broken_cover_search_and_replacement_preserve_body_and_backup() {
 mod upload_limits {
     use super::{common, fx};
     use crate::common::shared_fixtures::error_text;
-    use backend::epub_cover::{EpubCoverHooks, Limits};
     use common::edits;
+    use cover_manager::epub_cover::{EpubCoverHooks, Limits};
     use std::fs;
 
     use common::image::png_solid;
@@ -113,7 +113,7 @@ mod download_failures {
     use crate::common::shared_fixtures::err_has;
     use std::fs;
 
-    use backend::direct_cover_url::FetchError;
+    use cover_manager::direct_cover_url::FetchError;
 
     #[tokio::test]
     async fn test_download_failure_returns_the_reason_and_keeps_the_file() {

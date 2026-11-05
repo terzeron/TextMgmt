@@ -1,23 +1,21 @@
 mod common;
-#[path = "common/cover_fixtures.rs"]
-mod cover_fixtures;
-use crate::common::shared_fixtures::{backups, epub_with_cover, hooks_with, read, rev, str_of, truthy};
-use crate::common::shared_fixtures::{fetcher, thumbnailer};
-use backend::book_manager::{BookManager, Thumbnailer};
-use backend::cover_management::CandidateSearch;
-use backend::cover_management::{ApplyImageModel, Backup, CoverHooks, CoverManagement, EpubThumbnailer};
-use backend::cover_sources::{STORES, SearchError, SearchHooks};
-use backend::cover_sources::{SearchStatus, StoreSearch};
-use backend::epub_cover;
-use backend::epub_cover::EpubInspection;
-use backend::epub_cover::{CoverError, Limits, MAX_IMAGE_BYTES};
+use crate::common::cover_candidates::cached_candidates;
+use crate::common::epub_fixtures::{backups, epub_with_cover, hooks_with, read, rev, str_of, truthy};
+use crate::common::epub_fixtures::{fetcher, thumbnailer};
 use common::clock::{Event, FakeClock};
 use common::epub::{EpubSpec, make_epub};
 use common::fsx::{files_under, ino_mtime, sha256_hex, touch};
 use common::image::{b64, red_jpeg};
 use common::log_capture::LogCapture;
 use common::zipx::rewrite_epub_members;
-use cover_fixtures::cached_candidates;
+use cover_manager::cover_management::CandidateSearch;
+use cover_manager::cover_management::Thumbnailer;
+use cover_manager::cover_management::{ApplyImageModel, Backup, CoverHooks, CoverManagement, EpubThumbnailer};
+use cover_manager::cover_sources::{STORES, SearchError, SearchHooks};
+use cover_manager::cover_sources::{SearchStatus, StoreSearch};
+use cover_manager::epub_cover;
+use cover_manager::epub_cover::EpubInspection;
+use cover_manager::epub_cover::{CoverError, Limits, MAX_IMAGE_BYTES};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
@@ -400,12 +398,12 @@ fn test_cover_page_image_detection_and_existing_cover_protection() {
         let inspected = epub_cover::inspect_epub(&path).unwrap();
         assert_eq!(inspected.has_cover, has_cover, "page_href={page_href}, markup={image_markup}");
         let mut zip_archive = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
-        assert_eq!(BookManager::find_epub_cover_member(&mut zip_archive), has_cover.then(|| "OEBPS/Images/120(550).jpg".to_string()), "page_href={page_href}, markup={image_markup}");
+        assert_eq!(epub_cover::find_epub_cover_member(&mut zip_archive), has_cover.then(|| "OEBPS/Images/120(550).jpg".to_string()), "page_href={page_href}, markup={image_markup}");
         drop(zip_archive);
         let listed = !page(&CoverManagement::new(root), "", 60, false)["items"].as_array().unwrap().is_empty();
         assert_eq!(listed, !has_cover, "page_href={page_href}, markup={image_markup}");
         if has_cover {
-            assert!(BookManager::extract_cover_thumbnail(&path, "epub", None).is_some(), "page_href={page_href}, markup={image_markup}");
+            assert!(epub_cover::extract_epub_thumbnail(&path, None).is_some(), "page_href={page_href}, markup={image_markup}");
             let err = epub_cover::add_cover(&path, &red_jpeg(), &inspected.revision, &backups(root), false).unwrap_err();
             assert!(err.to_string().contains("이미 표지"), "page_href={page_href}: {err}");
             assert_eq!(read(&path), original, "page_href={page_href}, markup={image_markup}");
@@ -737,9 +735,9 @@ fn test_unreadable_or_oversized_cover_page_is_not_a_cover() {
         });
         let mut archive = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
         let found = if oversized {
-            BookManager::find_epub_cover_member_with(&mut archive, &|name| if name == "OPS/cover.xhtml" { Some(5 * 1024 * 1024) } else { None })
+            epub_cover::find_epub_cover_member_with(&mut archive, &|name| if name == "OPS/cover.xhtml" { Some(5 * 1024 * 1024) } else { None })
         } else {
-            BookManager::find_epub_cover_member(&mut archive)
+            epub_cover::find_epub_cover_member(&mut archive)
         };
         assert_eq!(found, None, "markup={markup:?}, oversized={oversized}");
     }
@@ -751,7 +749,7 @@ fn test_guide_missing_cover_page_is_ignored() {
     let path = make_epub(&tmp.path().join("book.epub"), &EpubSpec::cover("3.0", false));
     rewrite_epub_members(&path, |members| members.replace_in("OPS/book.opf", b"</package>", br#"<guide><reference type="cover" href="missing.xhtml"/></guide></package>"#));
     let mut archive = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
-    assert_eq!(BookManager::find_epub_cover_member(&mut archive), None);
+    assert_eq!(epub_cover::find_epub_cover_member(&mut archive), None);
 }
 
 #[test]
@@ -881,7 +879,7 @@ fn preview_refuses_when_the_cover_inspection_reported_an_error() {
 }
 
 mod clean_title {
-    use backend::cover_management::clean_title;
+    use cover_manager::cover_management::clean_title;
 
     #[test]
     fn titles_match_reference_cases() {
@@ -902,9 +900,9 @@ mod clean_title {
 
 mod cover_repair {
     use super::common;
-    use crate::common::shared_fixtures::{broken_cover, first_item, truthy};
+    use crate::common::epub_fixtures::{broken_cover, first_item, truthy};
 
-    use backend::cover_management::CoverManagement;
+    use cover_manager::cover_management::CoverManagement;
 
     use common::zipx::rewrite_epub_members;
 

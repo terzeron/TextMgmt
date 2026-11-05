@@ -20,6 +20,7 @@ docs/       문서
 | `doc_reader` | 문서 본문 요약 추출(TXT·EPUB·HTML·RTF·DOCX·PDF·HWP)과 파일 앞뒤 읽기. 인코딩 손상 판정은 `doc_checker::mojibake_detector`를 쓴다 |
 | `search_manager` | 책·만화 검색 색인 관리: ES 문서 검색·갱신·카테고리 집계(`ESManager`)와 그 trait(`EsManagerApi`). 전송은 `es_client`를 쓴다. backend 도메인 crate다 |
 | `auth_manager` | 인증: JWT 발급·검증과 역할 판정(`auth_service`), refresh token 저장·회전·세션 관리(`refresh_token_store`). 요청은 `http` crate 타입으로만 받고 axum을 모른다. backend 도메인 crate다 |
+| `cover_manager` | 책 표지: 서점 표지 후보 검색·캐시·저장(`cover_management`, `cover_sources`), URL 이미지 받기(`direct_cover_url`), EPUB 표지 교체·이미지 편집(`epub_cover`), 표지 유무 판정(`cover_status`), 크롭 기하(`image_edit`). backend 도메인 crate다 |
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. `search_manager`의 `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
 | `doc_checker` | 문서 파일 검사와 교정 기법. EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표(`format_dispatcher::scan_file`), 보안 정리(`epub_sanitizer`, `pdf::pdf_sanitizer`)와 결함 수리(`defect_repairer`)의 재구성·검증, TXT의 UTF-8 재인코딩(`encoding_repairer`), 인코딩 손상 판정(`mojibake_detector`). OLE 복합 파일 파서(`ole_parser`)를 포함한다. 파일 하나를 받아 보고서나 고친 바이트를 돌려줄 뿐, 파일 순회·적용·출력은 하지 않는다. 검사 설정은 `CheckOptions`다 |
@@ -47,7 +48,7 @@ docs/       문서
 - **테스트 파일은 소스 모듈과 1:1로 둔다.** `tests/rust/<crate>/<모듈 경로>.rs` 하나가 `src/<모듈 경로>.rs` 하나를 검증한다(예: `doc_checker/epub/security_checker.rs`).
   HTTP 라우트, CLI 진입점, 실행 파일, 소켓, 컨테이너를 거치는 테스트는 `tests/rust/<crate>/integration/<시나리오>.rs`에 두고 target 이름을 `integration_<시나리오>`로 한다.
   `*_gaps`, `*_parity`, `*_1`처럼 작업 이력을 따르는 파일 이름은 쓰지 않는다.
-  여러 crate 테스트가 함께 쓰는 helper는 `tests/rust/shared/`에 둔다(TLS 테스트 서버와 인증서, 환경 고정 `setup`·`env`, `clock`, `faulty_fs`, `es_dummy`, `log_capture`, `mysql_fixture`, `auth_fixtures`).
+  여러 crate 테스트가 함께 쓰는 helper는 `tests/rust/shared/`에 둔다(TLS 테스트 서버와 인증서, 환경 고정 `setup`·`env`, `clock`, `faulty_fs`, `es_dummy`, `log_capture`, `mysql_fixture`, `auth_fixtures`, EPUB·이미지·ZIP 생성 `epub`·`epub_book`·`image`·`zipx`·`fsx`, 표지 준비물 `epub_fixtures`·`cover_candidates`).
   각 crate의 `tests/rust/<crate>/common/mod.rs`가 필요한 파일만 `#[path]`로 포함한다. `env.rs`는 포함한 쪽 `common`의 `setup_env()`를 부른다. `tests/rust/common/`은 `common` crate의 테스트다.
   `mod common;`으로 helper 모듈을 둔 테스트 파일에서는 `common` crate를 `::common::`으로 부른다.
   private 항목을 검증하는 테스트는 그 소스 파일 안의 `#[cfg(test)] mod tests`에 둔다. `#[path]`로 `tests/` 밑 파일을 끌어오지 않는다.

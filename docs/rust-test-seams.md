@@ -475,7 +475,7 @@ doc_reader::pdf::PdftotextHooks { which, run }             // C6, C7 통합. 이
 ### 3.7 HTTP·이미지 fetch
 
 ```rust
-// backend::direct_cover_url
+// cover_manager::direct_cover_url
 pub trait ImageFetcher: Send + Sync { fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError>; }   // 구 FetchUrlImage, ImageFetcher
 pub enum FetchError { Value(String), Os(String), Other(String) }
 impl From<FetchError> for CoverError; impl From<FetchError> for EpubCoverError;

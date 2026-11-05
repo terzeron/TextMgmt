@@ -11,7 +11,7 @@ use crate::book_manager::{ApplyResult, EpubValidation, PdfEditResult, PdfValidat
 use crate::book_manager::{BookDeletion, CoverPage};
 use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
-use crate::cover_management::CoverSave;
+use cover_manager::cover_management::CoverSave;
 use search_manager::EsManagerApi;
 
 /// 사용 가능한 구현이 없을 때 쓰는 사유 문구. 각 trait의 기본 구현이 돌려준다.

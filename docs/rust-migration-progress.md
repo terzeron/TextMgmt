@@ -1607,7 +1607,7 @@ Python `backend/classifier/export.py`는 기준 구현과 fixture 생성용으�
   이 범위에서 동작 차이는 찾지 못했다. 전체 기능 동등성 감사는 계속 남아 있다.
 - 서점 구현 대응표를 확인했다. `backend/bookstore.py`의 13개 구현은 Rust factory 13개와 대응하고,
   표지 검색 store 8개도 Python/Rust 목록이 같다. Python `test_bookstore.py`·`test_cover_sources.py` 145개와
-  Rust `backend::bookstore`, `backend::cover_sources` `test_runner_rs` target이 통과했다. 이 범위에서
+  Rust `backend::bookstore`, `cover_manager::cover_sources` `test_runner_rs` target이 통과했다. 이 범위에서
   미대응 서점은 찾지 못했다.
 - Python classifier exporter의 manifest, vocabulary·IDF·계수 파일, golden 생성과 CLI 경로를 Rust
   `export_format`, `classify_cli import-joblib` 구현 및 테스트와 대조했다. Python exporter 11개와
@@ -1692,7 +1692,7 @@ Python `backend/classifier/export.py`는 기준 구현과 fixture 생성용으�
   전체 회귀는 실행하지 않았다.
 - 표지 관리 목록 정렬에서 Python은 `str.casefold()`를 사용하지만 Rust는 `to_lowercase()`를 사용해
   `ßeta`/`zeta`와 `ß.epub`/`z.epub` 순서가 달라지는 RED 테스트를 추가했다. 디렉터리·파일 정렬 키를
-  `pyfmt::py_casefold`로 바꿨다. `backend::cover_management` `test_runner_rs` target 70개와 backend library·target
+  `pyfmt::py_casefold`로 바꿨다. `cover_manager::cover_management` `test_runner_rs` target 70개와 backend library·target
   Clippy, workspace rustfmt 및 diff 검사가 통과했다. 전체 회귀는 실행하지 않았다.
 - 관리자 유사 이름 검색과 bulk rename의 정규화·정렬이 Python `casefold()` 대신 Rust `to_lowercase()`를 쓰는
   차이를 찾았다. `Straße`/`STRASSE` 점수와 `ß`/`z` 정렬의 RED 테스트를 추가하고 세 경로를 `pyfmt::py_casefold`로

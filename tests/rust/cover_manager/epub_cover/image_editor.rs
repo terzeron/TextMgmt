@@ -1,8 +1,8 @@
-//! `backend::epub_cover::image_editor` 단위 테스트.
+//! `cover_manager::epub_cover::image_editor` 단위 테스트.
 
 #[path = "../common/mod.rs"]
 mod common;
-use backend::epub_cover::edit_page_images;
+use cover_manager::epub_cover::edit_page_images;
 use serde_json::json;
 
 #[test]

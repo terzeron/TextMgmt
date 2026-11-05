@@ -1,10 +1,10 @@
-//! `backend::epub_cover::epub_writer` 단위 테스트.
+//! `cover_manager::epub_cover::epub_writer` 단위 테스트.
 
 #[path = "../common/mod.rs"]
 mod common;
 use crate::common::epub_book::multi;
-use crate::common::shared_fixtures::{assert_refused, full};
-use backend::epub_cover::EditImages;
+use crate::common::epub_fixtures::{assert_refused, full};
+use cover_manager::epub_cover::EditImages;
 use serde_json::json;
 use std::fs;
 

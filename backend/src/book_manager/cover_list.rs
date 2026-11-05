@@ -100,7 +100,7 @@ impl BookManager {
     pub fn extract_cover_thumbnail(file_path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>> {
         let width = Self::normalize_cover_width(width.map(i64::from));
         match file_type {
-            "epub" => crate::epub_cover::extract_epub_thumbnail(file_path, Some(width)),
+            "epub" => cover_manager::epub_cover::extract_epub_thumbnail(file_path, Some(width)),
             "pdf" => Self::render_pdf_cover(file_path, width).and_then(|img| Self::encode_cover_jpeg(&img, width)),
             _ => None,
         }
