@@ -5,8 +5,9 @@ use super::es_fake::FakeEsManager;
 use super::faulty_fs::FaultyFs;
 use super::pdf::make_pdf;
 use super::shared_fixtures::split;
+use backend::book_manager::PdfEditResult;
 use backend::book_manager::{BookManager, BookManagerDeps};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,7 +25,7 @@ pub struct Env {
 // 테스트를 나눈 뒤 이 파일의 테스트는 이 정의의 일부만 쓴다.
 #[allow(dead_code)]
 impl Env {
-    pub async fn edit(&self, pages: &[i64], order: Option<&[i64]>) -> (Option<Value>, Option<String>) {
+    pub async fn edit(&self, pages: &[i64], order: Option<&[i64]>) -> (Option<PdfEditResult>, Option<String>) {
         split(self.bm.delete_pdf_pages(1, pages, None, None, None, order).await)
     }
     pub fn backup(&self) -> PathBuf {

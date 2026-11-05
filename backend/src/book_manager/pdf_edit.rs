@@ -15,13 +15,16 @@ mod jpeg_encoder;
 mod page_image_editor;
 use page_image_editor::Edits;
 
-struct EditResult {
-    remaining: usize,
-    backup: String,
-    backup_created: bool,
-    cropped: usize,
-    split: usize,
-    inserted: usize,
+/// PDF 쪽 편집 결과. `backup`은 휴지통에 남긴 원본의 책 디렉터리 기준 경로다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct PdfEditResult {
+    pub remaining_pages: usize,
+    pub cropped_pages: usize,
+    pub split_pages: usize,
+    pub inserted_pages: usize,
+    pub backup: String,
+    pub backup_created: bool,
 }
 
 async fn run_upload_preview<F>(data: Vec<u8>, max_image_pixels: usize, normalize: F) -> Result<Vec<u8>, String>
@@ -63,11 +66,19 @@ impl BookManager {
     }
 
     /// PDF 쪽을 지운다. 페이지 번호와 순서는 편집 전 문서를 기준으로 한다.
-    pub async fn delete_pdf_pages(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String> {
+    pub async fn delete_pdf_pages(
+        &self,
+        book_id: i64,
+        pages: &[i64],
+        crops: Option<&[Value]>,
+        splits: Option<&[Value]>,
+        inserts: Option<&[Value]>,
+        order: Option<&[i64]>,
+    ) -> Result<PdfEditResult, String> {
         self.edit_pdf(book_id, pages, crops, splits, inserts, order).await
     }
 
-    async fn edit_pdf(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String> {
+    async fn edit_pdf(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<PdfEditResult, String> {
         let edits = Edits::parse(pages, crops, splits, inserts, order)?;
         let old = self.find_doc_async(book_id).await?.ok_or_else(|| format!("Book not found: {book_id}"))?;
         let path = self.try_make_book(book_id, &old, 0.0).map_err(|error| format!("Book conversion failed: {error}"))?.file_path;
@@ -100,7 +111,7 @@ impl BookManager {
                 }
             }
         }
-        let (reader, root, es, remaining) = (self.reader(), self.path_prefix.clone(), self.es.clone(), result.remaining);
+        let (reader, root, es, remaining) = (self.reader(), self.path_prefix.clone(), self.es.clone(), result.remaining_pages);
         let data = tokio::task::spawn_blocking(move || -> Result<Docs, String> {
             let docs = reader.try_read_file(&path, Some(&root), false).map_err(|e| format!("{e:?}"))?;
             if docs.len() != 1 {
@@ -135,9 +146,7 @@ impl BookManager {
             return Err(format!("페이지는 삭제되었으나 색인 갱신에 실패했습니다. 원본은 {} 에 있습니다: {error}", result.backup));
         }
         self.clear_mismatch_cache();
-        Ok(
-            json!({"remaining_pages":result.remaining, "cropped_pages":result.cropped, "split_pages":result.split, "inserted_pages":result.inserted, "backup":result.backup, "backup_created":result.backup_created}),
-        )
+        Ok(result)
     }
 }
 
@@ -155,7 +164,7 @@ impl Drop for Parts {
     }
 }
 
-fn edit_file(fs: Arc<dyn FsOps>, path: &Path, trash: &Path, edits: &Edits, fetcher: &dyn crate::direct_cover_url::ImageFetcher, max_image_pixels: usize) -> Result<EditResult, String> {
+fn edit_file(fs: Arc<dyn FsOps>, path: &Path, trash: &Path, edits: &Edits, fetcher: &dyn crate::direct_cover_url::ImageFetcher, max_image_pixels: usize) -> Result<PdfEditResult, String> {
     let mut pdf = Document::load(path).map_err(|e| format!("PDF 페이지 삭제 실패: {e}"))?;
     let original = pdf.get_pages();
     edits.validate(original.len())?;
@@ -187,13 +196,13 @@ fn edit_file(fs: Arc<dyn FsOps>, path: &Path, trash: &Path, edits: &Edits, fetch
         }
     }
     fs.rename(&edit, path).map_err(io_error)?;
-    Ok(EditResult {
-        remaining: selected.len(),
+    Ok(PdfEditResult {
+        remaining_pages: selected.len(),
+        cropped_pages: edits.crops.len(),
+        split_pages: edits.splits.len(),
+        inserted_pages: edits.inserts.len(),
         backup: format!("{}/{}", trash.file_name().unwrap_or_default().to_string_lossy(), name),
         backup_created,
-        cropped: edits.crops.len(),
-        split: edits.splits.len(),
-        inserted: edits.inserts.len(),
     })
 }
 

@@ -1348,7 +1348,7 @@ fn test_validate_epub_success_and_errors() {
     let manager = BookManager::with_deps(deps);
     let (result, err) = split(run(manager.validate_epub(1)));
     assert!(err.is_none());
-    assert_eq!(result.unwrap()["valid"], true);
+    assert!(result.unwrap().valid);
 
     // 잘못된 형식
     let manager = make_manager_with_doc(tmp_path, make_doc("a.epub", "pdf"));
@@ -1372,7 +1372,7 @@ fn test_validate_pdf_success_and_open_error() {
     }))));
     let (result, err) = split(run(manager.validate_pdf(1)));
     assert!(err.is_none());
-    assert_eq!(result.unwrap()["valid"], true);
+    assert!(result.unwrap().valid);
 
     let manager = BookManager::with_deps(make_deps(tmp_path, &es).with_pdf_opener(Arc::new(FakePdfOpener::OpenError("bad".to_string()))));
     let (_result, err) = split(run(manager.validate_pdf(1)));
@@ -1404,9 +1404,9 @@ fn test_validate_pdf_reports_reconstructed_cross_reference() {
 
     assert!(err.is_none(), "{err:?}");
     let result = result.unwrap();
-    assert_eq!(result["valid"], false);
-    assert!(result["summary"]["warning"].as_u64().unwrap() > 0);
-    assert!(!result["messages"].as_array().unwrap().is_empty());
+    assert!(!result.valid);
+    assert!(result.summary.warning > 0);
+    assert!(!result.messages.is_empty());
 }
 
 #[test]
@@ -3716,9 +3716,8 @@ fn test_validate_epub_message_empty_locations() {
     let manager = BookManager::with_deps(deps);
 
     let result = run(manager.validate_epub(1)).expect("result");
-    assert_eq!(result["messages"][0]["location"], Value::Null);
-    assert!(result.get("publication").is_some());
-    assert_eq!(result["publication"]["title"], "T");
+    assert_eq!(result.messages[0].location, None);
+    assert_eq!(result.publication.expect("publication").title, "T");
 }
 
 // ---- coverage: validate_pdf edge cases ----

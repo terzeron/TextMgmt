@@ -4,6 +4,7 @@ mod common;
 mod fx;
 
 use backend::auth_service::Claims;
+use backend::book_manager::PdfEditResult;
 use std::fs;
 
 use crate::common::shared_fixtures::{error_text, split};
@@ -49,7 +50,7 @@ async fn test_deletes_pages_and_keeps_original_in_trash() {
     let (result, error) = e.run_pages(&[2, 4]).await;
 
     assert_eq!(error, None);
-    assert_eq!(result.unwrap(), json!({"remaining_pages": 3, "cropped_pages": 0, "split_pages": 0, "inserted_pages": 0, "backup": "0_trash/book.pdf", "backup_created": true}));
+    assert_eq!(result.unwrap(), PdfEditResult { remaining_pages: 3, backup: "0_trash/book.pdf".into(), backup_created: true, ..PdfEditResult::default() });
     assert_eq!(widths(&e.pdf), [100, 102, 104]);
     let backup = e.root.join("0_trash").join("book.pdf");
     assert_eq!(fs::read(&backup).unwrap(), original);
@@ -69,7 +70,7 @@ async fn test_existing_backup_is_not_overwritten() {
     let (result, error) = e.run_pages(&[1]).await;
 
     assert_eq!(error, None);
-    assert_eq!(result.unwrap()["backup_created"], false);
+    assert!(!result.unwrap().backup_created);
     assert_eq!(fs::read(e.root.join("0_trash").join("book.pdf")).unwrap(), original);
     assert_eq!(widths(&e.pdf), [102, 103, 104]);
 }
@@ -93,7 +94,7 @@ async fn test_duplicate_pages_count_once() {
     let e = fx::env(Opts::loader());
     let (result, error) = e.run_pages(&[2, 2, 2]).await;
     assert_eq!(error, None);
-    assert_eq!(result.unwrap()["remaining_pages"], 4);
+    assert_eq!(result.unwrap().remaining_pages, 4);
 }
 
 #[tokio::test]
@@ -138,7 +139,7 @@ async fn test_order_rearranges_pages_and_keeps_original_in_trash() {
 
         assert_eq!(error, None, "order={order:?}");
         let result = result.unwrap();
-        assert!(result["remaining_pages"] == 5 && result["backup"] == "0_trash/book.pdf", "order={order:?}: {result}");
+        assert!(result.remaining_pages == 5 && result.backup == "0_trash/book.pdf", "order={order:?}: {result:?}");
         assert_eq!(widths(&e.pdf), expected, "order={order:?}");
         assert_eq!(fs::read(e.root.join("0_trash").join("book.pdf")).unwrap(), original, "order={order:?}");
         assert_eq!(e.es.deleted(), vec![1], "order={order:?}");
@@ -152,7 +153,7 @@ async fn test_order_and_delete_use_original_page_numbers() {
     let (result, error) = e.run(&Edit { pages: vec![1], order: Some(vec![2, 1, 3]), ..Edit::default() }).await;
 
     assert_eq!(error, None);
-    assert_eq!(result.unwrap()["remaining_pages"], 4);
+    assert_eq!(result.unwrap().remaining_pages, 4);
     assert_eq!(widths(&e.pdf), [101, 102, 103, 104]);
 }
 
@@ -181,7 +182,7 @@ async fn test_crop_keeps_only_the_given_region() {
 
     assert_eq!(error, None);
     let result = result.unwrap();
-    assert!(result["remaining_pages"] == 4 && result["cropped_pages"] == 1, "{result}");
+    assert!(result.remaining_pages == 4 && result.cropped_pages == 1, "{result:?}");
     assert_eq!(fs::read(e.root.join("0_trash").join("book.pdf")).unwrap(), original);
     let img = first_image(&e.pdf, 2);
     assert_eq!((img.width, img.height), (50, 60));
@@ -215,7 +216,7 @@ async fn test_crop_and_page_delete_use_original_page_numbers() {
     let (result, error) = e.run(&Edit { pages: vec![1], crops: Some(vec![edits::crop(4, 0.5, 0.0, 1.0, 1.0)]), ..Edit::default() }).await;
 
     assert_eq!(error, None);
-    assert_eq!(result.unwrap()["remaining_pages"], 3);
+    assert_eq!(result.unwrap().remaining_pages, 3);
     assert_eq!(first_image_size(&e.pdf, 3), (50, 60)); // 원본 4쪽이 3쪽이 되고 오른쪽 절반만 남음
     assert_eq!(first_image_size(&e.pdf, 1), (100, 60)); // 원본 2쪽
 }
@@ -252,7 +253,7 @@ async fn test_rotated_crop_straightens_the_region() {
     // 시계 방향 90°: 박스의 위쪽이 화면의 오른쪽을 향한다 -> 출력 윗줄은 원본 오른쪽(파랑), 아랫줄은 왼쪽(빨강)
     let (result, error) = e.run(&Edit { crops: Some(vec![edits::crop_at(1, 0.35, 0.1, 0.65, 0.9, 90.0)]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["cropped_pages"] == 1, "{error:?}");
+    assert!(error.is_none() && result.unwrap().cropped_pages == 1, "{error:?}");
     assert_eq!(fs::read(e.root.join("0_trash").join("book.pdf")).unwrap(), original);
     let img = first_image(&e.pdf, 1);
     assert_eq!((img.width, img.height), (30, 48));
@@ -283,7 +284,7 @@ async fn test_rotated_split_pages() {
     let rotated = json!({"page": 1, "first": {"x0": 0.35, "y0": 0.1, "x1": 0.65, "y1": 0.9, "angle": 90.0}, "second": {"x0": 0.1, "y0": 0.1, "x1": 0.4, "y1": 0.9}});
     let (result, error) = e.run(&Edit { splits: Some(vec![rotated]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["remaining_pages"] == 5, "{error:?}");
+    assert!(error.is_none() && result.unwrap().remaining_pages == 5, "{error:?}");
     assert_eq!(first_image_size(&e.pdf, 1), (30, 48));
     assert_eq!(first_image_size(&e.pdf, 2), (30, 48));
 }
@@ -323,7 +324,7 @@ async fn test_split_replaces_the_page_with_first_then_second() {
 
     assert_eq!(error, None);
     let result = result.unwrap();
-    assert!(result["remaining_pages"] == 5 && result["split_pages"] == 1, "{result}");
+    assert!(result.remaining_pages == 5 && result.split_pages == 1, "{result:?}");
     assert_eq!(page_count(&e.pdf), 5);
     assert_eq!(fs::read(e.root.join("0_trash").join("book.pdf")).unwrap(), original);
     let (first, second) = (first_image(&e.pdf, 2), first_image(&e.pdf, 3));
@@ -344,7 +345,7 @@ async fn test_split_pages_move_together_with_their_page_when_reordered() {
 
     let (result, error) = e.run(&Edit { splits: Some(vec![edits::split(2, edits::LEFT, edits::RIGHT)]), order: Some(vec![2, 1]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["remaining_pages"] == 5, "{error:?}");
+    assert!(error.is_none() && result.unwrap().remaining_pages == 5, "{error:?}");
     let sizes: Vec<(i64, i64)> = (1..=3).map(|n| first_image_size(&e.pdf, n)).collect();
     assert_eq!(sizes, [(50, 60), (50, 60), (100, 60)]);
 }
@@ -369,7 +370,7 @@ async fn test_split_and_delete_use_original_page_numbers() {
         e.run(&Edit { pages: vec![1], crops: Some(vec![edits::crop(4, 0.5, 0.0, 1.0, 1.0)]), splits: Some(vec![edits::split(2, edits::LEFT, edits::RIGHT)]), ..Edit::default() }).await;
 
     assert_eq!(error, None);
-    assert_eq!(result.unwrap()["remaining_pages"], 4);
+    assert_eq!(result.unwrap().remaining_pages, 4);
     let sizes: Vec<(i64, i64)> = (1..=2).map(|n| first_image_size(&e.pdf, n)).collect();
     assert_eq!(sizes, [(50, 60), (50, 60)]);
     assert_eq!(first_image_size(&e.pdf, 4), (50, 60));
@@ -384,7 +385,7 @@ async fn test_delete_after_split_removes_the_right_page() {
     let (result, error) = e.run(&Edit { pages: vec![4], splits: Some(vec![edits::split(2, edits::LEFT, edits::RIGHT)]), ..Edit::default() }).await;
 
     assert_eq!(error, None);
-    assert_eq!(result.unwrap()["remaining_pages"], 4); // 4 + 1 - 1
+    assert_eq!(result.unwrap().remaining_pages, 4); // 4 + 1 - 1
     assert_eq!(page_count(&e.pdf), 4);
 }
 
@@ -423,7 +424,7 @@ async fn test_insert_adds_an_image_page_before_the_given_page() {
 
     assert_eq!(error, None);
     let result = result.unwrap();
-    assert!(result["remaining_pages"] == 5 && result["inserted_pages"] == 1, "{result}");
+    assert!(result.remaining_pages == 5 && result.inserted_pages == 1, "{result:?}");
     assert_eq!(*e.fetch.calls.lock().unwrap(), vec!["https://img.example.com/a.png".to_string()]);
     assert_eq!(fs::read(e.root.join("0_trash").join("book.pdf")).unwrap(), original);
     assert_eq!(page_count(&e.pdf), 5);
@@ -448,7 +449,7 @@ async fn test_inserted_page_moves_together_with_its_reference_page_when_reordere
 
     let (result, error) = e.run(&Edit { inserts: Some(vec![edits::insert(2)]), order: Some(vec![2, 1]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["remaining_pages"] == 5, "{error:?}");
+    assert!(error.is_none() && result.unwrap().remaining_pages == 5, "{error:?}");
     assert_approx(mediabox_size(&e.pdf, 1).1, 150.0, "1쪽 높이"); // 삽입한 쪽이 기준 쪽(원본 2쪽)과 함께 맨 앞으로 갔다
     assert_approx(mediabox_size(&e.pdf, 2).1, 60.0, "2쪽 높이");
     assert_approx(mediabox_size(&e.pdf, 3).1, 60.0, "3쪽 높이");
@@ -462,7 +463,7 @@ async fn test_inserted_page_can_be_cropped_later() {
     assert_eq!(error, None);
     let (result, error) = e.run(&Edit { crops: Some(vec![edits::crop(1, 0.0, 0.0, 0.5, 0.5)]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["cropped_pages"] == 1, "{error:?}");
+    assert!(error.is_none() && result.unwrap().cropped_pages == 1, "{error:?}");
     assert_eq!(first_image_size(&e.pdf, 1), (100, 150));
 }
 
@@ -477,7 +478,7 @@ async fn test_insert_with_delete_split_and_crop_uses_original_numbers() {
 
     assert_eq!(error, None);
     let result = result.unwrap();
-    assert!(result["remaining_pages"] == 6 && result["inserted_pages"] == 2, "{result}");
+    assert!(result.remaining_pages == 6 && result.inserted_pages == 2, "{result:?}");
     // 삽입 쪽의 폭은 기준 쪽의 편집 전 폭(100pt)이다: 분할로 기준 쪽이 반쪽(50pt)이 되어도 같다.
     let (w, h) = mediabox_size(&e.pdf, 1);
     assert_approx(w, 100.0, "1쪽 너비");
@@ -496,7 +497,7 @@ async fn test_inserted_page_survives_when_the_reference_page_is_deleted() {
 
     let (result, error) = e.run(&Edit { pages: vec![2], inserts: Some(vec![edits::insert(2)]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["remaining_pages"] == 4, "{error:?}");
+    assert!(error.is_none() && result.unwrap().remaining_pages == 4, "{error:?}");
     assert_approx(mediabox_size(&e.pdf, 2).1, 150.0, "2쪽 높이"); // 삽입한 쪽이 원본 2쪽 자리에 남는다
     assert_eq!(page_count(&e.pdf), 4);
     let doc = load(&e.pdf);
@@ -651,7 +652,7 @@ async fn test_flate_crop_is_lossless() {
 
         let (result, error) = e.run(&Edit { crops: Some(vec![edits::crop(page as i64, rect.0, rect.1, rect.2, rect.3)]), ..Edit::default() }).await;
 
-        assert!(error.is_none() && result.unwrap()["cropped_pages"] == 1, "{kind}: {error:?}");
+        assert!(error.is_none() && result.unwrap().cropped_pages == 1, "{kind}: {error:?}");
         let (image, info) = pixel_image(&e.pdf, page);
         assert_eq!((info.filter.as_str(), info.bpc, info.cs.as_str()), ("/FlateDecode", 8, cs), "{kind}"); // JPEG 로 바꾸지 않는다
         assert!(image.mode == mode && same_pixels(&image, &expected), "{kind}: 픽셀이 같지 않다"); // 픽셀이 완전히 같다
@@ -695,7 +696,7 @@ async fn test_rotated_flate_crop_straightens_the_region() {
 
         let (result, error) = e.run(&Edit { crops: Some(vec![edits::crop_at(page as i64, 0.35, 0.1, 0.65, 0.9, 90.0)]), ..Edit::default() }).await;
 
-        assert!(error.is_none() && result.unwrap()["cropped_pages"] == 1, "page={page}: {error:?}");
+        assert!(error.is_none() && result.unwrap().cropped_pages == 1, "page={page}: {error:?}");
         let (image, info) = pixel_image(&e.pdf, page);
         assert!(info.filter == "/FlateDecode" && (image.w, image.h) == (30, 48), "page={page}");
         let (top, bottom) = (image.pixel(15, 3), image.pixel(15, 44));
@@ -723,7 +724,7 @@ async fn test_split_works_on_flate_pages() {
 
     let (result, error) = e.run(&Edit { splits: Some(vec![edits::split(2, edits::RIGHT, edits::LEFT)]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["remaining_pages"] == 7, "{error:?}");
+    assert!(error.is_none() && result.unwrap().remaining_pages == 7, "{error:?}");
     let (first, _) = pixel_image(&e.pdf, 2);
     let (second, _) = pixel_image(&e.pdf, 3);
     assert!(first.pixel(10, 10) == [0, 0, 255] && second.pixel(10, 10) == [255, 0, 0]);
@@ -735,7 +736,7 @@ async fn test_mixed_jpeg_and_flate_pages_in_one_save() {
 
     let (result, error) = e.run(&Edit { crops: Some(vec![edits::crop(1, 0.5, 0.0, 1.0, 1.0), edits::crop(6, 0.5, 0.0, 1.0, 1.0)]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["cropped_pages"] == 2, "{error:?}");
+    assert!(error.is_none() && result.unwrap().cropped_pages == 2, "{error:?}");
     assert_eq!(pixel_image(&e.pdf, 1).1.filter, "/FlateDecode");
     assert_eq!(pixel_image(&e.pdf, 6).1.filter, "/DCTDecode");
 }
@@ -788,7 +789,7 @@ async fn test_insert_uploaded_image_adds_a_page_without_fetching() {
     let (result, error) = e.run(&Edit { inserts: Some(vec![edits::upload(2, &png_halves(200, 300))]), ..Edit::default() }).await;
 
     assert_eq!(error, None);
-    assert_eq!(result.unwrap()["inserted_pages"], 1);
+    assert_eq!(result.unwrap().inserted_pages, 1);
     assert!(e.fetch.calls.lock().unwrap().is_empty());
     assert_eq!(fs::read(e.root.join("0_trash").join("book.pdf")).unwrap(), original);
     assert_eq!(page_count(&e.pdf), 5);
@@ -803,7 +804,7 @@ async fn test_uploaded_and_url_inserts_can_be_mixed() {
 
     let (result, error) = e.run(&Edit { inserts: Some(vec![edits::insert(1), edits::upload(3, &png_halves(200, 300))]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["inserted_pages"] == 2, "{error:?}");
+    assert!(error.is_none() && result.unwrap().inserted_pages == 2, "{error:?}");
     assert_eq!(page_count(&e.pdf), 6);
 }
 

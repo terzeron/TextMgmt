@@ -2,6 +2,7 @@
 mod common;
 use crate::common::pdf_edit_env::env;
 use crate::common::shared_fixtures::split;
+use backend::book_manager::PdfEditResult;
 use base64::Engine;
 use common::pdf::widths;
 use serde_json::json;
@@ -14,7 +15,7 @@ async fn removes_original_page_numbers_and_reindexes_same_id() {
     let original = fs::read(&e.pdf).unwrap();
     let (result, error) = e.edit(&[2, 4, 2], None).await;
     assert_eq!(error, None);
-    assert_eq!(result.unwrap(), json!({"remaining_pages":3,"cropped_pages":0,"split_pages":0,"inserted_pages":0,"backup":"0_trash/book.pdf","backup_created":true}));
+    assert_eq!(result.unwrap(), PdfEditResult { remaining_pages: 3, backup: "0_trash/book.pdf".into(), backup_created: true, ..PdfEditResult::default() });
     assert_eq!(widths(&e.pdf), [100, 102, 104]);
     assert_eq!(fs::read(e.backup()).unwrap(), original);
     e.es.with(|s| {
@@ -34,7 +35,7 @@ async fn reorder_prefix_preserves_tail_and_uses_original_numbers_for_deletion() 
     let e = env();
     let (result, error) = e.edit(&[2], Some(&[3, 1, 2])).await;
     assert_eq!(error, None);
-    assert_eq!(result.unwrap()["remaining_pages"], 4);
+    assert_eq!(result.unwrap().remaining_pages, 4);
     assert_eq!(widths(&e.pdf), [102, 100, 103, 104]);
 }
 
@@ -45,7 +46,7 @@ async fn repeated_edit_never_overwrites_first_backup() {
     assert_eq!(e.edit(&[2], None).await.1, None);
     let (result, error) = e.edit(&[2], None).await;
     assert_eq!(error, None);
-    assert_eq!(result.unwrap()["backup_created"], false);
+    assert!(!result.unwrap().backup_created);
     assert_eq!(widths(&e.pdf), [100, 103, 104]);
     assert_eq!(fs::read(e.backup()).unwrap(), original);
 }
@@ -149,7 +150,7 @@ async fn crop_removes_pixels_and_resizes_only_selected_page() {
     common::pdf::write_image_pdf(&e.pdf, &[img.clone(), img]);
     let crops = [json!({"page":1,"x0":0.2,"y0":0.1,"x1":0.8,"y1":0.9})];
     let result = e.bm.delete_pdf_pages(1, &[], Some(&crops), None, None, None).await.unwrap();
-    assert_eq!(result["cropped_pages"], 1);
+    assert_eq!(result.cropped_pages, 1);
     assert_eq!(common::pdf::mediabox_size(&e.pdf, 1), (60.0, 48.0));
     assert_eq!(common::pdf::mediabox_size(&e.pdf, 2), (100.0, 60.0));
     let doc = common::pdf::load(&e.pdf);
@@ -168,7 +169,7 @@ async fn split_keeps_both_halves_together_when_reordered() {
     common::pdf::write_image_pdf(&e.pdf, &[img.clone(), img]);
     let splits = [json!({"page":1,"first":{"x0":0.0,"y0":0.0,"x1":0.4,"y1":1.0},"second":{"x0":0.4,"y0":0.0,"x1":1.0,"y1":1.0}})];
     let result = e.bm.delete_pdf_pages(1, &[], None, Some(&splits), None, Some(&[2, 1])).await.unwrap();
-    assert_eq!(result["split_pages"], 1);
+    assert_eq!(result.split_pages, 1);
     assert_eq!(widths(&e.pdf), [100, 40, 60]);
     let doc = common::pdf::load(&e.pdf);
     assert_eq!(&common::pdf::first_xobject(&doc, 3).get_plain_content().unwrap()[..3], &[40, 0, 0]);
@@ -180,8 +181,8 @@ async fn inserted_page_survives_removal_of_its_reference_page() {
     let image = common::image::png_solid(80, 160, [10, 20, 30]);
     let inserts = [json!({"page":2,"image_data":base64::engine::general_purpose::STANDARD.encode(image)})];
     let result = e.bm.delete_pdf_pages(1, &[2], None, None, Some(&inserts), Some(&[2, 1])).await.unwrap();
-    assert_eq!(result["remaining_pages"], 5);
-    assert_eq!(result["inserted_pages"], 1);
+    assert_eq!(result.remaining_pages, 5);
+    assert_eq!(result.inserted_pages, 1);
     assert_eq!(widths(&e.pdf), [101, 100, 102, 103, 104]);
     assert_eq!(common::pdf::mediabox_size(&e.pdf, 1), (101.0, 202.0));
 }

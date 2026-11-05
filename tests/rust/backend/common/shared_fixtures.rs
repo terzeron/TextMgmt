@@ -12,6 +12,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
 use backend::auth_service::Claims;
 use backend::auth_service::RequestParts;
 use backend::book_manager::{AddBookError, BookAdder, BookContent, BookLookup, BookManager, BookManagerDeps, BookRef, BookResponse, CoverPage, FileReader, ProposeOptions, ReadFileError, Thumbnailer};
+use backend::book_manager::{EpubValidation, PdfValidation};
 use backend::book_manager::{FsOnlyFile, MismatchDetails, MismatchReload, ReloadCounts, ReloadedFiles};
 use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::cover_management::CoverManagement;
@@ -1219,12 +1220,12 @@ impl BookManagerApi for Mock {
         to_response(self.invoke("get_html_resource", call_args!([], {"book_id": book_id, "resource_path": resource_path})).await)
     }
 
-    async fn validate_epub(&self, book_id: i64) -> Result<Value, String> {
-        value_result(&self.invoke("validate_epub", call_args!([book_id], {})).await)
+    async fn validate_epub(&self, book_id: i64) -> Result<EpubValidation, String> {
+        typed_result(&self.invoke("validate_epub", call_args!([book_id], {})).await)
     }
 
-    async fn validate_pdf(&self, book_id: i64) -> Result<Value, String> {
-        value_result(&self.invoke("validate_pdf", call_args!([book_id], {})).await)
+    async fn validate_pdf(&self, book_id: i64) -> Result<PdfValidation, String> {
+        typed_result(&self.invoke("validate_pdf", call_args!([book_id], {})).await)
     }
 
     async fn get_books_in_category(&self, category: &str) -> Result<Vec<Book>, String> {

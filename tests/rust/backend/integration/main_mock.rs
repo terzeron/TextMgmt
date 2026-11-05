@@ -148,23 +148,25 @@ async fn test_non_frontend_host_is_hidden() {
 async fn test_epub_success() {
     let fx = Fx::new();
     fx.bm.returns("get_book", json!([make_book(json!({"file_type": "epub"})), null]));
-    fx.bm.returns("validate_epub", json!([{"valid": true}, null]));
+    let validation = json!({"valid": true, "file_path": "A/a.epub", "messages": [], "summary": {"fatal": 0, "error": 0, "warning": 0, "usage": 0, "info": 0}});
+    fx.bm.returns("validate_epub", json!([validation, null]));
 
     let r = fx.get("/validate/1").await;
     assert_eq!(r.status, 200);
-    assert_eq!(r.json(), json!({"status": "success", "result": {"valid": true}}));
+    assert_eq!(r.json(), json!({"status": "success", "result": validation}));
 }
 
 #[tokio::test]
 async fn test_pdf_success() {
     let fx = Fx::new();
     fx.bm.returns("get_book", json!([make_book(json!({"file_type": "pdf"})), null]));
-    fx.bm.returns("validate_pdf", json!([{"pages": 5}, null]));
+    let validation = json!({"valid": true, "file_path": "A/a.pdf", "messages": [], "summary": {"error": 0, "warning": 0}, "publication": {"page_count": 5, "pdf_version": "1.7"}});
+    fx.bm.returns("validate_pdf", json!([validation, null]));
 
     let r = fx.get("/validate/1").await;
     assert_eq!(r.status, 200);
     assert_eq!(r.json()["status"], "success");
-    assert_eq!(r.json()["result"], json!({"pages": 5}));
+    assert_eq!(r.json()["result"], validation);
 }
 
 #[tokio::test]

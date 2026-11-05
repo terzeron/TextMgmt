@@ -103,7 +103,7 @@ async fn test_crop_accepts_single_item_filter_array() {
 
     let (result, error) = e.run(&Edit { crops: Some(vec![edits::crop(2, 0.5, 0.0, 1.0, 1.0)]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["cropped_pages"] == 1, "{error:?}");
+    assert!(error.is_none() && result.unwrap().cropped_pages == 1, "{error:?}");
     assert_eq!(first_image_size(&e.pdf, 2), (50, 60));
 }
 
@@ -118,7 +118,7 @@ async fn test_crop_keeps_icc_color_space_when_channel_count_matches() {
 
     let (result, error) = e.run(&Edit { crops: Some(vec![edits::crop(1, 0.3, 0.2, 0.9, 0.8)]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["cropped_pages"] == 1, "{error:?}");
+    assert!(error.is_none() && result.unwrap().cropped_pages == 1, "{error:?}");
     let doc = load(&e.pdf);
     let image = first_xobject(&doc, 1);
     let cs = image.dict.get(b"ColorSpace").unwrap().as_array().unwrap();
@@ -220,7 +220,7 @@ async fn test_crop_preserves_single_channel_icc_profile() {
 
     let (result, error) = e.run(&Edit { crops: Some(vec![edits::crop(3, 0.3, 0.2, 0.9, 0.8)]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["cropped_pages"] == 1, "{error:?}");
+    assert!(error.is_none() && result.unwrap().cropped_pages == 1, "{error:?}");
     let doc = load(&e.pdf);
     let cs = first_xobject(&doc, 3).dict.get(b"ColorSpace").unwrap().as_array().unwrap();
     assert!(matches!(&cs[0], Object::Name(n) if n == b"ICCBased"));
@@ -237,7 +237,7 @@ async fn test_crop_accepts_indexed_palette_stream() {
 
     let (result, error) = e.run(&Edit { crops: Some(vec![edits::crop(5, 0.3, 0.2, 0.9, 0.8)]), ..Edit::default() }).await;
 
-    assert!(error.is_none() && result.unwrap()["cropped_pages"] == 1, "{error:?}");
+    assert!(error.is_none() && result.unwrap().cropped_pages == 1, "{error:?}");
     let doc = load(&e.pdf);
     let image = first_xobject(&doc, 5);
     assert_eq!(image.dict.get(b"Width").unwrap().as_i64().unwrap(), 60);

@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::book_manager::{BookDeletion, CoverPage};
 use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
+use crate::book_manager::{EpubValidation, PdfEditResult, PdfValidation};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
@@ -139,7 +140,15 @@ pub trait BookManagerApi: Send + Sync {
         BookResponse { status_code: 501, ..BookResponse::default() }
     }
 
-    async fn delete_pdf_pages(&self, _id: i64, _pages: &[i64], _crops: Option<&[Value]>, _splits: Option<&[Value]>, _inserts: Option<&[Value]>, _order: Option<&[i64]>) -> Result<Value, String> {
+    async fn delete_pdf_pages(
+        &self,
+        _id: i64,
+        _pages: &[i64],
+        _crops: Option<&[Value]>,
+        _splits: Option<&[Value]>,
+        _inserts: Option<&[Value]>,
+        _order: Option<&[i64]>,
+    ) -> Result<PdfEditResult, String> {
         Err(UNIMPLEMENTED.to_string())
     }
 
@@ -159,11 +168,11 @@ pub trait BookManagerApi: Send + Sync {
         BookResponse { status_code: 501, ..BookResponse::default() }
     }
 
-    async fn validate_epub(&self, _book_id: i64) -> Result<Value, String> {
+    async fn validate_epub(&self, _book_id: i64) -> Result<EpubValidation, String> {
         Err(UNIMPLEMENTED.to_string())
     }
 
-    async fn validate_pdf(&self, _book_id: i64) -> Result<Value, String> {
+    async fn validate_pdf(&self, _book_id: i64) -> Result<PdfValidation, String> {
         Err(UNIMPLEMENTED.to_string())
     }
 

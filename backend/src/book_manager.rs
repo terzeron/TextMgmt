@@ -62,6 +62,7 @@ mod epub_inspector;
 mod es_doc_converter;
 mod file_reader;
 mod file_validator;
+pub use file_validator::{EpubMessage, EpubPublication, EpubSummary, EpubValidation, MessageLocation, PdfMessage, PdfPublication, PdfSummary, PdfValidation};
 mod html_previewer;
 mod mismatch_reporter;
 pub use category_editor::{CategoryDeletePreview, CategoryDeletion, CategoryRename};
@@ -70,6 +71,7 @@ pub use mismatch_reporter::{CategoryMismatch, DuplicateDoc, DuplicatePath, EsOnl
 mod path_validator;
 mod pdf_cover;
 mod pdf_edit;
+pub use pdf_edit::PdfEditResult;
 mod preview_builder;
 mod seam_accessors;
 mod temp_file_maker;

@@ -395,8 +395,8 @@ async fn validate(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppD
     let manager = checked_manager(&deps, &payload, book_id, uri.path().starts_with("/comics/")).await?;
     let Ok(book) = manager.get_book(book_id).await else { return Ok(Json(json!({"status":"failure", "error":format!("Book not found: {book_id}")}))) };
     let validated = match book.file_type.as_str() {
-        "epub" => manager.validate_epub(book_id).await,
-        "pdf" => manager.validate_pdf(book_id).await,
+        "epub" => manager.validate_epub(book_id).await.map(|result| json!(result)),
+        "pdf" => manager.validate_pdf(book_id).await.map(|result| json!(result)),
         _ => return Ok(Json(json!({"status":"failure", "error":format!("Validation not supported for type: {}", book.file_type)}))),
     };
     Ok(Json(match validated {

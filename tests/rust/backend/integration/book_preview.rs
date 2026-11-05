@@ -1999,9 +1999,9 @@ async fn validate_with(bm: &UnitSetup, spawner: Arc<FakeSpawner>) -> (Option<Val
     validate_configured(bm, |d| d.with_runner(spawner)).await
 }
 
-/// `configure`로 Deps를 더 꽂은 manager로 `validate_epub(1)`을 부른다.
+/// `configure`로 Deps를 더 꽂은 manager로 `validate_epub(1)`을 부른다. 결과는 응답 JSON 모양이다.
 async fn validate_configured(bm: &UnitSetup, configure: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> (Option<Value>, Option<String>) {
-    split(bm.manager(configure).validate_epub(1).await)
+    split(bm.manager(configure).validate_epub(1).await.map(|result| json!(result)))
 }
 
 /// epubcheck가 유효하지 않은 JSON을 출력 → parse error.
@@ -2191,9 +2191,9 @@ fn make_mock_pdf_book(tmp_path: &Path, file_type: &str) -> BookRef {
     BookRef { book_id: 1, file_type: file_type.to_string(), file_path: pdf_path }
 }
 
-/// PDF 열기 대역을 끼운 manager로 `validate_pdf(1)`을 부른다.
+/// PDF 열기 대역을 끼운 manager로 `validate_pdf(1)`을 부른다. 결과는 응답 JSON 모양이다.
 async fn validate_pdf_with(bm: &UnitSetup, opened: Result<MockPdf, String>) -> (Option<Value>, Option<String>) {
-    split(bm.manager(|d| d.with_pdf_opener(Arc::new(FakeOpener(Mutex::new(Some(opened)))))).validate_pdf(1).await)
+    split(bm.manager(|d| d.with_pdf_opener(Arc::new(FakeOpener(Mutex::new(Some(opened)))))).validate_pdf(1).await.map(|result| json!(result)))
 }
 
 /// `validate_pdf` 메서드의 단위 테스트(PDF 열기 대역).
@@ -2361,9 +2361,9 @@ async fn validate_pdf_reports_reconstructed_cross_reference() {
     let book = BookRef { book_id: 1, file_type: "pdf".to_string(), file_path: path };
     let manager = unit_manager(tmp.path(), Some(book), None).manager(|deps| deps);
     let result = manager.validate_pdf(1).await.unwrap();
-    assert_eq!(result["valid"], false);
-    assert!(result["summary"]["warning"].as_u64().unwrap() > 0);
-    assert!(!result["messages"].as_array().unwrap().is_empty());
+    assert!(!result.valid);
+    assert!(result.summary.warning > 0);
+    assert!(!result.messages.is_empty());
 }
 
 #[test]

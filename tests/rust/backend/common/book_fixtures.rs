@@ -16,6 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use backend::book_manager::PdfEditResult;
 use backend::book_manager::{BookManager, BookManagerDeps, FileReader};
 use backend::cover_management::CoverSave;
 use backend::direct_cover_url::{FetchError, ImageFetcher};
@@ -128,7 +129,7 @@ pub struct Edit {
 }
 
 impl Env {
-    pub async fn run(&self, edit: &Edit) -> (Option<Value>, Option<String>) {
+    pub async fn run(&self, edit: &Edit) -> (Option<PdfEditResult>, Option<String>) {
         match self.bm.delete_pdf_pages(1, &edit.pages, edit.crops.as_deref(), edit.splits.as_deref(), edit.inserts.as_deref(), edit.order.as_deref()).await {
             Ok(value) => (Some(value), None),
             Err(error) => (None, Some(error)),
@@ -136,7 +137,7 @@ impl Env {
     }
 
     /// 인자를 따로 쓰는 호출: `delete_pdf_pages(1, pages)`
-    pub async fn run_pages(&self, pages: &[i64]) -> (Option<Value>, Option<String>) {
+    pub async fn run_pages(&self, pages: &[i64]) -> (Option<PdfEditResult>, Option<String>) {
         self.run(&Edit { pages: pages.to_vec(), ..Edit::default() }).await
     }
 
@@ -221,7 +222,7 @@ pub fn jpeg_with_orientation(orientation: u16, width: u32, height: u32) -> Vec<u
 pub struct FakeManager {
     pub preview_insert_image: Mutex<(Option<Vec<u8>>, Option<String>)>,
     pub preview_insert_upload: Mutex<(Option<Vec<u8>>, Option<String>)>,
-    pub delete_pdf_pages: Mutex<(Option<Value>, Option<String>)>,
+    pub delete_pdf_pages: Mutex<(Option<PdfEditResult>, Option<String>)>,
     pub edit_epub_images: Mutex<(Option<CoverSave>, Option<String>)>,
     /// (메서드 이름, 인자 목록): `await_args.args`에 대응한다.
     pub calls: Mutex<Vec<(String, Vec<Value>)>>,
@@ -232,7 +233,7 @@ impl FakeManager {
         Arc::new(Self {
             preview_insert_image: Mutex::new((Some(b"\xff\xd8\xffJPEG".to_vec()), None)),
             preview_insert_upload: Mutex::new((Some(b"\xff\xd8\xffJPEG".to_vec()), None)),
-            delete_pdf_pages: Mutex::new((Some(json!({"remaining_pages": 5})), None)),
+            delete_pdf_pages: Mutex::new((Some(PdfEditResult { remaining_pages: 5, ..PdfEditResult::default() }), None)),
             edit_epub_images: Mutex::new((Some(CoverSave { idrefs: Some(CreatedIdrefs::default()), ..CoverSave::default() }), None)),
             calls: Mutex::new(Vec::new()),
         })
@@ -261,7 +262,15 @@ impl backend::main::BookManagerApi for FakeManager {
         error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 
-    async fn delete_pdf_pages(&self, book_id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String> {
+    async fn delete_pdf_pages(
+        &self,
+        book_id: i64,
+        pages: &[i64],
+        crops: Option<&[Value]>,
+        splits: Option<&[Value]>,
+        inserts: Option<&[Value]>,
+        order: Option<&[i64]>,
+    ) -> Result<PdfEditResult, String> {
         self.calls.lock().unwrap().push(("delete_pdf_pages".into(), vec![json!(book_id), json!(pages), json!(crops), json!(splits), json!(inserts), json!(order)]));
         let (value, error) = self.delete_pdf_pages.lock().unwrap().clone();
         error.map_or(Ok(value.unwrap_or_default()), Err)

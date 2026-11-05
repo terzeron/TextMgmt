@@ -13,6 +13,7 @@ use super::{ApplyCategoryChanges, ProposeCategoryChanges, ReloadProgress};
 use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
 use super::{BookDeletion, CoverPage};
 use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
+use crate::book_manager::{EpubValidation, PdfEditResult, PdfValidation};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
@@ -90,7 +91,7 @@ impl BookManagerApi for BookManager {
         BookManager::preview_insert_upload(self, data).await
     }
 
-    async fn delete_pdf_pages(&self, id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<Value, String> {
+    async fn delete_pdf_pages(&self, id: i64, pages: &[i64], crops: Option<&[Value]>, splits: Option<&[Value]>, inserts: Option<&[Value]>, order: Option<&[i64]>) -> Result<PdfEditResult, String> {
         BookManager::delete_pdf_pages(self, id, pages, crops, splits, inserts, order).await
     }
 
@@ -142,11 +143,11 @@ impl BookManagerApi for BookManager {
         BookManager::get_cover(self, book_id, width).await
     }
 
-    async fn validate_epub(&self, book_id: i64) -> Result<Value, String> {
+    async fn validate_epub(&self, book_id: i64) -> Result<EpubValidation, String> {
         BookManager::validate_epub(self, book_id).await
     }
 
-    async fn validate_pdf(&self, book_id: i64) -> Result<Value, String> {
+    async fn validate_pdf(&self, book_id: i64) -> Result<PdfValidation, String> {
         BookManager::validate_pdf(self, book_id).await
     }
 

@@ -65,6 +65,7 @@ use axum::response::IntoResponse;
 use backend::auth_service::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
 use backend::book_manager::{BookContent, BookDeletion, BookManager, BookManagerApi, BookResponse};
 use backend::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, FsOnlyFile, MismatchDetails, MismatchReload, MismatchSummary, ReloadCounts, ReloadedFiles};
+use backend::book_manager::{EpubValidation, PdfValidation};
 use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
@@ -1405,15 +1406,15 @@ impl BookManagerApi for DummyManager {
         Ok(book)
     }
 
-    async fn validate_epub(&self, _book_id: i64) -> Result<Value, String> {
+    async fn validate_epub(&self, _book_id: i64) -> Result<EpubValidation, String> {
         if self.b().validate_epub_fail {
             return Err("validation failed".into());
         }
-        Ok(json!({"valid": true}))
+        Ok(EpubValidation { valid: true, ..EpubValidation::default() })
     }
 
-    async fn validate_pdf(&self, _book_id: i64) -> Result<Value, String> {
-        Ok(json!({"valid": true}))
+    async fn validate_pdf(&self, _book_id: i64) -> Result<PdfValidation, String> {
+        Ok(PdfValidation { valid: true, ..PdfValidation::default() })
     }
 
     async fn get_books_in_category(&self, category: &str) -> Result<Vec<Book>, String> {

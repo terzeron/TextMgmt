@@ -3,7 +3,8 @@
 use std::io;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sysdeps::CommandError;
 
 use super::BookManager;
@@ -12,9 +13,111 @@ use super::temp_file_maker::unique_token;
 /// epubveri 실행 시간 상한.
 const EPUBVERI_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// 검증 메시지가 가리키는 위치. 모르는 줄·칸은 -1이다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MessageLocation {
+    pub path: String,
+    pub line: i64,
+    pub column: i64,
+}
+
+/// epubveri 메시지 하나.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EpubMessage {
+    pub severity: String,
+    pub id: String,
+    pub message: String,
+    pub location: Option<MessageLocation>,
+}
+
+/// 심각도별 메시지 수.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EpubSummary {
+    pub fatal: i64,
+    pub error: i64,
+    pub warning: i64,
+    pub usage: i64,
+    pub info: i64,
+}
+
+/// EPUB 패키지의 서지 정보.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EpubPublication {
+    pub title: String,
+    pub creator: String,
+    pub date: String,
+    pub publisher: String,
+}
+
+/// EPUB 검증 결과. 서지 정보가 없으면 `publication`이 없다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EpubValidation {
+    pub valid: bool,
+    pub file_path: String,
+    pub messages: Vec<EpubMessage>,
+    pub summary: EpubSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication: Option<EpubPublication>,
+}
+
+/// PDF 구문 경고 하나.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PdfMessage {
+    pub severity: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PdfSummary {
+    pub error: i64,
+    pub warning: i64,
+}
+
+/// PDF 문서 정보. 문서 정보 사전에 없는 항목은 비운다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PdfPublication {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creation_date: Option<String>,
+    pub page_count: usize,
+    pub pdf_version: String,
+}
+
+/// PDF 검증 결과.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PdfValidation {
+    pub valid: bool,
+    pub file_path: String,
+    pub messages: Vec<PdfMessage>,
+    pub summary: PdfSummary,
+    pub publication: PdfPublication,
+}
+
+fn text_of(value: &Value, key: &str) -> String {
+    value.get(key).and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+fn number_of(value: &Value, key: &str, missing: i64) -> i64 {
+    value.get(key).and_then(Value::as_i64).unwrap_or(missing)
+}
+
 impl BookManager {
     /// Rust epubveri로 EPUB 파일의 구조적 유효성을 검증한다.
-    pub async fn validate_epub(&self, book_id: i64) -> Result<Value, String> {
+    pub async fn validate_epub(&self, book_id: i64) -> Result<EpubValidation, String> {
         log::debug!("# validate_epub(book_id={book_id})");
         let Ok(book) = self.get_book(book_id).await else { return Err(format!("Book not found: {book_id}")) };
         if book.file_type != "epub" {
@@ -39,35 +142,24 @@ impl BookManager {
             Err(message) => return Err(message),
         };
 
-        // 기존 API 형식 호환을 위해 메시지 ID 키 "ID"를 읽는다.
-        let mut messages: Vec<Value> = Vec::new();
+        // epubveri는 메시지 ID를 "ID" 키로 준다.
+        let mut messages: Vec<EpubMessage> = Vec::new();
         for msg in data.get("messages").and_then(Value::as_array).into_iter().flatten() {
             let loc = msg.get("locations").and_then(Value::as_array).and_then(|l| l.first()).filter(|l| l.as_object().is_none_or(|o| !o.is_empty()));
-            let location = loc.map(
-                |loc| json!({"path": loc.get("path").cloned().unwrap_or(json!("")), "line": loc.get("line").cloned().unwrap_or(json!(-1)), "column": loc.get("column").cloned().unwrap_or(json!(-1))}),
-            );
-            messages.push(json!({
-                "severity": msg.get("severity").cloned().unwrap_or(json!("")), "id": msg.get("ID").cloned().unwrap_or(json!("")),
-                "message": msg.get("message").cloned().unwrap_or(json!("")), "location": location,
-            }));
+            let location = loc.map(|loc| MessageLocation { path: text_of(loc, "path"), line: number_of(loc, "line", -1), column: number_of(loc, "column", -1) });
+            messages.push(EpubMessage { severity: text_of(msg, "severity"), id: text_of(msg, "ID"), message: text_of(msg, "message"), location });
         }
 
         let pub_raw = data.get("publication").filter(|p| p.as_object().is_some_and(|o| !o.is_empty()));
-        let publication = pub_raw.map(|p| json!({"title": p.get("title").cloned().unwrap_or(json!("")), "creator": p.get("creator").cloned().unwrap_or(json!("")), "date": p.get("date").cloned().unwrap_or(json!("")), "publisher": p.get("publisher").cloned().unwrap_or(json!(""))}));
+        let publication = pub_raw.map(|p| EpubPublication { title: text_of(p, "title"), creator: text_of(p, "creator"), date: text_of(p, "date"), publisher: text_of(p, "publisher") });
 
         // checker는 nFatal/nError/nWarning/nUsage만 준다. INFO 건수는 메시지에서 직접 센다.
-        let checker = data.get("checker").cloned().unwrap_or(json!({}));
-        let info_count = messages.iter().filter(|m| m["severity"] == "INFO").count();
-        let count = |key: &str| checker.get(key).cloned().unwrap_or(json!(0));
-        let rel_path = self.relative_to_root(&book.file_path).unwrap_or_else(|| book.file_path.display().to_string());
-        let mut result = json!({
-            "valid": returncode == 0, "file_path": rel_path, "messages": messages,
-            "summary": {"fatal": count("nFatal"), "error": count("nError"), "warning": count("nWarning"), "usage": count("nUsage"), "info": info_count},
-        });
-        if let Some(publication) = publication {
-            result["publication"] = publication;
-        }
-        Ok(result)
+        let checker = data.get("checker").cloned().unwrap_or(Value::Null);
+        let count = |key: &str| number_of(&checker, key, 0);
+        let summary =
+            EpubSummary { fatal: count("nFatal"), error: count("nError"), warning: count("nWarning"), usage: count("nUsage"), info: messages.iter().filter(|m| m.severity == "INFO").count() as i64 };
+        let file_path = self.relative_to_root(&book.file_path).unwrap_or_else(|| book.file_path.display().to_string());
+        Ok(EpubValidation { valid: returncode == 0, file_path, messages, summary, publication })
     }
 
     /// epubveri subprocess를 시간 제한으로 실행해 JSON 출력과 종료 코드를 돌려준다.
@@ -90,7 +182,7 @@ impl BookManager {
     }
 
     /// PDF 파일의 구문 유효성을 검증하고 메타데이터를 추출한다.
-    pub async fn validate_pdf(&self, book_id: i64) -> Result<Value, String> {
+    pub async fn validate_pdf(&self, book_id: i64) -> Result<PdfValidation, String> {
         log::debug!("# validate_pdf(book_id={book_id})");
         let Ok(book) = self.get_book(book_id).await else { return Err(format!("Book not found: {book_id}")) };
         if book.file_type != "pdf" {
@@ -104,25 +196,22 @@ impl BookManager {
             Ok(pdf) => pdf,
             Err(e) => return Err(format!("Failed to open PDF: {e}")),
         };
-        let result = (|| -> Result<Value, String> {
+        let result = (|| -> Result<PdfValidation, String> {
             let issues = pdf.check_pdf_syntax().map_err(|e| e.to_string())?;
-            let messages: Vec<Value> = issues.iter().map(|m| json!({"severity": "WARNING", "message": m})).collect();
+            let messages = issues.iter().map(|m| PdfMessage { severity: "WARNING".to_string(), message: m.clone() }).collect();
 
-            // 메타데이터 추출
             let docinfo = pdf.docinfo();
-            let mut publication = serde_json::Map::new();
-            for (key, field) in [("/Title", "title"), ("/Author", "creator"), ("/Producer", "producer"), ("/CreationDate", "creation_date")] {
-                if let Some(value) = docinfo.get(key).filter(|v| !v.is_empty()) {
-                    publication.insert(field.to_string(), json!(value));
-                }
-            }
-            publication.insert("page_count".to_string(), json!(pdf.page_count()));
-            publication.insert("pdf_version".to_string(), json!(pdf.pdf_version()));
-
-            let rel_path = self.relative_to_root(&book.file_path).unwrap_or_else(|| book.file_path.display().to_string());
-            let mut result = json!({"valid": issues.is_empty(), "file_path": rel_path, "messages": messages, "summary": {"error": 0, "warning": issues.len()}});
-            result["publication"] = Value::Object(publication);
-            Ok(result)
+            let info = |key: &str| docinfo.get(key).filter(|v| !v.is_empty()).cloned();
+            let publication = PdfPublication {
+                title: info("/Title"),
+                creator: info("/Author"),
+                producer: info("/Producer"),
+                creation_date: info("/CreationDate"),
+                page_count: pdf.page_count(),
+                pdf_version: pdf.pdf_version(),
+            };
+            let file_path = self.relative_to_root(&book.file_path).unwrap_or_else(|| book.file_path.display().to_string());
+            Ok(PdfValidation { valid: issues.is_empty(), file_path, messages, summary: PdfSummary { error: 0, warning: issues.len() as i64 }, publication })
         })();
         pdf.close();
         match result {

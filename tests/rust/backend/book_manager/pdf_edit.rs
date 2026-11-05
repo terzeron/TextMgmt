@@ -16,7 +16,7 @@ async fn custom_trash_directory_is_used() {
     let e = env();
     let bm = BookManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()).with_trash_dirname("backup"));
     let result = bm.delete_pdf_pages(1, &[1], None, None, None, None).await.unwrap();
-    assert_eq!(result["backup"], "backup/book.pdf");
+    assert_eq!(result.backup, "backup/book.pdf");
     assert!(e.root.path().join("backup/book.pdf").is_file());
 }
 
