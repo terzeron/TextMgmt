@@ -29,11 +29,13 @@ impl ApplyOpts {
     }
 }
 
+/// 적용 결과를 `(JSON, 오류)`로 펼친다. JSON은 상태 문서에 저장하는 모양이다.
 pub async fn apply_opts(manager: &BookManager, items: &[Value], opts: ApplyOpts) -> (Value, Option<String>) {
     let allowed: std::collections::HashSet<String> = opts.allowed.iter().cloned().collect();
     outcome(
         manager
             .apply_category_changes_with(items, &allowed, ApplyOptions { on_item_done: opts.on_item_done.as_deref(), should_continue: opts.should_continue.as_deref(), ..ApplyOptions::default() })
-            .await,
+            .await
+            .map(|result| serde_json::to_value(result).unwrap()),
     )
 }

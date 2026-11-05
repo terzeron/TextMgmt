@@ -4,8 +4,10 @@
 mod common;
 use crate::common::category_apply::{ApplyOpts, apply_opts};
 use crate::common::shared_fixtures::CONTAINER;
-use crate::common::shared_fixtures::{allowed_set, blank_pdf_bytes_sized, block_on, category_with_files, deps, image_bytes, make_deps, make_doc, make_manager, make_source_file, outcome, tmp_dir};
-use backend::book_manager::{ApplyOptions, BackfillThread, BookManager, CREATED_TIME_BACKFILL_ENV, ProposeOptions};
+use crate::common::shared_fixtures::{
+    allowed_set, blank_pdf_bytes_sized, block_on, category_with_files, deps, image_bytes, make_deps, make_doc, make_manager, make_source_file, outcome_or_default, tmp_dir,
+};
+use backend::book_manager::{ApplyOptions, BackfillThread, BookManager, CREATED_TIME_BACKFILL_ENV, ItemFailure, MoveOutcome, Proposal, ProposalGrade, ProposeOptions};
 use backend::main::{BookManagerApi, InlineRunner, TaskHandle, TaskRunner};
 use backend::pdf_page_reader::PdfCacheLimits;
 use common::env::EnvGuard;
@@ -301,7 +303,7 @@ async fn test_propose_awaits_async_progress_callback_and_records_failures() {
         if file_path.file_name().unwrap() == "bad.txt" {
             return Err("분류기 오류".to_string());
         }
-        Ok(json!({"target_category": "B", "grade": "high"}))
+        Ok(Proposal { target_category: Some("B".into()), grade: Some(ProposalGrade::Certain), ..Proposal::default() })
     }));
     let manager = BookManager::with_deps(deps);
     let reports: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
@@ -312,9 +314,9 @@ async fn test_propose_awaits_async_progress_callback_and_records_failures() {
 
     let result = manager.propose_category_changes("A", None, opts).await.unwrap();
 
-    let titles: Vec<&str> = result["items"].as_array().unwrap().iter().map(|i| i["title"].as_str().unwrap()).collect();
+    let titles: Vec<&str> = result.items.iter().map(|i| i.title.as_str()).collect();
     assert_eq!(titles, vec!["ok"]);
-    assert_eq!(result["failures"], json!([{"file_path": "A/bad.txt", "error": "분류 제안에 실패했습니다"}]));
+    assert_eq!(result.failures, vec![ItemFailure { file_path: "A/bad.txt".into(), error: "분류 제안에 실패했습니다".into() }]);
     assert!(reports.lock().unwrap().iter().any(|r| r.get("updated_items").is_some()));
 }
 
@@ -329,7 +331,7 @@ async fn test_apply_awaits_async_callbacks() {
     let progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
 
     // 가정한 seam(문서 3.12에 없음. 3.0 규칙대로 Deps 빌더로 옮겼다): 파일 이동 함수를 교체하는 훅
-    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| Ok(json!({"status": "moved"}))));
+    let deps = make_deps(tmp.path(), FakeEsManager::new()).with_move_classified_file_hook(Arc::new(|_path: &Path, _target: &str| Ok(MoveOutcome::default())));
     let manager = BookManager::with_deps(deps);
     let (done_sink, progress_sink) = (done.clone(), progress.clone());
     // 콜백은 동기 함수다.
@@ -341,7 +343,7 @@ async fn test_apply_awaits_async_callbacks() {
 
     let result = manager.apply_category_changes_with(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, opts).await.unwrap();
 
-    assert_eq!(result["applied_count"], 1);
+    assert_eq!(result.applied_count, 1);
     assert_eq!(*done.lock().unwrap(), vec!["moving", "moved"]);
     assert_eq!(*progress.lock().unwrap(), vec![json!({"apply_total_count": 1, "applied_count": 1, "failed_count": 0})]);
 }
@@ -357,10 +359,10 @@ async fn test_apply_records_move_error_as_failed() {
     let manager = BookManager::with_deps(deps);
     let allowed: HashSet<String> = ["1_A/a.txt".to_string()].into();
 
-    let (result, _) = outcome(manager.apply_category_changes(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, Default::default()).await);
+    let (result, _) = outcome_or_default(manager.apply_category_changes(&[json!({"file_path": "1_A/a.txt", "target_category": "2_B"})], &allowed, Default::default()).await);
 
-    assert_eq!(result["failed_count"], 1);
-    assert_eq!(result["results"][0]["apply_error"], "이동 실패");
+    assert_eq!(result.failed_count, 1);
+    assert_eq!(result.results[0].apply_error.as_deref(), Some("이동 실패"));
 }
 
 mod pdf_reader_cache_budget {

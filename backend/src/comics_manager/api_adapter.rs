@@ -1,9 +1,9 @@
 //! 만화 API는 동일한 도서 처리 로직을 만화 전용 의존성으로 실행한다.
 use super::ComicsManager;
 use crate::book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress};
+use crate::book_manager::{ApplyResult, EpubValidation, PdfEditResult, PdfValidation, ProposeResult};
 use crate::book_manager::{BookDeletion, BookManager, CoverPage};
 use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
-use crate::book_manager::{EpubValidation, PdfEditResult, PdfValidation};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 #[async_trait::async_trait]
 impl BookManagerApi for ComicsManager {
-    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<ProposeResult, String> {
         BookManagerApi::propose_category_changes(&self.inner, request).await
     }
     async fn index_single_file(&self, file_path: &str) -> Result<i64, String> {
@@ -31,10 +31,10 @@ impl BookManagerApi for ComicsManager {
     async fn reload_category_mismatches(&self, _content_type: &str, on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         BookManager::reload_category_mismatches_for(&self.inner, "comic", on_progress.as_deref()).await
     }
-    async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &std::collections::HashSet<String>, clean_existing: bool) -> Result<Value, String> {
+    async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &std::collections::HashSet<String>, clean_existing: bool) -> Result<ApplyResult, String> {
         BookManagerApi::apply_category_changes(&self.inner, items, allowed_file_paths, clean_existing).await
     }
-    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<Value, String> {
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<ApplyResult, String> {
         BookManagerApi::apply_category_changes_with(&self.inner, request).await
     }
     async fn delete_book(&self, id: i64) -> Result<BookDeletion, String> {

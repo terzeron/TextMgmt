@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 use super::{ApplyCategoryChanges, ProposeCategoryChanges, ReloadProgress};
 use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
 use super::{BookDeletion, CoverPage};
+use crate::book_manager::{ApplyResult, EpubValidation, PdfEditResult, PdfValidation, ProposeResult};
 use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
-use crate::book_manager::{EpubValidation, PdfEditResult, PdfValidation};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
@@ -23,7 +23,7 @@ const DEFAULT_CATEGORY_PAGE_SIZE: i64 = 500;
 
 #[async_trait]
 impl BookManagerApi for BookManager {
-    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<ProposeResult, String> {
         BookManager::propose_category_changes(
             self,
             request.category,
@@ -38,10 +38,10 @@ impl BookManagerApi for BookManager {
         )
         .await
     }
-    async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &std::collections::HashSet<String>, clean_existing: bool) -> Result<Value, String> {
+    async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &std::collections::HashSet<String>, clean_existing: bool) -> Result<ApplyResult, String> {
         BookManager::apply_category_changes_with(self, items, allowed_file_paths, super::ApplyOptions { clean_existing, ..Default::default() }).await
     }
-    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<Value, String> {
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<ApplyResult, String> {
         BookManager::apply_category_changes_with(
             self,
             request.items,

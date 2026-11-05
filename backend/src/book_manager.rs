@@ -66,6 +66,7 @@ pub use file_validator::{EpubMessage, EpubPublication, EpubSummary, EpubValidati
 mod html_previewer;
 mod mismatch_reporter;
 pub use category_editor::{CategoryDeletePreview, CategoryDeletion, CategoryRename};
+pub use category_proposer::{AppliedItem, ApplyResult, ApplyStatus, CategoryCandidate, ItemFailure, MoveAction, MoveOutcome, MoveStatus, Proposal, ProposalGrade, ProposalItem, ProposeResult};
 pub use category_reloader::{CategoryReload, MismatchReload, ReloadCounts, ReloadFailure, ReloadProgressFn, ReloadedFiles};
 pub use mismatch_reporter::{CategoryMismatch, DuplicateDoc, DuplicatePath, EsOnlyFile, FsOnlyFile, MismatchDetails, MismatchSummary};
 mod path_validator;

@@ -12,7 +12,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
 use backend::auth_service::Claims;
 use backend::auth_service::RequestParts;
 use backend::book_manager::{AddBookError, BookAdder, BookContent, BookLookup, BookManager, BookManagerDeps, BookRef, BookResponse, CoverPage, FileReader, ProposeOptions, ReadFileError, Thumbnailer};
-use backend::book_manager::{EpubValidation, PdfValidation};
+use backend::book_manager::{ApplyResult, EpubValidation, PdfValidation, ProposeResult};
 use backend::book_manager::{FsOnlyFile, MismatchDetails, MismatchReload, ReloadCounts, ReloadedFiles};
 use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::cover_management::CoverManagement;
@@ -400,9 +400,10 @@ pub fn opt_string(v: Value) -> Option<String> {
 }
 
 /// `Result<Value, _>`를 `(결과, 오류)`로 펼친다. 실패하면 빈 객체다.
-pub fn outcome(result: Result<serde_json::Value, String>) -> (serde_json::Value, Option<String>) {
+/// 결과를 `(JSON, 오류)`로 펼친다. 결과는 응답 JSON 모양이고, 실패하면 `{}`다.
+pub fn outcome(result: Result<impl serde::Serialize, String>) -> (serde_json::Value, Option<String>) {
     match result {
-        Ok(value) => (value, None),
+        Ok(value) => (serde_json::to_value(value).expect("결과를 JSON으로 바꾸지 못했다"), None),
         Err(error) => (serde_json::json!({}), Some(error)),
     }
 }
@@ -462,10 +463,10 @@ pub fn proposal_result(total: usize, items: &[Value]) -> Value {
     json!({"content_type": "book", "source_category": "0_inbox", "total_count": total, "processed_count": total, "items": items, "failures": []})
 }
 
+/// `0_inbox`의 분류 제안 결과. 상태 문서에 저장하는 JSON 모양이다.
 pub fn propose(m: &BookManager, opts: ProposeOptions<'_>) -> Value {
-    let (result, err) = outcome(run(m.propose_category_changes("0_inbox", Some(&json!({})), opts)));
-    assert!(err.is_none(), "{err:?}");
-    result
+    let result = run(m.propose_category_changes("0_inbox", Some(&json!({})), opts)).expect("propose_category_changes");
+    serde_json::to_value(result).unwrap()
 }
 
 // ── epub_cover 방어 경로: 표지 분리, 교체 전 표지 보존, 검증 실패 ──
@@ -1268,14 +1269,14 @@ impl BookManagerApi for Mock {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<ProposeResult, String> {
         let args = call_args!([request.category, request.mappings], {"content_type": request.content_type, "use_bookstore": request.use_bookstore, "use_content_meta": request.use_content_meta, "delay": request.delay})
             .with_callback("on_progress", progress_callback(request.on_progress));
         let v = self.invoke("propose_category_changes", args).await;
-        value_result(&v)
+        typed_result(&v)
     }
 
-    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<Value, String> {
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<ApplyResult, String> {
         let mut allowed: Vec<&String> = request.allowed_file_paths.iter().collect();
         allowed.sort();
         let args = call_args!([request.items, allowed], {"content_type": request.content_type, "clean_existing": request.clean_existing})
@@ -1283,7 +1284,7 @@ impl BookManagerApi for Mock {
             .with_callback("on_item_done", progress_callback(request.on_item_done))
             .with_callback("should_continue", continue_callback(request.should_continue));
         let v = self.invoke("apply_category_changes", args).await;
-        value_result(&v)
+        typed_result(&v)
     }
 
     async fn index_single_file(&self, file_path: &str) -> Result<i64, String> {
@@ -1575,7 +1576,7 @@ impl BookManagerApi for MockBm {
         Ok(())
     }
 
-    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
+    async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<ProposeResult, String> {
         if let Some(progress) = request.on_progress {
             let events = self.proposal_progress.lock().unwrap().clone();
             if events.is_empty() {
@@ -1593,7 +1594,7 @@ impl BookManagerApi for MockBm {
             .unwrap()
             .clone()
             .unwrap_or_else(|| json!({"source_category":"0_inbox","total_count":1,"processed_count":1,"items":[{"file_path":"0_inbox/a.epub","target_category":"3_SF"}],"failures":[]}));
-        Ok(result)
+        serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
     async fn get_categories(&self) -> Result<Value, String> {
@@ -1601,12 +1602,12 @@ impl BookManagerApi for MockBm {
         error.map_or(Ok(value), Err)
     }
 
-    async fn apply_category_changes(&self, _items: &[Value], _allowed: &HashSet<String>, _clean_existing: bool) -> Result<Value, String> {
+    async fn apply_category_changes(&self, _items: &[Value], _allowed: &HashSet<String>, _clean_existing: bool) -> Result<ApplyResult, String> {
         let (value, error) = self.apply_result.lock().unwrap().clone();
-        error.map_or(Ok(value), Err)
+        error.map_or_else(|| serde_json::from_value(value).map_err(|e| e.to_string()), Err)
     }
 
-    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<Value, String> {
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<ApplyResult, String> {
         if let Some(progress) = request.on_progress {
             progress(json!({"processed_count":request.items.len()}));
         }

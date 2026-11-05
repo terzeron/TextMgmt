@@ -7,9 +7,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::book_manager::{ApplyResult, EpubValidation, PdfEditResult, PdfValidation, ProposeResult};
 use crate::book_manager::{BookDeletion, CoverPage};
 use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
-use crate::book_manager::{EpubValidation, PdfEditResult, PdfValidation};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
@@ -67,13 +67,13 @@ pub type ReloadProgress = Arc<dyn Fn(crate::book_manager::ReloadCounts) + Send +
 /// 책/만화 관리자 facade. 책과 만화가 같은 trait를 쓴다. 지금은 문서 3.2의 통일 시그니처 일부만 있다.
 #[async_trait]
 pub trait BookManagerApi: Send + Sync {
-    async fn propose_category_changes(&self, _request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
+    async fn propose_category_changes(&self, _request: ProposeCategoryChanges<'_>) -> Result<ProposeResult, String> {
         Err(UNIMPLEMENTED.to_string())
     }
-    async fn apply_category_changes(&self, _items: &[Value], _allowed_file_paths: &std::collections::HashSet<String>, _clean_existing: bool) -> Result<Value, String> {
+    async fn apply_category_changes(&self, _items: &[Value], _allowed_file_paths: &std::collections::HashSet<String>, _clean_existing: bool) -> Result<ApplyResult, String> {
         Err(UNIMPLEMENTED.to_string())
     }
-    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<Value, String> {
+    async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<ApplyResult, String> {
         self.apply_category_changes(request.items, request.allowed_file_paths, request.clean_existing).await
     }
     async fn delete_book(&self, _id: i64) -> Result<BookDeletion, String> {

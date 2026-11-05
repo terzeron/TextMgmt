@@ -9,7 +9,7 @@ use crate::common::category_apply::{ApplyOpts, apply_opts};
 use crate::common::shared_fixtures::manager;
 use crate::common::shared_fixtures::{allowed_set, block_on, deps, make_doc, make_manager, make_source_file, outcome, propose, split, tmp_dir};
 use crate::common::shared_fixtures::{book_adder, file_reader, setup};
-use backend::book_manager::{AddBookError, BookManager, KeywordMatch, MoveOpts, ProposeOptions};
+use backend::book_manager::{AddBookError, BookManager, CategoryCandidate, KeywordMatch, MoveAction, MoveOpts, MoveStatus, Proposal, ProposalGrade, ProposeOptions};
 use classifier::BookClassifierApi;
 use common::env::EnvGuard;
 use common::es_fake::FakeEsManager;
@@ -120,24 +120,28 @@ fn mappings(pairs: &[(&str, &[&str])]) -> Mappings {
 /// 등급 판정 9(10)-케이스: candidates 추가가 target_category/grade를 바꾸지 않는지도
 /// 이 목록을 그대로 재사용해서(test_propose_category_candidates_first_matches_target_when_decided)
 /// 같이 검증한다. 두 값을 따로 유지하면 표류할 수 있어 리스트를 공유한다.
-fn propose_category_grade_cases() -> Vec<(Mappings, FakeClassifier, Option<&'static str>, &'static str)> {
+fn propose_category_grade_cases() -> Vec<(Mappings, FakeClassifier, Option<&'static str>, ProposalGrade)> {
     vec![
-        (mappings(&[("3_SF", &["과학소설"])]), FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.9)), Some("3_SF"), "certain"),
-        (mappings(&[("3_SF", &["과학소설"])]), FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.1)), Some("3_SF"), "unsure"),
-        (mappings(&[("3_SF", &["과학소설"])]), FakeClassifier::new(Some("5_음악"), "model", "r", Some("5_음악"), Some(0.9)), Some("3_SF"), "unsure"),
-        (mappings(&[("3_SF", &["과학소설"]), ("5_음악", &["과학소설"])]), FakeClassifier::new(None, "not_found", "r", None, Some(0.1)), None, "unknown"),
-        (mappings(&[]), FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.9)), Some("3_SF"), "certain"),
-        (mappings(&[]), FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.1)), None, "unknown"),
-        (mappings(&[]), FakeClassifier::new(Some("3_SF"), "bookstore_majority", "r", None, Some(0.1)), Some("3_SF"), "certain"),
-        (mappings(&[]), FakeClassifier::new(Some("3_SF"), "bookstore_single", "r", None, Some(0.1)), Some("3_SF"), "unsure"),
-        (mappings(&[]), FakeClassifier::new(None, "conflict", "r", Some("3_SF"), Some(0.1)), None, "unknown"),
-        (mappings(&[]), FakeClassifier::new(None, "not_found", "r", None, Some(0.1)), None, "unknown"),
+        (mappings(&[("3_SF", &["과학소설"])]), FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.9)), Some("3_SF"), ProposalGrade::Certain),
+        (mappings(&[("3_SF", &["과학소설"])]), FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.1)), Some("3_SF"), ProposalGrade::Unsure),
+        (mappings(&[("3_SF", &["과학소설"])]), FakeClassifier::new(Some("5_음악"), "model", "r", Some("5_음악"), Some(0.9)), Some("3_SF"), ProposalGrade::Unsure),
+        (mappings(&[("3_SF", &["과학소설"]), ("5_음악", &["과학소설"])]), FakeClassifier::new(None, "not_found", "r", None, Some(0.1)), None, ProposalGrade::Unknown),
+        (mappings(&[]), FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.9)), Some("3_SF"), ProposalGrade::Certain),
+        (mappings(&[]), FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.1)), None, ProposalGrade::Unknown),
+        (mappings(&[]), FakeClassifier::new(Some("3_SF"), "bookstore_majority", "r", None, Some(0.1)), Some("3_SF"), ProposalGrade::Certain),
+        (mappings(&[]), FakeClassifier::new(Some("3_SF"), "bookstore_single", "r", None, Some(0.1)), Some("3_SF"), ProposalGrade::Unsure),
+        (mappings(&[]), FakeClassifier::new(None, "conflict", "r", Some("3_SF"), Some(0.1)), None, ProposalGrade::Unknown),
+        (mappings(&[]), FakeClassifier::new(None, "not_found", "r", None, Some(0.1)), None, ProposalGrade::Unknown),
     ]
 }
 
-/// proposal["candidates"]의 category만 뽑는다.
-fn candidate_categories(proposal: &Value) -> Vec<String> {
-    proposal["candidates"].as_array().unwrap().iter().map(|c| c["category"].as_str().unwrap().to_string()).collect()
+fn candidate(category: &str) -> CategoryCandidate {
+    CategoryCandidate { category: category.to_string(), ..CategoryCandidate::default() }
+}
+
+/// 제안 후보의 카테고리만 뽑는다.
+fn candidate_categories(proposal: &Proposal) -> Vec<String> {
+    proposal.candidates.iter().map(|c| c.category.clone()).collect()
 }
 
 /// `propose_category_changes`의 인자 묶음(테스트 로컬).
@@ -191,7 +195,7 @@ fn test_move_classified_file_keeps_both_when_content_differs() {
     let (result, err) = split(block_on(manager.move_classified_file(&src, "B", "book", MoveOpts { clean_existing: true, ..Default::default() })));
 
     assert!(err.is_none());
-    assert_eq!(result.unwrap()["to"], "B/book (1).txt");
+    assert_eq!(result.unwrap().to, "B/book (1).txt");
     assert_eq!(fs::read_to_string(&existing).unwrap(), "기존 파일 내용은 다르다");
     assert_eq!(fs::read_to_string(tmp_path.join("B").join("book (1).txt")).unwrap(), "새 파일 내용");
     assert!(!src.exists());
@@ -213,7 +217,7 @@ fn test_move_classified_file_numbers_up_when_bracket_name_taken() {
     let (result, err) = split(block_on(manager.move_classified_file(&src, "B", "book", MoveOpts::default())));
 
     assert!(err.is_none());
-    assert_eq!(result.unwrap()["to"], "B/book (2).txt");
+    assert_eq!(result.unwrap().to, "B/book (2).txt");
     assert_eq!(fs::read_to_string(tmp_path.join("B").join("book (2).txt")).unwrap(), "세 번째");
 }
 
@@ -232,7 +236,7 @@ fn test_move_classified_file_same_size_different_content_keeps_both() {
     let (result, err) = split(block_on(manager.move_classified_file(&src, "B", "book", MoveOpts { clean_existing: true, ..Default::default() })));
 
     assert!(err.is_none());
-    assert_eq!(result.unwrap()["to"], "B/book (1).txt");
+    assert_eq!(result.unwrap().to, "B/book (1).txt");
     assert_eq!(fs::read_to_string(tmp_path.join("B").join("book.txt")).unwrap(), "BBBB");
 }
 
@@ -270,8 +274,8 @@ fn test_move_classified_file_edge_cases() {
     let manager_dup = BookManager::with_deps(deps(tmp_path, &FakeEsManager::new()).with_fs(faulty_dup.clone()));
     let (res3, err3) = split(block_on(manager_dup.move_classified_file(&f1, "B", "book", MoveOpts { dry_run: true, clean_existing: true, ..Default::default() })));
     let res3 = res3.expect("res3");
-    assert_eq!(res3["action"], "duplicate_clean");
-    assert_eq!(res3["status"], "dry_run");
+    assert_eq!(res3.action, Some(MoveAction::DuplicateClean));
+    assert_eq!(res3.status, MoveStatus::DryRun);
     assert!(err3.is_none());
 
     // 4. 1420-1421: clean_existing exception
@@ -332,10 +336,10 @@ fn test_move_classified_file_is_a_noop_when_already_in_target_category() {
 
     assert!(err.is_none());
     let result = result.expect("result");
-    assert_eq!(result["status"], "moved");
-    assert_eq!(result["action"], "noop");
-    assert_eq!(result["from"], result["to"]);
-    assert_eq!(result["to"], "2_science/제자리 도서.txt");
+    assert_eq!(result.status, MoveStatus::Moved);
+    assert_eq!(result.action, Some(MoveAction::Noop));
+    assert_eq!(result.from, result.to);
+    assert_eq!(result.to, "2_science/제자리 도서.txt");
     assert!(book.exists());
     let deleted_paths: Vec<String> = es.deleted_file_paths().into_iter().flat_map(|(paths, _exclude)| paths).collect();
     assert!(deleted_paths.is_empty(), "제자리인데 ES 문서를 지웠다");
@@ -410,7 +414,7 @@ fn test_move_classified_file_preserves_existing_es_metadata() {
     let (result, err) = split(block_on(manager.move_classified_file(&source_file, "2_science", "book", MoveOpts::default())));
 
     assert!(err.is_none());
-    assert_eq!(result.expect("result")["status"], "moved");
+    assert_eq!(result.expect("result").status, MoveStatus::Moved);
     let indexed_doc = es.inserted()[0].values().next().unwrap().clone();
     assert_eq!(indexed_doc["category"], "2_science");
     assert_eq!(indexed_doc["file_path"], "2_science/수정 과학.txt");
@@ -434,7 +438,7 @@ fn test_move_classified_file_logs_a_failed_lookup_of_the_existing_es_document_an
     let (result, err) = split(block_on(manager.move_classified_file(&source_file, "2_science", "book", MoveOpts::default())));
 
     assert!(err.is_none(), "{err:?}");
-    assert_eq!(result.expect("result")["status"], "moved");
+    assert_eq!(result.expect("result").status, MoveStatus::Moved);
     let logged = logs.text();
     assert!(logged.contains("기존 ES 문서 조회 실패 (0_inbox/조회 실패.txt)") && logged.contains("es lookup down"), "{logged}");
 }
@@ -572,8 +576,8 @@ fn test_propose_category_grades() {
 
         let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
 
-        assert_eq!(proposal["target_category"], json!(expected_target), "case {i}: target_category");
-        assert_eq!(proposal["grade"], json!(expected_grade), "case {i}: grade");
+        assert_eq!(proposal.target_category.as_deref(), expected_target, "case {i}: target_category");
+        assert_eq!(proposal.grade, Some(expected_grade), "case {i}: grade");
     }
 }
 
@@ -591,11 +595,10 @@ fn test_propose_category_candidates_first_matches_target_when_decided() {
 
         let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
 
-        assert_eq!(proposal["target_category"], json!(expected_target), "case {i}: target_category");
+        assert_eq!(proposal.target_category.as_deref(), expected_target, "case {i}: target_category");
         if let Some(expected) = expected_target {
-            let candidates = proposal["candidates"].as_array().unwrap_or_else(|| panic!("case {i}: candidates 없음"));
-            assert!(!candidates.is_empty(), "case {i}: candidates 비어 있음");
-            assert_eq!(candidates[0]["category"], expected, "case {i}: candidates[0]");
+            assert!(!proposal.candidates.is_empty(), "case {i}: candidates 비어 있음");
+            assert_eq!(proposal.candidates[0].category, expected, "case {i}: candidates[0]");
         }
     }
 }
@@ -612,9 +615,9 @@ fn test_propose_category_candidates_keyword_top_with_runner_up() {
 
     let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
 
-    assert_eq!(proposal["target_category"], "3_SF");
+    assert_eq!(proposal.target_category.as_deref(), Some("3_SF"));
     assert_eq!(candidate_categories(&proposal), ["3_SF", "5_음악"]);
-    assert_eq!(proposal["candidates"][0]["category"], proposal["target_category"]);
+    assert_eq!(Some(proposal.candidates[0].category.as_str()), proposal.target_category.as_deref());
 }
 
 #[test]
@@ -634,8 +637,8 @@ fn test_propose_category_item_always_carries_matched_keywords() {
     let hit = manager.propose_category_for_file(&matched, "A", &mappings(&[("3_SF", &["과학소설"])]), Some(&fake));
     let miss = manager.propose_category_for_file(&unmatched, "A", &mappings(&[("3_SF", &["과학소설"])]), Some(&fake));
 
-    assert_eq!(hit["matched_keywords"], json!(["과학소설"]));
-    assert_eq!(miss["matched_keywords"], json!([]));
+    assert_eq!(hit.matched_keywords, ["과학소설"]);
+    assert!(miss.matched_keywords.is_empty());
 }
 
 #[test]
@@ -653,9 +656,9 @@ fn test_propose_category_candidates_keyword_tie() {
 
     let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
 
-    assert!(proposal["target_category"].is_null());
-    assert_eq!(proposal["grade"], "unknown");
-    assert_eq!(proposal["candidates"].as_array().unwrap().len(), 2);
+    assert!(proposal.target_category.is_none());
+    assert_eq!(proposal.grade, Some(ProposalGrade::Unknown));
+    assert_eq!(proposal.candidates.len(), 2);
     let cats: BTreeSet<String> = candidate_categories(&proposal).into_iter().collect();
     assert_eq!(cats, BTreeSet::from(["3_SF".to_string(), "5_음악".to_string()]));
 }
@@ -671,8 +674,8 @@ fn test_propose_category_candidates_bookstore_conflict() {
 
     let proposal = manager.propose_category_for_file(&target, "A", &mappings(&[]), Some(&fake));
 
-    assert!(proposal["target_category"].is_null());
-    assert_eq!(proposal["grade"], "unknown");
+    assert!(proposal.target_category.is_none());
+    assert_eq!(proposal.grade, Some(ProposalGrade::Unknown));
     assert_eq!(candidate_categories(&proposal), ["3_무협", "3_판타지"]);
 }
 
@@ -687,9 +690,9 @@ fn test_propose_category_candidates_model_only_has_length_one() {
 
     let proposal = manager.propose_category_for_file(&target, "A", &mappings(&[]), Some(&fake));
 
-    assert_eq!(proposal["target_category"], "3_SF");
-    assert_eq!(proposal["candidates"].as_array().unwrap().len(), 1);
-    assert_eq!(proposal["candidates"][0]["category"], "3_SF");
+    assert_eq!(proposal.target_category.as_deref(), Some("3_SF"));
+    assert_eq!(proposal.candidates.len(), 1);
+    assert_eq!(proposal.candidates[0].category, "3_SF");
 }
 
 #[test]
@@ -704,7 +707,7 @@ fn test_propose_category_candidates_capped_at_two_even_with_more_contenders() {
 
     let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
 
-    assert!(proposal["candidates"].as_array().unwrap().len() <= 2);
+    assert!(proposal.candidates.len() <= 2);
 }
 
 #[test]
@@ -721,9 +724,9 @@ fn test_propose_category_candidates_bookstore_majority_without_vote_data_does_no
 
     let proposal = manager.propose_category_for_file(&target, "A", &mappings(&[]), Some(&fake));
 
-    assert_eq!(proposal["target_category"], "3_SF");
-    assert_eq!(proposal["grade"], "certain");
-    assert!(!proposal["candidates"][0]["detail"].as_str().unwrap().contains("1곳"));
+    assert_eq!(proposal.target_category.as_deref(), Some("3_SF"));
+    assert_eq!(proposal.grade, Some(ProposalGrade::Certain));
+    assert!(!proposal.candidates[0].detail.contains("1곳"));
 }
 
 #[test]
@@ -767,8 +770,8 @@ fn test_low_confidence_model_answer_is_not_pre_checked() {
 
     let proposal = manager.propose_category_for_file(&book, "9_성인", &mappings(&[]), Some(&fake));
 
-    assert_eq!(proposal["grade"], BookManager::GRADE_UNKNOWN, "동전 던지기 점수가 미리 체크됐다");
-    assert!(proposal["target_category"].is_null(), "점수가 낮은 답을 목적지로 썼다");
+    assert_eq!(proposal.grade, Some(ProposalGrade::Unknown), "동전 던지기 점수가 미리 체크됐다");
+    assert!(proposal.target_category.is_none(), "점수가 낮은 답을 목적지로 썼다");
     // 모델이 뭐라고 했는지는 후보로 남는다 — 사람이 보고 그걸 고를 수도 있어야 한다.
     assert_eq!(candidate_categories(&proposal), ["2_수필서간일기"]);
 }
@@ -788,10 +791,10 @@ fn test_single_keyword_match_still_offers_a_second_choice() {
 
     let proposal = manager.propose_category_for_file(&book, "9_어린이육아", &mappings(&[("2_수필서간일기", &["에세이"])]), Some(&fake));
 
-    assert_eq!(proposal["target_category"], "2_수필서간일기");
+    assert_eq!(proposal.target_category.as_deref(), Some("2_수필서간일기"));
     let categories = candidate_categories(&proposal);
     assert_eq!(categories, ["2_수필서간일기", "9_어린이육아"]);
-    assert_eq!(proposal["candidates"][0]["category"], proposal["target_category"]);
+    assert_eq!(Some(proposal.candidates[0].category.as_str()), proposal.target_category.as_deref());
 }
 
 #[test]
@@ -1253,9 +1256,9 @@ fn test_bookstore_votes_beat_a_model_alternative_when_no_destination_was_chosen(
 
     let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
 
-    assert!(proposal["target_category"].is_null());
+    assert!(proposal.target_category.is_none());
     assert_eq!(candidate_categories(&proposal), ["2_소설외국", "8_건강일반"]);
-    assert_eq!(proposal["candidates"][1]["source"], "bookstore");
+    assert_eq!(proposal.candidates[1].source, "bookstore");
 }
 
 // ---------------------------------------------------------------------------
@@ -1273,8 +1276,8 @@ fn test_proposal_carries_expected_accuracy() {
 
     let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
 
-    assert_eq!(proposal["confidence"], 0.076);
-    assert_eq!(proposal["expected_accuracy"], 0.93);
+    assert_eq!(proposal.confidence, Some(0.076));
+    assert_eq!(proposal.expected_accuracy, Some(0.93));
 }
 
 #[test]
@@ -1288,14 +1291,15 @@ fn test_proposal_expected_accuracy_is_none_without_calibration() {
 
     let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
 
-    assert!(proposal["expected_accuracy"].is_null());
+    assert!(proposal.expected_accuracy.is_none());
 }
 
 mod candidate_building {
+    use super::candidate;
     use super::common;
     use crate::common::dyn_es::make_manager;
     use crate::common::shared_fixtures::{category_with_files, outcome, split};
-    use backend::book_manager::{BookManager, MoveOpts};
+    use backend::book_manager::{BookManager, MoveAction, MoveOpts, MoveStatus};
     use classifier::BookClassifierApi;
     use common::es_fake::FakeEsManager;
     use serde_json::json;
@@ -1339,8 +1343,8 @@ mod candidate_building {
     fn test_fill_second_with_model_keeps_two_candidates_untouched() {
         let tmp = TempDir::new().unwrap();
         let manager = make_manager(tmp.path(), FakeEsManager::new());
-        let candidates = vec![json!({"category": "A"}), json!({"category": "B"})];
-        assert_eq!(manager.fill_second_with_model(candidates, &[("C".to_string(), 0.9)]), vec![json!({"category": "A"}), json!({"category": "B"})]);
+        let candidates = vec![candidate("A"), candidate("B")];
+        assert_eq!(manager.fill_second_with_model(candidates.clone(), &[("C".to_string(), 0.9)]), candidates);
     }
 
     #[test]
@@ -1349,7 +1353,7 @@ mod candidate_building {
         let manager = make_manager(tmp.path(), FakeEsManager::new());
         let votes = [("A".to_string(), 3), ("B".to_string(), 2), ("C".to_string(), 1)];
         let result = manager.build_candidates(None, "not_found", None, &votes);
-        let categories: Vec<&str> = result.iter().map(|c| c["category"].as_str().unwrap()).collect();
+        let categories: Vec<&str> = result.iter().map(|c| c.category.as_str()).collect();
         assert_eq!(categories, vec!["A", "B"]);
     }
 
@@ -1357,8 +1361,8 @@ mod candidate_building {
     fn test_fill_second_with_bookstore_keeps_two_candidates_untouched() {
         let tmp = TempDir::new().unwrap();
         let manager = make_manager(tmp.path(), FakeEsManager::new());
-        let candidates = vec![json!({"category": "A"}), json!({"category": "B"})];
-        assert_eq!(manager.fill_second_with_bookstore(candidates, &[("C".to_string(), 3)]), vec![json!({"category": "A"}), json!({"category": "B"})]);
+        let candidates = vec![candidate("A"), candidate("B")];
+        assert_eq!(manager.fill_second_with_bookstore(candidates.clone(), &[("C".to_string(), 3)]), candidates);
     }
 
     #[test]
@@ -1414,7 +1418,7 @@ mod candidate_building {
         let (result, err) = split(manager.move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
 
         assert_eq!(err, None);
-        assert_eq!(result.unwrap()["status"], "duplicate_cleaned");
+        assert_eq!(result.unwrap().status, MoveStatus::DuplicateCleaned);
         assert!(!tmp.path().join("A").join("book.txt").exists());
         assert_eq!(es.deleted_file_paths(), vec![(vec!["A/book.txt".to_string()], Vec::<i64>::new())]);
     }
@@ -1430,7 +1434,7 @@ mod candidate_building {
         let (result, err) = split(manager.move_classified_file(&tmp.path().join("A").join("book.txt"), "B", "book", opts).await);
 
         assert_eq!(err, None);
-        assert_eq!(result.unwrap()["action"], "move");
+        assert_eq!(result.unwrap().action, Some(MoveAction::Move));
         assert!(tmp.path().join("A").join("book.txt").exists());
     }
 }

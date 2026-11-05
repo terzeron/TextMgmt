@@ -11,7 +11,8 @@ use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use super::path_validator::relative_to;
 use super::{BookManager, ProgressFn};
@@ -57,6 +58,145 @@ pub struct MoveOpts {
     pub source_category: Option<String>,
 }
 
+/// 분류 제안 등급. 확실한 제안만 미리 체크한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProposalGrade {
+    Certain,
+    Unsure,
+    Unknown,
+}
+
+/// 목적지 후보 하나. `source`는 근거의 종류(keyword·model·bookstore), `detail`은 사람이 읽는 설명이다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CategoryCandidate {
+    pub category: String,
+    pub source: String,
+    pub detail: String,
+}
+
+/// 파일 하나의 분류 제안. 파일을 옮기지 않는다. 기본값은 아직 분류하지 않은 자리다.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Proposal {
+    pub target_category: Option<String>,
+    pub grade: Option<ProposalGrade>,
+    pub confidence: Option<f64>,
+    /// 확신도를 보정한 예상 정답률.
+    pub expected_accuracy: Option<f64>,
+    pub source: Option<String>,
+    pub matched_keywords: Vec<String>,
+    /// 목적지와 다른 곳을 가리킨 모델 판정.
+    pub model_category: Option<String>,
+    pub reason: String,
+    pub candidates: Vec<CategoryCandidate>,
+}
+
+/// 제안 항목의 적용 상태.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ApplyStatus {
+    #[default]
+    Pending,
+    /// 옮기기 시작했다. 도중에 죽으면 이 상태로 남는다.
+    Moving,
+    Moved,
+    Failed,
+}
+
+/// 제안 목록의 한 행.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProposalItem {
+    pub file_path: String,
+    pub book_id: Option<i64>,
+    pub title: String,
+    pub current_category: String,
+    #[serde(flatten)]
+    pub proposal: Proposal,
+    pub apply_status: ApplyStatus,
+    pub apply_error: Option<String>,
+}
+
+/// 처리하지 못한 파일.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ItemFailure {
+    pub file_path: String,
+    pub error: String,
+}
+
+/// 카테고리 하나의 분류 제안 결과.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProposeResult {
+    pub content_type: String,
+    pub source_category: String,
+    pub total_count: usize,
+    pub processed_count: usize,
+    pub items: Vec<ProposalItem>,
+    pub failures: Vec<ItemFailure>,
+}
+
+/// 승인 항목 하나의 적용 결과.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppliedItem {
+    pub file_path: Option<String>,
+    pub target_category: Option<String>,
+    pub apply_status: ApplyStatus,
+    pub apply_error: Option<String>,
+}
+
+/// 분류 적용 결과.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApplyResult {
+    pub content_type: String,
+    pub total_count: usize,
+    pub applied_count: i64,
+    pub failed_count: i64,
+    pub results: Vec<AppliedItem>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MoveStatus {
+    /// 옮기지 않고 할 일만 알렸다.
+    DryRun,
+    #[default]
+    Moved,
+    /// 대상에 같은 내용이 있어 원본을 지웠다.
+    DuplicateCleaned,
+}
+
+/// 미리보기에서 할 일.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MoveAction {
+    /// 이미 목적지에 있다.
+    Noop,
+    DuplicateClean,
+    Move,
+}
+
+/// 분류된 파일 하나의 이동 결과.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MoveOutcome {
+    pub status: MoveStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<MoveAction>,
+    pub from: String,
+    pub to: String,
+    /// 새로 색인한 문서 ID. 실제로 옮겼을 때만 있다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub book_id: Option<i64>,
+    pub target_category: String,
+    pub deleted_count: i64,
+}
+
 /// 키워드 점수 순위: (카테고리, 맞은 키워드들).
 pub type Ranked = Vec<(String, Vec<String>)>;
 
@@ -93,37 +233,33 @@ fn normalize_text(value: &str) -> String {
     folded.split(char::is_whitespace).filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
-fn candidate(category: &str, source: &str, detail: String) -> Value {
-    json!({"category": category, "source": source, "detail": detail})
+fn candidate(category: &str, source: &str, detail: String) -> CategoryCandidate {
+    CategoryCandidate { category: category.to_string(), source: source.to_string(), detail }
 }
 
-fn keyword_candidate(category: &str, keywords: &[String]) -> Value {
+fn keyword_candidate(category: &str, keywords: &[String]) -> CategoryCandidate {
     let quoted = keywords.iter().map(|k| format!("'{k}'")).collect::<Vec<_>>().join(", ");
     candidate(category, "keyword", if quoted.is_empty() { "키워드 일치".to_string() } else { format!("키워드 {quoted} 일치") })
 }
 
-fn bookstore_candidate(category: &str, count: i64) -> Value {
+fn bookstore_candidate(category: &str, count: i64) -> CategoryCandidate {
     candidate(category, "bookstore", format!("서점 {count}곳 일치"))
 }
 
-fn model_candidate(category: &str) -> Value {
+fn model_candidate(category: &str) -> CategoryCandidate {
     candidate(category, "model", "모델 판정".to_string())
 }
 
-fn model_alternative_candidate(category: &str, score: f64) -> Value {
+fn model_alternative_candidate(category: &str, score: f64) -> CategoryCandidate {
     candidate(category, "model", format!("모델 대안 {score:.3}"))
 }
 
-fn category_of(c: &Value) -> &str {
-    c.get("category").and_then(Value::as_str).unwrap_or("")
-}
-
 /// 2순위가 빈 채로 나가지 않도록 모델이 매긴 다음 후보를 붙인다. `min_score` 미만은 붙이지 않는다.
-fn fill_second_with_model(mut candidates: Vec<Value>, model_candidates: &[(String, f64)], min_score: f64) -> Vec<Value> {
+fn fill_second_with_model(mut candidates: Vec<CategoryCandidate>, model_candidates: &[(String, f64)], min_score: f64) -> Vec<CategoryCandidate> {
     if candidates.len() >= 2 {
         return candidates;
     }
-    let taken: HashSet<String> = candidates.iter().map(|c| category_of(c).to_string()).collect();
+    let taken: HashSet<String> = candidates.iter().map(|c| c.category.clone()).collect();
     for (category, score) in model_candidates {
         if taken.contains(category) {
             continue;
@@ -138,11 +274,11 @@ fn fill_second_with_model(mut candidates: Vec<Value>, model_candidates: &[(Strin
 }
 
 /// 2순위를 서점 득표로 채운다. 이미 나온 카테고리는 건너뛴다.
-fn fill_second_with_bookstore(mut candidates: Vec<Value>, bookstore_candidates: &[(String, i64)]) -> Vec<Value> {
+fn fill_second_with_bookstore(mut candidates: Vec<CategoryCandidate>, bookstore_candidates: &[(String, i64)]) -> Vec<CategoryCandidate> {
     if candidates.len() >= 2 {
         return candidates;
     }
-    let taken: HashSet<String> = candidates.iter().map(|c| category_of(c).to_string()).collect();
+    let taken: HashSet<String> = candidates.iter().map(|c| c.category.clone()).collect();
     if let Some((category, count)) = bookstore_candidates.iter().find(|(c, _)| !taken.contains(c)) {
         candidates.push(bookstore_candidate(category, *count));
     }
@@ -154,7 +290,7 @@ fn vote_count_for(category: &str, bookstore_candidates: &[(String, i64)]) -> i64
 }
 
 /// 다수결 1위 후보. 득표수를 모르면 숫자를 지어내지 않는다.
-fn bookstore_majority_candidate(target: &str, bookstore_candidates: &[(String, i64)]) -> Value {
+fn bookstore_majority_candidate(target: &str, bookstore_candidates: &[(String, i64)]) -> CategoryCandidate {
     match bookstore_candidates.iter().find(|(c, _)| c == target) {
         Some((_, count)) => bookstore_candidate(target, *count),
         None => candidate(target, "bookstore", "서점 다수결로 일치".to_string()),
@@ -162,7 +298,14 @@ fn bookstore_majority_candidate(target: &str, bookstore_candidates: &[(String, i
 }
 
 /// 키워드가 정하지 못했을 때 `candidates`를 만든다. 1위는 이미 정해진 `target`을 그대로 앵커링한다.
-fn build_candidates(target: Option<&str>, method: &str, model_category: Option<&str>, bookstore_candidates: &[(String, i64)], model_candidates: &[(String, f64)], min_score: f64) -> Vec<Value> {
+fn build_candidates(
+    target: Option<&str>,
+    method: &str,
+    model_category: Option<&str>,
+    bookstore_candidates: &[(String, i64)],
+    model_candidates: &[(String, f64)],
+    min_score: f64,
+) -> Vec<CategoryCandidate> {
     if let Some(target) = target {
         let first = match method {
             "bookstore_majority" => bookstore_majority_candidate(target, bookstore_candidates),
@@ -230,10 +373,6 @@ fn next_numbered_path(target: &Path, max_index: usize) -> Option<PathBuf> {
 }
 
 impl BookManager {
-    pub const GRADE_CERTAIN: &'static str = "certain";
-    pub const GRADE_UNSURE: &'static str = "unsure";
-    pub const GRADE_UNKNOWN: &'static str = "unknown";
-
     /// 편집 화면으로 보낼 book_id. 이 저장소에서 book_id는 파일의 inode 번호다. 파일이 사라졌으면 `None`.
     pub fn book_id_for_path(file_path: &Path) -> Option<i64> {
         std::fs::metadata(file_path).ok().map(|m| m.ino() as i64)
@@ -371,11 +510,11 @@ impl BookManager {
     }
 
     /// 2순위가 빈 채로 나가지 않도록 모델이 매긴 다음 후보를 붙인다(하한 없음).
-    pub fn fill_second_with_model(&self, candidates: Vec<Value>, model_candidates: &[(String, f64)]) -> Vec<Value> {
+    pub fn fill_second_with_model(&self, candidates: Vec<CategoryCandidate>, model_candidates: &[(String, f64)]) -> Vec<CategoryCandidate> {
         fill_second_with_model(candidates, model_candidates, 0.0)
     }
 
-    pub fn fill_second_with_bookstore(&self, candidates: Vec<Value>, bookstore_candidates: &[(String, i64)]) -> Vec<Value> {
+    pub fn fill_second_with_bookstore(&self, candidates: Vec<CategoryCandidate>, bookstore_candidates: &[(String, i64)]) -> Vec<CategoryCandidate> {
         fill_second_with_bookstore(candidates, bookstore_candidates)
     }
 
@@ -384,7 +523,7 @@ impl BookManager {
     }
 
     /// 키워드가 정하지 못했을 때 `candidates`를 만든다.
-    pub fn build_candidates(&self, target: Option<&str>, method: &str, model_category: Option<&str>, bookstore_candidates: &[(String, i64)]) -> Vec<Value> {
+    pub fn build_candidates(&self, target: Option<&str>, method: &str, model_category: Option<&str>, bookstore_candidates: &[(String, i64)]) -> Vec<CategoryCandidate> {
         build_candidates(target, method, model_category, bookstore_candidates, &[], 0.0)
     }
 
@@ -405,7 +544,7 @@ impl BookManager {
     }
 
     /// 한 파일의 제안 목적지와 등급을 만든다. 파일을 옮기지 않는다. `classifier`가 없으면 키워드만 쓴다.
-    pub fn propose_category_for_file(&self, file_path: &Path, source_category: &str, mappings: &[(Value, Vec<Value>)], classifier: Option<&dyn BookClassifierApi>) -> Value {
+    pub fn propose_category_for_file(&self, file_path: &Path, source_category: &str, mappings: &[(Value, Vec<Value>)], classifier: Option<&dyn BookClassifierApi>) -> Proposal {
         let keyword = self.match_category_by_keywords(file_path, source_category, mappings);
         let tie_reason = keyword.tie_reason.clone();
         let mut classification = Classification { method: "not_found".to_string(), ..Classification::default() };
@@ -426,47 +565,67 @@ impl BookManager {
 
         if let Some(keyword_category) = &keyword.category {
             // 키워드가 목적지를 정했어도 모델이 다른 곳을 자신 있게 가리키면 등급을 '불확실'로 낮춘다.
-            let grade = if high && model_category.as_deref() == Some(keyword_category.as_str()) { Self::GRADE_CERTAIN } else { Self::GRADE_UNSURE };
+            let grade = if high && model_category.as_deref() == Some(keyword_category.as_str()) { ProposalGrade::Certain } else { ProposalGrade::Unsure };
             let mut candidates = vec![keyword_candidate(keyword_category, &keyword.keywords)];
             if let Some((category, keywords)) = keyword.ranked.iter().find(|(c, _)| c != keyword_category) {
                 candidates.push(keyword_candidate(category, keywords));
             }
             let candidates = fill_second_with_model(candidates, &classification.model_candidates, min_score);
-            return json!({
-                "target_category": keyword_category, "grade": grade, "confidence": confidence, "expected_accuracy": accuracy, "source": "keyword",
-                "matched_keywords": keyword.keywords, "model_category": if model_category.as_deref() != Some(keyword_category.as_str()) { json!(model_category) } else { Value::Null },
-                "reason": reason, "candidates": candidates,
-            });
+            return Proposal {
+                target_category: Some(keyword_category.clone()),
+                grade: Some(grade),
+                confidence,
+                expected_accuracy: accuracy,
+                source: Some("keyword".to_string()),
+                matched_keywords: keyword.keywords,
+                model_category: model_category.filter(|m| m != keyword_category),
+                reason,
+                candidates,
+            };
         }
 
         if let Some(tie_reason) = tie_reason {
             // 동점이면 등급은 unknown 그대로다. 사람이 골라야 체크박스가 켜진다.
-            let candidates: Vec<Value> = keyword.ranked.iter().take(2).map(|(c, k)| keyword_candidate(c, k)).collect();
+            let candidates = keyword.ranked.iter().take(2).map(|(c, k)| keyword_candidate(c, k)).collect();
             let candidates = fill_second_with_model(candidates, &classification.model_candidates, min_score);
-            return json!({
-                "target_category": Value::Null, "grade": Self::GRADE_UNKNOWN, "confidence": confidence, "expected_accuracy": accuracy, "source": "keyword",
-                "matched_keywords": keyword.keywords, "model_category": model_category, "reason": tie_reason, "candidates": candidates,
-            });
+            return Proposal {
+                target_category: None,
+                grade: Some(ProposalGrade::Unknown),
+                confidence,
+                expected_accuracy: accuracy,
+                source: Some("keyword".to_string()),
+                matched_keywords: keyword.keywords,
+                model_category,
+                reason: tie_reason,
+                candidates,
+            };
         }
 
         let classified = classification.category.clone();
         let method = classification.method.as_str();
         let (grade, target) = match (method, classified) {
-            ("model", Some(category)) if high => (Self::GRADE_CERTAIN, Some(category)),
-            ("bookstore_majority", Some(category)) => (Self::GRADE_CERTAIN, Some(category)),
-            ("bookstore_single", Some(category)) => (Self::GRADE_UNSURE, Some(category)),
+            ("model", Some(category)) if high => (ProposalGrade::Certain, Some(category)),
+            ("bookstore_majority", Some(category)) => (ProposalGrade::Certain, Some(category)),
+            ("bookstore_single", Some(category)) => (ProposalGrade::Unsure, Some(category)),
             // 점수가 낮은 모델 답은 목적지로 쓰지 않는다. 근거에만 남긴다.
-            _ => (Self::GRADE_UNKNOWN, None),
+            _ => (ProposalGrade::Unknown, None),
         };
         let candidates = build_candidates(target.as_deref(), method, model_category.as_deref(), &classification.bookstore_candidates, &classification.model_candidates, min_score);
-        json!({
-            "target_category": target, "grade": grade, "confidence": confidence, "expected_accuracy": accuracy, "source": method,
-            "matched_keywords": keyword.keywords, "model_category": model_category, "reason": reason, "candidates": candidates,
-        })
+        Proposal {
+            target_category: target,
+            grade: Some(grade),
+            confidence,
+            expected_accuracy: accuracy,
+            source: Some(method.to_string()),
+            matched_keywords: keyword.keywords,
+            model_category,
+            reason,
+            candidates,
+        }
     }
 
     /// 선택 카테고리 직하위 파일의 분류 제안을 만든다. 파일을 옮기지 않는다.
-    pub async fn propose_category_changes(&self, category: &str, mappings: Option<&Value>, options: ProposeOptions<'_>) -> Result<Value, String> {
+    pub async fn propose_category_changes(&self, category: &str, mappings: Option<&Value>, options: ProposeOptions<'_>) -> Result<ProposeResult, String> {
         if category.is_empty() {
             return Err("카테고리 이름이 비어있습니다".to_string());
         }
@@ -494,38 +653,35 @@ impl BookManager {
         let file_paths = self.iter_category_indexable_files(category, false);
         let total_count = file_paths.len();
         let mut processed_count = 0usize;
-        let mut items: Vec<Value> = Vec::new();
-        let mut failures: Vec<Value> = Vec::new();
+        let mut items: Vec<ProposalItem> = Vec::new();
+        let mut failures: Vec<ItemFailure> = Vec::new();
 
-        let report = |processed: usize, payload: Value| {
-            let Some(callback) = options.on_progress else { return };
-            let mut merged = Map::new();
-            merged.insert("total_count".into(), json!(total_count));
-            merged.insert("processed_count".into(), json!(processed));
-            if let Some(extra) = payload.as_object() {
-                merged.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+        // 진행 보고는 호출자가 그대로 저장하는 JSON 객체다. 항목 목록 키 하나와 건수를 싣는다.
+        let report = |processed: usize, key: &str, list: &[ProposalItem]| {
+            if let Some(callback) = options.on_progress {
+                callback(json!({"total_count": total_count, "processed_count": processed, key: list}));
             }
-            callback(Value::Object(merged));
+        };
+        let item_for = |file_path: &Path, rel_path: String, proposal: Proposal| ProposalItem {
+            file_path: rel_path,
+            book_id: Self::book_id_for_path(file_path),
+            title: file_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+            current_category: category.to_string(),
+            proposal,
+            apply_status: ApplyStatus::Pending,
+            apply_error: None,
         };
 
         // 분류를 시작하기 전에 대상 파일의 이름만 담은 행을 먼저 깔아 둔다.
-        let mut placeholders: Vec<Value> = Vec::new();
-        for file_path in &file_paths {
-            let Some(rel_path) = relative_to(file_path, &self.path_prefix) else { continue };
-            placeholders.push(json!({
-                "file_path": rel_path, "book_id": Self::book_id_for_path(file_path), "title": file_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
-                "current_category": category, "target_category": Value::Null, "grade": Value::Null, "confidence": Value::Null, "expected_accuracy": Value::Null,
-                "source": Value::Null, "matched_keywords": [], "model_category": Value::Null, "reason": "", "candidates": [], "apply_status": "pending", "apply_error": Value::Null,
-            }));
-        }
+        let placeholders: Vec<ProposalItem> = file_paths.iter().filter_map(|file_path| Some(item_for(file_path, relative_to(file_path, &self.path_prefix)?, Proposal::default()))).collect();
         for chunk in placeholders.chunks(PROPOSAL_PLACEHOLDER_CHUNK) {
-            report(processed_count, json!({"new_items": chunk}));
+            report(processed_count, "new_items", chunk);
         }
 
         for file_path in &file_paths {
             processed_count += 1;
             let Some(rel_path) = relative_to(file_path, &self.path_prefix) else {
-                failures.push(json!({"file_path": file_path.to_string_lossy(), "error": "잘못된 파일 경로입니다"}));
+                failures.push(ItemFailure { file_path: file_path.to_string_lossy().into_owned(), error: "잘못된 파일 경로입니다".to_string() });
                 continue;
             };
             let proposal = match &propose_hook {
@@ -534,39 +690,34 @@ impl BookManager {
             };
             let Ok(proposal) = proposal else {
                 log::error!("분류 제안 실패: {rel_path}");
-                failures.push(json!({"file_path": rel_path, "error": "분류 제안에 실패했습니다"}));
+                failures.push(ItemFailure { file_path: rel_path, error: "분류 제안에 실패했습니다".to_string() });
                 continue;
             };
-            let mut new_item = json!({
-                "file_path": rel_path, "book_id": Self::book_id_for_path(file_path), "title": file_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
-                "current_category": category, "apply_status": "pending", "apply_error": Value::Null,
-            });
-            if let (Some(target), Some(extra)) = (new_item.as_object_mut(), proposal.as_object()) {
-                target.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
-            }
-            items.push(new_item.clone());
+            let new_item = item_for(file_path, rel_path, proposal);
             // 진행 보고에는 이번 틱에서 분류가 끝난 항목만 싣는다. 누적 목록은 호출자에게 돌려준다.
-            report(processed_count, json!({"updated_items": [new_item]}));
+            report(processed_count, "updated_items", std::slice::from_ref(&new_item));
+            items.push(new_item);
         }
 
-        Ok(json!({"content_type": content_type, "source_category": category, "total_count": total_count, "processed_count": processed_count, "items": items, "failures": failures}))
+        Ok(ProposeResult { content_type: content_type.to_string(), source_category: category.to_string(), total_count, processed_count, items, failures })
     }
 
     /// 승인된 항목만 실제로 옮긴다.
-    pub async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &HashSet<String>, on_progress: Option<ProgressFn<'_>>) -> Result<Value, String> {
+    pub async fn apply_category_changes(&self, items: &[Value], allowed_file_paths: &HashSet<String>, on_progress: Option<ProgressFn<'_>>) -> Result<ApplyResult, String> {
         self.apply_category_changes_with(items, allowed_file_paths, ApplyOptions { on_progress, ..ApplyOptions::default() }).await
     }
 
     /// `apply_category_changes`의 전체 옵션 판. 목적지(`target_category`)는 브라우저가 준 값이라 `allowed_file_paths`와 안전한 이름인지 다시 검증한다.
-    pub async fn apply_category_changes_with(&self, items: &[Value], allowed_file_paths: &HashSet<String>, options: ApplyOptions<'_>) -> Result<Value, String> {
+    pub async fn apply_category_changes_with(&self, items: &[Value], allowed_file_paths: &HashSet<String>, options: ApplyOptions<'_>) -> Result<ApplyResult, String> {
         let content_type = options.content_type.unwrap_or("book");
-        let mut results: Vec<Value> = Vec::new();
+        let mut results: Vec<AppliedItem> = Vec::new();
         let (mut applied_count, mut failed_count) = (0i64, 0i64);
         let move_hook = self.seams().move_hook;
         let root = self.resolved_root().unwrap_or_else(|_| self.path_prefix.clone());
-        let notify = |payload: Value| {
+        // 한 건의 상태 변화. 호출자가 그 한 건만 저장한다.
+        let notify = |file_path: Option<&str>, status: ApplyStatus, error: Option<&str>| {
             if let Some(callback) = options.on_item_done {
-                callback(payload);
+                callback(json!({"file_path": file_path, "apply_status": status, "apply_error": error}));
             }
         };
 
@@ -578,7 +729,7 @@ impl BookManager {
             }
             let file_path_value = item.get("file_path").and_then(Value::as_str);
             let target_category = item.get("target_category").and_then(Value::as_str);
-            let mut apply_status = "failed";
+            let mut apply_status = ApplyStatus::Failed;
             let mut apply_error: Option<String> = None;
 
             // 목적지 이름 검사는 한 번만 한다(검사 대역이 호출 횟수를 셀 수 있다). 최상위 이름일 때만 검사한다.
@@ -604,7 +755,7 @@ impl BookManager {
                         // 제안 시점의 카테고리를 source_category로 써서 빈 디렉터리 정리 대상을 맞춘다.
                         let source_category = file_path.rsplit_once('/').map_or(Self::ROOT_CATEGORY, |(dir, _)| dir);
                         // 실제 이동 직전에 "moving"을 기록한다. 도중에 죽으면 pending이 아니라 moving으로 남아 "시도는 했다"를 알린다.
-                        notify(json!({"file_path": file_path, "apply_status": "moving", "apply_error": Value::Null}));
+                        notify(Some(file_path), ApplyStatus::Moving, None);
                         let moved = match &move_hook {
                             Some(hook) => hook(&absolute_path, target),
                             None => {
@@ -618,27 +769,27 @@ impl BookManager {
                             }
                         };
                         match moved {
-                            Ok(_) => apply_status = "moved",
+                            Ok(_) => apply_status = ApplyStatus::Moved,
                             Err(error) => apply_error = Some(error),
                         }
                     }
                 }
             }
 
-            if apply_status == "moved" {
+            if apply_status == ApplyStatus::Moved {
                 applied_count += 1;
             } else {
                 failed_count += 1;
             }
-            results.push(json!({"file_path": file_path_value, "target_category": target_category, "apply_status": apply_status, "apply_error": apply_error}));
-            notify(json!({"file_path": file_path_value, "apply_status": apply_status, "apply_error": apply_error}));
+            notify(file_path_value, apply_status, apply_error.as_deref());
+            results.push(AppliedItem { file_path: file_path_value.map(str::to_string), target_category: target_category.map(str::to_string), apply_status, apply_error });
             if let Some(callback) = options.on_progress {
                 // 제안 단계의 total_count와 섞이지 않게 apply 전용 키를 쓴다.
                 callback(json!({"apply_total_count": items.len(), "applied_count": applied_count, "failed_count": failed_count}));
             }
         }
 
-        Ok(json!({"content_type": content_type, "total_count": items.len(), "applied_count": applied_count, "failed_count": failed_count, "results": results}))
+        Ok(ApplyResult { content_type: content_type.to_string(), total_count: items.len(), applied_count, failed_count, results })
     }
 
     /// 같은 책의 사본인지 판정한다. 크기가 다르면 즉시 다른 파일이다. 읽기에 실패하면 중복이 아니라고 보수적으로 판정한다.
@@ -656,7 +807,7 @@ impl BookManager {
     }
 
     /// 분류된 파일을 대상 카테고리로 옮긴다. `opts`로 미리보기·중복 정리·빈 디렉터리 기준을 정한다.
-    pub async fn move_classified_file(&self, file_path: &Path, target_category: &str, content_type: &str, opts: MoveOpts) -> Result<Value, String> {
+    pub async fn move_classified_file(&self, file_path: &Path, target_category: &str, content_type: &str, opts: MoveOpts) -> Result<MoveOutcome, String> {
         let MoveOpts { dry_run, clean_existing, source_category } = opts;
         let source_category = source_category.as_deref();
         let root = self.resolved_root().unwrap_or_else(|_| self.path_prefix.clone());
@@ -667,12 +818,21 @@ impl BookManager {
             return Err("잘못된 대상 경로입니다".to_string());
         }
         let mut target_rel_path = relative_to(&target_path, &self.path_prefix).unwrap_or_default();
+        let outcome = |status: MoveStatus, action: Option<MoveAction>, to: &str, book_id: Option<i64>, deleted_count: i64| MoveOutcome {
+            status,
+            action,
+            from: old_rel_path.clone(),
+            to: to.to_string(),
+            book_id,
+            target_category: target_category.to_string(),
+            deleted_count,
+        };
         if self.path_exists(&target_path) {
             let is_same_file = self.fs.same_file(file_path, &target_path).unwrap_or(false);
             if is_same_file && old_rel_path == target_rel_path {
                 // 이미 목적지에 있다. 옮길 것이 없다고 답하고 끝낸다.
-                let status = if dry_run { "dry_run" } else { "moved" };
-                return Ok(json!({"status": status, "action": "noop", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0}));
+                let status = if dry_run { MoveStatus::DryRun } else { MoveStatus::Moved };
+                return Ok(outcome(status, Some(MoveAction::Noop), &target_rel_path, None, 0));
             }
             if !is_same_file && !same_content(file_path, &target_path) {
                 // 이름만 겹치고 내용이 다르면 서로 다른 책이다. 번호를 붙여 둘 다 남긴다.
@@ -685,7 +845,7 @@ impl BookManager {
                 // 내용이 같은 별개 파일이거나, 경로는 다른데 같은 실체인 하드링크다. 둘 다 "대상에 이미 있다"로 본다.
                 if clean_existing {
                     if dry_run {
-                        return Ok(json!({"status": "dry_run", "action": "duplicate_clean", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0}));
+                        return Ok(outcome(MoveStatus::DryRun, Some(MoveAction::DuplicateClean), &target_rel_path, None, 0));
                     }
                     if let Err(e) = self.fs.remove_file(file_path) {
                         return Err(format!("중복 파일 정리 실패: {e}"));
@@ -694,9 +854,7 @@ impl BookManager {
                         self.clean_empty_parent_dirs(file_path.parent().unwrap_or(Path::new("")), &self.category_dir(source));
                     }
                     return match self.es.delete_by_file_paths(std::slice::from_ref(&old_rel_path), None) {
-                        Ok(deleted_count) => {
-                            Ok(json!({"status": "duplicate_cleaned", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": deleted_count}))
-                        }
+                        Ok(deleted_count) => Ok(outcome(MoveStatus::DuplicateCleaned, None, &target_rel_path, None, deleted_count)),
                         Err(e) => Err(format!("중복 파일 정리 실패: {e}")),
                     };
                 }
@@ -705,7 +863,7 @@ impl BookManager {
         }
 
         if dry_run {
-            return Ok(json!({"status": "dry_run", "action": "move", "from": old_rel_path, "to": target_rel_path, "target_category": target_category, "deleted_count": 0}));
+            return Ok(outcome(MoveStatus::DryRun, Some(MoveAction::Move), &target_rel_path, None, 0));
         }
 
         let (old_book_id, old_doc): (Option<i64>, Option<Value>) = match self.fs.metadata(file_path) {
@@ -738,7 +896,7 @@ impl BookManager {
             self.clean_empty_parent_dirs(&old_parent, &self.category_dir(source));
         }
 
-        let outcome: Result<Value, String> = (|| {
+        let moved: Result<MoveOutcome, String> = (|| {
             let mut deleted_count = self.es.delete_by_file_paths(std::slice::from_ref(&old_rel_path), None).map_err(|e| e.to_string())?;
             let (new_book_id, mut new_doc) = match &old_doc {
                 Some(doc) => (std::fs::metadata(&target_path).map_err(|e| e.to_string())?.ino() as i64, doc.clone()),
@@ -758,10 +916,10 @@ impl BookManager {
                 Ok(_) => return Err("ES 적재 실패".to_string()),
                 Err(error) => return Err(error.to_string()),
             }
-            Ok(json!({"status": "moved", "from": old_rel_path, "to": target_rel_path, "book_id": new_book_id, "target_category": target_category, "deleted_count": deleted_count}))
+            Ok(outcome(MoveStatus::Moved, None, &target_rel_path, Some(new_book_id), deleted_count))
         })();
 
-        match outcome {
+        match moved {
             Ok(result) => Ok(result),
             Err(error) => {
                 let mut rollback_messages: Vec<String> = Vec::new();

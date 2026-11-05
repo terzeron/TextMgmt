@@ -2598,7 +2598,7 @@ fn test_propose_category_changes_records_value_error() {
     deps = deps.with_iter_category_indexable_files_override(Arc::new(|_cat: &str, _recursive: bool| vec![PathBuf::from("/outside/book.txt")]));
     let manager = BookManager::with_deps(deps);
     let result = run(manager.propose_category_changes("0_inbox", None, ProposeOptions::default())).unwrap();
-    assert!(result["failures"].as_array().unwrap().iter().any(|f| f.get("error").and_then(|e| e.as_str()).unwrap_or("").contains("잘못된 파일 경로")));
+    assert!(result.failures.iter().any(|f| f.error.contains("잘못된 파일 경로")));
 }
 
 /// 제안 생성이 학습된 모델의 판정을 그대로 제안에 담는지 본다. 파일은 옮기지 않는다.

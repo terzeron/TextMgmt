@@ -252,12 +252,13 @@ async fn run_classify_proposal_job(
             return;
         }
     };
-    if let (Some(state), Some(result)) = (state.as_object_mut(), result.as_object()) {
-        for (key, value) in result {
-            if key != "items" {
-                state.insert(key.clone(), value.clone());
-            }
-        }
+    // 항목은 이미 따로 저장했다. 상태 문서에는 건수와 실패 목록만 남긴다.
+    if let Some(state) = state.as_object_mut() {
+        state.insert("content_type".into(), json!(result.content_type));
+        state.insert("source_category".into(), json!(result.source_category));
+        state.insert("total_count".into(), json!(result.total_count));
+        state.insert("processed_count".into(), json!(result.processed_count));
+        state.insert("failures".into(), json!(result.failures));
         state.insert("status".into(), json!("ready"));
     }
     if let Err(error) = mapping.set_classify_proposal_status(state, &content_type) {
@@ -365,8 +366,8 @@ async fn run_classify_apply_job(
         }
     };
     state["status"] = json!("done");
-    state["applied_count"] = result["applied_count"].clone();
-    state["failed_count"] = result["failed_count"].clone();
+    state["applied_count"] = json!(result.applied_count);
+    state["failed_count"] = json!(result.failed_count);
     if let Err(error) = mapping.set_classify_proposal_status(state, &content_type) {
         log::error!("분류 적용 완료 상태 저장 실패: {error}");
         set_proposal_failed(mapping.as_ref(), &content_type, "분류 적용에 실패했습니다.");
@@ -486,6 +487,7 @@ pub(super) async fn delete_classify_proposal(_: RequireAdmin, State(deps): State
 #[cfg(test)]
 mod proposal_tests {
     use super::run_classify_proposal_job;
+    use crate::book_manager::{ProposalItem, ProposeResult};
     use crate::main::{BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges};
     use serde_json::{Value, json};
     use std::sync::{Arc, Mutex};
@@ -573,11 +575,12 @@ mod proposal_tests {
 
     #[async_trait::async_trait]
     impl BookManagerApi for ProgressProposalManager {
-        async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<Value, String> {
+        async fn propose_category_changes(&self, request: ProposeCategoryChanges<'_>) -> Result<ProposeResult, String> {
             if let Some(callback) = request.on_progress {
                 callback(self.progress.clone());
             }
-            self.error.clone().map_or_else(|| Ok(json!({"new_count": 2, "items": [{"internal": true}]})), Err)
+            let result = ProposeResult { content_type: "book".into(), source_category: "inbox".into(), total_count: 2, processed_count: 1, items: vec![ProposalItem::default()], failures: vec![] };
+            self.error.clone().map_or_else(|| Ok(result), Err)
         }
     }
 
@@ -610,7 +613,8 @@ mod proposal_tests {
         let mapping = run_flow(json!({"processed_count": 1, "new_items": [{"id": 1}], "updated_items": [{"id": 2}]}), None, false, false, false).await;
 
         assert_eq!(mapping.events.lock().unwrap().as_slice(), ["add:1", "update:1"]);
-        assert_eq!(*mapping.state.lock().unwrap(), json!({"status":"ready","processed_count":1,"new_count":2}));
+        // 항목(items)은 상태 문서에 넣지 않는다.
+        assert_eq!(*mapping.state.lock().unwrap(), json!({"status":"ready","content_type":"book","source_category":"inbox","total_count":2,"processed_count":1,"failures":[]}));
     }
 
     #[tokio::test]
@@ -628,6 +632,7 @@ mod proposal_tests {
 #[cfg(test)]
 mod tests {
     use super::{ClassifyProposalBody, flush_proposal_item_buffer, run_classify_apply_job, set_proposal_failed};
+    use crate::book_manager::ApplyResult;
     use crate::main::{ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError};
     use serde_json::json;
     use std::{collections::HashSet, sync::Mutex};
@@ -698,7 +703,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl BookManagerApi for ApplyManager {
-        async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<serde_json::Value, String> {
+        async fn apply_category_changes_with(&self, request: ApplyCategoryChanges<'_>) -> Result<ApplyResult, String> {
             if let Some(on_progress) = request.on_progress {
                 on_progress(json!({"processed_count":1}));
             }
@@ -708,7 +713,7 @@ mod tests {
             if let Some(should_continue) = request.should_continue {
                 let _ = should_continue();
             }
-            self.error.map_or_else(|| Ok(json!({"applied_count":1,"failed_count":0})), |error| Err(error.to_string()))
+            self.error.map_or_else(|| Ok(ApplyResult { applied_count: 1, ..ApplyResult::default() }), |error| Err(error.to_string()))
         }
     }
 
