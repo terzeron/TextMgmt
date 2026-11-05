@@ -381,22 +381,23 @@ impl ESManager {
         self.get_source(&doc_id.to_string()).map(|source| source.unwrap_or_else(|| json!({})))
     }
 
-    pub fn search_and_aggregate_by_category(&self) -> Result<Value, EsError> {
+    /// 카테고리별 문서 수.
+    pub fn search_and_aggregate_by_category(&self) -> Result<BTreeMap<String, i64>, EsError> {
         log::debug!("search_and_aggregate_by_category()");
         let body = json!({"size": 1, "aggs": {"unique_values": {"terms": {"field": "category", "size": 10000}}}});
         let result = self.es.send(&EsRequest::search(body))?;
         let buckets = result["aggregations"]["unique_values"]["buckets"].as_array().ok_or_else(|| parse_error("aggregations.unique_values.buckets가 없다"))?;
-        let mut counts = Map::new();
+        let mut counts = BTreeMap::new();
         for bucket in buckets {
             let key = bucket["key"].as_str().map(str::to_string).unwrap_or_else(|| bucket["key"].to_string());
-            counts.insert(key, bucket["doc_count"].clone());
+            counts.insert(key, bucket["doc_count"].as_i64().unwrap_or(0));
         }
-        Ok(Value::Object(counts))
+        Ok(counts)
     }
 
-    fn pdf_stats_of(pdfs: &Value) -> Value {
+    fn pdf_stats_of(pdfs: &Value) -> PdfStats {
         let int = |value: &Value| value["value"].as_f64().unwrap_or(0.0) as i64;
-        json!({"file_count": pdfs["doc_count"], "page_count": int(&pdfs["total_pages"]), "total_file_size": int(&pdfs["total_file_size"])})
+        PdfStats { file_count: pdfs["doc_count"].as_i64().unwrap_or(0), page_count: int(&pdfs["total_pages"]), total_file_size: int(&pdfs["total_file_size"]) }
     }
 
     fn pdf_aggs() -> Value {
@@ -404,22 +405,22 @@ impl ESManager {
     }
 
     /// 카테고리와 하위 카테고리의 PDF 수, 페이지 합계, 파일 크기를 계산한다.
-    pub fn search_category_pdf_stats(&self, category: &str) -> Result<Value, EsError> {
+    pub fn search_category_pdf_stats(&self, category: &str) -> Result<PdfStats, EsError> {
         let query = json!({"bool": {"filter": [category_or_children(category)]}});
         let response = self.es.send(&EsRequest::search(json!({"query": query, "size": 0, "aggs": {"pdfs": Self::pdf_aggs()}})))?;
         Ok(Self::pdf_stats_of(&response["aggregations"]["pdfs"]))
     }
 
     /// 여러 카테고리와 하위 경로의 PDF 수·페이지 합계를 한 번에 집계한다.
-    pub fn search_categories_pdf_stats(&self, categories: &[&str]) -> Result<Value, EsError> {
+    pub fn search_categories_pdf_stats(&self, categories: &[&str]) -> Result<BTreeMap<String, PdfStats>, EsError> {
         if categories.is_empty() {
-            return Ok(json!({}));
+            return Ok(BTreeMap::new());
         }
         let filters: Map<String, Value> = categories.iter().map(|c| (c.to_string(), category_or_children(c))).collect();
         let aggs = json!({"by_category": {"filters": {"filters": filters}, "aggs": {"pdfs": Self::pdf_aggs()}}});
         let response = self.es.send(&EsRequest::search(json!({"query": {"match_all": {}}, "size": 0, "aggs": aggs})))?;
         let buckets = response["aggregations"]["by_category"]["buckets"].as_object().ok_or_else(|| parse_error("aggregations.by_category.buckets가 없다"))?;
-        Ok(Value::Object(buckets.iter().map(|(category, bucket)| (category.clone(), Self::pdf_stats_of(&bucket["pdfs"]))).collect()))
+        Ok(buckets.iter().map(|(category, bucket)| (category.clone(), Self::pdf_stats_of(&bucket["pdfs"]))).collect())
     }
 
     /// 전체 문서를 (category, file_path, 문서 수)로 훑는다. 검색이 아니라 열거라서 composite 집계를 쓴다.

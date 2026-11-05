@@ -256,7 +256,9 @@ fn real_connector_connects_through_http_and_uses_env_index() {
 mod real_transport {
     use super::tls_server;
     use crate::common::shared_fixtures::transport;
-    use backend::es_manager::{CoverFileHits, DeleteByQueryResult, ESManager, EsError, EsRequest, EsTransport, Hit, HttpTransport, PagedHits, SimilarDocsArgs, UpdateByQueryResult, UpdateFields};
+    use backend::es_manager::{
+        CoverFileHits, DeleteByQueryResult, ESManager, EsError, EsRequest, EsTransport, Hit, HttpTransport, PagedHits, PdfStats, SimilarDocsArgs, UpdateByQueryResult, UpdateFields,
+    };
     use serde_json::{Value, json};
     use std::collections::{BTreeMap, HashMap};
     use std::process::Command;
@@ -413,15 +415,15 @@ mod real_transport {
 
         // 5. 카테고리 집계와 건수
         let aggregated = manager.search_and_aggregate_by_category().unwrap();
-        assert_eq!(aggregated, json!({"과학": 2, "소설/한국": 1, "소설/한국/현대": 1, "과학/물리": 1}));
+        assert_eq!(aggregated, BTreeMap::from([("과학".to_string(), 2), ("소설/한국".to_string(), 1), ("소설/한국/현대".to_string(), 1), ("과학/물리".to_string(), 1)]));
         assert_eq!(manager.count_by_category("소설/한국", false).unwrap(), 1);
         assert_eq!(manager.count_by_category("소설/한국", true).unwrap(), 2);
         assert_eq!(manager.count_by_categories(&["과학", "소설/한국"], true).unwrap(), BTreeMap::from([("과학".to_string(), 3), ("소설/한국".to_string(), 2)]));
         let covers = manager.aggregate_cover_categories();
         assert_eq!(covers.get("과학").map(|c| c.0), Some(2));
         assert!(!covers.contains_key("과학/물리"), "txt는 커버 형식이 아니다");
-        assert_eq!(manager.search_category_pdf_stats("과학").unwrap(), json!({"file_count": 2, "page_count": 700, "total_file_size": 7000}));
-        assert_eq!(manager.search_categories_pdf_stats(&["과학", "소설/한국"]).unwrap()["소설/한국"], json!({"file_count": 0, "page_count": 0, "total_file_size": 0}));
+        assert_eq!(manager.search_category_pdf_stats("과학").unwrap(), PdfStats { file_count: 2, page_count: 700, total_file_size: 7000 });
+        assert_eq!(manager.search_categories_pdf_stats(&["과학", "소설/한국"]).unwrap()["소설/한국"], PdfStats::default());
         let rows: Vec<(String, String, i64)> = manager.iter_all_category_file_paths(2).collect::<Result<_, _>>().unwrap();
         assert_eq!(rows.len(), 5);
         assert!(rows.contains(&("과학".to_string(), "과학/코스모스.pdf".to_string(), 1)));

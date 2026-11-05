@@ -133,16 +133,24 @@ async fn similar_names(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Origin
             return Ok(failure("유사 이름 검색에 실패했습니다."));
         }
     };
-    let reference = stats.get(&query.exclude_category).cloned().unwrap_or(Value::Null);
-    let mut result: Vec<Value> = matches.drain(..).map(|(category, name_score)| {
-        let value = stats.get(&category).cloned().unwrap_or(Value::Null);
-        let mut score = name_score * 70.0;
-        for key in ["file_count", "total_file_size", "page_count"] {
-            let v = value[key].as_i64().unwrap_or(0);
-            let r = reference[key].as_i64().unwrap_or(0);
-            if !reference.is_null() { score += if v == r { 10.0 } else if v.max(r) > 0 { 10.0 * v.min(r) as f64 / v.max(r) as f64 } else { 0.0 }; }
+    // 비교 기준 카테고리와 PDF 수·크기·쪽수가 가까울수록 점수를 더한다.
+    let reference = stats.get(&query.exclude_category).copied();
+    let similarity = |v: i64, r: i64| {
+        if v == r {
+            10.0
+        } else if v.max(r) > 0 {
+            10.0 * v.min(r) as f64 / v.max(r) as f64
+        } else {
+            0.0
         }
-        json!({"kind":"directory","id":category,"category":category,"label":category,"file_count":value["file_count"].as_i64().unwrap_or(0),"page_count":value["page_count"].as_i64().unwrap_or(0),"total_file_size":value["total_file_size"].as_i64().unwrap_or(0),"score":score})
+    };
+    let mut result: Vec<Value> = matches.drain(..).map(|(category, name_score)| {
+        let value = stats.get(&category).copied().unwrap_or_default();
+        let mut score = name_score * 70.0;
+        if let Some(r) = reference {
+            score += similarity(value.file_count, r.file_count) + similarity(value.total_file_size, r.total_file_size) + similarity(value.page_count, r.page_count);
+        }
+        json!({"kind":"directory","id":category,"category":category,"label":category,"file_count":value.file_count,"page_count":value.page_count,"total_file_size":value.total_file_size,"score":score})
     }).collect();
     result.sort_by(|a, b| {
         b["score"]

@@ -433,7 +433,7 @@ fn test_search_by_id_propagates_unexpected_errors() {
 fn test_aggregate_grouped_delete_insert_update_counts() {
     let es = new_es();
     let manager = make_manager(&es);
-    assert_eq!(manager.search_and_aggregate_by_category().unwrap(), json!({"A": 2}));
+    assert_eq!(manager.search_and_aggregate_by_category().unwrap(), BTreeMap::from([("A".to_string(), 2)]));
     assert_eq!(manager.delete_by_file_paths(&["/a"], Some(&[1])), 2);
 
     es.on("delete_by_query", |_| Err(runtime("fail")));
@@ -1711,7 +1711,7 @@ fn test_search_latest_docs_only_returns_cover_types() {
 
 mod api_facade {
     use super::common;
-    use backend::es_manager::{ESManager, EsError, EsTransport};
+    use backend::es_manager::{ESManager, EsError, EsTransport, PdfStats};
     use common::es_dummy::DummyEs;
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
@@ -1830,7 +1830,7 @@ mod api_facade {
         assert!(api.refresh().is_ok());
         assert_eq!(api.search_and_aggregate_by_category().unwrap(), BTreeMap::from([("A".into(), 2)]));
         assert!(api.iter_all_category_file_paths(10).unwrap().is_empty());
-        assert_eq!(api.search_categories_pdf_stats(&categories).unwrap()["A"]["page_count"], 3);
+        assert_eq!(api.search_categories_pdf_stats(&categories).unwrap()["A"].page_count, 3);
         let _ = api.search_category_pdf_stats("A");
         assert_eq!(api.get_by_id_source("1").unwrap(), None);
         assert_eq!(api.search_by_path_source("/books/a.epub").unwrap(), None);
@@ -1890,13 +1890,13 @@ mod api_facade {
         let (manager, es) = manager();
         es.on("search", |_| Ok(json!({"aggregations": {"pdfs": {"doc_count": 3, "total_pages": {"value": 120.0}, "total_file_size": {"value": null}}}})));
 
-        assert_eq!(manager.search_category_pdf_stats("A").unwrap(), json!({"file_count": 3, "page_count": 120, "total_file_size": 0}));
+        assert_eq!(manager.search_category_pdf_stats("A").unwrap(), PdfStats { file_count: 3, page_count: 120, total_file_size: 0 });
     }
 
     #[test]
     fn test_search_categories_pdf_stats_returns_empty_for_no_categories() {
         let (manager, es) = manager();
-        assert_eq!(manager.search_categories_pdf_stats(&[]).unwrap(), json!({}));
+        assert!(manager.search_categories_pdf_stats(&[]).unwrap().is_empty());
         assert!(es.calls_of("search").is_empty(), "빈 카테고리 목록은 검색을 부르면 안 된다");
     }
 
@@ -1910,7 +1910,7 @@ mod api_facade {
 
         assert_eq!(
             manager.search_categories_pdf_stats(&["A", "B"]).unwrap(),
-            json!({"A": {"file_count": 2, "page_count": 10, "total_file_size": 99}, "B": {"file_count": 0, "page_count": 0, "total_file_size": 0}})
+            BTreeMap::from([("A".to_string(), PdfStats { file_count: 2, page_count: 10, total_file_size: 99 }), ("B".to_string(), PdfStats::default())])
         );
     }
 

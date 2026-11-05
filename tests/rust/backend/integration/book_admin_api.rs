@@ -151,11 +151,11 @@ async fn category_preview_and_pdf_stats_use_real_manager_and_mask_stats_errors()
     std::fs::create_dir_all(tmp.path().join("A/child")).unwrap();
     std::fs::write(tmp.path().join("A/book.txt"), b"book").unwrap();
     let es = FakeEsManager::new();
-    es.with(|s| s.category_pdf_stats = json!({"file_count":2,"page_count":100}));
+    es.set_category_pdf_stats(json!({"file_count":2,"page_count":100}));
     let client = client(tmp.path(), es.clone(), Arc::new(Policy::default()), false);
     let response = client.get("/category-delete-preview?category=A").await;
     assert_eq!(response.json(), json!({"status":"success","result":{"category":"A","directory_count":1,"file_count":1,"es_count":1}}));
-    assert_eq!(client.get("/category-pdf-stats?category=A").await.json(), json!({"status":"success","result":{"file_count":2,"page_count":100}}));
+    assert_eq!(client.get("/category-pdf-stats?category=A").await.json(), json!({"status":"success","result":{"file_count":2,"page_count":100,"total_file_size":0}}));
     assert_eq!(client.get("/category-pdf-stats?category=_root").await.status, 400);
     assert_eq!(client.get("/category-pdf-stats").await.status, 422);
     es.fail("search_category_pdf_stats", "private details");

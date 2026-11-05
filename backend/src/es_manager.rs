@@ -18,6 +18,15 @@ use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 pub use es_client::EsError;
 pub use es_client::transport::{Conflicts, EsRequest, EsTransport, HttpTransport};
 
+/// 카테고리 PDF 통계.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct PdfStats {
+    pub file_count: i64,
+    pub page_count: i64,
+    pub total_file_size: i64,
+}
+
 /// `update_by_query` 결과. `failures`는 ES가 준 실패 항목 그대로다.
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
 #[serde(default)]
@@ -119,10 +128,10 @@ pub trait EsManagerApi: Send + Sync {
     fn iter_all_category_file_paths(&self, _batch: usize) -> Result<Vec<(String, String, i64)>, EsError> {
         Err(EsError::Unsupported)
     }
-    fn search_categories_pdf_stats(&self, _categories: &[String]) -> Result<Value, EsError> {
+    fn search_categories_pdf_stats(&self, _categories: &[String]) -> Result<BTreeMap<String, PdfStats>, EsError> {
         Err(EsError::Unsupported)
     }
-    fn search_category_pdf_stats(&self, _category: &str) -> Result<Value, EsError> {
+    fn search_category_pdf_stats(&self, _category: &str) -> Result<PdfStats, EsError> {
         Err(EsError::Unsupported)
     }
     fn get_by_id_source(&self, _id: &str) -> Result<Option<Value>, EsError> {
@@ -589,19 +598,18 @@ impl EsManagerApi for ESManager {
     }
 
     fn search_and_aggregate_by_category(&self) -> Result<BTreeMap<String, i64>, EsError> {
-        let counts = ESManager::search_and_aggregate_by_category(self)?;
-        Ok(counts.as_object().map(|o| o.iter().map(|(k, v)| (k.clone(), v.as_i64().unwrap_or(0))).collect()).unwrap_or_default())
+        ESManager::search_and_aggregate_by_category(self)
     }
 
     fn iter_all_category_file_paths(&self, batch: usize) -> Result<Vec<(String, String, i64)>, EsError> {
         ESManager::iter_all_category_file_paths(self, batch).collect()
     }
 
-    fn search_categories_pdf_stats(&self, categories: &[String]) -> Result<Value, EsError> {
+    fn search_categories_pdf_stats(&self, categories: &[String]) -> Result<BTreeMap<String, PdfStats>, EsError> {
         ESManager::search_categories_pdf_stats(self, &texts(categories))
     }
 
-    fn search_category_pdf_stats(&self, category: &str) -> Result<Value, EsError> {
+    fn search_category_pdf_stats(&self, category: &str) -> Result<PdfStats, EsError> {
         ESManager::search_category_pdf_stats(self, category)
     }
 

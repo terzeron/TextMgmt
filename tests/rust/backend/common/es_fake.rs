@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
 pub use backend::es_manager::Hit;
-use backend::es_manager::{DeleteByQueryResult, EsError, EsManagerApi, KeywordSearchArgs, PagedHits, SimilarDocsArgs, UpdateByQueryResult};
+use backend::es_manager::{DeleteByQueryResult, EsError, EsManagerApi, KeywordSearchArgs, PagedHits, PdfStats, SimilarDocsArgs, UpdateByQueryResult};
 use serde_json::{Value, json};
 
 pub type Docs = BTreeMap<i64, Value>;
@@ -54,8 +54,8 @@ pub struct State {
     pub deleted_by_category: DeleteByQueryResult,
     pub rename_result: UpdateByQueryResult,
     pub backfill_result: Value,
-    pub categories_pdf_stats: Value,
-    pub category_pdf_stats: Value,
+    pub categories_pdf_stats: BTreeMap<String, PdfStats>,
+    pub category_pdf_stats: PdfStats,
     /// `get_by_id_source`/`search_by_path_source`가 줄 `_source`. 키는 ID 문자열과 경로다.
     pub source_by_id: HashMap<String, Value>,
     pub source_by_path: HashMap<String, Value>,
@@ -95,8 +95,8 @@ impl Default for State {
             deleted_by_category: DeleteByQueryResult { deleted: 2, failures: vec![] },
             rename_result: UpdateByQueryResult { updated: 3, failures: vec![] },
             backfill_result: json!({"updated": 0, "skipped": 0, "failed": 0}),
-            categories_pdf_stats: json!({}),
-            category_pdf_stats: json!({}),
+            categories_pdf_stats: BTreeMap::new(),
+            category_pdf_stats: PdfStats::default(),
             source_by_id: HashMap::new(),
             source_by_path: HashMap::new(),
             updates: Vec::new(),
@@ -183,12 +183,13 @@ impl FakeEsManager {
         self.with(|s| s.latest_docs = (docs, total));
     }
 
+    /// `{카테고리: {file_count, page_count, total_file_size}}` 모양의 JSON을 받는다.
     pub fn set_categories_pdf_stats(&self, value: Value) {
-        self.with(|s| s.categories_pdf_stats = value);
+        self.with(|s| s.categories_pdf_stats = serde_json::from_value(value).expect("PDF 통계 모양"));
     }
 
     pub fn set_category_pdf_stats(&self, value: Value) {
-        self.with(|s| s.category_pdf_stats = value);
+        self.with(|s| s.category_pdf_stats = serde_json::from_value(value).expect("PDF 통계 모양"));
     }
 
     /// `get_by_id_source(id)`가 줄 `_source`. 분류기 조회 테스트의 `by_inode`.
@@ -402,14 +403,14 @@ impl EsManagerApi for FakeEsManager {
         }))
     }
 
-    fn search_categories_pdf_stats(&self, categories: &[String]) -> Result<Value, EsError> {
+    fn search_categories_pdf_stats(&self, categories: &[String]) -> Result<BTreeMap<String, PdfStats>, EsError> {
         self.enter("search_categories_pdf_stats", json!([categories]))?;
         Ok(self.with(|s| s.categories_pdf_stats.clone()))
     }
 
-    fn search_category_pdf_stats(&self, category: &str) -> Result<Value, EsError> {
+    fn search_category_pdf_stats(&self, category: &str) -> Result<PdfStats, EsError> {
         self.enter("search_category_pdf_stats", json!([category]))?;
-        Ok(self.with(|s| s.category_pdf_stats.clone()))
+        Ok(self.with(|s| s.category_pdf_stats))
     }
 
     fn get_by_id_source(&self, id: &str) -> Result<Option<Value>, EsError> {
