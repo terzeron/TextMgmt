@@ -2,7 +2,7 @@
 mod common;
 
 use auth_manager::auth_service::Claims;
-use backend::book_manager::ReloadedFiles;
+use book_manager::ReloadedFiles;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 

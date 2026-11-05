@@ -396,7 +396,7 @@ pub(super) async fn get_classify_proposal(_: RequireAdmin, State(deps): State<Ar
             if item.get("book_id").is_none_or(Value::is_null)
                 && let Some(file_path) = item.get("file_path").and_then(Value::as_str)
             {
-                item["book_id"] = crate::book_manager::BookManager::book_id_for_path(&path_prefix.join(file_path)).map_or(Value::Null, |id| json!(id));
+                item["book_id"] = book_manager::BookManager::book_id_for_path(&path_prefix.join(file_path)).map_or(Value::Null, |id| json!(id));
             }
             item
         })
@@ -478,7 +478,7 @@ pub(super) async fn delete_classify_proposal(_: RequireAdmin, State(deps): State
 mod proposal_tests {
     use super::run_classify_proposal_job;
     use crate::api_router::{BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges};
-    use crate::book_manager::{ProposalItem, ProposeResult};
+    use book_manager::{ProposalItem, ProposeResult};
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
@@ -624,7 +624,7 @@ mod proposal_tests {
 mod tests {
     use super::{ClassifyProposalBody, flush_proposal_item_buffer, run_classify_apply_job, set_proposal_failed};
     use crate::api_router::{ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError};
-    use crate::book_manager::ApplyResult;
+    use book_manager::ApplyResult;
     use serde_json::json;
     use std::{collections::HashSet, sync::Mutex};
 

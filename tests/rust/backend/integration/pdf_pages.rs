@@ -10,8 +10,8 @@ use std::time::Duration;
 use crate::common::pdf_env::{Env, env};
 use crate::common::shared_fixtures::create_test_pdf;
 use backend::api_router::{AppDeps, AuthMode, app_with};
-use backend::book_manager::BookManagerDeps;
-use backend::pdf_page_reader::{LopdfPageOps, PdfPageOps};
+use book_manager::BookManagerDeps;
+use book_manager::pdf_page_reader::{LopdfPageOps, PdfPageOps};
 use common::TestClient;
 use common::pdf::page_count_bytes;
 use serde_json::json;
@@ -435,7 +435,7 @@ mod test_pdf_pages_endpoint {
     #[tokio::test]
     async fn test_preview_page_limit_and_comics_route() {
         let e = env();
-        let comics = backend::comics_manager::ComicsManager::with_deps(BookManagerDeps::new(e.temp_dir.clone(), e.es.clone()));
+        let comics = book_manager::comics_manager::ComicsManager::with_deps(BookManagerDeps::new(e.temp_dir.clone(), e.es.clone()));
         let deps = AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager(e.bm.clone()).with_comics_manager(Arc::new(comics));
         let client = TestClient::with_app(app_with(deps));
         for prefix in ["", "/comics"] {

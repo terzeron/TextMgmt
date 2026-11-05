@@ -2,8 +2,8 @@
 
 #[path = "../common/mod.rs"]
 mod common;
+use crate::common::router_fixtures::ip_headers;
 use crate::common::shared_fixtures::DEFAULT_CLIENT_HOST;
-use crate::common::shared_fixtures::ip_headers;
 
 #[test]
 fn test_prefers_cf_connecting_ip_over_proxy_hops() {
@@ -48,8 +48,8 @@ fn test_keeps_full_ipv6() {
 }
 
 mod request_ip_prefix {
+    use crate::common::router_fixtures::ip_headers;
     use crate::common::shared_fixtures::DEFAULT_CLIENT_HOST;
-    use crate::common::shared_fixtures::ip_headers;
 
     #[test]
     fn test_masks_cf_connecting_ip() {

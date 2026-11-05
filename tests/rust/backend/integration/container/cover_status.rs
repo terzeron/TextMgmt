@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use backend::book_manager::{BookManager, BookManagerDeps, CoverBooksPager, CoverPage, CoverPageOpts};
-use backend::book_metadata::Book as CoverBook;
+use book_manager::book_metadata::Book as CoverBook;
+use book_manager::{BookManager, BookManagerDeps, CoverBooksPager, CoverPage, CoverPageOpts};
 use common::{
     epub::{EpubSpec, make_epub},
     es_fake::FakeEsManager,
@@ -465,7 +465,7 @@ async fn uncovered_http_uses_real_book_and_comic_managers() {
         let deps = if prefix.is_empty() {
             deps.with_book_manager(Arc::new(BookManager::with_deps(managers)))
         } else {
-            deps.with_comics_manager(Arc::new(backend::comics_manager::ComicsManager::with_deps(managers)))
+            deps.with_comics_manager(Arc::new(book_manager::comics_manager::ComicsManager::with_deps(managers)))
         };
         let client = common::TestClient::with_app(app_with(deps));
         let response = client.get(&format!("{prefix}/browse?uncovered=true&limit=2")).await;

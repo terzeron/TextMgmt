@@ -12,20 +12,20 @@ use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 
 use super::app_capabilities::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, UnavailableBookAccess, ViewHistoryApi};
 use super::google_oauth::GoogleIdTokenVerifier;
-use crate::book_manager::{BookManager, LoaderFileReader};
-use crate::book_manager::{BookManagerApi, UnavailableBookManager};
-use crate::comics_manager::ComicsManager;
-use crate::task_runner::{TaskRunner, ThreadRunner};
 use auth_manager::auth_service::{Claims, HttpStatusError};
 use auth_manager::auth_service::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
 use auth_manager::refresh_token_store::{RefreshTokenStoreApi, create_refresh_token_store};
+use book_manager::comics_manager::ComicsManager;
+use book_manager::task_runner::{TaskRunner, ThreadRunner};
+use book_manager::{BookManager, LoaderFileReader};
+use book_manager::{BookManagerApi, UnavailableBookManager};
 use bookstore::store_clients::BookstoreSearch;
 use cover_manager::cover_management::CoverHooks;
 use db::category_mapping::CategoryMapping;
 use search_manager::{ESManager, EsManagerApi, RealEsConnector};
 
 type TaskRuntimeFactory = Arc<dyn Fn() -> Result<tokio::runtime::Runtime, std::io::Error> + Send + Sync>;
-use crate::view_history_store::create_view_history_store;
+use book_manager::view_history_store::create_view_history_store;
 
 /// 테스트 중간에 바꿀 수 있는 인증 payload. `AuthMode::Shared`가 쓴다.
 pub struct AuthSlots {
@@ -393,8 +393,8 @@ mod tests {
 
     use super::{Claims, RuntimeBookAccess, Slot, build_book_manager, build_comics_manager};
     use crate::api_router::{BookAccess, BookManagerApi, BookStub, CategoryMappingApi};
-    use crate::book_metadata::{Book, BookLookupError};
     use async_trait::async_trait;
+    use book_manager::book_metadata::{Book, BookLookupError};
     use search_manager::{EsError, EsManagerApi};
 
     struct CountingEs(AtomicUsize);

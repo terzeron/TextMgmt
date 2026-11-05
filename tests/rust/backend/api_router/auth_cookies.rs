@@ -2,7 +2,7 @@
 
 #[path = "../common/mod.rs"]
 mod common;
-use crate::common::shared_fixtures::fixture;
+use crate::common::auth_fixtures::fixture;
 use backend::api_router::{ACCESS_COOKIE_NAME, CustomJSONResponse, REFRESH_COOKIE_NAME};
 use serde_json::json;
 

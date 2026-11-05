@@ -5,7 +5,7 @@
 //!
 //! 이 파일의 `BookManagerApi`, `CategoryMappingApi`, `ViewHistoryApi`, `BookAccess`는 라우트를 붙이는 쪽이 필요로 하는
 //! 메서드만 먼저 정의한 뼈대다. 새 라우트가 메서드를 더 필요로 하면 여기에 기본 구현과 함께 추가한다.
-//! (실제 `BookManager`가 생기면 `backend::book_manager`가 이 trait를 `pub use`하거나 구현한다.)
+//! (실제 `BookManager`가 생기면 `book_manager`가 이 trait를 `pub use`하거나 구현한다.)
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -13,11 +13,11 @@ use std::fmt;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::view_history_store::{RecentViews, ViewHistoryError, ViewHistoryStore};
 use auth_manager::auth_service::{Claims, HttpStatusError};
+use book_manager::view_history_store::{RecentViews, ViewHistoryError, ViewHistoryStore};
 use db::category_mapping::CategoryMapping;
 
-pub(crate) use crate::book_manager::UNIMPLEMENTED;
+pub(crate) use book_manager::UNIMPLEMENTED;
 
 // ---------------------------------------------------------------------------
 // Google 로그인

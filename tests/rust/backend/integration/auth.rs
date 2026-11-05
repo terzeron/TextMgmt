@@ -43,8 +43,9 @@
 #[path = "../common/mod.rs"]
 mod common;
 use crate::common::auth_fakes::{FixedRole, access_token};
+use crate::common::auth_fixtures::{decode, encode_hs256, fixture, make_request};
+use crate::common::shared_fixtures::FakeStore;
 use crate::common::shared_fixtures::now;
-use crate::common::shared_fixtures::{FakeStore, decode, encode_hs256, fixture, make_request};
 use auth_manager::auth_service::Claims;
 use auth_manager::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, HttpStatusError, TokenIssuer};
 use auth_manager::refresh_token_store::RefreshTokenStoreApi;

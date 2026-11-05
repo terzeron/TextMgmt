@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::super::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, ReloadProgress, RequestValidationError, RequireAdmin, Routes};
 use super::manager;
-use crate::book_manager::{MismatchReload, ReloadCounts};
+use book_manager::{MismatchReload, ReloadCounts};
 
 pub(super) fn routes() -> Routes {
     let mut routes = Routes::new();

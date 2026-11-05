@@ -7,8 +7,8 @@ use auth_manager::auth_service::Claims;
 use axum::body::Body;
 use axum::http::Request;
 use backend::api_router::{AppDeps, AuthMode, app_with};
-use backend::book_manager::{BookManager, BookManagerDeps, BookRef};
-use backend::pdf_page_reader::{LopdfOpener, PdfDoc, PdfError, PdfOpener};
+use book_manager::pdf_page_reader::{LopdfOpener, PdfDoc, PdfError, PdfOpener};
+use book_manager::{BookManager, BookManagerDeps, BookRef};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use common::faulty_fs::FaultyFs;
@@ -2437,7 +2437,7 @@ async fn test_html_routes_preserve_comics_prefix_and_download_attachment() {
     let app = app_with(
         AppDeps::new(AuthMode::Fixed(Claims::with_role("admin")))
             .with_book_manager(Arc::new(BookManager::with_deps(deps.clone())))
-            .with_comics_manager(Arc::new(backend::comics_manager::ComicsManager::with_deps(deps))),
+            .with_comics_manager(Arc::new(book_manager::comics_manager::ComicsManager::with_deps(deps))),
     );
     let client = TestClient::with_app(app);
     for prefix in ["", "/comics"] {

@@ -3,11 +3,13 @@
 #[path = "../common/mod.rs"]
 mod common;
 use crate::common::auth_fakes::FixedRole;
-use crate::common::shared_fixtures::{CallArgs, DeferredRunner, Fut, Fx, Mock, RecordedArgs, Store, arg, arg_or, effective, install_classify_status_store, ready, store_set};
-use crate::common::shared_fixtures::{ListDirFs, admin_payload, arr, enc, is_truthy, now_plus_3600, proposal_result};
+use crate::common::router_fixtures::Fx;
+use crate::common::router_fixtures::admin_payload;
+use crate::common::shared_fixtures::{CallArgs, DeferredRunner, Fut, Mock, RecordedArgs, Store, arg, arg_or, effective, install_classify_status_store, ready, store_set};
+use crate::common::shared_fixtures::{ListDirFs, arr, enc, is_truthy, now_plus_3600, proposal_result};
 use auth_manager::auth_service::Claims;
 use backend::api_router::{BookstoreFactory, BookstoreSearch, GoogleVerifier, TaskRunner};
-use backend::book_metadata::Book;
+use book_manager::book_metadata::Book;
 use bookstore::store_clients::SearchRow;
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -2423,8 +2425,10 @@ async fn test_classify_proposal_restarts_when_the_previous_run_died() {
 
 mod auth_refresh {
     use crate::common::auth_fakes::fx_with_refresh_store;
-    use crate::common::shared_fixtures::{Fx, Mock};
-    use crate::common::shared_fixtures::{now_plus_3600, set_cookies};
+    use crate::common::router_fixtures::Fx;
+    use crate::common::router_fixtures::set_cookies;
+    use crate::common::shared_fixtures::Mock;
+    use crate::common::shared_fixtures::now_plus_3600;
     use serde_json::{Value, json};
 
     #[tokio::test]

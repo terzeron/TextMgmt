@@ -3,7 +3,8 @@
 
 #[allow(unused_imports)]
 pub use super::auth_fixtures::{FixedRole, access_token};
-use super::shared_fixtures::{Fx, Mock};
+use super::router_fixtures::Fx;
+use super::shared_fixtures::Mock;
 use std::sync::Arc;
 
 // TODO(common): FakeGoogle, FakeStore는 main_mock, view_history_api도 쓴다. 이 파일로 옮긴다.

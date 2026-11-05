@@ -2,7 +2,7 @@
 mod common;
 use auth_manager::auth_service::Claims;
 use backend::api_router::{AppDeps, AuthMode, BookManagerApi, CategoryMappingApi, MappingError, app_with};
-use backend::book_manager::{BookManager, BookManagerDeps};
+use book_manager::{BookManager, BookManagerDeps};
 use common::TestClient;
 use common::es_fake::{FakeEsManager, Hit};
 use serde_json::{Value, json};
@@ -43,7 +43,7 @@ fn client(root: &Path, es: Arc<FakeEsManager>, mapping: Arc<Policy>, comics: boo
     let managers = BookManagerDeps::new(root.into(), es);
     let deps = AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_category_mapping(mapping);
     let deps =
-        if comics { deps.with_comics_manager(Arc::new(backend::comics_manager::ComicsManager::with_deps(managers))) } else { deps.with_book_manager(Arc::new(BookManager::with_deps(managers))) };
+        if comics { deps.with_comics_manager(Arc::new(book_manager::comics_manager::ComicsManager::with_deps(managers))) } else { deps.with_book_manager(Arc::new(BookManager::with_deps(managers))) };
     TestClient::with_app(app_with(deps))
 }
 

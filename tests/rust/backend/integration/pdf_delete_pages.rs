@@ -1,10 +1,10 @@
 #[path = "../common/mod.rs"]
 mod common;
-#[path = "../common/book_fixtures.rs"]
+#[path = "../../shared/book_fixtures.rs"]
 mod fx;
 
 use auth_manager::auth_service::Claims;
-use backend::book_manager::PdfEditResult;
+use book_manager::PdfEditResult;
 use std::fs;
 
 use crate::common::shared_fixtures::{error_text, split};

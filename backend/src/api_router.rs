@@ -38,13 +38,13 @@ mod routes_mapping;
 mod routes_pdf;
 mod routes_view_history;
 
-pub use crate::book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
-pub use crate::task_runner::{InlineRunner, TaskHandle, TaskRunner, ThreadRunner};
-pub use crate::view_history_store::MAX_RECENT_VIEWS;
 pub use app_capabilities::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, MappingError, UnavailableBookAccess, UnavailableGoogleVerifier, ViewHistoryApi};
 pub use app_deps::{AppDeps, AuthMode, AuthSlots, BookstoreFactory, RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS, Slot};
 pub use auth_cookies::{CustomJSONResponse, ResponseHeaders, clear_auth_cookies, custom_jsonable_encoder, get_cookie_settings, is_local_frontend_origin, set_auth_cookies};
 pub use auth_manager::auth_service::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, HttpStatusError, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RoleResolver, observation_hash};
+pub use book_manager::task_runner::{InlineRunner, TaskHandle, TaskRunner, ThreadRunner};
+pub use book_manager::view_history_store::MAX_RECENT_VIEWS;
+pub use book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
 pub use bookstore::store_clients::BookstoreSearch;
 pub use error_responses::{
     ApiError, ApiResult, GENERIC_SERVER_ERROR_DETAIL, RequestValidationError, SERVICE_UNAVAILABLE_DETAIL, VALIDATION_ERROR_DETAIL, general_exception_handler, http_exception_handler, json_response,

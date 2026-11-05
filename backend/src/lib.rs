@@ -4,11 +4,4 @@
 #![allow(special_module_name)]
 
 pub mod api_router;
-pub mod book_manager;
-pub mod book_metadata;
-pub mod comics_manager;
-pub mod epub_metadata_reader;
-pub mod pdf_page_reader;
 pub mod stderr_logger;
-pub mod task_runner;
-pub mod view_history_store;

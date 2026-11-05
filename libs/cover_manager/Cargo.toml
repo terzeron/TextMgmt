@@ -63,3 +63,11 @@ path = "../../tests/rust/cover_manager/integration/cover_sources.rs"
 [[test]]
 name = "integration_direct_cover_url"
 path = "../../tests/rust/cover_manager/integration/direct_cover_url.rs"
+
+[[test]]
+name = "epub_cover"
+path = "../../tests/rust/cover_manager/epub_cover.rs"
+
+[[test]]
+name = "direct_cover_url"
+path = "../../tests/rust/cover_manager/direct_cover_url.rs"

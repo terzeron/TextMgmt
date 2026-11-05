@@ -19,6 +19,7 @@ path = "src/bin/epubveri.rs"
 
 [dependencies]
 auth_manager = { path = "../libs/auth_manager" }
+book_manager = { path = "../libs/book_manager" }
 common = { path = "../libs/common" }
 cover_manager = { path = "../libs/cover_manager" }
 epubveri = "0.33.0"
@@ -26,35 +27,27 @@ search_manager = { path = "../libs/search_manager" }
 file_indexer = { path = "../libs/file_indexer" }
 fancy-regex = "0.14.0"
 async-trait = "0.1"
-base64 = "0.23.1"
 axum = { version = "0.8.9", features = ["multipart"] }
 bookstore = { path = "../libs/bookstore" }
-classifier = { path = "../libs/classifier" }
 db = { path = "../libs/db" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-htmlkit = { path = "../libs/htmlkit" }
-hwp3_parser = { path = "../libs/hwp3_parser" }
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 log = "0.4.34"
 md5 = { package = "md-5", version = "0.11.0" }
-lopdf.workspace = true
-regex = "1.13.1"
-roxmltree = "0.21.1"
-scraper = "0.29.0"
-sha2 = "0.11.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 sysdeps = { path = "../libs/sysdeps" }
-xml_recoverer = { path = "../libs/xml_recoverer" }
 ureq = { workspace = true, features = ["rustls"] }
-zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util"] }
 tokio-stream = "0.1.19"
 tokio-util = { version = "0.7.20", features = ["io"] }
-jpeg-encoder = "0.7.1"
 
 [dev-dependencies]
+lopdf.workspace = true
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+roxmltree = "0.21.1"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+jpeg-encoder = "0.7.1"
 es_client = { path = "../libs/es_client" }
 doc_reader = { path = "../libs/doc_reader" }
 stat = { path = "../libs/stat" }
@@ -67,63 +60,6 @@ tempfile = "3.27.0"
 testcontainers-modules = { version = "0.15.0", features = ["mysql", "blocking"] }
 tower = { version = "0.5.3", features = ["util"] }
 
-
-[[test]]
-name = "book_metadata"
-path = "../tests/rust/backend/book_metadata.rs"
-
-[[test]]
-name = "epub_metadata_reader"
-path = "../tests/rust/backend/epub_metadata_reader.rs"
-
-[[test]]
-name = "book_manager"
-path = "../tests/rust/backend/book_manager.rs"
-
-[[test]]
-name = "book_manager_catalog_query"
-path = "../tests/rust/backend/book_manager/catalog_query.rs"
-
-[[test]]
-name = "book_manager_cover_finder"
-path = "../tests/rust/backend/book_manager/cover_finder.rs"
-
-[[test]]
-name = "book_manager_epub_inspector"
-path = "../tests/rust/backend/book_manager/epub_inspector.rs"
-
-[[test]]
-name = "book_manager_file_reader"
-path = "../tests/rust/backend/book_manager/file_reader.rs"
-
-[[test]]
-name = "book_manager_html_previewer"
-path = "../tests/rust/backend/book_manager/html_previewer.rs"
-
-[[test]]
-name = "book_manager_pdf_edit"
-path = "../tests/rust/backend/book_manager/pdf_edit.rs"
-
-[[test]]
-name = "book_manager_preview_builder"
-path = "../tests/rust/backend/book_manager/preview_builder.rs"
-
-
-[[test]]
-name = "comics_manager"
-path = "../tests/rust/backend/comics_manager.rs"
-
-
-
-[[test]]
-name = "direct_cover_url"
-path = "../tests/rust/backend/direct_cover_url.rs"
-
-[[test]]
-name = "epub_cover"
-path = "../tests/rust/backend/epub_cover.rs"
-
-
 [[test]]
 name = "api_router"
 path = "../tests/rust/backend/api_router.rs"
@@ -131,10 +67,6 @@ path = "../tests/rust/backend/api_router.rs"
 [[test]]
 name = "api_router_google_oauth"
 path = "../tests/rust/backend/api_router/google_oauth.rs"
-
-[[test]]
-name = "pdf_page_reader"
-path = "../tests/rust/backend/pdf_page_reader.rs"
 
 [[test]]
 name = "stderr_logger"
@@ -176,8 +108,6 @@ path = "../tests/rust/backend/integration/cover.rs"
 name = "integration_cover_management"
 path = "../tests/rust/backend/integration/cover_management.rs"
 
-
-
 [[test]]
 name = "integration_epub_cover_set"
 path = "../tests/rust/backend/integration/epub_cover_set.rs"
@@ -185,7 +115,6 @@ path = "../tests/rust/backend/integration/epub_cover_set.rs"
 [[test]]
 name = "integration_epub_image_edit"
 path = "../tests/rust/backend/integration/epub_image_edit.rs"
-
 
 [[test]]
 name = "integration_loader_file_reader"
@@ -236,53 +165,6 @@ name = "api_router_request_extractors"
 path = "../tests/rust/backend/api_router/request_extractors.rs"
 
 [[test]]
-name = "book_manager_file_validator"
-path = "../tests/rust/backend/book_manager/file_validator.rs"
-
-[[test]]
-name = "book_manager_category_reloader"
-path = "../tests/rust/backend/book_manager/category_reloader.rs"
-
-[[test]]
-name = "book_manager_category_editor"
-path = "../tests/rust/backend/book_manager/category_editor.rs"
-
-[[test]]
-name = "book_manager_book_updater"
-path = "../tests/rust/backend/book_manager/book_updater.rs"
-
-[[test]]
-name = "book_manager_cover_list"
-path = "../tests/rust/backend/book_manager/cover_list.rs"
-
-[[test]]
-name = "book_manager_mismatch_reporter"
-path = "../tests/rust/backend/book_manager/mismatch_reporter.rs"
-
-[[test]]
-name = "book_manager_seam_accessors"
-path = "../tests/rust/backend/book_manager/seam_accessors.rs"
-
-[[test]]
-name = "book_manager_path_validator"
-path = "../tests/rust/backend/book_manager/path_validator.rs"
-
-[[test]]
-name = "book_manager_category_proposer"
-path = "../tests/rust/backend/book_manager/category_proposer.rs"
-
-[[test]]
-name = "book_manager_pdf_cover"
-path = "../tests/rust/backend/book_manager/pdf_cover.rs"
-
-
-
-
-[[test]]
-name = "epub_cover_xml_tree"
-path = "../tests/rust/backend/epub_cover/xml_tree.rs"
-
-[[test]]
 name = "integration_request_schema"
 path = "../tests/rust/backend/integration/request_schema.rs"
 
@@ -290,11 +172,3 @@ path = "../tests/rust/backend/integration/request_schema.rs"
 name = "api_router_error_responses"
 path = "../tests/rust/backend/api_router/error_responses.rs"
 
-
-[[test]]
-name = "comics_manager_api_adapter"
-path = "../tests/rust/backend/comics_manager/api_adapter.rs"
-
-[[test]]
-name = "book_manager_api_adapter"
-path = "../tests/rust/backend/book_manager/api_adapter.rs"

@@ -2,12 +2,12 @@
 use super::{kind, manager};
 use crate::api_router::request_extractors::lenient_bool;
 use crate::api_router::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, RequireAdmin, Routes};
-use crate::book_manager::{BookDeletion, CategoryDeletion, CategoryRename};
-use crate::book_metadata::Book;
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},
 };
+use book_manager::book_metadata::Book;
+use book_manager::{BookDeletion, CategoryDeletion, CategoryRename};
 use fancy_regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

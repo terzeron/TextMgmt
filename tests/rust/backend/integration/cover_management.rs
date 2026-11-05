@@ -13,7 +13,7 @@ use std::time::Duration;
 use crate::common::shared_fixtures::fetcher;
 use crate::common::shared_fixtures::{backups, opf_of, read, rev, str_of, truthy};
 use backend::api_router::{AppDeps, AuthMode, app_with};
-use backend::book_manager::{BookManager, BookManagerDeps};
+use book_manager::{BookManager, BookManagerDeps};
 use common::{
     TestClient,
     clock::Event,

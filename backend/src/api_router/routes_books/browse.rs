@@ -14,7 +14,7 @@ use crate::api_router::{
     request_extractors::{ApiQuery, RequireAuth, parse_py_bool},
     route_registry::Routes,
 };
-use crate::book_manager::{CoverPage, MAX_CATEGORY_PAGE_SIZE};
+use book_manager::{CoverPage, MAX_CATEGORY_PAGE_SIZE};
 
 pub(super) fn routes() -> Routes {
     Routes::new().get("/browse", &["require_auth"], browse).get("/comics/browse", &["require_auth"], browse)
@@ -65,7 +65,7 @@ async fn browse(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
     #[derive(serde::Serialize)]
     struct CoverBook {
         #[serde(flatten)]
-        book: crate::book_metadata::BookView,
+        book: book_manager::book_metadata::BookView,
         display_title: String,
     }
     let books: Vec<CoverBook> = items.into_iter().map(|(book, display_title)| CoverBook { book: super::catalog::book_view(&book, manager.as_ref()), display_title }).collect();

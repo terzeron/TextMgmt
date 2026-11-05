@@ -2,8 +2,8 @@
 mod common;
 use crate::common::pdf_edit_env::env;
 use crate::common::shared_fixtures::split;
-use backend::book_manager::PdfEditResult;
 use base64::Engine;
+use book_manager::PdfEditResult;
 use common::pdf::widths;
 use serde_json::json;
 use std::fs;
@@ -378,7 +378,7 @@ mod http_contract {
     use super::common::pdf::widths;
     use crate::common::pdf_edit_env::env;
     use crate::common::shared_fixtures::FetchImage;
-    use backend::book_manager::{BookManager, BookManagerDeps};
+    use book_manager::{BookManager, BookManagerDeps};
     use serde_json::json;
     use std::fs;
     use std::sync::Arc;
@@ -393,7 +393,7 @@ mod http_contract {
             if prefix.is_empty() {
                 deps = deps.with_book_manager(Arc::new(e.bm));
             } else {
-                deps = deps.with_comics_manager(Arc::new(backend::comics_manager::ComicsManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()))));
+                deps = deps.with_comics_manager(Arc::new(book_manager::comics_manager::ComicsManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()))));
             }
             let client = common::TestClient::with_app(app_with(deps));
             let response = client.post_json(&format!("{prefix}/pdf-pages/1/delete"), &json!({"pages":[2,4]})).await;
