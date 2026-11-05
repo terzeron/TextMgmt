@@ -404,29 +404,19 @@ impl BookManager {
 
     /// `from_env`와 같으나, 기본 대역 묶음을 `customize`로 고쳐 쓴다(예: loader 기반 `FileReader`를 꽂는다).
     pub fn from_env_with(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<BookManager, BookManagerError> {
-        let Some(dir) = env("TM_BOOK_DIR") else {
-            return Err(BookManagerError("The environment variable TM_BOOK_DIR is not set.".to_string()));
-        };
-        let path_prefix = PathBuf::from(dir);
-        log::debug!("{}", path_prefix.display());
-        let index_name = env("TM_ES_BOOK_INDEX").unwrap_or_default();
-        let es = es_factory(&index_name);
-        es.create_index().map_err(|e| BookManagerError(format!("create_index failed: {e}")))?;
-        let mut deps = BookManagerDeps::new(path_prefix, es);
-        if let Some(program) = env("TM_LOADER_BIN").filter(|p| !p.is_empty()) {
-            deps = deps.with_loader_program(&program);
-        }
-        let manager = BookManager::with_deps(customize(deps));
-        manager.start_created_time_backfill(matches!(env(CREATED_TIME_BACKFILL_ENV).unwrap_or_default().trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"), &index_name);
-        Ok(manager)
+        // 책 디렉터리가 없으면 ES에 연결하기 전에 멈춘다.
+        Self::book_dir(env)?;
+        let es = es_factory(&env("TM_ES_BOOK_INDEX").unwrap_or_default());
+        Self::from_env_with_es(env, es, customize)
+    }
+
+    fn book_dir(env: EnvFn) -> Result<PathBuf, BookManagerError> {
+        env("TM_BOOK_DIR").map(PathBuf::from).ok_or_else(|| BookManagerError("The environment variable TM_BOOK_DIR is not set.".to_string()))
     }
 
     /// 이미 연결한 ES manager로 운영 인스턴스를 만든다.
     pub fn from_env_with_es(env: EnvFn, es: Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<BookManager, BookManagerError> {
-        let Some(dir) = env("TM_BOOK_DIR") else {
-            return Err(BookManagerError("The environment variable TM_BOOK_DIR is not set.".to_string()));
-        };
-        let path_prefix = PathBuf::from(dir);
+        let path_prefix = Self::book_dir(env)?;
         log::debug!("{}", path_prefix.display());
         let index_name = env("TM_ES_BOOK_INDEX").unwrap_or_default();
         es.create_index().map_err(|e| BookManagerError(format!("create_index failed: {e}")))?;

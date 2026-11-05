@@ -489,24 +489,30 @@ impl CategoryMapping {
     }
 
     pub fn set_hidden(&self, category: &str, hidden: bool, content_type: &str) -> Result<bool, DbError> {
+        self.set_category_flag("set_hidden", "hidden_categories", category, hidden, content_type)
+    }
+
+    /// 카테고리 목록 테이블(`hidden_categories`, `latest_excluded_categories`)에 행을 넣거나 뺀다.
+    /// 넣기 실패는 `Ok(false)`, 빼기 실패는 오류다.
+    fn set_category_flag(&self, label: &str, table: &str, category: &str, on: bool, content_type: &str) -> Result<bool, DbError> {
         let result = self.tx(|conn| {
-            if hidden {
-                conn.execute("INSERT IGNORE INTO hidden_categories (category, content_type) VALUES (?, ?)", &[category.into(), content_type.into()])
+            if on {
+                conn.execute(&format!("INSERT IGNORE INTO {table} (category, content_type) VALUES (?, ?)"), &[category.into(), content_type.into()])
             } else {
-                conn.execute("DELETE FROM hidden_categories WHERE category = ? AND content_type = ?", &[category.into(), content_type.into()])
+                conn.execute(&format!("DELETE FROM {table} WHERE category = ? AND content_type = ?"), &[category.into(), content_type.into()])
             }
         });
-        match (hidden, result) {
+        match (on, result) {
             (_, Ok(_)) => {
-                log::info!("set_hidden({category}, {hidden}, {content_type}): success");
+                log::info!("{label}({category}, {on}, {content_type}): success");
                 Ok(true)
             }
             (true, Err(e)) => {
-                log::error!("set_hidden({category}, {hidden}, {content_type}) failed: {e}");
+                log::error!("{label}({category}, {on}, {content_type}) failed: {e}");
                 Ok(false)
             }
             (false, Err(e)) => {
-                log::error!("set_hidden({category}, {hidden}, {content_type}) failed: {e}");
+                log::error!("{label}({category}, {on}, {content_type}) failed: {e}");
                 Err(e)
             }
         }
@@ -523,27 +529,7 @@ impl CategoryMapping {
     }
 
     pub fn set_latest_excluded(&self, category: &str, excluded: bool, content_type: &str) -> Result<bool, DbError> {
-        let result = self.tx(|conn| {
-            if excluded {
-                conn.execute("INSERT IGNORE INTO latest_excluded_categories (category, content_type) VALUES (?, ?)", &[category.into(), content_type.into()])
-            } else {
-                conn.execute("DELETE FROM latest_excluded_categories WHERE category = ? AND content_type = ?", &[category.into(), content_type.into()])
-            }
-        });
-        match (excluded, result) {
-            (_, Ok(_)) => {
-                log::info!("set_latest_excluded({category}, {excluded}, {content_type}): success");
-                Ok(true)
-            }
-            (true, Err(e)) => {
-                log::error!("set_latest_excluded({category}, {excluded}, {content_type}) failed: {e}");
-                Ok(false)
-            }
-            (false, Err(e)) => {
-                log::error!("set_latest_excluded({category}, {excluded}, {content_type}) failed: {e}");
-                Err(e)
-            }
-        }
+        self.set_category_flag("set_latest_excluded", "latest_excluded_categories", category, excluded, content_type)
     }
 
     /// 카테고리명을 바꾼다. 키워드·숨김·최신 제외 테이블을 한 트랜잭션으로 갱신한다.

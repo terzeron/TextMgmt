@@ -343,17 +343,20 @@ impl BookAccess for RuntimeBookAccess {
     }
 }
 
-fn build_book_manager(env: EnvFn<'_>, es: Arc<dyn EsManagerApi>) -> Result<Arc<dyn BookManagerApi>, String> {
+/// 책·만화 디렉터리를 아는 loader 기반 파일 reader.
+fn loader_file_reader(env: EnvFn<'_>) -> Arc<LoaderFileReader> {
     let book_root = env("TM_BOOK_DIR").map(PathBuf::from).unwrap_or_default();
     let comics_root = env("TM_COMICS_DIR").map(PathBuf::from).unwrap_or_default();
-    let reader = Arc::new(LoaderFileReader::new(book_root, comics_root));
+    Arc::new(LoaderFileReader::new(book_root, comics_root))
+}
+
+fn build_book_manager(env: EnvFn<'_>, es: Arc<dyn EsManagerApi>) -> Result<Arc<dyn BookManagerApi>, String> {
+    let reader = loader_file_reader(env);
     BookManager::from_env_with_es(env, es, |deps| deps.with_file_reader(reader)).map(|manager| Arc::new(manager) as Arc<dyn BookManagerApi>).map_err(|e| e.to_string())
 }
 
 fn build_comics_manager(env: EnvFn<'_>, es: Arc<dyn EsManagerApi>) -> Result<Arc<dyn BookManagerApi>, String> {
-    let book_root = env("TM_BOOK_DIR").map(PathBuf::from).unwrap_or_default();
-    let comics_root = env("TM_COMICS_DIR").map(PathBuf::from).unwrap_or_default();
-    let reader = Arc::new(LoaderFileReader::new(book_root, comics_root));
+    let reader = loader_file_reader(env);
     ComicsManager::from_env_with_es(env, es, |deps| deps.with_file_reader(reader)).map(|manager| Arc::new(manager) as Arc<dyn BookManagerApi>).map_err(|e| e.to_string())
 }
 

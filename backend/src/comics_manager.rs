@@ -64,32 +64,23 @@ impl ComicsManager {
     }
 
     /// `from_env`와 같고, 운영용 reader 등 manager 의존성을 구성할 때 꽂는다.
+    /// `TM_LOADER_BIN`도 `from_env_with_es`와 같이 읽는다.
     pub fn from_env_with(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<ComicsManager, BookManagerError> {
-        let Some(dir) = env("TM_COMICS_DIR") else {
-            return Err(BookManagerError("The environment variable TM_COMICS_DIR is not set.".to_string()));
-        };
-        let Some(index_name) = env("TM_ES_COMICS_INDEX") else {
-            return Err(BookManagerError("The environment variable TM_ES_COMICS_INDEX is not set.".to_string()));
-        };
-        let path_prefix = PathBuf::from(dir);
-        log::debug!("{}", path_prefix.display());
-        let es_manager = es_factory(&index_name);
-        es_manager.create_index().map_err(|e| BookManagerError(format!("create_index failed: {e}")))?;
-        let mut manager = Self::with_deps(customize(BookManagerDeps::new(path_prefix, es_manager)));
-        manager.es_index_name = index_name;
-        manager.backfill_created_time_if_enabled(env);
-        Ok(manager)
+        // 디렉터리·색인 설정이 없으면 ES에 연결하기 전에 멈춘다.
+        let (_, index_name) = Self::comics_env(env)?;
+        Self::from_env_with_es(env, es_factory(&index_name), customize)
+    }
+
+    fn comics_env(env: EnvFn) -> Result<(PathBuf, String), BookManagerError> {
+        let missing = |name: &str| BookManagerError(format!("The environment variable {name} is not set."));
+        let dir = env("TM_COMICS_DIR").ok_or_else(|| missing("TM_COMICS_DIR"))?;
+        let index_name = env("TM_ES_COMICS_INDEX").ok_or_else(|| missing("TM_ES_COMICS_INDEX"))?;
+        Ok((PathBuf::from(dir), index_name))
     }
 
     /// 이미 연결한 ES manager로 운영 인스턴스를 만든다.
     pub fn from_env_with_es(env: EnvFn, es_manager: Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<ComicsManager, BookManagerError> {
-        let Some(dir) = env("TM_COMICS_DIR") else {
-            return Err(BookManagerError("The environment variable TM_COMICS_DIR is not set.".to_string()));
-        };
-        let Some(index_name) = env("TM_ES_COMICS_INDEX") else {
-            return Err(BookManagerError("The environment variable TM_ES_COMICS_INDEX is not set.".to_string()));
-        };
-        let path_prefix = PathBuf::from(dir);
+        let (path_prefix, index_name) = Self::comics_env(env)?;
         log::debug!("{}", path_prefix.display());
         es_manager.create_index().map_err(|e| BookManagerError(format!("create_index failed: {e}")))?;
         let mut deps = BookManagerDeps::new(path_prefix, es_manager);

@@ -417,28 +417,20 @@ pub(super) async fn delete_classify_proposal_item(
     OriginalUri(uri): OriginalUri,
     ApiQuery(query): ApiQuery<ProposalItemQuery>,
 ) -> ApiResult<Json<Value>> {
-    let content_type = kind(&uri).to_string();
-    let mapping = deps.category_mapping().map_err(|_| ApiError::unavailable())?;
-    let status = tokio::task::spawn_blocking({
-        let mapping = mapping.clone();
-        let content_type = content_type.clone();
-        move || mapping.get_classify_proposal_status(&content_type, 300)
-    })
-    .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
-    if matches!(status["status"].as_str(), Some("running" | "applying")) {
-        return Ok(Json(json!({"status":"failure","error":"작업이 진행 중입니다."})));
-    }
-    let deleted = tokio::task::spawn_blocking(move || mapping.delete_classify_proposal_item(&query.file_path, &content_type))
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(Json(json!({"status":"success","result":{"deleted_count":deleted}})))
+    delete_proposal_items_when_idle(&deps, &uri, move |mapping, content_type| mapping.delete_classify_proposal_item(&query.file_path, content_type)).await
 }
 
 pub(super) async fn delete_applied_classify_proposal_items(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri) -> ApiResult<Json<Value>> {
-    let content_type = kind(&uri).to_string();
+    delete_proposal_items_when_idle(&deps, &uri, |mapping, content_type| mapping.delete_applied_classify_proposal_items(content_type)).await
+}
+
+/// 분류 제안·적용 작업이 돌고 있지 않을 때만 `delete`로 제안 항목을 지우고 지운 개수를 돌려준다.
+async fn delete_proposal_items_when_idle(
+    deps: &AppDeps,
+    uri: &axum::http::Uri,
+    delete: impl FnOnce(&dyn CategoryMappingApi, &str) -> Result<u64, MappingError> + Send + 'static,
+) -> ApiResult<Json<Value>> {
+    let content_type = kind(uri).to_string();
     let mapping = deps.category_mapping().map_err(|_| ApiError::unavailable())?;
     let status = tokio::task::spawn_blocking({
         let mapping = mapping.clone();
@@ -451,10 +443,7 @@ pub(super) async fn delete_applied_classify_proposal_items(_: RequireAdmin, Stat
     if matches!(status["status"].as_str(), Some("running" | "applying")) {
         return Ok(Json(json!({"status":"failure","error":"작업이 진행 중입니다."})));
     }
-    let deleted = tokio::task::spawn_blocking(move || mapping.delete_applied_classify_proposal_items(&content_type))
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let deleted = tokio::task::spawn_blocking(move || delete(mapping.as_ref(), &content_type)).await.map_err(|e| ApiError::Internal(e.to_string()))?.map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(json!({"status":"success","result":{"deleted_count":deleted}})))
 }
 
