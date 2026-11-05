@@ -94,8 +94,13 @@ pub fn stat_created_time(st: &StatResult) -> NaiveDateTime {
     stat_created_time_with_source(st).0
 }
 
-/// ISO 8601 문자열. 마이크로초가 0이면 소수부를 생략한다.
+/// ISO 8601 문자열. 소수부는 0이어도 항상 마이크로초 6자리로 쓴다.
 pub fn iso(dt: NaiveDateTime) -> String {
+    dt.format("%Y-%m-%dT%H:%M:%S%.6f").to_string()
+}
+
+/// [`iso`]의 짧은 형태. 마이크로초가 0이면 소수부를 생략한다. loader가 만드는 색인 레코드(`record_builder`)가 쓴다.
+pub fn iso_short(dt: NaiveDateTime) -> String {
     let base = dt.format("%Y-%m-%dT%H:%M:%S").to_string();
     match dt.nanosecond() / 1000 {
         0 => base,
@@ -104,7 +109,7 @@ pub fn iso(dt: NaiveDateTime) -> String {
 }
 
 pub fn stat_created_time_iso(st: &StatResult) -> String {
-    iso(stat_created_time(st))
+    iso_short(stat_created_time(st))
 }
 
 /// btime 조회 방법을 바꿔 끼울 수 있는 본체. `stat`이 없으면 경로를 stat한다.
@@ -127,7 +132,7 @@ pub fn path_created_time(path: &Path, stat: Option<&StatResult>) -> io::Result<N
 }
 
 pub fn path_created_time_iso_with(path: &Path, stat: Option<&StatResult>, btime: &dyn Fn(&Path) -> Option<NaiveDateTime>) -> io::Result<String> {
-    Ok(iso(path_created_time_with(path, stat, btime)?.0))
+    Ok(iso_short(path_created_time_with(path, stat, btime)?.0))
 }
 
 pub fn path_created_time_iso(path: &Path, stat: Option<&StatResult>) -> io::Result<String> {

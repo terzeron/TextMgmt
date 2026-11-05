@@ -3,9 +3,8 @@
 //! 만화 루트와 ES 색인을 따로 보관하고 도서 처리 기능은 `BookManager`에 위임한다.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Instant;
 
 use serde_json::Value;
 use sysdeps::EnvFn;
@@ -22,12 +21,6 @@ const CREATED_TIME_BACKFILL_ENV: &str = "TM_BACKFILL_CREATED_TIME_ON_STARTUP";
 
 fn env_flag_enabled(env: EnvFn, name: &str) -> bool {
     matches!(env(name).unwrap_or_default().trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on")
-}
-
-/// 단조 증가하는 초. 0.0은 "없음"으로 쓰므로 프로세스 시작 시점에서 1초를 더한다.
-fn monotonic_seconds() -> f64 {
-    static ORIGIN: OnceLock<Instant> = OnceLock::new();
-    ORIGIN.get_or_init(Instant::now).elapsed().as_secs_f64() + 1.0
 }
 
 pub struct ComicsManager {
@@ -144,7 +137,8 @@ impl ComicsManager {
 
     pub fn set_mismatch_cache(&mut self, cache: Value) {
         self.mismatch_cache = Some(cache);
-        self.mismatch_cache_time = monotonic_seconds();
+        // 0.0은 "없음"으로 쓰므로 단조 시각에 1초를 더한다.
+        self.mismatch_cache_time = sysdeps::Clock::monotonic(&sysdeps::SystemClock) + 1.0;
     }
 
     pub fn clear_mismatch_cache(&mut self) {

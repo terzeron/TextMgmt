@@ -600,14 +600,10 @@ impl XmlElement {
 
     /// 문자열로 다시 쓴다.
     pub fn tostring(&self) -> String {
-        let attrs: String = self.attributes.iter().map(|(k, v)| format!(" {k}=\"{}\"", escape(v))).collect();
-        let body: String = self.text.as_deref().map(escape).unwrap_or_default() + &self.children.iter().map(XmlElement::tostring).collect::<String>();
+        let attrs: String = self.attributes.iter().map(|(k, v)| format!(" {k}=\"{}\"", htmlkit::escape_html(v))).collect();
+        let body: String = self.text.as_deref().map(htmlkit::escape_html).unwrap_or_default() + &self.children.iter().map(XmlElement::tostring).collect::<String>();
         format!("<{}{attrs}>{body}</{}>", self.name, self.name)
     }
-}
-
-fn escape(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 /// 외부 엔티티, DTD, 네트워크 접근을 모두 끈 파서.

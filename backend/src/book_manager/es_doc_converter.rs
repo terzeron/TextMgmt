@@ -59,11 +59,6 @@ pub fn try_book_from_doc(path_prefix: &Path, book_id: i64, info: &Value, score: 
     Ok(book_from_doc(path_prefix, book_id, info, score))
 }
 
-/// 마이크로초 ISO 시각 문자열.
-pub fn iso(t: NaiveDateTime) -> String {
-    t.format("%Y-%m-%dT%H:%M:%S%.6f").to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,7 +69,7 @@ mod tests {
         for text in ["2024-01-02T03:04:05.123456", "2024-01-02 03:04:05", "2024-01-02T03:04", "2024-01-02 03:04", "2024-01-02"] {
             assert!(parse_iso(text).is_some(), "{text}");
         }
-        assert_eq!(iso(parse_iso("2024-01-02").unwrap()), "2024-01-02T00:00:00.000000");
+        assert_eq!(file_record::file_time::iso(parse_iso("2024-01-02").unwrap()), "2024-01-02T00:00:00.000000");
         assert_eq!(parse_iso("02/01/2024"), None);
     }
 

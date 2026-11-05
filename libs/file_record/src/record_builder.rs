@@ -6,7 +6,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::file_time::{StatResult, iso, path_created_time_with_source};
+use crate::file_time::{StatResult, iso_short, path_created_time_with_source};
 use common::zip_reader::open_zip;
 use doc_reader::epub::{EpubPath, read_epub_publisher, read_from_epub};
 use doc_reader::pdf::{PDF_STAGE_TIMEOUT, StageRunner, fast_page_count, read_from_pdf};
@@ -82,7 +82,7 @@ pub fn detect_file_type_with(path: &Path, declared: &str, inspect: Option<&FileI
 
 /// ISO 8601 문자열. 마이크로초가 0이면 소수부를 생략한다.
 pub fn now_iso() -> String {
-    iso(chrono::Local::now().naive_local())
+    iso_short(chrono::Local::now().naive_local())
 }
 
 fn page_count_by_lopdf(path: &Path, messages: &mut Vec<String>) -> usize {
@@ -206,7 +206,7 @@ pub fn read_file_with_hooks(
         let doc = json!({
             "category": category, "title": title, "author": author, "file_path": relative_path, "file_type": file_type,
             "file_size": file_size, "line_count": 0, "page_count": page_count, "isbn": "", "summary": "",
-            "created_time": iso(created), "created_time_source": created_source, "updated_time": now_iso(),
+            "created_time": iso_short(created), "created_time_source": created_source, "updated_time": now_iso(),
         });
         out.item = Some((inode, doc));
         return out;
@@ -332,7 +332,7 @@ pub fn read_file_with_hooks(
         ("page_count", json!(page_count)),
         ("isbn", json!(isbn_value)),
         ("summary", json!(summary)),
-        ("created_time", json!(iso(created))),
+        ("created_time", json!(iso_short(created))),
         ("created_time_source", json!(created_source)),
         ("updated_time", json!(now_iso())),
     ] {

@@ -12,7 +12,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::alphabet::STANDARD as STANDARD_ALPHABET;
@@ -398,10 +398,6 @@ fn decode_base64(data: &str) -> Result<Vec<u8>, base64::DecodeError> {
     base64_engine().decode(data)
 }
 
-fn now_seconds() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
-}
-
 fn is_epub_name(name: &str) -> bool {
     Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case("epub"))
 }
@@ -607,7 +603,7 @@ impl CoverManagement {
         let text = {
             if let Some(ttl) = ttl {
                 let modified = std::fs::metadata(path).ok()?.modified().ok()?;
-                let age = now_seconds() - modified.duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                let age = SystemClock.now() - modified.duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
                 if age >= ttl {
                     return None;
                 }

@@ -401,7 +401,7 @@ fn read_with_zip_regex_using(path: &Path, errors: &mut Vec<String>, parse: &Chap
     let Some(caps) = ROOTFILE.captures(&container) else { return Ok((String::new(), 0)) };
     let root_file = caps[1].to_owned();
     let root_dir = root_file.rsplit_once('/').map_or(String::new(), |(d, _)| d.to_owned());
-    let opf = decode_utf8_ignore(&read_member(&mut zip, &root_file)?);
+    let opf = text_decoder::decode_utf8_ignore(&read_member(&mut zip, &root_file)?);
 
     let mut result = String::new();
     let mut line_count = 0;
@@ -419,10 +419,6 @@ fn read_with_zip_regex_using(path: &Path, errors: &mut Vec<String>, parse: &Chap
         line_count += chapter_lines;
     }
     Ok((head_chars(&result, TEXT_SIZE).to_owned(), line_count))
-}
-
-fn decode_utf8_ignore(bytes: &[u8]) -> String {
-    text_decoder::decode_utf8_ignore(bytes)
 }
 
 /// EPUB 파일: (요약, 줄 수). 패키지 경로가 실패하면 정규식 경로로 간다.

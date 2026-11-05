@@ -38,11 +38,6 @@ pub(super) fn text_response(status_code: u16, content: impl Into<String>) -> Boo
     BookResponse { status_code, media_type: None, headers: Vec::new(), body: content.into().into_bytes() }
 }
 
-/// `html.escape(text)`: `&`, `<`, `>`, `"`, `'`를 바꾼다.
-fn escape_html(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#x27;")
-}
-
 fn no_transform_headers() -> Vec<(String, String)> {
     vec![("Content-Encoding".to_string(), "identity".to_string()), ("Cache-Control".to_string(), "no-transform".to_string())]
 }
@@ -757,7 +752,7 @@ fn filter_ncx(raw: &[u8], zp: &str, files_to_include: &BTreeSet<String>) -> Opti
 
 /// 평문을 문단(`<p>`)으로 나눈 미리보기 HTML. 빈 줄은 버린다.
 fn plain_text_html(plain_text: &str) -> String {
-    let paragraphs: String = escape_html(plain_text).split('\n').filter(|line| !line.trim().is_empty()).map(|line| format!("<p>{line}</p>")).collect::<Vec<_>>().join("\n");
+    let paragraphs: String = htmlkit::escape_html(plain_text).split('\n').filter(|line| !line.trim().is_empty()).map(|line| format!("<p>{line}</p>")).collect::<Vec<_>>().join("\n");
     format!("<html><body style=\"font-family:sans-serif;padding:1em;line-height:1.8\">{paragraphs}</body></html>")
 }
 

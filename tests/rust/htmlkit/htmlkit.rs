@@ -184,3 +184,11 @@ fn void_elements_close_at_their_start_tag_and_their_end_tag_is_not_a_boundary() 
 fn malformed_references_are_plain_text() {
     assert_eq!(text("&#; &#x; &1 &-x & "), "&#; &#x; &1 &-x & ");
 }
+
+#[test]
+fn escape_html_replaces_all_special_characters_and_escape_text_keeps_quotes() {
+    let raw = "a&b<c>d\"e'f";
+    assert_eq!(escape_html(raw), "a&amp;b&lt;c&gt;d&quot;e&#x27;f");
+    assert_eq!(escape_text(raw), "a&amp;b&lt;c&gt;d\"e'f");
+    assert_eq!(decode_entities(&escape_html(raw)), raw);
+}

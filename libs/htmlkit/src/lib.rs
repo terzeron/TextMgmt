@@ -131,6 +131,16 @@ pub fn tokenize(text: &str) -> (Vec<Tag>, bool) {
     (tags, malformed)
 }
 
+/// HTML 특수 문자를 모두 바꾼다: `&`, `<`, `>`, `"`, `'`. 속성값과 본문 어디에 넣어도 안전하다(Python `html.escape`와 같다).
+pub fn escape_html(text: &str) -> String {
+    escape_text(text).replace('"', "&quot;").replace('\'', "&#x27;")
+}
+
+/// 본문 텍스트용: `&`, `<`, `>`만 바꾼다. 따옴표는 그대로 둔다.
+pub fn escape_text(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
 pub fn decode_entities(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;

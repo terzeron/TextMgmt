@@ -176,11 +176,6 @@ const URL_ATTRS: &[&str] = &["href", "src", "action", "formaction", "xlink:href"
 /// 허용한 오탐: 사용자 정의 네임스페이스의 `d:data="javascript:..."`도 지표가 된다. 값이 URL처럼 위험할 때만 걸리므로 감수한다.
 const URL_ATTR_LOCALS: &[&str] = &["href", "src", "action", "formaction", "background", "poster", "data", "codebase", "manifest", "ping"];
 
-/// 속성 이름에서 접두사를 뗀 로컬 이름(마지막 `:` 뒤).
-fn attr_local(name: &str) -> &str {
-    name.rsplit(':').next().unwrap_or(name)
-}
-
 // ---------------------------------------------------------------- 정규식
 
 fn re(p: &str) -> Regex {
@@ -682,7 +677,7 @@ impl Scanner {
         };
         for (k, v) in &tag.attrs {
             // 리터럴 철자(`xlink:href` 포함)는 예전 그대로이고, 그 밖의 접두사는 로컬 이름으로 같은 검사를 받는다.
-            let local = attr_local(k);
+            let local = local_name(k);
             let literal = URL_ATTRS.contains(&k.as_str());
             if literal || URL_ATTR_LOCALS.contains(&local) {
                 let resource = rel_resource(if literal { k } else { local });
@@ -764,7 +759,7 @@ impl Scanner {
             "animate" | "set" | "animatetransform" | "animatemotion" => {
                 let target = tag.attr("attributename").unwrap_or("").to_lowercase();
                 // 보안 리뷰 지적: `x:href`처럼 접두사가 달라도 href 재작성이다. 예전 두 철자는 이 조건에 그대로 든다.
-                if attr_local(&target) == "href" {
+                if local_name(&target) == "href" {
                     self.add(Severity::Medium, "SVG_ANIMATE_HREF", name, "animation rewrites href");
                     for key in ["to", "values", "from"] {
                         if let Some(v) = tag.attr(key).filter(|v| classify_url(v) == UrlKind::Script) {

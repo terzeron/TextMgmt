@@ -87,15 +87,6 @@ fn strip_css_plain(css: &str) -> String {
     CSS_HOOKS.replace_all(&no_expr, "").into_owned()
 }
 
-/// 속성값을 큰따옴표 안에 쓸 수 있게 이스케이프한다. 작은따옴표와 `>`도 이스케이프해서 어떤 따옴표 규칙으로 읽어도 값 밖으로 나가지 못한다.
-fn escape_attr(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
-}
-
-fn escape_text(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-}
-
 // ---------------------------------------------------------------- 마크업
 
 struct Attr<'a> {
@@ -295,7 +286,7 @@ fn rewrite_tag(tag: &StartTag<'_>, lname: &str, changes: &mut Changes) -> String
             if cleaned != decoded {
                 // 원래 따옴표 종류(또는 따옴표 없음)와 무관하게 큰따옴표로 감싼 값으로 통째로 바꾼다.
                 let (from, to) = if quoted(a) { (a.vstart - 1, a.end.max(a.vend)) } else { (a.vstart, a.vend) };
-                edits.push((from, to, format!("\"{}\"", escape_attr(&cleaned))));
+                edits.push((from, to, format!("\"{}\"", htmlkit::escape_html(&cleaned))));
                 changes.add("style 속성 정리");
             }
         } else if URL_ATTRS.contains(&an.as_str()) && a.value.is_some() {
@@ -371,7 +362,7 @@ fn strip_pass(src: &str, _svg: bool) -> (String, Changes) {
         } else if rest.starts_with("<![CDATA[") {
             // CDATA는 마크업이 아니라 이스케이프한 글자로 남긴다.
             let close = rest.find("]]>");
-            out.push_str(&escape_text(&rest[9..close.unwrap_or(rest.len())]));
+            out.push_str(&htmlkit::escape_text(&rest[9..close.unwrap_or(rest.len())]));
             ch.add("CDATA 섹션");
             i += close.map_or(rest.len(), |k| k + 3);
         } else if rest.starts_with("<?") {

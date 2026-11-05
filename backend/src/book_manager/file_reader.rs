@@ -16,10 +16,10 @@ use file_record::record_builder;
 use serde_json::{Value, json};
 use sysdeps::FsOps;
 
-use super::es_doc_converter::iso;
 use super::path_validator::relative_to;
 use super::path_validator::{declared_type, is_indexable_type};
 use super::{Docs, FileReader};
+use file_record::file_time::iso;
 
 /// ZIP 기반으로 선언된 형식. 선언이 이 안이면 내용물을 열어보지 않는다.
 const ZIP_BASED_TYPES: [&str; 3] = ["epub", "cbz", "docx"];

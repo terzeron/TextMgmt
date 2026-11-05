@@ -83,6 +83,16 @@ fn stat_created_time_keeps_platform_birthtime_priority() {
 }
 
 #[test]
+fn iso_always_writes_six_fraction_digits_and_iso_short_drops_zero_microseconds() {
+    let whole = naive(2025, 1, 2, 3, 4, 5);
+    assert_eq!(iso(whole), "2025-01-02T03:04:05.000000");
+    assert_eq!(iso_short(whole), "2025-01-02T03:04:05");
+    let micro = whole + chrono::Duration::microseconds(42);
+    assert_eq!(iso(micro), "2025-01-02T03:04:05.000042");
+    assert_eq!(iso_short(micro), "2025-01-02T03:04:05.000042");
+}
+
+#[test]
 fn iso_helpers_drop_zero_microseconds() {
     let stat = ctime_only(local_ts(naive(2025, 1, 2, 3, 4, 5)));
     assert_eq!(stat_created_time_iso(&stat), "2025-01-02T03:04:05");
