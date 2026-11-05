@@ -32,7 +32,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use axum::http::Method;
 use backend::main::{AppDeps, AuthMode, BookAccess, BookStub, HttpStatusError, InlineRunner, MAX_RECENT_VIEWS, ViewHistoryApi, app_with, route_dependencies};
-use backend::view_history_store::{ViewHistoryError, ViewHistoryStore};
+use backend::view_history_store::{RecentViews, ViewHistoryError, ViewHistoryStore};
 use common::TestClient;
 use common::log_capture::LogCapture;
 use log::Level;
@@ -85,12 +85,12 @@ impl ViewHistoryApi for FakeStore {
         Ok(())
     }
 
-    fn list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError> {
+    fn list_recent_views(&self, limit: usize) -> Result<RecentViews, ViewHistoryError> {
         self.list_calls.lock().unwrap().push(limit);
         if let Some(message) = self.list_error.lock().unwrap().clone() {
             return Err(ViewHistoryError::Storage(message));
         }
-        Ok(self.list_result.lock().unwrap().clone())
+        Ok(serde_json::from_value(self.list_result.lock().unwrap().clone()).expect("조회 이력 모양"))
     }
 }
 

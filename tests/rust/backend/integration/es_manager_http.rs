@@ -257,7 +257,7 @@ mod real_transport {
     use super::tls_server;
     use crate::common::shared_fixtures::transport;
     use backend::es_manager::{
-        CoverFileHits, DeleteByQueryResult, ESManager, EsError, EsRequest, EsTransport, Hit, HttpTransport, PagedHits, PdfStats, SimilarDocsArgs, UpdateByQueryResult, UpdateFields,
+        BackfillReport, CoverFileHits, DeleteByQueryResult, ESManager, EsError, EsRequest, EsTransport, Hit, HttpTransport, PagedHits, PdfStats, SimilarDocsArgs, UpdateByQueryResult, UpdateFields,
     };
     use serde_json::{Value, json};
     use std::collections::{BTreeMap, HashMap};
@@ -483,7 +483,7 @@ mod real_transport {
         std::fs::create_dir_all(tmp.path().join("과학")).unwrap();
         std::fs::write(tmp.path().join("과학/코스모스.pdf"), "x").unwrap();
         let report = manager.backfill_created_time(tmp.path(), 2);
-        assert_eq!((report["updated"].clone(), report["skipped"].clone(), report["failed"].clone()), (json!(1), json!(4), json!(0)));
+        assert_eq!(report, BackfillReport { updated: 1, skipped: 4, failed: 0 });
         assert!(manager.search_by_id(3).unwrap()["created_time_source"].as_str().is_some());
 
         // 9. 이름 바꾸기, 삭제

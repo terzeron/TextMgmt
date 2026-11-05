@@ -63,7 +63,7 @@ fn trait_defaults_report_unsupported() {
     check(bare.search_group_representatives(&categories, &excluded).map(|_| ()));
 }
 
-use backend::es_manager::{CoverFileHit, CoverFileHits, DeleteByQueryResult, Hit, KeywordSearchArgs, PagedHits, UpdateByQueryResult};
+use backend::es_manager::{BackfillReport, CoverFileHit, CoverFileHits, DeleteByQueryResult, Hit, KeywordSearchArgs, PagedHits, UpdateByQueryResult};
 use std::collections::BTreeMap;
 
 /// `with_search_stub`이 받은 호출 하나: (query, sort, max_result_count).
@@ -1300,9 +1300,7 @@ fn test_backfill_created_time_updates_missing_docs() {
 
     let result = manager.backfill_created_time(tmp.path(), 500);
 
-    assert_eq!(result["updated"], json!(1));
-    assert_eq!(result["skipped"], json!(1));
-    assert_eq!(result["failed"], json!(0));
+    assert_eq!(result, BackfillReport { updated: 1, skipped: 1, failed: 0 });
     let bulk_body = bulk_body.lock().unwrap();
     assert_eq!(bulk_body[0], json!({"update": {"_index": "idx", "_id": "1"}}));
     assert!(bulk_body[1]["doc"].get("created_time").is_some());
@@ -1404,7 +1402,7 @@ fn test_backfill_created_time_all_error_branches() {
     mock.clear_scroll_error.store(true, Ordering::SeqCst);
     let manager = make_manager(&es);
     let res = manager.backfill_created_time(tmp.path(), 500);
-    assert_eq!(res["failed"], json!(1));
+    assert_eq!(res.failed, 1);
 
     // 2. bulk_body 비어있을 때 return (414) - 유효하지 않은 파일만 있는 경우 (384, 390-392)
     let (es2, mock2) = mock_backfill_es();
@@ -1415,8 +1413,8 @@ fn test_backfill_created_time_all_error_branches() {
     ];
     let manager2 = make_manager(&es2);
     let res2 = manager2.backfill_created_time(tmp.path(), 500);
-    assert_eq!(res2["skipped"], json!(3));
-    assert_eq!(res2["updated"], json!(0));
+    assert_eq!(res2.skipped, 3);
+    assert_eq!(res2.updated, 0);
 
     // 3. path_created_time_with_source OSError (407-409)
     let valid_file = tmp.path().join("test_file.txt");
@@ -1428,7 +1426,7 @@ fn test_backfill_created_time_all_error_branches() {
     stat_fail.set_metadata(fail_always(std::io::ErrorKind::Other, "stat error"));
     let manager3 = make_manager(&es3).with_fs(stat_fail);
     let res3 = manager3.backfill_created_time(tmp.path(), 500);
-    assert_eq!(res3["failed"], json!(1));
+    assert_eq!(res3.failed, 1);
 
     // 4. bulk_error (417-420)
     let (es4, mock4) = mock_backfill_es();
@@ -1436,7 +1434,7 @@ fn test_backfill_created_time_all_error_branches() {
     mock4.bulk_error.store(true, Ordering::SeqCst);
     let manager4 = make_manager(&es4);
     let res4 = manager4.backfill_created_time(tmp.path(), 500);
-    assert_eq!(res4["failed"], json!(1));
+    assert_eq!(res4.failed, 1);
 
     // 5. bulk_items_error (422-427)
     let (es5, mock5) = mock_backfill_es();
@@ -1444,8 +1442,8 @@ fn test_backfill_created_time_all_error_branches() {
     mock5.bulk_items_error.store(true, Ordering::SeqCst);
     let manager5 = make_manager(&es5);
     let res5 = manager5.backfill_created_time(tmp.path(), 500);
-    assert_eq!(res5["failed"], json!(1));
-    assert_eq!(res5["updated"], json!(0));
+    assert_eq!(res5.failed, 1);
+    assert_eq!(res5.updated, 0);
 }
 
 #[test]
@@ -1502,7 +1500,7 @@ fn test_backfill_created_time_resolve_oserror_and_clear_scroll_error() {
     let manager = make_manager(&es).with_fs(resolve_fail);
     let res = manager.backfill_created_time(tmp.path(), 500);
     assert!(cleared.load(Ordering::SeqCst));
-    assert_eq!(res["skipped"], json!(1));
+    assert_eq!(res.skipped, 1);
 }
 
 #[test]

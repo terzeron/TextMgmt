@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
 pub use backend::es_manager::Hit;
-use backend::es_manager::{DeleteByQueryResult, EsError, EsManagerApi, KeywordSearchArgs, PagedHits, PdfStats, SimilarDocsArgs, UpdateByQueryResult};
+use backend::es_manager::{BackfillReport, DeleteByQueryResult, EsError, EsManagerApi, KeywordSearchArgs, PagedHits, PdfStats, SimilarDocsArgs, UpdateByQueryResult};
 use serde_json::{Value, json};
 
 pub type Docs = BTreeMap<i64, Value>;
@@ -53,7 +53,7 @@ pub struct State {
     pub latest_docs: (Vec<Hit>, i64),
     pub deleted_by_category: DeleteByQueryResult,
     pub rename_result: UpdateByQueryResult,
-    pub backfill_result: Value,
+    pub backfill_result: BackfillReport,
     pub categories_pdf_stats: BTreeMap<String, PdfStats>,
     pub category_pdf_stats: PdfStats,
     /// `get_by_id_source`/`search_by_path_source`가 줄 `_source`. 키는 ID 문자열과 경로다.
@@ -94,7 +94,7 @@ impl Default for State {
             latest_docs: (Vec::new(), 0),
             deleted_by_category: DeleteByQueryResult { deleted: 2, failures: vec![] },
             rename_result: UpdateByQueryResult { updated: 3, failures: vec![] },
-            backfill_result: json!({"updated": 0, "skipped": 0, "failed": 0}),
+            backfill_result: BackfillReport::default(),
             categories_pdf_stats: BTreeMap::new(),
             category_pdf_stats: PdfStats::default(),
             source_by_id: HashMap::new(),
@@ -502,8 +502,8 @@ impl EsManagerApi for FakeEsManager {
         Ok(self.with(|s| s.latest_docs.clone()))
     }
 
-    fn backfill_created_time(&self, path_prefix: &Path) -> Result<Value, EsError> {
+    fn backfill_created_time(&self, path_prefix: &Path) -> Result<BackfillReport, EsError> {
         self.enter("backfill_created_time", json!([path_prefix.to_string_lossy()]))?;
-        Ok(self.with(|s| s.backfill_result.clone()))
+        Ok(self.with(|s| s.backfill_result))
     }
 }

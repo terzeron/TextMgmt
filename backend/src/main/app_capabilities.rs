@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::auth_service::{Claims, HttpStatusError};
-use crate::view_history_store::{ViewHistoryError, ViewHistoryStore};
+use crate::view_history_store::{RecentViews, ViewHistoryError, ViewHistoryStore};
 use db::category_mapping::CategoryMapping;
 
 pub(crate) use crate::book_manager::UNIMPLEMENTED;
@@ -55,7 +55,7 @@ pub trait ViewHistoryApi: Send + Sync {
         Err(ViewHistoryError::Storage(UNIMPLEMENTED.to_string()))
     }
 
-    fn list_recent_views(&self, _limit: usize) -> Result<Value, ViewHistoryError> {
+    fn list_recent_views(&self, _limit: usize) -> Result<RecentViews, ViewHistoryError> {
         Err(ViewHistoryError::Storage(UNIMPLEMENTED.to_string()))
     }
 }
@@ -65,7 +65,7 @@ impl ViewHistoryApi for ViewHistoryStore {
         ViewHistoryStore::record_view(self, email, content_type, book_id, title, category)
     }
 
-    fn list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError> {
+    fn list_recent_views(&self, limit: usize) -> Result<RecentViews, ViewHistoryError> {
         ViewHistoryStore::list_recent_views(self, limit)
     }
 }

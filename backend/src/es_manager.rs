@@ -18,6 +18,16 @@ use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 pub use es_client::EsError;
 pub use es_client::transport::{Conflicts, EsRequest, EsTransport, HttpTransport};
 
+/// `backfill_created_time`이 처리한 문서 수.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct BackfillReport {
+    pub updated: i64,
+    /// 파일이 없거나 책 루트 밖이라 건너뛴 문서.
+    pub skipped: i64,
+    pub failed: i64,
+}
+
 /// 카테고리 PDF 통계.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -174,7 +184,7 @@ pub trait EsManagerApi: Send + Sync {
     fn search_latest_docs(&self, _max_result_count: i64, _exclude_categories: Option<&[String]>) -> Result<(Vec<Hit>, i64), EsError> {
         Err(EsError::Unsupported)
     }
-    fn backfill_created_time(&self, _path_prefix: &Path) -> Result<Value, EsError> {
+    fn backfill_created_time(&self, _path_prefix: &Path) -> Result<BackfillReport, EsError> {
         Err(EsError::Unsupported)
     }
 
@@ -669,7 +679,7 @@ impl EsManagerApi for ESManager {
         Ok(ESManager::search_latest_docs(self, max_result_count, exclude.as_deref()))
     }
 
-    fn backfill_created_time(&self, path_prefix: &Path) -> Result<Value, EsError> {
+    fn backfill_created_time(&self, path_prefix: &Path) -> Result<BackfillReport, EsError> {
         Ok(ESManager::backfill_created_time(self, path_prefix, 500))
     }
 

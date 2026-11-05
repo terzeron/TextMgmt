@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
 use sysdeps::{Clock, EnvFn, SystemClock};
 
 use db::{ConnectionProvider, DbConnection, DbError, DbValue, MysqlConfig, mysql_provider};
@@ -158,7 +158,7 @@ impl ViewHistoryStore {
     }
 
     /// 사용자별로 책/만화 최근 조회 목록을 돌려준다. 사용자는 마지막 조회가 최근인 순서다.
-    pub fn list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError> {
+    pub fn list_recent_views(&self, limit: usize) -> Result<RecentViews, ViewHistoryError> {
         let mut conn = self.get_connection()?;
         let result = conn.fetch_all(SELECT_ALL_SQL, &[(self.max_history_rows as i64).into()]);
         conn.close();
@@ -167,20 +167,14 @@ impl ViewHistoryStore {
             log::warn!("조회 이력이 상한({})에 도달해 잘렸습니다.", self.max_history_rows);
         }
 
-        struct User {
-            email: String,
-            last_viewed_at: i64,
-            book: Vec<Value>,
-            comic: Vec<Value>,
-        }
-        let mut users: Vec<User> = Vec::new();
+        let mut users: Vec<UserViews> = Vec::new();
         let mut index: HashMap<String, usize> = HashMap::new();
         for row in &rows {
             let text = |key: &str| row.get(key).and_then(DbValue::as_str).unwrap_or("").to_string();
             let number = |key: &str| row.get(key).and_then(DbValue::as_i64).unwrap_or(0);
             let email = text("email");
             let slot = *index.entry(email.clone()).or_insert_with(|| {
-                users.push(User { email, last_viewed_at: 0, book: Vec::new(), comic: Vec::new() });
+                users.push(UserViews { email, ..UserViews::default() });
                 users.len() - 1
             });
             let user = &mut users[slot];
@@ -198,15 +192,43 @@ impl ViewHistoryStore {
             user.last_viewed_at = user.last_viewed_at.max(viewed_at);
             let bucket = if is_book { &mut user.book } else { &mut user.comic };
             if bucket.len() < limit {
-                bucket.push(json!({"book_id": number("book_id"), "title": text("title"), "category": text("category"), "viewed_at": viewed_at}));
+                bucket.push(RecentView { book_id: number("book_id"), title: text("title"), category: text("category"), viewed_at });
             }
         }
 
         // 안정 정렬이라 마지막 조회 시각이 같으면 SQL 순서를 유지한다.
         users.sort_by(|a, b| b.last_viewed_at.cmp(&a.last_viewed_at));
-        let users: Vec<Value> = users.into_iter().map(|u| json!({"email": u.email, "last_viewed_at": u.last_viewed_at, "book": u.book, "comic": u.comic})).collect();
-        Ok(json!({"limit": limit, "users": users}))
+        Ok(RecentViews { limit, users })
     }
+}
+
+/// 조회 이력 한 건.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecentView {
+    pub book_id: i64,
+    pub title: String,
+    pub category: String,
+    /// Unix 초.
+    pub viewed_at: i64,
+}
+
+/// 사용자 한 명의 최근 조회. 책과 만화는 각각 많아야 `limit`건이다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UserViews {
+    pub email: String,
+    pub last_viewed_at: i64,
+    pub book: Vec<RecentView>,
+    pub comic: Vec<RecentView>,
+}
+
+/// 사용자별 최근 조회 목록.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecentViews {
+    pub limit: usize,
+    pub users: Vec<UserViews>,
 }
 
 pub fn create_view_history_store() -> Result<ViewHistoryStore, ViewHistoryError> {

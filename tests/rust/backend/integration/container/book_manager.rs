@@ -62,7 +62,7 @@ use crate::common::shared_fixtures::{as_status, make_doc, outcome, outcome_or_de
 use backend::book_manager::{BookContent, BookManager, BookManagerDeps, BookManagerError, BookResponse, FileReader, ProposeOptions};
 use backend::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, FsOnlyFile, MismatchDetails, MismatchSummary, ReloadCounts};
 use backend::book_metadata::{Book, BookPage};
-use backend::es_manager::{DeleteByQueryResult, UpdateByQueryResult};
+use backend::es_manager::{BackfillReport, DeleteByQueryResult, UpdateByQueryResult};
 use backend::es_manager::{ESManager, EsError, EsManagerApi, Hit, PagedHits};
 use backend::pdf_page_reader::{PdfDoc, PdfError, PdfOpener, PdfPageOps};
 use classifier::Classify;
@@ -186,10 +186,10 @@ impl PdfPageOps for FakePdfPageOps {
 }
 
 /// `backfill_created_time`만 클로저로 바꿀 수 있는 ES 대역. 나머지는 `FakeEsManager`에 맡긴다.
-/// TODO(common): `FakeEsManager::on_backfill_created_time(Fn(&Path) -> Value)`가 생기면 이 구조체를 지운다.
+/// TODO(common): `FakeEsManager::on_backfill_created_time(Fn(&Path) -> BackfillReport)`가 생기면 이 구조체를 지운다.
 struct BackfillEs {
     inner: Arc<FakeEsManager>,
-    on_backfill: Box<dyn Fn(&Path) -> Value + Send + Sync>,
+    on_backfill: Box<dyn Fn(&Path) -> BackfillReport + Send + Sync>,
 }
 
 impl EsManagerApi for BackfillEs {
@@ -201,7 +201,7 @@ impl EsManagerApi for BackfillEs {
         self.inner.refresh()
     }
 
-    fn backfill_created_time(&self, path_prefix: &Path) -> Result<Value, EsError> {
+    fn backfill_created_time(&self, path_prefix: &Path) -> Result<BackfillReport, EsError> {
         Ok((self.on_backfill)(path_prefix))
     }
 }
@@ -1804,7 +1804,7 @@ fn test_book_manager_created_time_backfill_does_not_block_init() {
                 started.set();
                 release.wait(2);
                 finished.set();
-                json!({"updated": 0, "skipped": 0, "failed": 0})
+                BackfillReport::default()
             }),
         })
     };

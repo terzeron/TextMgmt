@@ -44,8 +44,8 @@ impl ESManager {
         Ok((iso, source))
     }
 
-    /// created_time이 없는 기존 ES 문서를 실제 파일 stat 기준으로 채운다. 반환: `{"updated", "skipped", "failed"}`
-    pub fn backfill_created_time(&self, path_prefix: &Path, batch_size: usize) -> Value {
+    /// created_time이 없는 기존 ES 문서를 실제 파일 stat 기준으로 채운다.
+    pub fn backfill_created_time(&self, path_prefix: &Path, batch_size: usize) -> BackfillReport {
         log::info!("backfill_created_time(index={}) start", self.index());
         let (mut updated, mut skipped, mut failed) = (0i64, 0i64, 0i64);
         let query = json!({"bool": {"should": [{"bool": {"must_not": [{"exists": {"field": "created_time"}}]}}, {"bool": {"must_not": [{"exists": {"field": "created_time_source"}}]}}], "minimum_should_match": 1}});
@@ -115,8 +115,8 @@ impl ESManager {
         {
             log::warn!("backfill_created_time refresh error: {e}");
         }
-        let result = json!({"updated": updated, "skipped": skipped, "failed": failed});
-        log::info!("backfill_created_time(index={}) done: {result}", self.index());
+        let result = BackfillReport { updated, skipped, failed };
+        log::info!("backfill_created_time(index={}) done: {result:?}", self.index());
         result
     }
 }

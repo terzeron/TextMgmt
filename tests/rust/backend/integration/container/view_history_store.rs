@@ -49,8 +49,9 @@ fn titles(result: &Value, email: &str, content_type: &str) -> Vec<String> {
     user[content_type].as_array().unwrap().iter().map(|item| item["title"].as_str().unwrap().to_string()).collect()
 }
 
+/// 최근 조회 목록의 응답 JSON 모양.
 fn list(store: &ViewHistoryStore) -> Value {
-    store.list_recent_views(MAX_RECENT_VIEWS).unwrap()
+    serde_json::to_value(store.list_recent_views(MAX_RECENT_VIEWS).unwrap()).unwrap()
 }
 
 #[test]
@@ -171,8 +172,8 @@ fn test_limit_argument_caps_returned_items() {
 
     let result = store.list_recent_views(2).unwrap();
 
-    assert_eq!(result["limit"], json!(2));
-    assert_eq!(result["users"][0]["book"].as_array().unwrap().len(), 2);
+    assert_eq!(result.limit, 2);
+    assert_eq!(result.users[0].book.len(), 2);
 }
 
 #[test]
@@ -402,7 +403,7 @@ fn test_list_recent_views_warns_and_skips_unknown_content_type() {
     let store = ViewHistoryStore::with_connection_provider(provider).with_max_history_rows(row_count);
     let logs = LogCapture::start(Level::Warn);
 
-    let result = store.list_recent_views(MAX_RECENT_VIEWS).unwrap();
+    let result = serde_json::to_value(store.list_recent_views(MAX_RECENT_VIEWS).unwrap()).unwrap();
 
     assert_eq!(executed.lock().unwrap()[0].1, vec![DbValue::Int(row_count as i64)]);
     assert_eq!(
