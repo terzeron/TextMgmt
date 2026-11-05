@@ -10,13 +10,14 @@ autotests = false
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-doc_reader = { path = "../../libs/doc_reader" }
 es_client = { path = "../../libs/es_client" }
 file_record = { path = "../../libs/file_record" }
 serde_json = { workspace = true, features = ["preserve_order"] }
 stat = { path = "../../libs/stat" }
 
 [dev-dependencies]
+# 테스트는 PDF 단계·파서를 직접 다룬다. 소스는 file_record를 거친다.
+doc_reader = { path = "../../libs/doc_reader" }
 encoding_rs = "0.8.35"
 hwp3_parser = { path = "../../libs/hwp3_parser" }
 isbn = { path = "../../libs/isbn" }

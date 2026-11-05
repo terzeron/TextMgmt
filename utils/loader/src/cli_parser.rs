@@ -7,9 +7,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use doc_reader::pdf::StageRunner;
 use es_client::EsError;
 use es_client::indexing::IndexStore;
+use file_record::child_process_runner::StageRunner;
 use stat::Stat;
 
 use crate::batch_loader::{BatchCounts, FILE_ARGUMENT_BATCH_SIZE, Loader, ProcessHooks, direct_files, recursive_files_with_unreadable, sample_files};
