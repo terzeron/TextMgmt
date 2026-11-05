@@ -23,11 +23,14 @@ use sha2::{Digest, Sha256};
 use sysdeps::{Clock, RealFs, SystemClock};
 use zip::ZipArchive;
 
-use crate::cover_sources::{CancelFn, GateError, STORES, SearchError, SearchHooks, StoreGate, blocked_status, build_search_url, search_candidates_with, store_hosts, store_lock_with};
+use crate::cover_sources::{
+    CancelFn, GateError, STORES, SearchError, SearchHooks, SearchStatus, StoreCandidate, StoreGate, StoreSearch, blocked_status, build_search_url, search_candidates_with, store_hosts, store_lock_with,
+};
 use crate::direct_cover_url::{ImageFetcher, RealImageFetcher};
 use crate::epub_cover::{self, CoverError, CoverImageInfo, CreatedIdrefs, EpubCoverHooks, EpubInspection, EpubRewrite, MAX_IMAGE_BYTES};
 use htmlkit::url_parser::{Netloc, urlsplit};
-use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 const BOOK_CHANGED: &str = "EPUB이 변경되었습니다. 목록을 새로 불러오세요";
 const ALREADY_COVERED: &str = "EPUB에 이미 표지가 있습니다";
@@ -70,9 +73,9 @@ pub fn check_cancelled() -> Result<(), CoverError> {
 // 훅
 // ---------------------------------------------------------------------------
 
-type SearchFn = Arc<dyn Fn(&str, &Value) -> Result<Value, SearchError> + Send + Sync>;
+type SearchFn = Arc<dyn Fn(&str, &EpubInspection) -> Result<StoreSearch, SearchError> + Send + Sync>;
 type FetchBytesFn = Arc<dyn Fn(&str, &str) -> Result<Vec<u8>, String> + Send + Sync>;
-type CachedSearchFn = Arc<dyn Fn(&str, &str) -> Option<Value> + Send + Sync>;
+type CachedSearchFn = Arc<dyn Fn(&str, &str) -> Option<CandidateSearch> + Send + Sync>;
 type InspectFn = Arc<dyn Fn(&Path) -> Result<EpubInspection, CoverError> + Send + Sync>;
 
 /// 표지 저장·삭제·삽화 넣기의 결과. 경로는 책 디렉터리 기준 상대 경로다.
@@ -91,6 +94,63 @@ pub struct CoverSave {
     pub idref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idrefs: Option<CreatedIdrefs>,
+}
+
+/// 디스크에 남기는 표지 후보 기록. 응답과 달리 `image_url`을 담는다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidateRecord {
+    #[serde(flatten)]
+    pub candidate: StoreCandidate,
+    #[serde(default)]
+    pub store: String,
+    #[serde(default)]
+    pub file_path: String,
+    #[serde(default)]
+    pub revision: String,
+    /// 이미지를 받은 뒤에 채운다.
+    #[serde(flatten, default)]
+    pub image: Option<CoverImageInfo>,
+}
+
+/// 응답에 싣는 표지 후보. 이미지는 `candidate_id`로만 가리킨다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidateView {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub detail_url: String,
+    #[serde(default)]
+    pub candidate_id: String,
+    /// 이미지를 받은 뒤에 채운다.
+    #[serde(flatten, default)]
+    pub image: Option<CoverImageInfo>,
+}
+
+/// 서점 한 곳의 표지 후보 검색 결과. 캐시 파일과 응답이 같은 모양이다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidateSearch {
+    pub status: SearchStatus,
+    #[serde(default)]
+    pub search_url: String,
+    #[serde(default)]
+    pub candidates: Vec<CandidateView>,
+    /// 서점이 요청을 제한해 검색하지 않았다.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub blocked: bool,
+    /// 다시 시도할 수 있을 때까지 남은 초.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl CandidateSearch {
+    /// 후보 없이 오류 문장만 담은 결과.
+    pub fn failed(search_url: String, error: String) -> Self {
+        Self { status: SearchStatus::Error, search_url, error: Some(error), ..Self::default() }
+    }
 }
 
 /// 후보 캐시를 비운 결과.
@@ -139,7 +199,7 @@ pub enum CoverListDetail {
 type StoreLockFn = Arc<dyn Fn(&Path, &str) -> Box<dyn Any + Send> + Send + Sync>;
 type DeleteCacheFn = Arc<dyn Fn(&Path) -> std::io::Result<()> + Send + Sync>;
 type DirectoriesFn = Arc<dyn Fn(&str) -> std::io::Result<Vec<Value>> + Send + Sync>;
-type CandidatesFn = Arc<dyn Fn(&str, &str) -> Result<Value, CoverError> + Send + Sync>;
+type CandidatesFn = Arc<dyn Fn(&str, &str) -> Result<CandidateSearch, CoverError> + Send + Sync>;
 type DisconnectedFn = Arc<dyn Fn() -> bool + Send + Sync>;
 type ResolveFn = Arc<dyn Fn(&Path) -> PathBuf + Send + Sync>;
 type ObserverFn = Arc<dyn Fn() + Send + Sync>;
@@ -168,7 +228,7 @@ pub struct CoverHooks {
 
 impl CoverHooks {
     /// 서점 검색(`search_candidates`)을 바꾼다. 인자는 서점 이름과 책 메타데이터다.
-    pub fn with_search(mut self, f: impl Fn(&str, &Value) -> Result<Value, SearchError> + Send + Sync + 'static) -> Self {
+    pub fn with_search(mut self, f: impl Fn(&str, &EpubInspection) -> Result<StoreSearch, SearchError> + Send + Sync + 'static) -> Self {
         self.search = Some(Arc::new(f));
         self
     }
@@ -202,7 +262,7 @@ impl CoverHooks {
     }
 
     /// 캐시된 검색 결과 읽기(`_cached_search`)를 바꾼다. 인자는 서점 이름과 책 상대 경로다.
-    pub fn with_cached_search(mut self, f: impl Fn(&str, &str) -> Option<Value> + Send + Sync + 'static) -> Self {
+    pub fn with_cached_search(mut self, f: impl Fn(&str, &str) -> Option<CandidateSearch> + Send + Sync + 'static) -> Self {
         self.cached_search = Some(Arc::new(f));
         self
     }
@@ -243,7 +303,7 @@ impl CoverHooks {
     }
 
     /// 후보 검색(`candidates`)을 바꾼다(라우트가 쓴다). 인자는 서점 이름과 파일 경로다.
-    pub fn with_candidates(mut self, f: impl Fn(&str, &str) -> Result<Value, CoverError> + Send + Sync + 'static) -> Self {
+    pub fn with_candidates(mut self, f: impl Fn(&str, &str) -> Result<CandidateSearch, CoverError> + Send + Sync + 'static) -> Self {
         self.candidates = Some(Arc::new(f));
         self
     }
@@ -355,12 +415,6 @@ fn host_of(url: &str) -> String {
 
 fn str_field<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or("")
-}
-
-const IMAGE_INFO_KEYS: [&str; 3] = ["width", "height", "byte_size"];
-
-fn has_image_info(record: &Value) -> bool {
-    IMAGE_INFO_KEYS.iter().all(|key| record.get(*key).is_some())
 }
 
 // ---------------------------------------------------------------------------
@@ -551,7 +605,8 @@ impl CoverManagement {
         }
     }
 
-    fn read_json_within(&self, path: &Path, ttl: Option<f64>) -> Option<Value> {
+    /// `path`의 JSON 객체. 없거나, 비었거나, `ttl`초보다 오래됐거나, 모양이 다르면 None이다.
+    fn read_json_within<T: DeserializeOwned>(&self, path: &Path, ttl: Option<f64>) -> Option<T> {
         let text = {
             if let Some(ttl) = ttl {
                 let modified = std::fs::metadata(path).ok()?.modified().ok()?;
@@ -562,10 +617,11 @@ impl CoverManagement {
             }
             std::fs::read_to_string(path).ok()?
         };
-        serde_json::from_str::<Value>(&text).ok().filter(Value::is_object)
+        let value = serde_json::from_str::<Value>(&text).ok().filter(|v| v.as_object().is_some_and(|o| !o.is_empty()))?;
+        serde_json::from_value(value).ok()
     }
 
-    pub fn read_json(&self, path: &Path) -> Option<Value> {
+    pub fn read_json<T: DeserializeOwned>(&self, path: &Path) -> Option<T> {
         self.read_json_within(path, None)
     }
 
@@ -651,18 +707,6 @@ impl CoverManagement {
         }
         let data = epub_cover::read_entry(&mut archive, &member).map_err(|_| unreadable())?;
         epub_cover::normalize_image_with(&data, Some(600), self.epub_hooks())
-    }
-}
-
-fn has_entries(value: &Value) -> bool {
-    value.as_object().is_some_and(|o| !o.is_empty())
-}
-
-fn merge(target: &mut Value, extra: &Value) {
-    if let (Some(target), Some(extra)) = (target.as_object_mut(), extra.as_object()) {
-        for (key, value) in extra {
-            target.insert(key.clone(), value.clone());
-        }
     }
 }
 

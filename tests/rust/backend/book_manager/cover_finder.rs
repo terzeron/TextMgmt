@@ -10,6 +10,7 @@ use crate::common::shared_fixtures::{broken_cover, error_text, first_item};
 use crate::common::shared_fixtures::{fetcher, thumbnailer};
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::cover_management::{CoverManagement, CoverSave};
+use backend::cover_sources::{SearchStatus, StoreSearch};
 use backend::epub_cover;
 use backend::epub_cover::{CoverError, MAX_IMAGE_BYTES};
 use common::epub::BODY;
@@ -18,7 +19,6 @@ use common::fsx::ino_mtime;
 use common::image::{b64, red_jpeg};
 use common::zipx::read_zip_entry;
 use fx::{Edit, Opts};
-use serde_json::json;
 
 #[tokio::test]
 async fn test_cover_ignores_legacy_id_only_cache() {
@@ -49,8 +49,8 @@ fn test_broken_cover_search_and_replacement_preserve_body_and_backup() {
         let stat = ino_mtime(&path);
         let mut service = CoverManagement::new(root);
         let item = first_item(&service, false);
-        service.set_hooks(service.hooks().clone().with_search(|_store, _metadata| Ok(json!({"status": "not_found", "candidates": []}))));
-        assert_eq!(service.candidates("yes24", "book.epub", true, false).unwrap()["status"], "not_found", "method={method}");
+        service.set_hooks(service.hooks().clone().with_search(|_store, _metadata| Ok(StoreSearch { status: SearchStatus::NotFound, ..StoreSearch::default() })));
+        assert_eq!(service.candidates("yes24", "book.epub", true, false).unwrap().status, SearchStatus::NotFound, "method={method}");
         // 기존 표지 존재 여부와 덮어쓰기 동의는 손상 여부와 별개다.
         let revision = item["revision"].as_str().unwrap();
         let err = epub_cover::add_cover(&path, &red_jpeg(), revision, &root.join(".cover_backups"), false).unwrap_err();

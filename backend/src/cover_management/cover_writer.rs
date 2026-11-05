@@ -22,12 +22,12 @@ impl CoverManagement {
                 if !(name.starts_with("candidate-") && name.ends_with(".json")) {
                     continue;
                 }
-                let Some(candidate) = self.read_json(&path).filter(has_entries) else { continue };
-                if norm_rel(str_field(&candidate, "file_path")) != norm_rel(relative) {
+                let Some(candidate) = self.read_json::<CandidateRecord>(&path) else { continue };
+                if norm_rel(&candidate.file_path) != norm_rel(relative) {
                     continue;
                 }
-                revisions.insert(str_field(&candidate, "revision").to_string());
-                aliases.insert(str_field(&candidate, "file_path").to_string());
+                revisions.insert(candidate.revision);
+                aliases.insert(candidate.file_path);
                 let candidate_id = name.trim_start_matches("candidate-").trim_end_matches(".json");
                 remove_if_exists(&self.cache.join(format!("image-{candidate_id}.jpg")))?;
                 remove_if_exists(&path)?;
@@ -64,7 +64,7 @@ impl CoverManagement {
         let relative = self.relative_of(&path);
         let _lock = self.book_lock(&relative, true)?;
         let candidate = self.candidate(candidate_id)?;
-        if norm_rel(str_field(&candidate, "file_path")) != norm_rel(&relative) || str_field(&candidate, "revision") != expected_revision {
+        if norm_rel(&candidate.file_path) != norm_rel(&relative) || candidate.revision != expected_revision {
             return Err(CoverError::new("표지 후보와 EPUB이 일치하지 않습니다. 목록을 새로 불러오세요"));
         }
         let image_path = self.image_file(candidate_id)?;

@@ -18,7 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use htmlkit::url_parser::{unquote, urlsplit};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sysdeps::FsOps;
 use sysdeps::zip_opener::zip_entry_name;
 use zip::ZipArchive;
@@ -222,7 +222,7 @@ pub type TestzipFn = Arc<dyn Fn(&Path) -> Option<String> + Send + Sync>;
 type InspectArchiveFn = Arc<dyn Fn(EpubInspection) -> EpubInspection + Send + Sync>;
 
 /// 표지 이미지의 크기. SVG 표지는 `byte_size`만 있다.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoverImageInfo {
     pub byte_size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]

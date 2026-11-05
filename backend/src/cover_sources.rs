@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sysdeps::{Clock, FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout, RealFs, SystemClock};
 
@@ -604,9 +605,37 @@ fn value_text(value: &Value) -> String {
     }
 }
 
+use crate::epub_cover::EpubInspection;
 use crate::has_content;
 
-pub fn extract_html_candidates(store: &str, detail_url: &str, html: &str) -> Vec<Value> {
+/// 서점이 찾은 표지 후보 하나. `image_url`은 서버만 쓴다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StoreCandidate {
+    pub title: String,
+    pub author: String,
+    pub detail_url: String,
+    pub image_url: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchStatus {
+    #[default]
+    Success,
+    NotFound,
+    Error,
+}
+
+/// 서점 검색 결과. 후보는 많아야 4개다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoreSearch {
+    pub status: SearchStatus,
+    pub search_url: String,
+    pub candidates: Vec<StoreCandidate>,
+}
+
+pub fn extract_html_candidates(store: &str, detail_url: &str, html: &str) -> Vec<StoreCandidate> {
     match default_client(store) {
         Some(client) => extract_html_candidates_with(client.as_ref(), store, detail_url, html),
         None => Vec::new(),
@@ -614,7 +643,7 @@ pub fn extract_html_candidates(store: &str, detail_url: &str, html: &str) -> Vec
 }
 
 /// `client`로 상세 페이지를 해석해 후보 한 건을 만든다. 제목이나 이미지가 없으면 후보가 없다.
-pub fn extract_html_candidates_with(client: &dyn StoreClient, store: &str, detail_url: &str, html: &str) -> Vec<Value> {
+pub fn extract_html_candidates_with(client: &dyn StoreClient, store: &str, detail_url: &str, html: &str) -> Vec<StoreCandidate> {
     let dom = HtmlDom::parse(html);
     let info = client.extract_book_info(html);
     let info_title = info.get("title").map(value_text).unwrap_or_default();
@@ -634,10 +663,10 @@ pub fn extract_html_candidates_with(client: &dyn StoreClient, store: &str, detai
         return Vec::new();
     }
     let author = info.get("author").map(value_text).unwrap_or_default();
-    vec![json!({"title": title, "author": author, "detail_url": detail_url, "image_url": urljoin(detail_url, &image_url)})]
+    vec![StoreCandidate { title, author, detail_url: detail_url.to_string(), image_url: urljoin(detail_url, &image_url) }]
 }
 
-pub fn parse_naver_candidates(html: &str) -> Vec<Value> {
+pub fn parse_naver_candidates(html: &str) -> Vec<StoreCandidate> {
     // 2026-10 페이지는 Next flight와 bookListItem DOM을 사용한다.
     let dom = HtmlDom::parse(html);
     let mut candidates = Vec::new();
@@ -657,7 +686,7 @@ pub fn parse_naver_candidates(html: &str) -> Vec<Value> {
                 author = dom.text_strip(spans[1]);
             }
         }
-        candidates.push(json!({"title": dom.attr(image, "alt").unwrap_or(""), "author": author, "detail_url": dom.attr(link, "href").unwrap_or(""), "image_url": src}));
+        candidates.push(StoreCandidate { title: dom.attr(image, "alt").unwrap_or("").to_string(), author, detail_url: dom.attr(link, "href").unwrap_or("").to_string(), image_url: src.to_string() });
         if candidates.len() == 4 {
             break;
         }
@@ -677,37 +706,37 @@ fn status_is_one(value: Option<&Value>) -> bool {
     }
 }
 
-pub fn parse_joara_candidates(data: &Value) -> Result<Vec<Value>, CoverSourceError> {
+pub fn parse_joara_candidates(data: &Value) -> Result<Vec<StoreCandidate>, CoverSourceError> {
     if !status_is_one(data.get("status")) {
         return value_err("조아라 검색 요청을 처리하지 못했습니다");
     }
     let mut results = Vec::new();
     for book in list_of(data, "data", "list") {
         if has_content(book.get("cover")) && has_content(book.get("book_code")) {
-            results.push(json!({
-                "title": book.get("subject").cloned().unwrap_or(json!("")),
-                "author": book.get("member_name").cloned().unwrap_or(json!("")),
-                "detail_url": format!("https://www.joara.com/book/{}", value_text(&book["book_code"])),
-                "image_url": book["cover"].clone(),
-            }));
+            results.push(StoreCandidate {
+                title: book.get("subject").map(value_text).unwrap_or_default(),
+                author: book.get("member_name").map(value_text).unwrap_or_default(),
+                detail_url: format!("https://www.joara.com/book/{}", value_text(&book["book_code"])),
+                image_url: value_text(&book["cover"]),
+            });
         }
     }
     Ok(results)
 }
 
-pub fn parse_munpia_candidates(data: &Value) -> Result<Vec<Value>, CoverSourceError> {
+pub fn parse_munpia_candidates(data: &Value) -> Result<Vec<StoreCandidate>, CoverSourceError> {
     if data.get("code").and_then(Value::as_str) != Some("M000_00000") {
         return value_err("문피아 검색 요청을 처리하지 못했습니다");
     }
     let mut results = Vec::new();
     for book in list_of(data, "result", "searchNovelTabDtos") {
         if has_content(book.get("coverUrl")) && has_content(book.get("novelId")) {
-            results.push(json!({
-                "title": book.get("title").cloned().unwrap_or(json!("")),
-                "author": book.get("author").cloned().unwrap_or(json!("")),
-                "detail_url": format!("https://www.munpia.com/novel/detail/{}", value_text(&book["novelId"])),
-                "image_url": book["coverUrl"].clone(),
-            }));
+            results.push(StoreCandidate {
+                title: book.get("title").map(value_text).unwrap_or_default(),
+                author: book.get("author").map(value_text).unwrap_or_default(),
+                detail_url: format!("https://www.munpia.com/novel/detail/{}", value_text(&book["novelId"])),
+                image_url: value_text(&book["coverUrl"]),
+            });
         }
     }
     Ok(results)
@@ -805,11 +834,11 @@ impl Drop for ClientGuard {
     }
 }
 
-pub fn search_candidates(store: &str, metadata: &Value) -> Result<Value, SearchError> {
+pub fn search_candidates(store: &str, metadata: &EpubInspection) -> Result<StoreSearch, SearchError> {
     search_candidates_with(store, metadata, &SearchHooks::default())
 }
 
-pub fn search_candidates_with(store: &str, metadata: &Value, hooks: &SearchHooks) -> Result<Value, SearchError> {
+pub fn search_candidates_with(store: &str, metadata: &EpubInspection, hooks: &SearchHooks) -> Result<StoreSearch, SearchError> {
     let Some(client) = hooks.client(store) else {
         return Err(SearchError::Value("지원하지 않는 서점입니다".to_string()));
     };
@@ -826,8 +855,8 @@ pub fn search_candidates_with(store: &str, metadata: &Value, hooks: &SearchHooks
             client.set_session_header(name, value);
         }
     }
-    let title = metadata.get("title").map(value_text).ok_or_else(|| SearchError::Value("title이 없습니다".to_string()))?;
-    let isbn = if client.supports_isbn_search() { metadata.get("isbn").map(value_text).unwrap_or_default() } else { String::new() };
+    let title = metadata.title.clone();
+    let isbn = if client.supports_isbn_search() { metadata.isbn.clone() } else { String::new() };
     let keyword = if isbn.is_empty() { title.clone() } else { isbn };
     let mut search_url = if store == "aladin" {
         format!("https://www.aladin.co.kr/search/wsearchresult.aspx?{}", urlencode(&[("SearchTarget", "Book"), ("SearchWord", &keyword)]))
@@ -838,7 +867,7 @@ pub fn search_candidates_with(store: &str, metadata: &Value, hooks: &SearchHooks
     let cancelled = || (hooks.cancel)();
     let fetch = |url: &str| fetch_bytes_cancellable(store, url, session.as_ref(), None, &*hooks.validate, &cancelled);
     let text = |raw: Vec<u8>| String::from_utf8_lossy(&raw).into_owned();
-    let results: Vec<Value> = match store {
+    let results: Vec<StoreCandidate> = match store {
         "joara" => {
             let device_uid = random_hex();
             let api_key = client.api_key();
@@ -896,8 +925,8 @@ pub fn search_candidates_with(store: &str, metadata: &Value, hooks: &SearchHooks
             results
         }
     };
-    let status = if results.is_empty() { "not_found" } else { "success" };
-    Ok(json!({"status": status, "search_url": search_url, "candidates": results.into_iter().take(4).collect::<Vec<_>>()}))
+    let status = if results.is_empty() { SearchStatus::NotFound } else { SearchStatus::Success };
+    Ok(StoreSearch { status, search_url, candidates: results.into_iter().take(4).collect() })
 }
 
 /// 서점의 검색 화면 URL. 모르는 서점이면 빈 문자열이다.

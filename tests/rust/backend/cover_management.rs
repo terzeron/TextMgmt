@@ -4,9 +4,12 @@ mod cover_fixtures;
 use crate::common::shared_fixtures::{backups, epub_with_cover, hooks_with, read, rev, str_of, truthy};
 use crate::common::shared_fixtures::{fetcher, thumbnailer};
 use backend::book_manager::{BookManager, Thumbnailer};
+use backend::cover_management::CandidateSearch;
 use backend::cover_management::{ApplyImageModel, Backup, CoverHooks, CoverManagement, EpubThumbnailer};
 use backend::cover_sources::{STORES, SearchError, SearchHooks};
+use backend::cover_sources::{SearchStatus, StoreSearch};
 use backend::epub_cover;
+use backend::epub_cover::EpubInspection;
 use backend::epub_cover::{CoverError, Limits, MAX_IMAGE_BYTES};
 use common::clock::{Event, FakeClock};
 use common::epub::{EpubSpec, make_epub};
@@ -31,8 +34,13 @@ fn first_item(service: &CoverManagement) -> Value {
     page(service, "", 60, false)["items"][0].clone()
 }
 
-fn not_found(_store: &str, _metadata: &Value) -> Result<Value, SearchError> {
-    Ok(json!({"status": "not_found", "candidates": []}))
+/// 표지 후보 검색 결과의 JSON 모양. 프런트엔드가 받는 응답과 같다.
+fn found(service: &CoverManagement, store: &str, relative: &str, include_covered: bool, refresh: bool) -> Value {
+    serde_json::to_value(service.candidates(store, relative, include_covered, refresh).unwrap()).unwrap()
+}
+
+fn not_found(_store: &str, _metadata: &EpubInspection) -> Result<StoreSearch, SearchError> {
+    Ok(StoreSearch { status: SearchStatus::NotFound, ..StoreSearch::default() })
 }
 
 #[test]
@@ -56,8 +64,8 @@ fn test_cover_listing_and_search_use_same_filename_title() {
         let seen = Arc::new(Mutex::new(Vec::<String>::new()));
         let sink = seen.clone();
         service.set_hooks(service.hooks().clone().with_search(move |_store, metadata| {
-            sink.lock().unwrap().push(metadata["title"].as_str().unwrap().to_string());
-            Ok(json!({"status": "not_found", "candidates": []}))
+            sink.lock().unwrap().push(metadata.title.clone());
+            Ok(StoreSearch { status: SearchStatus::NotFound, ..StoreSearch::default() })
         }));
         service.candidates("yes24", str_of(&item, "file_path"), false, false).unwrap();
         assert_eq!(*seen.lock().unwrap(), [str_of(&item, "title")], "filename={filename:?}");
@@ -114,8 +122,8 @@ fn test_filename_title_replaces_old_metadata_search_cache() {
         let calls = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
         let sink = calls.clone();
         service.set_hooks(service.hooks().clone().with_search(move |store, metadata| {
-            sink.lock().unwrap().push((store.to_string(), metadata["title"].as_str().unwrap().to_string()));
-            Ok(json!({"status": "not_found", "candidates": []}))
+            sink.lock().unwrap().push((store.to_string(), metadata.title.clone()));
+            Ok(StoreSearch { status: SearchStatus::NotFound, ..StoreSearch::default() })
         }));
         for store in STORES {
             let old_key = format!("{store}:{name}:{revision}") + if *store == "aladin" { ":books-v2" } else { "" };
@@ -124,7 +132,7 @@ fn test_filename_title_replaces_old_metadata_search_cache() {
                 service.write(&parent.join(format!("search-{old_hash}.json")), br#"{"status":"not_found","candidates":[]}"#);
             }
             for _ in 0..2 {
-                service.candidates(store, &name, covered, false).unwrap();
+                found(&service, store, &name, covered, false);
             }
         }
         let expected: Vec<(String, String)> = STORES.iter().map(|store| (store.to_string(), "저자 제목 1".to_string())).collect();
@@ -226,7 +234,7 @@ fn test_research_and_direct_url_replacement_allow_saved_book_explicitly() {
     let err = service.candidates("yes24", "book.epub", false, false).unwrap_err();
     assert!(err.to_string().contains("이미 표지"), "{err}");
     let original = read(&path);
-    assert_eq!(service.candidates("yes24", "book.epub", true, false).unwrap()["status"], "not_found");
+    assert_eq!(found(&service, "yes24", "book.epub", true, false)["status"], "not_found");
     assert_eq!(read(&path), original);
     let saved = service.apply_url("book.epub", "https://example.org/a", &rev(&path), true).unwrap();
     assert_eq!(read(&root.join(&saved.backup_path)), original);
@@ -244,14 +252,14 @@ fn test_retry_bypasses_error_cache_and_aladin_old_results() {
         Err(SearchError::Value("offline".to_string()))
     });
     let service = CoverManagement::with_hooks(root, hooks);
-    assert_eq!(service.candidates("yes24", "book.epub", false, false).unwrap()["status"], "error");
-    assert_eq!(service.candidates("yes24", "book.epub", false, false).unwrap()["status"], "error");
+    assert_eq!(found(&service, "yes24", "book.epub", false, false)["status"], "error");
+    assert_eq!(found(&service, "yes24", "book.epub", false, false)["status"], "error");
     assert_eq!(*calls.lock().unwrap(), ["yes24"]);
-    assert_eq!(service.candidates("yes24", "book.epub", false, true).unwrap()["status"], "error");
+    assert_eq!(found(&service, "yes24", "book.epub", false, true)["status"], "error");
     assert_eq!(*calls.lock().unwrap(), ["yes24", "yes24"]);
     let key = sha256_hex(format!("aladin:book.epub:{}", rev(&path)));
     service.write(&service.book_cache("book.epub").join(format!("search-{key}.json")), br#"{"status":"not_found","candidates":[]}"#);
-    assert_eq!(service.candidates("aladin", "book.epub", false, false).unwrap()["status"], "error");
+    assert_eq!(found(&service, "aladin", "book.epub", false, false)["status"], "error");
     assert_eq!(calls.lock().unwrap().last().unwrap(), "aladin");
 }
 
@@ -437,13 +445,13 @@ fn test_pending_cache_survives_age_and_service_restart() {
     }
     let mut restarted = CoverManagement::with_hooks(root, service.hooks().clone());
     for candidate in &cached.candidates {
-        assert!(!restarted.image(str_of(candidate, "candidate_id")).unwrap().is_empty());
+        assert!(!restarted.image(&candidate.candidate_id).unwrap().is_empty());
     }
     assert_eq!(cached.fetches.lock().unwrap().len(), 2);
     restarted.set_hooks(restarted.hooks().clone().with_search(|_store, _metadata| panic!("캐시한 검색을 다시 요청했다")));
-    let restored = restarted.candidates("yes24", "book.epub", false, false).unwrap()["candidates"].clone();
+    let restored = found(&restarted, "yes24", "book.epub", false, false)["candidates"].clone();
     let restored_ids: Vec<&str> = restored.as_array().unwrap().iter().map(|item| str_of(item, "candidate_id")).collect();
-    let cached_ids: Vec<&str> = cached.candidates.iter().map(|item| str_of(item, "candidate_id")).collect();
+    let cached_ids: Vec<&str> = cached.candidates.iter().map(|item| item.candidate_id.as_str()).collect();
     assert_eq!(restored_ids, cached_ids);
     assert!(restored.as_array().unwrap().iter().all(|item| item["width"] == 120 && item["height"] == 180 && item["byte_size"].as_u64().unwrap() > 0));
 }
@@ -544,7 +552,7 @@ fn test_legacy_cache_provides_image_size_without_external_fetch() {
     service.write(&service.cache().join(format!("candidate-{candidate_id}.json")), record.to_string().as_bytes());
     service.write(&service.cache().join(format!("image-{candidate_id}.jpg")), &red_jpeg());
     service.write(&service.cache().join(format!("search-{key}.json")), json!({"status": "success", "candidates": [{"candidate_id": candidate_id}]}).to_string().as_bytes());
-    let result = service.candidates("yes24", "book.epub", false, false).unwrap()["candidates"][0].clone();
+    let result = found(&service, "yes24", "book.epub", false, false)["candidates"][0].clone();
     assert_eq!((&result["width"], &result["height"]), (&json!(120), &json!(180)));
     assert_eq!(result["byte_size"].as_u64().unwrap() as usize, red_jpeg().len());
 }
@@ -568,8 +576,8 @@ fn test_service_rejects_invalid_and_stale_operations() {
         }
         if operation == "stale_image" {
             let mut record = service.candidate(&candidate_id).unwrap();
-            record["revision"] = json!("stale");
-            service.write(&service.candidate_path(&candidate_id), record.to_string().as_bytes());
+            record.revision = "stale".to_string();
+            service.write(&service.candidate_path(&candidate_id), &serde_json::to_vec(&record).unwrap());
         }
         if operation == "missing_image" {
             std::fs::remove_file(service.candidate_path(&candidate_id).parent().unwrap().join(format!("image-{candidate_id}.jpg"))).unwrap();
@@ -600,8 +608,8 @@ fn test_search_error_cache_expiry_cancel_and_cache_double_check() {
     let root = tmp.path();
     make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", false));
     let mut service = CoverManagement::with_hooks(root, CoverHooks::default().with_search(|_store, _metadata| Err(SearchError::Value("blocked".to_string()))));
-    assert_eq!(service.candidates("yes24", "book.epub", false, false).unwrap()["status"], "error");
-    assert_eq!(service.candidates("yes24", "book.epub", false, false).unwrap()["status"], "error");
+    assert_eq!(found(&service, "yes24", "book.epub", false, false)["status"], "error");
+    assert_eq!(found(&service, "yes24", "book.epub", false, false)["status"], "error");
     let book_cache = service.book_cache("book.epub");
     for cached in files_under(&book_cache) {
         let name = cached.file_name().unwrap().to_string_lossy().into_owned();
@@ -612,9 +620,9 @@ fn test_search_error_cache_expiry_cancel_and_cache_double_check() {
     service.set_hooks(service.hooks().clone().with_search(|_store, _metadata| Err(SearchError::Cancelled)));
     let err = service.candidates("yes24", "book.epub", false, false).unwrap_err();
     assert!(err.is_cancelled(), "{err}");
-    let values = Mutex::new(VecDeque::from([None, None, Some(json!({"status": "not_found", "candidates": []}))]));
+    let values = Mutex::new(VecDeque::from([None, None, Some(CandidateSearch { status: SearchStatus::NotFound, ..CandidateSearch::default() })]));
     service.set_hooks(service.hooks().clone().with_cached_search(move |_store, _relative| values.lock().unwrap().pop_front().expect("_cached_search를 세 번만 부른다")));
-    assert_eq!(service.candidates("yes24", "book.epub", false, false).unwrap()["status"], "not_found");
+    assert_eq!(found(&service, "yes24", "book.epub", false, false)["status"], "not_found");
 }
 
 #[test]
@@ -637,13 +645,13 @@ fn test_invalid_cached_records_refresh_and_image_lock_double_check() {
     }));
     assert_eq!(service.image(&candidate_id).unwrap(), red_jpeg());
     std::fs::remove_file(&record_path).unwrap();
-    assert_eq!(service.candidates("yes24", "book.epub", false, false).unwrap()["status"], "success");
+    assert_eq!(found(&service, "yes24", "book.epub", false, false)["status"], "success");
     let bad = service.cache().join("bad.json");
     service.write(&bad, b"[]");
-    assert!(service.read_json(&bad).is_none());
+    assert!(service.read_json::<Value>(&bad).is_none());
     service.write(&bad, b"not json");
-    assert!(service.read_json(&bad).is_none());
-    assert_eq!(record["file_path"], "book.epub");
+    assert!(service.read_json::<Value>(&bad).is_none());
+    assert_eq!(record.file_path, "book.epub");
 }
 
 #[test]
@@ -707,10 +715,10 @@ fn test_resolved_escape_and_incomplete_legacy_cache_are_safe() {
     let cached = cached_candidates(&mut service, "book.epub", &["yes24"]);
     let record_path = service.candidate_path(cached.id(0));
     let mut record = service.candidate(cached.id(0)).unwrap();
-    record.as_object_mut().unwrap().remove("width");
-    service.write(&record_path, record.to_string().as_bytes());
+    record.image = None;
+    service.write(&record_path, &serde_json::to_vec(&record).unwrap());
     std::fs::remove_file(record_path.parent().unwrap().join(format!("image-{}.jpg", cached.id(0)))).unwrap();
-    let result = service.candidates("yes24", "book.epub", false, false).unwrap()["candidates"][0].clone();
+    let result = found(&service, "yes24", "book.epub", false, false)["candidates"][0].clone();
     assert!(!result.as_object().unwrap().contains_key("width"), "{result}");
     service.write(&service.cache().join("candidate-invalid.json"), b"[]");
     service.clear_cache("book.epub", &rev(&path)).unwrap();
@@ -781,27 +789,27 @@ fn test_store_block_returns_wait_message_without_cache_and_stops_requests() {
     let mut service = CoverManagement::with_hooks(
         root,
         CoverHooks::default().with_clock(clock.clone()).with_search(move |_store, metadata| {
-            sink.lock().unwrap().push(metadata["title"].as_str().unwrap().to_string());
+            sink.lock().unwrap().push(metadata.title.clone());
             Err(http_error(418))
         }),
     );
-    let first = service.candidates("naver", "a.epub", false, false).unwrap();
+    let first = found(&service, "naver", "a.epub", false, false);
     assert!(first["status"] == "error" && first["blocked"] == true && first["retry_after"].as_f64() == Some(60.0), "{first}");
     assert!(str_of(&first, "error").contains("1분"), "{first}");
     // 차단 중에는 다른 책도, 수동 재시도(refresh)도 서점에 요청하지 않는다
-    assert_eq!(service.candidates("naver", "b.epub", false, false).unwrap()["blocked"], true);
-    assert_eq!(service.candidates("naver", "a.epub", false, true).unwrap()["blocked"], true);
+    assert_eq!(found(&service, "naver", "b.epub", false, false)["blocked"], true);
+    assert_eq!(found(&service, "naver", "a.epub", false, true)["blocked"], true);
     assert_eq!(calls.lock().unwrap().len(), 1);
     // 차단 응답은 책별 캐시에 남기지 않는다
     assert!(files_under(service.cache()).iter().all(|f| !f.file_name().unwrap().to_string_lossy().starts_with("search-")));
     // 다른 서점은 영향이 없다
     service.set_hooks(service.hooks().clone().with_search(not_found));
-    assert_eq!(service.candidates("yes24", "a.epub", false, false).unwrap()["status"], "not_found");
+    assert_eq!(found(&service, "yes24", "a.epub", false, false)["status"], "not_found");
     // 대기 후 시험 요청이 성공하면 차단이 풀리고 backoff가 초기화된다
     clock.advance(61.0);
-    assert_eq!(service.candidates("naver", "b.epub", false, false).unwrap()["status"], "not_found");
+    assert_eq!(found(&service, "naver", "b.epub", false, false)["status"], "not_found");
     service.set_hooks(service.hooks().clone().with_search(|_store, _metadata| Err(http_error(429))));
-    assert_eq!(service.candidates("naver", "a.epub", false, false).unwrap()["retry_after"].as_f64(), Some(60.0));
+    assert_eq!(found(&service, "naver", "a.epub", false, false)["retry_after"].as_f64(), Some(60.0));
 }
 
 #[test]
@@ -811,9 +819,9 @@ fn test_store_block_backoff_grows_when_probe_is_still_blocked() {
     let clock = FakeClock::new(5000.0);
     make_epub(&root.join("a.epub"), &EpubSpec::cover("3.0", false));
     let service = CoverManagement::with_hooks(root, CoverHooks::default().with_clock(clock.clone()).with_search(|_store, _metadata| Err(http_error(418))));
-    assert_eq!(service.candidates("naver", "a.epub", false, false).unwrap()["retry_after"].as_f64(), Some(60.0));
+    assert_eq!(found(&service, "naver", "a.epub", false, false)["retry_after"].as_f64(), Some(60.0));
     clock.advance(61.0);
-    let second = service.candidates("naver", "a.epub", false, true).unwrap();
+    let second = found(&service, "naver", "a.epub", false, true);
     assert!(second["retry_after"].as_f64() == Some(120.0) && str_of(&second, "error").contains("2분"), "{second}");
 }
 
@@ -829,16 +837,16 @@ fn test_non_rate_limit_http_error_is_cached_briefly_and_logs_status() {
     let service = CoverManagement::with_hooks(
         root,
         CoverHooks::default().with_clock(clock).with_search(move |_store, metadata| {
-            sink.lock().unwrap().push(metadata["title"].as_str().unwrap().to_string());
+            sink.lock().unwrap().push(metadata.title.clone());
             Err(http_error(500))
         }),
     );
     let log = LogCapture::start(log::Level::Warn);
-    let result = service.candidates("naver", "a.epub", false, false).unwrap();
+    let result = found(&service, "naver", "a.epub", false, false);
     assert!(result["status"] == "error" && !result.as_object().unwrap().contains_key("blocked"), "{result}");
     assert!(log.text().contains("500"), "{}", log.text());
-    assert_eq!(service.candidates("naver", "a.epub", false, false).unwrap()["status"], "error");
-    assert_eq!(service.candidates("naver", "b.epub", false, false).unwrap()["status"], "error");
+    assert_eq!(found(&service, "naver", "a.epub", false, false)["status"], "error");
+    assert_eq!(found(&service, "naver", "b.epub", false, false)["status"], "error");
     assert_eq!(*calls.lock().unwrap(), ["a", "b"]);
 }
 

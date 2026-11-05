@@ -3,6 +3,8 @@ mod common;
 #[path = "../common/cover_fixtures.rs"]
 mod cover_fixtures;
 
+use backend::cover_management::CandidateSearch;
+use backend::cover_sources::{SearchStatus, StoreCandidate, StoreSearch};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -161,7 +163,9 @@ async fn test_existing_cover_listing_can_recommend_and_replace_with_backup() {
     let root = tmp.path();
     let hooks = CoverHooks::default()
         .with_search(|_store, _metadata| {
-            Ok(json!({"status": "success", "candidates": [{"title": "교체 후보", "image_url": "https://image.yes24.com/cover.jpg", "detail_url": "https://www.yes24.com/book"}]}))
+            let candidate =
+                StoreCandidate { title: "교체 후보".into(), image_url: "https://image.yes24.com/cover.jpg".into(), detail_url: "https://www.yes24.com/book".into(), ..StoreCandidate::default() };
+            Ok(StoreSearch { status: SearchStatus::Success, search_url: String::new(), candidates: vec![candidate] })
         })
         .with_fetch_bytes(|_store, _url| Ok(red_jpeg()));
     let api = cover_api(root, hooks);
@@ -548,7 +552,7 @@ async fn test_disconnected_search_cancels_worker() {
                 Ok::<(), CoverError>(())
             });
             done.set();
-            outcome.map(|_| Value::Null)
+            outcome.map(|_| CandidateSearch::default())
         })
         .with_is_disconnected(|| true);
     let api = cover_api(tmp.path(), hooks);

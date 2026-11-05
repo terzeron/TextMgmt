@@ -8,7 +8,7 @@
 //! 가정한 API (아직 구현 전이다):
 //! - `backend::book_metadata::Book::override_path_prefix(path: &Path) -> PathPrefixGuard` (drop 시 원래 값 복원.
 //! - `backend::cover_management::CoverManagement::{new(root: &Path), with_hooks(root: &Path, hooks: CoverHooks), hooks(&self) -> &CoverHooks, set_hooks(&mut self, hooks: CoverHooks)}`
-//! - `backend::cover_management::CoverHooks` (Clone + Default): `with_search(Fn(&str, &Value) -> Result<Value, SearchError>)`, `with_fetch_bytes(Fn(&str, &str) -> Result<Vec<u8>, String>)`,
+//! - `backend::cover_management::CoverHooks` (Clone + Default): `with_search(Fn(&str, &EpubInspection) -> Result<StoreSearch, SearchError>)`, `with_fetch_bytes(Fn(&str, &str) -> Result<Vec<u8>, String>)`,
 //!   `with_fetch_url_image(Fn(&str) -> Result<Vec<u8>, CoverError>)`, `with_clock(Arc<dyn Clock>)`. 테스트가 대역을 꽂는 주입 지점이다.
 //! - `backend::cover_management::{AdminGate, BookIndex, create_cover_router}`
 //!   - `AdminGate::default()` 실제 인증, `.allow(Value)`, `.deny(status: u16, detail: &str)`, `.clear()`
@@ -18,6 +18,8 @@
 
 #![allow(dead_code)]
 
+use backend::cover_management::CandidateView;
+use backend::cover_sources::{SearchStatus, StoreCandidate, StoreSearch};
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -144,13 +146,13 @@ pub fn remove_element(xml: &[u8], local: &str) -> Vec<u8> {
 // ---- cached_candidates -----------------------------------------------------------------------
 
 pub struct Cached {
-    pub candidates: Vec<Value>,
+    pub candidates: Vec<CandidateView>,
     pub fetches: Arc<Mutex<Vec<String>>>,
 }
 
 impl Cached {
     pub fn id(&self, index: usize) -> &str {
-        self.candidates[index]["candidate_id"].as_str().unwrap()
+        &self.candidates[index].candidate_id
     }
 }
 
@@ -162,10 +164,15 @@ pub fn cached_candidates(service: &mut CoverManagement, relative: &str, stores: 
         .hooks()
         .clone()
         .with_search(|store, metadata| {
-            let candidates: Vec<Value> = (0..2)
-                .map(|index| json!({"title": metadata["title"], "author": "저자", "detail_url": "https://www.yes24.com/", "image_url": format!("https://image.yes24.com/{store}-{index}.jpg")}))
+            let candidates = (0..2)
+                .map(|index| StoreCandidate {
+                    title: metadata.title.clone(),
+                    author: "저자".into(),
+                    detail_url: "https://www.yes24.com/".into(),
+                    image_url: format!("https://image.yes24.com/{store}-{index}.jpg"),
+                })
                 .collect();
-            Ok(json!({"status": "success", "candidates": candidates}))
+            Ok(StoreSearch { status: SearchStatus::Success, search_url: String::new(), candidates })
         })
         .with_fetch_bytes(move |_store, url| {
             seen.lock().unwrap().push(url.to_string());
@@ -174,11 +181,10 @@ pub fn cached_candidates(service: &mut CoverManagement, relative: &str, stores: 
     service.set_hooks(hooks);
     let mut candidates = Vec::new();
     for store in stores {
-        let found = service.candidates(store, relative, false, false).unwrap();
-        candidates.extend(found["candidates"].as_array().unwrap().iter().cloned());
+        candidates.extend(service.candidates(store, relative, false, false).unwrap().candidates);
     }
     for candidate in &candidates {
-        service.image(candidate["candidate_id"].as_str().unwrap()).unwrap();
+        service.image(&candidate.candidate_id).unwrap();
     }
     Cached { candidates, fetches }
 }

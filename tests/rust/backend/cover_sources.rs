@@ -11,6 +11,8 @@ use backend::cover_sources::{
     GateError, SearchError, SearchHooks, StoreBlocked, StoreClient, StoreGate, StoreLockError, blocked_status, extract_html_candidates, fetch_bytes_with, parse_joara_candidates,
     parse_munpia_candidates, parse_naver_candidates, search_candidates_with, store_lock, store_lock_with, validate_url, validate_url_with,
 };
+use backend::cover_sources::{SearchStatus, StoreCandidate};
+use backend::epub_cover::EpubInspection;
 use common::{
     clock::FakeClock,
     faulty_fs::{FaultyFs, other_err},
@@ -26,17 +28,17 @@ fn test_html_candidates_use_real_page_images() {
             "https://example.invalid/book",
             r#"<html><meta property="og:title" content="책"><meta property="og:image" content="https://image.yes24.com/real.jpg"></html>"#,
         );
-        assert_eq!(candidates[0]["image_url"], "https://image.yes24.com/real.jpg", "store={store}");
-        assert!(!candidates[0]["title"].as_str().unwrap_or("").is_empty(), "store={store}");
+        assert_eq!(candidates[0].image_url, "https://image.yes24.com/real.jpg", "store={store}");
+        assert!(!candidates[0].title.is_empty(), "store={store}");
     }
 }
 
 #[test]
 fn test_naver_and_joara_search_candidates() {
     let html = r#"<a class="bookListItem_info_top__abc" href="https://cr3.shopping.naver.com/book/adcr?nvMid=123"><img alt="데미안" src="https://shopping-phinf.pstatic.net/book.jpg"><div class="bookListItem_define_item__abc"><span>저자</span><span>헤세</span></div></a>"#;
-    assert_eq!(parse_naver_candidates(html)[0]["author"], "헤세");
+    assert_eq!(parse_naver_candidates(html)[0].author, "헤세");
     let data = json!({"status": 1, "data": {"list": [{"book_code": "123", "subject": "책", "member_name": "저자", "cover": "https://cf-image.joara.com/book.png"}]}});
-    assert_eq!(parse_joara_candidates(&data).unwrap()[0]["image_url"], "https://cf-image.joara.com/book.png");
+    assert_eq!(parse_joara_candidates(&data).unwrap()[0].image_url, "https://cf-image.joara.com/book.png");
 }
 
 #[test]
@@ -55,8 +57,8 @@ fn joara_and_munpia_parsers_skip_incomplete_entries_within_four_item_window() {
     });
     let joara_results = parse_joara_candidates(&joara).unwrap();
     assert_eq!(joara_results.len(), 2);
-    assert_eq!(joara_results[0]["detail_url"], "https://www.joara.com/book/1");
-    assert_eq!(joara_results[0]["title"], "");
+    assert_eq!(joara_results[0].detail_url, "https://www.joara.com/book/1");
+    assert_eq!(joara_results[0].title, "");
 
     let munpia = json!({
         "code": "M000_00000",
@@ -72,8 +74,8 @@ fn joara_and_munpia_parsers_skip_incomplete_entries_within_four_item_window() {
     });
     let munpia_results = parse_munpia_candidates(&munpia).unwrap();
     assert_eq!(munpia_results.len(), 2);
-    assert_eq!(munpia_results[0]["detail_url"], "https://www.munpia.com/novel/detail/1");
-    assert_eq!(munpia_results[0]["title"], "");
+    assert_eq!(munpia_results[0].detail_url, "https://www.munpia.com/novel/detail/1");
+    assert_eq!(munpia_results[0].title, "");
 }
 
 /// 검색 요청 URL의 query 값.
@@ -166,18 +168,18 @@ fn recording_fetch(body: &'static str) -> (SearchHooks, Arc<Mutex<Vec<String>>>)
 fn test_aladin_covers_use_clean_book_keyword_instead_of_all_products() {
     for (title, keyword) in [("불멸과 소멸 1 이상문", "불멸과 소멸 1 이상문"), ("우리말의 상상력 1 어휘의 기원", "우리말의 상상력 1 어휘의 기원")] {
         let (hooks, seen) = recording_fetch(r#"<div id="Search3_Result">검색 결과 없음</div>"#);
-        let result = search_candidates_with("aladin", &json!({"title": title}), &hooks).unwrap();
+        let result = search_candidates_with("aladin", &EpubInspection { title: title.into(), ..EpubInspection::default() }, &hooks).unwrap();
         let query = query_values(&seen.lock().unwrap()[0]);
         assert_eq!(query["SearchTarget"], ["Book"], "title={title}");
         assert_eq!(query["SearchWord"], [keyword], "title={title}");
-        assert_eq!(result["status"], "not_found", "title={title}");
+        assert_eq!(result.status, SearchStatus::NotFound, "title={title}");
     }
 }
 
 #[test]
 fn test_aladin_cover_search_keeps_isbn() {
     let (hooks, seen) = recording_fetch("검색 결과 없음");
-    let _ = search_candidates_with("aladin", &json!({"title": "제목 저자 1", "isbn": "9781234567890"}), &hooks);
+    let _ = search_candidates_with("aladin", &EpubInspection { title: "제목 저자 1".into(), isbn: "9781234567890".into(), ..EpubInspection::default() }, &hooks);
     assert_eq!(query_values(&seen.lock().unwrap()[0])["SearchWord"], ["9781234567890"]);
 }
 
@@ -186,11 +188,11 @@ fn test_isbn_capable_stores_preserve_priority_and_filename_title_fallback() {
     for store in ["yes24", "aladin", "kyobo"] {
         for isbn in ["9781234567890", ""] {
             let (hooks, seen) = recording_fetch("검색 결과 없음");
-            let result = search_candidates_with(store, &json!({"title": "랜들 개릿 다아시 경의 모험 1", "isbn": isbn}), &hooks).unwrap();
+            let result = search_candidates_with(store, &EpubInspection { title: "랜들 개릿 다아시 경의 모험 1".into(), isbn: isbn.into(), ..EpubInspection::default() }, &hooks).unwrap();
             let keyword = if isbn.is_empty() { "랜들 개릿 다아시 경의 모험 1" } else { isbn };
             let first = seen.lock().unwrap()[0].clone();
             assert!(query_values(&first).values().any(|v| v == &[keyword.to_string()]), "store={store}, isbn={isbn:?}");
-            assert_eq!(result["search_url"], first.as_str(), "store={store}, isbn={isbn:?}");
+            assert_eq!(result.search_url, first, "store={store}, isbn={isbn:?}");
         }
     }
 }
@@ -198,15 +200,15 @@ fn test_isbn_capable_stores_preserve_priority_and_filename_title_fallback() {
 #[test]
 fn test_aladin_common_no_image_placeholder_is_not_a_cover() {
     let html = r#"<meta property="og:title" content="제목"><meta property="og:image" content="https://image.aladin.co.kr/img/shop/2018/img_no.jpg">"#;
-    assert_eq!(extract_html_candidates("aladin", "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=1", html), Vec::<Value>::new());
+    assert_eq!(extract_html_candidates("aladin", "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=1", html), Vec::<StoreCandidate>::new());
 }
 
 #[test]
 fn test_munpia_current_json_search() {
     let data = json!({"code": "M000_00000", "result": {"searchNovelTabDtos": [{"novelId": 104753, "title": "전지적 독자 시점", "author": "싱숑", "coverUrl": "https://cdn1.munpia.com/cover.jpg"}]}});
     let result = parse_munpia_candidates(&data).unwrap();
-    assert_eq!(result[0]["image_url"], "https://cdn1.munpia.com/cover.jpg");
-    assert_eq!(result[0]["detail_url"], "https://www.munpia.com/novel/detail/104753");
+    assert_eq!(result[0].image_url, "https://cdn1.munpia.com/cover.jpg");
+    assert_eq!(result[0].detail_url, "https://www.munpia.com/novel/detail/104753");
 }
 
 #[test]
@@ -353,22 +355,22 @@ fn fetch_bytes_uses_connect_and_read_timeouts() {
 
 #[test]
 fn test_parsers_handle_missing_fields_invalid_responses_and_limits() {
-    assert_eq!(extract_html_candidates("yes24", "https://www.yes24.com/", "<html></html>"), Vec::<Value>::new());
+    assert_eq!(extract_html_candidates("yes24", "https://www.yes24.com/", "<html></html>"), Vec::<StoreCandidate>::new());
     let portrait = extract_html_candidates(
         "naverseries",
         "https://series.naver.com/a",
         r#"<meta property="og:title" content="책"><meta property="og:image" content="wide.jpg"><a class="pic_area"><img src="portrait.jpg"></a>"#,
     );
-    assert!(portrait[0]["image_url"].as_str().unwrap().ends_with("portrait.jpg"));
+    assert!(portrait[0].image_url.ends_with("portrait.jpg"));
     let mut html = String::from(r#"<a class="bookListItem_info_top"><img></a><a class="bookListItem_info_top"></a>"#);
     html += &r#"<a class="bookListItem_info_top"><img alt="책" src="a.jpg"><div class="bookListItem_define_item"><span>출판사</span><span>출판</span></div><div class="bookListItem_define_item"><span>저자</span></div></a>"#.repeat(5);
     assert_eq!(parse_naver_candidates(&html).len(), 4);
     assert!(parse_joara_candidates(&json!({})).is_err());
     assert!(parse_munpia_candidates(&json!({})).is_err());
-    assert_eq!(parse_joara_candidates(&json!({"status": 1})).unwrap(), Vec::<Value>::new());
-    assert_eq!(parse_munpia_candidates(&json!({"code": "M000_00000"})).unwrap(), Vec::<Value>::new());
-    assert_eq!(parse_joara_candidates(&json!({"status": 1, "data": {"list": [{"cover": "a"}, {"book_code": "1"}]}})).unwrap(), Vec::<Value>::new());
-    assert_eq!(parse_munpia_candidates(&json!({"code": "M000_00000", "result": {"searchNovelTabDtos": [{"coverUrl": "a"}, {"novelId": 1}]}})).unwrap(), Vec::<Value>::new());
+    assert_eq!(parse_joara_candidates(&json!({"status": 1})).unwrap(), Vec::<StoreCandidate>::new());
+    assert_eq!(parse_munpia_candidates(&json!({"code": "M000_00000"})).unwrap(), Vec::<StoreCandidate>::new());
+    assert_eq!(parse_joara_candidates(&json!({"status": 1, "data": {"list": [{"cover": "a"}, {"book_code": "1"}]}})).unwrap(), Vec::<StoreCandidate>::new());
+    assert_eq!(parse_munpia_candidates(&json!({"code": "M000_00000", "result": {"searchNovelTabDtos": [{"coverUrl": "a"}, {"novelId": 1}]}})).unwrap(), Vec::<StoreCandidate>::new());
 }
 
 /// 가짜 클라이언트. 호출 인자와 닫힘 여부를 기록한다.
@@ -438,9 +440,9 @@ fn test_all_store_search_flows_with_local_fixtures() {
                 }
             }))
             .with_validate(skip_validation);
-        let result = search_candidates_with(store, &json!({"title": "검색 제목", "isbn": "1234567890"}), &hooks).unwrap();
-        assert_eq!(result["status"], "success", "store={store}");
-        assert_eq!(result["candidates"][0]["title"], "책", "store={store}");
+        let result = search_candidates_with(store, &EpubInspection { title: "검색 제목".into(), isbn: "1234567890".into(), ..EpubInspection::default() }, &hooks).unwrap();
+        assert_eq!(result.status, SearchStatus::Success, "store={store}");
+        assert_eq!(result.candidates[0].title, "책", "store={store}");
         assert!(client.closed.load(Ordering::SeqCst), "store={store}");
         if store != "aladin" {
             let expected = if store == "yes24" { "1234567890" } else { "검색 제목" };
@@ -465,12 +467,12 @@ fn test_empty_and_blocked_search_closes_session() {
             .with_session_factory(session_factory(move |_store, _url| html.as_bytes().to_vec()))
             .with_validate(skip_validation);
         if status == "error" {
-            assert!(matches!(search_candidates_with("yes24", &json!({"title": "책"}), &hooks), Err(SearchError::Value(_))), "html={html}");
+            assert!(matches!(search_candidates_with("yes24", &EpubInspection { title: "책".into(), ..EpubInspection::default() }, &hooks), Err(SearchError::Value(_))), "html={html}");
         } else {
-            assert_eq!(search_candidates_with("yes24", &json!({"title": "책"}), &hooks).unwrap()["status"], "not_found", "html={html}");
+            assert_eq!(search_candidates_with("yes24", &EpubInspection { title: "책".into(), ..EpubInspection::default() }, &hooks).unwrap().status, SearchStatus::NotFound, "html={html}");
         }
         assert!(client.closed.load(Ordering::SeqCst), "html={html}");
-        assert!(matches!(search_candidates_with("unknown", &json!({"title": "책"}), &hooks), Err(SearchError::Value(_))), "html={html}");
+        assert!(matches!(search_candidates_with("unknown", &EpubInspection { title: "책".into(), ..EpubInspection::default() }, &hooks), Err(SearchError::Value(_))), "html={html}");
     }
 }
 
