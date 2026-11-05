@@ -265,10 +265,10 @@ fn test_aggregate_grouped_delete_insert_update_counts() {
     let es = new_es();
     let manager = make_manager(&es);
     assert_eq!(manager.search_and_aggregate_by_category().unwrap(), BTreeMap::from([("A".to_string(), 2)]));
-    assert_eq!(manager.delete_by_file_paths(&["/a"], Some(&[1])), 2);
+    assert_eq!(manager.delete_by_file_paths(&["/a".to_string()], Some(&[1])).unwrap(), 2);
 
     es.on("delete_by_query", |_| Err(runtime("fail")));
-    assert_eq!(manager.delete_by_file_paths(&["/a"], None), 0);
+    assert!(matches!(manager.delete_by_file_paths(&["/a".to_string()], None), Err(EsError::Other(_))), "삭제 오류는 호출자에게 넘긴다");
     es.reset("delete_by_query");
 
     let data = vec![(1, json!({"file_path": "/a"})), (2, json!({"file_path": "/b"}))];
@@ -455,7 +455,7 @@ fn test_delete_by_file_paths_with_exclude_ids() {
         Ok(json!({"deleted": 3}))
     });
     let manager = make_manager(&es);
-    let deleted = manager.delete_by_file_paths(&["/a", "/b"], Some(&[1, 2]));
+    let deleted = manager.delete_by_file_paths(&["/a".to_string(), "/b".to_string()], Some(&[1, 2])).unwrap();
     assert_eq!(deleted, 3);
     let body = last_body.lock().unwrap().clone();
     let must_not = &body["query"]["bool"]["must_not"];
@@ -506,7 +506,7 @@ fn test_update_success_and_delete_by_file_paths_empty() {
     success.on("update", |_| Ok(json!({"_shards": {"failed": 0}})));
     let manager = make_manager(&success);
     assert!(manager.update(1, &UpdateFields { title: "t".into(), ..Default::default() }).unwrap());
-    assert_eq!(manager.delete_by_file_paths(&[], None), 0);
+    assert_eq!(manager.delete_by_file_paths(&[], None).unwrap(), 0);
 }
 
 #[test]
@@ -904,14 +904,14 @@ fn test_delete_by_ids_empty_and_chunked() {
         Ok(json!({"deleted": count}))
     });
     let manager = make_manager(&es);
-    assert_eq!(manager.delete_by_ids(&[], 10000), 0);
+    assert_eq!(manager.delete_by_ids(&[], 10000).unwrap(), 0);
     assert_eq!(es.calls_of("delete_by_query").len(), 0);
-    assert_eq!(manager.delete_by_ids(&[1, 2, 3, 4, 5], 2), 5);
+    assert_eq!(manager.delete_by_ids(&[1, 2, 3, 4, 5], 2).unwrap(), 5);
     assert_eq!(es.calls_of("delete_by_query").len(), 3);
 }
 
 #[test]
-fn test_delete_by_ids_error_returns_partial() {
+fn test_delete_by_ids_returns_the_error_after_earlier_chunks() {
     // HalfES: 첫 호출은 2건 삭제, 이후는 예외.
     let es = new_es();
     let calls = AtomicUsize::new(0);
@@ -922,7 +922,9 @@ fn test_delete_by_ids_error_returns_partial() {
         Err(runtime("boom"))
     });
     let manager = make_manager(&es);
-    assert_eq!(manager.delete_by_ids(&[1, 2, 3, 4], 2), 2);
+    // 앞 묶음은 이미 지워졌고, 실패는 호출자에게 넘긴다.
+    assert!(manager.delete_by_ids(&[1, 2, 3, 4], 2).is_err());
+    assert_eq!(es.calls_of("delete_by_query").len(), 2);
 }
 
 #[test]

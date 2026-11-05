@@ -596,11 +596,11 @@ impl EsManagerApi for ESManager {
     }
 
     fn delete_by_file_paths(&self, paths: &[String], exclude_ids: Option<&[i64]>) -> Result<i64, EsError> {
-        Ok(ESManager::delete_by_file_paths(self, &texts(paths), exclude_ids))
+        ESManager::delete_by_file_paths(self, paths, exclude_ids)
     }
 
     fn delete_by_ids(&self, ids: &[i64], chunk_size: usize) -> Result<i64, EsError> {
-        Ok(ESManager::delete_by_ids(self, ids, chunk_size))
+        ESManager::delete_by_ids(self, ids, chunk_size)
     }
 
     fn refresh(&self) -> Result<(), EsError> {

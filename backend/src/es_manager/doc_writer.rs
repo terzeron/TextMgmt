@@ -4,13 +4,9 @@ use super::*;
 use es_client::indexing::IndexStore;
 
 impl ESManager {
-    /// 주어진 file_path 목록의 기존 문서를 삭제한다(중복 방지용). `exclude_ids`는 지우지 않는다. 오류는 로그로 남기고 0을 돌려준다.
-    pub fn delete_by_file_paths(&self, file_paths: &[&str], exclude_ids: Option<&[i64]>) -> i64 {
-        let paths: Vec<String> = file_paths.iter().map(|p| (*p).to_owned()).collect();
-        self.index_store().delete_by_file_paths(&paths, exclude_ids.unwrap_or_default()).unwrap_or_else(|e| {
-            log::error!("delete_by_file_paths error: {e}");
-            0
-        })
+    /// 주어진 file_path 목록의 기존 문서를 삭제한다(중복 방지용). `exclude_ids`는 지우지 않는다.
+    pub fn delete_by_file_paths(&self, file_paths: &[String], exclude_ids: Option<&[i64]>) -> Result<i64, EsError> {
+        self.index_store().delete_by_file_paths(file_paths, exclude_ids.unwrap_or_default())
     }
 
     pub(super) fn clear_scroll_quietly(&self, scroll_id: Option<String>) {
@@ -21,20 +17,9 @@ impl ESManager {
         }
     }
 
-    /// 주어진 `_id`(inode) 목록의 문서를 `chunk_size`개씩 삭제한다. 오류가 나면 로그를 남기고 그때까지 지운 수를 돌려준다.
-    pub fn delete_by_ids(&self, ids: &[i64], chunk_size: usize) -> i64 {
-        let store = self.index_store();
-        let mut deleted = 0;
-        for chunk in ids.chunks(chunk_size.max(1)) {
-            match store.delete_by_ids_chunked(chunk, chunk.len()) {
-                Ok(n) => deleted += n,
-                Err(e) => {
-                    log::error!("delete_by_ids error: {e}");
-                    return deleted;
-                }
-            }
-        }
-        deleted
+    /// 주어진 `_id`(inode) 목록의 문서를 `chunk_size`개씩 삭제한다. 중간 묶음이 실패하면 앞 묶음은 지워진 채 오류를 돌려준다.
+    pub fn delete_by_ids(&self, ids: &[i64], chunk_size: usize) -> Result<i64, EsError> {
+        self.index_store().delete_by_ids_chunked(ids, chunk_size)
     }
 
     // ---- 쓰기 ----

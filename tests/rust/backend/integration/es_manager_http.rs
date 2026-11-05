@@ -497,9 +497,9 @@ mod real_transport {
         assert_eq!(manager.search_by_id(5).unwrap()["file_path"], json!("자연과학/물리/시간.txt"), "file_path의 접두사도 함께 바뀐다");
         assert_eq!(manager.count_by_category("자연과학", true).unwrap(), 3);
         assert_eq!(manager.delete_by_category("자연과학/물리", false).unwrap(), DeleteByQueryResult { deleted: 1, failures: vec![] });
-        assert_eq!(manager.delete_by_file_paths(&["소설/한국/토지1.epub"], Some(&[1])), 0);
-        assert_eq!(manager.delete_by_file_paths(&["소설/한국/토지1.epub"], None), 1);
-        assert_eq!(manager.delete_by_ids(&[2, 3], 1), 2);
+        assert_eq!(manager.delete_by_file_paths(&["소설/한국/토지1.epub".to_string()], Some(&[1])).unwrap(), 0);
+        assert_eq!(manager.delete_by_file_paths(&["소설/한국/토지1.epub".to_string()], None).unwrap(), 1);
+        assert_eq!(manager.delete_by_ids(&[2, 3], 1).unwrap(), 2);
         manager.refresh().unwrap();
         assert_eq!(manager.count_by_categories(&["자연과학", "소설/한국"], true).unwrap(), BTreeMap::from([("자연과학".to_string(), 1), ("소설/한국".to_string(), 0)]));
         assert!(manager.delete(4).unwrap());
