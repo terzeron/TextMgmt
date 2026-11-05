@@ -101,10 +101,10 @@ fn ok(v: Value) -> (u16, String) {
 
 #[test]
 fn create_index_puts_settings_and_mappings_when_absent() {
-    let m = mock(|r| if r.method == "GET" { (404, r#"{"error":"index_not_found_exception"}"#.into()) } else { ok(json!({"acknowledged": true})) });
+    let m = mock(|r| if r.method == "HEAD" { (404, r#"{"error":"index_not_found_exception"}"#.into()) } else { ok(json!({"acknowledged": true})) });
     m.client().create_index().unwrap();
     let seen = m.requests();
-    assert_eq!((seen[0].method.as_str(), seen[0].path.as_str()), ("GET", "/books"));
+    assert_eq!((seen[0].method.as_str(), seen[0].path.as_str()), ("HEAD", "/books"));
     assert_eq!((seen[1].method.as_str(), seen[1].path.as_str()), ("PUT", "/books"));
     let body = seen[1].json();
     assert_eq!(body["settings"], index_settings());
@@ -128,10 +128,22 @@ fn create_index_adds_only_the_missing_fields_to_an_existing_index() {
     assert!(m2.requests().iter().all(|r| r.method != "PUT"), "빠진 필드가 없으면 매핑을 건드리지 않는다");
 }
 
+/// 매핑을 읽지 못해도 이미 있는 색인은 그대로 쓰고, 매핑은 건드리지 않는다(경고만 남긴다).
+#[test]
+fn create_index_keeps_an_existing_index_when_the_mapping_cannot_be_read() {
+    let m = mock(|r| match (r.method.as_str(), r.path.as_str()) {
+        ("HEAD", "/books") => ok(json!({})),
+        ("GET", p) if p.ends_with("/_mapping") => (500, "{}".into()),
+        _ => ok(json!({"acknowledged": true})),
+    });
+    m.client().create_index().unwrap();
+    assert!(m.requests().iter().all(|r| r.method != "PUT"), "{:?}", m.requests().iter().map(|r| (r.method.clone(), r.path.clone())).collect::<Vec<_>>());
+}
+
 #[test]
 fn create_index_tolerates_a_creation_race() {
     let m = mock(|r| match (r.method.as_str(), r.path.as_str()) {
-        ("GET", "/books") => (404, "{}".into()),
+        ("HEAD", "/books") => (404, "{}".into()),
         ("PUT", "/books") => (400, r#"{"error":{"type":"resource_already_exists_exception"}}"#.into()),
         ("GET", p) if p.ends_with("/_mapping") => ok(json!({"books": {"mappings": {"properties": index_mappings()["properties"].clone()}}})),
         _ => ok(json!({})),
@@ -144,9 +156,9 @@ fn create_index_tolerates_a_creation_race() {
 
 #[test]
 fn delete_index_only_deletes_an_existing_index() {
-    let m = mock(|r| if r.method == "GET" { ok(json!({})) } else { ok(json!({"acknowledged": true})) });
+    let m = mock(|r| if r.method == "HEAD" { ok(json!({})) } else { ok(json!({"acknowledged": true})) });
     m.client().delete_index().unwrap();
-    assert_eq!(m.requests().iter().map(|r| r.method.as_str()).collect::<Vec<_>>(), ["GET", "DELETE"]);
+    assert_eq!(m.requests().iter().map(|r| r.method.as_str()).collect::<Vec<_>>(), ["HEAD", "DELETE"]);
     let m = mock(|_| (404, "{}".into()));
     assert!(!m.client().index_exists().unwrap());
     m.client().delete_index().unwrap();

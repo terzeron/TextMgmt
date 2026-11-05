@@ -378,11 +378,14 @@ mod real_transport {
         let container = start_es();
         let es: Arc<dyn EsTransport> = Arc::new(HttpTransport::new(&container.url, "", "", "tm_books", Duration::from_secs(30)));
         let manager = ESManager::with_transport(es.clone());
+        // 색인 존재 확인·조회·삭제는 loader와 같은 es_client 구현을 같은 전송 위에서 쓴다.
+        let store = es_client::EsClient::from_transport(es.clone());
+        use es_client::indexing::IndexStore;
 
         // 1. create_index: nori 매핑 포함, 두 번째 호출은 기존 색인을 점검만 한다.
-        assert!(!manager.do_exist_index().unwrap());
+        assert!(!store.index_exists().unwrap());
         assert_eq!(manager.create_index().unwrap()["acknowledged"], json!(true));
-        assert!(manager.do_exist_index().unwrap());
+        assert!(store.index_exists().unwrap());
         let mapping = es.send(&EsRequest::GetMapping { index: Some("tm_books".into()) }).unwrap();
         let props = &mapping["tm_books"]["mappings"]["properties"];
         assert_eq!(props["category"]["fields"]["nori"]["analyzer"], json!("nori_analyzer"));
@@ -398,13 +401,13 @@ mod real_transport {
             (4, book("과학", "엘러건트 유니버스", "브라이언 그린", "과학/유니버스.pdf", "pdf", 4000, 400, "2026-01-04T00:00:00")),
             (5, book("과학/물리", "시간의 역사", "스티븐 호킹", "과학/물리/시간.txt", "txt", 500, 0, "2026-01-05T00:00:00")),
         ];
-        assert_eq!(manager.insert(&docs, usize::MAX, 3).unwrap(), vec![1, 2, 3, 4, 5]);
+        assert_eq!(manager.insert(&docs).unwrap(), vec![1, 2, 3, 4, 5]);
         manager.refresh().unwrap();
 
         // 3. search_by_id
         assert_eq!(manager.search_by_id(1).unwrap()["title"], json!("토지 첫째 권"));
         assert_eq!(manager.search_by_id(999).unwrap(), json!({}));
-        assert_eq!(manager.get_existing_paths(&[1, 999]).unwrap(), HashMap::from([(1, "소설/한국/토지1.epub".to_string())]));
+        assert_eq!(store.get_existing_paths(&[1, 999]).unwrap(), HashMap::from([(1, "소설/한국/토지1.epub".to_string())]));
 
         // 4. update, delete, 오류 상태 코드
         assert!(manager.update(1, &UpdateFields { title: "토지 제1권".into(), updated_time: "2026-02-01T00:00:00".into(), ..Default::default() }).unwrap());
@@ -477,8 +480,8 @@ mod real_transport {
         assert_eq!(reps["과학"].iter().map(|r| r.0).collect::<Vec<_>>(), vec![4, 3]);
 
         // 8. scroll로 id 열거와 created_time 채우기
-        assert_eq!(manager.get_doc_ids_by_path_prefix("과학"), [3, 4, 5].into_iter().collect());
-        assert_eq!(manager.get_doc_ids_by_path_prefix("/").len(), 5);
+        assert_eq!(store.get_doc_ids_by_path_prefix("과학").unwrap(), [3, 4, 5].into_iter().collect());
+        assert_eq!(store.get_doc_ids_by_path_prefix("/").unwrap().len(), 5);
         let tmp = tempfile::TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("과학")).unwrap();
         std::fs::write(tmp.path().join("과학/코스모스.pdf"), "x").unwrap();
@@ -500,7 +503,7 @@ mod real_transport {
         manager.refresh().unwrap();
         assert_eq!(manager.count_by_categories(&["자연과학", "소설/한국"], true).unwrap(), BTreeMap::from([("자연과학".to_string(), 1), ("소설/한국".to_string(), 0)]));
         assert!(manager.delete(4).unwrap());
-        manager.delete_index().unwrap();
-        assert!(!manager.do_exist_index().unwrap());
+        store.delete_index().unwrap();
+        assert!(!store.index_exists().unwrap());
     }
 }

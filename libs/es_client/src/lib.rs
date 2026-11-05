@@ -1,7 +1,8 @@
 //! Elasticsearch REST 클라이언트(검색).
 //!
 //! HTTP와 TLS 검증 HTTPS를 지원한다. 자체 CA는 `TM_ES_CA_CERT` PEM 파일로 지정한다.
-//! 연산 이름과 JSON 인자를 받는 저수준 전송은 [`transport`]에 있다. backend `ESManager`가 그것을 쓴다.
+//! HTTP 요청은 모두 저수준 전송 [`transport`]를 거친다. [`EsClient`]는 그 위의 검색·색인 연산이고,
+//! backend `ESManager`도 같은 전송 위에서 [`EsClient::from_transport`]로 색인 연산을 쓴다.
 //! 접속 정보는 환경변수 `TM_ES_BOOK_INDEX`, `TM_ES_URL`, `TM_ES_USER`, `TM_ES_PASSWORD`에서 읽는다.
 
 pub mod indexing;
@@ -10,9 +11,12 @@ pub mod transport;
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+
+use crate::transport::{EsRequest, EsTransport, HttpTransport};
 
 /// 목록 응답에 필요한 필드만 받는다. summary는 단건 조회에만 쓴다.
 pub const LIST_SOURCE_FIELDS: [&str; 11] = ["category", "title", "author", "file_path", "file_type", "file_size", "line_count", "page_count", "isbn", "created_time", "updated_time"];
@@ -138,21 +142,14 @@ pub trait BookSearch {
     fn search_similar_docs(&self, summary: &str) -> Result<Vec<Hit>, EsError>;
 }
 
-/// ES REST 호출의 HTTP 메서드.
-#[derive(Clone, Copy)]
-enum Method {
-    Get,
-    Post,
-    Put,
-    Delete,
-}
-
+/// 검색·색인 연산. 요청은 모두 [`EsTransport`]로 보낸다.
 pub struct EsClient {
-    agent: ureq::Agent,
-    base: String,
-    auth: String,
+    transport: Arc<dyn EsTransport>,
     pub index: String,
 }
+
+/// `EsClient`가 직접 접속할 때 쓰는 요청 시간 상한.
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) fn base64(input: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -173,8 +170,18 @@ impl EsClient {
     }
 
     pub fn new_with_ca(url: &str, user: &str, password: &str, index: &str, ca_cert_path: Option<&Path>) -> Result<Self, EsError> {
-        let agent = build_agent(Duration::from_secs(10), ca_cert_path).map_err(EsError::Transport)?;
-        Ok(EsClient { agent, base: url.trim_end_matches('/').to_owned(), auth: format!("Basic {}", base64(format!("{user}:{password}").as_bytes())), index: index.to_owned() })
+        let transport = HttpTransport::try_new_with_ca(url, user, password, index, CLIENT_TIMEOUT, ca_cert_path).map_err(EsError::Transport)?;
+        Ok(Self::from_transport(Arc::new(transport)))
+    }
+
+    /// 이미 있는 전송 위에서 연산을 쓴다. 색인 이름은 전송의 기본 색인이다.
+    pub fn from_transport(transport: Arc<dyn EsTransport>) -> Self {
+        let index = transport.index_name().to_owned();
+        EsClient { transport, index }
+    }
+
+    pub(crate) fn send(&self, request: &EsRequest) -> Result<Value, EsError> {
+        self.transport.send(request)
     }
 
     /// 환경변수에서 접속 정보를 읽고 지정된 색인을 사용한다.
@@ -193,45 +200,11 @@ impl EsClient {
         Self::from_env_with_index(&get("TM_ES_BOOK_INDEX")?)
     }
 
-    /// 요청 URL. http·https가 아니면 보내지 않는다.
-    fn url(&self, path: &str) -> Result<String, EsError> {
-        let url = format!("{}{path}", self.base);
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(EsError::Transport(format!("ES URL은 http 또는 https여야 한다: {}", self.base)));
-        }
-        Ok(url)
-    }
-
-    /// 응답 상태를 확인하고 본문을 JSON으로 읽는다.
-    fn finish(result: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<Value, EsError> {
-        let mut resp = result.map_err(|e| EsError::Transport(e.to_string()))?;
-        let status = resp.status().as_u16();
-        let text = resp.body_mut().read_to_string().map_err(|e| EsError::Transport(e.to_string()))?;
-        if status >= 400 {
-            return Err(EsError::Status { status, body: text });
-        }
-        serde_json::from_str(&text).map_err(|e| EsError::Parse(e.to_string()))
-    }
-
-    fn call(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Value, EsError> {
-        let url = self.url(path)?;
-        let auth = &self.auth;
-        Self::finish(match (method, body) {
-            (Method::Post, Some(b)) => self.agent.post(&url).header("Authorization", auth).send_json(b),
-            (Method::Post, None) => self.agent.post(&url).header("Authorization", auth).send_empty(),
-            (Method::Put, Some(b)) => self.agent.put(&url).header("Authorization", auth).send_json(b),
-            (Method::Put, None) => self.agent.put(&url).header("Authorization", auth).send_empty(),
-            (Method::Delete, Some(b)) => self.agent.delete(&url).header("Authorization", auth).force_send_body().send_json(b),
-            (Method::Delete, None) => self.agent.delete(&url).header("Authorization", auth).call(),
-            (Method::Get, _) => self.agent.get(&url).header("Authorization", auth).call(),
-        })
-    }
-
     /// 접속을 확인한다. 실패하면 `2**(n+1)`초(최대 10초)씩 쉬며 `max_retries`번 시도한다.
     pub fn connect_with_retry(&self, max_retries: u32, sleep: &dyn Fn(u64)) -> Result<Value, EsError> {
         let mut last = None;
         for attempt in 0..max_retries {
-            match self.call(Method::Get, "/", None) {
+            match self.send(&EsRequest::Info) {
                 Ok(info) => return Ok(info),
                 Err(e) => {
                     if attempt + 1 < max_retries {
@@ -253,7 +226,7 @@ impl EsClient {
         if let Some(fields) = source_fields {
             body["_source"] = json!(fields);
         }
-        let response = self.call(Method::Post, &format!("/{}/_search", self.index), Some(&body))?;
+        let response = self.send(&EsRequest::search(body))?;
         let hits = &response["hits"];
         let Some(max_score) = hits["max_score"].as_f64() else { return Ok(Vec::new()) };
         let rows = hits["hits"].as_array().ok_or_else(|| EsError::Parse("hits.hits가 없다".into()))?;
@@ -265,7 +238,7 @@ impl EsClient {
         let mut scroll_id: Option<String> = None;
         let outcome: Result<Vec<Hit>, EsError> = (|| {
             let body = json!({"query": query, "size": MAX_RESULT_WINDOW, "track_scores": true});
-            let mut response = self.call(Method::Post, &format!("/{}/_search?scroll=10m", self.index), Some(&body))?;
+            let mut response = self.send(&EsRequest::scroll_search(body, "10m"))?;
             scroll_id = response.get("_scroll_id").and_then(Value::as_str).map(str::to_owned);
             let mut result = Vec::new();
             loop {
@@ -282,7 +255,7 @@ impl EsClient {
                         return Ok(result);
                     }
                 }
-                let mut next = self.call(Method::Post, "/_search/scroll", Some(&json!({"scroll":"10m", "scroll_id":scroll_id.as_deref().unwrap_or("")})))?;
+                let mut next = self.send(&EsRequest::Scroll { scroll_id: scroll_id.clone().unwrap_or_default(), scroll: "10m".to_string() })?;
                 scroll_id = Some(next.get("_scroll_id").and_then(Value::as_str).ok_or_else(|| EsError::Parse("scroll 응답에 _scroll_id가 없다".into()))?.to_owned());
                 if next["hits"]["max_score"].as_f64().is_none() {
                     return Ok(Vec::new());
@@ -293,7 +266,7 @@ impl EsClient {
             Ok(result)
         })();
         if let Some(id) = scroll_id {
-            let _ = self.call(Method::Delete, "/_search/scroll", Some(&json!({"scroll_id": id})));
+            let _ = self.send(&EsRequest::ClearScroll { scroll_id: id });
         }
         outcome
     }

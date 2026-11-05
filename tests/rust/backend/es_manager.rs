@@ -11,7 +11,7 @@ use common::clock::FakeClock;
 use common::es_dummy::{DummyEs, runtime_error};
 use common::faulty_fs::{FaultyFs, fail_always, fail_if_path_contains};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
 use tempfile::TempDir;
 
@@ -175,64 +175,6 @@ mod es {
 }
 
 #[test]
-fn test_do_exist_index_get_existing_ids_and_paths() {
-    let es = new_es();
-    let manager = make_manager(&es);
-    es.set_mapping(json!({"exists": true}));
-    assert!(manager.do_exist_index().unwrap());
-    assert_eq!(manager.get_existing_paths(&[1, 2]).unwrap(), HashMap::from([(1, "/a".to_string())]));
-}
-
-#[test]
-fn test_do_exist_index_is_true_only_for_a_true_response() {
-    let cases = [(json!(true), true), (json!(false), false), (json!(null), false), (json!(1), false), (json!("present"), false), (json!({"index": true}), false)];
-
-    for (response, expected) in cases {
-        let es = new_es();
-        let response_for_es = response.clone();
-        es.on("indices.exists", move |_| Ok(response_for_es.clone()));
-        assert_eq!(make_manager(&es).do_exist_index().unwrap(), expected, "response={response}");
-    }
-}
-
-#[test]
-fn test_get_existing_created_time_metadata_omits_empty_metadata() {
-    let es = new_es();
-    es.on("mget", |_| Ok(json!({"docs": [{"_id": "3", "found": true, "_source": {}}]})));
-    assert!(make_manager(&es).get_existing_created_time_metadata(&[3]).unwrap().is_empty());
-}
-
-#[test]
-fn test_get_existing_created_time_metadata_returns_stored_values() {
-    let es = new_es();
-    let manager = make_manager(&es);
-
-    es.on("mget", |kw| {
-        assert_eq!(kw["docs"], json!([{"_index": "idx", "_id": "1"}, {"_index": "idx", "_id": "2"}]));
-        assert_eq!(kw["_source"], json!(["created_time", "created_time_source", "updated_time"]));
-        Ok(json!({
-            "docs": [
-                {
-                    "_id": "1",
-                    "found": true,
-                    "_source": {
-                        "created_time": "2020-01-01T00:00:00",
-                        "created_time_source": "statx_btime",
-                        "updated_time": "2021-02-03T04:05:06",
-                    },
-                },
-                {"_id": "2", "found": false},
-            ]
-        }))
-    });
-
-    assert_eq!(
-        manager.get_existing_created_time_metadata(&[1, 2]).unwrap(),
-        HashMap::from([(1, json!({"created_time": "2020-01-01T00:00:00", "created_time_source": "statx_btime", "updated_time": "2021-02-03T04:05:06"}))])
-    );
-}
-
-#[test]
 fn test_create_index_paths() {
     let es = new_es();
     let manager = make_manager(&es);
@@ -276,117 +218,6 @@ fn test_create_index_includes_created_time_mapping() {
     let props = es.state(|s| s.created_body["mappings"]["properties"].clone());
     assert_eq!(props["created_time"], json!({"type": "date"}));
     assert_eq!(props["created_time_source"], json!({"type": "keyword"}));
-}
-
-#[test]
-fn test_ensure_category_nori_subfield_adds() {
-    let es = new_es();
-    let manager = make_manager(&es);
-    es.set_mapping(json!({"idx": {"mappings": {"properties": {"category": {}}}}}));
-    manager.ensure_category_nori_subfield();
-    assert!(es.state(|s| s.put_mapping_called));
-}
-
-#[test]
-fn test_ensure_created_time_field_adds_missing_created_time_fields() {
-    let es = new_es();
-    let manager = make_manager(&es);
-    es.set_mapping(json!({"idx": {"mappings": {"properties": {"category": {}}}}}));
-
-    manager.ensure_created_time_field();
-
-    assert!(es.state(|s| s.put_mapping_called));
-    assert_eq!(es.state(|s| s.put_mapping_properties.clone()), json!({"created_time": {"type": "date"}, "created_time_source": {"type": "keyword"}}));
-}
-
-#[test]
-fn test_ensure_created_time_field_swallows_mapping_read_error() {
-    let es = new_es();
-    es.on("indices.get_mapping", |_| Err(runtime("mapping unavailable")));
-
-    make_manager(&es).ensure_created_time_field();
-
-    assert!(!es.state(|s| s.put_mapping_called));
-}
-
-#[test]
-fn test_ensure_publisher_field_adds_it_when_missing() {
-    let es = new_es();
-    let manager = make_manager(&es);
-    es.set_mapping(json!({"idx": {"mappings": {"properties": {"title": {}}}}}));
-
-    manager.ensure_publisher_field();
-
-    assert!(es.state(|s| s.put_mapping_called));
-    // 자동분류가 전집을 가르는 데 쓰는 필드다. title/author 와 같은 모양으로 둔다.
-    assert_eq!(es.state(|s| s.put_mapping_properties.clone()), json!({"publisher": {"type": "text", "analyzer": "nori_analyzer", "fields": {"keyword": {"type": "keyword"}}}}));
-}
-
-#[test]
-fn test_ensure_publisher_field_is_a_no_op_when_already_present() {
-    let es = new_es();
-    let manager = make_manager(&es);
-    es.set_mapping(json!({"idx": {"mappings": {"properties": {"publisher": {"type": "text"}}}}}));
-
-    manager.ensure_publisher_field();
-
-    assert!(!es.state(|s| s.put_mapping_called));
-}
-
-#[test]
-fn test_ensure_publisher_field_swallows_errors() {
-    let es = new_es();
-    let manager = make_manager(&es);
-
-    es.on("indices.get_mapping", |_| Err(runtime("ES 가 응답하지 않는다")));
-    // 매핑 추가에 실패해도 색인 생성 자체를 막으면 안 된다
-    manager.ensure_publisher_field();
-    assert!(!es.state(|s| s.put_mapping_called));
-}
-
-#[test]
-fn test_ensure_mapping_helpers_skip_incomplete_mapping_shapes() {
-    let es = new_es();
-    let manager = make_manager(&es);
-
-    es.set_mapping(json!({"idx": {"mappings": {}}}));
-    manager.ensure_category_nori_subfield();
-
-    es.set_mapping(json!({"idx": {}}));
-    manager.ensure_created_time_field();
-    manager.ensure_publisher_field();
-
-    assert!(!es.state(|s| s.put_mapping_called));
-}
-
-#[test]
-fn test_ensure_mapping_helpers_swallow_put_mapping_errors() {
-    let cases =
-        [json!({"idx": {"mappings": {"properties": {"category": {}}}}}), json!({"idx": {"mappings": {"properties": {"title": {}}}}}), json!({"idx": {"mappings": {"properties": {"title": {}}}}})];
-    let ensure: [fn(&ESManager); 3] = [ESManager::ensure_category_nori_subfield, ESManager::ensure_created_time_field, ESManager::ensure_publisher_field];
-
-    for (mapping, ensure) in cases.into_iter().zip(ensure) {
-        let es = new_es();
-        let manager = make_manager(&es);
-        es.set_mapping(mapping);
-        es.on("indices.put_mapping", |_| Err(runtime("mapping update rejected")));
-
-        ensure(&manager);
-
-        assert_eq!(es.calls_of("indices.put_mapping").len(), 1);
-    }
-}
-
-#[test]
-fn test_ensure_created_time_field_adds_missing_source_only() {
-    let es = new_es();
-    let manager = make_manager(&es);
-    es.set_mapping(json!({"idx": {"mappings": {"properties": {"created_time": {"type": "date"}}}}}));
-
-    manager.ensure_created_time_field();
-
-    assert!(es.state(|s| s.put_mapping_called));
-    assert_eq!(es.state(|s| s.put_mapping_properties.clone()), json!({"created_time_source": {"type": "keyword"}}));
 }
 
 #[test]
@@ -441,7 +272,7 @@ fn test_aggregate_grouped_delete_insert_update_counts() {
     es.reset("delete_by_query");
 
     let data = vec![(1, json!({"file_path": "/a"})), (2, json!({"file_path": "/b"}))];
-    assert_eq!(manager.insert(&data, usize::MAX, 2).unwrap(), vec![1, 2]);
+    assert_eq!(manager.insert(&data).unwrap(), vec![1, 2]);
 
     assert!(!manager.update(1, &UpdateFields { title: "t".into(), ..Default::default() }).unwrap());
     assert_eq!(manager.count_by_category("A", true).unwrap(), 3);
@@ -614,15 +445,6 @@ fn test_count_by_categories_error_response() {
 }
 
 #[test]
-fn test_ensure_category_nori_subfield_exception() {
-    let es = new_es();
-    let manager = make_manager(&es);
-
-    es.on("indices.get_mapping", |_| Err(runtime("boom")));
-    manager.ensure_category_nori_subfield();
-}
-
-#[test]
 fn test_delete_by_file_paths_with_exclude_ids() {
     // ESDelete: 받은 body를 보관하고 deleted 3을 돌려준다.
     let es = new_es();
@@ -675,30 +497,6 @@ fn test_search_paged_with_zero_score() {
     let (results, total) = manager.search_paged(&json!({"match": {"title": "a"}}), None, 10, 0, 0.0, None).unwrap();
     assert_eq!(results, vec![]);
     assert_eq!(total, 1);
-}
-
-#[test]
-fn test_get_existing_ids_and_paths_empty() {
-    let es = new_es();
-    let manager = make_manager(&es);
-    assert_eq!(manager.get_existing_paths(&[]).unwrap(), HashMap::new());
-}
-
-#[test]
-fn test_delete_index_when_exists() {
-    let es = new_es();
-    let manager = make_manager(&es);
-    // `indices.exists`가 true를 돌려주게 해 색인이 있는 상황을 만든다.
-    es.set_mapping(json!({"exists": true}));
-    manager.delete_index().unwrap();
-    assert!(es.state(|s| s.deleted));
-}
-
-#[test]
-fn test_delete_index_is_a_noop_when_index_is_missing() {
-    let es = new_es();
-    make_manager(&es).delete_index().unwrap();
-    assert!(es.calls_of("indices.delete").is_empty());
 }
 
 #[test]
@@ -841,7 +639,7 @@ fn test_insert_final_failure() {
     // 재시도 사이의 sleep은 FakeClock이 건너뛴다. 시계는 `connect`로만 주입하므로 매니저를 `connect_with`로 만든다.
     let clock = FakeClock::new(0.0);
     let manager = connect_with(&retry_env, &es, &clock).unwrap();
-    let result = manager.insert(&[(1, json!({"file_path": "/a"}))], usize::MAX, 2);
+    let result = manager.insert(&[(1, json!({"file_path": "/a"}))]);
     assert!(matches!(result, Err(EsError::Transport(_))));
 }
 
@@ -851,32 +649,20 @@ fn test_insert_uses_injected_clock_and_preserves_bulk_failure_modes() {
     retry_es.on("bulk", |_| Err(EsError::Transport("connection refused".to_string())));
     let clock = FakeClock::new(0.0);
     let retry_manager = make_manager(&retry_es).with_clock(clock.clone());
-    assert!(retry_manager.insert(&[(1, json!({}))], usize::MAX, 3).is_err());
+    assert!(retry_manager.insert(&[(1, json!({}))]).is_err());
     assert_eq!(clock.slept(), vec![1.0, 2.0]);
 
     let status_es = new_es();
     status_es.on("bulk", |_| Err(EsError::Status { status: 400, body: "bad request".into() }));
     let status_clock = FakeClock::new(0.0);
     let status_manager = make_manager(&status_es).with_clock(status_clock.clone());
-    assert!(matches!(status_manager.insert(&[(1, json!({}))], usize::MAX, 3), Err(EsError::Status { status: 400, .. })));
+    assert!(matches!(status_manager.insert(&[(1, json!({}))]), Err(EsError::Status { status: 400, .. })));
     assert!(status_clock.slept().is_empty());
 
     let item_error_es = new_es();
     item_error_es.on("bulk", |_| Ok(json!({"errors": true})));
     let item_error_manager = make_manager(&item_error_es);
-    assert_eq!(item_error_manager.insert(&[(1, json!({}))], usize::MAX, 1).unwrap(), vec![1]);
-}
-
-#[test]
-fn test_insert_num_docs_limit() {
-    // insert stops when data_count >= num_docs
-    let es = new_es();
-    es.on("bulk", |_| Ok(json!({"errors": false})));
-    let manager = make_manager(&es);
-    let data: Vec<(i64, Value)> = (0..10).map(|i| (i, json!({"file_path": format!("/{i}")}))).collect();
-    let result = manager.insert(&data, 3, 3).unwrap();
-    // Should stop after processing first chunk that hits num_docs
-    assert!(result.len() <= 10);
+    assert_eq!(item_error_manager.insert(&[(1, json!({}))]).unwrap(), vec![1]);
 }
 
 #[test]
@@ -1107,46 +893,6 @@ fn test_http_url_does_not_set_ssl_kwargs() {
     assert_eq!(options.verify_certs, None);
     assert_eq!(options.ssl_show_warn, None);
     assert_eq!(options.ca_cert_path, None);
-}
-
-#[test]
-fn test_path_prefix_query_variants() {
-    for empty in ["", ".", "/"] {
-        assert_eq!(ESManager::path_prefix_query(empty), json!({"match_all": {}}), "빈 접두사: {empty:?}");
-    }
-    let q = ESManager::path_prefix_query("foo/bar/");
-    assert_eq!(q["bool"]["should"], json!([{"term": {"file_path": "foo/bar"}}, {"prefix": {"file_path": "foo/bar/"}}]));
-}
-
-#[test]
-fn test_get_doc_ids_by_path_prefix_scrolls_and_clears() {
-    // ScrollES: 첫 검색 2건, 스크롤 1페이지에 1건, 그다음 빈 페이지.
-    let es = new_es();
-    let cleared = Arc::new(AtomicBool::new(false));
-    let page = Arc::new(AtomicUsize::new(0));
-    es.on("search", |_| Ok(json!({"_scroll_id": "s1", "hits": {"hits": [{"_id": "1"}, {"_id": "2"}]}})));
-    es.on("scroll", move |_| {
-        if page.fetch_add(1, Ordering::SeqCst) + 1 == 1 {
-            return Ok(json!({"_scroll_id": "s2", "hits": {"hits": [{"_id": "3"}]}}));
-        }
-        Ok(json!({"_scroll_id": "s3", "hits": {"hits": []}}))
-    });
-    let flag = cleared.clone();
-    es.on("clear_scroll", move |_| {
-        flag.store(true, Ordering::SeqCst);
-        Ok(Value::Null)
-    });
-    let manager = make_manager(&es);
-    assert_eq!(manager.get_doc_ids_by_path_prefix("foo"), HashSet::from([1, 2, 3]));
-    assert!(cleared.load(Ordering::SeqCst));
-}
-
-#[test]
-fn test_get_doc_ids_by_path_prefix_error_returns_empty() {
-    let es = new_es();
-    es.on("search", |_| Err(runtime("boom")));
-    let manager = make_manager(&es);
-    assert_eq!(manager.get_doc_ids_by_path_prefix("foo"), HashSet::new());
 }
 
 #[test]
@@ -1444,40 +1190,6 @@ fn test_backfill_created_time_all_error_branches() {
     let res5 = manager5.backfill_created_time(tmp.path(), 500);
     assert_eq!(res5.failed, 1);
     assert_eq!(res5.updated, 0);
-}
-
-#[test]
-fn test_get_doc_ids_by_path_prefix_clear_scroll_error() {
-    // ScrollErrES
-    let es = new_es();
-    es.on("search", |_| Ok(json!({"_scroll_id": "s_err", "hits": {"hits": []}})));
-    es.on("clear_scroll", |_| Err(runtime("clear scroll error")));
-    let manager = make_manager(&es);
-    // 586-587: clear_scroll exception handled silently
-    let ids = manager.get_doc_ids_by_path_prefix("some/prefix");
-    assert_eq!(ids, HashSet::new());
-}
-
-#[test]
-fn test_ensure_category_nori_and_created_time_fields_already_present() {
-    // ExistingFieldsES: 필드가 이미 다 있는 매핑
-    let es = new_es();
-    es.set_mapping(json!({
-        "idx": {
-            "mappings": {
-                "properties": {
-                    "category": {"type": "keyword", "fields": {"nori": {"type": "text"}}},
-                    "created_time": {"type": "date"},
-                    "created_time_source": {"type": "keyword"},
-                }
-            }
-        }
-    }));
-    let manager = make_manager(&es);
-    manager.ensure_category_nori_subfield();
-    assert!(!es.state(|s| s.put_mapping_called));
-    manager.ensure_created_time_field();
-    assert!(!es.state(|s| s.put_mapping_called));
 }
 
 #[test]
@@ -1849,13 +1561,6 @@ mod api_facade {
         assert_eq!(aggregate["A"].0, 1);
         let _ = api.search_cover_files_paged(&categories, 10, Some((2, 1, "/cover".into())), &exclude);
         let _ = api.search_group_representatives(&categories, &exclude);
-    }
-
-    #[test]
-    fn test_existing_created_time_metadata_is_empty_for_no_ids() {
-        let (manager, es) = manager();
-        assert!(manager.get_existing_created_time_metadata(&[]).unwrap().is_empty());
-        assert!(es.calls_of("mget").is_empty(), "빈 ID 목록은 mget을 부르면 안 된다");
     }
 
     #[test]

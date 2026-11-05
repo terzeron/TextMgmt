@@ -240,10 +240,18 @@ impl HttpTransport {
         Self::new_with_ca(url, user, password, index, timeout, None)
     }
 
-    /// 사설 CA를 지정하면 해당 CA로 HTTPS 인증서를 검증한다.
+    /// 사설 CA를 지정하면 해당 CA로 HTTPS 인증서를 검증한다. agent를 만들지 못하면 요청을 보낼 때 오류를 돌려준다.
     pub fn new_with_ca(url: &str, user: &str, password: &str, index: &str, timeout: Duration, ca_cert_path: Option<&Path>) -> Self {
+        Self::with_agent(url, user, password, index, build_agent(timeout, ca_cert_path).map_err(EsError::Other))
+    }
+
+    /// `new_with_ca`와 같지만 agent를 만들지 못하면(CA 파일 오류 등) 바로 그 사유를 돌려준다.
+    pub fn try_new_with_ca(url: &str, user: &str, password: &str, index: &str, timeout: Duration, ca_cert_path: Option<&Path>) -> Result<Self, String> {
+        Ok(Self::with_agent(url, user, password, index, Ok(build_agent(timeout, ca_cert_path)?)))
+    }
+
+    fn with_agent(url: &str, user: &str, password: &str, index: &str, agent: Result<ureq::Agent, EsError>) -> Self {
         let auth = (!user.is_empty() || !password.is_empty()).then(|| format!("Basic {}", base64(format!("{user}:{password}").as_bytes())));
-        let agent = build_agent(timeout, ca_cert_path).map_err(EsError::Other);
         HttpTransport { agent, base: url.trim_end_matches('/').to_string(), auth, index: index.to_string() }
     }
 

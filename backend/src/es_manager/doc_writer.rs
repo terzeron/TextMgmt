@@ -1,68 +1,16 @@
 //! 문서 삭제·삽입·수정과 카테고리 이름 바꾸기·삭제.
 
 use super::*;
+use es_client::indexing::IndexStore;
 
 impl ESManager {
-    /// 주어진 file_path 목록의 기존 문서를 삭제한다(중복 방지용). `exclude_ids`는 지우지 않는다. 오류는 삼키고 0을 돌려준다.
+    /// 주어진 file_path 목록의 기존 문서를 삭제한다(중복 방지용). `exclude_ids`는 지우지 않는다. 오류는 로그로 남기고 0을 돌려준다.
     pub fn delete_by_file_paths(&self, file_paths: &[&str], exclude_ids: Option<&[i64]>) -> i64 {
-        if file_paths.is_empty() {
-            return 0;
-        }
-        let mut query = json!({"bool": {"must": [{"terms": {"file_path": file_paths}}]}});
-        if let Some(ids) = exclude_ids.filter(|ids| !ids.is_empty()) {
-            query["bool"]["must_not"] = json!([{"ids": {"values": ids.iter().map(i64::to_string).collect::<Vec<_>>()}}]);
-        }
-        match self.es.send(&EsRequest::DeleteByQuery { index: None, body: json!({"query": query}), conflicts: Some(Conflicts::Proceed), refresh: Some(false) }) {
-            Ok(result) => {
-                let deleted = result["deleted"].as_i64().unwrap_or(0);
-                if deleted > 0 {
-                    log::info!("delete_by_file_paths: {deleted} docs deleted for {} paths", file_paths.len());
-                }
-                deleted
-            }
-            Err(e) => {
-                log::error!("delete_by_file_paths error: {e}");
-                0
-            }
-        }
-    }
-
-    /// 경로 prefix 하위(자기 자신 포함) 문서를 매칭하는 쿼리. prefix가 ""/"."/"/"이면 전체(match_all)다.
-    pub fn path_prefix_query(path_prefix: &str) -> Value {
-        let p = path_prefix.trim_matches('/');
-        if p.is_empty() || p == "." {
-            return json!({"match_all": {}});
-        }
-        json!({"bool": {"should": [{"term": {"file_path": p}}, {"prefix": {"file_path": format!("{p}/")}}], "minimum_should_match": 1}})
-    }
-
-    /// 경로 prefix 하위 문서의 `_id`(inode) 집합. scroll로 읽고 `_source`는 받지 않는다. 오류는 삼키고 읽은 만큼 돌려준다.
-    pub fn get_doc_ids_by_path_prefix(&self, path_prefix: &str) -> HashSet<i64> {
-        let query = Self::path_prefix_query(path_prefix);
-        let mut ids = HashSet::new();
-        let mut scroll_id: Option<String> = None;
-        if let Err(e) = self.collect_ids(&query, &mut ids, &mut scroll_id) {
-            log::error!("get_doc_ids_by_path_prefix error: {e}");
-        }
-        self.clear_scroll_quietly(scroll_id);
-        ids
-    }
-
-    fn collect_ids(&self, query: &Value, ids: &mut HashSet<i64>, scroll_id: &mut Option<String>) -> Result<(), EsError> {
-        let mut response = self.es.send(&EsRequest::scroll_search(json!({"query": query, "size": 5000, "_source": false}), "10m"))?;
-        loop {
-            if let Some(id) = response["_scroll_id"].as_str() {
-                *scroll_id = Some(id.to_string());
-            }
-            let hits = hits_of(&response);
-            if hits.is_empty() {
-                return Ok(());
-            }
-            for hit in hits {
-                ids.insert(hit_id(hit)?);
-            }
-            response = self.es.send(&EsRequest::Scroll { scroll_id: scroll_id.clone().unwrap_or_default(), scroll: "10m".to_string() })?;
-        }
+        let paths: Vec<String> = file_paths.iter().map(|p| (*p).to_owned()).collect();
+        self.index_store().delete_by_file_paths(&paths, exclude_ids.unwrap_or_default()).unwrap_or_else(|e| {
+            log::error!("delete_by_file_paths error: {e}");
+            0
+        })
     }
 
     pub(super) fn clear_scroll_quietly(&self, scroll_id: Option<String>) {
@@ -73,72 +21,29 @@ impl ESManager {
         }
     }
 
-    /// 주어진 `_id`(inode) 목록의 문서를 삭제한다. 오류가 나면 그때까지 지운 수를 돌려준다.
+    /// 주어진 `_id`(inode) 목록의 문서를 `chunk_size`개씩 삭제한다. 오류가 나면 로그를 남기고 그때까지 지운 수를 돌려준다.
     pub fn delete_by_ids(&self, ids: &[i64], chunk_size: usize) -> i64 {
-        if ids.is_empty() {
-            return 0;
-        }
+        let store = self.index_store();
         let mut deleted = 0;
         for chunk in ids.chunks(chunk_size.max(1)) {
-            let query = json!({"ids": {"values": chunk.iter().map(i64::to_string).collect::<Vec<_>>()}});
-            match self.es.send(&EsRequest::DeleteByQuery { index: None, body: json!({"query": query}), conflicts: Some(Conflicts::Proceed), refresh: Some(false) }) {
-                Ok(result) => deleted += result["deleted"].as_i64().unwrap_or(0),
+            match store.delete_by_ids_chunked(chunk, chunk.len()) {
+                Ok(n) => deleted += n,
                 Err(e) => {
                     log::error!("delete_by_ids error: {e}");
                     return deleted;
                 }
             }
         }
-        if deleted > 0 {
-            log::info!("delete_by_ids: {deleted} docs deleted for {} ids", ids.len());
-        }
         deleted
     }
 
     // ---- 쓰기 ----
 
-    /// 문서를 100건씩 bulk로 넣는다. 연결 오류는 `2**attempt`초씩 쉬며 `max_retries`번까지 시도한다.
-    /// `num_docs` 이상 처리하면 그 묶음에서 멈춘다.
-    pub fn insert(&self, data: &[(i64, Value)], num_docs: usize, max_retries: u32) -> Result<Vec<i64>, EsError> {
+    /// 문서를 100건씩 bulk로 넣고 넣은 문서 id를 돌려준다. 재시도 규칙은 `EsClient::insert_with`와 같고, 쉬는 시간은 `Clock`으로 잰다.
+    pub fn insert(&self, data: &[(i64, Value)]) -> Result<Vec<i64>, EsError> {
         log::debug!("insert() {} items", data.len());
-        let mut doc_ids = Vec::new();
-        let mut data_count = 0usize;
-        for chunk in data.chunks(100) {
-            let mut body = Vec::with_capacity(chunk.len() * 2);
-            for (inode, doc) in chunk {
-                body.push(json!({"index": {"_index": self.index(), "_id": inode.to_string()}}));
-                body.push(doc.clone());
-                doc_ids.push(*inode);
-                data_count += 1;
-            }
-            log::info!("{} items inserted", body.len() / 2);
-            let request = EsRequest::Bulk { lines: body, timeout: Some("60s".to_string()), refresh: Some(false) };
-            for attempt in 0..max_retries {
-                match self.es.send(&request) {
-                    Ok(response) => {
-                        if response["errors"].as_bool().unwrap_or(false) {
-                            log::warn!("ES bulk 응답에 항목 오류가 있다");
-                        }
-                        break;
-                    }
-                    Err(e) if e.is_connection() => {
-                        if attempt + 1 < max_retries {
-                            let wait = 2f64.powi(attempt as i32);
-                            log::warn!("ES bulk 요청 실패 (시도 {}/{max_retries}): {e}. {wait}초 후 재시도...", attempt + 1);
-                            self.clock.sleep(wait);
-                        } else {
-                            log::error!("ES bulk 요청 최종 실패: {e}");
-                            return Err(e);
-                        }
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-            if data_count >= num_docs {
-                break;
-            }
-        }
-        Ok(doc_ids)
+        self.index_store().insert_with(data, &|secs| self.clock.sleep(secs as f64))?;
+        Ok(data.iter().map(|(id, _)| *id).collect())
     }
 
     /// 필드를 갱신한다(`refresh=true`). 샤드 실패가 있으면 `false`다.

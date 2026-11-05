@@ -1,7 +1,7 @@
 //! Elasticsearch 접근 계층의 trait와 오류. 구현(`ESManager`)은 `libs/es_client`를 감싸서 이 trait를 만족시킨다.
 //! 설계: docs/rust-test-seams.md 3.3. 모든 메서드의 기본 구현은 `Err(EsError::Unsupported)`라서, 테스트 대역은 쓰는 메서드만 구현한다.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
 use std::io;
 use std::os::unix::fs::MetadataExt;
@@ -592,7 +592,7 @@ impl EsManagerApi for ESManager {
 
     fn insert(&self, docs: &Docs) -> Result<Vec<i64>, EsError> {
         let data: Vec<(i64, Value)> = docs.iter().map(|(id, doc)| (*id, doc.clone())).collect();
-        ESManager::insert(self, &data, usize::MAX, 3)
+        ESManager::insert(self, &data)
     }
 
     fn delete_by_file_paths(&self, paths: &[String], exclude_ids: Option<&[i64]>) -> Result<i64, EsError> {
