@@ -13,11 +13,12 @@ use backend::cover_sources::{
 };
 use backend::cover_sources::{SearchStatus, StoreCandidate};
 use backend::epub_cover::EpubInspection;
+use bookstore::BookInfo;
 use common::{
     clock::FakeClock,
     faulty_fs::{FaultyFs, other_err},
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use sysdeps::{HttpError, HttpResponse, HttpSession, HttpTimeout, RealFs, SystemClock};
 
 #[test]
@@ -410,8 +411,8 @@ impl StoreClient for SharedClient {
     fn extract_search_links(&self, _html: &str) -> Vec<String> {
         if self.0.no_links { Vec::new() } else { vec!["https://example.org/detail".to_string()] }
     }
-    fn extract_book_info(&self, _html: &str) -> Value {
-        json!({"title": "책", "author": "저자"})
+    fn extract_book_info(&self, _html: &str) -> BookInfo {
+        BookInfo { title: "책".into(), author: "저자".into(), ..BookInfo::default() }
     }
     fn set_session_header(&self, name: &str, value: &str) {
         self.0.headers.lock().unwrap().insert(name.to_string(), value.to_string());

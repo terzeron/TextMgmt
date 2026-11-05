@@ -5,8 +5,6 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use sysdeps::{HttpError, HttpResponse, HttpSession, HttpTimeout};
 
-use serde_json::{Value, json};
-
 pub type Handler = Box<dyn Fn(&str, &[(String, String)]) -> Result<HttpResponse, HttpError> + Send + Sync>;
 
 pub type LoadHook = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
@@ -24,10 +22,6 @@ pub fn between(html: &str, open_tag: &str, close_tag: &str) -> String {
         }
         None => String::new(),
     }
-}
-
-pub fn empty_info() -> Value {
-    json!({"title": "", "author": "", "category": "", "isbn": ""})
 }
 
 /// `<a href='...'>`의 href 값을 문서 순서대로 모은다.

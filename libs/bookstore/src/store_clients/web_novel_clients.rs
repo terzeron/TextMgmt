@@ -38,7 +38,7 @@ impl Bookstore for MunpiaBookstore {
         links
     }
 
-    fn extract_book_info(&self, markup: &str) -> Value {
+    fn extract_book_info(&self, markup: &str) -> BookInfo {
         let doc = Html::parse_document(markup);
         let mut title = String::new();
         let mut author = String::new();
@@ -55,7 +55,7 @@ impl Bookstore for MunpiaBookstore {
         if let Some(path) = doc.select(sel!("p.meta-path")).next() {
             category = text_strip(path).split('>').map(str::trim).collect::<Vec<_>>().join(" > ");
         }
-        info_value(&title, &author, &category, "")
+        book_info(&title, &author, &category, "")
     }
 }
 
@@ -96,7 +96,7 @@ impl Bookstore for NaverSeriesBookstore {
         links
     }
 
-    fn extract_book_info(&self, markup: &str) -> Value {
+    fn extract_book_info(&self, markup: &str) -> BookInfo {
         let doc = Html::parse_document(markup);
         let title = title_string(&doc).map(|t| t.trim().to_owned()).unwrap_or_default();
         let mut author = String::new();
@@ -121,7 +121,7 @@ impl Bookstore for NaverSeriesBookstore {
             author = m[1].trim().to_owned();
         }
         let category = doc.select(sel!("div#content > ul.end_info > li.info_lst > ul > li span a")).next().map(text_strip).unwrap_or_default();
-        info_value(&title, &author, &category, "")
+        book_info(&title, &author, &category, "")
     }
 }
 

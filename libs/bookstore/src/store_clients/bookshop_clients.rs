@@ -45,7 +45,7 @@ impl Yes24Bookstore {
     }
 
     /// 조회가 실패할 수 있는 markup용. 도중에 실패하면 거기까지 뽑은 부분 결과를 돌려준다.
-    pub fn extract_book_info_from_source(&self, markup: &dyn MarkupSource) -> Value {
+    pub fn extract_book_info_from_source(&self, markup: &dyn MarkupSource) -> BookInfo {
         let mut title = String::new();
         let mut author = String::new();
         let partial = (|| -> Result<(String, String), String> {
@@ -58,10 +58,10 @@ impl Yes24Bookstore {
             Ok((self.extract_yes24_category_from_source(markup), self.extract_yes24_isbn_from_source(markup)))
         })();
         match partial {
-            Ok((category, isbn)) => info_value(&title, &author, &category, &isbn),
+            Ok((category, isbn)) => book_info(&title, &author, &category, &isbn),
             Err(e) => {
                 log::error!("책 정보 추출 중 오류: {e}");
-                info_value(&title, &author, "", "")
+                book_info(&title, &author, "", "")
             }
         }
     }
@@ -97,8 +97,8 @@ impl Bookstore for Yes24Bookstore {
         links
     }
 
-    fn extract_book_info(&self, markup: &str) -> Value {
-        lib_info(Store::Yes24.extract_book_info(markup))
+    fn extract_book_info(&self, markup: &str) -> BookInfo {
+        Store::Yes24.extract_book_info(markup)
     }
 }
 
@@ -175,8 +175,8 @@ impl Bookstore for AladinBookstore {
         links
     }
 
-    fn extract_book_info(&self, markup: &str) -> Value {
-        lib_info(Store::Aladin.extract_book_info(markup))
+    fn extract_book_info(&self, markup: &str) -> BookInfo {
+        Store::Aladin.extract_book_info(markup)
     }
 }
 
@@ -210,8 +210,8 @@ impl Bookstore for KyoboBookstore {
         links
     }
 
-    fn extract_book_info(&self, markup: &str) -> Value {
-        lib_info(Store::Kyobo.extract_book_info(markup))
+    fn extract_book_info(&self, markup: &str) -> BookInfo {
+        Store::Kyobo.extract_book_info(markup)
     }
 }
 
@@ -337,7 +337,7 @@ impl Bookstore for RidibooksBookstore {
         Vec::new()
     }
 
-    fn extract_book_info(&self, markup: &str) -> Value {
+    fn extract_book_info(&self, markup: &str) -> BookInfo {
         let doc = Html::parse_document(markup);
         let (mut title, mut author, mut category) = (String::new(), String::new(), String::new());
 
@@ -401,7 +401,7 @@ impl Bookstore for RidibooksBookstore {
             category = paths.join(" || ");
         }
 
-        info_value(&title, &author, &category, &self.extract_ridi_isbn(markup))
+        book_info(&title, &author, &category, &self.extract_ridi_isbn(markup))
     }
 }
 
@@ -418,7 +418,7 @@ const NAVER_SHOPPING_BASE_URL: &str = "https://search.shopping.naver.com";
 
 impl NaverShoppingBookstore {
     /// 조회가 실패할 수 있는 markup용. 도중에 실패하면 거기까지 뽑은 부분 결과를 돌려준다.
-    pub fn extract_book_info_from_source(&self, markup: &dyn MarkupSource) -> Value {
+    pub fn extract_book_info_from_source(&self, markup: &dyn MarkupSource) -> BookInfo {
         let find_title = || -> Result<String, String> {
             let found = match markup.find("h2")? {
                 Some(t) => Some(t),
@@ -427,10 +427,10 @@ impl NaverShoppingBookstore {
             Ok(found.map(|t| t.trim().to_owned()).unwrap_or_default())
         };
         match find_title() {
-            Ok(title) => info_value(&title, "", "", ""),
+            Ok(title) => book_info(&title, "", "", ""),
             Err(e) => {
                 log::error!("네이버쇼핑 상세 정보 추출 중 오류: {e}");
-                empty_info()
+                BookInfo::default()
             }
         }
     }
@@ -496,7 +496,7 @@ impl Bookstore for NaverShoppingBookstore {
     }
 
     /// CSS 클래스에 해시 접미사가 붙어서 접두사로 찾는다.
-    fn extract_book_info(&self, markup: &str) -> Value {
+    fn extract_book_info(&self, markup: &str) -> BookInfo {
         let doc = Html::parse_document(markup);
         let title_prefix = "bookTitle_book_name__";
         let title = find_by_class_prefix(&doc, sel!("h2"), title_prefix).or_else(|| find_by_class_prefix(&doc, sel!("div"), title_prefix)).map(text_strip).unwrap_or_default();
@@ -517,6 +517,6 @@ impl Bookstore for NaverShoppingBookstore {
         }
 
         let category = find_by_class_prefix(&doc, sel!("div"), "bookCatalogTop_breadcrumb__").map(|e| text_raw(e).split('>').map(str::trim).collect::<Vec<_>>().join(" > ")).unwrap_or_default();
-        info_value(&title, &author, &category, "")
+        book_info(&title, &author, &category, "")
     }
 }

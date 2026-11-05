@@ -424,13 +424,14 @@ pub trait StoreClient {
     fn base_url(&self) -> String;
     fn build_search_url(&self, keyword: &str) -> String;
     fn extract_search_links(&self, html: &str) -> Vec<String>;
-    fn extract_book_info(&self, html: &str) -> Value;
+    fn extract_book_info(&self, html: &str) -> BookInfo;
     fn set_session_header(&self, name: &str, value: &str);
     fn close(&self);
 }
 
-fn book_info(title: &str, author: &str) -> Value {
-    json!({"title": title, "author": author, "category": "", "isbn": ""})
+/// 제목·저자만 아는 서지 정보.
+fn book_info(title: &str, author: &str) -> BookInfo {
+    BookInfo { title: title.to_string(), author: author.to_string(), ..BookInfo::default() }
 }
 
 fn base_for(store: &str) -> &'static str {
@@ -461,7 +462,7 @@ impl DefaultClient {
         bookstore::Store::from_name(&self.store)
     }
 
-    fn ridi_info(html: &str) -> Value {
+    fn ridi_info(html: &str) -> BookInfo {
         let dom = HtmlDom::parse(html);
         let meta = dom.meta_content("property", "og:title").filter(|c| !c.is_empty()).or_else(|| dom.meta_content("name", "title").filter(|c| !c.is_empty()));
         let title = match meta {
@@ -487,7 +488,7 @@ impl DefaultClient {
         book_info(&title, &author)
     }
 
-    fn naverseries_info(html: &str) -> Value {
+    fn naverseries_info(html: &str) -> BookInfo {
         let dom = HtmlDom::parse(html);
         let title = dom.find_all(dom.root(), "title").first().map(|t| dom.text(*t).trim().to_string()).unwrap_or_default();
         let mut author = String::new();
@@ -574,8 +575,9 @@ impl StoreClient for DefaultClient {
         if self.store == "naverseries" { Self::naverseries_links(html) } else { Vec::new() }
     }
 
-    fn extract_book_info(&self, html: &str) -> Value {
+    fn extract_book_info(&self, html: &str) -> BookInfo {
         if let Some(store) = self.bookstore() {
+            // 표지 검색에는 제목과 저자만 쓴다.
             let info = store.extract_book_info(html);
             return book_info(&info.title, &info.author);
         }
@@ -607,6 +609,7 @@ fn value_text(value: &Value) -> String {
 
 use crate::epub_cover::EpubInspection;
 use crate::has_content;
+use bookstore::BookInfo;
 
 /// 서점이 찾은 표지 후보 하나. `image_url`은 서버만 쓴다.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -646,8 +649,7 @@ pub fn extract_html_candidates(store: &str, detail_url: &str, html: &str) -> Vec
 pub fn extract_html_candidates_with(client: &dyn StoreClient, store: &str, detail_url: &str, html: &str) -> Vec<StoreCandidate> {
     let dom = HtmlDom::parse(html);
     let info = client.extract_book_info(html);
-    let info_title = info.get("title").map(value_text).unwrap_or_default();
-    let title = if info_title.is_empty() { dom.meta_content("property", "og:title").unwrap_or_default() } else { info_title };
+    let title = if info.title.is_empty() { dom.meta_content("property", "og:title").unwrap_or_default() } else { info.title };
     let mut image_url = dom.meta_content("property", "og:image").unwrap_or_default();
     if store == "aladin" && urlsplit(&image_url).path.ends_with("/img_no.jpg") {
         return Vec::new();
@@ -662,7 +664,7 @@ pub fn extract_html_candidates_with(client: &dyn StoreClient, store: &str, detai
     if title.is_empty() || image_url.is_empty() {
         return Vec::new();
     }
-    let author = info.get("author").map(value_text).unwrap_or_default();
+    let author = info.author;
     vec![StoreCandidate { title, author, detail_url: detail_url.to_string(), image_url: urljoin(detail_url, &image_url) }]
 }
 
@@ -960,26 +962,26 @@ mod tests {
     #[test]
     fn ridi_info_uses_metadata_then_author_list_or_author_link() {
         let info = DefaultClient::ridi_info(r#"<meta property="og:title" content="  책 제목  "><li>홍길동외2명 저자</li>"#);
-        assert_eq!(info["title"], "책 제목");
-        assert_eq!(info["author"], "홍길동 외 2명");
+        assert_eq!(info.title, "책 제목");
+        assert_eq!(info.author, "홍길동 외 2명");
 
         let fallback = DefaultClient::ridi_info("<h1>본문 제목</h1><a href='/author/42'>작가 이름</a>");
-        assert_eq!(fallback["title"], "본문 제목");
-        assert_eq!(fallback["author"], "작가 이름");
-        assert_eq!(DefaultClient::ridi_info("<p>내용</p>")["title"], "");
+        assert_eq!(fallback.title, "본문 제목");
+        assert_eq!(fallback.author, "작가 이름");
+        assert_eq!(DefaultClient::ridi_info("<p>내용</p>").title, "");
     }
 
     #[test]
     fn naverseries_info_uses_structured_author_then_description_fallbacks() {
         let structured = DefaultClient::naverseries_info("<title>작품</title><div id='_otherProductByPerson'><strong>작품</strong><strong>홍길동</strong></div>");
-        assert_eq!(structured["title"], "작품");
-        assert_eq!(structured["author"], "홍길동");
+        assert_eq!(structured.title, "작품");
+        assert_eq!(structured.author, "홍길동");
 
         let description = DefaultClient::naverseries_info("<title>작품</title><meta name='description' content='작가: 김작가, 소개'>");
-        assert_eq!(description["author"], "김작가");
+        assert_eq!(description.author, "김작가");
         let og_description = DefaultClient::naverseries_info("<meta property='og:description' content='작가： 이작가」 소개'>");
-        assert_eq!(og_description["author"], "이작가");
-        assert_eq!(DefaultClient::naverseries_info("<p>내용</p>")["author"], "");
+        assert_eq!(og_description.author, "이작가");
+        assert_eq!(DefaultClient::naverseries_info("<p>내용</p>").author, "");
     }
 
     #[test]

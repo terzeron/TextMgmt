@@ -48,11 +48,12 @@ mod common;
 mod env_helpers;
 #[path = "../backend/common/log_capture.rs"]
 mod log_capture;
-use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, empty_info, single_quoted_hrefs};
+use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, single_quoted_hrefs};
 
 use crate::common::shared_fixtures::{Call, Kind, failing, session};
 use crate::env_helpers::{EnvGuard, empty_env, map_env};
 use crate::log_capture::LogCapture;
+use bookstore::BookInfo;
 use bookstore::store_clients::{
     AladinBookstore, BomtoonBookstore, Bookstore, JoaraBookstore, KakaoWebtoonBookstore, KyoboBookstore, LezhinBookstore, MAX_RESULTS, MarkupSource, MunpiaBookstore, NaverSeriesBookstore,
     NaverShoppingBookstore, NaverWebtoonBookstore, RidibooksBookstore, SearchRow, ToptoonBookstore, Yes24Bookstore, truncate_title,
@@ -258,22 +259,12 @@ macro_rules! dummy_store {
                 }
             }
 
-            fn extract_book_info(&self, markup: &str) -> Value {
+            fn extract_book_info(&self, markup: &str) -> BookInfo {
                 match self.kind {
-                    Kind::Dummy => json!({
-                        "title": between(markup, "<h1>", "</h1>"),
-                        "author": between(markup, "<span class='author'>", "</span>"),
-                        "category": between(markup, "<p class='category'>", "</p>"),
-                        "isbn": between(markup, "<p class='isbn'>", "</p>"),
-                    }),
-                    Kind::Unit => json!({"title": "T", "author": "A", "category": "A > B > C > D", "isbn": "I"}),
-                    Kind::Parsing => json!({
-                        "title": between(markup, "<h1>", "</h1>"),
-                        "author": between(markup, "<span class='author'>", "</span>"),
-                        "category": between(markup, "<div class='cat'>", "</div>"),
-                        "isbn": between(markup, "<div class='isbn'>", "</div>"),
-                    }),
-                    Kind::BaseOnly => empty_info(),
+                    Kind::Dummy => BookInfo { title: between(markup, "<h1>", "</h1>").into(), author: between(markup, "<span class='author'>", "</span>").into(), category: between(markup, "<p class='category'>", "</p>").into(), isbn: between(markup, "<p class='isbn'>", "</p>").into() },
+                    Kind::Unit => BookInfo { title: "T".into(), author: "A".into(), category: "A > B > C > D".into(), isbn: "I".into() },
+                    Kind::Parsing => BookInfo { title: between(markup, "<h1>", "</h1>").into(), author: between(markup, "<span class='author'>", "</span>").into(), category: between(markup, "<div class='cat'>", "</div>").into(), isbn: between(markup, "<div class='isbn'>", "</div>").into() },
+                    Kind::BaseOnly => BookInfo::default(),
                 }
             }
 
@@ -431,7 +422,7 @@ fn test_yes24_extract() {
     let store = yes24(false);
     let html = "<html><h2 class='gd_name'>Title</h2><span class='gd_auth'>Author</span></html>";
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "Title");
+    assert_eq!(info.title, "Title");
 }
 
 #[test]
@@ -439,7 +430,7 @@ fn test_aladin_extract() {
     let store = aladin(false);
     let html = "<html><title>Title | Author | Aladin</title></html>";
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "Title");
+    assert_eq!(info.title, "Title");
 }
 
 // ---- 추가 분기 ----
@@ -466,8 +457,8 @@ fn test_aladin_meta_fallbacks_and_no_isbn() {
     </html>
     "#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "OT");
-    assert_eq!(info["author"], "OA");
+    assert_eq!(info.title, "OT");
+    assert_eq!(info.author, "OA");
     assert_eq!(store.extract_aladin_isbn("<html></html>"), "");
 }
 
@@ -488,8 +479,8 @@ fn test_ridibooks_search_failure_and_author_fallbacks() {
     </html>
     "#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "HT");
-    assert_ne!(info["author"], "");
+    assert_eq!(info.title, "HT");
+    assert_ne!(info.author, "");
 }
 
 #[test]
@@ -510,7 +501,7 @@ fn test_naver_series_meta_description_fallback() {
     </html>
     "#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["author"], "홍길동");
+    assert_eq!(info.author, "홍길동");
 }
 
 #[test]
@@ -524,7 +515,7 @@ fn test_munpia_fallback_author() {
     </html>
     "#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["author"], "Writer");
+    assert_eq!(info.author, "Writer");
 }
 
 #[test]
@@ -667,8 +658,8 @@ fn html_cache_is_skipped_when_no_private_cache_dir_is_available() {
         fn extract_search_links(&self, _html: &str) -> Vec<String> {
             Vec::new()
         }
-        fn extract_book_info(&self, _html: &str) -> Value {
-            json!({})
+        fn extract_book_info(&self, _html: &str) -> BookInfo {
+            BookInfo::default()
         }
     }
 
@@ -698,8 +689,8 @@ fn bookstore_defaults_work_without_overrides() {
         fn extract_search_links(&self, _html: &str) -> Vec<String> {
             Vec::new()
         }
-        fn extract_book_info(&self, _html: &str) -> Value {
-            json!({})
+        fn extract_book_info(&self, _html: &str) -> BookInfo {
+            BookInfo::default()
         }
     }
 
@@ -807,10 +798,10 @@ fn test_yes24_primary_links_and_info_extraction() {
     let links = store.extract_search_links(html);
     assert_eq!(links, ["https://www.yes24.com/product/goods/999"]);
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "Yes Title");
-    assert_eq!(info["author"], "Yes Author");
-    assert_eq!(info["category"], "A > B");
-    assert_eq!(info["isbn"], "1234567890123");
+    assert_eq!(info.title, "Yes Title");
+    assert_eq!(info.author, "Yes Author");
+    assert_eq!(info.category, "A > B");
+    assert_eq!(info.isbn, "1234567890123");
     assert!(store.build_search_url("hello").contains("query=hello"));
     assert!(store.build_isbn_search_url("999").contains("query=999"));
 }
@@ -826,8 +817,8 @@ fn test_yes24_author_text_and_isbn10() {
     </html>
     "#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["author"], "Yes Author");
-    assert_eq!(info["isbn"], "1234567890");
+    assert_eq!(info.author, "Yes Author");
+    assert_eq!(info.isbn, "1234567890");
 }
 
 #[test]
@@ -911,8 +902,8 @@ fn test_ridibooks_extract_fallbacks_meta_and_author_link() {
     </html>
     "#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "Meta Title");
-    assert_eq!(info["author"], "Link Author");
+    assert_eq!(info.title, "Meta Title");
+    assert_eq!(info.author, "Link Author");
 }
 
 #[test]
@@ -935,7 +926,7 @@ fn test_ridibooks_header_typo_and_og_author() {
     </html>
     "#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["author"], "작가");
+    assert_eq!(info.author, "작가");
 }
 
 #[test]
@@ -948,8 +939,8 @@ fn test_naver_shopping_extract_fallback_author_and_title() {
     </html>
     "#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "Title");
-    assert_eq!(info["author"], "Author");
+    assert_eq!(info.title, "Title");
+    assert_eq!(info.author, "Author");
 }
 
 #[test]
@@ -962,7 +953,7 @@ fn test_munpia_meta_description_author() {
     </html>
     "#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["author"], "홍길동");
+    assert_eq!(info.author, "홍길동");
 }
 
 #[test]
@@ -1067,10 +1058,10 @@ fn test_ridibooks_search_success_and_extract() {
     </html>
     "#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "R Title");
-    assert_eq!(info["author"], "홍길동");
-    assert_eq!(info["category"], "A > B");
-    assert_eq!(info["isbn"], "1234567890123");
+    assert_eq!(info.title, "R Title");
+    assert_eq!(info.author, "홍길동");
+    assert_eq!(info.category, "A > B");
+    assert_eq!(info.isbn, "1234567890123");
 }
 
 #[test]
@@ -1098,9 +1089,9 @@ fn test_naver_shopping_links_and_extract() {
     </html>
     "#;
     let info = store.extract_book_info(detail_html);
-    assert_eq!(info["title"], "N Title");
-    assert_eq!(info["author"], "N Author");
-    assert_eq!(info["category"], "A > B");
+    assert_eq!(info.title, "N Title");
+    assert_eq!(info.author, "N Author");
+    assert_eq!(info.category, "A > B");
 }
 
 #[test]
@@ -1134,8 +1125,8 @@ fn test_munpia_links_and_meta_desc() {
     let links = store.extract_search_links(html);
     assert_eq!(links, ["https://novel.munpia.com/view/1", "https://novel.munpia.com/view/2"]);
     let info = store.extract_book_info(html);
-    assert_eq!(info["author"], "홍길동");
-    assert_eq!(info["category"], "A > B");
+    assert_eq!(info.author, "홍길동");
+    assert_eq!(info.category, "A > B");
     assert!(store.build_search_url("a b").ends_with("a%20b/order/search_result"));
 }
 
@@ -1156,9 +1147,9 @@ fn test_naver_series_links_and_authors() {
     let links = store.extract_search_links(html);
     assert_eq!(links, ["https://series.naver.com/novel/1", "https://series.naver.com/comic/2"]);
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "Series Title");
-    assert_eq!(info["author"], "홍길동");
-    assert_eq!(info["category"], "장르");
+    assert_eq!(info.title, "Series Title");
+    assert_eq!(info.author, "홍길동");
+    assert_eq!(info.category, "장르");
     assert!(store.build_search_url("hello").ends_with("q=hello"));
 }
 
@@ -1171,7 +1162,7 @@ fn test_naver_series_meta_og_fallback() {
     </html>
     "#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["author"], "김작가");
+    assert_eq!(info.author, "김작가");
 }
 
 // ---- coverage: uncovered lines ----
@@ -1193,8 +1184,9 @@ fn test_yes24_extract_book_info_exception() {
     let markup = RaisingMarkup { html: "<html><h2 class='gd_name'>Title</h2></html>", raise_on: "span" };
 
     let info = store.extract_book_info_from_source(&markup);
-    // Should not raise, returns partial info
-    assert!(info.is_object());
+    // 저자를 찾다 실패해도 그때까지 뽑은 제목은 남긴다.
+    assert!(info.title.ends_with("Title"), "{info:?}");
+    assert!(info.author.is_empty(), "{info:?}");
 }
 
 /// AladinBookstore.build_isbn_search_url
@@ -1232,7 +1224,7 @@ fn test_aladin_extract_isbn() {
     </div>
     </html>"#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["isbn"], "9781234567890");
+    assert_eq!(info.isbn, "9781234567890");
 }
 
 /// verbose 상태에서 RIDI API 응답 실패
@@ -1263,7 +1255,7 @@ fn test_ridibooks_author_meta_fallback() {
     <meta name="author" content="Meta Author"/>
     </html>"#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["author"], "Meta Author");
+    assert_eq!(info.author, "Meta Author");
 }
 
 /// Ridibooks meta description 에서 저자 추출
@@ -1275,7 +1267,7 @@ fn test_ridibooks_author_description_fallback() {
     <meta property="og:description" content="저자: 설명작가, 기타정보"/>
     </html>"#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["author"], "설명작가");
+    assert_eq!(info.author, "설명작가");
 }
 
 /// NaverShoppingBookstore.build_search_url
@@ -1312,17 +1304,17 @@ fn test_naver_shopping_extract_book_info_exception() {
     let markup = RaisingMarkup { html: "<html><body>normal</body></html>", raise_on: "h2" };
 
     let info = store.extract_book_info_from_source(&markup);
-    assert!(info.is_object());
+    assert_eq!(info, BookInfo::default());
 }
 
 #[test]
 fn test_naver_shopping_markup_title_and_div_fallbacks() {
     let store = naver_shopping(false);
     let h2 = RaisingMarkup { html: "<h2Primary title</h2>", raise_on: "never" };
-    assert_eq!(store.extract_book_info_from_source(&h2)["title"], "Primary title");
+    assert_eq!(store.extract_book_info_from_source(&h2).title, "Primary title");
 
     let div = RaisingMarkup { html: "<divFallback title</div>", raise_on: "never" };
-    assert_eq!(store.extract_book_info_from_source(&div)["title"], "Fallback title");
+    assert_eq!(store.extract_book_info_from_source(&div).title, "Fallback title");
 }
 
 // ---- 단위 사례 ----
@@ -1517,8 +1509,8 @@ fn test_yes24_extract_book_info_author_fallback() {
     let store = yes24(false);
     let html = "<html><h2 class='gd_name'>Title</h2><span class='gd_auth'>Auth</span></html>";
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "Title");
-    assert_eq!(info["author"], "Auth");
+    assert_eq!(info.title, "Title");
+    assert_eq!(info.author, "Auth");
 }
 
 #[test]
@@ -1558,9 +1550,9 @@ fn test_aladin_extract_search_links_and_info() {
     let links = store.extract_search_links(html);
     assert_eq!(links, ["https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=111", "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=222"]);
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "MetaTitle");
-    assert_eq!(info["author"], "MetaAuthor");
-    assert_eq!(info["category"], "국내도서 > 소설");
+    assert_eq!(info.title, "MetaTitle");
+    assert_eq!(info.author, "MetaAuthor");
+    assert_eq!(info.category, "국내도서 > 소설");
 }
 
 #[test]
@@ -1603,10 +1595,10 @@ fn test_ridibooks_search_by_keyword_and_extract_info() {
     </html>
     "#;
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "Title");
-    assert_eq!(info["author"], "홍길동");
-    assert_eq!(info["category"], "A > B");
-    assert_eq!(info["isbn"], "9781234567890");
+    assert_eq!(info.title, "Title");
+    assert_eq!(info.author, "홍길동");
+    assert_eq!(info.category, "A > B");
+    assert_eq!(info.isbn, "9781234567890");
 }
 
 #[test]
@@ -1627,9 +1619,9 @@ fn test_naver_shopping_links_and_info() {
     </html>
     "#;
     let info = store.extract_book_info(detail_html);
-    assert_eq!(info["title"], "Title");
-    assert_eq!(info["author"], "Author");
-    assert_eq!(info["category"], "국내도서 > 소설");
+    assert_eq!(info.title, "Title");
+    assert_eq!(info.author, "Author");
+    assert_eq!(info.category, "국내도서 > 소설");
 }
 
 #[test]
@@ -1654,9 +1646,9 @@ fn test_munpia_extract_links_and_info() {
     let links = store.extract_search_links(html);
     assert_eq!(links, ["https://novel.munpia.com/book/1"]);
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "Title");
-    assert_eq!(info["author"], "Author");
-    assert_eq!(info["category"], "장르 > 판타지");
+    assert_eq!(info.title, "Title");
+    assert_eq!(info.author, "Author");
+    assert_eq!(info.category, "장르 > 판타지");
 }
 
 #[test]
@@ -1673,9 +1665,9 @@ fn test_naver_series_links_and_info() {
     let links = store.extract_search_links(html);
     assert_eq!(links, ["https://series.naver.com/detail/1"]);
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "Title");
-    assert_eq!(info["author"], "작가명");
-    assert_eq!(info["category"], "장르");
+    assert_eq!(info.title, "Title");
+    assert_eq!(info.author, "작가명");
+    assert_eq!(info.category, "장르");
 }
 
 #[test]
@@ -1713,10 +1705,10 @@ fn test_kyobo_bookstore_links_and_info() {
     </html>
     "#;
     let info = store.extract_book_info(detail_html);
-    assert_eq!(info["title"], "교보 도서 제목");
-    assert_eq!(info["author"], "교보 작가");
-    assert_eq!(info["category"], "소설 > 한국소설");
-    assert_eq!(info["isbn"], "9788934900011");
+    assert_eq!(info.title, "교보 도서 제목");
+    assert_eq!(info.author, "교보 작가");
+    assert_eq!(info.category, "소설 > 한국소설");
+    assert_eq!(info.isbn, "9788934900011");
 }
 
 /// `shutil.disk_usage`와 `open` 대역. 쓰기 시도 횟수를 센다. 쓰는 메서드만 구현한다(`FsOps`의 나머지는 기본 구현).
@@ -1808,8 +1800,8 @@ fn test_kyobo_urls_and_fallback_links_and_title() {
     </html>
     "#;
     let info = store.extract_book_info(html_title_only);
-    assert_eq!(info["title"], "교보문고 상세 도서");
-    assert_eq!(info["author"], "김작가");
+    assert_eq!(info.title, "교보문고 상세 도서");
+    assert_eq!(info.author, "김작가");
 }
 
 /// 신형 종이책 상세(Next.js)에서 제목과 카테고리를 뽑는다.
@@ -1836,9 +1828,9 @@ fn test_kyobo_nextjs_detail_page_category_and_title() {
     </html>
     "#;
     let info = store.extract_book_info(detail_html);
-    assert_eq!(info["title"], "채식주의자");
+    assert_eq!(info.title, "채식주의자");
     // "국내도서"는 모든 책에 붙어 변별력이 없어 걸러낸다.
-    assert_eq!(info["category"], "소설 > 한국소설 > 한국소설일반");
+    assert_eq!(info.category, "소설 > 한국소설 > 한국소설일반");
 }
 
 /// `<title>` fallback 은 서점 이름만 떼고 제목 속 하이픈은 남긴다.
@@ -1847,7 +1839,7 @@ fn test_kyobo_title_fallback_strips_only_store_suffix() {
     let store = kyobo(false);
     let html = "<html><head><title>데미안 - 소년의 기록 - 교보문고</title></head><body></body></html>";
     let info = store.extract_book_info(html);
-    assert_eq!(info["title"], "데미안 - 소년의 기록");
+    assert_eq!(info.title, "데미안 - 소년의 기록");
 }
 
 /// 조아라는 제목(target=subject)만 검색한다. 저자를 붙이면 늘 0건이다.
@@ -1922,7 +1914,7 @@ fn test_joara_unused_html_hooks_are_inert() {
     let store = joara(false);
     let markup = "<html><body><a href='/book/1'>x</a></body></html>";
     assert!(store.extract_search_links(markup).is_empty());
-    assert_eq!(store.extract_book_info(markup), empty_info());
+    assert_eq!(store.extract_book_info(markup), BookInfo::default());
 }
 
 /// 네이버 웹툰은 '제목 저자' 키워드가 늘 0건이다. 제목만 한 번 부른다.
@@ -2127,7 +2119,7 @@ fn test_webtoon_unused_html_hooks_are_inert() {
     ];
     for (name, store) in &stores {
         assert!(store.extract_search_links(markup).is_empty(), "{name}");
-        assert_eq!(store.extract_book_info(markup), empty_info(), "{name}");
+        assert_eq!(store.extract_book_info(markup), BookInfo::default(), "{name}");
     }
 }
 

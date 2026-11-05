@@ -52,9 +52,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::shared_fixtures::{Kind, failing};
-use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, empty_info, single_quoted_hrefs};
+use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, single_quoted_hrefs};
+use bookstore::BookInfo;
 use bookstore::store_clients::{AladinBookstore, Bookstore, MAX_RESULTS, SearchRow, UreqHttpSession, Yes24Bookstore};
-use serde_json::{Value, json};
 use sysdeps::{HttpError, HttpSession, HttpTimeout};
 
 #[test]
@@ -497,22 +497,12 @@ macro_rules! dummy_store {
                 }
             }
 
-            fn extract_book_info(&self, markup: &str) -> Value {
+            fn extract_book_info(&self, markup: &str) -> BookInfo {
                 match self.kind {
-                    Kind::Dummy => json!({
-                        "title": between(markup, "<h1>", "</h1>"),
-                        "author": between(markup, "<span class='author'>", "</span>"),
-                        "category": between(markup, "<p class='category'>", "</p>"),
-                        "isbn": between(markup, "<p class='isbn'>", "</p>"),
-                    }),
-                    Kind::Unit => json!({"title": "T", "author": "A", "category": "A > B > C > D", "isbn": "I"}),
-                    Kind::Parsing => json!({
-                        "title": between(markup, "<h1>", "</h1>"),
-                        "author": between(markup, "<span class='author'>", "</span>"),
-                        "category": between(markup, "<div class='cat'>", "</div>"),
-                        "isbn": between(markup, "<div class='isbn'>", "</div>"),
-                    }),
-                    Kind::BaseOnly => empty_info(),
+                    Kind::Dummy => BookInfo { title: between(markup, "<h1>", "</h1>").into(), author: between(markup, "<span class='author'>", "</span>").into(), category: between(markup, "<p class='category'>", "</p>").into(), isbn: between(markup, "<p class='isbn'>", "</p>").into() },
+                    Kind::Unit => BookInfo { title: "T".into(), author: "A".into(), category: "A > B > C > D".into(), isbn: "I".into() },
+                    Kind::Parsing => BookInfo { title: between(markup, "<h1>", "</h1>").into(), author: between(markup, "<span class='author'>", "</span>").into(), category: between(markup, "<div class='cat'>", "</div>").into(), isbn: between(markup, "<div class='isbn'>", "</div>").into() },
+                    Kind::BaseOnly => BookInfo::default(),
                 }
             }
 

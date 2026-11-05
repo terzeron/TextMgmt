@@ -33,7 +33,7 @@ use crate::{BookInfo, Store};
 use htmlkit::url_parser::{quote, quote_component, urljoin};
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
-use serde_json::{Value, json};
+use serde_json::Value;
 use sysdeps::{FsOps, HttpError, HttpResponse, HttpSession, HttpTimeout, RealFs};
 
 /// 서점 검색 결과 한 줄.
@@ -179,16 +179,8 @@ fn params(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect()
 }
 
-fn info_value(title: &str, author: &str, category: &str, isbn: &str) -> Value {
-    json!({"title": title, "author": author, "category": category, "isbn": isbn})
-}
-
-fn empty_info() -> Value {
-    info_value("", "", "", "")
-}
-
-fn lib_info(info: BookInfo) -> Value {
-    info_value(&info.title, &info.author, &info.category, &info.isbn)
+fn book_info(title: &str, author: &str, category: &str, isbn: &str) -> BookInfo {
+    BookInfo { title: title.to_string(), author: author.to_string(), category: category.to_string(), isbn: isbn.to_string() }
 }
 
 /// 제목에서 부제 구분자(` - `, `－`, `-`, `：`) 왼쪽 부분만 남긴다.
@@ -463,7 +455,7 @@ pub trait Bookstore: Sync {
     /// 검색 결과 페이지에서 상세 페이지 링크를 뽑는다.
     fn extract_search_links(&self, markup: &str) -> Vec<String>;
     /// 상세 페이지에서 `{title, author, category, isbn}`을 뽑는다. 못 뽑은 값은 빈 문자열이다.
-    fn extract_book_info(&self, markup: &str) -> Value;
+    fn extract_book_info(&self, markup: &str) -> BookInfo;
 
     /// ISBN 검색 지원 여부
     fn supports_isbn_search(&self) -> bool {
@@ -631,17 +623,10 @@ pub fn default_fetch_search_results<S: Bookstore + ?Sized>(store: &S, url: &str)
             }
             continue;
         };
-        let info = store.extract_book_info(&html);
-        let category = str_field(&info, "category");
+        let BookInfo { title, author, category, isbn } = store.extract_book_info(&html);
+        // 서점 분류는 대분류부터 세 단계까지만 보인다.
         let category = if category.is_empty() { category } else { category.split('>').map(str::trim).take(3).collect::<Vec<_>>().join(" > ") };
-        results.push(SearchRow {
-            title: str_field(&info, "title"),
-            author: str_field(&info, "author"),
-            category,
-            detail_url: (*detail_url).clone(),
-            search_url: url.to_owned(),
-            isbn: str_field(&info, "isbn"),
-        });
+        results.push(SearchRow { title, author, category, detail_url: (*detail_url).clone(), search_url: url.to_owned(), isbn });
     }
     results
 }
@@ -865,8 +850,8 @@ macro_rules! unused_html_hooks {
             Vec::new()
         }
 
-        fn extract_book_info(&self, _markup: &str) -> Value {
-            empty_info()
+        fn extract_book_info(&self, _markup: &str) -> BookInfo {
+            BookInfo::default()
         }
     };
 }
@@ -882,6 +867,7 @@ pub use webtoon_clients::{BomtoonBookstore, KakaoWebtoonBookstore, LezhinBooksto
 #[cfg(test)]
 mod utility_tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn has_content_treats_only_null_and_empty_containers_as_missing() {
