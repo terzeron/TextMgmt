@@ -6,7 +6,7 @@ use std::path::Path;
 
 use crate::{Category, FileReport, Severity};
 use common::url_parser::unquote;
-use sysdeps::zip_opener::open_zip;
+use common::zip_reader::open_zip;
 
 use super::ooxml_checker::{Member, check_xml_attacks, classify_member, parse, preview, push_once, read_xml_part};
 use crate::epub::security_checker::{Limits, read_limited};

@@ -15,9 +15,9 @@ use std::sync::LazyLock;
 use std::path::Path;
 
 use common::url_parser::unquote;
+use common::zip_reader::zip_entry_name;
 use regex::Regex;
 use scraper::{Html, Node};
-use sysdeps::zip_opener::zip_entry_name;
 
 use crate::cli_parser::Options;
 use crate::epub::render_checker::xhtml_defect;

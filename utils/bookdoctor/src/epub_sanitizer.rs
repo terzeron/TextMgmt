@@ -7,6 +7,7 @@
 //! 문서 한 개의 글 정리는 `markup_sanitizer`, 멤버 읽기·분류·재구성은 `package_rebuilder`가 맡는다.
 //! 이 모듈에는 둘이 함께 쓰는 URL 판정과 검증·적용·진입점이 있다.
 
+use common::xml_parser::parse_xml;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Cursor, Read, Write};
@@ -16,9 +17,9 @@ use std::sync::LazyLock;
 use crate::magic_sniffer::{Sniffed, sniff};
 use crate::{Category, Severity};
 use common::url_parser::unquote;
+use common::zip_reader::zip_entry_name;
 use htmlkit::{decode_entities, text_of};
 use regex::Regex;
-use sysdeps::zip_opener::zip_entry_name;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -142,7 +143,7 @@ pub(crate) fn dangling(members: &[Member]) -> Result<(usize, usize), String> {
     let packages = package_names(members)?;
     for m in members.iter().filter(|m| packages.contains(&m.name)) {
         let text = package_text(m)?;
-        let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("{}: OPF를 해석할 수 없다: {e}", m.name))?;
+        let doc = parse_xml(&text).map_err(|e| format!("{}: OPF를 해석할 수 없다: {e}", m.name))?;
         let base = Path::new(&m.name).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         let mut ids = BTreeSet::new();
         for item in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "item") {

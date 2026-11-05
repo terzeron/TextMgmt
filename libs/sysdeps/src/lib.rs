@@ -19,7 +19,6 @@ pub mod pdf_worker_client;
 pub use pdf_worker_client as poppler;
 mod native_pdf;
 pub mod timeout_runner;
-pub mod zip_opener;
 
 /// 환경 변수 조회 함수. `file_record::env_config::Config::from_env`와 같은 모양이다.
 pub type EnvFn<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -367,9 +366,4 @@ pub trait ChildProcess: Send {
 
 pub trait ProcessSpawner: Send + Sync {
     fn spawn(&self, argv: &[String]) -> io::Result<Box<dyn ChildProcess>>;
-}
-
-/// panic 페이로드의 메시지. `panic!`이 넘긴 `&str`이나 `String`이 아니면 `None`이다. 없을 때의 문구는 호출자가 정한다.
-pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
-    payload.downcast_ref::<&str>().copied().or_else(|| payload.downcast_ref::<String>().map(String::as_str))
 }

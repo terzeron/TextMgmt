@@ -432,13 +432,3 @@ mod private_dir {
         assert_eq!(private_dir_in(&parent.path().join("missing"), "cache"), None);
     }
 }
-
-#[test]
-fn panic_message_reads_str_and_string_payloads_only() {
-    let text: Box<dyn std::any::Any + Send> = Box::new("boom");
-    let owned: Box<dyn std::any::Any + Send> = Box::new(String::from("owned"));
-    let other: Box<dyn std::any::Any + Send> = Box::new(5u8);
-    assert_eq!(sysdeps::panic_message(text.as_ref()), Some("boom"));
-    assert_eq!(sysdeps::panic_message(owned.as_ref()), Some("owned"));
-    assert_eq!(sysdeps::panic_message(other.as_ref()), None);
-}

@@ -4,6 +4,8 @@
 //! `declare_unbound_prefixes`로 먼저 선언한다. 문서를 고쳐 쓸 때는 DOM을 직렬화하지 않고 원문에서 해당 구간만 잘라내
 //! (`Edit`) 원문 서식을 보존한다.
 
+use common::xml_parser::parse_xml;
+use common::zip_reader::{self, MemberError};
 use std::io::{Read, Seek, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -94,11 +96,6 @@ pub fn declare_unbound_prefixes(xml: &str) -> String {
 pub fn xml_text(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     text.strip_prefix('\u{feff}').unwrap_or(&text).to_string()
-}
-
-/// 외부 엔티티·네트워크 접근 없이 파싱한다(`resolve_entities=False, no_network=True, load_dtd=False`와 같다).
-pub fn parse_xml(text: &str) -> Result<Document<'_>, roxmltree::Error> {
-    Document::parse_with_options(text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
 }
 
 /// 네임스페이스와 이름으로 가장 먼저 나오는 자손 요소.
@@ -204,17 +201,11 @@ pub fn read_member<R: Read + Seek>(zin: &mut ZipArchive<R>, name: &str) -> Resul
 /// `read_member`와 같고, 선언 크기나 실제로 푼 크기가 `limit`를 넘으면 오류다.
 fn read_member_limited<R: Read + Seek>(zin: &mut ZipArchive<R>, name: &str, limit: u64) -> Result<Vec<u8>, ZipError> {
     let actual = if zin.index_for_name(name).is_some() { name.to_string() } else { zip_names(zin).into_iter().find(|n| unquote(n) == name).unwrap_or_else(|| name.to_string()) };
-    let too_large = || ZipError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{actual}: 압축을 푼 크기가 상한 {limit}바이트를 넘습니다")));
-    let file = zin.by_name(&actual)?;
-    if file.size() > limit {
-        return Err(too_large());
-    }
-    let mut buf = Vec::with_capacity(file.size() as usize);
-    file.take(limit + 1).read_to_end(&mut buf).map_err(ZipError::Io)?;
-    if buf.len() as u64 > limit {
-        return Err(too_large());
-    }
-    Ok(buf)
+    zip_reader::read_member(zin, &actual, limit).map_err(|error| match error {
+        MemberError::Open(error) => error,
+        MemberError::Io(error) => ZipError::Io(error),
+        MemberError::TooLarge => ZipError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{actual}: 압축을 푼 크기가 상한 {limit}바이트를 넘습니다"))),
+    })
 }
 
 impl BookManager {

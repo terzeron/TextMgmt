@@ -15,9 +15,10 @@ use scraper::{Html, Selector};
 use zip::ZipArchive;
 use zip::result::ZipError;
 
-use super::epub_inspector::{Edit, NCX_NS, OPF_NS, XML_DECLARATION, apply_edits, children_named, declare_unbound_prefixes, find_el, parse_xml, read_member, xml_text, zip_names};
+use super::epub_inspector::{Edit, NCX_NS, OPF_NS, XML_DECLARATION, apply_edits, children_named, declare_unbound_prefixes, find_el, read_member, xml_text, zip_names};
 use super::path_validator::{clean_href, zip_path};
 use super::{BookManager, BookResponse};
+use common::xml_parser::parse_xml;
 
 const HTML_VIEWER_CSP: &str = "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' blob:;";
 /// 뷰어 이미지 축소를 시도하는 최소 크기(바이트).

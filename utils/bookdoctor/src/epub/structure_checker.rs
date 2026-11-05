@@ -5,7 +5,6 @@
 //! 정제기는 이를 거부한다. 단 bad_mimetype은 표준 위반일 뿐 뷰어를 깨뜨리지 않는다.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::LazyLock;
@@ -15,8 +14,8 @@ use regex::bytes::Regex;
 use zip::CompressionMethod;
 
 use common::url_parser::unquote;
-use sysdeps::zip_opener::zip_entry_name;
-use sysdeps::zip_opener::{Zip, open_zip};
+use common::zip_reader::zip_entry_name;
+use common::zip_reader::{Zip, open_zip};
 
 pub const EPUB_MIMETYPE: &[u8] = b"application/epub+zip";
 pub const ISSUE_NOT_ZIP: &str = "not_zip";
@@ -69,18 +68,12 @@ const MARKUP_EXTENSIONS: [&str; 5] = [".xhtml", ".html", ".htm", ".xml", ".svg"]
 
 /// ZIP 멤버를 읽는다. 없거나 깨졌거나 limit를 넘으면 None. 구분은 호출자가 이름 목록으로 한다.
 pub(crate) fn read_member(zip: &mut Zip, name: &str, limit: usize) -> Option<Vec<u8>> {
-    let entry = zip.by_name(name).ok()?;
-    let mut data = Vec::new();
-    entry.take(limit as u64 + 1).read_to_end(&mut data).ok()?;
-    (data.len() <= limit).then_some(data)
+    common::zip_reader::read_member(zip, name, limit as u64).ok()
 }
 
 /// 멤버 앞부분만 읽는다. 읽을 수 없으면 None(Bad magic number, Overlapped entries 등).
 fn read_head(zip: &mut Zip, name: &str, size: usize) -> Option<Vec<u8>> {
-    let entry = zip.by_name(name).ok()?;
-    let mut data = Vec::new();
-    entry.take(size as u64).read_to_end(&mut data).ok()?;
-    Some(data)
+    common::zip_reader::read_member_prefix(zip, name, size as u64).ok()
 }
 
 /// container.xml의 첫 rootfile `full-path`(정규화). render 검사도 같은 규칙으로 OPF를 찾는다.
@@ -93,8 +86,7 @@ pub(crate) fn rootfile_path(container: &[u8]) -> Option<String> {
 pub fn parse_xml(bytes: &[u8]) -> Option<roxmltree::Document<'_>> {
     let text = std::str::from_utf8(bytes).ok()?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let opts = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
-    roxmltree::Document::parse_with_options(text, opts).ok()
+    common::xml_parser::parse_xml(text).ok()
 }
 
 /// XML 문서 루트 요소의 원래 이름(접두사 포함).
@@ -202,7 +194,7 @@ pub fn inspect_with(path: &Path, report: &mut FileReport, root_tag: &dyn Fn(&[u8
             // 한 파일 때문에 수천 건 스캔이 중단되면 안 된다.
             let outcome = catch_unwind(AssertUnwindSafe(|| check_epub_members(&mut zip, root_tag, &mut flag)));
             if let Err(payload) = outcome {
-                let msg: String = format!("panic: {}", sysdeps::panic_message(payload.as_ref()).unwrap_or("unknown")).chars().take(120).collect();
+                let msg: String = format!("panic: {}", common::panic_message(payload.as_ref()).unwrap_or("unknown")).chars().take(120).collect();
                 report.mark_incomplete(&msg);
             }
         }

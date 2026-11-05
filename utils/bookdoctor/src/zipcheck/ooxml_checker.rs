@@ -1,6 +1,7 @@
 //! OOXML(DOCX 계열) 검사. 구조(필수 부분, XML 파싱, 선언된 부분의 존재)와 보안 지표를 본다.
 //! 압축 해제는 `epub::security::read_limited`로 상한에서 멈추고, 읽은 바이트는 모두 공유 예산(`spent`)에서 뺀다.
 
+use common::xml_parser::parse_xml;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::Path;
@@ -10,9 +11,9 @@ use crate::magic_sniffer::{Sniffed, sniff};
 use crate::output_formatter::sanitize_display;
 use crate::{Category, FileReport, Severity};
 use common::url_parser::unquote;
+use common::zip_reader::zip_entry_name;
+use common::zip_reader::{Zip, open_zip};
 use regex::Regex;
-use sysdeps::zip_opener::zip_entry_name;
-use sysdeps::zip_opener::{Zip, open_zip};
 
 use super::fast_zip_checker::read_failure;
 use crate::epub::security_checker::{Limits, TextEnc, decode_text, read_limited};
@@ -99,7 +100,7 @@ pub fn inspect_structure(path: &Path, limits: &Limits, spent: &mut u64, report: 
     }
     for (part, text) in texts {
         let Some(text) = text else { continue };
-        match roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }) {
+        match parse_xml(&text) {
             Err(e) => report.push(Category::Render, Severity::High, "MALFORMED_MARKUP", &preview(&part), &format!("XML이 올바르지 않다: {e}")),
             Ok(doc) if part == "[Content_Types].xml" => {
                 for node in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "Override") {
@@ -280,7 +281,7 @@ pub(super) fn check_xml_attacks(text: &str, name: &str, report: &mut FileReport)
 }
 
 pub(super) fn parse(text: &str) -> Option<roxmltree::Document<'_>> {
-    roxmltree::Document::parse_with_options(text.strip_prefix('\u{feff}').unwrap_or(text), roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).ok()
+    parse_xml(text.strip_prefix('\u{feff}').unwrap_or(text)).ok()
 }
 
 /// 관계·필드 대상이 어디를 가리키는가.

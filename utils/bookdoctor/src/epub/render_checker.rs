@@ -18,8 +18,8 @@ use regex::Regex;
 use roxmltree::{Document, Node};
 
 use common::url_parser::unquote;
-use sysdeps::zip_opener::zip_entry_name;
-use sysdeps::zip_opener::{Zip, open_zip};
+use common::zip_reader::zip_entry_name;
+use common::zip_reader::{Zip, open_zip};
 
 use super::security_checker::Limits;
 use super::structure_checker::{ISSUE_MEMBER_UNREADABLE, ISSUE_TO_CODE, is_markup, parse_xml, rootfile_path, spine_members};
@@ -947,7 +947,7 @@ pub fn inspect_with_verified(path: &Path, report: &mut FileReport, limits: &Limi
         report.mark_incomplete(note);
     }
     if let Err(payload) = outcome {
-        let msg: String = format!("panic: {}", sysdeps::panic_message(payload.as_ref()).unwrap_or("unknown")).chars().take(120).collect();
+        let msg: String = format!("panic: {}", common::panic_message(payload.as_ref()).unwrap_or("unknown")).chars().take(120).collect();
         report.mark_incomplete(&msg);
     }
 }

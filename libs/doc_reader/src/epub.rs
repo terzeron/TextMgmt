@@ -7,16 +7,15 @@
 //! 들여쓰기 출력은 자식이 요소뿐인 요소에서 줄바꿈을 더한다. 그 줄바꿈을 [`pretty_text`]가 흉내 낸다.
 
 use std::collections::HashSet;
-use std::io::Read;
 use std::path::Path;
 use std::sync::LazyLock;
 
 use common::url_parser::unquote;
+use common::zip_reader::zip_entry_name;
+use common::zip_reader::{MemberError, Zip, open_zip};
 use ego_tree::NodeRef;
 use regex::Regex;
 use scraper::{Html, Node};
-use sysdeps::zip_opener::zip_entry_name;
-use sysdeps::zip_opener::{Zip, open_zip};
 
 use crate::TEXT_SIZE;
 use crate::markup::{count_lines, get_body_text, is_blank_char_text};
@@ -79,15 +78,14 @@ fn parse_xml(bytes: &[u8]) -> Result<(String, ()), String> {
 }
 
 fn xml_doc(text: &str) -> Result<roxmltree::Document<'_>, String> {
-    roxmltree::Document::parse_with_options(text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("XML 해석 실패: {e}"))
+    common::xml_parser::parse_xml(text).map_err(|e| format!("XML 해석 실패: {e}"))
 }
 
 fn read_member(zip: &mut Zip, name: &str) -> Result<Vec<u8>, String> {
-    let file = zip.by_name(name).map_err(|_| format!("ZIP 항목이 없다: {name}"))?;
-    // 헤더의 선언 크기는 믿지 않는다(zip bomb). 미리 할당하지 않고 상한까지만 푼다.
-    let mut buf = Vec::new();
-    file.take(sysdeps::zip_opener::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
-    Ok(buf)
+    common::zip_reader::read_member_prefix(zip, name, common::zip_reader::MAX_MEMBER_BYTES).map_err(|error| match error {
+        MemberError::Open(_) => format!("ZIP 항목이 없다: {name}"),
+        other => format!("{name}: {other}"),
+    })
 }
 
 /// 매니페스트 항목.

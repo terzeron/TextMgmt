@@ -15,8 +15,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::LazyLock;
 
+use common::zip_reader::{MAX_MEMBER_BYTES, Zip, open_zip};
 use regex::Regex;
-use sysdeps::zip_opener::{MAX_MEMBER_BYTES, Zip, open_zip};
 use text_decoder::{decode_cp949_strict, decode_korean_ignore, decode_utf8_ignore, is_hangul_syllable};
 
 pub const COMMON_HANGUL_SYLLABLES: &str = "이다는을가지에그고하의아은어도로리나를한었기서들게니있라자사시만으해마보했수대것";

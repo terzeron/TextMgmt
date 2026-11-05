@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 
 use super::BookManager;
 use common::url_parser::unquote;
-use sysdeps::zip_opener::zip_entry_name;
+use common::zip_reader::zip_entry_name;
 
 /// 색인 대상 확장자.
 pub const INDEXABLE_FILE_TYPES: [&str; 17] = ["txt", "epub", "pdf", "docx", "doc", "hwp", "rtf", "html", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg", "cbz"];

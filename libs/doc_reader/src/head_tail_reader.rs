@@ -8,8 +8,8 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::Duration;
 
+use common::zip_reader::{MAX_MEMBER_BYTES, MemberError, Zip, open_zip, read_member_prefix};
 use htmlkit::{text_of, tokenize};
-use sysdeps::zip_opener::{MAX_MEMBER_BYTES, Zip, open_zip};
 use sysdeps::{CommandError, CommandRunner, SystemRunner};
 use text_decoder::decode_utf8_ignore;
 
@@ -89,10 +89,11 @@ pub fn read_hwp_strings(path: &Path, runner: &dyn CommandRunner, timeout: Durati
 // ---------------------------------------------------------------- EPUB
 
 fn read_member(zip: &mut Zip, name: &str) -> Result<Option<String>, ()> {
-    let Ok(entry) = zip.by_name(name) else { return Ok(None) };
-    let mut data = Vec::new();
-    entry.take(MAX_MEMBER_BYTES).read_to_end(&mut data).map_err(|_| ())?;
-    Ok(Some(decode_utf8_ignore(&data)))
+    match read_member_prefix(zip, name, MAX_MEMBER_BYTES) {
+        Ok(data) => Ok(Some(decode_utf8_ignore(&data))),
+        Err(MemberError::Open(_)) => Ok(None),
+        Err(_) => Err(()),
+    }
 }
 
 /// 연 EPUB과 OPF 본문. 챕터는 [`EpubPackage::edge_chapters_text`]를 부를 때만 읽는다.
@@ -207,7 +208,7 @@ pub fn pdf_text_fallback(path: &Path) -> Result<String, String> {
         let raw = blocks[idx];
         let mut inflated = Vec::new();
         // 압축 폭탄 스트림이 메모리를 다 쓰지 않도록 상한까지만 푼다.
-        let content = match flate2::read::ZlibDecoder::new(raw).take(sysdeps::zip_opener::MAX_MEMBER_BYTES).read_to_end(&mut inflated) {
+        let content = match flate2::read::ZlibDecoder::new(raw).take(common::zip_reader::MAX_MEMBER_BYTES).read_to_end(&mut inflated) {
             Ok(_) => &inflated[..],
             Err(_) => raw,
         };

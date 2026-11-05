@@ -1,11 +1,10 @@
 //! 오피스 문서와 이미지 읽기. DOCX는 직접 읽고, DOC·HWP·이미지는 LibreOffice로 변환해 읽는다.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use common::zip_reader::open_zip;
 use sysdeps::timeout_runner::run_with_hard_timeout;
-use sysdeps::zip_opener::open_zip;
 
 use crate::TEXT_SIZE;
 use crate::text_normalizer::{head_chars, keep_word_chars};
@@ -177,10 +176,11 @@ pub fn paragraph_text(p: roxmltree::Node) -> String {
     out
 }
 
-fn read_member(zip: &mut sysdeps::zip_opener::Zip, name: &str) -> Result<String, String> {
-    let file = zip.by_name(name).map_err(|_| format!("ZIP 항목이 없다: {name}"))?;
-    let mut buf = Vec::new();
-    file.take(sysdeps::zip_opener::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+fn read_member(zip: &mut common::zip_reader::Zip, name: &str) -> Result<String, String> {
+    let mut buf = common::zip_reader::read_member_prefix(zip, name, common::zip_reader::MAX_MEMBER_BYTES).map_err(|error| match error {
+        common::zip_reader::MemberError::Open(_) => format!("ZIP 항목이 없다: {name}"),
+        other => other.to_string(),
+    })?;
     if buf.starts_with(b"\xef\xbb\xbf") {
         buf.drain(..3);
     }
@@ -188,7 +188,7 @@ fn read_member(zip: &mut sysdeps::zip_opener::Zip, name: &str) -> Result<String,
 }
 
 /// 주 문서 파트 이름. `_rels/.rels`의 officeDocument 관계를 따르고, 없으면 `word/document.xml`.
-fn main_part(zip: &mut sysdeps::zip_opener::Zip) -> Result<String, String> {
+fn main_part(zip: &mut common::zip_reader::Zip) -> Result<String, String> {
     let rels = read_member(zip, "_rels/.rels")?;
     let doc = roxmltree::Document::parse(&rels).map_err(|e| format!("XML 해석 실패: {e}"))?;
     let target = doc

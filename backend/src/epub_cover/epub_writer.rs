@@ -14,7 +14,7 @@ use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 use super::member_path;
 use super::xml_tree::{self, Element, Node, XHTML_NS};
 use super::{CoverError, EpubCoverHooks, FResult, Fail, OPF_NS, entry_names, entry_size, find_cover_member_in, has_entry, inspect_archive, read_entry, read_package_with};
-use sysdeps::zip_opener::zip_entry_name;
+use common::zip_reader::zip_entry_name;
 
 /// 추가·교체할 멤버. 넣은 순서를 지킨다.
 #[derive(Default, Debug)]

@@ -590,9 +590,11 @@ checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
 name = "common"
 version = "0.1.0"
 dependencies = [
+ "roxmltree",
  "serde_json",
  "tempfile",
  "ureq",
+ "zip",
 ]
 
 [[package]]
@@ -1241,6 +1243,7 @@ name = "file_record"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "common",
  "doc_reader",
  "isbn",
  "lopdf",
@@ -3522,7 +3525,6 @@ dependencies = [
  "lopdf",
  "mupdf",
  "tempfile",
- "zip",
 ]
 
 [[package]]

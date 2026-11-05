@@ -7,7 +7,7 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
-common = { path = "../common" }
+common = { path = "../common", default-features = false, features = ["http_client"] }
 htmlkit = { path = "../htmlkit" }
 log = "0.4.34"
 regex = "1.13.1"

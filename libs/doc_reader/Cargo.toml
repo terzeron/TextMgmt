@@ -7,7 +7,7 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
-common = { path = "../common", default-features = false }
+common = { path = "../common", default-features = false, features = ["xml_parser", "zip_reader"] }
 text_decoder = { path = "../text_decoder" }
 ego-tree = "0.11"
 encoding_rs = "0.8.42"

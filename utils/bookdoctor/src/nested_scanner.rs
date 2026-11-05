@@ -15,7 +15,7 @@ use crate::magic_sniffer::{Sniffed, sniff};
 use crate::ole_parser::{Limits as OleLimits, OleFile};
 use crate::output_formatter::sanitize_display;
 use crate::{Category, FileReport, Severity};
-use sysdeps::zip_opener::open_zip;
+use common::zip_reader::open_zip;
 
 use crate::cli_parser::Options;
 use crate::epub::security_checker::directory_limit_note;
@@ -124,10 +124,8 @@ enum Kind {
 }
 
 /// `name` 멤버의 앞 `max`바이트를 읽는다.
-fn read_prefix(zip: &mut sysdeps::zip_opener::Zip, name: &str, max: u64) -> Option<Vec<u8>> {
-    let mut data = Vec::new();
-    zip.by_name(name).ok()?.take(max).read_to_end(&mut data).ok()?;
-    Some(data)
+fn read_prefix(zip: &mut common::zip_reader::Zip, name: &str, max: u64) -> Option<Vec<u8>> {
+    common::zip_reader::read_member_prefix(zip, name, max).ok()
 }
 
 /// 임시 파일의 ZIP이 어떤 문서 패키지인지 멤버 이름 구조로 가려 맞는 확장자를 모두 돌려준다. 멤버 이름(바깥 ZIP의 이름)은 쓰지 않는다.
@@ -158,7 +156,7 @@ fn zip_extensions(file: &Path) -> Vec<&'static str> {
 
 /// `mimetype`이 `application/hwp+zip`이고 `container.xml`이 (4KiB 안에서) `hwpml-package`를 말하며 `.opf`를 가리키지 않는가.
 /// `container.xml`이 4KiB보다 크면 끝까지 보지 못하므로 확신할 수 없다(`false`).
-fn is_genuine_hwpx_container(zip: &mut sysdeps::zip_opener::Zip) -> bool {
+fn is_genuine_hwpx_container(zip: &mut common::zip_reader::Zip) -> bool {
     const CAP: u64 = 4096;
     let mime_ok = read_prefix(zip, "mimetype", 64).is_some_and(|m| m.trim_ascii().eq_ignore_ascii_case(b"application/hwp+zip"));
     let Some(xml) = read_prefix(zip, "META-INF/container.xml", CAP + 1) else { return false };

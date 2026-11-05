@@ -1,11 +1,14 @@
-//! ZIP 열기와 멤버 읽기 상한. EPUB·OOXML·HWPX를 읽는 crate가 함께 쓴다.
+//! ZIP 열기와 멤버 읽기. EPUB·OOXML·HWPX를 읽는 crate가 함께 쓴다.
+//! 멤버는 헤더의 선언 크기를 믿지 않고 실제로 푼 바이트로 상한을 지킨다(zip bomb).
 
+use std::fmt;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{self, BufReader, Read, Seek};
 use std::path::{Component, Path};
 
 use zip::ZipArchive;
 use zip::read::{ArchiveOffset, Config};
+use zip::result::ZipError;
 
 /// 버퍼를 둔 ZIP 리더. 버퍼가 없으면 중앙 디렉토리를 읽느라 read/lseek가 수백만 번 난다.
 pub type Zip = ZipArchive<BufReader<File>>;
@@ -43,4 +46,48 @@ pub fn zip_entry_name(path: impl AsRef<Path>) -> Option<String> {
         }
     }
     Some(parts.join("/"))
+}
+
+/// 멤버를 읽지 못한 이유.
+#[derive(Debug)]
+pub enum MemberError {
+    /// 이름이 없거나 항목을 열 수 없다(손상, 지원하지 않는 압축 방식 등).
+    Open(ZipError),
+    /// 선언 크기나 압축을 푼 크기가 상한을 넘는다.
+    TooLarge,
+    Io(io::Error),
+}
+
+impl fmt::Display for MemberError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MemberError::Open(error) => write!(f, "{error}"),
+            MemberError::TooLarge => write!(f, "압축을 푼 크기가 상한을 넘습니다"),
+            MemberError::Io(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for MemberError {}
+
+/// 멤버 하나를 모두 읽는다. 선언 크기나 압축을 푼 크기가 `limit`를 넘으면 [`MemberError::TooLarge`]다.
+pub fn read_member<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str, limit: u64) -> Result<Vec<u8>, MemberError> {
+    let entry = zip.by_name(name).map_err(MemberError::Open)?;
+    if entry.size() > limit {
+        return Err(MemberError::TooLarge);
+    }
+    let mut data = Vec::new();
+    entry.take(limit + 1).read_to_end(&mut data).map_err(MemberError::Io)?;
+    if data.len() as u64 > limit {
+        return Err(MemberError::TooLarge);
+    }
+    Ok(data)
+}
+
+/// 멤버의 앞 `max`바이트까지만 읽는다. 더 긴 멤버는 잘라 읽고 오류로 보지 않는다.
+pub fn read_member_prefix<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str, max: u64) -> Result<Vec<u8>, MemberError> {
+    let entry = zip.by_name(name).map_err(MemberError::Open)?;
+    let mut data = Vec::new();
+    entry.take(max).read_to_end(&mut data).map_err(MemberError::Io)?;
+    Ok(data)
 }

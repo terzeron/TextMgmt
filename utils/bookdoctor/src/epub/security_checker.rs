@@ -4,6 +4,7 @@
 //! "지표 없음"은 안전하다는 보증이 아니다. 한도(`Limits`)를 넘어 못 본 부분은 `notes`에 남기고
 //! 상태를 `INCOMPLETE`로 표시한다.
 
+use common::xml_parser::parse_xml;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -14,10 +15,10 @@ use std::sync::LazyLock;
 
 use crate::{Category, FileReport};
 use common::url_parser::unquote;
+use common::zip_reader::zip_entry_name;
+use common::zip_reader::{Zip, open_zip};
 use htmlkit::{Tag, decode_entities, local_name, tokenize};
 use regex::Regex;
-use sysdeps::zip_opener::zip_entry_name;
-use sysdeps::zip_opener::{Zip, open_zip};
 use zip::CompressionMethod;
 
 const MAX_TEXT: usize = 160;
@@ -794,7 +795,7 @@ impl Scanner {
     }
 
     fn scan_opf(&mut self, text: &str, name: &str) {
-        let Ok(doc) = roxmltree::Document::parse_with_options(text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }) else {
+        let Ok(doc) = parse_xml(text) else {
             self.partial(name, "OPF is not well-formed XML");
             return;
         };
@@ -974,7 +975,7 @@ fn package_documents(zip: &mut Zip, names: &[String], limits: &Limits, spent: &m
     let mut found: HashSet<String> = names.iter().filter(|n| n.to_lowercase().ends_with(".opf")).cloned().collect();
     if let Some(i) = names.iter().position(|n| n == "META-INF/container.xml")
         && let Some(data) = read_budgeted(zip, i, limits.max_member.min(5 * 1024 * 1024), limits, spent, s)
-        && let Ok(doc) = roxmltree::Document::parse_with_options(&decode_text(&data).0, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
+        && let Ok(doc) = parse_xml(&decode_text(&data).0)
     {
         for root in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "rootfile") {
             let path = zip_entry_name(unquote(root.attribute("full-path").unwrap_or(""))).unwrap_or_default();
@@ -1173,7 +1174,7 @@ pub fn scan_html_document(data: &[u8], name: &str, report: &mut FileReport) {
 /// `scan`이 panic하면 그 파일을 incomplete로 바꾼다.
 pub fn guarded(report: &mut FileReport, scan: impl FnOnce(&mut FileReport)) {
     if let Err(payload) = catch_unwind(AssertUnwindSafe(|| scan(report))) {
-        let msg = sysdeps::panic_message(payload.as_ref()).unwrap_or("unknown");
+        let msg = common::panic_message(payload.as_ref()).unwrap_or("unknown");
         report.mark_incomplete(&safe(&format!("panic: {msg}")));
     }
 }

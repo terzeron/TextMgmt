@@ -1,9 +1,9 @@
-//! ZIP 열기 테스트 (`zip_opener` 모듈).
+//! `common::zip_reader` 테스트: ZIP 열기, 항목 이름, 멤버 읽기 상한.
 
 use std::io::{Read, Write};
 use std::path::Path;
 
-use sysdeps::zip_opener::{MAX_MEMBER_BYTES, open_zip, zip_entry_name};
+use common::zip_reader::{MAX_MEMBER_BYTES, MemberError, open_zip, read_member as read_limited, read_member_prefix, zip_entry_name};
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
@@ -64,4 +64,37 @@ fn zip_entry_names_reject_paths_leaving_the_archive() {
     assert_eq!(zip_entry_name("../content.opf"), None);
     assert_eq!(zip_entry_name("OEBPS/../../x"), None);
     assert_eq!(zip_entry_name(Path::new("OEBPS").join("../../etc/passwd")), None);
+}
+
+fn archive(name: &str, body: &[u8]) -> zip::ZipArchive<std::io::Cursor<Vec<u8>>> {
+    zip::ZipArchive::new(std::io::Cursor::new(zip_bytes(name, body))).unwrap()
+}
+
+#[test]
+fn read_member_reads_a_member_up_to_the_limit() {
+    let mut zip = archive("a.txt", b"hello");
+    assert_eq!(read_limited(&mut zip, "a.txt", 5).unwrap(), b"hello");
+}
+
+#[test]
+fn read_member_rejects_a_member_over_the_limit() {
+    let mut zip = archive("a.txt", b"hello");
+    assert!(matches!(read_limited(&mut zip, "a.txt", 4), Err(MemberError::TooLarge)));
+}
+
+#[test]
+fn read_member_reports_a_missing_member_as_open_error() {
+    let mut zip = archive("a.txt", b"hello");
+    let error = read_limited(&mut zip, "b.txt", 5).unwrap_err();
+    assert!(matches!(error, MemberError::Open(_)), "{error:?}");
+    assert!(!error.to_string().is_empty());
+    assert_eq!(MemberError::TooLarge.to_string(), "압축을 푼 크기가 상한을 넘습니다");
+}
+
+#[test]
+fn read_member_prefix_truncates_long_members() {
+    let mut zip = archive("a.txt", b"hello");
+    assert_eq!(read_member_prefix(&mut zip, "a.txt", 3).unwrap(), b"hel");
+    assert_eq!(read_member_prefix(&mut zip, "a.txt", 10).unwrap(), b"hello");
+    assert!(matches!(read_member_prefix(&mut zip, "b.txt", 3), Err(MemberError::Open(_))));
 }

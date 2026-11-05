@@ -234,8 +234,7 @@ pub fn parse(data: &[u8]) -> Result<Element, XmlError> {
 }
 
 pub fn parse_str(text: &str) -> Result<Element, XmlError> {
-    let options = roxmltree::ParsingOptions { allow_dtd: true, ..roxmltree::ParsingOptions::default() };
-    let doc = roxmltree::Document::parse_with_options(text, options).map_err(map_error)?;
+    let doc = common::xml_parser::parse_xml(text).map_err(map_error)?;
     Ok(convert(doc.root_element(), text))
 }
 

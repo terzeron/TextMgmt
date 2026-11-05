@@ -7,13 +7,13 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::file_time::{StatResult, iso, path_created_time_with_source};
+use common::zip_reader::open_zip;
 use doc_reader::epub::{EpubPath, read_epub_publisher, read_from_epub};
 use doc_reader::pdf::{PDF_STAGE_TIMEOUT, StageRunner, fast_page_count, read_from_pdf};
 use doc_reader::text::{TextRead, read_from_text, reencode_text_file_to_utf8};
 use doc_reader::{markup, office, rtf};
 use serde_json::{Map, Value, json};
 use stat::Stat;
-use sysdeps::zip_opener::open_zip;
 
 use crate::env_config::Config;
 

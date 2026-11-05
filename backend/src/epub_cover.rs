@@ -18,9 +18,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use common::url_parser::{unquote, urlsplit};
+use common::zip_reader::zip_entry_name;
 use serde::{Deserialize, Serialize};
 use sysdeps::FsOps;
-use sysdeps::zip_opener::zip_entry_name;
 use zip::ZipArchive;
 
 mod epub_writer;

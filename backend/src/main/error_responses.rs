@@ -181,7 +181,7 @@ impl std::fmt::Display for PanicError {
 impl Error for PanicError {}
 
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    sysdeps::panic_message(payload).unwrap_or("panic").to_owned()
+    common::panic_message(payload).unwrap_or("panic").to_owned()
 }
 
 /// 핸들러가 panic해도 연결을 끊지 않고 500 응답을 돌려준다.

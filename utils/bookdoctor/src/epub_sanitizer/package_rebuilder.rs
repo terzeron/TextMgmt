@@ -1,6 +1,7 @@
 //! EPUB 멤버를 읽고 허용 목록으로 다시 쓴다: 멤버 인코딩, 패키지 문서(OPF)와 선언 형식, 멤버 분류, manifest 정리.
 
 use super::*;
+use common::xml_parser::parse_xml;
 
 /// 멤버 하나와 전체를 읽는 상한. 압축 폭탄이 메모리를 채우지 못하게 한다.
 const MAX_MEMBER: u64 = 256 * 1024 * 1024;
@@ -205,8 +206,7 @@ pub(crate) fn package_names(members: &[Member]) -> Result<BTreeSet<String>, Stri
         }
         if m.name == "META-INF/container.xml" {
             let text = decode(&m.name, &m.data).map_err(|e| format!("container.xml의 인코딩을 읽을 수 없다: {e}"))?;
-            let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
-                .map_err(|e| format!("META-INF/container.xml을 해석할 수 없다: {e}"))?;
+            let doc = parse_xml(&text).map_err(|e| format!("META-INF/container.xml을 해석할 수 없다: {e}"))?;
             for root in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "rootfile") {
                 let raw = root.attribute("full-path").unwrap_or("");
                 let found: Vec<String> = [zip_entry_name(raw), zip_entry_name(unquote(raw))].into_iter().flatten().filter(|p| existing.contains(p.as_str())).collect();
@@ -234,7 +234,7 @@ pub(crate) fn package_text(m: &Member) -> Result<String, String> {
     if !PACKAGE_ROOT.is_match(&text) {
         return Err(format!("{name}: 컨테이너가 가리키는 패키지 문서가 `<package>` 문서가 아니다"));
     }
-    let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("{name}: 패키지 문서를 해석할 수 없다: {e}"))?;
+    let doc = parse_xml(&text).map_err(|e| format!("{name}: 패키지 문서를 해석할 수 없다: {e}"))?;
     if doc.root_element().tag_name().name() != "package" {
         return Err(format!("{name}: 루트 요소가 `<package>`가 아니다"));
     }
@@ -247,7 +247,7 @@ fn declared_media(members: &[Member], packages: &BTreeSet<String>) -> Result<BTr
     let mut map = BTreeMap::new();
     for m in members.iter().filter(|m| packages.contains(&m.name)) {
         let text = package_text(m)?;
-        let doc = roxmltree::Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("{}: {e}", m.name))?;
+        let doc = parse_xml(&text).map_err(|e| format!("{}: {e}", m.name))?;
         let base = Path::new(&m.name).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         for item in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "item") {
             let (Some(href), Some(media)) = (item.attribute("href"), item.attribute("media-type")) else { continue };

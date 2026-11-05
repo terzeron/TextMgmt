@@ -11,7 +11,7 @@ use scraper::{Html, Node, StrTendril};
 
 use super::preview_builder::{html_security_headers, text_response};
 use super::{BookManager, BookResponse};
-use sysdeps::zip_opener::zip_entry_name;
+use common::zip_reader::zip_entry_name;
 
 /// 뷰어가 내려줄 수 있는 리소스 확장자.
 pub const HTML_VIEWER_RESOURCE_EXTENSIONS: [&str; 21] =

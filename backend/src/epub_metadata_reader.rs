@@ -165,7 +165,7 @@ fn parse_opf(xml: &str, meta: &mut EpubMetadata) -> bool {
 /// EPUB 파일 내부의 `.opf` 메타데이터(title, author, subject, description)를 읽는다. 못 읽으면 빈 값이다.
 pub fn inspect_epub_metadata(path: &Path) -> EpubMetadata {
     let meta = EpubMetadata::default();
-    let Some(mut zip) = sysdeps::zip_opener::open_zip(path) else { return meta };
+    let Some(mut zip) = common::zip_reader::open_zip(path) else { return meta };
     if zip.len() > MAX_ZIP_ENTRIES {
         return meta;
     }
