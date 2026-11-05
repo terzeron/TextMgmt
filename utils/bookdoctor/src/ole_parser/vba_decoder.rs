@@ -7,6 +7,7 @@
 //! (MBCS 이름 + 예약 `0x0032` + 유니코드 이름), MODULEOFFSET `0x0031`(TextOffset u32), MODULE 종결자 `0x002B`.
 
 use super::{Entry, OleFile};
+use crate::byte_reader::{u16_at, u32_at};
 
 const CHUNK_OUT: usize = 4096;
 /// 한 프로젝트에서 읽는 모듈 수 상한.
@@ -125,14 +126,6 @@ struct ModuleInfo {
     name: String,
     stream: String,
     offset: usize,
-}
-
-fn u16_at(b: &[u8], at: usize) -> Option<u16> {
-    b.get(at..at + 2).map(|s| u16::from_le_bytes([s[0], s[1]]))
-}
-
-fn u32_at(b: &[u8], at: usize) -> Option<u32> {
-    b.get(at..at + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
 }
 
 /// 압축을 푼 `dir` 스트림에서 모듈 목록을 읽는다. PROJECTMODULES 레코드(`0F 00 02 00 00 00`, 뒤에 모듈 수)를 찾아 거기서부터 읽는다.

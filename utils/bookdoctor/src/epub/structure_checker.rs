@@ -184,10 +184,6 @@ fn check_epub_members(zip: &mut Zip, root_tag: &dyn Fn(&[u8]) -> Option<String>,
     }
 }
 
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown".into())
-}
-
 /// 루트 태그 추출기를 바꿔 끼울 수 있는 검사. 테스트가 예상 못 한 실패를 주입하는 데 쓴다.
 pub fn inspect_with(path: &Path, report: &mut FileReport, root_tag: &dyn Fn(&[u8]) -> Option<String>) {
     // 같은 이슈는 한 번만, 첫 사례 멤버로 남긴다.
@@ -206,7 +202,7 @@ pub fn inspect_with(path: &Path, report: &mut FileReport, root_tag: &dyn Fn(&[u8
             // 한 파일 때문에 수천 건 스캔이 중단되면 안 된다.
             let outcome = catch_unwind(AssertUnwindSafe(|| check_epub_members(&mut zip, root_tag, &mut flag)));
             if let Err(payload) = outcome {
-                let msg: String = format!("panic: {}", panic_message(payload.as_ref())).chars().take(120).collect();
+                let msg: String = format!("panic: {}", sysdeps::panic_message(payload.as_ref()).unwrap_or("unknown")).chars().take(120).collect();
                 report.mark_incomplete(&msg);
             }
         }

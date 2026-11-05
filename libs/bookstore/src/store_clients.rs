@@ -29,6 +29,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use sysdeps::has_content;
+
 use crate::{BookInfo, Store};
 use htmlkit::url_parser::{quote, quote_component, urljoin};
 use regex::Regex;
@@ -132,17 +134,6 @@ fn title_string(doc: &Html) -> Option<String> {
     let mut children = title.children();
     let only = children.next()?;
     only.value().as_text().map(|t| t.to_string()).filter(|t| !t.is_empty())
-}
-
-/// 값이 있고 내용이 있는가: null과 빈 문자열·빈 배열·빈 객체만 없는 것으로 본다. 숫자와 불리언은 값이 있다.
-fn has_content(value: Option<&Value>) -> bool {
-    value.is_some_and(|v| match v {
-        Value::Null => false,
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-        Value::Bool(_) | Value::Number(_) => true,
-    })
 }
 
 /// JSON 값의 글자 표기. 문자열은 그대로, 없음은 빈 문자열, 나머지는 JSON 표기다.
@@ -867,21 +858,6 @@ pub use webtoon_clients::{BomtoonBookstore, KakaoWebtoonBookstore, LezhinBooksto
 #[cfg(test)]
 mod utility_tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn has_content_treats_only_null_and_empty_containers_as_missing() {
-        assert!(!has_content(None));
-        assert!(!has_content(Some(&Value::Null)));
-        assert!(!has_content(Some(&json!(""))));
-        assert!(!has_content(Some(&json!([]))));
-        assert!(!has_content(Some(&json!({}))));
-        assert!(has_content(Some(&json!(0))));
-        assert!(has_content(Some(&json!(false))));
-        assert!(has_content(Some(&json!("x"))));
-        assert!(has_content(Some(&json!([1]))));
-        assert!(has_content(Some(&json!({"x": 1}))));
-    }
 
     #[test]
     fn default_ureq_session_uses_standard_configuration() {

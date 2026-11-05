@@ -1,5 +1,6 @@
 //! `BinData` 검사(명세 3.2.5, 표 17·18). `DocInfo`의 `HWPTAG_BIN_DATA`로 연결 파일을 찾고, `BinData/*` 스트림은 내용의 매직으로 본다.
 
+use crate::byte_reader::u16_at;
 use crate::magic_sniffer::{Sniffed, sniff};
 use crate::ole_parser::{Entry, EntryKind, OleFile};
 use crate::output_formatter::sanitize_display;
@@ -38,13 +39,9 @@ fn content_kind(bytes: &[u8]) -> Content {
     }
 }
 
-fn u16_at(b: &[u8], at: usize) -> Option<usize> {
-    b.get(at..at.checked_add(2)?).map(|s| usize::from(u16::from_le_bytes([s[0], s[1]])))
-}
-
 /// `at`에서 WORD 글자 수 + UTF-16 문자열을 읽는다. 문자열과 다음 위치를 돌려준다.
 fn wstring(b: &[u8], at: usize) -> Option<(String, usize)> {
-    let chars = u16_at(b, at)?;
+    let chars = usize::from(u16_at(b, at)?);
     let start = at + 2;
     let end = start.checked_add(chars.checked_mul(2)?)?;
     let units: Vec<u16> = b.get(start..end)?.chunks_exact(2).take(MAX_PATH_CHARS).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
@@ -61,7 +58,7 @@ fn is_remote(path: &str) -> bool {
 fn inspect_docinfo(bytes: &[u8], report: &mut FileReport) {
     for record in walk(bytes).filter(|r| r.tag == TAG_BIN_DATA) {
         // 속성의 bit 0~3이 Type: 0 LINK, 1 EMBEDDING, 2 STORAGE(OLE). LINK만 외부 경로를 가진다.
-        let Some(attr) = u16_at(record.data, 0) else { continue };
+        let Some(attr) = u16_at(record.data, 0).map(usize::from) else { continue };
         if attr & 0xF != 0 {
             continue;
         }

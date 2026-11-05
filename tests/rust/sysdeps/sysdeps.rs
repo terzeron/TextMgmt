@@ -495,3 +495,29 @@ mod private_dir {
         assert_eq!(private_dir_in(&parent.path().join("missing"), "cache"), None);
     }
 }
+
+#[test]
+fn has_content_treats_only_null_and_empty_containers_as_missing() {
+    use serde_json::{Value, json};
+    use sysdeps::has_content;
+    assert!(!has_content(None));
+    assert!(!has_content(Some(&Value::Null)));
+    assert!(!has_content(Some(&json!(""))));
+    assert!(!has_content(Some(&json!([]))));
+    assert!(!has_content(Some(&json!({}))));
+    assert!(has_content(Some(&json!(0))));
+    assert!(has_content(Some(&json!(false))));
+    assert!(has_content(Some(&json!("x"))));
+    assert!(has_content(Some(&json!([1]))));
+    assert!(has_content(Some(&json!({"x": 1}))));
+}
+
+#[test]
+fn panic_message_reads_str_and_string_payloads_only() {
+    let text: Box<dyn std::any::Any + Send> = Box::new("boom");
+    let owned: Box<dyn std::any::Any + Send> = Box::new(String::from("owned"));
+    let other: Box<dyn std::any::Any + Send> = Box::new(5u8);
+    assert_eq!(sysdeps::panic_message(text.as_ref()), Some("boom"));
+    assert_eq!(sysdeps::panic_message(owned.as_ref()), Some("owned"));
+    assert_eq!(sysdeps::panic_message(other.as_ref()), None);
+}

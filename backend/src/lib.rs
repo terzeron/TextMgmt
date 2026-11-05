@@ -22,16 +22,3 @@ pub mod refresh_token_store;
 pub mod stderr_logger;
 pub mod task_runner;
 pub mod view_history_store;
-
-use serde_json::Value;
-
-/// 값이 있고 내용이 있는가: null과 빈 문자열·빈 배열·빈 객체만 없는 것으로 본다. 숫자와 불리언은 값이 있다.
-pub(crate) fn has_content(value: Option<&Value>) -> bool {
-    value.is_some_and(|v| match v {
-        Value::Null => false,
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-        Value::Bool(_) | Value::Number(_) => true,
-    })
-}

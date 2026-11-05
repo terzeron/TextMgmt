@@ -56,19 +56,6 @@ fn url_scheme(url: &str) -> String {
     if valid { head.to_lowercase() } else { String::new() }
 }
 
-/// 모든 예약 문자를 퍼센트 인코딩한다(`/`도 인코딩).
-fn quote_all(text: &str) -> String {
-    let mut out = String::new();
-    for b in text.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-' | b'~') {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
-}
-
 impl BookManager {
     /// 뷰어 HTML에 붙이는 보안 헤더.
     pub fn html_security_headers() -> Vec<(String, String)> {
@@ -92,7 +79,7 @@ impl BookManager {
         if !scheme.is_empty() || trimmed.starts_with("//") {
             return None;
         }
-        Some(format!("{resource_base_url}?path={}", quote_all(trimmed)))
+        Some(format!("{resource_base_url}?path={}", htmlkit::url_parser::quote_component(trimmed)))
     }
 
     /// 뷰어에 내보낼 HTML에서 활성 콘텐츠를 걷어내고 리소스 주소를 엔드포인트로 돌린다.
@@ -252,8 +239,11 @@ impl BookManager {
         }
         if matches!(suffix.as_str(), ".html" | ".svg") {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let disposition =
-                if name.is_ascii() && !name.contains('"') && !name.contains('\\') { format!("attachment; filename=\"{name}\"") } else { format!("attachment; filename*=utf-8''{}", quote_all(&name)) };
+            let disposition = if name.is_ascii() && !name.contains('"') && !name.contains('\\') {
+                format!("attachment; filename=\"{name}\"")
+            } else {
+                format!("attachment; filename*=utf-8''{}", htmlkit::url_parser::quote_component(&name))
+            };
             headers.push(("Content-Disposition".to_string(), disposition));
         }
         (media_type, headers)

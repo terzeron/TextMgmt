@@ -5,6 +5,7 @@ pub mod bindata_checker;
 pub mod record_reader;
 pub mod script_checker;
 
+use crate::byte_reader::u32_at;
 use std::path::Path;
 
 use crate::magic_sniffer::Sniffed;
@@ -115,10 +116,6 @@ impl HeaderError {
     }
 }
 
-fn u32_at(b: &[u8], at: usize) -> u32 {
-    b.get(at..at + 4).map_or(0, |s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-}
-
 /// `FileHeader` 바이트를 읽는다. 256바이트 미만이거나 서명이 다르면 오류다.
 pub fn parse_file_header(bytes: &[u8]) -> Result<FileHeader, HeaderError> {
     if bytes.len() < HEADER_LEN {
@@ -127,7 +124,7 @@ pub fn parse_file_header(bytes: &[u8]) -> Result<FileHeader, HeaderError> {
     if !bytes.starts_with(SIGNATURE) {
         return Err(HeaderError::BadSignature);
     }
-    Ok(FileHeader { version: u32_at(bytes, 32), flags: u32_at(bytes, 36), flags2: u32_at(bytes, 40), encrypt_version: u32_at(bytes, 44) })
+    Ok(FileHeader { version: u32_at(bytes, 32).unwrap_or(0), flags: u32_at(bytes, 36).unwrap_or(0), flags2: u32_at(bytes, 40).unwrap_or(0), encrypt_version: u32_at(bytes, 44).unwrap_or(0) })
 }
 
 impl FileHeader {

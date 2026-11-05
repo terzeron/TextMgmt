@@ -224,7 +224,7 @@ pub fn load(data: &[u8]) -> Result<(Document, LoadInfo), String> {
 
 /// 파서 panic 페이로드를 `incomplete` 사유로 만든다. 페이로드는 파일 내용에서 올 수 있으므로 `epub::security::guarded`처럼 정화한다.
 fn panic_reason(payload: &(dyn std::any::Any + Send)) -> String {
-    let msg = payload.downcast_ref::<&str>().map(|m| (*m).to_owned()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown".into());
+    let msg = sysdeps::panic_message(payload).unwrap_or("unknown");
     sanitize_text(&format!("panic: parser panicked on malformed input: {msg}"), PREVIEW_CHARS, Some('…'))
 }
 

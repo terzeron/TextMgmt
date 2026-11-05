@@ -918,10 +918,6 @@ fn run(zip: &mut Zip, limits: &Limits, verified: &HashMap<usize, u64>, sink: &mu
     }
 }
 
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown".into())
-}
-
 /// 한도를 바꿔 끼울 수 있는 검사. 테스트가 작은 한도로 예산과 건너뛰기를 확인하는 데 쓴다.
 pub fn inspect_with(path: &Path, report: &mut FileReport, limits: &Limits) {
     inspect_with_verified(path, report, limits, &HashMap::new());
@@ -951,7 +947,7 @@ pub fn inspect_with_verified(path: &Path, report: &mut FileReport, limits: &Limi
         report.mark_incomplete(note);
     }
     if let Err(payload) = outcome {
-        let msg: String = format!("panic: {}", panic_message(payload.as_ref())).chars().take(120).collect();
+        let msg: String = format!("panic: {}", sysdeps::panic_message(payload.as_ref()).unwrap_or("unknown")).chars().take(120).collect();
         report.mark_incomplete(&msg);
     }
 }

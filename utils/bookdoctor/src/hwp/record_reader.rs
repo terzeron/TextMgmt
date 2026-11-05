@@ -20,10 +20,6 @@ pub fn walk(stream: &[u8]) -> Records<'_> {
     Records { stream, pos: 0, broken: false }
 }
 
-fn u32_at(b: &[u8], at: usize) -> Option<u32> {
-    b.get(at..at.checked_add(4)?).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-}
-
 impl<'a> Iterator for Records<'a> {
     type Item = Record<'a>;
 
@@ -56,6 +52,7 @@ impl<'a> Iterator for Records<'a> {
 
 // --- 스트림 읽기와 검증 ---
 
+use crate::byte_reader::u32_at;
 use crate::ole_parser::{Entry, EntryKind, OleFile};
 use crate::output_formatter::sanitize_display;
 use crate::{Category, FileReport, Severity};

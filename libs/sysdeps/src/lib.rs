@@ -502,3 +502,20 @@ pub trait HttpSession: Send + Sync {
         self.get(url, params)
     }
 }
+
+/// 값이 있고 내용이 있는가: null과 빈 문자열·빈 배열·빈 객체만 없는 것으로 본다. 숫자와 불리언은 값이 있다.
+/// 외부 API 응답과 ES 문서를 읽는 쪽이 함께 쓴다.
+pub fn has_content(value: Option<&Value>) -> bool {
+    value.is_some_and(|v| match v {
+        Value::Null => false,
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
+    })
+}
+
+/// panic 페이로드의 메시지. `panic!`이 넘긴 `&str`이나 `String`이 아니면 `None`이다. 없을 때의 문구는 호출자가 정한다.
+pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
+    payload.downcast_ref::<&str>().copied().or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+}

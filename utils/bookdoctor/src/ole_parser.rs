@@ -10,6 +10,7 @@
 
 pub mod vba_decoder;
 
+use crate::byte_reader::{u16_at, u32_at, u64_at};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
@@ -196,18 +197,6 @@ pub struct OleFile {
     fat_found: u32,
     limits: Limits,
     spent: u64,
-}
-
-fn u16_at(b: &[u8], at: usize) -> Option<u16> {
-    b.get(at..at + 2).map(|s| u16::from_le_bytes([s[0], s[1]]))
-}
-
-fn u32_at(b: &[u8], at: usize) -> Option<u32> {
-    b.get(at..at + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-}
-
-fn u64_at(b: &[u8], at: usize) -> Option<u64> {
-    b.get(at..at + 8).map(|s| u64::from_le_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
 }
 
 impl OleFile {

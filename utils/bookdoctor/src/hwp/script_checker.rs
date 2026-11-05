@@ -1,5 +1,6 @@
 //! `Scripts` 스토리지 검사(명세 3.2.9, 표 8·9). 스크립트는 텍스트로만 본다.
 
+use crate::byte_reader::u32_at;
 use crate::ole_parser::OleFile;
 use crate::{Category, FileReport, Severity};
 
@@ -15,10 +16,6 @@ const KEYWORDS: &[&str] = &["activexobject", "wscript", "shell.", "shellexecute"
 const MAX_STREAMS: usize = 32;
 /// `DefaultJScript`의 끝 표시(DWORD `-1`).
 const END_FLAG: u32 = u32::MAX;
-
-fn u32_at(b: &[u8], at: usize) -> Option<u32> {
-    b.get(at..at.checked_add(4)?).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-}
 
 fn utf16_lossy(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();

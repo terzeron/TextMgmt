@@ -608,8 +608,8 @@ fn value_text(value: &Value) -> String {
 }
 
 use crate::epub_cover::EpubInspection;
-use crate::has_content;
 use bookstore::BookInfo;
+use sysdeps::has_content;
 
 /// 서점이 찾은 표지 후보 하나. `image_url`은 서버만 쓴다.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

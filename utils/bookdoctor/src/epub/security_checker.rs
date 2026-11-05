@@ -1173,7 +1173,7 @@ pub fn scan_html_document(data: &[u8], name: &str, report: &mut FileReport) {
 /// `scan`이 panic하면 그 파일을 incomplete로 바꾼다.
 pub fn guarded(report: &mut FileReport, scan: impl FnOnce(&mut FileReport)) {
     if let Err(payload) = catch_unwind(AssertUnwindSafe(|| scan(report))) {
-        let msg = payload.downcast_ref::<&str>().map(|m| (*m).to_owned()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown".into());
+        let msg = sysdeps::panic_message(payload.as_ref()).unwrap_or("unknown");
         report.mark_incomplete(&safe(&format!("panic: {msg}")));
     }
 }
