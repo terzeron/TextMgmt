@@ -1,5 +1,5 @@
 [package]
-name = "isbn"
+name = "isbn_extractor"
 description = "파일에서 ISBN 찾기와 검증"
 version.workspace = true
 edition.workspace = true
@@ -17,5 +17,5 @@ tempfile = "3.27.0"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [[test]]
-name = "isbn"
-path = "../../tests/rust/isbn/isbn.rs"
+name = "isbn_extractor"
+path = "../../tests/rust/isbn_extractor/isbn_extractor.rs"

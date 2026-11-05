@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use doc_reader::head_tail_reader::pdf_text_fallback;
 use doc_reader::pdf::{InProcess, Stage, StageError, StageRunner};
-use isbn::*;
+use isbn_extractor::*;
 use stat::Stat;
 use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 

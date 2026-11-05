@@ -237,7 +237,7 @@ fn loader_isbn_pdf_worker_extracts_text_through_the_binary() {
     fs::write(&path, pdf_with_text("ISBN 9788994492032")).unwrap();
 
     let runner = file_indexer::child_process_runner::ChildRunner::new(PathBuf::from(env!("CARGO_BIN_EXE_loader")));
-    let isbns = isbn::extract(&path, None, &isbn::Backends::real(&runner, &Stat::new()));
+    let isbns = isbn_extractor::extract(&path, None, &isbn_extractor::Backends::real(&runner, &Stat::new()));
 
     assert_eq!(isbns, ["9788994492032"]);
 }

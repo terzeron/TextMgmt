@@ -20,7 +20,7 @@ stat = { path = "../../libs/stat" }
 doc_reader = { path = "../../libs/doc_reader" }
 encoding_rs = "0.8.35"
 hwp3_parser = { path = "../../libs/hwp3_parser" }
-isbn = { path = "../../libs/isbn" }
+isbn_extractor = { path = "../../libs/isbn_extractor" }
 sysdeps = { path = "../../libs/sysdeps" }
 tempfile = "3.27.0"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }

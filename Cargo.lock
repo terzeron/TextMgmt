@@ -1245,7 +1245,7 @@ dependencies = [
  "chrono",
  "common",
  "doc_reader",
- "isbn",
+ "isbn_extractor",
  "lopdf",
  "serde_json",
  "stat",
@@ -1939,7 +1939,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "isbn"
+name = "isbn_extractor"
 version = "0.1.0"
 dependencies = [
  "doc_reader",
@@ -2139,7 +2139,7 @@ dependencies = [
  "es_client",
  "file_indexer",
  "hwp3_parser",
- "isbn",
+ "isbn_extractor",
  "serde_json",
  "stat",
  "sysdeps",
@@ -3125,15 +3125,6 @@ dependencies = [
  "html5ever",
  "precomputed-hash",
  "selectors",
-]
-
-[[package]]
-name = "search"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "es_client",
- "serde_json",
 ]
 
 [[package]]
