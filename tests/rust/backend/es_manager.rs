@@ -1261,7 +1261,7 @@ fn last_msearch(es: &DummyEs) -> Vec<Value> {
 fn test_list_source_fields_excludes_summary() {
     // 목록 응답에 summary 가 없으므로 ES 에서도 받아오지 않는다.
     assert!(!ESManager::LIST_SOURCE_FIELDS.contains(&"summary"));
-    // Book/Comics 가 생성자에서 읽는 필수 필드는 빠지면 안 된다.
+    // Book이 생성자에서 읽는 필수 필드는 빠지면 안 된다.
     for required in ["category", "title", "author", "file_path", "file_type", "file_size", "updated_time"] {
         assert!(ESManager::LIST_SOURCE_FIELDS.contains(&required), "필수 필드 누락: {required}");
     }

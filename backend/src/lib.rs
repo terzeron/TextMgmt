@@ -7,7 +7,6 @@ pub mod auth_service;
 pub mod book_manager;
 pub mod book_metadata;
 pub mod comics_manager;
-pub mod comics_metadata;
 pub mod cover_management;
 pub mod cover_sources;
 pub mod cover_status;

@@ -26,6 +26,17 @@ fn with_flag(flag: &str) -> Vec<(&str, &str)> {
 }
 
 #[test]
+fn test_from_env_sets_root_and_index_and_starts_with_empty_mismatch_cache() {
+    let es = FakeEsManager::new();
+    let manager = build(&BASE, &es).unwrap();
+    assert_eq!(manager.path_prefix(), std::path::Path::new("/data/comics"));
+    assert_eq!(manager.es_index_name(), "idx");
+    assert_eq!(es.create_index_count(), 1);
+    assert!(manager.mismatch_cache().is_none());
+    assert_eq!(manager.mismatch_cache_time(), 0.0);
+}
+
+#[test]
 fn test_missing_comics_dir_does_not_touch_es() {
     let es = FakeEsManager::new();
     let err = build(&[("TM_ES_COMICS_INDEX", "idx")], &es).err().expect("실패해야 한다");

@@ -108,9 +108,6 @@ path = "../tests/rust/backend/book_manager/pdf_edit.rs"
 name = "book_manager_preview_builder"
 path = "../tests/rust/backend/book_manager/preview_builder.rs"
 
-[[test]]
-name = "comics_metadata"
-path = "../tests/rust/backend/comics_metadata.rs"
 
 [[test]]
 name = "comics_manager"

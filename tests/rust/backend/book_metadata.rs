@@ -84,7 +84,7 @@ fn test_init_uses_created_time_when_present() {
 
     let book = Book::new(6, &info, 0.0);
 
-    assert_eq!(book.view().created_time.unwrap(), "2020-01-01T01:02:03.000000");
+    assert_eq!(book.view().created_time, "2020-01-01T01:02:03.000000");
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn test_datetime_fromisoformat_accepts_timezone_suffixes() {
 
     let book = Book::new(7, &info, 0.0);
 
-    assert_eq!(book.view().created_time.unwrap(), "2020-01-02T03:04:05.123456");
+    assert_eq!(book.view().created_time, "2020-01-02T03:04:05.123456");
     assert_eq!(book.view().updated_time, "2022-02-03T04:05:06.000000");
 }
 
@@ -123,7 +123,7 @@ fn test_datetime_fromisoformat_accepts_comma_fraction() {
 
     let book = Book::new(8, &info, 0.0);
 
-    assert_eq!(book.view().created_time.unwrap(), "2020-01-02T03:04:05.123456");
+    assert_eq!(book.view().created_time, "2020-01-02T03:04:05.123456");
 }
 
 #[test]

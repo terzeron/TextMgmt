@@ -76,9 +76,7 @@ pub struct BookView {
     pub line_count: i64,
     pub page_count: i64,
     pub isbn: String,
-    /// 만화 색인에는 생성 시각이 없다.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_time: Option<String>,
+    pub created_time: String,
     pub updated_time: String,
     pub score: f64,
 }
@@ -172,7 +170,7 @@ impl Book {
             line_count: self.line_count,
             page_count: self.page_count,
             isbn: self.isbn.clone(),
-            created_time: Some(iso_micros(&self.created_time)),
+            created_time: iso_micros(&self.created_time),
             updated_time: iso_micros(&self.updated_time),
             score: self.score,
         }
