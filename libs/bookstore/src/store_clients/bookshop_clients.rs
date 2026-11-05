@@ -167,17 +167,22 @@ impl Bookstore for AladinBookstore {
     }
 
     fn extract_search_links(&self, markup: &str) -> Vec<String> {
-        let mut links = Store::Aladin.extract_search_links(markup);
-        links.truncate(self.max_results);
-        if self.verbose {
-            log::info!("알라딘에서 {}개의 상세 페이지 링크를 찾았습니다.", links.len());
-        }
-        links
+        limited_search_links(Store::Aladin, "알라딘", markup, self.max_results, self.verbose)
     }
 
     fn extract_book_info(&self, markup: &str) -> BookInfo {
         Store::Aladin.extract_book_info(markup)
     }
+}
+
+/// `store`의 검색 결과 링크를 `max_results`개까지 뽑는다. `verbose`면 찾은 개수를 `label`과 함께 남긴다.
+fn limited_search_links(store: Store, label: &str, markup: &str, max_results: usize, verbose: bool) -> Vec<String> {
+    let mut links = store.extract_search_links(markup);
+    links.truncate(max_results);
+    if verbose {
+        log::info!("{label}에서 {}개의 상세 페이지 링크를 찾았습니다.", links.len());
+    }
+    links
 }
 
 // ---------------------------------------------------------------------------
@@ -202,12 +207,7 @@ impl Bookstore for KyoboBookstore {
     }
 
     fn extract_search_links(&self, markup: &str) -> Vec<String> {
-        let mut links = Store::Kyobo.extract_search_links(markup);
-        links.truncate(self.max_results);
-        if self.verbose {
-            log::info!("Kyobo에서 {}개의 상세 페이지 링크를 찾았습니다", links.len());
-        }
-        links
+        limited_search_links(Store::Kyobo, "교보문고", markup, self.max_results, self.verbose)
     }
 
     fn extract_book_info(&self, markup: &str) -> BookInfo {

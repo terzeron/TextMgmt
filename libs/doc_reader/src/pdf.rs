@@ -72,12 +72,12 @@ impl StageRunner for InProcess {
 pub fn run_stage(stage: Stage, path: &Path) -> Result<(String, usize), String> {
     match stage {
         Stage::Poppler => poppler_text(path),
-        Stage::Lopdf => lopdf_text(path),
+        Stage::Lopdf => lopdf_pages_text(lopdf::Document::load(path).map_err(|e| e.to_string())?),
         Stage::Repair => {
             let mut doc = lopdf::Document::load(path).map_err(|e| e.to_string())?;
             let mut buffer = Vec::new();
             doc.save_to(&mut buffer).map_err(|e| e.to_string())?;
-            lopdf_text_from_bytes(buffer)
+            lopdf_pages_text(lopdf::Document::load_mem(&buffer).map_err(|e| e.to_string())?)
         }
         Stage::HeadTail => crate::head_tail_reader::pdf_text_auto(path),
         Stage::HeadTailScan => crate::head_tail_reader::pdf_text_fallback(path).map(|text| (text, 0)),
@@ -106,14 +106,8 @@ fn poppler_text(path: &Path) -> Result<(String, usize), String> {
     collect_pages(pages, |i| Ok::<_, String>(text.split('\u{000c}').nth(i).unwrap_or_default().to_owned()))
 }
 
-fn lopdf_text(path: &Path) -> Result<(String, usize), String> {
-    let doc = lopdf::Document::load(path).map_err(|e| e.to_string())?;
-    let numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
-    collect_pages(numbers.len(), |i| Ok::<_, String>(doc.extract_text(&[numbers[i]]).unwrap_or_default()))
-}
-
-fn lopdf_text_from_bytes(bytes: Vec<u8>) -> Result<(String, usize), String> {
-    let doc = lopdf::Document::load_mem(&bytes).map_err(|e| e.to_string())?;
+/// 연 문서의 쪽마다 본문을 뽑는다. 뽑지 못한 쪽은 빈 문자열이다.
+fn lopdf_pages_text(doc: lopdf::Document) -> Result<(String, usize), String> {
     let numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
     collect_pages(numbers.len(), |i| Ok::<_, String>(doc.extract_text(&[numbers[i]]).unwrap_or_default()))
 }

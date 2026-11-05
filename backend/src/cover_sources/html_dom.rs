@@ -212,15 +212,18 @@ impl HtmlDom {
 
     /// `get_text(strip=True)`.
     pub fn text_strip(&self, idx: usize) -> String {
-        let mut parts = Vec::new();
-        self.strings(idx, &mut parts);
-        parts.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>().concat()
+        self.trimmed_strings(idx).concat()
     }
 
     /// `get_text(separator=" ", strip=True)`.
     pub fn text_strip_sep(&self, idx: usize) -> String {
+        self.trimmed_strings(idx).join(" ")
+    }
+
+    /// 텍스트 조각의 앞뒤 공백을 떼고 빈 조각은 버린다.
+    fn trimmed_strings(&self, idx: usize) -> Vec<String> {
         let mut parts = Vec::new();
         self.strings(idx, &mut parts);
-        parts.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
+        parts.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).map(str::to_string).collect()
     }
 }
