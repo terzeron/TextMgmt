@@ -228,6 +228,8 @@ export default function ViewEPUB({
   const saveTimerRef = useRef(null);
   const cfiRef = useRef("");
   const coverPageRef = useRef(false);
+  // 첫 쪽에서 이전으로 가면 표지를 보여 주려고 콜백이 읽는 값(state 는 콜백을 다시 만들어야 해서 ref).
+  const atStartRef = useRef(false);
   const sliderTimerRef = useRef(null);
   const jumpingRef = useRef(false);
 
@@ -458,6 +460,7 @@ export default function ViewEPUB({
     setCoverUrl(null);
     setIsCoverPage(false);
     coverPageRef.current = false;
+    atStartRef.current = false;
     cfiRef.current = "";
 
     const chapters = preview ? CHAPTERS_PREVIEW : 0;
@@ -610,6 +613,7 @@ export default function ViewEPUB({
       setIsLoading(false);
       setErrorMessage(null);
       syncPageInfo(location);
+      atStartRef.current = Boolean(location?.atStart);
       setAtStart(Boolean(location?.atStart));
       const sectionIndex = location?.start?.index;
       setCurrentIdref(
@@ -801,10 +805,31 @@ export default function ViewEPUB({
     renditionRef.current?.next();
   }, [bookId, preview]);
 
+  // 첫 쪽에서 더 앞으로 가려 하면 표지를 다시 보여 준다. 읽던 위치를 복원해 연 책은 표지를 아직 읽지 않았으므로
+  // 이때 가져온다. spine 첫 항목이 표지 쪽이면 이미 본문 안에 있어 보여 줄 것이 없다.
+  const revealCover = useCallback(async () => {
+    const book = bookRef.current;
+    if (typeof book?.coverUrl !== "function") return;
+    if (/^tm-cover-page-/.test(book.spine?.get?.(0)?.idref || "")) return;
+    try {
+      const url = await book.coverUrl();
+      if (!url || bookRef.current !== book || coverPageRef.current) return;
+      setCoverUrl(url);
+      setIsCoverPage(true);
+      coverPageRef.current = true;
+    } catch {
+      // 표지를 읽지 못하면 그대로 둔다.
+    }
+  }, []);
+
   const goPrev = useCallback(() => {
     if (coverPageRef.current) return;
+    if (atStartRef.current) {
+      revealCover();
+      return;
+    }
     renditionRef.current?.prev();
-  }, []);
+  }, [revealCover]);
 
   // epub.js가 전달하는 터치는 passive라 기본 스크롤을 막을 수 없다.
   // iframe 문서에서 직접 받아 가로 팬을 막고, 세로 스크롤은 허용한다.
@@ -930,6 +955,10 @@ export default function ViewEPUB({
         if (direction > 0) goNext();
         return;
       }
+      if (direction < 0 && atStartRef.current) {
+        await revealCover();
+        return;
+      }
       const rendition = renditionRef.current;
       if (!rendition || jumpingRef.current) return;
       jumpingRef.current = true;
@@ -941,7 +970,7 @@ export default function ViewEPUB({
         jumpingRef.current = false;
       }
     },
-    [goNext],
+    [goNext, revealCover],
   );
 
   // 키보드: 문서와 iframe 내부(rendition keyup) 둘 다 받는다.
