@@ -409,7 +409,7 @@ dependencies = [
  "sha2",
  "sysdeps",
  "tempfile",
- "text_extractor",
+ "text_decoder",
  "zip",
 ]
 
@@ -1016,7 +1016,7 @@ dependencies = [
  "serde_json",
  "sysdeps",
  "tempfile",
- "text_extractor",
+ "text_decoder",
  "zip",
 ]
 
@@ -3575,14 +3575,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "text_extractor"
+name = "text_decoder"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
- "regex",
- "sysdeps",
- "tempfile",
- "zip",
 ]
 
 [[package]]

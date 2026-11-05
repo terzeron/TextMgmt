@@ -15,7 +15,7 @@ docs/       문서
 
 | crate | 용도 |
 | --- | --- |
-| `text_extractor` | 책 파일(TXT·EPUB) 본문 앞뒤 발췌(`extract_*`), 인코딩 판별 휴리스틱, 한국어 판정. `doc_reader`의 아래 계층이다 |
+| `text_decoder` | 잘못된 바이트를 버리는 UTF-8·CP949 디코딩과 한글 음절 판정. `doc_reader`의 아래 계층이다. 본문 표본 추출과 인코딩 추정은 bookdoctor `text_sampler`에 있다 |
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. backend `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |

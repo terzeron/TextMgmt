@@ -20,6 +20,7 @@ pub mod pdf;
 pub mod report;
 pub mod rule_engine;
 pub mod scan_runner;
+pub mod text_sampler;
 pub mod txt_checker;
 pub mod viewer_block_table;
 pub mod zip_name_rules;

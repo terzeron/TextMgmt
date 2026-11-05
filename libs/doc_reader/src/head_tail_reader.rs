@@ -11,7 +11,7 @@ use std::time::Duration;
 use htmlkit::{text_of, tokenize};
 use sysdeps::zip_opener::{MAX_MEMBER_BYTES, Zip, open_zip};
 use sysdeps::{CommandError, CommandRunner, SystemRunner};
-use text_extractor::decode_utf8_ignore;
+use text_decoder::decode_utf8_ignore;
 
 /// PDF·DJVU에서 앞뒤로 읽을 쪽 수.
 pub const HEAD_TAIL_PAGES: usize = 5;

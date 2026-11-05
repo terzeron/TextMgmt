@@ -424,7 +424,7 @@ fn read_with_zip_regex_using(path: &Path, errors: &mut Vec<String>, parse: &Chap
 }
 
 fn decode_utf8_ignore(bytes: &[u8]) -> String {
-    text_extractor::decode_utf8_ignore(bytes)
+    text_decoder::decode_utf8_ignore(bytes)
 }
 
 /// EPUB 파일: (요약, 줄 수). 패키지 경로가 실패하면 정규식 경로로 간다.

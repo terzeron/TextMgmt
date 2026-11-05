@@ -480,7 +480,7 @@ fn remove_pict_groups(rtf: &str) -> String {
 /// 코덱 이름으로 16진 바이트를 푼다. 풀 수 없는 바이트는 버린다(`errors="ignore"`).
 fn decode_hex_bytes(bytes: &[u8], encoding: &str) -> String {
     let label = match encoding {
-        "cp949" => return text_extractor::decode_korean_ignore(bytes, false),
+        "cp949" => return text_decoder::decode_korean_ignore(bytes, false),
         "cp1252" | "cp1250" | "cp1251" | "cp1253" | "cp1254" | "cp1255" | "cp1256" | "cp1257" | "cp1258" => format!("windows-{}", &encoding[2..]),
         "cp932" => "shift_jis".to_owned(),
         "cp936" => "gbk".to_owned(),

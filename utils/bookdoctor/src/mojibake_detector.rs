@@ -6,8 +6,9 @@
 
 use std::path::Path;
 
+use crate::text_sampler::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, extract_epub_text_limited, extract_txt_text, korean_likeness};
 use crate::{Category, FileReport, Severity};
-use text_extractor::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, extract_epub_text_limited, extract_txt_text, is_hangul_syllable, korean_likeness};
+use text_decoder::is_hangul_syllable;
 
 /// 손상 0.006 이하, 정상 0.271 이상. 사이가 비어 있어 경계를 넉넉히 잡는다.
 /// 값 출처: 옛 인코딩 검사 도구 소스 28행.

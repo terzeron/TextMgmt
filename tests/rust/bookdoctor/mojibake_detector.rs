@@ -7,9 +7,9 @@ use bookdoctor::cli_parser::Options;
 use bookdoctor::format_dispatcher::scan_file;
 use bookdoctor::mojibake_detector::{self, MIN_HANGUL_RATIO, MOJIBAKE_LIKENESS_THRESHOLD, TextSource, Verdict, classify_text};
 use bookdoctor::pdf;
+use bookdoctor::text_sampler::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, extract_document_text, korean_likeness};
 use bookdoctor::{Category, FileReport, Severity};
 use support::*;
-use text_extractor::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, extract_document_text, korean_likeness};
 
 fn hanja() -> String {
     HANJA_CLASSIC_UNIT.repeat(20)

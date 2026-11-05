@@ -1,8 +1,7 @@
-//! 책 파일(TXT·EPUB)에서 본문 일부(앞뒤 발췌)를 인코딩에 맞게 떼어 내고, 정상 한국어로 읽히는지 판정한다.
-//! `doc_reader`(형식별로 문서 전체를 읽는 상위 계층)와 분류기, bookdoctor가 아래 계층으로 쓴다.
+//! 책 파일(TXT·EPUB)에서 본문 앞뒤 표본을 인코딩에 맞게 떼어 내고, 정상 한국어로 읽히는 정도를 잰다. 인코딩 손상 판정(`mojibake_detector`)이 쓴다.
 //!
 //! - 본문 발췌: [`extract_txt_text`], [`extract_epub_text`], [`extract_epub_text_limited`], [`extract_document_text`]
-//! - 인코딩 판별·디코딩: [`decode_best`], [`decode_korean_ignore`], [`decode_utf8_ignore`]. 텍스트 인코딩을 추정하는 휴리스틱 로직이다
+//! - 인코딩 추정: [`decode_best`]. 텍스트 인코딩을 추정하는 휴리스틱 로직이다
 //! - 한국어 판정: [`korean_likeness`]
 //!
 //! 인코딩 판별은 실제 코퍼스의 오판 사례로 네 번 고쳐 잡은 휴리스틱이다. 다시 쓰지 말 것:
@@ -18,6 +17,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 use sysdeps::zip_opener::{MAX_MEMBER_BYTES, Zip, open_zip};
+use text_decoder::{decode_cp949_strict, decode_korean_ignore, decode_utf8_ignore, is_hangul_syllable};
 
 pub const COMMON_HANGUL_SYLLABLES: &str = "이다는을가지에그고하의아은어도로리나를한었기서들게니있라자사시만으해마보했수대것";
 
@@ -29,10 +29,6 @@ pub const TEXT_TAIL_CHARS: usize = 10000;
 
 static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
 static WS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
-
-pub fn is_hangul_syllable(c: char) -> bool {
-    ('가'..='힣').contains(&c)
-}
 
 /// 이 글이 정상 한국어로 읽히는 정도. 잴 음절이 모자라면 None.
 pub fn korean_likeness(text: &str) -> Option<f64> {
@@ -46,61 +42,10 @@ pub fn korean_likeness(text: &str) -> Option<f64> {
     (total >= MIN_SYLLABLES_FOR_LIKENESS).then(|| hits as f64 / total as f64)
 }
 
-/// UTF-8로 읽되 잘못된 바이트는 버린다.
-pub fn decode_utf8_ignore(raw: &[u8]) -> String {
-    raw.utf8_chunks().map(|c| c.valid()).collect()
-}
-
 /// UTF-16을 `errors="ignore"`로 푼다. 짝이 안 맞는 서로게이트와 홀수 바이트 꼬리는 버린다.
 fn decode_utf16_ignore(raw: &[u8], big_endian: bool) -> String {
     let units = raw.chunks_exact(2).map(|b| if big_endian { u16::from_be_bytes([b[0], b[1]]) } else { u16::from_le_bytes([b[0], b[1]]) });
     char::decode_utf16(units).filter_map(Result::ok).collect()
-}
-
-/// CP949(= WHATWG euc-kr, UHC 포함)를 엄격하게 푼다.
-fn decode_cp949_strict(raw: &[u8]) -> Option<String> {
-    encoding_rs::EUC_KR.decode_without_bom_handling_and_without_replacement(raw).map(|c| c.into_owned())
-}
-
-/// CP949 / EUC-KR을 읽되 잘못된 바이트는 버린다. 인코딩 판별 휴리스틱의 마지막 단계가 쓰는 관대한 디코더다.
-///
-/// 해석할 수 없는 선두 바이트는 1바이트만 버리고 바로 다음 바이트부터 다시 읽어, 손상 구간 뒤에서 빨리 정상 위치를 되찾는다.
-/// encoding_rs의 기본 동작은 비ASCII 후행 바이트까지 함께 버려 다시 읽는 위치가 달라지고, 중문·일문
-/// 텍스트를 이 경로로 읽을 때 판정이 바뀐다(실측: 표본 400건 중 7건).
-/// `ksx1001_only`가 참이면 확장 완성형(UHC)을 빼고 KS X 1001 영역만 받아들인다.
-pub fn decode_korean_ignore(raw: &[u8], ksx1001_only: bool) -> String {
-    // 흔한 경우: 전부 유효하면 한 번에 푼다. 잘못된 바이트가 있을 때만 아래 느린 경로를 탄다.
-    if !ksx1001_only && let Some(all) = decode_cp949_strict(raw) {
-        return all;
-    }
-    let mut out = String::with_capacity(raw.len());
-    let mut i = 0;
-    while i < raw.len() {
-        let c = raw[i];
-        if c < 0x80 {
-            out.push(c as char);
-            i += 1;
-            continue;
-        }
-        let pair_ok = match raw.get(i + 1) {
-            Some(&d) if c != 0x80 && c != 0xff && (!ksx1001_only || ((0xa1..=0xfe).contains(&c) && (0xa1..=0xfe).contains(&d))) => {
-                let before = out.len();
-                // `decode_to_string*`는 String을 키우지 않는다. 남은 용량이 모자라면 OutputFull로 실패하므로 미리 확보한다.
-                out.reserve(4);
-                let mut dec = encoding_rs::EUC_KR.new_decoder_without_bom_handling();
-                let (res, _) = dec.decode_to_string_without_replacement(&[c, d], &mut out, true);
-                if res == encoding_rs::DecoderResult::InputEmpty && out.len() > before {
-                    true
-                } else {
-                    out.truncate(before);
-                    false
-                }
-            }
-            _ => false,
-        };
-        i += if pair_ok { 2 } else { 1 };
-    }
-    out
 }
 
 /// 바이트 열을 올바른 인코딩으로 디코딩한다.
