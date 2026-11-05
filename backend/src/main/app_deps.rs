@@ -8,12 +8,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::Value;
 use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 
 use super::app_capabilities::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, UnavailableBookAccess, ViewHistoryApi};
 use super::google_oauth::GoogleIdTokenVerifier;
-use crate::auth_service::HttpStatusError;
+use crate::auth_service::{Claims, HttpStatusError};
 use crate::auth_service::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
 use crate::book_manager::{BookManager, LoaderFileReader};
 use crate::book_manager::{BookManagerApi, UnavailableBookManager};
@@ -30,12 +29,12 @@ use crate::view_history_store::create_view_history_store;
 
 /// 테스트 중간에 바꿀 수 있는 인증 payload. `AuthMode::Shared`가 쓴다.
 pub struct AuthSlots {
-    pub auth: Mutex<Value>,
-    pub admin: Mutex<Value>,
+    pub auth: Mutex<Claims>,
+    pub admin: Mutex<Claims>,
 }
 
 impl AuthSlots {
-    pub fn new(auth: Value, admin: Value) -> Self {
+    pub fn new(auth: Claims, admin: Claims) -> Self {
         Self { auth: Mutex::new(auth), admin: Mutex::new(admin) }
     }
 }
@@ -45,11 +44,11 @@ pub enum AuthMode {
     /// 실제 쿠키/Bearer 토큰 인증.
     Cookies,
     /// 둘 다 고정 payload.
-    Fixed(Value),
+    Fixed(Claims),
     /// `require_auth`와 `require_admin`을 각각 고정.
-    Split { auth: Value, admin: Value },
+    Split { auth: Claims, admin: Claims },
     /// `require_auth`만 고정하고 `require_admin`은 실제 인증.
-    AuthOnly(Value),
+    AuthOnly(Claims),
     /// 테스트 중간에 바꾸는 값.
     Shared(Arc<AuthSlots>),
 }
@@ -327,12 +326,12 @@ impl RuntimeBookAccess {
 
 #[async_trait::async_trait]
 impl BookAccess for RuntimeBookAccess {
-    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HttpStatusError> {
+    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Claims, content_type: &str) -> Result<BookStub, HttpStatusError> {
         let manager = if content_type == "comic" { &self.comics } else { &self.books };
         let manager = manager.get().map_err(|error| HttpStatusError::new(503, &error))?;
         let book = manager.get_book(book_id).await.map_err(|error| HttpStatusError::new(404, &error.to_string()))?;
 
-        if payload.get("role").and_then(Value::as_str) == Some("viewer") {
+        if payload.is_viewer() {
             let categories = self.categories.get().map_err(|error| HttpStatusError::new(503, &error))?;
             let hidden = categories.get_hidden_categories(content_type).map_err(|error| HttpStatusError::new(500, &error.to_string()))?;
             if super::routes_books::is_hidden(&book.category, &hidden) {
@@ -389,7 +388,7 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use super::{RuntimeBookAccess, Slot, build_book_manager, build_comics_manager};
+    use super::{Claims, RuntimeBookAccess, Slot, build_book_manager, build_comics_manager};
     use crate::book_metadata::{Book, BookLookupError};
     use crate::es_manager::{EsError, EsManagerApi};
     use crate::main::{BookAccess, BookManagerApi, BookStub, CategoryMappingApi};
@@ -470,7 +469,7 @@ mod tests {
         let mapping: Arc<dyn CategoryMappingApi> = Arc::new(FixedHiddenCategories(vec!["소설/판타지".into()]));
         let access = RuntimeBookAccess::new(Slot::ready(manager.clone()), Slot::ready(manager.clone()), Slot::ready(mapping));
 
-        let result = access.get_book_and_ensure_viewer_access(1, &json!({"role": "viewer"}), "book").await;
+        let result = access.get_book_and_ensure_viewer_access(1, &Claims::with_role("viewer"), "book").await;
 
         assert_eq!(result.unwrap_err().status_code, 403);
     }
@@ -481,7 +480,7 @@ mod tests {
         let mapping: Arc<dyn CategoryMappingApi> = Arc::new(FixedHiddenCategories(vec!["소설".into()]));
         let access = RuntimeBookAccess::new(Slot::ready(manager.clone()), Slot::ready(manager), Slot::ready(mapping));
 
-        let book = access.get_book_and_ensure_viewer_access(1, &json!({"role": "admin"}), "book").await.unwrap();
+        let book = access.get_book_and_ensure_viewer_access(1, &Claims::with_role("admin"), "book").await.unwrap();
 
         assert_eq!(book, BookStub { title: "title".into(), category: Some("소설/판타지".into()) });
     }
@@ -492,7 +491,7 @@ mod tests {
         let mapping: Arc<dyn CategoryMappingApi> = Arc::new(FixedHiddenCategories(vec![String::new()]));
         let access = RuntimeBookAccess::new(Slot::ready(manager.clone()), Slot::ready(manager), Slot::ready(mapping));
 
-        let result = access.get_book_and_ensure_viewer_access(1, &json!({"role": "viewer"}), "book").await;
+        let result = access.get_book_and_ensure_viewer_access(1, &Claims::with_role("viewer"), "book").await;
 
         assert!(result.is_ok());
     }

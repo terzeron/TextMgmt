@@ -48,6 +48,7 @@ use crate::common::shared_fixtures::{FakeStore, decode, encode_hs256, fixture, m
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request};
+use backend::auth_service::Claims;
 use backend::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, HttpStatusError, TokenIssuer};
 use backend::main::{ACCESS_COOKIE_NAME, AppDeps, AuthMode, GoogleVerifier, REFRESH_COOKIE_NAME, RequestValidationError, app_with, observation_hash};
 use backend::refresh_token_store::RefreshTokenStoreApi;
@@ -77,7 +78,10 @@ async fn post_empty(client: &TestClient, path: &str) -> Response {
 }
 
 fn auth_deps() -> AppDeps {
-    AppDeps::new(AuthMode::Split { auth: json!({"email": "user@example.com", "role": "user"}), admin: json!({"email": "admin@example.com", "role": "admin"}) })
+    AppDeps::new(AuthMode::Split {
+        auth: Claims { email: "user@example.com".into(), role: "user".into(), ..Claims::default() },
+        admin: Claims { email: "admin@example.com".into(), role: "admin".into(), ..Claims::default() },
+    })
 }
 
 fn auth_app(deps: AppDeps) -> Router {
@@ -140,9 +144,9 @@ impl TokenIssuer for FixedTokens {
         "rjwt".to_string()
     }
 
-    fn decode_refresh_token(&self, token: &str) -> Result<Value, HttpStatusError> {
+    fn decode_refresh_token(&self, token: &str) -> Result<Claims, HttpStatusError> {
         if token == "rjwt" {
-            return Ok(json!({"type": "refresh", "email": "e@example.com", "fid": "family1", "jti": "new-token"}));
+            return Ok(Claims { token_type: "refresh".into(), email: "e@example.com".into(), family_id: "family1".into(), token_id: "new-token".into(), ..Claims::default() });
         }
         backend::auth_service::decode_refresh_token(token)
     }
@@ -554,7 +558,7 @@ mod test_revoke_login_session {
 async fn test_viewer_is_forbidden() {
     let _env = fixture();
     // require_admin은 고정하지 않았으므로(`AuthOnly`) 실제 의존성이 동작한다
-    let app = auth_app(AppDeps::new(AuthMode::AuthOnly(json!({"email": "viewer@example.com", "role": "viewer"}))));
+    let app = auth_app(AppDeps::new(AuthMode::AuthOnly(Claims { email: "viewer@example.com".into(), role: "viewer".into(), ..Claims::default() })));
 
     let status = client(&app).get("/auth/sessions").await.status;
     assert!(status == 401 || status == 403, "GET /auth/sessions -> {status}");
@@ -659,7 +663,7 @@ async fn session_login(app: &Router) -> (String, String, String) {
     assert_eq!(response.status, 200);
     let access = cookie_value(&response, ACCESS_COOKIE_NAME).unwrap();
     let refresh = cookie_value(&response, REFRESH_COOKIE_NAME).unwrap();
-    let fid = backend::auth_service::decode_refresh_token(&refresh).unwrap()["fid"].as_str().unwrap().to_string();
+    let fid = backend::auth_service::decode_refresh_token(&refresh).unwrap().family_id;
     (access, refresh, fid)
 }
 
@@ -741,7 +745,7 @@ async fn test_session_access_refresh_keeps_family_and_prior_access_valid() {
     assert_eq!(response.status, 200);
     let next_access = cookie_value(&response, ACCESS_COOKIE_NAME).unwrap();
     let payload = backend::auth_service::extract_payload(&make_request(Some(&next_access), None)).unwrap();
-    assert_eq!(payload["fid"], fid);
+    assert_eq!(payload.family_id, fid);
     for token in [access, next_access] {
         assert_eq!(client(&app).cookie(ACCESS_COOKIE_NAME, &token).get("/auth/me").await.status, 200);
     }

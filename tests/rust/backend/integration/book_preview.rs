@@ -5,6 +5,7 @@ use crate::common::shared_fixtures::{CATEGORY, CONTAINER_XML, TempFile};
 use crate::common::shared_fixtures::{chapter, entry, err_has, make_opf, namelist, ns_children, ns_nodes, split, unlink, write_epub, zip_read, zip_read_string};
 use axum::body::Body;
 use axum::http::Request;
+use backend::auth_service::Claims;
 use backend::book_manager::{BookManager, BookManagerDeps, BookRef};
 use backend::main::{AppDeps, AuthMode, app_with};
 use backend::pdf_page_reader::{LopdfOpener, PdfDoc, PdfError, PdfOpener};
@@ -2434,7 +2435,7 @@ async fn test_html_routes_preserve_comics_prefix_and_download_attachment() {
     let es = FakeEsManager::with_doc(json!({"category":"test", "title":"HTML", "author":"", "file_path":"page.html", "file_type":"html", "file_size":100, "updated_time":"2024-01-01T00:00:00"}));
     let deps = BookManagerDeps::new(tmp.path().to_path_buf(), es);
     let app = app_with(
-        AppDeps::new(AuthMode::Fixed(json!({"role":"admin"})))
+        AppDeps::new(AuthMode::Fixed(Claims::with_role("admin")))
             .with_book_manager(Arc::new(BookManager::with_deps(deps.clone())))
             .with_comics_manager(Arc::new(backend::comics_manager::ComicsManager::with_deps(deps))),
     );

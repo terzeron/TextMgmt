@@ -1,5 +1,6 @@
 #[path = "../common/mod.rs"]
 mod common;
+use backend::auth_service::Claims;
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::{AppDeps, AuthMode, BookManagerApi, CategoryMappingApi, MappingError, app_with};
 use common::TestClient;
@@ -40,7 +41,7 @@ fn doc() -> Value {
 fn client(root: &Path, es: Arc<FakeEsManager>, mapping: Arc<Policy>, comics: bool) -> TestClient {
     common::setup_env();
     let managers = BookManagerDeps::new(root.into(), es);
-    let deps = AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_category_mapping(mapping);
+    let deps = AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_category_mapping(mapping);
     let deps =
         if comics { deps.with_comics_manager(Arc::new(backend::comics_manager::ComicsManager::with_deps(managers))) } else { deps.with_book_manager(Arc::new(BookManager::with_deps(managers))) };
     TestClient::with_app(app_with(deps))
@@ -81,7 +82,7 @@ impl BookManagerApi for Update {
 #[tokio::test]
 async fn update_book_uses_path_id_root_and_force_with_body_validation() {
     let manager = Arc::new(Update(Mutex::new(vec![])));
-    let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager(manager.clone())));
+    let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager(manager.clone())));
     let mut body = doc();
     body["book_id"] = json!(999);
     assert_eq!(client.put_json("/books/7?force=true", &body).await.json(), json!({"status":"success","result":"Ok"}));

@@ -1,5 +1,6 @@
 //! 도서·만화의 메타데이터, 검색, 카테고리 및 최신 목록.
 use super::{ensure_allowed, hidden_categories, is_hidden, kind, manager};
+use crate::auth_service::Claims;
 use crate::book_manager::MAX_LATEST_BOOK_COUNT;
 use crate::book_metadata::Book;
 use crate::main::{ApiError, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, RequireAuth, Routes};
@@ -37,7 +38,7 @@ fn mapping(deps: &AppDeps) -> ApiResult<Arc<dyn CategoryMappingApi>> {
         ApiError::unavailable()
     })
 }
-fn hidden(deps: &AppDeps, payload: &Value, uri: &Uri) -> ApiResult<Vec<String>> {
+fn hidden(deps: &AppDeps, payload: &Claims, uri: &Uri) -> ApiResult<Vec<String>> {
     hidden_categories(deps, payload, comics(uri))
 }
 pub(super) fn book_json(book: &Book, manager: &dyn BookManagerApi) -> Value {

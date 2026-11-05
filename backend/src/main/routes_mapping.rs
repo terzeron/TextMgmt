@@ -138,7 +138,7 @@ async fn replace_all(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, ApiQuery
     .await
 }
 async fn policy(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiQuery(query): ApiQuery<Query>) -> ApiResult<Json<Value>> {
-    if payload["role"] == "viewer" {
+    if payload.is_viewer() {
         return Ok(Json(success(Vec::<String>::new())));
     }
     if uri.path() == "/hidden-categories" {

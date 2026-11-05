@@ -129,6 +129,7 @@ pub async fn run_classify_apply_job(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth_service::Claims;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
@@ -138,7 +139,7 @@ mod tests {
     }
 
     fn plain_app() -> Router {
-        app_with(AppDeps::new(AuthMode::Fixed(json!({"email": "a@example.com", "role": "admin"}))))
+        app_with(AppDeps::new(AuthMode::Fixed(Claims { email: "a@example.com".into(), role: "admin".into(), ..Claims::default() })))
     }
 
     use serde_json::json;

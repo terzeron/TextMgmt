@@ -1,5 +1,6 @@
 #[path = "../common/mod.rs"]
 mod common;
+use backend::auth_service::Claims;
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::main::{AppDeps, AuthMode, CategoryMappingApi, MappingError, app_with};
 use common::TestClient;
@@ -22,7 +23,7 @@ impl CategoryMappingApi for Policy {
 fn client(es: Arc<FakeEsManager>, role: &str, comics: bool) -> TestClient {
     common::setup_env();
     let managers = BookManagerDeps::new("/tmp/catalog-library".into(), es);
-    let deps = AppDeps::new(AuthMode::AuthOnly(json!({"role":role}))).with_category_mapping(Arc::new(Policy));
+    let deps = AppDeps::new(AuthMode::AuthOnly(Claims { role: role.to_string(), ..Claims::default() })).with_category_mapping(Arc::new(Policy));
     let deps =
         if comics { deps.with_comics_manager(Arc::new(backend::comics_manager::ComicsManager::with_deps(managers))) } else { deps.with_book_manager(Arc::new(BookManager::with_deps(managers))) };
     TestClient::with_app(app_with(deps))

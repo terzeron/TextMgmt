@@ -1,6 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use backend::auth_service::Claims;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,7 +17,7 @@ use common::{
     es_fake::FakeEsManager,
     fsx::{set_times_ns, times_ns},
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 #[test]
 fn test_epubveri_cli_writes_epubcheck_compatible_json_for_valid_and_invalid_books() {
@@ -204,7 +205,7 @@ mod test_cover_endpoint {
     #[tokio::test]
     async fn test_checks_viewer_access() {
         let env = endpoint_env();
-        let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::AuthOnly(json!({"role":"viewer"}))).with_book_manager(env.manager.clone()).with_category_mapping(Arc::new(DenyAccess))));
+        let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::AuthOnly(Claims::with_role("viewer"))).with_book_manager(env.manager.clone()).with_category_mapping(Arc::new(DenyAccess))));
 
         let response = client.get("/cover/201").await;
 

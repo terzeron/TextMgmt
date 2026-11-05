@@ -15,6 +15,7 @@ use super::error_responses::{ApiError, ApiResult, RequestValidationError};
 use super::request_extractors::{ApiJson, ApiQuery, RequireAdmin, RequireAuth};
 use super::route_registry::Routes;
 use super::routes_books::{book_response, checked_manager, parse_book_id, run_blocking};
+use crate::auth_service::Claims;
 use crate::epub_cover::MAX_IMAGE_BYTES;
 
 pub(super) fn routes() -> Routes {
@@ -35,7 +36,7 @@ async fn comic_pages(RequireAuth(payload): RequireAuth, State(deps): State<Arc<A
     pages(&deps, &payload, &book_id, query, true).await
 }
 
-async fn pages(deps: &AppDeps, payload: &Value, book_id: &str, query: PagesQuery, comics: bool) -> ApiResult<Response> {
+async fn pages(deps: &AppDeps, payload: &Claims, book_id: &str, query: PagesQuery, comics: bool) -> ApiResult<Response> {
     let book_id = parse_book_id(book_id)?;
     let manager = checked_manager(deps, payload, book_id, comics).await?;
     let (start, end) = (query.start.unwrap_or(1), query.end.unwrap_or(1));

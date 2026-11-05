@@ -3,6 +3,7 @@ mod common;
 #[path = "../common/book_fixtures.rs"]
 mod fx;
 
+use backend::auth_service::Claims;
 use std::fs;
 
 use crate::common::shared_fixtures::{error_text, split};
@@ -596,7 +597,7 @@ async fn test_preview_rejects_non_image_download() {
 /// POST /pdf-pages/{id}/insert-preview: 관리자만 호출할 수 있고, 성공하면 JPEG, 실패하면 400 과 사유를 돌려준다.
 fn client() -> (TestClient, std::sync::Arc<fx::FakeManager>) {
     let fake = fx::FakeManager::new();
-    let app = app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(fake.clone()));
+    let app = app_with(AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager(fake.clone()));
     (TestClient::with_app(app), fake)
 }
 

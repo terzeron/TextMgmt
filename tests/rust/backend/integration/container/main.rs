@@ -47,6 +47,7 @@
 //! 모듈 범위 fixture(`backend_test_setup`)는 테스트마다 새로 만든다.
 
 use crate::{common, elasticsearch_fixture, mysql_fixture};
+use backend::auth_service::Claims;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -1005,12 +1006,12 @@ mod test_auth_me_logout {
 
 // ---- 추가 API 사례 ----
 
-fn user_payload() -> Value {
-    json!({"email": "user@example.com", "role": "user"})
+fn user_payload() -> Claims {
+    Claims { email: "user@example.com".into(), role: "user".into(), ..Claims::default() }
 }
 
-fn admin_example_payload() -> Value {
-    json!({"email": "admin@example.com", "role": "admin"})
+fn admin_example_payload() -> Claims {
+    Claims { email: "admin@example.com".into(), role: "admin".into(), ..Claims::default() }
 }
 
 /// `client` fixture: require_auth/require_admin을 override한 TestClient.
@@ -1719,7 +1720,7 @@ impl CategoryMappingApi for HiddenA {
 async fn test_viewer_hidden_category_access_control_routes() {
     let tmp = TempDir::new().unwrap();
     let dummy = DummyManager::new(tmp.path());
-    let viewer = json!({"email": "viewer@example.com", "role": "viewer"});
+    let viewer = Claims { email: "viewer@example.com".into(), role: "viewer".into(), ..Claims::default() };
     let dummy_client = dummy_client_with(&dummy, Arc::new(HiddenA), AuthMode::Split { auth: viewer, admin: admin_example_payload() });
 
     let resp = dummy_client.get("/books/1").await;
@@ -1849,8 +1850,12 @@ async fn test_reload_job_flushes_progress_on_a_fixed_interval() {
     let mapping = DummyCategoryMapping::new();
 
     // 상수 대신 값 설정자다. 0.02초 주기.
-    let deps = dummy_deps(&dummy, mapping.clone(), AuthMode::Split { auth: json!({"email": "u@e.com", "role": "user"}), admin: json!({"email": "a@e.com", "role": "admin"}) })
-        .with_reload_progress_flush_interval(Duration::from_millis(20));
+    let deps = dummy_deps(
+        &dummy,
+        mapping.clone(),
+        AuthMode::Split { auth: Claims { email: "u@e.com".into(), role: "user".into(), ..Claims::default() }, admin: Claims { email: "a@e.com".into(), role: "admin".into(), ..Claims::default() } },
+    )
+    .with_reload_progress_flush_interval(Duration::from_millis(20));
     common::setup_env();
     let client = TestClient::with_app(app_with(deps));
     let resp = post_empty(&client, "/category-mismatches/reload-all").await;
@@ -1898,7 +1903,7 @@ async fn test_latest_books_uses_latest_excluded_categories() {
 async fn test_latest_books_merges_viewer_hidden_and_latest_excluded_categories() {
     let tmp = TempDir::new().unwrap();
     let dummy = DummyManager::new(tmp.path());
-    let viewer = json!({"email": "viewer@example.com", "role": "viewer"});
+    let viewer = Claims { email: "viewer@example.com".into(), role: "viewer".into(), ..Claims::default() };
     let mapping = Arc::new(HiddenAndExcluded { hidden: vec!["hidden".into(), "shared".into()], excluded: vec!["latest".into(), "shared".into()] });
     let dummy_client = dummy_client_with(&dummy, mapping, AuthMode::Split { auth: viewer, admin: admin_example_payload() });
 

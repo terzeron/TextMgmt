@@ -1,6 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use backend::auth_service::Claims;
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -407,7 +408,7 @@ mod test_route {
 
     fn client() -> (TestClient, Arc<FakeManager>) {
         let fake = FakeManager::new();
-        let app = app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(fake.clone()));
+        let app = app_with(AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager(fake.clone()));
         (TestClient::with_app(app), fake)
     }
 
@@ -651,6 +652,6 @@ mod test_route_limits {
 
 fn test_route_client() -> (TestClient, Arc<FakeManager>) {
     let fake = FakeManager::new();
-    let app = app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(fake.clone()));
+    let app = app_with(AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager(fake.clone()));
     (TestClient::with_app(app), fake)
 }

@@ -3,14 +3,14 @@
 #[path = "../common/mod.rs"]
 mod common;
 use axum::http::Method;
+use backend::auth_service::Claims;
 use backend::main::{AppDeps, AuthMode, app_with};
 use common::TestClient;
-use serde_json::json;
 
 #[tokio::test]
 async fn missing_required_body_fields_are_rejected() {
     common::setup_env();
-    let auth = json!({"email":"admin@test.com", "role":"admin", "exp": 4_000_000_000_i64});
+    let auth = Claims { email: "admin@test.com".into(), role: "admin".into(), exp: 4_000_000_000, ..Claims::default() };
     let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(auth))));
     let expected: Vec<(String, String, Vec<String>)> = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/required_body_fields.json"))).unwrap();
 
@@ -25,7 +25,7 @@ async fn missing_required_body_fields_are_rejected() {
 #[tokio::test]
 async fn openapi_json_body_examples_pass_deserialization() {
     common::setup_env();
-    let auth = json!({"email":"admin@test.com", "role":"admin", "exp": 4_000_000_000_i64});
+    let auth = Claims { email: "admin@test.com".into(), role: "admin".into(), exp: 4_000_000_000, ..Claims::default() };
     let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(auth))));
     let examples: Vec<(String, String, String, serde_json::Value)> = serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/json_body_samples.json"))).unwrap();
 

@@ -5,6 +5,7 @@ mod common;
 use crate::common::auth_fakes::FixedRole;
 use crate::common::shared_fixtures::{CallArgs, DeferredRunner, Fut, Fx, Mock, RecordedArgs, Store, arg, arg_or, effective, install_classify_status_store, ready, store_set};
 use crate::common::shared_fixtures::{ListDirFs, admin_payload, arr, enc, is_truthy, now_plus_3600, proposal_result};
+use backend::auth_service::Claims;
 use backend::book_metadata::Book;
 use backend::main::{BookstoreFactory, BookstoreSearch, GoogleVerifier, TaskRunner};
 use bookstore::store_clients::SearchRow;
@@ -14,8 +15,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::TempDir;
 
-fn viewer_payload() -> Value {
-    json!({"email": "viewer@test.com", "role": "viewer", "name": "Viewer", "picture": "", "exp": now_plus_3600()})
+fn viewer_payload() -> Claims {
+    Claims { email: "viewer@test.com".into(), role: "viewer".into(), name: "Viewer".into(), exp: now_plus_3600() as i64, ..Claims::default() }
 }
 
 fn book_dict() -> Value {
@@ -1998,9 +1999,9 @@ async fn test_auth_me_returns_payload() {
     let data = r.json();
     let admin = admin_payload();
     assert_eq!(data["status"], "success");
-    assert_eq!(data["result"]["email"], admin["email"]);
-    assert_eq!(data["result"]["role"], admin["role"]);
-    assert_eq!(data["result"]["name"], admin["name"]);
+    assert_eq!(data["result"]["email"], admin.email);
+    assert_eq!(data["result"]["role"], admin.role);
+    assert_eq!(data["result"]["name"], admin.name);
     assert!(data["result"].get("expires_in").is_some());
 }
 

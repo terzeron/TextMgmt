@@ -1,6 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use backend::auth_service::Claims;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -407,7 +408,7 @@ mod test_pdf_pages_endpoint {
     #[tokio::test]
     async fn test_viewer_hidden_category_and_descendants_are_forbidden() {
         let e = env();
-        let deps = AppDeps::new(AuthMode::AuthOnly(json!({"role":"viewer"}))).with_book_manager(e.bm.clone()).with_category_mapping(Arc::new(HiddenCategories));
+        let deps = AppDeps::new(AuthMode::AuthOnly(Claims::with_role("viewer"))).with_book_manager(e.bm.clone()).with_category_mapping(Arc::new(HiddenCategories));
         let client = TestClient::with_app(app_with(deps));
         for category in ["test_category", "test_category/child"] {
             e.es.with(|state| state.default_doc.as_mut().unwrap()["category"] = json!(category));
@@ -424,7 +425,7 @@ mod test_pdf_pages_endpoint {
     #[tokio::test]
     async fn test_comics_uses_comic_manager_and_category_policy() {
         let e = env();
-        let deps = AppDeps::new(AuthMode::AuthOnly(json!({"role":"viewer"}))).with_comics_manager(e.bm.clone()).with_category_mapping(Arc::new(HiddenCategories));
+        let deps = AppDeps::new(AuthMode::AuthOnly(Claims::with_role("viewer"))).with_comics_manager(e.bm.clone()).with_category_mapping(Arc::new(HiddenCategories));
         let client = TestClient::with_app(app_with(deps));
         let response = client.get("/comics/pdf-pages/1?start=2&end=3").await;
         assert_eq!(response.status, 200);
@@ -435,7 +436,7 @@ mod test_pdf_pages_endpoint {
     async fn test_preview_page_limit_and_comics_route() {
         let e = env();
         let comics = backend::comics_manager::ComicsManager::with_deps(BookManagerDeps::new(e.temp_dir.clone(), e.es.clone()));
-        let deps = AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager(e.bm.clone()).with_comics_manager(Arc::new(comics));
+        let deps = AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager(e.bm.clone()).with_comics_manager(Arc::new(comics));
         let client = TestClient::with_app(app_with(deps));
         for prefix in ["", "/comics"] {
             let response = client.get(&format!("{prefix}/preview/1?pages=2")).await;

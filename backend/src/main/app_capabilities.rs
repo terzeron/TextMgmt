@@ -12,7 +12,7 @@ use std::fmt;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::auth_service::HttpStatusError;
+use crate::auth_service::{Claims, HttpStatusError};
 use crate::view_history_store::{ViewHistoryError, ViewHistoryStore};
 use db::category_mapping::CategoryMapping;
 
@@ -310,7 +310,7 @@ pub struct BookStub {
 /// 책을 찾고, 없으면 404, viewer가 볼 수 없는 카테고리면 403 오류를 돌려준다.
 #[async_trait]
 pub trait BookAccess: Send + Sync {
-    async fn get_book_and_ensure_viewer_access(&self, _book_id: i64, _payload: &Value, _content_type: &str) -> Result<BookStub, HttpStatusError> {
+    async fn get_book_and_ensure_viewer_access(&self, _book_id: i64, _payload: &Claims, _content_type: &str) -> Result<BookStub, HttpStatusError> {
         Err(HttpStatusError::new(500, UNIMPLEMENTED))
     }
 }
@@ -351,8 +351,8 @@ mod tests {
 
     #[tokio::test]
     async fn unavailable_book_access_fails_closed() {
-        assert!(EmptyBookAccess.get_book_and_ensure_viewer_access(1, &json!({}), "book").await.is_err());
-        assert!(UnavailableBookAccess.get_book_and_ensure_viewer_access(1, &json!({}), "book").await.is_err());
+        assert!(EmptyBookAccess.get_book_and_ensure_viewer_access(1, &Claims::default(), "book").await.is_err());
+        assert!(UnavailableBookAccess.get_book_and_ensure_viewer_access(1, &Claims::default(), "book").await.is_err());
     }
 
     #[test]

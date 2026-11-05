@@ -1,6 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use backend::auth_service::Claims;
 use std::fs::{self, File};
 use std::io::{Cursor, Read};
 use std::os::unix::fs::MetadataExt;
@@ -662,7 +663,7 @@ impl BookManagerApi for FakeBookManager {
 fn endpoint_client() -> (TestClient, Arc<FakeBookManager>) {
     common::setup_env();
     let fake = FakeBookManager::new();
-    let app = app_with(AppDeps::new(AuthMode::Fixed(json!({"role": "admin"}))).with_book_manager(fake.clone()));
+    let app = app_with(AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager(fake.clone()));
     (TestClient::with_app(app), fake)
 }
 

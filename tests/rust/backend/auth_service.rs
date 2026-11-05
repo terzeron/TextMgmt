@@ -135,8 +135,8 @@ mod decode_refresh_token {
         let _env = fixture();
         let token = refresh_token("admin@example.com", "admin");
         let payload = backend::auth_service::decode_refresh_token(&token).unwrap();
-        assert_eq!(payload["email"], "admin@example.com");
-        assert_eq!(payload["type"], "refresh");
+        assert_eq!(payload.email, "admin@example.com");
+        assert_eq!(payload.token_type, "refresh");
     }
 
     #[test]
@@ -218,8 +218,8 @@ mod extract_payload {
         let token = access_token("admin@example.com", "admin");
         let req = make_request(Some(&token), None);
         let payload = backend::auth_service::extract_payload(&req).unwrap();
-        assert_eq!(payload["email"], "admin@example.com");
-        assert_eq!(payload["role"], "admin");
+        assert_eq!(payload.email, "admin@example.com");
+        assert_eq!(payload.role, "admin");
     }
 
     #[test]
@@ -228,8 +228,8 @@ mod extract_payload {
         let token = access_token("admin@example.com", "admin");
         let req = make_request(None, Some(&token));
         let payload = backend::auth_service::extract_payload(&req).unwrap();
-        assert_eq!(payload["email"], "admin@example.com");
-        assert_eq!(payload["role"], "admin");
+        assert_eq!(payload.email, "admin@example.com");
+        assert_eq!(payload.role, "admin");
     }
 
     #[test]
@@ -268,7 +268,7 @@ mod extract_payload {
         let cookie_token = access_token("viewer1@example.com", "viewer");
         let req = make_request(Some(&header_token), Some(&cookie_token));
         let payload = backend::auth_service::extract_payload(&req).unwrap();
-        assert_eq!(payload["email"], "admin@example.com");
+        assert_eq!(payload.email, "admin@example.com");
     }
 
     #[test]
@@ -278,7 +278,7 @@ mod extract_payload {
         let req = FakeRequest { headers: HashMap::from([("Authorization".to_string(), "Bearer ".to_string())]), cookies: HashMap::from([("tm_access_token".to_string(), cookie_token)]) };
 
         let payload = backend::auth_service::extract_payload(&req).unwrap();
-        assert_eq!(payload["email"], "viewer1@example.com");
+        assert_eq!(payload.email, "viewer1@example.com");
     }
 }
 
@@ -291,7 +291,7 @@ mod require_auth {
         let token = access_token("admin@example.com", "admin");
         let req = make_request(Some(&token), None);
         let payload = backend::auth_service::require_auth(&req).await.unwrap();
-        assert_eq!(payload["role"], "admin");
+        assert_eq!(payload.role, "admin");
     }
 
     #[tokio::test]
@@ -300,7 +300,7 @@ mod require_auth {
         let token = access_token("viewer1@example.com", "viewer");
         let req = make_request(Some(&token), None);
         let payload = backend::auth_service::require_auth(&req).await.unwrap();
-        assert_eq!(payload["role"], "viewer");
+        assert_eq!(payload.role, "viewer");
     }
 
     #[tokio::test]
@@ -309,7 +309,7 @@ mod require_auth {
         let token = access_token("viewer1@example.com", "viewer");
         let req = make_request(None, Some(&token));
         let payload = backend::auth_service::require_auth(&req).await.unwrap();
-        assert_eq!(payload["role"], "viewer");
+        assert_eq!(payload.role, "viewer");
     }
 
     #[tokio::test]
@@ -359,7 +359,7 @@ mod require_admin {
         let token = access_token("admin@example.com", "admin");
         let req = make_request(Some(&token), None);
         let payload = backend::auth_service::require_admin(&req).await.unwrap();
-        assert_eq!(payload["role"], "admin");
+        assert_eq!(payload.role, "admin");
     }
 
     #[tokio::test]
@@ -368,7 +368,7 @@ mod require_admin {
         let token = access_token("admin@example.com", "admin");
         let req = make_request(None, Some(&token));
         let payload = backend::auth_service::require_admin(&req).await.unwrap();
-        assert_eq!(payload["role"], "admin");
+        assert_eq!(payload.role, "admin");
     }
 
     #[tokio::test]

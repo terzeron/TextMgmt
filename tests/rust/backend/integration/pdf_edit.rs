@@ -206,10 +206,11 @@ async fn unsupported_crop_and_bad_image_preserve_original_before_backup() {
 
 #[tokio::test]
 async fn http_validates_edit_shapes_before_opening_pdf() {
+    use backend::auth_service::Claims;
     use backend::main::{AppDeps, AuthMode, app_with};
     let e = env();
     let original = fs::read(&e.pdf).unwrap();
-    let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager(Arc::new(e.bm))));
+    let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager(Arc::new(e.bm))));
     for body in [
         json!({"pages":"1"}),
         json!({"crops":[{"page":1,"x0":0.0}]}),
@@ -383,10 +384,11 @@ mod http_contract {
 
     #[tokio::test]
     async fn http_edits_books_and_comics_with_the_response_contract() {
+        use backend::auth_service::Claims;
         use backend::main::{AppDeps, AuthMode, app_with};
         for prefix in ["", "/comics"] {
             let e = env();
-            let mut deps = AppDeps::new(AuthMode::Fixed(json!({"role":"admin"})));
+            let mut deps = AppDeps::new(AuthMode::Fixed(Claims::with_role("admin")));
             if prefix.is_empty() {
                 deps = deps.with_book_manager(Arc::new(e.bm));
             } else {
@@ -426,6 +428,7 @@ mod http_contract {
 
     #[tokio::test]
     async fn http_url_preview_returns_uncached_jpeg() {
+        use backend::auth_service::Claims;
         use backend::main::{AppDeps, AuthMode, app_with};
         let e = env();
         let bm = Arc::new(BookManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()).with_image_fetcher(Arc::new(FetchImage(Ok(common::image::png_solid(
@@ -433,7 +436,7 @@ mod http_contract {
             160,
             [10, 20, 30],
         )))))));
-        let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager(bm.clone()).with_comics_manager(bm)));
+        let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager(bm.clone()).with_comics_manager(bm)));
         for prefix in ["", "/comics"] {
             let path = format!("{prefix}/pdf-pages/1/insert-preview");
             let response = client.post_json(&path, &json!({"url":"https://example.com/image.png"})).await;

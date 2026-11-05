@@ -13,7 +13,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use serde_json::{Value, json};
+use serde::{Deserialize, Deserializer, Serialize};
 use sysdeps::EnvFn;
 
 pub const JWT_ALGORITHM: Algorithm = Algorithm::HS256;
@@ -43,6 +43,63 @@ impl fmt::Display for HttpStatusError {
 }
 
 impl std::error::Error for HttpStatusError {}
+
+/// JWT payload. 접근 토큰과 갱신 토큰이 같은 모양을 쓴다.
+///
+/// 모든 필드에 기본값이 있다. 빠진 claim과 `null` claim은 빈 값으로 읽는다.
+/// `fid`/`jti`가 빈 토큰은 만들 때 그 claim을 넣지 않는다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Claims {
+    #[serde(rename = "type", deserialize_with = "null_as_default")]
+    pub token_type: String,
+    #[serde(deserialize_with = "null_as_default")]
+    pub email: String,
+    #[serde(deserialize_with = "null_as_default")]
+    pub role: String,
+    #[serde(deserialize_with = "null_as_default")]
+    pub name: String,
+    #[serde(deserialize_with = "null_as_default")]
+    pub picture: String,
+    #[serde(rename = "fid", deserialize_with = "null_as_default", skip_serializing_if = "String::is_empty")]
+    pub family_id: String,
+    #[serde(rename = "jti", deserialize_with = "null_as_default", skip_serializing_if = "String::is_empty")]
+    pub token_id: String,
+    #[serde(deserialize_with = "seconds")]
+    pub exp: i64,
+    #[serde(deserialize_with = "seconds")]
+    pub iat: i64,
+}
+
+impl Claims {
+    /// 역할만 있는 payload. 테스트 대역이 주로 쓴다.
+    pub fn with_role(role: &str) -> Self {
+        Self { role: role.to_string(), ..Self::default() }
+    }
+
+    pub fn is_viewer(&self) -> bool {
+        self.role == "viewer"
+    }
+}
+
+fn null_as_default<'de, D: Deserializer<'de>, T: Default + Deserialize<'de>>(d: D) -> Result<T, D::Error> {
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
+/// 정수 초. 실수(`1.7e9`)는 소수점을 버린다. `null`은 0이다.
+fn seconds<'de, D: Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Seconds {
+        Int(i64),
+        Float(f64),
+    }
+    Ok(match Option::<Seconds>::deserialize(d)? {
+        Some(Seconds::Int(n)) => n,
+        Some(Seconds::Float(f)) => f as i64,
+        None => 0,
+    })
+}
 
 /// 프로세스를 끝내야 하는 설정 오류. 종료 코드를 담는다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +133,7 @@ pub trait TokenIssuer: Send + Sync {
         create_refresh_token_with(email, role, Some(name), Some(picture), Some(family_id), Some(token_id))
     }
 
-    fn decode_refresh_token(&self, token: &str) -> Result<Value, HttpStatusError> {
+    fn decode_refresh_token(&self, token: &str) -> Result<Claims, HttpStatusError> {
         decode_refresh_token(token)
     }
 
@@ -187,39 +244,42 @@ pub fn observation_hash(value: &str) -> String {
 // 토큰
 // ---------------------------------------------------------------------------
 
-fn sign(payload: &Value) -> String {
+fn sign(payload: &Claims) -> String {
     let secret = jwt_secret();
     assert!(!secret.is_empty(), "The environment variable TM_JWT_SECRET is not set.");
     jsonwebtoken::encode(&Header::new(JWT_ALGORITHM), payload, &EncodingKey::from_secret(secret.as_bytes())).expect("JWT 서명")
 }
 
 /// 만료(`exp`)를 필수로 검사한다. 시계 오차 허용(leeway)은 두지 않는다(PyJWT 기본값과 같다).
-fn decode_claims(token: &str) -> Result<Value, ErrorKind> {
+fn decode_claims(token: &str) -> Result<Claims, ErrorKind> {
     let secret = jwt_secret();
     if secret.is_empty() {
         return Err(ErrorKind::InvalidSignature);
     }
     let mut validation = Validation::new(JWT_ALGORITHM);
     validation.leeway = 0;
-    jsonwebtoken::decode::<Value>(token, &DecodingKey::from_secret(secret.as_bytes()), &validation).map(|data| data.claims).map_err(|e| e.into_kind())
+    jsonwebtoken::decode::<Claims>(token, &DecodingKey::from_secret(secret.as_bytes()), &validation).map(|data| data.claims).map_err(|e| e.into_kind())
 }
 
 /// 접근 토큰(2시간). `name`/`picture`가 None이면 빈 문자열이다.
 pub fn create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String {
-    let now = now_secs();
-    sign(&json!({
-        "type": "access", "email": email, "role": role, "name": name.unwrap_or(""), "picture": picture.unwrap_or(""),
-        "exp": now + ACCESS_TOKEN_EXPIRATION_SECONDS, "iat": now,
-    }))
+    create_session_jwt_token(email, role, name.unwrap_or(""), picture.unwrap_or(""), "")
 }
 
 /// 운영용 접근 토큰. 세션 식별자가 없는 기존 토큰은 HTTP 인증에서 거부한다.
 pub fn create_session_jwt_token(email: &str, role: &str, name: &str, picture: &str, family_id: &str) -> String {
     let now = now_secs();
-    sign(&json!({
-        "type": "access", "email": email, "role": role, "name": name, "picture": picture,
-        "fid": family_id, "exp": now + ACCESS_TOKEN_EXPIRATION_SECONDS, "iat": now,
-    }))
+    sign(&Claims {
+        token_type: "access".to_string(),
+        email: email.to_string(),
+        role: role.to_string(),
+        name: name.to_string(),
+        picture: picture.to_string(),
+        family_id: family_id.to_string(),
+        token_id: String::new(),
+        exp: now + ACCESS_TOKEN_EXPIRATION_SECONDS,
+        iat: now,
+    })
 }
 
 /// 갱신 토큰(30일). family/token id를 안 주면 새로 만든다.
@@ -229,31 +289,29 @@ pub fn create_refresh_token(email: &str, role: &str, name: Option<&str>, picture
 
 pub fn create_refresh_token_with(email: &str, role: &str, name: Option<&str>, picture: Option<&str>, family_id: Option<&str>, token_id: Option<&str>) -> String {
     let now = now_secs();
-    let family_id = family_id.filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(uuid_hex);
-    let token_id = token_id.filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(uuid_hex);
-    sign(&json!({
-        "type": "refresh", "email": email, "role": role, "name": name.unwrap_or(""), "picture": picture.unwrap_or(""),
-        "fid": family_id, "jti": token_id, "exp": now + REFRESH_TOKEN_EXPIRATION_SECONDS, "iat": now,
-    }))
+    let new_or = |id: Option<&str>| id.filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(uuid_hex);
+    sign(&Claims {
+        token_type: "refresh".to_string(),
+        email: email.to_string(),
+        role: role.to_string(),
+        name: name.unwrap_or("").to_string(),
+        picture: picture.unwrap_or("").to_string(),
+        family_id: new_or(family_id),
+        token_id: new_or(token_id),
+        exp: now + REFRESH_TOKEN_EXPIRATION_SECONDS,
+        iat: now,
+    })
 }
 
-fn claim_present(payload: &Value, key: &str) -> bool {
-    match payload.get(key) {
-        None | Some(Value::Null) => false,
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(_) => true,
-    }
-}
-
-pub fn decode_refresh_token(token: &str) -> Result<Value, HttpStatusError> {
+pub fn decode_refresh_token(token: &str) -> Result<Claims, HttpStatusError> {
     let payload = decode_claims(token).map_err(|kind| match kind {
         ErrorKind::ExpiredSignature => HttpStatusError::new(401, "Refresh token expired"),
         _ => HttpStatusError::new(401, "Invalid refresh token"),
     })?;
-    if payload.get("type").and_then(Value::as_str) != Some("refresh") {
+    if payload.token_type != "refresh" {
         return Err(HttpStatusError::new(401, "Invalid token type"));
     }
-    if !claim_present(&payload, "fid") || !claim_present(&payload, "jti") {
+    if payload.family_id.is_empty() || payload.token_id.is_empty() {
         return Err(HttpStatusError::new(401, "Refresh token missing required claims. Please log in again."));
     }
     Ok(payload)
@@ -264,7 +322,7 @@ pub fn decode_refresh_token(token: &str) -> Result<Value, HttpStatusError> {
 // ---------------------------------------------------------------------------
 
 /// `Authorization: Bearer`가 있으면 그것을, 비었으면 접근 쿠키를 쓴다.
-pub fn extract_payload<R: RequestParts + ?Sized>(req: &R) -> Result<Value, HttpStatusError> {
+pub fn extract_payload<R: RequestParts + ?Sized>(req: &R) -> Result<Claims, HttpStatusError> {
     let header = req.header("Authorization").unwrap_or_default();
     let mut token = header.strip_prefix("Bearer ").unwrap_or("").to_string();
     if token.is_empty() {
@@ -277,60 +335,52 @@ pub fn extract_payload<R: RequestParts + ?Sized>(req: &R) -> Result<Value, HttpS
         ErrorKind::ExpiredSignature => HttpStatusError::new(401, "Token expired"),
         _ => HttpStatusError::new(401, "Invalid token"),
     })?;
-    if payload.get("type").and_then(Value::as_str) != Some("access") {
+    if payload.token_type != "access" {
         return Err(HttpStatusError::new(401, "Invalid token type"));
     }
     Ok(payload)
 }
 
 /// 토큰의 역할이 지금 정책과 같아야 한다. 허용 목록에서 빠진 사용자와 강등된 관리자는 토큰이 살아 있어도 거부한다.
-fn resolve_current_role(payload: &Value, resolver: &dyn RoleResolver) -> Result<String, HttpStatusError> {
-    let email = payload.get("email").and_then(Value::as_str).unwrap_or("");
-    let current = resolver.determine_role(email);
-    let token_role = payload.get("role").and_then(Value::as_str);
-    match current {
-        Some(role) if token_role == Some(role.as_str()) => Ok(role),
+fn resolve_current_role(payload: &Claims, resolver: &dyn RoleResolver) -> Result<String, HttpStatusError> {
+    match resolver.determine_role(&payload.email) {
+        Some(role) if payload.role == role => Ok(role),
         _ => Err(HttpStatusError::new(403, "Access denied")),
     }
 }
 
-fn with_role(mut payload: Value, role: &str) -> Value {
-    payload["role"] = Value::String(role.to_string());
-    payload
-}
-
-pub async fn require_auth_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn RoleResolver) -> Result<Value, HttpStatusError> {
+pub async fn require_auth_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn RoleResolver) -> Result<Claims, HttpStatusError> {
     let payload = extract_payload(req)?;
     let role = resolve_current_role(&payload, resolver)?;
     if role != "admin" && role != "viewer" {
         return Err(HttpStatusError::new(403, "Insufficient permissions"));
     }
-    Ok(with_role(payload, &role))
+    Ok(Claims { role, ..payload })
 }
 
-pub async fn require_admin_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn RoleResolver) -> Result<Value, HttpStatusError> {
+pub async fn require_admin_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn RoleResolver) -> Result<Claims, HttpStatusError> {
     let payload = extract_payload(req)?;
     let role = resolve_current_role(&payload, resolver)?;
     if role != "admin" {
         return Err(HttpStatusError::new(403, "Admin access required"));
     }
-    Ok(with_role(payload, &role))
+    Ok(Claims { role, ..payload })
 }
 
-pub async fn require_auth<R: RequestParts + ?Sized>(req: &R) -> Result<Value, HttpStatusError> {
+pub async fn require_auth<R: RequestParts + ?Sized>(req: &R) -> Result<Claims, HttpStatusError> {
     require_auth_with(req, &EnvRoleResolver).await
 }
 
-pub async fn require_admin<R: RequestParts + ?Sized>(req: &R) -> Result<Value, HttpStatusError> {
+pub async fn require_admin<R: RequestParts + ?Sized>(req: &R) -> Result<Claims, HttpStatusError> {
     require_admin_with(req, &EnvRoleResolver).await
 }
 
 /// 인증에 실패하면 None. 오류를 만들지 않는다.
-pub async fn optional_auth_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn RoleResolver) -> Option<Value> {
+pub async fn optional_auth_with<R: RequestParts + ?Sized>(req: &R, resolver: &dyn RoleResolver) -> Option<Claims> {
     require_auth_with(req, resolver).await.ok()
 }
 
-pub async fn optional_auth<R: RequestParts + ?Sized>(req: &R) -> Option<Value> {
+pub async fn optional_auth<R: RequestParts + ?Sized>(req: &R) -> Option<Claims> {
     optional_auth_with(req, &EnvRoleResolver).await
 }
 

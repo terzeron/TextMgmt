@@ -16,6 +16,7 @@ use super::app_deps::AppDeps;
 use super::error_responses::{ApiError, ApiResult, RequestValidationError};
 use super::request_extractors::{ApiQuery, RequireAuth};
 use super::route_registry::Routes;
+use crate::auth_service::Claims;
 use crate::book_manager::BookManager;
 use crate::book_manager::{BookContent, BookManagerApi, BookResponse};
 use crate::book_metadata::BookLookupError;
@@ -230,13 +231,9 @@ impl From<MappingError> for ApiError {
     }
 }
 
-fn is_viewer(payload: &Value) -> bool {
-    payload.get("role").and_then(Value::as_str) == Some("viewer")
-}
-
 /// viewer에게 숨긴 카테고리. viewer가 아니면 비어 있다.
-fn hidden_categories(deps: &AppDeps, payload: &Value, comics: bool) -> ApiResult<Vec<String>> {
-    if !is_viewer(payload) {
+fn hidden_categories(deps: &AppDeps, payload: &Claims, comics: bool) -> ApiResult<Vec<String>> {
+    if !payload.is_viewer() {
         return Ok(Vec::new());
     }
     let mapping = deps.category_mapping().map_err(|e| {
@@ -256,9 +253,9 @@ fn ensure_allowed(category: &str, hidden: &[String]) -> ApiResult<()> {
 }
 
 /// viewer는 카테고리 정책을 확인한 뒤 파일을 읽는다. admin은 조회 제한을 받지 않는다.
-pub(super) async fn checked_manager(deps: &AppDeps, payload: &Value, book_id: i64, comics: bool) -> ApiResult<Arc<dyn BookManagerApi>> {
+pub(super) async fn checked_manager(deps: &AppDeps, payload: &Claims, book_id: i64, comics: bool) -> ApiResult<Arc<dyn BookManagerApi>> {
     let manager = manager_for(deps, comics)?;
-    if is_viewer(payload) {
+    if payload.is_viewer() {
         // 카테고리를 모르면 숨김 여부를 판정할 수 없다. 통과시키지 않고 거절한다(fail-closed).
         let book = match manager.get_book(book_id).await {
             Ok(book) => book,

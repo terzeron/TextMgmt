@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use super::app_deps::{AppDeps, AuthMode};
 use super::error_responses::{ApiError, RequestValidationError};
-use crate::auth_service::{optional_auth_with, require_admin_with, require_auth_with};
+use crate::auth_service::{Claims, optional_auth_with, require_admin_with, require_auth_with};
 
 /// 불리언 문자열 해석. 대소문자를 가리지 않는다. 해석할 수 없으면 `None`.
 pub(crate) fn parse_py_bool(text: &str) -> Option<bool> {
@@ -39,8 +39,8 @@ pub(super) fn lenient_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::E
     parsed.ok_or_else(|| serde::de::Error::custom("Input should be a valid boolean"))
 }
 
-async fn resolve_auth(deps: &AppDeps, parts: &Parts, admin: bool) -> Result<Value, ApiError> {
-    let slot = |m: &std::sync::Mutex<Value>| m.lock().unwrap_or_else(|e| e.into_inner()).clone();
+async fn resolve_auth(deps: &AppDeps, parts: &Parts, admin: bool) -> Result<Claims, ApiError> {
+    let slot = |m: &std::sync::Mutex<Claims>| m.lock().unwrap_or_else(|e| e.into_inner()).clone();
     match (deps.auth_mode(), admin) {
         (AuthMode::Fixed(v), _) => Ok(v.clone()),
         (AuthMode::Split { auth, .. }, false) => Ok(auth.clone()),
@@ -62,9 +62,11 @@ async fn resolve_auth(deps: &AppDeps, parts: &Parts, admin: bool) -> Result<Valu
 }
 
 /// 폐기 결과를 다음 요청부터 반영한다. 저장소 오류도 인증 성공으로 처리하지 않는다.
-async fn require_active_session(deps: &AppDeps, payload: &Value) -> Result<(), ApiError> {
-    let family_id = payload.get("fid").and_then(Value::as_str).filter(|fid| !fid.is_empty()).ok_or_else(|| ApiError::http(401, "Session token required"))?.to_string();
-    let email = payload.get("email").and_then(Value::as_str).unwrap_or_default().to_string();
+async fn require_active_session(deps: &AppDeps, payload: &Claims) -> Result<(), ApiError> {
+    if payload.family_id.is_empty() {
+        return Err(ApiError::http(401, "Session token required"));
+    }
+    let (family_id, email) = (payload.family_id.clone(), payload.email.clone());
     let unavailable = |error: String| {
         log::warn!("Access session validation failed: {error}");
         ApiError::unavailable()
@@ -76,15 +78,15 @@ async fn require_active_session(deps: &AppDeps, payload: &Value) -> Result<(), A
 }
 
 /// `Depends(require_auth)`: admin 또는 viewer. 값은 토큰 payload(역할은 지금 정책으로 덮어쓴다)다.
-pub struct RequireAuth(pub Value);
+pub struct RequireAuth(pub Claims);
 
 /// `Depends(require_admin)`
-pub struct RequireAdmin(pub Value);
+pub struct RequireAdmin(pub Claims);
 
 /// `Depends(optional_auth)`: 인증에 실패하면 None. 오류를 만들지 않는다.
 ///
 /// `optional_auth`는 `AuthMode`와 상관없이 항상 실제 인증을 한다.
-pub struct OptionalAuth(pub Option<Value>);
+pub struct OptionalAuth(pub Option<Claims>);
 
 impl FromRequestParts<Arc<AppDeps>> for RequireAuth {
     type Rejection = ApiError;

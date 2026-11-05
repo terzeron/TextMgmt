@@ -3,6 +3,7 @@
 // 공통 모듈은 container.rs가 한 번만 올린다. 여기서 다시 올리면 MySQL 컨테이너·DB_LOCK이 두 벌이 되어
 // 도중에 TM_MYSQL_*가 두 번째 컨테이너로 바뀌고 다른 테스트가 엉뚱한 DB를 읽는다.
 use crate::{common, mysql_fixture};
+use backend::auth_service::Claims;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -460,7 +461,7 @@ async fn uncovered_http_uses_real_book_and_comic_managers() {
         let plain = make("plain.pdf", (690, 1600));
         let (pager, _) = scripted(vec![(vec![(covered, String::new()), (plain, "작품 제목".into())], 2, None, None)]);
         let managers = deps(&book_root).with_cover_books_pager(pager);
-        let deps = AppDeps::new(AuthMode::Fixed(json!({"role":"admin"})));
+        let deps = AppDeps::new(AuthMode::Fixed(Claims::with_role("admin")));
         let deps = if prefix.is_empty() {
             deps.with_book_manager(Arc::new(BookManager::with_deps(managers)))
         } else {
@@ -518,7 +519,7 @@ impl backend::main::BookManagerApi for BrowseOutcomes {
 async fn browse_passes_hidden_categories_and_blocks_hidden_descendants() {
     use backend::main::{AppDeps, AuthMode, app_with};
     let manager = Arc::new(BrowseManager(Mutex::new(vec![])));
-    let deps = AppDeps::new(AuthMode::AuthOnly(json!({"role":"viewer"}))).with_book_manager(manager.clone()).with_comics_manager(manager.clone()).with_category_mapping(Arc::new(Hidden));
+    let deps = AppDeps::new(AuthMode::AuthOnly(Claims::with_role("viewer"))).with_book_manager(manager.clone()).with_comics_manager(manager.clone()).with_category_mapping(Arc::new(Hidden));
     let client = common::TestClient::with_app(app_with(deps));
     for (prefix, hidden) in [("", "hidden-book"), ("/comics", "hidden-comic")] {
         assert_eq!(client.get(&format!("{prefix}/browse?category={hidden}/child")).await.status, 403);
@@ -536,7 +537,7 @@ async fn browse_requires_auth_and_validates_limits() {
     let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies)));
     assert_eq!(client.get("/browse").await.status, 401);
     let manager = Arc::new(BrowseManager(Mutex::new(vec![])));
-    let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager(manager.clone())));
+    let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager(manager.clone())));
     for query in ["limit=0", "limit=-1", "limit=10001", "uncovered=invalid"] {
         assert_eq!(client.get(&format!("/browse?{query}")).await.status, 422);
     }
@@ -548,11 +549,11 @@ async fn browse_requires_auth_and_validates_limits() {
 async fn browse_handles_manager_initialization_and_query_errors() {
     use backend::main::{AppDeps, AuthMode, app_with};
 
-    let unavailable = AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager_factory(|| Err("manager unavailable".into()));
+    let unavailable = AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager_factory(|| Err("manager unavailable".into()));
     let response = common::TestClient::with_app(app_with(unavailable)).get("/browse").await;
     assert_eq!(response.status, 503);
 
-    let deps = AppDeps::new(AuthMode::Fixed(json!({"role":"admin"}))).with_book_manager(Arc::new(BrowseOutcomes));
+    let deps = AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager(Arc::new(BrowseOutcomes));
     let client = common::TestClient::with_app(app_with(deps));
     let failed = client.get("/browse").await;
     assert_eq!(failed.status, 200);
@@ -570,14 +571,15 @@ async fn browse_translates_hidden_category_store_errors() {
     for (error, expected_status, expected_detail) in
         [(MappingError::Http(429, "slow down".into()), 429, "slow down"), (MappingError::Other("database failed".into()), 500, "서버 내부 오류가 발생했습니다")]
     {
-        let deps = AppDeps::new(AuthMode::AuthOnly(json!({"role":"viewer"}))).with_book_manager(Arc::new(BrowseManager(Mutex::new(vec![])))).with_category_mapping(Arc::new(FailingHidden(error)));
+        let deps = AppDeps::new(AuthMode::AuthOnly(Claims::with_role("viewer"))).with_book_manager(Arc::new(BrowseManager(Mutex::new(vec![])))).with_category_mapping(Arc::new(FailingHidden(error)));
         let response = common::TestClient::with_app(app_with(deps)).get("/browse").await;
         assert_eq!(response.status, expected_status);
         assert_eq!(response.json()["detail"], expected_detail);
     }
 
-    let unavailable_mapping =
-        AppDeps::new(AuthMode::AuthOnly(json!({"role":"viewer"}))).with_book_manager(Arc::new(BrowseManager(Mutex::new(vec![])))).with_category_mapping_factory(|| Err("mapping unavailable".into()));
+    let unavailable_mapping = AppDeps::new(AuthMode::AuthOnly(Claims::with_role("viewer")))
+        .with_book_manager(Arc::new(BrowseManager(Mutex::new(vec![]))))
+        .with_category_mapping_factory(|| Err("mapping unavailable".into()));
     let response = common::TestClient::with_app(app_with(unavailable_mapping)).get("/browse").await;
     assert_eq!(response.status, 503);
 }

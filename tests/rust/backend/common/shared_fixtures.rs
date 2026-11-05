@@ -9,6 +9,7 @@ use super::pdf::make_blank_pdf;
 use super::zipx::{Members, ZipMode, read_zip_entry, rewrite_epub_members, write_zip, write_zip_with};
 use super::{Response, TestClient, es_dummy};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
+use backend::auth_service::Claims;
 use backend::auth_service::RequestParts;
 use backend::book_manager::{AddBookError, BookAdder, BookContent, BookLookup, BookManager, BookManagerDeps, BookRef, BookResponse, CoverPage, FileReader, ProposeOptions, ReadFileError, Thumbnailer};
 use backend::book_metadata::{Book, BookLookupError, BookPage};
@@ -44,8 +45,8 @@ macro_rules! call_args {
     };
 }
 
-pub fn admin_payload() -> Value {
-    json!({"email": "admin@test.com", "role": "admin", "name": "Admin", "picture": "", "exp": now_plus_3600()})
+pub fn admin_payload() -> Claims {
+    Claims { email: "admin@test.com".into(), role: "admin".into(), name: "Admin".into(), exp: now_plus_3600() as i64, ..Claims::default() }
 }
 
 pub fn allowed_set(paths: &[&str]) -> BTreeSet<String> {
@@ -983,7 +984,7 @@ impl Fx {
     }
 
     /// 인증 결과를 `payload`로 고정한다.
-    pub fn set_auth(&self, payload: Value) {
+    pub fn set_auth(&self, payload: Claims) {
         *self.slots.auth.lock().unwrap() = payload;
     }
 

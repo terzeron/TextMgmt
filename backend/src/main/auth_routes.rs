@@ -60,8 +60,7 @@ fn internal(context: &str, err: impl std::fmt::Display) -> ApiError {
 /// 요청자의 refresh 쿠키에서 family_id를 얻는다. 없거나 유효하지 않으면 None.
 fn current_refresh_family_id(deps: &AppDeps, headers: &HeaderMap) -> Option<String> {
     let token = headers.cookie(REFRESH_COOKIE_NAME).filter(|t| !t.is_empty())?;
-    let payload = deps.tokens().decode_refresh_token(&token).ok()?;
-    payload.get("fid").and_then(Value::as_str).map(str::to_string)
+    Some(deps.tokens().decode_refresh_token(&token).ok()?.family_id)
 }
 
 /// refresh 회전 거부 사건을 마스킹된 필드로만 기록한다.
@@ -160,14 +159,13 @@ async fn refresh_access_token(State(deps): State<Arc<AppDeps>>, headers: HeaderM
     };
     let payload = deps.tokens().decode_refresh_token(&refresh_token)?;
 
-    let email = str_of(&payload, "email");
+    let email = payload.email.as_str();
     let Some(role) = deps.role_resolver().determine_role(email) else {
         return Err(ApiError::http(403, "Access denied"));
     };
 
-    let current_token_id = str_of(&payload, "jti");
-    let family_id = str_of(&payload, "fid");
-    let (name, picture) = (str_of(&payload, "name"), str_of(&payload, "picture"));
+    let (current_token_id, family_id) = (payload.token_id.as_str(), payload.family_id.as_str());
+    let (name, picture) = (payload.name.as_str(), payload.picture.as_str());
     let issued_at = deps.clock().now() as i64;
     let new_token_id = deps.tokens().new_id();
     let rotated = deps.refresh_store().and_then(|store| {
@@ -195,11 +193,8 @@ async fn refresh_access_token(State(deps): State<Arc<AppDeps>>, headers: HeaderM
 }
 
 async fn auth_me(State(deps): State<Arc<AppDeps>>, RequireAuth(payload): RequireAuth) -> Json<Value> {
-    let exp = payload.get("exp").and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))).unwrap_or(0);
-    let remaining = (exp - deps.clock().now() as i64).max(0);
-    Json(
-        json!({"status": "success", "result": {"email": str_of(&payload, "email"), "role": str_of(&payload, "role"), "name": str_of(&payload, "name"), "picture": str_of(&payload, "picture"), "expires_in": remaining}}),
-    )
+    let remaining = (payload.exp - deps.clock().now() as i64).max(0);
+    Json(json!({"status": "success", "result": {"email": payload.email, "role": payload.role, "name": payload.name, "picture": payload.picture, "expires_in": remaining}}))
 }
 
 async fn logout(State(deps): State<Arc<AppDeps>>, headers: HeaderMap) -> ApiResult<Response> {
@@ -207,16 +202,16 @@ async fn logout(State(deps): State<Arc<AppDeps>>, headers: HeaderMap) -> ApiResu
     if let Some(refresh_token) = headers.cookie(REFRESH_COOKIE_NAME).filter(|t| !t.is_empty()) {
         match deps.tokens().decode_refresh_token(&refresh_token) {
             Ok(payload) => {
-                families.push(str_of(&payload, "fid").to_string());
+                families.push(payload.family_id);
             }
             Err(_) => log::debug!("Ignoring invalid refresh token during logout"),
         }
     }
     // refresh 쿠키가 없어도 서명된 access 토큰이 가리키는 세션을 폐기한다.
     if let Ok(payload) = crate::auth_service::extract_payload(&headers) {
-        let family = str_of(&payload, "fid");
-        if !family.is_empty() && !families.iter().any(|fid| fid == family) {
-            families.push(family.to_string());
+        let family = payload.family_id;
+        if !family.is_empty() && !families.contains(&family) {
+            families.push(family);
         }
     }
     if !families.is_empty() {
@@ -299,7 +294,7 @@ async fn revoke_login_session(State(deps): State<Arc<AppDeps>>, RequireAdmin(adm
 
     let revoked_current = current_refresh_family_id(&deps, &headers).as_deref() == Some(session_id.as_str());
     // 관리자 행위 감사 로그. 관리자와 대상 세션은 해시로만 남긴다.
-    log::warn!("Admin admin_hash={} revoked login session session_hash={} revoked_current={revoked_current}", observation_hash(str_of(&admin, "email")), observation_hash(&session_id));
+    log::warn!("Admin admin_hash={} revoked login session session_hash={} revoked_current={revoked_current}", observation_hash(&admin.email), observation_hash(&session_id));
 
     let session = outcome.get("session").filter(|s| !s.is_null()).cloned().unwrap_or_else(|| json!({}));
     let mut response = json_response(

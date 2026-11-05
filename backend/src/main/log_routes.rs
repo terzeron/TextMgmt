@@ -71,8 +71,7 @@ pub(super) fn routes() -> Routes {
 /// 프런트엔드 런타임/렌더링 에러를 기록한다. 로그인한 사용자면 이메일과 역할을 함께 남긴다(운영 로그 추적용).
 async fn log_client_error(OptionalAuth(auth_user): OptionalAuth, ApiJson(body): ApiJson<ClientErrorLogModel>) -> ApiResult<Json<Value>> {
     let body = body.validated()?;
-    let text = |key: &str| auth_user.as_ref().and_then(|u| u.get(key)).and_then(Value::as_str).unwrap_or("anonymous").to_string();
-    let (email, role) = (text("email"), text("role"));
+    let (email, role) = auth_user.as_ref().map_or(("anonymous", "anonymous"), |u| (u.email.as_str(), u.role.as_str()));
 
     log::error!("[CLIENT_ERROR] type={}, user={email}({role}), url={}, message={}", body.error_type, body.url, body.message);
     // json.dumps(ensure_ascii=False): 개행이 `\n` 두 글자로 남아 한 줄 기록이 된다.

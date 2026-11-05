@@ -1,6 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use backend::auth_service::Claims;
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -66,8 +67,8 @@ impl MockBm {
     }
 }
 
-fn admin_payload() -> Value {
-    json!({"email": "admin@test.com", "role": "admin", "name": "Admin", "picture": "", "exp": now_secs() + 3600})
+fn admin_payload() -> Claims {
+    Claims { email: "admin@test.com".into(), role: "admin".into(), name: "Admin".into(), exp: (now_secs() + 3600) as i64, ..Claims::default() }
 }
 
 fn client(bm: &Arc<MockBm>) -> TestClient {

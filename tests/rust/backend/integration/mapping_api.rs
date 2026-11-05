@@ -1,6 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use backend::auth_service::Claims;
 use backend::main::{AppDeps, AuthMode, CategoryMappingApi, MappingError, app_with};
 use common::TestClient;
 use serde_json::{Value, json};
@@ -73,7 +74,7 @@ fn client(mapping: Arc<Mapping>, auth: AuthMode) -> TestClient {
     TestClient::with_app(app_with(AppDeps::new(auth).with_refresh_token_store(common::session::store()).with_category_mapping(mapping)))
 }
 fn admin() -> AuthMode {
-    AuthMode::Fixed(json!({"role":"admin"}))
+    AuthMode::Fixed(Claims::with_role("admin"))
 }
 
 #[tokio::test]
@@ -127,7 +128,7 @@ async fn policy_routes_support_nested_paths_and_hide_settings_from_viewers() {
         assert!(mapping.calls.lock().unwrap().contains(&(getter.into(), json!("comic"))));
         assert!(mapping.calls.lock().unwrap().contains(&((if key == "hidden" { "set_hidden" } else { "set_excluded" }).into(), json!(["parent/child", false, "comic"]))));
         let mapping = Mapping::new(true, true);
-        let viewer = self::client(mapping.clone(), AuthMode::AuthOnly(json!({"role":"viewer"})));
+        let viewer = self::client(mapping.clone(), AuthMode::AuthOnly(Claims::with_role("viewer")));
         assert_eq!(viewer.get(&format!("/{path}")).await.json(), json!({"status":"success","result":[]}));
         assert!(mapping.calls.lock().unwrap().is_empty());
     }

@@ -24,6 +24,7 @@
 //! - 로그는 `log::warn!`로 남기고 `common::log_capture::LogCapture`로 수집한다.
 
 use crate::{common, mysql_fixture};
+use backend::auth_service::Claims;
 
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -37,16 +38,16 @@ use common::log_capture::LogCapture;
 use log::Level;
 use serde_json::{Value, json};
 
-fn payload(email: &str, role: &str, name: &str) -> Value {
+fn payload(email: &str, role: &str, name: &str) -> Claims {
     let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 3600;
-    json!({"email": email, "role": role, "name": name, "picture": "", "exp": exp})
+    Claims { email: email.into(), role: role.into(), name: name.into(), exp: exp as i64, ..Claims::default() }
 }
 
-fn admin_payload() -> Value {
+fn admin_payload() -> Claims {
     payload("admin@test.com", "admin", "Admin")
 }
 
-fn viewer_payload() -> Value {
+fn viewer_payload() -> Claims {
     payload("viewer@test.com", "viewer", "Viewer")
 }
 
@@ -93,14 +94,14 @@ impl ViewHistoryApi for FakeStore {
     }
 }
 
-type AccessFn = dyn Fn(i64, &Value, &str) -> Result<BookStub, HttpStatusError> + Send + Sync;
+type AccessFn = dyn Fn(i64, &Claims, &str) -> Result<BookStub, HttpStatusError> + Send + Sync;
 
 /// `_get_book_and_ensure_viewer_access` 대역. 클로저가 결과를 정한다.
 struct FnAccess(Box<AccessFn>);
 
 #[async_trait]
 impl BookAccess for FnAccess {
-    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HttpStatusError> {
+    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Claims, content_type: &str) -> Result<BookStub, HttpStatusError> {
         (self.0)(book_id, payload, content_type)
     }
 }

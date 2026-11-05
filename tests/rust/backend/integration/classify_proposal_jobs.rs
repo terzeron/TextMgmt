@@ -1,6 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use backend::auth_service::Claims;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -10,9 +11,9 @@ use backend::main::{AppDeps, AuthMode, BookstoreFactory, CategoryMappingApi, Cli
 use common::TestClient;
 use serde_json::{Value, json};
 
-fn admin_payload() -> Value {
+fn admin_payload() -> Claims {
     let exp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 3600;
-    json!({"email": "admin@test.com", "role": "admin", "name": "Admin", "picture": "", "exp": exp})
+    Claims { email: "admin@test.com".into(), role: "admin".into(), name: "Admin".into(), exp: exp as i64, ..Claims::default() }
 }
 
 fn client(bm: &Arc<MockBm>, cat: &Arc<MockCat>) -> TestClient {
