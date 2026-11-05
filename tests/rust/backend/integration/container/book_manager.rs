@@ -39,7 +39,7 @@
 //! - `backend::pdf_page_reader::{PdfOpener { fn open(&self, &Path) -> Result<Box<dyn PdfDoc>, PdfError> }, PdfDoc (page_count/pdf_version/docinfo/check_pdf_syntax/close), PdfPageOps (page_count/extract_pages), PdfError { kind, message }}` (문서 3.11)
 //! - `classifier::Classify { fn is_available(&self) -> bool; fn classify_path(&self, &Path, Option<f64>) -> Result<Prediction, String>; fn classify_document(&self, &Value, Option<f64>) -> Result<Prediction, String> }`
 //! - `classifier::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str) -> Prediction`
-//! - `backend::es_manager::{EsManagerApi, EsError, ESManager::connect(env, connector, clock)}` (문서 3.3. 대역은 `common::es_fake::FakeEsManager`)
+//! - `search_manager::{EsManagerApi, EsError, ESManager::connect(env, connector, clock)}` (문서 3.3. 대역은 `common::es_fake::FakeEsManager`)
 //! - 파일 읽기(`Loader.read_file`)는 `backend::book_manager::DefaultFileReader`로 대신한다(실제 ES 테스트에서만). `loader` crate에는 의존하지 않는다.
 //!
 //! TODO(common): 아래 로컬 정의는 common에 같은 것이 생기면 지운다. `FnFileReader`(FileReader 대역), `StaticPdfDoc`/`FakePdfOpener`/`FakePdfPageOps`(문서 3.11의 `fake_pdf.rs`),
@@ -62,8 +62,6 @@ use crate::common::shared_fixtures::{as_status, make_doc, outcome, outcome_or_de
 use backend::book_manager::{BookContent, BookManager, BookManagerDeps, BookManagerError, BookResponse, FileReader, ProposeOptions};
 use backend::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, FsOnlyFile, MismatchDetails, MismatchSummary, ReloadCounts};
 use backend::book_metadata::{Book, BookPage};
-use backend::es_manager::{BackfillReport, DeleteByQueryResult, UpdateByQueryResult};
-use backend::es_manager::{ESManager, EsError, EsManagerApi, Hit, PagedHits};
 use backend::pdf_page_reader::{PdfDoc, PdfError, PdfOpener, PdfPageOps};
 use classifier::Classify;
 use classifier::Prediction;
@@ -74,6 +72,8 @@ use common::faulty_fs::{FaultyFs, fail_on_nth_call};
 use common::fsx::{mkdir, set_mtime, write_file as write};
 use common::runner::FakeRunner;
 use common::zipx::{open_zip, write_zip};
+use search_manager::{BackfillReport, DeleteByQueryResult, UpdateByQueryResult};
+use search_manager::{ESManager, EsError, EsManagerApi, Hit, PagedHits};
 use serde_json::{Value, json};
 use sysdeps::{CommandError, CommandOutput};
 use tempfile::TempDir;
@@ -296,7 +296,7 @@ fn book_manager_with_data_at(book_dir: &Path) -> LockedBookManager {
                 "TM_ES_BOOK_INDEX" => Some(es_index.clone()),
                 _ => std::env::var(name).ok(),
             };
-            Arc::new(ESManager::connect(&env, &backend::es_manager::RealEsConnector, &sysdeps::SystemClock).expect("실제 ES 접속"))
+            Arc::new(ESManager::connect(&env, &search_manager::RealEsConnector, &sysdeps::SystemClock).expect("실제 ES 접속"))
         },
     )
     .expect("BookManager::from_env");

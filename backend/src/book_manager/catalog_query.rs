@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::{AddBookError, BookContent, BookManager, MAX_CATEGORY_PAGE_SIZE, MAX_LATEST_BOOK_COUNT};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
-use crate::es_manager::{Docs, EsManagerApi, Hit, KeywordSearchArgs, PagedHits, SimilarDocsArgs, decode_category_cursor, encode_category_cursor};
+use search_manager::{Docs, EsManagerApi, Hit, KeywordSearchArgs, PagedHits, SimilarDocsArgs, decode_category_cursor, encode_category_cursor};
 
 /// 없거나 빈 객체면 문서가 없는 것이다.
 fn non_empty(doc: Option<Value>) -> Option<Value> {
@@ -172,7 +172,7 @@ impl BookManager {
         if let Some(adder) = self.seams().book_adder {
             return adder.add_book();
         }
-        let exception = |e: crate::es_manager::EsError| AddBookError::Exception(e.to_string());
+        let exception = |e: search_manager::EsError| AddBookError::Exception(e.to_string());
         let ids = self.es.insert(data).map_err(exception)?;
         let [book_id] = ids[..] else {
             return Err(AddBookError::Rejected(format!("can't add book '{}' to ElasticSearch", serde_json::to_string(data).unwrap_or_default())));

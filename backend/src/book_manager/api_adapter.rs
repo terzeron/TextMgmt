@@ -16,7 +16,7 @@ use crate::book_manager::{ApplyResult, EpubValidation, PdfEditResult, PdfValidat
 use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
-use crate::es_manager::EsManagerApi;
+use search_manager::EsManagerApi;
 
 /// 라우트가 쪽 크기를 정하지 않을 때 쓰는 카테고리 목록 쪽 크기.
 const DEFAULT_CATEGORY_PAGE_SIZE: i64 = 500;

@@ -7,7 +7,7 @@
 //!   `type Row = BTreeMap<String, DbValue>`, `enum DbError { Constraint(String), Other(String) }`,
 //!   `trait DbConnection: Send { execute(sql, &[DbValue]) -> Result<u64, DbError>; fetch_all(..) -> Result<Vec<Row>, DbError>; fetch_one(..) -> Result<Option<Row>, DbError>; execute_batch(sql, &[Vec<DbValue>]) -> Result<u64, DbError>; commit(); rollback(); close(); }`
 //!   `type ConnectionProvider = Arc<dyn Fn() -> Result<Box<dyn DbConnection>, DbError> + Send + Sync>`
-//! - `backend::refresh_token_store`
+//! - `auth_manager::refresh_token_store`
 //!   - `trait RefreshTokenStoreApi`
 //!     - `store_issued(&self, token_id: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64, client_ip: Option<&str>, user_agent: Option<&str>) -> Result<(), StoreError>`
 //!     - `rotate(&self, current_token_id: &str, new_token_id: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64, client_ip: Option<&str>, user_agent: Option<&str>) -> Result<String, StoreError>`
@@ -31,10 +31,13 @@
 use std::collections::{BTreeSet, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::{common, mysql_fixture};
+#[path = "../common/mod.rs"]
+mod common;
+#[path = "../../shared/mysql_fixture.rs"]
+mod mysql_fixture;
 
-use crate::common::shared_fixtures::now;
-use backend::refresh_token_store::{
+use crate::common::clock::now;
+use auth_manager::refresh_token_store::{
     AnyRefreshTokenStore, DEFAULT_ROTATION_GRACE_SECONDS, MAX_USER_AGENT_LENGTH, MySQLRefreshTokenStore, RefreshTokenStoreApi, Rotation, SessionQuery, create_refresh_token_store,
     create_refresh_token_store_with, rotation_grace_seconds, summarize_user_agent,
 };
@@ -1448,7 +1451,7 @@ fn test_summarize_user_agent_with_only_browser_or_only_os() {
 #[test]
 fn test_parse_browser_name_version_returns_none_when_pattern_has_no_version() {
     let patterns = [(regex::Regex::new("Foo").unwrap(), "Foo {0}")];
-    assert!(backend::refresh_token_store::parse_browser_name_version_with("Foo/1", &patterns).is_none());
+    assert!(auth_manager::refresh_token_store::parse_browser_name_version_with("Foo/1", &patterns).is_none());
 }
 
 #[test]

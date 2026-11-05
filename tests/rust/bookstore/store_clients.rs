@@ -44,15 +44,11 @@
 
 mod common;
 
-#[path = "../backend/common/env.rs"]
-mod env_helpers;
-#[path = "../backend/common/log_capture.rs"]
-mod log_capture;
 use crate::common::shared_fixtures::{LoadHook, SaveHook, SearchHook, between, single_quoted_hrefs};
 
+use crate::common::env::{EnvGuard, empty_env, map_env};
+use crate::common::log_capture::LogCapture;
 use crate::common::shared_fixtures::{Call, Kind, failing, session};
-use crate::env_helpers::{EnvGuard, empty_env, map_env};
-use crate::log_capture::LogCapture;
 use ::common::http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout};
 use bookstore::BookInfo;
 use bookstore::store_clients::{
@@ -2552,4 +2548,16 @@ fn test_save_html_writes_uuid5_named_file() {
     store.save_html_to_tmp("<html>x</html>", "https://example.com/detail/1");
     let written = fs::read_to_string(tmp.path().join("2c75ebbd-c7d8-5945-b588-d1286cf77aee.html")).unwrap();
     assert_eq!(written, "<html>x</html>");
+}
+
+#[test]
+fn test_kyobo_fallback_links_stop_at_max_results() {
+    let store = KyoboBookstore::new(false);
+    let anchors: String = (0..store.max_results + 5).map(|n| format!(r#"<a href="/detail/{n}">책 {n}</a>"#)).collect();
+    let dom = format!("<html><body>{anchors}</body></html>");
+
+    let links = store.extract_search_links(&dom);
+
+    let expected: Vec<String> = (0..store.max_results).map(|n| format!("/detail/{n}")).collect();
+    assert_eq!(links, expected);
 }

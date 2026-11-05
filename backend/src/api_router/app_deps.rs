@@ -12,17 +12,17 @@ use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 
 use super::app_capabilities::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, UnavailableBookAccess, ViewHistoryApi};
 use super::google_oauth::GoogleIdTokenVerifier;
-use crate::auth_service::{Claims, HttpStatusError};
-use crate::auth_service::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
 use crate::book_manager::{BookManager, LoaderFileReader};
 use crate::book_manager::{BookManagerApi, UnavailableBookManager};
 use crate::comics_manager::ComicsManager;
 use crate::cover_management::CoverHooks;
-use crate::es_manager::{ESManager, EsManagerApi, RealEsConnector};
-use crate::refresh_token_store::{RefreshTokenStoreApi, create_refresh_token_store};
 use crate::task_runner::{TaskRunner, ThreadRunner};
+use auth_manager::auth_service::{Claims, HttpStatusError};
+use auth_manager::auth_service::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
+use auth_manager::refresh_token_store::{RefreshTokenStoreApi, create_refresh_token_store};
 use bookstore::store_clients::BookstoreSearch;
 use db::category_mapping::CategoryMapping;
+use search_manager::{ESManager, EsManagerApi, RealEsConnector};
 
 type TaskRuntimeFactory = Arc<dyn Fn() -> Result<tokio::runtime::Runtime, std::io::Error> + Send + Sync>;
 use crate::view_history_store::create_view_history_store;
@@ -394,8 +394,8 @@ mod tests {
     use super::{Claims, RuntimeBookAccess, Slot, build_book_manager, build_comics_manager};
     use crate::api_router::{BookAccess, BookManagerApi, BookStub, CategoryMappingApi};
     use crate::book_metadata::{Book, BookLookupError};
-    use crate::es_manager::{EsError, EsManagerApi};
     use async_trait::async_trait;
+    use search_manager::{EsError, EsManagerApi};
 
     struct CountingEs(AtomicUsize);
 

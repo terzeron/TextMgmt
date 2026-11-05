@@ -4,8 +4,8 @@
 mod common;
 use crate::common::shared_fixtures::{block_on, make_manager, outcome_or_default, tmp_dir};
 use backend::book_manager::CategoryRename;
-use backend::es_manager::DeleteByQueryResult;
 use common::es_fake::FakeEsManager;
+use search_manager::DeleteByQueryResult;
 use std::fs;
 use std::os::unix::fs::symlink;
 

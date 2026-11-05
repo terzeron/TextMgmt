@@ -586,12 +586,12 @@ pub use super::epub_inspector::prune_dead_ncx_navpoints as _prune_dead_ncx_navpo
 
 /// 정렬 값 배열(JSON)을 클라이언트에 내보낼 커서 문자열로 만든다.
 pub fn encode_category_cursor(sort_values: &Value) -> String {
-    crate::es_manager::encode_category_cursor(sort_values.as_array().map(Vec::as_slice).unwrap_or(&[]))
+    search_manager::encode_category_cursor(sort_values.as_array().map(Vec::as_slice).unwrap_or(&[]))
 }
 
 /// 커서를 정렬 값 배열(JSON)로 되돌린다. 형식이 잘못되면 `None`이다.
 pub fn decode_category_cursor(cursor: &str) -> Option<Value> {
-    crate::es_manager::decode_category_cursor(cursor).map(Value::Array)
+    search_manager::decode_category_cursor(cursor).map(Value::Array)
 }
 
 #[cfg(test)]

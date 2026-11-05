@@ -5,7 +5,7 @@
 mod common;
 #[path = "../common/elasticsearch_fixture.rs"]
 mod elasticsearch_fixture;
-#[path = "../common/mysql_fixture.rs"]
+#[path = "../../shared/mysql_fixture.rs"]
 mod mysql_fixture;
 
 #[path = "container/book_manager.rs"]
@@ -20,8 +20,6 @@ mod cover_status;
 mod db;
 #[path = "container/main.rs"]
 mod main_api;
-#[path = "container/refresh_token_store.rs"]
-mod refresh_token_store;
 #[path = "container/view_history_api.rs"]
 mod view_history_api;
 #[path = "container/view_history_store.rs"]

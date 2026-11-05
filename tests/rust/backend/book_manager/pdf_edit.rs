@@ -83,8 +83,8 @@ async fn test_upload_preview_rejects_oversized_data() {
 mod backup_reporting {
     use super::fx;
     use crate::common::shared_fixtures::error_text;
-    use backend::es_manager::Docs;
     use fx::Opts;
+    use search_manager::Docs;
 
     // ── 재색인 실패 ──
 

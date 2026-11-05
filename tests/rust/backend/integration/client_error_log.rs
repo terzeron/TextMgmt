@@ -1,8 +1,8 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use auth_manager::auth_service::ACCESS_COOKIE_NAME;
 use backend::api_router::CLIENT_ERROR_FIELD_LIMITS;
-use backend::auth_service::ACCESS_COOKIE_NAME;
 use common::TestClient;
 use common::log_capture::LogCapture;
 use log::Level;

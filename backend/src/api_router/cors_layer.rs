@@ -10,7 +10,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
-use crate::auth_service::{ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME, RequestParts};
+use auth_manager::auth_service::{ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME, RequestParts};
 
 const ALLOW_METHODS: &str = "GET, POST, PUT, DELETE";
 const ALLOW_HEADERS: &str = "Content-Type";

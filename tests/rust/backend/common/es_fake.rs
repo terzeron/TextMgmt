@@ -5,7 +5,7 @@
 //! 구성: 문서 맵 + 호출 기록 + 메서드별 오류 주입 + 메서드별 클로저 바꿔치기.
 //! 저수준 `EsTransport` 대역은 `es_dummy.rs`의 `DummyEs`다.
 //!
-//! 가정한 API (아직 구현 전이다): `backend::es_manager::{EsError, EsManagerApi}`. 문서 3.3의 메서드는 그대로, 아래는 문서가 "나머지"로 둔 메서드를
+//! 가정한 API (아직 구현 전이다): `search_manager::{EsError, EsManagerApi}`. 문서 3.3의 메서드는 그대로, 아래는 문서가 "나머지"로 둔 메서드를
 //! 기존 fake(book_manager_2의 `DummyEs`)의 모양에 맞춰 `Result<_, EsError>`와 `i64`로 통일해 가정했다. 실제 trait 모양이 다르면 이 파일의 해당 메서드만 고친다.
 //!
 //! 사용: `let es = FakeEsManager::with_doc(doc);` `es.fail("update", "boom");` `assert_eq!(es.updates().len(), 1);`
@@ -18,8 +18,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
-pub use backend::es_manager::Hit;
-use backend::es_manager::{BackfillReport, DeleteByQueryResult, EsError, EsManagerApi, KeywordSearchArgs, PagedHits, PdfStats, SimilarDocsArgs, UpdateByQueryResult};
+pub use search_manager::Hit;
+use search_manager::{BackfillReport, DeleteByQueryResult, EsError, EsManagerApi, KeywordSearchArgs, PagedHits, PdfStats, SimilarDocsArgs, UpdateByQueryResult};
 use serde_json::{Value, json};
 
 pub type Docs = BTreeMap<i64, Value>;

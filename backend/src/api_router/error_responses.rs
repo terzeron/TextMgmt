@@ -16,7 +16,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
-pub use crate::auth_service::HttpStatusError;
+pub use auth_manager::auth_service::HttpStatusError;
 
 pub const GENERIC_SERVER_ERROR_DETAIL: &str = "서버 내부 오류가 발생했습니다";
 pub const VALIDATION_ERROR_DETAIL: &str = "입력값이 올바르지 않습니다";

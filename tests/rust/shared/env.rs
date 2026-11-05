@@ -32,7 +32,7 @@ pub struct EnvReadGuard {
 impl EnvGuard {
     /// 쓰기 잠금을 쥐고 `setup_env()`로 고정 값을 먼저 맞춘다.
     pub fn new() -> Self {
-        crate::common::setup_env();
+        super::setup_env();
         Self { saved: Vec::new(), _lock: ENV_LOCK.write().unwrap_or_else(|e| e.into_inner()) }
     }
 
@@ -57,7 +57,7 @@ impl EnvGuard {
 
     /// 읽기만 하는 테스트용. `EnvGuard`의 쓰기 잠금이 풀릴 때까지 기다린다.
     pub fn read() -> EnvReadGuard {
-        crate::common::setup_env();
+        super::setup_env();
         EnvReadGuard { _lock: ENV_LOCK.read().unwrap_or_else(|e| e.into_inner()) }
     }
 
@@ -113,4 +113,9 @@ pub fn map_env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + Send
 /// 값이 하나도 없는 환경.
 pub fn empty_env() -> impl Fn(&str) -> Option<String> + Send + Sync + 'static {
     |_| None
+}
+
+/// `load_jwt_secret(env: EnvFn)`에 넘기는 실제 프로세스 환경.
+pub fn process_env(key: &str) -> Option<String> {
+    std::env::var(key).ok()
 }

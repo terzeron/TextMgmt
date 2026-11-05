@@ -4,7 +4,7 @@
 //! 토큰 발급 함수의 반환값을 고정해야 하는 `test_auth_refresh_and_logout`은 `AppDeps::with_token_issuer(Arc<dyn TokenIssuer>)` seam으로 풀었다.
 //!
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.2, 3.4, 3.9, 3.10):
-//! - `backend::auth_service`
+//! - `auth_manager::auth_service`
 //!   - `determine_role(email: &str) -> Option<String>`
 //!   - `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String` (4인자 통일안. None은 빈 문자열)
 //!   - `create_refresh_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`
@@ -23,7 +23,7 @@
 //!   - `trait GoogleVerifier { fn client_id(&self) -> Option<String>; fn verify(&self, credential: &str, audience: &str) -> Result<Value, String>; }`
 //!   - `trait RoleResolver { fn determine_role(&self, email: &str) -> Option<String>; }`
 //!   - (모든 trait 메서드에 기본 구현이 있다. fake는 쓰는 메서드만 구현한다)
-//!   - `trait TokenIssuer` (`backend::auth_service`, 모든 메서드에 기본 구현): `create_access_token`, `create_refresh_token`, `decode_refresh_token`, `new_id`. `AppDeps::with_token_issuer(Arc<dyn TokenIssuer>)`
+//!   - `trait TokenIssuer` (`auth_manager::auth_service`, 모든 메서드에 기본 구현): `create_access_token`, `create_refresh_token`, `decode_refresh_token`, `new_id`. `AppDeps::with_token_issuer(Arc<dyn TokenIssuer>)`
 //!   - `ACCESS_COOKIE_NAME`, `REFRESH_COOKIE_NAME: &str`, `observation_hash(&str) -> String`
 //!   - `get_cookie_settings() -> (bool, String)`, `set_auth_cookies(&mut CustomJSONResponse, &str, &str)`, `clear_auth_cookies(&mut CustomJSONResponse)`
 //!   - `CustomJSONResponse::{new(Value) -> Self, headers(&self) -> &HeaderMap}`, `custom_jsonable_encoder(&Value) -> Value`
@@ -31,7 +31,7 @@
 //!   - `async validation_exception_handler(&Parts, &RequestValidationError) -> Response`, `async http_exception_handler(&Parts, &HttpStatusError) -> Response`,
 //!     `async general_exception_handler(&Parts, &(dyn Error + Send + Sync)) -> Response`, `RequestValidationError::new(Vec<Value>, Value /*body*/)`
 //!   - `route_table() -> Vec<RouteInfo>`, `struct RouteInfo { path: String, methods: Vec<String>, dependencies: Vec<String> }`
-//! - `backend::refresh_token_store`: `trait RefreshTokenStoreApi`(store_issued, rotate, revoke_family, get_token_observation, list_sessions, revoke_session),
+//! - `auth_manager::refresh_token_store`: `trait RefreshTokenStoreApi`(store_issued, rotate, revoke_family, get_token_observation, list_sessions, revoke_session),
 //!   `SessionQuery { status, current_family_id, page, page_size, email }`, `StoreError::Unsupported(String)`
 //! - 로그 캡처는 `common::log_capture::LogCapture`(`log` crate 기반), 환경 변수는 `common::env::EnvGuard`.
 //! - dev-dependency: `jsonwebtoken`, `tokio`
@@ -45,13 +45,13 @@ mod common;
 use crate::common::auth_fakes::{FixedRole, access_token};
 use crate::common::shared_fixtures::now;
 use crate::common::shared_fixtures::{FakeStore, decode, encode_hs256, fixture, make_request};
+use auth_manager::auth_service::Claims;
+use auth_manager::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, HttpStatusError, TokenIssuer};
+use auth_manager::refresh_token_store::RefreshTokenStoreApi;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request};
 use backend::api_router::{ACCESS_COOKIE_NAME, AppDeps, AuthMode, GoogleVerifier, REFRESH_COOKIE_NAME, RequestValidationError, app_with, observation_hash};
-use backend::auth_service::Claims;
-use backend::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, HttpStatusError, TokenIssuer};
-use backend::refresh_token_store::RefreshTokenStoreApi;
 use common::env::EnvGuard;
 use common::log_capture::LogCapture;
 use common::{Response, TestClient};
@@ -148,7 +148,7 @@ impl TokenIssuer for FixedTokens {
         if token == "rjwt" {
             return Ok(Claims { token_type: "refresh".into(), email: "e@example.com".into(), family_id: "family1".into(), token_id: "new-token".into(), ..Claims::default() });
         }
-        backend::auth_service::decode_refresh_token(token)
+        auth_manager::auth_service::decode_refresh_token(token)
     }
 }
 #[test]
@@ -294,7 +294,7 @@ async fn test_auth_me_expires_in_with_real_token() {
     let _env = fixture();
     let store = FakeStore::new();
     store.store_issued("token", &family_a(), "admin@example.com", now(), now() + 3600, None, None).unwrap();
-    let token = backend::auth_service::create_session_jwt_token("admin@example.com", "admin", "A", "P", &family_a());
+    let token = auth_manager::auth_service::create_session_jwt_token("admin@example.com", "admin", "A", "P", &family_a());
 
     // 인증을 고정하지 않고(`AuthMode::Cookies`) 실제 토큰으로 호출
     let app = auth_app(AppDeps::new(AuthMode::Cookies).with_role_resolver(role("admin")).with_refresh_token_store(store));
@@ -663,7 +663,7 @@ async fn session_login(app: &Router) -> (String, String, String) {
     assert_eq!(response.status, 200);
     let access = cookie_value(&response, ACCESS_COOKIE_NAME).unwrap();
     let refresh = cookie_value(&response, REFRESH_COOKIE_NAME).unwrap();
-    let fid = backend::auth_service::decode_refresh_token(&refresh).unwrap().family_id;
+    let fid = auth_manager::auth_service::decode_refresh_token(&refresh).unwrap().family_id;
     (access, refresh, fid)
 }
 
@@ -744,7 +744,7 @@ async fn test_session_access_refresh_keeps_family_and_prior_access_valid() {
     let response = post_empty(&client(&app).cookie(REFRESH_COOKIE_NAME, &refresh), "/auth/refresh").await;
     assert_eq!(response.status, 200);
     let next_access = cookie_value(&response, ACCESS_COOKIE_NAME).unwrap();
-    let payload = backend::auth_service::extract_payload(&make_request(Some(&next_access), None)).unwrap();
+    let payload = auth_manager::auth_service::extract_payload(&make_request(Some(&next_access), None)).unwrap();
     assert_eq!(payload.family_id, fid);
     for token in [access, next_access] {
         assert_eq!(client(&app).cookie(ACCESS_COOKIE_NAME, &token).get("/auth/me").await.status, 200);

@@ -1,7 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
+use auth_manager::auth_service::Claims;
 use backend::api_router::{AppDeps, AuthMode, BookManagerApi, CategoryMappingApi, MappingError, app_with};
-use backend::auth_service::Claims;
 use backend::book_manager::{BookManager, BookManagerDeps};
 use common::TestClient;
 use common::es_fake::{FakeEsManager, Hit};
@@ -195,7 +195,7 @@ async fn admin_operations_reject_real_viewer_token_before_touching_managers() {
     common::setup_env();
     // 같은 바이너리의 auth 테스트가 TM_JWT_SECRET 등을 잠깐 바꾼다. 바꾸는 동안 토큰을 만들지 않게 읽기 잠금을 쥔다.
     let _env = common::env::EnvGuard::read();
-    let token = backend::auth_service::create_jwt_token("viewer@test.com", "viewer", None, None);
+    let token = auth_manager::auth_service::create_jwt_token("viewer@test.com", "viewer", None, None);
     let client = TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies))).bearer(&token);
     for prefix in ["", "/comics"] {
         for (method, path, body) in [

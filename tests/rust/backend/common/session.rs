@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, StoreError};
+use auth_manager::refresh_token_store::{RefreshTokenStoreApi, Rotation, StoreError};
 use db::Row;
 use serde_json::Value;
 
@@ -11,7 +11,7 @@ const VIEWER_FAMILY: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 pub fn token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String {
     let family = if role == "admin" { ADMIN_FAMILY } else { VIEWER_FAMILY };
-    backend::auth_service::create_session_jwt_token(email, role, name.unwrap_or_default(), picture.unwrap_or_default(), family)
+    auth_manager::auth_service::create_session_jwt_token(email, role, name.unwrap_or_default(), picture.unwrap_or_default(), family)
 }
 
 pub fn store() -> Arc<dyn RefreshTokenStoreApi> {

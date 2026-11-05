@@ -13,21 +13,28 @@
 #![allow(dead_code)]
 
 pub mod auth_fakes;
+#[path = "../../shared/auth_fixtures.rs"]
+pub mod auth_fixtures;
 pub mod category_apply;
+#[path = "../../shared/clock.rs"]
 pub mod clock;
 pub mod cover_docs;
 pub mod cover_env;
 pub mod dyn_es;
 pub mod edits;
+#[path = "../../shared/env.rs"]
 pub mod env;
 pub mod epub;
 pub mod epub_book;
+#[path = "../../shared/es_dummy.rs"]
 pub mod es_dummy;
 pub mod es_fake;
+#[path = "../../shared/faulty_fs.rs"]
 pub mod faulty_fs;
 pub mod file_reader_fakes;
 pub mod fsx;
 pub mod image;
+#[path = "../../shared/log_capture.rs"]
 pub mod log_capture;
 pub mod pdf;
 pub mod pdf_edit_env;
@@ -44,6 +51,7 @@ use axum::http::{Method, Request};
 use serde_json::Value;
 use tower::ServiceExt;
 
+#[path = "../../shared/setup.rs"]
 mod setup;
 
 // 테스트 파일마다 쓰는 이름이 달라 일부가 쓰이지 않는다(`dead_code` 허용과 같은 이유).

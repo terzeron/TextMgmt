@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use super::app_deps::{AppDeps, AuthMode};
 use super::error_responses::{ApiError, RequestValidationError};
-use crate::auth_service::{Claims, optional_auth_with, require_admin_with, require_auth_with};
+use auth_manager::auth_service::{Claims, optional_auth_with, require_admin_with, require_auth_with};
 
 /// 불리언 문자열 해석. 대소문자를 가리지 않는다. 해석할 수 없으면 `None`.
 pub(crate) fn parse_py_bool(text: &str) -> Option<bool> {

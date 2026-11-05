@@ -1,15 +1,11 @@
-//! `backend::es_manager` 단위 테스트.
+//! `search_manager` 단위 테스트.
 
 mod common;
-#[path = "common/book_fixtures.rs"]
-mod fx;
-use backend::es_manager::{
-    ConnectOptions, Docs, ESManager, ESManagerError, EsConnector, EsError, EsManagerApi, EsTransport, SimilarDocsArgs, UpdateFields, decode_category_cursor, encode_category_cursor,
-};
 use base64::Engine;
 use common::clock::FakeClock;
 use common::es_dummy::{DummyEs, runtime_error};
 use common::faulty_fs::{FaultyFs, fail_always, fail_if_path_contains};
+use search_manager::{ConnectOptions, Docs, ESManager, ESManagerError, EsConnector, EsError, EsManagerApi, EsTransport, SimilarDocsArgs, UpdateFields, decode_category_cursor, encode_category_cursor};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
@@ -63,7 +59,7 @@ fn trait_defaults_report_unsupported() {
     check(bare.search_group_representatives(&categories, &excluded).map(|_| ()));
 }
 
-use backend::es_manager::{BackfillReport, CoverFileHit, CoverFileHits, DeleteByQueryResult, Hit, KeywordSearchArgs, PagedHits, UpdateByQueryResult};
+use search_manager::{BackfillReport, CoverFileHit, CoverFileHits, DeleteByQueryResult, Hit, KeywordSearchArgs, PagedHits, UpdateByQueryResult};
 use std::collections::BTreeMap;
 
 /// `with_search_stub`이 받은 호출 하나: (query, sort, max_result_count).
@@ -1423,14 +1419,14 @@ fn test_search_latest_docs_only_returns_cover_types() {
 
 mod api_facade {
     use super::common;
-    use backend::es_manager::{ESManager, EsError, EsTransport, PdfStats};
     use common::es_dummy::DummyEs;
+    use search_manager::{ESManager, EsError, EsTransport, PdfStats};
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
-    type SearchStub = Arc<dyn Fn(&Value, Option<&Value>, i64, Option<&[String]>) -> Result<Vec<backend::es_manager::Hit>, backend::es_manager::EsError> + Send + Sync>;
+    type SearchStub = Arc<dyn Fn(&Value, Option<&Value>, i64, Option<&[String]>) -> Result<Vec<search_manager::Hit>, search_manager::EsError> + Send + Sync>;
 
     /// `_manager()`: 가짜 ES와 인덱스 이름 `idx`를 가진 매니저.
     fn manager() -> (ESManager, Arc<DummyEs>) {
@@ -1452,7 +1448,7 @@ mod api_facade {
     #[test]
     fn es_manager_api_default_methods_return_unsupported() {
         struct UnsupportedManager;
-        impl backend::es_manager::EsManagerApi for UnsupportedManager {}
+        impl search_manager::EsManagerApi for UnsupportedManager {}
 
         macro_rules! unsupported {
             ($call:expr) => {
@@ -1463,36 +1459,36 @@ mod api_facade {
         let manager = UnsupportedManager;
         let docs = BTreeMap::new();
         let strings = vec!["A".to_owned()];
-        let similar = backend::es_manager::SimilarDocsArgs::default();
-        unsupported!(backend::es_manager::EsManagerApi::create_index(&manager));
-        unsupported!(backend::es_manager::EsManagerApi::search_by_id(&manager, 1));
-        unsupported!(backend::es_manager::EsManagerApi::update(&manager, 1, &Value::Null));
-        unsupported!(backend::es_manager::EsManagerApi::delete(&manager, 1));
-        unsupported!(backend::es_manager::EsManagerApi::insert(&manager, &docs));
-        unsupported!(backend::es_manager::EsManagerApi::delete_by_file_paths(&manager, &strings, None));
-        unsupported!(backend::es_manager::EsManagerApi::delete_by_ids(&manager, &[1], 1));
-        unsupported!(backend::es_manager::EsManagerApi::refresh(&manager));
-        unsupported!(backend::es_manager::EsManagerApi::search_and_aggregate_by_category(&manager));
-        unsupported!(backend::es_manager::EsManagerApi::iter_all_category_file_paths(&manager, 1));
-        unsupported!(backend::es_manager::EsManagerApi::search_categories_pdf_stats(&manager, &strings));
-        unsupported!(backend::es_manager::EsManagerApi::search_category_pdf_stats(&manager, "A"));
-        unsupported!(backend::es_manager::EsManagerApi::get_by_id_source(&manager, "1"));
-        unsupported!(backend::es_manager::EsManagerApi::search_by_path_source(&manager, "/a"));
-        unsupported!(backend::es_manager::EsManagerApi::search_by_category(&manager, "A", 10));
-        unsupported!(backend::es_manager::EsManagerApi::search_by_category_paged(&manager, "A", 10, None));
-        unsupported!(backend::es_manager::EsManagerApi::count_by_categories(&manager, &strings, false));
-        unsupported!(backend::es_manager::EsManagerApi::count_by_category(&manager, "A", false));
-        unsupported!(backend::es_manager::EsManagerApi::rename_category(&manager, "A", "B"));
-        unsupported!(backend::es_manager::EsManagerApi::delete_by_category(&manager, "A", false));
-        unsupported!(backend::es_manager::EsManagerApi::search_by_keyword(&manager, "q", 10));
-        unsupported!(backend::es_manager::EsManagerApi::search_by_keyword_paged(&manager, &backend::es_manager::KeywordSearchArgs::default()));
-        unsupported!(backend::es_manager::EsManagerApi::search_similar_docs(&manager, &similar));
-        unsupported!(backend::es_manager::EsManagerApi::search_similar_docs_paged(&manager, &similar));
-        unsupported!(backend::es_manager::EsManagerApi::search_latest_docs(&manager, 10, None));
-        unsupported!(backend::es_manager::EsManagerApi::backfill_created_time(&manager, Path::new("/books")));
-        unsupported!(backend::es_manager::EsManagerApi::aggregate_cover_categories(&manager));
-        unsupported!(backend::es_manager::EsManagerApi::search_cover_files_paged(&manager, &strings, 10, None, &[]));
-        unsupported!(backend::es_manager::EsManagerApi::search_group_representatives(&manager, &strings, &[]));
+        let similar = search_manager::SimilarDocsArgs::default();
+        unsupported!(search_manager::EsManagerApi::create_index(&manager));
+        unsupported!(search_manager::EsManagerApi::search_by_id(&manager, 1));
+        unsupported!(search_manager::EsManagerApi::update(&manager, 1, &Value::Null));
+        unsupported!(search_manager::EsManagerApi::delete(&manager, 1));
+        unsupported!(search_manager::EsManagerApi::insert(&manager, &docs));
+        unsupported!(search_manager::EsManagerApi::delete_by_file_paths(&manager, &strings, None));
+        unsupported!(search_manager::EsManagerApi::delete_by_ids(&manager, &[1], 1));
+        unsupported!(search_manager::EsManagerApi::refresh(&manager));
+        unsupported!(search_manager::EsManagerApi::search_and_aggregate_by_category(&manager));
+        unsupported!(search_manager::EsManagerApi::iter_all_category_file_paths(&manager, 1));
+        unsupported!(search_manager::EsManagerApi::search_categories_pdf_stats(&manager, &strings));
+        unsupported!(search_manager::EsManagerApi::search_category_pdf_stats(&manager, "A"));
+        unsupported!(search_manager::EsManagerApi::get_by_id_source(&manager, "1"));
+        unsupported!(search_manager::EsManagerApi::search_by_path_source(&manager, "/a"));
+        unsupported!(search_manager::EsManagerApi::search_by_category(&manager, "A", 10));
+        unsupported!(search_manager::EsManagerApi::search_by_category_paged(&manager, "A", 10, None));
+        unsupported!(search_manager::EsManagerApi::count_by_categories(&manager, &strings, false));
+        unsupported!(search_manager::EsManagerApi::count_by_category(&manager, "A", false));
+        unsupported!(search_manager::EsManagerApi::rename_category(&manager, "A", "B"));
+        unsupported!(search_manager::EsManagerApi::delete_by_category(&manager, "A", false));
+        unsupported!(search_manager::EsManagerApi::search_by_keyword(&manager, "q", 10));
+        unsupported!(search_manager::EsManagerApi::search_by_keyword_paged(&manager, &search_manager::KeywordSearchArgs::default()));
+        unsupported!(search_manager::EsManagerApi::search_similar_docs(&manager, &similar));
+        unsupported!(search_manager::EsManagerApi::search_similar_docs_paged(&manager, &similar));
+        unsupported!(search_manager::EsManagerApi::search_latest_docs(&manager, 10, None));
+        unsupported!(search_manager::EsManagerApi::backfill_created_time(&manager, Path::new("/books")));
+        unsupported!(search_manager::EsManagerApi::aggregate_cover_categories(&manager));
+        unsupported!(search_manager::EsManagerApi::search_cover_files_paged(&manager, &strings, 10, None, &[]));
+        unsupported!(search_manager::EsManagerApi::search_group_representatives(&manager, &strings, &[]));
     }
 
     #[test]
@@ -1512,7 +1508,7 @@ mod api_facade {
 
     #[test]
     fn es_manager_api_implementation_delegates_to_manager_and_normalizes_results() {
-        use backend::es_manager::EsManagerApi;
+        use search_manager::EsManagerApi;
 
         let (manager, es) = manager();
         es.on("search", |_| {
@@ -1553,8 +1549,8 @@ mod api_facade {
         let _ = api.rename_category("A", "B");
         let _ = api.delete_by_category("A", false);
         let _ = api.search_by_keyword("sample", 10);
-        let _ = api.search_by_keyword_paged(&backend::es_manager::KeywordSearchArgs { keyword: "sample".into(), exclude_categories: Some(vec!["hidden".into()]), ..Default::default() });
-        let similar = backend::es_manager::SimilarDocsArgs { title: "sample".into(), ..Default::default() };
+        let _ = api.search_by_keyword_paged(&search_manager::KeywordSearchArgs { keyword: "sample".into(), exclude_categories: Some(vec!["hidden".into()]), ..Default::default() });
+        let similar = search_manager::SimilarDocsArgs { title: "sample".into(), ..Default::default() };
         let _ = api.search_similar_docs(&similar);
         let _ = api.search_similar_docs_paged(&similar);
         let _ = api.search_latest_docs(10, Some(&exclude));

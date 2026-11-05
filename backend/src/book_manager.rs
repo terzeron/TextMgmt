@@ -29,9 +29,9 @@ use serde_json::Value;
 use sysdeps::{CommandRunner, EnvFn, FsOps, RealFs, SystemRunner};
 
 use crate::book_metadata::Book;
-use crate::es_manager::{Docs, EsManagerApi};
 use crate::pdf_page_reader::{LopdfOpener, LopdfPageOps, PageCountCache, PdfOpener, PdfPageOps, PdfReaderCache};
 use classifier::Classify;
+use search_manager::{Docs, EsManagerApi};
 
 /// 책 관리 작업이 실패했다.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -81,7 +81,7 @@ pub(super) async fn apply_classify_proposal(_: RequireAdmin, State(deps): State<
     let content_type = kind(&uri).to_string();
     let manager = manager(&deps, &uri)?;
     let mapping = deps.category_mapping().map_err(|_| ApiError::unavailable())?;
-    let token = crate::auth_service::uuid_hex();
+    let token = auth_manager::auth_service::uuid_hex();
     let claim_mapping = mapping.clone();
     let claim_type = content_type.clone();
     let claim_token = token.clone();

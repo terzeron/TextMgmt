@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::path_validator::relative_to;
 use super::{AddBookError, BookManager};
-use crate::es_manager::Docs;
+use search_manager::Docs;
 
 /// `delete_book` 성공 결과. 파일이 이미 없었으면 색인만 지우고 경고를 남긴다.
 #[derive(Debug, Clone, PartialEq, Eq)]

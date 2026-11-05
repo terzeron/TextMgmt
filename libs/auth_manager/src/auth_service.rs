@@ -3,7 +3,7 @@
 //! - 환경 변수(`TM_JWT_SECRET`, `TM_ADMIN_EMAIL`, `TM_ALLOWED_EMAILS`)는 호출 시점에 읽는다.
 //! - 시작 때 `load_jwt_secret`으로 비밀키를 확인하고,
 //!   토큰을 만드는 함수는 비밀키가 없으면 panic한다. 비밀키가 비었을 때 토큰을 검증하는 쪽은 항상 거부한다.
-//! - 이 모듈은 HTTP 프레임워크를 모른다. 요청은 `RequestParts`로 추상화하고, axum 연결은 `main::extract`가 한다.
+//! - 이 모듈은 HTTP 프레임워크를 모른다. 요청은 `RequestParts`로 추상화하고 `http` crate 타입에만 구현한다.
 
 use std::fmt;
 use std::io::Read;
@@ -385,11 +385,11 @@ pub async fn optional_auth<R: RequestParts + ?Sized>(req: &R) -> Option<Claims> 
 }
 
 // ---------------------------------------------------------------------------
-// axum 요청 연결
+// `http` 요청 연결
 // ---------------------------------------------------------------------------
 
 /// `Cookie` 헤더(여러 개 가능)에서 `name`의 값을 찾는다. 같은 이름이 여러 번이면 뒤의 것이 이긴다.
-fn cookie_from_headers(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+fn cookie_from_headers(headers: &http::HeaderMap, name: &str) -> Option<String> {
     let mut found = None;
     for value in headers.get_all("cookie") {
         let Ok(text) = value.to_str() else { continue };
@@ -405,7 +405,7 @@ fn cookie_from_headers(headers: &axum::http::HeaderMap, name: &str) -> Option<St
     found
 }
 
-impl RequestParts for axum::http::HeaderMap {
+impl RequestParts for http::HeaderMap {
     fn header(&self, name: &str) -> Option<String> {
         self.get(name).and_then(|v| v.to_str().ok()).map(str::to_string)
     }
@@ -415,7 +415,7 @@ impl RequestParts for axum::http::HeaderMap {
     }
 }
 
-impl RequestParts for axum::http::request::Parts {
+impl RequestParts for http::request::Parts {
     fn header(&self, name: &str) -> Option<String> {
         self.headers.header(name)
     }
@@ -428,7 +428,7 @@ impl RequestParts for axum::http::request::Parts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderMap;
+    use http::HeaderMap;
 
     #[test]
     fn uuid_hex_looks_like_uuid4_hex() {

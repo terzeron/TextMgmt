@@ -363,7 +363,7 @@ pub struct BookResponse { pub status_code: u16, pub media_type: Option<String>, 
 ### 3.3 ES
 
 ```rust
-// backend::es_manager
+// search_manager
 pub enum EsError {              // 실제 es_client::EsError에 변형 3개를 추가한다
     MissingEnv(String), Transport(String), Status { status: u16, body: String }, Parse(String), Unsupported(String),
     Other(String),              // 구 ElasticsearchError::RuntimeError, book_manager_2의 EsError::Other

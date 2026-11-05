@@ -19,7 +19,7 @@ use super::cover_browse::{CoverEntry, CoverGroup, CoverStats, MISSING_TIME, late
 use super::preview_builder::text_response;
 use super::{BookManager, BookResponse, CoverPage, MAX_CATEGORY_PAGE_SIZE};
 use crate::book_metadata::Book;
-use crate::es_manager::{CoverFileHits, decode_category_cursor, encode_category_cursor};
+use search_manager::{CoverFileHits, decode_category_cursor, encode_category_cursor};
 
 const COVER_GENERATION_LIMIT: usize = 10;
 

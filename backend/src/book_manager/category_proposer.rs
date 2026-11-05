@@ -16,8 +16,8 @@ use serde_json::{Value, json};
 
 use super::path_validator::relative_to;
 use super::{BookManager, ProgressFn};
-use crate::es_manager::Docs;
 use classifier::{BookClassifierApi, ModelOnlyClassifier};
+use search_manager::Docs;
 
 /// 제안 시작 때 이름만 담은 행을 한 번에 보내는 개수.
 const PROPOSAL_PLACEHOLDER_CHUNK: usize = 500;

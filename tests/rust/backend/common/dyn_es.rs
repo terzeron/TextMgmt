@@ -3,7 +3,7 @@
 
 use super::shared_fixtures::make_deps;
 use backend::book_manager::BookManager;
-use backend::es_manager::EsManagerApi;
+use search_manager::EsManagerApi;
 use std::path::Path;
 use std::sync::Arc;
 

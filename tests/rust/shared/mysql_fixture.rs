@@ -4,7 +4,7 @@
 //! - `testcontainers_modules::mysql::Mysql`과 `testcontainers_modules::testcontainers::runners::SyncRunner` (blocking 기능)
 //! - 컨테이너를 못 띄우면 panic한다. 이 fixture를 쓰는 테스트는 `#[ignore = "Docker 필요"]`이고 `--ignored`로 실행한다.
 //!
-//! 테스트 파일은 `#[path = "common/mysql_fixture.rs"] mod mysql_fixture;`로 가져온다.
+//! 테스트 파일은 `#[path = "<shared까지 상대 경로>/mysql_fixture.rs"] mod mysql_fixture;`로 가져온다.
 
 #![allow(dead_code)]
 

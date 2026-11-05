@@ -764,7 +764,7 @@ mod tests {
 
     struct NullEs;
 
-    impl crate::es_manager::EsManagerApi for NullEs {}
+    impl search_manager::EsManagerApi for NullEs {}
 
     #[test]
     fn preview_failure_converts_string_and_zip_errors() {

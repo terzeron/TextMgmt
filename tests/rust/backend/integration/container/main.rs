@@ -25,7 +25,7 @@
 //!   - 상수: `ERR_MISSING_INPUT`, `GENERIC_MISMATCH_ERROR`, `GENERIC_MAPPING_ERROR_DETAIL`, `GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL`, `GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL`
 //!   - 구 `backend::api_router::testing::*` 전역 가드는 없다. `RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS` 패치는 `AppDeps::with_reload_progress_flush_interval`, `os.listdir` 패치는 `AppDeps::with_fs`가 대신한다.
 //!   - 백그라운드 작업(reload-*)은 응답을 돌려주기 전에 끝난다.
-//! - `backend::auth_service`: `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`, `create_refresh_token`(같은 인자),
+//! - `auth_manager::auth_service`: `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`, `create_refresh_token`(같은 인자),
 //!   `tm_admin_email() -> String`, `jwt_secret() -> String`, `JWT_ALGORITHM: jsonwebtoken::Algorithm`
 //! - `backend::book_metadata::Book` (`Default + Clone + Serialize`): `book_id, category, title, author, file_path: PathBuf, file_type, file_size, line_count, page_count, isbn, created_time: Option<String>, updated_time, score: f64`, `Book::path_prefix() -> PathBuf`
 //! - `bookstore::store_clients::Yes24Bookstore { verbose: bool }`
@@ -34,7 +34,7 @@
 //!   - `async add_book(BTreeMap<i64, Value>) -> Result<i64, String>`, `async get_book(i64) -> Result<Book, BookLookupError>`
 //!   - `BookManagerApi`(모든 메서드에 기본 구현이 있다): 아래 `DummyManager` 구현부의 시그니처를 따른다. `fn es_manager(&self) -> Arc<dyn EsManagerApi>`.
 //!     통일 시그니처(설계 3.2): `get_book_content -> BookContent`, `get_book_preview(id, chapters, resource_base_url) -> BookResponse`, `get_pdf_pages(id, start, end) -> BookResponse`, `get_category_mismatches(force_refresh) -> Result<Value, String>`
-//! - `backend::es_manager::{EsManagerApi, EsError, ESManager}`: `delete(&self, i64) -> Result<bool, EsError>`, `search_categories_pdf_stats(&self, &[String]) -> Result<Value, EsError>`. 대역은 `common::es_fake::FakeEsManager`다.
+//! - `search_manager::{EsManagerApi, EsError, ESManager}`: `delete(&self, i64) -> Result<bool, EsError>`, `search_categories_pdf_stats(&self, &[String]) -> Result<Value, EsError>`. 대역은 `common::es_fake::FakeEsManager`다.
 //!   (실제 ES 통합 테스트만 `ESManager::connect(env, &RealEsConnector, &SystemClock)`를 가정한다. 커넥터 이름은 문서에 없다.)
 //! - `backend::comics_manager::ComicsManager::from_env(env, es_factory)` (`BookManagerApi` 구현)
 //! - `db::category_mapping::{CategoryMapping, CategoryMappingApi, MappingError}`
@@ -47,7 +47,7 @@
 //! 모듈 범위 fixture(`backend_test_setup`)는 테스트마다 새로 만든다.
 
 use crate::{common, elasticsearch_fixture, mysql_fixture};
-use backend::auth_service::Claims;
+use auth_manager::auth_service::Claims;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -60,19 +60,19 @@ use std::time::Duration;
 
 use crate::common::shared_fixtures::{CATEGORY, ListDirFs};
 use crate::common::shared_fixtures::{enc, now_secs, process_env, split};
+use auth_manager::auth_service::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
 use axum::http::Method;
 use axum::response::IntoResponse;
 use backend::api_router::{AppDeps, AuthMode, BookstoreFactory, BookstoreSearch, CategoryMappingApi, CustomJSONResponse, GoogleVerifier, MappingError, RoleResolver, Slot, app_with};
-use backend::auth_service::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
 use backend::book_manager::{BookContent, BookDeletion, BookManager, BookManagerApi, BookResponse};
 use backend::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, FsOnlyFile, MismatchDetails, MismatchReload, MismatchSummary, ReloadCounts, ReloadedFiles};
 use backend::book_manager::{EpubValidation, PdfValidation};
 use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::comics_manager::ComicsManager;
-use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
 use bookstore::store_clients::SearchRow;
 use common::{TestClient, env::EnvGuard, es_fake::FakeEsManager};
 use db::category_mapping::CategoryMapping;
+use search_manager::{ESManager, EsManagerApi, RealEsConnector};
 use serde_json::{Value, json};
 use sysdeps::{FsOps, SystemClock};
 use tempfile::TempDir;
@@ -2234,8 +2234,8 @@ impl RoleResolver for ScriptedRole {
 #[derive(Default)]
 struct AuthRefreshStore(Mutex<HashMap<String, String>>);
 
-impl backend::refresh_token_store::RefreshTokenStoreApi for AuthRefreshStore {
-    fn store_issued(&self, _: &str, family: &str, email: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<(), backend::refresh_token_store::StoreError> {
+impl auth_manager::refresh_token_store::RefreshTokenStoreApi for AuthRefreshStore {
+    fn store_issued(&self, _: &str, family: &str, email: &str, _: i64, _: i64, _: Option<&str>, _: Option<&str>) -> Result<(), auth_manager::refresh_token_store::StoreError> {
         self.0.lock().unwrap().insert(family.into(), email.into());
         Ok(())
     }
@@ -2249,17 +2249,17 @@ impl backend::refresh_token_store::RefreshTokenStoreApi for AuthRefreshStore {
         _: i64,
         _: Option<&str>,
         _: Option<&str>,
-    ) -> Result<backend::refresh_token_store::Rotation, backend::refresh_token_store::StoreError> {
+    ) -> Result<auth_manager::refresh_token_store::Rotation, auth_manager::refresh_token_store::StoreError> {
         self.0.lock().unwrap().insert(family.into(), email.into());
-        Ok(backend::refresh_token_store::Rotation::Ok)
+        Ok(auth_manager::refresh_token_store::Rotation::Ok)
     }
-    fn revoke_family(&self, _: &str, _: &str) -> Result<(), backend::refresh_token_store::StoreError> {
-        Err(backend::refresh_token_store::StoreError::Unsupported("test store".into()))
+    fn revoke_family(&self, _: &str, _: &str) -> Result<(), auth_manager::refresh_token_store::StoreError> {
+        Err(auth_manager::refresh_token_store::StoreError::Unsupported("test store".into()))
     }
-    fn get_token_observation(&self, _: &str) -> Result<Option<Value>, backend::refresh_token_store::StoreError> {
-        Err(backend::refresh_token_store::StoreError::Unsupported("test store".into()))
+    fn get_token_observation(&self, _: &str) -> Result<Option<Value>, auth_manager::refresh_token_store::StoreError> {
+        Err(auth_manager::refresh_token_store::StoreError::Unsupported("test store".into()))
     }
-    fn session_rows(&self, email: Option<&str>, family: Option<&str>) -> Result<Vec<db::Row>, backend::refresh_token_store::StoreError> {
+    fn session_rows(&self, email: Option<&str>, family: Option<&str>) -> Result<Vec<db::Row>, auth_manager::refresh_token_store::StoreError> {
         Ok(self
             .0
             .lock()

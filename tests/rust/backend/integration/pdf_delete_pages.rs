@@ -3,7 +3,7 @@ mod common;
 #[path = "../common/book_fixtures.rs"]
 mod fx;
 
-use backend::auth_service::Claims;
+use auth_manager::auth_service::Claims;
 use backend::book_manager::PdfEditResult;
 use std::fs;
 

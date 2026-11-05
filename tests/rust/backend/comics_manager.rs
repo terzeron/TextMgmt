@@ -1,7 +1,7 @@
 mod common;
 use backend::comics_manager::ComicsManager;
-use backend::es_manager::EsManagerApi;
 use common::es_fake::FakeEsManager;
+use search_manager::EsManagerApi;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

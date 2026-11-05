@@ -13,8 +13,8 @@ use std::fmt;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::auth_service::{Claims, HttpStatusError};
 use crate::view_history_store::{RecentViews, ViewHistoryError, ViewHistoryStore};
+use auth_manager::auth_service::{Claims, HttpStatusError};
 use db::category_mapping::CategoryMapping;
 
 pub(crate) use crate::book_manager::UNIMPLEMENTED;

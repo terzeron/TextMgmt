@@ -15,8 +15,8 @@ use super::error_responses::{ApiError, ApiResult, RequestValidationError};
 use super::request_extractors::{ApiJson, ApiQuery, RequireAdmin, RequireAuth};
 use super::route_registry::Routes;
 use super::routes_books::{book_response, checked_manager, parse_book_id, run_blocking};
-use crate::auth_service::Claims;
 use crate::epub_cover::MAX_IMAGE_BYTES;
+use auth_manager::auth_service::Claims;
 
 pub(super) fn routes() -> Routes {
     Routes::new().get("/pdf-pages/{book_id}", &["require_auth"], book_pages).get("/comics/pdf-pages/{book_id}", &["require_auth"], comic_pages).merge(edit_routes())

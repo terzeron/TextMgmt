@@ -21,8 +21,8 @@ use backend::book_manager::{BookManager, BookManagerDeps, FileReader};
 use backend::cover_management::CoverSave;
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover::CreatedIdrefs;
-use backend::es_manager::Docs;
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
+use search_manager::Docs;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 // 사본을 지우고 common 원본을 다시 내보낸다. 이 fixture를 쓰는 테스트 crate마다 일부만 쓴다.

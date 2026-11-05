@@ -11,7 +11,7 @@ use sysdeps::EnvFn;
 
 use crate::book_manager::BookManagerApi;
 use crate::book_manager::{BookManager, BookManagerDeps};
-use crate::es_manager::EsManagerApi;
+use search_manager::EsManagerApi;
 
 mod api_adapter;
 

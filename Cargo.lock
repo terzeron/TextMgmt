@@ -114,6 +114,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "auth_manager"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "db",
+ "http",
+ "jsonwebtoken",
+ "log",
+ "regex",
+ "serde",
+ "serde_json",
+ "sysdeps",
+ "testcontainers-modules",
+ "tokio",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -201,6 +218,7 @@ name = "backend"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "auth_manager",
  "axum",
  "base64 0.23.1",
  "bookstore",
@@ -228,6 +246,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "scraper",
+ "search_manager",
  "serde",
  "serde_json",
  "sha2",
@@ -3145,6 +3164,24 @@ dependencies = [
  "html5ever",
  "precomputed-hash",
  "selectors",
+]
+
+[[package]]
+name = "search_manager"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "common",
+ "es_client",
+ "log",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "sysdeps",
+ "tempfile",
+ "ureq",
 ]
 
 [[package]]

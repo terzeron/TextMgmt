@@ -17,7 +17,7 @@ use file_indexer::ignore_rules::IGNORED_DIR_NAMES;
 use regex::Regex;
 use serde_json::Value;
 
-use crate::es_manager::CoverFileHit;
+use search_manager::CoverFileHit;
 
 /// 최신 만화 탭의 FIRST_INSTALLMENT_PATTERN과 같다. "1권", "01화"는 1권으로 본다.
 /// Rust `regex`는 lookahead가 없어서 뒤쪽 경계를 소비하는 그룹으로 바꿨다(일치 여부만 쓰므로 결과가 같다).

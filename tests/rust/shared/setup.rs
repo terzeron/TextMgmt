@@ -1,4 +1,4 @@
-//! 테스트 환경 변수 고정. backend 공용 도구(`mod.rs`)와 backend를 쓰지 않는 crate 테스트(`tests/rust/classifier/common`)가 함께 쓴다.
+//! 테스트 환경 변수 고정. 여러 crate 테스트의 공용 도구(`tests/rust/<crate>/common/mod.rs`)가 함께 쓴다.
 
 use std::path::PathBuf;
 use std::sync::Once;

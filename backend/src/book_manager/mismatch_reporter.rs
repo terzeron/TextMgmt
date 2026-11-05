@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::BookManager;
-use crate::es_manager::{Hit, PagedHits};
+use search_manager::{Hit, PagedHits};
 
 /// ES 쪽 카테고리 하나의 경로 집합.
 #[derive(Default)]

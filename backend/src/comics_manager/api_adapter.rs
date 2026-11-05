@@ -6,7 +6,7 @@ use crate::book_manager::{BookDeletion, BookManager, CoverPage};
 use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
-use crate::es_manager::EsManagerApi;
+use search_manager::EsManagerApi;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

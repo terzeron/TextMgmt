@@ -1,5 +1,12 @@
 //! 여러 테스트 파일이 함께 쓰는 준비물(helper·대역). 같은 본문의 사본을 한곳에 모았다.
 #![allow(dead_code)]
+// 인증·시각·환경 helper는 `tests/rust/shared/`로 옮겼다. 기존 테스트의 경로를 그대로 쓰도록 다시 내보낸다.
+#[allow(unused_imports)]
+pub use super::auth_fixtures::{FakeRequest, SECRET, decode, encode_hs256, fixture, make_request};
+#[allow(unused_imports)]
+pub use super::clock::now;
+#[allow(unused_imports)]
+pub use super::env::process_env;
 use super::env::{EnvGuard, EnvReadGuard};
 use super::epub::{EpubSpec, make_epub};
 use super::es_fake::{Docs, FakeEsManager};
@@ -8,10 +15,10 @@ use super::image::{BLUE, color, encode, encode_image, image_size, jpeg_bytes};
 use super::pdf::make_blank_pdf;
 use super::zipx::{Members, ZipMode, read_zip_entry, rewrite_epub_members, write_zip, write_zip_with};
 use super::{Response, TestClient, es_dummy};
+use auth_manager::auth_service::Claims;
+use auth_manager::refresh_token_store::{RefreshTokenStoreApi, Rotation, SessionPage, SessionQuery, SessionRevocation, StoreError};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
 use backend::api_router::{AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, ReloadProgress, TaskHandle, TaskRunner};
-use backend::auth_service::Claims;
-use backend::auth_service::RequestParts;
 use backend::book_manager::{AddBookError, BookAdder, BookContent, BookLookup, BookManager, BookManagerDeps, BookRef, BookResponse, CoverPage, FileReader, ProposeOptions, ReadFileError, Thumbnailer};
 use backend::book_manager::{ApplyResult, EpubValidation, PdfValidation, ProposeResult};
 use backend::book_manager::{FsOnlyFile, MismatchDetails, MismatchReload, ReloadCounts, ReloadedFiles};
@@ -20,12 +27,10 @@ use backend::cover_management::CoverManagement;
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover;
 use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, EpubRewrite, Limits, edit_images};
-use backend::es_manager::{EsError, EsManagerApi, HttpTransport};
-use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, SessionPage, SessionQuery, SessionRevocation, StoreError};
 use db::category_mapping::CategoryMapping;
 use db::{DbValue, Row};
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage, RgbaImage};
-use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use search_manager::{EsError, EsManagerApi};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -36,7 +41,6 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, atomic::AtomicUsize, atomic::Ordering};
 use std::task::{Context, Poll, Waker};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use zip::ZipArchive;
 
@@ -360,10 +364,6 @@ pub fn namelist<R: Read + std::io::Seek>(zf: &mut ZipArchive<R>) -> Vec<String> 
     (0..zf.len()).map(|i| zf.by_index(i).unwrap().name().unwrap().into_owned()).collect()
 }
 
-pub fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
-}
-
 // ── 공용 상수와 헬퍼 ─────────────────────────────────────────────────────────
 
 pub fn now_plus_3600() -> u64 {
@@ -452,11 +452,6 @@ pub fn pdf_bytes(pages: usize, width: u32, height: u32, info: &[(&str, &str)]) -
 
 pub fn png(c: &str) -> Vec<u8> {
     encode(DynamicImage::ImageRgb8(RgbImage::from_pixel(200, 100, Rgb(color(c)))), ImageFormat::Png)
-}
-
-/// `load_jwt_secret(env: EnvFn)`에 넘기는 실제 프로세스 환경.
-pub fn process_env(key: &str) -> Option<String> {
-    std::env::var(key).ok()
 }
 
 pub fn proposal_result(total: usize, items: &[Value]) -> Value {
@@ -554,10 +549,6 @@ pub fn tmp_dir() -> TempDir {
 pub fn to_response(v: Value) -> BookResponse {
     let r = v.get("__response__").cloned().unwrap_or(Value::Null);
     BookResponse { status_code: 200, media_type: r["media_type"].as_str().map(str::to_string), headers: Vec::new(), body: r["content"].as_str().unwrap_or("").as_bytes().to_vec() }
-}
-
-pub fn transport(url: &str) -> HttpTransport {
-    HttpTransport::new(url, "elastic", "pw", "books", Duration::from_secs(5))
 }
 
 // TODO(common): `es_dummy::truthy(Option<&Value>)`를 `&Value`로 받는 얇은 래퍼. cover_fixtures::truthy를 대신한다.
@@ -717,21 +708,6 @@ impl BookLookup for FakeBooks {
             (None, Some(error)) => Err(BookLookupError::Failed(error)),
             (None, None) => Err(BookLookupError::NotFound(book_id)),
         }
-    }
-}
-
-pub struct FakeRequest {
-    pub headers: HashMap<String, String>,
-    pub cookies: HashMap<String, String>,
-}
-
-impl RequestParts for FakeRequest {
-    fn header(&self, name: &str) -> Option<String> {
-        self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone())
-    }
-
-    fn cookie(&self, name: &str) -> Option<String> {
-        self.cookies.get(name).cloned()
     }
 }
 
@@ -1853,8 +1829,6 @@ pub struct RecordedArgs {
 
 // ---- 환경 변수 / 토큰 / 요청 헬퍼 ----
 
-pub const SECRET: &str = "testsecret123";
-
 /// 책 루트(`books`)와 서비스 파일(`meta`)을 나눠 둔다. 캐시 파일이 책으로 스캔되면 안 된다.
 pub struct Setup {
     pub _tmp: TempDir,
@@ -1902,10 +1876,6 @@ pub fn continue_callback<'a>(f: Option<&'a (dyn Fn() -> bool + Send + Sync)>) ->
     })
 }
 
-pub fn decode(token: &str) -> Value {
-    jsonwebtoken::decode::<Value>(token, &DecodingKey::from_secret(SECRET.as_bytes()), &Validation::new(Algorithm::HS256)).unwrap().claims
-}
-
 pub fn effective(store: &Store, content_type: &str, stale_seconds: f64) -> Value {
     let mut current = store.lock().unwrap().get(content_type).cloned().unwrap_or_else(|| json!({"status": "idle", "content_type": content_type}));
     let obj = current.as_object_mut().unwrap();
@@ -1919,10 +1889,6 @@ pub fn effective(store: &Store, content_type: &str, stale_seconds: f64) -> Value
     current
 }
 
-pub fn encode_hs256(payload: &Value) -> String {
-    jsonwebtoken::encode(&Header::new(Algorithm::HS256), payload, &EncodingKey::from_secret(SECRET.as_bytes())).unwrap()
-}
-
 pub fn fetcher<F: Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync + 'static>(f: F) -> Arc<dyn ImageFetcher> {
     Arc::new(FnFetcher(f))
 }
@@ -1930,14 +1896,6 @@ pub fn fetcher<F: Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync + 'stati
 /// 구 `loader_read_file_override(closure)`.
 pub fn file_reader(f: impl Fn(&Path) -> Result<Value, LoaderReadError> + Send + Sync + 'static) -> Arc<dyn FileReader> {
     Arc::new(FnFileReader(Box::new(f)))
-}
-
-pub fn fixture() -> EnvGuard {
-    let mut env = EnvGuard::new();
-    env.set("TM_JWT_SECRET", SECRET);
-    env.set("TM_ADMIN_EMAIL", "admin@example.com");
-    env.set("TM_ALLOWED_EMAILS", "viewer1@example.com,viewer2@example.com");
-    env
 }
 
 /// `install_classify_status_store`에 대응한다. 단순히 반환값을 박지 않고 전이 규칙을 흉내 낸다.
@@ -2007,18 +1965,6 @@ pub fn install_classify_status_store(mock_cat: &Mock, initial: Option<Value>) ->
     });
 
     store
-}
-
-pub fn make_request(token: Option<&str>, cookie_token: Option<&str>) -> FakeRequest {
-    let mut headers = HashMap::new();
-    let mut cookies = HashMap::new();
-    if let Some(t) = token.filter(|t| !t.is_empty()) {
-        headers.insert("Authorization".to_string(), format!("Bearer {t}"));
-    }
-    if let Some(c) = cookie_token.filter(|c| !c.is_empty()) {
-        cookies.insert("tm_access_token".to_string(), c.to_string());
-    }
-    FakeRequest { headers, cookies }
 }
 
 pub fn mock_bm() -> Arc<MockBm> {

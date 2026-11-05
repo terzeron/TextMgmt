@@ -7,16 +7,16 @@
 //!   컨테이너는 테스트가 끝나면(실패해도) `docker rm -f`로 지운다. 운영 ES와 `.env`는 쓰지 않는다.
 //!
 //! 가정한 API:
-//! - `backend::es_manager::HttpTransport::new(url: &str, user: &str, password: &str, index: &str, timeout: Duration)` (`EsTransport` 구현, http 전용)
-//! - `backend::es_manager::RealEsConnector`(`EsConnector` 구현)와 `ESManager::connect`
+//! - `search_manager::HttpTransport::new(url: &str, user: &str, password: &str, index: &str, timeout: Duration)` (`EsTransport` 구현, http 전용)
+//! - `search_manager::RealEsConnector`(`EsConnector` 구현)와 `ESManager::connect`
 
 #[path = "../common/mod.rs"]
 mod common;
 
 #[path = "../../shared/tls_server.rs"]
 mod tls_server;
-use crate::common::shared_fixtures::transport;
-use backend::es_manager::{Conflicts, ESManager, EsError, EsRequest, EsTransport, HttpTransport, RealEsConnector};
+use crate::common::transport;
+use search_manager::{Conflicts, ESManager, EsError, EsRequest, EsTransport, HttpTransport, RealEsConnector};
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -255,8 +255,8 @@ fn real_connector_connects_through_http_and_uses_env_index() {
 
 mod real_transport {
     use super::tls_server;
-    use crate::common::shared_fixtures::transport;
-    use backend::es_manager::{
+    use crate::common::transport;
+    use search_manager::{
         BackfillReport, CoverFileHits, DeleteByQueryResult, ESManager, EsError, EsRequest, EsTransport, Hit, HttpTransport, PagedHits, PdfStats, SimilarDocsArgs, UpdateByQueryResult, UpdateFields,
     };
     use serde_json::{Value, json};
@@ -362,7 +362,7 @@ mod real_transport {
     #[test]
     fn https_uses_the_configured_ca() {
         let (url, server) = tls_server::serve_tls_once();
-        let ca_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/rust/shared/tls/local-es.crt");
+        let ca_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/rust/shared/tls/local-es.crt");
         let t = HttpTransport::new_with_ca(&url, "u", "p", "books", Duration::from_secs(1), Some(&ca_path));
         assert_eq!(t.send(&EsRequest::Info).unwrap()["version"]["number"], "9.1.0");
         server.join().unwrap();

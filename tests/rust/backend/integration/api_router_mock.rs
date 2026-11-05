@@ -5,8 +5,8 @@ mod common;
 use crate::common::auth_fakes::FixedRole;
 use crate::common::shared_fixtures::{CallArgs, DeferredRunner, Fut, Fx, Mock, RecordedArgs, Store, arg, arg_or, effective, install_classify_status_store, ready, store_set};
 use crate::common::shared_fixtures::{ListDirFs, admin_payload, arr, enc, is_truthy, now_plus_3600, proposal_result};
+use auth_manager::auth_service::Claims;
 use backend::api_router::{BookstoreFactory, BookstoreSearch, GoogleVerifier, TaskRunner};
-use backend::auth_service::Claims;
 use backend::book_metadata::Book;
 use bookstore::store_clients::SearchRow;
 use serde_json::{Value, json};
@@ -2446,7 +2446,7 @@ mod auth_refresh {
         let rt_store = Mock::new();
         rt_store.returns("rotate", json!("ok"));
         let fx = fx_with_refresh_store(&rt_store);
-        let token = backend::auth_service::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
+        let token = auth_manager::auth_service::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
         let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &token).await;
         assert_eq!(r.status, 200);
         assert_eq!(r.json()["status"], "success");
@@ -2456,7 +2456,7 @@ mod auth_refresh {
     #[tokio::test]
     async fn test_unauthorized_email_returns_403() {
         let fx = Fx::new();
-        let token = backend::auth_service::create_refresh_token("stranger@other.com", "viewer", Some("X"), None);
+        let token = auth_manager::auth_service::create_refresh_token("stranger@other.com", "viewer", Some("X"), None);
         let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &token).await;
         assert_eq!(r.status, 403);
     }
@@ -2466,7 +2466,7 @@ mod auth_refresh {
         let rt_store = Mock::new();
         rt_store.returns("rotate", json!("reused"));
         let fx = fx_with_refresh_store(&rt_store);
-        let token = backend::auth_service::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
+        let token = auth_manager::auth_service::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
         let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &token).await;
         assert_eq!(r.status, 401);
         assert_eq!(r.json()["detail"], "Invalid refresh token state");
@@ -2481,7 +2481,7 @@ mod auth_refresh {
         let rt_store = Mock::new();
         rt_store.raises("rotate", "DB connection lost");
         let fx = fx_with_refresh_store(&rt_store);
-        let token = backend::auth_service::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
+        let token = auth_manager::auth_service::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
         let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &token).await;
         assert_eq!(r.status, 503);
     }
@@ -2505,7 +2505,7 @@ async fn test_logout_revokes_refresh_family_when_cookie_is_present() {
     let rt_store = Mock::new();
     let store = rt_store.clone();
     let fx = Fx::tweaked(move |d| d.with_refresh_token_store(Arc::new(store)));
-    let token = backend::auth_service::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
+    let token = auth_manager::auth_service::create_refresh_token("admin@test.com", "admin", Some("Admin"), None);
     let r = fx.post_with_cookie("/auth/logout", "tm_refresh_token", &token).await;
     assert_eq!(r.status, 200);
     assert_eq!(rt_store.call_count("revoke_family"), 1);

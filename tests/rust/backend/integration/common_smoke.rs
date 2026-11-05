@@ -1,9 +1,9 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use backend::es_manager::EsManagerApi;
 use common::es_fake::FakeEsManager;
 use common::{TestClient, setup_env};
+use search_manager::EsManagerApi;
 
 #[test]
 fn setup_env_sets_the_test_variables() {

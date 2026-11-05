@@ -1,7 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
+use auth_manager::auth_service::Claims;
 use backend::api_router::{AppDeps, AuthMode, CategoryMappingApi, MappingError, app_with};
-use backend::auth_service::Claims;
 use backend::book_manager::{BookManager, BookManagerDeps};
 use common::TestClient;
 use common::es_fake::{FakeEsManager, Hit};

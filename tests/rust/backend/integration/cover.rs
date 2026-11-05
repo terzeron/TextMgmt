@@ -1,7 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use backend::auth_service::Claims;
+use auth_manager::auth_service::Claims;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

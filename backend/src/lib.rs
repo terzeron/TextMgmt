@@ -4,7 +4,6 @@
 #![allow(special_module_name)]
 
 pub mod api_router;
-pub mod auth_service;
 pub mod book_manager;
 pub mod book_metadata;
 pub mod comics_manager;
@@ -14,10 +13,8 @@ pub mod cover_status;
 pub mod direct_cover_url;
 pub mod epub_cover;
 pub mod epub_metadata_reader;
-pub mod es_manager;
 pub(crate) mod image_edit;
 pub mod pdf_page_reader;
-pub mod refresh_token_store;
 pub mod stderr_logger;
 pub mod task_runner;
 pub mod view_history_store;

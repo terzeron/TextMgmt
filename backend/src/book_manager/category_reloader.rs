@@ -10,7 +10,7 @@ use serde_json::Value;
 use sysdeps::CommandError;
 
 use super::{BookManager, HARD_PARSE_TIMEOUT_SECONDS, MismatchDetails, ReadFileError};
-use crate::es_manager::Docs;
+use search_manager::Docs;
 
 /// `reload_category`의 loader 실행 시간 상한.
 const RELOAD_TIMEOUT: Duration = Duration::from_secs(600);

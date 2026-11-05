@@ -30,9 +30,9 @@ mod cover_member_lookup {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
 
-    use backend::es_manager::{CoverFileHit, CoverFileHits, EsError, EsManagerApi};
     use common::es_fake::FakeEsManager;
     use common::faulty_fs::FaultyFs;
+    use search_manager::{CoverFileHit, CoverFileHits, EsError, EsManagerApi};
 
     use common::zipx::{open_zip, write_zip};
     use serde_json::{Value, json};

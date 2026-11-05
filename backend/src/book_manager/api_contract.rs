@@ -12,7 +12,7 @@ use crate::book_manager::{BookDeletion, CoverPage};
 use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
-use crate::es_manager::EsManagerApi;
+use search_manager::EsManagerApi;
 
 /// 사용 가능한 구현이 없을 때 쓰는 사유 문구. 각 trait의 기본 구현이 돌려준다.
 pub const UNIMPLEMENTED: &str = "unimplemented";
@@ -280,7 +280,7 @@ mod tests {
         assert!(manager.delete_category("fiction", false).await.is_err());
         assert!(manager.preview_delete_category("fiction").await.is_err());
         assert!(manager.path_prefix().as_os_str().is_empty());
-        assert!(matches!(manager.es_manager().create_index(), Err(crate::es_manager::EsError::Unsupported)));
+        assert!(matches!(manager.es_manager().create_index(), Err(search_manager::EsError::Unsupported)));
         assert!(manager.get_book(1).await.is_err());
         assert!(manager.get_categories().await.is_err());
         assert!(manager.get_books_in_category_paged("fiction", None, None).await.is_err());

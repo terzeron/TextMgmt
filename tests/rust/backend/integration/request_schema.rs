@@ -2,9 +2,9 @@
 
 #[path = "../common/mod.rs"]
 mod common;
+use auth_manager::auth_service::Claims;
 use axum::http::Method;
 use backend::api_router::{AppDeps, AuthMode, app_with};
-use backend::auth_service::Claims;
 use common::TestClient;
 
 #[tokio::test]

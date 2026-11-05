@@ -1,9 +1,9 @@
 //! 도서·만화의 메타데이터, 검색, 카테고리 및 최신 목록.
 use super::{ensure_allowed, hidden_categories, is_hidden, kind, manager};
 use crate::api_router::{ApiError, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, RequireAuth, Routes};
-use crate::auth_service::Claims;
 use crate::book_manager::MAX_LATEST_BOOK_COUNT;
 use crate::book_metadata::{Book, BookView};
+use auth_manager::auth_service::Claims;
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},

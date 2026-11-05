@@ -20,8 +20,8 @@ use super::google_oauth::GOOGLE_ISSUERS;
 use super::request_extractors::ClientInfo;
 use super::request_extractors::{ApiJson, ApiQuery, RequireAdmin, RequireAuth};
 use super::route_registry::Routes;
-use crate::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RequestParts, observation_hash};
-use crate::refresh_token_store::Rotation;
+use auth_manager::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RequestParts, observation_hash};
+use auth_manager::refresh_token_store::Rotation;
 
 /// family_id는 `uuid4().hex`라서 32자 소문자 hex다.
 const FAMILY_ID_LENGTH: usize = 32;
@@ -205,7 +205,7 @@ async fn logout(State(deps): State<Arc<AppDeps>>, headers: HeaderMap) -> ApiResu
         }
     }
     // refresh 쿠키가 없어도 서명된 access 토큰이 가리키는 세션을 폐기한다.
-    if let Ok(payload) = crate::auth_service::extract_payload(&headers) {
+    if let Ok(payload) = auth_manager::auth_service::extract_payload(&headers) {
         let family = payload.family_id;
         if !family.is_empty() && !families.contains(&family) {
             families.push(family);
@@ -251,7 +251,7 @@ async fn list_login_sessions(State(deps): State<Arc<AppDeps>>, RequireAdmin(_): 
     if !SESSION_STATUS_FILTERS.contains(&status.as_str()) {
         return Err(ApiError::http(400, &format!("status must be one of: {}", SESSION_STATUS_FILTERS.join(", "))));
     }
-    let query = crate::refresh_token_store::SessionQuery {
+    let query = auth_manager::refresh_token_store::SessionQuery {
         status,
         current_family_id: current_refresh_family_id(&deps, &headers),
         page: page as u32,

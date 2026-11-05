@@ -24,7 +24,7 @@
 //! - 로그는 `log::warn!`로 남기고 `common::log_capture::LogCapture`로 수집한다.
 
 use crate::{common, mysql_fixture};
-use backend::auth_service::Claims;
+use auth_manager::auth_service::Claims;
 
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};

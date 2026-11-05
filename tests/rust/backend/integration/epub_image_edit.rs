@@ -1,7 +1,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use backend::auth_service::Claims;
+use auth_manager::auth_service::Claims;
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
