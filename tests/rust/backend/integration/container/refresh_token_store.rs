@@ -13,7 +13,7 @@
 //!     - `rotate(&self, current_token_id: &str, new_token_id: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64, client_ip: Option<&str>, user_agent: Option<&str>) -> Result<String, StoreError>`
 //!     - `revoke_family(&self, family_id: &str, reason: &str) -> Result<(), StoreError>`
 //!     - `get_token_observation(&self, token_id: &str) -> Result<Option<Value>, StoreError>`
-//!     - `list_sessions(&self, q: &SessionQuery) -> Result<Value, StoreError>`, `revoke_session(&self, family_id: &str) -> Result<Value, StoreError>`
+//!     - `list_sessions(&self, q: &SessionQuery) -> Result<SessionPage, StoreError>`, `revoke_session(&self, family_id: &str) -> Result<SessionRevocation, StoreError>`
 //!     - `session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError>`
 //!   - `struct SessionQuery { status: String, current_family_id: Option<String>, page: u32, page_size: u32, email: Option<String> }`
 //!   - `MySQLRefreshTokenStore::{new() -> Result<Self, StoreError> (TM_MYSQL_* 환경 변수), with_connector(ConnectionProvider) -> Result<Self, StoreError> (_init_db 실행),
@@ -72,6 +72,16 @@ fn rot(s: &dyn RefreshTokenStoreApi, current: &str, new: &str, family_id: &str, 
 
 fn all() -> SessionQuery {
     SessionQuery { status: "all".to_string(), ..Default::default() }
+}
+
+/// 세션 목록의 응답 JSON 모양.
+fn listed(store: &impl RefreshTokenStoreApi, q: &SessionQuery) -> Value {
+    serde_json::to_value(store.list_sessions(q).unwrap()).unwrap()
+}
+
+/// 세션 폐기 결과의 응답 JSON 모양.
+fn revoked(store: &impl RefreshTokenStoreApi, family_id: &str) -> Value {
+    serde_json::to_value(store.revoke_session(family_id).unwrap()).unwrap()
 }
 
 fn items_of(page: &Value) -> Vec<Value> {
@@ -662,12 +672,12 @@ fn test_mysql_rotation_observation_session_listing_and_revoke() {
     let observation = store.get_token_observation("old").unwrap().unwrap();
     assert_eq!(observation["replaced_by_present"], true);
     assert_eq!(observation["revoke_reason"], "rotated");
-    let page = store.list_sessions(&all()).unwrap();
+    let page = listed(&store, &all());
     assert_eq!(page["summary"]["active"], 1);
     assert_eq!(page["items"][0]["token_count"], 2);
     assert_eq!(page["items"][0]["client_ip"], "203.0.113.8");
 
-    let revoked = store.revoke_session(&fam('s')).unwrap();
+    let revoked = revoked(&store, &fam('s'));
     assert_eq!(revoked["found"], true);
     assert_eq!(revoked["revoked"], true);
     assert_eq!(revoked["session"]["status"], "revoked");
@@ -683,7 +693,7 @@ fn test_mysql_rotation_reuse_after_grace_revokes_the_family() {
 
     assert_eq!(rot(&store, "old", "new", &fam('r'), "reader@example.com", issued_at - 100, issued_at + 3600), "ok");
     assert_eq!(rot(&store, "old", "replay", &fam('r'), "reader@example.com", issued_at, issued_at + 3600), "reused");
-    let page = store.list_sessions(&all()).unwrap();
+    let page = listed(&store, &all());
     assert_eq!(page["summary"]["revoked"], 1);
     assert_eq!(page["items"][0]["revoke_reason"], "reuse-detected");
 }
@@ -958,7 +968,7 @@ fn session_fixture() -> (MySQLRefreshTokenStore, i64) {
 fn test_list_sessions_groups_by_family_and_derives_status() {
     let (store, now) = session_fixture();
 
-    let page = store.list_sessions(&all()).unwrap();
+    let page = listed(&store, &all());
 
     let by_email_status: BTreeSet<(String, String)> = items_of(&page).iter().map(|i| (i["email"].as_str().unwrap().to_string(), i["status"].as_str().unwrap().to_string())).collect();
     let expected: BTreeSet<(String, String)> =
@@ -981,7 +991,7 @@ fn test_list_sessions_groups_by_family_and_derives_status() {
 fn test_list_sessions_reports_revoke_reason_only_for_revoked() {
     let (store, _) = session_fixture();
 
-    let items = items_of(&store.list_sessions(&all()).unwrap());
+    let items = items_of(&listed(&store, &all()));
     let by_status = |s: &str| items.iter().find(|i| i["status"] == s).unwrap().clone();
 
     assert_eq!(by_status("revoked")["revoke_reason"], json!("logout"));
@@ -994,7 +1004,7 @@ fn test_list_sessions_reports_revoke_reason_only_for_revoked() {
 fn test_list_sessions_active_filter_and_default() {
     let (store, _) = session_fixture();
 
-    let default_page = store.list_sessions(&SessionQuery::default()).unwrap();
+    let default_page = listed(&store, &SessionQuery::default());
     let statuses: Vec<Value> = items_of(&default_page).iter().map(|i| i["status"].clone()).collect();
     assert_eq!(statuses, vec![json!("active")]);
     // 요약은 필터와 무관하게 전체를 센다
@@ -1006,7 +1016,7 @@ fn test_list_sessions_active_filter_and_default() {
 fn test_list_sessions_does_not_expose_token_internals() {
     let (store, _) = session_fixture();
 
-    let item = items_of(&store.list_sessions(&all()).unwrap()).remove(0);
+    let item = items_of(&listed(&store, &all())).remove(0);
 
     assert!(item.get("jti").is_none());
     assert!(item.get("replaced_by").is_none());
@@ -1051,7 +1061,7 @@ fn test_list_sessions_merges_adjacent_browser_version_upgrade() {
     issue_from(&store, "old1", &fam('d'), "admin@example.com", now - 500, now + 500, "1.2.3.4", &chrome_ua("130"));
     issue_from(&store, "new1", &fam('e'), "admin@example.com", now - 10, now + 1000, "1.2.3.4", &chrome_ua("131"));
 
-    let items = items_of(&store.list_sessions(&all()).unwrap());
+    let items = items_of(&listed(&store, &all()));
 
     assert_eq!(items.len(), 1);
     let merged = &items[0];
@@ -1073,7 +1083,7 @@ fn test_list_sessions_does_not_merge_across_different_ip() {
     issue_from(&store, "f1", &fam('f'), "admin@example.com", now - 500, now + 500, "1.2.3.4", &chrome_ua("130"));
     issue_from(&store, "g1", &fam('0'), "admin@example.com", now - 10, now + 1000, "9.9.9.9", &chrome_ua("131"));
 
-    let items = items_of(&store.list_sessions(&all()).unwrap());
+    let items = items_of(&listed(&store, &all()));
 
     assert_eq!(items.len(), 2);
 }
@@ -1085,7 +1095,7 @@ fn test_list_sessions_does_not_merge_when_version_gap_exceeds_tolerance() {
     issue_from(&store, "h1", &fam('1'), "admin@example.com", now - 500, now + 500, "1.2.3.4", &chrome_ua("125"));
     issue_from(&store, "i1", &fam('2'), "admin@example.com", now - 10, now + 1000, "1.2.3.4", &chrome_ua("131"));
 
-    let items = items_of(&store.list_sessions(&all()).unwrap());
+    let items = items_of(&listed(&store, &all()));
 
     assert_eq!(items.len(), 2);
 }
@@ -1099,7 +1109,7 @@ fn test_list_sessions_never_merges_revoked_sessions() {
     store.revoke_family(&fam('3'), "admin-revoked").unwrap();
     issue_from(&store, "k1", &fam('4'), "admin@example.com", now - 10, now + 1000, "1.2.3.4", &chrome_ua("131"));
 
-    let items = items_of(&store.list_sessions(&all()).unwrap());
+    let items = items_of(&listed(&store, &all()));
 
     assert_eq!(items.len(), 2);
     let statuses: BTreeSet<String> = items.iter().map(|i| i["status"].as_str().unwrap().to_string()).collect();
@@ -1110,7 +1120,7 @@ fn test_list_sessions_never_merges_revoked_sessions() {
 fn test_list_sessions_marks_current_session() {
     let (store, _) = session_fixture();
 
-    let page = store.list_sessions(&SessionQuery { current_family_id: Some(fam('b')), ..all() }).unwrap();
+    let page = listed(&store, &SessionQuery { current_family_id: Some(fam('b')), ..all() });
 
     let current: Vec<Value> = items_of(&page).into_iter().filter(|i| i["is_current"] == true).collect();
     assert_eq!(current.len(), 1);
@@ -1121,8 +1131,8 @@ fn test_list_sessions_marks_current_session() {
 fn test_list_sessions_paginates_newest_activity_first() {
     let (store, _) = session_fixture();
 
-    let first = store.list_sessions(&SessionQuery { page: 1, page_size: 2, ..all() }).unwrap();
-    let second = store.list_sessions(&SessionQuery { page: 2, page_size: 2, ..all() }).unwrap();
+    let first = listed(&store, &SessionQuery { page: 1, page_size: 2, ..all() });
+    let second = listed(&store, &SessionQuery { page: 2, page_size: 2, ..all() });
 
     assert_eq!(first["pagination"], json!({"page": 1, "pageSize": 2, "totalItems": 3, "totalPages": 2}));
     assert_eq!(items_of(&first).len(), 2);
@@ -1141,7 +1151,7 @@ fn test_list_sessions_paginates_newest_activity_first() {
 #[test]
 fn test_list_sessions_page_beyond_end_is_empty() {
     let (store, _) = session_fixture();
-    let page = store.list_sessions(&SessionQuery { page: 99, page_size: 50, ..all() }).unwrap();
+    let page = listed(&store, &SessionQuery { page: 99, page_size: 50, ..all() });
     assert!(items_of(&page).is_empty());
 }
 
@@ -1149,7 +1159,7 @@ fn test_list_sessions_page_beyond_end_is_empty() {
 fn test_list_sessions_filters_by_email() {
     let (store, _) = session_fixture();
 
-    let page = store.list_sessions(&SessionQuery { email: Some("viewer@example.com".to_string()), ..all() }).unwrap();
+    let page = listed(&store, &SessionQuery { email: Some("viewer@example.com".to_string()), ..all() });
 
     let emails: BTreeSet<String> = items_of(&page).iter().map(|i| i["email"].as_str().unwrap().to_string()).collect();
     assert_eq!(emails, BTreeSet::from(["viewer@example.com".to_string()]));
@@ -1160,7 +1170,7 @@ fn test_list_sessions_filters_by_email() {
 fn test_list_sessions_empty_store() {
     let store = memory_mysql_store();
 
-    let page = store.list_sessions(&all()).unwrap();
+    let page = listed(&store, &all());
 
     assert!(items_of(&page).is_empty());
     assert_eq!(page["summary"], json!({"active": 0, "expired": 0, "revoked": 0, "total": 0}));
@@ -1171,7 +1181,7 @@ fn test_list_sessions_empty_store() {
 fn test_revoke_session_revokes_whole_family() {
     let (store, _) = session_fixture();
 
-    let result = store.revoke_session(&fam('a')).unwrap();
+    let result = revoked(&store, &fam('a'));
 
     assert_eq!(result["found"], json!(true));
     assert_eq!(result["revoked"], json!(true));
@@ -1185,9 +1195,9 @@ fn test_revoke_session_revokes_whole_family() {
 #[test]
 fn test_revoke_session_is_idempotent_for_inactive_family() {
     let (store, _) = session_fixture();
-    store.revoke_session(&fam('a')).unwrap();
+    revoked(&store, &fam('a'));
 
-    let again = store.revoke_session(&fam('a')).unwrap();
+    let again = revoked(&store, &fam('a'));
 
     // 이미 활성 토큰이 없으므로 revoked=False 지만 성공이고 현재 상태를 돌려준다
     assert_eq!(again["found"], json!(true));
@@ -1199,7 +1209,7 @@ fn test_revoke_session_is_idempotent_for_inactive_family() {
 fn test_revoke_session_keeps_existing_terminal_reason() {
     let (store, _) = session_fixture();
 
-    let result = store.revoke_session(&fam('b')).unwrap();
+    let result = revoked(&store, &fam('b'));
 
     assert_eq!(result["found"], json!(true));
     assert_eq!(result["revoked"], json!(false));
@@ -1211,7 +1221,7 @@ fn test_revoke_session_keeps_existing_terminal_reason() {
 fn test_revoke_session_unknown_family() {
     let (store, _) = session_fixture();
 
-    let result = store.revoke_session(&fam('d')).unwrap();
+    let result = revoked(&store, &fam('d'));
 
     assert_eq!(result, json!({"found": false, "revoked": false, "session": null}));
 }
@@ -1220,9 +1230,9 @@ fn test_revoke_session_unknown_family() {
 fn test_revoke_session_does_not_touch_other_families() {
     let (store, _) = session_fixture();
 
-    store.revoke_session(&fam('a')).unwrap();
+    revoked(&store, &fam('a'));
 
-    let page = store.list_sessions(&all()).unwrap();
+    let page = listed(&store, &all());
     let by_id = |id: &str| items_of(&page).into_iter().find(|i| i["session_id"] == id).unwrap();
     assert_eq!(by_id(&fam('b'))["revoke_reason"], json!("logout"));
     assert_eq!(by_id(&fam('c'))["status"], json!("expired"));
@@ -1235,7 +1245,7 @@ fn test_mysql_list_sessions_uses_same_derivation() {
     let (provider, _conns) = install_fresh_conns(Some(mysql_session_row(now)));
     let store = MySQLRefreshTokenStore::with_connector(provider).unwrap();
 
-    let page = store.list_sessions(&SessionQuery { current_family_id: Some(fam('a')), ..all() }).unwrap();
+    let page = listed(&store, &SessionQuery { current_family_id: Some(fam('a')), ..all() });
 
     assert_eq!(page["summary"], json!({"active": 1, "expired": 0, "revoked": 0, "total": 1}));
     let item = &items_of(&page)[0];
@@ -1251,7 +1261,7 @@ fn test_mysql_revoke_session_revokes_and_reports_status() {
     let (provider, conns) = install_fresh_conns(Some(mysql_session_row(now)));
     let store = MySQLRefreshTokenStore::with_connector(provider).unwrap();
 
-    let result = store.revoke_session(&fam('a')).unwrap();
+    let result = revoked(&store, &fam('a'));
 
     assert_eq!(result["found"], json!(true));
     assert_eq!(result["revoked"], json!(true));
@@ -1264,7 +1274,7 @@ fn test_mysql_revoke_session_unknown_family() {
     let (provider, _conns) = install_fresh_conns(None);
     let store = MySQLRefreshTokenStore::with_connector(provider).unwrap();
 
-    assert_eq!(store.revoke_session(&fam('d')).unwrap(), json!({"found": false, "revoked": false, "session": null}));
+    assert_eq!(revoked(&store, &fam('d')), json!({"found": false, "revoked": false, "session": null}));
 }
 
 // ========== 접속 IP / User-Agent 수집 ==========
@@ -1281,7 +1291,7 @@ fn test_list_sessions_reports_latest_client_info() {
     // 같은 세션이 다른 회선에서 갱신되면 최신 값으로 덮인다
     store.rotate("t1", "t2", &fam('a'), "admin@example.com", now - 10, now + 2000, Some("198.51.100.42"), Some(SAFARI_IOS_UA)).unwrap();
 
-    let item = items_of(&store.list_sessions(&all()).unwrap()).remove(0);
+    let item = items_of(&listed(&store, &all())).remove(0);
 
     assert_eq!(item["client_ip"], json!("198.51.100.42"));
     assert_eq!(item["user_agent"], json!(SAFARI_IOS_UA));
@@ -1293,7 +1303,7 @@ fn test_list_sessions_returns_empty_client_info_for_legacy_rows() {
     // 컬럼 추가 이전에 쌓인 세션은 빈 문자열로 나온다(None 이 화면까지 새지 않는다).
     let (store, _) = session_fixture();
 
-    for item in items_of(&store.list_sessions(&all()).unwrap()) {
+    for item in items_of(&listed(&store, &all())) {
         assert_eq!(item["client_ip"], json!(""));
         assert_eq!(item["user_agent"], json!(""));
         assert_eq!(item["user_agent_summary"], json!(""));
@@ -1307,7 +1317,7 @@ fn test_store_truncates_oversized_client_info() {
     let now = now();
     issue_from(&store, "t1", &fam('a'), "admin@example.com", now, now + 1000, "203.0.113.7", &"U".repeat(MAX_USER_AGENT_LENGTH * 2));
 
-    let item = items_of(&store.list_sessions(&all()).unwrap()).remove(0);
+    let item = items_of(&listed(&store, &all())).remove(0);
 
     assert_eq!(item["user_agent"].as_str().unwrap().chars().count(), MAX_USER_AGENT_LENGTH);
 }
@@ -1372,7 +1382,7 @@ fn test_mysql_aggregate_sql_runs_and_reports_latest_client_info() {
     issue_from(&store, "t1", &fam('a'), "admin@example.com", now - 100, now + 1000, "203.0.113.7", CHROME_MAC_UA);
     assert_eq!(store.rotate("t1", "t2", &fam('a'), "admin@example.com", now - 10, now + 2000, Some("198.51.100.42"), Some(SAFARI_IOS_UA)).unwrap(), Rotation::Ok);
 
-    let page = store.list_sessions(&all()).unwrap();
+    let page = listed(&store, &all());
 
     assert_eq!(items_of(&page).len(), 1);
     let item = &items_of(&page)[0];
@@ -1391,7 +1401,7 @@ fn test_mysql_aggregate_sql_filters_by_email() {
     issue_from(&store, "t1", &fam('a'), "admin@example.com", now, now + 1000, "203.0.113.7", CHROME_MAC_UA);
     issue_from(&store, "t2", &fam('b'), "viewer@example.com", now, now + 1000, "198.51.100.42", SAFARI_IOS_UA);
 
-    let page = store.list_sessions(&SessionQuery { email: Some("viewer@example.com".to_string()), ..all() }).unwrap();
+    let page = listed(&store, &SessionQuery { email: Some("viewer@example.com".to_string()), ..all() });
 
     let emails: Vec<Value> = items_of(&page).iter().map(|i| i["email"].clone()).collect();
     assert_eq!(emails, vec![json!("viewer@example.com")]);
@@ -1419,7 +1429,7 @@ fn test_mysql_migration_adds_columns_to_legacy_table() {
 
     let store = MySQLRefreshTokenStore::new().unwrap(); // init_db 가 마이그레이션을 수행한다
 
-    let item = items_of(&store.list_sessions(&all()).unwrap()).remove(0);
+    let item = items_of(&listed(&store, &all())).remove(0);
     assert_eq!(item["client_ip"], json!(""));
     assert_eq!(item["user_agent"], json!(""));
 }

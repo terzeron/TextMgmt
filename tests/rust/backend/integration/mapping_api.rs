@@ -5,6 +5,7 @@ use backend::auth_service::Claims;
 use backend::main::{AppDeps, AuthMode, CategoryMappingApi, MappingError, app_with};
 use common::TestClient;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, ThreadId};
 
@@ -25,9 +26,9 @@ impl Mapping {
     }
 }
 impl CategoryMappingApi for Mapping {
-    fn get_all_mappings(&self, ct: &str) -> Result<Value, MappingError> {
+    fn get_all_mappings(&self, ct: &str) -> Result<BTreeMap<String, Vec<String>>, MappingError> {
         self.call("get_all", json!(ct))?;
-        Ok(json!({"fiction":["one"]}))
+        Ok(BTreeMap::from([("fiction".to_string(), vec!["one".to_string()])]))
     }
     fn get_keywords(&self, category: &str, ct: &str) -> Result<Vec<String>, MappingError> {
         self.call("get_keywords", json!([category, ct]))?;

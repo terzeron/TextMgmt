@@ -7,6 +7,7 @@
 //! 메서드만 먼저 정의한 뼈대다. 새 라우트가 메서드를 더 필요로 하면 여기에 기본 구현과 함께 추가한다.
 //! (실제 `BookManager`가 생기면 `backend::book_manager`가 이 trait를 `pub use`하거나 구현한다.)
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use async_trait::async_trait;
@@ -126,7 +127,8 @@ pub trait CategoryMappingApi: Send + Sync {
     fn rename_category(&self, _old: &str, _new: &str, _content_type: &str) -> Result<bool, MappingError> {
         unimplemented_mapping()
     }
-    fn get_all_mappings(&self, _content_type: &str) -> Result<Value, MappingError> {
+    /// 카테고리 → 키워드 목록.
+    fn get_all_mappings(&self, _content_type: &str) -> Result<BTreeMap<String, Vec<String>>, MappingError> {
         unimplemented_mapping()
     }
     fn get_keywords(&self, _category: &str, _content_type: &str) -> Result<Vec<String>, MappingError> {
@@ -222,8 +224,8 @@ impl CategoryMappingApi for CategoryMapping {
     fn rename_category(&self, old: &str, new: &str, content_type: &str) -> Result<bool, MappingError> {
         Ok(CategoryMapping::rename_category(self, old, new, content_type))
     }
-    fn get_all_mappings(&self, content_type: &str) -> Result<Value, MappingError> {
-        CategoryMapping::get_all_mappings(self, content_type).map(|value| serde_json::json!(value)).map_err(|e| MappingError::Other(e.to_string()))
+    fn get_all_mappings(&self, content_type: &str) -> Result<BTreeMap<String, Vec<String>>, MappingError> {
+        CategoryMapping::get_all_mappings(self, content_type).map_err(|e| MappingError::Other(e.to_string()))
     }
     fn get_keywords(&self, category: &str, content_type: &str) -> Result<Vec<String>, MappingError> {
         CategoryMapping::get_keywords(self, category, content_type).map_err(|e| MappingError::Other(e.to_string()))

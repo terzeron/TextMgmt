@@ -288,7 +288,7 @@ async fn revoke_login_session(State(deps): State<Arc<AppDeps>>, RequireAdmin(adm
             return Err(ApiError::unavailable());
         }
     };
-    if is_falsy(outcome.get("found")) {
+    if !outcome.found {
         return Err(ApiError::http(404, "Session not found"));
     }
 
@@ -296,15 +296,18 @@ async fn revoke_login_session(State(deps): State<Arc<AppDeps>>, RequireAdmin(adm
     // 관리자 행위 감사 로그. 관리자와 대상 세션은 해시로만 남긴다.
     log::warn!("Admin admin_hash={} revoked login session session_hash={} revoked_current={revoked_current}", observation_hash(&admin.email), observation_hash(&session_id));
 
-    let session = outcome.get("session").filter(|s| !s.is_null()).cloned().unwrap_or_else(|| json!({}));
+    let (status, revoke_reason) = match &outcome.session {
+        Some(session) => (session.status.as_str(), session.revoke_reason.clone()),
+        None => ("revoked", None),
+    };
     let mut response = json_response(
         200,
         &json!({"status": "success", "result": {
             "session_id": session_id,
-            "revoked": outcome.get("revoked").cloned().unwrap_or(Value::Null),
+            "revoked": outcome.revoked,
             "revoked_current": revoked_current,
-            "status": session.get("status").and_then(Value::as_str).unwrap_or("revoked"),
-            "revoke_reason": session.get("revoke_reason").cloned().unwrap_or(Value::Null),
+            "status": status,
+            "revoke_reason": revoke_reason,
         }}),
     );
     if revoked_current {

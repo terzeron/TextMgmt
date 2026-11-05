@@ -159,8 +159,9 @@ async fn run_classify_proposal_job(
         log::error!("분류 제안 항목 초기화 실패: {error}");
         return;
     }
+    // 분류 제안 입력은 아직 `{카테고리: [키워드]}` JSON을 받는다.
     let mappings = match mapping.get_all_mappings(&content_type) {
-        Ok(value) => value,
+        Ok(mappings) => json!(mappings),
         Err(error) => {
             set_proposal_failed(mapping.as_ref(), &content_type, "분류 제안에 실패했습니다.");
             log::error!("분류 제안 매핑 조회 실패: {error}");
@@ -490,6 +491,7 @@ mod proposal_tests {
     use crate::book_manager::{ProposalItem, ProposeResult};
     use crate::main::{BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges};
     use serde_json::{Value, json};
+    use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
     struct ProposalSetupMapping {
@@ -503,8 +505,8 @@ mod proposal_tests {
             if self.clear_error { Err(MappingError::Other("clear failed".into())) } else { Ok(()) }
         }
 
-        fn get_all_mappings(&self, _: &str) -> Result<Value, MappingError> {
-            if self.mappings_error { Err(MappingError::Other("mappings failed".into())) } else { Ok(json!({})) }
+        fn get_all_mappings(&self, _: &str) -> Result<BTreeMap<String, Vec<String>>, MappingError> {
+            if self.mappings_error { Err(MappingError::Other("mappings failed".into())) } else { Ok(BTreeMap::new()) }
         }
 
         fn get_classify_proposal_status(&self, _: &str, _: i64) -> Result<Value, MappingError> {
@@ -534,8 +536,8 @@ mod proposal_tests {
             Ok(())
         }
 
-        fn get_all_mappings(&self, _: &str) -> Result<Value, MappingError> {
-            Ok(json!({"fiction": ["keyword"]}))
+        fn get_all_mappings(&self, _: &str) -> Result<BTreeMap<String, Vec<String>>, MappingError> {
+            Ok(BTreeMap::from([("fiction".to_string(), vec!["keyword".to_string()])]))
         }
 
         fn get_classify_proposal_status(&self, _: &str, _: i64) -> Result<Value, MappingError> {

@@ -9,6 +9,7 @@ use std::fmt;
 use std::sync::{Arc, LazyLock};
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sysdeps::{Clock, SystemClock};
 
@@ -269,27 +270,89 @@ struct Session {
     merged_family_ids: Vec<String>,
 }
 
+/// 관리자 화면의 로그인 세션 한 줄.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionView {
+    pub session_id: String,
+    /// 화면에 보일 짧은 이름. 세션 ID 앞부분에 `...`를 붙인다.
+    pub session_label: String,
+    pub email: String,
+    /// active·expired·revoked 중 하나.
+    pub status: String,
+    pub created_at: i64,
+    pub last_seen_at: i64,
+    pub expires_at: i64,
+    pub revoked_at: Option<i64>,
+    pub revoke_reason: Option<String>,
+    pub token_count: i64,
+    pub valid_token_count: i64,
+    pub client_ip: String,
+    pub user_agent: String,
+    pub user_agent_summary: String,
+    pub is_current: bool,
+    pub merged_family_ids: Vec<String>,
+}
+
+/// 세션 목록 쪽 정보. 키 이름은 프런트엔드 표 컴포넌트가 정한 camelCase다.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SessionPagination {
+    pub page: u32,
+    pub page_size: u32,
+    pub total_items: usize,
+    pub total_pages: usize,
+}
+
+/// 상태별 세션 수. 필터와 무관하게 전체를 센다.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionSummary {
+    pub active: usize,
+    pub expired: usize,
+    pub revoked: usize,
+    pub total: usize,
+}
+
+/// 로그인 세션 목록 한 쪽.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionPage {
+    pub items: Vec<SessionView>,
+    pub pagination: SessionPagination,
+    pub summary: SessionSummary,
+}
+
+/// 세션 폐기 결과. `revoked`는 폐기 전에 살아 있는 토큰이 있었는가다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionRevocation {
+    pub found: bool,
+    pub revoked: bool,
+    pub session: Option<SessionView>,
+}
+
 impl Session {
-    fn to_json(&self) -> Value {
+    fn view(&self) -> SessionView {
         let label: String = self.session_id.chars().take(SESSION_LABEL_LENGTH).collect();
-        json!({
-            "session_id": self.session_id,
-            "session_label": format!("{label}..."),
-            "email": self.email,
-            "status": self.status,
-            "created_at": self.created_at,
-            "last_seen_at": self.last_seen_at,
-            "expires_at": self.expires_at,
-            "revoked_at": self.revoked_at,
-            "revoke_reason": self.revoke_reason,
-            "token_count": self.token_count,
-            "valid_token_count": self.valid_token_count,
-            "client_ip": self.client_ip,
-            "user_agent": self.user_agent,
-            "user_agent_summary": summarize_user_agent(&self.user_agent),
-            "is_current": self.is_current,
-            "merged_family_ids": self.merged_family_ids,
-        })
+        SessionView {
+            session_id: self.session_id.clone(),
+            session_label: format!("{label}..."),
+            email: self.email.clone(),
+            status: self.status.to_string(),
+            created_at: self.created_at,
+            last_seen_at: self.last_seen_at,
+            expires_at: self.expires_at,
+            revoked_at: self.revoked_at,
+            revoke_reason: self.revoke_reason.clone(),
+            token_count: self.token_count,
+            valid_token_count: self.valid_token_count,
+            client_ip: self.client_ip.clone(),
+            user_agent: self.user_agent.clone(),
+            user_agent_summary: summarize_user_agent(&self.user_agent),
+            is_current: self.is_current,
+            merged_family_ids: self.merged_family_ids.clone(),
+        }
     }
 }
 
@@ -404,7 +467,7 @@ fn merge_similar_sessions(sessions: Vec<Session>) -> Vec<Session> {
 }
 
 /// 집계 row 들을 병합·상태 요약·필터·페이징이 적용된 응답으로 만든다.
-fn build_session_page(rows: &[Row], q: &SessionQuery) -> Value {
+fn build_session_page(rows: &[Row], q: &SessionQuery) -> SessionPage {
     let mut sessions: Vec<Session> = rows.iter().map(derive_session).collect();
     if let Some(current) = q.current_family_id.as_deref().filter(|c| !c.is_empty()) {
         for session in sessions.iter_mut().filter(|s| s.session_id == current) {
@@ -413,9 +476,13 @@ fn build_session_page(rows: &[Row], q: &SessionQuery) -> Value {
     }
     let sessions = merge_similar_sessions(sessions);
 
-    let mut summary = json!({"active": 0, "expired": 0, "revoked": 0, "total": sessions.len()});
+    let mut summary = SessionSummary { total: sessions.len(), ..SessionSummary::default() };
     for session in &sessions {
-        summary[session.status] = json!(summary[session.status].as_i64().unwrap_or(0) + 1);
+        match session.status {
+            "active" => summary.active += 1,
+            "expired" => summary.expired += 1,
+            _ => summary.revoked += 1,
+        }
     }
 
     let mut filtered: Vec<&Session> = sessions.iter().filter(|s| q.status == "all" || s.status == q.status).collect();
@@ -423,12 +490,9 @@ fn build_session_page(rows: &[Row], q: &SessionQuery) -> Value {
     let total_items = filtered.len();
     let page_size = q.page_size as usize;
     // page 0 은 빈 목록이다.
-    let items: Vec<Value> = if q.page == 0 { Vec::new() } else { filtered.iter().skip((q.page as usize - 1) * page_size).take(page_size).map(|s| s.to_json()).collect() };
-    json!({
-        "items": items,
-        "pagination": {"page": q.page, "pageSize": q.page_size, "totalItems": total_items, "totalPages": total_items.div_ceil(page_size.max(1)).max(1)},
-        "summary": summary,
-    })
+    let items = if q.page == 0 { Vec::new() } else { filtered.iter().skip((q.page as usize - 1) * page_size).take(page_size).map(|s| s.view()).collect() };
+    let pagination = SessionPagination { page: q.page, page_size: q.page_size, total_items, total_pages: total_items.div_ceil(page_size.max(1)).max(1) };
+    SessionPage { items, pagination, summary }
 }
 
 /// `list_sessions` 인자와 기본값.
@@ -589,21 +653,21 @@ pub trait RefreshTokenStoreApi: Send + Sync {
         Ok(rows.iter().any(|row| text_of(cell(row, "family_id")) == family_id && text_of(cell(row, "email")) == email && int_of(cell(row, "valid_token_count")) > 0))
     }
 
-    fn list_sessions(&self, q: &SessionQuery) -> Result<Value, StoreError> {
+    fn list_sessions(&self, q: &SessionQuery) -> Result<SessionPage, StoreError> {
         let rows = self.session_rows(q.email.as_deref(), None)?;
         Ok(build_session_page(&rows, q))
     }
 
     /// 관리자 요청으로 family 하나를 폐기한다. 존재하지 않으면 found=false.
-    fn revoke_session(&self, family_id: &str) -> Result<Value, StoreError> {
+    fn revoke_session(&self, family_id: &str) -> Result<SessionRevocation, StoreError> {
         let before = self.session_rows(None, Some(family_id))?;
         let Some(first) = before.first() else {
-            return Ok(json!({"found": false, "revoked": false, "session": null}));
+            return Ok(SessionRevocation::default());
         };
         let had_active = int_of(cell(first, "valid_token_count")) > 0;
         self.revoke_family(family_id, ADMIN_REVOKE_REASON)?;
         let after = self.session_rows(None, Some(family_id))?;
-        Ok(json!({"found": true, "revoked": had_active, "session": after.first().map(|r| derive_session(r).to_json())}))
+        Ok(SessionRevocation { found: true, revoked: had_active, session: after.first().map(|r| derive_session(r).view()) })
     }
 }
 

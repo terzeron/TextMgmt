@@ -1160,8 +1160,8 @@ async fn test_search_bookstore_api_limits_results_to_four() {
 struct EndpointMapping;
 
 impl CategoryMappingApi for EndpointMapping {
-    fn get_all_mappings(&self, _ct: &str) -> Result<Value, MappingError> {
-        Ok(json!({"A": ["a"]}))
+    fn get_all_mappings(&self, _ct: &str) -> Result<BTreeMap<String, Vec<String>>, MappingError> {
+        Ok(BTreeMap::from([("A".to_string(), vec!["a".to_string()])]))
     }
 
     fn get_keywords(&self, _category: &str, _ct: &str) -> Result<Vec<String>, MappingError> {
@@ -2050,7 +2050,7 @@ async fn test_search_bookstore_api_branches() {
 struct FailingMapping;
 
 impl CategoryMappingApi for FailingMapping {
-    fn get_all_mappings(&self, _ct: &str) -> Result<Value, MappingError> {
+    fn get_all_mappings(&self, _ct: &str) -> Result<BTreeMap<String, Vec<String>>, MappingError> {
         Err(MappingError::Other("boom".into()))
     }
 

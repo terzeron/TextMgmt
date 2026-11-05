@@ -21,7 +21,7 @@ use backend::epub_cover;
 use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, EpubRewrite, Limits, edit_images};
 use backend::es_manager::{EsError, EsManagerApi, HttpTransport};
 use backend::main::{AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, ReloadProgress, TaskHandle, TaskRunner};
-use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, SessionQuery, StoreError};
+use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, SessionPage, SessionQuery, SessionRevocation, StoreError};
 use db::category_mapping::CategoryMapping;
 use db::{DbValue, Row};
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage, RgbaImage};
@@ -848,15 +848,17 @@ impl RefreshTokenStoreApi for FakeStore {
             .collect())
     }
 
-    fn list_sessions(&self, q: &SessionQuery) -> Result<Value, StoreError> {
+    fn list_sessions(&self, q: &SessionQuery) -> Result<SessionPage, StoreError> {
         // 이름 붙은 인자를 객체로 담아 둔다.
         self.list_calls.lock().unwrap().push(json!({"status": q.status, "current_family_id": q.current_family_id, "page": q.page, "page_size": q.page_size, "email": q.email}));
-        self.sessions.lock().unwrap().clone().unwrap_or_else(|| Err("unset".to_string())).map_err(StoreError::Unsupported)
+        let page = self.sessions.lock().unwrap().clone().unwrap_or_else(|| Err("unset".to_string())).map_err(StoreError::Unsupported)?;
+        Ok(serde_json::from_value(page).expect("세션 목록 모양"))
     }
 
-    fn revoke_session(&self, family_id: &str) -> Result<Value, StoreError> {
+    fn revoke_session(&self, family_id: &str) -> Result<SessionRevocation, StoreError> {
         self.revoke_session_calls.lock().unwrap().push(json!({"family_id": family_id}));
-        self.revoke_result.lock().unwrap().clone().unwrap_or_else(|| Err("unset".to_string())).map_err(StoreError::Unsupported)
+        let outcome = self.revoke_result.lock().unwrap().clone().unwrap_or_else(|| Err("unset".to_string())).map_err(StoreError::Unsupported)?;
+        Ok(serde_json::from_value(outcome).expect("세션 폐기 결과 모양"))
     }
 }
 
@@ -1353,8 +1355,8 @@ impl BookManagerApi for Mock {
 
 /// category_mapping 대역. 이름 붙은 인자(`content_type=...`)로 호출을 기록한다.
 impl CategoryMappingApi for Mock {
-    fn get_all_mappings(&self, ct: &str) -> Result<Value, MappingError> {
-        self.invoke_sync_try("get_all_mappings", call_args!([], {"content_type": ct})).map_err(MappingError::Other)
+    fn get_all_mappings(&self, ct: &str) -> Result<BTreeMap<String, Vec<String>>, MappingError> {
+        self.invoke_sync_try("get_all_mappings", call_args!([], {"content_type": ct})).and_then(|v| serde_json::from_value(v).map_err(|e| e.to_string())).map_err(MappingError::Other)
     }
 
     fn get_keywords(&self, category: &str, ct: &str) -> Result<Vec<String>, MappingError> {
@@ -1717,8 +1719,8 @@ impl CategoryMappingApi for MockCat {
         Ok(())
     }
 
-    fn get_all_mappings(&self, _content_type: &str) -> Result<Value, backend::main::MappingError> {
-        Ok(json!({}))
+    fn get_all_mappings(&self, _content_type: &str) -> Result<BTreeMap<String, Vec<String>>, backend::main::MappingError> {
+        Ok(BTreeMap::new())
     }
 
     fn get_reload_status(&self, _content_type: &str, category: Option<&str>) -> Result<Option<Value>, MappingError> {
