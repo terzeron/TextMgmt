@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use crate::output_formatter::thousands;
 
 use crate::cli_parser::Options;
-use crate::epub_sanitizer::apply;
+use crate::file_rewriter::apply;
+use crate::output_formatter::show;
 
 pub mod xhtml_fix;
 
@@ -116,10 +117,6 @@ pub fn restore_binary_with(path: &Path, trash_dir: &Path, unmangle: &dyn Fn(&[u8
         Err(e) => return error(e.to_string()),
     };
     Some(FixResult::Restored { path: shown, restored_to: target.to_string_lossy().into_owned(), before: raw.len(), after: restored.len(), trash: saved.to_string_lossy().into_owned() })
-}
-
-fn show(text: &str) -> String {
-    crate::output_formatter::sanitize_display(text, usize::MAX, None)
 }
 
 fn name_of(path: &str) -> String {

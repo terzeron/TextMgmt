@@ -8,6 +8,7 @@ pub mod epub;
 pub mod epub_sanitizer;
 pub mod file_prefetcher;
 pub mod file_quarantiner;
+pub(crate) mod file_rewriter;
 pub mod finding_model;
 pub mod format_dispatcher;
 pub mod generic_checker;

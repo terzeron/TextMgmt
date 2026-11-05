@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crate::output_formatter::thousands;
+use crate::output_formatter::{show, thousands};
 use serde_json::{Map, Value, json};
 
 use crate::cli_parser::{BROKEN_DIR_NAME, Options};
@@ -29,11 +29,6 @@ pub type Log<'a> = &'a dyn Fn(&str);
 
 /// 파일 한 건을 옮기는 함수. 테스트가 OS 오류를 주입하는 데 쓴다.
 pub type Mover<'a> = &'a dyn Fn(&Path, &Path) -> io::Result<()>;
-
-/// 터미널에 찍을 문자열에서 제어문자와 방향·서식 문자를 지운다. 경로는 파일을 열거나 옮길 때만 원문을 쓴다.
-fn show(text: &str) -> String {
-    crate::output_formatter::sanitize_display(text, usize::MAX, None)
-}
 
 fn name_of(path: &str, max_chars: usize) -> String {
     Path::new(path).file_name().map(|n| crate::output_formatter::sanitize_display(&n.to_string_lossy(), max_chars, None)).unwrap_or_default()

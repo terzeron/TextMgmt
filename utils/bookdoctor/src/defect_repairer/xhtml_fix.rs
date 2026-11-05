@@ -21,11 +21,10 @@ use sysdeps::zip_opener::zip_entry_name;
 
 use crate::cli_parser::Options;
 use crate::epub::render_checker::xhtml_defect;
-use crate::epub_sanitizer::{
-    HTML_EXTS, Member, apply, create_private_temp, dangling, decode, ext_of, has_serious_security, is_subsequence, package_names, package_text, read_members, read_members_lenient, show, visible_text,
-    write_members,
-};
+use crate::epub_sanitizer::{HTML_EXTS, Member, dangling, decode, ext_of, is_subsequence, package_names, package_text, read_members, read_members_lenient, visible_text, write_members};
+use crate::file_rewriter::{apply_and_report, has_serious_security, rescan_bytes};
 use crate::format_dispatcher::scan_file;
+use crate::output_formatter::show;
 
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 const HTML_VOID: &[&str] = &["area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input", "keygen", "link", "meta", "param", "source", "track", "wbr"];
@@ -497,9 +496,7 @@ fn has_defect(report: &crate::FileReport) -> bool {
 /// 고친 결과를 임시 파일에 써서 다시 검사한다. 본문 결함이 남거나 보안 지표(HIGH 이상)가 있으면 오류다.
 /// 수리는 마크업을 읽는 방식을 바꾼다. 닫히지 않은 따옴표에 가려져 있던 `<script>` 같은 것이 살아날 수 있으므로 결과를 다시 검사한다.
 fn rescan(bytes: &[u8], opts: &Options) -> Result<(), String> {
-    let tmp = create_private_temp(bytes).map_err(|e| e.to_string())?;
-    let report = scan_file(&tmp, opts);
-    let _ = fs::remove_file(&tmp);
+    let report = rescan_bytes(bytes, "epub", opts)?;
     if has_serious_security(&report) {
         return Err("수리한 결과에 보안 지표(HIGH 이상)가 있다. 먼저 --sanitize로 정리한다".to_owned());
     }
@@ -554,16 +551,9 @@ pub fn run(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
         for (name, why) in &plan.dropped {
             writeln!(out, "  - 제거 {} ({})", show(name), show(why))?;
         }
-        {
-            let trash = opts.trash_dir();
-            match apply(path, &plan.bytes, &trash) {
-                Ok(saved) => writeln!(out, "  - 원본 보관 {}", show(&saved.to_string_lossy()))?,
-                Err(e) => {
-                    writeln!(out, "FAIL {shown}: {}", show(&e.to_string()))?;
-                    failed += 1;
-                    continue;
-                }
-            }
+        if !apply_and_report(path, &plan.bytes, opts, &shown, out)? {
+            failed += 1;
+            continue;
         }
         done += 1;
     }

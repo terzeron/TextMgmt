@@ -10,8 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Cursor, Read, Write};
-use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::magic_sniffer::{Sniffed, sniff};
@@ -24,7 +23,9 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::cli_parser::Options;
+use crate::file_rewriter::{apply_and_report, has_serious_security, rescan_bytes};
 use crate::format_dispatcher::scan_file;
+use crate::output_formatter::show;
 
 pub(crate) const HTML_EXTS: &[&str] = &["xhtml", "html", "htm"];
 const SAFE_SCHEMES: &[&str] = &["http", "https", "mailto", "tel", "sms", "epub", "cid", "urn", "tag"];
@@ -186,78 +187,9 @@ pub fn verify(orig: &[u8], new: &[u8]) -> Result<(), String> {
 
 // ---------------------------------------------------------------- 실행
 
-fn unique_trash_path(dir: &Path, file_name: &str) -> PathBuf {
-    let first = dir.join(file_name);
-    if !first.exists() {
-        return first;
-    }
-    let (stem, ext) = file_name.rsplit_once('.').map_or((file_name, String::new()), |(s, e)| (s, format!(".{e}")));
-    (1..).map(|n| dir.join(format!("{stem}.{n}{ext}"))).find(|p| !p.exists()).unwrap_or(first)
-}
-
-/// 원본을 휴지통에 두고, 같은 inode에 새 내용을 덮어쓰고, mtime을 되돌린다.
-pub(crate) fn apply(path: &Path, bytes: &[u8], trash_dir: &Path) -> io::Result<PathBuf> {
-    let meta = fs::metadata(path)?;
-    let mtime = meta.modified()?;
-    fs::create_dir_all(trash_dir)?;
-    let trash = unique_trash_path(trash_dir, &path.file_name().map_or_else(|| "book.epub".into(), |n| n.to_string_lossy().into_owned()));
-    fs::copy(path, &trash)?;
-    if fs::metadata(&trash)?.len() != meta.len() {
-        return Err(io::Error::other("휴지통 사본의 크기가 원본과 다르다"));
-    }
-    fs::OpenOptions::new().write(true).open(&trash)?.set_modified(mtime)?;
-    let mut f = fs::OpenOptions::new().write(true).open(path)?;
-    f.write_all(bytes)?;
-    f.set_len(bytes.len() as u64)?;
-    f.sync_all()?;
-    f.set_modified(mtime)?;
-    if fs::metadata(path)?.ino() != meta.ino() {
-        return Err(io::Error::other("inode가 바뀌었다"));
-    }
-    Ok(trash)
-}
-
-/// 터미널로 나가는 문자열의 제어문자(ESC 등)와 숨은 서식 문자를 지운다. 멤버 이름과 오류 메시지는 파일이 정한 값이다.
-pub(crate) fn show(text: &str) -> String {
-    crate::output_formatter::sanitize_display(text, usize::MAX, None)
-}
-
-pub(crate) fn has_serious_security(report: &crate::FileReport) -> bool {
-    report.findings.iter().any(|f| f.category == Category::Security && f.severity >= Severity::High)
-}
-
-/// 임시 파일을 `O_EXCL`(`create_new`)과 모드 0600으로 만든다. 이름이 겹치거나 링크가 이미 있으면 다른 이름으로 다시 시도한다.
-/// 파일을 새로 만든 경우에만 쓰므로 미리 심어 둔 심볼릭 링크를 따라가지 않는다.
-pub(crate) fn create_private_temp(bytes: &[u8]) -> io::Result<PathBuf> {
-    create_private_temp_ext(bytes, "epub")
-}
-
-/// `create_private_temp`와 같고 확장자를 고른다. 검사는 확장자로 형식을 가르므로 PDF는 `pdf`로 만든다.
-pub(crate) fn create_private_temp_ext(bytes: &[u8], ext: &str) -> io::Result<PathBuf> {
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir();
-    for _ in 0..100 {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
-        let path = dir.join(format!("bookdoctor-sanitize-{}-{nanos:x}-{}.{ext}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)));
-        match fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path) {
-            Ok(mut f) => {
-                f.write_all(bytes)?;
-                return Ok(path);
-            }
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e),
-        }
-    }
-    Err(io::Error::other("임시 파일 이름을 정하지 못했다"))
-}
-
 /// 재구성본을 임시 파일에 써서 다시 검사한다. 보안 지표(HIGH 이상)가 하나라도 남으면 오류다: 허용 목록으로 고치지 못한 문제가 있는 파일은 적용하지 않는다.
 fn rescan(bytes: &[u8], opts: &Options) -> Result<(), String> {
-    let tmp = create_private_temp(bytes).map_err(|e| e.to_string())?;
-    let report = scan_file(&tmp, opts);
-    let _ = fs::remove_file(&tmp);
+    let report = rescan_bytes(bytes, "epub", opts)?;
     let left: Vec<String> = report.findings.iter().filter(|f| f.category == Category::Security && f.severity >= Severity::High).map(|f| f.code.to_string()).collect();
     if left.is_empty() { Ok(()) } else { Err(format!("재검사에서 보안 지표가 남았다: {}", left.join(", "))) }
 }
@@ -309,16 +241,9 @@ pub fn run(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
         for (name, what) in &plan.edited {
             writeln!(out, "  - 수정 {} ({what})", show(name))?;
         }
-        {
-            let trash = opts.trash_dir();
-            match apply(path, &plan.bytes, &trash) {
-                Ok(saved) => writeln!(out, "  - 원본 보관 {}", show(&saved.to_string_lossy()))?,
-                Err(e) => {
-                    writeln!(out, "FAIL {shown}: {}", show(&e.to_string()))?;
-                    failed += 1;
-                    continue;
-                }
-            }
+        if !apply_and_report(path, &plan.bytes, opts, &shown, out)? {
+            failed += 1;
+            continue;
         }
         done += 1;
     }

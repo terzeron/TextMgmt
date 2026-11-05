@@ -95,3 +95,8 @@ pub fn enabled(mode: ColorMode, is_tty: bool, no_color: bool) -> bool {
         ColorMode::Auto => is_tty && !no_color,
     }
 }
+
+/// 터미널에 찍을 문자열에서 제어문자(ESC 등)와 방향·서식 문자를 지운다. 경로·멤버 이름·오류 메시지는 파일이 정한 값이다.
+pub(crate) fn show(text: &str) -> String {
+    sanitize_display(text, usize::MAX, None)
+}

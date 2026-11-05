@@ -16,8 +16,9 @@ use std::path::Path;
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 
 use crate::cli_parser::Options;
-use crate::epub_sanitizer::{apply, create_private_temp_ext, has_serious_security, show};
+use crate::file_rewriter::{apply_and_report, has_serious_security, rescan_bytes};
 use crate::format_dispatcher::scan_file;
+use crate::output_formatter::show;
 use crate::pdf::security_checker::{REF_FILE_BUDGET, count_raw_references};
 
 /// 다시 쓰는 PDF의 크기 상한. lopdf는 객체를 모두 메모리에 올리므로 파일보다 몇 배 큰 메모리를 쓴다.
@@ -199,10 +200,7 @@ pub fn verify(orig: &[u8], new: &[u8]) -> Result<(), String> {
 
 /// 다시 쓴 결과를 임시 파일에 써서 다시 검사한다. 보안 지표(HIGH 이상)가 남으면 오류다.
 fn rescan(bytes: &[u8], opts: &Options) -> Result<(), String> {
-    let tmp = create_private_temp_ext(bytes, "pdf").map_err(|e| e.to_string())?;
-    let report = scan_file(&tmp, opts);
-    let _ = fs::remove_file(&tmp);
-    if has_serious_security(&report) { Err("재검사에서 보안 지표가 남았다".to_owned()) } else { Ok(()) }
+    if has_serious_security(&rescan_bytes(bytes, "pdf", opts)?) { Err("재검사에서 보안 지표가 남았다".to_owned()) } else { Ok(()) }
 }
 
 pub(crate) enum Outcome {
@@ -237,15 +235,5 @@ pub(crate) fn process(path: &Path, shown: &str, opts: &Options, scan_opts: &Opti
     for (location, what) in &plan.removed {
         writeln!(out, "  - 제거 {} ({})", show(location), show(what))?;
     }
-    {
-        let trash = opts.trash_dir();
-        match apply(path, &plan.bytes, &trash) {
-            Ok(saved) => writeln!(out, "  - 원본 보관 {}", show(&saved.to_string_lossy()))?,
-            Err(e) => {
-                writeln!(out, "FAIL {shown}: {}", show(&e.to_string()))?;
-                return Ok(Outcome::Failed);
-            }
-        }
-    }
-    Ok(Outcome::Done)
+    Ok(if apply_and_report(path, &plan.bytes, opts, shown, out)? { Outcome::Done } else { Outcome::Failed })
 }
