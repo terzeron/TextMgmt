@@ -1,18 +1,16 @@
 //! ISBN 추출 테스트.
-//! 외부 도구와 PDF 추출기는 `Backends`로 대역을 꽂는다. 같은 자리를
-//! `Backends`로 주입한다.
+//! 외부 도구와 PDF 단계 실행기는 `Backends`로 대역을 꽂는다.
 
+use std::cell::RefCell;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use doc_reader::head_tail_reader::pdf_text_fallback;
+use doc_reader::pdf::{InProcess, Stage, StageError, StageRunner};
 use isbn::*;
 use stat::Stat;
 use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
@@ -232,7 +230,7 @@ fn external_tools_run_under_the_isbn_time_limit() {
     extract_from_hwp(Path::new("b.hwp"), &f);
     let timeouts = f.timeouts.lock().unwrap();
     assert_eq!(timeouts.len(), 4, "djvused 1번, djvutxt 2번, strings 1번");
-    assert!(timeouts.iter().all(|t| *t == Some(Duration::from_secs_f64(PDF_ISBN_TIMEOUT))), "{timeouts:?}");
+    assert!(timeouts.iter().all(|t| *t == Some(Duration::from_secs(TOOL_TIMEOUT))), "{timeouts:?}");
 }
 
 #[test]
@@ -283,15 +281,42 @@ fn hwp_strings_are_cut_to_head_and_tail() {
 
 // ---- PDF ----
 
-type Primary = Arc<dyn Fn(&Path) -> Result<(String, usize), String> + Send + Sync>;
-type Fallback = Arc<dyn Fn(&Path) -> Result<String, String> + Send + Sync>;
+type StageAnswer = Result<(String, usize), StageError>;
 
-fn backends(stat: &Arc<Stat>, primary: Primary, fallback: Fallback) -> Backends {
-    Backends { pdf_primary: primary, pdf_fallback: fallback, runner: Rc::new(SystemRunner), stat: Arc::clone(stat), pdf_timeout: 5.0, pdf_worker_executable: None }
+/// 단계별 답을 돌려주는 PDF 실행기. 답이 없는 단계를 부르면 panic한다.
+struct FakePdf {
+    answers: Vec<(Stage, StageAnswer)>,
+    calls: RefCell<Vec<Stage>>,
 }
 
-fn never_fallback() -> Fallback {
-    Arc::new(|_| panic!("fallback should not run"))
+impl FakePdf {
+    fn new(answers: Vec<(Stage, StageAnswer)>) -> Self {
+        FakePdf { answers, calls: RefCell::new(Vec::new()) }
+    }
+}
+
+impl StageRunner for FakePdf {
+    fn run(&self, stage: Stage, _path: &Path) -> StageAnswer {
+        self.calls.borrow_mut().push(stage);
+        self.answers.iter().find(|(s, _)| *s == stage).map(|(_, answer)| answer.clone()).unwrap_or_else(|| panic!("{stage:?} should not run"))
+    }
+}
+
+fn text(t: &str, pages: usize) -> StageAnswer {
+    Ok((t.to_owned(), pages))
+}
+
+fn failed() -> StageAnswer {
+    Err(StageError::Failed("boom".into()))
+}
+
+fn backends<'a>(stat: &Arc<Stat>, pdf: &'a FakePdf) -> Backends<'a> {
+    Backends { pdf_runner: pdf, runner: Rc::new(SystemRunner), stat: Arc::clone(stat) }
+}
+
+/// 실제 도구와 현재 프로세스 실행기로 추출한다.
+fn extract_real(path: &Path, content: Option<&str>) -> Vec<String> {
+    extract(path, content, &Backends::real(&InProcess))
 }
 
 fn stage_line(stat: &Stat, stage: &str) -> String {
@@ -305,14 +330,14 @@ fn txt_uses_the_given_content_or_reads_the_file() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("book.txt");
     write(&f, "ISBN 9788994492032");
-    assert!(extract_default(&f, None).contains(&"9788994492032".to_string()));
+    assert!(extract_real(&f, None).contains(&"9788994492032".to_string()));
     write(&f, "no isbn here");
-    assert!(extract_default(&f, None).is_empty());
+    assert!(extract_real(&f, None).is_empty());
     write(&f, "nothing");
-    assert!(extract_default(&f, Some("ISBN 9788994492032")).contains(&"9788994492032".to_string()));
+    assert!(extract_real(&f, Some("ISBN 9788994492032")).contains(&"9788994492032".to_string()));
     // 빈 content는 없는 것으로 보고 파일을 읽는다.
     write(&f, "ISBN 9788994492032");
-    assert!(!extract_default(&f, Some("")).is_empty());
+    assert!(!extract_real(&f, Some("")).is_empty());
 }
 
 #[test]
@@ -320,10 +345,11 @@ fn unsupported_extensions_and_dispatch_to_djvu_and_hwp() {
     let d = tempfile::tempdir().unwrap();
     let x = d.path().join("book.xyz");
     write(&x, "ISBN 9788994492032");
-    assert!(extract_default(&x, None).is_empty());
+    assert!(extract_real(&x, None).is_empty());
 
     let stat = Arc::new(Stat::new());
-    let mut b = backends(&stat, Arc::new(|_| Ok((String::new(), 0))), never_fallback());
+    let pdf = FakePdf::new(vec![]);
+    let mut b = backends(&stat, &pdf);
     b.runner = Rc::new(fake(|_, _| out(0, "ISBN 9788994492032")));
     assert!(extract(&d.path().join("a.hwp"), None, &b).contains(&"9788994492032".to_string()));
     b.runner = Rc::new(fake(|p, _| if p == "djvused" { out(0, "1") } else { out(0, "ISBN 9788994492032") }));
@@ -333,18 +359,19 @@ fn unsupported_extensions_and_dispatch_to_djvu_and_hwp() {
 }
 
 #[test]
-fn pdf_uses_the_primary_extractor_before_the_fallback() {
+fn pdf_uses_the_head_tail_stage_before_the_stream_scan() {
     let stat = Arc::new(Stat::new());
-    let b = backends(&stat, Arc::new(|_| Ok(("ISBN 9788994492032".into(), 6))), never_fallback());
-    assert_eq!(extract(Path::new("book.pdf"), None, &b), ["9788994492032"]);
+    let pdf = FakePdf::new(vec![(Stage::HeadTail, text("ISBN 9788994492032", 6))]);
+    assert_eq!(extract(Path::new("book.pdf"), None, &backends(&stat, &pdf)), ["9788994492032"]);
+    assert_eq!(*pdf.calls.borrow(), [Stage::HeadTail]);
     assert!(stage_line(&stat, "isbn_poppler").contains("ok=1"), "{}", stage_line(&stat, "isbn_poppler"));
 }
 
 #[test]
-fn pdf_falls_back_when_the_primary_extractor_cannot_open_the_document() {
+fn pdf_scans_streams_when_the_head_tail_stage_cannot_open_the_document() {
     let stat = Arc::new(Stat::new());
-    let b = backends(&stat, Arc::new(|_| Err("Poppler fail".into())), Arc::new(|_| Ok("ISBN 9788994492032".into())));
-    assert_eq!(extract(Path::new("book.pdf"), None, &b), ["9788994492032"]);
+    let pdf = FakePdf::new(vec![(Stage::HeadTail, failed()), (Stage::HeadTailScan, text("ISBN 9788994492032", 0))]);
+    assert_eq!(extract(Path::new("book.pdf"), None, &backends(&stat, &pdf)), ["9788994492032"]);
     assert!(stage_line(&stat, "isbn_poppler").contains("error=1"));
     assert!(stage_line(&stat, "isbn_fallback").contains("ok=1"));
 }
@@ -352,119 +379,47 @@ fn pdf_falls_back_when_the_primary_extractor_cannot_open_the_document() {
 #[test]
 fn pdf_given_content_with_an_isbn_skips_extraction() {
     let stat = Arc::new(Stat::new());
-    let b = backends(&stat, Arc::new(|_| panic!("content로 끝났어야 한다")), never_fallback());
-    assert_eq!(extract(Path::new("book.pdf"), Some("ISBN 978-89-94492-03-2"), &b), ["9788994492032"]);
-    // content에 ISBN이 없으면 추출기를 돈다.
-    let b = backends(&stat, Arc::new(|_| Ok(("ISBN 9788994492032".into(), 1))), never_fallback());
-    assert_eq!(extract(Path::new("book.pdf"), Some("본문"), &b), ["9788994492032"]);
+    let none = FakePdf::new(vec![]);
+    assert_eq!(extract(Path::new("book.pdf"), Some("ISBN 978-89-94492-03-2"), &backends(&stat, &none)), ["9788994492032"]);
+    assert!(none.calls.borrow().is_empty());
+    // content에 ISBN이 없으면 단계를 돈다.
+    let pdf = FakePdf::new(vec![(Stage::HeadTail, text("ISBN 9788994492032", 1))]);
+    assert_eq!(extract(Path::new("book.pdf"), Some("본문"), &backends(&stat, &pdf)), ["9788994492032"]);
 }
 
 #[test]
-fn pdf_primary_timeout_gives_up_without_the_fallback() {
+fn pdf_head_tail_timeout_gives_up_without_the_stream_scan() {
     let stat = Arc::new(Stat::new());
-    let mut b = backends(
-        &stat,
-        Arc::new(|_| {
-            std::thread::sleep(Duration::from_millis(400));
-            Ok(("ISBN 9788994492032".into(), 1))
-        }),
-        never_fallback(),
-    );
-    b.pdf_timeout = 0.05;
-    assert!(extract(Path::new("hang.pdf"), None, &b).is_empty());
+    let pdf = FakePdf::new(vec![(Stage::HeadTail, Err(StageError::Timeout))]);
+    assert!(extract(Path::new("hang.pdf"), None, &backends(&stat, &pdf)).is_empty());
+    assert_eq!(*pdf.calls.borrow(), [Stage::HeadTail]);
     assert!(stage_line(&stat, "isbn_poppler").contains("timeout=1"));
 }
 
-#[cfg(unix)]
 #[test]
-fn production_pdf_worker_is_killed_after_the_isbn_timeout() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = tempfile::tempdir().unwrap();
-    let worker = dir.path().join("stuck-isbn-worker");
-    fs::write(&worker, "#!/bin/sh\nwhile :; do :; done\n").unwrap();
-    fs::set_permissions(&worker, fs::Permissions::from_mode(0o755)).unwrap();
-
+fn pdf_head_tail_text_without_an_isbn_stops_there() {
     let stat = Arc::new(Stat::new());
-    let completed = Arc::new(AtomicBool::new(false));
-    let completed_in_worker = Arc::clone(&completed);
-    let primary = Arc::new(move |_path: &Path| {
-        std::thread::sleep(Duration::from_millis(300));
-        completed_in_worker.store(true, Ordering::SeqCst);
-        Ok(("ISBN 9788994492032".into(), 1))
-    });
-    let mut b = backends(&stat, primary, never_fallback());
-    b.pdf_worker_executable = Some(worker);
-    b.pdf_timeout = 0.05;
-
-    let start = Instant::now();
-    assert!(extract(Path::new("stuck.pdf"), None, &b).is_empty());
-    assert!(start.elapsed() < Duration::from_secs(2));
-    std::thread::sleep(Duration::from_millis(350));
-    assert!(!completed.load(Ordering::SeqCst), "timed-out PDF work must not continue in a background thread");
-    assert!(stage_line(&stat, "isbn_poppler").contains("timeout=1"));
-}
-
-#[cfg(unix)]
-#[test]
-fn production_pdf_worker_returns_text_and_page_count() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = tempfile::tempdir().unwrap();
-    let worker = dir.path().join("isbn-worker");
-    fs::write(&worker, "#!/bin/sh\nprintf '1\\nISBN 9788994492032\\n'\n").unwrap();
-    fs::set_permissions(&worker, fs::Permissions::from_mode(0o755)).unwrap();
-
-    let stat = Arc::new(Stat::new());
-    let mut b = backends(&stat, Arc::new(|_: &Path| panic!("worker executable should handle PDFium")), never_fallback());
-    b.pdf_worker_executable = Some(worker);
-
-    assert_eq!(extract(Path::new("book.pdf"), None, &b), ["9788994492032"]);
-    assert!(stage_line(&stat, "isbn_poppler").contains("ok=1"));
+    let pdf = FakePdf::new(vec![(Stage::HeadTail, text("본문만 있고 국제표준도서번호는 없다", 12))]);
+    assert!(extract(Path::new("no_isbn.pdf"), None, &backends(&stat, &pdf)).is_empty());
+    assert_eq!(*pdf.calls.borrow(), [Stage::HeadTail]);
 }
 
 #[test]
-fn pdf_primary_text_without_an_isbn_stops_there() {
+fn pdf_that_opened_but_has_no_text_does_not_scan_streams() {
     let stat = Arc::new(Stat::new());
-    let b = backends(&stat, Arc::new(|_| Ok(("본문만 있고 국제표준도서번호는 없다".into(), 12))), never_fallback());
-    assert!(extract(Path::new("no_isbn.pdf"), None, &b).is_empty());
-}
-
-#[test]
-fn pdf_that_opened_but_has_no_text_does_not_use_the_fallback() {
-    let stat = Arc::new(Stat::new());
-    let b = backends(&stat, Arc::new(|_| Ok((String::new(), 3))), never_fallback());
-    assert!(extract(Path::new("scan.pdf"), None, &b).is_empty());
+    let pdf = FakePdf::new(vec![(Stage::HeadTail, text("", 3))]);
+    assert!(extract(Path::new("scan.pdf"), None, &backends(&stat, &pdf)).is_empty());
     assert!(stage_line(&stat, "isbn_poppler").contains("ok=0 empty=1"));
 }
 
 #[test]
-fn pdf_fallback_outcomes_are_recorded() {
+fn pdf_stream_scan_outcomes_are_recorded() {
     let stat = Arc::new(Stat::new());
-    let none: Primary = Arc::new(|_| Ok((String::new(), 0)));
-    assert!(extract(Path::new("a.pdf"), None, &backends(&stat, none.clone(), Arc::new(|_| Ok(String::new())))).is_empty());
-    assert!(stage_line(&stat, "isbn_fallback").contains("empty=1"));
-    assert!(extract(Path::new("a.pdf"), None, &backends(&stat, none.clone(), Arc::new(|_| Err("boom".into())))).is_empty());
-    assert!(stage_line(&stat, "isbn_fallback").contains("error=1"));
-    let mut slow = backends(
-        &stat,
-        none,
-        Arc::new(|_| {
-            std::thread::sleep(Duration::from_millis(400));
-            Ok(String::new())
-        }),
-    );
-    slow.pdf_timeout = 0.05;
-    assert!(extract(Path::new("a.pdf"), None, &slow).is_empty());
-    assert!(stage_line(&stat, "isbn_fallback").contains("timeout=1"));
-}
-
-#[test]
-fn a_panicking_extractor_counts_as_an_error_and_never_escapes() {
-    let stat = Arc::new(Stat::new());
-    let b = backends(&stat, Arc::new(|_| panic!("unexpected")), Arc::new(|_| Ok("ISBN 9788994492032".into())));
-    assert_eq!(extract(Path::new("a.pdf"), None, &b), ["9788994492032"]);
-    assert!(stage_line(&stat, "isbn_poppler").contains("error=1"));
+    for (answer, outcome) in [(text("", 0), "empty=1"), (failed(), "error=1"), (Err(StageError::Timeout), "timeout=1")] {
+        let pdf = FakePdf::new(vec![(Stage::HeadTail, text("", 0)), (Stage::HeadTailScan, answer)]);
+        assert!(extract(Path::new("a.pdf"), None, &backends(&stat, &pdf)).is_empty());
+        assert!(stage_line(&stat, "isbn_fallback").contains(outcome), "{}", stage_line(&stat, "isbn_fallback"));
+    }
 }
 
 // ---- 실제 PDF ----
@@ -499,10 +454,10 @@ fn a_real_pdf_with_an_isbn_is_read_through_the_default_backends() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("book.pdf");
     fs::write(&f, text_pdf("ISBN 9788994492032")).unwrap();
-    assert!(extract_default(&f, None).contains(&"9788994492032".to_string()));
+    assert!(extract_real(&f, None).contains(&"9788994492032".to_string()));
     let blank = d.path().join("blank.pdf");
     fs::write(&blank, text_pdf("")).unwrap();
-    assert!(extract_default(&blank, None).is_empty());
+    assert!(extract_real(&blank, None).is_empty());
 }
 
 #[test]
@@ -510,8 +465,8 @@ fn a_broken_pdf_gives_an_empty_list() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("book.pdf");
     write(&f, "not a pdf");
-    assert!(extract_default(&f, None).is_empty());
-    assert!(extract_default(&d.path().join("none.pdf"), None).is_empty());
+    assert!(extract_real(&f, None).is_empty());
+    assert!(extract_real(&d.path().join("none.pdf"), None).is_empty());
 }
 
 #[test]
@@ -523,7 +478,7 @@ fn the_fallback_scanner_reads_text_from_a_pdf_whose_xref_is_broken() {
     bytes.truncate(cut);
     fs::write(&f, bytes).unwrap();
     assert!(pdf_text_fallback(&f).unwrap().contains("9788994492032"));
-    assert!(extract_default(&f, None).contains(&"9788994492032".to_string()));
+    assert!(extract_real(&f, None).contains(&"9788994492032".to_string()));
 }
 
 // ---- Poppler ----

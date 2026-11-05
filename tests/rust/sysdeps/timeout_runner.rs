@@ -1,40 +1,10 @@
-//! 파서 시간 상한 테스트.
-//! 실행 중인 코드를 밖에서 멈출 수 없으므로 목적을
-//! 스레드 기반 `run_with_timeout`, 자식 프로세스 강제 종료 `run_with_hard_timeout`로 나눈다.
+//! 파서 시간 상한 테스트. 자식 프로세스를 상한에서 강제 종료하는 `run_with_hard_timeout`만 있다.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use sysdeps::timeout_runner::*;
-
-#[test]
-fn time_limit_returns_the_value_when_the_work_finishes_in_time() {
-    assert_eq!(run_with_timeout(1.0, "Timeout", || 1 + 1), Ok(2));
-}
-
-#[test]
-fn time_limit_reports_the_message_when_the_work_runs_too_long() {
-    let start = Instant::now();
-    let err = run_with_timeout(0.1, "Exceeded limit", || thread::sleep(Duration::from_millis(600))).unwrap_err();
-    assert!(err.to_string().contains("Exceeded limit"));
-    assert_eq!(err.message, "Exceeded limit");
-    assert!(start.elapsed() < Duration::from_millis(500), "기다리지 않고 바로 돌아온다");
-}
-
-#[test]
-fn time_limit_works_from_a_worker_thread_too() {
-    let handle = thread::spawn(|| run_with_timeout(1.0, "Worker timeout", || 42));
-    assert_eq!(handle.join().unwrap(), Ok(42));
-}
-
-#[test]
-fn a_panic_inside_the_work_is_passed_through_like_the_child_process_error() {
-    let caught = catch_unwind(AssertUnwindSafe(|| run_with_timeout(2.0, "t", || -> i32 { panic!("Something went wrong") })));
-    let payload = caught.unwrap_err();
-    assert_eq!(payload.downcast_ref::<&str>().copied(), Some("Something went wrong"));
-}
 
 #[test]
 fn hard_timeout_returns_the_output_of_a_command_that_finishes() {

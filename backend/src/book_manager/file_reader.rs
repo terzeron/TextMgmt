@@ -88,7 +88,7 @@ impl LoaderFileReader {
     }
 
     fn read(&self, path: &Path, path_prefix: Option<&Path>, skip_text: bool) -> Docs {
-        let outcome = record_builder::read_file_in_process(&self.config, path, skip_text, path_prefix);
+        let outcome = file_record::child_process_runner::read_file_with_child_stages(&self.worker_executable, &self.config, path, path_prefix, skip_text);
         for message in outcome.messages {
             log::warn!("loader failed to read '{}': {message}", path.display());
         }

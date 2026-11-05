@@ -14,26 +14,30 @@ use sysdeps::timeout_runner::run_with_hard_timeout;
 use crate::env_config::Config;
 use crate::record_builder::ReadOutcome;
 
-/// 자식 프로세스로 PDF 단계를 돌리는 숨은 부명령. Poppler 명령을 시간 상한으로 제한한다.
+/// 자식 프로세스로 PDF 단계(본문·ISBN)를 돌리는 숨은 부명령.
 pub const PDF_STAGE_COMMAND: &str = "__pdf-stage";
-/// ISBN PDF 파싱을 별도 프로세스에서 수행하는 숨은 부명령.
-pub const ISBN_PDF_STAGE_COMMAND: &str = isbn::PDF_ISBN_WORKER_COMMAND;
 /// Backend의 격리된 파일 파서 부명령.
 pub const READ_FILE_COMMAND: &str = "__read-file";
 
+const STAGES: [Stage; 5] = [Stage::Poppler, Stage::Lopdf, Stage::Repair, Stage::HeadTail, Stage::HeadTailScan];
+
+/// 부명령 인자로 쓰는 단계 키. 모두 `-`를 넣는다. 테스트 바이너리가 실수로 worker로 뜨면 인자를
+/// 테스트 이름 필터로 읽는데, Rust 식별자에는 `-`가 없어 어떤 테스트도 고르지 않는다.
 fn stage_key(stage: Stage) -> &'static str {
     match stage {
-        Stage::Poppler => "poppler",
-        Stage::Lopdf => "lopdf",
-        Stage::Repair => "repair",
+        Stage::Poppler => "text-poppler",
+        Stage::Lopdf => "text-lopdf",
+        Stage::Repair => "text-repair",
+        Stage::HeadTail => "isbn-head-tail",
+        Stage::HeadTailScan => "isbn-stream-scan",
     }
 }
 
 fn stage_from_key(key: &str) -> Option<Stage> {
-    [Stage::Poppler, Stage::Lopdf, Stage::Repair].into_iter().find(|s| stage_key(*s) == key)
+    STAGES.into_iter().find(|s| stage_key(*s) == key)
 }
 
-/// PDF 단계를 자식 프로세스(이 실행 파일의 숨은 부명령)로 돌리고 시간 상한이 넘으면 강제 종료한다.
+/// PDF 단계를 자식 프로세스(이 실행 파일의 숨은 부명령)로 돌리고 시간 상한이 넘으면 프로세스 그룹째 종료한다.
 pub struct ChildRunner {
     pub exe: PathBuf,
     pub timeout_seconds: f64,
@@ -56,16 +60,13 @@ impl StageRunner for ChildRunner {
         let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|e| StageError::Failed(e.to_string()))?;
         Ok((parsed["text"].as_str().unwrap_or_default().to_owned(), parsed["pages"].as_u64().unwrap_or(0) as usize))
     }
-
-    fn worker_executable(&self) -> Option<&Path> {
-        Some(&self.exe)
-    }
 }
 
 /// 숨은 부명령 `__pdf-stage <단계> <경로>`: 단계를 실행해 JSON으로 쓴다.
 pub fn run_pdf_stage_command(args: &[String], out: &mut dyn Write) -> i32 {
     let (Some(stage), Some(path)) = (args.first().and_then(|k| stage_from_key(k)), args.get(1)) else {
-        eprintln!("usage: {PDF_STAGE_COMMAND} <poppler|plumber|repair> <path>");
+        let keys: Vec<&str> = STAGES.into_iter().map(stage_key).collect();
+        eprintln!("usage: {PDF_STAGE_COMMAND} <{}> <path>", keys.join("|"));
         return 2;
     };
     match doc_reader::pdf::run_stage(stage, Path::new(path)) {
@@ -75,32 +76,6 @@ pub fn run_pdf_stage_command(args: &[String], out: &mut dyn Write) -> i32 {
         }
         Err(e) => {
             eprintln!("{e}");
-            1
-        }
-    }
-}
-
-/// 숨은 부명령 `__isbn-pdf-stage <poppler|fallback> <path>`.
-pub fn run_isbn_pdf_stage_command(args: &[String], out: &mut dyn Write) -> i32 {
-    let (Some(stage), Some(path)) = (args.first().map(String::as_str), args.get(1)) else {
-        eprintln!("usage: {ISBN_PDF_STAGE_COMMAND} <poppler|fallback> <path>");
-        return 2;
-    };
-    let result = match stage {
-        "poppler" => doc_reader::head_tail_reader::pdf_text_auto(Path::new(path)),
-        "fallback" => doc_reader::head_tail_reader::pdf_text_fallback(Path::new(path)).map(|text| (text, 0)),
-        _ => {
-            eprintln!("unknown ISBN PDF stage: {stage}");
-            return 2;
-        }
-    };
-    match result {
-        Ok((text, pages)) => {
-            let _ = writeln!(out, "{pages}\n{text}");
-            0
-        }
-        Err(error) => {
-            eprintln!("{error}");
             1
         }
     }
@@ -149,8 +124,15 @@ pub fn run_read_file_command(args: &[String], out: &mut dyn Write) -> i32 {
     let cfg = Config::new(&args[0], &args[1]);
     let path = Path::new(&args[2]);
     let prefix = (args[3] == "1").then(|| Path::new(&args[4]));
-    let runner = ChildRunner::new(std::env::current_exe().unwrap_or_else(|_| PathBuf::from("backend")));
-    let result = crate::record_builder::read_file(&cfg, path, None, args[5] == "1", prefix, &runner, Stat::global());
+    let executable = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("backend"));
+    let result = read_file_with_child_stages(&executable, &cfg, path, prefix, args[5] == "1");
     let _ = writeln!(out, "{}", serde_json::json!({"item": result.item, "messages": result.messages}));
     0
+}
+
+/// 파일 하나를 이 프로세스에서 읽되 PDF 단계는 `executable`의 자식 프로세스로 돌린다. 통계는 전역 [`Stat`]에 쌓는다.
+/// 파일 전체 상한 없이 읽는 호출자도 멈춘 PDF 파서는 단계 상한에서 종료된다.
+pub fn read_file_with_child_stages(executable: &Path, cfg: &Config, path: &Path, path_prefix: Option<&Path>, skip_text: bool) -> ReadOutcome {
+    let runner = ChildRunner::new(executable.to_path_buf());
+    crate::record_builder::read_file(cfg, path, None, skip_text, path_prefix, &runner, Stat::global())
 }

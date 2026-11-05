@@ -132,12 +132,6 @@ impl<'a> Timed<'a> {
     }
 }
 
-/// [`read_file`]을 같은 프로세스에서(`doc_reader::pdf::InProcess`) 전역 통계(`Stat::global()`)로 부른다.
-/// 파일 하나를 다시 읽는 backend처럼 자식 프로세스 격리와 별도 통계가 필요 없는 호출자가 쓴다.
-pub fn read_file_in_process(cfg: &Config, path: &Path, skip_text: bool, path_prefix: Option<&Path>) -> ReadOutcome {
-    read_file(cfg, path, None, skip_text, path_prefix, &doc_reader::pdf::InProcess, Stat::global())
-}
-
 /// 파일을 읽어 문서를 만든다. 파일이 아니거나 지원하지 않는 형식이면 `item`이 없다.
 pub fn read_file(cfg: &Config, path: &Path, st: Option<&Metadata>, skip_text: bool, path_prefix: Option<&Path>, runner: &dyn StageRunner, stat: &Stat) -> ReadOutcome {
     read_file_with_hooks(cfg, path, st, skip_text, path_prefix, runner, stat, &ReadHooks::default())
@@ -320,11 +314,7 @@ pub fn read_file_with_hooks(
             "pdf" => Some(summary.as_str()),
             _ => None,
         };
-        let values = match runner.worker_executable() {
-            Some(executable) => isbn::extract_default_with_worker(path, content, executable),
-            None => isbn::extract_default(path, content),
-        };
-        isbn_value = values.into_iter().next().unwrap_or_default();
+        isbn_value = isbn::extract(path, content, &isbn::Backends::real(runner)).into_iter().next().unwrap_or_default();
     }
     // dc:publisher는 OPF 한 멤버만 풀면 나온다.
     let publisher = if file_type == "epub" { read_epub_publisher(path) } else { String::new() };

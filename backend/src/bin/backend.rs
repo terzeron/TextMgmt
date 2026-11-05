@@ -27,12 +27,6 @@ async fn main() -> ExitCode {
         let _ = std::io::Write::flush(&mut out);
         return ExitCode::from(code as u8);
     }
-    if args.first().map(String::as_str) == Some(file_record::child_process_runner::ISBN_PDF_STAGE_COMMAND) {
-        let mut out = std::io::stdout().lock();
-        let code = file_record::child_process_runner::run_isbn_pdf_stage_command(&args[1..], &mut out);
-        let _ = std::io::Write::flush(&mut out);
-        return ExitCode::from(code as u8);
-    }
     if args.first().map(String::as_str) == Some(file_record::child_process_runner::READ_FILE_COMMAND) {
         let mut out = std::io::stdout().lock();
         let code = file_record::child_process_runner::run_read_file_command(&args[1..], &mut out);

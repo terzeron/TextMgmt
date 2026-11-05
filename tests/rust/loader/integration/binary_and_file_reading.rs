@@ -53,15 +53,16 @@ use serde_json::Value;
 use stat::Stat;
 
 #[test]
-fn loader_binary_dispatches_the_isbn_pdf_worker_command() {
+fn loader_binary_runs_the_isbn_stream_scan_stage() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("not-a-pdf.pdf");
     fs::write(&path, b"not a PDF").unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_loader")).args(["__isbn-pdf-stage", "fallback"]).arg(path).output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_loader")).args(["__pdf-stage", "isbn-stream-scan"]).arg(path).output().unwrap();
 
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "0\n\n");
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!((result["text"].as_str(), result["pages"].as_u64()), (Some(""), Some(0)));
 }
 
 #[test]
@@ -78,7 +79,7 @@ fn loader_binary_runs_poppler_pdf_stage() {
     let path = dir.path().join("two-pages.pdf");
     fs::write(&path, minimal_pdf(2)).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_loader")).args(["__pdf-stage", "poppler"]).arg(&path).output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_loader")).args(["__pdf-stage", "text-poppler"]).arg(&path).output().unwrap();
 
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -196,16 +197,14 @@ fn pdf_with_text(text: &str) -> Vec<u8> {
 }
 
 #[test]
-fn read_file_passes_the_worker_to_isbn_extraction() {
-    struct EmptySummaryRunner(PathBuf);
+fn read_file_runs_isbn_stages_through_the_same_runner() {
+    /// 본문 단계는 빈 글을, ISBN 앞뒤 쪽 단계만 ISBN을 돌려준다.
+    struct EmptySummaryRunner(Mutex<Vec<Stage>>);
 
     impl StageRunner for EmptySummaryRunner {
-        fn run(&self, _stage: Stage, _path: &Path) -> Result<(String, usize), StageError> {
-            Ok((String::new(), 1))
-        }
-
-        fn worker_executable(&self) -> Option<&Path> {
-            Some(&self.0)
+        fn run(&self, stage: Stage, _path: &Path) -> Result<(String, usize), StageError> {
+            self.0.lock().unwrap().push(stage);
+            Ok((if stage == Stage::HeadTail { "ISBN 9788994492032".into() } else { String::new() }, 1))
         }
     }
 
@@ -218,11 +217,12 @@ fn read_file_passes_the_worker_to_isbn_extraction() {
     let path = category.join("book.pdf");
     fs::write(&path, pdf_with_text("ISBN 9788994492032")).unwrap();
     let cfg = Config::new(&books, &comics);
-    let runner = EmptySummaryRunner(PathBuf::from(env!("CARGO_BIN_EXE_loader")));
+    let runner = EmptySummaryRunner(Mutex::new(Vec::new()));
 
     let result = read_file(&cfg, &path, None, false, None, &runner, &Stat::new());
 
     assert_eq!(result.item.unwrap().1["isbn"], "9788994492032");
+    assert_eq!(*runner.0.lock().unwrap(), [Stage::Poppler, Stage::HeadTail]);
 }
 
 #[test]
@@ -231,7 +231,8 @@ fn loader_isbn_pdf_worker_extracts_text_through_the_binary() {
     let path = dir.path().join("book.pdf");
     fs::write(&path, pdf_with_text("ISBN 9788994492032")).unwrap();
 
-    let isbns = isbn::extract_default_with_worker(&path, None, Path::new(env!("CARGO_BIN_EXE_loader")));
+    let runner = file_record::child_process_runner::ChildRunner::new(PathBuf::from(env!("CARGO_BIN_EXE_loader")));
+    let isbns = isbn::extract(&path, None, &isbn::Backends::real(&runner));
 
     assert_eq!(isbns, ["9788994492032"]);
 }

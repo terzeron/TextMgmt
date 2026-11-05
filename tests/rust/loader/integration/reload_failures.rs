@@ -30,12 +30,34 @@ fn executable_script(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 
 #[cfg(unix)]
 #[test]
-fn child_runner_parses_successful_json_and_reports_its_executable() {
+fn child_runner_parses_successful_json() {
     let (_dir, executable) = executable_script("printf '%s' '{\"text\":\"parsed\",\"pages\":3}'");
-    let runner = ChildRunner::new(executable.clone());
+    let runner = ChildRunner::new(executable);
 
     assert_eq!(runner.run(Stage::Poppler, Path::new("sample.pdf")).unwrap(), ("parsed".into(), 3));
-    assert_eq!(runner.worker_executable(), Some(executable.as_path()));
+    assert_eq!(runner.run(Stage::HeadTail, Path::new("sample.pdf")).unwrap(), ("parsed".into(), 3));
+}
+
+#[test]
+fn child_runner_waits_sixty_seconds_per_stage() {
+    assert_eq!(ChildRunner::new("loader".into()).timeout_seconds, 60.0);
+}
+
+/// 상한을 넘긴 단계는 기다림만 멈추는 게 아니라 프로세스가 끝나야 한다. 끝나지 않으면 뒤늦게 marker를 만든다.
+#[cfg(unix)]
+#[test]
+fn child_runner_kills_a_stage_that_exceeds_its_time_limit() {
+    let (dir, executable) = executable_script("sleep 0.4\ntouch \"$(dirname \"$0\")/finished\"");
+    let mut runner = ChildRunner::new(executable);
+    runner.timeout_seconds = 0.1;
+    let started = std::time::Instant::now();
+
+    let error = runner.run(Stage::HeadTailScan, Path::new("stuck.pdf")).unwrap_err();
+
+    assert_eq!(error, StageError::Timeout);
+    assert!(started.elapsed() < std::time::Duration::from_millis(350), "상한에서 바로 돌아와야 한다");
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert!(!dir.path().join("finished").exists(), "상한을 넘긴 worker가 끝까지 돌았다");
 }
 
 #[cfg(unix)]

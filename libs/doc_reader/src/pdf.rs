@@ -1,7 +1,8 @@
 //! PDF 읽기: 본문 텍스트 추출과 빠른 쪽수 세기.
 //!
 //! Poppler -> lopdf -> lopdf 재저장 복구 단계를 순서대로 시도한다.
-//! 단계 실행은 [`StageRunner`] 뒤에 두어 멈춘 외부 명령을 자식 프로세스와 timeout으로 격리한다.
+//! ISBN을 찾는 앞뒤 쪽 단계([`Stage::HeadTail`], [`Stage::HeadTailScan`])도 같은 [`StageRunner`]로 실행한다.
+//! 운영 실행기는 단계마다 자식 프로세스를 띄우고 [`PDF_STAGE_TIMEOUT`]을 넘기면 프로세스째 종료한다.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -16,8 +17,8 @@ use crate::text_normalizer::{head_chars, keep_word_chars};
 
 /// 앞에서부터 이만큼의 쪽만 훑는다(TEXT_SIZE를 채우는 데 실측 최대 27쪽).
 pub const PDF_PAGE_LIMIT: usize = 40;
-/// 파서 단계 하나의 벽시계 상한(초).
-pub const PDF_STAGE_TIMEOUT: u64 = 30;
+/// 파서 단계 하나의 벽시계 상한(초). 넘기면 실행기가 단계를 실행하던 자식 프로세스를 종료한다.
+pub const PDF_STAGE_TIMEOUT: u64 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
@@ -27,6 +28,10 @@ pub enum Stage {
     Lopdf,
     /// lopdf로 다시 저장한 뒤 Poppler 대신 lopdf로 읽는다.
     Repair,
+    /// 앞뒤 [`crate::head_tail_reader::HEAD_TAIL_PAGES`]쪽: Poppler, 안 되면 lopdf. ISBN 검색용.
+    HeadTail,
+    /// 문서 구조를 못 여는 PDF의 스트림을 직접 훑어 앞뒤 블록의 글자열을 모은다. ISBN 검색용.
+    HeadTailScan,
 }
 
 impl Stage {
@@ -36,6 +41,8 @@ impl Stage {
             Stage::Poppler => "pdf_text_poppler",
             Stage::Lopdf => "pdf_text_lopdf",
             Stage::Repair => "pdf_text_repair",
+            Stage::HeadTail => "isbn_poppler",
+            Stage::HeadTailScan => "isbn_fallback",
         }
     }
 }
@@ -49,14 +56,10 @@ pub enum StageError {
 /// 단계 하나를 실행해 (텍스트, 쪽수)를 돌려준다.
 pub trait StageRunner {
     fn run(&self, stage: Stage, path: &Path) -> Result<(String, usize), StageError>;
-
-    /// 실행 파일이 제공하는 격리 worker. 외부 파서의 후속 처리도 같은 실행 파일에서 분리할 때 쓴다.
-    fn worker_executable(&self) -> Option<&Path> {
-        None
-    }
 }
 
-/// 현재 프로세스에서 단계를 실행한다. 시간 상한은 걸지 않는다.
+/// 현재 프로세스에서 단계를 실행한다. 시간 상한이 없어 파서가 멈추면 호출자도 멈춘다.
+/// 테스트용이다. 운영 경로는 `file_record::child_process_runner::ChildRunner`를 쓴다.
 pub struct InProcess;
 
 impl StageRunner for InProcess {
@@ -76,6 +79,8 @@ pub fn run_stage(stage: Stage, path: &Path) -> Result<(String, usize), String> {
             doc.save_to(&mut buffer).map_err(|e| e.to_string())?;
             lopdf_text_from_bytes(buffer)
         }
+        Stage::HeadTail => crate::head_tail_reader::pdf_text_auto(path),
+        Stage::HeadTailScan => crate::head_tail_reader::pdf_text_fallback(path).map(|text| (text, 0)),
     }
 }
 

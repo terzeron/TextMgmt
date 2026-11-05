@@ -21,7 +21,7 @@ fn loader_reads_book_text_and_epub_content_metadata() {
     let text = books.join("fiction/[Author] Story.txt");
     std::fs::write(&text, "one line\nsecond line\n").unwrap();
     let epub = make_epub(&books.join("fiction/[Writer] Novel.epub"), &EpubSpec::chapters(&["<p>첫 문단</p><p>둘째 문단</p>"]));
-    let reader = LoaderFileReader::new(books.clone(), comics);
+    let reader = LoaderFileReader::new(books.clone(), comics).with_worker_executable(env!("CARGO_BIN_EXE_backend").into());
     let text_docs = reader.read_file(&text, Some(&books));
     let text_doc = &text_docs[&(std::fs::metadata(&text).unwrap().ino() as i64)];
     assert_eq!(text_doc["category"], "fiction");
@@ -45,7 +45,7 @@ fn loader_honors_comics_skip_text_and_requested_path_prefix() {
     std::fs::create_dir_all(comics.join("series")).unwrap();
     let pdf = comics.join("series/page.pdf");
     write_blank_pdf(&pdf, 480, 623);
-    let reader = LoaderFileReader::new(books, comics.clone());
+    let reader = LoaderFileReader::new(books, comics.clone()).with_worker_executable(env!("CARGO_BIN_EXE_backend").into());
     let docs = reader.read_file_with_options(&pdf, Some(&comics), true);
     let item = &docs[&(std::fs::metadata(&pdf).unwrap().ino() as i64)];
     assert_eq!(item["category"], "series");

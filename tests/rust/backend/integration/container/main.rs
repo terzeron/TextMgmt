@@ -78,15 +78,16 @@ use sysdeps::{FsOps, SystemClock};
 use tempfile::TempDir;
 
 #[test]
-fn backend_binary_dispatches_the_isbn_pdf_worker_command() {
+fn backend_binary_runs_the_isbn_stream_scan_stage() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("not-a-pdf.pdf");
     fs::write(&path, b"not a PDF").unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_backend")).args(["__isbn-pdf-stage", "fallback"]).arg(path).output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_backend")).args(["__pdf-stage", "isbn-stream-scan"]).arg(path).output().unwrap();
 
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "0\n\n");
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!((result["text"].as_str(), result["pages"].as_u64()), (Some(""), Some(0)));
 }
 
 /// 경로 조각을 인코딩한다. `/`는 그대로 둔다.

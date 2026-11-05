@@ -81,7 +81,7 @@ fn timeouts_are_reported_per_file() {
     assert_eq!(read.summary, "");
     assert_eq!(*fake.calls.borrow(), [Stage::Poppler, Stage::Lopdf, Stage::Repair], "쪽을 하나도 못 열면 구조 복구를 시도한다");
     let messages: Vec<&str> = read.logs.iter().map(|(_, m)| m.as_str()).collect();
-    assert!(messages.iter().any(|m| m.contains("PDF 파서 타임아웃(30초 초과): pdf_text_poppler")), "{messages:?}");
+    assert!(messages.iter().any(|m| m.contains("PDF 파서 타임아웃(60초 초과): pdf_text_poppler")), "{messages:?}");
     assert!(messages.iter().any(|m| m.contains("PDF 구조 복구 타임아웃")));
     assert!(messages.iter().any(|m| m.contains("모든 파서가 타임아웃 또는 오류") && m.contains("pdf_text_repair")), "{messages:?}");
     assert_eq!(read.records.iter().map(|r| r.outcome).collect::<Vec<_>>(), ["timeout", "timeout", "timeout"]);

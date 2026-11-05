@@ -4,28 +4,25 @@
 //! HWP는 `strings` 출력의 앞뒤만 본다. OCR이 망가뜨린 글자(l, I, B, O, Ⅹ)도 알아본다.
 //!
 //! 파일을 읽는 일은 [`doc_reader::head_tail_reader`]가 한다. 이 crate는 어느 부분을 어떤 순서로 볼지,
-//! PDF 단계의 시간 상한과 통계 기록, 본문 검색과 검증을 맡는다.
-//! 외부 도구와 PDF 추출기는 [`Backends`]로 주입한다. 테스트가 대역을 꽂는 자리다.
+//! PDF 단계의 통계 기록, 본문 검색과 검증을 맡는다.
+//! PDF 단계는 본문 읽기와 같은 [`StageRunner`]로 실행한다. 시간 상한과 종료는 실행기가 맡는다.
+//! 외부 도구와 PDF 실행기는 [`Backends`]로 주입한다. 테스트가 대역을 꽂는 자리다.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
-use std::process::Command;
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
-use doc_reader::head_tail_reader::{EpubPackage, pdf_text_auto, pdf_text_fallback, read_djvu_head_tail, read_head_tail_from_content, read_head_tail_from_file, read_hwp_strings};
+use doc_reader::head_tail_reader::{EpubPackage, read_djvu_head_tail, read_head_tail_from_content, read_head_tail_from_file, read_hwp_strings};
+use doc_reader::pdf::{PDF_STAGE_TIMEOUT, Stage, StageError, StageRunner};
 use regex::Regex;
 use stat::Stat;
-use sysdeps::timeout_runner::{run_with_hard_timeout, run_with_timeout};
 use sysdeps::{CommandRunner, SystemRunner};
 
 /// 앞뒤로 읽을 바이트 크기 (8KB).
 pub const HEAD_TAIL_SIZE: usize = 8 * 1024;
-/// PDF ISBN 추출 상한(초). 본문 추출을 포기한 손상 PDF도 여기서 다시 파싱되므로 상한이 없으면 멈춘다.
-pub const PDF_ISBN_TIMEOUT: f64 = 30.0;
-/// ISBN PDF 파서를 자식 프로세스에서 실행하는 숨은 부명령.
-pub const PDF_ISBN_WORKER_COMMAND: &str = "__isbn-pdf-stage";
+/// 외부 도구(`djvused`, `djvutxt`, `strings`)의 시간 상한(초). PDF 단계 상한과 같다.
+pub const TOOL_TIMEOUT: u64 = PDF_STAGE_TIMEOUT;
 
 // ---------------------------------------------------------------- 검증
 
@@ -150,9 +147,8 @@ pub fn search_in_content_bytes(content: &[u8]) -> Vec<String> {
 }
 // ---------------------------------------------------------------- 외부 명령·EPUB
 
-/// 외부 도구(`djvused`, `djvutxt`, `strings`)의 시간 상한. PDF ISBN 추출과 같은 [`PDF_ISBN_TIMEOUT`]이다.
 fn tool_timeout() -> Duration {
-    Duration::from_secs_f64(PDF_ISBN_TIMEOUT)
+    Duration::from_secs(TOOL_TIMEOUT)
 }
 
 /// DJVU: 앞 5쪽과 뒤 5쪽의 텍스트만 본다. 도구가 없으면 빈 목록이다.
@@ -182,65 +178,36 @@ fn epub_isbns(path: &Path) -> Option<Vec<String>> {
 
 // ---------------------------------------------------------------- PDF
 
-type PdfPrimary = Arc<dyn Fn(&Path) -> Result<(String, usize), String> + Send + Sync>;
-type PdfFallback = Arc<dyn Fn(&Path) -> Result<String, String> + Send + Sync>;
-
-/// 외부 의존을 한곳에 모은 묶음. 기본값은 실제 도구와 lopdf 추출기다.
-pub struct Backends {
-    pub pdf_primary: PdfPrimary,
-    pub pdf_fallback: PdfFallback,
+/// 외부 의존을 한곳에 모은 묶음.
+pub struct Backends<'a> {
+    /// PDF 단계 실행기. 본문 읽기에 쓴 실행기를 그대로 넘긴다.
+    pub pdf_runner: &'a dyn StageRunner,
     pub runner: Rc<dyn CommandRunner>,
     pub stat: Arc<Stat>,
-    pub pdf_timeout: f64,
-    /// 지정하면 Poppler·대비책 단계를 별도 프로세스에서 실행해 멈춘 작업을 종료한다.
-    pub pdf_worker_executable: Option<std::path::PathBuf>,
 }
 
-impl Backends {
-    pub fn real() -> Self {
-        Backends {
-            pdf_primary: Arc::new(pdf_text_auto),
-            pdf_fallback: Arc::new(pdf_text_fallback),
-            runner: Rc::new(SystemRunner),
-            stat: Arc::clone(Stat::global()),
-            pdf_timeout: PDF_ISBN_TIMEOUT,
-            pdf_worker_executable: None,
-        }
+impl<'a> Backends<'a> {
+    /// 실제 외부 도구와 전역 통계에 `pdf_runner`를 묶는다.
+    pub fn real(pdf_runner: &'a dyn StageRunner) -> Self {
+        Backends { pdf_runner, runner: Rc::new(SystemRunner), stat: Arc::clone(Stat::global()) }
     }
 }
 
-enum StageError {
-    Timeout,
-    Failed,
+/// PDF 단계 하나를 실행하고 결과를 통계에 남긴다.
+fn run_pdf_stage(b: &Backends<'_>, stage: Stage, path: &Path) -> Result<(String, usize), StageError> {
+    let start = Instant::now();
+    let result = b.pdf_runner.run(stage, path);
+    let outcome = match &result {
+        Ok((text, _)) if text.is_empty() => "empty",
+        Ok(_) => "ok",
+        Err(StageError::Timeout) => "timeout",
+        Err(StageError::Failed(_)) => "error",
+    };
+    b.stat.record_pdf_stage(stage.name(), start.elapsed().as_secs_f64(), outcome);
+    result
 }
 
-/// 한 추출 단계를 시간 상한 안에서 실행한다. panic도 실패로 본다.
-fn run_stage<T: Send + 'static>(seconds: f64, message: &str, f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, StageError> {
-    match run_with_timeout(seconds, message, move || catch_unwind(AssertUnwindSafe(f))) {
-        Err(_) => Err(StageError::Timeout),
-        Ok(Ok(Ok(value))) => Ok(value),
-        Ok(_) => Err(StageError::Failed),
-    }
-}
-
-fn outcome(text: &str) -> &'static str {
-    if text.is_empty() { "empty" } else { "ok" }
-}
-
-fn run_pdf_worker(executable: &Path, stage: &str, path: &Path, seconds: f64) -> Result<(String, usize), StageError> {
-    let mut command = Command::new(executable);
-    command.arg(PDF_ISBN_WORKER_COMMAND).arg(stage).arg(path);
-    let output = run_with_hard_timeout(command, seconds).map_err(|_| StageError::Timeout)?;
-    if !output.status.success() {
-        return Err(StageError::Failed);
-    }
-    let output = String::from_utf8(output.stdout).map_err(|_| StageError::Failed)?;
-    let (pages, text) = output.split_once('\n').ok_or(StageError::Failed)?;
-    let pages = pages.parse::<usize>().map_err(|_| StageError::Failed)?;
-    Ok((text.to_owned(), pages))
-}
-
-fn extract_pdf(path: &Path, content: Option<&str>, b: &Backends) -> Vec<String> {
+fn extract_pdf(path: &Path, content: Option<&str>, b: &Backends<'_>) -> Vec<String> {
     if let Some(c) = content.filter(|c| !c.is_empty()) {
         let found = search_in_content(c);
         if !found.is_empty() {
@@ -248,25 +215,11 @@ fn extract_pdf(path: &Path, content: Option<&str>, b: &Backends) -> Vec<String> 
         }
     }
 
-    let start = Instant::now();
-    let primary = Arc::clone(&b.pdf_primary);
-    let owned = path.to_path_buf();
-    let (mut pages, mut text) = (0, String::new());
-    let primary_result = match b.pdf_worker_executable.as_deref() {
-        Some(executable) => run_pdf_worker(executable, "poppler", path, b.pdf_timeout),
-        None => run_stage(b.pdf_timeout, "isbn/poppler", move || primary(&owned)),
+    let (text, pages) = match run_pdf_stage(b, Stage::HeadTail, path) {
+        Ok(read) => read,
+        Err(StageError::Timeout) => return Vec::new(),
+        Err(StageError::Failed(_)) => (String::new(), 0),
     };
-    match primary_result {
-        Ok((t, n)) => {
-            b.stat.record_pdf_stage("isbn_poppler", start.elapsed().as_secs_f64(), outcome(&t));
-            (text, pages) = (t, n);
-        }
-        Err(StageError::Timeout) => {
-            b.stat.record_pdf_stage("isbn_poppler", start.elapsed().as_secs_f64(), "timeout");
-            return Vec::new();
-        }
-        Err(StageError::Failed) => b.stat.record_pdf_stage("isbn_poppler", start.elapsed().as_secs_f64(), "error"),
-    }
     if !text.is_empty() {
         return search_in_content(&text);
     }
@@ -274,34 +227,17 @@ fn extract_pdf(path: &Path, content: Option<&str>, b: &Backends) -> Vec<String> 
         return Vec::new();
     }
 
-    // 문서 구조를 아예 못 열었을 때만 대비책을 쓴다. 손상 PDF는 안에서 무한히 돌 수 있어 상한이 필요하다.
-    let start = Instant::now();
-    let fallback = Arc::clone(&b.pdf_fallback);
-    let owned = path.to_path_buf();
-    let fallback_result = match b.pdf_worker_executable.as_deref() {
-        Some(executable) => run_pdf_worker(executable, "fallback", path, b.pdf_timeout).map(|(text, _)| text),
-        None => run_stage(b.pdf_timeout, "isbn/fallback", move || fallback(&owned)),
-    };
-    match fallback_result {
-        Ok(t) => {
-            b.stat.record_pdf_stage("isbn_fallback", start.elapsed().as_secs_f64(), outcome(&t));
-            search_in_content(&t)
-        }
-        Err(StageError::Timeout) => {
-            b.stat.record_pdf_stage("isbn_fallback", start.elapsed().as_secs_f64(), "timeout");
-            Vec::new()
-        }
-        Err(StageError::Failed) => {
-            b.stat.record_pdf_stage("isbn_fallback", start.elapsed().as_secs_f64(), "error");
-            Vec::new()
-        }
+    // 문서 구조를 아예 못 열었을 때만 스트림을 직접 훑는다.
+    match run_pdf_stage(b, Stage::HeadTailScan, path) {
+        Ok((text, _)) => search_in_content(&text),
+        Err(_) => Vec::new(),
     }
 }
 
 // ---------------------------------------------------------------- 진입점
 
 /// 파일에서 ISBN을 추출한다. `content`는 이미 읽은 본문이다(중복 I/O를 피하려는 용도).
-pub fn extract(path: &Path, content: Option<&str>, backends: &Backends) -> Vec<String> {
+pub fn extract(path: &Path, content: Option<&str>, backends: &Backends<'_>) -> Vec<String> {
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     match ext.as_str() {
         "txt" => {
@@ -317,16 +253,4 @@ pub fn extract(path: &Path, content: Option<&str>, backends: &Backends) -> Vec<S
         "hwp" => extract_from_hwp(path, backends.runner.as_ref()),
         _ => Vec::new(),
     }
-}
-
-/// 실제 도구로 추출한다.
-pub fn extract_default(path: &Path, content: Option<&str>) -> Vec<String> {
-    extract(path, content, &Backends::real())
-}
-
-/// 호출자가 제공한 hidden worker로 PDF 파싱을 격리해 ISBN을 추출한다.
-pub fn extract_default_with_worker(path: &Path, content: Option<&str>, executable: &Path) -> Vec<String> {
-    let mut backends = Backends::real();
-    backends.pdf_worker_executable = Some(executable.to_path_buf());
-    extract(path, content, &backends)
 }

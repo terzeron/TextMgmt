@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use es_client::EsClient;
 use es_client::indexing::IndexStore;
-use file_record::child_process_runner::{ChildRunner, ISBN_PDF_STAGE_COMMAND, PDF_STAGE_COMMAND, run_isbn_pdf_stage_command, run_pdf_stage_command};
+use file_record::child_process_runner::{ChildRunner, PDF_STAGE_COMMAND, run_pdf_stage_command};
 use loader::cli_parser::{World, run};
 
 fn connect(index: &str) -> Result<Box<dyn IndexStore>, String> {
@@ -22,11 +22,6 @@ fn main() -> ExitCode {
     let mut out = std::io::stdout().lock();
     if args.first().map(String::as_str) == Some(PDF_STAGE_COMMAND) {
         let code = run_pdf_stage_command(&args[1..], &mut out);
-        let _ = out.flush();
-        return ExitCode::from(code as u8);
-    }
-    if args.first().map(String::as_str) == Some(ISBN_PDF_STAGE_COMMAND) {
-        let code = run_isbn_pdf_stage_command(&args[1..], &mut out);
         let _ = out.flush();
         return ExitCode::from(code as u8);
     }

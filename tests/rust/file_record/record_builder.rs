@@ -3,12 +3,14 @@
 use std::fs;
 
 use doc_reader::pdf::InProcess;
+use file_record::child_process_runner::read_file_with_child_stages;
 use file_record::env_config::Config;
-use file_record::record_builder::{read_file, read_file_in_process, split_author_title};
+use file_record::record_builder::{read_file, split_author_title};
 use stat::Stat;
 
+/// PDF 단계가 없는 TXT라서 worker 실행 파일은 불리지 않는다.
 #[test]
-fn reading_in_process_matches_read_file_with_the_in_process_runner_and_global_stat() {
+fn reading_with_child_stages_matches_read_file_with_the_global_stat() {
     let dir = tempfile::tempdir().unwrap();
     let book = dir.path().join("books");
     let category = book.join("1_소설");
@@ -18,7 +20,7 @@ fn reading_in_process_matches_read_file_with_the_in_process_runner_and_global_st
     let cfg = Config::new(&book, dir.path().join("comics"));
 
     let direct = read_file(&cfg, &path, None, false, None, &InProcess, Stat::global());
-    let in_process = read_file_in_process(&cfg, &path, false, None);
+    let in_process = read_file_with_child_stages(std::path::Path::new("/bin/false"), &cfg, &path, None, false);
 
     // `updated_time`은 읽은 시각이라 호출마다 다르다. 있는지만 보고 나머지를 비교한다.
     let without_read_time = |outcome: file_record::record_builder::ReadOutcome| {
