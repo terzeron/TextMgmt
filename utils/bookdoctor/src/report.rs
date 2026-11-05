@@ -4,10 +4,10 @@
 
 use std::io::{self, Write};
 
-use crate::finding_model::{ENCRYPTION_CODES, Suppressed};
-use crate::output_formatter::sanitize_display;
 use crate::output_formatter::{Style, paint};
 use crate::{Category, FileReport, Finding, Severity, Summary};
+use doc_checker::finding_model::{ENCRYPTION_CODES, Suppressed};
+use doc_checker::text_sanitizer::sanitize_display;
 
 /// 출력할 내용이 있는가: 발견이 있거나 검사를 끝내지 못했다.
 fn is_flagged(r: &FileReport) -> bool {

@@ -8,9 +8,10 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::cli_parser::Options;
-use crate::format_dispatcher::scan_file;
 use crate::output_formatter::show;
 use crate::{Category, FileReport, Severity};
+use doc_checker::CheckOptions;
+use doc_checker::format_dispatcher::scan_file;
 
 fn unique_trash_path(dir: &Path, file_name: &str) -> PathBuf {
     let first = dir.join(file_name);
@@ -71,7 +72,7 @@ fn create_private_temp(bytes: &[u8], ext: &str) -> io::Result<PathBuf> {
 }
 
 /// 고친 바이트를 확장자 `ext`의 임시 파일에 써서 검사하고 보고서를 돌려준다. 판정은 호출자가 한다.
-pub(crate) fn rescan_bytes(bytes: &[u8], ext: &str, opts: &Options) -> Result<FileReport, String> {
+pub(crate) fn rescan_bytes(bytes: &[u8], ext: &str, opts: &CheckOptions) -> Result<FileReport, String> {
     let tmp = create_private_temp(bytes, ext).map_err(|e| e.to_string())?;
     let report = scan_file(&tmp, opts);
     let _ = fs::remove_file(&tmp);

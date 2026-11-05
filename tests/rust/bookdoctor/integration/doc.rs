@@ -5,9 +5,9 @@ use std::fs;
 
 use crate::support::shared_fixtures::doc_cfb;
 use crate::support::shared_fixtures::write;
-use bookdoctor::Format;
-use bookdoctor::cli_parser::{Options, run};
-use bookdoctor::format_dispatcher::scan_file;
+use bookdoctor::cli_parser::run;
+use doc_checker::Format;
+use doc_checker::format_dispatcher::scan_file;
 
 #[test]
 fn doc_and_dot_are_collected_and_lookalikes_are_not() {
@@ -21,5 +21,5 @@ fn doc_and_dot_are_collected_and_lookalikes_are_not() {
     let out = String::from_utf8(out).unwrap();
     assert!(!out.contains("c.docs"), "{out}");
     let (_d2, p) = write("b.dot", &bytes);
-    assert_eq!(scan_file(&p, &Options::default()).format, Some(Format::Doc));
+    assert_eq!(scan_file(&p, &doc_checker::CheckOptions::default()).format, Some(Format::Doc));
 }

@@ -1,5 +1,7 @@
 //! 텍스트·JSON·리포트 파일 출력 테스트.
 
+mod support;
+
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
@@ -90,12 +92,11 @@ fn bidi_file_name_is_hidden_in_text_but_kept_in_json() {
 
 #[test]
 fn escape_and_bidi_in_the_path_are_hidden_in_text_but_the_real_file_is_found() {
-    use bookdoctor::cli_parser::Options;
-    use bookdoctor::format_dispatcher::scan_file;
+    use doc_checker::format_dispatcher::scan_file;
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("ev\u{1b}[31m\u{202e}il.txt");
     std::fs::write(&p, [0u8; 4096]).unwrap();
-    let r = scan_file(&p, &Options { no_pdf_worker: true, ..Options::default() });
+    let r = scan_file(&p, &doc_checker::CheckOptions { no_pdf_worker: true, ..doc_checker::CheckOptions::default() });
     // 열고 옮기는 쪽이 쓰는 경로는 원문이다.
     assert_eq!(Path::new(&r.path), p.as_path());
     assert!(Path::new(&r.path).exists());
@@ -208,4 +209,37 @@ fn escape_in_file_name_and_detail_never_reaches_output_raw() {
     let text = String::from_utf8(out).unwrap();
     // 우리가 붙인 시작·끝 코드 한 쌍(칠한 줄 1개)만 있어야 한다.
     assert_eq!(text.matches('\u{1b}').count(), 2, "{text:?}");
+}
+
+// ---- JSON 출력의 뷰어 차단 값 ----
+
+mod viewer_blocked_json {
+    use super::support;
+    use crate::support::shared_fixtures::opts;
+    use bookdoctor::report::write_json_line;
+    use doc_checker::format_dispatcher::scan_file;
+
+    fn scripted_epub() -> support::NamedFile {
+        let f = support::epub_named("s.epub");
+        support::epub_with_chapter(f.path(), &support::xhtml("<script>eval(x)</script><p>hi</p>"));
+        f
+    }
+
+    #[test]
+    fn json_shows_viewer_blocked_values() {
+        let e = scripted_epub();
+        let r = scan_file(e.path(), &opts());
+        let mut out = Vec::new();
+        write_json_line(&r, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("\"viewer_blocked\":\"blocked\""), "{s}");
+        let t = support::file_with("b.txt", "<script>x</script>\n\u{202E}한글\n".as_bytes());
+        let mut out = Vec::new();
+        write_json_line(&scan_file(t.path(), &opts()), &mut out).unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("\"viewer_blocked\":\"not_blocked\""));
+        let d = support::file_with("c.txt", b"\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD\n<p>x</p>\n");
+        let mut out = Vec::new();
+        write_json_line(&scan_file(d.path(), &opts()), &mut out).unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("\"viewer_blocked\":\"n/a\""));
+    }
 }

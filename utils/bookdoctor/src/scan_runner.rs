@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
-use crate::finding_model::Severity;
+use crate::{FileReport, Severity};
 
 // ---- 입력 경로에서 검사할 파일을 모은다. ----
 
@@ -65,6 +65,17 @@ pub trait Report: Send {
     fn severities(&self) -> impl Iterator<Item = Severity> + '_;
     /// 파일 전체를 검사하지 못했는가(읽기 실패, 한도 초과 등).
     fn is_incomplete(&self) -> bool;
+}
+
+/// 검사 보고서는 실행기가 세는 단위다.
+impl Report for FileReport {
+    fn severities(&self) -> impl Iterator<Item = Severity> + '_ {
+        self.findings.iter().map(|f| f.severity)
+    }
+
+    fn is_incomplete(&self) -> bool {
+        self.incomplete
+    }
 }
 
 /// 전체 실행의 요약.

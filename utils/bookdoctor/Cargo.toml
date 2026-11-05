@@ -1,103 +1,34 @@
 [package]
 name = "bookdoctor"
-description = "EPUB·PDF·TXT 통합 진단 (보안, 결함, 렌더링 차단 검사)"
+description = "EPUB·PDF·TXT 통합 진단 도구: 명령행, 파일 순회·병렬 실행, 정리·수리 적용, 보고 출력. 검사·교정 기법은 doc_checker"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 autotests = false
 
 [dependencies]
-common = { path = "../../libs/common", default-features = false, features = ["xml_parser", "zip_reader"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-text_decoder = { path = "../../libs/text_decoder" }
-encoding_rs = "0.8.42"
-flate2 = "1"
-htmlkit = { path = "../../libs/htmlkit" }
-lopdf.workspace = true
+doc_checker = { path = "../../libs/doc_checker" }
 rayon = "1.12.0"
-regex = "1.13.1"
-roxmltree = "0.21.1"
-scraper = "0.29.0"
-sha2 = "0.11.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
-sysdeps = { path = "../../libs/sysdeps" }
-zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+# 테스트 준비물(doc_checker 테스트와 함께 쓴다)이 ZIP·PDF·압축 데이터를 만든다.
+encoding_rs = "0.8.42"
+flate2 = "1"
+lopdf.workspace = true
+sysdeps = { path = "../../libs/sysdeps" }
 tempfile = "3.27.0"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [[test]]
 name = "cli_parser"
 path = "../../tests/rust/bookdoctor/cli_parser.rs"
 
 [[test]]
-name = "generic_checker"
-path = "../../tests/rust/bookdoctor/generic_checker.rs"
-
-[[test]]
 name = "output_formatter"
 path = "../../tests/rust/bookdoctor/output_formatter.rs"
-
-[[test]]
-name = "doc"
-path = "../../tests/rust/bookdoctor/doc.rs"
-
-[[test]]
-name = "doc_rtf_checker"
-path = "../../tests/rust/bookdoctor/doc/rtf_checker.rs"
-
-[[test]]
-name = "epub"
-path = "../../tests/rust/bookdoctor/epub.rs"
-
-[[test]]
-name = "epub_render_checker"
-path = "../../tests/rust/bookdoctor/epub/render_checker.rs"
-
-[[test]]
-name = "epub_security_checker"
-path = "../../tests/rust/bookdoctor/epub/security_checker.rs"
-
-[[test]]
-name = "epub_structure_checker"
-path = "../../tests/rust/bookdoctor/epub/structure_checker.rs"
-
-[[test]]
-name = "finding_model"
-path = "../../tests/rust/bookdoctor/finding_model.rs"
-
-[[test]]
-name = "hwp"
-path = "../../tests/rust/bookdoctor/hwp.rs"
-
-[[test]]
-name = "mojibake_detector"
-path = "../../tests/rust/bookdoctor/mojibake_detector.rs"
-
-[[test]]
-name = "text_sampler"
-path = "../../tests/rust/bookdoctor/text_sampler.rs"
-
-[[test]]
-name = "ole_parser"
-path = "../../tests/rust/bookdoctor/ole_parser.rs"
-
-[[test]]
-name = "ole_parser_vba_decoder"
-path = "../../tests/rust/bookdoctor/ole_parser/vba_decoder.rs"
-
-[[test]]
-name = "pdf_pdf_sanitizer"
-path = "../../tests/rust/bookdoctor/pdf/pdf_sanitizer.rs"
-
-[[test]]
-name = "pdf_security_checker"
-path = "../../tests/rust/bookdoctor/pdf/security_checker.rs"
-
-[[test]]
-name = "pdf_structure_checker"
-path = "../../tests/rust/bookdoctor/pdf/structure_checker.rs"
 
 [[test]]
 name = "file_prefetcher"
@@ -108,80 +39,16 @@ name = "file_quarantiner"
 path = "../../tests/rust/bookdoctor/file_quarantiner.rs"
 
 [[test]]
-name = "nested_scanner"
-path = "../../tests/rust/bookdoctor/nested_scanner.rs"
-
-[[test]]
-name = "defect_repairer"
-path = "../../tests/rust/bookdoctor/defect_repairer.rs"
-
-[[test]]
-name = "defect_repairer_xhtml_fix"
-path = "../../tests/rust/bookdoctor/defect_repairer/xhtml_fix.rs"
-
-[[test]]
 name = "report"
 path = "../../tests/rust/bookdoctor/report.rs"
-
-[[test]]
-name = "rule_engine"
-path = "../../tests/rust/bookdoctor/rule_engine.rs"
-
-[[test]]
-name = "rule_engine_builtin_rules"
-path = "../../tests/rust/bookdoctor/rule_engine/builtin_rules.rs"
-
-[[test]]
-name = "rule_engine_rule_parser"
-path = "../../tests/rust/bookdoctor/rule_engine/rule_parser.rs"
 
 [[test]]
 name = "scan_runner"
 path = "../../tests/rust/bookdoctor/scan_runner.rs"
 
 [[test]]
-name = "epub_sanitizer"
-path = "../../tests/rust/bookdoctor/epub_sanitizer.rs"
-
-[[test]]
-name = "format_dispatcher"
-path = "../../tests/rust/bookdoctor/format_dispatcher.rs"
-
-[[test]]
-name = "magic_sniffer"
-path = "../../tests/rust/bookdoctor/magic_sniffer.rs"
-
-[[test]]
-name = "txt_checker"
-path = "../../tests/rust/bookdoctor/txt_checker.rs"
-
-[[test]]
-name = "viewer_block_table"
-path = "../../tests/rust/bookdoctor/viewer_block_table.rs"
-
-[[test]]
-name = "zipcheck_fast_zip_checker"
-path = "../../tests/rust/bookdoctor/zipcheck/fast_zip_checker.rs"
-
-[[test]]
-name = "zipcheck_hwpx_checker"
-path = "../../tests/rust/bookdoctor/zipcheck/hwpx_checker.rs"
-
-[[test]]
-name = "zipcheck_ooxml_checker"
-path = "../../tests/rust/bookdoctor/zipcheck/ooxml_checker.rs"
-
-[[test]]
-name = "zip_name_rules"
-path = "../../tests/rust/bookdoctor/zip_name_rules.rs"
-
-[[test]]
 name = "integration_bin"
 path = "../../tests/rust/bookdoctor/integration/bin.rs"
-
-[[test]]
-name = "integration_doc"
-path = "../../tests/rust/bookdoctor/integration/doc.rs"
 
 [[test]]
 name = "integration_html"
@@ -190,10 +57,6 @@ path = "../../tests/rust/bookdoctor/integration/html.rs"
 [[test]]
 name = "integration_hwp"
 path = "../../tests/rust/bookdoctor/integration/hwp.rs"
-
-[[test]]
-name = "integration_recurse"
-path = "../../tests/rust/bookdoctor/integration/recurse.rs"
 
 [[test]]
 name = "integration_rtf_disguise"
@@ -208,29 +71,21 @@ name = "integration_scan"
 path = "../../tests/rust/bookdoctor/integration/scan.rs"
 
 [[test]]
+name = "file_sanitizer"
+path = "../../tests/rust/bookdoctor/file_sanitizer.rs"
+
+[[test]]
+name = "file_repairer"
+path = "../../tests/rust/bookdoctor/file_repairer.rs"
+
+[[test]]
+name = "integration_doc"
+path = "../../tests/rust/bookdoctor/integration/doc.rs"
+
+[[test]]
+name = "integration_recurse"
+path = "../../tests/rust/bookdoctor/integration/recurse.rs"
+
+[[test]]
 name = "integration_zip_fast"
 path = "../../tests/rust/bookdoctor/integration/zip_fast.rs"
-
-[[test]]
-name = "hwp_script_checker"
-path = "../../tests/rust/bookdoctor/hwp/script_checker.rs"
-
-[[test]]
-name = "hwp_bindata_checker"
-path = "../../tests/rust/bookdoctor/hwp/bindata_checker.rs"
-
-[[test]]
-name = "hwp_record_reader"
-path = "../../tests/rust/bookdoctor/hwp/record_reader.rs"
-
-[[test]]
-name = "rule_engine_rule_matcher"
-path = "../../tests/rust/bookdoctor/rule_engine/rule_matcher.rs"
-
-[[test]]
-name = "pdf"
-path = "../../tests/rust/bookdoctor/pdf.rs"
-
-[[test]]
-name = "zipcheck"
-path = "../../tests/rust/bookdoctor/zipcheck.rs"

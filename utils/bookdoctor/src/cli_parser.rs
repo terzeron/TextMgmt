@@ -9,16 +9,17 @@ use std::sync::Arc;
 
 use crate::DEFAULT_LIBRARY_ROOT;
 use crate::scan_runner::{DEFAULT_WORKERS, pool, workers_within_memory};
+use doc_checker::{CheckOptions, MAX_TOTAL_MB};
 
 use crate::scan_runner::collect_files;
 use crate::{Severity, scan_streaming};
 
 use crate::file_prefetcher::Prefetcher;
-use crate::format_dispatcher::is_exec_extension;
-use crate::format_dispatcher::scan_file;
-use crate::pdf::security_checker::MAX_PARALLEL_INPUT_MB;
 use crate::report::{Aggregate, write_json_line, write_summary_line, write_text};
-use crate::rule_engine::Compiled;
+use doc_checker::format_dispatcher::is_exec_extension;
+use doc_checker::format_dispatcher::scan_file;
+use doc_checker::pdf::security_checker::MAX_PARALLEL_INPUT_MB;
+use doc_checker::rule_engine::Compiled;
 
 const USAGE: &str = "usage: bookdoctor scan [--json] [--min-severity low|medium|high|critical] PATH... | sanitize PATH... | repair PATH... | quarantine PATH... | unquarantine";
 
@@ -28,9 +29,6 @@ pub const TRASH_DIR_NAME: &str = "0_trash";
 pub const BROKEN_DIR_NAME: &str = "0_broken";
 /// 격리 매니페스트 파일 이름. 격리 디렉터리 안에 둔다.
 pub const MANIFEST_NAME: &str = "manifest.json";
-
-/// 파일 하나에서 읽는 최대 크기(MB).
-const MAX_TOTAL_MB: u64 = 256;
 
 /// 한 번에 검사하는 파일 수는 워커 수의 이 배수다.
 const WINDOW_PER_WORKER: usize = 8;
@@ -116,6 +114,11 @@ impl Default for Options {
 }
 
 impl Options {
+    /// 검사기에 넘기는 검사 설정.
+    pub fn check_options(&self) -> CheckOptions {
+        CheckOptions { max_total_mb: self.max_total_mb, zip_deep: self.zip_deep, no_pdf_worker: self.no_pdf_worker, recurse: self.recurse, ruleset: self.ruleset.clone() }
+    }
+
     /// `sanitize`·`repair`가 원본을 두는 디렉터리.
     pub fn trash_dir(&self) -> PathBuf {
         self.library_root.join(TRASH_DIR_NAME)
@@ -178,7 +181,7 @@ fn wanted(p: &Path) -> bool {
 }
 
 fn report_error(e: &dyn std::fmt::Display) {
-    eprintln!("bookdoctor: error: {}", crate::output_formatter::sanitize_display(&e.to_string(), usize::MAX, None));
+    eprintln!("bookdoctor: error: {}", doc_checker::text_sanitizer::sanitize_display(&e.to_string(), usize::MAX, None));
 }
 
 /// 진입점. 종료 코드를 돌려준다. 색은 실제 stdout이 터미널인지와 `NO_COLOR`로 정한다.
@@ -200,7 +203,7 @@ pub fn run_with_env(argv: &[String], out: &mut dyn Write, is_tty: bool, no_color
     match parse(argv) {
         Ok(opts) => execute(&opts, out, is_tty, no_color),
         Err(msg) => {
-            eprintln!("{USAGE}\nbookdoctor: error: {}", crate::output_formatter::sanitize_display(&msg, usize::MAX, None));
+            eprintln!("{USAGE}\nbookdoctor: error: {}", doc_checker::text_sanitizer::sanitize_display(&msg, usize::MAX, None));
             2
         }
     }
@@ -208,11 +211,11 @@ pub fn run_with_env(argv: &[String], out: &mut dyn Write, is_tty: bool, no_color
 
 /// 읽은 설정으로 명령을 실행한다. 내장 규칙을 읽어 `ruleset`에 넣는다.
 pub fn execute(opts: &Options, out: &mut dyn Write, is_tty: bool, no_color: bool) -> i32 {
-    let opts = Options { ruleset: Some(Arc::new(crate::rule_engine::builtin_compiled())), ..opts.clone() };
+    let opts = Options { ruleset: Some(Arc::new(doc_checker::rule_engine::builtin_compiled())), ..opts.clone() };
     let result = match opts.command {
         Command::Scan => scan(&opts, out, is_tty && !no_color),
-        Command::Sanitize => crate::epub_sanitizer::run(&opts, out),
-        Command::Repair => crate::defect_repairer::run(&opts, out),
+        Command::Sanitize => crate::file_sanitizer::run(&opts, out),
+        Command::Repair => crate::file_repairer::run(&opts, out),
         Command::Quarantine => crate::file_quarantiner::run(&opts, out),
         Command::Unquarantine => crate::file_quarantiner::undo(&opts, out),
     };
@@ -252,13 +255,14 @@ fn scan(opts: &Options, out: &mut dyn Write, color: bool) -> io::Result<i32> {
     let prefetcher = (opts.prefetch && paths.len() > 1).then(|| Prefetcher::start(paths.clone(), PREFETCH_FILES + workers * WINDOW_PER_WORKER, PREFETCH_BYTES, PREFETCH_MAX_FILE));
     let mut emitted = 0usize;
     let mut agg = Aggregate::new();
+    let check = opts.check_options();
     let summary = scan_streaming(
         &paths,
         &pool,
         workers * WINDOW_PER_WORKER,
         |p| {
             // 점수 같은 판단은 scan_file 안에서 끝낸다. 출력 필터는 그 뒤에만 건다.
-            let mut r = scan_file(p, opts);
+            let mut r = scan_file(p, &check);
             r.suppress_below(opts.min_severity);
             r
         },
@@ -328,7 +332,7 @@ scan 옵션:
 종료 코드 (scan은 출력된 지표 기준. --min-severity보다 낮은 지표는 세지 않는다):
   0 지표 없음, 1 지표 있음 또는 쓰기 실패, 2 검사하지 못한 파일이 있고 지표는 없음 또는 잘못된 인자
 ",
-        TEXT_PROBE = crate::pdf::structure_checker::TEXT_PROBE_PAGES,
+        TEXT_PROBE = doc_checker::pdf::structure_checker::TEXT_PROBE_PAGES,
         library = DEFAULT_LIBRARY_ROOT,
         trash = TRASH_DIR_NAME,
         broken = BROKEN_DIR_NAME,

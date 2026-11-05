@@ -10,7 +10,7 @@ use bookdoctor::cli_parser::{Options, run};
 fn no_recurse_turns_the_nested_scan_off() {
     let outer = zip_bytes(&[("inner.docx", &vba_docx())]);
     let opts = Options { recurse: false, ..Options::default() };
-    let r = scan_bytes("a.zip", &outer, &opts);
+    let r = scan_bytes("a.zip", &outer, &opts.check_options());
     assert!(!has_vba_under(&r, "inner.docx!"), "{:?}", r.findings);
     assert!(Options::default().recurse);
     // 명령행 옵션도 받는다.

@@ -15,9 +15,10 @@ docs/       문서
 
 | crate | 용도 |
 | --- | --- |
-| `text_decoder` | 잘못된 바이트를 버리는 UTF-8·CP949 디코딩과 한글 음절 판정. `doc_reader`의 아래 계층이다. 본문 표본 추출과 인코딩 추정은 bookdoctor `text_sampler`에 있다 |
+| `text_decoder` | 잘못된 바이트를 버리는 UTF-8·CP949 디코딩과 한글 음절 판정. `doc_reader`의 아래 계층이다. 본문 표본 추출과 인코딩 추정은 `doc_checker::text_sampler`에 있다 |
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. backend `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
+| `doc_checker` | 문서 파일 검사와 교정 기법. EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표(`format_dispatcher::scan_file`), 보안 정리(`epub_sanitizer`, `pdf::pdf_sanitizer`)와 결함 수리(`defect_repairer`)의 재구성·검증. OLE 복합 파일 파서(`ole_parser`)를 포함한다. 파일 하나를 받아 보고서나 고친 바이트를 돌려줄 뿐, 파일 순회·적용·출력은 하지 않는다. 검사 설정은 `CheckOptions`다 |
 | `common` | 여러 crate가 함께 쓰는 기능: HTTP 요청·응답과 `ureq` 구현(`http_client`), URL 나누기·잇기·인코딩(`url_parser`), JSON 필드 읽기(`json_field_reader`), DTD를 허용하는 XML 해석(`xml_parser`), ZIP 열기와 멤버 읽기 상한(`zip_reader`), panic 메시지 읽기(`panic_message`). 시스템 능력이나 특정 문서 형식에 속하지 않고 두 crate 이상이 쓰는 것만 둔다. `http_client`·`xml_parser`·`zip_reader`는 feature이고, 필요 없는 crate는 `default-features = false`로 끈다 |
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
 | `stat` | 색인·파싱 통계 카운터 |
@@ -32,14 +33,14 @@ docs/       문서
 
 | crate | 용도 |
 | --- | --- |
-| `bookdoctor` | 문서 파일 진단(`scan`), 보안 정리(`sanitize`), 결함 수리(`repair`), 손상 문서 격리·복구(`quarantine`·`unquarantine`). OLE 복합 파일 파서(`ole`)를 포함한다 |
+| `bookdoctor` | 문서 파일 진단(`scan`), 보안 정리(`sanitize`), 결함 수리(`repair`), 손상 문서 격리·복구(`quarantine`·`unquarantine`) 명령. 명령행, 파일 순회와 병렬 실행, 적용(휴지통 보관·덮어쓰기), 보고 출력을 맡고 검사·교정 기법은 `doc_checker`를 쓴다 |
 | `loader` | 책·만화 디렉토리의 파일을 읽어 ES 색인을 만들고 맞춘다 |
 
 ## 규칙
 
 - `-h`/`--help`는 도움말을 출력한다. `loader`는 인자 없이 실행하면 사용법을 출력하고 코드 1로 끝난다.
 - 잘못된 인자의 출력 위치와 종료 코드는 각 CLI 계약을 따른다.
-- **테스트 파일은 소스 모듈과 1:1로 둔다.** `tests/rust/<crate>/<모듈 경로>.rs` 하나가 `src/<모듈 경로>.rs` 하나를 검증한다(예: `bookdoctor/epub/security.rs`).
+- **테스트 파일은 소스 모듈과 1:1로 둔다.** `tests/rust/<crate>/<모듈 경로>.rs` 하나가 `src/<모듈 경로>.rs` 하나를 검증한다(예: `doc_checker/epub/security_checker.rs`).
   HTTP 라우트, CLI 진입점, 실행 파일, 소켓, 컨테이너를 거치는 테스트는 `tests/rust/<crate>/integration/<시나리오>.rs`에 두고 target 이름을 `integration_<시나리오>`로 한다.
   `*_gaps`, `*_parity`, `*_1`처럼 작업 이력을 따르는 파일 이름은 쓰지 않는다.
   여러 crate 테스트가 함께 쓰는 helper(TLS 테스트 서버와 인증서)는 `tests/rust/shared/`에 둔다. `tests/rust/common/`은 `common` crate의 테스트다.

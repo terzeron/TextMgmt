@@ -225,3 +225,13 @@ fn pool_has_at_least_one_thread_and_the_default_is_two() {
     assert_eq!(pool(0).current_num_threads(), 1);
     assert_eq!(pool(3).current_num_threads(), 3);
 }
+
+#[test]
+fn a_file_report_is_counted_by_its_finding_severities_and_incomplete_state() {
+    let mut r = bookdoctor::FileReport::new(Path::new("a.pdf"), Some(bookdoctor::Format::Pdf));
+    r.push(bookdoctor::Category::Defect, Severity::High, "NOT_UTF8", "", "d");
+    assert_eq!(r.severities().collect::<Vec<_>>(), vec![Severity::High]);
+    assert!(!r.is_incomplete());
+    r.mark_incomplete("skipped");
+    assert!(r.is_incomplete());
+}

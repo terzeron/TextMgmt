@@ -289,3 +289,133 @@ fn an_empty_argument_list_needs_a_command_and_help_exits_0() {
     assert_eq!(run(&["scan".into(), "-h".into()], &mut out), 0);
     assert!(String::from_utf8(out).unwrap().contains("bookdoctor unquarantine"));
 }
+
+#[test]
+fn zip_deep_is_off_by_default_on_the_command_line() {
+    assert!(!parse(&["scan".to_string(), "a.zip".to_string()]).unwrap().zip_deep);
+}
+
+/// 기본 출력은 HIGH 미만 지표를 숨긴다. `--min-severity low`면 MEDIUM인 외부 이미지 참조도 보인다.
+#[test]
+fn medium_findings_are_hidden_unless_min_severity_is_lowered() {
+    let rels = br#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId0" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="http://tracker.example/p.gif" TargetMode="External"/></Relationships>"#;
+    let d = tempfile::tempdir().unwrap();
+    support::docx_with(&d.path().join("img.docx"), &[], &[("word/_rels/document.xml.rels", rels)]);
+    let show = |extra: &[&str]| {
+        let mut argv: Vec<String> = vec!["scan".into()];
+        argv.extend(extra.iter().map(|s| s.to_string()));
+        argv.push(d.path().to_string_lossy().into_owned());
+        let mut out = Vec::new();
+        run_with_env(&argv, &mut out, false, false);
+        String::from_utf8(out).unwrap()
+    };
+    assert!(!show(&[]).contains("OOXML_EXTERNAL_IMAGE"));
+    assert!(show(&["--min-severity", "low"]).contains("OOXML_EXTERNAL_IMAGE"));
+}
+
+/// 디렉터리를 검사할 때 명령행이 모으는 파일과 결과(옛 format_dispatcher 테스트에서 옮겼다).
+mod directory_scan {
+    use super::*;
+    use bookdoctor::cli_parser::run_with_env;
+
+    #[test]
+    fn directory_walk_collects_zip_docx_hwpx_but_not_lookalike_extensions() {
+        let d = tempfile::tempdir().unwrap();
+        for name in ["a.zip", "b.docx", "c.hwpx", "d.docs", "e.zipx"] {
+            std::fs::write(d.path().join(name), b"PK\x03\x04 not a real archive").unwrap();
+        }
+        let mut out = Vec::new();
+        run_with_env(&["scan".into(), "--min-severity".into(), "low".into(), d.path().to_string_lossy().into_owned()], &mut out, false, false);
+        let out = String::from_utf8(out).unwrap();
+        for hit in ["a.zip", "b.docx", "c.hwpx"] {
+            assert!(out.contains(hit), "{hit}: {out}");
+        }
+        for miss in ["d.docs", "e.zipx"] {
+            assert!(!out.contains(miss), "{miss}: {out}");
+        }
+    }
+
+    /// `MZ` 머리, e_lfanew=`offset`, 그 자리의 `PE\0\0`. 파일 길이는 `len`이다.
+    fn pe_bytes(offset: u32, len: usize) -> Vec<u8> {
+        let mut b = vec![0u8; len];
+        b[0] = b'M';
+        b[1] = b'Z';
+        b[0x3C..0x40].copy_from_slice(&offset.to_le_bytes());
+        let at = offset as usize;
+        b[at..at + 4].copy_from_slice(b"PE\0\0");
+        b
+    }
+
+    fn min_pe() -> Vec<u8> {
+        pe_bytes(0x40, 0x100)
+    }
+
+    fn elf() -> Vec<u8> {
+        let mut b = vec![0u8; 128];
+        b[..4].copy_from_slice(b"\x7fELF");
+        b
+    }
+
+    fn run_dir(dir: &Path, extra: &[&str]) -> (i32, String) {
+        let mut argv: Vec<String> = vec!["scan".into()];
+        argv.extend(extra.iter().map(|s| s.to_string()));
+        argv.push(dir.to_string_lossy().into_owned());
+        let mut out = Vec::new();
+        let code = run(&argv, &mut out);
+        (code, String::from_utf8(out).unwrap())
+    }
+
+    #[test]
+    fn executable_file_is_high_and_survives_the_default_filter() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.exe"), min_pe()).unwrap();
+        let (code, out) = run_dir(d.path(), &[]);
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains("[HIGH] EXECUTABLE_FILE"), "{out}");
+    }
+
+    #[test]
+    fn summary_line_counts_confirmed_executables_separately() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.exe"), min_pe()).unwrap();
+        std::fs::write(d.path().join("b.so"), elf()).unwrap();
+        std::fs::write(d.path().join("c.dll"), b"not a binary at all\n".repeat(10)).unwrap();
+        let (_, out) = run_dir(d.path(), &[]);
+        assert!(out.contains("실행 파일 2건"), "{out}");
+    }
+
+    #[test]
+    fn summary_line_has_no_executable_part_without_executables() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.txt"), "소림사 장로가 강호에서 내공을 운기조식했다.\n".repeat(10)).unwrap();
+        let (_, out) = run_dir(d.path(), &[]);
+        assert!(!out.contains("실행 파일"), "{out}");
+    }
+
+    #[test]
+    fn json_names_the_format_executable() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.exe"), min_pe()).unwrap();
+        let (_, out) = run_dir(d.path(), &["--json"]);
+        assert!(out.contains("\"format\":\"executable\""), "{out}");
+    }
+
+    #[test]
+    fn directory_walk_collects_executable_extensions_but_not_unknown_ones() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.exe"), min_pe()).unwrap();
+        std::fs::write(d.path().join("readme.md"), b"x").unwrap();
+        let (_, out) = run_dir(d.path(), &["--min-severity", "low"]);
+        assert!(out.contains("a.exe") && !out.contains("readme.md"), "{out}");
+    }
+
+    #[test]
+    fn executable_count_survives_a_filter_that_hides_the_finding() {
+        // HIGH인 EXECUTABLE_FILE이 --min-severity critical로 숨겨져도 "실행 파일 N건"은 남아야 한다.
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("a.exe"), min_pe()).unwrap();
+        let (code, out) = run_dir(d.path(), &["--min-severity", "critical"]);
+        assert_eq!(code, 0, "{out}");
+        assert!(!out.contains("EXECUTABLE_FILE") && out.contains("실행 파일 1건"), "{out}");
+    }
+}

@@ -14,7 +14,7 @@ use crate::output_formatter::{show, thousands};
 use serde_json::{Map, Value, json};
 
 use crate::cli_parser::{BROKEN_DIR_NAME, Options};
-use crate::format_dispatcher::scan_file;
+use doc_checker::format_dispatcher::scan_file;
 
 /// 인코딩 손상을 뜻하는 지표 코드. 다른 코드(NOT_UTF8, FORMAT_MISMATCH 등)는 격리하지 않는다.
 pub const MOJIBAKE_CODE: &str = "MOJIBAKE";
@@ -31,7 +31,7 @@ pub type Log<'a> = &'a dyn Fn(&str);
 pub type Mover<'a> = &'a dyn Fn(&Path, &Path) -> io::Result<()>;
 
 fn name_of(path: &str, max_chars: usize) -> String {
-    Path::new(path).file_name().map(|n| crate::output_formatter::sanitize_display(&n.to_string_lossy(), max_chars, None)).unwrap_or_default()
+    Path::new(path).file_name().map(|n| doc_checker::text_sanitizer::sanitize_display(&n.to_string_lossy(), max_chars, None)).unwrap_or_default()
 }
 
 fn field(rec: &Rec, key: &str) -> String {
@@ -47,7 +47,7 @@ fn quarantinable(p: &Path) -> bool {
 pub fn find_corrupted(opts: &Options) -> Vec<Rec> {
     let mut found = Vec::new();
     for path in crate::cli_parser::collect(opts, quarantinable) {
-        let report = scan_file(&path, opts);
+        let report = scan_file(&path, &opts.check_options());
         if !report.findings.iter().any(|f| f.code == MOJIBAKE_CODE) {
             continue;
         }

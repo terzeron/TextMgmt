@@ -1,0 +1,178 @@
+[package]
+name = "doc_checker"
+description = "문서 파일 검사와 교정 기법: EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표, 보안 정리와 결함 수리의 재구성·검증"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[dependencies]
+common = { path = "../common", default-features = false, features = ["xml_parser", "zip_reader"] }
+encoding_rs = "0.8.42"
+flate2 = "1"
+htmlkit = { path = "../htmlkit" }
+lopdf.workspace = true
+regex = "1.13.1"
+roxmltree = "0.21.1"
+scraper = "0.29.0"
+serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11.1"
+sysdeps = { path = "../sysdeps" }
+text_decoder = { path = "../text_decoder" }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["preserve_order"] }
+tempfile = "3.27.0"
+
+[[test]]
+name = "generic_checker"
+path = "../../tests/rust/doc_checker/generic_checker.rs"
+
+[[test]]
+name = "doc"
+path = "../../tests/rust/doc_checker/doc.rs"
+
+[[test]]
+name = "doc_rtf_checker"
+path = "../../tests/rust/doc_checker/doc/rtf_checker.rs"
+
+[[test]]
+name = "epub"
+path = "../../tests/rust/doc_checker/epub.rs"
+
+[[test]]
+name = "epub_render_checker"
+path = "../../tests/rust/doc_checker/epub/render_checker.rs"
+
+[[test]]
+name = "epub_security_checker"
+path = "../../tests/rust/doc_checker/epub/security_checker.rs"
+
+[[test]]
+name = "epub_structure_checker"
+path = "../../tests/rust/doc_checker/epub/structure_checker.rs"
+
+[[test]]
+name = "finding_model"
+path = "../../tests/rust/doc_checker/finding_model.rs"
+
+[[test]]
+name = "hwp"
+path = "../../tests/rust/doc_checker/hwp.rs"
+
+[[test]]
+name = "mojibake_detector"
+path = "../../tests/rust/doc_checker/mojibake_detector.rs"
+
+[[test]]
+name = "text_sampler"
+path = "../../tests/rust/doc_checker/text_sampler.rs"
+
+[[test]]
+name = "ole_parser"
+path = "../../tests/rust/doc_checker/ole_parser.rs"
+
+[[test]]
+name = "ole_parser_vba_decoder"
+path = "../../tests/rust/doc_checker/ole_parser/vba_decoder.rs"
+
+[[test]]
+name = "pdf_pdf_sanitizer"
+path = "../../tests/rust/doc_checker/pdf/pdf_sanitizer.rs"
+
+[[test]]
+name = "pdf_security_checker"
+path = "../../tests/rust/doc_checker/pdf/security_checker.rs"
+
+[[test]]
+name = "pdf_structure_checker"
+path = "../../tests/rust/doc_checker/pdf/structure_checker.rs"
+
+[[test]]
+name = "nested_scanner"
+path = "../../tests/rust/doc_checker/nested_scanner.rs"
+
+[[test]]
+name = "defect_repairer"
+path = "../../tests/rust/doc_checker/defect_repairer.rs"
+
+[[test]]
+name = "defect_repairer_xhtml_fix"
+path = "../../tests/rust/doc_checker/defect_repairer/xhtml_fix.rs"
+
+[[test]]
+name = "rule_engine"
+path = "../../tests/rust/doc_checker/rule_engine.rs"
+
+[[test]]
+name = "rule_engine_builtin_rules"
+path = "../../tests/rust/doc_checker/rule_engine/builtin_rules.rs"
+
+[[test]]
+name = "rule_engine_rule_parser"
+path = "../../tests/rust/doc_checker/rule_engine/rule_parser.rs"
+
+[[test]]
+name = "epub_sanitizer"
+path = "../../tests/rust/doc_checker/epub_sanitizer.rs"
+
+[[test]]
+name = "format_dispatcher"
+path = "../../tests/rust/doc_checker/format_dispatcher.rs"
+
+[[test]]
+name = "magic_sniffer"
+path = "../../tests/rust/doc_checker/magic_sniffer.rs"
+
+[[test]]
+name = "txt_checker"
+path = "../../tests/rust/doc_checker/txt_checker.rs"
+
+[[test]]
+name = "viewer_block_table"
+path = "../../tests/rust/doc_checker/viewer_block_table.rs"
+
+[[test]]
+name = "zipcheck_fast_zip_checker"
+path = "../../tests/rust/doc_checker/zipcheck/fast_zip_checker.rs"
+
+[[test]]
+name = "zipcheck_hwpx_checker"
+path = "../../tests/rust/doc_checker/zipcheck/hwpx_checker.rs"
+
+[[test]]
+name = "zipcheck_ooxml_checker"
+path = "../../tests/rust/doc_checker/zipcheck/ooxml_checker.rs"
+
+[[test]]
+name = "zip_name_rules"
+path = "../../tests/rust/doc_checker/zip_name_rules.rs"
+
+[[test]]
+name = "hwp_script_checker"
+path = "../../tests/rust/doc_checker/hwp/script_checker.rs"
+
+[[test]]
+name = "hwp_bindata_checker"
+path = "../../tests/rust/doc_checker/hwp/bindata_checker.rs"
+
+[[test]]
+name = "hwp_record_reader"
+path = "../../tests/rust/doc_checker/hwp/record_reader.rs"
+
+[[test]]
+name = "rule_engine_rule_matcher"
+path = "../../tests/rust/doc_checker/rule_engine/rule_matcher.rs"
+
+[[test]]
+name = "pdf"
+path = "../../tests/rust/doc_checker/pdf.rs"
+
+[[test]]
+name = "zipcheck"
+path = "../../tests/rust/doc_checker/zipcheck.rs"
+
+[[test]]
+name = "text_sanitizer"
+path = "../../tests/rust/doc_checker/text_sanitizer.rs"

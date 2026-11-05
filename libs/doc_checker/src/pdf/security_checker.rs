@@ -1,0 +1,679 @@
+//! PDF 정적 동작·활성 콘텐츠 검사 (옛 PDF 검사 도구에서 이식).
+//!
+//! PDF를 렌더링하거나 JavaScript를 실행하거나 첨부를 열거나 프로그램을 띄우지 않는다. PDF 파싱 자체가 공격면이므로
+//! 신뢰할 수 없는 파일은 권한 없는 샌드박스에서 검사한다.
+//!
+//! 메모리 상한 안에서 문서를 읽는 일(로딩 훅과 줄이기)은 `document_loader`가 맡고, 이 모듈은 읽은 문서와 원본 바이트를 검사한다.
+
+use std::borrow::Cow;
+use std::collections::BTreeSet;
+use std::sync::LazyLock;
+
+use regex::bytes::Regex;
+
+use crate::magic_sniffer::{Sniffed, sniff};
+use crate::text_sanitizer::sanitize as sanitize_text;
+use crate::{Category, FileReport, Severity};
+use lopdf::xref::XrefEntry;
+use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
+
+use crate::epub::security_checker::guarded;
+
+const MAX_DEPTH: usize = 100;
+const PREVIEW_CHARS: usize = 100;
+const JS_STREAM_LIMIT: usize = 64 * 1024;
+const MAX_DECOMPRESSED_STREAM_BYTES: usize = 4 * 1024 * 1024;
+/// Bound the amount of input PDF data held by concurrent scans. `lopdf` may
+/// allocate more than the input size while parsing, so this is a conservative
+/// concurrency guard rather than a hard process-memory limit.
+pub const MAX_PARALLEL_INPUT_MB: u64 = 256;
+
+/// File extensions that an embedded file or launch target should not carry.
+const RISKY_EXT: &[&str] = &[
+    "exe", "com", "scr", "pif", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta", "msi", "msp", "dll", "jar", "lnk", "reg", "cpl", "sh", "bash", "run", "bin", "appimage",
+    "desktop", "py", "pl", "rb", "docm", "xlsm", "pptm", "swf",
+];
+
+struct Finding {
+    severity: Severity,
+    kind: &'static str,
+    object: ObjectId,
+    path: String,
+    detail: String,
+}
+
+mod document_loader;
+
+use document_loader::{FILTER_ARRAY_TRUNCATED_KEY, FILTER_KEEP_LEN, FILTER_TRUNCATED_KEY, STREAM_KEEP_BYTES};
+pub use document_loader::{LoadInfo, load};
+pub(crate) use document_loader::{REF_FILE_BUDGET, count_raw_references};
+
+/// 한 스트림의 `/Filter` 배열이 이 길이 이상이면 `long filter chain`(Medium)이다. 계획 11행의 기준값이다.
+/// 정상 PDF의 체인은 보통 1~2단계(예: ASCII85+Flate)라서 5단계 이상은 해독 검사를 지치게 하려는 수법으로 본다. 경험적 값이다.
+/// 로딩 중 `FILTER_KEEP_LEN`(16)으로 잘린 배열은 표지(`FILTER_TRUNCATED_KEY`)가 있으므로 "16단계 이상"으로 보고 지표를 낸다.
+const LONG_FILTER_CHAIN: usize = 5;
+// 잘리지 않은 배열은 길이를 그대로 읽으므로, 자르는 길이가 기준보다 커야 기준 판정이 잘림에 가려지지 않는다.
+const _: () = assert!(FILTER_KEEP_LEN > LONG_FILTER_CHAIN);
+/// `startxref`가 이 개수 이상이면 `many incremental updates`(Low)다. 계획 11행의 기준값으로, 외부 근거 없는 경험적 값이다.
+/// 증분 저장은 이전 내용을 지우지 않고 덧붙이므로, 많이 쌓일수록 눈에 보이지 않는 옛 객체가 남을 수 있다.
+const MANY_INCREMENTAL_UPDATES: usize = 10;
+/// 내장 파일을 내용으로 판별할 때 보는 앞부분 길이. 계획은 1024바이트였으나(11-C), 해제한 스트림 전체가 메모리에 있으므로
+/// 64KiB까지 본다. PE 헤더가 1KiB 밖에 있어도 찾기 위해서다. 헤더가 64KiB 밖에 있는 PE는 놓치는 한계가 있다(정상 PE는 앞 수백 바이트).
+const EMBEDDED_SNIFF_BYTES: usize = 64 * 1024;
+
+// ---------------------------------------------------------------- helpers
+
+/// Make attacker-controlled text safe to print: no control chars, bounded length.
+fn sanitize(bytes: &[u8]) -> String {
+    sanitize_text(&String::from_utf8_lossy(bytes), PREVIEW_CHARS, Some('…'))
+}
+
+fn name_of(obj: &Object) -> Option<String> {
+    match obj {
+        Object::Name(n) => Some(String::from_utf8_lossy(n).into_owned()),
+        _ => None,
+    }
+}
+
+fn has_risky_ext(name: &[u8]) -> bool {
+    name_readings(name).iter().any(|reading| ext_is_risky(&reading.to_ascii_lowercase()))
+}
+
+/// 소문자로 만든 이름 하나의 확장자가 실행 파일인가. 주소 형태는 호스트가 아니라 경로를 본다.
+fn ext_is_risky(lower: &str) -> bool {
+    // 맨 앞이 http·https·ftp 주소이고 호스트가 비어 있지 않을 때만 호스트가 아니라 경로의 확장자를 본다.
+    // `https://example.com`의 `.com`은 DOS 실행 파일이 아니고, `https://x.example/evil.exe`는 경로가 .exe라서 잡힌다.
+    // 문자열 중간의 `://`나 모르는 형태는 이름 그대로 검사한다(뷰어가 어떻게 읽을지 모르므로 열어 두지 않는다).
+    let url_rest = ["http://", "https://", "ftp://"].iter().find_map(|scheme| lower.strip_prefix(scheme)).filter(|rest| !rest.is_empty() && !rest.starts_with('/'));
+    let target = if let Some(rest) = url_rest {
+        let rest = rest.split(['?', '#']).next().unwrap_or("");
+        rest.split_once('/').map_or("", |(_, path)| path)
+    } else if let Some(address) = lower.strip_prefix("mailto:").filter(|a| a.contains('@')) {
+        // 주소의 도메인(`.com`)이 아니라 `@` 앞 사서함 이름만 본다.
+        address.split('@').next().unwrap_or("")
+    } else {
+        lower
+    };
+    // Windows ignores trailing dots/spaces, so strip them before the check.
+    let trimmed = target.trim_end_matches(['.', ' ']);
+    match trimmed.rsplit_once('.') {
+        Some((_, ext)) => RISKY_EXT.contains(&ext),
+        None => false,
+    }
+}
+
+/// Text of a string / stream value, following one reference. Inert data only.
+fn text_preview(doc: &Document, obj: &Object) -> String {
+    match obj {
+        Object::String(s, _) => sanitize(s),
+        Object::Reference(id) => match doc.get_object(*id) {
+            Ok(Object::String(s, _)) => format!("{} {} R: {}", id.0, id.1, sanitize(s)),
+            Ok(Object::Stream(st)) => {
+                let data = st.decompressed_content_with_limit(JS_STREAM_LIMIT).unwrap_or_else(|_| st.content.clone());
+                format!("{} {} R (stream): {}", id.0, id.1, sanitize(&data))
+            }
+            _ => format!("{} {} R", id.0, id.1),
+        },
+        Object::Stream(st) => sanitize(&st.content),
+        _ => String::new(),
+    }
+}
+
+/// 문자열이거나 문자열·스트림을 가리키는 참조의 원본 바이트. 상한을 넘는 스트림은 앞부분만 본다.
+fn raw_bytes(doc: &Document, obj: &Object) -> Vec<u8> {
+    match obj {
+        Object::String(s, _) => s.clone(),
+        Object::Reference(id) => match doc.get_object(*id) {
+            Ok(Object::String(s, _)) => s.clone(),
+            // 탐지용이라 미리보기(64KB)보다 넉넉히 푼다. 64KB를 넘는 JS를 압축 원본으로 되돌리면 패딩만으로 탐지를 피한다.
+            Ok(Object::Stream(st)) => st.decompressed_content_with_limit(MAX_DECOMPRESSED_STREAM_BYTES).unwrap_or_else(|_| st.content.iter().take(JS_STREAM_LIMIT).copied().collect()),
+            _ => Vec::new(),
+        },
+        Object::Stream(st) => st.content.iter().take(JS_STREAM_LIMIT).copied().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// 파일 지정 사전에서 이름을 담는 키. 뷰어는 /UF를 먼저 쓰기도 해서, 하나만 보면 다른 키에 실행 파일을 숨길 수 있다.
+const FILESPEC_KEYS: [&[u8]; 5] = [b"F", b"UF", b"DOS", b"Mac", b"Unix"];
+
+/// 파일 지정(문자열이거나 위 키를 가진 사전)이 문서에서 열 이유가 없는 대상을 가리키는가. 키 하나라도 위험하면 위험이다.
+fn filespec_is_dangerous(doc: &Document, obj: &Object) -> bool {
+    // 11-B(R16 보안 검토): 참조가 가리키는 사전도 인라인 사전과 똑같이 본다. 인라인 값의 동작은 그대로다.
+    match resolve(doc, obj) {
+        Some(Object::Dictionary(d)) => FILESPEC_KEYS.iter().filter_map(|k| d.get(k).ok()).any(|v| launch_target_is_dangerous(&raw_bytes(doc, v))),
+        _ => launch_target_is_dangerous(&raw_bytes(doc, obj)),
+    }
+}
+
+/// 참조하는 JavaScript 스트림을 끝까지 검사하지 못했는가: 로딩 중에 잘렸거나(`STREAM_KEEP_BYTES` 이상), 해제 한도를 넘거나 풀 수 없다.
+/// 이때 탐지는 앞부분(또는 압축 원본)만 본 것이므로, 조용히 지나가지 않고 알려야 한다. 패딩이나 거대한 해제분으로 탐지를 피하지 못하게 한다.
+fn js_stream_not_fully_inspected(doc: &Document, obj: &Object) -> bool {
+    let Object::Reference(id) = obj else { return false };
+    matches!(doc.get_object(*id), Ok(Object::Stream(st)) if st.content.len() >= STREAM_KEEP_BYTES || st.dict.has(FILTER_TRUNCATED_KEY) || st.decompressed_content_with_limit(MAX_DECOMPRESSED_STREAM_BYTES).is_err())
+}
+
+/// 문서에서 열 이유가 없는 대상인가: 실행 파일 확장자이거나 셸·스크립트 인터프리터를 부른다.
+fn launch_target_is_dangerous(target: &[u8]) -> bool {
+    const SHELLS: &[&str] = &["cmd.exe", "cmd/c", "powershell", "pwsh", "mshta", "wscript", "cscript", "rundll32", "regsvr32", "/bin/sh", "/bin/bash"];
+    has_risky_ext(target)
+        || name_readings(target).iter().any(|reading| {
+            let flat: String = reading.to_ascii_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
+            SHELLS.iter().any(|sh| flat.contains(sh))
+        })
+}
+
+/// JavaScript 원문을 글로 바꾼다. PDF 문자열은 UTF-16(BOM)일 수 있어서, 그대로 찾으면 인코딩만 바꿔 탐지를 피할 수 있다.
+fn js_text(bytes: &[u8]) -> String {
+    let units = |b: &[u8], be: bool| -> String {
+        let u16s: Vec<u16> = b.chunks_exact(2).map(|c| if be { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) }).collect();
+        String::from_utf16_lossy(&u16s)
+    };
+    match bytes {
+        [0xFE, 0xFF, rest @ ..] => units(rest, true),
+        [0xFF, 0xFE, rest @ ..] => units(rest, false),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
+/// 보이는 이름. 지표의 설명에만 쓴다(판정에는 `name_readings`).
+fn name_text(bytes: &[u8]) -> String {
+    js_text(bytes).replace('\0', "")
+}
+
+/// 이름을 읽는 방법은 뷰어마다 다르다. 한 가지만 믿으면 읽는 쪽이 다른 뷰어를 속일 수 있어서, 가능한 해석을 모두 돌려준다.
+/// - 해석: BOM을 따른 글(`FE FF`, 그리고 이 스캐너가 알아보는 `FF FE`)과 BOM을 무시하고 그대로 읽은 글.
+///   `FF FE` 뒤에 ASCII 이름이 오면 LE로 풀 때는 한자 쓰레기가 되지만, 명세대로 읽는 뷰어에는 `ÿþcalc.exe`다.
+/// - NUL: 지운 글(BOM 없는 UTF-16)과 첫 NUL에서 자른 글(C 문자열). `calc.exe\0.txt`는 지우면 안전해 보이지만 자르면 `calc.exe`다.
+///
+/// 호출하는 쪽은 이 중 하나라도 위험하면 위험으로 본다.
+fn name_readings(bytes: &[u8]) -> Vec<String> {
+    let decoded = js_text(bytes);
+    let raw = String::from_utf8_lossy(bytes).into_owned();
+    let mut texts = vec![decoded];
+    if texts[0] != raw {
+        texts.push(raw);
+    }
+    let mut out = Vec::new();
+    for text in texts {
+        out.push(text.replace('\0', ""));
+        if let Some(head) = text.split('\0').next().filter(|h| h.len() != text.len()) {
+            out.push(head.to_owned());
+        }
+    }
+    out
+}
+
+/// 알려진 공격 수법이 든 JavaScript인가: 첨부 자동 실행, 로컬·UNC 경로 실행, 복호화한 페이로드의 eval, 셸코드 NOP sled.
+fn js_is_exploit(source: &[u8]) -> bool {
+    // 파일 이름과 같은 이유로 BOM을 따른 글과 그대로 읽은 글을 모두 본다. BOM이 없으면 둘이 같다.
+    let decoded = js_text(source);
+    let raw = String::from_utf8_lossy(source).into_owned();
+    exploit_in(&decoded) || (decoded != raw && exploit_in(&raw))
+}
+
+static JS_STRING_CONCAT: LazyLock<Option<regex::Regex>> = LazyLock::new(|| regex::Regex::new(r#"["']\s*\+\s*["']"#).ok());
+/// 공백을 지우고 소문자로 만든 글에 쓴다. `util.printf("%45000f")`처럼 폭이 네 자리 이상이면 오버플로 시도다.
+static JS_PRINTF_OVERFLOW: LazyLock<Option<regex::Regex>> = LazyLock::new(|| regex::Regex::new(r#"util\.printf\(["'][^"']*%[0-9]{4,}"#).ok());
+static JS_ALIAS_EXEC: LazyLock<Option<regex::Regex>> =
+    LazyLock::new(|| regex::Regex::new(r#"(?:[=,(:?]|&&|\|\||return)(?:(?:window|self|globalthis|this|top|parent)\.)?(?:eval|function)[;,)\]}]|\[["'](?:eval|function)["']\]"#).ok());
+static JS_DECODE_CALL: LazyLock<Option<regex::Regex>> = LazyLock::new(|| regex::Regex::new(r"(?:atob|unescape|decodeuricomponent)\(|string\.fromcharcode\(").ok());
+
+/// 별칭 사용 앞뒤 300바이트 안에 디코딩 호출이 있는가. 멀리 떨어져 따로 나오는 둘은 묶지 않는다.
+fn alias_near_decode(flat: &str) -> bool {
+    let (Some(alias), Some(decode)) = (JS_ALIAS_EXEC.as_ref(), JS_DECODE_CALL.as_ref()) else { return false };
+    alias.find_iter(flat).any(|m| {
+        let mut a = m.start().saturating_sub(300);
+        while !flat.is_char_boundary(a) {
+            a -= 1;
+        }
+        let mut b = (m.end() + 300).min(flat.len());
+        while !flat.is_char_boundary(b) {
+            b += 1;
+        }
+        decode.is_match(&flat[a..b])
+    })
+}
+
+fn exploit_in(text: &str) -> bool {
+    // 붙어 있는 문자열 리터럴(`"export"+"DataObject"`)은 합쳐서 본다.
+    let joined = JS_STRING_CONCAT.as_ref().map_or(Cow::Borrowed(text), |rx| rx.replace_all(text, ""));
+    let flat: String = joined.to_lowercase().chars().filter(|c| !c.is_whitespace() && *c != '\0').collect();
+    (flat.contains("exportdataobject") && flat.contains("nlaunch"))
+        || (flat.contains("launchurl") && (flat.contains("file:") || flat.contains("\\\\")))
+        || flat.contains("eval(unescape(")
+        || flat.contains("eval(string.fromcharcode(")
+        || flat.matches("%u9090").count() >= 4
+        // 알려진 취약점 호출: util.printf 정수 폭 오버플로(CVE-2008-2992), Collab.collectEmailInfo(CVE-2007-5659), Collab.getIcon(CVE-2009-0927), media.newPlayer(CVE-2009-4324).
+        || JS_PRINTF_OVERFLOW.as_ref().is_some_and(|rx| rx.is_match(&flat))
+        || flat.contains("collab.getauthor(")
+        || flat.contains("collab.collectemailinfo(")
+        || flat.contains("collab.geticon(")
+        || flat.contains("media.newplayer(")
+        // `eval`을 별칭이나 대괄호로 꺼내 디코딩한 페이로드를 실행한다.
+        || alias_near_decode(&flat)
+}
+
+/// 참조를 따라가는 최대 횟수. 이 안에 값에 닿지 못하면(끊긴 참조·순환) None이다.
+/// lopdf의 `dereference`는 한도가 더 크고 오류 종류만 다르므로, 한도를 이 스캐너가 정하도록 직접 따라간다.
+const MAX_REF_HOPS: usize = 8;
+
+/// 참조 사슬을 끝까지 따라가 값과(참조를 거쳤다면) 마지막 객체 번호를 돌려준다. 한도 안에 닿지 못하면 None.
+fn resolve_with_id<'a>(doc: &'a Document, obj: &'a Object) -> Option<(Option<ObjectId>, &'a Object)> {
+    let mut cur = obj;
+    let mut id = None;
+    for _ in 0..MAX_REF_HOPS {
+        let Object::Reference(r) = cur else { return Some((id, cur)) };
+        id = Some(*r);
+        cur = doc.objects.get(r)?;
+    }
+    if matches!(cur, Object::Reference(_)) { None } else { Some((id, cur)) }
+}
+
+/// 참조를 한도 안에서 따라간 값. 순환이나 끊긴 참조는 None.
+fn resolve<'a>(doc: &'a Document, obj: &'a Object) -> Option<&'a Object> {
+    resolve_with_id(doc, obj).map(|(_, o)| o)
+}
+
+/// `unresolvable action type`의 설명. 값이 무엇이었는지만 밝힌다(내용은 싣지 않는다).
+fn describe_unresolved(raw: &Object, resolved: Option<&Object>) -> String {
+    let kind = |o: &Object| match o {
+        Object::Null => "null",
+        Object::Boolean(_) => "boolean",
+        Object::Integer(_) => "integer",
+        Object::Real(_) => "real",
+        Object::Name(_) => "name",
+        Object::String(..) => "string",
+        Object::Array(_) => "array",
+        Object::Dictionary(_) => "dictionary",
+        Object::Stream(_) => "stream",
+        Object::Reference(_) => "reference",
+    };
+    let article = |k: &str| if k.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+    match (raw, resolved) {
+        (Object::Reference(id), None) => format!("reference {} {} R does not resolve", id.0, id.1),
+        (Object::Reference(id), Some(o)) => format!("reference {} {} R resolves to {} {}, not a name", id.0, id.1, article(kind(o)), kind(o)),
+        (o, _) => format!("value is {} {}, not a name", article(kind(o)), kind(o)),
+    }
+}
+
+/// Join the listed keys of an inline dictionary value, e.g. /Win << /F /P >>.
+fn value_dict_text(doc: &Document, value: &Object, keys: &[&[u8]]) -> String {
+    // 11-B: 참조가 가리키는 사전도 인라인과 같게 읽는다.
+    let Some(Object::Dictionary(d)) = resolve(doc, value) else {
+        return String::new();
+    };
+    keys.iter().filter_map(|k| d.get(k).ok().map(|v| text_preview(doc, v))).collect::<Vec<_>>().join(" ")
+}
+
+// ---------------------------------------------------------------- scanning
+
+struct Scanner<'a> {
+    doc: &'a Document,
+    findings: Vec<Finding>,
+}
+
+impl Scanner<'_> {
+    fn add(&mut self, sev: Severity, kind: &'static str, id: ObjectId, path: &str, detail: String) {
+        self.findings.push(Finding { severity: sev, kind, object: id, path: path.to_owned(), detail });
+    }
+
+    fn walk(&mut self, obj: &Object, id: ObjectId, path: &str, depth: usize) {
+        if depth > MAX_DEPTH {
+            self.add(Severity::Low, "nesting limit exceeded", id, path, "structure deeper than the scanner follows".into());
+            return;
+        }
+        match obj {
+            Object::Dictionary(d) => self.dict(d, id, path, depth),
+            Object::Stream(s) => self.dict(&s.dict, id, path, depth),
+            Object::Array(items) => {
+                for (i, v) in items.iter().enumerate() {
+                    self.walk(v, id, &format!("{path}[{i}]"), depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn dict(&mut self, d: &Dictionary, id: ObjectId, path: &str, depth: usize) {
+        let doc = self.doc;
+        // 11-A(R16 보안 검토): `/S 12 0 R`처럼 간접으로 쓴 동작 이름도 인라인과 같게 판정한다. 이름으로 풀리지 않으면
+        // 모든 동작 규칙을 피해 가므로 Low로 알린다. 인라인 이름은 예전과 같고, 이름이 아닌 값은 이제 Low 지표가 하나 붙는다.
+        let action = match d.get(b"S").ok() {
+            None => None,
+            Some(v) => match resolve(doc, v) {
+                Some(resolved @ Object::Name(_)) => name_of(resolved),
+                other => {
+                    // 선형화 PDF의 힌트 스트림 사전은 `/S <정수>`를 가진다(공유 객체 힌트 표의 오프셋). 인라인 비-Name `/S`는
+                    // 사전이 스스로 동작(`/Type /Action`)이라 밝힐 때만, 참조는 끊기거나 순환하거나 Name이 아닐 때 알린다.
+                    let declared_action = matches!(d.get(b"Type").ok().and_then(|t| resolve(doc, t)), Some(Object::Name(n)) if n.as_slice() == b"Action");
+                    if matches!(v, Object::Reference(_)) || declared_action {
+                        self.add(Severity::Low, "unresolvable action type", id, path, describe_unresolved(v, other));
+                    }
+                    None
+                }
+            },
+        };
+
+        if let Some(s) = action.as_deref() {
+            match s {
+                "Launch" => {
+                    let target = d.get(b"F").map(|v| text_preview(doc, v)).unwrap_or_default();
+                    let dangerous = d.get(b"F").is_ok_and(|v| filespec_is_dangerous(doc, v));
+                    self.add(if dangerous { Severity::Critical } else { Severity::High }, "Launch action", id, path, target);
+                }
+                "JavaScript" => {
+                    if d.get(b"JS").is_ok_and(|v| js_stream_not_fully_inspected(doc, v)) {
+                        self.add(Severity::High, "JavaScript stream not fully inspected", id, path, String::new());
+                    }
+                    let js = d.get(b"JS").map(|v| text_preview(doc, v)).unwrap_or_default();
+                    if d.get(b"JS").is_ok_and(|v| js_is_exploit(&raw_bytes(doc, v))) {
+                        self.add(Severity::Critical, "exploit JavaScript", id, path, js);
+                    } else {
+                        self.add(Severity::High, "JavaScript action", id, path, js);
+                    }
+                }
+                "RichMediaExecute" => self.add(Severity::High, "RichMediaExecute action", id, path, String::new()),
+                "ImportData" | "SubmitForm" | "GoToR" | "GoToE" | "Rendition" | "Movie" | "Sound" => {
+                    let target = d.get(b"F").or_else(|_| d.get(b"URI")).map(|v| text_preview(doc, v)).unwrap_or_default();
+                    self.add(Severity::Medium, "external/media action", id, path, format!("/S /{s} {target}"));
+                    // 계획 11행: 옛 묶음 지표는 그대로 두고, 동작별 코드를 더한다. 대상(/F)은 GoToR·SubmitForm에 싣는다.
+                    let code = match s {
+                        "GoToR" => Some("GoToR action"),
+                        "GoToE" => Some("GoToE action"),
+                        "SubmitForm" => Some("SubmitForm action"),
+                        "ImportData" => Some("ImportData action"),
+                        _ => None,
+                    };
+                    if let Some(code) = code {
+                        let f = d.get(b"F").ok();
+                        let detail = match (s, f) {
+                            ("GoToR" | "SubmitForm", Some(v)) => match resolve(doc, v) {
+                                Some(Object::Dictionary(_)) => value_dict_text(doc, v, &[&b"F"[..], &b"UF"[..]]),
+                                _ => text_preview(doc, v),
+                            },
+                            _ => String::new(),
+                        };
+                        self.add(Severity::Medium, code, id, path, detail);
+                    }
+                }
+                "URI" => {
+                    let uri = d.get(b"URI").map(|v| text_preview(doc, v)).unwrap_or_default();
+                    self.add(Severity::Low, "URI action", id, path, uri);
+                }
+                _ => {}
+            }
+        }
+
+        // File specification: an embedded or referenced executable-looking name.
+        for key in FILESPEC_KEYS {
+            // 11-B: `/F 13 0 R`처럼 문자열을 가리키는 참조도 인라인 문자열과 같게 본다.
+            if let Some(Object::String(name, _)) = d.get(key).ok().and_then(|v| resolve(doc, v)) {
+                let is_filespec = d.has(b"EF") || matches!(d.get(b"Type").ok().and_then(name_of).as_deref(), Some("Filespec")) || action.as_deref() == Some("Launch");
+                if is_filespec && has_risky_ext(name) {
+                    self.add(Severity::High, "executable-looking file name", id, path, sanitize(name_text(name).as_bytes()));
+                }
+            }
+        }
+
+        for (key, value) in d.iter() {
+            let key_name = String::from_utf8_lossy(key).into_owned();
+            // 경로는 출력에 그대로 나간다. PDF가 정한 키 이름의 제어문자는 걷어낸다. 판정은 원래 이름으로 한다.
+            let child = format!("{path}/{}", sanitize(key));
+            match key_name.as_str() {
+                // The action dict case is already reported through /S above.
+                "JS" if action.as_deref() != Some("JavaScript") => {
+                    if js_stream_not_fully_inspected(doc, value) {
+                        self.add(Severity::High, "JavaScript stream not fully inspected", id, &child, String::new());
+                    }
+                    if js_is_exploit(&raw_bytes(doc, value)) {
+                        self.add(Severity::Critical, "exploit JavaScript", id, &child, text_preview(doc, value));
+                    } else {
+                        self.add(Severity::High, "JavaScript code", id, &child, text_preview(doc, value));
+                    }
+                }
+                "JavaScript" => {
+                    self.add(Severity::Medium, "JavaScript name tree", id, &child, String::new());
+                }
+                "Win" | "Mac" | "Unix" => {
+                    let cmd = value_dict_text(doc, value, &[&b"F"[..], &b"P"[..]]);
+                    // 11-B: 참조가 가리키는 사전도 인라인과 같게 본다.
+                    let dangerous = match resolve(doc, value) {
+                        Some(Object::Dictionary(v)) => [&b"F"[..], &b"P"[..]].iter().any(|k| v.get(k).is_ok_and(|x| filespec_is_dangerous(doc, x))),
+                        _ => false,
+                    };
+                    self.add(if dangerous { Severity::Critical } else { Severity::High }, "platform launch parameters", id, &child, cmd);
+                }
+                "OpenAction" => {
+                    self.add(Severity::Medium, "OpenAction (runs on open)", id, &child, String::new());
+                }
+                "AA" => {
+                    self.add(Severity::Medium, "additional-actions trigger", id, &child, String::new());
+                }
+                "EmbeddedFiles" | "EF" => {
+                    self.add(Severity::Medium, "embedded file", id, &child, String::new());
+                }
+                "RichMediaContent" => {
+                    self.add(Severity::Medium, "RichMedia content", id, &child, String::new());
+                }
+                "XFA" => {
+                    self.add(Severity::Medium, "XFA form", id, &child, String::new());
+                }
+                "3DD" => {
+                    self.add(Severity::Low, "3D content", id, &child, String::new());
+                }
+                "Subtype" => match name_of(value).as_deref() {
+                    Some("FileAttachment") => self.add(Severity::Medium, "file attachment annotation", id, path, String::new()),
+                    Some("Screen") => self.add(Severity::Low, "screen annotation", id, path, String::new()),
+                    _ => {}
+                },
+                _ => {}
+            }
+            // References are resolved by the flat object loop, so only inline
+            // children are followed here.
+            self.walk(value, id, &child, depth + 1);
+        }
+    }
+}
+
+/// 계획 11행 `long filter chain`·`embedded executable content`: 스트림 객체마다 보는 검사. `walk`와 독립이라 옛 지표의 순서·내용에 닿지 않는다.
+fn stream_checks(doc: &Document, findings: &mut Vec<Finding>) {
+    // `/EF` 사전이 가리키는 스트림과 `/Type /EmbeddedFile`인 스트림이 내장 파일이다.
+    let mut embedded: BTreeSet<ObjectId> = BTreeSet::new();
+    for obj in doc.objects.values() {
+        collect_embedded(doc, obj, &mut embedded, 0);
+    }
+    for (id, obj) in &doc.objects {
+        let Object::Stream(st) = obj else { continue };
+        let chain = resolve(doc, st.dict.get(b"Filter").unwrap_or(&Object::Null));
+        let long_chain = matches!(chain, Some(Object::Array(items)) if items.len() >= LONG_FILTER_CHAIN);
+        let filter_cut = st.dict.has(FILTER_ARRAY_TRUNCATED_KEY);
+        if long_chain || filter_cut {
+            let detail = match chain {
+                Some(Object::Array(items)) if !filter_cut => format!("{} filters", items.len()),
+                _ => format!("{FILTER_KEEP_LEN} or more filters"),
+            };
+            findings.push(Finding { severity: Severity::Medium, kind: "long filter chain", object: *id, path: String::new(), detail });
+        }
+        // 한계: 로딩 훅이 스트림 내용을 64KiB로 자른다. Flate는 잘린 앞부분도 해제되어(앞 64KiB 해제분으로 판별) 잡히지만,
+        // ASCII85·LZW 등 앞부분만으로는 해제되지 않는 필터 체인은 64KiB를 넘으면 놓친다.
+        if embedded.contains(id) || st.dict.has_type(b"EmbeddedFile") {
+            let data = st.decompressed_content_with_limit(MAX_DECOMPRESSED_STREAM_BYTES).unwrap_or_else(|_| st.content.clone());
+            let head = data.get(..data.len().min(EMBEDDED_SNIFF_BYTES)).unwrap_or(&[]);
+            let kind = match sniff(head) {
+                Sniffed::Elf => Some("ELF"),
+                Sniffed::MachO => Some("Mach-O"),
+                Sniffed::Pe => Some("PE"),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                findings.push(Finding { severity: Severity::Critical, kind: "embedded executable content", object: *id, path: String::new(), detail: format!("{kind} executable") });
+            }
+        }
+    }
+}
+
+/// `/EF` 사전(인라인이든 참조든)이 가리키는 스트림의 객체 번호를 모은다. 깊이는 `MAX_DEPTH`로 막는다.
+fn collect_embedded(doc: &Document, obj: &Object, out: &mut BTreeSet<ObjectId>, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let dict = match obj {
+        Object::Dictionary(d) => d,
+        Object::Stream(s) => &s.dict,
+        Object::Array(items) => return items.iter().for_each(|v| collect_embedded(doc, v, out, depth + 1)),
+        _ => return,
+    };
+    for (key, value) in dict.iter() {
+        if key.as_slice() == b"EF"
+            && let Some(Object::Dictionary(ef)) = resolve(doc, value)
+        {
+            out.extend(ef.iter().filter_map(|(_, v)| resolve_with_id(doc, v)).filter(|(_, o)| matches!(o, Object::Stream(_))).filter_map(|(id, _)| id));
+        }
+        collect_embedded(doc, value, out, depth + 1);
+    }
+}
+
+/// 이름 토큰 안에 `#xx` 이스케이프가 든 것. 토큰 길이는 앞뒤 각 64바이트로 제한해, 긴 입력에서도 선형 시간이다.
+static HEX_NAME: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"/[^\x00\t\n\x0c\r ()<>\[\]{}/%]{0,64}#[0-9A-Fa-f]{2}[^\x00\t\n\x0c\r ()<>\[\]{}/%]{0,64}").ok());
+static STARTXREF: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new("startxref").ok());
+
+/// `#xx`를 푼 이름. 이스케이프가 아닌 `#`는 그대로 둔다.
+fn unescape_name(token: &[u8]) -> Vec<u8> {
+    let hex = |b: u8| char::from(b).to_digit(16).and_then(|d| u8::try_from(d).ok());
+    let mut out = Vec::with_capacity(token.len());
+    let mut i = 0;
+    while let Some(&b) = token.get(i) {
+        if b == b'#'
+            && let (Some(h), Some(l)) = (token.get(i + 1).and_then(|&c| hex(c)), token.get(i + 2).and_then(|&c| hex(c)))
+        {
+            out.push(h * 16 + l);
+            i += 3;
+        } else {
+            out.push(b);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// 계획 11행 `hex-obfuscated action name`·`many incremental updates`: 파일 원본 바이트로 하는 검사. lopdf는 이름을 풀어서
+/// 읽으므로 `/J#53`가 `/JS`와 구별되지 않는다. 그래서 원본에서 `#xx`로 쓴 `JS`·`JavaScript`·`Launch` 키를 직접 찾는다.
+fn raw_checks(data: &[u8], report: &mut FileReport) {
+    let mut seen: BTreeSet<Vec<u8>> = BTreeSet::new();
+    for m in HEX_NAME.as_ref().into_iter().flat_map(|re| re.find_iter(data)) {
+        let name = unescape_name(m.as_bytes().get(1..).unwrap_or(&[]));
+        if [&b"JS"[..], b"JavaScript", b"Launch"].contains(&name.as_slice()) && seen.insert(name.clone()) {
+            // 원본 바이트라 객체를 모른다. 위치는 바이트 오프셋으로 남긴다.
+            let location = format!("obj 0 0:raw@{}", m.start());
+            report.push(Category::Security, Severity::Medium, "hex-obfuscated action name", &location, &format!("/{} written with #xx escapes", sanitize(&name)));
+        }
+    }
+    let updates = STARTXREF.as_ref().map_or(0, |re| re.find_iter(data).count());
+    if updates >= MANY_INCREMENTAL_UPDATES {
+        report.push(Category::Security, Severity::Low, "many incremental updates", "obj 0 0:startxref", &format!("{updates} startxref markers"));
+    }
+}
+
+/// 한 건의 위치. 옛 `object`(번호, 세대)는 `obj N G:` 접두로 붙인다.
+fn location_of(f: &Finding) -> String {
+    format!("obj {} {}:{}", f.object.0, f.object.1, f.path)
+}
+
+fn scan_document(doc: &Document, report: &mut FileReport) {
+    if doc.is_encrypted() {
+        report.mark_incomplete("encrypted: string values may be unreadable");
+    }
+    let incomplete_object_streams: BTreeSet<u32> = doc
+        .reference_table
+        .entries
+        .iter()
+        .filter_map(|(object, entry)| match entry {
+            XrefEntry::Compressed { container, .. } if !doc.objects.contains_key(&(*object, 0)) => Some(*container),
+            _ => None,
+        })
+        .collect();
+    for container in incomplete_object_streams {
+        report.mark_incomplete(&format!("objects in object stream {container} could not be decoded within the {} byte limit", MAX_DECOMPRESSED_STREAM_BYTES));
+    }
+    let mut sc = Scanner { doc, findings: Vec::new() };
+    sc.walk(&Object::Dictionary(doc.trailer.clone()), (0, 0), "trailer", 0);
+    for (id, obj) in &doc.objects {
+        sc.walk(obj, *id, "", 0);
+    }
+    stream_checks(doc, &mut sc.findings);
+    // Stable, most severe first.
+    sc.findings.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.object.cmp(&b.object)));
+    for f in &sc.findings {
+        report.push(Category::Security, f.severity, f.kind, &location_of(f), &f.detail);
+    }
+}
+
+/// 이미 읽은 문서(없을 수 있다)로 보안 검사를 한다. 구문 오류 보고는 하지 않는다(`pdf::structure`가 한다).
+pub fn scan_loaded(data: &[u8], doc: Option<&Document>, report: &mut FileReport) {
+    // 구문 분석 성패와 무관하게 원본 바이트 검사를 한다. 깨진 파일일수록 은닉을 쓸 수 있다.
+    guarded(report, |r| raw_checks(data, r));
+    // 문서를 훑다 panic하면 그때까지 모은 지표는 버린다(옛 구조와 같다: 지표는 정렬 뒤에 한꺼번에 낸다).
+    if let Some(doc) = doc {
+        guarded(report, |r| scan_document(doc, r));
+    }
+}
+
+/// `data`의 앞 1024바이트에 `%PDF-`가 있는가.
+pub fn has_header(data: &[u8]) -> bool {
+    data.windows(5).take(1024).any(|w| w == b"%PDF-")
+}
+
+/// PDF 바이트를 검사해 `report`에 더한다. 크기 제한은 호출자(`common::inspect`)가 이미 걸었다.
+/// 구문 오류는 `incomplete` 사유로만 남긴다. 구조 지표(`XREF_BROKEN` 등)는 `pdf::structure::inspect`가 낸다.
+pub fn scan(data: &[u8], report: &mut FileReport) {
+    if !has_header(data) {
+        report.mark_incomplete("no %PDF- header");
+        return;
+    }
+    match load(data) {
+        Ok((doc, _)) => scan_loaded(data, Some(&doc), report),
+        Err(e) => {
+            scan_loaded(data, None, report);
+            report.mark_incomplete(&format!("parse error: {e}"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stream_with_a_truncated_filter_chain_is_reported_as_not_fully_inspected() {
+        let mut doc = Document::new();
+        // 로더가 필터 체인을 자르고 붙이는 표지. 표지를 붙이는 쪽은 `document_loader` 테스트가 본다.
+        let mut dict = Dictionary::new();
+        dict.set(FILTER_TRUNCATED_KEY.to_vec(), Object::Boolean(true));
+        let marked = lopdf::Stream::new(dict, b"x".to_vec());
+        // 필터가 없는 작은 스트림: 표지도 없고 해제도 문제없다.
+        let plain = lopdf::Stream::new(Dictionary::new(), b"app.alert(1)".to_vec());
+        doc.objects.insert((5, 0), Object::Stream(marked));
+        doc.objects.insert((6, 0), Object::Stream(plain));
+        assert!(js_stream_not_fully_inspected(&doc, &Object::Reference((5, 0))));
+        // 표지가 없고 작은 스트림이면 알리지 않는다. 참조가 아니거나 없는 객체도 마찬가지다.
+        assert!(!js_stream_not_fully_inspected(&doc, &Object::Reference((6, 0))));
+        assert!(!js_stream_not_fully_inspected(&doc, &Object::Integer(1)));
+        assert!(!js_stream_not_fully_inspected(&doc, &Object::Reference((99, 0))));
+    }
+
+    #[test]
+    fn finding_paths_never_carry_control_characters_from_key_names() {
+        let doc = Document::new();
+        let mut action = Dictionary::new();
+        action.set("S", Object::Name(b"Launch".to_vec()));
+        let mut outer = Dictionary::new();
+        outer.set(b"\x1b[2J\x07evil".to_vec(), Object::Dictionary(action));
+        let mut sc = Scanner { doc: &doc, findings: Vec::new() };
+        sc.walk(&Object::Dictionary(outer), (1, 0), "", 0);
+        assert!(!sc.findings.is_empty());
+        for f in &sc.findings {
+            assert!(!f.path.chars().any(char::is_control), "{:?}", f.path);
+        }
+    }
+}
