@@ -17,11 +17,13 @@ stat = { path = "../../libs/stat" }
 
 [dev-dependencies]
 # 테스트는 PDF 단계·파서를 직접 다룬다. 소스는 file_indexer를 거친다.
+doc_checker = { path = "../../libs/doc_checker" }
 doc_reader = { path = "../../libs/doc_reader" }
 encoding_rs = "0.8.35"
 hwp3_parser = { path = "../../libs/hwp3_parser" }
 isbn_extractor = { path = "../../libs/isbn_extractor" }
 sysdeps = { path = "../../libs/sysdeps" }
+text_decoder = { path = "../../libs/text_decoder" }
 tempfile = "3.27.0"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 

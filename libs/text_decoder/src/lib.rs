@@ -1,5 +1,9 @@
-//! 바이트를 텍스트로 푼다: 잘못된 바이트를 버리는 UTF-8·CP949 디코딩과 한글 음절 판정.
-//! `doc_reader`와 bookdoctor가 쓴다. 본문 표본 추출과 인코딩 추정은 bookdoctor `text_sampler`에 있다.
+//! 바이트를 텍스트로 푼다: 잘못된 바이트를 버리는 UTF-8·CP949 디코딩과 한글 음절 판정,
+//! 인코딩 이름과 코덱(`text_transcoder`), 인코딩 추정 휴리스틱(`encoding_guesser`).
+//! `doc_reader`와 `doc_checker`가 쓴다.
+
+pub mod encoding_guesser;
+pub mod text_transcoder;
 
 pub fn is_hangul_syllable(c: char) -> bool {
     ('가'..='힣').contains(&c)

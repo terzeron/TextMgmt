@@ -5,9 +5,9 @@
 //!
 //! 설계: docs/rust-test-seams.md 3.12, 3.13, 4.2. loader/doc_reader의 `_with`는 `*_with(args, &XxxHooks)` 구조체 하나로 통일했다(pdf_and_text_stages.rs와 같은 이름·필드).
 //!   훅은 모두 `Option<&dyn Fn(..)>` 필드이고 `Default`로 안 쓰는 훅을 생략한다.
-//! - `doc_reader::text::{TextHooks, read_from_text_with(&Path, &TextHooks) -> Result<TextRead, String>,
-//!   reencode_text_file_to_utf8_with(&Path, dry_run, backup_dir, relative, &TextHooks) -> Reencode}`
-//!   `TextHooks { detect (chardet 대체), write_backup (백업 쓰기 대체), read_bytes (원본 읽기와 저장 후 재읽기 대체), .. }`.
+//! - `doc_reader::text::{TextHooks, read_from_text_with(&Path, &TextHooks) -> Result<TextRead, String>}`,
+//!   `doc_checker::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8_with(&Path, dry_run, backup_dir, relative, &ReencodeHooks) -> Reencode}`
+//!   `ReencodeHooks { detect (chardet 대체), write_backup (백업 쓰기 대체), read_bytes (원본 읽기와 저장 후 재읽기 대체), .. }`.
 //!   `write_backup: Fn(&Path, &[u8]) -> io::Result<()>`, `read_bytes: Fn(&Path) -> io::Result<Vec<u8>>`. 구 `ReencodeIo`를 흡수한다.
 //! - `doc_reader::pdf::{collect_pages, find_xref_offset, apply_png_predictor, xref_stream_find_entry}`를 `pub`으로 연 것
 //! - `doc_reader::pdf::{FastCountHooks, fast_page_count_with(&Path, &FastCountHooks) -> Option<usize>}` xref 해석 바꿔치기 자리.
@@ -34,10 +34,11 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::shared_fixtures::{config_with_book, test_env, tests_root, write};
+use doc_checker::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8, reencode_text_file_to_utf8_with};
+use doc_checker::mojibake_detector::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, is_usable_text};
 use doc_reader::TEXT_SIZE;
 use doc_reader::epub::{read_from_epub, read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using};
 use doc_reader::markup::{count_lines, read_from_html};
-use doc_reader::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, is_usable_text};
 use doc_reader::office::read_from_docx;
 use doc_reader::office::{convert_with_libreoffice, find_libreoffice_with, read_from_doc, read_from_hwp, read_from_image};
 use doc_reader::pdf::XrefStream;
@@ -46,11 +47,13 @@ use doc_reader::pdf::{
     pdf_text_by_pdftotext_with, read_from_pdf, run_stage, xref_stream_find_entry,
 };
 use doc_reader::rtf::read_from_rtf_text;
-use doc_reader::text::{Enc, HIGH_BYTE_PAIRED_MIN, TextHooks, TextRead, read_from_text, read_from_text_with, reencode_text_file_to_utf8, reencode_text_file_to_utf8_with};
+use doc_reader::text::{TextHooks, TextRead, read_from_text, read_from_text_with};
 use file_indexer::env_config::Config;
 use file_indexer::record_builder::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
 use serde_json::Value;
 use stat::Stat;
+use text_decoder::encoding_guesser::HIGH_BYTE_PAIRED_MIN;
+use text_decoder::text_transcoder::Enc;
 
 #[test]
 fn loader_binary_runs_the_isbn_stream_scan_stage() {
@@ -1102,7 +1105,7 @@ fn encode_named(name: &str, text: &str) -> Vec<u8> {
 }
 
 /// 제자리 재인코딩을 기본 옵션으로 호출한다. 원본이 `Loader.path_prefix` 밖의 파일에 쓰는 상대 경로는 파일 이름이다.
-fn reencode(f: &Path) -> doc_reader::text::Reencode {
+fn reencode(f: &Path) -> doc_checker::encoding_repairer::Reencode {
     reencode_text_file_to_utf8(f, false, None, Path::new(f.file_name().unwrap()))
 }
 
@@ -1216,7 +1219,7 @@ mod test_reencode_text_file_to_utf8 {
         write(&f, encode_korean(&original));
 
         let detect = |_: &[u8]| Some(Enc::Cp1252);
-        let hooks = TextHooks { detect: Some(&detect), ..Default::default() };
+        let hooks = ReencodeHooks { detect: Some(&detect), ..Default::default() };
         let r = reencode_text_file_to_utf8_with(&f, false, None, Path::new("korean.txt"), &hooks);
         assert!(r.changed, "{}", r.reason);
         // cp949로 올바르게 복원되어야 하고, mojibake가 저장되면 안 된다
@@ -1258,7 +1261,7 @@ mod test_reencode_text_file_to_utf8 {
         write(&f, &raw);
 
         let detect = |_: &[u8]| -> Option<Enc> { None };
-        let hooks = TextHooks { detect: Some(&detect), ..Default::default() };
+        let hooks = ReencodeHooks { detect: Some(&detect), ..Default::default() };
         let r = reencode_text_file_to_utf8_with(&f, false, None, Path::new("novel.txt"), &hooks);
         assert!(r.changed, "{}", r.reason);
         assert_eq!(String::from_utf8(fs::read(&f).unwrap()).unwrap(), decode_cp949(&raw));
@@ -1361,7 +1364,7 @@ mod test_reencode_text_file_to_utf8 {
         let detect = |_: &[u8]| -> Option<Enc> { None };
         // 백업 디렉터리에 쓰는 바이트를 5바이트로 잘라 쓴다.
         let truncating_write = |dest: &Path, data: &[u8]| -> io::Result<()> { fs::write(dest, &data[..data.len().min(5)]) };
-        let hooks = TextHooks { detect: Some(&detect), write_backup: Some(&truncating_write), ..Default::default() };
+        let hooks = ReencodeHooks { detect: Some(&detect), write_backup: Some(&truncating_write), ..Default::default() };
         let r = reencode_text_file_to_utf8_with(&f, false, Some(&backup), Path::new("novel.txt"), &hooks);
         assert!(!r.changed);
         assert!(r.reason.contains("백업 검증 실패"), "{}", r.reason);
@@ -1409,7 +1412,7 @@ mod test_reencode_text_file_to_utf8 {
             }
             Ok(data)
         };
-        let hooks = TextHooks { detect: Some(&detect), read_bytes: Some(&flaky_read_bytes), ..Default::default() };
+        let hooks = ReencodeHooks { detect: Some(&detect), read_bytes: Some(&flaky_read_bytes), ..Default::default() };
         let r = reencode_text_file_to_utf8_with(&f, false, None, Path::new("novel.txt"), &hooks);
         assert!(!r.changed);
         assert!(r.reason.contains("저장 후 불일치"), "{}", r.reason);
@@ -1536,7 +1539,7 @@ mod test_reencode_text_file_to_utf8 {
         write(&f, &raw);
 
         let detect = |_: &[u8]| Some(Enc::Utf16Be);
-        let hooks = TextHooks { detect: Some(&detect), ..Default::default() };
+        let hooks = ReencodeHooks { detect: Some(&detect), ..Default::default() };
         let r = reencode_text_file_to_utf8_with(&f, false, None, Path::new("cp1252.txt"), &hooks);
         // UTF-16으로 오독하면 안 되고, 서양어 단일바이트로 올바르게 읽혀야 한다
         assert!(!r.reason.contains("utf-16"), "UTF-16으로 오독됨: {}", r.reason);

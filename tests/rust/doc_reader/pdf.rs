@@ -193,3 +193,9 @@ fn corpus_pdf_has_page_counts_and_extracted_text() {
         assert_eq!(read.page_count as i64, rec["page_count"].as_i64().unwrap(), "page count for {path}");
     }
 }
+
+#[test]
+fn mojibake_run_window_matches_the_summary_length() {
+    // PDF 추출 실패 판정은 요약에 쓰는 앞부분만 본다.
+    assert_eq!(doc_checker::mojibake_detector::RUN_SCAN_CHARS, doc_reader::TEXT_SIZE);
+}

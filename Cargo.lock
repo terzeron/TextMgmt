@@ -1034,6 +1034,7 @@ name = "doc_reader"
 version = "0.1.0"
 dependencies = [
  "common",
+ "doc_checker",
  "ego-tree",
  "encoding_rs",
  "flate2",
@@ -1259,6 +1260,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "common",
+ "doc_checker",
  "doc_reader",
  "isbn_extractor",
  "lopdf",
@@ -2149,6 +2151,7 @@ name = "loader"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "doc_checker",
  "doc_reader",
  "encoding_rs",
  "es_client",
@@ -2159,6 +2162,7 @@ dependencies = [
  "stat",
  "sysdeps",
  "tempfile",
+ "text_decoder",
  "zip",
 ]
 

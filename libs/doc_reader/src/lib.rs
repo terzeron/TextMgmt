@@ -5,7 +5,6 @@
 pub mod epub;
 pub mod head_tail_reader;
 pub mod markup;
-pub mod mojibake_counter;
 pub mod office;
 pub mod pdf;
 pub mod rtf;

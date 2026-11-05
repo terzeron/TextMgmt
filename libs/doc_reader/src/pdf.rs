@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Instant;
 
+use doc_checker::mojibake_detector::{count_mojibake_runs, is_usable_text};
 use regex::bytes::Regex as BytesRegex;
 
 use crate::TEXT_SIZE;
-use crate::mojibake_counter::{count_mojibake_runs, is_usable_text};
 use crate::text_normalizer::{head_chars, keep_word_chars};
 
 /// 앞에서부터 이만큼의 쪽만 훑는다(TEXT_SIZE를 채우는 데 실측 최대 27쪽).

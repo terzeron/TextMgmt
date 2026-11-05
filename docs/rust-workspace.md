@@ -15,10 +15,11 @@ docs/       문서
 
 | crate | 용도 |
 | --- | --- |
-| `text_decoder` | 잘못된 바이트를 버리는 UTF-8·CP949 디코딩과 한글 음절 판정. `doc_reader`의 아래 계층이다. 본문 표본 추출과 인코딩 추정은 `doc_checker::text_sampler`에 있다 |
+| `text_decoder` | 바이트를 텍스트로 푼다: 잘못된 바이트를 버리는 UTF-8·CP949 디코딩과 한글 음절 판정, 인코딩 이름과 코덱(`text_transcoder`), 인코딩 추정 휴리스틱 `detect_hint`·`decode_best`와 `korean_likeness`(`encoding_guesser`). `doc_checker`와 `doc_reader`의 아래 계층이다 |
+| `doc_reader` | 문서 본문 요약 추출(TXT·EPUB·HTML·RTF·DOCX·PDF·HWP)과 파일 앞뒤 읽기. 인코딩 손상 판정은 `doc_checker::mojibake_detector`를 쓴다 |
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. backend `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
-| `doc_checker` | 문서 파일 검사와 교정 기법. EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표(`format_dispatcher::scan_file`), 보안 정리(`epub_sanitizer`, `pdf::pdf_sanitizer`)와 결함 수리(`defect_repairer`)의 재구성·검증. OLE 복합 파일 파서(`ole_parser`)를 포함한다. 파일 하나를 받아 보고서나 고친 바이트를 돌려줄 뿐, 파일 순회·적용·출력은 하지 않는다. 검사 설정은 `CheckOptions`다 |
+| `doc_checker` | 문서 파일 검사와 교정 기법. EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표(`format_dispatcher::scan_file`), 보안 정리(`epub_sanitizer`, `pdf::pdf_sanitizer`)와 결함 수리(`defect_repairer`)의 재구성·검증, TXT의 UTF-8 재인코딩(`encoding_repairer`), 인코딩 손상 판정(`mojibake_detector`). OLE 복합 파일 파서(`ole_parser`)를 포함한다. 파일 하나를 받아 보고서나 고친 바이트를 돌려줄 뿐, 파일 순회·적용·출력은 하지 않는다. 검사 설정은 `CheckOptions`다 |
 | `common` | 여러 crate가 함께 쓰는 기능: HTTP 요청·응답과 `ureq` 구현(`http_client`), URL 나누기·잇기·인코딩(`url_parser`), JSON 필드 읽기(`json_field_reader`), DTD를 허용하는 XML 해석(`xml_parser`), ZIP 열기와 멤버 읽기 상한(`zip_reader`), panic 메시지 읽기(`panic_message`). 시스템 능력이나 특정 문서 형식에 속하지 않고 두 crate 이상이 쓰는 것만 둔다. `http_client`·`xml_parser`·`zip_reader`는 feature이고, 필요 없는 crate는 `default-features = false`로 끈다 |
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
 | `stat` | 색인·파싱 통계 카운터 |

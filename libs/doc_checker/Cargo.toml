@@ -1,6 +1,6 @@
 [package]
 name = "doc_checker"
-description = "문서 파일 검사와 교정 기법: EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표, 보안 정리와 결함 수리의 재구성·검증"
+description = "문서 파일 검사와 교정 기법: EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표, 보안 정리와 결함 수리의 재구성·검증, TXT 재인코딩"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -64,6 +64,10 @@ path = "../../tests/rust/doc_checker/hwp.rs"
 [[test]]
 name = "mojibake_detector"
 path = "../../tests/rust/doc_checker/mojibake_detector.rs"
+
+[[test]]
+name = "encoding_repairer"
+path = "../../tests/rust/doc_checker/encoding_repairer.rs"
 
 [[test]]
 name = "text_sampler"

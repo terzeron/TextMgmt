@@ -20,10 +20,11 @@
 //! - `doc_reader::pdf::{PlumberDocument, pdf_text_by_plumber_with(&Path, &dyn PlumberDocument) -> Result<(String, usize), String>,
 //!   PdftotextHooks, pdf_text_by_pdftotext_with(&Path, &PdftotextHooks) -> (String, usize)}`
 //!   `PdftotextHooks { which: Fn() -> Option<PathBuf>, run: Fn(&[String]) -> Option<(i32, Vec<u8>)>, path_cache: OnceLock }`
-//! - `doc_reader::text::{TextHooks, Candidate, read_from_text_with(&Path, &TextHooks) -> Result<TextRead, String>,
-//!   reencode_text_file_to_utf8_with(&Path, bool, Option<&Path>, &Path, &TextHooks) -> Reencode}`
-//!   `TextHooks { detect, encodings, read_bytes, read_replace, write_backup }` (binary_and_file_reading.rs는 detect, read_bytes, write_backup을 쓴다)
-//! - `doc_reader::mojibake_counter::count_mojibake_runs_with(&str, &str) -> usize` (런 정규식 패턴을 받는다)
+//! - `doc_reader::text::{TextHooks, read_from_text_with(&Path, &TextHooks) -> Result<TextRead, String>}`, `text_decoder::text_transcoder::Candidate`
+//!   `TextHooks { detect, encodings, read_bytes, read_replace }`
+//! - `doc_checker::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8_with(&Path, bool, Option<&Path>, &Path, &ReencodeHooks) -> Reencode}`
+//!   `ReencodeHooks { detect, encodings, read_bytes, write_backup }`
+//! - `doc_checker::mojibake_detector::count_mojibake_runs_with(&str, &str) -> usize` (런 정규식 패턴을 받는다)
 //! - `doc_reader::office::read_from_hwp_with(&Path, &Path, &dyn Fn(&Path) -> Result<String, String>) -> (String, usize, Vec<String>)`
 //! - `file_indexer::record_builder::{ReadHooks, read_file_with_hooks(...)}`: `fast_page_count`, `fallback_page_count`, `inspect` 대체 훅 (`Default` 구현)
 //! - `loader::cli_parser::{RunHooks, run_with_hooks(...)}`: `read_file`, `stat`, `on_worker_spawn` 대체 훅
@@ -43,15 +44,16 @@ use std::thread::{self, ThreadId};
 use std::time::{Duration, UNIX_EPOCH};
 
 use crate::common::shared_fixtures::{FakeStore, hwp_dir, path_str, run_main, run_main_with, run_main_with_hooks, setup_loader_env, tmp, write_blank_pdf};
+use doc_checker::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8_with};
+use doc_checker::mojibake_detector::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, count_mojibake_runs_with};
 use doc_reader::TEXT_SIZE;
-use doc_reader::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, count_mojibake_runs_with};
 use doc_reader::office::{convert_with_libreoffice, find_libreoffice, read_from_hwp_with_fallback};
 use doc_reader::pdf::XrefStream;
 use doc_reader::pdf::{
     FastCountHooks, InProcess, PlumberDocument, Stage, StageError, StageRunner, fast_page_count, fast_page_count_with, find_xref_offset, parse_one_xref_stream, pdf_text_by_plumber_with,
     read_from_obj_stream, read_from_pdf, run_stage,
 };
-use doc_reader::text::{Candidate, Enc, TextHooks, read_from_text_with, reencode_text_file_to_utf8_with};
+use doc_reader::text::{TextHooks, read_from_text_with};
 use file_indexer::env_config::Config;
 use file_indexer::record_builder::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, zip_container_type};
 use loader::batch_loader::{recursive_files, sample_files};
@@ -59,6 +61,7 @@ use loader::cli_parser::RunHooks;
 use serde_json::{Value, json};
 use stat::Stat;
 use sysdeps::timeout_runner::ParserTimeout;
+use text_decoder::text_transcoder::{Candidate, Enc};
 
 /// zlib.compress 대응. 압축하지 않는(stored) deflate 블록이라 64KiB 미만 입력만 다룬다.
 fn zlib_compress(data: &[u8]) -> Vec<u8> {
@@ -1081,7 +1084,7 @@ mod test_reencode_candidate_rejection {
         // 디코딩은 되지만 인코딩은 실패하는 코덱(latin-1 디코딩, 인코딩 항상 실패)을 후보로 넣는다.
         let dir = tmp();
         let no_detect = |_: &[u8]| -> Option<Enc> { None };
-        let hooks = TextHooks {
+        let hooks = ReencodeHooks {
             detect: Some(&no_detect),
             encodings: Some(vec![Candidate::Builtin(Enc::Utf8), Candidate::Custom { name: "tmdecodeonly", decode: |data| data.iter().map(|&b| b as char).collect(), encode: |_| None }]),
             ..Default::default()
@@ -1103,7 +1106,7 @@ mod test_reencode_candidate_rejection {
         // 상위바이트가 대부분 고립되어 cp1252가 후보로 올라가지만, 그 안에 섞인 EUC-KR 2바이트 쌍이 한글로 되살아나므로 cp1252 해석은 틀린 것이다.
         let dir = tmp();
         let no_detect = |_: &[u8]| -> Option<Enc> { None };
-        let hooks = TextHooks { detect: Some(&no_detect), ..Default::default() };
+        let hooks = ReencodeHooks { detect: Some(&no_detect), ..Default::default() };
 
         let f = dir.path().join("mojibake_candidate.txt");
         let mut raw = b"a\xe9".repeat(60);
@@ -1136,7 +1139,7 @@ mod test_reencode_candidate_rejection {
             }
             fs::read(path)
         };
-        let hooks = TextHooks { read_bytes: Some(&flaky_read_bytes), ..Default::default() };
+        let hooks = ReencodeHooks { read_bytes: Some(&flaky_read_bytes), ..Default::default() };
 
         let r = reencode_text_file_to_utf8_with(&f, false, None, Path::new("readback.txt"), &hooks);
         assert!(!r.changed);
