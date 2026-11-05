@@ -8,7 +8,6 @@ autotests = false
 
 [dependencies]
 common = { path = "../common", default-features = false, features = ["xml_parser", "zip_reader"] }
-doc_checker = { path = "../doc_checker" }
 text_decoder = { path = "../text_decoder" }
 ego-tree = "0.11"
 encoding_rs = "0.8.42"
@@ -55,3 +54,7 @@ path = "../../tests/rust/doc_reader/text.rs"
 [[test]]
 name = "text_normalizer"
 path = "../../tests/rust/doc_reader/text_normalizer.rs"
+
+[[test]]
+name = "text_sampler"
+path = "../../tests/rust/doc_reader/text_sampler.rs"

@@ -207,3 +207,23 @@ pub fn rewrite_epub_members(path: &Path, transform: impl FnOnce(&mut Members)) {
     transform(&mut members);
     members.write(path, ZipMode::EpubStyle);
 }
+
+/// 이름·본문 쌍으로 ZIP을 만든다. 모든 멤버를 DEFLATE로 쓴다.
+pub fn make_zip(path: &Path, docs: &[(&str, &str)]) {
+    let mut z = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+    for (name, body) in docs {
+        z.start_file(*name, options(CompressionMethod::Deflated)).unwrap();
+        z.write_all(body.as_bytes()).unwrap();
+    }
+    z.finish().unwrap();
+}
+
+/// 멤버 하나의 로컬 헤더 서명을 지워 그 멤버만 읽을 수 없게 만든다.
+pub fn corrupt_local_header(path: &Path, member: &str) {
+    let mut data = std::fs::read(path).unwrap();
+    let name = member.as_bytes();
+    let sig = b"PK\x03\x04";
+    let offset = (0..data.len().saturating_sub(30 + name.len())).find(|&i| &data[i..i + 4] == sig && &data[i + 30..i + 30 + name.len()] == name).expect("local header not found");
+    data[offset..offset + 4].copy_from_slice(&[0, 0, 0, 0]);
+    std::fs::write(path, data).unwrap();
+}

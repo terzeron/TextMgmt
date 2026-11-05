@@ -24,7 +24,7 @@
 //!   `TextHooks { detect, encodings, read_bytes, read_replace }`
 //! - `doc_checker::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8_with(&Path, bool, Option<&Path>, &Path, &ReencodeHooks) -> Reencode}`
 //!   `ReencodeHooks { detect, encodings, read_bytes, write_backup }`
-//! - `doc_checker::mojibake_detector::count_mojibake_runs_with(&str, &str) -> usize` (런 정규식 패턴을 받는다)
+//! - `text_decoder::mojibake_counter::count_mojibake_runs_with(&str, &str) -> usize` (런 정규식 패턴을 받는다)
 //! - `doc_reader::office::read_from_hwp_with(&Path, &Path, &dyn Fn(&Path) -> Result<String, String>) -> (String, usize, Vec<String>)`
 //! - `file_indexer::record_builder::{ReadHooks, read_file_with_hooks(...)}`: `fast_page_count`, `fallback_page_count`, `inspect` 대체 훅 (`Default` 구현)
 //! - `loader::cli_parser::{RunHooks, run_with_hooks(...)}`: `read_file`, `stat`, `on_worker_spawn` 대체 훅
@@ -45,7 +45,6 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use crate::common::shared_fixtures::{FakeStore, hwp_dir, path_str, run_main, run_main_with, run_main_with_hooks, setup_loader_env, tmp, write_blank_pdf};
 use doc_checker::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8_with};
-use doc_checker::mojibake_detector::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, count_mojibake_runs_with};
 use doc_reader::TEXT_SIZE;
 use doc_reader::office::{convert_with_libreoffice, find_libreoffice, read_from_hwp_with_fallback};
 use doc_reader::pdf::XrefStream;
@@ -61,6 +60,7 @@ use loader::cli_parser::RunHooks;
 use serde_json::{Value, json};
 use stat::Stat;
 use sysdeps::timeout_runner::ParserTimeout;
+use text_decoder::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, count_mojibake_runs_with};
 use text_decoder::text_transcoder::{Candidate, Enc};
 
 /// zlib.compress 대응. 압축하지 않는(stored) deflate 블록이라 64KiB 미만 입력만 다룬다.

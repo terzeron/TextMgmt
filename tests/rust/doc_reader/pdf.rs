@@ -197,5 +197,5 @@ fn corpus_pdf_has_page_counts_and_extracted_text() {
 #[test]
 fn mojibake_run_window_matches_the_summary_length() {
     // PDF 추출 실패 판정은 요약에 쓰는 앞부분만 본다.
-    assert_eq!(doc_checker::mojibake_detector::RUN_SCAN_CHARS, doc_reader::TEXT_SIZE);
+    assert_eq!(text_decoder::mojibake_counter::RUN_SCAN_CHARS, doc_reader::TEXT_SIZE);
 }

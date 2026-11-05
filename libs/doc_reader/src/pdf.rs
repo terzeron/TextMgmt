@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Instant;
 
-use doc_checker::mojibake_detector::{count_mojibake_runs, is_usable_text};
 use regex::bytes::Regex as BytesRegex;
+use text_decoder::mojibake_counter::{count_mojibake_runs, is_usable_text};
 
 use crate::TEXT_SIZE;
 use crate::text_normalizer::{head_chars, keep_word_chars};

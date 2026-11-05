@@ -1,10 +1,11 @@
-//! `doc_checker::text_sampler` 단위 테스트.
+//! `doc_reader::text_sampler` 단위 테스트.
 
-mod support;
+#[path = "../shared/zipx.rs"]
+mod zipx;
 
-use doc_checker::text_sampler::*;
+use doc_reader::text_sampler::*;
 use std::fs;
-use support::*;
+use zipx::{corrupt_local_header, make_zip};
 
 const KOREAN: &str = "그는 아무 말도 하지 않았다 그리고 다시 길을 걸었다 바람이 불었다 ";
 

@@ -10,6 +10,7 @@ pub mod pdf;
 pub mod rtf;
 pub mod text;
 pub mod text_normalizer;
+pub mod text_sampler;
 
 /// 요약 길이(문자 수).
 pub const TEXT_SIZE: usize = 4096;

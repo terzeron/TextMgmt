@@ -22,7 +22,6 @@ pub mod nested_scanner;
 pub mod ole_parser;
 pub mod pdf;
 pub mod rule_engine;
-pub mod text_sampler;
 pub mod text_sanitizer;
 pub mod txt_checker;
 pub mod viewer_block_table;

@@ -35,7 +35,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::shared_fixtures::{config_with_book, test_env, tests_root, write};
 use doc_checker::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8, reencode_text_file_to_utf8_with};
-use doc_checker::mojibake_detector::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, is_usable_text};
 use doc_reader::TEXT_SIZE;
 use doc_reader::epub::{read_from_epub, read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using};
 use doc_reader::markup::{count_lines, read_from_html};
@@ -53,6 +52,7 @@ use file_indexer::record_builder::{ReadHooks, detect_file_type, read_file, read_
 use serde_json::Value;
 use stat::Stat;
 use text_decoder::encoding_guesser::HIGH_BYTE_PAIRED_MIN;
+use text_decoder::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, is_usable_text};
 use text_decoder::text_transcoder::Enc;
 
 #[test]

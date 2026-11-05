@@ -3,6 +3,12 @@
 
 #[path = "../ole_common.rs"]
 pub mod ole_common;
+#[path = "../../shared/zipx.rs"]
+pub mod zipx;
+
+// 여러 crate 테스트가 쓰는 ZIP 생성 helper는 `shared/zipx.rs`에 있다. 기존 테스트의 경로를 그대로 쓰도록 다시 내보낸다.
+#[allow(unused_imports)]
+pub use zipx::{corrupt_local_header, make_zip};
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -93,15 +99,6 @@ pub fn make_epub(path: &Path) {
 }
 
 /// (이름, 본문) 목록으로 단순 ZIP을 만든다. reader 테스트용.
-pub fn make_zip(path: &Path, docs: &[(&str, &str)]) {
-    let mut z = ZipWriter::new(File::create(path).unwrap());
-    for (name, body) in docs {
-        z.start_file(*name, deflated()).unwrap();
-        z.write_all(body.as_bytes()).unwrap();
-    }
-    z.finish().unwrap();
-}
-
 pub fn make_zip_with_media(path: &Path, media_type: &str, member_name: &str, payload: &[u8]) {
     let opf = format!(
         r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest><item id="a" href="{member_name}" media-type="{media_type}"/></manifest><spine><itemref idref="a"/></spine></package>"#
@@ -116,16 +113,6 @@ pub fn make_zip_with_media(path: &Path, media_type: &str, member_name: &str, pay
     z.start_file(format!("OEBPS/{member_name}"), deflated()).unwrap();
     z.write_all(payload).unwrap();
     z.finish().unwrap();
-}
-
-/// ZIP 중앙 디렉토리는 그대로 두고 멤버의 로컬 헤더 시그니처만 망가뜨린다(Bad magic number 재현).
-pub fn corrupt_local_header(path: &Path, member: &str) {
-    let mut data = fs::read(path).unwrap();
-    let name = member.as_bytes();
-    let sig = b"PK\x03\x04";
-    let offset = (0..data.len().saturating_sub(30 + name.len())).find(|&i| &data[i..i + 4] == sig && &data[i + 30..i + 30 + name.len()] == name).expect("local header not found");
-    data[offset..offset + 4].copy_from_slice(&[0, 0, 0, 0]);
-    fs::write(path, data).unwrap();
 }
 
 // ---- EPUB 보안 검사용 fixture ----

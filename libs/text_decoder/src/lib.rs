@@ -1,9 +1,18 @@
 //! 바이트를 텍스트로 푼다: 잘못된 바이트를 버리는 UTF-8·CP949 디코딩과 한글 음절 판정,
-//! 인코딩 이름과 코덱(`text_transcoder`), 인코딩 추정 휴리스틱(`encoding_guesser`).
+//! 인코딩 이름과 코덱(`text_transcoder`), 인코딩 추정 휴리스틱(`encoding_guesser`), 손상 구간 세기(`mojibake_counter`).
 //! `doc_reader`와 `doc_checker`가 쓴다.
 
 pub mod encoding_guesser;
+pub mod mojibake_counter;
 pub mod text_transcoder;
+
+/// 첫 `n`개 코드포인트.
+pub fn head_chars(s: &str, n: usize) -> &str {
+    match s.char_indices().nth(n) {
+        Some((i, _)) => &s[..i],
+        None => s,
+    }
+}
 
 pub fn is_hangul_syllable(c: char) -> bool {
     ('가'..='힣').contains(&c)

@@ -8,6 +8,7 @@ autotests = false
 
 [dependencies]
 encoding_rs = "0.8.42"
+regex = "1.13.1"
 
 [[test]]
 name = "text_decoder"
@@ -16,6 +17,10 @@ path = "../../tests/rust/text_decoder/text_decoder.rs"
 [[test]]
 name = "text_transcoder"
 path = "../../tests/rust/text_decoder/text_transcoder.rs"
+
+[[test]]
+name = "mojibake_counter"
+path = "../../tests/rust/text_decoder/mojibake_counter.rs"
 
 [[test]]
 name = "encoding_guesser"

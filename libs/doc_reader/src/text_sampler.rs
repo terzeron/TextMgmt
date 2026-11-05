@@ -1,4 +1,4 @@
-//! 책 파일(TXT·EPUB)에서 본문 앞뒤 표본을 인코딩에 맞게 떼어 낸다. 인코딩 손상 판정(`mojibake_detector`)이 쓴다.
+//! 책 파일(TXT·EPUB)에서 본문 앞뒤 표본을 인코딩에 맞게 떼어 낸다. 인코딩 손상 판정(`doc_checker::mojibake_detector`)이 쓴다.
 //!
 //! - 본문 발췌: [`extract_txt_text`], [`extract_epub_text`], [`extract_epub_text_limited`], [`extract_document_text`]
 //! - 인코딩 추정(`decode_best`)과 한국어 판정(`korean_likeness`)은 `text_decoder::encoding_guesser`에 있다.
@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::LazyLock;
+use text_decoder::head_chars;
 
 use common::zip_reader::{MAX_MEMBER_BYTES, Zip, open_zip};
 use regex::Regex;
@@ -18,14 +19,6 @@ pub const TEXT_TAIL_CHARS: usize = 10000;
 
 static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
 static WS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
-
-/// 첫 `n`개 코드포인트.
-pub(crate) fn head_chars(s: &str, n: usize) -> &str {
-    match s.char_indices().nth(n) {
-        Some((i, _)) => &s[..i],
-        None => s,
-    }
-}
 
 fn last_chars(s: &str, n: usize) -> String {
     let count = s.chars().count();

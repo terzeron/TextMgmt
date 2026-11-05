@@ -8,8 +8,8 @@ use std::{fs, io};
 use text_decoder::encoding_guesser::{DETECT_PREFIX, HIGH_BYTE_PAIRED_MIN, TEXT_ENCODINGS, TextDetector, detect_hint, high_byte_paired_ratio};
 use text_decoder::text_transcoder::{Candidate, Enc, decode, encode};
 
-use crate::mojibake_detector::{PDF_MOJIBAKE_RUN_LIMIT, RUN_SCAN_CHARS, count_mojibake_runs};
-use crate::text_sampler::head_chars;
+use text_decoder::head_chars;
+use text_decoder::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, RUN_SCAN_CHARS, count_mojibake_runs};
 
 pub type BackupWriter<'a> = dyn Fn(&Path, &[u8]) -> io::Result<()> + 'a;
 pub type TextReader<'a> = dyn Fn(&Path) -> io::Result<Vec<u8>> + 'a;

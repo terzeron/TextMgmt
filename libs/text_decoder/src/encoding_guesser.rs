@@ -1,7 +1,7 @@
 //! 인코딩 추정 휴리스틱 두 벌과 한국어 판정.
 //!
 //! - [`detect_hint`]: TXT 읽기와 재인코딩이 후보 순서를 정할 때 쓴다(chardet 대신).
-//! - [`decode_best`]: 본문 표본 추출(`doc_checker::text_sampler`)이 쓴다.
+//! - [`decode_best`]: 본문 표본 추출(`doc_reader::text_sampler`)이 쓴다.
 //! - [`korean_likeness`]: 글이 정상 한국어로 읽히는 정도. `decode_best`와 인코딩 손상 판정이 쓴다.
 //!
 //! 두 휴리스틱은 서로 다른 오판 사례로 조정했다. 합치면 판정이 바뀐다.
