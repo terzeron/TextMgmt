@@ -310,13 +310,13 @@ fn failed() -> StageAnswer {
     Err(StageError::Failed("boom".into()))
 }
 
-fn backends<'a>(stat: &Arc<Stat>, pdf: &'a FakePdf) -> Backends<'a> {
-    Backends { pdf_runner: pdf, runner: Rc::new(SystemRunner), stat: Arc::clone(stat) }
+fn backends<'a>(stat: &'a Arc<Stat>, pdf: &'a FakePdf) -> Backends<'a> {
+    Backends { pdf_runner: pdf, runner: Rc::new(SystemRunner), stat }
 }
 
 /// 실제 도구와 현재 프로세스 실행기로 추출한다.
 fn extract_real(path: &Path, content: Option<&str>) -> Vec<String> {
-    extract(path, content, &Backends::real(&InProcess))
+    extract(path, content, &Backends::real(&InProcess, &Stat::new()))
 }
 
 fn stage_line(stat: &Stat, stage: &str) -> String {

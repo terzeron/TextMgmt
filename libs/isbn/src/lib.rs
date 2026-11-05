@@ -10,7 +10,7 @@
 
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use doc_reader::head_tail_reader::{EpubPackage, read_djvu_head_tail, read_head_tail_from_content, read_head_tail_from_file, read_hwp_strings};
@@ -183,13 +183,14 @@ pub struct Backends<'a> {
     /// PDF 단계 실행기. 본문 읽기에 쓴 실행기를 그대로 넘긴다.
     pub pdf_runner: &'a dyn StageRunner,
     pub runner: Rc<dyn CommandRunner>,
-    pub stat: Arc<Stat>,
+    /// PDF 단계 통계를 쌓을 곳. 본문 읽기와 같은 통계를 넘긴다.
+    pub stat: &'a Stat,
 }
 
 impl<'a> Backends<'a> {
-    /// 실제 외부 도구와 전역 통계에 `pdf_runner`를 묶는다.
-    pub fn real(pdf_runner: &'a dyn StageRunner) -> Self {
-        Backends { pdf_runner, runner: Rc::new(SystemRunner), stat: Arc::clone(Stat::global()) }
+    /// 실제 외부 도구에 `pdf_runner`와 통계 `stat`을 묶는다.
+    pub fn real(pdf_runner: &'a dyn StageRunner, stat: &'a Stat) -> Self {
+        Backends { pdf_runner, runner: Rc::new(SystemRunner), stat }
     }
 }
 

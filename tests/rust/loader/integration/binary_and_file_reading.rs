@@ -218,11 +218,16 @@ fn read_file_runs_isbn_stages_through_the_same_runner() {
     fs::write(&path, pdf_with_text("ISBN 9788994492032")).unwrap();
     let cfg = Config::new(&books, &comics);
     let runner = EmptySummaryRunner(Mutex::new(Vec::new()));
+    let stat = Stat::new();
 
-    let result = read_file(&cfg, &path, None, false, None, &runner, &Stat::new());
+    let result = read_file(&cfg, &path, None, false, None, &runner, &stat);
 
     assert_eq!(result.item.unwrap().1["isbn"], "9788994492032");
     assert_eq!(*runner.0.lock().unwrap(), [Stage::Poppler, Stage::HeadTail]);
+    // ISBN 단계 통계도 넘긴 stat에 쌓인다(전역 통계가 아니다).
+    let mut printed = Vec::new();
+    stat.print(&mut printed).unwrap();
+    assert!(String::from_utf8(printed).unwrap().contains("isbn_poppler"));
 }
 
 #[test]
@@ -232,7 +237,7 @@ fn loader_isbn_pdf_worker_extracts_text_through_the_binary() {
     fs::write(&path, pdf_with_text("ISBN 9788994492032")).unwrap();
 
     let runner = file_record::child_process_runner::ChildRunner::new(PathBuf::from(env!("CARGO_BIN_EXE_loader")));
-    let isbns = isbn::extract(&path, None, &isbn::Backends::real(&runner));
+    let isbns = isbn::extract(&path, None, &isbn::Backends::real(&runner, &Stat::new()));
 
     assert_eq!(isbns, ["9788994492032"]);
 }

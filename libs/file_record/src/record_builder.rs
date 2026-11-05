@@ -314,7 +314,7 @@ pub fn read_file_with_hooks(
             "pdf" => Some(summary.as_str()),
             _ => None,
         };
-        isbn_value = isbn::extract(path, content, &isbn::Backends::real(runner)).into_iter().next().unwrap_or_default();
+        isbn_value = isbn::extract(path, content, &isbn::Backends::real(runner, stat)).into_iter().next().unwrap_or_default();
     }
     // dc:publisher는 OPF 한 멤버만 풀면 나온다.
     let publisher = if file_type == "epub" { read_epub_publisher(path) } else { String::new() };
