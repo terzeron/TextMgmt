@@ -1,9 +1,9 @@
 #[path = "../common/mod.rs"]
 mod common;
 use crate::common::shared_fixtures::{block_on, deps, make_doc, make_manager, tmp_dir};
+use backend::api_router::BookManagerApi;
 use backend::book_manager::{BookContent, BookManager, MAX_CATEGORY_RESULT_COUNT};
 use backend::book_metadata::BookPage;
-use backend::main::BookManagerApi;
 use common::es_fake::{FakeEsManager, Hit};
 use common::log_capture::LogCapture;
 use serde_json::json;

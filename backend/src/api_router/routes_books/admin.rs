@@ -1,9 +1,9 @@
 //! 도서·만화 수정과 카테고리 관리. 실제 파일 작업은 BookManager에 위임한다.
 use super::{kind, manager};
+use crate::api_router::request_extractors::lenient_bool;
+use crate::api_router::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, RequireAdmin, Routes};
 use crate::book_manager::{BookDeletion, CategoryDeletion, CategoryRename};
 use crate::book_metadata::Book;
-use crate::main::request_extractors::lenient_bool;
-use crate::main::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, RequireAdmin, Routes};
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},
@@ -446,7 +446,7 @@ async fn pdf_stats(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUr
 #[cfg(test)]
 mod tests {
     use super::{kind, manager, mapping, normalized_category_name, result, sequence_ratio};
-    use crate::main::{ApiError, AppDeps, AuthMode, CategoryMappingApi, MappingError};
+    use crate::api_router::{ApiError, AppDeps, AuthMode, CategoryMappingApi, MappingError};
     use axum::http::Uri;
     use serde_json::json;
 

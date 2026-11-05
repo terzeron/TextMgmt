@@ -1,8 +1,8 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+use backend::api_router::CLIENT_ERROR_FIELD_LIMITS;
 use backend::auth_service::ACCESS_COOKIE_NAME;
-use backend::main::CLIENT_ERROR_FIELD_LIMITS;
 use common::TestClient;
 use common::log_capture::LogCapture;
 use log::Level;
@@ -15,7 +15,7 @@ fn jwt(email: &str, role: &str) -> String {
 
 fn client() -> TestClient {
     common::setup_env();
-    TestClient::with_app(backend::main::app_with(backend::main::AppDeps::from_env().with_refresh_token_store(common::session::store())))
+    TestClient::with_app(backend::api_router::app_with(backend::api_router::AppDeps::from_env().with_refresh_token_store(common::session::store())))
 }
 
 #[tokio::test]

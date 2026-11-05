@@ -1,9 +1,9 @@
 //! 도서·만화의 메타데이터, 검색, 카테고리 및 최신 목록.
 use super::{ensure_allowed, hidden_categories, is_hidden, kind, manager};
+use crate::api_router::{ApiError, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, RequireAuth, Routes};
 use crate::auth_service::Claims;
 use crate::book_manager::MAX_LATEST_BOOK_COUNT;
 use crate::book_metadata::{Book, BookView};
-use crate::main::{ApiError, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, RequireAuth, Routes};
 use axum::{
     Json,
     extract::{OriginalUri, Path, State},
@@ -119,7 +119,7 @@ struct LatestQuery {
 async fn latest(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiQuery(query): ApiQuery<LatestQuery>) -> ApiResult<Json<Value>> {
     let limit = query.limit.unwrap_or(MAX_LATEST_BOOK_COUNT);
     if !(1..=MAX_LATEST_BOOK_COUNT).contains(&limit) {
-        return Err(crate::main::RequestValidationError::single(&["query", "limit"], "Invalid latest page size", json!(limit)).into());
+        return Err(crate::api_router::RequestValidationError::single(&["query", "limit"], "Invalid latest page size", json!(limit)).into());
     }
     let mut excluded = hidden(&deps, &payload, &uri)?;
     for category in mapping(&deps)?.get_latest_excluded_categories(kind(&uri))? {

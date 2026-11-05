@@ -2,7 +2,7 @@
 //!
 //! `DefaultFileReader`는 `loader` crate 없이 메타데이터 문서만 만든다: 카테고리, 제목, 저자, 크기, 시각, 형식.
 //! 본문 요약은 txt만 앞부분을 담고, 쪽수·줄 수·ISBN·PDF/EPUB/DOC 본문은 채우지 않는다.
-//! 운영에서는 `file_record::record_builder::read_file`을 감싼 `FileReader`를 `BookManagerDeps::with_file_reader`로 꽂아야 한다.
+//! 운영에서는 `file_indexer::record_builder::read_file`을 감싼 `FileReader`를 `BookManagerDeps::with_file_reader`로 꽂아야 한다.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
@@ -11,15 +11,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{Local, NaiveDateTime};
-use file_record::env_config::Config;
-use file_record::record_builder;
+use file_indexer::env_config::Config;
+use file_indexer::record_builder;
 use serde_json::{Value, json};
 use sysdeps::FsOps;
 
 use super::path_validator::relative_to;
 use super::path_validator::{declared_type, is_indexable_type};
 use super::{Docs, FileReader};
-use file_record::file_time::iso;
+use file_indexer::file_time::iso;
 
 /// ZIP 기반으로 선언된 형식. 선언이 이 안이면 내용물을 열어보지 않는다.
 const ZIP_BASED_TYPES: [&str; 3] = ["epub", "cbz", "docx"];
@@ -88,7 +88,7 @@ impl LoaderFileReader {
     }
 
     fn read(&self, path: &Path, path_prefix: Option<&Path>, skip_text: bool) -> Docs {
-        let outcome = file_record::child_process_runner::read_file_with_child_stages(&self.worker_executable, &self.config, path, path_prefix, skip_text);
+        let outcome = file_indexer::child_process_runner::read_file_with_child_stages(&self.worker_executable, &self.config, path, path_prefix, skip_text);
         for message in outcome.messages {
             log::warn!("loader failed to read '{}': {message}", path.display());
         }
@@ -106,10 +106,11 @@ impl FileReader for LoaderFileReader {
     }
 
     fn try_read_file_with_timeout(self: Arc<Self>, path: PathBuf, path_prefix: Option<PathBuf>, skip_text: bool, timeout: Duration) -> Result<Docs, super::ReadFileError> {
-        let outcome = file_record::child_process_runner::read_file_in_child(&self.worker_executable, &self.config, &path, path_prefix.as_deref(), skip_text, timeout).map_err(|error| match error {
-            file_record::child_process_runner::ChildReadError::Timeout(error) => super::ReadFileError::Timeout(error.to_string()),
-            file_record::child_process_runner::ChildReadError::Other(error) => super::ReadFileError::Other(error),
-        })?;
+        let outcome =
+            file_indexer::child_process_runner::read_file_in_child(&self.worker_executable, &self.config, &path, path_prefix.as_deref(), skip_text, timeout).map_err(|error| match error {
+                file_indexer::child_process_runner::ChildReadError::Timeout(error) => super::ReadFileError::Timeout(error.to_string()),
+                file_indexer::child_process_runner::ChildReadError::Other(error) => super::ReadFileError::Other(error),
+            })?;
         for message in outcome.messages {
             log::warn!("loader failed to read '{}': {message}", path.display());
         }

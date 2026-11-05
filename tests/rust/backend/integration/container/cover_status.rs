@@ -444,7 +444,7 @@ fn test_epub_is_judged_by_cover_metadata() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
 async fn uncovered_http_uses_real_book_and_comic_managers() {
-    use backend::main::{AppDeps, AuthMode, app_with};
+    use backend::api_router::{AppDeps, AuthMode, app_with};
     common::setup_env();
     tokio::task::spawn_blocking(mysql_fixture::mysql_container).await.unwrap();
     let _db_guard = mysql_fixture::db_lock();
@@ -483,29 +483,29 @@ async fn uncovered_http_uses_real_book_and_comic_managers() {
 
 struct BrowseManager(Mutex<Vec<serde_json::Value>>);
 #[async_trait::async_trait]
-impl backend::main::BookManagerApi for BrowseManager {
+impl backend::api_router::BookManagerApi for BrowseManager {
     async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, excluded: Option<&[String]>) -> Result<CoverPage, String> {
         self.0.lock().unwrap().push(json!([category, size, cursor, excluded]));
         Ok(CoverPage { items: vec![], total: Some(17), next_cursor: Some("next".into()) })
     }
 }
 struct Hidden;
-impl backend::main::CategoryMappingApi for Hidden {
-    fn get_hidden_categories(&self, kind: &str) -> Result<Vec<String>, backend::main::MappingError> {
+impl backend::api_router::CategoryMappingApi for Hidden {
+    fn get_hidden_categories(&self, kind: &str) -> Result<Vec<String>, backend::api_router::MappingError> {
         Ok(vec![if kind == "comic" { "hidden-comic".into() } else { "hidden-book".into() }])
     }
 }
 
-struct FailingHidden(backend::main::MappingError);
-impl backend::main::CategoryMappingApi for FailingHidden {
-    fn get_hidden_categories(&self, _kind: &str) -> Result<Vec<String>, backend::main::MappingError> {
+struct FailingHidden(backend::api_router::MappingError);
+impl backend::api_router::CategoryMappingApi for FailingHidden {
+    fn get_hidden_categories(&self, _kind: &str) -> Result<Vec<String>, backend::api_router::MappingError> {
         Err(self.0.clone())
     }
 }
 
 struct BrowseOutcomes;
 #[async_trait::async_trait]
-impl backend::main::BookManagerApi for BrowseOutcomes {
+impl backend::api_router::BookManagerApi for BrowseOutcomes {
     async fn get_cover_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _excluded: Option<&[String]>) -> Result<CoverPage, String> {
         Err("cover query failed".into())
     }
@@ -517,7 +517,7 @@ impl backend::main::BookManagerApi for BrowseOutcomes {
 
 #[tokio::test]
 async fn browse_passes_hidden_categories_and_blocks_hidden_descendants() {
-    use backend::main::{AppDeps, AuthMode, app_with};
+    use backend::api_router::{AppDeps, AuthMode, app_with};
     let manager = Arc::new(BrowseManager(Mutex::new(vec![])));
     let deps = AppDeps::new(AuthMode::AuthOnly(Claims::with_role("viewer"))).with_book_manager(manager.clone()).with_comics_manager(manager.clone()).with_category_mapping(Arc::new(Hidden));
     let client = common::TestClient::with_app(app_with(deps));
@@ -533,7 +533,7 @@ async fn browse_passes_hidden_categories_and_blocks_hidden_descendants() {
 
 #[tokio::test]
 async fn browse_requires_auth_and_validates_limits() {
-    use backend::main::{AppDeps, AuthMode, app_with};
+    use backend::api_router::{AppDeps, AuthMode, app_with};
     let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Cookies)));
     assert_eq!(client.get("/browse").await.status, 401);
     let manager = Arc::new(BrowseManager(Mutex::new(vec![])));
@@ -547,7 +547,7 @@ async fn browse_requires_auth_and_validates_limits() {
 
 #[tokio::test]
 async fn browse_handles_manager_initialization_and_query_errors() {
-    use backend::main::{AppDeps, AuthMode, app_with};
+    use backend::api_router::{AppDeps, AuthMode, app_with};
 
     let unavailable = AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager_factory(|| Err("manager unavailable".into()));
     let response = common::TestClient::with_app(app_with(unavailable)).get("/browse").await;
@@ -566,7 +566,7 @@ async fn browse_handles_manager_initialization_and_query_errors() {
 
 #[tokio::test]
 async fn browse_translates_hidden_category_store_errors() {
-    use backend::main::{AppDeps, AuthMode, MappingError, app_with};
+    use backend::api_router::{AppDeps, AuthMode, MappingError, app_with};
 
     for (error, expected_status, expected_detail) in
         [(MappingError::Http(429, "slow down".into()), 429, "slow down"), (MappingError::Other("database failed".into()), 500, "서버 내부 오류가 발생했습니다")]

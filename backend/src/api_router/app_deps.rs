@@ -392,9 +392,9 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{Claims, RuntimeBookAccess, Slot, build_book_manager, build_comics_manager};
+    use crate::api_router::{BookAccess, BookManagerApi, BookStub, CategoryMappingApi};
     use crate::book_metadata::{Book, BookLookupError};
     use crate::es_manager::{EsError, EsManagerApi};
-    use crate::main::{BookAccess, BookManagerApi, BookStub, CategoryMappingApi};
     use async_trait::async_trait;
 
     struct CountingEs(AtomicUsize);
@@ -441,7 +441,7 @@ mod tests {
     struct FixedHiddenCategories(Vec<String>);
 
     impl CategoryMappingApi for FixedHiddenCategories {
-        fn get_hidden_categories(&self, _content_type: &str) -> Result<Vec<String>, crate::main::MappingError> {
+        fn get_hidden_categories(&self, _content_type: &str) -> Result<Vec<String>, crate::api_router::MappingError> {
             Ok(self.0.clone())
         }
     }

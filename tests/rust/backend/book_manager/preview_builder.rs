@@ -8,8 +8,8 @@ mod common;
 use crate::common::dyn_es::make_manager;
 use crate::common::shared_fixtures::{CONTAINER, CONTAINER_XML, TempFile};
 use crate::common::shared_fixtures::{image_bytes, make_doc, namelist, write_zip_stored, zip_read_string};
+use backend::api_router::BookManagerApi;
 use backend::book_manager::{BookManager, BookManagerDeps};
-use backend::main::BookManagerApi;
 use common::es_fake::FakeEsManager;
 use common::runner::FakeRunner;
 use common::zipx::write_zip;
@@ -184,7 +184,7 @@ mod get_pdf_pages {
     use std::path::Path;
     use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
 
-    impl ResponseExt for backend::main::BookResponse {
+    impl ResponseExt for backend::api_router::BookResponse {
         fn header(&self, name: &str) -> Option<&str> {
             self.headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str())
         }
@@ -414,9 +414,9 @@ mod get_pdf_pages {
 mod get_book_preview {
     use super::common;
     use crate::common::shared_fixtures::{blank_pdf_bytes, blank_pdf_bytes_sized, block_on, deps, make_doc, make_manager, tmp_dir};
+    use backend::api_router::{BookManagerApi, BookResponse};
     use backend::book_manager::BookManager;
     use backend::epub_cover::EpubCoverHooks;
-    use backend::main::{BookManagerApi, BookResponse};
     use backend::pdf_page_reader::{PdfError, PdfPageOps};
     use common::epub::{EpubSpec, make_epub};
     use common::es_fake::FakeEsManager;
@@ -1298,8 +1298,8 @@ mod hwp_preview {
     use super::common;
     use super::common::{es_fake::FakeEsManager, runner::FakeRunner};
     use crate::common::shared_fixtures::{block_on, deps, make_doc, tmp_dir};
+    use backend::api_router::{BookManagerApi, BookResponse};
     use backend::book_manager::BookManager;
-    use backend::main::{BookManagerApi, BookResponse};
     use std::fs;
     use std::path::{Path, PathBuf};
 

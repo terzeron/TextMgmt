@@ -12,10 +12,10 @@ use std::time::Duration;
 
 use crate::common::shared_fixtures::fetcher;
 use crate::common::shared_fixtures::{backups, opf_of, read, rev, str_of, truthy};
+use backend::api_router::{AppDeps, AuthMode, app_with};
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::cover_management::{CoverHooks, CoverManagement, check_cancelled};
 use backend::epub_cover::{self, CoverError, EpubRewrite, OPF_NS};
-use backend::main::{AppDeps, AuthMode, app_with};
 use common::{
     TestClient,
     clock::Event,

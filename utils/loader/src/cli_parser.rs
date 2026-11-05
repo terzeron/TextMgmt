@@ -9,12 +9,12 @@ use std::time::Instant;
 
 use es_client::EsError;
 use es_client::indexing::IndexStore;
-use file_record::child_process_runner::StageRunner;
+use file_indexer::child_process_runner::StageRunner;
 use stat::Stat;
 
 use crate::batch_loader::{BatchCounts, FILE_ARGUMENT_BATCH_SIZE, Loader, ProcessHooks, direct_files, recursive_files_with_unreadable, sample_files};
-use file_record::env_config::Config;
-use file_record::record_builder::ReadOutcome;
+use file_indexer::env_config::Config;
+use file_indexer::record_builder::ReadOutcome;
 
 pub type ReadFileHook<'a> = dyn Fn(&Path, Option<&Metadata>, bool) -> ReadOutcome + Sync + 'a;
 pub type StatHook<'a> = dyn Fn(&Path) -> io::Result<Metadata> + Sync + 'a;

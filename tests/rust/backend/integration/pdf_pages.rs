@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use crate::common::pdf_env::{Env, env};
 use crate::common::shared_fixtures::create_test_pdf;
+use backend::api_router::{AppDeps, AuthMode, app_with};
 use backend::book_manager::BookManagerDeps;
-use backend::main::{AppDeps, AuthMode, app_with};
 use backend::pdf_page_reader::{LopdfPageOps, PdfPageOps};
 use common::TestClient;
 use common::pdf::page_count_bytes;
@@ -378,7 +378,7 @@ fn encrypted_pdf_preview_only_contains_the_requested_pages_without_encryption() 
 
 mod test_pdf_pages_endpoint {
     use super::*;
-    use backend::main::{CategoryMappingApi, MappingError};
+    use backend::api_router::{CategoryMappingApi, MappingError};
 
     struct HiddenCategories;
 

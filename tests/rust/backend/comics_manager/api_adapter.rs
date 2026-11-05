@@ -4,9 +4,9 @@
 mod common;
 use crate::common::es_fake::FakeEsManager;
 use crate::common::shared_fixtures::outcome;
+use backend::api_router::{ApplyCategoryChanges, BookManagerApi, ProposeCategoryChanges};
 use backend::book_manager::BookManagerDeps;
 use backend::comics_manager::ComicsManager;
-use backend::main::{ApplyCategoryChanges, BookManagerApi, ProposeCategoryChanges};
 use serde_json::json;
 
 #[tokio::test]

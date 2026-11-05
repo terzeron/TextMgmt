@@ -24,9 +24,9 @@ use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use backend::api_router::{AppDeps, AuthMode, BookManagerApi, app_with};
 use backend::cover_management::{CoverHooks, CoverManagement};
 use backend::es_manager::{EsError, EsManagerApi};
-use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
 use image::{ImageFormat, Rgb, RgbImage};
 use lopdf::{Document, Object, Stream, dictionary};
 use serde_json::{Value, json};

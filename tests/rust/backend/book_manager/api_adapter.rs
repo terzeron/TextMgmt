@@ -6,8 +6,8 @@ mod common;
 use std::path::Path;
 use std::sync::Arc;
 
+use backend::api_router::BookManagerApi;
 use backend::book_manager::{BookManager, BookManagerDeps};
-use backend::main::BookManagerApi;
 use common::es_fake::FakeEsManager;
 
 fn manager(root: &Path, es: &Arc<FakeEsManager>) -> BookManager {

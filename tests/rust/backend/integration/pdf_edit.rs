@@ -207,8 +207,8 @@ async fn unsupported_crop_and_bad_image_preserve_original_before_backup() {
 
 #[tokio::test]
 async fn http_validates_edit_shapes_before_opening_pdf() {
+    use backend::api_router::{AppDeps, AuthMode, app_with};
     use backend::auth_service::Claims;
-    use backend::main::{AppDeps, AuthMode, app_with};
     let e = env();
     let original = fs::read(&e.pdf).unwrap();
     let client = common::TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager(Arc::new(e.bm))));
@@ -385,8 +385,8 @@ mod http_contract {
 
     #[tokio::test]
     async fn http_edits_books_and_comics_with_the_response_contract() {
+        use backend::api_router::{AppDeps, AuthMode, app_with};
         use backend::auth_service::Claims;
-        use backend::main::{AppDeps, AuthMode, app_with};
         for prefix in ["", "/comics"] {
             let e = env();
             let mut deps = AppDeps::new(AuthMode::Fixed(Claims::with_role("admin")));
@@ -409,7 +409,7 @@ mod http_contract {
 
     #[tokio::test]
     async fn http_rejects_non_admin_before_editing_or_body_validation() {
-        use backend::main::{AppDeps, AuthMode, app_with};
+        use backend::api_router::{AppDeps, AuthMode, app_with};
         for prefix in ["", "/comics"] {
             for viewer in [false, true] {
                 let e = env();
@@ -429,8 +429,8 @@ mod http_contract {
 
     #[tokio::test]
     async fn http_url_preview_returns_uncached_jpeg() {
+        use backend::api_router::{AppDeps, AuthMode, app_with};
         use backend::auth_service::Claims;
-        use backend::main::{AppDeps, AuthMode, app_with};
         let e = env();
         let bm = Arc::new(BookManager::with_deps(BookManagerDeps::new(e.root.path().to_path_buf(), e.es.clone()).with_image_fetcher(Arc::new(FetchImage(Ok(common::image::png_solid(
             80,

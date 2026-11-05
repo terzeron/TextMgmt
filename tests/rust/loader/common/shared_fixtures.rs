@@ -5,7 +5,7 @@
 use doc_reader::pdf::{InProcess, StageRunner};
 use es_client::EsError;
 use es_client::indexing::IndexStore;
-use file_record::env_config::Config;
+use file_indexer::env_config::Config;
 use loader::cli_parser::{RunHooks, World, run, run_with_hooks};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};

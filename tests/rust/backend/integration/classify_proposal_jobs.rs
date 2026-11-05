@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::common::shared_fixtures::enc;
 use crate::common::shared_fixtures::{MockBm, MockCat, mock_bm};
-use backend::main::{AppDeps, AuthMode, BookstoreFactory, CategoryMappingApi, ClientErrorLogModel, TaskHandle, TaskRunner, app_with};
+use backend::api_router::{AppDeps, AuthMode, BookstoreFactory, CategoryMappingApi, ClientErrorLogModel, TaskHandle, TaskRunner, app_with};
 use common::TestClient;
 use serde_json::{Value, json};
 

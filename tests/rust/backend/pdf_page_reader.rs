@@ -291,7 +291,7 @@ async fn test_es_delete_failure_stops_before_reindexing() {
     assert!(e.es.inserted().is_empty());
 }
 
-impl ResponseExt for backend::main::BookResponse {
+impl ResponseExt for backend::api_router::BookResponse {
     fn header(&self, name: &str) -> Option<&str> {
         self.headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str())
     }

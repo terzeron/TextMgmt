@@ -477,8 +477,8 @@ pub(super) async fn delete_classify_proposal(_: RequireAdmin, State(deps): State
 #[cfg(test)]
 mod proposal_tests {
     use super::run_classify_proposal_job;
+    use crate::api_router::{BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges};
     use crate::book_manager::{ProposalItem, ProposeResult};
-    use crate::main::{BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges};
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
@@ -623,8 +623,8 @@ mod proposal_tests {
 #[cfg(test)]
 mod tests {
     use super::{ClassifyProposalBody, flush_proposal_item_buffer, run_classify_apply_job, set_proposal_failed};
+    use crate::api_router::{ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError};
     use crate::book_manager::ApplyResult;
-    use crate::main::{ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError};
     use serde_json::json;
     use std::{collections::HashSet, sync::Mutex};
 

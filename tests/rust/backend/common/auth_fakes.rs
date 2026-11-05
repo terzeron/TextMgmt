@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use super::shared_fixtures::{Fx, Mock};
-use backend::main::RoleResolver;
+use backend::api_router::RoleResolver;
 use std::sync::Arc;
 
 // TODO(common): FakeGoogle, FakeStore는 main_mock, view_history_api도 쓴다. 이 파일로 옮긴다.

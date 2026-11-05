@@ -9,6 +9,7 @@ use super::pdf::make_blank_pdf;
 use super::zipx::{Members, ZipMode, read_zip_entry, rewrite_epub_members, write_zip, write_zip_with};
 use super::{Response, TestClient, es_dummy};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method};
+use backend::api_router::{AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, ReloadProgress, TaskHandle, TaskRunner};
 use backend::auth_service::Claims;
 use backend::auth_service::RequestParts;
 use backend::book_manager::{AddBookError, BookAdder, BookContent, BookLookup, BookManager, BookManagerDeps, BookRef, BookResponse, CoverPage, FileReader, ProposeOptions, ReadFileError, Thumbnailer};
@@ -20,7 +21,6 @@ use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover;
 use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, EpubRewrite, Limits, edit_images};
 use backend::es_manager::{EsError, EsManagerApi, HttpTransport};
-use backend::main::{AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, ReloadProgress, TaskHandle, TaskRunner};
 use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, SessionPage, SessionQuery, SessionRevocation, StoreError};
 use db::category_mapping::CategoryMapping;
 use db::{DbValue, Row};
@@ -999,7 +999,7 @@ impl Fx {
             .with_category_mapping(Arc::new(cat.clone()))
             .with_refresh_token_store(Arc::new(Mock::new()))
             .with_task_runner(Arc::new(JoinedRunner));
-        Self { app: backend::main::app_with(tweak(deps)), slots, bm, cm, cat, store, _guard: guard }
+        Self { app: backend::api_router::app_with(tweak(deps)), slots, bm, cm, cat, store, _guard: guard }
     }
 
     /// 인증 결과를 `payload`로 고정한다.
@@ -1719,7 +1719,7 @@ impl CategoryMappingApi for MockCat {
         Ok(())
     }
 
-    fn get_all_mappings(&self, _content_type: &str) -> Result<BTreeMap<String, Vec<String>>, backend::main::MappingError> {
+    fn get_all_mappings(&self, _content_type: &str) -> Result<BTreeMap<String, Vec<String>>, backend::api_router::MappingError> {
         Ok(BTreeMap::new())
     }
 

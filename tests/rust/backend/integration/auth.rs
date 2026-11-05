@@ -48,9 +48,9 @@ use crate::common::shared_fixtures::{FakeStore, decode, encode_hs256, fixture, m
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request};
+use backend::api_router::{ACCESS_COOKIE_NAME, AppDeps, AuthMode, GoogleVerifier, REFRESH_COOKIE_NAME, RequestValidationError, app_with, observation_hash};
 use backend::auth_service::Claims;
 use backend::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, HttpStatusError, TokenIssuer};
-use backend::main::{ACCESS_COOKIE_NAME, AppDeps, AuthMode, GoogleVerifier, REFRESH_COOKIE_NAME, RequestValidationError, app_with, observation_hash};
 use backend::refresh_token_store::RefreshTokenStoreApi;
 use common::env::EnvGuard;
 use common::log_capture::LogCapture;
@@ -578,7 +578,7 @@ async fn test_unauthenticated_is_rejected() {
 #[test]
 fn test_endpoints_declare_admin_dependency() {
     let _env = fixture();
-    let routes: Vec<backend::main::RouteInfo> = backend::main::route_table().into_iter().filter(|r| r.path.starts_with("/auth/sessions")).collect();
+    let routes: Vec<backend::api_router::RouteInfo> = backend::api_router::route_table().into_iter().filter(|r| r.path.starts_with("/auth/sessions")).collect();
     assert!(!routes.is_empty(), "세션 관리 라우트를 찾지 못했습니다");
     for route in routes {
         assert!(route.dependencies.iter().any(|d| d == "require_admin"), "{:?} {} 에 require_admin 이 없습니다", route.methods, route.path);
@@ -911,16 +911,16 @@ async fn test_handlers_direct() {
 
     let secret = "super-secret-token";
     let exc = RequestValidationError::new(vec![json!({"loc": ["body"], "msg": "bad", "type": "value_error"})], json!({"credential": secret}));
-    let resp = backend::main::validation_exception_handler(&parts, &exc).await;
+    let resp = backend::api_router::validation_exception_handler(&parts, &exc).await;
     assert_eq!(resp.status().as_u16(), 422);
     assert!(!logs.text().contains(secret));
 
     let http_exc = HttpStatusError::new(404, "no");
-    let resp = backend::main::http_exception_handler(&parts, &http_exc).await;
+    let resp = backend::api_router::http_exception_handler(&parts, &http_exc).await;
     assert_eq!(resp.status().as_u16(), 404);
 
     let boom = std::io::Error::other("boom");
-    let resp = backend::main::general_exception_handler(&parts, &boom).await;
+    let resp = backend::api_router::general_exception_handler(&parts, &boom).await;
     assert_eq!(resp.status().as_u16(), 500);
 }
 

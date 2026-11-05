@@ -3,23 +3,23 @@
 //! 실제 SQL 동작은 `view_history_store.rs`가 MySQL 컨테이너로 검증한다.
 //!
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.2, 3.4, 3.13):
-//! - `backend::main::MAX_RECENT_VIEWS: usize`
-//! - `backend::main::app_with(deps: AppDeps) -> axum::Router`: 의존성을 대역으로 바꿔 끼우는 seam
-//! - `backend::main::AppDeps::new(auth: AuthMode) -> AppDeps` (나머지는 실제 구현), 소비형 빌더:
+//! - `backend::api_router::MAX_RECENT_VIEWS: usize`
+//! - `backend::api_router::app_with(deps: AppDeps) -> axum::Router`: 의존성을 대역으로 바꿔 끼우는 seam
+//! - `backend::api_router::AppDeps::new(auth: AuthMode) -> AppDeps` (나머지는 실제 구현), 소비형 빌더:
 //!   `with_view_history_store(Arc<dyn ViewHistoryApi>)`, `with_book_access(Arc<dyn BookAccess>)`, `with_task_runner(Arc<dyn TaskRunner>)`
 //!   (구 `AppDeps { view_history_store, book_access, auth_override, admin_override, ..Default::default() }` 리터럴)
-//! - `backend::main::AuthMode::{Split { auth: Value, admin: Value }, AuthOnly(Value)}`
+//! - `backend::api_router::AuthMode::{Split { auth: Value, admin: Value }, AuthOnly(Value)}`
 //!   - `Split`은 `require_auth`와 `require_admin`을 각각 고정 payload로 바꾼다(구 `auth_override`, `admin_override`)
 //!   - `AuthOnly`는 `require_auth`만 고정하고 `require_admin`은 실제 의존성이다
-//! - `backend::main::{TaskRunner, InlineRunner}`: `InlineRunner`는 백그라운드 작업을 응답 전에 같은 스레드에서 끝낸다. 스레드 로컬 `LogCapture`가 로그를 잡으려면 필요하다
-//! - `backend::main::ViewHistoryApi` (뼈대가 `main/traits.rs`에 둔다):
+//! - `backend::api_router::{TaskRunner, InlineRunner}`: `InlineRunner`는 백그라운드 작업을 응답 전에 같은 스레드에서 끝낸다. 스레드 로컬 `LogCapture`가 로그를 잡으려면 필요하다
+//! - `backend::api_router::ViewHistoryApi` (뼈대가 `main/traits.rs`에 둔다):
 //!   `record_view(&self, email: &str, content_type: &str, book_id: i64, title: &str, category: &str) -> Result<(), ViewHistoryError>`,
 //!   `list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError>` (`ViewHistoryStore`도 구현한다)
 //! - `ViewHistoryStore::get_connection(&self) -> Result<Box<dyn DbConnection>, DbError>` (구 `_get_connection() -> mysql::Conn`), `DbConnection::execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>`
-//! - `backend::main::BookAccess`:
+//! - `backend::api_router::BookAccess`:
 //!   `get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Value, content_type: &str) -> Result<BookStub, HttpStatusError>`
-//! - `backend::main::BookStub { title: String, category: Option<String> }`, `backend::main::HttpStatusError { status_code: u16, detail: String }`
-//! - `backend::main::route_dependencies(path: &str) -> Vec<&'static str>`: 라우트에 붙은 의존성 이름 (`route.dependant.dependencies` 대응)
+//! - `backend::api_router::BookStub { title: String, category: Option<String> }`, `backend::api_router::HttpStatusError { status_code: u16, detail: String }`
+//! - `backend::api_router::route_dependencies(path: &str) -> Vec<&'static str>`: 라우트에 붙은 의존성 이름 (`route.dependant.dependencies` 대응)
 //! - 인증 없는 요청은 401을 돌려준다.
 //! - 로그는 `log::warn!`로 남기고 `common::log_capture::LogCapture`로 수집한다.
 
@@ -31,7 +31,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use axum::http::Method;
-use backend::main::{AppDeps, AuthMode, BookAccess, BookStub, HttpStatusError, InlineRunner, MAX_RECENT_VIEWS, ViewHistoryApi, app_with, route_dependencies};
+use backend::api_router::{AppDeps, AuthMode, BookAccess, BookStub, HttpStatusError, InlineRunner, MAX_RECENT_VIEWS, ViewHistoryApi, app_with, route_dependencies};
 use backend::view_history_store::{RecentViews, ViewHistoryError, ViewHistoryStore};
 use common::TestClient;
 use common::log_capture::LogCapture;

@@ -59,7 +59,7 @@ pub trait StageRunner {
 }
 
 /// 현재 프로세스에서 단계를 실행한다. 시간 상한이 없어 파서가 멈추면 호출자도 멈춘다.
-/// 테스트용이다. 운영 경로는 `file_record::child_process_runner::ChildRunner`를 쓴다.
+/// 테스트용이다. 운영 경로는 `file_indexer::child_process_runner::ChildRunner`를 쓴다.
 pub struct InProcess;
 
 impl StageRunner for InProcess {

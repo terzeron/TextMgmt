@@ -5,9 +5,9 @@ mod common;
 use crate::common::auth_fakes::FixedRole;
 use crate::common::shared_fixtures::{CallArgs, DeferredRunner, Fut, Fx, Mock, RecordedArgs, Store, arg, arg_or, effective, install_classify_status_store, ready, store_set};
 use crate::common::shared_fixtures::{ListDirFs, admin_payload, arr, enc, is_truthy, now_plus_3600, proposal_result};
+use backend::api_router::{BookstoreFactory, BookstoreSearch, GoogleVerifier, TaskRunner};
 use backend::auth_service::Claims;
 use backend::book_metadata::Book;
-use backend::main::{BookstoreFactory, BookstoreSearch, GoogleVerifier, TaskRunner};
 use bookstore::store_clients::SearchRow;
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -2313,14 +2313,14 @@ fn test_is_request_from_frontend_host_no_env_returns_false() {
     let _env = EnvGuard::apply(&[("TM_FRONTEND_URL", None)]);
     // 원본은 scope의 server=("testserver", 80)을 쓴다. axum Request에는 서버 정보가 없어 URI의 호스트로 대신한다.
     let request = axum::http::Request::builder().method("GET").uri("http://testserver/").body(()).unwrap();
-    assert!(!backend::main::is_request_from_frontend_host(&request));
+    assert!(!backend::api_router::is_request_from_frontend_host(&request));
 }
 
 /// 카테고리가 빈 문자열이면 false다.
 #[cfg(any())] // hidden category 필터는 공개 라우트 통합 테스트에서 검증한다.
 #[test]
 fn test_category_matches_hidden_empty_category_returns_false() {
-    assert!(!backend::main::category_matches_hidden("", &["cat1", "cat2"]));
+    assert!(!backend::api_router::category_matches_hidden("", &["cat1", "cat2"]));
 }
 
 /// viewer 권한에서 hidden 카테고리 책이 유사도 결과에서 제외된다.

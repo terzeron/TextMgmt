@@ -3,7 +3,7 @@
 
 mod common;
 use crate::common::shared_fixtures::{MockCat, mock_bm};
-use backend::main::{CategoryMappingApi, route_table};
+use backend::api_router::{CategoryMappingApi, route_table};
 use serde_json::json;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ async fn test_apply_job_marks_state_failed_when_book_manager_returns_error() {
     *bm.path_prefix.lock().unwrap() = tmp.path().to_path_buf();
 
     // content_type="book"인 라우터 안의 작업 함수. 가정한 seam이다.
-    backend::main::run_classify_apply_job(
+    backend::api_router::run_classify_apply_job(
         bm.as_ref(),
         cat.as_ref(),
         "book",
@@ -80,5 +80,5 @@ fn real_mapping_facade_propagates_mapping_read_database_failures() {
 #[cfg(any())] // hidden category 필터는 공개 라우트 통합 테스트에서 검증한다.
 #[test]
 fn test_category_matches_hidden_empty_category_returns_false() {
-    assert!(!backend::main::category_matches_hidden("", &["cat1", "cat2"]));
+    assert!(!backend::api_router::category_matches_hidden("", &["cat1", "cat2"]));
 }

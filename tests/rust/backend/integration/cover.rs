@@ -8,9 +8,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::cover_docs::{create_test_pdf, use_doc};
 use crate::common::shared_fixtures::thumbnailer;
+use backend::api_router::{AppDeps, AuthMode, CategoryMappingApi, MappingError, app_with};
 use backend::book_manager::{BookManager, BookManagerApi, BookManagerDeps};
 use backend::comics_manager::ComicsManager;
-use backend::main::{AppDeps, AuthMode, CategoryMappingApi, MappingError, app_with};
 use common::{
     TestClient,
     epub::{EpubSpec, make_epub},

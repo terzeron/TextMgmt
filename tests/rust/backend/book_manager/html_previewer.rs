@@ -5,8 +5,8 @@
 #[path = "../common/mod.rs"]
 mod common;
 use crate::common::shared_fixtures::{block_on, deps, make_doc, make_manager, tmp_dir};
+use backend::api_router::BookResponse;
 use backend::book_manager::BookManager;
-use backend::main::BookResponse;
 use common::es_fake::FakeEsManager;
 use std::os::unix::fs::symlink;
 use std::path::Path;

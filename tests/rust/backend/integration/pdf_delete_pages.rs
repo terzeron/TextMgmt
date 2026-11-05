@@ -9,7 +9,7 @@ use std::fs;
 
 use crate::common::shared_fixtures::{error_text, split};
 use axum::http::Method;
-use backend::main::{AppDeps, AuthMode, app_with};
+use backend::api_router::{AppDeps, AuthMode, app_with};
 use common::TestClient;
 use common::edits;
 use common::image::{assert_approx, image_size, jpeg_with_orientation, multipart_file, png_halves};

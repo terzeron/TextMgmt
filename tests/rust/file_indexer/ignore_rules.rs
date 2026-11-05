@@ -1,4 +1,4 @@
-use file_record::ignore_rules::{IGNORED_DIR_NAMES, is_ignored_segment};
+use file_indexer::ignore_rules::{IGNORED_DIR_NAMES, is_ignored_segment};
 
 #[test]
 fn ignored_dir_names_match_the_layout_rules() {

@@ -1,8 +1,8 @@
-//! `file_record::env_config` 단위 테스트.
+//! `file_indexer::env_config` 단위 테스트.
 
 use std::path::Path;
 
-use file_record::env_config::Config;
+use file_indexer::env_config::Config;
 
 #[test]
 fn from_env_names_the_first_missing_variable() {

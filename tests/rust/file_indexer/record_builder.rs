@@ -1,11 +1,11 @@
-//! `file_record::record_builder` 단위 테스트.
+//! `file_indexer::record_builder` 단위 테스트.
 
 use std::fs;
 
 use doc_reader::pdf::InProcess;
-use file_record::child_process_runner::read_file_with_child_stages;
-use file_record::env_config::Config;
-use file_record::record_builder::{read_file, split_author_title};
+use file_indexer::child_process_runner::read_file_with_child_stages;
+use file_indexer::env_config::Config;
+use file_indexer::record_builder::{read_file, split_author_title};
 use stat::Stat;
 
 /// PDF 단계가 없는 TXT라서 worker 실행 파일은 불리지 않는다.
@@ -23,7 +23,7 @@ fn reading_with_child_stages_matches_read_file_with_the_global_stat() {
     let in_process = read_file_with_child_stages(std::path::Path::new("/bin/false"), &cfg, &path, None, false);
 
     // `updated_time`은 읽은 시각이라 호출마다 다르다. 있는지만 보고 나머지를 비교한다.
-    let without_read_time = |outcome: file_record::record_builder::ReadOutcome| {
+    let without_read_time = |outcome: file_indexer::record_builder::ReadOutcome| {
         outcome.item.map(|(id, mut doc)| {
             assert!(doc.get("updated_time").and_then(|v| v.as_str()).is_some_and(|t| !t.is_empty()));
             doc.as_object_mut().unwrap().remove("updated_time");

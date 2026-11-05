@@ -23,7 +23,7 @@
 //!   - `stale_running_status(status: &Value, stale_seconds: f64, now: Option<f64>) -> Option<Value>`
 //!   - `create_bookstore() -> Yes24Bookstore`
 //!   - 상수: `ERR_MISSING_INPUT`, `GENERIC_MISMATCH_ERROR`, `GENERIC_MAPPING_ERROR_DETAIL`, `GENERIC_HIDDEN_CATEGORY_ERROR_DETAIL`, `GENERIC_LATEST_EXCLUDED_CATEGORY_ERROR_DETAIL`
-//!   - 구 `backend::main::testing::*` 전역 가드는 없다. `RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS` 패치는 `AppDeps::with_reload_progress_flush_interval`, `os.listdir` 패치는 `AppDeps::with_fs`가 대신한다.
+//!   - 구 `backend::api_router::testing::*` 전역 가드는 없다. `RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS` 패치는 `AppDeps::with_reload_progress_flush_interval`, `os.listdir` 패치는 `AppDeps::with_fs`가 대신한다.
 //!   - 백그라운드 작업(reload-*)은 응답을 돌려주기 전에 끝난다.
 //! - `backend::auth_service`: `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`, `create_refresh_token`(같은 인자),
 //!   `tm_admin_email() -> String`, `jwt_secret() -> String`, `JWT_ALGORITHM: jsonwebtoken::Algorithm`
@@ -40,7 +40,7 @@
 //! - `db::category_mapping::{CategoryMapping, CategoryMappingApi, MappingError}`
 //!   - `MappingError::{Http(u16, String), Other(String)}`, `CategoryMappingApi`는 동기 메서드이고 기본 구현은 `Err(Other("unimplemented"))`다.
 //!   - `CategoryMapping::new() -> Result<Self, MappingError>`(env + 실제 MySQL), `get_connection() -> Result<Box<dyn DbConnection>, DbError>`, `DbConnection::{execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>, commit(&mut self) -> Result<(), DbError>}` (설계 3.4)
-//! - `file_record::{env_config::Config, record_builder::read_file, record_builder::now_iso}`, `doc_reader::pdf::InProcess`, `stat::Stat` (libs/file_record/src에서 확인한 실제 API)
+//! - `file_indexer::{env_config::Config, record_builder::read_file, record_builder::now_iso}`, `doc_reader::pdf::InProcess`, `stat::Stat` (libs/file_indexer/src에서 확인한 실제 API)
 //! - 개발 의존성: `jsonwebtoken`, `async-trait`, `tempfile`, `tokio`, `serde_json`
 //!
 //! ES 인덱스(`TM_ES_BOOK_INDEX`)는 테스트 공용 설정의 `es_index`와 같은 매핑으로 미리 만들어져 있다고 본다.
@@ -62,6 +62,7 @@ use crate::common::shared_fixtures::{CATEGORY, ListDirFs};
 use crate::common::shared_fixtures::{enc, now_secs, process_env, split};
 use axum::http::Method;
 use axum::response::IntoResponse;
+use backend::api_router::{AppDeps, AuthMode, BookstoreFactory, BookstoreSearch, CategoryMappingApi, CustomJSONResponse, GoogleVerifier, MappingError, RoleResolver, Slot, app_with};
 use backend::auth_service::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
 use backend::book_manager::{BookContent, BookDeletion, BookManager, BookManagerApi, BookResponse};
 use backend::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, FsOnlyFile, MismatchDetails, MismatchReload, MismatchSummary, ReloadCounts, ReloadedFiles};
@@ -69,7 +70,6 @@ use backend::book_manager::{EpubValidation, PdfValidation};
 use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
-use backend::main::{AppDeps, AuthMode, BookstoreFactory, BookstoreSearch, CategoryMappingApi, CustomJSONResponse, GoogleVerifier, MappingError, RoleResolver, Slot, app_with};
 use bookstore::store_clients::SearchRow;
 use common::{TestClient, env::EnvGuard, es_fake::FakeEsManager};
 use db::category_mapping::CategoryMapping;
@@ -133,9 +133,9 @@ struct Setup {
 /// `Loader.read_file`에 대응한다. 읽지 못하면 빈 map이다.
 fn read_file(path: &Path) -> BTreeMap<i64, Value> {
     let root = common::project_root();
-    let cfg = file_record::env_config::Config::new(root.join("tests/books"), root.join("tests/comics"));
+    let cfg = file_indexer::env_config::Config::new(root.join("tests/books"), root.join("tests/comics"));
     let stat = stat::Stat::new();
-    let out = file_record::record_builder::read_file(&cfg, path, None, false, None, &doc_reader::pdf::InProcess, &stat);
+    let out = file_indexer::record_builder::read_file(&cfg, path, None, false, None, &doc_reader::pdf::InProcess, &stat);
     out.item.into_iter().collect()
 }
 
@@ -513,7 +513,7 @@ async fn insert_docs(bm: &BookManager, category: &str, count: i64, start_id: i64
             "page_count": 0,
             "isbn": "",
             "summary": summary,
-            "updated_time": file_record::record_builder::now_iso(),
+            "updated_time": file_indexer::record_builder::now_iso(),
         });
         let (book_id, error) = split(bm.add_book(&BTreeMap::from([(doc_id, doc)])).await);
         ids.push(expect_id(book_id, error));
@@ -733,7 +733,7 @@ mod test_update_book_conflict {
             "page_count": 0,
             "isbn": "",
             "summary": "conflict test",
-            "updated_time": file_record::record_builder::now_iso(),
+            "updated_time": file_indexer::record_builder::now_iso(),
         });
         let (book_id, error) = split(bm.add_book(&BTreeMap::from([(meta.ino() as i64, doc)])).await);
         assert!(book_id.unwrap_or(0) != 0 && error.is_none(), "Failed to register: {error:?}");
@@ -1049,7 +1049,7 @@ fn test_lazy_proxy_initializes_once() {
 #[test]
 fn test_custom_jsonable_encoder() {
     let data = json!({"korean": "테스트", "list": ["값"], "nested": {"a": "나"}});
-    let encoded = backend::main::custom_jsonable_encoder(&data);
+    let encoded = backend::api_router::custom_jsonable_encoder(&data);
     assert_eq!(encoded, data);
 }
 
@@ -1493,7 +1493,7 @@ impl BookManagerApi for DummyManager {
         Ok(ReloadedFiles { category: category.to_string(), processed_count: 1 })
     }
 
-    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<backend::main::ReloadProgress>) -> Result<MismatchReload, String> {
+    async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<backend::api_router::ReloadProgress>) -> Result<MismatchReload, String> {
         let b = self.b();
         if b.errors {
             return Err("bulk fail".into());
@@ -1514,7 +1514,7 @@ impl BookManagerApi for DummyManager {
         Ok(MismatchReload { content_type: content_type.to_string(), category_count: 1, indexed_count: 2, deleted_count: 3, before_count: 5, ..MismatchReload::default() })
     }
 
-    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<backend::main::ReloadProgress>) -> Result<MismatchReload, String> {
+    async fn reload_category_mismatch_files(&self, category: &str, content_type: &str, on_progress: Option<backend::api_router::ReloadProgress>) -> Result<MismatchReload, String> {
         let b = self.b();
         if b.mismatch_files_raise {
             panic!("mismatch boom");
@@ -1590,7 +1590,7 @@ impl CategoryMappingApi for DummyCategoryMapping {
         Ok(true)
     }
 
-    fn acquire_reload_lock(&self, _ct: &str, category: Option<&str>, reload_source: Option<&str>) -> Result<(bool, Option<String>, Option<Value>), backend::main::MappingError> {
+    fn acquire_reload_lock(&self, _ct: &str, category: Option<&str>, reload_source: Option<&str>) -> Result<(bool, Option<String>, Option<Value>), backend::api_router::MappingError> {
         let lock_key = category.unwrap_or(BULK_LOCK_KEY).to_string();
         let check_keys: Vec<String> = if lock_key == BULK_LOCK_KEY { vec![lock_key.clone()] } else { vec![lock_key.clone(), BULK_LOCK_KEY.to_string()] };
         let mut locks = self.locks.lock().unwrap();
@@ -1635,7 +1635,7 @@ impl CategoryMappingApi for DummyCategoryMapping {
         Ok(())
     }
 
-    fn get_reload_status(&self, _ct: &str, category: Option<&str>) -> Result<Option<Value>, backend::main::MappingError> {
+    fn get_reload_status(&self, _ct: &str, category: Option<&str>) -> Result<Option<Value>, backend::api_router::MappingError> {
         Ok(self.locks.lock().unwrap().get(category.unwrap_or(BULK_LOCK_KEY)).cloned())
     }
 }
@@ -1917,7 +1917,7 @@ async fn test_latest_books_merges_viewer_hidden_and_latest_excluded_categories()
 
 #[test]
 fn test_custom_jsonable_encoder_fallback() {
-    assert_eq!(backend::main::custom_jsonable_encoder(&json!(1)), json!(1));
+    assert_eq!(backend::api_router::custom_jsonable_encoder(&json!(1)), json!(1));
 }
 
 #[test]
@@ -2153,13 +2153,13 @@ fn test_cookie_settings_variants() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.set("TM_COOKIE_SECURE", "false");
     env.set("TM_COOKIE_SAMESITE", "none");
-    let (secure, samesite) = backend::main::get_cookie_settings();
+    let (secure, samesite) = backend::api_router::get_cookie_settings();
     assert!(!secure);
     assert_eq!(samesite, "lax");
 
     env.set("TM_COOKIE_SECURE", "true");
     env.set("TM_COOKIE_SAMESITE", "strict");
-    let (secure, samesite) = backend::main::get_cookie_settings();
+    let (secure, samesite) = backend::api_router::get_cookie_settings();
     assert!(secure);
     assert_eq!(samesite, "strict");
 }
@@ -2171,12 +2171,12 @@ fn test_set_and_clear_auth_cookies() {
     env.set("TM_COOKIE_SAMESITE", "lax");
 
     let mut resp = axum::Json(json!({"ok": true})).into_response();
-    backend::main::set_auth_cookies(&mut resp, "access", Some("refresh"));
+    backend::api_router::set_auth_cookies(&mut resp, "access", Some("refresh"));
     let headers = resp.headers().get("set-cookie").map(|v| v.to_str().unwrap().to_string()).unwrap_or_default();
     assert!(headers.contains("tm_access_token"), "{headers}");
 
     let mut resp2 = axum::Json(json!({"ok": true})).into_response();
-    backend::main::clear_auth_cookies(&mut resp2);
+    backend::api_router::clear_auth_cookies(&mut resp2);
     let headers2 = resp2.headers().get("set-cookie").map(|v| v.to_str().unwrap().to_string()).unwrap_or_default();
     assert!(headers2.contains("Max-Age=0"), "{headers2}");
 }
@@ -2187,7 +2187,7 @@ fn test_cookie_settings_defaults_to_lax_for_unknown_value() {
     env.set("TM_FRONTEND_URL", "http://localhost:3000");
     env.set("TM_COOKIE_SECURE", "false");
     env.set("TM_COOKIE_SAMESITE", "unexpected");
-    let (secure, samesite) = backend::main::get_cookie_settings();
+    let (secure, samesite) = backend::api_router::get_cookie_settings();
     assert!(!secure);
     assert_eq!(samesite, "lax");
 }
@@ -2199,7 +2199,7 @@ fn test_set_auth_cookies_without_refresh_token() {
     env.set("TM_COOKIE_SAMESITE", "lax");
 
     let mut resp = axum::Json(json!({"ok": true})).into_response();
-    backend::main::set_auth_cookies(&mut resp, "access-only", None);
+    backend::api_router::set_auth_cookies(&mut resp, "access-only", None);
     let headers: Vec<String> = resp.headers().get_all("set-cookie").iter().map(|v| v.to_str().unwrap().to_string()).collect();
     assert_eq!(headers.len(), 1);
     assert!(headers[0].contains("tm_access_token=access-only"), "{}", headers[0]);

@@ -18,7 +18,7 @@ use base64::Engine as _;
 use base64::alphabet::STANDARD as STANDARD_ALPHABET;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 use common::json_field_reader::str_field;
-use file_record::ignore_rules::IGNORED_DIR_NAMES;
+use file_indexer::ignore_rules::IGNORED_DIR_NAMES;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sysdeps::{Clock, RealFs, SystemClock};

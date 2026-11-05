@@ -1,7 +1,7 @@
 //! backend 테스트 공용 도구.
 //!
 //! 가정한 backend API (아직 구현 전이다):
-//! - `backend::main::app() -> axum::Router`
+//! - `backend::api_router::app() -> axum::Router`
 //!
 //! 각 테스트 파일은 `mod common;`으로 가져온다. 새 모듈은 `use common::clock::FakeClock;`처럼 경로로 쓴다.
 //! (`use common::image;`로 모듈 자체를 들이면 `image` crate 이름과 겹치므로 항목을 직접 가져온다.)
@@ -79,7 +79,7 @@ pub struct TestClient {
 impl TestClient {
     pub fn new() -> Self {
         setup_env();
-        Self { app: backend::main::app(), headers: Vec::new() }
+        Self { app: backend::api_router::app(), headers: Vec::new() }
     }
 
     pub fn with_app(app: axum::Router) -> Self {

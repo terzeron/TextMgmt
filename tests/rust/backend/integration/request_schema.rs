@@ -3,8 +3,8 @@
 #[path = "../common/mod.rs"]
 mod common;
 use axum::http::Method;
+use backend::api_router::{AppDeps, AuthMode, app_with};
 use backend::auth_service::Claims;
-use backend::main::{AppDeps, AuthMode, app_with};
 use common::TestClient;
 
 #[tokio::test]

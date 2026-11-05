@@ -281,7 +281,7 @@ impl HttpResponse {
 - `find_libreoffice_with(which, exists)`는 `doc_reader::office`에 이미 있고 book_manager_1과 loader_1이 같은 모양이다. 그대로 쓰고 `which`/`exists`에는 `CommandRunner::which`, `FsOps::is_file`을 넘긴다.
 - `HttpSession`은 bookstore H1(완결 본문)과 cover_sources H2(청크 스트림, `closed` 플래그 검증)를 함께 덮는다. `direct_cover_url`의 `Net/Pool`은 DNS 고정·TLS 호스트명 검증용 저수준이라 따로 둔다.
 
-### 3.2 앱 진입점·인증 (`backend::main`)
+### 3.2 앱 진입점·인증 (`backend::api_router`, 옛 이름 `backend::main`)
 
 ```rust
 pub fn app() -> Router { app_with(AppDeps::from_env()) }

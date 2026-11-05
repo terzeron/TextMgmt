@@ -25,7 +25,7 @@
 //!   `TextHooks { detect, encodings, read_bytes, read_replace, write_backup }` (binary_and_file_reading.rs는 detect, read_bytes, write_backup을 쓴다)
 //! - `doc_reader::mojibake_counter::count_mojibake_runs_with(&str, &str) -> usize` (런 정규식 패턴을 받는다)
 //! - `doc_reader::office::read_from_hwp_with(&Path, &Path, &dyn Fn(&Path) -> Result<String, String>) -> (String, usize, Vec<String>)`
-//! - `file_record::record_builder::{ReadHooks, read_file_with_hooks(...)}`: `fast_page_count`, `fallback_page_count`, `inspect` 대체 훅 (`Default` 구현)
+//! - `file_indexer::record_builder::{ReadHooks, read_file_with_hooks(...)}`: `fast_page_count`, `fallback_page_count`, `inspect` 대체 훅 (`Default` 구현)
 //! - `loader::cli_parser::{RunHooks, run_with_hooks(...)}`: `read_file`, `stat`, `on_worker_spawn` 대체 훅
 
 #![allow(clippy::type_complexity)]
@@ -52,8 +52,8 @@ use doc_reader::pdf::{
     read_from_obj_stream, read_from_pdf, run_stage,
 };
 use doc_reader::text::{Candidate, Enc, TextHooks, read_from_text_with, reencode_text_file_to_utf8_with};
-use file_record::env_config::Config;
-use file_record::record_builder::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, zip_container_type};
+use file_indexer::env_config::Config;
+use file_indexer::record_builder::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, zip_container_type};
 use loader::batch_loader::{recursive_files, sample_files};
 use loader::cli_parser::RunHooks;
 use serde_json::{Value, json};

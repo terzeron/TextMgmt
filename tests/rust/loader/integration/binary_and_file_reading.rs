@@ -17,7 +17,7 @@
 //! - `doc_reader::epub::{read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using}` zip 직접 추출 경로
 //! - `doc_reader::office::find_libreoffice_with(which, exists)` PATH 조회와 파일 존재 확인 바꿔치기 자리
 //! - `loader::batch_loader::get_file_list(path, recursive, num_files: Option<usize>) -> Vec<PathBuf>`, `loader::batch_loader::read_files(cfg, path, runner, stat) -> HashMap<i64, Value>`
-//! - `file_record::record_builder::{ReadHooks, read_file_with_hooks(cfg, path, .., &ReadHooks)}`
+//! - `file_indexer::record_builder::{ReadHooks, read_file_with_hooks(cfg, path, .., &ReadHooks)}`
 //!   `ReadHooks { fast_page_count, fallback_page_count (lopdf 쪽 수), inspect }`
 //! - `stat::Stat::{pdf_stage_count, pdf_stage_total_time, pdf_stage_outcome_count}` 단계별 통계 조회
 
@@ -47,8 +47,8 @@ use doc_reader::pdf::{
 };
 use doc_reader::rtf::read_from_rtf_text;
 use doc_reader::text::{Enc, HIGH_BYTE_PAIRED_MIN, TextHooks, TextRead, read_from_text, read_from_text_with, reencode_text_file_to_utf8, reencode_text_file_to_utf8_with};
-use file_record::env_config::Config;
-use file_record::record_builder::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
+use file_indexer::env_config::Config;
+use file_indexer::record_builder::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
 use serde_json::Value;
 use stat::Stat;
 
@@ -236,7 +236,7 @@ fn loader_isbn_pdf_worker_extracts_text_through_the_binary() {
     let path = dir.path().join("book.pdf");
     fs::write(&path, pdf_with_text("ISBN 9788994492032")).unwrap();
 
-    let runner = file_record::child_process_runner::ChildRunner::new(PathBuf::from(env!("CARGO_BIN_EXE_loader")));
+    let runner = file_indexer::child_process_runner::ChildRunner::new(PathBuf::from(env!("CARGO_BIN_EXE_loader")));
     let isbns = isbn::extract(&path, None, &isbn::Backends::real(&runner, &Stat::new()));
 
     assert_eq!(isbns, ["9788994492032"]);

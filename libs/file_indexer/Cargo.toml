@@ -1,5 +1,5 @@
 [package]
-name = "file_record"
+name = "file_indexer"
 description = "파일 하나를 색인 레코드로 읽는다: 종류 판별, 본문·메타데이터 추출, 자식 프로세스 격리. loader와 backend가 함께 쓴다"
 version.workspace = true
 edition.workspace = true
@@ -21,16 +21,16 @@ tempfile = "3.27.0"
 
 [[test]]
 name = "file_time"
-path = "../../tests/rust/file_record/file_time.rs"
+path = "../../tests/rust/file_indexer/file_time.rs"
 
 [[test]]
 name = "record_builder"
-path = "../../tests/rust/file_record/record_builder.rs"
+path = "../../tests/rust/file_indexer/record_builder.rs"
 
 [[test]]
 name = "ignore_rules"
-path = "../../tests/rust/file_record/ignore_rules.rs"
+path = "../../tests/rust/file_indexer/ignore_rules.rs"
 
 [[test]]
 name = "env_config"
-path = "../../tests/rust/file_record/env_config.rs"
+path = "../../tests/rust/file_indexer/env_config.rs"

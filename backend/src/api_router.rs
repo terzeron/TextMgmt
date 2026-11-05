@@ -1,12 +1,13 @@
-//! HTTP 라우트와 앱 조립. 설계: docs/rust-test-seams.md 3.2
+//! axum HTTP 계층: 라우트와 핸들러를 모아 `Router`를 조립한다. 서버 실행은 `bin/backend.rs`가 한다.
+//! 설계: docs/rust-test-seams.md 3.2
 //!
 //! # 구성
-//! - `deps.rs`: `AppDeps`(주입 묶음), `AuthMode`. `traits.rs`: 주입하는 trait와 실제 구현.
-//! - `routes.rs`: 라우트 등록부 `Routes`. `extract.rs`: 인증·JSON·쿼리 추출기. `errors.rs`: 오류 응답과 로깅.
-//! - `auth_routes.rs`, `log_routes.rs`: 라우트 파일 예시. `cors.rs`, `cookies.rs`, `extract.rs`: 공용 도우미.
+//! - `app_deps.rs`: `AppDeps`(주입 묶음), `AuthMode`. `app_capabilities.rs`: 주입하는 trait와 실제 구현.
+//! - `route_registry.rs`: 라우트 등록부 `Routes`. `request_extractors.rs`: 인증·JSON·쿼리 추출기. `error_responses.rs`: 오류 응답과 로깅.
+//! - `routes_*.rs`, `auth_routes.rs`, `log_routes.rs`: 자원별 라우트. `cors_layer.rs`, `auth_cookies.rs`, `google_oauth.rs`: 공용 도우미.
 //!
 //! # 라우트를 붙이는 방법
-//! 1. `src/main/routes_xxx.rs`를 만들고 `pub(super) fn routes() -> Routes`를 하나 둔다.
+//! 1. `src/api_router/routes_xxx.rs`를 만들고 `pub(super) fn routes() -> Routes`를 하나 둔다.
 //!    핸들러는 `State<Arc<AppDeps>>`로 의존성을 받는다(`deps.book_manager()`, `deps.clock()` 등 접근자).
 //!    인증은 핸들러 첫 인자에 `RequireAuth`/`RequireAdmin`/`OptionalAuth` 추출기를 두고, 등록 때 같은 이름을 `&["require_admin"]`처럼 적는다.
 //! 2. 이 파일에 `mod routes_xxx;`를 더하고 `all_routes()`에 `.merge(routes_xxx::routes())` 한 줄을 더한다.

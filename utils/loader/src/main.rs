@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use es_client::EsClient;
 use es_client::indexing::IndexStore;
-use file_record::child_process_runner::{ChildRunner, PDF_STAGE_COMMAND, run_pdf_stage_command};
+use file_indexer::child_process_runner::{ChildRunner, PDF_STAGE_COMMAND, run_pdf_stage_command};
 use loader::cli_parser::{World, run};
 
 fn connect(index: &str) -> Result<Box<dyn IndexStore>, String> {

@@ -18,9 +18,9 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::api_router::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, RequestValidationError, RequireAdmin, Routes};
 use crate::cover_management::{ApplyCoverModel, ApplyImageModel, ApplyUrlModel, BookCoverModel, CoverHooks, CoverManagement, CoverSave, with_cancel_scope};
 use crate::epub_cover::{CoverError, MAX_IMAGE_BYTES};
-use crate::main::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, RequestValidationError, RequireAdmin, Routes};
 
 const FAILED_DETAIL: &str = "표지 작업을 완료하지 못했습니다. 다시 시도하세요";
 
@@ -185,7 +185,7 @@ fn min_length(name: &'static str, value: &str) -> ApiResult<()> {
 
 /// 불리언 쿼리 해석.
 fn parse_bool(name: &'static str, value: Option<&str>) -> ApiResult<bool> {
-    value.map_or(Some(false), crate::main::parse_py_bool).ok_or_else(|| invalid(&["query", name], "Input should be a valid boolean, unable to interpret input"))
+    value.map_or(Some(false), crate::api_router::parse_py_bool).ok_or_else(|| invalid(&["query", name], "Input should be a valid boolean, unable to interpret input"))
 }
 
 // ---------------------------------------------------------------------------
@@ -280,7 +280,7 @@ async fn complete_apply(deps: &Arc<AppDeps>, mut result: CoverSave) -> ApiResult
     Ok(success(result))
 }
 
-async fn run_index_update(deps: &Arc<AppDeps>, manager: Result<Arc<dyn crate::main::BookManagerApi>, String>, book_id: i64, file_size: u64) -> Result<(), String> {
+async fn run_index_update(deps: &Arc<AppDeps>, manager: Result<Arc<dyn crate::api_router::BookManagerApi>, String>, book_id: i64, file_size: u64) -> Result<(), String> {
     let manager = manager?;
     let shared = Arc::new(Mutex::new(Shared { result: None, waker: None }));
     let sink = shared.clone();

@@ -10,13 +10,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use es_client::EsError;
 use es_client::indexing::IndexStore;
-use file_record::child_process_runner::StageRunner;
-use file_record::ignore_rules::is_ignored_segment;
+use file_indexer::child_process_runner::StageRunner;
+use file_indexer::ignore_rules::is_ignored_segment;
 use serde_json::Value;
 use stat::Stat;
 
-use file_record::env_config::Config;
-use file_record::record_builder::{ReadOutcome, detect_file_type, read_file};
+use file_indexer::env_config::Config;
+use file_indexer::record_builder::{ReadOutcome, detect_file_type, read_file};
 
 pub type BatchReadHook<'a> = dyn Fn(&Path, Option<&Metadata>, bool) -> ReadOutcome + Sync + 'a;
 pub type BatchStatHook<'a> = dyn Fn(&Path) -> std::io::Result<Metadata> + Sync + 'a;
@@ -341,7 +341,7 @@ pub fn get_file_list(path: &Path, recursive: bool, num_files: Option<usize>) -> 
 pub fn read_files(cfg: &Config, path: &Path, runner: &(dyn StageRunner + Sync), stat: &Stat) -> HashMap<i64, Value> {
     let mut data = HashMap::new();
     for file in get_file_list(path, false, None) {
-        let outcome = file_record::record_builder::read_file(cfg, &file, None, false, None, runner, stat);
+        let outcome = file_indexer::record_builder::read_file(cfg, &file, None, false, None, runner, stat);
         if let Some((inode, doc)) = outcome.item {
             data.insert(inode, doc);
         }

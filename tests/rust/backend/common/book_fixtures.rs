@@ -249,7 +249,7 @@ impl FakeManager {
 }
 
 #[async_trait::async_trait]
-impl backend::main::BookManagerApi for FakeManager {
+impl backend::api_router::BookManagerApi for FakeManager {
     async fn preview_insert_image(&self, url: &str) -> Result<Vec<u8>, String> {
         self.calls.lock().unwrap().push(("preview_insert_image".into(), vec![json!(url)]));
         let (value, error) = self.preview_insert_image.lock().unwrap().clone();

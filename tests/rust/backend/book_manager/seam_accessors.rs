@@ -7,8 +7,8 @@ use crate::common::shared_fixtures::CONTAINER;
 use crate::common::shared_fixtures::{
     allowed_set, blank_pdf_bytes_sized, block_on, category_with_files, deps, image_bytes, make_deps, make_doc, make_manager, make_source_file, outcome_or_default, tmp_dir,
 };
+use backend::api_router::{BookManagerApi, InlineRunner, TaskHandle, TaskRunner};
 use backend::book_manager::{ApplyOptions, BackfillThread, BookManager, CREATED_TIME_BACKFILL_ENV, ItemFailure, MoveOutcome, Proposal, ProposalGrade, ProposeOptions};
-use backend::main::{BookManagerApi, InlineRunner, TaskHandle, TaskRunner};
 use backend::pdf_page_reader::PdfCacheLimits;
 use common::env::EnvGuard;
 use common::es_fake::FakeEsManager;

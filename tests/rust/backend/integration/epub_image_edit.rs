@@ -12,12 +12,12 @@ use crate::common::epub_book::{book, make_book, make_multi, multi, page, write_z
 use crate::common::shared_fixtures::MULTI_PAGE;
 use crate::common::shared_fixtures::{assert_refused, edit, full, jpeg, size, text_of};
 use async_trait::async_trait;
+use backend::api_router::{AppDeps, AuthMode, BookManagerApi, app_with};
 use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
 use backend::book_metadata::BookLookupError;
 use backend::cover_management::CoverSave;
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover::{CreatedIdrefs, EditImages, OPF_NS, read_package};
-use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use common::image::b64;

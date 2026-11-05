@@ -212,7 +212,7 @@ dependencies = [
  "epubveri",
  "es_client",
  "fancy-regex",
- "file_record",
+ "file_indexer",
  "flate2",
  "htmlkit",
  "hwp3_parser",
@@ -1239,7 +1239,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "file_record"
+name = "file_indexer"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -2137,7 +2137,7 @@ dependencies = [
  "doc_reader",
  "encoding_rs",
  "es_client",
- "file_record",
+ "file_indexer",
  "hwp3_parser",
  "isbn",
  "serde_json",

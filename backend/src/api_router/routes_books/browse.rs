@@ -8,13 +8,13 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use super::{ensure_allowed, hidden_categories, kind, manager_for};
-use crate::book_manager::{CoverPage, MAX_CATEGORY_PAGE_SIZE};
-use crate::main::{
+use crate::api_router::{
     app_deps::AppDeps,
     error_responses::ApiResult,
     request_extractors::{ApiQuery, RequireAuth, parse_py_bool},
     route_registry::Routes,
 };
+use crate::book_manager::{CoverPage, MAX_CATEGORY_PAGE_SIZE};
 
 pub(super) fn routes() -> Routes {
     Routes::new().get("/browse", &["require_auth"], browse).get("/comics/browse", &["require_auth"], browse)
