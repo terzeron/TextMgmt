@@ -63,7 +63,8 @@ fn trait_defaults_report_unsupported() {
     check(bare.search_group_representatives(&categories, &excluded).map(|_| ()));
 }
 
-use backend::es_manager::{CoverFileHit, CoverFileHits, Hit, KeywordSearchArgs, PagedHits};
+use backend::es_manager::{CoverFileHit, CoverFileHits, DeleteByQueryResult, Hit, KeywordSearchArgs, PagedHits, UpdateByQueryResult};
+use std::collections::BTreeMap;
 
 /// `with_search_stub`이 받은 호출 하나: (query, sort, max_result_count).
 type SearchCall = (Value, Option<Value>, i64);
@@ -184,14 +185,7 @@ fn test_do_exist_index_get_existing_ids_and_paths() {
 
 #[test]
 fn test_do_exist_index_is_true_only_for_a_true_response() {
-    let cases = [
-        (json!(true), true),
-        (json!(false), false),
-        (json!(null), false),
-        (json!(1), false),
-        (json!("present"), false),
-        (json!({"index": true}), false),
-    ];
+    let cases = [(json!(true), true), (json!(false), false), (json!(null), false), (json!(1), false), (json!("present"), false), (json!({"index": true}), false)];
 
     for (response, expected) in cases {
         let es = new_es();
@@ -451,9 +445,9 @@ fn test_aggregate_grouped_delete_insert_update_counts() {
 
     assert!(!manager.update(1, &UpdateFields { title: "t".into(), ..Default::default() }).unwrap());
     assert_eq!(manager.count_by_category("A", true).unwrap(), 3);
-    assert_eq!(manager.count_by_categories(&["A"], false).unwrap(), json!({"A": 3}));
-    assert_eq!(manager.rename_category("A", "B").unwrap(), json!({"updated": 4, "failures": []}));
-    assert_eq!(manager.delete_by_category("A", true).unwrap(), json!({"deleted": 2, "failures": []}));
+    assert_eq!(manager.count_by_categories(&["A"], false).unwrap(), BTreeMap::from([("A".to_string(), 3)]));
+    assert_eq!(manager.rename_category("A", "B").unwrap(), UpdateByQueryResult { updated: 4, failures: vec![] });
+    assert_eq!(manager.delete_by_category("A", true).unwrap(), DeleteByQueryResult { deleted: 2, failures: vec![] });
     assert!(manager.delete(1).unwrap());
 }
 
@@ -552,7 +546,7 @@ fn test_count_by_categories_handles_msearch_error() {
     let es = new_es();
     let manager = make_manager(&es);
     es.on("msearch", |_| Ok(json!({"responses": [{"error": "boom"}, {"hits": {"total": {"value": 2}}}]})));
-    assert_eq!(manager.count_by_categories(&["A", "B"], false).unwrap(), json!({"A": 0, "B": 2}));
+    assert_eq!(manager.count_by_categories(&["A", "B"], false).unwrap(), BTreeMap::from([("A".to_string(), 0), ("B".to_string(), 2)]));
 }
 
 #[test]
@@ -616,7 +610,7 @@ fn test_count_by_categories_error_response() {
     es.on("msearch", |_| Ok(json!({"responses": [{"error": {"reason": "bad"}}, {"hits": {"total": {"value": 5}}}]})));
     let manager = make_manager(&es);
     let result = manager.count_by_categories(&["A", "B"], false).unwrap();
-    assert_eq!(result, json!({"A": 0, "B": 5}));
+    assert_eq!(result, BTreeMap::from([("A".to_string(), 0), ("B".to_string(), 5)]));
 }
 
 #[test]
@@ -723,14 +717,14 @@ fn test_count_by_categories_single() {
     let es = new_es();
     let manager = make_manager(&es);
     es.on("count", |_| Ok(json!({"count": 7})));
-    assert_eq!(manager.count_by_categories(&["A"], false).unwrap(), json!({"A": 7}));
+    assert_eq!(manager.count_by_categories(&["A"], false).unwrap(), BTreeMap::from([("A".to_string(), 7)]));
 }
 
 #[test]
 fn test_count_by_categories_empty_is_a_noop() {
     let es = new_es();
 
-    assert_eq!(make_manager(&es).count_by_categories(&[], false).unwrap(), json!({}));
+    assert_eq!(make_manager(&es).count_by_categories(&[], false).unwrap(), BTreeMap::new());
     assert!(es.calls_of("msearch").is_empty());
     assert!(es.calls_of("count").is_empty());
 }
@@ -933,7 +927,7 @@ fn test_delete_by_category_no_prefix() {
     });
     let manager = make_manager(&es);
     let result = manager.delete_by_category("A", false).unwrap();
-    assert_eq!(result["deleted"], json!(1));
+    assert_eq!(result.deleted, 1);
     assert_eq!(*last_query.lock().unwrap(), json!({"term": {"category": "A"}}));
 }
 

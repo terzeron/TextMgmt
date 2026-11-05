@@ -175,13 +175,13 @@ impl ESManager {
         result["count"].as_i64().ok_or_else(|| parse_error("count가 없다"))
     }
 
-    /// 여러 카테고리의 문서 수를 msearch로 한 번에 조회한다. 카테고리가 없으면 호출 없이 `{}`다.
-    pub fn count_by_categories(&self, categories: &[&str], prefix: bool) -> Result<Value, EsError> {
+    /// 여러 카테고리의 문서 수를 msearch로 한 번에 조회한다. 카테고리가 없으면 호출 없이 빈 결과다.
+    pub fn count_by_categories(&self, categories: &[&str], prefix: bool) -> Result<BTreeMap<String, i64>, EsError> {
         if categories.is_empty() {
-            return Ok(json!({}));
+            return Ok(BTreeMap::new());
         }
         if let [category] = categories {
-            return Ok(json!({ *category: self.count_by_category(category, prefix)? }));
+            return Ok(BTreeMap::from([(category.to_string(), self.count_by_category(category, prefix)?)]));
         }
         log::debug!("count_by_categories(categories={categories:?}, prefix={prefix})");
         let mut searches = Vec::with_capacity(categories.len() * 2);
@@ -191,21 +191,21 @@ impl ESManager {
         }
         let response = self.es.send(&EsRequest::MultiSearch { index: None, searches })?;
         let responses = response["responses"].as_array().ok_or_else(|| parse_error("msearch responses가 없다"))?;
-        let mut result = Map::new();
+        let mut result = BTreeMap::new();
         for (category, item) in categories.iter().zip(responses) {
-            if item.get("error").is_some() {
+            let count = if item.get("error").is_some() {
                 log::error!("msearch error for category '{category}': {}", item["error"]);
-                result.insert(category.to_string(), json!(0));
+                0
             } else {
-                result.insert(category.to_string(), json!(total_of(item)?));
-            }
+                total_of(item)?
+            };
+            result.insert(category.to_string(), count);
         }
-        Ok(Value::Object(result))
+        Ok(result)
     }
 
     /// 특정 카테고리('A'와 'A/*')의 모든 문서를 새 카테고리로 바꾸고 file_path의 카테고리 prefix도 갱신한다.
-    /// 반환: `{"updated": n, "failures": [...]}`
-    pub fn rename_category(&self, old_category: &str, new_category: &str) -> Result<Value, EsError> {
+    pub fn rename_category(&self, old_category: &str, new_category: &str) -> Result<UpdateByQueryResult, EsError> {
         log::debug!("rename_category(old='{old_category}', new='{new_category}')");
         let old_prefix = format!("{old_category}/");
         let new_prefix = format!("{new_category}/");
@@ -226,13 +226,13 @@ impl ESManager {
         });
         let query = json!({"bool": {"should": [{"term": {"category": old_category}}, {"prefix": {"category": old_prefix}}], "minimum_should_match": 1}});
         let result = self.es.send(&EsRequest::UpdateByQuery { index: None, body: json!({"query": query, "script": script}), conflicts: Some(Conflicts::Abort), refresh: Some(true) })?;
-        Ok(json!({"updated": result["updated"].as_i64().unwrap_or(0), "failures": result.get("failures").cloned().unwrap_or_else(|| json!([]))}))
+        serde_json::from_value(result).map_err(|e| parse_error(format!("update_by_query 응답: {e}")))
     }
 
-    /// 특정 카테고리의 모든 문서를 삭제한다. `prefix`이면 하위 카테고리도 지운다. 반환: `{"deleted": n, "failures": [...]}`
-    pub fn delete_by_category(&self, category: &str, prefix: bool) -> Result<Value, EsError> {
+    /// 특정 카테고리의 모든 문서를 삭제한다. `prefix`이면 하위 카테고리도 지운다.
+    pub fn delete_by_category(&self, category: &str, prefix: bool) -> Result<DeleteByQueryResult, EsError> {
         log::debug!("delete_by_category(category='{category}', prefix={prefix})");
         let result = self.es.send(&EsRequest::DeleteByQuery { index: None, body: json!({"query": Self::category_query(category, prefix)}), conflicts: Some(Conflicts::Abort), refresh: Some(true) })?;
-        Ok(json!({"deleted": result["deleted"].as_i64().unwrap_or(0), "failures": result.get("failures").cloned().unwrap_or_else(|| json!([]))}))
+        serde_json::from_value(result).map_err(|e| parse_error(format!("delete_by_query 응답: {e}")))
     }
 }

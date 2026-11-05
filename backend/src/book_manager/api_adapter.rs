@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::{ApplyCategoryChanges, ProposeCategoryChanges, ReloadProgress};
 use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
 use super::{BookDeletion, CoverPage};
-use crate::book_manager::{MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
+use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
@@ -73,13 +73,13 @@ impl BookManagerApi for BookManager {
     async fn reload_category_mismatches(&self, content_type: &str, on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         BookManager::reload_category_mismatches_for(self, content_type, on_progress.as_deref()).await
     }
-    async fn rename_category(&self, old: &str, new: &str) -> Result<Value, String> {
+    async fn rename_category(&self, old: &str, new: &str) -> Result<CategoryRename, String> {
         BookManager::rename_category(self, old, new).await
     }
-    async fn delete_category(&self, category: &str, delete_files: bool) -> Result<Value, String> {
+    async fn delete_category(&self, category: &str, delete_files: bool) -> Result<CategoryDeletion, String> {
         BookManager::delete_category(self, category, delete_files).await
     }
-    async fn preview_delete_category(&self, category: &str) -> Result<Value, String> {
+    async fn preview_delete_category(&self, category: &str) -> Result<CategoryDeletePreview, String> {
         BookManager::preview_delete_category(self, category).await
     }
     async fn preview_insert_image(&self, url: &str) -> Result<Vec<u8>, String> {

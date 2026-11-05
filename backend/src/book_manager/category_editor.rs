@@ -2,23 +2,49 @@
 
 use std::path::PathBuf;
 
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::BookManager;
 
-fn failures_of(es_result: &Value) -> Option<&Value> {
-    es_result.get("failures").filter(|f| f.as_array().is_some_and(|a| !a.is_empty()) || f.as_str().is_some_and(|s| !s.is_empty()))
+/// ES가 준 실패 항목을 `['a', {...}]` 모양으로 적는다.
+fn failures_text(failures: &[Value]) -> String {
+    format!("[{}]", failures.iter().map(|v| v.as_str().map_or_else(|| v.to_string(), |s| format!("'{s}'"))).collect::<Vec<_>>().join(", "))
 }
 
-fn failures_text(failures: &Value) -> String {
-    match failures.as_array() {
-        Some(list) => format!("[{}]", list.iter().map(|v| v.as_str().map_or_else(|| v.to_string(), |s| format!("'{s}'"))).collect::<Vec<_>>().join(", ")),
-        None => failures.to_string(),
-    }
+/// 카테고리 이름 변경 결과.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CategoryRename {
+    pub old_category: String,
+    pub new_category: String,
+    pub updated_count: i64,
+    /// 디렉터리도 옮겼다. 디렉터리가 없으면 ES만 바꾼다.
+    pub fs_renamed: bool,
+}
+
+/// 카테고리를 지우면 사라질 것들의 수.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CategoryDeletePreview {
+    pub category: String,
+    pub directory_count: i64,
+    pub file_count: i64,
+    pub es_count: i64,
+}
+
+/// 카테고리 삭제 결과. 파일까지 지우라고 했을 때만 `fs_deleted`가 있다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CategoryDeletion {
+    pub category: String,
+    pub deleted_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fs_deleted: Option<bool>,
 }
 
 impl BookManager {
-    pub async fn rename_category(&self, old_category: &str, new_category: &str) -> Result<Value, String> {
+    pub async fn rename_category(&self, old_category: &str, new_category: &str) -> Result<CategoryRename, String> {
         log::debug!("# rename_category(old='{old_category}', new='{new_category}')");
         let fail = |message: String| Err(message);
 
@@ -93,7 +119,8 @@ impl BookManager {
             }
         };
 
-        if let Some(failures) = failures_of(&es_result) {
+        let failures = &es_result.failures;
+        if !failures.is_empty() {
             // 부분 실패 시 FS 롤백
             if fs_renamed && let Err(rollback_err) = self.fs.rename(&new_dir, &old_dir) {
                 log::error!("rename_category: FS 롤백 실패: {rollback_err}");
@@ -102,7 +129,7 @@ impl BookManager {
             return fail(format!("ES 업데이트 부분 실패: {}", failures_text(failures)));
         }
 
-        Ok(json!({"old_category": old_category, "new_category": new_category, "updated_count": es_result["updated"], "fs_renamed": fs_renamed}))
+        Ok(CategoryRename { old_category: old_category.to_string(), new_category: new_category.to_string(), updated_count: es_result.updated, fs_renamed })
     }
 
     /// 삭제 대상 카테고리의 디스크 경로를 검증해 돌려준다.
@@ -130,7 +157,7 @@ impl BookManager {
     }
 
     /// 삭제 확인 모달용으로, 지워질 하위 디렉터리 수·디스크 파일 수·ES 문서 수를 센다. 아무것도 바꾸지 않는다.
-    pub async fn preview_delete_category(&self, category: &str) -> Result<Value, String> {
+    pub async fn preview_delete_category(&self, category: &str) -> Result<CategoryDeletePreview, String> {
         let dir_check = match self.resolve_deletable_category_dir(category, true) {
             Ok(dir) => dir,
             Err(e) => return Err(e),
@@ -152,14 +179,14 @@ impl BookManager {
             }
         }
         match self.es.count_by_category(category, true) {
-            Ok(es_count) => Ok(json!({"category": category, "directory_count": directory_count, "file_count": file_count, "es_count": es_count})),
+            Ok(es_count) => Ok(CategoryDeletePreview { category: category.to_string(), directory_count, file_count, es_count }),
             Err(e) => Err(format!("ES 조회 실패: {e}")),
         }
     }
 
     /// 카테고리의 모든 문서를 일괄 삭제한다. `delete_files`가 거짓이면 ES 문서만 지우고 파일은 남긴다.
     /// 참이면 디렉터리 트리도 지운다(디스크를 먼저 지워서, 실패하면 ES 문서가 남아 다시 시도할 수 있다).
-    pub async fn delete_category(&self, category: &str, delete_files: bool) -> Result<Value, String> {
+    pub async fn delete_category(&self, category: &str, delete_files: bool) -> Result<CategoryDeletion, String> {
         log::debug!("# delete_category(category='{category}')");
         let dir_check = match self.resolve_deletable_category_dir(category, delete_files) {
             Ok(dir) => dir,
@@ -188,14 +215,9 @@ impl BookManager {
             Ok(result) => result,
             Err(e) => return Err(format!("ES 삭제 실패: {e}")),
         };
-        if let Some(failures) = failures_of(&es_result) {
-            return Err(format!("ES 삭제 부분 실패: {}", failures_text(failures)));
+        if !es_result.failures.is_empty() {
+            return Err(format!("ES 삭제 부분 실패: {}", failures_text(&es_result.failures)));
         }
-
-        let mut result = json!({"category": category, "deleted_count": es_result["deleted"]});
-        if delete_files {
-            result["fs_deleted"] = json!(fs_deleted);
-        }
-        Ok(result)
+        Ok(CategoryDeletion { category: category.to_string(), deleted_count: es_result.deleted, fs_deleted: delete_files.then_some(fs_deleted) })
     }
 }

@@ -64,7 +64,7 @@ use axum::http::Method;
 use axum::response::IntoResponse;
 use backend::auth_service::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
 use backend::book_manager::{BookContent, BookDeletion, BookManager, BookManagerApi, BookResponse};
-use backend::book_manager::{FsOnlyFile, MismatchDetails, MismatchReload, MismatchSummary, ReloadCounts, ReloadedFiles};
+use backend::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, FsOnlyFile, MismatchDetails, MismatchReload, MismatchSummary, ReloadCounts, ReloadedFiles};
 use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::comics_manager::ComicsManager;
 use backend::es_manager::{ESManager, EsManagerApi, RealEsConnector};
@@ -1526,31 +1526,31 @@ impl BookManagerApi for DummyManager {
         Ok(MismatchReload { content_type: content_type.to_string(), category: Some(category.to_string()), indexed_count: 1, deleted_count: 1, before_count: 2, ..MismatchReload::default() })
     }
 
-    async fn rename_category(&self, old_category: &str, new_category: &str) -> Result<Value, String> {
+    async fn rename_category(&self, old_category: &str, new_category: &str) -> Result<CategoryRename, String> {
         match self.b().rename {
             Some(f) => {
                 let (value, error) = f(old_category, new_category);
-                error.map_or(Ok(value.unwrap_or(Value::Null)), Err)
+                error.map_or(Ok(value.map(|v| serde_json::from_value(v).unwrap()).unwrap_or_default()), Err)
             }
             None => Err("rename_category not implemented".into()),
         }
     }
 
-    async fn delete_category(&self, category: &str, _delete_files: bool) -> Result<Value, String> {
+    async fn delete_category(&self, category: &str, _delete_files: bool) -> Result<CategoryDeletion, String> {
         match self.b().delete_category {
             Some(f) => {
                 let (value, error) = f(category);
-                error.map_or(Ok(value.unwrap_or(Value::Null)), Err)
+                error.map_or(Ok(value.map(|v| serde_json::from_value(v).unwrap()).unwrap_or_default()), Err)
             }
             None => Err("delete_category not implemented".into()),
         }
     }
 
-    async fn preview_delete_category(&self, category: &str) -> Result<Value, String> {
+    async fn preview_delete_category(&self, category: &str) -> Result<CategoryDeletePreview, String> {
         match self.b().preview {
             Some(f) => {
                 let (value, error) = f(category);
-                error.map_or(Ok(value.unwrap_or(Value::Null)), Err)
+                error.map_or(Ok(value.map(|v| serde_json::from_value(v).unwrap()).unwrap_or_default()), Err)
             }
             None => Err("preview_delete_category not implemented".into()),
         }

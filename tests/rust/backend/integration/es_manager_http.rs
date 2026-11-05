@@ -256,9 +256,9 @@ fn real_connector_connects_through_http_and_uses_env_index() {
 mod real_transport {
     use super::tls_server;
     use crate::common::shared_fixtures::transport;
-    use backend::es_manager::{CoverFileHits, ESManager, EsError, EsRequest, EsTransport, Hit, HttpTransport, PagedHits, SimilarDocsArgs, UpdateFields};
+    use backend::es_manager::{CoverFileHits, DeleteByQueryResult, ESManager, EsError, EsRequest, EsTransport, Hit, HttpTransport, PagedHits, SimilarDocsArgs, UpdateByQueryResult, UpdateFields};
     use serde_json::{Value, json};
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::process::Command;
     use std::sync::Arc;
     use std::thread;
@@ -416,7 +416,7 @@ mod real_transport {
         assert_eq!(aggregated, json!({"과학": 2, "소설/한국": 1, "소설/한국/현대": 1, "과학/물리": 1}));
         assert_eq!(manager.count_by_category("소설/한국", false).unwrap(), 1);
         assert_eq!(manager.count_by_category("소설/한국", true).unwrap(), 2);
-        assert_eq!(manager.count_by_categories(&["과학", "소설/한국"], true).unwrap(), json!({"과학": 3, "소설/한국": 2}));
+        assert_eq!(manager.count_by_categories(&["과학", "소설/한국"], true).unwrap(), BTreeMap::from([("과학".to_string(), 3), ("소설/한국".to_string(), 2)]));
         let covers = manager.aggregate_cover_categories();
         assert_eq!(covers.get("과학").map(|c| c.0), Some(2));
         assert!(!covers.contains_key("과학/물리"), "txt는 커버 형식이 아니다");
@@ -486,17 +486,17 @@ mod real_transport {
 
         // 9. 이름 바꾸기, 삭제
         let renamed = manager.rename_category("과학", "자연과학").unwrap();
-        assert_eq!(renamed, json!({"updated": 3, "failures": []}));
+        assert_eq!(renamed, UpdateByQueryResult { updated: 3, failures: vec![] });
         assert_eq!(manager.search_by_id(3).unwrap()["category"], json!("자연과학"));
         assert_eq!(manager.search_by_id(5).unwrap()["category"], json!("자연과학/물리"));
         assert_eq!(manager.search_by_id(5).unwrap()["file_path"], json!("자연과학/물리/시간.txt"), "file_path의 접두사도 함께 바뀐다");
         assert_eq!(manager.count_by_category("자연과학", true).unwrap(), 3);
-        assert_eq!(manager.delete_by_category("자연과학/물리", false).unwrap(), json!({"deleted": 1, "failures": []}));
+        assert_eq!(manager.delete_by_category("자연과학/물리", false).unwrap(), DeleteByQueryResult { deleted: 1, failures: vec![] });
         assert_eq!(manager.delete_by_file_paths(&["소설/한국/토지1.epub"], Some(&[1])), 0);
         assert_eq!(manager.delete_by_file_paths(&["소설/한국/토지1.epub"], None), 1);
         assert_eq!(manager.delete_by_ids(&[2, 3], 1), 2);
         manager.refresh().unwrap();
-        assert_eq!(manager.count_by_categories(&["자연과학", "소설/한국"], true).unwrap(), json!({"자연과학": 1, "소설/한국": 0}));
+        assert_eq!(manager.count_by_categories(&["자연과학", "소설/한국"], true).unwrap(), BTreeMap::from([("자연과학".to_string(), 1), ("소설/한국".to_string(), 0)]));
         assert!(manager.delete(4).unwrap());
         manager.delete_index().unwrap();
         assert!(!manager.do_exist_index().unwrap());

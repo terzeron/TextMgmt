@@ -1,6 +1,6 @@
 //! 도서·만화 수정과 카테고리 관리. 실제 파일 작업은 BookManager에 위임한다.
 use super::{kind, manager};
-use crate::book_manager::BookDeletion;
+use crate::book_manager::{BookDeletion, CategoryDeletion, CategoryRename};
 use crate::book_metadata::Book;
 use crate::main::request_extractors::lenient_bool;
 use crate::main::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, RequireAdmin, Routes};
@@ -9,7 +9,7 @@ use axum::{
     extract::{OriginalUri, Path, State},
 };
 use fancy_regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::HashSet,
@@ -278,7 +278,7 @@ async fn bulk_rename_files(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Or
     failures.truncate(20);
     Ok(Json(json!({"status":"success","result":{"changed_count":changed_count,"failed_count":failed_count,"failures":failures}})))
 }
-fn result(outcome: Result<Value, String>) -> Json<Value> {
+fn result(outcome: Result<impl Serialize, String>) -> Json<Value> {
     Json(match outcome {
         Ok(value) => json!({"status":"success","result":value}),
         Err(error) => json!({"status":"failure","error":error}),
@@ -352,16 +352,23 @@ struct Rename {
     new_category: String,
 }
 async fn rename_category(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<Rename>) -> ApiResult<Json<Value>> {
-    let mut renamed = manager(&deps, &uri)?.rename_category(&body.old_category, &body.new_category).await;
-    if let Ok(value) = &mut renamed {
-        let ct = kind(&uri);
-        let updated = mapping(deps, move |m| m.rename_category(&body.old_category, &body.new_category, ct)).await?;
-        if !updated {
-            log::warn!("rename_category: MySQL 매핑 갱신 실패");
-        }
-        value["mapping_updated"] = json!(updated);
+    /// 이름 변경 결과에 MySQL 매핑 갱신 여부를 더한 응답.
+    #[derive(Serialize)]
+    struct Renamed {
+        #[serde(flatten)]
+        renamed: CategoryRename,
+        mapping_updated: bool,
     }
-    Ok(result(renamed))
+    let renamed = match manager(&deps, &uri)?.rename_category(&body.old_category, &body.new_category).await {
+        Ok(renamed) => renamed,
+        Err(error) => return Ok(result(Err::<Renamed, _>(error))),
+    };
+    let ct = kind(&uri);
+    let mapping_updated = mapping(deps, move |m| m.rename_category(&body.old_category, &body.new_category, ct)).await?;
+    if !mapping_updated {
+        log::warn!("rename_category: MySQL 매핑 갱신 실패");
+    }
+    Ok(result(Ok(Renamed { renamed, mapping_updated })))
 }
 #[derive(Deserialize)]
 struct Delete {
@@ -370,8 +377,18 @@ struct Delete {
     delete_files: bool,
 }
 async fn delete_category(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<Delete>) -> ApiResult<Json<Value>> {
-    let mut deleted_category = manager(&deps, &uri)?.delete_category(&body.category, body.delete_files).await;
-    if let Ok(value) = &mut deleted_category {
+    /// 삭제 결과에 MySQL 매핑 삭제 여부를 더한 응답.
+    #[derive(Serialize)]
+    struct Deleted {
+        #[serde(flatten)]
+        deleted: CategoryDeletion,
+        mapping_deleted: bool,
+    }
+    let deleted_category = match manager(&deps, &uri)?.delete_category(&body.category, body.delete_files).await {
+        Ok(deleted) => deleted,
+        Err(error) => return Ok(result(Err::<Deleted, _>(error))),
+    };
+    {
         let ct = kind(&uri);
         let deleted = mapping(deps, move |m| {
             let deleted = m.delete_category(&body.category, ct, true)?;
@@ -394,9 +411,8 @@ async fn delete_category(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Orig
         if !deleted {
             log::warn!("delete_category: MySQL 키워드 매핑 삭제 대상 없음");
         }
-        value["mapping_deleted"] = json!(deleted);
+        Ok(result(Ok(Deleted { deleted: deleted_category, mapping_deleted: deleted })))
     }
-    Ok(result(deleted_category))
 }
 #[derive(Deserialize)]
 struct CategoryQuery {
@@ -414,7 +430,7 @@ async fn pdf_stats(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUr
         Ok(Ok(value)) => Ok(result(Ok(value))),
         error => {
             log::error!("get_category_pdf_stats failed: {error:?}");
-            Ok(result(Err("PDF 통계를 불러오지 못했습니다.".into())))
+            Ok(result(Err::<Value, _>("PDF 통계를 불러오지 못했습니다.".into())))
         }
     }
 }
@@ -471,7 +487,7 @@ mod tests {
         let success = result(Ok(json!({"count":2})));
         assert_eq!(success.0, json!({"status":"success","result":{"count":2}}));
 
-        let failure = result(Err("failed".into()));
+        let failure = result(Err::<serde_json::Value, _>("failed".into()));
         assert_eq!(failure.0, json!({"status":"failure","error":"failed"}));
     }
 }

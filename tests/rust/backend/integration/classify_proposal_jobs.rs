@@ -1,8 +1,8 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-use backend::book_manager::ReloadedFiles;
 use backend::auth_service::Claims;
+use backend::book_manager::ReloadedFiles;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 

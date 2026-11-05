@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::book_manager::{BookDeletion, CoverPage};
-use crate::book_manager::{MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
+use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
@@ -93,13 +93,13 @@ pub trait BookManagerApi: Send + Sync {
     async fn reload_category_mismatches(&self, _content_type: &str, _on_progress: Option<ReloadProgress>) -> Result<MismatchReload, String> {
         Err(UNIMPLEMENTED.to_string())
     }
-    async fn rename_category(&self, _old: &str, _new: &str) -> Result<Value, String> {
+    async fn rename_category(&self, _old: &str, _new: &str) -> Result<CategoryRename, String> {
         Err(UNIMPLEMENTED.to_string())
     }
-    async fn delete_category(&self, _category: &str, _delete_files: bool) -> Result<Value, String> {
+    async fn delete_category(&self, _category: &str, _delete_files: bool) -> Result<CategoryDeletion, String> {
         Err(UNIMPLEMENTED.to_string())
     }
-    async fn preview_delete_category(&self, _category: &str) -> Result<Value, String> {
+    async fn preview_delete_category(&self, _category: &str) -> Result<CategoryDeletePreview, String> {
         Err(UNIMPLEMENTED.to_string())
     }
     fn path_prefix(&self) -> PathBuf {

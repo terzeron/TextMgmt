@@ -2,7 +2,7 @@
 use super::ComicsManager;
 use crate::book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress};
 use crate::book_manager::{BookDeletion, BookManager, CoverPage};
-use crate::book_manager::{MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
+use crate::book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
@@ -39,13 +39,13 @@ impl BookManagerApi for ComicsManager {
     async fn delete_book(&self, id: i64) -> Result<BookDeletion, String> {
         BookManagerApi::delete_book(&self.inner, id).await
     }
-    async fn rename_category(&self, old: &str, new: &str) -> Result<Value, String> {
+    async fn rename_category(&self, old: &str, new: &str) -> Result<CategoryRename, String> {
         BookManagerApi::rename_category(&self.inner, old, new).await
     }
-    async fn delete_category(&self, category: &str, delete_files: bool) -> Result<Value, String> {
+    async fn delete_category(&self, category: &str, delete_files: bool) -> Result<CategoryDeletion, String> {
         BookManagerApi::delete_category(&self.inner, category, delete_files).await
     }
-    async fn preview_delete_category(&self, category: &str) -> Result<Value, String> {
+    async fn preview_delete_category(&self, category: &str) -> Result<CategoryDeletePreview, String> {
         BookManagerApi::preview_delete_category(&self.inner, category).await
     }
     async fn preview_insert_image(&self, url: &str) -> Result<Vec<u8>, String> {

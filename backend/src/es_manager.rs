@@ -18,6 +18,22 @@ use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 pub use es_client::EsError;
 pub use es_client::transport::{Conflicts, EsRequest, EsTransport, HttpTransport};
 
+/// `update_by_query` 결과. `failures`는 ES가 준 실패 항목 그대로다.
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
+#[serde(default)]
+pub struct UpdateByQueryResult {
+    pub updated: i64,
+    pub failures: Vec<Value>,
+}
+
+/// `delete_by_query` 결과. `failures`는 ES가 준 실패 항목 그대로다.
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
+#[serde(default)]
+pub struct DeleteByQueryResult {
+    pub deleted: i64,
+    pub failures: Vec<Value>,
+}
+
 /// 검색 결과 한 건.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hit {
@@ -128,10 +144,10 @@ pub trait EsManagerApi: Send + Sync {
     fn count_by_category(&self, _category: &str, _prefix: bool) -> Result<i64, EsError> {
         Err(EsError::Unsupported)
     }
-    fn rename_category(&self, _old_category: &str, _new_category: &str) -> Result<Value, EsError> {
+    fn rename_category(&self, _old_category: &str, _new_category: &str) -> Result<UpdateByQueryResult, EsError> {
         Err(EsError::Unsupported)
     }
-    fn delete_by_category(&self, _category: &str, _prefix: bool) -> Result<Value, EsError> {
+    fn delete_by_category(&self, _category: &str, _prefix: bool) -> Result<DeleteByQueryResult, EsError> {
         Err(EsError::Unsupported)
     }
     fn search_by_keyword(&self, _keyword: &str, _max_result_count: i64) -> Result<Vec<Hit>, EsError> {
@@ -608,19 +624,18 @@ impl EsManagerApi for ESManager {
     }
 
     fn count_by_categories(&self, categories: &[String], prefix: bool) -> Result<BTreeMap<String, i64>, EsError> {
-        let counts = ESManager::count_by_categories(self, &texts(categories), prefix)?;
-        Ok(counts.as_object().map(|o| o.iter().map(|(k, v)| (k.clone(), v.as_i64().unwrap_or(0))).collect()).unwrap_or_default())
+        ESManager::count_by_categories(self, &texts(categories), prefix)
     }
 
     fn count_by_category(&self, category: &str, prefix: bool) -> Result<i64, EsError> {
         ESManager::count_by_category(self, category, prefix)
     }
 
-    fn rename_category(&self, old_category: &str, new_category: &str) -> Result<Value, EsError> {
+    fn rename_category(&self, old_category: &str, new_category: &str) -> Result<UpdateByQueryResult, EsError> {
         ESManager::rename_category(self, old_category, new_category)
     }
 
-    fn delete_by_category(&self, category: &str, prefix: bool) -> Result<Value, EsError> {
+    fn delete_by_category(&self, category: &str, prefix: bool) -> Result<DeleteByQueryResult, EsError> {
         ESManager::delete_by_category(self, category, prefix)
     }
 

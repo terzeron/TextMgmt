@@ -64,6 +64,7 @@ mod file_reader;
 mod file_validator;
 mod html_previewer;
 mod mismatch_reporter;
+pub use category_editor::{CategoryDeletePreview, CategoryDeletion, CategoryRename};
 pub use category_reloader::{CategoryReload, MismatchReload, ReloadCounts, ReloadFailure, ReloadProgressFn, ReloadedFiles};
 pub use mismatch_reporter::{CategoryMismatch, DuplicateDoc, DuplicatePath, EsOnlyFile, FsOnlyFile, MismatchDetails, MismatchSummary};
 mod path_validator;

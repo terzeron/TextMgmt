@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
 pub use backend::es_manager::Hit;
-use backend::es_manager::{EsError, EsManagerApi, KeywordSearchArgs, PagedHits, SimilarDocsArgs};
+use backend::es_manager::{DeleteByQueryResult, EsError, EsManagerApi, KeywordSearchArgs, PagedHits, SimilarDocsArgs, UpdateByQueryResult};
 use serde_json::{Value, json};
 
 pub type Docs = BTreeMap<i64, Value>;
@@ -51,8 +51,8 @@ pub struct State {
     pub similar_paged: (Vec<Hit>, i64),
     pub keyword_paged: (Vec<Hit>, i64),
     pub latest_docs: (Vec<Hit>, i64),
-    pub deleted_by_category: Value,
-    pub rename_result: Value,
+    pub deleted_by_category: DeleteByQueryResult,
+    pub rename_result: UpdateByQueryResult,
     pub backfill_result: Value,
     pub categories_pdf_stats: Value,
     pub category_pdf_stats: Value,
@@ -92,8 +92,8 @@ impl Default for State {
             similar_paged: (Vec::new(), 0),
             keyword_paged: (Vec::new(), 0),
             latest_docs: (Vec::new(), 0),
-            deleted_by_category: json!({"deleted": 2, "failures": []}),
-            rename_result: json!({"updated": 3, "failures": []}),
+            deleted_by_category: DeleteByQueryResult { deleted: 2, failures: vec![] },
+            rename_result: UpdateByQueryResult { updated: 3, failures: vec![] },
             backfill_result: json!({"updated": 0, "skipped": 0, "failed": 0}),
             categories_pdf_stats: json!({}),
             category_pdf_stats: json!({}),
@@ -465,12 +465,12 @@ impl EsManagerApi for FakeEsManager {
         Ok(self.with(|s| s.counts.get(category).copied().unwrap_or(0)))
     }
 
-    fn rename_category(&self, old_category: &str, new_category: &str) -> Result<Value, EsError> {
+    fn rename_category(&self, old_category: &str, new_category: &str) -> Result<UpdateByQueryResult, EsError> {
         self.enter("rename_category", json!([old_category, new_category]))?;
         Ok(self.with(|s| s.rename_result.clone()))
     }
 
-    fn delete_by_category(&self, category: &str, prefix: bool) -> Result<Value, EsError> {
+    fn delete_by_category(&self, category: &str, prefix: bool) -> Result<DeleteByQueryResult, EsError> {
         self.enter("delete_by_category", json!([category, prefix]))?;
         Ok(self.with(|s| s.deleted_by_category.clone()))
     }
