@@ -9,5 +9,3 @@ mod mysql_fixture;
 
 #[path = "container/book_manager.rs"]
 mod manager_store;
-#[path = "container/view_history_store.rs"]
-mod view_history_store;

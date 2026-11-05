@@ -3,7 +3,7 @@
 //! 실제 MySQL 컨테이너가 필요한 테스트는 컨테이너를 못 띄우면 건너뛴다.
 //!
 //! 가정한 API (설계: docs/rust-test-seams.md 3.4, 3.13):
-//! - `book_manager::view_history_store::{MAX_RECENT_VIEWS: usize, ViewHistoryStore, ViewHistoryError, create_view_history_store}`
+//! - `db::view_history_store::{MAX_RECENT_VIEWS: usize, ViewHistoryStore, ViewHistoryError, create_view_history_store}`
 //! - `ViewHistoryStore::new() -> Result<ViewHistoryStore, ViewHistoryError>`: `TM_MYSQL_*` 환경 변수로 접속하고 테이블을 만든다
 //! - `ViewHistoryStore::record_view(&self, email: &str, content_type: &str, book_id: i64, title: &str, category: &str) -> Result<(), ViewHistoryError>`
 //! - `ViewHistoryStore::list_recent_views(&self, limit: usize) -> Result<Value, ViewHistoryError>`
@@ -17,16 +17,19 @@
 //!   `ViewHistoryStore::with_max_history_rows(self, usize) -> ViewHistoryStore`(구 `set_max_history_rows`)
 //! - 로그는 `log::warn!`로 남기고 `common::log_capture::LogCapture`로 수집한다.
 
-use crate::{common, mysql_fixture};
+#[path = "../../shared/log_capture.rs"]
+mod log_capture;
+#[path = "../../shared/mysql_fixture.rs"]
+mod mysql_fixture;
 
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::sleep;
 use std::time::Duration;
 
-use book_manager::view_history_store::{MAX_RECENT_VIEWS, ViewHistoryError, ViewHistoryStore, create_view_history_store};
-use common::log_capture::LogCapture;
+use db::view_history_store::{MAX_RECENT_VIEWS, ViewHistoryError, ViewHistoryStore, create_view_history_store};
 use db::{ConnectionProvider, DbConnection, DbError, DbValue, Row};
 use log::Level;
+use log_capture::LogCapture;
 use serde_json::{Value, json};
 
 /// `store` fixture: 실제 MySQL 컨테이너에 붙은 스토어. 테스트마다 테이블을 비운다.

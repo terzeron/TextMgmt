@@ -18,6 +18,7 @@ pub mod pdf_worker_client;
 // 기존 호출자의 모듈 경로는 유지하되 구현은 MuPDF Rust worker를 사용한다.
 pub use pdf_worker_client as poppler;
 mod native_pdf;
+pub mod task_runner;
 pub mod timeout_runner;
 
 /// 환경 변수 조회 함수. `file_indexer::env_config::Config::from_env`와 같은 모양이다.

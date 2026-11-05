@@ -9,7 +9,6 @@ use crate::common::shared_fixtures::{
 };
 use book_manager::BookManagerApi;
 use book_manager::pdf_page_reader::PdfCacheLimits;
-use book_manager::task_runner::{InlineRunner, TaskHandle, TaskRunner};
 use book_manager::{ApplyOptions, BackfillThread, BookManager, CREATED_TIME_BACKFILL_ENV, ItemFailure, MoveOutcome, Proposal, ProposalGrade, ProposeOptions};
 use common::env::EnvGuard;
 use common::es_fake::FakeEsManager;
@@ -21,6 +20,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{fs, io};
+use sysdeps::task_runner::{InlineRunner, TaskHandle, TaskRunner};
 use tempfile::TempDir;
 
 /// `MagicMock()`으로 만든 스레드 대역. `is_alive`와 `start` 호출 횟수만 본다.

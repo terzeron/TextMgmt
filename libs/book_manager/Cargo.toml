@@ -13,7 +13,6 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 classifier = { path = "../classifier" }
 common = { path = "../common" }
 cover_manager = { path = "../cover_manager" }
-db = { path = "../db" }
 file_indexer = { path = "../file_indexer" }
 htmlkit = { path = "../htmlkit" }
 hwp3_parser = { path = "../hwp3_parser" }
@@ -34,6 +33,7 @@ xml_recoverer = { path = "../xml_recoverer" }
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+db = { path = "../db" }
 doc_reader = { path = "../doc_reader" }
 es_client = { path = "../es_client" }
 flate2 = "1"

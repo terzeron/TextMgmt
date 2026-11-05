@@ -17,7 +17,6 @@ use super::image::encode_image;
 use super::pdf::make_blank_pdf;
 use super::zipx::{Members, ZipMode, write_zip, write_zip_with};
 use book_manager::book_metadata::{Book, BookLookupError, BookPage};
-use book_manager::task_runner::{TaskHandle, TaskRunner};
 use book_manager::{AddBookError, BookAdder, BookContent, BookLookup, BookManager, BookManagerDeps, BookRef, BookResponse, CoverPage, FileReader, ProposeOptions, ReadFileError};
 use book_manager::{ApplyCategoryChanges, BookManagerApi, ProposeCategoryChanges, ReloadProgress};
 use book_manager::{ApplyResult, EpubValidation, PdfValidation, ProposeResult};
@@ -35,6 +34,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, atomic::AtomicUsize};
 use std::task::{Context, Poll, Waker};
+use sysdeps::task_runner::{TaskHandle, TaskRunner};
 use tempfile::TempDir;
 use zip::ZipArchive;
 

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use sysdeps::{Clock, EnvFn, SystemClock};
 
-use db::{ConnectionProvider, DbConnection, DbError, DbValue, MysqlConfig, mysql_provider};
+use crate::{ConnectionProvider, DbConnection, DbError, DbValue, MysqlConfig, mysql_provider};
 
 /// 사용자·콘텐츠 유형별로 보관하는 최근 조회 건수. 초과분은 기록 시점에 정리하므로
 /// 테이블 크기가 (사용자 수 × 유형 2 × 이 값)으로 고정되고 별도 purge가 필요 없다.

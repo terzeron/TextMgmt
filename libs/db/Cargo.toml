@@ -13,8 +13,17 @@ diesel = { version = "2.3.14", default-features = false, features = ["mysql", "r
 log = "0.4.34"
 # MySQL 클라이언트는 개발 헤더 없이 쓰려고 소스에서 번들 빌드한다 (docs/rust-test-seams.md, diesel spike)
 mysqlclient-sys = { version = "0.5.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
+sysdeps = { path = "../sysdeps" }
+
+[dev-dependencies]
+testcontainers-modules = { version = "0.15.0", features = ["mysql", "blocking"] }
 
 [[test]]
 name = "category_mapping"
 path = "../../tests/rust/db/category_mapping.rs"
+
+[[test]]
+name = "integration_view_history_store"
+path = "../../tests/rust/db/integration/view_history_store.rs"

@@ -42,10 +42,9 @@ pub use app_capabilities::{BookAccess, BookStub, CategoryMappingApi, GoogleVerif
 pub use app_deps::{AppDeps, AuthMode, AuthSlots, BookstoreFactory, RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS, Slot};
 pub use auth_cookies::{CustomJSONResponse, ResponseHeaders, clear_auth_cookies, custom_jsonable_encoder, get_cookie_settings, is_local_frontend_origin, set_auth_cookies};
 pub use auth_manager::auth_service::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, HttpStatusError, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RoleResolver, observation_hash};
-pub use book_manager::task_runner::{InlineRunner, TaskHandle, TaskRunner, ThreadRunner};
-pub use book_manager::view_history_store::MAX_RECENT_VIEWS;
 pub use book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
 pub use bookstore::store_clients::BookstoreSearch;
+pub use db::view_history_store::MAX_RECENT_VIEWS;
 pub use error_responses::{
     ApiError, ApiResult, GENERIC_SERVER_ERROR_DETAIL, RequestValidationError, SERVICE_UNAVAILABLE_DETAIL, VALIDATION_ERROR_DETAIL, general_exception_handler, http_exception_handler, json_response,
     summarize_request_body, validation_exception_handler,
@@ -56,6 +55,7 @@ pub(crate) use request_extractors::parse_py_bool;
 pub use request_extractors::{ApiJson, ApiQuery, OptionalAuth, RequireAdmin, RequireAuth};
 pub use request_extractors::{ClientInfo, client_ip, request_ip_prefix, request_user_agent};
 pub use route_registry::{RouteInfo, Routes};
+pub use sysdeps::task_runner::{InlineRunner, TaskHandle, TaskRunner, ThreadRunner};
 
 /// 앱의 모든 라우트. 새 라우트 파일은 여기에 `.merge(..)` 한 줄로 붙인다.
 fn all_routes() -> Routes {

@@ -16,16 +16,16 @@ use auth_manager::auth_service::{Claims, HttpStatusError};
 use auth_manager::auth_service::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
 use auth_manager::refresh_token_store::{RefreshTokenStoreApi, create_refresh_token_store};
 use book_manager::comics_manager::ComicsManager;
-use book_manager::task_runner::{TaskRunner, ThreadRunner};
 use book_manager::{BookManager, LoaderFileReader};
 use book_manager::{BookManagerApi, UnavailableBookManager};
 use bookstore::store_clients::BookstoreSearch;
 use cover_manager::cover_management::CoverHooks;
 use db::category_mapping::CategoryMapping;
 use search_manager::{ESManager, EsManagerApi, RealEsConnector};
+use sysdeps::task_runner::{TaskRunner, ThreadRunner};
 
 type TaskRuntimeFactory = Arc<dyn Fn() -> Result<tokio::runtime::Runtime, std::io::Error> + Send + Sync>;
-use book_manager::view_history_store::create_view_history_store;
+use db::view_history_store::create_view_history_store;
 
 /// 테스트 중간에 바꿀 수 있는 인증 payload. `AuthMode::Shared`가 쓴다.
 pub struct AuthSlots {

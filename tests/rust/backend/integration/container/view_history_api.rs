@@ -32,9 +32,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use axum::http::Method;
 use backend::api_router::{AppDeps, AuthMode, BookAccess, BookStub, HttpStatusError, InlineRunner, MAX_RECENT_VIEWS, ViewHistoryApi, app_with, route_dependencies};
-use book_manager::view_history_store::{RecentViews, ViewHistoryError, ViewHistoryStore};
 use common::TestClient;
 use common::log_capture::LogCapture;
+use db::view_history_store::{RecentViews, ViewHistoryError, ViewHistoryStore};
 use log::Level;
 use serde_json::{Value, json};
 

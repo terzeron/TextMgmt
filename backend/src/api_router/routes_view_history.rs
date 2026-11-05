@@ -15,7 +15,7 @@ use super::request_extractors::{ApiQuery, RequireAdmin, RequireAuth};
 use super::route_registry::Routes;
 use super::routes_books::parse_book_id;
 use auth_manager::auth_service::Claims;
-use book_manager::view_history_store::MAX_RECENT_VIEWS;
+use db::view_history_store::MAX_RECENT_VIEWS;
 
 pub(super) fn routes() -> Routes {
     Routes::new().post("/books/view-history/{book_id}", &["require_auth"], record_book_view).post("/comics/view-history/{book_id}", &["require_auth"], record_comic_view).get(

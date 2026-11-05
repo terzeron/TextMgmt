@@ -52,8 +52,6 @@ pub mod book_metadata;
 pub mod comics_manager;
 pub mod epub_metadata_reader;
 pub mod pdf_page_reader;
-pub mod task_runner;
-pub mod view_history_store;
 
 mod api_adapter;
 mod api_contract;

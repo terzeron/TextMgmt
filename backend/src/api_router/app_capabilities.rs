@@ -14,8 +14,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use auth_manager::auth_service::{Claims, HttpStatusError};
-use book_manager::view_history_store::{RecentViews, ViewHistoryError, ViewHistoryStore};
 use db::category_mapping::CategoryMapping;
+use db::view_history_store::{RecentViews, ViewHistoryError, ViewHistoryStore};
 
 pub(crate) use book_manager::UNIMPLEMENTED;
 
