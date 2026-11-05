@@ -6,10 +6,10 @@ mod fx;
 #[path = "../common/mod.rs"]
 mod common;
 use crate::common::cover_docs::{create_test_pdf, use_doc};
-use crate::common::shared_fixtures::{broken_cover, error_text, first_item, truthy};
+use crate::common::shared_fixtures::{broken_cover, error_text, first_item};
 use crate::common::shared_fixtures::{fetcher, thumbnailer};
 use backend::book_manager::{BookManager, BookManagerDeps};
-use backend::cover_management::CoverManagement;
+use backend::cover_management::{CoverManagement, CoverSave};
 use backend::epub_cover;
 use backend::epub_cover::{CoverError, MAX_IMAGE_BYTES};
 use common::epub::BODY;
@@ -18,7 +18,7 @@ use common::fsx::ino_mtime;
 use common::image::{b64, red_jpeg};
 use common::zipx::read_zip_entry;
 use fx::{Edit, Opts};
-use serde_json::{Value, json};
+use serde_json::json;
 
 #[tokio::test]
 async fn test_cover_ignores_legacy_id_only_cache() {
@@ -55,7 +55,7 @@ fn test_broken_cover_search_and_replacement_preserve_body_and_backup() {
         let revision = item["revision"].as_str().unwrap();
         let err = epub_cover::add_cover(&path, &red_jpeg(), revision, &root.join(".cover_backups"), false).unwrap_err();
         assert!(err.to_string().contains("이미 표지"), "method={method}: {err}");
-        let bad: Result<Value, CoverError> = service.apply_image("book.epub", &b64(b"bad replacement"), revision);
+        let bad: Result<CoverSave, CoverError> = service.apply_image("book.epub", &b64(b"bad replacement"), revision);
         assert!(bad.is_err(), "method={method}");
         assert_eq!(std::fs::read(&path).unwrap(), original, "method={method}");
         assert!(!root.join(".cover_backups").exists(), "method={method}");
@@ -65,8 +65,8 @@ fn test_broken_cover_search_and_replacement_preserve_body_and_backup() {
             service.set_hooks(service.hooks().clone().with_image_fetcher(fetcher(|_url| Ok(red_jpeg()))));
             service.apply_url("book.epub", "https://example.org/cover.jpg", revision, true).unwrap()
         };
-        assert!(!truthy(&epub_cover::inspect_epub(&path).unwrap()["cover_error"]), "method={method}");
-        assert_eq!(std::fs::read(root.join(result["backup_path"].as_str().unwrap())).unwrap(), original, "method={method}");
+        assert!(epub_cover::inspect_epub(&path).unwrap().cover_error.is_none(), "method={method}");
+        assert_eq!(std::fs::read(root.join(&result.backup_path)).unwrap(), original, "method={method}");
         assert_eq!(ino_mtime(&path), stat, "method={method}");
         assert_eq!(read_zip_entry(&path, "OPS/chapter.xhtml"), BODY.as_bytes(), "method={method}");
     }

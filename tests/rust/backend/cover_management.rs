@@ -22,8 +22,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// 표지 목록 한 쪽의 JSON 모양. 프런트엔드가 받는 응답과 같다.
+fn page(service: &CoverManagement, directory: &str, limit: usize, covered: bool) -> Value {
+    serde_json::to_value(service.missing(directory, "", limit, covered).unwrap()).unwrap()
+}
+
 fn first_item(service: &CoverManagement) -> Value {
-    service.missing("", "", 60, false).unwrap()["items"][0].clone()
+    page(service, "", 60, false)["items"][0].clone()
 }
 
 fn not_found(_store: &str, _metadata: &Value) -> Result<Value, SearchError> {
@@ -46,7 +51,7 @@ fn test_cover_listing_and_search_use_same_filename_title() {
         let path = make_epub(&tmp.path().join("folder.epub").join(filename), &EpubSpec::cover("3.0", false));
         let original = read(&path);
         let mut service = CoverManagement::new(tmp.path());
-        let item = service.missing("folder.epub", "", 60, false).unwrap()["items"][0].clone();
+        let item = page(&service, "folder.epub", 60, false)["items"][0].clone();
         assert_eq!(item["title"], title, "filename={filename:?}");
         let seen = Arc::new(Mutex::new(Vec::<String>::new()));
         let sink = seen.clone();
@@ -124,7 +129,7 @@ fn test_filename_title_replaces_old_metadata_search_cache() {
         }
         let expected: Vec<(String, String)> = STORES.iter().map(|store| (store.to_string(), "저자 제목 1".to_string())).collect();
         assert_eq!(*calls.lock().unwrap(), expected, "covered={covered}");
-        assert_eq!(service.missing("", "", 60, covered).unwrap()["items"][0]["title"], "저자 제목 1", "covered={covered}");
+        assert_eq!(page(&service, "", 60, covered)["items"][0]["title"], "저자 제목 1", "covered={covered}");
     }
 }
 
@@ -201,14 +206,14 @@ fn test_browser_image_replaces_cover_after_server_candidates_are_deleted() {
     let saved = service.apply("book.epub", cached.id(0), &rev(&path)).unwrap();
     assert!(!service.book_cache("book.epub").exists());
     let before = read(&path);
-    assert!(service.apply_image("book.epub", "not valid base64!", str_of(&saved, "revision")).is_err());
-    assert!(service.apply_image("book.epub", &b64(b"invalid image"), str_of(&saved, "revision")).is_err());
+    assert!(service.apply_image("book.epub", "not valid base64!", &saved.revision).is_err());
+    assert!(service.apply_image("book.epub", &b64(b"invalid image"), &saved.revision).is_err());
     let err = service.apply_image("book.epub", &b64(&red_jpeg()), "stale").unwrap_err();
     assert!(err.to_string().contains("변경"), "{err}");
     assert_eq!(read(&path), before);
-    let replaced = service.apply_image("book.epub", &b64(&red_jpeg()), str_of(&saved, "revision")).unwrap();
-    assert_ne!(replaced["revision"], saved["revision"]);
-    assert_eq!(read(&root.join(str_of(&replaced, "backup_path"))), before);
+    let replaced = service.apply_image("book.epub", &b64(&red_jpeg()), &saved.revision).unwrap();
+    assert_ne!(replaced.revision, saved.revision);
+    assert_eq!(read(&root.join(&replaced.backup_path)), before);
 }
 
 #[test]
@@ -224,7 +229,7 @@ fn test_research_and_direct_url_replacement_allow_saved_book_explicitly() {
     assert_eq!(service.candidates("yes24", "book.epub", true, false).unwrap()["status"], "not_found");
     assert_eq!(read(&path), original);
     let saved = service.apply_url("book.epub", "https://example.org/a", &rev(&path), true).unwrap();
-    assert_eq!(read(&root.join(str_of(&saved, "backup_path"))), original);
+    assert_eq!(read(&root.join(&saved.backup_path)), original);
 }
 
 #[test]
@@ -261,10 +266,10 @@ fn test_missing_opf_namespace_recognizes_existing_cover_without_modifying_book()
         let stat = ino_mtime(&path);
 
         let metadata = epub_cover::inspect_epub(&path).unwrap();
-        assert!(truthy(&metadata["has_cover"]), "version={version}");
-        assert_eq!(metadata["author"], "저자", "version={version}");
-        assert_eq!(CoverManagement::new(root).missing("", "", 60, false).unwrap()["items"], json!([]), "version={version}");
-        let err = epub_cover::add_cover(&path, &red_jpeg(), str_of(&metadata, "revision"), &backups(root), false).unwrap_err();
+        assert!(metadata.has_cover, "version={version}");
+        assert_eq!(metadata.author, "저자", "version={version}");
+        assert_eq!(page(&CoverManagement::new(root), "", 60, false)["items"], json!([]), "version={version}");
+        let err = epub_cover::add_cover(&path, &red_jpeg(), &metadata.revision, &backups(root), false).unwrap_err();
         assert!(err.to_string().contains("이미 표지"), "version={version}: {err}");
         assert_eq!(read(&path), original, "version={version}");
         assert_eq!(ino_mtime(&path), stat, "version={version}");
@@ -286,14 +291,14 @@ fn test_direct_url_saves_cover_and_clear_cache_preserves_epub() {
         sink.lock().unwrap().push(url.to_string());
         Ok(red_jpeg())
     })));
-    let result = service.apply_url("book.epub", "https://example.org/cover.jpg", str_of(&metadata, "revision"), false).unwrap();
+    let result = service.apply_url("book.epub", "https://example.org/cover.jpg", &metadata.revision, false).unwrap();
     assert_eq!(*downloaded.lock().unwrap(), ["https://example.org/cover.jpg"]);
-    assert!(truthy(&epub_cover::inspect_epub(&path).unwrap()["has_cover"]));
+    assert!(epub_cover::inspect_epub(&path).unwrap().has_cover);
     assert!(!service.candidate_path(cached.id(0)).exists());
     let saved = read(&path);
-    service.clear_cache("book.epub", str_of(&result, "revision")).unwrap();
+    service.clear_cache("book.epub", &result.revision).unwrap();
     assert_eq!(read(&path), saved);
-    assert!(root.join(str_of(&result, "backup_path")).exists());
+    assert!(root.join(&result.backup_path).exists());
 }
 
 #[test]
@@ -326,7 +331,7 @@ fn test_filesystem_listing_includes_unindexed_epub_and_reports_errors() {
     let manager = CoverManagement::new(root);
     let labels: Vec<Value> = manager.directories("").unwrap().iter().map(|entry| entry["label"].clone()).collect();
     assert_eq!(labels, [json!("目录")]);
-    let page = manager.missing("目录", "", 60, false).unwrap();
+    let page = page(&manager, "目录", 60, false);
     let statuses: std::collections::BTreeSet<&str> = page["items"].as_array().unwrap().iter().map(|item| item["status"].as_str().unwrap()).collect();
     assert_eq!(statuses, ["error", "missing"].into_iter().collect());
     assert_eq!(page["items"].as_array().unwrap().len(), 2);
@@ -352,7 +357,7 @@ fn filesystem_listing_orders_by_lowercased_name() {
     let labels: Vec<String> = manager.directories("").unwrap().into_iter().map(|entry| entry["label"].as_str().unwrap().to_owned()).collect();
     assert_eq!(labels, ["zeta", "ßeta"]);
 
-    let page = manager.missing("", "", 10, false).unwrap();
+    let page = page(&manager, "", 10, false);
     let paths: Vec<&str> = page["items"].as_array().unwrap().iter().map(|item| item["file_path"].as_str().unwrap()).collect();
     assert_eq!(paths, ["z.epub", "ß.epub"]);
 }
@@ -385,15 +390,15 @@ fn test_cover_page_image_detection_and_existing_cover_protection() {
         make_epub(&path, &spec);
         let original = read(&path);
         let inspected = epub_cover::inspect_epub(&path).unwrap();
-        assert_eq!(inspected["has_cover"], json!(has_cover), "page_href={page_href}, markup={image_markup}");
+        assert_eq!(inspected.has_cover, has_cover, "page_href={page_href}, markup={image_markup}");
         let mut zip_archive = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
         assert_eq!(BookManager::find_epub_cover_member(&mut zip_archive), has_cover.then(|| "OEBPS/Images/120(550).jpg".to_string()), "page_href={page_href}, markup={image_markup}");
         drop(zip_archive);
-        let listed = !CoverManagement::new(root).missing("", "", 60, false).unwrap()["items"].as_array().unwrap().is_empty();
+        let listed = !page(&CoverManagement::new(root), "", 60, false)["items"].as_array().unwrap().is_empty();
         assert_eq!(listed, !has_cover, "page_href={page_href}, markup={image_markup}");
         if has_cover {
             assert!(BookManager::extract_cover_thumbnail(&path, "epub", None).is_some(), "page_href={page_href}, markup={image_markup}");
-            let err = epub_cover::add_cover(&path, &red_jpeg(), str_of(&inspected, "revision"), &backups(root), false).unwrap_err();
+            let err = epub_cover::add_cover(&path, &red_jpeg(), &inspected.revision, &backups(root), false).unwrap_err();
             assert!(err.to_string().contains("이미 표지"), "page_href={page_href}: {err}");
             assert_eq!(read(&path), original, "page_href={page_href}, markup={image_markup}");
         }
@@ -416,7 +421,7 @@ fn test_symlink_is_excluded() {
     std::os::unix::fs::symlink(&path, root.join("link.epub")).unwrap();
     let manager = CoverManagement::new(root);
     assert!(manager.resolve("link.epub", false).is_err());
-    assert_eq!(manager.missing("", "", 60, false).unwrap()["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page(&manager, "", 60, false)["items"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -453,8 +458,8 @@ fn test_success_removes_all_book_candidates_but_keeps_other_book_and_backup() {
     let cached = cached_candidates(&mut service, "book.epub", STORES);
     let other = cached_candidates(&mut service, "other.epub", &["yes24"]);
     let result = service.apply("book.epub", cached.id(0), &rev(&path)).unwrap();
-    assert!(truthy(&epub_cover::inspect_epub(&path).unwrap()["has_cover"]));
-    assert!(root.join(str_of(&result, "backup_path")).is_file());
+    assert!(epub_cover::inspect_epub(&path).unwrap().has_cover);
+    assert!(root.join(&result.backup_path).is_file());
     let files = files_under(service.cache());
     assert_eq!(files.iter().filter(|f| f.extension().is_some_and(|e| e == "jpg")).count(), 2);
     for record in files.iter().filter(|f| f.file_name().unwrap().to_string_lossy().starts_with("candidate-") && f.extension().is_some_and(|e| e == "json")) {
@@ -659,8 +664,8 @@ fn test_success_warns_on_candidate_cleanup_failure_and_invalidates_only_own_prev
     }
     service.set_hooks(service.hooks().clone().with_delete_book_cache(|_path| Err(std::io::Error::other("disk"))));
     let result = service.apply("book.epub", cached.id(0), &rev(&path)).unwrap();
-    assert!(result.as_object().unwrap().contains_key("warning"), "{result}");
-    assert!(truthy(&epub_cover::inspect_epub(&path).unwrap()["has_cover"]));
+    assert!(result.warning.is_some(), "{result:?}");
+    assert!(epub_cover::inspect_epub(&path).unwrap().has_cover);
     for name in [".cover_cache", ".preview_cache"] {
         assert!(!root.join(name).join(format!("{book_id}.jpg")).exists(), "{name}");
         assert!(!root.join(name).join(format!("{book_id}_ch10.epub")).exists(), "{name}");

@@ -107,11 +107,11 @@ impl CoverManagement {
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let _book = self.book_lock(&relative, false)?;
-        let mut metadata = self.inspect(&path)?;
-        metadata["title"] = json!(filename_title(&path));
-        if metadata.get("has_cover").and_then(Value::as_bool) == Some(true) && !include_covered {
+        let inspection = EpubInspection { title: filename_title(&path), ..self.inspect(&path)? };
+        if inspection.has_cover && !include_covered {
             return Err(CoverError::new(ALREADY_COVERED));
         }
+        let metadata = serde_json::to_value(&inspection).map_err(|e| CoverError::io(&e.to_string()))?;
         let cache_key = sha256_hex(&format!("{store}:{relative}:{}:filename-v1", str_field(&metadata, "revision")));
         let book_cache = self.book_cache(&relative);
         let result_path = book_cache.join(format!("search-{cache_key}.json"));

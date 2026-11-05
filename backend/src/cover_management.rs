@@ -18,15 +18,16 @@ use base64::Engine as _;
 use base64::alphabet::STANDARD as STANDARD_ALPHABET;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 use file_record::ignore_rules::IGNORED_DIR_NAMES;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sysdeps::{Clock, RealFs, SystemClock};
 use zip::ZipArchive;
 
 use crate::cover_sources::{CancelFn, GateError, STORES, SearchError, SearchHooks, StoreGate, blocked_status, build_search_url, search_candidates_with, store_hosts, store_lock_with};
 use crate::direct_cover_url::{ImageFetcher, RealImageFetcher};
-use crate::epub_cover::{self, CoverError, EpubCoverHooks, MAX_IMAGE_BYTES};
+use crate::epub_cover::{self, CoverError, CoverImageInfo, CreatedIdrefs, EpubCoverHooks, EpubInspection, EpubRewrite, MAX_IMAGE_BYTES};
 use htmlkit::url_parser::{Netloc, urlsplit};
+use serde::Serialize;
 
 const BOOK_CHANGED: &str = "EPUB이 변경되었습니다. 목록을 새로 불러오세요";
 const ALREADY_COVERED: &str = "EPUB에 이미 표지가 있습니다";
@@ -72,7 +73,69 @@ pub fn check_cancelled() -> Result<(), CoverError> {
 type SearchFn = Arc<dyn Fn(&str, &Value) -> Result<Value, SearchError> + Send + Sync>;
 type FetchBytesFn = Arc<dyn Fn(&str, &str) -> Result<Vec<u8>, String> + Send + Sync>;
 type CachedSearchFn = Arc<dyn Fn(&str, &str) -> Option<Value> + Send + Sync>;
-type InspectFn = Arc<dyn Fn(&Path) -> Result<Value, CoverError> + Send + Sync>;
+type InspectFn = Arc<dyn Fn(&Path) -> Result<EpubInspection, CoverError> + Send + Sync>;
+
+/// 표지 저장·삭제·삽화 넣기의 결과. 경로는 책 디렉터리 기준 상대 경로다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct CoverSave {
+    pub file_path: String,
+    pub revision: String,
+    pub book_id: u64,
+    pub file_size: u64,
+    pub cover_image: Option<CoverImageInfo>,
+    pub backup_path: String,
+    /// 저장은 했지만 후속 정리에 실패한 경우의 안내.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idrefs: Option<CreatedIdrefs>,
+}
+
+/// 후보 캐시를 비운 결과.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CacheCleared {
+    pub cleared: bool,
+    pub file_path: String,
+}
+
+/// 표지 목록 한 쪽.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CoverList {
+    pub items: Vec<CoverListItem>,
+    /// 다음 쪽의 cursor. 마지막 쪽이면 None이다.
+    pub next_cursor: Option<String>,
+    pub scanned: usize,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CoverListItem {
+    pub file_path: String,
+    pub book_id: u64,
+    /// 책이 든 디렉터리. 책 루트면 `_root`다.
+    pub category: String,
+    pub status: CoverListStatus,
+    #[serde(flatten)]
+    pub detail: CoverListDetail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CoverListStatus {
+    Covered,
+    Missing,
+    Error,
+}
+
+/// 검사에 성공하면 검사 결과(제목은 파일 이름에서 뽑는다), 실패하면 오류 문장이다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum CoverListDetail {
+    Inspected(EpubInspection),
+    Failed { title: String, revision: String, error: String },
+}
 type StoreLockFn = Arc<dyn Fn(&Path, &str) -> Box<dyn Any + Send> + Send + Sync>;
 type DeleteCacheFn = Arc<dyn Fn(&Path) -> std::io::Result<()> + Send + Sync>;
 type DirectoriesFn = Arc<dyn Fn(&str) -> std::io::Result<Vec<Value>> + Send + Sync>;
@@ -150,7 +213,7 @@ impl CoverHooks {
     }
 
     /// 표지 검사(`inspect_epub`)를 바꾼다.
-    pub fn with_inspect_epub(mut self, f: impl Fn(&Path) -> Result<Value, CoverError> + Send + Sync + 'static) -> Self {
+    pub fn with_inspect_epub(mut self, f: impl Fn(&Path) -> Result<EpubInspection, CoverError> + Send + Sync + 'static) -> Self {
         self.inspect_epub = Some(Arc::new(f));
         self
     }
@@ -278,8 +341,6 @@ fn now_seconds() -> f64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
 }
 
-use crate::has_content;
-
 fn is_epub_name(name: &str) -> bool {
     Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case("epub"))
 }
@@ -348,7 +409,7 @@ impl CoverManagement {
         &self.hooks.epub_hooks
     }
 
-    fn inspect(&self, path: &Path) -> Result<Value, CoverError> {
+    fn inspect(&self, path: &Path) -> Result<EpubInspection, CoverError> {
         match &self.hooks.inspect_epub {
             Some(f) => f(path),
             None => epub_cover::inspect_epub_with(path, self.epub_hooks()),
@@ -419,7 +480,7 @@ impl CoverManagement {
     }
 
     /// 표지가 없는(`covered`면 있는) EPUB 목록을 `limit`개씩 훑는다.
-    pub fn missing(&self, directory: &str, cursor: &str, limit: usize, covered: bool) -> Result<Value, CoverError> {
+    pub fn missing(&self, directory: &str, cursor: &str, limit: usize, covered: bool) -> Result<CoverList, CoverError> {
         let parent = self.resolve(directory, true)?;
         if !cursor.is_empty() && (!cursor.bytes().all(|b| b.is_ascii_digit()) || cursor.len() > 10) {
             return Err(CoverError::new("목록 cursor가 올바르지 않습니다"));
@@ -437,36 +498,26 @@ impl CoverManagement {
         }
         files.sort_by_key(|(name, _)| (name.to_lowercase(), name.clone()));
         let total = files.len();
-        let mut items: Vec<Value> = Vec::new();
+        let mut items = Vec::new();
         for (_, path) in files.iter().skip(offset).take(limit) {
-            let relative = self.relative_of(path);
             let category = match path.parent() {
                 Some(dir) if dir != self.root => self.relative_of(dir),
                 _ => "_root".to_string(),
             };
-            let identity = json!({"file_path": relative, "book_id": file_inode(path), "category": category, "title": filename_title(path)});
-            match self.inspect(path) {
-                Ok(metadata) => {
-                    let has_cover = metadata.get("has_cover").and_then(Value::as_bool) == Some(true);
-                    if has_cover != covered && !has_content(metadata.get("cover_error")) {
+            let (status, detail) = match self.inspect(path) {
+                Ok(inspection) => {
+                    if inspection.has_cover != covered && inspection.cover_error.is_none() {
                         continue;
                     }
-                    let mut item = metadata;
-                    merge(&mut item, &identity);
-                    item["status"] = json!(if has_cover { "covered" } else { "missing" });
-                    items.push(item);
+                    let status = if inspection.has_cover { CoverListStatus::Covered } else { CoverListStatus::Missing };
+                    (status, CoverListDetail::Inspected(EpubInspection { title: filename_title(path), ..inspection }))
                 }
-                Err(err) => {
-                    let mut item = identity;
-                    item["revision"] = json!(self.revision_of(path));
-                    item["status"] = json!("error");
-                    item["error"] = json!(err.to_string());
-                    items.push(item);
-                }
-            }
+                Err(err) => (CoverListStatus::Error, CoverListDetail::Failed { title: filename_title(path), revision: self.revision_of(path), error: err.to_string() }),
+            };
+            items.push(CoverListItem { file_path: self.relative_of(path), book_id: file_inode(path), category, status, detail });
         }
         let next_offset = (offset + limit).min(total);
-        Ok(json!({"items": items, "next_cursor": if next_offset < total { json!(next_offset.to_string()) } else { Value::Null }, "scanned": next_offset, "total": total}))
+        Ok(CoverList { items, next_cursor: (next_offset < total).then(|| next_offset.to_string()), scanned: next_offset, total })
     }
 
     // ---- 캐시 파일 ----
@@ -568,11 +619,11 @@ impl CoverManagement {
         let path = self.resolve(relative, false)?;
         // 저장 중인 파일을 읽지 않도록 표지 검사에서 공유 잠금을 확인한다.
         let info = self.inspect(&path)?;
-        if info.get("has_cover").and_then(Value::as_bool) != Some(true) {
+        if !info.has_cover {
             return Err(CoverError::new("EPUB에 표지가 없습니다"));
         }
         // 검사가 표지 이미지를 읽지 못했다고 보고하면(크기 상한 초과 등) 썸네일도 만들지 않는다.
-        if has_content(info.get("cover_error")) {
+        if info.cover_error.is_some() {
             return Err(CoverError::new(UNREADABLE_COVER));
         }
         if original {

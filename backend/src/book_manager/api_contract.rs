@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::book_manager::{BookDeletion, CoverPage};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
+use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
 
 /// 사용 가능한 구현이 없을 때 쓰는 사유 문구. 각 trait의 기본 구현이 돌려준다.
@@ -197,22 +198,22 @@ pub trait BookManagerApi: Send + Sync {
     }
 
     /// EPUB 표지를 URL 또는 올린 이미지(base64)로 넣거나 바꾼다.
-    async fn set_epub_cover(&self, _book_id: i64, _url: Option<&str>, _image_data: Option<&str>) -> Result<Value, String> {
+    async fn set_epub_cover(&self, _book_id: i64, _url: Option<&str>, _image_data: Option<&str>) -> Result<CoverSave, String> {
         Err(UNIMPLEMENTED.to_string())
     }
 
     /// EPUB 쪽 이미지의 크롭·분할·삭제·삽입을 한 번에 저장한다. 항목은 라우트가 검증한 JSON 객체다.
-    async fn edit_epub_images(&self, _book_id: i64, _crops: &[Value], _splits: &[Value], _deletes: &[Value], _inserts: &[Value]) -> Result<Value, String> {
+    async fn edit_epub_images(&self, _book_id: i64, _crops: &[Value], _splits: &[Value], _deletes: &[Value], _inserts: &[Value]) -> Result<CoverSave, String> {
         Err(UNIMPLEMENTED.to_string())
     }
 
     /// EPUB 표지를 뺀다.
-    async fn remove_epub_cover(&self, _book_id: i64) -> Result<Value, String> {
+    async fn remove_epub_cover(&self, _book_id: i64) -> Result<CoverSave, String> {
         Err(UNIMPLEMENTED.to_string())
     }
 
     /// `before_idref` 페이지 앞에 삽화를 넣는다.
-    async fn insert_epub_illustration(&self, _book_id: i64, _before_idref: &str, _url: Option<&str>, _image_data: Option<&str>) -> Result<Value, String> {
+    async fn insert_epub_illustration(&self, _book_id: i64, _before_idref: &str, _url: Option<&str>, _image_data: Option<&str>) -> Result<CoverSave, String> {
         Err(UNIMPLEMENTED.to_string())
     }
 

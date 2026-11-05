@@ -14,8 +14,9 @@ use crate::common::shared_fixtures::{assert_refused, edit, full, jpeg, size, tex
 use async_trait::async_trait;
 use backend::book_manager::{BookLookup, BookManager, BookManagerDeps, BookRef};
 use backend::book_metadata::BookLookupError;
+use backend::cover_management::CoverSave;
 use backend::direct_cover_url::{FetchError, ImageFetcher};
-use backend::epub_cover::{EditImages, OPF_NS, read_package};
+use backend::epub_cover::{CreatedIdrefs, EditImages, OPF_NS, read_package};
 use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
@@ -44,14 +45,14 @@ fn manifest_ids_of(path: &Path, opf: &str) -> BTreeSet<String> {
 
 /// `MagicMock` book_manager. 호출 인자를 기록하고 정해 둔 `(result, error)`를 돌려준다.
 struct FakeManager {
-    edit_epub_images: Mutex<(Option<Value>, Option<String>)>,
+    edit_epub_images: Mutex<(Option<CoverSave>, Option<String>)>,
     /// (메서드 이름, 인자 목록): `await_args.args`에 대응한다.
     calls: Mutex<Vec<(String, Vec<Value>)>>,
 }
 
 impl FakeManager {
     fn new() -> Arc<Self> {
-        Arc::new(Self { edit_epub_images: Mutex::new((Some(json!({"idrefs": {"inserted": [], "split": {}}})), None)), calls: Mutex::new(Vec::new()) })
+        Arc::new(Self { edit_epub_images: Mutex::new((Some(CoverSave { idrefs: Some(CreatedIdrefs::default()), ..CoverSave::default() }), None)), calls: Mutex::new(Vec::new()) })
     }
 
     fn args(&self, method: &str) -> Vec<Value> {
@@ -61,7 +62,7 @@ impl FakeManager {
 
 #[async_trait]
 impl BookManagerApi for FakeManager {
-    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String> {
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<CoverSave, String> {
         self.calls.lock().unwrap().push(("edit_epub_images".into(), vec![json!(book_id), json!(crops), json!(splits), json!(deletes), json!(inserts)]));
         let (value, error) = self.edit_epub_images.lock().unwrap().clone();
         error.map_or(Ok(value.unwrap_or_default()), Err)
@@ -79,7 +80,7 @@ fn test_crop_replaces_the_image_in_place_keeping_the_format() {
     assert_eq!(&after["OPS/img/2.png"][..8], b"\x89PNG\r\n\x1a\n");
     assert_eq!(after["OPS/p1.xhtml"], before["OPS/p1.xhtml"]);
     assert!(b.trash.join("book.epub").exists());
-    assert!(result["cover_image"].is_null() && result["idrefs"] == json!({"inserted": [], "split": {}}), "{result}");
+    assert!(result.cover_image.is_none() && result.idrefs == Some(CreatedIdrefs::default()), "{result:?}");
 }
 
 #[test]
@@ -123,7 +124,7 @@ fn test_crop_region_errors_are_reported_in_korean() {
 fn test_split_replaces_the_original_and_adds_a_page_right_after() {
     let b = book();
     let result = b.edit(EditImages { splits: vec![json!({"idref": "p1", "first": [0, 0, 0.5, 1, 0], "second": [0.5, 0, 1, 1, 0]})], ..EditImages::default() }).unwrap();
-    let new_id = result["idrefs"]["split"]["p1"].as_str().unwrap().to_string();
+    let new_id = result.idrefs.as_ref().unwrap().split["p1"].clone();
     assert!(new_id.starts_with("tm-split-page-"), "{new_id}");
     let order = spine(&b.path);
     assert_eq!(order[..3], ["p1".to_string(), new_id.clone(), "p2".to_string()]);
@@ -142,7 +143,7 @@ fn test_split_in_a_page_with_text_happens_inside_the_page() {
     let path = make_book(&tmp.path().join("t").join("book.epub"), &[("OPS/p1.xhtml", page(&["img/1.jpg"], "<p>설명 글</p>").into_bytes())]);
     let result =
         edit(&path, &tmp.path().join("0_trash"), EditImages { splits: vec![json!({"idref": "p1", "first": [0, 0, 0.5, 1, 0], "second": [0.5, 0, 1, 1, 0]})], ..EditImages::default() }).unwrap();
-    assert!(result["idrefs"]["split"] == json!({}) && spine(&path)[..2] == ["p1".to_string(), "p2".to_string()], "{result}");
+    assert!(result.idrefs.as_ref().unwrap().split.is_empty() && spine(&path)[..2] == ["p1".to_string(), "p2".to_string()], "{result:?}");
     let text = text_of(&read(&path), "OPS/p1.xhtml");
     assert!(text.matches("<img").count() == 2 && text.contains("설명 글"), "{text}");
 }
@@ -271,7 +272,7 @@ fn test_delete_refuses_to_empty_the_book() {
 fn test_multiple_inserts_keep_their_order_before_the_same_page() {
     let b = book();
     let result = b.edit(EditImages { inserts: vec![("p2".into(), jpeg("red")), ("p2".into(), jpeg("blue")), ("p1".into(), jpeg("green"))], ..EditImages::default() }).unwrap();
-    let ids: Vec<String> = result["idrefs"]["inserted"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    let ids: Vec<String> = result.idrefs.as_ref().unwrap().inserted.clone();
     let (first, second, third) = (ids[0].clone(), ids[1].clone(), ids[2].clone());
     let order = spine(&b.path);
     assert_eq!(order[..5], [third, "p1".to_string(), first, second, "p2".to_string()]);
@@ -281,7 +282,7 @@ fn test_multiple_inserts_keep_their_order_before_the_same_page() {
 fn test_insert_may_target_a_page_deleted_in_the_same_request() {
     let b = book();
     let result = b.edit(EditImages { inserts: vec![("p2".into(), jpeg("red"))], deletes: vec![json!("p2")], ..EditImages::default() }).unwrap();
-    let inserted = result["idrefs"]["inserted"][0].as_str().unwrap().to_string();
+    let inserted = result.idrefs.as_ref().unwrap().inserted[0].clone();
     let order = spine(&b.path);
     assert!(order[..2] == ["p1".to_string(), inserted] && !order.contains(&"p2".to_string()), "{order:?}");
 }
@@ -309,7 +310,8 @@ fn test_combined_request_is_applied_atomically() {
         })
         .unwrap();
     assert_eq!(size(&read(&b.path)["OPS/img/1.jpg"]), (100, 100));
-    assert!(result["idrefs"]["inserted"].as_array().unwrap().len() == 1 && result["idrefs"]["split"].get("p2").is_some(), "{result}");
+    let idrefs = result.idrefs.as_ref().unwrap();
+    assert!(idrefs.inserted.len() == 1 && idrefs.split.contains_key("p2"), "{result:?}");
     // archive.testzip() is None: 모든 멤버를 끝까지 읽어 CRC를 확인한다.
     let mut archive = ZipArchive::new(File::open(&b.path).unwrap()).unwrap();
     for i in 0..archive.len() {
@@ -387,7 +389,8 @@ async fn test_manager_applies_a_combined_edit_and_keeps_the_original_in_trash() 
         )
         .await
         .unwrap();
-    assert!(result["idrefs"]["inserted"].as_array().unwrap().len() == 2 && result["idrefs"]["split"].get("p2").is_some(), "{result}");
+    let idrefs = result.idrefs.as_ref().unwrap();
+    assert!(idrefs.inserted.len() == 2 && idrefs.split.contains_key("p2"), "{result:?}");
     assert_eq!(fs::read(m.tmp.path().join("0_trash").join("book.epub")).unwrap(), original);
     assert_eq!(m.es.updates().len(), 1);
 }
@@ -423,7 +426,7 @@ mod test_route {
         });
         let response = http.post_json("/epub-images/1", &body).await;
         assert_eq!(response.status, 200);
-        assert_eq!(response.json(), json!({"status": "success", "result": {"idrefs": {"inserted": [], "split": {}}}}));
+        assert_eq!(response.json(), json!({"status": "success", "result": CoverSave { idrefs: Some(CreatedIdrefs::default()), ..CoverSave::default() }}));
         let args = fake.args("edit_epub_images");
         assert!(args[0] == json!(1) && args[1][0]["idref"] == "p1" && args[1][0]["index"] == json!(1) && args[1][0]["angle"].as_f64() == Some(2.0), "{args:?}");
         assert!(args[2][0]["first"]["x1"].as_f64() == Some(0.5) && args[3] == json!([{"idref": "p3", "index": 0}]) && args[4][0]["before_idref"] == "p1", "{args:?}");
@@ -480,7 +483,7 @@ fn test_multi_image_page_split_adds_an_image_inside_the_page() {
     let b = multi();
     let before = read(&b.path);
     let result = b.edit(EditImages { splits: vec![json!({"idref": "multi", "index": 1, "first": [0, 0, 0.5, 1, 0], "second": [0.5, 0, 1, 1, 0]})], ..EditImages::default() }).unwrap();
-    assert_eq!(result["idrefs"]["split"], json!({}));
+    assert!(result.idrefs.unwrap().split.is_empty());
     let after = read(&b.path);
     let page_text = text_of(&after, "OEBPS/Text/multi.xhtml");
     assert_eq!(page_text.matches("<img").count(), 3);

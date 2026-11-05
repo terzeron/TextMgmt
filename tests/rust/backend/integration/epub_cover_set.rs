@@ -12,7 +12,8 @@ use crate::common::cover_env::{env, split};
 use crate::common::shared_fixtures::URL;
 use crate::common::shared_fixtures::{assert_cover_error, attach_publisher_cover_page, cover_tmp_files, elements, err_has, has_cover, publisher_cover_epub, revision, spine_idrefs, xml_text};
 use backend::book_manager::BookManagerApi;
-use backend::epub_cover::{self, CoverError};
+use backend::cover_management::CoverSave;
+use backend::epub_cover::{self, CoverError, EpubRewrite};
 use backend::main::{AppDeps, AuthMode, app_with};
 use common::{
     TestClient,
@@ -21,7 +22,7 @@ use common::{
     image::{b64, color_jpeg, red_jpeg},
     zipx::{Members, bytes_replace, rewrite_epub_members},
 };
-use serde_json::{Value, json};
+use serde_json::json;
 
 // ── 도구 ───────────────────────────────────────────────────
 
@@ -75,7 +76,7 @@ async fn test_adds_a_cover_to_an_epub_without_one() {
     assert!(error.is_none());
     assert!(has_cover(&env.path));
     let result = result.unwrap();
-    assert_eq!(result["file_size"].as_u64(), Some(env.size()));
+    assert_eq!(result.file_size, env.size());
     let calls = env.es.updates();
     assert_eq!(calls.len(), 1, "update는 한 번만 불려야 한다");
     let (doc_id, kwargs) = &calls[0];
@@ -83,7 +84,7 @@ async fn test_adds_a_cover_to_an_epub_without_one() {
     // 최신 책 목록(updated_time 순)에 오르도록 방금 시각을 색인한다. 만화 인덱스의 strptime 형식과도 맞아야 한다.
     let stamp = parse_updated_time(kwargs["updated_time"].as_str().unwrap());
     assert!((chrono::Local::now().naive_local() - stamp).num_milliseconds().abs() < 60_000);
-    assert!(result.get("warning").is_none());
+    assert!(result.warning.is_none());
 }
 
 #[tokio::test]
@@ -161,7 +162,7 @@ async fn test_index_update_failure_keeps_the_saved_cover_and_warns() {
 
     assert!(error.is_none());
     assert!(has_cover(&env.path));
-    assert!(result.unwrap()["warning"].as_str().unwrap().contains("색인"));
+    assert!(result.unwrap().warning.unwrap().contains("색인"));
 }
 
 #[tokio::test]
@@ -182,7 +183,7 @@ async fn test_removes_a_cover_added_by_this_tool() {
     // 본문은 그대로다.
     assert_eq!(Members::read(&env.path).get("OPS/chapter.xhtml"), &"<html><body>본문을 보존한다.</body></html>".as_bytes().to_vec());
     let result = result.unwrap();
-    assert!(result["cover_image"].is_null() && result["file_size"].as_u64() == Some(env.size()));
+    assert!(result.cover_image.is_none() && result.file_size == env.size());
     // 처음 원본은 0_trash 에 그대로 있다(표지를 넣을 때 보존한 것).
     assert!(fs::read(env.dir().join("0_trash").join("book.epub")).unwrap() == original && with_cover != original);
     let calls = env.es.updates();
@@ -329,7 +330,7 @@ async fn test_illustration_is_inserted_before_the_chosen_page_without_touching_t
     let (result, error) = env.illustrate("chapter").await;
 
     assert!(error.is_none());
-    let idref = result.unwrap()["idref"].as_str().unwrap().to_string();
+    let idref = result.unwrap().idref.unwrap();
     assert!(idref.starts_with("tm-plate-page-"));
     let ids = spine_idrefs(&env.path);
     assert!(ids[0].starts_with("tm-cover-page-") && ids[1].starts_with("tm-plate-page-") && ids.last().unwrap() == "chapter");
@@ -386,9 +387,9 @@ async fn test_the_same_image_can_be_inserted_at_several_places() {
 
     assert!(error.is_none());
     let (first, second) = (first.unwrap(), second.unwrap());
-    assert_ne!(first["idref"], second["idref"]);
+    assert_ne!(first.idref, second.idref);
     let ids = spine_idrefs(&env.path);
-    assert_eq!(ids[..3], [first["idref"].as_str().unwrap().to_string(), second["idref"].as_str().unwrap().to_string(), "chapter".to_string()]);
+    assert_eq!(ids[..3], [first.idref.clone().unwrap(), second.idref.clone().unwrap(), "chapter".to_string()]);
     let plates: std::collections::HashSet<String> = Members::read(&env.path).names().into_iter().filter(|n| n.starts_with("OPS/tm-plate-") && n.ends_with(".jpg")).collect();
     assert_eq!(plates.len(), 2);
 }
@@ -424,7 +425,7 @@ async fn test_removes_a_publisher_cover_and_preserves_the_original_backup() {
     let (result, error) = env.remove().await;
 
     assert!(error.is_none());
-    assert!(result.unwrap()["cover_image"].is_null());
+    assert!(result.unwrap().cover_image.is_none());
     assert!(!has_cover(&env.path));
     assert_eq!(fs::read(env.dir().join("0_trash").join("book.epub")).unwrap(), before);
     assert_eq!(Members::read(&env.path).get("OPS/chapter.xhtml"), &"<html><body>본문을 보존한다.</body></html>".as_bytes().to_vec());
@@ -601,7 +602,7 @@ async fn test_remove_index_failure_keeps_the_change_and_warns() {
     let (result, error) = env.remove().await;
 
     assert!(error.is_none());
-    assert!(result.unwrap()["warning"].as_str().unwrap().contains("색인"));
+    assert!(result.unwrap().warning.unwrap().contains("색인"));
 }
 
 // ── 엔드포인트: fake manager를 끼운 앱 ──────────────────────
@@ -613,7 +614,7 @@ enum FakeCall {
     Illustrate(i64, String, Option<String>, Option<String>),
 }
 
-type Outcome = (Option<Value>, Option<String>);
+type Outcome = (Option<CoverSave>, Option<String>);
 
 /// `MagicMock` book_manager. 호출 인자를 기록하고 정해 둔 `(result, error)`를 돌려준다.
 struct FakeBookManager {
@@ -627,9 +628,9 @@ impl FakeBookManager {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             calls: Mutex::new(Vec::new()),
-            set_epub_cover: Mutex::new((Some(json!({"file_size": 10})), None)),
-            remove_epub_cover: Mutex::new((Some(json!({"file_size": 9})), None)),
-            insert_epub_illustration: Mutex::new((Some(json!({"idref": "tm-plate-page-x"})), None)),
+            set_epub_cover: Mutex::new((Some(CoverSave { file_size: 10, ..CoverSave::default() }), None)),
+            remove_epub_cover: Mutex::new((Some(CoverSave { file_size: 9, ..CoverSave::default() }), None)),
+            insert_epub_illustration: Mutex::new((Some(CoverSave { idref: Some("tm-plate-page-x".into()), ..CoverSave::default() }), None)),
         })
     }
 
@@ -640,19 +641,19 @@ impl FakeBookManager {
 
 #[async_trait::async_trait]
 impl BookManagerApi for FakeBookManager {
-    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
+    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<CoverSave, String> {
         self.calls.lock().unwrap().push(FakeCall::SetCover(book_id, url.map(String::from), image_data.map(String::from)));
         let (value, error) = self.set_epub_cover.lock().unwrap().clone();
         error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 
-    async fn remove_epub_cover(&self, book_id: i64) -> Result<Value, String> {
+    async fn remove_epub_cover(&self, book_id: i64) -> Result<CoverSave, String> {
         self.calls.lock().unwrap().push(FakeCall::RemoveCover(book_id));
         let (value, error) = self.remove_epub_cover.lock().unwrap().clone();
         error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 
-    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
+    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<CoverSave, String> {
         self.calls.lock().unwrap().push(FakeCall::Illustrate(book_id, before_idref.to_string(), url.map(String::from), image_data.map(String::from)));
         let (value, error) = self.insert_epub_illustration.lock().unwrap().clone();
         error.map_or(Ok(value.unwrap_or_default()), Err)
@@ -675,7 +676,7 @@ mod test_epub_cover_endpoint {
         let (http, fake) = endpoint_client();
         let response = http.post_json("/epub-cover/1", &json!({"url": URL})).await;
         assert_eq!(response.status, 200);
-        assert_eq!(response.json(), json!({"status": "success", "result": {"file_size": 10}}));
+        assert_eq!(response.json(), json!({"status": "success", "result": CoverSave { file_size: 10, ..CoverSave::default() }}));
         assert_eq!(fake.calls(), [FakeCall::SetCover(1, Some(URL.to_string()), None)]);
     }
 
@@ -711,7 +712,7 @@ mod test_epub_cover_endpoint {
         let (http, fake) = endpoint_client();
         let response = http.post_json("/epub-illustration/1", &json!({"url": URL, "before_idref": "chapter"})).await;
         assert_eq!(response.status, 200);
-        assert_eq!(response.json(), json!({"status": "success", "result": {"idref": "tm-plate-page-x"}}));
+        assert_eq!(response.json(), json!({"status": "success", "result": CoverSave { idref: Some("tm-plate-page-x".into()), ..CoverSave::default() }}));
         assert_eq!(fake.calls(), [FakeCall::Illustrate(1, "chapter".to_string(), Some(URL.to_string()), None)]);
     }
 
@@ -743,7 +744,7 @@ mod test_epub_cover_endpoint {
         let (http, fake) = endpoint_client();
         let response = http.delete("/epub-cover/1").await;
         assert_eq!(response.status, 200);
-        assert_eq!(response.json(), json!({"status": "success", "result": {"file_size": 9}}));
+        assert_eq!(response.json(), json!({"status": "success", "result": CoverSave { file_size: 9, ..CoverSave::default() }}));
         assert_eq!(fake.calls(), [FakeCall::RemoveCover(1)]);
     }
 
@@ -774,7 +775,7 @@ async fn test_adds_a_cover_from_an_uploaded_image_without_fetching() {
 
     assert!(error.is_none());
     assert!(has_cover(&env.path));
-    assert_eq!(result.unwrap()["file_size"].as_u64(), Some(env.size()));
+    assert_eq!(result.unwrap().file_size, env.size());
     assert_eq!(env.es.updates().len(), 1, "update는 한 번만 불려야 한다");
 }
 
@@ -831,7 +832,7 @@ mod test_epub_cover_upload_endpoint {
         let (http, fake) = upload_client();
         let response = http.post_json("/epub-cover/1", &json!({"image_data": "QUJD"})).await;
         assert_eq!(response.status, 200);
-        assert_eq!(response.json(), json!({"status": "success", "result": {"file_size": 10}}));
+        assert_eq!(response.json(), json!({"status": "success", "result": CoverSave { file_size: 10, ..CoverSave::default() }}));
         assert_eq!(fake.calls(), [FakeCall::SetCover(1, None, Some("QUJD".to_string()))]);
     }
 
@@ -845,7 +846,7 @@ mod test_epub_cover_upload_endpoint {
     }
 }
 
-fn remove_directly(path: &Path, tmp_path: &Path) -> Result<Value, CoverError> {
+fn remove_directly(path: &Path, tmp_path: &Path) -> Result<EpubRewrite, CoverError> {
     epub_cover::remove_cover(path, &revision(path), &tmp_path.join(".cover_backups"))
 }
 

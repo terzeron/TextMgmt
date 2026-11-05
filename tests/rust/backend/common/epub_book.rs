@@ -3,8 +3,7 @@
 
 use super::shared_fixtures::{MULTI_PAGE, edit, gif, jpeg, png};
 use super::zipx::{Members as ZipMembers, ZipMode, write_zip_with};
-use backend::epub_cover::{CoverError, EditImages, OPF_NS};
-use serde_json::Value;
+use backend::epub_cover::{CoverError, EditImages, EpubRewrite, OPF_NS};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -17,7 +16,7 @@ pub struct Book {
 }
 
 impl Book {
-    pub fn edit(&self, args: EditImages) -> Result<Value, CoverError> {
+    pub fn edit(&self, args: EditImages) -> Result<EpubRewrite, CoverError> {
         edit(&self.path, &self.trash, args)
     }
 }

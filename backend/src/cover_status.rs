@@ -62,7 +62,7 @@ pub fn pdf_first_image_size(path: &Path, lock: &Mutex<()>) -> Result<Option<(u32
 pub fn has_official_cover(path: &Path, file_type: &str, lock: &Mutex<()>) -> Result<bool, String> {
     match file_type {
         "pdf" => Ok(pdf_first_image_size(path, lock)?.is_some_and(|size| STANDARD_COVER_SIZES.contains(&size))),
-        "epub" => crate::epub_cover::inspect_epub(path).map(|v| v["has_cover"].as_bool().unwrap_or(false)).map_err(|e| e.to_string()),
+        "epub" => crate::epub_cover::inspect_epub(path).map(|inspection| inspection.has_cover).map_err(|e| e.to_string()),
         _ => Ok(true),
     }
 }

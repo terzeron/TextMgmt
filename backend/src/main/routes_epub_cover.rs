@@ -103,7 +103,7 @@ impl TryFrom<RawIllustration> for EpubIllustrationBody {
     }
 }
 
-fn outcome(result: Result<Value, String>) -> Json<Value> {
+fn outcome<T: Serialize>(result: Result<T, String>) -> Json<Value> {
     match result {
         Ok(result) => Json(json!({"status": "success", "result": result})),
         Err(error) => Json(json!({"status": "failure", "error": error})),

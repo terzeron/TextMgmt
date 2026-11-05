@@ -59,7 +59,7 @@ impl CoverManagement {
 
     // ---- 저장 ----
 
-    pub fn apply(&self, relative: &str, candidate_id: &str, expected_revision: &str) -> Result<Value, CoverError> {
+    pub fn apply(&self, relative: &str, candidate_id: &str, expected_revision: &str) -> Result<CoverSave, CoverError> {
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let _lock = self.book_lock(&relative, true)?;
@@ -75,19 +75,19 @@ impl CoverManagement {
         self.save_cover(&path, &relative, &data, expected_revision, false, Backup::default())
     }
 
-    pub fn apply_url(&self, relative: &str, url: &str, expected_revision: &str, replace_existing: bool) -> Result<Value, CoverError> {
+    pub fn apply_url(&self, relative: &str, url: &str, expected_revision: &str, replace_existing: bool) -> Result<CoverSave, CoverError> {
         self.apply_url_backup(relative, url, expected_revision, replace_existing, Backup::default())
     }
 
-    pub fn apply_url_backup(&self, relative: &str, url: &str, expected_revision: &str, replace_existing: bool, backup: Backup<'_>) -> Result<Value, CoverError> {
+    pub fn apply_url_backup(&self, relative: &str, url: &str, expected_revision: &str, replace_existing: bool, backup: Backup<'_>) -> Result<CoverSave, CoverError> {
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let _lock = self.book_lock(&relative, true)?;
-        let metadata = self.inspect(&path)?;
-        if str_field(&metadata, "revision") != expected_revision {
+        let inspection = self.inspect(&path)?;
+        if inspection.revision != expected_revision {
             return Err(CoverError::new(BOOK_CHANGED));
         }
-        if metadata.get("has_cover").and_then(Value::as_bool) == Some(true) && !replace_existing {
+        if inspection.has_cover && !replace_existing {
             return Err(CoverError::new(ALREADY_COVERED));
         }
         let data = self.download_image(url)?;
@@ -106,7 +106,7 @@ impl CoverManagement {
         Ok(fetcher.fetch_url_image(url)?)
     }
 
-    pub fn insert_illustration(&self, relative: &str, expected_revision: &str, before_idref: &str, image_data: Option<&str>) -> Result<Value, CoverError> {
+    pub fn insert_illustration(&self, relative: &str, expected_revision: &str, before_idref: &str, image_data: Option<&str>) -> Result<CoverSave, CoverError> {
         self.insert_illustration_backup(relative, expected_revision, before_idref, None, image_data, Backup::default())
     }
 
@@ -119,7 +119,7 @@ impl CoverManagement {
         url: Option<&str>,
         image_data: Option<&str>,
         backup: Backup<'_>,
-    ) -> Result<Value, CoverError> {
+    ) -> Result<CoverSave, CoverError> {
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let decoded = match image_data.filter(|d| !d.is_empty()) {
@@ -136,7 +136,7 @@ impl CoverManagement {
     }
 
     /// 쪽 이미지를 한 번에 크롭·분할·삭제·삽입한다. `inserts`는 `[{before_idref, url | image_data(base64)}]`다.
-    pub fn edit_images(&self, relative: &str, expected_revision: &str, edits: epub_cover::EditImages, inserts: &[Value], backup: Backup<'_>) -> Result<Value, CoverError> {
+    pub fn edit_images(&self, relative: &str, expected_revision: &str, edits: epub_cover::EditImages, inserts: &[Value], backup: Backup<'_>) -> Result<CoverSave, CoverError> {
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let mut decoded: Vec<(String, Option<Vec<u8>>, String)> = Vec::new();
@@ -165,11 +165,11 @@ impl CoverManagement {
         self.finish_save(&relative, result, expected_revision)
     }
 
-    pub fn apply_image(&self, relative: &str, image_data: &str, expected_revision: &str) -> Result<Value, CoverError> {
+    pub fn apply_image(&self, relative: &str, image_data: &str, expected_revision: &str) -> Result<CoverSave, CoverError> {
         self.apply_image_backup(relative, image_data, expected_revision, Backup::default())
     }
 
-    pub fn apply_image_backup(&self, relative: &str, image_data: &str, expected_revision: &str, backup: Backup<'_>) -> Result<Value, CoverError> {
+    pub fn apply_image_backup(&self, relative: &str, image_data: &str, expected_revision: &str, backup: Backup<'_>) -> Result<CoverSave, CoverError> {
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let data = decode_base64(image_data).map_err(|_| CoverError::new("표지 이미지 데이터를 읽을 수 없습니다"))?;
@@ -177,7 +177,7 @@ impl CoverManagement {
         self.save_cover(&path, &relative, &data, expected_revision, true, backup)
     }
 
-    pub fn clear_cache(&self, relative: &str, expected_revision: &str) -> Result<Value, CoverError> {
+    pub fn clear_cache(&self, relative: &str, expected_revision: &str) -> Result<CacheCleared, CoverError> {
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let _lock = self.book_lock(&relative, true)?;
@@ -185,16 +185,16 @@ impl CoverManagement {
             return Err(CoverError::new(BOOK_CHANGED));
         }
         self.delete_book_cache(&relative, expected_revision)?;
-        Ok(json!({"cleared": true, "file_path": relative}))
+        Ok(CacheCleared { cleared: true, file_path: relative })
     }
 
-    fn save_cover(&self, path: &Path, relative: &str, image: &[u8], expected_revision: &str, replace_existing: bool, backup: Backup<'_>) -> Result<Value, CoverError> {
+    fn save_cover(&self, path: &Path, relative: &str, image: &[u8], expected_revision: &str, replace_existing: bool, backup: Backup<'_>) -> Result<CoverSave, CoverError> {
         let result = epub_cover::add_cover_backup_with(path, image, expected_revision, &self.backup_dir(backup), replace_existing, backup.name, self.epub_hooks())?;
         self.finish_save(relative, result, expected_revision)
     }
 
     /// 이 도구가 넣은 표지를 EPUB에서 빼고, 저장 때와 같이 캐시를 비운다.
-    pub fn remove(&self, relative: &str, expected_revision: &str, backup: Backup<'_>) -> Result<Value, CoverError> {
+    pub fn remove(&self, relative: &str, expected_revision: &str, backup: Backup<'_>) -> Result<CoverSave, CoverError> {
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let _lock = self.book_lock(&relative, true)?;
@@ -202,26 +202,25 @@ impl CoverManagement {
         self.finish_save(&relative, result, expected_revision)
     }
 
-    fn finish_save(&self, relative: &str, mut result: Value, expected_revision: &str) -> Result<Value, CoverError> {
+    fn finish_save(&self, relative: &str, result: EpubRewrite, expected_revision: &str) -> Result<CoverSave, CoverError> {
+        let mut warning = None;
         if let Err(err) = self.delete_book_cache(relative, expected_revision) {
             log::warn!("Cover saved; candidate cache cleanup failed: {:?}", err.kind());
-            result["warning"] = json!("EPUB 표지를 저장했습니다. 후보 캐시를 삭제하지 못했습니다");
+            warning = Some("EPUB 표지를 저장했습니다. 후보 캐시를 삭제하지 못했습니다".to_string());
         }
-        let book_id = result.get("book_id").and_then(Value::as_u64).unwrap_or(0);
-        self.invalidate_view_cache(book_id);
-        let backup_path = Path::new(str_field(&result, "backup_path"));
+        self.invalidate_view_cache(result.book_id);
+        let backup_path = Path::new(&result.backup_path);
         let backup_relative = backup_path.strip_prefix(&self.root).map_err(|_| CoverError::io("백업 경로가 책 디렉토리 밖입니다"))?.to_string_lossy().into_owned();
-        let mut response = Map::new();
-        response.insert("file_path".to_string(), json!(relative));
-        for key in ["revision", "book_id", "file_size", "cover_image"] {
-            response.insert(key.to_string(), result.get(key).cloned().unwrap_or(Value::Null));
-        }
-        response.insert("backup_path".to_string(), json!(backup_relative));
-        for key in ["warning", "idref", "idrefs"] {
-            if has_content(result.get(key)) {
-                response.insert(key.to_string(), result[key].clone());
-            }
-        }
-        Ok(Value::Object(response))
+        Ok(CoverSave {
+            file_path: relative.to_string(),
+            revision: result.revision,
+            book_id: result.book_id,
+            file_size: result.file_size,
+            cover_image: result.cover_image,
+            backup_path: backup_relative,
+            warning,
+            idref: result.idref.filter(|idref| !idref.is_empty()),
+            idrefs: result.idrefs,
+        })
     }
 }

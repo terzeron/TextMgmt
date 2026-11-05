@@ -8,18 +8,18 @@ mod common;
 mod fx;
 use crate::common::cover_env::{env, split};
 use crate::common::shared_fixtures::URL;
-use crate::common::shared_fixtures::{assert_cover_error, backups, cover_tmp_files, epub_with_cover, has_cover, hooks_with, opf_of, publisher_cover_epub, read, rev, revision, str_of, truthy};
+use crate::common::shared_fixtures::{assert_cover_error, backups, cover_tmp_files, epub_with_cover, has_cover, hooks_with, opf_of, publisher_cover_epub, read, rev, revision};
 use crate::common::{epub::append_child, epub::attr_of_element_with_id, epub::count_elements, epub::remove_element, fsx::count_matching, image::RED, image::encode_image, image::image_size};
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::epub_cover;
-use backend::epub_cover::{CoverError, EpubCoverHooks, Limits};
+use backend::epub_cover::{CoverError, CoverImageInfo, EpubCoverHooks, EpubInspection, EpubRewrite, Limits};
 use common::epub::{EpubSpec, make_epub};
 use common::faulty_fs::{FaultyFs, other_err};
 use common::fsx::{ino_mtime, sha256_hex};
 use common::image::{color_jpeg, red_jpeg};
 use common::zipx::{read_zip_entry, rewrite_epub_members};
 use image::ImageFormat;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::VecDeque;
 use std::fs;
 use std::fs::File;
@@ -78,7 +78,7 @@ fn test_failed_write_restores_the_current_file_not_the_older_backup() {
     assert!(cover_tmp_files(tmp_path).is_empty());
 }
 
-fn remove_directly_with(path: &Path, tmp_path: &Path, hooks: &EpubCoverHooks) -> Result<Value, CoverError> {
+fn remove_directly_with(path: &Path, tmp_path: &Path, hooks: &EpubCoverHooks) -> Result<EpubRewrite, CoverError> {
     epub_cover::remove_cover_with(path, &revision(path), &tmp_path.join(".cover_backups"), hooks)
 }
 
@@ -121,7 +121,7 @@ fn test_removal_is_rejected_when_the_staged_epub_still_reports_a_cover() {
     let path = publisher_cover_epub(tmp.path(), &[]);
     let original = fs::read(&path).unwrap();
     let rev = revision(&path);
-    let hooks = EpubCoverHooks::default().with_inspect_archive(Arc::new(|_inspected: Value| json!({"has_cover": true})));
+    let hooks = EpubCoverHooks::default().with_inspect_archive(Arc::new(|_inspected| EpubInspection { has_cover: true, ..EpubInspection::default() }));
 
     assert_cover_error(epub_cover::remove_cover_with(&path, &rev, &tmp.path().join(".cover_backups"), &hooks), "표지를 삭제한 EPUB의 검증에 실패");
 
@@ -174,7 +174,7 @@ fn test_inspection_reads_headers_without_decoding_pixels() {
 
     let hooks = EpubCoverHooks::default().with_pixel_decode_observer(Arc::new(|| panic!("목록 검사에서 이미지 전체를 디코딩했다")));
     let result = epub_cover::inspect_epub_with(&path, &hooks).unwrap();
-    assert_eq!(result["cover_image"], json!({"width": 120, "height": 180, "byte_size": byte_size}));
+    assert_eq!(result.cover_image, Some(CoverImageInfo { byte_size: byte_size as u64, width: Some(120), height: Some(180) }));
     assert_eq!(std::fs::read(&path).unwrap(), original);
 }
 
@@ -193,9 +193,9 @@ fn test_unreadable_existing_cover_metadata_is_a_warning() {
         } else {
             epub_cover::inspect_epub_with(&path, &EpubCoverHooks::default().with_limits(Limits { max_image_pixels: 1, ..Limits::default() })).unwrap()
         };
-        assert!(truthy(&result["has_cover"]), "kind={kind}");
-        assert!(truthy(&result["cover_error"]), "kind={kind}");
-        assert!(result["cover_image"].is_null(), "kind={kind}");
+        assert!(result.has_cover, "kind={kind}");
+        assert!(result.cover_error.is_some(), "kind={kind}");
+        assert!(result.cover_image.is_none(), "kind={kind}");
     }
 }
 
@@ -256,7 +256,7 @@ mod image_page_cropping {
         svg_epub(&path, (300, 400), "표지", false);
         // `deletes`에 idref "c" 하나를 넘긴다.
         let result = edit_images(&path, &revision(&path), &tmp.path().join("trash"), EditImages { deletes: vec![json!("c")], ..EditImages::default() }).unwrap();
-        assert!(result["revision"].as_str().is_some_and(|r| !r.is_empty()), "{result}");
+        assert!(!result.revision.is_empty(), "{result:?}");
     }
 
     #[test]
@@ -304,7 +304,7 @@ fn test_failed_write_restores_original() {
     let root = tmp.path();
     let path = make_epub(&root.join("test.epub"), &EpubSpec::cover("3.0", false));
     let original = read(&path);
-    let revision = epub_cover::inspect_epub(&path).unwrap()["revision"].as_str().unwrap().to_string();
+    let revision = epub_cover::inspect_epub(&path).unwrap().revision;
     let calls = AtomicUsize::new(0);
     let fs = FaultyFs::new();
     fs.set_sync_file(move |_file| if calls.fetch_add(1, Ordering::SeqCst) + 1 == 3 { Some(other_err("write failed")) } else { None });
@@ -349,15 +349,15 @@ fn test_epub_validation_limits_and_svg_cover() {
                     members.set("OPS/cover.svg", &br#"<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>"#[..]);
                     members.remove("OPS/cover.jpg");
                 });
-                assert!(truthy(&epub_cover::inspect_epub(&path).unwrap()["has_cover"]), "mode={mode}");
+                assert!(epub_cover::inspect_epub(&path).unwrap().has_cover, "mode={mode}");
                 continue;
             }
             _ => {
                 limits.max_image_bytes = 1;
                 let result = epub_cover::inspect_epub_with(&path, &hooks.with_limits(limits)).unwrap();
-                assert!(truthy(&result["has_cover"]), "mode={mode}");
-                assert!(result["cover_image"].is_null(), "mode={mode}");
-                assert!(str_of(&result, "cover_error").contains("크기 제한"), "mode={mode}: {result}");
+                assert!(result.has_cover, "mode={mode}");
+                assert!(result.cover_image.is_none(), "mode={mode}");
+                assert!(result.cover_error.as_deref().unwrap_or("").contains("크기 제한"), "mode={mode}: {result:?}");
                 continue;
             }
         }
@@ -408,12 +408,7 @@ fn test_cover_rebuild_guards_and_old_declaration_cleanup() {
                 hooks = hooks.with_revision(Arc::new(move |_path: &Path| values.lock().unwrap().pop_front().expect("revision을 두 번만 부른다")));
             }
             "invalid_stage" => hooks = hooks.with_testzip(Arc::new(|_path: &Path| Some("corrupt".to_string()))),
-            "no_staged_cover" => {
-                hooks = hooks.with_inspect_archive(Arc::new(|mut inspected: Value| {
-                    inspected["has_cover"] = json!(false);
-                    inspected
-                }))
-            }
+            "no_staged_cover" => hooks = hooks.with_inspect_archive(Arc::new(|inspected| EpubInspection { has_cover: false, ..inspected })),
             _ => {}
         }
         if mode == "old_declarations" {
@@ -421,7 +416,7 @@ fn test_cover_rebuild_guards_and_old_declaration_cleanup() {
             let opf = opf_of(&path);
             assert_eq!(count_elements(&opf, "meta", Some(("name", "cover"))), 1, "mode={mode}");
             assert_eq!(attr_of_element_with_id(&opf, "item", "stale1", "properties"), "other", "mode={mode}");
-            assert!(truthy(&epub_cover::inspect_epub(&path).unwrap()["has_cover"]), "mode={mode}");
+            assert!(epub_cover::inspect_epub(&path).unwrap().has_cover, "mode={mode}");
         } else {
             assert!(epub_cover::add_cover_with(&path, &red_jpeg(), &revision, &backups(root), false, &hooks).is_err(), "mode={mode}");
             assert_eq!(read(&path), original, "mode={mode}");

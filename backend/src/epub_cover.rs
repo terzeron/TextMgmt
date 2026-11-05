@@ -18,7 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use htmlkit::url_parser::{unquote, urlsplit};
-use serde_json::{Map, Value, json};
+use serde::Serialize;
 use sysdeps::FsOps;
 use sysdeps::zip_opener::zip_entry_name;
 use zip::ZipArchive;
@@ -219,7 +219,60 @@ impl Default for Limits {
 type FindOpfPath = Arc<dyn Fn() -> String + Send + Sync>;
 type RevisionFn = Arc<dyn Fn(&Path) -> String + Send + Sync>;
 pub type TestzipFn = Arc<dyn Fn(&Path) -> Option<String> + Send + Sync>;
-type InspectArchiveFn = Arc<dyn Fn(Value) -> Value + Send + Sync>;
+type InspectArchiveFn = Arc<dyn Fn(EpubInspection) -> EpubInspection + Send + Sync>;
+
+/// 표지 이미지의 크기. SVG 표지는 `byte_size`만 있다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct CoverImageInfo {
+    pub byte_size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+}
+
+/// 제자리 편집 한 번의 결과. 원본은 `backup_path`에 남는다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct EpubRewrite {
+    pub revision: String,
+    pub backup_path: String,
+    pub backup_created: bool,
+    pub file_size: u64,
+    /// 파일의 inode. 제자리 편집이라 바뀌지 않는다.
+    pub book_id: u64,
+    /// 새 표지의 크기. 표지를 넣지 않은 편집에서는 None이다.
+    pub cover_image: Option<CoverImageInfo>,
+    /// 새로 넣은 삽화 쪽의 idref.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idref: Option<String>,
+    /// 쪽 이미지 편집이 만든 쪽의 idref.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idrefs: Option<CreatedIdrefs>,
+}
+
+/// 쪽 이미지 편집이 새로 만든 쪽. `split`은 원래 idref → 분할로 생긴 idref다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct CreatedIdrefs {
+    pub inserted: Vec<String>,
+    pub split: std::collections::BTreeMap<String, String>,
+}
+
+/// EPUB의 제목·저자·ISBN·표지 상태.
+///
+/// `revision`은 `inspect_epub`만 채운다. 압축 파일만 검사한 결과에서는 비어 있다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct EpubInspection {
+    pub title: String,
+    pub author: String,
+    pub isbn: String,
+    pub has_cover: bool,
+    pub cover_image: Option<CoverImageInfo>,
+    /// 표지 이미지를 읽지 못한 이유. EPUB 구조 오류와 달리 검색과 교체를 막지 않는다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_error: Option<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub revision: String,
+}
 type UuidFn = Arc<dyn Fn() -> String + Send + Sync>;
 type Observer = Arc<dyn Fn() + Send + Sync>;
 
@@ -265,7 +318,7 @@ impl EpubCoverHooks {
     }
 
     /// 압축 파일 검사 결과(`_inspect_archive`)를 바꾼다.
-    pub fn with_inspect_archive(mut self, f: Arc<dyn Fn(Value) -> Value + Send + Sync>) -> Self {
+    pub fn with_inspect_archive(mut self, f: InspectArchiveFn) -> Self {
         self.inspect_archive = Some(f);
         self
     }
@@ -345,7 +398,7 @@ impl EpubCoverHooks {
         Ok(None)
     }
 
-    pub(crate) fn finish_inspect(&self, value: Value) -> Value {
+    pub(crate) fn finish_inspect(&self, value: EpubInspection) -> EpubInspection {
         match &self.inspect_archive {
             Some(f) => f(value),
             None => value,
@@ -723,19 +776,17 @@ fn first_text(package: &Element, local: &str) -> String {
 }
 
 /// 기존 표지 이미지의 크기와 형식을 머리글만 읽어 확인한다. 실패하면 `cover_error` 문장이다.
-fn inspect_cover_image<R: Read + Seek>(archive: &mut ZipArchive<R>, member: &str, hooks: &EpubCoverHooks) -> Result<Value, String> {
+fn inspect_cover_image<R: Read + Seek>(archive: &mut ZipArchive<R>, member: &str, hooks: &EpubCoverHooks) -> Result<CoverImageInfo, String> {
     let limits = hooks.limits();
     let unreadable = || "기존 표지 이미지를 읽을 수 없습니다".to_string();
     let byte_size = entry_size(archive, member).map_err(|_| unreadable())?;
     if byte_size > limits.max_image_bytes as u64 {
         return Err("기존 표지가 검사 크기 제한을 초과했습니다".to_string());
     }
-    let mut info = Map::new();
-    info.insert("byte_size".to_string(), json!(byte_size));
     if member.to_lowercase().ends_with(".svg") {
         let data = read_entry(archive, member).map_err(|_| unreadable())?;
         xml_tree::parse(&data).map_err(|_| unreadable())?;
-        return Ok(Value::Object(info));
+        return Ok(CoverImageInfo { byte_size, ..CoverImageInfo::default() });
     }
     // 목록에서는 머리글만 읽는다. 픽셀 디코딩과 변환은 미리보기·저장에서 검증한다.
     const HEAD: u64 = 512 * 1024;
@@ -753,40 +804,34 @@ fn inspect_cover_image<R: Read + Seek>(archive: &mut ZipArchive<R>, member: &str
     if (dimensions.0 as usize).saturating_mul(dimensions.1 as usize) > limits.max_image_pixels {
         return Err("기존 표지 이미지 해상도가 너무 큽니다".to_string());
     }
-    info.insert("width".to_string(), json!(dimensions.0));
-    info.insert("height".to_string(), json!(dimensions.1));
-    Ok(Value::Object(info))
+    Ok(CoverImageInfo { byte_size, width: Some(dimensions.0), height: Some(dimensions.1) })
 }
 
 /// 압축 파일 전체를 검사한다.
-pub(crate) fn inspect_archive<R: Read + Seek>(archive: &mut ZipArchive<R>, hooks: &EpubCoverHooks) -> FResult<Value> {
+pub(crate) fn inspect_archive<R: Read + Seek>(archive: &mut ZipArchive<R>, hooks: &EpubCoverHooks) -> FResult<EpubInspection> {
     let (_, package) = read_package_with(archive, hooks)?;
     let member = find_cover_member_in(archive, hooks, &|_| None);
     let has_cover = member.as_deref().is_some_and(|m| has_entry(archive, m));
-    let (mut cover_image, mut cover_error) = (Value::Null, String::new());
+    let (mut cover_image, mut cover_error) = (None, None);
     if let (true, Some(member)) = (has_cover, member.as_deref()) {
         match inspect_cover_image(archive, member, hooks) {
-            Ok(info) => cover_image = info,
+            Ok(info) => cover_image = Some(info),
             // 기존 이미지의 손상이 검색과 교체를 막지 않도록 EPUB 구조 오류와 구분한다.
-            Err(message) => cover_error = message,
+            Err(message) => cover_error = Some(message),
         }
     }
-    let mut metadata = Map::new();
-    for (key, local) in [("title", "title"), ("author", "creator"), ("isbn", "identifier")] {
-        metadata.insert(key.to_string(), json!(first_text(&package, local)));
-    }
-    let isbn = metadata["isbn"].as_str().unwrap_or("").to_string();
-    if !isbn.is_empty() {
-        let value = isbn.strip_prefix("urn:isbn:").unwrap_or(&isbn).replace('-', "");
-        let valid = value.chars().all(|c| c.is_ascii_digit()) && matches!(value.chars().count(), 10 | 13);
-        metadata.insert("isbn".to_string(), json!(if valid { value } else { String::new() }));
-    }
-    metadata.insert("has_cover".to_string(), json!(has_cover));
-    metadata.insert("cover_image".to_string(), cover_image);
-    if !cover_error.is_empty() {
-        metadata.insert("cover_error".to_string(), json!(cover_error));
-    }
-    Ok(hooks.finish_inspect(Value::Object(metadata)))
+    let identifier = first_text(&package, "identifier");
+    let isbn = identifier.strip_prefix("urn:isbn:").unwrap_or(&identifier).replace('-', "");
+    let valid = isbn.chars().all(|c| c.is_ascii_digit()) && matches!(isbn.chars().count(), 10 | 13);
+    Ok(hooks.finish_inspect(EpubInspection {
+        title: first_text(&package, "title"),
+        author: first_text(&package, "creator"),
+        isbn: if valid { isbn } else { String::new() },
+        has_cover,
+        cover_image,
+        cover_error,
+        revision: String::new(),
+    }))
 }
 
 /// 임시 경로에 도판을 끼운 EPUB를 만든다(원본은 건드리지 않는다). 새 쪽의 idref를 돌려준다.
@@ -799,22 +844,21 @@ pub fn stage_cover_removal(source: &File, destination: &Path) -> Result<(), Cove
     epub_writer::stage_cover_removal(source, destination, &EpubCoverHooks::default()).map_err(Fail::into_cover)
 }
 
-pub fn inspect_epub(path: &Path) -> Result<Value, CoverError> {
+pub fn inspect_epub(path: &Path) -> Result<EpubInspection, CoverError> {
     inspect_epub_with(path, &EpubCoverHooks::default())
 }
 
 /// EPUB의 제목·저자·ISBN·표지 상태를 읽는다. 파일은 바꾸지 않는다. 저장 중이면 거절한다.
-pub fn inspect_epub_with(path: &Path, hooks: &EpubCoverHooks) -> Result<Value, CoverError> {
-    let run = || -> FResult<Value> {
+pub fn inspect_epub_with(path: &Path, hooks: &EpubCoverHooks) -> Result<EpubInspection, CoverError> {
+    let run = || -> FResult<EpubInspection> {
         let file = File::open(path)?;
         hooks.lock_shared(&file)?;
         let mut archive = ZipArchive::new(&file)?;
         let mut metadata = inspect_archive(&mut archive, hooks)?;
-        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let title = metadata["title"].as_str().unwrap_or("");
-        let title = if title.is_empty() { stem } else { title.to_string() };
-        metadata["title"] = json!(title);
-        metadata["revision"] = json!(hooks.revision_of(path));
+        if metadata.title.is_empty() {
+            metadata.title = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        }
+        metadata.revision = hooks.revision_of(path);
         Ok(metadata)
     };
     run().map_err(|fail| match fail {

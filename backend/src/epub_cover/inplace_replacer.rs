@@ -5,12 +5,11 @@ use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
 use super::epub_writer::{stage_cover, stage_cover_removal, stage_illustration};
-use super::{CHANGED, CoverError, EpubCoverHooks, FResult, Fail, SAVING, inspect_archive, normalize_image_with, read_dimensions};
+use super::{CHANGED, CoverError, CoverImageInfo, EpubCoverHooks, EpubRewrite, FResult, Fail, SAVING, inspect_archive, normalize_image_with, read_dimensions};
 
 type Precheck<'a> = &'a dyn Fn(&mut ZipArchive<&File>) -> FResult<()>;
 type Stage<'a> = &'a mut dyn FnMut(&File, &Path) -> FResult<()>;
@@ -65,11 +64,11 @@ pub(crate) fn rewrite_epub(
     stage: Stage<'_>,
     precheck: Option<Precheck<'_>>,
     hooks: &EpubCoverHooks,
-) -> Result<Value, CoverError> {
+) -> Result<EpubRewrite, CoverError> {
     rewrite_inner(path, expected_revision, backup_dir, backup_name, stage, precheck, hooks).map_err(Fail::into_cover)
 }
 
-fn rewrite_inner(path: &Path, expected_revision: &str, backup_dir: &Path, backup_name: Option<&str>, stage: Stage<'_>, precheck: Option<Precheck<'_>>, hooks: &EpubCoverHooks) -> FResult<Value> {
+fn rewrite_inner(path: &Path, expected_revision: &str, backup_dir: &Path, backup_name: Option<&str>, stage: Stage<'_>, precheck: Option<Precheck<'_>>, hooks: &EpubCoverHooks) -> FResult<EpubRewrite> {
     let mut source = OpenOptions::new().read(true).write(true).open(path)?;
     if let Err(err) = hooks.lock_exclusive(&source) {
         return Err(if err.kind() == std::io::ErrorKind::WouldBlock { CoverError::new(SAVING).into() } else { err.into() });
@@ -131,24 +130,25 @@ fn rewrite_inner(path: &Path, expected_revision: &str, backup_dir: &Path, backup
     drop(staged);
     drop(rollback_temp);
     outcome?;
-    Ok(json!({
-        "revision": hooks.revision_of(path),
-        "backup_path": backup.to_string_lossy(),
-        "backup_created": backup_created,
-        "file_size": std::fs::metadata(path)?.len(),
-        "book_id": original_stat.ino(),
-    }))
+    Ok(EpubRewrite {
+        revision: hooks.revision_of(path),
+        backup_path: backup.to_string_lossy().into_owned(),
+        backup_created,
+        file_size: std::fs::metadata(path)?.len(),
+        book_id: original_stat.ino(),
+        ..EpubRewrite::default()
+    })
 }
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-pub fn add_cover(path: &Path, image: &[u8], expected_revision: &str, backup_dir: &Path, replace_existing: bool) -> Result<Value, CoverError> {
+pub fn add_cover(path: &Path, image: &[u8], expected_revision: &str, backup_dir: &Path, replace_existing: bool) -> Result<EpubRewrite, CoverError> {
     add_cover_with(path, image, expected_revision, backup_dir, replace_existing, &EpubCoverHooks::default())
 }
 
-pub fn add_cover_with(path: &Path, image: &[u8], expected_revision: &str, backup_dir: &Path, replace_existing: bool, hooks: &EpubCoverHooks) -> Result<Value, CoverError> {
+pub fn add_cover_with(path: &Path, image: &[u8], expected_revision: &str, backup_dir: &Path, replace_existing: bool, hooks: &EpubCoverHooks) -> Result<EpubRewrite, CoverError> {
     add_cover_backup_with(path, image, expected_revision, backup_dir, replace_existing, None, hooks)
 }
 
@@ -161,31 +161,31 @@ pub fn add_cover_backup_with(
     replace_existing: bool,
     backup_name: Option<&str>,
     hooks: &EpubCoverHooks,
-) -> Result<Value, CoverError> {
+) -> Result<EpubRewrite, CoverError> {
     let image = normalize_image_with(image, Some(600), hooks)?;
     let (width, height) = read_dimensions(&image).map_err(|_| CoverError::new("표지 이미지 형식을 읽을 수 없습니다"))?;
-    let image_info = json!({"width": width, "height": height, "byte_size": image.len()});
+    let image_info = CoverImageInfo { byte_size: image.len() as u64, width: Some(width), height: Some(height) };
     let refuse_existing = |archive: &mut ZipArchive<&File>| -> FResult<()> {
-        if inspect_archive(archive, hooks)?["has_cover"].as_bool().unwrap_or(false) && !replace_existing {
+        if inspect_archive(archive, hooks)?.has_cover && !replace_existing {
             return Err(CoverError::new("EPUB에 이미 표지가 있습니다").into());
         }
         Ok(())
     };
     let mut result = rewrite_epub(path, expected_revision, backup_dir, backup_name, &mut |source, staged| stage_cover(source, staged, &image, hooks), Some(&refuse_existing), hooks)?;
-    result["cover_image"] = image_info;
+    result.cover_image = Some(image_info);
     Ok(result)
 }
 
-pub fn remove_cover(path: &Path, expected_revision: &str, backup_dir: &Path) -> Result<Value, CoverError> {
+pub fn remove_cover(path: &Path, expected_revision: &str, backup_dir: &Path) -> Result<EpubRewrite, CoverError> {
     remove_cover_with(path, expected_revision, backup_dir, &EpubCoverHooks::default())
 }
 
-pub fn remove_cover_with(path: &Path, expected_revision: &str, backup_dir: &Path, hooks: &EpubCoverHooks) -> Result<Value, CoverError> {
+pub fn remove_cover_with(path: &Path, expected_revision: &str, backup_dir: &Path, hooks: &EpubCoverHooks) -> Result<EpubRewrite, CoverError> {
     remove_cover_backup_with(path, expected_revision, backup_dir, None, hooks)
 }
 
 /// EPUB 표지를 뺀다. 표지가 없거나 본문과 공유하면 원본과 백업을 건드리지 않는다.
-pub fn remove_cover_backup_with(path: &Path, expected_revision: &str, backup_dir: &Path, backup_name: Option<&str>, hooks: &EpubCoverHooks) -> Result<Value, CoverError> {
+pub fn remove_cover_backup_with(path: &Path, expected_revision: &str, backup_dir: &Path, backup_name: Option<&str>, hooks: &EpubCoverHooks) -> Result<EpubRewrite, CoverError> {
     use super::epub_writer::{detach_publisher_cover, remove_tool_covers, sections};
     use super::{OPF_NS, read_package_with};
     let require_cover = |archive: &mut ZipArchive<&File>| -> FResult<()> {
@@ -195,7 +195,7 @@ pub fn remove_cover_backup_with(path: &Path, expected_revision: &str, backup_dir
             let (Some(manifest), Some(metadata), Some(spine)) = (parts.manifest, parts.metadata, parts.spine) else {
                 return Err(CoverError::new("EPUB manifest, metadata 또는 spine이 없습니다").into());
             };
-            if !inspect_archive(archive, hooks)?["has_cover"].as_bool().unwrap_or(false) {
+            if !inspect_archive(archive, hooks)?.has_cover {
                 return Err(CoverError::new("EPUB에 표지가 없습니다").into());
             }
             remove_tool_covers(&opf_path, manifest, metadata, spine);
@@ -204,16 +204,14 @@ pub fn remove_cover_backup_with(path: &Path, expected_revision: &str, backup_dir
         detach_publisher_cover(archive, &opf_path, &mut package, true, hooks)?;
         Ok(())
     };
-    let mut result = rewrite_epub(path, expected_revision, backup_dir, backup_name, &mut |source, staged| stage_cover_removal(source, staged, hooks), Some(&require_cover), hooks)?;
-    result["cover_image"] = Value::Null;
-    Ok(result)
+    rewrite_epub(path, expected_revision, backup_dir, backup_name, &mut |source, staged| stage_cover_removal(source, staged, hooks), Some(&require_cover), hooks)
 }
 
-pub fn add_illustration(path: &Path, image: &[u8], expected_revision: &str, backup_dir: &Path, before_idref: &str) -> Result<Value, CoverError> {
+pub fn add_illustration(path: &Path, image: &[u8], expected_revision: &str, backup_dir: &Path, before_idref: &str) -> Result<EpubRewrite, CoverError> {
     add_illustration_with(path, image, expected_revision, backup_dir, before_idref, &EpubCoverHooks::default())
 }
 
-pub fn add_illustration_with(path: &Path, image: &[u8], expected_revision: &str, backup_dir: &Path, before_idref: &str, hooks: &EpubCoverHooks) -> Result<Value, CoverError> {
+pub fn add_illustration_with(path: &Path, image: &[u8], expected_revision: &str, backup_dir: &Path, before_idref: &str, hooks: &EpubCoverHooks) -> Result<EpubRewrite, CoverError> {
     add_illustration_backup_with(path, image, expected_revision, backup_dir, before_idref, None, hooks)
 }
 
@@ -226,7 +224,7 @@ pub fn add_illustration_backup_with(
     before_idref: &str,
     backup_name: Option<&str>,
     hooks: &EpubCoverHooks,
-) -> Result<Value, CoverError> {
+) -> Result<EpubRewrite, CoverError> {
     let image = normalize_image_with(image, Some(1200), hooks)?;
     let mut created = String::new();
     let mut result = rewrite_epub(
@@ -241,7 +239,6 @@ pub fn add_illustration_backup_with(
         None,
         hooks,
     )?;
-    result["cover_image"] = Value::Null;
-    result["idref"] = json!(created);
+    result.idref = Some(created);
     Ok(result)
 }

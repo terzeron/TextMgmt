@@ -13,6 +13,7 @@ use super::{ApplyCategoryChanges, ProposeCategoryChanges, ReloadProgress};
 use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
 use super::{BookDeletion, CoverPage};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
+use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
 
 /// 라우트가 쪽 크기를 정하지 않을 때 쓰는 카테고리 목록 쪽 크기.
@@ -187,19 +188,19 @@ impl BookManagerApi for BookManager {
         BookManager::get_uncovered_books_paged(self, opts).await
     }
 
-    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
+    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<CoverSave, String> {
         BookManager::set_epub_cover(self, book_id, url, image_data).await
     }
 
-    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String> {
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<CoverSave, String> {
         BookManager::edit_epub_images(self, book_id, crops, splits, deletes, inserts).await
     }
 
-    async fn remove_epub_cover(&self, book_id: i64) -> Result<Value, String> {
+    async fn remove_epub_cover(&self, book_id: i64) -> Result<CoverSave, String> {
         BookManager::remove_epub_cover(self, book_id).await
     }
 
-    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
+    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<CoverSave, String> {
         BookManager::insert_epub_illustration(self, book_id, before_idref, url, image_data).await
     }
 

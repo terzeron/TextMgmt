@@ -22,7 +22,9 @@ use super::epub_writer::{Added, PreviousCover, add_image_page, add_split_image, 
 use super::inplace_replacer::rewrite_epub;
 use super::member_path;
 use super::xml_tree::{self, Element, Node};
-use super::{CoverError, EpubCoverHooks, FResult, Fail, MAX_XML_BYTES, entry_names, entry_size, has_entry, normalize_image_with, read_dimensions, read_entry, read_package_with};
+use super::{
+    CoverError, CreatedIdrefs, EpubCoverHooks, EpubRewrite, FResult, Fail, MAX_XML_BYTES, entry_names, entry_size, has_entry, normalize_image_with, read_dimensions, read_entry, read_package_with,
+};
 use crate::image_edit::{Rect, crop_rotated};
 use htmlkit::url_parser::quote;
 
@@ -496,7 +498,7 @@ fn stage_image_edits(
     splits: &[Value],
     deletes: &[Value],
     inserts: &[(String, Vec<u8>)],
-    created: &mut Value,
+    created: &mut CreatedIdrefs,
     hooks: &EpubCoverHooks,
 ) -> FResult<()> {
     {
@@ -609,7 +611,7 @@ fn stage_image_edits(
                 if added.total_bytes() > MAX_EDIT_OUTPUT_BYTES {
                     return Err(err("편집 결과가 너무 커서 저장할 수 없습니다").into());
                 }
-                created["split"][idref] = json!(new_idref);
+                created.split.insert(idref.to_string(), new_idref);
             } else {
                 let parts = sections(&mut package);
                 let Some(manifest) = parts.manifest else { return Err(missing()) };
@@ -631,7 +633,7 @@ fn stage_image_edits(
             if added.total_bytes() > MAX_EDIT_OUTPUT_BYTES {
                 return Err(err("편집 결과가 너무 커서 저장할 수 없습니다").into());
             }
-            created["inserted"].as_array_mut().expect("inserted는 배열이다").push(json!(new_idref));
+            created.inserted.push(new_idref);
         }
 
         if !deletes.is_empty() {
@@ -715,11 +717,11 @@ impl<R: Read + Seek> Stager<'_, R> {
 }
 
 /// EPUB 쪽의 이미지를 한 번에 크롭·분할·삭제·삽입한다(원자적).
-pub fn edit_images(path: &Path, expected_revision: &str, backup_dir: &Path, args: EditImages) -> Result<Value, CoverError> {
+pub fn edit_images(path: &Path, expected_revision: &str, backup_dir: &Path, args: EditImages) -> Result<EpubRewrite, CoverError> {
     edit_images_with(path, expected_revision, backup_dir, args, &EpubCoverHooks::default())
 }
 
-pub fn edit_images_with(path: &Path, expected_revision: &str, backup_dir: &Path, args: EditImages, hooks: &EpubCoverHooks) -> Result<Value, CoverError> {
+pub fn edit_images_with(path: &Path, expected_revision: &str, backup_dir: &Path, args: EditImages, hooks: &EpubCoverHooks) -> Result<EpubRewrite, CoverError> {
     let EditImages { crops, splits, deletes, inserts, backup_name } = args;
     if crops.len() > MAX_EDITS || splits.len() > MAX_EDITS || deletes.len() > MAX_EDITS || inserts.len() > MAX_INSERTS {
         return Err(err("한 번에 저장할 수 있는 편집 항목 수를 넘었습니다"));
@@ -748,7 +750,7 @@ pub fn edit_images_with(path: &Path, expected_revision: &str, backup_dir: &Path,
     for (before, image) in &inserts {
         normalized.push((before.clone(), normalize_image_with(image, Some(1200), hooks)?));
     }
-    let mut created = json!({"inserted": [], "split": {}});
+    let mut created = CreatedIdrefs::default();
     let mut result = rewrite_epub(
         path,
         expected_revision,
@@ -758,8 +760,7 @@ pub fn edit_images_with(path: &Path, expected_revision: &str, backup_dir: &Path,
         None,
         hooks,
     )?;
-    result["cover_image"] = Value::Null;
-    result["idrefs"] = created;
+    result.idrefs = Some(created);
     Ok(result)
 }
 

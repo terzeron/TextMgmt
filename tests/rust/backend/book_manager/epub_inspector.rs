@@ -5,13 +5,13 @@ mod common;
 use crate::common::epub_book::{Book, book};
 use crate::common::shared_fixtures::{assert_refused, full};
 use backend::book_manager::BookManager;
-use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, Limits, edit_images, edit_images_with, revision};
+use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, EpubRewrite, Limits, edit_images, edit_images_with, revision};
 use common::epub::{EpubSpec, make_epub};
 use common::faulty_fs::FaultyFs;
 use common::fsx::set_mtime_ago;
 use doc_reader::TEXT_SIZE;
 use doc_reader::epub::{EpubHooks, EpubPath, EpubRead, read_from_epub, read_from_epub_with, read_from_epub_with_extracting_zip};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::fs;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -39,7 +39,7 @@ fn test_stale_revision_is_rejected_and_backup_is_kept_once() {
 
 // ── 입력 검증과 상한 ───────────────────────────────────
 
-fn edit_with(b: &Book, hooks: &EpubCoverHooks, args: EditImages) -> Result<Value, CoverError> {
+fn edit_with(b: &Book, hooks: &EpubCoverHooks, args: EditImages) -> Result<EpubRewrite, CoverError> {
     edit_images_with(&b.path, &revision(&b.path), &b.trash, EditImages { backup_name: Some("book.epub".to_string()), ..args }, hooks)
 }
 

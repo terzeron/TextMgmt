@@ -5,12 +5,12 @@ mod common;
 
 #[path = "../common/cover_fixtures.rs"]
 mod cover_fixtures;
-use crate::common::shared_fixtures::{backups, opf_of, read, rev, str_of};
+use crate::common::shared_fixtures::{backups, opf_of, read, rev};
 use crate::common::{epub::BODY, epub::EpubSpec, epub::count_elements, epub::make_epub, fsx::ino_mtime, image::BLUE, image::encode_image, image::red_jpeg, zipx::member_names, zipx::read_zip_entry};
 use backend::book_manager::BookManager;
 use backend::epub_cover;
+use backend::epub_cover::EpubRewrite;
 use image::ImageFormat;
-use serde_json::Value;
 use std::fs::File;
 use std::path::Path;
 
@@ -26,10 +26,10 @@ fn test_cover_replacement_preserves_content_and_has_one_generated_cover() {
         // 600px 축소 경로만 지나면 된다. 크게 만들면 디버그 빌드에서 Lanczos 축소가 수 초씩 걸린다.
         let png = encode_image(900, 1350, BLUE, ImageFormat::Png);
         let mut plates: Vec<usize> = Vec::new();
-        let mut result = Value::Null;
+        let mut result = EpubRewrite::default();
         for data in [png.clone(), png.clone(), red_jpeg()] {
             result = epub_cover::add_cover(&path, &data, &rev(&path), &backups(root), true).unwrap();
-            assert_eq!(read(Path::new(str_of(&result, "backup_path"))), before, "version={version}");
+            assert_eq!(read(Path::new(&result.backup_path)), before, "version={version}");
             assert_eq!(ino_mtime(&path), stat, "version={version}");
             let mut archive = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
             let member = BookManager::find_epub_cover_member(&mut archive).unwrap();
@@ -48,6 +48,6 @@ fn test_cover_replacement_preserves_content_and_has_one_generated_cover() {
         }
         // 같은 이미지로 다시 교체하면 도판이 늘지 않고, 다른 이미지로 바꿀 때만 늘어난다.
         assert_eq!(plates, [1, 1, 2], "version={version}");
-        assert_ne!(first["revision"], result["revision"], "version={version}");
+        assert_ne!(first.revision, result.revision, "version={version}");
     }
 }

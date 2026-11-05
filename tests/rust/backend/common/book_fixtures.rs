@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use backend::book_manager::{BookManager, BookManagerDeps, FileReader};
+use backend::cover_management::CoverSave;
 use backend::direct_cover_url::{FetchError, ImageFetcher};
+use backend::epub_cover::CreatedIdrefs;
 use backend::es_manager::Docs;
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use serde_json::{Value, json};
@@ -220,7 +222,7 @@ pub struct FakeManager {
     pub preview_insert_image: Mutex<(Option<Vec<u8>>, Option<String>)>,
     pub preview_insert_upload: Mutex<(Option<Vec<u8>>, Option<String>)>,
     pub delete_pdf_pages: Mutex<(Option<Value>, Option<String>)>,
-    pub edit_epub_images: Mutex<(Option<Value>, Option<String>)>,
+    pub edit_epub_images: Mutex<(Option<CoverSave>, Option<String>)>,
     /// (메서드 이름, 인자 목록): `await_args.args`에 대응한다.
     pub calls: Mutex<Vec<(String, Vec<Value>)>>,
 }
@@ -231,7 +233,7 @@ impl FakeManager {
             preview_insert_image: Mutex::new((Some(b"\xff\xd8\xffJPEG".to_vec()), None)),
             preview_insert_upload: Mutex::new((Some(b"\xff\xd8\xffJPEG".to_vec()), None)),
             delete_pdf_pages: Mutex::new((Some(json!({"remaining_pages": 5})), None)),
-            edit_epub_images: Mutex::new((Some(json!({"idrefs": {"inserted": [], "split": {}}})), None)),
+            edit_epub_images: Mutex::new((Some(CoverSave { idrefs: Some(CreatedIdrefs::default()), ..CoverSave::default() }), None)),
             calls: Mutex::new(Vec::new()),
         })
     }
@@ -265,7 +267,7 @@ impl backend::main::BookManagerApi for FakeManager {
         error.map_or(Ok(value.unwrap_or_default()), Err)
     }
 
-    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String> {
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<CoverSave, String> {
         self.calls.lock().unwrap().push(("edit_epub_images".into(), vec![json!(book_id), json!(crops), json!(splits), json!(deletes), json!(inserts)]));
         let (value, error) = self.edit_epub_images.lock().unwrap().clone();
         error.map_or(Ok(value.unwrap_or_default()), Err)

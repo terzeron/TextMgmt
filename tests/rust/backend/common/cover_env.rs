@@ -6,7 +6,7 @@ use super::es_fake::FakeEsManager;
 use super::image::red_jpeg;
 use super::shared_fixtures::{FakeBooks, FetchSlot, URL};
 use backend::book_manager::{BookManager, BookManagerDeps, BookRef};
-use serde_json::Value;
+use backend::cover_management::CoverSave;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -30,19 +30,19 @@ impl Env {
         self.tmp.path()
     }
 
-    pub async fn call(&self, url: &str) -> (Option<Value>, Option<String>) {
+    pub async fn call(&self, url: &str) -> (Option<CoverSave>, Option<String>) {
         split(self.manager.set_epub_cover(1, Some(url), None).await)
     }
 
-    pub async fn upload(&self, image_data: &str) -> (Option<Value>, Option<String>) {
+    pub async fn upload(&self, image_data: &str) -> (Option<CoverSave>, Option<String>) {
         split(self.manager.set_epub_cover(1, None, Some(image_data)).await)
     }
 
-    pub async fn remove(&self) -> (Option<Value>, Option<String>) {
+    pub async fn remove(&self) -> (Option<CoverSave>, Option<String>) {
         split(self.manager.remove_epub_cover(1).await)
     }
 
-    pub async fn illustrate(&self, before: &str) -> (Option<Value>, Option<String>) {
+    pub async fn illustrate(&self, before: &str) -> (Option<CoverSave>, Option<String>) {
         split(self.manager.insert_epub_illustration(1, before, Some(URL), None).await)
     }
 
@@ -64,7 +64,7 @@ pub fn env() -> Env {
 
 /// `"x" in error`: 오류가 없으면 실패로 본다.
 /// `Result`를 `(결과, 오류)` 모양으로 펼쳐 단언을 짧게 쓴다.
-pub fn split(result: Result<Value, String>) -> (Option<Value>, Option<String>) {
+pub fn split<T>(result: Result<T, String>) -> (Option<T>, Option<String>) {
     match result {
         Ok(value) => (Some(value), None),
         Err(error) => (None, Some(error)),

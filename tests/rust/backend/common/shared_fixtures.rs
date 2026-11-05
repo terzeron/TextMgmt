@@ -16,7 +16,7 @@ use backend::book_metadata::{Book, BookLookupError, BookPage};
 use backend::cover_management::CoverManagement;
 use backend::direct_cover_url::{FetchError, ImageFetcher};
 use backend::epub_cover;
-use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, Limits, edit_images};
+use backend::epub_cover::{CoverError, EditImages, EpubCoverHooks, EpubRewrite, Limits, edit_images};
 use backend::es_manager::{EsError, EsManagerApi, HttpTransport};
 use backend::main::{AppDeps, ApplyCategoryChanges, AuthMode, AuthSlots, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, ReloadProgress, TaskHandle, TaskRunner};
 use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, SessionQuery, StoreError};
@@ -75,7 +75,7 @@ pub fn assert_cover_error<T: std::fmt::Debug>(result: Result<T, CoverError>, nee
     }
 }
 
-pub fn assert_refused(result: Result<Value, CoverError>, reason: &str, label: &str) {
+pub fn assert_refused<T: std::fmt::Debug>(result: Result<T, CoverError>, reason: &str, label: &str) {
     let text = err_of(result);
     assert!(text.contains(reason), "{label}: {text:?} 에 {reason:?}가 없다");
 }
@@ -178,7 +178,7 @@ pub fn deps(tmp_path: &Path, es: &Arc<FakeEsManager>) -> BookManagerDeps {
     BookManagerDeps::new(tmp_path.to_path_buf(), es.clone())
 }
 
-pub fn edit(path: &Path, trash: &Path, args: EditImages) -> Result<Value, CoverError> {
+pub fn edit(path: &Path, trash: &Path, args: EditImages) -> Result<EpubRewrite, CoverError> {
     edit_images(path, &revision(path), trash, EditImages { backup_name: Some("book.epub".to_string()), ..args })
 }
 
@@ -207,7 +207,7 @@ pub fn err_has(error: &Option<String>, needle: &str) -> bool {
     error.as_deref().unwrap_or_else(|| panic!("error가 None이다 (기대: {needle:?} 포함)")).contains(needle)
 }
 
-pub fn err_of(result: Result<Value, CoverError>) -> String {
+pub fn err_of<T: std::fmt::Debug>(result: Result<T, CoverError>) -> String {
     result.expect_err("CoverError가 나야 한다").to_string()
 }
 
@@ -215,8 +215,9 @@ pub fn error_text(error: &Option<String>) -> &str {
     error.as_deref().unwrap_or("")
 }
 
+/// 표지 목록 첫 항목의 JSON 모양.
 pub fn first_item(service: &CoverManagement, covered: bool) -> Value {
-    service.missing("", "", 60, covered).unwrap()["items"][0].clone()
+    serde_json::to_value(service.missing("", "", 60, covered).unwrap()).unwrap()["items"][0].clone()
 }
 
 pub fn flag(v: &Value) -> bool {
@@ -232,7 +233,7 @@ pub fn gif() -> Vec<u8> {
 }
 
 pub fn has_cover(path: &Path) -> bool {
-    epub_cover::inspect_epub(path).unwrap()["has_cover"].as_bool().unwrap()
+    epub_cover::inspect_epub(path).unwrap().has_cover
 }
 
 pub fn hooks_with(limits: Limits) -> EpubCoverHooks {
@@ -479,11 +480,11 @@ pub fn read(path: &Path) -> Vec<u8> {
 
 /// 현재 `revision`.
 pub fn rev(path: &Path) -> String {
-    epub_cover::inspect_epub(path).unwrap()["revision"].as_str().unwrap().to_string()
+    epub_cover::inspect_epub(path).unwrap().revision
 }
 
 pub fn revision(path: &Path) -> String {
-    epub_cover::inspect_epub(path).unwrap()["revision"].as_str().unwrap().to_string()
+    epub_cover::inspect_epub(path).unwrap().revision
 }
 
 pub fn run<F: std::future::Future>(fut: F) -> F::Output {

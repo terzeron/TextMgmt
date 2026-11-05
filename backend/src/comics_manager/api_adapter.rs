@@ -3,6 +3,7 @@ use super::ComicsManager;
 use crate::book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress};
 use crate::book_manager::{BookDeletion, BookManager, CoverPage};
 use crate::book_metadata::{Book, BookLookupError, BookPage};
+use crate::cover_management::CoverSave;
 use crate::es_manager::EsManagerApi;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -142,19 +143,19 @@ impl BookManagerApi for ComicsManager {
         BookManagerApi::get_uncovered_books_paged(&self.inner, category, size, cursor, exclude_categories).await
     }
 
-    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
+    async fn set_epub_cover(&self, book_id: i64, url: Option<&str>, image_data: Option<&str>) -> Result<CoverSave, String> {
         BookManagerApi::set_epub_cover(&self.inner, book_id, url, image_data).await
     }
 
-    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<Value, String> {
+    async fn edit_epub_images(&self, book_id: i64, crops: &[Value], splits: &[Value], deletes: &[Value], inserts: &[Value]) -> Result<CoverSave, String> {
         BookManagerApi::edit_epub_images(&self.inner, book_id, crops, splits, deletes, inserts).await
     }
 
-    async fn remove_epub_cover(&self, book_id: i64) -> Result<Value, String> {
+    async fn remove_epub_cover(&self, book_id: i64) -> Result<CoverSave, String> {
         BookManagerApi::remove_epub_cover(&self.inner, book_id).await
     }
 
-    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<Value, String> {
+    async fn insert_epub_illustration(&self, book_id: i64, before_idref: &str, url: Option<&str>, image_data: Option<&str>) -> Result<CoverSave, String> {
         BookManagerApi::insert_epub_illustration(&self.inner, book_id, before_idref, url, image_data).await
     }
 

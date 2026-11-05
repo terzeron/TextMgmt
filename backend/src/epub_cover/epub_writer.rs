@@ -624,7 +624,7 @@ pub fn stage_cover(source: &File, destination: &Path, image: &[u8], hooks: &Epub
 
 fn staged_has_cover(destination: &Path, hooks: &EpubCoverHooks) -> FResult<bool> {
     let mut archive = ZipArchive::new(File::open(destination)?)?;
-    Ok(inspect_archive(&mut archive, hooks)?["has_cover"].as_bool().unwrap_or(false))
+    Ok(inspect_archive(&mut archive, hooks)?.has_cover)
 }
 
 /// 이미지 한 장짜리 쪽을 anchor(spine itemref) 앞(`after`면 뒤)에 끼우고 새 쪽의 idref를 돌려준다.
@@ -732,7 +732,7 @@ pub fn stage_cover_removal(source: &File, destination: &Path, hooks: &EpubCoverH
     }
     let mut archive = ZipArchive::new(File::open(destination)?)?;
     read_package_with(&mut archive, hooks)?;
-    if inspect_archive(&mut archive, hooks)?["has_cover"].as_bool().unwrap_or(false) {
+    if inspect_archive(&mut archive, hooks)?.has_cover {
         return Err(CoverError::new("표지를 삭제한 EPUB의 검증에 실패했습니다").into());
     }
     Ok(())

@@ -12,7 +12,7 @@ use crate::common::shared_fixtures::fetcher;
 use crate::common::shared_fixtures::{backups, opf_of, read, rev, str_of, truthy};
 use backend::book_manager::{BookManager, BookManagerDeps};
 use backend::cover_management::{CoverHooks, CoverManagement, check_cancelled};
-use backend::epub_cover::{self, CoverError, OPF_NS};
+use backend::epub_cover::{self, CoverError, EpubRewrite, OPF_NS};
 use backend::main::{AppDeps, AuthMode, app_with};
 use common::{
     TestClient,
@@ -230,7 +230,7 @@ fn test_replacement_preserves_unrelated_assets_with_generated_cover_names() {
     }
     assert_eq!(count_elements(&opf_of(&path), "itemref", Some(("idref", "appendix"))), 1);
     assert!(testzip_ok(&path));
-    assert!(Path::new(str_of(&result, "backup_path")).is_file());
+    assert!(Path::new(&result.backup_path).is_file());
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn test_replacement_rejects_external_change_before_creating_another_backup() {
     appended.extend_from_slice(b"external update");
     std::fs::write(&path, &appended).unwrap();
     let changed = read(&path);
-    let err = epub_cover::add_cover(&path, &red_jpeg(), str_of(&saved, "revision"), &backup_dir, true).unwrap_err();
+    let err = epub_cover::add_cover(&path, &red_jpeg(), &saved.revision, &backup_dir, true).unwrap_err();
     assert!(err.to_string().contains("변경"), "{err}");
     assert_eq!(read(&path), changed);
     assert_eq!(dir_names(&backup_dir), existing);
@@ -331,8 +331,8 @@ fn test_missing_opf_namespace_is_valid_xml_after_cover_save() {
     let original = read(&path);
 
     let result = epub_cover::add_cover(&path, &red_jpeg(), &rev(&path), &backups(root), false).unwrap();
-    assert!(truthy(&epub_cover::inspect_epub(&path).unwrap()["has_cover"]));
-    assert_eq!(read(Path::new(str_of(&result, "backup_path"))), original);
+    assert!(epub_cover::inspect_epub(&path).unwrap().has_cover);
+    assert_eq!(read(Path::new(&result.backup_path)), original);
     let opf = String::from_utf8(opf_of(&path)).unwrap();
     let package = roxmltree::Document::parse(&opf).expect("저장한 OPF가 올바른 XML이 아니다");
     let creator = package.descendants().find(|n| n.is_element() && n.tag_name().name() == "creator").unwrap();
@@ -382,13 +382,13 @@ fn test_cover_save_preserves_book_id_and_content() {
         let original = read(&path);
         let inode = ino_mtime(&path).0;
         let metadata = epub_cover::inspect_epub(&path).unwrap();
-        assert_eq!(metadata["title"], "테스트 책", "version={version}");
-        assert!(!truthy(&metadata["has_cover"]), "version={version}");
-        let result = epub_cover::add_cover(&path, &red_jpeg(), str_of(&metadata, "revision"), &backups(root), false).unwrap();
+        assert_eq!(metadata.title, "테스트 책", "version={version}");
+        assert!(!metadata.has_cover, "version={version}");
+        let result = epub_cover::add_cover(&path, &red_jpeg(), &metadata.revision, &backups(root), false).unwrap();
         assert_eq!(ino_mtime(&path).0, inode, "version={version}");
-        assert!(truthy(&epub_cover::inspect_epub(&path).unwrap()["has_cover"]), "version={version}");
-        assert_ne!(result["revision"], metadata["revision"], "version={version}");
-        assert_eq!(read(Path::new(str_of(&result, "backup_path"))), original, "version={version}");
+        assert!(epub_cover::inspect_epub(&path).unwrap().has_cover, "version={version}");
+        assert_ne!(result.revision, metadata.revision, "version={version}");
+        assert_eq!(read(Path::new(&result.backup_path)), original, "version={version}");
         let mut archive = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
         {
             let first = archive.by_index(0).unwrap();
@@ -424,7 +424,7 @@ fn test_invalid_image_does_not_touch_original() {
     let root = tmp.path();
     let path = make_epub(&root.join("test.epub"), &EpubSpec::cover("3.0", false));
     let original = read(&path);
-    let outcome: Result<Value, CoverError> = epub_cover::add_cover(&path, b"not an image", &rev(&path), &backups(root), false);
+    let outcome: Result<EpubRewrite, CoverError> = epub_cover::add_cover(&path, b"not an image", &rev(&path), &backups(root), false);
     assert!(outcome.is_err());
     assert_eq!(read(&path), original);
 }
@@ -437,7 +437,7 @@ async fn test_admin_api_save_and_preview() {
     let service = CoverManagement::new(root);
     let metadata = epub_cover::inspect_epub(&path).unwrap();
     let candidate_id = "a".repeat(64);
-    let record = json!({"store": "yes24", "file_path": "book.epub", "revision": metadata["revision"], "image_url": "https://image.yes24.com/book.jpg"});
+    let record = json!({"store": "yes24", "file_path": "book.epub", "revision": metadata.revision, "image_url": "https://image.yes24.com/book.jpg"});
     service.write(&service.cache().join(format!("candidate-{candidate_id}.json")), record.to_string().as_bytes());
     service.write(&service.cache().join(format!("image-{candidate_id}.jpg")), &red_jpeg());
     // 인증 없는 요청은 401, 관리자 쿠키를 붙인 요청은 통과한다. 구 `gate.allow({"role": "admin"})`가 중간에 바꾸던 값이다.
@@ -448,7 +448,7 @@ async fn test_admin_api_save_and_preview() {
     for endpoint in ["directories", "missing", "candidates/yes24?file_path=book.epub", image_endpoint.as_str(), "preview?file_path=book.epub"] {
         assert_eq!(anonymous.get(&format!("/admin/book-covers/{endpoint}")).await.status, 401, "endpoint={endpoint}");
     }
-    let apply_body = json!({"file_path": "book.epub", "candidate_id": candidate_id, "revision": metadata["revision"]});
+    let apply_body = json!({"file_path": "book.epub", "candidate_id": candidate_id, "revision": metadata.revision});
     assert_eq!(anonymous.post_json("/admin/book-covers/apply", &apply_body).await.status, 401);
     let inode = ino_mtime(&path).0;
     let listed = client.get("/admin/book-covers/missing").await.json()["result"]["items"][0].clone();
@@ -503,7 +503,7 @@ async fn test_direct_url_api_updates_index_or_reports_post_save_warning() {
         let response = api.client.post_json("/admin/book-covers/apply-url", &json!({"file_path": "book.epub", "revision": rev(&path), "url": "https://example.org/a"})).await;
         assert_eq!(response.status, 200, "index={index}");
         let result = response.json()["result"].clone();
-        assert!(truthy(&epub_cover::inspect_epub(&path).unwrap()["has_cover"]), "index={index}");
+        assert!(epub_cover::inspect_epub(&path).unwrap().has_cover, "index={index}");
         assert_eq!(result.as_object().unwrap().contains_key("warning"), index == "failed" || index == "exception", "index={index}");
         if index == "ok" {
             let size = std::fs::metadata(&path).unwrap().len();
@@ -564,7 +564,7 @@ fn test_isbn_normalization_and_title_fallback() {
         let path = make_epub(&tmp.path().join("fallback.epub"), &EpubSpec::cover("3.0", false));
         rewrite_epub_members(&path, |members| members.replace_in("OPS/book.opf", "<dc:title>테스트 책</dc:title>".as_bytes(), format!("<dc:identifier>{isbn}</dc:identifier>").as_bytes()));
         let result = epub_cover::inspect_epub(&path).unwrap();
-        assert_eq!(result["title"], "fallback", "isbn={isbn}");
-        assert_eq!(result["isbn"], expected, "isbn={isbn}");
+        assert_eq!(result.title, "fallback", "isbn={isbn}");
+        assert_eq!(result.isbn, expected, "isbn={isbn}");
     }
 }
