@@ -1,10 +1,10 @@
 //! 오피스 문서와 이미지 읽기. DOCX는 직접 읽고, DOC·HWP·이미지는 LibreOffice로 변환해 읽는다.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::time::Duration;
 
 use common::zip_reader::open_zip;
-use sysdeps::timeout_runner::run_with_hard_timeout;
+use sysdeps::{CommandError, CommandRunner, SystemRunner};
 
 use crate::TEXT_SIZE;
 use crate::text_normalizer::{head_chars, keep_word_chars};
@@ -35,32 +35,72 @@ fn which(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(name)).find(|p| p.is_file())
 }
 
-/// 파일을 `output_format`(예: `txt:Text`)으로 변환하고 결과 텍스트를 돌려준다. 결과 파일이 없으면 오류 메시지와 빈 문자열.
-pub fn convert_with_libreoffice(path: &Path, output_format: &str, binary: &Path, errors: &mut Vec<String>) -> String {
-    let Ok(tmp) = tempfile::tempdir() else { return String::new() };
-    let mut cmd = Command::new(binary);
-    cmd.args(["--headless", "--convert-to", output_format, "--outdir"]).arg(tmp.path()).arg(path);
-    let output = run_with_hard_timeout(cmd, LIBREOFFICE_TIMEOUT);
-    let ext = output_format.split(':').next().unwrap_or("txt");
+/// LibreOffice 변환이 결과를 내지 못한 이유.
+#[derive(Debug)]
+pub enum ConvertFailure {
+    /// 실행하지 못했다(시간 초과·실행 파일 없음 포함).
+    Run(CommandError),
+    /// 실행은 했지만 결과 파일이 없다. 진단 메시지(종료 코드, stderr, 작업 디렉터리 파일)를 담는다.
+    NoOutput(String),
+}
+
+/// `runner`로 LibreOffice를 실행해 `path`를 `output_format`(예: `txt:Text`)으로 바꾸고 결과 글을 돌려준다.
+/// `work_dir`가 없으면 임시 디렉터리를 만들어 쓰고 지운다. 결과 파일 이름(stem)이 다르면 확장자로 찾는다.
+pub fn convert_with_libreoffice_using(runner: &dyn CommandRunner, binary: &Path, work_dir: Option<&Path>, path: &Path, output_format: &str) -> Result<String, ConvertFailure> {
+    let temp;
+    let dir: PathBuf = match work_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => {
+            temp = tempfile::tempdir().map_err(|e| ConvertFailure::Run(CommandError::Failed(e.to_string())))?;
+            temp.path().to_path_buf()
+        }
+    };
+    let argv = vec![
+        binary.to_string_lossy().into_owned(),
+        "--headless".to_string(),
+        "--convert-to".to_string(),
+        output_format.to_string(),
+        "--outdir".to_string(),
+        dir.to_string_lossy().into_owned(),
+        path.to_string_lossy().into_owned(),
+    ];
+    let output = runner.run(&argv, Some(Duration::from_secs_f64(LIBREOFFICE_TIMEOUT))).map_err(ConvertFailure::Run)?;
+    let ext = output_format.split(':').next().unwrap_or(output_format);
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let read = |p: &Path| String::from_utf8_lossy(&std::fs::read(p).unwrap_or_default()).into_owned();
-    let expected = tmp.path().join(format!("{stem}.{ext}"));
+    let expected = dir.join(format!("{stem}.{ext}"));
     if expected.exists() {
-        return read(&expected);
+        return Ok(read(&expected));
     }
     // 이름이 달라졌으면 확장자로 찾는다.
-    let mut found: Vec<PathBuf> = std::fs::read_dir(tmp.path()).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == ext)).collect()).unwrap_or_default();
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&dir).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e.to_string_lossy() == ext)).collect()).unwrap_or_default();
     found.sort();
     if let Some(first) = found.first() {
-        return read(first);
+        return Ok(read(first));
     }
-    let files: Vec<String> = std::fs::read_dir(tmp.path()).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
-    let (code, stderr) = match &output {
-        Ok(o) => (o.status.code().unwrap_or(-1).to_string(), head_chars(&String::from_utf8_lossy(&o.stderr), 500).to_owned()),
-        Err(e) => ("timeout".to_owned(), e.to_string()),
-    };
-    errors.push(format!("LibreOffice produced no output: file='{}', format='{output_format}', returncode={code}, stderr={stderr}, tmpdir_files={files:?}", path.display()));
-    String::new()
+    let files: Vec<String> = std::fs::read_dir(&dir).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    Err(ConvertFailure::NoOutput(format!(
+        "LibreOffice produced no output: file='{}', format='{output_format}', returncode={}, stderr={}, tmpdir_files={files:?}",
+        path.display(),
+        output.returncode,
+        head_chars(&String::from_utf8_lossy(&output.stderr), 500)
+    )))
+}
+
+/// 파일을 `output_format`(예: `txt:Text`)으로 변환하고 결과 텍스트를 돌려준다. 결과를 못 얻으면 오류 메시지를 남기고 빈 문자열.
+/// 실행하지 못한 경우(시간 초과 포함)는 `returncode=timeout`으로 적는다.
+pub fn convert_with_libreoffice(path: &Path, output_format: &str, binary: &Path, errors: &mut Vec<String>) -> String {
+    match convert_with_libreoffice_using(&SystemRunner, binary, None, path, output_format) {
+        Ok(text) => text,
+        Err(ConvertFailure::NoOutput(message)) => {
+            errors.push(message);
+            String::new()
+        }
+        Err(ConvertFailure::Run(e)) => {
+            errors.push(format!("LibreOffice produced no output: file='{}', format='{output_format}', returncode=timeout, stderr={e}, tmpdir_files=[]", path.display()));
+            String::new()
+        }
+    }
 }
 
 fn finish(raw_text: &str) -> (String, usize) {

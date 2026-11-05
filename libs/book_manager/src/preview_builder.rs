@@ -4,6 +4,7 @@
 //! HTML 미리보기와 리소스 경로는 `html.rs`에서 처리한다. HWP3은 LibreOffice 변환이 비면 네이티브 파서로 폴백한다.
 //! PDF reader와 쪽수는 경로·수정 시각 cache를 공유한다.
 
+use doc_reader::office::{ConvertFailure, convert_with_libreoffice_using, find_libreoffice_with};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
@@ -240,7 +241,16 @@ impl BookManager {
             log::debug!("Preview cache hit for book_id={book_id} ({suffix})");
             return self.file_response(&cache_file, "text/html", html_security_headers());
         }
-        let converted = Self::try_convert_with_libreoffice(&*self.runner, &self.find_libreoffice(), None, file_path, "html");
+        let binary = find_libreoffice_with(&|command| self.runner.which(command), &|path| path.exists());
+        let converted = match convert_with_libreoffice_using(&*self.runner, &binary, None, file_path, "html") {
+            Ok(html) => Ok(html),
+            // 결과 파일이 없으면 빈 미리보기로 이어 간다. 실행 실패만 오류다.
+            Err(ConvertFailure::NoOutput(message)) => {
+                log::error!("{message}");
+                Ok(String::new())
+            }
+            Err(ConvertFailure::Run(e)) => Err(e),
+        };
         let html_content = match converted {
             Ok(html) => html,
             Err(e) => {

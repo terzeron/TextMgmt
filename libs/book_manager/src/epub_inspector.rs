@@ -1,4 +1,4 @@
-//! EPUB 구조 검사·보조: OPF 찾기, 미리보기 검증, 챕터 수, 이미지 축소, 캐시 정리, LibreOffice 변환.
+//! EPUB 구조 검사·보조: OPF 찾기, 미리보기 검증, 챕터 수, 이미지 축소, 캐시 정리. LibreOffice 변환은 `doc_reader::office`에 있다.
 //!
 //! XML은 `roxmltree`로 읽는다. 깨진 XML을 복구하지는 않는다. 대신 선언 없이 쓰인 접두사는
 //! `xml_recoverer::declare_unbound_prefixes`로 먼저 선언한다. 문서를 고쳐 쓸 때는 DOM을 직렬화하지 않고 원문에서 해당 구간만 잘라내
@@ -8,20 +8,19 @@ use common::xml_parser::parse_xml;
 use common::zip_reader::{self, MemberError};
 use std::io::{Read, Seek, Write};
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use image::{ImageFormat, imageops::FilterType};
 use regex::Regex;
 use roxmltree::{Document, Node};
-use sysdeps::{CommandError, CommandRunner, FsOps, RealFs};
+use sysdeps::{FsOps, RealFs};
 use xml_recoverer::{declare_unbound_prefixes, strip_doctype, strip_unknown_entities};
 use zip::ZipArchive;
 use zip::result::ZipError;
 
 use super::BookManager;
 use super::path_validator::{clean_href, zip_path};
-use super::temp_file_maker::TempDir;
 use common::url_parser::unquote;
 use serde_json::Value;
 use std::borrow::Cow;
@@ -32,8 +31,6 @@ pub const NCX_NS: &str = "http://www.daisy.org/z3986/2005/ncx/";
 
 /// 이미지 축소 때 JPEG 품질.
 const EPUB_IMAGE_JPEG_QUALITY: u8 = 80;
-/// LibreOffice 변환 시간 상한.
-const LIBREOFFICE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// XML 바이트를 문자열로 바꾼다(UTF-8 BOM 제거, 잘못된 바이트는 대체 문자).
 pub fn xml_text(bytes: &[u8]) -> String {
@@ -279,78 +276,6 @@ impl BookManager {
                 Err(e) => log::warn!("Failed to evict cache file {name}: {e}"),
             }
         }
-    }
-
-    /// LibreOffice 실행 파일 경로. `which`로 못 찾으면 맥 경로, 그것도 없으면 `libreoffice`다.
-    pub fn find_libreoffice_with(which: &dyn Fn(&str) -> Option<String>, exists: &dyn Fn(&Path) -> bool) -> String {
-        for command in ["libreoffice", "soffice"] {
-            if let Some(path) = which(command) {
-                return path;
-            }
-        }
-        let mac_path = "/Applications/LibreOffice.app/Contents/MacOS/soffice";
-        if exists(Path::new(mac_path)) {
-            return mac_path.to_string();
-        }
-        "libreoffice".to_string()
-    }
-
-    /// 이 매니저의 외부 명령 대역으로 LibreOffice를 찾는다.
-    pub(crate) fn find_libreoffice(&self) -> String {
-        Self::find_libreoffice_with(&|command| self.runner.which(command).map(|p| p.to_string_lossy().into_owned()), &|p| p.exists())
-    }
-
-    /// LibreOffice로 파일을 변환하고 결과 텍스트를 돌려준다. 변환 결과가 없으면 빈 문자열이다.
-    /// `work_dir`가 없으면 임시 디렉터리를 만들어 쓰고 지운다.
-    pub fn convert_with_libreoffice_with(runner: &dyn CommandRunner, lo_bin: &str, work_dir: Option<&Path>, file_path: &Path, output_format: &str) -> String {
-        Self::try_convert_with_libreoffice(runner, lo_bin, work_dir, file_path, output_format).unwrap_or_else(|e| {
-            log::error!("LibreOffice 실행 실패: file='{}', format='{output_format}': {e}", file_path.display());
-            String::new()
-        })
-    }
-
-    /// `convert_with_libreoffice_with`의 오류 판. 실행 실패(시간 초과 포함)는 `Err`다.
-    pub(crate) fn try_convert_with_libreoffice(runner: &dyn CommandRunner, lo_bin: &str, work_dir: Option<&Path>, file_path: &Path, output_format: &str) -> Result<String, CommandError> {
-        let temp;
-        let dir: PathBuf = match work_dir {
-            Some(dir) => dir.to_path_buf(),
-            None => {
-                temp = TempDir::new("lo-convert-").map_err(|e| CommandError::Failed(e.to_string()))?;
-                temp.path().to_path_buf()
-            }
-        };
-        let argv = vec![
-            lo_bin.to_string(),
-            "--headless".to_string(),
-            "--convert-to".to_string(),
-            output_format.to_string(),
-            "--outdir".to_string(),
-            dir.to_string_lossy().into_owned(),
-            file_path.to_string_lossy().into_owned(),
-        ];
-        let output = runner.run(&argv, Some(LIBREOFFICE_TIMEOUT))?;
-        let ext = output_format.split(':').next().unwrap_or(output_format);
-        let stem = file_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let read = |path: &Path| String::from_utf8_lossy(&std::fs::read(path).unwrap_or_default()).into_owned();
-        let out_file = dir.join(format!("{stem}.{ext}"));
-        if out_file.exists() {
-            return Ok(read(&out_file));
-        }
-        // stem 불일치 시 글로브로 검색
-        let mut candidates: Vec<PathBuf> =
-            std::fs::read_dir(&dir).map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e.to_string_lossy() == ext)).collect()).unwrap_or_default();
-        candidates.sort();
-        if let Some(first) = candidates.first() {
-            return Ok(read(first));
-        }
-        let names: Vec<String> = std::fs::read_dir(&dir).map(|rd| rd.filter_map(Result::ok).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
-        log::error!(
-            "LibreOffice produced no output: file='{}', format='{output_format}', returncode={}, stderr={}, tmpdir_files={names:?}",
-            file_path.display(),
-            output.returncode,
-            String::from_utf8_lossy(&output.stderr).chars().take(500).collect::<String>()
-        );
-        Ok(String::new())
     }
 }
 

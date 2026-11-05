@@ -1309,29 +1309,6 @@ fn test_downscale_epub_image_png_stays_png() {
 }
 
 #[test]
-fn test_convert_with_libreoffice_success_and_fallback() {
-    let tmp = TempDir::new().unwrap();
-    let tmp_path = tmp.path();
-    let fake_bin = tmp_path.join("libreoffice");
-    write(&fake_bin, "");
-
-    // 출력 파일 이름(stem)이 달라서 glob 대체 경로를 타게 한다
-    let runner = FakeRunner::new(|argv| {
-        let idx = argv.iter().position(|a| a == "--outdir").unwrap();
-        let outdir = PathBuf::from(&argv[idx + 1]);
-        mkdir(&outdir);
-        write(outdir.join("other.txt"), "ok");
-        Ok(CommandOutput { returncode: 0, stdout: vec![], stderr: vec![] })
-    });
-    let content = BookManager::convert_with_libreoffice_with(&*runner, fake_bin.to_str().unwrap(), None, &tmp_path.join("x.doc"), "txt");
-    assert_eq!(content, "ok");
-
-    let runner_empty = FakeRunner::new(|_argv| Ok(CommandOutput { returncode: 0, stdout: vec![], stderr: vec![] }));
-    let content = BookManager::convert_with_libreoffice_with(&*runner_empty, fake_bin.to_str().unwrap(), None, &tmp_path.join("x.doc"), "txt");
-    assert_eq!(content, "");
-}
-
-#[test]
 fn test_validate_epub_success_and_errors() {
     let tmp = TempDir::new().unwrap();
     let tmp_path = tmp.path();
@@ -1724,49 +1701,6 @@ fn test_find_opf_path_regex_and_direct() {
 }
 
 #[test]
-fn test_find_libreoffice_mac_path() {
-    let mac_path = "/Applications/LibreOffice.app/Contents/MacOS/soffice";
-    let found = BookManager::find_libreoffice_with(&|_cmd: &str| None, &|p: &Path| p.to_str() == Some(mac_path));
-    assert_eq!(found, mac_path);
-}
-
-#[test]
-fn test_convert_with_libreoffice_direct_output() {
-    let tmp = TempDir::new().unwrap();
-    let tmp_path = tmp.path();
-    let sample = tmp_path.join("sample.docx");
-    write(&sample, "doc");
-
-    // TemporaryDirectory 대신 tmp_path를 작업 디렉토리로 쓴다
-    let work_dir = tmp_path.to_path_buf();
-    let runner = FakeRunner::new(move |_argv| {
-        write(work_dir.join("sample.html"), "ok");
-        Ok(CommandOutput { returncode: 0, stdout: vec![], stderr: vec![] })
-    });
-    assert_eq!(BookManager::convert_with_libreoffice_with(&*runner, "lo", Some(tmp_path), &sample, "html"), "ok");
-}
-
-#[test]
-fn test_convert_with_libreoffice_no_output() {
-    let tmp = TempDir::new().unwrap();
-    let tmp_path = tmp.path();
-    let sample = tmp_path.join("sample.docx");
-    write(&sample, "doc");
-
-    let work_dir = tmp_path.to_path_buf();
-    let runner = FakeRunner::new(move |_argv| {
-        for entry in fs::read_dir(&work_dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_some_and(|e| e == "html") {
-                fs::remove_file(path).unwrap();
-            }
-        }
-        Ok(CommandOutput { returncode: 1, stdout: vec![], stderr: b"err".to_vec() })
-    });
-    assert_eq!(BookManager::convert_with_libreoffice_with(&*runner, "lo", Some(tmp_path), &sample, "html"), "");
-}
-
-#[test]
 fn test_book_manager_init_requires_env() {
     // TM_BOOK_DIR을 지운 환경을 흉내낸다. 프로세스 환경을 바꾸지 않도록 조회 함수를 주입한다.
     let get_env = |_name: &str| -> Option<String> { None };
@@ -1880,23 +1814,6 @@ fn test_catalog_search_paths_report_missing_required_es_fields() {
 }
 
 // ---- coverage: additional uncovered lines ----
-
-#[test]
-fn test_find_libreoffice_which_found() {
-    let found = BookManager::find_libreoffice_with(
-        &|cmd: &str| {
-            if cmd == "libreoffice" { Some("/usr/bin/libreoffice".to_string()) } else { None }
-        },
-        &|p: &Path| p.exists(),
-    );
-    assert_eq!(found, "/usr/bin/libreoffice");
-}
-
-#[test]
-fn test_find_libreoffice_fallback() {
-    let found = BookManager::find_libreoffice_with(&|_cmd: &str| None, &|_p: &Path| false);
-    assert_eq!(found, "libreoffice");
-}
 
 #[test]
 fn test_get_book_content_missing_file() {

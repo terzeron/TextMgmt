@@ -17,7 +17,6 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tempfile::TempDir;
 
 #[test]
 fn test_empty_and_duplicate_requests_are_rejected() {
@@ -149,21 +148,6 @@ fn test_forced_zip_fallback_uses_same_line_count() {
     assert_eq!(forced.line_count, 3);
     assert_eq!(expected, 3);
     assert_eq!(forced.line_count, expected);
-}
-
-#[test]
-fn libreoffice_without_an_output_file_returns_empty_text_and_logs_the_directory() {
-    let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("unrelated.log"), "x").unwrap();
-    let runner = common::runner::FakeRunner::returning(Ok(common::runner::output(0, "", "warn: nothing written")));
-    let logs = common::log_capture::LogCapture::start(log::Level::Error);
-
-    let text = BookManager::convert_with_libreoffice_with(&*runner, "soffice", Some(dir.path()), Path::new("/books/book.hwp"), "txt:Text");
-
-    assert_eq!(text, "");
-    let logged = logs.text();
-    assert!(logged.contains("LibreOffice produced no output") && logged.contains("format='txt:Text'"), "{logged}");
-    assert!(logged.contains("unrelated.log") && logged.contains("warn: nothing written"), "{logged}");
 }
 
 mod xml_safety_and_cursors {

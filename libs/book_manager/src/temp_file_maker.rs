@@ -1,6 +1,5 @@
-//! 겹치지 않는 임시 파일·디렉터리 이름을 만든다. 다 쓴 파일은 `rename`으로 제자리에 놓는다.
+//! 겹치지 않는 임시 파일 이름을 만든다. 다 쓴 파일은 `rename`으로 제자리에 놓는다.
 
-use std::io;
 use std::path::{Path, PathBuf};
 
 /// 이 프로세스 안에서 겹치지 않는 임시 경로 이름 조각.
@@ -17,29 +16,6 @@ pub fn temp_sibling(path: &Path) -> PathBuf {
     path.with_file_name(format!(".{name}.{}.tmp", unique_token()))
 }
 
-/// 지울 때 알아서 정리되는 임시 디렉터리. `tempfile`은 개발 의존이라 직접 만든다.
-pub struct TempDir {
-    path: PathBuf,
-}
-
-impl TempDir {
-    pub fn new(prefix: &str) -> io::Result<TempDir> {
-        let path = std::env::temp_dir().join(format!("{prefix}{}", unique_token()));
-        std::fs::create_dir_all(&path)?;
-        Ok(TempDir { path })
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,15 +27,5 @@ mod tests {
         assert_eq!(sibling.parent(), Some(Path::new("/a/b")));
         let name = sibling.file_name().unwrap().to_string_lossy().into_owned();
         assert!(name.starts_with(".cover.jpg.") && name.ends_with(".tmp"), "{name}");
-    }
-
-    #[test]
-    fn temp_dir_is_created_and_removed_on_drop() {
-        let path = {
-            let dir = TempDir::new("tm-temp-file-maker-").unwrap();
-            assert!(dir.path().is_dir());
-            dir.path().to_path_buf()
-        };
-        assert!(!path.exists());
     }
 }
