@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime};
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// `TM_BOOK_DIR`에서 책 루트를 읽는다. 없으면 프로세스를 끝내야 하는 설정 오류를 돌려준다.
 pub fn path_prefix_from_env(get: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf, String> {
@@ -58,6 +59,32 @@ pub struct Book {
     pub created_time: NaiveDateTime,
     pub updated_time: NaiveDateTime,
     pub score: f64,
+}
+
+/// 응답에 싣는 책 한 권. 경로는 책 루트 기준 상대 경로, 시각은 마이크로초까지 적은 ISO 문자열이다.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BookView {
+    pub book_id: i64,
+    pub category: String,
+    pub title: String,
+    pub author: String,
+    pub file_path: String,
+    pub file_type: String,
+    pub file_size: i64,
+    pub line_count: i64,
+    pub page_count: i64,
+    pub isbn: String,
+    /// 만화 색인에는 생성 시각이 없다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_time: Option<String>,
+    pub updated_time: String,
+    pub score: f64,
+}
+
+/// `2020-01-02T03:04:05.123456` 모양.
+pub fn iso_micros(time: &NaiveDateTime) -> String {
+    time.format("%Y-%m-%dT%H:%M:%S.%6f").to_string()
 }
 
 fn required_str(info: &Value, key: &str) -> String {
@@ -129,28 +156,29 @@ impl Book {
         }
     }
 
-    pub fn dict(&self) -> Value {
-        self.dict_with_prefix(&Self::path_prefix())
+    /// 응답에 싣는 모양. 경로는 `TM_BOOK_DIR` 기준이다.
+    pub fn view(&self) -> BookView {
+        self.view_with_prefix(&Self::path_prefix())
     }
 
-    /// `dict`와 같으나 manager가 정한 책 루트를 기준으로 경로를 상대화한다.
-    pub(crate) fn dict_with_prefix(&self, prefix: &Path) -> Value {
+    /// `view`와 같으나 manager가 정한 책 루트를 기준으로 경로를 상대화한다.
+    pub(crate) fn view_with_prefix(&self, prefix: &Path) -> BookView {
         let relative = self.file_path.strip_prefix(prefix).expect("file_path is not under TM_BOOK_DIR");
-        json!({
-            "book_id": self.book_id,
-            "category": self.category,
-            "title": self.title,
-            "author": self.author,
-            "file_path": relative.to_string_lossy(),
-            "file_type": self.file_type,
-            "file_size": self.file_size,
-            "line_count": self.line_count,
-            "page_count": self.page_count,
-            "isbn": self.isbn,
-            "created_time": self.created_time.format("%Y-%m-%dT%H:%M:%S.%6f").to_string(),
-            "updated_time": self.updated_time.format("%Y-%m-%dT%H:%M:%S.%6f").to_string(),
-            "score": self.score,
-        })
+        BookView {
+            book_id: self.book_id,
+            category: self.category.clone(),
+            title: self.title.clone(),
+            author: self.author.clone(),
+            file_path: relative.to_string_lossy().into_owned(),
+            file_type: self.file_type.clone(),
+            file_size: self.file_size,
+            line_count: self.line_count,
+            page_count: self.page_count,
+            isbn: self.isbn.clone(),
+            created_time: Some(iso_micros(&self.created_time)),
+            updated_time: iso_micros(&self.updated_time),
+            score: self.score,
+        }
     }
 }
 

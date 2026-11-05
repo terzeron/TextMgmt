@@ -10,21 +10,22 @@ fn info() -> Value {
     json!({"category": "cat", "title": "title", "author": "author", "file_path": "cat/file.epub", "file_type": "epub", "file_size": 10, "updated_time": "2021-01-01T00:00:00.000000"})
 }
 #[test]
-fn test_init_and_dict() {
+fn test_init_and_view() {
     common::setup_env();
     let c = Comics::new(1, &info(), 1.5);
-    let data = c.dict();
-    assert_eq!(data["book_id"], 1);
-    assert_eq!(data["category"], "cat");
-    assert_eq!(data["file_path"], "cat/file.epub");
-    assert_eq!(data["score"], 1.5);
+    let data = c.view();
+    assert_eq!(data.book_id, 1);
+    assert_eq!(data.category, "cat");
+    assert_eq!(data.file_path, "cat/file.epub");
+    assert_eq!(data.score, 1.5);
+    assert_eq!(data.created_time, None);
 }
 
 #[test]
 fn test_json_and_str() {
     common::setup_env();
     let c = Comics::new(2, &info(), 0.0);
-    assert!(c.dict().get("category").is_some(), "{}", c.dict());
+    assert!(json!(c.view()).get("category").is_some(), "{:?}", c.view());
     assert!(c.to_string().contains("title"), "{c}");
 }
 
@@ -46,16 +47,16 @@ fn test_init_uses_optional_defaults_and_score() {
     assert_eq!(c.isbn, "");
     assert_eq!(c.summary, "");
     assert_eq!(c.score, 2.5);
-    assert_eq!(c.dict()["file_path"], "cat2/file.pdf");
+    assert_eq!(c.view().file_path, "cat2/file.pdf");
 }
 
 #[test]
 #[should_panic]
-fn test_dict_rejects_paths_outside_comics_root() {
+fn test_view_rejects_paths_outside_comics_root() {
     common::setup_env();
     let mut value = info();
     value["file_path"] = json!("/outside/book.epub");
-    Comics::new(4, &value, 0.0).dict();
+    Comics::new(4, &value, 0.0).view();
 }
 
 #[test]

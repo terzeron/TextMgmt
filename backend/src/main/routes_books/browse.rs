@@ -61,14 +61,14 @@ async fn browse(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
         Ok(page) => page,
         Err(error) => return Ok(Json(json!({"status":"failure","error":error}))),
     };
-    let books: Vec<Value> = items
-        .into_iter()
-        .map(|(book, title)| {
-            let mut value = super::catalog::book_json(&book, manager.as_ref());
-            value["display_title"] = json!(title);
-            value
-        })
-        .collect();
+    /// 표지 목록의 책. 화면에 보일 제목을 덧붙인다.
+    #[derive(serde::Serialize)]
+    struct CoverBook {
+        #[serde(flatten)]
+        book: crate::book_metadata::BookView,
+        display_title: String,
+    }
+    let books: Vec<CoverBook> = items.into_iter().map(|(book, display_title)| CoverBook { book: super::catalog::book_view(&book, manager.as_ref()), display_title }).collect();
     Ok(Json(json!({"status":"success","result":books,"total":total,"next_cursor":next})))
 }
 

@@ -2,7 +2,7 @@
 use super::{ensure_allowed, hidden_categories, is_hidden, kind, manager};
 use crate::auth_service::Claims;
 use crate::book_manager::MAX_LATEST_BOOK_COUNT;
-use crate::book_metadata::Book;
+use crate::book_metadata::{Book, BookView};
 use crate::main::{ApiError, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, RequireAuth, Routes};
 use axum::{
     Json,
@@ -41,13 +41,14 @@ fn mapping(deps: &AppDeps) -> ApiResult<Arc<dyn CategoryMappingApi>> {
 fn hidden(deps: &AppDeps, payload: &Claims, uri: &Uri) -> ApiResult<Vec<String>> {
     hidden_categories(deps, payload, comics(uri))
 }
-pub(super) fn book_json(book: &Book, manager: &dyn BookManagerApi) -> Value {
+/// manager의 책 루트를 기준으로 경로를 상대화한 응답 모양.
+pub(super) fn book_view(book: &Book, manager: &dyn BookManagerApi) -> BookView {
     let manager_prefix = manager.path_prefix();
     let prefix = if !manager_prefix.as_os_str().is_empty() && book.file_path.starts_with(&manager_prefix) { manager_prefix } else { Book::path_prefix() };
-    book.dict_with_prefix(&prefix)
+    book.view_with_prefix(&prefix)
 }
-fn books_json(books: &[Book], manager: &dyn BookManagerApi) -> Vec<Value> {
-    books.iter().map(|b| book_json(b, manager)).collect()
+fn book_views(books: &[Book], manager: &dyn BookManagerApi) -> Vec<BookView> {
+    books.iter().map(|b| book_view(b, manager)).collect()
 }
 fn failure(error: Option<String>) -> Json<Value> {
     Json(json!({"status":"failure","error":error}))
@@ -59,7 +60,7 @@ async fn metadata(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppD
     match manager.get_book(id).await {
         Ok(book) => {
             ensure_allowed(&book.category, &hidden(&deps, &payload, &uri)?)?;
-            Ok(Json(json!({"status":"success","result":book_json(&book,manager.as_ref())})))
+            Ok(Json(json!({"status":"success","result":book_view(&book,manager.as_ref())})))
         }
         Err(error) => Ok(failure(Some(error.to_string()))),
     }
@@ -101,12 +102,12 @@ async fn in_category(
     let manager = manager(&deps, &uri)?;
     if query.limit > 0 {
         return Ok(match manager.get_books_in_category_paged(&category, Some(query.limit), Some(&query.cursor)).await {
-            Ok(page) => Json(json!({"status":"success","result":books_json(&page.books,manager.as_ref()),"total":page.total,"next_cursor":page.next_cursor})),
+            Ok(page) => Json(json!({"status":"success","result":book_views(&page.books,manager.as_ref()),"total":page.total,"next_cursor":page.next_cursor})),
             Err(error) => failure(Some(error)),
         });
     }
     Ok(match manager.get_books_in_category(&category).await {
-        Ok(books) => Json(json!({"status":"success","result":books_json(&books,manager.as_ref())})),
+        Ok(books) => Json(json!({"status":"success","result":book_views(&books,manager.as_ref())})),
         Err(error) => failure(Some(error)),
     })
 }
@@ -128,7 +129,7 @@ async fn latest(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
     }
     let manager = manager(&deps, &uri)?;
     Ok(match manager.get_latest_books(limit, Some(&excluded)).await {
-        Ok(page) => Json(json!({"status":"success","result":books_json(&page.books,manager.as_ref()),"total":page.total})),
+        Ok(page) => Json(json!({"status":"success","result":book_views(&page.books,manager.as_ref()),"total":page.total})),
         Err(error) => failure(Some(error)),
     })
 }
@@ -169,7 +170,7 @@ async fn search(
     let excluded = (!excluded.is_empty()).then_some(excluded.as_slice());
     let category = (!query.category.is_empty()).then_some(query.category.as_str());
     Ok(match manager.search_by_keyword_paged(&keyword, query.limit, query.offset, excluded, category).await {
-        Ok(page) => Json(json!({"status":"success","result":books_json(&page.books,manager.as_ref()),"total":page.total})),
+        Ok(page) => Json(json!({"status":"success","result":book_views(&page.books,manager.as_ref()),"total":page.total})),
         Err(error) => failure(Some(error)),
     })
 }
@@ -192,14 +193,14 @@ async fn similar(
                 page.total = page.books.len() as i64;
             }
             if !page.books.is_empty() {
-                return Ok(Json(json!({"status":"success","result":books_json(&page.books,manager.as_ref()),"total":page.total})));
+                return Ok(Json(json!({"status":"success","result":book_views(&page.books,manager.as_ref()),"total":page.total})));
             }
             None
         }
         Err(error) => Some(error),
     };
     match manager.get_book(id).await {
-        Ok(book) => Ok(Json(json!({"status":"success","result":[book_json(&book,manager.as_ref())],"total":1}))),
+        Ok(book) => Ok(Json(json!({"status":"success","result":[book_view(&book,manager.as_ref())],"total":1}))),
         Err(second_error) => Ok(failure(error.or(Some(second_error.to_string())))),
     }
 }

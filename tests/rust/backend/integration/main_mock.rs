@@ -27,7 +27,7 @@ fn book_dict() -> Value {
     })
 }
 
-/// `_make_book(overrides)`에 대응한다. MagicMock 책 대신 `.dict()` 결과를 돌려준다.
+/// 책 응답(`BookView`) 모양의 JSON을 만든다. `overrides`의 키로 값을 바꾼다.
 fn make_book(overrides: Value) -> Value {
     let mut d = book_dict();
     for (k, v) in overrides.as_object().cloned().unwrap_or_default() {

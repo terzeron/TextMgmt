@@ -27,13 +27,13 @@ fn test_init() {
 }
 
 #[test]
-fn test_dict() {
+fn test_view_serializes_response_shape() {
     let book_id = 3;
     let info = info_with_path(prefix().join("category1").join("[anonymous] any book.epub"), "file_type1", 100);
 
     let book = Book::new(book_id, &info, 0.0);
     assert_eq!(
-        book.dict(),
+        json!(book.view()),
         json!({"book_id": 3, "category": "category1", "title": "title1", "author": "author1", "file_path": "category1/[anonymous] any book.epub", "file_type": "file_type1", "file_size": 100, "line_count": 0, "page_count": 0, "isbn": "", "created_time": "2021-01-01T00:00:00.000000", "updated_time": "2021-01-01T00:00:00.000000", "score": 0.0})
     );
 }
@@ -43,7 +43,7 @@ fn test_json_and_str() {
     let book_id = 4;
     let info = info_with_path(prefix().join("category1").join("book.txt"), "txt", 10);
     let book = Book::new(book_id, &info, 0.0);
-    assert_eq!(book.dict()["title"], "title1");
+    assert_eq!(book.view().title, "title1");
     assert!(book.to_string().contains("category: category1"), "{book}");
 }
 
@@ -65,7 +65,7 @@ fn test_init_uses_optional_defaults_and_score() {
     assert_eq!(book.isbn, "");
     assert_eq!(book.summary, "");
     assert_eq!(book.score, 12.5);
-    assert_eq!(book.dict()["file_path"], "category2/book2.pdf");
+    assert_eq!(book.view().file_path, "category2/book2.pdf");
 }
 
 #[test]
@@ -84,7 +84,7 @@ fn test_init_uses_created_time_when_present() {
 
     let book = Book::new(6, &info, 0.0);
 
-    assert_eq!(book.dict()["created_time"], "2020-01-01T01:02:03.000000");
+    assert_eq!(book.view().created_time.unwrap(), "2020-01-01T01:02:03.000000");
 }
 
 #[test]
@@ -103,8 +103,8 @@ fn test_datetime_fromisoformat_accepts_timezone_suffixes() {
 
     let book = Book::new(7, &info, 0.0);
 
-    assert_eq!(book.dict()["created_time"], "2020-01-02T03:04:05.123456");
-    assert_eq!(book.dict()["updated_time"], "2022-02-03T04:05:06.000000");
+    assert_eq!(book.view().created_time.unwrap(), "2020-01-02T03:04:05.123456");
+    assert_eq!(book.view().updated_time, "2022-02-03T04:05:06.000000");
 }
 
 #[test]
@@ -123,15 +123,15 @@ fn test_datetime_fromisoformat_accepts_comma_fraction() {
 
     let book = Book::new(8, &info, 0.0);
 
-    assert_eq!(book.dict()["created_time"], "2020-01-02T03:04:05.123456");
+    assert_eq!(book.view().created_time.unwrap(), "2020-01-02T03:04:05.123456");
 }
 
 #[test]
 #[should_panic]
-fn test_dict_rejects_paths_outside_book_root() {
+fn test_view_rejects_paths_outside_book_root() {
     common::setup_env();
     let info = info_with_path(PathBuf::from("/outside/book.pdf"), "pdf", 10);
-    Book::new(9, &info, 0.0).dict();
+    Book::new(9, &info, 0.0).view();
 }
 
 // ---- 환경 변수 누락 검사 ----

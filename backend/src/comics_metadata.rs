@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use chrono::NaiveDateTime;
-use serde_json::{Value, json};
+use serde_json::Value;
+
+use crate::book_metadata::{BookView, iso_micros};
 
 /// `TM_COMICS_DIR`에서 만화 루트를 읽는다. 없으면 프로세스를 끝내야 하는 설정 오류를 돌려준다.
 pub fn path_prefix_from_env(get: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf, String> {
@@ -73,23 +75,25 @@ impl Comics {
         }
     }
 
-    pub fn dict(&self) -> Value {
+    /// 응답에 싣는 모양. 경로는 `TM_COMICS_DIR` 기준이고, 생성 시각은 없다.
+    pub fn view(&self) -> BookView {
         let prefix = Self::path_prefix();
         let relative = self.file_path.strip_prefix(&prefix).expect("file_path is not under TM_COMICS_DIR");
-        json!({
-            "book_id": self.book_id,
-            "category": self.category,
-            "title": self.title,
-            "author": self.author,
-            "file_path": relative.to_string_lossy(),
-            "file_type": self.file_type,
-            "file_size": self.file_size,
-            "line_count": self.line_count,
-            "page_count": self.page_count,
-            "isbn": self.isbn,
-            "updated_time": self.updated_time.format("%Y-%m-%dT%H:%M:%S.%6f").to_string(),
-            "score": self.score,
-        })
+        BookView {
+            book_id: self.book_id,
+            category: self.category.clone(),
+            title: self.title.clone(),
+            author: self.author.clone(),
+            file_path: relative.to_string_lossy().into_owned(),
+            file_type: self.file_type.clone(),
+            file_size: self.file_size,
+            line_count: self.line_count,
+            page_count: self.page_count,
+            isbn: self.isbn.clone(),
+            created_time: None,
+            updated_time: iso_micros(&self.updated_time),
+            score: self.score,
+        }
     }
 }
 
