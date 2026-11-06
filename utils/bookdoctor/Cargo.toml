@@ -39,8 +39,8 @@ name = "file_quarantiner"
 path = "../../tests/rust/bookdoctor/file_quarantiner.rs"
 
 [[test]]
-name = "report"
-path = "../../tests/rust/bookdoctor/report.rs"
+name = "report_writer"
+path = "../../tests/rust/bookdoctor/report_writer.rs"
 
 [[test]]
 name = "scan_runner"

@@ -8,7 +8,7 @@ pub mod file_repairer;
 pub(crate) mod file_rewriter;
 pub mod file_sanitizer;
 pub mod output_formatter;
-pub mod report;
+pub mod report_writer;
 pub mod scan_runner;
 
 pub use doc_checker::{Category, FileReport, Finding, Format, Severity, ViewerBlocked};

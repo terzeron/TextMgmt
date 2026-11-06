@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 use bookdoctor::output_formatter::Style;
-use bookdoctor::report::{Aggregate, finding_style, write_json_line, write_text};
+use bookdoctor::report_writer::{Aggregate, finding_style, write_json_line, write_text};
 use bookdoctor::{Category, FileReport, Format, Severity, Summary};
 
 fn flagged(path: &Path) -> FileReport {
@@ -109,7 +109,7 @@ fn escape_and_bidi_in_the_path_are_hidden_in_text_but_the_real_file_is_found() {
 
 #[test]
 fn aggregate_counts_suppressed_even_for_files_that_print_nothing() {
-    use bookdoctor::report::write_summary_line;
+    use bookdoctor::report_writer::write_summary_line;
     let mut only_low = FileReport::new(Path::new("a.epub"), Some(Format::Epub));
     only_low.push(Category::Defect, Severity::Low, "L", "", "");
     only_low.push(Category::Defect, Severity::Medium, "M", "", "");
@@ -127,7 +127,7 @@ fn aggregate_counts_suppressed_even_for_files_that_print_nothing() {
 
 #[test]
 fn summary_line_omits_suppressed_part_when_nothing_was_suppressed() {
-    use bookdoctor::report::write_summary_line;
+    use bookdoctor::report_writer::write_summary_line;
     let agg = Aggregate::new();
     let mut out = Vec::new();
     write_summary_line(&agg, &Summary { scanned: 3, ..Summary::default() }, &mut out).unwrap();
@@ -137,7 +137,7 @@ fn summary_line_omits_suppressed_part_when_nothing_was_suppressed() {
 
 #[test]
 fn summary_line_lists_only_nonzero_suppressed_severities() {
-    use bookdoctor::report::write_summary_line;
+    use bookdoctor::report_writer::write_summary_line;
     let mut r = FileReport::new(Path::new("a.epub"), Some(Format::Epub));
     r.push(Category::Defect, Severity::Medium, "M", "", "");
     r.suppress_below(Severity::High);
@@ -216,7 +216,7 @@ fn escape_in_file_name_and_detail_never_reaches_output_raw() {
 mod viewer_blocked_json {
     use super::support;
     use crate::support::shared_fixtures::opts;
-    use bookdoctor::report::write_json_line;
+    use bookdoctor::report_writer::write_json_line;
     use doc_checker::format_dispatcher::scan_file;
 
     fn scripted_epub() -> support::NamedFile {
