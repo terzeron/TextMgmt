@@ -1,6 +1,6 @@
 [package]
 name = "common"
-description = "여러 crate가 함께 쓰는 기능: HTTP 요청(http_client), URL 해석(url_parser), JSON 필드 읽기(json_field_reader), XML 해석(xml_parser), ZIP 읽기(zip_reader)"
+description = "여러 crate가 함께 쓰는 기능: HTTP 요청(http_client), URL 해석(url_parser), JSON 필드 읽기(json_field_reader), XML 해석과 고칠 수 있는 XML 트리(xml_parser), ZIP 읽기(zip_reader)"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -10,7 +10,7 @@ autotests = false
 [features]
 default = ["http_client", "xml_parser", "zip_reader"]
 http_client = ["dep:ureq"]
-xml_parser = ["dep:roxmltree"]
+xml_parser = ["dep:roxmltree", "dep:xml_recoverer"]
 zip_reader = ["dep:zip"]
 
 [dependencies]
@@ -18,6 +18,7 @@ serde_json.workspace = true
 # 공개 서점과 ES는 HTTPS라 TLS(rustls)를 켠다. 인증서 검증은 기본값(켬)을 그대로 쓴다.
 ureq = { workspace = true, features = ["rustls"], optional = true }
 roxmltree = { version = "0.21.1", optional = true }
+xml_recoverer = { path = "../xml_recoverer", optional = true }
 zip = { version = "9.0.5", default-features = false, features = ["deflate"], optional = true }
 
 [dev-dependencies]

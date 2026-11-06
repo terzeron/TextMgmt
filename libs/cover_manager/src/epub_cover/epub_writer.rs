@@ -12,8 +12,8 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
 use super::member_path;
-use super::xml_tree::{self, Element, Node, XHTML_NS};
 use super::{CoverError, EpubCoverHooks, FResult, Fail, OPF_NS, entry_names, entry_size, find_cover_member_in, has_entry, inspect_archive, read_entry, read_package_with};
+use common::xml_parser::{self, Element, Node, XHTML_NS};
 use common::zip_reader::zip_entry_name;
 
 /// 추가·교체할 멤버. 넣은 순서를 지킨다.
@@ -322,7 +322,7 @@ pub fn detach_publisher_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_p
             return Err(CoverError::new("표지와 본문 참조를 검사할 파일이 너무 큽니다").into());
         }
         let data = read_entry(archive, &name)?;
-        let document = if media == "text/css" { None } else { Some(xml_tree::parse(&data)?) };
+        let document = if media == "text/css" { None } else { Some(xml_parser::parse(&data)?) };
         let doc = Doc { name: name.clone(), item: ItemInfo { id: item.id.clone(), href: item.href.clone(), media_type: item.media_type.clone(), properties: item.properties.clone() }, document, data };
         match documents.iter_mut().find(|d| d.name == name) {
             Some(slot) => *slot = doc,
@@ -347,7 +347,7 @@ pub fn detach_publisher_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_p
             .descendants()
             .into_iter()
             .filter(|e| matches!(e.name.as_str(), "img" | "image"))
-            .map(|e| [e.attr("src"), e.attr("href"), e.attr_ns(xml_tree::XLINK_NS, "href")].into_iter().flatten().find(|v| !v.is_empty()).unwrap_or("").to_string())
+            .map(|e| [e.attr("src"), e.attr("href"), e.attr_ns(xml_parser::XLINK_NS, "href")].into_iter().flatten().find(|v| !v.is_empty()).unwrap_or("").to_string())
             .collect();
         if !image_refs.is_empty() && image_refs.iter().all(|href| member_path(&page_dir, href) == member) && body.text_content().trim().is_empty() {
             detached.insert(doc.name.clone());
@@ -389,7 +389,7 @@ pub fn detach_publisher_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_p
                     element.remove_attr("href");
                 }
             });
-            updates.push((doc.name.clone(), xml_tree::to_bytes_with_declaration(document)));
+            updates.push((doc.name.clone(), xml_parser::to_bytes_with_declaration(document)));
         }
     }
 
@@ -427,7 +427,7 @@ pub fn detach_publisher_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_p
         if changed {
             normalize_play_order(document)?;
             updates.retain(|(n, _)| n != &doc.name);
-            updates.push((doc.name.clone(), xml_tree::to_bytes_with_declaration(document)));
+            updates.push((doc.name.clone(), xml_parser::to_bytes_with_declaration(document)));
         }
     }
     let mut obsolete = detached;
@@ -454,7 +454,7 @@ pub fn write_epub<R: Read + Seek>(original: &mut ZipArchive<R>, destination: &Pa
     writer.start_file("mimetype", new_member_options(CompressionMethod::Stored))?;
     writer.write_all(b"application/epub+zip")?;
     writer.set_raw_comment(original.comment().to_vec().into_boxed_slice())?;
-    let opf_bytes = xml_tree::to_bytes_with_declaration(package);
+    let opf_bytes = xml_parser::to_bytes_with_declaration(package);
     for index in 0..original.len() {
         let name = match original.name_for_index(index) {
             Some(Ok(name)) => name.into_owned(),

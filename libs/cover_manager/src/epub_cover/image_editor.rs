@@ -21,12 +21,12 @@ use zip::ZipArchive;
 use super::epub_writer::{Added, PreviousCover, add_image_page, add_split_image, read_previous_cover, sections, verify_staged, write_epub};
 use super::inplace_replacer::rewrite_epub;
 use super::member_path;
-use super::xml_tree::{self, Element, Node};
 use super::{
     CoverError, CreatedIdrefs, EpubCoverHooks, EpubRewrite, FResult, Fail, MAX_XML_BYTES, entry_names, entry_size, has_entry, normalize_image_with, read_dimensions, read_entry, read_package_with,
 };
 use crate::image_edit::{Rect, crop_rotated};
 use common::url_parser::quote;
+use common::xml_parser::{self, Element, Node};
 
 /// crops 의 idref 에 이 값을 주면 쪽이 아니라 표지 이미지를 자른다(표지 화면은 spine 항목이 아닐 수 있다).
 pub const COVER_TARGET: &str = "@cover";
@@ -113,7 +113,7 @@ fn visible_text(element: &Element) -> String {
 }
 
 fn image_href(element: &Element) -> String {
-    [element.attr("src"), element.attr("href"), element.attr_ns(xml_tree::XLINK_NS, "href")].into_iter().flatten().find(|v| !v.is_empty()).unwrap_or("").to_string()
+    [element.attr("src"), element.attr("href"), element.attr_ns(xml_parser::XLINK_NS, "href")].into_iter().flatten().find(|v| !v.is_empty()).unwrap_or("").to_string()
 }
 
 fn page_info<R: Read + Seek>(archive: &mut ZipArchive<R>, base: &str, items: &BTreeMap<String, String>, idref: &str, index: usize, hooks: &EpubCoverHooks) -> FResult<PageInfo> {
@@ -124,7 +124,7 @@ fn page_info<R: Read + Seek>(archive: &mut ZipArchive<R>, base: &str, items: &BT
     if entry_size(archive, &page_member)? > hooks.limits().max_xml_bytes as u64 {
         return Err(crop_err("쪽 문서가 너무 큼").into());
     }
-    let root = xml_tree::parse_lenient(&read_entry(archive, &page_member)?).ok_or_else(|| crop_err("쪽 문서를 읽을 수 없음"))?;
+    let root = xml_parser::parse_lenient(&read_entry(archive, &page_member)?).ok_or_else(|| crop_err("쪽 문서를 읽을 수 없음"))?;
     let all = root.descendants();
     let images: Vec<&Element> = all.iter().copied().filter(|e| matches!(e.name.as_str(), "img" | "image")).collect();
     if images.is_empty() {
@@ -166,7 +166,7 @@ fn decode_page(raw: &[u8]) -> Result<(String, Encoding), CoverError> {
         return Ok((String::from_utf8(rest.to_vec()).map_err(|_| unreadable())?, Encoding::Utf8Sig));
     }
     if raw.starts_with(&[0xFF, 0xFE]) || raw.starts_with(&[0xFE, 0xFF]) {
-        return Ok((xml_tree::decode(raw).map_err(|_| unreadable())?, Encoding::Utf16));
+        return Ok((xml_parser::decode(raw).map_err(|_| unreadable())?, Encoding::Utf16));
     }
     let head: String = raw.iter().take(1024).filter(|b| b.is_ascii()).map(|b| *b as char).collect();
     let declared = XML_DECLARATION.captures(&head).or_else(|| META_CHARSET.captures(&head)).map(|c| c[1].to_lowercase());
@@ -350,7 +350,7 @@ fn image_size(data: &[u8]) -> Result<(u32, u32), CoverError> {
 /// image 의 width/height 가 원래 픽셀 크기와 같으면 새 크기로 바꾸고, svg 의 viewBox 가 그 크기를 감쌌으면 같이 바꾼다.
 /// 구조가 예상과 다르거나 문서를 읽을 수 없으면 쪽을 건드리지 않는다.
 fn fit_svg_page(page_xml: &[u8], old_size: (u32, u32), new_size: (u32, u32)) -> Vec<u8> {
-    let Ok(mut root) = xml_tree::parse(page_xml) else { return page_xml.to_vec() };
+    let Ok(mut root) = xml_parser::parse(page_xml) else { return page_xml.to_vec() };
     fn find_image(element: &Element, path: &mut Vec<usize>) -> bool {
         if element.name == "image" {
             return true;
@@ -399,7 +399,7 @@ fn fit_svg_page(page_xml: &[u8], old_size: (u32, u32), new_size: (u32, u32)) -> 
             break;
         }
     }
-    if changed { xml_tree::to_bytes_with_declaration(&root) } else { page_xml.to_vec() }
+    if changed { xml_parser::to_bytes_with_declaration(&root) } else { page_xml.to_vec() }
 }
 
 fn reference_variants(member: &str) -> Vec<Vec<u8>> {

@@ -639,6 +639,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "ureq",
+ "xml_recoverer",
  "zip",
 ]
 

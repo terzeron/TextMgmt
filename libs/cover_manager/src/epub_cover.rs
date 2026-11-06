@@ -2,7 +2,7 @@
 //!
 //! 설계: docs/rust-test-seams.md 3.5, 3.7, 3.11, 3.12.
 //! - 한도(`MAX_*`)와 `fsync`/`flock`, 개정 번호, 무결성 검사는 `EpubCoverHooks`로 바꾼다. 기본값은 운영 값이다.
-//! - XML은 `xml_tree`(고칠 수 있는 작은 트리), 이미지는 `image`, ZIP은 `zip` crate로 다룬다.
+//! - XML은 `common::xml_parser`(고칠 수 있는 작은 트리), 이미지는 `image`, ZIP은 `zip` crate로 다룬다.
 //! - 쓰기는 `stage`(OPF·XHTML 편집), `rewrite`(잠금·백업·제자리 쓰기·되돌리기), `edit`(쪽 이미지 편집)에 나눴다.
 //!
 //! 제한:
@@ -26,14 +26,14 @@ use zip::ZipArchive;
 mod epub_writer;
 pub mod image_editor;
 mod inplace_replacer;
-pub mod xml_tree;
+use common::xml_parser;
 
 pub use image_editor::{EditImages, edit_images, edit_images_with, edit_page_images};
 pub use inplace_replacer::{
     add_cover, add_cover_backup_with, add_cover_with, add_illustration, add_illustration_backup_with, add_illustration_with, remove_cover, remove_cover_backup_with, remove_cover_with,
 };
 
-use xml_tree::Element;
+use xml_parser::Element;
 
 /// 상대 `href`를 ZIP 멤버 이름으로 푼다. URL이거나 압축 파일 밖(맨 앞 `/`, 루트를 넘는 `..`)을 가리키면 빈 문자열이다.
 pub fn member_path(base: &str, href: &str) -> String {
@@ -169,8 +169,8 @@ impl From<zip::result::ZipError> for Fail {
     }
 }
 
-impl From<xml_tree::XmlError> for Fail {
-    fn from(err: xml_tree::XmlError) -> Self {
+impl From<xml_parser::XmlError> for Fail {
+    fn from(err: xml_parser::XmlError) -> Self {
         Fail::Lib(err.to_string())
     }
 }
@@ -487,7 +487,7 @@ pub(crate) fn read_entry<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str
 pub fn find_opf_path<R: Read + Seek>(archive: &mut ZipArchive<R>) -> String {
     const CONTAINER_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
     if let Ok(data) = read_entry(archive, "META-INF/container.xml") {
-        if let Some(container) = xml_tree::parse_lenient(&data) {
+        if let Some(container) = xml_parser::parse_lenient(&data) {
             let found = container.descendants().into_iter().find(|e| e.is(CONTAINER_NS, "rootfile")).map(|e| e.attr_or("full-path", "").to_string()).unwrap_or_default();
             if !found.is_empty() {
                 return found;
@@ -534,7 +534,7 @@ pub(crate) fn read_package_with<R: Read + Seek>(archive: &mut ZipArchive<R>, hoo
         return Err(CoverError::new("EPUB package를 찾거나 읽을 수 없습니다").into());
     }
     let data = read_entry(archive, &opf_path)?;
-    let package = xml_tree::parse_package(&data)?;
+    let package = xml_parser::parse_package(&data)?;
     if package.name != "package" {
         return Err(CoverError::new("올바른 EPUB package가 아닙니다").into());
     }
@@ -622,7 +622,7 @@ pub(crate) fn find_cover_member_in<R: Read + Seek>(archive: &mut ZipArchive<R>, 
     if opf_path.is_empty() {
         return None;
     }
-    let opf = xml_tree::parse_lenient(&read_entry(archive, &opf_path).ok()?)?;
+    let opf = xml_parser::parse_lenient(&read_entry(archive, &opf_path).ok()?)?;
     let (mut image_items, mut page_items, mut cover_pages) = (Vec::new(), Vec::new(), Vec::<String>::new());
     let (mut meta_cover_id, mut first_spine_id) = (String::new(), String::new());
     for element in opf.descendants() {
@@ -683,11 +683,11 @@ fn first_image_in_page<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_dir: &st
     if size.is_none_or(|s| s > MAX_XML_BYTES as u64) {
         return None;
     }
-    let page = read_entry(archive, &page_member).ok().and_then(|data| xml_tree::parse_lenient(&data))?;
+    let page = read_entry(archive, &page_member).ok().and_then(|data| xml_parser::parse_lenient(&data))?;
     for el in page.descendants() {
         let href = match el.name.as_str() {
             "img" => el.attr_or("src", "").to_string(),
-            "image" => el.attr("href").filter(|h| !h.is_empty()).or_else(|| el.attr_ns(xml_tree::XLINK_NS, "href")).unwrap_or("").to_string(),
+            "image" => el.attr("href").filter(|h| !h.is_empty()).or_else(|| el.attr_ns(xml_parser::XLINK_NS, "href")).unwrap_or("").to_string(),
             _ => continue,
         };
         if let Some(member) = existing_member_path(archive, Path::new(&page_member).parent().and_then(Path::to_str).unwrap_or(""), &href) {
@@ -708,7 +708,7 @@ fn find_first_spine_image<R: Read + Seek>(archive: &mut ZipArchive<R>, hooks: &E
     if opf_path.is_empty() {
         return None;
     }
-    let opf = xml_tree::parse_lenient(&read_entry(archive, &opf_path).ok()?)?;
+    let opf = xml_parser::parse_lenient(&read_entry(archive, &opf_path).ok()?)?;
     let mut pages: HashMap<&str, &str> = HashMap::new();
     let mut spine_ids: Vec<&str> = Vec::new();
     for element in opf.descendants() {
@@ -768,7 +768,7 @@ fn first_text(package: &Element, local: &str) -> String {
         if element.name != local {
             continue;
         }
-        if let Some(xml_tree::Node::Text(text)) = element.children.iter().find(|n| matches!(n, xml_tree::Node::Text(_))) {
+        if let Some(xml_parser::Node::Text(text)) = element.children.iter().find(|n| matches!(n, xml_parser::Node::Text(_))) {
             return text.trim().to_string();
         }
     }
@@ -785,7 +785,7 @@ fn inspect_cover_image<R: Read + Seek>(archive: &mut ZipArchive<R>, member: &str
     }
     if member.to_lowercase().ends_with(".svg") {
         let data = read_entry(archive, member).map_err(|_| unreadable())?;
-        xml_tree::parse(&data).map_err(|_| unreadable())?;
+        xml_parser::parse(&data).map_err(|_| unreadable())?;
         return Ok(CoverImageInfo { byte_size, ..CoverImageInfo::default() });
     }
     // 목록에서는 머리글만 읽는다. 픽셀 디코딩과 변환은 미리보기·저장에서 검증한다.
