@@ -795,7 +795,6 @@ dependencies = [
  "sha2",
  "sysdeps",
  "tempfile",
- "xml_recoverer",
  "zip",
 ]
 

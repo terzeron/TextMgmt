@@ -2,23 +2,16 @@ mod common;
 mod corpus;
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use common::epub::{EpubSpec, make_epub};
 use doc_reader::TEXT_SIZE;
 use doc_reader::epub::{EpubHooks, EpubPath, EpubRead, pretty_text, read_from_epub, read_from_epub_with, read_from_epub_with_extracting_zip};
-use zip::write::SimpleFileOptions;
 
 /// 이름→내용 목록으로 EPUB(ZIP)을 만든다.
 fn build(dir: &Path, name: &str, members: &[(&str, &str)]) -> PathBuf {
     let path = dir.join(name);
-    let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
-    for (member, content) in members {
-        zip.start_file(*member, SimpleFileOptions::default()).unwrap();
-        zip.write_all(content.as_bytes()).unwrap();
-    }
-    zip.finish().unwrap();
+    common::zipx::write_zip_text(&path, members, true);
     path
 }
 

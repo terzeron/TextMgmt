@@ -2497,7 +2497,7 @@ mod auth_refresh {
         let now = now_plus_3600() - 3600;
         let legacy_payload = json!({"type": "refresh", "email": "admin@test.com", "role": "admin", "exp": now + 3600, "iat": now});
         let secret = std::env::var("TM_JWT_SECRET").unwrap_or_else(|_| "test_jwt_secret_for_testing_minimum_32bytes".to_string());
-        let legacy_token = jsonwebtoken::encode(&jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256), &legacy_payload, &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes())).unwrap();
+        let legacy_token = crate::common::auth_fixtures::encode_hs256_with_secret(&legacy_payload, &secret);
         let r = fx.post_with_cookie("/auth/refresh", "tm_refresh_token", &legacy_token).await;
         assert_eq!(r.status, 401);
         assert!(r.json().get("detail").and_then(Value::as_str).unwrap_or("").to_lowercase().contains("log in again"));

@@ -33,7 +33,12 @@ pub fn decode(token: &str) -> Value {
 }
 
 pub fn encode_hs256(payload: &Value) -> String {
-    jsonwebtoken::encode(&Header::new(Algorithm::HS256), payload, &EncodingKey::from_secret(SECRET.as_bytes())).unwrap()
+    encode_hs256_with_secret(payload, SECRET)
+}
+
+/// 임의 payload로 HS256 토큰을 만든다. 구형·만료 토큰처럼 운영 코드가 만들지 않는 토큰을 시험할 때 쓴다.
+pub fn encode_hs256_with_secret(payload: &Value, secret: &str) -> String {
+    jsonwebtoken::encode(&Header::new(Algorithm::HS256), payload, &EncodingKey::from_secret(secret.as_bytes())).unwrap()
 }
 
 pub fn fixture() -> EnvGuard {

@@ -21,15 +21,15 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 log = "0.4.34"
 lopdf.workspace = true
 regex = "1.13.1"
-roxmltree = "0.21.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 sha2 = "0.11.1"
 sysdeps = { path = "../sysdeps" }
-xml_recoverer = { path = "../xml_recoverer" }
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+# 공용 테스트 helper(shared/epub.rs)가 OPF를 해석한다.
+roxmltree = "0.21.1"
 es_client = { path = "../es_client" }
 tempfile = "3.27.0"
 

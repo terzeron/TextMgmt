@@ -26,7 +26,6 @@ axum = { version = "0.8.9", features = ["multipart"] }
 bookstore = { path = "../libs/bookstore" }
 db = { path = "../libs/db" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 log = "0.4.34"
 md5 = { package = "md-5", version = "0.11.0" }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -37,6 +36,8 @@ tokio-stream = "0.1.19"
 tokio-util = { version = "0.7.20", features = ["io"] }
 
 [dev-dependencies]
+# 테스트가 구형·만료 refresh token을 직접 만들어 거절되는지 확인한다.
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 doc_reader = { path = "../libs/doc_reader" }
 image_processor = { path = "../libs/image_processor" }
 pdf_engine = { path = "../libs/pdf_engine" }

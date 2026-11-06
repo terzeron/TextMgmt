@@ -89,23 +89,21 @@ mod docx_reader {
 
     #[test]
     fn a_utf8_bom_on_docx_xml_parts_is_ignored() {
-        use std::io::{Read, Write};
+        use crate::common::zipx::{ZipMode, member_names, read_zip_entry, write_zip_owned};
         let tmp = tempfile::tempdir().unwrap();
         let with_bom = tmp.path().join("bom.docx");
-        let mut source = zip::ZipArchive::new(fs::File::open(fixture("a.docx")).unwrap()).unwrap();
-        let mut writer = zip::ZipWriter::new(fs::File::create(&with_bom).unwrap());
-        for i in 0..source.len() {
-            let mut member = source.by_index(i).unwrap();
-            let name = member.name().unwrap().into_owned();
-            let mut data = Vec::new();
-            member.read_to_end(&mut data).unwrap();
-            if name.ends_with(".xml") || name.ends_with(".rels") {
-                data.splice(0..0, *b"\xef\xbb\xbf");
-            }
-            writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
-            writer.write_all(&data).unwrap();
-        }
-        writer.finish().unwrap();
+        let source = fixture("a.docx");
+        let members: Vec<(String, Vec<u8>)> = member_names(&source)
+            .into_iter()
+            .map(|name| {
+                let mut data = read_zip_entry(&source, &name);
+                if name.ends_with(".xml") || name.ends_with(".rels") {
+                    data.splice(0..0, *b"\xef\xbb\xbf");
+                }
+                (name, data)
+            })
+            .collect();
+        write_zip_owned(&with_bom, &members, ZipMode::Deflated);
         assert_eq!(read_from_docx(&with_bom).unwrap(), read_from_docx(&fixture("a.docx")).unwrap());
     }
 

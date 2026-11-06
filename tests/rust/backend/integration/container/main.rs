@@ -60,7 +60,7 @@ use std::time::Duration;
 
 use crate::common::shared_fixtures::{CATEGORY, ListDirFs};
 use crate::common::shared_fixtures::{enc, now_secs, process_env, split};
-use auth_manager::auth_service::{JWT_ALGORITHM, create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
+use auth_manager::auth_service::{create_jwt_token, create_refresh_token, jwt_secret, tm_admin_email};
 use axum::http::Method;
 use axum::response::IntoResponse;
 use backend::api_router::{AppDeps, AuthMode, BookstoreFactory, BookstoreSearch, CategoryMappingApi, CustomJSONResponse, GoogleVerifier, MappingError, RoleResolver, Slot, app_with};
@@ -924,7 +924,7 @@ mod test_auth_refresh_endpoint {
         let now = now_secs() as i64;
         let expired_payload = json!({"type": "refresh", "email": tm_admin_email(), "role": "admin", "exp": now - 100, "iat": now - 200});
 
-        let token = jsonwebtoken::encode(&jsonwebtoken::Header::new(JWT_ALGORITHM), &expired_payload, &jsonwebtoken::EncodingKey::from_secret(jwt_secret().as_bytes())).unwrap();
+        let token = crate::common::auth_fixtures::encode_hs256_with_secret(&expired_payload, &jwt_secret());
         let client = unauthenticated_client().cookie("tm_refresh_token", &token);
         let response = post_empty(&client, "/auth/refresh").await;
         assert_eq!(response.status, 401);
