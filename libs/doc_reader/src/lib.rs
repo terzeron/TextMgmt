@@ -7,7 +7,6 @@ pub mod head_tail_reader;
 pub mod markup;
 pub mod office;
 pub mod pdf;
-pub mod pdf_page_reader;
 pub mod rtf;
 pub mod text;
 pub mod text_normalizer;

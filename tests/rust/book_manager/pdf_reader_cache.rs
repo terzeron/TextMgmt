@@ -78,17 +78,17 @@ mod pdf_reader_cache_budget {
 
     /// 실제 페이지 수 조회와 추출에서 PDF를 읽는 횟수를 센다.
     struct CountingOpener {
-        inner: doc_reader::pdf_page_reader::LopdfPageOps,
+        inner: pdf_engine::pdf_page_reader::LopdfPageOps,
         opened: Arc<AtomicUsize>,
     }
 
-    impl doc_reader::pdf_page_reader::PdfPageOps for CountingOpener {
-        fn page_count(&self, path: &Path) -> Result<usize, doc_reader::pdf_page_reader::PdfError> {
+    impl pdf_engine::pdf_page_reader::PdfPageOps for CountingOpener {
+        fn page_count(&self, path: &Path) -> Result<usize, pdf_engine::pdf_page_reader::PdfError> {
             self.opened.fetch_add(1, Ordering::SeqCst);
             self.inner.page_count(path)
         }
 
-        fn extract_pages(&self, path: &Path, start: usize, end: usize) -> Result<Vec<u8>, doc_reader::pdf_page_reader::PdfError> {
+        fn extract_pages(&self, path: &Path, start: usize, end: usize) -> Result<Vec<u8>, pdf_engine::pdf_page_reader::PdfError> {
             self.opened.fetch_add(1, Ordering::SeqCst);
             self.inner.extract_pages(path, start, end)
         }
@@ -102,7 +102,7 @@ mod pdf_reader_cache_budget {
     async fn test_disk_cache_hit_does_not_open_pdf() {
         let opened = Arc::new(AtomicUsize::new(0));
         let counter = opened.clone();
-        let e = build(move |_, d| d.with_pdf_pages(Arc::new(CountingOpener { inner: doc_reader::pdf_page_reader::LopdfPageOps, opened: counter })));
+        let e = build(move |_, d| d.with_pdf_pages(Arc::new(CountingOpener { inner: pdf_engine::pdf_page_reader::LopdfPageOps, opened: counter })));
 
         let first = e.bm.get_pdf_pages(1, 1, 2).await;
         assert_eq!(first.status_code, 200);

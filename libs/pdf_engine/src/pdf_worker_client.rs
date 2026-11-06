@@ -1,7 +1,7 @@
 //! MuPDF Rust worker adapter. Native parsers keep the existing process limits.
-use crate::{CommandError, CommandRunner};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use sysdeps::{CommandError, CommandRunner};
 const TIMEOUT: Duration = Duration::from_secs(30);
 pub const WORKER_NAME: &str = "tm-pdf-worker";
 fn worker_path() -> PathBuf {

@@ -13,7 +13,7 @@ use backend::api_router::{AppDeps, AuthMode, app_with};
 use book_manager::BookManagerDeps;
 use common::TestClient;
 use common::pdf::page_count_bytes;
-use doc_reader::pdf_page_reader::{LopdfPageOps, PdfPageOps};
+use pdf_engine::pdf_page_reader::{LopdfPageOps, PdfPageOps};
 use serde_json::json;
 
 /// 비내장 UHC 한글 글꼴과 쪽별 content/주석으로 원본 객체 보존을 확인한다.
@@ -148,7 +148,7 @@ fn extracting_encrypted_korean_pages_keeps_readable_korean_text() {
     assert_eq!(extracted.get_pages().len(), 2);
     let output = tmp.path().join("preview.pdf");
     fs::write(&output, bytes).unwrap();
-    let text = sysdeps::pdf_worker_client::extract_text(&sysdeps::SystemRunner, &output, 1, 2).unwrap();
+    let text = pdf_engine::pdf_worker_client::extract_text(&sysdeps::SystemRunner, &output, 1, 2).unwrap();
     assert_eq!(text.matches("한글").count(), 2);
 }
 
@@ -288,7 +288,7 @@ fn extracting_a_page_from_a_large_tagged_pdf_does_not_rescan_each_deleted_page()
     let preview_path = tmp.path().join("preview.pdf");
     fs::write(&preview_path, &bytes).unwrap();
     let render = |path: &Path, page: usize| {
-        let pixels = sysdeps::pdf_worker_client::render_page(&sysdeps::SystemRunner, path, page, 150).unwrap();
+        let pixels = pdf_engine::pdf_worker_client::render_page(&sysdeps::SystemRunner, path, page, 150).unwrap();
         assert!(!pixels.is_empty());
         pixels
     };

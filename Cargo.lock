@@ -240,6 +240,7 @@ dependencies = [
  "log",
  "lopdf",
  "md-5",
+ "pdf_engine",
  "roxmltree",
  "rustls",
  "rustls-pki-types",
@@ -430,6 +431,7 @@ dependencies = [
  "jpeg-encoder",
  "log",
  "lopdf",
+ "pdf_engine",
  "regex",
  "roxmltree",
  "scraper",
@@ -784,6 +786,7 @@ dependencies = [
  "image",
  "log",
  "lopdf",
+ "pdf_engine",
  "regex",
  "roxmltree",
  "serde",
@@ -1124,6 +1127,7 @@ dependencies = [
  "flate2",
  "htmlkit",
  "lopdf",
+ "pdf_engine",
  "regex",
  "roxmltree",
  "scraper",
@@ -1150,6 +1154,7 @@ dependencies = [
  "image",
  "log",
  "lopdf",
+ "pdf_engine",
  "regex",
  "roxmltree",
  "scraper",
@@ -2693,6 +2698,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdf_engine"
+version = "0.1.0"
+dependencies = [
+ "lopdf",
+ "mupdf",
+ "sysdeps",
+ "tempfile",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3661,8 +3676,6 @@ dependencies = [
  "async-trait",
  "libc",
  "log",
- "lopdf",
- "mupdf",
  "tempfile",
 ]
 

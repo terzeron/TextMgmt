@@ -1,10 +1,10 @@
 //! 매니저가 소유하는 PDF 캐시: 경로 기준 LRU 리더 캐시(`PdfReaderCache`)와 쪽 수 캐시(`PageCountCache`).
-//! PDF 열기·쪽 처리 능력은 `doc_reader::pdf_page_reader`에 있다.
+//! PDF 열기·쪽 처리 능력은 `pdf_engine::pdf_page_reader`에 있다.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use doc_reader::pdf_page_reader::PdfReaderHandle;
+use pdf_engine::pdf_page_reader::PdfReaderHandle;
 
 /// PDF 리더 캐시 한도. 호환성을 위해 원본 파일 크기를 예산으로 쓴다. `None`은 제한 없음이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

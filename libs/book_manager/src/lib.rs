@@ -31,7 +31,7 @@ use sysdeps::{CommandRunner, EnvFn, FsOps, RealFs, SystemRunner};
 use crate::pdf_reader_cache::{PageCountCache, PdfReaderCache};
 use book_record::book_metadata::Book;
 use classifier::Classify;
-use doc_reader::pdf_page_reader::{LopdfOpener, LopdfPageOps, PdfOpener, PdfPageOps};
+use pdf_engine::pdf_page_reader::{LopdfOpener, LopdfPageOps, PdfOpener, PdfPageOps};
 use search_manager::{Docs, EsManagerApi};
 
 /// 책 관리 작업이 실패했다.

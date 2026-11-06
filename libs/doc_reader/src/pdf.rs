@@ -100,9 +100,9 @@ pub fn collect_pages<E>(page_count: usize, mut page_text: impl FnMut(usize) -> R
 
 fn poppler_text(path: &Path) -> Result<(String, usize), String> {
     let runner = sysdeps::SystemRunner;
-    let pages = sysdeps::pdf_worker_client::page_count(&runner, path)?;
+    let pages = pdf_engine::pdf_worker_client::page_count(&runner, path)?;
     let last = pages.min(PDF_PAGE_LIMIT);
-    let text = if last == 0 { String::new() } else { sysdeps::pdf_worker_client::extract_text(&runner, path, 1, last)? };
+    let text = if last == 0 { String::new() } else { pdf_engine::pdf_worker_client::extract_text(&runner, path, 1, last)? };
     collect_pages(pages, |i| Ok::<_, String>(text.split('\u{000c}').nth(i).unwrap_or_default().to_owned()))
 }
 

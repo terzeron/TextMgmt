@@ -45,6 +45,7 @@ tokio-stream = "0.1.19"
 tokio-util = { version = "0.7.20", features = ["io"] }
 
 [dev-dependencies]
+pdf_engine = { path = "../libs/pdf_engine" }
 lopdf.workspace = true
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 roxmltree = "0.21.1"

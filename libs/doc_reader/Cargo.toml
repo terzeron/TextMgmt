@@ -7,6 +7,7 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
+pdf_engine = { path = "../pdf_engine" }
 log = "0.4.34"
 xml_recoverer = { path = "../xml_recoverer" }
 common = { path = "../common", default-features = false, features = ["xml_parser", "zip_reader"] }
@@ -61,6 +62,3 @@ path = "../../tests/rust/doc_reader/text.rs"
 name = "text_normalizer"
 path = "../../tests/rust/doc_reader/text_normalizer.rs"
 
-[[test]]
-name = "pdf_page_reader"
-path = "../../tests/rust/doc_reader/pdf_page_reader.rs"

@@ -2,7 +2,7 @@
 //!
 //! worker 호출 정책: 비싼 외부 프로세스라서 파일당 본문 추출을 최대 두 번(앞쪽·끝쪽) 한다. 열림만 확인하는 호출은 따로 하지 않고
 //! 앞쪽 추출의 실패를 열림 실패로 본다. `%PDF-` 머리가 없으면 부르지 않는다. lopdf가 못 읽은 파일도 부른다(lopdf는 못 읽어도
-//! 뷰어는 여는 파일을 가려내는 것이 목적이다). 값싼 구조 검사를 모두 끝낸 뒤에 부르고, 시간 상한은 `sysdeps::pdf_worker_client`의 30초다.
+//! 뷰어는 여는 파일을 가려내는 것이 목적이다). 값싼 구조 검사를 모두 끝낸 뒤에 부르고, 시간 상한은 `pdf_engine::pdf_worker_client`의 30초다.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use std::time::Duration;
 use crate::{Category, FileReport, Severity};
 use common::text_sanitizer::sanitize;
 use lopdf::{Dictionary, Document, Object};
-use sysdeps::pdf_worker_client::extract_text;
+use pdf_engine::pdf_worker_client::extract_text;
 use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 
 use crate::CheckOptions;
@@ -50,7 +50,7 @@ const BASE_14: [&str; 14] = [
     "ZapfDingbats",
 ];
 
-/// 실행기가 낸 `CommandError`의 종류. `sysdeps::pdf_worker_client`는 오류를 문자열로 뭉개므로 래퍼가 직접 기록한다.
+/// 실행기가 낸 `CommandError`의 종류. `pdf_engine::pdf_worker_client`는 오류를 문자열로 뭉개므로 래퍼가 직접 기록한다.
 /// 0이 아닌 종료 코드는 `CommandError`가 아니므로 여기에 남지 않는다(그것만 `PDF_OPEN_FAILED`다).
 enum Failure {
     NotFound,

@@ -179,7 +179,7 @@ mod get_pdf_pages {
     use book_manager::BookManager;
     use common::faulty_fs::FaultyFs;
     use common::pdf::page_count_bytes;
-    use doc_reader::pdf_page_reader::{PdfError, PdfPageOps, PdfReaderHandle};
+    use pdf_engine::pdf_page_reader::{PdfError, PdfPageOps, PdfReaderHandle};
     use std::fs;
     use std::path::Path;
     use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
@@ -423,7 +423,7 @@ mod get_book_preview {
     use common::runner::FakeRunner;
     use common::zipx::write_zip;
     use cover_manager::epub_cover::EpubCoverHooks;
-    use doc_reader::pdf_page_reader::{PdfError, PdfPageOps};
+    use pdf_engine::pdf_page_reader::{PdfError, PdfPageOps};
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::sync::Arc;

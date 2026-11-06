@@ -14,10 +14,6 @@ use std::sync::{OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub mod pdf_worker_client;
-// 기존 호출자의 모듈 경로는 유지하되 구현은 MuPDF Rust worker를 사용한다.
-pub use pdf_worker_client as poppler;
-mod native_pdf;
 pub mod task_runner;
 pub mod temp_file_maker;
 pub mod timeout_runner;

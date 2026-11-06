@@ -1,0 +1,31 @@
+[package]
+name = "pdf_engine"
+description = "PDF 처리 능력: lopdf로 열기·쪽 추출(`pdf_page_reader`), 격리된 MuPDF worker(`tm-pdf-worker`)와 그 호출 adapter(`pdf_worker_client`)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[bin]]
+name = "tm-pdf-worker"
+path = "src/bin/pdf_worker.rs"
+
+[dependencies]
+lopdf.workspace = true
+mupdf = { version = "=0.8.0", default-features = false, features = ["base14-fonts", "system-fonts", "sys-lib-libjpeg", "sys-lib-zlib", "sys-lib-freetype", "sys-lib-harfbuzz", "sys-lib-openjpeg"] }
+sysdeps = { path = "../sysdeps" }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[[test]]
+name = "native_pdf"
+path = "../../tests/rust/pdf_engine/native_pdf.rs"
+
+[[test]]
+name = "pdf_worker_client"
+path = "../../tests/rust/pdf_engine/pdf_worker_client.rs"
+
+[[test]]
+name = "pdf_page_reader"
+path = "../../tests/rust/pdf_engine/pdf_page_reader.rs"

@@ -17,7 +17,7 @@ docs/       문서
 | --- | --- |
 | `text_decoder` | 바이트를 텍스트로 푼다: 잘못된 바이트를 버리는 UTF-8·CP949 디코딩과 한글 음절 판정, 인코딩 이름과 코덱(`text_transcoder`), 인코딩 추정 휴리스틱 `detect_hint`·`decode_best`와 `korean_likeness`(`encoding_guesser`), 추출한 글의 손상 구간 세기(`mojibake_counter`). 파일을 읽지 않고 바이트와 글만 본다. `doc_reader`와 `doc_checker`의 아래 계층이다 |
 | `xml_recoverer` | 깨진 XML을 엄격한 파서(`roxmltree`)가 다시 읽을 수 있게 고치는 문자열 변환: 선언 없는 접두사 선언, DOCTYPE·모르는 엔티티 제거, 잘린 태그 닫기. 파싱은 하지 않고 변환 순서는 호출자가 정한다. backend의 EPUB 메타데이터·검사·표지 편집이 쓴다 |
-| `doc_reader` | 문서 읽기: 본문 요약 추출(TXT·EPUB·HTML·RTF·DOCX·PDF·HWP), 파일 앞뒤 읽기와 인코딩 손상 판정용 본문 표본(`head_tail_reader`), EPUB 본문·OPF 메타데이터·출판사(`epub`), PDF 열기·쪽 추출 능력(`pdf_page_reader`). 판정은 하지 않는다. `doc_checker`의 아래 계층이다 |
+| `doc_reader` | 문서 읽기: 본문 요약 추출(TXT·EPUB·HTML·RTF·DOCX·PDF·HWP), 파일 앞뒤 읽기와 인코딩 손상 판정용 본문 표본(`head_tail_reader`), EPUB 본문·OPF 메타데이터·출판사(`epub`). PDF 처리 능력은 `pdf_engine`을 쓴다. 판정은 하지 않는다. `doc_checker`의 아래 계층이다 |
 | `search_manager` | 책·만화 검색 색인 관리: ES 문서 검색·갱신·카테고리 집계(`ESManager`)와 그 trait(`EsManagerApi`). 전송은 `es_client`를 쓴다. backend 도메인 crate다 |
 | `auth_manager` | 인증: JWT 발급·검증과 역할 판정(`auth_service`), refresh token 저장·회전·세션 관리(`refresh_token_store`). 요청은 `http` crate 타입으로만 받고 axum을 모른다. backend 도메인 crate다 |
 | `book_record` | 책 한 권의 기록: 메타데이터 모델(`book_metadata`), ES 문서에서 `Book` 만들기(`es_doc_converter`), 파일시스템 상태와 무관한 경로·파일 종류 규칙(`path_validator`, 매직바이트 판별 `detect_file_type` 포함). `book_manager`의 아래 계층이다 |
@@ -33,7 +33,8 @@ docs/       문서
 | `db` | MySQL 접근 추상화와 카테고리 매핑 저장소(`category_mapping`), 사용자별 최근 조회 이력 저장소(`view_history_store`) |
 | `classifier` | 도서 분류기 껍데기: backend 분류 제안이 쓰는 `Classify`·`BookClassifierApi` trait와 모델 단독 어댑터. 구현은 없어서 backend는 카테고리 매핑 키워드만으로 제안한다 |
 | `file_indexer` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리, 색인 제외 디렉토리 규칙(`layout`). loader와 backend가 함께 쓴다 |
-| `sysdeps` | 시계, 파일시스템, 외부 명령 같은 시스템 능력의 trait와 실제 구현. 백그라운드 작업 실행기(`task_runner`)와 겹치지 않는 임시 파일 이름(`temp_file_maker`)도 여기 있다. 파서 시간 상한(`timeout`)과 PDF worker(`tm-pdf-worker`)를 포함한다 |
+| `pdf_engine` | PDF 처리 능력: lopdf로 열기·쪽 추출(`pdf_page_reader`), MuPDF를 별도 프로세스에서 30초·512MiB 상한으로 돌리는 worker(`tm-pdf-worker`, 본체 `native_pdf`)와 호출 adapter(`pdf_worker_client`). 표지 이미지 처리는 `cover_manager::pdf_cover`가 맡는다. `doc_reader`·`doc_checker`·`cover_manager`·`book_manager`의 아래 계층이다 |
+| `sysdeps` | 시계, 파일시스템, 외부 명령 같은 시스템 능력의 trait와 실제 구현. 백그라운드 작업 실행기(`task_runner`)와 겹치지 않는 임시 파일 이름(`temp_file_maker`)도 여기 있다. 파서 시간 상한(`timeout_runner`)을 포함한다 |
 | `isbn_extractor` | 파일에서 ISBN 추출(TXT·EPUB·PDF·DJVU·HWP) |
 | `hwp3_parser` | HWP 3.x 텍스트 추출. 생성된 HNC→유니코드 매핑 표(`tables`)를 포함한다 |
 

@@ -1,7 +1,7 @@
-//! `doc_reader::pdf_page_reader` 단위 테스트.
+//! `pdf_engine::pdf_page_reader` 단위 테스트.
 
-use doc_reader::pdf_page_reader::{LopdfPageOps, PdfPageOps, PdfReaderHandle};
 use lopdf::{Document, Object, dictionary};
+use pdf_engine::pdf_page_reader::{LopdfPageOps, PdfPageOps, PdfReaderHandle};
 use std::path::Path;
 
 /// 빈 쪽 `pages`개짜리 PDF.

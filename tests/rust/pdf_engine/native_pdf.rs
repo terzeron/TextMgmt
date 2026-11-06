@@ -1,9 +1,9 @@
-//! MuPDF worker(`native_pdf`)와 어댑터(`sysdeps::pdf_worker_client`) 테스트. worker는 프로세스를 띄우지 않고 `run_worker`로 직접 부른다.
+//! MuPDF worker(`native_pdf`)와 어댑터(`pdf_engine::pdf_worker_client`) 테스트. worker는 프로세스를 띄우지 않고 `run_worker`로 직접 부른다.
 use lopdf::{Document, Object, Stream, dictionary};
+use pdf_engine::pdf_worker_client::run_worker;
 use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use sysdeps::pdf_worker_client::run_worker;
 
 /// 16×8 빨간 JPEG.
 const JPEG: &[u8] = include_bytes!("fixtures/red_16x8.jpg");

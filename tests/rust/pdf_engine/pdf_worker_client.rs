@@ -1,4 +1,4 @@
-//! `sysdeps::pdf_worker_client` 단위 테스트.
+//! `pdf_engine::pdf_worker_client` 단위 테스트.
 
 mod common;
 
@@ -28,10 +28,10 @@ impl CommandRunner for Fake {
     }
 }
 use crate::common::shared_fixtures::runner;
+use pdf_engine::pdf_worker_client::{extract_pages, extract_text, first_page_jpeg, page_count, render_page};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
-use sysdeps::pdf_worker_client::{extract_pages, extract_text, first_page_jpeg, page_count, render_page};
 use sysdeps::{CommandError, CommandOutput, CommandRunner};
 
 #[test]
@@ -76,10 +76,75 @@ fn adapter_prefers_a_worker_on_the_path() {
 #[test]
 fn page_count_uses_pdfinfo_and_rejects_malformed_output() {
     let fake = runner(&[("Title: sample\nPages:          12\n", "", 0)]);
-    assert_eq!(sysdeps::poppler::page_count(&fake, Path::new("a book.pdf")).unwrap(), 12);
+    assert_eq!(pdf_engine::pdf_worker_client::page_count(&fake, Path::new("a book.pdf")).unwrap(), 12);
     assert_eq!(&fake.calls.lock().unwrap()[0][5..], ["info", "a book.pdf"]);
     assert_eq!(&fake.calls.lock().unwrap()[0][..4], ["prlimit", "--as=536870912", "--cpu=25", "--"]);
 
     let malformed = runner(&[("Pages: nope\n", "", 0)]);
-    assert!(sysdeps::poppler::page_count(&malformed, Path::new("a.pdf")).is_err());
+    assert!(pdf_engine::pdf_worker_client::page_count(&malformed, Path::new("a.pdf")).is_err());
+}
+
+/// 경로 인자 유지, 도구 오류·잘못된 범위·잘못된 출력 보고.
+mod adapter_errors {
+    use crate::common::shared_fixtures::runner;
+    use std::path::Path;
+    use std::time::Duration;
+    use sysdeps::{CommandError, CommandRunner};
+
+    struct FailingRunner {
+        missing: bool,
+    }
+
+    impl CommandRunner for FailingRunner {
+        fn run(&self, _argv: &[String], _timeout: Option<Duration>) -> Result<sysdeps::CommandOutput, CommandError> {
+            if self.missing { Err(CommandError::NotFound) } else { Err(CommandError::Failed("runner failure".into())) }
+        }
+
+        fn which(&self, _program: &str) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    struct InvalidUtf8Runner;
+
+    impl CommandRunner for InvalidUtf8Runner {
+        fn run(&self, _argv: &[String], _timeout: Option<Duration>) -> Result<sysdeps::CommandOutput, CommandError> {
+            Ok(sysdeps::CommandOutput { returncode: 0, stdout: vec![0xff], stderr: Vec::new() })
+        }
+
+        fn which(&self, _program: &str) -> Option<std::path::PathBuf> {
+            None
+        }
+    }
+
+    #[test]
+    fn text_and_render_commands_keep_paths_as_arguments_and_report_tool_errors() {
+        let fake = runner(&[("본문\n", "", 0), ("P6\n1 1\n255\n", "", 0)]);
+        assert_eq!(pdf_engine::pdf_worker_client::extract_text(&fake, Path::new("a book.pdf"), 2, 5).unwrap(), "본문\n");
+        assert_eq!(&fake.calls.lock().unwrap()[0][5..], ["text", "a book.pdf", "2", "5"]);
+        assert_eq!(pdf_engine::pdf_worker_client::render_page(&fake, Path::new("a book.pdf"), 3, 900).unwrap(), b"P6\n1 1\n255\n");
+        assert_eq!(&fake.calls.lock().unwrap()[1][5..], ["render", "a book.pdf", "3", "900"]);
+
+        let failed = runner(&[("", "Syntax Error: broken file", 1)]);
+        assert!(pdf_engine::pdf_worker_client::extract_text(&failed, Path::new("broken.pdf"), 1, 1).unwrap_err().contains("broken file"));
+    }
+
+    #[test]
+    fn reports_missing_tools_invalid_ranges_and_invalid_output() {
+        let missing = FailingRunner { missing: true };
+        assert!(pdf_engine::pdf_worker_client::page_count(&missing, Path::new("a.pdf")).unwrap_err().contains("build tm-pdf-worker"));
+
+        let failed = FailingRunner { missing: false };
+        assert!(pdf_engine::pdf_worker_client::page_count(&failed, Path::new("a.pdf")).unwrap_err().contains("runner failure"));
+
+        let no_count = runner(&[("Title: no page count\n", "", 0)]);
+        assert!(pdf_engine::pdf_worker_client::page_count(&no_count, Path::new("a.pdf")).unwrap_err().contains("did not report"));
+
+        let valid = runner(&[]);
+        assert!(pdf_engine::pdf_worker_client::extract_text(&valid, Path::new("a.pdf"), 0, 1).unwrap_err().contains("invalid PDF page range"));
+        assert!(pdf_engine::pdf_worker_client::extract_text(&valid, Path::new("a.pdf"), 2, 1).unwrap_err().contains("invalid PDF page range"));
+        assert!(pdf_engine::pdf_worker_client::extract_text(&InvalidUtf8Runner, Path::new("a.pdf"), 1, 1).unwrap_err().contains("invalid UTF-8"));
+        assert!(pdf_engine::pdf_worker_client::render_page(&valid, Path::new("a.pdf"), 0, 900).unwrap_err().contains("invalid PDF render dimensions"));
+        assert!(pdf_engine::pdf_worker_client::render_page(&valid, Path::new("a.pdf"), 1, 0).unwrap_err().contains("invalid PDF render dimensions"));
+    }
 }

@@ -1,7 +1,6 @@
 //! sysdeps 테스트: 시계, 파일시스템, 외부 명령.
 //! 설계: docs/rust-test-seams.md 3.1
 
-mod common;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -41,68 +40,6 @@ mod clock {
         SystemClock.sleep(-1.0);
         SystemClock.sleep(f64::NAN);
         assert!(start.elapsed() < Duration::from_millis(50));
-    }
-}
-
-mod poppler {
-    use super::*;
-    use crate::common::shared_fixtures::runner;
-
-    struct FailingRunner {
-        missing: bool,
-    }
-
-    impl CommandRunner for FailingRunner {
-        fn run(&self, _argv: &[String], _timeout: Option<Duration>) -> Result<sysdeps::CommandOutput, CommandError> {
-            if self.missing { Err(CommandError::NotFound) } else { Err(CommandError::Failed("runner failure".into())) }
-        }
-
-        fn which(&self, _program: &str) -> Option<std::path::PathBuf> {
-            None
-        }
-    }
-
-    struct InvalidUtf8Runner;
-
-    impl CommandRunner for InvalidUtf8Runner {
-        fn run(&self, _argv: &[String], _timeout: Option<Duration>) -> Result<sysdeps::CommandOutput, CommandError> {
-            Ok(sysdeps::CommandOutput { returncode: 0, stdout: vec![0xff], stderr: Vec::new() })
-        }
-
-        fn which(&self, _program: &str) -> Option<std::path::PathBuf> {
-            None
-        }
-    }
-
-    #[test]
-    fn text_and_render_commands_keep_paths_as_arguments_and_report_tool_errors() {
-        let fake = runner(&[("본문\n", "", 0), ("P6\n1 1\n255\n", "", 0)]);
-        assert_eq!(sysdeps::poppler::extract_text(&fake, Path::new("a book.pdf"), 2, 5).unwrap(), "본문\n");
-        assert_eq!(&fake.calls.lock().unwrap()[0][5..], ["text", "a book.pdf", "2", "5"]);
-        assert_eq!(sysdeps::poppler::render_page(&fake, Path::new("a book.pdf"), 3, 900).unwrap(), b"P6\n1 1\n255\n");
-        assert_eq!(&fake.calls.lock().unwrap()[1][5..], ["render", "a book.pdf", "3", "900"]);
-
-        let failed = runner(&[("", "Syntax Error: broken file", 1)]);
-        assert!(sysdeps::poppler::extract_text(&failed, Path::new("broken.pdf"), 1, 1).unwrap_err().contains("broken file"));
-    }
-
-    #[test]
-    fn reports_missing_tools_invalid_ranges_and_invalid_output() {
-        let missing = FailingRunner { missing: true };
-        assert!(sysdeps::poppler::page_count(&missing, Path::new("a.pdf")).unwrap_err().contains("build tm-pdf-worker"));
-
-        let failed = FailingRunner { missing: false };
-        assert!(sysdeps::poppler::page_count(&failed, Path::new("a.pdf")).unwrap_err().contains("runner failure"));
-
-        let no_count = runner(&[("Title: no page count\n", "", 0)]);
-        assert!(sysdeps::poppler::page_count(&no_count, Path::new("a.pdf")).unwrap_err().contains("did not report"));
-
-        let valid = runner(&[]);
-        assert!(sysdeps::poppler::extract_text(&valid, Path::new("a.pdf"), 0, 1).unwrap_err().contains("invalid PDF page range"));
-        assert!(sysdeps::poppler::extract_text(&valid, Path::new("a.pdf"), 2, 1).unwrap_err().contains("invalid PDF page range"));
-        assert!(sysdeps::poppler::extract_text(&InvalidUtf8Runner, Path::new("a.pdf"), 1, 1).unwrap_err().contains("invalid UTF-8"));
-        assert!(sysdeps::poppler::render_page(&valid, Path::new("a.pdf"), 0, 900).unwrap_err().contains("invalid PDF render dimensions"));
-        assert!(sysdeps::poppler::render_page(&valid, Path::new("a.pdf"), 1, 0).unwrap_err().contains("invalid PDF render dimensions"));
     }
 }
 

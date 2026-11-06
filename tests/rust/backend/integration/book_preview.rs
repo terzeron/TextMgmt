@@ -11,7 +11,7 @@ use book_manager::{BookManager, BookManagerDeps, BookRef};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use common::faulty_fs::FaultyFs;
-use doc_reader::pdf_page_reader::{LopdfOpener, PdfDoc, PdfError, PdfOpener};
+use pdf_engine::pdf_page_reader::{LopdfOpener, PdfDoc, PdfError, PdfOpener};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
