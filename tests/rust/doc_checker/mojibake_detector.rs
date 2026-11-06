@@ -8,7 +8,7 @@ use doc_checker::format_dispatcher::scan_file;
 use doc_checker::mojibake_detector::{self, MIN_HANGUL_RATIO, MOJIBAKE_LIKENESS_THRESHOLD, TextSource, Verdict, classify_text};
 use doc_checker::pdf;
 use doc_checker::{Category, FileReport, Severity};
-use doc_reader::text_sampler::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, extract_document_text};
+use doc_reader::head_tail_reader::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, extract_document_text};
 use support::*;
 use text_decoder::encoding_guesser::korean_likeness;
 

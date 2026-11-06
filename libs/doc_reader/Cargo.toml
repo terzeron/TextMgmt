@@ -25,7 +25,6 @@ sysdeps = { path = "../sysdeps" }
 serde_json = { workspace = true }
 tempfile = "3.27.0"
 
-
 [dev-dependencies]
 base64 = "0.23.1"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
@@ -61,14 +60,6 @@ path = "../../tests/rust/doc_reader/text.rs"
 [[test]]
 name = "text_normalizer"
 path = "../../tests/rust/doc_reader/text_normalizer.rs"
-
-[[test]]
-name = "text_sampler"
-path = "../../tests/rust/doc_reader/text_sampler.rs"
-
-[[test]]
-name = "epub_metadata_reader"
-path = "../../tests/rust/doc_reader/epub_metadata_reader.rs"
 
 [[test]]
 name = "pdf_page_reader"

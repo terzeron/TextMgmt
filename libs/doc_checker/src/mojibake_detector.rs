@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use crate::{Category, FileReport, Severity};
-use doc_reader::text_sampler::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, extract_epub_text_limited, extract_txt_text};
+use doc_reader::head_tail_reader::{TEXT_HEAD_CHARS, TEXT_TAIL_CHARS, extract_epub_text_limited, extract_txt_text};
 use text_decoder::encoding_guesser::korean_likeness;
 use text_decoder::is_hangul_syllable;
 
