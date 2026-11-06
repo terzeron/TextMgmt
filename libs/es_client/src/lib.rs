@@ -22,7 +22,7 @@ pub const LIST_SOURCE_FIELDS: [&str; 11] = ["category", "title", "author", "file
 
 /// HTTP(S) agent를 만든다. CA를 지정하면 그 인증서를 TLS trust root로 사용한다.
 pub fn build_agent(timeout: Duration, ca_cert_path: Option<&Path>) -> Result<ureq::Agent, String> {
-    common::http_client::http_client_with_timeout(timeout, ca_cert_path).map_err(|error| format!("ES {error}"))
+    http_client::http_client_with_timeout(timeout, ca_cert_path).map_err(|error| format!("ES {error}"))
 }
 
 const DEFAULT_MAX_RESULT_COUNT: usize = 10;

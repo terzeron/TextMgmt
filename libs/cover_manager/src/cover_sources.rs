@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
-use common::http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout};
+use http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};

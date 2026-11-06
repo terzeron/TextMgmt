@@ -122,6 +122,7 @@ dependencies = [
  "common",
  "db",
  "http",
+ "http_client",
  "jsonwebtoken",
  "log",
  "regex",
@@ -483,6 +484,7 @@ version = "0.1.0"
 dependencies = [
  "common",
  "htmlkit",
+ "http_client",
  "log",
  "regex",
  "scraper",
@@ -655,7 +657,6 @@ dependencies = [
  "roxmltree",
  "serde_json",
  "tempfile",
- "ureq",
  "xml_recoverer",
  "zip",
 ]
@@ -782,6 +783,7 @@ dependencies = [
  "db",
  "es_client",
  "htmlkit",
+ "http_client",
  "image",
  "image_processor",
  "log",
@@ -1335,6 +1337,7 @@ name = "es_client"
 version = "0.1.0"
 dependencies = [
  "common",
+ "http_client",
  "rustls",
  "rustls-pki-types",
  "serde_json",
@@ -1765,6 +1768,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "http_client"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "ureq",
+]
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2060,6 +2072,7 @@ name = "image_processor"
 version = "0.1.0"
 dependencies = [
  "common",
+ "http_client",
  "idna",
  "image",
  "ureq",

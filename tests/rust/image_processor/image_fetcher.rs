@@ -1,6 +1,6 @@
 //! `image_processor::image_fetcher` 단위 테스트.
 
-use ::common::http_client::HttpTimeout;
+use ::http_client::HttpTimeout;
 use image_processor::image_fetcher::{ConnectRequest, MAX_IMAGE_BYTES, Net, Pool, PoolResponse, fetch_url_image_with};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering};

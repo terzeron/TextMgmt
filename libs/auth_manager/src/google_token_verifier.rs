@@ -46,7 +46,7 @@ struct HttpGoogleJwksFetcher {
 
 impl Default for HttpGoogleJwksFetcher {
     fn default() -> Self {
-        Self { agent: common::http_client::http_client_with_timeout(Duration::from_secs(10), None).expect("CA를 지정하지 않으면 agent 생성은 실패하지 않는다") }
+        Self { agent: http_client::http_client_with_timeout(Duration::from_secs(10), None).expect("CA를 지정하지 않으면 agent 생성은 실패하지 않는다") }
     }
 }
 

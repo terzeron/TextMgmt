@@ -9,7 +9,8 @@ autotests = false
 [dependencies]
 async-trait = "0.1"
 base64 = "0.23.1"
-common = { path = "../common", default-features = false, features = ["http_client"] }
+common = { path = "../common", default-features = false }
+http_client = { path = "../http_client" }
 ureq = { workspace = true, features = ["rustls"] }
 db = { path = "../db" }
 http = "1.5.0"

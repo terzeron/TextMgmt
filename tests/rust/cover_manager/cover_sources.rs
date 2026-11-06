@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ::common::http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout};
+use ::http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout};
 use bookstore::BookInfo;
 use common::{
     clock::FakeClock,

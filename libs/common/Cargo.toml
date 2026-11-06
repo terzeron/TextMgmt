@@ -1,6 +1,6 @@
 [package]
 name = "common"
-description = "여러 crate가 함께 쓰는 기능: HTTP 요청(http_client), URL 해석(url_parser), JSON 필드 읽기(json_field_reader), 출력용 문자열 정리(text_sanitizer), XML 해석과 고칠 수 있는 XML 트리(xml_parser), ZIP 읽기(zip_reader)"
+description = "여러 crate가 함께 쓰는 기능: URL 해석(url_parser), JSON 필드 읽기(json_field_reader), 출력용 문자열 정리(text_sanitizer), XML 해석과 고칠 수 있는 XML 트리(xml_parser), ZIP 읽기(zip_reader)"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -8,15 +8,12 @@ autotests = false
 
 # 필요 없는 기능은 `default-features = false`로 끄고 쓰는 것만 켠다.
 [features]
-default = ["http_client", "xml_parser", "zip_reader"]
-http_client = ["dep:ureq"]
+default = ["xml_parser", "zip_reader"]
 xml_parser = ["dep:roxmltree", "dep:xml_recoverer"]
 zip_reader = ["dep:zip"]
 
 [dependencies]
 serde_json.workspace = true
-# 공개 서점과 ES는 HTTPS라 TLS(rustls)를 켠다. 인증서 검증은 기본값(켬)을 그대로 쓴다.
-ureq = { workspace = true, features = ["rustls"], optional = true }
 roxmltree = { version = "0.21.1", optional = true }
 xml_recoverer = { path = "../xml_recoverer", optional = true }
 zip = { version = "9.0.5", default-features = false, features = ["deflate"], optional = true }
@@ -43,14 +40,6 @@ path = "../../tests/rust/common/zip_reader.rs"
 [[test]]
 name = "common"
 path = "../../tests/rust/common/common.rs"
-
-[[test]]
-name = "http_client"
-path = "../../tests/rust/common/http_client.rs"
-
-[[test]]
-name = "integration_http_client"
-path = "../../tests/rust/common/integration/http_client.rs"
 
 [[test]]
 name = "text_sanitizer"

@@ -1,6 +1,6 @@
 //! 여러 테스트 파일이 함께 쓰는 준비물(helper·대역). 같은 본문의 사본을 한곳에 모았다.
 #![allow(dead_code)]
-use ::common::http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout};
+use ::http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout};
 use bookstore::store_clients::SearchRow;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};

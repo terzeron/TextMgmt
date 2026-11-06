@@ -5,7 +5,7 @@ use std::io::Write;
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
 use std::time::Duration;
 
-use common::http_client::{HttpError, HttpResponse, http_client_with_timeout};
+use http_client::{HttpError, HttpResponse, http_client_with_timeout};
 
 #[test]
 fn errors_have_stable_display_text() {

@@ -6,7 +6,7 @@
 //! - Yes24·알라딘·교보문고의 URL 조립과 HTML 파싱은 이 crate 최상위의 [`crate::Store`]를 재사용한다.
 //! - 리디북스·네이버쇼핑·네이버시리즈·문피아는 `scraper`로 새로 포팅했다.
 //! - 조아라·웹툰 5종은 JSON API를 직접 부른다. HTML 훅은 쓰지 않는다.
-//! - HTTP는 `common::http_client::HttpSession`, 파일 쓰기는 `sysdeps::FsOps`로 주입한다. 기본 HTTP는 `UreqHttpSession`을 쓰며
+//! - HTTP는 `http_client::HttpSession`, 파일 쓰기는 `sysdeps::FsOps`로 주입한다. 기본 HTTP는 `UreqHttpSession`을 쓰며
 //!   테스트는 `with_session`으로 대역을 주입한다.
 //! - 조아라 API 키는 소스에 두지 않는다. 환경 변수 `TM_JOARA_API_KEY`에서 읽고, 없으면 빈 문자열이다.
 //!   로그와 오류 문장에는 키 값을 남기지 않는다.
@@ -31,8 +31,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use common::json_field_reader::has_content;
 
 use crate::{BookInfo, Store};
-use common::http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout, UreqHttpSession};
 use common::url_parser::{quote, quote_component, urljoin};
+use http_client::{HttpError, HttpResponse, HttpSession, HttpTimeout, UreqHttpSession};
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
 use serde_json::Value;

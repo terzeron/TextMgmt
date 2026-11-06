@@ -7,7 +7,8 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
-common = { path = "../common", default-features = false, features = ["http_client"] }
+common = { path = "../common", default-features = false }
+http_client = { path = "../http_client" }
 idna = "1.1.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 ureq = { workspace = true, features = ["rustls"] }

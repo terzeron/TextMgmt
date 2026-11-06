@@ -15,6 +15,7 @@ common = { path = "../common" }
 db = { path = "../db" }
 book_model = { path = "../book_model" }
 htmlkit = { path = "../htmlkit" }
+http_client = { path = "../http_client" }
 image_processor = { path = "../image_processor" }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 log = "0.4.34"

@@ -1,10 +1,10 @@
-//! `common::http_client::UreqHttpSession` 통합 테스트. 로컬 TCP 서버로 timeout, 크기 상한, 연결 재사용을 확인한다.
+//! `http_client::UreqHttpSession` 통합 테스트. 로컬 TCP 서버로 timeout, 크기 상한, 연결 재사용을 확인한다.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use common::http_client::{HttpError, HttpSession, HttpTimeout, MAX_RESPONSE_BYTES, UreqHttpSession};
+use http_client::{HttpError, HttpSession, HttpTimeout, MAX_RESPONSE_BYTES, UreqHttpSession};
 
 fn session() -> UreqHttpSession {
     UreqHttpSession::new(10, Vec::new())

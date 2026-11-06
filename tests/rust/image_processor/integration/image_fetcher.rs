@@ -16,7 +16,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use ::common::http_client::HttpTimeout;
+use ::http_client::HttpTimeout;
 use image_processor::image_fetcher::{ConnectRequest, Net, SystemNet};
 
 #[test]

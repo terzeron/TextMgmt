@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["libs/common", "libs/es_client", "libs/container_parser", "libs/doc_checker", "libs/doc_repairer", "utils/bookdoctor", "libs/parse_stat_counter", "libs/file_indexer", "libs/htmlkit", "libs/isbn_extractor", "libs/hwp3_parser", "libs/text_decoder", "libs/xml_recoverer", "libs/search_manager", "libs/auth_manager", "libs/image_processor", "libs/cover_manager", "libs/book_model", "libs/book_manager", "libs/bookstore", "libs/doc_reader", "utils/loader", "libs/pdf_engine", "libs/sysdeps", "libs/db", "libs/classifier", "backend"]
+members = ["libs/common", "libs/http_client", "libs/es_client", "libs/container_parser", "libs/doc_checker", "libs/doc_repairer", "utils/bookdoctor", "libs/parse_stat_counter", "libs/file_indexer", "libs/htmlkit", "libs/isbn_extractor", "libs/hwp3_parser", "libs/text_decoder", "libs/xml_recoverer", "libs/search_manager", "libs/auth_manager", "libs/image_processor", "libs/cover_manager", "libs/book_model", "libs/book_manager", "libs/bookstore", "libs/doc_reader", "utils/loader", "libs/pdf_engine", "libs/sysdeps", "libs/db", "libs/classifier", "backend"]
 
 [workspace.package]
 version = "0.1.0"
