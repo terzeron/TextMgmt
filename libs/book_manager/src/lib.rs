@@ -28,8 +28,8 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use sysdeps::{CommandRunner, EnvFn, FsOps, RealFs, SystemRunner};
 
-use crate::book_metadata::Book;
 use crate::pdf_reader_cache::{PageCountCache, PdfReaderCache};
+use book_record::book_metadata::Book;
 use classifier::Classify;
 use doc_reader::pdf_page_reader::{LopdfOpener, LopdfPageOps, PdfOpener, PdfPageOps};
 use search_manager::{Docs, EsManagerApi};
@@ -49,7 +49,6 @@ impl std::error::Error for BookManagerError {}
 pub use api_contract::UNIMPLEMENTED;
 pub use api_contract::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
 
-pub mod book_metadata;
 pub mod comics_manager;
 pub mod pdf_reader_cache;
 
@@ -60,10 +59,8 @@ mod catalog_query;
 mod category_editor;
 pub mod category_proposer;
 mod category_reloader;
-mod cover_browse;
 mod cover_finder;
 pub mod cover_list;
-mod es_doc_converter;
 mod file_reader;
 mod file_validator;
 pub use file_validator::{EpubMessage, EpubPublication, EpubSummary, EpubValidation, MessageLocation, PdfMessage, PdfPublication, PdfSummary, PdfValidation};
@@ -78,17 +75,25 @@ mod pdf_edit;
 pub use pdf_edit::PdfEditResult;
 pub mod preview_builder;
 mod seam_accessors;
-mod temp_file_maker;
 mod uncovered_book_finder;
 
 pub use book_updater::BookDeletion;
 pub use category_proposer::{ApplyOptions, KeywordMatch, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, ProposeOptions, Ranked};
 pub use cover_finder::{BookLookup, BookRef, Thumbnailer};
 pub use cover_list::CoverPageOpts;
-pub use es_doc_converter::{decode_category_cursor, encode_category_cursor};
 pub use file_reader::{DefaultFileReader, LoaderFileReader};
 pub use seam_accessors::{AddBookError, BackfillThread, BookAdder, CategoryNameCheck, PathIsRelativeTo, PreviewEpubValidator};
 pub use uncovered_book_finder::{CoverBooksPager, CoverPage};
+
+/// 정렬 값 배열(JSON)을 클라이언트에 내보낼 커서 문자열로 만든다.
+pub fn encode_category_cursor(sort_values: &Value) -> String {
+    search_manager::encode_category_cursor(sort_values.as_array().map(Vec::as_slice).unwrap_or(&[]))
+}
+
+/// 커서를 정렬 값 배열(JSON)로 되돌린다. 형식이 잘못되면 `None`이다.
+pub fn decode_category_cursor(cursor: &str) -> Option<Value> {
+    search_manager::decode_category_cursor(cursor).map(Value::Array)
+}
 
 /// 카테고리 단위 ES 조회 상한. ES `max_result_window`(기본 10000)와 같다.
 pub const MAX_CATEGORY_RESULT_COUNT: i64 = 10000;
@@ -367,7 +372,7 @@ impl BookManager {
     pub const HWP3_PREVIEW_VERSION: u32 = 2;
     pub const EPUB_IMAGE_MAX_EDGE: u32 = EPUB_IMAGE_MAX_EDGE;
     /// 최상위 파일을 가리키는 카테고리 이름.
-    pub const ROOT_CATEGORY: &'static str = "_root";
+    pub const ROOT_CATEGORY: &'static str = book_record::path_validator::ROOT_CATEGORY;
 
     /// 대역을 꽂아 만든다. ES 색인 생성(`create_index`)과 백필은 하지 않는다(`from_env`가 한다).
     pub fn with_deps(deps: BookManagerDeps) -> BookManager {
@@ -463,7 +468,7 @@ impl BookManager {
     }
 
     fn try_make_book(&self, book_id: i64, info: &Value, score: f64) -> Result<Book, String> {
-        es_doc_converter::try_book_from_doc(&self.path_prefix, book_id, info, score)
+        book_record::es_doc_converter::try_book_from_doc(&self.path_prefix, book_id, info, score)
     }
 }
 

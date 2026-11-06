@@ -20,7 +20,8 @@ docs/       문서
 | `doc_reader` | 문서 읽기: 본문 요약 추출(TXT·EPUB·HTML·RTF·DOCX·PDF·HWP), 파일 앞뒤 읽기, 인코딩 손상 판정용 본문 표본(`text_sampler`), EPUB OPF 메타데이터(`epub_metadata_reader`), PDF 열기·쪽 추출 능력(`pdf_page_reader`). 판정은 하지 않는다. `doc_checker`의 아래 계층이다 |
 | `search_manager` | 책·만화 검색 색인 관리: ES 문서 검색·갱신·카테고리 집계(`ESManager`)와 그 trait(`EsManagerApi`). 전송은 `es_client`를 쓴다. backend 도메인 crate다 |
 | `auth_manager` | 인증: JWT 발급·검증과 역할 판정(`auth_service`), refresh token 저장·회전·세션 관리(`refresh_token_store`). 요청은 `http` crate 타입으로만 받고 axum을 모른다. backend 도메인 crate다 |
-| `book_manager` | 책·만화 관리: 목록·검색·미리보기·편집·재적재·카테고리 제안(`BookManager`, crate 루트), 만화(`comics_manager`), 책 메타데이터(`book_metadata`), PDF 리더·쪽 수 캐시(`pdf_reader_cache`), 미리보기용 EPUB 패키지 도구(`preview_builder::epub_package`). `cover_manager`·`search_manager`를 쓴다. backend 도메인 crate다 |
+| `book_record` | 책 한 권의 기록: 메타데이터 모델(`book_metadata`), ES 문서에서 `Book` 만들기(`es_doc_converter`), 파일시스템 상태와 무관한 경로·파일 종류 규칙(`path_validator`, 매직바이트 판별 `detect_file_type` 포함). `book_manager`의 아래 계층이다 |
+| `book_manager` | 책·만화 관리: 목록·검색·미리보기·편집·재적재·카테고리 제안(`BookManager`, crate 루트), 만화(`comics_manager`), PDF 리더·쪽 수 캐시(`pdf_reader_cache`), 미리보기용 EPUB 패키지 도구(`preview_builder::epub_package`). `cover_manager`·`search_manager`·`book_record`를 쓴다. backend 도메인 crate다 |
 | `cover_manager` | 책 표지: 서점 표지 후보 검색·캐시·저장(`cover_management`, `cover_sources`), URL 이미지 받기(`direct_cover_url`), EPUB 표지 교체·이미지 편집(`epub_cover`), 표지 유무 판정(`cover_status`), PDF 표지 렌더링·빈 표지 판정(`pdf_cover`), 크롭 기하(`image_edit`). backend 도메인 crate다 |
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. `search_manager`의 `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
@@ -32,7 +33,7 @@ docs/       문서
 | `db` | MySQL 접근 추상화와 카테고리 매핑 저장소(`category_mapping`), 사용자별 최근 조회 이력 저장소(`view_history_store`) |
 | `classifier` | 도서 분류기 껍데기: backend 분류 제안이 쓰는 `Classify`·`BookClassifierApi` trait와 모델 단독 어댑터. 구현은 없어서 backend는 카테고리 매핑 키워드만으로 제안한다 |
 | `file_indexer` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리, 색인 제외 디렉토리 규칙(`layout`). loader와 backend가 함께 쓴다 |
-| `sysdeps` | 시계, 파일시스템, 외부 명령 같은 시스템 능력의 trait와 실제 구현. 백그라운드 작업 실행기(`task_runner`)도 여기 있다. 파서 시간 상한(`timeout`)과 PDF worker(`tm-pdf-worker`)를 포함한다 |
+| `sysdeps` | 시계, 파일시스템, 외부 명령 같은 시스템 능력의 trait와 실제 구현. 백그라운드 작업 실행기(`task_runner`)와 겹치지 않는 임시 파일 이름(`temp_file_maker`)도 여기 있다. 파서 시간 상한(`timeout`)과 PDF worker(`tm-pdf-worker`)를 포함한다 |
 | `isbn_extractor` | 파일에서 ISBN 추출(TXT·EPUB·PDF·DJVU·HWP) |
 | `hwp3_parser` | HWP 3.x 텍스트 추출. 생성된 HNC→유니코드 매핑 표(`tables`)를 포함한다 |
 

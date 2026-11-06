@@ -9,7 +9,7 @@ use crate::common::shared_fixtures::{CallArgs, DeferredRunner, Fut, Mock, Record
 use crate::common::shared_fixtures::{ListDirFs, arr, enc, is_truthy, now_plus_3600, proposal_result};
 use auth_manager::auth_service::Claims;
 use backend::api_router::{BookstoreFactory, BookstoreSearch, GoogleVerifier, TaskRunner};
-use book_manager::book_metadata::Book;
+use book_record::book_metadata::Book;
 use bookstore::store_clients::SearchRow;
 use serde_json::{Value, json};
 use std::collections::HashSet;

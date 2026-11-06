@@ -3,7 +3,7 @@
 //! 설계: docs/rust-test-seams.md 3장(통일안). 공용 대역은 `tests/rust/backend/common/`(es_fake, faulty_fs, runner, zipx, epub, fsx, clock)를 쓴다.
 //!
 //! 가정한 API:
-//! - `book_manager::book_metadata::Book { book_id: i64, category: String, title: String, author: String, file_type: String, file_path: PathBuf, file_size: i64, updated_time: NaiveDateTime }`
+//! - `book_record::book_metadata::Book { book_id: i64, category: String, title: String, author: String, file_type: String, file_path: PathBuf, file_size: i64, updated_time: NaiveDateTime }`
 //! - `book_manager::{BookManager, BookManagerDeps}`
 //!   - 생성: `BookManager::with_deps(BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>).with_*(..)) -> BookManager` (구 `for_test`. 전역 `Book.path_prefix`를 건드리지 않고 매니저가 들고 있는다)
 //!   - 생성: `BookManager::from_env(env: &dyn Fn(&str) -> Option<String>, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, BookManagerError>` (구 `new_from_env`/`new_with`/`with_es_url`)
@@ -59,9 +59,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::common::file_reader_fakes::FnFileReader;
 use crate::common::shared_fixtures::{as_status, make_doc, outcome, outcome_or_default, run, split, verdict};
-use book_manager::book_metadata::{Book, BookPage};
 use book_manager::{BookContent, BookManager, BookManagerDeps, BookManagerError, BookResponse, FileReader, ProposeOptions};
 use book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, FsOnlyFile, MismatchDetails, MismatchSummary, ReloadCounts};
+use book_record::book_metadata::{Book, BookPage};
 use classifier::Classify;
 use classifier::Prediction;
 use common::clock::Event;

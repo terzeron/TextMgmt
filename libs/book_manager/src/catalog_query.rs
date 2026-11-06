@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 use super::{AddBookError, BookContent, BookManager, MAX_CATEGORY_PAGE_SIZE, MAX_LATEST_BOOK_COUNT};
-use crate::book_metadata::{Book, BookLookupError, BookPage};
+use book_record::book_metadata::{Book, BookLookupError, BookPage};
 use search_manager::{Docs, EsManagerApi, Hit, KeywordSearchArgs, PagedHits, SimilarDocsArgs, decode_category_cursor, encode_category_cursor};
 
 /// 없거나 빈 객체면 문서가 없는 것이다.

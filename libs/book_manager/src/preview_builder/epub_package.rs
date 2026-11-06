@@ -20,7 +20,7 @@ use xml_recoverer::declare_unbound_prefixes;
 use zip::ZipArchive;
 use zip::result::ZipError;
 
-use crate::path_validator::{clean_href, zip_path};
+use book_record::path_validator::{clean_href, zip_path};
 use common::url_parser::unquote;
 use common::zip_reader::zip_names;
 
@@ -394,7 +394,7 @@ fn check_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String> {
     log::info!("EPUB validate: rewriting OPF in {}", cache_file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
     let modified_opf = format!("{XML_DECLARATION}{}", apply_edits(&opf_text, doc.root_element().range(), edits));
     // 이름을 고정하면 같은 책의 동시 요청이 서로의 임시 파일을 덮어쓴다.
-    let tmp_path = crate::temp_file_maker::temp_sibling(cache_file);
+    let tmp_path = sysdeps::temp_file_maker::temp_sibling(cache_file);
     let rewrite = || -> Result<(), String> {
         let mut zin_r = ZipArchive::new(std::fs::File::open(cache_file).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         let mut zout = zip::ZipWriter::new(std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?);

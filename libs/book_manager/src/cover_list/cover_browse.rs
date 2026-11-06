@@ -23,7 +23,7 @@ use search_manager::CoverFileHit;
 /// Rust `regex`는 lookahead가 없어서 뒤쪽 경계를 소비하는 그룹으로 바꿨다(일치 여부만 쓰므로 결과가 같다).
 static FIRST_INSTALLMENT_PATTERN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|[^\d])0*1\s*(?:권|화)(?:$|[^\d])").expect("정규식"));
 
-pub const ROOT_CATEGORY: &str = "_root";
+pub const ROOT_CATEGORY: &str = book_record::path_validator::ROOT_CATEGORY;
 /// ES가 desc 정렬에서 값 없는 문서에 주는 정렬값(missing: _last)과 같다.
 pub const MISSING_TIME: f64 = -9_223_372_036_854_775_808.0;
 
@@ -363,7 +363,7 @@ mod tests {
         use super::*;
 
         /// 커서 값 `[수정, 생성, 경로]`을 그대로 풀어 `latest_rank`에 넘긴다.
-        fn rank_of_cursor(values: &[Value]) -> crate::cover_browse::Rank {
+        fn rank_of_cursor(values: &[Value]) -> crate::cover_list::cover_browse::Rank {
             latest_rank(values[0].as_f64(), values[1].as_f64(), values[2].as_str().unwrap())
         }
 

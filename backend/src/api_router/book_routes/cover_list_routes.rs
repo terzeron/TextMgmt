@@ -97,7 +97,7 @@ async fn browse(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
     #[derive(serde::Serialize)]
     struct CoverBook {
         #[serde(flatten)]
-        book: book_manager::book_metadata::BookView,
+        book: book_record::book_metadata::BookView,
         display_title: String,
     }
     let books: Vec<CoverBook> = items.into_iter().map(|(book, display_title)| CoverBook { book: super::book_view(&book, manager.as_ref()), display_title }).collect();

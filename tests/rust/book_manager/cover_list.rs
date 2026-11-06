@@ -22,8 +22,8 @@ mod cover_member_lookup {
     use crate::common::dyn_es::make_manager;
     use crate::common::shared_fixtures::CONTAINER;
     use crate::common::shared_fixtures::{make_deps, make_doc};
-    use book_manager::book_metadata::Book;
     use book_manager::{BookManager, CoverPage, CoverPageOpts, MAX_CATEGORY_PAGE_SIZE, encode_category_cursor};
+    use book_record::book_metadata::Book;
     use std::collections::HashMap;
     use std::fs;
     use std::io::{Seek, SeekFrom, Write};

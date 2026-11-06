@@ -9,7 +9,7 @@ use serde_json::Value;
 use sysdeps::CommandError;
 
 use super::BookManager;
-use super::temp_file_maker::unique_token;
+use sysdeps::temp_file_maker::unique_token;
 
 /// epubveri 실행 시간 상한.
 const EPUBVERI_TIMEOUT: Duration = Duration::from_secs(60);

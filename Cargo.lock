@@ -222,6 +222,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "book_manager",
+ "book_record",
  "bookstore",
  "chrono",
  "common",
@@ -413,6 +414,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
+ "book_record",
  "chrono",
  "classifier",
  "common",
@@ -440,6 +442,18 @@ dependencies = [
  "testcontainers-modules",
  "tokio",
  "xml_recoverer",
+ "zip",
+]
+
+[[package]]
+name = "book_record"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "common",
+ "serde",
+ "serde_json",
+ "sysdeps",
  "zip",
 ]
 

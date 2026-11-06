@@ -394,7 +394,7 @@ mod tests {
     use super::{Claims, RuntimeBookAccess, Slot, build_book_manager, build_comics_manager};
     use crate::api_router::{BookAccess, BookManagerApi, BookStub, CategoryMappingApi};
     use async_trait::async_trait;
-    use book_manager::book_metadata::{Book, BookLookupError};
+    use book_record::book_metadata::{Book, BookLookupError};
     use search_manager::{EsError, EsManagerApi};
 
     struct CountingEs(AtomicUsize);

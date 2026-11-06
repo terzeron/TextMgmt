@@ -2,8 +2,8 @@
 mod common;
 use crate::common::shared_fixtures::{block_on, deps, make_doc, make_manager, tmp_dir};
 use book_manager::BookManagerApi;
-use book_manager::book_metadata::BookPage;
 use book_manager::{BookContent, BookManager, MAX_CATEGORY_RESULT_COUNT};
+use book_record::book_metadata::BookPage;
 use common::es_fake::{FakeEsManager, Hit};
 use common::log_capture::LogCapture;
 use serde_json::json;

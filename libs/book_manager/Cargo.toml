@@ -9,6 +9,7 @@ autotests = false
 [dependencies]
 async-trait = "0.1"
 base64 = "0.23.1"
+book_record = { path = "../book_record" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 classifier = { path = "../classifier" }
 common = { path = "../common" }
@@ -49,10 +50,6 @@ path = "../../tests/rust/book_manager/book_manager.rs"
 [[test]]
 name = "api_adapter"
 path = "../../tests/rust/book_manager/api_adapter.rs"
-
-[[test]]
-name = "book_metadata"
-path = "../../tests/rust/book_manager/book_metadata.rs"
 
 [[test]]
 name = "book_updater"
@@ -130,6 +127,3 @@ path = "../../tests/rust/book_manager/pdf_reader_cache.rs"
 name = "preview_builder_epub_package"
 path = "../../tests/rust/book_manager/preview_builder/epub_package.rs"
 
-[[test]]
-name = "es_doc_converter"
-path = "../../tests/rust/book_manager/es_doc_converter.rs"

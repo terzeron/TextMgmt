@@ -59,16 +59,6 @@ pub fn try_book_from_doc(path_prefix: &Path, book_id: i64, info: &Value, score: 
     Ok(book_from_doc(path_prefix, book_id, info, score))
 }
 
-/// 정렬 값 배열(JSON)을 클라이언트에 내보낼 커서 문자열로 만든다.
-pub fn encode_category_cursor(sort_values: &Value) -> String {
-    search_manager::encode_category_cursor(sort_values.as_array().map(Vec::as_slice).unwrap_or(&[]))
-}
-
-/// 커서를 정렬 값 배열(JSON)로 되돌린다. 형식이 잘못되면 `None`이다.
-pub fn decode_category_cursor(cursor: &str) -> Option<Value> {
-    search_manager::decode_category_cursor(cursor).map(Value::Array)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,7 +69,7 @@ mod tests {
         for text in ["2024-01-02T03:04:05.123456", "2024-01-02 03:04:05", "2024-01-02T03:04", "2024-01-02 03:04", "2024-01-02"] {
             assert!(parse_iso(text).is_some(), "{text}");
         }
-        assert_eq!(file_indexer::file_time::iso(parse_iso("2024-01-02").unwrap()), "2024-01-02T00:00:00.000000");
+        assert_eq!(crate::book_metadata::iso_micros(&parse_iso("2024-01-02").unwrap()), "2024-01-02T00:00:00.000000");
         assert_eq!(parse_iso("02/01/2024"), None);
     }
 

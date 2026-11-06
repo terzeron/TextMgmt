@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use book_manager::book_metadata::Book as CoverBook;
 use book_manager::{BookManager, BookManagerDeps, CoverBooksPager, CoverPage, CoverPageOpts};
+use book_record::book_metadata::Book as CoverBook;
 use common::{
     epub::{EpubSpec, make_epub},
     es_fake::FakeEsManager,

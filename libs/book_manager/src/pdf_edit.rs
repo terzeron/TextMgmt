@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 use sysdeps::FsOps;
 
 use super::strerror;
-use super::temp_file_maker::unique_token;
 use super::{BookManager, Docs};
+use sysdeps::temp_file_maker::unique_token;
 
 mod jpeg_encoder;
 mod page_image_editor;

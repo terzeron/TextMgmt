@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 use super::{ApplyCategoryChanges, ProposeCategoryChanges, ReloadProgress};
 use super::{BookContent, BookManager, BookManagerApi, BookResponse, CoverPageOpts};
 use super::{BookDeletion, CoverPage};
-use crate::book_metadata::{Book, BookLookupError, BookPage};
 use crate::{ApplyResult, EpubValidation, PdfEditResult, PdfValidation, ProposeResult};
 use crate::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
+use book_record::book_metadata::{Book, BookLookupError, BookPage};
 use cover_manager::cover_management::CoverSave;
 use search_manager::EsManagerApi;
 

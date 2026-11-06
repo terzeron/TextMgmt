@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use super::{BookManager, BookManagerDeps, CoverPageOpts, MAX_CATEGORY_PAGE_SIZE};
-use crate::book_metadata::Book;
+use book_record::book_metadata::Book;
 use cover_manager::cover_status::{CoverStatusCache, has_official_cover};
 
 /// 표지 목록 한 쪽. `items`는 (대표 책, 작품 디렉터리 이름 또는 "")이다.

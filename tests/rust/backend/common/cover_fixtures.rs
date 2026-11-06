@@ -6,7 +6,7 @@
 //! `#[path = "common/cover_fixtures.rs"] mod cover_fixtures;`로 가져온다.
 //!
 //! 가정한 API (아직 구현 전이다):
-//! - `book_manager::book_metadata::Book::override_path_prefix(path: &Path) -> PathPrefixGuard` (drop 시 원래 값 복원.
+//! - `book_record::book_metadata::Book::override_path_prefix(path: &Path) -> PathPrefixGuard` (drop 시 원래 값 복원.
 //! - `cover_manager::cover_management::CoverManagement::{new(root: &Path), with_hooks(root: &Path, hooks: CoverHooks), hooks(&self) -> &CoverHooks, set_hooks(&mut self, hooks: CoverHooks)}`
 //! - `cover_manager::cover_management::CoverHooks` (Clone + Default): `with_search(Fn(&str, &EpubInspection) -> Result<StoreSearch, SearchError>)`, `with_fetch_bytes(Fn(&str, &str) -> Result<Vec<u8>, String>)`,
 //!   `with_fetch_url_image(Fn(&str) -> Result<Vec<u8>, CoverError>)`, `with_clock(Arc<dyn Clock>)`. 테스트가 대역을 꽂는 주입 지점이다.

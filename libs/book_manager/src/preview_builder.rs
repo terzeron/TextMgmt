@@ -18,8 +18,8 @@ use zip::result::ZipError;
 
 pub mod epub_package;
 
-use super::path_validator::{clean_href, zip_path};
 use super::{BookManager, BookResponse};
+use book_record::path_validator::{clean_href, zip_path};
 use common::xml_parser::parse_xml;
 use common::zip_reader::zip_names;
 use epub_package::{Edit, NCX_NS, OPF_NS, XML_DECLARATION, apply_edits, children_named, find_el, read_member, xml_text};
@@ -117,7 +117,7 @@ impl BookManager {
     /// 캐시 파일이 있고 원본보다 새것인가.
     /// 캐시를 임시 파일에 다 쓴 뒤 이름을 바꾼다. 동시 요청이 쓰는 중인 잘린 파일을 캐시 적중으로 내보내지 않게 한다.
     fn write_cache(&self, cache_file: &Path, bytes: &[u8]) -> std::io::Result<()> {
-        let tmp = super::temp_file_maker::temp_sibling(cache_file);
+        let tmp = sysdeps::temp_file_maker::temp_sibling(cache_file);
         self.fs.write(&tmp, bytes).and_then(|()| self.fs.rename(&tmp, cache_file)).inspect_err(|_| {
             let _ = self.fs.remove_file(&tmp);
         })
@@ -321,7 +321,7 @@ impl BookManager {
         }
 
         // 임시 파일에 만들고 검증까지 마친 뒤 이름을 바꾼다. 동시 요청이 만드는 중인 파일을 캐시 적중으로 보지 않게 한다.
-        let tmp_file = super::temp_file_maker::temp_sibling(&cache_file);
+        let tmp_file = sysdeps::temp_file_maker::temp_sibling(&cache_file);
         // 훅이나 파서가 panic해도 요청 하나의 500으로 끝낸다.
         let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.build_epub_preview(book_id, file_path, &tmp_file, requested_chapters == 0, chapters)))
             .unwrap_or_else(|_| Err(PreviewFailure::Other("panic during EPUB preview".to_string())));

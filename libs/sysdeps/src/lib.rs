@@ -19,6 +19,7 @@ pub mod pdf_worker_client;
 pub use pdf_worker_client as poppler;
 mod native_pdf;
 pub mod task_runner;
+pub mod temp_file_maker;
 pub mod timeout_runner;
 
 /// 환경 변수 조회 함수. `file_indexer::env_config::Config::from_env`와 같은 모양이다.

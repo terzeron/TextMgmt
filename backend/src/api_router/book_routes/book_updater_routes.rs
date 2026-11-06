@@ -14,7 +14,7 @@ use axum::extract::OriginalUri;
 use axum::extract::Path;
 use axum::extract::State;
 use book_manager::BookDeletion;
-use book_manager::book_metadata::Book;
+use book_record::book_metadata::Book;
 use fancy_regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;

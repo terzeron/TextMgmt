@@ -15,9 +15,9 @@ use file_indexer::env_config::Config;
 use file_indexer::record_builder;
 use serde_json::{Value, json};
 
-use super::path_validator::relative_to;
-use super::path_validator::{declared_type, detect_file_type, is_indexable_type};
 use super::{Docs, FileReader};
+use book_record::path_validator::relative_to;
+use book_record::path_validator::{declared_type, detect_file_type, is_indexable_type};
 use file_indexer::file_time::iso;
 /// 요약에 담는 본문 길이(문자).
 const SUMMARY_CHARS: usize = 3500;

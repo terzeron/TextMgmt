@@ -6,8 +6,8 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::path_validator::relative_to;
 use super::{AddBookError, BookManager};
+use book_record::path_validator::relative_to;
 use search_manager::Docs;
 
 /// `delete_book` 성공 결과. 파일이 이미 없었으면 색인만 지우고 경고를 남긴다.
