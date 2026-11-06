@@ -38,7 +38,6 @@ md5 = { package = "md-5", version = "0.11.0" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 sysdeps = { path = "../libs/sysdeps" }
-ureq = { workspace = true, features = ["rustls"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util"] }
 tokio-stream = "0.1.19"
 tokio-util = { version = "0.7.20", features = ["io"] }
@@ -64,10 +63,6 @@ tower = { version = "0.5.3", features = ["util"] }
 [[test]]
 name = "api_router"
 path = "../tests/rust/backend/api_router.rs"
-
-[[test]]
-name = "api_router_google_oauth"
-path = "../tests/rust/backend/api_router/google_oauth.rs"
 
 [[test]]
 name = "stderr_logger"

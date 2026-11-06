@@ -20,33 +20,6 @@ use db::view_history_store::{RecentViews, ViewHistoryError, ViewHistoryStore};
 pub(crate) use book_manager::UNIMPLEMENTED;
 
 // ---------------------------------------------------------------------------
-// Google 로그인
-// ---------------------------------------------------------------------------
-
-/// Google ID 토큰 검증. `TM_GOOGLE_CLIENT_ID`를 audience로 쓴다.
-pub trait GoogleVerifier: Send + Sync {
-    /// 설정된 OAuth 클라이언트 ID. 없으면 None.
-    fn client_id(&self) -> Option<String> {
-        std::env::var("TM_GOOGLE_CLIENT_ID").ok().filter(|v| !v.is_empty())
-    }
-
-    /// 검증에 성공하면 토큰의 claims를 돌려준다. 실패 사유는 문자열이다.
-    fn verify(&self, _credential: &str, _audience: &str) -> Result<Value, String> {
-        Err(UNIMPLEMENTED.to_string())
-    }
-}
-
-/// 자리표시자. Google 공개 키를 HTTPS로 가져오는 TLS 클라이언트가 아직 없어서 항상 "검증 불가"를 돌려준다.
-/// 그래서 이 구현으로는 아무도 로그인할 수 없다(실패로 닫힌다).
-pub struct UnavailableGoogleVerifier;
-
-impl GoogleVerifier for UnavailableGoogleVerifier {
-    fn verify(&self, _credential: &str, _audience: &str) -> Result<Value, String> {
-        Err("Google ID token verification is not available in this build".to_string())
-    }
-}
-
-// ---------------------------------------------------------------------------
 // 조회 이력
 // ---------------------------------------------------------------------------
 
@@ -331,24 +304,17 @@ mod tests {
     use super::*;
 
     struct EmptyMapping;
-    struct EmptyGoogleVerifier;
     struct EmptyBookAccess;
     struct EmptyViewHistory;
 
     impl CategoryMappingApi for EmptyMapping {}
-    impl GoogleVerifier for EmptyGoogleVerifier {}
     impl BookAccess for EmptyBookAccess {}
     impl ViewHistoryApi for EmptyViewHistory {}
 
     #[test]
-    fn google_verifier_and_view_history_defaults_are_explicit() {
-        let expected_client_id = std::env::var("TM_GOOGLE_CLIENT_ID").ok().filter(|value| !value.is_empty());
-        assert_eq!(EmptyGoogleVerifier.client_id(), expected_client_id);
-        assert_eq!(EmptyGoogleVerifier.verify("token", "audience").unwrap_err(), UNIMPLEMENTED);
-
+    fn view_history_defaults_are_explicit() {
         assert!(EmptyViewHistory.record_view("a@b", "book", 1, "title", "category").is_err());
         assert!(EmptyViewHistory.list_recent_views(5).is_err());
-        assert!(UnavailableGoogleVerifier.verify("token", "audience").is_err());
     }
 
     #[tokio::test]

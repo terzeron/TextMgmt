@@ -10,10 +10,10 @@ use std::time::Duration;
 
 use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 
-use super::app_capabilities::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, UnavailableBookAccess, ViewHistoryApi};
-use super::google_oauth::GoogleIdTokenVerifier;
+use super::app_capabilities::{BookAccess, BookStub, CategoryMappingApi, UnavailableBookAccess, ViewHistoryApi};
 use auth_manager::auth_service::{Claims, HttpStatusError};
 use auth_manager::auth_service::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
+use auth_manager::google_token_verifier::{GoogleIdTokenVerifier, GoogleVerifier};
 use auth_manager::refresh_token_store::{RefreshTokenStoreApi, create_refresh_token_store};
 use book_manager::comics_manager::ComicsManager;
 use book_manager::{BookManager, LoaderFileReader};

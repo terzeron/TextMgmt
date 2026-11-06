@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use backend::api_router::{GoogleIdTokenVerifier, GoogleJwksFetcher, GoogleVerifier};
+use auth_manager::google_token_verifier::{GoogleIdTokenVerifier, GoogleJwksFetcher, GoogleVerifier, UNIMPLEMENTED, UnavailableGoogleVerifier};
 use serde_json::{Value, json};
 
 const VALID: &str = "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2V5IiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLCJhdWQiOiJ0ZXh0bWdtdC1jbGllbnQiLCJleHAiOjQxMDI0NDQ4MDAsImVtYWlsIjoicmVhZGVyQGV4YW1wbGUuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWV9.w5063aZeVEDYkVBBzW3w1Yr28Xa27Fu2WM6A_unCvL4HgvRNIl6q2AQI7pvFbpwFtcKJQ5KkQ5gm4cMc39EhI76ogfnUAmX3ZNiU97Qg9SYxhiqo_2paeXhtbHaPyx6n80BRih9KUpvDJq-LgSD55GExKrFodFOs6W_jEJR3T7OFNdnBNmGrYxL8qHZJh494DMLcCppVhFdVp8ITW94wIc73PU3C4LBJjR4sDpFENBXzZIl5w4E9A-k9oZRpPwWoAlpNCfKLJO6qRyAvewoHgpEkR7Iek8IBRSTG2f2aBVy4m2SrsZ9a58kfAa2ZXhOT074_kYYTnsPNh0jG5Af9ug";
@@ -113,4 +113,15 @@ fn rejects_tokens_not_signed_with_rs256() {
     let hs256 = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.c2ln";
     let (verifier, _) = verifier();
     assert_eq!(verifier.verify(hs256, "textmgmt-client").unwrap_err(), "Google ID token must use RS256");
+}
+
+struct EmptyGoogleVerifier;
+impl GoogleVerifier for EmptyGoogleVerifier {}
+
+#[test]
+fn google_verifier_defaults_are_explicit() {
+    let expected_client_id = std::env::var("TM_GOOGLE_CLIENT_ID").ok().filter(|value| !value.is_empty());
+    assert_eq!(EmptyGoogleVerifier.client_id(), expected_client_id);
+    assert_eq!(EmptyGoogleVerifier.verify("token", "audience").unwrap_err(), UNIMPLEMENTED);
+    assert!(UnavailableGoogleVerifier.verify("token", "audience").is_err());
 }

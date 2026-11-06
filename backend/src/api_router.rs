@@ -4,7 +4,7 @@
 //! # 구성
 //! - `app_deps.rs`: `AppDeps`(주입 묶음), `AuthMode`. `app_capabilities.rs`: 주입하는 trait와 실제 구현.
 //! - `route_registry.rs`: 라우트 등록부 `Routes`. `request_extractors.rs`: 인증·JSON·쿼리 추출기. `error_responses.rs`: 오류 응답과 로깅.
-//! - `routes_*.rs`, `auth_routes.rs`, `log_routes.rs`: 자원별 라우트. `cors_layer.rs`, `auth_cookies.rs`, `google_oauth.rs`: 공용 도우미.
+//! - `routes_*.rs`, `auth_routes.rs`, `log_routes.rs`: 자원별 라우트. `cors_layer.rs`, `auth_cookies.rs`: 공용 도우미. Google ID 토큰 검증은 `auth_manager::google_token_verifier`에 있다.
 //!
 //! # 라우트를 붙이는 방법
 //! 1. 라우트가 부르는 도메인 이름으로 `src/api_router/<도메인>_routes.rs`를 만들고 `pub(super) fn routes() -> Routes`를 하나 둔다.
@@ -30,17 +30,17 @@ mod category_mapping_routes;
 mod cors_layer;
 mod cover_routes;
 mod error_responses;
-mod google_oauth;
 mod log_routes;
 mod request_extractors;
 mod route_registry;
 mod view_history_routes;
 mod wake_routes;
 
-pub use app_capabilities::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, MappingError, UnavailableBookAccess, UnavailableGoogleVerifier, ViewHistoryApi};
+pub use app_capabilities::{BookAccess, BookStub, CategoryMappingApi, MappingError, UnavailableBookAccess, ViewHistoryApi};
 pub use app_deps::{AppDeps, AuthMode, AuthSlots, BookstoreFactory, RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS, Slot};
 pub use auth_cookies::{CustomJSONResponse, ResponseHeaders, clear_auth_cookies, custom_jsonable_encoder, get_cookie_settings, is_local_frontend_origin, set_auth_cookies};
 pub use auth_manager::auth_service::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, HttpStatusError, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RoleResolver, observation_hash};
+pub use auth_manager::google_token_verifier::{GoogleIdTokenVerifier, GoogleJwksFetcher, GoogleVerifier, UnavailableGoogleVerifier};
 pub use book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
 pub use bookstore::store_clients::BookstoreSearch;
 pub use db::view_history_store::MAX_RECENT_VIEWS;
@@ -48,7 +48,6 @@ pub use error_responses::{
     ApiError, ApiResult, GENERIC_SERVER_ERROR_DETAIL, RequestValidationError, SERVICE_UNAVAILABLE_DETAIL, VALIDATION_ERROR_DETAIL, general_exception_handler, http_exception_handler, json_response,
     summarize_request_body, validation_exception_handler,
 };
-pub use google_oauth::{GoogleIdTokenVerifier, GoogleJwksFetcher};
 pub use log_routes::{CLIENT_ERROR_FIELD_LIMITS, ClientErrorLogModel};
 pub(crate) use request_extractors::parse_py_bool;
 pub use request_extractors::{ApiJson, ApiQuery, OptionalAuth, RequireAdmin, RequireAuth};

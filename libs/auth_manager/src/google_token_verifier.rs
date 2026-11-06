@@ -1,13 +1,39 @@
+//! Google 로그인의 ID 토큰 검증. Google 공개 키(JWKS)를 HTTPS로 받아 캐시하고, 서명·발급자·audience·만료를 확인한다.
+
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde_json::Value;
 
-use super::app_capabilities::GoogleVerifier;
+/// 기본 구현이 아직 없다는 오류 문구.
+pub const UNIMPLEMENTED: &str = "unimplemented";
+
+/// Google ID 토큰 검증. `TM_GOOGLE_CLIENT_ID`를 audience로 쓴다.
+pub trait GoogleVerifier: Send + Sync {
+    /// 설정된 OAuth 클라이언트 ID. 없으면 None.
+    fn client_id(&self) -> Option<String> {
+        std::env::var("TM_GOOGLE_CLIENT_ID").ok().filter(|v| !v.is_empty())
+    }
+
+    /// 검증에 성공하면 토큰의 claims를 돌려준다. 실패 사유는 문자열이다.
+    fn verify(&self, _credential: &str, _audience: &str) -> Result<Value, String> {
+        Err(UNIMPLEMENTED.to_string())
+    }
+}
+
+/// 자리표시자. Google 공개 키를 HTTPS로 가져오는 TLS 클라이언트가 아직 없어서 항상 "검증 불가"를 돌려준다.
+/// 그래서 이 구현으로는 아무도 로그인할 수 없다(실패로 닫힌다).
+pub struct UnavailableGoogleVerifier;
+
+impl GoogleVerifier for UnavailableGoogleVerifier {
+    fn verify(&self, _credential: &str, _audience: &str) -> Result<Value, String> {
+        Err("Google ID token verification is not available in this build".to_string())
+    }
+}
 
 const GOOGLE_JWKS_URL: &str = "https://www.googleapis.com/oauth2/v3/certs";
-pub(super) const GOOGLE_ISSUERS: [&str; 2] = ["accounts.google.com", "https://accounts.google.com"];
+pub const GOOGLE_ISSUERS: [&str; 2] = ["accounts.google.com", "https://accounts.google.com"];
 const UNKNOWN_KID_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Google 공개 서명 키를 가져온다. 테스트는 고정 JWKS를 주입한다.

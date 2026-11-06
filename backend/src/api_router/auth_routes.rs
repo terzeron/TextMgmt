@@ -16,11 +16,11 @@ use serde_json::{Value, json};
 use super::app_deps::AppDeps;
 use super::auth_cookies::{clear_auth_cookies, set_auth_cookies};
 use super::error_responses::{ApiError, ApiResult, json_response};
-use super::google_oauth::GOOGLE_ISSUERS;
 use super::request_extractors::ClientInfo;
 use super::request_extractors::{ApiJson, ApiQuery, RequireAdmin, RequireAuth};
 use super::route_registry::Routes;
 use auth_manager::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RequestParts, observation_hash};
+use auth_manager::google_token_verifier::GOOGLE_ISSUERS;
 use auth_manager::refresh_token_store::Rotation;
 
 /// family_id는 `uuid4().hex`라서 32자 소문자 hex다.
