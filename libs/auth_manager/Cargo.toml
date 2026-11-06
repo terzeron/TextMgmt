@@ -1,12 +1,13 @@
 [package]
 name = "auth_manager"
-description = "인증: JWT 발급·검증과 역할 판정(auth_service), refresh token 저장·회전·세션 관리(refresh_token_store), Google ID 토큰 검증(google_token_verifier). HTTP 요청은 http crate 타입으로만 받는다"
+description = "인증: JWT 발급·검증과 역할 판정(auth_service), refresh token 저장·회전·세션 관리(refresh_token_store), Google ID 토큰 검증(google_token_verifier), viewer 카테고리 접근 정책(category_access_checker). HTTP 요청은 http crate 타입으로만 받는다"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 autotests = false
 
 [dependencies]
+async-trait = "0.1"
 base64 = "0.23.1"
 common = { path = "../common", default-features = false, features = ["http_client"] }
 ureq = { workspace = true, features = ["rustls"] }
@@ -34,3 +35,7 @@ path = "../../tests/rust/auth_manager/integration/refresh_token_store.rs"
 [[test]]
 name = "google_token_verifier"
 path = "../../tests/rust/auth_manager/google_token_verifier.rs"
+
+[[test]]
+name = "category_access_checker"
+path = "../../tests/rust/auth_manager/category_access_checker.rs"

@@ -2,7 +2,7 @@
 //! 설계: docs/rust-test-seams.md 3.2
 //!
 //! # 구성
-//! - `app_deps.rs`: `AppDeps`(주입 묶음), `AuthMode`. `app_capabilities.rs`: 주입하는 trait와 실제 구현.
+//! - `app_deps.rs`: `AppDeps`(주입 묶음), `AuthMode`. 주입하는 능력의 trait와 구현은 각 도메인 crate에 있다(책 접근 검사는 `auth_manager::category_access_checker`).
 //! - `route_registry.rs`: 라우트 등록부 `Routes`. `request_extractors.rs`: 인증·JSON·쿼리 추출기. `error_responses.rs`: 오류 응답과 로깅.
 //! - `routes_*.rs`, `auth_routes.rs`, `log_routes.rs`: 자원별 라우트. `cors_layer.rs`, `auth_cookies.rs`: 공용 도우미. Google ID 토큰 검증은 `auth_manager::google_token_verifier`에 있다.
 //!
@@ -20,7 +20,6 @@ use axum::Router;
 use axum::middleware::from_fn;
 use std::sync::Arc;
 
-mod app_capabilities;
 mod app_deps;
 mod auth_cookies;
 mod auth_routes;
@@ -36,10 +35,10 @@ mod route_registry;
 mod view_history_routes;
 mod wake_routes;
 
-pub use app_capabilities::{BookAccess, BookStub, UnavailableBookAccess};
 pub use app_deps::{AppDeps, AuthMode, AuthSlots, BookstoreFactory, RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS, Slot};
 pub use auth_cookies::{CustomJSONResponse, ResponseHeaders, clear_auth_cookies, custom_jsonable_encoder, get_cookie_settings, is_local_frontend_origin, set_auth_cookies};
 pub use auth_manager::auth_service::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, HttpStatusError, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RoleResolver, observation_hash};
+pub use auth_manager::category_access_checker::{BookAccess, BookStub, UnavailableBookAccess};
 pub use auth_manager::google_token_verifier::{GoogleIdTokenVerifier, GoogleJwksFetcher, GoogleVerifier, UnavailableGoogleVerifier};
 pub use book_manager::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
 pub use bookstore::store_clients::BookstoreSearch;

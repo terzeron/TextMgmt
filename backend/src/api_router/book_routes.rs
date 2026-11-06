@@ -7,6 +7,7 @@ use super::error_responses::ApiResult;
 use super::error_responses::RequestValidationError;
 use super::route_registry::Routes;
 use auth_manager::auth_service::Claims;
+use auth_manager::category_access_checker::ensure_category_visible;
 use axum::Json;
 use axum::body::Body;
 use axum::http::Uri;
@@ -17,7 +18,6 @@ use book_manager::book_metadata::BookLookupError;
 use book_manager::book_metadata::{Book, BookView};
 use db::category_mapping::CategoryMappingApi;
 use db::category_mapping::MappingError;
-use db::category_mapping::is_hidden_category;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -100,7 +100,7 @@ fn hidden_categories(deps: &AppDeps, payload: &Claims, comics: bool) -> ApiResul
 }
 
 fn ensure_allowed(category: &str, hidden: &[String]) -> ApiResult<()> {
-    if is_hidden_category(category, hidden) { Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다.")) } else { Ok(()) }
+    Ok(ensure_category_visible(category, hidden)?)
 }
 
 /// viewer는 카테고리 정책을 확인한 뒤 파일을 읽는다. admin은 조회 제한을 받지 않는다.

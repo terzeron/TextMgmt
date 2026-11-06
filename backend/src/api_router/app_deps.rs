@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 
-use super::app_capabilities::{BookAccess, BookStub, UnavailableBookAccess};
 use auth_manager::auth_service::{Claims, HttpStatusError};
 use auth_manager::auth_service::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
+use auth_manager::category_access_checker::{BookAccess, BookLookup, BookStub, UnavailableBookAccess, ViewerBookAccess};
 use auth_manager::google_token_verifier::{GoogleIdTokenVerifier, GoogleVerifier};
 use auth_manager::refresh_token_store::{RefreshTokenStoreApi, create_refresh_token_store};
 use book_manager::comics_manager::ComicsManager;
@@ -145,7 +145,7 @@ impl AppDeps {
         let mut deps = Self::new(AuthMode::Cookies);
         deps.book_manager = Slot::lazy(create_runtime_book_manager);
         deps.comics_manager = Slot::lazy(create_runtime_comics_manager);
-        deps.book_access = Arc::new(RuntimeBookAccess::new(deps.book_manager.clone(), deps.comics_manager.clone(), deps.category_mapping.clone()));
+        deps.book_access = Arc::new(runtime_book_access(deps.book_manager.clone(), deps.comics_manager.clone(), deps.category_mapping.clone()));
         deps
     }
 
@@ -314,35 +314,25 @@ impl AppDeps {
     }
 }
 
-struct RuntimeBookAccess {
+/// 운영용 책 찾기: 만화면 만화 관리자, 아니면 책 관리자에서 찾는다.
+struct ManagerBookLookup {
     books: Slot<dyn BookManagerApi>,
     comics: Slot<dyn BookManagerApi>,
-    categories: Slot<dyn CategoryMappingApi>,
-}
-
-impl RuntimeBookAccess {
-    fn new(books: Slot<dyn BookManagerApi>, comics: Slot<dyn BookManagerApi>, categories: Slot<dyn CategoryMappingApi>) -> Self {
-        Self { books, comics, categories }
-    }
 }
 
 #[async_trait::async_trait]
-impl BookAccess for RuntimeBookAccess {
-    async fn get_book_and_ensure_viewer_access(&self, book_id: i64, payload: &Claims, content_type: &str) -> Result<BookStub, HttpStatusError> {
+impl BookLookup for ManagerBookLookup {
+    async fn find_book(&self, book_id: i64, content_type: &str) -> Result<BookStub, HttpStatusError> {
         let manager = if content_type == "comic" { &self.comics } else { &self.books };
         let manager = manager.get().map_err(|error| HttpStatusError::new(503, &error))?;
         let book = manager.get_book(book_id).await.map_err(|error| HttpStatusError::new(404, &error.to_string()))?;
-
-        if payload.is_viewer() {
-            let categories = self.categories.get().map_err(|error| HttpStatusError::new(503, &error))?;
-            let hidden = categories.get_hidden_categories(content_type).map_err(|error| HttpStatusError::new(500, &error.to_string()))?;
-            if db::category_mapping::is_hidden_category(&book.category, &hidden) {
-                return Err(HttpStatusError::new(403, "접근 권한이 없는 카테고리입니다."));
-            }
-        }
-
         Ok(BookStub { title: book.title, category: Some(book.category) })
     }
+}
+
+/// 운영용 책 접근 확인. 정책은 `auth_manager::category_access_checker`가 적용한다.
+fn runtime_book_access(books: Slot<dyn BookManagerApi>, comics: Slot<dyn BookManagerApi>, categories: Slot<dyn CategoryMappingApi>) -> ViewerBookAccess {
+    ViewerBookAccess::new(Arc::new(ManagerBookLookup { books, comics }), Arc::new(move || categories.get()))
 }
 
 /// 책·만화 디렉터리를 아는 loader 기반 파일 reader.
@@ -393,7 +383,7 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use super::{Claims, RuntimeBookAccess, Slot, build_book_manager, build_comics_manager};
+    use super::{Claims, Slot, build_book_manager, build_comics_manager, runtime_book_access};
     use crate::api_router::{BookAccess, BookManagerApi, BookStub, CategoryMappingApi};
     use async_trait::async_trait;
     use book_manager::book_metadata::{Book, BookLookupError};
@@ -472,7 +462,7 @@ mod tests {
     async fn runtime_book_access_denies_hidden_category_and_descendants_for_viewers() {
         let manager: Arc<dyn BookManagerApi> = Arc::new(FixedBookManager(test_book("소설/판타지/무협")));
         let mapping: Arc<dyn CategoryMappingApi> = Arc::new(FixedHiddenCategories(vec!["소설/판타지".into()]));
-        let access = RuntimeBookAccess::new(Slot::ready(manager.clone()), Slot::ready(manager.clone()), Slot::ready(mapping));
+        let access = runtime_book_access(Slot::ready(manager.clone()), Slot::ready(manager.clone()), Slot::ready(mapping));
 
         let result = access.get_book_and_ensure_viewer_access(1, &Claims::with_role("viewer"), "book").await;
 
@@ -483,7 +473,7 @@ mod tests {
     async fn runtime_book_access_allows_admin_without_loading_hidden_categories() {
         let manager: Arc<dyn BookManagerApi> = Arc::new(FixedBookManager(test_book("소설/판타지")));
         let mapping: Arc<dyn CategoryMappingApi> = Arc::new(FixedHiddenCategories(vec!["소설".into()]));
-        let access = RuntimeBookAccess::new(Slot::ready(manager.clone()), Slot::ready(manager), Slot::ready(mapping));
+        let access = runtime_book_access(Slot::ready(manager.clone()), Slot::ready(manager), Slot::ready(mapping));
 
         let book = access.get_book_and_ensure_viewer_access(1, &Claims::with_role("admin"), "book").await.unwrap();
 
@@ -494,7 +484,7 @@ mod tests {
     async fn runtime_book_access_does_not_hide_an_empty_category() {
         let manager: Arc<dyn BookManagerApi> = Arc::new(FixedBookManager(test_book("")));
         let mapping: Arc<dyn CategoryMappingApi> = Arc::new(FixedHiddenCategories(vec![String::new()]));
-        let access = RuntimeBookAccess::new(Slot::ready(manager.clone()), Slot::ready(manager), Slot::ready(mapping));
+        let access = runtime_book_access(Slot::ready(manager.clone()), Slot::ready(manager), Slot::ready(mapping));
 
         let result = access.get_book_and_ensure_viewer_access(1, &Claims::with_role("viewer"), "book").await;
 
