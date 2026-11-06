@@ -86,9 +86,6 @@ path = "../../tests/rust/book_manager/cover_finder.rs"
 name = "cover_list"
 path = "../../tests/rust/book_manager/cover_list.rs"
 
-[[test]]
-name = "epub_inspector"
-path = "../../tests/rust/book_manager/epub_inspector.rs"
 
 
 [[test]]
@@ -136,3 +133,11 @@ path = "../../tests/rust/book_manager/integration/container.rs"
 [[test]]
 name = "pdf_reader_cache"
 path = "../../tests/rust/book_manager/pdf_reader_cache.rs"
+
+[[test]]
+name = "preview_builder_epub_package"
+path = "../../tests/rust/book_manager/preview_builder/epub_package.rs"
+
+[[test]]
+name = "es_doc_converter"
+path = "../../tests/rust/book_manager/es_doc_converter.rs"

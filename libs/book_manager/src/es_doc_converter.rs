@@ -59,6 +59,16 @@ pub fn try_book_from_doc(path_prefix: &Path, book_id: i64, info: &Value, score: 
     Ok(book_from_doc(path_prefix, book_id, info, score))
 }
 
+/// 정렬 값 배열(JSON)을 클라이언트에 내보낼 커서 문자열로 만든다.
+pub fn encode_category_cursor(sort_values: &Value) -> String {
+    search_manager::encode_category_cursor(sort_values.as_array().map(Vec::as_slice).unwrap_or(&[]))
+}
+
+/// 커서를 정렬 값 배열(JSON)로 되돌린다. 형식이 잘못되면 `None`이다.
+pub fn decode_category_cursor(cursor: &str) -> Option<Value> {
+    search_manager::decode_category_cursor(cursor).map(Value::Array)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

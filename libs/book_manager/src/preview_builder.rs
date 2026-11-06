@@ -16,10 +16,13 @@ use scraper::{Html, Selector};
 use zip::ZipArchive;
 use zip::result::ZipError;
 
-use super::epub_inspector::{Edit, NCX_NS, OPF_NS, XML_DECLARATION, apply_edits, children_named, find_el, read_member, xml_text, zip_names};
+pub mod epub_package;
+
 use super::path_validator::{clean_href, zip_path};
 use super::{BookManager, BookResponse};
 use common::xml_parser::parse_xml;
+use common::zip_reader::zip_names;
+use epub_package::{Edit, NCX_NS, OPF_NS, XML_DECLARATION, apply_edits, children_named, find_el, read_member, xml_text};
 use xml_recoverer::declare_unbound_prefixes;
 
 const HTML_VIEWER_CSP: &str = "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' blob:;";
@@ -218,7 +221,7 @@ impl BookManager {
         };
         match generate() {
             Ok(bytes) => {
-                Self::evict_old_cache_with(&*self.fs, cache_dir);
+                epub_package::evict_old_cache_with(&*self.fs, cache_dir);
                 BookResponse { status_code: 200, media_type: Some("application/pdf".to_string()), headers: no_transform_headers(), body: bytes }
             }
             Err(e) => {
@@ -263,7 +266,7 @@ impl BookManager {
                 log::error!("{} preview cache write failed for book_id={book_id}: {e}", suffix.to_uppercase());
                 return text_response(500, format!("{} preview failed", suffix.to_uppercase()));
             }
-            Self::evict_old_cache_with(&*self.fs, cache_dir);
+            epub_package::evict_old_cache_with(&*self.fs, cache_dir);
             log::debug!("Preview generated for book_id={book_id} ({suffix})");
             return BookResponse { status_code: 200, media_type: Some("text/html".to_string()), headers: html_security_headers(), body: html_content.into_bytes() };
         }
@@ -293,13 +296,13 @@ impl BookManager {
             log::error!("HWP3 preview cache write failed for book_id={book_id}: {e}");
             return Some(text_response(500, "HWP preview failed"));
         }
-        Self::evict_old_cache_with(&*self.fs, cache_dir);
+        epub_package::evict_old_cache_with(&*self.fs, cache_dir);
         log::debug!("Preview generated for book_id={book_id} (HWP3 native)");
         Some(BookResponse { status_code: 200, media_type: Some("text/html".to_string()), headers: html_security_headers(), body: html_content.into_bytes() })
     }
 
     fn preview_epub(&self, book_id: i64, file_path: &Path, cache_dir: &Path, original_mtime: SystemTime, requested_chapters: u32) -> BookResponse {
-        let total_chapters = Self::get_epub_total_chapters(file_path);
+        let total_chapters = epub_package::get_epub_total_chapters(file_path);
         // chapters<=0: 전체 챕터 포함(대용량 폰트 제거, 대형 이미지 축소)
         let chapters = if requested_chapters == 0 { total_chapters } else { i64::from(requested_chapters) };
         let cache_name = format!("{book_id}_ch{chapters}_v{}.epub", BookManager::EPUB_IMAGE_POLICY_VERSION);
@@ -335,7 +338,7 @@ impl BookManager {
                 // 생성된 EPUB 유효성 검증
                 let validated = match self.seams().preview_epub_validator {
                     Some(validator) => validator(&tmp_file),
-                    None => Self::validate_preview_epub_with(&*self.fs, &tmp_file),
+                    None => epub_package::validate_preview_epub_with(&*self.fs, &tmp_file),
                 };
                 if let Err(err) = validated {
                     let _ = self.fs.remove_file(&tmp_file);
@@ -347,7 +350,7 @@ impl BookManager {
                     log::error!("EPUB preview cache write failed for book_id={book_id}: {e}");
                     return text_response(500, "EPUB preview failed");
                 }
-                Self::evict_old_cache_with(&*self.fs, cache_dir);
+                epub_package::evict_old_cache_with(&*self.fs, cache_dir);
                 log::debug!("Preview generated for book_id={book_id} (EPUB, {chapter_count} chapters)");
                 self.file_response(&cache_file, "application/epub+zip", extra_headers)
             }
@@ -374,7 +377,7 @@ impl BookManager {
 
         // OPF 경로 찾기(container.xml -> regex -> 직접 탐색)
         let opf_override = self.opf_path_override().filter(|p| !p.is_empty());
-        let Some(opf_path) = opf_override.or_else(|| Self::find_opf_path(&mut zin)) else {
+        let Some(opf_path) = opf_override.or_else(|| epub_package::find_opf_path(&mut zin)) else {
             log::warn!("EPUB preview: OPF file not found for book_id={book_id}");
             return Err(PreviewFailure::Response(text_response(422, "EPUB structure error: OPF file not found")));
         };
@@ -634,7 +637,7 @@ impl BookManager {
                 } else if EPUB_IMAGE_SUFFIXES.iter().any(|s| lower.ends_with(s)) && data.len() > seams.epub_image_min_bytes.unwrap_or(EPUB_IMAGE_MIN_BYTES) {
                     data = match &seams.downscale_hook {
                         Some(hook) => hook(&data),
-                        None => Self::downscale_epub_image(&data),
+                        None => epub_package::downscale_epub_image(&data),
                     };
                 }
                 data
@@ -738,7 +741,7 @@ impl BookManager {
             log::error!("PDF pages extraction failed for book_id={book_id} ({}): {e}", book.file_path.display());
             return storage_error(&e);
         }
-        Self::evict_old_cache_with(&*self.fs, &cache_dir);
+        epub_package::evict_old_cache_with(&*self.fs, &cache_dir);
         log::debug!("PDF pages extracted for book_id={book_id} (p{start}-{end}, total={total_pages})");
         pdf_response(pdf_bytes)
     }

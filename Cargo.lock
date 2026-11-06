@@ -1116,12 +1116,14 @@ dependencies = [
 name = "doc_reader"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "common",
  "ego-tree",
  "encoding_rs",
  "flate2",
  "htmlkit",
  "hwp3_parser",
+ "image",
  "log",
  "lopdf",
  "regex",

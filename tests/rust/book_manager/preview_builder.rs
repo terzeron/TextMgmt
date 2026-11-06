@@ -521,7 +521,7 @@ mod get_book_preview {
         // 더 최근 mtime을 가진 캐시 파일을 만든다.
         let cache_dir = tmp_path.join(".preview_cache");
         fs::create_dir_all(&cache_dir).unwrap();
-        BookManager::get_epub_total_chapters(&epub);
+        book_manager::preview_builder::epub_package::get_epub_total_chapters(&epub);
         let cache_file = cache_dir.join(format!("1_ch3_v{}.epub", BookManager::EPUB_IMAGE_POLICY_VERSION));
         make_epub(&cache_file, &minimal_spec());
 

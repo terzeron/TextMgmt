@@ -91,3 +91,8 @@ pub fn read_member_prefix<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str, m
     entry.take(max).read_to_end(&mut data).map_err(MemberError::Io)?;
     Ok(data)
 }
+
+/// ZIP 멤버 이름을 저장 순서대로 돌려준다.
+pub fn zip_names<R: std::io::Read + std::io::Seek>(zin: &mut zip::ZipArchive<R>) -> Vec<String> {
+    (0..zin.len()).filter_map(|i| zin.by_index_raw(i).ok().and_then(|f| f.name().ok().map(|n| n.into_owned()))).collect()
+}

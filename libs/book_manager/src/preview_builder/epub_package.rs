@@ -1,4 +1,5 @@
-//! EPUB 구조 검사·보조: OPF 찾기, 미리보기 검증, 챕터 수, 이미지 축소, 캐시 정리. LibreOffice 변환은 `doc_reader::office`에 있다.
+//! 미리보기가 쓰는 EPUB 패키지 도구: OPF 찾기, 원문 구간 편집, 챕터 수, 이미지 축소, 미리보기 EPUB 검증, 캐시 정리.
+//! 파일 하나를 다루는 형식 수준 도구라 `BookManager` 상태를 쓰지 않는다.
 //!
 //! XML은 `roxmltree`로 읽는다. 깨진 XML을 복구하지는 않는다. 대신 선언 없이 쓰인 접두사는
 //! `xml_recoverer::declare_unbound_prefixes`로 먼저 선언한다. 문서를 고쳐 쓸 때는 DOM을 직렬화하지 않고 원문에서 해당 구간만 잘라내
@@ -15,15 +16,13 @@ use image::{ImageFormat, imageops::FilterType};
 use regex::Regex;
 use roxmltree::{Document, Node};
 use sysdeps::{FsOps, RealFs};
-use xml_recoverer::{declare_unbound_prefixes, strip_doctype, strip_unknown_entities};
+use xml_recoverer::declare_unbound_prefixes;
 use zip::ZipArchive;
 use zip::result::ZipError;
 
-use super::BookManager;
-use super::path_validator::{clean_href, zip_path};
+use crate::path_validator::{clean_href, zip_path};
 use common::url_parser::unquote;
-use serde_json::Value;
-use std::borrow::Cow;
+use common::zip_reader::zip_names;
 
 pub const OPF_NS: &str = "http://www.idpf.org/2007/opf";
 pub const CONTAINER_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
@@ -125,11 +124,6 @@ pub fn prune_dead_ncx_navpoints(ncx_bytes: &[u8], ncx_dir: &str, exists: &dyn Fn
     changed.then(|| format!("<?xml version='1.0' encoding='utf-8'?>\n{body}").into_bytes())
 }
 
-/// ZIP 멤버 이름을 저장 순서대로 돌려준다.
-pub fn zip_names<R: Read + Seek>(zin: &mut ZipArchive<R>) -> Vec<String> {
-    (0..zin.len()).filter_map(|i| zin.by_index_raw(i).ok().and_then(|f| f.name().ok().map(|n| n.into_owned()))).collect()
-}
-
 /// EPUB 멤버 하나를 풀 때의 상한. 헤더의 선언 크기는 믿지 않는다(zip bomb).
 pub const MAX_MEMBER_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -148,139 +142,137 @@ fn read_member_limited<R: Read + Seek>(zin: &mut ZipArchive<R>, name: &str, limi
     })
 }
 
-impl BookManager {
-    /// ZIP 안 OPF 경로를 찾는다. container.xml, 정규식 폴백, `.opf` 직접 탐색 순으로 시도한다.
-    pub fn find_opf_path<R: Read + Seek>(zin: &mut ZipArchive<R>) -> Option<String> {
-        if let Ok(container_xml) = read_member(zin, "META-INF/container.xml") {
-            let text = xml_text(&container_xml);
-            if let Ok(doc) = parse_xml(&text)
-                && let Some(rootfile) = find_el(&doc, CONTAINER_NS, "rootfile")
-                && let Some(path) = rootfile.attribute("full-path").filter(|p| !p.is_empty())
+/// ZIP 안 OPF 경로를 찾는다. container.xml, 정규식 폴백, `.opf` 직접 탐색 순으로 시도한다.
+pub fn find_opf_path<R: Read + Seek>(zin: &mut ZipArchive<R>) -> Option<String> {
+    if let Ok(container_xml) = read_member(zin, "META-INF/container.xml") {
+        let text = xml_text(&container_xml);
+        if let Ok(doc) = parse_xml(&text)
+            && let Some(rootfile) = find_el(&doc, CONTAINER_NS, "rootfile")
+            && let Some(path) = rootfile.attribute("full-path").filter(|p| !p.is_empty())
+        {
+            return Some(path.to_string());
+        }
+        // XML 파싱 실패 시 정규식 폴백
+        let re = Regex::new(r#"full-path=["']([^"']+)"#).ok()?;
+        if let Some(m) = re.captures(&text) {
+            return Some(m[1].to_string());
+        }
+    }
+    // container.xml이 없거나 파싱 실패 시 ZIP 안 .opf 파일을 직접 찾는다.
+    zip_names(zin).into_iter().find(|n| n.to_lowercase().ends_with(".opf"))
+}
+
+/// EPUB 총 챕터 수. manifest에 없거나 ZIP에 없는 spine 문서는 뷰어가 보여 줄 수 없어 세지 않는다.
+pub fn get_epub_total_chapters(file_path: &Path) -> i64 {
+    let count = || -> Result<i64, String> {
+        let file = std::fs::File::open(file_path).map_err(|e| e.to_string())?;
+        let mut zin = ZipArchive::new(file).map_err(|e| e.to_string())?;
+        let Some(opf_path) = find_opf_path(&mut zin) else { return Ok(0) };
+        let opf_bytes = read_member(&mut zin, &opf_path).map_err(|e| e.to_string())?;
+        let text = declare_unbound_prefixes(&xml_text(&opf_bytes));
+        let doc = parse_xml(&text).map_err(|e| e.to_string())?;
+        let Some(spine) = find_el(&doc, OPF_NS, "spine") else { return Ok(0) };
+        let manifest: std::collections::HashMap<&str, &str> = doc
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().namespace() == Some(OPF_NS) && n.tag_name().name() == "item")
+            .filter_map(|n| Some((n.attribute("id")?, n.attribute("href").unwrap_or(""))))
+            .collect();
+        let base = Path::new(&opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
+        let names = zip_names(&mut zin);
+        let mut count = 0;
+        for itemref in children_named(spine, OPF_NS, "itemref") {
+            let href = clean_href(itemref.attribute("idref").and_then(|id| manifest.get(id)).copied().unwrap_or(""));
+            if href.is_empty() {
+                continue;
+            }
+            let member = zip_path(&base, &href);
+            // ZIP 항목 헤더가 손상되지 않았는지 본다(로컬 헤더만 읽는 가벼운 검사).
+            let actual = if names.contains(&member) { Some(member.clone()) } else { names.iter().find(|n| unquote(n) == member).cloned() };
+            if let Some(actual) = actual
+                && zin.by_name(&actual).is_ok()
             {
-                return Some(path.to_string());
-            }
-            // XML 파싱 실패 시 정규식 폴백
-            let re = Regex::new(r#"full-path=["']([^"']+)"#).ok()?;
-            if let Some(m) = re.captures(&text) {
-                return Some(m[1].to_string());
+                count += 1;
             }
         }
-        // container.xml이 없거나 파싱 실패 시 ZIP 안 .opf 파일을 직접 찾는다.
-        zip_names(zin).into_iter().find(|n| n.to_lowercase().ends_with(".opf"))
-    }
+        Ok(count)
+    };
+    count().unwrap_or_else(|e| {
+        log::error!("Failed to get EPUB total chapters for '{}': {e}", file_path.display());
+        0
+    })
+}
 
-    /// EPUB 총 챕터 수. manifest에 없거나 ZIP에 없는 spine 문서는 뷰어가 보여 줄 수 없어 세지 않는다.
-    pub fn get_epub_total_chapters(file_path: &Path) -> i64 {
-        let count = || -> Result<i64, String> {
-            let file = std::fs::File::open(file_path).map_err(|e| e.to_string())?;
-            let mut zin = ZipArchive::new(file).map_err(|e| e.to_string())?;
-            let Some(opf_path) = Self::find_opf_path(&mut zin) else { return Ok(0) };
-            let opf_bytes = read_member(&mut zin, &opf_path).map_err(|e| e.to_string())?;
-            let text = declare_unbound_prefixes(&xml_text(&opf_bytes));
-            let doc = parse_xml(&text).map_err(|e| e.to_string())?;
-            let Some(spine) = find_el(&doc, OPF_NS, "spine") else { return Ok(0) };
-            let manifest: std::collections::HashMap<&str, &str> = doc
-                .descendants()
-                .filter(|n| n.is_element() && n.tag_name().namespace() == Some(OPF_NS) && n.tag_name().name() == "item")
-                .filter_map(|n| Some((n.attribute("id")?, n.attribute("href").unwrap_or(""))))
-                .collect();
-            let base = Path::new(&opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
-            let names = zip_names(&mut zin);
-            let mut count = 0;
-            for itemref in children_named(spine, OPF_NS, "itemref") {
-                let href = clean_href(itemref.attribute("idref").and_then(|id| manifest.get(id)).copied().unwrap_or(""));
-                if href.is_empty() {
-                    continue;
-                }
-                let member = zip_path(&base, &href);
-                // ZIP 항목 헤더가 손상되지 않았는지 본다(로컬 헤더만 읽는 가벼운 검사).
-                let actual = if names.contains(&member) { Some(member.clone()) } else { names.iter().find(|n| unquote(n) == member).cloned() };
-                if let Some(actual) = actual
-                    && zin.by_name(&actual).is_ok()
-                {
-                    count += 1;
-                }
+/// EPUB 뷰어용으로 큰 이미지를 줄여 재압축한다. 실패하면 원본 바이트를 돌려준다. 형식은 유지한다(JPEG는 JPEG, PNG는 PNG).
+pub fn downscale_epub_image(data: &[u8]) -> Vec<u8> {
+    try_downscale_epub_image(data).unwrap_or_else(|| data.to_vec())
+}
+
+fn try_downscale_epub_image(data: &[u8]) -> Option<Vec<u8>> {
+    let format = image::guess_format(data).ok().filter(|f| matches!(f, ImageFormat::Jpeg | ImageFormat::Png))?;
+    let img = image::load_from_memory_with_format(data, format).ok()?;
+    let (width, height) = (img.width(), img.height());
+    let max_edge = width.max(height);
+    if max_edge <= crate::EPUB_IMAGE_MAX_EDGE {
+        return None;
+    }
+    let scale = f64::from(crate::EPUB_IMAGE_MAX_EDGE) / f64::from(max_edge);
+    let resized = img.resize_exact(((f64::from(width) * scale).round() as u32).max(1), ((f64::from(height) * scale).round() as u32).max(1), FilterType::Lanczos3);
+    let mut out = Vec::new();
+    match format {
+        ImageFormat::Png => {
+            let encoder = image::codecs::png::PngEncoder::new_with_quality(&mut out, image::codecs::png::CompressionType::Best, image::codecs::png::FilterType::Adaptive);
+            resized.write_with_encoder(encoder).ok()?;
+        }
+        _ => {
+            let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, EPUB_IMAGE_JPEG_QUALITY);
+            image::DynamicImage::ImageRgb8(resized.to_rgb8()).write_with_encoder(encoder).ok()?;
+        }
+    }
+    (out.len() < data.len()).then_some(out)
+}
+
+/// 생성된 미리보기 EPUB의 구조적 유효성을 검증하고 경미한 문제는 자동으로 고친다.
+pub fn validate_preview_epub(cache_file: &Path) -> Result<(), String> {
+    check_preview_epub(&RealFs, cache_file)
+}
+
+pub fn validate_preview_epub_with(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String> {
+    check_preview_epub(fs, cache_file)
+}
+
+/// 1일 넘은 캐시 파일을 지운다.
+pub fn evict_old_cache(cache_dir: &Path) {
+    evict_old_cache_with(&RealFs, cache_dir);
+}
+
+pub fn evict_old_cache_with(fs: &dyn FsOps, cache_dir: &Path) {
+    let entries = match fs.read_dir(cache_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            log::warn!("Cache eviction failed: {e}");
+            return;
+        }
+    };
+    let cutoff = SystemTime::now() - Duration::from_secs(crate::CACHE_MAX_AGE_SECONDS);
+    for entry in entries {
+        let name = entry.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let evict = || -> std::io::Result<bool> {
+            if !fs.is_file(&entry)? || fs.metadata(&entry)?.modified()? >= cutoff {
+                return Ok(false);
             }
-            Ok(count)
+            fs.remove_file(&entry)?;
+            Ok(true)
         };
-        count().unwrap_or_else(|e| {
-            log::error!("Failed to get EPUB total chapters for '{}': {e}", file_path.display());
-            0
-        })
-    }
-
-    /// EPUB 뷰어용으로 큰 이미지를 줄여 재압축한다. 실패하면 원본 바이트를 돌려준다. 형식은 유지한다(JPEG는 JPEG, PNG는 PNG).
-    pub fn downscale_epub_image(data: &[u8]) -> Vec<u8> {
-        Self::try_downscale_epub_image(data).unwrap_or_else(|| data.to_vec())
-    }
-
-    fn try_downscale_epub_image(data: &[u8]) -> Option<Vec<u8>> {
-        let format = image::guess_format(data).ok().filter(|f| matches!(f, ImageFormat::Jpeg | ImageFormat::Png))?;
-        let img = image::load_from_memory_with_format(data, format).ok()?;
-        let (width, height) = (img.width(), img.height());
-        let max_edge = width.max(height);
-        if max_edge <= Self::EPUB_IMAGE_MAX_EDGE {
-            return None;
-        }
-        let scale = f64::from(Self::EPUB_IMAGE_MAX_EDGE) / f64::from(max_edge);
-        let resized = img.resize_exact(((f64::from(width) * scale).round() as u32).max(1), ((f64::from(height) * scale).round() as u32).max(1), FilterType::Lanczos3);
-        let mut out = Vec::new();
-        match format {
-            ImageFormat::Png => {
-                let encoder = image::codecs::png::PngEncoder::new_with_quality(&mut out, image::codecs::png::CompressionType::Best, image::codecs::png::FilterType::Adaptive);
-                resized.write_with_encoder(encoder).ok()?;
-            }
-            _ => {
-                let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, EPUB_IMAGE_JPEG_QUALITY);
-                image::DynamicImage::ImageRgb8(resized.to_rgb8()).write_with_encoder(encoder).ok()?;
-            }
-        }
-        (out.len() < data.len()).then_some(out)
-    }
-
-    /// 생성된 미리보기 EPUB의 구조적 유효성을 검증하고 경미한 문제는 자동으로 고친다.
-    pub fn validate_preview_epub(cache_file: &Path) -> Result<(), String> {
-        validate_preview_epub(&RealFs, cache_file)
-    }
-
-    pub fn validate_preview_epub_with(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String> {
-        validate_preview_epub(fs, cache_file)
-    }
-
-    /// 1일 넘은 캐시 파일을 지운다.
-    pub fn evict_old_cache(cache_dir: &Path) {
-        Self::evict_old_cache_with(&RealFs, cache_dir);
-    }
-
-    pub fn evict_old_cache_with(fs: &dyn FsOps, cache_dir: &Path) {
-        let entries = match fs.read_dir(cache_dir) {
-            Ok(entries) => entries,
-            Err(e) => {
-                log::warn!("Cache eviction failed: {e}");
-                return;
-            }
-        };
-        let cutoff = SystemTime::now() - Duration::from_secs(Self::CACHE_MAX_AGE_SECONDS);
-        for entry in entries {
-            let name = entry.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let evict = || -> std::io::Result<bool> {
-                if !fs.is_file(&entry)? || fs.metadata(&entry)?.modified()? >= cutoff {
-                    return Ok(false);
-                }
-                fs.remove_file(&entry)?;
-                Ok(true)
-            };
-            match evict() {
-                Ok(true) => log::debug!("Evicted old cache file: {name}"),
-                Ok(false) => {}
-                Err(e) => log::warn!("Failed to evict cache file {name}: {e}"),
-            }
+        match evict() {
+            Ok(true) => log::debug!("Evicted old cache file: {name}"),
+            Ok(false) => {}
+            Err(e) => log::warn!("Failed to evict cache file {name}: {e}"),
         }
     }
 }
 
 /// `validate_preview_epub`의 본체. 문제가 있으면 사유를 `Err`로 돌려준다.
-fn validate_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String> {
+fn check_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String> {
     let file = fs.open(cache_file).map_err(|e| format!("validation error: {e}"))?;
     let mut zin = match ZipArchive::new(file) {
         Ok(zin) => zin,
@@ -311,7 +303,7 @@ fn validate_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String
     }
 
     // 2) OPF 찾기 및 파싱
-    let Some(opf_path) = BookManager::find_opf_path(&mut zin) else { return Err("OPF file not found".to_string()) };
+    let Some(opf_path) = find_opf_path(&mut zin) else { return Err("OPF file not found".to_string()) };
     let opf_bytes = match read_member(&mut zin, &opf_path) {
         Ok(bytes) => bytes,
         Err(ZipError::FileNotFound) => return Err(format!("OPF file missing in archive: {opf_path}")),
@@ -402,7 +394,7 @@ fn validate_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String
     log::info!("EPUB validate: rewriting OPF in {}", cache_file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
     let modified_opf = format!("{XML_DECLARATION}{}", apply_edits(&opf_text, doc.root_element().range(), edits));
     // 이름을 고정하면 같은 책의 동시 요청이 서로의 임시 파일을 덮어쓴다.
-    let tmp_path = super::temp_file_maker::temp_sibling(cache_file);
+    let tmp_path = crate::temp_file_maker::temp_sibling(cache_file);
     let rewrite = || -> Result<(), String> {
         let mut zin_r = ZipArchive::new(std::fs::File::open(cache_file).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
         let mut zout = zip::ZipWriter::new(std::fs::File::create(&tmp_path).map_err(|e| e.to_string())?);
@@ -430,93 +422,6 @@ fn validate_preview_epub(fs: &dyn FsOps, cache_file: &Path) -> Result<(), String
         let _ = std::fs::remove_file(&tmp_path);
         format!("validation error: {e}")
     })
-}
-
-// ---- XXE를 막은 XML 읽기와 그 도우미. ----
-//
-// `roxmltree`는 외부 엔티티를 읽지 않는다(내부 엔티티만 펼친다). 깨진 문서를 고쳐 읽지는 못하므로,
-// 복구 모드는 DOCTYPE과 알 수 없는 엔티티 참조를 걷어낸 뒤 한 번 더 읽는 데 그친다.
-/// 읽어 낸 XML 요소. 이름은 네임스페이스를 뺀 로컬 이름이다.
-#[derive(Debug, Clone)]
-pub struct XmlElement {
-    name: String,
-    text: Option<String>,
-    attributes: Vec<(String, String)>,
-    children: Vec<XmlElement>,
-}
-
-impl XmlElement {
-    fn from_node(node: Node) -> Self {
-        let text: String = node.children().filter(Node::is_text).filter_map(|t| t.text()).collect();
-        XmlElement {
-            name: node.tag_name().name().to_string(),
-            text: (!text.is_empty()).then_some(text),
-            attributes: node.attributes().map(|a| (a.name().to_string(), a.value().to_string())).collect(),
-            children: node.children().filter(Node::is_element).map(XmlElement::from_node).collect(),
-        }
-    }
-
-    /// 이름이 같은 첫 직계 자식.
-    pub fn find(&self, name: &str) -> Option<&XmlElement> {
-        self.children.iter().find(|c| c.name == name)
-    }
-
-    /// 요소 안의 텍스트. 없으면 `None`.
-    pub fn text(&self) -> Option<String> {
-        self.text.clone()
-    }
-
-    /// 문자열로 다시 쓴다.
-    pub fn tostring(&self) -> String {
-        let attrs: String = self.attributes.iter().map(|(k, v)| format!(" {k}=\"{}\"", htmlkit::escape_html(v))).collect();
-        let body: String = self.text.as_deref().map(htmlkit::escape_html).unwrap_or_default() + &self.children.iter().map(XmlElement::tostring).collect::<String>();
-        format!("<{}{attrs}>{body}</{}>", self.name, self.name)
-    }
-}
-
-/// 외부 엔티티, DTD, 네트워크 접근을 모두 끈 파서.
-#[derive(Debug, Clone, Copy)]
-pub struct SafeXmlParser {
-    recover: bool,
-}
-
-/// XXE를 막은 XML 파서. `recover`가 참이면 DOCTYPE과 모르는 엔티티를 걷어 내고 다시 읽는다.
-pub fn safe_xml_parser(recover: bool) -> SafeXmlParser {
-    SafeXmlParser { recover }
-}
-
-impl SafeXmlParser {
-    pub fn fromstring(&self, data: &[u8]) -> Result<XmlElement, String> {
-        let text = xml_text(data);
-        match parse_xml(&text) {
-            Ok(doc) => return Ok(XmlElement::from_node(doc.root_element())),
-            Err(e) if !self.recover => return Err(e.to_string()),
-            Err(_) => {}
-        }
-        // 복구: DOCTYPE과 알 수 없는 엔티티 참조(외부 엔티티 포함)를 걷어내고 다시 읽는다. 엔티티 내용은 읽지 않는다.
-        let cleaned = strip_unknown_entities(&strip_doctype(&text));
-        let doc = parse_xml(&cleaned).map_err(|e| e.to_string())?;
-        Ok(XmlElement::from_node(doc.root_element()))
-    }
-}
-
-/// 선언 없이 쓰인 접두사를 루트 요소에 선언한다. 빠진 선언이 없으면 입력을 그대로(`Borrowed`) 돌려준다.
-pub fn declare_unbound_prefixes_bytes(xml_bytes: &[u8]) -> Cow<'_, [u8]> {
-    let text = String::from_utf8_lossy(xml_bytes);
-    let fixed = declare_unbound_prefixes(&text);
-    if fixed == text { Cow::Borrowed(xml_bytes) } else { Cow::Owned(fixed.into_bytes()) }
-}
-
-pub use super::epub_inspector::prune_dead_ncx_navpoints as _prune_dead_ncx_navpoints;
-
-/// 정렬 값 배열(JSON)을 클라이언트에 내보낼 커서 문자열로 만든다.
-pub fn encode_category_cursor(sort_values: &Value) -> String {
-    search_manager::encode_category_cursor(sort_values.as_array().map(Vec::as_slice).unwrap_or(&[]))
-}
-
-/// 커서를 정렬 값 배열(JSON)로 되돌린다. 형식이 잘못되면 `None`이다.
-pub fn decode_category_cursor(cursor: &str) -> Option<Value> {
-    search_manager::decode_category_cursor(cursor).map(Value::Array)
 }
 
 #[cfg(test)]

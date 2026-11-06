@@ -284,7 +284,7 @@ async fn test_preview_downscales_large_epub_images() {
     );
     let deps = make_deps(tmp.path(), FakeEsManager::with_doc(make_doc("pic.epub", "epub"))).with_epub_image_min_bytes(0).with_downscale_epub_image_hook(Arc::new(move |data: &[u8]| {
         spy.lock().unwrap().push(data.len());
-        BookManager::downscale_epub_image(data)
+        book_manager::preview_builder::epub_package::downscale_epub_image(data)
     }));
     let manager = BookManager::with_deps(deps);
 

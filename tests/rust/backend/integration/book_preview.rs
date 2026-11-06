@@ -1045,7 +1045,7 @@ async fn test_total_chapters_of_truncated_download_is_zero() {
     let data = fs::read(&epub_path).unwrap();
     fs::write(&epub_path, &data[..data.len() - 120]).unwrap();
     let _cleanup = TempFile(epub_path.clone());
-    assert_eq!(BookManager::get_epub_total_chapters(&epub_path), 0);
+    assert_eq!(book_manager::preview_builder::epub_package::get_epub_total_chapters(&epub_path), 0);
 }
 
 /// 챕터 하나의 ZIP 항목이 손상돼(Bad magic number / Overlapped entries) 읽히지 않아도 책 전체를 거부하지 않는다.
@@ -1091,7 +1091,7 @@ async fn test_total_chapters_unbound_prefix() {
     create_epub_with_unbound_prefix(&epub_path);
     let _cleanup = TempFile(epub_path.clone());
 
-    let count = BookManager::get_epub_total_chapters(&epub_path);
+    let count = book_manager::preview_builder::epub_package::get_epub_total_chapters(&epub_path);
     assert_eq!(count, 2, "Expected 2 chapters, got {count}");
 }
 
@@ -1131,7 +1131,7 @@ async fn test_total_chapters_missing_container_xml() {
     create_epub_without_container_xml(&epub_path);
     let _cleanup = TempFile(epub_path.clone());
 
-    let count = BookManager::get_epub_total_chapters(&epub_path);
+    let count = book_manager::preview_builder::epub_package::get_epub_total_chapters(&epub_path);
     assert_eq!(count, 2, "Expected 2 chapters, got {count}");
 }
 
@@ -1195,7 +1195,7 @@ async fn test_total_chapters_missing_spine() {
     create_epub_without_spine(&epub_path);
     let _cleanup = TempFile(epub_path.clone());
 
-    let count = BookManager::get_epub_total_chapters(&epub_path);
+    let count = book_manager::preview_builder::epub_package::get_epub_total_chapters(&epub_path);
     assert_eq!(count, 0, "Expected 0 (no spine), got {count}");
 }
 
@@ -1271,7 +1271,7 @@ async fn test_total_chapters_corrupted_container_xml() {
     create_epub_with_corrupted_container_xml(&epub_path);
     let _cleanup = TempFile(epub_path.clone());
 
-    let count = BookManager::get_epub_total_chapters(&epub_path);
+    let count = book_manager::preview_builder::epub_package::get_epub_total_chapters(&epub_path);
     assert_eq!(count, 2, "Expected 2 chapters, got {count}");
 }
 
@@ -1284,7 +1284,7 @@ async fn test_total_chapters_binary_garbage_container() {
     create_epub_with_binary_garbage_container(&epub_path);
     let _cleanup = TempFile(epub_path.clone());
 
-    let count = BookManager::get_epub_total_chapters(&epub_path);
+    let count = book_manager::preview_builder::epub_package::get_epub_total_chapters(&epub_path);
     assert_eq!(count, 2, "Expected 2 chapters, got {count}");
 }
 
@@ -1318,7 +1318,7 @@ async fn test_total_chapters_bad_zip() {
     fs::write(&epub_path, b"not a zip").unwrap();
     let _cleanup = TempFile(epub_path.clone());
 
-    let count = BookManager::get_epub_total_chapters(&epub_path);
+    let count = book_manager::preview_builder::epub_package::get_epub_total_chapters(&epub_path);
     assert_eq!(count, 0);
 }
 

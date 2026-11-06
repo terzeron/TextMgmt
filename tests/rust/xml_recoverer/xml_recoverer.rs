@@ -85,3 +85,58 @@ fn close_open_tags_keeps_comments_cdata_pi_and_quoted_brackets() {
     assert_eq!(close_open_tags("<a><!-- open"), "<a></a>");
     assert_eq!(close_open_tags("<a><!DOCTYPE x>t"), "<a>t</a>");
 }
+
+// ---- OPF 접두사 선언 (book_manager의 바이트 감싸개 테스트에서 옮김) ----
+
+const OPF_NS_STR: &str = "http://www.idpf.org/2007/opf";
+
+fn opf(sep: &str, attr: &str, extra_decl: &str) -> String {
+    format!(
+        r#"<?xml version="1.0"?>{}<package{sep}xmlns="{OPF_NS_STR}"{extra_decl} version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:creator {attr}>x</dc:creator></metadata><manifest/><spine/></package>"#,
+        "\n"
+    )
+}
+
+#[test]
+fn test_declare_unbound_prefixes_handles_any_whitespace_after_package() {
+    for sep in [" ", "\n  ", "\t"] {
+        let fixed = declare_unbound_prefixes(&opf(sep, r#"opf:role="aut""#, ""));
+        assert!(strict_parses(&fixed), "sep={sep:?}");
+        assert!(fixed.contains(&format!(r#"xmlns:opf="{OPF_NS_STR}""#)), "sep={sep:?}");
+    }
+}
+
+#[test]
+fn test_declare_unbound_prefixes_handles_prefixes_other_than_opf() {
+    for (attr, prefix) in [(r#"xsi:type="x""#, "xsi"), (r#"calibre:series="s""#, "calibre")] {
+        let fixed = declare_unbound_prefixes(&opf(" ", attr, ""));
+        assert!(strict_parses(&fixed), "attr={attr}");
+        assert!(fixed.contains(&format!("xmlns:{prefix}=")), "attr={attr}, prefix={prefix}");
+    }
+}
+
+#[test]
+fn test_declare_unbound_prefixes_returns_input_unchanged_when_nothing_is_missing() {
+    let clean = opf(" ", r#"id="a""#, "");
+    assert_eq!(declare_unbound_prefixes(&clean), clean);
+    let declared = opf(" ", r#"opf:role="aut""#, &format!(r#" xmlns:opf="{OPF_NS_STR}""#));
+    assert_eq!(declare_unbound_prefixes(&declared), declared);
+}
+
+#[test]
+fn test_declare_unbound_prefixes_ignores_prefixes_that_only_appear_in_values_and_text() {
+    let data = r#"<?xml version="1.0"?><!-- <fake:tag a:b="1"/> --><package xmlns="http://www.idpf.org/2007/opf"><meta property="dcterms:modified">urn:uuid:x</meta></package>"#;
+    assert_eq!(declare_unbound_prefixes(data), data);
+}
+
+#[test]
+fn test_declare_unbound_prefixes_keeps_xml_prefix_and_declares_each_prefix_once() {
+    let fixed = declare_unbound_prefixes(r#"<package xmlns="http://www.idpf.org/2007/opf" xml:lang="ko"><a opf:x="1" opf:y="2"/><b xsi:z="1"/></package>"#);
+    assert!(fixed.matches("xmlns:opf=").count() == 1 && !fixed.contains("xmlns:xml="));
+    assert!(strict_parses(&fixed));
+}
+
+#[test]
+fn test_declare_unbound_prefixes_without_root_element_is_unchanged_for_plain_text() {
+    assert_eq!(declare_unbound_prefixes("not xml"), "not xml");
+}
