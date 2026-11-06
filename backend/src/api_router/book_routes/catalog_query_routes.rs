@@ -8,7 +8,6 @@ use super::super::request_extractors::RequireAuth;
 use super::super::route_registry::Routes;
 use super::ensure_allowed;
 use super::hidden_categories;
-use super::is_hidden;
 use super::kind;
 use super::manager;
 use crate::api_router::CategoryMappingApi;
@@ -30,6 +29,7 @@ use book_manager::BookResponse;
 use book_manager::MAX_LATEST_BOOK_COUNT;
 use book_manager::book_metadata::Book;
 use book_manager::book_metadata::BookView;
+use db::category_mapping::is_hidden_category;
 use serde::Deserialize;
 use serde_json::Value;
 use serde_json::json;
@@ -446,7 +446,7 @@ async fn categories(RequireAuth(payload): RequireAuth, State(deps): State<Arc<Ap
     };
     let hidden = hidden(&deps, &payload, &uri)?;
     if let Some(categories) = result.as_object_mut() {
-        categories.retain(|category, _| !is_hidden(category, &hidden));
+        categories.retain(|category, _| !is_hidden_category(category, &hidden));
     }
     Ok(Json(json!({"status":"success","result":result})))
 }
@@ -565,7 +565,7 @@ async fn similar(
     let error = match similar {
         Ok(mut page) => {
             if !hidden.is_empty() {
-                page.books.retain(|book| !is_hidden(&book.category, &hidden));
+                page.books.retain(|book| !is_hidden_category(&book.category, &hidden));
                 page.total = page.books.len() as i64;
             }
             if !page.books.is_empty() {

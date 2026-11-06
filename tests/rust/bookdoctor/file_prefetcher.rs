@@ -4,8 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use bookdoctor::cli_parser::{Options, execute, parse};
+use bookdoctor::cli_parser::{execute, parse};
 use bookdoctor::file_prefetcher::Prefetcher;
+use bookdoctor::option_model::Options;
 
 const MIB: usize = 1024 * 1024;
 

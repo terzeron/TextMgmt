@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use crate::cli_parser::Options;
+use crate::option_model::Options;
 use crate::output_formatter::show;
 use crate::{Category, FileReport, Severity};
 use doc_checker::CheckOptions;

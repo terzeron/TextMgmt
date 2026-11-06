@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::output_formatter::{show, thousands};
 use serde_json::{Map, Value, json};
 
-use crate::cli_parser::{BROKEN_DIR_NAME, Options};
+use crate::option_model::{BROKEN_DIR_NAME, Options};
 use doc_checker::format_dispatcher::scan_file;
 
 /// 인코딩 손상을 뜻하는 지표 코드. 다른 코드(NOT_UTF8, FORMAT_MISMATCH 등)는 격리하지 않는다.
@@ -46,7 +46,7 @@ fn quarantinable(p: &Path) -> bool {
 /// 경로를 검사해 `MOJIBAKE`가 나온 파일을 기록으로 만든다(path, likeness, verdict).
 pub fn find_corrupted(opts: &Options) -> Vec<Rec> {
     let mut found = Vec::new();
-    for path in crate::cli_parser::collect(opts, quarantinable) {
+    for path in crate::scan_runner::collect(opts, quarantinable) {
         let report = scan_file(&path, &opts.check_options());
         if !report.findings.iter().any(|f| f.code == MOJIBAKE_CODE) {
             continue;
@@ -79,7 +79,7 @@ pub fn plan_moves(records: &[Rec], library_root: &Path, log: Log) -> Vec<Rec> {
             log(&format!("WARNING 라이브러리 밖 경로는 건너뛴다: {}", show(&src.to_string_lossy())));
             continue;
         };
-        if rel.as_os_str().is_empty() || crate::cli_parser::in_reserved_dir(&src, library_root) {
+        if rel.as_os_str().is_empty() || crate::scan_runner::in_reserved_dir(&src, library_root) {
             continue;
         }
         let dst = broken_root.join(rel);

@@ -1249,3 +1249,13 @@ fn test_merge_classify_proposal_status_with_only_status_is_a_no_op() {
     assert_eq!(cursor.executed().len(), before);
     assert!(conns.lock().unwrap().is_empty());
 }
+
+#[test]
+fn is_hidden_matches_the_category_and_its_descendants_only() {
+    let hidden = vec!["A".to_string()];
+    assert!(db::category_mapping::is_hidden_category("A", &hidden));
+    assert!(db::category_mapping::is_hidden_category("A/b/c", &hidden));
+    assert!(!db::category_mapping::is_hidden_category("AB", &hidden), "이름이 같은 접두어인 형제 카테고리는 숨기지 않는다");
+    assert!(!db::category_mapping::is_hidden_category("", &hidden));
+    assert!(!db::category_mapping::is_hidden_category("A", &[]));
+}

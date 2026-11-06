@@ -17,6 +17,7 @@ use book_manager::BookManagerApi;
 use book_manager::BookResponse;
 use book_manager::book_metadata::BookLookupError;
 use book_manager::book_metadata::{Book, BookView};
+use db::category_mapping::is_hidden_category;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -100,13 +101,8 @@ fn hidden_categories(deps: &AppDeps, payload: &Claims, comics: bool) -> ApiResul
     Ok(mapping.get_hidden_categories(if comics { "comic" } else { "book" })?)
 }
 
-/// 카테고리가 숨긴 카테고리이거나 그 하위면 참이다. 모든 viewer 접근 검사가 이 판정 하나를 쓴다.
-pub(super) fn is_hidden(category: &str, hidden: &[String]) -> bool {
-    !category.is_empty() && hidden.iter().any(|h| category == h || category.strip_prefix(h.as_str()).is_some_and(|rest| rest.starts_with('/')))
-}
-
 fn ensure_allowed(category: &str, hidden: &[String]) -> ApiResult<()> {
-    if is_hidden(category, hidden) { Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다.")) } else { Ok(()) }
+    if is_hidden_category(category, hidden) { Err(ApiError::http(403, "접근 권한이 없는 카테고리입니다.")) } else { Ok(()) }
 }
 
 /// viewer는 카테고리 정책을 확인한 뒤 파일을 읽는다. admin은 조회 제한을 받지 않는다.
@@ -169,17 +165,7 @@ pub(super) fn book_view(book: &Book, manager: &dyn BookManagerApi) -> BookView {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{is_hidden, run_blocking};
-
-    #[test]
-    fn is_hidden_matches_the_category_and_its_descendants_only() {
-        let hidden = vec!["A".to_string()];
-        assert!(is_hidden("A", &hidden));
-        assert!(is_hidden("A/b/c", &hidden));
-        assert!(!is_hidden("AB", &hidden), "이름이 같은 접두어인 형제 카테고리는 숨기지 않는다");
-        assert!(!is_hidden("", &hidden));
-        assert!(!is_hidden("A", &[]));
-    }
+    use super::run_blocking;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn run_blocking_keeps_the_worker_free() {

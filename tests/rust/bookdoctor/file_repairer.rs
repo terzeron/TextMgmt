@@ -9,8 +9,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use crate::support::shared_fixtures::{member, run_in};
-use bookdoctor::cli_parser::{Options, execute, parse};
+use bookdoctor::cli_parser::{execute, parse};
 use bookdoctor::file_repairer::*;
+use bookdoctor::option_model::Options;
 use doc_checker::epub::render_checker::xhtml_defect;
 
 mod xhtml {

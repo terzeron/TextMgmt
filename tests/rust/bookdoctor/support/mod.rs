@@ -12,7 +12,8 @@ pub mod shared_fixtures {
 
     use std::path::Path;
 
-    use bookdoctor::cli_parser::{Options, execute, parse};
+    use bookdoctor::cli_parser::{execute, parse};
+    use bookdoctor::option_model::Options;
 
     /// `root`를 코퍼스 루트로 삼아 명령을 실행한다. 휴지통은 `root/0_trash`다.
     pub fn run_in(root: &Path, args: &[&str]) -> (i32, String) {

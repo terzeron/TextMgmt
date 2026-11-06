@@ -2,13 +2,14 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 use super::BookManager;
 use common::url_parser::unquote;
 use common::zip_reader::zip_entry_name;
+use sysdeps::FsOps;
 
 /// 색인 대상 확장자.
 pub const INDEXABLE_FILE_TYPES: [&str; 17] = ["txt", "epub", "pdf", "docx", "doc", "hwp", "rtf", "html", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg", "cbz"];
@@ -116,7 +117,7 @@ impl BookManager {
         if is_indexable_type(&declared) {
             return true;
         }
-        super::file_reader::detect_file_type(&*self.fs, file_path, &declared).is_some_and(|t| is_indexable_type(&t))
+        detect_file_type(&*self.fs, file_path, &declared).is_some_and(|t| is_indexable_type(&t))
     }
 
     /// `_category_dir`.
@@ -217,4 +218,44 @@ pub(crate) fn is_dir_nofollow(path: &Path) -> bool {
 /// 파일 이름 조각.
 pub(crate) fn file_name_of(path: &Path) -> OsString {
     path.file_name().map(|n| n.to_os_string()).unwrap_or_default()
+}
+
+/// 이 확장자 멤버만 든 ZIP은 만화(cbz)다.
+const IMAGE_SUFFIXES: [&str; 6] = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"];
+/// ZIP 기반으로 선언된 형식. 선언이 이 안이면 내용물을 열어보지 않는다.
+const ZIP_BASED_TYPES: [&str; 3] = ["epub", "cbz", "docx"];
+
+/// ZIP 컨테이너의 실제 종류를 내용물로 판별한다.
+fn zip_container_type<R: Read + Seek>(reader: R) -> Option<&'static str> {
+    let mut zip = zip::ZipArchive::new(reader).ok()?;
+    let names = common::zip_reader::zip_names(&mut zip);
+    if names.iter().any(|n| n.ends_with(".opf")) || names.iter().any(|n| n == "META-INF/container.xml") {
+        return Some("epub");
+    }
+    if names.iter().any(|n| n.starts_with("word/")) {
+        return Some("docx");
+    }
+    let entries: Vec<&String> = names.iter().filter(|n| !n.ends_with('/')).collect();
+    if !entries.is_empty() && entries.iter().all(|n| IMAGE_SUFFIXES.iter().any(|s| n.to_lowercase().ends_with(s))) {
+        return Some("cbz");
+    }
+    None
+}
+
+/// 매직바이트로 실제 형식을 판별한다. 판별 불가면 `None`. `Loader.detect_file_type`.
+pub fn detect_file_type(fs: &dyn FsOps, path: &Path, declared: &str) -> Option<String> {
+    let mut file = fs.open(path).ok()?;
+    let mut head = [0u8; 4];
+    file.read_exact(&mut head).ok()?;
+    if &head == b"%PDF" {
+        return Some("pdf".to_string());
+    }
+    if &head == b"PK\x03\x04" {
+        if ZIP_BASED_TYPES.contains(&declared) {
+            return Some(declared.to_string());
+        }
+        file.seek(SeekFrom::Start(0)).ok()?;
+        return zip_container_type(file).map(str::to_string);
+    }
+    None
 }

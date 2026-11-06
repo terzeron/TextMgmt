@@ -6,8 +6,9 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use bookdoctor::cli_parser::{BROKEN_DIR_NAME, Options, TRASH_DIR_NAME, execute, parse};
+use bookdoctor::cli_parser::{execute, parse};
 use bookdoctor::file_quarantiner::*;
+use bookdoctor::option_model::{BROKEN_DIR_NAME, Options, TRASH_DIR_NAME};
 use serde_json::{Value, json};
 
 fn quiet(_: &str) {}

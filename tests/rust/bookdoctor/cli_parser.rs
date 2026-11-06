@@ -1,7 +1,8 @@
 //! `bookdoctor::cli_parser` 단위 테스트.
 
 mod support;
-use bookdoctor::cli_parser::{Command, Options, effective_workers, execute, parse, print_usage, run, run_with_env};
+use bookdoctor::cli_parser::{effective_workers, execute, parse, print_usage, run, run_with_env};
+use bookdoctor::option_model::{Command, Options};
 use bookdoctor::{DEFAULT_LIBRARY_ROOT, Severity};
 use std::path::{Path, PathBuf};
 

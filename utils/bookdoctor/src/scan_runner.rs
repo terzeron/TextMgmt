@@ -1,5 +1,6 @@
 //! 검사 실행: 입력 경로에서 대상 파일을 모으고, 보고서를 창 단위로 검사해 바로 내보낸다.
 
+use crate::option_model::{BROKEN_DIR_NAME, Command, Options, TRASH_DIR_NAME};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io;
@@ -76,6 +77,19 @@ impl Report for FileReport {
     fn is_incomplete(&self) -> bool {
         self.incomplete
     }
+}
+
+pub(crate) fn collect(opts: &Options, keep: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+    let mut paths = collect_files(&opts.paths, true, keep);
+    if opts.command != Command::Scan {
+        paths.retain(|p| !in_reserved_dir(p, &opts.library_root));
+    }
+    paths
+}
+
+/// `path`가 `library_root` 바로 아래의 휴지통이나 격리 디렉터리 안에 있는가.
+pub(crate) fn in_reserved_dir(path: &Path, library_root: &Path) -> bool {
+    path.strip_prefix(library_root).ok().and_then(|rel| rel.components().next()).is_some_and(|first| first.as_os_str() == TRASH_DIR_NAME || first.as_os_str() == BROKEN_DIR_NAME)
 }
 
 /// 전체 실행의 요약.

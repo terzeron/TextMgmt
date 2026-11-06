@@ -904,3 +904,8 @@ impl CategoryMapping {
         })
     }
 }
+
+/// 카테고리가 숨긴 카테고리이거나 그 하위면 참이다. 모든 viewer 접근 검사가 이 판정 하나를 쓴다.
+pub fn is_hidden_category(category: &str, hidden: &[String]) -> bool {
+    !category.is_empty() && hidden.iter().any(|h| category == h || category.strip_prefix(h.as_str()).is_some_and(|rest| rest.starts_with('/')))
+}

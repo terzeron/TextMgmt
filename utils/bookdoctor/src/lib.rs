@@ -7,6 +7,7 @@ pub mod file_quarantiner;
 pub mod file_repairer;
 pub(crate) mod file_rewriter;
 pub mod file_sanitizer;
+pub mod option_model;
 pub mod output_formatter;
 pub mod report_writer;
 pub mod scan_runner;

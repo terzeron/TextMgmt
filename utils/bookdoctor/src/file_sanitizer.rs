@@ -11,8 +11,8 @@ use doc_checker::epub_sanitizer;
 use doc_checker::format_dispatcher::scan_file;
 use doc_checker::pdf::pdf_sanitizer;
 
-use crate::cli_parser::Options;
 use crate::file_rewriter::{apply_and_report, has_serious_security, rescan_bytes};
+use crate::option_model::Options;
 use crate::output_formatter::show;
 use crate::{Category, Severity};
 use doc_checker::CheckOptions;
@@ -66,7 +66,7 @@ fn process_pdf(path: &Path, shown: &str, opts: &Options, scan_opts: &CheckOption
 
 /// `--sanitize` 진입점. 종료 코드를 돌려준다(건너뛴 파일이 있어도 0, 쓰기 실패가 있으면 1).
 pub fn run(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
-    let paths = crate::cli_parser::collect(opts, |p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("epub") || e.eq_ignore_ascii_case("pdf")));
+    let paths = crate::scan_runner::collect(opts, |p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("epub") || e.eq_ignore_ascii_case("pdf")));
     let scan_opts = opts.check_options();
     let (mut done, mut untouched, mut skipped, mut failed) = (0usize, 0usize, 0usize, 0usize);
     for path in &paths {

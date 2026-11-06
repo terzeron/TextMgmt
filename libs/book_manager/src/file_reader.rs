@@ -4,7 +4,7 @@
 //! 본문 요약은 txt만 앞부분을 담고, 쪽수·줄 수·ISBN·PDF/EPUB/DOC 본문은 채우지 않는다.
 //! 운영에서는 `file_indexer::record_builder::read_file`을 감싼 `FileReader`를 `BookManagerDeps::with_file_reader`로 꽂아야 한다.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,53 +14,13 @@ use chrono::{Local, NaiveDateTime};
 use file_indexer::env_config::Config;
 use file_indexer::record_builder;
 use serde_json::{Value, json};
-use sysdeps::FsOps;
 
 use super::path_validator::relative_to;
-use super::path_validator::{declared_type, is_indexable_type};
+use super::path_validator::{declared_type, detect_file_type, is_indexable_type};
 use super::{Docs, FileReader};
 use file_indexer::file_time::iso;
-
-/// ZIP 기반으로 선언된 형식. 선언이 이 안이면 내용물을 열어보지 않는다.
-const ZIP_BASED_TYPES: [&str; 3] = ["epub", "cbz", "docx"];
-const IMAGE_SUFFIXES: [&str; 6] = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"];
 /// 요약에 담는 본문 길이(문자).
 const SUMMARY_CHARS: usize = 3500;
-
-/// ZIP 컨테이너의 실제 종류를 내용물로 판별한다.
-fn zip_container_type<R: Read + Seek>(reader: R) -> Option<&'static str> {
-    let mut zip = zip::ZipArchive::new(reader).ok()?;
-    let names = common::zip_reader::zip_names(&mut zip);
-    if names.iter().any(|n| n.ends_with(".opf")) || names.iter().any(|n| n == "META-INF/container.xml") {
-        return Some("epub");
-    }
-    if names.iter().any(|n| n.starts_with("word/")) {
-        return Some("docx");
-    }
-    let entries: Vec<&String> = names.iter().filter(|n| !n.ends_with('/')).collect();
-    if !entries.is_empty() && entries.iter().all(|n| IMAGE_SUFFIXES.iter().any(|s| n.to_lowercase().ends_with(s))) {
-        return Some("cbz");
-    }
-    None
-}
-
-/// 매직바이트로 실제 형식을 판별한다. 판별 불가면 `None`. `Loader.detect_file_type`.
-pub fn detect_file_type(fs: &dyn FsOps, path: &Path, declared: &str) -> Option<String> {
-    let mut file = fs.open(path).ok()?;
-    let mut head = [0u8; 4];
-    file.read_exact(&mut head).ok()?;
-    if &head == b"%PDF" {
-        return Some("pdf".to_string());
-    }
-    if &head == b"PK\x03\x04" {
-        if ZIP_BASED_TYPES.contains(&declared) {
-            return Some(declared.to_string());
-        }
-        file.seek(SeekFrom::Start(0)).ok()?;
-        return zip_container_type(file).map(str::to_string);
-    }
-    None
-}
 
 fn local_naive(time: std::time::SystemTime) -> NaiveDateTime {
     chrono::DateTime::<Local>::from(time).naive_local()

@@ -16,8 +16,8 @@ use doc_checker::format_dispatcher::scan_file;
 use doc_checker::text_sanitizer::sanitize_display;
 
 use crate::FileReport;
-use crate::cli_parser::Options;
 use crate::file_rewriter::{apply, apply_and_report, has_serious_security, rescan_bytes};
+use crate::option_model::Options;
 use crate::output_formatter::{show, thousands};
 use doc_checker::CheckOptions;
 
@@ -98,7 +98,7 @@ fn name_of(path: &str) -> String {
 
 /// TXT 파일에서 잘못 저장된 바이너리를 찾아 되돌린다. 쓰기 실패가 있으면 1이다.
 fn restore_binaries(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
-    let paths = crate::cli_parser::collect(opts, |p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("txt")));
+    let paths = crate::scan_runner::collect(opts, |p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("txt")));
     let trash = opts.trash_dir();
     let (mut restored, mut skipped, mut failed) = (0usize, 0usize, 0usize);
     for path in &paths {
@@ -139,7 +139,7 @@ fn rescan_xhtml(bytes: &[u8], opts: &CheckOptions) -> Result<(), String> {
 
 /// `--fix-xhtml` 진입점. 종료 코드를 돌려준다(건너뜀·삭제 후보가 있어도 0, 쓰기 실패가 있으면 1).
 pub fn fix_xhtml(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
-    let paths = crate::cli_parser::collect(opts, |p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("epub")));
+    let paths = crate::scan_runner::collect(opts, |p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("epub")));
     let scan_opts = opts.check_options();
     let (mut done, mut untouched, mut candidates, mut skipped, mut failed) = (0usize, 0usize, 0usize, 0usize, 0usize);
     for path in &paths {
