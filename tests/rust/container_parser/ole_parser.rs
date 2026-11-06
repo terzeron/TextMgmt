@@ -1,8 +1,8 @@
-//! `doc_checker::ole_parser` 단위 테스트.
+//! `container_parser::ole_parser` 단위 테스트.
 
-#[path = "ole_common.rs"]
+#[path = "../shared/ole_common.rs"]
 mod support;
-use doc_checker::ole_parser::{EntryKind, Limits, OleError, OleFile};
+use container_parser::ole_parser::{EntryKind, Limits, OleError, OleFile};
 use support::{make_cfb, make_cfb_v4};
 
 fn bytes_of(n: usize, seed: u8) -> Vec<u8> {
@@ -140,7 +140,7 @@ fn prefix_read_returns_only_the_requested_bytes() {
 
 mod anomaly_reporting {
     use super::support;
-    use doc_checker::ole_parser::{Anomaly, Limits, OleError, OleFile};
+    use container_parser::ole_parser::{Anomaly, Limits, OleError, OleFile};
     use std::time::{Duration, Instant};
     use support::{Cfb, make_cfb, make_cfb_v4, put32};
 

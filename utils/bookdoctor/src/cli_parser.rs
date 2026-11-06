@@ -77,7 +77,7 @@ fn wanted(p: &Path) -> bool {
 }
 
 fn report_error(e: &dyn std::fmt::Display) {
-    eprintln!("bookdoctor: error: {}", doc_checker::text_sanitizer::sanitize_display(&e.to_string(), usize::MAX, None));
+    eprintln!("bookdoctor: error: {}", common::text_sanitizer::sanitize_display(&e.to_string(), usize::MAX, None));
 }
 
 /// 진입점. 종료 코드를 돌려준다. 색은 실제 stdout이 터미널인지와 `NO_COLOR`로 정한다.
@@ -99,7 +99,7 @@ pub fn run_with_env(argv: &[String], out: &mut dyn Write, is_tty: bool, no_color
     match parse(argv) {
         Ok(opts) => execute(&opts, out, is_tty, no_color),
         Err(msg) => {
-            eprintln!("{USAGE}\nbookdoctor: error: {}", doc_checker::text_sanitizer::sanitize_display(&msg, usize::MAX, None));
+            eprintln!("{USAGE}\nbookdoctor: error: {}", common::text_sanitizer::sanitize_display(&msg, usize::MAX, None));
             2
         }
     }

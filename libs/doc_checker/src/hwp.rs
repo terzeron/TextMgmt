@@ -5,17 +5,17 @@ use crate::Category;
 use crate::CheckOptions;
 use crate::FileReport;
 use crate::Severity;
-use crate::byte_reader::u16_at;
-use crate::byte_reader::u32_at;
 use crate::doc::open_ole;
 use crate::doc::report_anomalies;
-use crate::magic_sniffer::Sniffed;
-use crate::magic_sniffer::sniff;
-use crate::ole_parser::Entry;
-use crate::ole_parser::EntryKind;
-use crate::ole_parser::OleFile;
-use crate::text_sanitizer::sanitize_display;
 use crate::zipcheck::fast_zip_checker::ZIP_EXEC_EXTS;
+use common::text_sanitizer::sanitize_display;
+use container_parser::byte_reader::u16_at;
+use container_parser::byte_reader::u32_at;
+use container_parser::magic_sniffer::Sniffed;
+use container_parser::magic_sniffer::sniff;
+use container_parser::ole_parser::Entry;
+use container_parser::ole_parser::EntryKind;
+use container_parser::ole_parser::OleFile;
 use flate2::read::DeflateDecoder;
 use flate2::read::ZlibDecoder;
 use std::io::Read;
@@ -600,7 +600,7 @@ fn raw_text(data: &[u8]) -> String {
 /// 스트림을 읽어 검사할 바이트 후보를 돌려준다: 원본, 그리고 압축 비트가 서 있으면 raw deflate나 zlib으로 푼 내용.
 /// 표 2는 `Scripts`를 압축 대상으로 표시하지 않으므로 압축하지 않은 스트림도 받는다. 읽는 쪽이 어느 쪽으로 읽는지 알 수 없어 둘 다 본다.
 /// 상한이나 풀기 문제로 덜 본 사유도 함께 돌려준다.
-fn read_script(file: &mut OleFile, entry: &crate::ole_parser::Entry, compressed: bool) -> Result<(Vec<Vec<u8>>, Option<String>), String> {
+fn read_script(file: &mut OleFile, entry: &container_parser::ole_parser::Entry, compressed: bool) -> Result<(Vec<Vec<u8>>, Option<String>), String> {
     let data = file.read_stream_prefix(entry, MAX_SCRIPT).map_err(|e| format!("{} could not be read: {e:?}", entry.name))?;
     let mut note = (entry.size > MAX_SCRIPT as u64).then(|| format!("{} ({} bytes) exceeds the scan limit; only the first {} MiB were scanned", entry.name, entry.size, MAX_SCRIPT / (1024 * 1024)));
     let mut candidates = Vec::new();
@@ -630,10 +630,10 @@ pub fn inspect_script(file: &mut OleFile, header: &FileHeader, report: &mut File
     }
     // 작성자가 스크립트 저장을 선언했으면 소스가 비었어도 스크립트가 있는 문서다.
     let mut present = header.has_scripts();
-    let mut streams: Vec<(String, crate::ole_parser::Entry)> = file
+    let mut streams: Vec<(String, container_parser::ole_parser::Entry)> = file
         .entries()
         .iter()
-        .filter(|e| e.kind == crate::ole_parser::EntryKind::Stream)
+        .filter(|e| e.kind == container_parser::ole_parser::EntryKind::Stream)
         .map(|e| (file.path_of(e), e.clone()))
         .filter(|(path, _)| path.to_lowercase().starts_with("scripts/"))
         .collect();

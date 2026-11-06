@@ -1,8 +1,8 @@
-#[path = "../ole_common.rs"]
+#[path = "../../shared/ole_common.rs"]
 mod support;
 
-use doc_checker::ole_parser::vba_decoder::{VbaError, decompress, read_project};
-use doc_checker::ole_parser::{Limits, OleFile};
+use container_parser::ole_parser::vba_decoder::{VbaError, decompress, read_project};
+use container_parser::ole_parser::{Limits, OleFile};
 use support::{compress, dir_stream, make_cfb, module_stream, pseudo};
 
 /// MS-OVBA 3.2.2 일반 압축 예제의 압축 바이트와 해제 결과.

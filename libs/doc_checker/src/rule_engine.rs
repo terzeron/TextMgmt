@@ -97,8 +97,8 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 
-use crate::text_sanitizer::sanitize_display;
 use crate::{Category, FileReport};
+use common::text_sanitizer::sanitize_display;
 
 /// 규칙을 적용하려고 읽는 파일 앞부분의 최대 바이트.
 pub const MAX_SCAN_BYTES: u64 = 16 * 1024 * 1024;

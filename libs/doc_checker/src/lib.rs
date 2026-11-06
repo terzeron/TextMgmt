@@ -6,7 +6,6 @@
 
 use std::sync::Arc;
 
-pub(crate) mod byte_reader;
 pub mod defect_repairer;
 pub mod doc;
 pub mod encoding_repairer;
@@ -16,13 +15,10 @@ pub mod finding_model;
 pub mod format_dispatcher;
 pub mod generic_checker;
 pub mod hwp;
-pub mod magic_sniffer;
 pub mod mojibake_detector;
 pub mod nested_scanner;
-pub mod ole_parser;
 pub mod pdf;
 pub mod rule_engine;
-pub mod text_sanitizer;
 pub mod txt_checker;
 pub mod viewer_block_table;
 pub mod zip_name_rules;

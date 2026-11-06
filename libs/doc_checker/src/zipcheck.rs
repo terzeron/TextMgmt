@@ -8,7 +8,7 @@ pub mod ooxml_checker;
 use std::path::Path;
 
 use crate::FileReport;
-use crate::magic_sniffer::Sniffed;
+use container_parser::magic_sniffer::Sniffed;
 
 use crate::CheckOptions;
 use crate::epub::security_checker::Limits;

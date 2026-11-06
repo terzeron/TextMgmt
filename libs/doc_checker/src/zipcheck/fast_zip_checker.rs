@@ -7,11 +7,11 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use crate::magic_sniffer::{Sniffed, sniff};
-use crate::magic_sniffer::{is_text_name, shannon};
-use crate::text_sanitizer::sanitize_display;
 use crate::{Category, FileReport, Severity};
+use common::text_sanitizer::sanitize_display;
 use common::zip_reader::open_zip;
+use container_parser::magic_sniffer::{Sniffed, sniff};
+use container_parser::magic_sniffer::{is_text_name, shannon};
 use zip::CompressionMethod;
 
 use crate::epub::security_checker::{Limits, directory_limit_note, read_limited, zip_directory_bounds};

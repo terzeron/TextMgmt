@@ -6,6 +6,7 @@
 #[cfg(feature = "http_client")]
 pub mod http_client;
 pub mod json_field_reader;
+pub mod text_sanitizer;
 pub mod url_parser;
 #[cfg(feature = "xml_parser")]
 pub mod xml_parser;

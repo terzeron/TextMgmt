@@ -4,9 +4,9 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use crate::magic_sniffer::windows_reserved;
-use crate::magic_sniffer::{Sniffed, sniff};
 use crate::{Category, FileReport, Severity};
+use container_parser::magic_sniffer::windows_reserved;
+use container_parser::magic_sniffer::{Sniffed, sniff};
 
 use crate::CheckOptions;
 
@@ -56,7 +56,7 @@ fn check_name(path: &Path, report: &mut FileReport) {
     let bytes = name.to_string_lossy().into_owned().into_bytes();
     if bytes.iter().any(|b| b.is_ascii_control()) {
         report.push(Category::Defect, Severity::Medium, "FILENAME_CONTROL_CHAR", "", "파일명에 제어문자가 있다");
-    } else if name.to_string_lossy().chars().any(crate::text_sanitizer::is_hidden_format_char) {
+    } else if name.to_string_lossy().chars().any(common::text_sanitizer::is_hidden_format_char) {
         // 방향 지정·폭 없는 문자는 이름을 다르게 보이게 한다(예: `gpj.exe`를 뒤집어 `exe.jpg`처럼).
         report.push(Category::Defect, Severity::Medium, "FILENAME_CONTROL_CHAR", "", "파일명에 방향·서식 문자가 있다");
     }

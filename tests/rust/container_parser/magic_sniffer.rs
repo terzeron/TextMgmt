@@ -1,7 +1,7 @@
 //! sniff 테스트: 매직바이트 판별, 섀넌 엔트로피, Windows 예약 이름.
 
-use doc_checker::magic_sniffer::windows_reserved;
-use doc_checker::magic_sniffer::{Sniffed, sniff};
+use container_parser::magic_sniffer::windows_reserved;
+use container_parser::magic_sniffer::{Sniffed, sniff};
 
 #[test]
 fn sniffs_pdf_even_at_offset_300() {
@@ -126,7 +126,7 @@ fn sniffs_ole_compound_file_and_keeps_exec_precedence() {
     assert_eq!(sniff(b"\x7fELF\x02"), Sniffed::Elf);
 }
 
-use doc_checker::magic_sniffer::{is_text_name, shannon};
+use container_parser::magic_sniffer::{is_text_name, shannon};
 
 #[test]
 fn shannon_of_known_inputs() {

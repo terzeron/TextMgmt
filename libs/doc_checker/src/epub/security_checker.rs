@@ -294,7 +294,7 @@ static KNOWN_PUBLIC_IDS: &[&str] = &["-//W3C//DTD", "-//NISO//DTD", "-//IDPF//DT
 
 /// 보고서에 들어가는 문자열: 제어문자(C0·C1)는 `.`로 바꾸고 길이를 자른다.
 fn safe(s: &str) -> String {
-    crate::text_sanitizer::sanitize(s, MAX_TEXT, None)
+    common::text_sanitizer::sanitize(s, MAX_TEXT, None)
 }
 
 /// 브라우저가 스킴을 알아보는 방식으로 정규화한다: 엔티티를 풀고 공백·제어문자를 지우고 소문자로 만든다.

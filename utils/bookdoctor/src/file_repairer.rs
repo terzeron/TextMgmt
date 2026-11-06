@@ -10,10 +10,10 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
+use common::text_sanitizer::sanitize_display;
 use doc_checker::defect_repairer::{self, Verdict};
 use doc_checker::defect_repairer::{true_extension_with, unmangle_utf16};
 use doc_checker::format_dispatcher::scan_file;
-use doc_checker::text_sanitizer::sanitize_display;
 
 use crate::FileReport;
 use crate::file_rewriter::{apply, apply_and_report, has_serious_security, rescan_bytes};

@@ -158,7 +158,7 @@ fn a_giant_unterminated_field_is_bounded() {
 fn structural_damage_is_reported_with_ole_codes_and_a_security_summary() {
     let cfb = doc_cfb(&[("Data", &[7u8; 5000][..])], 0, b"hi");
     let bytes = cfb.bytes.clone();
-    let start = doc_checker::ole_parser::OleFile::from_bytes(bytes.clone(), &doc_checker::ole_parser::Limits::default()).unwrap().find("Data").unwrap().start;
+    let start = container_parser::ole_parser::OleFile::from_bytes(bytes.clone(), &container_parser::ole_parser::Limits::default()).unwrap().find("Data").unwrap().start;
     let mut b = bytes;
     let at = cfb.fat_entry_offset(start);
     b[at..at + 4].copy_from_slice(&start.to_le_bytes());

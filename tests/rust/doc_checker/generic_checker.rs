@@ -1,8 +1,8 @@
 mod support;
+use container_parser::magic_sniffer::Sniffed;
 use doc_checker::CheckOptions;
 use doc_checker::format_dispatcher::scan_file;
 use doc_checker::generic_checker::sniff_head;
-use doc_checker::magic_sniffer::Sniffed;
 use doc_checker::{Category, Format, Severity};
 use std::fs;
 use std::fs::File;

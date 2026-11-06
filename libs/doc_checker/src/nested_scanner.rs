@@ -11,11 +11,11 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::magic_sniffer::{Sniffed, sniff};
-use crate::ole_parser::{Limits as OleLimits, OleFile};
-use crate::text_sanitizer::sanitize_display;
 use crate::{Category, FileReport, Severity};
+use common::text_sanitizer::sanitize_display;
 use common::zip_reader::open_zip;
+use container_parser::magic_sniffer::{Sniffed, sniff};
+use container_parser::ole_parser::{Limits as OleLimits, OleFile};
 
 use crate::CheckOptions;
 use crate::epub::security_checker::directory_limit_note;

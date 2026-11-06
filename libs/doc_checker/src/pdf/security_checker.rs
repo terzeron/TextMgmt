@@ -11,9 +11,9 @@ use std::sync::LazyLock;
 
 use regex::bytes::Regex;
 
-use crate::magic_sniffer::{Sniffed, sniff};
-use crate::text_sanitizer::sanitize as sanitize_text;
 use crate::{Category, FileReport, Severity};
+use common::text_sanitizer::sanitize as sanitize_text;
+use container_parser::magic_sniffer::{Sniffed, sniff};
 use lopdf::xref::XrefEntry;
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 

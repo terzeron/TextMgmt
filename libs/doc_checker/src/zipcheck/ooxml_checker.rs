@@ -7,12 +7,12 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use crate::magic_sniffer::{Sniffed, sniff};
-use crate::text_sanitizer::sanitize_display;
 use crate::{Category, FileReport, Severity};
+use common::text_sanitizer::sanitize_display;
 use common::url_parser::unquote;
 use common::zip_reader::zip_entry_name;
 use common::zip_reader::{Zip, open_zip};
+use container_parser::magic_sniffer::{Sniffed, sniff};
 use regex::Regex;
 
 use super::fast_zip_checker::read_failure;

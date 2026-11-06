@@ -14,9 +14,9 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::Severity;
-use crate::magic_sniffer::{Sniffed, sniff};
 use common::url_parser::unquote;
 use common::zip_reader::zip_entry_name;
+use container_parser::magic_sniffer::{Sniffed, sniff};
 use htmlkit::{decode_entities, text_of};
 use regex::Regex;
 use zip::write::SimpleFileOptions;

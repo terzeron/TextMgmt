@@ -3,8 +3,8 @@
 use std::io::Write;
 use std::path::Path;
 
+use container_parser::magic_sniffer::Sniffed;
 use doc_checker::CheckOptions;
-use doc_checker::magic_sniffer::Sniffed;
 use doc_checker::zipcheck::{scan_docx_file, scan_hwpx_file, scan_zip_file};
 use doc_checker::{FileReport, Format};
 

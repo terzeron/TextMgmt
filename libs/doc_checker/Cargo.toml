@@ -7,6 +7,7 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
+container_parser = { path = "../container_parser" }
 doc_reader = { path = "../doc_reader" }
 common = { path = "../common", default-features = false, features = ["xml_parser", "zip_reader"] }
 encoding_rs = "0.8.42"
@@ -67,14 +68,6 @@ name = "encoding_repairer"
 path = "../../tests/rust/doc_checker/encoding_repairer.rs"
 
 [[test]]
-name = "ole_parser"
-path = "../../tests/rust/doc_checker/ole_parser.rs"
-
-[[test]]
-name = "ole_parser_vba_decoder"
-path = "../../tests/rust/doc_checker/ole_parser/vba_decoder.rs"
-
-[[test]]
 name = "pdf_pdf_sanitizer"
 path = "../../tests/rust/doc_checker/pdf/pdf_sanitizer.rs"
 
@@ -115,10 +108,6 @@ name = "format_dispatcher"
 path = "../../tests/rust/doc_checker/format_dispatcher.rs"
 
 [[test]]
-name = "magic_sniffer"
-path = "../../tests/rust/doc_checker/magic_sniffer.rs"
-
-[[test]]
 name = "txt_checker"
 path = "../../tests/rust/doc_checker/txt_checker.rs"
 
@@ -154,6 +143,3 @@ path = "../../tests/rust/doc_checker/pdf.rs"
 name = "zipcheck"
 path = "../../tests/rust/doc_checker/zipcheck.rs"
 
-[[test]]
-name = "text_sanitizer"
-path = "../../tests/rust/doc_checker/text_sanitizer.rs"

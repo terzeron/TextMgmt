@@ -1,6 +1,6 @@
-//! `doc_checker::text_sanitizer` 테스트.
+//! `common::text_sanitizer` 테스트.
 
-use doc_checker::text_sanitizer::{is_hidden_format_char, sanitize, sanitize_display};
+use common::text_sanitizer::{is_hidden_format_char, sanitize, sanitize_display};
 
 #[test]
 fn sanitize_replaces_c0_and_c1_controls_and_cuts_at_the_limit() {

@@ -51,3 +51,7 @@ path = "../../tests/rust/common/http_client.rs"
 [[test]]
 name = "integration_http_client"
 path = "../../tests/rust/common/integration/http_client.rs"
+
+[[test]]
+name = "text_sanitizer"
+path = "../../tests/rust/common/text_sanitizer.rs"

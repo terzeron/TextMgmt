@@ -1,9 +1,9 @@
 //! `doc_checker::format_dispatcher` 단위 테스트.
 
 mod support;
+use container_parser::magic_sniffer::Sniffed;
 use doc_checker::CheckOptions;
 use doc_checker::format_dispatcher::{EXEC_EXTENSIONS, dispatch_format, is_exec_extension, scan_file};
-use doc_checker::magic_sniffer::Sniffed;
 use doc_checker::{Category, FileReport, Format, Severity};
 use std::path::Path;
 
@@ -390,9 +390,9 @@ mod html_scanner {
 
     #[test]
     fn a_missing_or_unreadable_html_path_is_incomplete() {
+        use container_parser::magic_sniffer::Sniffed;
         use doc_checker::FileReport;
         use doc_checker::format_dispatcher::scan_html_file;
-        use doc_checker::magic_sniffer::Sniffed;
         let d = tempfile::tempdir().unwrap();
         let mut r = FileReport::new(&d.path().join("none.html"), None);
         scan_html_file(&d.path().join("none.html"), Sniffed::Html, &mut r);

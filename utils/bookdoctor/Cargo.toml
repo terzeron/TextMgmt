@@ -8,6 +8,7 @@ autotests = false
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+common = { path = "../../libs/common", default-features = false }
 doc_checker = { path = "../../libs/doc_checker" }
 rayon = "1.12.0"
 serde = { version = "1.0.229", features = ["derive"] }

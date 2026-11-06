@@ -1,6 +1,6 @@
-//! 사람이 읽는 출력: 숫자 형식, 터미널 색. 공격자가 정한 문자열 정리는 `doc_checker::text_sanitizer`에 있다.
+//! 사람이 읽는 출력: 숫자 형식, 터미널 색. 공격자가 정한 문자열 정리는 `common::text_sanitizer`에 있다.
 
-use doc_checker::text_sanitizer::sanitize_display;
+use common::text_sanitizer::sanitize_display;
 
 /// 정수를 세 자리마다 쉼표로 끊는다(`1,234,567`).
 pub fn thousands(n: usize) -> String {

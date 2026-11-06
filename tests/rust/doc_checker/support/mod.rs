@@ -1,7 +1,7 @@
 //! 테스트 공용 fixture.
 #![allow(dead_code)]
 
-#[path = "../ole_common.rs"]
+#[path = "../../shared/ole_common.rs"]
 pub mod ole_common;
 #[path = "../../shared/zipx.rs"]
 pub mod zipx;

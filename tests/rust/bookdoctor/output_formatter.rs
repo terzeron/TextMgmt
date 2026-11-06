@@ -1,4 +1,4 @@
-//! `bookdoctor::output_formatter` 테스트: 터미널 색. 문자열 정리는 `tests/rust/doc_checker/text_sanitizer.rs`가 검증한다.
+//! `bookdoctor::output_formatter` 테스트: 터미널 색. 문자열 정리는 `tests/rust/common/text_sanitizer.rs`가 검증한다.
 
 use bookdoctor::output_formatter::{ColorMode, Style, enabled, paint};
 

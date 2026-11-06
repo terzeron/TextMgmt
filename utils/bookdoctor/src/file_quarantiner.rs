@@ -31,7 +31,7 @@ pub type Log<'a> = &'a dyn Fn(&str);
 pub type Mover<'a> = &'a dyn Fn(&Path, &Path) -> io::Result<()>;
 
 fn name_of(path: &str, max_chars: usize) -> String {
-    Path::new(path).file_name().map(|n| doc_checker::text_sanitizer::sanitize_display(&n.to_string_lossy(), max_chars, None)).unwrap_or_default()
+    Path::new(path).file_name().map(|n| common::text_sanitizer::sanitize_display(&n.to_string_lossy(), max_chars, None)).unwrap_or_default()
 }
 
 fn field(rec: &Rec, key: &str) -> String {
