@@ -6,7 +6,7 @@ use doc_reader::pdf::InProcess;
 use file_indexer::child_process_runner::read_file_with_child_stages;
 use file_indexer::env_config::Config;
 use file_indexer::record_builder::{read_file, split_author_title};
-use stat::Stat;
+use parse_stat_counter::Stat;
 
 /// PDF 단계가 없는 TXT라서 worker 실행 파일은 불리지 않는다.
 #[test]

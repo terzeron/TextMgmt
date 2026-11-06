@@ -31,7 +31,7 @@ docs/       문서
 | `doc_repairer` | 문서 파일 교정 기법: EPUB·PDF 보안 정리(`epub_sanitizer`, `pdf_sanitizer`), EPUB 결함 수리(`defect_repairer`), TXT의 UTF-8 재인코딩(`encoding_repairer`). 고친 바이트와 그 검증을 돌려주고, 판정은 `doc_checker`를 쓴다. `doc_checker`의 위 계층이다 |
 | `common` | 여러 crate가 함께 쓰는 기능: HTTP 요청·응답과 `ureq` 구현(`http_client`), URL 나누기·잇기·인코딩(`url_parser`), JSON 필드 읽기(`json_field_reader`), 공격자가 정한 문자열을 출력용으로 정리하기(`text_sanitizer`), DTD를 허용하는 XML 해석과 고칠 수 있는 작은 XML 트리(`xml_parser`, 깨진 문서는 `xml_recoverer`로 고쳐 읽는다), ZIP 열기와 멤버 읽기 상한(`zip_reader`), panic 메시지 읽기(`panic_message`). 시스템 능력이나 특정 문서 형식에 속하지 않고 두 crate 이상이 쓰는 것만 둔다. `http_client`·`xml_parser`·`zip_reader`는 feature이고, 필요 없는 crate는 `default-features = false`로 끈다 |
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
-| `stat` | 색인·파싱 통계 카운터 |
+| `parse_stat_counter` | 색인·파싱 통계 카운터 |
 | `db` | MySQL 접근 추상화와 저장소: 카테고리 매핑(`category_mapping`), 사용자별 최근 조회 이력(`view_history_store`). 각 저장소는 라우트가 쓰는 JSON 기반 facade(`CategoryMappingApi`, `ViewHistoryApi`)도 함께 구현한다 |
 | `classifier` | 도서 분류기 껍데기: backend 분류 제안이 쓰는 `Classify`·`BookClassifierApi` trait와 모델 단독 어댑터. 구현은 없어서 backend는 카테고리 매핑 키워드만으로 제안한다 |
 | `file_indexer` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리. 파일을 고쳐 쓰지 않는다(TXT 본문을 읽기 직전의 준비 단계는 호출자가 `ReadHooks::prepare_text`로 꽂는다). 색인 제외 디렉터리 규칙은 `book_model::ignore_rules`를 쓴다. loader와 book_manager가 함께 쓴다 |

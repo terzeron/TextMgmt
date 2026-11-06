@@ -15,7 +15,7 @@ book_model = { path = "../../libs/book_model" }
 doc_repairer = { path = "../../libs/doc_repairer" }
 file_indexer = { path = "../../libs/file_indexer" }
 serde_json = { workspace = true, features = ["preserve_order"] }
-stat = { path = "../../libs/stat" }
+parse_stat_counter = { path = "../../libs/parse_stat_counter" }
 
 [dev-dependencies]
 # 테스트는 PDF 단계·파서를 직접 다룬다. 소스는 file_indexer를 거친다.

@@ -10,7 +10,7 @@ use std::time::Duration;
 /// 실행기를 받는 쪽(loader 등)이 doc_reader에 직접 의존하지 않게 다시 내보낸다.
 pub use doc_reader::pdf::StageRunner;
 use doc_reader::pdf::{PDF_STAGE_TIMEOUT, Stage, StageError};
-use stat::Stat;
+use parse_stat_counter::Stat;
 use sysdeps::timeout_runner::run_with_hard_timeout;
 
 use crate::env_config::Config;

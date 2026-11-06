@@ -10,7 +10,7 @@ use std::time::Instant;
 use es_client::EsError;
 use es_client::indexing::IndexStore;
 use file_indexer::child_process_runner::StageRunner;
-use stat::Stat;
+use parse_stat_counter::Stat;
 
 use crate::batch_loader::{BatchCounts, FILE_ARGUMENT_BATCH_SIZE, Loader, ProcessHooks, ReencodeOptions, direct_files, recursive_files_with_unreadable, sample_files};
 use file_indexer::env_config::Config;

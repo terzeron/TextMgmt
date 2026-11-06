@@ -19,7 +19,7 @@
 //! - `loader::batch_loader::get_file_list(path, recursive, num_files: Option<usize>) -> Vec<PathBuf>`, `loader::batch_loader::read_files(cfg, path, runner, stat) -> HashMap<i64, Value>`
 //! - `file_indexer::record_builder::{ReadHooks, read_file_with_hooks(cfg, path, .., &ReadHooks)}`
 //!   `ReadHooks { fast_page_count, fallback_page_count (lopdf 쪽 수), inspect }`
-//! - `stat::Stat::{pdf_stage_count, pdf_stage_total_time, pdf_stage_outcome_count}` 단계별 통계 조회
+//! - `parse_stat_counter::Stat::{pdf_stage_count, pdf_stage_total_time, pdf_stage_outcome_count}` 단계별 통계 조회
 
 #![allow(clippy::type_complexity)]
 #[path = "../common/mod.rs"]
@@ -49,8 +49,8 @@ use doc_reader::text::{TextHooks, TextRead, read_from_text, read_from_text_with}
 use doc_repairer::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8, reencode_text_file_to_utf8_with};
 use file_indexer::env_config::Config;
 use file_indexer::record_builder::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
+use parse_stat_counter::Stat;
 use serde_json::Value;
-use stat::Stat;
 use text_decoder::encoding_guesser::HIGH_BYTE_PAIRED_MIN;
 use text_decoder::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, is_usable_text};
 use text_decoder::text_transcoder::Enc;

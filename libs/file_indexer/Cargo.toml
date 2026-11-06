@@ -13,7 +13,7 @@ doc_reader = { path = "../doc_reader" }
 isbn_extractor = { path = "../isbn_extractor" }
 lopdf.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
-stat = { path = "../stat" }
+parse_stat_counter = { path = "../parse_stat_counter" }
 sysdeps = { path = "../sysdeps" }
 
 [dev-dependencies]

@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use doc_reader::head_tail_reader::{EpubPackage, read_djvu_head_tail, read_head_tail_from_content, read_head_tail_from_file, read_hwp_strings};
 use doc_reader::pdf::{PDF_STAGE_TIMEOUT, Stage, StageError, StageRunner};
+use parse_stat_counter::Stat;
 use regex::Regex;
-use stat::Stat;
 use sysdeps::{CommandRunner, SystemRunner};
 
 /// 앞뒤로 읽을 바이트 크기 (8KB).

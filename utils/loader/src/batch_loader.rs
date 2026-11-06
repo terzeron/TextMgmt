@@ -12,8 +12,8 @@ use book_model::ignore_rules::is_ignored_segment;
 use es_client::EsError;
 use es_client::indexing::IndexStore;
 use file_indexer::child_process_runner::StageRunner;
+use parse_stat_counter::Stat;
 use serde_json::Value;
-use stat::Stat;
 
 use doc_repairer::encoding_repairer::reencode_text_file_to_utf8;
 use file_indexer::env_config::Config;

@@ -7,8 +7,8 @@ use doc_reader::pdf::InProcess;
 use file_indexer::env_config::Config;
 use file_indexer::record_builder::read_file;
 use loader::batch_loader::{get_file_list, read_files, report_problems};
+use parse_stat_counter::Stat;
 use serde_json::Value;
-use stat::Stat;
 use std::collections::HashMap;
 use std::fs;
 

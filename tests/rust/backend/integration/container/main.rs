@@ -40,7 +40,7 @@
 //! - `db::category_mapping::{CategoryMapping, CategoryMappingApi, MappingError}`
 //!   - `MappingError::{Http(u16, String), Other(String)}`, `CategoryMappingApi`는 동기 메서드이고 기본 구현은 `Err(Other("unimplemented"))`다.
 //!   - `CategoryMapping::new() -> Result<Self, MappingError>`(env + 실제 MySQL), `get_connection() -> Result<Box<dyn DbConnection>, DbError>`, `DbConnection::{execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>, commit(&mut self) -> Result<(), DbError>}` (설계 3.4)
-//! - `file_indexer::{env_config::Config, record_builder::read_file, record_builder::now_iso}`, `doc_reader::pdf::InProcess`, `stat::Stat` (libs/file_indexer/src에서 확인한 실제 API)
+//! - `file_indexer::{env_config::Config, record_builder::read_file, record_builder::now_iso}`, `doc_reader::pdf::InProcess`, `parse_stat_counter::Stat` (libs/file_indexer/src에서 확인한 실제 API)
 //! - 개발 의존성: `jsonwebtoken`, `async-trait`, `tempfile`, `tokio`, `serde_json`
 //!
 //! ES 인덱스(`TM_ES_BOOK_INDEX`)는 테스트 공용 설정의 `es_index`와 같은 매핑으로 미리 만들어져 있다고 본다.
@@ -134,7 +134,7 @@ struct Setup {
 fn read_file(path: &Path) -> BTreeMap<i64, Value> {
     let root = common::project_root();
     let cfg = file_indexer::env_config::Config::new(root.join("tests/books"), root.join("tests/comics"));
-    let stat = stat::Stat::new();
+    let stat = parse_stat_counter::Stat::new();
     let out = file_indexer::record_builder::read_file(&cfg, path, None, false, None, &doc_reader::pdf::InProcess, &stat);
     out.item.into_iter().collect()
 }

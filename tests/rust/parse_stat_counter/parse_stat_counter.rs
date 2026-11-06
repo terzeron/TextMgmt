@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::thread;
 
-use stat::{Stat, StatError};
+use parse_stat_counter::{Stat, StatError};
 
 fn printed(s: &Stat) -> String {
     let mut out = Vec::new();

@@ -243,6 +243,7 @@ dependencies = [
  "log",
  "lopdf",
  "md-5",
+ "parse_stat_counter",
  "pdf_engine",
  "roxmltree",
  "rustls",
@@ -251,7 +252,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "stat",
  "sysdeps",
  "tempfile",
  "testcontainers-modules",
@@ -1397,8 +1397,8 @@ dependencies = [
  "doc_reader",
  "isbn_extractor",
  "lopdf",
+ "parse_stat_counter",
  "serde_json",
- "stat",
  "sysdeps",
  "tempfile",
 ]
@@ -2103,8 +2103,8 @@ name = "isbn_extractor"
 version = "0.1.0"
 dependencies = [
  "doc_reader",
+ "parse_stat_counter",
  "regex",
- "stat",
  "sysdeps",
  "tempfile",
  "zip",
@@ -2302,8 +2302,8 @@ dependencies = [
  "file_indexer",
  "hwp3_parser",
  "isbn_extractor",
+ "parse_stat_counter",
  "serde_json",
- "stat",
  "sysdeps",
  "tempfile",
  "text_decoder",
@@ -2706,6 +2706,10 @@ dependencies = [
  "structmeta",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "parse_stat_counter"
+version = "0.1.0"
 
 [[package]]
 name = "pathfinder_geometry"
@@ -3578,10 +3582,6 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
-
-[[package]]
-name = "stat"
-version = "0.1.0"
 
 [[package]]
 name = "string_cache"
