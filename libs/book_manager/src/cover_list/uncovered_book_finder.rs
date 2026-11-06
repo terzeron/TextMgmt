@@ -4,7 +4,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use super::{BookManager, BookManagerDeps, CoverPageOpts, MAX_CATEGORY_PAGE_SIZE};
+use super::CoverPageOpts;
+use crate::{BookManager, BookManagerDeps, MAX_CATEGORY_PAGE_SIZE};
 use book_model::book_metadata::Book;
 use cover_manager::cover_status::{CoverStatusCache, has_official_cover};
 

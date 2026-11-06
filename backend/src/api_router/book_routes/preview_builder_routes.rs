@@ -20,12 +20,14 @@ use std::sync::Arc;
 #[allow(unused_imports)]
 use super::*;
 
+mod html_previewer_routes;
+
 pub(super) fn routes() -> Routes {
     let mut routes = Routes::new().get("/pdf-pages/{book_id}", &["require_auth"], book_pages).get("/comics/pdf-pages/{book_id}", &["require_auth"], comic_pages);
     for prefix in ["", "/comics"] {
         routes = routes.get(&format!("{prefix}/preview/{{book_id}}"), &["require_auth"], preview);
     }
-    routes
+    routes.merge(html_previewer_routes::routes())
 }
 
 #[derive(Deserialize)]

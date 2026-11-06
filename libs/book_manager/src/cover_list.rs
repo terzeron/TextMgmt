@@ -1,8 +1,9 @@
 //! 커버 목록과 표지 썸네일 응답.
 //!
-//! 정식 표지가 없는 책만 찾는 경로는 `uncovered` 모듈에 있다.
+//! 정식 표지가 없는 책만 찾는 경로는 하위 모듈 `uncovered_book_finder`에 있다.
 
 mod cover_browse;
+mod uncovered_book_finder;
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -18,10 +19,11 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::preview_builder::text_response;
-use super::{BookManager, BookResponse, CoverPage, MAX_CATEGORY_PAGE_SIZE};
+use super::{BookManager, BookResponse, MAX_CATEGORY_PAGE_SIZE};
 use book_model::book_metadata::Book;
 use cover_browse::{CoverEntry, CoverGroup, CoverStats, MISSING_TIME, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
 use search_manager::{CoverFileHits, decode_category_cursor, encode_category_cursor};
+pub use uncovered_book_finder::{CoverBooksPager, CoverPage};
 
 const COVER_GENERATION_LIMIT: usize = 10;
 

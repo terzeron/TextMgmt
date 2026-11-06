@@ -93,8 +93,8 @@ name = "file_validator"
 path = "../../tests/rust/book_manager/file_validator.rs"
 
 [[test]]
-name = "html_previewer"
-path = "../../tests/rust/book_manager/html_previewer.rs"
+name = "preview_builder_html_previewer"
+path = "../../tests/rust/book_manager/preview_builder/html_previewer.rs"
 
 [[test]]
 name = "mismatch_reporter"

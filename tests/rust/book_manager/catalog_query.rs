@@ -81,7 +81,7 @@ fn test_get_book_content_html_forces_attachment() {
         other => panic!("FileResponse가 아님: {other:?}"),
     };
     assert!(path.is_file());
-    let (media_type, headers) = book_manager::html_previewer::file_response_meta(&path);
+    let (media_type, headers) = book_manager::preview_builder::html_previewer::file_response_meta(&path);
     assert_eq!(media_type, "text/html");
     let content_disposition = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("content-disposition")).map(|(_, v)| v.as_str()).expect("content-disposition");
     assert!(content_disposition.starts_with("attachment;"));

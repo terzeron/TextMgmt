@@ -17,6 +17,7 @@ use zip::ZipArchive;
 use zip::result::ZipError;
 
 pub mod epub_package;
+pub mod html_previewer;
 
 use super::{BookManager, BookResponse};
 use crate::path_validator::{clean_href, zip_path};

@@ -224,7 +224,7 @@ async fn download(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppD
         BookContent::Text(text) => Ok(Json(text).into_response()),
         BookContent::Error(message) => Err(ApiError::Internal(message)),
         BookContent::File(path) => {
-            let (media_type, headers) = book_manager::html_previewer::file_response_meta(&path);
+            let (media_type, headers) = book_manager::preview_builder::html_previewer::file_response_meta(&path);
             let metadata = std::fs::metadata(&path).map_err(|e| ApiError::Internal(e.to_string()))?;
             let file_size = metadata.len();
             let mut headers = headers;

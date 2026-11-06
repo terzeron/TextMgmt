@@ -1,8 +1,8 @@
-//! HTML 미리보기 sanitizer(`book_manager::html_previewer::sanitize_html_for_viewer`)의 적대적 입력 검증.
+//! HTML 미리보기 sanitizer(`book_manager::preview_builder::html_previewer::sanitize_html_for_viewer`)의 적대적 입력 검증.
 //! 실행 가능한 구성요소가 출력에 남지 않는다는 보장을 여러 우회 형태로 확인한다.
 //! 출력은 서버가 `Content-Security-Policy: sandbox`와 함께 내려주지만, sanitizer 자체도 실행 가능한 요소를 남기면 안 된다.
 
-#[path = "common/mod.rs"]
+#[path = "../common/mod.rs"]
 mod common;
 use crate::common::shared_fixtures::{block_on, deps, make_doc, make_manager, tmp_dir};
 use book_manager::BookManager;
@@ -16,7 +16,7 @@ use std::{fs, io};
 const BASE: &str = "/api/books/1/html-resource";
 
 fn sanitize(html: &str) -> String {
-    book_manager::html_previewer::sanitize_html_for_viewer(html, BASE)
+    book_manager::preview_builder::html_previewer::sanitize_html_for_viewer(html, BASE)
 }
 
 /// 출력의 모든 태그에서 (태그 이름, 속성 이름 목록)을 뽑는다. 속성 값은 따옴표를 존중해서 건너뛴다(값 안의 텍스트는 속성이 아니다).
@@ -271,7 +271,7 @@ fn test_get_html_resource_allows_local_whitelisted_files_only() {
 #[test]
 fn test_svg_download_blocks_active_content() {
     for name in ["untrusted.svg", "untrusted.SVG", "한글 표지.svg"] {
-        let (media_type, headers) = book_manager::html_previewer::file_response_meta(Path::new(name));
+        let (media_type, headers) = book_manager::preview_builder::html_previewer::file_response_meta(Path::new(name));
         assert_eq!(media_type, "image/svg+xml");
         let header = |name: &str| headers.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.as_str());
         assert!(header("Content-Disposition").is_some_and(|v| v.starts_with("attachment;")));
@@ -286,7 +286,7 @@ fn test_svg_download_blocks_active_content() {
 fn test_sanitize_html_external_src_attribute_removed() {
     // 외부 URL src 는 build_html_resource_url 이 None 을 반환하므로 속성이 제거된다.
     let html = r#"<html><body><img src="http://external.com/img.png"></body></html>"#;
-    let result = book_manager::html_previewer::sanitize_html_for_viewer(html, "/base");
+    let result = book_manager::preview_builder::html_previewer::sanitize_html_for_viewer(html, "/base");
     let dom = scraper::Html::parse_document(&result);
     let sel = scraper::Selector::parse("img").unwrap();
     let img = dom.select(&sel).next();
@@ -295,34 +295,34 @@ fn test_sanitize_html_external_src_attribute_removed() {
 
 #[test]
 fn test_empty_string_returns_none() {
-    assert_eq!(book_manager::html_previewer::build_html_resource_url("/base", ""), None);
+    assert_eq!(book_manager::preview_builder::html_previewer::build_html_resource_url("/base", ""), None);
 }
 
 #[test]
 fn test_whitespace_only_returns_none() {
-    assert_eq!(book_manager::html_previewer::build_html_resource_url("/base", "   "), None);
+    assert_eq!(book_manager::preview_builder::html_previewer::build_html_resource_url("/base", "   "), None);
 }
 
 #[test]
 fn test_data_uri_returned_as_is() {
     let uri = "data:image/png;base64,abc123";
-    assert_eq!(book_manager::html_previewer::build_html_resource_url("/base", uri), Some(uri.to_string()));
+    assert_eq!(book_manager::preview_builder::html_previewer::build_html_resource_url("/base", uri), Some(uri.to_string()));
 }
 
 #[test]
 fn test_blob_uri_returned_as_is() {
     let uri = "blob:http://example.com/uuid";
-    assert_eq!(book_manager::html_previewer::build_html_resource_url("/base", uri), Some(uri.to_string()));
+    assert_eq!(book_manager::preview_builder::html_previewer::build_html_resource_url("/base", uri), Some(uri.to_string()));
 }
 
 #[test]
 fn test_external_http_url_returns_none() {
-    assert_eq!(book_manager::html_previewer::build_html_resource_url("/base", "http://external.com/img.png"), None);
+    assert_eq!(book_manager::preview_builder::html_previewer::build_html_resource_url("/base", "http://external.com/img.png"), None);
 }
 
 #[test]
 fn test_protocol_relative_url_returns_none() {
-    assert_eq!(book_manager::html_previewer::build_html_resource_url("/base", "//cdn.example.com/img.png"), None);
+    assert_eq!(book_manager::preview_builder::html_previewer::build_html_resource_url("/base", "//cdn.example.com/img.png"), None);
 }
 
 #[test]

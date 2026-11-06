@@ -9,8 +9,8 @@ use std::path::Path;
 
 use scraper::{Html, Node, StrTendril};
 
-use super::preview_builder::{html_security_headers, text_response};
-use super::{BookManager, BookResponse};
+use super::{html_security_headers, text_response};
+use crate::{BookManager, BookResponse};
 use common::zip_reader::zip_entry_name;
 
 /// 뷰어가 내려줄 수 있는 리소스 확장자.

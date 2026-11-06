@@ -32,7 +32,6 @@ mod category_reloader_routes;
 mod cover_finder_routes;
 mod cover_list_routes;
 mod file_validator_routes;
-mod html_previewer_routes;
 mod mismatch_reporter_routes;
 mod pdf_edit_routes;
 mod preview_builder_routes;
@@ -47,7 +46,6 @@ pub(super) fn routes() -> Routes {
         .merge(cover_finder_routes::routes())
         .merge(cover_list_routes::routes())
         .merge(file_validator_routes::routes())
-        .merge(html_previewer_routes::routes())
         .merge(mismatch_reporter_routes::routes())
         .merge(pdf_edit_routes::routes())
         .merge(preview_builder_routes::routes())

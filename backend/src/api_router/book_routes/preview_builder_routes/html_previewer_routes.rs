@@ -1,10 +1,10 @@
-//! HTML 책 미리보기 리소스 라우트(`book_manager::html_previewer`).
+//! HTML 책 미리보기 리소스 라우트(`book_manager::preview_builder::html_previewer`).
 
-use super::super::app_deps::AppDeps;
-use super::super::error_responses::ApiResult;
-use super::super::request_extractors::ApiQuery;
-use super::super::request_extractors::RequireAuth;
-use super::super::route_registry::Routes;
+use super::super::super::app_deps::AppDeps;
+use super::super::super::error_responses::ApiResult;
+use super::super::super::request_extractors::ApiQuery;
+use super::super::super::request_extractors::RequireAuth;
+use super::super::super::route_registry::Routes;
 use axum::extract::OriginalUri;
 use axum::extract::Path;
 use axum::extract::State;
@@ -13,7 +13,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 #[allow(unused_imports)]
-use super::*;
+use super::super::*;
 
 pub(super) fn routes() -> Routes {
     let mut routes = Routes::new();

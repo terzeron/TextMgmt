@@ -65,7 +65,6 @@ pub mod cover_list;
 mod file_reader;
 mod file_validator;
 pub use file_validator::{EpubMessage, EpubPublication, EpubSummary, EpubValidation, MessageLocation, PdfMessage, PdfPublication, PdfSummary, PdfValidation};
-pub mod html_previewer;
 mod mismatch_reporter;
 pub use category_editor::{CategoryDeletePreview, CategoryDeletion, CategoryRename};
 pub use category_proposer::{AppliedItem, ApplyResult, ApplyStatus, CategoryCandidate, ItemFailure, MoveAction, MoveOutcome, MoveStatus, Proposal, ProposalGrade, ProposalItem, ProposeResult};
@@ -76,15 +75,14 @@ mod pdf_edit;
 pub use pdf_edit::PdfEditResult;
 pub mod preview_builder;
 mod seam_accessors;
-mod uncovered_book_finder;
 
 pub use book_updater::BookDeletion;
 pub use category_proposer::{ApplyOptions, KeywordMatch, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, ProposeOptions, Ranked};
 pub use cover_finder::{BookLookup, BookRef, Thumbnailer};
 pub use cover_list::CoverPageOpts;
+pub use cover_list::{CoverBooksPager, CoverPage};
 pub use file_reader::{DefaultFileReader, LoaderFileReader};
 pub use seam_accessors::{AddBookError, BackfillThread, BookAdder, CategoryNameCheck, PathIsRelativeTo, PreviewEpubValidator};
-pub use uncovered_book_finder::{CoverBooksPager, CoverPage};
 
 /// 정렬 값 배열(JSON)을 클라이언트에 내보낼 커서 문자열로 만든다.
 pub fn encode_category_cursor(sort_values: &Value) -> String {
