@@ -38,6 +38,13 @@ pub struct BookResponse {
     pub body: Vec<u8>,
 }
 
+impl BookResponse {
+    /// 형식과 헤더 없이 글만 담은 응답. 오류와 짧은 안내에 쓴다.
+    pub fn text(status_code: u16, content: impl Into<String>) -> Self {
+        BookResponse { status_code, media_type: None, headers: Vec::new(), body: content.into().into_bytes() }
+    }
+}
+
 struct NoEs;
 
 impl EsManagerApi for NoEs {}

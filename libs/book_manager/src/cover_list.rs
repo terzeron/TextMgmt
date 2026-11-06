@@ -18,7 +18,6 @@ use image::{DynamicImage, RgbImage};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::preview_builder::text_response;
 use super::{BookManager, BookResponse, MAX_CATEGORY_PAGE_SIZE};
 use book_model::book_metadata::Book;
 use cover_browse::{CoverEntry, CoverGroup, CoverStats, MISSING_TIME, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
@@ -93,22 +92,22 @@ impl BookManager {
         log::debug!("# get_cover(book_id={book_id}, width={width})");
         let doc = match self.find_doc_async(book_id).await {
             Ok(Some(doc)) => doc,
-            Ok(None) => return text_response(404, format!("Book not found: {book_id}")),
-            Err(e) => return text_response(500, format!("Book lookup failed: {e}")),
+            Ok(None) => return BookResponse::text(404, format!("Book not found: {book_id}")),
+            Err(e) => return BookResponse::text(500, format!("Book lookup failed: {e}")),
         };
         let book = match self.try_make_book(book_id, &doc, 0.0) {
             Ok(book) => book,
-            Err(e) => return text_response(500, format!("Book conversion failed: {e}")),
+            Err(e) => return BookResponse::text(500, format!("Book conversion failed: {e}")),
         };
         if book.file_type != "epub" && book.file_type != "pdf" {
-            return text_response(404, format!("Cover not supported for type: {}", book.file_type));
+            return BookResponse::text(404, format!("Cover not supported for type: {}", book.file_type));
         }
         let source = match self.fs.is_file(&book.file_path).and_then(|is_file| if is_file { self.fs.metadata(&book.file_path).map(Some) } else { Ok(None) }) {
             Ok(Some(meta)) => meta,
-            Ok(None) => return text_response(404, format!("File not found: {}", book.file_path.display())),
+            Ok(None) => return BookResponse::text(404, format!("File not found: {}", book.file_path.display())),
             Err(e) => {
                 log::error!("Cover file access failed for book_id={book_id} ({}): {e}", book.file_path.display());
-                return text_response(503, format!("Storage access error ({}): {}", super::strerror(&e), book.file_path.display()));
+                return BookResponse::text(503, format!("Storage access error ({}): {}", super::strerror(&e), book.file_path.display()));
             }
         };
 
@@ -164,10 +163,10 @@ impl BookManager {
             Ok(data) => data,
             Err(error) => {
                 log::error!("Cover generation slot failed for book_id={book_id}: {error}");
-                return text_response(503, "커버 생성을 잠시 후 다시 시도해 주세요");
+                return BookResponse::text(503, "커버 생성을 잠시 후 다시 시도해 주세요");
             }
         };
-        let Some(data) = data else { return text_response(404, format!("Cover not found: {book_id}")) };
+        let Some(data) = data else { return BookResponse::text(404, format!("Cover not found: {book_id}")) };
         jpeg(data)
     }
 

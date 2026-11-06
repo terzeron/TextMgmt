@@ -9,7 +9,7 @@ use std::path::Path;
 
 use scraper::{Html, Node, StrTendril};
 
-use super::{html_security_headers, text_response};
+use super::html_security_headers;
 use crate::{BookManager, BookResponse};
 use common::zip_reader::zip_entry_name;
 
@@ -73,10 +73,10 @@ impl BookManager {
                 let base = if resource_base_url.is_empty() { format!("/html-resource/{book_id}") } else { resource_base_url.to_string() };
                 BookResponse { status_code: 200, media_type: Some("text/html".to_string()), headers: html_security_headers(), body: sanitize_html_for_viewer(&content, &base).into_bytes() }
             }
-            Ok(None) => text_response(413, "HTML file too large"),
+            Ok(None) => BookResponse::text(413, "HTML file too large"),
             Err(e) => {
                 log::error!("HTML preview generation failed for book_id={book_id}: {e}");
-                text_response(500, "HTML preview failed")
+                BookResponse::text(500, "HTML preview failed")
             }
         }
     }
@@ -86,25 +86,25 @@ impl BookManager {
         log::debug!("# get_html_resource(book_id={book_id}, resource_path='{resource_path}')");
         let doc = match self.find_doc_async(book_id).await {
             Ok(Some(doc)) => doc,
-            Ok(None) => return text_response(404, format!("Book not found: {book_id}")),
-            Err(e) => return text_response(500, format!("Book lookup failed: {e}")),
+            Ok(None) => return BookResponse::text(404, format!("Book not found: {book_id}")),
+            Err(e) => return BookResponse::text(500, format!("Book lookup failed: {e}")),
         };
         let book = match self.try_make_book(book_id, &doc, 0.0) {
             Ok(book) => book,
-            Err(e) => return text_response(500, format!("Book conversion failed: {e}")),
+            Err(e) => return BookResponse::text(500, format!("Book conversion failed: {e}")),
         };
         if book.file_path.extension().map(|e| e.to_string_lossy().to_lowercase()) != Some("html".to_string()) {
-            return text_response(400, "HTML resource preview is only supported for HTML files");
+            return BookResponse::text(400, "HTML resource preview is only supported for HTML files");
         }
 
         // 비었거나 HTML 디렉터리 위로 올라가는 경로는 거부한다.
         let normalized = match zip_entry_name(resource_path) {
             Some(n) if !n.is_empty() && !resource_path.contains('\0') => n,
-            _ => return text_response(400, "Invalid resource path"),
+            _ => return BookResponse::text(400, "Invalid resource path"),
         };
         let html_dir = match book.file_path.parent().map(|p| self.resolve_path(p)) {
             Some(Ok(dir)) => dir,
-            _ => return text_response(400, "Invalid resource path"),
+            _ => return BookResponse::text(400, "Invalid resource path"),
         };
         let target = match self.resolve_path(&html_dir.join(&normalized)) {
             Ok(target) => {
@@ -114,26 +114,26 @@ impl BookManager {
                     None => Ok(target.starts_with(&html_dir)),
                 };
                 if !matches!(inside, Ok(true)) {
-                    return text_response(400, "Invalid resource path");
+                    return BookResponse::text(400, "Invalid resource path");
                 }
                 target
             }
-            Err(_) => return text_response(400, "Invalid resource path"),
+            Err(_) => return BookResponse::text(400, "Invalid resource path"),
         };
         if !self.fs.is_file(&target).unwrap_or(false) {
-            return text_response(404, format!("Resource not found: {resource_path}"));
+            return BookResponse::text(404, format!("Resource not found: {resource_path}"));
         }
         let suffix = target.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default();
         if !HTML_VIEWER_RESOURCE_EXTENSIONS.contains(&suffix.as_str()) {
-            return text_response(400, "Unsupported resource type");
+            return BookResponse::text(400, "Unsupported resource type");
         }
         let body = match self.fs.open(&target).and_then(|f| {
             let mut bytes = Vec::new();
             f.take(MAX_HTML_RESOURCE_BYTES + 1).read_to_end(&mut bytes).map(|_| bytes)
         }) {
             Ok(bytes) if bytes.len() as u64 <= MAX_HTML_RESOURCE_BYTES => bytes,
-            Ok(_) => return text_response(413, "Resource too large"),
-            Err(e) => return text_response(500, format!("Resource read failed: {e}")),
+            Ok(_) => return BookResponse::text(413, "Resource too large"),
+            Err(e) => return BookResponse::text(500, format!("Resource read failed: {e}")),
         };
         BookResponse { status_code: 200, media_type: Some(media_type_for_suffix(&suffix).to_string()), headers: html_security_headers(), body }
     }

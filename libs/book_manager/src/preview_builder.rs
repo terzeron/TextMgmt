@@ -39,10 +39,6 @@ const DEFAULT_PREVIEW_PAGES: u32 = 5;
 const DEFAULT_PREVIEW_CHAPTERS: u32 = 10;
 
 /// 본문이 문자열인 응답.
-pub(super) fn text_response(status_code: u16, content: impl Into<String>) -> BookResponse {
-    BookResponse { status_code, media_type: None, headers: Vec::new(), body: content.into().into_bytes() }
-}
-
 fn no_transform_headers() -> Vec<(String, String)> {
     vec![("Content-Encoding".to_string(), "identity".to_string()), ("Cache-Control".to_string(), "no-transform".to_string())]
 }
@@ -130,7 +126,7 @@ impl BookManager {
     fn file_response(&self, path: &Path, media_type: &str, headers: Vec<(String, String)>) -> BookResponse {
         match std::fs::read(path) {
             Ok(body) => BookResponse { status_code: 200, media_type: Some(media_type.to_string()), headers, body },
-            Err(e) => text_response(500, format!("File read failed: {e}")),
+            Err(e) => BookResponse::text(500, format!("File read failed: {e}")),
         }
     }
 
@@ -147,32 +143,32 @@ impl BookManager {
             Ok(Some(doc)) => doc,
             Ok(None) => {
                 log::warn!("get_book_preview: book_id={book_id} not found in ES");
-                return text_response(404, format!("Book not found: {book_id}"));
+                return BookResponse::text(404, format!("Book not found: {book_id}"));
             }
-            Err(e) => return text_response(500, format!("Book lookup failed: {e}")),
+            Err(e) => return BookResponse::text(500, format!("Book lookup failed: {e}")),
         };
         let book = match self.try_make_book(book_id, &doc, 0.0) {
             Ok(book) => book,
-            Err(e) => return text_response(500, format!("Book conversion failed: {e}")),
+            Err(e) => return BookResponse::text(500, format!("Book conversion failed: {e}")),
         };
         if !self.fs.is_file(&book.file_path).unwrap_or(false) {
             log::warn!("get_book_preview: file not found: '{}' (book_id={book_id})", book.file_path.display());
-            return text_response(404, format!("File not found: {}", book.file_path.display()));
+            return BookResponse::text(404, format!("File not found: {}", book.file_path.display()));
         }
 
         let suffix = book.file_path.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default();
         let cache_dir = self.path_prefix.join(".preview_cache");
         if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-            return text_response(500, format!("Preview cache unavailable: {e}"));
+            return BookResponse::text(500, format!("Preview cache unavailable: {e}"));
         }
-        let Some(original_mtime) = self.mtime_of(&book.file_path) else { return text_response(500, "Preview failed") };
+        let Some(original_mtime) = self.mtime_of(&book.file_path) else { return BookResponse::text(500, "Preview failed") };
 
         match suffix.as_str() {
             ".pdf" => self.preview_pdf(book_id, &book.file_path, &cache_dir, original_mtime, pages),
             ".epub" => self.preview_epub(book_id, &book.file_path, &cache_dir, original_mtime, chapters),
             ".html" => self.preview_html(book_id, &book.file_path, resource_base_url),
             ".doc" | ".hwp" => self.preview_office(book_id, &book.file_path, &cache_dir, original_mtime, &suffix),
-            _ => text_response(400, format!("Unsupported file type: {suffix}")),
+            _ => BookResponse::text(400, format!("Unsupported file type: {suffix}")),
         }
     }
 
@@ -221,7 +217,7 @@ impl BookManager {
             }
             Err(e) => {
                 log::error!("PDF preview generation failed for book_id={book_id}: {e}");
-                text_response(500, "PDF preview failed")
+                BookResponse::text(500, "PDF preview failed")
             }
         }
     }
@@ -253,13 +249,13 @@ impl BookManager {
             Ok(html) => html,
             Err(e) => {
                 log::error!("{} preview generation failed for book_id={book_id}: {e}", suffix.to_uppercase());
-                return text_response(500, format!("{} preview failed", suffix.to_uppercase()));
+                return BookResponse::text(500, format!("{} preview failed", suffix.to_uppercase()));
             }
         };
         if !html_content.is_empty() {
             if let Err(e) = self.write_cache(&cache_file, html_content.as_bytes()) {
                 log::error!("{} preview cache write failed for book_id={book_id}: {e}", suffix.to_uppercase());
-                return text_response(500, format!("{} preview failed", suffix.to_uppercase()));
+                return BookResponse::text(500, format!("{} preview failed", suffix.to_uppercase()));
             }
             epub_package::evict_old_cache_with(&*self.fs, cache_dir);
             log::debug!("Preview generated for book_id={book_id} ({suffix})");
@@ -289,7 +285,7 @@ impl BookManager {
         let html_content = plain_text_html(&plain_text);
         if let Err(e) = self.write_cache(&cache_file, html_content.as_bytes()) {
             log::error!("HWP3 preview cache write failed for book_id={book_id}: {e}");
-            return Some(text_response(500, "HWP preview failed"));
+            return Some(BookResponse::text(500, "HWP preview failed"));
         }
         epub_package::evict_old_cache_with(&*self.fs, cache_dir);
         log::debug!("Preview generated for book_id={book_id} (HWP3 native)");
@@ -338,12 +334,12 @@ impl BookManager {
                 if let Err(err) = validated {
                     let _ = self.fs.remove_file(&tmp_file);
                     log::error!("EPUB preview validation failed for book_id={book_id}: {err}");
-                    return text_response(422, format!("EPUB preview validation failed: {err}"));
+                    return BookResponse::text(422, format!("EPUB preview validation failed: {err}"));
                 }
                 if let Err(e) = self.fs.rename(&tmp_file, &cache_file) {
                     let _ = self.fs.remove_file(&tmp_file);
                     log::error!("EPUB preview cache write failed for book_id={book_id}: {e}");
-                    return text_response(500, "EPUB preview failed");
+                    return BookResponse::text(500, "EPUB preview failed");
                 }
                 epub_package::evict_old_cache_with(&*self.fs, cache_dir);
                 log::debug!("Preview generated for book_id={book_id} (EPUB, {chapter_count} chapters)");
@@ -353,9 +349,9 @@ impl BookManager {
             Err(PreviewFailure::Other(message)) => {
                 log::error!("EPUB preview generation failed for book_id={book_id}: {message}");
                 if message.contains("corrupted") {
-                    return text_response(422, "EPUB file is corrupted or not a valid ZIP");
+                    return BookResponse::text(422, "EPUB file is corrupted or not a valid ZIP");
                 }
-                text_response(500, "EPUB preview failed")
+                BookResponse::text(500, "EPUB preview failed")
             }
         }
     }
@@ -366,7 +362,7 @@ impl BookManager {
         let mut zin = match ZipArchive::new(file) {
             Ok(zin) => zin,
             Err(ZipError::Io(e)) if e.kind() != std::io::ErrorKind::UnexpectedEof => return Err(PreviewFailure::Other(e.to_string())),
-            Err(_) => return Err(PreviewFailure::Response(text_response(422, "EPUB file is corrupted or not a valid ZIP"))),
+            Err(_) => return Err(PreviewFailure::Response(BookResponse::text(422, "EPUB file is corrupted or not a valid ZIP"))),
         };
         let names = zip_names(&mut zin);
 
@@ -374,14 +370,14 @@ impl BookManager {
         let opf_override = self.opf_path_override().filter(|p| !p.is_empty());
         let Some(opf_path) = opf_override.or_else(|| epub_package::find_opf_path(&mut zin)) else {
             log::warn!("EPUB preview: OPF file not found for book_id={book_id}");
-            return Err(PreviewFailure::Response(text_response(422, "EPUB structure error: OPF file not found")));
+            return Err(PreviewFailure::Response(BookResponse::text(422, "EPUB structure error: OPF file not found")));
         };
         let opf_dir = Path::new(&opf_path).parent().and_then(Path::to_str).unwrap_or_default().to_owned();
         let opf_bytes = match read_member(&mut zin, &opf_path) {
             Ok(bytes) => bytes,
             Err(ZipError::FileNotFound) => {
                 log::warn!("EPUB preview: OPF file missing in archive: {opf_path} (book_id={book_id})");
-                return Err(PreviewFailure::Response(text_response(422, format!("EPUB structure error: OPF file missing: {opf_path}"))));
+                return Err(PreviewFailure::Response(BookResponse::text(422, format!("EPUB structure error: OPF file missing: {opf_path}"))));
             }
             Err(e) => return Err(e.into()),
         };
@@ -650,9 +646,9 @@ impl BookManager {
         if e.kind == "OSError" {
             // "[Errno 28] No space left on device"에서 사람이 읽을 부분만 쓴다.
             let reason = e.message.split_once("] ").map_or(e.message.as_str(), |(_, rest)| rest);
-            return text_response(503, format!("Storage access error ({reason}): {}", path.display()));
+            return BookResponse::text(503, format!("Storage access error ({reason}): {}", path.display()));
         }
-        text_response(500, format!("PDF pages extraction failed ({}): {}", e.kind, e.message))
+        BookResponse::text(500, format!("PDF pages extraction failed ({}): {}", e.kind, e.message))
     }
 
     /// PDF에서 `start`~`end`쪽(1부터, 양끝 포함)만 추출해 돌려준다. 한 번에 `MAX_PDF_PAGE_RANGE`쪽까지다.
@@ -660,24 +656,24 @@ impl BookManager {
         log::debug!("# get_pdf_pages(book_id={book_id}, start={start}, end={end})");
         let doc = match self.find_doc(book_id) {
             Ok(Some(doc)) => doc,
-            Ok(None) => return text_response(404, format!("Book not found: {book_id}")),
-            Err(e) => return text_response(500, format!("PDF pages extraction failed (ReadError): {e}")),
+            Ok(None) => return BookResponse::text(404, format!("Book not found: {book_id}")),
+            Err(e) => return BookResponse::text(500, format!("PDF pages extraction failed (ReadError): {e}")),
         };
         let book = match self.try_make_book(book_id, &doc, 0.0) {
             Ok(book) => book,
-            Err(e) => return text_response(500, format!("Book conversion failed: {e}")),
+            Err(e) => return BookResponse::text(500, format!("Book conversion failed: {e}")),
         };
         // stat() 자체가 실패할 수 있다(예: 스토리지 마운트가 끊겨 EIO). 잡지 않으면 CORS 헤더 없는 500이 나가 브라우저에는 "Failed to fetch"로만 보인다.
         match self.fs.is_file(&book.file_path) {
             Err(e) => {
                 log::error!("PDF file access failed for book_id={book_id} ({}): {e}", book.file_path.display());
-                return text_response(503, format!("Storage access error ({}): {}", super::strerror(&e), book.file_path.display()));
+                return BookResponse::text(503, format!("Storage access error ({}): {}", super::strerror(&e), book.file_path.display()));
             }
-            Ok(false) => return text_response(404, format!("File not found: {}", book.file_path.display())),
+            Ok(false) => return BookResponse::text(404, format!("File not found: {}", book.file_path.display())),
             Ok(true) => {}
         }
         if book.file_path.extension().map(|e| e.to_string_lossy().to_lowercase()) != Some("pdf".to_string()) {
-            return text_response(400, format!("Not a PDF file: {}", book.file_path.display()));
+            return BookResponse::text(400, format!("Not a PDF file: {}", book.file_path.display()));
         }
 
         // 페이지 수만 먼저 구한다. 디스크 캐시 히트면 페이지 추출이 필요 없으므로 리더를 만들 필요가 없다.
@@ -689,18 +685,18 @@ impl BookManager {
         let start = start.max(1);
         let end = end.min(total_pages);
         if start > total_pages {
-            return text_response(400, format!("Start page {start} exceeds total pages {total_pages}"));
+            return BookResponse::text(400, format!("Start page {start} exceeds total pages {total_pages}"));
         }
         // 범위마다 캐시 파일이 생기므로 거꾸로 된 범위와 너무 넓은 범위는 받지 않는다.
         if end < start {
-            return text_response(400, format!("End page {end} is before start page {start}"));
+            return BookResponse::text(400, format!("End page {end} is before start page {start}"));
         }
         if end - start + 1 > MAX_PDF_PAGE_RANGE {
-            return text_response(400, format!("Page range exceeds {MAX_PDF_PAGE_RANGE} pages"));
+            return BookResponse::text(400, format!("Page range exceeds {MAX_PDF_PAGE_RANGE} pages"));
         }
 
         let cache_dir = self.path_prefix.join(".preview_cache");
-        let storage_error = |e: &std::io::Error| text_response(503, format!("Storage access error ({}): {}", super::strerror(e), book.file_path.display()));
+        let storage_error = |e: &std::io::Error| BookResponse::text(503, format!("Storage access error ({}): {}", super::strerror(e), book.file_path.display()));
         if let Err(e) = std::fs::create_dir_all(&cache_dir) {
             return storage_error(&e);
         }
