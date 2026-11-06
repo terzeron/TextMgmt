@@ -5,7 +5,8 @@
 
 ## 현재 상태
 
-- develop에 머지했다(로컬). **원격에는 push하지 않았다.**
+- develop에 머지하고 원격에 push했다(2026-11-06). backend-ci가 통과했다(실행 42222650301: rust-tests·container-build 성공, 테스트 3,826개 통과).
+  CI가 MuPDF 시스템 라이브러리를 설치하지 않아 실패하던 문제를 `f7a4b666`에서 고쳤다.
 - 머지 결과 트리는 마지막으로 검증한 브랜치 트리(`05d1c8c6`)와 같다(이 문서 커밋만 더해짐).
 - 검증 결과(머지 직전 브랜치 기준)
   - `test_runner_rs` 증분 실행 통과, 재실행 대상 없음. 테스트 함수 3,836개.
@@ -35,9 +36,8 @@
 
 새 테스트를 만들기보다 옮기는 것이 중심이다. Cargo `[[test]]` target도 함께 추가한다.
 
-### 2. push와 배포 (승인 필요)
+### 2. 배포 (승인 필요)
 
-- `git push origin develop`은 하지 않았다. 사용자 승인 후 진행한다.
 - 배포는 `./build.sh`(레지스트리 push + `kubectl set image`)다. 이것도 승인 후 진행한다.
 - Dockerfile 변경 3건이 이번 작업에 들어 있다: `-p pdf_engine`, `-p doc_checker`(epubveri), `-p file_indexer`(`tm-index-worker` 설치).
   로컬 빌드로는 확인했지만 클러스터 기동(환경 변수, ES·MySQL 연결)은 배포해야 확인된다.
