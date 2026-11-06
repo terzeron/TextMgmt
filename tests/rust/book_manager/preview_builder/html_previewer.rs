@@ -413,3 +413,62 @@ fn test_is_relative_to_oserror_returns_400() {
     let resp = block_on(manager.get_html_resource(1, "image.jpg"));
     assert_eq!(resp.status_code, 400);
 }
+
+fn html_book(tmp_path: &Path, es: &FakeEsManager) {
+    fs::create_dir_all(tmp_path.join("A")).unwrap();
+    fs::write(tmp_path.join("A").join("test.html"), "<html></html>").unwrap();
+    es.set_doc(Some(make_doc("A/test.html", "html")));
+}
+
+#[test]
+fn test_get_html_resource_reports_an_es_lookup_failure_as_a_500() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    es.fail("search_by_id", "down");
+    let resp = block_on(make_manager(tmp.path(), &es).get_html_resource(1, "style.css"));
+    assert_eq!(resp.status_code, 500);
+    assert!(String::from_utf8_lossy(&resp.body).starts_with("Book lookup failed"));
+}
+
+#[test]
+fn test_get_html_resource_rejects_a_resource_over_the_size_limit() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    html_book(tmp.path(), &es);
+    let css = fs::File::create(tmp.path().join("A").join("big.css")).unwrap();
+    css.set_len(book_manager::preview_builder::html_previewer::MAX_HTML_RESOURCE_BYTES + 1).unwrap();
+    let resp = block_on(make_manager(tmp.path(), &es).get_html_resource(1, "big.css"));
+    assert_eq!((resp.status_code, String::from_utf8_lossy(&resp.body).as_ref()), (413, "Resource too large"));
+}
+
+#[test]
+fn test_get_html_resource_reports_a_read_failure_as_a_500() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    html_book(tmp.path(), &es);
+    fs::write(tmp.path().join("A").join("style.css"), "body{}").unwrap();
+    let faulty = common::faulty_fs::FaultyFs::new();
+    faulty.set_open(|p| p.ends_with("style.css").then(|| io::Error::from_raw_os_error(5)));
+    let manager = BookManager::with_deps(deps(tmp.path(), &es).with_fs(faulty));
+    let resp = block_on(manager.get_html_resource(1, "style.css"));
+    assert_eq!(resp.status_code, 500);
+    assert!(String::from_utf8_lossy(&resp.body).starts_with("Resource read failed"));
+}
+
+#[test]
+fn test_html_preview_rejects_a_document_over_the_size_limit() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    html_book(tmp.path(), &es);
+    let html = fs::OpenOptions::new().write(true).open(tmp.path().join("A").join("test.html")).unwrap();
+    html.set_len(book_manager::preview_builder::html_previewer::MAX_HTML_BYTES + 1).unwrap();
+    let resp = block_on(book_manager::BookManagerApi::get_book_preview(&make_manager(tmp.path(), &es), 1, None, None));
+    assert_eq!((resp.status_code, String::from_utf8_lossy(&resp.body).as_ref()), (413, "HTML file too large"));
+}
+
+#[test]
+fn test_html_viewer_resource_extensions_allow_styles_and_images_but_not_scripts() {
+    let allowed = book_manager::preview_builder::html_previewer::html_viewer_resource_extensions();
+    assert!(allowed.contains(".css") && allowed.contains(".png"));
+    assert!(!allowed.contains(".js") && !allowed.contains(".html"));
+}

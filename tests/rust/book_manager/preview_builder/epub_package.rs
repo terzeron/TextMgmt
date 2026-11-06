@@ -468,6 +468,87 @@ mod validate_preview_epub {
         assert!(toc.is_none(), "toc attribute should be removed");
     }
 
+    /// `toc="toc"`인데 toc.ncx가 없는 EPUB. 검증이 OPF를 다시 써야 한다. `extra`를 더 넣는다.
+    fn epub_needing_rewrite(path: &Path, extra: &[(&str, &[u8])]) {
+        let opf = make_opf(2, false, false);
+        let (ch1, ch2) = (chapter(1), chapter(2));
+        let mut entries: Vec<(&str, &[u8])> = vec![
+            ("mimetype", b"application/epub+zip"),
+            ("META-INF/container.xml", CONTAINER_XML.as_bytes()),
+            ("OEBPS/content.opf", opf.as_bytes()),
+            ("OEBPS/ch1.xhtml", ch1.as_bytes()),
+            ("OEBPS/ch2.xhtml", ch2.as_bytes()),
+        ];
+        entries.extend_from_slice(extra);
+        write_zip_stored(path, &entries);
+    }
+
+    #[test]
+    fn test_rewrite_keeps_directory_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let epub = tmp.path().join("dirs.epub");
+        epub_needing_rewrite(&epub, &[("OEBPS/images/", b"")]);
+
+        let (valid, err) = verdict(book_manager::preview_builder::epub_package::validate_preview_epub(&epub));
+
+        assert!(valid, "{err:?}");
+        let names: Vec<String> = ZipArchive::new(File::open(&epub).unwrap()).unwrap().file_names().filter_map(Result::ok).map(|n| n.into_owned()).collect();
+        assert!(names.iter().any(|n| n == "OEBPS/images/"), "{names:?}");
+        assert!(spine_of(&epub, "OEBPS/content.opf").0.is_none(), "다시 쓴 OPF에는 toc 속성이 없다");
+    }
+
+    #[test]
+    fn test_a_rewrite_that_cannot_write_its_temporary_file_is_a_validation_error() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("ro");
+        fs::create_dir(&dir).unwrap();
+        let epub = dir.join("book.epub");
+        epub_needing_rewrite(&epub, &[]);
+        let before = fs::read(&epub).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = book_manager::preview_builder::epub_package::validate_preview_epub(&epub);
+
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.as_ref().is_err_and(|e| e.starts_with("validation error:")), "{result:?}");
+        assert_eq!(fs::read(&epub).unwrap(), before, "원본은 그대로다");
+    }
+
+    #[test]
+    fn test_a_path_that_cannot_be_read_as_a_zip_is_a_validation_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = book_manager::preview_builder::epub_package::validate_preview_epub(tmp.path());
+        assert!(result.as_ref().is_err_and(|e| e.starts_with("validation error:")), "{result:?}");
+    }
+
+    #[test]
+    fn test_an_opf_whose_local_header_is_broken_is_a_corrupted_zip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let epub = tmp.path().join("header.epub");
+        epub_needing_rewrite(&epub, &[]);
+        let mut data = fs::read(&epub).unwrap();
+        let name = b"OEBPS/content.opf";
+        let at = (0..data.len() - 30 - name.len()).find(|&i| &data[i..i + 4] == b"PK\x03\x04" && &data[i + 30..i + 30 + name.len()] == name).unwrap();
+        data[at..at + 4].copy_from_slice(&[0, 0, 0, 0]);
+        fs::write(&epub, data).unwrap();
+        let result = book_manager::preview_builder::epub_package::validate_preview_epub(&epub);
+        assert_eq!(result, Err("corrupted ZIP file".to_string()));
+    }
+
+    #[test]
+    fn test_an_opf_that_fails_its_checksum_is_a_validation_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let epub = tmp.path().join("crc.epub");
+        epub_needing_rewrite(&epub, &[]);
+        let mut data = fs::read(&epub).unwrap();
+        let at = data.windows(9).position(|w| w == b"<package ").unwrap();
+        data[at + 1] = b'P';
+        fs::write(&epub, data).unwrap();
+        let result = book_manager::preview_builder::epub_package::validate_preview_epub(&epub);
+        assert!(result.as_ref().is_err_and(|e| e.starts_with("validation error:")), "{result:?}");
+    }
+
     /// manifest에 없는 spine idref가 자동 제거되고 통과한다.
     #[test]
     fn test_invalid_spine_idref_removed() {
@@ -610,4 +691,11 @@ fn test_prune_dead_ncx_navpoints_ignores_unparsable_ncx_and_empty_src() {
     assert!(prune_dead_ncx_navpoints(b"<ncx", "OEBPS", &|_path| false).is_none());
     let no_src = format!(r#"<ncx xmlns="{NCX_NS_STR}"><navMap><navPoint id="x"><content src=""/></navPoint><navPoint id="y"/></navMap></ncx>"#).into_bytes();
     assert!(prune_dead_ncx_navpoints(&no_src, "", &|_path| false).is_none());
+}
+
+#[test]
+fn test_apply_edits_skips_an_edit_that_overlaps_an_earlier_one() {
+    use book_manager::preview_builder::epub_package::{Edit, apply_edits};
+    let out = apply_edits("abcdef", 0..6, vec![Edit::remove(1..4), Edit::remove(2..3), Edit { range: 5..6, replacement: "Z".to_string() }]);
+    assert_eq!(out, "aeZ");
 }

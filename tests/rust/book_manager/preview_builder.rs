@@ -1252,6 +1252,193 @@ mod get_book_preview {
         let resp2 = block_on(manager.get_pdf_pages(1, 1, 2));
         assert_eq!(resp2.status_code, 200);
     }
+
+    fn pdf_book(tmp_path: &Path, es: &FakeEsManager) -> std::path::PathBuf {
+        let pdf = tmp_path.join("A").join("sample.pdf");
+        fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+        fs::write(&pdf, blank_pdf_bytes(2, &[])).unwrap();
+        es.set_doc(Some(make_doc("A/sample.pdf", ".pdf")));
+        pdf
+    }
+
+    #[test]
+    fn test_get_pdf_pages_reports_an_es_lookup_failure_as_a_500() {
+        let tmp = tmp_dir();
+        let es = FakeEsManager::new();
+        es.fail("search_by_id", "down");
+        let manager = make_manager(tmp.path(), &es);
+        let resp = block_on(manager.get_pdf_pages(1, 1, 1));
+        assert_eq!(resp.status_code, 500);
+        assert!(resp.body_text().starts_with("PDF pages extraction failed (ReadError)"), "{}", resp.body_text());
+    }
+
+    #[test]
+    fn test_get_pdf_pages_reports_an_uncreatable_cache_directory_as_a_storage_error() {
+        let tmp = tmp_dir();
+        let es = FakeEsManager::new();
+        pdf_book(tmp.path(), &es);
+        fs::write(tmp.path().join(".preview_cache"), b"not a directory").unwrap();
+        let resp = block_on(make_manager(tmp.path(), &es).get_pdf_pages(1, 1, 1));
+        assert_eq!(resp.status_code, 503);
+        assert!(resp.body_text().starts_with("Storage access error"), "{}", resp.body_text());
+    }
+
+    #[test]
+    fn test_get_pdf_pages_reports_a_cache_write_failure_as_a_storage_error() {
+        let tmp = tmp_dir();
+        let es = FakeEsManager::new();
+        pdf_book(tmp.path(), &es);
+        let faulty = FaultyFs::new();
+        faulty.set_write(|_p| Some(io::Error::from_raw_os_error(28)));
+        let manager = BookManager::with_deps(deps(tmp.path(), &es).with_fs(faulty));
+        let resp = block_on(manager.get_pdf_pages(1, 1, 1));
+        assert_eq!(resp.status_code, 503);
+        assert!(resp.body_text().starts_with("Storage access error"), "{}", resp.body_text());
+    }
+
+    #[test]
+    fn test_get_pdf_pages_reports_a_reader_that_cannot_open_the_file() {
+        // 쪽 수는 캐시에 있지만 파일이 PDF로 열리지 않는다.
+        let tmp = tmp_dir();
+        let es = FakeEsManager::new();
+        let pdf = pdf_book(tmp.path(), &es);
+        fs::write(&pdf, b"not a pdf").unwrap();
+        let manager = make_manager(tmp.path(), &es);
+        manager.page_count_cache().insert((pdf.to_string_lossy().into_owned(), mtime_key(&pdf)), 2);
+        let resp = block_on(manager.get_pdf_pages(1, 1, 1));
+        assert_ne!(resp.status_code, 200);
+        assert!(resp.body_text().starts_with("PDF pages extraction failed"), "{}", resp.body_text());
+    }
+
+    #[test]
+    fn test_pdf_preview_keeps_going_when_a_legacy_cache_cannot_be_removed() {
+        let tmp = tmp_dir();
+        let es = FakeEsManager::new();
+        pdf_book(tmp.path(), &es);
+        let legacy = tmp.path().join(".preview_cache").join("1.pdf");
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, b"old").unwrap();
+        let faulty = FaultyFs::new();
+        faulty.set_remove_file(|p| p.ends_with("1.pdf").then(|| io::Error::from_raw_os_error(13)));
+        let manager = BookManager::with_deps(deps(tmp.path(), &es).with_fs(faulty));
+        let resp = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(resp.status_code, 200, "{}", resp.body_text());
+        assert!(legacy.exists());
+    }
+
+    /// `name` 멤버의 로컬 헤더 서명을 지운다.
+    fn break_local_header(path: &Path, name: &str) {
+        let mut data = fs::read(path).unwrap();
+        let name = name.as_bytes();
+        let at = (0..data.len() - 30 - name.len()).find(|&i| &data[i..i + 4] == b"PK\x03\x04" && &data[i + 30..i + 30 + name.len()] == name).unwrap();
+        data[at..at + 4].copy_from_slice(&[0, 0, 0, 0]);
+        fs::write(path, data).unwrap();
+    }
+
+    fn epub_preview(spec: &EpubSpec, chapters: Option<i64>, tweak: impl FnOnce(&Path)) -> BookResponse {
+        let tmp = tmp_dir();
+        let epub = tmp.path().join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        make_epub(&epub, spec);
+        tweak(&epub);
+        let es = FakeEsManager::new();
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        block_on(BookManagerApi::get_book_preview(&make_manager(tmp.path(), &es), 1, chapters, None))
+    }
+
+    fn preview_names(resp: &BookResponse) -> Vec<String> {
+        zip::ZipArchive::new(std::io::Cursor::new(resp.body.clone())).unwrap().file_names().filter_map(Result::ok).map(|n| n.into_owned()).collect()
+    }
+
+    const TWO_CHAPTER_OPF: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>"#;
+
+    #[test]
+    fn test_epub_preview_uses_the_last_manifest_item_for_a_repeated_id() {
+        let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="ch1" href="missing.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        let resp = epub_preview(&minimal_spec().with_opf(opf), Some(3), |_| {});
+        assert_eq!(resp.status_code, 200, "{}", resp.body_text());
+        assert!(preview_names(&resp).iter().any(|n| n == "ch1.xhtml"));
+    }
+
+    #[test]
+    fn test_epub_preview_reports_an_unreadable_opf_as_a_500() {
+        let resp = epub_preview(&minimal_spec(), Some(3), |epub| break_local_header(epub, "content.opf"));
+        assert_eq!((resp.status_code, resp.body_text().as_str()), (500, "EPUB preview failed"));
+    }
+
+    #[test]
+    fn test_partial_epub_preview_skips_an_unreadable_ncx() {
+        let mut spec = minimal_spec().with_opf(TWO_CHAPTER_OPF).with_extra("toc.ncx", b"<ncx/>".to_vec());
+        spec.chapters.push(("ch2.xhtml".to_string(), "<html><body><p>Two</p></body></html>".to_string()));
+        let resp = epub_preview(&spec, Some(1), |epub| break_local_header(epub, "toc.ncx"));
+        assert_eq!(resp.status_code, 200, "{}", resp.body_text());
+        assert!(!preview_names(&resp).iter().any(|n| n == "toc.ncx"));
+    }
+
+    #[test]
+    fn test_epub_preview_passes_a_large_image_within_the_edge_limit_through_the_default_downscaler() {
+        // 잡음 PNG는 압축되지 않아 400KB를 넘지만, 가장자리가 상한 안이라 기본 축소기가 원본을 그대로 돌려준다.
+        let mut seed: u32 = 1;
+        let img = image::RgbImage::from_fn(600, 600, |_, _| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            image::Rgb([(seed >> 16) as u8, (seed >> 8) as u8, seed as u8])
+        });
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        assert!(png.len() > 400 * 1024);
+        let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="img" href="big.png" media-type="image/png"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        let mut spec = minimal_spec().with_opf(opf).with_extra("big.png", png.clone());
+        spec.chapters = vec![("ch1.xhtml".to_string(), r#"<html><body><img src="big.png"/></body></html>"#.to_string())];
+
+        let resp = epub_preview(&spec, Some(3), |_| {});
+
+        assert_eq!(resp.status_code, 200, "{}", resp.body_text());
+        let mut out = zip::ZipArchive::new(std::io::Cursor::new(resp.body.clone())).unwrap();
+        let mut kept = Vec::new();
+        std::io::Read::read_to_end(&mut out.by_name("big.png").unwrap(), &mut kept).unwrap();
+        assert_eq!(kept, png);
+    }
+
+    #[test]
+    fn test_epub_preview_reports_a_cache_rename_failure_as_a_500() {
+        let tmp = tmp_dir();
+        let es = FakeEsManager::new();
+        let epub = tmp.path().join("A").join("test.epub");
+        fs::create_dir_all(epub.parent().unwrap()).unwrap();
+        make_epub(&epub, &minimal_spec());
+        es.set_doc(Some(make_doc("A/test.epub", "epub")));
+        let faulty = FaultyFs::new();
+        faulty.set_rename(|_from, to| to.to_string_lossy().contains(".preview_cache").then(|| io::Error::from_raw_os_error(28)));
+        let manager = BookManager::with_deps(deps(tmp.path(), &es).with_fs(faulty));
+        let resp = block_on(BookManagerApi::get_book_preview(&manager, 1, Some(3), None));
+        assert_eq!(resp.status_code, 500);
+        assert_eq!(resp.body_text(), "EPUB preview failed");
+    }
 }
 
 #[tokio::test]
@@ -1378,6 +1565,36 @@ mod hwp_preview {
         assert!(cache_file.exists());
         assert!(fs::read_to_string(&cache_file).unwrap().chars().count() > 50);
         assert!(!tmp_path.join(".preview_cache").join("1.html").exists());
+    }
+
+    #[test]
+    fn test_hwp3_preview_serves_the_cached_result_on_the_next_request() {
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        copy_hwp_sample(tmp_path, "v2.10_KYOKA.hwp", "kyoka.hwp");
+        let es = FakeEsManager::new();
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")));
+        es.set_doc(Some(make_doc("A/kyoka.hwp", "hwp")));
+        let first = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        let cache_file = tmp_path.join(".preview_cache").join(format!("1.hwp3_v{}.html", BookManager::HWP3_PREVIEW_VERSION));
+        fs::write(&cache_file, "<p>캐시</p>").unwrap();
+        let second = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!(first.status_code, 200);
+        assert_eq!((second.status_code, second.body_text().as_str()), (200, "<p>캐시</p>"));
+    }
+
+    #[test]
+    fn test_hwp3_preview_cache_write_failure_is_a_500() {
+        let tmp = tmp_dir();
+        let tmp_path = tmp.path();
+        copy_hwp_sample(tmp_path, "v2.10_KYOKA.hwp", "kyoka.hwp");
+        let es = FakeEsManager::new();
+        let faulty = super::common::faulty_fs::FaultyFs::new();
+        faulty.set_write(|p| p.to_string_lossy().contains(".hwp3_v").then(|| std::io::Error::from_raw_os_error(28)));
+        let manager = BookManager::with_deps(deps(tmp_path, &es).with_runner(FakeRunner::office_output("")).with_fs(faulty));
+        es.set_doc(Some(make_doc("A/kyoka.hwp", "hwp")));
+        let resp = block_on(BookManagerApi::get_book_preview(&manager, 1, None, None));
+        assert_eq!((resp.status_code, resp.body_text().as_str()), (500, "HWP preview failed"));
     }
 
     #[test]
