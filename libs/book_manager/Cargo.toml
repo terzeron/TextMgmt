@@ -1,6 +1,6 @@
 [package]
 name = "book_manager"
-description = "책·만화 관리: 목록·검색·미리보기·편집·재적재·카테고리 제안(BookManager), 만화(comics_manager), 책 메타데이터, EPUB 메타데이터·PDF 쪽 읽기, 조회 이력, 백그라운드 작업 실행기"
+description = "책·만화 관리: 목록·검색·미리보기·편집·재적재·카테고리 제안·표지 목록(BookManager)과 만화(comics_manager). backend 도메인 crate다"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

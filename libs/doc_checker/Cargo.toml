@@ -1,6 +1,6 @@
 [package]
 name = "doc_checker"
-description = "문서 파일 검사와 교정 기법: EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표, 보안 정리와 결함 수리의 재구성·검증, TXT 재인코딩"
+description = "문서 파일 검사 기법: EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표와 인코딩 손상 판정. 파일 하나를 받아 보고서를 돌려준다"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

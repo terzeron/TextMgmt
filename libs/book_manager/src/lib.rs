@@ -3,13 +3,13 @@
 //! # 구조
 //!
 //! - 이 파일: `BookManager`(상태), `BookManagerDeps`(생성 때 꽂는 대역과 설정), 주입 trait(`FileReader`), 상수, 생성자.
-//! - `book_manager/*.rs`: 기능별 하위 모듈. 각 파일이 `impl BookManager { ... }` 블록 하나를 맡는다.
+//! - `src/*.rs`: 기능별 하위 모듈. 각 파일이 `impl BookManager { ... }` 블록 하나를 맡는다.
 //!   하위 모듈은 이 파일의 비공개 필드(`self.fs`, `self.es` ...)에 바로 접근한다.
-//! - `book_manager/api.rs`: `impl BookManagerApi for BookManager`. 라우트가 쓰는 trait 메서드를 inherent 메서드에 이어 준다.
+//! - `api_adapter.rs`: `impl BookManagerApi for BookManager`(trait 정의는 `api_contract.rs`). 라우트가 쓰는 trait 메서드를 inherent 메서드에 이어 준다.
 //!
 //! # 기능을 덧붙이는 방법
 //!
-//! 1. `book_manager/<기능>.rs`를 만들고 이 파일에 `mod <기능>;`을 한 줄 추가한다.
+//! 1. `src/<기능>.rs`를 만들고 이 파일에 `mod <기능>;`을 한 줄 추가한다.
 //! 2. 새 파일에서 `impl BookManager { pub async fn ... }`을 쓴다. 필요한 대역은 `self.fs`, `self.runner`, `self.es`, `self.reader()`로 쓴다.
 //! 3. 새 설정이나 대역이 필요하면 이 파일의 `BookManagerDeps` 필드를 늘리지 말고, 새 파일에 설정 구조체를 두고
 //!    `BookManagerDeps::with_ext(값)`으로 꽂는다. 읽을 때는 `self.ext::<타입>()`이다(없으면 `None`, 보통 `unwrap_or_default`).
