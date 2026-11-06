@@ -4,7 +4,7 @@
 //! HTML 미리보기와 리소스 경로는 `html.rs`에서 처리한다. HWP3은 LibreOffice 변환이 비면 네이티브 파서로 폴백한다.
 //! PDF reader와 쪽수는 경로·수정 시각 cache를 공유한다.
 
-use doc_reader::office::{ConvertFailure, convert_with_libreoffice_using, find_libreoffice_with};
+use doc_reader::office::{ConvertFailure, convert_with_libreoffice_using, extract_text_from_hwp3, find_libreoffice_with, is_hwp3};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
@@ -21,10 +21,9 @@ pub mod html_previewer;
 
 use super::{BookManager, BookResponse};
 use crate::path_validator::{clean_href, zip_path};
-use common::xml_parser::parse_xml;
+use common::xml_parser::{declare_unbound_prefixes, parse_xml};
 use common::zip_reader::zip_names;
 use epub_package::{Edit, NCX_NS, OPF_NS, XML_DECLARATION, apply_edits, children_named, find_el, read_member, xml_text};
-use xml_recoverer::declare_unbound_prefixes;
 
 const HTML_VIEWER_CSP: &str = "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' blob:;";
 /// 뷰어 이미지 축소를 시도하는 최소 크기(바이트).
@@ -230,7 +229,7 @@ impl BookManager {
     fn preview_office(&self, book_id: i64, file_path: &Path, cache_dir: &Path, original_mtime: SystemTime, suffix: &str) -> BookResponse {
         // HWP 3.x 이하는 LibreOffice가 한자를 `?`로 깨뜨리므로 네이티브 파서를 먼저 쓴다.
         if suffix == ".hwp"
-            && hwp3_parser::is_hwp3(file_path)
+            && is_hwp3(file_path)
             && let Some(response) = self.preview_hwp3(book_id, file_path, cache_dir, original_mtime)
         {
             return response;
@@ -283,7 +282,7 @@ impl BookManager {
             log::debug!("Preview cache hit for book_id={book_id} (HWP3)");
             return Some(self.file_response(&cache_file, "text/html", html_security_headers()));
         }
-        let plain_text = hwp3_parser::extract_text_from_hwp3(file_path);
+        let plain_text = extract_text_from_hwp3(file_path);
         if plain_text.trim().is_empty() {
             return None;
         }

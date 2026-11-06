@@ -427,7 +427,6 @@ dependencies = [
  "file_indexer",
  "flate2",
  "htmlkit",
- "hwp3_parser",
  "image",
  "image_processor",
  "jpeg-encoder",
@@ -445,7 +444,6 @@ dependencies = [
  "tempfile",
  "testcontainers-modules",
  "tokio",
- "xml_recoverer",
  "zip",
 ]
 

@@ -116,6 +116,9 @@ pub fn read_from_doc(path: &Path, binary: &Path) -> (String, usize, Vec<String>)
     (summary, lines, errors)
 }
 
+/// HWP 3.x 이하 판별과 네이티브 본문 추출. 미리보기처럼 요약이 아닌 원문이 필요한 호출자가 쓴다.
+pub use hwp3_parser::{extract_text_from_hwp3, is_hwp3};
+
 /// HWP 파일: HWP 3.x 이하는 네이티브 HWP3 파서를 먼저 쓴다(LibreOffice는 한자를 `?`로 깨뜨린다).
 /// 그 결과가 비거나 HWP 5.x면 LibreOffice로 변환한다. 네이티브 파서는 이미 실패했으므로 다시 부르지 않는다.
 pub fn read_from_hwp(path: &Path, binary: &Path) -> (String, usize, Vec<String>) {

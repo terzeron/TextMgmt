@@ -2,7 +2,7 @@
 //! 파일 하나를 다루는 형식 수준 도구라 `BookManager` 상태를 쓰지 않는다.
 //!
 //! XML은 `roxmltree`로 읽는다. 깨진 XML을 복구하지는 않는다. 대신 선언 없이 쓰인 접두사는
-//! `xml_recoverer::declare_unbound_prefixes`로 먼저 선언한다. 문서를 고쳐 쓸 때는 DOM을 직렬화하지 않고 원문에서 해당 구간만 잘라내
+//! `common::xml_parser::declare_unbound_prefixes`로 먼저 선언한다. 문서를 고쳐 쓸 때는 DOM을 직렬화하지 않고 원문에서 해당 구간만 잘라내
 //! (`Edit`) 원문 서식을 보존한다.
 
 use common::xml_parser::parse_xml;
@@ -12,11 +12,11 @@ use std::ops::Range;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
+use common::xml_parser::declare_unbound_prefixes;
 use image::{ImageFormat, imageops::FilterType};
 use regex::Regex;
 use roxmltree::{Document, Node};
 use sysdeps::{FsOps, RealFs};
-use xml_recoverer::declare_unbound_prefixes;
 use zip::ZipArchive;
 use zip::result::ZipError;
 

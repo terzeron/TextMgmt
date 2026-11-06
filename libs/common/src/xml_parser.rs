@@ -14,6 +14,9 @@ use std::collections::BTreeMap;
 
 use xml_recoverer::{declare_prefix, strip_unknown_entities};
 
+/// 선언이 빠진 이름공간 접두사를 루트 요소에 선언해, 엄격한 파서가 읽을 수 있게 한다.
+pub use xml_recoverer::declare_unbound_prefixes;
+
 pub const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 pub const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 pub const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
