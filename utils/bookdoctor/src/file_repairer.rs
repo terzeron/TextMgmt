@@ -1,6 +1,6 @@
 //! `repair`: 뷰어가 열지 못하는 결함을 고친다.
 //!
-//! 1. EPUB 본문 XHTML(`doc_checker::defect_repairer::xhtml_fix`의 재구성·검증).
+//! 1. EPUB 본문 XHTML(`doc_checker::defect_repairer`의 재구성·검증).
 //! 2. UTF-16LE로 읽혀 UTF-8로 저장된 바이너리(HWP·PDF·PNG가 `.txt`로 남은 것)를 원래 바이트와 확장자로 되돌린다.
 //!    원본은 휴지통에 두고, 같은 inode에 덮어쓴 뒤 이름만 바꾼다(book_id가 inode다).
 //!
@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-use doc_checker::defect_repairer::xhtml_fix::{self, Verdict};
+use doc_checker::defect_repairer::{self, Verdict};
 use doc_checker::defect_repairer::{true_extension_with, unmangle_utf16};
 use doc_checker::format_dispatcher::scan_file;
 use doc_checker::text_sanitizer::sanitize_display;
@@ -154,7 +154,7 @@ pub fn fix_xhtml(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
             skipped += 1;
             continue;
         }
-        let planned = fs::read(path).map_err(|e| e.to_string()).and_then(|src| xhtml_fix::rebuild(&src).map(|verdict| (src, verdict)));
+        let planned = fs::read(path).map_err(|e| e.to_string()).and_then(|src| defect_repairer::rebuild(&src).map(|verdict| (src, verdict)));
         let (src, plan) = match planned {
             Ok((_, Verdict::Delete(why))) => {
                 writeln!(out, "DELETE_CANDIDATE {shown}: {}", show(&why))?;
@@ -173,7 +173,7 @@ pub fn fix_xhtml(opts: &Options, out: &mut dyn Write) -> io::Result<i32> {
             untouched += 1;
             continue;
         }
-        if let Err(e) = xhtml_fix::verify(&src, &plan.bytes).and_then(|()| rescan_xhtml(&plan.bytes, &scan_opts)) {
+        if let Err(e) = defect_repairer::verify(&src, &plan.bytes).and_then(|()| rescan_xhtml(&plan.bytes, &scan_opts)) {
             writeln!(out, "SKIP {shown}: 검증 실패: {}", show(&e))?;
             skipped += 1;
             continue;

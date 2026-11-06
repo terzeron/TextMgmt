@@ -35,10 +35,6 @@ name = "doc"
 path = "../../tests/rust/doc_checker/doc.rs"
 
 [[test]]
-name = "doc_rtf_checker"
-path = "../../tests/rust/doc_checker/doc/rtf_checker.rs"
-
-[[test]]
 name = "epub"
 path = "../../tests/rust/doc_checker/epub.rs"
 
@@ -70,7 +66,6 @@ path = "../../tests/rust/doc_checker/mojibake_detector.rs"
 name = "encoding_repairer"
 path = "../../tests/rust/doc_checker/encoding_repairer.rs"
 
-
 [[test]]
 name = "ole_parser"
 path = "../../tests/rust/doc_checker/ole_parser.rs"
@@ -98,10 +93,6 @@ path = "../../tests/rust/doc_checker/nested_scanner.rs"
 [[test]]
 name = "defect_repairer"
 path = "../../tests/rust/doc_checker/defect_repairer.rs"
-
-[[test]]
-name = "defect_repairer_xhtml_fix"
-path = "../../tests/rust/doc_checker/defect_repairer/xhtml_fix.rs"
 
 [[test]]
 name = "rule_engine"
@@ -150,18 +141,6 @@ path = "../../tests/rust/doc_checker/zipcheck/ooxml_checker.rs"
 [[test]]
 name = "zip_name_rules"
 path = "../../tests/rust/doc_checker/zip_name_rules.rs"
-
-[[test]]
-name = "hwp_script_checker"
-path = "../../tests/rust/doc_checker/hwp/script_checker.rs"
-
-[[test]]
-name = "hwp_bindata_checker"
-path = "../../tests/rust/doc_checker/hwp/bindata_checker.rs"
-
-[[test]]
-name = "hwp_record_reader"
-path = "../../tests/rust/doc_checker/hwp/record_reader.rs"
 
 [[test]]
 name = "rule_engine_rule_matcher"

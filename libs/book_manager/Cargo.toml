@@ -86,8 +86,6 @@ path = "../../tests/rust/book_manager/cover_finder.rs"
 name = "cover_list"
 path = "../../tests/rust/book_manager/cover_list.rs"
 
-
-
 [[test]]
 name = "file_reader"
 path = "../../tests/rust/book_manager/file_reader.rs"
@@ -108,11 +106,9 @@ path = "../../tests/rust/book_manager/mismatch_reporter.rs"
 name = "path_validator"
 path = "../../tests/rust/book_manager/path_validator.rs"
 
-
 [[test]]
 name = "pdf_edit"
 path = "../../tests/rust/book_manager/pdf_edit.rs"
-
 
 [[test]]
 name = "preview_builder"
@@ -121,10 +117,6 @@ path = "../../tests/rust/book_manager/preview_builder.rs"
 [[test]]
 name = "seam_accessors"
 path = "../../tests/rust/book_manager/seam_accessors.rs"
-
-[[test]]
-name = "comics_manager_api_adapter"
-path = "../../tests/rust/book_manager/comics_manager/api_adapter.rs"
 
 [[test]]
 name = "integration_container"
