@@ -124,26 +124,6 @@ impl BookManager {
         if category == Self::ROOT_CATEGORY { self.path_prefix.clone() } else { self.path_prefix.join(category) }
     }
 
-    /// `_is_top_level_target_category`.
-    pub(crate) fn is_top_level_target_category(category: &str) -> bool {
-        !category.is_empty() && category != Self::ROOT_CATEGORY && !category.contains('/')
-    }
-
-    /// 심볼릭 링크를 따라가지 않고 보통 파일인가.
-    pub(crate) fn is_regular_file_nofollow(path: &Path) -> bool {
-        std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
-    }
-
-    /// 심볼릭 링크를 따라가지 않고 디렉터리인가.
-    pub(crate) fn is_dir_nofollow(path: &Path) -> bool {
-        std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir())
-    }
-
-    /// 파일 이름 조각.
-    pub(crate) fn file_name_of(path: &Path) -> OsString {
-        path.file_name().map(|n| n.to_os_string()).unwrap_or_default()
-    }
-
     /// `shutil.move`: 이름 바꾸기가 안 되면(다른 장치) 복사 뒤 지운다.
     pub(crate) fn move_file(&self, from: &Path, to: &Path) -> io::Result<()> {
         match self.fs.rename(from, to) {
@@ -217,4 +197,24 @@ pub fn zip_path(dir: &str, href: &str) -> String {
 /// 상대 경로 문자열. 접두사를 못 떼면 `None`.
 pub fn relative_to(path: &Path, prefix: &Path) -> Option<String> {
     path.strip_prefix(prefix).ok().map(|p| p.to_string_lossy().into_owned())
+}
+
+/// `_is_top_level_target_category`.
+pub(crate) fn is_top_level_target_category(category: &str) -> bool {
+    !category.is_empty() && category != BookManager::ROOT_CATEGORY && !category.contains('/')
+}
+
+/// 심볼릭 링크를 따라가지 않고 보통 파일인가.
+pub(crate) fn is_regular_file_nofollow(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
+}
+
+/// 심볼릭 링크를 따라가지 않고 디렉터리인가.
+pub(crate) fn is_dir_nofollow(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir())
+}
+
+/// 파일 이름 조각.
+pub(crate) fn file_name_of(path: &Path) -> OsString {
+    path.file_name().map(|n| n.to_os_string()).unwrap_or_default()
 }

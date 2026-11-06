@@ -168,7 +168,7 @@ impl BookManager {
             while let Some(dir) = stack.pop() {
                 let Ok(entries) = self.fs.read_dir(&dir) else { continue };
                 for entry in entries {
-                    if Self::is_dir_nofollow(&entry) {
+                    if crate::path_validator::is_dir_nofollow(&entry) {
                         directory_count += 1;
                         stack.push(entry);
                     } else {

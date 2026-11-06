@@ -57,96 +57,6 @@ fn url_scheme(url: &str) -> String {
 }
 
 impl BookManager {
-    /// 뷰어 HTML에 붙이는 보안 헤더.
-    pub fn html_security_headers() -> Vec<(String, String)> {
-        html_security_headers()
-    }
-
-    /// HTML 안의 URL을 뷰어가 안전하게 열 수 있는 주소로 바꾼다. 쪽 안 이동(`#`)과 `data:`, `blob:`은 그대로 두고,
-    /// 상대 경로는 리소스 엔드포인트로 돌리고, 외부 주소(스킴이나 `//`로 시작)는 `None`이다.
-    pub fn build_html_resource_url(resource_base_url: &str, raw_path: &str) -> Option<String> {
-        let trimmed = raw_path.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        if trimmed.starts_with('#') {
-            return Some(trimmed.to_string());
-        }
-        let scheme = url_scheme(trimmed);
-        if scheme == "data" || scheme == "blob" {
-            return Some(trimmed.to_string());
-        }
-        if !scheme.is_empty() || trimmed.starts_with("//") {
-            return None;
-        }
-        Some(format!("{resource_base_url}?path={}", common::url_parser::quote_component(trimmed)))
-    }
-
-    /// 뷰어에 내보낼 HTML에서 활성 콘텐츠를 걷어내고 리소스 주소를 엔드포인트로 돌린다.
-    pub fn sanitize_html_for_viewer(html_content: &str, resource_base_url: &str) -> String {
-        let mut html = Html::parse_document(html_content);
-
-        // 1) 지울 노드: 활성 콘텐츠 태그, http-equiv가 있는 meta, 스타일시트가 아닌 link
-        let mut detach = Vec::new();
-        for node in html.tree.nodes() {
-            let Node::Element(element) = node.value() else { continue };
-            let name = element.name().to_ascii_lowercase();
-            let has = |attr: &str| element.attrs().any(|(k, v)| k.eq_ignore_ascii_case(attr) && !v.is_empty());
-            let remove = REMOVED_TAGS.contains(&name.as_str())
-                || (name == "meta" && has("http-equiv"))
-                || (name == "link" && !element.attr("rel").is_some_and(|rel| rel.split_whitespace().any(|r| r.eq_ignore_ascii_case("stylesheet"))));
-            if remove {
-                detach.push(node.id());
-            }
-        }
-        for id in detach {
-            if let Some(mut node) = html.tree.get_mut(id) {
-                node.detach();
-            }
-        }
-
-        // 2) 남은 요소: 위험한 속성을 지우고 URL을 고친다. rel 속성 이름표는 같은 파서가 만든 것을 빌려 쓴다.
-        let rel_name = Html::parse_fragment("<a rel=\"x\"></a>").tree.nodes().find_map(|n| if let Node::Element(e) = n.value() { e.attrs.iter().map(|(k, _)| k.clone()).next() } else { None });
-        let ids: Vec<_> = html.tree.nodes().filter(|n| n.value().is_element()).map(|n| n.id()).collect();
-        for id in ids {
-            let Some(mut node) = html.tree.get_mut(id) else { continue };
-            let Node::Element(element) = node.value() else { continue };
-            let is_anchor = element.name().eq_ignore_ascii_case("a");
-            element.attrs.retain(|(name, _)| {
-                let lowered = (*name.local).to_ascii_lowercase();
-                !(lowered.starts_with("on") || REMOVED_ATTRS.contains(&lowered.as_str()))
-            });
-            let mut kept: Vec<(_, StrTendril)> = Vec::new();
-            for (name, value) in element.attrs.drain(..) {
-                let lowered = (*name.local).to_ascii_lowercase();
-                if is_anchor {
-                    if lowered == "href" {
-                        // 링크는 쪽 안 이동(`#`)만 남긴다.
-                        match Self::build_html_resource_url(resource_base_url, &value) {
-                            Some(safe) if safe.starts_with('#') => kept.push((name, StrTendril::from(safe.as_str()))),
-                            _ => {}
-                        }
-                        continue;
-                    }
-                    if lowered == "rel" {
-                        continue;
-                    }
-                } else if URL_ATTRS.contains(&lowered.as_str()) && !value.is_empty() {
-                    if let Some(safe) = Self::build_html_resource_url(resource_base_url, &value) {
-                        kept.push((name, StrTendril::from(safe.as_str())));
-                    }
-                    continue;
-                }
-                kept.push((name, value));
-            }
-            if is_anchor && let Some(rel) = &rel_name {
-                kept.push((rel.clone(), StrTendril::from("nofollow noopener noreferrer")));
-            }
-            element.attrs.extend(kept);
-        }
-        html.html()
-    }
-
     /// `.html` 책 미리보기. 읽은 HTML을 걷어낸 뒤 보안 헤더와 함께 돌려준다.
     pub(super) fn preview_html(&self, book_id: i64, file_path: &Path, resource_base_url: &str) -> BookResponse {
         let read = || -> std::io::Result<Option<String>> {
@@ -161,7 +71,7 @@ impl BookManager {
         match read() {
             Ok(Some(content)) => {
                 let base = if resource_base_url.is_empty() { format!("/html-resource/{book_id}") } else { resource_base_url.to_string() };
-                BookResponse { status_code: 200, media_type: Some("text/html".to_string()), headers: html_security_headers(), body: Self::sanitize_html_for_viewer(&content, &base).into_bytes() }
+                BookResponse { status_code: 200, media_type: Some("text/html".to_string()), headers: html_security_headers(), body: sanitize_html_for_viewer(&content, &base).into_bytes() }
             }
             Ok(None) => text_response(413, "HTML file too large"),
             Err(e) => {
@@ -227,30 +137,115 @@ impl BookManager {
         };
         BookResponse { status_code: 200, media_type: Some(media_type_for_suffix(&suffix).to_string()), headers: html_security_headers(), body }
     }
+}
 
-    /// HTML과 SVG는 첨부로 내려 활성 콘텐츠가 API Origin에서 실행되지 않게 한다.
-    pub fn file_response_meta(path: &Path) -> (String, Vec<(String, String)>) {
-        let suffix = path.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default();
-        let media_type = media_type_for_suffix(&suffix).to_string();
-        // Content-Encoding: identity는 압축 미들웨어를, no-transform은 외부 프록시의 응답 변환을 막는다.
-        let mut headers = vec![("Content-Encoding".to_string(), "identity".to_string()), ("Cache-Control".to_string(), "no-transform".to_string())];
-        if suffix == ".svg" {
-            headers.extend(html_security_headers());
+/// HTML 안의 URL을 뷰어가 안전하게 열 수 있는 주소로 바꾼다. 쪽 안 이동(`#`)과 `data:`, `blob:`은 그대로 두고,
+/// 상대 경로는 리소스 엔드포인트로 돌리고, 외부 주소(스킴이나 `//`로 시작)는 `None`이다.
+pub fn build_html_resource_url(resource_base_url: &str, raw_path: &str) -> Option<String> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with('#') {
+        return Some(trimmed.to_string());
+    }
+    let scheme = url_scheme(trimmed);
+    if scheme == "data" || scheme == "blob" {
+        return Some(trimmed.to_string());
+    }
+    if !scheme.is_empty() || trimmed.starts_with("//") {
+        return None;
+    }
+    Some(format!("{resource_base_url}?path={}", common::url_parser::quote_component(trimmed)))
+}
+
+/// 뷰어에 내보낼 HTML에서 활성 콘텐츠를 걷어내고 리소스 주소를 엔드포인트로 돌린다.
+pub fn sanitize_html_for_viewer(html_content: &str, resource_base_url: &str) -> String {
+    let mut html = Html::parse_document(html_content);
+
+    // 1) 지울 노드: 활성 콘텐츠 태그, http-equiv가 있는 meta, 스타일시트가 아닌 link
+    let mut detach = Vec::new();
+    for node in html.tree.nodes() {
+        let Node::Element(element) = node.value() else { continue };
+        let name = element.name().to_ascii_lowercase();
+        let has = |attr: &str| element.attrs().any(|(k, v)| k.eq_ignore_ascii_case(attr) && !v.is_empty());
+        let remove = REMOVED_TAGS.contains(&name.as_str())
+            || (name == "meta" && has("http-equiv"))
+            || (name == "link" && !element.attr("rel").is_some_and(|rel| rel.split_whitespace().any(|r| r.eq_ignore_ascii_case("stylesheet"))));
+        if remove {
+            detach.push(node.id());
         }
-        if matches!(suffix.as_str(), ".html" | ".svg") {
-            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let disposition = if name.is_ascii() && !name.contains('"') && !name.contains('\\') {
-                format!("attachment; filename=\"{name}\"")
-            } else {
-                format!("attachment; filename*=utf-8''{}", common::url_parser::quote_component(&name))
-            };
-            headers.push(("Content-Disposition".to_string(), disposition));
+    }
+    for id in detach {
+        if let Some(mut node) = html.tree.get_mut(id) {
+            node.detach();
         }
-        (media_type, headers)
     }
 
-    /// 이 모듈이 본 적 있는 허용 확장자 집합(테스트용).
-    pub fn html_viewer_resource_extensions() -> HashSet<&'static str> {
-        HTML_VIEWER_RESOURCE_EXTENSIONS.iter().copied().collect()
+    // 2) 남은 요소: 위험한 속성을 지우고 URL을 고친다. rel 속성 이름표는 같은 파서가 만든 것을 빌려 쓴다.
+    let rel_name = Html::parse_fragment("<a rel=\"x\"></a>").tree.nodes().find_map(|n| if let Node::Element(e) = n.value() { e.attrs.iter().map(|(k, _)| k.clone()).next() } else { None });
+    let ids: Vec<_> = html.tree.nodes().filter(|n| n.value().is_element()).map(|n| n.id()).collect();
+    for id in ids {
+        let Some(mut node) = html.tree.get_mut(id) else { continue };
+        let Node::Element(element) = node.value() else { continue };
+        let is_anchor = element.name().eq_ignore_ascii_case("a");
+        element.attrs.retain(|(name, _)| {
+            let lowered = (*name.local).to_ascii_lowercase();
+            !(lowered.starts_with("on") || REMOVED_ATTRS.contains(&lowered.as_str()))
+        });
+        let mut kept: Vec<(_, StrTendril)> = Vec::new();
+        for (name, value) in element.attrs.drain(..) {
+            let lowered = (*name.local).to_ascii_lowercase();
+            if is_anchor {
+                if lowered == "href" {
+                    // 링크는 쪽 안 이동(`#`)만 남긴다.
+                    match build_html_resource_url(resource_base_url, &value) {
+                        Some(safe) if safe.starts_with('#') => kept.push((name, StrTendril::from(safe.as_str()))),
+                        _ => {}
+                    }
+                    continue;
+                }
+                if lowered == "rel" {
+                    continue;
+                }
+            } else if URL_ATTRS.contains(&lowered.as_str()) && !value.is_empty() {
+                if let Some(safe) = build_html_resource_url(resource_base_url, &value) {
+                    kept.push((name, StrTendril::from(safe.as_str())));
+                }
+                continue;
+            }
+            kept.push((name, value));
+        }
+        if is_anchor && let Some(rel) = &rel_name {
+            kept.push((rel.clone(), StrTendril::from("nofollow noopener noreferrer")));
+        }
+        element.attrs.extend(kept);
     }
+    html.html()
+}
+
+/// HTML과 SVG는 첨부로 내려 활성 콘텐츠가 API Origin에서 실행되지 않게 한다.
+pub fn file_response_meta(path: &Path) -> (String, Vec<(String, String)>) {
+    let suffix = path.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default();
+    let media_type = media_type_for_suffix(&suffix).to_string();
+    // Content-Encoding: identity는 압축 미들웨어를, no-transform은 외부 프록시의 응답 변환을 막는다.
+    let mut headers = vec![("Content-Encoding".to_string(), "identity".to_string()), ("Cache-Control".to_string(), "no-transform".to_string())];
+    if suffix == ".svg" {
+        headers.extend(html_security_headers());
+    }
+    if matches!(suffix.as_str(), ".html" | ".svg") {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let disposition = if name.is_ascii() && !name.contains('"') && !name.contains('\\') {
+            format!("attachment; filename=\"{name}\"")
+        } else {
+            format!("attachment; filename*=utf-8''{}", common::url_parser::quote_component(&name))
+        };
+        headers.push(("Content-Disposition".to_string(), disposition));
+    }
+    (media_type, headers)
+}
+
+/// 이 모듈이 본 적 있는 허용 확장자 집합(테스트용).
+pub fn html_viewer_resource_extensions() -> HashSet<&'static str> {
+    HTML_VIEWER_RESOURCE_EXTENSIONS.iter().copied().collect()
 }

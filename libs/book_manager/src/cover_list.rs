@@ -83,45 +83,9 @@ impl BookManager {
     pub const COVER_JPEG_QUALITY: u8 = 85;
     pub const COVER_CACHE_VERSION: u32 = 8;
 
-    /// 허용한 썸네일 폭만 통과시킨다. 임의 값이 캐시 파일을 무한히 늘리지 못하게 한다.
-    pub fn normalize_cover_width(width: Option<i64>) -> u32 {
-        match width {
-            Some(w) if Self::COVER_THUMBNAIL_WIDTHS.iter().any(|&allowed| i64::from(allowed) == w) => w as u32,
-            _ => Self::COVER_THUMBNAIL_WIDTH,
-        }
-    }
-
-    /// EPUB 표지 멤버 찾기(`find_epub_cover_member`).
-    /// EPUB 표지 이미지나 PDF 앞쪽 표지 쪽을 JPEG 썸네일로 만든다. 만들 수 없으면 `None`이다.
-    pub fn extract_cover_thumbnail(file_path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>> {
-        let width = Self::normalize_cover_width(width.map(i64::from));
-        match file_type {
-            "epub" => cover_manager::epub_cover::extract_epub_thumbnail(file_path, Some(width)),
-            "pdf" => cover_manager::pdf_cover::render_pdf_cover(file_path, width).and_then(|img| Self::encode_cover_jpeg(&img, width)),
-            _ => None,
-        }
-    }
-
-    /// `thumbnail((width, width * 10))`: 상자 안에 비율을 지켜 줄이고(키우지 않는다) JPEG로 쓴다.
-    fn encode_cover_jpeg(img: &RgbImage, width: u32) -> Option<Vec<u8>> {
-        let (w, h) = (img.width(), img.height());
-        let (bound_w, bound_h) = (width, width * 10);
-        let resized = if w <= bound_w && h <= bound_h {
-            DynamicImage::ImageRgb8(img.clone())
-        } else {
-            let scale = (f64::from(bound_w) / f64::from(w)).min(f64::from(bound_h) / f64::from(h));
-            let (nw, nh) = (((f64::from(w) * scale).round() as u32).max(1), ((f64::from(h) * scale).round() as u32).max(1));
-            DynamicImage::ImageRgb8(image::imageops::resize(img, nw, nh, image::imageops::FilterType::Lanczos3))
-        };
-        let mut out = Vec::new();
-        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(Cursor::new(&mut out), Self::COVER_JPEG_QUALITY);
-        resized.write_with_encoder(encoder).ok()?;
-        Some(out)
-    }
-
     /// EPUB 커버나 PDF 첫 쪽을 JPEG 썸네일로 돌려준다. 표지가 없거나 만들 수 없으면 404다.
     pub async fn get_cover(&self, book_id: i64, width: Option<i64>) -> BookResponse {
-        let width = Self::normalize_cover_width(width);
+        let width = normalize_cover_width(width);
         log::debug!("# get_cover(book_id={book_id}, width={width})");
         let doc = match self.find_doc_async(book_id).await {
             Ok(Some(doc)) => doc,
@@ -177,7 +141,7 @@ impl BookManager {
             }
             let data = match thumbnailer {
                 Some(extractor) => extractor.extract_cover_thumbnail(&path, &file_type, Some(width)),
-                None => Self::extract_cover_thumbnail(&path, &file_type, Some(width)),
+                None => extract_cover_thumbnail(&path, &file_type, Some(width)),
             };
             if let Some(bytes) = &data
                 && let Err(error) = std::fs::write(&cache_file, bytes)
@@ -275,4 +239,40 @@ impl BookManager {
         let next_cursor = has_more.then(|| encode_category_cursor(&[next_group_after, next_file_after]));
         Ok(CoverPage { items, total: Some(groups.len() + files_total.max(0) as usize), next_cursor })
     }
+}
+
+/// 허용한 썸네일 폭만 통과시킨다. 임의 값이 캐시 파일을 무한히 늘리지 못하게 한다.
+pub fn normalize_cover_width(width: Option<i64>) -> u32 {
+    match width {
+        Some(w) if BookManager::COVER_THUMBNAIL_WIDTHS.iter().any(|&allowed| i64::from(allowed) == w) => w as u32,
+        _ => BookManager::COVER_THUMBNAIL_WIDTH,
+    }
+}
+
+/// EPUB 표지 멤버 찾기(`find_epub_cover_member`).
+/// EPUB 표지 이미지나 PDF 앞쪽 표지 쪽을 JPEG 썸네일로 만든다. 만들 수 없으면 `None`이다.
+pub fn extract_cover_thumbnail(file_path: &Path, file_type: &str, width: Option<u32>) -> Option<Vec<u8>> {
+    let width = normalize_cover_width(width.map(i64::from));
+    match file_type {
+        "epub" => cover_manager::epub_cover::extract_epub_thumbnail(file_path, Some(width)),
+        "pdf" => cover_manager::pdf_cover::render_pdf_cover(file_path, width).and_then(|img| encode_cover_jpeg(&img, width)),
+        _ => None,
+    }
+}
+
+/// `thumbnail((width, width * 10))`: 상자 안에 비율을 지켜 줄이고(키우지 않는다) JPEG로 쓴다.
+fn encode_cover_jpeg(img: &RgbImage, width: u32) -> Option<Vec<u8>> {
+    let (w, h) = (img.width(), img.height());
+    let (bound_w, bound_h) = (width, width * 10);
+    let resized = if w <= bound_w && h <= bound_h {
+        DynamicImage::ImageRgb8(img.clone())
+    } else {
+        let scale = (f64::from(bound_w) / f64::from(w)).min(f64::from(bound_h) / f64::from(h));
+        let (nw, nh) = (((f64::from(w) * scale).round() as u32).max(1), ((f64::from(h) * scale).round() as u32).max(1));
+        DynamicImage::ImageRgb8(image::imageops::resize(img, nw, nh, image::imageops::FilterType::Lanczos3))
+    };
+    let mut out = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(Cursor::new(&mut out), BookManager::COVER_JPEG_QUALITY);
+    resized.write_with_encoder(encoder).ok()?;
+    Some(out)
 }

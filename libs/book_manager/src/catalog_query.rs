@@ -122,25 +122,10 @@ impl BookManager {
         Ok(BookPage { books: self.books_from_hits(&hits, false)?, total, next_cursor: None })
     }
 
-    /// 유사 문서 검색 인자. 요약은 앞 3500자만 쓴다.
-    fn similar_args(book_id: i64, doc: &Value) -> SimilarDocsArgs {
-        let text = |key: &str| doc.get(key).and_then(Value::as_str).unwrap_or("").to_string();
-        SimilarDocsArgs {
-            category: text("category"),
-            title: text("title"),
-            author: text("author"),
-            file_type: text("file_type"),
-            file_size: doc.get("file_size").and_then(Value::as_i64).unwrap_or(0),
-            summary: text("summary").chars().take(SIMILAR_SUMMARY_CHARS).collect(),
-            exclude_id: Some(book_id),
-            ..SimilarDocsArgs::default()
-        }
-    }
-
     pub async fn search_similar_books(&self, book_id: i64, max_result_count: i64) -> Result<Vec<Book>, String> {
         log::debug!("# search_similar_books(book_id={book_id})");
         let doc = self.find_doc_async(book_id).await?.ok_or_else(|| format!("No book found with id '{book_id}'"))?;
-        let args = SimilarDocsArgs { max_result_count, ..Self::similar_args(book_id, &doc) };
+        let args = SimilarDocsArgs { max_result_count, ..similar_args(book_id, &doc) };
         let hits = self.blocking(move |es| es.search_similar_docs(&args)).await.map_err(|e| e.to_string())?;
         if hits.is_empty() {
             return Err("No similar books found".to_string());
@@ -151,7 +136,7 @@ impl BookManager {
     pub async fn search_similar_books_paged(&self, book_id: i64, size: i64, offset: i64) -> Result<BookPage, String> {
         log::debug!("# search_similar_books_paged(book_id={book_id}, size={size}, offset={offset})");
         let doc = self.find_doc_async(book_id).await?.ok_or_else(|| format!("No book found with id '{book_id}'"))?;
-        let args = SimilarDocsArgs { size, offset, ..Self::similar_args(book_id, &doc) };
+        let args = SimilarDocsArgs { size, offset, ..similar_args(book_id, &doc) };
         let (hits, total) = self.blocking(move |es| es.search_similar_docs_paged(&args)).await.map_err(|e| e.to_string())?;
         if hits.is_empty() {
             return Err("No similar books found".to_string());
@@ -189,5 +174,20 @@ impl BookManager {
             AddBookError::Rejected(message) => message,
             AddBookError::Exception(e) => format!("can't add book '{}' to ElasticSearch: {e}", serde_json::to_string(data).unwrap_or_default()),
         })
+    }
+}
+
+/// 유사 문서 검색 인자. 요약은 앞 3500자만 쓴다.
+fn similar_args(book_id: i64, doc: &Value) -> SimilarDocsArgs {
+    let text = |key: &str| doc.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+    SimilarDocsArgs {
+        category: text("category"),
+        title: text("title"),
+        author: text("author"),
+        file_type: text("file_type"),
+        file_size: doc.get("file_size").and_then(Value::as_i64).unwrap_or(0),
+        summary: text("summary").chars().take(SIMILAR_SUMMARY_CHARS).collect(),
+        exclude_id: Some(book_id),
+        ..SimilarDocsArgs::default()
     }
 }

@@ -420,8 +420,11 @@ impl BookManager {
                 return Err(format!("최상위 디렉토리를 읽을 수 없습니다: {e}"));
             }
         };
-        let mut file_names: Vec<String> =
-            entries.iter().filter(|p| Self::is_regular_file_nofollow(p) && self.is_indexable_file_path(p)).map(|p| Self::file_name_of(p).to_string_lossy().into_owned()).collect();
+        let mut file_names: Vec<String> = entries
+            .iter()
+            .filter(|p| crate::path_validator::is_regular_file_nofollow(p) && self.is_indexable_file_path(p))
+            .map(|p| crate::path_validator::file_name_of(p).to_string_lossy().into_owned())
+            .collect();
         file_names.sort();
 
         let mut processed = 0usize;

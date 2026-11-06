@@ -89,16 +89,16 @@ async fn test_epub_unquoted_href_and_full_view() {
 /// XHTML 자기닫힘 `<title/>` 등이 HTML 파서에서 본문을 삼키지 않게 펴는지 검증.
 #[test]
 fn test_expands_self_closing_rcdata_tags() {
-    assert_eq!(BookManager::expand_self_closing_rcdata(b"<title/>"), b"<title></title>");
-    assert_eq!(BookManager::expand_self_closing_rcdata(b"<TITLE />"), b"<TITLE ></TITLE>");
-    assert_eq!(BookManager::expand_self_closing_rcdata(b"<script src=\"a.js\"/>"), b"<script src=\"a.js\"></script>");
-    assert_eq!(BookManager::expand_self_closing_rcdata(b"<style/><textarea/>"), b"<style></style><textarea></textarea>");
+    assert_eq!(book_manager::preview_builder::expand_self_closing_rcdata(b"<title/>"), b"<title></title>");
+    assert_eq!(book_manager::preview_builder::expand_self_closing_rcdata(b"<TITLE />"), b"<TITLE ></TITLE>");
+    assert_eq!(book_manager::preview_builder::expand_self_closing_rcdata(b"<script src=\"a.js\"/>"), b"<script src=\"a.js\"></script>");
+    assert_eq!(book_manager::preview_builder::expand_self_closing_rcdata(b"<style/><textarea/>"), b"<style></style><textarea></textarea>");
 }
 
 #[test]
 fn test_keeps_paired_and_unrelated_tags() {
     for data in [&b"<title>keep</title>"[..], b"<br/>", b"<img src=\"a.jpg\"/>", b"<titlebar/>"] {
-        assert_eq!(BookManager::expand_self_closing_rcdata(data), data, "data={}", String::from_utf8_lossy(data));
+        assert_eq!(book_manager::preview_builder::expand_self_closing_rcdata(data), data, "data={}", String::from_utf8_lossy(data));
     }
 }
 

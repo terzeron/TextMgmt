@@ -72,7 +72,7 @@ fn font_face_pattern() -> &'static Regex {
 }
 
 /// XHTML에서는 `<title/>`이 유효하지만 HTML 파서는 title/script/style/textarea의 자기닫힘 표기를 인정하지 않는다. 미리보기 산출물에서만 쌍으로 편다.
-fn expand_self_closing_rcdata(data: &[u8]) -> Vec<u8> {
+pub fn expand_self_closing_rcdata(data: &[u8]) -> Vec<u8> {
     static RE: OnceLock<regex::bytes::Regex> = OnceLock::new();
     let re = RE.get_or_init(|| regex::bytes::Regex::new(r"(?i)<(title|script|style|textarea)(\s[^<>]*?)?\s*/>").expect("정규식"));
     re.replace_all(data, &b"<${1}${2}></${1}>"[..]).into_owned()
@@ -109,11 +109,6 @@ pub const MAX_PDF_PAGE_RANGE: i64 = 50;
 impl BookManager {
     /// CJK CMap과 서버 글꼴을 보완하기 전에 생성한 PDF를 재사용하지 않는다.
     pub const PDF_PREVIEW_CACHE_VERSION: u32 = 3;
-
-    /// 공개 검증 지점. EPUB 미리보기의 HTML 호환 변환을 수행한다.
-    pub fn expand_self_closing_rcdata(data: &[u8]) -> Vec<u8> {
-        expand_self_closing_rcdata(data)
-    }
 
     fn mtime_of(&self, path: &Path) -> Option<SystemTime> {
         self.fs.metadata(path).ok().and_then(|m| m.modified().ok())

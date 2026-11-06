@@ -58,16 +58,16 @@ mod api_contract;
 mod book_updater;
 mod catalog_query;
 mod category_editor;
-mod category_proposer;
+pub mod category_proposer;
 mod category_reloader;
 mod cover_browse;
 mod cover_finder;
-mod cover_list;
+pub mod cover_list;
 mod es_doc_converter;
 mod file_reader;
 mod file_validator;
 pub use file_validator::{EpubMessage, EpubPublication, EpubSummary, EpubValidation, MessageLocation, PdfMessage, PdfPublication, PdfSummary, PdfValidation};
-mod html_previewer;
+pub mod html_previewer;
 mod mismatch_reporter;
 pub use category_editor::{CategoryDeletePreview, CategoryDeletion, CategoryRename};
 pub use category_proposer::{AppliedItem, ApplyResult, ApplyStatus, CategoryCandidate, ItemFailure, MoveAction, MoveOutcome, MoveStatus, Proposal, ProposalGrade, ProposalItem, ProposeResult};
@@ -408,18 +408,14 @@ impl BookManager {
     /// `from_env`와 같으나, 기본 대역 묶음을 `customize`로 고쳐 쓴다(예: loader 기반 `FileReader`를 꽂는다).
     pub fn from_env_with(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<BookManager, BookManagerError> {
         // 책 디렉터리가 없으면 ES에 연결하기 전에 멈춘다.
-        Self::book_dir(env)?;
+        book_dir(env)?;
         let es = es_factory(&env("TM_ES_BOOK_INDEX").unwrap_or_default());
         Self::from_env_with_es(env, es, customize)
     }
 
-    fn book_dir(env: EnvFn) -> Result<PathBuf, BookManagerError> {
-        env("TM_BOOK_DIR").map(PathBuf::from).ok_or_else(|| BookManagerError("The environment variable TM_BOOK_DIR is not set.".to_string()))
-    }
-
     /// 이미 연결한 ES manager로 운영 인스턴스를 만든다.
     pub fn from_env_with_es(env: EnvFn, es: Arc<dyn EsManagerApi>, customize: impl FnOnce(BookManagerDeps) -> BookManagerDeps) -> Result<BookManager, BookManagerError> {
-        let path_prefix = Self::book_dir(env)?;
+        let path_prefix = book_dir(env)?;
         log::debug!("{}", path_prefix.display());
         let index_name = env("TM_ES_BOOK_INDEX").unwrap_or_default();
         es.create_index().map_err(|e| BookManagerError(format!("create_index failed: {e}")))?;
@@ -478,4 +474,8 @@ fn strerror(e: &std::io::Error) -> String {
         Some(i) => text[..i].to_string(),
         None => text,
     }
+}
+
+fn book_dir(env: EnvFn) -> Result<PathBuf, BookManagerError> {
+    env("TM_BOOK_DIR").map(PathBuf::from).ok_or_else(|| BookManagerError("The environment variable TM_BOOK_DIR is not set.".to_string()))
 }

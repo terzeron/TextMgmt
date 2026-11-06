@@ -195,11 +195,6 @@ impl BookManager {
         Ok(collected)
     }
 
-    /// FS 스캔이 들어가지 않는 디렉터리는 ES 쪽에서도 빼야 한다.
-    fn is_scannable_category(category: &str) -> bool {
-        !category.split('/').any(file_indexer::ignore_rules::is_ignored_segment)
-    }
-
     /// 디렉터리마다 (카테고리, 색인 대상 파일의 상대 경로 집합)을 깊이 제한 없이 만든다. 디렉터리 하나씩 `visit`에 넘긴다.
     fn for_each_fs_category(&self, mut visit: impl FnMut(String, BTreeSet<String>)) {
         let mut stack: Vec<(PathBuf, String)> = vec![(self.path_prefix.clone(), Self::ROOT_CATEGORY.to_string())];
@@ -207,7 +202,7 @@ impl BookManager {
             let Ok(entries) = self.fs.read_dir(&dir_path) else { continue };
             let mut paths: BTreeSet<String> = BTreeSet::new();
             for entry in entries {
-                let name = Self::file_name_of(&entry).to_string_lossy().into_owned();
+                let name = crate::path_validator::file_name_of(&entry).to_string_lossy().into_owned();
                 let qualified = if category == Self::ROOT_CATEGORY { name.clone() } else { format!("{category}/{name}") };
                 match entry_kind(&entry) {
                     EntryKind::Dir => {
@@ -256,7 +251,7 @@ impl BookManager {
 
         // 디렉터리가 사라진 카테고리 - ES 문서 전부가 고아다.
         for (category, entry) in es_entries {
-            if !Self::is_scannable_category(&category) {
+            if !is_scannable_category(&category) {
                 continue;
             }
             stats.insert(category, Stat { es_count: entry.doc_count, fs_count: 0, es_only_count: entry.paths.len() as i64, fs_only_count: 0, duplicate_count: entry.duplicate_paths.len() as i64 });
@@ -347,8 +342,8 @@ impl BookManager {
         let mut fs_files: BTreeSet<String> = BTreeSet::new();
         if let Ok(entries) = self.fs.read_dir(&self.category_dir(category)) {
             for entry in entries {
-                if Self::is_regular_file_nofollow(&entry) && self.is_indexable_file_path(&entry) {
-                    let name = Self::file_name_of(&entry).to_string_lossy().into_owned();
+                if crate::path_validator::is_regular_file_nofollow(&entry) && self.is_indexable_file_path(&entry) {
+                    let name = crate::path_validator::file_name_of(&entry).to_string_lossy().into_owned();
                     fs_files.insert(if category == Self::ROOT_CATEGORY { name } else { format!("{category}/{name}") });
                 }
             }
@@ -397,4 +392,9 @@ impl BookManager {
             MismatchDetails { error: Some(e), ..MismatchDetails::default() }
         })
     }
+}
+
+/// FS 스캔이 들어가지 않는 디렉터리는 ES 쪽에서도 빼야 한다.
+fn is_scannable_category(category: &str) -> bool {
+    !category.split('/').any(file_indexer::ignore_rules::is_ignored_segment)
 }

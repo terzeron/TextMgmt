@@ -2488,7 +2488,7 @@ fn test_fill_missing_book_ids() {
 #[test]
 fn test_book_id_for_path_returns_none_when_file_is_gone() {
     let tmp = TempDir::new().unwrap();
-    assert_eq!(BookManager::book_id_for_path(&tmp.path().join("없는파일.txt")), None);
+    assert_eq!(book_manager::category_proposer::book_id_for_path(&tmp.path().join("없는파일.txt")), None);
 }
 
 /// propose_category_changes도 auto_classify_category와 같은 카테고리 이름 검증을 한다.

@@ -1299,7 +1299,7 @@ mod candidate_building {
     use super::common;
     use crate::common::dyn_es::make_manager;
     use crate::common::shared_fixtures::{category_with_files, outcome, split};
-    use book_manager::{BookManager, MoveAction, MoveOpts, MoveStatus};
+    use book_manager::{MoveAction, MoveOpts, MoveStatus};
     use classifier::BookClassifierApi;
     use common::es_fake::FakeEsManager;
     use serde_json::json;
@@ -1329,14 +1329,14 @@ mod candidate_building {
     fn test_model_decision_floor_ignores_unparsable_value() {
         // 파싱할 수 없는 값은 타입이 있는 API에서 `None`이다
         let service = StubService { min_confidence: None, accuracy: None };
-        assert_eq!(BookManager::model_decision_floor(&service), 0.0);
+        assert_eq!(book_manager::category_proposer::model_decision_floor(&service), 0.0);
     }
 
     #[test]
     fn test_expected_accuracy_swallows_calibration_errors() {
         // 보정 중 예외는 타입이 있는 API에서 `None`이다
         let service = StubService { min_confidence: None, accuracy: None };
-        assert_eq!(BookManager::expected_accuracy(&service, 0.9), None);
+        assert_eq!(book_manager::category_proposer::expected_accuracy(&service, 0.9), None);
     }
 
     #[test]
@@ -1367,12 +1367,12 @@ mod candidate_building {
 
     #[test]
     fn test_vote_count_returns_recorded_votes_for_known_category() {
-        assert_eq!(BookManager::vote_count_for("A", &[("B".to_string(), 5), ("A".to_string(), 3)]), 3);
+        assert_eq!(book_manager::category_proposer::vote_count_for("A", &[("B".to_string(), 5), ("A".to_string(), 3)]), 3);
     }
 
     #[test]
     fn test_vote_count_defaults_to_one_when_category_has_no_votes() {
-        assert_eq!(BookManager::vote_count_for("Z", &[("A".to_string(), 3)]), 1);
+        assert_eq!(book_manager::category_proposer::vote_count_for("Z", &[("A".to_string(), 3)]), 1);
     }
 
     // ---- 분류 제안 ----
@@ -1393,7 +1393,7 @@ mod candidate_building {
         let tmp = TempDir::new().unwrap();
         let source = tmp.path().join("a.txt");
         fs::write(&source, "x").unwrap();
-        assert!(!BookManager::is_duplicate_content(&source, &tmp.path().join("없음.txt")));
+        assert!(!book_manager::category_proposer::is_duplicate_content(&source, &tmp.path().join("없음.txt")));
     }
 
     #[test]
@@ -1402,7 +1402,7 @@ mod candidate_building {
         let tmp = TempDir::new().unwrap();
         let target = tmp.path().join("book.txt");
         fs::write(tmp.path().join("book (1).txt"), "x").unwrap();
-        let result = BookManager::next_numbered_path_with(&target, 1);
+        let result = book_manager::category_proposer::next_numbered_path_with(&target, 1);
         assert!(result.is_none());
     }
 

@@ -242,21 +242,21 @@ mod cover_member_lookup {
     fn test_find_epub_cover_member_returns_none_without_opf() {
         let tmp = TempDir::new().unwrap();
         let mut zin = epub_with(tmp.path(), &[("readme.txt", "x")]);
-        assert_eq!(BookManager::find_epub_cover_member(&mut zin), None);
+        assert_eq!(cover_manager::epub_cover::find_epub_cover_member(&mut zin), None);
     }
 
     #[test]
     fn test_find_epub_cover_member_returns_none_when_opf_member_is_missing() {
         let tmp = TempDir::new().unwrap();
         let mut zin = epub_with(tmp.path(), &[("META-INF/container.xml", CONTAINER)]);
-        assert_eq!(BookManager::find_epub_cover_member(&mut zin), None);
+        assert_eq!(cover_manager::epub_cover::find_epub_cover_member(&mut zin), None);
     }
 
     #[test]
     fn test_find_epub_cover_member_returns_none_when_opf_is_not_xml() {
         let tmp = TempDir::new().unwrap();
         let mut zin = epub_with(tmp.path(), &[("META-INF/container.xml", CONTAINER), ("OEBPS/content.opf", "xml 이 아닌 문자열")]);
-        assert_eq!(BookManager::find_epub_cover_member(&mut zin), None);
+        assert_eq!(cover_manager::epub_cover::find_epub_cover_member(&mut zin), None);
     }
 
     #[test]
@@ -268,7 +268,7 @@ mod cover_member_lookup {
     </package>"#;
         let tmp = TempDir::new().unwrap();
         let mut zin = epub_with(tmp.path(), &[("META-INF/container.xml", CONTAINER), ("OEBPS/content.opf", opf)]);
-        assert_eq!(BookManager::find_epub_cover_member(&mut zin).as_deref(), Some("OEBPS/img/c.png"));
+        assert_eq!(cover_manager::epub_cover::find_epub_cover_member(&mut zin).as_deref(), Some("OEBPS/img/c.png"));
     }
 
     #[test]
@@ -284,7 +284,7 @@ mod cover_member_lookup {
         let members = [("META-INF/container.xml", CONTAINER), ("OEBPS/content.opf", opf), ("OEBPS/Images/incover.jpg", "x"), ("OEBPS/Images/cover.jpg", "x")];
         let tmp = TempDir::new().unwrap();
         let mut zin = epub_with(tmp.path(), &members);
-        assert_eq!(BookManager::find_epub_cover_member(&mut zin).as_deref(), Some("OEBPS/Images/cover.jpg"));
+        assert_eq!(cover_manager::epub_cover::find_epub_cover_member(&mut zin).as_deref(), Some("OEBPS/Images/cover.jpg"));
     }
 
     #[test]
@@ -311,13 +311,13 @@ mod cover_member_lookup {
         ];
         let tmp = TempDir::new().unwrap();
         let mut zin = epub_with(tmp.path(), &members);
-        assert_eq!(BookManager::find_epub_cover_member(&mut zin).as_deref(), Some("OEBPS/images/img1.webp"));
+        assert_eq!(cover_manager::epub_cover::find_epub_cover_member(&mut zin).as_deref(), Some("OEBPS/images/img1.webp"));
     }
 
     #[test]
     fn test_extract_cover_thumbnail_ignores_unsupported_type() {
         let tmp = TempDir::new().unwrap();
-        assert_eq!(BookManager::extract_cover_thumbnail(&tmp.path().join("a.txt"), "txt", None), None);
+        assert_eq!(book_manager::cover_list::extract_cover_thumbnail(&tmp.path().join("a.txt"), "txt", None), None);
     }
 
     #[tokio::test]
@@ -545,7 +545,7 @@ mod cover_member_lookup {
         let pdf_path = tmp.path().join("tall.pdf");
         fs::write(&pdf_path, blank_pdf(66, 165)).unwrap();
 
-        let data = BookManager::extract_cover_thumbnail(&pdf_path, "pdf", Some(200)).expect("썸네일");
+        let data = book_manager::cover_list::extract_cover_thumbnail(&pdf_path, "pdf", Some(200)).expect("썸네일");
 
         assert_eq!(image::guess_format(&data).unwrap(), image::ImageFormat::Jpeg);
         let thumb = image::load_from_memory(&data).unwrap();
@@ -559,7 +559,7 @@ mod cover_member_lookup {
         let pdf_path = tmp.path().join("vector.pdf");
         fs::write(&pdf_path, vector_pdf()).unwrap();
 
-        let data = BookManager::extract_cover_thumbnail(&pdf_path, "pdf", Some(200)).expect("벡터 PDF 표지");
+        let data = book_manager::cover_list::extract_cover_thumbnail(&pdf_path, "pdf", Some(200)).expect("벡터 PDF 표지");
         let thumb = image::load_from_memory(&data).unwrap().to_rgb8();
 
         assert_eq!((thumb.width(), thumb.height()), (200, 300));
@@ -574,7 +574,7 @@ mod cover_member_lookup {
         append_large_unreferenced_stream(&pdf_path, &vector_pdf(), stream_size);
         assert!(fs::metadata(&pdf_path).unwrap().len() > 256 * 1024 * 1024);
 
-        let data = BookManager::extract_cover_thumbnail(&pdf_path, "pdf", Some(200)).expect("큰 PDF 첫 쪽 표지");
+        let data = book_manager::cover_list::extract_cover_thumbnail(&pdf_path, "pdf", Some(200)).expect("큰 PDF 첫 쪽 표지");
         let thumb = image::load_from_memory(&data).unwrap().to_rgb8();
 
         assert_eq!((thumb.width(), thumb.height()), (200, 300));
@@ -1088,7 +1088,7 @@ mod get_cover {
 
     #[test]
     fn test_normalize_cover_width_rejects_non_int() {
-        assert_eq!(BookManager::normalize_cover_width(json!(100).as_i64()), 100);
-        assert_eq!(BookManager::normalize_cover_width(json!("100").as_i64()), BookManager::COVER_THUMBNAIL_WIDTH);
+        assert_eq!(book_manager::cover_list::normalize_cover_width(json!(100).as_i64()), 100);
+        assert_eq!(book_manager::cover_list::normalize_cover_width(json!("100").as_i64()), BookManager::COVER_THUMBNAIL_WIDTH);
     }
 }
