@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use super::{BookManager, BookManagerDeps};
 use book_model::book_metadata::BookLookupError;
 use cover_manager::cover_management::{Backup, CoverHooks, CoverManagement, CoverSave};
-use cover_manager::direct_cover_url::ImageFetcher;
 use cover_manager::epub_cover::{self, CoverError, EpubCoverHooks};
+use image_processor::image_fetcher::ImageFetcher;
 
 /// 표지 편집이 저장 위치를 정할 때 쓰는 기본 휴지통 디렉터리 이름.
 pub const TRASH_DIRNAME: &str = "0_trash";
@@ -92,7 +92,7 @@ impl BookManager {
 impl BookManager {
     pub(super) fn pdf_edit_settings(&self) -> (String, Arc<dyn ImageFetcher>) {
         let ext = self.cover_ext();
-        (ext.trash_dirname.unwrap_or_else(|| TRASH_DIRNAME.into()), ext.image_fetcher.unwrap_or_else(|| Arc::new(cover_manager::direct_cover_url::RealImageFetcher)))
+        (ext.trash_dirname.unwrap_or_else(|| TRASH_DIRNAME.into()), ext.image_fetcher.unwrap_or_else(|| Arc::new(image_processor::image_fetcher::RealImageFetcher)))
     }
 
     pub(super) fn image_pixel_limit(&self) -> usize {

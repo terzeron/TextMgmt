@@ -22,7 +22,8 @@ docs/       문서
 | `auth_manager` | 인증: JWT 발급·검증과 역할 판정(`auth_service`), refresh token 저장·회전·세션 관리(`refresh_token_store`), Google ID 토큰 검증(`google_token_verifier`). 요청은 `http` crate 타입으로만 받고 axum을 모른다. backend 도메인 crate다 |
 | `book_model` | 책 도메인 모델: 메타데이터(`book_metadata`: `Book`, `BookView`, `BookPage`, 조회 오류, `ROOT_CATEGORY`)와 ES 문서에서 `Book` 만들기(`es_doc_converter`), 색인에서 뺄 코퍼스 디렉터리 규칙(`ignore_rules`). `book_manager`의 아래 계층이고, 상위 crate는 `book_manager::book_metadata`로 다시 내보낸 경로를 쓴다 |
 | `book_manager` | 책·만화 관리: 목록·검색·미리보기·편집·재적재·카테고리 제안(`BookManager`, crate 루트), 만화(`comics_manager`), PDF 리더·쪽 수 캐시(`pdf_reader_cache`), 미리보기용 EPUB 패키지 도구(`preview_builder::epub_package`). `cover_manager`·`search_manager`·`book_model`을 쓴다. 경로 검증과 파일 종류 판정은 `path_validator`에 있다. backend 도메인 crate다 |
-| `cover_manager` | 책 표지: 서점 표지 후보 검색·캐시·저장(`cover_management`, `cover_sources`), URL 이미지 받기(`direct_cover_url`), EPUB 표지 교체·이미지 편집(`epub_cover`), 표지 유무 판정(`cover_status`), PDF 표지 렌더링·빈 표지 판정(`pdf_cover`), 크롭 기하(`image_edit`). backend 도메인 crate다 |
+| `cover_manager` | 책 표지: 서점 표지 후보 검색·캐시·저장(`cover_management`, `cover_sources`), EPUB 표지 교체·이미지 편집(`epub_cover`), 표지 유무 판정(`cover_status`), PDF 표지 렌더링·빈 표지 판정(`pdf_cover`). 크롭 기하와 URL 이미지 받기는 `image_processor`를 쓴다. backend 도메인 crate다 |
+| `image_processor` | 이미지 공용 처리: 회전 크롭 기하(`image_cropper`), DNS로 검증한 IP에만 연결하는 URL 이미지 받기(`image_fetcher`), 이미지 크기·픽셀 상한. `cover_manager`와 `book_manager::pdf_edit`가 함께 쓴다 |
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. `search_manager`의 `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
 | `container_parser` | 문서 컨테이너의 바이트 수준 해석: 리틀엔디언 정수 읽기(`byte_reader`), OLE(CFB) 복합 문서와 VBA 프로젝트(`ole_parser`), 매직 바이트 형식 판별(`magic_sniffer`). 검사 판단은 하지 않는다. `doc_checker`의 아래 계층이다 |

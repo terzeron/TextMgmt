@@ -4,7 +4,7 @@
 
 pub mod html_dom;
 
-use crate::direct_cover_url::{is_global, system_resolve};
+use image_processor::image_fetcher::{is_global, system_resolve};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};

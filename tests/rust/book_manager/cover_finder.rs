@@ -119,7 +119,7 @@ mod download_failures {
     use crate::common::shared_fixtures::err_has;
     use std::fs;
 
-    use cover_manager::direct_cover_url::FetchError;
+    use image_processor::image_fetcher::FetchError;
 
     #[tokio::test]
     async fn test_download_failure_returns_the_reason_and_keeps_the_file() {

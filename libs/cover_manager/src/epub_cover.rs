@@ -51,8 +51,7 @@ pub fn member_path(base: &str, href: &str) -> String {
 pub const OPF_NS: &str = "http://www.idpf.org/2007/opf";
 pub const MAX_XML_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_EPUB_BYTES: usize = 1024 * 1024 * 1024;
-pub const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
-pub const MAX_IMAGE_PIXELS: usize = 80_000_000;
+pub use image_processor::{MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS};
 /// ZIP 항목 수 상한.
 pub const MAX_ENTRIES: usize = 20_000;
 
@@ -124,9 +123,9 @@ impl From<std::io::Error> for CoverError {
     }
 }
 
-impl From<crate::direct_cover_url::FetchError> for CoverError {
-    fn from(err: crate::direct_cover_url::FetchError) -> Self {
-        use crate::direct_cover_url::FetchError;
+impl From<image_processor::image_fetcher::FetchError> for CoverError {
+    fn from(err: image_processor::image_fetcher::FetchError) -> Self {
+        use image_processor::image_fetcher::FetchError;
         match err {
             FetchError::Value(message) => CoverError::new(&message),
             FetchError::Os(message) | FetchError::Other(message) => CoverError::io(&message),

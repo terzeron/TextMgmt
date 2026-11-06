@@ -21,8 +21,8 @@ use book_manager::{AddBookError, BookAdder, BookContent, BookLookup, BookManager
 use book_manager::{ApplyCategoryChanges, BookManagerApi, ProposeCategoryChanges, ReloadProgress};
 use book_manager::{ApplyResult, EpubValidation, PdfValidation, ProposeResult};
 use book_manager::{FsOnlyFile, MismatchDetails, MismatchReload, ReloadCounts, ReloadedFiles};
-use cover_manager::direct_cover_url::{FetchError, ImageFetcher};
 use db::category_mapping::CategoryMapping;
+use image_processor::image_fetcher::{FetchError, ImageFetcher};
 use search_manager::{EsError, EsManagerApi};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -566,10 +566,10 @@ impl FakeStore {
 
 pub type Fetch = Box<dyn Fn(&str) -> Result<Vec<u8>, FetchError> + Send + Sync>;
 
-pub struct FetchImage(pub Result<Vec<u8>, cover_manager::direct_cover_url::FetchError>);
+pub struct FetchImage(pub Result<Vec<u8>, image_processor::image_fetcher::FetchError>);
 
-impl cover_manager::direct_cover_url::ImageFetcher for FetchImage {
-    fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, cover_manager::direct_cover_url::FetchError> {
+impl image_processor::image_fetcher::ImageFetcher for FetchImage {
+    fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, image_processor::image_fetcher::FetchError> {
         assert_eq!(url, "https://example.com/image.png");
         self.0.clone()
     }

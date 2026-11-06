@@ -2,16 +2,12 @@
 //!
 //! - `cover_management`: 서점 표지 후보 검색·캐시·저장과 그 라우터 계약.
 //! - `cover_sources`: 서점별 표지 후보 추출.
-//! - `direct_cover_url`: URL에서 표지 이미지 받기.
 //! - `epub_cover`: EPUB 표지 교체, 본문 이미지 편집, 표지 멤버 찾기.
 //! - `cover_status`: PDF·EPUB 표지 유무 판정과 그 결과 저장(MySQL).
 //! - `pdf_cover`: PDF 표지 렌더링과 거의 빈 표지 판정. EPUB 표지 썸네일은 `epub_cover`에 있다.
-//! - `image_edit`: PDF 쪽 크롭과 EPUB 이미지 크롭이 함께 쓰는 크롭 기하.
 
 pub mod cover_management;
 pub mod cover_sources;
 pub mod cover_status;
-pub mod direct_cover_url;
 pub mod epub_cover;
-pub mod image_edit;
 pub mod pdf_cover;

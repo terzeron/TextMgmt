@@ -10,8 +10,8 @@ use book_manager::{BookManager, BookManagerDeps};
 use common::edits;
 use common::image::assert_approx;
 use common::pdf::{edit_pdf, first_image_size, first_xobject, first_xobject_mut, load, mediabox_of, page_dict, page_dict_mut, srgb_profile};
-use cover_manager::direct_cover_url::FetchError;
 use fx::{Edit, FetchBehavior, Opts, image_env, pixel_env};
+use image_processor::image_fetcher::FetchError;
 use lopdf::{Dictionary, Document, Object, Stream, dictionary};
 use serde_json::json;
 use std::fs;
@@ -39,7 +39,7 @@ async fn url_preview_is_the_same_jpeg_that_gets_inserted() {
 
 #[tokio::test]
 async fn url_preview_reports_safe_fetch_errors() {
-    use cover_manager::direct_cover_url::FetchError;
+    use image_processor::image_fetcher::FetchError;
     for (effect, expected) in [
         (FetchError::Value("내부 주소의 이미지는 사용할 수 없습니다".into()), "내부 주소의 이미지는 사용할 수 없습니다"),
         (FetchError::Os("dns error".into()), "이미지 서버 주소를 확인하지 못했습니다"),
@@ -81,7 +81,7 @@ mod upload_limits {
 async fn test_upload_preview_rejects_oversized_data() {
     let e = image_env(Opts::plain());
 
-    let (jpeg, error) = split(e.bm.preview_insert_upload(&vec![0u8; cover_manager::epub_cover::MAX_IMAGE_BYTES + 1]).await);
+    let (jpeg, error) = split(e.bm.preview_insert_upload(&vec![0u8; image_processor::MAX_IMAGE_BYTES + 1]).await);
 
     assert!(jpeg.is_none() && error_text(&error).contains("큽니다"), "{error:?}");
 }

@@ -6,9 +6,9 @@ use image::{DynamicImage, ImageDecoder, ImageFormat};
 use lopdf::{Document, Object, ObjectId, Stream, dictionary};
 use serde_json::Value;
 
-use cover_manager::direct_cover_url::ImageFetcher;
-use cover_manager::epub_cover::{MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS};
-use cover_manager::image_edit::{Rect, crop_rotated};
+use image_processor::image_cropper::{Rect, crop_rotated};
+use image_processor::image_fetcher::ImageFetcher;
+use image_processor::{MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS};
 
 pub(super) struct Edits {
     remove: BTreeSet<i64>,
@@ -126,7 +126,7 @@ impl Edits {
 }
 
 pub(super) fn download_image(fetcher: &dyn ImageFetcher, url: &str, max_image_pixels: usize) -> Result<Vec<u8>, String> {
-    use cover_manager::direct_cover_url::FetchError;
+    use image_processor::image_fetcher::FetchError;
     let bytes = fetcher.fetch_url_image(url).map_err(|error| match error {
         FetchError::Value(message) => message,
         FetchError::Os(_) => "이미지 서버 주소를 확인하지 못했습니다".into(),

@@ -27,9 +27,9 @@ use zip::ZipArchive;
 use crate::cover_sources::{
     CancelFn, GateError, STORES, SearchError, SearchHooks, SearchStatus, StoreCandidate, StoreGate, StoreSearch, blocked_status, build_search_url, search_candidates_with, store_hosts, store_lock_with,
 };
-use crate::direct_cover_url::{ImageFetcher, RealImageFetcher};
 use crate::epub_cover::{self, CoverError, CoverImageInfo, CreatedIdrefs, EpubCoverHooks, EpubInspection, EpubRewrite, MAX_IMAGE_BYTES};
 use common::url_parser::{Netloc, urlsplit};
+use image_processor::image_fetcher::{ImageFetcher, RealImageFetcher};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 

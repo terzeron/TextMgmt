@@ -19,7 +19,7 @@ use axum::extract::Path;
 use axum::extract::State;
 use axum::handler::Handler;
 use axum::response::Response;
-use cover_manager::epub_cover::MAX_IMAGE_BYTES;
+use book_manager::MAX_IMAGE_BYTES;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;

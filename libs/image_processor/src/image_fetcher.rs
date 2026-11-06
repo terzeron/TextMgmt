@@ -1,4 +1,4 @@
-//! 공개 이미지 URL을 검증한 IP에 직접 연결하여 내려받는다.
+//! 공개 이미지 URL을 검증한 IP에 직접 연결하여 내려받는다. 표지 후보와 PDF 쪽 교체 이미지가 같은 경로를 쓴다.
 //!
 //! DNS 조회와 연결 풀은 [`Net`] trait 뒤에 둔다(설계: docs/rust-test-seams.md 3.7).
 //! 연결 수준 계약이라 `common::http_client::HttpSession`과 합치지 않는다. 본문 읽기는 `BodyChunks`를 함께 쓴다. 연결은 DNS로 검증한 IP에만 하고, TLS 호스트명은 원래 호스트로 확인한다.
@@ -12,8 +12,7 @@ use std::time::Duration;
 use common::http_client::{BodyChunks, HttpTimeout};
 use common::url_parser::{Netloc, urljoin, urlsplit};
 
-/// `backend.epub_cover.MAX_IMAGE_BYTES`와 같다.
-pub const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
+pub use crate::MAX_IMAGE_BYTES;
 
 const MAX_REDIRECTS: usize = 5;
 

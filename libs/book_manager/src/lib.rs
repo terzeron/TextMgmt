@@ -50,6 +50,8 @@ pub use api_contract::UNIMPLEMENTED;
 pub use api_contract::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
 
 pub use book_model::book_metadata;
+/// 업로드·URL로 받는 이미지 한 장의 최대 바이트. 라우트의 본문 상한이 이 값에서 나온다.
+pub use image_processor::MAX_IMAGE_BYTES;
 pub mod comics_manager;
 pub mod pdf_reader_cache;
 

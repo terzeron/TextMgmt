@@ -236,6 +236,7 @@ dependencies = [
  "file_indexer",
  "flate2",
  "image",
+ "image_processor",
  "jpeg-encoder",
  "jsonwebtoken",
  "log",
@@ -428,6 +429,7 @@ dependencies = [
  "htmlkit",
  "hwp3_parser",
  "image",
+ "image_processor",
  "jpeg-encoder",
  "log",
  "lopdf",
@@ -781,8 +783,8 @@ dependencies = [
  "db",
  "es_client",
  "htmlkit",
- "idna",
  "image",
+ "image_processor",
  "log",
  "lopdf",
  "pdf_engine",
@@ -793,7 +795,6 @@ dependencies = [
  "sha2",
  "sysdeps",
  "tempfile",
- "ureq",
  "xml_recoverer",
  "zip",
 ]
@@ -2053,6 +2054,16 @@ checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
 dependencies = [
  "byteorder-lite",
  "quick-error",
+]
+
+[[package]]
+name = "image_processor"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "idna",
+ "image",
+ "ureq",
 ]
 
 [[package]]

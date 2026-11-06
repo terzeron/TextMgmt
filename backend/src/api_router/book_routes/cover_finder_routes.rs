@@ -16,7 +16,7 @@ use super::super::request_extractors::{ApiJson, RequireAdmin};
 use super::super::route_registry::Routes;
 use super::parse_book_id;
 use book_manager::BookManagerApi;
-use cover_manager::epub_cover::MAX_IMAGE_BYTES;
+use book_manager::MAX_IMAGE_BYTES;
 
 pub(super) fn routes() -> Routes {
     // base64 본문이 이미지 상한의 4/3배라서 axum의 기본 2MiB 상한을 넓힌다.

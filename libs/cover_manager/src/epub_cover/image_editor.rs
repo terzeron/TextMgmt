@@ -2,7 +2,7 @@
 //!
 //! 입력 검증:
 //! - 편집 항목 수(크롭·분할·삭제 각 500, 삽입 100)와 쪽 안 이미지 번호(0~10000)에 상한이 있다.
-//! - 크롭 영역은 숫자 5개(x0, y0, x1, y1, angle)여야 하고 유한해야 한다. 범위는 `image_edit::crop_rotated`이 확인한다.
+//! - 크롭 영역은 숫자 5개(x0, y0, x1, y1, angle)여야 하고 유한해야 한다. 범위는 `image_processor::image_cropper::crop_rotated`가 확인한다.
 //! - 읽는 이미지는 읽기 전에 바이트 크기(`max_image_bytes`)를, 디코딩 전에 화소 수(`max_image_pixels`)를 상한과 비교한다.
 //!   크롭 결과는 원본보다 커지지 않는다.
 //! - 편집으로 쌓는 멤버의 합이 `MAX_EDIT_OUTPUT_BYTES`를 넘으면 거절한다.
@@ -24,9 +24,9 @@ use super::member_path;
 use super::{
     CoverError, CreatedIdrefs, EpubCoverHooks, EpubRewrite, FResult, Fail, MAX_XML_BYTES, entry_names, entry_size, has_entry, normalize_image_with, read_dimensions, read_entry, read_package_with,
 };
-use crate::image_edit::{Rect, crop_rotated};
 use common::url_parser::quote;
 use common::xml_parser::{self, Element, Node};
+use image_processor::image_cropper::{Rect, crop_rotated};
 
 /// crops 의 idref 에 이 값을 주면 쪽이 아니라 표지 이미지를 자른다(표지 화면은 spine 항목이 아닐 수 있다).
 pub const COVER_TARGET: &str = "@cover";
