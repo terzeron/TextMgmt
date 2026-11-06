@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sysdeps::{Clock, EnvFn, SystemClock};
 
 use crate::{ConnectionProvider, DbConnection, DbError, DbValue, MysqlConfig, mysql_provider};
+use common::UNIMPLEMENTED;
 
 /// 사용자·콘텐츠 유형별로 보관하는 최근 조회 건수. 초과분은 기록 시점에 정리하므로
 /// 테이블 크기가 (사용자 수 × 유형 2 × 이 값)으로 고정되고 별도 purge가 필요 없다.
@@ -233,4 +234,44 @@ pub struct RecentViews {
 
 pub fn create_view_history_store() -> Result<ViewHistoryStore, ViewHistoryError> {
     ViewHistoryStore::new()
+}
+
+// ---------------------------------------------------------------------------
+// 라우트용 facade
+// ---------------------------------------------------------------------------
+
+/// 사용자별 조회 이력 저장소 facade. `ViewHistoryStore`가 구현한다.
+pub trait ViewHistoryApi: Send + Sync {
+    fn record_view(&self, _email: &str, _content_type: &str, _book_id: i64, _title: &str, _category: &str) -> Result<(), ViewHistoryError> {
+        Err(ViewHistoryError::Storage(UNIMPLEMENTED.to_string()))
+    }
+
+    fn list_recent_views(&self, _limit: usize) -> Result<RecentViews, ViewHistoryError> {
+        Err(ViewHistoryError::Storage(UNIMPLEMENTED.to_string()))
+    }
+}
+
+impl ViewHistoryApi for ViewHistoryStore {
+    fn record_view(&self, email: &str, content_type: &str, book_id: i64, title: &str, category: &str) -> Result<(), ViewHistoryError> {
+        ViewHistoryStore::record_view(self, email, content_type, book_id, title, category)
+    }
+
+    fn list_recent_views(&self, limit: usize) -> Result<RecentViews, ViewHistoryError> {
+        ViewHistoryStore::list_recent_views(self, limit)
+    }
+}
+
+#[cfg(test)]
+mod facade_tests {
+    use super::*;
+
+    struct EmptyViewHistory;
+
+    impl ViewHistoryApi for EmptyViewHistory {}
+
+    #[test]
+    fn view_history_defaults_are_explicit() {
+        assert!(EmptyViewHistory.record_view("a@b", "book", 1, "title", "category").is_err());
+        assert!(EmptyViewHistory.list_recent_views(5).is_err());
+    }
 }

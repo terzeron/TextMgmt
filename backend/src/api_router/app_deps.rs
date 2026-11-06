@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 
-use super::app_capabilities::{BookAccess, BookStub, CategoryMappingApi, UnavailableBookAccess, ViewHistoryApi};
+use super::app_capabilities::{BookAccess, BookStub, UnavailableBookAccess};
 use auth_manager::auth_service::{Claims, HttpStatusError};
 use auth_manager::auth_service::{EnvRoleResolver, JwtIssuer, RoleResolver, TokenIssuer};
 use auth_manager::google_token_verifier::{GoogleIdTokenVerifier, GoogleVerifier};
@@ -21,6 +21,8 @@ use book_manager::{BookManagerApi, UnavailableBookManager};
 use bookstore::store_clients::BookstoreSearch;
 use cover_manager::cover_management::CoverHooks;
 use db::category_mapping::CategoryMapping;
+use db::category_mapping::CategoryMappingApi;
+use db::view_history_store::ViewHistoryApi;
 use search_manager::{ESManager, EsManagerApi, RealEsConnector};
 use sysdeps::task_runner::{TaskRunner, ThreadRunner};
 

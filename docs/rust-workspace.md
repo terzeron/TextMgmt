@@ -31,7 +31,7 @@ docs/       문서
 | `common` | 여러 crate가 함께 쓰는 기능: HTTP 요청·응답과 `ureq` 구현(`http_client`), URL 나누기·잇기·인코딩(`url_parser`), JSON 필드 읽기(`json_field_reader`), 공격자가 정한 문자열을 출력용으로 정리하기(`text_sanitizer`), DTD를 허용하는 XML 해석과 고칠 수 있는 작은 XML 트리(`xml_parser`, 깨진 문서는 `xml_recoverer`로 고쳐 읽는다), ZIP 열기와 멤버 읽기 상한(`zip_reader`), panic 메시지 읽기(`panic_message`). 시스템 능력이나 특정 문서 형식에 속하지 않고 두 crate 이상이 쓰는 것만 둔다. `http_client`·`xml_parser`·`zip_reader`는 feature이고, 필요 없는 crate는 `default-features = false`로 끈다 |
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
 | `stat` | 색인·파싱 통계 카운터 |
-| `db` | MySQL 접근 추상화와 카테고리 매핑 저장소(`category_mapping`), 사용자별 최근 조회 이력 저장소(`view_history_store`) |
+| `db` | MySQL 접근 추상화와 저장소: 카테고리 매핑(`category_mapping`), 사용자별 최근 조회 이력(`view_history_store`). 각 저장소는 라우트가 쓰는 JSON 기반 facade(`CategoryMappingApi`, `ViewHistoryApi`)도 함께 구현한다 |
 | `classifier` | 도서 분류기 껍데기: backend 분류 제안이 쓰는 `Classify`·`BookClassifierApi` trait와 모델 단독 어댑터. 구현은 없어서 backend는 카테고리 매핑 키워드만으로 제안한다 |
 | `file_indexer` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리. 파일을 고쳐 쓰지 않는다(TXT 본문을 읽기 직전의 준비 단계는 호출자가 `ReadHooks::prepare_text`로 꽂는다). 색인 제외 디렉터리 규칙은 `book_model::ignore_rules`를 쓴다. loader와 book_manager가 함께 쓴다 |
 | `pdf_engine` | PDF 처리 능력: lopdf로 열기·쪽 추출(`pdf_page_reader`), MuPDF를 별도 프로세스에서 30초·512MiB 상한으로 돌리는 worker(`tm-pdf-worker`, 본체 `native_pdf`)와 호출 adapter(`pdf_worker_client`). 표지 이미지 처리는 `cover_manager::pdf_cover`가 맡는다. `doc_reader`·`doc_checker`·`cover_manager`·`book_manager`의 아래 계층이다 |

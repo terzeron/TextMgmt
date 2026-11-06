@@ -14,6 +14,7 @@ use chrono::{Local, NaiveDateTime};
 use serde_json::{Map, Value};
 
 use crate::{ConnectionProvider, DbConnection, DbError, DbValue, MysqlConfig, Row, mysql_provider};
+use common::UNIMPLEMENTED;
 
 /// 재적재 락의 heartbeat(updated_at)가 이 시간 이상 갱신되지 않으면 죽은 작업으로 본다.
 /// 총 소요 시간이 아니라 "최근에 살아있다는 신호"로 판정해야, 오래 걸리는 정상 재적재와 안 풀리는 죽은 락을 구분한다.
@@ -908,4 +909,337 @@ impl CategoryMapping {
 /// 카테고리가 숨긴 카테고리이거나 그 하위면 참이다. 모든 viewer 접근 검사가 이 판정 하나를 쓴다.
 pub fn is_hidden_category(category: &str, hidden: &[String]) -> bool {
     !category.is_empty() && hidden.iter().any(|h| category == h || category.strip_prefix(h.as_str()).is_some_and(|rest| rest.starts_with('/')))
+}
+
+// ---------------------------------------------------------------------------
+// 라우트용 facade: JSON 값으로 주고받는 `CategoryMappingApi`와 그 구현
+// ---------------------------------------------------------------------------
+
+/// 카테고리 매핑 facade의 오류. `Http`는 라우트가 그대로 응답으로 바꾼다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MappingError {
+    Http(u16, String),
+    Other(String),
+}
+
+impl fmt::Display for MappingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MappingError::Http(status, detail) => write!(f, "{status}: {detail}"),
+            MappingError::Other(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl std::error::Error for MappingError {}
+
+fn unimplemented_mapping<T>() -> Result<T, MappingError> {
+    Err(MappingError::Other(UNIMPLEMENTED.to_string()))
+}
+
+fn db_row_to_json(row: Row) -> Value {
+    Value::Object(row.iter().map(|(key, value)| (key.clone(), Value::from(value))).collect())
+}
+
+fn reload_counts(value: &Value) -> Result<Vec<(&str, i64)>, String> {
+    value
+        .as_object()
+        .ok_or_else(|| "재적재 진행 수치가 객체가 아닙니다".to_string())?
+        .iter()
+        .map(|(key, value)| value.as_i64().map(|count| (key.as_str(), count)).ok_or_else(|| format!("재적재 진행 수치가 정수가 아닙니다: {key}")))
+        .collect()
+}
+
+/// 카테고리 매핑 facade. 동기 메서드다. 지금은 viewer 접근 제어에 필요한 조회만 있다.
+pub trait CategoryMappingApi: Send + Sync {
+    fn acquire_reload_lock(&self, _content_type: &str, _category: Option<&str>, _reload_source: Option<&str>) -> Result<(bool, Option<String>, Option<Value>), MappingError> {
+        unimplemented_mapping()
+    }
+    fn heartbeat_reload_lock(&self, _content_type: &str, _category: Option<&str>, _counts: &Value) -> Result<(), String> {
+        Err(UNIMPLEMENTED.into())
+    }
+    fn complete_reload_lock(&self, _content_type: &str, _status: &str, _error: Option<&str>, _category: Option<&str>, _counts: &Value) -> Result<(), String> {
+        Err(UNIMPLEMENTED.into())
+    }
+    fn get_reload_status(&self, _content_type: &str, _category: Option<&str>) -> Result<Option<Value>, MappingError> {
+        unimplemented_mapping()
+    }
+    fn rename_category(&self, _old: &str, _new: &str, _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    /// 카테고리 → 키워드 목록.
+    fn get_all_mappings(&self, _content_type: &str) -> Result<BTreeMap<String, Vec<String>>, MappingError> {
+        unimplemented_mapping()
+    }
+    fn get_keywords(&self, _category: &str, _content_type: &str) -> Result<Vec<String>, MappingError> {
+        unimplemented_mapping()
+    }
+    fn set_keywords(&self, _category: &str, _keywords: &[String], _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn add_keyword(&self, _category: &str, _keyword: &str, _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn remove_keyword(&self, _category: &str, _keyword: &str, _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn delete_category(&self, _category: &str, _content_type: &str, _prefix: bool) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn update_all_mappings(&self, _mappings: &Value, _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn set_hidden(&self, _category: &str, _hidden: bool, _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn set_latest_excluded(&self, _category: &str, _excluded: bool, _content_type: &str) -> Result<bool, MappingError> {
+        unimplemented_mapping()
+    }
+    fn get_hidden_categories(&self, _content_type: &str) -> Result<Vec<String>, MappingError> {
+        unimplemented_mapping()
+    }
+
+    fn get_latest_excluded_categories(&self, _content_type: &str) -> Result<Vec<String>, MappingError> {
+        unimplemented_mapping()
+    }
+
+    fn get_classify_proposal_status(&self, _content_type: &str, _stale_seconds: i64) -> Result<Value, MappingError> {
+        unimplemented_mapping()
+    }
+    fn set_classify_proposal_status(&self, _status: Value, _content_type: &str) -> Result<(), MappingError> {
+        unimplemented_mapping()
+    }
+    fn merge_classify_proposal_status(&self, _fields: Value, _content_type: &str) -> Result<(), MappingError> {
+        unimplemented_mapping()
+    }
+    fn try_start_classify_proposal(&self, _status: Value, content_type: &str, _stale_seconds: i64) -> Result<(bool, Value), MappingError> {
+        Ok((false, self.get_classify_proposal_status(content_type, 900)?))
+    }
+    fn try_begin_classify_apply(&self, _apply_token: &str, content_type: &str, _stale_seconds: i64) -> Result<(bool, Value), MappingError> {
+        Ok((false, self.get_classify_proposal_status(content_type, 900)?))
+    }
+    fn clear_classify_proposal_items(&self, _content_type: &str) -> Result<(), MappingError> {
+        unimplemented_mapping()
+    }
+    fn get_classify_proposal_items(&self, _content_type: &str) -> Result<Vec<Value>, MappingError> {
+        unimplemented_mapping()
+    }
+    fn delete_classify_proposal_item(&self, _file_path: &str, _content_type: &str) -> Result<u64, MappingError> {
+        unimplemented_mapping()
+    }
+    fn delete_applied_classify_proposal_items(&self, _content_type: &str) -> Result<u64, MappingError> {
+        unimplemented_mapping()
+    }
+    fn add_classify_proposal_items(&self, _items: &[Value], _source_category: &str, _content_type: &str) -> Result<(), MappingError> {
+        unimplemented_mapping()
+    }
+    fn update_classify_proposal_item_payloads(&self, _items: &[Value], _content_type: &str) -> Result<(), MappingError> {
+        unimplemented_mapping()
+    }
+    fn update_classify_proposal_item_status(&self, _file_path: &str, _apply_status: &str, _apply_error: Option<&str>, _content_type: &str) -> Result<(), MappingError> {
+        unimplemented_mapping()
+    }
+}
+
+impl CategoryMappingApi for CategoryMapping {
+    fn acquire_reload_lock(&self, content_type: &str, category: Option<&str>, reload_source: Option<&str>) -> Result<(bool, Option<String>, Option<Value>), MappingError> {
+        CategoryMapping::acquire_reload_lock(self, content_type, category, reload_source)
+            .map(|(acquired, error, status)| (acquired, error, status.map(db_row_to_json)))
+            .map_err(|e| MappingError::Other(e.to_string()))
+    }
+
+    fn heartbeat_reload_lock(&self, content_type: &str, category: Option<&str>, counts: &Value) -> Result<(), String> {
+        let counts = reload_counts(counts)?;
+        CategoryMapping::heartbeat_reload_lock(self, content_type, category, &counts).map_err(|error| error.to_string())
+    }
+
+    fn complete_reload_lock(&self, content_type: &str, status: &str, error: Option<&str>, category: Option<&str>, counts: &Value) -> Result<(), String> {
+        let counts = reload_counts(counts)?;
+        CategoryMapping::complete_reload_lock(self, content_type, status, error, category, &counts).map_err(|error| error.to_string())
+    }
+
+    fn get_reload_status(&self, content_type: &str, category: Option<&str>) -> Result<Option<Value>, MappingError> {
+        CategoryMapping::get_reload_status(self, content_type, category).map(|row| row.map(db_row_to_json)).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn rename_category(&self, old: &str, new: &str, content_type: &str) -> Result<bool, MappingError> {
+        Ok(CategoryMapping::rename_category(self, old, new, content_type))
+    }
+    fn get_all_mappings(&self, content_type: &str) -> Result<BTreeMap<String, Vec<String>>, MappingError> {
+        CategoryMapping::get_all_mappings(self, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn get_keywords(&self, category: &str, content_type: &str) -> Result<Vec<String>, MappingError> {
+        CategoryMapping::get_keywords(self, category, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn set_keywords(&self, category: &str, keywords: &[String], content_type: &str) -> Result<bool, MappingError> {
+        Ok(CategoryMapping::set_keywords(self, category, &keywords.iter().map(String::as_str).collect::<Vec<_>>(), content_type))
+    }
+    fn add_keyword(&self, category: &str, keyword: &str, content_type: &str) -> Result<bool, MappingError> {
+        CategoryMapping::add_keyword(self, category, keyword, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn remove_keyword(&self, category: &str, keyword: &str, content_type: &str) -> Result<bool, MappingError> {
+        CategoryMapping::remove_keyword(self, category, keyword, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn delete_category(&self, category: &str, content_type: &str, prefix: bool) -> Result<bool, MappingError> {
+        CategoryMapping::delete_category(self, category, content_type, prefix).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn update_all_mappings(&self, mappings: &Value, content_type: &str) -> Result<bool, MappingError> {
+        let mappings = serde_json::from_value(mappings.clone()).map_err(|e| MappingError::Other(e.to_string()))?;
+        Ok(CategoryMapping::update_all_mappings(self, &mappings, content_type))
+    }
+    fn set_hidden(&self, category: &str, hidden: bool, content_type: &str) -> Result<bool, MappingError> {
+        CategoryMapping::set_hidden(self, category, hidden, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn set_latest_excluded(&self, category: &str, excluded: bool, content_type: &str) -> Result<bool, MappingError> {
+        CategoryMapping::set_latest_excluded(self, category, excluded, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn get_hidden_categories(&self, content_type: &str) -> Result<Vec<String>, MappingError> {
+        CategoryMapping::get_hidden_categories(self, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+
+    fn get_latest_excluded_categories(&self, content_type: &str) -> Result<Vec<String>, MappingError> {
+        CategoryMapping::get_latest_excluded_categories(self, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+
+    fn get_classify_proposal_status(&self, content_type: &str, stale_seconds: i64) -> Result<Value, MappingError> {
+        CategoryMapping::get_classify_proposal_status(self, content_type, stale_seconds).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn set_classify_proposal_status(&self, status: Value, content_type: &str) -> Result<(), MappingError> {
+        CategoryMapping::set_classify_proposal_status(self, &status, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn merge_classify_proposal_status(&self, fields: Value, content_type: &str) -> Result<(), MappingError> {
+        CategoryMapping::merge_classify_proposal_status(self, &fields, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn try_start_classify_proposal(&self, status: Value, content_type: &str, stale_seconds: i64) -> Result<(bool, Value), MappingError> {
+        CategoryMapping::try_start_classify_proposal(self, &status, content_type, stale_seconds).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn try_begin_classify_apply(&self, apply_token: &str, content_type: &str, stale_seconds: i64) -> Result<(bool, Value), MappingError> {
+        CategoryMapping::try_begin_classify_apply(self, apply_token, content_type, stale_seconds).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn clear_classify_proposal_items(&self, content_type: &str) -> Result<(), MappingError> {
+        CategoryMapping::clear_classify_proposal_items(self, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn get_classify_proposal_items(&self, content_type: &str) -> Result<Vec<Value>, MappingError> {
+        CategoryMapping::get_classify_proposal_items(self, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn delete_classify_proposal_item(&self, file_path: &str, content_type: &str) -> Result<u64, MappingError> {
+        CategoryMapping::delete_classify_proposal_item(self, file_path, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn delete_applied_classify_proposal_items(&self, content_type: &str) -> Result<u64, MappingError> {
+        CategoryMapping::delete_applied_classify_proposal_items(self, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn add_classify_proposal_items(&self, items: &[Value], source_category: &str, content_type: &str) -> Result<(), MappingError> {
+        CategoryMapping::add_classify_proposal_items(self, items, source_category, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn update_classify_proposal_item_payloads(&self, items: &[Value], content_type: &str) -> Result<(), MappingError> {
+        CategoryMapping::update_classify_proposal_item_payloads(self, items, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+    fn update_classify_proposal_item_status(&self, file_path: &str, apply_status: &str, apply_error: Option<&str>, content_type: &str) -> Result<(), MappingError> {
+        CategoryMapping::update_classify_proposal_item_status(self, file_path, apply_status, apply_error, content_type).map_err(|e| MappingError::Other(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod facade_tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::*;
+
+    struct EmptyMapping;
+
+    impl CategoryMappingApi for EmptyMapping {}
+
+    #[test]
+    fn category_mapping_defaults_report_unimplemented() {
+        let mapping = EmptyMapping;
+        let counts = json!({"indexed_count": 1});
+        let item = json!({"path": "/books/a.epub"});
+
+        assert!(mapping.acquire_reload_lock("book", None, None).is_err());
+        assert_eq!(mapping.heartbeat_reload_lock("book", None, &counts).unwrap_err(), UNIMPLEMENTED);
+        assert_eq!(mapping.complete_reload_lock("book", "done", None, None, &counts).unwrap_err(), UNIMPLEMENTED);
+        assert!(mapping.get_reload_status("book", None).is_err());
+        assert!(mapping.rename_category("old", "new", "book").is_err());
+        assert!(mapping.get_all_mappings("book").is_err());
+        assert!(mapping.get_keywords("fiction", "book").is_err());
+        assert!(mapping.set_keywords("fiction", &[], "book").is_err());
+        assert!(mapping.add_keyword("fiction", "word", "book").is_err());
+        assert!(mapping.remove_keyword("fiction", "word", "book").is_err());
+        assert!(mapping.delete_category("fiction", "book", false).is_err());
+        assert!(mapping.update_all_mappings(&json!({}), "book").is_err());
+        assert!(mapping.set_hidden("fiction", true, "book").is_err());
+        assert!(mapping.set_latest_excluded("fiction", true, "book").is_err());
+        assert!(mapping.get_hidden_categories("book").is_err());
+        assert!(mapping.get_latest_excluded_categories("book").is_err());
+        assert!(mapping.get_classify_proposal_status("book", 60).is_err());
+        assert!(mapping.set_classify_proposal_status(json!({}), "book").is_err());
+        assert!(mapping.merge_classify_proposal_status(json!({}), "book").is_err());
+        assert!(mapping.try_start_classify_proposal(json!({}), "book", 60).is_err());
+        assert!(mapping.try_begin_classify_apply("token", "book", 60).is_err());
+        assert!(mapping.clear_classify_proposal_items("book").is_err());
+        assert!(mapping.get_classify_proposal_items("book").is_err());
+        assert!(mapping.delete_classify_proposal_item("/a", "book").is_err());
+        assert!(mapping.delete_applied_classify_proposal_items("book").is_err());
+        assert!(mapping.add_classify_proposal_items(std::slice::from_ref(&item), "old", "book").is_err());
+        assert!(mapping.update_classify_proposal_item_payloads(&[item], "book").is_err());
+        assert!(mapping.update_classify_proposal_item_status("/a", "failed", None, "book").is_err());
+    }
+
+    #[test]
+    fn mapping_errors_format_http_and_other_messages() {
+        assert_eq!(MappingError::Http(409, "busy".into()).to_string(), "409: busy");
+        assert_eq!(MappingError::Other("broken".into()).to_string(), "broken");
+    }
+
+    #[test]
+    fn row_and_reload_progress_converters_cover_all_value_types_and_errors() {
+        let mut row = Row::new();
+        row.insert("null".into(), DbValue::Null);
+        row.insert("number".into(), DbValue::Int(7));
+        row.insert("text".into(), DbValue::Text("value".into()));
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 27).unwrap().and_hms_opt(1, 2, 3).unwrap();
+        row.insert("date".into(), DbValue::DateTime(date));
+        assert_eq!(db_row_to_json(row), json!({"null": null, "number": 7, "text": "value", "date": "2026-10-27 01:02:03"}));
+
+        assert_eq!(reload_counts(&json!({"done": 2, "failed": 0})).unwrap(), vec![("done", 2), ("failed", 0)]);
+        assert!(reload_counts(&json!([])).unwrap_err().contains("객체가 아닙니다"));
+        assert!(reload_counts(&json!({"done": "2"})).unwrap_err().contains("정수가 아닙니다: done"));
+    }
+
+    #[test]
+    fn concrete_category_mapping_adapter_forwards_database_errors() {
+        let mapping = CategoryMapping::with_connection_provider(Arc::new(|| Err(DbError::Other("offline".into()))));
+        let counts = json!({"indexed_count": 1});
+        let item = json!({"file_path": "/books/a.epub"});
+
+        assert!(CategoryMappingApi::acquire_reload_lock(&mapping, "book", None, None).is_err());
+        assert!(CategoryMappingApi::heartbeat_reload_lock(&mapping, "book", None, &counts).unwrap_err().contains("offline"));
+        assert!(CategoryMappingApi::complete_reload_lock(&mapping, "book", "done", None, None, &counts).unwrap_err().contains("offline"));
+        assert!(CategoryMappingApi::get_reload_status(&mapping, "book", None).is_err());
+        assert!(!CategoryMappingApi::rename_category(&mapping, "old", "new", "book").unwrap());
+        assert!(CategoryMappingApi::get_all_mappings(&mapping, "book").is_err());
+        assert!(CategoryMappingApi::get_keywords(&mapping, "fiction", "book").is_err());
+        assert!(!CategoryMappingApi::set_keywords(&mapping, "fiction", &[], "book").unwrap());
+        assert!(CategoryMappingApi::add_keyword(&mapping, "fiction", "word", "book").is_err());
+        assert!(CategoryMappingApi::remove_keyword(&mapping, "fiction", "word", "book").is_err());
+        assert!(CategoryMappingApi::delete_category(&mapping, "fiction", "book", false).is_err());
+        assert!(!CategoryMappingApi::update_all_mappings(&mapping, &json!({}), "book").unwrap());
+        assert!(!CategoryMappingApi::set_hidden(&mapping, "fiction", true, "book").unwrap());
+        assert!(!CategoryMappingApi::set_latest_excluded(&mapping, "fiction", true, "book").unwrap());
+        assert!(CategoryMappingApi::get_hidden_categories(&mapping, "book").is_err());
+        assert!(CategoryMappingApi::get_latest_excluded_categories(&mapping, "book").is_err());
+        assert!(CategoryMappingApi::get_classify_proposal_status(&mapping, "book", 60).is_err());
+        assert!(CategoryMappingApi::set_classify_proposal_status(&mapping, json!({}), "book").is_err());
+        assert!(CategoryMappingApi::merge_classify_proposal_status(&mapping, json!({"progress": 1}), "book").is_err());
+        assert!(CategoryMappingApi::try_start_classify_proposal(&mapping, json!({}), "book", 60).is_err());
+        assert!(CategoryMappingApi::try_begin_classify_apply(&mapping, "token", "book", 60).is_err());
+        assert!(CategoryMappingApi::clear_classify_proposal_items(&mapping, "book").is_err());
+        assert!(CategoryMappingApi::get_classify_proposal_items(&mapping, "book").is_err());
+        assert!(CategoryMappingApi::delete_classify_proposal_item(&mapping, "/a", "book").is_err());
+        assert!(CategoryMappingApi::delete_applied_classify_proposal_items(&mapping, "book").is_err());
+        assert!(CategoryMappingApi::add_classify_proposal_items(&mapping, std::slice::from_ref(&item), "old", "book").is_err());
+        assert!(CategoryMappingApi::update_classify_proposal_item_payloads(&mapping, &[item], "book").is_err());
+        assert!(CategoryMappingApi::update_classify_proposal_item_status(&mapping, "/a", "failed", None, "book").is_err());
+    }
 }

@@ -6,8 +6,7 @@ use std::time::{Duration, Instant};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde_json::Value;
 
-/// 기본 구현이 아직 없다는 오류 문구.
-pub const UNIMPLEMENTED: &str = "unimplemented";
+pub use common::UNIMPLEMENTED;
 
 /// Google ID 토큰 검증. `TM_GOOGLE_CLIENT_ID`를 audience로 쓴다.
 pub trait GoogleVerifier: Send + Sync {

@@ -1,8 +1,6 @@
 //! 책·만화 라우트. 하위 모듈은 그 라우트가 부르는 `book_manager` 모듈 이름을 따른다(예: `catalog_query_routes` → `book_manager::catalog_query`).
 //! 책 라우트가 함께 쓰는 helper(책 ID 해석, 숨김 카테고리 검사, 매니저 고르기, 응답 변환)는 이 파일에 둔다.
 
-use super::app_capabilities::CategoryMappingApi;
-use super::app_capabilities::MappingError;
 use super::app_deps::AppDeps;
 use super::error_responses::ApiError;
 use super::error_responses::ApiResult;
@@ -17,6 +15,8 @@ use book_manager::BookManagerApi;
 use book_manager::BookResponse;
 use book_manager::book_metadata::BookLookupError;
 use book_manager::book_metadata::{Book, BookView};
+use db::category_mapping::CategoryMappingApi;
+use db::category_mapping::MappingError;
 use db::category_mapping::is_hidden_category;
 use serde::Deserialize;
 use serde::Serialize;
