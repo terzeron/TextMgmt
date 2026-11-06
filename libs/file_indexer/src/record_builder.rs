@@ -12,7 +12,6 @@ use doc_reader::epub::{EpubPath, read_epub_publisher, read_from_epub};
 use doc_reader::pdf::{PDF_STAGE_TIMEOUT, StageRunner, fast_page_count, read_from_pdf};
 use doc_reader::text::{TextRead, read_from_text};
 use doc_reader::{markup, office, rtf};
-use doc_repairer::encoding_repairer::reencode_text_file_to_utf8;
 use serde_json::{Map, Value, json};
 use stat::Stat;
 
@@ -57,12 +56,16 @@ pub fn detect_file_type(path: &Path, declared: &str) -> Option<String> {
 pub type FileInspector<'a> = dyn Fn(&Path) -> Option<&'static str> + 'a;
 pub type PageCounter<'a> = dyn Fn(&Path) -> Option<usize> + 'a;
 pub type FallbackPageCounter<'a> = dyn Fn(&Path) -> Result<usize, sysdeps::timeout_runner::ParserTimeout> + 'a;
+/// TXT 본문을 읽기 직전에 부르는 준비 단계(파일 경로, 책 루트 기준 상대 경로). 돌려준 메시지는 읽기 결과에 남는다.
+/// loader의 `--reencode`가 여기서 파일을 UTF-8로 바꾼다.
+pub type TextPreparer<'a> = dyn Fn(&Path, &Path) -> Vec<String> + 'a;
 
 #[derive(Clone, Copy, Default)]
 pub struct ReadHooks<'a> {
     pub fast_page_count: Option<&'a PageCounter<'a>>,
     pub fallback_page_count: Option<&'a FallbackPageCounter<'a>>,
     pub inspect: Option<&'a FileInspector<'a>>,
+    pub prepare_text: Option<&'a TextPreparer<'a>>,
 }
 
 pub fn detect_file_type_with(path: &Path, declared: &str, inspect: Option<&FileInspector<'_>>) -> Option<String> {
@@ -217,15 +220,9 @@ pub fn read_file_with_hooks(
     let mut raw_content = String::new();
     match file_type.as_str() {
         "txt" => {
-            if cfg.reencode {
+            if let Some(prepare) = hooks.prepare_text {
                 let rel = path.strip_prefix(prefix).unwrap_or(Path::new(path.file_name().unwrap_or_default()));
-                let r = reencode_text_file_to_utf8(path, cfg.reencode_dry_run, cfg.reencode_backup_dir.as_deref(), rel);
-                if r.changed {
-                    let _ = stat.add("text_reencoded_count", 1.0);
-                    out.messages.push(format!("UTF-8 재인코딩: {}", r.reason));
-                } else if r.reason != "이미 UTF-8" && r.reason != "빈 파일" {
-                    out.messages.push(format!("UTF-8 재인코딩 건너뜀: {}", r.reason));
-                }
+                out.messages.extend(prepare(path, rel));
             }
             let t = Timed::start(stat, "text");
             let read = read_from_text(path).unwrap_or_else(|error| {

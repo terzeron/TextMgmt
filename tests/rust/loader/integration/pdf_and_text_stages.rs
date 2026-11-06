@@ -1378,22 +1378,28 @@ mod test_read_file_page_count_timeout {
 
 mod test_read_file_reencode_mode {
     use super::*;
+    use loader::batch_loader::ReencodeOptions;
 
-    // --reencode 모드에서 read_file이 적재 전에 파일을 UTF-8로 바꾼다 (1291-1297).
+    /// loader가 `--reencode`로 꽂는 준비 단계를 붙여 읽는다.
+    fn read_reencoding(cfg: &Config, path: &Path) -> ReadOutcome {
+        let (options, stat) = (ReencodeOptions::default(), Stat::new());
+        let prepare = |p: &Path, relative: &Path| options.reencode_before_read(&stat, p, relative);
+        read_file_with_hooks(cfg, path, None, false, None, &InProcess, &stat, &ReadHooks { prepare_text: Some(&prepare), ..ReadHooks::default() })
+    }
+
+    // --reencode 모드에서 loader의 준비 단계가 적재 전에 파일을 UTF-8로 바꾼다 (1291-1297).
 
     #[test]
     fn test_converted_file_is_logged() {
         let dir = tmp();
-        let mut cfg = config_for(dir.path(), &dir.path().join("comics"));
-        cfg.reencode = true;
-        cfg.reencode_dry_run = false;
+        let cfg = config_for(dir.path(), &dir.path().join("comics"));
 
         let f = dir.path().join("[작가] 제목.txt");
         let original = "한글 소설 본문입니다.\n둘째 줄\n";
         // original.encode("cp949")
         fs::write(&f, b"\xc7\xd1\xb1\xdb\x20\xbc\xd2\xbc\xb3\x20\xba\xbb\xb9\xae\xc0\xd4\xb4\xcf\xb4\xd9\x2e\x0a\xb5\xd1\xc2\xb0\x20\xc1\xd9\x0a").unwrap();
 
-        let data = read(&cfg, &f, false);
+        let data = read_reencoding(&cfg, &f);
 
         assert_eq!(String::from_utf8(fs::read(&f).unwrap()).unwrap(), original);
         assert!(data.item.is_some());
@@ -1404,15 +1410,13 @@ mod test_read_file_reencode_mode {
     fn test_skipped_file_is_logged_with_reason() {
         // 변환하지 못한 파일은 사유를 남긴다 (1296-1297).
         let dir = tmp();
-        let mut cfg = config_for(dir.path(), &dir.path().join("comics"));
-        cfg.reencode = true;
-        cfg.reencode_dry_run = false;
+        let cfg = config_for(dir.path(), &dir.path().join("comics"));
 
         let f = dir.path().join("broken.txt");
         let raw = [0x80u8, 0x81, 0xFE, 0xFF, 0x00, 0x9C, 0x90].repeat(40);
         fs::write(&f, &raw).unwrap();
 
-        let data = read(&cfg, &f, false);
+        let data = read_reencoding(&cfg, &f);
 
         assert_eq!(fs::read(&f).unwrap(), raw);
         assert!(messages_of(&data).contains("UTF-8 재인코딩 건너뜀:"));

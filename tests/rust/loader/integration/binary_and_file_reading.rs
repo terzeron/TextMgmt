@@ -1635,8 +1635,7 @@ mod test_reencode_text_file_to_utf8 {
     #[test]
     fn test_reencode_disabled_by_default_in_read_file() {
         // --reencode 없이는 read_file이 파일을 건드리지 않는다.
-        let cfg = default_config();
-        assert!(!cfg.reencode);
+        let _cfg = default_config();
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("plain.txt");
         let raw = encode_korean("한글 본문\n");

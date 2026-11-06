@@ -1394,7 +1394,6 @@ dependencies = [
  "chrono",
  "common",
  "doc_reader",
- "doc_repairer",
  "isbn_extractor",
  "lopdf",
  "serde_json",

@@ -12,7 +12,7 @@ use es_client::indexing::IndexStore;
 use file_indexer::child_process_runner::StageRunner;
 use stat::Stat;
 
-use crate::batch_loader::{BatchCounts, FILE_ARGUMENT_BATCH_SIZE, Loader, ProcessHooks, direct_files, recursive_files_with_unreadable, sample_files};
+use crate::batch_loader::{BatchCounts, FILE_ARGUMENT_BATCH_SIZE, Loader, ProcessHooks, ReencodeOptions, direct_files, recursive_files_with_unreadable, sample_files};
 use file_indexer::env_config::Config;
 use file_indexer::record_builder::ReadOutcome;
 
@@ -159,16 +159,14 @@ pub fn run_with_hooks(program: &str, args: &[String], world: &World, out: &mut d
             return 0;
         }
     };
-    let mut cfg = match Config::from_env(world.env) {
+    let cfg = match Config::from_env(world.env) {
         Ok(c) => c,
         Err(msg) => {
             eprintln!("ERROR {msg}");
             return 255;
         }
     };
-    cfg.reencode = options.reencode;
-    cfg.reencode_dry_run = options.reencode_dry_run;
-    cfg.reencode_backup_dir = options.reencode_backup_dir.clone();
+    let reencode = options.reencode.then(|| ReencodeOptions { dry_run: options.reencode_dry_run, backup_dir: options.reencode_backup_dir.clone() });
 
     let Some(index_arg) = options.positional.first() else {
         print_usage(program, out);
@@ -225,7 +223,7 @@ pub fn run_with_hooks(program: &str, args: &[String], world: &World, out: &mut d
     }
 
     let stat = Stat::global();
-    let loader = Loader { cfg: &cfg, es: es.as_ref(), runner: world.runner, stat };
+    let loader = Loader { cfg: &cfg, es: es.as_ref(), runner: world.runner, stat, reencode };
     let skip_text = index_arg == "comics";
     let process_hooks = ProcessHooks { read_file: hooks.read_file, stat: hooks.stat, on_worker_spawn: hooks.on_worker_spawn };
     let mut pending: Vec<PathBuf> = Vec::new();

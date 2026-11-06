@@ -11,16 +11,12 @@ pub struct Config {
     pub book_prefix: PathBuf,
     /// `TM_COMICS_DIR`
     pub comics_prefix: PathBuf,
-    /// `--reencode` 또는 `--reencode-dry-run`
-    pub reencode: bool,
-    pub reencode_dry_run: bool,
-    pub reencode_backup_dir: Option<PathBuf>,
     pub libreoffice: PathBuf,
 }
 
 impl Config {
     pub fn new(book_prefix: impl Into<PathBuf>, comics_prefix: impl Into<PathBuf>) -> Self {
-        Config { book_prefix: book_prefix.into(), comics_prefix: comics_prefix.into(), reencode: false, reencode_dry_run: false, reencode_backup_dir: None, libreoffice: find_libreoffice() }
+        Config { book_prefix: book_prefix.into(), comics_prefix: comics_prefix.into(), libreoffice: find_libreoffice() }
     }
 
     /// 환경변수에서 만든다. 빠진 변수가 있으면 그 이름을 담은 오류.

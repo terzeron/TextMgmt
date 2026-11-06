@@ -15,8 +15,9 @@ use file_indexer::child_process_runner::StageRunner;
 use serde_json::Value;
 use stat::Stat;
 
+use doc_repairer::encoding_repairer::reencode_text_file_to_utf8;
 use file_indexer::env_config::Config;
-use file_indexer::record_builder::{ReadOutcome, detect_file_type, read_file};
+use file_indexer::record_builder::{ReadHooks, ReadOutcome, detect_file_type, read_file_with_hooks};
 
 pub type BatchReadHook<'a> = dyn Fn(&Path, Option<&Metadata>, bool) -> ReadOutcome + Sync + 'a;
 pub type BatchStatHook<'a> = dyn Fn(&Path) -> std::io::Result<Metadata> + Sync + 'a;
@@ -64,12 +65,38 @@ fn iso_to_timestamp(text: &str) -> Option<f64> {
     Some(local.timestamp() as f64 + f64::from(local.timestamp_subsec_nanos()) / 1e9)
 }
 
+/// `--reencode` 설정. 색인하기 전에 UTF-8이 아닌 TXT를 제자리에서 UTF-8로 바꾼다.
+#[derive(Debug, Clone, Default)]
+pub struct ReencodeOptions {
+    /// 파일을 쓰지 않고 바꿀 내용만 보여 준다(`--reencode-dry-run`).
+    pub dry_run: bool,
+    /// 덮어쓰기 전에 원본을 복사해 둘 디렉터리(`--reencode-backup-dir`).
+    pub backup_dir: Option<PathBuf>,
+}
+
+impl ReencodeOptions {
+    /// `read_file`이 TXT 본문을 읽기 직전에 부르는 단계. 바꾼 사유나 건너뛴 사유를 메시지로 돌려준다.
+    pub fn reencode_before_read(&self, stat: &Stat, path: &Path, relative: &Path) -> Vec<String> {
+        let r = reencode_text_file_to_utf8(path, self.dry_run, self.backup_dir.as_deref(), relative);
+        if r.changed {
+            let _ = stat.add("text_reencoded_count", 1.0);
+            vec![format!("UTF-8 재인코딩: {}", r.reason)]
+        } else if r.reason != "이미 UTF-8" && r.reason != "빈 파일" {
+            vec![format!("UTF-8 재인코딩 건너뜀: {}", r.reason)]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 /// 적재 도구. ES와 PDF 단계 실행기를 바꿔 끼울 수 있다.
 pub struct Loader<'a> {
     pub cfg: &'a Config,
     pub es: &'a dyn IndexStore,
     pub runner: &'a (dyn StageRunner + Sync),
     pub stat: &'a Stat,
+    /// 있으면 TXT를 읽기 전에 UTF-8로 바꾼다.
+    pub reencode: Option<ReencodeOptions>,
 }
 
 /// 배치 처리 결과.
@@ -165,10 +192,14 @@ impl Loader<'_> {
             let results: Mutex<HashMap<i64, ReadOutcome>> = Mutex::new(HashMap::new());
             let next = AtomicUsize::new(0);
             // 작업 스레드는 ES를 쓰지 않으므로 필요한 것만 빌려 준다.
-            let (cfg, runner, stat) = (self.cfg, self.runner, self.stat);
+            let (cfg, runner, stat, reencode) = (self.cfg, self.runner, self.stat, self.reencode.as_ref());
+            let prepare = |path: &Path, relative: &Path| reencode.map(|r| r.reencode_before_read(stat, path, relative)).unwrap_or_default();
             let parse = |path: &Path, st: &Metadata| match hooks.read_file {
                 Some(read) => read(path, Some(st), skip_text),
-                None => read_file(cfg, path, Some(st), skip_text, None, runner, stat),
+                None => {
+                    let read_hooks = ReadHooks { prepare_text: reencode.is_some().then_some(&prepare as _), ..ReadHooks::default() };
+                    read_file_with_hooks(cfg, path, Some(st), skip_text, None, runner, stat, &read_hooks)
+                }
             };
             std::thread::scope(|scope| {
                 if !workers.is_empty() {

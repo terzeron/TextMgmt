@@ -14,7 +14,6 @@ fn from_env_names_the_first_missing_variable() {
     let config = Config::from_env(&both).unwrap();
     assert_eq!(config.book_prefix, Path::new("/books"));
     assert_eq!(config.comics_prefix, Path::new("/comics"));
-    assert!(!config.reencode && !config.reencode_dry_run && config.reencode_backup_dir.is_none());
 }
 
 #[test]

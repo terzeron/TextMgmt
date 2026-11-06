@@ -12,13 +12,13 @@ autotests = false
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 es_client = { path = "../../libs/es_client" }
 book_model = { path = "../../libs/book_model" }
+doc_repairer = { path = "../../libs/doc_repairer" }
 file_indexer = { path = "../../libs/file_indexer" }
 serde_json = { workspace = true, features = ["preserve_order"] }
 stat = { path = "../../libs/stat" }
 
 [dev-dependencies]
 # 테스트는 PDF 단계·파서를 직접 다룬다. 소스는 file_indexer를 거친다.
-doc_repairer = { path = "../../libs/doc_repairer" }
 doc_reader = { path = "../../libs/doc_reader" }
 encoding_rs = "0.8.35"
 hwp3_parser = { path = "../../libs/hwp3_parser" }
