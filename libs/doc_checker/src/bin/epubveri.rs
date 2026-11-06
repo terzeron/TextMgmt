@@ -1,3 +1,8 @@
+//! EPUB 표준 준수 검증 CLI. `epubveri` crate의 검증 결과를 epubcheck 형식 JSON으로 쓴다.
+//! `book_manager::file_validator`가 시간 상한을 두고 하위 프로세스로 부른다.
+//!
+//! 사용: `epubveri <epub> --json <report.json>`. 유효하면 0, 위반이 있으면 1, 실행 오류는 2로 끝난다.
+
 use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;

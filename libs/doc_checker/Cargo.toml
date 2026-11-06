@@ -1,10 +1,14 @@
 [package]
 name = "doc_checker"
-description = "문서 파일 검사 기법: EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표와 인코딩 손상 판정. 파일 하나를 받아 보고서를 돌려준다"
+description = "문서 파일 검사 기법: EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표와 인코딩 손상 판정. 파일 하나를 받아 보고서를 돌려준다. EPUB 표준 준수 검증 CLI(epubveri)를 함께 빌드한다"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 autotests = false
+
+[[bin]]
+name = "epubveri"
+path = "src/bin/epubveri.rs"
 
 [dependencies]
 pdf_engine = { path = "../pdf_engine" }
@@ -12,19 +16,22 @@ container_parser = { path = "../container_parser" }
 doc_reader = { path = "../doc_reader" }
 common = { path = "../common", default-features = false, features = ["xml_parser", "zip_reader"] }
 encoding_rs = "0.8.42"
+epubveri = "0.33.0"
 flate2 = "1"
 htmlkit = { path = "../htmlkit" }
 lopdf.workspace = true
 regex = "1.13.1"
 roxmltree = "0.21.1"
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
 sha2 = "0.11.1"
 sysdeps = { path = "../sysdeps" }
 text_decoder = { path = "../text_decoder" }
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-serde_json = { workspace = true, features = ["preserve_order"] }
+base64 = "0.23.1"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 tempfile = "3.27.0"
 
 [[test]]
@@ -130,3 +137,7 @@ path = "../../tests/rust/doc_checker/zipcheck.rs"
 [[test]]
 name = "exec_extension_table"
 path = "../../tests/rust/doc_checker/exec_extension_table.rs"
+
+[[test]]
+name = "integration_epubveri"
+path = "../../tests/rust/doc_checker/integration/epubveri.rs"

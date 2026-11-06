@@ -232,7 +232,6 @@ dependencies = [
  "cover_manager",
  "db",
  "doc_reader",
- "epubveri",
  "es_client",
  "fancy-regex",
  "file_indexer",
@@ -1121,12 +1120,15 @@ dependencies = [
 name = "doc_checker"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "common",
  "container_parser",
  "doc_reader",
  "encoding_rs",
+ "epubveri",
  "flate2",
  "htmlkit",
+ "image",
  "lopdf",
  "pdf_engine",
  "regex",

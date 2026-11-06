@@ -17,7 +17,7 @@ COPY utils /app/utils
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    cargo build --locked --profile image -p backend -p loader -p pdf_engine && \
+    cargo build --locked --profile image -p backend -p loader -p pdf_engine -p doc_checker && \
     mkdir -p /out && \
     cp target/image/backend target/image/loader target/image/epubveri target/image/tm-pdf-worker /out/
 

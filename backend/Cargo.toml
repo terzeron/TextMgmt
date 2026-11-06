@@ -13,17 +13,11 @@ path = "src/lib.rs"
 name = "backend"
 path = "src/bin/backend.rs"
 
-[[bin]]
-name = "epubveri"
-path = "src/bin/epubveri.rs"
-
 [dependencies]
 auth_manager = { path = "../libs/auth_manager" }
 book_manager = { path = "../libs/book_manager" }
 common = { path = "../libs/common" }
-doc_reader = { path = "../libs/doc_reader" }
 cover_manager = { path = "../libs/cover_manager" }
-epubveri = "0.33.0"
 search_manager = { path = "../libs/search_manager" }
 file_indexer = { path = "../libs/file_indexer" }
 fancy-regex = "0.14.0"
@@ -43,6 +37,7 @@ tokio-stream = "0.1.19"
 tokio-util = { version = "0.7.20", features = ["io"] }
 
 [dev-dependencies]
+doc_reader = { path = "../libs/doc_reader" }
 image_processor = { path = "../libs/image_processor" }
 pdf_engine = { path = "../libs/pdf_engine" }
 lopdf.workspace = true
