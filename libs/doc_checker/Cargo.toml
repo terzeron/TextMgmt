@@ -17,7 +17,6 @@ htmlkit = { path = "../htmlkit" }
 lopdf.workspace = true
 regex = "1.13.1"
 roxmltree = "0.21.1"
-scraper = "0.29.0"
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.11.1"
 sysdeps = { path = "../sysdeps" }
@@ -65,14 +64,6 @@ name = "mojibake_detector"
 path = "../../tests/rust/doc_checker/mojibake_detector.rs"
 
 [[test]]
-name = "encoding_repairer"
-path = "../../tests/rust/doc_checker/encoding_repairer.rs"
-
-[[test]]
-name = "pdf_pdf_sanitizer"
-path = "../../tests/rust/doc_checker/pdf/pdf_sanitizer.rs"
-
-[[test]]
 name = "pdf_security_checker"
 path = "../../tests/rust/doc_checker/pdf/security_checker.rs"
 
@@ -85,10 +76,6 @@ name = "nested_scanner"
 path = "../../tests/rust/doc_checker/nested_scanner.rs"
 
 [[test]]
-name = "defect_repairer"
-path = "../../tests/rust/doc_checker/defect_repairer.rs"
-
-[[test]]
 name = "rule_engine"
 path = "../../tests/rust/doc_checker/rule_engine.rs"
 
@@ -99,10 +86,6 @@ path = "../../tests/rust/doc_checker/rule_engine/builtin_rules.rs"
 [[test]]
 name = "rule_engine_rule_parser"
 path = "../../tests/rust/doc_checker/rule_engine/rule_parser.rs"
-
-[[test]]
-name = "epub_sanitizer"
-path = "../../tests/rust/doc_checker/epub_sanitizer.rs"
 
 [[test]]
 name = "format_dispatcher"

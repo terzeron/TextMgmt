@@ -1,3 +1,4 @@
+#[path = "../shared/doc_support/mod.rs"]
 mod support;
 use container_parser::magic_sniffer::Sniffed;
 use doc_checker::CheckOptions;

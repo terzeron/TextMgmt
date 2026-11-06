@@ -1,4 +1,4 @@
-#[path = "../support/mod.rs"]
+#[path = "../../shared/doc_support/mod.rs"]
 mod support;
 use crate::support::shared_fixtures::{binary, forge_declared_size};
 use doc_checker::CheckOptions;

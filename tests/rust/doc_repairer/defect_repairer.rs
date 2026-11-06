@@ -1,5 +1,6 @@
+#[path = "../shared/doc_support/mod.rs"]
 mod support;
-use doc_checker::defect_repairer::*;
+use doc_repairer::defect_repairer::*;
 
 const OLE_AS_UTF16_CHARS: &str = "\u{cfd0}\u{e011}\u{b1a1}\u{e11a}";
 const OLE_MAGIC: [u8; 8] = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
@@ -40,8 +41,8 @@ mod xhtml_fix {
 
     use crate::support::shared_fixtures::{epub_bytes, member, names};
     use crate::support::*;
-    use doc_checker::defect_repairer::{Verdict, rebuild, repair_markup, verify};
     use doc_checker::epub::render_checker::xhtml_defect;
+    use doc_repairer::defect_repairer::{Verdict, rebuild, repair_markup, verify};
 
     fn fixed(src: &str) -> String {
         let out = repair_markup(src);
@@ -160,7 +161,7 @@ mod xhtml_fix {
         format!(r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest>{manifest}{extra_manifest}</manifest><spine>{spine}</spine></package>"#)
     }
 
-    fn plan(v: Verdict) -> doc_checker::defect_repairer::Plan {
+    fn plan(v: Verdict) -> doc_repairer::defect_repairer::Plan {
         match v {
             Verdict::Fix(p) => p,
             Verdict::Delete(why) => panic!("삭제 후보로 판정했다: {why}"),

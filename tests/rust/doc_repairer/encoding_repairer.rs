@@ -1,6 +1,6 @@
-//! `doc_checker::encoding_repairer` 단위 테스트. 훅을 쓰는 시나리오는 loader 통합 테스트에 있다.
+//! `doc_repairer::encoding_repairer` 단위 테스트. 훅을 쓰는 시나리오는 loader 통합 테스트에 있다.
 
-use doc_checker::encoding_repairer::reencode_text_file_to_utf8;
+use doc_repairer::encoding_repairer::reencode_text_file_to_utf8;
 use std::fs;
 use std::path::Path;
 

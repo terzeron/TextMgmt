@@ -6,11 +6,8 @@
 
 use std::sync::Arc;
 
-pub mod defect_repairer;
 pub mod doc;
-pub mod encoding_repairer;
 pub mod epub;
-pub mod epub_sanitizer;
 pub mod exec_extension_table;
 pub mod finding_model;
 pub mod format_dispatcher;

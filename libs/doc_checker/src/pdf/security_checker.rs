@@ -46,7 +46,7 @@ mod document_loader;
 
 use document_loader::{FILTER_ARRAY_TRUNCATED_KEY, FILTER_KEEP_LEN, FILTER_TRUNCATED_KEY, STREAM_KEEP_BYTES};
 pub use document_loader::{LoadInfo, load};
-pub(crate) use document_loader::{REF_FILE_BUDGET, count_raw_references};
+pub use document_loader::{REF_FILE_BUDGET, count_raw_references};
 
 /// 한 스트림의 `/Filter` 배열이 이 길이 이상이면 `long filter chain`(Medium)이다. 계획 11행의 기준값이다.
 /// 정상 PDF의 체인은 보통 1~2단계(예: ASCII85+Flate)라서 5단계 이상은 해독 검사를 지치게 하려는 수법으로 본다. 경험적 값이다.

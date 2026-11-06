@@ -1,5 +1,6 @@
 //! `doc_checker::format_dispatcher` 단위 테스트.
 
+#[path = "../shared/doc_support/mod.rs"]
 mod support;
 use container_parser::magic_sniffer::Sniffed;
 use doc_checker::CheckOptions;

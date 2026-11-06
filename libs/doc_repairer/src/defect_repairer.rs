@@ -4,7 +4,6 @@
 //! 2. UTF-16LE로 읽혀 UTF-8로 저장된 바이너리(HWP·PDF·PNG가 `.txt`로 남은 것)를 원래 바이트와 확장자로 되돌린다.
 //!    옛 `quarantine_broken fix-ext`를 옮겨 왔다. 원본은 휴지통에 두고, 같은 inode에 덮어쓴 뒤 이름만 바꾼다(book_id가 inode다).
 
-use crate::epub::render_checker::xhtml_defect;
 use crate::epub_sanitizer::HTML_EXTS;
 use crate::epub_sanitizer::Member;
 use crate::epub_sanitizer::dangling;
@@ -19,6 +18,7 @@ use crate::epub_sanitizer::visible_text;
 use crate::epub_sanitizer::write_members;
 use common::url_parser::unquote;
 use common::zip_reader::zip_entry_name;
+use doc_checker::epub::render_checker::xhtml_defect;
 use regex::Regex;
 use scraper::Html;
 use scraper::Node;

@@ -1,19 +1,19 @@
 //! `repair`: 뷰어가 열지 못하는 결함을 고친다.
 //!
-//! 1. EPUB 본문 XHTML(`doc_checker::defect_repairer`의 재구성·검증).
+//! 1. EPUB 본문 XHTML(`doc_repairer::defect_repairer`의 재구성·검증).
 //! 2. UTF-16LE로 읽혀 UTF-8로 저장된 바이너리(HWP·PDF·PNG가 `.txt`로 남은 것)를 원래 바이트와 확장자로 되돌린다.
 //!    원본은 휴지통에 두고, 같은 inode에 덮어쓴 뒤 이름만 바꾼다(book_id가 inode다).
 //!
-//! 파일 순회와 적용은 여기서 하고, 판별·재구성 기법은 `doc_checker::defect_repairer`에 있다.
+//! 파일 순회와 적용은 여기서 하고, 판별·재구성 기법은 `doc_repairer::defect_repairer`에 있다.
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use common::text_sanitizer::sanitize_display;
-use doc_checker::defect_repairer::{self, Verdict};
-use doc_checker::defect_repairer::{true_extension_with, unmangle_utf16};
 use doc_checker::format_dispatcher::scan_file;
+use doc_repairer::defect_repairer::{self, Verdict};
+use doc_repairer::defect_repairer::{true_extension_with, unmangle_utf16};
 
 use crate::FileReport;
 use crate::file_rewriter::{apply, apply_and_report, has_serious_security, rescan_bytes};

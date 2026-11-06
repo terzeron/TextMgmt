@@ -1,5 +1,6 @@
 //! `doc_checker::rule_engine` 단위 테스트.
 
+#[path = "../shared/doc_support/mod.rs"]
 mod support;
 use doc_checker::CheckOptions;
 use doc_checker::format_dispatcher::scan_file;

@@ -1,6 +1,6 @@
 //! 내장 규칙 테스트. 규칙마다 양성과 음성 두 가지를 확인한다.
 
-#[path = "../support/mod.rs"]
+#[path = "../../shared/doc_support/mod.rs"]
 mod support;
 
 use std::collections::HashSet;

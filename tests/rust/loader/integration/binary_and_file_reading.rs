@@ -6,7 +6,7 @@
 //! 설계: docs/rust-test-seams.md 3.12, 3.13, 4.2. loader/doc_reader의 `_with`는 `*_with(args, &XxxHooks)` 구조체 하나로 통일했다(pdf_and_text_stages.rs와 같은 이름·필드).
 //!   훅은 모두 `Option<&dyn Fn(..)>` 필드이고 `Default`로 안 쓰는 훅을 생략한다.
 //! - `doc_reader::text::{TextHooks, read_from_text_with(&Path, &TextHooks) -> Result<TextRead, String>}`,
-//!   `doc_checker::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8_with(&Path, dry_run, backup_dir, relative, &ReencodeHooks) -> Reencode}`
+//!   `doc_repairer::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8_with(&Path, dry_run, backup_dir, relative, &ReencodeHooks) -> Reencode}`
 //!   `ReencodeHooks { detect (chardet 대체), write_backup (백업 쓰기 대체), read_bytes (원본 읽기와 저장 후 재읽기 대체), .. }`.
 //!   `write_backup: Fn(&Path, &[u8]) -> io::Result<()>`, `read_bytes: Fn(&Path) -> io::Result<Vec<u8>>`. 구 `ReencodeIo`를 흡수한다.
 //! - `doc_reader::pdf::{collect_pages, find_xref_offset, apply_png_predictor, xref_stream_find_entry}`를 `pub`으로 연 것
@@ -34,7 +34,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::shared_fixtures::{config_with_book, test_env, tests_root, write};
-use doc_checker::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8, reencode_text_file_to_utf8_with};
 use doc_reader::TEXT_SIZE;
 use doc_reader::epub::{read_from_epub, read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using};
 use doc_reader::markup::{count_lines, read_from_html};
@@ -47,6 +46,7 @@ use doc_reader::pdf::{
 };
 use doc_reader::rtf::read_from_rtf_text;
 use doc_reader::text::{TextHooks, TextRead, read_from_text, read_from_text_with};
+use doc_repairer::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8, reencode_text_file_to_utf8_with};
 use file_indexer::env_config::Config;
 use file_indexer::record_builder::{ReadHooks, detect_file_type, read_file, read_file_with_hooks};
 use serde_json::Value;
@@ -1105,7 +1105,7 @@ fn encode_named(name: &str, text: &str) -> Vec<u8> {
 }
 
 /// 제자리 재인코딩을 기본 옵션으로 호출한다. 원본이 `Loader.path_prefix` 밖의 파일에 쓰는 상대 경로는 파일 이름이다.
-fn reencode(f: &Path) -> doc_checker::encoding_repairer::Reencode {
+fn reencode(f: &Path) -> doc_repairer::encoding_repairer::Reencode {
     reencode_text_file_to_utf8(f, false, None, Path::new(f.file_name().unwrap()))
 }
 

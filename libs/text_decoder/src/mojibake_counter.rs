@@ -1,6 +1,6 @@
 //! 추출한 글에서 EUC-KR 바이트를 latin-1로 잘못 읽은 손상 구간을 센다. 파일을 읽지 않고 글만 본다.
 //!
-//! PDF 추출 결과를 쓸 수 있는지(`doc_reader`)와 TXT 재인코딩 결과가 맞는지(`doc_checker::encoding_repairer`)를 판정할 때 쓴다.
+//! PDF 추출 결과를 쓸 수 있는지(`doc_reader`)와 TXT 재인코딩 결과가 맞는지(`doc_repairer::encoding_repairer`)를 판정할 때 쓴다.
 //! 파일 단위 손상 판정(`korean_likeness` 기준)은 `doc_checker::mojibake_detector`에 있다.
 
 use crate::{decode_korean_ignore, head_chars, is_hangul_syllable};

@@ -1,5 +1,5 @@
 //! 인코딩 이름([`Enc`])과 엄격·관대 디코딩, 같은 인코딩으로 다시 인코딩하기.
-//! TXT 읽기(`doc_reader::text`)와 TXT 재인코딩(`doc_checker::encoding_repairer`)이 함께 쓴다.
+//! TXT 읽기(`doc_reader::text`)와 TXT 재인코딩(`doc_repairer::encoding_repairer`)이 함께 쓴다.
 
 use encoding_rs::{EUC_KR, WINDOWS_1252};
 

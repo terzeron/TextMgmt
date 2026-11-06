@@ -1,6 +1,6 @@
 [package]
 name = "bookdoctor"
-description = "EPUB·PDF·TXT 통합 진단 도구: 명령행, 파일 순회·병렬 실행, 정리·수리 적용, 보고 출력. 검사·교정 기법은 doc_checker"
+description = "EPUB·PDF·TXT 통합 진단 도구: 명령행, 파일 순회·병렬 실행, 정리·수리 적용, 보고 출력. 검사 기법은 doc_checker, 교정 기법은 doc_repairer"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -10,6 +10,7 @@ autotests = false
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 common = { path = "../../libs/common", default-features = false }
 doc_checker = { path = "../../libs/doc_checker" }
+doc_repairer = { path = "../../libs/doc_repairer" }
 rayon = "1.12.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }

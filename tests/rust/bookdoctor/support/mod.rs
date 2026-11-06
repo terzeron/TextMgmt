@@ -1,7 +1,7 @@
 //! bookdoctor 테스트 준비물. 검사 준비물은 doc_checker 테스트의 것을 그대로 쓰고, 명령행 실행만 더한다.
 #![allow(dead_code)]
 
-#[path = "../../doc_checker/support/mod.rs"]
+#[path = "../../shared/doc_support/mod.rs"]
 mod checker;
 #[allow(unused_imports)] // 테스트 바이너리마다 쓰는 준비물이 다르다.
 pub use checker::*;

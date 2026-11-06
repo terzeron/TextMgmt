@@ -1,6 +1,5 @@
 //! PDF 검사: 보안(`security`)과 구조·렌더링(`structure`).
 
-pub mod pdf_sanitizer;
 pub mod security_checker;
 pub mod structure_checker;
 

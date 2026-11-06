@@ -1,6 +1,6 @@
 //! PDF `--sanitize`: 위험한 동작과 스크립트를 지우고 다시 쓴다. 쪽 수와 쪽 내용 보존, 보안 재검사, 휴지통 보관과 제자리 덮어쓰기.
 
-#[path = "../support/mod.rs"]
+#[path = "../shared/doc_support/mod.rs"]
 mod support;
 
 use std::fs;
@@ -8,8 +8,8 @@ use std::fs;
 use crate::support::shared_fixtures::pdf;
 use doc_checker::CheckOptions;
 use doc_checker::format_dispatcher::scan_file;
-use doc_checker::pdf::pdf_sanitizer::{rebuild, verify};
 use doc_checker::{Category, Severity};
+use doc_repairer::pdf_sanitizer::{rebuild, verify};
 use lopdf::Document;
 
 const CONTENT: &str = "BT /F1 12 Tf 10 20 Td (Hello world) Tj ET";

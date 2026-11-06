@@ -1,15 +1,15 @@
 //! `--sanitize`: 보안 지표가 있는 EPUB·PDF를 허용 목록으로 다시 쓴다.
 //!
 //! 파일을 모으고, 검사하고, `doc_checker`의 재구성(`rebuild`)과 검증(`verify`)을 거친 뒤 재검사하고 적용한다.
-//! 재구성 기법은 `doc_checker::epub_sanitizer`와 `doc_checker::pdf::pdf_sanitizer`에 있다.
+//! 재구성 기법은 `doc_repairer::epub_sanitizer`와 `doc_repairer::pdf_sanitizer`에 있다.
 
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 
-use doc_checker::epub_sanitizer;
 use doc_checker::format_dispatcher::scan_file;
-use doc_checker::pdf::pdf_sanitizer;
+use doc_repairer::epub_sanitizer;
+use doc_repairer::pdf_sanitizer;
 
 use crate::file_rewriter::{apply_and_report, has_serious_security, rescan_bytes};
 use crate::option_model::Options;

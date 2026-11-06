@@ -26,7 +26,8 @@ docs/       문서
 | `es_client` | Elasticsearch REST 클라이언트: HTTP와 인증서 검증 HTTPS, 검색·갱신·조회·삭제. `search_manager`의 `ESManager`가 쓰는 저수준 전송(`transport`)과 공용 `EsError`도 여기 있다 |
 | `htmlkit` | HTML 토큰화와 텍스트 추출 |
 | `container_parser` | 문서 컨테이너의 바이트 수준 해석: 리틀엔디언 정수 읽기(`byte_reader`), OLE(CFB) 복합 문서와 VBA 프로젝트(`ole_parser`), 매직 바이트 형식 판별(`magic_sniffer`). 검사 판단은 하지 않는다. `doc_checker`의 아래 계층이다 |
-| `doc_checker` | 문서 파일 검사와 교정 기법. EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표(`format_dispatcher::scan_file`), 보안 정리(`epub_sanitizer`, `pdf::pdf_sanitizer`)와 결함 수리(`defect_repairer`)의 재구성·검증, TXT의 UTF-8 재인코딩(`encoding_repairer`), 인코딩 손상 판정(`mojibake_detector`, 표본은 `doc_reader::head_tail_reader`). 컨테이너 바이트 해석은 `container_parser`를 쓴다. 파일 하나를 받아 보고서나 고친 바이트를 돌려줄 뿐, 파일 순회·적용·출력은 하지 않는다. 검사 설정은 `CheckOptions`다 |
+| `doc_checker` | 문서 파일 검사 기법. EPUB·PDF·TXT·HWP·RTF·ZIP 계열의 보안·결함·렌더링 차단 지표(`format_dispatcher::scan_file`), 인코딩 손상 판정(`mojibake_detector`, 표본은 `doc_reader::head_tail_reader`). 형식 검사기 아래에 공용 도구를 둔다: ZIP 멤버 읽기 한도(`zip_member_reader`), OLE 공용 검사(`ole_checker`), Word 필드 판정(`word_field_checker`), 실행 파일 확장자 계층 표(`exec_extension_table`). 컨테이너 바이트 해석은 `container_parser`를 쓴다. 파일 하나를 받아 보고서를 돌려줄 뿐, 파일 순회·적용·출력은 하지 않는다. 검사 설정은 `CheckOptions`다 |
+| `doc_repairer` | 문서 파일 교정 기법: EPUB·PDF 보안 정리(`epub_sanitizer`, `pdf_sanitizer`), EPUB 결함 수리(`defect_repairer`), TXT의 UTF-8 재인코딩(`encoding_repairer`). 고친 바이트와 그 검증을 돌려주고, 판정은 `doc_checker`를 쓴다. `doc_checker`의 위 계층이다 |
 | `common` | 여러 crate가 함께 쓰는 기능: HTTP 요청·응답과 `ureq` 구현(`http_client`), URL 나누기·잇기·인코딩(`url_parser`), JSON 필드 읽기(`json_field_reader`), 공격자가 정한 문자열을 출력용으로 정리하기(`text_sanitizer`), DTD를 허용하는 XML 해석과 고칠 수 있는 작은 XML 트리(`xml_parser`, 깨진 문서는 `xml_recoverer`로 고쳐 읽는다), ZIP 열기와 멤버 읽기 상한(`zip_reader`), panic 메시지 읽기(`panic_message`). 시스템 능력이나 특정 문서 형식에 속하지 않고 두 crate 이상이 쓰는 것만 둔다. `http_client`·`xml_parser`·`zip_reader`는 feature이고, 필요 없는 crate는 `default-features = false`로 끈다 |
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
 | `stat` | 색인·파싱 통계 카운터 |
@@ -42,7 +43,7 @@ docs/       문서
 
 | crate | 용도 |
 | --- | --- |
-| `bookdoctor` | 문서 파일 진단(`scan`), 보안 정리(`sanitize`), 결함 수리(`repair`), 손상 문서 격리·복구(`quarantine`·`unquarantine`) 명령. 명령행, 파일 순회와 병렬 실행, 적용(휴지통 보관·덮어쓰기), 보고 출력을 맡고 검사·교정 기법은 `doc_checker`를 쓴다 |
+| `bookdoctor` | 문서 파일 진단(`scan`), 보안 정리(`sanitize`), 결함 수리(`repair`), 손상 문서 격리·복구(`quarantine`·`unquarantine`) 명령. 명령행, 파일 순회와 병렬 실행, 적용(휴지통 보관·덮어쓰기), 보고 출력을 맡는다. 검사 기법은 `doc_checker`, 교정 기법은 `doc_repairer`를 쓴다 |
 | `loader` | 책·만화 디렉토리의 파일을 읽어 ES 색인을 만들고 맞춘다 |
 
 ## 규칙

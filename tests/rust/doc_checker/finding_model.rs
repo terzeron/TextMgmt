@@ -1,5 +1,6 @@
 //! `doc_checker::finding_model` 단위 테스트.
 
+#[path = "../shared/doc_support/mod.rs"]
 mod support;
 use doc_checker::finding_model::{COMBINATIONS, Suppressed, escalate, guarded, risk_score};
 use doc_checker::{Category, FileReport, Finding, Format, Severity};

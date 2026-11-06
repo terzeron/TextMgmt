@@ -1,9 +1,10 @@
+#[path = "../shared/doc_support/mod.rs"]
 mod support;
 
 use std::io::{Cursor, Read};
 
 use crate::support::shared_fixtures::{epub_bytes, member, names};
-use doc_checker::epub_sanitizer::{rebuild, strip_css, strip_markup, verify};
+use doc_repairer::epub_sanitizer::{rebuild, strip_css, strip_markup, verify};
 use support::*;
 
 fn markup(s: &str) -> String {

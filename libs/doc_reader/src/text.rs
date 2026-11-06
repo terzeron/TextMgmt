@@ -2,7 +2,7 @@
 //!
 //! 원본은 chardet으로 후보 순서를 정한다. chardet은 옮기지 않았고, 같은 목적의 간단한 판별
 //! (`text_decoder::encoding_guesser::detect_hint`)으로 대신한다. 엄격 UTF-8로 읽히는 파일(코퍼스 표본 거의 전부)에서는 같은 길을 탄다.
-//! 인코딩 이름과 코덱은 `text_decoder`, UTF-8 재인코딩(교정)은 `doc_checker::encoding_repairer`에 있다.
+//! 인코딩 이름과 코덱은 `text_decoder`, UTF-8 재인코딩(교정)은 `doc_repairer::encoding_repairer`에 있다.
 
 use std::path::Path;
 use std::{fs, io};

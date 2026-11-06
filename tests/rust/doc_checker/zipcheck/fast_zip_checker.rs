@@ -1,4 +1,4 @@
-#[path = "../support/mod.rs"]
+#[path = "../../shared/doc_support/mod.rs"]
 mod support;
 use crate::support::shared_fixtures::{finding, scan_path as scan};
 use doc_checker::CheckOptions;

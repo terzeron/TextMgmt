@@ -1,6 +1,6 @@
 //! `doc_checker::pdf::security_checker` 단위 테스트.
 
-#[path = "../support/mod.rs"]
+#[path = "../../shared/doc_support/mod.rs"]
 mod support;
 use crate::support::shared_fixtures::pdf;
 use doc_checker::CheckOptions;

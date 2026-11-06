@@ -463,6 +463,7 @@ dependencies = [
  "chrono",
  "common",
  "doc_checker",
+ "doc_repairer",
  "encoding_rs",
  "flate2",
  "lopdf",
@@ -1127,7 +1128,6 @@ dependencies = [
  "pdf_engine",
  "regex",
  "roxmltree",
- "scraper",
  "serde",
  "serde_json",
  "sha2",
@@ -1160,6 +1160,27 @@ dependencies = [
  "tempfile",
  "text_decoder",
  "xml_recoverer",
+ "zip",
+]
+
+[[package]]
+name = "doc_repairer"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "container_parser",
+ "doc_checker",
+ "encoding_rs",
+ "flate2",
+ "htmlkit",
+ "lopdf",
+ "regex",
+ "roxmltree",
+ "scraper",
+ "serde_json",
+ "sysdeps",
+ "tempfile",
+ "text_decoder",
  "zip",
 ]
 
@@ -1372,8 +1393,8 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "common",
- "doc_checker",
  "doc_reader",
+ "doc_repairer",
  "isbn_extractor",
  "lopdf",
  "serde_json",
@@ -2263,8 +2284,8 @@ name = "loader"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "doc_checker",
  "doc_reader",
+ "doc_repairer",
  "encoding_rs",
  "es_client",
  "file_indexer",

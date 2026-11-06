@@ -1,4 +1,4 @@
-#[path = "../support/mod.rs"]
+#[path = "../../shared/doc_support/mod.rs"]
 mod support;
 
 use std::fs;

@@ -1,3 +1,4 @@
+#[path = "../shared/doc_support/mod.rs"]
 mod support;
 use support::ole_common;
 

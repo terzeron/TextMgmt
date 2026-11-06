@@ -1,5 +1,5 @@
 //! `bookdoctor::file_sanitizer` 테스트: `--sanitize`가 파일을 모으고, 재구성·검증·재검사를 거쳐 휴지통에 원본을 두고 적용하는 흐름.
-//! 재구성 기법 자체는 `tests/rust/doc_checker/epub_sanitizer.rs`, `pdf/pdf_sanitizer.rs`가 검증한다.
+//! 재구성 기법 자체는 `tests/rust/doc_repairer/epub_sanitizer.rs`, `pdf_sanitizer.rs`가 검증한다.
 
 mod support;
 

@@ -1,5 +1,5 @@
 //! `bookdoctor::file_repairer` 테스트: `repair`가 파일을 모으고, 결함 수리·바이너리 복원을 휴지통 보관과 함께 적용하는 흐름.
-//! 판별·재구성 기법 자체는 `tests/rust/doc_checker/defect_repairer.rs`, `defect_repairer/xhtml_fix.rs`가 검증한다.
+//! 판별·재구성 기법 자체는 `tests/rust/doc_repairer/defect_repairer.rs`, `defect_repairer.rs`의 `xhtml_fix`가 검증한다.
 
 mod support;
 

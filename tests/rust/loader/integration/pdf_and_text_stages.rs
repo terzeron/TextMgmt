@@ -22,7 +22,7 @@
 //!   `PdftotextHooks { which: Fn() -> Option<PathBuf>, run: Fn(&[String]) -> Option<(i32, Vec<u8>)>, path_cache: OnceLock }`
 //! - `doc_reader::text::{TextHooks, read_from_text_with(&Path, &TextHooks) -> Result<TextRead, String>}`, `text_decoder::text_transcoder::Candidate`
 //!   `TextHooks { detect, encodings, read_bytes, read_replace }`
-//! - `doc_checker::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8_with(&Path, bool, Option<&Path>, &Path, &ReencodeHooks) -> Reencode}`
+//! - `doc_repairer::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8_with(&Path, bool, Option<&Path>, &Path, &ReencodeHooks) -> Reencode}`
 //!   `ReencodeHooks { detect, encodings, read_bytes, write_backup }`
 //! - `text_decoder::mojibake_counter::count_mojibake_runs_with(&str, &str) -> usize` (런 정규식 패턴을 받는다)
 //! - `doc_reader::office::read_from_hwp_with(&Path, &Path, &dyn Fn(&Path) -> Result<String, String>) -> (String, usize, Vec<String>)`
@@ -44,7 +44,6 @@ use std::thread::{self, ThreadId};
 use std::time::{Duration, UNIX_EPOCH};
 
 use crate::common::shared_fixtures::{FakeStore, hwp_dir, path_str, run_main, run_main_with, run_main_with_hooks, setup_loader_env, tmp, write_blank_pdf};
-use doc_checker::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8_with};
 use doc_reader::TEXT_SIZE;
 use doc_reader::office::{convert_with_libreoffice, find_libreoffice, read_from_hwp_with_fallback};
 use doc_reader::pdf::XrefStream;
@@ -53,6 +52,7 @@ use doc_reader::pdf::{
     read_from_obj_stream, read_from_pdf, run_stage,
 };
 use doc_reader::text::{TextHooks, read_from_text_with};
+use doc_repairer::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8_with};
 use file_indexer::env_config::Config;
 use file_indexer::record_builder::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, zip_container_type};
 use loader::batch_loader::{recursive_files, sample_files};

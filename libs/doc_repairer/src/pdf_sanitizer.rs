@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 
-use crate::pdf::security_checker::{REF_FILE_BUDGET, count_raw_references};
+use doc_checker::pdf::security_checker::{REF_FILE_BUDGET, count_raw_references};
 
 /// 다시 쓰는 PDF의 크기 상한. lopdf는 객체를 모두 메모리에 올리므로 파일보다 몇 배 큰 메모리를 쓴다.
 const MAX_FILE_BYTES: usize = 128 * 1024 * 1024;

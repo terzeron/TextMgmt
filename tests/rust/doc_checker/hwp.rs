@@ -1,3 +1,4 @@
+#[path = "../shared/doc_support/mod.rs"]
 mod support;
 use crate::support::shared_fixtures::{JSCRIPT_VERSION, TAG_SHAPE_COMPONENT_OLE, bin_data_link, default_jscript, file_header, finding, pe_bytes, raw_deflate, record, scan, valid_stream, zlib};
 use crate::support::shared_fixtures::{hwp_cfb, scan_cfb};
