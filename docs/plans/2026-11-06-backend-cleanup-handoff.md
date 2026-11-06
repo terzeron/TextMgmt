@@ -22,7 +22,7 @@
 
 ## 남은 작업
 
-### 1. 새로 뗀 모듈의 테스트 1:1 배치 (승인 대기 중이던 제안)
+### 1. 새로 뗀 모듈의 테스트 1:1 배치 (완료, 커밋 전)
 
 아래 모듈은 원래 모듈의 테스트가 간접으로 검증한다. 테스트는 통과하지만 "테스트 파일은 소스 모듈과 1:1" 규칙에 어긋난다.
 
@@ -35,6 +35,19 @@
 | `doc_reader::body_decoder` (`pub(crate)`) | `text`·`epub` 테스트                                                            | 소스 안 `#[cfg(test)] mod tests`                                 |
 
 새 테스트를 만들기보다 옮기는 것이 중심이다. Cargo `[[test]]` target도 함께 추가한다.
+
+**결과 (2026-11-06):** `pub(crate)` 항목은 `tests/`에서 부를 수 없어 "옮기기"가 불가능했다. `docs/rust-workspace.md` 규칙대로 소스 안 단위 테스트를 새로 썼다.
+
+| 모듈 | 처리 | 줄 커버리지 |
+| --- | --- | --- |
+| `zip_member_reader` | `decode_calls` 테스트 4개를 `tests/rust/doc_checker/zip_member_reader.rs`로 이동하고 `[[test]]` 추가. `decode_text`·`read_limited`·`zip_directory_bounds`는 소스 안 단위 테스트 | 96.5% |
+| `ole_checker` | 소스 안 단위 테스트(최소 CFB를 직접 만들어 정상·손상 경로 검증) | 96.1% |
+| `word_field_checker` | 소스 안 단위 테스트 | 98.0% |
+| `epub_package_io` | 소스 안 단위 테스트 | 95.7% |
+| `body_decoder` | 소스 안 단위 테스트 | 97.4% |
+
+`doc`·`hwp`·`ooxml_checker` 같은 상위 검사기 테스트는 옮기지 않았다. 옮기면 상위 검사기의 검증이 사라진다.
+미커버로 남은 곳: `ole_checker`의 구조 이상 50건 초과 경로(손상 OLE 50건 이상을 만들어야 함).
 
 ### 2. 배포 (승인 필요)
 

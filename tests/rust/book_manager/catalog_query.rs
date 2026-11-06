@@ -183,3 +183,12 @@ async fn test_read_paths_run_off_the_event_loop_thread() {
     let blocking: Vec<&String> = call_threads.iter().filter(|(_, tid)| **tid == loop_thread).map(|(name, _)| name).collect();
     assert!(blocking.is_empty(), "이벤트 루프 스레드에서 실행된 ES 호출: {blocking:?}");
 }
+
+#[test]
+fn get_book_content_reports_an_es_lookup_failure_as_an_error_content() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    es.fail("search_by_id", "down");
+    let manager = make_manager(tmp.path(), &es);
+    assert!(matches!(block_on(manager.get_book_content(1)), BookContent::Error(message) if message.contains("down")));
+}

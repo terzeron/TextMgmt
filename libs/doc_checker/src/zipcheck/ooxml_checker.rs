@@ -546,3 +546,41 @@ mod budget_tests {
         assert!(spent > 600 * 1024 + 400 * 1024, "읽은 바이트가 예산에서 빠지지 않았다: {spent}");
     }
 }
+
+#[cfg(test)]
+mod field_tests {
+    use std::path::Path;
+
+    use super::*;
+
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    fn fields(body: &str) -> FileReport {
+        let xml = format!(r#"<w:document xmlns:w="{W}"><w:body>{body}</w:body></w:document>"#);
+        let doc = roxmltree::Document::parse(&xml).unwrap();
+        let mut report = FileReport::new(Path::new("a.docx"), None);
+        check_fields(&doc, "word/document.xml", &mut report);
+        report
+    }
+
+    #[test]
+    fn push_capped_cuts_on_a_char_boundary() {
+        let mut dst = String::new();
+        let truncated = push_capped(&mut dst, &"가".repeat(MAX_FIELD_TEXT / 3 + 2));
+        assert!(truncated);
+        assert!(dst.len() <= MAX_FIELD_TEXT && dst.chars().all(|c| c == '가'));
+    }
+
+    #[test]
+    fn looks_like_xml_recognizes_utf16_by_bom_or_nul_pairs() {
+        for prefix in [&[0xFF, 0xFE, b'x', 0][..], &[0xFE, 0xFF, 0, b'x'], &[0x3C, 0x00, b'a', 0], &[0x00, 0x3C, 0, b'a']] {
+            assert!(looks_like_xml(prefix), "{prefix:?}");
+        }
+    }
+
+    #[test]
+    fn stray_field_markers_and_a_simple_field_without_an_instruction_are_ignored() {
+        let report = fields(r#"<w:p><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:fldSimple/></w:p>"#);
+        assert!(report.findings.is_empty() && !report.incomplete, "{:?}", report.findings);
+    }
+}

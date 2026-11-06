@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use doc_checker::Severity;
 use doc_checker::Severity::{Critical, High, Low, Medium};
-use doc_checker::zip_name_rules::check;
+use doc_checker::zip_name_rules::{check, local_header_issue};
 
 /// 같은 (코드, 심각도)가 두 번 나와도 하나로 본다. 호출자(`Scanner::add`)가 (코드, 위치)로 합친다.
 fn got(name: &str) -> BTreeSet<(&'static str, Severity)> {
@@ -63,4 +63,16 @@ fn details_are_the_fixed_english_phrases_the_epub_reports_used() {
     assert_eq!(d("a\u{1}b", "ZIP_CONTROL_CHAR_NAME"), "Control character in entry name");
     assert_eq!(d("con", "WINDOWS_RESERVED_NAME"), "Windows device name");
     assert_eq!(d("dir/a:b", "ZIP_ALT_DATA_STREAM"), "Colon in name (NTFS stream)");
+}
+
+#[test]
+fn a_missing_local_header_signature_is_a_high_bad_local_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("junk.zip");
+    std::fs::write(&path, [0u8; 64]).unwrap();
+    let mut file = std::fs::File::open(&path).unwrap();
+
+    let issue = local_header_issue(&mut file, 0, b"a.txt").expect("서명이 없으면 문제다");
+
+    assert_eq!((issue.code, issue.severity), ("BAD_LOCAL_HEADER", High));
 }

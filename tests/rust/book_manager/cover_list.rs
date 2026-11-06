@@ -1092,3 +1092,14 @@ mod get_cover {
         assert_eq!(book_manager::cover_list::normalize_cover_width(json!("100").as_i64()), BookManager::COVER_THUMBNAIL_WIDTH);
     }
 }
+
+#[test]
+fn get_cover_reports_an_es_lookup_failure_as_a_500() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    es.fail("search_by_id", "down");
+    let manager = make_manager(tmp.path(), &es);
+    let response = block_on(manager.get_cover(1, None));
+    assert_eq!(response.status_code, 500);
+    assert!(String::from_utf8_lossy(&response.body).starts_with("Book lookup failed"), "{:?}", String::from_utf8_lossy(&response.body));
+}

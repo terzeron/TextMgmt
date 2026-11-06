@@ -3,7 +3,8 @@ mod support;
 use crate::support::shared_fixtures::{finding, scan_path as scan};
 use doc_checker::CheckOptions;
 use doc_checker::format_dispatcher::scan_file;
-use doc_checker::zipcheck::fast_zip_checker::resolve_name;
+use doc_checker::zip_member_reader::Limits;
+use doc_checker::zipcheck::fast_zip_checker::{check, resolve_name};
 use doc_checker::{Category, FileReport, Format, Severity};
 use std::fs;
 use std::path::Path;
@@ -395,4 +396,43 @@ mod text_member_entropy {
         assert!(scan("b.docx", &[("[Content_Types].xml", b"<Types/>"), ("word/styles.xml", &random_bytes(4096, 2))]).has("HIGH_ENTROPY_TEXT_MEMBER"));
         assert!(scan("c.hwpx", &[("Contents/section0.xml", &random_bytes(4096, 3))]).has("HIGH_ENTROPY_TEXT_MEMBER"));
     }
+}
+
+fn checked(path: &Path, limits: &Limits, deep: bool) -> FileReport {
+    let mut report = FileReport::new(path, Some(Format::Zip));
+    check(path, limits, deep, &mut report);
+    report
+}
+
+#[test]
+fn more_entries_than_the_limit_is_incomplete() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("a.zip");
+    support::zip_of(&p, &[("a.txt", &text(1)), ("b.txt", &text(1))]);
+
+    let r = checked(&p, &Limits { max_files: 1, ..Limits::default() }, false);
+
+    assert!(r.incomplete && r.reasons.iter().any(|m| m == "Too many entries: 2 (max 1)"), "{:?}", r.reasons);
+}
+
+#[test]
+fn a_deep_scan_skips_a_member_larger_than_the_member_limit() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("a.zip");
+    support::zip_of(&p, &[("a.txt", &text(50))]);
+
+    let r = checked(&p, &Limits { max_member: 16, ..Limits::default() }, true);
+
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("Member larger than max inspection size")), "{:?}", r.reasons);
+}
+
+#[test]
+fn a_deep_scan_stops_when_the_decompression_budget_is_exhausted() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("a.zip");
+    support::zip_of(&p, &[("a.txt", &text(5)), ("b.txt", &text(5))]);
+
+    let r = checked(&p, &Limits { max_total: 0, ..Limits::default() }, true);
+
+    assert!(r.incomplete && r.reasons.iter().any(|m| m == "deep scan stopped: decompression budget exhausted"), "{:?}", r.reasons);
 }

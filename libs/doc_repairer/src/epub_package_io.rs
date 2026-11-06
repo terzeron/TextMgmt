@@ -277,3 +277,238 @@ pub(crate) fn dangling(members: &[Member]) -> Result<(usize, usize), String> {
     }
     Ok((missing, bad_spine))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OPF_NS: &str = "http://www.idpf.org/2007/opf";
+
+    fn member(name: &str, data: &[u8]) -> Member {
+        Member { name: name.to_string(), data: data.to_vec(), method: CompressionMethod::Deflated, modified: None }
+    }
+
+    /// `Result::unwrap_err`는 `Ok` 쪽에도 `Debug`를 요구하는데 `Enc`와 `Member`에는 없다.
+    fn err<T>(result: Result<T, String>) -> String {
+        match result {
+            Ok(_) => panic!("오류여야 한다"),
+            Err(e) => e,
+        }
+    }
+
+    fn opf(manifest: &str, spine: &str) -> String {
+        format!(r#"<?xml version="1.0"?><package xmlns="{OPF_NS}" version="3.0"><manifest>{manifest}</manifest><spine>{spine}</spine></package>"#)
+    }
+
+    fn container(full_path: &str) -> Vec<u8> {
+        format!(r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="{full_path}" media-type="application/oebps-package+xml"/></rootfiles></container>"#).into_bytes()
+    }
+
+    // ---- 인코딩 ----
+
+    #[test]
+    fn ext_of_lowercases_the_last_extension_of_the_file_name() {
+        assert_eq!(ext_of("OEBPS/Text/Ch1.XHTML"), "xhtml");
+        assert_eq!(ext_of("a.tar.gz"), "gz");
+        assert_eq!(ext_of("dir.d/noext"), "");
+        assert_eq!(ext_of("mimetype"), "");
+    }
+
+    #[test]
+    fn decode_enc_reads_utf8_and_bom_utf16() {
+        let (text, enc) = decode_enc("a", "가나".as_bytes()).unwrap();
+        assert!(text == "가나" && matches!(enc, Enc::Utf8));
+        let (text, enc) = decode_enc("a", b"\xEF\xBB\xBFx").unwrap();
+        assert!(text == "\u{feff}x" && matches!(enc, Enc::Utf8), "UTF-8 BOM은 글에 남는다");
+        let (text, enc) = decode_enc("a", b"\xFF\xFEa\x00").unwrap();
+        assert!(text == "a" && matches!(enc, Enc::Utf16 { le: true }));
+        let (text, enc) = decode_enc("a", b"\xFE\xFF\x00a").unwrap();
+        assert!(text == "a" && matches!(enc, Enc::Utf16 { le: false }));
+    }
+
+    #[test]
+    fn decode_enc_refuses_what_it_cannot_write_back_safely() {
+        assert!(err(decode_enc("a", b"\xFF\xFE\x00\x00x\x00\x00\x00")).contains("UTF-32"));
+        assert!(err(decode_enc("a", b"\x00\x00\xFE\xFF")).contains("UTF-32"));
+        assert!(err(decode_enc("a", b"\xB0\xA1")).contains("UTF-8이 아니라"));
+        assert!(err(decode_enc("a", b"\xFF\xFE\x00\xD8")).contains("UTF-16이 올바르지 않아"), "짝 없는 서로게이트");
+        assert!(decode("a.xhtml", b"\xB0\xA1").unwrap_err().starts_with("a.xhtml:"));
+    }
+
+    #[test]
+    fn encode_enc_round_trips_each_encoding() {
+        for (enc, expect_prefix) in [(Enc::Utf8, &b""[..]), (Enc::Utf16 { le: true }, b"\xFF\xFE"), (Enc::Utf16 { le: false }, b"\xFE\xFF")] {
+            let bytes = encode_enc("가a나", enc);
+            assert!(bytes.starts_with(expect_prefix));
+            assert_eq!(decode("a", &bytes).unwrap(), "가a나");
+        }
+    }
+
+    // ---- 멤버 입출력 ----
+
+    #[test]
+    fn write_members_puts_mimetype_first_stored_and_keeps_the_rest() {
+        let mut members = vec![member("OEBPS/a.xhtml", &b"<p>x</p>".repeat(50)), member("mimetype", b"application/epub+zip")];
+        let bytes = write_members(&mut members).unwrap();
+        let read = read_members(&bytes).unwrap();
+        assert_eq!(read.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["mimetype", "OEBPS/a.xhtml"]);
+        assert_eq!(read[0].method, CompressionMethod::Stored);
+        assert_eq!(read[1].method, CompressionMethod::Deflated);
+        assert_eq!(read[1].data, b"<p>x</p>".repeat(50));
+    }
+
+    #[test]
+    fn write_members_keeps_a_stored_member_stored() {
+        let mut stored = member("a.bin", b"abc");
+        stored.method = CompressionMethod::Stored;
+        let read = read_members(&write_members(&mut [stored]).unwrap()).unwrap();
+        assert_eq!(read[0].method, CompressionMethod::Stored);
+    }
+
+    #[test]
+    fn write_members_preserves_the_modified_time() {
+        let mut m = member("a.txt", b"x");
+        m.modified = Some(zip::DateTime::from_date_and_time(2020, 5, 17, 10, 20, 30).unwrap());
+        let read = read_members(&write_members(&mut [m]).unwrap()).unwrap();
+        assert_eq!(read[0].modified, Some(zip::DateTime::from_date_and_time(2020, 5, 17, 10, 20, 30).unwrap()));
+    }
+
+    #[test]
+    fn read_members_rejects_bytes_that_are_not_a_zip() {
+        assert!(err(read_members(b"not a zip")).starts_with("ZIP을 열 수 없다"));
+    }
+
+    #[test]
+    fn a_member_with_a_bad_checksum_is_broken_and_the_others_survive() {
+        let mut stored = member("a.txt", b"hello world");
+        stored.method = CompressionMethod::Stored;
+        let mut bytes = write_members(&mut [stored, member("b.txt", b"fine")]).unwrap();
+        let at = bytes.windows(11).position(|w| w == b"hello world").unwrap();
+        bytes[at] = b'j';
+        let (members, broken) = read_members_lenient(&bytes).unwrap();
+        assert_eq!(broken.len(), 1, "{broken:?}");
+        assert_eq!(broken[0].0, "a.txt");
+        assert!(members.iter().any(|m| m.name == "b.txt"));
+        assert!(read_members(&bytes).is_err(), "read_members는 깨진 멤버를 오류로 올린다");
+    }
+
+    #[test]
+    fn undecodable_marks_the_nul_prefix_only() {
+        assert!(undecodable("\0이름.xhtml"));
+        assert!(!undecodable("a.xhtml"));
+    }
+
+    // ---- 패키지 문서 ----
+
+    #[test]
+    fn package_names_finds_opf_container_target_and_package_root_documents() {
+        let members = [
+            member("META-INF/container.xml", &container("OEBPS/main.xml")),
+            member("OEBPS/main.xml", opf("", "").as_bytes()),
+            member("OEBPS/extra.opf", opf("", "").as_bytes()),
+            member("OEBPS/hidden", opf("", "").as_bytes()),
+            member("OEBPS/style.xml", b"<style/>"),
+            member("OEBPS/ch1.xhtml", b"<package/>"),
+        ];
+        let names: Vec<_> = package_names(&members).unwrap().into_iter().collect();
+        assert_eq!(names, ["OEBPS/extra.opf", "OEBPS/hidden", "OEBPS/main.xml"]);
+    }
+
+    #[test]
+    fn package_names_accepts_a_percent_encoded_full_path() {
+        let members = [member("META-INF/container.xml", &container("OEBPS/my%20book.opf")), member("OEBPS/my book.opf", opf("", "").as_bytes())];
+        assert!(package_names(&members).unwrap().contains("OEBPS/my book.opf"));
+    }
+
+    #[test]
+    fn package_names_fails_when_container_xml_cannot_be_trusted() {
+        let missing = [member("META-INF/container.xml", &container("OEBPS/none.opf"))];
+        assert!(package_names(&missing).unwrap_err().contains("가리키는 패키지 문서가 없다"));
+        let broken = [member("META-INF/container.xml", b"<container>")];
+        assert!(package_names(&broken).unwrap_err().contains("해석할 수 없다"));
+        let encoding = [member("META-INF/container.xml", b"\xB0\xA1")];
+        assert!(package_names(&encoding).unwrap_err().contains("인코딩을 읽을 수 없다"));
+    }
+
+    #[test]
+    fn package_text_returns_the_text_without_a_leading_bom() {
+        let mut data = b"\xEF\xBB\xBF".to_vec();
+        data.extend(opf("", "").as_bytes());
+        assert_eq!(package_text(&member("a.opf", &data)).unwrap(), opf("", ""));
+    }
+
+    #[test]
+    fn package_text_rejects_anything_that_is_not_a_readable_package_document() {
+        let exec = package_text(&member("p.bin", opf("", "").as_bytes())).unwrap_err();
+        assert!(exec.contains("실행 파일 확장자"), "{exec}");
+        assert!(package_text(&member("p.opf", b"\xB0\xA1")).unwrap_err().contains("UTF-8이 아니라"));
+        assert!(package_text(&member("p.opf", b"<html/>")).unwrap_err().contains("`<package>` 문서가 아니다"));
+        assert!(package_text(&member("p.opf", b"<package>")).unwrap_err().contains("패키지 문서를 해석할 수 없다"));
+        assert!(package_text(&member("\0p.opf", b"<html/>")).unwrap_err().starts_with("p.opf:"), "NUL 표지는 오류 이름에서 뗀다");
+    }
+
+    // ---- URL ----
+
+    #[test]
+    fn normalize_url_reads_like_a_browser() {
+        assert_eq!(normalize_url("  JavaScript:\talert(1)"), "javascript:alert(1)");
+        assert_eq!(normalize_url("jav&#97;script:x"), "javascript:x");
+        assert_eq!(normalize_url("/\\evil"), "//evil");
+        assert_eq!(normalize_url("\\/evil"), "//evil");
+    }
+
+    #[test]
+    fn scheme_of_accepts_only_rfc_shaped_schemes() {
+        assert_eq!(scheme_of("http://x"), Some("http"));
+        assert_eq!(scheme_of("svn+ssh://x"), Some("svn+ssh"));
+        for n in ["no colon", ":x", "1a:x", "a b:c", "a_b:c"] {
+            assert_eq!(scheme_of(n), None, "{n}");
+        }
+    }
+
+    #[test]
+    fn local_refs_have_no_scheme_and_are_not_network_paths() {
+        for href in ["ch1.xhtml", "../img/a.png", "ch1.xhtml#top", "sub/a b.png"] {
+            assert!(is_local_ref(href), "{href}");
+        }
+        for href in ["http://x/a", "//host/x", "/\\evil", "\\\\host\\share", "\\\\host", "javascript:1", "&#92;&#92;host"] {
+            assert!(!is_local_ref(href), "{href}");
+        }
+    }
+
+    // ---- 재구성 검증 ----
+
+    #[test]
+    fn visible_text_drops_markup_scripts_and_whitespace() {
+        assert_eq!(visible_text("<p>a b</p>\n<script>x()</script><p>c</p>"), "abc");
+    }
+
+    #[test]
+    fn visible_text_keeps_the_body_after_a_self_closing_script() {
+        assert_eq!(visible_text(r#"<p>a</p><script src="x.js"/><p>b</p><style/><p>c</p>"#), "abc");
+    }
+
+    #[test]
+    fn is_subsequence_keeps_order_but_allows_gaps() {
+        assert!(is_subsequence("ac", "abc"));
+        assert!(is_subsequence("", "x"));
+        assert!(!is_subsequence("ca", "abc"));
+        assert!(!is_subsequence("abcd", "abc"));
+    }
+
+    #[test]
+    fn dangling_counts_missing_manifest_targets_and_unknown_spine_ids() {
+        let manifest = r#"<item id="ch1" href="ch1.xhtml#a" media-type="application/xhtml+xml"/><item id="gone" href="gone.xhtml" media-type="application/xhtml+xml"/><item id="web" href="http://example.com/x.css" media-type="text/css"/>"#;
+        let spine = r#"<itemref idref="ch1"/><itemref idref="ghost"/>"#;
+        let members = [member("OEBPS/content.opf", opf(manifest, spine).as_bytes()), member("OEBPS/ch1.xhtml", b"<p>x</p>")];
+        assert_eq!(dangling(&members).unwrap(), (1, 1));
+    }
+
+    #[test]
+    fn dangling_is_zero_for_a_consistent_package_and_fails_on_a_broken_one() {
+        let ok = [member("content.opf", opf(r#"<item id="a" href="a.xhtml"/>"#, r#"<itemref idref="a"/>"#).as_bytes()), member("a.xhtml", b"x")];
+        assert_eq!(dangling(&ok).unwrap(), (0, 0));
+        let bad = [member("content.opf", b"<package><manifest>")];
+        assert!(dangling(&bad).is_err());
+    }
+}

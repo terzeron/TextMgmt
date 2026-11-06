@@ -25,6 +25,10 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 tempfile = "3.27.0"
 
 [[test]]
+name = "child_process_runner"
+path = "../../tests/rust/file_indexer/child_process_runner.rs"
+
+[[test]]
 name = "file_time"
 path = "../../tests/rust/file_indexer/file_time.rs"
 

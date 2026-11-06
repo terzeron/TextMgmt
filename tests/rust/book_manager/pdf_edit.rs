@@ -107,6 +107,29 @@ mod backup_reporting {
         assert!(e.es.inserted().is_empty());
         assert!(e.root.join("0_trash").join("book.pdf").is_file());
     }
+
+    #[tokio::test]
+    async fn test_a_reread_document_that_is_not_an_object_reports_backup_location() {
+        let e = fx::env(Opts::loader());
+        *e.reader.docs.lock().unwrap() = Docs::from([(1, serde_json::json!("not an object"))]);
+
+        let (result, error) = e.run_pages(&[3]).await;
+
+        assert!(result.is_none());
+        assert!(error_text(&error).contains("재색인할 문서를 읽지 못했습니다") && error_text(&error).contains("0_trash/book.pdf"), "{error:?}");
+        assert!(e.es.inserted().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_a_reindex_under_another_id_is_a_reindex_failure() {
+        let e = fx::env(Opts::loader());
+        e.es.on_insert(|_| Ok(vec![999_999]));
+
+        let (result, error) = e.run_pages(&[3]).await;
+
+        assert!(result.is_none());
+        assert!(error_text(&error).contains("ES 재색인 실패") && error_text(&error).contains("0_trash/book.pdf"), "{error:?}");
+    }
 }
 
 // ---- 이미지 URL 받기 실패 (cover_manager direct_cover_url 테스트에서 옮김) ----

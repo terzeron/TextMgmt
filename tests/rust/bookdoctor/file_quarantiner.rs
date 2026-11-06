@@ -207,6 +207,25 @@ fn move_across_filesystems_falls_back_to_copy_and_keeps_mtime() {
     assert_eq!(fs::metadata(&dst).unwrap().modified().unwrap(), mtime);
 }
 
+#[test]
+fn move_file_falls_back_to_copy_when_rename_crosses_devices() {
+    // /dev/shm은 /tmp와 다른 파일시스템이다. 같은 장치로 합쳐진 환경이면 rename이 성공해 이 분기를 만들 수 없다.
+    let shm = tempfile::tempdir_in("/dev/shm").unwrap();
+    let here = tempfile::tempdir().unwrap();
+    if fs::metadata(shm.path()).unwrap().dev() == fs::metadata(here.path()).unwrap().dev() {
+        eprintln!("건너뜀: /dev/shm과 임시 디렉터리가 같은 장치다");
+        return;
+    }
+    let (src, dst) = (shm.path().join("a.txt"), here.path().join("a.txt"));
+    fs::write(&src, "내용").unwrap();
+    let mtime = fs::metadata(&src).unwrap().modified().unwrap() - std::time::Duration::from_secs(86_400);
+    fs::File::options().write(true).open(&src).unwrap().set_modified(mtime).unwrap();
+    move_file(&src, &dst).unwrap();
+    assert!(!src.exists());
+    assert_eq!(fs::read_to_string(&dst).unwrap(), "내용");
+    assert_eq!(fs::metadata(&dst).unwrap().modified().unwrap(), mtime);
+}
+
 // ---- 요약 ----
 
 fn summary(moves: &[Value]) -> String {

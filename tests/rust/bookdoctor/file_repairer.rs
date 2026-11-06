@@ -100,6 +100,78 @@ mod xhtml {
         assert_eq!(fs::read(&p).unwrap(), before);
         assert!(!trash.exists() || fs::read_dir(&trash).unwrap().count() == 0);
     }
+
+    #[test]
+    fn a_file_with_visible_security_findings_is_skipped_before_any_rebuild() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("evil.epub");
+        // 스크립트가 첫 검사에서 이미 보인다. 수리하기 전에 먼저 --sanitize로 정리해야 한다.
+        epub_with_files(&p, &clean_opf(), "<html><head><title>t</title></head><body><p>본문<br><script>alert(1)</script></p></body></html>", &[]);
+        let before = fs::read(&p).unwrap();
+        let (code, out) = run_in(d.path(), &["repair", p.to_str().unwrap()]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("SKIP") && out.contains("보안 지표(HIGH 이상)가 있다"), "{out}");
+        assert_eq!(fs::read(&p).unwrap(), before);
+    }
+
+    #[test]
+    fn an_unreadable_non_markup_member_makes_the_rebuild_fail_and_the_file_is_skipped() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.epub");
+        epub_with_files(&p, &clean_opf(), BROKEN, &[("OEBPS/data.bin", b"payload payload payload")]);
+        // 압축 데이터 한가운데 한 바이트를 뒤집는다. 헤더는 멀쩡해서 검사는 통과하고 읽을 때만 실패한다.
+        let mut bytes = fs::read(&p).unwrap();
+        let name = b"OEBPS/data.bin";
+        let at = bytes.windows(name.len()).position(|w| w == name).unwrap();
+        let data_start = at + name.len() + u16::from_le_bytes([bytes[at - 2], bytes[at - 1]]) as usize;
+        bytes[data_start + 2] ^= 0xff;
+        fs::write(&p, &bytes).unwrap();
+        let before = fs::read(&p).unwrap();
+        let (code, out) = run_in(d.path(), &["repair", p.to_str().unwrap()]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("SKIP") && out.contains("data.bin"), "{out}");
+        assert_eq!(fs::read(&p).unwrap(), before);
+    }
+
+    #[test]
+    fn a_member_that_is_not_markup_is_dropped_and_listed() {
+        let d = tempfile::tempdir().unwrap();
+        let chapters: Vec<(String, String)> = (1..=6).map(|i| (format!("c{i}"), format!("ch{i}.xhtml"))).collect();
+        let refs: Vec<(&str, &str)> = chapters.iter().map(|(id, href)| (id.as_str(), href.as_str())).collect();
+        let p = d.path().join("a.epub");
+        let extra: Vec<(String, &[u8])> = (3..=6).map(|i| (format!("OEBPS/ch{i}.xhtml"), &b"<html><head><title>t</title></head><body><p>x</p></body></html>"[..])).collect();
+        let mut files: Vec<(&str, &[u8])> = extra.iter().map(|(n, d)| (n.as_str(), *d)).collect();
+        files.push(("OEBPS/ch2.xhtml", GARBAGE));
+        epub_with_files(&p, &opf_with_chapters(&refs, ""), BROKEN, &files);
+        let (code, out) = run_in(d.path(), &["repair", p.to_str().unwrap()]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("FIXED") && out.contains("- 제거 ") && out.contains("마크업이 아닌 데이터"), "{out}");
+    }
+
+    #[test]
+    fn a_defect_in_a_member_the_rebuild_does_not_treat_as_markup_is_reported_unchanged() {
+        // 스펙상 본문(spine)이지만 확장자가 .dat라서 수리 대상 멤버로 보지 않는다.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.epub");
+        epub_with_files(&p, &opf_with_chapters(&[("c1", "ch1.xhtml"), ("c2", "ch2.dat")], ""), &xhtml("<p>글</p>"), &[("OEBPS/ch2.dat", BROKEN.as_bytes())]);
+        let before = fs::read(&p).unwrap();
+        let (code, out) = run_in(d.path(), &["repair", p.to_str().unwrap()]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("UNCHANGED"), "{out}");
+        assert_eq!(fs::read(&p).unwrap(), before);
+    }
+
+    #[test]
+    fn a_write_failure_is_reported_and_exits_1() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("0_trash"), b"not a directory").unwrap(); // 휴지통 디렉터리를 만들 수 없다
+        let p = broken_epub(d.path(), "a.epub");
+        let before = fs::read(&p).unwrap();
+        let (code, out) = run_in(d.path(), &["repair", p.to_str().unwrap()]);
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains("FAIL") && out.contains("실패 1건"), "{out}");
+        assert_eq!(fs::read(&p).unwrap(), before);
+    }
 }
 
 mod binary {
@@ -247,5 +319,19 @@ mod binary {
         let out = String::from_utf8(out).unwrap();
         assert_eq!(code, 1, "{out}");
         assert!(out.contains("FAIL") && out.contains("실패 1건"), "{out}");
+    }
+
+    #[test]
+    fn repair_command_lists_a_lossy_restore_as_skipped_and_leaves_the_file() {
+        // 끝에 잘린 바이트가 붙어 있으면 되돌린 바이트가 원본과 같지 않다. 무손실이 아니면 건드리지 않는다.
+        let d = tempfile::tempdir().unwrap();
+        let mut raw = format!("{OLE_AS_UTF16_CHARS}{}", "FileHeader 본문 내용".repeat(20)).into_bytes();
+        raw.push(0xe4);
+        let p = d.path().join("mangled.txt");
+        fs::write(&p, &raw).unwrap();
+        let (code, out) = run_in(d.path(), &["repair", p.to_str().unwrap()]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("SKIP") && out.contains("무손실 왕복 실패") && out.contains("건너뜀 1건"), "{out}");
+        assert_eq!(fs::read(&p).unwrap(), raw);
     }
 }

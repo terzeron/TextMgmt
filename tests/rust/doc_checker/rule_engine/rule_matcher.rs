@@ -169,3 +169,12 @@ fn the_at_check_only_looks_at_that_strings_variants() {
     assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
     assert_eq!(out.matches.len(), 1);
 }
+
+#[test]
+fn rules_after_the_condition_budget_is_spent_are_not_evaluated() {
+    // 예산이 0이면 첫 규칙의 조건 평가가 예산을 넘기고, 뒤 규칙은 평가하지 않은 채 한도 도달로 끝난다.
+    let set = parse("rule a { strings: $x = \"MZ\" condition: $x } rule b { strings: $y = \"MZ\" condition: $y }").unwrap();
+    let out = set.compile().scan_with_budget(b"MZ", 0);
+    assert!(out.work_limit_hit);
+    assert!(out.matches.len() < 2, "{:?}", out.matches.len());
+}

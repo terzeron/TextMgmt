@@ -259,3 +259,15 @@ pub fn detect_file_type(fs: &dyn FsOps, path: &Path, declared: &str) -> Option<S
     }
     None
 }
+
+#[cfg(test)]
+mod declared_type_tests {
+    use super::declared_type;
+
+    #[test]
+    fn declared_type_is_the_lowercase_extension_or_empty() {
+        assert_eq!(declared_type("Book.EPUB"), "epub");
+        assert_eq!(declared_type("archive.tar.gz"), "gz");
+        assert_eq!(declared_type("README"), "");
+    }
+}

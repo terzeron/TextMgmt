@@ -176,3 +176,19 @@ fn test_update_book_reindex_and_rollback_branches() {
     assert_eq!(st6, "Error");
     assert!(msg6.expect("msg6").contains("기존 ES 문서 복구 완료"));
 }
+
+#[test]
+fn test_delete_file_rejects_a_path_that_climbs_out_through_a_missing_directory() {
+    // 없는 디렉터리 뒤의 `..`도 한 단계 올라간다고 해석한다. 결과가 책 루트 밖이면 지우지 않는다.
+    let outer = tmp_dir();
+    let root = outer.path().join("root");
+    fs::create_dir(&root).unwrap();
+    let victim = outer.path().join("evil.txt");
+    fs::write(&victim, "keep").unwrap();
+    let manager = make_manager(&root, &FakeEsManager::new());
+
+    let (_, err) = split(block_on(manager.delete_file("missing/../../evil.txt")));
+
+    assert_eq!(err.as_deref(), Some("잘못된 경로입니다"));
+    assert!(victim.is_file());
+}

@@ -195,3 +195,17 @@ fn check_text(text: &str, report: &mut FileReport) {
         report.push(Category::Render, Severity::Low, "LONG_LINE", &format!("line {n}"), &format!("limit={MAX_LINE_CHARS}"));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_multibyte_char_cut_at_the_end_is_dropped_but_a_real_error_is_kept() {
+        let cut = &"가나".as_bytes()[..5]; // "나"의 앞 2바이트만 남았다
+        assert_eq!(trim_truncated_tail(cut), "가".as_bytes());
+        let invalid = b"ab\xffcd";
+        assert_eq!(trim_truncated_tail(invalid), invalid);
+        assert_eq!(trim_truncated_tail("끝".as_bytes()), "끝".as_bytes());
+    }
+}

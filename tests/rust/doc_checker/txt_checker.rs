@@ -267,3 +267,21 @@ fn oversized_file_is_truncated_and_marked_incomplete() {
     assert!(r.incomplete);
     assert!(r.reasons.iter().any(|x| x == "truncated: only first 64 MiB scanned"), "{:?}", r.reasons);
 }
+
+#[test]
+fn a_missing_file_is_incomplete_because_the_read_failed() {
+    let mut report = FileReport::new(std::path::Path::new("none.txt"), None);
+    doc_checker::txt_checker::scan_txt_file(std::path::Path::new("/nonexistent/none.txt"), &CheckOptions::default(), &mut report);
+
+    assert!(report.incomplete && report.reasons.iter().any(|r| r.starts_with("read failed")), "{:?}", report.reasons);
+}
+
+#[test]
+fn a_path_that_cannot_be_read_as_a_file_is_incomplete_because_the_read_failed() {
+    // 디렉터리는 열리지만 읽을 수 없다.
+    let dir = tempfile::tempdir().unwrap();
+    let mut report = FileReport::new(dir.path(), None);
+    doc_checker::txt_checker::scan_txt_file(dir.path(), &CheckOptions::default(), &mut report);
+
+    assert!(report.incomplete && report.reasons.iter().any(|r| r.starts_with("read failed")), "{:?}", report.reasons);
+}

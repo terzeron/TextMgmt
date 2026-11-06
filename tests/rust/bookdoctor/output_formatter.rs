@@ -1,6 +1,6 @@
 //! `bookdoctor::output_formatter` 테스트: 터미널 색. 문자열 정리는 `tests/rust/common/text_sanitizer.rs`가 검증한다.
 
-use bookdoctor::output_formatter::{ColorMode, Style, enabled, paint};
+use bookdoctor::output_formatter::{ColorMode, Style, enabled, paint, thousands};
 
 #[test]
 fn paint_wraps_with_ansi_when_on() {
@@ -41,4 +41,11 @@ fn color_mode_parses_three_names() {
     assert_eq!(ColorMode::parse("never"), Some(ColorMode::Never));
     assert_eq!(ColorMode::parse("Always"), None);
     assert_eq!(ColorMode::parse(""), None);
+}
+
+#[test]
+fn thousands_groups_digits_by_three_from_the_right() {
+    for (n, expected) in [(0, "0"), (999, "999"), (1_000, "1,000"), (12_345, "12,345"), (1_234_567, "1,234,567")] {
+        assert_eq!(thousands(n), expected);
+    }
 }

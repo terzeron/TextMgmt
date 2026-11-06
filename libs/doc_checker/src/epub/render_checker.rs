@@ -966,3 +966,23 @@ mod entity_table_tests {
         assert!(XHTML_ENTITIES.windows(2).all(|w| w[0].0 < w[1].0));
     }
 }
+
+#[cfg(test)]
+mod capture_tests {
+    use std::io::Write;
+
+    use super::Capture;
+
+    #[test]
+    fn capture_counts_bytes_keeps_them_only_on_request_and_flushes_without_effect() {
+        let mut counting = Capture { n: 0, buf: None };
+        counting.write_all(b"abc").unwrap();
+        counting.flush().unwrap();
+        assert_eq!((counting.n, counting.buf), (3, None));
+
+        let mut keeping = Capture { n: 0, buf: Some(Vec::new()) };
+        keeping.write_all(b"ab").unwrap();
+        keeping.write_all(b"c").unwrap();
+        assert_eq!((keeping.n, keeping.buf.as_deref()), (3, Some(&b"abc"[..])));
+    }
+}

@@ -1113,3 +1113,53 @@ fn pdf_ordinary_javascript_stays_high() {
         assert_eq!(pdf_worst(&r), Some(Severity::High), "{js}: {:?}", r.findings);
     }
 }
+
+// ---- 진입점 `scan`에 바이트를 직접 넣는 경우 ----
+
+fn scan_direct(bytes: &[u8]) -> FileReport {
+    let mut report = FileReport::new(std::path::Path::new("t.pdf"), Some(doc_checker::Format::Pdf));
+    security_checker::scan(bytes, &mut report);
+    report
+}
+
+fn scan_direct_with(extra: &str, more: &[&str]) -> FileReport {
+    let cat = catalog(extra);
+    let mut objs = vec![cat.as_str(), PAGES, PAGE];
+    objs.extend_from_slice(more);
+    scan_direct(&pdf(&objs))
+}
+
+fn stream_object(body: &[u8]) -> String {
+    format!("<< /Length {} >>\nstream\n{}\nendstream", body.len(), String::from_utf8_lossy(body))
+}
+
+#[test]
+fn a_file_that_cannot_be_parsed_is_incomplete_with_the_parse_error() {
+    let r = scan_direct(b"%PDF-1.4\nthis is not a pdf at all");
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.starts_with("parse error:")), "{:?}", r.reasons);
+}
+
+#[test]
+fn javascript_kept_in_a_stream_object_is_found() {
+    let r = scan_direct_with("/OpenAction 4 0 R", &["<< /S /JavaScript /JS 5 0 R >>", &stream_object(b"app.alert(1)")]);
+    assert!(r.findings.iter().any(|f| f.category == Category::Security && f.code.to_lowercase().contains("javascript")), "{:?}", r.findings);
+}
+
+#[test]
+fn an_action_whose_type_is_not_a_name_is_not_a_known_action() {
+    let r = scan_direct_with("/OpenAction << /S 5 /JS (app.alert(1)) >>", &[]);
+    assert!(r.reasons.is_empty(), "{:?}", r.reasons);
+}
+
+#[test]
+fn a_remote_goto_with_a_file_specification_dictionary_reports_the_target_file() {
+    let r = scan_direct_with("/OpenAction << /S /GoToR /F << /Type /Filespec /F (other.pdf) >> /D [0 /Fit] >>", &[]);
+    assert!(r.findings.iter().any(|f| f.detail.contains("other.pdf")), "{:?}", r.findings);
+}
+
+#[test]
+fn a_js_stream_over_the_inspection_limit_in_another_action_is_flagged_as_not_fully_inspected() {
+    let big = vec![b'a'; 70 * 1024];
+    let r = scan_direct_with("/OpenAction << /S /Launch /JS 4 0 R >>", &[&stream_object(&big)]);
+    assert!(r.findings.iter().any(|f| f.code == "JavaScript stream not fully inspected"), "{:?}", r.findings);
+}

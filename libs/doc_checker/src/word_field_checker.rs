@@ -86,3 +86,118 @@ pub(crate) fn classify_field(instr: &str, name: &str, report: &mut FileReport) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    fn classify(instr: &str) -> FileReport {
+        let mut report = FileReport::new(Path::new("a.docx"), None);
+        classify_field(instr, "word/document.xml", &mut report);
+        report
+    }
+
+    fn only(report: &FileReport) -> (&str, Severity) {
+        assert_eq!(report.findings.len(), 1, "{:?}", report.findings);
+        (&report.findings[0].code, report.findings[0].severity)
+    }
+
+    #[test]
+    fn file_tail_with_a_host_or_a_unc_path_is_remote() {
+        assert!(file_tail_is_remote("//host/share/x.doc"));
+        assert!(file_tail_is_remote("////host/share"), "호스트가 비어도 경로가 //로 시작하면 UNC다");
+        assert!(file_tail_is_remote("//localhost//host/share"));
+    }
+
+    #[test]
+    fn file_tail_with_a_drive_or_posix_path_is_local() {
+        assert!(!file_tail_is_remote("///c:/dir/x.doc"));
+        assert!(!file_tail_is_remote("//localhost/c:/x"));
+        assert!(!file_tail_is_remote("/c:/x"));
+        assert!(!file_tail_is_remote(""));
+    }
+
+    #[test]
+    fn file_tail_stops_at_whitespace_and_quotes() {
+        assert!(!file_tail_is_remote("///c:/x.doc \"//evil/share\""));
+        assert!(!file_tail_is_remote("///c:/x.doc'//evil/share"));
+    }
+
+    #[test]
+    fn file_tail_lookahead_cuts_on_a_char_boundary() {
+        // 앞 512바이트에서 자르는 위치가 가 글자 한가운데여도 panic하지 않는다.
+        let tail = format!("/{}", "가".repeat(300));
+        assert!(!file_tail_is_remote(&tail));
+    }
+
+    #[test]
+    fn cap_text_keeps_text_within_the_limit_untouched() {
+        assert_eq!(cap_text("abc"), ("abc", false));
+        let exact = "a".repeat(MAX_FIELD_TEXT);
+        assert_eq!(cap_text(&exact), (exact.as_str(), false));
+    }
+
+    #[test]
+    fn cap_text_truncates_long_text_and_reports_it() {
+        let long = "a".repeat(MAX_FIELD_TEXT + 10);
+        let (kept, truncated) = cap_text(&long);
+        assert_eq!(kept.len(), MAX_FIELD_TEXT);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn cap_text_cuts_on_a_char_boundary() {
+        let long = "가".repeat(MAX_FIELD_TEXT / 3 + 5);
+        let (kept, truncated) = cap_text(&long);
+        assert!(truncated);
+        assert!(kept.len() <= MAX_FIELD_TEXT && kept.chars().all(|c| c == '가'));
+    }
+
+    #[test]
+    fn dde_fields_are_critical_in_any_case() {
+        for instr in ["DDEAUTO c:\\\\cmd.exe", "dde cmd", "  DdeAuto x"] {
+            let report = classify(instr);
+            assert_eq!(only(&report), ("OOXML_DDE_FIELD", Severity::Critical), "{instr}");
+            assert_eq!(report.findings[0].location, "word/document.xml");
+        }
+    }
+
+    #[test]
+    fn remote_include_fields_are_high() {
+        for instr in [r#"INCLUDETEXT "\\host\share\x.doc""#, r#"LINK Excel.Sheet.8 "file://host/share/x.xls""#, r#"IMPORT "http://evil.example/x.png""#, r#"INCLUDETEXT "https://evil.example/x.doc""#]
+        {
+            assert_eq!(only(&classify(instr)), ("OOXML_DANGEROUS_FIELD", Severity::High), "{instr}");
+        }
+    }
+
+    #[test]
+    fn include_picture_over_http_is_medium_but_over_unc_is_high() {
+        assert_eq!(only(&classify(r#"INCLUDEPICTURE "https://cdn.example/a.png""#)), ("OOXML_DANGEROUS_FIELD", Severity::Medium));
+        assert_eq!(only(&classify(r#"INCLUDEPICTURE "\\host\share\a.png""#)), ("OOXML_DANGEROUS_FIELD", Severity::High));
+        assert_eq!(only(&classify(r#"INCLUDEPICTURE "file://host/share/a.png""#)), ("OOXML_DANGEROUS_FIELD", Severity::High));
+    }
+
+    #[test]
+    fn local_and_unrelated_fields_are_ignored() {
+        for instr in [r#"INCLUDETEXT "c:\\dir\\x.doc""#, r#"INCLUDEPICTURE "file:///c:/a.png""#, "PAGE", "", "   "] {
+            assert!(classify(instr).findings.is_empty(), "{instr}");
+        }
+    }
+
+    #[test]
+    fn the_same_location_and_code_is_reported_once() {
+        let mut report = FileReport::new(Path::new("a.docx"), None);
+        classify_field("DDE a", "word/document.xml", &mut report);
+        classify_field("DDE b", "word/document.xml", &mut report);
+        classify_field("DDE c", "word/footer1.xml", &mut report);
+        assert_eq!(report.findings.len(), 2);
+    }
+
+    #[test]
+    fn analysis_stops_at_the_length_cap() {
+        let hidden = format!("INCLUDETEXT {} http://evil.example/x", "a".repeat(MAX_FIELD_TEXT));
+        assert!(classify(&hidden).findings.is_empty(), "상한 뒤의 URL은 보지 않는다");
+    }
+}

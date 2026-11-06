@@ -1124,3 +1124,21 @@ fn scan_epub_unguarded(path: &Path, limits: &Limits, s: &mut Scanner, stats: &mu
     stats.entries = entries;
     stats.inspected_bytes = inspected;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_alias_window_never_cuts_through_a_multibyte_char() {
+        // 가(3바이트)로 채워 창의 양 끝이 글자 한가운데에 떨어지게 한다. 디코딩 호출이 창 밖에 있으면 별칭만으로는 지표가 아니다.
+        let text = format!("{}a = eval;x{}", "가".repeat(100), "가".repeat(101));
+        assert!(!alias_near_decode(&text));
+    }
+
+    #[test]
+    fn an_alias_next_to_a_decode_call_is_flagged() {
+        assert!(alias_near_decode("var e = eval; e(atob('YQ=='));"));
+        assert!(!alias_near_decode("var e = eval;"));
+    }
+}

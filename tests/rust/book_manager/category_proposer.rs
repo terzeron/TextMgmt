@@ -1546,3 +1546,21 @@ mod classified_file_moves {
         assert!(tmp.path().join("A").join("book.txt").exists());
     }
 }
+
+#[test]
+fn test_move_classified_file_falls_back_to_copy_and_remove_across_devices() {
+    let tmp = tmp_dir();
+    let tmp_path = tmp.path();
+    fs::create_dir_all(tmp_path.join("A")).unwrap();
+    let source = tmp_path.join("A/f1.txt");
+    fs::write(&source, "content").unwrap();
+    let es = FakeEsManager::new();
+    let faulty = FaultyFs::new();
+    faulty.set_rename(|_src, _dst| Some(std::io::Error::from(std::io::ErrorKind::CrossesDevices)));
+    let manager = BookManager::with_deps(deps(tmp_path, &es).with_fs(faulty));
+
+    let _ = block_on(manager.move_classified_file(&source, "B", "book", MoveOpts::default()));
+
+    assert_eq!(fs::read_to_string(tmp_path.join("B/f1.txt")).unwrap(), "content");
+    assert!(!source.exists(), "복사한 뒤 원본을 지운다");
+}

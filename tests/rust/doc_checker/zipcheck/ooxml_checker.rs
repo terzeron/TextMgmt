@@ -693,3 +693,14 @@ mod package_structure {
         assert!(scan(&p).has("FORMAT_MISMATCH"));
     }
 }
+
+#[test]
+fn directory_entries_and_embedded_files_with_other_extensions_raise_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("a.docx");
+    support::docx_with(&p, &[], &[("word/media/", b""), ("word/embeddings/readme.txt", b"note")]);
+
+    let r = scan_file(&p, &CheckOptions::default());
+
+    assert!(r.findings.is_empty() && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+}

@@ -154,3 +154,28 @@ fn the_number_of_condition_terms_per_rule_is_limited() {
     let at: String = (0..1001).map(|i| format!("$a at {i}")).collect::<Vec<_>>().join(" or ");
     assert!(err(&format!("rule X {{ strings: $a = \"ab\" condition: {at} }}")).message.contains("terms"));
 }
+
+#[test]
+fn unterminated_comments_and_hex_strings_are_errors() {
+    assert!(err("/* never closed").message.contains("unterminated block comment"));
+    assert!(err("rule a { strings: $x = { 4D 5A").message.contains("unterminated hex string"));
+}
+
+#[test]
+fn a_hex_string_over_the_size_limit_is_an_error() {
+    let hex = "AA ".repeat(doc_checker::rule_engine::MAX_STRING_BYTES + 1);
+    let e = err(&format!("rule a {{ strings: $x = {{ {hex} }} condition: $x }}"));
+    assert!(e.message.contains("hex string longer than"), "{}", e.message);
+}
+
+#[test]
+fn a_count_comparison_accepts_a_hex_integer() {
+    let set = ok("rule a { strings: $x = \"MZ\" condition: #x >= 0x10 }");
+    assert_eq!(set.rules.len(), 1);
+}
+
+#[test]
+fn a_rule_named_like_unsupported_syntax_is_an_unsupported_error_at_its_position() {
+    let e = err("rule import { condition: true }");
+    assert!(e.message.contains("import"), "{}", e.message);
+}

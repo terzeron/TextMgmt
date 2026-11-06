@@ -35,3 +35,25 @@ async fn facade_lookups_return_what_the_inherent_methods_return() {
     let categories = BookManagerApi::get_categories(&manager).await.unwrap();
     assert_eq!(categories, serde_json::json!(manager.get_categories().await.unwrap()));
 }
+
+#[tokio::test]
+async fn facade_reloads_return_what_the_inherent_methods_return() {
+    let tmp = tempfile::tempdir().unwrap();
+    let es = FakeEsManager::new();
+    let manager = manager(tmp.path(), &es);
+
+    let via = BookManagerApi::reload_category(&manager, "", "book").await;
+    let direct = manager.reload_category("", Some("book")).await;
+    assert_eq!(format!("{:?}", via.as_ref().err()), format!("{:?}", direct.as_ref().err()));
+    assert!(via.is_err(), "빈 카테고리 이름은 오류다");
+
+    let via = BookManagerApi::reload_category_mismatch_files(&manager, "", "book", None).await;
+    let direct = manager.reload_category_mismatch_files_for("", "book", None).await;
+    assert_eq!(format!("{:?}", via.as_ref().err()), format!("{:?}", direct.as_ref().err()));
+    assert!(via.is_err());
+
+    let via = BookManagerApi::reload_category_mismatches(&manager, "book", None).await;
+    let direct = manager.reload_category_mismatches_for("book", None).await;
+    assert_eq!(via.is_ok(), direct.is_ok());
+    assert_eq!(format!("{:?}", via.as_ref().err()), format!("{:?}", direct.as_ref().err()));
+}

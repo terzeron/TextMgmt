@@ -362,3 +362,15 @@ fn mojibake_sampling_is_skipped_when_security_already_reported_the_budget() {
     let r = scan_file(&path, &CheckOptions { max_total_mb: 1, ..CheckOptions::default() });
     assert!(r.reasons.iter().any(|x| x.contains("mojibake sampling skipped")), "{:?}", r.reasons);
 }
+
+#[test]
+fn an_epub_sample_cut_by_the_decompression_budget_is_incomplete() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.epub");
+    epub_with_chapter(&path, &xhtml(&format!("<p>{}</p>", clean_korean())));
+    let mut report = FileReport::new(&path, None);
+
+    mojibake_detector::check_file_limited(&path, &mut report, TextSource::Epub, 1, usize::MAX);
+
+    assert!(report.incomplete && report.reasons.iter().any(|r| r.contains("decompression budget reached")), "{:?}", report.reasons);
+}

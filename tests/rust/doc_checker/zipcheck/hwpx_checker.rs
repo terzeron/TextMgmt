@@ -190,3 +190,32 @@ fn crc_error_in_a_content_part_is_reported_not_silently_skipped() {
     let r = scan_file(&p, &CheckOptions::default());
     assert!(r.has("ZIP_CRC_MISMATCH"), "{:?} {:?}", r.findings, r.reasons);
 }
+
+#[test]
+fn a_manifest_that_is_not_xml_is_a_high_malformed_markup() {
+    let r = hwpx(&[], &[("Contents/content.hpf", b"<not closed")]);
+    let f = finding(&r, "MALFORMED_MARKUP");
+    assert_eq!((f.severity, f.location.as_str()), (Severity::High, "Contents/content.hpf"));
+}
+
+#[test]
+fn more_entries_than_the_limit_is_incomplete() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("a.hwpx");
+    support::hwpx_with(&p, &[], &[]);
+    let mut r = FileReport::new(&p, Some(Format::Hwpx));
+
+    doc_checker::zipcheck::hwpx_checker::inspect(&p, &doc_checker::zip_member_reader::Limits { max_files: 1, ..Default::default() }, &mut r);
+
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.starts_with("scan limited to the first 1 of ")), "{:?}", r.reasons);
+}
+
+#[test]
+fn xml_parts_beyond_the_scan_cap_are_not_read() {
+    let parts: Vec<(String, Vec<u8>)> = (0..300).map(|i| (format!("Contents/extra{i}.xml"), b"<a/>".to_vec())).collect();
+    let add: Vec<(&str, &[u8])> = parts.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+
+    let r = hwpx(&[], &add);
+
+    assert!(r.incomplete && r.reasons.iter().any(|m| m == "scan stopped after 256 XML parts"), "{:?}", r.reasons);
+}

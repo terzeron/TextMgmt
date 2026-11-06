@@ -92,3 +92,18 @@ pub(crate) fn apply_and_report(path: &Path, bytes: &[u8], opts: &Options, shown:
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_and_report_writes_a_fail_line_and_returns_false_when_apply_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = Options { library_root: dir.path().to_path_buf(), ..Options::default() };
+        let mut out = Vec::new();
+        let applied = apply_and_report(&dir.path().join("none.epub"), b"x", &opts, "none.epub", &mut out).unwrap();
+        assert!(!applied);
+        assert!(String::from_utf8(out).unwrap().starts_with("FAIL none.epub: "));
+    }
+}

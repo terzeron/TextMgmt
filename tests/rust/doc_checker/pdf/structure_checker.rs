@@ -501,3 +501,54 @@ fn normal_kids_array_through_the_real_load_is_complete() {
     assert_absent(&r, "ZERO_PAGES");
     assert!(!r.incomplete, "{r:?}");
 }
+
+#[test]
+fn the_default_entry_point_reports_structure_without_a_worker() {
+    let doc = doc_with_pages(vec![]);
+    let mut r = FileReport::new(Path::new("x.pdf"), None);
+
+    structure_checker::inspect(b"%PDF-1.7\n%%EOF\n", Some(&doc), doc_checker::pdf::security_checker::LoadInfo::default(), None, Path::new("x.pdf"), &opts(), &mut r);
+
+    assert_flag(&r, "ZERO_PAGES", Category::Defect, Severity::High);
+}
+
+/// 쪽 수를 `pages`로 답하고, 본문 추출은 첫 호출만 성공하고 그 뒤는 0이 아닌 종료 코드로 끝난다.
+struct TailExtractionFails {
+    pages: usize,
+    text_calls: std::sync::atomic::AtomicUsize,
+}
+
+impl sysdeps::CommandRunner for TailExtractionFails {
+    fn run(&self, argv: &[String], _: Option<std::time::Duration>) -> Result<sysdeps::CommandOutput, sysdeps::CommandError> {
+        if argv.get(5).map(String::as_str) != Some("text") {
+            return Ok(sysdeps::CommandOutput { returncode: 0, stdout: format!("Pages: {}\n", self.pages).into_bytes(), stderr: Vec::new() });
+        }
+        if self.text_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            Ok(sysdeps::CommandOutput { returncode: 0, stdout: "본문 텍스트".as_bytes().to_vec(), stderr: Vec::new() })
+        } else {
+            Ok(sysdeps::CommandOutput { returncode: 1, stdout: Vec::new(), stderr: b"boom".to_vec() })
+        }
+    }
+
+    fn which(&self, _: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+}
+
+#[test]
+fn a_failed_tail_text_extraction_is_incomplete_with_the_reason() {
+    let pages = structure_checker::TEXT_PROBE_PAGES + 3;
+    let mut doc = doc_with_pages((0..pages).map(|i| Object::Reference((10 + i as u32, 0))).collect());
+    for i in 0..pages {
+        let mut page = Dictionary::new();
+        page.set("Type", "Page");
+        page.set("Parent", Object::Reference((2, 0)));
+        doc.objects.insert((10 + i as u32, 0), Object::Dictionary(page));
+    }
+    let runner = TailExtractionFails { pages, text_calls: std::sync::atomic::AtomicUsize::new(0) };
+    let mut r = FileReport::new(Path::new("x.pdf"), None);
+
+    structure_checker::inspect_with(b"%PDF-1.7\n%%EOF\n", Some(&doc), doc_checker::pdf::security_checker::LoadInfo::default(), None, Path::new("x.pdf"), &CheckOptions::default(), &mut r, &runner);
+
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.starts_with("PDF text extraction failed:") && m.contains("boom")), "{:?}", r.reasons);
+}

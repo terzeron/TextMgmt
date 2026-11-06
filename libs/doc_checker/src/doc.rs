@@ -525,3 +525,59 @@ pub fn inspect_rtf(bytes: &[u8], report: &mut FileReport) {
         report.mark_incomplete(reason);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn units(text: &str) -> Vec<u16> {
+        text.chars().map(|c| c as u16).collect()
+    }
+
+    fn emitted(text: &str) -> (Vec<String>, bool) {
+        let mut got = Vec::new();
+        let limited = scan_units(units(text).into_iter(), &mut |t: &str| got.push(t.to_string()));
+        (got, limited)
+    }
+
+    #[test]
+    fn a_field_with_a_blank_instruction_emits_nothing() {
+        assert_eq!(emitted("\u{13}\u{14} \u{15}"), (Vec::new(), false));
+    }
+
+    #[test]
+    fn a_field_without_a_separator_emits_its_text_at_the_end_marker() {
+        assert_eq!(emitted("\u{13}QUOTE hi\u{15}"), (vec!["QUOTE hi".to_string()], false));
+    }
+
+    #[test]
+    fn instructions_beyond_the_cap_are_dropped_and_reported_as_limited() {
+        let (got, limited) = emitted(&"\u{13}A\u{14}\u{15}".repeat(MAX_INSTRUCTIONS + 1));
+        assert!(limited);
+        assert_eq!(got.len(), MAX_INSTRUCTIONS);
+    }
+
+    #[test]
+    fn fields_nested_deeper_than_the_cap_are_skipped_and_reported_as_limited() {
+        let text = format!("{}{}", "\u{13}".repeat(MAX_FIELD_DEPTH + 1), "\u{15}".repeat(MAX_FIELD_DEPTH + 1));
+        assert_eq!(emitted(&text), (Vec::new(), true));
+    }
+
+    #[test]
+    fn a_hex_escape_that_is_not_a_letter_or_digit_is_kept_as_written() {
+        assert_eq!(normalize(b"\\'20x"), b"\\'20x");
+        assert_eq!(normalize(b"\\obj\\'64ata"), b"\\objdata");
+    }
+
+    #[test]
+    fn a_negative_control_word_parameter_is_signed() {
+        assert_eq!(parameter(b"-12 x", 0), (-12, 4));
+        assert_eq!(parameter(b"7x", 0), (7, 1));
+    }
+
+    #[test]
+    fn hex_decoding_skips_escapes_and_stops_at_a_trailing_backslash() {
+        assert_eq!(decode_hex_prefix(b"4D\\'41 5A}", 0).bytes, [0x4D, 0x5A]);
+        assert_eq!(decode_hex_prefix(b"4D5A\\", 0).bytes, [0x4D, 0x5A]);
+    }
+}

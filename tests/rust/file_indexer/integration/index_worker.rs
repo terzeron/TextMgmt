@@ -62,3 +62,39 @@ fn worker_runs_poppler_pdf_stage() {
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["pages"], 2);
 }
+
+#[test]
+fn worker_reports_a_failing_pdf_stage_with_exit_1() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let output = worker().args(["__pdf-stage", "text-poppler"]).arg(dir.path().join("missing.pdf")).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!output.stderr.is_empty());
+}
+
+#[test]
+fn worker_reports_read_file_usage() {
+    let output = worker().args(["__read-file", "book-root"]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("usage: __read-file"));
+}
+
+#[test]
+fn worker_reads_a_text_file_into_an_index_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let (books, comics) = (dir.path().join("book"), dir.path().join("comics"));
+    fs::create_dir_all(books.join("3_판타지")).unwrap();
+    fs::create_dir_all(&comics).unwrap();
+    let path = books.join("3_판타지/a.txt");
+    fs::write(&path, "소림사 장로가 강호에서 내공을 운기조식했다.\n".repeat(30)).unwrap();
+
+    let output = worker().arg("__read-file").arg(&books).arg(&comics).arg(&path).args(["0", "", "0"]).output().unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let item = result["item"].as_array().unwrap_or_else(|| panic!("{result}"));
+    assert!(item[0].as_i64().is_some_and(|id| id > 0), "문서 id는 파일의 inode다: {result}");
+    assert!(result["messages"].is_array());
+}

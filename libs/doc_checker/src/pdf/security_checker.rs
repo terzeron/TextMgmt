@@ -677,3 +677,91 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod branch_tests {
+    use super::*;
+
+    #[test]
+    fn the_alias_window_never_cuts_through_a_multibyte_char() {
+        // 가(3바이트)로 채워 창의 양 끝이 글자 한가운데에 떨어지게 한다. 디코딩 호출이 창 밖이면 별칭만으로는 지표가 아니다.
+        let text = format!("{}a=eval;x{}", "가".repeat(100), "가".repeat(101));
+        assert!(!alias_near_decode(&text));
+        assert!(alias_near_decode("var e=eval;e(atob('x'));"));
+    }
+
+    #[test]
+    fn an_unresolved_action_name_is_described_by_the_kind_of_value_it_is() {
+        let cases = [
+            (Object::Null, "value is a null, not a name"),
+            (Object::Boolean(true), "value is a boolean, not a name"),
+            (Object::Integer(5), "value is an integer, not a name"),
+            (Object::Real(1.5), "value is a real, not a name"),
+            (Object::Name(b"X".to_vec()), "value is a name, not a name"),
+            (Object::String(b"s".to_vec(), lopdf::StringFormat::Literal), "value is a string, not a name"),
+            (Object::Array(Vec::new()), "value is an array, not a name"),
+            (Object::Dictionary(lopdf::Dictionary::new()), "value is a dictionary, not a name"),
+            (Object::Stream(lopdf::Stream::new(lopdf::Dictionary::new(), Vec::new())), "value is a stream, not a name"),
+        ];
+        for (object, expected) in cases {
+            assert_eq!(describe_unresolved(&object, None), expected);
+        }
+        let reference = Object::Reference((7, 0));
+        assert_eq!(describe_unresolved(&reference, None), "reference 7 0 R does not resolve");
+        assert_eq!(describe_unresolved(&reference, Some(&Object::Reference((8, 0)))), "reference 7 0 R resolves to a reference, not a name");
+    }
+
+    #[test]
+    fn an_encrypted_document_is_marked_incomplete() {
+        let mut doc = Document::new();
+        let encrypt = doc.add_object(Object::Dictionary(lopdf::Dictionary::new()));
+        doc.trailer.set("Encrypt", Object::Reference(encrypt));
+        let mut report = FileReport::new(std::path::Path::new("t.pdf"), None);
+        scan_document(&doc, &mut report);
+        assert!(report.incomplete && report.reasons.iter().any(|r| r.starts_with("encrypted:")), "{:?}", report.reasons);
+    }
+
+    #[test]
+    fn embedded_files_deeper_than_the_depth_cap_are_not_collected() {
+        let mut doc = Document::new();
+        let stream = doc.add_object(Object::Stream(lopdf::Stream::new(lopdf::Dictionary::new(), b"payload".to_vec())));
+        let mut ef = lopdf::Dictionary::new();
+        ef.set("F", Object::Reference(stream));
+        let mut spec = lopdf::Dictionary::new();
+        spec.set("EF", Object::Dictionary(ef));
+        let shallow = Object::Array(vec![Object::Dictionary(spec.clone())]);
+        let mut out = BTreeSet::new();
+        collect_embedded(&doc, &shallow, &mut out, 0);
+        assert_eq!(out, BTreeSet::from([stream]));
+
+        let mut deep = Object::Dictionary(spec);
+        for _ in 0..MAX_DEPTH + 5 {
+            deep = Object::Array(vec![deep]);
+        }
+        let mut out = BTreeSet::new();
+        collect_embedded(&doc, &deep, &mut out, 0);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn helpers_read_a_stream_given_inline_and_ignore_non_name_values() {
+        let doc = Document::new();
+        let stream = Object::Stream(lopdf::Stream::new(lopdf::Dictionary::new(), b"app.alert(1)".to_vec()));
+        assert_eq!(text_preview(&doc, &stream), "app.alert(1)");
+        assert_eq!(raw_bytes(&doc, &stream), b"app.alert(1)");
+        assert_eq!(name_of(&Object::Integer(1)), None);
+        assert_eq!(name_of(&Object::Name(b"JavaScript".to_vec())), Some("JavaScript".to_string()));
+    }
+
+    #[test]
+    fn walking_stops_with_a_low_finding_past_the_depth_cap() {
+        let doc = Document::new();
+        let mut deep = Object::Null;
+        for _ in 0..MAX_DEPTH + 5 {
+            deep = Object::Array(vec![deep]);
+        }
+        let mut scanner = Scanner { doc: &doc, findings: Vec::new() };
+        scanner.walk(&deep, (1, 0), "root", 0);
+        assert!(scanner.findings.iter().any(|f| f.kind == "nesting limit exceeded" && f.severity == Severity::Low), "{}", scanner.findings.len());
+    }
+}

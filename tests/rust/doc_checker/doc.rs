@@ -533,3 +533,65 @@ mod rtf_checker {
         assert!(!scan("b.rtf", b"{\\rtf1{\\*\\objdata 0102030405060708}}").incomplete);
     }
 }
+
+// ---- RTF 파일 읽기 ----
+
+fn scan_rtf_path(path: &std::path::Path) -> FileReport {
+    let mut report = FileReport::new(path, Some(Format::Doc));
+    doc_checker::doc::scan_doc_file(path, &CheckOptions::default(), container_parser::magic_sniffer::Sniffed::Rtf, &mut report);
+    report
+}
+
+#[test]
+fn an_rtf_that_cannot_be_opened_is_incomplete() {
+    let r = scan_rtf_path(std::path::Path::new("/nonexistent/a.rtf"));
+    assert!(r.incomplete && r.reasons.iter().any(|m| m == "RTF file could not be opened"), "{:?}", r.reasons);
+}
+
+#[test]
+fn an_rtf_that_cannot_be_read_is_incomplete() {
+    // 디렉터리는 열리지만 읽을 수 없다.
+    let d = tempfile::tempdir().unwrap();
+    let r = scan_rtf_path(d.path());
+    assert!(r.incomplete && r.reasons.iter().any(|m| m == "RTF file could not be read"), "{:?}", r.reasons);
+}
+
+#[test]
+fn an_rtf_over_the_read_limit_is_inspected_only_in_part() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("big.rtf");
+    let mut file = fs::File::create(&p).unwrap();
+    std::io::Write::write_all(&mut file, b"{\\rtf1 text}").unwrap();
+    file.set_len(64 * 1024 * 1024 + 16).unwrap(); // 나머지는 0으로 채워진 희소 파일이다
+
+    let r = scan_rtf_path(&p);
+
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("RTF larger than the read limit")), "{:?}", r.reasons);
+}
+
+// ---- 내장 객체와 VBA ----
+
+#[test]
+fn an_embedded_object_name_longer_than_the_scanned_prefix_is_incomplete() {
+    // 4바이트 크기, 2바이트 형식, 그 뒤 널 없는 긴 이름.
+    let mut native = vec![0u8; 6];
+    native.extend(std::iter::repeat_n(b'a', 70_000));
+    let r = scan_doc(&[("ObjectPool/_1/\u{1}Ole10Native", &native)], 0, b"hi");
+    assert!(r.reasons.iter().any(|m| m.contains("longer than the scanned prefix")), "{:?}", r.reasons);
+}
+
+#[test]
+fn a_vba_project_whose_module_cannot_be_read_is_incomplete() {
+    let dir = compress(&dir_stream(&[("Module1", "Module1", 16)]));
+    let r = scan_doc(&[("Macros/VBA/dir", &dir)], 0, b"hello");
+    assert!(r.reasons.iter().any(|m| m.contains("could not be fully read") || m.contains("could not be read")), "{:?}", r.reasons);
+}
+
+#[test]
+fn only_the_first_suspicious_keyword_among_several_modules_is_reported() {
+    let dir = compress(&dir_stream(&[("Module1", "Module1", 16), ("Module2", "Module2", 16)]));
+    let first = module_stream(16, "Sub A()\r\n  Shell \"calc\"\r\nEnd Sub\r\n");
+    let second = module_stream(16, "Sub B()\r\n  CreateObject \"x\"\r\nEnd Sub\r\n");
+    let r = scan_doc(&[("Macros/VBA/dir", &dir), ("Macros/VBA/Module1", &first), ("Macros/VBA/Module2", &second)], 0, b"hello");
+    assert!(r.has("DOC_VBA_MACRO"), "{:?}", r.findings);
+}

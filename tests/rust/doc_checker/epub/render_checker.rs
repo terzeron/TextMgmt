@@ -836,3 +836,60 @@ fn budget_exhaustion_is_judged_the_same_with_or_without_skipping() {
         assert_same(&new, &old);
     }
 }
+
+fn member_unreadable_details(r: &FileReport) -> Vec<&str> {
+    r.findings.iter().filter(|f| f.code == "MEMBER_UNREADABLE" && f.detail.starts_with("멤버를 읽을 수 없음")).map(|f| f.detail.as_str()).collect()
+}
+
+/// 본문이 링크한 스타일시트 `OEBPS/s.css`가 든 EPUB.
+fn epub_with_linked_stylesheet() -> NamedFile {
+    let mut p = valid();
+    p.ch1 = chapter_with(&link("s.css"), &r#"<span class="h">x</span>"#.repeat(20));
+    p.extra.push(("OEBPS/s.css".into(), padded(".h{font-size:0}", 2000)));
+    build(&p)
+}
+
+#[test]
+fn a_stylesheet_with_an_unsupported_compression_method_is_reported_unreadable() {
+    let f = epub_with_linked_stylesheet();
+    crate::support::shared_fixtures::patch_central(f.path(), "OEBPS/s.css", 10, &[99, 0]);
+
+    let r = report(&f);
+
+    assert_eq!(member_unreadable_details(&r), ["멤버를 읽을 수 없음: compression method not supported: 99"], "{:?}", r.findings);
+}
+
+#[test]
+fn a_stylesheet_whose_compressed_data_is_damaged_is_a_crc_mismatch() {
+    let f = epub_with_linked_stylesheet();
+    let mut bytes = fs::read(f.path()).unwrap();
+    let name = b"OEBPS/s.css";
+    let at = bytes.windows(name.len()).position(|w| w == name).unwrap();
+    let data_start = at + name.len() + u16::from_le_bytes([bytes[at - 2], bytes[at - 1]]) as usize;
+    bytes[data_start + 4] ^= 0xff;
+    fs::write(f.path(), &bytes).unwrap();
+
+    let r = report(&f);
+
+    let f = r.findings.iter().find(|f| f.code == "ZIP_CRC_MISMATCH").unwrap_or_else(|| panic!("{:?}", r.findings));
+    assert_eq!((f.severity, f.location.as_str()), (Severity::High, "OEBPS/s.css"));
+}
+
+#[test]
+fn directory_entries_are_skipped_when_reading_members() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("a.epub");
+    epub_with_files(&p, &clean_opf(), &xhtml(&format!("<p>{}</p>", clean_korean())), &[("OEBPS/images/", b"")]);
+
+    let r = scan_file(&p, &CheckOptions::default());
+
+    assert!(member_unreadable_details(&r).is_empty() && !r.reasons.iter().any(|m| m.contains("images")), "{:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn selectors_with_pseudo_classes_attributes_ids_or_wildcards_are_skipped() {
+    let css = "p:hover, a[href], #id, *, span.hidden { font-size: 0 }";
+    let selectors = zero_size_selectors(css);
+    assert_eq!(selectors.len(), 1, "{selectors:?}");
+    assert_eq!((selectors[0].tag.as_str(), selectors[0].classes.as_slice()), ("span", &["hidden".to_string()][..]));
+}

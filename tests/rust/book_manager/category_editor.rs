@@ -97,3 +97,38 @@ fn test_delete_category_success() {
     assert_eq!(res.deleted_count, 5);
     assert_eq!(res.category, "test_cat");
 }
+
+// ---- ES 조회 실패 ----
+
+#[test]
+fn rename_category_reports_an_es_count_failure() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    es.fail("count_by_categories", "down");
+    let err = block_on(manager.rename_category("old", "new")).expect_err("ES 오류는 이름 바꾸기를 막는다");
+    assert!(err.starts_with("ES 조회 실패"), "{err}");
+}
+
+#[test]
+fn preview_delete_category_reports_an_es_count_failure() {
+    let tmp = tmp_dir();
+    fs::create_dir(tmp.path().join("cat")).unwrap();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    es.fail("count_by_category", "down");
+    let err = block_on(manager.preview_delete_category("cat")).expect_err("ES 오류는 미리보기를 막는다");
+    assert!(err.starts_with("ES 조회 실패"), "{err}");
+}
+
+#[test]
+fn delete_category_reports_an_es_count_failure_and_deletes_nothing() {
+    let tmp = tmp_dir();
+    fs::create_dir(tmp.path().join("cat")).unwrap();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    es.fail("count_by_category", "down");
+    let err = block_on(manager.delete_category("cat", true)).expect_err("ES 오류는 삭제를 막는다");
+    assert!(err.starts_with("ES 조회 실패"), "{err}");
+    assert!(tmp.path().join("cat").is_dir());
+}

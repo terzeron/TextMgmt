@@ -403,3 +403,17 @@ fn ole_content_named_docx_or_hwpx_is_sent_to_the_ole_checkers() {
         assert!(!report.findings.iter().any(|f| f.code.starts_with("ZIP_") || f.code.starts_with("OOXML_")), "{name}: ZIP 검사로 가지 않는다: {:?}", report.findings);
     }
 }
+
+#[test]
+fn dispatch_follows_content_for_an_html_name_that_holds_a_zip() {
+    assert_eq!(dispatch_format(Path::new("a.html"), Sniffed::Zip), Some(Format::Zip));
+}
+
+#[test]
+fn a_file_with_an_unknown_extension_and_plain_content_is_unsupported() {
+    let f = support::file_with("a.xyz", b"plain text");
+    let report = scan_file(f.path(), &CheckOptions::default());
+
+    assert_eq!(report.format, None);
+    assert!(report.incomplete && report.reasons.iter().any(|r| r == "unsupported format"), "{:?}", report.reasons);
+}

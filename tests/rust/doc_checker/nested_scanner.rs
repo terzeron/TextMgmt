@@ -309,3 +309,60 @@ fn scratch_dirs() -> usize {
     let prefix = format!("bookdoctor-{}-", std::process::id());
     fs::read_dir(std::env::temp_dir()).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&prefix)).count()).unwrap_or(0)
 }
+
+fn ole_with(stream: &str) -> Vec<u8> {
+    support::ole_common::make_cfb(&[(stream, b"data")]).bytes
+}
+
+#[test]
+fn an_ole_member_with_a_file_header_stream_is_scanned_as_hwp() {
+    let r = scan_bytes("a.zip", &zip_bytes(&[("note.bin", &ole_with("FileHeader"))]), &CheckOptions::default());
+    let f = r.findings.iter().find(|f| f.code == "HWP_BAD_HEADER").unwrap_or_else(|| panic!("{:?} {:?}", r.findings, r.reasons));
+    assert_eq!(f.location, "note.bin!FileHeader");
+}
+
+#[test]
+fn an_ole_member_with_a_word_document_stream_is_scanned_as_doc() {
+    let r = scan_bytes("a.zip", &zip_bytes(&[("note.bin", &ole_with("WordDocument"))]), &CheckOptions::default());
+    assert!(r.findings.is_empty() && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
+}
+
+#[test]
+fn an_ole_member_at_the_depth_limit_is_not_scanned_and_the_file_is_incomplete() {
+    // 바깥 ⊃ l1 ⊃ l2 ⊃ l3 ⊃ OLE: l3는 3단계에서 검사하고, 그 안의 OLE는 한도를 넘는다.
+    let mut data = ole_with("WordDocument");
+    for name in ["l4.zip", "l3.zip", "l2.zip", "l1.zip"] {
+        data = zip_bytes(&[(name, &data)]);
+    }
+    let r = scan_bytes("deep.zip", &data, &CheckOptions::default());
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("recursion depth limit (3) reached")), "{:?}", r.reasons);
+}
+
+#[test]
+fn nested_findings_beyond_the_merge_cap_are_not_listed() {
+    let exes: Vec<(String, Vec<u8>)> = (0..600).map(|i| (format!("a{i}.exe"), b"MZ".to_vec())).collect();
+    let refs: Vec<(&str, &[u8])> = exes.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    let r = scan_bytes("many.zip", &zip_bytes(&[("inner.zip", &zip_bytes(&refs))]), &CheckOptions::default());
+    assert_eq!(r.findings.len(), 501, "바깥의 NESTED_ARCHIVE 1건과 중첩 지표 500건");
+    assert!(r.reasons.iter().any(|m| m == "more than 500 nested findings; the rest were not listed"), "{:?}", r.reasons);
+}
+
+#[test]
+fn the_same_finding_from_two_analyzers_is_merged_once() {
+    // DOCX와 EPUB 분석기가 모두 ZIP 이름 규칙을 쓰므로 같은 (코드, 위치, 설명)이 두 번 나온다.
+    let poly = bytes_of(|p| support::docx_with(p, &[], &[("META-INF/container.xml", b"<container/>"), ("mimetype", b"application/epub+zip"), ("../evil.txt", b"x")]));
+    let r = scan_bytes("a.zip", &zip_bytes(&[("poly.dat", &poly)]), &CheckOptions::default());
+    assert!(r.has("PACKAGE_POLYGLOT"), "{:?}", r.findings);
+    let traversal: Vec<_> = r.findings.iter().filter(|f| f.code == "ZIP_PATH_TRAVERSAL").collect();
+    assert_eq!(traversal.len(), 1, "{:?}", r.findings);
+}
+
+#[test]
+fn a_container_xml_larger_than_the_prefix_is_not_trusted_as_a_genuine_hwpx() {
+    let mut padded = b"<container><!--".to_vec();
+    padded.extend(std::iter::repeat_n(b'x', 6000));
+    padded.extend_from_slice(b"--><hwpml-package/></container>");
+    let big = hwpx_bytes(&[("META-INF/container.xml", &padded), ("OEBPS/a.xhtml", REMOTE_XHTML)]);
+    let r = scan_bytes("a.zip", &zip_bytes(&[("big.dat", &big)]), &CheckOptions::default());
+    assert!(r.findings.iter().any(|f| f.code == "REMOTE_SCRIPT" && f.location.starts_with("big.dat!")), "{:?} {:?}", r.findings, r.reasons);
+}

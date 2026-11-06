@@ -301,3 +301,19 @@ mod api_adapter {
         let _ = BookManagerApi::update_book(&manager, -1, "missing", "title", "author", &path, "pdf", false).await;
     }
 }
+
+#[test]
+fn test_from_env_accepts_a_loader_program_override() {
+    let es = FakeEsManager::new();
+    let mut pairs = BASE.to_vec();
+    pairs.push(("TM_LOADER_BIN", "/opt/tm/loader"));
+    assert!(build(&pairs, &es).is_ok());
+}
+
+#[test]
+fn test_es_manager_returns_the_connected_instance() {
+    let es = FakeEsManager::new();
+    let manager = build(&BASE, &es).unwrap();
+    let connected: Arc<dyn EsManagerApi> = es.clone();
+    assert!(Arc::ptr_eq(manager.es_manager(), &connected));
+}

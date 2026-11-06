@@ -330,3 +330,19 @@ fn test_clean_empty_parent_dirs_keeps_dirs_it_cannot_read() {
     BookManager::with_deps(deps(tmp.path(), &FakeEsManager::new()).with_fs(busy)).clean_empty_parent_dirs(&sub, tmp.path());
     assert!(sub.exists());
 }
+
+#[test]
+fn test_clean_empty_parent_dirs_tolerates_paths_that_do_not_exist() {
+    let tmp = tmp_dir();
+    let stop = tmp.path().join("stop");
+    fs::create_dir(&stop).unwrap();
+    let manager = make_manager(tmp.path(), &FakeEsManager::new());
+
+    // 없는 경로는 가까운 조상을 풀어 이어 붙이며, `..`는 한 단계 올라간다.
+    manager.clean_empty_parent_dirs(&stop.join("x/../y"), &stop);
+    manager.clean_empty_parent_dirs(&stop.join("x/y"), &stop);
+    // 존재하는 조상이 하나도 없는 상대 경로도 그대로 해석한다.
+    manager.clean_empty_parent_dirs(std::path::Path::new("no-such-dir-xyz/a"), std::path::Path::new("no-such-dir-xyz"));
+
+    assert!(stop.is_dir(), "stop_dir 자신은 지우지 않는다");
+}

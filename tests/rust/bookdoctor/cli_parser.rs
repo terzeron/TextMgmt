@@ -249,6 +249,25 @@ fn mojibake_is_reported_as_json() {
 }
 
 #[test]
+fn a_failing_output_stream_makes_scan_exit_1() {
+    struct Closed;
+    impl std::io::Write for Closed {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("출력이 닫혔다"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let d = tempfile::tempdir().unwrap();
+    let text = support::clean_korean();
+    let (cp949, _, _) = encoding_rs::EUC_KR.encode(&text);
+    write_file(d.path(), "old.txt", &cp949);
+    let o = parse(&args("scan a")).unwrap();
+    assert_eq!(execute(&Options { paths: vec![d.path().into()], ..o }, &mut Closed, false, true), 1);
+}
+
+#[test]
 fn builtin_rules_are_always_on() {
     // 내장 규칙은 옵션 없이 적용된다. 규칙 목록이 비어 있지 않은지만 본다(어느 규칙이 걸리는지는 rules_builtin.rs가 본다).
     let o = parse(&args("scan a")).unwrap();

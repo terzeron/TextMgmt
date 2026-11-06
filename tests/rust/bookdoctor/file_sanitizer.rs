@@ -92,6 +92,32 @@ mod epub {
         assert_eq!(fs::read_dir(&trash).unwrap().count(), 2);
         assert_eq!(fs::read(&clean).unwrap(), clean_before);
     }
+
+    #[test]
+    fn an_unreadable_package_is_skipped_with_the_reason_and_left_untouched() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.epub");
+        epub_with_files(&p, &opf_with(""), &xhtml("<p>본문</p><script>alert(1)</script>"), &[]);
+        // container.xml이 없는 패키지 문서를 가리키면 무엇이 패키지인지 알 수 없어 다시 쓰지 않는다.
+        zipx::rewrite_epub_members(&p, |m| m.replace_in("META-INF/container.xml", b"OEBPS/content.opf", b"OEBPS/none.opf"));
+        let before = fs::read(&p).unwrap();
+        let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("SKIP") && out.contains("none.opf"), "{out}");
+        assert_eq!(fs::read(&p).unwrap(), before);
+    }
+
+    #[test]
+    fn a_write_failure_is_reported_and_exits_1() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("0_trash"), b"not a directory").unwrap(); // 휴지통 디렉터리를 만들 수 없다
+        let p = infected(d.path(), "a.epub");
+        let before = fs::read(&p).unwrap();
+        let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains("FAIL") && out.contains("실패 1건"), "{out}");
+        assert_eq!(fs::read(&p).unwrap(), before);
+    }
 }
 
 mod pdf_file {
@@ -185,5 +211,44 @@ mod pdf_file {
         assert_eq!(code, 0, "{out}");
         assert_eq!(fs::read(&p).unwrap(), before);
         assert!(!trash.exists() || fs::read_dir(&trash).unwrap().count() == 0);
+    }
+
+    #[test]
+    fn a_pdf_with_nothing_removable_is_reported_unchanged() {
+        // 실행 파일 첨부만 있고 지울 동작 객체가 없다. 정리로 해결되지 않으므로 파일을 건드리지 않는다.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("c.pdf");
+        fs::write(&p, build("/Names << /EmbeddedFiles << /Names [(a) 5 0 R] >> >>", "", &["<< /Type /Filespec /F (evil.exe) /EF << /F 6 0 R >> >>", "<< /Length 2 >>\nstream\nMZ\nendstream"]))
+            .unwrap();
+        let before = fs::read(&p).unwrap();
+        let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("UNCHANGED"), "{out}");
+        assert_eq!(fs::read(&p).unwrap(), before);
+    }
+
+    #[test]
+    fn a_pdf_with_too_many_references_is_skipped_because_it_is_not_rewritten() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("refs.pdf");
+        let refs = format!("<< /X [{}] >>", "1 0 R ".repeat(500_001));
+        fs::write(&p, build("/OpenAction 5 0 R", "", &["<< /S /JavaScript /JS (app.alert(1)) >>", refs.as_str()])).unwrap();
+        let before = fs::read(&p).unwrap();
+        let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("SKIP") && out.contains("참조가 너무 많아"), "{out}");
+        assert_eq!(fs::read(&p).unwrap(), before);
+    }
+
+    #[test]
+    fn a_write_failure_is_reported_and_exits_1() {
+        let d = tempfile::tempdir().unwrap();
+        fs::write(d.path().join("0_trash"), b"not a directory").unwrap(); // 휴지통 디렉터리를 만들 수 없다
+        let p = infected(d.path(), "a.pdf");
+        let before = fs::read(&p).unwrap();
+        let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains("FAIL") && out.contains("실패 1건"), "{out}");
+        assert_eq!(fs::read(&p).unwrap(), before);
     }
 }

@@ -3,7 +3,7 @@ mod support;
 use container_parser::magic_sniffer::Sniffed;
 use doc_checker::CheckOptions;
 use doc_checker::format_dispatcher::scan_file;
-use doc_checker::generic_checker::sniff_head;
+use doc_checker::generic_checker::{inspect, sniff_head};
 use doc_checker::{Category, Format, Severity};
 use std::fs;
 use std::fs::File;
@@ -317,4 +317,12 @@ fn flags_bidi_and_zero_width_characters_in_the_file_name() {
     }
     let ok = support::file_with("정상 이름.txt", "본문\n".as_bytes());
     assert_eq!(count(&scan_file(ok.path(), &CheckOptions { no_pdf_worker: true, ..CheckOptions::default() }), "FILENAME_CONTROL_CHAR"), 0);
+}
+
+#[test]
+fn inspect_returns_the_head_bytes_of_a_regular_file() {
+    let f = support::file_with("a.txt", b"hello");
+    let mut report = doc_checker::FileReport::new(f.path(), None);
+
+    assert_eq!(inspect(f.path(), &CheckOptions::default(), &mut report), Some(b"hello".to_vec()));
 }

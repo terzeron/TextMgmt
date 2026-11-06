@@ -439,6 +439,35 @@ mod record_reader {
         let cfb = make_cfb(&[("FileHeader", &file_header(0)[..]), ("DocInfo", &ok[..]), ("DocInfo", &link[..])]);
         assert!(scan("c.hwp", &cfb.bytes).has("HWP_LINKED_FILE"));
     }
+
+    #[test]
+    fn docinfo_copies_beyond_the_limit_are_not_all_scanned() {
+        let ok = valid_stream();
+        let header = file_header(0);
+        let mut streams: Vec<(&str, &[u8])> = vec![("FileHeader", &header[..])];
+        streams.extend(std::iter::repeat_n(("DocInfo", &ok[..]), 5));
+        let r = scan("a.hwp", &make_cfb(&streams).bytes);
+        assert!(r.incomplete && r.reasons.iter().any(|m| m.starts_with("more than 4 DocInfo streams")), "{:?}", r.reasons);
+    }
+
+    #[test]
+    fn sections_beyond_the_limit_are_truncated() {
+        let ok = valid_stream();
+        let names: Vec<String> = (0..257).map(|i| format!("BodyText/Section{i}")).collect();
+        let header = file_header(0);
+        let mut streams: Vec<(&str, &[u8])> = vec![("FileHeader", &header[..])];
+        streams.extend(names.iter().map(|n| (n.as_str(), &ok[..])));
+        let r = scan("a.hwp", &make_cfb(&streams).bytes);
+        assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("257 BodyText sections; only the first 256")), "{:?}", r.reasons);
+    }
+
+    #[test]
+    fn a_record_header_cut_short_at_the_end_is_a_defect() {
+        let mut section = valid_stream();
+        section.extend_from_slice(&[1, 2]); // 4바이트 머리말이 안 되는 꼬리
+        let r = scan_sections(0, None, section);
+        assert!(r.has("HWP_BAD_RECORD"), "{:?} {:?}", r.findings, r.reasons);
+    }
 }
 
 // ---- script_checker (하위 모듈을 합치며 옮긴 테스트) ----
@@ -505,6 +534,14 @@ mod script_checker {
         }
         let r = scan_scripts(0x8, &default_jscript(["", "var x = EVAL ( payload ) ; new Function('a')", "", ""]));
         assert!(r.has("HWP_SCRIPT_SUSPICIOUS"), "{:?}", r.findings);
+    }
+
+    #[test]
+    fn new_function_with_extra_spaces_is_critical() {
+        let r = scan_scripts(0, &default_jscript(["", "var f = new   Function (\"alert(1)\");", "", ""]));
+        let f = finding(&r, "HWP_SCRIPT_SUSPICIOUS");
+        assert_eq!(f.severity, doc_checker::Severity::Critical);
+        assert!(f.detail.contains("new Function("), "{:?}", f.detail);
     }
 
     #[test]
@@ -634,4 +671,39 @@ mod script_checker {
         let r = scan_cfb("c.hwp", &hwp_cfb(&[("Scripts/DefaultJScript", &empty[..]), ("Scripts/JScriptVersion", &JSCRIPT_VERSION[..])], 0));
         assert!(r.findings.is_empty() && !r.incomplete, "{:?} {:?}", r.findings, r.reasons);
     }
+}
+
+// ---- 읽기 한도 ----
+
+/// 이름에 `needle`이 든 항목의 선언 크기를 크게 바꾼 뒤, 누적 읽기 한도를 1MiB로 낮춰 검사한다.
+/// 접두부 읽기는 요청 크기만큼 한도에서 차감되므로 선언만 큰 스트림은 한도를 넘는다.
+fn scan_with_oversized(mut cfb: ole_common::Cfb, needle: &str) -> FileReport {
+    let ids: Vec<usize> = cfb.names.iter().enumerate().filter(|(_, n)| n.to_lowercase().contains(needle)).map(|(i, _)| i).collect();
+    assert!(!ids.is_empty(), "{needle}: {:?}", cfb.names);
+    for id in ids {
+        let at = cfb.entry_offset(id) + 120;
+        ole_common::put32(&mut cfb.bytes, at, 0x7000_0000);
+    }
+    let (_d, p) = crate::support::shared_fixtures::write("a.hwp", &cfb.bytes);
+    scan_file(&p, &CheckOptions { max_total_mb: 1, ..CheckOptions::default() })
+}
+
+#[test]
+fn a_docinfo_stream_over_the_read_budget_is_incomplete() {
+    let r = scan_with_oversized(hwp_cfb(&[("DocInfo", &[0u8; 16][..])], 0), "docinfo");
+    assert!(r.reasons.iter().any(|m| m.starts_with("DocInfo could not be read")), "{:?}", r.reasons);
+}
+
+#[test]
+fn a_script_stream_over_the_read_budget_is_incomplete() {
+    let r = scan_with_oversized(hwp_cfb(&[("Scripts/DefaultJScript", &[0u8; 32][..])], 0), "defaultjscript");
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("could not be read")), "{:?}", r.reasons);
+}
+
+#[test]
+fn bindata_streams_beyond_the_scan_limit_are_not_all_scanned() {
+    let bins: Vec<(String, Vec<u8>)> = (0..4097).map(|i| (format!("BIN{i:04}.bin"), vec![0u8; 8])).collect();
+    let refs: Vec<(&str, Vec<u8>)> = bins.iter().map(|(n, d)| (n.as_str(), d.clone())).collect();
+    let r = crate::support::shared_fixtures::scan_bindata(0, None, &refs);
+    assert!(r.incomplete && r.reasons.iter().any(|m| m.contains("4097 BinData streams; only the first 4096")), "{:?}", r.reasons);
 }

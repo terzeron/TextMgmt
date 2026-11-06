@@ -37,6 +37,14 @@ fn book_classifier_api_defaults_mean_no_evidence() {
     assert!(!Nothing.prefers_bookstore(0.9));
     assert_eq!(Nothing.min_confidence(), None);
     assert_eq!(Nothing.expected_accuracy(Some(0.5)), None);
+    assert!(Nothing.as_any().is::<()>(), "기본 as_any는 빈 값을 돌려준다");
+}
+
+#[test]
+fn classify_defaults_have_no_threshold_and_no_calibration() {
+    let model = Fixed { available: true, result: Err("미사용".to_string()) };
+    assert_eq!(model.min_confidence(), None);
+    assert_eq!(model.expected_accuracy(0.9), None);
 }
 
 #[test]

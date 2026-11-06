@@ -152,3 +152,147 @@ pub(crate) fn read_limited(zip: &mut Zip, index: usize, limit: u64) -> Result<Ve
     entry.take(limit + 1).read_to_end(&mut data).map_err(|e| e.to_string())?;
     Ok(data)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    use common::zip_reader::open_zip;
+
+    use super::*;
+
+    fn zip_with(dir: &tempfile::TempDir, members: &[(&str, &[u8])]) -> PathBuf {
+        let path = dir.path().join("a.zip");
+        let mut w = zip::ZipWriter::new(File::create(&path).unwrap());
+        for (name, data) in members {
+            w.start_file(*name, zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)).unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.finish().unwrap();
+        path
+    }
+
+    /// zip64 EOCD 레코드 + 로케이터 + EOCD를 이어 붙인 바이트열. 항목 수와 디렉터리 크기를 zip64 쪽에만 적는다.
+    fn zip64_tail(entries: u64, dir_bytes: u64, record_sig: &[u8; 4]) -> Vec<u8> {
+        let mut record = vec![0u8; 56];
+        record[..4].copy_from_slice(record_sig);
+        record[32..40].copy_from_slice(&entries.to_le_bytes());
+        record[40..48].copy_from_slice(&dir_bytes.to_le_bytes());
+        let mut locator = vec![0u8; 20];
+        locator[..4].copy_from_slice(b"PK\x06\x07");
+        let mut eocd = vec![0u8; 22];
+        eocd[..4].copy_from_slice(b"PK\x05\x06");
+        eocd[10..12].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        eocd[12..16].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        [record, locator, eocd].concat()
+    }
+
+    #[test]
+    fn decode_text_reads_utf8_without_copying() {
+        let (text, enc) = decode_text("가나다 abc".as_bytes());
+        assert!(matches!(text, Cow::Borrowed("가나다 abc")) && enc == TextEnc::Utf8);
+    }
+
+    #[test]
+    fn decode_text_converts_bom_utf16_in_both_byte_orders() {
+        for raw in [&b"\xFF\xFE<\x00p\x00>\x00"[..], b"\xFE\xFF\x00<\x00p\x00>"] {
+            let (text, enc) = decode_text(raw);
+            assert_eq!(text, "<p>");
+            assert!(enc == TextEnc::Utf16);
+        }
+    }
+
+    #[test]
+    fn decode_text_flags_utf32_boms_without_converting() {
+        assert!(decode_text(b"\xFF\xFE\x00\x00<\x00\x00\x00").1 == TextEnc::Utf32);
+        assert!(decode_text(b"\x00\x00\xFE\xFF\x00\x00\x00<").1 == TextEnc::Utf32);
+    }
+
+    #[test]
+    fn decode_text_recognizes_utf16_without_a_bom_by_nul_interleaving() {
+        assert_eq!(decode_text(b"<\x00s\x00c\x00r\x00i\x00p\x00t\x00").0, "<script");
+        assert_eq!(decode_text(b"\x00<\x00s\x00c\x00r\x00i\x00p\x00t").0, "<script");
+    }
+
+    #[test]
+    fn decode_text_reads_other_bytes_lossily_as_invalid() {
+        let (text, enc) = decode_text(b"ab\xB0\xA1cd");
+        assert!(enc == TextEnc::Invalid);
+        assert!(text.contains('\u{fffd}') && text.starts_with("ab") && text.ends_with("cd"));
+    }
+
+    #[test]
+    fn bomless_utf16_needs_three_quarters_of_the_pairs_in_one_order() {
+        assert_eq!(bomless_utf16(b"a\x00b\x00c\x00d\x00"), Some(true));
+        assert_eq!(bomless_utf16(b"\x00a\x00b\x00c\x00d"), Some(false));
+        assert_eq!(bomless_utf16(b"a\x00b\x00cdef"), None, "절반만 맞으면 판단하지 않는다");
+        assert_eq!(bomless_utf16(b"ab"), None, "쌍이 둘 미만이면 판단하지 않는다");
+        assert_eq!(bomless_utf16(b""), None);
+    }
+
+    #[test]
+    fn decode_calls_counts_each_decode_on_this_thread() {
+        let before = decode_calls();
+        decode_text(b"a");
+        decode_text(b"b");
+        assert_eq!(decode_calls() - before, 2);
+    }
+
+    #[test]
+    fn read_limited_reads_one_byte_past_the_limit_so_callers_can_see_overflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut zip = open_zip(&zip_with(&dir, &[("a.txt", b"hello world")])).unwrap();
+        assert_eq!(read_limited(&mut zip, 0, 5).unwrap(), b"hello ");
+        assert_eq!(read_limited(&mut zip, 0, 11).unwrap(), b"hello world");
+        assert_eq!(read_limited(&mut zip, 0, 1000).unwrap(), b"hello world");
+        assert!(read_limited(&mut zip, 7, 5).is_err(), "없는 인덱스는 오류다");
+    }
+
+    #[test]
+    fn zip_directory_bounds_reads_the_end_of_central_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = zip_with(&dir, &[("a.txt", b"x"), ("b.txt", b"y")]);
+        let (entries, bytes) = zip_directory_bounds(&path).unwrap();
+        assert_eq!(entries, 2);
+        assert!(bytes > 0);
+        assert_eq!(directory_limit_note(&path), None);
+    }
+
+    #[test]
+    fn zip_directory_bounds_is_none_for_files_it_cannot_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = dir.path().join("a.txt");
+        std::fs::write(&text, b"plain text, no zip trailer").unwrap();
+        assert_eq!(zip_directory_bounds(&text), None);
+        assert_eq!(zip_directory_bounds(&dir.path().join("none.zip")), None);
+        assert_eq!(directory_limit_note(&text), None);
+    }
+
+    #[test]
+    fn a_zip64_trailer_supplies_the_real_entry_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.zip");
+        std::fs::write(&path, zip64_tail(2_000_000, 100, b"PK\x06\x06")).unwrap();
+        assert_eq!(zip_directory_bounds(&path), Some((2_000_000, 100)));
+        let note = directory_limit_note(&path).unwrap();
+        assert!(note.starts_with("Too many entries: 2000000"), "{note}");
+    }
+
+    #[test]
+    fn a_huge_central_directory_is_refused_even_with_few_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.zip");
+        std::fs::write(&path, zip64_tail(10, MAX_DIRECTORY_BYTES + 1, b"PK\x06\x06")).unwrap();
+        let note = directory_limit_note(&path).unwrap();
+        assert!(note.starts_with("Central directory too large"), "{note}");
+    }
+
+    #[test]
+    fn a_zip64_locator_pointing_at_a_wrong_record_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.zip");
+        std::fs::write(&path, zip64_tail(2_000_000, 100, b"XXXX")).unwrap();
+        assert_eq!(zip_directory_bounds(&path), None);
+    }
+}

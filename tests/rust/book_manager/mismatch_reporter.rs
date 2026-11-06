@@ -69,6 +69,47 @@ mod mismatch_summary {
 
         assert!(result.mismatches.iter().all(|item| item.category != "A"));
     }
+
+    #[test]
+    fn test_category_mismatches_list_a_category_whose_directory_is_gone_as_es_only() {
+        let tmp = TempDir::new().unwrap();
+        let es = FakeEsManager::new();
+        es.with(|s| s.all_file_paths = vec![("Gone".to_string(), "Gone/a.txt".to_string()), ("Gone".to_string(), "Gone/b.txt".to_string())]);
+        let manager = make_manager(tmp.path(), es);
+
+        let result = manager.get_category_mismatches(true);
+
+        assert_eq!(result.es_only.len(), 1, "{:?}", result.es_only);
+        let item = &result.es_only[0];
+        assert_eq!((item.category.as_str(), item.es_count, item.fs_count, item.es_only_count), ("Gone", 2, 0, 2));
+    }
+
+    #[test]
+    fn test_category_mismatches_ignore_symlinks_in_a_category_directory() {
+        let tmp = TempDir::new().unwrap();
+        let es = FakeEsManager::new();
+        es.with(|s| s.all_file_paths = vec![("A".to_string(), "A/real.txt".to_string())]);
+        let manager = make_manager(tmp.path(), es);
+        category_with_files(tmp.path(), "A", &["real.txt"]);
+        std::os::unix::fs::symlink(tmp.path().join("A/real.txt"), tmp.path().join("A/link.txt")).unwrap();
+
+        let result = manager.get_category_mismatches(true);
+
+        assert!(result.mismatches.is_empty() && result.fs_only.is_empty() && result.es_only.is_empty(), "링크는 파일로 세지 않는다: {result:?}");
+    }
+
+    #[test]
+    fn test_category_mismatches_report_an_es_failure_as_an_error_in_an_empty_summary() {
+        let tmp = TempDir::new().unwrap();
+        let es = FakeEsManager::new();
+        es.fail("iter_all_category_file_paths", "down");
+        let manager = make_manager(tmp.path(), es);
+
+        let result = manager.get_category_mismatches(true);
+
+        assert!(result.error.as_deref().is_some_and(|e| e.contains("down")), "{:?}", result.error);
+        assert!(result.mismatches.is_empty() && result.es_only.is_empty() && result.fs_only.is_empty());
+    }
 }
 
 #[test]

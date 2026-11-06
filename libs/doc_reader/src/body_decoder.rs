@@ -82,3 +82,98 @@ pub(crate) fn decode_body(path: &Path, raw: &[u8], detect: Option<&TextDetector<
 pub(crate) fn decode_markup_bytes(raw: &[u8]) -> Option<String> {
     decode_body(Path::new(""), raw, None, None, None).ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use text_decoder::text_transcoder::encode;
+
+    use super::*;
+
+    fn path() -> &'static Path {
+        Path::new("a.txt")
+    }
+
+    fn cp949(text: &str) -> Vec<u8> {
+        encode(Enc::Cp949, text).unwrap()
+    }
+
+    #[test]
+    fn strict_utf8_skips_detection_and_unifies_newlines() {
+        let never: &TextDetector = &|_| panic!("엄격 UTF-8로 읽히면 판별하지 않는다");
+        let text = decode_body(path(), "안녕\r\n하세요\r".as_bytes(), Some(never), None, None).unwrap();
+        assert_eq!(text, "안녕\n하세요\n");
+    }
+
+    #[test]
+    fn a_utf8_bom_runs_detection_and_the_hint_goes_first() {
+        let raw = [b"\xef\xbb\xbf".as_slice(), "안녕".as_bytes()].concat();
+        assert_eq!(decode_body(path(), &raw, None, None, None).unwrap(), "안녕");
+    }
+
+    #[test]
+    fn the_detector_hint_is_tried_before_the_default_order() {
+        let raw = cp949("안녕하세요 독자 여러분");
+        let hint: &TextDetector = &|_| Some(Enc::Cp949);
+        assert_eq!(decode_body(path(), &raw, Some(hint), None, None).unwrap(), "안녕하세요 독자 여러분");
+    }
+
+    #[test]
+    fn explicit_encodings_skip_detection() {
+        let never: &TextDetector = &|_| panic!("후보를 지정하면 판별하지 않는다");
+        let encodings = [Candidate::Builtin(Enc::Cp949)];
+        assert_eq!(decode_body(path(), &cp949("안녕하세요"), Some(never), Some(&encodings[..]), None).unwrap(), "안녕하세요");
+    }
+
+    #[test]
+    fn a_custom_candidate_runs_after_the_builtin_ones_fail() {
+        let encodings = [Candidate::Builtin(Enc::Utf8), Candidate::Custom { name: "x", decode: |_| "사용자\r\n정의".to_string(), encode: |_| None }];
+        assert_eq!(decode_body(path(), &[0xff, 0xff], None, Some(&encodings[..]), None).unwrap(), "사용자\n정의");
+    }
+
+    #[test]
+    fn an_empty_custom_result_falls_through_to_the_replace_reader() {
+        let encodings = [Candidate::Builtin(Enc::Utf8), Candidate::Custom { name: "x", decode: |_| String::new(), encode: |_| None }];
+        let reader: &ReplaceReader = &|p| {
+            assert_eq!(p, Path::new("a.txt"));
+            Ok("대체\r\n본문".to_string())
+        };
+        assert_eq!(decode_body(path(), &[0xff, 0xff], None, Some(&encodings[..]), Some(reader)).unwrap(), "대체\n본문");
+    }
+
+    #[test]
+    fn a_failing_or_empty_replace_reader_falls_through_to_lossy_decoding() {
+        let encodings = [Candidate::Builtin(Enc::Utf8)];
+        let failing: &ReplaceReader = &|_| Err(io::Error::other("읽기 실패"));
+        let empty: &ReplaceReader = &|_| Ok(String::new());
+        for reader in [failing, empty] {
+            assert_eq!(decode_body(path(), b"ab\xffcd", None, Some(&encodings[..]), Some(reader)).unwrap(), "ab\u{fffd}cd");
+        }
+    }
+
+    #[test]
+    fn undecodable_bytes_report_the_last_codec_error() {
+        let encodings = [Candidate::Builtin(Enc::Cp949)];
+        let error = decode_body(path(), &[0xff], None, Some(&encodings[..]), None).unwrap_err();
+        assert!(error.contains("cp949"), "{error}");
+    }
+
+    #[test]
+    fn a_checked_encoding_without_any_text_char_is_skipped() {
+        // UTF-16LE로는 "!!"로 풀리지만 글자가 없다. 다음 후보 UTF-8의 해석을 쓴다.
+        let encodings = [Candidate::Builtin(Enc::Utf16Le), Candidate::Builtin(Enc::Utf8)];
+        assert_eq!(decode_body(path(), &[0x21, 0, 0x21, 0], None, Some(&encodings[..]), None).unwrap(), "!\0!\0");
+    }
+
+    #[test]
+    fn a_checked_encoding_with_only_spaces_is_accepted() {
+        let encodings = [Candidate::Builtin(Enc::Utf16Le)];
+        assert_eq!(decode_body(path(), &[0x20, 0, 0x20, 0], None, Some(&encodings[..]), None).unwrap(), "  ");
+    }
+
+    #[test]
+    fn markup_bytes_decode_by_their_bom() {
+        assert_eq!(decode_markup_bytes(&encode(Enc::Utf16, "<p>가</p>").unwrap()).as_deref(), Some("<p>가</p>"));
+        assert_eq!(decode_markup_bytes("<p>나</p>".as_bytes()).as_deref(), Some("<p>나</p>"));
+        assert_eq!(decode_markup_bytes(b"").as_deref(), Some(""));
+    }
+}

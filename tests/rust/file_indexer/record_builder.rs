@@ -1,11 +1,13 @@
 //! `file_indexer::record_builder` 단위 테스트.
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
 use doc_reader::pdf::InProcess;
 use file_indexer::child_process_runner::read_file_with_child_stages;
 use file_indexer::env_config::Config;
-use file_indexer::record_builder::{read_file, split_author_title};
+use file_indexer::record_builder::{ReadHooks, ReadOutcome, read_file, read_file_with_hooks, split_author_title};
 use parse_stat_counter::Stat;
 
 /// PDF 단계가 없는 TXT라서 worker 실행 파일은 불리지 않는다.
@@ -42,4 +44,78 @@ fn author_title_split_needs_both_parts_on_one_line() {
     for stem in ["[저자]", "[] 제목", "[저자] 제\n목", "[저자 제목"] {
         assert_eq!(split_author_title(stem), (String::new(), stem.to_string()), "{stem:?}");
     }
+}
+
+fn library() -> (tempfile::TempDir, Config) {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("books/1_소설")).unwrap();
+    fs::create_dir_all(dir.path().join("comics")).unwrap();
+    let cfg = Config::new(dir.path().join("books"), dir.path().join("comics"));
+    (dir, cfg)
+}
+
+fn read(cfg: &Config, path: &Path) -> ReadOutcome {
+    read_file(cfg, path, None, false, None, &InProcess, &Stat::new())
+}
+
+#[test]
+fn a_page_count_from_the_fallback_counter_is_used_when_the_fast_counter_finds_none() {
+    let (dir, cfg) = library();
+    let pdf = dir.path().join("comics/book.pdf");
+    fs::write(&pdf, b"%PDF-1.4\n").unwrap();
+    let fast = |_: &Path| -> Option<usize> { None };
+    let fallback = |_: &Path| -> Result<usize, sysdeps::timeout_runner::ParserTimeout> { Ok(7) };
+    let hooks = ReadHooks { fast_page_count: Some(&fast), fallback_page_count: Some(&fallback), ..Default::default() };
+
+    let outcome = read_file_with_hooks(&cfg, &pdf, None, false, None, &InProcess, &Stat::new(), &hooks);
+
+    let (_, doc) = outcome.item.expect("만화 PDF는 문서가 된다");
+    assert_eq!(doc["page_count"], 7);
+}
+
+#[test]
+fn an_unreadable_text_file_reports_the_read_error() {
+    let (dir, cfg) = library();
+    let path = dir.path().join("books/1_소설/a.txt");
+    fs::write(&path, "본문\n").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let outcome = read(&cfg, &path);
+
+    assert!(!outcome.messages.is_empty(), "{outcome:?}");
+}
+
+#[test]
+fn a_file_that_is_not_a_docx_reports_the_read_error() {
+    let (dir, cfg) = library();
+    let path = dir.path().join("books/1_소설/a.docx");
+    fs::write(&path, b"PK\x03\x04 not really a docx").unwrap();
+
+    let outcome = read(&cfg, &path);
+
+    assert!(outcome.messages.iter().any(|m| m.starts_with("can't read docx file")), "{outcome:?}");
+}
+
+#[test]
+fn an_rtf_file_that_is_not_utf8_reports_its_path_and_the_error() {
+    let (dir, cfg) = library();
+    let path = dir.path().join("books/1_소설/a.rtf");
+    fs::write(&path, b"{\\rtf1 \xff\xfe}").unwrap();
+
+    let outcome = read(&cfg, &path);
+
+    assert_eq!(outcome.messages.first().map(String::as_str), Some(path.to_str().unwrap()), "{outcome:?}");
+    assert!(outcome.messages.len() >= 2);
+}
+
+#[test]
+fn an_unreadable_html_file_reports_the_read_error() {
+    let (dir, cfg) = library();
+    let path = dir.path().join("books/1_소설/a.html");
+    fs::write(&path, "<p>본문</p>").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let outcome = read(&cfg, &path);
+
+    assert!(outcome.messages.iter().any(|m| m.starts_with("can't read html file")), "{outcome:?}");
 }

@@ -359,3 +359,45 @@ mod tests {
         assert!(r.incomplete);
     }
 }
+
+#[cfg(test)]
+mod branch_tests {
+    use sysdeps::{CommandError, CommandOutput};
+
+    use super::*;
+
+    struct Stub;
+
+    impl CommandRunner for Stub {
+        fn run(&self, _: &[String], _: Option<Duration>) -> Result<CommandOutput, CommandError> {
+            Err(CommandError::NotFound)
+        }
+
+        fn which(&self, program: &str) -> Option<PathBuf> {
+            Some(PathBuf::from(format!("/stub/{program}")))
+        }
+    }
+
+    #[test]
+    fn the_watching_runner_forwards_which_and_records_the_last_run_failure() {
+        let watching = Watching { inner: &Stub, failure: Mutex::new(None) };
+        assert_eq!(watching.which("mutool"), Some(PathBuf::from("/stub/mutool")));
+        assert!(watching.run(&[], None).is_err());
+        assert!(matches!(watching.take(), Some(Failure::NotFound)));
+        assert!(watching.take().is_none(), "기록은 한 번 꺼내면 비워진다");
+    }
+
+    #[test]
+    fn a_media_box_that_is_not_four_numbers_or_has_no_ancestor_with_one_is_unknown() {
+        let mut doc = Document::new();
+        let mut short = Dictionary::new();
+        short.set("MediaBox", Object::Array(vec![Object::Integer(0), Object::Integer(0), Object::Integer(10)]));
+        assert_eq!(inherited_media_box(&doc, &short), None);
+
+        // /Parent가 자기 자신을 가리키면 사슬을 끝까지 올라가도 MediaBox가 없다.
+        let mut looping = Dictionary::new();
+        looping.set("Parent", Object::Reference((5, 0)));
+        doc.objects.insert((5, 0), Object::Dictionary(looping.clone()));
+        assert_eq!(inherited_media_box(&doc, &looping), None);
+    }
+}

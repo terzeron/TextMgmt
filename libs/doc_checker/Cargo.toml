@@ -119,6 +119,10 @@ name = "zipcheck_ooxml_checker"
 path = "../../tests/rust/doc_checker/zipcheck/ooxml_checker.rs"
 
 [[test]]
+name = "zip_member_reader"
+path = "../../tests/rust/doc_checker/zip_member_reader.rs"
+
+[[test]]
 name = "zip_name_rules"
 path = "../../tests/rust/doc_checker/zip_name_rules.rs"
 
@@ -141,3 +145,8 @@ path = "../../tests/rust/doc_checker/exec_extension_table.rs"
 [[test]]
 name = "integration_epubveri"
 path = "../../tests/rust/doc_checker/integration/epubveri.rs"
+
+[[test]]
+name = "integration_nested_scratch"
+path = "../../tests/rust/doc_checker/integration/nested_scratch.rs"
+

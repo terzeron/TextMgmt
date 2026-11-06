@@ -29,3 +29,7 @@ path = "../../tests/rust/pdf_engine/pdf_worker_client.rs"
 [[test]]
 name = "pdf_page_reader"
 path = "../../tests/rust/pdf_engine/pdf_page_reader.rs"
+
+[[test]]
+name = "integration_pdf_worker"
+path = "../../tests/rust/pdf_engine/integration/pdf_worker.rs"

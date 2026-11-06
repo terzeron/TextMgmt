@@ -543,4 +543,17 @@ mod tests {
         let Object::Array(outer) = &obj else { unreachable!() };
         assert_eq!(outer.len(), 1, "깊이 가드를 넘는 배열은 비우지 않는다");
     }
+
+    #[test]
+    fn load_info_stops_descending_past_the_depth_cap() {
+        // 깊이 한도를 넘은 곳의 긴 참조 배열은 세지 않는다. 한도가 없으면 kept_ref_nodes가 0이 아니다.
+        let mut object = Object::Array((0..ARRAY_KEEP_LEN as u32 + 8).map(|i| Object::Reference((i + 1, 0))).collect());
+        for _ in 0..SHRINK_MAX_DEPTH + 5 {
+            object = Object::Array(vec![object]);
+        }
+        let mut doc = Document::new();
+        doc.add_object(object);
+
+        assert_eq!(LoadInfo::from_document(&doc), LoadInfo::default());
+    }
 }
