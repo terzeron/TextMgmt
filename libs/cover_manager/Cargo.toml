@@ -13,7 +13,7 @@ bookstore = { path = "../bookstore" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 common = { path = "../common" }
 db = { path = "../db" }
-file_indexer = { path = "../file_indexer" }
+book_model = { path = "../book_model" }
 htmlkit = { path = "../htmlkit" }
 idna = "1.1.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }

@@ -5,5 +5,4 @@
 pub mod child_process_runner;
 pub mod env_config;
 pub mod file_time;
-pub mod ignore_rules;
 pub mod record_builder;

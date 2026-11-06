@@ -1,6 +1,6 @@
 [package]
 name = "book_model"
-description = "책 도메인 모델: 메타데이터(`Book`, `BookView`, `BookPage`, 조회 오류)와 ES 문서에서 `Book`을 만드는 변환"
+description = "책 도메인 모델: 메타데이터(`Book`, `BookView`, `BookPage`, 조회 오류)와 ES 문서에서 `Book`을 만드는 변환, 색인에서 뺄 코퍼스 디렉터리 규칙"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -17,3 +17,7 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 [[test]]
 name = "book_metadata"
 path = "../../tests/rust/book_model/book_metadata.rs"
+
+[[test]]
+name = "ignore_rules"
+path = "../../tests/rust/book_model/ignore_rules.rs"

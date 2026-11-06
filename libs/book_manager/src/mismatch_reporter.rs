@@ -206,7 +206,7 @@ impl BookManager {
                 let qualified = if category == Self::ROOT_CATEGORY { name.clone() } else { format!("{category}/{name}") };
                 match entry_kind(&entry) {
                     EntryKind::Dir => {
-                        if !file_indexer::ignore_rules::is_ignored_segment(&name) {
+                        if !book_model::ignore_rules::is_ignored_segment(&name) {
                             stack.push((entry, qualified));
                         }
                     }
@@ -396,5 +396,5 @@ impl BookManager {
 
 /// FS 스캔이 들어가지 않는 디렉터리는 ES 쪽에서도 빼야 한다.
 fn is_scannable_category(category: &str) -> bool {
-    !category.split('/').any(file_indexer::ignore_rules::is_ignored_segment)
+    !category.split('/').any(book_model::ignore_rules::is_ignored_segment)
 }

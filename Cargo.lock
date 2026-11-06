@@ -773,12 +773,12 @@ name = "cover_manager"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "book_model",
  "bookstore",
  "chrono",
  "common",
  "db",
  "es_client",
- "file_indexer",
  "htmlkit",
  "idna",
  "image",
@@ -2283,6 +2283,7 @@ checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
 name = "loader"
 version = "0.1.0"
 dependencies = [
+ "book_model",
  "chrono",
  "doc_reader",
  "doc_repairer",

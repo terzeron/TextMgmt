@@ -29,9 +29,5 @@ name = "record_builder"
 path = "../../tests/rust/file_indexer/record_builder.rs"
 
 [[test]]
-name = "ignore_rules"
-path = "../../tests/rust/file_indexer/ignore_rules.rs"
-
-[[test]]
 name = "env_config"
 path = "../../tests/rust/file_indexer/env_config.rs"
