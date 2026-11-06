@@ -1,15 +1,17 @@
-//! MySQL 접근 추상화. pymysql `DictCursor`의 의미(`%s` 자리표시자, 열 이름 맵 행, 수동 커밋, IntegrityError)를 Diesel 위에서 재현한다.
+//! MySQL 접근 추상화. Diesel 위에서 `?` 자리표시자, 열 이름 맵 행, 수동 커밋, 제약 위반 오류를 제공한다.
 //! 서비스 코드는 `DbConnection`/`ConnectionProvider`만 알고, 테스트는 가짜 연결을 주입한다. 설계: docs/rust-test-seams.md 3.4
 //!
-//! 시간대: Diesel은 연결을 열 때 `time_zone`을 `+00:00`으로 바꾸므로, `connect`가 서버 전역 설정으로 되돌려 pymysql과 맞춘다.
+//! 시간대: Diesel은 연결을 열 때 `time_zone`을 `+00:00`으로 바꾸므로, `connect`가 서버 전역 설정으로 되돌린다.
 
 pub mod category_mapping;
+pub mod view_history_store;
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use common::url_parser::quote_component;
 use diesel::connection::SimpleConnection;
 use diesel::deserialize::{self, FromSql, QueryableByName};
 use diesel::mysql::{Mysql, MysqlConnection, MysqlType};
@@ -111,20 +113,20 @@ impl From<serde_json::Value> for DbValue {
     }
 }
 
-/// 열 이름 → 값. `DictCursor`가 돌려주는 dict에 대응한다.
+/// 열 구조를 미리 정하지 않은 SELECT 결과 한 행: 열 이름 → 값.
 pub type Row = BTreeMap<String, DbValue>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DbError {
-    /// `pymysql.IntegrityError`: 키 중복, 외래 키, NOT NULL 위반.
-    IntegrityError(String),
+    /// 제약 위반: 키 중복, 외래 키, NOT NULL 위반.
+    Constraint(String),
     Other(String),
 }
 
 impl fmt::Display for DbError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DbError::IntegrityError(msg) => write!(f, "무결성 오류: {msg}"),
+            DbError::Constraint(msg) => write!(f, "무결성 오류: {msg}"),
             DbError::Other(msg) => write!(f, "DB 오류: {msg}"),
         }
     }
@@ -136,38 +138,28 @@ impl std::error::Error for DbError {}
 // 추상화
 // ---------------------------------------------------------------------------
 
-pub trait DbCursor {
-    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError>;
-    fn executemany(&mut self, sql: &str, seq: &[Vec<DbValue>]) -> Result<(), DbError>;
-    /// 남은 행을 모두 돌려준다. 결과 집합이 없는 문장(INSERT 등) 뒤에는 `None`이다.
-    fn fetchall(&mut self) -> Option<Vec<Row>>;
-    fn fetchone(&mut self) -> Option<Row>;
-    /// SELECT는 읽은 행 수, 그 밖의 문장은 영향받은 행 수다.
-    fn rowcount(&self) -> u64;
-}
-
+/// 연결 하나. SQL 자리표시자는 `?`다.
 pub trait DbConnection: Send {
-    fn cursor(&mut self) -> Box<dyn DbCursor>;
+    /// 문장을 실행하고 영향받은 행 수를 돌려준다. SELECT면 읽은 행 수다.
+    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError>;
+    /// SELECT를 실행하고 모든 행을 돌려준다.
+    fn fetch_all(&mut self, sql: &str, params: &[DbValue]) -> Result<Vec<Row>, DbError>;
     fn commit(&mut self) -> Result<(), DbError>;
     fn rollback(&mut self) -> Result<(), DbError>;
     fn close(&mut self);
 
-    /// 커서 하나로 문장을 실행하고 영향받은(SELECT는 읽은) 행 수를 돌려준다.
-    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError> {
-        let mut cur = self.cursor();
-        cur.execute(sql, params)?;
-        Ok(cur.rowcount())
+    /// SELECT를 실행하고 첫 행을 돌려준다. 행이 없으면 `None`이다.
+    fn fetch_one(&mut self, sql: &str, params: &[DbValue]) -> Result<Option<Row>, DbError> {
+        Ok(self.fetch_all(sql, params)?.into_iter().next())
     }
 
-    /// 커서 하나로 문장을 실행하고 첫 행을 돌려준다. 행이 없으면 `None`이다.
-    fn fetch_one(&mut self, sql: &str, params: &[DbValue]) -> Result<Option<Row>, DbError> {
-        let mut cur = self.cursor();
-        cur.execute(sql, params)?;
-        Ok(cur.fetchone())
+    /// 같은 문장을 인자 묶음마다 실행하고 영향받은 행 수의 합을 돌려준다.
+    fn execute_batch(&mut self, sql: &str, rows: &[Vec<DbValue>]) -> Result<u64, DbError> {
+        rows.iter().try_fold(0, |total, params| Ok(total + self.execute(sql, params)?))
     }
 }
 
-/// 호출할 때마다 새 연결을 연다. Python 코드가 연산마다 `pymysql.connect`를 부르는 것과 같다.
+/// 호출할 때마다 새 연결을 연다.
 pub type ConnectionProvider = Arc<dyn Fn() -> Result<Box<dyn DbConnection>, DbError> + Send + Sync>;
 
 // ---------------------------------------------------------------------------
@@ -202,46 +194,10 @@ impl fmt::Debug for MysqlConfig {
     }
 }
 
-fn percent_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
-}
-
 pub fn mysql_url(c: &MysqlConfig) -> String {
-    // libmysqlclient는 "localhost"를 유닉스 소켓으로 해석한다. pymysql처럼 항상 TCP로 붙게 루프백 주소로 바꾼다.
+    // libmysqlclient는 "localhost"를 유닉스 소켓으로 해석한다. 항상 TCP로 붙게 루프백 주소로 바꾼다.
     let host = if c.host == "localhost" { "127.0.0.1" } else { c.host.as_str() };
-    format!("mysql://{}:{}@{}:{}/{}", percent_encode(&c.user), percent_encode(&c.password), host, c.port, c.database)
-}
-
-/// pymysql의 `%s`를 MySQL 준비된 문장의 `?`로 바꾼다. `%%`는 `%` 한 글자다.
-pub fn to_mysql_placeholders(sql: &str) -> String {
-    let mut out = String::with_capacity(sql.len());
-    let mut chars = sql.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            match chars.peek() {
-                Some('s') => {
-                    chars.next();
-                    out.push('?');
-                }
-                Some('%') => {
-                    chars.next();
-                    out.push('%');
-                }
-                _ => out.push('%'),
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
+    format!("mysql://{}:{}@{}:{}/{}", quote_component(&c.user), quote_component(&c.password), host, c.port, c.database)
 }
 
 // ---------------------------------------------------------------------------
@@ -251,20 +207,10 @@ pub fn to_mysql_placeholders(sql: &str) -> String {
 fn map_error(e: DieselError) -> DbError {
     match e {
         DieselError::DatabaseError(DatabaseErrorKind::UniqueViolation | DatabaseErrorKind::ForeignKeyViolation | DatabaseErrorKind::NotNullViolation | DatabaseErrorKind::CheckViolation, info) => {
-            DbError::IntegrityError(info.message().to_string())
+            DbError::Constraint(info.message().to_string())
         }
         DieselError::DatabaseError(_, info) => DbError::Other(info.message().to_string()),
         other => DbError::Other(other.to_string()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{DbError, DieselError, map_error};
-
-    #[test]
-    fn non_database_diesel_errors_become_other_db_errors() {
-        assert!(matches!(map_error(DieselError::NotFound), DbError::Other(message) if !message.is_empty()));
     }
 }
 
@@ -315,70 +261,6 @@ fn returns_rows(sql: &str) -> bool {
     matches!(first.as_str(), "SELECT" | "SHOW" | "DESCRIBE" | "DESC" | "EXPLAIN" | "WITH")
 }
 
-struct MysqlCursor {
-    conn: SharedConn,
-    rows: std::vec::IntoIter<Row>,
-    has_result: bool,
-    rowcount: u64,
-}
-
-impl MysqlCursor {
-    fn run(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError> {
-        let sql = to_mysql_placeholders(sql);
-        let is_query = returns_rows(&sql);
-        let mut q = sql_query(sql).into_boxed::<Mysql>();
-        for p in params {
-            q = match p {
-                DbValue::Null => q.bind::<Nullable<Text>, _>(None::<String>),
-                DbValue::Int(n) => q.bind::<BigInt, _>(*n),
-                DbValue::Text(s) => q.bind::<Text, _>(s.clone()),
-                DbValue::DateTime(d) => q.bind::<Timestamp, _>(*d),
-            };
-        }
-        let mut guard = lock(&self.conn);
-        if is_query {
-            let rows: Vec<DynRow> = q.load(&mut *guard).map_err(map_error)?;
-            self.rowcount = rows.len() as u64;
-            self.rows = rows.into_iter().map(|r| r.0).collect::<Vec<_>>().into_iter();
-            self.has_result = true;
-        } else {
-            let n = q.execute(&mut *guard).map_err(map_error)?;
-            self.rowcount = n as u64;
-            self.rows = Vec::new().into_iter();
-            self.has_result = false;
-        }
-        Ok(())
-    }
-}
-
-impl DbCursor for MysqlCursor {
-    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<(), DbError> {
-        self.run(sql, params)
-    }
-
-    fn executemany(&mut self, sql: &str, seq: &[Vec<DbValue>]) -> Result<(), DbError> {
-        let mut total = 0;
-        for params in seq {
-            self.run(sql, params)?;
-            total += self.rowcount;
-        }
-        self.rowcount = total;
-        Ok(())
-    }
-
-    fn fetchall(&mut self) -> Option<Vec<Row>> {
-        self.has_result.then(|| self.rows.by_ref().collect())
-    }
-
-    fn fetchone(&mut self) -> Option<Row> {
-        self.rows.next()
-    }
-
-    fn rowcount(&self) -> u64 {
-        self.rowcount
-    }
-}
-
 struct MysqlDbConnection {
     conn: SharedConn,
     closed: bool,
@@ -391,11 +273,33 @@ impl MysqlDbConnection {
         }
         lock(&self.conn).batch_execute(sql).map_err(map_error)
     }
+
+    fn query(sql: &str, params: &[DbValue]) -> diesel::query_builder::BoxedSqlQuery<'static, Mysql, diesel::query_builder::SqlQuery> {
+        let mut q = sql_query(sql.to_string()).into_boxed::<Mysql>();
+        for p in params {
+            q = match p {
+                DbValue::Null => q.bind::<Nullable<Text>, _>(None::<String>),
+                DbValue::Int(n) => q.bind::<BigInt, _>(*n),
+                DbValue::Text(s) => q.bind::<Text, _>(s.clone()),
+                DbValue::DateTime(d) => q.bind::<Timestamp, _>(*d),
+            };
+        }
+        q
+    }
 }
 
 impl DbConnection for MysqlDbConnection {
-    fn cursor(&mut self) -> Box<dyn DbCursor> {
-        Box::new(MysqlCursor { conn: self.conn.clone(), rows: Vec::new().into_iter(), has_result: false, rowcount: 0 })
+    fn execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError> {
+        if returns_rows(sql) {
+            return Ok(self.fetch_all(sql, params)?.len() as u64);
+        }
+        let n = Self::query(sql, params).execute(&mut *lock(&self.conn)).map_err(map_error)?;
+        Ok(n as u64)
+    }
+
+    fn fetch_all(&mut self, sql: &str, params: &[DbValue]) -> Result<Vec<Row>, DbError> {
+        let rows: Vec<DynRow> = Self::query(sql, params).load(&mut *lock(&self.conn)).map_err(map_error)?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
     fn commit(&mut self) -> Result<(), DbError> {
@@ -411,10 +315,10 @@ impl DbConnection for MysqlDbConnection {
     }
 }
 
-/// 새 연결을 연다. pymysql 기본값처럼 자동 커밋을 끄고(`autocommit=0`), 커밋은 `commit()`으로 명시한다.
+/// 새 연결을 연다. 자동 커밋을 끄고(`autocommit=0`), 커밋은 `commit()`으로 명시한다.
 pub fn connect(config: &MysqlConfig) -> Result<Box<dyn DbConnection>, DbError> {
     let mut conn = MysqlConnection::establish(&mysql_url(config)).map_err(|e| DbError::Other(format!("MySQL 연결 실패 ({}:{}): {e}", config.host, config.port)))?;
-    // Diesel은 연결할 때 time_zone을 +00:00으로 바꾼다. pymysql처럼 서버 설정을 따르게 되돌린다.
+    // Diesel은 연결할 때 time_zone을 +00:00으로 바꾼다. 서버 설정을 따르게 되돌린다.
     conn.batch_execute("SET autocommit=0, time_zone=@@global.time_zone").map_err(map_error)?;
     Ok(Box::new(MysqlDbConnection { conn: Arc::new(Mutex::new(conn)), closed: false }))
 }
@@ -426,4 +330,14 @@ pub fn connect_from_env(env: &dyn Fn(&str) -> Option<String>, default_user: &str
 /// 설정을 고정한 제공자. 서비스에 주입해서 연산마다 새 연결을 얻게 한다.
 pub fn mysql_provider(config: MysqlConfig) -> ConnectionProvider {
     Arc::new(move || connect(&config))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DbError, DieselError, map_error};
+
+    #[test]
+    fn non_database_diesel_errors_become_other_db_errors() {
+        assert!(matches!(map_error(DieselError::NotFound), DbError::Other(message) if !message.is_empty()));
+    }
 }

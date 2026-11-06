@@ -1,0 +1,502 @@
+//! ISBN 추출 테스트.
+//! 외부 도구와 PDF 단계 실행기는 `Backends`로 대역을 꽂는다.
+
+use std::cell::RefCell;
+use std::fs;
+use std::io::Write;
+use std::path::Path;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use doc_reader::head_tail_reader::pdf_text_fallback;
+use doc_reader::pdf::{InProcess, Stage, StageError, StageRunner};
+use isbn_extractor::*;
+use parse_stat_counter::Stat;
+use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
+
+fn write(p: &Path, text: &str) {
+    fs::write(p, text).unwrap();
+}
+
+fn make_zip(path: &Path, files: &[(&str, &str)]) {
+    let mut z = zip::ZipWriter::new(fs::File::create(path).unwrap());
+    for (n, c) in files {
+        z.start_file(*n, zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(c.as_bytes()).unwrap();
+    }
+    z.finish().unwrap();
+}
+
+// ---- 검증 ----
+
+#[test]
+fn isbn13_validation() {
+    assert!(validate_isbn13("9788994492032"));
+    assert!(!validate_isbn13("9788994492031"));
+    assert!(!validate_isbn13("123"));
+    assert!(!validate_isbn13("abcdefghijklm"));
+}
+
+#[test]
+fn isbn10_validation() {
+    assert!(validate_isbn10("0306406152"));
+    assert!(validate_isbn10("080442957X"));
+    for bad in ["0306406153", "12345", "1111111111", "1100101101", "abcdefghij", "030X406152"] {
+        assert!(!validate_isbn10(bad), "{bad}");
+    }
+}
+
+#[test]
+fn validate_isbn_dispatches_on_length() {
+    assert!(validate_isbn("9788994492032"));
+    assert!(validate_isbn("0306406152"));
+    assert!(!validate_isbn("1234"));
+    assert!(!validate_isbn("1234567890123"));
+}
+
+#[test]
+/// 숫자는 ASCII와 전각(０~９)만 받는다. 아랍-인도 숫자 같은 다른 유니코드 숫자는 받지 않는다.
+fn validators_accept_ascii_and_fullwidth_digits_only() {
+    assert!(validate_isbn13("9788９94492032"));
+    assert!(validate_isbn10("030640615２"));
+    assert_eq!(search_in_content("9788994９42032"), ["9788994９42032"]);
+
+    assert!(!validate_isbn13("9788٩94492032"));
+    assert!(!validate_isbn10("030640615٢"));
+    assert!(search_in_content("9788994٩42032").is_empty());
+}
+
+// ---- 본문 검색 ----
+
+#[test]
+fn search_in_content_finds_plain_dashed_and_ocr_damaged_numbers() {
+    assert!(search_in_content("ISBN 9788994492032").contains(&"9788994492032".to_string()));
+    assert!(search_in_content("978-89-94492-03-2").contains(&"9788994492032".to_string()));
+    assert!(search_in_content_bytes(b"ISBN 9788994492032").contains(&"9788994492032".to_string()));
+    assert_eq!(search_in_content("no isbn here"), Vec::<String>::new());
+    assert!(search_in_content("first 9788994492032 and 978-89-94492-03-2").contains(&"9788994492032".to_string()));
+    assert!(!search_in_content("ISBN 97B-8O-94492-O3-2").contains(&"9788094492032".to_string()));
+    assert!(search_in_content("ISBN 89-329-0839-7 some text").contains(&"8932908397".to_string()));
+    let _ = search_in_content("89-94492-03-2");
+}
+
+#[test]
+fn search_matches_reference_results_for_ocr_and_separator_variants() {
+    // 기대값은 기록된 search_in_content 출력이다.
+    for (input, expected) in [
+        ("ISBN 0-8044-2957-Ⅹ", vec![]),
+        ("ISBN 89-8044-2957-Ⅹ", vec![]),
+        ("ISBN 978-89-9449l-03-2", vec![]),
+        ("ISBN 978-89-94492-03-2", vec!["9788994492032"]),
+        ("ISBN 978-89-9449I-03-2", vec![]),
+        ("ISBN 89-329-0839-7", vec!["8932908397"]),
+        ("ISBN 8Ⅹ-329-0839-7", vec![]),
+        ("isbn 978–89–94492–03–2", vec!["9788994492032"]),
+    ] {
+        assert_eq!(search_in_content(input), expected, "{input}");
+    }
+}
+
+#[test]
+fn bytes_are_decoded_leniently() {
+    let mut b = b"\xff\xfe junk ".to_vec();
+    b.extend(b"ISBN 9788994492032");
+    assert!(search_in_content_bytes(&b).contains(&"9788994492032".to_string()));
+}
+
+// ---- 앞뒤 읽기 ----
+
+// ---- EPUB ----
+
+#[test]
+fn epub_isbn_from_the_opf_metadata() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("book.epub");
+    make_zip(&p, &[("content.opf", "<package><metadata>ISBN 9788994492032</metadata></package>")]);
+    assert!(extract_from_epub(&p).contains(&"9788994492032".to_string()));
+}
+
+#[test]
+fn epub_isbn_from_the_first_and_last_spine_chapters() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("book.epub");
+    make_zip(
+        &p,
+        &[
+            ("content.opf", r#"<package><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#),
+            ("ch1.xhtml", "<html><body>ISBN 9788994492032</body></html>"),
+        ],
+    );
+    assert!(extract_from_epub(&p).contains(&"9788994492032".to_string()));
+
+    let q = d.path().join("test.epub");
+    let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="c1" href="head.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="middle.xhtml" media-type="application/xhtml+xml"/><item id="c3" href="tail.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/><itemref idref="c2"/><itemref idref="c3"/></spine></package>"#;
+    make_zip(
+        &q,
+        &[
+            ("OPS/content.opf", opf),
+            ("OPS/head.xhtml", "<html><body>ISBN 9788994492032</body></html>"),
+            ("OPS/middle.xhtml", "<html><body>ISBN 9788994492032 middle</body></html>"),
+            ("OPS/tail.xhtml", "<html><body>tail text</body></html>"),
+        ],
+    );
+    assert!(extract_from_epub(&q).contains(&"9788994492032".to_string()));
+}
+
+#[test]
+fn epub_middle_chapters_are_not_read() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("test.epub");
+    let opf = r#"<package><manifest><item id="c1" href="a.xhtml" media-type="text/html"/><item id="c2" href="b.xhtml" media-type="text/html"/><item id="c3" href="c.xhtml" media-type="text/html"/></manifest><spine><itemref idref="c1"/><itemref idref="c2"/><itemref idref="c3"/></spine></package>"#;
+    make_zip(&p, &[("content.opf", opf), ("a.xhtml", "<p>x</p>"), ("b.xhtml", "<p>ISBN 9788994492032</p>"), ("c.xhtml", "<p>y</p>")]);
+    assert!(extract_from_epub(&p).is_empty());
+}
+
+#[test]
+fn epub_failure_modes_all_give_an_empty_list() {
+    let d = tempfile::tempdir().unwrap();
+    let no_opf = d.path().join("a.epub");
+    make_zip(&no_opf, &[("dummy.txt", "no opf here")]);
+    assert!(extract_from_epub(&no_opf).is_empty());
+
+    let bad = d.path().join("bad.epub");
+    write(&bad, "not a zip");
+    assert!(extract_from_epub(&bad).is_empty());
+    assert!(extract_from_epub(&d.path().join("none.epub")).is_empty());
+
+    let missing = d.path().join("m.epub");
+    make_zip(&missing, &[("content.opf", r#"<package><manifest><item id="c1" href="missing.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#)]);
+    assert!(extract_from_epub(&missing).is_empty());
+
+    let empty_spine = d.path().join("e.epub");
+    make_zip(
+        &empty_spine,
+        &[("content.opf", r#"<package><manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="missing_id"/></spine></package>"#)],
+    );
+    assert!(extract_from_epub(&empty_spine).is_empty());
+
+    // 매니페스트에 있어도 html 형식이 아니면 본문으로 보지 않는다.
+    let image = d.path().join("i.epub");
+    make_zip(&image, &[("content.opf", r#"<package><manifest><item id="c1" href="a.png" media-type="image/png"/></manifest><spine><itemref idref="c1"/></spine></package>"#)]);
+    assert!(extract_from_epub(&image).is_empty());
+}
+
+#[test]
+fn epub_opf_is_found_by_a_case_sensitive_suffix_and_uses_the_first_one() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("a.epub");
+    make_zip(&p, &[("OPS/CONTENT.OPF", "<package>ISBN 9788994492032</package>")]);
+    assert!(extract_from_epub(&p).is_empty());
+    let q = d.path().join("b.epub");
+    make_zip(&q, &[("one.opf", "<package>nothing</package>"), ("two.opf", "<package>ISBN 9788994492032</package>")]);
+    assert!(extract_from_epub(&q).is_empty());
+}
+
+// ---- 외부 명령 ----
+
+type Answer = Box<dyn Fn(&str, &[String]) -> Result<CommandOutput, CommandError> + Send + Sync>;
+
+struct Fake {
+    calls: Mutex<Vec<Vec<String>>>,
+    timeouts: Mutex<Vec<Option<Duration>>>,
+    answer: Answer,
+}
+
+impl CommandRunner for Fake {
+    fn run(&self, argv: &[String], timeout: Option<Duration>) -> Result<CommandOutput, CommandError> {
+        self.calls.lock().unwrap().push(argv.to_vec());
+        self.timeouts.lock().unwrap().push(timeout);
+        (self.answer)(&argv[0], &argv[1..])
+    }
+
+    fn which(&self, _program: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+}
+
+fn fake(answer: impl Fn(&str, &[String]) -> Result<CommandOutput, CommandError> + Send + Sync + 'static) -> Fake {
+    Fake { calls: Mutex::new(Vec::new()), timeouts: Mutex::new(Vec::new()), answer: Box::new(answer) }
+}
+
+fn out(code: i32, stdout: &str) -> Result<CommandOutput, CommandError> {
+    Ok(CommandOutput { returncode: code, stdout: stdout.as_bytes().to_vec(), stderr: Vec::new() })
+}
+
+#[test]
+fn external_tools_run_under_the_isbn_time_limit() {
+    let f = fake(|prog, _| if prog == "djvused" { out(0, "2") } else { out(0, "ISBN 9788994492032") });
+    extract_from_djvu(Path::new("b.djvu"), &f);
+    extract_from_hwp(Path::new("b.hwp"), &f);
+    let timeouts = f.timeouts.lock().unwrap();
+    assert_eq!(timeouts.len(), 4, "djvused 1번, djvutxt 2번, strings 1번");
+    assert!(timeouts.iter().all(|t| *t == Some(Duration::from_secs(TOOL_TIMEOUT))), "{timeouts:?}");
+}
+
+#[test]
+fn external_tools_that_time_out_yield_no_isbn() {
+    assert!(extract_from_djvu(Path::new("b"), &fake(|_, _| Err(CommandError::Timeout))).is_empty());
+    assert!(extract_from_djvu(Path::new("b"), &fake(|p, _| if p == "djvused" { out(0, "10") } else { Err(CommandError::Timeout) })).is_empty());
+    assert!(extract_from_hwp(Path::new("b.hwp"), &fake(|_, _| Err(CommandError::Timeout))).is_empty());
+}
+
+#[test]
+fn djvu_text_comes_from_the_first_and_last_five_pages() {
+    let f = fake(|prog, _| if prog == "djvused" { out(0, "10\n") } else { out(0, "ISBN 9788994492032") });
+    let r = extract_from_djvu(Path::new("book.djvu"), &f);
+    assert!(r.contains(&"9788994492032".to_string()));
+    let calls = f.calls.lock().unwrap();
+    assert_eq!(calls[0], ["djvused", "book.djvu", "-e", "n"]);
+    assert_eq!(calls[1], ["djvutxt", "--page=1,2,3,4,5", "book.djvu"]);
+    assert_eq!(calls[2], ["djvutxt", "--page=6,7,8,9,10", "book.djvu"]);
+}
+
+#[test]
+fn djvu_with_few_pages_and_every_failure_mode() {
+    let f = fake(|prog, _| if prog == "djvused" { out(0, "3") } else { out(0, "x") });
+    extract_from_djvu(Path::new("b.djvu"), &f);
+    assert_eq!(f.calls.lock().unwrap()[1][1], "--page=1,2,3");
+    assert_eq!(f.calls.lock().unwrap()[2][1], "--page=1,2,3");
+
+    assert!(extract_from_djvu(Path::new("b"), &fake(|_, _| out(1, ""))).is_empty());
+    assert!(extract_from_djvu(Path::new("b"), &fake(|_, _| out(0, "not_a_number\n"))).is_empty());
+    assert!(extract_from_djvu(Path::new("b"), &fake(|_, _| Err(CommandError::NotFound))).is_empty());
+    // 텍스트 추출이 모두 실패하면 비어 있다.
+    assert!(extract_from_djvu(Path::new("b"), &fake(|p, _| if p == "djvused" { out(0, "10") } else { out(1, "") })).is_empty());
+    // 페이지 수가 0이면 범위를 만들지 않는다.
+    let none = fake(|p, _| if p == "djvused" { out(0, "0") } else { out(0, "") });
+    assert!(extract_from_djvu(Path::new("b"), &none).is_empty());
+}
+
+#[test]
+fn hwp_strings_are_cut_to_head_and_tail() {
+    assert!(extract_from_hwp(Path::new("b.hwp"), &fake(|_, _| out(0, "ISBN 9788994492032"))).contains(&"9788994492032".to_string()));
+    assert!(extract_from_hwp(Path::new("b.hwp"), &fake(|_, _| out(1, ""))).is_empty());
+    assert!(extract_from_hwp(Path::new("b.hwp"), &fake(|_, _| Err(CommandError::NotFound))).is_empty());
+    assert!(extract_from_hwp(Path::new("b.hwp"), &fake(|_, _| out(0, ""))).is_empty());
+    // 가운데에 있는 번호는 버려진다.
+    let long = format!("{}ISBN 9788994492032{}", "x".repeat(HEAD_TAIL_SIZE + 10), "y".repeat(HEAD_TAIL_SIZE + 10));
+    assert!(extract_from_hwp(Path::new("b.hwp"), &fake(move |_, _| out(0, &long))).is_empty());
+}
+
+// ---- PDF ----
+
+type StageAnswer = Result<(String, usize), StageError>;
+
+/// 단계별 답을 돌려주는 PDF 실행기. 답이 없는 단계를 부르면 panic한다.
+struct FakePdf {
+    answers: Vec<(Stage, StageAnswer)>,
+    calls: RefCell<Vec<Stage>>,
+}
+
+impl FakePdf {
+    fn new(answers: Vec<(Stage, StageAnswer)>) -> Self {
+        FakePdf { answers, calls: RefCell::new(Vec::new()) }
+    }
+}
+
+impl StageRunner for FakePdf {
+    fn run(&self, stage: Stage, _path: &Path) -> StageAnswer {
+        self.calls.borrow_mut().push(stage);
+        self.answers.iter().find(|(s, _)| *s == stage).map(|(_, answer)| answer.clone()).unwrap_or_else(|| panic!("{stage:?} should not run"))
+    }
+}
+
+fn text(t: &str, pages: usize) -> StageAnswer {
+    Ok((t.to_owned(), pages))
+}
+
+fn failed() -> StageAnswer {
+    Err(StageError::Failed("boom".into()))
+}
+
+fn backends<'a>(stat: &'a Arc<Stat>, pdf: &'a FakePdf) -> Backends<'a> {
+    Backends { pdf_runner: pdf, runner: Rc::new(SystemRunner), stat }
+}
+
+/// 실제 도구와 현재 프로세스 실행기로 추출한다.
+fn extract_real(path: &Path, content: Option<&str>) -> Vec<String> {
+    extract(path, content, &Backends::real(&InProcess, &Stat::new()))
+}
+
+fn stage_line(stat: &Stat, stage: &str) -> String {
+    let mut buf = Vec::new();
+    stat.print(&mut buf).unwrap();
+    String::from_utf8(buf).unwrap().lines().find(|l| l.starts_with(&format!("  - {stage}"))).unwrap_or("").to_string()
+}
+
+#[test]
+fn txt_uses_the_given_content_or_reads_the_file() {
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("book.txt");
+    write(&f, "ISBN 9788994492032");
+    assert!(extract_real(&f, None).contains(&"9788994492032".to_string()));
+    write(&f, "no isbn here");
+    assert!(extract_real(&f, None).is_empty());
+    write(&f, "nothing");
+    assert!(extract_real(&f, Some("ISBN 9788994492032")).contains(&"9788994492032".to_string()));
+    // 빈 content는 없는 것으로 보고 파일을 읽는다.
+    write(&f, "ISBN 9788994492032");
+    assert!(!extract_real(&f, Some("")).is_empty());
+}
+
+#[test]
+fn unsupported_extensions_and_dispatch_to_djvu_and_hwp() {
+    let d = tempfile::tempdir().unwrap();
+    let x = d.path().join("book.xyz");
+    write(&x, "ISBN 9788994492032");
+    assert!(extract_real(&x, None).is_empty());
+
+    let stat = Arc::new(Stat::new());
+    let pdf = FakePdf::new(vec![]);
+    let mut b = backends(&stat, &pdf);
+    b.runner = Rc::new(fake(|_, _| out(0, "ISBN 9788994492032")));
+    assert!(extract(&d.path().join("a.hwp"), None, &b).contains(&"9788994492032".to_string()));
+    b.runner = Rc::new(fake(|p, _| if p == "djvused" { out(0, "1") } else { out(0, "ISBN 9788994492032") }));
+    assert!(extract(&d.path().join("a.djvu"), None, &b).contains(&"9788994492032".to_string()));
+    // 확장자는 대소문자를 가리지 않는다.
+    assert!(extract(&d.path().join("A.HWP"), None, &b).len() <= 1);
+}
+
+#[test]
+fn pdf_uses_the_head_tail_stage_before_the_stream_scan() {
+    let stat = Arc::new(Stat::new());
+    let pdf = FakePdf::new(vec![(Stage::HeadTail, text("ISBN 9788994492032", 6))]);
+    assert_eq!(extract(Path::new("book.pdf"), None, &backends(&stat, &pdf)), ["9788994492032"]);
+    assert_eq!(*pdf.calls.borrow(), [Stage::HeadTail]);
+    assert!(stage_line(&stat, "isbn_poppler").contains("ok=1"), "{}", stage_line(&stat, "isbn_poppler"));
+}
+
+#[test]
+fn pdf_scans_streams_when_the_head_tail_stage_cannot_open_the_document() {
+    let stat = Arc::new(Stat::new());
+    let pdf = FakePdf::new(vec![(Stage::HeadTail, failed()), (Stage::HeadTailScan, text("ISBN 9788994492032", 0))]);
+    assert_eq!(extract(Path::new("book.pdf"), None, &backends(&stat, &pdf)), ["9788994492032"]);
+    assert!(stage_line(&stat, "isbn_poppler").contains("error=1"));
+    assert!(stage_line(&stat, "isbn_fallback").contains("ok=1"));
+}
+
+#[test]
+fn pdf_given_content_with_an_isbn_skips_extraction() {
+    let stat = Arc::new(Stat::new());
+    let none = FakePdf::new(vec![]);
+    assert_eq!(extract(Path::new("book.pdf"), Some("ISBN 978-89-94492-03-2"), &backends(&stat, &none)), ["9788994492032"]);
+    assert!(none.calls.borrow().is_empty());
+    // content에 ISBN이 없으면 단계를 돈다.
+    let pdf = FakePdf::new(vec![(Stage::HeadTail, text("ISBN 9788994492032", 1))]);
+    assert_eq!(extract(Path::new("book.pdf"), Some("본문"), &backends(&stat, &pdf)), ["9788994492032"]);
+}
+
+#[test]
+fn pdf_head_tail_timeout_gives_up_without_the_stream_scan() {
+    let stat = Arc::new(Stat::new());
+    let pdf = FakePdf::new(vec![(Stage::HeadTail, Err(StageError::Timeout))]);
+    assert!(extract(Path::new("hang.pdf"), None, &backends(&stat, &pdf)).is_empty());
+    assert_eq!(*pdf.calls.borrow(), [Stage::HeadTail]);
+    assert!(stage_line(&stat, "isbn_poppler").contains("timeout=1"));
+}
+
+#[test]
+fn pdf_head_tail_text_without_an_isbn_stops_there() {
+    let stat = Arc::new(Stat::new());
+    let pdf = FakePdf::new(vec![(Stage::HeadTail, text("본문만 있고 국제표준도서번호는 없다", 12))]);
+    assert!(extract(Path::new("no_isbn.pdf"), None, &backends(&stat, &pdf)).is_empty());
+    assert_eq!(*pdf.calls.borrow(), [Stage::HeadTail]);
+}
+
+#[test]
+fn pdf_that_opened_but_has_no_text_does_not_scan_streams() {
+    let stat = Arc::new(Stat::new());
+    let pdf = FakePdf::new(vec![(Stage::HeadTail, text("", 3))]);
+    assert!(extract(Path::new("scan.pdf"), None, &backends(&stat, &pdf)).is_empty());
+    assert!(stage_line(&stat, "isbn_poppler").contains("ok=0 empty=1"));
+}
+
+#[test]
+fn pdf_stream_scan_outcomes_are_recorded() {
+    let stat = Arc::new(Stat::new());
+    for (answer, outcome) in [(text("", 0), "empty=1"), (failed(), "error=1"), (Err(StageError::Timeout), "timeout=1")] {
+        let pdf = FakePdf::new(vec![(Stage::HeadTail, text("", 0)), (Stage::HeadTailScan, answer)]);
+        assert!(extract(Path::new("a.pdf"), None, &backends(&stat, &pdf)).is_empty());
+        assert!(stage_line(&stat, "isbn_fallback").contains(outcome), "{}", stage_line(&stat, "isbn_fallback"));
+    }
+}
+
+// ---- 실제 PDF ----
+
+/// 텍스트 한 줄을 그리는 1쪽짜리 PDF.
+fn text_pdf(text: &str) -> Vec<u8> {
+    let content = format!("BT /F1 12 Tf 72 700 Td ({text}) Tj ET");
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+    }
+    let xref = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).bytes());
+    for o in offsets {
+        out.extend(format!("{o:010} 00000 n \n").bytes());
+    }
+    out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).bytes());
+    out
+}
+
+#[test]
+fn a_real_pdf_with_an_isbn_is_read_through_the_default_backends() {
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("book.pdf");
+    fs::write(&f, text_pdf("ISBN 9788994492032")).unwrap();
+    assert!(extract_real(&f, None).contains(&"9788994492032".to_string()));
+    let blank = d.path().join("blank.pdf");
+    fs::write(&blank, text_pdf("")).unwrap();
+    assert!(extract_real(&blank, None).is_empty());
+}
+
+#[test]
+fn a_broken_pdf_gives_an_empty_list() {
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("book.pdf");
+    write(&f, "not a pdf");
+    assert!(extract_real(&f, None).is_empty());
+    assert!(extract_real(&d.path().join("none.pdf"), None).is_empty());
+}
+
+#[test]
+fn the_fallback_scanner_reads_text_from_a_pdf_whose_xref_is_broken() {
+    let d = tempfile::tempdir().unwrap();
+    let f = d.path().join("broken.pdf");
+    let mut bytes = text_pdf("ISBN 9788994492032");
+    let cut = bytes.windows(4).position(|w| w == b"xref").unwrap();
+    bytes.truncate(cut);
+    fs::write(&f, bytes).unwrap();
+    assert!(pdf_text_fallback(&f).unwrap().contains("9788994492032"));
+    assert!(extract_real(&f, None).contains(&"9788994492032".to_string()));
+}
+
+// ---- Poppler ----
+
+// ---- 분기 보강 ----
+
+#[test]
+fn a_corrupt_chapter_makes_the_epub_give_up_but_a_missing_one_is_skipped() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("book.epub");
+    let opf = r#"<package><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
+    make_zip(&p, &[("content.opf", opf), ("ch1.xhtml", &"<p>ISBN 9788994492032 안녕하세요</p>".repeat(40))]);
+    let mut data = fs::read(&p).unwrap();
+    let marker = b"ch1.xhtml";
+    let at = data.windows(marker.len()).position(|w| w == marker).unwrap() + marker.len() + 6;
+    for b in &mut data[at..at + 12] {
+        *b ^= 0xff;
+    }
+    fs::write(&p, data).unwrap();
+    assert!(extract_from_epub(&p).is_empty());
+}

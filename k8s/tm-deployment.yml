@@ -88,9 +88,6 @@ spec:
               valueFrom: { secretKeyRef: { name: tm-es-cred, key: password } }
             - name: TM_ES_BOOK_INDEX
               value: book
-            # Rust가 학습한 export 디렉터리를 books-pv에 둔다.
-            - name: TM_CLASSIFIER_MODEL_DIR
-              value: /books/.classifier/rust-export
             - name: TM_ES_COMICS_INDEX
               value: comics
             - name: TM_BACKFILL_CREATED_TIME_ON_STARTUP

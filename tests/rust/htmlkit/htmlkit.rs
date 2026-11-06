@@ -1,4 +1,4 @@
-//! htmlkit 테스트. 기대값은 BeautifulSoup 4.12.3 `html.parser`의 실제 출력에서 가져왔다.
+//! htmlkit 테스트. 기대값은 기록된 출력이다.
 
 use htmlkit::*;
 
@@ -6,7 +6,7 @@ fn text(html: &str) -> String {
     text_of(html)
 }
 
-// ---- text_of: BeautifulSoup(...).get_text() ----
+// ---- text_of ----
 
 #[test]
 fn script_and_style_bodies_are_excluded() {
@@ -21,7 +21,7 @@ fn comments_doctype_and_processing_instructions_are_excluded_but_cdata_is_kept()
 }
 
 #[test]
-fn entities_follow_beautifulsoup_including_the_dropped_semicolon() {
+fn entities_keep_unknown_names_without_the_semicolon() {
     assert_eq!(text("&nbsp;x&#8211;y&amp;z&bogus;&#x41;&hellip;"), "\u{a0}x–y&z&bogusA…");
     assert_eq!(text("&lt;b&gt; &quot;q&quot; &#X42; &#99999999;"), "<b> \"q\" B \u{fffd}");
     // 종결 문자가 없으면 엔티티가 아니라 글자 그대로다. 종결 문자는 `;`일 때만 먹는다.
@@ -126,7 +126,7 @@ fn attribute_entities_decode_numeric_and_common_named_references() {
     assert_eq!(decode_entities("&#99999999;"), "&#99999999;");
 }
 
-// ---- 공백만 있는 텍스트 노드는 한 글자로 줄어든다 (BeautifulSoup endData) ----
+// ---- 공백만 있는 텍스트 노드는 한 글자로 줄어든다 ----
 
 #[test]
 fn whitespace_only_text_nodes_collapse_to_one_newline_or_space() {
@@ -183,4 +183,12 @@ fn void_elements_close_at_their_start_tag_and_their_end_tag_is_not_a_boundary() 
 #[test]
 fn malformed_references_are_plain_text() {
     assert_eq!(text("&#; &#x; &1 &-x & "), "&#; &#x; &1 &-x & ");
+}
+
+#[test]
+fn escape_html_replaces_all_special_characters_and_escape_text_keeps_quotes() {
+    let raw = "a&b<c>d\"e'f";
+    assert_eq!(escape_html(raw), "a&amp;b&lt;c&gt;d&quot;e&#x27;f");
+    assert_eq!(escape_text(raw), "a&amp;b&lt;c&gt;d\"e'f");
+    assert_eq!(decode_entities(&escape_html(raw)), raw);
 }

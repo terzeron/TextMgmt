@@ -1,7 +1,7 @@
-//! backend 테스트 공용 도구. Python `tests/conftest.py`의 환경 설정과 FastAPI `TestClient`에 대응한다.
+//! backend 테스트 공용 도구.
 //!
 //! 가정한 backend API (아직 구현 전이다):
-//! - `backend::main::app() -> axum::Router`
+//! - `backend::api_router::app() -> axum::Router`
 //!
 //! 각 테스트 파일은 `mod common;`으로 가져온다. 새 모듈은 `use common::clock::FakeClock;`처럼 경로로 쓴다.
 //! (`use common::image;`로 모듈 자체를 들이면 `image` crate 이름과 겹치므로 항목을 직접 가져온다.)
@@ -12,20 +12,62 @@
 
 #![allow(dead_code)]
 
+pub mod auth_fakes;
+#[path = "../../shared/auth_fixtures.rs"]
+pub mod auth_fixtures;
+#[path = "../../shared/category_apply.rs"]
+pub mod category_apply;
+#[path = "../../shared/clock.rs"]
 pub mod clock;
+#[path = "../../shared/cover_candidates.rs"]
+pub mod cover_candidates;
+#[path = "../../shared/cover_docs.rs"]
+pub mod cover_docs;
+#[path = "../../shared/cover_env.rs"]
+pub mod cover_env;
+#[path = "../../shared/dyn_es.rs"]
+pub mod dyn_es;
+#[path = "../../shared/edits.rs"]
 pub mod edits;
+#[path = "../../shared/env.rs"]
 pub mod env;
+#[path = "../../shared/epub.rs"]
 pub mod epub;
+#[path = "../../shared/epub_book.rs"]
+pub mod epub_book;
+#[path = "../../shared/epub_fixtures.rs"]
+pub mod epub_fixtures;
+#[path = "../../shared/es_dummy.rs"]
 pub mod es_dummy;
+#[path = "../../shared/es_fake.rs"]
 pub mod es_fake;
+#[path = "../../shared/faulty_fs.rs"]
 pub mod faulty_fs;
+#[path = "../../shared/file_reader_fakes.rs"]
+pub mod file_reader_fakes;
+#[path = "../../shared/fsx.rs"]
 pub mod fsx;
+#[path = "../../shared/image.rs"]
 pub mod image;
+#[path = "../../shared/log_capture.rs"]
 pub mod log_capture;
+#[path = "../../shared/pdf.rs"]
 pub mod pdf;
+#[path = "../../shared/pdf_edit_env.rs"]
+pub mod pdf_edit_env;
+#[path = "../../shared/pdf_env.rs"]
+pub mod pdf_env;
+#[path = "../../shared/preview_epubs.rs"]
+pub mod preview_epubs;
+#[path = "../../shared/raster.rs"]
 pub mod raster;
+pub mod router_fixtures;
+#[path = "../../shared/runner.rs"]
 pub mod runner;
 pub mod session;
+#[path = "../../shared/shared_fixtures.rs"]
+pub mod shared_fixtures;
+#[path = "../../shared/zipx.rs"]
 pub mod zipx;
 
 use axum::body::Body;
@@ -33,6 +75,7 @@ use axum::http::{Method, Request};
 use serde_json::Value;
 use tower::ServiceExt;
 
+#[path = "../../shared/setup.rs"]
 mod setup;
 
 // 테스트 파일마다 쓰는 이름이 달라 일부가 쓰이지 않는다(`dead_code` 허용과 같은 이유).
@@ -59,7 +102,7 @@ impl Response {
     }
 }
 
-/// FastAPI `TestClient(app)`에 대응한다. 요청마다 새 `Router`를 만들지 않고 복제해서 쓴다.
+/// 앱에 요청을 보내는 테스트 클라이언트. 요청마다 새 `Router`를 만들지 않고 복제해서 쓴다.
 pub struct TestClient {
     app: axum::Router,
     headers: Vec<(String, String)>,
@@ -68,7 +111,7 @@ pub struct TestClient {
 impl TestClient {
     pub fn new() -> Self {
         setup_env();
-        Self { app: backend::main::app(), headers: Vec::new() }
+        Self { app: backend::api_router::app(), headers: Vec::new() }
     }
 
     pub fn with_app(app: axum::Router) -> Self {

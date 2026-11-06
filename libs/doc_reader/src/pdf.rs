@@ -1,7 +1,8 @@
-//! PDF 읽기. 원본: `Loader.read_from_pdf`와 `_fast_pdf_page_count`.
+//! PDF 읽기: 본문 텍스트 추출과 빠른 쪽수 세기.
 //!
 //! Poppler -> lopdf -> lopdf 재저장 복구 단계를 순서대로 시도한다.
-//! 단계 실행은 [`StageRunner`] 뒤에 두어 멈춘 외부 명령을 자식 프로세스와 timeout으로 격리한다.
+//! ISBN을 찾는 앞뒤 쪽 단계([`Stage::HeadTail`], [`Stage::HeadTailScan`])도 같은 [`StageRunner`]로 실행한다.
+//! 운영 실행기는 단계마다 자식 프로세스를 띄우고 [`PDF_STAGE_TIMEOUT`]을 넘기면 프로세스째 종료한다.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -9,33 +10,39 @@ use std::sync::LazyLock;
 use std::time::Instant;
 
 use regex::bytes::Regex as BytesRegex;
+use text_decoder::mojibake_counter::{count_mojibake_runs, is_usable_text};
 
 use crate::TEXT_SIZE;
-use crate::mojibake::{count_mojibake_runs, is_usable_text};
-use crate::pytext::{head_chars, is_space, keep_word_chars};
+use crate::text_normalizer::{head_chars, keep_word_chars};
 
 /// 앞에서부터 이만큼의 쪽만 훑는다(TEXT_SIZE를 채우는 데 실측 최대 27쪽).
 pub const PDF_PAGE_LIMIT: usize = 40;
-/// 파서 단계 하나의 벽시계 상한(초).
-pub const PDF_STAGE_TIMEOUT: u64 = 30;
+/// 파서 단계 하나의 벽시계 상한(초). 넘기면 실행기가 단계를 실행하던 자식 프로세스를 종료한다.
+pub const PDF_STAGE_TIMEOUT: u64 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
     /// Poppler 텍스트 추출
-    Pdfium,
-    /// pdfplumber에 대응(lopdf)
-    Plumber,
+    Poppler,
+    /// lopdf 텍스트 추출
+    Lopdf,
     /// lopdf로 다시 저장한 뒤 Poppler 대신 lopdf로 읽는다.
     Repair,
+    /// 앞뒤 [`crate::head_tail_reader::HEAD_TAIL_PAGES`]쪽: Poppler, 안 되면 lopdf. ISBN 검색용.
+    HeadTail,
+    /// 문서 구조를 못 여는 PDF의 스트림을 직접 훑어 앞뒤 블록의 글자열을 모은다. ISBN 검색용.
+    HeadTailScan,
 }
 
 impl Stage {
-    /// 통계에 쓰는 이름. 원본의 함수 이름 그대로다.
+    /// 통계에 쓰는 이름.
     pub fn name(self) -> &'static str {
         match self {
-            Stage::Pdfium => "_pdf_text_by_poppler",
-            Stage::Plumber => "_pdf_text_by_pdfplumber",
-            Stage::Repair => "_pdf_text_by_pikepdf_repair",
+            Stage::Poppler => "pdf_text_poppler",
+            Stage::Lopdf => "pdf_text_lopdf",
+            Stage::Repair => "pdf_text_repair",
+            Stage::HeadTail => "isbn_poppler",
+            Stage::HeadTailScan => "isbn_fallback",
         }
     }
 }
@@ -49,14 +56,10 @@ pub enum StageError {
 /// 단계 하나를 실행해 (텍스트, 쪽수)를 돌려준다.
 pub trait StageRunner {
     fn run(&self, stage: Stage, path: &Path) -> Result<(String, usize), StageError>;
-
-    /// 실행 파일이 제공하는 격리 worker. 외부 파서의 후속 처리도 같은 실행 파일에서 분리할 때 쓴다.
-    fn worker_executable(&self) -> Option<&Path> {
-        None
-    }
 }
 
-/// 현재 프로세스에서 단계를 실행한다. 시간 상한은 걸지 않는다.
+/// 현재 프로세스에서 단계를 실행한다. 시간 상한이 없어 파서가 멈추면 호출자도 멈춘다.
+/// 테스트용이다. 운영 경로는 `file_indexer::child_process_runner::ChildRunner`를 쓴다.
 pub struct InProcess;
 
 impl StageRunner for InProcess {
@@ -68,14 +71,16 @@ impl StageRunner for InProcess {
 /// 단계의 실제 작업.
 pub fn run_stage(stage: Stage, path: &Path) -> Result<(String, usize), String> {
     match stage {
-        Stage::Pdfium => poppler_text(path),
-        Stage::Plumber => lopdf_text(path),
+        Stage::Poppler => poppler_text(path),
+        Stage::Lopdf => lopdf_pages_text(lopdf::Document::load(path).map_err(|e| e.to_string())?),
         Stage::Repair => {
             let mut doc = lopdf::Document::load(path).map_err(|e| e.to_string())?;
             let mut buffer = Vec::new();
             doc.save_to(&mut buffer).map_err(|e| e.to_string())?;
-            lopdf_text_from_bytes(buffer)
+            lopdf_pages_text(lopdf::Document::load_mem(&buffer).map_err(|e| e.to_string())?)
         }
+        Stage::HeadTail => crate::head_tail_reader::pdf_text_auto(path),
+        Stage::HeadTailScan => crate::head_tail_reader::pdf_text_fallback(path).map(|text| (text, 0)),
     }
 }
 
@@ -95,20 +100,14 @@ pub fn collect_pages<E>(page_count: usize, mut page_text: impl FnMut(usize) -> R
 
 fn poppler_text(path: &Path) -> Result<(String, usize), String> {
     let runner = sysdeps::SystemRunner;
-    let pages = sysdeps::pdf::page_count(&runner, path)?;
+    let pages = pdf_engine::pdf_worker_client::page_count(&runner, path)?;
     let last = pages.min(PDF_PAGE_LIMIT);
-    let text = if last == 0 { String::new() } else { sysdeps::pdf::extract_text(&runner, path, 1, last)? };
+    let text = if last == 0 { String::new() } else { pdf_engine::pdf_worker_client::extract_text(&runner, path, 1, last)? };
     collect_pages(pages, |i| Ok::<_, String>(text.split('\u{000c}').nth(i).unwrap_or_default().to_owned()))
 }
 
-fn lopdf_text(path: &Path) -> Result<(String, usize), String> {
-    let doc = lopdf::Document::load(path).map_err(|e| e.to_string())?;
-    let numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
-    collect_pages(numbers.len(), |i| Ok::<_, String>(doc.extract_text(&[numbers[i]]).unwrap_or_default()))
-}
-
-fn lopdf_text_from_bytes(bytes: Vec<u8>) -> Result<(String, usize), String> {
-    let doc = lopdf::Document::load_mem(&bytes).map_err(|e| e.to_string())?;
+/// 연 문서의 쪽마다 본문을 뽑는다. 뽑지 못한 쪽은 빈 문자열이다.
+fn lopdf_pages_text(doc: lopdf::Document) -> Result<(String, usize), String> {
     let numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
     collect_pages(numbers.len(), |i| Ok::<_, String>(doc.extract_text(&[numbers[i]]).unwrap_or_default()))
 }
@@ -133,7 +132,7 @@ pub struct PdfRead {
 }
 
 fn blank(text: &str) -> bool {
-    text.trim_matches(is_space).is_empty()
+    text.trim_matches(char::is_whitespace).is_empty()
 }
 
 /// PDF에서 요약과 쪽수를 읽는다.
@@ -145,7 +144,7 @@ pub fn read_from_pdf(path: &Path, runner: &dyn StageRunner) -> PdfRead {
     let mut logs: Vec<(&'static str, String)> = Vec::new();
     let mut timed_out: Vec<&'static str> = Vec::new();
 
-    for (stage_no, stage) in [Stage::Pdfium, Stage::Plumber].into_iter().enumerate() {
+    for (stage_no, stage) in [Stage::Poppler, Stage::Lopdf].into_iter().enumerate() {
         let started = Instant::now();
         let mut outcome = "error";
         let mut stop = false;
@@ -237,7 +236,7 @@ pub type PdftotextRun<'a> = dyn Fn(&[String]) -> Option<(i32, Vec<u8>)> + 'a;
 pub struct PdftotextHooks<'a> {
     pub which: Option<&'a PdftotextWhich<'a>>,
     pub run: Option<&'a PdftotextRun<'a>>,
-    /// Python `Loader` caches the binary path. Each Rust loader/test scope owns its cache.
+    /// 실행 파일 경로 캐시. loader·테스트 범위마다 따로 가진다.
     pub path_cache: &'a std::sync::OnceLock<Option<PathBuf>>,
 }
 
@@ -456,7 +455,18 @@ pub fn read_from_obj_stream(file: &mut std::fs::File, stream_offset: i64, target
     raw.get(start..next_offset.min(raw.len())).map(<[u8]>::to_vec)
 }
 
-pub type XrefStream = (Vec<u8>, [usize; 3], Vec<i64>, Option<i64>);
+/// xref 스트림 하나를 읽은 결과.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XrefStream {
+    /// 압축을 풀고 PNG 예측을 되돌린 항목 데이터.
+    pub entries: Vec<u8>,
+    /// 항목 필드 너비(`/W`).
+    pub widths: [usize; 3],
+    /// 객체 번호 범위(`/Index`): (시작, 개수) 쌍을 이어 붙인 목록.
+    pub index_ranges: Vec<i64>,
+    /// 이전 xref 위치(`/Prev`).
+    pub prev: Option<i64>,
+}
 
 pub fn parse_one_xref_stream(file: &mut std::fs::File, xref_offset: i64) -> Option<XrefStream> {
     static W: LazyLock<BytesRegex> = LazyLock::new(|| bre(r"/W\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s*\]"));
@@ -507,7 +517,7 @@ pub fn parse_one_xref_stream(file: &mut std::fs::File, xref_offset: i64) -> Opti
         }
     }
     let prev = PREV.captures(&data).and_then(|c| num(&c[1]));
-    Some((decompressed, w, index_ranges, prev))
+    Some(XrefStream { entries: decompressed, widths: w, index_ranges, prev })
 }
 
 enum Lookup {
@@ -576,7 +586,7 @@ pub fn fast_page_count_with(path: &Path, hooks: &FastCountHooks<'_>) -> Option<u
             }))
             .ok()
             .flatten();
-            let Some((decompressed, w, index_ranges, prev)) = parsed else { break };
+            let Some(XrefStream { entries: decompressed, widths: w, index_ranges, prev }) = parsed else { break };
             lookups.push(Lookup::Stream(decompressed, w, index_ranges));
             xref_offset = prev;
         }

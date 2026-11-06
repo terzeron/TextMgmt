@@ -12,10 +12,11 @@
 - seam 방식은 세 갈래다. (a) 생성자 주입(`Deps` 빌더), (b) 인스턴스 `set_*` 변경자, (c) 전역 `override_*`/`hooks::set_*`/`testing::*` 가드. (c)는 같은 test binary 안에서 병렬 테스트와 충돌한다. 저장소 규칙(전역 상태 금지)에도 어긋난다.
 - 전체 테스트는 약 2,174개다. 그중 `#[ignore]`가 769개이고, 약 600개는 사유가 `monkeypatch`/`mock.patch`/seam 부재다. seam을 통일하면 이 600개가 열린다.
 - 통일 원칙은 네 줄이다.
-  1. 서비스 전체를 바꾸는 facade는 `XxxApi`(예: `BookManagerApi`, `EsManagerApi`). 좁은 능력은 역할 명사(예: `FsOps`, `Clock`, `CommandRunner`). 기존 crate(`isbn::CommandRunner`, `es_client::IndexStore`, `bookstore::Fetcher`, `doc_reader::StageRunner`)가 이미 이 규칙이다.
+  1. 서비스 전체를 바꾸는 facade는 `XxxApi`(예: `BookManagerApi`, `EsManagerApi`). 좁은 능력은 역할 명사(예: `FsOps`, `Clock`, `CommandRunner`). 기존 crate(`isbn::CommandRunner`, `es_client::IndexStore`, `doc_reader::StageRunner`)가 이미 이 규칙이다.
   2. 주입은 생성자 `XxxDeps` + 소비형 `with_*` 빌더 하나로 한다. `set_*`, 전역 가드, `backend::*::testing` 모듈은 쓰지 않는다.
   3. 말단 순수 함수만 `*_with(args, &XxxHooks)`를 쓴다(`doc_reader`, `epub_cover`, `cover_sources`가 이미 이 방식).
   4. 공용 능력(`Clock`, `FsOps`, `CommandRunner`, `HttpSession`)은 새 lib crate `libs/sysdeps`에 두고 backend, loader, doc_reader가 함께 쓴다.
+     `HttpSession`과 `HttpResponse`는 이후 `libs/common`의 `http_client`로 옮겼다. 시스템 능력이 아니라서다.
 - 재작성 규모: 테스트 본문 수정 약 410개(19%, 41개 파일). 그중 기계적 치환 약 190개, 수작업 약 220개. 대역(fake) 구현을 고치는 헬퍼 수정은 별도로 약 25개 파일이다. 본문·헬퍼 모두 안 고치는 파일은 약 11개다.
 
 ---
@@ -178,7 +179,7 @@ test binary가 파일마다 하나라서 V1은 파일 간 충돌이 없다. 한 
 | M5 `BookManager::for_test(path, es, Arc<dyn BookLookup>)`, `BookManager::new()`(env)                                          | book_preview(99)                                                                                        |
 | M6 `BookManagerDeps::new(es, path).with_*` 빌더 + `BookManager::with_deps`                                                    | common/book_fixtures → pdf_delete_pages, pdf_delete_pages_gaps, pdf_pages, epub_image_edit              |
 | M7 `BookManagerDeps { path_prefix, trash_dirname, es_manager, book_lookup, image_fetcher }` struct 리터럴                     | epub_cover_set(70)                                                                                      |
-| M8 `backend::book_manager::testing::{DummyEs, make_manager, make_doc}` (프로덕션 crate 안의 테스트 모듈로 가정)               | book_manager_gaps(47), book_manager_hwp_preview, main(11회), classify_cli(16회), classify_cli_gaps(9회) |
+| M8 `book_manager::testing::{DummyEs, make_manager, make_doc}` (프로덕션 crate 안의 테스트 모듈로 가정)               | book_manager_gaps(47), book_manager_hwp_preview, main(11회), classify_cli(16회), classify_cli_gaps(9회) |
 | M9 `new_from_env(get)`, `new_with(get, es_factory: Box<dyn FnOnce>)`, `with_es_url(url)`                                      | book_manager_1                                                                                          |
 | M10 `ComicsManager::from_env(get)`, `from_env_with_es(get, es_factory: FnOnce(&str) -> Box<dyn IndexManager>)`                | comics                                                                                                  |
 | 인자 순서                                                                                                                     | `(path, es)` 4곳, `(es, path)` 1곳(book_fixtures)                                                       |
@@ -196,7 +197,7 @@ test binary가 파일마다 하나라서 V1은 파일 간 충돌이 없다. 한 
 | epub_cover 훅       | cover_management `Hooks{limits, find_opf_path, fsync, flock, revision, testzip, inspect_archive}` ≈ epub_cover_set `hooks::{set_fsync, set_max_xml_bytes, set_zip_test, set_inspect_archive, set_uuid_hex}` ≈ pdf_delete_pages_gaps `set_max_image_pixels` ≈ cover_repair `Limits`+`set_pixel_decode_hook` |
 | EPUB 에러           | `CoverError`, `EpubCoverError{Cover,Io}`, `FetchError{Value,Os,Other}`, `ValueError`, `SearchError`                                                                                                                                                                                                        |
 | loader `doc_reader` | `read_from_text_with(path, detect)`(loader*1) vs `read_from_text_with(path, &TextHooks)`(loader_2). `fast_page_count_with(.., XrefOps)` vs `(.., &FastCountHooks)`. `reencode*\*\_with_detect / \_with_io / \_with(&TextHooks)`3종.`read_file_with_fast_count`vs`read_file_with_hooks(ReadHooks)`          |
-| 서점 대역           | `SoupSource`(예외 던지는 soup), `BookstoreSearch`, `set_fetch_search_results`                                                                                                                                                                                                                              |
+| 서점 대역           | `MarkupSource`(조회가 실패하는 HTML 대역), `BookstoreSearch`, `set_fetch_search_results`                                                                                                                                                                                                                              |
 
 ---
 
@@ -280,7 +281,7 @@ impl HttpResponse {
 - `find_libreoffice_with(which, exists)`는 `doc_reader::office`에 이미 있고 book_manager_1과 loader_1이 같은 모양이다. 그대로 쓰고 `which`/`exists`에는 `CommandRunner::which`, `FsOps::is_file`을 넘긴다.
 - `HttpSession`은 bookstore H1(완결 본문)과 cover_sources H2(청크 스트림, `closed` 플래그 검증)를 함께 덮는다. `direct_cover_url`의 `Net/Pool`은 DNS 고정·TLS 호스트명 검증용 저수준이라 따로 둔다.
 
-### 3.2 앱 진입점·인증 (`backend::main`)
+### 3.2 앱 진입점·인증 (`backend::api_router`, 옛 이름 `backend::main`)
 
 ```rust
 pub fn app() -> Router { app_with(AppDeps::from_env()) }
@@ -362,7 +363,7 @@ pub struct BookResponse { pub status_code: u16, pub media_type: Option<String>, 
 ### 3.3 ES
 
 ```rust
-// backend::es_manager
+// search_manager
 pub enum EsError {              // 실제 es_client::EsError에 변형 3개를 추가한다
     MissingEnv(String), Transport(String), Status { status: u16, body: String }, Parse(String), Unsupported(String),
     Other(String),              // 구 ElasticsearchError::RuntimeError, book_manager_2의 EsError::Other
@@ -370,12 +371,10 @@ pub enum EsError {              // 실제 es_client::EsError에 변형 3개를 �
 impl EsError { pub fn is_not_found(&self) -> bool; pub fn is_connection(&self) -> bool; }
 // 구 ElasticsearchError 매핑: ConnectionError -> Transport, NotFoundError -> Status{404}, BadRequestError{message,status} -> Status{status, body:message}, RuntimeError -> Other
 
-// 저수준: ESManager 단위 테스트와 분류기 corpus가 쓴다. 구 EsApi(call), EsLike
+// 저수준: ESManager 단위 테스트가 쓴다. EsRequest variant 하나가 ES REST 호출 하나다.
 pub trait EsTransport: Send + Sync {
     fn index_name(&self) -> &str;
-    fn call(&self, op: &str, kwargs: &Value) -> Result<Value, EsError>;          // "indices.exists" 등
-    fn get(&self, kwargs: &Value) -> Result<Value, EsError> { self.call("get", kwargs) }
-    fn search(&self, kwargs: &Value) -> Result<Value, EsError> { self.call("search", kwargs) }
+    fn send(&self, request: &EsRequest) -> Result<Value, EsError>;              // EsRequest::Search { .. } 등
 }
 
 // 고수준: BookManager, 라우트, 분류기 조회가 쓴다. 모든 메서드 기본 구현 = Err(EsError::Unsupported)
@@ -404,7 +403,7 @@ impl ESManager {
 // ESManager는 EsManagerApi를 구현한다. BookManager는 Arc<dyn EsManagerApi>만 안다.
 ```
 
-- `ESManager` 자기 비공개 메서드 바꿔치기(`set_search_override` 등 6종, 15개 테스트)는 trait로 올리지 않는다. 대신 `EsTransport`에 `call("search")` 응답을 스크립트하는 `DummyEs::on(op, handler)`(common/es_dummy에 이미 있음)로 같은 분기를 만든다. `_search` 반환을 직접 주입해야 하는 3~4개 테스트만 `ESManager::with_search_stub(Arc<dyn Fn>)` 한 개를 남긴다(미결정 아님, 구현 시 판단).
+- `ESManager` 자기 비공개 메서드 바꿔치기(`set_search_override` 등 6종, 15개 테스트)는 trait로 올리지 않는다. 대신 `EsTransport`의 `EsRequest::Search` 응답을 스크립트하는 `DummyEs::on(op, handler)`(common/es_dummy에 이미 있음)로 같은 분기를 만든다. `_search` 반환을 직접 주입해야 하는 3~4개 테스트만 `ESManager::with_search_stub(Arc<dyn Fn>)` 한 개를 남긴다(미결정 아님, 구현 시 판단).
 - 분류기: `EsLookup`/`EsLike`는 없앤다. `ClassifierOptions.es: Option<Arc<dyn EsTransport>>`로 `get`/`search`를 직접 쓰고, 상위 `_source` 조회가 필요하면 `EsManagerApi::get_by_id_source`를 쓴다(미결정 아님).
 - `BookIndex`(cover)는 `EsManagerApi`의 부분집합이라 없앤다. 기본 구현 덕분에 `search_by_id`와 `update`만 구현한 fake가 그대로 `EsManagerApi`가 된다.
 - `loader`의 `IndexStore`, `es_client::BookStore/BookSearch`는 그대로 둔다.
@@ -476,7 +475,7 @@ doc_reader::pdf::PdftotextHooks { which, run }             // C6, C7 통합. 이
 ### 3.7 HTTP·이미지 fetch
 
 ```rust
-// backend::direct_cover_url
+// cover_manager::direct_cover_url
 pub trait ImageFetcher: Send + Sync { fn fetch_url_image(&self, url: &str) -> Result<Vec<u8>, FetchError>; }   // 구 FetchUrlImage, ImageFetcher
 pub enum FetchError { Value(String), Os(String), Other(String) }
 impl From<FetchError> for CoverError; impl From<FetchError> for EpubCoverError;
@@ -807,7 +806,7 @@ loader::cli::RunHooks { read_file, stat, on_worker_spawn }
    - `sysdeps`(권장): `loader`, `doc_reader`, `isbn`이 이미 같은 목적의 trait(`CommandRunner`, `StageRunner`, `find_libreoffice_with`)를 따로 갖고 있다. 저장소 규칙("공유할 코드는 libs/")과도 맞는다. 대신 workspace 멤버와 문서(`docs/rust-workspace.md`)가 늘고, `isbn::CommandRunner`를 나중에 옮겨야 한다.
    - backend 안: crate 하나 덜 만든다. 대신 loader/doc_reader가 backend에 의존하거나 같은 trait를 다시 만들게 된다.
 2. **인증 대역을 `AuthMode`에 모을지, 별도 `AuthProvider` trait로 뺄지.** 지금 안은 enum 5변형(`Cookies`, `Fixed`, `Split`, `AuthOnly`, `Shared`)이다. 쿠키 만료·거부(401/403) 같은 동작 테스트가 더 필요하면 `AuthMode::Denied{status, detail}` 추가나 `trait AuthProvider`로 가야 한다. 변형 추가는 쉽지만 trait로 가면 main.rs의 `Fixed/Split` 119개 호출을 다시 고쳐야 한다. 권장은 enum 유지.
-3. **trait 이름 규칙 `XxxApi`를 어디까지 쓸지.** 요청안은 `XxxApi`를 일괄 규칙으로 보지만, 기존 crate는 `CommandRunner`, `IndexStore`, `Fetcher`, `StageRunner`처럼 역할 명사다. 이 문서는 "facade만 `Api`, 좁은 능력은 명사"로 정했다. 일괄 `Api` 접미사로 가면 `ClockApi`, `FsOpsApi`처럼 어색한 이름이 생기고 기존 crate 4곳과 어긋난다. 권장은 현재 안.
+3. **trait 이름 규칙 `XxxApi`를 어디까지 쓸지.** 요청안은 `XxxApi`를 일괄 규칙으로 보지만, 기존 crate는 `CommandRunner`, `IndexStore`, `StageRunner`처럼 역할 명사다. 이 문서는 "facade만 `Api`, 좁은 능력은 명사"로 정했다. 일괄 `Api` 접미사로 가면 `ClockApi`, `FsOpsApi`처럼 어색한 이름이 생기고 기존 crate 3곳과 어긋난다. 권장은 현재 안.
 
 그 밖에 구현 때 판단해도 되는 사항은 다음과 같다. ES `_search` 같은 비공개 메서드 스텁 3~4개의 처리, `scandir`/`read_dir` 통합 시 경로 필터 방식, `LogCapture`의 스레드 로컬 한계(워커 스레드 로그 미수집), `i64` 통일로 인한 `usize` 파라미터 테스트 수정.
 

@@ -1,0 +1,41 @@
+[package]
+name = "file_indexer"
+description = "파일 하나를 색인 레코드로 읽는다: 종류 판별, 본문·메타데이터 추출, 자식 프로세스 격리. loader와 backend가 함께 쓴다"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[[bin]]
+name = "tm-index-worker"
+path = "src/bin/index_worker.rs"
+
+[dependencies]
+common = { path = "../common", default-features = false, features = ["zip_reader"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+doc_reader = { path = "../doc_reader" }
+isbn_extractor = { path = "../isbn_extractor" }
+lopdf.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+parse_stat_counter = { path = "../parse_stat_counter" }
+sysdeps = { path = "../sysdeps" }
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["preserve_order"] }
+tempfile = "3.27.0"
+
+[[test]]
+name = "file_time"
+path = "../../tests/rust/file_indexer/file_time.rs"
+
+[[test]]
+name = "record_builder"
+path = "../../tests/rust/file_indexer/record_builder.rs"
+
+[[test]]
+name = "env_config"
+path = "../../tests/rust/file_indexer/env_config.rs"
+
+[[test]]
+name = "integration_index_worker"
+path = "../../tests/rust/file_indexer/integration/index_worker.rs"

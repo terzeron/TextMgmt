@@ -1,4 +1,4 @@
-//! 파일을 읽어 Elasticsearch 색인에 적재한다. 원본: `utils/loader.py`.
+//! 파일을 읽어 Elasticsearch 색인에 적재한다.
 
-pub mod cli;
-pub mod flow;
+pub mod batch_loader;
+pub mod cli_parser;

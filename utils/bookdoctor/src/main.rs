@@ -7,7 +7,7 @@ fn main() -> ExitCode {
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut out = std::io::stdout().lock();
-    let code = bookdoctor::cli::run(&args, &mut out);
+    let code = bookdoctor::cli_parser::run(&args, &mut out);
     let _ = out.flush();
     ExitCode::from(code as u8)
 }

@@ -1,0 +1,42 @@
+[package]
+name = "doc_repairer"
+description = "문서 파일 교정 기법: EPUB·PDF 보안 정리, EPUB 결함 수리, TXT의 UTF-8 재인코딩. 재구성한 바이트와 그 검증을 돌려주고 판정은 doc_checker를 쓴다"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[dependencies]
+common = { path = "../common", default-features = false, features = ["xml_parser", "zip_reader"] }
+container_parser = { path = "../container_parser" }
+doc_checker = { path = "../doc_checker" }
+htmlkit = { path = "../htmlkit" }
+lopdf.workspace = true
+regex = "1.13.1"
+scraper = "0.29.0"
+text_decoder = { path = "../text_decoder" }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+encoding_rs = "0.8.42"
+flate2 = "1"
+roxmltree = "0.21.1"
+serde_json = { workspace = true, features = ["preserve_order"] }
+sysdeps = { path = "../sysdeps" }
+tempfile = "3.27.0"
+
+[[test]]
+name = "defect_repairer"
+path = "../../tests/rust/doc_repairer/defect_repairer.rs"
+
+[[test]]
+name = "encoding_repairer"
+path = "../../tests/rust/doc_repairer/encoding_repairer.rs"
+
+[[test]]
+name = "epub_sanitizer"
+path = "../../tests/rust/doc_repairer/epub_sanitizer.rs"
+
+[[test]]
+name = "pdf_sanitizer"
+path = "../../tests/rust/doc_repairer/pdf_sanitizer.rs"

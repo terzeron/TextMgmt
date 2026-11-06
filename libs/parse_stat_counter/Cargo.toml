@@ -1,0 +1,13 @@
+[package]
+name = "parse_stat_counter"
+description = "색인·파싱 통계 카운터: 파일 종류별 파싱 건수와 소요 시간, UTF-8 재인코딩 건수"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[dependencies]
+
+[[test]]
+name = "parse_stat_counter"
+path = "../../tests/rust/parse_stat_counter/parse_stat_counter.rs"

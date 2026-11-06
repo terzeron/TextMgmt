@@ -1,19 +1,29 @@
 [package]
 name = "db"
-description = "MySQL 접근 추상화와 카테고리 매핑 저장소. backend와 분류기가 함께 쓴다"
+description = "MySQL 접근 추상화와 저장소: 카테고리 매핑(category_mapping), 조회 이력(view_history_store). backend·auth_manager·cover_manager가 쓴다"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 autotests = false
 
 [dependencies]
+common = { path = "../common", default-features = false }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 diesel = { version = "2.3.14", default-features = false, features = ["mysql", "r2d2", "chrono"] }
 log = "0.4.34"
 # MySQL 클라이언트는 개발 헤더 없이 쓰려고 소스에서 번들 빌드한다 (docs/rust-test-seams.md, diesel spike)
 mysqlclient-sys = { version = "0.5.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
+sysdeps = { path = "../sysdeps" }
+
+[dev-dependencies]
+testcontainers-modules = { version = "0.15.0", features = ["mysql", "blocking"] }
 
 [[test]]
 name = "category_mapping"
 path = "../../tests/rust/db/category_mapping.rs"
+
+[[test]]
+name = "integration_view_history_store"
+path = "../../tests/rust/db/integration/view_history_store.rs"

@@ -1,42 +1,53 @@
 [package]
 name = "loader"
-description = "파일을 읽어 Elasticsearch 색인에 적재한다 (utils/loader.py의 Rust 대응)"
+description = "파일을 읽어 Elasticsearch 색인에 적재한다"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 autotests = false
 
-# loader_1, loader_2는 doc_reader/loader에 *_with(&XxxHooks) API를 만든 뒤 등록한다.
-[[test]]
-name = "loader_gaps"
-path = "../../tests/rust/loader/loader_gaps.rs"
-
-[[test]]
-name = "loader_hwp3"
-path = "../../tests/rust/loader/loader_hwp3.rs"
-
-[[test]]
-name = "loader_1"
-path = "../../tests/rust/loader/loader_1.rs"
-
-[[test]]
-name = "loader_2"
-path = "../../tests/rust/loader/loader_2.rs"
+# binary_and_file_reading, pdf_and_text_stages는 doc_reader/loader에 *_with(&XxxHooks) API를 만든 뒤 등록한다.
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-corpus_layout = { path = "../../libs/corpus_layout" }
-doc_reader = { path = "../../libs/doc_reader" }
 es_client = { path = "../../libs/es_client" }
-file_record = { path = "../../libs/file_record" }
+book_model = { path = "../../libs/book_model" }
+doc_repairer = { path = "../../libs/doc_repairer" }
+file_indexer = { path = "../../libs/file_indexer" }
 serde_json = { workspace = true, features = ["preserve_order"] }
-stat = { path = "../../libs/stat" }
+parse_stat_counter = { path = "../../libs/parse_stat_counter" }
 
 [dev-dependencies]
+# 테스트는 PDF 단계·파서를 직접 다룬다. 소스는 file_indexer를 거친다.
+doc_reader = { path = "../../libs/doc_reader" }
 encoding_rs = "0.8.35"
 hwp3_parser = { path = "../../libs/hwp3_parser" }
-hwp3_tables = { path = "../../libs/hwp3_tables" }
-isbn = { path = "../../libs/isbn" }
-parser_timeout = { path = "../../libs/parser_timeout" }
+isbn_extractor = { path = "../../libs/isbn_extractor" }
+sysdeps = { path = "../../libs/sysdeps" }
+text_decoder = { path = "../../libs/text_decoder" }
 tempfile = "3.27.0"
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+[[test]]
+name = "cli_parser"
+path = "../../tests/rust/loader/cli_parser.rs"
+
+[[test]]
+name = "batch_loader"
+path = "../../tests/rust/loader/batch_loader.rs"
+
+[[test]]
+name = "integration_binary_and_file_reading"
+path = "../../tests/rust/loader/integration/binary_and_file_reading.rs"
+
+[[test]]
+name = "integration_pdf_and_text_stages"
+path = "../../tests/rust/loader/integration/pdf_and_text_stages.rs"
+
+[[test]]
+name = "integration_reload_failures"
+path = "../../tests/rust/loader/integration/reload_failures.rs"
+
+[[test]]
+name = "integration_loader_hwp3"
+path = "../../tests/rust/loader/integration/loader_hwp3.rs"

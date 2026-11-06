@@ -1,18 +1,29 @@
 [package]
 name = "hwp3_parser"
-description = "HWP V2.00/V2.10/V3.00 텍스트 추출기 (utils/hwp3_parser.py의 Rust 대응)"
+description = "HWP V1.20/V2.00/V2.10/V3.00 텍스트 추출기"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 autotests = false
 
-[[test]]
-name = "hwp3"
-path = "../../tests/rust/hwp3_parser/hwp3.rs"
-
 [dependencies]
 flate2 = "1"
-hwp3_tables = { path = "../hwp3_tables" }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[[test]]
+name = "hwp3_parser"
+path = "../../tests/rust/hwp3_parser/hwp3_parser.rs"
+
+[[test]]
+name = "char_converter"
+path = "../../tests/rust/hwp3_parser/char_converter.rs"
+
+[[test]]
+name = "paragraph_parser"
+path = "../../tests/rust/hwp3_parser/paragraph_parser.rs"
+
+[[test]]
+name = "tables"
+path = "../../tests/rust/hwp3_parser/tables.rs"

@@ -1,11 +1,11 @@
 //! HTML/XML 마크업 토큰화와 텍스트 추출.
 //!
-//! 토크나이저와 속성 엔티티 해석은 EPUB 보안 검사가 쓰고(`bookdoctor`), `text_of`는 BeautifulSoup
-//! `html.parser`의 `get_text()`와 같은 텍스트를 만든다(`isbn`, 이후 `loader`).
+//! 토크나이저와 속성 엔티티 해석은 EPUB 보안 검사가 쓰고(`bookdoctor`), `text_of`는 태그를 걷어 낸
+//! 본문 텍스트를 만든다(`doc_reader`).
 
-mod entities;
+mod entity_table;
 
-use entities::ENTITIES;
+use entity_table::ENTITIES;
 
 #[derive(Debug)]
 pub struct Tag {
@@ -131,6 +131,16 @@ pub fn tokenize(text: &str) -> (Vec<Tag>, bool) {
     (tags, malformed)
 }
 
+/// HTML 특수 문자를 모두 바꾼다: `&`, `<`, `>`, `"`, `'`. 속성값과 본문 어디에 넣어도 안전하다(Python `html.escape`와 같다).
+pub fn escape_html(text: &str) -> String {
+    escape_text(text).replace('"', "&quot;").replace('\'', "&#x27;")
+}
+
+/// 본문 텍스트용: `&`, `<`, `>`만 바꾼다. 따옴표는 그대로 둔다.
+pub fn escape_text(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
 pub fn decode_entities(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -179,7 +189,7 @@ pub fn decode_entities(s: &str) -> String {
 
 // ---------------------------------------------------------------- text_of
 
-/// 모르는 이름이거나 정의되지 않은 번호일 때 Python이 쓰는 대체 문자.
+/// 모르는 이름이거나 정의되지 않은 번호일 때 쓰는 대체 문자.
 const REPLACEMENT: char = '\u{fffd}';
 
 /// windows-1252에서 0x80~0x9f 자리. 정의되지 않은 자리는 `None`이다.
@@ -218,7 +228,7 @@ const CP1252_HIGH: [Option<char>; 32] = [
     Some('Ÿ'),
 ];
 
-/// BeautifulSoup `handle_charref`: 256 미만은 windows-1252로 읽고, 그 밖에는 코드포인트로 읽는다.
+/// 숫자 문자 참조: 256 미만은 windows-1252로 읽고, 그 밖에는 코드포인트로 읽는다.
 fn charref(number: u32) -> char {
     match number {
         0x80..=0x9f => CP1252_HIGH[(number - 0x80) as usize].or_else(|| char::from_u32(number)).unwrap_or(REPLACEMENT),
@@ -245,7 +255,7 @@ fn read_charref(s: &str) -> Option<(char, usize)> {
     Some((charref(number), 2 + end + usize::from(terminator == b';')))
 }
 
-/// `&name` 이름 참조를 읽는다. 모르는 이름은 BeautifulSoup처럼 `&name`(세미콜론 없이)이 된다.
+/// `&name` 이름 참조를 읽는다. 모르는 이름은 `&name`(세미콜론 없이)으로 남긴다.
 fn read_entityref(s: &str) -> Option<(String, usize)> {
     let rest = s.strip_prefix('&')?;
     let bytes = rest.as_bytes();
@@ -263,13 +273,13 @@ fn read_entityref(s: &str) -> Option<(String, usize)> {
     Some((text, 1 + len + usize::from(terminator == b';')))
 }
 
-/// BeautifulSoup이 시작 태그에서 곧바로 닫는 void 요소(`HTMLTreeBuilder.empty_element_tags`).
+/// 시작 태그에서 곧바로 닫는 void 요소.
 const VOID_ELEMENTS: [&str; 24] = [
     "area", "base", "br", "col", "embed", "hr", "img", "input", "keygen", "link", "menuitem", "meta", "param", "source", "track", "wbr", "basefont", "bgsound", "command", "frame", "image", "isindex",
     "nextid", "spacer",
 ];
 
-/// 공백만 있는 텍스트 노드는 개행이 있으면 `"\n"`, 없으면 `" "` 하나로 줄인다(BeautifulSoup `endData`).
+/// 공백만 있는 텍스트 노드는 개행이 있으면 `"\n"`, 없으면 `" "` 하나로 줄인다.
 /// `<pre>`·`<textarea>` 안은 그대로 둔다. 노드 하나는 태그·주석·선언 사이의 연속 구간이다.
 fn flush(out: &mut String, node: &mut String, preserve: bool) {
     let blank = !node.is_empty() && node.chars().all(|c| matches!(c, ' ' | '\n' | '\t' | '\u{c}' | '\r'));
@@ -281,7 +291,7 @@ fn flush(out: &mut String, node: &mut String, preserve: bool) {
     node.clear();
 }
 
-/// BeautifulSoup(html, "html.parser").get_text()와 같은 텍스트. `<script>`·`<style>` 본문, 주석, 선언,
+/// 태그를 걷어 낸 본문 텍스트. `<script>`·`<style>` 본문, 주석, 선언,
 /// 처리 명령은 빼고 CDATA는 넣는다. 끝까지 닫히지 않은 태그는 버린다.
 pub fn text_of(html: &str) -> String {
     let lower = html.to_ascii_lowercase();

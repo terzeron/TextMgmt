@@ -1,0 +1,129 @@
+[package]
+name = "book_manager"
+description = "책·만화 관리: 목록·검색·미리보기·편집·재적재·카테고리 제안·표지 목록(BookManager)과 만화(comics_manager). backend 도메인 crate다"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[dependencies]
+pdf_engine = { path = "../pdf_engine" }
+async-trait = "0.1"
+base64 = "0.23.1"
+book_model = { path = "../book_model" }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+classifier = { path = "../classifier" }
+common = { path = "../common" }
+cover_manager = { path = "../cover_manager" }
+doc_reader = { path = "../doc_reader" }
+file_indexer = { path = "../file_indexer" }
+htmlkit = { path = "../htmlkit" }
+image_processor = { path = "../image_processor" }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+jpeg-encoder = "0.7.1"
+log = "0.4.34"
+lopdf.workspace = true
+regex = "1.13.1"
+roxmltree = "0.21.1"
+scraper = "0.29.0"
+search_manager = { path = "../search_manager" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+sha2 = "0.11.1"
+sysdeps = { path = "../sysdeps" }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+db = { path = "../db" }
+doc_reader = { path = "../doc_reader" }
+es_client = { path = "../es_client" }
+flate2 = "1"
+tempfile = "3.27.0"
+testcontainers-modules = { version = "0.15.0", features = ["mysql", "blocking"] }
+tokio = { version = "1.54.1", features = ["time"] }
+
+[[test]]
+name = "book_manager"
+path = "../../tests/rust/book_manager/book_manager.rs"
+
+[[test]]
+name = "api_adapter"
+path = "../../tests/rust/book_manager/api_adapter.rs"
+
+[[test]]
+name = "book_updater"
+path = "../../tests/rust/book_manager/book_updater.rs"
+
+[[test]]
+name = "catalog_query"
+path = "../../tests/rust/book_manager/catalog_query.rs"
+
+[[test]]
+name = "category_editor"
+path = "../../tests/rust/book_manager/category_editor.rs"
+
+[[test]]
+name = "category_proposer"
+path = "../../tests/rust/book_manager/category_proposer.rs"
+
+[[test]]
+name = "category_reloader"
+path = "../../tests/rust/book_manager/category_reloader.rs"
+
+[[test]]
+name = "comics_manager"
+path = "../../tests/rust/book_manager/comics_manager.rs"
+
+[[test]]
+name = "cover_finder"
+path = "../../tests/rust/book_manager/cover_finder.rs"
+
+[[test]]
+name = "cover_list"
+path = "../../tests/rust/book_manager/cover_list.rs"
+
+[[test]]
+name = "file_reader"
+path = "../../tests/rust/book_manager/file_reader.rs"
+
+[[test]]
+name = "file_validator"
+path = "../../tests/rust/book_manager/file_validator.rs"
+
+[[test]]
+name = "preview_builder_html_previewer"
+path = "../../tests/rust/book_manager/preview_builder/html_previewer.rs"
+
+[[test]]
+name = "mismatch_reporter"
+path = "../../tests/rust/book_manager/mismatch_reporter.rs"
+
+[[test]]
+name = "path_validator"
+path = "../../tests/rust/book_manager/path_validator.rs"
+
+[[test]]
+name = "pdf_edit"
+path = "../../tests/rust/book_manager/pdf_edit.rs"
+
+[[test]]
+name = "preview_builder"
+path = "../../tests/rust/book_manager/preview_builder.rs"
+
+[[test]]
+name = "seam_accessors"
+path = "../../tests/rust/book_manager/seam_accessors.rs"
+
+[[test]]
+name = "integration_container"
+path = "../../tests/rust/book_manager/integration/container.rs"
+
+[[test]]
+name = "pdf_reader_cache"
+path = "../../tests/rust/book_manager/pdf_reader_cache.rs"
+
+[[test]]
+name = "preview_builder_epub_package"
+path = "../../tests/rust/book_manager/preview_builder/epub_package.rs"
+

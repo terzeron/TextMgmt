@@ -11,7 +11,7 @@
 - **Frontend**: React (npm), Vite
 - **Testing**: cargo test / llvm-cov (backend and utilities), jest (frontend)
 - **Infra**: Kubernetes (`k8s/`), Docker
-- **Search**: Elasticsearch (`backend/src/es_manager.rs`)
+- **Search**: Elasticsearch (`libs/search_manager`)
 - **Auth**: JWT (access + refresh token), Google OAuth2
 
 ## Directory Layout

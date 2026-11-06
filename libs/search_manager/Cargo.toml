@@ -1,0 +1,31 @@
+[package]
+name = "search_manager"
+description = "책·만화 검색 색인 관리: Elasticsearch 문서 검색·갱신·카테고리 집계(ESManager)와 그 trait(EsManagerApi). 전송은 libs/es_client를 쓴다"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[dependencies]
+base64 = "0.23.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+common = { path = "../common", default-features = false }
+es_client = { path = "../es_client" }
+log = "0.4.34"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+sysdeps = { path = "../sysdeps" }
+
+[dev-dependencies]
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = "1.15.1"
+tempfile = "3.27.0"
+ureq = { workspace = true, features = ["rustls"] }
+
+[[test]]
+name = "search_manager"
+path = "../../tests/rust/search_manager/search_manager.rs"
+
+[[test]]
+name = "integration_es_manager_http"
+path = "../../tests/rust/search_manager/integration/es_manager_http.rs"
