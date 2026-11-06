@@ -11,7 +11,7 @@ use crate::{ApplyResult, EpubValidation, PdfEditResult, PdfValidation, ProposeRe
 use crate::{BookDeletion, CoverPage};
 use crate::{CategoryDeletePreview, CategoryDeletion, CategoryRename, MismatchDetails, MismatchReload, MismatchSummary, ReloadedFiles};
 use book_model::book_metadata::{Book, BookLookupError, BookPage};
-use cover_manager::cover_management::CoverSave;
+use cover_manager::cover_management::{CoverHooks, CoverManagement, CoverSave};
 use search_manager::EsManagerApi;
 
 /// 사용 가능한 구현이 없을 때 쓰는 사유 문구. 각 trait의 기본 구현이 돌려준다.
@@ -105,6 +105,12 @@ pub trait BookManagerApi: Send + Sync {
     }
     fn path_prefix(&self) -> PathBuf {
         PathBuf::new()
+    }
+
+    /// 이 서재(책 또는 만화 루트)를 대상으로 하는 표지 일괄 관리: 디렉터리별 누락 표지, 서점 후보 검색, 표지 적용.
+    /// 라우트는 이것을 받아 쓰기만 한다. 요청 단위의 연결 끊김 확인 같은 훅은 호출자가 넘긴다.
+    fn cover_management(&self, hooks: CoverHooks) -> CoverManagement {
+        CoverManagement::with_hooks(&self.path_prefix(), hooks)
     }
 
     fn es_manager(&self) -> Arc<dyn EsManagerApi> {

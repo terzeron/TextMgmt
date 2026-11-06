@@ -116,12 +116,12 @@ fn to_api_error(err: CoverError) -> ApiError {
     }
 }
 
-fn root_and_hooks(deps: &AppDeps) -> Result<(std::path::PathBuf, CoverHooks), ApiError> {
+fn manager_and_hooks(deps: &AppDeps) -> Result<(Arc<dyn book_manager::BookManagerApi>, CoverHooks), ApiError> {
     let manager = deps.book_manager().map_err(|e| {
         log::warn!("Cover management failed: {e}");
         ApiError::http(503, FAILED_DETAIL)
     })?;
-    Ok((manager.path_prefix(), deps.cover_hooks()))
+    Ok((manager, deps.cover_hooks()))
 }
 
 /// 서비스 작업을 작업 스레드에서 돌리고 결과를 기다린다. `watch`면 연결이 끊겼는지 확인한다.
@@ -130,7 +130,7 @@ where
     R: Send + 'static,
     F: FnOnce(&CoverManagement) -> Result<R, CoverError> + Send + 'static,
 {
-    let (root, hooks) = root_and_hooks(deps)?;
+    let (manager, hooks) = manager_and_hooks(deps)?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let _guard = CancelOnDrop(cancelled.clone());
     let shared = Arc::new(Mutex::new(Shared { result: None, waker: None }));
@@ -145,7 +145,7 @@ where
     deps.task_runner().spawn(
         "cover-management",
         Box::new(move || {
-            let service = CoverManagement::with_hooks(&root, hooks);
+            let service = manager.cover_management(hooks);
             let outcome = with_cancel_scope(Arc::new(move || flag.load(Ordering::SeqCst)), || job(&service));
             let waker = {
                 let mut shared = sink.lock().unwrap_or_else(|e| e.into_inner());
