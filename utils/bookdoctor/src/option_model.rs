@@ -6,9 +6,12 @@ use std::sync::Arc;
 
 use crate::DEFAULT_LIBRARY_ROOT;
 use crate::Severity;
-use crate::scan_runner::DEFAULT_WORKERS;
 use doc_checker::rule_engine::Compiled;
 use doc_checker::{CheckOptions, MAX_TOTAL_MB};
+
+/// 기본 검사 워커 수. /mnt/data는 회전 디스크라 워커를 늘려도 I/O로 막힌다. 2개가 실측상 가장 빨랐다.
+/// 메모리 상한이 더 작게 잡으면 그 값을 쓴다.
+pub const DEFAULT_WORKERS: usize = 2;
 
 /// 원본을 보관하는 디렉터리 이름(`sanitize`·`repair`). 코퍼스 루트 바로 아래에 있다.
 pub const TRASH_DIR_NAME: &str = "0_trash";

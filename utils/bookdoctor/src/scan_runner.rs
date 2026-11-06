@@ -146,9 +146,7 @@ where
     Ok(summary)
 }
 
-// ---- 병렬 풀과 워커 수. ----
-/// /mnt/data는 회전 디스크라 워커를 늘려도 I/O로 막힌다. 2개가 실측상 가장 빨랐다.
-pub const DEFAULT_WORKERS: usize = 2;
+// ---- 병렬 풀과 워커 수. 기본 워커 수는 `option_model::DEFAULT_WORKERS`다. ----
 
 pub fn pool(workers: usize) -> rayon::ThreadPool {
     rayon::ThreadPoolBuilder::new().num_threads(workers.max(1)).build().expect("thread pool")

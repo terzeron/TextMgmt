@@ -5,8 +5,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use bookdoctor::scan_runner::{DEFAULT_WORKERS, pool, workers_within_memory};
+use bookdoctor::option_model::DEFAULT_WORKERS;
 use bookdoctor::scan_runner::{collect_files, has_extension};
+use bookdoctor::scan_runner::{pool, workers_within_memory};
 use bookdoctor::{Report, Severity, Summary, scan_streaming};
 
 fn touch(path: &Path) {

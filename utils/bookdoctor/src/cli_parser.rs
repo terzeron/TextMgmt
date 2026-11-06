@@ -8,8 +8,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::DEFAULT_LIBRARY_ROOT;
+use crate::option_model::DEFAULT_WORKERS;
 use crate::option_model::{BROKEN_DIR_NAME, Command, MANIFEST_NAME, Options, TRASH_DIR_NAME};
-use crate::scan_runner::{DEFAULT_WORKERS, pool, workers_within_memory};
+use crate::scan_runner::{pool, workers_within_memory};
 
 use crate::scan_runner::collect;
 use crate::{Severity, scan_streaming};
