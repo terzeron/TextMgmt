@@ -4,18 +4,18 @@
 //! 2. UTF-16LE로 읽혀 UTF-8로 저장된 바이너리(HWP·PDF·PNG가 `.txt`로 남은 것)를 원래 바이트와 확장자로 되돌린다.
 //!    옛 `quarantine_broken fix-ext`를 옮겨 왔다. 원본은 휴지통에 두고, 같은 inode에 덮어쓴 뒤 이름만 바꾼다(book_id가 inode다).
 
-use crate::epub_sanitizer::HTML_EXTS;
-use crate::epub_sanitizer::Member;
-use crate::epub_sanitizer::dangling;
-use crate::epub_sanitizer::decode;
-use crate::epub_sanitizer::ext_of;
-use crate::epub_sanitizer::is_subsequence;
-use crate::epub_sanitizer::package_names;
-use crate::epub_sanitizer::package_text;
-use crate::epub_sanitizer::read_members;
-use crate::epub_sanitizer::read_members_lenient;
-use crate::epub_sanitizer::visible_text;
-use crate::epub_sanitizer::write_members;
+use crate::epub_package_io::HTML_EXTS;
+use crate::epub_package_io::Member;
+use crate::epub_package_io::dangling;
+use crate::epub_package_io::decode;
+use crate::epub_package_io::ext_of;
+use crate::epub_package_io::is_subsequence;
+use crate::epub_package_io::package_names;
+use crate::epub_package_io::package_text;
+use crate::epub_package_io::read_members;
+use crate::epub_package_io::read_members_lenient;
+use crate::epub_package_io::visible_text;
+use crate::epub_package_io::write_members;
 use common::url_parser::unquote;
 use common::zip_reader::zip_entry_name;
 use doc_checker::epub::render_checker::xhtml_defect;

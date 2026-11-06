@@ -6,5 +6,6 @@
 
 pub mod defect_repairer;
 pub mod encoding_repairer;
+mod epub_package_io;
 pub mod epub_sanitizer;
 pub mod pdf_sanitizer;
