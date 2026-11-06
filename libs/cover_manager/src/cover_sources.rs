@@ -4,11 +4,12 @@
 
 pub mod html_dom;
 
+use crate::direct_cover_url::{is_global, system_resolve};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -303,51 +304,6 @@ impl StoreGate {
 // ---------------------------------------------------------------------------
 // URL 검증과 내려받기
 // ---------------------------------------------------------------------------
-
-/// `ipaddress.ip_address(...).is_global`. 사설·루프백·링크 로컬·문서용·멀티캐스트 등은 전역 주소가 아니다.
-pub fn is_global(addr: &IpAddr) -> bool {
-    match addr {
-        IpAddr::V4(v4) => is_global_v4(v4),
-        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(v4) => is_global_v4(&v4),
-            None => is_global_v6(v6),
-        },
-    }
-}
-
-fn is_global_v4(ip: &Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    !(a == 0
-        || a == 10
-        || (a == 100 && (64..128).contains(&b))
-        || a == 127
-        || (a == 169 && b == 254)
-        || (a == 172 && (16..32).contains(&b))
-        || (a == 192 && b == 0 && c == 0)
-        || (a == 192 && b == 0 && c == 2)
-        || (a == 192 && b == 168)
-        || (a == 198 && (b == 18 || b == 19))
-        || (a == 198 && b == 51 && c == 100)
-        || (a == 203 && b == 0 && c == 113)
-        || a >= 224)
-}
-
-fn is_global_v6(ip: &Ipv6Addr) -> bool {
-    let seg = ip.segments();
-    !(ip.is_unspecified()
-        || ip.is_loopback()
-        || ip.is_multicast()
-        || (seg[0] & 0xfe00) == 0xfc00 // 고유 로컬
-        || (seg[0] & 0xffc0) == 0xfe80 // 링크 로컬
-        || (seg[0] == 0x2001 && seg[1] == 0x0db8) // 문서용
-        || (seg[0] == 0x0064 && seg[1] == 0xff9b) // NAT64
-        || seg[0] == 0x0100 && seg[1] == 0 && seg[2] == 0 && seg[3] == 0) // 버림 접두사
-}
-
-/// 시스템 DNS(`getaddrinfo`)로 호스트를 푼다.
-pub fn system_resolve(host: &str, port: u16) -> io::Result<Vec<IpAddr>> {
-    Ok((host, port).to_socket_addrs()?.map(|a| a.ip()).collect())
-}
 
 pub fn validate_url(store: &str, url: &str) -> Result<String, CoverSourceError> {
     validate_url_with(store, url, &system_resolve)

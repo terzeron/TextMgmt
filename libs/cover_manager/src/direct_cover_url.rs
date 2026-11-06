@@ -4,10 +4,11 @@
 //! 연결 수준 계약이라 `common::http_client::HttpSession`과 합치지 않는다. 본문 읽기는 `BodyChunks`를 함께 쓴다. 연결은 DNS로 검증한 IP에만 하고, TLS 호스트명은 원래 호스트로 확인한다.
 
 use std::fmt;
+use std::io;
 use std::net::{IpAddr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::time::Duration;
 
-use crate::cover_sources::{is_global, system_resolve};
 use common::http_client::{BodyChunks, HttpTimeout};
 use common::url_parser::{Netloc, urljoin, urlsplit};
 
@@ -267,4 +268,53 @@ pub fn fetch_url_image_with(url: &str, net: &dyn Net, max_image_bytes: usize) ->
         return Ok(output);
     }
     Err(value_err("이미지 redirect 횟수를 초과했습니다"))
+}
+
+// ---------------------------------------------------------------------------
+// 주소 검증: 전역 주소 판정과 DNS 조회. 서점 검색(`cover_sources`)도 같은 검증을 쓴다.
+// ---------------------------------------------------------------------------
+
+/// `ipaddress.ip_address(...).is_global`. 사설·루프백·링크 로컬·문서용·멀티캐스트 등은 전역 주소가 아니다.
+pub fn is_global(addr: &IpAddr) -> bool {
+    match addr {
+        IpAddr::V4(v4) => is_global_v4(v4),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => is_global_v4(&v4),
+            None => is_global_v6(v6),
+        },
+    }
+}
+
+fn is_global_v4(ip: &Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    !(a == 0
+        || a == 10
+        || (a == 100 && (64..128).contains(&b))
+        || a == 127
+        || (a == 169 && b == 254)
+        || (a == 172 && (16..32).contains(&b))
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 192 && b == 0 && c == 2)
+        || (a == 192 && b == 168)
+        || (a == 198 && (b == 18 || b == 19))
+        || (a == 198 && b == 51 && c == 100)
+        || (a == 203 && b == 0 && c == 113)
+        || a >= 224)
+}
+
+fn is_global_v6(ip: &Ipv6Addr) -> bool {
+    let seg = ip.segments();
+    !(ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_multicast()
+        || (seg[0] & 0xfe00) == 0xfc00 // 고유 로컬
+        || (seg[0] & 0xffc0) == 0xfe80 // 링크 로컬
+        || (seg[0] == 0x2001 && seg[1] == 0x0db8) // 문서용
+        || (seg[0] == 0x0064 && seg[1] == 0xff9b) // NAT64
+        || seg[0] == 0x0100 && seg[1] == 0 && seg[2] == 0 && seg[3] == 0) // 버림 접두사
+}
+
+/// 시스템 DNS(`getaddrinfo`)로 호스트를 푼다.
+pub fn system_resolve(host: &str, port: u16) -> io::Result<Vec<IpAddr>> {
+    Ok((host, port).to_socket_addrs()?.map(|a| a.ip()).collect())
 }
