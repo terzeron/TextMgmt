@@ -144,3 +144,6 @@ path = "../../tests/rust/doc_checker/pdf.rs"
 name = "zipcheck"
 path = "../../tests/rust/doc_checker/zipcheck.rs"
 
+[[test]]
+name = "exec_extension_table"
+path = "../../tests/rust/doc_checker/exec_extension_table.rs"

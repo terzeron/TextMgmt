@@ -15,14 +15,8 @@ use container_parser::magic_sniffer::{is_text_name, shannon};
 use zip::CompressionMethod;
 
 use crate::epub::security_checker::{Limits, directory_limit_note, read_limited, zip_directory_bounds};
+use crate::exec_extension_table::ZIP_MEMBER;
 use crate::zip_name_rules;
-
-/// ZIP 안에서 이름만으로 실행 파일로 보는 확장자. EPUB 목록에서 데이터로 흔한 `bin`을 빼고(내용이 실행 파일이면 매직 검사가 잡는다),
-/// EPUB은 따로 다루지만 ZIP·문서 패키지에서는 흔한 전달 수단인 `js`, 디스크 이미지, 설치·도움말 형식을 더했다.
-pub(crate) const ZIP_EXEC_EXTS: &[&str] = &[
-    "exe", "dll", "scr", "com", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "jse", "wsf", "wsh", "hta", "msi", "msp", "jar", "lnk", "reg", "cpl", "sh", "bash", "zsh", "py", "pl", "rb", "php", "apk",
-    "app", "dmg", "so", "dylib", "run", "swf", "class", "js", "pif", "msc", "scf", "url", "iso", "img", "vhd", "vhdx", "chm", "xll", "wsc", "one", "appx", "msix",
-];
 
 /// 멤버마다 풀어 보는 앞부분의 바이트 수.
 pub const PROBE_BYTES: usize = 4096;
@@ -141,7 +135,7 @@ pub fn check(path: &Path, limits: &Limits, deep: bool, report: &mut FileReport) 
         }
         let mut flagged_exec = false;
         let ext = extension(&name);
-        if ZIP_EXEC_EXTS.contains(&ext.as_str()) {
+        if ZIP_MEMBER.contains(&ext) {
             flagged_exec = true;
             report.push(Category::Security, Severity::Critical, "EMBEDDED_EXECUTABLE", &shown, &format!("Executable/script file type: .{ext}"));
         }

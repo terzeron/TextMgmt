@@ -5,7 +5,7 @@ use crate::Category;
 use crate::CheckOptions;
 use crate::FileReport;
 use crate::Severity;
-use crate::zipcheck::fast_zip_checker::ZIP_EXEC_EXTS;
+use crate::exec_extension_table::ZIP_MEMBER;
 use crate::zipcheck::ooxml_checker::classify_field;
 use common::text_sanitizer::sanitize_display;
 use container_parser::magic_sniffer::Sniffed;
@@ -259,7 +259,7 @@ fn check_objects(file: &mut OleFile, report: &mut FileReport) {
         let shown = sanitize_display(&label, 120, Some('…'));
         for name in [&label, &source, &temp] {
             let ext = name.trim_end_matches([' ', '.']).rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
-            if ZIP_EXEC_EXTS.contains(&ext.as_str()) {
+            if ZIP_MEMBER.contains(&ext) {
                 push_once(report, Category::Security, Severity::Critical, "EMBEDDED_EXECUTABLE", &sanitize_display(name, 120, Some('…')), &format!("Embedded file type .{ext}"));
                 break;
             }

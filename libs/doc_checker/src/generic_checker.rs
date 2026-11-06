@@ -115,7 +115,7 @@ pub fn inspect_with_sniff(path: &Path, opts: &CheckOptions, report: &mut FileRep
     }
     // 실행 파일 확장자는 앞 64KiB와 PE 헤더 4바이트만 읽는다. 파서용 크기 한도와 잘린 다운로드 검사(희소 파일, 끝 0)는 걸지 않는다.
     // 펌웨어·이미지처럼 끝이 0으로 찬 정상 데이터가 오탐이 되고, 큰 설치 파일이 한도로 확정을 피하는 것을 막는다.
-    let exec_ext = path.extension().is_some_and(|e| crate::format_dispatcher::is_exec_extension(&e.to_string_lossy()));
+    let exec_ext = path.extension().is_some_and(|e| crate::exec_extension_table::is_exec_extension(&e.to_string_lossy()));
     if !exec_ext && len > opts.max_total_mb.saturating_mul(1024 * 1024) {
         report.mark_incomplete(&format!("skipped: {len} bytes exceeds --max-total-mb"));
         return None;

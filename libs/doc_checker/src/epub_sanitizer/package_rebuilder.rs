@@ -226,7 +226,7 @@ pub(crate) fn package_names(members: &[Member]) -> Result<BTreeSet<String>, Stri
 /// 내용이 정말 `<package>` 루트의 XML이어야 한다. 하나라도 어긋나면 오류다: 패키지 문서를 읽지 못하고 넘어가면 선언 형식을 놓친다.
 pub(crate) fn package_text(m: &Member) -> Result<String, String> {
     let name = m.name.trim_start_matches('\0');
-    if crate::epub::security_checker::EXEC_EXTS.contains(&ext_of(name).as_str()) {
+    if crate::exec_extension_table::EPUB_MEMBER.contains(&ext_of(name)) {
         return Err(format!("{name}: 실행 파일 확장자인 패키지 문서"));
     }
     let (text, _) = decode_enc(name, &m.data)?;
@@ -282,7 +282,7 @@ fn classify(name: &str, data: &[u8], media: Option<&str>, is_package: bool) -> O
     if name == "mimetype" || name.starts_with("META-INF/") || textual || PASSIVE_EXTS.contains(&ext.as_str()) {
         return None;
     }
-    Some(if crate::epub::security_checker::EXEC_EXTS.contains(&ext.as_str()) { "실행 파일 형식" } else { "허용 목록 밖 형식" })
+    Some(if crate::exec_extension_table::EPUB_MEMBER.contains(&ext) { "실행 파일 형식" } else { "허용 목록 밖 형식" })
 }
 
 /// OPF에서 지운 멤버의 manifest 항목, 원격·위험 항목, 낡은 `scripted`·`remote-resources` 선언을 지운다.

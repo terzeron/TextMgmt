@@ -3,7 +3,7 @@
 mod support;
 use container_parser::magic_sniffer::Sniffed;
 use doc_checker::CheckOptions;
-use doc_checker::format_dispatcher::{EXEC_EXTENSIONS, dispatch_format, is_exec_extension, scan_file};
+use doc_checker::format_dispatcher::{dispatch_format, scan_file};
 use doc_checker::{Category, FileReport, Format, Severity};
 use std::path::Path;
 
@@ -172,7 +172,6 @@ fn pe_with_e_lfanew_beyond_the_head_window_is_confirmed() {
 #[test]
 fn extension_match_is_case_insensitive() {
     assert!(scan_named("A.EXE", &min_pe()).has("EXECUTABLE_FILE"));
-    assert!(is_exec_extension("ExE") && is_exec_extension("SO"));
 }
 
 #[test]
@@ -180,16 +179,6 @@ fn any_executable_magic_counts_for_any_executable_extension() {
     // 확장자가 .so인데 PE 내용이어도 실행 파일은 맞다(종류는 상세에 그대로 적는다).
     let r = scan_named("odd.so", &min_pe());
     assert!(finding(&r, "EXECUTABLE_FILE").detail.contains("PE"));
-}
-
-#[test]
-fn only_executable_extensions_are_executable_extensions() {
-    for ext in ["exe", "dll", "sys", "scr", "ocx", "cpl", "drv", "efi", "so", "elf", "ko", "dylib", "bundle", "bin", "out"] {
-        assert!(is_exec_extension(ext) && EXEC_EXTENSIONS.contains(&ext), "{ext}");
-    }
-    for ext in ["txt", "epub", "pdf", "zip", "doc", "hwp", ""] {
-        assert!(!is_exec_extension(ext), "{ext}");
-    }
 }
 
 #[test]

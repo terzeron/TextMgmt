@@ -56,7 +56,7 @@ pub fn dispatch_format(path: &Path, sniffed: Sniffed) -> Option<Format> {
         "doc" | "dot" | "rtf" => Some(Format::Doc),
         "hwp" => Some(Format::Hwp),
         "html" | "htm" | "xhtml" => Some(Format::Html),
-        e if is_exec_extension(e) => Some(Format::Executable),
+        e if crate::exec_extension_table::is_exec_extension(e) => Some(Format::Executable),
         _ => None,
     }
 }
@@ -112,14 +112,6 @@ pub fn scan_file(path: &Path, opts: &CheckOptions) -> FileReport {
 
 // ---- 실행 파일 이중 확인. 확장자가 실행 파일이고 매직바이트도 실행 파일(ELF·Mach-O·PE)이어야 "확정"이다. ----
 // 확장자만 맞고 내용이 다르면 확정하지 않고 낮은 심각도의 결함으로 남긴다.
-/// 실행 파일로 보는 확장자. 디렉토리를 훑을 때 이 확장자도 모은다.
-pub const EXEC_EXTENSIONS: &[&str] = &["exe", "dll", "sys", "scr", "ocx", "cpl", "drv", "efi", "so", "elf", "ko", "dylib", "bundle", "bin", "out"];
-
-/// 실행 파일 확장자인가(대소문자 무시).
-pub fn is_exec_extension(ext: &str) -> bool {
-    EXEC_EXTENSIONS.iter().any(|e| e.eq_ignore_ascii_case(ext))
-}
-
 fn kind(sniffed: Sniffed) -> Option<&'static str> {
     match sniffed {
         Sniffed::Elf => Some("ELF"),

@@ -7,7 +7,7 @@ use crate::FileReport;
 use crate::Severity;
 use crate::doc::open_ole;
 use crate::doc::report_anomalies;
-use crate::zipcheck::fast_zip_checker::ZIP_EXEC_EXTS;
+use crate::exec_extension_table::ZIP_MEMBER;
 use common::text_sanitizer::sanitize_display;
 use container_parser::byte_reader::u16_at;
 use container_parser::byte_reader::u32_at;
@@ -319,7 +319,7 @@ fn inspect_docinfo(bytes: &[u8], report: &mut FileReport) {
 fn inspect_stream(file: &mut OleFile, path: &str, entry: &Entry, report: &mut FileReport) {
     let shown = sanitize_display(path, 120, Some('…'));
     let ext = entry.name.rsplit_once('.').map(|(_, e)| e.trim().to_lowercase()).unwrap_or_default();
-    if ZIP_EXEC_EXTS.contains(&ext.as_str()) {
+    if ZIP_MEMBER.contains(&ext) {
         report.push(Category::Security, Severity::Critical, "EMBEDDED_EXECUTABLE", &shown, &format!("BinData file type .{ext}"));
     }
     let data = match file.read_stream_prefix(entry, MAX_STREAM_READ) {

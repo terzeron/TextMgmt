@@ -13,6 +13,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 use std::sync::LazyLock;
 
+use crate::exec_extension_table::EPUB_MEMBER;
 use crate::{Category, FileReport};
 use common::url_parser::unquote;
 use common::zip_reader::zip_entry_name;
@@ -118,10 +119,6 @@ pub fn directory_limit_note(path: &Path) -> Option<String> {
 
 // ---------------------------------------------------------------- 상수
 
-pub(crate) const EXEC_EXTS: &[&str] = &[
-    "exe", "dll", "scr", "com", "bat", "cmd", "ps1", "psm1", "vbs", "vbe", "jse", "wsf", "wsh", "hta", "msi", "msp", "jar", "lnk", "reg", "cpl", "sh", "bash", "zsh", "py", "pl", "rb", "php", "apk",
-    "app", "dmg", "so", "dylib", "bin", "run", "swf", "class",
-];
 const HTML_EXTS: &[&str] = &["xhtml", "html", "htm", "svg"];
 const XML_EXTS: &[&str] = &["xml", "opf", "ncx", "xsl", "xslt", "smil", "dtd"];
 const DANGEROUS_SCHEMES: &[&str] = &[
@@ -995,7 +992,7 @@ fn with_hash(detail: &str, data: &[u8], complete: bool) -> String {
 
 fn check_magic(s: &mut Scanner, data: &[u8], name: &str, ext: &str, textual: bool, complete: bool) {
     // 번들 실행 파일은 확장자로 위장했든 설치 파일 모양이든 문서에 있을 이유가 없어서 모두 Critical이다.
-    let disguised = !EXEC_EXTS.contains(&ext);
+    let disguised = !EPUB_MEMBER.contains(ext);
     if !textual && data.starts_with(b"MZ") {
         let what = if disguised { "Windows PE/DOS MZ header disguised by extension" } else { "Windows PE/DOS MZ header" };
         s.add(Severity::Critical, "PE_EXECUTABLE_CONTENT", name, &with_hash(what, data, complete));
@@ -1095,7 +1092,7 @@ fn check_member(s: &mut Scanner, zip: &mut Zip, index: usize, name: &str, limits
     }
 
     let ext = extension(name);
-    if EXEC_EXTS.contains(&ext.as_str()) {
+    if EPUB_MEMBER.contains(&ext) {
         s.add(Severity::Critical, "EMBEDDED_EXECUTABLE", name, &with_hash(&format!("Executable/script file type: .{ext}"), &data, actual <= bound));
     }
     let ext_kind = kind_of_ext(&ext);

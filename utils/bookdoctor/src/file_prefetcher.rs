@@ -100,7 +100,7 @@ fn run(shared: &Shared, paths: &[PathBuf], ahead_files: usize, ahead_bytes: u64,
             continue;
         }
         // 실행 파일 확장자는 검사기가 머리만 읽으므로 통째로 미리 읽을 이유가 없다.
-        if paths[next].extension().is_some_and(|e| doc_checker::format_dispatcher::is_exec_extension(&e.to_string_lossy())) {
+        if paths[next].extension().is_some_and(|e| doc_checker::exec_extension_table::is_exec_extension(&e.to_string_lossy())) {
             next += 1;
             continue;
         }

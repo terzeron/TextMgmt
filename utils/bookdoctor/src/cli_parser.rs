@@ -16,7 +16,7 @@ use crate::{Severity, scan_streaming};
 
 use crate::file_prefetcher::Prefetcher;
 use crate::report_writer::{Aggregate, write_json_line, write_summary_line, write_text};
-use doc_checker::format_dispatcher::is_exec_extension;
+use doc_checker::exec_extension_table::is_exec_extension;
 use doc_checker::format_dispatcher::scan_file;
 use doc_checker::pdf::security_checker::MAX_PARALLEL_INPUT_MB;
 
