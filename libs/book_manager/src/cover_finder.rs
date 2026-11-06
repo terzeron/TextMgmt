@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{BookManager, BookManagerDeps};
-use book_record::book_metadata::BookLookupError;
+use book_model::book_metadata::BookLookupError;
 use cover_manager::cover_management::{Backup, CoverHooks, CoverManagement, CoverSave};
 use cover_manager::direct_cover_url::ImageFetcher;
 use cover_manager::epub_cover::{self, CoverError, EpubCoverHooks};

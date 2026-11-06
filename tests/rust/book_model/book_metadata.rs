@@ -1,5 +1,5 @@
 mod common;
-use book_record::book_metadata::{Book, path_prefix_from_env};
+use book_model::book_metadata::{Book, path_prefix_from_env};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 

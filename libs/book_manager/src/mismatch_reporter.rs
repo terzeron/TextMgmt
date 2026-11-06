@@ -202,7 +202,7 @@ impl BookManager {
             let Ok(entries) = self.fs.read_dir(&dir_path) else { continue };
             let mut paths: BTreeSet<String> = BTreeSet::new();
             for entry in entries {
-                let name = book_record::path_validator::file_name_of(&entry).to_string_lossy().into_owned();
+                let name = crate::path_validator::file_name_of(&entry).to_string_lossy().into_owned();
                 let qualified = if category == Self::ROOT_CATEGORY { name.clone() } else { format!("{category}/{name}") };
                 match entry_kind(&entry) {
                     EntryKind::Dir => {
@@ -342,8 +342,8 @@ impl BookManager {
         let mut fs_files: BTreeSet<String> = BTreeSet::new();
         if let Ok(entries) = self.fs.read_dir(&self.category_dir(category)) {
             for entry in entries {
-                if book_record::path_validator::is_regular_file_nofollow(&entry) && self.is_indexable_file_path(&entry) {
-                    let name = book_record::path_validator::file_name_of(&entry).to_string_lossy().into_owned();
+                if crate::path_validator::is_regular_file_nofollow(&entry) && self.is_indexable_file_path(&entry) {
+                    let name = crate::path_validator::file_name_of(&entry).to_string_lossy().into_owned();
                     fs_files.insert(if category == Self::ROOT_CATEGORY { name } else { format!("{category}/{name}") });
                 }
             }

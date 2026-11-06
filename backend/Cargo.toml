@@ -20,7 +20,6 @@ path = "src/bin/epubveri.rs"
 [dependencies]
 auth_manager = { path = "../libs/auth_manager" }
 book_manager = { path = "../libs/book_manager" }
-book_record = { path = "../libs/book_record" }
 common = { path = "../libs/common" }
 doc_reader = { path = "../libs/doc_reader" }
 cover_manager = { path = "../libs/cover_manager" }

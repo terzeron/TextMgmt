@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{BookManager, ProgressFn};
-use book_record::path_validator::relative_to;
+use crate::path_validator::relative_to;
 use classifier::{BookClassifierApi, ModelOnlyClassifier};
 use search_manager::Docs;
 
@@ -401,13 +401,13 @@ impl BookManager {
                 if relative.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')) {
                     continue;
                 }
-                if book_record::path_validator::is_dir_nofollow(&entry) {
+                if crate::path_validator::is_dir_nofollow(&entry) {
                     if recursive {
                         stack.push(entry);
                     }
                     continue;
                 }
-                if !book_record::path_validator::is_regular_file_nofollow(&entry) {
+                if !crate::path_validator::is_regular_file_nofollow(&entry) {
                     continue;
                 }
                 match self.resolve_path(&entry) {
@@ -443,7 +443,7 @@ impl BookManager {
         for (raw_category, raw_keywords) in mappings {
             let Some(raw_category) = raw_category.as_str() else { continue };
             let target = raw_category.trim();
-            if target == source_category || !book_record::path_validator::is_top_level_target_category(target) || !self.is_safe_category_name(target) {
+            if target == source_category || !crate::path_validator::is_top_level_target_category(target) || !self.is_safe_category_name(target) {
                 continue;
             }
             let mut matched: Vec<String> = Vec::new();
@@ -695,12 +695,12 @@ impl BookManager {
 
             // 목적지 이름 검사는 한 번만 한다(검사 대역이 호출 횟수를 셀 수 있다). 최상위 이름일 때만 검사한다.
             let safety = target_category
-                .filter(|t| allowed_file_paths.contains(file_path_value.unwrap_or("")) && book_record::path_validator::is_top_level_target_category(t))
+                .filter(|t| allowed_file_paths.contains(file_path_value.unwrap_or("")) && crate::path_validator::is_top_level_target_category(t))
                 .map(|t| self.try_is_safe_category_name(t));
             match (file_path_value, target_category) {
                 (Some(file_path), _) if !allowed_file_paths.contains(file_path) => apply_error = Some("제안 목록에 없는 파일입니다".to_string()),
                 (None, _) => apply_error = Some("제안 목록에 없는 파일입니다".to_string()),
-                (Some(_), Some(target)) if !book_record::path_validator::is_top_level_target_category(target) => apply_error = Some("옮길 수 없는 카테고리입니다".to_string()),
+                (Some(_), Some(target)) if !crate::path_validator::is_top_level_target_category(target) => apply_error = Some("옮길 수 없는 카테고리입니다".to_string()),
                 // 검사 자체가 파일시스템 오류로 실패해도 그 항목만 실패로 남기고 배치는 계속한다.
                 (Some(_), Some(_)) if matches!(safety, Some(Err(_))) => apply_error = Some("분류 적용 중 오류가 발생했습니다".to_string()),
                 (Some(_), Some(_)) if !matches!(safety, Some(Ok(true))) => apply_error = Some("옮길 수 없는 카테고리입니다".to_string()),
@@ -762,7 +762,7 @@ impl BookManager {
         let root = self.resolved_root().unwrap_or_else(|_| self.path_prefix.clone());
         let Some(old_rel_path) = relative_to(file_path, &self.path_prefix) else { return Err("잘못된 파일 경로입니다".to_string()) };
 
-        let mut target_path = self.path_prefix.join(target_category).join(book_record::path_validator::file_name_of(file_path));
+        let mut target_path = self.path_prefix.join(target_category).join(crate::path_validator::file_name_of(file_path));
         if !self.resolve_path(&target_path).is_ok_and(|p| p.starts_with(&root)) {
             return Err("잘못된 대상 경로입니다".to_string());
         }

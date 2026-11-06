@@ -422,8 +422,8 @@ impl BookManager {
         };
         let mut file_names: Vec<String> = entries
             .iter()
-            .filter(|p| book_record::path_validator::is_regular_file_nofollow(p) && self.is_indexable_file_path(p))
-            .map(|p| book_record::path_validator::file_name_of(p).to_string_lossy().into_owned())
+            .filter(|p| crate::path_validator::is_regular_file_nofollow(p) && self.is_indexable_file_path(p))
+            .map(|p| crate::path_validator::file_name_of(p).to_string_lossy().into_owned())
             .collect();
         file_names.sort();
 

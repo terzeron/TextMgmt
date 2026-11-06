@@ -10,7 +10,7 @@ autotests = false
 pdf_engine = { path = "../pdf_engine" }
 async-trait = "0.1"
 base64 = "0.23.1"
-book_record = { path = "../book_record" }
+book_model = { path = "../book_model" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 classifier = { path = "../classifier" }
 common = { path = "../common" }

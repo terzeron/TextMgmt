@@ -27,7 +27,7 @@
 //!   - 백그라운드 작업(reload-*)은 응답을 돌려주기 전에 끝난다.
 //! - `auth_manager::auth_service`: `create_jwt_token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String`, `create_refresh_token`(같은 인자),
 //!   `tm_admin_email() -> String`, `jwt_secret() -> String`, `JWT_ALGORITHM: jsonwebtoken::Algorithm`
-//! - `book_record::book_metadata::Book` (`Default + Clone + Serialize`): `book_id, category, title, author, file_path: PathBuf, file_type, file_size, line_count, page_count, isbn, created_time: Option<String>, updated_time, score: f64`, `Book::path_prefix() -> PathBuf`
+//! - `book_manager::book_metadata::Book` (`Default + Clone + Serialize`): `book_id, category, title, author, file_path: PathBuf, file_type, file_size, line_count, page_count, isbn, created_time: Option<String>, updated_time, score: f64`, `Book::path_prefix() -> PathBuf`
 //! - `bookstore::store_clients::Yes24Bookstore { verbose: bool }`
 //! - `book_manager::{BookManager, BookManagerApi, BookContent, BookResponse}`: `BookManager::from_env(env: EnvFn, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, _>`, `BookManager::media_type(suffix_with_dot: &str) -> &'static str`
 //!   - `bm.path_prefix() -> PathBuf`, `bm.es_manager() -> Arc<dyn EsManagerApi>` (`insert(&Docs) -> Result<Vec<i64>, EsError>`, `refresh() -> Result<(), EsError>`, `delete(i64) -> Result<bool, EsError>`, `count_by_category(&str, bool) -> Result<i64, EsError>`)
@@ -64,11 +64,11 @@ use auth_manager::auth_service::{JWT_ALGORITHM, create_jwt_token, create_refresh
 use axum::http::Method;
 use axum::response::IntoResponse;
 use backend::api_router::{AppDeps, AuthMode, BookstoreFactory, BookstoreSearch, CategoryMappingApi, CustomJSONResponse, GoogleVerifier, MappingError, RoleResolver, Slot, app_with};
+use book_manager::book_metadata::{Book, BookLookupError, BookPage};
 use book_manager::comics_manager::ComicsManager;
 use book_manager::{BookContent, BookDeletion, BookManager, BookManagerApi, BookResponse};
 use book_manager::{CategoryDeletePreview, CategoryDeletion, CategoryRename, FsOnlyFile, MismatchDetails, MismatchReload, MismatchSummary, ReloadCounts, ReloadedFiles};
 use book_manager::{EpubValidation, PdfValidation};
-use book_record::book_metadata::{Book, BookLookupError, BookPage};
 use bookstore::store_clients::SearchRow;
 use common::{TestClient, env::EnvGuard, es_fake::FakeEsManager};
 use db::category_mapping::CategoryMapping;

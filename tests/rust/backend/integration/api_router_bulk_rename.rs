@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use crate::common::shared_fixtures::now_secs;
 use backend::api_router::{AppDeps, AuthMode, app_with};
 use book_manager::BookManagerApi;
-use book_record::book_metadata::{Book, BookPage};
+use book_manager::book_metadata::{Book, BookPage};
 use common::TestClient;
 use common::es_fake::FakeEsManager;
 use common::faulty_fs::{FaultyFs, fail_on_nth_path};

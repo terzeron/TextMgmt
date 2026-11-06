@@ -222,7 +222,6 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "book_manager",
- "book_record",
  "bookstore",
  "chrono",
  "common",
@@ -415,7 +414,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
- "book_record",
+ "book_model",
  "chrono",
  "classifier",
  "common",
@@ -448,15 +447,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "book_record"
+name = "book_model"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "common",
  "serde",
  "serde_json",
- "sysdeps",
- "zip",
 ]
 
 [[package]]

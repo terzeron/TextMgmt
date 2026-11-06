@@ -19,7 +19,7 @@ use zip::result::ZipError;
 pub mod epub_package;
 
 use super::{BookManager, BookResponse};
-use book_record::path_validator::{clean_href, zip_path};
+use crate::path_validator::{clean_href, zip_path};
 use common::xml_parser::parse_xml;
 use common::zip_reader::zip_names;
 use epub_package::{Edit, NCX_NS, OPF_NS, XML_DECLARATION, apply_edits, children_named, find_el, read_member, xml_text};

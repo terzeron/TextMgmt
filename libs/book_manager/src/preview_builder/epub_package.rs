@@ -20,7 +20,7 @@ use xml_recoverer::declare_unbound_prefixes;
 use zip::ZipArchive;
 use zip::result::ZipError;
 
-use book_record::path_validator::{clean_href, zip_path};
+use crate::path_validator::{clean_href, zip_path};
 use common::url_parser::unquote;
 use common::zip_reader::zip_names;
 

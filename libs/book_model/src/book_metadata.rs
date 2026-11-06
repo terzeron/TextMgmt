@@ -9,6 +9,9 @@ use common::json_field_reader::str_field;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// 책 루트 자체를 가리키는 카테고리 이름.
+pub const ROOT_CATEGORY: &str = "_root";
+
 /// `TM_BOOK_DIR`에서 책 루트를 읽는다. 없으면 프로세스를 끝내야 하는 설정 오류를 돌려준다.
 pub fn path_prefix_from_env(get: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf, String> {
     match get("TM_BOOK_DIR") {

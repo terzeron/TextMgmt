@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 
 use super::preview_builder::text_response;
 use super::{BookManager, BookResponse, CoverPage, MAX_CATEGORY_PAGE_SIZE};
-use book_record::book_metadata::Book;
+use book_model::book_metadata::Book;
 use cover_browse::{CoverEntry, CoverGroup, CoverStats, MISSING_TIME, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
 use search_manager::{CoverFileHits, decode_category_cursor, encode_category_cursor};
 

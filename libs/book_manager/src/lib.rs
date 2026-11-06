@@ -29,7 +29,7 @@ use serde_json::Value;
 use sysdeps::{CommandRunner, EnvFn, FsOps, RealFs, SystemRunner};
 
 use crate::pdf_reader_cache::{PageCountCache, PdfReaderCache};
-use book_record::book_metadata::Book;
+use book_model::book_metadata::Book;
 use classifier::Classify;
 use pdf_engine::pdf_page_reader::{LopdfOpener, LopdfPageOps, PdfOpener, PdfPageOps};
 use search_manager::{Docs, EsManagerApi};
@@ -49,6 +49,7 @@ impl std::error::Error for BookManagerError {}
 pub use api_contract::UNIMPLEMENTED;
 pub use api_contract::{ApplyCategoryChanges, BookContent, BookManagerApi, BookResponse, ProposeCategoryChanges, ReloadProgress, UnavailableBookManager};
 
+pub use book_model::book_metadata;
 pub mod comics_manager;
 pub mod pdf_reader_cache;
 
@@ -372,7 +373,7 @@ impl BookManager {
     pub const HWP3_PREVIEW_VERSION: u32 = 2;
     pub const EPUB_IMAGE_MAX_EDGE: u32 = EPUB_IMAGE_MAX_EDGE;
     /// 최상위 파일을 가리키는 카테고리 이름.
-    pub const ROOT_CATEGORY: &'static str = book_record::path_validator::ROOT_CATEGORY;
+    pub const ROOT_CATEGORY: &'static str = book_model::book_metadata::ROOT_CATEGORY;
 
     /// 대역을 꽂아 만든다. ES 색인 생성(`create_index`)과 백필은 하지 않는다(`from_env`가 한다).
     pub fn with_deps(deps: BookManagerDeps) -> BookManager {
@@ -468,7 +469,7 @@ impl BookManager {
     }
 
     fn try_make_book(&self, book_id: i64, info: &Value, score: f64) -> Result<Book, String> {
-        book_record::es_doc_converter::try_book_from_doc(&self.path_prefix, book_id, info, score)
+        book_model::es_doc_converter::try_book_from_doc(&self.path_prefix, book_id, info, score)
     }
 }
 
