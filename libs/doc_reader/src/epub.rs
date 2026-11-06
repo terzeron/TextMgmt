@@ -276,7 +276,7 @@ fn decode_markup(content: &[u8]) -> String {
     let content = content.strip_prefix(b"\xef\xbb\xbf").unwrap_or(content);
     match std::str::from_utf8(content) {
         Ok(s) => s.to_owned(),
-        Err(_) => crate::text::decode_markup_bytes(content).unwrap_or_else(|| String::from_utf8_lossy(content).into_owned()),
+        Err(_) => crate::body_decoder::decode_markup_bytes(content).unwrap_or_else(|| String::from_utf8_lossy(content).into_owned()),
     }
 }
 
