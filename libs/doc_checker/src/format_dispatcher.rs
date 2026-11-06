@@ -75,8 +75,11 @@ fn scan_inner(path: &Path, opts: &CheckOptions, report: &mut FileReport) {
         Some(Format::Txt) => txt_checker::scan_txt_file(path, opts, report),
         Some(Format::Executable) => scan_exe_file(sniffed, report),
         Some(Format::Zip) => zipcheck::scan_zip_file(path, opts, report),
-        Some(Format::Docx) => zipcheck::scan_docx_file(path, opts, sniffed, report),
-        Some(Format::Hwpx) => zipcheck::scan_hwpx_file(path, opts, sniffed, report),
+        // 이름은 DOCX·HWPX인데 내용이 OLE면 ZIP이 아니다. 암호화 OOXML이거나 구형 형식을 이름만 바꾼 것이라 OLE 검사기로 보낸다.
+        Some(Format::Docx) if sniffed == Sniffed::Ole => doc::scan_ole_named_docx(path, opts, report),
+        Some(Format::Docx) => zipcheck::scan_docx_file(path, opts, report),
+        Some(Format::Hwpx) if sniffed == Sniffed::Ole => hwp::scan_ole_named_hwpx(path, opts, report),
+        Some(Format::Hwpx) => zipcheck::scan_hwpx_file(path, opts, report),
         Some(Format::Doc) => doc::scan_doc_file(path, opts, sniffed, report),
         Some(Format::Hwp) => hwp::scan_hwp_file(path, opts, sniffed, report),
         Some(Format::Html) => scan_html_file(path, sniffed, report),

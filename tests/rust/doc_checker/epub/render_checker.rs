@@ -5,9 +5,10 @@ use doc_checker::CheckOptions;
 use doc_checker::epub::{
     render_checker::MAX_UNREADABLE_FINDINGS, render_checker::ReadErrorKind, render_checker::Selector, render_checker::classify_read_error, render_checker::count_hidden_elements,
     render_checker::full_reads, render_checker::inspect, render_checker::inspect_with, render_checker::inspect_with_verified, render_checker::zero_size_selectors, scan_epub_file,
-    security_checker::Limits, security_checker::scan_verified,
+    security_checker::scan_verified,
 };
 use doc_checker::format_dispatcher::scan_file;
+use doc_checker::zip_member_reader::Limits;
 use doc_checker::{Category, FileReport, Format, Severity};
 use std::collections::HashMap;
 use std::fs;

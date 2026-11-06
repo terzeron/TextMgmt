@@ -13,9 +13,9 @@ use crate::CheckOptions;
 
 /// EPUB 파일 하나를 검사해 `report`에 더한다.
 pub fn scan_epub_file(path: &Path, opts: &CheckOptions, report: &mut FileReport) {
-    let limits = security_checker::Limits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..security_checker::Limits::default() };
+    let limits = crate::zip_member_reader::Limits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..crate::zip_member_reader::Limits::default() };
     // 중앙 디렉터리가 한도를 넘으면 어느 단계도 ZIP을 열지 않는다. 구조·렌더링·손상 검사는 한도를 따로 보지 않는다.
-    if security_checker::directory_limit_note(path).is_some() {
+    if crate::zip_member_reader::directory_limit_note(path).is_some() {
         security_checker::scan(path, &limits, report);
         return;
     }

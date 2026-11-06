@@ -14,8 +14,8 @@ use container_parser::magic_sniffer::{Sniffed, sniff};
 use container_parser::magic_sniffer::{is_text_name, shannon};
 use zip::CompressionMethod;
 
-use crate::epub::security_checker::{Limits, directory_limit_note, read_limited, zip_directory_bounds};
 use crate::exec_extension_table::ZIP_MEMBER;
+use crate::zip_member_reader::{Limits, directory_limit_note, read_limited, zip_directory_bounds};
 use crate::zip_name_rules;
 
 /// 멤버마다 풀어 보는 앞부분의 바이트 수.

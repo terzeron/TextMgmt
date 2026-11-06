@@ -21,8 +21,8 @@ use common::url_parser::unquote;
 use common::zip_reader::zip_entry_name;
 use common::zip_reader::{Zip, open_zip};
 
-use super::security_checker::Limits;
 use super::structure_checker::{ISSUE_MEMBER_UNREADABLE, ISSUE_TO_CODE, is_markup, parse_xml, rootfile_path, spine_members};
+use crate::zip_member_reader::Limits;
 
 // EpubDiagnose.js 상단 상수.
 const OPF_NS: &str = "http://www.idpf.org/2007/opf";

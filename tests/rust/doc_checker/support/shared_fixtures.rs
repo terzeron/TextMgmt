@@ -3,8 +3,9 @@
 use super::epub_with_files;
 use super::ole_common::{Cfb, make_cfb};
 use doc_checker::CheckOptions;
-use doc_checker::epub::{security_checker::Limits, security_checker::Stats, security_checker::scan as scan_into, security_checker::scan_stats};
+use doc_checker::epub::{security_checker::Stats, security_checker::scan as scan_into, security_checker::scan_stats};
 use doc_checker::format_dispatcher::scan_file;
+use doc_checker::zip_member_reader::Limits;
 use doc_checker::{FileReport, Format};
 use flate2::Compression;
 use flate2::write::{DeflateEncoder, ZlibEncoder};

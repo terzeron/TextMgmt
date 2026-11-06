@@ -392,3 +392,13 @@ mod html_scanner {
         assert!(r.reasons.iter().any(|m| m == "HTML file could not be read"), "{:?}", r.reasons);
     }
 }
+
+#[test]
+fn ole_content_named_docx_or_hwpx_is_sent_to_the_ole_checkers() {
+    for (name, format) in [("a.docx", Format::Docx), ("a.hwpx", Format::Hwpx)] {
+        let report = scan_named(name, b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1 truncated ole");
+        assert_eq!(report.format, Some(format), "{name}");
+        assert!(report.incomplete || !report.findings.is_empty(), "{name}: 깨진 OLE를 정상으로 보고하지 않는다");
+        assert!(!report.findings.iter().any(|f| f.code.starts_with("ZIP_") || f.code.starts_with("OOXML_")), "{name}: ZIP 검사로 가지 않는다: {:?}", report.findings);
+    }
+}

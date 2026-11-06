@@ -6,14 +6,12 @@ use crate::CheckOptions;
 use crate::FileReport;
 use crate::Severity;
 use crate::exec_extension_table::ZIP_MEMBER;
-use crate::zipcheck::ooxml_checker::classify_field;
+use crate::ole_checker::{open_ole, report_anomalies};
+use crate::word_field_checker::classify_field;
 use common::text_sanitizer::sanitize_display;
 use container_parser::magic_sniffer::Sniffed;
 use container_parser::magic_sniffer::sniff;
-use container_parser::ole_parser::Anomaly;
 use container_parser::ole_parser::EntryKind;
-use container_parser::ole_parser::Limits as OleLimits;
-use container_parser::ole_parser::OleError;
 use container_parser::ole_parser::OleFile;
 use container_parser::ole_parser::vba_decoder;
 use std::io::Read;
@@ -33,8 +31,6 @@ const VBA_BUDGET: u64 = 16 * 1024 * 1024;
 const NATIVE_PREFIX: usize = 64 * 1024;
 /// RTF를 읽는 최대 바이트(`OleFile`의 스트림 상한과 같다).
 const RTF_READ_MAX: u64 = 64 * 1024 * 1024;
-/// 한 파일에서 보고하는 구조 이상 수의 상한.
-const MAX_ANOMALY_FINDINGS: usize = 50;
 
 /// `.doc`·`.dot` 하나를 검사한다. 내용이 OLE가 아니면 열지 않는다(확장자 위장은 `common`이 알린다).
 pub fn scan_doc_file(path: &Path, opts: &CheckOptions, sniffed: Sniffed, report: &mut FileReport) {
@@ -68,22 +64,6 @@ pub fn scan_ole_named_docx(path: &Path, opts: &CheckOptions, report: &mut FileRe
     }
 }
 
-/// OLE 파일을 한도 안에서 연다. 열지 못하면 사유를 미완료로 남기고 `None`을 돌려준다.
-pub(crate) fn open_ole(path: &Path, opts: &CheckOptions, report: &mut FileReport) -> Option<OleFile> {
-    let limits = OleLimits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..OleLimits::default() };
-    match OleFile::open(path, &limits) {
-        Ok(file) => Some(file),
-        Err(OleError::Limit(message)) => {
-            report.mark_incomplete(&format!("skipped: {message}"));
-            None
-        }
-        Err(e) => {
-            report.mark_incomplete(&format!("OLE container could not be read: {e:?}"));
-            None
-        }
-    }
-}
-
 /// RTF 파일을 한도까지 읽어 `inspect_rtf`에 넘긴다. 한도를 넘으면 앞부분만 보고 미완료로 남긴다.
 fn scan_rtf_file(path: &Path, report: &mut FileReport) {
     let Ok(file) = std::fs::File::open(path) else {
@@ -102,40 +82,6 @@ fn scan_rtf_file(path: &Path, report: &mut FileReport) {
     inspect_rtf(&bytes, report);
 }
 
-fn severity_of(a: &Anomaly) -> Severity {
-    match a {
-        Anomaly::FatChainCycle { .. }
-        | Anomaly::SectorOutOfRange { .. }
-        | Anomaly::FatSectorCountMismatch { .. }
-        | Anomaly::DifatTruncated
-        | Anomaly::DirectoryTruncated
-        | Anomaly::DirectoryCycle
-        | Anomaly::TooManyEntries(_)
-        | Anomaly::StreamSizeExceedsFile { .. }
-        | Anomaly::CrossLinkedSectors { .. } => Severity::High,
-        _ => Severity::Medium,
-    }
-}
-
-/// 파서를 속여 무한 루프·큰 할당·범위 밖 읽기를 유도하는 데 쓰는 이상인가.
-fn abusable(a: &Anomaly) -> bool {
-    matches!(
-        a,
-        Anomaly::FatChainCycle { .. }
-            | Anomaly::SectorOutOfRange { .. }
-            | Anomaly::DirectoryCycle
-            | Anomaly::TooManyEntries(_)
-            | Anomaly::StreamSizeExceedsFile { .. }
-            | Anomaly::CrossLinkedSectors { .. }
-    )
-}
-
-fn push_once(report: &mut FileReport, category: Category, severity: Severity, code: &str, location: &str, detail: &str) {
-    if !report.findings.iter().any(|f| f.code == code && f.location == location) {
-        report.push(category, severity, code, location, detail);
-    }
-}
-
 /// 열린 OLE 파일을 분석해 `report`에 더한다.
 pub fn inspect(file: &mut OleFile, report: &mut FileReport) {
     report_anomalies(file, report);
@@ -144,26 +90,6 @@ pub fn inspect(file: &mut OleFile, report: &mut FileReport) {
     check_objects(file, report);
     if !encrypted {
         scan_fields(file, report);
-    }
-}
-
-pub(crate) fn report_anomalies(file: &OleFile, report: &mut FileReport) {
-    let anomalies = file.anomalies();
-    for a in anomalies.iter().take(MAX_ANOMALY_FINDINGS) {
-        report.push(Category::Defect, severity_of(a), a.code(), "", &sanitize_display(&a.detail(), 200, Some('…')));
-    }
-    if anomalies.len() > MAX_ANOMALY_FINDINGS {
-        report.mark_incomplete(&format!("{} structure anomalies; only the first {MAX_ANOMALY_FINDINGS} are listed", anomalies.len()));
-    }
-    if anomalies.iter().any(abusable) {
-        push_once(
-            report,
-            Category::Security,
-            Severity::High,
-            "OLE_MALFORMED_STRUCTURE",
-            "",
-            "OLE structure is malformed in ways that trigger parser bugs (loops, out-of-range sectors, shared sectors, size lies)",
-        );
     }
 }
 
@@ -192,7 +118,7 @@ fn check_vba(file: &mut OleFile, report: &mut FileReport) {
     let roots: Vec<String> = file.entries().iter().filter(|e| e.kind == EntryKind::Storage && e.name.eq_ignore_ascii_case("VBA")).map(|e| file.path_of(e)).take(4).collect();
     for root in roots {
         let shown = sanitize_display(&root, 120, Some('…'));
-        push_once(report, Category::Security, Severity::High, "DOC_VBA_MACRO", &shown, "VBA macro project");
+        report.push_once(Category::Security, Severity::High, "DOC_VBA_MACRO", &shown, "VBA macro project");
         match vba_decoder::read_project(file, &root, VBA_BUDGET) {
             Err(e) => report.mark_incomplete(&format!("VBA project {shown} could not be read: {e:?}")),
             Ok(project) => {
@@ -214,9 +140,9 @@ fn check_vba(file: &mut OleFile, report: &mut FileReport) {
                 }
                 if let Some((module, name)) = auto {
                     let loc = sanitize_display(&format!("{root}/{module}"), 160, Some('…'));
-                    push_once(report, Category::Security, Severity::High, "DOC_VBA_AUTOEXEC", &loc, &format!("auto-run entry point {name}"));
+                    report.push_once(Category::Security, Severity::High, "DOC_VBA_AUTOEXEC", &loc, &format!("auto-run entry point {name}"));
                     if let Some(keyword) = suspicious {
-                        push_once(report, Category::Security, Severity::Critical, "DOC_VBA_SUSPICIOUS", &loc, &format!("auto-run macro that uses {keyword}"));
+                        report.push_once(Category::Security, Severity::Critical, "DOC_VBA_SUSPICIOUS", &loc, &format!("auto-run macro that uses {keyword}"));
                     }
                 }
             }
@@ -235,7 +161,7 @@ fn c_string(bytes: &[u8], pos: usize) -> (String, usize, bool) {
 
 fn check_objects(file: &mut OleFile, report: &mut FileReport) {
     if file.entries().iter().any(|e| e.kind == EntryKind::Storage && e.name.eq_ignore_ascii_case("ObjectPool")) {
-        push_once(report, Category::Security, Severity::High, "DOC_OLE_OBJECT", "ObjectPool", "Embedded OLE objects");
+        report.push_once(Category::Security, Severity::High, "DOC_OLE_OBJECT", "ObjectPool", "Embedded OLE objects");
     }
     let natives: Vec<_> = file.entries().iter().filter(|e| e.kind == EntryKind::Stream && e.name.trim_start_matches('\u{1}').eq_ignore_ascii_case("Ole10Native")).cloned().collect();
     for entry in natives.into_iter().take(64) {
@@ -260,14 +186,14 @@ fn check_objects(file: &mut OleFile, report: &mut FileReport) {
         for name in [&label, &source, &temp] {
             let ext = name.trim_end_matches([' ', '.']).rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
             if ZIP_MEMBER.contains(&ext) {
-                push_once(report, Category::Security, Severity::Critical, "EMBEDDED_EXECUTABLE", &sanitize_display(name, 120, Some('…')), &format!("Embedded file type .{ext}"));
+                report.push_once(Category::Security, Severity::Critical, "EMBEDDED_EXECUTABLE", &sanitize_display(name, 120, Some('…')), &format!("Embedded file type .{ext}"));
                 break;
             }
         }
         // 이름이 무엇이든 내용이 실행 파일인 것을 찾는다(앞부분에서 `MZ`·`\x7fELF`가 나오는 자리마다 헤더를 확인한다).
         let hit = prefix.windows(2).enumerate().any(|(i, w)| (w == b"MZ" || w == b"\x7f\x45") && matches!(sniff(&prefix[i..]), Sniffed::Pe | Sniffed::Elf));
         if hit {
-            push_once(report, Category::Security, Severity::Critical, "EMBEDDED_EXECUTABLE", &shown, "Embedded executable content (PE/ELF magic)");
+            report.push_once(Category::Security, Severity::Critical, "EMBEDDED_EXECUTABLE", &shown, "Embedded executable content (PE/ELF magic)");
         }
     }
 }
@@ -364,7 +290,7 @@ fn scan_fields(file: &mut OleFile, report: &mut FileReport) {
     }
     for f in tmp.findings {
         let code = f.code.replacen("OOXML_", "DOC_", 1);
-        push_once(report, Category::Security, f.severity, &code, &f.location, &f.detail);
+        report.push_once(Category::Security, f.severity, &code, &f.location, &f.detail);
     }
 }
 

@@ -1,7 +1,7 @@
 //! `doc_checker::finding_model` 단위 테스트.
 
 mod support;
-use doc_checker::finding_model::{COMBINATIONS, Suppressed, escalate, risk_score};
+use doc_checker::finding_model::{COMBINATIONS, Suppressed, escalate, guarded, risk_score};
 use doc_checker::{Category, FileReport, Finding, Format, Severity};
 use std::path::Path;
 
@@ -223,4 +223,23 @@ fn severity_parse_accepts_four_lowercase_names_and_rejects_others() {
     for bad in ["", "HIGH", "High", "info", "highest", " high"] {
         assert_eq!(Severity::parse(bad), None, "{bad:?}");
     }
+}
+
+#[test]
+fn a_panicking_scan_becomes_an_incomplete_report_instead_of_killing_the_batch() {
+    let mut r = FileReport::new(Path::new("/x/y.epub"), Some(Format::Epub));
+    guarded(&mut r, |_| panic!("parser bug"));
+    assert!(r.incomplete);
+    assert!(r.findings.is_empty());
+    assert!(r.path.ends_with("y.epub") && r.reasons.iter().any(|n| n.starts_with("panic:") && n.contains("parser bug")), "{:?}", r.reasons);
+}
+
+#[test]
+fn findings_found_before_a_panic_are_kept() {
+    let mut r = FileReport::new(Path::new("/x/y.epub"), Some(Format::Epub));
+    guarded(&mut r, |rep| {
+        rep.push(Category::Security, Severity::High, "SCRIPT_TAG", "a.xhtml", "d");
+        panic!("boom");
+    });
+    assert!(r.incomplete && r.has("SCRIPT_TAG"));
 }

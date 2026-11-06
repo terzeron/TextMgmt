@@ -8,10 +8,9 @@ pub mod ooxml_checker;
 use std::path::Path;
 
 use crate::FileReport;
-use container_parser::magic_sniffer::Sniffed;
 
 use crate::CheckOptions;
-use crate::epub::security_checker::Limits;
+use crate::zip_member_reader::Limits;
 
 /// `.zip` 파일 하나를 검사해 `report`에 더한다.
 pub fn scan_zip_file(path: &Path, opts: &CheckOptions, report: &mut FileReport) {
@@ -19,13 +18,8 @@ pub fn scan_zip_file(path: &Path, opts: &CheckOptions, report: &mut FileReport) 
     fast_zip_checker::check(path, &limits, opts.zip_deep, report);
 }
 
-/// DOCX 계열(`.docx`·`.docm`·`.dotx`·`.dotm`) 하나를 검사한다. 내용이 OLE면 ZIP이 아니므로 열지 않고 미완료로 남긴다.
-/// 구형 `.doc`인지 암호화된 OOXML인지는 CFB를 읽어야 알 수 있다. 확인하지 못한 것을 암호화라고 하지 않는다.
-pub fn scan_docx_file(path: &Path, opts: &CheckOptions, sniffed: Sniffed, report: &mut FileReport) {
-    if sniffed == Sniffed::Ole {
-        crate::doc::scan_ole_named_docx(path, opts, report);
-        return;
-    }
+/// ZIP 내용인 DOCX 계열(`.docx`·`.docm`·`.dotx`·`.dotm`) 하나를 검사한다. 내용이 OLE인 파일은 `format_dispatcher`가 DOC 검사기로 보낸다.
+pub fn scan_docx_file(path: &Path, opts: &CheckOptions, report: &mut FileReport) {
     let limits = Limits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..Limits::default() };
     if fast_zip_checker::check(path, &limits, opts.zip_deep, report) {
         // 구조와 보안 검사가 같은 압축 해제 예산을 쓴다.
@@ -37,12 +31,8 @@ pub fn scan_docx_file(path: &Path, opts: &CheckOptions, sniffed: Sniffed, report
     }
 }
 
-/// `.hwpx` 하나를 검사한다. 내용이 OLE면 HWP 5.x를 이름만 바꾼 것이다. ZIP이 아니므로 열지 않고 미완료로 남긴다(HWP 5.x 검사기는 아직 없다).
-pub fn scan_hwpx_file(path: &Path, opts: &CheckOptions, sniffed: Sniffed, report: &mut FileReport) {
-    if sniffed == Sniffed::Ole {
-        crate::hwp::scan_ole_named_hwpx(path, opts, report);
-        return;
-    }
+/// ZIP 내용인 `.hwpx` 하나를 검사한다. 내용이 OLE인 파일(HWP 5.x를 이름만 바꾼 것)은 `format_dispatcher`가 HWP 검사기로 보낸다.
+pub fn scan_hwpx_file(path: &Path, opts: &CheckOptions, report: &mut FileReport) {
     let limits = Limits { max_total: opts.max_total_mb.saturating_mul(1024 * 1024), ..Limits::default() };
     if fast_zip_checker::check(path, &limits, opts.zip_deep, report) {
         hwpx_checker::inspect(path, &limits, report);

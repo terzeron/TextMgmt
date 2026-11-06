@@ -18,8 +18,8 @@ use container_parser::magic_sniffer::{Sniffed, sniff};
 use container_parser::ole_parser::{Limits as OleLimits, OleFile};
 
 use crate::CheckOptions;
-use crate::epub::security_checker::directory_limit_note;
 use crate::format_dispatcher::scan_file;
+use crate::zip_member_reader::directory_limit_note;
 
 /// 바깥 파일 아래로 내려가는 최대 단계.
 pub const MAX_DEPTH: u8 = 3;

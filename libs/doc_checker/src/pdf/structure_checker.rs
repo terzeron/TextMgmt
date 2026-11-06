@@ -16,7 +16,7 @@ use pdf_engine::pdf_worker_client::extract_text;
 use sysdeps::{CommandError, CommandOutput, CommandRunner, SystemRunner};
 
 use crate::CheckOptions;
-use crate::epub::security_checker::guarded;
+use crate::finding_model::guarded;
 use crate::pdf::security_checker::{LoadInfo, has_header};
 
 /// 머리·꼬리 표지를 찾는 구간. 뷰어도 앞 1024바이트 안에서 `%PDF-`를 찾는다(pdf.js `find("%PDF-", 1024)`).

@@ -17,7 +17,7 @@ use container_parser::magic_sniffer::{Sniffed, sniff};
 use lopdf::xref::XrefEntry;
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 
-use crate::epub::security_checker::guarded;
+use crate::finding_model::guarded;
 
 const MAX_DEPTH: usize = 100;
 const PREVIEW_CHARS: usize = 100;

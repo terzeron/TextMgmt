@@ -18,10 +18,13 @@ pub mod generic_checker;
 pub mod hwp;
 pub mod mojibake_detector;
 pub mod nested_scanner;
+pub mod ole_checker;
 pub mod pdf;
 pub mod rule_engine;
 pub mod txt_checker;
 pub mod viewer_block_table;
+pub mod word_field_checker;
+pub mod zip_member_reader;
 pub mod zip_name_rules;
 pub mod zipcheck;
 

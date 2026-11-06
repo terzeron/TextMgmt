@@ -9,7 +9,7 @@ use common::url_parser::unquote;
 use common::zip_reader::open_zip;
 
 use super::ooxml_checker::{Member, check_xml_attacks, classify_member, parse, preview, push_once, read_xml_part};
-use crate::epub::security_checker::{Limits, read_limited};
+use crate::zip_member_reader::{Limits, read_limited};
 
 const MANIFEST: &str = "Contents/content.hpf";
 const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];

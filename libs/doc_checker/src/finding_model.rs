@@ -1,5 +1,6 @@
 //! 진단 결과 모델: 심각도, 지표, 파일 보고서, 위험 점수와 조합 승격. 포맷과 무관하다.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
 // ---- 지표의 심각도. ----
@@ -153,6 +154,13 @@ impl FileReport {
     }
 
     /// 전체를 검사하지 못했다고 표시하고 이유를 남긴다.
+    /// 같은 (코드, 위치) 지표가 아직 없을 때만 더한다.
+    pub fn push_once(&mut self, category: Category, severity: Severity, code: &str, location: &str, detail: &str) {
+        if !self.findings.iter().any(|f| f.code == code && f.location == location) {
+            self.push(category, severity, code, location, detail);
+        }
+    }
+
     pub fn mark_incomplete(&mut self, reason: &str) {
         self.incomplete = true;
         self.reasons.push(reason.to_string());
@@ -229,5 +237,13 @@ pub fn escalate(report: &mut FileReport) {
             report.push(Category::Security, Severity::High, COMBINED_CODE, "", &format!("{left} + {partner}"));
             return;
         }
+    }
+}
+
+/// `scan`이 panic하면 그 파일을 incomplete로 바꾼다. panic 전까지 찾은 지표는 남는다.
+pub fn guarded(report: &mut FileReport, scan: impl FnOnce(&mut FileReport)) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| scan(report))) {
+        let msg = common::panic_message(payload.as_ref()).unwrap_or("unknown");
+        report.mark_incomplete(&common::text_sanitizer::sanitize(&format!("panic: {msg}"), 160, None));
     }
 }

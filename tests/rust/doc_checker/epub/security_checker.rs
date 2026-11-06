@@ -3,7 +3,8 @@
 #[path = "../support/mod.rs"]
 mod support;
 use crate::support::shared_fixtures::{binary, has, patch_central};
-use doc_checker::epub::{security_checker::Limits, security_checker::decode_calls, security_checker::scan as scan_into};
+use doc_checker::epub::security_checker::scan as scan_into;
+use doc_checker::zip_member_reader::{Limits, decode_calls};
 use doc_checker::{FileReport, Format, Severity};
 use std::fs;
 use std::io::Write;
@@ -142,7 +143,7 @@ mod budget_and_encoding_evasion {
     use super::scan_chapter;
     use super::support;
     use crate::support::shared_fixtures::{codes, forge_declared_size, has, scan_with, scan_with_stats};
-    use doc_checker::epub::security_checker::Limits;
+    use doc_checker::zip_member_reader::Limits;
     use doc_checker::{FileReport, Severity};
     use support::*;
 
@@ -460,8 +461,8 @@ mod active_content {
     use super::support;
     use super::{scan, scan_chapter};
     use crate::support::shared_fixtures::{codes, has, patch_central, scan_with, scan_with_stats};
-    use doc_checker::epub::{security_checker::Limits, security_checker::guarded};
-    use doc_checker::{Category, FileReport, Format, Severity};
+    use doc_checker::zip_member_reader::Limits;
+    use doc_checker::{Category, FileReport, Severity};
     use std::fs;
     use std::io::Write;
     use std::path::Path;
@@ -1242,25 +1243,6 @@ mod active_content {
     }
 
     // ---- 큰 파일과 메모리 ----
-
-    #[test]
-    fn a_panicking_scan_becomes_an_incomplete_report_instead_of_killing_the_batch() {
-        let mut r = FileReport::new(Path::new("/x/y.epub"), Some(Format::Epub));
-        guarded(&mut r, |_| panic!("parser bug"));
-        assert!(r.incomplete);
-        assert!(r.findings.is_empty());
-        assert!(r.path.ends_with("y.epub") && r.reasons.iter().any(|n| n.starts_with("panic:") && n.contains("parser bug")), "{:?}", r.reasons);
-    }
-
-    #[test]
-    fn findings_found_before_a_panic_are_kept() {
-        let mut r = FileReport::new(Path::new("/x/y.epub"), Some(Format::Epub));
-        guarded(&mut r, |rep| {
-            rep.push(Category::Security, Severity::High, "SCRIPT_TAG", "a.xhtml", "d");
-            panic!("boom");
-        });
-        assert!(r.incomplete && r.has("SCRIPT_TAG"));
-    }
 
     /// ZIP을 파일 중간에서 잘라도 panic하지 않고 incomplete이거나 지표를 낸다(옛 도구와 같다).
     #[test]

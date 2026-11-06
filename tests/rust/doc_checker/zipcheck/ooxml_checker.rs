@@ -455,7 +455,7 @@ fn the_part_cap_cannot_push_the_main_document_out_of_the_scan() {
 
 #[test]
 fn entries_beyond_max_files_are_not_walked_and_the_scan_is_incomplete() {
-    use doc_checker::epub::security_checker::Limits;
+    use doc_checker::zip_member_reader::Limits;
     use doc_checker::zipcheck::ooxml_checker::inspect_security;
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("many.docx");
@@ -472,7 +472,7 @@ fn entries_beyond_max_files_are_not_walked_and_the_scan_is_incomplete() {
 
 #[test]
 fn structure_reads_are_charged_to_the_shared_budget() {
-    use doc_checker::epub::security_checker::Limits;
+    use doc_checker::zip_member_reader::Limits;
     use doc_checker::zipcheck::ooxml_checker::inspect_structure;
     let d = tempfile::tempdir().unwrap();
     let p = d.path().join("s.docx");
