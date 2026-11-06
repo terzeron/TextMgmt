@@ -217,3 +217,114 @@ mod root_file_reload {
         assert_eq!(err.as_deref(), Some("최상위 파일 재적재 실패 2건: 색인 실패"));
     }
 }
+
+// ---- ES·파서 실패 분기 ----
+
+/// `A/ok.txt`를 만들고, 파일 읽기 대역이 `reader`를 쓰는 매니저를 만든다.
+fn manager_with_reader(tmp_path: &std::path::Path, es: &Arc<FakeEsManager>, reader: impl Fn(&std::path::Path) -> Result<serde_json::Value, LoaderReadError> + Send + Sync + 'static) -> BookManager {
+    fs::create_dir_all(tmp_path.join("A")).unwrap();
+    fs::write(tmp_path.join("A").join("ok.txt"), "ok").unwrap();
+    BookManager::with_deps(deps(tmp_path, es).with_file_reader(file_reader(reader)))
+}
+
+#[test]
+fn test_bulk_index_files_reports_a_parse_failure_per_file() {
+    let tmp = tmp_dir();
+    let manager = manager_with_reader(tmp.path(), &FakeEsManager::new(), |_| Err(LoaderReadError::Other("broken".to_string())));
+    let (indexed, failures) = block_on(manager.bulk_index_files(&["A/ok.txt"], true));
+    assert!(indexed.is_empty());
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].error, "파일 읽기 실패: A/ok.txt");
+}
+
+#[test]
+fn test_bulk_index_files_still_indexes_when_cleaning_stale_documents_fails() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    es.fail("delete_by_file_paths", "down");
+    let manager = manager_with_reader(tmp.path(), &es, |_| Ok(json!({"999": make_doc("A/ok.txt", ".txt")})));
+    let (indexed, failures) = block_on(manager.bulk_index_files(&["A/ok.txt"], true));
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(indexed.len(), 1);
+}
+
+#[test]
+fn test_bulk_index_files_reports_an_es_insert_error_as_a_load_failure() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    es.fail("insert", "down");
+    let manager = manager_with_reader(tmp.path(), &es, |_| Ok(json!({"999": make_doc("A/ok.txt", ".txt")})));
+    let (indexed, failures) = block_on(manager.bulk_index_files(&["A/ok.txt"], true));
+    assert!(indexed.is_empty());
+    assert!(failures.iter().any(|f| f.error.contains("ES 적재 실패")), "{failures:?}");
+}
+
+#[test]
+fn test_reload_mismatch_details_counts_nothing_deleted_when_es_delete_fails() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    es.fail("delete_by_ids", "down");
+    let manager = make_manager(tmp.path(), &es);
+    let details = MismatchDetails { es_only: vec![EsOnlyFile { book_id: 888, ..EsOnlyFile::default() }], ..MismatchDetails::default() };
+    let result = block_on(manager.reload_category_mismatch_details("A", &details));
+    assert_eq!(result.deleted_count, 0);
+    assert!(result.failures.iter().any(|f| f.error == "ES 문서 1건 중 0건만 삭제됨"), "{:?}", result.failures);
+}
+
+#[test]
+fn test_reload_category_mismatches_reports_a_summary_failure() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    es.fail("iter_all_category_file_paths", "down");
+    let (_, err) = outcome_or_default(block_on(make_manager(tmp.path(), &es).reload_category_mismatches(None)));
+    assert!(err.as_deref().is_some_and(|e| e.starts_with("불일치 조회 실패")), "{err:?}");
+}
+
+#[test]
+fn test_reload_category_mismatches_rejects_a_category_whose_details_failed() {
+    let tmp = tmp_dir();
+    fs::create_dir_all(tmp.path().join("A")).unwrap();
+    let manager = BookManager::with_deps(
+        deps(tmp.path(), &FakeEsManager::new())
+            .with_get_category_mismatches_override(Arc::new(|_| MismatchSummary {
+                mismatches: vec![CategoryMismatch { category: "A".into(), ..CategoryMismatch::default() }],
+                ..MismatchSummary::default()
+            }))
+            .with_get_category_mismatch_details_override(Arc::new(|_| MismatchDetails { error: Some("down".into()), ..MismatchDetails::default() })),
+    );
+    let logs = common::log_capture::LogCapture::start(log::Level::Info);
+    let (result, err) = outcome_or_default(block_on(manager.reload_category_mismatches(None)));
+    assert!(err.is_none(), "{err:?}");
+    assert!(result.failures.iter().any(|f| f.error == "불일치 상세 조회 실패: down"), "{result:?}");
+    assert!(logs.text().contains("reload_category_mismatches 완료"), "완료 요약을 남긴다: {}", logs.text());
+    assert_eq!(result.failed_count, result.failures.len() as i64);
+}
+
+#[test]
+fn test_reload_category_mismatch_files_reports_a_details_failure() {
+    let tmp = tmp_dir();
+    fs::create_dir_all(tmp.path().join("A")).unwrap();
+    let manager = BookManager::with_deps(
+        deps(tmp.path(), &FakeEsManager::new()).with_get_category_mismatch_details_override(Arc::new(|_| MismatchDetails { error: Some("down".into()), ..MismatchDetails::default() })),
+    );
+    let (_, err) = outcome_or_default(block_on(manager.reload_category_mismatch_files("A", None)));
+    assert_eq!(err.as_deref(), Some("불일치 상세 조회 실패: down"));
+}
+
+#[test]
+fn test_reload_category_logs_loader_stderr_only_when_there_is_some() {
+    use common::runner::{FakeRunner, output};
+    let tmp = tmp_dir();
+    fs::create_dir_all(tmp.path().join("A")).unwrap();
+    let es = FakeEsManager::new();
+    let logs = common::log_capture::LogCapture::start(log::Level::Warn);
+
+    let noisy = BookManager::with_deps(deps(tmp.path(), &es).with_runner(FakeRunner::returning(Ok(output(0, "총 3개 파일 처리됨", "slow disk")))));
+    assert!(block_on(noisy.reload_category("A", None)).is_ok());
+    assert!(logs.text().contains("stderr 출력 - slow disk"), "{}", logs.text());
+
+    logs.clear();
+    let quiet = BookManager::with_deps(deps(tmp.path(), &es).with_runner(FakeRunner::returning(Ok(output(0, "총 3개 파일 처리됨", "")))));
+    assert!(block_on(quiet.reload_category("A", None)).is_ok());
+    assert!(!logs.text().contains("stderr 출력"), "{}", logs.text());
+}

@@ -1564,3 +1564,114 @@ fn test_move_classified_file_falls_back_to_copy_and_remove_across_devices() {
     assert_eq!(fs::read_to_string(tmp_path.join("B/f1.txt")).unwrap(), "content");
     assert!(!source.exists(), "복사한 뒤 원본을 지운다");
 }
+
+// ---- 적용·이동의 남은 분기 ----
+
+#[test]
+fn test_apply_category_changes_rejects_items_without_a_path_or_a_target() {
+    let tmp = tmp_dir();
+    let manager = make_manager(tmp.path(), &FakeEsManager::new());
+    make_source_file(tmp.path(), "A", "book.epub");
+
+    let items = [json!({"target_category": "3_SF"}), json!({"file_path": "A/book.epub"})];
+    let (result, error) = block_on(apply_opts(&manager, &items, ApplyOpts::new(allowed_set(&["A/book.epub"]))));
+
+    assert!(error.is_none());
+    assert_eq!(result["applied_count"], 0);
+    assert_eq!(result["results"][0]["apply_error"], "제안 목록에 없는 파일입니다");
+    assert_eq!(result["results"][1]["apply_error"], "옮길 수 없는 카테고리입니다");
+}
+
+#[test]
+fn test_iter_category_indexable_files_descends_only_when_recursive_and_skips_links() {
+    let tmp = tmp_dir();
+    let dir = tmp.path().join("A");
+    fs::create_dir_all(dir.join("sub")).unwrap();
+    fs::write(dir.join("a.txt"), "a").unwrap();
+    fs::write(dir.join("sub").join("b.txt"), "b").unwrap();
+    symlink(dir.join("a.txt"), dir.join("link.txt")).unwrap();
+    let manager = make_manager(tmp.path(), &FakeEsManager::new());
+
+    let names = |recursive: bool| -> Vec<String> { manager.iter_category_indexable_files("A", recursive).iter().map(|p| p.strip_prefix(&dir).unwrap().to_string_lossy().into_owned()).collect() };
+
+    assert_eq!(names(false), ["a.txt"]);
+    assert_eq!(names(true), ["a.txt", "sub/b.txt"]);
+}
+
+#[test]
+fn test_move_classified_file_reports_an_es_failure_while_cleaning_a_duplicate() {
+    let tmp = tmp_dir();
+    let source = make_source_file(tmp.path(), "A", "f1.txt");
+    fs::create_dir_all(tmp.path().join("B")).unwrap();
+    fs::copy(&source, tmp.path().join("B").join("f1.txt")).unwrap();
+    let es = FakeEsManager::new();
+    es.fail("delete_by_file_paths", "down");
+    let manager = make_manager(tmp.path(), &es);
+
+    let (result, err) = split(block_on(manager.move_classified_file(&source, "B", "book", MoveOpts { clean_existing: true, ..Default::default() })));
+
+    assert!(result.is_none());
+    assert!(err.expect("err").starts_with("중복 파일 정리 실패"));
+}
+
+/// 원본의 기존 ES 문서를 심어 둔 매니저. `insert`의 응답은 `ids`가 정한다.
+fn manager_with_existing_doc(tmp_path: &Path, source: &Path, ids: impl Fn(usize, &search_manager::Docs) -> Vec<i64> + Send + Sync + 'static) -> BookManager {
+    use std::os::unix::fs::MetadataExt;
+    let es = FakeEsManager::new();
+    es.put_doc(fs::metadata(source).unwrap().ino() as i64, make_doc("A/f1.txt", ".txt"));
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    es.on_insert(move |docs| Ok(ids(calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst), docs)));
+    make_manager(tmp_path, &es)
+}
+
+#[test]
+fn test_move_classified_file_restores_the_old_document_when_the_new_one_is_indexed_under_another_id() {
+    let tmp = tmp_dir();
+    let source = make_source_file(tmp.path(), "A", "f1.txt");
+    // 새 문서는 엉뚱한 id로 들어가고, 기존 문서 복구는 제 id로 들어간다.
+    let manager = manager_with_existing_doc(tmp.path(), &source, |call, docs| if call == 0 { vec![123_456] } else { docs.keys().copied().collect() });
+
+    let (result, err) = split(block_on(manager.move_classified_file(&source, "B", "book", MoveOpts::default())));
+
+    assert!(result.is_none());
+    let err = err.expect("err");
+    assert!(err.contains("ES 적재 실패") && !err.contains("기존 ES 문서 복구 실패"), "{err}");
+}
+
+#[test]
+fn test_move_classified_file_reports_an_old_document_that_could_not_be_restored() {
+    let tmp = tmp_dir();
+    let source = make_source_file(tmp.path(), "A", "f1.txt");
+    let manager = manager_with_existing_doc(tmp.path(), &source, |_, _| vec![123_456]);
+
+    let (result, err) = split(block_on(manager.move_classified_file(&source, "B", "book", MoveOpts::default())));
+
+    assert!(result.is_none());
+    assert!(err.expect("err").contains("기존 ES 문서 복구 실패: None"));
+}
+
+#[test]
+fn test_next_numbered_path_picks_a_free_sibling_name() {
+    let tmp = tmp_dir();
+    let target = tmp.path().join("book.epub");
+    fs::write(&target, "x").unwrap();
+    let next = book_manager::category_proposer::next_numbered_path(&target).expect("빈 이름이 있다");
+    assert_ne!(next, target);
+    assert_eq!(next.parent(), target.parent());
+    assert!(!next.exists());
+}
+
+#[test]
+fn test_move_classified_file_moves_even_when_the_source_metadata_cannot_be_read() {
+    // 원본의 inode를 못 읽으면 기존 ES 문서를 모르는 채로 옮긴다.
+    let tmp = tmp_dir();
+    let source = make_source_file(tmp.path(), "A", "f1.txt");
+    let faulty = FaultyFs::new();
+    faulty.set_metadata(|p| p.ends_with("A/f1.txt").then(|| other_err("stat failed")));
+    let manager = BookManager::with_deps(deps(tmp.path(), &FakeEsManager::new()).with_fs(faulty));
+
+    let _ = block_on(manager.move_classified_file(&source, "B", "book", MoveOpts::default()));
+
+    assert!(tmp.path().join("B").join("f1.txt").is_file());
+    assert!(!source.exists());
+}

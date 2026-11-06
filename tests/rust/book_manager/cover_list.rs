@@ -580,6 +580,19 @@ mod cover_member_lookup {
         assert_eq!((thumb.width(), thumb.height()), (200, 300));
         assert!(thumb.pixels().any(|pixel| pixel[0] > 180 && pixel[1] < 100 && pixel[2] < 100), "첫 쪽 벡터 표지를 렌더링해야 한다");
     }
+
+    #[tokio::test]
+    async fn test_get_cover_books_paged_reports_a_malformed_group_representative() {
+        let tmp = TempDir::new().unwrap();
+        let (files, mut reps, stats) = cover_fixture();
+        reps.insert("A/나작품".to_string(), vec![json!({"file_path": "A/나작품/1.pdf"})]);
+        let (es, _calls) = fake_cover_es(&stats, &files, &reps);
+        let manager = make_manager(tmp.path(), es);
+
+        let (_, _, _, error) = unpage(manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await);
+
+        assert!(error.is_some(), "필수 필드가 없는 대표 문서는 오류다");
+    }
 }
 
 mod get_cover {
@@ -1102,4 +1115,91 @@ fn get_cover_reports_an_es_lookup_failure_as_a_500() {
     let response = block_on(manager.get_cover(1, None));
     assert_eq!(response.status_code, 500);
     assert!(String::from_utf8_lossy(&response.body).starts_with("Book lookup failed"), "{:?}", String::from_utf8_lossy(&response.body));
+}
+
+mod cover_failures {
+    use super::common;
+    use crate::common::dyn_es::make_manager as make_dyn_manager;
+    use crate::common::shared_fixtures::{block_on, deps, make_doc, thumbnailer, tmp_dir};
+    use book_manager::{BookManager, CoverPageOpts};
+    use common::es_fake::FakeEsManager;
+    use search_manager::{CoverFileHits, EsError, EsManagerApi};
+    use serde_json::Value;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    /// 커버 목록 집계는 성공하고 파일 조회나 대표 조회가 실패하는 ES 대역. 디렉터리 A 아래에 작품 디렉터리 하나가 있다.
+    struct FailingCoverEs {
+        fail_files: bool,
+    }
+
+    impl EsManagerApi for FailingCoverEs {
+        fn aggregate_cover_categories(&self) -> Result<HashMap<String, (usize, f64, f64)>, EsError> {
+            Ok(HashMap::from([("A".to_string(), (1, 1.0, 0.0)), ("A/작품".to_string(), (2, 2.0, 0.0))]))
+        }
+
+        fn search_cover_files_paged(&self, _: &[String], _: i64, _: Option<(i64, i64, String)>, _: &[String]) -> Result<CoverFileHits, EsError> {
+            if self.fail_files { Err(EsError::Other("files down".into())) } else { Ok(CoverFileHits { hits: Vec::new(), total: 0 }) }
+        }
+
+        fn search_group_representatives(&self, _: &[String], _: &[String]) -> Result<HashMap<String, Vec<(i64, Value)>>, EsError> {
+            Err(EsError::Other("reps down".into()))
+        }
+    }
+
+    fn page_a() -> CoverPageOpts {
+        CoverPageOpts { category: Some("A".to_string()), size: 10, cursor: None, exclude_categories: Vec::new() }
+    }
+
+    #[tokio::test]
+    async fn test_get_cover_books_paged_reports_a_file_search_failure() {
+        let tmp = tmp_dir();
+        let manager = make_dyn_manager(tmp.path(), Arc::new(FailingCoverEs { fail_files: true }));
+        let error = manager.get_cover_books_paged(page_a()).await.expect_err("파일 조회 실패는 오류다");
+        assert!(error.contains("files down"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn test_get_cover_books_paged_reports_a_representative_search_failure() {
+        let tmp = tmp_dir();
+        let manager = make_dyn_manager(tmp.path(), Arc::new(FailingCoverEs { fail_files: false }));
+        let error = manager.get_cover_books_paged(page_a()).await.expect_err("대표 조회 실패는 오류다");
+        assert!(error.contains("reps down"), "{error}");
+    }
+
+    fn epub_book(tmp_path: &std::path::Path, es: &Arc<FakeEsManager>) {
+        fs::create_dir_all(tmp_path.join("A")).unwrap();
+        fs::write(tmp_path.join("A").join("book.epub"), b"x").unwrap();
+        es.set_doc(Some(make_doc("A/book.epub", "epub")));
+    }
+
+    #[test]
+    fn test_get_cover_treats_a_crashed_extraction_as_no_cover() {
+        let tmp = tmp_dir();
+        let es = FakeEsManager::new();
+        epub_book(tmp.path(), &es);
+        let manager = BookManager::with_deps(deps(tmp.path(), &es).with_thumbnailer(thumbnailer(|_, _, _| panic!("decoder crashed"))));
+        let resp = block_on(manager.get_cover(1, None));
+        assert_eq!(resp.status_code, 404);
+    }
+
+    #[test]
+    fn test_get_cover_still_serves_the_thumbnail_when_the_cache_cannot_be_written() {
+        let tmp = tmp_dir();
+        let es = FakeEsManager::new();
+        epub_book(tmp.path(), &es);
+        let cache = tmp.path().join(".cover_cache");
+        fs::create_dir_all(cache.join(".generation_slots")).unwrap();
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o555)).unwrap();
+        let manager = BookManager::with_deps(deps(tmp.path(), &es).with_thumbnailer(thumbnailer(|_, _, _| Some(b"\xff\xd8\xff thumb".to_vec()))));
+
+        let resp = block_on(manager.get_cover(1, None));
+
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(resp.status_code, 200);
+        assert_eq!(resp.body, b"\xff\xd8\xff thumb");
+        assert!(!fs::read_dir(&cache).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with(".jpg")));
+    }
 }

@@ -193,3 +193,38 @@ async fn test_replaced_cover_stays_as_an_illustration_after_the_new_cover() {
     let mut archive = zip::ZipArchive::new(File::open(&env.path).unwrap()).unwrap();
     assert!(epub_cover::find_epub_cover_member(&mut archive).unwrap().contains("tm-cover-"));
 }
+
+// ---- 입력 변환과 저장 실패 ----
+
+#[tokio::test]
+async fn test_edit_epub_images_rejects_a_crop_with_a_non_numeric_edge() {
+    let env = env();
+    let (_, error) = split(env.manager.edit_epub_images(1, &[json!({"idref": "chapter", "x0": "left", "y0": 0, "x1": 1, "y1": 1})], &[], &[], &[]).await);
+    assert_eq!(error.as_deref(), Some("크롭 영역이 올바르지 않습니다"));
+}
+
+#[tokio::test]
+async fn test_edit_epub_images_treats_a_null_angle_as_no_rotation() {
+    // 각도가 null이면 0으로 본다. 변환을 통과한 뒤 EPUB이 아닌 책이라 거부된다.
+    let env = env();
+    *env.books.0.lock().unwrap() = (Some(book_manager::BookRef { book_id: 1, file_path: env.path.with_extension("txt"), file_type: "txt".into() }), None);
+    let crop = json!({"idref": "chapter", "x0": 0, "y0": 0, "x1": 1, "y1": 1, "angle": null});
+    let (_, error) = split(env.manager.edit_epub_images(1, &[crop], &[], &[], &[]).await);
+    assert_eq!(error.as_deref(), Some("EPUB 파일이 아닙니다"));
+}
+
+#[tokio::test]
+async fn test_a_cover_change_passes_custom_epub_hooks_and_thumbnailer_to_the_service() {
+    let env = env();
+    make_epub(&env.path, &EpubSpec::cover("3.0", true));
+    let manager = BookManager::with_deps(
+        BookManagerDeps::new(env.dir().to_path_buf(), env.es.clone())
+            .with_trash_dirname("0_trash")
+            .with_book_lookup(env.books.clone())
+            .with_epub_hooks(epub_cover::EpubCoverHooks::default())
+            .with_thumbnailer(thumbnailer(|_, _, _| None)),
+    );
+    let (saved, error) = split(manager.remove_epub_cover(1).await);
+    assert!(error.is_none() && saved.is_some(), "{error:?}");
+    assert!(!has_cover(&env.path));
+}

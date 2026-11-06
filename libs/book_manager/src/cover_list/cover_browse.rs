@@ -486,3 +486,16 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod file_rank_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn a_non_string_path_sort_value_is_compared_by_its_text() {
+        let rank = file_rank(&[json!(400.0), json!(0.0), json!(42)]);
+        assert_eq!(rank, latest_rank(Some(400.0), Some(0.0), "42"));
+    }
+}

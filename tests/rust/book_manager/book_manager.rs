@@ -50,3 +50,15 @@ mod category_cursor {
         assert_eq!(decode_category_cursor(&not_list), None);
     }
 }
+
+#[test]
+fn test_from_env_with_es_accepts_a_loader_program_override() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_string_lossy().into_owned();
+    let env = move |key: &str| match key {
+        "TM_BOOK_DIR" => Some(root.clone()),
+        "TM_LOADER_BIN" => Some("/opt/tm/loader".to_string()),
+        _ => None,
+    };
+    assert!(book_manager::BookManager::from_env_with_es(&env, common::es_fake::FakeEsManager::new(), |deps| deps).is_ok());
+}
