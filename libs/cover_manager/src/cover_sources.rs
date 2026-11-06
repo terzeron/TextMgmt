@@ -564,9 +564,15 @@ fn value_text(value: &Value) -> String {
     }
 }
 
-use crate::epub_cover::EpubInspection;
 use bookstore::BookInfo;
 use common::json_field_reader::has_content;
+
+/// 서점 표지 검색의 입력. 책 형식(EPUB·PDF)과 무관하게 제목과 ISBN만 쓴다.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CoverQuery {
+    pub title: String,
+    pub isbn: String,
+}
 
 /// 서점이 찾은 표지 후보 하나. `image_url`은 서버만 쓴다.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -793,11 +799,11 @@ impl Drop for ClientGuard {
     }
 }
 
-pub fn search_candidates(store: &str, metadata: &EpubInspection) -> Result<StoreSearch, SearchError> {
+pub fn search_candidates(store: &str, metadata: &CoverQuery) -> Result<StoreSearch, SearchError> {
     search_candidates_with(store, metadata, &SearchHooks::default())
 }
 
-pub fn search_candidates_with(store: &str, metadata: &EpubInspection, hooks: &SearchHooks) -> Result<StoreSearch, SearchError> {
+pub fn search_candidates_with(store: &str, metadata: &CoverQuery, hooks: &SearchHooks) -> Result<StoreSearch, SearchError> {
     let Some(client) = hooks.client(store) else {
         return Err(SearchError::Value("지원하지 않는 서점입니다".to_string()));
     };

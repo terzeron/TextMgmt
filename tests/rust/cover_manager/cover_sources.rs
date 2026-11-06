@@ -13,12 +13,12 @@ use common::{
     clock::FakeClock,
     faulty_fs::{FaultyFs, other_err},
 };
+use cover_manager::cover_sources::CoverQuery;
 use cover_manager::cover_sources::{
     GateError, SearchError, SearchHooks, StoreBlocked, StoreClient, StoreGate, StoreLockError, blocked_status, extract_html_candidates, fetch_bytes_with, parse_joara_candidates,
     parse_munpia_candidates, parse_naver_candidates, search_candidates_with, store_lock, store_lock_with, validate_url, validate_url_with,
 };
 use cover_manager::cover_sources::{SearchStatus, StoreCandidate};
-use cover_manager::epub_cover::EpubInspection;
 use serde_json::json;
 use sysdeps::{RealFs, SystemClock};
 
@@ -170,7 +170,7 @@ fn recording_fetch(body: &'static str) -> (SearchHooks, Arc<Mutex<Vec<String>>>)
 fn test_aladin_covers_use_clean_book_keyword_instead_of_all_products() {
     for (title, keyword) in [("불멸과 소멸 1 이상문", "불멸과 소멸 1 이상문"), ("우리말의 상상력 1 어휘의 기원", "우리말의 상상력 1 어휘의 기원")] {
         let (hooks, seen) = recording_fetch(r#"<div id="Search3_Result">검색 결과 없음</div>"#);
-        let result = search_candidates_with("aladin", &EpubInspection { title: title.into(), ..EpubInspection::default() }, &hooks).unwrap();
+        let result = search_candidates_with("aladin", &CoverQuery { title: title.into(), ..CoverQuery::default() }, &hooks).unwrap();
         let query = query_values(&seen.lock().unwrap()[0]);
         assert_eq!(query["SearchTarget"], ["Book"], "title={title}");
         assert_eq!(query["SearchWord"], [keyword], "title={title}");
@@ -181,7 +181,7 @@ fn test_aladin_covers_use_clean_book_keyword_instead_of_all_products() {
 #[test]
 fn test_aladin_cover_search_keeps_isbn() {
     let (hooks, seen) = recording_fetch("검색 결과 없음");
-    let _ = search_candidates_with("aladin", &EpubInspection { title: "제목 저자 1".into(), isbn: "9781234567890".into(), ..EpubInspection::default() }, &hooks);
+    let _ = search_candidates_with("aladin", &CoverQuery { title: "제목 저자 1".into(), isbn: "9781234567890".into() }, &hooks);
     assert_eq!(query_values(&seen.lock().unwrap()[0])["SearchWord"], ["9781234567890"]);
 }
 
@@ -190,7 +190,7 @@ fn test_isbn_capable_stores_preserve_priority_and_filename_title_fallback() {
     for store in ["yes24", "aladin", "kyobo"] {
         for isbn in ["9781234567890", ""] {
             let (hooks, seen) = recording_fetch("검색 결과 없음");
-            let result = search_candidates_with(store, &EpubInspection { title: "랜들 개릿 다아시 경의 모험 1".into(), isbn: isbn.into(), ..EpubInspection::default() }, &hooks).unwrap();
+            let result = search_candidates_with(store, &CoverQuery { title: "랜들 개릿 다아시 경의 모험 1".into(), isbn: isbn.into() }, &hooks).unwrap();
             let keyword = if isbn.is_empty() { "랜들 개릿 다아시 경의 모험 1" } else { isbn };
             let first = seen.lock().unwrap()[0].clone();
             assert!(query_values(&first).values().any(|v| v == &[keyword.to_string()]), "store={store}, isbn={isbn:?}");
@@ -442,7 +442,7 @@ fn test_all_store_search_flows_with_local_fixtures() {
                 }
             }))
             .with_validate(skip_validation);
-        let result = search_candidates_with(store, &EpubInspection { title: "검색 제목".into(), isbn: "1234567890".into(), ..EpubInspection::default() }, &hooks).unwrap();
+        let result = search_candidates_with(store, &CoverQuery { title: "검색 제목".into(), isbn: "1234567890".into() }, &hooks).unwrap();
         assert_eq!(result.status, SearchStatus::Success, "store={store}");
         assert_eq!(result.candidates[0].title, "책", "store={store}");
         assert!(client.closed.load(Ordering::SeqCst), "store={store}");
@@ -469,12 +469,12 @@ fn test_empty_and_blocked_search_closes_session() {
             .with_session_factory(session_factory(move |_store, _url| html.as_bytes().to_vec()))
             .with_validate(skip_validation);
         if status == "error" {
-            assert!(matches!(search_candidates_with("yes24", &EpubInspection { title: "책".into(), ..EpubInspection::default() }, &hooks), Err(SearchError::Value(_))), "html={html}");
+            assert!(matches!(search_candidates_with("yes24", &CoverQuery { title: "책".into(), ..CoverQuery::default() }, &hooks), Err(SearchError::Value(_))), "html={html}");
         } else {
-            assert_eq!(search_candidates_with("yes24", &EpubInspection { title: "책".into(), ..EpubInspection::default() }, &hooks).unwrap().status, SearchStatus::NotFound, "html={html}");
+            assert_eq!(search_candidates_with("yes24", &CoverQuery { title: "책".into(), ..CoverQuery::default() }, &hooks).unwrap().status, SearchStatus::NotFound, "html={html}");
         }
         assert!(client.closed.load(Ordering::SeqCst), "html={html}");
-        assert!(matches!(search_candidates_with("unknown", &EpubInspection { title: "책".into(), ..EpubInspection::default() }, &hooks), Err(SearchError::Value(_))), "html={html}");
+        assert!(matches!(search_candidates_with("unknown", &CoverQuery { title: "책".into(), ..CoverQuery::default() }, &hooks), Err(SearchError::Value(_))), "html={html}");
     }
 }
 

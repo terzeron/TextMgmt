@@ -67,7 +67,7 @@ impl CoverManagement {
     fn search(&self, store: &str, metadata: &EpubInspection) -> Result<StoreSearch, SearchError> {
         match &self.hooks.search {
             Some(f) => f(store, metadata),
-            None => search_candidates_with(store, metadata, &self.hooks.search_hooks),
+            None => search_candidates_with(store, &crate::cover_sources::CoverQuery { title: metadata.title.clone(), isbn: metadata.isbn.clone() }, &self.hooks.search_hooks),
         }
     }
 
