@@ -1,50 +1,35 @@
-//! PDF 페이지 조회와 admin 전용 PDF 편집(쪽 삭제·크롭 등). 책·만화 경로를 함께 등록한다.
+//! PDF 쪽 삭제·이미지 삽입 미리보기 라우트(`book_manager::pdf_edit`).
 
-use std::sync::Arc;
-
+use super::super::app_deps::AppDeps;
+use super::super::error_responses::ApiError;
+use super::super::error_responses::ApiResult;
+use super::super::error_responses::RequestValidationError;
+use super::super::request_extractors::ApiJson;
+use super::super::request_extractors::RequireAdmin;
+use super::super::route_registry::Routes;
+use super::BookResponse;
+use super::book_response;
+use super::checked_manager;
+use super::parse_book_id;
 use axum::Json;
-use axum::extract::{DefaultBodyLimit, Multipart, OriginalUri, Path, State};
+use axum::extract::DefaultBodyLimit;
+use axum::extract::Multipart;
+use axum::extract::OriginalUri;
+use axum::extract::Path;
+use axum::extract::State;
 use axum::handler::Handler;
 use axum::response::Response;
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-
-use super::BookResponse;
-use super::app_deps::AppDeps;
-use super::error_responses::{ApiError, ApiResult, RequestValidationError};
-use super::request_extractors::{ApiJson, ApiQuery, RequireAdmin, RequireAuth};
-use super::route_registry::Routes;
-use super::routes_books::{book_response, checked_manager, parse_book_id, run_blocking};
-use auth_manager::auth_service::Claims;
 use cover_manager::epub_cover::MAX_IMAGE_BYTES;
+use serde::Deserialize;
+use serde::Serialize;
+use serde_json::Value;
+use serde_json::json;
+use std::sync::Arc;
+
+#[allow(unused_imports)]
+use super::*;
 
 pub(super) fn routes() -> Routes {
-    Routes::new().get("/pdf-pages/{book_id}", &["require_auth"], book_pages).get("/comics/pdf-pages/{book_id}", &["require_auth"], comic_pages).merge(edit_routes())
-}
-
-#[derive(Deserialize)]
-struct PagesQuery {
-    start: Option<i64>,
-    end: Option<i64>,
-}
-
-async fn book_pages(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, Path(book_id): Path<String>, ApiQuery(query): ApiQuery<PagesQuery>) -> ApiResult<Response> {
-    pages(&deps, &payload, &book_id, query, false).await
-}
-
-async fn comic_pages(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, Path(book_id): Path<String>, ApiQuery(query): ApiQuery<PagesQuery>) -> ApiResult<Response> {
-    pages(&deps, &payload, &book_id, query, true).await
-}
-
-async fn pages(deps: &AppDeps, payload: &Claims, book_id: &str, query: PagesQuery, comics: bool) -> ApiResult<Response> {
-    let book_id = parse_book_id(book_id)?;
-    let manager = checked_manager(deps, payload, book_id, comics).await?;
-    let (start, end) = (query.start.unwrap_or(1), query.end.unwrap_or(1));
-    book_response(run_blocking(async move { manager.get_pdf_pages(book_id, start, end).await }).await?)
-}
-
-// ---- PDF 편집 요청 모델과 admin 전용 엔드포인트. ----
-fn edit_routes() -> Routes {
     let limit = || DefaultBodyLimit::max(MAX_IMAGE_BYTES.div_ceil(3) * 4 * 5 + 64 * 1024);
     Routes::new()
         .post("/pdf-pages/{book_id}/delete", &["require_admin"], delete_pages.layer(limit()))
@@ -64,18 +49,21 @@ struct Rect {
     #[serde(default)]
     angle: f64,
 }
+
 #[derive(Deserialize, Serialize)]
 struct Crop {
     page: i64,
     #[serde(flatten)]
     rect: Rect,
 }
+
 #[derive(Deserialize, Serialize)]
 struct Split {
     page: i64,
     first: Rect,
     second: Rect,
 }
+
 #[derive(Deserialize, Serialize)]
 #[serde(try_from = "RawInsert")]
 struct Insert {
@@ -83,12 +71,14 @@ struct Insert {
     url: Option<String>,
     image_data: Option<String>,
 }
+
 #[derive(Deserialize)]
 struct RawInsert {
     page: i64,
     url: Option<String>,
     image_data: Option<String>,
 }
+
 impl TryFrom<RawInsert> for Insert {
     type Error = String;
     fn try_from(raw: RawInsert) -> Result<Self, String> {
@@ -104,6 +94,7 @@ impl TryFrom<RawInsert> for Insert {
         Ok(Self { page: raw.page, url: raw.url, image_data: raw.image_data })
     }
 }
+
 #[derive(Deserialize)]
 struct EditBody {
     #[serde(default)]
@@ -123,10 +114,12 @@ struct EditBody {
 struct PreviewBody {
     url: String,
 }
+
 #[derive(Deserialize)]
 struct RawPreview {
     url: String,
 }
+
 impl TryFrom<RawPreview> for PreviewBody {
     type Error = String;
     fn try_from(raw: RawPreview) -> Result<Self, String> {

@@ -334,7 +334,7 @@ impl BookAccess for RuntimeBookAccess {
         if payload.is_viewer() {
             let categories = self.categories.get().map_err(|error| HttpStatusError::new(503, &error))?;
             let hidden = categories.get_hidden_categories(content_type).map_err(|error| HttpStatusError::new(500, &error.to_string()))?;
-            if super::routes_books::is_hidden(&book.category, &hidden) {
+            if super::book_routes::is_hidden(&book.category, &hidden) {
                 return Err(HttpStatusError::new(403, "접근 권한이 없는 카테고리입니다."));
             }
         }

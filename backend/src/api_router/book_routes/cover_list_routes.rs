@@ -1,23 +1,53 @@
-//! 도서·만화 표지 목록. 카테고리 정책을 확인한 뒤 일반 목록 또는 미표지 목록을 조회한다.
-use axum::{
-    Json,
-    extract::{OriginalUri, State},
-};
+//! 표지 썸네일과 표지 목록 라우트(`book_manager::cover_list`).
+
+use super::super::app_deps::AppDeps;
+use super::super::error_responses::ApiResult;
+use super::super::request_extractors::ApiQuery;
+use super::super::request_extractors::RequireAuth;
+use super::super::route_registry::Routes;
+use super::ensure_allowed;
+use super::hidden_categories;
+use super::kind;
+use super::manager_for;
+use crate::api_router::request_extractors::parse_py_bool;
+use axum::Json;
+use axum::extract::OriginalUri;
+use axum::extract::Path;
+use axum::extract::State;
+use axum::response::Response;
+use book_manager::CoverPage;
+use book_manager::MAX_CATEGORY_PAGE_SIZE;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
+use serde_json::json;
 use std::sync::Arc;
 
-use super::{ensure_allowed, hidden_categories, kind, manager_for};
-use crate::api_router::{
-    app_deps::AppDeps,
-    error_responses::ApiResult,
-    request_extractors::{ApiQuery, RequireAuth, parse_py_bool},
-    route_registry::Routes,
-};
-use book_manager::{CoverPage, MAX_CATEGORY_PAGE_SIZE};
+#[allow(unused_imports)]
+use super::*;
 
 pub(super) fn routes() -> Routes {
-    Routes::new().get("/browse", &["require_auth"], browse).get("/comics/browse", &["require_auth"], browse)
+    let mut routes = Routes::new().get("/browse", &["require_auth"], browse).get("/comics/browse", &["require_auth"], browse);
+    for prefix in ["", "/comics"] {
+        routes = routes.get(&format!("{prefix}/cover/{{book_id}}"), &["require_auth"], cover);
+    }
+    routes
+}
+
+#[derive(Deserialize)]
+struct CoverQuery {
+    w: Option<i64>,
+}
+
+async fn cover(
+    RequireAuth(payload): RequireAuth,
+    State(deps): State<Arc<AppDeps>>,
+    Path(raw_id): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    ApiQuery(query): ApiQuery<CoverQuery>,
+) -> ApiResult<Response> {
+    let book_id = parse_book_id(&raw_id)?;
+    let manager = checked_manager(&deps, &payload, book_id, uri.path().starts_with("/comics/")).await?;
+    book_response(manager.get_cover(book_id, query.w).await)
 }
 
 #[derive(Deserialize)]
@@ -28,6 +58,7 @@ struct Query {
     cursor: String,
     uncovered: bool,
 }
+
 #[derive(Deserialize)]
 struct RawQuery {
     category: Option<String>,
@@ -35,6 +66,7 @@ struct RawQuery {
     cursor: Option<String>,
     uncovered: Option<String>,
 }
+
 impl TryFrom<RawQuery> for Query {
     type Error = String;
     fn try_from(raw: RawQuery) -> Result<Self, String> {
@@ -68,7 +100,7 @@ async fn browse(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
         book: book_manager::book_metadata::BookView,
         display_title: String,
     }
-    let books: Vec<CoverBook> = items.into_iter().map(|(book, display_title)| CoverBook { book: super::catalog::book_view(&book, manager.as_ref()), display_title }).collect();
+    let books: Vec<CoverBook> = items.into_iter().map(|(book, display_title)| CoverBook { book: super::book_view(&book, manager.as_ref()), display_title }).collect();
     Ok(Json(json!({"status":"success","result":books,"total":total,"next_cursor":next})))
 }
 

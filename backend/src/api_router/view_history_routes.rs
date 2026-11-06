@@ -10,10 +10,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::app_deps::AppDeps;
+use super::book_routes::parse_book_id;
 use super::error_responses::{ApiError, ApiResult, RequestValidationError};
 use super::request_extractors::{ApiQuery, RequireAdmin, RequireAuth};
 use super::route_registry::Routes;
-use super::routes_books::parse_book_id;
 use auth_manager::auth_service::Claims;
 use db::view_history_store::MAX_RECENT_VIEWS;
 

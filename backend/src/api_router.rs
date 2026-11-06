@@ -7,10 +7,11 @@
 //! - `routes_*.rs`, `auth_routes.rs`, `log_routes.rs`: 자원별 라우트. `cors_layer.rs`, `auth_cookies.rs`, `google_oauth.rs`: 공용 도우미.
 //!
 //! # 라우트를 붙이는 방법
-//! 1. `src/api_router/routes_xxx.rs`를 만들고 `pub(super) fn routes() -> Routes`를 하나 둔다.
+//! 1. 라우트가 부르는 도메인 이름으로 `src/api_router/<도메인>_routes.rs`를 만들고 `pub(super) fn routes() -> Routes`를 하나 둔다.
+//!    책 도메인(`book_manager`) 라우트는 `book_routes/<모듈>_routes.rs`에 둔다.
 //!    핸들러는 `State<Arc<AppDeps>>`로 의존성을 받는다(`deps.book_manager()`, `deps.clock()` 등 접근자).
 //!    인증은 핸들러 첫 인자에 `RequireAuth`/`RequireAdmin`/`OptionalAuth` 추출기를 두고, 등록 때 같은 이름을 `&["require_admin"]`처럼 적는다.
-//! 2. 이 파일에 `mod routes_xxx;`를 더하고 `all_routes()`에 `.merge(routes_xxx::routes())` 한 줄을 더한다.
+//! 2. 이 파일에 `mod <도메인>_routes;`를 더하고 `all_routes()`에 `.merge(<도메인>_routes::routes())` 한 줄을 더한다.
 //! 3. 오류는 `Result<_, ApiError>`로 돌려준다(`ApiError::http(404, "..")`). 새 의존성이 필요하면 `AppDeps`에 필드, `with_xxx`, 접근자를 더한다.
 //!
 //! 앱 안의 로그는 스레드 로컬 수집(`LogCapture`)에 잡히도록 핸들러 안에서 `spawn`하지 않는다. 오래 걸리는 일은 `deps.task_runner()`로 넘긴다.
@@ -23,20 +24,18 @@ mod app_capabilities;
 mod app_deps;
 mod auth_cookies;
 mod auth_routes;
+mod book_routes;
+mod bookstore_routes;
+mod category_mapping_routes;
 mod cors_layer;
+mod cover_routes;
 mod error_responses;
 mod google_oauth;
 mod log_routes;
 mod request_extractors;
 mod route_registry;
-mod routes_books;
-mod routes_bookstore;
-mod routes_cover;
-mod routes_epub_cover;
-mod routes_health;
-mod routes_mapping;
-mod routes_pdf;
-mod routes_view_history;
+mod view_history_routes;
+mod wake_routes;
 
 pub use app_capabilities::{BookAccess, BookStub, CategoryMappingApi, GoogleVerifier, MappingError, UnavailableBookAccess, UnavailableGoogleVerifier, ViewHistoryApi};
 pub use app_deps::{AppDeps, AuthMode, AuthSlots, BookstoreFactory, RELOAD_PROGRESS_FLUSH_INTERVAL_SECONDS, Slot};
@@ -62,14 +61,12 @@ fn all_routes() -> Routes {
     Routes::new()
         .merge(auth_routes::routes())
         .merge(log_routes::routes())
-        .merge(routes_view_history::routes())
-        .merge(routes_epub_cover::routes())
-        .merge(routes_pdf::routes())
-        .merge(routes_books::routes())
-        .merge(routes_bookstore::routes())
-        .merge(routes_health::routes())
-        .merge(routes_mapping::routes())
-        .merge(routes_cover::routes())
+        .merge(view_history_routes::routes())
+        .merge(book_routes::routes())
+        .merge(bookstore_routes::routes())
+        .merge(wake_routes::routes())
+        .merge(category_mapping_routes::routes())
+        .merge(cover_routes::routes())
 }
 
 /// 환경 변수로 조립한 운영용 앱.

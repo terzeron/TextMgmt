@@ -10,11 +10,11 @@ use axum::handler::Handler;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::app_deps::AppDeps;
-use super::error_responses::{ApiError, ApiResult};
-use super::request_extractors::{ApiJson, RequireAdmin};
-use super::route_registry::Routes;
-use super::routes_books::parse_book_id;
+use super::super::app_deps::AppDeps;
+use super::super::error_responses::{ApiError, ApiResult};
+use super::super::request_extractors::{ApiJson, RequireAdmin};
+use super::super::route_registry::Routes;
+use super::parse_book_id;
 use book_manager::BookManagerApi;
 use cover_manager::epub_cover::MAX_IMAGE_BYTES;
 

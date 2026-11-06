@@ -1,6 +1,33 @@
 //! 자동 분류 제안 작업의 시작·조회·적용·삭제 라우트.
 
+#[allow(unused_imports)]
 use super::*;
+use crate::api_router::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, ApplyCategoryChanges, BookManagerApi, CategoryMappingApi, MappingError, ProposeCategoryChanges, RequireAdmin, Routes};
+use axum::{
+    Json,
+    extract::{OriginalUri, State},
+};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::{
+    collections::HashSet,
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::{Arc, Mutex},
+};
+
+pub(super) fn routes() -> Routes {
+    let mut routes = Routes::new();
+    for prefix in ["", "/comics"] {
+        routes = routes
+            .delete(&format!("{prefix}/categories/classify-proposal"), &["require_admin"], delete_classify_proposal)
+            .get(&format!("{prefix}/categories/classify-proposal"), &["require_admin"], get_classify_proposal)
+            .post(&format!("{prefix}/categories/classify-proposal"), &["require_admin"], start_classify_proposal)
+            .post(&format!("{prefix}/categories/classify-proposal/apply"), &["require_admin"], apply_classify_proposal)
+            .delete(&format!("{prefix}/categories/classify-proposal/item"), &["require_admin"], delete_classify_proposal_item)
+            .delete(&format!("{prefix}/categories/classify-proposal/applied"), &["require_admin"], delete_applied_classify_proposal_items);
+    }
+    routes
+}
 
 #[derive(Deserialize)]
 pub(super) struct ClassifyProposalBody {
@@ -33,7 +60,7 @@ fn default_delay() -> f64 {
     1.2
 }
 
-pub(super) async fn start_classify_proposal(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<ClassifyProposalBody>) -> ApiResult<Json<Value>> {
+async fn start_classify_proposal(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<ClassifyProposalBody>) -> ApiResult<Json<Value>> {
     let content_type = kind(&uri).to_string();
     let manager = manager(&deps, &uri)?;
     let mapping = deps.category_mapping().map_err(|_| ApiError::unavailable())?;
@@ -77,7 +104,7 @@ pub(super) async fn start_classify_proposal(_: RequireAdmin, State(deps): State<
     ))
 }
 
-pub(super) async fn apply_classify_proposal(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<ClassifyApplyBody>) -> ApiResult<Json<Value>> {
+async fn apply_classify_proposal(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<ClassifyApplyBody>) -> ApiResult<Json<Value>> {
     let content_type = kind(&uri).to_string();
     let manager = manager(&deps, &uri)?;
     let mapping = deps.category_mapping().map_err(|_| ApiError::unavailable())?;
@@ -375,7 +402,7 @@ async fn run_classify_apply_job(
     }
 }
 
-pub(super) async fn get_classify_proposal(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri) -> ApiResult<Json<Value>> {
+async fn get_classify_proposal(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri) -> ApiResult<Json<Value>> {
     let content_type = kind(&uri).to_string();
     let mapping = deps.category_mapping().map_err(|_| ApiError::unavailable())?;
     let status = tokio::task::spawn_blocking({
@@ -411,16 +438,11 @@ pub(super) struct ProposalItemQuery {
     file_path: String,
 }
 
-pub(super) async fn delete_classify_proposal_item(
-    _: RequireAdmin,
-    State(deps): State<Arc<AppDeps>>,
-    OriginalUri(uri): OriginalUri,
-    ApiQuery(query): ApiQuery<ProposalItemQuery>,
-) -> ApiResult<Json<Value>> {
+async fn delete_classify_proposal_item(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiQuery(query): ApiQuery<ProposalItemQuery>) -> ApiResult<Json<Value>> {
     delete_proposal_items_when_idle(&deps, &uri, move |mapping, content_type| mapping.delete_classify_proposal_item(&query.file_path, content_type)).await
 }
 
-pub(super) async fn delete_applied_classify_proposal_items(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri) -> ApiResult<Json<Value>> {
+async fn delete_applied_classify_proposal_items(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri) -> ApiResult<Json<Value>> {
     delete_proposal_items_when_idle(&deps, &uri, |mapping, content_type| mapping.delete_applied_classify_proposal_items(content_type)).await
 }
 
@@ -447,7 +469,7 @@ async fn delete_proposal_items_when_idle(
     Ok(Json(json!({"status":"success","result":{"deleted_count":deleted}})))
 }
 
-pub(super) async fn delete_classify_proposal(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri) -> ApiResult<Json<Value>> {
+async fn delete_classify_proposal(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri) -> ApiResult<Json<Value>> {
     let content_type = kind(&uri);
     let mapping = deps.category_mapping().map_err(|e| {
         log::warn!("분류 제안 상태 저장소를 쓸 수 없다: {e}");

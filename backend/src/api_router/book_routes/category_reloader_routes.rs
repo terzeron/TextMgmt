@@ -1,73 +1,41 @@
-//! 카테고리 불일치 화면의 파일·Elasticsearch 문서 작업.
+//! 카테고리 재적재 라우트(`book_manager::category_reloader`). 진행 상태는 카테고리 매핑 저장소에 둔다.
 
-use std::sync::{Arc, Mutex};
-
-use axum::{
-    Json,
-    extract::{OriginalUri, Path, State},
-};
-use serde::Deserialize;
-use serde_json::{Value, json};
-
-use super::super::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, BookManagerApi, CategoryMappingApi, ReloadProgress, RequestValidationError, RequireAdmin, Routes};
+use super::super::ApiError;
+use super::super::ApiJson;
+use super::super::ApiQuery;
+use super::super::ApiResult;
+use super::super::AppDeps;
+use super::super::BookManagerApi;
+use super::super::CategoryMappingApi;
+use super::super::ReloadProgress;
+use super::super::RequestValidationError;
+use super::super::RequireAdmin;
+use super::super::Routes;
 use super::manager;
-use book_manager::{MismatchReload, ReloadCounts};
+use axum::Json;
+use axum::extract::OriginalUri;
+use axum::extract::State;
+use book_manager::MismatchReload;
+use book_manager::ReloadCounts;
+use serde::Deserialize;
+use serde_json::Value;
+use serde_json::json;
+use std::sync::Arc;
+use std::sync::Mutex;
+
+#[allow(unused_imports)]
+use super::*;
 
 pub(super) fn routes() -> Routes {
     let mut routes = Routes::new();
     for prefix in ["", "/comics"] {
         routes = routes
-            .get(&format!("{prefix}/category-mismatches"), &["require_admin"], get_mismatches)
-            .post(&format!("{prefix}/category-mismatches/index-file"), &["require_admin"], index_file)
-            .post(&format!("{prefix}/category-mismatches/delete-file"), &["require_admin"], delete_file)
-            .delete(&format!("{prefix}/category-mismatches/es-doc/{{book_id}}"), &["require_admin"], delete_es_doc)
             .post(&format!("{prefix}/category-mismatches/reload"), &["require_admin"], reload_category)
             .post(&format!("{prefix}/category-mismatches/reload-mismatches"), &["require_admin"], reload_mismatches)
             .post(&format!("{prefix}/category-mismatches/reload-all"), &["require_admin"], reload_all_mismatches)
-            .get(&format!("{prefix}/category-mismatches/reload-status"), &["require_admin"], reload_status)
-            .get(&format!("{prefix}/category-mismatches/{{*category}}"), &["require_admin"], mismatch_details);
+            .get(&format!("{prefix}/category-mismatches/reload-status"), &["require_admin"], reload_status);
     }
     routes
-}
-
-async fn get_mismatches(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri) -> Json<Value> {
-    let response = match manager(&deps, &uri).and_then(|bm| bm.get_category_mismatches(false).map_err(|_| ApiError::unavailable())) {
-        Ok(result) => json!({"status":"success","result":result}),
-        Err(_) => json!({"status":"failure","error":"카테고리 불일치 조회 중 오류가 발생했습니다"}),
-    };
-    Json(response)
-}
-
-#[derive(Deserialize)]
-struct FilePath {
-    #[serde(default)]
-    file_path: String,
-}
-
-async fn index_file(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<FilePath>) -> ApiResult<Json<Value>> {
-    if body.file_path.is_empty() {
-        return Err(ApiError::http(400, "file_path is required"));
-    }
-    Ok(Json(match manager(&deps, &uri)?.index_single_file(&body.file_path).await {
-        Ok(book_id) => json!({"status":"success","result":{"book_id":book_id}}),
-        Err(error) => json!({"status":"failure","error":error}),
-    }))
-}
-
-async fn delete_file(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiJson(body): ApiJson<FilePath>) -> ApiResult<Json<Value>> {
-    if body.file_path.is_empty() {
-        return Err(ApiError::http(400, "file_path is required"));
-    }
-    Ok(Json(match manager(&deps, &uri)?.delete_file(&body.file_path).await {
-        Ok(()) => json!({"status":"success","result":"Ok"}),
-        Err(error) => json!({"status":"failure","error":error}),
-    }))
-}
-
-async fn delete_es_doc(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, Path(raw_id): Path<String>) -> ApiResult<Json<Value>> {
-    let id = super::parse_book_id(&raw_id)?;
-    let success = manager(&deps, &uri)?.es_manager().delete(id).unwrap_or(false);
-    Ok(Json(if success { json!({"status":"success"}) } else { json!({"status":"failure","error":format!("ES 문서 삭제 실패: {id}")}) }))
 }
 
 #[derive(Deserialize)]
@@ -81,14 +49,6 @@ async fn reload_category(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Orig
         Ok(result) => json!({"status":"success","result":result}),
         Err(error) => json!({"status":"failure","error":error}),
     }))
-}
-
-async fn mismatch_details(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, Path(category): Path<String>) -> Json<Value> {
-    let response = match manager(&deps, &uri).and_then(|bm| bm.get_category_mismatch_details(&category).map_err(|_| ApiError::unavailable())) {
-        Ok(result) => json!({"status":"success","result":result}),
-        Err(_) => json!({"status":"failure","error":"카테고리 불일치 조회 중 오류가 발생했습니다"}),
-    };
-    Json(response)
 }
 
 #[derive(Deserialize)]
