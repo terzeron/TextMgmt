@@ -35,7 +35,7 @@ docs/       문서
 | `parse_stat_counter` | 색인·파싱 통계 카운터 |
 | `db` | MySQL 접근 추상화와 저장소: 카테고리 매핑(`category_mapping`), 사용자별 최근 조회 이력(`view_history_store`). 각 저장소는 라우트가 쓰는 JSON 기반 facade(`CategoryMappingApi`, `ViewHistoryApi`)도 함께 구현한다 |
 | `classifier` | 도서 분류기 껍데기: backend 분류 제안이 쓰는 `Classify`·`BookClassifierApi` trait와 모델 단독 어댑터. 구현은 없어서 backend는 카테고리 매핑 키워드만으로 제안한다 |
-| `file_indexer` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리. 파일을 고쳐 쓰지 않는다(TXT 본문을 읽기 직전의 준비 단계는 호출자가 `ReadHooks::prepare_text`로 꽂는다). 색인 제외 디렉터리 규칙은 `book_model::ignore_rules`를 쓴다. loader와 book_manager가 함께 쓴다 |
+| `file_indexer` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리(워커 바이너리 `tm-index-worker`). 파일을 고쳐 쓰지 않는다(TXT 본문을 읽기 직전의 준비 단계는 호출자가 `ReadHooks::prepare_text`로 꽂는다). 색인 제외 디렉터리 규칙은 `book_model::ignore_rules`를 쓴다. loader와 book_manager가 함께 쓴다 |
 | `pdf_engine` | PDF 처리 능력: lopdf로 열기·쪽 추출(`pdf_page_reader`), MuPDF를 별도 프로세스에서 30초·512MiB 상한으로 돌리는 worker(`tm-pdf-worker`, 본체 `native_pdf`)와 호출 adapter(`pdf_worker_client`). 표지 이미지 처리는 `cover_manager::pdf_cover`가 맡는다. `doc_reader`·`doc_checker`·`cover_manager`·`book_manager`의 아래 계층이다 |
 | `sysdeps` | 시계, 파일시스템, 외부 명령 같은 시스템 능력의 trait와 실제 구현. 백그라운드 작업 실행기(`task_runner`)와 겹치지 않는 임시 파일 이름(`temp_file_maker`)도 여기 있다. 파서 시간 상한(`timeout_runner`)을 포함한다 |
 | `isbn_extractor` | 파일에서 ISBN 추출(TXT·EPUB·PDF·DJVU·HWP) |
@@ -64,6 +64,12 @@ docs/       문서
 - **커버리지는 100%에 가깝게 유지한다.** `cargo llvm-cov --workspace --summary-only`.
 - **라이브러리와 backend는 도구에 의존하지 않는다.** 공유할 코드는 `libs/`로 올린다.
 - **한 crate만 쓰는 코드는 그 crate 안에 둔다.** 사용자가 둘 이상이 될 때 `libs/`로 올린다.
+- **MySQL 저장소(테이블을 만드는 코드)의 위치.** 한 도메인 crate만 쓰는 저장소는 그 도메인 안에 둔다(`refresh_tokens`는 `auth_manager`, `cover_status`는 `cover_manager`).
+  둘 이상의 crate가 함께 쓰거나 소유할 도메인 crate가 없는 저장소는 `db`에 둔다(`category_mapping`은 backend와 `auth_manager`가 함께 쓰고, `view_history`는 소유 도메인이 없다).
+  연결·트랜잭션 같은 접근 추상화(`DbConnection`, `ConnectionProvider`)는 늘 `db`에 있다.
+- **격리 실행 워커는 그 능력을 가진 crate의 바이너리로 둔다.** `tm-pdf-worker`는 `pdf_engine`, `tm-index-worker`는 `file_indexer`, `epubveri`는 `doc_checker`에 있다.
+  호출하는 쪽은 `sysdeps::locate_executable`로 찾는다(`PATH`, 실행 파일 디렉터리, 그 상위 순서). 다른 crate의 테스트가 워커를 쓰려면 워크스페이스 빌드나 `cargo build -p <crate> --bin <워커>`로 먼저 만들어 둔다.
+- **테스트 fixture를 만드는 데만 쓰는 crate는 dev 의존으로 둔다.** 테스트 본문에서 직접 부르지 않고 `tests/rust/shared/`의 helper(`auth_fixtures`, `zipx`, `pdf_bytes` 등)를 거친다.
 - `bookstore`는 공개 서점 HTTPS를 사용한다. ES client도 HTTP와 인증서 검증 HTTPS를 지원하며, 사설 CA는 `TM_ES_CA_CERT` PEM 경로로 지정한다. 인증서 검증을 끄는 우회로는 두지 않는다.
 - ZIP 안 경로는 zip crate 규칙을 따른다. `std::path::Path`로 잇고 `common::zip_reader::zip_entry_name`으로 항목 이름을 만든다(`.` 무시, `..`은 앞 조각 제거, 루트 밖이면 `None`). 별도 경로 모듈은 두지 않는다.
 - ZIP은 `common::zip_reader::open_zip`으로 연다. 멤버는 `read_member`(상한을 넘으면 거절)나 `read_member_prefix`(상한에서 자름)로 읽는다. `zip` 크레이트 기본 설정(`Detect`)은 파일 전체를 훑어 느리다
@@ -110,4 +116,4 @@ cargo llvm-cov --workspace --summary-only   # 커버리지
 ```
 
 PDF 쪽수·텍스트·cover 렌더링은 MuPDF Rust library를 사용한다. 원본 객체를 보존하는 미리보기와 편집은 lopdf를 사용한다.
-자체 `tm-pdf-worker`에서 네이티브 파서를 실행해 30초·512MiB 제한을 유지한다. 빌드·배포 패키지와 큰 PDF 처리 기준은 [PDF engine](pdf-engine.md)을 본다.
+자체 `tm-pdf-worker`에서 네이티브 파서를 실행해 30초·512MiB 제한을 유지한다. 색인용 파일 읽기는 `tm-index-worker`가 자식 프로세스로 맡는다. 빌드·배포 패키지와 큰 PDF 처리 기준은 [PDF engine](pdf-engine.md)을 본다.

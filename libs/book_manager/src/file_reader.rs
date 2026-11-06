@@ -39,7 +39,7 @@ pub struct LoaderFileReader {
 
 impl LoaderFileReader {
     pub fn new(book_prefix: PathBuf, comics_prefix: PathBuf) -> Self {
-        Self { config: Config::new(book_prefix, comics_prefix), worker_executable: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("backend")) }
+        Self { config: Config::new(book_prefix, comics_prefix), worker_executable: file_indexer::child_process_runner::index_worker_path() }
     }
 
     pub fn with_worker_executable(mut self, executable: PathBuf) -> Self {

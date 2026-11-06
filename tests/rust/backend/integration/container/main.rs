@@ -53,7 +53,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -76,19 +75,6 @@ use search_manager::{ESManager, EsManagerApi, RealEsConnector};
 use serde_json::{Value, json};
 use sysdeps::{FsOps, SystemClock};
 use tempfile::TempDir;
-
-#[test]
-fn backend_binary_runs_the_isbn_stream_scan_stage() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("not-a-pdf.pdf");
-    fs::write(&path, b"not a PDF").unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_backend")).args(["__pdf-stage", "isbn-stream-scan"]).arg(path).output().unwrap();
-
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!((result["text"].as_str(), result["pages"].as_u64()), (Some(""), Some(0)));
-}
 
 /// 경로 조각을 인코딩한다. `/`는 그대로 둔다.
 fn enc_path(s: &str) -> String {

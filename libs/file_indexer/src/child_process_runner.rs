@@ -20,6 +20,13 @@ use crate::record_builder::ReadOutcome;
 pub const PDF_STAGE_COMMAND: &str = "__pdf-stage";
 /// Backend의 격리된 파일 파서 부명령.
 pub const READ_FILE_COMMAND: &str = "__read-file";
+/// 위 두 부명령을 처리하는 전용 워커 실행 파일. 파서가 죽거나 멈춰도 부모(backend·loader)는 살아남는다.
+pub const INDEX_WORKER_NAME: &str = "tm-index-worker";
+
+/// 함께 배포한 `tm-index-worker`의 경로.
+pub fn index_worker_path() -> PathBuf {
+    sysdeps::locate_executable(INDEX_WORKER_NAME)
+}
 
 const STAGES: [Stage; 5] = [Stage::Poppler, Stage::Lopdf, Stage::Repair, Stage::HeadTail, Stage::HeadTailScan];
 
@@ -126,7 +133,7 @@ pub fn run_read_file_command(args: &[String], out: &mut dyn Write) -> i32 {
     let cfg = Config::new(&args[0], &args[1]);
     let path = Path::new(&args[2]);
     let prefix = (args[3] == "1").then(|| Path::new(&args[4]));
-    let executable = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("backend"));
+    let executable = std::env::current_exe().unwrap_or_else(|_| index_worker_path());
     let result = read_file_with_child_stages(&executable, &cfg, path, prefix, args[5] == "1");
     let _ = writeln!(out, "{}", serde_json::json!({"item": result.item, "messages": result.messages}));
     0

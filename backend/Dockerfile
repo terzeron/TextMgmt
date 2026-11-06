@@ -17,9 +17,9 @@ COPY utils /app/utils
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    cargo build --locked --profile image -p backend -p loader -p pdf_engine -p doc_checker && \
+    cargo build --locked --profile image -p backend -p loader -p pdf_engine -p doc_checker -p file_indexer && \
     mkdir -p /out && \
-    cp target/image/backend target/image/loader target/image/epubveri target/image/tm-pdf-worker /out/
+    cp target/image/backend target/image/loader target/image/epubveri target/image/tm-pdf-worker target/image/tm-index-worker /out/
 
 # Runtime includes only the Rust server, its loader/PDF worker subprocesses and the
 # external tools still required for office conversion.
@@ -45,6 +45,7 @@ RUN useradd --uid "$USER_ID" --create-home "$USER_NAME" && \
 COPY --from=builder /out/backend /usr/local/bin/backend
 COPY --from=builder /out/loader /usr/local/bin/loader
 COPY --from=builder /out/tm-pdf-worker /usr/local/bin/tm-pdf-worker
+COPY --from=builder /out/tm-index-worker /usr/local/bin/tm-index-worker
 COPY --from=builder /out/epubveri /usr/local/bin/epubveri
 COPY backend/fontconfig/99-textmgmt-cjk.conf /etc/fonts/conf.d/99-textmgmt-cjk.conf
 

@@ -15,6 +15,27 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub mod task_runner;
+
+/// 함께 배포 실행 파일(워커)의 경로. `PATH`, 이 실행 파일의 디렉터리, 그 상위 디렉터리 순서로 찾는다.
+/// 상위 디렉터리까지 보는 것은 테스트 실행 파일(`target/debug/deps/…`)이 `target/debug`의 워커를 찾게 하려는 것이다.
+/// 찾지 못하면 이름만 돌려주어 실행할 때 `PATH`에 맡긴다.
+pub fn locate_executable(name: &str) -> PathBuf {
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        let p = dir.join(name);
+        if p.is_file() {
+            return p;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        for dir in exe.parent().into_iter().chain(exe.parent().and_then(Path::parent)) {
+            let p = dir.join(name);
+            if p.is_file() {
+                return p;
+            }
+        }
+    }
+    PathBuf::from(name)
+}
 pub mod temp_file_maker;
 pub mod timeout_runner;
 

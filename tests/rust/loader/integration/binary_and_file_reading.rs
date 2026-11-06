@@ -24,6 +24,9 @@
 #![allow(clippy::type_complexity)]
 #[path = "../common/mod.rs"]
 mod common;
+#[path = "../../shared/pdf_bytes.rs"]
+mod pdf_bytes;
+use pdf_bytes::minimal_pdf;
 
 use std::fs;
 use std::io::{self, Write as _};
@@ -54,40 +57,6 @@ use serde_json::Value;
 use text_decoder::encoding_guesser::HIGH_BYTE_PAIRED_MIN;
 use text_decoder::mojibake_counter::{PDF_MOJIBAKE_RUN_LIMIT, count_mojibake_runs, is_usable_text};
 use text_decoder::text_transcoder::Enc;
-
-#[test]
-fn loader_binary_runs_the_isbn_stream_scan_stage() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("not-a-pdf.pdf");
-    fs::write(&path, b"not a PDF").unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_loader")).args(["__pdf-stage", "isbn-stream-scan"]).arg(path).output().unwrap();
-
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!((result["text"].as_str(), result["pages"].as_u64()), (Some(""), Some(0)));
-}
-
-#[test]
-fn loader_binary_dispatches_the_pdf_worker_command() {
-    let output = Command::new(env!("CARGO_BIN_EXE_loader")).arg("__pdf-stage").output().unwrap();
-
-    assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("usage: __pdf-stage"));
-}
-
-#[test]
-fn loader_binary_runs_poppler_pdf_stage() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("two-pages.pdf");
-    fs::write(&path, minimal_pdf(2)).unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_loader")).args(["__pdf-stage", "text-poppler"]).arg(&path).output().unwrap();
-
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(result["pages"], 2);
-}
 
 #[test]
 fn loader_binary_prints_usage_for_help_without_connecting() {
@@ -239,7 +208,7 @@ fn loader_isbn_pdf_worker_extracts_text_through_the_binary() {
     let path = dir.path().join("book.pdf");
     fs::write(&path, pdf_with_text("ISBN 9788994492032")).unwrap();
 
-    let runner = file_indexer::child_process_runner::ChildRunner::new(PathBuf::from(env!("CARGO_BIN_EXE_loader")));
+    let runner = file_indexer::child_process_runner::ChildRunner::new(file_indexer::child_process_runner::index_worker_path());
     let isbns = isbn_extractor::extract(&path, None, &isbn_extractor::Backends::real(&runner, &Stat::new()));
 
     assert_eq!(isbns, ["9788994492032"]);
@@ -346,30 +315,6 @@ fn write_docx(path: &Path, paragraphs: &[&str]) {
     let document = format!(r#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>"#);
     let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     write_zip(path, &[("_rels/.rels", rels.as_bytes()), ("word/document.xml", document.as_bytes())]);
-}
-
-/// 빈 쪽 `pages`개짜리 최소 PDF.
-fn minimal_pdf(pages: usize) -> Vec<u8> {
-    let mut objs: Vec<String> = Vec::new();
-    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 3 + i)).collect();
-    objs.push("<< /Type /Catalog /Pages 2 0 R >>".into());
-    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {pages} >>", kids.join(" ")));
-    for _ in 0..pages {
-        objs.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] >>".into());
-    }
-    let mut out = b"%PDF-1.4\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, body) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend(format!("{} 0 obj\n{body}\nendobj\n", i + 1).bytes());
-    }
-    let xref_at = out.len();
-    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).bytes());
-    for o in &offsets {
-        out.extend(format!("{o:010} 00000 n \n").bytes());
-    }
-    out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF\n", objs.len() + 1).bytes());
-    out
 }
 
 /// 단계별로 준비한 답을 돌려주고 부른 순서를 기록하는 PDF 단계 실행기.

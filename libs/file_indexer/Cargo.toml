@@ -6,6 +6,10 @@ edition.workspace = true
 publish.workspace = true
 autotests = false
 
+[[bin]]
+name = "tm-index-worker"
+path = "src/bin/index_worker.rs"
+
 [dependencies]
 common = { path = "../common", default-features = false, features = ["zip_reader"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
@@ -17,6 +21,7 @@ parse_stat_counter = { path = "../parse_stat_counter" }
 sysdeps = { path = "../sysdeps" }
 
 [dev-dependencies]
+serde_json = { workspace = true, features = ["preserve_order"] }
 tempfile = "3.27.0"
 
 [[test]]
@@ -30,3 +35,7 @@ path = "../../tests/rust/file_indexer/record_builder.rs"
 [[test]]
 name = "env_config"
 path = "../../tests/rust/file_indexer/env_config.rs"
+
+[[test]]
+name = "integration_index_worker"
+path = "../../tests/rust/file_indexer/integration/index_worker.rs"

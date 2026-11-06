@@ -5,21 +5,7 @@ use sysdeps::{CommandError, CommandRunner};
 const TIMEOUT: Duration = Duration::from_secs(30);
 pub const WORKER_NAME: &str = "tm-pdf-worker";
 fn worker_path() -> PathBuf {
-    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
-        let p = dir.join(WORKER_NAME);
-        if p.is_file() {
-            return p;
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        for dir in exe.parent().into_iter().chain(exe.parent().and_then(Path::parent)) {
-            let p = dir.join(WORKER_NAME);
-            if p.is_file() {
-                return p;
-            }
-        }
-    }
-    PathBuf::from(WORKER_NAME)
+    sysdeps::locate_executable(WORKER_NAME)
 }
 fn run(runner: &dyn CommandRunner, operation: &str, path: &Path, args: &[String]) -> Result<Vec<u8>, String> {
     let mut command =
