@@ -43,11 +43,10 @@
   로컬 빌드로는 확인했지만 클러스터 기동(환경 변수, ES·MySQL 연결)은 배포해야 확인된다.
 - 검증용 이미지 `terzeron/tm_backend:verify-05d1c8c6`이 남아 있다. 디스크 사용률이 98%였으니 필요 없으면 `docker rmi`로 지운다.
 
-### 3. 머지된 로컬 브랜치 정리 (완료, 1건 남음)
+### 3. 머지된 로컬 브랜치·worktree 정리 (완료)
 
-develop에 머지된 로컬 브랜치 10개를 `git branch -d`로 지웠다(2026-11-06).
-`refactor/parser-timeout`만 남았다. 이번 머지로 develop에 모두 들어갔지만 worktree `tm_dev-cohesion`에서 체크아웃 중이라 지우지 않았다.
-지우려면 그 worktree부터 지운다(`git worktree remove`, 커밋하지 않은 변경이 없는지 먼저 확인).
+develop에 머지된 로컬 브랜치 11개와 worktree `tm_dev-bookdoctor`·`tm_dev-corpus`·`tm_dev-cohesion`을 지웠다(2026-11-06).
+남은 로컬 브랜치는 `develop`과 `main`뿐이고, worktree는 `tm_dev` 하나다.
 
 ### 4. 분류 시스템 (다음 큰 작업)
 
@@ -58,7 +57,6 @@ develop에 머지된 로컬 브랜치 10개를 `git branch -d`로 지웠다(2026
 
 ## 그 밖에 알아 둘 것
 
-- worktree `tm_dev-cohesion`(`refactor/parser-timeout`)은 건드리지 않았다. 그 브랜치의 커밋은 이번 머지로 develop에 들어왔다.
 - develop worktree(`tm_dev`)의 추적하지 않는 파일(`0.txt`~`9.txt`, `22222.txt`, `graph-output/`)은 건드리지 않았다.
 - crate 하나만 따로 테스트할 때는 워커를 먼저 빌드한다:
   `cargo build -p pdf_engine --bin tm-pdf-worker`, `cargo build -p file_indexer --bin tm-index-worker`.
