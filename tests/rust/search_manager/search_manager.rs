@@ -1688,3 +1688,83 @@ fn manager_errors_render_and_from_env_requires_the_es_settings() {
     env.remove("TM_ES_URL");
     assert!(matches!(ESManager::from_env(), Err(ESManagerError::FatalConfigError(-1))));
 }
+
+// ---- 분류기용 열거·일괄 조회·ISBN 조회 ----
+
+#[test]
+fn list_ids_and_paths_pages_through_scroll_and_clears_it() {
+    let es = new_es();
+    es.on("search", |_| Ok(json!({"_scroll_id": "s1", "hits": {"hits": [{"_id": "1", "_source": {"file_path": "A/a.epub"}}, {"_id": "x", "_source": {"file_path": "A/b.epub"}}, {"_id": "3", "_source": {}}]}})));
+    let pages = Arc::new(AtomicUsize::new(0));
+    let counter = pages.clone();
+    es.on("scroll", move |_| {
+        if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(json!({"_scroll_id": "s2", "hits": {"hits": [{"_id": "4", "_source": {"file_path": "B/c.epub"}}]}}))
+        } else {
+            Ok(json!({"_scroll_id": "s2", "hits": {"hits": []}}))
+        }
+    });
+
+    let rows = make_manager(&es).list_ids_and_paths().unwrap();
+
+    assert_eq!(rows, vec![(1, "A/a.epub".to_string()), (4, "B/c.epub".to_string())]);
+    let search = &es.calls_of("search")[0];
+    assert_eq!(search["_source"], json!(["file_path"]));
+    assert_eq!(search["sort"], json!(["_doc"]));
+    assert_eq!(search["size"], json!(5000));
+    assert_eq!(es.calls_of("clear_scroll"), vec![json!({"scroll_id": "s2"})]);
+}
+
+#[test]
+fn list_ids_and_paths_clears_scroll_on_error() {
+    let es = new_es();
+    es.on("search", |_| Ok(json!({"_scroll_id": "s1", "hits": {"hits": [{"_id": "1", "_source": {"file_path": "A/a.epub"}}]}})));
+    es.on("scroll", |_| Err(runtime_error("scroll failed")));
+
+    assert!(make_manager(&es).list_ids_and_paths().is_err());
+    assert_eq!(es.calls_of("clear_scroll"), vec![json!({"scroll_id": "s1"})]);
+}
+
+#[test]
+fn mget_sources_chunks_by_1000_and_skips_missing() {
+    let es = new_es();
+    es.on("mget", |kw| {
+        let docs: Vec<Value> = kw["docs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| {
+                let id: i64 = d["_id"].as_str().unwrap().parse().unwrap();
+                if id % 2 == 0 { json!({"_id": id.to_string(), "found": true, "_source": {"title": format!("t{id}")}}) } else { json!({"_id": id.to_string(), "found": false}) }
+            })
+            .collect();
+        Ok(json!({"docs": docs}))
+    });
+    let ids: Vec<i64> = (1..=2001).collect();
+
+    let rows = make_manager(&es).mget_sources(&ids, &["title"]).unwrap();
+
+    assert_eq!(es.calls_of("mget").len(), 3);
+    assert_eq!(es.calls_of("mget")[0]["_source"], json!(["title"]));
+    assert_eq!(rows.len(), 1000);
+    assert_eq!(rows[0], (2, json!({"title": "t2"})));
+}
+
+#[test]
+fn search_by_isbn_sends_term_query_with_limit() {
+    let es = new_es();
+    es.on("search", |_| Ok(json!({"hits": {"hits": [{"_id": "7", "_source": {"file_path": "A/x.epub"}}, {"_id": "8", "_source": {"file_path": "B/y.epub"}}]}})));
+
+    let rows = make_manager(&es).search_by_isbn("9788937460449", search_manager::ISBN_MATCH_LIMIT).unwrap();
+
+    assert_eq!(rows, vec![(7, "A/x.epub".to_string()), (8, "B/y.epub".to_string())]);
+    let search = &es.calls_of("search")[0];
+    assert_eq!(search["query"], json!({"term": {"isbn": "9788937460449"}}));
+    assert_eq!(search["size"], json!(50));
+    assert_eq!(search["_source"], json!(["file_path"]));
+}
+
+#[test]
+fn search_by_isbn_default_is_unsupported() {
+    assert_eq!(Bare.search_by_isbn("1", 10).unwrap_err(), EsError::Unsupported);
+}
