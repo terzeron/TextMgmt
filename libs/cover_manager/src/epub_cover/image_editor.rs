@@ -860,6 +860,10 @@ mod tests {
         assert!(fitted.contains("viewBox=\"0 0 50 100\""));
         assert!(fitted.contains("width=\"50\""));
         assert!(fitted.contains("height=\"100\""));
+        // viewBox는 image 바로 위가 아니어도, 그 크기를 감싼 가장 가까운 svg에서 바꾼다.
+        let nested = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 200"><g><image width="100" height="200"/></g></svg>"#;
+        let fitted = String::from_utf8(fit_svg_page(nested, (100, 200), (50, 100))).unwrap();
+        assert!(fitted.contains("viewBox=\"0 0 50 100\"") && fitted.contains("<g>"), "{fitted}");
     }
 
     #[test]

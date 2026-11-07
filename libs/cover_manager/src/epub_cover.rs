@@ -885,4 +885,46 @@ mod tests {
         assert!(check_entry_count(20_000).is_ok());
         assert!(check_entry_count(20_001).is_err());
     }
+
+    fn zip_of(members: &[(&str, &[u8], zip::CompressionMethod)]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, data, method) in members {
+            writer.start_file(*name, zip::write::SimpleFileOptions::default().compression_method(*method)).unwrap();
+            std::io::Write::write_all(&mut writer, data).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn entry_that_inflates_past_its_declared_size_is_refused() {
+        let mut bytes = zip_of(&[("a.txt", &[b'a'; 100], zip::CompressionMethod::Deflated)]);
+        // 로컬 헤더와 중앙 디렉토리의 압축 전 크기를 10으로 줄인다.
+        bytes[22..26].copy_from_slice(&10u32.to_le_bytes());
+        let central = bytes.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+        bytes[central + 24..central + 28].copy_from_slice(&10u32.to_le_bytes());
+        let mut archive = ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        // zip 라이브러리가 먼저 잡아 I/O 오류로 낸다.
+        let err = read_entry(&mut archive, "a.txt").unwrap_err().into_cover();
+        assert!(err.io_kind().is_some() && err.message().contains("declared uncompressed size"), "{err}");
+        // 없는 항목은 검사 실패다.
+        assert_eq!(read_entry(&mut archive, "missing.txt").unwrap_err().into_cover().message(), INSPECT_FAILED);
+    }
+
+    #[test]
+    fn opf_path_falls_back_to_the_full_path_text_of_an_unusual_container() {
+        for container in [&b"<container><rootfile full-path=\"OPS/c.opf\"/></container>"[..], b"full-path='OPS/c.opf'"] {
+            let bytes = zip_of(&[("META-INF/container.xml", container, zip::CompressionMethod::Stored)]);
+            let mut archive = ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            assert_eq!(find_opf_path(&mut archive), "OPS/c.opf", "container={}", String::from_utf8_lossy(container));
+        }
+        // 컨테이너에 경로가 없으면 `.opf` 멤버 이름을 쓴다.
+        let bytes = zip_of(&[("META-INF/container.xml", b"<container/>", zip::CompressionMethod::Stored), ("OPS/Book.OPF", b"", zip::CompressionMethod::Stored)]);
+        assert_eq!(find_opf_path(&mut ZipArchive::new(std::io::Cursor::new(bytes)).unwrap()), "OPS/Book.OPF");
+    }
+
+    #[test]
+    fn first_text_skips_elements_without_text() {
+        let package = xml_parser::parse_lenient(b"<package><metadata><title/><title> \xec\xa0\x9c\xeb\xaa\xa9 </title></metadata></package>").unwrap();
+        assert_eq!(first_text(&package, "title"), "제목");
+    }
 }

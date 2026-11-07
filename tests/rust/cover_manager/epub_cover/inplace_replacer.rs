@@ -48,3 +48,28 @@ fn test_cover_replacement_preserves_content_and_has_one_generated_cover() {
         assert_ne!(first.revision, result.revision, "version={version}");
     }
 }
+
+#[test]
+fn test_staging_file_that_cannot_be_created_leaves_the_epub_unchanged() {
+    use std::os::unix::fs::PermissionsExt;
+    let hooks = epub_cover::EpubCoverHooks::default().with_uuid_hex(std::sync::Arc::new(|| "f".repeat(32)));
+    // 임시 이름이 16번 모두 이미 있는 경우와, 디렉토리에 쓸 수 없는 경우.
+    for read_only in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let backup = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("books");
+        let path = make_epub(&dir.join("book.epub"), &EpubSpec::cover("3.0", false));
+        let before = read(&path);
+        if read_only {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        } else {
+            std::fs::write(dir.join(format!(".cover-{}.tmp", "f".repeat(16))), b"").unwrap();
+        }
+        let outcome = epub_cover::add_cover_with(&path, &red_jpeg(), &rev(&path), backup.path(), false, &hooks);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = outcome.unwrap_err().to_string();
+        let expected = if read_only { "Permission denied" } else { "임시 파일 이름을 만들 수 없습니다" };
+        assert!(err.contains(expected), "read_only={read_only}: {err}");
+        assert_eq!(read(&path), before, "read_only={read_only}");
+    }
+}

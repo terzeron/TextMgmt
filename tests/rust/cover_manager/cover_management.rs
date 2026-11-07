@@ -316,6 +316,9 @@ fn test_clear_cache_is_book_scoped_and_revision_checked() {
     let mut service = CoverManagement::new(root);
     let cached = cached_candidates(&mut service, "book.epub", &["yes24"]);
     let other = cached_candidates(&mut service, "other.epub", &["yes24"]);
+    // 이전 flat cache에 남은 다른 책의 후보는 지우지 않는다.
+    let legacy_other = service.cache().join(format!("candidate-{}.json", "c".repeat(64)));
+    service.write(&legacy_other, json!({"store": "yes24", "file_path": "other.epub", "revision": "r", "image_url": "https://image.yes24.com/o.jpg"}).to_string().as_bytes());
     let original = read(&path);
     let err = service.clear_cache("book.epub", "stale").unwrap_err();
     assert!(err.to_string().contains("변경"), "{err}");
@@ -323,6 +326,7 @@ fn test_clear_cache_is_book_scoped_and_revision_checked() {
     service.clear_cache("book.epub", &rev(&path)).unwrap();
     assert!(!service.candidate_path(cached.id(0)).exists());
     assert!(service.candidate_path(other.id(0)).exists());
+    assert!(legacy_other.exists());
     assert_eq!(read(&path), original);
 }
 
@@ -381,6 +385,8 @@ fn test_cover_page_image_detection_and_existing_cover_protection() {
         ("Text/cover.xhtml", "", "", svg.to_string(), true),
         ("Text/chapter.xhtml", "", "", img.to_string(), false),
         ("Text/cover.xhtml", "", "", r#"<img src="missing.jpg" />"#.to_string(), false),
+        // 표지 ID와 첫 쪽이 같은 쪽을 가리키면 한 번만 본다.
+        ("Text/front.xhtml", r#"<meta name="cover" content="page" />"#, "", r#"<img src="missing.jpg" />"#.to_string(), false),
         ("Text/cover.xhtml", "", "", r#"<img src="https://example.com/cover.jpg" />"#.to_string(), false),
     ];
     for (page_href, metadata, guide, image_markup, has_cover) in cases {
@@ -930,4 +936,138 @@ mod cover_repair {
         assert_eq!(item["status"], "error");
         assert!(!item.as_object().unwrap().contains_key("cover_error"), "{item}");
     }
+}
+
+/// 모든 요청에 `status`와 빈 본문을 돌려주는 서점 세션.
+struct StatusSession(u16);
+
+impl ::http_client::HttpSession for StatusSession {
+    fn get(&self, _url: &str, _params: &[(String, String)]) -> Result<::http_client::HttpResponse, ::http_client::HttpError> {
+        Ok(::http_client::HttpResponse::from_chunks(self.0, Vec::new(), Vec::new(), Arc::new(std::sync::atomic::AtomicBool::new(false))))
+    }
+}
+
+fn status_hooks(status: u16) -> SearchHooks {
+    SearchHooks::default().with_session_factory(Arc::new(move |_store| Arc::new(StatusSession(status)) as Arc<dyn ::http_client::HttpSession>)).with_validate(|_store, url| Ok(url.to_string()))
+}
+
+#[test]
+fn test_default_image_fetch_reports_cancel_rejected_url_and_http_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", false));
+    let mut service = CoverManagement::new(root);
+    let cached = cached_candidates(&mut service, "book.epub", &["yes24"]);
+    let candidate_id = cached.id(0).to_string();
+    std::fs::remove_file(service.candidate_path(&candidate_id).parent().unwrap().join(format!("image-{candidate_id}.jpg"))).unwrap();
+    let cases: [(SearchHooks, &str); 3] = [
+        (SearchHooks::default().with_cancel(Arc::new(|| true)), "취소"),
+        (SearchHooks::default().with_validate(|_store, _url| Err(cover_manager::cover_sources::CoverSourceError("허용하지 않는 주소".into()))), "허용하지 않는 주소"),
+        (status_hooks(404), "HTTP 404"),
+    ];
+    for (hooks, expected) in cases {
+        service.set_hooks(CoverHooks::default().with_search_hooks(hooks));
+        let err = service.image(&candidate_id).unwrap_err();
+        assert!(err.to_string().contains(expected), "expected={expected}: {err}");
+    }
+}
+
+#[test]
+fn test_store_search_failures_are_reported_as_search_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", false));
+    let mut service = CoverManagement::with_hooks(root, CoverHooks::default().with_search_hooks(status_hooks(500)));
+    let log = LogCapture::start(log::Level::Warn);
+    assert_eq!(found(&service, "yes24", "book.epub", false, true)["status"], "error");
+    assert!(log.text().contains("HTTP 500"), "{}", log.text());
+    service.set_hooks(service.hooks().clone().with_search(|_store, _metadata| Err(SearchError::Transport("connection reset".into()))));
+    assert_eq!(found(&service, "yes24", "book.epub", false, true)["status"], "error");
+    assert!(log.text().contains("RequestException"), "{}", log.text());
+    service.set_hooks(service.hooks().clone().with_search(|_store, _metadata| {
+        let candidate = cover_manager::cover_sources::StoreCandidate { title: "제목".into(), ..Default::default() };
+        Ok(StoreSearch { status: SearchStatus::Success, search_url: String::new(), candidates: vec![candidate] })
+    }));
+    assert_eq!(found(&service, "yes24", "book.epub", false, true)["status"], "error");
+    assert!(log.text().contains("후보에 image_url이 없습니다"), "{}", log.text());
+}
+
+#[test]
+fn test_cancel_after_the_book_lock_stops_at_the_store_lock_or_the_request_gate() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let path = make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", false));
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // 책 잠금을 잡은 뒤(메타데이터를 읽을 때) 화면이 요청을 버린다.
+    let flag = cancelled.clone();
+    let hooks = CoverHooks::default().with_clock(FakeClock::new(5000.0)).with_search(not_found).with_inspect_epub(move |path| {
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        epub_cover::inspect_epub(path)
+    });
+    let mut service = CoverManagement::with_hooks(root, hooks);
+    let probe = cancelled.clone();
+    let cancel: cover_manager::cover_sources::CancelFn = Arc::new(move || probe.load(std::sync::atomic::Ordering::SeqCst));
+    let err = cover_manager::cover_management::with_cancel_scope(cancel.clone(), || service.candidates("yes24", "book.epub", false, false)).unwrap_err();
+    assert!(err.is_cancelled(), "{err}");
+    // naver는 요청 간격을 기다리는 동안 취소를 확인한다.
+    service.set_hooks(service.hooks().clone().with_store_lock(|_cache, _store| Box::new(())));
+    assert_eq!(found(&service, "naver", "book.epub", false, false)["status"], "not_found");
+    cancelled.store(false, std::sync::atomic::Ordering::SeqCst);
+    let err = cover_manager::cover_management::with_cancel_scope(cancel, || service.candidates("naver", "book.epub", false, true)).unwrap_err();
+    assert!(err.is_cancelled(), "{err}");
+    assert!(epub_cover::inspect_epub(&path).is_ok());
+}
+
+#[test]
+fn test_image_fetch_reports_unknown_store_and_unopenable_store_lock() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", false));
+    let mut service = CoverManagement::new(root);
+    let cached = cached_candidates(&mut service, "book.epub", &["yes24"]);
+    let candidate_id = cached.id(0).to_string();
+    let record_path = service.candidate_path(&candidate_id);
+    std::fs::remove_file(record_path.parent().unwrap().join(format!("image-{candidate_id}.jpg"))).unwrap();
+    service.set_hooks(CoverHooks::default());
+    let lock = service.cache().join("yes24.lock");
+    let _ = std::fs::remove_file(&lock);
+    std::fs::create_dir(&lock).unwrap();
+    assert!(service.image(&candidate_id).is_err());
+    let mut record = service.candidate(&candidate_id).unwrap();
+    record.store = "unknown".to_string();
+    service.write(&record_path, &serde_json::to_vec(&record).unwrap());
+    let err = service.image(&candidate_id).unwrap_err();
+    assert!(err.to_string().contains("지원하지 않는 서점입니다"), "{err}");
+}
+
+#[test]
+fn test_cache_write_into_a_read_only_directory_fails_and_is_logged() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let service = CoverManagement::new(tmp.path());
+    let locked = tmp.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let outcome = service.try_write(&locked.join("a.json"), b"{}");
+    let log = LogCapture::start(log::Level::Warn);
+    service.write(&locked.join("a.json"), b"{}");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(outcome.is_err());
+    assert!(log.text().contains("Cover cache write failed"), "{}", log.text());
+    assert_eq!(std::fs::read_dir(&locked).unwrap().count(), 0);
+}
+
+#[test]
+fn test_clearing_a_book_cache_skips_an_unlistable_legacy_cache_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let path = make_epub(&root.join("book.epub"), &EpubSpec::cover("3.0", false));
+    let service = CoverManagement::new(root);
+    std::fs::create_dir_all(service.cache().join(".book_locks")).unwrap();
+    // 쓰고 들어갈 수는 있지만 목록은 읽을 수 없는 캐시 디렉토리.
+    std::fs::set_permissions(service.cache(), std::fs::Permissions::from_mode(0o300)).unwrap();
+    let outcome = service.clear_cache("book.epub", &rev(&path));
+    std::fs::set_permissions(service.cache(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    outcome.unwrap();
 }

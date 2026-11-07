@@ -757,3 +757,17 @@ pub fn add_split_image(opf_path: &str, manifest: &mut Element, original_names: &
     }
     Err(CoverError::new("추가할 이미지 ID를 만들 수 없습니다").into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Added;
+
+    #[test]
+    fn adding_the_same_member_twice_keeps_the_latest_data() {
+        let mut added = Added::default();
+        added.insert("OPS/a.jpg", vec![1]);
+        added.insert("OPS/a.jpg", vec![2]);
+        assert_eq!(added.get("OPS/a.jpg"), Some(&[2u8][..]));
+        assert_eq!(added.names().len(), 1);
+    }
+}

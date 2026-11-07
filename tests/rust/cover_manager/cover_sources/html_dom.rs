@@ -46,3 +46,26 @@ fn meta_content_and_text_helpers() {
     assert_eq!(dom.text_strip_sep(other), "둘째   문단");
     assert!(dom.text(dom.root()).contains("제목"));
 }
+
+#[test]
+fn attributes_allow_spaces_unquoted_values_and_bare_keys() {
+    let dom = HtmlDom::parse(r#"<img src = "a.jpg" alt=표지&amp;그림 data-lazy>"#);
+    let img = dom.find_all(dom.root(), "img")[0];
+    assert_eq!(dom.attr(img, "src"), Some("a.jpg"));
+    assert_eq!(dom.attr(img, "alt"), Some("표지&그림"));
+    assert_eq!(dom.attr(img, "data-lazy"), Some(""));
+}
+
+#[test]
+fn markup_outside_elements_is_skipped_and_stray_tags_are_tolerated() {
+    let html = r#"<!DOCTYPE html><?xml version="1.0"?><!-- <img src="old.jpg"> --><script>if (a<b) { s = "<img src='x.jpg'>"; }</script><p>1 < 2</p><div><span>안</div><em>밖</em></b>"#;
+    let dom = HtmlDom::parse(html);
+    assert!(dom.find_all(dom.root(), "img").is_empty(), "주석과 script 안의 태그는 요소가 아니다");
+    assert_eq!(dom.find_all(dom.root(), "script").len(), 1);
+    // 글 조각마다 앞뒤 공백을 자른다. 홀로 선 `<`도 글이다.
+    assert_eq!(dom.text_strip(dom.find_all(dom.root(), "p")[0]), "1<2");
+    // `</div>`는 열린 span을 건너뛰어 div를 닫는다. 짝 없는 `</b>`는 무시한다.
+    let em = dom.find_all(dom.root(), "em")[0];
+    assert_eq!(dom.parent(em), None, "em은 div 밖 최상위 요소다");
+    assert_eq!(dom.text_strip(dom.root()), "1<2안밖");
+}

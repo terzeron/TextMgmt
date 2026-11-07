@@ -33,11 +33,13 @@ fn test_html_candidates_use_real_page_images() {
         assert_eq!(candidates[0].image_url, "https://image.yes24.com/real.jpg", "store={store}");
         assert!(!candidates[0].title.is_empty(), "store={store}");
     }
+    assert!(extract_html_candidates("unknown", "https://example.invalid/book", "<html/>").is_empty());
+    assert!(matches!(cover_manager::cover_sources::search_candidates("unknown", &CoverQuery::default()), Err(SearchError::Value(_))));
 }
 
 #[test]
 fn test_naver_and_joara_search_candidates() {
-    let html = r#"<a class="bookListItem_info_top__abc" href="https://cr3.shopping.naver.com/book/adcr?nvMid=123"><img alt="데미안" src="https://shopping-phinf.pstatic.net/book.jpg"><div class="bookListItem_define_item__abc"><span>저자</span><span>헤세</span></div></a>"#;
+    let html = r#"<a href="/ad">광고</a><a class="bookListItem_info_top__abc" href="https://cr3.shopping.naver.com/book/adcr?nvMid=123"><img alt="데미안" src="https://shopping-phinf.pstatic.net/book.jpg"><div class="bookListItem_define_item__abc"><span>저자</span><span>헤세</span></div></a>"#;
     assert_eq!(parse_naver_candidates(html)[0].author, "헤세");
     let data = json!({"status": 1, "data": {"list": [{"book_code": "123", "subject": "책", "member_name": "저자", "cover": "https://cf-image.joara.com/book.png"}]}});
     assert_eq!(parse_joara_candidates(&data).unwrap()[0].image_url, "https://cf-image.joara.com/book.png");
@@ -300,6 +302,67 @@ fn test_cancelled_and_timed_out_store_locks() {
     });
     let timed_out = store_lock_with(tmp.path(), "yes24", &*fs, &*clock, &|| false);
     assert!(matches!(timed_out, Err(StoreLockError::Timeout)));
+    // 잠금이 WouldBlock 아닌 오류로 실패하면 I/O 오류다.
+    let broken = FaultyFs::new();
+    broken.set_lock_exclusive(|_file, _nonblocking| Some(other_err("flock")));
+    assert!(matches!(store_lock_with(tmp.path(), "yes24", &*broken, &SystemClock, &|| false), Err(StoreLockError::Io(_))));
+    // 잠금을 잡은 직후 취소되면 잠금을 돌려주지 않는다.
+    let checks = std::sync::atomic::AtomicUsize::new(0);
+    let late = store_lock_with(tmp.path(), "yes24", &RealFs, &SystemClock, &|| checks.fetch_add(1, Ordering::SeqCst) > 0);
+    assert!(matches!(late, Err(StoreLockError::Cancelled)));
+}
+
+#[test]
+fn test_store_host_whose_address_cannot_be_resolved_is_rejected() {
+    let err = validate_url_with("yes24", "https://image.yes24.com/a.jpg", &|_host, _port| Err(std::io::Error::other("dns"))).unwrap_err();
+    assert!(err.0.contains("확인하지 못했습니다"), "{}", err.0);
+}
+
+#[test]
+fn test_fetch_reports_transport_errors_and_cancel_between_chunks() {
+    struct Unreachable;
+    impl HttpSession for Unreachable {
+        fn get(&self, _url: &str, _params: &[(String, String)]) -> Result<HttpResponse, HttpError> {
+            Err(HttpError::Connection("refused".into()))
+        }
+    }
+    let identity = |_store: &str, url: &str| Ok(url.to_string());
+    let err = fetch_bytes_with("yes24", "https://image.yes24.com/a.jpg", &Unreachable, None, &identity).unwrap_err();
+    assert!(matches!(&err, SearchError::Transport(message) if message.contains("refused")), "{err}");
+    // 요청 전 확인은 통과하고 본문을 받는 중에 취소된다.
+    let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = checks.clone();
+    let hooks = SearchHooks::default()
+        .with_session_factory(session_factory(|_store, _url| b"image".to_vec()))
+        .with_validate(skip_validation)
+        .with_cancel(Arc::new(move || counter.fetch_add(1, Ordering::SeqCst) > 0));
+    assert!(matches!(hooks.fetch_bytes("yes24", "https://image.yes24.com/a.jpg", None), Err(SearchError::Cancelled)));
+}
+
+#[test]
+fn test_default_clients_search_joara_api_and_ridi_and_naverseries_pages() {
+    let hooks = SearchHooks::default()
+        .with_session_factory(session_factory(|_store, url| {
+            let body = if url.starts_with("https://api.joara.com/") {
+                json!({"status": true, "data": {"list": [{"book_code": "7", "subject": "책", "member_name": null, "cover": "https://cf-image.joara.com/c.png"}]}}).to_string()
+            } else if url.starts_with("https://ridibooks.com/search") {
+                r#"<p>검색 결과</p><a href="/books/1">책</a><a href="/books/1">같은 책</a><a href="/author/9">작가</a>"#.to_string()
+            } else if url.starts_with("https://series.naver.com/search") {
+                r#"<p>검색 결과</p><ul class="lst_list"><li><a class="N=a:empty" href="">빈 링크</a><a class="N=a:book" href="/novel/detail.series?productNo=1">책</a></li></ul>"#.to_string()
+            } else {
+                r#"<meta property="og:title" content="책"><meta property="og:image" content="https://image.yes24.com/real.jpg">"#.to_string()
+            };
+            body.into_bytes()
+        }))
+        .with_validate(skip_validation);
+    let query = CoverQuery { title: "책".into(), ..CoverQuery::default() };
+    let joara = search_candidates_with("joara", &query, &hooks).unwrap();
+    assert_eq!((joara.candidates.len(), joara.candidates[0].author.as_str()), (1, ""));
+    for (store, detail) in [("ridi", "https://ridibooks.com/books/1"), ("naverseries", "https://series.naver.com/novel/detail.series?productNo=1")] {
+        let found = search_candidates_with(store, &query, &hooks).unwrap();
+        assert_eq!(found.candidates.len(), 1, "store={store}");
+        assert_eq!(found.candidates[0].detail_url, detail, "store={store}");
+    }
 }
 
 /// 정한 응답을 차례로 돌려주고 요청 URL을 기록하는 `HttpSession`.

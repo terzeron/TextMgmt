@@ -117,3 +117,76 @@ fn test_oversized_page_document_is_refused() {
     let hooks = EpubCoverHooks::default().with_limits(Limits { max_xml_bytes: 50, ..Limits::default() });
     assert!(edit_with(&b, &hooks, EditImages { crops: vec![json!({"idref": "p1", "rect": full()})], ..EditImages::default() }).is_err());
 }
+
+#[test]
+fn test_deleting_a_page_keeps_the_declared_cover_image() {
+    let b = book();
+    crate::common::zipx::rewrite_epub_members(&b.path, |members| {
+        members.replace_in("OPS/book.opf", br#"<item id="i1" href="img/1.jpg" media-type="image/jpeg"/>"#, br#"<item id="i1" href="img/1.jpg" media-type="image/jpeg" properties="cover-image"/>"#)
+    });
+
+    b.edit(EditImages { deletes: vec![json!({"idref": "p1", "index": 0})], ..EditImages::default() }).unwrap();
+
+    let names = crate::common::zipx::member_names(&b.path);
+    assert!(!names.contains(&"OPS/p1.xhtml".to_string()), "{names:?}");
+    assert!(names.contains(&"OPS/img/1.jpg".to_string()), "{names:?}");
+}
+
+#[test]
+fn test_deleting_an_unlisted_image_removes_its_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = crate::common::epub_book::make_book(
+        &tmp.path().join("book.epub"),
+        &[("OPS/p1.xhtml", crate::common::epub_book::page(&["img/9.jpg"], "글").into_bytes()), ("OPS/img/9.jpg", crate::common::epub_fixtures::jpeg("red"))],
+    );
+    crate::common::zipx::rewrite_epub_members(&path, |members| {
+        // 목차 문서와 spine의 한 쪽이 압축 파일에 없다.
+        members.replace_in("OPS/book.opf", br#"href="nav.xhtml""#, br#"href="gone.xhtml""#);
+        members.replace_in("OPS/book.opf", b"</manifest>", br#"<item id="ghost" href="ghost.xhtml" media-type="application/xhtml+xml"/></manifest>"#);
+        members.replace_in("OPS/book.opf", b"</spine>", br#"<itemref idref="ghost"/></spine>"#);
+    });
+    let b = Book { path, trash: tmp.path().join("0_trash"), _tmp: tmp };
+
+    b.edit(EditImages { deletes: vec![json!({"idref": "p1", "index": 0})], ..EditImages::default() }).unwrap();
+
+    assert!(!crate::common::zipx::has_member(&b.path, "OPS/img/9.jpg"));
+    let page = crate::common::zipx::read_zip_entry_string(&b.path, "OPS/p1.xhtml");
+    assert!(page.contains("글") && !page.contains("<img"), "{page}");
+}
+
+#[test]
+fn test_splitting_an_svg_image_page_fits_the_page_to_the_first_part() {
+    let tmp = tempfile::tempdir().unwrap();
+    let svg_page = br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 200 100"><image width="200" height="100" xlink:href="img/1.jpg"/></svg></body></html>"#;
+    let path = crate::common::epub_book::make_book(&tmp.path().join("book.epub"), &[("OPS/p1.xhtml", svg_page.to_vec())]);
+    let b = Book { path, trash: tmp.path().join("0_trash"), _tmp: tmp };
+
+    b.edit(EditImages { splits: vec![json!({"idref": "p1", "index": 0, "first": [0, 0, 0.5, 1, 0], "second": [0.5, 0, 1, 1, 0]})], ..EditImages::default() }).unwrap();
+
+    let page = crate::common::zipx::read_zip_entry_string(&b.path, "OPS/p1.xhtml");
+    assert!(page.contains(r#"viewBox="0 0 100 100""#) && page.contains(r#"width="100""#), "{page}");
+}
+
+#[test]
+fn test_cover_crop_and_image_delete_on_the_same_page_are_both_applied() {
+    let tmp = tempfile::tempdir().unwrap();
+    // 본문 쪽이 표지 이미지와 다른 이미지를 함께 보여 준다.
+    let page = br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>text</p><img src="img/1.jpg"/><img src="img/3.jpg"/></body></html>"#;
+    let path = crate::common::epub_book::make_book(&tmp.path().join("book.epub"), &[("OPS/p1.xhtml", page.to_vec())]);
+    crate::common::zipx::rewrite_epub_members(&path, |members| {
+        members.replace_in("OPS/book.opf", br#"<item id="i1" href="img/1.jpg" media-type="image/jpeg"/>"#, br#"<item id="i1" href="img/1.jpg" media-type="image/jpeg" properties="cover-image"/>"#)
+    });
+    let b = Book { path, trash: tmp.path().join("0_trash"), _tmp: tmp };
+    let before = crate::common::zipx::read_zip_entry(&b.path, "OPS/img/1.jpg");
+
+    b.edit(EditImages {
+        crops: vec![json!({"idref": cover_manager::epub_cover::image_editor::COVER_TARGET, "rect": [0, 0, 0.5, 1, 0]})],
+        deletes: vec![json!({"idref": "p1", "index": 1})],
+        ..EditImages::default()
+    })
+    .unwrap();
+
+    assert_ne!(crate::common::zipx::read_zip_entry(&b.path, "OPS/img/1.jpg"), before);
+    let page = crate::common::zipx::read_zip_entry_string(&b.path, "OPS/p1.xhtml");
+    assert!(page.contains("img/1.jpg") && !page.contains("img/3.jpg"), "{page}");
+}

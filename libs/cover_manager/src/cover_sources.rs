@@ -924,7 +924,7 @@ mod tests {
 
     #[test]
     fn ridi_info_uses_metadata_then_author_list_or_author_link() {
-        let info = DefaultClient::ridi_info(r#"<meta property="og:title" content="  책 제목  "><li>홍길동외2명 저자</li>"#);
+        let info = DefaultClient::ridi_info(r#"<meta property="og:title" content="  책 제목  "><li>목차</li><li>홍길동외2명 저자</li>"#);
         assert_eq!(info.title, "책 제목");
         assert_eq!(info.author, "홍길동 외 2명");
 

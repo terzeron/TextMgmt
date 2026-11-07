@@ -84,6 +84,82 @@ fn test_corrupt_staged_epub_is_rejected_for_illustration_and_removal() {
 }
 
 #[test]
+fn test_cover_removal_cleans_indented_ncx_and_nav_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    // 들여쓴 목차: 지우는 표지 항목 아래 하위 항목이 있고, 다른 namespace의 링크도 표지를 가리킨다.
+    let ncx = br#"<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap>
+  <navPoint id="cover" playOrder="1"><navLabel><text>Cover</text></navLabel><content src="Text/front.xhtml#cover"/>
+    <navPoint id="inner" playOrder="2"><navLabel><text>Inner</text></navLabel><content src="chapter.xhtml#inner"/></navPoint>
+  </navPoint>
+  <navPoint id="chapter" playOrder="3"><navLabel><text>Chapter</text></navLabel><content src="chapter.xhtml"/></navPoint>
+</navMap></ncx>"#;
+    let nav = br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol>
+  <li><a href="Text/front.xhtml#cover">Cover</a></li>
+  <li><a href="chapter.xhtml">Chapter</a></li>
+  <li><x:a xmlns:x="urn:example:other" href="Text/front.xhtml">Front</x:a><ol><li><a href="chapter.xhtml#s">Section</a></li></ol></li>
+</ol></nav></body></html>"#;
+    let path = publisher_cover_epub(tmp.path(), &[("OPS/toc.ncx", ncx.to_vec()), ("OPS/nav.xhtml", nav.to_vec())]);
+    rewrite_epub_members(&path, |members| {
+        // 다른 namespace의 package 자식과, 같은 문서를 가리키는 두 번째 manifest 항목.
+        members.replace_in("OPS/book.opf", b"</package>", br#"<x:extra xmlns:x="urn:example:other"/></package>"#);
+        members.replace_in("OPS/book.opf", b"</manifest>", br#"<item id="chapter-again" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest>"#);
+    });
+
+    remove_directly_with(&path, tmp.path(), &EpubCoverHooks::default()).unwrap();
+
+    assert!(!epub_cover::inspect_epub(&path).unwrap().has_cover);
+    let ncx = String::from_utf8(read_zip_entry(&path, "OPS/toc.ncx")).unwrap();
+    assert!(!ncx.contains(r#"id="cover""#) && ncx.contains(r#"id="inner""#) && ncx.contains(r#"id="chapter""#), "{ncx}");
+    let nav = String::from_utf8(read_zip_entry(&path, "OPS/nav.xhtml")).unwrap();
+    assert!(!nav.contains("Text/front.xhtml"), "{nav}");
+    assert!(nav.contains("Front</") && nav.contains("chapter.xhtml#s"), "{nav}");
+
+    // 표지를 가리키지 않는 NCX는 그대로 둔다.
+    let other = tmp.path().join("other");
+    let plain_ncx = br#"<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap><navPoint id="chapter" playOrder="1"><navLabel><text>Chapter</text></navLabel><content src="chapter.xhtml"/></navPoint></navMap></ncx>"#;
+    // 본문이 표지 쪽을 링크가 아닌 글로만 언급하면 본문도 그대로 둔다.
+    let mention = br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>url(Text/front.xhtml)</p></body></html>"#;
+    let path = publisher_cover_epub(&other, &[("OPS/toc.ncx", plain_ncx.to_vec()), ("OPS/chapter.xhtml", mention.to_vec())]);
+    remove_directly_with(&path, &other, &EpubCoverHooks::default()).unwrap();
+    assert_eq!(read_zip_entry(&path, "OPS/toc.ncx"), plain_ncx);
+    assert_eq!(read_zip_entry(&path, "OPS/chapter.xhtml"), mention);
+}
+
+#[test]
+fn test_replacing_a_tool_cover_keeps_a_cover_page_that_was_moved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = make_epub(&tmp.path().join("book.epub"), &EpubSpec::cover("3.0", false));
+    epub_cover::add_cover(&path, &red_jpeg(), &revision(&path), &backups(tmp.path()), false).unwrap();
+    // 다른 도구가 표지 쪽 항목을 다른 경로로 옮겼다.
+    rewrite_epub_members(&path, |members| members.replace_in("OPS/book.opf", br#"href="tm-cover-page-"#, br#"href="moved/tm-cover-page-"#));
+
+    epub_cover::add_cover(&path, &color_jpeg("green"), &revision(&path), &backups(tmp.path()), true).unwrap();
+
+    let opf = String::from_utf8(opf_of(&path)).unwrap();
+    assert!(opf.contains("moved/tm-cover-page-"), "{opf}");
+    assert!(epub_cover::inspect_epub(&path).unwrap().has_cover);
+}
+
+#[test]
+fn test_previous_cover_over_the_byte_limit_is_not_kept_as_a_plate() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = make_epub(&tmp.path().join("book.epub"), &EpubSpec::cover("3.0", true));
+    // 무늬가 많아 잘 압축되지 않는 이전 표지.
+    let noisy = image::RgbImage::from_fn(300, 450, |x, y| image::Rgb([(x * 7 + y * 13) as u8, (x * x + y) as u8, (y * y + x * 3) as u8]));
+    let mut previous = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut previous, 95).encode_image(&noisy).unwrap();
+    rewrite_epub_members(&path, |members| members.set("OPS/cover.jpg", previous.clone()));
+    let limit = previous.len() - 1;
+    let hooks = EpubCoverHooks::default().with_limits(Limits { max_image_bytes: limit, ..Limits::default() });
+
+    epub_cover::add_cover_with(&path, &red_jpeg(), &revision(&path), &backups(tmp.path()), true, &hooks).unwrap();
+
+    let names = common::zipx::member_names(&path);
+    assert!(!names.iter().any(|name| name.contains("tm-plate-page-")), "{names:?}");
+    assert!(names.iter().filter(|name| name.contains("tm-cover-")).count() > 0, "{names:?}");
+}
+
+#[test]
 fn test_removal_is_rejected_when_the_staged_epub_still_reports_a_cover() {
     let tmp = tempfile::tempdir().unwrap();
     let path = publisher_cover_epub(tmp.path(), &[]);
@@ -130,7 +206,38 @@ mod member_path {
         assert_eq!(member_path("OPS", ""), "");
         assert_eq!(member_path("OPS", "a.xhtml#frag"), "OPS/a.xhtml");
         assert_eq!(member_path("", "a.jpg?x=1"), "a.jpg");
+        assert_eq!(member_path("OPS", "/Images/a.jpg"), "", "압축 파일 루트 기준 절대 경로");
     }
+}
+
+#[test]
+fn test_directory_cannot_be_inspected_and_missing_path_has_no_revision() {
+    let tmp = tempfile::tempdir().unwrap();
+    let err = epub_cover::inspect_epub(tmp.path()).unwrap_err();
+    assert_eq!(err.message(), "EPUB 또는 기존 표지를 검사할 수 없습니다");
+    assert_eq!(epub_cover::revision(&tmp.path().join("missing.epub")), "");
+}
+
+#[test]
+fn test_cover_normalization_reports_pixel_decoding_to_the_observer() {
+    let decoded = Arc::new(AtomicUsize::new(0));
+    let seen = decoded.clone();
+    let hooks = EpubCoverHooks::default().with_pixel_decode_observer(Arc::new(move || {
+        seen.fetch_add(1, Ordering::SeqCst);
+    }));
+    epub_cover::normalize_image_with(&red_jpeg(), Some(600), &hooks).unwrap();
+    assert_eq!(decoded.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn test_archive_without_a_package_document_has_no_thumbnail() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bare.epub");
+    let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
+    zip.start_file("mimetype", zip::write::SimpleFileOptions::default()).unwrap();
+    std::io::Write::write_all(&mut zip, b"application/epub+zip").unwrap();
+    zip.finish().unwrap();
+    assert!(epub_cover::extract_epub_thumbnail(&path, None).is_none());
 }
 
 #[test]

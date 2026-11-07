@@ -246,6 +246,15 @@ mod tests {
         assert_eq!(ppm_to_rgb(b"P6\n1 1\n255\n\x10\x20\x30").unwrap().get_pixel(0, 0).0, [16, 32, 48]);
         assert!(ppm_to_rgb(b"P6\n2 1\n255\n\x00\x00\x00").is_none());
         assert!(ppm_to_rgb(b"P6\n1300 1300\n255\n").is_none());
+        // 주석 줄과 CRLF 구분자는 건너뛴다.
+        assert_eq!(ppm_to_rgb(b"P6\n# poppler\n1 1\n255\r\n\x10\x20\x30").unwrap().get_pixel(0, 0).0, [16, 32, 48]);
+        assert!(ppm_to_rgb(b"P5\n1 1\n255\n\x10").is_none(), "P6가 아닌 형식");
+        assert!(ppm_to_rgb(b"P6\n1 1\n255").is_none(), "최댓값 뒤 구분자가 없다");
+    }
+
+    #[test]
+    fn crop_of_an_empty_render_has_no_cover() {
+        assert!(super::crop_cover_image(&RgbImage::new(0, 0), 300).is_none());
     }
 
     #[test]
