@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use common::epub::{EpubSpec, make_epub};
 use doc_reader::TEXT_SIZE;
-use doc_reader::epub::{EpubHooks, EpubPath, EpubRead, pretty_text, read_from_epub, read_from_epub_with, read_from_epub_with_extracting_zip};
+use doc_reader::epub::{
+    EpubHooks, EpubPath, EpubRead, pretty_text, read_epub_publisher, read_from_epub, read_from_epub_with, read_from_epub_with_extracting_zip, read_from_epub_with_extracting_zip_using,
+};
 
 /// 이름→내용 목록으로 EPUB(ZIP)을 만든다.
 fn build(dir: &Path, name: &str, members: &[(&str, &str)]) -> PathBuf {
@@ -111,6 +113,151 @@ fn broken_zips_and_missing_containers_report_errors_and_return_nothing() {
     let read = read_from_epub(&no_container);
     assert_eq!(read.summary, "");
     assert!(read.errors.iter().any(|e| e.contains("container.xml")), "{:?}", read.errors);
+
+    // 정규식 경로만 실행하는 두 진입점도 컨테이너가 없으면 빈 결과다.
+    let direct = read_from_epub_with_extracting_zip(&no_container);
+    assert_eq!((direct.summary.as_str(), direct.line_count), ("", 0));
+    assert!(direct.errors.iter().any(|e| e.contains("container.xml")), "{:?}", direct.errors);
+    let parse = |_: &[u8]| -> Result<(String, usize), String> { panic!("챕터를 읽기 전에 끝나야 한다") };
+    assert_eq!(read_from_epub_with_extracting_zip_using(&no_container, &parse), (String::new(), 0));
+}
+
+const CHAPTER: &str = "<html><body><p>본문</p></body></html>";
+
+#[test]
+fn package_xml_follows_a_utf16_bom_or_a_declared_encoding() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut container = vec![0xff, 0xfe];
+    container.extend(CONTAINER.encode_utf16().flat_map(u16::to_le_bytes));
+    let manifest = r#"<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>"#;
+    let declared = opf(manifest, "").replacen(r#"<?xml version="1.0"?>"#, r#"<?xml version="1.0" encoding="euc-kr"?>"#, 1);
+    let (euc_kr, _, _) = encoding_rs::EUC_KR.encode(&declared);
+    let path = tmp.path().join("enc.epub");
+    let members = vec![("META-INF/container.xml".to_owned(), container), ("OEBPS/content.opf".to_owned(), euc_kr.into_owned()), ("OEBPS/ch1.xhtml".to_owned(), CHAPTER.as_bytes().to_vec())];
+    common::zipx::write_zip_owned(&path, &members, common::zipx::ZipMode::Deflated);
+    let read = read_from_epub(&path);
+    assert_eq!(read.path, EpubPath::Normal, "{:?}", read.errors);
+    assert!(read.summary.starts_with(" 제목 책 저자"), "{:?}", read.summary);
+
+    // 선언이 없으면 UTF-8이 아닌 OPF는 읽을 수 없어 정규식 경로로 간다.
+    let plain = opf(manifest, "");
+    let (undeclared, _, _) = encoding_rs::EUC_KR.encode(&plain);
+    let path = tmp.path().join("undeclared.epub");
+    let members = vec![
+        ("META-INF/container.xml".to_owned(), CONTAINER.as_bytes().to_vec()),
+        ("OEBPS/content.opf".to_owned(), undeclared.into_owned()),
+        ("OEBPS/ch1.xhtml".to_owned(), CHAPTER.as_bytes().to_vec()),
+    ];
+    common::zipx::write_zip_owned(&path, &members, common::zipx::ZipMode::Deflated);
+    assert_eq!(read_from_epub(&path).path, EpubPath::Zipped);
+}
+
+#[test]
+fn package_structure_edge_cases_pick_the_reading_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let chapter = r#"<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>"#;
+    let read = |name: &str, container: &str, opf_text: &str, extra: &[(&str, &str)]| {
+        let mut members = vec![("META-INF/container.xml", container), ("OEBPS/content.opf", opf_text), ("OEBPS/ch1.xhtml", CHAPTER)];
+        members.extend_from_slice(extra);
+        read_from_epub(&build(tmp.path(), name, &members))
+    };
+
+    // rootfile에 full-path가 없으면 패키지를 찾지 못한다.
+    let no_full_path = CONTAINER.replace(r#" full-path="OEBPS/content.opf""#, "");
+    assert_eq!(read("rootfile.epub", &no_full_path, &opf(chapter, ""), &[]).path, EpubPath::Zipped);
+    // OPF가 아닌 rootfile은 건너뛰고 OPF rootfile을 쓴다.
+    let other_rootfile = CONTAINER.replace("<rootfiles>", r#"<rootfiles><rootfile full-path="a.pdf" media-type="application/pdf"/>"#);
+    assert_eq!(read("two-rootfiles.epub", &other_rootfile, &opf(chapter, ""), &[]).path, EpubPath::Normal);
+
+    // DC가 아닌 네임스페이스의 메타데이터 요소는 건너뛴다.
+    let foreign = opf(chapter, "").replace("<dc:creator></dc:creator>", r#"<x:note xmlns:x="urn:x">무시</x:note>"#);
+    let normal = read("foreign.epub", CONTAINER, &foreign, &[]);
+    assert_eq!(normal.path, EpubPath::Normal);
+    assert!(!normal.summary.contains("무시"), "{:?}", normal.summary);
+
+    // NCX의 navMap 안에서 DAISY가 아닌 요소는 무시한다.
+    let ncx_item = r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#;
+    let ncx = r#"<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap><x:y xmlns:x="urn:x"/><navPoint><navLabel><text>t</text></navLabel></navPoint></navMap></ncx>"#;
+    let with_ncx = opf(&format!("{chapter}{ncx_item}"), r#"toc="ncx""#);
+    assert_eq!(read("ncx.epub", CONTAINER, &with_ncx, &[("OEBPS/toc.ncx", ncx)]).path, EpubPath::Normal);
+
+    // 빈 장은 글 없이 지나가고, body가 없는 장은 패키지 경로를 실패시킨다.
+    assert_eq!(read("blank.epub", CONTAINER, &opf(&format!("{chapter}{}", chapter.replace("c1", "c2").replace("ch1", "blank")), ""), &[("OEBPS/blank.xhtml", "  ")]).path, EpubPath::Normal);
+    let headless =
+        read("head.epub", CONTAINER, &opf(&format!("{chapter}{}", chapter.replace("c1", "c2").replace("ch1", "head")), ""), &[("OEBPS/head.xhtml", "<html><head><title>머리</title></head></html>")]);
+    assert_eq!(headless.path, EpubPath::Zipped);
+    assert!(headless.summary.contains("본문"), "{:?}", headless.summary);
+}
+
+#[test]
+fn nav_documents_with_nested_lists_and_an_ncx_toc() {
+    let tmp = tempfile::tempdir().unwrap();
+    let manifest = r#"<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#;
+    let read = |name: &str, opf_text: &str, nav: &str, extra: &[(&str, &str)]| {
+        let mut members = vec![("META-INF/container.xml", CONTAINER), ("OEBPS/content.opf", opf_text), ("OEBPS/ch1.xhtml", CHAPTER), ("OEBPS/nav.xhtml", nav)];
+        members.extend_from_slice(extra);
+        read_from_epub(&build(tmp.path(), name, &members)).path
+    };
+    let nested = |outer: &str| format!(r#"<html><body><nav epub:type="toc"><ol><li>{outer}<ol><li><a href="ch1.xhtml">1.1</a></li></ol></li></ol></nav></body></html>"#);
+    assert_eq!(read("nested.epub", &opf(manifest, ""), &nested(r#"<a href="ch1.xhtml">1</a>"#), &[]), EpubPath::Normal);
+    assert_eq!(read("nested-no-href.epub", &opf(manifest, ""), &nested("<a>1</a>"), &[]), EpubPath::Zipped);
+    assert_eq!(read("blank-nav.epub", &opf(manifest, ""), " \n", &[]), EpubPath::Zipped);
+
+    // spine toc가 NCX를 가리키면 nav의 toc 목록은 보지 않고 page-list만 본다.
+    let ncx_item = r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#;
+    let ncx = r#"<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap/></ncx>"#;
+    let no_toc_nav = r#"<html><body><nav epub:type="landmarks"><ol><li><a href="ch1.xhtml">1</a></li></ol></nav></body></html>"#;
+    assert_eq!(read("ncx-and-nav.epub", &opf(&format!("{manifest}{ncx_item}"), r#"toc="ncx""#), no_toc_nav, &[("OEBPS/toc.ncx", ncx)]), EpubPath::Normal);
+}
+
+#[test]
+fn a_corrupt_chapter_is_skipped_by_the_regex_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let manifest = r#"<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="ch2.xhtml" media-type="application/xhtml+xml"/>"#;
+    let opf_text = opf(manifest, "");
+    let path = tmp.path().join("crc.epub");
+    common::zipx::write_zip_text(
+        &path,
+        &[
+            ("META-INF/container.xml", CONTAINER),
+            ("OEBPS/content.opf", &opf_text),
+            ("OEBPS/ch1.xhtml", "<html><body><p>CRCMARK</p></body></html>"),
+            ("OEBPS/ch2.xhtml", "<html><body><p>empty</p></body></html>"),
+        ],
+        false,
+    );
+    // 저장 방식 멤버의 내용만 바꾸면 CRC가 맞지 않아 읽는 도중 I/O 오류가 난다.
+    fs::write(&path, common::zipx::bytes_replace(&fs::read(&path).unwrap(), b"CRCMARK", b"CRCMARX")).unwrap();
+    let read = read_from_epub(&path);
+    assert_eq!(read.path, EpubPath::Zipped);
+    assert_eq!(read.summary, "empty");
+
+    // 정규식 경로에서 빈 장은 글과 줄 없이 지나간다.
+    let blank = build(tmp.path(), "blank.epub", &[("META-INF/container.xml", CONTAINER), ("OEBPS/content.opf", &opf_text), ("OEBPS/ch1.xhtml", " "), ("OEBPS/ch2.xhtml", CHAPTER)]);
+    let direct = read_from_epub_with_extracting_zip(&blank);
+    assert_eq!((direct.summary.as_str(), direct.line_count), ("본문", 1));
+}
+
+#[test]
+fn the_publisher_is_empty_for_an_unreadable_opf_or_too_many_members() {
+    let tmp = tempfile::tempdir().unwrap();
+    let opf_text = r#"<package><metadata><dc:publisher>PUBMARK</dc:publisher></metadata></package>"#;
+    let path = build(tmp.path(), "p.epub", &[("content.opf", opf_text)]);
+    assert_eq!(read_epub_publisher(&path), "PUBMARK");
+    common::zipx::write_zip_text(&path, &[("content.opf", opf_text)], false);
+    fs::write(&path, common::zipx::bytes_replace(&fs::read(&path).unwrap(), b"PUBMARK", b"PUBMARX")).unwrap();
+    assert_eq!(read_epub_publisher(&path), "");
+
+    // 멤버가 10만 개를 넘으면 OPF를 찾지 않는다.
+    let crowded = tmp.path().join("crowded.epub");
+    let mut zip = zip::ZipWriter::new(fs::File::create(&crowded).unwrap());
+    zip.start_file("content.opf", common::zipx::options(zip::CompressionMethod::Stored)).unwrap();
+    std::io::Write::write_all(&mut zip, opf_text.as_bytes()).unwrap();
+    for i in 0..100_000 {
+        zip.start_file(format!("{i}"), common::zipx::options(zip::CompressionMethod::Stored)).unwrap();
+    }
+    zip.finish().unwrap();
+    assert_eq!(read_epub_publisher(&crowded), "");
 }
 
 #[test]

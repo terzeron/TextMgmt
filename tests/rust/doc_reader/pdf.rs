@@ -4,7 +4,10 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
 
-use doc_reader::pdf::{InProcess, PDF_PAGE_LIMIT, Stage, StageError, StageRunner, fast_page_count, read_from_pdf};
+use doc_reader::pdf::{
+    InProcess, PDF_PAGE_LIMIT, PdftotextHooks, Stage, StageError, StageRunner, fast_page_count, find_xref_offset, parse_one_xref_stream, pdf_text_by_pdftotext_with, read_from_obj_stream,
+    read_from_pdf,
+};
 
 type Answer<'a> = Result<(&'a str, usize), StageError>;
 type OwnedAnswer = (Stage, Result<(String, usize), StageError>);
@@ -161,6 +164,84 @@ fn fast_page_count_gives_up_on_garbage() {
     assert_eq!(fast_page_count(&tmp.path().join("none.pdf")), None);
     fs::write(&path, b"").unwrap();
     assert_eq!(fast_page_count(&path), None);
+}
+
+#[test]
+fn fast_page_count_follows_prev_sections_up_to_the_depth_limit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("prev.pdf");
+    let pdf = minimal_pdf(4);
+    let xref_at = pdf.windows(5).position(|w| w == b"\nxref").unwrap() + 1;
+    // /Prev가 자기 자신을 가리켜도 10단계에서 멈추고, 첫 구간에서 읽은 /Root를 그대로 쓴다.
+    let looping = String::from_utf8(pdf).unwrap().replace("/Root 1 0 R >>", &format!("/Root 1 0 R /Prev {xref_at} >>"));
+    fs::write(&path, looping).unwrap();
+    assert_eq!(fast_page_count(&path), Some(4));
+}
+
+#[test]
+fn xref_tables_accept_cr_line_ends_and_stop_at_a_short_subsection() {
+    assert_eq!(find_xref_offset(b"xref\r\n0 2\r0000000000 65535 f \r\n0000000017 00000 n \r\ntrailer", 1), Some(17));
+    // 하위 구간 헤더가 말한 항목 수보다 줄이 모자라면 찾지 못한다.
+    assert_eq!(find_xref_offset(b"xref\n0 3\n0000000000 65535 f \n", 2), None);
+}
+
+fn zlib(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(data).unwrap();
+    enc.finish().unwrap()
+}
+
+/// `bytes`를 파일로 쓰고 연다.
+fn file_of(dir: &Path, bytes: &[u8]) -> fs::File {
+    let path = dir.join("part.bin");
+    fs::write(&path, bytes).unwrap();
+    fs::File::open(path).unwrap()
+}
+
+#[test]
+fn the_last_object_of_a_compressed_object_stream_runs_to_the_stream_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let header = b"5 0 ";
+    let compressed = zlib(&[&header[..], b"<< /Type /Catalog >>"].concat());
+    let mut stream = format!("1 0 obj\n<< /First {} /Length {} /Filter /FlateDecode >>\nstream\n", header.len(), compressed.len()).into_bytes();
+    stream.extend(&compressed);
+    stream.extend(b"\nendstream");
+    assert_eq!(read_from_obj_stream(&mut file_of(tmp.path(), &stream), 0, 5).as_deref(), Some(&b"<< /Type /Catalog >>"[..]));
+    // 필터가 없으면 스트림 바이트를 그대로 읽는다.
+    let mut plain = format!("1 0 obj\n<< /First {} /Length 24 >>\nstream\n", header.len()).into_bytes();
+    plain.extend(b"5 0 << /Type /Catalog >>\nendstream");
+    assert_eq!(read_from_obj_stream(&mut file_of(tmp.path(), &plain), 0, 5).as_deref(), Some(&b"<< /Type /Catalog >>"[..]));
+}
+
+#[test]
+fn xref_stream_predictors_need_level_ten_and_default_columns_to_the_entry_width() {
+    let tmp = tempfile::tempdir().unwrap();
+    // 행마다 필터 바이트 2(위 행 더하기). /Columns가 없으면 /W 합(4)을 쓴다.
+    let rows = [2u8, 1, 0, 100, 0, 2, 0, 0, 100, 0];
+    let compressed = zlib(&rows);
+    let stream = |parms: &str| {
+        let mut s = format!("1 0 obj\n<< /W [1 2 1] /Size 2 /Length {} /Filter /FlateDecode /DecodeParms << {parms} >> >>\nstream\n", compressed.len()).into_bytes();
+        s.extend(&compressed);
+        s.extend(b"\nendstream");
+        s
+    };
+    let parsed = parse_one_xref_stream(&mut file_of(tmp.path(), &stream("/Predictor 12")), 0).unwrap();
+    assert_eq!(parsed.entries, [1, 0, 100, 0, 1, 0, 200, 0]);
+    // 10 미만 예측기는 되돌리지 않는다.
+    let parsed = parse_one_xref_stream(&mut file_of(tmp.path(), &stream("/Predictor 2")), 0).unwrap();
+    assert_eq!(parsed.entries, rows);
+}
+
+#[test]
+fn pdftotext_without_hooks_uses_poppler_in_process() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("a.pdf");
+    fs::write(&path, minimal_pdf(2)).unwrap();
+    let hooks = PdftotextHooks { which: None, run: None, path_cache: &std::sync::OnceLock::new() };
+    assert_eq!(pdf_text_by_pdftotext_with(&path, &hooks), (String::new(), 2));
+    fs::write(&path, b"not a pdf").unwrap();
+    assert_eq!(pdf_text_by_pdftotext_with(&path, &hooks), (String::new(), 0));
 }
 
 #[test]

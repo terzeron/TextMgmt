@@ -1,6 +1,6 @@
 mod corpus;
 
-use doc_reader::markup::{count_lines, get_body_text, get_text, read_from_html};
+use doc_reader::markup::{count_lines, expand_self_closing, get_body_text, get_text, read_from_html, relocated_tail};
 use serde_json::Value;
 use std::fs;
 
@@ -22,6 +22,30 @@ fn get_text_and_line_counts_match_reference() {
 fn get_text_keeps_whitespace_before_an_implicit_head() {
     let html = "<!DOCTYPE html>\n<html>\n<body><p>x</p></body></html>";
     assert_eq!(get_text(html), "\nx");
+}
+
+#[test]
+fn self_closing_expansion_skips_cdata_and_stops_at_an_unterminated_tag() {
+    assert_eq!(expand_self_closing("<![CDATA[<a/>]]><b/>"), "<![CDATA[<a/>]]><b></b>");
+    // 닫히지 않은 시작 태그를 만나면 거기서 멈추고 나머지는 그대로 둔다.
+    assert_eq!(expand_self_closing("<b/><p class='x/>"), "<b></b><p class='x/>");
+}
+
+#[test]
+fn body_tail_relocation_needs_only_blanks_after_the_body() {
+    assert_eq!(relocated_tail("<body>a</body>x</html>"), "");
+    assert_eq!(relocated_tail("<body>a</body>x"), "");
+    // 꼬리 공백이 body의 마지막 텍스트 전부면 그 노드는 글에서 빠진다.
+    assert_eq!(get_body_text("<html><body><p>a</p></body>\n"), "a");
+}
+
+#[test]
+fn tail_blank_runs_are_kept_per_run_only_around_blank_body_and_html_ends() {
+    // `</body>`·`</html>` 둘레가 공백뿐이면 덩어리마다 한 글자: 줄바꿈 없는 덩어리는 공백 하나다.
+    assert_eq!(get_text("<html><body><p>a</p> </body> </html> "), "a   ");
+    // `</html>` 뒤나 `</body>`와 `</html>` 사이에 글이 있으면 고치지 않는다.
+    assert_eq!(get_text("<html><body>a</body></html>x"), "ax");
+    assert_eq!(get_text("<html><body>a</body>x</html>"), "ax");
 }
 
 #[test]

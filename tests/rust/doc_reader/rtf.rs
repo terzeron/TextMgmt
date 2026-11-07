@@ -39,3 +39,26 @@ fn corpus_rtf_matches_the_recorded_summaries() {
         assert_eq!(got.1 as i64, rec["line_count"].as_i64().unwrap(), "line count for {path}");
     }
 }
+
+#[test]
+fn font_charsets_pick_the_codec_for_hex_bytes() {
+    let with_charset = |charset: u32, hex: &str| rtf_to_text(&format!(r"{{\rtf1{{\fonttbl{{\f0\fcharset{charset} F;}}}}\f0 {hex}}}")).unwrap();
+    assert_eq!(with_charset(128, r"\'82\'a0"), "あ");
+    assert_eq!(with_charset(134, r"\'c4\'e3"), "你");
+    assert_eq!(with_charset(136, r"\'a4\'a4"), "中");
+    assert_eq!(with_charset(222, r"\'a1"), "ก");
+    assert_eq!(with_charset(77, r"\'8a"), "ä");
+    assert_eq!(with_charset(84, r"\'80"), "А");
+    // encoding_rs가 모르는 코덱은 UTF-8로 읽고 깨진 바이트는 버린다.
+    assert_eq!(with_charset(80, r"\'41\'ff"), "A");
+    // 목록에 없는 코드 페이지는 UTF-8로 본다.
+    assert_eq!(rtf_to_text(r"{\rtf1\ansi\ansicpg65001 \'ea\'b0\'80}").unwrap(), "가");
+}
+
+#[test]
+fn unicode_skips_and_unbalanced_braces() {
+    // 인수 없는 `\u`도 대체 글자 하나를 건너뛴다.
+    assert_eq!(rtf_to_text(r"{\rtf1\uc1 \u \'41B}").unwrap(), "B");
+    // 짝이 없는 닫는 중괄호 뒤의 글은 버린다.
+    assert_eq!(rtf_to_text(r"{\rtf1 a}}b").unwrap(), "a");
+}

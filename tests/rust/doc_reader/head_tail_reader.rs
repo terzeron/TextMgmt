@@ -125,6 +125,10 @@ fn the_fallback_scanner_handles_odd_stream_and_string_syntax() {
     assert!(text.contains("a(b)c\r\t\u{1}x) "), "{text:?}");
     assert!(text.contains("pq"), "{text:?}");
     assert!(text.contains("AB"), "{text:?}");
+
+    // `>`가 없는 `<`는 한 글자만 넘기고, 스트림 끝의 `\`에서 문자열 읽기를 멈춘다.
+    fs::write(&f, b"%PDF-1.4\n1 0 obj\n<< >>\nstream\n<41 (xy\\endstream\n").unwrap();
+    assert_eq!(pdf_text_fallback(&f).unwrap(), "xy ");
 }
 
 /// 인코딩 손상 판정용 본문 표본(`extract_*_text`).

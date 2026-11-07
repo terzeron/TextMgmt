@@ -84,3 +84,14 @@ fn corpus_txt_matches_the_recorded_summaries() {
         assert_eq!(read.raw_content.chars().count() as i64, rec["raw_len"].as_i64().unwrap(), "raw length for {path}");
     }
 }
+
+#[test]
+fn a_checked_candidate_that_yields_no_text_is_an_error() {
+    use doc_reader::text::{TextHooks, read_from_text_with};
+    use text_decoder::text_transcoder::{Candidate, Enc};
+    let tmp = tempfile::tempdir().unwrap();
+    let path = write(tmp.path(), "bad.txt", b"\xff");
+    let hooks = TextHooks { encodings: Some(vec![Candidate::Builtin(Enc::Cp949)]), ..TextHooks::default() };
+    let error = read_from_text_with(&path, &hooks).unwrap_err();
+    assert!(error.contains("can't read unicode text") && error.contains("codec can't decode"), "{error}");
+}

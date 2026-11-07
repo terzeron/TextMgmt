@@ -4,7 +4,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use common::runner::{FakeRunner, output};
-use doc_reader::office::{ConvertFailure, convert_with_libreoffice, convert_with_libreoffice_using, find_libreoffice, find_libreoffice_with, read_from_doc, read_from_hwp, read_from_image};
+use doc_reader::office::{
+    ConvertFailure, convert_with_libreoffice, convert_with_libreoffice_using, find_libreoffice, find_libreoffice_with, read_from_doc, read_from_hwp, read_from_hwp_with, read_from_hwp_with_fallback,
+    read_from_image,
+};
 use sysdeps::CommandOutput;
 
 /// 변환기를 흉내 내는 셸 스크립트. 마지막 인자(원본)의 stem으로 `--outdir` 아래에 결과를 쓴다.
@@ -65,6 +68,23 @@ fn hwp_falls_back_to_the_native_hwp3_parser_when_conversion_is_empty() {
 }
 
 #[test]
+fn injected_hwp_readers_use_native_text_first_and_report_conversion_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let hwp3 = tmp.path().join("v3.hwp");
+    fs::write(&hwp3, b"HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05").unwrap();
+    let convert = |_: &Path| -> Result<String, String> { panic!("네이티브 결과가 있으면 변환하지 않는다") };
+    let native = |_: &Path| -> Result<String, String> { Ok("네이티브 본문\n둘째 줄".into()) };
+    let (summary, lines, errors) = read_from_hwp_with_fallback(&hwp3, Path::new("unused"), &convert, &native);
+    assert_eq!((summary.as_str(), lines), ("네이티브 본문\n둘째 줄", 2));
+    assert!(errors.is_empty());
+
+    let hwp5 = tmp.path().join("v5.hwp");
+    fs::write(&hwp5, b"not hwp3").unwrap();
+    let failing = |_: &Path| -> Result<String, String> { Err("변환 실패".into()) };
+    assert_eq!(read_from_hwp_with(&hwp5, Path::new("unused"), &failing), (String::new(), 0, vec!["변환 실패".to_owned()]));
+}
+
+#[test]
 fn images_have_no_text() {
     assert_eq!(read_from_image(), (String::new(), 0, 0));
     assert!(!find_libreoffice().as_os_str().is_empty());
@@ -114,6 +134,34 @@ mod docx_reader {
         fs::write(&bad, b"not a zip").unwrap();
         assert!(read_from_docx(&bad).is_err());
         assert!(read_from_docx(&tmp.path().join("none.docx")).is_err());
+    }
+
+    #[test]
+    fn paragraph_properties_are_skipped_and_a_missing_relationship_part_is_an_error() {
+        use crate::common::zipx::write_zip_text;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("p.docx");
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#;
+        let document = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr/><w:r><w:t>글</w:t></w:r></w:p></w:body></w:document>"#;
+        write_zip_text(&path, &[("_rels/.rels", rels), ("word/document.xml", document)], true);
+        assert_eq!(read_from_docx(&path).unwrap(), ("글".to_owned(), 1));
+        write_zip_text(&path, &[("word/document.xml", document)], true);
+        assert_eq!(read_from_docx(&path).unwrap_err(), "ZIP 항목이 없다: _rels/.rels");
+    }
+
+    #[test]
+    fn a_corrupt_document_part_is_an_io_error() {
+        use crate::common::zipx::{ZipMode, bytes_replace, member_names, read_zip_entry, write_zip_owned};
+        let tmp = tempfile::tempdir().unwrap();
+        let source = fixture("a.docx");
+        let members: Vec<(String, Vec<u8>)> = member_names(&source).into_iter().map(|name| (name.clone(), read_zip_entry(&source, &name))).collect();
+        let corrupt = tmp.path().join("crc.docx");
+        write_zip_owned(&corrupt, &members, ZipMode::Stored);
+        // 저장 방식 멤버의 내용을 같은 길이로 바꾸면 CRC 검사에서 읽기가 실패한다.
+        let bytes = bytes_replace(&fs::read(&corrupt).unwrap(), b"<w:body>", b"<w:bodx>");
+        fs::write(&corrupt, bytes).unwrap();
+        let error = read_from_docx(&corrupt).unwrap_err();
+        assert!(!error.contains("ZIP 항목이 없다") && !error.contains("XML"), "{error}");
     }
 }
 
