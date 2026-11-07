@@ -225,3 +225,18 @@ mod tests {
         assert!(super::encode_crop(&with_table, &too_wide).is_err());
     }
 }
+
+#[cfg(test)]
+mod marker_tests {
+    use super::Settings;
+
+    fn summary(bytes: &[u8]) -> Result<(usize, usize, bool), String> {
+        Settings::read(bytes).map(|s| (s.tables.len(), s.components.len(), s.progressive))
+    }
+
+    #[test]
+    fn standalone_markers_without_a_length_are_skipped() {
+        // TEM(0x01)과 RST(0xD0~0xD7)는 길이 필드가 없다. 건너뛰면 마커가 없을 때와 같다.
+        assert_eq!(summary(&[0xff, 0xd8, 0xff, 0x01, 0xff, 0xd0, 0xff, 0xd9]), summary(&[0xff, 0xd8, 0xff, 0xd9]));
+    }
+}

@@ -448,3 +448,20 @@ async fn test_es_delete_failure_stops_before_reindexing() {
     assert!(error_text(&error).contains("ES 문서 삭제 실패") && error_text(&error).contains("0_trash/book.pdf"), "{error:?}");
     assert!(e.es.inserted().is_empty());
 }
+
+fn cyclic_pages_parent(doc: &mut Document) {
+    let pages = doc.catalog().unwrap().get(b"Pages").unwrap().as_reference().unwrap();
+    doc.get_dictionary_mut(pages).unwrap().set("Parent", Object::Reference(pages));
+}
+
+#[tokio::test]
+async fn test_deleting_pages_rejects_a_page_tree_whose_parents_loop_and_changes_nothing() {
+    let e = fx::env(Opts::loader());
+    edit_pdf(&e.pdf, cyclic_pages_parent);
+    let original = fs::read(&e.pdf).unwrap();
+
+    let (result, error) = e.run_pages(&[1]).await;
+
+    assert!(result.is_none(), "{error:?}");
+    e.assert_nothing_changed(&original);
+}

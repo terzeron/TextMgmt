@@ -431,3 +431,59 @@ mod pdf_reader_cache_budget {
         assert_eq!(e.bm.pdf_cache().len(), 1); // 낡은 항목이 남지 않는다
     }
 }
+
+// ---- 백필 스레드 기다리기 ----
+
+#[test]
+fn test_joining_a_backfill_thread_without_its_own_join_returns_at_once() {
+    let tmp = tmp_dir();
+    let manager = make_manager(tmp.path(), &FakeEsManager::new());
+    let thread = Arc::new(FakeBackfillThread::alive());
+    manager.set_created_time_backfill_thread(Some(thread.clone()));
+
+    let started = std::time::Instant::now();
+    manager.join_created_time_backfill_thread(Duration::from_secs(5));
+
+    assert!(started.elapsed() < Duration::from_secs(1), "기본 join은 기다리지 않는다");
+    assert!(thread.is_alive());
+}
+
+/// 작업은 그 자리에서 끝내지만, 핸들은 `pending`번 물을 때까지 끝나지 않았다고 답한다.
+struct SlowHandle {
+    checks: Arc<std::sync::atomic::AtomicUsize>,
+    pending: usize,
+}
+
+impl TaskHandle for SlowHandle {
+    fn is_finished(&self) -> bool {
+        self.checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= self.pending
+    }
+}
+
+struct SlowRunner(Arc<std::sync::atomic::AtomicUsize>);
+
+impl TaskRunner for SlowRunner {
+    fn spawn(&self, _name: &str, job: Box<dyn FnOnce() + Send>) -> Box<dyn TaskHandle> {
+        job();
+        Box::new(SlowHandle { checks: self.0.clone(), pending: 3 })
+    }
+
+    fn spawn_blocking_observed(&self, _name: &str) {}
+}
+
+#[test]
+fn test_joining_a_running_backfill_waits_until_it_finishes() {
+    let tmp = tmp_dir();
+    let checks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let _env = EnvGuard::single(CREATED_TIME_BACKFILL_ENV, "1");
+    let manager = BookManager::with_deps(deps(tmp.path(), &FakeEsManager::new()).with_task_runner(Arc::new(SlowRunner(checks.clone()))));
+    manager.set_created_time_backfill_thread(None);
+    manager.backfill_created_time_if_enabled();
+    let thread = manager.created_time_backfill_thread().expect("백필을 시작했다");
+    assert!(thread.is_alive());
+
+    manager.join_created_time_backfill_thread(Duration::from_secs(5));
+
+    assert!(!thread.is_alive());
+    assert!(checks.load(std::sync::atomic::Ordering::SeqCst) > 3, "끝날 때까지 여러 번 확인했다");
+}

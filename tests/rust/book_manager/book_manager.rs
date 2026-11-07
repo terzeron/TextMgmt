@@ -62,3 +62,36 @@ fn test_from_env_with_es_accepts_a_loader_program_override() {
     };
     assert!(book_manager::BookManager::from_env_with_es(&env, common::es_fake::FakeEsManager::new(), |deps| deps).is_ok());
 }
+
+// ---- 파일 읽기 시간 상한 ----
+
+struct SlowReader;
+
+impl book_manager::FileReader for SlowReader {
+    fn read_file(&self, _path: &std::path::Path, _path_prefix: Option<&std::path::Path>) -> search_manager::Docs {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        search_manager::Docs::new()
+    }
+}
+
+struct CrashingReader;
+
+impl book_manager::FileReader for CrashingReader {
+    fn read_file(&self, _path: &std::path::Path, _path_prefix: Option<&std::path::Path>) -> search_manager::Docs {
+        panic!("parser crashed")
+    }
+}
+
+#[test]
+fn test_reading_past_the_time_limit_is_a_timeout() {
+    use book_manager::FileReader;
+    let result = std::sync::Arc::new(SlowReader).try_read_file_with_timeout("a.txt".into(), None, false, std::time::Duration::from_millis(20));
+    assert!(matches!(result, Err(book_manager::ReadFileError::Timeout(_))));
+}
+
+#[test]
+fn test_a_reader_that_crashes_yields_no_documents() {
+    use book_manager::FileReader;
+    let result = std::sync::Arc::new(CrashingReader).try_read_file_with_timeout("a.txt".into(), None, false, std::time::Duration::from_secs(5));
+    assert!(matches!(result, Ok(docs) if docs.is_empty()));
+}
