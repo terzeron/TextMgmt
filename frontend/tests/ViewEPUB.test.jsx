@@ -463,6 +463,71 @@ describe("ViewEPUB(세로 스크롤 뷰어)", () => {
     expect(screen.queryByRole("img", { name: "책 표지" })).toBeNull();
   });
 
+  it("읽던 위치를 복원해 연 책도 첫 쪽에서 이전으로 가면 표지를 보여 준다", async () => {
+    mockCoverUrl = "blob:epub-cover";
+    localStorageMock._set("epub_location_1", "epubcfi(/6/6!/4/2)");
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    await act(async () => {
+      lastRendition._emit("relocated", { atStart: true, start: {} });
+    });
+    expect(screen.queryByRole("img", { name: "책 표지" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "이전 페이지" }));
+
+    expect(
+      (await screen.findByRole("img", { name: "책 표지" })).getAttribute("src"),
+    ).toBe("blob:epub-cover");
+    expect(lastRendition.prev).not.toHaveBeenCalled();
+  });
+
+  it("첫 쪽이 아니면 이전 이동이 표지를 띄우지 않고 앞 쪽으로 간다", async () => {
+    mockCoverUrl = "blob:epub-cover";
+    localStorageMock._set("epub_location_1", "epubcfi(/6/6!/4/2)");
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    await act(async () => {
+      lastRendition._emit("relocated", { atStart: false, start: {} });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "이전 페이지" }));
+
+    expect(lastRendition.prev).toHaveBeenCalledOnce();
+    expect(lastBook.coverUrl).not.toHaveBeenCalled();
+    expect(screen.queryByRole("img", { name: "책 표지" })).toBeNull();
+  });
+
+  it("첫 쪽에서 PageUp 을 눌러도 표지를 보여 준다", async () => {
+    mockCoverUrl = "blob:epub-cover";
+    localStorageMock._set("epub_location_1", "epubcfi(/6/6!/4/2)");
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    await act(async () => {
+      lastRendition._emit("relocated", { atStart: true, start: {} });
+    });
+
+    fireEvent.keyDown(document, { key: "PageUp" });
+
+    expect(await screen.findByRole("img", { name: "책 표지" })).toBeTruthy();
+    expect(lastRendition.prev).not.toHaveBeenCalled();
+  });
+
+  it("spine 첫 항목이 도구 표지 쪽이면 첫 쪽에서 이전으로 가도 오버레이를 만들지 않는다", async () => {
+    mockCoverUrl = "blob:epub-cover";
+    firstSpineIdref = "tm-cover-page-5a991dcf381ed4bf";
+    localStorageMock._set("epub_location_1", "epubcfi(/6/6!/4/2)");
+    render(<ViewEPUB bookId={1} />);
+    await openBook();
+    await act(async () => {
+      lastRendition._emit("relocated", { atStart: true, start: {} });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "이전 페이지" }));
+    await act(async () => {});
+
+    expect(screen.queryByRole("img", { name: "책 표지" })).toBeNull();
+  });
+
   it("displayed 이벤트가 오면 로딩이 풀린다", async () => {
     render(<ViewEPUB bookId={1} />);
     await openBook();
