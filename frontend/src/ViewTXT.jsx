@@ -4,14 +4,15 @@ import {textGetReq} from "./Common";
 import {formatText} from './textFormatter';
 import ViewerFontSelect from "./ViewerFontSelect";
 import { useReaderFontFamily } from "./viewerFonts";
+import { useStoredViewerOption } from "./useStoredViewerOption";
 import './ViewTXT.css';
 
 export default function ViewTXT({bookId, lineCount, apiPrefix = ''}) {
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState(null);
     const [fileContent, setFileContent] = useState([]);
-    const [merged, setMerged] = useState(false);
-    const [minBlank, setMinBlank] = useState(1);
+    const [merged, setMerged] = useStoredViewerOption("txt_merged", false, v => typeof v === "boolean");
+    const [minBlank, setMinBlank] = useStoredViewerOption("txt_min_blank", 1, v => Number.isInteger(v) && v >= 1);
     const [fontFamily, setFontFamily] = useReaderFontFamily();
 
     useEffect(() => {

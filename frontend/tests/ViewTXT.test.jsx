@@ -283,4 +283,19 @@ describe("ViewTXT", () => {
 
     formatTextMock.mockRestore();
   });
+  it("줄 합치기와 빈 줄 기준을 저장하고 다시 열면 복원한다", async () => {
+    mockTextGetReq.mockImplementation((url, payload, resolve) => {
+      resolve("가\n\n나");
+    });
+    const first = render(<ViewTXT bookId={1} />);
+    await waitFor(() => screen.getByText("줄 합치기"));
+    fireEvent.click(screen.getByText("줄 합치기"));
+    fireEvent.click(screen.getByText("+"));
+    expect(localStorage.getItem("tm_viewer_txt_merged")).toBe("true");
+    expect(localStorage.getItem("tm_viewer_txt_min_blank")).toBe("2");
+    first.unmount();
+    render(<ViewTXT bookId={1} />);
+    await waitFor(() => screen.getByText("빈 줄 기준"));
+    expect(screen.getByText("2")).toBeTruthy();
+  });
 });

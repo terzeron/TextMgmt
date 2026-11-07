@@ -125,6 +125,7 @@ describe("ViewPDF", () => {
   let originalFetch;
 
   beforeEach(() => {
+    localStorage.clear();
     mockGetDocument.mockReset();
     originalFetch = globalThis.fetch;
     HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}));
@@ -601,6 +602,33 @@ describe("ViewPDF", () => {
     });
   });
 
+  it("보기 옵션을 저장하고 다시 열면 복원한다. 미리보기와 전체보기는 맞춤·1장씩을 따로 기억한다", async () => {
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => createMockPdf(1));
+
+    const first = render(<ViewPDF bookId={1} />);
+    await waitFor(() => screen.getByText("총 2쪽 표시"));
+    fireEvent.click(screen.getByRole("button", { name: "맞춤" }));
+    fireEvent.click(screen.getByRole("button", { name: "1장씩" }));
+    fireEvent.click(screen.getByRole("button", { name: /좌←우/ }));
+    expect(localStorage.getItem("tm_viewer_pdf_full_fit")).toBe("false");
+    expect(localStorage.getItem("tm_viewer_pdf_full_single")).toBe("true");
+    expect(localStorage.getItem("tm_viewer_pdf_page_mode")).toBe('"rtl"');
+    first.unmount();
+
+    const second = render(<ViewPDF bookId={1} />);
+    await waitFor(() => screen.getByText("총 2쪽 표시"));
+    expect(screen.getByRole("button", { name: "1장씩" }).classList.contains("active")).toBe(true);
+    expect(screen.getByRole("button", { name: "맞춤" }).classList.contains("active")).toBe(false);
+    expect(screen.getByRole("button", { name: /좌←우/ }).getAttribute("aria-pressed")).toBe("true");
+    second.unmount();
+
+    // 미리보기는 전체보기 값의 영향을 받지 않는다
+    render(<ViewPDF bookId={1} preview />);
+    await waitFor(() => screen.getByText(/표시|렌더링/));
+    expect(screen.getByRole("button", { name: "1장씩" }).classList.contains("active")).toBe(false);
+  });
+
   it("1장씩 토글은 기본 꺼짐이고, 켜면 pdf-single 클래스와 컨테이너 포커스가 적용된다", async () => {
     globalThis.fetch = createMockFetch(2);
     setupGetDocument(() => createMockPdf(1));
@@ -817,6 +845,8 @@ describe("ViewPDF", () => {
         press("ArrowRight");
         expect(scrolled).toEqual([pages[2]]);
         cleanup();
+        scrolled.length = 0;
+        localStorage.clear();
       }
     });
 
@@ -2115,6 +2145,7 @@ describe("ViewPDF: 쪽 크기가 비정상적으로 작은 PDF", () => {
   }
 
   beforeEach(() => {
+    localStorage.clear();
     mockGetDocument.mockReset();
     originalFetch = globalThis.fetch;
     HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}));
@@ -2208,6 +2239,7 @@ describe("ViewPDF: 이미지 한 장짜리 쪽은 이미지 원래 크기로 표
   }
 
   beforeEach(() => {
+    localStorage.clear();
     mockGetDocument.mockReset();
     originalFetch = globalThis.fetch;
     HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}));
