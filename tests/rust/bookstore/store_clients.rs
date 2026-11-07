@@ -1136,6 +1136,7 @@ fn test_naver_series_links_and_authors() {
       <ul class="lst_list">
         <li><a class="N=a:nov.title" href="/novel/1">A</a></li>
         <li><a class="N=a:com.title" href="/comic/2">B</a></li>
+        <li><a class="N=a:nov.title" href="">빈 링크</a></li>
       </ul>
       <div id="_otherProductByPerson"><strong>작가</strong><strong>홍길동</strong></div>
       <div id="content"><ul class="end_info"><li class="info_lst"><ul><li><span><a>장르</a></span></li></ul></li></ul></div>
@@ -1890,19 +1891,22 @@ fn test_joara_search_by_keyword_success() {
 /// 조아라는 파라미터가 빠져도 HTTP 200 에 status=0 을 준다. 본문을 봐야 실패를 안다.
 #[test]
 fn test_joara_search_by_keyword_failure_paths() {
-    let mut store = joara(true);
+    // verbose를 끈 경우도 같은 결과다.
+    for verbose in [true, false] {
+        let mut store = joara(verbose);
 
-    store = store.with_session(constant(200, "", json!({"status": 0, "message": "필수 파라메타값이 정의되지 않았습니다.[\"deviceuid\"]"})));
-    assert!(store.search_by_keyword("데미안").is_empty());
+        store = store.with_session(constant(200, "", json!({"status": 0, "message": "필수 파라메타값이 정의되지 않았습니다.[\"deviceuid\"]"})));
+        assert!(store.search_by_keyword("데미안").is_empty());
 
-    store = store.with_session(constant(200, "", json!({"status": 1, "data": {"list": []}})));
-    assert!(store.search_by_keyword("데미안").is_empty());
+        store = store.with_session(constant(200, "", json!({"status": 1, "data": {"list": []}})));
+        assert!(store.search_by_keyword("데미안").is_empty());
 
-    store = store.with_session(constant(500, "", json!({})));
-    assert!(store.search_by_keyword("데미안").is_empty());
+        store = store.with_session(constant(500, "", json!({})));
+        assert!(store.search_by_keyword("데미안").is_empty());
 
-    store = store.with_session(failing());
-    assert!(store.search_by_keyword("데미안").is_empty());
+        store = store.with_session(failing());
+        assert!(store.search_by_keyword("데미안").is_empty());
+    }
 }
 
 /// 조아라는 API 를 직접 부르므로 HTML 훅은 호출되지 않는다.
@@ -1985,9 +1989,12 @@ macro_rules! failure_path_checks {
 
 #[test]
 fn test_naver_webtoon_search_by_keyword_failure_paths() {
-    let mut store = naver_webtoon(true);
+    // verbose를 끈 경우도 같은 결과다.
+    for verbose in [true, false] {
+        let mut store = naver_webtoon(verbose);
 
-    failure_path_checks!(store, json!({"searchList": [], "pageInfo": {"totalRows": 0}}), json!({"searchList": [{"titleName": "id 없음"}]}));
+        failure_path_checks!(store, json!({"searchList": [], "pageInfo": {"totalRows": 0}}), json!({"searchList": [{"titleName": "id 없음"}]}));
+    }
 }
 
 /// 카카오웹툰도 '제목 저자' 키워드가 0건이다. 제목만 한 번 부른다.
@@ -2198,9 +2205,12 @@ fn test_bomtoon_search_by_keyword_success() {
 
 #[test]
 fn test_bomtoon_search_by_keyword_failure_paths() {
-    let mut store = bomtoon(true);
+    // verbose를 끈 경우도 같은 결과다.
+    for verbose in [true, false] {
+        let mut store = bomtoon(verbose);
 
-    failure_path_checks!(store, json!({"data": {"results": []}}), json!({"data": {"results": [{"title": "alias 없음", "contentsType": "cartoon"}]}}));
+        failure_path_checks!(store, json!({"data": {"results": []}}), json!({"data": {"results": [{"title": "alias 없음", "contentsType": "cartoon"}]}}));
+    }
 }
 
 #[test]
@@ -2358,39 +2368,43 @@ fn test_toptoon_search_by_keyword_falls_back_to_author_string() {
 
 #[test]
 fn test_toptoon_search_by_keyword_failure_paths() {
-    let mut store = toptoon(true);
+    // verbose를 끈 경우도 같은 결과다.
+    for verbose in [true, false] {
+        let mut store = toptoon(verbose);
 
-    // 공백뿐인 키워드는 요청 없이 끝난다.
-    store = store.with_session(session(|_, _| panic!("요청하면 안 된다")).0);
-    assert!(store.search_by_keyword("   ").is_empty());
+        // 공백뿐인 키워드는 요청 없이 끝난다.
+        store = store.with_session(session(|_, _| panic!("요청하면 안 된다")).0);
+        assert!(store.search_by_keyword("   ").is_empty());
 
-    // 페이지 HTTP 오류
-    store = store.with_session(constant(500, "", json!([])));
-    assert!(store.search_by_keyword("x").is_empty());
+        // 페이지 HTTP 오류
+        store = store.with_session(constant(500, "", json!([])));
+        assert!(store.search_by_keyword("x").is_empty());
 
-    // 페이지에 목록 JSON 주소가 없음
-    store = store.with_session(constant(200, "<html></html>", json!([])));
-    assert!(store.search_by_keyword("x").is_empty());
+        // 페이지에 목록 JSON 주소가 없음
+        store = store.with_session(constant(200, "<html></html>", json!([])));
+        assert!(store.search_by_keyword("x").is_empty());
 
-    // 목록 JSON HTTP 오류
-    store = store.with_session(session(|url, _| if url.contains("hashtag") { http(200, CATALOG_URL, json!([])) } else { http(404, "", json!([])) }).0);
-    assert!(store.search_by_keyword("x").is_empty());
+        // 목록 JSON HTTP 오류
+        store = store.with_session(session(|url, _| if url.contains("hashtag") { http(200, CATALOG_URL, json!([])) } else { http(404, "", json!([])) }).0);
+        assert!(store.search_by_keyword("x").is_empty());
 
-    // 첫 요청은 성공했지만 목록 JSON 요청에서 연결이 끊긴다.
-    store = store.with_session(session(|url, _| if url.contains("hashtag") { http(200, CATALOG_URL, Value::Null) } else { Err(HttpError::Connection("catalog disconnected".to_owned())) }).0);
-    assert!(store.search_by_keyword("x").is_empty());
+        // 첫 요청은 성공했지만 목록 JSON 요청에서 연결이 끊긴다.
+        store = store.with_session(session(|url, _| if url.contains("hashtag") { http(200, CATALOG_URL, Value::Null) } else { Err(HttpError::Connection("catalog disconnected".to_owned())) }).0);
+        assert!(store.search_by_keyword("x").is_empty());
 
-    // 유효하지 않은 JSON 본문은 빈 목록처럼 처리한다.
-    store = store.with_session(session(|url, _| if url.contains("hashtag") { http(200, CATALOG_URL, Value::Null) } else { http(200, "not-json", Value::Null) }).0);
-    assert!(store.search_by_keyword("x").is_empty());
+        // 유효하지 않은 JSON 본문은 빈 목록처럼 처리한다.
+        store = store.with_session(session(|url, _| if url.contains("hashtag") { http(200, CATALOG_URL, Value::Null) } else { http(200, "not-json", Value::Null) }).0);
+        assert!(store.search_by_keyword("x").is_empty());
 
-    // 일치하는 제목이 없음
-    store = store
-        .with_session(session(|url, _| if url.contains("hashtag") { http(200, CATALOG_URL, json!([])) } else { http(200, "", json!([toptoon_comic("다른 작품", "a", 0, &["판타지"], "작가")])) }).0);
-    assert!(store.search_by_keyword("없는작품").is_empty());
+        // 일치하는 제목이 없음
+        store = store.with_session(
+            session(|url, _| if url.contains("hashtag") { http(200, CATALOG_URL, json!([])) } else { http(200, "", json!([toptoon_comic("다른 작품", "a", 0, &["판타지"], "작가")])) }).0,
+        );
+        assert!(store.search_by_keyword("없는작품").is_empty());
 
-    store = store.with_session(failing());
-    assert!(store.search_by_keyword("x").is_empty());
+        store = store.with_session(failing());
+        assert!(store.search_by_keyword("x").is_empty());
+    }
 }
 
 #[test]
@@ -2560,4 +2574,94 @@ fn test_kyobo_fallback_links_stop_at_max_results() {
 
     let expected: Vec<String> = (0..store.max_results).map(|n| format!("/detail/{n}")).collect();
     assert_eq!(links, expected);
+}
+
+// ---- 기본 구현과 서점별 남은 분기 ----
+
+#[test]
+fn default_isbn_search_requests_the_isbn_url_when_supported() {
+    let (fake, calls) = session(|_, _| Err(HttpError::Other("offline".to_owned())));
+    let store = Plain::new(Kind::Dummy).with_session(fake);
+    assert!(store.search_by_isbn("9788934900011").is_empty());
+    assert_eq!(urls(&calls), ["https://example.com/search?q=9788934900011"]);
+}
+
+#[test]
+fn an_unreadable_cached_page_is_logged_and_ignored() {
+    let tmp = TempDir::new().unwrap();
+    let mut store = Plain::new(Kind::Dummy).with_verbose(true);
+    store.tmp_dir = Some(tmp.path().to_path_buf());
+    let url = "https://example.com/detail/broken";
+    fs::write(tmp.path().join(bookstore::store_clients::cache_file_name(url)), b"\xff\xfe").unwrap();
+    assert_eq!(store.load_html_from_tmp(url), None);
+}
+
+#[test]
+fn bookstore_search_forwards_to_the_bookstore_search_flow() {
+    let mut store = Hooked::new(Kind::Dummy);
+    store.keyword = Some(Box::new(|keyword| vec![row(keyword, "a", "c", "u", "s", "")]));
+    let (results, keyword, method) = bookstore::store_clients::BookstoreSearch::search(&store, "", "제목", "");
+    assert_eq!((keyword.as_str(), method.as_str()), ("제목", "title"));
+    assert_eq!(results[0].title, "제목");
+}
+
+#[test]
+fn every_store_reports_its_base_url() {
+    let bases = [
+        yes24(false).base_url().to_owned(),
+        aladin(false).base_url().to_owned(),
+        kyobo(false).base_url().to_owned(),
+        ridibooks(false).base_url().to_owned(),
+        naver_shopping(false).base_url().to_owned(),
+        naver_series(false).base_url().to_owned(),
+        munpia(false).base_url().to_owned(),
+        joara(false).base_url().to_owned(),
+        naver_webtoon(false).base_url().to_owned(),
+        kakao_webtoon(false).base_url().to_owned(),
+        bomtoon(false).base_url().to_owned(),
+        lezhin(false).base_url().to_owned(),
+        toptoon(false).base_url().to_owned(),
+    ];
+    assert!(bases.iter().all(|base| base.starts_with("https://")), "{bases:?}");
+}
+
+#[test]
+fn yes24_source_extraction_reads_title_author_category_and_isbn() {
+    let markup = RaisingMarkup { html: "<h2T</h2><spanA</span>", raise_on: "never" };
+    let info = yes24(false).extract_book_info_from_source(&markup);
+    assert_eq!((info.title.as_str(), info.author.as_str(), info.category.as_str(), info.isbn.as_str()), ("T", "A", "", ""));
+}
+
+#[test]
+fn ridi_isbn_skips_labels_without_a_thirteen_digit_sibling() {
+    // 형제 div가 없는 라벨과 13자리가 아닌 값은 건너뛴다.
+    let html = "<html><section><div>ISBN</div></section><div>ISBN</div><div>12345</div><div>ISBN</div><div>9781234567890</div></html>";
+    assert_eq!(ridibooks(false).extract_ridi_isbn(html), "9781234567890");
+}
+
+#[test]
+fn ridi_search_uses_a_parent_category_alone_and_skips_empty_pairs() {
+    let store = ridibooks(false).with_session(constant(200, "", json!({"books": [{"b_id": "5", "title": "T5", "author": "A5", "parent_category_name": "P5"}]})));
+    let results = store.search_by_keyword("k");
+    assert_eq!(results[0].category, "P5");
+}
+
+#[test]
+fn ridi_author_comes_from_the_first_li_that_ends_with_the_author_label() {
+    let info = ridibooks(false).extract_book_info("<html><ul><li>저자</li><li>다른 정보</li><li>홍길동외2명 저자</li></ul></html>");
+    assert_eq!(info.author, "홍길동 외 2명");
+}
+
+#[test]
+fn naver_shopping_quietly_handles_bad_json_and_queries_without_items() {
+    let store = naver_shopping(false);
+    assert!(store.extract_search_links("<html><script>{ SearchAll broken</script></html>").is_empty());
+    let data = json!({"props": {"pageProps": {"dehydratedState": {"queries": [{"queryKey": ["Other"]}, {"queryKey": ["SearchAll"], "state": {}}]}}}});
+    assert!(store.extract_search_links(&format!("<html><script>{data}</script></html>")).is_empty());
+}
+
+#[test]
+fn naver_shopping_author_skips_labels_other_than_the_author_label() {
+    let html = r#"<html><div class="bookTitle_info_title__a">출판사</div><div class="bookTitle_info_content__a">출판</div><div class="bookTitle_info_title__a">저자</div><div class="bookTitle_info_content__a">홍길동</div></html>"#;
+    assert_eq!(naver_shopping(false).extract_book_info(html).author, "홍길동");
 }

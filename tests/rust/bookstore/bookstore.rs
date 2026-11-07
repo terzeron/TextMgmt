@@ -71,3 +71,9 @@ fn malformed_html_yields_empty_results_not_a_panic() {
         assert_eq!(info.title, "");
     }
 }
+
+#[test]
+fn an_empty_aladin_title_tag_gives_no_title_or_author() {
+    let info = store("aladin").extract_book_info("<html><head><title></title></head><body></body></html>");
+    assert_eq!((info.title.as_str(), info.author.as_str()), ("", ""));
+}
