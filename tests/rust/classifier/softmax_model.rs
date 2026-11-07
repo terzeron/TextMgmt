@@ -2,9 +2,9 @@
 
 use std::path::PathBuf;
 
-use classifier::feature_hasher::{hash_features, BookFields};
-use classifier::softmax_model::{ModelHeader, SoftmaxModel};
 use classifier::Classify;
+use classifier::feature_hasher::{BookFields, hash_features};
+use classifier::softmax_model::{ModelHeader, SoftmaxModel};
 use serde_json::json;
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -117,7 +117,7 @@ fn classify_document_reads_es_source() {
     for (i, _) in &x {
         m.weights[(1 << 10) + *i as usize] = 1.0;
     }
-    let prediction = m.classify_document(&json!({"title": "검과 마법", "summary": ""}), None).unwrap();
+    let prediction = m.classify_document(&json!({"title": "검과 마법", "summary": ""})).unwrap();
     assert_eq!(prediction.ranked.len(), 2);
     assert_eq!(prediction.ranked[0].0, "b");
 }

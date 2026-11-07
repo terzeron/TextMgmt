@@ -6,9 +6,9 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::feature_hasher::{hash_features, BookFields, SparseVec};
+use crate::feature_hasher::{BookFields, SparseVec, hash_features};
 use crate::{Classify, Prediction};
 
 const MAGIC: &[u8; 8] = b"TMCLS\0\x01\0";
@@ -156,18 +156,8 @@ impl SoftmaxModel {
 }
 
 impl Classify for SoftmaxModel {
-    fn is_available(&self) -> bool {
-        true
-    }
-
-    fn classify_path(&self, _path: &Path, _min_confidence: Option<f64>) -> Result<Prediction, String> {
-        Err("ES 문서로만 분류한다".into())
-    }
-
-    fn classify_document(&self, doc: &Value, _min_confidence: Option<f64>) -> Result<Prediction, String> {
+    fn classify_document(&self, doc: &Value) -> Result<Prediction, String> {
         let x = hash_features(&BookFields::from_es_source(doc), self.header.hash_bits);
-        let ranked = self.predict_proba(&x, true);
-        let (top, confidence) = ranked.first().map(|(c, p)| (Some(c.clone()), *p)).unwrap_or((None, 0.0));
-        Ok(Prediction::new(top.as_deref(), confidence, ranked, ""))
+        Ok(Prediction { ranked: self.predict_proba(&x, true) })
     }
 }

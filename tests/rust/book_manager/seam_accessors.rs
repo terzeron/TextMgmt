@@ -9,7 +9,7 @@ use crate::common::shared_fixtures::{
 };
 use book_manager::BookManagerApi;
 use book_manager::pdf_reader_cache::PdfCacheLimits;
-use book_manager::{ApplyOptions, BackfillThread, BookManager, CREATED_TIME_BACKFILL_ENV, ItemFailure, MoveOutcome, Proposal, ProposalGrade, ProposeOptions};
+use book_manager::{ApplyOptions, BackfillThread, BookManager, CREATED_TIME_BACKFILL_ENV, ItemFailure, MoveOutcome, Proposal, ProposeOptions};
 use common::env::EnvGuard;
 use common::es_fake::FakeEsManager;
 use common::fsx::set_mtime;
@@ -304,7 +304,7 @@ async fn test_propose_awaits_async_progress_callback_and_records_failures() {
         if file_path.file_name().unwrap() == "bad.txt" {
             return Err("분류기 오류".to_string());
         }
-        Ok(Proposal { target_category: Some("B".into()), grade: Some(ProposalGrade::Certain), ..Proposal::default() })
+        Ok(Proposal { target_category: Some("B".into()), classified: true, ..Proposal::default() })
     }));
     let manager = BookManager::with_deps(deps);
     let reports: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));

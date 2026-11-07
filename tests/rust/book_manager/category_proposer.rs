@@ -9,8 +9,8 @@ use crate::common::category_apply::{ApplyOpts, apply_opts};
 use crate::common::shared_fixtures::manager;
 use crate::common::shared_fixtures::{allowed_set, block_on, deps, make_doc, make_manager, make_source_file, outcome, propose, split, tmp_dir};
 use crate::common::shared_fixtures::{book_adder, file_reader, setup};
-use book_manager::{AddBookError, BookManager, CategoryCandidate, KeywordMatch, MoveAction, MoveOpts, MoveStatus, Proposal, ProposalGrade, ProposeOptions};
-use classifier::BookClassifierApi;
+use book_manager::{AddBookError, BookManager, KeywordMatch, MoveAction, MoveOpts, MoveStatus, Proposal, ProposeOptions};
+use classifier::{Classify, Prediction};
 use common::env::EnvGuard;
 use common::es_fake::FakeEsManager;
 use common::faulty_fs::{FaultyFs, fail_on_nth_call, other_err};
@@ -23,91 +23,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
-// ---- Task 3: 등급 판정과 제안 생성 ----
-
-/// classify_file 결과를 고정해 등급 규칙만 검증한다.
-///
-/// bookstore_candidates는 기본값 None이면 entry에 아예 안 실어서, 이 필드를
-/// 모르는 기존 9(10)-케이스를 그대로 둔다(호출자가 .get() 기본값으로 방어한다는
-/// 전제를 같이 검증하는 셈이다).
-///
-/// `FakeClassifierWithFloor`/`FakeClassifierWithCalibration`은 `with_floor`/`with_calibration`으로 옮겼다.
-/// 하위 클래스만 `classifier` 속성(min_confidence, expected_accuracy)을 가지므로, 기본형은 `classifier`가 None이다.
-struct FakeClassifier {
-    result: (Option<String>, String, String, Value),
-    override_below: f64,
-    classifier: Option<FakeModel>,
-}
-
-struct FakeModel {
-    min_confidence: f64,
-    expected_accuracy: Option<f64>,
-    calibrated: bool,
-}
-
-impl FakeClassifier {
-    fn new(target: Option<&str>, method: &str, reason: &str, model_category: Option<&str>, confidence: Option<f64>) -> Self {
-        let entry = json!({"confidence": confidence, "model_category": model_category});
-        Self { result: (target.map(str::to_string), method.to_string(), reason.to_string(), entry), override_below: 0.5, classifier: None }
-    }
-
-    fn override_below(mut self, boundary: f64) -> Self {
-        self.override_below = boundary;
-        self
-    }
-
-    fn bookstore_candidates(mut self, candidates: &[(&str, i64)]) -> Self {
-        self.result.3["bookstore_candidates"] = json!(candidates);
-        self
-    }
-
-    fn model_candidates(mut self, candidates: &[(&str, f64)]) -> Self {
-        self.result.3["model_candidates"] = json!(candidates);
-        self
-    }
-
-    /// FakeClassifierWithFloor: 판정 임계값을 가진 모델 대역 (기본 0.056).
-    fn with_floor(mut self) -> Self {
-        self.classifier = Some(FakeModel { min_confidence: 0.056, expected_accuracy: None, calibrated: false });
-        self
-    }
-
-    /// FakeClassifierWithCalibration: 확신도를 예상 정답률로 옮길 줄 아는 모델 대역.
-    fn with_calibration(mut self, accuracy: f64) -> Self {
-        self = self.with_floor();
-        let model = self.classifier.as_mut().unwrap();
-        model.expected_accuracy = Some(accuracy);
-        model.calibrated = true;
-        self
-    }
-}
-
-impl BookClassifierApi for FakeClassifier {
-    fn classify_file(&self, _path: &Path) -> (Option<String>, String, String, Value) {
-        self.result.clone()
-    }
-
-    fn override_below(&self) -> f64 {
-        self.override_below
-    }
-
-    fn prefers_bookstore(&self, value: f64) -> bool {
-        self.override_below > 0.0 && value < self.override_below
-    }
-
-    fn min_confidence(&self) -> Option<f64> {
-        self.classifier.as_ref().map(|m| m.min_confidence)
-    }
-
-    fn expected_accuracy(&self, confidence: Option<f64>) -> Option<Option<f64>> {
-        // 바깥 Option은 보정 함수 유무(classifier.expected_accuracy 속성), 안쪽은 함수의 반환값이다.
-        let model = self.classifier.as_ref()?;
-        if !model.calibrated {
-            return None;
-        }
-        Some(confidence.and(model.expected_accuracy))
-    }
-}
+// ---- 제안 생성 ----
 
 /// 카테고리 -> 키워드 매핑.
 /// 키/키워드가 문자열이 아닌 경우(예: 정수)를 만들 수 있도록 값은 `Value`다.
@@ -115,28 +31,6 @@ type Mappings = Vec<(Value, Vec<Value>)>;
 
 fn mappings(pairs: &[(&str, &[&str])]) -> Mappings {
     pairs.iter().map(|(cat, kws)| (json!(cat), kws.iter().map(|k| json!(k)).collect())).collect()
-}
-
-/// 등급 판정 9(10)-케이스: candidates 추가가 target_category/grade를 바꾸지 않는지도
-/// 이 목록을 그대로 재사용해서(test_propose_category_candidates_first_matches_target_when_decided)
-/// 같이 검증한다. 두 값을 따로 유지하면 표류할 수 있어 리스트를 공유한다.
-fn propose_category_grade_cases() -> Vec<(Mappings, FakeClassifier, Option<&'static str>, ProposalGrade)> {
-    vec![
-        (mappings(&[("3_SF", &["과학소설"])]), FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.9)), Some("3_SF"), ProposalGrade::Certain),
-        (mappings(&[("3_SF", &["과학소설"])]), FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.1)), Some("3_SF"), ProposalGrade::Unsure),
-        (mappings(&[("3_SF", &["과학소설"])]), FakeClassifier::new(Some("5_음악"), "model", "r", Some("5_음악"), Some(0.9)), Some("3_SF"), ProposalGrade::Unsure),
-        (mappings(&[("3_SF", &["과학소설"]), ("5_음악", &["과학소설"])]), FakeClassifier::new(None, "not_found", "r", None, Some(0.1)), None, ProposalGrade::Unknown),
-        (mappings(&[]), FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.9)), Some("3_SF"), ProposalGrade::Certain),
-        (mappings(&[]), FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.1)), None, ProposalGrade::Unknown),
-        (mappings(&[]), FakeClassifier::new(Some("3_SF"), "bookstore_majority", "r", None, Some(0.1)), Some("3_SF"), ProposalGrade::Certain),
-        (mappings(&[]), FakeClassifier::new(Some("3_SF"), "bookstore_single", "r", None, Some(0.1)), Some("3_SF"), ProposalGrade::Unsure),
-        (mappings(&[]), FakeClassifier::new(None, "conflict", "r", Some("3_SF"), Some(0.1)), None, ProposalGrade::Unknown),
-        (mappings(&[]), FakeClassifier::new(None, "not_found", "r", None, Some(0.1)), None, ProposalGrade::Unknown),
-    ]
-}
-
-fn candidate(category: &str) -> CategoryCandidate {
-    CategoryCandidate { category: category.to_string(), ..CategoryCandidate::default() }
 }
 
 /// 제안 후보의 카테고리만 뽑는다.
@@ -567,43 +461,6 @@ fn test_move_classified_file_target_traversal_and_restore_err() {
 }
 
 #[test]
-fn test_propose_category_grades() {
-    for (i, (mappings, fake, expected_target, expected_grade)) in propose_category_grade_cases().into_iter().enumerate() {
-        let tmp = tmp_dir();
-        let tmp_path = tmp.path();
-        let manager = make_manager(tmp_path, &FakeEsManager::new());
-        let target = make_source_file(tmp_path, "A", "과학소설 모음.epub");
-
-        let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
-
-        assert_eq!(proposal.target_category.as_deref(), expected_target, "case {i}: target_category");
-        assert_eq!(proposal.grade, Some(expected_grade), "case {i}: grade");
-    }
-}
-
-#[test]
-fn test_propose_category_candidates_first_matches_target_when_decided() {
-    // target_category가 None이 아닌 모든 등급에서 candidates[0]이 그 값과 같아야 한다.
-    //
-    // 후보를 더 보여주는 것이 등급 판정 결과(target_category)를 바꾸면 안 된다는
-    // 불변식을, 등급 판정 자체를 검증하는 목록을 그대로 재사용해서 확인한다.
-    for (i, (mappings, fake, expected_target, _expected_grade)) in propose_category_grade_cases().into_iter().enumerate() {
-        let tmp = tmp_dir();
-        let tmp_path = tmp.path();
-        let manager = make_manager(tmp_path, &FakeEsManager::new());
-        let target = make_source_file(tmp_path, "A", "과학소설 모음.epub");
-
-        let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
-
-        assert_eq!(proposal.target_category.as_deref(), expected_target, "case {i}: target_category");
-        if let Some(expected) = expected_target {
-            assert!(!proposal.candidates.is_empty(), "case {i}: candidates 비어 있음");
-            assert_eq!(proposal.candidates[0].category, expected, "case {i}: candidates[0]");
-        }
-    }
-}
-
-#[test]
 fn test_propose_category_candidates_keyword_top_with_runner_up() {
     // 키워드 단독 최고점이면 1위와 2위를 후보로 낸다.
     let tmp = tmp_dir();
@@ -611,9 +468,8 @@ fn test_propose_category_candidates_keyword_top_with_runner_up() {
     let manager = make_manager(tmp_path, &FakeEsManager::new());
     let target = make_source_file(tmp_path, "A", "과학소설 클래식 모음.epub");
     let mappings = mappings(&[("3_SF", &["과학소설"]), ("5_음악", &["클래식"])]);
-    let fake = FakeClassifier::new(None, "not_found", "r", None, None);
 
-    let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
+    let proposal = manager.propose_category_for_file(&target, "A", &mappings, None);
 
     assert_eq!(proposal.target_category.as_deref(), Some("3_SF"));
     assert_eq!(candidate_categories(&proposal), ["3_SF", "5_음악"]);
@@ -632,10 +488,9 @@ fn test_propose_category_item_always_carries_matched_keywords() {
     let manager = make_manager(tmp_path, &FakeEsManager::new());
     let matched = make_source_file(tmp_path, "A", "과학소설 모음.epub");
     let unmatched = make_source_file(tmp_path, "A", "제목 없음.epub");
-    let fake = FakeClassifier::new(None, "not_found", "r", None, None);
 
-    let hit = manager.propose_category_for_file(&matched, "A", &mappings(&[("3_SF", &["과학소설"])]), Some(&fake));
-    let miss = manager.propose_category_for_file(&unmatched, "A", &mappings(&[("3_SF", &["과학소설"])]), Some(&fake));
+    let hit = manager.propose_category_for_file(&matched, "A", &mappings(&[("3_SF", &["과학소설"])]), None);
+    let miss = manager.propose_category_for_file(&unmatched, "A", &mappings(&[("3_SF", &["과학소설"])]), None);
 
     assert_eq!(hit.matched_keywords, ["과학소설"]);
     assert!(miss.matched_keywords.is_empty());
@@ -643,56 +498,18 @@ fn test_propose_category_item_always_carries_matched_keywords() {
 
 #[test]
 fn test_propose_category_candidates_keyword_tie() {
-    // 키워드가 동점으로 갈리면 후보 2개를 보여주되 target은 정하지 않는다.
-    //
-    // 체계가 못 정했다는 사실은 후보가 보여도 바뀌지 않는다 — 사람이 셀렉트박스로
-    // 골라야 체크박스가 켜진다.
+    // 키워드 수가 같으면 점수도 같다. 동점은 카테고리 이름 오름차순으로 1등을 정하고 둘 다 후보로 낸다.
     let tmp = tmp_dir();
     let tmp_path = tmp.path();
     let manager = make_manager(tmp_path, &FakeEsManager::new());
     let target = make_source_file(tmp_path, "A", "SF음악.epub");
     let mappings = mappings(&[("3_SF", &["SF"]), ("5_음악", &["음악"])]);
-    let fake = FakeClassifier::new(None, "not_found", "r", None, None);
 
-    let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
-
-    assert!(proposal.target_category.is_none());
-    assert_eq!(proposal.grade, Some(ProposalGrade::Unknown));
-    assert_eq!(proposal.candidates.len(), 2);
-    let cats: BTreeSet<String> = candidate_categories(&proposal).into_iter().collect();
-    assert_eq!(cats, BTreeSet::from(["3_SF".to_string(), "5_음악".to_string()]));
-}
-
-#[test]
-fn test_propose_category_candidates_bookstore_conflict() {
-    // 서점 판정이 갈리면 득표 상위 2개를 후보로 보여주되 target은 unknown으로 남긴다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let target = make_source_file(tmp_path, "A", "달빛조각사.epub");
-    let fake = FakeClassifier::new(None, "conflict", "r", None, None).bookstore_candidates(&[("3_무협", 1), ("3_판타지", 1)]);
-
-    let proposal = manager.propose_category_for_file(&target, "A", &mappings(&[]), Some(&fake));
-
-    assert!(proposal.target_category.is_none());
-    assert_eq!(proposal.grade, Some(ProposalGrade::Unknown));
-    assert_eq!(candidate_categories(&proposal), ["3_무협", "3_판타지"]);
-}
-
-#[test]
-fn test_propose_category_candidates_model_only_has_length_one() {
-    // 모델 단독 판정은 대안이 없으니 후보가 1개다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let target = make_source_file(tmp_path, "A", "book.epub");
-    let fake = FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.9));
-
-    let proposal = manager.propose_category_for_file(&target, "A", &mappings(&[]), Some(&fake));
+    let proposal = manager.propose_category_for_file(&target, "A", &mappings, None);
 
     assert_eq!(proposal.target_category.as_deref(), Some("3_SF"));
-    assert_eq!(proposal.candidates.len(), 1);
-    assert_eq!(proposal.candidates[0].category, "3_SF");
+    assert_eq!(candidate_categories(&proposal), ["3_SF", "5_음악"]);
+    assert_eq!(proposal.candidates[0].score, proposal.candidates[1].score);
 }
 
 #[test]
@@ -703,142 +520,222 @@ fn test_propose_category_candidates_capped_at_two_even_with_more_contenders() {
     let manager = make_manager(tmp_path, &FakeEsManager::new());
     let target = make_source_file(tmp_path, "A", "과학 음악 역사.epub");
     let mappings = mappings(&[("3_SF", &["과학"]), ("5_음악", &["음악"]), ("7_역사", &["역사"])]);
-    let fake = FakeClassifier::new(None, "not_found", "r", None, None);
 
-    let proposal = manager.propose_category_for_file(&target, "A", &mappings, Some(&fake));
+    let proposal = manager.propose_category_for_file(&target, "A", &mappings, None);
 
     assert!(proposal.candidates.len() <= 2);
 }
 
-#[test]
-fn test_propose_category_candidates_bookstore_majority_without_vote_data_does_not_understate_the_count() {
-    // bookstore_candidates가 비어 있어도(오래된 캐시 등) certain 등급에 "서점 1곳"이라는
-    // 자기모순적인 근거를 달면 안 된다. MIN_STORE_VOTES는 2라서
-    // bookstore_majority는 실제로 1표일 수 없는데, 근거 문구가 1곳이라고 하면 관리자가
-    // "겨우 한 곳"이라는 약한 근거로 착각한 채 사전 체크된 행을 그대로 승인할 수 있다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let target = make_source_file(tmp_path, "A", "book.epub");
-    let fake = FakeClassifier::new(Some("3_SF"), "bookstore_majority", "r", None, Some(0.1));
+// ---- 근거별 가중치 합산 ----
 
-    let proposal = manager.propose_category_for_file(&target, "A", &mappings(&[]), Some(&fake));
+/// 순위를 고정해 돌려주는 모델 대역.
+struct FixedModel(Vec<(&'static str, f64)>);
+
+impl Classify for FixedModel {
+    fn classify_document(&self, _doc: &Value) -> Result<Prediction, String> {
+        Ok(Prediction { ranked: self.0.iter().map(|(c, p)| (c.to_string(), *p)).collect() })
+    }
+}
+
+/// 파일의 inode로 ES 문서를 넣는다. 문서 키는 inode다.
+fn index_doc(es: &FakeEsManager, file: &Path, doc: Value) {
+    es.put_doc(book_manager::category_proposer::book_id_for_path(file).unwrap(), doc);
+}
+
+fn make_dirs(root: &Path, names: &[&str]) {
+    for name in names {
+        fs::create_dir_all(root.join(name)).unwrap();
+    }
+}
+
+fn candidate_sources(proposal: &Proposal) -> Vec<String> {
+    proposal.candidates.iter().map(|c| c.source.clone()).collect()
+}
+
+#[test]
+fn proposal_top_two_follow_combined_score() {
+    // B = 0.6·ISBN 1.0 + 0.15·모델 0.1 = 0.615, C = 0.25·키워드 1.0, D = 0.15·모델 0.9 = 0.135.
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    make_dirs(tmp.path(), &["B", "C", "D"]);
+    let book = make_source_file(tmp.path(), "A", "검마법.epub");
+    index_doc(&es, &book, json!({"title": "검과 마법", "isbn": "111", "file_path": "A/검마법.epub"}));
+    es.put_doc(999_999_001, json!({"isbn": "111", "file_path": "B/사본.epub"}));
+    let model = FixedModel(vec![("D", 0.9), ("B", 0.1)]);
+
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[("C", &["검마법"])]), Some(&model));
+
+    assert_eq!(proposal.target_category.as_deref(), Some("B"));
+    assert_eq!(candidate_categories(&proposal), ["B", "C"]);
+    assert_eq!(candidate_sources(&proposal), ["isbn", "keyword"]);
+    assert!((proposal.score.unwrap() - 0.615).abs() < 1e-9, "{:?}", proposal.score);
+    assert_eq!(proposal.candidates[0].score, proposal.score.unwrap());
+    assert_eq!(proposal.model_category.as_deref(), Some("D"));
+    assert!(proposal.classified);
+}
+
+#[test]
+fn isbn_match_in_current_category_keeps_book_in_place() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    let book = make_source_file(tmp.path(), "A", "책.epub");
+    index_doc(&es, &book, json!({"title": "책", "isbn": "222", "file_path": "A/책.epub"}));
+    es.put_doc(999_999_002, json!({"isbn": "222", "file_path": "A/다른 판.epub"}));
+
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), None);
+
+    assert_eq!(proposal.target_category.as_deref(), Some("A"));
+}
+
+#[test]
+fn own_inode_is_excluded_from_isbn_matches() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    let book = make_source_file(tmp.path(), "A", "책.epub");
+    index_doc(&es, &book, json!({"title": "책", "isbn": "333", "file_path": "A/책.epub"}));
+
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), None);
+
+    assert!(proposal.target_category.is_none());
+    assert!(proposal.candidates.is_empty());
+    assert!(proposal.classified);
+}
+
+#[test]
+fn isbn_matches_at_the_limit_are_ignored_even_after_dropping_own_inode() {
+    // 상한은 자기 문서를 빼기 전의 건수로 본다. 빼고 세면 50건이 49건이 되어 상한을 빠져나간다.
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    let book = make_source_file(tmp.path(), "A", "책.epub");
+    index_doc(&es, &book, json!({"title": "책", "isbn": "444", "file_path": "A/책.epub"}));
+    for i in 0..(search_manager::ISBN_MATCH_LIMIT as i64 - 1) {
+        es.put_doc(999_000_000 + i, json!({"isbn": "444", "file_path": format!("B/{i}.epub")}));
+    }
+
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), None);
+
+    assert!(proposal.target_category.is_none(), "{proposal:?}");
+}
+
+#[test]
+fn unindexed_file_uses_keyword_only() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    make_dirs(tmp.path(), &["C", "D"]);
+    let book = make_source_file(tmp.path(), "A", "검마법.epub");
+    let model = FixedModel(vec![("D", 1.0)]);
+
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[("C", &["검마법"])]), Some(&model));
+
+    assert_eq!(candidate_categories(&proposal), ["C"]);
+    assert_eq!(proposal.score, Some(1.0));
+    assert!(proposal.model_category.is_none());
+}
+
+#[test]
+fn model_candidates_without_directory_are_dropped() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    make_dirs(tmp.path(), &["D"]);
+    let book = make_source_file(tmp.path(), "A", "책.epub");
+    index_doc(&es, &book, json!({"title": "검과 마법", "file_path": "A/책.epub"}));
+    let model = FixedModel(vec![("없는곳", 0.7), ("D", 0.3)]);
+
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&model));
+
+    assert_eq!(candidate_categories(&proposal), ["D"]);
+    // 남은 카테고리끼리 합 1로 다시 정규화한다.
+    assert!((proposal.score.unwrap() - 1.0).abs() < 1e-9);
+    assert_eq!(proposal.model_category.as_deref(), Some("D"));
+}
+
+#[test]
+fn empty_summary_and_title_skip_model() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    make_dirs(tmp.path(), &["D"]);
+    let book = make_source_file(tmp.path(), "A", "책.epub");
+    index_doc(&es, &book, json!({"title": "  ", "summary": "", "author": "누군가", "file_path": "A/책.epub"}));
+    let model = FixedModel(vec![("D", 1.0)]);
+
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&model));
+
+    assert!(proposal.target_category.is_none());
+    assert!(proposal.model_category.is_none());
+}
+
+#[test]
+fn es_lookup_failure_falls_back_to_keywords_and_is_noted() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    es.on_search_by_id(|_| Err(search_manager::EsError::Transport("연결 끊김".into())));
+    let manager = make_manager(tmp.path(), &es);
+    make_dirs(tmp.path(), &["C"]);
+    let book = make_source_file(tmp.path(), "A", "검마법.epub");
+
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[("C", &["검마법"])]), Some(&FixedModel(vec![("C", 1.0)])));
+
+    assert_eq!(proposal.target_category.as_deref(), Some("C"));
+    assert_eq!(candidate_sources(&proposal), ["keyword"]);
+    assert!(proposal.reason.contains("ES 조회 실패"), "{}", proposal.reason);
+}
+
+#[test]
+fn no_model_factory_returns_none_and_proposal_still_runs() {
+    // 팩토리는 제안 한 번에 한 번만 부른다. None이면 모델 없이 키워드로 진행한다.
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = calls.clone();
+    let manager = BookManager::with_deps(deps(tmp.path(), &es).with_classifier_factory(Arc::new(move || {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        None
+    })));
+    make_dirs(tmp.path(), &["C"]);
+    make_source_file(tmp.path(), "A", "검마법 1.epub");
+    make_source_file(tmp.path(), "A", "검마법 2.epub");
+
+    let (result, error) = block_on(propose_opts(&manager, "A", &mappings(&[("C", &["검마법"])]), ProposeOpts { use_bookstore: false, use_content_meta: true, on_progress: None }));
+
+    assert!(error.is_none());
+    assert!(result["items"].as_array().unwrap().iter().all(|i| i["target_category"] == "C"));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn placeholder_rows_are_not_classified_and_finished_rows_are() {
+    let tmp = tmp_dir();
+    let manager = make_manager(tmp.path(), &FakeEsManager::new());
+    make_source_file(tmp.path(), "A", "가.epub");
+
+    let progress: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = progress.clone();
+    block_on(propose_opts(&manager, "A", &mappings(&[]), ProposeOpts { use_bookstore: false, use_content_meta: false, on_progress: Some(Box::new(move |call| sink.lock().unwrap().push(call))) }));
+
+    let progress = progress.lock().unwrap();
+    let placeholder = progress.iter().find_map(|call| call.get("new_items")).unwrap();
+    let finished = progress.iter().find_map(|call| call.get("updated_items")).unwrap();
+    assert_eq!(placeholder[0]["classified"], false);
+    assert_eq!(finished[0]["classified"], true);
+}
+
+#[test]
+fn old_payload_with_grade_still_deserializes() {
+    let old = json!({"target_category": "3_SF", "grade": "certain", "confidence": 0.9, "expected_accuracy": 0.8, "source": "model", "candidates": [{"category": "3_SF", "source": "model", "detail": "모델 판정"}]});
+
+    let proposal: Proposal = serde_json::from_value(old).unwrap();
 
     assert_eq!(proposal.target_category.as_deref(), Some("3_SF"));
-    assert_eq!(proposal.grade, Some(ProposalGrade::Certain));
-    assert!(!proposal.candidates[0].detail.contains("1곳"));
-}
-
-#[test]
-fn test_high_confidence_needs_a_calibrated_boundary() {
-    // 정책 파일이 없으면 경계가 0이라 모든 점수가 높음이 된다. 그러면 전부 자동 체크된다.
-    let tmp = tmp_dir();
-    let manager = make_manager(tmp.path(), &FakeEsManager::new());
-    let fake = FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.9)).override_below(0.0);
-
-    assert!(!manager.is_high_confidence(&fake, 0.9));
-}
-
-#[test]
-fn test_high_confidence_needs_more_than_the_bookstore_boundary() {
-    // 서점 경계만 넘은 낮은 점수는 '확실'이 아니다.
-    //
-    // 서점 경계(override_below)는 "모델과 서점 중 누구를 믿을까"를 가르려고 잰 값이지
-    // "확실한가"를 가르려고 잰 값이 아니다. 이 코퍼스에서 그 값은 0.056인데, 752건을
-    // 실측하니 0.10 아래 구간의 정답률은 약 53%(동전 던지기)이고 0.10 위는 약 97.7%다.
-    // 경계를 그대로 쓰던 시절에는 제안의 88%가 그 상태로 미리 체크됐다.
-    let tmp = tmp_dir();
-    let manager = make_manager(tmp.path(), &FakeEsManager::new());
-    let fake = FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.07)).override_below(0.056);
-
-    // 서점 경계(0.056)는 넘지만 확실 경계(0.10)는 못 넘는다.
-    assert!(!manager.is_high_confidence(&fake, 0.07));
-    assert!(manager.is_high_confidence(&fake, 0.12));
-}
-
-#[test]
-fn test_low_confidence_model_answer_is_not_pre_checked() {
-    // 0.10 아래 모델 판정은 '애매'로 내려가 체크가 꺼진 채 사람에게 간다.
-    //
-    // 실제로 겪은 사례다. 성인 웹소설이 확신도 0.069~0.088로 2_수필서간일기로 판정돼
-    // '확실'로 미리 체크됐다. 그 점수대의 정답률은 절반 수준이라 사람이 봐야 한다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let book = make_source_file(tmp_path, "9_성인", "어떤 웹소설.epub");
-    let fake = FakeClassifier::new(Some("2_수필서간일기"), "model", "모델 판정", Some("2_수필서간일기"), Some(0.076)).override_below(0.056);
-
-    let proposal = manager.propose_category_for_file(&book, "9_성인", &mappings(&[]), Some(&fake));
-
-    assert_eq!(proposal.grade, Some(ProposalGrade::Unknown), "동전 던지기 점수가 미리 체크됐다");
-    assert!(proposal.target_category.is_none(), "점수가 낮은 답을 목적지로 썼다");
-    // 모델이 뭐라고 했는지는 후보로 남는다 — 사람이 보고 그걸 고를 수도 있어야 한다.
-    assert_eq!(candidate_categories(&proposal), ["2_수필서간일기"]);
-}
-
-#[test]
-fn test_single_keyword_match_still_offers_a_second_choice() {
-    // 키워드가 하나만 맞아도 추천 2 칸이 비지 않는다.
-    //
-    // 실제로 겪은 사례다. 파일명의 '에세이' 하나가 2_수필서간일기를 정하자 모델이 낸
-    // 답은 통째로 버려지고 추천 2가 비었다. 키워드가 틀렸다고 느낀 관리자에게는
-    // 2,000개짜리 드롭다운 말고는 길이 없었다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let book = make_source_file(tmp_path, "9_어린이육아", "고생을 위한 철학에세이.txt");
-    let fake = FakeClassifier::new(Some("9_어린이육아"), "model", "r", Some("9_어린이육아"), Some(0.116)).model_candidates(&[("9_어린이육아", 0.116), ("4_철학윤리", 0.04)]);
-
-    let proposal = manager.propose_category_for_file(&book, "9_어린이육아", &mappings(&[("2_수필서간일기", &["에세이"])]), Some(&fake));
-
-    assert_eq!(proposal.target_category.as_deref(), Some("2_수필서간일기"));
-    let categories = candidate_categories(&proposal);
-    assert_eq!(categories, ["2_수필서간일기", "9_어린이육아"]);
-    assert_eq!(Some(proposal.candidates[0].category.as_str()), proposal.target_category.as_deref());
-}
-
-#[test]
-fn test_model_path_offers_its_runner_up_as_the_second_choice() {
-    // 모델 판정 경로는 모델이 이미 매긴 2순위를 추천 2로 보여준다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let book = make_source_file(tmp_path, "A", "제목.txt");
-    let fake = FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.3)).model_candidates(&[("3_SF", 0.3), ("5_음악", 0.08)]);
-
-    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
-
-    assert_eq!(candidate_categories(&proposal), ["3_SF", "5_음악"]);
-}
-
-#[test]
-fn test_model_alternative_is_not_added_when_two_candidates_already_exist() {
-    // 이미 후보가 2개면 모델 대안을 덧붙이지 않는다. 2개가 상한이다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let book = make_source_file(tmp_path, "A", "과학소설 클래식 모음.txt");
-    let fake = FakeClassifier::new(None, "not_found", "r", None, None).model_candidates(&[("9_성인", 0.2)]);
-
-    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[("3_SF", &["과학소설"]), ("5_음악", &["클래식"])]), Some(&fake));
-
-    let categories = candidate_categories(&proposal);
-    assert_eq!(categories.len(), 2);
-    assert!(!categories.iter().any(|c| c == "9_성인"));
-}
-
-#[test]
-fn test_model_alternative_never_repeats_the_destination() {
-    // 모델 1순위가 이미 목적지면 같은 카테고리를 두 번 보여주지 않는다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let book = make_source_file(tmp_path, "A", "과학소설 모음.txt");
-    let fake = FakeClassifier::new(Some("3_SF"), "model", "r", Some("3_SF"), Some(0.3)).model_candidates(&[("3_SF", 0.3)]);
-
-    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[("3_SF", &["과학소설"])]), Some(&fake));
-
-    assert_eq!(candidate_categories(&proposal), ["3_SF"]);
+    assert!(!proposal.classified);
+    assert!(proposal.score.is_none());
+    assert_eq!(proposal.candidates[0].score, 0.0);
 }
 
 #[test]
@@ -930,8 +827,8 @@ fn test_propose_category_changes_lists_every_target_before_classifying() {
     let mut paths: Vec<&str> = first["new_items"].as_array().unwrap().iter().map(|item| item["file_path"].as_str().unwrap()).collect();
     paths.sort();
     assert_eq!(paths, ["A/가.epub", "A/나.epub"]);
-    // 아직 분류 전이라 등급도 목적지도 없다. 화면은 이것으로 "분류 중"을 구분한다.
-    assert!(first["new_items"].as_array().unwrap().iter().all(|item| item["grade"].is_null() && item["target_category"].is_null()));
+    // 아직 분류 전이라 목적지가 없고 classified도 false다. 화면은 이것으로 "분류 중"을 구분한다.
+    assert!(first["new_items"].as_array().unwrap().iter().all(|item| item["classified"] == false && item["target_category"].is_null()));
     assert!(first["new_items"].as_array().unwrap().iter().all(|item| item["title"].as_str().is_some_and(|t| !t.is_empty())));
 }
 
@@ -1198,182 +1095,17 @@ fn test_apply_category_changes_retrying_moving_row_when_move_never_happened() {
     assert!(tmp_path.join("5_음악").join("book.epub").is_file());
 }
 
-// ---------------------------------------------------------------------------
-// 추천 2 — 모델이 스스로 버린 답을 대안으로 내밀지 않는다
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_model_alternative_below_the_decision_floor_is_not_offered() {
-    // 임계값 미만 점수는 모델이 같은 턴에 '판정하지 않음'으로 버린 값이다.
-    //
-    // 그것을 추천 칸에 올리면, 시스템이 근거 없다고 판단한 카테고리를 관리자가
-    // 근거 있는 추천으로 읽는다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let book = make_source_file(tmp_path, "A", "제목.txt");
-    let fake = FakeClassifier::new(Some("2_소설외국"), "bookstore_majority", "r", None, Some(0.076))
-        .with_floor()
-        .bookstore_candidates(&[("2_소설외국", 3)])
-        .model_candidates(&[("2_소설외국", 0.076), ("2_수필서간일기", 0.046)]);
-
-    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
-
-    assert_eq!(candidate_categories(&proposal), ["2_소설외국"]);
-}
-
-#[test]
-fn test_model_alternative_at_or_above_the_decision_floor_is_offered() {
-    // 임계값을 넘긴 대안은 그대로 보여준다. 게이트가 2순위를 통째로 죽이면 안 된다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let book = make_source_file(tmp_path, "A", "제목.txt");
-    let fake = FakeClassifier::new(Some("2_소설외국"), "bookstore_majority", "r", None, Some(0.2))
-        .with_floor()
-        .bookstore_candidates(&[("2_소설외국", 3)])
-        .model_candidates(&[("2_소설외국", 0.2), ("3_스릴러", 0.09)]);
-
-    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
-
-    assert_eq!(candidate_categories(&proposal), ["2_소설외국", "3_스릴러"]);
-}
-
-#[test]
-fn test_bookstore_votes_beat_a_model_alternative_when_no_destination_was_chosen() {
-    // 목적지를 못 정했어도 서점 득표가 있으면 그것을 추천 2로 보여준다.
-    //
-    // 모델 확신도가 '확실' 기준에 못 미치면 목적지가 빈다. 그때 화면이 모델의
-    // 저점수 대안만 늘어놓으면, 정작 서점이 남긴 근거가 안 보인다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let book = make_source_file(tmp_path, "A", "제목.txt");
-    let fake = FakeClassifier::new(None, "model", "r", Some("2_소설외국"), Some(0.076))
-        .with_floor()
-        .bookstore_candidates(&[("8_건강일반", 1)])
-        .model_candidates(&[("2_소설외국", 0.076), ("2_수필서간일기", 0.046)]);
-
-    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
-
-    assert!(proposal.target_category.is_none());
-    assert_eq!(candidate_categories(&proposal), ["2_소설외국", "8_건강일반"]);
-    assert_eq!(proposal.candidates[1].source, "bookstore");
-}
-
-// ---------------------------------------------------------------------------
-// 점수 표기 — 확신도 대신 예상 정답률
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_proposal_carries_expected_accuracy() {
-    // 0.076 은 좋은 점수인지 화면에서 읽을 수 없다. 보정한 정답률을 함께 보낸다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let book = make_source_file(tmp_path, "A", "제목.txt");
-    let fake = FakeClassifier::new(Some("2_소설외국"), "bookstore_majority", "r", None, Some(0.076)).with_calibration(0.93).bookstore_candidates(&[("2_소설외국", 3)]);
-
-    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
-
-    assert_eq!(proposal.confidence, Some(0.076));
-    assert_eq!(proposal.expected_accuracy, Some(0.93));
-}
-
-#[test]
-fn test_proposal_expected_accuracy_is_none_without_calibration() {
-    // 보정이 없는 옛 모델에서는 아무 값도 주장하지 않는다.
-    let tmp = tmp_dir();
-    let tmp_path = tmp.path();
-    let manager = make_manager(tmp_path, &FakeEsManager::new());
-    let book = make_source_file(tmp_path, "A", "제목.txt");
-    let fake = FakeClassifier::new(Some("2_소설외국"), "bookstore_majority", "r", None, Some(0.076)).with_floor().bookstore_candidates(&[("2_소설외국", 3)]);
-
-    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&fake));
-
-    assert!(proposal.expected_accuracy.is_none());
-}
-
 mod candidate_building {
-    use super::candidate;
     use super::common;
     use crate::common::dyn_es::make_manager;
     use crate::common::shared_fixtures::{category_with_files, outcome, split};
     use book_manager::{MoveAction, MoveOpts, MoveStatus};
-    use classifier::BookClassifierApi;
     use common::es_fake::FakeEsManager;
     use serde_json::json;
     use std::fs;
     use tempfile::TempDir;
 
-    /// `BookClassifierApi` 대역. 모델 판정 하한과 보정 정확도만 정할 수 있다.
-    /// "파싱할 수 없는 값"과 "보정 중 오류"는 둘 다 `None`으로 나타낸다.
-    struct StubService {
-        min_confidence: Option<f64>,
-        accuracy: Option<Option<f64>>,
-    }
-
-    impl BookClassifierApi for StubService {
-        fn min_confidence(&self) -> Option<f64> {
-            self.min_confidence
-        }
-
-        fn expected_accuracy(&self, _confidence: Option<f64>) -> Option<Option<f64>> {
-            self.accuracy
-        }
-    }
-
     // ---- 분류 후보 조립 ----
-
-    #[test]
-    fn test_model_decision_floor_ignores_unparsable_value() {
-        // 파싱할 수 없는 값은 타입이 있는 API에서 `None`이다
-        let service = StubService { min_confidence: None, accuracy: None };
-        assert_eq!(book_manager::category_proposer::model_decision_floor(&service), 0.0);
-    }
-
-    #[test]
-    fn test_expected_accuracy_swallows_calibration_errors() {
-        // 보정 중 예외는 타입이 있는 API에서 `None`이다
-        let service = StubService { min_confidence: None, accuracy: None };
-        assert_eq!(book_manager::category_proposer::expected_accuracy(&service, 0.9), None);
-    }
-
-    #[test]
-    fn test_fill_second_with_model_keeps_two_candidates_untouched() {
-        let tmp = TempDir::new().unwrap();
-        let manager = make_manager(tmp.path(), FakeEsManager::new());
-        let candidates = vec![candidate("A"), candidate("B")];
-        assert_eq!(manager.fill_second_with_model(candidates.clone(), &[("C".to_string(), 0.9)]), candidates);
-    }
-
-    #[test]
-    fn test_build_candidates_without_model_uses_top_two_bookstore_votes() {
-        let tmp = TempDir::new().unwrap();
-        let manager = make_manager(tmp.path(), FakeEsManager::new());
-        let votes = [("A".to_string(), 3), ("B".to_string(), 2), ("C".to_string(), 1)];
-        let result = manager.build_candidates(None, "not_found", None, &votes);
-        let categories: Vec<&str> = result.iter().map(|c| c.category.as_str()).collect();
-        assert_eq!(categories, vec!["A", "B"]);
-    }
-
-    #[test]
-    fn test_fill_second_with_bookstore_keeps_two_candidates_untouched() {
-        let tmp = TempDir::new().unwrap();
-        let manager = make_manager(tmp.path(), FakeEsManager::new());
-        let candidates = vec![candidate("A"), candidate("B")];
-        assert_eq!(manager.fill_second_with_bookstore(candidates.clone(), &[("C".to_string(), 3)]), candidates);
-    }
-
-    #[test]
-    fn test_vote_count_returns_recorded_votes_for_known_category() {
-        assert_eq!(book_manager::category_proposer::vote_count_for("A", &[("B".to_string(), 5), ("A".to_string(), 3)]), 3);
-    }
-
-    #[test]
-    fn test_vote_count_defaults_to_one_when_category_has_no_votes() {
-        assert_eq!(book_manager::category_proposer::vote_count_for("Z", &[("A".to_string(), 3)]), 1);
-    }
 
     // ---- 분류 제안 ----
 
@@ -1452,7 +1184,7 @@ fn without_an_injected_classifier_proposals_use_keywords_only() {
     let result = propose(&m, ProposeOptions::default());
 
     assert_eq!(result["items"].as_array().unwrap().len(), 2);
-    assert!(result["items"].as_array().unwrap().iter().all(|i| i["grade"] == "unknown" && i["target_category"].is_null() && i["confidence"].is_null()));
+    assert!(result["items"].as_array().unwrap().iter().all(|i| i["classified"] == true && i["target_category"].is_null() && i["score"].is_null()));
     assert!(logs.records().iter().all(|r| r.level != log::Level::Warn), "{}", logs.text());
 }
 
@@ -1463,7 +1195,7 @@ fn the_model_directory_variable_is_ignored() {
     env.set("TM_CLASSIFIER_MODEL_DIR", s.meta.to_str().unwrap());
     let m = manager(&s, |d| d);
     let result = propose(&m, ProposeOptions { use_bookstore: Some(false), ..Default::default() });
-    assert!(result["items"][0]["confidence"].is_null(), "{}", result["items"][0]);
+    assert!(result["items"][0]["model_category"].is_null(), "{}", result["items"][0]);
     drop(env);
 }
 

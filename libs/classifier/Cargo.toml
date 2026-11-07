@@ -1,6 +1,6 @@
 [package]
 name = "classifier"
-description = "도서 분류기 껍데기: backend 분류 제안이 쓰는 Classify·BookClassifierApi trait와 모델 단독 어댑터"
+description = "도서 분류기: 특징 해시, softmax 모델, 모델 파일 핫 리로드, backend 분류 제안이 쓰는 Classify trait"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -9,10 +9,6 @@ autotests = false
 [dependencies]
 log = { workspace = true }
 serde_json = { workspace = true }
-
-[[test]]
-name = "classifier"
-path = "../../tests/rust/classifier/classifier.rs"
 
 [[test]]
 name = "feature_hasher"

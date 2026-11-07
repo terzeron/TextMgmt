@@ -64,6 +64,10 @@ name = "category_editor"
 path = "../../tests/rust/book_manager/category_editor.rs"
 
 [[test]]
+name = "evidence_scorer"
+path = "../../tests/rust/book_manager/evidence_scorer.rs"
+
+[[test]]
 name = "category_proposer"
 path = "../../tests/rust/book_manager/category_proposer.rs"
 
