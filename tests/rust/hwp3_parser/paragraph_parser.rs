@@ -271,3 +271,10 @@ fn container_control_characters_read_nested_paragraph_lists() {
 fn raw_stream_bytes(s: &HwpStream) -> Vec<u8> {
     s.bytes().to_vec()
 }
+
+#[test]
+fn codes_outside_the_control_range_are_ignored() {
+    let (result, parts) = handle(40, vec![]);
+    assert!(result.is_ok());
+    assert!(parts.is_empty());
+}

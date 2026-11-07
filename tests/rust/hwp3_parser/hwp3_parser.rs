@@ -378,3 +378,15 @@ fn bruteforce_flushes_runs_at_unknown_and_control_codes() {
     b.extend(codes("After Control Code"));
     assert_eq!(extract_text_bruteforce(&pack(&b)), "Hello World Test\nAfter Control Code");
 }
+
+#[test]
+fn v120_tabs_and_unreadable_bruteforce_runs() {
+    let chars = [u16::from(b'A'), 9, u16::from(b'B')];
+    let data = v120_file(&[v120_para(0, &chars, &[1, 0, 0x80, 0])], &[]);
+    assert_eq!(extract_text_v120(&data), "A\tB\n");
+    // 8자 이상이어도 읽을 수 있는 글자가 70% 미만인 run은 버린다.
+    let mut body = codes("!!!!!!!!!!");
+    body.push(1);
+    body.extend(codes("readable text"));
+    assert_eq!(extract_text_bruteforce(&pack(&body)), "readable text");
+}
