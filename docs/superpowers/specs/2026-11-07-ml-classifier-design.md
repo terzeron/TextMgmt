@@ -27,7 +27,7 @@ backend는 카테고리 매핑 키워드만으로 제안하므로 사실상 아�
 **비목표**
 
 - frontend 변경. 기존 응답 필드(`candidates`, `grade`, `confidence`, `expected_accuracy`, `model_category`, `target_category`)를 그대로 채운다.
-- 서점 판정 부활. `use_bookstore`는 지금처럼 받기만 한다.
+- 서점 판정 부활. `use_bookstore`는 지금처럼 받기만 한다. 서점 판정과 근거별 가중치 합산 등급(예: 서점 3곳과 모델이 일치하면 100점, 2곳과 모델이 일치하면 90점)은 다음 작업에서 설계한다.
 - 카테고리 체계 정리(전집 병합 등). 웹소설 4종은 합치지 않는다는 기존 결정을 유지한다.
 - 주기적·자동 재학습.
 
@@ -122,6 +122,8 @@ ES에 없는 파일은 `Err("색인되지 않은 파일")`을 돌려주고, 제�
 또 `ModelOnlyClassifier`는 `min_confidence`·`expected_accuracy`를 모델에 위임하지 않는다. 두 곳을 고쳐, 모델 확신도가 모델의 `min_confidence` 이상이면 `certain`이 되게 한다.
 
 **우선순위.** ISBN 일치 > 키워드 > 모델. 앞 근거가 추천 1을 정하면, 빈 추천 2는 기존 `fill_second_with_model`처럼 다음 근거로 채운다.
+
+**등급 판정 한곳에 모으기.** 이번에는 "모델 점수 ≥ `min_confidence`이면 확실"로 둔다. 나중에 서점 판정 점수와 합산하는 규칙으로 바뀔 예정이므로, 등급을 정하는 로직은 `is_high_confidence` 한 함수에 모으고 다른 곳에 경계값을 흩뿌리지 않는다. 합산 규칙 자체는 만들지 않는다.
 
 ### 4.4 모델 파일과 배포
 
