@@ -142,3 +142,13 @@ fn test_book_requires_book_dir() {
     let missing = path_prefix_from_env(&|_| None);
     assert!(missing.is_err(), "TM_BOOK_DIR 없이도 성공했다: {missing:?}");
 }
+
+#[test]
+fn test_datetime_accepts_an_offset_without_a_colon_and_rejects_non_iso_text() {
+    common::setup_env();
+    let info = |created: &str| json!({"category": "c", "title": "t", "author": "a", "file_path": "c/b.pdf", "file_type": "pdf", "file_size": 1, "created_time": created, "updated_time": "2022-02-03T04:05:06"});
+    // RFC 3339가 받지 않는 `+0900` 꼴 오프셋도 읽는다.
+    assert_eq!(Book::new(10, &info("2020-01-02T03:04:05+0900"), 0.0).view().created_time, "2020-01-02T03:04:05.000000");
+    let rejected = std::panic::catch_unwind(|| Book::new(11, &info("어제"), 0.0));
+    assert!(rejected.is_err(), "ISO 형식이 아닌 시각은 받지 않는다");
+}
