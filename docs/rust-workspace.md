@@ -46,6 +46,7 @@ docs/       문서
 | crate | 용도 |
 | --- | --- |
 | `bookdoctor` | 문서 파일 진단(`scan`), 보안 정리(`sanitize`), 결함 수리(`repair`), 손상 문서 격리·복구(`quarantine`·`unquarantine`) 명령. 명령행, 파일 순회와 병렬 실행, 적용(휴지통 보관·덮어쓰기), 보고 출력을 맡는다. 검사 기법은 `doc_checker`, 교정 기법은 `doc_repairer`를 쓴다 |
+| `classifier_trainer` | ES 책 문서(`summary`·`title`·`author`)에서 카테고리별 균등 무작위 표본을 뽑아 softmax 분류 모델을 학습하고 홀드아웃 정답률을 출력한다. 모델 형식·특징 해시는 `classifier`를 쓴다 |
 | `loader` | 책·만화 디렉토리의 파일을 읽어 ES 색인을 만들고 맞춘다. `--reencode`면 읽기 직전에 UTF-8이 아닌 TXT를 `doc_repairer`로 고쳐 쓴다 |
 
 ## 규칙

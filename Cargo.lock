@@ -631,6 +631,18 @@ dependencies = [
 name = "classifier"
 version = "0.1.0"
 dependencies = [
+ "log",
+ "serde_json",
+]
+
+[[package]]
+name = "classifier_trainer"
+version = "0.1.0"
+dependencies = [
+ "classifier",
+ "rand 0.9.5",
+ "rand_chacha",
+ "search_manager",
  "serde_json",
 ]
 
