@@ -72,7 +72,7 @@ seed를 주지 않으면 OS 난수로 정하고, 출력과 모델 파일에 기�
 
 **특징.** 사전 없는 해시 특징을 쓴다. 필드마다 다른 namespace로 해시한다.
 
-- `summary`, `title`: 공백 정규화 뒤 글자 2-gram·3-gram
+- `summary`, `title`: 공백 정규화 뒤 글자 2-gram·3-gram. `summary`는 앞 1,500자만 쓴다(예전 실측에서 1,500자와 1,000자의 정답률 차이가 없었고, 메모리를 줄인다)
 - `author`: 저자 문자열 전체를 토큰 하나로(여러 명이면 쉼표로 나눠 각각)
 - 값은 `log(1 + tf)`, 필드별 L2 정규화
 
@@ -102,9 +102,9 @@ ES 접속은 기존 `es_client`의 env(`TM_ES_URL` 등)를 쓴다.
 - `Classify::classify_document(doc)` 구현: `doc`의 `summary`·`title`·`author`로 모든 카테고리의 확률(합 1.0, 사전확률 보정 후)을 점수 순으로 낸다
 - 특징 추출 코드는 학습 CLI와 이 crate가 공유한다. 두 벌을 두지 않는다
 
-`classify_path(path)`는 ES 조회가 필요하므로 `libs/book_manager` 쪽 어댑터가 맡는다.
-경로 → inode(`book_id_for_path`) → ES 문서 조회 → `classify_document` 순서다.
-ES에 없는 파일은 `Err("색인되지 않은 파일")`을 돌려주고, 제안은 모델 없이 계속된다.
+ES 조회는 `libs/book_manager`가 한다. 제안 단계에서 파일마다 경로 → inode(`book_id_for_path`) → ES 문서를 한 번 조회하고, 그 문서를 ISBN 근거와 모델 근거가 함께 쓴다.
+ES에 없는 파일은 ISBN·모델 근거가 "없음"이 되고, 키워드 근거만으로 계속된다.
+이에 따라 `Classify`는 `classify_document`만 남기고 `classify_path`, `BookClassifierApi`, `ModelOnlyClassifier`를 지운다.
 
 ### 4.3 합산 판정: `libs/book_manager/src/category_proposer.rs`
 
@@ -146,7 +146,7 @@ ISBN 일치 문서 조회는 ES `term` 질의로 한다. 일치 문서가 현재
 - 핫 리로드: backend는 분류 제안을 시작할 때마다 모델 파일의 수정 시각과 크기를 확인한다. 바뀌었으면 다시 읽고, 같으면 캐시한 `Arc`를 쓴다. 다시 읽기에 실패하면 이전 모델을 계속 쓰고 경고를 남긴다.
 - 원자적 교체: 학습 CLI는 같은 디렉토리의 임시 파일에 다 쓴 뒤 rename한다. backend가 반쯤 쓰인 파일을 읽지 않는다.
 - 파일이 없거나 처음 읽기에 실패하면 경고 로그를 남기고 모델 근거를 "없음"으로 둔다. 키워드·ISBN 합산은 그대로 돈다.
-- 형식: 작은 JSON 헤더(버전, seed, 생성 시각, 카테고리 목록, 실제·학습 권수, 해시 크기) + 가중치 배열. 목표 크기는 50MB 이하다.
+- 형식: 작은 JSON 헤더(버전, seed, 생성 시각, 카테고리 목록, 실제·학습 권수, 해시 크기) + 가중치 배열. 목표 크기는 64MB 이하다(해시 크기 2^17 × 카테고리 약 105개 × f32).
 
 ## 5. 제약
 
@@ -167,7 +167,7 @@ ISBN 일치 문서 조회는 ES `term` 질의로 한다. 일치 문서가 현재
 
 ## 7. 빌더 재량
 
-- 해시 크기, 학습률, epoch 수, L2 계수: 홀드아웃 결과로 정한다. 모델 크기 50MB 이하를 지킨다.
+- 해시 크기, 학습률, epoch 수, L2 계수: 홀드아웃 결과로 정한다. 모델 크기 64MB 이하를 지킨다.
 - crate·모듈 이름은 저장소의 "목적어\_행위자" 규칙을 따른다.
 - ES 조회(문서 1건, `isbn` term 질의)를 `EsManagerApi`에 더할지, 기존 검색 메서드로 할지.
 - 후보 `detail` 문구.
