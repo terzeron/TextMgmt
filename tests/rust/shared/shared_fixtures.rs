@@ -97,7 +97,7 @@ pub fn count(v: &Value) -> i64 {
 /// `[항목, 전체 수, 다음 커서, 오류]`를 `Result<CoverPage, _>`로 바꾼다. 전체 수가 null이면 모르는 것이다.
 pub fn cover_page(v: &Value) -> Result<CoverPage, String> {
     let total = arr(v, 1).as_u64().map(|n| n as usize);
-    opt_string(arr(v, 3)).map_or_else(|| Ok(CoverPage { items: titled_books(arr(v, 0)), total, next_cursor: opt_string(arr(v, 2)) }), Err)
+    opt_string(arr(v, 3)).map_or_else(|| Ok(CoverPage { items: titled_books(arr(v, 0)), total, next_cursor: opt_string(arr(v, 2)), ..CoverPage::default() }), Err)
 }
 
 /// `create_test_pdf`

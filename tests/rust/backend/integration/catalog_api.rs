@@ -112,6 +112,35 @@ async fn latest_merges_hidden_and_latest_exclusions_and_validates_limit() {
 }
 
 #[tokio::test]
+async fn comics_latest_returns_one_card_per_work_with_fallbacks() {
+    let episode = |n: u32| {
+        let mut doc = doc("1_웹툰/작품");
+        doc["file_path"] = json!(format!("1_웹툰/작품/작품 {n}화.pdf"));
+        doc["title"] = json!(format!("작품 {n}화"));
+        doc
+    };
+    let es = FakeEsManager::new();
+    es.with(|s| {
+        s.latest_docs = (vec![Hit::new(48, episode(48), 0.0), Hit::new(49, episode(49), 0.0)], 2);
+        s.group_representatives = [("1_웹툰/작품".to_string(), vec![(2, episode(2)), (1, episode(1))])].into();
+    });
+    let client = client(es.clone(), "viewer", true);
+
+    let body = client.get("/comics/latest?limit=20").await.json();
+
+    assert_eq!(body["status"], "success");
+    assert_eq!(body["total"], 2);
+    let result = body["result"].as_array().unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0]["book_id"], 1);
+    assert_eq!(result[0]["display_title"], "작품");
+    assert_eq!(result[0]["fallbacks"][0]["book_id"], 2);
+    assert_eq!(result[0]["fallbacks"][0]["file_path"], "1_웹툰/작품/작품 2화.pdf");
+    es.fail("search_latest_docs", "latest failed");
+    assert_eq!(client.get("/comics/latest").await.json(), json!({"status":"failure","error":"latest failed"}));
+}
+
+#[tokio::test]
 async fn search_forwards_filters_and_preserves_total_score_and_errors() {
     for (prefix, kind, comics) in [("", "book", false), ("/comics", "comic", true)] {
         let es = FakeEsManager::new();

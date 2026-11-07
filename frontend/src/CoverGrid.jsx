@@ -15,9 +15,11 @@ const COVER_FILE_TYPES = new Set(["epub", "pdf"]);
 const COVER_VERSION =
   typeof __COVER_VERSION__ !== "undefined" ? __COVER_VERSION__ : "dev";
 
-function CoverImage({ src, fileType }) {
+function CoverImage({ src, fileType, onFail }) {
   const [failed, setFailed] = useState(false);
   const imageRef = useRef(null);
+  const onFailRef = useRef(onFail);
+  onFailRef.current = onFail;
 
   useEffect(() => {
     const image = imageRef.current;
@@ -36,7 +38,11 @@ function CoverImage({ src, fileType }) {
             finish();
           };
           const onError = () => {
-            if (!disposed) setFailed(true);
+            if (!disposed) {
+              // 대체할 다음 권이 있으면 부모가 src를 바꿔 다시 그린다. 없으면 포맷명 박스로 바꾼다.
+              if (onFailRef.current) onFailRef.current();
+              else setFailed(true);
+            }
             finish();
           };
           image.addEventListener("load", onLoad);
@@ -72,6 +78,68 @@ function CoverImage({ src, fileType }) {
 CoverImage.propTypes = {
   src: PropTypes.string,
   fileType: PropTypes.string,
+  onFail: PropTypes.func,
+};
+
+function coverSource(book, apiPrefix) {
+  // ID를 재사용해도 브라우저가 이전 책의 이미지를 쓰지 않도록 원본 경로도 구분한다.
+  return COVER_FILE_TYPES.has(book.file_type || "")
+    ? `${getApiUrlPrefix()}${apiPrefix}/cover/${book.book_id}?v=${COVER_VERSION}${
+        book.updated_time
+          ? `&u=${encodeURIComponent(book.updated_time)}`
+          : ""
+      }${book.file_path ? `&path=${encodeURIComponent(book.file_path)}` : ""}`
+    : null;
+}
+
+/**
+ * 커버 카드 한 장. 서버가 준 fallbacks는 같은 작품의 다른 권이다.
+ * 대표 권의 커버를 못 받으면 다음 권으로 차례로 넘어가고, 링크도 보이는 권을 연다.
+ */
+function CoverCard({ book, apiPrefix, viewBasePath }) {
+  const [candidateIndex, setCandidateIndex] = useState(0);
+  const candidates = [
+    book,
+    ...(Array.isArray(book.fallbacks) ? book.fallbacks : []),
+  ];
+  const shown = candidates[Math.min(candidateIndex, candidates.length - 1)];
+  const hasNextCandidate = candidateIndex < candidates.length - 1;
+  const filename =
+    (book.file_path || "").split("/").pop() || book.title || "Unknown";
+  const rawTitle = book.display_title || book.title || filename;
+  const displayTitle = rawTitle.replace(/^(?:\d+\s+)?\[[^\]]+\]\s+/, "") || rawTitle;
+  const category = shown.category || "_root";
+  const fileType = shown.file_type || "";
+  const coverSrc = coverSource(shown, apiPrefix);
+  return (
+    <a
+      className="cover-grid-card"
+      href={`${viewBasePath}/${shown.book_id}?category=${encodeURIComponent(category)}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={displayTitle}
+    >
+      <div className="cover-grid-cover">
+        <CoverImage
+          key={coverSrc}
+          src={coverSrc}
+          fileType={fileType}
+          onFail={
+            hasNextCandidate
+              ? () => setCandidateIndex((index) => index + 1)
+              : undefined
+          }
+        />
+      </div>
+      <div className="cover-grid-title">{displayTitle}</div>
+    </a>
+  );
+}
+
+CoverCard.propTypes = {
+  book: PropTypes.object.isRequired,
+  apiPrefix: PropTypes.string.isRequired,
+  viewBasePath: PropTypes.string.isRequired,
 };
 
 /**
@@ -141,37 +209,14 @@ export default function CoverGrid({
   return (
     <>
       <div className="cover-grid">
-        {results.slice(0, visibleCount).map((book) => {
-          const filename =
-            (book.file_path || "").split("/").pop() || book.title || "Unknown";
-          const rawTitle = book.display_title || book.title || filename;
-          const displayTitle = rawTitle.replace(/^(?:\d+\s+)?\[[^\]]+\]\s+/, "") || rawTitle;
-          const category = book.category || "_root";
-          const fileType = book.file_type || "";
-          // ID를 재사용해도 브라우저가 이전 책의 이미지를 쓰지 않도록 원본 경로도 구분한다.
-          const coverSrc = COVER_FILE_TYPES.has(fileType)
-            ? `${getApiUrlPrefix()}${apiPrefix}/cover/${book.book_id}?v=${COVER_VERSION}${
-                book.updated_time
-                  ? `&u=${encodeURIComponent(book.updated_time)}`
-                  : ""
-              }${book.file_path ? `&path=${encodeURIComponent(book.file_path)}` : ""}`
-            : null;
-          return (
-            <a
-              key={book.book_id}
-              className="cover-grid-card"
-              href={`${viewBasePath}/${book.book_id}?category=${encodeURIComponent(category)}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={displayTitle}
-            >
-              <div className="cover-grid-cover">
-                <CoverImage key={coverSrc} src={coverSrc} fileType={fileType} />
-              </div>
-              <div className="cover-grid-title">{displayTitle}</div>
-            </a>
-          );
-        })}
+        {results.slice(0, visibleCount).map((book) => (
+          <CoverCard
+            key={book.book_id}
+            book={book}
+            apiPrefix={apiPrefix}
+            viewBasePath={viewBasePath}
+          />
+        ))}
       </div>
       {needsSentinel && (
         <div ref={sentinelRef} className="cover-grid-sentinel" />

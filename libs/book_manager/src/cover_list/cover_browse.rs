@@ -136,19 +136,32 @@ pub fn plan_cover_scope(category_stats: &CoverStats, scope: &str, hidden_categor
     (file_categories, sorted)
 }
 
-/// 파일 경로순으로 받은 후보 중 1권을 우선하고, 없으면 맨 앞을 대표로 한다.
-pub fn pick_representative(hits: &[(i64, Value)]) -> Option<(i64, Value)> {
-    let first = hits.first()?;
-    for hit in hits {
-        let source = &hit.1;
-        let file_path = source.get("file_path").and_then(Value::as_str).unwrap_or("");
-        let file_name = file_path.rsplit('/').next().unwrap_or("");
-        let title = source.get("title").and_then(Value::as_str).unwrap_or("");
-        if FIRST_INSTALLMENT_PATTERN.is_match(&format!("{title} {file_name}")) {
-            return Some(hit.clone());
-        }
+/// 최신 만화를 묶는 작품 디렉터리. `숫자_이름/작품/...`이면 (`숫자_이름/작품`, `작품`)이고, 나머지는 묶지 않는다.
+pub fn work_directory(category: &str) -> Option<(String, String)> {
+    let mut parts = category.split('/');
+    let top = parts.next()?;
+    let work = parts.next().filter(|work| !work.is_empty())?;
+    let (digits, name) = top.split_once('_')?;
+    let numbered = !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) && !name.is_empty();
+    numbered.then(|| (format!("{top}/{work}"), work.to_string()))
+}
+
+fn is_first_installment(source: &Value) -> bool {
+    let file_path = source.get("file_path").and_then(Value::as_str).unwrap_or("");
+    let file_name = file_path.rsplit('/').next().unwrap_or("");
+    let title = source.get("title").and_then(Value::as_str).unwrap_or("");
+    FIRST_INSTALLMENT_PATTERN.is_match(&format!("{title} {file_name}"))
+}
+
+/// 파일 경로순으로 받은 후보를 대표 권이 맨 앞에 오게 늘어놓는다. 1권을 우선하고, 없으면 맨 앞이 대표다.
+/// 나머지는 받은 순서를 지킨다. 대표 커버를 못 만들 때 화면이 이 순서로 대체한다.
+pub fn rank_candidates(hits: &[(i64, Value)]) -> Vec<(i64, Value)> {
+    let mut ranked = hits.to_vec();
+    if let Some(index) = ranked.iter().position(|hit| is_first_installment(&hit.1)) {
+        let representative = ranked.remove(index);
+        ranked.insert(0, representative);
     }
-    Some(first.clone())
+    ranked
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -188,7 +201,7 @@ mod tests {
 
     use std::collections::{BTreeMap, BTreeSet};
 
-    use super::{CoverEntry, CoverFileHit, CoverGroup, CoverStats, MISSING_TIME, file_rank, latest_rank, merge_cover_page, pick_representative, plan_cover_scope};
+    use super::{CoverEntry, CoverFileHit, CoverGroup, CoverStats, MISSING_TIME, file_rank, latest_rank, merge_cover_page, plan_cover_scope, rank_candidates, work_directory};
     use serde_json::{Value, json};
 
     /// {카테고리: 문서 수}를 ES 집계 결과 모양 (수, 수정 시각, 생성 시각)으로 바꾼다.
@@ -383,40 +396,69 @@ mod tests {
         }
     }
 
-    mod test_pick_representative {
+    mod test_work_directory {
+        use super::*;
+
+        #[test]
+        fn test_groups_numbered_top_level_with_its_work() {
+            assert_eq!(work_directory("1_웹툰/곤륜마협 (01-51화 완)/외전"), Some(("1_웹툰/곤륜마협 (01-51화 완)".to_string(), "곤륜마협 (01-51화 완)".to_string())));
+        }
+
+        #[test]
+        fn test_does_not_group_other_categories() {
+            for category in ["1_웹툰", "1_웹툰/", "웹툰/작품", "_웹툰/작품", "1_/작품", "a1_웹툰/작품", "_root", ""] {
+                assert_eq!(work_directory(category), None, "{category}");
+            }
+        }
+    }
+
+    mod test_rank_candidates {
         use super::*;
 
         #[test]
         fn test_prefers_first_installment() {
             let hits = [(1, json!({"title": "작품 02권", "file_path": "d/작품 02권.pdf"})), (2, json!({"title": "작품 01권", "file_path": "d/작품 01권.pdf"}))];
 
-            assert_eq!(pick_representative(&hits).unwrap().0, 2);
+            assert_eq!(rank_candidates(&hits)[0].0, 2);
         }
 
         #[test]
         fn test_does_not_confuse_numbers_that_merely_contain_one() {
             let hits = [(1, json!({"title": "작품 11권", "file_path": "d/작품 11권.pdf"})), (2, json!({"title": "작품 21화", "file_path": "d/작품 21화.pdf"}))];
 
-            assert_eq!(pick_representative(&hits).unwrap().0, 1);
+            assert_eq!(rank_candidates(&hits)[0].0, 1);
         }
 
         #[test]
         fn test_falls_back_to_first_candidate() {
             let hits = [(7, json!({"title": "가", "file_path": "d/가.pdf"})), (8, json!({"title": "나", "file_path": "d/나.pdf"}))];
 
-            assert_eq!(pick_representative(&hits).unwrap().0, 7);
+            assert_eq!(rank_candidates(&hits)[0].0, 7);
         }
 
         #[test]
         fn test_returns_none_without_candidates() {
-            assert!(pick_representative(&[]).is_none());
+            assert!(rank_candidates(&[]).is_empty());
+        }
+
+        #[test]
+        fn test_keeps_the_rest_in_path_order_after_the_representative() {
+            let hits = [
+                (1, json!({"title": "작품 02화", "file_path": "d/작품 02화.pdf"})),
+                (2, json!({"title": "작품 03화", "file_path": "d/작품 03화.pdf"})),
+                (3, json!({"title": "작품 01화", "file_path": "d/작품 01화.pdf"})),
+            ];
+
+            let ids: Vec<i64> = rank_candidates(&hits).iter().map(|hit| hit.0).collect();
+
+            assert_eq!(ids, vec![3, 1, 2]);
         }
 
         #[test]
         fn test_matches_on_file_name_when_title_lacks_installment() {
             let hits = [(1, json!({"title": "작품", "file_path": "d/작품 02화.pdf"})), (2, json!({"title": "작품", "file_path": "d/작품 1화.pdf"}))];
 
-            assert_eq!(pick_representative(&hits).unwrap().0, 2);
+            assert_eq!(rank_candidates(&hits)[0].0, 2);
         }
     }
 

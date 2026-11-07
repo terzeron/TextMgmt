@@ -167,6 +167,10 @@ impl BookManagerApi for BookManager {
         BookManager::search_similar_books_paged(self, book_id, size, offset).await
     }
 
+    async fn get_latest_comic_covers(&self, size: i64, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
+        BookManager::get_latest_comic_covers(self, size, exclude_categories.map(<[String]>::to_vec).unwrap_or_default()).await
+    }
+
     async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         let opts = CoverPageOpts {
             category: Some(category.to_string()),

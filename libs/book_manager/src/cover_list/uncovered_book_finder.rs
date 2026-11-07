@@ -1,4 +1,5 @@
 //! 표지가 없는 책을 제한된 시간·페이지 수 안에서 조회한다.
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -11,11 +12,13 @@ use cover_manager::cover_status::{CoverStatusCache, has_official_cover};
 
 /// 표지 목록 한 쪽. `items`는 (대표 책, 작품 디렉터리 이름 또는 "")이다.
 /// `total`은 표지 목록에서만 채운다. 미표지 목록은 전체를 훑지 않으므로 모른다.
+/// `fallbacks`는 대표 책 ID별로, 대표 커버를 못 만들 때 차례로 쓸 같은 작품의 다른 권이다.
 #[derive(Debug, Clone, Default)]
 pub struct CoverPage {
     pub items: Vec<(Book, String)>,
     pub total: Option<usize>,
     pub next_cursor: Option<String>,
+    pub fallbacks: HashMap<i64, Vec<Book>>,
 }
 pub type CoverBooksPager = Arc<dyn Fn(CoverPageOpts) -> Pin<Box<dyn Future<Output = Result<CoverPage, String>> + Send>> + Send + Sync>;
 
@@ -101,6 +104,7 @@ impl BookManager {
             }
             opts.cursor = next.clone();
         }
-        Ok(CoverPage { items, total: None, next_cursor: next })
+        // 미표지 목록은 표지 없는 권을 찾는 화면이라 다른 권 커버로 대체하지 않는다.
+        Ok(CoverPage { items, total: None, next_cursor: next, fallbacks: HashMap::new() })
     }
 }

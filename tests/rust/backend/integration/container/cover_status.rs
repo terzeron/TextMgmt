@@ -264,7 +264,7 @@ type RawPage = (Vec<(CoverBook, String)>, usize, Option<String>, Option<String>)
 
 fn page(raw: RawPage) -> Result<CoverPage, String> {
     let (items, total, next_cursor, error) = raw;
-    error.map_or(Ok(CoverPage { items, total: Some(total), next_cursor }), Err)
+    error.map_or(Ok(CoverPage { items, total: Some(total), next_cursor, ..CoverPage::default() }), Err)
 }
 
 /// 미표지 목록 결과를 원본 테스트 모양으로 펼친 것. 전체 수는 모르면 `None`이다.
@@ -486,7 +486,7 @@ struct BrowseManager(Mutex<Vec<serde_json::Value>>);
 impl backend::api_router::BookManagerApi for BrowseManager {
     async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, excluded: Option<&[String]>) -> Result<CoverPage, String> {
         self.0.lock().unwrap().push(json!([category, size, cursor, excluded]));
-        Ok(CoverPage { items: vec![], total: Some(17), next_cursor: Some("next".into()) })
+        Ok(CoverPage { items: vec![], total: Some(17), next_cursor: Some("next".into()), ..CoverPage::default() })
     }
 }
 struct Hidden;
@@ -511,7 +511,7 @@ impl backend::api_router::BookManagerApi for BrowseOutcomes {
     }
 
     async fn get_uncovered_books_paged(&self, _category: &str, _size: i64, _cursor: &str, _excluded: Option<&[String]>) -> Result<CoverPage, String> {
-        Ok(CoverPage { items: vec![], total: None, next_cursor: Some("next-uncovered".into()) })
+        Ok(CoverPage { items: vec![], total: None, next_cursor: Some("next-uncovered".into()), ..CoverPage::default() })
     }
 }
 

@@ -133,44 +133,26 @@ describe("LatestBooks", () => {
     expect(list.textContent).toContain("새 만화");
   });
 
-  it("최신 만화를 책 디렉토리별 1권이나 1화로 모아 표시한다", async () => {
+  it("서버가 작품별로 묶은 최신 만화를 순서 그대로 표시한다", async () => {
     mockRawJsonGetReq.mockImplementation((_url, resolve, _reject, final) => {
       resolve({
         status: "success",
         result: [
           {
-            book_id: 11,
-            title: "작품 A 2권",
-            category: "1_액션/작품 A",
-            file_path: "1_액션/작품 A/02.pdf",
-            file_type: "pdf",
-          },
-          {
             book_id: 10,
             title: "작품 A 1권",
+            display_title: "작품 A",
             category: "1_액션/작품 A",
             file_path: "1_액션/작품 A/01.pdf",
             file_type: "pdf",
+            fallbacks: [{ book_id: 11, file_path: "1_액션/작품 A/02.pdf" }],
           },
           {
-            book_id: 12,
-            title: "작품 A 부록",
-            category: "1_액션/작품 A/부록",
-            file_path: "1_액션/작품 A/부록/extra.pdf",
-            file_type: "pdf",
-          },
-          {
-            book_id: 20,
-            title: "다른 작품 10화",
-            category: "2_SF/다른 작품",
-            file_path: "2_SF/다른 작품/10화.pdf",
-            file_type: "pdf",
-          },
-          {
-            book_id: 21,
-            title: "다른 작품 1화",
-            category: "2_SF/다른 작품",
-            file_path: "2_SF/다른 작품/1화.pdf",
+            book_id: 30,
+            title: "단편",
+            display_title: "",
+            category: "1_액션",
+            file_path: "1_액션/단편.pdf",
             file_type: "pdf",
           },
         ],
@@ -181,10 +163,9 @@ describe("LatestBooks", () => {
     render(<LatestBooks contentType="comic" />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("search-result").dataset.bookIds).toBe("10,21");
+      expect(screen.getByTestId("search-result").dataset.bookIds).toBe("10,30");
     });
-    const list = screen.getByTestId("search-result");
-    expect(list.textContent).toBe("작품 A,다른 작품");
+    expect(screen.getByTestId("search-result").textContent).toBe("작품 A,단편");
   });
 
   it("조회 실패 시 오류 메시지를 표시한다", async () => {
@@ -530,7 +511,7 @@ describe("LatestBooks", () => {
   });
 });
 
-describe("LatestBooks 만화 대표 선정 경계", () => {
+describe("LatestBooks 만화 응답 경계", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
@@ -538,51 +519,16 @@ describe("LatestBooks 만화 대표 선정 경계", () => {
 
   afterEach(cleanup);
 
-  const renderComics = async (result) => {
+  it("만화 결과가 배열이 아니면 빈 목록으로 처리한다", async () => {
     mockRawJsonGetReq.mockImplementation((_url, resolve, _reject, final) => {
-      resolve({ status: "success", result });
+      resolve({ status: "success", result: { unexpected: true } });
       final();
     });
     render(<LatestBooks contentType="comic" />);
-    await waitFor(() => expect(mockRawJsonGetReq).toHaveBeenCalled());
-    return screen.getByTestId("search-result");
-  };
-
-  it.each([
-    ["경로가 더 앞서면 교체한다", ["1_a/작품/02.pdf", "1_a/작품/01.pdf"], "2"],
-    ["경로가 더 뒤면 유지한다", ["1_a/작품/01.pdf", "1_a/작품/02.pdf"], "1"],
-  ])("둘 다 1권이 아닐 때 %s", async (_name, paths, expectedId) => {
-    const list = await renderComics(
-      paths.map((file_path, index) => ({
-        book_id: index + 1,
-        title: `작품 ${index + 5}권`,
-        category: "1_a/작품",
-        file_path,
-      })),
+    await waitFor(() =>
+      expect(screen.getByTestId("search-result").textContent).toBe(
+        "최신 만화가 없습니다.",
+      ),
     );
-    await waitFor(() => expect(list.dataset.bookIds).toBe(expectedId));
-  });
-
-  it("둘 다 1권이면 경로 순으로 고른다", async () => {
-    const list = await renderComics([
-      { book_id: 1, title: "작품 1권", category: "1_a/작품", file_path: "1_a/작품/b.pdf" },
-      { book_id: 2, title: "작품 1화", category: "1_a/작품", file_path: "1_a/작품/a.pdf" },
-    ]);
-    await waitFor(() => expect(list.dataset.bookIds).toBe("2"));
-  });
-
-  it("title과 file_path가 없는 항목도 안전하게 묶는다", async () => {
-    const list = await renderComics([
-      { book_id: 1, category: "1_a/작품" },
-      { book_id: 2, category: "1_a/작품" },
-      { book_id: 3, title: "작품 1권", category: "1_a/작품" },
-      { book_id: 4, category: null },
-    ]);
-    await waitFor(() => expect(list.dataset.bookIds).toContain("3"));
-  });
-
-  it("만화 결과가 배열이 아니면 빈 목록으로 처리한다", async () => {
-    const list = await renderComics({ unexpected: true });
-    await waitFor(() => expect(list.textContent).toBe("최신 만화가 없습니다."));
   });
 });

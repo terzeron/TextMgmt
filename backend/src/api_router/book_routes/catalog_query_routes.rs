@@ -502,6 +502,16 @@ async fn latest(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
         }
     }
     let manager = manager(&deps, &uri)?;
+    // 만화는 작품마다 대표 한 권으로 묶어 보낸다. 대표는 커버 목록과 같은 규칙으로 서버가 고른다.
+    if comics(&uri) {
+        return Ok(match manager.get_latest_comic_covers(limit, Some(&excluded)).await {
+            Ok(page) => {
+                let total = page.total;
+                Json(json!({"status":"success","result":super::cover_list_routes::cover_books(page, manager.as_ref()),"total":total}))
+            }
+            Err(error) => failure(Some(error)),
+        });
+    }
     Ok(match manager.get_latest_books(limit, Some(&excluded)).await {
         Ok(page) => Json(json!({"status":"success","result":book_views(&page.books,manager.as_ref()),"total":page.total})),
         Err(error) => failure(Some(error)),

@@ -51,6 +51,8 @@ pub struct State {
     pub similar_paged: (Vec<Hit>, i64),
     pub keyword_paged: (Vec<Hit>, i64),
     pub latest_docs: (Vec<Hit>, i64),
+    /// `search_group_representatives`가 작품 디렉터리 키별로 줄 경로순 후보.
+    pub group_representatives: HashMap<String, Vec<(i64, Value)>>,
     pub deleted_by_category: DeleteByQueryResult,
     pub rename_result: UpdateByQueryResult,
     pub backfill_result: BackfillReport,
@@ -92,6 +94,7 @@ impl Default for State {
             similar_paged: (Vec::new(), 0),
             keyword_paged: (Vec::new(), 0),
             latest_docs: (Vec::new(), 0),
+            group_representatives: HashMap::new(),
             deleted_by_category: DeleteByQueryResult { deleted: 2, failures: vec![] },
             rename_result: UpdateByQueryResult { updated: 3, failures: vec![] },
             backfill_result: BackfillReport::default(),
@@ -500,6 +503,11 @@ impl EsManagerApi for FakeEsManager {
     fn search_latest_docs(&self, max_result_count: i64, exclude_categories: Option<&[String]>) -> Result<(Vec<Hit>, i64), EsError> {
         self.enter("search_latest_docs", json!([max_result_count, exclude_categories]))?;
         Ok(self.with(|s| s.latest_docs.clone()))
+    }
+
+    fn search_group_representatives(&self, keys: &[String], exclude: &[String]) -> Result<HashMap<String, Vec<(i64, Value)>>, EsError> {
+        self.enter("search_group_representatives", json!([keys, exclude]))?;
+        Ok(self.with(|s| keys.iter().filter_map(|key| s.group_representatives.get(key).map(|hits| (key.clone(), hits.clone()))).collect()))
     }
 
     fn backfill_created_time(&self, path_prefix: &Path) -> Result<BackfillReport, EsError> {
