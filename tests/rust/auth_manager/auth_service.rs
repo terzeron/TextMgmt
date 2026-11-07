@@ -437,3 +437,35 @@ fn test_observation_hash_of_empty_value_is_empty_string() {
     common::setup_env();
     assert_eq!(auth_service::observation_hash(""), "");
 }
+
+#[test]
+fn test_load_jwt_secret_returns_a_configured_secret_and_errors_render_status_and_detail() {
+    let _env = fixture();
+    assert!(auth_manager::auth_service::load_jwt_secret(&process_env).is_ok_and(|secret| !secret.is_empty()));
+    assert_eq!(HttpStatusError::new(401, "Invalid token").to_string(), "401: Invalid token");
+}
+
+#[test]
+fn test_issued_at_accepts_a_float_or_null() {
+    let _env = fixture();
+    let float_iat = encode_hs256(&json!({"type": "refresh", "email": "admin@example.com", "role": "admin", "fid": "f", "jti": "j", "exp": now() + 100, "iat": 1_700_000_000.75}));
+    assert_eq!(auth_manager::auth_service::decode_refresh_token(&float_iat).unwrap().iat, 1_700_000_000);
+    let null_iat = encode_hs256(&json!({"type": "refresh", "email": "admin@example.com", "role": "admin", "fid": "f", "jti": "j", "exp": now() + 100, "iat": null}));
+    assert_eq!(auth_manager::auth_service::decode_refresh_token(&null_iat).unwrap().iat, 0);
+}
+
+#[test]
+fn test_decoding_without_a_secret_is_unauthorized() {
+    let mut env = fixture();
+    let token = refresh_token("admin@example.com", "admin");
+    env.remove("TM_JWT_SECRET");
+    assert_eq!(auth_manager::auth_service::decode_refresh_token(&token).unwrap_err().status_code, 401);
+}
+
+#[tokio::test]
+async fn test_optional_auth_returns_claims_or_none() {
+    let _env = fixture();
+    let token = access_token("admin@example.com", "admin");
+    assert_eq!(auth_manager::auth_service::optional_auth(&make_request(Some(&token), None)).await.map(|claims| claims.role).as_deref(), Some("admin"));
+    assert!(auth_manager::auth_service::optional_auth(&make_request(None, None)).await.is_none());
+}

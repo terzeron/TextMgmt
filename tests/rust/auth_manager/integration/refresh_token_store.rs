@@ -729,6 +729,65 @@ fn test_factory_selects_mysql_when_configured() {
 }
 
 #[test]
+fn test_factory_store_delegates_every_operation_to_mysql() {
+    let mut env = EnvGuard::new();
+    env.remove("TM_REFRESH_TOKEN_BACKEND");
+    let store = create_refresh_token_store_with(MemDb::default().provider()).unwrap();
+    let issued_at = now();
+    issue(&store, "old", &fam('d'), "reader@example.com", issued_at, issued_at + 3600);
+    assert_eq!(rot(&store, "old", "new", &fam('d'), "reader@example.com", issued_at + 1, issued_at + 3601), "ok");
+    assert_eq!(store.get_token_observation("old").unwrap().unwrap()["revoke_reason"], "rotated");
+    assert_eq!(store.session_rows(Some("reader@example.com"), None).unwrap().len(), 1);
+    store.revoke_family(&fam('d'), "logout").unwrap();
+    assert_eq!(listed(&store, &all())["items"][0]["revoke_reason"], "logout");
+}
+
+#[test]
+fn test_factory_without_a_connector_reports_an_unreachable_mysql() {
+    // 닫힌 loopback 포트를 가리켜 실제 서비스에 붙지 않고 연결 실패를 확인한다.
+    let mut env = EnvGuard::new();
+    env.set("TM_REFRESH_TOKEN_BACKEND", "mysql");
+    env.set("TM_MYSQL_HOST", "127.0.0.1");
+    env.set("TM_MYSQL_PORT", "1");
+    assert!(create_refresh_token_store().is_err());
+}
+
+#[test]
+fn test_mysql_init_and_issue_report_database_errors() {
+    assert!(MySQLRefreshTokenStore::with_connector(provider_of(&FakeConn::boom())).is_err());
+    let (store, _boom) = install_init_then_boom();
+    assert!(store.store_issued("t", &fam('e'), "e", 1, 2, None, None).is_err());
+}
+
+struct FixedClock(f64);
+
+impl sysdeps::Clock for FixedClock {
+    fn now(&self) -> f64 {
+        self.0
+    }
+    fn monotonic(&self) -> f64 {
+        self.0
+    }
+    fn sleep(&self, _seconds: f64) {}
+}
+
+#[test]
+fn test_mysql_session_listing_uses_the_injected_clock_and_loose_cell_types() {
+    let now = now();
+    let mut session = mysql_session_row(now);
+    // 정수 family_id는 글자로, 날짜 값의 생성 시각은 0으로 읽는다.
+    session.insert("family_id".to_string(), DbValue::Int(7));
+    session.insert("created_at".to_string(), DbValue::DateTime(Default::default()));
+    let (provider, conns) = install_fresh_conns(Some(session));
+    let store = MySQLRefreshTokenStore::with_connector(provider).unwrap().with_clock(Arc::new(FixedClock((now + 5000) as f64)));
+    let item = &items_of(&listed(&store, &all()))[0];
+    assert_eq!(item["session_id"], json!("7"));
+    assert_eq!(item["created_at"], json!(0));
+    // 살아 있는 토큰 판정 기준 시각은 주입한 시계에서 온다.
+    assert!(last_conn(&conns).last_params().contains(&DbValue::Int(now + 5000)), "{:?}", last_conn(&conns).last_params());
+}
+
+#[test]
 fn test_mysql_rotate_ok_inserts_new_and_revokes_old() {
     let (provider, conns) = install_fresh_conns(Some(mysql_row_for_rotate("F", now() + 1000, DbValue::Null, DbValue::Null, None)));
     let store = MySQLRefreshTokenStore::with_connector(provider).unwrap();

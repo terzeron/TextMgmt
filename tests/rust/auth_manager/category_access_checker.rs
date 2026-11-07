@@ -75,3 +75,20 @@ async fn viewer_access_reports_unavailable_mapping_as_503() {
     let result = access("소설", &[], false).get_book_and_ensure_viewer_access(1, &Claims::with_role("viewer"), "book").await;
     assert_eq!(result.unwrap_err().status_code, 503);
 }
+
+struct FailingHidden;
+
+impl CategoryMappingApi for FailingHidden {
+    fn get_hidden_categories(&self, _content_type: &str) -> Result<Vec<String>, MappingError> {
+        Err(MappingError::Other("query failed".into()))
+    }
+}
+
+#[tokio::test]
+async fn viewer_access_reports_a_hidden_category_query_failure_as_500() {
+    let book = BookStub { title: "title".into(), category: Some("소설".into()) };
+    let mapping: Arc<dyn CategoryMappingApi> = Arc::new(FailingHidden);
+    let access = ViewerBookAccess::new(Arc::new(FixedLookup(book)), Arc::new(move || Ok(mapping.clone())));
+    let error = access.get_book_and_ensure_viewer_access(1, &Claims::with_role("viewer"), "book").await.unwrap_err();
+    assert_eq!((error.status_code, error.detail.as_str()), (500, "query failed"));
+}
