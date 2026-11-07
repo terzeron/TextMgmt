@@ -170,6 +170,15 @@ mod tests {
         // Authorization 헤더는 허용 목록에 없다.
         let resp = app().oneshot(preflight("GET", "authorization")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // 허용하지 않은 Origin의 사전 요청은 메서드와 무관하게 거절한다.
+        let mut foreign = preflight("GET", "content-type");
+        foreign.headers_mut().insert("origin", HeaderValue::from_static("https://evil.example.com"));
+        let resp = app().oneshot(foreign).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(resp.headers().get_all(header::VARY).iter().any(|v| v == "Origin"));
+        // Origin 없이 Referer만 있는 쿠키 인증 요청은 Referer가 http(s)여야 한다.
+        let ftp = Request::post("/x").header("referer", "ftp://localhost:3000/x").header(header::COOKIE, format!("{ACCESS_COOKIE_NAME}=t")).body(Body::empty()).unwrap();
+        assert_eq!(app().oneshot(ftp).await.unwrap().status(), StatusCode::FORBIDDEN);
 
         unsafe { std::env::remove_var("TM_FRONTEND_URL") };
         let none = app().oneshot(Request::get("/x").header("origin", ORIGIN).body(Body::empty()).unwrap()).await.unwrap();

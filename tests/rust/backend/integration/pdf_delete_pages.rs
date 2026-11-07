@@ -931,6 +931,28 @@ mod test_insert_upload_endpoint {
         assert_eq!(http.request(Method::POST, "/pdf-pages/1/insert-preview-upload", None, Vec::new()).await.status, 422);
     }
 
+    fn form(parts: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (name, data) in parts {
+            body.extend_from_slice(format!("--tmbound\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\n").as_bytes());
+            body.extend_from_slice(data);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(b"--tmbound--\r\n");
+        body
+    }
+
+    #[tokio::test]
+    async fn test_upload_reads_the_file_field_among_other_fields() {
+        let (http, fake) = client();
+        let response = http.post_multipart("/pdf-pages/1/insert-preview-upload", "tmbound", form(&[("note", b"skip"), ("file", b"PNGDATA")])).await;
+        assert_eq!(response.status, 200);
+        assert_eq!(fake.args("preview_insert_upload"), vec![json!(b"PNGDATA".as_slice())]);
+        // file 필드가 없으면 검증 오류다.
+        let response = http.post_multipart("/pdf-pages/1/insert-preview-upload", "tmbound", form(&[("note", b"skip")])).await;
+        assert_eq!(response.status, 422);
+    }
+
     #[tokio::test]
     async fn test_upload_requires_admin() {
         let body = multipart_file("tmbound", "file", "a.png", "image/png", b"x");
@@ -958,7 +980,7 @@ mod test_insert_upload_endpoint {
 
     #[tokio::test]
     async fn test_delete_requires_exactly_one_source() {
-        let cases = [json!({"page": 2}), json!({"page": 2, "url": "https://a.example/a.png", "image_data": "QUJD"}), json!({"page": 2, "image_data": ""})];
+        let cases = [json!({"page": 2}), json!({"page": 2, "url": "https://a.example/a.png", "image_data": "QUJD"}), json!({"page": 2, "image_data": ""}), json!({"page": 2, "url": ""})];
         for insert in cases {
             let (http, fake) = client();
             let response = http.post_json("/pdf-pages/1/delete", &json!({"inserts": [insert]})).await;

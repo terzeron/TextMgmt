@@ -33,6 +33,35 @@ async fn test_apply_job_marks_state_failed_when_book_manager_returns_error() {
     assert_eq!(state["error"], "적용 오류");
 }
 
+/// 상태 조회부터 실패하는 저장소. 기본 구현은 모두 오류다.
+struct StatusUnreadable;
+impl CategoryMappingApi for StatusUnreadable {}
+
+/// 상태는 읽지만 저장은 실패하는 저장소.
+struct StatusUnwritable;
+impl CategoryMappingApi for StatusUnwritable {
+    fn get_classify_proposal_status(&self, _content_type: &str, _stale_seconds: i64) -> Result<serde_json::Value, backend::api_router::MappingError> {
+        Ok(json!({"status": "applying"}))
+    }
+}
+
+#[tokio::test]
+async fn test_apply_job_failure_logs_when_its_state_cannot_be_read_or_saved() {
+    let bm = mock_bm();
+    *bm.apply_result.lock().unwrap() = (json!({}), Some("적용 오류".into()));
+    let logs = common::log_capture::LogCapture::start(log::Level::Error);
+    let stores: [(&dyn CategoryMappingApi, &str); 2] = [(&StatusUnreadable, "상태 조회 실패"), (&StatusUnwritable, "상태 저장 실패")];
+    for (store, expected) in stores {
+        backend::api_router::run_classify_apply_job(bm.as_ref(), store, "book", vec![], HashSet::new(), false, "tok").await;
+        assert!(logs.text().contains(expected), "expected={expected}: {}", logs.text());
+    }
+    // 적용이 성공하면 상태를 건드리지 않는다.
+    *bm.apply_result.lock().unwrap() = (json!({"applied_count": 0, "failed_count": 0}), None);
+    let cat = MockCat::with_store(Some(json!({"status": "applying"})));
+    backend::api_router::run_classify_apply_job(bm.as_ref(), cat.as_ref(), "book", vec![], HashSet::new(), false, "tok").await;
+    assert_eq!(cat.store.lock().unwrap()["book"]["status"], "applying");
+}
+
 fn normalize_path(method: &str, path: &str) -> String {
     let path = path.replace("{*", "{");
     if method != "GET" {

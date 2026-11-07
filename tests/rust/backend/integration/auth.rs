@@ -208,6 +208,33 @@ async fn test_auth_google_errors() {
         .with_role_resolver(no_role());
     let resp = TestClient::with_app(auth_app(deps)).post_json("/auth/google", &json!({"credential": "c"})).await;
     assert_eq!(resp.status, 403);
+
+    // 0, 빈 목록, 빈 객체도 자격 증명이 없는 것이다.
+    for credential in [json!(0), json!([]), json!({})] {
+        let resp = TestClient::with_app(auth_app(auth_deps())).post_json("/auth/google", &json!({"credential": credential})).await;
+        assert_eq!(resp.status, 400, "credential={credential}");
+    }
+    // 본문이 객체가 아니면 검증 오류다.
+    let resp = TestClient::with_app(auth_app(auth_deps())).post_json("/auth/google", &json!(["c"])).await;
+    assert_eq!(resp.status, 422);
+    // 발급한 refresh 토큰을 저장하지 못하면 내부 오류다.
+    let deps = auth_deps()
+        .with_google_verifier(fake_google("cid", |_credential, audience| Ok(valid_google_claims(audience))))
+        .with_role_resolver(role("user"))
+        .with_refresh_token_store(common::session::store());
+    let resp = TestClient::with_app(auth_app(deps)).post_json("/auth/google", &json!({"credential": "c"})).await;
+    assert_eq!(resp.status, 500);
+}
+
+#[tokio::test]
+async fn test_auth_me_counts_remaining_seconds_on_the_server_clock() {
+    let _env = fixture();
+    for (now, expected) in [(1_000.0, 300), (2_000.0, 0)] {
+        let claims = Claims { email: "user@example.com".into(), role: "user".into(), exp: 1_300, ..Claims::default() };
+        let deps = AppDeps::new(AuthMode::Split { auth: claims.clone(), admin: claims }).with_clock(common::clock::FakeClock::new(now));
+        let resp = client(&auth_app(deps)).get("/auth/me").await;
+        assert_eq!(resp.json()["result"]["expires_in"], json!(expected), "now={now}");
+    }
 }
 
 #[tokio::test]
@@ -503,6 +530,18 @@ mod test_revoke_login_session {
         assert_eq!(result["revoked"], json!(false));
         assert_eq!(result["status"], "revoked");
         assert_eq!(result["revoke_reason"], "logout");
+    }
+
+    #[tokio::test]
+    async fn test_revoked_family_without_session_details_reports_revoked() {
+        let _env = fixture();
+        let deps = auth_deps().with_refresh_token_store(FakeStore::revoking(Ok(json!({"found": true, "revoked": true, "session": null}))));
+
+        let resp = client(&auth_app(deps)).delete(&format!("/auth/sessions/{}", family_a())).await;
+
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.json()["result"]["status"], "revoked");
+        assert!(resp.json()["result"]["revoke_reason"].is_null());
     }
 
     #[tokio::test]

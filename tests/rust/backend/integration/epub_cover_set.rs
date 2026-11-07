@@ -757,6 +757,23 @@ mod test_epub_cover_endpoint {
     }
 
     #[tokio::test]
+    async fn test_delete_on_comics_uses_the_comics_manager() {
+        common::setup_env();
+        let fake = FakeBookManager::new();
+        let app = app_with(AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_comics_manager(fake.clone()));
+        let response = TestClient::with_app(app).delete("/comics/epub-cover/1").await;
+        assert_eq!(response.json()["status"], "success");
+        assert_eq!(fake.calls(), [FakeCall::RemoveCover(1)]);
+    }
+
+    #[tokio::test]
+    async fn test_unavailable_manager_returns_503() {
+        common::setup_env();
+        let app = app_with(AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_book_manager_factory(|| Err("book store down".into())));
+        assert_eq!(TestClient::with_app(app).delete("/epub-cover/1").await.status, 503);
+    }
+
+    #[tokio::test]
     async fn test_delete_requires_admin_on_books_and_comics() {
         let http = TestClient::new();
         assert!([401, 403].contains(&http.delete("/epub-cover/1").await.status));

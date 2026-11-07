@@ -446,6 +446,15 @@ mod test_route {
         assert_eq!(http.post_json("/epub-images/1", &json!({"deletes": [{"idref": ""}]})).await.status, 422);
         assert_eq!(http.post_json("/epub-images/1", &json!({"deletes": [{"idref": "p1", "index": -1}]})).await.status, 422);
         assert_eq!(http.post_json("/epub-images/1", &json!({"inserts": [{"before_idref": "p1"}]})).await.status, 422);
+        assert_eq!(http.post_json("/epub-images/1", &json!({"inserts": [{"before_idref": "", "url": "https://img.example.com/a.jpg"}]})).await.status, 422);
+    }
+
+    #[tokio::test]
+    async fn test_crop_without_an_angle_is_not_rotated() {
+        let (http, fake) = client();
+        let response = http.post_json("/epub-images/1", &json!({"crops": [{"idref": "p1", "x0": 0.1, "y0": 0.1, "x1": 0.9, "y1": 0.9}]})).await;
+        assert_eq!(response.status, 200);
+        assert_eq!(fake.args("edit_epub_images")[1][0]["angle"].as_f64(), Some(0.0));
     }
 
     #[tokio::test]

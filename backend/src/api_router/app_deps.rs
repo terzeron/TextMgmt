@@ -481,6 +481,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_book_access_reports_an_unavailable_manager() {
+        let unavailable: Slot<dyn BookManagerApi> = Slot::lazy(|| Err("만화 저장소 없음".to_string()));
+        let manager: Arc<dyn BookManagerApi> = Arc::new(FixedBookManager(test_book("")));
+        let mapping: Arc<dyn CategoryMappingApi> = Arc::new(FixedHiddenCategories(Vec::new()));
+        let access = runtime_book_access(Slot::ready(manager), unavailable, Slot::ready(mapping));
+
+        let error = access.get_book_and_ensure_viewer_access(1, &Claims::with_role("admin"), "comic").await.unwrap_err();
+
+        assert_eq!(error.status_code, 503);
+        // 저장소는 있지만 책을 찾지 못하면 404다.
+        let missing: Arc<dyn BookManagerApi> = Arc::new(crate::api_router::UnavailableBookManager);
+        let mapping: Arc<dyn CategoryMappingApi> = Arc::new(FixedHiddenCategories(Vec::new()));
+        let access = runtime_book_access(Slot::ready(missing.clone()), Slot::ready(missing), Slot::ready(mapping));
+        let error = access.get_book_and_ensure_viewer_access(1, &Claims::with_role("admin"), "book").await.unwrap_err();
+        assert_eq!(error.status_code, 404);
+    }
+
+    // 프로세스 환경 변수를 읽으므로 경우를 한 테스트 안에서 차례로 본다. ES 설정이 없으면 연결 전에 실패한다.
+    #[test]
+    fn runtime_managers_report_missing_configuration_before_connecting() {
+        let error = |result: Result<Arc<dyn BookManagerApi>, String>| result.err().unwrap_or_default();
+        // SAFETY: 이 lib 단위 테스트 바이너리에서 아래 변수를 쓰는 테스트는 이것 하나다.
+        unsafe {
+            for key in ["TM_BOOK_DIR", "TM_COMICS_DIR", "TM_ES_COMICS_INDEX", "TM_ES_BOOK_INDEX", "TM_ES_URL", "TM_ES_USER", "TM_ES_PASSWORD"] {
+                std::env::remove_var(key);
+            }
+        }
+        assert!(error(super::create_runtime_book_manager()).contains("TM_BOOK_DIR"));
+        assert!(error(super::create_runtime_comics_manager()).contains("TM_COMICS_DIR"));
+        unsafe {
+            std::env::set_var("TM_BOOK_DIR", "/books");
+            std::env::set_var("TM_COMICS_DIR", "/comics");
+        }
+        assert!(error(super::create_runtime_comics_manager()).contains("TM_ES_COMICS_INDEX"));
+        assert!(!error(super::create_runtime_book_manager()).is_empty(), "ES 설정 없이 책 저장소를 만들었다");
+        unsafe { std::env::set_var("TM_ES_COMICS_INDEX", "comics") };
+        assert!(!error(super::create_runtime_comics_manager()).is_empty(), "ES 설정 없이 만화 저장소를 만들었다");
+        unsafe {
+            for key in ["TM_BOOK_DIR", "TM_COMICS_DIR", "TM_ES_COMICS_INDEX"] {
+                std::env::remove_var(key);
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn runtime_book_access_does_not_hide_an_empty_category() {
         let manager: Arc<dyn BookManagerApi> = Arc::new(FixedBookManager(test_book("")));
         let mapping: Arc<dyn CategoryMappingApi> = Arc::new(FixedHiddenCategories(vec![String::new()]));

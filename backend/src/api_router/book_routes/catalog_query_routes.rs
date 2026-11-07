@@ -591,5 +591,30 @@ mod tests {
         assert_eq!(sequence_ratio(&[], &[]), 1.0);
         assert_eq!(sequence_ratio(&"same".chars().collect::<Vec<_>>(), &"same".chars().collect::<Vec<_>>()), 1.0);
         assert_eq!(sequence_ratio(&"abc".chars().collect::<Vec<_>>(), &"xyz".chars().collect::<Vec<_>>()), 0.0);
+        // 가운데가 다르면 앞뒤 일치 구간을 모두 센다.
+        assert_eq!(sequence_ratio(&"abXcd".chars().collect::<Vec<_>>(), &"abYcd".chars().collect::<Vec<_>>()), 0.8);
+    }
+
+    fn ranges(value: &str) -> Result<Vec<(u64, u64)>, &'static str> {
+        super::parse_byte_ranges(value, 10).map_err(|error| match error {
+            super::RangeError::Malformed(message) => message,
+            super::RangeError::Unsatisfiable => "unsatisfiable",
+        })
+    }
+
+    #[test]
+    fn byte_ranges_skip_empty_parts_merge_overlaps_and_reject_bad_orders() {
+        assert_eq!(ranges("bytes=-, 0-4, 3-7"), Ok(vec![(0, 8)]));
+        assert_eq!(ranges("bytes=abc"), Err("Range header: range must be requested"));
+        assert_eq!(ranges("bytes=5-2"), Err("Range header: start must be less than end"));
+        assert_eq!(ranges("bytes=20-30"), Err("unsatisfiable"));
+    }
+
+    #[test]
+    fn file_headers_accept_a_modification_time_before_the_epoch() {
+        let mut headers = Vec::new();
+        let modified = std::time::UNIX_EPOCH - std::time::Duration::from_secs(86_400);
+        super::add_file_headers(modified, 3, &mut headers).unwrap();
+        assert!(headers.iter().any(|(key, value)| key.eq_ignore_ascii_case("last-modified") && value.contains("1969")), "{headers:?}");
     }
 }

@@ -86,6 +86,15 @@ mod tests {
         let routes = first.merge(second);
         let table: Vec<(&str, &str, Vec<&str>)> = routes.table().iter().map(|r| (r.path.as_str(), r.methods[0].as_str(), r.dependencies.iter().map(String::as_str).collect())).collect();
         assert_eq!(table, vec![("/a", "GET", vec!["require_auth"]), ("/a", "POST", vec![]), ("/b", "PUT", vec!["require_admin"]), ("/c", "DELETE", vec![]), ("/d", "PATCH", vec!["optional_auth"])]);
-        let _router = routes.into_router();
+        let router = routes.into_router();
+        // 기록한 경로와 메서드로 실제 요청이 handler에 닿는다.
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let response = runtime
+            .block_on(tower::ServiceExt::oneshot(
+                router.with_state(Arc::new(AppDeps::new(super::super::app_deps::AuthMode::Cookies))),
+                axum::http::Request::builder().method("PATCH").uri("/d").body(axum::body::Body::empty()).unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
     }
 }

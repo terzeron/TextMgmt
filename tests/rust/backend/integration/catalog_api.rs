@@ -143,6 +143,21 @@ async fn similar_filters_hidden_results_and_falls_back_to_original() {
     assert_eq!(response.json()["status"], "success");
     assert_eq!(response.json()["total"], 1);
     assert_eq!(response.json()["result"][0]["book_id"], 1);
+    // 결과가 모두 숨긴 카테고리면 원래 책으로 대신한다.
+    es.with(|s| s.similar_paged = (vec![Hit::new(2, doc("hidden-book/child"), 1.0)], 1));
+    let response = client.get("/similar/1").await;
+    assert_eq!(response.json()["result"][0]["book_id"], 1);
+}
+
+#[tokio::test]
+async fn latest_is_unavailable_without_the_exclusion_policy_store() {
+    common::setup_env();
+    let managers = BookManagerDeps::new("/tmp/catalog-library".into(), FakeEsManager::new());
+    // 관리자는 숨김 목록 없이 지나가고, 최신 목록 제외 정책을 읽을 때 저장소가 필요하다.
+    let deps = AppDeps::new(AuthMode::AuthOnly(Claims { role: "admin".to_string(), ..Claims::default() }))
+        .with_category_mapping_factory(|| Err("mapping store down".into()))
+        .with_book_manager(Arc::new(BookManager::with_deps(managers)));
+    assert_eq!(TestClient::with_app(app_with(deps)).get("/latest").await.status, 503);
 }
 
 #[tokio::test]

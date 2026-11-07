@@ -631,6 +631,14 @@ mod proposal_tests {
     }
 
     #[tokio::test]
+    async fn proposal_job_fails_when_progress_cannot_be_saved() {
+        let mapping = run_flow(json!({"processed_count": 1}), None, false, false, true).await;
+
+        assert_eq!(mapping.state.lock().unwrap()["status"], "failed");
+        assert_eq!(mapping.state.lock().unwrap()["error"], "분류 제안에 실패했습니다.");
+    }
+
+    #[tokio::test]
     async fn proposal_job_marks_callback_flush_failures() {
         let new_items = (0..10).map(|id| json!({"id": id})).collect::<Vec<_>>();
         let updated_items = (10..20).map(|id| json!({"id": id})).collect::<Vec<_>>();

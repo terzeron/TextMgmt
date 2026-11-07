@@ -23,6 +23,10 @@ fn usage_and_invalid_arguments_have_stable_exit_codes() {
         let output = command().args(&args).output().unwrap();
         assert_eq!(output.status.code(), Some(2), "{args:?}: {}", String::from_utf8_lossy(&output.stderr));
     }
+    // 프런트엔드 주소 없이는 서버를 띄우지 않는다.
+    let output = command().env_remove("TM_FRONTEND_URL").args(["serve", "--addr", "127.0.0.1:0"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(255));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("TM_FRONTEND_URL"));
 }
 
 struct Server(Child);

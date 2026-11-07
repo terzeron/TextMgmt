@@ -13,7 +13,7 @@ use backend::api_router::{AppDeps, AuthMode, AuthSlots, CategoryMappingApi, Mapp
 use db::{DbValue, Row};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, atomic::Ordering};
+use std::sync::{Arc, atomic::Ordering};
 
 pub fn ip_headers(headers: &[(&str, &str)]) -> HeaderMap {
     let mut map = HeaderMap::new();
@@ -66,7 +66,7 @@ impl Fx {
     pub fn build(guard: Guard, tweak: impl FnOnce(AppDeps) -> AppDeps) -> Self {
         let (bm, cm, cat) = (Mock::new(), Mock::new(), Mock::new());
         let store = install_classify_status_store(&cat, None);
-        let slots = Arc::new(AuthSlots { auth: Mutex::new(admin_payload()), admin: Mutex::new(admin_payload()) });
+        let slots = Arc::new(AuthSlots::new(admin_payload(), admin_payload()));
         let deps = AppDeps::new(AuthMode::Shared(slots.clone()))
             .with_book_manager(Arc::new(bm.clone()))
             .with_comics_manager(Arc::new(cm.clone()))

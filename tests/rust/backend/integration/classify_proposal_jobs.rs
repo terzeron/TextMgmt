@@ -231,6 +231,11 @@ async fn classify_proposal_get_fills_missing_book_id_from_existing_file() {
 
     let item = &response.json()["result"]["items"][0];
     assert!(item["book_id"].as_i64().is_some_and(|id| id > 0));
+
+    // 이미 book_id가 있는 항목은 다시 계산하지 않는다.
+    *cat.proposal_items.lock().unwrap() = vec![json!({"file_path":"0_inbox/a.epub","book_id":7})];
+    let response = client(&bm, &cat).get("/categories/classify-proposal").await;
+    assert_eq!(response.json()["result"]["items"][0]["book_id"], 7);
 }
 
 #[tokio::test]
@@ -428,6 +433,77 @@ async fn test_category_mismatch_reload_starts_a_background_job() {
     runner.run_all();
 }
 
+/// 재적재 잠금 저장소 대역. `started`가 거짓이면 예전 형식(문자열)의 진행 상태로 거절하고, 완료 기록은 늘 실패한다.
+struct LegacyReloadLock {
+    started: bool,
+    completions: AtomicUsize,
+}
+
+impl CategoryMappingApi for LegacyReloadLock {
+    fn acquire_reload_lock(&self, _content_type: &str, _category: Option<&str>, _reload_source: Option<&str>) -> Result<(bool, Option<String>, Option<Value>), backend::api_router::MappingError> {
+        Ok(if self.started { (true, None, None) } else { (false, Some("busy".into()), Some(json!("legacy status"))) })
+    }
+
+    fn heartbeat_reload_lock(&self, _content_type: &str, _category: Option<&str>, _counts: &Value) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn complete_reload_lock(&self, _content_type: &str, _status: &str, _error: Option<&str>, _category: Option<&str>, _counts: &Value) -> Result<(), String> {
+        self.completions.fetch_add(1, Ordering::SeqCst);
+        Err("status store down".into())
+    }
+}
+
+fn reload_client(bm: &Arc<MockBm>, mapping: Arc<LegacyReloadLock>, runner: Arc<dyn TaskRunner>) -> TestClient {
+    common::setup_env();
+    TestClient::with_app(app_with(AppDeps::new(AuthMode::Fixed(admin_payload())).with_book_manager(bm.clone()).with_category_mapping(mapping).with_task_runner(runner)))
+}
+
+#[tokio::test]
+async fn reload_refusal_with_a_non_object_status_reports_the_lock_error() {
+    let bm = mock_bm();
+    let client = reload_client(&bm, Arc::new(LegacyReloadLock { started: false, completions: AtomicUsize::new(0) }), Arc::new(QueuedTasks::default()));
+    let mismatch = client.post_json("/category-mismatches/reload-mismatches", &json!({"category":"A"})).await;
+    assert_eq!(mismatch.json()["result"], json!({"already_running":true,"error":"busy"}));
+    let bulk = client.request(axum::http::Method::POST, "/category-mismatches/reload-all", None, Vec::new()).await;
+    assert_eq!(bulk.json()["result"], json!({"already_running":true,"error":"busy"}));
+}
+
+#[tokio::test]
+async fn reload_job_finishes_even_when_its_completion_cannot_be_saved() {
+    let bm = mock_bm();
+    let runner = Arc::new(QueuedTasks::default());
+    let mapping = Arc::new(LegacyReloadLock { started: true, completions: AtomicUsize::new(0) });
+    let client = reload_client(&bm, mapping.clone(), runner.clone());
+    let started = client.post_json("/category-mismatches/reload-mismatches", &json!({"category":"A"})).await;
+    assert_eq!(started.json()["result"]["started"], true);
+    // 작업 스레드는 완료 기록 실패를 로그로만 남기고 끝난다.
+    runner.run_all();
+    assert_eq!(mapping.completions.load(Ordering::SeqCst), 1);
+}
+
+/// 불일치 재적재 중 panic하는 관리자.
+struct PanickingReloader;
+
+#[async_trait::async_trait]
+impl backend::api_router::BookManagerApi for PanickingReloader {
+    async fn reload_category_mismatch_files(&self, _category: &str, _content_type: &str, _on_progress: Option<backend::api_router::ReloadProgress>) -> Result<book_manager::MismatchReload, String> {
+        panic!("reload crashed");
+    }
+}
+
+#[tokio::test]
+async fn reload_job_panic_still_tries_to_record_the_failure() {
+    common::setup_env();
+    let runner = Arc::new(QueuedTasks::default());
+    let mapping = Arc::new(LegacyReloadLock { started: true, completions: AtomicUsize::new(0) });
+    let app = app_with(AppDeps::new(AuthMode::Fixed(admin_payload())).with_book_manager(Arc::new(PanickingReloader)).with_category_mapping(mapping.clone()).with_task_runner(runner.clone()));
+    let started = TestClient::with_app(app).post_json("/category-mismatches/reload-mismatches", &json!({"category":"A"})).await;
+    assert_eq!(started.json()["result"]["started"], true);
+    runner.run_all();
+    assert_eq!(mapping.completions.load(Ordering::SeqCst), 1);
+}
+
 #[tokio::test]
 async fn test_category_pdf_stats_hides_internal_errors() {
     let (bm, cat) = (mock_bm(), MockCat::with_store(None));
@@ -484,6 +560,20 @@ async fn wake_only_reads_storage_for_the_configured_frontend_host() {
     let failed = TestClient::with_app(failing_app).header("host", "localhost").get("/wake").await;
     assert_eq!(failed.status, 503);
     assert_eq!(failed.json(), json!({"status":"failure"}));
+
+    // 저장소 확인 작업 자체가 죽으면 내부 오류다.
+    let crashing_fs = common::faulty_fs::FaultyFs::new();
+    crashing_fs.set_read_dir(|_| panic!("storage probe crashed"));
+    let crashing_app = app_with(AppDeps::new(AuthMode::Fixed(admin_payload())).with_fs(crashing_fs));
+    let logs = common::log_capture::LogCapture::start(log::Level::Error);
+    let crashed = TestClient::with_app(crashing_app).header("host", "localhost").get("/wake").await;
+    assert_eq!(crashed.status, 500);
+    assert!(logs.text().contains("storage probe crashed"), "{}", logs.text());
+
+    // 등록한 경로에 없는 메서드는 JSON 405다.
+    let wrong_method = client(&bm, &cat).header("host", "localhost").delete("/wake").await;
+    assert_eq!(wrong_method.status, 405);
+    assert_eq!(wrong_method.json(), json!({"detail": "Method Not Allowed"}));
 }
 
 struct MockOnlineBookstore;

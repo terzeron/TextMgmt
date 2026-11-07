@@ -561,6 +561,34 @@ async fn test_disconnected_search_cancels_worker() {
     assert!(finished.wait(2));
 }
 
+#[tokio::test]
+async fn test_slow_search_keeps_waking_until_it_finishes_and_maps_cancellation() {
+    let tmp = tempfile::tempdir().unwrap();
+    // 연결은 살아 있고, 작업이 첫 확인보다 늦게 끝난다.
+    let hooks = CoverHooks::default()
+        .with_candidates(|_store, _relative| {
+            std::thread::sleep(Duration::from_millis(150));
+            Err(CoverError::cancelled())
+        })
+        .with_is_disconnected(|| false);
+    let api = cover_api(tmp.path(), hooks);
+    let response = api.client.get("/admin/book-covers/candidates/yes24?file_path=book.epub").await;
+    assert_eq!(response.status, 499);
+}
+
+#[tokio::test]
+async fn test_cover_api_validates_query_numbers_and_needs_the_book_manager() {
+    let tmp = tempfile::tempdir().unwrap();
+    let api = cover_api(tmp.path(), CoverHooks::default());
+    for limit in ["101", "many"] {
+        assert_eq!(api.client.get(&format!("/admin/book-covers/missing?limit={limit}")).await.status, 422, "limit={limit}");
+    }
+    assert_eq!(api.client.get("/admin/book-covers/preview?file_path=book.epub&w=wide").await.status, 422);
+    drop(api);
+    let app = app_with(AppDeps::new(AuthMode::Cookies).with_refresh_token_store(crate::common::session::store()).with_book_manager_factory(|| Err("book store down".into())));
+    assert_eq!(admin_client(app).get("/admin/book-covers/directories").await.status, 503);
+}
+
 #[test]
 fn test_isbn_normalization_and_title_fallback() {
     for (isbn, expected) in [("urn:isbn:978-1234567890", "9781234567890"), ("1234567890", "1234567890"), ("invalid", "")] {

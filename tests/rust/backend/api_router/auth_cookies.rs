@@ -113,6 +113,15 @@ fn test_set_and_clear_auth_cookies() {
     let cookies: Vec<String> = response.headers().get_all("set-cookie").iter().map(|v| v.to_str().unwrap().to_string()).collect();
     assert!(cookies.iter().any(|cookie| cookie.contains(ACCESS_COOKIE_NAME)), "{cookies:?}");
     assert!(cookies.iter().any(|cookie| cookie.contains(REFRESH_COOKIE_NAME)), "{cookies:?}");
+    // HTTP 응답으로 바꿔도 상태·본문·쿠키를 그대로 싣는다.
+    response.status_code = 201;
+    let body = response.body.clone();
+    let http = axum::response::IntoResponse::into_response(response);
+    assert_eq!(http.status(), 201);
+    assert_eq!(http.headers()["content-type"], "application/json");
+    assert_eq!(http.headers().get_all("set-cookie").iter().count(), cookies.len());
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    assert_eq!(runtime.block_on(axum::body::to_bytes(http.into_body(), usize::MAX)).unwrap(), body);
 
     let mut response2 = CustomJSONResponse::new(json!({"ok": true}));
     backend::api_router::clear_auth_cookies(&mut response2);

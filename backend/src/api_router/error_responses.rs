@@ -224,3 +224,21 @@ pub async fn error_middleware(req: Request, next: Next) -> Response {
 pub async fn not_found() -> ApiError {
     ApiError::http(404, "Not Found")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn bare_method_not_allowed_becomes_json_and_keeps_allow() {
+        // 본문 없는 405를 직접 돌려주는 handler. Allow 헤더를 JSON 응답에도 남긴다.
+        let app = axum::Router::new()
+            .route("/x", axum::routing::get(|| async { (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST")]).into_response() }))
+            .layer(axum::middleware::from_fn(error_middleware));
+        let response = app.oneshot(Request::get("/x").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(response.headers()[header::ALLOW], "POST");
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+    }
+}
