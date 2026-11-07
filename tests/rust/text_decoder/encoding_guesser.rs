@@ -107,3 +107,12 @@ fn decode_best_falls_back_to_most_korean_reading() {
 fn decode_best_all_garbage_returns_something() {
     assert_eq!(decode_best(&[0xff; 300]), "");
 }
+
+#[test]
+fn extended_wansung_bytes_are_detected_as_cp949() {
+    use text_decoder::encoding_guesser::detect_hint;
+    use text_decoder::text_transcoder::{Enc, encode};
+    // KS X 1001 밖의 확장 완성형 글자가 섞이면 EUC-KR이 아니라 CP949다.
+    let bytes = encode(Enc::Cp949, "똠방각하 똠방각하").unwrap();
+    assert_eq!(detect_hint(&bytes), Some(Enc::Cp949));
+}
