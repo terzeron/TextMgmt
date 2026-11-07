@@ -3,6 +3,8 @@
 //! 모델·학습·코퍼스·서점 판정 구현은 지웠다. backend는 `BookManagerDeps::with_classifier_factory`로 [`Classify`] 구현을
 //! 꽂을 때만 모델 판정을 쓰고, 꽂지 않으면 카테고리 매핑 키워드만으로 제안한다.
 
+pub mod feature_hasher;
+
 use std::any::Any;
 use std::path::Path;
 use std::sync::Arc;
