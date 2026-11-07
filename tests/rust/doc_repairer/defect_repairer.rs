@@ -268,4 +268,51 @@ mod xhtml_fix {
         let lost = epub_bytes(&xhtml("<p>다른 글</p>"), &clean_opf(), &[]);
         assert!(verify(&src, &lost).unwrap_err().contains("본문"));
     }
+
+    #[test]
+    fn open_quotes_in_self_closing_tags_unclosed_style_and_attribute_quotes_are_repaired() {
+        let out = fixed("<html><head></head><body><p>앞<img alt=\"x/>뒤</p></body></html>");
+        assert!(text(&out).starts_with("앞"), "{out}");
+        assert_eq!(text(&fixed("<html><head></head><body><p>앞</p><style>p { color: red }")), "앞");
+        let out = fixed("<html><head></head><body><p title='a\"b\u{1}c'>글</p></body></html>");
+        assert!(out.contains("title=\"a&quot;bc\""), "{out}");
+        // XML 이름이 될 수 없는 요소는 속성 없이 span으로 바꾼다.
+        let out = fixed("<html><head></head><body><p><x\u{b7}y title=\"t\">글</x\u{b7}y></p></body></html>");
+        assert!(out.contains("<span>글</span>"), "{out}");
+    }
+
+    #[test]
+    fn dropped_members_leave_the_guide_and_nested_toc_entries_consistent() {
+        let ncx = r#"<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap><navPoint id="n1" playOrder="1"><navLabel><text>하나</text></navLabel><content src="ch1.xhtml"/><navPoint id="n1a" playOrder="2"><navLabel><text>하나의 절</text></navLabel><content src="ch1.xhtml#a"/></navPoint><navPoint id="n1b"/></navPoint><navPoint id="n2" playOrder="3"><navLabel><text>둘</text></navLabel><content src="ch2.xhtml"/></navPoint></navMap></ncx>"#;
+        let opf = opf_with_chapters(&[("c1", "ch1.xhtml"), ("c2", "ch2.xhtml"), ("c3", "ch3.xhtml")], r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#)
+            .replace("</package>", r#"<guide><reference type="text" href="ch2.xhtml"/><reference type="toc" href="ch1.xhtml"/></guide></package>"#);
+        let src = epub_bytes(&xhtml("<p>하나</p>"), &opf, &[("OEBPS/ch2.xhtml", GARBAGE), ("OEBPS/ch3.xhtml", xhtml("<p>셋</p>").as_bytes()), ("OEBPS/toc.ncx", ncx.as_bytes())]);
+        let p = plan(rebuild(&src).unwrap());
+        let opf_after = member(&p.bytes, "OEBPS/content.opf");
+        assert!(!opf_after.contains(r#"href="ch2.xhtml""#) && opf_after.contains(r#"type="toc""#), "{opf_after}");
+        let ncx_after = member(&p.bytes, "OEBPS/toc.ncx");
+        assert!(ncx_after.contains(r#"id="n1a""#) && !ncx_after.contains("ch2.xhtml"), "{ncx_after}");
+    }
+
+    #[test]
+    fn references_in_utf16_toc_and_non_utf8_member_names_are_refused() {
+        let opf = opf_with_chapters(&[("c1", "ch1.xhtml"), ("c2", "ch2.xhtml"), ("c3", "ch3.xhtml")], r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#);
+        let ncx: Vec<u8> = [&[0xFF, 0xFE][..], &"<ncx><navMap/></ncx>".encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>()].concat();
+        let src = epub_bytes(&xhtml("<p>하나</p>"), &opf, &[("OEBPS/ch2.xhtml", GARBAGE), ("OEBPS/ch3.xhtml", xhtml("<p>셋</p>").as_bytes()), ("OEBPS/toc.ncx", &ncx)]);
+        assert!(rebuild(&src).err().is_some_and(|e| e.contains("UTF-16")));
+        // 멤버 이름 바이트를 UTF-8이 아닌 값으로 바꾼다(로컬 헤더와 중앙 디렉토리 모두).
+        let src = epub_bytes(&xhtml("<p>하나</p>"), &clean_opf(), &[("OEBPS/zz.png", b"\x89PNG\r\n\x1a\nxx")]);
+        let renamed = zipx::bytes_replace(&src, b"OEBPS/zz.png", b"OEBPS/\xffz.png");
+        assert!(rebuild(&renamed).err().is_some_and(|e| e.contains("UTF-8")));
+    }
+
+    #[test]
+    fn verify_rejects_a_moved_mimetype_a_remaining_defect_and_new_broken_references() {
+        let src = epub_bytes(BROKEN, &clean_opf(), &[]);
+        assert!(verify(&src, &reordered(&src, "OEBPS/ch1.xhtml")).unwrap_err().contains("mimetype"));
+        assert!(verify(&src, &src).unwrap_err().contains("수리한 뒤에도"));
+        let healthy = epub_bytes(&xhtml("<p>글</p>"), &clean_opf(), &[]);
+        let broken = epub_bytes(&xhtml("<p>글</p>"), &opf_with_chapters(&[("c1", "ch1.xhtml"), ("c2", "gone.xhtml")], ""), &[]);
+        assert!(verify(&healthy, &broken).unwrap_err().contains("정합성"));
+    }
 }

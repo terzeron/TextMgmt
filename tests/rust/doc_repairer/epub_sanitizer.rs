@@ -367,14 +367,28 @@ fn markup_in_utf16_or_utf32_is_recognized_in_binary_extensions() {
     let utf16be: Vec<u8> = [&[0xFE, 0xFF][..], &"  <svg onload='x'/>".encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>()].concat();
     let utf16_bomless: Vec<u8> = "<html/>".encode_utf16().flat_map(u16::to_le_bytes).collect();
     let utf32le: Vec<u8> = [&[0xFF, 0xFE, 0, 0][..], &"<html/>".chars().flat_map(|c| (c as u32).to_le_bytes()).collect::<Vec<u8>>()].concat();
+    let utf32be: Vec<u8> = [&[0, 0, 0xFE, 0xFF][..], &"<html/>".chars().flat_map(|c| (c as u32).to_be_bytes()).collect::<Vec<u8>>()].concat();
+    let utf32le_bomless: Vec<u8> = "<html/>".chars().flat_map(|c| (c as u32).to_le_bytes()).collect();
+    let utf32be_bomless: Vec<u8> = "<html/>".chars().flat_map(|c| (c as u32).to_be_bytes()).collect();
+    let utf16be_bomless: Vec<u8> = "<html/>".encode_utf16().flat_map(u16::to_be_bytes).collect();
     let src = epub_bytes(
         &xhtml("<p>본문</p>"),
         &clean_opf(),
-        &[("OEBPS/a.png", &utf16le), ("OEBPS/b.jpg", &utf16be), ("OEBPS/c.gif", &utf16_bomless), ("OEBPS/d.webp", &utf32le), ("OEBPS/e.png", b"\x89PNG\r\n\x1a\nrest")],
+        &[
+            ("OEBPS/a.png", &utf16le),
+            ("OEBPS/b.jpg", &utf16be),
+            ("OEBPS/c.gif", &utf16_bomless),
+            ("OEBPS/d.webp", &utf32le),
+            ("OEBPS/f.png", &utf32be),
+            ("OEBPS/g.png", &utf32le_bomless),
+            ("OEBPS/h.png", &utf32be_bomless),
+            ("OEBPS/i.png", &utf16be_bomless),
+            ("OEBPS/e.png", b"\x89PNG\r\n\x1a\nrest"),
+        ],
     );
     let kept = names(&rebuild(&src).unwrap().bytes);
     assert!(kept.contains(&"OEBPS/e.png".to_string()), "{kept:?}");
-    for gone in ["a.png", "b.jpg", "c.gif", "d.webp"] {
+    for gone in ["a.png", "b.jpg", "c.gif", "d.webp", "f.png", "g.png", "h.png", "i.png"] {
         assert!(!kept.iter().any(|n| n.ends_with(gone)), "{gone}: {kept:?}");
     }
 }
@@ -518,4 +532,76 @@ fn only_a_real_package_document_is_exempt_from_the_extension_allowlist() {
     // 진짜 패키지면 `.dat` 확장자여도 남긴다.
     let src = epub_with_package("OEBPS/package.dat", PACKAGE_DECLARING_CSS_AS_XHTML.as_bytes());
     assert!(names(&rebuild(&src).unwrap().bytes).contains(&"OEBPS/package.dat".to_string()));
+}
+
+#[test]
+fn tag_syntax_edge_cases_keep_ordinary_markup_unchanged() {
+    // 공백 낀 속성, 값 없는 속성, 닫는 꺾쇠 앞 공백은 그대로 둔다.
+    for kept in ["<p class = 'a'>t</p>", "<p class= 'a'>t</p>", "<td nowrap>t</td>", "<p class='a' >t</p>", "a < b"] {
+        assert_eq!(markup(kept), kept);
+    }
+    // 끝나지 않은 태그는 지운다.
+    assert_eq!(markup("a<p class=x"), "a");
+}
+
+#[test]
+fn raw_text_skipping_ignores_tags_that_only_start_with_the_same_name() {
+    assert_eq!(markup("x<script>a<scripts>b</script>y"), "xy");
+    assert_eq!(markup("x<script>a</scripts>b</script>y"), "xy");
+    assert_eq!(markup("<svg><animate attributeName='href'>x</animate></svg>"), "<svg></svg>");
+}
+
+#[test]
+fn risky_attributes_and_unquoted_angle_brackets_are_neutralized() {
+    assert_eq!(markup("<p formaction='http://x'>t</p>"), "<p>t</p>");
+    assert_eq!(markup("<p title=a<b>c</p>"), "<p title=\"a&lt;b\">c</p>");
+}
+
+#[test]
+fn cleanup_repeats_until_no_new_markup_appears() {
+    // 첫 정리에서 안쪽 script가 빠지면 앞의 `<`와 뒤의 글이 새 script 태그가 된다. 다시 정리해 지운다.
+    let out = markup("a<<script>x</script>script>alert(1)</script>b");
+    assert!(!out.to_ascii_lowercase().contains("script") && !out.contains("alert"), "{out}");
+}
+
+#[test]
+fn an_unterminated_doctype_subset_is_dropped_to_the_end() {
+    let out = markup("<!DOCTYPE html [<!ENTITY x 'y'>t");
+    assert!(out.starts_with("<!DOCTYPE html>") && !out.contains("ENTITY"), "{out}");
+}
+
+#[test]
+fn a_css_line_continuation_cannot_hide_a_remote_load() {
+    let out = strip_css("a{background:u\\\nrl(http://evil/i.png)}");
+    assert!(!out.contains("evil"), "{out}");
+}
+
+#[test]
+fn rebuild_drops_script_capability_properties_from_the_manifest() {
+    let opf = opf_with(
+        r#"<item id="n" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav scripted"/><item id="r" href="r.xhtml" media-type="application/xhtml+xml" properties="remote-resources"/><item id="m" href="m.xhtml" media-type="application/xhtml+xml" properties="mathml"/>"#,
+    );
+    let src = epub_bytes(
+        &xhtml("<p>본문</p>"),
+        &opf,
+        &[("OEBPS/nav.xhtml", xhtml("<p>목차</p>").as_bytes()), ("OEBPS/r.xhtml", xhtml("<p>글</p>").as_bytes()), ("OEBPS/m.xhtml", xhtml("<p>수식</p>").as_bytes())],
+    );
+    let new_opf = member(&rebuild(&src).unwrap().bytes, "OEBPS/content.opf");
+    assert!(new_opf.contains(r#"properties="mathml""#), "{new_opf}");
+    assert!(new_opf.contains(r#"properties="nav""#) && !new_opf.contains("scripted") && !new_opf.contains("remote-resources"), "{new_opf}");
+}
+
+#[test]
+fn clean_markup_reports_no_changes_and_background_loads_are_remote_resources() {
+    assert!(strip_markup("<p>t</p>", false).1.is_empty());
+    let (out, changes) = strip_markup("<td background='http://evil/x.png'>t</td>", false);
+    assert!(!changes.is_empty() && !out.contains("evil"), "{out}");
+}
+
+#[test]
+fn verify_rejects_a_moved_mimetype_and_new_broken_manifest_entries() {
+    let src = epub_bytes(&xhtml("<p>본문</p>"), &clean_opf(), &[]);
+    assert!(verify(&src, &reordered(&src, "OEBPS/ch1.xhtml")).unwrap_err().contains("mimetype"));
+    let broken = epub_bytes(&xhtml("<p>본문</p>"), &opf_with(r#"<item id="gone" href="gone.xhtml" media-type="application/xhtml+xml"/>"#), &[]);
+    assert!(verify(&src, &broken).unwrap_err().contains("정합성"));
 }

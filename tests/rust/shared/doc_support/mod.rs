@@ -127,6 +127,27 @@ pub fn opf(items: &str) -> String {
     format!(r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><manifest>{items}</manifest><spine><itemref idref="c1"/></spine></package>"#)
 }
 
+/// `src` 압축 파일의 멤버를 `first`부터 다시 쓴다. 나머지 순서는 그대로다.
+pub fn reordered(src: &[u8], first: &str) -> Vec<u8> {
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(src)).unwrap();
+    let mut members: Vec<(String, Vec<u8>)> = (0..archive.len())
+        .map(|i| {
+            let mut file = archive.by_index(i).unwrap();
+            let mut data = Vec::new();
+            file.read_to_end(&mut data).unwrap();
+            (file.name().unwrap().into_owned(), data)
+        })
+        .collect();
+    members.sort_by_key(|(name, _)| name != first);
+    let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in members {
+        writer.start_file(name, SimpleFileOptions::default()).unwrap();
+        writer.write_all(&data).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+
 pub fn opf_item(id: &str, href: &str, media: &str, props: &str) -> String {
     let p = if props.is_empty() { String::new() } else { format!(r#" properties="{props}""#) };
     format!(r#"<item id="{id}" href="{href}" media-type="{media}"{p}/>"#)

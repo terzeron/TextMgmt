@@ -130,3 +130,38 @@ fn verify_rejects_a_rewrite_that_changes_the_pages() {
     ]);
     assert!(verify(&src, &other).unwrap_err().contains("쪽"));
 }
+
+#[test]
+fn an_action_type_given_by_reference_is_followed_only_to_a_name() {
+    // 5: /S가 이름 객체를 가리키는 JavaScript 동작. 8·9: /S가 이름이 아닌 값이라 동작으로 보지 않는다.
+    let src = build("/OpenAction 5 0 R /First 8 0 R /Second 9 0 R", "", &["<< /S 6 0 R /Next 7 0 R >>", "/JavaScript", "42", "<< /S 7 0 R >>", "<< /S 42 >>"]);
+    let plan = rebuild(&src).unwrap();
+    assert!(plan.removed.iter().any(|(_, what)| what.contains("JavaScript 동작")), "{:?}", plan.removed);
+    let out = Document::load_mem(&plan.bytes).unwrap();
+    let catalog = out.catalog().unwrap();
+    assert!(!catalog.has(b"OpenAction"));
+    assert!(catalog.has(b"First") && catalog.has(b"Second"));
+}
+
+#[test]
+fn nesting_past_the_depth_limit_is_left_alone() {
+    let deep = format!("/Deep {}/JS (x){}", "[".repeat(70), "]".repeat(70));
+    let src = build(&deep, "", &[]);
+    let plan = rebuild(&src).unwrap();
+    // 상한보다 깊은 곳의 스크립트 키는 보지 않는다.
+    assert!(plan.removed.is_empty(), "{:?}", plan.removed);
+}
+
+#[test]
+fn an_oversized_file_is_refused_before_parsing() {
+    let huge = vec![0u8; 128 * 1024 * 1024 + 1];
+    assert!(rebuild(&huge).err().is_some_and(|e| e.contains("너무 커서")));
+}
+
+#[test]
+fn verify_rejects_a_changed_page_count_and_an_unreadable_original() {
+    let src = build("", "", &[]);
+    let two_pages = pdf(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>", &page(""), &content_stream(), &page("")]);
+    assert!(verify(&src, &two_pages).unwrap_err().contains("쪽 수"));
+    assert!(verify(b"not a pdf", &src).unwrap_err().contains("읽을 수 없다"));
+}

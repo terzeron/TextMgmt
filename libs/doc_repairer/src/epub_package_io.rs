@@ -511,4 +511,24 @@ mod tests {
         let bad = [member("content.opf", b"<package><manifest>")];
         assert!(dangling(&bad).is_err());
     }
+
+    #[test]
+    fn directory_entries_are_skipped_and_an_oversized_declaration_is_refused() {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer.add_directory("OEBPS/", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.start_file("OEBPS/a.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut writer, b"abc").unwrap();
+        let mut bytes = writer.finish().unwrap().into_inner();
+        let names: Vec<String> = read_members(&bytes).unwrap().into_iter().map(|m| m.name).collect();
+        assert_eq!(names, ["OEBPS/a.txt"]);
+        // 중앙 디렉토리의 압축 전 크기를 512MB로 부풀린다(마지막 멤버가 a.txt).
+        let central = bytes.windows(4).rposition(|w| w == b"PK\x01\x02").unwrap();
+        bytes[central + 24..central + 28].copy_from_slice(&(512u32 * 1024 * 1024).to_le_bytes());
+        assert!(err(read_members(&bytes)).contains("너무 크다"));
+    }
+
+    #[test]
+    fn a_root_that_only_starts_with_package_is_not_a_package_document() {
+        assert!(err(package_text(&member("OEBPS/content.opf", b"<package-x/>"))).contains("루트 요소"));
+    }
 }

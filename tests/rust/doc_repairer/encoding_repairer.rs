@@ -59,3 +59,35 @@ fn western_single_byte_text_is_converted_via_cp1252_not_cp949() {
     assert!(r.changed && r.reason.contains("cp1252"), "{r:?}");
     assert_eq!(fs::read_to_string(&path).unwrap(), "Don Sabas\u{2014}a man called café and more text here\n");
 }
+
+#[test]
+fn custom_decoders_must_round_trip_and_read_as_real_text() {
+    use doc_repairer::encoding_repairer::{ReencodeHooks, reencode_text_file_to_utf8_with};
+    use text_decoder::text_transcoder::Candidate;
+    let latin1_decode: fn(&[u8]) -> String = |raw| raw.iter().map(|&b| char::from(b)).collect();
+    let latin1_encode: fn(&str) -> Option<Vec<u8>> = |text| text.chars().map(|c| u8::try_from(u32::from(c)).ok()).collect();
+    let rejected: [(&str, Candidate<'static>); 3] = [
+        ("대체 문자", Candidate::Custom { name: "replacement", decode: |_| "\u{fffd}".to_string(), encode: |_| None }),
+        ("되돌릴 수 없음", Candidate::Custom { name: "one-way", decode: |raw| raw.iter().map(|&b| char::from(b)).collect(), encode: |_| None }),
+        (
+            "글자가 없음",
+            Candidate::Custom {
+                name: "symbols",
+                decode: |raw| raw.iter().map(|&b| char::from_u32(0x2500 + u32::from(b)).unwrap()).collect(),
+                encode: |text| text.chars().map(|c| u8::try_from(u32::from(c) - 0x2500).ok()).collect(),
+            },
+        ),
+    ];
+    let tmp = tempfile::tempdir().unwrap();
+    for (why, candidate) in rejected {
+        let path = write(tmp.path(), "c.txt", b"caf\xe9 au lait\n");
+        let hooks = ReencodeHooks { encodings: Some(vec![candidate]), ..ReencodeHooks::default() };
+        let r = reencode_text_file_to_utf8_with(&path, false, None, Path::new("c.txt"), &hooks);
+        assert!(!r.changed, "{why}: {r:?}");
+    }
+    let path = write(tmp.path(), "c.txt", b"caf\xe9 au lait\n");
+    let hooks = ReencodeHooks { encodings: Some(vec![Candidate::Custom { name: "latin1", decode: latin1_decode, encode: latin1_encode }]), ..ReencodeHooks::default() };
+    let r = reencode_text_file_to_utf8_with(&path, false, None, Path::new("c.txt"), &hooks);
+    assert!(r.changed, "{r:?}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "café au lait\n");
+}
