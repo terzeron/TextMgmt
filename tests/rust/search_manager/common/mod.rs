@@ -8,6 +8,8 @@ use search_manager::HttpTransport;
 
 #[path = "../../shared/clock.rs"]
 pub mod clock;
+#[path = "../../shared/env.rs"]
+pub mod env;
 #[path = "../../shared/es_dummy.rs"]
 pub mod es_dummy;
 #[path = "../../shared/faulty_fs.rs"]

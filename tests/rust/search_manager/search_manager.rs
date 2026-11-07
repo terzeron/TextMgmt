@@ -1642,3 +1642,49 @@ mod api_facade {
         assert_eq!(es.calls_of("search")[1]["aggs"]["paths"]["composite"]["after"], json!({"category": "A", "file_path": "A/1"}));
     }
 }
+
+#[test]
+fn backfill_resolves_parent_segments_in_a_missing_tail_and_survives_a_refresh_error() {
+    let es = new_es();
+    es.on("search", |_| Ok(json!({"_scroll_id": "s1", "hits": {"hits": [{"_id": "1", "_source": {"file_path": "A/missing/../new.txt"}}]}})));
+    es.on("scroll", |_| Ok(json!({"_scroll_id": "s2", "hits": {"hits": []}})));
+    es.on("bulk", |_| Ok(json!({"errors": false})));
+    es.on("indices.refresh", |_| Err(runtime("refresh failed")));
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir(tmp.path().join("A")).unwrap();
+    std::fs::write(tmp.path().join("A").join("new.txt"), "new").unwrap();
+    let result = make_manager(&es).backfill_created_time(tmp.path(), 500);
+    assert_eq!(result, BackfillReport { updated: 1, skipped: 0, failed: 0 });
+}
+
+#[test]
+fn backfill_keeps_a_prefix_that_cannot_be_resolved_at_all() {
+    let es = new_es();
+    es.on("search", |_| Ok(json!({"_scroll_id": "s1", "hits": {"hits": []}})));
+    let result = make_manager(&es).backfill_created_time(std::path::Path::new("no-such-prefix-for-backfill"), 500);
+    assert_eq!(result, BackfillReport { updated: 0, skipped: 0, failed: 0 });
+}
+
+#[test]
+fn searches_pass_the_sort_and_zero_max_score_gives_zero_scores() {
+    let es = new_es();
+    let manager = make_manager(&es);
+    let sort = json!([{"title.keyword": "asc"}]);
+    manager.search(&json!({"match_all": {}}), Some(&sort), 20000, None).unwrap();
+    assert_eq!(es.calls_of("search")[0]["sort"], sort);
+    manager.search_paged(&json!({"match_all": {}}), Some(&sort), 10, 0, 1.0, None).unwrap();
+    assert_eq!(last_search(&es)["sort"], sort);
+
+    let zero = new_es();
+    zero.on("search", |_| Ok(json!({"hits": {"max_score": 0.0, "hits": [{"_id": "1", "_score": 0.0, "_source": {}}]}})));
+    let hits = make_manager(&zero).search(&json!({"match_all": {}}), None, 10, None).unwrap();
+    assert_eq!(hits[0].score, 0.0);
+}
+
+#[test]
+fn manager_errors_render_and_from_env_requires_the_es_settings() {
+    assert_eq!(ESManagerError::Elasticsearch(runtime("boom")).to_string(), runtime("boom").to_string());
+    let mut env = common::env::EnvGuard::new();
+    env.remove("TM_ES_URL");
+    assert!(matches!(ESManager::from_env(), Err(ESManagerError::FatalConfigError(-1))));
+}
