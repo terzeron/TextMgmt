@@ -261,3 +261,10 @@ fn test_download_limits_cleanup_and_url_validation() {
         }
     }
 }
+
+#[test]
+fn ipv4_mapped_ipv6_addresses_follow_the_ipv4_rules() {
+    use image_processor::image_fetcher::is_global;
+    assert!(is_global(&"::ffff:8.8.8.8".parse().unwrap()));
+    assert!(!is_global(&"::ffff:127.0.0.1".parse().unwrap()));
+}

@@ -135,3 +135,30 @@ fn test_system_net_enforces_body_idle_timeout() {
     assert!(chunks.is_err(), "idle body read must time out");
     server.join().unwrap();
 }
+
+#[test]
+fn test_system_net_sends_headers_but_keeps_its_own_host() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0; 2048];
+        let count = stream.read(&mut request).unwrap();
+        stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n").unwrap();
+        String::from_utf8_lossy(&request[..count]).to_ascii_lowercase()
+    });
+    let request = ConnectRequest { https: false, address: "127.0.0.1".to_string(), port, server_hostname: None, assert_hostname: None, cert_reqs: None, timeout: HttpTimeout::from_secs(5, 15) };
+    let mut pool = SystemNet.connect(&request);
+    let headers = [("Host".to_string(), "spoofed.example".to_string()), ("User-Agent".to_string(), "TextMgmt/test".to_string())];
+    let mut response = pool.urlopen("GET", "/", &headers).unwrap();
+    assert_eq!(response.status(), 204);
+    response.close();
+    let seen = server.join().unwrap();
+    assert!(seen.contains("user-agent: textmgmt/test"), "{seen}");
+    assert!(!seen.contains("spoofed.example"), "{seen}");
+
+    // 잘못된 헤더 이름과 값은 요청을 보내기 전에 거절한다.
+    let mut pool = SystemNet.connect(&request);
+    assert!(pool.urlopen("GET", "/", &[("bad name".to_string(), "v".to_string())]).is_err());
+    assert!(pool.urlopen("GET", "/", &[("X-Test".to_string(), "a\nb".to_string())]).is_err());
+}

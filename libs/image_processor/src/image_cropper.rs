@@ -188,6 +188,17 @@ mod tests {
         assert_eq!(out.color(), ColorType::L8);
     }
 
+    #[test]
+    fn test_tilted_rgba_crop_keeps_alpha_and_fills_outside_pixels_white() {
+        // 쪽 전체를 조금 기울이면 모서리 출력 픽셀이 원본 밖을 가리켜 흰색으로 남는다.
+        let source = DynamicImage::ImageRgba8(image::RgbaImage::new(200, 200));
+        let out = crop_rotated(&source, Rect::new(0.0, 0.0, 1.0, 1.0, 0.5)).unwrap();
+        assert_eq!(out.color(), ColorType::Rgba8);
+        let rgba = out.to_rgba8();
+        assert_eq!(rgba.get_pixel(0, 0).0, [255, 255, 255, 255]);
+        assert_eq!(rgba.get_pixel(100, 100).0, [0, 0, 0, 0]);
+    }
+
     type Case = (Rect, &'static str);
 
     #[test]
