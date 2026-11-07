@@ -1,16 +1,15 @@
-use doc_reader::markup::{count_lines, get_body_text, get_text, read_from_html};
+mod corpus;
+
+use doc_reader::markup::{count_lines, expand_self_closing, get_body_text, get_text, read_from_html, relocated_tail};
 use serde_json::Value;
 use std::fs;
-
-#[path = "corpus.rs"]
-mod corpus;
 
 fn cases() -> Value {
     serde_json::from_str(include_str!("markup_cases.json")).unwrap()
 }
 
 #[test]
-fn get_text_and_line_counts_match_python_lxml() {
+fn get_text_and_line_counts_match_reference() {
     for case in cases().as_array().unwrap() {
         let html = case["html"].as_str().unwrap();
         assert_eq!(get_text(html), case["text"].as_str().unwrap(), "text of {html:?}");
@@ -23,6 +22,30 @@ fn get_text_and_line_counts_match_python_lxml() {
 fn get_text_keeps_whitespace_before_an_implicit_head() {
     let html = "<!DOCTYPE html>\n<html>\n<body><p>x</p></body></html>";
     assert_eq!(get_text(html), "\nx");
+}
+
+#[test]
+fn self_closing_expansion_skips_cdata_and_stops_at_an_unterminated_tag() {
+    assert_eq!(expand_self_closing("<![CDATA[<a/>]]><b/>"), "<![CDATA[<a/>]]><b></b>");
+    // 닫히지 않은 시작 태그를 만나면 거기서 멈추고 나머지는 그대로 둔다.
+    assert_eq!(expand_self_closing("<b/><p class='x/>"), "<b></b><p class='x/>");
+}
+
+#[test]
+fn body_tail_relocation_needs_only_blanks_after_the_body() {
+    assert_eq!(relocated_tail("<body>a</body>x</html>"), "");
+    assert_eq!(relocated_tail("<body>a</body>x"), "");
+    // 꼬리 공백이 body의 마지막 텍스트 전부면 그 노드는 글에서 빠진다.
+    assert_eq!(get_body_text("<html><body><p>a</p></body>\n"), "a");
+}
+
+#[test]
+fn tail_blank_runs_are_kept_per_run_only_around_blank_body_and_html_ends() {
+    // `</body>`·`</html>` 둘레가 공백뿐이면 덩어리마다 한 글자: 줄바꿈 없는 덩어리는 공백 하나다.
+    assert_eq!(get_text("<html><body><p>a</p> </body> </html> "), "a   ");
+    // `</html>` 뒤나 `</body>`와 `</html>` 사이에 글이 있으면 고치지 않는다.
+    assert_eq!(get_text("<html><body>a</body></html>x"), "ax");
+    assert_eq!(get_text("<html><body>a</body>x</html>"), "ax");
 }
 
 #[test]
@@ -48,13 +71,13 @@ fn read_from_html_truncates_to_4096_chars_and_reports_unreadable_files() {
 }
 
 #[test]
-fn corpus_html_matches_python() {
+fn corpus_html_matches_the_recorded_summaries() {
     let root = corpus::books_root();
     for rec in corpus::records(include_str!("fixtures/corpus_html.jsonl")) {
         let path = rec["path"].as_str().unwrap();
         let got = read_from_html(&root.join(path));
         if rec.get("error").is_some() {
-            assert!(got.is_err(), "expected Python reader error for {path}: {got:?}");
+            assert!(got.is_err(), "expected a reader error for {path}: {got:?}");
             continue;
         }
         let (summary, lines, pages) = got.unwrap_or_else(|error| panic!("Rust reader failed for {path}: {error}"));

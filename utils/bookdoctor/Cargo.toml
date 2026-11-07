@@ -1,216 +1,93 @@
 [package]
 name = "bookdoctor"
-description = "EPUB·PDF·TXT 통합 진단 (보안, 결함, 렌더링 차단 검사)"
+description = "EPUB·PDF·TXT 통합 진단 도구: 명령행, 파일 순회·병렬 실행, 정리·수리 적용, 보고 출력. 검사 기법은 doc_checker, 교정 기법은 doc_repairer"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 autotests = false
 
-[[test]]
-name = "bin"
-path = "../../tests/rust/bookdoctor/bin.rs"
-
-[[test]]
-name = "cli"
-path = "../../tests/rust/bookdoctor/cli.rs"
-
-[[test]]
-name = "common_checks"
-path = "../../tests/rust/bookdoctor/common_checks.rs"
-
-[[test]]
-name = "exe"
-path = "../../tests/rust/bookdoctor/exe.rs"
-
-[[test]]
-name = "hwpx"
-path = "../../tests/rust/bookdoctor/hwpx.rs"
-
-[[test]]
-name = "doc"
-path = "../../tests/rust/bookdoctor/doc.rs"
-
-[[test]]
-name = "ooxml_security"
-path = "../../tests/rust/bookdoctor/ooxml_security.rs"
-
-[[test]]
-name = "ooxml_structure"
-path = "../../tests/rust/bookdoctor/ooxml_structure.rs"
-
-[[test]]
-name = "zip_fast"
-path = "../../tests/rust/bookdoctor/zip_fast.rs"
-
-[[test]]
-name = "zipnames"
-path = "../../tests/rust/bookdoctor/zipnames.rs"
-
-[[test]]
-name = "epub_perf"
-path = "../../tests/rust/bookdoctor/epub_perf.rs"
-
-[[test]]
-name = "prefetch"
-path = "../../tests/rust/bookdoctor/prefetch.rs"
-
-[[test]]
-name = "epub_gaps"
-path = "../../tests/rust/bookdoctor/epub_gaps.rs"
-
-[[test]]
-name = "epub_render"
-path = "../../tests/rust/bookdoctor/epub_render.rs"
-
-[[test]]
-name = "epub_security_hardening"
-path = "../../tests/rust/bookdoctor/epub_security_hardening.rs"
-
-[[test]]
-name = "epub_structure"
-path = "../../tests/rust/bookdoctor/epub_structure.rs"
-
-[[test]]
-name = "epub_security"
-path = "../../tests/rust/bookdoctor/epub_security.rs"
-
-[[test]]
-name = "mojibake"
-path = "../../tests/rust/bookdoctor/mojibake.rs"
-
-[[test]]
-name = "pdf_structure"
-path = "../../tests/rust/bookdoctor/pdf_structure.rs"
-
-[[test]]
-name = "pdf_security"
-path = "../../tests/rust/bookdoctor/pdf_security.rs"
-
-[[test]]
-name = "pdf_security_new"
-path = "../../tests/rust/bookdoctor/pdf_security_new.rs"
-
-[[test]]
-name = "entropy"
-path = "../../tests/rust/bookdoctor/entropy.rs"
-
-[[test]]
-name = "html"
-path = "../../tests/rust/bookdoctor/html.rs"
-
-[[test]]
-name = "hwp"
-path = "../../tests/rust/bookdoctor/hwp.rs"
-
-[[test]]
-name = "rules_builtin"
-path = "../../tests/rust/bookdoctor/rules_builtin.rs"
-
-[[test]]
-name = "rules_cli"
-path = "../../tests/rust/bookdoctor/rules_cli.rs"
-
-[[test]]
-name = "rules_match"
-path = "../../tests/rust/bookdoctor/rules_match.rs"
-
-[[test]]
-name = "rules_parse"
-path = "../../tests/rust/bookdoctor/rules_parse.rs"
-
-[[test]]
-name = "recurse"
-path = "../../tests/rust/bookdoctor/recurse.rs"
-
-[[test]]
-name = "report"
-path = "../../tests/rust/bookdoctor/report.rs"
-
-[[test]]
-name = "rtf_disguise"
-path = "../../tests/rust/bookdoctor/rtf_disguise.rs"
-
-[[test]]
-name = "scan"
-path = "../../tests/rust/bookdoctor/scan.rs"
-
-[[test]]
-name = "txt"
-path = "../../tests/rust/bookdoctor/txt.rs"
-
-[[test]]
-name = "viewer"
-path = "../../tests/rust/bookdoctor/viewer.rs"
-
-[[test]]
-name = "ole"
-path = "../../tests/rust/bookdoctor/ole.rs"
-
-[[test]]
-name = "ole_vba"
-path = "../../tests/rust/bookdoctor/ole_vba.rs"
-
-[[test]]
-name = "ole_anomalies"
-path = "../../tests/rust/bookdoctor/ole_anomalies.rs"
-
-[[test]]
-name = "finding"
-path = "../../tests/rust/bookdoctor/finding.rs"
-
-[[test]]
-name = "sniff"
-path = "../../tests/rust/bookdoctor/sniff.rs"
-
-[[test]]
-name = "display"
-path = "../../tests/rust/bookdoctor/display.rs"
-
-[[test]]
-name = "runner"
-path = "../../tests/rust/bookdoctor/runner.rs"
-
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-corpus_common = { path = "../../libs/corpus_common" }
-encoding_rs = "0.8.42"
-fancy-regex = "0.14"
-flate2 = "1"
-htmlkit = { path = "../../libs/htmlkit" }
-lopdf.workspace = true
+common = { path = "../../libs/common", default-features = false }
+doc_checker = { path = "../../libs/doc_checker" }
+doc_repairer = { path = "../../libs/doc_repairer" }
 rayon = "1.12.0"
-regex = "1.13.1"
-roxmltree = "0.21.1"
-scraper = "0.29.0"
-sha2 = "0.11.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
-sysdeps = { path = "../../libs/sysdeps" }
-zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+# 테스트 준비물(doc_checker 테스트와 함께 쓴다)이 ZIP·PDF·압축 데이터를 만든다.
+encoding_rs = "0.8.42"
+flate2 = "1"
+lopdf.workspace = true
+sysdeps = { path = "../../libs/sysdeps" }
 tempfile = "3.27.0"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [[test]]
-name = "critical_promotion"
-path = "../../tests/rust/bookdoctor/critical_promotion.rs"
+name = "cli_parser"
+path = "../../tests/rust/bookdoctor/cli_parser.rs"
 
 [[test]]
-name = "sanitize"
-path = "../../tests/rust/bookdoctor/sanitize.rs"
+name = "output_formatter"
+path = "../../tests/rust/bookdoctor/output_formatter.rs"
 
 [[test]]
-name = "xhtml_fix"
-path = "../../tests/rust/bookdoctor/xhtml_fix.rs"
+name = "file_prefetcher"
+path = "../../tests/rust/bookdoctor/file_prefetcher.rs"
 
 [[test]]
-name = "quarantine"
-path = "../../tests/rust/bookdoctor/quarantine.rs"
+name = "file_quarantiner"
+path = "../../tests/rust/bookdoctor/file_quarantiner.rs"
 
 [[test]]
-name = "repair"
-path = "../../tests/rust/bookdoctor/repair.rs"
+name = "report_writer"
+path = "../../tests/rust/bookdoctor/report_writer.rs"
 
 [[test]]
-name = "pdf_sanitize"
-path = "../../tests/rust/bookdoctor/pdf_sanitize.rs"
+name = "scan_runner"
+path = "../../tests/rust/bookdoctor/scan_runner.rs"
+
+[[test]]
+name = "integration_bin"
+path = "../../tests/rust/bookdoctor/integration/bin.rs"
+
+[[test]]
+name = "integration_html"
+path = "../../tests/rust/bookdoctor/integration/html.rs"
+
+[[test]]
+name = "integration_hwp"
+path = "../../tests/rust/bookdoctor/integration/hwp.rs"
+
+[[test]]
+name = "integration_rtf_disguise"
+path = "../../tests/rust/bookdoctor/integration/rtf_disguise.rs"
+
+[[test]]
+name = "integration_rules_builtin"
+path = "../../tests/rust/bookdoctor/integration/rules_builtin.rs"
+
+[[test]]
+name = "integration_scan"
+path = "../../tests/rust/bookdoctor/integration/scan.rs"
+
+[[test]]
+name = "file_sanitizer"
+path = "../../tests/rust/bookdoctor/file_sanitizer.rs"
+
+[[test]]
+name = "file_repairer"
+path = "../../tests/rust/bookdoctor/file_repairer.rs"
+
+[[test]]
+name = "integration_doc"
+path = "../../tests/rust/bookdoctor/integration/doc.rs"
+
+[[test]]
+name = "integration_recurse"
+path = "../../tests/rust/bookdoctor/integration/recurse.rs"
+
+[[test]]
+name = "integration_zip_fast"
+path = "../../tests/rust/bookdoctor/integration/zip_fast.rs"

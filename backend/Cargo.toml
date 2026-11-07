@@ -1,6 +1,6 @@
 [package]
 name = "backend"
-description = "TextMgmt 백엔드 API (backend/*.py의 Rust 대응). axum + diesel + libs/es_client"
+description = "TextMgmt 백엔드 API. axum 라우터와 실행 진입점. 도메인 로직은 libs/의 *_manager crate를 쓴다"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
@@ -9,193 +9,45 @@ autotests = false
 [lib]
 path = "src/lib.rs"
 
-[[test]]
-name = "pdf_edit"
-path = "../tests/rust/backend/pdf_edit.rs"
-
-[[test]]
-name = "pdf_delete_pages"
-path = "../tests/rust/backend/pdf_delete_pages.rs"
-
-[[test]]
-name = "pdf_delete_pages_gaps"
-path = "../tests/rust/backend/pdf_delete_pages_gaps.rs"
-
-[[test]]
-name = "main_bulk_rename"
-path = "../tests/rust/backend/main_bulk_rename.rs"
-
-[[test]]
-name = "main_gaps"
-path = "../tests/rust/backend/main_gaps.rs"
-
-[[test]]
-name = "api_exploration"
-path = "../tests/rust/backend/api_exploration.rs"
-
-[[test]]
-name = "pdf_pages"
-path = "../tests/rust/backend/pdf_pages.rs"
-
-[[test]]
-name = "book_preview"
-path = "../tests/rust/backend/book_preview.rs"
-
-[[test]]
-name = "cover"
-path = "../tests/rust/backend/cover.rs"
-
 [[bin]]
 name = "backend"
 path = "src/bin/backend.rs"
 
-[[bin]]
-name = "epubveri"
-path = "src/bin/epubveri.rs"
-
 [dependencies]
-epubveri = "0.33.0"
-doc_reader = { path = "../libs/doc_reader" }
-es_client = { path = "../libs/es_client" }
-file_record = { path = "../libs/file_record" }
+auth_manager = { path = "../libs/auth_manager" }
+book_manager = { path = "../libs/book_manager" }
+common = { path = "../libs/common" }
+cover_manager = { path = "../libs/cover_manager" }
+search_manager = { path = "../libs/search_manager" }
 fancy-regex = "0.14.0"
-pyfmt = { path = "../libs/pyfmt" }
 async-trait = "0.1"
-base64 = "0.23.1"
 axum = { version = "0.8.9", features = ["multipart"] }
 bookstore = { path = "../libs/bookstore" }
-corpus_layout = { path = "../libs/corpus_layout" }
-classifier = { path = "../libs/classifier" }
 db = { path = "../libs/db" }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
-htmlkit = { path = "../libs/htmlkit" }
-hwp3_parser = { path = "../libs/hwp3_parser" }
-idna = "1.1.0"
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
-isbn = { path = "../libs/isbn" }
-jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
 log = "0.4.34"
 md5 = { package = "md-5", version = "0.11.0" }
-lopdf.workspace = true
-regex = "1.13.1"
-roxmltree = "0.21.1"
-scraper = "0.29.0"
-sha2 = "0.11.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
-stat = { path = "../libs/stat" }
 sysdeps = { path = "../libs/sysdeps" }
-ureq = { workspace = true, features = ["rustls"] }
-zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util"] }
 tokio-stream = "0.1.19"
 tokio-util = { version = "0.7.20", features = ["io"] }
-jpeg-encoder = "0.7.1"
-[[test]]
-name = "common_smoke"
-path = "../tests/rust/backend/common_smoke.rs"
-
-[[test]]
-name = "book"
-path = "../tests/rust/backend/book.rs"
-
-[[test]]
-name = "cover_status"
-path = "../tests/rust/backend/cover_status.rs"
-
-[[test]]
-name = "cover_sources"
-path = "../tests/rust/backend/cover_sources.rs"
-
-[[test]]
-name = "direct_cover_url"
-path = "../tests/rust/backend/direct_cover_url.rs"
-
-[[test]]
-name = "es_manager"
-path = "../tests/rust/backend/es_manager.rs"
-
-[[test]]
-name = "es_manager_gaps"
-path = "../tests/rust/backend/es_manager_gaps.rs"
-
-[[test]]
-name = "es_manager_http"
-path = "../tests/rust/backend/es_manager_http.rs"
-
-[[test]]
-name = "comics"
-path = "../tests/rust/backend/comics.rs"
-
-[[test]]
-name = "comics_manager"
-path = "../tests/rust/backend/comics_manager.rs"
-
-[[test]]
-name = "auth"
-path = "../tests/rust/backend/auth.rs"
-
-[[test]]
-name = "google_verifier"
-path = "../tests/rust/backend/google_verifier.rs"
-
-[[test]]
-name = "stderr_logger"
-path = "../tests/rust/backend/stderr_logger.rs"
-
-[[test]]
-name = "client_error_log"
-path = "../tests/rust/backend/client_error_log.rs"
-
-[[test]]
-name = "main_route_parity"
-path = "../tests/rust/backend/main_route_parity.rs"
-
-[[test]]
-name = "main_schema_parity"
-path = "../tests/rust/backend/main_schema_parity.rs"
-
-[[test]]
-name = "book_manager_2"
-path = "../tests/rust/backend/book_manager_2.rs"
-
-[[test]]
-name = "book_manager_gaps"
-path = "../tests/rust/backend/book_manager_gaps.rs"
-
-[[test]]
-name = "book_manager_hwp_preview"
-path = "../tests/rust/backend/book_manager_hwp_preview.rs"
-
-[[test]]
-name = "cover_repair"
-path = "../tests/rust/backend/cover_repair.rs"
-
-[[test]]
-name = "epub_cover_set"
-path = "../tests/rust/backend/epub_cover_set.rs"
-
-[[test]]
-name = "epub_image_edit"
-path = "../tests/rust/backend/epub_image_edit.rs"
-
-[[test]]
-name = "cover_management"
-path = "../tests/rust/backend/cover_management.rs"
-
-[[test]]
-name = "html_sanitizer"
-path = "../tests/rust/backend/html_sanitizer.rs"
-
-[[test]]
-name = "auth_bookstore_gaps"
-path = "../tests/rust/backend/auth_bookstore_gaps.rs"
-
-[[test]]
-name = "book_manager_classifier"
-path = "../tests/rust/backend/book_manager_classifier.rs"
 
 [dev-dependencies]
+file_indexer = { path = "../libs/file_indexer" }
+# 테스트가 구형·만료 refresh token을 직접 만들어 거절되는지 확인한다.
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
+doc_reader = { path = "../libs/doc_reader" }
+image_processor = { path = "../libs/image_processor" }
+pdf_engine = { path = "../libs/pdf_engine" }
+lopdf.workspace = true
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+roxmltree = "0.21.1"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+jpeg-encoder = "0.7.1"
+es_client = { path = "../libs/es_client" }
+parse_stat_counter = { path = "../libs/parse_stat_counter" }
 base64 = "0.23.1"
 flate2 = "1"
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
@@ -206,34 +58,110 @@ testcontainers-modules = { version = "0.15.0", features = ["mysql", "blocking"] 
 tower = { version = "0.5.3", features = ["util"] }
 
 [[test]]
-name = "catalog_api"
-path = "../tests/rust/backend/catalog_api.rs"
+name = "api_router"
+path = "../tests/rust/backend/api_router.rs"
 
 [[test]]
-name = "mapping_api"
-path = "../tests/rust/backend/mapping_api.rs"
+name = "stderr_logger"
+path = "../tests/rust/backend/stderr_logger.rs"
 
 [[test]]
-name = "book_admin_api"
-path = "../tests/rust/backend/book_admin_api.rs"
+name = "integration_api_exploration"
+path = "../tests/rust/backend/integration/api_exploration.rs"
 
 [[test]]
-name = "server_cli"
-path = "../tests/rust/backend/server_cli.rs"
+name = "integration_auth"
+path = "../tests/rust/backend/integration/auth.rs"
 
 [[test]]
-name = "loader_file_reader"
-path = "../tests/rust/backend/loader_file_reader.rs"
-
-
-[[test]]
-name = "main_mock"
-path = "../tests/rust/backend/main_mock.rs"
+name = "integration_book_admin_api"
+path = "../tests/rust/backend/integration/book_admin_api.rs"
 
 [[test]]
-name = "epub_line_count"
-path = "../tests/rust/backend/epub_line_count.rs"
+name = "integration_book_preview"
+path = "../tests/rust/backend/integration/book_preview.rs"
 
 [[test]]
-name = "container_integration"
-path = "../tests/rust/backend/container_integration.rs"
+name = "integration_catalog_api"
+path = "../tests/rust/backend/integration/catalog_api.rs"
+
+[[test]]
+name = "integration_client_error_log"
+path = "../tests/rust/backend/integration/client_error_log.rs"
+
+[[test]]
+name = "integration_common_smoke"
+path = "../tests/rust/backend/integration/common_smoke.rs"
+
+[[test]]
+name = "integration_cover"
+path = "../tests/rust/backend/integration/cover.rs"
+
+[[test]]
+name = "integration_cover_management"
+path = "../tests/rust/backend/integration/cover_management.rs"
+
+[[test]]
+name = "integration_epub_cover_set"
+path = "../tests/rust/backend/integration/epub_cover_set.rs"
+
+[[test]]
+name = "integration_epub_image_edit"
+path = "../tests/rust/backend/integration/epub_image_edit.rs"
+
+[[test]]
+name = "integration_loader_file_reader"
+path = "../tests/rust/backend/integration/loader_file_reader.rs"
+
+[[test]]
+name = "integration_api_router_bulk_rename"
+path = "../tests/rust/backend/integration/api_router_bulk_rename.rs"
+
+[[test]]
+name = "integration_classify_proposal_jobs"
+path = "../tests/rust/backend/integration/classify_proposal_jobs.rs"
+
+[[test]]
+name = "integration_api_router_mock"
+path = "../tests/rust/backend/integration/api_router_mock.rs"
+
+[[test]]
+name = "integration_mapping_api"
+path = "../tests/rust/backend/integration/mapping_api.rs"
+
+[[test]]
+name = "integration_pdf_delete_pages"
+path = "../tests/rust/backend/integration/pdf_delete_pages.rs"
+
+[[test]]
+name = "integration_pdf_edit"
+path = "../tests/rust/backend/integration/pdf_edit.rs"
+
+[[test]]
+name = "integration_pdf_pages"
+path = "../tests/rust/backend/integration/pdf_pages.rs"
+
+[[test]]
+name = "integration_server_cli"
+path = "../tests/rust/backend/integration/server_cli.rs"
+
+[[test]]
+name = "integration_container"
+path = "../tests/rust/backend/integration/container.rs"
+
+[[test]]
+name = "api_router_auth_cookies"
+path = "../tests/rust/backend/api_router/auth_cookies.rs"
+
+[[test]]
+name = "api_router_request_extractors"
+path = "../tests/rust/backend/api_router/request_extractors.rs"
+
+[[test]]
+name = "integration_request_schema"
+path = "../tests/rust/backend/integration/request_schema.rs"
+
+[[test]]
+name = "api_router_error_responses"
+path = "../tests/rust/backend/api_router/error_responses.rs"
+

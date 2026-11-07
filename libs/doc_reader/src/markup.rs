@@ -1,7 +1,6 @@
-//! HTML·XHTML 본문 텍스트 추출과 줄 수 세기. 원본: `BeautifulSoup(markup, "lxml")`의 `get_text()`와 `Loader._count_epub_lines`.
+//! HTML·XHTML 본문 텍스트 추출과 줄 수 세기.
 //!
-//! lxml(libxml2) 대신 html5ever(`scraper`)로 파싱한다. 정상 문서에서는 같은 글이 나오고, 심하게 깨진
-//! 문서에서는 트리가 다를 수 있다. libxml2 2.14처럼 공백뿐인 텍스트 노드는 한 글자로 줄인다.
+//! html5ever(`scraper`)로 파싱한다. 공백뿐인 텍스트 노드는 한 글자로 줄인다.
 
 use std::path::Path;
 
@@ -9,7 +8,7 @@ use ego_tree::NodeRef;
 use scraper::{Html, Node};
 
 use crate::TEXT_SIZE;
-use crate::pytext::{head_chars, keep_word_chars, universal_newlines};
+use crate::text_normalizer::{head_chars, keep_word_chars, universal_newlines};
 
 /// EPUB 줄 수를 셀 때 앞뒤에 줄바꿈을 두는 블록 태그.
 const BLOCK_TAGS: [&str; 35] = [
@@ -167,7 +166,7 @@ fn inside_pre(node: &NodeRef<Node>) -> bool {
     node.ancestors().any(|a| element_name(&a) == Some("pre"))
 }
 
-/// lxml(libxml2 2.14)은 공백뿐인 텍스트를 한 글자로 줄인다: 줄바꿈이 있으면 `\n`, 없으면 공백 하나.
+/// 공백뿐인 텍스트를 한 글자로 줄인다: 줄바꿈이 있으면 `\n`, 없으면 공백 하나.
 /// `pre` 안에서는 그대로 둔다.
 fn normalized_text<'a>(node: &NodeRef<Node>, text: &'a str) -> &'a str {
     if text.is_empty() || !is_blank(text) || inside_pre(node) {
@@ -295,7 +294,7 @@ pub fn get_body_text(markup: &str) -> String {
     collect_text(body, &relocated_tail(markup))
 }
 
-/// 문서 전체의 텍스트를 모은다. EPUB ZIP 대체 경로의 BeautifulSoup `get_text()` 대응.
+/// 문서 전체의 텍스트를 모은다. EPUB 정규식 대체 경로가 쓴다.
 pub fn get_document_text(markup: &str) -> String {
     let doc = parse(markup);
     collect_text(doc.tree.root(), &relocated_tail(markup))
@@ -305,7 +304,7 @@ fn collapse_ws(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_space = false;
     for c in text.chars() {
-        if crate::pytext::is_space(c) {
+        if c.is_whitespace() {
             if !in_space {
                 out.push(' ');
             }
@@ -351,7 +350,7 @@ pub(crate) fn count_lines_in(doc: &Html) -> usize {
     let body = doc.tree.root().descendants().find(|n| element_name(n) == Some("body")).unwrap_or_else(|| doc.tree.root());
     let mut parts = Vec::new();
     walk_lines(body, false, &mut parts);
-    parts.concat().lines().filter(|l| !l.trim_matches(crate::pytext::is_space).is_empty()).count()
+    parts.concat().lines().filter(|l| !l.trim_matches(char::is_whitespace).is_empty()).count()
 }
 
 /// HTML 파일: (요약, 줄 수, 쪽 수=0). UTF-8로 읽을 수 없으면 `Err`.

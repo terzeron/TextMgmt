@@ -21,24 +21,6 @@ fn validate_frontend_url(frontend_url: Option<&str>) -> Result<(), &'static str>
 #[tokio::main]
 async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some(file_record::child::PDF_STAGE_COMMAND) {
-        let mut out = std::io::stdout().lock();
-        let code = file_record::child::run_pdf_stage_command(&args[1..], &mut out);
-        let _ = std::io::Write::flush(&mut out);
-        return ExitCode::from(code as u8);
-    }
-    if args.first().map(String::as_str) == Some(file_record::child::ISBN_PDF_STAGE_COMMAND) {
-        let mut out = std::io::stdout().lock();
-        let code = file_record::child::run_isbn_pdf_stage_command(&args[1..], &mut out);
-        let _ = std::io::Write::flush(&mut out);
-        return ExitCode::from(code as u8);
-    }
-    if args.first().map(String::as_str) == Some(file_record::child::READ_FILE_COMMAND) {
-        let mut out = std::io::stdout().lock();
-        let code = file_record::child::run_read_file_command(&args[1..], &mut out);
-        let _ = std::io::Write::flush(&mut out);
-        return ExitCode::from(code as u8);
-    }
     if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
         print_usage();
         return ExitCode::SUCCESS;
@@ -87,7 +69,7 @@ async fn serve(address: &str) -> Result<(), String> {
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;
     };
-    let app = backend::main::app();
+    let app = backend::api_router::app();
     println!("Listening on {address}");
     axum::serve(listener, app).with_graceful_shutdown(shutdown).await.map_err(|e| e.to_string())
 }

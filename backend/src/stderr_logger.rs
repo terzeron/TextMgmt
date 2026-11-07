@@ -15,7 +15,7 @@ struct StderrLogger;
 
 static LOGGER: StderrLogger = StderrLogger;
 
-/// 기록할 한 줄의 모양. 예: `[ERROR] backend::main::log_routes: [CLIENT_ERROR] ...`
+/// 기록할 한 줄의 모양. 예: `[ERROR] backend::api_router::log_routes: [CLIENT_ERROR] ...`
 pub fn format_line(record: &Record) -> String {
     format!("[{}] {}: {}", record.level(), record.target(), record.args())
 }

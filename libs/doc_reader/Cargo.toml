@@ -1,22 +1,39 @@
 [package]
 name = "doc_reader"
-description = "문서 본문 요약 추출: TXT·EPUB·HTML·RTF·DOCX·PDF (utils/loader.py의 read_from_* 대응)"
+description = "문서 본문 요약 추출: TXT·EPUB·HTML·RTF·DOCX·PDF·HWP, 파일 앞뒤 읽기"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 autotests = false
 
-[[test]]
-name = "text"
-path = "../../tests/rust/doc_reader/text.rs"
+[dependencies]
+pdf_engine = { path = "../pdf_engine" }
+log = "0.4.34"
+xml_recoverer = { path = "../xml_recoverer" }
+common = { path = "../common", default-features = false, features = ["xml_parser", "zip_reader"] }
+text_decoder = { path = "../text_decoder" }
+ego-tree = "0.11"
+encoding_rs = "0.8.42"
+flate2 = "1"
+hwp3_parser = { path = "../hwp3_parser" }
+htmlkit = { path = "../htmlkit" }
+lopdf.workspace = true
+regex = "1.13.1"
+roxmltree = "0.21"
+scraper = "0.29.0"
+sysdeps = { path = "../sysdeps" }
+serde_json = { workspace = true }
+tempfile = "3.27.0"
+
+[dev-dependencies]
+# 테스트가 EPUB·DOCX fixture를 만든다.
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+base64 = "0.23.1"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 
 [[test]]
-name = "pdf"
-path = "../../tests/rust/doc_reader/pdf.rs"
-
-[[test]]
-name = "formats"
-path = "../../tests/rust/doc_reader/formats.rs"
+name = "head_tail_reader"
+path = "../../tests/rust/doc_reader/head_tail_reader.rs"
 
 [[test]]
 name = "epub"
@@ -26,20 +43,23 @@ path = "../../tests/rust/doc_reader/epub.rs"
 name = "markup"
 path = "../../tests/rust/doc_reader/markup.rs"
 
-[dependencies]
-corpus_common = { path = "../corpus_common" }
-ego-tree = "0.11"
-encoding_rs = "0.8.42"
-flate2 = "1"
-hwp3_parser = { path = "../hwp3_parser" }
-isbn = { path = "../isbn" }
-lopdf.workspace = true
-parser_timeout = { path = "../parser_timeout" }
-pyfmt = { path = "../pyfmt" }
-regex = "1.13.1"
-roxmltree = "0.21"
-zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
-scraper = "0.29.0"
-sysdeps = { path = "../sysdeps" }
-serde_json = { workspace = true }
-tempfile = "3.27.0"
+[[test]]
+name = "office"
+path = "../../tests/rust/doc_reader/office.rs"
+
+[[test]]
+name = "pdf"
+path = "../../tests/rust/doc_reader/pdf.rs"
+
+[[test]]
+name = "rtf"
+path = "../../tests/rust/doc_reader/rtf.rs"
+
+[[test]]
+name = "text"
+path = "../../tests/rust/doc_reader/text.rs"
+
+[[test]]
+name = "text_normalizer"
+path = "../../tests/rust/doc_reader/text_normalizer.rs"
+

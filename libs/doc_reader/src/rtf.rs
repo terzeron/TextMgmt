@@ -1,4 +1,4 @@
-//! RTF를 평문으로. 원본: `striprtf.rtf_to_text`(`Loader.read_from_rtf`가 씀).
+//! RTF를 평문으로.
 //!
 //! 정규식 상태 기계를 그대로 옮겼다. 목적지 그룹(글꼴 표, 그림 등)은 건너뛰고, 16진 이스케이프는 글꼴의 문자셋으로 푼다.
 
@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::TEXT_SIZE;
-use crate::pytext::{head_chars, keep_word_chars};
+use crate::text_normalizer::{head_chars, keep_word_chars};
 
 const DESTINATIONS: [&str; 292] = [
     "aftncn",
@@ -477,10 +477,10 @@ fn remove_pict_groups(rtf: &str) -> String {
     out
 }
 
-/// Python 코덱 이름으로 16진 바이트를 푼다. 풀 수 없는 바이트는 버린다(`errors="ignore"`).
+/// 코덱 이름으로 16진 바이트를 푼다. 풀 수 없는 바이트는 버린다(`errors="ignore"`).
 fn decode_hex_bytes(bytes: &[u8], encoding: &str) -> String {
     let label = match encoding {
-        "cp949" => return corpus_common::reader::decode_korean_ignore(bytes, false),
+        "cp949" => return text_decoder::decode_korean_ignore(bytes, false),
         "cp1252" | "cp1250" | "cp1251" | "cp1253" | "cp1254" | "cp1255" | "cp1256" | "cp1257" | "cp1258" => format!("windows-{}", &encoding[2..]),
         "cp932" => "shift_jis".to_owned(),
         "cp936" => "gbk".to_owned(),
@@ -565,12 +565,12 @@ pub fn rtf_to_text(text: &str) -> Result<String, String> {
                 } else if let Some(s) = special(word) {
                     out.push_str(s);
                 } else if word == "uc" {
-                    ucskip = arg.ok_or("TypeError: \\uc에 인수가 없다")?.parse().map_err(|_| "ValueError: \\uc 인수".to_owned())?;
+                    ucskip = arg.ok_or("\\uc에 인수가 없다")?.parse().map_err(|_| "\\uc 인수가 숫자가 아니다".to_owned())?;
                 } else if word == "u" {
                     match arg {
                         None => curskip = ucskip,
                         Some(a) => {
-                            let mut c: i64 = a.parse().map_err(|_| "ValueError: \\u 인수".to_owned())?;
+                            let mut c: i64 = a.parse().map_err(|_| "\\u 인수가 숫자가 아니다".to_owned())?;
                             if c < 0 {
                                 c += 0x10000;
                             }

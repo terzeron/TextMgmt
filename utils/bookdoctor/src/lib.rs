@@ -1,31 +1,19 @@
-//! EPUB·PDF·TXT 통합 진단. 보안(security), 결함(defect), 렌더링 차단(render) 지표를 한 도구에서 낸다.
+//! EPUB·PDF·TXT 통합 진단 도구. 명령행, 파일 순회와 병렬 실행, 적용(휴지통 보관·덮어쓰기), 보고 출력을 맡는다.
+//! 검사와 교정 기법은 `doc_checker`에 있다.
 
-pub mod cli;
-pub mod common;
-pub mod display;
-pub mod doc;
-pub mod html;
-pub mod hwp;
-pub mod epub;
-pub mod exe;
-pub mod finding;
-pub mod mojibake;
-pub mod ole;
-pub mod pdf;
-pub mod prefetch;
-pub mod quarantine;
-pub mod recurse;
-pub mod repair;
-pub mod report;
-pub mod rules;
-pub mod runner;
-pub mod sanitize;
-pub mod scan;
-pub mod sniff;
-pub mod txt;
-pub mod viewer;
-pub mod zipcheck;
-pub mod zipnames;
+pub mod cli_parser;
+pub mod file_prefetcher;
+pub mod file_quarantiner;
+pub mod file_repairer;
+pub(crate) mod file_rewriter;
+pub mod file_sanitizer;
+pub mod option_model;
+pub mod output_formatter;
+pub mod report_writer;
+pub mod scan_runner;
 
-pub use finding::{Category, FileReport, Finding, Format, Severity, ViewerBlocked};
-pub use runner::{Report, Summary, scan_streaming};
+pub use doc_checker::{Category, FileReport, Finding, Format, Severity, ViewerBlocked};
+pub use scan_runner::{Report, Summary, scan_streaming};
+
+/// 진단 대상의 기본 라이브러리 루트.
+pub const DEFAULT_LIBRARY_ROOT: &str = "/mnt/data/text";

@@ -1,33 +1,32 @@
 [package]
 name = "bookstore"
-description = "온라인 서점(Yes24·알라딘·교보문고) 검색과 상세 페이지 추출 (backend/bookstore.py의 Rust 대응)"
+description = "온라인 서점 검색과 상세 페이지 추출(Yes24·알라딘·교보문고·리디북스·네이버·웹소설·웹툰)"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 autotests = false
 
-[[test]]
-name = "extract"
-path = "../../tests/rust/bookstore/extract.rs"
-
-[[test]]
-name = "stores"
-path = "../../tests/rust/bookstore/stores.rs"
-
-[[test]]
-name = "search"
-path = "../../tests/rust/bookstore/search.rs"
-
 [dependencies]
+common = { path = "../common", default-features = false }
+http_client = { path = "../http_client" }
 htmlkit = { path = "../htmlkit" }
 log = "0.4.34"
-pyfmt = { path = "../pyfmt" }
 regex = "1.13.1"
 scraper = "0.29.0"
 serde_json = { workspace = true, features = ["preserve_order"] }
 sysdeps = { path = "../sysdeps" }
-# 공개 서점은 HTTPS라 이 crate에서만 TLS(rustls)를 켠다. 인증서 검증은 기본값(켬)을 그대로 쓴다.
-ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[[test]]
+name = "bookstore"
+path = "../../tests/rust/bookstore/bookstore.rs"
+
+[[test]]
+name = "store_clients"
+path = "../../tests/rust/bookstore/store_clients.rs"
+
+[[test]]
+name = "integration_stores"
+path = "../../tests/rust/bookstore/integration/stores.rs"

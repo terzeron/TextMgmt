@@ -1,0 +1,24 @@
+[package]
+name = "container_parser"
+description = "문서 컨테이너의 바이트 수준 해석: 리틀엔디언 읽기, OLE(CFB) 복합 문서와 VBA 프로젝트, 매직 바이트 판별"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[[test]]
+name = "ole_parser"
+path = "../../tests/rust/container_parser/ole_parser.rs"
+
+[[test]]
+name = "ole_parser_vba_decoder"
+path = "../../tests/rust/container_parser/ole_parser/vba_decoder.rs"
+
+[[test]]
+name = "magic_sniffer"
+path = "../../tests/rust/container_parser/magic_sniffer.rs"

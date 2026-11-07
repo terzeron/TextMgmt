@@ -1,12 +1,13 @@
-//! LibreOffice로 변환해 읽는 형식(DOC, HWP)과 이미지. 원본: `Loader.read_from_doc/hwp/image`, `_convert_with_libreoffice`.
+//! 오피스 문서와 이미지 읽기. DOCX는 직접 읽고, DOC·HWP·이미지는 LibreOffice로 변환해 읽는다.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::time::Duration;
 
-use parser_timeout::run_with_hard_timeout;
+use common::zip_reader::open_zip;
+use sysdeps::{CommandError, CommandRunner, SystemRunner};
 
 use crate::TEXT_SIZE;
-use crate::pytext::{head_chars, is_space, keep_word_chars};
+use crate::text_normalizer::{head_chars, keep_word_chars};
 
 /// 변환 한 번에 허용하는 시간(초).
 pub const LIBREOFFICE_TIMEOUT: f64 = 60.0;
@@ -34,32 +35,72 @@ fn which(name: &str) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(name)).find(|p| p.is_file())
 }
 
-/// 파일을 `output_format`(예: `txt:Text`)으로 변환하고 결과 텍스트를 돌려준다. 결과 파일이 없으면 오류 메시지와 빈 문자열.
-pub fn convert_with_libreoffice(path: &Path, output_format: &str, binary: &Path, errors: &mut Vec<String>) -> String {
-    let Ok(tmp) = tempfile::tempdir() else { return String::new() };
-    let mut cmd = Command::new(binary);
-    cmd.args(["--headless", "--convert-to", output_format, "--outdir"]).arg(tmp.path()).arg(path);
-    let output = run_with_hard_timeout(cmd, LIBREOFFICE_TIMEOUT);
-    let ext = output_format.split(':').next().unwrap_or("txt");
+/// LibreOffice 변환이 결과를 내지 못한 이유.
+#[derive(Debug)]
+pub enum ConvertFailure {
+    /// 실행하지 못했다(시간 초과·실행 파일 없음 포함).
+    Run(CommandError),
+    /// 실행은 했지만 결과 파일이 없다. 진단 메시지(종료 코드, stderr, 작업 디렉터리 파일)를 담는다.
+    NoOutput(String),
+}
+
+/// `runner`로 LibreOffice를 실행해 `path`를 `output_format`(예: `txt:Text`)으로 바꾸고 결과 글을 돌려준다.
+/// `work_dir`가 없으면 임시 디렉터리를 만들어 쓰고 지운다. 결과 파일 이름(stem)이 다르면 확장자로 찾는다.
+pub fn convert_with_libreoffice_using(runner: &dyn CommandRunner, binary: &Path, work_dir: Option<&Path>, path: &Path, output_format: &str) -> Result<String, ConvertFailure> {
+    let temp;
+    let dir: PathBuf = match work_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => {
+            temp = tempfile::tempdir().map_err(|e| ConvertFailure::Run(CommandError::Failed(e.to_string())))?;
+            temp.path().to_path_buf()
+        }
+    };
+    let argv = vec![
+        binary.to_string_lossy().into_owned(),
+        "--headless".to_string(),
+        "--convert-to".to_string(),
+        output_format.to_string(),
+        "--outdir".to_string(),
+        dir.to_string_lossy().into_owned(),
+        path.to_string_lossy().into_owned(),
+    ];
+    let output = runner.run(&argv, Some(Duration::from_secs_f64(LIBREOFFICE_TIMEOUT))).map_err(ConvertFailure::Run)?;
+    let ext = output_format.split(':').next().unwrap_or(output_format);
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let read = |p: &Path| String::from_utf8_lossy(&std::fs::read(p).unwrap_or_default()).into_owned();
-    let expected = tmp.path().join(format!("{stem}.{ext}"));
+    let expected = dir.join(format!("{stem}.{ext}"));
     if expected.exists() {
-        return read(&expected);
+        return Ok(read(&expected));
     }
     // 이름이 달라졌으면 확장자로 찾는다.
-    let mut found: Vec<PathBuf> = std::fs::read_dir(tmp.path()).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == ext)).collect()).unwrap_or_default();
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&dir).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e.to_string_lossy() == ext)).collect()).unwrap_or_default();
     found.sort();
     if let Some(first) = found.first() {
-        return read(first);
+        return Ok(read(first));
     }
-    let files: Vec<String> = std::fs::read_dir(tmp.path()).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
-    let (code, stderr) = match &output {
-        Ok(o) => (o.status.code().unwrap_or(-1).to_string(), head_chars(&String::from_utf8_lossy(&o.stderr), 500).to_owned()),
-        Err(e) => ("timeout".to_owned(), e.to_string()),
-    };
-    errors.push(format!("LibreOffice produced no output: file='{}', format='{output_format}', returncode={code}, stderr={stderr}, tmpdir_files={files:?}", path.display()));
-    String::new()
+    let files: Vec<String> = std::fs::read_dir(&dir).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    Err(ConvertFailure::NoOutput(format!(
+        "LibreOffice produced no output: file='{}', format='{output_format}', returncode={}, stderr={}, tmpdir_files={files:?}",
+        path.display(),
+        output.returncode,
+        head_chars(&String::from_utf8_lossy(&output.stderr), 500)
+    )))
+}
+
+/// 파일을 `output_format`(예: `txt:Text`)으로 변환하고 결과 텍스트를 돌려준다. 결과를 못 얻으면 오류 메시지를 남기고 빈 문자열.
+/// 실행하지 못한 경우(시간 초과 포함)는 `returncode=timeout`으로 적는다.
+pub fn convert_with_libreoffice(path: &Path, output_format: &str, binary: &Path, errors: &mut Vec<String>) -> String {
+    match convert_with_libreoffice_using(&SystemRunner, binary, None, path, output_format) {
+        Ok(text) => text,
+        Err(ConvertFailure::NoOutput(message)) => {
+            errors.push(message);
+            String::new()
+        }
+        Err(ConvertFailure::Run(e)) => {
+            errors.push(format!("LibreOffice produced no output: file='{}', format='{output_format}', returncode=timeout, stderr={e}, tmpdir_files=[]", path.display()));
+            String::new()
+        }
+    }
 }
 
 fn finish(raw_text: &str) -> (String, usize) {
@@ -75,13 +116,17 @@ pub fn read_from_doc(path: &Path, binary: &Path) -> (String, usize, Vec<String>)
     (summary, lines, errors)
 }
 
-/// HWP 파일: LibreOffice 변환이 비면 HWP3 파서로 대신한다.
+/// HWP 3.x 이하 판별과 네이티브 본문 추출. 미리보기처럼 요약이 아닌 원문이 필요한 호출자가 쓴다.
+pub use hwp3_parser::{extract_text_from_hwp3, is_hwp3};
+
+/// HWP 파일: HWP 3.x 이하는 네이티브 HWP3 파서를 먼저 쓴다(LibreOffice는 한자를 `?`로 깨뜨린다).
+/// 그 결과가 비거나 HWP 5.x면 LibreOffice로 변환한다. 네이티브 파서는 이미 실패했으므로 다시 부르지 않는다.
 pub fn read_from_hwp(path: &Path, binary: &Path) -> (String, usize, Vec<String>) {
-    let mut errors = Vec::new();
-    let mut raw = convert_with_libreoffice(path, "txt:Text", binary, &mut errors);
-    if errors.is_empty() && raw.trim_matches(is_space).is_empty() {
-        raw = hwp3_parser::extract_text_from_hwp3(path);
+    if let Some(done) = read_hwp3_natively(path, &|path| Ok(hwp3_parser::extract_text_from_hwp3(path))) {
+        return done;
     }
+    let mut errors = Vec::new();
+    let raw = convert_with_libreoffice(path, "txt:Text", binary, &mut errors);
     let (summary, lines) = finish(&raw);
     (summary, lines, errors)
 }
@@ -90,12 +135,26 @@ pub fn read_from_hwp_with(path: &Path, _binary: &Path, convert: &dyn Fn(&Path) -
     read_from_hwp_with_fallback(path, _binary, convert, &|path| Ok(hwp3_parser::extract_text_from_hwp3(path)))
 }
 
+/// HWP 3.x 이하이고 네이티브 추출 결과가 있으면 그것으로 끝낸다.
+fn read_hwp3_natively(path: &Path, extract: &dyn Fn(&Path) -> Result<String, String>) -> Option<(String, usize, Vec<String>)> {
+    if !hwp3_parser::is_hwp3(path) {
+        return None;
+    }
+    let raw = extract(path).ok().filter(|text| !text.trim_matches(char::is_whitespace).is_empty())?;
+    let (summary, lines) = finish(&raw);
+    Some((summary, lines, Vec::new()))
+}
+
+/// [`read_from_hwp`]와 같은 순서이되 LibreOffice 변환(`convert`)과 HWP3 추출(`extract_native`)을 주입한다.
 pub fn read_from_hwp_with_fallback(
     path: &Path,
     _binary: &Path,
     convert: &dyn Fn(&Path) -> Result<String, String>,
-    extract_fallback: &dyn Fn(&Path) -> Result<String, String>,
+    extract_native: &dyn Fn(&Path) -> Result<String, String>,
 ) -> (String, usize, Vec<String>) {
+    if let Some(done) = read_hwp3_natively(path, extract_native) {
+        return done;
+    }
     let mut errors = Vec::new();
     let converted = match convert(path) {
         Ok(text) => text,
@@ -105,21 +164,102 @@ pub fn read_from_hwp_with_fallback(
             return (summary, lines, errors);
         }
     };
-    let mut raw = converted;
-    if raw.trim_matches(is_space).is_empty() {
-        raw = match extract_fallback(path) {
-            Ok(text) => text,
-            Err(error) => {
-                errors.push(error);
-                String::new()
-            }
-        };
-    }
-    let (summary, lines) = finish(&raw);
+    let (summary, lines) = finish(&converted);
     (summary, lines, errors)
 }
 
 /// 이미지에는 본문·줄·쪽이 없다.
 pub fn read_from_image() -> (String, usize, usize) {
     (String::new(), 0, 0)
+}
+
+// ---- DOCX 읽기: `word/document.xml`의 문단(`w:p`)을 차례로 읽는다. ----
+//
+// 본문(`w:body`)의 바로 아래 문단만 센다(표 안 문단은 제외). 문단 글은 `w:r`과 `w:hyperlink`의 런 글을 이은 것이다.
+const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const REL_NS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+
+fn is_w(node: roxmltree::Node, name: &str) -> bool {
+    node.is_element() && node.tag_name().name() == name && node.tag_name().namespace() == Some(W_NS)
+}
+
+/// 런 하나의 글: `w:t`, `w:tab`, `w:br`(줄바꿈이면 `\n`), `w:cr`, `w:noBreakHyphen`, `w:ptab`.
+fn run_text(run: roxmltree::Node) -> String {
+    let mut out = String::new();
+    for e in run.children().filter(|c| c.is_element() && c.tag_name().namespace() == Some(W_NS)) {
+        match e.tag_name().name() {
+            "t" => out.push_str(e.text().unwrap_or("")),
+            "tab" | "ptab" => out.push('\t'),
+            "br" => {
+                let kind = e.attribute((W_NS, "type")).unwrap_or("textWrapping");
+                if kind == "textWrapping" {
+                    out.push('\n');
+                }
+            }
+            "cr" => out.push('\n'),
+            "noBreakHyphen" => out.push('-'),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 문단 글: 직계 `w:r`과 `w:hyperlink`(그 안의 `w:r`)를 문서 순서대로 잇는다.
+pub fn paragraph_text(p: roxmltree::Node) -> String {
+    let mut out = String::new();
+    for e in p.children().filter(|c| c.is_element()) {
+        if is_w(e, "r") {
+            out.push_str(&run_text(e));
+        } else if is_w(e, "hyperlink") {
+            for r in e.children().filter(|c| is_w(*c, "r")) {
+                out.push_str(&run_text(r));
+            }
+        }
+    }
+    out
+}
+
+fn read_member(zip: &mut common::zip_reader::Zip, name: &str) -> Result<String, String> {
+    let mut buf = common::zip_reader::read_member_prefix(zip, name, common::zip_reader::MAX_MEMBER_BYTES).map_err(|error| match error {
+        common::zip_reader::MemberError::Open(_) => format!("ZIP 항목이 없다: {name}"),
+        other => other.to_string(),
+    })?;
+    if buf.starts_with(b"\xef\xbb\xbf") {
+        buf.drain(..3);
+    }
+    String::from_utf8(buf).map_err(|e| e.to_string())
+}
+
+/// 주 문서 파트 이름. `_rels/.rels`의 officeDocument 관계를 따르고, 없으면 `word/document.xml`.
+fn main_part(zip: &mut common::zip_reader::Zip) -> Result<String, String> {
+    let rels = read_member(zip, "_rels/.rels")?;
+    let doc = roxmltree::Document::parse(&rels).map_err(|e| format!("XML 해석 실패: {e}"))?;
+    let target = doc
+        .descendants()
+        .find(|n| n.is_element() && n.tag_name().name() == "Relationship" && n.tag_name().namespace() == Some(REL_NS) && n.attribute("Type").is_some_and(|t| t.ends_with("/officeDocument")))
+        .and_then(|n| n.attribute("Target"));
+    Ok(target.map_or_else(|| "word/document.xml".to_owned(), |t| t.trim_start_matches('/').to_owned()))
+}
+
+/// DOCX 파일: (요약, 줄 수). 패키지를 열 수 없으면 `Err`.
+pub fn read_from_docx(path: &Path) -> Result<(String, usize), String> {
+    let mut zip = open_zip(path).ok_or("Package not found / bad zip file")?;
+    let part = main_part(&mut zip)?;
+    let xml = read_member(&mut zip, &part)?;
+    let doc = roxmltree::Document::parse(&xml).map_err(|e| format!("XML 해석 실패: {e}"))?;
+    let body = doc.root_element().children().find(|c| is_w(*c, "body")).ok_or("문서 본문(w:body)이 없다")?;
+
+    let mut result = String::new();
+    let mut total_text = String::new();
+    for p in body.children().filter(|c| is_w(*c, "p")) {
+        let text = paragraph_text(p);
+        total_text.push_str(&text);
+        total_text.push('\n');
+        if result.chars().count() < TEXT_SIZE {
+            result.push_str(&text);
+        }
+    }
+    let line_count = if total_text.is_empty() { 0 } else { total_text.matches('\n').count() };
+    let cleaned = keep_word_chars(&result);
+    Ok((head_chars(&cleaned, TEXT_SIZE).to_owned(), line_count))
 }

@@ -1,4 +1,4 @@
-//! 색인 적재에 쓰는 ES 호출. `backend/es_manager.py`의 `ESManager` 중 loader가 쓰는 부분의 이식.
+//! 색인 적재에 쓰는 ES 호출. loader가 쓴다.
 //!
 //! 인덱스 만들기·매핑 보강, 문서 대량 입력, 기존 문서 조회, 중복·고아 문서 삭제를 맡는다.
 //! HTTP와 TLS 인증서를 검증하는 HTTPS를 지원한다.
@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use crate::{EsClient, EsError, Method};
+use crate::transport::{Conflicts, EsRequest};
+use crate::{EsClient, EsError};
 
 /// bulk 한 번에 보내는 문서 수.
 pub const BULK_CHUNK_SIZE: usize = 100;
@@ -95,29 +96,19 @@ fn mget_docs(index: &str, ids: &[i64]) -> Vec<Value> {
     ids.iter().map(|id| json!({"_index": index, "_id": id.to_string()})).collect()
 }
 
-fn transport(e: &EsError) -> bool {
-    matches!(e, EsError::Transport(_))
-}
-
 impl EsClient {
-    fn call_ndjson(&self, path: &str, body: &str) -> Result<Value, EsError> {
-        let url = self.url(path)?;
-        Self::finish(self.agent.post(&url).header("Authorization", &self.auth).content_type("application/x-ndjson").send(body.as_bytes()))
-    }
-
     fn mget(&self, ids: &[i64], source: &[&str]) -> Result<Vec<Value>, EsError> {
-        let body = json!({"docs": mget_docs(&self.index, ids)});
-        let response = self.call(Method::Post, &format!("/_mget?_source={}", source.join(",")), Some(&body))?;
+        let response = self.send(&EsRequest::MultiGet { docs: mget_docs(&self.index, ids), source: Some(source.iter().map(|s| (*s).to_owned()).collect()) })?;
         Ok(response["docs"].as_array().cloned().unwrap_or_default())
     }
 
     fn mapping_properties(&self) -> Result<Value, EsError> {
-        let mapping = self.call(Method::Get, &format!("/{}/_mapping", self.index), None)?;
+        let mapping = self.send(&EsRequest::GetMapping { index: None })?;
         Ok(mapping[&self.index]["mappings"]["properties"].clone())
     }
 
     fn put_properties(&self, properties: Value) -> Result<(), EsError> {
-        self.call(Method::Put, &format!("/{}/_mapping", self.index), Some(&json!({"properties": properties}))).map(|_| ())
+        self.send(&EsRequest::PutMapping { index: None, properties }).map(|_| ())
     }
 
     /// 기존 인덱스에 빠진 필드(category.nori, created_time 계열, publisher)를 더한다. 실패해도 경고만 남기고 넘어간다.
@@ -153,7 +144,7 @@ impl EsClient {
     }
 
     fn delete_by_query(&self, query: Value) -> Result<i64, EsError> {
-        let response = self.call(Method::Post, &format!("/{}/_delete_by_query?conflicts=proceed&refresh=false", self.index), Some(&json!({"query": query})))?;
+        let response = self.send(&EsRequest::DeleteByQuery { index: None, body: json!({"query": query}), conflicts: Some(Conflicts::Proceed), refresh: Some(false) })?;
         Ok(response["deleted"].as_i64().unwrap_or(0))
     }
 }
@@ -164,15 +155,11 @@ impl IndexStore for EsClient {
     }
 
     fn ping(&self) -> Result<(), EsError> {
-        self.call(Method::Get, "/", None).map(|_| ())
+        self.send(&EsRequest::Info).map(|_| ())
     }
 
     fn index_exists(&self) -> Result<bool, EsError> {
-        match self.call(Method::Get, &format!("/{}", self.index), None) {
-            Ok(_) => Ok(true),
-            Err(EsError::Status { status: 404, .. }) => Ok(false),
-            Err(e) => Err(e),
-        }
+        Ok(self.send(&EsRequest::IndexExists { index: None })?.as_bool() == Some(true))
     }
 
     fn create_index(&self) -> Result<(), EsError> {
@@ -180,7 +167,7 @@ impl IndexStore for EsClient {
             self.ensure_existing_index_mappings();
             return Ok(());
         }
-        match self.call(Method::Put, &format!("/{}", self.index), Some(&json!({"settings": index_settings(), "mappings": index_mappings()}))) {
+        match self.send(&EsRequest::CreateIndex { index: None, body: json!({"settings": index_settings(), "mappings": index_mappings()}) }) {
             Ok(_) => Ok(()),
             Err(EsError::Status { status: 400, body }) if body.contains("resource_already_exists_exception") => {
                 eprintln!("INFO Index {} already exists, skipping creation", self.index);
@@ -193,7 +180,7 @@ impl IndexStore for EsClient {
 
     fn delete_index(&self) -> Result<(), EsError> {
         if self.index_exists()? {
-            self.call(Method::Delete, &format!("/{}", self.index), None)?;
+            self.send(&EsRequest::DeleteIndex { index: None })?;
         }
         Ok(())
     }
@@ -253,7 +240,7 @@ impl IndexStore for EsClient {
         let mut scroll_id: Option<String> = None;
         let outcome = (|| -> Result<(), EsError> {
             let body = json!({"query": path_prefix_query(path_prefix), "size": SCROLL_PAGE_SIZE, "_source": false});
-            let mut response = self.call(Method::Post, &format!("/{}/_search?scroll=10m", self.index), Some(&body))?;
+            let mut response = self.send(&EsRequest::scroll_search(body, "10m"))?;
             scroll_id = response["_scroll_id"].as_str().map(str::to_owned);
             loop {
                 let hits = response["hits"]["hits"].as_array().cloned().unwrap_or_default();
@@ -261,19 +248,34 @@ impl IndexStore for EsClient {
                     return Ok(());
                 }
                 ids.extend(hits.iter().filter_map(|h| h["_id"].as_str().and_then(|s| s.parse::<i64>().ok())));
-                response = self.call(Method::Post, "/_search/scroll", Some(&json!({"scroll": "10m", "scroll_id": scroll_id})))?;
+                response = self.send(&EsRequest::Scroll { scroll_id: scroll_id.clone().unwrap_or_default(), scroll: "10m".to_string() })?;
                 scroll_id = response["_scroll_id"].as_str().map(str::to_owned).or(scroll_id.take());
             }
         })();
         if let Some(id) = scroll_id {
-            let _ = self.call(Method::Delete, "/_search/scroll", Some(&json!({"scroll_id": id})));
+            let _ = self.send(&EsRequest::ClearScroll { scroll_id: id });
         }
         outcome.map(|()| ids)
     }
 
     fn delete_by_ids(&self, ids: &[i64]) -> Result<i64, EsError> {
+        self.delete_by_ids_chunked(ids, DELETE_CHUNK_SIZE)
+    }
+
+    fn insert(&self, docs: &[(i64, Value)]) -> Result<(), EsError> {
+        self.insert_with(docs, &|secs| std::thread::sleep(Duration::from_secs(secs)))
+    }
+
+    fn refresh(&self) -> Result<(), EsError> {
+        self.send(&EsRequest::RefreshIndex { index: None }).map(|_| ())
+    }
+}
+
+impl EsClient {
+    /// `ids`를 `chunk_size`개씩 나눠 지운다. 중간 묶음이 실패하면 앞 묶음은 이미 지워진 채 오류를 돌려준다.
+    pub fn delete_by_ids_chunked(&self, ids: &[i64], chunk_size: usize) -> Result<i64, EsError> {
         let mut deleted = 0;
-        for chunk in ids.chunks(DELETE_CHUNK_SIZE) {
+        for chunk in ids.chunks(chunk_size.max(1)) {
             deleted += self.delete_by_query(json!({"ids": {"values": chunk.iter().map(i64::to_string).collect::<Vec<_>>()}}))?;
         }
         if deleted > 0 {
@@ -282,38 +284,28 @@ impl IndexStore for EsClient {
         Ok(deleted)
     }
 
-    fn insert(&self, docs: &[(i64, Value)]) -> Result<(), EsError> {
-        self.insert_with(docs, &|secs| std::thread::sleep(Duration::from_secs(secs)))
-    }
-
-    fn refresh(&self) -> Result<(), EsError> {
-        self.call(Method::Post, &format!("/{}/_refresh", self.index), None).map(|_| ())
-    }
-}
-
-impl EsClient {
-    /// 문서를 100건씩 bulk로 넣는다. 전송 오류는 `1, 2, 4`초 쉬며 3번까지 다시 시도한다. `sleep`은 쉬는 방법이다.
+    /// 문서를 100건씩 bulk로 넣는다. 연결·응답 해석 오류([`EsError::is_connection`])는 `1, 2, 4`초 쉬며 3번까지 다시 시도한다.
+    /// 문서마다 `_id`를 정해 넣으므로 다시 보내도 중복되지 않는다. `sleep`은 쉬는 방법이다.
     pub fn insert_with(&self, docs: &[(i64, Value)], sleep: &dyn Fn(u64)) -> Result<(), EsError> {
         for chunk in docs.chunks(BULK_CHUNK_SIZE) {
-            let mut body = String::new();
+            let mut lines = Vec::with_capacity(chunk.len() * 2);
             for (id, doc) in chunk {
-                body.push_str(&json!({"index": {"_index": self.index, "_id": id.to_string()}}).to_string());
-                body.push('\n');
-                body.push_str(&doc.to_string());
-                body.push('\n');
+                lines.push(json!({"index": {"_index": self.index, "_id": id.to_string()}}));
+                lines.push(doc.clone());
             }
             eprintln!("INFO {} items inserted", chunk.len());
+            let request = EsRequest::Bulk { lines, timeout: Some("60s".to_string()), refresh: Some(false) };
             for attempt in 0..BULK_MAX_RETRIES {
-                match self.call_ndjson("/_bulk?timeout=60s&refresh=false", &body) {
+                match self.send(&request) {
                     Ok(response) => {
-                        // 원본은 항목별 실패를 확인하지 않는다. 조용히 사라지지 않도록 경고를 남긴다.
+                        // 항목별 실패는 요청 전체를 실패로 보지 않는다. 조용히 사라지지 않도록 경고를 남긴다.
                         if response["errors"].as_bool().unwrap_or(false) {
                             let failed = response["items"].as_array().map_or(0, |items| items.iter().filter(|i| i["index"]["error"].is_object()).count());
                             eprintln!("WARNING ES bulk 응답에 항목 오류가 있다: {failed}건");
                         }
                         break;
                     }
-                    Err(e) if transport(&e) && attempt + 1 < BULK_MAX_RETRIES => {
+                    Err(e) if e.is_connection() && attempt + 1 < BULK_MAX_RETRIES => {
                         let wait = 1u64 << attempt;
                         eprintln!("WARNING ES bulk 요청 실패 (시도 {}/{BULK_MAX_RETRIES}): {e}. {wait}초 후 재시도...", attempt + 1);
                         sleep(wait);

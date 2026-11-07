@@ -1,13 +1,10 @@
-//! sysdeps 테스트: 시계, 파일시스템, 외부 명령, HTTP 응답 값 객체.
+//! sysdeps 테스트: 시계, 파일시스템, 외부 명령.
 //! 설계: docs/rust-test-seams.md 3.1
 
 use std::io::ErrorKind;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-
-use sysdeps::{Clock, CommandError, CommandRunner, FsOps, HttpResponse, RealFs, SystemClock, SystemRunner};
+use sysdeps::{Clock, CommandError, CommandRunner, FsOps, RealFs, SystemClock, SystemRunner};
 
 fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| s.to_string()).collect()
@@ -43,104 +40,6 @@ mod clock {
         SystemClock.sleep(-1.0);
         SystemClock.sleep(f64::NAN);
         assert!(start.elapsed() < Duration::from_millis(50));
-    }
-}
-
-mod poppler {
-    use super::*;
-
-    struct FakeRunner {
-        outputs: std::sync::Mutex<Vec<sysdeps::CommandOutput>>,
-        calls: std::sync::Mutex<Vec<Vec<String>>>,
-    }
-
-    impl CommandRunner for FakeRunner {
-        fn run(&self, argv: &[String], timeout: Option<Duration>) -> Result<sysdeps::CommandOutput, CommandError> {
-            assert_eq!(timeout, Some(Duration::from_secs(30)));
-            self.calls.lock().unwrap().push(argv.to_vec());
-            Ok(self.outputs.lock().unwrap().remove(0))
-        }
-
-        fn which(&self, program: &str) -> Option<std::path::PathBuf> {
-            Some(std::path::PathBuf::from(format!("/usr/bin/{program}")))
-        }
-    }
-
-    fn runner(outputs: &[(&str, &str, i32)]) -> FakeRunner {
-        FakeRunner {
-            outputs: std::sync::Mutex::new(
-                outputs.iter().map(|(stdout, stderr, returncode)| sysdeps::CommandOutput { stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec(), returncode: *returncode }).collect(),
-            ),
-            calls: std::sync::Mutex::new(Vec::new()),
-        }
-    }
-
-    struct FailingRunner {
-        missing: bool,
-    }
-
-    impl CommandRunner for FailingRunner {
-        fn run(&self, _argv: &[String], _timeout: Option<Duration>) -> Result<sysdeps::CommandOutput, CommandError> {
-            if self.missing { Err(CommandError::NotFound) } else { Err(CommandError::Failed("runner failure".into())) }
-        }
-
-        fn which(&self, _program: &str) -> Option<std::path::PathBuf> {
-            None
-        }
-    }
-
-    struct InvalidUtf8Runner;
-
-    impl CommandRunner for InvalidUtf8Runner {
-        fn run(&self, _argv: &[String], _timeout: Option<Duration>) -> Result<sysdeps::CommandOutput, CommandError> {
-            Ok(sysdeps::CommandOutput { returncode: 0, stdout: vec![0xff], stderr: Vec::new() })
-        }
-
-        fn which(&self, _program: &str) -> Option<std::path::PathBuf> {
-            None
-        }
-    }
-
-    #[test]
-    fn page_count_uses_pdfinfo_and_rejects_malformed_output() {
-        let fake = runner(&[("Title: sample\nPages:          12\n", "", 0)]);
-        assert_eq!(sysdeps::poppler::page_count(&fake, Path::new("a book.pdf")).unwrap(), 12);
-        assert_eq!(&fake.calls.lock().unwrap()[0][5..], ["info", "a book.pdf"]);
-        assert_eq!(&fake.calls.lock().unwrap()[0][..4], ["prlimit", "--as=536870912", "--cpu=25", "--"]);
-
-        let malformed = runner(&[("Pages: nope\n", "", 0)]);
-        assert!(sysdeps::poppler::page_count(&malformed, Path::new("a.pdf")).is_err());
-    }
-
-    #[test]
-    fn text_and_render_commands_keep_paths_as_arguments_and_report_tool_errors() {
-        let fake = runner(&[("본문\n", "", 0), ("P6\n1 1\n255\n", "", 0)]);
-        assert_eq!(sysdeps::poppler::extract_text(&fake, Path::new("a book.pdf"), 2, 5).unwrap(), "본문\n");
-        assert_eq!(&fake.calls.lock().unwrap()[0][5..], ["text", "a book.pdf", "2", "5"]);
-        assert_eq!(sysdeps::poppler::render_page(&fake, Path::new("a book.pdf"), 3, 900).unwrap(), b"P6\n1 1\n255\n");
-        assert_eq!(&fake.calls.lock().unwrap()[1][5..], ["render", "a book.pdf", "3", "900"]);
-
-        let failed = runner(&[("", "Syntax Error: broken file", 1)]);
-        assert!(sysdeps::poppler::extract_text(&failed, Path::new("broken.pdf"), 1, 1).unwrap_err().contains("broken file"));
-    }
-
-    #[test]
-    fn reports_missing_tools_invalid_ranges_and_invalid_output() {
-        let missing = FailingRunner { missing: true };
-        assert!(sysdeps::poppler::page_count(&missing, Path::new("a.pdf")).unwrap_err().contains("build tm-pdf-worker"));
-
-        let failed = FailingRunner { missing: false };
-        assert!(sysdeps::poppler::page_count(&failed, Path::new("a.pdf")).unwrap_err().contains("runner failure"));
-
-        let no_count = runner(&[("Title: no page count\n", "", 0)]);
-        assert!(sysdeps::poppler::page_count(&no_count, Path::new("a.pdf")).unwrap_err().contains("did not report"));
-
-        let valid = runner(&[]);
-        assert!(sysdeps::poppler::extract_text(&valid, Path::new("a.pdf"), 0, 1).unwrap_err().contains("invalid PDF page range"));
-        assert!(sysdeps::poppler::extract_text(&valid, Path::new("a.pdf"), 2, 1).unwrap_err().contains("invalid PDF page range"));
-        assert!(sysdeps::poppler::extract_text(&InvalidUtf8Runner, Path::new("a.pdf"), 1, 1).unwrap_err().contains("invalid UTF-8"));
-        assert!(sysdeps::poppler::render_page(&valid, Path::new("a.pdf"), 0, 900).unwrap_err().contains("invalid PDF render dimensions"));
-        assert!(sysdeps::poppler::render_page(&valid, Path::new("a.pdf"), 1, 0).unwrap_err().contains("invalid PDF render dimensions"));
     }
 }
 
@@ -211,7 +110,7 @@ mod fs {
         std::fs::write(&p, b"x").unwrap();
         assert!(RealFs.is_file(&p).unwrap());
         assert!(!RealFs.is_file(dir.path()).unwrap());
-        // Python Path.is_file()은 없는 경로에서 예외 없이 False다.
+        // 없는 경로는 오류 없이 false다.
         assert!(!RealFs.is_file(&dir.path().join("missing")).unwrap());
     }
 
@@ -377,6 +276,25 @@ mod runner {
         assert!(matches!(err, CommandError::NotFound), "{err:?}");
     }
 
+    /// 방금 쓴 스크립트를 다른 스레드가 fork한 자식이 아직 쓰기용으로 쥐고 있으면 exec가 ETXTBSY로 실패한다.
+    /// 쥔 쪽이 곧 놓으므로 잠깐 기다렸다 다시 실행해야 한다.
+    #[test]
+    fn run_retries_while_the_program_file_is_busy() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("busy.sh");
+        std::fs::write(&script, "#!/bin/sh\necho ok\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let writer = std::fs::OpenOptions::new().write(true).open(&script).unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(writer);
+        });
+        let out = SystemRunner.run(&argv(&[script.to_str().unwrap()]), Some(Duration::from_secs(5))).unwrap();
+        release.join().unwrap();
+        assert_eq!(out.stdout, b"ok\n");
+    }
+
     #[test]
     fn run_rejects_an_empty_argv() {
         let err = SystemRunner.run(&[], None).unwrap_err();
@@ -398,71 +316,66 @@ mod runner {
     }
 
     #[test]
-    fn errors_have_python_compatible_display_text() {
+    fn errors_have_stable_display_text() {
         assert_eq!(CommandError::Timeout.to_string(), "명령이 시간 상한을 넘었다");
         assert_eq!(CommandError::NotFound.to_string(), "명령을 찾을 수 없다");
         assert_eq!(CommandError::Failed("broken".into()).to_string(), "명령 실행 실패: broken");
-        assert_eq!(sysdeps::HttpError::Timeout.to_string(), "HTTP 요청 시간 초과");
-        assert_eq!(sysdeps::HttpError::Connection("closed".into()).to_string(), "HTTP 연결 실패: closed");
-        assert_eq!(sysdeps::HttpError::Other("bad status".into()).to_string(), "HTTP 오류: bad status");
     }
 }
 
-mod http {
-    use super::*;
+mod private_dir {
+    use std::fs;
+    use std::os::{unix::fs::MetadataExt, unix::fs::PermissionsExt, unix::fs::symlink};
+    use sysdeps::private_dir_in;
 
-    #[test]
-    fn from_text_exposes_status_text_and_json() {
-        let r = HttpResponse::from_text(200, "{\"a\": 1}");
-        assert_eq!(r.status_code, 200);
-        assert_eq!(r.json()["a"], 1);
-        assert_eq!(HttpResponse::from_text(200, "한글").text(), "한글");
+    /// 테스트가 만든 디렉터리의 소유자 = 현재 euid.
+    fn expected_name(parent: &std::path::Path) -> std::path::PathBuf {
+        parent.join(format!("cache-{}", fs::metadata(parent).unwrap().uid()))
     }
 
     #[test]
-    fn debug_output_contains_response_metadata() {
-        let r = HttpResponse::from_text(204, "");
-        let debug = format!("{r:?}");
-        assert!(debug.contains("status_code: 204"));
-        assert!(debug.contains("headers: []"));
+    fn creates_a_0700_directory_and_reuses_it() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = private_dir_in(parent.path(), "cache").unwrap();
+        assert_eq!(dir, expected_name(parent.path()));
+        assert_eq!(fs::metadata(&dir).unwrap().mode() & 0o777, 0o700);
+        assert_eq!(private_dir_in(parent.path(), "cache"), Some(dir));
     }
 
     #[test]
-    fn from_chunks_concatenates_chunks_and_marks_the_body_closed() {
-        let closed = Arc::new(AtomicBool::new(false));
-        let r = HttpResponse::from_chunks(200, vec![], vec![b"ab".to_vec(), b"cd".to_vec()], closed.clone());
-        assert!(!closed.load(Ordering::SeqCst));
-        assert_eq!(r.text(), "abcd");
-        assert!(closed.load(Ordering::SeqCst), "본문을 다 읽으면 닫아야 한다");
+    fn rejects_a_directory_open_to_group_or_other() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = expected_name(parent.path());
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(private_dir_in(parent.path(), "cache"), None);
     }
 
     #[test]
-    fn dropping_an_unread_response_closes_the_body() {
-        let closed = Arc::new(AtomicBool::new(false));
-        let r = HttpResponse::from_chunks(200, vec![], vec![b"ab".to_vec()], closed.clone());
-        drop(r);
-        assert!(closed.load(Ordering::SeqCst));
+    fn rejects_a_symlink_even_to_a_private_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("real");
+        fs::create_dir(&target).unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
+        symlink(&target, expected_name(parent.path())).unwrap();
+        assert_eq!(private_dir_in(parent.path(), "cache"), None);
     }
 
     #[test]
-    fn next_chunk_streams_until_exhausted() {
-        let closed = Arc::new(AtomicBool::new(false));
-        let mut r = HttpResponse::from_chunks(200, vec![], vec![b"ab".to_vec(), b"cd".to_vec()], closed);
-        assert_eq!(r.next_chunk().unwrap().unwrap(), b"ab");
-        assert_eq!(r.next_chunk().unwrap().unwrap(), b"cd");
-        assert!(r.next_chunk().is_none());
+    fn rejects_a_regular_file_or_missing_parent() {
+        let parent = tempfile::tempdir().unwrap();
+        fs::write(expected_name(parent.path()), "x").unwrap();
+        assert_eq!(private_dir_in(parent.path(), "cache"), None);
+        assert_eq!(private_dir_in(&parent.path().join("missing"), "cache"), None);
     }
+}
 
-    #[test]
-    fn redirect_statuses_expose_the_location_header_case_insensitively() {
-        for status in [301u16, 302, 303, 307, 308] {
-            let r = HttpResponse::from_chunks(status, vec![("Location".into(), "https://x.test/a".into())], vec![], Arc::new(AtomicBool::new(false)));
-            assert!(r.is_redirect(), "status={status}");
-            assert_eq!(r.location(), Some("https://x.test/a"));
-        }
-        let ok = HttpResponse::from_text(200, "");
-        assert!(!ok.is_redirect());
-        assert_eq!(ok.location(), None);
-        assert_eq!(ok.header("Content-Type"), None);
-    }
+#[test]
+fn locate_executable_falls_back_to_the_executable_directory_and_then_the_bare_name() {
+    // PATH에 없는 이름은 실행 파일 디렉터리에서 찾고, 그래도 없으면 이름만 돌려준다.
+    let exe = std::env::current_exe().unwrap();
+    let name = exe.file_name().unwrap().to_str().unwrap();
+    assert_eq!(sysdeps::locate_executable(name), exe);
+    let missing = "sysdeps-test-no-such-executable";
+    assert_eq!(sysdeps::locate_executable(missing), Path::new(missing));
 }

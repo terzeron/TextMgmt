@@ -1,29 +1,22 @@
-//! 온라인 서점(Yes24·알라딘·교보문고) 검색. 원본: `backend/bookstore.py`의 `AbstractBookstore`와 세 구현.
+//! 온라인 서점(Yes24·알라딘·교보문고) 검색 URL 조립과 HTML 파싱.
 //!
 //! [`stores`]는 backend가 쓰는 전체 서점(리디북스·네이버·문피아·조아라·웹툰 포함) 구현이다. 세 서점의 URL 조립과 파싱은 이 최상위 모듈을 재사용한다.
 //!
-//! 검색 페이지에서 상세 페이지 링크를 뽑고(`extract_search_links`), 상세 페이지를 받아
-//! 제목·저자·카테고리·ISBN을 뽑는다(`extract_book_info`). 네트워크는 [`Fetcher`] 뒤에 둬서 테스트에서 갈아 끼운다.
+//! 이 모듈은 검색 URL을 만들고, 검색 페이지에서 상세 페이지 링크를 뽑고(`extract_search_links`),
+//! 상세 페이지에서 제목·저자·카테고리·ISBN을 뽑는다(`extract_book_info`). 네트워크 요청과 검색 순서는 [`stores`]가 맡는다.
 //!
-//! 원본과 다른 점: BeautifulSoup `html.parser` 대신 html5ever(`scraper`)로 파싱한다. 정상 HTML에서는 같고
-//! 심하게 깨진 HTML에서는 트리가 다를 수 있다. 상세 페이지 HTML을 임시 디렉토리에 캐시하지 않고, 쿠키를 넘기지 않는다.
+//! HTML은 html5ever(`scraper`)로 파싱한다. 심하게 깨진 HTML은 브라우저처럼 트리를 고쳐 읽는다.
 
-pub mod stores;
+pub mod store_clients;
 
 use std::sync::LazyLock;
-use std::time::Duration;
 
+use common::url_parser::{quote, urljoin};
 use regex::Regex;
 use scraper::{ElementRef, Html, Node, Selector};
 
 /// 상세 페이지를 받아 볼 검색 결과 수 상한.
 pub const MAX_RESULTS: usize = 4;
-const MAX_PARALLEL: usize = 8;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const CURL_UA: &str = "curl/7.79.1";
-const CHROME_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-const ACCEPT: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
-const ACCEPT_LANGUAGE: &str = "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Store {
@@ -39,31 +32,6 @@ pub struct BookInfo {
     pub author: String,
     pub category: String,
     pub isbn: String,
-}
-
-/// 검색 결과 한 줄.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SearchRow {
-    pub title: String,
-    pub author: String,
-    pub category: String,
-    pub detail_url: String,
-    pub search_url: String,
-    pub isbn: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SearchOutcome {
-    pub rows: Vec<SearchRow>,
-    /// 실제로 쓴 검색어
-    pub keyword: String,
-    /// `isbn`, `title_author`, `title`, `unknown`
-    pub method: &'static str,
-}
-
-/// 페이지를 받아 오는 쪽.
-pub trait Fetcher: Sync {
-    fn get(&self, store: Store, url: &str) -> Result<String, String>;
 }
 
 fn selector(css: &str) -> Selector {
@@ -91,37 +59,6 @@ fn text_strip(el: ElementRef) -> String {
 
 fn attr<'a>(el: &ElementRef<'a>, name: &str) -> Option<&'a str> {
     el.value().attr(name)
-}
-
-/// `urllib.parse.urljoin`의 흔한 경우: 절대 URL, `//host`, `/path`, 상대 경로.
-fn urljoin(base: &str, href: &str) -> String {
-    if href.contains("://") {
-        return href.to_owned();
-    }
-    let scheme_end = base.find("://").map_or(0, |i| i + 3);
-    let origin_end = base[scheme_end..].find('/').map_or(base.len(), |i| scheme_end + i);
-    if let Some(rest) = href.strip_prefix("//") {
-        return format!("{}//{rest}", &base[..scheme_end.saturating_sub(2).max(0)]);
-    }
-    if href.starts_with('/') {
-        return format!("{}{href}", &base[..origin_end]);
-    }
-    let dir_end = base[origin_end..].rfind('/').map_or(origin_end, |i| origin_end + i + 1);
-    let dir = if dir_end == origin_end { format!("{}/", &base[..origin_end]) } else { base[..dir_end].to_owned() };
-    format!("{dir}{href}")
-}
-
-/// `urllib.parse.quote(s)`: 영문·숫자·`_.-~/`만 그대로 둔다.
-fn quote(value: &str) -> String {
-    let mut out = String::new();
-    for b in value.bytes() {
-        if b.is_ascii_alphanumeric() || b"_.-~/".contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
 }
 
 /// 제목에서 부제 구분자(` - `, `－`, `-`, `：`) 왼쪽만 남긴다.
@@ -176,14 +113,6 @@ impl Store {
     /// 저자와 제목을 함께 검색할 때 저자를 앞에 둔다.
     pub fn author_first(self) -> bool {
         self == Store::Aladin
-    }
-
-    pub fn user_agent(self) -> &'static str {
-        if self == Store::Kyobo { CHROME_UA } else { CURL_UA }
-    }
-
-    fn referer(self) -> &'static str {
-        if self == Store::Kyobo { "https://www.kyobobook.co.kr/" } else { self.base_url() }
     }
 
     pub fn build_search_url(self, keyword: &str) -> String {
@@ -299,7 +228,7 @@ fn yes24_info(doc: &Html, html: &str) -> BookInfo {
 /// "관련분류" 글자가 든 문자열(주석 포함)의 부모 안에서 카테고리 링크를 모아 `a > b` 꼴로 만든다.
 fn yes24_category(doc: &Html) -> String {
     for node in doc.tree.nodes() {
-        // BeautifulSoup의 문자열 검색은 주석과 스크립트 안 글자도 포함한다. 실제 페이지는 주석 안 "관련분류 시작" 뒤에 링크가 있다.
+        // 주석과 스크립트 안 글자까지 검색한다. 실제 페이지는 주석 안 "관련분류 시작" 뒤에 링크가 있다.
         let text: &str = match node.value() {
             Node::Text(text) => text,
             Node::Comment(comment) => comment,
@@ -427,105 +356,4 @@ fn kyobo_info(doc: &Html) -> BookInfo {
         }
     }
     info
-}
-
-/// 한 서점에서 검색한다. 우선순위는 ISBN, 제목+저자, 제목이다. 부제 구분자 왼쪽만 제목으로 쓴다.
-pub fn search(store: Store, fetcher: &dyn Fetcher, isbn: &str, title: &str, author: &str) -> SearchOutcome {
-    let mut title = if title.is_empty() { String::new() } else { truncate_title(title) };
-    if store == Store::Aladin && !title.is_empty() {
-        title = strip_trailing_number(&title);
-    }
-    let outcome = |rows, keyword: &str, method| SearchOutcome { rows, keyword: keyword.to_owned(), method };
-    let combined = || if store.author_first() { format!("{author} {title}") } else { format!("{title} {author}") };
-
-    if !isbn.is_empty() && store.supports_isbn_search() {
-        let rows = fetch_results(store, fetcher, &store.build_isbn_search_url(isbn));
-        if !rows.is_empty() {
-            return outcome(rows, isbn, "isbn");
-        }
-    }
-    if !title.is_empty() && !author.is_empty() {
-        let keyword = combined();
-        let rows = fetch_results(store, fetcher, &store.build_search_url(&keyword));
-        if !rows.is_empty() {
-            return outcome(rows, &keyword, "title_author");
-        }
-    }
-    if !title.is_empty() {
-        let rows = fetch_results(store, fetcher, &store.build_search_url(&title));
-        if !rows.is_empty() {
-            return outcome(rows, &title, "title");
-        }
-    }
-    if !title.is_empty() && !author.is_empty() {
-        return outcome(Vec::new(), &combined(), "title_author");
-    }
-    if !title.is_empty() {
-        return outcome(Vec::new(), &title, "title");
-    }
-    if !isbn.is_empty() {
-        return outcome(Vec::new(), isbn, "isbn");
-    }
-    outcome(Vec::new(), "", "unknown")
-}
-
-/// 검색 URL의 결과 링크 앞쪽 `MAX_RESULTS`개로 상세 페이지를 병렬로 받아 행을 만든다. 순서는 링크 순서다.
-fn fetch_results(store: Store, fetcher: &dyn Fetcher, search_url: &str) -> Vec<SearchRow> {
-    let html = match fetcher.get(store, search_url) {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("검색 페이지 요청 실패: {e}");
-            return Vec::new();
-        }
-    };
-    let links = store.extract_search_links(&html);
-    let detail_urls: Vec<&String> = links.iter().take(MAX_RESULTS).collect();
-    let pages: Vec<Option<String>> = std::thread::scope(|scope| {
-        let handles: Vec<_> = detail_urls
-            .chunks(MAX_PARALLEL)
-            .flat_map(|chunk| chunk.iter().map(|url| scope.spawn(move || fetcher.get(store, url).map_err(|e| eprintln!("상세 페이지 요청 실패: {url} - {e}")).ok())).collect::<Vec<_>>())
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap_or(None)).collect()
-    });
-    let mut rows = Vec::new();
-    for (url, page) in detail_urls.iter().zip(pages) {
-        let Some(page) = page.filter(|p| !p.trim().is_empty()) else { continue };
-        let info = store.extract_book_info(&page);
-        let category = if info.category.is_empty() { String::new() } else { info.category.split('>').map(str::trim).take(3).collect::<Vec<_>>().join(" > ") };
-        rows.push(SearchRow { title: info.title, author: info.author, category, detail_url: (*url).clone(), search_url: search_url.to_owned(), isbn: info.isbn });
-    }
-    rows
-}
-
-/// ureq로 페이지를 받는다. 서점별 헤더를 보내고, 상태 코드와 무관하게 본문을 UTF-8로 읽는다(원본과 같다).
-pub struct HttpFetcher {
-    agent: ureq::Agent,
-}
-
-impl HttpFetcher {
-    pub fn new() -> Self {
-        HttpFetcher { agent: ureq::Agent::config_builder().timeout_global(Some(REQUEST_TIMEOUT)).http_status_as_error(false).build().into() }
-    }
-}
-
-impl Default for HttpFetcher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Fetcher for HttpFetcher {
-    fn get(&self, store: Store, url: &str) -> Result<String, String> {
-        let mut response = self
-            .agent
-            .get(url)
-            .header("User-Agent", store.user_agent())
-            .header("Accept", ACCEPT)
-            .header("Accept-Language", ACCEPT_LANGUAGE)
-            .header("Referer", store.referer())
-            .call()
-            .map_err(|e| e.to_string())?;
-        let bytes = response.body_mut().read_to_vec().map_err(|e| e.to_string())?;
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
-    }
 }

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
+use auth_manager::refresh_token_store::{RefreshTokenStoreApi, Rotation, StoreError};
 use db::Row;
-use backend::refresh_token_store::{RefreshTokenStoreApi, Rotation, StoreError};
 use serde_json::Value;
 
 const ADMIN_FAMILY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -11,7 +11,7 @@ const VIEWER_FAMILY: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 pub fn token(email: &str, role: &str, name: Option<&str>, picture: Option<&str>) -> String {
     let family = if role == "admin" { ADMIN_FAMILY } else { VIEWER_FAMILY };
-    backend::auth::create_session_jwt_token(email, role, name.unwrap_or_default(), picture.unwrap_or_default(), family)
+    auth_manager::auth_service::create_session_jwt_token(email, role, name.unwrap_or_default(), picture.unwrap_or_default(), family)
 }
 
 pub fn store() -> Arc<dyn RefreshTokenStoreApi> {
@@ -42,7 +42,7 @@ impl RefreshTokenStoreApi for ContentSessions {
         Err(unsupported())
     }
 
-    fn _session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
+    fn session_rows(&self, email: Option<&str>, family_id: Option<&str>) -> Result<Vec<Row>, StoreError> {
         Ok([(ADMIN_FAMILY, "admin@test.com"), (VIEWER_FAMILY, "viewer@test.com")]
             .into_iter()
             .filter(|(fid, owner)| email.is_none_or(|e| e == *owner) && family_id.is_none_or(|f| f == *fid))

@@ -114,6 +114,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "auth_manager"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "common",
+ "db",
+ "http",
+ "http_client",
+ "jsonwebtoken",
+ "log",
+ "regex",
+ "serde",
+ "serde_json",
+ "sysdeps",
+ "testcontainers-modules",
+ "tokio",
+ "ureq",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -201,39 +222,36 @@ name = "backend"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "auth_manager",
  "axum",
  "base64 0.23.1",
+ "book_manager",
  "bookstore",
  "chrono",
- "classifier",
- "corpus_layout",
+ "common",
+ "cover_manager",
  "db",
  "doc_reader",
- "epubveri",
  "es_client",
  "fancy-regex",
- "file_record",
+ "file_indexer",
  "flate2",
- "htmlkit",
- "hwp3_parser",
- "idna",
  "image",
- "isbn",
+ "image_processor",
  "jpeg-encoder",
  "jsonwebtoken",
  "log",
  "lopdf",
  "md-5",
- "pyfmt",
- "regex",
+ "parse_stat_counter",
+ "pdf_engine",
  "roxmltree",
  "rustls",
  "rustls-pki-types",
- "scraper",
+ "search_manager",
  "serde",
  "serde_json",
  "sha2",
- "stat",
  "sysdeps",
  "tempfile",
  "testcontainers-modules",
@@ -241,7 +259,6 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tower",
- "ureq",
  "zip",
 ]
 
@@ -395,23 +412,66 @@ dependencies = [
 ]
 
 [[package]]
+name = "book_manager"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "book_model",
+ "chrono",
+ "classifier",
+ "common",
+ "cover_manager",
+ "db",
+ "doc_reader",
+ "es_client",
+ "file_indexer",
+ "flate2",
+ "htmlkit",
+ "image",
+ "image_processor",
+ "jpeg-encoder",
+ "log",
+ "lopdf",
+ "pdf_engine",
+ "regex",
+ "roxmltree",
+ "scraper",
+ "search_manager",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sysdeps",
+ "tempfile",
+ "testcontainers-modules",
+ "tokio",
+ "zip",
+]
+
+[[package]]
+name = "book_model"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "common",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bookdoctor"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "corpus_common",
+ "common",
+ "doc_checker",
+ "doc_repairer",
  "encoding_rs",
- "fancy-regex",
  "flate2",
- "htmlkit",
  "lopdf",
  "rayon",
- "regex",
- "roxmltree",
- "scraper",
  "serde",
  "serde_json",
- "sha2",
  "sysdeps",
  "tempfile",
  "zip",
@@ -421,15 +481,15 @@ dependencies = [
 name = "bookstore"
 version = "0.1.0"
 dependencies = [
+ "common",
  "htmlkit",
+ "http_client",
  "log",
- "pyfmt",
  "regex",
  "scraper",
  "serde_json",
  "sysdeps",
  "tempfile",
- "ureq",
 ]
 
 [[package]]
@@ -571,24 +631,7 @@ dependencies = [
 name = "classifier"
 version = "0.1.0"
 dependencies = [
- "base64 0.23.1",
- "bookstore",
- "chrono",
- "corpus_common",
- "db",
- "es_client",
- "fancy-regex",
- "image",
- "log",
- "pyfmt",
- "regex",
- "roxmltree",
- "serde",
  "serde_json",
- "sha2",
- "sysdeps",
- "tempfile",
- "zip",
 ]
 
 [[package]]
@@ -607,10 +650,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
 
 [[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "roxmltree",
+ "serde_json",
+ "tempfile",
+ "xml_recoverer",
+ "zip",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+
+[[package]]
+name = "container_parser"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "cookie"
@@ -710,21 +771,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
 
 [[package]]
-name = "corpus_common"
+name = "cover_manager"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
+ "book_model",
+ "bookstore",
  "chrono",
- "encoding_rs",
- "pyfmt",
- "rayon",
+ "common",
+ "db",
+ "es_client",
+ "htmlkit",
+ "http_client",
+ "image",
+ "image_processor",
+ "log",
+ "lopdf",
+ "pdf_engine",
  "regex",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sysdeps",
  "tempfile",
  "zip",
 ]
-
-[[package]]
-name = "corpus_layout"
-version = "0.1.0"
 
 [[package]]
 name = "cpubits"
@@ -881,10 +953,14 @@ name = "db"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "common",
  "diesel",
  "log",
  "mysqlclient-sys",
+ "serde",
  "serde_json",
+ "sysdeps",
+ "testcontainers-modules",
 ]
 
 [[package]]
@@ -1040,24 +1116,75 @@ dependencies = [
 ]
 
 [[package]]
+name = "doc_checker"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "common",
+ "container_parser",
+ "doc_reader",
+ "encoding_rs",
+ "epubveri",
+ "flate2",
+ "htmlkit",
+ "image",
+ "lopdf",
+ "pdf_engine",
+ "regex",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sysdeps",
+ "tempfile",
+ "text_decoder",
+ "zip",
+]
+
+[[package]]
 name = "doc_reader"
 version = "0.1.0"
 dependencies = [
- "corpus_common",
+ "base64 0.23.1",
+ "common",
  "ego-tree",
  "encoding_rs",
  "flate2",
+ "htmlkit",
  "hwp3_parser",
- "isbn",
+ "image",
+ "log",
  "lopdf",
- "parser_timeout",
- "pyfmt",
+ "pdf_engine",
  "regex",
  "roxmltree",
  "scraper",
  "serde_json",
  "sysdeps",
  "tempfile",
+ "text_decoder",
+ "xml_recoverer",
+ "zip",
+]
+
+[[package]]
+name = "doc_repairer"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "container_parser",
+ "doc_checker",
+ "encoding_rs",
+ "flate2",
+ "htmlkit",
+ "lopdf",
+ "regex",
+ "roxmltree",
+ "scraper",
+ "serde_json",
+ "sysdeps",
+ "tempfile",
+ "text_decoder",
  "zip",
 ]
 
@@ -1210,6 +1337,8 @@ dependencies = [
 name = "es_client"
 version = "0.1.0"
 dependencies = [
+ "common",
+ "http_client",
  "rustls",
  "rustls-pki-types",
  "serde_json",
@@ -1264,17 +1393,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "file_record"
+name = "file_indexer"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "corpus_common",
+ "common",
  "doc_reader",
- "isbn",
+ "isbn_extractor",
  "lopdf",
- "parser_timeout",
+ "parse_stat_counter",
  "serde_json",
- "stat",
+ "sysdeps",
  "tempfile",
 ]
 
@@ -1640,6 +1769,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "http_client"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "ureq",
+]
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1656,13 +1794,8 @@ name = "hwp3_parser"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "hwp3_tables",
  "tempfile",
 ]
-
-[[package]]
-name = "hwp3_tables"
-version = "0.1.0"
 
 [[package]]
 name = "hybrid-array"
@@ -1936,6 +2069,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "image_processor"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "http_client",
+ "idna",
+ "image",
+ "ureq",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1969,19 +2113,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "isbn"
+name = "isbn_extractor"
 version = "0.1.0"
 dependencies = [
- "corpus_common",
- "flate2",
- "htmlkit",
- "lopdf",
- "parser_timeout",
+ "doc_reader",
+ "parse_stat_counter",
  "regex",
- "stat",
  "sysdeps",
  "tempfile",
- "unicode-general-category",
  "zip",
 ]
 
@@ -2168,19 +2307,20 @@ checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
 name = "loader"
 version = "0.1.0"
 dependencies = [
+ "book_model",
  "chrono",
- "corpus_layout",
  "doc_reader",
+ "doc_repairer",
  "encoding_rs",
  "es_client",
- "file_record",
+ "file_indexer",
  "hwp3_parser",
- "hwp3_tables",
- "isbn",
- "parser_timeout",
+ "isbn_extractor",
+ "parse_stat_counter",
  "serde_json",
- "stat",
+ "sysdeps",
  "tempfile",
+ "text_decoder",
  "zip",
 ]
 
@@ -2582,11 +2722,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "parser_timeout"
+name = "parse_stat_counter"
 version = "0.1.0"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "pathfinder_geometry"
@@ -2605,6 +2742,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4500030c302e4af1d423f36f3b958d1aecb6c04184356ed5a833bf6b60435777"
 dependencies = [
  "rustc_version",
+]
+
+[[package]]
+name = "pdf_engine"
+version = "0.1.0"
+dependencies = [
+ "lopdf",
+ "mupdf",
+ "sysdeps",
+ "tempfile",
 ]
 
 [[package]]
@@ -2802,13 +2949,6 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
-
-[[package]]
-name = "pyfmt"
-version = "0.1.0"
-dependencies = [
- "serde_json",
-]
 
 [[package]]
 name = "quick-error"
@@ -3179,13 +3319,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "search"
+name = "search_manager"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
+ "common",
  "es_client",
- "pyfmt",
+ "log",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
  "serde_json",
+ "sysdeps",
+ "tempfile",
+ "ureq",
 ]
 
 [[package]]
@@ -3450,10 +3598,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
-name = "stat"
-version = "0.1.0"
-
-[[package]]
 name = "string_cache"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3574,9 +3718,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "libc",
- "lopdf",
- "mupdf",
- "serde_json",
+ "log",
  "tempfile",
 ]
 
@@ -3640,6 +3782,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5985fde5befe4ffa77a052e035e16c2da86e8bae301baa9f9904ad3c494d357"
 dependencies = [
  "testcontainers",
+]
+
+[[package]]
+name = "text_decoder"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "regex",
 ]
 
 [[package]]
@@ -3874,19 +4024,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "trainer"
-version = "0.1.0"
-dependencies = [
- "bookstore",
- "classifier",
- "es_client",
- "log",
- "regex",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3909,12 +4046,6 @@ name = "unicode-bidi"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
-
-[[package]]
-name = "unicode-general-category"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b993bddc193ae5bd0d623b49ec06ac3e9312875fdae725a975c51db1cc1677f"
 
 [[package]]
 name = "unicode-ident"
@@ -4346,6 +4477,14 @@ checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
  "rustix",
+]
+
+[[package]]
+name = "xml_recoverer"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "roxmltree",
 ]
 
 [[package]]

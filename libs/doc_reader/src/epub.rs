@@ -1,25 +1,28 @@
-//! EPUB 읽기. 원본: `Loader.read_from_epub`(ebooklib)와 `read_from_epub_with_extracting_zip`(정규식 대체 경로).
+//! EPUB 읽기. OPF 패키지(매니페스트·스파인)를 따라 읽고, 실패하면 정규식으로 챕터만 읽는 대체 경로로 간다.
 //!
-//! ebooklib 경로가 예외를 내면(필수 요소 누락, 매니페스트 항목이 ZIP에 없음, NCX·nav 해석 실패 등)
+//! 패키지 경로가 실패하면(필수 요소 누락, 매니페스트 항목이 ZIP에 없음, NCX·nav 해석 실패 등)
 //! 정규식으로 챕터만 읽는 대체 경로로 간다. 두 경로는 결과가 달라서 어느 쪽으로 갔는지가 중요하다.
 //!
-//! 본문은 ebooklib처럼 `<body>`를 `etree.tostring(pretty_print=True)`로 직렬화했다가 다시 파싱한 글이다.
-//! libxml2의 들여쓰기 출력은 자식이 요소뿐인 요소에서 줄바꿈을 더한다. 그 줄바꿈을 [`pretty_text`]가 흉내 낸다.
+//! 본문은 `<body>`를 들여쓰기 직렬화했다가 다시 읽은 글이다.
+//! 들여쓰기 출력은 자식이 요소뿐인 요소에서 줄바꿈을 더한다. 그 줄바꿈을 [`pretty_text`]가 흉내 낸다.
 
 use std::collections::HashSet;
 use std::io::Read;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use corpus_common::reader::{Zip, open_zip};
-use corpus_common::util::{posix_dirname, posix_join, posix_normpath, unquote};
+use common::url_parser::unquote;
+use common::zip_reader::zip_entry_name;
+use common::zip_reader::{MemberError, Zip, open_zip};
 use ego_tree::NodeRef;
 use regex::Regex;
 use scraper::{Html, Node};
+use serde_json::{Value, json};
+use xml_recoverer::{close_open_tags, strip_doctype, strip_unknown_entities};
 
 use crate::TEXT_SIZE;
 use crate::markup::{count_lines, get_body_text, is_blank_char_text};
-use crate::pytext::{head_chars, keep_word_chars};
+use crate::text_normalizer::{head_chars, keep_word_chars};
 
 const CONTAINER_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
 const OPF_NS: &str = "http://www.idpf.org/2007/opf";
@@ -31,7 +34,7 @@ const XHTML_MEDIA_TYPE: &str = "application/xhtml+xml";
 /// 어떤 경로로 읽혔나. 통계(`normal_epub_count` / `zipped_epub_count`)에 쓴다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EpubPath {
-    /// ebooklib 경로
+    /// OPF 패키지 경로
     Normal,
     /// 정규식 대체 경로
     Zipped,
@@ -78,15 +81,14 @@ fn parse_xml(bytes: &[u8]) -> Result<(String, ()), String> {
 }
 
 fn xml_doc(text: &str) -> Result<roxmltree::Document<'_>, String> {
-    roxmltree::Document::parse_with_options(text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).map_err(|e| format!("XML 해석 실패: {e}"))
+    common::xml_parser::parse_xml(text).map_err(|e| format!("XML 해석 실패: {e}"))
 }
 
 fn read_member(zip: &mut Zip, name: &str) -> Result<Vec<u8>, String> {
-    let file = zip.by_name(name).map_err(|_| format!("KeyError: {name}"))?;
-    // 헤더의 선언 크기는 믿지 않는다(zip bomb). 미리 할당하지 않고 상한까지만 푼다.
-    let mut buf = Vec::new();
-    file.take(corpus_common::reader::MAX_MEMBER_BYTES).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
-    Ok(buf)
+    common::zip_reader::read_member_prefix(zip, name, common::zip_reader::MAX_MEMBER_BYTES).map_err(|error| match error {
+        MemberError::Open(_) => format!("ZIP 항목이 없다: {name}"),
+        other => format!("{name}: {other}"),
+    })
 }
 
 /// 매니페스트 항목.
@@ -104,8 +106,8 @@ fn child<'a, 'b>(node: roxmltree::Node<'a, 'b>, ns: &str, name: &str) -> Option<
     node.children().find(|c| c.is_element() && c.tag_name().name() == name && c.tag_name().namespace() == Some(ns))
 }
 
-/// ebooklib 경로. 예외가 날 상황이면 `Err`.
-fn read_with_ebooklib(path: &Path) -> Result<(String, usize), String> {
+/// OPF 패키지 경로. 패키지가 깨졌으면 `Err`.
+fn read_with_package(path: &Path) -> Result<(String, usize), String> {
     let mut zip = open_zip(path).ok_or("Bad Zip file")?;
     let names: HashSet<String> = zip.file_names().filter_map(|n| n.ok()).map(|n| n.into_owned()).collect();
 
@@ -116,19 +118,20 @@ fn read_with_ebooklib(path: &Path) -> Result<(String, usize), String> {
     let mut opf_file = String::new();
     for rootfile in container.descendants().filter(|n| n.is_element() && n.tag_name().name() == "rootfile" && n.tag_name().namespace() == Some(CONTAINER_NS)) {
         if rootfile.attribute("media-type") == Some(OEBPS_MEDIA_TYPE) {
-            opf_file = rootfile.attribute("full-path").ok_or("TypeError: full-path 없음")?.to_owned();
+            opf_file = rootfile.attribute("full-path").ok_or("rootfile에 full-path가 없다")?.to_owned();
         }
     }
-    let opf_dir = posix_dirname(&opf_file);
+    let opf_dir = Path::new(&opf_file).parent().map(Path::to_path_buf).unwrap_or_default();
 
     // OPF
-    let opf_bytes = read_member(&mut zip, &posix_normpath(&opf_file)).map_err(|_| "Can not find container file".to_owned())?;
+    let opf_name = zip_entry_name(&opf_file).ok_or("Can not find container file")?;
+    let opf_bytes = read_member(&mut zip, &opf_name).map_err(|_| "Can not find container file".to_owned())?;
     let (opf_text, ()) = parse_xml(&opf_bytes)?;
     let opf = xml_doc(&opf_text)?;
     let root = opf.root_element();
 
     // 메타데이터: 요소마다 네임스페이스가 있어야 한다(없으면 KeyError).
-    let metadata = child(root, OPF_NS, "metadata").ok_or("AttributeError: metadata 없음")?;
+    let metadata = child(root, OPF_NS, "metadata").ok_or("OPF에 metadata가 없다")?;
     let mut titles: Vec<Option<String>> = Vec::new();
     let mut creators: Vec<Option<String>> = Vec::new();
     for t in metadata.children().filter(|c| c.is_element()) {
@@ -137,7 +140,7 @@ fn read_with_ebooklib(path: &Path) -> Result<(String, usize), String> {
         if is_meta {
             continue;
         }
-        let ns = t.tag_name().namespace().ok_or("KeyError: 네임스페이스 없는 메타데이터 요소")?;
+        let ns = t.tag_name().namespace().ok_or("메타데이터 요소에 네임스페이스가 없다")?;
         if ns == DC_NS {
             let text = t.first_child().filter(|c| c.is_text()).and_then(|c| c.text()).map(str::to_owned);
             match t.tag_name().name() {
@@ -149,29 +152,29 @@ fn read_with_ebooklib(path: &Path) -> Result<(String, usize), String> {
     }
 
     // 매니페스트: 모든 항목의 멤버가 ZIP에 있어야 한다.
-    let manifest = child(root, OPF_NS, "manifest").ok_or("TypeError: manifest 없음")?;
+    let manifest = child(root, OPF_NS, "manifest").ok_or("OPF에 manifest가 없다")?;
     let mut items: Vec<Item> = Vec::new();
     for r in manifest.children().filter(|c| c.is_element() && c.tag_name().name() == "item" && c.tag_name().namespace() == Some(OPF_NS)) {
         let media_type = r.attribute("media-type");
-        let href = r.attribute("href").ok_or("TypeError: href 없음")?;
+        let href = r.attribute("href").ok_or("href가 없다")?;
         let file_name = unquote(href);
         let properties: Vec<&str> = r.attribute("properties").map(|p| p.split(' ').collect()).unwrap_or_default();
         let is_xhtml = media_type == Some(XHTML_MEDIA_TYPE);
         let is_nav = is_xhtml && properties.contains(&"nav");
-        // nav 항목만 href를 풀지 않은 채로 멤버를 찾는다(ebooklib의 동작).
-        let member_name = if is_nav { posix_normpath(&posix_join(&opf_dir, href)) } else { posix_normpath(&posix_join(&opf_dir, &file_name)) };
+        // nav 항목만 href를 풀지 않은 채로 멤버를 찾는다.
+        let member_name = zip_entry_name(opf_dir.join(if is_nav { href } else { file_name.as_str() })).ok_or_else(|| format!("ZIP 밖을 가리키는 href: {href}"))?;
         if !names.contains(&member_name) {
-            return Err(format!("KeyError: {member_name}"));
+            return Err(format!("ZIP 항목이 없다: {member_name}"));
         }
         items.push(Item { id: r.attribute("id").map(str::to_owned), file_name, member: member_name, is_document: is_xhtml, is_nav });
     }
 
     // 스파인과 목차
-    let spine = child(root, OPF_NS, "spine").ok_or("TypeError: spine 없음")?;
+    let spine = child(root, OPF_NS, "spine").ok_or("OPF에 spine이 없다")?;
     let nav_item = items.iter().find(|i| i.is_nav);
     if let Some(toc) = spine.attribute("toc").filter(|t| !t.is_empty()) {
-        let item = items.iter().find(|i| i.id.as_deref() == Some(toc)).ok_or("AttributeError: ncx 항목 없음")?;
-        let ncx_name = posix_normpath(&posix_join(&opf_dir, &item.file_name));
+        let item = items.iter().find(|i| i.id.as_deref() == Some(toc)).ok_or("spine의 toc가 가리키는 ncx 항목이 없다")?;
+        let ncx_name = zip_entry_name(opf_dir.join(&item.file_name)).ok_or("Can not find ncx file.")?;
         let ncx_bytes = read_member(&mut zip, &ncx_name).map_err(|_| "Can not find ncx file.".to_owned())?;
         validate_ncx(&ncx_bytes)?;
     }
@@ -179,11 +182,10 @@ fn read_with_ebooklib(path: &Path) -> Result<(String, usize), String> {
         let nav_bytes = read_member(&mut zip, &nav.member)?;
         let toc_parsed = spine.attribute("toc").is_some_and(|t| !t.is_empty());
         let nav_text = String::from_utf8_lossy(&nav_bytes).into_owned();
-        let base = posix_dirname(&nav.file_name);
         if !toc_parsed {
-            validate_nav(&nav_text, &base, "toc")?;
+            validate_nav(&nav_text, "toc")?;
         }
-        validate_nav(&nav_text, &base, "page-list")?;
+        validate_nav(&nav_text, "page-list")?;
     }
 
     // 본문
@@ -212,7 +214,7 @@ fn read_with_ebooklib(path: &Path) -> Result<(String, usize), String> {
 fn validate_ncx(bytes: &[u8]) -> Result<(), String> {
     let (text, ()) = parse_xml(bytes)?;
     let doc = xml_doc(&text)?;
-    let nav_map = child(doc.root_element(), DAISY_NS, "navMap").ok_or("AttributeError: navMap 없음")?;
+    let nav_map = child(doc.root_element(), DAISY_NS, "navMap").ok_or("NCX에 navMap이 없다")?;
     fn walk(node: roxmltree::Node) -> Result<(), String> {
         for a in node.children().filter(|c| c.is_element()) {
             if a.tag_name().namespace() != Some(DAISY_NS) {
@@ -237,7 +239,7 @@ fn element_children<'a>(node: NodeRef<'a, Node>, name: &str) -> Vec<NodeRef<'a, 
 }
 
 /// nav 문서를 읽다 예외가 날 상황인지 본다(`_parse_nav`). `kind`는 `toc` 또는 `page-list`.
-fn validate_nav(markup: &str, _base: &str, kind: &str) -> Result<(), String> {
+fn validate_nav(markup: &str, kind: &str) -> Result<(), String> {
     if markup.trim().is_empty() {
         return Err("ParserError: Document is empty".into());
     }
@@ -246,7 +248,7 @@ fn validate_nav(markup: &str, _base: &str, kind: &str) -> Result<(), String> {
     let Some(nav) = nav else {
         return if kind == "toc" { Err("IndexError: nav toc 없음".into()) } else { Ok(()) };
     };
-    let ol = element_children(nav, "ol").into_iter().next().ok_or("AttributeError: nav에 ol 없음")?;
+    let ol = element_children(nav, "ol").into_iter().next().ok_or("nav에 ol이 없다")?;
     fn parse_list(list: NodeRef<Node>) -> Result<(), String> {
         for li in element_children(list, "li") {
             let sublist = element_children(li, "ol").into_iter().next();
@@ -257,12 +259,12 @@ fn validate_nav(markup: &str, _base: &str, kind: &str) -> Result<(), String> {
                 if let Some(link) = link
                     && !href_ok(link)
                 {
-                    return Err("TypeError: href 없음".into());
+                    return Err("href가 없다".into());
                 }
             } else if let Some(link) = link
                 && !href_ok(link)
             {
-                return Err("TypeError: href 없음".into());
+                return Err("href가 없다".into());
             }
         }
         Ok(())
@@ -274,7 +276,7 @@ fn decode_markup(content: &[u8]) -> String {
     let content = content.strip_prefix(b"\xef\xbb\xbf").unwrap_or(content);
     match std::str::from_utf8(content) {
         Ok(s) => s.to_owned(),
-        Err(_) => crate::text::decode_markup_bytes(content).unwrap_or_else(|| String::from_utf8_lossy(content).into_owned()),
+        Err(_) => crate::body_decoder::decode_markup_bytes(content).unwrap_or_else(|| String::from_utf8_lossy(content).into_owned()),
     }
 }
 
@@ -337,7 +339,7 @@ fn emit_pretty(node: NodeRef<Node>, format: bool, skip_leading: bool, tail: &str
     }
 }
 
-/// ebooklib `get_body_content`를 거친 뒤 `(soup.body or soup).get_text()`와 같은 글.
+/// 문서의 `<body>`(없으면 문서 전체) 본문 텍스트.
 pub fn pretty_text(markup: &str) -> Option<String> {
     pretty_text_in(&crate::markup::parse(markup), markup)
 }
@@ -350,7 +352,7 @@ fn pretty_text_in(doc: &Html, markup: &str) -> Option<String> {
     }
     let has_attrs = matches!(body.value(), Node::Element(e) if e.attrs().next().is_some());
     let mut out = String::new();
-    // `<body>` 태그가 속성 없이 `<body>`로 시작하면 ebooklib가 태그를 떼어 낸다.
+    // `<body>` 태그가 속성 없이 `<body>`로 시작하면 태그를 떼어 낸다.
     emit_pretty(body, true, !has_attrs, &crate::markup::relocated_tail(markup), &mut out);
     Some(out)
 }
@@ -363,11 +365,11 @@ pub fn document_text_and_lines(content: &[u8]) -> Result<(String, usize), String
     }
     let doc = crate::markup::parse(&markup);
     let body = doc.tree.root().descendants().find(|n| matches!(n.value(), Node::Element(e) if e.name() == "body"));
-    // lxml은 본문이 없는 문서(머리만 있는 문서)에서 body를 만들지 않아 `len(None)`에서 예외가 난다.
+    // 본문이 없는 문서(머리만 있는 문서)는 body가 없어 실패로 본다.
     let body_children = body.map_or(0, child_count);
     let has_body_text = body.is_some_and(|b| b.children().any(|c| matches!(c.value(), Node::Text(t) if !t.trim().is_empty())));
     if body_children == 0 && !has_body_text && !markup.to_ascii_lowercase().contains("<body") {
-        return Err("TypeError: object of type 'NoneType' has no len()".into());
+        return Err("문서에 body가 없다".into());
     }
     let lines = crate::markup::count_lines_in(&doc);
     let text = pretty_text_in(&doc, &markup).unwrap_or_else(|| get_body_text(&markup));
@@ -402,7 +404,7 @@ fn read_with_zip_regex_using(path: &Path, errors: &mut Vec<String>, parse: &Chap
     let Some(caps) = ROOTFILE.captures(&container) else { return Ok((String::new(), 0)) };
     let root_file = caps[1].to_owned();
     let root_dir = root_file.rsplit_once('/').map_or(String::new(), |(d, _)| d.to_owned());
-    let opf = decode_utf8_ignore(&read_member(&mut zip, &root_file)?);
+    let opf = text_decoder::decode_utf8_ignore(&read_member(&mut zip, &root_file)?);
 
     let mut result = String::new();
     let mut line_count = 0;
@@ -422,11 +424,7 @@ fn read_with_zip_regex_using(path: &Path, errors: &mut Vec<String>, parse: &Chap
     Ok((head_chars(&result, TEXT_SIZE).to_owned(), line_count))
 }
 
-fn decode_utf8_ignore(bytes: &[u8]) -> String {
-    corpus_common::reader::decode_utf8_ignore(bytes)
-}
-
-/// EPUB 파일: (요약, 줄 수). ebooklib 경로가 실패하면 정규식 경로로 간다.
+/// EPUB 파일: (요약, 줄 수). 패키지 경로가 실패하면 정규식 경로로 간다.
 pub fn read_from_epub(path: &Path) -> EpubRead {
     read_from_epub_with(path, &EpubHooks::default())
 }
@@ -434,7 +432,7 @@ pub fn read_from_epub(path: &Path) -> EpubRead {
 /// EPUB을 읽는다. 테스트와 호출자가 normal reader 실패를 재현할 수 있다.
 pub fn read_from_epub_with(path: &Path, hooks: &EpubHooks<'_>) -> EpubRead {
     let mut errors = Vec::new();
-    let normal = hooks.read_epub.map_or_else(|| read_with_ebooklib(path), |reader| reader(path));
+    let normal = hooks.read_epub.map_or_else(|| read_with_package(path), |reader| reader(path));
     let (result, line_count, used) = match normal {
         Ok((result, lines)) => (result, lines, EpubPath::Normal),
         Err(first) => match read_with_zip_regex(path, &mut errors) {
@@ -481,14 +479,108 @@ pub fn read_from_epub_with_extracting_zip_using(path: &Path, parse: &ChapterPars
 }
 
 /// EPUB의 `dc:publisher`. OPF 하나만 풀고 본문은 읽지 않는다. 읽을 수 없으면 빈 문자열이다.
-/// 원본: `backend/classifier/reader.py`의 `read_epub_publisher`.
 pub fn read_epub_publisher(path: &Path) -> String {
     static DC_PUBLISHER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)<dc:publisher[^>]*>(.*?)</dc:publisher>").unwrap());
     static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
-    let Some(mut zip) = open_zip(path) else { return String::new() };
-    let opf = zip.file_names().filter_map(|n| n.ok()).map(|n| n.into_owned()).find(|n| n.to_lowercase().ends_with(".opf"));
-    let Some(opf) = opf else { return String::new() };
-    let Ok(bytes) = read_member(&mut zip, &opf) else { return String::new() };
-    let xml = String::from_utf8_lossy(&bytes).into_owned();
+    let Some(xml) = read_opf_text(path) else { return String::new() };
     DC_PUBLISHER.captures_iter(&xml).map(|c| TAG.replace_all(&c[1], "").trim().to_owned()).filter(|v| !v.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+/// 첫 `.opf` 멤버(대소문자 무시)를 글로 읽는다. 멤버가 너무 많거나 OPF가 상한을 넘거나 못 읽으면 `None`이다.
+/// 선언 크기를 속인 항목도 상한 이상은 읽지 않는다. 앞의 BOM은 뗀다.
+fn read_opf_text(path: &Path) -> Option<String> {
+    let mut zip = open_zip(path)?;
+    if zip.len() > MAX_ZIP_ENTRIES {
+        return None;
+    }
+    let index = zip.file_names().position(|n| n.as_ref().is_ok_and(|n| n.to_lowercase().ends_with(".opf")))?;
+    let entry = zip.by_index(index).ok()?;
+    if entry.size() > MAX_OPF_BYTES as u64 {
+        log::warn!("OPF too large, skipping metadata ({} bytes)", entry.size());
+        return None;
+    }
+    let mut raw = Vec::new();
+    if entry.take(MAX_OPF_BYTES as u64 + 1).read_to_end(&mut raw).is_err() || raw.len() > MAX_OPF_BYTES {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&raw);
+    Some(text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned())
+}
+
+// ---- OPF 메타데이터 ----
+// title, author, subject, description. `epubveri` 보고서가 출판 정보를 채울 때 쓴다.
+// OPF는 신뢰할 수 없는 입력으로 다룬다: DTD를 읽지 않고(엔티티 폭탄·외부 엔티티 차단), 크기 상한을 두고,
+// 깨진 XML은 태그 구조를 복구해 한 번 더 읽는다.
+
+/// 읽을 OPF 크기 상한.
+pub const MAX_OPF_BYTES: usize = 8 * 1024 * 1024;
+/// 이보다 멤버가 많은 ZIP에서는 OPF를 읽지 않는다.
+const MAX_ZIP_ENTRIES: usize = 100_000;
+
+/// EPUB 의 OPF 에서 읽은 메타데이터.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EpubMetadata {
+    pub title: String,
+    pub author: String,
+    pub subject: String,
+    pub description: String,
+}
+
+impl PartialEq<Value> for EpubMetadata {
+    fn eq(&self, other: &Value) -> bool {
+        *other == json!({"title": self.title, "author": self.author, "subject": self.subject, "description": self.description})
+    }
+}
+
+fn parse_opf(xml: &str, meta: &mut EpubMetadata) -> bool {
+    // DTD 는 읽지 않는다. 엔티티 폭탄(CWE-776)과 외부 엔티티(CWE-611)를 둘 다 이 한 줄로 막는다.
+    let strict = roxmltree::Document::parse(xml);
+    let cleaned;
+    let recovered;
+    let doc = match strict {
+        Ok(d) => d,
+        Err(_) => {
+            // 복구: DOCTYPE 과 알 수 없는 엔티티 참조를 걷어내고 한 번 더 읽는다. 엔티티 내용은 읽지 않는다.
+            cleaned = strip_unknown_entities(&strip_doctype(xml));
+            match roxmltree::Document::parse(&cleaned) {
+                Ok(d) => d,
+                Err(_) => {
+                    recovered = close_open_tags(&cleaned);
+                    match roxmltree::Document::parse(&recovered) {
+                        Ok(d) => d,
+                        Err(_) => return false,
+                    }
+                }
+            }
+        }
+    };
+    for node in doc.descendants().filter(|n| n.is_element()) {
+        let tag = node.tag_name().name().to_lowercase();
+        let text = node.first_child().filter(|c| c.is_text()).and_then(|c| c.text()).filter(|t| !t.is_empty());
+        let Some(text) = text else { continue };
+        let text = text.trim();
+        match tag.as_str() {
+            "title" if meta.title.is_empty() => meta.title = text.to_string(),
+            "creator" | "author" if meta.author.is_empty() => meta.author = text.to_string(),
+            "subject" => {
+                if meta.subject.is_empty() {
+                    meta.subject = text.to_string();
+                } else {
+                    meta.subject = format!("{} > {text}", meta.subject);
+                }
+            }
+            "description" if meta.description.is_empty() => meta.description = text.to_string(),
+            _ => {}
+        }
+    }
+    true
+}
+
+/// EPUB 파일 내부의 `.opf` 메타데이터(title, author, subject, description)를 읽는다. 못 읽으면 빈 값이다.
+pub fn inspect_epub_metadata(path: &Path) -> EpubMetadata {
+    let mut found = EpubMetadata::default();
+    match read_opf_text(path) {
+        Some(text) if parse_opf(&text, &mut found) => found,
+        _ => EpubMetadata::default(),
+    }
 }

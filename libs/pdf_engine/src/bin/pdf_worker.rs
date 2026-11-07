@@ -1,0 +1,11 @@
+fn main() -> std::process::ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut out = std::io::stdout().lock();
+    match pdf_engine::pdf_worker_client::run_worker(&args, &mut out) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::ExitCode::from(1)
+        }
+    }
+}

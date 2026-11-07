@@ -1,50 +1,67 @@
-//! Elasticsearch REST 클라이언트. `backend/es_manager.py`의 `ESManager` 중 검색 부분의 이식.
+//! Elasticsearch REST 클라이언트(검색).
 //!
 //! HTTP와 TLS 검증 HTTPS를 지원한다. 자체 CA는 `TM_ES_CA_CERT` PEM 파일로 지정한다.
-//! 연산 이름과 JSON 인자를 받는 저수준 전송은 [`transport`]에 있다. backend `ESManager`가 그것을 쓴다.
+//! HTTP 요청은 모두 저수준 전송 [`transport`]를 거친다. [`EsClient`]는 그 위의 검색·색인 연산이고,
+//! backend `ESManager`도 같은 전송 위에서 [`EsClient::from_transport`]로 색인 연산을 쓴다.
 //! 접속 정보는 환경변수 `TM_ES_BOOK_INDEX`, `TM_ES_URL`, `TM_ES_USER`, `TM_ES_PASSWORD`에서 읽는다.
 
 pub mod indexing;
 pub mod transport;
 
 use std::fmt;
-use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
-/// 목록 응답에 필요한 필드만 받는다. summary는 단건 조회에만 쓴다(원본 `LIST_SOURCE_FIELDS`).
+use crate::transport::{EsRequest, EsTransport, HttpTransport};
+
+/// 목록 응답에 필요한 필드만 받는다. summary는 단건 조회에만 쓴다.
 pub const LIST_SOURCE_FIELDS: [&str; 11] = ["category", "title", "author", "file_path", "file_type", "file_size", "line_count", "page_count", "isbn", "created_time", "updated_time"];
 
 /// HTTP(S) agent를 만든다. CA를 지정하면 그 인증서를 TLS trust root로 사용한다.
 pub fn build_agent(timeout: Duration, ca_cert_path: Option<&Path>) -> Result<ureq::Agent, String> {
-    let mut builder = ureq::Agent::config_builder().timeout_global(Some(timeout)).http_status_as_error(false);
-    if let Some(path) = ca_cert_path {
-        let pem = fs::read(path).map_err(|error| format!("ES CA 인증서를 읽지 못했다 ({}): {error}", path.display()))?;
-        let certs = ureq::tls::parse_pem(&pem)
-            .filter_map(|item| match item {
-                Ok(ureq::tls::PemItem::Certificate(cert)) => Some(Ok(cert)),
-                Ok(ureq::tls::PemItem::PrivateKey(_)) => None,
-                Err(error) => Some(Err(error)),
-                _ => None,
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("ES CA 인증서 PEM을 해석하지 못했다: {error}"))?;
-        if certs.is_empty() {
-            return Err(format!("ES CA 인증서 PEM에 X.509 certificate가 없다: {}", path.display()));
-        }
-        let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::new_with_certs(&certs)).build();
-        builder = builder.tls_config(tls);
-    }
-    Ok(builder.build().into())
+    http_client::http_client_with_timeout(timeout, ca_cert_path).map_err(|error| format!("ES {error}"))
 }
 
 const DEFAULT_MAX_RESULT_COUNT: usize = 10;
 /// ES `max_result_window` 기본값. 이 이하는 scroll 없이 한 번에 받는다.
 const MAX_RESULT_WINDOW: usize = 10_000;
-const SIMILAR_SUMMARY_MAX_QUERY_TERMS: u32 = 25;
-const SIMILAR_SUMMARY_MIN_DOC_FREQ: u32 = 3;
+pub const SIMILAR_SUMMARY_MAX_QUERY_TERMS: u32 = 25;
+pub const SIMILAR_SUMMARY_MIN_DOC_FREQ: u32 = 3;
+/// 제목·확장자·크기 검색 질의. 제목 단어가 많을수록 제목 boost를 키운다.
+/// 공백 하나(`" "`)를 기준으로 나눈 조각 수. 빈 문자열도 1개다.
+pub fn title_query(title: &str, file_type: &str, file_size: i64) -> Value {
+    let words = title.split(' ').count() as f64;
+    json!({"bool": {"should": [
+        {"match": {"title": {"query": title, "boost": 1.2 + words.log2()}}},
+        {"match": {"file_type": {"query": file_type, "boost": 1}}},
+        {"match": {"file_size": {"query": file_size, "boost": 1}}},
+    ]}})
+}
+
+/// 유사 문서 검색의 should 절.
+/// summary 원문을 match로 넣으면 nori가 토큰 1,000여 개로 쪼개 3.5초 걸려서 more_like_this로 상위 용어만 쓴다.
+pub fn similar_should_clauses(title: &str, author: &str, file_size: i64, summary: &str) -> Vec<Value> {
+    let size = file_size as f64;
+    vec![
+        json!({"match": {"title": {"query": title, "boost": 20}}}),
+        json!({"match": {"author": {"query": author, "boost": 15}}}),
+        json!({"more_like_this": {"fields": ["summary"], "like": summary, "max_query_terms": SIMILAR_SUMMARY_MAX_QUERY_TERMS, "min_term_freq": 1, "min_doc_freq": SIMILAR_SUMMARY_MIN_DOC_FREQ, "boost": 3}}),
+        json!({"range": {"file_size": {"gte": size * 0.9, "lte": size * 1.1, "boost": 1}}}),
+    ]
+}
+
+/// 유사 문서 검색 질의. `exclude_id`가 있으면 그 문서를 결과에서 뺀다.
+pub fn similar_query(title: &str, author: &str, file_size: i64, summary: &str, exclude_id: Option<i64>) -> Value {
+    let mut query = json!({"bool": {"should": similar_should_clauses(title, author, file_size, summary), "minimum_should_match": 1}});
+    if let Some(id) = exclude_id {
+        query["bool"]["must_not"] = json!([{"term": {"_id": id.to_string()}}]);
+    }
+    query
+}
+
 const ENV_KEYS: [&str; 4] = ["TM_ES_BOOK_INDEX", "TM_ES_URL", "TM_ES_USER", "TM_ES_PASSWORD"];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,7 +71,10 @@ pub enum EsError {
     /// 연결 실패나 시간 초과 같은 전송 계층 오류.
     Transport(String),
     /// ES가 오류 상태 코드를 돌려줬다.
-    Status { status: u16, body: String },
+    Status {
+        status: u16,
+        body: String,
+    },
     /// 응답 본문을 해석할 수 없다.
     Parse(String),
     /// 이 구현에 없는 연산.
@@ -83,7 +103,7 @@ impl EsError {
         matches!(self, EsError::Status { status: 404, .. })
     }
 
-    /// 연결을 만들지 못했거나 응답을 해석하지 못했다. Python `ConnectionError`, `ConnectionTimeout`, `SerializationError`에 대응한다.
+    /// 연결을 만들지 못했거나 응답을 해석하지 못했다. 연결 실패, 시간 초과, 응답 해석 실패가 여기에 든다.
     pub fn is_connection(&self) -> bool {
         matches!(self, EsError::Transport(_) | EsError::Parse(_))
     }
@@ -103,21 +123,14 @@ pub trait BookSearch {
     fn search_similar_docs(&self, summary: &str) -> Result<Vec<Hit>, EsError>;
 }
 
-/// ES REST 호출의 HTTP 메서드.
-#[derive(Clone, Copy)]
-enum Method {
-    Get,
-    Post,
-    Put,
-    Delete,
-}
-
+/// 검색·색인 연산. 요청은 모두 [`EsTransport`]로 보낸다.
 pub struct EsClient {
-    agent: ureq::Agent,
-    base: String,
-    auth: String,
+    transport: Arc<dyn EsTransport>,
     pub index: String,
 }
+
+/// `EsClient`가 직접 접속할 때 쓰는 요청 시간 상한.
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) fn base64(input: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -138,8 +151,18 @@ impl EsClient {
     }
 
     pub fn new_with_ca(url: &str, user: &str, password: &str, index: &str, ca_cert_path: Option<&Path>) -> Result<Self, EsError> {
-        let agent = build_agent(Duration::from_secs(10), ca_cert_path).map_err(EsError::Transport)?;
-        Ok(EsClient { agent, base: url.trim_end_matches('/').to_owned(), auth: format!("Basic {}", base64(format!("{user}:{password}").as_bytes())), index: index.to_owned() })
+        let transport = HttpTransport::try_new_with_ca(url, user, password, index, CLIENT_TIMEOUT, ca_cert_path).map_err(EsError::Transport)?;
+        Ok(Self::from_transport(Arc::new(transport)))
+    }
+
+    /// 이미 있는 전송 위에서 연산을 쓴다. 색인 이름은 전송의 기본 색인이다.
+    pub fn from_transport(transport: Arc<dyn EsTransport>) -> Self {
+        let index = transport.index_name().to_owned();
+        EsClient { transport, index }
+    }
+
+    pub(crate) fn send(&self, request: &EsRequest) -> Result<Value, EsError> {
+        self.transport.send(request)
     }
 
     /// 환경변수에서 접속 정보를 읽고 지정된 색인을 사용한다.
@@ -151,52 +174,18 @@ impl EsClient {
 
     pub fn from_env() -> Result<Self, EsError> {
         let get = |k: &str| std::env::var(k).map_err(|_| EsError::MissingEnv(k.to_owned()));
-        // 원본과 같은 순서로 확인해 처음 빠진 변수를 알린다.
+        // 정해진 순서로 확인해 처음 빠진 변수를 알린다.
         for key in ENV_KEYS {
             get(key)?;
         }
         Self::from_env_with_index(&get("TM_ES_BOOK_INDEX")?)
     }
 
-    /// 요청 URL. http·https가 아니면 보내지 않는다.
-    fn url(&self, path: &str) -> Result<String, EsError> {
-        let url = format!("{}{path}", self.base);
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(EsError::Transport(format!("ES URL은 http 또는 https여야 한다: {}", self.base)));
-        }
-        Ok(url)
-    }
-
-    /// 응답 상태를 확인하고 본문을 JSON으로 읽는다.
-    fn finish(result: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<Value, EsError> {
-        let mut resp = result.map_err(|e| EsError::Transport(e.to_string()))?;
-        let status = resp.status().as_u16();
-        let text = resp.body_mut().read_to_string().map_err(|e| EsError::Transport(e.to_string()))?;
-        if status >= 400 {
-            return Err(EsError::Status { status, body: text });
-        }
-        serde_json::from_str(&text).map_err(|e| EsError::Parse(e.to_string()))
-    }
-
-    fn call(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Value, EsError> {
-        let url = self.url(path)?;
-        let auth = &self.auth;
-        Self::finish(match (method, body) {
-            (Method::Post, Some(b)) => self.agent.post(&url).header("Authorization", auth).send_json(b),
-            (Method::Post, None) => self.agent.post(&url).header("Authorization", auth).send_empty(),
-            (Method::Put, Some(b)) => self.agent.put(&url).header("Authorization", auth).send_json(b),
-            (Method::Put, None) => self.agent.put(&url).header("Authorization", auth).send_empty(),
-            (Method::Delete, Some(b)) => self.agent.delete(&url).header("Authorization", auth).force_send_body().send_json(b),
-            (Method::Delete, None) => self.agent.delete(&url).header("Authorization", auth).call(),
-            (Method::Get, _) => self.agent.get(&url).header("Authorization", auth).call(),
-        })
-    }
-
     /// 접속을 확인한다. 실패하면 `2**(n+1)`초(최대 10초)씩 쉬며 `max_retries`번 시도한다.
     pub fn connect_with_retry(&self, max_retries: u32, sleep: &dyn Fn(u64)) -> Result<Value, EsError> {
         let mut last = None;
         for attempt in 0..max_retries {
-            match self.call(Method::Get, "/", None) {
+            match self.send(&EsRequest::Info) {
                 Ok(info) => return Ok(info),
                 Err(e) => {
                     if attempt + 1 < max_retries {
@@ -218,19 +207,19 @@ impl EsClient {
         if let Some(fields) = source_fields {
             body["_source"] = json!(fields);
         }
-        let response = self.call(Method::Post, &format!("/{}/_search", self.index), Some(&body))?;
+        let response = self.send(&EsRequest::search(body))?;
         let hits = &response["hits"];
         let Some(max_score) = hits["max_score"].as_f64() else { return Ok(Vec::new()) };
         let rows = hits["hits"].as_array().ok_or_else(|| EsError::Parse("hits.hits가 없다".into()))?;
         rows.iter().map(|hit| to_hit(hit, max_score)).collect()
     }
 
-    /// Python `_search`처럼 10,000건을 넘는 요청은 ES scroll context로 이어 읽는다.
+    /// 10,000건을 넘는 요청은 ES scroll context로 이어 읽는다.
     fn search_scroll(&self, query: &Value, max_result_count: usize) -> Result<Vec<Hit>, EsError> {
         let mut scroll_id: Option<String> = None;
         let outcome: Result<Vec<Hit>, EsError> = (|| {
             let body = json!({"query": query, "size": MAX_RESULT_WINDOW, "track_scores": true});
-            let mut response = self.call(Method::Post, &format!("/{}/_search?scroll=10m", self.index), Some(&body))?;
+            let mut response = self.send(&EsRequest::scroll_search(body, "10m"))?;
             scroll_id = response.get("_scroll_id").and_then(Value::as_str).map(str::to_owned);
             let mut result = Vec::new();
             loop {
@@ -247,7 +236,7 @@ impl EsClient {
                         return Ok(result);
                     }
                 }
-                let mut next = self.call(Method::Post, "/_search/scroll", Some(&json!({"scroll":"10m", "scroll_id":scroll_id.as_deref().unwrap_or("")})))?;
+                let mut next = self.send(&EsRequest::Scroll { scroll_id: scroll_id.clone().unwrap_or_default(), scroll: "10m".to_string() })?;
                 scroll_id = Some(next.get("_scroll_id").and_then(Value::as_str).ok_or_else(|| EsError::Parse("scroll 응답에 _scroll_id가 없다".into()))?.to_owned());
                 if next["hits"]["max_score"].as_f64().is_none() {
                     return Ok(Vec::new());
@@ -258,7 +247,7 @@ impl EsClient {
             Ok(result)
         })();
         if let Some(id) = scroll_id {
-            let _ = self.call(Method::Delete, "/_search/scroll", Some(&json!({"scroll_id": id})));
+            let _ = self.send(&EsRequest::ClearScroll { scroll_id: id });
         }
         outcome
     }
@@ -266,32 +255,12 @@ impl EsClient {
     /// 제목·확장자·크기로 찾는다. 기본 건수는 10건이다.
     pub fn search_by_title(&self, title: &str, file_type: &str, file_size: i64, max_result_count: Option<usize>) -> Result<Vec<Hit>, EsError> {
         let n = max_result_count.unwrap_or(DEFAULT_MAX_RESULT_COUNT);
-        // Python `title.split(" ")`처럼 공백 하나를 기준으로 센다. 빈 문자열도 1개다.
-        let words = title.split(' ').count() as f64;
-        let query = json!({"bool": {"should": [
-            {"match": {"title": {"query": title, "boost": 1.2 + words.log2()}}},
-            {"match": {"file_type": {"query": file_type, "boost": 1}}},
-            {"match": {"file_size": {"query": file_size, "boost": 1}}},
-        ]}});
-        self.search(query, n, Some(&LIST_SOURCE_FIELDS))
+        self.search(title_query(title, file_type, file_size), n, Some(&LIST_SOURCE_FIELDS))
     }
 
     pub fn search_similar_docs(&self, title: &str, author: &str, file_size: i64, summary: &str, max_result_count: Option<usize>, exclude_id: Option<i64>) -> Result<Vec<Hit>, EsError> {
         let n = max_result_count.unwrap_or(DEFAULT_MAX_RESULT_COUNT);
-        let size = file_size as f64;
-        let mut query = json!({"bool": {
-            "should": [
-                {"match": {"title": {"query": title, "boost": 20}}},
-                {"match": {"author": {"query": author, "boost": 15}}},
-                {"more_like_this": {"fields": ["summary"], "like": summary, "max_query_terms": SIMILAR_SUMMARY_MAX_QUERY_TERMS, "min_term_freq": 1, "min_doc_freq": SIMILAR_SUMMARY_MIN_DOC_FREQ, "boost": 3}},
-                {"range": {"file_size": {"gte": size * 0.9, "lte": size * 1.1, "boost": 1}}},
-            ],
-            "minimum_should_match": 1,
-        }});
-        if let Some(id) = exclude_id {
-            query["bool"]["must_not"] = json!([{"term": {"_id": id.to_string()}}]);
-        }
-        self.search(query, n, Some(&LIST_SOURCE_FIELDS))
+        self.search(similar_query(title, author, file_size, summary, exclude_id), n, Some(&LIST_SOURCE_FIELDS))
     }
 }
 

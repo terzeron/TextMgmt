@@ -4,7 +4,7 @@ Rust 1.91을 유지한다. MuPDF Rust crate 0.8.0(C core 1.27.2)로 쪽수, 텍�
 
 ## 실행과 제한
 
-`libs/sysdeps/src/pdf.rs`는 공용 adapter다. `tm-pdf-worker`는 같은 workspace에서 빌드하는 Rust 실행 파일이며 MuPDF CLI가 아니다. worker 내부에서 MuPDF Rust library를 직접 호출한다. `prlimit` 주소 공간 512MiB·CPU 25초와 부모의 30초 timeout을 유지한다. 실패·시간 초과 시에는 기존 호출자의 오류/fallback 경로를 사용한다.
+`libs/pdf_engine/src/pdf_worker_client.rs`는 공용 adapter다. `tm-pdf-worker`는 같은 workspace에서 빌드하는 Rust 실행 파일이며 MuPDF CLI가 아니다. worker 내부에서 MuPDF Rust library를 직접 호출한다. `prlimit` 주소 공간 512MiB·CPU 25초와 부모의 30초 timeout을 유지한다. 실패·시간 초과 시에는 기존 호출자의 오류/fallback 경로를 사용한다.
 
 Noto Serif CJK collection을 MuPDF FontLoader로 연결한다. KR face index는 1이며 regular/bold를 제공한다. base14-fonts는 번들로 포함한다. JPEG·zlib·FreeType·HarfBuzz·JPEG2000 디코더는 시스템 라이브러리를 사용해 번들 JPEG와 시스템 JPEG 간의 성능 차이를 피한다.
 
@@ -17,15 +17,15 @@ cover는 단일 full-page JPEG인 경우에만 압축 이미지를 직접 추출
 Debian/Ubuntu build packages: `build-essential cmake pkg-config libclang-dev libssl-dev libjpeg62-turbo-dev zlib1g-dev libfreetype6-dev libharfbuzz-dev libopenjp2-7-dev libfontconfig1-dev fonts-noto-cjk`.
 
 ```sh
-cargo build -p sysdeps --bin tm-pdf-worker
-cargo test -p sysdeps
+cargo build -p pdf_engine --bin tm-pdf-worker
+cargo test -p pdf_engine
 cargo test -p backend --test pdf_pages --test cover --test pdf_edit
 cargo test --workspace
 ```
 
 `cargo build --workspace`에는 worker가 포함된다. 개별 package만 빌드한 개발 환경은 worker를 먼저 빌드한다. adapter는 PATH와 현재 실행 파일 주변(target/debug 등)에서 worker를 찾는다. Docker는 image profile로 worker를 빌드해 `/usr/local/bin`에 넣으며 필요한 native runtime libraries와 fonts를 설치한다. `./build.sh`가 두 이미지를 빌드·배포한다.
 
-`sysdeps::poppler`, `Stage::Pdfium`, 일부 bookdoctor 옵션/보고서 코드는 이전 호출자의 호환성을 위해 이름을 유지한다. 해당 운영 구현은 MuPDF worker를 사용하며 Poppler를 실행하지 않는다. pdftotext mock hook은 과거 포팅 테스트용이며 기본 실행 경로는 native PDF adapter다.
+`Stage::Poppler`·`Stage::Pdfium`, 일부 bookdoctor 옵션/보고서 코드는 이전 호출자의 호환성을 위해 이름을 유지한다. 해당 운영 구현은 MuPDF worker를 사용하며 Poppler를 실행하지 않는다. pdftotext mock hook은 과거 포팅 테스트용이며 기본 실행 경로는 native PDF adapter다.
 
 ## 검증
 

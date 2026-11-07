@@ -1,0 +1,42 @@
+//! 파서에 벽시계 상한을 거는 도구.
+//!
+//! [`run_with_hard_timeout`]은 작업을 자식 프로세스로 실행하고 시간이 넘으면 프로세스 그룹째 종료한다.
+//! 멈춘 작업을 thread로 돌리면 강제로 끊을 때 잡고 있던 lock과 메모리가 망가지므로 thread 방식 상한은 두지 않는다.
+//! 실행은 [`crate::SystemRunner`]와 같은 엔진이 맡는다.
+
+use std::fmt;
+use std::os::unix::process::ExitStatusExt;
+use std::process::{Command, Output};
+use std::time::Duration;
+
+use crate::{CommandError, run_child};
+
+/// 파서가 제한 시간 안에 끝나지 않았다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserTimeout {
+    pub message: String,
+}
+
+impl fmt::Display for ParserTimeout {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ParserTimeout {}
+
+/// `cmd`를 자식 프로세스로 실행한다. `timeout`초를 넘기면 강제 종료하고 `ParserTimeout`을 돌려준다.
+/// 실행하지 못한 경우와 시그널에 죽은 경우도 `ParserTimeout`이다. 0이 아닌 종료 코드는 호출자가 보도록 `Output`으로 돌려준다.
+pub fn run_with_hard_timeout(cmd: Command, timeout: f64) -> Result<Output, ParserTimeout> {
+    let program = cmd.get_program().to_string_lossy().into_owned();
+    let output = run_child(cmd, Some(Duration::from_secs_f64(timeout.max(0.0)))).map_err(|error| ParserTimeout {
+        message: match error {
+            CommandError::Timeout => format!("처리 시간 초과({timeout}초): {program}"),
+            other => format!("프로세스를 실행하지 못했다: {program}: {other}"),
+        },
+    })?;
+    if let Some(signal) = output.status.signal() {
+        return Err(ParserTimeout { message: format!("처리가 비정상 종료되었습니다(signal {signal}): {program}") });
+    }
+    Ok(output)
+}

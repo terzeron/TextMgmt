@@ -28,11 +28,11 @@ by line coverage are:
 
 | Module | Line coverage | Uncovered lines |
 | --- | ---: | ---: |
-| `backend/src/main/google.rs` | 81.82% | 20 |
+| `backend/src/main/google_oauth.rs` | 81.82% | 20 |
 | `backend/src/classifier/model.rs` | 82.66% | 30 |
 | `backend/src/book_manager/file_reader.rs` | 83.21% | 23 |
 | `backend/src/classifier/config.rs` | 83.72% | 14 |
-| `backend/src/book_manager/update.rs` | 84.62% | 30 |
+| `backend/src/book_manager/book_updater.rs` | 84.62% | 30 |
 | `backend/src/cover_status.rs` | 84.70% | 43 |
 | `utils/classify_cli/src/commands.rs` | 85.14% | 44 |
 

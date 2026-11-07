@@ -40,6 +40,11 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # MuPDF(pdf_engine)를 빌드하는 시스템 라이브러리. 목록은 backend/Dockerfile 빌드 단계와 docs/pdf-engine.md를 따른다.
+      - name: Install native build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config cmake libclang-dev libfontconfig1-dev libfreetype6-dev libharfbuzz-dev libjpeg-turbo8-dev libopenjp2-7-dev zlib1g-dev fonts-noto-cjk
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --locked -- --test-threads=1
       - run: cargo clippy -p backend -p loader --all-targets --locked -- -D warnings

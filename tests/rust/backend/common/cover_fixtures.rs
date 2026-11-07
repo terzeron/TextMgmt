@@ -1,58 +1,50 @@
 // TODO(seams): common::{image,fsx,epub,zipx,pdf,clock}로 이전 중. 이전 후 삭제
-//! 표지(cover) 테스트 공용 fixture. Python `tests/test_cover_management.py`의 `make_epub`, `image_bytes`, `rewrite_epub_members`,
-//! `cached_candidates`, `cover_api`와 `tests/test_cover.py`·`tests/test_cover_status.py`의 PDF 생성 도구에 대응한다.
+//! 표지(cover) 테스트 공용 fixture.
+//! `cached_candidates`, `cover_api`와 표지 판정 테스트의 PDF 생성 도구.
 //!
 //! 이 파일은 `common/mod.rs`를 건드리지 않으려고 따로 둔다. 쓰는 쪽은 `mod common;` 아래에서
 //! `#[path = "common/cover_fixtures.rs"] mod cover_fixtures;`로 가져온다.
 //!
 //! 가정한 API (아직 구현 전이다):
-//! - `backend::book::Book::override_path_prefix(path: &Path) -> PathPrefixGuard` (drop 시 원래 값 복원. Python `monkeypatch.setattr(Book, "path_prefix", ...)`)
-//! - `backend::cover_management::CoverManagement::{new(root: &Path), with_hooks(root: &Path, hooks: CoverHooks), hooks(&self) -> &CoverHooks, set_hooks(&mut self, hooks: CoverHooks)}`
-//! - `backend::cover_management::CoverHooks` (Clone + Default): `with_search(Fn(&str, &Value) -> Result<Value, SearchError>)`, `with_fetch_bytes(Fn(&str, &str) -> Result<Vec<u8>, String>)`,
-//!   `with_fetch_url_image(Fn(&str) -> Result<Vec<u8>, CoverError>)`, `with_clock(Arc<dyn Clock>)`. Python의 모듈 함수 monkeypatch를 대신하는 주입 지점이다.
-//! - `backend::cover_management::{AdminGate, BookIndex, create_cover_router}`
-//!   - `AdminGate::default()` 실제 인증, `.allow(Value)`, `.deny(status: u16, detail: &str)`, `.clear()` (FastAPI `dependency_overrides`)
+//! - `book_manager::book_metadata::Book::override_path_prefix(path: &Path) -> PathPrefixGuard` (drop 시 원래 값 복원.
+//! - `cover_manager::cover_management::CoverManagement::{new(root: &Path), with_hooks(root: &Path, hooks: CoverHooks), hooks(&self) -> &CoverHooks, set_hooks(&mut self, hooks: CoverHooks)}`
+//! - `cover_manager::cover_management::CoverHooks` (Clone + Default): `with_search(Fn(&str, &EpubInspection) -> Result<StoreSearch, SearchError>)`, `with_fetch_bytes(Fn(&str, &str) -> Result<Vec<u8>, String>)`,
+//!   `with_fetch_url_image(Fn(&str) -> Result<Vec<u8>, CoverError>)`, `with_clock(Arc<dyn Clock>)`. 테스트가 대역을 꽂는 주입 지점이다.
+//! - `cover_manager::cover_management::{AdminGate, BookIndex, create_cover_router}`
+//!   - `AdminGate::default()` 실제 인증, `.allow(Value)`, `.deny(status: u16, detail: &str)`, `.clear()`
 //!   - `trait BookIndex: Send + Sync { fn search_by_id(&self, book_id: i64) -> Result<Option<Value>, String>; fn update(&self, book_id: i64, fields: &Value) -> Result<bool, String>; }`
 //!   - `create_cover_router(get_manager: Arc<dyn Fn() -> Arc<dyn BookIndex> + Send + Sync>, gate: AdminGate, hooks: CoverHooks) -> axum::Router`
-//! - `backend::cover_sources::Clock` (`fn now(&self) -> f64`, `fn sleep(&self, seconds: f64)`)
+//! - `cover_manager::cover_sources::Clock` (`fn now(&self) -> f64`, `fn sleep(&self, seconds: f64)`)
 
 #![allow(dead_code)]
 
-use std::io::{Cursor, Read, Write};
+#[allow(unused_imports)]
+pub use crate::common::cover_candidates::{Cached, cached_candidates, encode_image, image_bytes};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use backend::cover_management::{CoverHooks, CoverManagement};
-use backend::es_manager::{EsError, EsManagerApi};
-use backend::main::{AppDeps, AuthMode, BookManagerApi, app_with};
-use image::{ImageFormat, Rgb, RgbImage};
+use backend::api_router::{AppDeps, AuthMode, BookManagerApi, app_with};
+use cover_manager::cover_management::CoverHooks;
+use image::RgbImage;
 use lopdf::{Document, Object, Stream, dictionary};
+use search_manager::{EsError, EsManagerApi};
 use serde_json::{Value, json};
-use sysdeps::Clock;
 use zip::CompressionMethod;
-use zip::write::SimpleFileOptions;
 
 use crate::common::TestClient;
-
-pub const RED: [u8; 3] = [255, 0, 0];
-pub const BLUE: [u8; 3] = [0, 0, 255];
-
-pub const CONTAINER_XML: &str = r#"<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>"#;
-
-pub const BODY: &str = "<html><body>본문을 보존한다.</body></html>";
-
-/// 단색 이미지를 `format`으로 인코딩한다. Python `Image.new("RGB", size, color).save(buf, format)`.
-pub fn encode_image(width: u32, height: u32, rgb: [u8; 3], format: ImageFormat) -> Vec<u8> {
-    let image = RgbImage::from_pixel(width, height, Rgb(rgb));
-    let mut out = Cursor::new(Vec::new());
-    image.write_to(&mut out, format).unwrap();
-    out.into_inner()
-}
-
-/// 120x180 빨강 JPEG. Python `image_bytes()`.
-pub fn image_bytes() -> Vec<u8> {
-    encode_image(120, 180, RED, ImageFormat::Jpeg)
-}
+// 사본을 지우고 common 원본을 다시 내보낸다. 이 fixture를 쓰는 테스트 crate마다 일부만 쓴다.
+#[allow(unused_imports)]
+pub use crate::common::clock::FakeClock;
+#[allow(unused_imports)]
+pub use crate::common::epub::{BODY, CONTAINER_XML, append_child, attr_of_element_with_id, count_elements};
+#[allow(unused_imports)]
+pub use crate::common::fsx::{files_under, sha256_hex};
+#[allow(unused_imports)]
+pub use crate::common::image::{BLUE, RED, paste, solid};
+use crate::common::zipx::options;
+#[allow(unused_imports)]
+pub use crate::common::zipx::{Members, bytes_replace};
 
 /// 인코딩된 이미지의 (너비, 높이).
 pub fn image_size(data: &[u8]) -> (u32, u32) {
@@ -60,26 +52,7 @@ pub fn image_size(data: &[u8]) -> (u32, u32) {
     (image.width(), image.height())
 }
 
-pub fn solid(width: u32, height: u32, rgb: [u8; 3]) -> RgbImage {
-    RgbImage::from_pixel(width, height, Rgb(rgb))
-}
-
-/// PIL `image.paste(color, (x0, y0, x1, y1))`.
-pub fn paste(image: &mut RgbImage, (x0, y0, x1, y1): (u32, u32, u32, u32), rgb: [u8; 3]) {
-    for y in y0..y1 {
-        for x in x0..x1 {
-            image.put_pixel(x, y, Rgb(rgb));
-        }
-    }
-}
-
-/// 압축 방식만 다른 ZIP 멤버 옵션.
-fn options(method: CompressionMethod) -> SimpleFileOptions {
-    SimpleFileOptions::default().compression_method(method)
-}
-
-/// 임시 EPUB을 만든다. 표지가 있으면 `OPS/cover.jpg`를 `cover-image`로 선언한다. Python `make_epub(path, version, cover)`.
-/// Python `zipfile.ZipFile(path, "w")`의 기본 압축은 STORED라서 모든 멤버를 저장만 한다.
+/// 임시 EPUB을 만든다. 표지가 있으면 `OPS/cover.jpg`를 `cover-image`로 선언한다.
 pub fn make_epub(path: &Path, version: &str, cover: bool) -> PathBuf {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut archive = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
@@ -106,58 +79,6 @@ pub fn make_epub(path: &Path, version: &str, cover: bool) -> PathBuf {
     path.to_path_buf()
 }
 
-/// 바이트열 안의 `from`을 모두 `to`로 바꾼다. Python `bytes.replace`.
-pub fn bytes_replace(data: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len());
-    let mut i = 0;
-    while i < data.len() {
-        if !from.is_empty() && data[i..].starts_with(from) {
-            out.extend_from_slice(to);
-            i += from.len();
-        } else {
-            out.push(data[i]);
-            i += 1;
-        }
-    }
-    out
-}
-
-/// EPUB 멤버를 이름 순서대로 담는 dict. Python `rewrite_epub_members`의 `members`.
-pub struct Members {
-    items: Vec<(String, Vec<u8>)>,
-}
-
-impl Members {
-    pub fn get(&self, name: &str) -> &[u8] {
-        &self.items.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("멤버 없음: {name}")).1
-    }
-
-    pub fn contains(&self, name: &str) -> bool {
-        self.items.iter().any(|(n, _)| n == name)
-    }
-
-    /// 있으면 덮어쓰고 없으면 뒤에 붙인다. Python `members[name] = data`.
-    pub fn set(&mut self, name: &str, data: impl Into<Vec<u8>>) {
-        let data = data.into();
-        match self.items.iter_mut().find(|(n, _)| n == name) {
-            Some(slot) => slot.1 = data,
-            None => self.items.push((name.to_string(), data)),
-        }
-    }
-
-    /// Python `members.pop(name)` / `del members[name]`.
-    pub fn remove(&mut self, name: &str) -> Vec<u8> {
-        let at = self.items.iter().position(|(n, _)| n == name).unwrap_or_else(|| panic!("멤버 없음: {name}"));
-        self.items.remove(at).1
-    }
-
-    /// 멤버 안의 바이트열을 바꿔 다시 넣는다. Python `members[name] = members[name].replace(a, b)`.
-    pub fn replace_in(&mut self, name: &str, from: &[u8], to: &[u8]) {
-        let replaced = bytes_replace(self.get(name), from, to);
-        self.set(name, replaced);
-    }
-}
-
 /// 작은 fixture의 멤버를 중복 entry 없이 바꾼다. `mimetype`만 STORED, 나머지는 DEFLATED.
 pub fn rewrite_epub_members(path: &Path, transform: impl FnOnce(&mut Members)) {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
@@ -181,7 +102,7 @@ pub fn rewrite_epub_members(path: &Path, transform: impl FnOnce(&mut Members)) {
     out.finish().unwrap();
 }
 
-/// ZIP 멤버 하나를 읽는다. Python `archive.read(name)`.
+/// ZIP 멤버 하나를 읽는다.
 pub fn read_member(path: &Path, name: &str) -> Vec<u8> {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
     let mut file = archive.by_name(name).unwrap_or_else(|_| panic!("멤버 없음: {name}"));
@@ -190,27 +111,13 @@ pub fn read_member(path: &Path, name: &str) -> Vec<u8> {
     data
 }
 
-/// ZIP 멤버 이름을 저장 순서대로 돌려준다. Python `archive.namelist()`.
+/// ZIP 멤버 이름을 저장 순서대로 돌려준다.
 pub fn member_names(path: &Path) -> Vec<String> {
     let archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
     archive.file_names().map(|n| n.unwrap().into_owned()).collect()
 }
 
-/// `//*[local-name()=local]` 중 `attr`(이름, 값)을 만족하는 요소 수. Python `package.xpath('count(...)')`.
-pub fn count_elements(xml: &[u8], local: &str, attr: Option<(&str, &str)>) -> usize {
-    let text = std::str::from_utf8(xml).unwrap();
-    let doc = roxmltree::Document::parse(text).unwrap();
-    doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == local).filter(|n| attr.is_none_or(|(k, v)| n.attribute(k) == Some(v))).count()
-}
-
-/// `//*[local-name()=local and @id=id]/@attr`. 없으면 빈 문자열.
-pub fn attr_of_element_with_id(xml: &[u8], local: &str, id: &str, attr: &str) -> String {
-    let text = std::str::from_utf8(xml).unwrap();
-    let doc = roxmltree::Document::parse(text).unwrap();
-    doc.descendants().find(|n| n.is_element() && n.tag_name().name() == local && n.attribute("id") == Some(id)).and_then(|n| n.attribute(attr)).unwrap_or("").to_string()
-}
-
-/// `<opf:manifest>` 같은 자식 요소 하나를 통째로 지운다. Python `package.remove(package.find(...))`.
+/// `<opf:manifest>` 같은 자식 요소 하나를 통째로 지운다.
 pub fn remove_element(xml: &[u8], local: &str) -> Vec<u8> {
     let text = std::str::from_utf8(xml).unwrap();
     let open = format!("<{local}");
@@ -223,96 +130,7 @@ pub fn remove_element(xml: &[u8], local: &str) -> Vec<u8> {
     format!("{}{}", &text[..start], &text[end..]).into_bytes()
 }
 
-/// `</parent>` 앞에 조각을 넣는다. Python `etree.SubElement(parent, ...)`.
-pub fn append_child(xml: &[u8], parent: &str, fragment: &str) -> Vec<u8> {
-    let text = std::str::from_utf8(xml).unwrap();
-    let close = format!("</{parent}>");
-    let at = text.find(&close).unwrap_or_else(|| panic!("요소 없음: {parent}"));
-    format!("{}{}{}", &text[..at], fragment, &text[at..]).into_bytes()
-}
-
-// ---- 가짜 시계 -------------------------------------------------------------------------------
-
-/// Python `_clock`/`fake_clock`: `_now`와 `_sleep`을 바꿔 시간을 직접 움직인다.
-pub struct FakeClock {
-    now: Mutex<f64>,
-    slept: Mutex<Vec<f64>>,
-}
-
-impl FakeClock {
-    pub fn new(start: f64) -> Arc<Self> {
-        Arc::new(Self { now: Mutex::new(start), slept: Mutex::new(Vec::new()) })
-    }
-
-    pub fn advance(&self, seconds: f64) {
-        *self.now.lock().unwrap() += seconds;
-    }
-
-    pub fn slept(&self) -> Vec<f64> {
-        self.slept.lock().unwrap().clone()
-    }
-
-    pub fn clear_slept(&self) {
-        self.slept.lock().unwrap().clear();
-    }
-}
-
-impl Clock for FakeClock {
-    fn now(&self) -> f64 {
-        *self.now.lock().unwrap()
-    }
-
-    fn monotonic(&self) -> f64 {
-        *self.now.lock().unwrap()
-    }
-
-    fn sleep(&self, seconds: f64) {
-        self.slept.lock().unwrap().push(seconds);
-        *self.now.lock().unwrap() += seconds;
-    }
-}
-
 // ---- cached_candidates -----------------------------------------------------------------------
-
-pub struct Cached {
-    pub candidates: Vec<Value>,
-    pub fetches: Arc<Mutex<Vec<String>>>,
-}
-
-impl Cached {
-    pub fn id(&self, index: usize) -> &str {
-        self.candidates[index]["candidate_id"].as_str().unwrap()
-    }
-}
-
-/// 검색과 이미지 내려받기를 가짜로 바꾸고 후보와 이미지를 캐시에 채운다. Python `cached_candidates`.
-pub fn cached_candidates(service: &mut CoverManagement, relative: &str, stores: &[&str]) -> Cached {
-    let fetches = Arc::new(Mutex::new(Vec::<String>::new()));
-    let seen = fetches.clone();
-    let hooks = service
-        .hooks()
-        .clone()
-        .with_search(|store, metadata| {
-            let candidates: Vec<Value> = (0..2)
-                .map(|index| json!({"title": metadata["title"], "author": "저자", "detail_url": "https://www.yes24.com/", "image_url": format!("https://image.yes24.com/{store}-{index}.jpg")}))
-                .collect();
-            Ok(json!({"status": "success", "candidates": candidates}))
-        })
-        .with_fetch_bytes(move |_store, url| {
-            seen.lock().unwrap().push(url.to_string());
-            Ok(image_bytes())
-        });
-    service.set_hooks(hooks);
-    let mut candidates = Vec::new();
-    for store in stores {
-        let found = service.candidates(store, relative, false, false).unwrap();
-        candidates.extend(found["candidates"].as_array().unwrap().iter().cloned());
-    }
-    for candidate in &candidates {
-        service.image(candidate["candidate_id"].as_str().unwrap()).unwrap();
-    }
-    Cached { candidates, fetches }
-}
 
 // ---- cover_api -------------------------------------------------------------------------------
 
@@ -418,7 +236,7 @@ impl MockManager {
         *self.search.lock().unwrap() = Ok(value);
     }
 
-    /// `search_by_id.side_effect = RuntimeError(message)`
+    /// `search_by_id.side_effect = BookManagerError(message)`
     pub fn set_search_error(&self, message: &str) {
         *self.search.lock().unwrap() = Err(message.to_string());
     }
@@ -444,7 +262,7 @@ pub struct CoverApi {
     pub manager: Arc<MockManager>,
 }
 
-/// 표지 라우터가 올라간 앱. 책 경로를 `root`로 두고 관리자 쿠키를 붙인다. Python `cover_api` fixture.
+/// 표지 라우터가 올라간 앱. 책 경로를 `root`로 두고 관리자 쿠키를 붙인다.
 pub fn cover_api(root: &Path, hooks: CoverHooks) -> CoverApi {
     let manager = MockManager::new(root);
     let gate = AdminGate::new();
@@ -455,7 +273,7 @@ pub fn cover_api(root: &Path, hooks: CoverHooks) -> CoverApi {
 
 // ---- PDF 생성 --------------------------------------------------------------------------------
 
-/// 이미지 한 장당 한 쪽인 PDF. 쪽 크기는 픽셀 크기와 같다. Python `Image.save(path, "PDF", resolution=72)`.
+/// 이미지 한 장당 한 쪽인 PDF. 쪽 크기는 픽셀 크기와 같다.
 pub fn write_image_pdf(path: &Path, pages: &[RgbImage]) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut doc = Document::with_version("1.5");
@@ -492,7 +310,7 @@ pub fn write_image_pdf(path: &Path, pages: &[RgbImage]) {
     doc.save(path).unwrap();
 }
 
-/// 이미지 없는 빈 한 쪽짜리 PDF. Python `PdfWriter().add_blank_page(width, height)`.
+/// 이미지 없는 빈 한 쪽짜리 PDF.
 pub fn write_blank_pdf(path: &Path, width: i64, height: i64) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut doc = Document::with_version("1.5");
@@ -510,20 +328,17 @@ pub fn write_blank_pdf(path: &Path, width: i64, height: i64) {
 
 // ---- 작은 도우미 -----------------------------------------------------------------------------
 
-/// Python `base64.b64encode(data).decode()`.
 pub fn b64(data: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(data)
 }
 
-/// Python `(path.stat().st_ino, path.stat().st_mtime_ns)`.
 pub fn ino_mtime(path: &Path) -> (u64, i128) {
     use std::os::unix::fs::MetadataExt;
     let meta = std::fs::metadata(path).unwrap();
     (meta.ino(), meta.mtime() as i128 * 1_000_000_000 + meta.mtime_nsec() as i128)
 }
 
-/// Python `bool(value)`처럼 null, 빈 문자열, false, 0, 빈 배열과 객체를 거짓으로 본다.
 pub fn truthy(value: &Value) -> bool {
     match value {
         Value::Null => false,
@@ -535,13 +350,6 @@ pub fn truthy(value: &Value) -> bool {
     }
 }
 
-/// Python `hashlib.sha256(text.encode()).hexdigest()`.
-pub fn sha256_hex(data: impl AsRef<[u8]>) -> String {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(data.as_ref()).iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// Python `archive.testzip() is None`: 모든 멤버를 끝까지 읽어 CRC를 확인한다.
 pub fn testzip_ok(path: &Path) -> bool {
     let mut archive = match zip::ZipArchive::new(std::fs::File::open(path).unwrap()) {
         Ok(a) => a,
@@ -560,43 +368,25 @@ pub fn testzip_ok(path: &Path) -> bool {
     true
 }
 
-/// 이름이 `prefix`로 시작하고 `suffix`로 끝나는 직속 항목 수. Python `len(list(dir.glob("prefix*suffix")))`.
+/// 이름이 `prefix`로 시작하고 `suffix`로 끝나는 직속 항목 수.
 pub fn count_matching(dir: &Path, prefix: &str, suffix: &str) -> usize {
     std::fs::read_dir(dir).map(|rd| rd.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().starts_with(prefix) && e.file_name().to_string_lossy().ends_with(suffix)).count()).unwrap_or(0)
 }
 
-/// 직속 항목 이름을 정렬해서 돌려준다. Python `list(dir.iterdir())`을 순서 없이 비교할 때 쓴다.
+/// 직속 항목 이름을 정렬해서 돌려준다.
 pub fn dir_names(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
     names.sort();
     names
 }
 
-/// 하위 디렉터리까지 모든 파일. Python `dir.rglob("*")` 중 파일만.
-pub fn files_under(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(dir) {
-        for entry in rd.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.is_dir() {
-                out.extend(files_under(&path));
-            } else {
-                out.push(path);
-            }
-        }
-    }
-    out.sort();
-    out
-}
-
-/// 접근·수정 시각을 `seconds_since_epoch`로 맞춘다. Python `os.utime(path, (t, t))`.
+/// 접근·수정 시각을 `seconds_since_epoch`로 맞춘다.
 pub fn touch(path: &Path, seconds_since_epoch: u64) {
     let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds_since_epoch);
     let times = std::fs::FileTimes::new().set_accessed(at).set_modified(at);
     std::fs::OpenOptions::new().write(true).open(path).unwrap().set_times(times).unwrap();
 }
 
-/// Python `threading.Event`.
 pub struct Event {
     flag: Mutex<bool>,
     condvar: std::sync::Condvar,

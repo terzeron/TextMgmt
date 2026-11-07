@@ -1,0 +1,46 @@
+[package]
+name = "common"
+description = "여러 crate가 함께 쓰는 기능: URL 해석(url_parser), JSON 필드 읽기(json_field_reader), 출력용 문자열 정리(text_sanitizer), XML 해석과 고칠 수 있는 XML 트리(xml_parser), ZIP 읽기(zip_reader)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+# 필요 없는 기능은 `default-features = false`로 끄고 쓰는 것만 켠다.
+[features]
+default = ["xml_parser", "zip_reader"]
+xml_parser = ["dep:roxmltree", "dep:xml_recoverer"]
+zip_reader = ["dep:zip"]
+
+[dependencies]
+serde_json.workspace = true
+roxmltree = { version = "0.21.1", optional = true }
+xml_recoverer = { path = "../xml_recoverer", optional = true }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"], optional = true }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[[test]]
+name = "url_parser"
+path = "../../tests/rust/common/url_parser.rs"
+
+[[test]]
+name = "json_field_reader"
+path = "../../tests/rust/common/json_field_reader.rs"
+
+[[test]]
+name = "xml_parser"
+path = "../../tests/rust/common/xml_parser.rs"
+
+[[test]]
+name = "zip_reader"
+path = "../../tests/rust/common/zip_reader.rs"
+
+[[test]]
+name = "common"
+path = "../../tests/rust/common/common.rs"
+
+[[test]]
+name = "text_sanitizer"
+path = "../../tests/rust/common/text_sanitizer.rs"
