@@ -131,6 +131,55 @@ mod read_files {
     }
 }
 
+mod process_file_iter {
+    use super::*;
+    use crate::common::shared_fixtures::FakeStore;
+    use file_indexer::record_builder::ReadOutcome;
+    use loader::batch_loader::{Loader, ProcessHooks};
+    use serde_json::json;
+    use std::path::{Path, PathBuf};
+
+    fn loader<'a>(cfg: &'a Config, store: &'a FakeStore, stat: &'a Stat) -> Loader<'a> {
+        Loader { cfg, es: store, runner: &InProcess, stat, reencode: None }
+    }
+
+    #[test]
+    fn the_default_hooks_read_and_store_each_file() {
+        let d = tempfile::tempdir().unwrap();
+        let cfg = config_with_book(d.path());
+        write(&d.path().join("a.txt"), "hello world");
+        let (store, stat) = (FakeStore::new(), Stat::new());
+        let counts = loader(&cfg, &store, &stat).process_file_iter(&mut Vec::new(), [d.path().join("a.txt")], true, false, None).unwrap();
+        assert_eq!(counts.processed, 1);
+        assert_eq!(store.inserted_docs().len(), 1);
+    }
+
+    #[test]
+    fn the_same_document_id_keeps_the_later_file_and_unread_files_are_skipped() {
+        let d = tempfile::tempdir().unwrap();
+        let cfg = config_with_book(d.path());
+        let files: Vec<PathBuf> = ["a.txt", "b.txt", "c.txt"].iter().map(|n| d.path().join(n)).collect();
+        for f in &files {
+            write(f, "x");
+        }
+        // 두 파일이 같은 문서 id를 내면 나중 파일이 이기고, 문서를 못 만든 파일은 저장하지 않는다.
+        let read = |path: &Path, _: Option<&std::fs::Metadata>, _: bool| -> ReadOutcome {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let item = (name != "c.txt").then(|| (42, json!({"file_path": name})));
+            ReadOutcome { item, messages: Vec::new() }
+        };
+        let (store, stat) = (FakeStore::new(), Stat::new());
+        // 중복 정리 실패는 적재를 멈추지 않는다.
+        store.update(|s| s.delete_by_paths_error = true);
+        let hooks = ProcessHooks { read_file: Some(&read), ..ProcessHooks::default() };
+        let counts = loader(&cfg, &store, &stat).process_file_iter_with_hooks(&mut Vec::new(), files, true, false, None, &hooks).unwrap();
+        assert_eq!(counts.processed, 1);
+        let docs = store.inserted_docs();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[&42]["file_path"], "b.txt");
+    }
+}
+
 mod report_problems {
     use super::*;
 

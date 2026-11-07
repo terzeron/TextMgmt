@@ -61,6 +61,9 @@ impl IndexStore for FakeStore {
         }
     }
     fn create_index(&self) -> Result<(), EsError> {
+        if self.state.lock().unwrap().create_index_error {
+            return Err(EsError::Transport("create failed".to_owned()));
+        }
         Ok(())
     }
     fn delete_index(&self) -> Result<(), EsError> {
@@ -75,7 +78,11 @@ impl IndexStore for FakeStore {
         Ok(self.state.lock().unwrap().created_meta.clone())
     }
     fn delete_by_file_paths(&self, _file_paths: &[String], _exclude_ids: &[i64]) -> Result<i64, EsError> {
-        Ok(self.state.lock().unwrap().delete_by_paths_result)
+        let s = self.state.lock().unwrap();
+        if s.delete_by_paths_error {
+            return Err(EsError::Transport("delete by paths failed".to_owned()));
+        }
+        Ok(s.delete_by_paths_result)
     }
     fn get_doc_ids_by_path_prefix(&self, _path_prefix: &str) -> Result<HashSet<i64>, EsError> {
         // 실제 적재된 inode + 디스크에 없는 orphan
@@ -86,6 +93,9 @@ impl IndexStore for FakeStore {
         Ok(s.inserted.iter().flatten().map(|(id, _)| *id).chain(s.orphan_ids.iter().copied()).collect())
     }
     fn delete_by_ids(&self, ids: &[i64]) -> Result<i64, EsError> {
+        if self.state.lock().unwrap().delete_by_ids_error {
+            return Err(EsError::Transport("delete by ids failed".to_owned()));
+        }
         let mut sorted = ids.to_vec();
         sorted.sort_unstable();
         self.state.lock().unwrap().deleted_ids = Some(sorted);
@@ -114,6 +124,9 @@ pub struct State {
     pub orphan_ids: HashSet<i64>,
     pub prefix_lookup_error: bool,
     pub deleted_ids: Option<Vec<i64>>,
+    pub create_index_error: bool,
+    pub delete_by_paths_error: bool,
+    pub delete_by_ids_error: bool,
 }
 
 // ---- TestFastPdfPageCount -------------------------------------------------------------------

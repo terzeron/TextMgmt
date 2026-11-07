@@ -371,3 +371,70 @@ mod loader_main_reencode_options {
         assert_eq!(inserted.values().next().unwrap()["page_count"], 1);
     }
 }
+
+mod option_and_setup_errors {
+    use super::*;
+
+    #[test]
+    fn long_options_accept_separators_inline_values_and_unique_prefixes() {
+        let options = parse_options(&to_args(&["--del", "--reencode-backup-dir=/b", "--", "--reload"])).unwrap();
+        assert!(options.delete && !options.reload);
+        assert_eq!(options.reencode_backup_dir, Some(PathBuf::from("/b")));
+        assert_eq!(options.positional, ["--reload"]);
+        assert_eq!(parse_options(&to_args(&["--re"])).unwrap_err(), "option --re not a unique prefix");
+        assert_eq!(parse_options(&to_args(&["--nope"])).unwrap_err(), "option --nope not recognized");
+        assert_eq!(parse_options(&to_args(&["--delete=x"])).unwrap_err(), "option --delete must not have an argument");
+    }
+
+    #[test]
+    fn missing_configuration_and_index_setup_failures_stop_before_loading() {
+        let dir = tmp();
+        let root = path_str(dir.path());
+        let mut no_book_dir = setup_loader_env(dir.path());
+        no_book_dir.remove("TM_BOOK_DIR");
+        assert_eq!(run_main(&["book", &root], &no_book_dir, &FakeStore::new()).0, 255);
+        // 옵션만 있고 색인 이름이 없으면 사용법이다.
+        let env = setup_loader_env(dir.path());
+        let (code, out) = run_main(&["--recursive"], &env, &FakeStore::new());
+        assert_eq!(code, 2);
+        assert!(out.contains("사용법"));
+        let mut no_index = setup_loader_env(dir.path());
+        no_index.remove("TM_ES_BOOK_INDEX");
+        assert_eq!(run_main(&["book", &root], &no_index, &FakeStore::new()).0, 255);
+        let store = FakeStore::new();
+        store.update(|s| s.create_index_error = true);
+        assert_eq!(run_main(&["book", &root], &env, &store).0, 255);
+        assert!(store.inserted_docs().is_empty());
+    }
+
+    #[test]
+    fn a_failed_orphan_delete_is_reported_and_loading_still_succeeds() {
+        let dir = tmp();
+        fs::write(dir.path().join("a.txt"), "hello world\n").unwrap();
+        let env = setup_loader_env(dir.path());
+        let store = FakeStore::new();
+        store.update(|s| {
+            s.orphan_ids.insert(999999);
+            s.delete_by_ids_error = true;
+        });
+        let (code, out) = run_main(&["--recursive", "--reload", "book", &path_str(dir.path())], &env, &store);
+        assert_eq!(code, 0);
+        assert!(out.contains("[orphan 삭제 실패]"), "{out}");
+        assert_eq!(store.inserted_docs().len(), 1);
+    }
+
+    #[test]
+    fn text_files_are_read_on_worker_threads() {
+        let dir = tmp();
+        let text = dir.path().join("[작가] 책.txt");
+        fs::write(&text, "본문입니다\n").unwrap();
+        let spawned = AtomicUsize::new(0);
+        let on_spawn = || {
+            spawned.fetch_add(1, Ordering::SeqCst);
+        };
+        let hooks = RunHooks { on_worker_spawn: Some(&on_spawn), ..Default::default() };
+        let (code, _) = run_main_with_hooks(&["book", &path_str(&text)], &setup_loader_env(dir.path()), &FakeStore::new(), &hooks);
+        assert_eq!(code, 0);
+        assert_eq!(spawned.load(Ordering::SeqCst), 1);
+    }
+}
