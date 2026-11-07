@@ -7,6 +7,7 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
+log = { workspace = true }
 serde_json = { workspace = true }
 
 [[test]]
@@ -20,3 +21,7 @@ path = "../../tests/rust/classifier/feature_hasher.rs"
 [[test]]
 name = "softmax_model"
 path = "../../tests/rust/classifier/softmax_model.rs"
+
+[[test]]
+name = "model_reloader"
+path = "../../tests/rust/classifier/model_reloader.rs"
