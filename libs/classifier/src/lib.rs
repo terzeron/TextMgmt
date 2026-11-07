@@ -4,6 +4,7 @@
 //! 꽂을 때만 모델 판정을 쓰고, 꽂지 않으면 카테고리 매핑 키워드만으로 제안한다.
 
 pub mod feature_hasher;
+pub mod softmax_model;
 
 use std::any::Any;
 use std::path::Path;

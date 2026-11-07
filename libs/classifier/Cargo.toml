@@ -16,3 +16,7 @@ path = "../../tests/rust/classifier/classifier.rs"
 [[test]]
 name = "feature_hasher"
 path = "../../tests/rust/classifier/feature_hasher.rs"
+
+[[test]]
+name = "softmax_model"
+path = "../../tests/rust/classifier/softmax_model.rs"
