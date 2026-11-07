@@ -369,3 +369,13 @@ mod private_dir {
         assert_eq!(private_dir_in(&parent.path().join("missing"), "cache"), None);
     }
 }
+
+#[test]
+fn locate_executable_falls_back_to_the_executable_directory_and_then_the_bare_name() {
+    // PATH에 없는 이름은 실행 파일 디렉터리에서 찾고, 그래도 없으면 이름만 돌려준다.
+    let exe = std::env::current_exe().unwrap();
+    let name = exe.file_name().unwrap().to_str().unwrap();
+    assert_eq!(sysdeps::locate_executable(name), exe);
+    let missing = "sysdeps-test-no-such-executable";
+    assert_eq!(sysdeps::locate_executable(missing), Path::new(missing));
+}
