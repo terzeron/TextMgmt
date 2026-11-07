@@ -1249,3 +1249,97 @@ fn test_merge_classify_proposal_status_with_only_status_is_a_no_op() {
     assert_eq!(cursor.executed().len(), before);
     assert!(conns.lock().unwrap().is_empty());
 }
+
+// ---- 초기화 단계별 실패, 연결·락·제안 상태의 남은 분기 ----
+
+#[test]
+fn every_init_statement_failure_stops_construction() {
+    let steps = [
+        "CREATE TABLE IF NOT EXISTS category_keywords",
+        "CREATE TABLE IF NOT EXISTS hidden_categories",
+        "CREATE TABLE IF NOT EXISTS latest_excluded_categories",
+        "CREATE TABLE IF NOT EXISTS classify_proposal_items",
+        "CREATE TABLE IF NOT EXISTS classify_proposal_status",
+        "column_name = 'apply_status'",
+        "index_name = 'idx_content_file'",
+        "index_name = 'idx_content_type'",
+        "table_name = 'reload_locks' AND column_name",
+    ];
+    for step in steps {
+        let cursor = FakeCursor::new().with_side_effect(move |sql, _| if sql.contains(step) { Err(DbError::Other("init failed".into())) } else { Ok(()) });
+        let c = cursor.clone();
+        let connector: ConnectionProvider = Arc::new(move || Ok(Box::new(FakeConn::new(&c)) as Box<dyn DbConnection>));
+        assert!(CategoryMapping::with_connector(connector).is_err(), "{step}");
+        assert!(cursor.ran(step), "{step}");
+    }
+}
+
+#[test]
+fn a_mapping_connection_can_roll_back() {
+    let conn = FakeConn::new(&FakeCursor::new());
+    let cm = CategoryMapping::with_connection_provider(provider_of(&conn));
+    cm.get_connection().unwrap().rollback().unwrap();
+    assert!(conn.rolled_back());
+}
+
+#[test]
+fn blank_keywords_only_clear_or_skip_inserts() {
+    let cursor = FakeCursor::new();
+    let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
+    assert!(cm.set_keywords("c", &["  ", ""], "book"));
+    assert!(cm.update_all_mappings(&HashMap::from([("c".to_string(), strs(&[" "]))]), "book"));
+    assert!(cursor.executed_many().is_empty());
+}
+
+#[test]
+fn reload_status_reads_loose_column_types() {
+    let stale = now() - Duration::seconds(RELOAD_LOCK_HEARTBEAT_STALE_SECONDS + 60);
+    let status_of = |row: Row| {
+        let cursor = FakeCursor::new().with_fetchone_rows(vec![Some(row)]);
+        CategoryMapping::with_connection_provider(provider_for_cursor(&cursor)).get_reload_status("book", None).unwrap().unwrap()
+    };
+    // 멈춘 락의 빈 오류 글은 안내 문구로 바꾸고, 글이 아닌 오류 값은 그대로 둔다.
+    let mut empty_error = reload_row(DbValue::Null, "running", stale);
+    empty_error.insert("error".into(), "".into());
+    let out = status_of(empty_error);
+    assert_eq!(out["status"], "failed".into());
+    assert_ne!(out["error"], "".into());
+    let mut numeric_error = reload_row(DbValue::Null, "running", stale);
+    numeric_error.insert("error".into(), DbValue::Int(5));
+    assert_eq!(status_of(numeric_error)["error"], DbValue::Int(5));
+    // 시각이 날짜형이 아니면 멈춤으로 보지 않고 시각은 null이다.
+    let mut text_times = reload_row(DbValue::Null, "running", stale);
+    text_times.insert("updated_at".into(), "2026-01-01".into());
+    text_times.insert("started_at".into(), "2026-01-01".into());
+    let out = status_of(text_times);
+    assert_eq!((out["status"].clone(), out["started_at"].clone(), out["updated_at"].clone()), ("running".into(), DbValue::Null, DbValue::Null));
+}
+
+#[test]
+fn acquiring_a_reload_lock_fails_when_the_insert_fails() {
+    let cursor = FakeCursor::new().with_side_effect(|sql, _| if sql.starts_with("INSERT INTO reload_locks") { Err(DbError::Other("insert failed".into())) } else { Ok(()) });
+    let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
+    assert!(cm.acquire_reload_lock("book", None, None).is_err());
+}
+
+#[test]
+fn proposal_status_without_an_object_payload_keeps_only_the_status() {
+    for payload in [Some("[1]"), None] {
+        let mut status_row = row([("status", "ready".into()), ("age_seconds", 0_i64.into())]);
+        if let Some(payload) = payload {
+            status_row.insert("payload".into(), payload.into());
+        }
+        let cursor = FakeCursor::new().with_fetchone_rows(vec![Some(status_row)]);
+        let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
+        assert_eq!(cm.get_classify_proposal_status("book", 60).unwrap()["status"], "ready", "{payload:?}");
+    }
+}
+
+#[test]
+fn starting_a_proposal_reports_lock_read_and_update_failures() {
+    for needle in ["FOR UPDATE", "UPDATE classify_proposal_status SET status"] {
+        let cursor = FakeCursor::new().with_side_effect(move |sql, _| if sql.contains(needle) { Err(DbError::Other("db failed".into())) } else { Ok(()) });
+        let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
+        assert!(cm.try_start_classify_proposal(&json!({"status": "running"}), "book", 60).is_err(), "{needle}");
+    }
+}

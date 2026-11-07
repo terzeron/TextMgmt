@@ -447,3 +447,25 @@ fn test_factory_returns_store() {
     let _guard = mysql_fixture::db_lock();
     assert!(create_view_history_store().is_ok());
 }
+
+struct FixedClock(f64);
+
+impl sysdeps::Clock for FixedClock {
+    fn now(&self) -> f64 {
+        self.0
+    }
+    fn monotonic(&self) -> f64 {
+        self.0
+    }
+    fn sleep(&self, _seconds: f64) {}
+}
+
+#[test]
+fn test_injected_clock_sets_viewed_at_and_select_statements_count_rows() {
+    let (store, _guard) = fixture();
+    let store = store.with_clock(Arc::new(FixedClock(1_700_000_000.0)));
+    store.record_view("a@example.com", "book", 1, "책", "소설").unwrap();
+    assert_eq!(list(&store)["users"][0]["book"][0]["viewed_at"], json!(1_700_000_000_i64));
+    // 행을 돌려주는 문장을 execute로 실행하면 읽은 행 수를 돌려준다.
+    assert_eq!(store.get_connection().unwrap().execute("SELECT 1 AS one", &[]).unwrap(), 1);
+}
