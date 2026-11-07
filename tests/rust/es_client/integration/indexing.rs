@@ -128,6 +128,19 @@ fn create_index_adds_only_the_missing_fields_to_an_existing_index() {
     assert!(m2.requests().iter().all(|r| r.method != "PUT"), "빠진 필드가 없으면 매핑을 건드리지 않는다");
 }
 
+/// 빠진 필드를 더하지 못해도 이미 있는 색인은 그대로 쓴다(경고만 남긴다).
+#[test]
+fn create_index_keeps_an_existing_index_when_adding_fields_fails() {
+    let old = json!({"books": {"mappings": {"properties": {}}}});
+    let m = mock(move |r| match (r.method.as_str(), r.path.as_str()) {
+        ("GET", p) if p.ends_with("/_mapping") => ok(old.clone()),
+        ("PUT", _) => (500, "{}".into()),
+        _ => ok(json!({})),
+    });
+    m.client().create_index().unwrap();
+    assert_eq!(m.requests().iter().filter(|r| r.method == "PUT").count(), 3);
+}
+
 /// 매핑을 읽지 못해도 이미 있는 색인은 그대로 쓰고, 매핑은 건드리지 않는다(경고만 남긴다).
 #[test]
 fn create_index_keeps_an_existing_index_when_the_mapping_cannot_be_read() {

@@ -31,3 +31,7 @@ path = "../../tests/rust/es_client/integration/es.rs"
 [[test]]
 name = "integration_indexing"
 path = "../../tests/rust/es_client/integration/indexing.rs"
+
+[[test]]
+name = "transport"
+path = "../../tests/rust/es_client/transport.rs"

@@ -235,3 +235,12 @@ fn the_book_search_trait_uses_the_default_arguments() {
     assert_eq!(body["query"]["bool"]["should"][2]["more_like_this"]["like"], "요약");
     assert!(body["query"]["bool"].get("must_not").is_none());
 }
+
+#[test]
+fn search_scroll_with_a_null_first_max_score_is_empty() {
+    let first = json!({"_scroll_id":"s1","hits":{"max_score":null,"hits":[]}});
+    let (url, rx) = serve_sequence(vec![(200, first), (200, json!({"succeeded":true}))]);
+    assert!(client(&url).search(json!({}), 10_001, None).unwrap().is_empty());
+    assert_eq!(rx.recv().unwrap().request_line, "POST /books/_search?scroll=10m HTTP/1.1");
+    assert_eq!(rx.recv().unwrap().request_line, "DELETE /_search/scroll HTTP/1.1");
+}
