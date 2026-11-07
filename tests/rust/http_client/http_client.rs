@@ -83,3 +83,18 @@ fn http_client_with_timeout_reports_unreadable_or_empty_ca_files() {
     let error = http_client_with_timeout(timeout, Some(empty.path())).unwrap_err();
     assert!(error.starts_with("CA 인증서 PEM에 X.509 certificate가 없다"), "{error}");
 }
+
+#[test]
+fn ca_pem_private_keys_are_skipped_and_broken_blocks_are_errors() {
+    let timeout = Duration::from_secs(1);
+    // 인증서 없이 개인키 블록만 있으면 인증서가 없는 것과 같다. 키 내용은 더미 값이다.
+    let mut key_only = tempfile::NamedTempFile::new().unwrap();
+    key_only.write_all(b"-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n").unwrap();
+    let error = http_client_with_timeout(timeout, Some(key_only.path())).unwrap_err();
+    assert!(error.starts_with("CA 인증서 PEM에 X.509 certificate가 없다"), "{error}");
+
+    let mut broken = tempfile::NamedTempFile::new().unwrap();
+    broken.write_all(b"-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n").unwrap();
+    let error = http_client_with_timeout(timeout, Some(broken.path())).unwrap_err();
+    assert!(error.starts_with("CA 인증서 PEM을 해석하지 못했다"), "{error}");
+}

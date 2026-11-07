@@ -231,3 +231,35 @@ fn ureq_session_reports_a_body_that_ends_before_content_length() {
     assert!(matches!(result, Err(HttpError::Connection(_))), "{result:?}");
     server.join().unwrap();
 }
+
+#[test]
+fn body_chunks_stop_after_the_first_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                break;
+            }
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nabc").unwrap();
+    });
+    let agent = http_client::http_client(0);
+    let response = agent.get(&format!("http://{address}/short")).call().unwrap();
+    let mut chunks = http_client::BodyChunks::new(response.into_body().into_reader(), agent, Duration::from_secs(1));
+    let mut saw_error = false;
+    for chunk in chunks.by_ref() {
+        if chunk.is_err() {
+            saw_error = true;
+            break;
+        }
+    }
+    assert!(saw_error);
+    // 오류를 한 번 돌려준 뒤에는 더 읽지 않는다.
+    assert!(chunks.next().is_none());
+    server.join().unwrap();
+}
