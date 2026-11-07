@@ -228,6 +228,7 @@ dependencies = [
  "book_manager",
  "bookstore",
  "chrono",
+ "classifier",
  "common",
  "cover_manager",
  "db",

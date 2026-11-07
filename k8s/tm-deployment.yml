@@ -137,6 +137,9 @@ spec:
             # java 등 $HOME/XDG 기반 캐시·설정 쓰기를 writable emptyDir(/tmp)로 redirect.
             - name: HOME
               value: /tmp
+            # 분류 제안 모델. 파일이 바뀌면 다음 제안 때 다시 읽는다(pod 재시작 불필요). 없으면 모델 없이 제안한다.
+            - name: TM_CLASSIFIER_MODEL
+              value: /app/models/classifier/model.bin
           livenessProbe:
             exec:
               command:
@@ -159,6 +162,9 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: classifier-model
+              mountPath: /app/models/classifier
+              readOnly: true
       volumes:
         - name: books-pvc
           persistentVolumeClaim:
@@ -171,6 +177,11 @@ spec:
             name: elasticsearch-es-ca
         - name: tmp
           emptyDir: {}
+        # classifier_trainer가 호스트에서 원자적으로 모델 파일을 바꿔 쓴다.
+        - name: classifier-model
+          hostPath:
+            path: /home/terzeron/workspace/tm/models/classifier
+            type: DirectoryOrCreate
 
 ---
 apiVersion: apps/v1

@@ -16,6 +16,7 @@ path = "src/bin/backend.rs"
 [dependencies]
 auth_manager = { path = "../libs/auth_manager" }
 book_manager = { path = "../libs/book_manager" }
+classifier = { path = "../libs/classifier" }
 common = { path = "../libs/common" }
 cover_manager = { path = "../libs/cover_manager" }
 search_manager = { path = "../libs/search_manager" }
