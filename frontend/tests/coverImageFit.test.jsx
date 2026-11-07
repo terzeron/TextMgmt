@@ -69,7 +69,7 @@ describe("썸네일 폭 계약", () => {
     const frameWidth = Number(css.match(/--cover-card-width:\s*calc\(var\(--cover-image-width\) \+ (\d+)px\)/)[1]);
     expect(COVER_THUMB_WIDTHS).toEqual([imageWidth, imageWidth * 2]);
     expect(frameWidth).toBe(2);
-    const rust = readFileSync("../backend/src/book_manager/cover_list.rs", "utf-8");
+    const rust = readFileSync("../libs/book_manager/src/cover_list.rs", "utf-8");
     expect(rust).toMatch(
       new RegExp(`COVER_THUMBNAIL_WIDTHS: \\[u32; 2\\] = \\[${imageWidth}, ${imageWidth * 2}\\]`),
     );
