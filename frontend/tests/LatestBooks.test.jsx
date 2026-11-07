@@ -34,9 +34,16 @@ vi.mock("../src/SearchResult", () => ({
     emptyMessage,
     viewMode,
     headerActions,
+    hasMore,
+    onLoadMore,
   }) => (
     <>
       {headerActions}
+      {hasMore && (
+        <button type="button" data-testid="load-more" onClick={onLoadMore}>
+          더 보기
+        </button>
+      )}
       <div
         data-testid="search-result"
         data-title={title}
@@ -98,7 +105,7 @@ describe("LatestBooks", () => {
     expect(list.textContent).toContain("새 책");
   });
 
-  it("최신 만화 2000권을 조회하고 기존 목록 컴포넌트로 렌더링한다", async () => {
+  it("최신 만화 첫 페이지를 조회하고 기존 목록 컴포넌트로 렌더링한다", async () => {
     mockRawJsonGetReq.mockImplementation((url, resolve, reject, final) => {
       resolve({
         status: "success",
@@ -120,7 +127,7 @@ describe("LatestBooks", () => {
 
     await waitFor(() => {
       expect(mockRawJsonGetReq).toHaveBeenCalledWith(
-        "/comics/latest?limit=2000",
+        "/comics/latest?limit=60",
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
@@ -511,7 +518,7 @@ describe("LatestBooks", () => {
   });
 });
 
-describe("LatestBooks 만화 응답 경계", () => {
+describe("LatestBooks 만화 페이지", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
@@ -519,16 +526,33 @@ describe("LatestBooks 만화 응답 경계", () => {
 
   afterEach(cleanup);
 
-  it("만화 결과가 배열이 아니면 빈 목록으로 처리한다", async () => {
-    mockRawJsonGetReq.mockImplementation((_url, resolve, _reject, final) => {
-      resolve({ status: "success", result: { unexpected: true } });
+  it("다음 커서가 있으면 이어받아 목록 뒤에 붙인다", async () => {
+    const pages = {
+      "/comics/latest?limit=60": {
+        status: "success",
+        result: [{ book_id: 1, display_title: "가", category: "1_a/가" }],
+        next_cursor: "c1",
+      },
+      "/comics/latest?limit=60&cursor=c1": {
+        status: "success",
+        result: [{ book_id: 2, display_title: "나", category: "1_a/나" }],
+        next_cursor: null,
+      },
+    };
+    mockRawJsonGetReq.mockImplementation((url, resolve, _reject, final) => {
+      resolve(pages[url]);
       final();
     });
     render(<LatestBooks contentType="comic" />);
     await waitFor(() =>
-      expect(screen.getByTestId("search-result").textContent).toBe(
-        "최신 만화가 없습니다.",
-      ),
+      expect(screen.getByTestId("search-result").dataset.bookIds).toBe("1"),
     );
+
+    fireEvent.click(screen.getByTestId("load-more"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("search-result").dataset.bookIds).toBe("1,2"),
+    );
+    expect(screen.queryByTestId("load-more")).toBeNull();
   });
 });

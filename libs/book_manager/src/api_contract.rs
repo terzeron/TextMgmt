@@ -213,8 +213,8 @@ pub trait BookManagerApi: Send + Sync {
         Err(UNIMPLEMENTED.to_string())
     }
 
-    /// 최신 만화를 작품 디렉터리마다 대표 한 권(대체 후보 포함)으로 묶는다.
-    async fn get_latest_comic_covers(&self, _size: i64, _exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
+    /// 최신 만화 한 페이지. 작품 디렉터리는 대표 한 권(대체 후보 포함)으로 묶는다.
+    async fn get_latest_comic_covers(&self, _size: i64, _cursor: &str, _exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         Err(UNIMPLEMENTED.to_string())
     }
 

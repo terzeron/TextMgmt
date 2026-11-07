@@ -66,6 +66,9 @@ describe("buildBrowseUrl", () => {
     expect(buildBrowseUrl("/comics", "a", "cur", true)).toBe(
       `/comics/browse?limit=${BROWSE_PAGE_SIZE}&category=a&cursor=cur&uncovered=true`,
     );
+    expect(buildBrowseUrl("/comics", "", "cur", false, "latest")).toBe(
+      `/comics/latest?limit=${BROWSE_PAGE_SIZE}&cursor=cur`,
+    );
     expect(buildBrowseUrl("", "", "", false)).toBe(
       `/browse?limit=${BROWSE_PAGE_SIZE}`,
     );

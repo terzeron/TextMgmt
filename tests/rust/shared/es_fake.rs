@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
 pub use search_manager::Hit;
-use search_manager::{BackfillReport, DeleteByQueryResult, EsError, EsManagerApi, KeywordSearchArgs, PagedHits, PdfStats, SimilarDocsArgs, UpdateByQueryResult};
+use search_manager::{BackfillReport, CoverFileHits, DeleteByQueryResult, EsError, EsManagerApi, KeywordSearchArgs, PagedHits, PdfStats, SimilarDocsArgs, UpdateByQueryResult};
 use serde_json::{Value, json};
 
 pub type Docs = BTreeMap<i64, Value>;
@@ -53,6 +53,10 @@ pub struct State {
     pub latest_docs: (Vec<Hit>, i64),
     /// `search_group_representatives`가 작품 디렉터리 키별로 줄 경로순 후보.
     pub group_representatives: HashMap<String, Vec<(i64, Value)>>,
+    /// `aggregate_cover_categories`가 줄 카테고리별 (문서 수, 최근 수정, 최근 생성).
+    pub cover_stats: HashMap<String, (usize, f64, f64)>,
+    /// `search_cover_files_paged`가 줄 개별 파일 한 페이지.
+    pub cover_files: CoverFileHits,
     pub deleted_by_category: DeleteByQueryResult,
     pub rename_result: UpdateByQueryResult,
     pub backfill_result: BackfillReport,
@@ -95,6 +99,8 @@ impl Default for State {
             keyword_paged: (Vec::new(), 0),
             latest_docs: (Vec::new(), 0),
             group_representatives: HashMap::new(),
+            cover_stats: HashMap::new(),
+            cover_files: CoverFileHits::default(),
             deleted_by_category: DeleteByQueryResult { deleted: 2, failures: vec![] },
             rename_result: UpdateByQueryResult { updated: 3, failures: vec![] },
             backfill_result: BackfillReport::default(),
@@ -503,6 +509,16 @@ impl EsManagerApi for FakeEsManager {
     fn search_latest_docs(&self, max_result_count: i64, exclude_categories: Option<&[String]>) -> Result<(Vec<Hit>, i64), EsError> {
         self.enter("search_latest_docs", json!([max_result_count, exclude_categories]))?;
         Ok(self.with(|s| s.latest_docs.clone()))
+    }
+
+    fn aggregate_cover_categories(&self) -> Result<HashMap<String, (usize, f64, f64)>, EsError> {
+        self.enter("aggregate_cover_categories", json!([]))?;
+        Ok(self.with(|s| s.cover_stats.clone()))
+    }
+
+    fn search_cover_files_paged(&self, categories: &[String], size: i64, search_after: Option<(i64, i64, String)>, exclude: &[String]) -> Result<CoverFileHits, EsError> {
+        self.enter("search_cover_files_paged", json!([categories, size, search_after, exclude]))?;
+        Ok(self.with(|s| s.cover_files.clone()))
     }
 
     fn search_group_representatives(&self, keys: &[String], exclude: &[String]) -> Result<HashMap<String, Vec<(i64, Value)>>, EsError> {

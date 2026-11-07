@@ -854,6 +854,11 @@ impl BookManagerApi for Mock {
         cover_page(&v)
     }
 
+    async fn get_latest_comic_covers(&self, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
+        let v = self.invoke("get_latest_comic_covers", call_args!([], {"size": size, "cursor": cursor, "exclude_categories": exclude_categories})).await;
+        cover_page(&v)
+    }
+
     async fn get_uncovered_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         let v = self.invoke("get_uncovered_books_paged", call_args!([], {"category": category, "size": size, "cursor": cursor, "exclude_categories": exclude_categories})).await;
         cover_page(&v)

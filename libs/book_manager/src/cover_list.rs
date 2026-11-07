@@ -5,7 +5,7 @@
 mod cover_browse;
 mod uncovered_book_finder;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::io::Cursor;
@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 
 use super::{BookManager, BookResponse, MAX_CATEGORY_PAGE_SIZE};
 use book_model::book_metadata::Book;
-use cover_browse::{CoverEntry, CoverGroup, CoverStats, MISSING_TIME, latest_rank, merge_cover_page, plan_cover_scope, rank_candidates, work_directory};
+use cover_browse::{CoverEntry, CoverGroup, CoverStats, MISSING_TIME, latest_rank, merge_cover_page, plan_cover_scope, plan_latest_works, rank_candidates};
 use search_manager::{CoverFileHits, decode_category_cursor, encode_category_cursor};
 pub use uncovered_book_finder::{CoverBooksPager, CoverPage};
 
@@ -174,10 +174,22 @@ impl BookManager {
 
     /// 커버 목록용 책을 최신순으로 한 페이지 조회한다. epub, pdf만 대상이다. 작품 디렉터리는 대표 한 권으로 묶는다.
     pub async fn get_cover_books_paged(&self, opts: CoverPageOpts) -> Result<CoverPage, String> {
-        let invalid = || Err("invalid cursor".to_string());
         let category = opts.category.clone().unwrap_or_default();
+        log::debug!("# get_cover_books_paged(category='{category}', size={}, cursor={:?}, exclude_categories={:?})", opts.size, opts.cursor, opts.exclude_categories);
+        self.cover_page(opts, move |stats, excluded| plan_cover_scope(stats, &category, excluded)).await
+    }
+
+    /// 최신 만화를 최신순으로 한 페이지 조회한다. 작품 디렉터리(`숫자_이름/작품`)는 대표 한 권으로 묶는다.
+    /// 대표 권은 커버 목록과 같은 규칙으로 작품 전체에서 고르고, 작품 순서는 작품 안의 가장 최근 시각이다.
+    pub async fn get_latest_comic_covers(&self, opts: CoverPageOpts) -> Result<CoverPage, String> {
+        log::debug!("# get_latest_comic_covers(size={}, cursor={:?}, exclude_categories={:?})", opts.size, opts.cursor, opts.exclude_categories);
+        self.cover_page(opts, plan_latest_works).await
+    }
+
+    /// 계획(`plan`)이 나눈 작품 묶음과 개별 파일을 최신순으로 합쳐 한 페이지를 만든다.
+    async fn cover_page(&self, opts: CoverPageOpts, plan: impl FnOnce(&CoverStats, &[String]) -> (Vec<String>, Vec<CoverGroup>)) -> Result<CoverPage, String> {
+        let invalid = || Err("invalid cursor".to_string());
         let cursor = opts.cursor.clone().unwrap_or_default();
-        log::debug!("# get_cover_books_paged(category='{category}', size={}, cursor='{cursor}', exclude_categories={:?})", opts.size, opts.exclude_categories);
         let size = opts.size.clamp(1, MAX_CATEGORY_PAGE_SIZE as usize);
         let (mut group_after, mut file_after): (Option<Vec<Value>>, Option<Vec<Value>>) = (None, None);
         if !cursor.is_empty() {
@@ -199,7 +211,7 @@ impl BookManager {
                 .collect(),
             Err(e) => return Err(e.to_string()),
         };
-        let (file_categories, groups) = plan_cover_scope(&stats, &category, &excluded);
+        let (file_categories, groups) = plan(&stats, &excluded);
         let remaining: Vec<CoverGroup> = match &group_after {
             Some(after) => {
                 let rank_after = latest_rank(after[0].as_f64(), after[1].as_f64(), after[2].as_str().unwrap_or(""));
@@ -254,44 +266,6 @@ impl BookManager {
         let representative = self.try_make_book(book_id, &doc, 0.0)?;
         let others = ranked.filter_map(|(id, doc)| self.try_make_book(id, &doc, 0.0).map_err(|error| log::warn!("대체 커버 후보를 건너뛴다(book_id={id}): {error}")).ok()).collect();
         Ok(Some((representative, others)))
-    }
-
-    /// 최신 만화를 작품 디렉터리마다 한 장으로 묶는다. 순서는 작품마다 가장 최근 권이 놓인 자리다.
-    /// 대표 권은 커버 목록과 같은 규칙으로 작품 전체에서 고른다. 최신 목록에 들어온 권만 보면
-    /// 1권이 목록 밖으로 밀렸을 때 중간 권이 대표가 된다.
-    pub async fn get_latest_comic_covers(&self, size: i64, exclude_categories: Vec<String>) -> Result<CoverPage, String> {
-        let page = self.get_latest_books(size, Some(exclude_categories.clone())).await?;
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut entries: Vec<(Book, Option<(String, String)>)> = Vec::new();
-        for book in page.books {
-            match work_directory(&book.category) {
-                Some((key, name)) => {
-                    if seen.insert(key.clone()) {
-                        entries.push((book, Some((key, name))));
-                    }
-                }
-                None => entries.push((book, None)),
-            }
-        }
-        let keys: Vec<String> = entries.iter().filter_map(|(_, group)| group.as_ref().map(|(key, _)| key.clone())).collect();
-        let representatives: HashMap<String, Vec<(i64, Value)>> =
-            if keys.is_empty() { HashMap::new() } else { self.blocking(move |es| es.search_group_representatives(&keys, &exclude_categories)).await.map_err(|e| e.to_string())? };
-
-        let mut items: Vec<(Book, String)> = Vec::new();
-        let mut fallbacks: HashMap<i64, Vec<Book>> = HashMap::new();
-        for (book, group) in entries {
-            let Some((key, name)) = group else {
-                items.push((book, String::new()));
-                continue;
-            };
-            // 대표 후보를 못 받으면 최신 목록의 그 권을 그대로 쓴다.
-            let (book, others) = self.group_cover_books(representatives.get(&key).map_or(&[][..], Vec::as_slice))?.unwrap_or((book, Vec::new()));
-            if !others.is_empty() {
-                fallbacks.insert(book.book_id, others);
-            }
-            items.push((book, name));
-        }
-        Ok(CoverPage { items, total: Some(page.total.max(0) as usize), next_cursor: None, fallbacks })
     }
 }
 

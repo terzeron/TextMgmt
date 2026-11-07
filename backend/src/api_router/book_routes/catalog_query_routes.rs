@@ -488,6 +488,9 @@ async fn in_category(
 #[derive(Deserialize)]
 struct LatestQuery {
     limit: Option<i64>,
+    /// 만화만 쓴다. 이전 페이지의 `next_cursor`다.
+    #[serde(default)]
+    cursor: String,
 }
 
 async fn latest(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, OriginalUri(uri): OriginalUri, ApiQuery(query): ApiQuery<LatestQuery>) -> ApiResult<Json<Value>> {
@@ -502,12 +505,12 @@ async fn latest(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
         }
     }
     let manager = manager(&deps, &uri)?;
-    // 만화는 작품마다 대표 한 권으로 묶어 보낸다. 대표는 커버 목록과 같은 규칙으로 서버가 고른다.
+    // 만화는 작품마다 대표 한 권으로 묶어 커서로 한 페이지씩 보낸다. 대표는 커버 목록과 같은 규칙으로 서버가 고른다.
     if comics(&uri) {
-        return Ok(match manager.get_latest_comic_covers(limit, Some(&excluded)).await {
+        return Ok(match manager.get_latest_comic_covers(limit, &query.cursor, Some(&excluded)).await {
             Ok(page) => {
-                let total = page.total;
-                Json(json!({"status":"success","result":super::cover_list_routes::cover_books(page, manager.as_ref()),"total":total}))
+                let (total, next) = (page.total, page.next_cursor.clone());
+                Json(json!({"status":"success","result":super::cover_list_routes::cover_books(page, manager.as_ref()),"total":total,"next_cursor":next}))
             }
             Err(error) => failure(Some(error)),
         });

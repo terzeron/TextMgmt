@@ -297,8 +297,8 @@ impl BookManagerApi for ComicsManager {
         BookManagerApi::search_similar_books_paged(&self.inner, book_id, size, offset).await
     }
 
-    async fn get_latest_comic_covers(&self, size: i64, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
-        BookManagerApi::get_latest_comic_covers(&self.inner, size, exclude_categories).await
+    async fn get_latest_comic_covers(&self, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
+        BookManagerApi::get_latest_comic_covers(&self.inner, size, cursor, exclude_categories).await
     }
 
     async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {

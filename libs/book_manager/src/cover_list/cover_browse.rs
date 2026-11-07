@@ -153,6 +153,28 @@ fn is_first_installment(source: &Value) -> bool {
     FIRST_INSTALLMENT_PATTERN.is_match(&format!("{title} {file_name}"))
 }
 
+/// 최신 만화 화면을 개별 파일 카테고리와 작품 묶음으로 나눈다. `숫자_이름/작품` 아래는 작품 하나로 묶고,
+/// 나머지 카테고리의 파일은 한 권씩 보인다. 묶음은 작품 안의 가장 최근 시각 기준 최신순이다.
+pub fn plan_latest_works(category_stats: &CoverStats, excluded: &[String]) -> (Vec<String>, Vec<CoverGroup>) {
+    let mut file_categories: Vec<String> = Vec::new();
+    let mut groups: BTreeMap<String, CoverGroup> = BTreeMap::new();
+    for (category, &(_count, updated, created)) in category_stats {
+        if is_ignored_category(category) || category_matches(category, excluded) {
+            continue;
+        }
+        let Some((key, name)) = work_directory(category) else {
+            file_categories.push(category.clone());
+            continue;
+        };
+        let known = groups.get(&key);
+        let merged = CoverGroup { name, key: key.clone(), updated: later(known.and_then(|g| g.updated), updated), created: later(known.and_then(|g| g.created), created) };
+        groups.insert(key, merged);
+    }
+    let mut sorted: Vec<CoverGroup> = groups.into_values().collect();
+    sorted.sort_by_key(CoverGroup::rank);
+    (file_categories, sorted)
+}
+
 /// 파일 경로순으로 받은 후보를 대표 권이 맨 앞에 오게 늘어놓는다. 1권을 우선하고, 없으면 맨 앞이 대표다.
 /// 나머지는 받은 순서를 지킨다. 대표 커버를 못 만들 때 화면이 이 순서로 대체한다.
 pub fn rank_candidates(hits: &[(i64, Value)]) -> Vec<(i64, Value)> {
@@ -201,7 +223,7 @@ mod tests {
 
     use std::collections::{BTreeMap, BTreeSet};
 
-    use super::{CoverEntry, CoverFileHit, CoverGroup, CoverStats, MISSING_TIME, file_rank, latest_rank, merge_cover_page, plan_cover_scope, rank_candidates, work_directory};
+    use super::{CoverEntry, CoverFileHit, CoverGroup, CoverStats, MISSING_TIME, file_rank, latest_rank, merge_cover_page, plan_cover_scope, plan_latest_works, rank_candidates, work_directory};
     use serde_json::{Value, json};
 
     /// {카테고리: 문서 수}를 ES 집계 결과 모양 (수, 수정 시각, 생성 시각)으로 바꾼다.
@@ -409,6 +431,40 @@ mod tests {
             for category in ["1_웹툰", "1_웹툰/", "웹툰/작품", "_웹툰/작품", "1_/작품", "a1_웹툰/작품", "_root", ""] {
                 assert_eq!(work_directory(category), None, "{category}");
             }
+        }
+    }
+
+    mod test_plan_latest_works {
+        use super::*;
+
+        fn strings(items: &[&str]) -> Vec<String> {
+            items.iter().map(|s| s.to_string()).collect()
+        }
+
+        #[test]
+        fn test_groups_works_newest_first_and_keeps_other_categories_as_files() {
+            let s = stats(
+                &[("1_웹툰", 2), ("1_웹툰/가", 3), ("1_웹툰/가/외전", 1), ("1_웹툰/나", 4), ("_root", 1), ("웹툰/다", 1)],
+                &[("1_웹툰/가", 100.0), ("1_웹툰/가/외전", 500.0), ("1_웹툰/나", 300.0)],
+                &[],
+            );
+
+            let (files, groups) = plan_latest_works(&s, &[]);
+
+            assert_eq!(files, strings(&["1_웹툰", "_root", "웹툰/다"]));
+            assert_eq!(keys(&groups), vec!["1_웹툰/가", "1_웹툰/나"]);
+            assert_eq!(groups[0].name, "가");
+            assert_eq!(groups[0].updated, Some(500.0));
+        }
+
+        #[test]
+        fn test_drops_excluded_and_ignored_categories() {
+            let s = stats(&[("1_웹툰/가", 1), ("1_웹툰/숨김", 1), ("2_미완/나", 1), ("2_미완", 1), ("1_웹툰/.cache", 1)], &[], &[]);
+
+            let (files, groups) = plan_latest_works(&s, &strings(&["1_웹툰/숨김", "2_미완"]));
+
+            assert!(files.is_empty());
+            assert_eq!(keys(&groups), vec!["1_웹툰/가"]);
         }
     }
 
