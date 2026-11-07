@@ -101,6 +101,7 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
   let originalFetch;
 
   beforeEach(() => {
+    localStorage.clear();
     mockGetDocument.mockReset();
     setupGetDocument();
     originalFetch = globalThis.fetch;
@@ -1059,6 +1060,7 @@ describe("ViewPDF 편집 모드: 경계 분기", () => {
   let originalFetch;
 
   beforeEach(() => {
+    localStorage.clear();
     mockGetDocument.mockReset();
     setupGetDocument();
     originalFetch = globalThis.fetch;

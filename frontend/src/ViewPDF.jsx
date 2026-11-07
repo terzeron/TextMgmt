@@ -19,6 +19,7 @@ import PdfInsertImageModal from "./PdfInsertImageModal";
 import { describeHttpError } from "./httpError";
 import { blobToBase64 } from "./insertPreview";
 import usePendingImages from "./usePendingImages";
+import { useStoredViewerOption } from "./useStoredViewerOption";
 import "./viewerEditActions.css";
 import { MarkCropBox } from "./ImageCropBox";
 import { newMark, withBoxRect } from "./cropRect";
@@ -104,14 +105,32 @@ export default function ViewPDF({
   const [saveError, setSaveError] = useState(null);
   // 저장 뒤 같은 bookId로 PDF를 다시 불러오기 위한 카운터
   const [reloadToken, setReloadToken] = useState(0);
-  const [fitMode, setFitMode] = useState(!preview);
+  // 보기 옵션은 localStorage에 기억한다. 미리보기와 전체보기는 화면 폭이 달라 맞춤·배율·1장씩은 따로 저장한다.
+  const optionScope = preview ? "preview" : "full";
+  const [fitMode, setFitMode] = useStoredViewerOption(
+    `pdf_${optionScope}_fit`,
+    !preview,
+    (v) => typeof v === "boolean",
+  );
   // 1장씩 보기: 이미지 배율은 유지하고 각 쪽에 뷰포트 높이 이상의 공간을 확보해 한 쪽씩 멈춘다.
-  const [singlePage, setSinglePage] = useState(false);
+  const [singlePage, setSinglePage] = useStoredViewerOption(
+    `pdf_${optionScope}_single`,
+    false,
+    (v) => typeof v === "boolean",
+  );
   // 쪽 넘김 방식: 1장씩 보기와 독립이며 셋 중 하나만 켜진다(xor).
   //   vertical: 상하 스크롤만 / ltr: 좌우 넘김만 / rtl: 좌우 넘김만, 방향 반대(일본 만화 등)
-  const [pageMode, setPageMode] = useState("vertical");
+  const [pageMode, setPageMode] = useStoredViewerOption(
+    "pdf_page_mode",
+    "vertical",
+    (v) => ["vertical", "ltr", "rtl"].includes(v),
+  );
   const horizontal = pageMode !== "vertical";
-  const [zoomIndex, setZoomIndex] = useState(ZOOM_STEPS.indexOf(100));
+  const [zoomIndex, setZoomIndex] = useStoredViewerOption(
+    `pdf_${optionScope}_zoom`,
+    ZOOM_STEPS.indexOf(100),
+    (v) => Number.isInteger(v) && v >= 0 && v < ZOOM_STEPS.length,
+  );
   const zoomPercent = ZOOM_STEPS[zoomIndex];
   const toggleSinglePage = () => {
     setSinglePage((prev) => !prev);
