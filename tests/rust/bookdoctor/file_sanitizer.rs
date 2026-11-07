@@ -33,6 +33,19 @@ mod epub {
     }
 
     #[test]
+    fn an_epub_with_nothing_removable_is_reported_unchanged() {
+        // 압축 밖을 가리키는 manifest 항목만 있고 지울 요소가 없다. 파일을 건드리지 않는다.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("u.epub");
+        epub_with_files(&p, &opf_with(r#"<item id="esc" href="../../outside.xhtml" media-type="application/xhtml+xml"/>"#), &xhtml("<p>본문</p>"), &[]);
+        let before = fs::read(&p).unwrap();
+        let (code, out) = run_in(d.path(), &["sanitize", p.to_str().unwrap()]);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("UNCHANGED"), "{out}");
+        assert_eq!(fs::read(&p).unwrap(), before);
+    }
+
+    #[test]
     fn a_file_with_security_findings_left_after_rebuild_is_not_applied() {
         // manifest가 압축 밖을 가리키는 항목은 허용 목록으로 고치지 못한다. 남은 보안 지표가 있으면 적용하지 않는다.
         let d = tempfile::tempdir().unwrap();

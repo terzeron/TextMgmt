@@ -243,3 +243,18 @@ mod viewer_blocked_json {
         assert!(String::from_utf8(out).unwrap().contains("\"viewer_blocked\":\"n/a\""));
     }
 }
+
+#[test]
+fn a_failing_writer_turns_the_json_error_into_an_io_error() {
+    struct Broken;
+    impl std::io::Write for Broken {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("disk full"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let error = write_json_line(&flagged(Path::new("a.epub")), &mut Broken).unwrap_err();
+    assert!(error.to_string().contains("disk full"), "{error}");
+}
