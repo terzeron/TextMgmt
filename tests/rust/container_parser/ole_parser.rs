@@ -386,3 +386,17 @@ mod anomaly_reporting {
         assert!(anomalies(b).iter().any(|a| matches!(a, Anomaly::InvalidObjectType { value: 0xFF, .. })));
     }
 }
+
+#[test]
+fn from_bytes_enforces_the_total_limit_and_trusts_the_v4_major_version() {
+    let data = bytes_of(3000, 1);
+    let cfb = make_cfb(&[("x", &data)]);
+    let tiny = Limits { max_total: 1024, ..Limits::default() };
+    assert!(matches!(OleFile::from_bytes(cfb.bytes.clone(), &tiny), Err(OleError::Limit(_))));
+    // 주버전 4인데 섹터 크기 필드가 어긋나면 4096바이트 섹터로 읽는다.
+    let mut v4 = make_cfb_v4(&[("x", &data)]).bytes;
+    v4[30..32].copy_from_slice(&9u16.to_le_bytes());
+    let mut file = OleFile::from_bytes(v4, &Limits::default()).unwrap();
+    let entry = file.find("x").unwrap().clone();
+    assert_eq!(file.read_stream(&entry).unwrap(), data);
+}

@@ -3,7 +3,7 @@ mod support;
 
 use container_parser::ole_parser::vba_decoder::{VbaError, decompress, read_project};
 use container_parser::ole_parser::{Limits, OleFile};
-use support::{compress, dir_stream, make_cfb, module_stream, pseudo};
+use support::{compress, dir_stream, make_cfb, module_stream, pseudo, record, utf16};
 
 /// MS-OVBA 3.2.2 일반 압축 예제의 압축 바이트와 해제 결과.
 const SPEC_COMPRESSED: [u8; 51] = [
@@ -151,4 +151,75 @@ fn the_same_module_stream_is_not_decompressed_twice() {
     let project = read_project(&mut f, "Macros/VBA", 1 << 20).unwrap();
     assert_eq!(project.modules.len(), 1, "{:?}", project.modules);
     assert_eq!(project.errors.len(), 2, "{:?}", project.errors);
+}
+
+#[test]
+fn chunk_and_copy_token_limits_are_errors() {
+    // 무압축 청크도 출력 상한을 넘으면 거절한다.
+    let mut raw = vec![0x01];
+    raw.extend_from_slice(&(0x3000u16 | 4095).to_le_bytes());
+    raw.extend_from_slice(&pseudo(4096, 9));
+    assert_eq!(decompress(&raw, 100), Err(VbaError::OutputLimit));
+    // 복사 토큰 자리에 1바이트만 남은 청크
+    assert_eq!(decompress(&[0x01, 0x01, 0xB0, 0x01, 0x41], 100), Err(VbaError::Truncated));
+    // 리터럴 'a' 뒤 길이 4짜리 복사 토큰: 상한 2를 넘는다.
+    let copy = [0x01, 0x03, 0xB0, 0x02, b'a', 0x01, 0x00];
+    assert_eq!(decompress(&copy, 2), Err(VbaError::OutputLimit));
+    assert_eq!(decompress(&copy, 100).unwrap(), b"aaaaa");
+}
+
+/// PROJECTMODULES 레코드 뒤에 `records`를 붙인 dir 스트림으로 프로젝트를 읽는다.
+fn project_with_dir_records(records: &[u8], streams: &[(&str, &[u8])]) -> container_parser::ole_parser::vba_decoder::VbaProject {
+    let mut dir = record(0x000F, &1u16.to_le_bytes());
+    dir.extend_from_slice(records);
+    let compressed = compress(&dir);
+    let mut all: Vec<(&str, &[u8])> = vec![("Macros/VBA/dir", compressed.as_slice())];
+    all.extend_from_slice(streams);
+    let mut f = OleFile::from_bytes(make_cfb(&all).bytes, &Limits::default()).unwrap();
+    read_project(&mut f, "Macros/VBA", 1 << 20).unwrap()
+}
+
+#[test]
+fn module_docstrings_are_skipped_and_short_stream_names_end_the_module_list() {
+    let src = "Sub M()\r\nEnd Sub\r\n";
+    let mut records = record(0x0019, b"M");
+    let mut stream_name = b"M".to_vec();
+    stream_name.extend_from_slice(&0x0032u16.to_le_bytes());
+    stream_name.extend_from_slice(&2u32.to_le_bytes());
+    stream_name.extend(utf16("M"));
+    records.extend_from_slice(&0x001Au16.to_le_bytes());
+    records.extend_from_slice(&1u32.to_le_bytes());
+    records.extend_from_slice(&stream_name);
+    // MODULEDOCSTRING: MBCS 글 뒤에 예약값과 유니코드 글이 이어진다.
+    records.extend(record(0x001C, b"doc"));
+    records.extend_from_slice(&0x0048u16.to_le_bytes());
+    records.extend_from_slice(&6u32.to_le_bytes());
+    records.extend(utf16("doc"));
+    records.extend(record(0x0031, &0u32.to_le_bytes()));
+    records.extend(record(0x002B, &[]));
+    let module = module_stream(0, src);
+    let project = project_with_dir_records(&records, &[("Macros/VBA/M", &module)]);
+    assert_eq!(project.modules.iter().map(|m| (m.name.as_str(), m.source.as_str())).collect::<Vec<_>>(), [("M", src)]);
+
+    // 유니코드 이름 길이가 dir 끝을 넘거나, 이름 뒤에 아무것도 없으면 모듈을 끝맺지 못한다.
+    let mut past_end = record(0x0019, b"M");
+    past_end.extend(record(0x001A, b"M"));
+    past_end.extend_from_slice(&0x0032u16.to_le_bytes());
+    past_end.extend_from_slice(&1000u32.to_le_bytes());
+    assert!(project_with_dir_records(&past_end, &[]).modules.is_empty());
+    let mut last = record(0x0019, b"M");
+    last.extend(record(0x001A, b"M"));
+    assert!(project_with_dir_records(&last, &[]).modules.is_empty());
+}
+
+#[test]
+fn a_module_stream_over_the_stream_limit_is_reported() {
+    let dir = compress(&dir_stream(&[("Big", "Big", 0)]));
+    let big = module_stream(3000, "Sub Big()\r\nEnd Sub\r\n");
+    let cfb = make_cfb(&[("Macros/VBA/dir", &dir), ("Macros/VBA/Big", &big)]);
+    let limits = Limits { max_stream: 2000, ..Limits::default() };
+    let mut f = OleFile::from_bytes(cfb.bytes, &limits).unwrap();
+    let project = read_project(&mut f, "Macros/VBA", 1 << 20).unwrap();
+    assert!(project.modules.is_empty());
+    assert!(project.errors.iter().any(|e| e.starts_with("Big: ")), "{:?}", project.errors);
 }
