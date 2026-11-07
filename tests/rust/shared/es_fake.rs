@@ -340,6 +340,14 @@ impl EsManagerApi for FakeEsManager {
         Ok(self.with(|s| s.docs.get(&doc_id).cloned().or_else(|| s.default_doc.clone())))
     }
 
+    /// `put_doc`로 넣은 문서 중 `isbn`이 같은 것의 `(inode, file_path)`.
+    fn search_by_isbn(&self, isbn: &str, limit: usize) -> Result<Vec<(i64, String)>, EsError> {
+        self.enter("search_by_isbn", json!([isbn, limit]))?;
+        Ok(self.with(|s| {
+            s.docs.iter().filter(|(_, d)| d["isbn"].as_str() == Some(isbn)).filter_map(|(id, d)| Some((*id, d["file_path"].as_str()?.to_string()))).take(limit).collect()
+        }))
+    }
+
     fn update(&self, doc_id: i64, fields: &Value) -> Result<bool, EsError> {
         self.enter("update", json!([doc_id, fields]))?;
         self.with(|s| s.updates.push((doc_id, fields.clone())));

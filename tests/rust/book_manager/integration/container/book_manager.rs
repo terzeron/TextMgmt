@@ -8,10 +8,9 @@
 //!   - 생성: `BookManager::with_deps(BookManagerDeps::new(path_prefix: PathBuf, es: Arc<dyn EsManagerApi>).with_*(..)) -> BookManager` (구 `for_test`. 전역 `Book.path_prefix`를 건드리지 않고 매니저가 들고 있는다)
 //!   - 생성: `BookManager::from_env(env: &dyn Fn(&str) -> Option<String>, es_factory: &dyn Fn(&str) -> Arc<dyn EsManagerApi>) -> Result<BookManager, BookManagerError>` (구 `new_from_env`/`new_with`/`with_es_url`)
 //!   - `BookManagerDeps` 빌더(소비형, 3.12): `with_fs(Arc<dyn FsOps>)`, `with_runner(Arc<dyn CommandRunner>)`, `with_pdf_opener(Arc<dyn PdfOpener>)`, `with_pdf_pages(Arc<dyn PdfPageOps>)`,
-//!     `with_file_reader(Arc<dyn FileReader>)`, `with_bulk_reindex_batch_size(usize)`, `with_scan_observer(Arc<dyn Fn() + Send + Sync>)`, `with_classifier_factory(Arc<dyn Fn() -> Arc<dyn Classify> + Send + Sync>)`
+//!     `with_file_reader(Arc<dyn FileReader>)`, `with_bulk_reindex_batch_size(usize)`, `with_scan_observer(Arc<dyn Fn() + Send + Sync>)`, `with_classifier_factory(Arc<dyn Fn() -> Option<Arc<dyn Classify>> + Send + Sync>)`
 //!   - 문서 3.12에 없는 seam(3.0 규칙대로 `with_*`로 옮겨 가정한 것. 확정 필요): `with_get_category_mismatches_override(Arc<dyn Fn(bool) -> Value + Send + Sync>)`,
-//!     `with_get_category_mismatch_details_override(Arc<dyn Fn(&str) -> Value + Send + Sync>)`, `with_iter_category_indexable_files_override(Arc<dyn Fn(&str, bool) -> Vec<PathBuf> + Send + Sync>)`,
-//!     `with_is_high_confidence_override(Arc<dyn Fn(&dyn Any, f64) -> bool + Send + Sync>)`
+//!     `with_get_category_mismatch_details_override(Arc<dyn Fn(&str) -> Value + Send + Sync>)`, `with_iter_category_indexable_files_override(Arc<dyn Fn(&str, bool) -> Vec<PathBuf> + Send + Sync>)`
 //!   - `book_manager::FileReader { fn read_file(&self, path: &Path, path_prefix: Option<&Path>) -> Docs }` (구 `ReadFile`/`set_read_file`/`Loader.read_file`)
 //!   - 상수: `CACHE_MAX_AGE_SECONDS: u64`, `EPUB_IMAGE_MAX_EDGE: u32`
 //!   - 비동기(`async fn`, `&self`): `get_categories() -> Result<BTreeMap<String, i64>, String>`, `get_books_in_category(&str) -> Result<Vec<Book>, String>`,
@@ -37,8 +36,7 @@
 //! - `book_manager::{BookContent::{File(PathBuf), Text(String)}, BookResponse { status_code: u16, body: Vec<u8> }, BookManagerError(String), ProposeOptions { use_bookstore: Option<bool>, use_content_meta: Option<bool>, on_progress: Option<&dyn Fn(Value)> }: Default}`
 //! - `sysdeps::{FsOps, CommandRunner, CommandOutput { returncode: i32, stdout: Vec<u8>, stderr: Vec<u8> }, CommandError::{Timeout, NotFound, Failed(String)}}` (문서 3.1. `FsOps`는 `common::faulty_fs::FaultyFs`, `CommandRunner`는 `common::runner::FakeRunner`가 구현한다)
 //! - `pdf_engine::pdf_page_reader::{PdfOpener { fn open(&self, &Path) -> Result<Box<dyn PdfDoc>, PdfError> }, PdfDoc (page_count/pdf_version/docinfo/check_pdf_syntax/close), PdfPageOps (page_count/extract_pages), PdfError { kind, message }}` (문서 3.11)
-//! - `classifier::Classify { fn is_available(&self) -> bool; fn classify_path(&self, &Path, Option<f64>) -> Result<Prediction, String>; fn classify_document(&self, &Value, Option<f64>) -> Result<Prediction, String> }`
-//! - `classifier::Prediction::new(category: Option<&str>, confidence: f64, top: Vec<(String, f64)>, reason: &str) -> Prediction`
+//! - `classifier::Classify { fn classify_document(&self, &Value) -> Result<Prediction, String> }`, `classifier::Prediction { ranked: Vec<(String, f64)> }`
 //! - `search_manager::{EsManagerApi, EsError, ESManager::connect(env, connector, clock)}` (문서 3.3. 대역은 `common::es_fake::FakeEsManager`)
 //! - 파일 읽기(`Loader.read_file`)는 `book_manager::DefaultFileReader`로 대신한다(실제 ES 테스트에서만). `loader` crate에는 의존하지 않는다.
 //!
@@ -2530,28 +2528,19 @@ fn test_propose_category_changes_uses_the_supervised_model() {
     let rofan_book = source_dir.join("[로판] 황녀님이 너무해.txt");
     write(&rofan_book, "황녀님과 기사단장 이야기");
 
+    mkdir(tmp_path.join("3_여성향"));
+
     struct StubClassifier;
     impl Classify for StubClassifier {
-        fn is_available(&self) -> bool {
-            true
-        }
-        fn classify_path(&self, _fpath: &Path, _min_confidence: Option<f64>) -> Result<Prediction, String> {
-            Ok(Prediction::new(Some("3_여성향"), 0.96, vec![("3_여성향".to_string(), 0.96)], "모델 확신도 0.960 -> 3_여성향"))
-        }
-        fn classify_document(&self, _doc: &Value, _min_confidence: Option<f64>) -> Result<Prediction, String> {
-            self.classify_path(Path::new(""), None)
+        fn classify_document(&self, _doc: &Value) -> Result<Prediction, String> {
+            Ok(Prediction { ranked: vec![("3_여성향".to_string(), 0.96), ("1_소설".to_string(), 0.04)] })
         }
     }
 
-    deps = deps.with_classifier_factory(Arc::new(|| Arc::new(StubClassifier) as Arc<dyn Classify>));
-    // 신뢰도 보정 경계는 정책 파일에서 오는데(is_high_confidence), 테스트 환경엔 정책 파일이
-    // 없어 늘 "낮음"으로 본다. 그 경계값 자체는 test_high_confidence_needs_a_calibrated_boundary가
-    // 따로 검증하므로, 여기서는 실제 배선(BookClassifierService -> classify_file -> 모델)이
-    // 제안까지 이어지는지만 본다.
-    deps = deps.with_is_high_confidence_override(Arc::new(|_classifier_service, _confidence: f64| true));
-
-    let fake_doc = json!({"title": "황녀님이 너무해", "author": "작가", "category": "0_inbox", "file_path": rofan_book.strip_prefix(tmp_path).unwrap().to_str().unwrap()});
-    deps = deps.with_file_reader(FnFileReader::new(move |_p: &Path, _prefix: Option<&Path>| Docs::from([(12345, fake_doc.clone())])));
+    // 배선(팩토리 -> inode로 ES 문서 조회 -> 모델)이 제안까지 이어지는지 본다. 디렉토리가 없는 1_소설은 빠진다.
+    deps = deps.with_classifier_factory(Arc::new(|| Some(Arc::new(StubClassifier) as Arc<dyn Classify>)));
+    let inode = std::fs::metadata(&rofan_book).map(|m| std::os::unix::fs::MetadataExt::ino(&m) as i64).unwrap();
+    es.put_doc(inode, json!({"title": "황녀님이 너무해", "author": "작가", "category": "0_inbox", "file_path": rofan_book.strip_prefix(tmp_path).unwrap().to_str().unwrap()}));
     let manager = BookManager::with_deps(deps);
 
     let (result, err) = outcome(run(manager.propose_category_changes(
@@ -2563,8 +2552,9 @@ fn test_propose_category_changes_uses_the_supervised_model() {
     assert!(err.is_none());
     assert!(rofan_book.exists()); // 제안 단계는 파일을 옮기지 않는다
     assert_eq!(result["items"][0]["target_category"], "3_여성향");
-    assert_eq!(result["items"][0]["source"], "model");
-    assert_eq!(result["items"][0]["grade"], "certain");
+    assert_eq!(result["items"][0]["candidates"][0]["source"], "model");
+    assert_eq!(result["items"][0]["score"], 1.0);
+    assert_eq!(result["items"][0]["classified"], true);
 }
 
 #[test]

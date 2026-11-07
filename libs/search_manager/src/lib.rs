@@ -16,6 +16,9 @@ use serde_json::{Map, Value, json};
 use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 
 pub use es_client::EsError;
+
+/// 분류 제안이 같은 ISBN 문서를 찾을 때 받는 최대 건수. 이만큼 일치하면 잘못 추출된 흔한 값으로 본다.
+pub const ISBN_MATCH_LIMIT: usize = 50;
 pub use es_client::transport::{Conflicts, EsRequest, EsTransport, HttpTransport};
 
 /// `backfill_created_time`이 처리한 문서 수.
@@ -148,6 +151,10 @@ pub trait EsManagerApi: Send + Sync {
         Err(EsError::Unsupported)
     }
     fn search_by_path_source(&self, _path: &str) -> Result<Option<Value>, EsError> {
+        Err(EsError::Unsupported)
+    }
+    /// 같은 ISBN 문서의 `(inode, file_path)`. 최대 `limit`건.
+    fn search_by_isbn(&self, _isbn: &str, _limit: usize) -> Result<Vec<(i64, String)>, EsError> {
         Err(EsError::Unsupported)
     }
     fn search_by_category(&self, _category: &str, _max_result_count: i64) -> Result<Vec<Hit>, EsError> {
@@ -628,6 +635,10 @@ impl EsManagerApi for ESManager {
     }
 
     /// 문서 3.3의 `EsLookup::search_by_path`에 대응한다. file_path 정확 일치 첫 문서의 `_source`다.
+    fn search_by_isbn(&self, isbn: &str, limit: usize) -> Result<Vec<(i64, String)>, EsError> {
+        ESManager::search_by_isbn(self, isbn, limit)
+    }
+
     fn search_by_path_source(&self, path: &str) -> Result<Option<Value>, EsError> {
         let response = self.es.send(&EsRequest::search(json!({"query": {"term": {"file_path": path}}, "size": 1})))?;
         Ok(hits_of(&response).first().map(source_of))

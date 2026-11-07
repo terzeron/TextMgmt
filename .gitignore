@@ -60,3 +60,4 @@ backend/classifier/export/
 *.orig.*
 tests/books/_epub/temp_*.epub
 tests/books/_conflict_test_dir/
+/models/

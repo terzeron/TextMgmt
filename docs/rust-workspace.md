@@ -34,7 +34,7 @@ docs/       문서
 | `bookstore` | Yes24·알라딘·교보문고 검색과 상세 추출. backend가 쓰는 전체 서점 구현(`stores`: 리디북스·네이버·문피아·조아라·웹툰 포함)도 여기 있다 |
 | `parse_stat_counter` | 색인·파싱 통계 카운터 |
 | `db` | MySQL 접근 추상화와 저장소: 카테고리 매핑(`category_mapping`), 사용자별 최근 조회 이력(`view_history_store`). 각 저장소는 라우트가 쓰는 JSON 기반 facade(`CategoryMappingApi`, `ViewHistoryApi`)도 함께 구현한다 |
-| `classifier` | 도서 분류기 껍데기: backend 분류 제안이 쓰는 `Classify`·`BookClassifierApi` trait와 모델 단독 어댑터. 구현은 없어서 backend는 카테고리 매핑 키워드만으로 제안한다 |
+| `classifier` | 도서 분류기: 특징 해시(`feature_hasher`), softmax 모델과 파일 형식(`softmax_model`), 모델 파일 핫 리로드(`model_reloader`), backend 분류 제안이 쓰는 `Classify` trait. ES를 모른다. 제안 점수 합산은 `book_manager::evidence_scorer`가 한다 |
 | `file_indexer` | 파일 하나를 색인 레코드로 읽기: 종류 판별, 본문·메타데이터·생성 시각 추출, 파서 자식 프로세스 격리(워커 바이너리 `tm-index-worker`). 파일을 고쳐 쓰지 않는다(TXT 본문을 읽기 직전의 준비 단계는 호출자가 `ReadHooks::prepare_text`로 꽂는다). 색인 제외 디렉터리 규칙은 `book_model::ignore_rules`를 쓴다. loader와 book_manager가 함께 쓴다 |
 | `pdf_engine` | PDF 처리 능력: lopdf로 열기·쪽 추출(`pdf_page_reader`), MuPDF를 별도 프로세스에서 30초·512MiB 상한으로 돌리는 worker(`tm-pdf-worker`, 본체 `native_pdf`)와 호출 adapter(`pdf_worker_client`). 표지 이미지 처리는 `cover_manager::pdf_cover`가 맡는다. `doc_reader`·`doc_checker`·`cover_manager`·`book_manager`의 아래 계층이다 |
 | `sysdeps` | 시계, 파일시스템, 외부 명령 같은 시스템 능력의 trait와 실제 구현. 백그라운드 작업 실행기(`task_runner`)와 겹치지 않는 임시 파일 이름(`temp_file_maker`)도 여기 있다. 파서 시간 상한(`timeout_runner`)을 포함한다 |
@@ -46,6 +46,7 @@ docs/       문서
 | crate | 용도 |
 | --- | --- |
 | `bookdoctor` | 문서 파일 진단(`scan`), 보안 정리(`sanitize`), 결함 수리(`repair`), 손상 문서 격리·복구(`quarantine`·`unquarantine`) 명령. 명령행, 파일 순회와 병렬 실행, 적용(휴지통 보관·덮어쓰기), 보고 출력을 맡는다. 검사 기법은 `doc_checker`, 교정 기법은 `doc_repairer`를 쓴다 |
+| `classifier_trainer` | ES 책 문서(`summary`·`title`·`author`)에서 카테고리별 균등 무작위 표본을 뽑아 softmax 분류 모델을 학습하고 홀드아웃 정답률을 출력한다. 모델 형식·특징 해시는 `classifier`를 쓴다 |
 | `loader` | 책·만화 디렉토리의 파일을 읽어 ES 색인을 만들고 맞춘다. `--reencode`면 읽기 직전에 UTF-8이 아닌 TXT를 `doc_repairer`로 고쳐 쓴다 |
 
 ## 규칙

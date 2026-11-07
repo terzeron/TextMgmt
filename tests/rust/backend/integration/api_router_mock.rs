@@ -616,8 +616,8 @@ async fn test_classify_proposal_batches_new_and_updated_items_in_tens() {
     fx.cat.returns("get_all_mappings", json!({}));
     install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
 
-    let placeholders = epub_items(25, json!({"target_category": null, "grade": null}));
-    let classified = epub_items(25, json!({"target_category": "3_SF", "grade": "certain"}));
+    let placeholders = epub_items(25, json!({"target_category": null, "classified": false}));
+    let classified = epub_items(25, json!({"target_category": "3_SF", "classified": true}));
     let mut events: Vec<Value> = placeholders.iter().map(|item| json!({"total_count": 25, "processed_count": 0, "new_items": [item]})).collect();
     events.extend(classified.iter().enumerate().map(|(i, item)| json!({"total_count": 25, "processed_count": i + 1, "updated_items": [item]})));
     fx.bm.side_effect("propose_category_changes", fake_propose(events, proposal_result(25, &classified), None));
@@ -661,7 +661,7 @@ async fn test_classify_proposal_keeps_large_progress_event_as_one_batch() {
     fx.bm.set_path_prefix(tmp.path());
     fx.cat.returns("get_all_mappings", json!({}));
     install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
-    let placeholders = epub_items(25, json!({"target_category": null, "grade": null}));
+    let placeholders = epub_items(25, json!({"target_category": null, "classified": false}));
     fx.bm.side_effect("propose_category_changes", fake_propose(vec![json!({"total_count": 25, "processed_count": 0, "new_items": placeholders})], proposal_result(25, &[]), None));
 
     let response = fx.post_json("/categories/classify-proposal", &json!({"category": "0_inbox"})).await;
@@ -944,12 +944,12 @@ async fn test_classify_proposal_job_stores_names_first_then_fills_them_in() {
     fx.cat.returns("get_all_mappings", json!({}));
     install_classify_status_store(&fx.cat, Some(json!({"status": "idle"})));
 
-    let placeholders: Vec<Value> = (0..3).map(|i| json!({"file_path": format!("0_inbox/{i}.epub"), "title": format!("{i}"), "grade": null, "target_category": null})).collect();
+    let placeholders: Vec<Value> = (0..3).map(|i| json!({"file_path": format!("0_inbox/{i}.epub"), "title": format!("{i}"), "classified": false, "target_category": null})).collect();
     let classified: Vec<Value> = placeholders
         .iter()
         .map(|item| {
             let mut c = item.clone();
-            c["grade"] = json!("certain");
+            c["classified"] = json!(true);
             c["target_category"] = json!("3_SF");
             c
         })
@@ -979,7 +979,7 @@ async fn test_classify_proposal_job_flushes_the_update_tail() {
     fx.bm.set_path_prefix(tmp.path());
     fx.cat.returns("get_all_mappings", json!({}));
     install_classify_status_store(&fx.cat, Some(json!({"status": "running", "total_count": 0, "processed_count": 0})));
-    let classified = epub_items(25, json!({"grade": "certain"}));
+    let classified = epub_items(25, json!({"classified": true}));
 
     let events: Vec<Value> = classified.iter().enumerate().map(|(i, item)| json!({"total_count": 25, "processed_count": i + 1, "updated_items": [item]})).collect();
     fx.bm.side_effect("propose_category_changes", fake_propose(events, proposal_result(25, &classified), None));

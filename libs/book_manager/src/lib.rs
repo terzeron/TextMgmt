@@ -64,12 +64,13 @@ pub mod category_proposer;
 mod category_reloader;
 mod cover_finder;
 pub mod cover_list;
+pub mod evidence_scorer;
 mod file_reader;
 mod file_validator;
 pub use file_validator::{EpubMessage, EpubPublication, EpubSummary, EpubValidation, MessageLocation, PdfMessage, PdfPublication, PdfSummary, PdfValidation};
 mod mismatch_reporter;
 pub use category_editor::{CategoryDeletePreview, CategoryDeletion, CategoryRename};
-pub use category_proposer::{AppliedItem, ApplyResult, ApplyStatus, CategoryCandidate, ItemFailure, MoveAction, MoveOutcome, MoveStatus, Proposal, ProposalGrade, ProposalItem, ProposeResult};
+pub use category_proposer::{AppliedItem, ApplyResult, ApplyStatus, CategoryCandidate, ItemFailure, MoveAction, MoveOutcome, MoveStatus, Proposal, ProposalItem, ProposeResult};
 pub use category_reloader::{CategoryReload, MismatchReload, ReloadCounts, ReloadFailure, ReloadProgressFn, ReloadedFiles};
 pub use mismatch_reporter::{CategoryMismatch, DuplicateDoc, DuplicatePath, EsOnlyFile, FsOnlyFile, MismatchDetails, MismatchSummary};
 mod path_validator;
@@ -79,7 +80,7 @@ pub mod preview_builder;
 mod seam_accessors;
 
 pub use book_updater::BookDeletion;
-pub use category_proposer::{ApplyOptions, KeywordMatch, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, ProposeOptions, Ranked};
+pub use category_proposer::{ApplyOptions, KeywordMatch, MoveOpts, ProposeOptions, Ranked};
 pub use cover_finder::{BookLookup, BookRef, Thumbnailer};
 pub use cover_list::CoverPageOpts;
 pub use cover_list::{CoverBooksPager, CoverPage};
@@ -161,11 +162,11 @@ pub trait FileReader: Send + Sync + 'static {
     }
 }
 
-pub type ClassifierFactory = Arc<dyn Fn() -> Arc<dyn Classify> + Send + Sync>;
+/// 제안 한 번에 한 번 부른다. `None`은 모델 파일이 없다는 뜻이다.
+pub type ClassifierFactory = Arc<dyn Fn() -> Option<Arc<dyn Classify>> + Send + Sync>;
 pub type MismatchOverride = Arc<dyn Fn(bool) -> MismatchSummary + Send + Sync>;
 pub type DetailsOverride = Arc<dyn Fn(&str) -> MismatchDetails + Send + Sync>;
 pub type IterFilesOverride = Arc<dyn Fn(&str, bool) -> Vec<PathBuf> + Send + Sync>;
-pub type HighConfidenceOverride = Arc<dyn Fn(&dyn Any, f64) -> bool + Send + Sync>;
 
 /// 하위 모듈이 덧붙이는 설정과 대역을 담는 칸. 타입 하나에 값 하나다.
 #[derive(Clone, Default)]
@@ -199,7 +200,6 @@ pub struct BookManagerDeps {
     get_category_mismatches_override: Option<MismatchOverride>,
     get_category_mismatch_details_override: Option<DetailsOverride>,
     iter_category_indexable_files_override: Option<IterFilesOverride>,
-    is_high_confidence_override: Option<HighConfidenceOverride>,
     loader_program: String,
     duplicate_name_max_index: usize,
     max_category_result_count: i64,
@@ -223,7 +223,6 @@ impl BookManagerDeps {
             get_category_mismatches_override: None,
             get_category_mismatch_details_override: None,
             iter_category_indexable_files_override: None,
-            is_high_confidence_override: None,
             loader_program: "loader".to_string(),
             duplicate_name_max_index: DUPLICATE_NAME_MAX_INDEX,
             max_category_result_count: MAX_CATEGORY_RESULT_COUNT,
@@ -289,12 +288,6 @@ impl BookManagerDeps {
         self
     }
 
-    /// 모델 점수가 '확실'인지 판정하는 함수를 바꾼다. 첫 인자는 분류기(`Arc<dyn Classify>`를 `&dyn Any`로 본 것)다.
-    pub fn with_is_high_confidence_override(mut self, f: HighConfidenceOverride) -> Self {
-        self.is_high_confidence_override = Some(f);
-        self
-    }
-
     /// 카테고리 전체 재적재(`reload_category`)가 실행할 loader 실행 파일. 기본은 PATH의 `loader`다.
     pub fn with_loader_program(mut self, program: &str) -> Self {
         self.loader_program = program.to_string();
@@ -350,7 +343,6 @@ pub struct BookManager {
     get_category_mismatches_override: Option<MismatchOverride>,
     get_category_mismatch_details_override: Option<DetailsOverride>,
     iter_category_indexable_files_override: Option<IterFilesOverride>,
-    is_high_confidence_override: Option<HighConfidenceOverride>,
     loader_program: String,
     duplicate_name_max_index: usize,
     max_category_result_count: i64,
@@ -394,7 +386,6 @@ impl BookManager {
             get_category_mismatches_override: deps.get_category_mismatches_override,
             get_category_mismatch_details_override: deps.get_category_mismatch_details_override,
             iter_category_indexable_files_override: deps.iter_category_indexable_files_override,
-            is_high_confidence_override: deps.is_high_confidence_override,
             loader_program: deps.loader_program,
             duplicate_name_max_index: deps.duplicate_name_max_index,
             max_category_result_count: deps.max_category_result_count,

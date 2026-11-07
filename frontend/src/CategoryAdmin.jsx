@@ -52,10 +52,7 @@ import {
   updateFolderInTree,
 } from "./folderUtils";
 import { TreeNodeIcon } from "./fileTypeIcons";
-import ClassifyProposalTable, {
-  isSelectable,
-  isAlreadyInCurrentCategory,
-} from "./ClassifyProposalTable";
+import ClassifyProposalTable, { isSelectable } from "./ClassifyProposalTable";
 import "./Folder.css";
 import SplitLayout from "./SplitLayout";
 
@@ -1044,33 +1041,15 @@ export default function CategoryAdmin({
   ]);
 
   // 분류 제안 상태를 반영한다. ready/done/failed(검토 가능한 종료 상태)에 새로
-  // 진입할 때만 기본 선택을 다시 채운다 — 이 상태들은 폴링이 멈추는 지점이라
+  // 진입할 때 선택을 비운다 — 이 상태들은 폴링이 멈추는 지점이라
   // 이후 사용자가 직접 고친 체크 상태를 덮어쓸 일이 없다.
   const applyProposalStatus = useCallback((data) => {
     if (!data) return;
     setProposal(data);
     if (["ready", "done", "failed"].includes(data.status)) {
-      const items = data.items || [];
-      // 확실한 행만 추천 1을 미리 체크해 둔다. target_category는 candidates[0]과
-      // 같다는 것이 백엔드의 불변식이라, 체크 표시와 실제 목적지가 어긋나지 않는다.
-      const defaults = {};
-      for (const item of items) {
-        const first = (item.candidates || [])[0];
-        // 추천 1이 이미 있는 디렉토리와 같으면 제자리 이동이라 체크하지 않는다.
-        if (
-          item.grade === "certain" &&
-          first?.category &&
-          item.apply_status !== "moved" &&
-          !isAlreadyInCurrentCategory(item)
-        ) {
-          defaults[item.file_path] = {
-            source: "candidate",
-            index: 0,
-            category: first.category,
-          };
-        }
-      }
-      setProposalChoices(defaults);
+      // 어떤 후보도 미리 체크하지 않는다. 합산 점수는 확실성 등급이 아니라서
+      // 자동 승인 기준으로 쓸 수 없다. 사람이 직접 누른 행만 승인 대상이다.
+      setProposalChoices({});
     }
     setProposalPolling(data.status === "running" || data.status === "applying");
   }, []);
