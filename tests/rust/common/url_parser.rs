@@ -56,3 +56,17 @@ fn unquote_decodes_percent_escapes_and_keeps_broken_ones() {
     assert_eq!(unquote("%28a%29"), "(a)");
     assert_eq!(unquote("%FF"), "\u{fffd}");
 }
+
+#[test]
+fn an_invalid_scheme_stays_in_the_path_and_an_open_ipv6_bracket_keeps_the_host() {
+    let s = urlsplit("1abc:rest");
+    assert_eq!((s.scheme.as_str(), s.path.as_str()), ("", "1abc:rest"));
+    let n = Netloc::parse("[::1");
+    assert_eq!(n.hostname.as_deref(), Some("::1"));
+    assert_eq!(n.port(), Ok(None));
+}
+
+#[test]
+fn a_trailing_parent_segment_keeps_the_directory_slash() {
+    assert_eq!(urljoin("https://example.com/a/b/c", ".."), "https://example.com/a/");
+}
