@@ -22,7 +22,7 @@ backend는 카테고리 매핑 키워드만으로 제안하므로 사실상 아�
 
 - 분류 제안을 누르면 책마다 추천 1·2가 채워진다.
 - 학습은 CLI 한 번으로 끝나고, 홀드아웃 정답률을 출력한다.
-- 모델 파일은 저장소 쪽 별도 디렉토리에 두고 backend 이미지에 넣는다.
+- 모델 파일은 책 디렉토리와 이미지 밖의 별도 호스트 디렉토리에 두고 pod에 독립적으로 마운트한다. 모델을 바꿔도 이미지 재빌드와 pod 재시작이 필요 없다.
 
 **비목표**
 
@@ -48,7 +48,7 @@ backend는 카테고리 매핑 키워드만으로 제안하므로 사실상 아�
 | 문서 키     | inode(`book_id`, ES `_id`). `file_path`로 조회하지 않는다                 |
 | ISBN        | 모델에는 넣지 않는다. 분류 제안에서 정확 일치 판정에 쓴다                 |
 | 우선순위    | ISBN 일치 > 키워드 > 모델                                                 |
-| 모델 위치   | 저장소 안 별도 디렉토리. Dockerfile로 이미지에 넣는다                     |
+| 모델 위치   | `~/workspace/tm` 아래 별도 디렉토리. 이미지와 독립적으로 마운트한다       |
 | 클래스 비중 | 실제 권수가 많은 카테고리가 사전확률상 유리해야 한다                      |
 
 ## 4. 설계
@@ -125,17 +125,19 @@ ES에 없는 파일은 `Err("색인되지 않은 파일")`을 돌려주고, 제�
 
 ### 4.4 모델 파일과 배포
 
-- 위치: 저장소 루트 `models/classifier/model.bin`. 모델 파일은 `.gitignore`에 넣고 `models/classifier/.gitkeep`만 커밋한다(비어 있으면 Docker `COPY`가 실패한다).
-- `backend/Dockerfile`: `COPY models/classifier /app/models/classifier`
-- backend env `TM_CLASSIFIER_MODEL=/app/models/classifier/model.bin`. `k8s/tm-deployment.yml`에 더한다.
-- 파일이 없거나 읽기에 실패하면 경고 로그를 한 번 남기고 키워드·ISBN만으로 제안한다.
+- 호스트 위치: `/home/terzeron/workspace/tm/models/classifier/model.bin`. `tm`은 `main` 배포용 checkout이다. 학습은 `tm_dev`에서 돌리고 `--output`으로 이 경로에 쓴다.
+- 저장소에서는 `models/`를 `.gitignore`에 넣는다. 모델 파일은 커밋하지 않는다.
+- `k8s/tm-deployment.yml`: `hostPath`(`type: DirectoryOrCreate`) 볼륨을 `/app/models/classifier`에 `readOnly`로 마운트하고, env `TM_CLASSIFIER_MODEL=/app/models/classifier/model.bin`을 더한다.
+- `backend/Dockerfile`은 바꾸지 않는다.
+- 핫 리로드: backend는 분류 제안을 시작할 때마다 모델 파일의 수정 시각과 크기를 확인한다. 바뀌었으면 다시 읽고, 같으면 캐시한 `Arc`를 쓴다. 다시 읽기에 실패하면 이전 모델을 계속 쓰고 경고를 남긴다.
+- 원자적 교체: 학습 CLI는 같은 디렉토리의 임시 파일에 다 쓴 뒤 rename한다. backend가 반쯤 쓰인 파일을 읽지 않는다.
+- 파일이 없거나 처음 읽기에 실패하면 경고 로그를 남기고 키워드·ISBN만으로 제안한다.
 - 형식: 작은 JSON 헤더(버전, seed, 생성 시각, 카테고리 목록, 실제·학습 권수, 해시 크기, `min_confidence`, 정답률 표) + 가중치 배열. 목표 크기는 50MB 이하다.
-- 모델 로드는 backend 프로세스에서 한 번만 한다. factory는 같은 `Arc`를 돌려준다.
 
 ## 5. 제약
 
 - Rust만 쓴다. 저장소에 Python이 없다.
-- 새 의존성은 승인 대상이다. 현재 필요하다고 보는 것: `rand`, `rand_chacha` 0.9(이미 `Cargo.lock`에 간접 의존으로 있어 새로 내려받는 crate는 없다).
+- 의존성: `rand`, `rand_chacha` 0.9를 직접 의존으로 추가한다(2026-11-07 사용자 승인). 이미 `Cargo.lock`에 간접 의존으로 있다. 그 밖의 새 의존성은 다시 승인을 받는다.
 - 학습 메모리는 수 GB 안이어야 한다. 학습은 사용자 셸에서 foreground로 돌리고, 길면 `systemd-run --user`로 격리한다.
 - 테스트는 `tests/rust/<crate>/<모듈>.rs` 1:1, 흐름은 `integration/`. 실행은 `test_runner_rs`로 한다.
 - 새 API 엔드포인트는 만들지 않는다. 기존 분류 제안 엔드포인트의 인증 요구사항을 그대로 쓴다.
@@ -157,5 +159,5 @@ ES에 없는 파일은 `Err("색인되지 않은 파일")`을 돌려주고, 제�
 
 - 정답률은 실측 전까지 모른다. 예전 23만 건 Python 모델의 top-1은 약 79%였다.
 - 전집·상위 장르처럼 본문으로 구분이 안 되는 카테고리 쌍은 모델로 풀리지 않는다.
-- 모델을 바꾸려면 backend 이미지를 다시 빌드해야 한다.
+- 모델 마운트는 `hostPath`라 backend pod가 `~/workspace/tm`이 있는 노드에 떠야 한다. 지금 `books-pv`도 `hostPath`라 같은 전제를 이미 쓰고 있다.
 - ES에 색인되지 않은 파일은 모델·ISBN 추천을 받지 못한다.
