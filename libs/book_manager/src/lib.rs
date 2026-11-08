@@ -65,6 +65,7 @@ mod category_reloader;
 mod cover_finder;
 pub mod cover_list;
 pub mod evidence_scorer;
+pub mod store_category_matcher;
 mod file_reader;
 mod file_validator;
 pub use file_validator::{EpubMessage, EpubPublication, EpubSummary, EpubValidation, MessageLocation, PdfMessage, PdfPublication, PdfSummary, PdfValidation};

@@ -169,7 +169,7 @@ const scoreStoreKeywords = (keywords, dirKeywords) => {
 // - 다른 키워드에 포함되는 범용 키워드는 제거 (예: "소설"이 "세계각국소설"에 포함)
 // - 각 키워드별 최선 매칭에 키워드 수 감점(keywordCountFactor)을 적용해 합산
 // - { category: score } 형태의 객체 반환
-const calculateCategoryScores = (bookstoreCategory, categoryList) => {
+export const calculateCategoryScores = (bookstoreCategory, categoryList) => {
   /* v8 ignore next -- public callers validate category inputs before scoring. */
   if (!bookstoreCategory || !categoryList?.length) return {};
 
@@ -205,7 +205,7 @@ const calculateCategoryScores = (bookstoreCategory, categoryList) => {
 
 // 여러 서점 카테고리의 유사도를 합산하여 상위 N개 반환
 // - suggestedCategories: { yes24: 'category1', aladin: 'category2', ... }
-const findTopSimilarCategories = (
+export const findTopSimilarCategories = (
   suggestedCategories,
   categoryList,
   topN = 3,

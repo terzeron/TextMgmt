@@ -68,6 +68,10 @@ name = "evidence_scorer"
 path = "../../tests/rust/book_manager/evidence_scorer.rs"
 
 [[test]]
+name = "store_category_matcher"
+path = "../../tests/rust/book_manager/store_category_matcher.rs"
+
+[[test]]
 name = "category_proposer"
 path = "../../tests/rust/book_manager/category_proposer.rs"
 
