@@ -431,6 +431,7 @@ dependencies = [
  "htmlkit",
  "image",
  "image_processor",
+ "isbn_extractor",
  "jpeg-encoder",
  "log",
  "lopdf",
