@@ -101,6 +101,7 @@ kubectl rollout status deploy/traefik -n kube-system --timeout=120s
 echo ""
 echo ">>> Creating PersistentVolume and PersistentVolumeClaim"
 kubectl apply -f "$SCRIPT_DIR/books-volume.yml"
+kubectl apply -f "$SCRIPT_DIR/classifier-model-volume.yml"
 
 # 5. Google OAuth Secret 생성
 echo ""

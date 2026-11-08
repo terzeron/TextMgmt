@@ -178,10 +178,11 @@ spec:
         - name: tmp
           emptyDir: {}
         # classifier_trainer가 호스트에서 원자적으로 모델 파일을 바꿔 쓴다.
+        # PodSecurity baseline이 hostPath를 막으므로 PVC로 받는다(classifier-model-volume.yml).
         - name: classifier-model
-          hostPath:
-            path: /home/terzeron/workspace/tm/models/classifier
-            type: DirectoryOrCreate
+          persistentVolumeClaim:
+            claimName: classifier-model-pvc
+            readOnly: true
 
 ---
 apiVersion: apps/v1

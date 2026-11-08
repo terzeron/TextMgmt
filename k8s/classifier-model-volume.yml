@@ -1,0 +1,31 @@
+---
+# 분류 모델 디렉토리. classifier_trainer가 호스트에서 원자적으로 모델 파일을 바꿔 쓴다.
+# 네임스페이스가 PodSecurity baseline을 강제해 pod에 hostPath를 직접 둘 수 없으므로
+# books-volume.yml처럼 PV/PVC로 감싼다.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: classifier-model-pv
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadOnlyMany
+  hostPath:
+    path: /home/terzeron/workspace/tm/models/classifier
+    type: DirectoryOrCreate
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: classifier-model-pvc
+  namespace: textmanager
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 1Gi
+  volumeName: classifier-model-pv # PVC가 바인딩될 PV의 이름
+  storageClassName: "" # 스토리지 클래스를 비워두어 동적 프로비저닝을 방지
