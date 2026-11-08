@@ -4,4 +4,5 @@
 #![allow(special_module_name)]
 
 pub mod api_router;
+pub mod bookstore_result_fetcher;
 pub mod stderr_logger;

@@ -18,29 +18,55 @@ import { faPencil, faTrash, faSpinner } from "@fortawesome/free-solid-svg-icons"
 
 // 점수 열에 무엇을 보여줄 것인가.
 //
-// 확신도(item.confidence)는 79개 카테고리에 softmax를 씌운 값이라 눈금이 사람
-// 기준과 안 맞는다. 바닥이 1/79 = 0.013이고 판정 임계값이 0.056, 위쪽이 0.13쯤이다.
-// 소수 둘째 자리로 자르면 거의 모든 행이 0.05·0.06·0.07 세 값으로 뭉개진다.
-//
-// 그래서 모델이 홀드아웃에서 학습한 보정(expected_accuracy)이 있으면 그것을 쓴다.
-// 0~1의 예상 정답률이라 0.93이 "대체로 맞다"로 그대로 읽힌다. 보정이 없는 옛
-// 모델에서는 확신도를 그대로 보여주되 셋째 자리까지 남겨 행끼리 구분되게 한다.
+// 지금 제안은 ISBN·키워드·모델 근거를 가중치로 합산한 점수(item.score, 0~1)를 싣는다.
+// 예전에 저장된 제안은 score가 없고 예상 정답률(expected_accuracy)이나 79개
+// 카테고리 softmax 확신도(confidence)만 있다. 확신도는 바닥이 0.013이라 둘째
+// 자리로 자르면 뭉개지므로 셋째 자리까지 남긴다.
 export function scoreValue(item) {
-  return item?.expected_accuracy ?? item?.confidence ?? null;
+  return item?.score ?? item?.expected_accuracy ?? item?.confidence ?? null;
 }
 
 export function formatScore(item) {
+  if (item?.score != null) return item.score.toFixed(2);
   if (item?.expected_accuracy != null) return item.expected_accuracy.toFixed(2);
   if (item?.confidence != null) return item.confidence.toFixed(3);
   return "-";
 }
 
+// 서점이 표를 내지 않은 이유. backend `StoreVote.abstain` 값이다.
+const ABSTAIN_LABELS = {
+  not_found: "결과 없음",
+  blocked: "차단",
+  error: "오류",
+  no_match: "대응 없음",
+  tie: "동점",
+  excluded: "제외",
+};
+
+function bookstoreVotesText(item) {
+  const votes = item?.bookstore_votes || [];
+  return votes
+    .map((v) => `${v.store} ${v.category ?? `기권(${ABSTAIN_LABELS[v.abstain] ?? v.abstain})`}`)
+    .join(" · ");
+}
+
 export function scoreTitle(item) {
+  if (item?.score != null) {
+    const votes = bookstoreVotesText(item);
+    return votes ? `합산 점수 ${item.score.toFixed(2)} · ${votes}` : `합산 점수 ${item.score.toFixed(2)}`;
+  }
   if (item?.confidence == null) return "점수 없음";
   if (item?.expected_accuracy == null) {
     return `모델 확신도 ${item.confidence.toFixed(3)} (보정 없음)`;
   }
   return `예상 정답률 ${item.expected_accuracy.toFixed(2)} · 모델 확신도 ${item.confidence.toFixed(3)}`;
+}
+
+// 분류가 끝난 행인가. 예전 payload에는 classified가 없으므로 등급이나 후보가 있으면 끝난 것으로 본다.
+export function isClassified(item) {
+  return (
+    item.classified ?? (item.grade != null || (item.candidates || []).length > 0)
+  );
 }
 
 export function resolveTarget(item, choices) {
@@ -91,9 +117,8 @@ export function manualValue(item, choices) {
 // 바로 옆 칸에 보이는데도 2,000개가 넘는 드롭다운에서 같은 이름을 다시 찾아야 한다.
 // 못 고른 판단을 사람이 대신 내리는 것이 이 체크박스의 용도다.
 //
-// "시스템이 못 정한 것이 저절로 승인되면 안 된다"는 원래 의도는 기본값으로 지킨다:
-// 미리 체크되는 것은 확실(certain) 행의 추천 1뿐이고, 불확실 행은 사람이 직접
-// 누르지 않으면 승인 대상에 들어가지 않는다.
+// "시스템이 정한 것이 저절로 승인되면 안 된다"는 의도는 기본값으로 지킨다:
+// 어떤 후보도 미리 체크하지 않는다. 사람이 직접 누른 행만 승인 대상에 들어간다.
 export function canCheckCandidate(item, candidate) {
   return Boolean(candidate?.category && item.apply_status !== "moved");
 }
@@ -321,7 +346,7 @@ function CandidateCell({ item, candidate, index, checked, onToggle }) {
   // 제안이 시작되면 대상 파일의 이름만 담긴 행이 먼저 깔리고, 분류가 끝나는 대로
   // 채워진다. 아직 안 채워진 행을 "-"로 두면 "후보가 없다"와 구분되지 않는다.
   if (!candidate) {
-    if (index === 0 && item.grade == null) {
+    if (index === 0 && !isClassified(item)) {
       return <small className="text-muted">분류 중…</small>;
     }
     return "-";
@@ -500,9 +525,9 @@ export default function ClassifyProposalTable({
           </th>
           <th aria-sort={ariaSort("confidence")}>
             <div className="d-flex gap-2 align-items-center">
-              예상 정답률
+              점수
               <SortButton
-                label="예상 정답률"
+                label="점수"
                 active={sort.key === "confidence"}
                 dir={sort.dir}
                 onClick={() => toggleSort("confidence")}
@@ -535,13 +560,12 @@ export default function ClassifyProposalTable({
         {visibleItems.map((item) => {
           const manual = manualValue(item, choices);
           const candidates = item.candidates || [];
-          // grade가 unknown이면서 후보가 2개면, 시스템이 둘 중 하나를 고르지
-          // 못하고 동점으로 남겨 뒀다는 뜻이다 — 키워드 점수 동점(source: "keyword",
-          // 근거: "여러 카테고리가 동일 점수로 일치합니다")과 서점 표 갈림(source:
-          // "conflict", 근거: "서점 판정이 갈림")이 여기 해당한다. 후보 칸에 득표/점수만
-          // 나열하면 "동률이라 못 골랐다"는 사실 자체가 안 보이므로 배지로 명시한다.
-          // "서점"으로 못 박지 않는 이유는 두 원인 모두를 가리켜야 하기 때문이다.
-          const isTie = item.grade === "unknown" && candidates.length === 2;
+          // 두 후보의 합산 점수가 같으면 추천 1은 이름순으로 정해졌을 뿐이다.
+          // 후보 칸만 보면 "동률이라 순서가 의미 없다"는 사실이 안 보이므로 배지로 명시한다.
+          const isTie =
+            candidates.length === 2 &&
+            candidates[0].score != null &&
+            candidates[0].score === candidates[1].score;
           return (
             <tr
               key={item.file_path}

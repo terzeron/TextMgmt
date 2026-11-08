@@ -9,68 +9,9 @@ import { rawJsonGetReq } from "./Common.js";
 import SearchResult from "./SearchResult";
 import CoverViewToggle from "./CoverViewToggle";
 import { useCoverViewMode } from "./useCoverViewMode";
+import { useCoverBrowse } from "./useCoverBrowse";
 
 const LATEST_ITEM_LIMIT = 2000;
-const COMIC_TOP_LEVEL_DIRECTORY_PATTERN = /^\d+_[^/]+$/;
-const FIRST_INSTALLMENT_PATTERN = /(?:^|[^\d])0*1\s*(?:권|화)(?=$|[^\d])/;
-
-function isFirstInstallment(book) {
-  const fileName =
-    String(book?.file_path || "")
-      .split("/")
-      .pop() || "";
-  return FIRST_INSTALLMENT_PATTERN.test(`${book?.title || ""} ${fileName}`);
-}
-
-function shouldReplaceComicRepresentative(currentBook, candidateBook) {
-  const currentIsFirst = isFirstInstallment(currentBook);
-  const candidateIsFirst = isFirstInstallment(candidateBook);
-  if (currentIsFirst !== candidateIsFirst) return candidateIsFirst;
-
-  return (
-    String(candidateBook?.file_path || "").localeCompare(
-      String(currentBook?.file_path || ""),
-      "ko",
-      { numeric: true, sensitivity: "base" },
-    ) < 0
-  );
-}
-
-function groupLatestComicsByBookDirectory(results) {
-  if (!Array.isArray(results)) return [];
-
-  const directoryIndexes = new Map();
-  return results.reduce((groupedResults, book) => {
-    const [topLevelDirectory, bookDirectory] = String(
-      book?.category || "",
-    ).split("/");
-    if (
-      !COMIC_TOP_LEVEL_DIRECTORY_PATTERN.test(topLevelDirectory) ||
-      !bookDirectory
-    ) {
-      groupedResults.push(book);
-      return groupedResults;
-    }
-
-    const directoryPath = `${topLevelDirectory}/${bookDirectory}`;
-    const existingIndex = directoryIndexes.get(directoryPath);
-    if (existingIndex !== undefined) {
-      if (
-        shouldReplaceComicRepresentative(groupedResults[existingIndex], book)
-      ) {
-        groupedResults[existingIndex] = {
-          ...book,
-          display_title: bookDirectory,
-        };
-      }
-      return groupedResults;
-    }
-
-    directoryIndexes.set(directoryPath, groupedResults.length);
-    groupedResults.push({ ...book, display_title: bookDirectory });
-    return groupedResults;
-  }, []);
-}
 
 const LATEST_CONFIG = {
   book: {
@@ -91,6 +32,54 @@ const LATEST_CONFIG = {
   },
 };
 
+/** 최신 책. 서버가 최근 파일을 한 번에 보낸다. */
+function LatestBookItems({ config, children }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    setLoading(true);
+    setErrorMessage("");
+    rawJsonGetReq(
+      `${config.apiPrefix}/latest?limit=${LATEST_ITEM_LIMIT}`,
+      (data) => {
+        if (data.status === "success") {
+          setItems(Array.isArray(data.result) ? data.result : []);
+        } else {
+          setItems([]);
+          setErrorMessage(config.errorMessage);
+        }
+      },
+      () => {
+        setItems([]);
+        setErrorMessage(config.errorMessage);
+      },
+      () => setLoading(false),
+    );
+  }, [config]);
+
+  return children({ items, loading, errorMessage });
+}
+
+/**
+ * 최신 만화. 서버가 작품마다 대표 한 권(대체 후보 포함)으로 묶어 최신순으로 한 페이지씩 보낸다.
+ * 화면 끝에 닿으면 다음 페이지를 이어받으므로 개수 상한을 두지 않는다.
+ */
+function LatestComicItems({ config, children }) {
+  const { items, hasMore, loading, error, loadMore } = useCoverBrowse({
+    apiPrefix: config.apiPrefix,
+    endpoint: "latest",
+  });
+  return children({
+    items,
+    loading,
+    errorMessage: error ? config.errorMessage : "",
+    hasMore,
+    onLoadMore: loadMore,
+  });
+}
+
 export default function LatestBooks({ contentType = "book" }) {
   const config = LATEST_CONFIG[contentType] || LATEST_CONFIG.book;
   const {
@@ -105,79 +94,67 @@ export default function LatestBooks({ contentType = "book" }) {
     handleSearchCategoryChange,
     searchInProgress = false,
   } = useOutletContext() || {};
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState("");
   const [viewMode, handleViewModeChange] = useCoverViewMode(contentType);
-
-  useEffect(() => {
-    setLoading(true);
-    setErrorMessage("");
-    rawJsonGetReq(
-      `${config.apiPrefix}/latest?limit=${LATEST_ITEM_LIMIT}`,
-      (data) => {
-        if (data.status === "success") {
-          const results = data.result || [];
-          setItems(
-            contentType === "comic"
-              ? groupLatestComicsByBookDirectory(results)
-              : results,
-          );
-        } else {
-          setItems([]);
-          setErrorMessage(config.errorMessage);
-        }
-      },
-      () => {
-        setItems([]);
-        setErrorMessage(config.errorMessage);
-      },
-      () => setLoading(false),
-    );
-  }, [config, contentType]);
+  const LatestItems =
+    config === LATEST_CONFIG.comic ? LatestComicItems : LatestBookItems;
 
   return (
-    <Container id={config.containerId} className="ps-0 pe-0">
-      {errorMessage && (
-        <Alert variant="danger" className="mb-2">
-          {errorMessage}
-        </Alert>
-      )}
-      {hasSearched && (
-        <SearchResult
-          results={searchResults}
-          role={role}
-          showEditButton={role === "admin"}
-          onLoadMore={handleLoadMore}
-          hasMore={searchResults.length < searchTotal}
-          loading={searchLoading}
-          basePath={config.basePath}
-          categories={searchCategories}
-          selectedCategory={selectedSearchCategory}
-          onCategoryChange={handleSearchCategoryChange}
-          categoryLoading={searchInProgress}
-        />
-      )}
-      <SearchResult
-        results={items}
-        role={role}
-        showEditButton={role === "admin"}
-        basePath={config.basePath}
-        title={config.title}
-        emptyMessage={loading ? "로딩 중..." : config.emptyMessage}
-        viewMode={viewMode}
-        headerActions={
-          <CoverViewToggle
-            id={config.containerId}
+    <LatestItems config={config}>
+      {({ items, loading, errorMessage, hasMore = false, onLoadMore }) => (
+        <Container id={config.containerId} className="ps-0 pe-0">
+          {errorMessage && (
+            <Alert variant="danger" className="mb-2">
+              {errorMessage}
+            </Alert>
+          )}
+          {hasSearched && (
+            <SearchResult
+              results={searchResults}
+              role={role}
+              showEditButton={role === "admin"}
+              onLoadMore={handleLoadMore}
+              hasMore={searchResults.length < searchTotal}
+              loading={searchLoading}
+              basePath={config.basePath}
+              categories={searchCategories}
+              selectedCategory={selectedSearchCategory}
+              onCategoryChange={handleSearchCategoryChange}
+              categoryLoading={searchInProgress}
+            />
+          )}
+          <SearchResult
+            results={items}
+            role={role}
+            showEditButton={role === "admin"}
+            basePath={config.basePath}
+            title={config.title}
+            emptyMessage={loading ? "로딩 중..." : config.emptyMessage}
             viewMode={viewMode}
-            onChange={handleViewModeChange}
+            hasMore={hasMore}
+            loading={loading}
+            onLoadMore={onLoadMore}
+            coverResetKey={config.containerId}
+            headerActions={
+              <CoverViewToggle
+                id={config.containerId}
+                viewMode={viewMode}
+                onChange={handleViewModeChange}
+              />
+            }
           />
-        }
-      />
-    </Container>
+        </Container>
+      )}
+    </LatestItems>
   );
 }
 
 LatestBooks.propTypes = {
   contentType: PropTypes.oneOf(["book", "comic"]),
 };
+
+const latestItemsPropTypes = {
+  config: PropTypes.object.isRequired,
+  children: PropTypes.func.isRequired,
+};
+LatestBookItems.propTypes = latestItemsPropTypes;
+LatestComicItems.propTypes = latestItemsPropTypes;

@@ -363,6 +363,107 @@ mod cover_member_lookup {
     }
 
     #[tokio::test]
+    async fn test_get_cover_books_paged_attaches_the_rest_of_the_work_as_fallbacks() {
+        let tmp = TempDir::new().unwrap();
+        let (files, reps, stats) = cover_fixture();
+        let (es, _) = fake_cover_es(&stats, &files, &reps);
+        let manager = make_manager(tmp.path(), es);
+
+        let page = manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await.unwrap();
+
+        // 나작품 대표는 01권(901)이고 02권(900)이 대체 후보다. 후보가 하나뿐인 라작품과 단독 파일은 대체가 없다.
+        let fallback_titles: Vec<(i64, Vec<String>)> = {
+            let mut list: Vec<(i64, Vec<String>)> = page.fallbacks.iter().map(|(id, books)| (*id, books.iter().map(|b| b.title.clone()).collect())).collect();
+            list.sort();
+            list
+        };
+        assert_eq!(fallback_titles, vec![(901, strings(&["나작품 02권"]))]);
+    }
+
+    #[tokio::test]
+    async fn test_get_cover_books_paged_caps_fallbacks_at_three() {
+        let tmp = TempDir::new().unwrap();
+        let docs: Vec<Value> = (1..=5).map(|n| cover_doc(&format!("A/작품/작품 {n:02}화.pdf"), &format!("작품 {n:02}화"), "A/작품", "pdf")).collect();
+        let reps = HashMap::from([("A/작품".to_string(), docs)]);
+        let stats = HashMap::from([("A/작품".to_string(), (5, 100.0, 0.0))]);
+        let (es, _) = fake_cover_es(&stats, &[], &reps);
+        let manager = make_manager(tmp.path(), es);
+
+        let page = manager.get_cover_books_paged(page(Some("A"), 10, None, &[])).await.unwrap();
+
+        let titles: Vec<String> = page.fallbacks[&900].iter().map(|b| b.title.clone()).collect();
+        assert_eq!(titles, strings(&["작품 02화", "작품 03화", "작품 04화"]));
+    }
+
+    // ---- 최신 만화(작품 묶음) ----
+
+    const WORK: &str = "1_웹툰/곤륜마협";
+
+    fn episode(n: u32) -> Value {
+        cover_doc(&format!("{WORK}/곤륜마협 {n}화.pdf"), &format!("곤륜마협 {n}화"), WORK, "pdf")
+    }
+
+    /// 작품 곤륜마협(최근 300)과 1_웹툰 직속 단편(수정 400). 대표 후보는 경로순으로 10화, 1화, 2화다(ID 900~902).
+    fn latest_fixture() -> CoverFixture {
+        let files = vec![(cover_doc("1_웹툰/단편.pdf", "단편", "1_웹툰", "pdf"), 400)];
+        let reps = HashMap::from([(WORK.to_string(), vec![episode(10), episode(1), episode(2)])]);
+        let stats = HashMap::from([(WORK.to_string(), (51, 300.0, 0.0)), ("1_웹툰".to_string(), (1, 400.0, 0.0))]);
+        (files, reps, stats)
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_comic_covers_groups_works_and_picks_the_first_installment() {
+        let tmp = TempDir::new().unwrap();
+        let (files, reps, stats) = latest_fixture();
+        let (es, calls) = fake_cover_es(&stats, &files, &reps);
+        let manager = make_manager(tmp.path(), es);
+
+        let page = manager.get_latest_comic_covers(page(None, 10, None, &["hidden"])).await.unwrap();
+
+        assert_eq!(titles(&page.items), pairs(&[("단편", ""), ("곤륜마협 1화", "곤륜마협")]));
+        let fallbacks: Vec<String> = page.fallbacks[&901].iter().map(|b| b.title.clone()).collect();
+        assert_eq!(fallbacks, strings(&["곤륜마협 10화", "곤륜마협 2화"]));
+        assert_eq!(page.total, Some(2));
+        assert_eq!(page.next_cursor, None);
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.files[0].categories, strings(&["1_웹툰"]));
+        assert_eq!(calls.files[0].exclude, strings(&["hidden"]));
+        assert_eq!(calls.reps[0].keys, strings(&[WORK]));
+        assert_eq!(calls.reps[0].exclude, strings(&["hidden"]));
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_comic_covers_pages_with_a_cursor() {
+        let tmp = TempDir::new().unwrap();
+        let (files, reps, stats) = latest_fixture();
+        let (es, _) = fake_cover_es(&stats, &files, &reps);
+        let manager = make_manager(tmp.path(), es);
+
+        let first = manager.get_latest_comic_covers(page(None, 1, None, &[])).await.unwrap();
+        let second = manager.get_latest_comic_covers(page(None, 1, first.next_cursor.as_deref(), &[])).await.unwrap();
+
+        assert_eq!(titles(&first.items), pairs(&[("단편", "")]));
+        assert_eq!(titles(&second.items), pairs(&[("곤륜마협 1화", "곤륜마협")]));
+        assert_eq!(second.next_cursor, None);
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_comic_covers_drops_a_malformed_fallback_only() {
+        let tmp = TempDir::new().unwrap();
+        let mut broken = episode(2);
+        broken.as_object_mut().unwrap().remove("category");
+        let reps = HashMap::from([(WORK.to_string(), vec![episode(1), broken, episode(3)])]);
+        let stats = HashMap::from([(WORK.to_string(), (3, 300.0, 0.0))]);
+        let (es, _) = fake_cover_es(&stats, &[], &reps);
+        let manager = make_manager(tmp.path(), es);
+
+        let page = manager.get_latest_comic_covers(page(None, 10, None, &[])).await.unwrap();
+
+        let fallbacks: Vec<i64> = page.fallbacks[&900].iter().map(|b| b.book_id).collect();
+        assert_eq!(fallbacks, vec![902]);
+    }
+
+    #[tokio::test]
     async fn test_get_cover_books_paged_rejects_malformed_es_book() {
         let tmp = TempDir::new().unwrap();
         let mut doc = make_doc("A/bad.epub", "epub");

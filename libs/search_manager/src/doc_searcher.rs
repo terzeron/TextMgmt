@@ -485,3 +485,60 @@ impl Iterator for CategoryFilePaths<'_> {
         }
     }
 }
+
+/// 한 번에 받는 열거 쪽 크기와 일괄 조회 크기.
+const ENUMERATE_PAGE_SIZE: usize = 5000;
+const MGET_CHUNK_SIZE: usize = 1000;
+
+fn id_and_path(hit: &Value) -> Option<(i64, String)> {
+    let id = hit["_id"].as_str()?.parse().ok()?;
+    Some((id, hit["_source"]["file_path"].as_str()?.to_string()))
+}
+
+impl ESManager {
+    /// 전체 문서의 `(inode, file_path)`. 분류기 학습의 모집단이다. `_id`가 정수가 아니거나 경로가 없는 문서는 건너뛴다.
+    pub fn list_ids_and_paths(&self) -> Result<Vec<(i64, String)>, EsError> {
+        let mut rows = Vec::new();
+        let mut scroll_id: Option<String> = None;
+        let outcome = (|| -> Result<(), EsError> {
+            let body = json!({"query": {"match_all": {}}, "size": ENUMERATE_PAGE_SIZE, "_source": ["file_path"], "sort": ["_doc"]});
+            let mut response = self.es.send(&EsRequest::scroll_search(body, "10m"))?;
+            loop {
+                scroll_id = response["_scroll_id"].as_str().map(str::to_owned).or(scroll_id.take());
+                let hits = hits_of(&response);
+                if hits.is_empty() {
+                    return Ok(());
+                }
+                rows.extend(hits.iter().filter_map(id_and_path));
+                response = self.es.send(&EsRequest::Scroll { scroll_id: scroll_id.clone().unwrap_or_default(), scroll: "10m".to_string() })?;
+            }
+        })();
+        if let Some(id) = scroll_id {
+            let _ = self.es.send(&EsRequest::ClearScroll { scroll_id: id });
+        }
+        outcome.map(|()| rows)
+    }
+
+    /// inode로 문서를 일괄 조회한다. 없는 문서는 뺀다.
+    pub fn mget_sources(&self, ids: &[i64], fields: &[&str]) -> Result<Vec<(i64, Value)>, EsError> {
+        let mut rows = Vec::new();
+        for chunk in ids.chunks(MGET_CHUNK_SIZE) {
+            let docs = chunk.iter().map(|id| json!({"_index": self.es.index_name(), "_id": id.to_string()})).collect();
+            let response = self.es.send(&EsRequest::MultiGet { docs, source: Some(fields.iter().map(|f| (*f).to_string()).collect()) })?;
+            for doc in response["docs"].as_array().into_iter().flatten() {
+                if doc["found"].as_bool() == Some(true)
+                    && let Some(id) = doc["_id"].as_str().and_then(|s| s.parse().ok())
+                {
+                    rows.push((id, doc["_source"].clone()));
+                }
+            }
+        }
+        Ok(rows)
+    }
+
+    /// 같은 ISBN 문서의 `(inode, file_path)`. 최대 `limit`건.
+    pub fn search_by_isbn(&self, isbn: &str, limit: usize) -> Result<Vec<(i64, String)>, EsError> {
+        let response = self.es.send(&EsRequest::search(json!({"query": {"term": {"isbn": isbn}}, "size": limit, "_source": ["file_path"]})))?;
+        Ok(hits_of(&response).iter().filter_map(id_and_path).collect())
+    }
+}

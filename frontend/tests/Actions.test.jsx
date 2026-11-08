@@ -1,254 +1,34 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 
 afterEach(cleanup);
 
+// 추천 API 대역. 대응 알고리즘은 backend(store_category_matcher)가 맡고 Rust 테스트가 검증한다.
+// 여기서는 서점 카테고리 단어가 디렉토리 이름(숫자 접두 제외)에 들어 있으면 맞은 것으로 보는 단순 규칙을 쓴다.
+const { mockPost } = vi.hoisted(() => ({ mockPost: vi.fn() }));
+const fakeSuggest = ({ suggested, categories, top_n }) => {
+  const words = Object.values(suggested).flatMap((v) => v.split(/[/()\s]+/).filter(Boolean));
+  return categories
+    .map((c) => [c, words.filter((w) => (c.includes("_") ? c.split("_").slice(1).join("_") : c).includes(w)).length])
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, top_n)
+    .map(([c]) => c);
+};
 vi.mock("../src/Common", () => ({
   getRandomLightColor: () => "#cccccc",
   ROOT_DIRECTORY: "$$rootdir$$",
+  jsonPostReq: (...args) => mockPost(...args),
 }));
-
-vi.mock("../src/categoryMappingCache", () => ({
-  loadCategoryMappings: () => ({ 소설: ["fiction", "소설"] }),
-  fetchCategoryMappings: () => Promise.resolve(),
-  isCacheInitialized: () => true,
-}));
-
-import Actions, {
-  generateNgrams,
-  ngramSimilarity,
-  calculateSimilarity,
-  filterSubstringKeywords,
-  stripNoiseWords,
-  getSimilarityDebugInfo,
-  keywordCountFactor,
-} from "../src/Actions";
-import * as categoryMappingCache from "../src/categoryMappingCache";
-
-// ── generateNgrams ──
-
-describe("generateNgrams", () => {
-  it("bigram 집합을 생성한다", () => {
-    const result = generateNgrams("hello", 2);
-    expect(result).toEqual(new Set(["he", "el", "ll", "lo"]));
-  });
-
-  it("문자열이 n보다 짧으면 빈 집합을 반환한다", () => {
-    expect(generateNgrams("a", 2)).toEqual(new Set());
-  });
-
-  it("빈 문자열이면 빈 집합을 반환한다", () => {
-    expect(generateNgrams("", 2)).toEqual(new Set());
-  });
-
-  it("문자열 길이가 n과 같으면 하나의 ngram을 반환한다", () => {
-    expect(generateNgrams("ab", 2)).toEqual(new Set(["ab"]));
-  });
-
-  it("trigram을 생성할 수 있다", () => {
-    expect(generateNgrams("abcd", 3)).toEqual(new Set(["abc", "bcd"]));
-  });
+const answerNow = () =>
+  mockPost.mockImplementation((url, payload, resolve) => resolve({ top: fakeSuggest(payload), debug: null }));
+beforeEach(() => {
+  mockPost.mockReset();
+  answerNow();
 });
 
-// ── ngramSimilarity ──
-
-describe("ngramSimilarity", () => {
-  it("동일한 문자열이면 1.0을 반환한다", () => {
-    expect(ngramSimilarity("hello", "hello")).toBe(1.0);
-  });
-
-  it("완전히 다른 문자열이면 0을 반환한다", () => {
-    expect(ngramSimilarity("abc", "xyz")).toBe(0);
-  });
-
-  it("부분적으로 겹치면 0과 1 사이 값을 반환한다", () => {
-    const score = ngramSimilarity("abcd", "abef");
-    expect(score).toBeGreaterThan(0);
-    expect(score).toBeLessThan(1);
-  });
-
-  it("n보다 짧은 동일 문자열이면 1.0을 반환한다", () => {
-    expect(ngramSimilarity("a", "a", 2)).toBe(1.0);
-  });
-
-  it("n보다 짧은 다른 문자열이면 0을 반환한다", () => {
-    expect(ngramSimilarity("a", "b", 2)).toBe(0);
-  });
-
-  it("Jaccard 유사도 공식이 정확하다", () => {
-    // 'abcd' → {ab, bc, cd}, 'abef' → {ab, be, ef}
-    // intersection: {ab} → 1, union: 3+3-1 = 5
-    // Jaccard = 1/5 = 0.2
-    expect(ngramSimilarity("abcd", "abef")).toBeCloseTo(0.2);
-  });
-});
-
-// ── calculateSimilarity ──
-
-describe("calculateSimilarity", () => {
-  it("완전 일치하면 1.0을 반환한다", () => {
-    expect(calculateSimilarity("hello", "hello")).toBe(1.0);
-  });
-
-  it("대소문자 무관하게 완전 일치하면 1.0을 반환한다", () => {
-    expect(calculateSimilarity("Hello", "HELLO")).toBe(1.0);
-  });
-
-  it("포함 관계이면 0.7~0.9 범위를 반환한다", () => {
-    const score = calculateSimilarity("SF", "SF소설");
-    expect(score).toBeGreaterThanOrEqual(0.7);
-    expect(score).toBeLessThanOrEqual(0.9);
-  });
-
-  it("한글 1글자도 포함 관계로 인정한다", () => {
-    const score = calculateSimilarity("소", "소설");
-    expect(score).toBeGreaterThanOrEqual(0.7);
-  });
-
-  it("비한글 1글자는 포함 관계로 인정하지 않는다", () => {
-    const score = calculateSimilarity("S", "SF");
-    expect(score).toBeLessThan(0.7);
-  });
-
-  it("N-gram 유사도가 있으면 0.3~0.6 범위를 반환한다", () => {
-    // '프로그래밍' vs '프로그래머': 공통 bigram 3/5 = 0.6
-    // → 0.3 + 0.6*0.3 = 0.48
-    const score = calculateSimilarity("프로그래밍", "프로그래머");
-    expect(score).toBeGreaterThanOrEqual(0.3);
-    expect(score).toBeLessThanOrEqual(0.6);
-  });
-
-  it("완전히 다른 문자열이면 0을 반환한다", () => {
-    expect(calculateSimilarity("abc", "xyz")).toBe(0);
-  });
-
-  it("빈 문자열이면 0을 반환한다", () => {
-    expect(calculateSimilarity("", "hello")).toBe(0);
-    expect(calculateSimilarity("hello", "")).toBe(0);
-  });
-
-  it("null/undefined이면 0을 반환한다", () => {
-    expect(calculateSimilarity(null, "hello")).toBe(0);
-    expect(calculateSimilarity("hello", undefined)).toBe(0);
-  });
-});
-
-// ── filterSubstringKeywords ──
-
-describe("filterSubstringKeywords", () => {
-  it("다른 키워드에 포함되는 짧은 키워드를 제거한다", () => {
-    expect(filterSubstringKeywords(["소설", "세계각국소설"])).toEqual([
-      "세계각국소설",
-    ]);
-  });
-
-  it("포함 관계가 없으면 모두 유지한다", () => {
-    expect(filterSubstringKeywords(["역사", "과학"])).toEqual(["역사", "과학"]);
-  });
-
-  it("키워드가 1개이면 그대로 반환한다", () => {
-    expect(filterSubstringKeywords(["소설"])).toEqual(["소설"]);
-  });
-
-  it("빈 배열이면 빈 배열을 반환한다", () => {
-    expect(filterSubstringKeywords([])).toEqual([]);
-  });
-
-  it("대소문자 무관하게 포함 관계를 판단한다", () => {
-    expect(filterSubstringKeywords(["sf", "SF소설"])).toEqual(["SF소설"]);
-  });
-
-  it("여러 키워드 중 포함되는 것만 제거한다", () => {
-    expect(filterSubstringKeywords(["소설", "세계각국소설", "역사"])).toEqual([
-      "세계각국소설",
-      "역사",
-    ]);
-  });
-});
-
-// ── stripNoiseWords ──
-
-describe("stripNoiseWords", () => {
-  it('"일반"을 제거한다', () => {
-    expect(stripNoiseWords(["경영일반"])).toEqual(["경영"]);
-  });
-
-  it('여러 키워드에서 "일반"을 제거한다', () => {
-    expect(stripNoiseWords(["중문일반", "영문일반", "교육일반"])).toEqual([
-      "중문",
-      "영문",
-      "교육",
-    ]);
-  });
-
-  it('"일반"이 없는 키워드는 그대로 유지한다', () => {
-    expect(stripNoiseWords(["소설", "역사"])).toEqual(["소설", "역사"]);
-  });
-
-  it('"일반"만 있는 키워드는 제거한다 (빈 문자열 필터)', () => {
-    expect(stripNoiseWords(["일반"])).toEqual([]);
-  });
-
-  it('혼합: "일반" 포함과 미포함 키워드를 올바르게 처리한다', () => {
-    expect(stripNoiseWords(["경영일반", "소설", "건강일반"])).toEqual([
-      "경영",
-      "소설",
-      "건강",
-    ]);
-  });
-
-  it("빈 배열이면 빈 배열을 반환한다", () => {
-    expect(stripNoiseWords([])).toEqual([]);
-  });
-
-  it('키워드 중간에 있는 "일반"도 제거한다', () => {
-    expect(stripNoiseWords(["일반소설"])).toEqual(["소설"]);
-  });
-});
-
-// ── calculateSimilarity: 한글 포함 관계 임계값 ──
-
-describe("calculateSimilarity: 한글 포함 관계 임계값", () => {
-  it("한글 2글자가 긴 문자열의 50% 이하로 포함되면 N-gram으로 평가한다", () => {
-    // "소설" ⊂ "세계각국소설" → ratio = 2/6 = 0.33 ≤ 0.5 → N-gram
-    const score = calculateSimilarity("소설", "세계각국소설");
-    expect(score).toBeLessThan(0.7); // 포함 관계가 아닌 N-gram 범위
-  });
-
-  it("한글 2글자가 긴 문자열의 50% 초과로 포함되면 포함 관계로 인정한다", () => {
-    // "소설" ⊂ "SF소설" → ratio = 2/4 = 0.5 → 0.5 > 0.5 미성립 → 포함 관계
-    // 그런데 "소설"은 한글 2글자이고 ratio=0.5이므로 0.5 <= 0.5 성립
-    // 하지만 "SF"는 비한글이라 shorter가 "소설"이 아닐 수도...
-    // "소설" vs "소설외국" → ratio = 2/4 = 0.5 → 한글 2글자, ratio 0.5 ≤ 0.5 → N-gram
-    const score = calculateSimilarity("소설", "소설외국");
-    expect(score).toBeLessThan(0.7);
-  });
-
-  it("한글 3글자가 긴 문자열의 50% 초과로 포함되면 포함 관계로 인정한다", () => {
-    // "각국소설" ⊂ "세계각국소설" → ratio = 4/6 = 0.67 > 0.5 → 포함 관계
-    const score = calculateSimilarity("각국소설", "세계각국소설");
-    expect(score).toBeGreaterThanOrEqual(0.7);
-  });
-
-  it("영문 키워드의 포함 관계는 기존과 동일하다", () => {
-    // "SF" ⊂ "SF소설" → 비한글이므로 한글 임계값 적용 안 됨 → 포함 관계
-    const score = calculateSimilarity("SF", "SF소설");
-    expect(score).toBeGreaterThanOrEqual(0.7);
-  });
-
-  it("한글 1글자가 3글자 이상 단어에 포함되면 N-gram으로 평가한다", () => {
-    // "시" ⊂ "러시아소설" → 1글자, longer=5글자 → 우연적 포함
-    expect(calculateSimilarity("시", "러시아소설")).toBeLessThan(0.7);
-    // "시" ⊂ "레시피" → 1글자, longer=3글자 → 우연적 포함
-    expect(calculateSimilarity("시", "레시피")).toBeLessThan(0.7);
-  });
-
-  it("한글 1글자가 2글자 단어에 포함되면 포함 관계로 인정한다", () => {
-    // "시" ⊂ "시집" → 1글자, longer=2글자 → 의미 있는 포함
-    expect(calculateSimilarity("시", "시집")).toBeGreaterThanOrEqual(0.7);
-  });
-});
+import Actions from "../src/Actions";
 
 // ── 공통 props ──
 
@@ -566,20 +346,42 @@ describe("Actions 추가 분기", () => {
     expect(screen.queryByText("다음 디렉토리로")).toBeNull();
   });
 
-  it("캐시가 초기화되지 않았으면 fetchCategoryMappings를 호출한다", async () => {
-    const fetchSpy = vi
-      .spyOn(categoryMappingCache, "fetchCategoryMappings")
-      .mockResolvedValue();
-    const initSpy = vi
-      .spyOn(categoryMappingCache, "isCacheInitialized")
-      .mockReturnValue(false);
+  it("서점 카테고리를 backend 추천 API로 보낸다", () => {
+    render(
+      <Actions
+        {...defaultProps}
+        otherCategoryList={["_root", "소설", "역사"]}
+        suggestedCategories={{ yes24_0_0: "소설" }}
+      />,
+    );
 
-    render(<Actions {...defaultProps} />);
+    expect(mockPost).toHaveBeenCalledWith(
+      "/bookstore/category-suggestions?content_type=book",
+      { suggested: { yes24_0_0: "소설" }, categories: ["소설", "역사"], top_n: 5 },
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
 
-    expect(fetchSpy).toHaveBeenCalled();
+  it("추천 요청이 실패하면 하이라이트하지 않는다", () => {
+    mockPost.mockImplementation((url, payload, resolve, reject) => reject("서버 오류"));
+    render(<Actions {...defaultProps} suggestedCategories={{ yes24: "소설" }} />);
+    expect(document.querySelectorAll(".highlight").length).toBe(0);
+  });
 
-    fetchSpy.mockRestore();
-    initSpy.mockRestore();
+  it("늦게 도착한 이전 응답은 무시한다", () => {
+    const pending = [];
+    mockPost.mockImplementation((url, payload, resolve) => pending.push(() => resolve({ top: fakeSuggest(payload) })));
+    const selectFn = vi.fn();
+    const props = { ...defaultProps, selectDirectoryButtonClicked: selectFn };
+    const { rerender } = render(<Actions {...props} suggestedCategories={{ yes24: "소설" }} />);
+    rerender(<Actions {...props} suggestedCategories={{ yes24: "역사" }} />);
+
+    act(() => pending[1]());
+    act(() => pending[0]());
+
+    expect(selectFn).toHaveBeenCalledTimes(1);
+    expect(selectFn).toHaveBeenCalledWith(null, "역사");
   });
 
   it("언더스코어가 있는 카테고리는 접두사 색상과 하위 라벨로 렌더링한다", () => {
@@ -593,99 +395,7 @@ describe("Actions 추가 분기", () => {
   });
 });
 
-// ── getSimilarityDebugInfo ──
-
-describe("getSimilarityDebugInfo", () => {
-  it("null 입력 시 null을 반환한다", () => {
-    expect(getSimilarityDebugInfo(null, ["소설"])).toBeNull();
-    expect(getSimilarityDebugInfo({ yes24: "소설" }, null)).toBeNull();
-    expect(getSimilarityDebugInfo({ yes24: "소설" }, [])).toBeNull();
-  });
-
-  it("서점별 키워드와 카테고리별 상세 정보를 반환한다", () => {
-    const result = getSimilarityDebugInfo(
-      { yes24: "한국소설" },
-      ["소설", "역사"],
-      10,
-    );
-    expect(result).not.toBeNull();
-    expect(result.bookstoreKeywords).toBeDefined();
-    expect(result.bookstoreKeywords.yes24).toBeDefined();
-    expect(result.bookstoreKeywords.yes24.original).toBe("한국소설");
-    expect(result.categoryDetails).toBeDefined();
-    expect(Array.isArray(result.categoryDetails)).toBe(true);
-  });
-
-  it("빈 카테고리 값은 건너뛴다", () => {
-    const result = getSimilarityDebugInfo({ yes24: "", aladin: "한국소설" }, [
-      "소설",
-    ]);
-    expect(result.bookstoreKeywords.yes24).toBeUndefined();
-    expect(result.bookstoreKeywords.aladin).toBeDefined();
-  });
-
-  it("topN으로 상위 결과를 제한한다", () => {
-    const categories = Array.from({ length: 20 }, (_, i) => `카테고리${i}`);
-    const result = getSimilarityDebugInfo(
-      { yes24: "카테고리0" },
-      categories,
-      3,
-    );
-    expect(result.categoryDetails.length).toBeLessThanOrEqual(3);
-  });
-});
-
-// ── calculateSimilarity 추가 엣지케이스 ──
-
-describe("calculateSimilarity 추가 케이스", () => {
-  it("양쪽 모두 빈 문자열이면 0을 반환한다", () => {
-    expect(calculateSimilarity("", "")).toBe(0);
-  });
-
-  it("양쪽 모두 null이면 0을 반환한다", () => {
-    expect(calculateSimilarity(null, null)).toBe(0);
-  });
-
-  it("매우 긴 문자열도 처리한다", () => {
-    const long1 = "가".repeat(100);
-    const long2 = "가".repeat(100) + "나";
-    const score = calculateSimilarity(long1, long2);
-    expect(score).toBeGreaterThan(0);
-  });
-});
-
 // ── 추가 분기 ──
-
-describe("ngramSimilarity 경계", () => {
-  it("두 문자열이 모두 n보다 짧으면 0을 반환한다", () => {
-    // 양쪽 ngram 집합이 비어 unionSize === 0
-    expect(ngramSimilarity("a", "b", 2)).toBe(0);
-  });
-});
-
-describe("getSimilarityDebugInfo - 숫자 prefix / 빈 서점 카테고리", () => {
-  it("숫자 prefix 가 있는 디렉토리명은 prefix 를 제거하고 비교한다", () => {
-    const info = getSimilarityDebugInfo({ yes24: "소설" }, [
-      "4_소설",
-      "5_역사",
-    ]);
-    expect(info).not.toBeNull();
-    const names = info.categoryDetails.map((d) => d.category);
-    expect(names).toContain("4_소설");
-  });
-
-  it("빈 서점 카테고리는 건너뛴다", () => {
-    const info = getSimilarityDebugInfo({ yes24: "", aladin: "소설" }, [
-      "소설",
-      "역사",
-    ]);
-    expect(Object.keys(info.bookstoreKeywords)).toEqual(["aladin"]);
-  });
-
-  it("categoryList 가 비어 있으면 null 을 반환한다", () => {
-    expect(getSimilarityDebugInfo({ yes24: "소설" }, [])).toBeNull();
-  });
-});
 
 describe("Actions 카테고리 하이라이트", () => {
   it("유사도 2~5위 카테고리에 highlight-secondary 클래스를 적용한다", () => {
@@ -774,59 +484,3 @@ describe("Actions 버튼 비활성화 조건", () => {
   });
 });
 
-// ── 서점 내 키워드 수 감점 ──
-
-describe("keywordCountFactor", () => {
-  it("키워드가 하나 늘 때마다 10%p씩 감점하고 11개 이상은 0으로 한다", () => {
-    expect(keywordCountFactor(1)).toBe(1);
-    expect(keywordCountFactor(2)).toBeCloseTo(0.9);
-    expect(keywordCountFactor(3)).toBeCloseTo(0.8);
-    expect(keywordCountFactor(9)).toBeCloseTo(0.2);
-    expect(keywordCountFactor(11)).toBe(0);
-    expect(keywordCountFactor(12)).toBe(0);
-  });
-});
-
-describe("getSimilarityDebugInfo - 키워드 수 감점", () => {
-  const totalOf = (info, category) =>
-    info.categoryDetails.find((d) => d.category === category)?.totalScore;
-
-  it("키워드가 1개인 서점은 감점하지 않는다", () => {
-    const info = getSimilarityDebugInfo({ kyobo: "스릴러" }, ["3_스릴러"]);
-    expect(totalOf(info, "3_스릴러")).toBeCloseTo(1.0);
-  });
-
-  it("키워드가 3개인 서점은 키워드별 점수에 0.8을 곱해 합산한다", () => {
-    const info = getSimilarityDebugInfo({ yes24: "스릴러 가나다 라마바" }, [
-      "3_스릴러",
-    ]);
-    expect(totalOf(info, "3_스릴러")).toBeCloseTo(0.8);
-  });
-
-  it("일치 키워드가 여럿이면 감점 후 합산한다", () => {
-    // 매핑 mock: 소설 → ["fiction", "소설"]. 두 키워드 모두 1.0 → (1.0 + 1.0) × 0.9
-    const info = getSimilarityDebugInfo({ yes24: "fiction 소설" }, ["소설"]);
-    expect(totalOf(info, "소설")).toBeCloseTo(1.8);
-  });
-
-  it("키워드가 11개 이상이면 무시한다", () => {
-    const noise = Array.from({ length: 10 }, (_, i) => `가${i}`).join(" ");
-    const info = getSimilarityDebugInfo({ yes24: `스릴러 ${noise}` }, [
-      "3_스릴러",
-    ]);
-    expect(totalOf(info, "3_스릴러")).toBeUndefined();
-  });
-
-  it("서점 두 곳이 가리키는 스릴러가 한 곳이 가리키는 영미소설보다 앞선다", () => {
-    // yes24·aladin 이 스릴러를, kyobo 한 곳이 영미소설을 가리키는 상황
-    const info = getSimilarityDebugInfo(
-      {
-        yes24: "소설 추리 미스터리 스릴러",
-        aladin: "스릴러",
-        kyobo: "영미소설",
-      },
-      ["2_영미소설", "3_스릴러"],
-    );
-    expect(info.categoryDetails[0].category).toBe("3_스릴러");
-  });
-});

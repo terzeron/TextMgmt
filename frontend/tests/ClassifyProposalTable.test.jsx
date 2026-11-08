@@ -26,11 +26,12 @@ const ITEMS = [
     title: "확실한 책",
     current_category: "A",
     target_category: "3_SF",
-    grade: "certain",
-    confidence: 0.91,
-    source: "model",
-    reason: "모델 판정",
-    candidates: [{ category: "3_SF", source: "model", detail: "모델 판정" }],
+    classified: true,
+    score: 0.91,
+    reason: "",
+    candidates: [
+      { category: "3_SF", source: "model", detail: "모델 판정", score: 0.91 },
+    ],
     apply_status: "pending",
   },
   {
@@ -38,13 +39,12 @@ const ITEMS = [
     title: "애매한 책",
     current_category: "A",
     target_category: "5_음악",
-    grade: "unsure",
-    confidence: 0.2,
-    source: "bookstore_single",
-    reason: "서점 한 곳",
+    classified: true,
+    score: 0.2,
+    reason: "",
     candidates: [
-      { category: "5_음악", source: "bookstore", detail: "서점 1곳 일치" },
-      { category: "1_서양고전", source: "bookstore", detail: "서점 1곳 일치" },
+      { category: "5_음악", source: "keyword", detail: "키워드 1.00", score: 0.2 },
+      { category: "1_서양고전", source: "model", detail: "모델 0.40", score: 0.06 },
     ],
     apply_status: "pending",
   },
@@ -53,13 +53,12 @@ const ITEMS = [
     title: "불확실한 책",
     current_category: "A",
     target_category: null,
-    grade: "unknown",
-    confidence: null,
-    source: "conflict",
-    reason: "서점 판정이 갈림",
+    classified: true,
+    score: null,
+    reason: "",
     candidates: [
-      { category: "5_음악", source: "bookstore", detail: "서점 2곳 일치" },
-      { category: "1_서양고전", source: "bookstore", detail: "서점 2곳 일치" },
+      { category: "5_음악", source: "keyword", detail: "키워드 0.50" },
+      { category: "1_서양고전", source: "keyword", detail: "키워드 0.50" },
     ],
     apply_status: "pending",
   },
@@ -88,7 +87,7 @@ describe("ClassifyProposalTable", () => {
     renderTable();
     const row = screen.getByText("확실한 책").closest("tr");
     const cells = within(row).getAllByRole("cell");
-    // 열 순서: 책, 추천1, 추천2, 직접 선택, 예상 정답률, 이동 상태
+    // 열 순서: 책, 추천1, 추천2, 직접 선택, 점수, 이동 상태
     expect(cells).toHaveLength(6);
     expect(cells[0].textContent).toBe("확실한 책");
     expect(
@@ -236,42 +235,32 @@ describe("ClassifyProposalTable", () => {
     expect(within(tieCells[2]).getByText("1_서양고전")).toBeTruthy();
   });
 
-  it("서점 판정이 갈린 행은 두 추천이 다른 답임을 배지로 드러낸다", () => {
-    renderTable();
-    const row = screen.getByText("불확실한 책").closest("tr");
-    const cells = within(row).getAllByRole("cell");
-    expect(within(cells[1]).getByText("후보 동률")).toBeTruthy();
-    expect(within(cells[1]).getByText("5_음악")).toBeTruthy();
-    expect(within(cells[2]).getByText("1_서양고전")).toBeTruthy();
-  });
-
-  it("키워드 점수가 동점인 행도 같은 배지로 동률임을 드러낸다", () => {
+  it("두 후보의 합산 점수가 같으면 동률 배지를 보여준다", () => {
     const items = [
       {
         file_path: "A/d.epub",
-        title: "키워드 동점 책",
+        title: "동점 책",
         current_category: "A",
-        target_category: null,
-        grade: "unknown",
-        confidence: null,
-        source: "keyword",
-        reason: "여러 카테고리가 동일 점수로 일치합니다: 3_SF, 5_음악",
+        target_category: "3_SF",
+        classified: true,
+        score: 0.25,
         candidates: [
-          { category: "3_SF", source: "keyword", detail: "키워드 'SF' 일치" },
-          {
-            category: "5_음악",
-            source: "keyword",
-            detail: "키워드 '음악' 일치",
-          },
+          { category: "3_SF", source: "keyword", detail: "키워드 0.50", score: 0.25 },
+          { category: "5_음악", source: "keyword", detail: "키워드 0.50", score: 0.25 },
         ],
       },
     ];
     renderTable({ items });
-    const row = screen.getByText("키워드 동점 책").closest("tr");
+    const row = screen.getByText("동점 책").closest("tr");
     const cells = within(row).getAllByRole("cell");
     expect(within(cells[1]).getByText("후보 동률")).toBeTruthy();
     expect(within(cells[1]).getByText("3_SF")).toBeTruthy();
     expect(within(cells[2]).getByText("5_음악")).toBeTruthy();
+  });
+
+  it("점수가 다르거나 점수가 없는 두 후보에는 동률 배지가 없다", () => {
+    renderTable();
+    expect(screen.queryByText("후보 동률")).toBeNull();
   });
 
   it("아직 분류 안 된 행도 이름이 보이고 '분류 중'으로 구분된다", () => {
@@ -283,8 +272,7 @@ describe("ClassifyProposalTable", () => {
         title: "아직 분류 안 된 책",
         current_category: "A",
         target_category: null,
-        grade: null,
-        confidence: null,
+        classified: false,
         candidates: [],
         apply_status: "pending",
       },
@@ -299,6 +287,26 @@ describe("ClassifyProposalTable", () => {
     expect(screen.queryByLabelText("A/z.epub 추천 1 선택")).toBeNull();
   });
 
+  it("분류를 마쳤는데 후보가 없는 행은 '분류 중'이 아니라 '-'로 보인다", () => {
+    const items = [
+      { file_path: "A/n.epub", title: "근거 없는 책", current_category: "A", classified: true, candidates: [] },
+    ];
+    renderTable({ items, choices: {} });
+    const cells = within(screen.getByText("근거 없는 책").closest("tr")).getAllByRole("cell");
+    expect(cells[1].textContent).toBe("-");
+  });
+
+  it("classified가 없는 옛 payload는 등급이 있으면 분류를 마친 행으로 본다", () => {
+    const items = [
+      { file_path: "A/o.epub", title: "옛 행", current_category: "A", grade: "unknown", candidates: [] },
+      { file_path: "A/p.epub", title: "옛 자리", current_category: "A", grade: null, candidates: [] },
+    ];
+    renderTable({ items, choices: {} });
+    const cellsOf = (title) => within(screen.getByText(title).closest("tr")).getAllByRole("cell");
+    expect(cellsOf("옛 행")[1].textContent).toBe("-");
+    expect(within(cellsOf("옛 자리")[1]).getByText("분류 중…")).toBeTruthy();
+  });
+
   it("이동 상태가 대기/이동 중(중단됨)/이동 완료/실패:사유로 나온다", () => {
     const items = [
       { ...ITEMS[0], apply_status: "pending" },
@@ -309,9 +317,8 @@ describe("ClassifyProposalTable", () => {
         title: "실패한 책",
         current_category: "A",
         target_category: "3_SF",
-        grade: "certain",
-        confidence: 0.9,
-        source: "model",
+        classified: true,
+        score: 0.9,
         candidates: [],
         apply_status: "failed",
         apply_error: "대상 폴더 없음",
@@ -354,21 +361,19 @@ describe("ClassifyProposalTable", () => {
   });
 
   it("모델과 목적지가 다르면 점수 칸에 모델 카테고리를 함께 보여준다", () => {
-    // I3: 키워드가 고른 목적지와 모델이 자신 있게 가리킨 카테고리가 다르면, 점수가
-    // 어느 카테고리의 확신도인지 화면에서 구분돼야 한다.
+    // I3: 합산 1등과 모델 단독 1등이 다르면, 모델이 어디를 가리켰는지 화면에서 구분돼야 한다.
     const items = [
       {
         ...ITEMS[1],
         target_category: "5_음악",
         model_category: "3_SF",
-        confidence: 0.91,
+        score: 0.91,
       },
     ];
     renderTable({ items });
 
     const row = screen.getByText("애매한 책").closest("tr");
-    // 보정이 없으면 확신도를 셋째 자리까지 보여준다.
-    expect(within(row).getByText("0.910")).toBeTruthy();
+    expect(within(row).getByText("0.91")).toBeTruthy();
     expect(within(row).getByText(/모델: 3_SF/)).toBeTruthy();
   });
 
@@ -378,7 +383,7 @@ describe("ClassifyProposalTable", () => {
         ...ITEMS[0],
         target_category: "3_SF",
         model_category: "3_SF",
-        confidence: 0.91,
+        score: 0.91,
       },
     ];
     renderTable({ items });
@@ -415,7 +420,7 @@ describe("ClassifyProposalTable", () => {
 
   it("책·추천1·추천2·점수·이동 상태에 정렬 버튼이 있고 직접 선택에는 없다", () => {
     renderTable();
-    for (const label of ["책", "추천 1", "추천 2", "예상 정답률", "이동 상태"]) {
+    for (const label of ["책", "추천 1", "추천 2", "점수", "이동 상태"]) {
       expect(screen.getByLabelText(`${label} 정렬`)).toBeTruthy();
     }
     expect(screen.queryByLabelText("직접 선택 정렬")).toBeNull();
@@ -457,7 +462,7 @@ describe("ClassifyProposalTable", () => {
   it("점수가 없는 행은 오름차순·내림차순 모두 뒤로 간다", () => {
     // 빈 칸이 맨 위에 몰리면 정렬을 눌러도 보려던 값이 화면 밖으로 밀린다.
     renderTable();
-    const button = screen.getByLabelText("예상 정답률 정렬");
+    const button = screen.getByLabelText("점수 정렬");
 
     fireEvent.click(button);
     expect(titleOrder()).toEqual(["애매한 책", "확실한 책", "불확실한 책"]);
@@ -826,11 +831,10 @@ describe("제자리 제안 표시", () => {
     title: "제자리 책",
     current_category: "A",
     target_category: "A",
-    grade: "certain",
-    confidence: 0.95,
-    source: "model",
-    reason: "모델 판정",
-    candidates: [{ category: "A", source: "model", detail: "모델 판정" }],
+    classified: true,
+    score: 0.95,
+    reason: "",
+    candidates: [{ category: "A", source: "isbn", detail: "ISBN 1.00", score: 0.95 }],
     apply_status: "pending",
   };
 
@@ -864,19 +868,35 @@ describe("제자리 제안 표시", () => {
     expect(row.className).not.toContain("table-secondary");
   });
 
-  // 점수 표기 — 확신도 대신 예상 정답률
-  //
-  // 확신도는 79개 클래스 softmax라 실제 범위가 0.013~0.13이다. 소수 둘째 자리로
-  // 자르면 거의 모든 행이 0.05·0.06·0.07 세 값으로 뭉개져 열이 무의미해진다.
-  it("예상 정답률이 있으면 그 값을 소수로 보여준다", () => {
+  // 점수 표기 — 합산 점수, 옛 payload는 예상 정답률·확신도
+  it("합산 점수를 소수 둘째 자리로 보여주고 툴팁에 근거를 밝힌다", () => {
+    renderTable({ items: [{ ...ITEMS[0], score: 0.934 }], choices: {} });
+    const row = screen.getByText("확실한 책").closest("tr");
+    const cells = within(row).getAllByRole("cell");
+    expect(cells[4].textContent).toContain("0.93");
+    expect(within(row).getByTitle("합산 점수 0.93")).toBeTruthy();
+  });
+
+  it("툴팁에 서점별 표와 기권 이유를 보여준다", () => {
+    const votes = [
+      { store: "yes24", category: "3_SF", abstain: null },
+      { store: "aladin", category: "3_SF", abstain: null },
+      { store: "kyobo", category: null, abstain: "blocked" },
+    ];
+    renderTable({ items: [{ ...ITEMS[0], score: 0.934, bookstore_votes: votes }], choices: {} });
+    const row = screen.getByText("확실한 책").closest("tr");
+    expect(within(row).getByTitle("합산 점수 0.93 · yes24 3_SF · aladin 3_SF · kyobo 기권(차단)")).toBeTruthy();
+  });
+
+  it("점수가 없는 행의 툴팁은 점수 없음이다", () => {
+    renderTable();
+    const row = screen.getByText("불확실한 책").closest("tr");
+    expect(within(row).getByTitle("점수 없음")).toBeTruthy();
+  });
+
+  it("옛 payload에 예상 정답률이 있으면 그 값을 소수로 보여준다", () => {
     renderTable({
-      items: [
-        {
-          ...ITEMS[0],
-          confidence: 0.076,
-          expected_accuracy: 0.93,
-        },
-      ],
+      items: [{ ...ITEMS[0], score: null, confidence: 0.076, expected_accuracy: 0.93 }],
       choices: {},
     });
     const row = screen.getByText("확실한 책").closest("tr");
@@ -885,16 +905,10 @@ describe("제자리 제안 표시", () => {
     expect(cells[4].textContent).not.toContain("%");
   });
 
-  it("예상 정답률이 없으면 확신도를 소수 셋째 자리까지 보여준다", () => {
+  it("옛 payload에 예상 정답률이 없으면 확신도를 소수 셋째 자리까지 보여준다", () => {
     // 보정이 없는 옛 모델. 0.05와 0.07을 구분할 자릿수는 남겨야 한다.
     renderTable({
-      items: [
-        {
-          ...ITEMS[0],
-          confidence: 0.076,
-          expected_accuracy: null,
-        },
-      ],
+      items: [{ ...ITEMS[0], score: null, confidence: 0.076, expected_accuracy: null }],
       choices: {},
     });
     const row = screen.getByText("확실한 책").closest("tr");
@@ -902,22 +916,22 @@ describe("제자리 제안 표시", () => {
     expect(cells[4].textContent).toContain("0.076");
   });
 
-  it("점수 정렬은 예상 정답률을 기준으로 한다", () => {
-    // 확신도 순서와 예상 정답률 순서가 어긋나게 둔다. 화면에 보이는 숫자로 정렬해야
+  it("점수 정렬은 합산 점수를 기준으로 한다", () => {
+    // 옛 확신도 순서와 합산 점수 순서가 어긋나게 둔다. 화면에 보이는 숫자로 정렬해야
     // 관리자가 본 대로 줄이 선다.
     renderTable({
       items: [
-        { ...ITEMS[0], title: "낮은 정답률", confidence: 0.12, expected_accuracy: 0.6 },
-        { ...ITEMS[1], title: "높은 정답률", confidence: 0.08, expected_accuracy: 0.95 },
+        { ...ITEMS[0], title: "낮은 점수", confidence: 0.12, score: 0.6 },
+        { ...ITEMS[1], title: "높은 점수", confidence: 0.08, score: 0.95 },
       ],
       choices: {},
     });
-    fireEvent.click(screen.getByLabelText("예상 정답률 정렬"));
+    fireEvent.click(screen.getByLabelText("점수 정렬"));
     const titles = screen
       .getAllByRole("row")
       .slice(1)
       .map((row) => within(row).getAllByRole("cell")[0].textContent);
-    expect(titles[0]).toBe("낮은 정답률");
+    expect(titles[0]).toBe("낮은 점수");
   });
 
   it("추천 2가 없는 행은 추천 2 정렬에서 방향과 무관하게 뒤로 간다", () => {

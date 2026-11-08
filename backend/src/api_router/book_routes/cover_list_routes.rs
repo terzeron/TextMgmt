@@ -89,19 +89,35 @@ async fn browse(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDep
     } else {
         manager.get_cover_books_paged(&query.category, query.limit, &query.cursor, Some(&hidden)).await
     };
-    let CoverPage { items, total, next_cursor: next } = match page {
+    let page = match page {
         Ok(page) => page,
         Err(error) => return Ok(Json(json!({"status":"failure","error":error}))),
     };
-    /// 표지 목록의 책. 화면에 보일 제목을 덧붙인다.
-    #[derive(serde::Serialize)]
-    struct CoverBook {
-        #[serde(flatten)]
-        book: book_manager::book_metadata::BookView,
-        display_title: String,
-    }
-    let books: Vec<CoverBook> = items.into_iter().map(|(book, display_title)| CoverBook { book: super::book_view(&book, manager.as_ref()), display_title }).collect();
+    let (total, next) = (page.total, page.next_cursor.clone());
+    let books = cover_books(page, manager.as_ref());
     Ok(Json(json!({"status":"success","result":books,"total":total,"next_cursor":next})))
+}
+
+/// 표지 목록의 책. 화면에 보일 제목과, 대표 커버를 못 만들 때 차례로 쓸 같은 작품의 다른 권을 덧붙인다.
+#[derive(serde::Serialize)]
+pub(super) struct CoverBook {
+    #[serde(flatten)]
+    book: BookView,
+    display_title: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fallbacks: Vec<BookView>,
+}
+
+/// 표지 목록 한 쪽을 응답의 `result` 모양으로 바꾼다. 커버 목록과 최신 만화가 같이 쓴다.
+pub(super) fn cover_books(page: CoverPage, manager: &dyn BookManagerApi) -> Vec<CoverBook> {
+    let CoverPage { items, mut fallbacks, .. } = page;
+    items
+        .into_iter()
+        .map(|(book, display_title)| {
+            let others = fallbacks.remove(&book.book_id).unwrap_or_default();
+            CoverBook { book: super::book_view(&book, manager), display_title, fallbacks: others.iter().map(|other| super::book_view(other, manager)).collect() }
+        })
+        .collect()
 }
 
 #[cfg(test)]

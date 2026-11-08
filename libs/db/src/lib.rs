@@ -3,6 +3,7 @@
 //!
 //! 시간대: Diesel은 연결을 열 때 `time_zone`을 `+00:00`으로 바꾸므로, `connect`가 서버 전역 설정으로 되돌린다.
 
+pub mod bookstore_cache_store;
 pub mod category_mapping;
 pub mod view_history_store;
 

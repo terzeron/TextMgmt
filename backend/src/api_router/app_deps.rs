@@ -15,10 +15,13 @@ use auth_manager::auth_service::{EnvRoleResolver, JwtIssuer, RoleResolver, Token
 use auth_manager::category_access_checker::{BookAccess, BookLookup, BookStub, UnavailableBookAccess, ViewerBookAccess};
 use auth_manager::google_token_verifier::{GoogleIdTokenVerifier, GoogleVerifier};
 use auth_manager::refresh_token_store::{RefreshTokenStoreApi, create_refresh_token_store};
+use book_manager::bookstore_evidence::{BookstoreLookup, BookstoreLookupFactory, STORES};
 use book_manager::comics_manager::ComicsManager;
-use book_manager::{BookManager, LoaderFileReader};
+use book_manager::{BookManager, ClassifierFactory, LoaderFileReader};
 use book_manager::{BookManagerApi, UnavailableBookManager};
 use bookstore::store_clients::BookstoreSearch;
+use classifier::Classify;
+use classifier::model_reloader::ModelReloader;
 use cover_manager::cover_management::CoverHooks;
 use db::category_mapping::CategoryMapping;
 use db::category_mapping::CategoryMappingApi;
@@ -342,9 +345,48 @@ fn loader_file_reader(env: EnvFn<'_>) -> Arc<LoaderFileReader> {
     Arc::new(LoaderFileReader::new(book_root, comics_root))
 }
 
+/// `TM_CLASSIFIER_MODEL` 모델 파일을 분류 제안마다 확인해 바뀌었으면 다시 읽는다. env가 없으면 모델 없이 제안한다.
+fn classifier_factory_from_env(env: EnvFn<'_>) -> Option<ClassifierFactory> {
+    let Some(path) = env("TM_CLASSIFIER_MODEL").filter(|p| !p.trim().is_empty()) else {
+        log::warn!("TM_CLASSIFIER_MODEL이 없어 분류 제안에 모델을 쓰지 않는다");
+        return None;
+    };
+    let reloader = ModelReloader::new(PathBuf::from(path));
+    Some(Arc::new(move || reloader.current().map(|model| model as Arc<dyn Classify>)))
+}
+
+/// 분류 제안마다 서점 조회 객체를 만든다. 서점 세 곳과 MySQL 캐시를 쓴다.
+/// 캐시를 못 열면 경고를 남기고 캐시 없이(매번 서점을 불러) 조회한다. 연결 정보는 지금 env에서 복사해 둔다.
+fn bookstore_lookup_factory_from_env(env: EnvFn<'_>) -> BookstoreLookupFactory {
+    let mysql: std::collections::HashMap<String, String> =
+        ["TM_MYSQL_HOST", "TM_MYSQL_PORT", "TM_MYSQL_DATABASE", "TM_MYSQL_USER", "TM_MYSQL_PASSWORD"].iter().filter_map(|key| env(key).map(|value| (key.to_string(), value))).collect();
+    Arc::new(move || {
+        let stores = STORES.iter().filter_map(|name| bookstore::store_clients::create_bookstore_search(name).map(|store| (name.to_string(), store))).collect();
+        let cache = match db::bookstore_cache_store::BookstoreCacheStore::from_env(&|key| mysql.get(key).cloned()) {
+            Ok(cache) => Some(Arc::new(cache) as Arc<dyn crate::bookstore_result_fetcher::CacheStore>),
+            Err(error) => {
+                log::warn!("서점 캐시를 열지 못해 캐시 없이 조회한다: {error}");
+                None
+            }
+        };
+        Some(Arc::new(crate::bookstore_result_fetcher::BookstoreResultFetcher::new(stores, cache, Arc::new(SystemClock))) as Arc<dyn BookstoreLookup>)
+    })
+}
+
 fn build_book_manager(env: EnvFn<'_>, es: Arc<dyn EsManagerApi>) -> Result<Arc<dyn BookManagerApi>, String> {
     let reader = loader_file_reader(env);
-    BookManager::from_env_with_es(env, es, |deps| deps.with_file_reader(reader)).map(|manager| Arc::new(manager) as Arc<dyn BookManagerApi>).map_err(|e| e.to_string())
+    // 만화 매니저에는 꽂지 않는다. 모델은 책 카테고리로만 학습한다.
+    let classifier = classifier_factory_from_env(env);
+    let bookstore = bookstore_lookup_factory_from_env(env);
+    BookManager::from_env_with_es(env, es, |deps| {
+        let deps = deps.with_file_reader(reader).with_bookstore_lookup_factory(bookstore);
+        match classifier {
+            Some(factory) => deps.with_classifier_factory(factory),
+            None => deps,
+        }
+    })
+    .map(|manager| Arc::new(manager) as Arc<dyn BookManagerApi>)
+    .map_err(|e| e.to_string())
 }
 
 fn build_comics_manager(env: EnvFn<'_>, es: Arc<dyn EsManagerApi>) -> Result<Arc<dyn BookManagerApi>, String> {
@@ -401,6 +443,40 @@ mod tests {
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
         let values: HashMap<String, String> = pairs.iter().map(|(key, value)| (key.to_string(), value.to_string())).collect();
         move |key| values.get(key).cloned()
+    }
+
+    #[test]
+    fn bookstore_lookup_factory_covers_three_stores_without_a_reachable_cache() {
+        // 닿지 않는 MySQL이면 캐시 없이 조회 객체를 만든다(매번 서점을 부른다).
+        let factory = super::bookstore_lookup_factory_from_env(&env(&[("TM_MYSQL_HOST", "127.0.0.1"), ("TM_MYSQL_PORT", "1")]));
+        let lookup = factory().expect("조회 객체");
+        let summary = lookup.summary().expect("집계");
+        assert_eq!(summary.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), vec!["aladin", "kyobo", "yes24"]);
+    }
+
+    #[test]
+    fn classifier_factory_is_none_without_model_env() {
+        assert!(super::classifier_factory_from_env(&env(&[])).is_none());
+    }
+
+    #[test]
+    fn classifier_factory_without_model_file_yields_no_model() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("model.bin");
+        let factory = super::classifier_factory_from_env(&env(&[("TM_CLASSIFIER_MODEL", path.to_str().unwrap())])).unwrap();
+        assert!(factory().is_none());
+    }
+
+    #[test]
+    fn classifier_factory_loads_a_valid_model_file() {
+        use classifier::softmax_model::{ModelHeader, SoftmaxModel};
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("model.bin");
+        let header = ModelHeader { version: 1, seed: 1, created_unix_secs: 1, hash_bits: 4, categories: vec!["A".into(), "B".into()], population_counts: vec![1, 1], sample_counts: vec![1, 1] };
+        SoftmaxModel { header, weights: vec![0.0; 2 << 4], bias: vec![0.0; 2] }.save_atomic(&path).unwrap();
+        let factory = super::classifier_factory_from_env(&env(&[("TM_CLASSIFIER_MODEL", path.to_str().unwrap())])).unwrap();
+        let model = factory().expect("모델을 읽어야 한다");
+        assert_eq!(model.classify_document(&json!({"title": "제목"})).unwrap().ranked.len(), 2);
     }
 
     #[test]

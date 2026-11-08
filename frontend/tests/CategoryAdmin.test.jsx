@@ -1983,6 +1983,34 @@ describe("CategoryAdmin", () => {
     ).toBe(true);
   });
 
+  it("서점 조회는 기본으로 켜져 있고 끄면 요청에 use_bookstore: false를 싣는다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("1_fiction"));
+    mockJsonPostReq.mockImplementation((url, payload, resolve, _reject, final) => {
+      resolve({ started: true, status: "running", source_category: "1_fiction", total_count: 0, processed_count: 0 });
+      if (final) final();
+    });
+
+    const checkbox = screen.getByLabelText("서점 조회");
+    expect(checkbox.checked).toBe(true);
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByTitle("분류 제안"));
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/categories/classify-proposal",
+        { category: "1_fiction", use_bookstore: false },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
   it("분류 제안 버튼 클릭 시 선택 카테고리로 분류 제안을 시작한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
@@ -2008,7 +2036,7 @@ describe("CategoryAdmin", () => {
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/categories/classify-proposal",
-        { category: "1_fiction" },
+        { category: "1_fiction", use_bookstore: true },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
@@ -2118,7 +2146,7 @@ describe("CategoryAdmin", () => {
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/comics/categories/classify-proposal",
-        { category: "1_fiction" },
+        { category: "1_fiction", use_bookstore: true },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
@@ -4331,10 +4359,10 @@ describe("CategoryAdmin 분류 제안", () => {
     title: "확실한 책",
     current_category: "1_fiction",
     target_category: "2_science",
-    grade: "certain",
-    confidence: 0.9,
+    classified: true,
+    score: 0.9,
     candidates: [
-      { category: "2_science", source: "model", detail: "모델 판정" },
+      { category: "2_science", source: "model", detail: "모델 1.00", score: 0.9 },
     ],
     apply_status: "pending",
     apply_error: null,
@@ -4344,10 +4372,10 @@ describe("CategoryAdmin 분류 제안", () => {
     title: "애매한 책",
     current_category: "1_fiction",
     target_category: "3_history",
-    grade: "unsure",
-    confidence: 0.3,
+    classified: true,
+    score: 0.3,
     candidates: [
-      { category: "3_history", source: "bookstore", detail: "서점 1곳 일치" },
+      { category: "3_history", source: "keyword", detail: "키워드 1.00", score: 0.3 },
     ],
     apply_status: "pending",
     apply_error: null,
@@ -4357,8 +4385,8 @@ describe("CategoryAdmin 분류 제안", () => {
     title: "이미 옮긴 책",
     current_category: "1_fiction",
     target_category: "2_science",
-    grade: "certain",
-    confidence: 0.95,
+    classified: true,
+    score: 0.95,
     candidates: [],
     apply_status: "moved",
     apply_error: null,
@@ -4529,7 +4557,7 @@ describe("CategoryAdmin 분류 제안", () => {
     }
   });
 
-  it("상태가 ready면 표가 보이고 certain 항목이 기본 선택된다", async () => {
+  it("상태가 ready면 표가 보이고 어떤 후보도 미리 체크하지 않는다", async () => {
     const resultRef = {
       current: {
         status: "ready",
@@ -4547,51 +4575,22 @@ describe("CategoryAdmin 분류 제안", () => {
     render(<CategoryAdmin />);
 
     await waitFor(() => {
-      expect(
-        screen.getByLabelText("1_fiction/a.epub 추천 1 선택").checked,
-      ).toBe(true);
+      expect(screen.getByLabelText("1_fiction/a.epub 추천 1 선택")).toBeTruthy();
     });
+    // 합산 점수는 확실성 등급이 아니라 자동 승인 기준으로 쓰지 않는다.
+    expect(screen.getByLabelText("1_fiction/a.epub 추천 1 선택").checked).toBe(
+      false,
+    );
     expect(screen.getByLabelText("1_fiction/b.epub 추천 1 선택").checked).toBe(
       false,
     );
+    expect(
+      screen.getByRole("button", { name: /분류 승인/ }).textContent,
+    ).toContain("분류 승인 (0건)");
     // 이미 옮긴 행은 목적지를 다시 고를 수 없다.
     expect(screen.getByLabelText("1_fiction/c.epub 목적지").disabled).toBe(
       true,
     );
-  });
-
-  it("추천 1이 현재 디렉토리와 같으면 certain이라도 기본 선택하지 않는다", async () => {
-    // 제자리 이동이라 옮길 것이 없다. 자동으로 승인 목록에 들어가면 실제로
-    // 옮겨야 할 행이 몇 개인지 숫자로 안 보인다.
-    const sameCategoryItem = {
-      ...PROPOSAL_ITEM_CERTAIN,
-      file_path: "1_fiction/same.epub",
-      title: "제자리 책",
-      target_category: "1_fiction",
-      candidates: [
-        { category: "1_fiction", source: "model", detail: "모델 판정" },
-      ],
-    };
-    const resultRef = {
-      current: {
-        status: "ready",
-        source_category: "1_fiction",
-        total_count: 2,
-        processed_count: 2,
-        items: [PROPOSAL_ITEM_CERTAIN, sameCategoryItem],
-      },
-    };
-    mockClassifyProposalGet(resultRef);
-    render(<CategoryAdmin />);
-
-    await waitFor(() => {
-      expect(
-        screen.getByLabelText("1_fiction/a.epub 추천 1 선택").checked,
-      ).toBe(true);
-    });
-    expect(
-      screen.getByLabelText("1_fiction/same.epub 추천 1 선택").checked,
-    ).toBe(false);
   });
 
   it("상태가 failed면 에러 메시지를 보여준다 (I2)", async () => {
@@ -4617,6 +4616,8 @@ describe("CategoryAdmin 분류 제안", () => {
     // 명시해야 한다 — 그러지 않으면 관리자가 미완성 제안을 완성됐다고 착각한다.
     expect(screen.getByText(/1200건 중 34건까지만/)).toBeTruthy();
     // failed에서도 승인은 계속 켜져 있어야 한다 — C1/I4가 재시도할 수 있어야 한다.
+    // 미리 체크하지 않으므로 관리자가 직접 고른 뒤 확인한다.
+    fireEvent.click(screen.getByLabelText("1_fiction/a.epub 추천 1 선택"));
     expect(screen.getByRole("button", { name: /분류 승인/ }).disabled).toBe(
       false,
     );
@@ -4711,7 +4712,7 @@ describe("CategoryAdmin 분류 제안", () => {
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/categories/classify-proposal",
-        { category: "1_fiction" },
+        { category: "1_fiction", use_bookstore: true },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
@@ -4754,7 +4755,7 @@ describe("CategoryAdmin 분류 제안", () => {
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/categories/classify-proposal",
-        { category: "1_fiction" },
+        { category: "1_fiction", use_bookstore: true },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
@@ -4973,12 +4974,11 @@ describe("CategoryAdmin 분류 제안", () => {
     render(<CategoryAdmin />);
 
     await waitFor(() => {
-      expect(
-        screen.getByLabelText("1_fiction/a.epub 추천 1 선택").checked,
-      ).toBe(true);
+      expect(screen.getByLabelText("1_fiction/a.epub 추천 1 선택")).toBeTruthy();
     });
+    fireEvent.click(screen.getByLabelText("1_fiction/a.epub 추천 1 선택"));
 
-    // 애매한 책은 기본 선택되지 않으므로 직접 선택으로 목적지를 준다.
+    // 애매한 책은 체크하지 않았으므로 직접 선택으로 목적지를 준다.
     fireEvent.change(screen.getByLabelText("1_fiction/b.epub 목적지"), {
       target: { value: "2_science" },
     });
@@ -5032,10 +5032,12 @@ describe("CategoryAdmin 분류 제안", () => {
     render(<CategoryAdmin />);
 
     await waitFor(() => {
-      expect(
-        screen.getByLabelText("1_fiction/a.epub 추천 1 선택").checked,
-      ).toBe(true);
+      expect(screen.getByLabelText("1_fiction/a.epub 추천 1 선택")).toBeTruthy();
     });
+    fireEvent.click(screen.getByLabelText("1_fiction/a.epub 추천 1 선택"));
+    expect(
+      screen.getByRole("button", { name: /분류 승인/ }).textContent,
+    ).toContain("분류 승인 (1건)");
 
     // 추천 체크를 풀면 그 행에는 목적지가 없다. 승인 버튼은 대상이 0건이 되어
     // 비활성화된다 — CategoryAdmin의 proposalApplyItems가 isSelectable로 거른
@@ -5127,6 +5129,7 @@ describe("CategoryAdmin 분류 제안", () => {
 
   it("분류 승인 모달은 취소와 닫기로 모두 닫힌다", async () => {
     await renderReadyProposal([PROPOSAL_ITEM_CERTAIN]);
+    fireEvent.click(screen.getByLabelText("1_fiction/a.epub 추천 1 선택"));
 
     fireEvent.click(screen.getByRole("button", { name: /분류 승인/ }));
     let modal = await screen.findByRole("dialog");
@@ -5148,6 +5151,7 @@ describe("CategoryAdmin 분류 제안", () => {
 
   it("분류 승인이 실패하면 메시지를 보여준다", async () => {
     await renderReadyProposal([PROPOSAL_ITEM_CERTAIN]);
+    fireEvent.click(screen.getByLabelText("1_fiction/a.epub 추천 1 선택"));
 
     mockJsonPostReq.mockImplementation(
       (url, payload, _resolve, reject, final) => {
@@ -7890,7 +7894,7 @@ describe("CategoryAdmin 분류 제안 상태 경계", () => {
           file_path: "1_fiction/a.epub",
           title: "후보 없는 책",
           current_category: "1_fiction",
-          grade: "certain",
+          classified: true,
           apply_status: "pending",
         },
       ],

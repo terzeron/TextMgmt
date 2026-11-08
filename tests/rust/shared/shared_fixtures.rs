@@ -97,7 +97,7 @@ pub fn count(v: &Value) -> i64 {
 /// `[항목, 전체 수, 다음 커서, 오류]`를 `Result<CoverPage, _>`로 바꾼다. 전체 수가 null이면 모르는 것이다.
 pub fn cover_page(v: &Value) -> Result<CoverPage, String> {
     let total = arr(v, 1).as_u64().map(|n| n as usize);
-    opt_string(arr(v, 3)).map_or_else(|| Ok(CoverPage { items: titled_books(arr(v, 0)), total, next_cursor: opt_string(arr(v, 2)) }), Err)
+    opt_string(arr(v, 3)).map_or_else(|| Ok(CoverPage { items: titled_books(arr(v, 0)), total, next_cursor: opt_string(arr(v, 2)), ..CoverPage::default() }), Err)
 }
 
 /// `create_test_pdf`
@@ -851,6 +851,11 @@ impl BookManagerApi for Mock {
 
     async fn get_cover_books_paged(&self, category: &str, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
         let v = self.invoke("get_cover_books_paged", call_args!([], {"category": category, "size": size, "cursor": cursor, "exclude_categories": exclude_categories})).await;
+        cover_page(&v)
+    }
+
+    async fn get_latest_comic_covers(&self, size: i64, cursor: &str, exclude_categories: Option<&[String]>) -> Result<CoverPage, String> {
+        let v = self.invoke("get_latest_comic_covers", call_args!([], {"size": size, "cursor": cursor, "exclude_categories": exclude_categories})).await;
         cover_page(&v)
     }
 

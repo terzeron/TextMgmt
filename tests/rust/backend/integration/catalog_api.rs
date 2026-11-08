@@ -5,6 +5,7 @@ use backend::api_router::{AppDeps, AuthMode, CategoryMappingApi, MappingError, a
 use book_manager::{BookManager, BookManagerDeps};
 use common::TestClient;
 use common::es_fake::{FakeEsManager, Hit};
+use search_manager::{CoverFileHit, CoverFileHits};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -97,7 +98,7 @@ async fn category_list_supports_legacy_and_cursor_contracts() {
 
 #[tokio::test]
 async fn latest_merges_hidden_and_latest_exclusions_and_validates_limit() {
-    for (prefix, kind, comics) in [("", "book", false), ("/comics", "comic", true)] {
+    for (prefix, kind, comics) in [("", "book", false)] {
         let es = FakeEsManager::new();
         es.with(|s| s.latest_docs = (vec![Hit::new(1, doc("public"), 0.0)], 12));
         let client = client(es.clone(), "viewer", comics);
@@ -109,6 +110,43 @@ async fn latest_merges_hidden_and_latest_exclusions_and_validates_limit() {
             assert_eq!(client.get(&format!("{prefix}/latest?limit={limit}")).await.status, 422);
         }
     }
+}
+
+#[tokio::test]
+async fn comics_latest_pages_one_card_per_work_with_fallbacks() {
+    let episode = |n: u32| {
+        let mut doc = doc("1_웹툰/작품");
+        doc["file_path"] = json!(format!("1_웹툰/작품/작품 {n}화.pdf"));
+        doc["title"] = json!(format!("작품 {n}화"));
+        doc
+    };
+    let es = FakeEsManager::new();
+    es.with(|s| {
+        s.cover_stats = [("1_웹툰/작품".to_string(), (51, 300.0, 0.0)), ("1_웹툰".to_string(), (1, 100.0, 0.0))].into();
+        s.cover_files = CoverFileHits { hits: vec![CoverFileHit::new(30, doc("1_웹툰"), vec![json!(100), json!(0), json!("public/book.pdf")])], total: 1 };
+        s.group_representatives = [("1_웹툰/작품".to_string(), vec![(2, episode(2)), (1, episode(1))])].into();
+    });
+    let client = client(es.clone(), "viewer", true);
+
+    let body = client.get("/comics/latest?limit=1&cursor=").await.json();
+
+    assert_eq!(body["status"], "success");
+    assert_eq!(body["total"], 2);
+    assert!(body["next_cursor"].is_string());
+    let result = body["result"].as_array().unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0]["book_id"], 1);
+    assert_eq!(result[0]["display_title"], "작품");
+    assert_eq!(result[0]["fallbacks"][0]["book_id"], 2);
+    assert_eq!(result[0]["fallbacks"][0]["file_path"], "1_웹툰/작품/작품 2화.pdf");
+    assert_eq!(es.calls_of("search_cover_files_paged"), vec![json!([["1_웹툰"], 1, null, ["hidden-comic", "old"]])]);
+    assert_eq!(es.calls_of("search_group_representatives"), vec![json!([["1_웹툰/작품"], ["hidden-comic", "old"]])]);
+    assert!(es.calls_of("search_latest_docs").is_empty());
+    for limit in ["0", "2001", "bad"] {
+        assert_eq!(client.get(&format!("/comics/latest?limit={limit}")).await.status, 422);
+    }
+    es.fail("aggregate_cover_categories", "stats failed");
+    assert_eq!(client.get("/comics/latest").await.json(), json!({"status":"failure","error":"stats failed"}));
 }
 
 #[tokio::test]

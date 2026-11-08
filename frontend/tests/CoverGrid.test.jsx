@@ -180,6 +180,52 @@ describe("CoverGrid", () => {
     expect(screen.getByText("EPUB")).toBeTruthy();
   });
 
+  describe("대체 후보", () => {
+    const work = {
+      book_id: 1,
+      title: "작품 1화",
+      display_title: "작품",
+      category: "1_웹툰/작품",
+      file_path: "1_웹툰/작품/1화.pdf",
+      file_type: "pdf",
+      fallbacks: [
+        { book_id: 2, category: "1_웹툰/작품", file_path: "1_웹툰/작품/2화.pdf", file_type: "pdf" },
+        { book_id: 3, category: "1_웹툰/작품", file_path: "1_웹툰/작품/3화.pdf", file_type: "pdf" },
+      ],
+    };
+
+    it("대표 커버가 실패하면 다음 권 커버를 요청하고 링크도 그 권으로 바꾼다", () => {
+      render(<CoverGrid results={[work]} basePath="/comics-view" />);
+      expect(document.querySelector("img").getAttribute("src")).toMatch(/\/comics\/cover\/1\?/);
+
+      fireEvent.error(document.querySelector("img"));
+
+      expect(document.querySelector("img").getAttribute("src")).toMatch(/\/comics\/cover\/2\?/);
+      expect(screen.getByRole("link").getAttribute("href")).toMatch(/^\/comics-view\/2\?/);
+      expect(screen.getByText("작품")).toBeTruthy();
+    });
+
+    it("모든 후보가 실패하면 포맷명 박스로 바꾼다", () => {
+      render(<CoverGrid results={[work]} basePath="/comics-view" />);
+      for (let attempt = 0; attempt < 3; attempt += 1) fireEvent.error(document.querySelector("img"));
+
+      expect(document.querySelector("img")).toBeNull();
+      expect(screen.getByText("PDF")).toBeTruthy();
+      expect(screen.getByRole("link").getAttribute("href")).toMatch(/^\/comics-view\/3\?/);
+    });
+
+    it("대체 후보 없이 category가 비면 _root로 링크한다", () => {
+      render(
+        <CoverGrid
+          results={[{ book_id: 5, file_type: "pdf", fallbacks: [{ book_id: 6, file_type: "pdf" }] }]}
+          basePath="/comics-view"
+        />,
+      );
+      fireEvent.error(document.querySelector("img"));
+      expect(screen.getByRole("link").getAttribute("href")).toBe("/comics-view/6?category=_root");
+    });
+  });
+
   it("카드는 새 탭에서 조회 화면을 연다", () => {
     render(<CoverGrid results={makeBooks(1, "epub")} basePath="/book-view" />);
     const link = screen.getByRole("link");
@@ -253,6 +299,16 @@ describe("CoverGrid", () => {
     expect(screen.queryByText("[책 저자] 책 제목")).toBeNull();
     expect(screen.queryByText("[만화 작가] 만화 제목")).toBeNull();
     expect(screen.queryByText("01 [번호 저자] 번호 책 제목")).toBeNull();
+  });
+
+  it("[저자] prefix만 있는 제목은 지우지 않고 그대로 보여 준다", () => {
+    render(
+      <CoverGrid
+        results={[{ ...makeBooks(1, "epub")[0], display_title: "[저자만] " }]}
+        basePath="/book-view"
+      />,
+    );
+    expect(screen.getByRole("link").getAttribute("title")).toBe("[저자만] ");
   });
 
   it(`커버 요청을 ${COVER_BATCH_SIZE}개씩 나누어 화면 끝에서 이어 그린다`, () => {

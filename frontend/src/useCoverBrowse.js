@@ -17,14 +17,14 @@ const LOAD_ERROR_MESSAGE = "책 목록을 불러오지 못했습니다.";
 
 /**
  * category가 없으면 전체, 있으면 그 디렉토리를 기준으로 한 커버 목록 URL을 만든다.
- * uncovered가 true면 정식 표지가 없는 책만 받는다.
+ * uncovered가 true면 정식 표지가 없는 책만 받는다. endpoint "latest"는 최신 만화 목록이다.
  */
-export function buildBrowseUrl(apiPrefix, category, cursor, uncovered = false) {
+export function buildBrowseUrl(apiPrefix, category, cursor, uncovered = false, endpoint = "browse") {
   const params = [`limit=${BROWSE_PAGE_SIZE}`];
   if (category) params.push(`category=${encodeURIComponent(category)}`);
   if (cursor) params.push(`cursor=${encodeURIComponent(cursor)}`);
   if (uncovered) params.push("uncovered=true");
-  return `${apiPrefix}/browse?${params.join("&")}`;
+  return `${apiPrefix}/${endpoint}?${params.join("&")}`;
 }
 
 /**
@@ -32,8 +32,9 @@ export function buildBrowseUrl(apiPrefix, category, cursor, uncovered = false) {
  * @param {string} options.apiPrefix - "" (book) 또는 "/comics"
  * @param {string} [options.category] - 비우면 전체 책
  * @param {boolean} [options.uncovered] - true면 정식 표지가 없는 책만. 서버가 전체 개수를 몰라 total은 null이다
+ * @param {string} [options.endpoint] - "browse"(커버 목록) 또는 "latest"(최신 만화)
  */
-export function useCoverBrowse({ apiPrefix, category = "", uncovered = false }) {
+export function useCoverBrowse({ apiPrefix, category = "", uncovered = false, endpoint = "browse" }) {
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(null);
   const [hasMore, setHasMore] = useState(false);
@@ -61,7 +62,7 @@ export function useCoverBrowse({ apiPrefix, category = "", uncovered = false }) 
         setError(LOAD_ERROR_MESSAGE);
       };
       rawJsonGetReq(
-        buildBrowseUrl(apiPrefix, category, cursorRef.current, uncovered),
+        buildBrowseUrl(apiPrefix, category, cursorRef.current, uncovered, endpoint),
         (data) => {
           if (generation !== generationRef.current) return;
           if (!data || data["status"] !== "success") {
@@ -95,7 +96,7 @@ export function useCoverBrowse({ apiPrefix, category = "", uncovered = false }) 
         },
       );
     },
-    [apiPrefix, category, uncovered],
+    [apiPrefix, category, uncovered, endpoint],
   );
 
   useEffect(() => {

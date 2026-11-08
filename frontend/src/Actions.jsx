@@ -1,6 +1,4 @@
-/* eslint-disable react-refresh/only-export-components --
-   유사도/문자열 처리 유틸들이 동일 도메인 응집을 위해 컴포넌트와 co-located. HMR 힌트일 뿐 런타임 영향 없음. */
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import PropTypes from "prop-types";
 
 import "./Edit.css";
@@ -14,300 +12,7 @@ import {
   faSpinner,
 } from "@fortawesome/free-solid-svg-icons";
 
-import { getRandomLightColor, ROOT_DIRECTORY } from "./Common";
-import {
-  loadCategoryMappings,
-  fetchCategoryMappings,
-  isCacheInitialized,
-} from "./categoryMappingCache";
-
-// 문자열에서 n-gram 집합 생성
-export const generateNgrams = (str, n = 2) => {
-  const ngrams = new Set();
-  for (let i = 0; i <= str.length - n; i++) {
-    ngrams.add(str.substring(i, i + n));
-  }
-  return ngrams;
-};
-
-// N-gram 기반 Jaccard 유사도 (0~1)
-export const ngramSimilarity = (str1, str2, n = 2) => {
-  if (str1.length < n || str2.length < n) {
-    return str1 === str2 ? 1.0 : 0;
-  }
-  const ngrams1 = generateNgrams(str1, n);
-  const ngrams2 = generateNgrams(str2, n);
-  let intersectionSize = 0;
-  for (const ng of ngrams1) {
-    if (ngrams2.has(ng)) intersectionSize++;
-  }
-  const unionSize = ngrams1.size + ngrams2.size - intersectionSize;
-  /* v8 ignore next -- length guard prevents both n-gram sets from being empty. */
-  return unionSize === 0 ? 0 : intersectionSize / unionSize;
-};
-
-// 한글 문자 포함 여부 확인
-const containsKorean = (str) => /[\uAC00-\uD7AF]/.test(str);
-
-// 유사도 계산 (완전일치 > 포함관계 > N-gram 유사도)
-export const calculateSimilarity = (str1, str2) => {
-  if (!str1 || !str2) return 0;
-  const s1 = str1.toLowerCase();
-  const s2 = str2.toLowerCase();
-
-  // 1) 완전 일치 → 1.0
-  if (s1 === s2) return 1.0;
-
-  // 2) 포함 관계 → 0.7~0.9
-  //    단, 한글 키워드가 우연히 포함되는 경우를 배제:
-  //    - 한글 1글자가 3글자 이상 단어에 포함 → N-gram (예: "시" ⊂ "러시아소설")
-  //    - 한글 2글자 이상이 절반 이하로 포함 → N-gram (예: "소설" ⊂ "세계각국소설")
-  //    - 한글 1글자가 2글자 단어에 포함 → 포함 관계 유지 (예: "소" ⊂ "소설")
-  const shorter = s1.length <= s2.length ? s1 : s2;
-  const longer = s1.length > s2.length ? s1 : s2;
-  // 한글은 1글자도 의미있으므로 허용, 그 외는 2글자 이상
-  const minLength = containsKorean(shorter) ? 1 : 2;
-  if (longer.includes(shorter) && shorter.length >= minLength) {
-    const ratio = shorter.length / longer.length;
-    if (
-      containsKorean(shorter) &&
-      ((shorter.length === 1 && longer.length > 2) ||
-        (shorter.length >= 2 && ratio <= 0.5))
-    ) {
-      // 한글 우연적 포함 → N-gram으로 평가
-    } else {
-      return 0.7 + ratio * 0.2;
-    }
-  }
-
-  // 3) N-gram 유사도 기반 → 0.3~0.6
-  const ngramScore = ngramSimilarity(s1, s2, 2);
-  const minNgramScore = containsKorean(s1) || containsKorean(s2) ? 0.15 : 0.2;
-  if (ngramScore >= minNgramScore) {
-    return 0.3 + ngramScore * 0.3;
-  }
-
-  return 0;
-};
-
-// 특수기호로 문자열을 분리하여 키워드 추출
-// 슬래시(/), 괄호(()), 공백 등을 구분자로 사용
-const splitBySpecialChars = (str) => {
-  /* v8 ignore next -- callers skip falsy bookstore categories. */
-  if (!str) return [];
-  // 슬래시, 괄호, 공백 등으로 분리 후 빈 문자열 제거
-  return str
-    .split(/[/()\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-};
-
-// 다른 키워드에 포함되는 짧은 키워드를 제거하여 구체적인 키워드만 사용
-// 예: ["소설", "세계각국소설"] → ["세계각국소설"] ("소설"은 "세계각국소설"에 포함)
-export const filterSubstringKeywords = (keywords) => {
-  if (keywords.length <= 1) return keywords;
-  return keywords.filter((kw) => {
-    const kwLower = kw.toLowerCase();
-    return !keywords.some((other) => {
-      if (other === kw) return false;
-      return other.toLowerCase().includes(kwLower);
-    });
-  });
-};
-
-// 유사도 비교에 노이즈를 주는 부분문자열 제거
-// 예: "경영일반" → "경영", "중문일반" → "중문"
-const NOISE_PATTERNS = [/일반/g];
-
-export const stripNoiseWords = (keywords) => {
-  return keywords
-    .map((kw) =>
-      NOISE_PATTERNS.reduce((s, pat) => s.replace(pat, ""), kw).trim(),
-    )
-    .filter(Boolean);
-};
-
-// 한 서점 안의 키워드가 n개일 때 키워드별 점수에 곱하는 계수.
-// 정보가 흩어질수록 감점한다: 1개 100%, 2개 90%, 3개 80%, ... 11개 이상 0% (무시)
-export const keywordCountFactor = (n) => Math.max(0, 1 - 0.1 * (n - 1));
-
-// 한 서점의 키워드들을 디렉토리 키워드와 비교한다.
-// 키워드별 최선 매칭을 구하고, 키워드 수에 따른 감점을 적용해 합산한다.
-const scoreStoreKeywords = (keywords, dirKeywords) => {
-  const matchDetails = [];
-  let sum = 0;
-  for (const deepKeyword of keywords) {
-    let bestSimilarity = 0;
-    let bestMatch = null;
-    for (const dirKeyword of dirKeywords) {
-      const similarity = calculateSimilarity(deepKeyword, dirKeyword);
-      if (similarity > bestSimilarity) {
-        bestSimilarity = similarity;
-        const dkLower = deepKeyword.toLowerCase();
-        const drLower = dirKeyword.toLowerCase();
-        const isExact = dkLower === drLower;
-        const isContained =
-          drLower.includes(dkLower) || dkLower.includes(drLower);
-        bestMatch = {
-          bookstoreKeyword: deepKeyword,
-          dirKeyword,
-          similarity,
-          isContained,
-          matchType: isExact ? "exact" : isContained ? "contains" : "ngram",
-        };
-      }
-    }
-    if (bestSimilarity > 0) matchDetails.push(bestMatch);
-    sum += bestSimilarity;
-  }
-  return { score: sum * keywordCountFactor(keywords.length), matchDetails };
-};
-
-// 단일 서점 카테고리와 디렉토리의 유사도 점수 계산
-// - 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체
-// - 서점 카테고리(이미 마지막 레벨)를 특수기호로 분리하여 사용
-// - 다른 키워드에 포함되는 범용 키워드는 제거 (예: "소설"이 "세계각국소설"에 포함)
-// - 각 키워드별 최선 매칭에 키워드 수 감점(keywordCountFactor)을 적용해 합산
-// - { category: score } 형태의 객체 반환
-const calculateCategoryScores = (bookstoreCategory, categoryList) => {
-  /* v8 ignore next -- public callers validate category inputs before scoring. */
-  if (!bookstoreCategory || !categoryList?.length) return {};
-
-  // 서점 카테고리를 특수기호로 분리 후 부분문자열 키워드 제거 + 노이즈 제거
-  const rawKeywords = splitBySpecialChars(bookstoreCategory);
-  const deepKeywords = stripNoiseWords(filterSubstringKeywords(rawKeywords));
-
-  if (deepKeywords.length === 0) return {};
-
-  const mappings = loadCategoryMappings();
-  const scores = {};
-
-  for (const category of categoryList) {
-    // 디렉토리명에서 숫자 prefix 제거 (예: "4_심리학뇌과학" -> "심리학뇌과학")
-    const categoryName = category.includes("_")
-      ? category.split("_").slice(1).join("_")
-      : category;
-
-    // 디렉토리별 키워드 = 매핑 테이블 키워드 + 디렉토리명 자체 (노이즈 제거)
-    const dirKeywords = stripNoiseWords([
-      ...(mappings[category] || []),
-      categoryName,
-    ]);
-
-    const { score } = scoreStoreKeywords(deepKeywords, dirKeywords);
-    if (score > 0) {
-      scores[category] = score;
-    }
-  }
-
-  return scores;
-};
-
-// 여러 서점 카테고리의 유사도를 합산하여 상위 N개 반환
-// - suggestedCategories: { yes24: 'category1', aladin: 'category2', ... }
-const findTopSimilarCategories = (
-  suggestedCategories,
-  categoryList,
-  topN = 3,
-) => {
-  if (!suggestedCategories || !categoryList?.length) return [];
-
-  const combinedScores = {};
-
-  // 각 서점의 카테고리에 대해 유사도 점수 계산 후 합산
-  for (const [_store, bookstoreCategory] of Object.entries(
-    suggestedCategories,
-  )) {
-    if (!bookstoreCategory) continue;
-
-    const storeScores = calculateCategoryScores(
-      bookstoreCategory,
-      categoryList,
-    );
-    for (const [category, score] of Object.entries(storeScores)) {
-      combinedScores[category] = (combinedScores[category] || 0) + score;
-    }
-  }
-
-  // 점수 내림차순 정렬 후 상위 N개 반환
-  return Object.entries(combinedScores)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, topN)
-    .map((item) => item[0]);
-};
-
-// 디버깅용: 상위 N개 카테고리의 유사도 계산 과정 반환
-export const getSimilarityDebugInfo = (
-  suggestedCategories,
-  categoryList,
-  topN = 10,
-) => {
-  if (!suggestedCategories || !categoryList?.length) return null;
-
-  const mappings = loadCategoryMappings();
-  const debugInfo = {
-    bookstoreKeywords: {}, // 서점별 추출된 키워드
-    categoryDetails: [], // 각 카테고리별 상세 계산 과정
-  };
-
-  // 1. 서점별 추출된 키워드 수집 (부분문자열 필터링 + 노이즈 제거)
-  for (const [store, bookstoreCategory] of Object.entries(
-    suggestedCategories,
-  )) {
-    if (!bookstoreCategory) continue;
-    const rawKeywords = splitBySpecialChars(bookstoreCategory);
-    const keywords = stripNoiseWords(filterSubstringKeywords(rawKeywords));
-    debugInfo.bookstoreKeywords[store] = {
-      original: bookstoreCategory,
-      keywords,
-    };
-  }
-
-  // 2. 각 카테고리별 상세 점수 계산
-  const allCategoryScores = {};
-
-  for (const category of categoryList) {
-    const categoryName = category.includes("_")
-      ? category.split("_").slice(1).join("_")
-      : category;
-    const dirKeywords = stripNoiseWords([
-      ...(mappings[category] || []),
-      categoryName,
-    ]);
-
-    const matchDetails = []; // 어떤 키워드 쌍이 매칭되었는지
-    let totalScore = 0;
-
-    for (const [store, storeInfo] of Object.entries(
-      debugInfo.bookstoreKeywords,
-    )) {
-      // 각 서점 키워드별 최선 매칭을 개별적으로 기록, 키워드 수 감점 후 합산
-      const { score, matchDetails: storeMatches } = scoreStoreKeywords(
-        storeInfo.keywords,
-        dirKeywords,
-      );
-      for (const match of storeMatches) matchDetails.push({ store, ...match });
-      totalScore += score;
-    }
-
-    if (totalScore > 0) {
-      allCategoryScores[category] = {
-        categoryName,
-        dirKeywords,
-        totalScore,
-        matchDetails,
-      };
-    }
-  }
-
-  // 3. 상위 N개만 추출
-  debugInfo.categoryDetails = Object.entries(allCategoryScores)
-    .sort((a, b) => b[1].totalScore - a[1].totalScore)
-    .slice(0, topN)
-    .map(([category, details]) => ({ category, ...details }));
-
-  return debugInfo;
-};
+import { getRandomLightColor, jsonPostReq, ROOT_DIRECTORY } from "./Common";
 
 export default function Actions(props) {
   const [renderingInfoList, setRenderingInfoList] = useState([]);
@@ -315,37 +20,32 @@ export default function Actions(props) {
   // effect가 최신 값을 읽어야 하므로 화면 표시용 state와 함께 ref로도 둔다.
   const [manuallyClicked, setManuallyClicked] = useState(false);
   const manuallyClickedRef = useRef(false);
-  const [mappingsLoaded, setMappingsLoaded] = useState(false);
+  const [highlightedCategories, setHighlightedCategories] = useState([]);
+  const suggestionRequestRef = useRef(0);
 
-  // 매핑 캐시 초기화
+  // 서점 카테고리와 유사한 상위 5개 디렉토리는 backend(store_category_matcher)가 계산한다.
+  // 새 요청을 보낼 때 이전 강조를 비우고, 늦게 도착한 이전 요청의 응답은 버린다.
   useEffect(() => {
-    if (isCacheInitialized()) {
-      // 이미 다른 곳에서 캐시가 초기화됨
-      setMappingsLoaded(true);
-    } else {
-      fetchCategoryMappings().then(() => setMappingsLoaded(true));
+    const requestId = ++suggestionRequestRef.current;
+    const suggested = props.suggestedCategories;
+    const categories = (props.otherCategoryList || []).filter(
+      (cat) => cat !== "_root",
+    );
+    setHighlightedCategories([]);
+    if (!suggested || Object.keys(suggested).length === 0 || !categories.length) {
+      return;
     }
-  }, []);
-
-  // 여러 서점 카테고리와 유사한 상위 5개 디렉토리 찾기 (useMemo로 동기 계산)
-  const highlightedCategories = useMemo(() => {
-    if (
-      props.suggestedCategories &&
-      Object.keys(props.suggestedCategories).length > 0 &&
-      props.otherCategoryList?.length &&
-      mappingsLoaded
-    ) {
-      const filteredCategoryList = props.otherCategoryList.filter(
-        (cat) => cat !== "_root",
-      );
-      return findTopSimilarCategories(
-        props.suggestedCategories,
-        filteredCategoryList,
-        5,
-      );
-    }
-    return [];
-  }, [props.suggestedCategories, props.otherCategoryList, mappingsLoaded]);
+    jsonPostReq(
+      "/bookstore/category-suggestions?content_type=book",
+      { suggested, categories, top_n: 5 },
+      (result) => {
+        if (requestId === suggestionRequestRef.current) {
+          setHighlightedCategories(result?.top || []);
+        }
+      },
+      () => {},
+    );
+  }, [props.suggestedCategories, props.otherCategoryList]);
 
   // 다른 책으로 바뀌면 이전 책에서 고른 카테고리는 더 이상 유효하지 않으므로 자동 선택을 다시 허용한다.
   // 아래 자동 선택 effect보다 먼저 선언해야 같은 렌더에서 먼저 실행된다.

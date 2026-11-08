@@ -24,6 +24,7 @@ jpeg-encoder = "0.7.1"
 log = "0.4.34"
 lopdf.workspace = true
 regex = "1.13.1"
+isbn_extractor = { path = "../isbn_extractor" }
 roxmltree = "0.21.1"
 scraper = "0.29.0"
 search_manager = { path = "../search_manager" }
@@ -62,6 +63,22 @@ path = "../../tests/rust/book_manager/catalog_query.rs"
 [[test]]
 name = "category_editor"
 path = "../../tests/rust/book_manager/category_editor.rs"
+
+[[test]]
+name = "evidence_scorer"
+path = "../../tests/rust/book_manager/evidence_scorer.rs"
+
+[[test]]
+name = "store_category_matcher"
+path = "../../tests/rust/book_manager/store_category_matcher.rs"
+
+[[test]]
+name = "bookstore_query_builder"
+path = "../../tests/rust/book_manager/bookstore_query_builder.rs"
+
+[[test]]
+name = "bookstore_evidence"
+path = "../../tests/rust/book_manager/bookstore_evidence.rs"
 
 [[test]]
 name = "category_proposer"

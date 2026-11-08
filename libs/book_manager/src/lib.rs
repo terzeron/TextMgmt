@@ -58,18 +58,22 @@ pub mod pdf_reader_cache;
 mod api_adapter;
 mod api_contract;
 mod book_updater;
+pub mod bookstore_evidence;
+pub mod bookstore_query_builder;
 mod catalog_query;
 mod category_editor;
 pub mod category_proposer;
 mod category_reloader;
 mod cover_finder;
 pub mod cover_list;
+pub mod evidence_scorer;
 mod file_reader;
 mod file_validator;
+pub mod store_category_matcher;
 pub use file_validator::{EpubMessage, EpubPublication, EpubSummary, EpubValidation, MessageLocation, PdfMessage, PdfPublication, PdfSummary, PdfValidation};
 mod mismatch_reporter;
 pub use category_editor::{CategoryDeletePreview, CategoryDeletion, CategoryRename};
-pub use category_proposer::{AppliedItem, ApplyResult, ApplyStatus, CategoryCandidate, ItemFailure, MoveAction, MoveOutcome, MoveStatus, Proposal, ProposalGrade, ProposalItem, ProposeResult};
+pub use category_proposer::{AppliedItem, ApplyResult, ApplyStatus, CategoryCandidate, ItemFailure, MoveAction, MoveOutcome, MoveStatus, Proposal, ProposalItem, ProposeResult};
 pub use category_reloader::{CategoryReload, MismatchReload, ReloadCounts, ReloadFailure, ReloadProgressFn, ReloadedFiles};
 pub use mismatch_reporter::{CategoryMismatch, DuplicateDoc, DuplicatePath, EsOnlyFile, FsOnlyFile, MismatchDetails, MismatchSummary};
 mod path_validator;
@@ -79,7 +83,7 @@ pub mod preview_builder;
 mod seam_accessors;
 
 pub use book_updater::BookDeletion;
-pub use category_proposer::{ApplyOptions, KeywordMatch, MODEL_CERTAIN_MIN_CONFIDENCE, MoveOpts, ProposeOptions, Ranked};
+pub use category_proposer::{ApplyOptions, KeywordMatch, MoveOpts, ProposeOptions, Ranked};
 pub use cover_finder::{BookLookup, BookRef, Thumbnailer};
 pub use cover_list::CoverPageOpts;
 pub use cover_list::{CoverBooksPager, CoverPage};
@@ -161,11 +165,11 @@ pub trait FileReader: Send + Sync + 'static {
     }
 }
 
-pub type ClassifierFactory = Arc<dyn Fn() -> Arc<dyn Classify> + Send + Sync>;
+/// 제안 한 번에 한 번 부른다. `None`은 모델 파일이 없다는 뜻이다.
+pub type ClassifierFactory = Arc<dyn Fn() -> Option<Arc<dyn Classify>> + Send + Sync>;
 pub type MismatchOverride = Arc<dyn Fn(bool) -> MismatchSummary + Send + Sync>;
 pub type DetailsOverride = Arc<dyn Fn(&str) -> MismatchDetails + Send + Sync>;
 pub type IterFilesOverride = Arc<dyn Fn(&str, bool) -> Vec<PathBuf> + Send + Sync>;
-pub type HighConfidenceOverride = Arc<dyn Fn(&dyn Any, f64) -> bool + Send + Sync>;
 
 /// 하위 모듈이 덧붙이는 설정과 대역을 담는 칸. 타입 하나에 값 하나다.
 #[derive(Clone, Default)]
@@ -194,12 +198,12 @@ pub struct BookManagerDeps {
     pdf_pages: Arc<dyn PdfPageOps>,
     file_reader: Option<Arc<dyn FileReader>>,
     classifier_factory: Option<ClassifierFactory>,
+    bookstore_lookup_factory: Option<bookstore_evidence::BookstoreLookupFactory>,
     bulk_reindex_batch_size: usize,
     scan_observer: Option<Arc<dyn Fn() + Send + Sync>>,
     get_category_mismatches_override: Option<MismatchOverride>,
     get_category_mismatch_details_override: Option<DetailsOverride>,
     iter_category_indexable_files_override: Option<IterFilesOverride>,
-    is_high_confidence_override: Option<HighConfidenceOverride>,
     loader_program: String,
     duplicate_name_max_index: usize,
     max_category_result_count: i64,
@@ -218,12 +222,12 @@ impl BookManagerDeps {
             pdf_pages: Arc::new(LopdfPageOps),
             file_reader: None,
             classifier_factory: None,
+            bookstore_lookup_factory: None,
             bulk_reindex_batch_size: BULK_REINDEX_BATCH_SIZE,
             scan_observer: None,
             get_category_mismatches_override: None,
             get_category_mismatch_details_override: None,
             iter_category_indexable_files_override: None,
-            is_high_confidence_override: None,
             loader_program: "loader".to_string(),
             duplicate_name_max_index: DUPLICATE_NAME_MAX_INDEX,
             max_category_result_count: MAX_CATEGORY_RESULT_COUNT,
@@ -261,6 +265,12 @@ impl BookManagerDeps {
         self
     }
 
+    /// 분류 제안의 서점 조회. 제안 한 번에 한 번 부른다(연속 차단 상한 같은 상태가 제안 하나에 묶인다).
+    pub fn with_bookstore_lookup_factory(mut self, factory: bookstore_evidence::BookstoreLookupFactory) -> Self {
+        self.bookstore_lookup_factory = Some(factory);
+        self
+    }
+
     /// 불일치 재적재가 한 번에 색인하는 파일 수. 0이면 1로 본다.
     pub fn with_bulk_reindex_batch_size(mut self, n: usize) -> Self {
         self.bulk_reindex_batch_size = n.max(1);
@@ -286,12 +296,6 @@ impl BookManagerDeps {
 
     pub fn with_iter_category_indexable_files_override(mut self, f: IterFilesOverride) -> Self {
         self.iter_category_indexable_files_override = Some(f);
-        self
-    }
-
-    /// 모델 점수가 '확실'인지 판정하는 함수를 바꾼다. 첫 인자는 분류기(`Arc<dyn Classify>`를 `&dyn Any`로 본 것)다.
-    pub fn with_is_high_confidence_override(mut self, f: HighConfidenceOverride) -> Self {
-        self.is_high_confidence_override = Some(f);
         self
     }
 
@@ -345,12 +349,12 @@ pub struct BookManager {
     pdf_pages: Arc<dyn PdfPageOps>,
     file_reader: Option<Arc<dyn FileReader>>,
     classifier_factory: Option<ClassifierFactory>,
+    bookstore_lookup_factory: Option<bookstore_evidence::BookstoreLookupFactory>,
     bulk_reindex_batch_size: usize,
     scan_observer: Option<Arc<dyn Fn() + Send + Sync>>,
     get_category_mismatches_override: Option<MismatchOverride>,
     get_category_mismatch_details_override: Option<DetailsOverride>,
     iter_category_indexable_files_override: Option<IterFilesOverride>,
-    is_high_confidence_override: Option<HighConfidenceOverride>,
     loader_program: String,
     duplicate_name_max_index: usize,
     max_category_result_count: i64,
@@ -389,12 +393,12 @@ impl BookManager {
             pdf_pages: deps.pdf_pages,
             file_reader: deps.file_reader,
             classifier_factory: deps.classifier_factory,
+            bookstore_lookup_factory: deps.bookstore_lookup_factory,
             bulk_reindex_batch_size: deps.bulk_reindex_batch_size,
             scan_observer: deps.scan_observer,
             get_category_mismatches_override: deps.get_category_mismatches_override,
             get_category_mismatch_details_override: deps.get_category_mismatch_details_override,
             iter_category_indexable_files_override: deps.iter_category_indexable_files_override,
-            is_high_confidence_override: deps.is_high_confidence_override,
             loader_program: deps.loader_program,
             duplicate_name_max_index: deps.duplicate_name_max_index,
             max_category_result_count: deps.max_category_result_count,
