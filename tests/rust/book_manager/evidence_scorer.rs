@@ -11,8 +11,19 @@ fn approx(a: f64, b: f64) -> bool {
 }
 
 #[test]
-fn weights_follow_isbn_keyword_model_order() {
-    assert_eq!(EVIDENCE_WEIGHTS, [(Evidence::Isbn, 0.6), (Evidence::Keyword, 0.25), (Evidence::Model, 0.15)]);
+fn weights_follow_isbn_bookstore_keyword_model_order() {
+    assert_eq!(EVIDENCE_WEIGHTS, [(Evidence::Isbn, 0.45), (Evidence::Bookstore, 0.30), (Evidence::Keyword, 0.15), (Evidence::Model, 0.10)]);
+}
+
+#[test]
+fn bookstore_and_model_combine_by_present_weights() {
+    // A = (0.30·2/3 + 0.10·0.4) / 0.40 = 0.6, B = (0.30·1/3 + 0.10·0.6) / 0.40 = 0.4
+    let ranked = combine(&[(Evidence::Bookstore, s(&[("A", 2.0 / 3.0), ("B", 1.0 / 3.0)])), (Evidence::Model, s(&[("A", 0.4), ("B", 0.6)]))]);
+    assert_eq!(ranked[0].category, "A");
+    assert!(approx(ranked[0].score, 0.6), "{}", ranked[0].score);
+    assert!(approx(ranked[1].score, 0.4), "{}", ranked[1].score);
+    assert_eq!(ranked[0].dominant().name(), "bookstore");
+    assert_eq!(detail_of(&ranked[0]), "서점 0.67 · 모델 0.40");
 }
 
 #[test]
@@ -62,15 +73,16 @@ fn combine_normalizes_by_present_weights() {
 fn combine_isbn_outweighs_keyword_and_model_together() {
     let ranked = combine(&[(Evidence::Isbn, s(&[("A", 1.0)])), (Evidence::Keyword, s(&[("B", 1.0)])), (Evidence::Model, s(&[("B", 1.0)]))]);
     assert_eq!(ranked[0].category, "A");
-    assert!(approx(ranked[0].score, 0.6));
-    assert!(approx(ranked[1].score, 0.4));
+    // 있는 근거 가중치 합 = 0.45 + 0.15 + 0.10 = 0.70
+    assert!(approx(ranked[0].score, 0.45 / 0.70));
+    assert!(approx(ranked[1].score, 0.25 / 0.70));
 }
 
 #[test]
 fn combine_records_each_contribution() {
     let ranked = combine(&[(Evidence::Keyword, s(&[("A", 1.0)])), (Evidence::Model, s(&[("A", 0.5)]))]);
     assert_eq!(ranked[0].contributions, vec![(Evidence::Keyword, 1.0), (Evidence::Model, 0.5)]);
-    assert!(approx(ranked[0].score, (0.25 + 0.075) / 0.4));
+    assert!(approx(ranked[0].score, (0.15 + 0.10 * 0.5) / 0.25));
 }
 
 #[test]

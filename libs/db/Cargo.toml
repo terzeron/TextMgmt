@@ -27,3 +27,11 @@ path = "../../tests/rust/db/category_mapping.rs"
 [[test]]
 name = "integration_view_history_store"
 path = "../../tests/rust/db/integration/view_history_store.rs"
+
+[[test]]
+name = "bookstore_cache_store"
+path = "../../tests/rust/db/bookstore_cache_store.rs"
+
+[[test]]
+name = "integration_bookstore_cache_store"
+path = "../../tests/rust/db/integration/bookstore_cache_store.rs"

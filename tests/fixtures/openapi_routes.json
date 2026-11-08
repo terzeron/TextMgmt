@@ -532,6 +532,13 @@
   ],
   [
     "POST",
+    "/bookstore/category-suggestions",
+    [
+      "require_admin"
+    ]
+  ],
+  [
+    "POST",
     "/categories/bulk-rename-files",
     [
       "require_admin"

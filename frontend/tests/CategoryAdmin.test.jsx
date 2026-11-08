@@ -1983,6 +1983,34 @@ describe("CategoryAdmin", () => {
     ).toBe(true);
   });
 
+  it("서점 조회는 기본으로 켜져 있고 끄면 요청에 use_bookstore: false를 싣는다", async () => {
+    setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
+    render(<CategoryAdmin />);
+    await waitFor(() => {
+      expect(screen.getByText("1_fiction")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("1_fiction"));
+    mockJsonPostReq.mockImplementation((url, payload, resolve, _reject, final) => {
+      resolve({ started: true, status: "running", source_category: "1_fiction", total_count: 0, processed_count: 0 });
+      if (final) final();
+    });
+
+    const checkbox = screen.getByLabelText("서점 조회");
+    expect(checkbox.checked).toBe(true);
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByTitle("분류 제안"));
+
+    await waitFor(() => {
+      expect(mockJsonPostReq).toHaveBeenCalledWith(
+        "/categories/classify-proposal",
+        { category: "1_fiction", use_bookstore: false },
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+      );
+    });
+  });
+
   it("분류 제안 버튼 클릭 시 선택 카테고리로 분류 제안을 시작한다", async () => {
     setupMockResponses(CATEGORIES_RESPONSE, MISMATCH_RESPONSE_EMPTY);
     render(<CategoryAdmin />);
@@ -2008,7 +2036,7 @@ describe("CategoryAdmin", () => {
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/categories/classify-proposal",
-        { category: "1_fiction" },
+        { category: "1_fiction", use_bookstore: true },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
@@ -2118,7 +2146,7 @@ describe("CategoryAdmin", () => {
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/comics/categories/classify-proposal",
-        { category: "1_fiction" },
+        { category: "1_fiction", use_bookstore: true },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
@@ -4684,7 +4712,7 @@ describe("CategoryAdmin 분류 제안", () => {
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/categories/classify-proposal",
-        { category: "1_fiction" },
+        { category: "1_fiction", use_bookstore: true },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),
@@ -4727,7 +4755,7 @@ describe("CategoryAdmin 분류 제안", () => {
     await waitFor(() => {
       expect(mockJsonPostReq).toHaveBeenCalledWith(
         "/categories/classify-proposal",
-        { category: "1_fiction" },
+        { category: "1_fiction", use_bookstore: true },
         expect.any(Function),
         expect.any(Function),
         expect.any(Function),

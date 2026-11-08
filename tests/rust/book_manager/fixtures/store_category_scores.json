@@ -1,0 +1,1114 @@
+{
+ "categories": [
+  "3_SF",
+  "2_소설한국",
+  "4_경영마케팅",
+  "4_경제",
+  "5_음악",
+  "1_서양고전",
+  "7_영어교육",
+  "3_판타지",
+  "2_시",
+  "4_철학윤리",
+  "6_재테크",
+  "3_무협",
+  "4_역사인물",
+  "5_수학과학일반",
+  "2_소설일본",
+  "4_심리학뇌과학",
+  "2_수필서간일기",
+  "nf_decode_work"
+ ],
+ "mappings": {
+  "1_서양고전": [
+   "클래식",
+   "고전"
+  ],
+  "5_음악": [
+   "클래식",
+   "음악"
+  ],
+  "3_SF": [
+   "과학소설",
+   "SF"
+  ],
+  "7_영어교육": [
+   "영어",
+   "토익"
+  ],
+  "4_경영마케팅": [
+   "마케팅",
+   "경영일반"
+  ]
+ },
+ "similarity": [
+  {
+   "a": "SF",
+   "b": "SF",
+   "score": 1
+  },
+  {
+   "a": "소",
+   "b": "소설",
+   "score": 0.7999999999999999
+  },
+  {
+   "a": "시",
+   "b": "러시아소설",
+   "score": 0
+  },
+  {
+   "a": "소설",
+   "b": "세계각국소설",
+   "score": 0.36
+  },
+  {
+   "a": "마케팅",
+   "b": "경영마케팅",
+   "score": 0.82
+  },
+  {
+   "a": "경제",
+   "b": "경제경영",
+   "score": 0.39999999999999997
+  },
+  {
+   "a": "Fiction",
+   "b": "fiction",
+   "score": 1
+  },
+  {
+   "a": "ab",
+   "b": "abc",
+   "score": 0.8333333333333333
+  },
+  {
+   "a": "a",
+   "b": "b",
+   "score": 0
+  },
+  {
+   "a": "무협",
+   "b": "판타지무협",
+   "score": 0.375
+  },
+  {
+   "a": "심리학",
+   "b": "심리학뇌과학",
+   "score": 0.42
+  },
+  {
+   "a": "철학",
+   "b": "철학윤리",
+   "score": 0.39999999999999997
+  },
+  {
+   "a": "",
+   "b": "x",
+   "score": 0
+  },
+  {
+   "a": "English",
+   "b": "Englsh",
+   "score": 0.4714285714285714
+  },
+  {
+   "a": "클래식",
+   "b": "고전음악",
+   "score": 0
+  }
+ ],
+ "two_level": [
+  {
+   "input": "소설/시/희곡 > SF > 한국SF",
+   "output": "SF 한국SF"
+  },
+  {
+   "input": "소설/시/희곡 > 중국소설",
+   "output": "소설/시/희곡 중국소설"
+  },
+  {
+   "input": "한국SF",
+   "output": "한국SF"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "소설 > 한국소설 || 소설 > 추리/미스터리/스릴러",
+   "output": "한국소설 || 소설 추리/미스터리/스릴러"
+  },
+  {
+   "input": "국내도서 > 경제경영 > 마케팅/세일즈 > 마케팅전략",
+   "output": "마케팅/세일즈 마케팅전략"
+  },
+  {
+   "input": "  a  >  b  ",
+   "output": "a b"
+  },
+  {
+   "input": "a>>b",
+   "output": "a b"
+  },
+  {
+   "input": "x || ",
+   "output": "x ||"
+  },
+  {
+   "input": "외국도서 > ELT/사전 || 국내도서 > 외국어 > 토익",
+   "output": "외국어 토익"
+  }
+ ],
+ "multi_path": [
+  {
+   "input": "소설/시/희곡 > SF > 한국SF",
+   "output": [
+    "SF 한국SF"
+   ]
+  },
+  {
+   "input": "소설/시/희곡 > 중국소설",
+   "output": [
+    "소설/시/희곡 중국소설"
+   ]
+  },
+  {
+   "input": "한국SF",
+   "output": [
+    "한국SF"
+   ]
+  },
+  {
+   "input": "",
+   "output": []
+  },
+  {
+   "input": "소설 > 한국소설 || 소설 > 추리/미스터리/스릴러",
+   "output": [
+    "소설 한국소설",
+    "소설 추리/미스터리/스릴러"
+   ]
+  },
+  {
+   "input": "국내도서 > 경제경영 > 마케팅/세일즈 > 마케팅전략",
+   "output": [
+    "마케팅/세일즈 마케팅전략"
+   ]
+  },
+  {
+   "input": "  a  >  b  ",
+   "output": [
+    "a b"
+   ]
+  },
+  {
+   "input": "a>>b",
+   "output": [
+    "a b"
+   ]
+  },
+  {
+   "input": "x || ",
+   "output": [
+    "x"
+   ]
+  },
+  {
+   "input": "외국도서 > ELT/사전 || 국내도서 > 외국어 > 토익",
+   "output": [
+    "외국도서 ELT/사전",
+    "외국어 토익"
+   ]
+  }
+ ],
+ "scores": [
+  {
+   "store_category": "SF 한국SF",
+   "scores": [
+    [
+     "3_SF",
+     0.7999999999999999
+    ],
+    [
+     "2_소설한국",
+     0.36
+    ]
+   ]
+  },
+  {
+   "store_category": "소설/시/희곡 한국소설",
+   "scores": [
+    [
+     "3_SF",
+     0.288
+    ],
+    [
+     "2_소설한국",
+     0.36
+    ],
+    [
+     "2_시",
+     0.8
+    ],
+    [
+     "2_소설일본",
+     0.288
+    ]
+   ]
+  },
+  {
+   "store_category": "경제경영 마케팅/세일즈",
+   "scores": [
+    [
+     "4_경영마케팅",
+     1.1199999999999999
+    ],
+    [
+     "4_경제",
+     0.32
+    ]
+   ]
+  },
+  {
+   "store_category": "경제경영 경제일반",
+   "scores": [
+    [
+     "4_경영마케팅",
+     0.36
+    ],
+    [
+     "4_경제",
+     1.26
+    ]
+   ]
+  },
+  {
+   "store_category": "예술/대중문화 클래식",
+   "scores": [
+    [
+     "5_음악",
+     0.8
+    ],
+    [
+     "1_서양고전",
+     0.8
+    ]
+   ]
+  },
+  {
+   "store_category": "외국어 토익",
+   "scores": [
+    [
+     "7_영어교육",
+     0.9
+    ]
+   ]
+  },
+  {
+   "store_category": "인문학 서양철학",
+   "scores": [
+    [
+     "1_서양고전",
+     0.324
+    ],
+    [
+     "4_철학윤리",
+     0.324
+    ]
+   ]
+  },
+  {
+   "store_category": "소설/시/희곡 시",
+   "scores": [
+    [
+     "3_SF",
+     0.27999999999999997
+    ],
+    [
+     "2_소설한국",
+     0.27999999999999997
+    ],
+    [
+     "2_시",
+     1.4
+    ],
+    [
+     "2_소설일본",
+     0.27999999999999997
+    ]
+   ]
+  },
+  {
+   "store_category": "판타지 무협",
+   "scores": [
+    [
+     "3_판타지",
+     0.9
+    ],
+    [
+     "3_무협",
+     0.9
+    ]
+   ]
+  },
+  {
+   "store_category": "역사 인물",
+   "scores": [
+    [
+     "4_역사인물",
+     0.72
+    ]
+   ]
+  },
+  {
+   "store_category": "과학 수학",
+   "scores": [
+    [
+     "3_SF",
+     0.36
+    ],
+    [
+     "5_수학과학일반",
+     0.72
+    ],
+    [
+     "4_심리학뇌과학",
+     0.324
+    ]
+   ]
+  },
+  {
+   "store_category": "국내도서 소설",
+   "scores": [
+    [
+     "3_SF",
+     0.36
+    ],
+    [
+     "2_소설한국",
+     0.36
+    ],
+    [
+     "2_소설일본",
+     0.36
+    ]
+   ]
+  },
+  {
+   "store_category": "소설 일본소설",
+   "scores": [
+    [
+     "3_SF",
+     0.36
+    ],
+    [
+     "2_소설한국",
+     0.36
+    ],
+    [
+     "2_소설일본",
+     0.44999999999999996
+    ]
+   ]
+  },
+  {
+   "store_category": "a",
+   "scores": []
+  },
+  {
+   "store_category": "x y z w v u t s r q p o",
+   "scores": []
+  },
+  {
+   "store_category": "재테크/투자 부동산",
+   "scores": [
+    [
+     "6_재테크",
+     0.8
+    ]
+   ]
+  },
+  {
+   "store_category": "일반",
+   "scores": []
+  },
+  {
+   "store_category": "자기계발 처세술",
+   "scores": []
+  },
+  {
+   "store_category": "만화 학원만화",
+   "scores": []
+  },
+  {
+   "store_category": "English Fiction",
+   "scores": []
+  },
+  {
+   "store_category": "Business Management",
+   "scores": []
+  },
+  {
+   "store_category": "SF",
+   "scores": [
+    [
+     "3_SF",
+     1
+    ]
+   ]
+  },
+  {
+   "store_category": "고전 서양고전문학",
+   "scores": [
+    [
+     "1_서양고전",
+     0.8333333333333333
+    ]
+   ]
+  },
+  {
+   "store_category": "중국소설",
+   "scores": [
+    [
+     "3_SF",
+     0.36
+    ],
+    [
+     "2_소설한국",
+     0.36
+    ],
+    [
+     "2_소설일본",
+     0.36
+    ]
+   ]
+  },
+  {
+   "store_category": "심리학 뇌과학",
+   "scores": [
+    [
+     "3_SF",
+     0.3375
+    ],
+    [
+     "5_수학과학일반",
+     0.3375
+    ],
+    [
+     "4_심리학뇌과학",
+     0.756
+    ]
+   ]
+  },
+  {
+   "store_category": "에세이 한국에세이",
+   "scores": [
+    [
+     "2_소설한국",
+     0.35
+    ]
+   ]
+  },
+  {
+   "store_category": "판타지/환상문학",
+   "scores": [
+    [
+     "3_판타지",
+     0.9
+    ]
+   ]
+  },
+  {
+   "store_category": "경영일반",
+   "scores": [
+    [
+     "4_경영마케팅",
+     1
+    ]
+   ]
+  },
+  {
+   "store_category": "소",
+   "scores": []
+  },
+  {
+   "store_category": "철학 윤리학",
+   "scores": [
+    [
+     "4_철학윤리",
+     0.6974999999999999
+    ],
+    [
+     "4_심리학뇌과학",
+     0.315
+    ]
+   ]
+  }
+ ],
+ "top": [
+  {
+   "suggested": [
+    [
+     "yes24_0_0",
+     "SF 한국SF"
+    ],
+    [
+     "aladin_0_0",
+     "SF 한국SF"
+    ],
+    [
+     "kyobo_0_0",
+     "소설/시/희곡 한국소설"
+    ]
+   ],
+   "top_n": 3,
+   "result": [
+    "3_SF",
+    "2_소설한국",
+    "2_시"
+   ]
+  },
+  {
+   "suggested": [
+    [
+     "yes24_0_0",
+     "예술/대중문화 클래식"
+    ],
+    [
+     "aladin_0_0",
+     "고전 서양고전문학"
+    ]
+   ],
+   "top_n": 3,
+   "result": [
+    "1_서양고전",
+    "5_음악"
+   ]
+  },
+  {
+   "suggested": [
+    [
+     "yes24_0_0",
+     "경제경영 마케팅/세일즈"
+    ],
+    [
+     "yes24_1_0",
+     "경제경영 경제일반"
+    ],
+    [
+     "kyobo_0_0",
+     "경영일반"
+    ]
+   ],
+   "top_n": 3,
+   "result": [
+    "4_경영마케팅",
+    "4_경제"
+   ]
+  },
+  {
+   "suggested": [
+    [
+     "aladin_0_0",
+     "x y z w v u t s r q p o"
+    ]
+   ],
+   "top_n": 3,
+   "result": []
+  },
+  {
+   "suggested": [
+    [
+     "yes24_0_0",
+     "판타지 무협"
+    ],
+    [
+     "aladin_0_0",
+     "판타지/환상문학"
+    ],
+    [
+     "kyobo_0_0",
+     "만화 학원만화"
+    ]
+   ],
+   "top_n": 3,
+   "result": [
+    "3_판타지",
+    "3_무협"
+   ]
+  }
+ ],
+ "debug": [
+  {
+   "suggested": [
+    [
+     "yes24_0_0",
+     "SF 한국SF"
+    ],
+    [
+     "aladin_0_0",
+     "SF 한국SF"
+    ],
+    [
+     "kyobo_0_0",
+     "소설/시/희곡 한국소설"
+    ]
+   ],
+   "top_n": 5,
+   "result": {
+    "bookstoreKeywords": {
+     "yes24_0_0": {
+      "original": "SF 한국SF",
+      "keywords": [
+       "한국SF"
+      ]
+     },
+     "aladin_0_0": {
+      "original": "SF 한국SF",
+      "keywords": [
+       "한국SF"
+      ]
+     },
+     "kyobo_0_0": {
+      "original": "소설/시/희곡 한국소설",
+      "keywords": [
+       "시",
+       "희곡",
+       "한국소설"
+      ]
+     }
+    },
+    "categoryDetails": [
+     {
+      "category": "3_SF",
+      "categoryName": "SF",
+      "dirKeywords": [
+       "과학소설",
+       "SF",
+       "SF"
+      ],
+      "totalScore": 1.888,
+      "matchDetails": [
+       {
+        "store": "yes24_0_0",
+        "bookstoreKeyword": "한국SF",
+        "dirKeyword": "SF",
+        "similarity": 0.7999999999999999,
+        "isContained": true,
+        "matchType": "contains"
+       },
+       {
+        "store": "aladin_0_0",
+        "bookstoreKeyword": "한국SF",
+        "dirKeyword": "SF",
+        "similarity": 0.7999999999999999,
+        "isContained": true,
+        "matchType": "contains"
+       },
+       {
+        "store": "kyobo_0_0",
+        "bookstoreKeyword": "한국소설",
+        "dirKeyword": "과학소설",
+        "similarity": 0.36,
+        "isContained": false,
+        "matchType": "ngram"
+       }
+      ]
+     },
+     {
+      "category": "2_소설한국",
+      "categoryName": "소설한국",
+      "dirKeywords": [
+       "소설한국"
+      ],
+      "totalScore": 1.08,
+      "matchDetails": [
+       {
+        "store": "yes24_0_0",
+        "bookstoreKeyword": "한국SF",
+        "dirKeyword": "소설한국",
+        "similarity": 0.36,
+        "isContained": false,
+        "matchType": "ngram"
+       },
+       {
+        "store": "aladin_0_0",
+        "bookstoreKeyword": "한국SF",
+        "dirKeyword": "소설한국",
+        "similarity": 0.36,
+        "isContained": false,
+        "matchType": "ngram"
+       },
+       {
+        "store": "kyobo_0_0",
+        "bookstoreKeyword": "한국소설",
+        "dirKeyword": "소설한국",
+        "similarity": 0.44999999999999996,
+        "isContained": false,
+        "matchType": "ngram"
+       }
+      ]
+     },
+     {
+      "category": "2_시",
+      "categoryName": "시",
+      "dirKeywords": [
+       "시"
+      ],
+      "totalScore": 0.8,
+      "matchDetails": [
+       {
+        "store": "kyobo_0_0",
+        "bookstoreKeyword": "시",
+        "dirKeyword": "시",
+        "similarity": 1,
+        "isContained": true,
+        "matchType": "exact"
+       }
+      ]
+     },
+     {
+      "category": "2_소설일본",
+      "categoryName": "소설일본",
+      "dirKeywords": [
+       "소설일본"
+      ],
+      "totalScore": 0.288,
+      "matchDetails": [
+       {
+        "store": "kyobo_0_0",
+        "bookstoreKeyword": "한국소설",
+        "dirKeyword": "소설일본",
+        "similarity": 0.36,
+        "isContained": false,
+        "matchType": "ngram"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "suggested": [
+    [
+     "yes24_0_0",
+     "예술/대중문화 클래식"
+    ],
+    [
+     "aladin_0_0",
+     "고전 서양고전문학"
+    ]
+   ],
+   "top_n": 5,
+   "result": {
+    "bookstoreKeywords": {
+     "yes24_0_0": {
+      "original": "예술/대중문화 클래식",
+      "keywords": [
+       "예술",
+       "대중문화",
+       "클래식"
+      ]
+     },
+     "aladin_0_0": {
+      "original": "고전 서양고전문학",
+      "keywords": [
+       "서양고전문학"
+      ]
+     }
+    },
+    "categoryDetails": [
+     {
+      "category": "1_서양고전",
+      "categoryName": "서양고전",
+      "dirKeywords": [
+       "클래식",
+       "고전",
+       "서양고전"
+      ],
+      "totalScore": 1.6333333333333333,
+      "matchDetails": [
+       {
+        "store": "yes24_0_0",
+        "bookstoreKeyword": "클래식",
+        "dirKeyword": "클래식",
+        "similarity": 1,
+        "isContained": true,
+        "matchType": "exact"
+       },
+       {
+        "store": "aladin_0_0",
+        "bookstoreKeyword": "서양고전문학",
+        "dirKeyword": "서양고전",
+        "similarity": 0.8333333333333333,
+        "isContained": true,
+        "matchType": "contains"
+       }
+      ]
+     },
+     {
+      "category": "5_음악",
+      "categoryName": "음악",
+      "dirKeywords": [
+       "클래식",
+       "음악",
+       "음악"
+      ],
+      "totalScore": 0.8,
+      "matchDetails": [
+       {
+        "store": "yes24_0_0",
+        "bookstoreKeyword": "클래식",
+        "dirKeyword": "클래식",
+        "similarity": 1,
+        "isContained": true,
+        "matchType": "exact"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "suggested": [
+    [
+     "yes24_0_0",
+     "경제경영 마케팅/세일즈"
+    ],
+    [
+     "yes24_1_0",
+     "경제경영 경제일반"
+    ],
+    [
+     "kyobo_0_0",
+     "경영일반"
+    ]
+   ],
+   "top_n": 5,
+   "result": {
+    "bookstoreKeywords": {
+     "yes24_0_0": {
+      "original": "경제경영 마케팅/세일즈",
+      "keywords": [
+       "경제경영",
+       "마케팅",
+       "세일즈"
+      ]
+     },
+     "yes24_1_0": {
+      "original": "경제경영 경제일반",
+      "keywords": [
+       "경제경영",
+       "경제"
+      ]
+     },
+     "kyobo_0_0": {
+      "original": "경영일반",
+      "keywords": [
+       "경영"
+      ]
+     }
+    },
+    "categoryDetails": [
+     {
+      "category": "4_경영마케팅",
+      "categoryName": "경영마케팅",
+      "dirKeywords": [
+       "마케팅",
+       "경영",
+       "경영마케팅"
+      ],
+      "totalScore": 2.48,
+      "matchDetails": [
+       {
+        "store": "yes24_0_0",
+        "bookstoreKeyword": "경제경영",
+        "dirKeyword": "경영",
+        "similarity": 0.39999999999999997,
+        "isContained": true,
+        "matchType": "contains"
+       },
+       {
+        "store": "yes24_0_0",
+        "bookstoreKeyword": "마케팅",
+        "dirKeyword": "마케팅",
+        "similarity": 1,
+        "isContained": true,
+        "matchType": "exact"
+       },
+       {
+        "store": "yes24_1_0",
+        "bookstoreKeyword": "경제경영",
+        "dirKeyword": "경영",
+        "similarity": 0.39999999999999997,
+        "isContained": true,
+        "matchType": "contains"
+       },
+       {
+        "store": "kyobo_0_0",
+        "bookstoreKeyword": "경영",
+        "dirKeyword": "경영",
+        "similarity": 1,
+        "isContained": true,
+        "matchType": "exact"
+       }
+      ]
+     },
+     {
+      "category": "4_경제",
+      "categoryName": "경제",
+      "dirKeywords": [
+       "경제"
+      ],
+      "totalScore": 1.58,
+      "matchDetails": [
+       {
+        "store": "yes24_0_0",
+        "bookstoreKeyword": "경제경영",
+        "dirKeyword": "경제",
+        "similarity": 0.39999999999999997,
+        "isContained": true,
+        "matchType": "contains"
+       },
+       {
+        "store": "yes24_1_0",
+        "bookstoreKeyword": "경제경영",
+        "dirKeyword": "경제",
+        "similarity": 0.39999999999999997,
+        "isContained": true,
+        "matchType": "contains"
+       },
+       {
+        "store": "yes24_1_0",
+        "bookstoreKeyword": "경제",
+        "dirKeyword": "경제",
+        "similarity": 1,
+        "isContained": true,
+        "matchType": "exact"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "suggested": [
+    [
+     "aladin_0_0",
+     "x y z w v u t s r q p o"
+    ]
+   ],
+   "top_n": 5,
+   "result": {
+    "bookstoreKeywords": {
+     "aladin_0_0": {
+      "original": "x y z w v u t s r q p o",
+      "keywords": [
+       "x",
+       "y",
+       "z",
+       "w",
+       "v",
+       "u",
+       "t",
+       "s",
+       "r",
+       "q",
+       "p",
+       "o"
+      ]
+     }
+    },
+    "categoryDetails": []
+   }
+  },
+  {
+   "suggested": [
+    [
+     "yes24_0_0",
+     "판타지 무협"
+    ],
+    [
+     "aladin_0_0",
+     "판타지/환상문학"
+    ],
+    [
+     "kyobo_0_0",
+     "만화 학원만화"
+    ]
+   ],
+   "top_n": 5,
+   "result": {
+    "bookstoreKeywords": {
+     "yes24_0_0": {
+      "original": "판타지 무협",
+      "keywords": [
+       "판타지",
+       "무협"
+      ]
+     },
+     "aladin_0_0": {
+      "original": "판타지/환상문학",
+      "keywords": [
+       "판타지",
+       "환상문학"
+      ]
+     },
+     "kyobo_0_0": {
+      "original": "만화 학원만화",
+      "keywords": [
+       "학원만화"
+      ]
+     }
+    },
+    "categoryDetails": [
+     {
+      "category": "3_판타지",
+      "categoryName": "판타지",
+      "dirKeywords": [
+       "판타지"
+      ],
+      "totalScore": 1.8,
+      "matchDetails": [
+       {
+        "store": "yes24_0_0",
+        "bookstoreKeyword": "판타지",
+        "dirKeyword": "판타지",
+        "similarity": 1,
+        "isContained": true,
+        "matchType": "exact"
+       },
+       {
+        "store": "aladin_0_0",
+        "bookstoreKeyword": "판타지",
+        "dirKeyword": "판타지",
+        "similarity": 1,
+        "isContained": true,
+        "matchType": "exact"
+       }
+      ]
+     },
+     {
+      "category": "3_무협",
+      "categoryName": "무협",
+      "dirKeywords": [
+       "무협"
+      ],
+      "totalScore": 0.9,
+      "matchDetails": [
+       {
+        "store": "yes24_0_0",
+        "bookstoreKeyword": "무협",
+        "dirKeyword": "무협",
+        "similarity": 1,
+        "isContained": true,
+        "matchType": "exact"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ]
+}

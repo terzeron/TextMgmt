@@ -1,24 +1,23 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 
 afterEach(cleanup);
 
-const { mockIsCacheInit, mockFetchMappings } = vi.hoisted(() => ({
-  mockIsCacheInit: vi.fn(() => true),
-  mockFetchMappings: vi.fn(() => Promise.resolve()),
+// 디버그 정보는 backend 추천 API가 계산한다. 응답의 debug를 제어 가능하게 mock한다.
+const { mockGetSimilarityDebugInfo, mockPost } = vi.hoisted(() => ({
+  mockGetSimilarityDebugInfo: vi.fn(),
+  mockPost: vi.fn(),
 }));
-vi.mock("../src/categoryMappingCache", () => ({
-  loadCategoryMappings: () => ({}),
-  fetchCategoryMappings: (...a) => mockFetchMappings(...a),
-  isCacheInitialized: (...a) => mockIsCacheInit(...a),
+vi.mock("../src/Common", () => ({
+  jsonPostReq: (...args) => mockPost(...args),
 }));
-
-// getSimilarityDebugInfo를 제어 가능하게 mock
-const mockGetSimilarityDebugInfo = vi.fn();
-vi.mock("../src/Actions", () => ({
-  getSimilarityDebugInfo: (...args) => mockGetSimilarityDebugInfo(...args),
-}));
+beforeEach(() => {
+  mockPost.mockReset();
+  mockPost.mockImplementation((url, payload, resolve) =>
+    resolve({ top: [], debug: mockGetSimilarityDebugInfo(payload.suggested, payload.categories, payload.top_n) ?? null }),
+  );
+});
 
 import SimilarityDebug from "../src/SimilarityDebug";
 
@@ -371,15 +370,22 @@ describe("bookstoreKeywords 누락/필드 누락 시 기본값 처리", () => {
   });
 });
 
-describe("SimilarityDebug 카테고리 매핑 초기화", () => {
-  it("캐시가 초기화되지 않았으면 fetchCategoryMappings로 매핑을 로드한다", () => {
-    mockIsCacheInit.mockReturnValueOnce(false);
+describe("SimilarityDebug 추천 API 호출", () => {
+  it("debug를 켜고 상위 10개를 요청한다", () => {
     mockGetSimilarityDebugInfo.mockReturnValue(null);
-    render(
-      <SimilarityDebug suggestedCategories={{}} categoryList={["소설"]} />,
+    render(<SimilarityDebug suggestedCategories={{ yes24_0_0: "소설" }} categoryList={["소설", "역사"]} />);
+    expect(mockPost).toHaveBeenCalledWith(
+      "/bookstore/category-suggestions?content_type=book",
+      { suggested: { yes24_0_0: "소설" }, categories: ["소설", "역사"], top_n: 10, debug: true },
+      expect.any(Function),
+      expect.any(Function),
     );
-    // isCacheInitialized()가 false → useEffect의 else 분기 실행
-    expect(mockFetchMappings).toHaveBeenCalled();
+  });
+
+  it("요청이 실패하면 아무것도 그리지 않는다", () => {
+    mockPost.mockImplementation((url, payload, resolve, reject) => reject("서버 오류"));
+    const { container } = render(<SimilarityDebug suggestedCategories={{ yes24_0_0: "소설" }} categoryList={["소설"]} />);
+    expect(container.innerHTML).toBe("");
   });
 });
 

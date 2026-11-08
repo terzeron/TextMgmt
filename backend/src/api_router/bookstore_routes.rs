@@ -9,13 +9,53 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use super::{ApiError, ApiQuery, ApiResult, AppDeps, RequireAuth, Routes};
+use super::{ApiError, ApiJson, ApiQuery, ApiResult, AppDeps, RequireAdmin, RequireAuth, Routes};
+use book_manager::store_category_matcher::{similarity_debug, top_similar_categories};
 
 const MISSING_INPUT: &str = "제목 또는 저자를 입력해주세요";
 const BLOCKED_MESSAGE: &str = "서점이 자동 검색을 차단했습니다. 서점 링크로 직접 검색하세요.";
 
 pub(super) fn routes() -> Routes {
-    Routes::new().get("/search/bookstore/{store_name}", &["require_auth"], search_bookstore)
+    Routes::new().get("/search/bookstore/{store_name}", &["require_auth"], search_bookstore).post("/bookstore/category-suggestions", &["require_admin"], category_suggestions)
+}
+
+#[derive(Deserialize)]
+struct SuggestionQuery {
+    #[serde(default = "default_content_type")]
+    content_type: String,
+}
+
+fn default_content_type() -> String {
+    "book".to_string()
+}
+
+fn default_top_n() -> usize {
+    5
+}
+
+#[derive(Deserialize)]
+struct SuggestionBody {
+    /// `{"yes24_0_0": "SF 한국SF", ...}`. 키 순서가 동점 순서를 정한다.
+    suggested: serde_json::Map<String, Value>,
+    categories: Vec<String>,
+    #[serde(default = "default_top_n")]
+    top_n: usize,
+    #[serde(default)]
+    debug: bool,
+}
+
+/// 편집 화면의 서점 카테고리 추천. 키워드 매핑은 서버가 읽는다. 읽지 못하면 매핑 없이(디렉토리 이름만으로) 계산한다.
+async fn category_suggestions(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, ApiQuery(query): ApiQuery<SuggestionQuery>, ApiJson(body): ApiJson<SuggestionBody>) -> ApiResult<Json<Value>> {
+    let mapping = deps.category_mapping().map_err(|_| ApiError::unavailable())?;
+    let content_type = query.content_type;
+    let mappings = tokio::task::spawn_blocking(move || mapping.get_all_mappings(&content_type)).await.map_err(|error| ApiError::Internal(error.to_string()))?.unwrap_or_else(|error| {
+        log::warn!("서점 추천 키워드 매핑 조회 실패: {error}");
+        Default::default()
+    });
+    let suggested: Vec<(String, String)> = body.suggested.into_iter().filter_map(|(key, value)| value.as_str().map(|category| (key, category.to_string()))).collect();
+    let top = top_similar_categories(&suggested, &body.categories, &mappings, body.top_n);
+    let debug = if body.debug { similarity_debug(&suggested, &body.categories, &mappings, body.top_n) } else { None };
+    Ok(Json(json!({"status":"success","result":{"top":top,"debug":debug}})))
 }
 
 #[derive(Deserialize)]

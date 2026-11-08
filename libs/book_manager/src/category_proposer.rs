@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{BookManager, ProgressFn};
+use crate::bookstore_evidence::{BookstoreLookup, StoreVote, bookstore_scores, store_vote};
+use crate::bookstore_query_builder::query_from_file;
 use crate::evidence_scorer::{Evidence, combine, detail_of, isbn_scores, keyword_scores};
 use crate::path_validator::relative_to;
 use classifier::Classify;
@@ -84,6 +86,8 @@ pub struct Proposal {
     pub model_category: Option<String>,
     pub reason: String,
     pub candidates: Vec<CategoryCandidate>,
+    /// 서점별 표. 서점 근거를 쓰지 않았으면 비어 있다.
+    pub bookstore_votes: Vec<StoreVote>,
 }
 
 /// 제안 항목의 적용 상태.
@@ -369,6 +373,20 @@ impl BookManager {
     /// 근거는 ISBN(같은 ISBN 사본이 있는 디렉토리), 키워드, 모델 셋이다. 있는 근거만 가중치로 합산해 점수 내림차순 상위 2개를 후보로 낸다.
     /// ES 문서는 inode로 한 번만 읽는다. 읽지 못하면 ISBN·모델 근거 없이 키워드로만 판정하고 `reason`에 남긴다.
     pub fn propose_category_for_file(&self, file_path: &Path, source_category: &str, mappings: &[(Value, Vec<Value>)], model: Option<&dyn Classify>) -> Proposal {
+        self.propose_category_for_file_with(file_path, source_category, mappings, model, None, &[]).0
+    }
+
+    /// `propose_category_for_file`에 서점 근거를 더한 판. `categories`는 서점 표를 대응시킬 카테고리 목록이다.
+    /// 반환의 두 번째 값은 서점을 실제로 불렀는지다(캐시로 끝나면 거짓).
+    pub fn propose_category_for_file_with(
+        &self,
+        file_path: &Path,
+        source_category: &str,
+        mappings: &[(Value, Vec<Value>)],
+        model: Option<&dyn Classify>,
+        bookstore: Option<&dyn BookstoreLookup>,
+        categories: &[String],
+    ) -> (Proposal, bool) {
         let keyword = self.match_category_by_keywords(file_path, source_category, mappings);
         let own_id = book_id_for_path(file_path);
         let mut notes: Vec<String> = Vec::new();
@@ -395,6 +413,19 @@ impl BookManager {
         }
         parts.extend(keyword_scores(&keyword.ranked).map(|scores| (Evidence::Keyword, scores)));
 
+        let mut bookstore_votes = Vec::new();
+        let mut network_used = false;
+        if let (Some(lookup), Some(id)) = (bookstore, own_id) {
+            let file_stem = file_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let isbn = doc.as_ref().and_then(|d| d.get("isbn")).and_then(Value::as_str);
+            let outcome = lookup.lookup(id, &query_from_file(&file_stem, isbn));
+            network_used = outcome.network_used;
+            let keyword_map = keyword_map(mappings);
+            let allowed = |c: &str| is_recommendable_category(c) && crate::path_validator::is_top_level_target_category(c) && self.is_safe_category_name(c) && self.category_dir(c).is_dir();
+            bookstore_votes = outcome.results.iter().map(|r| store_vote(r, categories, &keyword_map, &allowed)).collect();
+            parts.extend(bookstore_scores(&bookstore_votes).map(|scores| (Evidence::Bookstore, scores)));
+        }
+
         let mut model_category = None;
         if let (Some(model), Some(doc)) = (model, &doc)
             && !BookFields::from_es_source(doc).is_empty()
@@ -419,7 +450,7 @@ impl BookManager {
             notes.push("근거가 없습니다".to_string());
         }
         let candidates = ranked.iter().take(2).map(|c| CategoryCandidate { category: c.category.clone(), source: c.dominant().name().to_string(), detail: detail_of(c), score: c.score }).collect();
-        Proposal {
+        let proposal = Proposal {
             target_category: ranked.first().map(|c| c.category.clone()),
             score: ranked.first().map(|c| c.score),
             classified: true,
@@ -427,7 +458,25 @@ impl BookManager {
             model_category,
             reason: notes.join("; "),
             candidates,
-        }
+            bookstore_votes,
+        };
+        (proposal, network_used)
+    }
+
+    /// 책 루트 바로 아래의 카테고리 디렉토리 이름(숨김 제외, 이름순). 서점 표를 대응시킬 목록이다.
+    fn top_level_categories(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(&self.path_prefix)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .filter(|e| crate::path_validator::is_dir_nofollow(&e.path()))
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .filter(|name| !name.starts_with('.'))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
     }
 
     /// 선택 카테고리 직하위 파일의 분류 제안을 만든다. 파일을 옮기지 않는다.
@@ -443,7 +492,13 @@ impl BookManager {
         }
 
         let content_type = options.content_type.unwrap_or("book");
-        // 서점 판정은 없어졌다. `use_bookstore`는 요청 호환을 위해 받기만 한다.
+        // 서점 근거는 책에만 쓴다. 만화는 웹툰 서점 규칙이 따로 있다.
+        let bookstore = match &self.bookstore_lookup_factory {
+            Some(factory) if options.use_bookstore.unwrap_or(true) && content_type != "comic" => factory(),
+            _ => None,
+        };
+        let bookstore_categories = if bookstore.is_some() { self.top_level_categories() } else { Vec::new() };
+        let delay = std::time::Duration::from_secs_f64(options.delay.unwrap_or(0.0).max(0.0));
         let use_content_meta = options.use_content_meta.unwrap_or(true);
         let empty = json!({});
         let mappings = mappings.unwrap_or(&empty);
@@ -491,7 +546,14 @@ impl BookManager {
             };
             let proposal = match &propose_hook {
                 Some(hook) => hook(file_path),
-                None => Ok(self.propose_category_for_file(file_path, category, &mappings, model.as_deref())),
+                None => {
+                    let (proposal, network_used) = self.propose_category_for_file_with(file_path, category, &mappings, model.as_deref(), bookstore.as_deref(), &bookstore_categories);
+                    // 서점을 실제로 부른 파일 뒤에만 쉰다. 캐시로 끝난 파일은 서점에 부담을 주지 않는다.
+                    if network_used && !delay.is_zero() {
+                        std::thread::sleep(delay);
+                    }
+                    Ok(proposal)
+                }
             };
             let Ok(proposal) = proposal else {
                 log::error!("분류 제안 실패: {rel_path}");
@@ -502,6 +564,12 @@ impl BookManager {
             // 진행 보고에는 이번 틱에서 분류가 끝난 항목만 싣는다. 누적 목록은 호출자에게 돌려준다.
             report(processed_count, "updated_items", std::slice::from_ref(&new_item));
             items.push(new_item);
+        }
+
+        if let (Some(lookup), Some(callback)) = (&bookstore, options.on_progress)
+            && let Some(summary) = lookup.summary()
+        {
+            callback(json!({"total_count": total_count, "processed_count": processed_count, "bookstore_counts": summary}));
         }
 
         Ok(ProposeResult { content_type: content_type.to_string(), source_category: category.to_string(), total_count, processed_count, items, failures })
@@ -734,6 +802,11 @@ impl BookManager {
             }
         }
     }
+}
+
+/// 키워드 매핑 목록을 서점 대응용 `{카테고리: [키워드]}`로 바꾼다. 문자열이 아닌 항목은 건너뛴다.
+fn keyword_map(mappings: &[(Value, Vec<Value>)]) -> std::collections::BTreeMap<String, Vec<String>> {
+    mappings.iter().filter_map(|(c, ks)| Some((c.as_str()?.trim().to_string(), ks.iter().filter_map(Value::as_str).map(str::to_string).collect()))).collect()
 }
 
 /// `0_` 카테고리는 보관·작업용이라 자동 추천 후보로 내지 않는다. 직접 선택으로는 옮길 수 있다.

@@ -482,6 +482,8 @@ export default function CategoryAdmin({
   // 삭제 중인 행의 file_path. 한 건씩만 돌리고 그동안 다른 행의 버튼도 잠근다.
   const [deletingProposalPath, setDeletingProposalPath] = useState(null);
   const [proposalStarting, setProposalStarting] = useState(false);
+  // 분류 제안에서 서점 세 곳을 조회할지. 기본은 켠다(서점 근거가 합산 점수에 들어간다).
+  const [useBookstore, setUseBookstore] = useState(true);
   const [showProposalApplyModal, setShowProposalApplyModal] = useState(false);
   const [showProposalClearModal, setShowProposalClearModal] = useState(false);
   const [showProposalRestartModal, setShowProposalRestartModal] =
@@ -1409,7 +1411,7 @@ export default function CategoryAdmin({
     setMessage("");
     jsonPostReq(
       `${apiPrefix}/categories/classify-proposal`,
-      { category },
+      { category, use_bookstore: useBookstore },
       (result) => {
         applyProposalStatus(result);
       },
@@ -1421,7 +1423,7 @@ export default function CategoryAdmin({
         setProposalStarting(false);
       },
     );
-  }, [selectedCategory, apiPrefix, applyProposalStatus]);
+  }, [selectedCategory, apiPrefix, applyProposalStatus, useBookstore]);
 
   // 이미 만들어진 제안에 항목이 있으면, 다시 누르는 순간 관리자가 읽고 체크하고
   // 목적지를 고친 검토 결과가 통째로 사라진다(선택/오버라이드는 즉시 비워지고,
@@ -2258,6 +2260,15 @@ export default function CategoryAdmin({
                         </span>
                       )}
                     </Button>
+                    <Form.Check
+                      type="checkbox"
+                      id="proposal-use-bookstore"
+                      label="서점 조회"
+                      className="small mb-0 align-self-center"
+                      checked={useBookstore}
+                      disabled={proposalStarting || proposalPolling}
+                      onChange={(event) => setUseBookstore(event.target.checked)}
+                    />
                     <Button
                       variant="outline-primary"
                       size="sm"
