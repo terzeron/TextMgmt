@@ -3,7 +3,6 @@
 //! `score(c) = Σ w · p(c) / Σ w`. 합은 그 파일에 "있음"인 근거만 더한다. 서점 근거는 나중에 이 표에 더한다.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use search_manager::ISBN_MATCH_LIMIT;
 
@@ -63,16 +62,19 @@ fn shares(counts: BTreeMap<String, usize>) -> Option<Vec<(String, f64)>> {
     Some(counts.into_iter().map(|(c, n)| (c, n as f64 / total as f64)).collect())
 }
 
-/// 같은 ISBN 문서 경로들의 부모 디렉토리 비율. 일치가 없거나 상한 이상이면(잘못 추출된 흔한 값) 근거가 없다.
+/// 같은 ISBN 문서들이 있는 최상위 카테고리(경로 첫 조각) 비율. 승인은 최상위 카테고리만 목적지로 받으므로 하위 디렉토리로 나누지 않는다.
+/// 루트 낱개 파일은 세지 않는다. 일치가 없거나 상한 이상이면(잘못 추출된 흔한 값) 근거가 없다.
 pub fn isbn_scores(matched_paths: &[String]) -> Option<Vec<(String, f64)>> {
     if matched_paths.len() >= ISBN_MATCH_LIMIT {
         return None;
     }
     let mut counts = BTreeMap::new();
     for path in matched_paths {
-        let parent = Path::new(path).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-        if !parent.is_empty() {
-            *counts.entry(parent).or_insert(0) += 1;
+        if let Some((category, rest)) = path.split_once('/')
+            && !category.is_empty()
+            && !rest.is_empty()
+        {
+            *counts.entry(category.to_string()).or_insert(0) += 1;
         }
     }
     shares(counts)

@@ -20,7 +20,14 @@ fn isbn_scores_are_category_shares() {
     let scores = isbn_scores(&["A/x.epub".into(), "A/y.epub".into(), "B/sub/z.epub".into()]).unwrap();
     assert_eq!(scores.len(), 2);
     assert!(approx(scores.iter().find(|(c, _)| c == "A").unwrap().1, 2.0 / 3.0));
-    assert!(approx(scores.iter().find(|(c, _)| c == "B/sub").unwrap().1, 1.0 / 3.0));
+    // 하위 디렉토리가 아니라 최상위 카테고리로 센다. 승인은 최상위 카테고리만 목적지로 받는다.
+    assert!(approx(scores.iter().find(|(c, _)| c == "B").unwrap().1, 1.0 / 3.0));
+}
+
+#[test]
+fn isbn_scores_merge_subdirectories_of_one_category() {
+    let scores = isbn_scores(&["A/x/1.epub".into(), "A/y/2.epub".into(), "B/3.epub".into()]).unwrap();
+    assert_eq!(scores, s(&[("A", 2.0 / 3.0), ("B", 1.0 / 3.0)]));
 }
 
 #[test]
