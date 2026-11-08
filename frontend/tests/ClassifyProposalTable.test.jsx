@@ -877,6 +877,17 @@ describe("제자리 제안 표시", () => {
     expect(within(row).getByTitle("합산 점수 0.93")).toBeTruthy();
   });
 
+  it("툴팁에 서점별 표와 기권 이유를 보여준다", () => {
+    const votes = [
+      { store: "yes24", category: "3_SF", abstain: null },
+      { store: "aladin", category: "3_SF", abstain: null },
+      { store: "kyobo", category: null, abstain: "blocked" },
+    ];
+    renderTable({ items: [{ ...ITEMS[0], score: 0.934, bookstore_votes: votes }], choices: {} });
+    const row = screen.getByText("확실한 책").closest("tr");
+    expect(within(row).getByTitle("합산 점수 0.93 · yes24 3_SF · aladin 3_SF · kyobo 기권(차단)")).toBeTruthy();
+  });
+
   it("점수가 없는 행의 툴팁은 점수 없음이다", () => {
     renderTable();
     const row = screen.getByText("불확실한 책").closest("tr");

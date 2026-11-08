@@ -33,8 +33,28 @@ export function formatScore(item) {
   return "-";
 }
 
+// 서점이 표를 내지 않은 이유. backend `StoreVote.abstain` 값이다.
+const ABSTAIN_LABELS = {
+  not_found: "결과 없음",
+  blocked: "차단",
+  error: "오류",
+  no_match: "대응 없음",
+  tie: "동점",
+  excluded: "제외",
+};
+
+function bookstoreVotesText(item) {
+  const votes = item?.bookstore_votes || [];
+  return votes
+    .map((v) => `${v.store} ${v.category ?? `기권(${ABSTAIN_LABELS[v.abstain] ?? v.abstain})`}`)
+    .join(" · ");
+}
+
 export function scoreTitle(item) {
-  if (item?.score != null) return `합산 점수 ${item.score.toFixed(2)}`;
+  if (item?.score != null) {
+    const votes = bookstoreVotesText(item);
+    return votes ? `합산 점수 ${item.score.toFixed(2)} · ${votes}` : `합산 점수 ${item.score.toFixed(2)}`;
+  }
   if (item?.confidence == null) return "점수 없음";
   if (item?.expected_accuracy == null) {
     return `모델 확신도 ${item.confidence.toFixed(3)} (보정 없음)`;
