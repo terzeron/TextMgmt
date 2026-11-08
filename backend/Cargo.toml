@@ -135,6 +135,10 @@ name = "integration_mapping_api"
 path = "../tests/rust/backend/integration/mapping_api.rs"
 
 [[test]]
+name = "integration_bookstore_suggestion_api"
+path = "../tests/rust/backend/integration/bookstore_suggestion_api.rs"
+
+[[test]]
 name = "integration_pdf_delete_pages"
 path = "../tests/rust/backend/integration/pdf_delete_pages.rs"
 

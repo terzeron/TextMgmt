@@ -1,4 +1,4 @@
-import {useState, useEffect} from 'react';
+import {useState, useEffect, useRef} from 'react';
 import PropTypes from 'prop-types';
 
 import 'bootstrap/dist/css/bootstrap.min.css';
@@ -6,8 +6,7 @@ import {Card, Badge, Table} from 'react-bootstrap';
 import {FontAwesomeIcon} from '@fortawesome/react-fontawesome';
 import {faChevronDown, faChevronRight} from '@fortawesome/free-solid-svg-icons';
 
-import {getSimilarityDebugInfo} from './Actions';
-import {isCacheInitialized, fetchCategoryMappings} from './categoryMappingCache';
+import {jsonPostReq} from './Common';
 
 // 카테고리 키(예: "aladin_0_0")에서 서점명 추출
 const getStoreName = (key) => {
@@ -24,26 +23,26 @@ const STORE_COLORS = {
 export default function SimilarityDebug({suggestedCategories, categoryList, showWhenEmpty = false}) {
     const [isOpen, setIsOpen] = useState(false);
     const [debugInfo, setDebugInfo] = useState(null);
-    const [mappingsLoaded, setMappingsLoaded] = useState(false);
+    const requestRef = useRef(0);
 
-    // 매핑 캐시 초기화
+    // 디버그 정보는 backend(store_category_matcher)가 계산한다. 늦게 도착한 이전 요청의 응답은 버린다.
     useEffect(() => {
-        if (isCacheInitialized()) {
-            setMappingsLoaded(true);
-        } else {
-            fetchCategoryMappings().then(() => setMappingsLoaded(true));
+        const requestId = ++requestRef.current;
+        setDebugInfo(null);
+        if (!suggestedCategories || Object.keys(suggestedCategories).length === 0 || !categoryList?.length) {
+            return;
         }
-    }, []);
-
-    // 디버그 정보 계산
-    useEffect(() => {
-        if (mappingsLoaded && suggestedCategories && Object.keys(suggestedCategories).length > 0 && categoryList?.length) {
-            const info = getSimilarityDebugInfo(suggestedCategories, categoryList, 10);
-            setDebugInfo(info);
-        } else {
-            setDebugInfo(null);
-        }
-    }, [suggestedCategories, categoryList, mappingsLoaded]);
+        jsonPostReq(
+            '/bookstore/category-suggestions?content_type=book',
+            {suggested: suggestedCategories, categories: categoryList, top_n: 10, debug: true},
+            (result) => {
+                if (requestId === requestRef.current) {
+                    setDebugInfo(result?.debug || null);
+                }
+            },
+            () => {},
+        );
+    }, [suggestedCategories, categoryList]);
 
     if (!debugInfo) {
         if (!showWhenEmpty) {
