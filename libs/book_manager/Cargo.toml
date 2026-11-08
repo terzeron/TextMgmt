@@ -77,6 +77,10 @@ name = "bookstore_query_builder"
 path = "../../tests/rust/book_manager/bookstore_query_builder.rs"
 
 [[test]]
+name = "bookstore_evidence"
+path = "../../tests/rust/book_manager/bookstore_evidence.rs"
+
+[[test]]
 name = "category_proposer"
 path = "../../tests/rust/book_manager/category_proposer.rs"
 

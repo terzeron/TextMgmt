@@ -187,7 +187,7 @@ pub fn category_scores(store_category: &str, categories: &[String], mappings: &B
 }
 
 /// 삽입 순서를 지키며 같은 키의 값을 더한다.
-fn add_in_order(acc: &mut Vec<(String, f64)>, key: &str, value: f64) {
+pub(crate) fn add_in_order(acc: &mut Vec<(String, f64)>, key: &str, value: f64) {
     match acc.iter_mut().find(|(k, _)| k == key) {
         Some((_, v)) => *v += value,
         None => acc.push((key.to_string(), value)),

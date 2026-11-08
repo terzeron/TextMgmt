@@ -58,6 +58,8 @@ pub mod pdf_reader_cache;
 mod api_adapter;
 mod api_contract;
 mod book_updater;
+pub mod bookstore_evidence;
+pub mod bookstore_query_builder;
 mod catalog_query;
 mod category_editor;
 pub mod category_proposer;
@@ -65,10 +67,9 @@ mod category_reloader;
 mod cover_finder;
 pub mod cover_list;
 pub mod evidence_scorer;
-pub mod store_category_matcher;
-pub mod bookstore_query_builder;
 mod file_reader;
 mod file_validator;
+pub mod store_category_matcher;
 pub use file_validator::{EpubMessage, EpubPublication, EpubSummary, EpubValidation, MessageLocation, PdfMessage, PdfPublication, PdfSummary, PdfValidation};
 mod mismatch_reporter;
 pub use category_editor::{CategoryDeletePreview, CategoryDeletion, CategoryRename};
@@ -197,6 +198,7 @@ pub struct BookManagerDeps {
     pdf_pages: Arc<dyn PdfPageOps>,
     file_reader: Option<Arc<dyn FileReader>>,
     classifier_factory: Option<ClassifierFactory>,
+    bookstore_lookup_factory: Option<bookstore_evidence::BookstoreLookupFactory>,
     bulk_reindex_batch_size: usize,
     scan_observer: Option<Arc<dyn Fn() + Send + Sync>>,
     get_category_mismatches_override: Option<MismatchOverride>,
@@ -220,6 +222,7 @@ impl BookManagerDeps {
             pdf_pages: Arc::new(LopdfPageOps),
             file_reader: None,
             classifier_factory: None,
+            bookstore_lookup_factory: None,
             bulk_reindex_batch_size: BULK_REINDEX_BATCH_SIZE,
             scan_observer: None,
             get_category_mismatches_override: None,
@@ -259,6 +262,12 @@ impl BookManagerDeps {
 
     pub fn with_classifier_factory(mut self, factory: ClassifierFactory) -> Self {
         self.classifier_factory = Some(factory);
+        self
+    }
+
+    /// 분류 제안의 서점 조회. 제안 한 번에 한 번 부른다(연속 차단 상한 같은 상태가 제안 하나에 묶인다).
+    pub fn with_bookstore_lookup_factory(mut self, factory: bookstore_evidence::BookstoreLookupFactory) -> Self {
+        self.bookstore_lookup_factory = Some(factory);
         self
     }
 
@@ -340,6 +349,7 @@ pub struct BookManager {
     pdf_pages: Arc<dyn PdfPageOps>,
     file_reader: Option<Arc<dyn FileReader>>,
     classifier_factory: Option<ClassifierFactory>,
+    bookstore_lookup_factory: Option<bookstore_evidence::BookstoreLookupFactory>,
     bulk_reindex_batch_size: usize,
     scan_observer: Option<Arc<dyn Fn() + Send + Sync>>,
     get_category_mismatches_override: Option<MismatchOverride>,
@@ -383,6 +393,7 @@ impl BookManager {
             pdf_pages: deps.pdf_pages,
             file_reader: deps.file_reader,
             classifier_factory: deps.classifier_factory,
+            bookstore_lookup_factory: deps.bookstore_lookup_factory,
             bulk_reindex_batch_size: deps.bulk_reindex_batch_size,
             scan_observer: deps.scan_observer,
             get_category_mismatches_override: deps.get_category_mismatches_override,

@@ -1,6 +1,6 @@
 //! 분류 제안의 근거별 카테고리 점수와 가중치 합산. 파일·ES를 모르는 순수 계산이다.
 //!
-//! `score(c) = Σ w · p(c) / Σ w`. 합은 그 파일에 "있음"인 근거만 더한다. 서점 근거는 나중에 이 표에 더한다.
+//! `score(c) = Σ w · p(c) / Σ w`. 합은 그 파일에 "있음"인 근거만 더한다. 근거는 ISBN·서점·키워드·모델 넷이다.
 
 use std::collections::BTreeMap;
 
@@ -9,6 +9,7 @@ use search_manager::ISBN_MATCH_LIMIT;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Evidence {
     Isbn,
+    Bookstore,
     Keyword,
     Model,
 }
@@ -18,6 +19,7 @@ impl Evidence {
     pub fn name(self) -> &'static str {
         match self {
             Evidence::Isbn => "isbn",
+            Evidence::Bookstore => "bookstore",
             Evidence::Keyword => "keyword",
             Evidence::Model => "model",
         }
@@ -26,6 +28,7 @@ impl Evidence {
     fn label(self) -> &'static str {
         match self {
             Evidence::Isbn => "ISBN",
+            Evidence::Bookstore => "서점",
             Evidence::Keyword => "키워드",
             Evidence::Model => "모델",
         }
@@ -36,8 +39,8 @@ impl Evidence {
     }
 }
 
-/// 초기 가중치. ISBN 하나가 나머지 둘의 합보다 크고, 키워드가 모델보다 크다. 튜닝하지 않은 값이다.
-pub const EVIDENCE_WEIGHTS: [(Evidence, f64); 3] = [(Evidence::Isbn, 0.6), (Evidence::Keyword, 0.25), (Evidence::Model, 0.15)];
+/// 초기 가중치. 순위는 ISBN > 서점 > 키워드 > 모델이다. 튜닝하지 않은 값이다.
+pub const EVIDENCE_WEIGHTS: [(Evidence, f64); 4] = [(Evidence::Isbn, 0.45), (Evidence::Bookstore, 0.30), (Evidence::Keyword, 0.15), (Evidence::Model, 0.10)];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScoredCategory {

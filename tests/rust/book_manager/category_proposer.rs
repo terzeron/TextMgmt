@@ -9,6 +9,8 @@ use crate::common::category_apply::{ApplyOpts, apply_opts};
 use crate::common::shared_fixtures::manager;
 use crate::common::shared_fixtures::{allowed_set, block_on, deps, make_doc, make_manager, make_source_file, outcome, propose, split, tmp_dir};
 use crate::common::shared_fixtures::{book_adder, file_reader, setup};
+use book_manager::bookstore_evidence::{BookstoreLookup, LookupOutcome, LookupStatus, StoreResult, StoreRow};
+use book_manager::bookstore_query_builder::BookQuery;
 use book_manager::{AddBookError, BookManager, KeywordMatch, MoveAction, MoveOpts, MoveStatus, Proposal, ProposeOptions};
 use classifier::{Classify, Prediction};
 use common::env::EnvGuard;
@@ -554,7 +556,8 @@ fn candidate_sources(proposal: &Proposal) -> Vec<String> {
 
 #[test]
 fn proposal_top_two_follow_combined_score() {
-    // B = 0.6·ISBN 1.0 + 0.15·모델 0.1 = 0.615, C = 0.25·키워드 1.0, D = 0.15·모델 0.9 = 0.135.
+    // 있는 근거 가중치 합 = ISBN 0.45 + 키워드 0.15 + 모델 0.10 = 0.70.
+    // B = (0.45·1.0 + 0.10·0.1)/0.70, C = 0.15/0.70, D = 0.10·0.9/0.70.
     let tmp = tmp_dir();
     let es = FakeEsManager::new();
     let manager = make_manager(tmp.path(), &es);
@@ -569,7 +572,7 @@ fn proposal_top_two_follow_combined_score() {
     assert_eq!(proposal.target_category.as_deref(), Some("B"));
     assert_eq!(candidate_categories(&proposal), ["B", "C"]);
     assert_eq!(candidate_sources(&proposal), ["isbn", "keyword"]);
-    assert!((proposal.score.unwrap() - 0.615).abs() < 1e-9, "{:?}", proposal.score);
+    assert!((proposal.score.unwrap() - 0.46 / 0.70).abs() < 1e-9, "{:?}", proposal.score);
     assert_eq!(proposal.candidates[0].score, proposal.score.unwrap());
     assert_eq!(proposal.model_category.as_deref(), Some("D"));
     assert!(proposal.classified);
@@ -653,6 +656,99 @@ fn model_candidates_without_directory_are_dropped() {
     // 남은 카테고리끼리 합 1로 다시 정규화한다.
     assert!((proposal.score.unwrap() - 1.0).abs() < 1e-9);
     assert_eq!(proposal.model_category.as_deref(), Some("D"));
+}
+
+// ---- 서점 근거 ----
+
+/// 정해 둔 결과를 돌려주고 호출 수를 센다.
+struct FixedLookup {
+    results: Vec<StoreResult>,
+    network_used: bool,
+    calls: Mutex<Vec<(i64, BookQuery)>>,
+}
+
+impl FixedLookup {
+    fn new(status: LookupStatus, category: &str) -> Self {
+        let results =
+            ["yes24", "aladin", "kyobo"].iter().map(|store| StoreResult { store: store.to_string(), status, rows: vec![StoreRow { category: category.to_string(), ..StoreRow::default() }] }).collect();
+        FixedLookup { results, network_used: true, calls: Mutex::new(Vec::new()) }
+    }
+}
+
+impl BookstoreLookup for FixedLookup {
+    fn lookup(&self, inode: i64, query: &BookQuery) -> LookupOutcome {
+        self.calls.lock().unwrap().push((inode, query.clone()));
+        LookupOutcome { results: self.results.clone(), network_used: self.network_used }
+    }
+}
+
+fn names(list: &[&str]) -> Vec<String> {
+    list.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn three_agreeing_stores_make_the_bookstore_the_top_evidence() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    make_dirs(tmp.path(), &["3_SF", "5_음악"]);
+    let book = make_source_file(tmp.path(), "A", "[홍길동] 검과 마법 1권.epub");
+    index_doc(&es, &book, json!({"title": "검과 마법", "isbn": "0-306-40615-2", "file_path": "A/[홍길동] 검과 마법 1권.epub"}));
+    let lookup = FixedLookup::new(LookupStatus::Found, "소설/시/희곡 > SF > 한국SF");
+
+    let (proposal, network_used) = manager.propose_category_for_file_with(&book, "A", &mappings(&[]), None, Some(&lookup), &names(&["3_SF", "5_음악", "A"]));
+
+    assert!(network_used);
+    assert_eq!(proposal.target_category.as_deref(), Some("3_SF"));
+    assert_eq!(proposal.score, Some(1.0));
+    assert_eq!(candidate_sources(&proposal), ["bookstore"]);
+    assert_eq!(proposal.bookstore_votes.iter().filter(|v| v.category.as_deref() == Some("3_SF")).count(), 3);
+    let calls = lookup.calls.lock().unwrap();
+    assert_eq!(calls[0].1, BookQuery { isbn13: Some("9780306406157".to_string()), title: "검과 마법".to_string(), author: "홍길동".to_string() });
+}
+
+#[test]
+fn all_blocked_stores_leave_the_score_to_other_evidence() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    make_dirs(tmp.path(), &["3_SF", "5_음악"]);
+    let book = make_source_file(tmp.path(), "A", "음악책.epub");
+    let lookup = FixedLookup::new(LookupStatus::Blocked, "SF > 한국SF");
+
+    let (proposal, _) = manager.propose_category_for_file_with(&book, "A", &mappings(&[("5_음악", &["음악책"])]), None, Some(&lookup), &names(&["3_SF", "5_음악", "A"]));
+
+    assert_eq!(candidate_categories(&proposal), ["5_음악"]);
+    assert_eq!(proposal.score, Some(1.0));
+    assert!(proposal.bookstore_votes.iter().all(|v| v.category.is_none() && v.abstain.as_deref() == Some("blocked")));
+}
+
+fn manager_with_lookup(tmp: &Path, es: &Arc<FakeEsManager>, lookup: Arc<FixedLookup>) -> BookManager {
+    let factory_lookup = lookup.clone();
+    BookManager::with_deps(deps(tmp, es).with_bookstore_lookup_factory(Arc::new(move || Some(factory_lookup.clone() as Arc<dyn BookstoreLookup>))))
+}
+
+fn propose_with(manager: &BookManager, content_type: &str, use_bookstore: bool) {
+    let options = ProposeOptions { content_type: Some(content_type), delay: Some(0.0), use_bookstore: Some(use_bookstore), ..ProposeOptions::default() };
+    let (_, error) = outcome(block_on(manager.propose_category_changes("A", None, options)));
+    assert!(error.is_none(), "{error:?}");
+}
+
+#[test]
+fn proposals_query_bookstores_only_for_books_with_the_option_on() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    make_dirs(tmp.path(), &["3_SF"]);
+    make_source_file(tmp.path(), "A", "책.epub");
+    let lookup = Arc::new(FixedLookup::new(LookupStatus::Found, "SF > 한국SF"));
+    let manager = manager_with_lookup(tmp.path(), &es, lookup.clone());
+
+    propose_with(&manager, "comic", true);
+    propose_with(&manager, "book", false);
+    assert_eq!(lookup.calls.lock().unwrap().len(), 0);
+
+    propose_with(&manager, "book", true);
+    assert_eq!(lookup.calls.lock().unwrap().len(), 1);
 }
 
 // ---- 0_ 카테고리는 추천 대상이 아니다 ----
