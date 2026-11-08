@@ -43,7 +43,8 @@ impl ModelReloader {
             state.stamp = Some(stamp);
             match SoftmaxModel::load(&self.path) {
                 Ok(model) => {
-                    log::info!("분류 모델을 읽었다: {} (카테고리 {}개)", self.path.display(), model.header.categories.len());
+                    // backend 로거는 warn 이상만 남긴다. 파일이 바뀔 때만 찍히므로 warn으로 올려 pod 로그에서 로드를 확인한다.
+                    log::warn!("분류 모델을 읽었다: {} (카테고리 {}개)", self.path.display(), model.header.categories.len());
                     state.model = Some(Arc::new(model));
                 }
                 Err(e) => log::warn!("분류 모델을 다시 읽지 못해 이전 모델을 쓴다: {e}"),
