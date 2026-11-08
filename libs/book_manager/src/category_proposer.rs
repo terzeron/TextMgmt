@@ -329,7 +329,7 @@ impl BookManager {
         for (raw_category, raw_keywords) in mappings {
             let Some(raw_category) = raw_category.as_str() else { continue };
             let target = raw_category.trim();
-            if target == source_category || !crate::path_validator::is_top_level_target_category(target) || !self.is_safe_category_name(target) {
+            if target == source_category || !crate::path_validator::is_top_level_target_category(target) || !is_recommendable_category(target) || !self.is_safe_category_name(target) {
                 continue;
             }
             let mut matched: Vec<String> = Vec::new();
@@ -386,7 +386,7 @@ impl BookManager {
             match self.es.search_by_isbn(isbn, ISBN_MATCH_LIMIT) {
                 // 상한은 자기 문서를 빼기 전 건수로 본다. 빼고 세면 상한에 걸린 흔한 값이 49건으로 빠져나간다.
                 Ok(rows) if rows.len() < ISBN_MATCH_LIMIT => {
-                    let paths: Vec<String> = rows.into_iter().filter(|(id, _)| Some(*id) != own_id).map(|(_, path)| path).collect();
+                    let paths: Vec<String> = rows.into_iter().filter(|(id, path)| Some(*id) != own_id && is_recommendable_category(path)).map(|(_, path)| path).collect();
                     parts.extend(isbn_scores(&paths).map(|scores| (Evidence::Isbn, scores)));
                 }
                 Ok(_) => {}
@@ -402,7 +402,8 @@ impl BookManager {
             match model.classify_document(doc) {
                 Ok(prediction) => {
                     // 디스크에 디렉토리가 없는 카테고리는 옮길 수 없다. 남은 것끼리 합 1로 다시 맞춘다.
-                    let kept: Vec<(String, f64)> = prediction.ranked.into_iter().filter(|(c, p)| *p > 0.0 && self.is_safe_category_name(c) && self.category_dir(c).is_dir()).collect();
+                    let kept: Vec<(String, f64)> =
+                        prediction.ranked.into_iter().filter(|(c, p)| *p > 0.0 && is_recommendable_category(c) && self.is_safe_category_name(c) && self.category_dir(c).is_dir()).collect();
                     let total: f64 = kept.iter().map(|(_, p)| p).sum();
                     if total > 0.0 {
                         model_category = kept.first().map(|(c, _)| c.clone());
@@ -733,6 +734,12 @@ impl BookManager {
             }
         }
     }
+}
+
+/// `0_` 카테고리는 보관·작업용이라 자동 추천 후보로 내지 않는다. 직접 선택으로는 옮길 수 있다.
+/// 책 루트 기준 상대 경로를 받아도 첫 조각으로 판정된다.
+pub fn is_recommendable_category(category_or_path: &str) -> bool {
+    !category_or_path.starts_with("0_")
 }
 
 /// 편집 화면으로 보낼 book_id. 이 저장소에서 book_id는 파일의 inode 번호다. 파일이 사라졌으면 `None`.

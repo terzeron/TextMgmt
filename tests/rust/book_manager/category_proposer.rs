@@ -655,6 +655,55 @@ fn model_candidates_without_directory_are_dropped() {
     assert_eq!(proposal.model_category.as_deref(), Some("D"));
 }
 
+// ---- 0_ 카테고리는 추천 대상이 아니다 ----
+
+#[test]
+fn zero_prefixed_model_candidates_are_not_recommended() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    make_dirs(tmp.path(), &["0_보관", "D"]);
+    let book = make_source_file(tmp.path(), "A", "책.epub");
+    index_doc(&es, &book, json!({"title": "검과 마법", "file_path": "A/책.epub"}));
+    let model = FixedModel(vec![("0_보관", 0.7), ("D", 0.3)]);
+
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), Some(&model));
+
+    assert_eq!(candidate_categories(&proposal), ["D"]);
+    assert!((proposal.score.unwrap() - 1.0).abs() < 1e-9);
+    assert_eq!(proposal.model_category.as_deref(), Some("D"));
+}
+
+#[test]
+fn zero_prefixed_keyword_categories_are_not_recommended() {
+    let tmp = tmp_dir();
+    let manager = make_manager(tmp.path(), &FakeEsManager::new());
+    let book = make_source_file(tmp.path(), "A", "과학소설 클래식 모음.epub");
+    let mappings = mappings(&[("0_작업", &["과학소설"]), ("5_음악", &["클래식"])]);
+
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings, None);
+
+    assert_eq!(candidate_categories(&proposal), ["5_음악"]);
+    assert_eq!(proposal.score, Some(1.0));
+    assert_eq!(proposal.matched_keywords, ["클래식"]);
+}
+
+#[test]
+fn zero_prefixed_isbn_directories_are_not_recommended() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    let manager = make_manager(tmp.path(), &es);
+    let book = make_source_file(tmp.path(), "A", "책.epub");
+    index_doc(&es, &book, json!({"title": "책", "isbn": "555", "file_path": "A/책.epub"}));
+    es.put_doc(999_999_005, json!({"isbn": "555", "file_path": "0_보관/사본.epub"}));
+    es.put_doc(999_999_006, json!({"isbn": "555", "file_path": "B/사본.epub"}));
+
+    let proposal = manager.propose_category_for_file(&book, "A", &mappings(&[]), None);
+
+    assert_eq!(candidate_categories(&proposal), ["B"]);
+    assert_eq!(proposal.score, Some(1.0));
+}
+
 #[test]
 fn empty_summary_and_title_skip_model() {
     let tmp = tmp_dir();
