@@ -67,6 +67,10 @@ name = "stderr_logger"
 path = "../tests/rust/backend/stderr_logger.rs"
 
 [[test]]
+name = "bookstore_result_fetcher"
+path = "../tests/rust/backend/bookstore_result_fetcher.rs"
+
+[[test]]
 name = "integration_api_exploration"
 path = "../tests/rust/backend/integration/api_exploration.rs"
 

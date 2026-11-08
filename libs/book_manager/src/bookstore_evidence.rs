@@ -53,6 +53,11 @@ pub struct LookupOutcome {
 /// 서점 조회. backend가 캐시와 서점 검색으로 구현한다.
 pub trait BookstoreLookup: Send + Sync {
     fn lookup(&self, inode: i64, query: &BookQuery) -> LookupOutcome;
+
+    /// 제안 하나 동안의 서점별 집계. 제안이 끝날 때 진행 상태의 `bookstore_counts`로 보고한다.
+    fn summary(&self) -> Option<serde_json::Value> {
+        None
+    }
 }
 
 /// 분류 제안 한 번에 한 번 부르는 조회 팩토리.

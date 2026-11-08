@@ -680,6 +680,10 @@ impl BookstoreLookup for FixedLookup {
         self.calls.lock().unwrap().push((inode, query.clone()));
         LookupOutcome { results: self.results.clone(), network_used: self.network_used }
     }
+
+    fn summary(&self) -> Option<Value> {
+        Some(json!({"yes24": {"found": self.calls.lock().unwrap().len()}}))
+    }
 }
 
 fn names(list: &[&str]) -> Vec<String> {
@@ -749,6 +753,25 @@ fn proposals_query_bookstores_only_for_books_with_the_option_on() {
 
     propose_with(&manager, "book", true);
     assert_eq!(lookup.calls.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn proposal_reports_the_bookstore_summary_at_the_end() {
+    let tmp = tmp_dir();
+    let es = FakeEsManager::new();
+    make_dirs(tmp.path(), &["3_SF"]);
+    make_source_file(tmp.path(), "A", "책.epub");
+    let manager = manager_with_lookup(tmp.path(), &es, Arc::new(FixedLookup::new(LookupStatus::Found, "SF > 한국SF")));
+    let reports: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let sink = reports.clone();
+    let on_progress = move |v: Value| sink.lock().unwrap().push(v);
+    let options = ProposeOptions { content_type: Some("book"), delay: Some(0.0), use_bookstore: Some(true), on_progress: Some(&on_progress), ..ProposeOptions::default() };
+
+    let (_, error) = outcome(block_on(manager.propose_category_changes("A", None, options)));
+
+    assert!(error.is_none(), "{error:?}");
+    let last = reports.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(last["bookstore_counts"], json!({"yes24": {"found": 1}}));
 }
 
 // ---- 0_ 카테고리는 추천 대상이 아니다 ----

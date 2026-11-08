@@ -566,6 +566,12 @@ impl BookManager {
             items.push(new_item);
         }
 
+        if let (Some(lookup), Some(callback)) = (&bookstore, options.on_progress)
+            && let Some(summary) = lookup.summary()
+        {
+            callback(json!({"total_count": total_count, "processed_count": processed_count, "bookstore_counts": summary}));
+        }
+
         Ok(ProposeResult { content_type: content_type.to_string(), source_category: category.to_string(), total_count, processed_count, items, failures })
     }
 
