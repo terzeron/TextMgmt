@@ -31,6 +31,32 @@ export function computeRenderScale(page, canvas, dpr) {
   return Math.max(minScale, Math.min(Math.max(floor, wanted), areaCap));
 }
 
+// 타일 canvas 하나의 면적 상한(픽셀). 쪽당 상한과 같게 두어 렌더 단위 하나의 메모리를 똑같이 묶는다.
+const TILE_MAX_PIXELS = MAX_CANVAS_PIXELS;
+// 타일로 그릴 쪽의 최소 세로/가로 비율. 일반 만화·문서 쪽(약 1.4)은 기존 단일 canvas 경로를 그대로 쓴다.
+// 넓은 화면에서 일반 쪽도 면적 상한을 조금 넘지만, 그 손실은 작고 경로를 바꾸는 위험이 더 크다.
+const MIN_TILE_ASPECT = 3;
+
+// 면적 상한에 걸리는 긴 쪽(웹툰 스트립)을 세로 타일로 나눠 그리는 계획을 돌려준다. 필요 없으면 null.
+// 쪽 전체를 화면 폭 x dpr 해상도로 그리되, 타일 하나는 TILE_MAX_PIXELS 이하로 둔다.
+// 경계는 정수 장치 픽셀이라 타일을 이어 붙여도 틈이나 겹침이 없다.
+// 반환: { scale, width, height, tiles: [{ top, height }] } (모두 장치 픽셀)
+export function computeTilePlan(page, cssWidth, dpr) {
+  const base = page.getViewport({ scale: 1 });
+  if (!cssWidth || !base.width || !base.height) return null;
+  if (base.height < base.width * MIN_TILE_ASPECT) return null;
+  const scale = Math.max(DISPLAY_SCALE * dpr, (cssWidth * dpr) / base.width);
+  const width = Math.round(base.width * scale);
+  const height = Math.round(base.height * scale);
+  if (width * height <= MAX_CANVAS_PIXELS) return null;
+  const tileHeight = Math.max(1, Math.floor(TILE_MAX_PIXELS / width));
+  const tiles = [];
+  for (let top = 0; top < height; top += tileHeight) {
+    tiles.push({ top, height: Math.min(tileHeight, height - top) });
+  }
+  return { scale, width, height, tiles };
+}
+
 // 쪽 전체를 이미지 한 장으로 채운 PDF(만화·스캔본)의 이미지 픽셀 크기를 돌려준다. 아니면 null.
 // 이런 PDF 의 쪽 크기(pt)는 만든 도구가 임의로 정한 값이라(예: 448px 이미지를 300dpi 로 107.52pt) 그대로 쓰면
 // 원본 이미지보다 훨씬 작게 보인다. 이미지 픽셀 폭을 기준 표시 폭으로 삼으면 원래 크기로 보인다.
@@ -38,7 +64,8 @@ export function computeRenderScale(page, canvas, dpr) {
 const ASPECT_TOLERANCE = 0.02;
 export async function getFullPageImageSize(page, paintOp) {
   try {
-    if (typeof page?.getOperatorList !== "function" || paintOp === undefined) return null;
+    if (typeof page?.getOperatorList !== "function" || paintOp === undefined)
+      return null;
     const { fnArray, argsArray } = await page.getOperatorList();
     const images = [];
     fnArray.forEach((fn, i) => {
@@ -47,10 +74,12 @@ export async function getFullPageImageSize(page, paintOp) {
     if (images.length !== 1) return null;
     const [, width, height] = images[0];
     const base = page.getViewport({ scale: 1 });
-    if (!(width > 0 && height > 0 && base.width > 0 && base.height > 0)) return null;
+    if (!(width > 0 && height > 0 && base.width > 0 && base.height > 0))
+      return null;
     const imageAspect = height / width;
     const pageAspect = base.height / base.width;
-    if (Math.abs(imageAspect - pageAspect) / pageAspect > ASPECT_TOLERANCE) return null;
+    if (Math.abs(imageAspect - pageAspect) / pageAspect > ASPECT_TOLERANCE)
+      return null;
     return { width, height };
   } catch {
     return null;
