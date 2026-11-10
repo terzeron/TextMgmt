@@ -29,7 +29,6 @@ import {
   DISPLAY_SCALE,
   computeRenderScale,
   computeTilePlan,
-  getFullPageImageSize,
 } from "./pdfRenderScale";
 import { pdfjs, PDF_DOCUMENT_OPTIONS } from "./pdfjsEnv";
 import { preparePdfCanvasFonts } from "./pdfCanvasFonts";
@@ -258,6 +257,8 @@ export default function ViewPDF({
     setZoomIndex((prev) => Math.min(ZOOM_STEPS.length - 1, prev + 1));
   const nativeWidthRef = useRef(0);
   const nativeHeightRef = useRef(0);
+  // 첫 쪽과 폭이 다른 쪽의 표시 폭(CSS px). 브라우저 PDF viewer 처럼 쪽마다 제 크기로 보여 준다.
+  const [pageWidths, setPageWidths] = useState(() => new Map());
   const containerRef = useRef(null);
   const canvasRefs = useRef({});
   const renderedPagesRef = useRef(new Set());
@@ -472,6 +473,22 @@ export default function ViewPDF({
         if (!canvas || (!isTile && tilePlansRef.current.has(pageNum))) {
           renderedPagesRef.current.delete(globalPageNum);
           return;
+        }
+
+        // 첫 쪽과 폭이 다른 쪽은 제 폭으로 바꾼다. 렌더 배율과 타일 계획이 canvas 폭을 읽으므로 먼저 반영한다.
+        if (!isTile) {
+          const cssWidth = page.getViewport({ scale: DISPLAY_SCALE }).width;
+          const own =
+            cssWidth >= MIN_PLAUSIBLE_CSS_WIDTH
+              ? cssWidth
+              : FALLBACK_NATIVE_CSS_WIDTH;
+          if (own !== nativeWidthRef.current) {
+            flushSync(() => {
+              setPageWidths((prev) =>
+                prev.get(pageNum) === own ? prev : new Map(prev).set(pageNum, own),
+              );
+            });
+          }
         }
 
         // 긴 쪽은 쪽 하나를 그리지 않고 타일로 바꾼다. 타일은 화면에 붙으면 관찰자가 하나씩 큐에 넣는다.
@@ -784,6 +801,7 @@ export default function ViewPDF({
       tilePlansRef.current = new Map();
       tilePagesRef.current = new Map();
       setTilePlans(new Map());
+      setPageWidths(new Map());
       renderQueueRef.current = new Set();
       activeRenderTasksRef.current = new Map();
       chunkDocsRef.current = new Map();
@@ -849,22 +867,12 @@ export default function ViewPDF({
           firstCssViewport.width > 0 && firstCssViewport.height > 0
             ? firstCssViewport.height / firstCssViewport.width
             : 1;
-        // 쪽이 이미지 한 장이면 쪽 크기(pt) 대신 이미지 픽셀 크기를 원래 크기(100%)로 삼는다.
-        const imageSize = await getFullPageImageSize(
-          firstPage,
-          pdfjs.OPS?.paintImageXObject,
-        );
-        if (imageSize) {
-          nativeWidthRef.current = imageSize.width;
-          nativeHeightRef.current = imageSize.height;
-        } else {
-          nativeWidthRef.current = implausiblySmall
-            ? FALLBACK_NATIVE_CSS_WIDTH
-            : firstCssViewport.width;
-          nativeHeightRef.current = implausiblySmall
-            ? FALLBACK_NATIVE_CSS_WIDTH * aspect
-            : firstCssViewport.height;
-        }
+        nativeWidthRef.current = implausiblySmall
+          ? FALLBACK_NATIVE_CSS_WIDTH
+          : firstCssViewport.width;
+        nativeHeightRef.current = implausiblySmall
+          ? FALLBACK_NATIVE_CSS_WIDTH * aspect
+          : firstCssViewport.height;
 
         if (cancelledRef.current) return;
 
@@ -1193,7 +1201,7 @@ export default function ViewPDF({
           const canvasStyle = fitMode
             ? { width: "100%", height: "auto" }
             : {
-                width: `${Math.round((nativeWidthRef.current * zoomPercent) / 100)}px`,
+                width: `${Math.round(((pageWidths.get(pageNum) ?? nativeWidthRef.current) * zoomPercent) / 100)}px`,
                 height: "auto",
                 // 원래 크기(100%)에서 이미지가 컨테이너보다 넓으면 컨테이너 폭에 맞춘다.
                 // 사용자가 확대(+)한 경우에는 제한을 풀어 가로 스크롤로 볼 수 있게 한다.

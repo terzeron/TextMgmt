@@ -44,10 +44,7 @@ vi.mock("../src/Common", () => ({
 }));
 
 import ViewPDF from "../src/ViewPDF";
-import {
-  computeRenderScale,
-  getFullPageImageSize,
-} from "../src/pdfRenderScale";
+import { computeRenderScale } from "../src/pdfRenderScale";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 // 실제 pdfjs-dist 6.x에서 PDFDocumentProxy에는 destroy()가 없고
@@ -2070,20 +2067,20 @@ describe("computeRenderScale", () => {
     getViewport: vi.fn(() => ({ width, height })),
   });
 
-  it("캔버스 CSS 폭을 모르면 기본 배율(1.2 x dpr)을 쓴다", () => {
+  it("캔버스 CSS 폭을 모르면 기본 배율(96/72 x dpr)을 쓴다", () => {
     expect(
       computeRenderScale(pageOf(600, 800), { clientWidth: 0 }, 2),
-    ).toBeCloseTo(2.4);
-    expect(computeRenderScale(pageOf(600, 800), null, 1)).toBeCloseTo(1.2);
+    ).toBeCloseTo((96 / 72) * 2);
+    expect(computeRenderScale(pageOf(600, 800), null, 1)).toBeCloseTo(96 / 72);
   });
 
   it("페이지 크기가 0이면 기본 배율을 쓴다", () => {
     expect(
       computeRenderScale(pageOf(0, 800), { clientWidth: 500 }, 1),
-    ).toBeCloseTo(1.2);
+    ).toBeCloseTo(96 / 72);
     expect(
       computeRenderScale(pageOf(600, 0), { clientWidth: 500 }, 1),
-    ).toBeCloseTo(1.2);
+    ).toBeCloseTo(96 / 72);
   });
 
   it("화면 폭에 맞춘 배율이 기본 배율보다 크면 그 배율을 쓴다", () => {
@@ -2103,8 +2100,8 @@ describe("computeRenderScale", () => {
     expect(scale).toBeCloseTo(Math.sqrt(3_000_000 / 10_000));
   });
 
-  it("큰 쪽은 기본 배율(1.2 x dpr)보다 면적 상한이 우선해 canvas 가 3M 픽셀을 넘지 않는다", () => {
-    // 실제 크래시 재현: dpr 3 휴대폰(CSS 폭 390), 900x1450pt 쪽. 기본 배율 3.6 이면 약 17M 픽셀이 된다.
+  it("큰 쪽은 기본 배율(96/72 x dpr)보다 면적 상한이 우선해 canvas 가 3M 픽셀을 넘지 않는다", () => {
+    // 실제 크래시 재현: dpr 3 휴대폰(CSS 폭 390), 900x1450pt 쪽. 기본 배율 4(96/72 x 3)면 약 21M 픽셀이 된다.
     const base = { width: 900, height: 1450 };
     const scale = computeRenderScale(
       pageOf(base.width, base.height),
@@ -2121,7 +2118,7 @@ describe("computeRenderScale", () => {
   it("화면이 작아 계산 배율이 기본보다 작아도 기본 배율 아래로 내려가지 않는다", () => {
     expect(
       computeRenderScale(pageOf(1000, 1000), { clientWidth: 100 }, 1),
-    ).toBeCloseTo(1.2);
+    ).toBeCloseTo(96 / 72);
   });
 });
 
@@ -2210,33 +2207,21 @@ describe("ViewPDF: 쪽 크기가 비정상적으로 작은 PDF", () => {
     expect(0.0675 * scale).toBeGreaterThanOrEqual(100 - 1e-6);
     // 정상 크기 쪽은 기존처럼 DISPLAY_SCALE 배율 그대로다
     const normal = { getViewport: () => ({ width: 612, height: 792 }) };
-    expect(computeRenderScale(normal, { clientWidth: 0 }, 2)).toBeCloseTo(2.4);
+    expect(computeRenderScale(normal, { clientWidth: 0 }, 2)).toBeCloseTo((96 / 72) * 2);
   });
 });
 
-describe("ViewPDF: 이미지 한 장짜리 쪽은 이미지 원래 크기로 표시", () => {
+describe("ViewPDF: 원래 크기(100%)는 브라우저 PDF viewer 와 같다", () => {
   let originalFetch;
 
-  // 448x627 이미지를 300dpi 로 107.52 x 150.48pt 에 그려 넣은 만화 PDF
-  function createImagePagePdf(imageOps = [["img_1", 448, 627]]) {
-    return {
-      numPages: 1,
-      getPage: vi.fn(() =>
-        Promise.resolve({
-          getViewport: ({ scale }) => ({
-            width: 107.52 * scale,
-            height: 150.48 * scale,
-          }),
-          getOperatorList: () =>
-            Promise.resolve({
-              fnArray: imageOps.map(() => 85),
-              argsArray: imageOps,
-            }),
-          render: () => ({ promise: Promise.resolve() }),
-        }),
-      ),
-    };
-  }
+  // 쪽 크기(pt)만 의미가 있다. 이미지 픽셀 크기는 표시 폭에 쓰지 않는다.
+  const ptPage = (ptWidth, ptHeight) => ({
+    getViewport: ({ scale = 1 } = {}) => ({
+      width: ptWidth * scale,
+      height: ptHeight * scale,
+    }),
+    render: () => ({ promise: Promise.resolve() }),
+  });
 
   beforeEach(() => {
     localStorage.clear();
@@ -2250,21 +2235,67 @@ describe("ViewPDF: 이미지 한 장짜리 쪽은 이미지 원래 크기로 표
     vi.restoreAllMocks();
   });
 
-  it("미리보기 폭이 쪽 크기(129px)가 아니라 이미지 픽셀 폭(448px)이다", async () => {
+  it("쪽 폭(pt) x 96/72 를 CSS px 폭으로 쓴다", async () => {
+    // 웹툰 1화: 쪽 폭 405pt → 브라우저 100% 에서 540px
     globalThis.fetch = createMockFetch(2);
-    setupGetDocument(() => createImagePagePdf());
+    setupGetDocument(() => ({
+      numPages: 2,
+      getPage: vi.fn(() => Promise.resolve(ptPage(405, 3595.5))),
+    }));
 
     const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
 
     await waitFor(() => {
       expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
     });
-    expect(container.querySelector("canvas").style.width).toBe("448px");
+    expect(container.querySelector("canvas").style.width).toBe("540px");
+  });
+
+  it("쪽마다 그 쪽 크기로 표시한다", async () => {
+    // 첫 쪽만 300pt(400px)이고 나머지는 405pt(540px)다.
+    let docCount = 0;
+    globalThis.fetch = createMockFetch(3);
+    setupGetDocument(() => {
+      docCount += 1;
+      const page = docCount === 1 ? ptPage(300, 600) : ptPage(405, 3595.5);
+      return { numPages: 3, getPage: vi.fn(() => Promise.resolve(page)) };
+    });
+
+    const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
+
+    await waitFor(() => {
+      const widths = [...container.querySelectorAll("canvas")].map(
+        (c) => c.style.width,
+      );
+      expect(widths).toEqual(["400px", "540px", "540px"]);
+    });
+  });
+
+  it("뒤 쪽이 비정상적으로 작으면 기준 폭으로 표시한다", async () => {
+    let docCount = 0;
+    globalThis.fetch = createMockFetch(2);
+    setupGetDocument(() => {
+      docCount += 1;
+      const page = docCount === 1 ? ptPage(405, 600) : ptPage(0.09, 0.1);
+      return { numPages: 2, getPage: vi.fn(() => Promise.resolve(page)) };
+    });
+
+    const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
+
+    await waitFor(() => {
+      const widths = [...container.querySelectorAll("canvas")].map(
+        (c) => c.style.width,
+      );
+      expect(widths).toEqual(["540px", "900px"]);
+    });
   });
 
   it("원래 크기(100%)에서는 컨테이너 폭을 넘지 않게 제한하고 확대하면 제한을 푼다", async () => {
     globalThis.fetch = createMockFetch(2);
-    setupGetDocument(() => createImagePagePdf());
+    setupGetDocument(() => ({
+      numPages: 2,
+      getPage: vi.fn(() => Promise.resolve(ptPage(405, 600))),
+    }));
 
     const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
 
@@ -2276,45 +2307,6 @@ describe("ViewPDF: 이미지 한 장짜리 쪽은 이미지 원래 크기로 표
     await waitFor(() => {
       expect(container.querySelector("canvas").style.maxWidth).toBe("none");
     });
-  });
-
-  it("이미지가 둘 이상이면 쪽 크기로 폭을 정한다", async () => {
-    globalThis.fetch = createMockFetch(2);
-    setupGetDocument(() =>
-      createImagePagePdf([
-        ["img_1", 448, 627],
-        ["img_2", 448, 627],
-      ]),
-    );
-
-    const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
-    });
-    expect(container.querySelector("canvas").style.width).toBe("129px");
-  });
-
-  it("getFullPageImageSize 는 쪽과 이미지 비율이 다르거나 연산 목록이 실패하면 null 이다", async () => {
-    const view = { getViewport: () => ({ width: 100, height: 150 }) };
-    const withOps = (args) => ({
-      ...view,
-      getOperatorList: () => Promise.resolve({ fnArray: [85], argsArray: [args] }),
-    });
-    expect(await getFullPageImageSize(withOps(["i", 100, 150]), 85)).toEqual({
-      width: 100,
-      height: 150,
-    });
-    // 쪽 일부에 그린 작은 이미지(비율 불일치)
-    expect(await getFullPageImageSize(withOps(["i", 100, 100]), 85)).toBeNull();
-    expect(
-      await getFullPageImageSize(
-        { ...view, getOperatorList: () => Promise.reject(new Error("x")) },
-        85,
-      ),
-    ).toBeNull();
-    expect(await getFullPageImageSize(view, 85)).toBeNull();
-    expect(await getFullPageImageSize(withOps(["i", 100, 150]), undefined)).toBeNull();
   });
 });
 
