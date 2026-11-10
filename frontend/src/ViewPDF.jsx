@@ -28,6 +28,7 @@ import { getApiUrlPrefix } from "./Common";
 import {
   DISPLAY_SCALE,
   computeRenderScale,
+  computeTilePlan,
   getFullPageImageSize,
 } from "./pdfRenderScale";
 import { pdfjs, PDF_DOCUMENT_OPTIONS } from "./pdfjsEnv";
@@ -63,6 +64,13 @@ const MAX_CONCURRENT_RENDERS = 3;
 // 보이는 영역(near zone) 밖에서 그려진 채로 남겨 두는 페이지 수. 가까운 순으로 이만큼만 남기고
 // 나머지는 canvas 비트맵과 청크 pdfDoc 을 해제해 긴 PDF 를 넘겨도 메모리가 쌓이지 않게 한다.
 const RETAIN_PAGES_OUTSIDE_VIEW = 6;
+
+// 렌더 단위 키. 일반 쪽은 쪽 번호(숫자), 긴 쪽의 타일은 "쪽:타일번호"(문자열)다.
+// 렌더 큐·실행 중·그려진·근접 집합이 모두 이 키를 쓴다. 타일 하나도 일반 쪽처럼 따로 그리고 해제한다.
+const tileKey = (pageNum, index) => `${pageNum}:${index}`;
+const unitPage = (key) =>
+  typeof key === "number" ? key : Number(key.split(":")[0]);
+const percent = (ratio) => `${ratio * 100}%`;
 
 export default function ViewPDF({
   bookId,
@@ -255,6 +263,14 @@ export default function ViewPDF({
   const renderedPagesRef = useRef(new Set());
   const everRenderedRef = useRef(new Set()); // 한 번이라도 그려진 페이지 (진행률 표시용, 해제해도 유지)
   const nearPagesRef = useRef(new Set()); // 지금 near zone 에 있는 페이지 (해제 대상에서 제외)
+  // 타일로 그리는 긴 쪽: 쪽 번호 → computeTilePlan 결과. ref 는 스케줄러가, state 는 화면이 쓴다.
+  const tilePlansRef = useRef(new Map());
+  const [tilePlans, setTilePlans] = useState(() => new Map());
+  // 타일은 상하 스크롤 + 1장씩 보기 꺼짐에서만 쓴다. 그 밖의 모드는 쪽을 화면 높이에 맞춰 작게 보여 준다.
+  const tileModeRef = useRef(false);
+  const tileRefCallbacksRef = useRef(new Map());
+  // 타일을 그린 쪽의 pdfjs 페이지: 그 쪽의 타일이 모두 끝나면 cleanup 한다.
+  const tilePagesRef = useRef(new Map());
   const observerRef = useRef(null);
 
   // 렌더 스케줄러 상태
@@ -297,7 +313,8 @@ export default function ViewPDF({
   }, []);
 
   // 청크 키에서 해당 페이지를 포함하는 청크의 pdfDoc과 로컬 페이지 번호를 반환
-  const findChunkForPage = useCallback((globalPageNum) => {
+  const findChunkForPage = useCallback((unitKey) => {
+    const globalPageNum = unitPage(unitKey);
     for (const [key, pdfDoc] of chunkDocsRef.current.entries()) {
       const [s, e] = key.split("-").map(Number);
       if (globalPageNum >= s && globalPageNum <= e) {
@@ -375,17 +392,20 @@ export default function ViewPDF({
 
   // pageNums 쪽을 포함한 청크 중 그려진·렌더 중·대기 중인 쪽이 하나도 없는 청크의 pdfDoc 을 해제한다.
   // (해제한 청크는 그 쪽이 다시 필요해질 때 pumpQueue 가 다시 받아 온다.)
-  const releaseIdleChunks = useCallback((pageNums) => {
+  const releaseIdleChunks = useCallback((unitKeys) => {
+    const pageNums = unitKeys.map(unitPage);
+    const busyPages = new Set(
+      [
+        ...renderedPagesRef.current,
+        ...activeRenderTasksRef.current.keys(),
+        ...renderQueueRef.current,
+      ].map(unitPage),
+    );
     for (const [key, pdfDoc] of [...chunkDocsRef.current.entries()]) {
       const [s, e] = key.split("-").map(Number);
       if (!pageNums.some((n) => n >= s && n <= e)) continue;
       let busy = false;
-      for (let n = s; n <= e && !busy; n++) {
-        busy =
-          renderedPagesRef.current.has(n) ||
-          activeRenderTasksRef.current.has(n) ||
-          renderQueueRef.current.has(n);
-      }
+      for (let n = s; n <= e && !busy; n++) busy = busyPages.has(n);
       if (busy) continue;
       chunkDocsRef.current.delete(key);
       pdfDoc.loadingTask.destroy();
@@ -398,14 +418,23 @@ export default function ViewPDF({
     const near = nearPagesRef.current;
     // 관찰자가 아직 위치를 알려주지 않았으면 어느 쪽이 보이는지 모르므로 해제하지 않는다
     if (near.size === 0) return;
-    const nearMin = Math.min(...near);
-    const nearMax = Math.max(...near);
+    // 타일은 쪽 안의 위치를 소수부로 둔다(7:2 of 4 → 7.5). 일반 쪽은 쪽 번호 그대로다.
+    const position = (key) => {
+      if (typeof key === "number") return key;
+      const [pageNum, index] = key.split(":").map(Number);
+      const count = tilePlansRef.current.get(pageNum).tiles.length;
+      return pageNum + index / count;
+    };
+    const nearPositions = [...near].map(position);
+    const nearMin = Math.min(...nearPositions);
+    const nearMax = Math.max(...nearPositions);
     const far = [];
     for (const pageNum of renderedPagesRef.current) {
       if (near.has(pageNum) || activeRenderTasksRef.current.has(pageNum)) continue;
+      const pos = position(pageNum);
       far.push({
         pageNum,
-        dist: Math.max(nearMin - pageNum, pageNum - nearMax, 0),
+        dist: Math.max(nearMin - pos, pos - nearMax, 0),
       });
     }
     if (far.length <= RETAIN_PAGES_OUTSIDE_VIEW) return;
@@ -437,22 +466,53 @@ export default function ViewPDF({
         const page = await chunkInfo.pdfDoc.getPage(chunkInfo.localPageNum);
         const dpr = window.devicePixelRatio || 1;
         const canvas = canvasRefs.current[globalPageNum];
-        if (!canvas) {
+        const pageNum = unitPage(globalPageNum);
+        const isTile = typeof globalPageNum === "string";
+        // 타일로 바뀐 쪽의 쪽 단위 렌더는 버린다(자리에는 이제 타일 컨테이너가 있다).
+        if (!canvas || (!isTile && tilePlansRef.current.has(pageNum))) {
           renderedPagesRef.current.delete(globalPageNum);
           return;
         }
 
-        const renderViewport = page.getViewport({
-          scale: computeRenderScale(page, canvas, dpr),
-        });
+        // 긴 쪽은 쪽 하나를 그리지 않고 타일로 바꾼다. 타일은 화면에 붙으면 관찰자가 하나씩 큐에 넣는다.
+        const plan =
+          !isTile && tileModeRef.current
+            ? computeTilePlan(page, canvas.clientWidth, dpr)
+            : null;
+        if (plan) {
+          renderedPagesRef.current.delete(globalPageNum);
+          nearPagesRef.current.delete(globalPageNum);
+          tilePlansRef.current.set(pageNum, plan);
+          setTilePlans(new Map(tilePlansRef.current));
+          trace(`tile p${pageNum} x${plan.tiles.length}`);
+          return;
+        }
+
+        // 타일은 쪽 전체 viewport 를 위로 tile.top 만큼 밀어 그 구간만 canvas 에 담는다.
+        let renderViewport;
+        let canvasSize;
+        if (isTile) {
+          const tilePlan = tilePlansRef.current.get(pageNum);
+          const tile = tilePlan.tiles[Number(globalPageNum.split(":")[1])];
+          renderViewport = page.getViewport({
+            scale: tilePlan.scale,
+            offsetY: -tile.top,
+          });
+          canvasSize = { width: tilePlan.width, height: tile.height };
+        } else {
+          renderViewport = page.getViewport({
+            scale: computeRenderScale(page, canvas, dpr),
+          });
+          canvasSize = renderViewport;
+        }
 
         trace(`render-start p${globalPageNum}`);
         const context = canvas.getContext("2d");
         await preparePdfCanvasFonts(context);
         if (cancelledRef.current) return;
         canvas.style.aspectRatio = "";
-        canvas.width = renderViewport.width;
-        canvas.height = renderViewport.height;
+        canvas.width = canvasSize.width;
+        canvas.height = canvasSize.height;
 
         const task = page.render({
           canvasContext: context,
@@ -461,26 +521,33 @@ export default function ViewPDF({
         // 취소 가능하도록 슬롯 마커를 실제 RenderTask로 교체
         activeRenderTasksRef.current.set(globalPageNum, task);
         await task.promise;
-        // 그린 뒤에는 pdfjs 가 페이지에 붙들고 있는 operator list 등을 놓아 준다
-        page.cleanup?.();
+        // 그린 뒤에는 pdfjs 가 페이지에 붙들고 있는 operator list·디코딩한 이미지를 놓아 준다.
+        // 타일은 같은 쪽의 마지막 타일이 끝날 때까지 미룬다(releaseTilePage). 타일마다 놓으면 이미지를
+        // 매번 다시 디코딩한다(시제품 실측: 690x16383 쪽에서 타일당 약 150ms → 유지하면 약 7ms).
+        if (isTile) tilePagesRef.current.set(pageNum, page);
+        else page.cleanup?.();
 
-        everRenderedRef.current.add(globalPageNum);
+        everRenderedRef.current.add(pageNum);
         setLoadedPages(everRenderedRef.current.size);
         trace(`render-done p${globalPageNum}`);
 
-        if (globalPageNum === 1) {
+        if (pageNum === 1) {
           setIsFirstPageReady(true);
         }
         trimFarPages();
       } catch (err) {
-        // 취소된 렌더는 재진입 시 다시 그릴 수 있도록 완료 표시를 해제한다
+        // 취소된 렌더는 재진입 시 다시 그릴 수 있도록 완료 표시를 해제한다.
+        // 비트맵 크기를 이미 잡았으면 비워 둔다. 남기면 그려진 목록에서 빠진 채 메모리를 계속 잡는다
+        // (빠르게 스크롤하면 화면을 지나간 쪽·타일의 렌더가 자주 취소된다).
+        const canvas = canvasRefs.current[globalPageNum];
+        if (canvas?.width > 1) evictPage(globalPageNum);
         renderedPagesRef.current.delete(globalPageNum);
         if (err?.name !== "RenderingCancelledException") {
           console.error(`페이지 ${globalPageNum} 렌더링 실패:`, err);
         }
       }
     },
-    [findChunkForPage, trimFarPages, trace],
+    [findChunkForPage, trimFarPages, evictPage, trace],
   );
 
   // 큐에서 청크가 로드되어 즉시 렌더 가능한 페이지 중 뷰포트에 가장 가까운 것을 고른다
@@ -494,7 +561,12 @@ export default function ViewPDF({
     for (const pageNum of renderQueueRef.current) {
       if (!findChunkForPage(pageNum)) continue; // 청크 미로드 → 아직 렌더 불가
       const canvas = canvasRefs.current[pageNum];
-      const top = canvas ? canvas.offsetTop : 0;
+      // 타일은 쪽 컨테이너 안에 절대 위치로 놓이므로 offsetTop 이 쪽 기준이다. 쪽 위치를 더한다.
+      const parentTop =
+        typeof pageNum === "string"
+          ? canvasRefs.current[unitPage(pageNum)]?.offsetTop || 0
+          : 0;
+      const top = canvas ? parentTop + canvas.offsetTop : 0;
       const height = canvas ? canvas.offsetHeight : 0;
       const dist = Math.abs(top + height / 2 - center);
       if (dist < bestDist) {
@@ -505,6 +577,20 @@ export default function ViewPDF({
     return best;
   }, [findChunkForPage]);
 
+  // 같은 쪽의 타일이 실행 중이거나 대기 중이 아니면, 미뤄 둔 pdfjs 페이지 cleanup 을 한다.
+  // 실행 중 표시는 렌더가 끝날 때마다 하나씩 지워지므로, 동시에 끝나도 마지막 타일이 반드시 정리한다.
+  const releaseTilePage = useCallback((pageNum) => {
+    const page = tilePagesRef.current.get(pageNum);
+    if (!page) return;
+    const pending = [
+      ...activeRenderTasksRef.current.keys(),
+      ...renderQueueRef.current,
+    ].some((key) => typeof key === "string" && unitPage(key) === pageNum);
+    if (pending) return;
+    tilePagesRef.current.delete(pageNum);
+    page.cleanup?.();
+  }, []);
+
   // 스케줄러 펌프: (1) 큐의 미로드 페이지에 대한 청크 페칭을 트리거하고,
   // (2) 동시성 한도 내에서 렌더 가능한 페이지를 우선순위 순으로 실행한다.
   // 페이지는 실제로 렌더 실행될 때까지 큐에 남으므로, 청크 로드 후 재호출되면
@@ -513,7 +599,7 @@ export default function ViewPDF({
     // 큐에 있는 미로드 페이지들의 청크 페칭 트리거 (fetchChunk가 중복 제거)
     for (const pageNum of renderQueueRef.current) {
       if (findChunkForPage(pageNum)) continue;
-      const chunkStart = getChunkStart(pageNum);
+      const chunkStart = getChunkStart(unitPage(pageNum));
       const chunkEnd = Math.min(
         /* v8 ignore next -- page 1 is loaded by the initial single-page chunk. */
         chunkStart === 1 ? 1 : chunkStart + CHUNK_SIZE - 1,
@@ -530,6 +616,7 @@ export default function ViewPDF({
       activeRenderTasksRef.current.set(pageNum, null);
       executeRender(pageNum).finally(() => {
         activeRenderTasksRef.current.delete(pageNum);
+        releaseTilePage(unitPage(pageNum));
         /* v8 ignore next -- queue pumping after unmount is intentionally skipped. */
         if (!cancelledRef.current) pumpQueue();
       });
@@ -540,6 +627,7 @@ export default function ViewPDF({
     getChunkStart,
     fetchChunk,
     executeRender,
+    releaseTilePage,
   ]);
 
   // 페이지를 렌더 큐에 넣는다 (이미 렌더됐거나 실행 중이면 무시)
@@ -656,7 +744,8 @@ export default function ViewPDF({
 
   useEffect(() => {
     traceModeRef.current = `${pageMode}${singlePage ? "+single" : ""}${fitMode ? "+fit" : ""}`;
-  }, [pageMode, singlePage, fitMode]);
+    tileModeRef.current = !horizontal && !singlePage;
+  }, [pageMode, singlePage, fitMode, horizontal]);
 
   // 진단 기록의 수명. 전체 보기 한 곳에서만 기록한다: 미리보기는 한 화면에 여러 개가 함께 떠서
   // 기록이 서로 덮어써지고, 그러면 멀쩡한 뷰어가 비정상 종료로 보고된다.
@@ -692,6 +781,9 @@ export default function ViewPDF({
       renderedPagesRef.current = new Set();
       everRenderedRef.current = new Set();
       nearPagesRef.current = new Set();
+      tilePlansRef.current = new Map();
+      tilePagesRef.current = new Map();
+      setTilePlans(new Map());
       renderQueueRef.current = new Set();
       activeRenderTasksRef.current = new Map();
       chunkDocsRef.current = new Map();
@@ -806,19 +898,24 @@ export default function ViewPDF({
         enqueueRender(1);
         setDownloadProgress(50);
 
-        if (cancelledRef.current || pagesToRender <= 1) return;
+        /* v8 ignore next -- cancellation here requires unmount in the same async gap. */
+        if (cancelledRef.current) return;
 
         // 2단계: 나머지 페이지 로딩
-        if (preview) {
-          // 미리보기: 나머지 2~pagesToRender 한 번에 페칭
-          fetchChunk(2, pagesToRender);
-        } else {
-          // 전체보기: 2~11페이지 즉시 페칭
-          const firstBatchEnd = Math.min(1 + CHUNK_SIZE, pagesToRender);
-          fetchChunk(2, firstBatchEnd);
+        if (pagesToRender > 1) {
+          if (preview) {
+            // 미리보기: 나머지 2~pagesToRender 한 번에 페칭
+            fetchChunk(2, pagesToRender);
+          } else {
+            // 전체보기: 2~11페이지 즉시 페칭
+            const firstBatchEnd = Math.min(1 + CHUNK_SIZE, pagesToRender);
+            fetchChunk(2, firstBatchEnd);
+          }
+
+          setDownloadProgress(100);
         }
 
-        setDownloadProgress(100);
+        // 1쪽뿐인 PDF 도 관찰자를 만든다: 긴 쪽은 타일로 바뀌고, 타일은 관찰자가 보여야 그려진다.
 
         // IntersectionObserver: 근접 영역(near-zone) 진입 시 큐에 투입, 이탈 시 취소.
         // 아래쪽 margin을 크게 둬 순방향 스크롤에서 다음 페이지들을 미리 준비한다.
@@ -827,7 +924,9 @@ export default function ViewPDF({
         const observer = new IntersectionObserver(
           (entries) => {
             for (const entry of entries) {
-              const pageNum = parseInt(entry.target.dataset.page);
+              const pageNum =
+                entry.target.dataset.tile ??
+                parseInt(entry.target.dataset.page);
               if (!pageNum) continue;
               nearPagesRef.current.delete(pageNum);
               if (entry.isIntersecting) {
@@ -848,10 +947,11 @@ export default function ViewPDF({
         observerRef.current = observer;
 
         // 1쪽도 관찰한다: 해제된 뒤 다시 보이면 이 관찰자가 되살려야 한다.
+        // 이미 타일로 바뀐 쪽은 타일 canvas 가 붙을 때 스스로 관찰을 등록한다(setTileRef).
         for (let i = 1; i <= pagesToRender; i++) {
           const canvas = canvasRefs.current[i];
           /* v8 ignore next 4 -- flushSync creates all observed page canvases before observer setup. */
-          if (canvas) {
+          if (canvas && !tilePlansRef.current.has(i)) {
             canvas.dataset.page = String(i);
             observer.observe(canvas);
           }
@@ -907,6 +1007,54 @@ export default function ViewPDF({
       }
     },
     [],
+  );
+
+  // 타일 canvas ref. 붙을 때 관찰을 등록하고 떨어질 때 해제한다.
+  // 렌더마다 새 함수를 주면 React 가 떼었다 다시 붙여 관찰이 반복되므로 키마다 같은 함수를 돌려준다.
+  const setTileRef = useCallback((key) => {
+    const callbacks = tileRefCallbacksRef.current;
+    if (!callbacks.has(key)) {
+      let attached = null;
+      callbacks.set(key, (el) => {
+        if (el) {
+          attached = el;
+          // canvas 기본 비트맵(300x150)을 비워 두고, 관찰자가 화면 근처라고 알려 줄 때 그린다.
+          el.width = 1;
+          el.height = 1;
+          canvasRefs.current[key] = el;
+          observerRef.current?.observe(el);
+        } else {
+          // React 는 붙였던 요소를 뗄 때만 null 로 부른다.
+          observerRef.current?.unobserve(attached);
+          if (canvasRefs.current[key] === attached) delete canvasRefs.current[key];
+          attached = null;
+        }
+      });
+    }
+    return callbacks.get(key);
+  }, []);
+
+  // 긴 쪽의 타일 묶음. 컨테이너가 쪽 전체 비율을 갖고, 타일은 쪽 높이 대비 % 로 겹침 없이 쌓인다.
+  const renderTiles = (pageNum, plan, className, style) => (
+    <div
+      ref={setCanvasRef(pageNum)}
+      className={`${className} pdf-page-tiles`}
+      style={{ ...style, aspectRatio: `${plan.width} / ${plan.height}` }}
+      data-testid={`pdf-tiles-${pageNum}`}
+    >
+      {plan.tiles.map((tile, index) => (
+        <canvas
+          key={index}
+          ref={setTileRef(tileKey(pageNum, index))}
+          className="pdf-tile"
+          data-tile={tileKey(pageNum, index)}
+          style={{
+            top: percent(tile.top / plan.height),
+            height: percent(tile.height / plan.height),
+          }}
+        />
+      ))}
+    </div>
   );
 
   if (error) {
@@ -1051,14 +1199,19 @@ export default function ViewPDF({
                 // 사용자가 확대(+)한 경우에는 제한을 풀어 가로 스크롤로 볼 수 있게 한다.
                 maxWidth: zoomPercent <= 100 ? "100%" : "none",
               };
+          const plan = tilePlans.get(pageNum);
           if (!editable) {
             return (
               <div key={pageNum} className="pdf-page-slot">
-                <canvas
-                  ref={setCanvasRef(pageNum)}
-                  className="pdf-page"
-                  style={canvasStyle}
-                />
+                {plan ? (
+                  renderTiles(pageNum, plan, "pdf-page", canvasStyle)
+                ) : (
+                  <canvas
+                    ref={setCanvasRef(pageNum)}
+                    className="pdf-page"
+                    style={canvasStyle}
+                  />
+                )}
               </div>
             );
           }
@@ -1114,7 +1267,11 @@ export default function ViewPDF({
               style={canvasStyle}
               data-marked={marked ? "true" : "false"}
             >
-              <canvas ref={setCanvasRef(pageNum)} className="pdf-page-canvas" />
+              {plan ? (
+                renderTiles(pageNum, plan, "pdf-page-canvas", undefined)
+              ) : (
+                <canvas ref={setCanvasRef(pageNum)} className="pdf-page-canvas" />
+              )}
               {moved && (
                 <div className="viewer-edit-tag">
                   순서 변경 · 저장 전 ({pageNum}쪽 → {position + 1}번째)
@@ -1405,6 +1562,22 @@ const pdfStyles = `
     /* 편집 화면: 캔버스를 감싸는 래퍼. 버튼·회색 레이어를 캔버스 위에 겹친다. */
     .pdf-page-wrap {
         position: relative;
+    }
+    /* 긴 쪽 타일: 컨테이너가 쪽 비율을 갖고 타일 canvas 를 % 위치로 겹침 없이 쌓는다. */
+    .pdf-page-tiles {
+        position: relative;
+    }
+    .pdf-page-tiles .pdf-tile {
+        position: absolute;
+        left: 0;
+        display: block;
+        width: 100%;
+    }
+    /* 화면 높이에 맞추는 모드: canvas 의 object-fit: contain 대신 높이에서 폭을 비율로 정한다. */
+    .pdf-container.pdf-fit:not(.pdf-fit-width) .pdf-page-tiles {
+        width: auto !important;
+        max-width: 100%;
+        margin: 0 auto;
     }
     .pdf-page-wrap .pdf-page-canvas {
         display: block;

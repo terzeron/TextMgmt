@@ -2317,3 +2317,210 @@ describe("ViewPDF: 이미지 한 장짜리 쪽은 이미지 원래 크기로 표
     expect(await getFullPageImageSize(withOps(["i", 100, 150]), undefined)).toBeNull();
   });
 });
+
+// ── 긴 쪽(웹툰 스트립) 타일 렌더 ──
+// 120화 1쪽과 같은 517.5 x 12287.25pt 쪽을 표시 폭 690px, dpr 2 로 그린다.
+// computeTilePlan: 폭 1380px, 전체 32766px, 타일 높이 2173px → 타일 16개.
+describe("ViewPDF 긴 쪽 타일", () => {
+  const TILE_H = 2173;
+  const TILES = 16;
+  let originalFetch;
+  let originalDpr;
+  let RealIO;
+  let observers;
+
+  const tallPage = (renderSpy, cleanupSpy) => ({
+    getViewport: ({ scale = 1, offsetY = 0 } = {}) => ({
+      width: 517.5 * scale,
+      height: 12287.25 * scale,
+      scale,
+      offsetY,
+    }),
+    render: renderSpy,
+    cleanup: cleanupSpy,
+  });
+
+  const setup = ({ numPages = 1 } = {}) => {
+    const renderSpy = vi.fn(() => ({ promise: Promise.resolve() }));
+    const cleanupSpy = vi.fn();
+    const docs = [];
+    setupGetDocument(() => {
+      const pdf = {
+        numPages,
+        getPage: vi.fn(() => Promise.resolve(tallPage(renderSpy, cleanupSpy))),
+      };
+      pdf.loadingTask = { promise: Promise.resolve(pdf), destroy: vi.fn() };
+      docs.push(pdf);
+      return pdf;
+    });
+    globalThis.fetch = createMockFetch(numPages);
+    return { renderSpy, cleanupSpy, docs };
+  };
+
+  const tileCanvases = () => [...document.querySelectorAll("canvas.pdf-tile")];
+  const fire = (entries) =>
+    act(() => {
+      const obs = observers[observers.length - 1];
+      obs.cb(
+        entries.map(([target, isIntersecting]) => ({ target, isIntersecting })),
+        obs,
+      );
+    });
+
+  beforeEach(() => {
+    localStorage.clear();
+    mockGetDocument.mockReset();
+    originalFetch = globalThis.fetch;
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}));
+    Object.defineProperty(HTMLCanvasElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => 690,
+    });
+    originalDpr = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+    Object.defineProperty(window, "devicePixelRatio", {
+      configurable: true,
+      value: 2,
+    });
+    // observe 해도 자동으로 발사하지 않는 관찰자: 테스트가 어느 타일이 보이는지 정한다
+    observers = [];
+    RealIO = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        this.observed = new Set();
+        this.unobserved = [];
+        observers.push(this);
+      }
+      observe(el) {
+        this.observed.add(el);
+      }
+      unobserve(el) {
+        this.observed.delete(el);
+        this.unobserved.push(el);
+      }
+      disconnect() {}
+    };
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    globalThis.IntersectionObserver = RealIO;
+    delete HTMLCanvasElement.prototype.clientWidth;
+    if (originalDpr) Object.defineProperty(window, "devicePixelRatio", originalDpr);
+    else delete window.devicePixelRatio;
+    vi.restoreAllMocks();
+  });
+
+  it("긴 쪽을 타일로 바꾸고 보이는 타일만 그 구간으로 그린다", async () => {
+    const { renderSpy, cleanupSpy } = setup();
+    render(<ViewPDF bookId={1} />);
+
+    // 1쪽은 렌더 시점에 타일로 바뀐다. 쪽 단위로는 그리지 않는다.
+    await waitFor(() => expect(tileCanvases()).toHaveLength(TILES));
+    expect(renderSpy).not.toHaveBeenCalled();
+    const container = screen.getByTestId("pdf-tiles-1");
+    expect(container.classList.contains("pdf-page")).toBe(true);
+    expect(container.style.aspectRatio).toBe("1380 / 32766");
+    const tiles = tileCanvases();
+    expect(tiles[1].style.top).toBe(`${(TILE_H / 32766) * 100}%`);
+    // 붙은 타일은 관찰 대상이 되고, 그리기 전에는 1x1 이다.
+    const obs = observers[observers.length - 1];
+    expect(tiles.every((t) => obs.observed.has(t))).toBe(true);
+    expect(tiles[0].width).toBe(1);
+
+    // 앞 세 타일이 화면 근처에 들어온다
+    await fire([[tiles[0], true], [tiles[1], true], [tiles[2], true]]);
+    await waitFor(() => expect(renderSpy).toHaveBeenCalledTimes(3));
+    const offsets = renderSpy.mock.calls.map(([arg]) => arg.viewport.offsetY);
+    expect(offsets.sort((a, b) => b - a)).toEqual([-0, -TILE_H, -2 * TILE_H]);
+    expect(renderSpy.mock.calls[0][0].viewport.scale).toBeCloseTo(1380 / 517.5);
+    expect(tiles[0].width).toBe(1380);
+    expect(tiles[0].height).toBe(TILE_H);
+    // 디코딩한 이미지를 타일마다 버리지 않는다: 세 타일 중 마지막 하나만 cleanup 한다.
+    expect(cleanupSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("타일로 바뀐 쪽의 옛 canvas 가 다시 보여도 쪽 단위로 그리지 않는다", async () => {
+    const { renderSpy } = setup();
+    render(<ViewPDF bookId={1} />);
+    await waitFor(() => expect(tileCanvases()).toHaveLength(TILES));
+    // 관찰자는 타일로 바뀌기 전의 1쪽 canvas 를 아직 기억한다(지금은 DOM 에서 떨어져 있다).
+    const obs = observers[observers.length - 1];
+    const pageCanvas = [...obs.observed].find((el) => el.dataset.page === "1");
+    expect(pageCanvas.isConnected).toBe(false);
+    await fire([[pageCanvas, true]]);
+    await act(async () => {});
+    expect(renderSpy).not.toHaveBeenCalled();
+  });
+
+  it("멀어진 타일은 해제하고 쪽의 청크는 남은 타일이 쓰므로 유지한다", async () => {
+    const { renderSpy, docs } = setup();
+    render(<ViewPDF bookId={1} />);
+    await waitFor(() => expect(tileCanvases()).toHaveLength(TILES));
+    const tiles = tileCanvases();
+
+    // 타일을 하나씩 내려가며 본다: 새 타일이 들어오고 직전 타일이 나간다
+    await fire([[tiles[0], true]]);
+    await waitFor(() => expect(renderSpy).toHaveBeenCalledTimes(1));
+    for (let i = 1; i < TILES; i++) {
+      await fire([[tiles[i], true], [tiles[i - 1], false]]);
+      await waitFor(() => expect(renderSpy).toHaveBeenCalledTimes(i + 1));
+    }
+
+    // 보는 타일(15)에서 가까운 6개(9~14)만 남기고 0~8 은 1x1 로 비운다
+    expect(tiles[0].width).toBe(1);
+    expect(tiles[8].width).toBe(1);
+    expect(tiles[9].width).toBe(1380);
+    expect(tiles[15].width).toBe(1380);
+    expect(docs[0].loadingTask.destroy).not.toHaveBeenCalled();
+  });
+
+  it("다른 책을 불러오면 타일을 걷고 새 책은 처음부터 다시 판정한다", async () => {
+    const { renderSpy } = setup();
+    const { rerender } = render(<ViewPDF bookId={1} />);
+    await waitFor(() => expect(tileCanvases()).toHaveLength(TILES));
+    rerender(<ViewPDF bookId={2} />);
+    // 새 책도 같은 긴 쪽이라 다시 타일로 바뀐다. 이전 책의 타일은 그리지 않은 채 떨어진다.
+    await waitFor(() => expect(screen.getByTestId("pdf-tiles-1")).toBeTruthy());
+    await waitFor(() => expect(tileCanvases()).toHaveLength(TILES));
+    expect(renderSpy).not.toHaveBeenCalled();
+  });
+
+  it("렌더가 취소된 타일의 비트맵은 비워 메모리에 남기지 않는다", async () => {
+    const { renderSpy } = setup();
+    // 그리기 직전에 취소된다: canvas 크기는 이미 잡혔다
+    renderSpy.mockImplementation(() => ({
+      promise: Promise.reject(
+        Object.assign(new Error("cancelled"), { name: "RenderingCancelledException" }),
+      ),
+    }));
+    render(<ViewPDF bookId={1} />);
+    await waitFor(() => expect(tileCanvases()).toHaveLength(TILES));
+    const tiles = tileCanvases();
+    await fire([[tiles[0], true]]);
+    await waitFor(() => expect(renderSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(tiles[0].width).toBe(1));
+    expect(tiles[0].height).toBe(1);
+  });
+
+  it("1장씩 보기에서는 긴 쪽도 타일로 나누지 않는다", async () => {
+    localStorage.setItem("tm_viewer_pdf_full_single", "true");
+    const { renderSpy } = setup();
+    render(<ViewPDF bookId={1} />);
+    await waitFor(() => expect(renderSpy).toHaveBeenCalledTimes(1));
+    expect(tileCanvases()).toHaveLength(0);
+  });
+
+  it("편집 화면에서도 타일 묶음을 쪽 래퍼 안에 두고, 언마운트하면 관찰을 푼다", async () => {
+    setup();
+    const { unmount } = render(<ViewPDF bookId={1} editable />);
+    await waitFor(() => expect(tileCanvases()).toHaveLength(TILES));
+    const container = screen.getByTestId("pdf-tiles-1");
+    expect(container.parentElement.classList.contains("pdf-page-wrap")).toBe(true);
+    expect(container.classList.contains("pdf-page-canvas")).toBe(true);
+    const tiles = tileCanvases();
+    const obs = observers[observers.length - 1];
+    unmount();
+    expect(obs.unobserved).toEqual(expect.arrayContaining(tiles));
+  });
+});
