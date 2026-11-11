@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 
 afterEach(cleanup);
 
@@ -502,5 +502,194 @@ describe("Folder - 다크 테마 및 파일 타입 아이콘", () => {
       />,
     );
     expect(screen.getByText("표지.image")).toBeTruthy();
+  });
+
+});
+
+describe("Folder - URL 지정 항목 자동 스크롤", () => {
+  const TARGET = '1_fiction/101';
+  const CONTAINER_TOP = 100;
+  const TARGET_TOP_UNSCROLLED = 600;
+  let rectSpy;
+
+  const getBody = (container) => container.querySelector(".card-body");
+
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"],
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get() {
+        return this.classList.contains("card-body") ? 1000 : 0;
+      },
+    });
+    rectSpy = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function rect() {
+        if (this.classList.contains("card-body")) return { top: CONTAINER_TOP };
+        if (this.getAttribute("data-item-id") === TARGET) {
+          const body = this.closest(".card-body");
+          return { top: TARGET_TOP_UNSCROLLED - body.scrollTop };
+        }
+        return { top: 0 };
+      });
+  });
+
+  afterEach(() => {
+    rectSpy.mockRestore();
+    delete HTMLElement.prototype.clientHeight;
+    vi.useRealTimers();
+  });
+
+  it("대상 항목을 스크롤 영역 높이의 10% 지점으로 스크롤한다", () => {
+    const { container } = render(
+      <Folder {...defaultProps} expandedItems={["1_fiction"]} scrollTargetId={TARGET} />,
+    );
+    // 600 - 100(영역 top) - 1000 * 0.1 = 400
+    expect(getBody(container).scrollTop).toBe(400);
+  });
+
+  it("펼침 애니메이션 동안 위치가 바뀌면 매 프레임 다시 맞추고 1초 뒤 멈춘다", () => {
+    const { container } = render(
+      <Folder {...defaultProps} expandedItems={["1_fiction"]} scrollTargetId={TARGET} />,
+    );
+    const body = getBody(container);
+    rectSpy.mockImplementation(function rect() {
+      if (this.classList.contains("card-body")) return { top: CONTAINER_TOP };
+      if (this.getAttribute("data-item-id") === TARGET) {
+        return { top: 700 - body.scrollTop };
+      }
+      return { top: 0 };
+    });
+    vi.advanceTimersByTime(20);
+    expect(body.scrollTop).toBe(500);
+
+    vi.advanceTimersByTime(1100);
+    body.scrollTop = 0;
+    vi.advanceTimersByTime(100);
+    expect(body.scrollTop).toBe(0);
+  });
+
+  it("사용자가 휠을 굴리면 보정을 멈춘다", () => {
+    const { container } = render(
+      <Folder {...defaultProps} expandedItems={["1_fiction"]} scrollTargetId={TARGET} />,
+    );
+    const body = getBody(container);
+    fireEvent.wheel(body);
+    body.scrollTop = 0;
+    vi.advanceTimersByTime(100);
+    expect(body.scrollTop).toBe(0);
+  });
+
+  it("대상이 아직 없으면 기다렸다가 펼쳐져 나타날 때 스크롤한다", async () => {
+    const props = { ...defaultProps, scrollTargetId: TARGET };
+    const { container, rerender } = render(
+      <Folder {...props} expandedItems={["2_science"]} />,
+    );
+    const body = getBody(container);
+    expect(body.querySelector(`[data-item-id="${TARGET}"]`)).toBeNull();
+    expect(body.scrollTop).toBe(0);
+
+    rerender(<Folder {...props} expandedItems={["1_fiction"]} />);
+    await act(async () => {});
+    expect(body.scrollTop).toBe(400);
+  });
+
+  it("트리가 바뀌어도 대상이 아직 없으면 계속 기다린다", async () => {
+    const props = { ...defaultProps, scrollTargetId: TARGET };
+    const withoutTarget = [
+      { ...FOLDER_DATA[0], children: [] },
+      FOLDER_DATA[1],
+    ];
+    const { container, rerender } = render(
+      <Folder {...props} folderData={[FOLDER_DATA[1]]} expandedItems={[]} />,
+    );
+    const body = getBody(container);
+    rerender(<Folder {...props} folderData={withoutTarget} expandedItems={[]} />);
+    await act(async () => {});
+    expect(body.scrollTop).toBe(0);
+
+    rerender(<Folder {...props} folderData={FOLDER_DATA} expandedItems={["1_fiction"]} />);
+    await act(async () => {});
+    expect(body.scrollTop).toBe(400);
+  });
+
+  it("보정 중 대상이 사라지면 그 프레임은 건너뛴다", () => {
+    const props = { ...defaultProps, scrollTargetId: TARGET, expandedItems: ["1_fiction"] };
+    const { container, rerender } = render(<Folder {...props} />);
+    const body = getBody(container);
+    rerender(<Folder {...props} folderData={[FOLDER_DATA[1]]} />);
+    body.scrollTop = 0;
+    vi.advanceTimersByTime(100);
+    expect(body.scrollTop).toBe(0);
+  });
+
+  it("같은 대상은 한 번만 스크롤하고 트리 변경으로 다시 끌어오지 않는다", () => {
+    const props = { ...defaultProps, scrollTargetId: TARGET };
+    const { container, rerender } = render(
+      <Folder {...props} expandedItems={["1_fiction"]} />,
+    );
+    const body = getBody(container);
+    vi.advanceTimersByTime(1100);
+    body.scrollTop = 0;
+
+    rerender(<Folder {...props} expandedItems={["1_fiction", "2_science"]} />);
+    vi.advanceTimersByTime(100);
+    expect(body.scrollTop).toBe(0);
+  });
+
+  it("카드를 닫았다 다시 열어도 이미 스크롤한 대상으로 다시 끌어오지 않는다", () => {
+    const props = { ...defaultProps, scrollTargetId: TARGET, expandedItems: ["1_fiction"] };
+    const { container, rerender } = render(<Folder {...props} />);
+    expect(getBody(container).scrollTop).toBe(400);
+    vi.advanceTimersByTime(1100);
+
+    rerender(<Folder {...props} isOpen={false} />);
+    rerender(<Folder {...props} isOpen={true} />);
+    expect(getBody(container).scrollTop).toBe(0);
+  });
+
+  it("unmount하면 진행 중인 보정을 멈춘다", () => {
+    const cancelSpy = vi.spyOn(window, "cancelAnimationFrame");
+    const { unmount } = render(
+      <Folder {...defaultProps} expandedItems={["1_fiction"]} scrollTargetId={TARGET} />,
+    );
+    unmount();
+    expect(cancelSpy).toHaveBeenCalled();
+    cancelSpy.mockRestore();
+  });
+
+  it("따옴표가 든 id도 찾아 스크롤한다", () => {
+    const quotedId = '1_fiction/"x"';
+    const data = [
+      {
+        ...FOLDER_DATA[0],
+        children: [{ id: quotedId, label: "따옴표.pdf", fileType: "pdf", children: [] }],
+      },
+    ];
+    rectSpy.mockImplementation(function rect() {
+      if (this.classList.contains("card-body")) return { top: CONTAINER_TOP };
+      if (this.getAttribute("data-item-id") === quotedId) {
+        return { top: TARGET_TOP_UNSCROLLED - this.closest(".card-body").scrollTop };
+      }
+      return { top: 0 };
+    });
+    const { container } = render(
+      <Folder
+        {...defaultProps}
+        folderData={data}
+        expandedItems={["1_fiction"]}
+        scrollTargetId={quotedId}
+      />,
+    );
+    expect(getBody(container).scrollTop).toBe(400);
+  });
+
+  it("isOpen=false이면 스크롤하지 않는다", () => {
+    const { container } = render(
+      <Folder {...defaultProps} isOpen={false} scrollTargetId={TARGET} />,
+    );
+    expect(container.querySelector(".card-body")).toBeNull();
   });
 });

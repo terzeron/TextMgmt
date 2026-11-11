@@ -1,6 +1,6 @@
 import "./Folder.css";
 
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import PropTypes from "prop-types";
 
 import clsx from "clsx";
@@ -215,7 +215,9 @@ export const CustomTreeItem = React.forwardRef(
 
     return (
       <TreeItemProvider {...getContextProviderProps()}>
-        <StyledTreeItemRoot {...getRootProps(other)}>
+        <StyledTreeItemRoot
+          {...getRootProps({ ...other, "data-item-id": itemId })}
+        >
           <CustomTreeItemContent
             {...getContentProps({
               className: clsx("content", {
@@ -247,7 +249,79 @@ export const CustomTreeItem = React.forwardRef(
   },
 );
 
+// URL로 지정한 항목을 스크롤 영역 높이의 이 비율 지점에 둔다.
+const SCROLL_TARGET_RATIO = 0.1;
+// 부모 폴더 펼침 애니메이션 동안 위치가 바뀌므로 이 시간만큼 매 프레임 보정한다.
+const SCROLL_SETTLE_MS = 1000;
+const USER_SCROLL_EVENTS = ["wheel", "touchstart", "pointerdown", "keydown"];
+
+function findTreeItemElement(container, itemId) {
+  const quoted = itemId.replace(/["\\]/g, "\\$&");
+  return container.querySelector(`[data-item-id="${quoted}"]`);
+}
+
+function scrollItemNearTop(container, element) {
+  const offset =
+    element.getBoundingClientRect().top - container.getBoundingClientRect().top;
+  container.scrollTop += offset - container.clientHeight * SCROLL_TARGET_RATIO;
+}
+
+// 펼침 애니메이션이 끝날 때까지 매 프레임 위치를 맞춘다. 사용자가 조작하면 멈춘다.
+function startScrollSettling(container, itemId) {
+  let frameId = 0;
+  const deadline = performance.now() + SCROLL_SETTLE_MS;
+  const stop = () => {
+    cancelAnimationFrame(frameId);
+    USER_SCROLL_EVENTS.forEach((type) =>
+      container.removeEventListener(type, stop),
+    );
+  };
+  const step = () => {
+    const element = findTreeItemElement(container, itemId);
+    if (element) scrollItemNearTop(container, element);
+    if (performance.now() < deadline) {
+      frameId = requestAnimationFrame(step);
+    } else {
+      stop();
+    }
+  };
+  USER_SCROLL_EVENTS.forEach((type) =>
+    container.addEventListener(type, stop, { passive: true }),
+  );
+  step();
+  return stop;
+}
+
 export default function Folder(props) {
+  const bodyRef = useRef(null);
+  const scrolledTargetRef = useRef(null);
+  const stopScrollRef = useRef(null);
+  const { scrollTargetId, isOpen } = props;
+
+  // URL로 연 항목이 긴 트리 아래에 묻히지 않도록 상단 근처로 한 번 스크롤한다.
+  // 부모를 펼쳐도 Collapse가 자식을 다음 렌더에 붙이므로 DOM 변경을 지켜본다.
+  useEffect(() => {
+    const container = bodyRef.current;
+    // 접힌 카드에는 Card.Body가 없어 container가 null이다.
+    if (!container || !scrollTargetId) return;
+    if (scrolledTargetRef.current === scrollTargetId) return;
+    const startWhenRendered = () => {
+      if (!findTreeItemElement(container, scrollTargetId)) return false;
+      scrolledTargetRef.current = scrollTargetId;
+      stopScrollRef.current?.();
+      stopScrollRef.current = startScrollSettling(container, scrollTargetId);
+      return true;
+    };
+    if (startWhenRendered()) return;
+    const observer = new MutationObserver(() => {
+      if (startWhenRendered()) observer.disconnect();
+    });
+    observer.observe(container, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [scrollTargetId, isOpen]);
+
+  useEffect(() => () => stopScrollRef.current?.(), []);
+
   const defaultExpandedItems = useMemo(
     () => (props.folderData || []).map((o) => o.id),
     [props.folderData],
@@ -286,7 +360,7 @@ export default function Folder(props) {
         <FontAwesomeIcon icon={faChevronDown} className="me-2" />
         디렉토리
       </Card.Header>
-      <Card.Body className="overflow-auto">
+      <Card.Body className="overflow-auto" ref={bodyRef}>
         <div id="dir_list">
           {props.folderData && (
             <RichTreeView
@@ -335,4 +409,5 @@ Folder.propTypes = {
   onClickHandler: PropTypes.func.isRequired,
   isOpen: PropTypes.bool.isRequired,
   onToggle: PropTypes.func.isRequired,
+  scrollTargetId: PropTypes.string,
 };

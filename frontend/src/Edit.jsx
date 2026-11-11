@@ -1169,6 +1169,7 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                 isOpen={true}
                 onToggle={setIsFolderOpen}
                 onClickHandler={entryClicked}
+                scrollTargetId={directoryTarget}
               />
             </Suspense>
           </SplitLayout.Left>
