@@ -2,14 +2,15 @@
 //!
 //! `log` 크레이트는 로거를 등록하지 않으면 모든 `log::error!`·`log::warn!` 출력을 버린다.
 //! 그러면 `POST /logs/client-error`가 받은 프런트엔드 에러도 pod 로그에 남지 않는다.
-//! 새 의존성 없이 경고 이상만 stderr에 한 줄씩 남긴다. 시각은 `kubectl logs --timestamps`가 붙인다.
+//! 새 의존성 없이 정보 이상만 stderr에 한 줄씩 남긴다. 시각은 `kubectl logs --timestamps`가 붙인다.
 
 use std::io::Write;
 
 use log::{Level, LevelFilter, Log, Metadata, Record, SetLoggerError};
 
-/// 이 수준(포함) 이상의 심각도만 기록한다. 정보·디버그는 양이 많아 남기지 않는다.
-const MAX_LEVEL: Level = Level::Warn;
+/// 이 수준(포함) 이상의 심각도만 기록한다. 삭제·이동 같은 주요 액션을 정보 수준으로 남기므로 정보까지 기록한다.
+/// 디버그는 조회마다 찍혀 양이 많아 남기지 않는다.
+const MAX_LEVEL: Level = Level::Info;
 
 struct StderrLogger;
 
@@ -38,6 +39,6 @@ impl Log for StderrLogger {
 /// 전역 로거로 등록한다. 이미 다른 로거가 있으면 오류를 돌려준다.
 pub fn init() -> Result<(), SetLoggerError> {
     log::set_logger(&LOGGER)?;
-    log::set_max_level(LevelFilter::Warn);
+    log::set_max_level(LevelFilter::Info);
     Ok(())
 }

@@ -583,6 +583,7 @@ impl BookManager {
     /// `apply_category_changes`의 전체 옵션 판. 목적지(`target_category`)는 브라우저가 준 값이라 `allowed_file_paths`와 안전한 이름인지 다시 검증한다.
     pub async fn apply_category_changes_with(&self, items: &[Value], allowed_file_paths: &HashSet<String>, options: ApplyOptions<'_>) -> Result<ApplyResult, String> {
         let content_type = options.content_type.unwrap_or("book");
+        log::info!("# apply_category_changes(items={}, content_type='{content_type}')", items.len());
         let mut results: Vec<AppliedItem> = Vec::new();
         let (mut applied_count, mut failed_count) = (0i64, 0i64);
         let move_hook = self.seams().move_hook;
@@ -670,6 +671,9 @@ impl BookManager {
     /// 분류된 파일을 대상 카테고리로 옮긴다. `opts`로 미리보기·중복 정리·빈 디렉터리 기준을 정한다.
     pub async fn move_classified_file(&self, file_path: &Path, target_category: &str, content_type: &str, opts: MoveOpts) -> Result<MoveOutcome, String> {
         let MoveOpts { dry_run, clean_existing, source_category } = opts;
+        if !dry_run {
+            log::info!("# move_classified_file(file='{}', target_category='{target_category}', content_type='{content_type}')", file_path.display());
+        }
         let source_category = source_category.as_deref();
         let root = self.resolved_root().unwrap_or_else(|_| self.path_prefix.clone());
         let Some(old_rel_path) = relative_to(file_path, &self.path_prefix) else { return Err("잘못된 파일 경로입니다".to_string()) };

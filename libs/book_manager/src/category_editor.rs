@@ -45,7 +45,7 @@ pub struct CategoryDeletion {
 
 impl BookManager {
     pub async fn rename_category(&self, old_category: &str, new_category: &str) -> Result<CategoryRename, String> {
-        log::debug!("# rename_category(old='{old_category}', new='{new_category}')");
+        log::info!("# rename_category(old='{old_category}', new='{new_category}')");
         let fail = |message: String| Err(message);
 
         // 입력 검증
@@ -187,7 +187,7 @@ impl BookManager {
     /// 카테고리의 모든 문서를 일괄 삭제한다. `delete_files`가 거짓이면 ES 문서만 지우고 파일은 남긴다.
     /// 참이면 디렉터리 트리도 지운다(디스크를 먼저 지워서, 실패하면 ES 문서가 남아 다시 시도할 수 있다).
     pub async fn delete_category(&self, category: &str, delete_files: bool) -> Result<CategoryDeletion, String> {
-        log::debug!("# delete_category(category='{category}')");
+        log::info!("# delete_category(category='{category}', delete_files={delete_files})");
         let dir_check = match self.resolve_deletable_category_dir(category, delete_files) {
             Ok(dir) => dir,
             Err(e) => return Err(e),

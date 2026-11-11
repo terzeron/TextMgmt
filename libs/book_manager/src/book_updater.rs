@@ -83,7 +83,7 @@ impl BookManager {
     /// 책의 카테고리·제목·저자·경로를 바꾼다. 파일을 옮기고 ES 문서를 지웠다가 다시 넣으며, 실패하면 되돌린다.
     #[allow(clippy::too_many_arguments)]
     pub async fn update_book_with(&self, book_id: i64, new_category: &str, new_title: &str, new_author: &str, new_path: &Path, new_type: &str, force: bool) -> Result<(), String> {
-        log::debug!(
+        log::info!(
             "# update_book(book_id={book_id}, new_category='{new_category}', new_title='{new_title}', new_author='{new_author}', new_path='{}', new_file_type='{new_type}', force={force})",
             new_path.display()
         );
@@ -184,7 +184,7 @@ impl BookManager {
     }
 
     pub async fn delete_book(&self, book_id: i64) -> Result<BookDeletion, String> {
-        log::debug!("# delete_book(book_id={book_id})");
+        log::info!("# delete_book(book_id={book_id})");
         let doc = match self.find_doc(book_id) {
             Ok(Some(doc)) => doc,
             Ok(None) => return Ok(BookDeletion::Done),
@@ -197,6 +197,7 @@ impl BookManager {
             Ok(book) => book.file_path,
             Err(error) => return Err(error),
         };
+        log::info!("delete_book: book_id={book_id}, file='{}'", file_path.display());
         match self.fs.remove_file(&file_path) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -220,6 +221,7 @@ impl BookManager {
     }
 
     pub async fn index_single_file_with(&self, file_path: &str, clean_existing: bool) -> Result<i64, String> {
+        log::info!("# index_single_file(file_path='{file_path}', clean_existing={clean_existing})");
         let abs_path = match self.resolve_path(&self.path_prefix.join(file_path)) {
             Ok(p) if matches!(self.is_inside_root(&p), Ok(true)) => p,
             _ => return Err("잘못된 경로입니다".to_string()),
@@ -245,6 +247,7 @@ impl BookManager {
 
     /// 파일시스템에서 파일 하나를 지운다.
     pub async fn delete_file(&self, file_path: &str) -> Result<(), String> {
+        log::info!("# delete_file(file_path='{file_path}')");
         let abs_path = match self.resolve_path(&self.path_prefix.join(file_path)) {
             Ok(p) if matches!(self.is_inside_root(&p), Ok(true)) => p,
             _ => return Err("잘못된 경로입니다".to_string()),
