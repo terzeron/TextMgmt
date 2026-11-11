@@ -75,6 +75,8 @@ impl BookManager {
         inserts: Option<&[Value]>,
         order: Option<&[i64]>,
     ) -> Result<PdfEditResult, String> {
+        let counts = [pages.len(), crops.map_or(0, <[Value]>::len), splits.map_or(0, <[Value]>::len), inserts.map_or(0, <[Value]>::len)];
+        log::info!("# delete_pdf_pages(book_id={book_id}, pages={}, crops={}, splits={}, inserts={}, reorder={})", counts[0], counts[1], counts[2], counts[3], order.is_some());
         self.edit_pdf(book_id, pages, crops, splits, inserts, order).await
     }
 

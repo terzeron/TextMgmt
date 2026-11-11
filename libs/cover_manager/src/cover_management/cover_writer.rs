@@ -60,6 +60,7 @@ impl CoverManagement {
     // ---- 저장 ----
 
     pub fn apply(&self, relative: &str, candidate_id: &str, expected_revision: &str) -> Result<CoverSave, CoverError> {
+        log::info!("# apply_cover(file='{relative}', candidate_id='{candidate_id}')");
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let _lock = self.book_lock(&relative, true)?;
@@ -80,6 +81,7 @@ impl CoverManagement {
     }
 
     pub fn apply_url_backup(&self, relative: &str, url: &str, expected_revision: &str, replace_existing: bool, backup: Backup<'_>) -> Result<CoverSave, CoverError> {
+        log::info!("# apply_cover_url(file='{relative}', url='{url}', replace_existing={replace_existing})");
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let _lock = self.book_lock(&relative, true)?;
@@ -120,6 +122,7 @@ impl CoverManagement {
         image_data: Option<&str>,
         backup: Backup<'_>,
     ) -> Result<CoverSave, CoverError> {
+        log::info!("# insert_illustration(file='{relative}', before_idref='{before_idref}', uploaded={})", image_data.is_some_and(|d| !d.is_empty()));
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let decoded = match image_data.filter(|d| !d.is_empty()) {
@@ -137,6 +140,7 @@ impl CoverManagement {
 
     /// 쪽 이미지를 한 번에 크롭·분할·삭제·삽입한다. `inserts`는 `[{before_idref, url | image_data(base64)}]`다.
     pub fn edit_images(&self, relative: &str, expected_revision: &str, edits: epub_cover::EditImages, inserts: &[Value], backup: Backup<'_>) -> Result<CoverSave, CoverError> {
+        log::info!("# edit_images(file='{relative}', crops={}, splits={}, deletes={}, inserts={})", edits.crops.len(), edits.splits.len(), edits.deletes.len(), inserts.len());
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let mut decoded: Vec<(String, Option<Vec<u8>>, String)> = Vec::new();
@@ -170,6 +174,7 @@ impl CoverManagement {
     }
 
     pub fn apply_image_backup(&self, relative: &str, image_data: &str, expected_revision: &str, backup: Backup<'_>) -> Result<CoverSave, CoverError> {
+        log::info!("# apply_cover_image(file='{relative}', bytes_base64={})", image_data.len());
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let data = decode_base64(image_data).map_err(|_| CoverError::new("표지 이미지 데이터를 읽을 수 없습니다"))?;
@@ -195,6 +200,7 @@ impl CoverManagement {
 
     /// 이 도구가 넣은 표지를 EPUB에서 빼고, 저장 때와 같이 캐시를 비운다.
     pub fn remove(&self, relative: &str, expected_revision: &str, backup: Backup<'_>) -> Result<CoverSave, CoverError> {
+        log::info!("# remove_cover(file='{relative}')");
         let path = self.resolve(relative, false)?;
         let relative = self.relative_of(&path);
         let _lock = self.book_lock(&relative, true)?;
