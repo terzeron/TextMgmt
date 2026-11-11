@@ -123,6 +123,13 @@ function setupMockResponses(
   });
 }
 
+// 제안은 마운트 때 자동으로 선택을 복원하지 않는다. 사용자가 그 디렉토리를 직접
+// 골라야 표가 보인다.
+async function selectProposalCategory(category = "1_fiction") {
+  const tree = await screen.findByRole("tree");
+  fireEvent.click(await within(tree).findByText(category));
+}
+
 describe("CategoryAdmin", () => {
   beforeEach(() => {
     mockJsonGetReq.mockReset();
@@ -4428,6 +4435,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
     await waitFor(() => {
       expect(screen.getByText("지울 책")).toBeTruthy();
     });
@@ -4544,6 +4552,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
     await waitFor(() => {
       expect(screen.getByLabelText("1_fiction/d.epub 삭제")).toBeTruthy();
     });
@@ -4573,6 +4582,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     await waitFor(() => {
       expect(screen.getByLabelText("1_fiction/a.epub 추천 1 선택")).toBeTruthy();
@@ -4606,6 +4616,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     // 배너 텍스트가 <strong>과 형제 텍스트 노드로 나뉘어 있어 getByText의 기본
     // 정확 일치로는 못 찾는다 — 정규식으로 부분 일치를 확인한다.
@@ -4637,6 +4648,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     await waitFor(() => {
       expect(
@@ -4658,6 +4670,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     await waitFor(() => {
       expect(screen.getByText("확실한 책")).toBeTruthy();
@@ -4677,6 +4690,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     await waitFor(() => {
       expect(screen.getByTitle("분류 제안")).toBeTruthy();
@@ -4775,6 +4789,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     await waitFor(() => {
       expect(screen.getByText("확실한 책")).toBeTruthy();
@@ -4818,7 +4833,8 @@ describe("CategoryAdmin 분류 제안", () => {
     ).toBeTruthy();
     // 스캔이 도는 동안은 이상 항목 집계 중임을 헤더에서 알린다.
     expect(screen.getByLabelText("이상 항목 집계 중")).toBeTruthy();
-    // 복원된 선택 카테고리의 제안 표와 진행 수도 같이 보인다.
+    // 직접 고른 디렉토리가 제안의 카테고리이면 그 표와 진행 수도 같이 보인다.
+    await selectProposalCategory();
     expect(screen.getByText("확실한 책")).toBeTruthy();
     expect(screen.getByText("분류 제안: 1_fiction")).toBeTruthy();
     expect(screen.getByText(/2 \/ 5/)).toBeTruthy();
@@ -4876,6 +4892,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     await waitFor(() => {
       expect(screen.getByText("확실한 책")).toBeTruthy();
@@ -4901,6 +4918,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     await waitFor(() => {
       expect(screen.getByText("확실한 책")).toBeTruthy();
@@ -4931,6 +4949,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     const button = await screen.findByTitle("분류 제안");
     await waitFor(() => {
@@ -4952,6 +4971,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     const button = await screen.findByTitle("분류 제안");
     await waitFor(() => {
@@ -4972,6 +4992,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     await waitFor(() => {
       expect(screen.getByLabelText("1_fiction/a.epub 추천 1 선택")).toBeTruthy();
@@ -5030,6 +5051,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     await waitFor(() => {
       expect(screen.getByLabelText("1_fiction/a.epub 추천 1 선택")).toBeTruthy();
@@ -5061,6 +5083,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     await waitFor(() => {
       expect(screen.getByText("애매한 책")).toBeTruthy();
@@ -5088,6 +5111,7 @@ describe("CategoryAdmin 분류 제안", () => {
       },
     );
     render(<CategoryAdmin />);
+    await selectProposalCategory();
 
     await waitFor(() => {
       expect(screen.getByText("이미 옮긴 책")).toBeTruthy();
@@ -5122,6 +5146,7 @@ describe("CategoryAdmin 분류 제안", () => {
     };
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
+    await selectProposalCategory();
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /분류 승인/ })).toBeTruthy();
     });
@@ -5271,7 +5296,7 @@ describe("CategoryAdmin 분류 제안", () => {
     expect(mockJsonPostReq).not.toHaveBeenCalled();
   });
 
-  it("마운트 시 상태가 ready면 source_category가 선택된다", async () => {
+  it("마운트 시 ready 제안이 있어도 디렉토리를 고르기 전에는 표가 보이지 않는다", async () => {
     const resultRef = {
       current: {
         status: "ready",
@@ -5284,12 +5309,37 @@ describe("CategoryAdmin 분류 제안", () => {
     mockClassifyProposalGet(resultRef);
     render(<CategoryAdmin />);
 
-    // 카테고리 상세 카드(분류 제안 버튼 포함)는 selectedCategory가 있어야
-    // 보인다 — source_category로 복원됐는지는 이 카드의 노출로 확인한다.
+    // 지난 제안을 불러온 뒤에도 선택은 비어 있고, 제안 표도 카드도 없다.
     await waitFor(() => {
-      expect(screen.getByTitle("분류 제안")).toBeTruthy();
+      expect(
+        mockJsonGetReq.mock.calls.some(
+          ([url]) => url === "/categories/classify-proposal",
+        ),
+      ).toBe(true);
     });
-    expect(screen.queryByText("왼쪽에서 디렉토리를 선택하세요.")).toBeNull();
+    await screen.findByRole("tree");
+    expect(screen.getByText("왼쪽에서 디렉토리를 선택하세요.")).toBeTruthy();
+    expect(screen.queryByText("확실한 책")).toBeNull();
+    expect(screen.queryByText("분류 제안: 1_fiction")).toBeNull();
+    expect(screen.queryByTitle("분류 제안")).toBeNull();
+  });
+
+  it("제안을 만든 디렉토리를 직접 고르면 그 표가 보인다", async () => {
+    const resultRef = {
+      current: {
+        status: "ready",
+        source_category: "1_fiction",
+        total_count: 1,
+        processed_count: 1,
+        items: [PROPOSAL_ITEM_CERTAIN],
+      },
+    };
+    mockClassifyProposalGet(resultRef);
+    render(<CategoryAdmin />);
+    await selectProposalCategory();
+
+    expect(await screen.findByText("확실한 책")).toBeTruthy();
+    expect(screen.getByTitle("분류 제안")).toBeTruthy();
   });
 
   it("분류가 도는 동안 새로 분류된 책이 새로고침 없이 표에 나타난다", async () => {
@@ -5308,6 +5358,7 @@ describe("CategoryAdmin 분류 제안", () => {
       };
       mockClassifyProposalGet(resultRef);
       render(<CategoryAdmin />);
+    await selectProposalCategory();
 
       await waitFor(() => {
         expect(screen.getByText("확실한 책")).toBeTruthy();
@@ -5348,6 +5399,7 @@ describe("CategoryAdmin 분류 제안", () => {
       };
       mockClassifyProposalGet(resultRef);
       render(<CategoryAdmin />);
+    await selectProposalCategory();
 
       await waitFor(() => {
         expect(screen.getByText("확실한 책")).toBeTruthy();
@@ -7900,6 +7952,7 @@ describe("CategoryAdmin 분류 제안 상태 경계", () => {
       ],
     });
     await renderLoaded();
+    await selectProposalCategory();
 
     expect(await screen.findByText("분류 제안: 1_fiction")).toBeTruthy();
     expect(screen.getByText("0 / 0")).toBeTruthy();
@@ -7909,6 +7962,7 @@ describe("CategoryAdmin 분류 제안 상태 경계", () => {
   it("실패 제안에 원인이 없으면 원인을 알 수 없다고 표시한다", async () => {
     mockProposalGet({ status: "failed", source_category: "1_fiction" });
     await renderLoaded();
+    await selectProposalCategory();
 
     expect(await screen.findByText(/원인을 알 수 없습니다\./)).toBeTruthy();
   });
@@ -7920,6 +7974,7 @@ describe("CategoryAdmin 분류 제안 상태 경계", () => {
       total_count: 5,
     });
     await renderLoaded();
+    await selectProposalCategory();
 
     expect(await screen.findByText("0/5")).toBeTruthy();
   });
@@ -7932,7 +7987,6 @@ describe("CategoryAdmin 분류 제안 상태 경계", () => {
       processed_count: 1,
     });
     await renderLoaded();
-    await screen.findByText("1/5");
 
     fireEvent.click(screen.getByText("2_science", { selector: "p" }));
 

@@ -1056,19 +1056,14 @@ export default function CategoryAdmin({
     setProposalPolling(data.status === "running" || data.status === "applying");
   }, []);
 
-  // 마운트 시 지난 제안 상태를 한 번 복원한다. ready였다면 표를 바로 볼 수 있게
-  // 그 제안을 만들었던 카테고리를 선택 상태로 되돌린다.
+  // 마운트 시 지난 제안 상태를 한 번 복원한다. 카테고리는 자동 선택하지 않는다.
+  // 사용자가 그 제안의 카테고리를 직접 고를 때만 표가 보인다(proposalIsForSelection).
   useEffect(() => {
     jsonGetReq(
       apiPrefix + "/categories/classify-proposal",
       null,
       (data) => {
         applyProposalStatus(data);
-        // ready뿐 아니라 도는 중(running/applying)에도 되돌린다. 그래야 페이지를
-        // 떠났다 돌아왔을 때 표와 함께 버튼의 진행 표시도 다시 보인다.
-        if (data?.status && data.status !== "idle" && data.source_category) {
-          setSelectedCategory(data.source_category);
-        }
       },
       () => {},
     );
