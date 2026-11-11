@@ -1406,6 +1406,12 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                     fileType={bookInfo["file_type"]}
                     viewUrl={viewUrl}
                     downloadUrl={downloadUrl}
+                    directoryEditUrl={
+                      bookInfo["category"] && bookInfo["category"] !== "_root"
+                        ? `${basePath}?directory=${encodeURIComponent(bookInfo["category"])}`
+                        : ""
+                    }
+                    role="admin"
                     lineCount={100}
                     pageCount={10}
                     preview={true}

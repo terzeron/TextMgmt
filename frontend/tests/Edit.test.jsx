@@ -148,8 +148,12 @@ vi.mock("../src/BookInfoView", () => ({
 }));
 
 vi.mock("../src/ViewSingle", () => ({
-  default: ({ bookId, viewUrl }) => (
-    <div data-testid="view-single" data-view-url={viewUrl}>
+  default: ({ bookId, viewUrl, directoryEditUrl }) => (
+    <div
+      data-testid="view-single"
+      data-view-url={viewUrl}
+      data-directory-edit-url={directoryEditUrl}
+    >
       ViewSingle:{bookId}
     </div>
   ),
@@ -2099,6 +2103,9 @@ describe("Edit", () => {
     expect(
       document.querySelector('[data-view-url*="&api=%2Fcomics"]'),
     ).toBeTruthy();
+    expect(
+      screen.getByTestId("view-single").getAttribute("data-directory-edit-url"),
+    ).toBe("/comics-edit?directory=1_fiction%2Fsub");
   });
 
   it("이미 펼쳐진 부모 안의 다음 디렉토리로 넘어가도 펼침 목록에 중복을 넣지 않는다", async () => {
