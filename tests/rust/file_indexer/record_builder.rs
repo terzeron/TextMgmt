@@ -119,3 +119,22 @@ fn an_unreadable_html_file_reports_the_read_error() {
 
     assert!(outcome.messages.iter().any(|m| m.starts_with("can't read html file")), "{outcome:?}");
 }
+
+/// `updated_time`은 읽은 시각이 아니라 파일 mtime이다. 최신 목록이 적재 순서가 아닌 파일 변경 순서를 따르게 한다.
+#[test]
+fn updated_time_is_file_mtime_with_and_without_text() {
+    use file_indexer::file_time::{datetime_from_parts, iso_short};
+    use std::time::{Duration, UNIX_EPOCH};
+    let (dir, cfg) = library();
+    let path = dir.path().join("books/1_소설/작가 - 제목.txt");
+    fs::write(&path, "본문\n").unwrap();
+    let mtime = UNIX_EPOCH + Duration::new(1_600_000_000, 123_456_000);
+    fs::File::options().write(true).open(&path).unwrap().set_modified(mtime).unwrap();
+    let expected = iso_short(datetime_from_parts(1_600_000_000, 123_456_000));
+
+    for skip_text in [false, true] {
+        let outcome = read_file(&cfg, &path, None, skip_text, None, &InProcess, &Stat::new());
+        let (_, doc) = outcome.item.unwrap_or_else(|| panic!("문서가 된다(skip_text={skip_text}): {:?}", outcome.messages));
+        assert_eq!(doc["updated_time"], expected, "skip_text={skip_text}");
+    }
+}
