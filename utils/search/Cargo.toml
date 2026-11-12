@@ -1,0 +1,20 @@
+[package]
+name = "search"
+description = "Elasticsearch 도서·만화 색인을 읽기 전용으로 조회한다(호스트 진단용)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[dependencies]
+es_client = { path = "../../libs/es_client" }
+search_manager = { path = "../../libs/search_manager" }
+serde_json = { workspace = true, features = ["preserve_order"] }
+
+[[test]]
+name = "cli_parser"
+path = "../../tests/rust/search/cli_parser.rs"
+
+[[test]]
+name = "integration_search_bin"
+path = "../../tests/rust/search/integration/search_bin.rs"

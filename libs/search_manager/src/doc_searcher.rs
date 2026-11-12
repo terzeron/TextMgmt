@@ -246,7 +246,8 @@ impl ESManager {
         result
     }
 
-    fn keyword_query(keyword: &str) -> Value {
+    /// 웹 키워드 검색의 질의 절. `search` CLI도 같은 결과를 내려고 이 함수를 쓴다.
+    pub fn keyword_query(keyword: &str) -> Value {
         json!({"bool": {"should": [
             {"match": {"title": {"query": keyword, "boost": 10}}},
             {"match": {"author": {"query": keyword, "boost": 5}}},
