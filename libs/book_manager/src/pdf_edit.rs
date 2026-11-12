@@ -152,6 +152,12 @@ impl BookManager {
     }
 }
 
+/// 파일 내용을 바꾸고 디스크에 반영한다. inode는 그대로다.
+fn overwrite(fs: &dyn FsOps, path: &Path, data: &[u8]) -> std::io::Result<()> {
+    fs.write(path, data)?;
+    fs.sync_file(&std::fs::File::open(path)?)
+}
+
 fn io_error(error: std::io::Error) -> String {
     format!("파일 처리 실패: {}", strerror(&error))
 }
@@ -174,20 +180,21 @@ fn edit_file(fs: Arc<dyn FsOps>, path: &Path, trash: &Path, edits: &Edits, fetch
     let selected = edits.apply(&mut pdf, fetcher, max_image_pixels)?;
     flatten_pages(&mut pdf, &selected).map_err(|e| format!("PDF 페이지 삭제 실패: {e}"))?;
     pdf.prune_objects();
+    let mut edited = Vec::new();
+    pdf.save_to(&mut edited).map_err(io_error)?;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let token = unique_token();
-    let edit = path.with_file_name(format!(".{name}.{token}.edit.part"));
+    // 덮어쓰기가 실패하면 되돌릴 편집 전 사본. 백업이 이미 있어도 지금 내용을 따로 잡아 둔다.
+    let original_part = path.with_file_name(format!(".{name}.{token}.orig.part"));
     let backup_part = trash.join(format!(".{name}.{token}.part"));
-    let _parts = Parts(vec![edit.clone(), backup_part.clone()]);
-    let mut output = std::fs::OpenOptions::new().write(true).create_new(true).open(&edit).map_err(io_error)?;
-    pdf.save_to(&mut output).map_err(io_error)?;
-    std::fs::set_permissions(&edit, std::fs::metadata(path).map_err(io_error)?.permissions()).map_err(io_error)?;
-    fs.sync_file(&output).map_err(io_error)?;
+    let mut parts = Parts(vec![original_part.clone(), backup_part.clone()]);
+    std::fs::copy(path, &original_part).map_err(io_error)?;
+    fs.sync_file(&std::fs::File::open(&original_part).map_err(io_error)?).map_err(io_error)?;
     std::fs::create_dir_all(trash).map_err(io_error)?;
     let backup = trash.join(name.as_ref());
     let mut backup_created = false;
     if !backup.try_exists().map_err(io_error)? {
-        std::fs::copy(path, &backup_part).map_err(io_error)?;
+        std::fs::copy(&original_part, &backup_part).map_err(io_error)?;
         let saved = std::fs::File::open(&backup_part).map_err(io_error)?;
         fs.sync_file(&saved).map_err(io_error)?;
         // hard_link은 기존 백업을 덮어쓰지 않고 완성된 파일을 게시한다.
@@ -197,7 +204,17 @@ fn edit_file(fs: Arc<dyn FsOps>, path: &Path, trash: &Path, edits: &Edits, fetch
             Err(e) => return Err(io_error(e)),
         }
     }
-    fs.rename(&edit, path).map_err(io_error)?;
+    // 문서 번호가 inode라서 새 파일로 바꿔치기하지 않고 같은 파일에 덮어쓴다.
+    if let Err(error) = overwrite(fs.as_ref(), path, &edited) {
+        let restored = std::fs::read(&original_part).and_then(|original| overwrite(fs.as_ref(), path, &original));
+        return Err(match restored {
+            Ok(()) => io_error(error),
+            Err(_) => {
+                parts.0.retain(|part| part != &original_part);
+                format!("{} 원본을 되돌리지 못했습니다. 편집 전 내용은 {} 에 있습니다", io_error(error), original_part.display())
+            }
+        });
+    }
     Ok(PdfEditResult {
         remaining_pages: selected.len(),
         cropped_pages: edits.crops.len(),
