@@ -6,7 +6,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::file_time::{StatResult, iso_short, path_created_time_with_source};
+use crate::file_time::{StatResult, datetime_from_parts, iso_short, path_created_time_with_source};
 use common::zip_reader::open_zip;
 use doc_reader::epub::{EpubPath, read_epub_publisher, read_from_epub};
 use doc_reader::pdf::{PDF_STAGE_TIMEOUT, StageRunner, fast_page_count, read_from_pdf};
@@ -172,6 +172,8 @@ pub fn read_file_with_hooks(
     };
     let inode = st.ino() as i64;
     let file_size = st.len();
+    // 최신 목록은 updated_time 순이다. 적재 시각을 쓰면 새 inode로 다시 쓴 옛 파일이 최신으로 올라오므로 파일 mtime을 쓴다.
+    let updated_time = iso_short(datetime_from_parts(st.mtime(), st.mtime_nsec() as u32));
     let (created, created_source) = match path_created_time_with_source(path, Some(&StatResult::from_metadata(st))) {
         Ok(v) => v,
         Err(e) => {
@@ -210,7 +212,7 @@ pub fn read_file_with_hooks(
         let doc = json!({
             "category": category, "title": title, "author": author, "file_path": relative_path, "file_type": file_type,
             "file_size": file_size, "line_count": 0, "page_count": page_count, "isbn": "", "summary": "",
-            "created_time": iso_short(created), "created_time_source": created_source, "updated_time": now_iso(),
+            "created_time": iso_short(created), "created_time_source": created_source, "updated_time": updated_time,
         });
         out.item = Some((inode, doc));
         return out;
@@ -332,7 +334,7 @@ pub fn read_file_with_hooks(
         ("summary", json!(summary)),
         ("created_time", json!(iso_short(created))),
         ("created_time_source", json!(created_source)),
-        ("updated_time", json!(now_iso())),
+        ("updated_time", json!(updated_time)),
     ] {
         doc.insert(k.to_owned(), v);
     }
