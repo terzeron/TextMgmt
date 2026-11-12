@@ -77,19 +77,88 @@ async fn invalid_edits_leave_file_backup_and_index_untouched() {
     }
 }
 
+/// 문서 번호가 inode라서 편집 뒤에도 같은 파일(inode)이어야 한다.
 #[tokio::test]
-async fn replace_failure_keeps_original_and_backup_and_cleans_parts() {
+async fn edit_keeps_inode_so_document_id_still_matches_file() {
+    use std::os::unix::fs::MetadataExt;
+    let e = env();
+    let before = fs::metadata(&e.pdf).unwrap().ino();
+    assert_eq!(e.edit(&[2], None).await.1, None);
+    assert_eq!(fs::metadata(&e.pdf).unwrap().ino(), before);
+    assert_eq!(widths(&e.pdf), [100, 102, 103, 104]);
+    e.assert_no_parts();
+}
+
+/// 덮어쓰기 도중 실패해 원본이 일부만 남은 상황을 흉내 낸다. `fails`번째 쓰기까지 실패한다.
+fn fail_writes_to_pdf(e: &crate::common::pdf_edit_env::Env, fails: usize) {
+    let path = e.pdf.clone();
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    e.fs.set_write(move |p| {
+        if p != path || count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= fails {
+            return None;
+        }
+        fs::write(p, b"partial").unwrap();
+        Some(std::io::Error::other("replace failed"))
+    });
+}
+
+#[tokio::test]
+async fn replace_failure_restores_original_and_keeps_backup_and_cleans_parts() {
+    use std::os::unix::fs::MetadataExt;
     let e = env();
     let original = fs::read(&e.pdf).unwrap();
-    let path = e.pdf.clone();
-    e.fs.set_rename(move |_, to| (to == path).then(|| std::io::Error::other("replace failed")));
+    let inode = fs::metadata(&e.pdf).unwrap().ino();
+    fail_writes_to_pdf(&e, 1);
     let (result, error) = e.edit(&[2], None).await;
     assert_eq!(result, None);
     assert!(error.unwrap().contains("replace failed"));
     assert_eq!(fs::read(&e.pdf).unwrap(), original);
+    assert_eq!(fs::metadata(&e.pdf).unwrap().ino(), inode);
     assert_eq!(fs::read(e.backup()).unwrap(), original);
     e.es.with(|s| assert!(s.deleted.is_empty()));
     e.assert_no_parts();
+}
+
+#[tokio::test]
+async fn replace_failure_after_earlier_backup_restores_current_content() {
+    let e = env();
+    let first = fs::read(&e.pdf).unwrap();
+    assert_eq!(e.edit(&[2], None).await.1, None);
+    let current = fs::read(&e.pdf).unwrap();
+    fail_writes_to_pdf(&e, 1);
+    let (_, error) = e.edit(&[2], None).await;
+    assert!(error.unwrap().contains("replace failed"));
+    assert_eq!(fs::read(&e.pdf).unwrap(), current);
+    assert_eq!(fs::read(e.backup()).unwrap(), first);
+    e.assert_no_parts();
+}
+
+#[tokio::test]
+async fn sync_failure_restores_original() {
+    let e = env();
+    let original = fs::read(&e.pdf).unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // 편집 전 사본(1번째)과 휴지통 백업(2번째) sync는 통과하고 덮어쓴 원본 sync(3번째)만 실패한다.
+    e.fs.set_sync_file(move |_| (calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2).then(|| std::io::Error::other("sync failed")));
+    let (_, error) = e.edit(&[2], None).await;
+    assert!(error.unwrap().contains("sync failed"));
+    assert_eq!(fs::read(&e.pdf).unwrap(), original);
+    e.assert_no_parts();
+}
+
+#[tokio::test]
+async fn restore_failure_keeps_safety_copy_and_names_it() {
+    let e = env();
+    assert_eq!(e.edit(&[2], None).await.1, None);
+    let current = fs::read(&e.pdf).unwrap();
+    fail_writes_to_pdf(&e, 2);
+    let (_, error) = e.edit(&[2], None).await;
+    let error = error.unwrap();
+    assert!(error.contains("replace failed"), "{error}");
+    let kept: Vec<_> = fs::read_dir(e.pdf.parent().unwrap()).unwrap().flatten().map(|d| d.path()).filter(|p| p.to_string_lossy().ends_with(".part")).collect();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert!(error.contains(&*kept[0].to_string_lossy()), "{error}");
+    assert_eq!(fs::read(&kept[0]).unwrap(), current);
 }
 
 #[tokio::test]

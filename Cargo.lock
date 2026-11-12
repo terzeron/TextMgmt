@@ -3333,6 +3333,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "search"
+version = "0.1.0"
+dependencies = [
+ "es_client",
+ "search_manager",
+ "serde_json",
+]
+
+[[package]]
 name = "search_manager"
 version = "0.1.0"
 dependencies = [
