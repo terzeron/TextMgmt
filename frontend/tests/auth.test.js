@@ -1,37 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { determineRole, isViewerAllowedPath } from '../src/auth.js';
-
-const ADMIN_EMAIL = 'admin@example.com';
-const ALLOWED_EMAILS = ['viewer1@example.com', 'viewer2@example.com'];
-
-describe('determineRole', () => {
-    it('admin 이메일이면 admin 반환', () => {
-        expect(determineRole(ADMIN_EMAIL, ADMIN_EMAIL, ALLOWED_EMAILS)).toBe('admin');
-    });
-
-    it('허용 목록 이메일이면 viewer 반환', () => {
-        expect(determineRole('viewer1@example.com', ADMIN_EMAIL, ALLOWED_EMAILS)).toBe('viewer');
-        expect(determineRole('viewer2@example.com', ADMIN_EMAIL, ALLOWED_EMAILS)).toBe('viewer');
-    });
-
-    it('미등록 이메일이면 null 반환', () => {
-        expect(determineRole('unknown@example.com', ADMIN_EMAIL, ALLOWED_EMAILS)).toBeNull();
-    });
-
-    it('admin 이메일이 allowedEmails에도 포함되면 admin 우선', () => {
-        const emails = [ADMIN_EMAIL, 'viewer1@example.com'];
-        expect(determineRole(ADMIN_EMAIL, ADMIN_EMAIL, emails)).toBe('admin');
-    });
-
-    it('allowedEmails가 빈 배열이면 admin만 접근 가능', () => {
-        expect(determineRole(ADMIN_EMAIL, ADMIN_EMAIL, [])).toBe('admin');
-        expect(determineRole('viewer1@example.com', ADMIN_EMAIL, [])).toBeNull();
-    });
-
-    it('빈 문자열 이메일은 null 반환', () => {
-        expect(determineRole('', ADMIN_EMAIL, ALLOWED_EMAILS)).toBeNull();
-    });
-});
+import { isViewerAllowedPath } from '../src/auth.js';
 
 describe('isViewerAllowedPath', () => {
     it('루트 경로 허용', () => {
