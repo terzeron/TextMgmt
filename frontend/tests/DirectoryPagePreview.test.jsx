@@ -12,6 +12,7 @@ const { mockRawJsonGetReq, mockGetDocument } = vi.hoisted(() => ({
 vi.mock("../src/Common", () => ({
   getApiUrlPrefix: () => "http://localhost:8000",
   rawJsonGetReq: mockRawJsonGetReq,
+  authFetch: (url, options) => fetch(url, options),
 }));
 
 vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({

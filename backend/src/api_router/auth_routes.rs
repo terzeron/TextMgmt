@@ -19,7 +19,7 @@ use super::error_responses::{ApiError, ApiResult, json_response};
 use super::request_extractors::ClientInfo;
 use super::request_extractors::{ApiJson, ApiQuery, RequireAdmin, RequireAuth};
 use super::route_registry::Routes;
-use auth_manager::auth_service::{ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RequestParts, observation_hash};
+use auth_manager::auth_service::{ACCESS_COOKIE_NAME, ACCESS_TOKEN_EXPIRATION_SECONDS, REFRESH_COOKIE_NAME, REFRESH_TOKEN_EXPIRATION_SECONDS, RequestParts, observation_hash};
 use auth_manager::google_token_verifier::GOOGLE_ISSUERS;
 use auth_manager::refresh_token_store::Rotation;
 
@@ -81,6 +81,11 @@ fn log_refresh_rotation_rejected(deps: &AppDeps, client: &ClientInfo, status: &s
     );
 }
 
+/// 세션이 사라진 원인을 나중에 맞춰 보려고 요청 단서를 hash로 붙인다.
+fn client_hashes(client: &ClientInfo) -> String {
+    format!("request_user_agent_hash={} request_ip_prefix_hash={}", observation_hash(&client.user_agent), observation_hash(&client.ip_prefix))
+}
+
 /// 접근·갱신 토큰을 만들고 갱신 토큰을 세션 저장소에 기록한다.
 fn issue_auth_tokens(deps: &AppDeps, email: &str, role: &str, name: &str, picture: &str, client: &ClientInfo) -> ApiResult<(String, String)> {
     let issued_at = deps.clock().now() as i64;
@@ -93,6 +98,7 @@ fn issue_auth_tokens(deps: &AppDeps, email: &str, role: &str, name: &str, pictur
     store
         .store_issued(&refresh_token_id, &family_id, email, issued_at, issued_at + REFRESH_TOKEN_EXPIRATION_SECONDS, Some(&client.ip), Some(&client.user_agent))
         .map_err(|e| internal("store_issued", e))?;
+    log::info!("Session issued event=session-issued email_hash={} family_hash={} {}", observation_hash(email), observation_hash(&family_id), client_hashes(client));
     Ok((access, refresh))
 }
 
@@ -152,12 +158,16 @@ async fn verify_google_token(State(deps): State<Arc<AppDeps>>, client: ClientInf
 
 async fn refresh_access_token(State(deps): State<Arc<AppDeps>>, headers: HeaderMap, client: ClientInfo) -> ApiResult<Response> {
     let Some(refresh_token) = headers.cookie(REFRESH_COOKIE_NAME).filter(|t| !t.is_empty()) else {
+        // access 쿠키만 남았는지 보면 쿠키가 만료됐는지 통째로 지워졌는지 가를 수 있다.
+        let access_present = headers.cookie(ACCESS_COOKIE_NAME).is_some_and(|t| !t.is_empty());
+        log::warn!("Refresh rejected event=refresh-missing-cookie access_cookie_present={access_present} {}", client_hashes(&client));
         return Err(ApiError::http(400, "Refresh token is required"));
     };
-    let payload = deps.tokens().decode_refresh_token(&refresh_token)?;
+    let payload = deps.tokens().decode_refresh_token(&refresh_token).inspect_err(|e| log::warn!("Refresh rejected event=refresh-invalid-token reason={:?} {}", e.detail, client_hashes(&client)))?;
 
     let email = payload.email.as_str();
     let Some(role) = deps.role_resolver().determine_role(email) else {
+        log::warn!("Refresh rejected event=refresh-access-denied email_hash={} {}", observation_hash(email), client_hashes(&client));
         return Err(ApiError::http(403, "Access denied"));
     };
 
@@ -184,6 +194,7 @@ async fn refresh_access_token(State(deps): State<Arc<AppDeps>>, headers: HeaderM
 
     let access = deps.tokens().create_access_token(email, &role, name, picture, family_id);
     let new_refresh = deps.tokens().create_refresh_token(email, &role, name, picture, family_id, &new_token_id);
+    log::info!("Refresh rotated event=refresh-rotated email_hash={} family_hash={} {}", observation_hash(email), observation_hash(family_id), client_hashes(&client));
     let mut response = json_response(200, &json!({"status": "success", "expires_in": ACCESS_TOKEN_EXPIRATION_SECONDS}));
     set_auth_cookies(&mut response, &access, new_refresh.as_str());
     Ok(response)
@@ -194,7 +205,7 @@ async fn auth_me(State(deps): State<Arc<AppDeps>>, RequireAuth(payload): Require
     Json(json!({"status": "success", "result": {"email": payload.email, "role": payload.role, "name": payload.name, "picture": payload.picture, "expires_in": remaining}}))
 }
 
-async fn logout(State(deps): State<Arc<AppDeps>>, headers: HeaderMap) -> ApiResult<Response> {
+async fn logout(State(deps): State<Arc<AppDeps>>, headers: HeaderMap, client: ClientInfo) -> ApiResult<Response> {
     let mut families = Vec::new();
     if let Some(refresh_token) = headers.cookie(REFRESH_COOKIE_NAME).filter(|t| !t.is_empty()) {
         match deps.tokens().decode_refresh_token(&refresh_token) {
@@ -211,6 +222,7 @@ async fn logout(State(deps): State<Arc<AppDeps>>, headers: HeaderMap) -> ApiResu
             families.push(family);
         }
     }
+    log::info!("Logout event=logout family_count={} {}", families.len(), client_hashes(&client));
     if !families.is_empty() {
         let store = deps.refresh_store().map_err(|e| internal("refresh token store", e))?;
         for family in families {

@@ -15,6 +15,9 @@ import {
   tryRefreshToken,
   startProactiveRefresh,
   stopProactiveRefresh,
+  authFetch,
+  handleSessionExpired,
+  SESSION_EXPIRED_KEY,
 } from "../src/Common";
 
 describe("Common Utilities", () => {
@@ -372,7 +375,7 @@ describe("Common Utilities", () => {
     });
   });
 
-  it("apiReq handles 401 with retry not ok (reload)", async () => {
+  it("apiReq rejects without reload when retry fails for non-auth reason", async () => {
     // 1st fetch returns 401
     fetch.mockResolvedValueOnce({ ok: false, status: 401 });
     // refresh succeeds
@@ -391,9 +394,11 @@ describe("Common Utilities", () => {
     const reject = vi.fn();
     jsonGetReq("/test-retry-fail", null, null, reject);
 
+    // 갱신은 됐으므로 인증과 무관한 실패로 보고 새로고침하지 않는다.
     await vi.waitFor(() => {
-      expect(window.location.reload).toHaveBeenCalled();
+      expect(reject).toHaveBeenCalled();
     });
+    expect(window.location.reload).not.toHaveBeenCalled();
   });
 
   it("tryRefreshToken handles network error (catch branch)", async () => {
@@ -434,7 +439,7 @@ describe("Common Utilities", () => {
     });
   });
 
-  it("rawJsonGetReq handles 401 with retry not ok (reload)", async () => {
+  it("rawJsonGetReq rejects without reload when retry fails for non-auth reason", async () => {
     // 1st fetch returns 401
     fetch.mockResolvedValueOnce({ ok: false, status: 401 });
     // refresh succeeds
@@ -454,8 +459,9 @@ describe("Common Utilities", () => {
     rawJsonGetReq("/test-raw-retry-fail", null, reject);
 
     await vi.waitFor(() => {
-      expect(window.location.reload).toHaveBeenCalled();
+      expect(reject).toHaveBeenCalled();
     });
+    expect(window.location.reload).not.toHaveBeenCalled();
   });
 
   it("rawJsonGetReq handles 401 with refresh failure (reload)", async () => {
@@ -709,5 +715,93 @@ describe("Common Utilities", () => {
     await vi.waitFor(() => {
       expect(reject).toHaveBeenCalledWith("Unknown error");
     });
+  });
+});
+
+describe("세션 만료 처리", () => {
+  let storage;
+  beforeEach(() => {
+    storage = new Map();
+    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("window", {
+      location: { reload: vi.fn(), href: "https://tm.example/x" },
+      __ENV__: { VITE_API_URL_PREFIX: "/api" },
+      sessionStorage: {
+        setItem: (k, v) => storage.set(k, v),
+        getItem: (k) => storage.get(k) ?? null,
+      },
+    });
+    vi.stubGlobal("navigator", { sendBeacon: vi.fn(() => true) });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("안내 표시를 남기고 원인을 보고한 뒤 새로고침한다", () => {
+    handleSessionExpired("test-source");
+    expect(storage.get(SESSION_EXPIRED_KEY)).toBe("test-source");
+    expect(navigator.sendBeacon).toHaveBeenCalledWith(
+      "/api/logs/client-error",
+      expect.any(Blob),
+    );
+    expect(window.location.reload).toHaveBeenCalled();
+  });
+
+  it("reload=false 면 표시와 보고만 하고 새로고침하지 않는다", () => {
+    handleSessionExpired("keep-edits", { reload: false });
+    expect(storage.get(SESSION_EXPIRED_KEY)).toBe("keep-edits");
+    expect(window.location.reload).not.toHaveBeenCalled();
+  });
+
+  it("sessionStorage 를 못 써도 새로고침한다", () => {
+    window.sessionStorage = {
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    };
+    handleSessionExpired("no-storage");
+    expect(window.location.reload).toHaveBeenCalled();
+  });
+
+  it("authFetch 는 401 이 아니면 그대로 돌려준다", async () => {
+    const ok = { ok: true, status: 200 };
+    fetch.mockResolvedValueOnce(ok);
+    expect(await authFetch("/a", {}, "src")).toBe(ok);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("authFetch 는 갱신 후에도 401 이면 만료 처리한다", async () => {
+    const denied = { ok: false, status: 401 };
+    fetch
+      .mockResolvedValueOnce(denied)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "success" }),
+      })
+      .mockResolvedValueOnce(denied);
+    expect(await authFetch("/a", {}, "retry-401")).toBe(denied);
+    expect(storage.get(SESSION_EXPIRED_KEY)).toBe("retry-401");
+    expect(window.location.reload).toHaveBeenCalled();
+  });
+
+  it("authFetch 는 갱신 실패 시 expiry 옵션을 넘긴다", async () => {
+    fetch
+      .mockResolvedValueOnce({ ok: false, status: 401 })
+      .mockResolvedValueOnce({ ok: false, status: 400 });
+    await authFetch("/a", {}, "save", { reload: false });
+    expect(storage.get(SESSION_EXPIRED_KEY)).toBe("save");
+    expect(window.location.reload).not.toHaveBeenCalled();
+  });
+
+  it("선제 갱신이 실패하면 만료 처리한다", async () => {
+    vi.useFakeTimers();
+    fetch.mockResolvedValueOnce({ ok: false, status: 400 });
+    startProactiveRefresh(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(storage.get(SESSION_EXPIRED_KEY)).toBe("proactive-refresh");
+    expect(window.location.reload).toHaveBeenCalled();
   });
 });

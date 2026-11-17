@@ -161,6 +161,7 @@ vi.mock("epubjs", () => ({
 
 vi.mock("../src/Common", () => ({
   getApiUrlPrefix: () => "http://localhost:8000",
+  authFetch: (url, options) => fetch(url, options),
 }));
 vi.mock("../src/ViewEPUB.css", () => ({}));
 vi.mock("../src/EpubCoverModal", () => ({

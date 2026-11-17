@@ -302,8 +302,9 @@ describe("refreshOnVisible 디바운스", () => {
 
     expect(await tab.refreshOnVisible()).toBe(true);
     // 디바운스 창(3s) 안의 후속 호출은 요청을 만들지 않는다
-    expect(await tab.refreshOnVisible()).toBe(false);
-    expect(await tab.refreshOnVisible()).toBe(false);
+    // 디바운스로 건너뛴 호출은 실패(false)와 구분되도록 null 이다.
+    expect(await tab.refreshOnVisible()).toBeNull();
+    expect(await tab.refreshOnVisible()).toBeNull();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     tab.stopProactiveRefresh();

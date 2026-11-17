@@ -24,7 +24,7 @@ import "./viewerEditActions.css";
 import { MarkCropBox } from "./ImageCropBox";
 import { newMark, withBoxRect } from "./cropRect";
 
-import { getApiUrlPrefix } from "./Common";
+import { authFetch, getApiUrlPrefix } from "./Common";
 import {
   DISPLAY_SCALE,
   computeRenderScale,
@@ -222,7 +222,7 @@ export default function ViewPDF({
             : { page, image_data: await blobToBase64(entry.blob) },
         ),
       );
-      const response = await fetch(
+      const response = await authFetch(
         getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}/delete`,
         {
           method: "POST",
@@ -236,6 +236,9 @@ export default function ViewPDF({
             ...(pageOrder && { order: pageOrder }),
           }),
         },
+        // 저장하지 않은 편집이 날아가지 않도록 만료돼도 새로고침하지 않는다.
+        "ViewPDF.save",
+        { reload: false },
       );
       if (!response.ok) throw new Error(await describeHttpError(response));
       const body = await response.json();
@@ -337,7 +340,11 @@ export default function ViewPDF({
           getApiUrlPrefix() +
           apiPrefix +
           `/pdf-pages/${bookId}?start=${start}&end=${end}`;
-        const response = await fetch(url, { credentials: "include" });
+        const response = await authFetch(
+          url,
+          { credentials: "include" },
+          "ViewPDF",
+        );
         if (!response.ok) throw new Error(await describeHttpError(response));
 
         const buffer = await response.arrayBuffer();
@@ -813,7 +820,11 @@ export default function ViewPDF({
         setDownloadProgress(10);
         const firstUrl =
           getApiUrlPrefix() + apiPrefix + `/pdf-pages/${bookId}?start=1&end=1`;
-        const firstResponse = await fetch(firstUrl, { credentials: "include" });
+        const firstResponse = await authFetch(
+          firstUrl,
+          { credentials: "include" },
+          "ViewPDF",
+        );
         if (!firstResponse.ok)
           throw new Error(await describeHttpError(firstResponse));
 
