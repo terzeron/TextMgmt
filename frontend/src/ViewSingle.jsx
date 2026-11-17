@@ -26,7 +26,7 @@ export default function ViewSingle(props) {
   const { entryId, fileType: paramFileType } = useParams();
   const [searchParams] = useSearchParams();
   const paramFilePath = searchParams.get("path") || "";
-  const paramApiPrefix = searchParams.get("api") || "";
+  const paramApiPrefix = searchParams.get("api") === "/comics" ? "/comics" : "";
   const paramCategory = searchParams.get("category") || "";
   const standalone = Boolean(entryId && paramFileType);
   const [bookId, setBookId] = useState(0);

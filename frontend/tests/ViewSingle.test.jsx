@@ -137,6 +137,30 @@ describe("ViewSingle", () => {
 
   // ── standalone 모드 ──
 
+  it.each([
+    ["", ""],
+    ["/comics", "/comics"],
+    ["https://example.invalid", ""],
+    ["//example.invalid", ""],
+    ["/comics/../other", ""],
+    ["/comics/", ""],
+  ])("standalone api=%s는 허용한 prefix %s만 뷰어와 API에 전달한다", async (api, expected) => {
+    mockUseParams.mockReturnValue({ entryId: "10", fileType: "jpg" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams({ path: "/test.jpg", category: "fiction", api }),
+    ]);
+    Common.jsonGetReq.mockImplementation((_url, _headers, callback) => callback([]));
+
+    render(<ViewSingle />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("view-image").textContent).toBe(`IMG:10:ap=${expected}`);
+    });
+    expect(Common.jsonGetReq).toHaveBeenCalledWith(
+      `${expected}/categories/fiction`, null, expect.any(Function),
+    );
+  });
+
   it("standalone 모드에서 body 스타일을 잠근다", async () => {
     mockUseParams.mockReturnValue({ entryId: "10", fileType: "pdf" });
     mockUseSearchParams.mockReturnValue([

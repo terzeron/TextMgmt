@@ -35,11 +35,11 @@ jobs:
   rust-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.91.1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@dd87c1884d4b74c592b9ad3151acd86a8a80c6f2 # 1.91.1
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       # MuPDF(pdf_engine)를 빌드하는 시스템 라이브러리. 목록은 backend/Dockerfile 빌드 단계와 docs/pdf-engine.md를 따른다.
       - name: Install native build packages
         run: |
@@ -52,5 +52,5 @@ jobs:
   container-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: docker build --file backend/Dockerfile --tag textmgmt-backend:ci .
