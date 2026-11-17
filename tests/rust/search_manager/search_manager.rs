@@ -1694,7 +1694,9 @@ fn manager_errors_render_and_from_env_requires_the_es_settings() {
 #[test]
 fn list_ids_and_paths_pages_through_scroll_and_clears_it() {
     let es = new_es();
-    es.on("search", |_| Ok(json!({"_scroll_id": "s1", "hits": {"hits": [{"_id": "1", "_source": {"file_path": "A/a.epub"}}, {"_id": "x", "_source": {"file_path": "A/b.epub"}}, {"_id": "3", "_source": {}}]}})));
+    es.on("search", |_| {
+        Ok(json!({"_scroll_id": "s1", "hits": {"hits": [{"_id": "1", "_source": {"file_path": "A/a.epub"}}, {"_id": "x", "_source": {"file_path": "A/b.epub"}}, {"_id": "3", "_source": {}}]}}))
+    });
     let pages = Arc::new(AtomicUsize::new(0));
     let counter = pages.clone();
     es.on("scroll", move |_| {

@@ -1,6 +1,6 @@
 //! 특징 해시: ES 문서 필드를 고정 크기 희소 벡터로 바꾼다.
 
-use classifier::feature_hasher::{fnv1a64, hash_features, BookFields, SUMMARY_MAX_CHARS};
+use classifier::feature_hasher::{BookFields, SUMMARY_MAX_CHARS, fnv1a64, hash_features};
 use serde_json::json;
 
 fn fields(summary: &str, title: &str, author: &str) -> BookFields {

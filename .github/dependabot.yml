@@ -1,7 +1,10 @@
 version: 2
 updates:
-  - package-ecosystem: "uv"
+  # workflow의 Action은 commit SHA로 고정한다. 이 항목이 없으면 고정한 SHA가 갱신되지 않는다.
+  - package-ecosystem: "github-actions"
     directory: "/"
+    cooldown:
+      default-days: 7
     schedule:
       interval: "weekly"
     target-branch: "develop"
@@ -9,6 +12,8 @@ updates:
 
   - package-ecosystem: "npm"
     directory: "/frontend"
+    cooldown:
+      default-days: 7
     schedule:
       interval: "weekly"
     target-branch: "develop"

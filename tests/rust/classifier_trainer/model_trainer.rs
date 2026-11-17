@@ -1,7 +1,7 @@
 //! softmax 학습: 분리 가능한 데이터 학습, 재현성, L2 감쇠.
 
 use classifier::feature_hasher::SparseVec;
-use classifier_trainer::model_trainer::{train, TrainConfig};
+use classifier_trainer::model_trainer::{TrainConfig, train};
 
 const BITS: u32 = 6;
 

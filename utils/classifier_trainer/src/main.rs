@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use classifier::feature_hasher::{hash_features, BookFields, SparseVec};
+use classifier::feature_hasher::{BookFields, SparseVec, hash_features};
 use classifier::softmax_model::{ModelHeader, SoftmaxModel};
 use classifier_trainer::holdout_evaluator::{evaluate, format_report};
-use classifier_trainer::model_trainer::{train_with_progress, TrainConfig};
+use classifier_trainer::model_trainer::{TrainConfig, train_with_progress};
 use classifier_trainer::sample_drawer::{draw, group};
 use search_manager::ESManager;
 

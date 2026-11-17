@@ -22,6 +22,9 @@ spec:
       initContainers:
         - name: wait-for-es
           image: busybox:1.37
+          resources:
+            requests: { cpu: "10m", memory: "8Mi" }
+            limits: { cpu: "100m", memory: "32Mi" }
           # nc 한 줄만 실행하므로 비루트·읽기전용 rootfs로 충분하다.
           securityContext:
             runAsNonRoot: true

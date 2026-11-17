@@ -4,8 +4,8 @@
 //! L2는 epoch마다 전체 가중치를 한 번 줄이는 방식으로 근사한다.
 
 use classifier::feature_hasher::SparseVec;
-use rand::seq::SliceRandom;
 use rand::SeedableRng;
+use rand::seq::SliceRandom;
 use rand_chacha::ChaCha8Rng;
 
 #[derive(Debug, Clone, PartialEq)]

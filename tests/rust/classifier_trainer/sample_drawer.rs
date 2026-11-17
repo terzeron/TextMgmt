@@ -1,6 +1,6 @@
 //! 표본 추출: 카테고리 판정, 모집단 묶기, 균등 비복원 추출, 홀드아웃 분리.
 
-use classifier_trainer::sample_drawer::{category_of, draw, group, Population};
+use classifier_trainer::sample_drawer::{Population, category_of, draw, group};
 
 fn rows(category: &str, ids: std::ops::Range<i64>) -> Vec<(i64, String)> {
     ids.map(|id| (id, format!("{category}/{id}.epub"))).collect()

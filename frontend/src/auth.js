@@ -1,9 +1,3 @@
-export function determineRole(email, adminEmail, allowedEmails) {
-    if (email === adminEmail) return 'admin';
-    if (allowedEmails.includes(email)) return 'viewer';
-    return null;
-}
-
 export function isViewerAllowedPath(pathname) {
     return pathname === '/'
         || pathname === '/book-view' || pathname.startsWith('/book-view/')
