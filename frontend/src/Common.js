@@ -1,5 +1,6 @@
 import { str } from "crc-32";
 import { DateTime } from "luxon";
+import { reportClientError } from "./clientLogger";
 
 const GOLDEN_RATIO_CONJUGATE = 0.6180339887498949; // 1/φ
 
@@ -39,8 +40,37 @@ function getAuthHeaders(includeContentType = false) {
   return headers;
 }
 
-function clearAuthState() {
-  // HttpOnly 쿠키는 JS에서 직접 제거 불가
+// 로그인 화면이 "세션 만료" 안내를 띄울지 판단하는 표시.
+export const SESSION_EXPIRED_KEY = "tm_session_expired";
+
+// 세션을 되살릴 수 없을 때 모든 경로가 이 함수를 거친다. 원인을 서버 로그에 남기고
+// 안내 표시를 저장한 뒤 새로고침해서 재로그인 화면으로 보낸다.
+// 저장하지 않은 편집을 들고 있는 경로는 reload=false 로 새로고침을 막는다.
+export function handleSessionExpired(source, { reload = true } = {}) {
+  stopProactiveRefresh();
+  try {
+    window.sessionStorage.setItem(SESSION_EXPIRED_KEY, source);
+  } catch {
+    // 저장소를 못 쓰면 안내 문구만 빠진다.
+  }
+  reportClientError({
+    errorType: "CUSTOM_ERROR",
+    message: `[AUTH_SESSION_EXPIRED] source=${source} reload=${reload}`,
+  });
+  if (reload) window.location.reload();
+}
+
+// 공통 요청 함수를 거치지 않는 fetch 도 같은 갱신·만료 처리를 받게 한다.
+// 갱신 후에도 401이면 만료 처리하고 그 응답을 그대로 돌려준다.
+export async function authFetch(url, options, source, expiry) {
+  let response = await fetch(url, options);
+  if (response.status !== 401) return response;
+  if (await tryRefreshToken()) {
+    response = await fetch(url, options);
+    if (response.status !== 401) return response;
+  }
+  handleSessionExpired(source, expiry);
+  return response;
 }
 
 let refreshPromise = null;
@@ -77,7 +107,7 @@ function _scheduleProactiveRefresh(expiresInSec) {
   const delayMs = Math.max(expiresInSec * 1000 - REFRESH_BUFFER_MS, 10_000);
   _refreshTimerId = setTimeout(async () => {
     _refreshTimerId = null;
-    await tryRefreshToken();
+    if (!(await tryRefreshToken())) handleSessionExpired("proactive-refresh");
   }, delayMs);
 }
 
@@ -276,11 +306,11 @@ export async function tryRefreshToken() {
 let _lastVisibilityRefreshAt = 0;
 
 // 탭이 다시 보일 때 호출한다. 여러 탭이 한꺼번에 활성화되어도 짧은 창 안에서는
-// 한 번만 refresh 를 시도한다.
+// 한 번만 refresh 를 시도한다. 디바운스로 건너뛰면 null 이라서 실패(false)와 구분된다.
 export function refreshOnVisible() {
   const now = Date.now();
   if (now - _lastVisibilityRefreshAt < VISIBILITY_REFRESH_DEBOUNCE_MS) {
-    return Promise.resolve(false);
+    return Promise.resolve(null);
   }
   _lastVisibilityRefreshAt = now;
   return tryRefreshToken();
@@ -363,28 +393,10 @@ function processData(data, type, resolve, reject) {
 
 const apiReq = (url, method, payload, type, resolve, reject, final) => {
   const fullUrl = getApiUrlPrefix() + url;
-  fetch(fullUrl, buildFetchOptions(method, payload))
+  authFetch(fullUrl, buildFetchOptions(method, payload), "apiReq")
     .then(handleFetchErrors)
-    .then(async (response) => {
-      if (response.status === 401) {
-        const refreshed = await tryRefreshToken();
-        if (refreshed) {
-          // 새 토큰으로 재시도
-          const retry = await fetch(
-            fullUrl,
-            buildFetchOptions(method, payload),
-          );
-          if (!retry.ok) {
-            clearAuthState();
-            window.location.reload();
-            throw Error("Authentication required");
-          }
-          return processResponse(retry, type);
-        }
-        clearAuthState();
-        window.location.reload();
-        throw Error("Authentication required");
-      }
+    .then((response) => {
+      if (response.status === 401) throw Error("Authentication required");
       return processResponse(response, type);
     })
     .then((data) => processData(data, type, resolve, reject))
@@ -412,27 +424,14 @@ export const blobGetReq = (url, payload, resolve, reject, final) =>
 // 원본 JSON 응답을 그대로 반환 (status 체크 없이, 내부 API용)
 export const rawJsonGetReq = (url, resolve, reject, final) => {
   const fullUrl = getApiUrlPrefix() + url;
-  fetch(fullUrl, { headers: getAuthHeaders(), credentials: "include" })
+  authFetch(
+    fullUrl,
+    { headers: getAuthHeaders(), credentials: "include" },
+    "rawJsonGetReq",
+  )
     .then(handleFetchErrors)
-    .then(async (response) => {
-      if (response.status === 401) {
-        const refreshed = await tryRefreshToken();
-        if (refreshed) {
-          const retry = await fetch(fullUrl, {
-            headers: getAuthHeaders(),
-            credentials: "include",
-          });
-          if (!retry.ok) {
-            clearAuthState();
-            window.location.reload();
-            throw Error("Authentication required");
-          }
-          return retry.json();
-        }
-        clearAuthState();
-        window.location.reload();
-        throw Error("Authentication required");
-      }
+    .then((response) => {
+      if (response.status === 401) throw Error("Authentication required");
       return response.json();
     })
     .then((data) => resolve && resolve(data))

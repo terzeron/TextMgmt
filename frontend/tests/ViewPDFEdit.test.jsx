@@ -47,6 +47,7 @@ vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
 vi.mock("../src/Common", () => ({
   getApiUrlPrefix: () => "http://localhost:8000",
   getAuthToken: () => "test-token",
+  authFetch: (url, options) => fetch(url, options),
 }));
 
 import ViewPDF from "../src/ViewPDF";

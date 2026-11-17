@@ -9,6 +9,7 @@ import {
 
 vi.mock("../src/Common", () => ({
   getApiUrlPrefix: () => "http://localhost:8000",
+  authFetch: (url, options) => fetch(url, options),
 }));
 
 const JPEG = new Blob(["jpeg"], { type: "image/jpeg" });

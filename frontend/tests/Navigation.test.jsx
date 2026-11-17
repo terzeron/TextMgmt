@@ -23,8 +23,12 @@ vi.mock("@react-oauth/google", () => ({
   GoogleOAuthProvider: ({ children }) => (
     <div data-testid="google-oauth-provider">{children}</div>
   ),
-  GoogleLogin: ({ onSuccess, onError }) => (
-    <div>
+  GoogleLogin: ({ onSuccess, onError, useOneTap, auto_select }) => (
+    <div
+      data-testid="google-login-wrapper"
+      data-one-tap={String(Boolean(useOneTap))}
+      data-auto-select={String(Boolean(auto_select))}
+    >
       <button
         data-testid="google-login"
         onClick={() => onSuccess({ credential: "test-token" })}
@@ -50,11 +54,15 @@ vi.mock("../src/Common", async () => {
     rawJsonGetReq: vi.fn(),
     getApiUrlPrefix: vi.fn(() => "/api"),
     tryRefreshToken: vi.fn(),
-    refreshOnVisible: vi.fn(),
+    refreshOnVisible: vi.fn(() => Promise.resolve(true)),
     startProactiveRefresh: vi.fn(),
     stopProactiveRefresh: vi.fn(),
+    handleSessionExpired: vi.fn(),
   };
 });
+
+vi.mock("../src/clientLogger.js", () => ({ reportClientError: vi.fn() }));
+import { reportClientError } from "../src/clientLogger.js";
 
 // Mock window.matchMedia
 if (!window.matchMedia) {
@@ -76,6 +84,7 @@ if (!window.matchMedia) {
 describe("Navigation Component", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.sessionStorage.clear();
     window.__ENV__ = {
       VITE_API_URL_PREFIX: "/api",
       VITE_GOOGLE_CLIENT_ID: "test-client-id",
@@ -1857,5 +1866,139 @@ describe("Navigation Component", () => {
       expect(fetch).toHaveBeenCalledWith("/api/auth/me", expect.anything()),
     );
     expect(screen.queryByText(/로그아웃/)).toBeNull();
+  });
+
+  describe("세션 만료 재로그인 흐름", () => {
+    const sessionOk = () =>
+      fetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          status: "success",
+          result: { role: "admin", name: "T", email: "t@example.com" },
+        }),
+      });
+    const showTab = () => {
+      Object.defineProperty(document, "visibilityState", {
+        value: "visible",
+        writable: true,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    const renderNav = () =>
+      render(
+        <MemoryRouter>
+          <Navigation />
+        </MemoryRouter>,
+      );
+
+    it("탭 복귀 refresh 가 실패하면 만료 처리한다", async () => {
+      sessionOk();
+      Common.refreshOnVisible.mockResolvedValueOnce(false);
+      renderNav();
+      await waitFor(() => expect(screen.getByText("책 편집")).toBeDefined());
+      showTab();
+      await waitFor(() =>
+        expect(Common.handleSessionExpired).toHaveBeenCalledWith(
+          "visibility-refresh",
+        ),
+      );
+    });
+
+    it("디바운스로 건너뛴 refresh(null)는 만료로 보지 않는다", async () => {
+      sessionOk();
+      Common.refreshOnVisible.mockResolvedValueOnce(null);
+      renderNav();
+      await waitFor(() => expect(screen.getByText("책 편집")).toBeDefined());
+      showTab();
+      await Promise.resolve();
+      expect(Common.refreshOnVisible).toHaveBeenCalled();
+      expect(Common.handleSessionExpired).not.toHaveBeenCalled();
+    });
+
+    it("로그아웃 상태에서는 탭 복귀 refresh 를 하지 않는다", async () => {
+      fetch.mockResolvedValueOnce({ ok: false, status: 500 });
+      renderNav();
+      await waitFor(() =>
+        expect(screen.getByTestId("google-login")).toBeDefined(),
+      );
+      showTab();
+      expect(Common.refreshOnVisible).not.toHaveBeenCalled();
+    });
+
+    it("만료 표시가 있으면 안내하고 로그인 성공 시 지운다", async () => {
+      window.sessionStorage.setItem(Common.SESSION_EXPIRED_KEY, "apiReq");
+      fetch.mockResolvedValueOnce({ ok: false, status: 500 });
+      fetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ role: "admin", name: "T", email: "t@e.com" }),
+      });
+      renderNav();
+      await waitFor(() =>
+        expect(screen.getByText(/세션이 만료되었습니다/)).toBeDefined(),
+      );
+      fireEvent.click(screen.getByTestId("google-login"));
+      await waitFor(() => expect(screen.getByText("책 편집")).toBeDefined());
+      expect(
+        window.sessionStorage.getItem(Common.SESSION_EXPIRED_KEY),
+      ).toBeNull();
+    });
+
+    it("세션 복원에 성공하면 남은 만료 표시를 지운다", async () => {
+      window.sessionStorage.setItem(Common.SESSION_EXPIRED_KEY, "apiReq");
+      sessionOk();
+      renderNav();
+      await waitFor(() => expect(screen.getByText("책 편집")).toBeDefined());
+      expect(
+        window.sessionStorage.getItem(Common.SESSION_EXPIRED_KEY),
+      ).toBeNull();
+    });
+
+    it("sessionStorage 를 못 쓰면 안내 없이 로그인 화면을 보인다", async () => {
+      const spy = vi
+        .spyOn(Storage.prototype, "getItem")
+        .mockImplementation(() => {
+          throw new Error("blocked");
+        });
+      const removeSpy = vi
+        .spyOn(Storage.prototype, "removeItem")
+        .mockImplementation(() => {
+          throw new Error("blocked");
+        });
+      sessionOk();
+      renderNav();
+      await waitFor(() => expect(screen.getByText("책 편집")).toBeDefined());
+      expect(screen.queryByText(/세션이 만료되었습니다/)).toBeNull();
+      spy.mockRestore();
+      removeSpy.mockRestore();
+    });
+
+    it("One Tap 자동 선택을 켠다", async () => {
+      fetch.mockResolvedValueOnce({ ok: false, status: 500 });
+      renderNav();
+      const wrapper = await screen.findByTestId("google-login-wrapper");
+      expect(wrapper.dataset.oneTap).toBe("true");
+      expect(wrapper.dataset.autoSelect).toBe("true");
+    });
+
+    it("로그인 실패 원인을 서버에 보고한다", async () => {
+      fetch.mockResolvedValueOnce({ ok: false, status: 500 });
+      fetch.mockResolvedValueOnce({ ok: false, status: 403 });
+      renderNav();
+      fireEvent.click(await screen.findByTestId("google-login-error"));
+      expect(reportClientError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "[AUTH_LOGIN_FAILED] stage=google onError",
+        }),
+      );
+      fireEvent.click(screen.getByTestId("google-login"));
+      await waitFor(() =>
+        expect(reportClientError).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: "[AUTH_LOGIN_FAILED] stage=verify status=403",
+          }),
+        ),
+      );
+    });
   });
 });

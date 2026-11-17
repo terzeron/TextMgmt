@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
-import { getApiUrlPrefix, rawJsonGetReq } from "./Common";
+import { authFetch, getApiUrlPrefix, rawJsonGetReq } from "./Common";
 import { pdfjs, PDF_DOCUMENT_OPTIONS } from "./pdfjsEnv";
 import { preparePdfCanvasFonts } from "./pdfCanvasFonts";
 import {
@@ -50,9 +50,10 @@ export default function DirectoryPagePreview({ category, apiPrefix }) {
           return;
         }
         try {
-          const response = await fetch(
+          const response = await authFetch(
             `${getApiUrlPrefix()}${apiPrefix}/pdf-pages/${file.book_id}?start=1&end=${PREVIEW_PAGE_COUNT}`,
             { credentials: "include" },
+            "DirectoryPagePreview",
           );
           if (!response.ok) throw new Error(await describeHttpError(response));
           const totalPages = parseInt(

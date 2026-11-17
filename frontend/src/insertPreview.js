@@ -1,8 +1,11 @@
-import { getApiUrlPrefix } from "./Common";
+import { authFetch, getApiUrlPrefix } from "./Common";
 import { describeHttpError } from "./httpError";
 
 // 서버가 받는 이미지 한도(backend MAX_IMAGE_BYTES)와 같다. 넘으면 올리기 전에 알린다.
 export const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+
+// 편집 화면에서 부르므로 세션이 만료돼도 새로고침해서 편집을 날리지 않는다.
+const KEEP_EDITS = { reload: false };
 
 // PDF 쪽 삽입과 EPUB 표지가 함께 쓰는 미리보기 요청이다.
 // source 는 공개 이미지 URL(문자열)이거나 이 기기에서 고른 파일(File)이다.
@@ -17,18 +20,24 @@ export async function requestInsertPreview(apiPrefix, bookId, source) {
   if (isFile) {
     const form = new FormData();
     form.append("file", source);
-    response = await fetch(`${base}/insert-preview-upload`, {
-      method: "POST",
-      credentials: "include",
-      body: form,
-    });
+    response = await authFetch(
+      `${base}/insert-preview-upload`,
+      { method: "POST", credentials: "include", body: form },
+      "insertPreview",
+      KEEP_EDITS,
+    );
   } else {
-    response = await fetch(`${base}/insert-preview`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: source }),
-    });
+    response = await authFetch(
+      `${base}/insert-preview`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: source }),
+      },
+      "insertPreview",
+      KEEP_EDITS,
+    );
   }
   if (!response.ok) {
     // 400 은 서버가 사람이 읽을 사유를 본문에 담아 보낸 것이다.

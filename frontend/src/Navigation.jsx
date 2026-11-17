@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Outlet, useLocation, useNavigate, Navigate } from "react-router-dom";
 import {
   GoogleOAuthProvider,
@@ -6,6 +6,7 @@ import {
   googleLogout,
 } from "@react-oauth/google";
 import {
+  Alert,
   Button,
   Form,
   FormControl,
@@ -23,7 +24,10 @@ import {
   refreshOnVisible,
   startProactiveRefresh,
   stopProactiveRefresh,
+  handleSessionExpired,
+  SESSION_EXPIRED_KEY,
 } from "./Common.js";
+import { reportClientError } from "./clientLogger.js";
 import { isViewerAllowedPath } from "./auth.js";
 import "./Navigation.css";
 import "./TabStrip.css";
@@ -41,6 +45,21 @@ const ADMIN_NAV_ITEMS = [
   { href: "/admin", label: "관리" },
 ];
 
+function readSessionExpired() {
+  try {
+    return Boolean(window.sessionStorage.getItem(SESSION_EXPIRED_KEY));
+  } catch {
+    return false;
+  }
+}
+
+function reportLoginFailure(stage, detail) {
+  reportClientError({
+    errorType: "CUSTOM_ERROR",
+    message: `[AUTH_LOGIN_FAILED] stage=${stage} ${detail}`,
+  });
+}
+
 export default function Navigation() {
   /* v8 ignore next 3 -- Vite env fallback depends on the runtime bundle. */
   const clientId =
@@ -53,6 +72,9 @@ export default function Navigation() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [picture, setPicture] = useState("");
+  const [sessionExpired, setSessionExpired] = useState(readSessionExpired);
+  // visibilitychange 리스너는 마운트 때 한 번 등록되므로 최신 로그인 여부를 ref 로 읽는다.
+  const loginRef = useRef(false);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [hasSearched, setHasSearched] = useState(false);
@@ -193,6 +215,19 @@ export default function Navigation() {
   ]);
 
   useEffect(() => {
+    loginRef.current = login;
+  }, [login]);
+
+  const clearSessionExpired = () => {
+    try {
+      window.sessionStorage.removeItem(SESSION_EXPIRED_KEY);
+    } catch {
+      // 저장소를 못 쓰면 지울 표시도 없다.
+    }
+    setSessionExpired(false);
+  };
+
+  useEffect(() => {
     if (!clientId) {
       console.error(
         "The environment variable VITE_GOOGLE_CLIENT_ID is not set.",
@@ -220,6 +255,7 @@ export default function Navigation() {
           setName(data.result.name || "");
           setEmail(data.result.email || "");
           setPicture(data.result.picture || "");
+          clearSessionExpired();
           // 세션 복원 성공 시 선제적 갱신 타이머 시작
           startProactiveRefresh(data.result.expires_in || 7200);
         }
@@ -234,10 +270,13 @@ export default function Navigation() {
     // 탭이 다시 활성화되면 토큰 상태 확인 후 필요 시 갱신.
     // 여러 탭이 한꺼번에 활성화될 때 각 탭이 refresh 를 쏘면 회전된 토큰이 재제출되어
     // 서버가 재사용으로 오판하므로 디바운스된 진입점을 쓴다.
+    // 갱신이 실패하면 화면은 로그인 상태로 남아 있으므로 바로 재로그인 흐름으로 보낸다.
+    // 로그아웃 상태에서 만료 처리하면 새로고침이 반복되므로 로그인 중일 때만 시도한다.
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        refreshOnVisible();
-      }
+      if (document.visibilityState !== "visible" || !loginRef.current) return;
+      refreshOnVisible().then((ok) => {
+        if (ok === false) handleSessionExpired("visibility-refresh");
+      });
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
 
@@ -262,7 +301,10 @@ export default function Navigation() {
         body: JSON.stringify({ credential: credentialResponse.credential }),
       });
 
-      if (!res.ok) throw new Error(`API Error: ${res.status}`);
+      if (!res.ok) {
+        reportLoginFailure("verify", `status=${res.status}`);
+        throw new Error(`API Error: ${res.status}`);
+      }
 
       const data = await res.json();
       console.log("Google auth verified:", data);
@@ -273,6 +315,7 @@ export default function Navigation() {
         setPicture(data.picture || "");
         setLogin(true);
         setRole(data.role);
+        clearSessionExpired();
         if (data.expires_in) startProactiveRefresh(data.expires_in);
       }
     } catch (error) {
@@ -323,14 +366,28 @@ export default function Navigation() {
         <div
           style={{
             display: "flex",
+            flexDirection: "column",
             justifyContent: "center",
             alignItems: "center",
+            gap: "1rem",
             minHeight: "calc(100vh - 56px)",
           }}
         >
+          {sessionExpired && (
+            <Alert variant="warning">
+              세션이 만료되었습니다. 다시 로그인해 주세요.
+            </Alert>
+          )}
+          {/* One Tap 자동 선택: Google 로그인이 살아 있으면 버튼 없이 다시 로그인한다.
+              사용자가 직접 로그아웃하면 googleLogout()이 자동 선택을 끈다. */}
           <GoogleLogin
+            useOneTap
+            auto_select
             onSuccess={onLoginSuccess}
-            onError={() => alert("Google 로그인 실패")}
+            onError={() => {
+              reportLoginFailure("google", "onError");
+              alert("Google 로그인 실패");
+            }}
             theme="filled_blue"
             size="large"
             shape="pill"

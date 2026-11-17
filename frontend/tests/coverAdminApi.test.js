@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { coverAdminRequest } from "../src/coverAdminApi";
 
-const { refresh } = vi.hoisted(() => ({ refresh: vi.fn() }));
-vi.mock("../src/Common", () => ({ getApiUrlPrefix: () => "https://api.example.org", tryRefreshToken: refresh }));
-afterEach(() => { vi.unstubAllGlobals(); refresh.mockReset(); });
+// 갱신·만료 처리는 Common.authFetch 테스트가 맡는다. 여기서는 전역 fetch 로 넘기기만 한다.
+const { authFetch } = vi.hoisted(() => ({ authFetch: vi.fn((url, options) => fetch(url, options)) }));
+vi.mock("../src/Common", () => ({ getApiUrlPrefix: () => "https://api.example.org", authFetch }));
+afterEach(() => { vi.unstubAllGlobals(); authFetch.mockClear(); });
 
 describe("표지 관리 API", () => {
   it("cookie 인증과 AbortSignal을 유지해 JSON을 조회한다", async () => {
@@ -28,21 +29,15 @@ describe("표지 관리 API", () => {
     expect(await coverAdminRequest("/candidate-image/a", { image: true })).toBe(blob);
   });
 
-  it("401이면 refresh 후 원래 옵션으로 한 번 재시도한다", async () => {
-    refresh.mockResolvedValue(true);
-    const fetch = vi.fn().mockResolvedValueOnce({ status: 401 }).mockResolvedValueOnce({ ok: true, json: async () => ({ status: "success", result: "saved" }) });
-    vi.stubGlobal("fetch", fetch);
+  it("만료돼도 고른 표지를 잃지 않도록 새로고침 없이 authFetch 로 요청한다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: "success", result: "saved" }) }));
     expect(await coverAdminRequest("/apply", { body: { revision: "r1" } })).toBe("saved");
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(fetch.mock.calls[0]).toEqual(fetch.mock.calls[1]);
+    expect(authFetch).toHaveBeenCalledWith("https://api.example.org/admin/book-covers/apply", expect.objectContaining({ method: "POST" }), "coverAdminApi", { reload: false });
   });
 
-  it("refresh 실패 시 요청을 반복하지 않는다", async () => {
-    refresh.mockResolvedValue(false);
-    const fetch = vi.fn().mockResolvedValue({ status: 401, ok: false, json: async () => ({ detail: "로그인이 필요합니다" }) });
-    vi.stubGlobal("fetch", fetch);
+  it("세션 만료 401 은 서버 사유로 실패한다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 401, ok: false, json: async () => ({ detail: "로그인이 필요합니다" }) }));
     await expect(coverAdminRequest("/missing")).rejects.toThrow("로그인이 필요합니다");
-    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it.each([{}, { detail: [] }])("문자열이 아닌 HTTP 오류는 기본 문구를 쓴다: %j", async (data) => {
@@ -64,6 +59,5 @@ describe("표지 관리 API", () => {
     const error = new DOMException("취소", "AbortError");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(error));
     await expect(coverAdminRequest("/missing")).rejects.toBe(error);
-    expect(refresh).not.toHaveBeenCalled();
   });
 });
