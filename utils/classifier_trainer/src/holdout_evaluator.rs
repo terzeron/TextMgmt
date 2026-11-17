@@ -22,11 +22,7 @@ pub struct Report {
 }
 
 fn ratio(a: f64, b: f64) -> f64 {
-    if b > 0.0 {
-        a / b
-    } else {
-        0.0
-    }
+    if b > 0.0 { a / b } else { 0.0 }
 }
 
 pub fn evaluate(model: &SoftmaxModel, holdout: &[(SparseVec, usize)]) -> Report {
