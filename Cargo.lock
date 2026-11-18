@@ -642,7 +642,7 @@ name = "classifier_trainer"
 version = "0.1.0"
 dependencies = [
  "classifier",
- "rand 0.9.5",
+ "rand 0.10.3",
  "rand_chacha 0.10.0",
  "search_manager",
  "serde_json",
