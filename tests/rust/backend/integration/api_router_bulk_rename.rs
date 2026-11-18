@@ -175,7 +175,8 @@ async fn test_regex_backtracking_error_is_reported_without_updates() {
     let paths = touch(tmp.path(), &[name.as_str()]);
     setup(&bm, &paths);
 
-    let response = client(&bm).post_json(URL, &json!({"category": "cat", "pattern": "(?i)(a|b|ab)*(?=c)", "replacement": "b"})).await;
+    // fancy-regex 0.20은 입력에 없는 글자를 요구하는 뒤쪽 lookahead `(?=c)`를 VM 없이 걸러 낸다. lookbehind는 그대로 백트래킹한다.
+    let response = client(&bm).post_json(URL, &json!({"category": "cat", "pattern": "(?i)(a|b|ab)*(?<=c)", "replacement": "b"})).await;
     let body = response.json();
 
     assert_eq!(body["status"], "failure", "{body}");
