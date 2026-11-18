@@ -9,7 +9,8 @@ publish = false
 
 # 공유 의존성은 여기서 버전을 한 번만 정한다. 각 crate는 `dep.workspace = true`로 쓴다.
 [workspace.dependencies]
-lopdf = "0.47"
+# 날짜 API를 쓰지 않으므로 기본 feature의 chrono를 뺀다. rayon은 기본값 그대로 둔다.
+lopdf = { version = "0.47", default-features = false, features = ["rayon"] }
 log = "0.4"
 serde_json = "1"
 # 내부망 http 전용이라 TLS 기능을 켜지 않는다.

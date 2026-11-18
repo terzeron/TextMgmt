@@ -2329,7 +2329,6 @@ dependencies = [
  "bitflags 2.13.2",
  "brotli-decompressor",
  "cbc",
- "chrono",
  "ecb",
  "encoding_rs",
  "flate2",
