@@ -49,6 +49,16 @@ jobs:
       - run: cargo test --workspace --locked -- --test-threads=1
       - run: cargo clippy -p backend -p loader --all-targets --locked -- -D warnings
 
+  # RustSec 공지에 등록된 취약점이 Cargo.lock에 있으면 실패한다. unmaintained 경고는 실패로 치지 않는다.
+  cargo-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
   container-build:
     runs-on: ubuntu-latest
     steps:
