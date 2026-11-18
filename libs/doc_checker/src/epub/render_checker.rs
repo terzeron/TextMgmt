@@ -313,7 +313,8 @@ pub fn classify_read_error(e: &io::Error) -> ReadErrorKind {
     match e.kind() {
         // zip 9의 Crc32Reader는 EOF에서 InvalidData "Invalid checksum"을 낸다(테스트로 확인).
         io::ErrorKind::InvalidData if e.to_string().contains("checksum") => ReadErrorKind::Checksum,
-        io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput | io::ErrorKind::UnexpectedEof => ReadErrorKind::Corrupt,
+        // zip 9.2부터 지원하지 않는 압축 방식은 by_name이 아니라 읽기에서 Unsupported로 온다.
+        io::ErrorKind::InvalidData | io::ErrorKind::InvalidInput | io::ErrorKind::UnexpectedEof | io::ErrorKind::Unsupported => ReadErrorKind::Corrupt,
         _ => ReadErrorKind::Io,
     }
 }

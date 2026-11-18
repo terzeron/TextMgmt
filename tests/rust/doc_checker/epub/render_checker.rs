@@ -615,6 +615,7 @@ fn read_errors_are_classified() {
     assert_eq!(classify_read_error(&Error::new(ErrorKind::InvalidData, "Invalid checksum")), ReadErrorKind::Checksum);
     assert_eq!(classify_read_error(&Error::new(ErrorKind::InvalidData, "deflate")), ReadErrorKind::Corrupt);
     assert_eq!(classify_read_error(&Error::new(ErrorKind::UnexpectedEof, "eof")), ReadErrorKind::Corrupt);
+    assert_eq!(classify_read_error(&Error::new(ErrorKind::Unsupported, "compression method not supported: 99")), ReadErrorKind::Corrupt);
     assert_eq!(classify_read_error(&Error::new(ErrorKind::PermissionDenied, "io")), ReadErrorKind::Io);
     assert_eq!(classify_read_error(&Error::other("io")), ReadErrorKind::Io);
 }
