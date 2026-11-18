@@ -130,7 +130,7 @@ async fn bulk_rename_files(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Or
             } else {
                 for path in &reserved {
                     if let Some(file_name) = path.file_name().map(|n| n.to_string_lossy())
-                        && let Ok(Some(captures)) = serial_re.captures(&file_name)
+                        && let Ok(Some(captures)) = serial_re.captures(&*file_name)
                     {
                         largest = largest.max(captures.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0));
                     }
