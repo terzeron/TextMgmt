@@ -23,6 +23,9 @@ on:
       - 'Cargo.lock'
       - '.cargo/**'
       - '.github/workflows/backend-ci.yml'
+  # Cargo.lock이 그대로여도 새 RustSec 공지는 나온다. 매주 cargo-audit만 다시 돌린다.
+  schedule:
+    - cron: '0 0 * * 1'
 
 permissions:
   contents: read
@@ -33,9 +36,10 @@ concurrency:
 
 jobs:
   rust-tests:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@dd87c1884d4b74c592b9ad3151acd86a8a80c6f2 # 1.91.1
         with:
           components: rustfmt, clippy
@@ -49,8 +53,19 @@ jobs:
       - run: cargo test --workspace --locked -- --test-threads=1
       - run: cargo clippy -p backend -p loader --all-targets --locked -- -D warnings
 
-  container-build:
+  # RustSec 공지에 등록된 취약점이 Cargo.lock에 있으면 실패한다. unmaintained 경고는 실패로 치지 않는다.
+  cargo-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
+  container-build:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: docker build --file backend/Dockerfile --tag textmgmt-backend:ci .
