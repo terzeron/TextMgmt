@@ -439,6 +439,13 @@ fn test_observation_hash_of_empty_value_is_empty_string() {
 }
 
 #[test]
+fn test_observation_hash_without_a_secret_is_empty_string() {
+    let mut env = fixture();
+    env.remove("TM_JWT_SECRET");
+    assert_eq!(auth_service::observation_hash("session"), "");
+}
+
+#[test]
 fn test_load_jwt_secret_returns_a_configured_secret_and_errors_render_status_and_detail() {
     let _env = fixture();
     assert!(auth_manager::auth_service::load_jwt_secret(&process_env).is_ok_and(|secret| !secret.is_empty()));

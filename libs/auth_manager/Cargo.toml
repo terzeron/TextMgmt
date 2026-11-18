@@ -14,7 +14,7 @@ http_client = { path = "../http_client" }
 ureq = { workspace = true, features = ["rustls"] }
 db = { path = "../db" }
 http = "1.5.0"
-jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "12.0.0", default-features = false, features = ["aws_lc_rs"] }
 log = "0.4.34"
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
