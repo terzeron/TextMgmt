@@ -152,3 +152,26 @@ fn test_datetime_accepts_an_offset_without_a_colon_and_rejects_non_iso_text() {
     let rejected = std::panic::catch_unwind(|| Book::new(11, &info("어제"), 0.0));
     assert!(rejected.is_err(), "ISO 형식이 아닌 시각은 받지 않는다");
 }
+
+/// ES 문서의 시각은 여러 꼴로 들어와도 응답에서는 `YYYY-MM-DDTHH:MM:SS.ffffff` 하나로 나간다. 오프셋은 버리고 그 시각대의 시각을 쓴다.
+#[test]
+fn test_view_renders_every_accepted_time_shape_with_micros() {
+    common::setup_env();
+    let render = |text: &str| {
+        let info = json!({"category": "c", "title": "t", "author": "a", "file_path": "c/t.pdf", "file_type": "pdf", "file_size": 1, "created_time": text, "updated_time": text});
+        Book::new(1, &info, 0.0).view().created_time
+    };
+    for (text, expected) in [
+        ("2020-01-02", "2020-01-02T00:00:00.000000"),
+        ("2020-01-02T03:04", "2020-01-02T03:04:00.000000"),
+        ("2020-01-02 03:04", "2020-01-02T03:04:00.000000"),
+        ("2020-01-02 03:04:05", "2020-01-02T03:04:05.000000"),
+        ("2020-01-02T03:04:05.000042", "2020-01-02T03:04:05.000042"),
+        ("2020-01-02T03:04:05,5", "2020-01-02T03:04:05.500000"),
+        ("2020-01-02T03:04:05Z", "2020-01-02T03:04:05.000000"),
+        ("2020-01-02T03:04:05+09:00", "2020-01-02T03:04:05.000000"),
+        ("2020-01-02 03:04:05.1+0900", "2020-01-02T03:04:05.100000"),
+    ] {
+        assert_eq!(render(text), expected, "{text}");
+    }
+}

@@ -31,7 +31,7 @@
 //!   - `merge_classify_proposal_status(&self, status: &Value, ct)`
 //!   - `pub const RELOAD_LOCK_HEARTBEAT_STALE_SECONDS: i64`, `struct CategoryMappingError(pub String)`
 //! - `chrono`가 dev-dependency에 있다고 본다 (`datetime.now()` 대응).
-use chrono::{Duration, Local, NaiveDateTime};
+use chrono::{Duration, Local, NaiveDate, NaiveDateTime};
 use db::category_mapping::{CategoryMapping, CategoryMappingError, RELOAD_LOCK_HEARTBEAT_STALE_SECONDS};
 use db::{ConnectionProvider, DbConnection, DbError, DbValue, Row};
 use serde_json::{Value, json};
@@ -1342,4 +1342,16 @@ fn starting_a_proposal_reports_lock_read_and_update_failures() {
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
         assert!(cm.try_start_classify_proposal(&json!({"status": "running"}), "book", 60).is_err(), "{needle}");
     }
+}
+
+/// 재적재 상태 응답의 시각은 `T`로 잇는 ISO 문자열이다. 마이크로초가 0이면 소수부를 뺀다.
+#[test]
+fn reload_status_times_are_iso_strings_without_zero_micros() {
+    let whole = NaiveDate::from_ymd_opt(2026, 1, 2).unwrap().and_hms_opt(3, 4, 5).unwrap();
+    let mut row = reload_row(DbValue::Null, "running", whole);
+    row.insert("updated_at".into(), DbValue::DateTime(whole + Duration::microseconds(42)));
+    let cursor = FakeCursor::new().with_fetchone_rows(vec![Some(row)]);
+    let out = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor)).get_reload_status("book", None).unwrap().unwrap();
+    assert_eq!(out["started_at"], "2026-01-02T03:04:05".into());
+    assert_eq!(out["updated_at"], "2026-01-02T03:04:05.000042".into());
 }

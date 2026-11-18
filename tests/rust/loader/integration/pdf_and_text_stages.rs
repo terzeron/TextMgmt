@@ -915,6 +915,16 @@ mod test_loader_main_branches {
     }
 
     #[test]
+    fn test_reload_reads_stored_updated_time_as_local_time_to_the_fraction() {
+        // 저장된 updated_time은 로컬 시각이고 소수 초까지 비교한다. 같은 초의 mtime이면 유지한다.
+        let doc = run_reload_with_stored_updated_time("2021-01-01T00:00:00.500000", local_timestamp(2021));
+        assert_eq!(doc["updated_time"], "2021-01-01T00:00:00.500000");
+        // 1초 새 파일이면 mtime을 로컬 시각으로 쓴 새 값이 들어간다.
+        let doc = run_reload_with_stored_updated_time("2021-01-01T00:00:00", local_timestamp(2021) + 1);
+        assert_eq!(doc["updated_time"], "2021-01-01T00:00:01");
+    }
+
+    #[test]
     fn test_reload_ignores_unparsable_stored_updated_time() {
         // 저장된 updated_time이 ISO 형식이 아니면 예외 없이 새 값으로 적재한다.
         let doc = run_reload_with_stored_updated_time("not-a-date", local_timestamp(2020));

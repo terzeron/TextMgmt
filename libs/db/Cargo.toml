@@ -21,6 +21,10 @@ sysdeps = { path = "../sysdeps" }
 testcontainers-modules = { version = "0.15.0", features = ["mysql", "blocking"] }
 
 [[test]]
+name = "db"
+path = "../../tests/rust/db/db.rs"
+
+[[test]]
 name = "category_mapping"
 path = "../../tests/rust/db/category_mapping.rs"
 

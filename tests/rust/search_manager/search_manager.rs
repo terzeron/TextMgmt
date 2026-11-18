@@ -1047,7 +1047,9 @@ fn test_backfill_created_time_updates_missing_docs() {
     assert_eq!(result, BackfillReport { updated: 1, skipped: 1, failed: 0 });
     let bulk_body = bulk_body.lock().unwrap();
     assert_eq!(bulk_body[0], json!({"update": {"_index": "idx", "_id": "1"}}));
-    assert!(bulk_body[1]["doc"].get("created_time").is_some());
+    let created_time = bulk_body[1]["doc"]["created_time"].as_str().unwrap();
+    let mask: String = created_time.chars().map(|c| if c.is_ascii_digit() { '0' } else { c }).collect();
+    assert!(mask == "0000-00-00T00:00:00" || (mask == "0000-00-00T00:00:00.000000" && !created_time.ends_with(".000000")), "{created_time}");
     assert!(bulk_body[1]["doc"]["created_time_source"].as_str().is_some_and(|s| !s.is_empty()));
     assert!(cleared.load(Ordering::SeqCst));
 }
