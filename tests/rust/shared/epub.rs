@@ -22,7 +22,9 @@ pub const BODY: &str = "<html><body>본문을 보존한다.</body></html>";
 pub const CSS: &str = "body { color: red; }";
 
 fn container_xml(opf_path: &str) -> String {
-    format!(r#"<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="{opf_path}" media-type="application/oebps-package+xml"/></rootfiles></container>"#)
+    format!(
+        r#"<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="{opf_path}" media-type="application/oebps-package+xml"/></rootfiles></container>"#
+    )
 }
 
 /// 만들 EPUB의 모양. 생성자로 시작해 `with_*`/`without_*`로 고친다.
