@@ -23,6 +23,9 @@ on:
       - 'Cargo.lock'
       - '.cargo/**'
       - '.github/workflows/backend-ci.yml'
+  # Cargo.lock이 그대로여도 새 RustSec 공지는 나온다. 매주 cargo-audit만 다시 돌린다.
+  schedule:
+    - cron: '0 0 * * 1'
 
 permissions:
   contents: read
@@ -33,6 +36,7 @@ concurrency:
 
 jobs:
   rust-tests:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -53,13 +57,14 @@ jobs:
   cargo-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-audit
       - run: cargo audit
 
   container-build:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
