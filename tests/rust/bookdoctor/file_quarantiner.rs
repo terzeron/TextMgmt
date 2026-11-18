@@ -116,6 +116,11 @@ fn move_relocates_file_keeps_inode_and_writes_manifest() {
     assert_eq!((before.ino(), before.mtime()), (after.ino(), after.mtime()), "book_id가 inode다");
     assert_eq!(result.moved.len(), 1);
     assert!(manifest.exists());
+    // created_at은 `YYYY-MM-DDTHH:MM:SS+00:00`이다(UTC, 소수 초 없음).
+    let written: Value = serde_json::from_str(&fs::read_to_string(&manifest).unwrap()).unwrap();
+    let created_at = written["created_at"].as_str().unwrap();
+    let mask: String = created_at.chars().map(|c| if c.is_ascii_digit() { '0' } else { c }).collect();
+    assert_eq!(mask, "0000-00-00T00:00:00+00:00", "{created_at}");
 }
 
 #[test]

@@ -169,6 +169,10 @@ async fn test_resolves_the_book_from_elasticsearch_without_a_lookup_override() {
     assert!(result.is_some());
     assert!(has_cover(&env.path));
     assert_eq!(env.es.updates().len(), 1);
+    // 색인에 쓰는 updated_time은 `YYYY-MM-DDTHH:MM:SS.ffffff`다.
+    let updated_time = env.es.updates()[0].1["updated_time"].as_str().unwrap().to_string();
+    let mask: String = updated_time.chars().map(|c| if c.is_ascii_digit() { '0' } else { c }).collect();
+    assert_eq!(mask, "0000-00-00T00:00:00.000000", "{updated_time}");
 }
 
 /// 교체로 빠지는 기존 표지는 새 표지 바로 뒤, 본문 앞의 도판으로 남는다.

@@ -2456,3 +2456,17 @@ async fn test_html_routes_preserve_comics_prefix_and_download_attachment() {
         assert_eq!(download.body, fs::read(tmp.path().join("page.html")).unwrap());
     }
 }
+
+/// Last-Modified는 파일 mtime을 UTC로 쓴 IMF-fixdate(RFC 9110)다.
+#[tokio::test]
+async fn test_download_last_modified_is_imf_fixdate_in_gmt() {
+    let book = book!();
+    book.run(async {
+        // 2026-01-01T00:00:00Z
+        File::options().write(true).open(&book.epub_path).unwrap().set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_767_225_600)).unwrap();
+        let response = book.client().get(&format!("/download/{}", book.book_id)).await;
+        assert_eq!(response.status, 200);
+        assert_eq!(response.header("last-modified"), Some("Thu, 01 Jan 2026 00:00:00 GMT"));
+    })
+    .await;
+}
