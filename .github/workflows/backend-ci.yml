@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@dd87c1884d4b74c592b9ad3151acd86a8a80c6f2 # 1.91.1
+      - uses: dtolnay/rust-toolchain@1961bfc0c4a8bf07e0a0c98e1e2459c642ea70a0 # 1.95.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2

@@ -63,7 +63,7 @@ fn get_top_frequent_words(okt: Option<&dyn Okt>, text: &str, top_n: usize) -> Re
             None => counts.push((word, 1)),
         }
     }
-    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    counts.sort_by_key(|entry| std::cmp::Reverse(entry.1));
     counts.truncate(top_n);
     Ok(counts)
 }

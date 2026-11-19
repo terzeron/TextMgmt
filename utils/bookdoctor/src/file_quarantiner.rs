@@ -264,7 +264,7 @@ pub fn summarize(moves: &[Rec], out: &mut dyn Write) -> io::Result<()> {
     }
     writeln!(out, "\n대상 {}건, {:.1}MB", thousands(moves.len()), total_size / 1024.0 / 1024.0)?;
     writeln!(out, "  {:<26}{:>6}", "원래 카테고리", "건수")?;
-    by_cat.sort_by(|a, b| b.1.cmp(&a.1));
+    by_cat.sort_by_key(|entry| std::cmp::Reverse(entry.1));
     for (cat, n) in by_cat {
         writeln!(out, "  {:<26}{n:>6}", show(&cat))?;
     }

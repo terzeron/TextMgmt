@@ -1,1 +1,1 @@
-# PDF native worker는 cargo build --workspace로 함께 빌드한다. Rust 1.91을 유지한다.
+# PDF native worker는 cargo build --workspace로 함께 빌드한다. Rust 버전은 rust-toolchain.toml을 따른다.
