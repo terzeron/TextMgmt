@@ -227,7 +227,6 @@ dependencies = [
  "base64 0.23.1",
  "book_manager",
  "bookstore",
- "chrono",
  "classifier",
  "common",
  "cover_manager",
@@ -239,6 +238,7 @@ dependencies = [
  "flate2",
  "image",
  "image_processor",
+ "jiff 1.0.1",
  "jpeg-encoder",
  "jsonwebtoken",
  "log",
@@ -419,7 +419,6 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "book_model",
- "chrono",
  "classifier",
  "common",
  "cover_manager",
@@ -432,6 +431,7 @@ dependencies = [
  "image",
  "image_processor",
  "isbn_extractor",
+ "jiff 1.0.1",
  "jpeg-encoder",
  "log",
  "lopdf",
@@ -454,8 +454,8 @@ dependencies = [
 name = "book_model"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "common",
+ "jiff 1.0.1",
  "serde",
  "serde_json",
 ]
@@ -464,12 +464,12 @@ dependencies = [
 name = "bookdoctor"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "common",
  "doc_checker",
  "doc_repairer",
  "encoding_rs",
  "flate2",
+ "jiff 1.0.1",
  "lopdf",
  "rayon",
  "serde",
@@ -800,7 +800,6 @@ dependencies = [
  "base64 0.23.1",
  "book_model",
  "bookstore",
- "chrono",
  "common",
  "db",
  "es_client",
@@ -808,6 +807,7 @@ dependencies = [
  "http_client",
  "image",
  "image_processor",
+ "jiff 1.0.1",
  "log",
  "lopdf",
  "pdf_engine",
@@ -940,9 +940,10 @@ dependencies = [
 name = "db"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "common",
  "diesel",
+ "jiff 1.0.1",
+ "jiff-diesel",
  "log",
  "mysqlclient-sys",
  "serde",
@@ -989,7 +990,6 @@ checksum = "9824c36a57a17ece4c8883baed41dc3eb81b2b949364c174750acc462e19b5ec"
 dependencies = [
  "bitflags 2.13.2",
  "byteorder",
- "chrono",
  "diesel_derives",
  "downcast-rs",
  "mysqlclient-sys",
@@ -1367,10 +1367,10 @@ dependencies = [
 name = "file_indexer"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "common",
  "doc_reader",
  "isbn_extractor",
+ "jiff 1.0.1",
  "lopdf",
  "parse_stat_counter",
  "serde_json",
@@ -2136,9 +2136,25 @@ version = "0.2.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "175dc66334db3b9ab9985bf8b61cfed50dc16d20964bb47f9e479adcae984a7f"
 dependencies = [
- "jiff-core",
- "jiff-static",
- "jiff-tzdb-platform",
+ "jiff-core 0.1.8",
+ "jiff-static 0.2.46",
+ "jiff-tzdb-platform 0.1.3",
+ "log",
+ "portable-atomic",
+ "portable-atomic-util",
+ "serde_core",
+ "windows-link",
+]
+
+[[package]]
+name = "jiff"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5d126d72eb017f10b302e73bdeca446bea405ee449af4d9e7866d6b082d83e"
+dependencies = [
+ "jiff-core 1.0.1",
+ "jiff-static 1.0.1",
+ "jiff-tzdb-platform 1.0.0",
  "log",
  "portable-atomic",
  "portable-atomic-util",
@@ -2156,15 +2172,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "jiff-core"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6b46a105a9874634dd96231021526bf24ca04955a5998c59a9c7666e634b7b8"
+dependencies = [
+ "log",
+]
+
+[[package]]
+name = "jiff-diesel"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6b5ecd45a915436964f1bc65d62b1a32e9212dc10bf3af42ab051cfcfb5e0ee"
+dependencies = [
+ "diesel",
+ "jiff 1.0.1",
+]
+
+[[package]]
 name = "jiff-static"
 version = "0.2.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7b1af7547d47354bc438d797e3854601bde8f8d185780c5ba4ab27afa54f1ba"
 dependencies = [
- "jiff-core",
+ "jiff-core 0.1.8",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "jiff-static"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0127e9bde3c6130d6169e7d8d68676e4be69c4bf7573c308b6f960a5089c428"
+dependencies = [
+ "jiff-core 1.0.1",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -2174,12 +2221,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0980fca2cc272465bd60e82397607ba9f33add9e48defd77923301bbd03808f2"
 
 [[package]]
+name = "jiff-tzdb"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12e71a1b68a875a44a33bb7a1dd84392cb77145a3367a552a3cfe6a4f5cf3afc"
+
+[[package]]
 name = "jiff-tzdb-platform"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "875a5a69ac2bab1a891711cf5eccbec1ce0341ea805560dcd90b7a2e925132e8"
 dependencies = [
- "jiff-tzdb",
+ "jiff-tzdb 0.1.10",
+]
+
+[[package]]
+name = "jiff-tzdb-platform"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc65b284afcfa8f6cf189c7274c805505314a7ab975c60e1f548bff56525420e"
+dependencies = [
+ "jiff-tzdb 1.0.0",
 ]
 
 [[package]]
@@ -2288,7 +2350,6 @@ name = "loader"
 version = "0.1.0"
 dependencies = [
  "book_model",
- "chrono",
  "doc_reader",
  "doc_repairer",
  "encoding_rs",
@@ -2296,6 +2357,7 @@ dependencies = [
  "file_indexer",
  "hwp3_parser",
  "isbn_extractor",
+ "jiff 1.0.1",
  "parse_stat_counter",
  "serde_json",
  "sysdeps",
@@ -3312,9 +3374,9 @@ name = "search_manager"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
- "chrono",
  "common",
  "es_client",
+ "jiff 1.0.1",
  "log",
  "rustls",
  "rustls-pki-types",
@@ -3462,7 +3524,7 @@ dependencies = [
  "hex",
  "indexmap 1.9.3",
  "indexmap 2.14.2",
- "jiff",
+ "jiff 0.2.46",
  "schemars 0.9.0",
  "schemars 1.2.3",
  "serde_core",

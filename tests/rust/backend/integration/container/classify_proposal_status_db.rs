@@ -7,7 +7,7 @@
 //! - `db::category_mapping::CategoryMapping::new() -> Result<CategoryMapping, DbError>`
 //! - `CategoryMapping::get_connection(&self) -> Result<MappingConnection, DbError>` (`execute`/`fetch_one`/`commit`을 가진 래퍼)
 //! - `MappingConnection::{execute(&mut self, sql, &[DbValue]) -> Result<u64, DbError>, fetch_one(&mut self, sql, &[DbValue]) -> Result<Option<Row>, DbError>, commit(&mut self) -> Result<(), DbError>}`
-//! - `db::{DbValue, Row}`: `enum DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`, `From<Value>`),
+//! - `db::{DbValue, Row}`: `enum DbValue { Null, Int(i64), Text(String), DateTime(jiff::civil::DateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`, `From<Value>`),
 //!   `type Row = BTreeMap<String, DbValue>`. 구 `serde_json::Value` 파라미터는 `DbValue`로 쓴다.
 //! - `CategoryMapping::get_classify_proposal_status(&self, content_type: &str, stale_seconds: i64) -> Result<Value, DbError>`
 //! - `CategoryMapping::set_classify_proposal_status(&self, status: &Value, content_type: &str)`

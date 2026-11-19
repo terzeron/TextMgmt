@@ -11,7 +11,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use common::url_parser::quote_component;
 use diesel::connection::SimpleConnection;
 use diesel::deserialize::{self, FromSql, QueryableByName};
@@ -20,6 +19,8 @@ use diesel::result::{DatabaseErrorKind, Error as DieselError};
 use diesel::row::{Field, NamedRow};
 use diesel::sql_types::{BigInt, Date, Datetime, Double, Nullable, Text, Time, Timestamp};
 use diesel::{Connection, RunQueryDsl, sql_query};
+use jiff::civil;
+use jiff_diesel::ToDiesel;
 
 // ---------------------------------------------------------------------------
 // 값과 오류
@@ -30,17 +31,17 @@ pub enum DbValue {
     Null,
     Int(i64),
     Text(String),
-    DateTime(NaiveDateTime),
+    DateTime(civil::DateTime),
 }
 
-/// JSON 응답용 변환. 날짜는 `NaiveDateTime`의 `Display` 문자열이다.
+/// JSON 응답용 변환. 날짜는 [`datetime_text`] 꼴이다.
 impl From<&DbValue> for serde_json::Value {
     fn from(value: &DbValue) -> Self {
         match value {
             DbValue::Null => Self::Null,
             DbValue::Int(n) => Self::from(*n),
             DbValue::Text(s) => Self::from(s.as_str()),
-            DbValue::DateTime(d) => Self::from(d.to_string()),
+            DbValue::DateTime(d) => Self::from(datetime_text(d)),
         }
     }
 }
@@ -89,8 +90,24 @@ impl From<i32> for DbValue {
     }
 }
 
-impl From<NaiveDateTime> for DbValue {
-    fn from(v: NaiveDateTime) -> Self {
+/// `YYYY-MM-DD HH:MM:SS` 뒤에 [`time_text`]의 소수 초를 붙인다. chrono 시절 응답 꼴을 그대로 지킨다.
+pub fn datetime_text(dt: &civil::DateTime) -> String {
+    format!("{} {}", dt.strftime("%Y-%m-%d"), time_text(dt.time()))
+}
+
+/// `HH:MM:SS`. 소수 초는 0이 아닐 때만 3·6·9자리 묶음 중 가장 짧은 것으로 붙인다.
+pub fn time_text(t: civil::Time) -> String {
+    let base = t.strftime("%H:%M:%S").to_string();
+    match t.subsec_nanosecond() {
+        0 => base,
+        n if n % 1_000_000 == 0 => format!("{base}.{:03}", n / 1_000_000),
+        n if n % 1_000 == 0 => format!("{base}.{:06}", n / 1_000),
+        n => format!("{base}.{n:09}"),
+    }
+}
+
+impl From<civil::DateTime> for DbValue {
+    fn from(v: civil::DateTime) -> Self {
         DbValue::DateTime(v)
     }
 }
@@ -236,10 +253,11 @@ impl QueryableByName<Mysql> for DynRow {
                     | MysqlType::LongLong
                     | MysqlType::UnsignedLongLong => DbValue::Int(<i64 as FromSql<BigInt, Mysql>>::from_sql(raw)?),
                     MysqlType::Float | MysqlType::Double => DbValue::Text(<f64 as FromSql<Double, Mysql>>::from_sql(raw)?.to_string()),
-                    MysqlType::DateTime => DbValue::DateTime(<NaiveDateTime as FromSql<Datetime, Mysql>>::from_sql(raw)?),
-                    MysqlType::Timestamp => DbValue::DateTime(<NaiveDateTime as FromSql<Timestamp, Mysql>>::from_sql(raw)?),
-                    MysqlType::Date => DbValue::DateTime(<NaiveDate as FromSql<Date, Mysql>>::from_sql(raw)?.and_time(NaiveTime::MIN)),
-                    MysqlType::Time => DbValue::Text(<NaiveTime as FromSql<Time, Mysql>>::from_sql(raw)?.to_string()),
+                    // DATETIME은 시간대가 없어 jiff-diesel이 UTC 시각으로 읽는다. UTC로 풀면 저장된 벽시계 값이다.
+                    MysqlType::DateTime => DbValue::DateTime(jiff::tz::TimeZone::UTC.to_datetime(<jiff_diesel::Timestamp as FromSql<Datetime, Mysql>>::from_sql(raw)?.to_jiff())),
+                    MysqlType::Timestamp => DbValue::DateTime(<jiff_diesel::DateTime as FromSql<Timestamp, Mysql>>::from_sql(raw)?.to_jiff()),
+                    MysqlType::Date => DbValue::DateTime(<jiff_diesel::Date as FromSql<Date, Mysql>>::from_sql(raw)?.to_jiff().to_datetime(civil::Time::midnight())),
+                    MysqlType::Time => DbValue::Text(time_text(<jiff_diesel::Time as FromSql<Time, Mysql>>::from_sql(raw)?.to_jiff())),
                     // 문자열, DECIMAL, 바이너리, 열거형은 UTF-8 문자열로 읽는다. 잘못된 바이트는 대체 문자가 된다.
                     _ => DbValue::Text(String::from_utf8_lossy(raw.as_bytes()).into_owned()),
                 },
@@ -282,7 +300,7 @@ impl MysqlDbConnection {
                 DbValue::Null => q.bind::<Nullable<Text>, _>(None::<String>),
                 DbValue::Int(n) => q.bind::<BigInt, _>(*n),
                 DbValue::Text(s) => q.bind::<Text, _>(s.clone()),
-                DbValue::DateTime(d) => q.bind::<Timestamp, _>(*d),
+                DbValue::DateTime(d) => q.bind::<Timestamp, _>(d.to_diesel()),
             };
         }
         q

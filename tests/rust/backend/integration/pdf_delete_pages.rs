@@ -37,8 +37,8 @@ async fn test_reindexed_document_gets_a_fresh_updated_time() {
     assert_eq!(indexed["page_count"], 4);
     let updated = indexed["updated_time"].as_str().unwrap();
     assert!(updated > "2024-01-01T00:00:00.000000", "{updated}");
-    let parsed = chrono::NaiveDateTime::parse_from_str(updated, "%Y-%m-%dT%H:%M:%S%.f").unwrap();
-    let delta = (chrono::Local::now().naive_local() - parsed).num_seconds().abs();
+    let parsed = jiff::civil::DateTime::strptime("%Y-%m-%dT%H:%M:%S%.f", updated).unwrap();
+    let delta = parsed.duration_until(jiff::ZonedDateTime::now().datetime()).as_secs().abs();
     assert!(delta < 60, "{updated}");
 }
 

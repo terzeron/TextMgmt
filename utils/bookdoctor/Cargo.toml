@@ -7,7 +7,7 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+jiff.workspace = true
 common = { path = "../../libs/common", default-features = false }
 doc_checker = { path = "../../libs/doc_checker" }
 doc_repairer = { path = "../../libs/doc_repairer" }

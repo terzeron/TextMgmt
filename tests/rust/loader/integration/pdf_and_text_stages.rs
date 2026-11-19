@@ -101,8 +101,8 @@ fn inode_of(path: &Path) -> i64 {
 
 /// 로컬 시각 기준 해당 해 1월 1일 0시의 유닉스 시각(`datetime(y, 1, 1).timestamp()`).
 fn local_timestamp(year: i32) -> u64 {
-    use chrono::TimeZone;
-    chrono::Local.with_ymd_and_hms(year, 1, 1, 0, 0, 0).single().unwrap().timestamp() as u64
+    let midnight = jiff::civil::date(year as i16, 1, 1).at(0, 0, 0, 0);
+    jiff::tz::TimeZone::system().to_ambiguous_timestamp(midnight).unambiguous().unwrap().as_second() as u64
 }
 
 fn set_mtime(path: &Path, secs: u64) {

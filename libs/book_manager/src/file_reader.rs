@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{Local, NaiveDateTime};
+use book_model::es_doc_converter::UNIX_EPOCH_DATETIME;
 use file_indexer::env_config::Config;
 use file_indexer::record_builder;
+use jiff::civil;
 use serde_json::{Value, json};
 
 use super::{Docs, FileReader};
@@ -22,8 +23,8 @@ use file_indexer::file_time::iso;
 /// 요약에 담는 본문 길이(문자).
 const SUMMARY_CHARS: usize = 3500;
 
-fn local_naive(time: std::time::SystemTime) -> NaiveDateTime {
-    chrono::DateTime::<Local>::from(time).naive_local()
+fn local_naive(time: std::time::SystemTime) -> Option<civil::DateTime> {
+    jiff::Timestamp::try_from(time).ok().map(|t| jiff::tz::TimeZone::system().to_datetime(t))
 }
 
 /// 기본 `FileReader`. 설명은 모듈 머리말을 본다.
@@ -109,11 +110,11 @@ impl DefaultFileReader {
         }
         let relative_path = relative_to(path, prefix).unwrap_or_default();
         let summary = if !skip_text && file_type == "txt" { read_summary(path) } else { String::new() };
-        let created = meta.created().or_else(|_| meta.modified()).map(local_naive).unwrap_or_default();
+        let created = meta.created().or_else(|_| meta.modified()).ok().and_then(local_naive).unwrap_or(UNIX_EPOCH_DATETIME);
         let doc: Value = json!({
             "category": category, "title": title, "author": author, "file_path": relative_path, "file_type": file_type,
             "file_size": meta.len(), "line_count": 0, "page_count": 0, "isbn": "", "summary": summary,
-            "created_time": iso(created), "created_time_source": "birthtime", "updated_time": iso(Local::now().naive_local()),
+            "created_time": iso(created), "created_time_source": "birthtime", "updated_time": iso(jiff::ZonedDateTime::now().datetime()),
         });
         out.insert(meta.ino() as i64, doc);
         out

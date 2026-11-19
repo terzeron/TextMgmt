@@ -5,8 +5,8 @@ use crate::mysql_fixture;
 
 use std::collections::BTreeMap;
 
-use chrono::NaiveDate;
 use db::{DbError, DbValue, MysqlConfig, Row, connect_from_env, mysql_url};
+use jiff::civil;
 
 fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
     let map: BTreeMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
@@ -24,7 +24,7 @@ mod values {
         assert_eq!(DbValue::from(7i32), DbValue::Int(7));
         assert_eq!(DbValue::from(None::<&str>), DbValue::Null);
         assert_eq!(DbValue::from(Some("a")), DbValue::Text("a".into()));
-        let dt = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap().and_hms_opt(3, 4, 5).unwrap();
+        let dt = civil::date(2024, 1, 2).at(3, 4, 5, 0);
         assert_eq!(DbValue::from(dt), DbValue::DateTime(dt));
     }
 
@@ -131,7 +131,7 @@ mod mysql {
         let mut conn = container_conn();
         conn.execute("DROP TABLE IF EXISTS db_rt", &[]).unwrap();
         conn.execute("CREATE TABLE db_rt (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(50), note TEXT NULL, at DATETIME NULL)", &[]).unwrap();
-        let at = NaiveDate::from_ymd_opt(2024, 5, 6).unwrap().and_hms_opt(7, 8, 9).unwrap();
+        let at = civil::date(2024, 5, 6).at(7, 8, 9, 0);
         assert_eq!(conn.execute("INSERT INTO db_rt (name, note, at) VALUES (?, ?, ?)", &["한글 이름".into(), DbValue::Null, at.into()]).unwrap(), 1);
         let rows = conn.fetch_all("SELECT id, name, note, at FROM db_rt", &[]).unwrap();
         assert_eq!(rows, vec![row(&[("id", DbValue::Int(1)), ("name", "한글 이름".into()), ("note", DbValue::Null), ("at", DbValue::DateTime(at))])]);
@@ -214,8 +214,8 @@ mod mysql {
         conn.execute("DROP TABLE IF EXISTS db_types", &[]).unwrap();
         conn.execute("CREATE TABLE db_types (real_value DOUBLE, timestamp_value TIMESTAMP, date_value DATE, time_value TIME, decimal_value DECIMAL(10,2))", &[]).unwrap();
         conn.execute("INSERT INTO db_types VALUES (1.25, '2024-05-06 07:08:09', '2024-05-06', '07:08:09', 12.34)", &[]).unwrap();
-        let date_time = NaiveDate::from_ymd_opt(2024, 5, 6).unwrap().and_hms_opt(0, 0, 0).unwrap();
-        let timestamp = NaiveDate::from_ymd_opt(2024, 5, 6).unwrap().and_hms_opt(7, 8, 9).unwrap();
+        let date_time = civil::date(2024, 5, 6).at(0, 0, 0, 0);
+        let timestamp = civil::date(2024, 5, 6).at(7, 8, 9, 0);
         assert_eq!(
             conn.fetch_one("SELECT * FROM db_types", &[]).unwrap(),
             Some(row(&[

@@ -9,7 +9,7 @@ autotests = false
 # binary_and_file_reading, pdf_and_text_stages는 doc_reader/loader에 *_with(&XxxHooks) API를 만든 뒤 등록한다.
 
 [dependencies]
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+jiff.workspace = true
 es_client = { path = "../../libs/es_client" }
 book_model = { path = "../../libs/book_model" }
 doc_repairer = { path = "../../libs/doc_repairer" }

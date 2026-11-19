@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE;
-use chrono::{DateTime, Local};
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 use serde_json::{Map, Value, json};
 use sysdeps::{Clock, EnvFn, FsOps, RealFs, SystemClock};
 

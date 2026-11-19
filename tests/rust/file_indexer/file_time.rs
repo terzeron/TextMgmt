@@ -4,11 +4,12 @@ use std::io;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Local, NaiveDate, NaiveDateTime};
 use file_indexer::file_time::*;
+use jiff::tz::TimeZone;
+use jiff::{SignedDuration, Timestamp, civil};
 
-fn local(sec: i64, micro: u32) -> NaiveDateTime {
-    DateTime::from_timestamp(sec, micro * 1000).unwrap().with_timezone(&Local).naive_local()
+fn local(sec: i64, micro: u32) -> civil::DateTime {
+    TimeZone::system().to_datetime(Timestamp::new(sec, (micro * 1000) as i32).unwrap())
 }
 
 fn at(secs: u64, nanos: u32) -> SystemTime {
@@ -19,12 +20,12 @@ fn ctime_only(secs: f64) -> StatResult {
     StatResult { birthtime_ns: None, birthtime: None, ctime: secs }
 }
 
-fn naive(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> NaiveDateTime {
-    NaiveDate::from_ymd_opt(y, mo, d).unwrap().and_hms_opt(h, mi, s).unwrap()
+fn naive(y: i16, mo: i8, d: i8, h: i8, mi: i8, s: i8) -> civil::DateTime {
+    civil::date(y, mo, d).at(h, mi, s, 0)
 }
 
-fn local_ts(dt: NaiveDateTime) -> f64 {
-    dt.and_local_timezone(Local).unwrap().timestamp() as f64
+fn local_ts(dt: civil::DateTime) -> f64 {
+    TimeZone::system().to_ambiguous_timestamp(dt).unambiguous().unwrap().as_second() as f64
 }
 
 #[test]
@@ -87,7 +88,7 @@ fn iso_always_writes_six_fraction_digits_and_iso_short_drops_zero_microseconds()
     let whole = naive(2025, 1, 2, 3, 4, 5);
     assert_eq!(iso(whole), "2025-01-02T03:04:05.000000");
     assert_eq!(iso_short(whole), "2025-01-02T03:04:05");
-    let micro = whole + chrono::Duration::microseconds(42);
+    let micro = whole + SignedDuration::from_micros(42);
     assert_eq!(iso(micro), "2025-01-02T03:04:05.000042");
     assert_eq!(iso_short(micro), "2025-01-02T03:04:05.000042");
 }
@@ -108,10 +109,10 @@ fn real_files_report_a_creation_time_close_to_now() {
     std::fs::write(&p, "x").unwrap();
     let (t, source) = path_created_time_with_source(&p, None).unwrap();
     assert!([CREATED_TIME_SOURCE_STATX_BTIME, CREATED_TIME_SOURCE_ST_BIRTHTIME, CREATED_TIME_SOURCE_ST_CTIME].contains(&source));
-    let drift = (Local::now().naive_local() - t).num_seconds().abs();
+    let drift = t.duration_until(jiff::ZonedDateTime::now().datetime()).as_secs().abs();
     assert!(drift < 60, "{t} {source}");
     assert_eq!(path_created_time(&p, None).unwrap(), t);
-    assert!(path_created_time_iso(&p, None).unwrap().starts_with(&t.format("%Y-%m-%dT%H:%M:%S").to_string()));
+    assert!(path_created_time_iso(&p, None).unwrap().starts_with(&t.strftime("%Y-%m-%dT%H:%M:%S").to_string()));
 }
 
 #[test]

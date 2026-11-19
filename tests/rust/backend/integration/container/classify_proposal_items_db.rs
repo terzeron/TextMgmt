@@ -8,7 +8,7 @@
 //! - `MappingConnection` 편의 메서드:
 //!   `execute(&mut self, sql: &str, params: &[DbValue]) -> Result<u64, DbError>`, `fetch_all(.., &[DbValue]) -> Result<Vec<Row>, DbError>`,
 //!   `fetch_one(.., &[DbValue]) -> Result<Option<Row>, DbError>`, `commit(&mut self) -> Result<(), DbError>`
-//! - `db::{DbValue, Row}`: `enum DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`, `From<Value>`),
+//! - `db::{DbValue, Row}`: `enum DbValue { Null, Int(i64), Text(String), DateTime(jiff::civil::DateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`, `From<Value>`),
 //!   `type Row = BTreeMap<String, DbValue>`. 구 `serde_json::Value` 파라미터는 `DbValue`로 쓰고, 행 값은 `DbValue::Text`로 읽는다.
 //! - `CategoryMapping::add_classify_proposal_items(&self, items: &[Value], source_category: &str, content_type: &str)`
 //! - `CategoryMapping::get_classify_proposal_items(&self, content_type: &str).unwrap() -> Vec<Value>`

@@ -106,8 +106,8 @@ fn book(path: &Path, book_id: i64) -> Book {
         page_count: 0,
         isbn: String::new(),
         summary: String::new(),
-        created_time: chrono::NaiveDateTime::default(),
-        updated_time: chrono::NaiveDateTime::default(),
+        created_time: jiff::civil::date(1970, 1, 1).at(0, 0, 0, 0),
+        updated_time: jiff::civil::date(1970, 1, 1).at(0, 0, 0, 0),
         score: 0.0,
     }
 }
