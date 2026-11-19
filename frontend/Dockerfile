@@ -17,7 +17,7 @@ ARG APP_BUILD_ID
 RUN npm run build
 
 
-FROM nginxinc/nginx-unprivileged:1.28
+FROM ghcr.io/nginx/nginx-unprivileged:1.30.7
 
 # apt 보안 패치 레이어의 캐시 키. build.sh가 ISO 주차를 넘겨 주 1회 재실행시킨다.
 # 이 값이 고정이면 아래 apt-get upgrade가 캐시에서 재사용되어 패치가 적용되지 않는다
