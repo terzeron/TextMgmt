@@ -660,30 +660,25 @@ impl Scanner {
                     self.add(Severity::High, "REMOTE_FORM_ACTION", name, "form posts to a remote URL");
                 }
             }
-            "meta" => {
-                if tag.attr("http-equiv").is_some_and(|v| v.trim().eq_ignore_ascii_case("refresh")) {
-                    let target = tag.attr("content").and_then(|c| REFRESH_URL.captures(c).map(|m| m[1].to_owned()));
-                    let risky = target.as_deref().is_some_and(|u| matches!(classify_url(u), UrlKind::Remote | UrlKind::Script | UrlKind::Dangerous));
-                    let exploit = target.as_deref().is_some_and(|u| classify_url(u) == UrlKind::Dangerous && is_exploit_scheme(u));
-                    self.add(
-                        if exploit {
-                            Severity::Critical
-                        } else if risky {
-                            Severity::High
-                        } else {
-                            Severity::Medium
-                        },
-                        "META_REFRESH",
-                        name,
-                        "meta refresh",
-                    );
-                }
+            // guard가 거짓이면 아래 `_ => {}`로 가서 아무것도 하지 않는다.
+            "meta" if tag.attr("http-equiv").is_some_and(|v| v.trim().eq_ignore_ascii_case("refresh")) => {
+                let target = tag.attr("content").and_then(|c| REFRESH_URL.captures(c).map(|m| m[1].to_owned()));
+                let risky = target.as_deref().is_some_and(|u| matches!(classify_url(u), UrlKind::Remote | UrlKind::Script | UrlKind::Dangerous));
+                let exploit = target.as_deref().is_some_and(|u| classify_url(u) == UrlKind::Dangerous && is_exploit_scheme(u));
+                self.add(
+                    if exploit {
+                        Severity::Critical
+                    } else if risky {
+                        Severity::High
+                    } else {
+                        Severity::Medium
+                    },
+                    "META_REFRESH",
+                    name,
+                    "meta refresh",
+                );
             }
-            "base" => {
-                if tag.attr("href").is_some() {
-                    self.add(Severity::Medium, "BASE_HREF", name, "base element rewrites relative URLs");
-                }
-            }
+            "base" if tag.attr("href").is_some() => self.add(Severity::Medium, "BASE_HREF", name, "base element rewrites relative URLs"),
             "foreignobject" => self.add(Severity::Medium, "SVG_FOREIGN_OBJECT", name, "foreignObject embeds HTML in SVG"),
             "animate" | "set" | "animatetransform" | "animatemotion" => {
                 let target = tag.attr("attributename").unwrap_or("").to_lowercase();

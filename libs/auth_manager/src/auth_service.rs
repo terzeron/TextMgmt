@@ -231,7 +231,10 @@ pub fn observation_hash(value: &str) -> String {
         return String::new();
     }
     // jsonwebtoken의 HS256 서명은 HMAC-SHA256이다. 서명 결과(base64url)를 hex로 바꿔 쓴다.
-    let key = EncodingKey::from_secret(jwt_secret().as_bytes());
+    // jsonwebtoken 12부터 빈 HMAC 키는 거부된다. 비밀값이 없으면 관측 해시를 남기지 않는다.
+    let Ok(key) = EncodingKey::from_secret(jwt_secret().as_bytes()) else {
+        return String::new();
+    };
     let message = format!("tm-observation|{value}");
     let Ok(signature) = jsonwebtoken::crypto::sign(message.as_bytes(), &key, JWT_ALGORITHM) else {
         return String::new();
@@ -247,7 +250,7 @@ pub fn observation_hash(value: &str) -> String {
 fn sign(payload: &Claims) -> String {
     let secret = jwt_secret();
     assert!(!secret.is_empty(), "The environment variable TM_JWT_SECRET is not set.");
-    jsonwebtoken::encode(&Header::new(JWT_ALGORITHM), payload, &EncodingKey::from_secret(secret.as_bytes())).expect("JWT 서명")
+    jsonwebtoken::encode(&Header::new(JWT_ALGORITHM), payload, &EncodingKey::from_secret(secret.as_bytes()).expect("JWT 서명 키")).expect("JWT 서명")
 }
 
 /// 만료(`exp`)를 필수로 검사한다. 시계 오차 허용(leeway)은 두지 않는다(PyJWT 기본값과 같다).
@@ -258,7 +261,8 @@ fn decode_claims(token: &str) -> Result<Claims, ErrorKind> {
     }
     let mut validation = Validation::new(JWT_ALGORITHM);
     validation.leeway = 0;
-    jsonwebtoken::decode::<Claims>(token, &DecodingKey::from_secret(secret.as_bytes()), &validation).map(|data| data.claims).map_err(|e| e.into_kind())
+    let key = DecodingKey::from_secret(secret.as_bytes()).map_err(|e| e.into_kind())?;
+    jsonwebtoken::decode::<Claims>(token, &key, &validation).map(|data| data.claims).map_err(|e| e.into_kind())
 }
 
 /// 접근 토큰(2시간). `name`/`picture`가 None이면 빈 문자열이다.

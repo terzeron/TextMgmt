@@ -174,7 +174,7 @@ pub fn apply_moves_with(moves: &[Rec], manifest_path: &Path, log: Log, mover: Mo
         }
     }
 
-    let mut manifest = Manifest { created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string(), moved: done.clone(), failed };
+    let mut manifest = Manifest { created_at: jiff::Timestamp::now().strftime("%Y-%m-%dT%H:%M:%S+00:00").to_string(), moved: done.clone(), failed };
     if !done.is_empty() {
         // 기존 매니페스트가 있으면 합쳐서 누적한다. 나눠 옮겨도 unquarantine이 전부를 되돌린다.
         if manifest_path.exists() {
@@ -264,7 +264,7 @@ pub fn summarize(moves: &[Rec], out: &mut dyn Write) -> io::Result<()> {
     }
     writeln!(out, "\n대상 {}건, {:.1}MB", thousands(moves.len()), total_size / 1024.0 / 1024.0)?;
     writeln!(out, "  {:<26}{:>6}", "원래 카테고리", "건수")?;
-    by_cat.sort_by(|a, b| b.1.cmp(&a.1));
+    by_cat.sort_by_key(|entry| std::cmp::Reverse(entry.1));
     for (cat, n) in by_cat {
         writeln!(out, "  {:<26}{n:>6}", show(&cat))?;
     }

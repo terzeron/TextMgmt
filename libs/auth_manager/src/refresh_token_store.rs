@@ -486,7 +486,7 @@ fn build_session_page(rows: &[Row], q: &SessionQuery) -> SessionPage {
     }
 
     let mut filtered: Vec<&Session> = sessions.iter().filter(|s| q.status == "all" || s.status == q.status).collect();
-    filtered.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at));
+    filtered.sort_by_key(|session| std::cmp::Reverse(session.last_seen_at));
     let total_items = filtered.len();
     let page_size = q.page_size as usize;
     // page 0 은 빈 목록이다.

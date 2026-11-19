@@ -198,7 +198,7 @@ impl ViewHistoryStore {
         }
 
         // 안정 정렬이라 마지막 조회 시각이 같으면 SQL 순서를 유지한다.
-        users.sort_by(|a, b| b.last_viewed_at.cmp(&a.last_viewed_at));
+        users.sort_by_key(|user| std::cmp::Reverse(user.last_viewed_at));
         Ok(RecentViews { limit, users })
     }
 }

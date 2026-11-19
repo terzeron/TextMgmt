@@ -101,8 +101,8 @@ fn inode_of(path: &Path) -> i64 {
 
 /// 로컬 시각 기준 해당 해 1월 1일 0시의 유닉스 시각(`datetime(y, 1, 1).timestamp()`).
 fn local_timestamp(year: i32) -> u64 {
-    use chrono::TimeZone;
-    chrono::Local.with_ymd_and_hms(year, 1, 1, 0, 0, 0).single().unwrap().timestamp() as u64
+    let midnight = jiff::civil::date(year as i16, 1, 1).at(0, 0, 0, 0);
+    jiff::tz::TimeZone::system().to_ambiguous_timestamp(midnight).unambiguous().unwrap().as_second() as u64
 }
 
 fn set_mtime(path: &Path, secs: u64) {
@@ -912,6 +912,16 @@ mod test_loader_main_branches {
         // 파일 mtime이 저장된 updated_time보다 오래되면 재적재해도 updated_time을 유지한다.
         let doc = run_reload_with_stored_updated_time("2021-02-03T04:05:06", local_timestamp(2020));
         assert_eq!(doc["updated_time"], "2021-02-03T04:05:06");
+    }
+
+    #[test]
+    fn test_reload_reads_stored_updated_time_as_local_time_to_the_fraction() {
+        // 저장된 updated_time은 로컬 시각이고 소수 초까지 비교한다. 같은 초의 mtime이면 유지한다.
+        let doc = run_reload_with_stored_updated_time("2021-01-01T00:00:00.500000", local_timestamp(2021));
+        assert_eq!(doc["updated_time"], "2021-01-01T00:00:00.500000");
+        // 1초 새 파일이면 mtime을 로컬 시각으로 쓴 새 값이 들어간다.
+        let doc = run_reload_with_stored_updated_time("2021-01-01T00:00:00", local_timestamp(2021) + 1);
+        assert_eq!(doc["updated_time"], "2021-01-01T00:00:01");
     }
 
     #[test]

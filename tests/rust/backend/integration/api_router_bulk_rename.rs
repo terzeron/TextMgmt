@@ -106,8 +106,8 @@ fn book(path: &Path, book_id: i64) -> Book {
         page_count: 0,
         isbn: String::new(),
         summary: String::new(),
-        created_time: chrono::NaiveDateTime::default(),
-        updated_time: chrono::NaiveDateTime::default(),
+        created_time: jiff::civil::date(1970, 1, 1).at(0, 0, 0, 0),
+        updated_time: jiff::civil::date(1970, 1, 1).at(0, 0, 0, 0),
         score: 0.0,
     }
 }
@@ -175,7 +175,8 @@ async fn test_regex_backtracking_error_is_reported_without_updates() {
     let paths = touch(tmp.path(), &[name.as_str()]);
     setup(&bm, &paths);
 
-    let response = client(&bm).post_json(URL, &json!({"category": "cat", "pattern": "(?i)(a|b|ab)*(?=c)", "replacement": "b"})).await;
+    // fancy-regex 0.20은 입력에 없는 글자를 요구하는 뒤쪽 lookahead `(?=c)`를 VM 없이 걸러 낸다. lookbehind는 그대로 백트래킹한다.
+    let response = client(&bm).post_json(URL, &json!({"category": "cat", "pattern": "(?i)(a|b|ab)*(?<=c)", "replacement": "b"})).await;
     let body = response.json();
 
     assert_eq!(body["status"], "failure", "{body}");

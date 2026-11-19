@@ -20,12 +20,12 @@ classifier = { path = "../libs/classifier" }
 common = { path = "../libs/common" }
 cover_manager = { path = "../libs/cover_manager" }
 search_manager = { path = "../libs/search_manager" }
-fancy-regex = "0.14.0"
+fancy-regex = "0.20.1"
 async-trait = "0.1"
 axum = { version = "0.8.9", features = ["multipart"] }
 bookstore = { path = "../libs/bookstore" }
 db = { path = "../libs/db" }
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+jiff.workspace = true
 log = "0.4.34"
 md5 = { package = "md-5", version = "0.11.0" }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -38,7 +38,7 @@ tokio-util = { version = "0.7.20", features = ["io"] }
 [dev-dependencies]
 file_indexer = { path = "../libs/file_indexer" }
 # 테스트가 구형·만료 refresh token을 직접 만들어 거절되는지 확인한다.
-jsonwebtoken = { version = "11.1.0", default-features = false, features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "12.0.0", default-features = false, features = ["aws_lc_rs"] }
 doc_reader = { path = "../libs/doc_reader" }
 image_processor = { path = "../libs/image_processor" }
 pdf_engine = { path = "../libs/pdf_engine" }

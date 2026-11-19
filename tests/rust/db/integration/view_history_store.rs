@@ -12,7 +12,7 @@
 //! - `create_view_history_store() -> Result<ViewHistoryStore, ViewHistoryError>`
 //! - `db::{DbConnection, DbValue, DbError, Row, ConnectionProvider}`: 구 `StoreConnection`은 `DbConnection`이다.
 //!   - `trait DbConnection: Send { execute(sql, &[DbValue]) -> Result<u64, DbError>; fetch_all(..) -> Result<Vec<Row>, DbError>; fetch_one(..) -> Result<Option<Row>, DbError>; execute_batch(sql, &[Vec<DbValue>]) -> Result<u64, DbError>; commit(); rollback(); close(); }`
-//!   - `DbValue::{Null, Int(i64), Text(String), DateTime(NaiveDateTime)}`는 `PartialEq + Debug`이고 `From<&str>`, `From<i64>`, `From<Value>`를 가진다
+//!   - `DbValue::{Null, Int(i64), Text(String), DateTime(jiff::civil::DateTime)}`는 `PartialEq + Debug`이고 `From<&str>`, `From<i64>`, `From<Value>`를 가진다
 //! - (mock seam) `ViewHistoryStore::with_connection_provider(ConnectionProvider) -> ViewHistoryStore`(init_db를 건너뛴다. 구 `with_connection_factory`),
 //!   `ViewHistoryStore::with_max_history_rows(self, usize) -> ViewHistoryStore`(구 `set_max_history_rows`)
 //! - 로그는 `log::warn!`로 남기고 `common::log_capture::LogCapture`로 수집한다.

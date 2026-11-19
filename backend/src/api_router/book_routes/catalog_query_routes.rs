@@ -141,7 +141,7 @@ fn add_file_headers(modified: SystemTime, file_size: u64, headers: &mut Vec<(Str
         Ok(duration) => duration.as_secs_f64(),
         Err(before_epoch) => -before_epoch.duration().as_secs_f64(),
     };
-    let last_modified = chrono::DateTime::<chrono::Utc>::from(modified).format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+    let last_modified = jiff::Timestamp::try_from(modified).unwrap_or(jiff::Timestamp::UNIX_EPOCH).strftime("%a, %d %b %Y %H:%M:%S GMT").to_string();
     let etag_input = format!("{modified_secs}-{file_size}");
     let etag_hash = md5::Md5::digest(etag_input.as_bytes());
     let etag = format!("\"{}\"", etag_hash.iter().map(|byte| format!("{byte:02x}")).collect::<String>());

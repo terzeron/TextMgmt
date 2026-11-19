@@ -3,7 +3,7 @@
 //! 빠른 동작 테스트는 메모리 MySQL 대역을 쓰고, 운영 SQL 검증은 Docker MySQL 통합 테스트로 확인한다.
 //!
 //! 가정한 API (아직 구현 전이다. 설계: docs/rust-test-seams.md 3.4, 3.9, 3.10):
-//! - `db`: `DbValue { Null, Int(i64), Text(String), DateTime(NaiveDateTime) }` (`From<&str>`, `From<i64>`, `Clone + PartialEq + Debug`),
+//! - `db`: `DbValue { Null, Int(i64), Text(String), DateTime(jiff::civil::DateTime) }` (`From<&str>`, `From<i64>`, `Clone + PartialEq + Debug`),
 //!   `type Row = BTreeMap<String, DbValue>`, `enum DbError { Constraint(String), Other(String) }`,
 //!   `trait DbConnection: Send { execute(sql, &[DbValue]) -> Result<u64, DbError>; fetch_all(..) -> Result<Vec<Row>, DbError>; fetch_one(..) -> Result<Option<Row>, DbError>; execute_batch(sql, &[Vec<DbValue>]) -> Result<u64, DbError>; commit(); rollback(); close(); }`
 //!   `type ConnectionProvider = Arc<dyn Fn() -> Result<Box<dyn DbConnection>, DbError> + Send + Sync>`

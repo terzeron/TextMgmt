@@ -14,9 +14,25 @@ fn serve_raw(status: u16, body: &'static str) -> String {
     let url = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        stream.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
-        let mut buf = [0u8; 4096];
-        let _ = stream.read(&mut buf);
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        // 요청을 덜 읽고 닫으면 커널이 RST를 보내 클라이언트가 응답 대신 connection reset을 받는다.
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let header_end = loop {
+            let n = stream.read(&mut chunk).unwrap();
+            assert!(n > 0, "요청 헤더가 끝나기 전에 연결이 닫혔다");
+            buf.extend_from_slice(&chunk[..n]);
+            if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break p + 4;
+            }
+        };
+        let head = String::from_utf8_lossy(&buf[..header_end]).to_ascii_lowercase();
+        let len: usize = head.lines().find_map(|l| l.strip_prefix("content-length:")).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+        while buf.len() < header_end + len {
+            let n = stream.read(&mut chunk).unwrap();
+            assert!(n > 0, "요청 본문이 끝나기 전에 연결이 닫혔다");
+            buf.extend_from_slice(&chunk[..n]);
+        }
         write!(stream, "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
     });
     url

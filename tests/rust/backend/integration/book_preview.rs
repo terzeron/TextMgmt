@@ -321,7 +321,7 @@ fn build_epub_data(bm: &BookManager, epub_path: &Path) -> Value {
     let meta = fs::metadata(epub_path).unwrap();
     let inode = meta.ino();
     let rel_path = epub_path.strip_prefix(bm.path_prefix()).unwrap();
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.6f").to_string();
+    let now = jiff::ZonedDateTime::now().strftime("%Y-%m-%dT%H:%M:%S%.6f").to_string();
     let mut data = serde_json::Map::new();
     data.insert(
         inode.to_string(),
@@ -1845,7 +1845,7 @@ async fn test_validate_unsupported_type() {
     use std::os::unix::fs::MetadataExt;
     let meta = fs::metadata(&txt_path).unwrap();
     let rel_path = txt_path.strip_prefix(setup.bm.path_prefix()).unwrap();
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.6f").to_string();
+    let now = jiff::ZonedDateTime::now().strftime("%Y-%m-%dT%H:%M:%S%.6f").to_string();
     let mut data = serde_json::Map::new();
     data.insert(
         meta.ino().to_string(),
@@ -2455,4 +2455,18 @@ async fn test_html_routes_preserve_comics_prefix_and_download_attachment() {
         assert_eq!(download.header("content-disposition"), Some("attachment; filename=\"page.html\""));
         assert_eq!(download.body, fs::read(tmp.path().join("page.html")).unwrap());
     }
+}
+
+/// Last-Modified는 파일 mtime을 UTC로 쓴 IMF-fixdate(RFC 9110)다.
+#[tokio::test]
+async fn test_download_last_modified_is_imf_fixdate_in_gmt() {
+    let book = book!();
+    book.run(async {
+        // 2026-01-01T00:00:00Z
+        File::options().write(true).open(&book.epub_path).unwrap().set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_767_225_600)).unwrap();
+        let response = book.client().get(&format!("/download/{}", book.book_id)).await;
+        assert_eq!(response.status, 200);
+        assert_eq!(response.header("last-modified"), Some("Thu, 01 Jan 2026 00:00:00 GMT"));
+    })
+    .await;
 }

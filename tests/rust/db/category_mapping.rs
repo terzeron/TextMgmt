@@ -6,7 +6,7 @@
 //!
 //! 가정한 API:
 //! - `db`: 드라이버 추상화 (가짜 연결이 구현한다)
-//!   - `enum DbValue { Null, Int(i64), Text(String), DateTime(chrono::NaiveDateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`)
+//!   - `enum DbValue { Null, Int(i64), Text(String), DateTime(jiff::civil::DateTime) }` (`Clone + PartialEq + Debug`, `From<&str>`, `From<i64>`)
 //!   - `type Row = BTreeMap<String, DbValue>`, `enum DbError { Constraint(String), Other(String) }`
 //!   - `trait DbConnection: Send { execute(sql, &[DbValue]) -> Result<u64, DbError>; fetch_all(..) -> Result<Vec<Row>, DbError>; fetch_one(..) -> Result<Option<Row>, DbError>; execute_batch(sql, &[Vec<DbValue>]) -> Result<u64, DbError>; commit(); rollback(); close(); }`
 //!   - `type ConnectionProvider = Arc<dyn Fn() -> Result<Box<dyn DbConnection>, DbError> + Send + Sync>`
@@ -30,10 +30,10 @@
 //!   - `clear_classify_proposal_items(&self, ct)`, `delete_classify_proposal_item(&self, file_path: &str, ct).unwrap() -> u64`
 //!   - `merge_classify_proposal_status(&self, status: &Value, ct)`
 //!   - `pub const RELOAD_LOCK_HEARTBEAT_STALE_SECONDS: i64`, `struct CategoryMappingError(pub String)`
-//! - `chrono`가 dev-dependency에 있다고 본다 (`datetime.now()` 대응).
-use chrono::{Duration, Local, NaiveDateTime};
+//! - `jiff`가 의존성에 있다고 본다 (`datetime.now()` 대응).
 use db::category_mapping::{CategoryMapping, CategoryMappingError, RELOAD_LOCK_HEARTBEAT_STALE_SECONDS};
 use db::{ConnectionProvider, DbConnection, DbError, DbValue, Row};
+use jiff::{SignedDuration, civil};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering};
@@ -269,11 +269,11 @@ fn fail_with(msg: &'static str) -> impl Fn(&str, &[DbValue]) -> Result<(), DbErr
     move |_sql, _params| Err(DbError::Other(msg.to_string()))
 }
 
-fn now() -> NaiveDateTime {
-    Local::now().naive_local()
+fn now() -> civil::DateTime {
+    jiff::ZonedDateTime::now().datetime()
 }
 
-fn reload_row(category: DbValue, status: &str, at: NaiveDateTime) -> Row {
+fn reload_row(category: DbValue, status: &str, at: civil::DateTime) -> Row {
     row([
         ("category", category),
         ("status", status.into()),
@@ -288,7 +288,7 @@ fn reload_row(category: DbValue, status: &str, at: NaiveDateTime) -> Row {
     ])
 }
 
-fn lock_row(lock_key: &str, status: &str, updated_at: NaiveDateTime) -> Row {
+fn lock_row(lock_key: &str, status: &str, updated_at: civil::DateTime) -> Row {
     row([("lock_key", lock_key.into()), ("status", status.into()), ("updated_at", DbValue::DateTime(updated_at))])
 }
 
@@ -693,7 +693,7 @@ fn test_acquire_reload_lock_already_in_progress() {
 
 #[test]
 fn test_acquire_reload_lock_replaces_stale_lock() {
-    let old_updated_at = now() - Duration::seconds(RELOAD_LOCK_HEARTBEAT_STALE_SECONDS + 60);
+    let old_updated_at = now() - SignedDuration::from_secs(RELOAD_LOCK_HEARTBEAT_STALE_SECONDS + 60);
     let cursor = FakeCursor::new().with_rows(vec![lock_row("__all__", "running", old_updated_at)]);
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     let (acquired, error, blocking) = cm.acquire_reload_lock("book", None, None).unwrap();
@@ -863,7 +863,7 @@ fn test_get_reload_status_returns_running_row() {
 
 #[test]
 fn test_get_reload_status_reports_stale_running_as_failed() {
-    let old_updated_at = now() - Duration::seconds(RELOAD_LOCK_HEARTBEAT_STALE_SECONDS + 60);
+    let old_updated_at = now() - SignedDuration::from_secs(RELOAD_LOCK_HEARTBEAT_STALE_SECONDS + 60);
     let cursor = FakeCursor::new().with_fetchone_rows(vec![Some(reload_row("A".into(), "running", old_updated_at))]);
     let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
     let status = cm.get_reload_status("book", None).unwrap().unwrap();
@@ -1293,7 +1293,7 @@ fn blank_keywords_only_clear_or_skip_inserts() {
 
 #[test]
 fn reload_status_reads_loose_column_types() {
-    let stale = now() - Duration::seconds(RELOAD_LOCK_HEARTBEAT_STALE_SECONDS + 60);
+    let stale = now() - SignedDuration::from_secs(RELOAD_LOCK_HEARTBEAT_STALE_SECONDS + 60);
     let status_of = |row: Row| {
         let cursor = FakeCursor::new().with_fetchone_rows(vec![Some(row)]);
         CategoryMapping::with_connection_provider(provider_for_cursor(&cursor)).get_reload_status("book", None).unwrap().unwrap()
@@ -1342,4 +1342,16 @@ fn starting_a_proposal_reports_lock_read_and_update_failures() {
         let cm = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor));
         assert!(cm.try_start_classify_proposal(&json!({"status": "running"}), "book", 60).is_err(), "{needle}");
     }
+}
+
+/// 재적재 상태 응답의 시각은 `T`로 잇는 ISO 문자열이다. 마이크로초가 0이면 소수부를 뺀다.
+#[test]
+fn reload_status_times_are_iso_strings_without_zero_micros() {
+    let whole = civil::date(2026, 1, 2).at(3, 4, 5, 0);
+    let mut row = reload_row(DbValue::Null, "running", whole);
+    row.insert("updated_at".into(), DbValue::DateTime(whole + SignedDuration::from_micros(42)));
+    let cursor = FakeCursor::new().with_fetchone_rows(vec![Some(row)]);
+    let out = CategoryMapping::with_connection_provider(provider_for_cursor(&cursor)).get_reload_status("book", None).unwrap().unwrap();
+    assert_eq!(out["started_at"], "2026-01-02T03:04:05".into());
+    assert_eq!(out["updated_at"], "2026-01-02T03:04:05.000042".into());
 }

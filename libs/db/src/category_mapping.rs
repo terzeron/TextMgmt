@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
-use chrono::{Local, NaiveDateTime};
+use jiff::civil;
 use serde_json::{Map, Value};
 
 use crate::{ConnectionProvider, DbConnection, DbError, DbValue, MysqlConfig, Row, mysql_provider};
@@ -91,9 +91,9 @@ fn is_empty_value(v: Option<&DbValue>) -> bool {
 }
 
 /// ISO 8601 문자열. 마이크로초가 0이면 소수부를 생략한다.
-fn isoformat(dt: &NaiveDateTime) -> String {
-    let micros = dt.and_utc().timestamp_subsec_micros();
-    if micros == 0 { dt.format("%Y-%m-%dT%H:%M:%S").to_string() } else { format!("{}.{micros:06}", dt.format("%Y-%m-%dT%H:%M:%S")) }
+fn isoformat(dt: &civil::DateTime) -> String {
+    let micros = dt.subsec_nanosecond() / 1_000;
+    if micros == 0 { dt.strftime("%Y-%m-%dT%H:%M:%S").to_string() } else { format!("{}.{micros:06}", dt.strftime("%Y-%m-%dT%H:%M:%S")) }
 }
 
 fn iso_or_null(v: Option<&DbValue>) -> DbValue {
@@ -106,7 +106,7 @@ fn iso_or_null(v: Option<&DbValue>) -> DbValue {
 /// `updated_at`이 지금(앱 지역 시간)보다 `RELOAD_LOCK_HEARTBEAT_STALE_SECONDS`를 넘게 과거인가.
 fn heartbeat_is_stale(updated_at: Option<&DbValue>) -> bool {
     match updated_at {
-        Some(DbValue::DateTime(dt)) => (Local::now().naive_local() - *dt).num_milliseconds() > RELOAD_LOCK_HEARTBEAT_STALE_SECONDS * 1000,
+        Some(DbValue::DateTime(dt)) => dt.duration_until(jiff::ZonedDateTime::now().datetime()).as_millis() > i128::from(RELOAD_LOCK_HEARTBEAT_STALE_SECONDS) * 1000,
         _ => false,
     }
 }
@@ -1193,7 +1193,7 @@ mod facade_tests {
         row.insert("null".into(), DbValue::Null);
         row.insert("number".into(), DbValue::Int(7));
         row.insert("text".into(), DbValue::Text("value".into()));
-        let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 27).unwrap().and_hms_opt(1, 2, 3).unwrap();
+        let date = jiff::civil::date(2026, 10, 27).at(1, 2, 3, 0);
         row.insert("date".into(), DbValue::DateTime(date));
         assert_eq!(db_row_to_json(row), json!({"null": null, "number": 7, "text": "value", "date": "2026-10-27 01:02:03"}));
 

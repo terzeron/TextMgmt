@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM rust:1.91-slim-bookworm AS builder
+FROM rust:1.95.0-slim-bookworm AS builder
 ARG APT_REFRESH=0
 RUN : "apt refresh ${APT_REFRESH}" && \
     apt-get update && apt-get upgrade -y && \

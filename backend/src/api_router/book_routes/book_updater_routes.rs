@@ -81,7 +81,7 @@ async fn bulk_rename_files(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Or
             }
         }
     }
-    books.sort_by(|a, b| a.file_path.to_string_lossy().to_lowercase().cmp(&b.file_path.to_string_lossy().to_lowercase()));
+    books.sort_by_key(|book| book.file_path.to_string_lossy().to_lowercase());
     let mut plans = Vec::new();
     for book in books {
         let name = book.file_path.file_name().unwrap_or_default().to_string_lossy();
@@ -130,7 +130,7 @@ async fn bulk_rename_files(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Or
             } else {
                 for path in &reserved {
                     if let Some(file_name) = path.file_name().map(|n| n.to_string_lossy())
-                        && let Ok(Some(captures)) = serial_re.captures(&file_name)
+                        && let Ok(Some(captures)) = serial_re.captures(&*file_name)
                     {
                         largest = largest.max(captures.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0));
                     }

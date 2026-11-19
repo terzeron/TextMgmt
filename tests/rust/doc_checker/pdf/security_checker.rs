@@ -241,7 +241,8 @@ fn oversized_compressed_object_stream_is_rejected_as_incomplete() {
     assert!(bytes.len() < 1024 * 1024, "fixture must be a highly compressed PDF");
     let (code, out) = scan_bytes(&bytes);
     assert_eq!(code, 2, "oversized object stream must not be scanned as complete: {out}");
-    assert!(out.contains("INCOMPLETE") && out.contains("object stream"), "{out}");
+    // lopdf 0.47은 객체 스트림의 해제 한도 초과를 `invalid object stream`으로 감싸지 않고 그대로 돌려준다.
+    assert!(out.contains("INCOMPLETE") && out.contains("couldn't decompress stream"), "{out}");
 }
 
 // ---- 인자 ----

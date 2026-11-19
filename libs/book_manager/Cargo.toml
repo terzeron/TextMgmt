@@ -11,7 +11,7 @@ pdf_engine = { path = "../pdf_engine" }
 async-trait = "0.1"
 base64 = "0.23.1"
 book_model = { path = "../book_model" }
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+jiff.workspace = true
 classifier = { path = "../classifier" }
 common = { path = "../common" }
 cover_manager = { path = "../cover_manager" }

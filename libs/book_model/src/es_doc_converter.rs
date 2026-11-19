@@ -2,32 +2,35 @@
 
 use std::path::Path;
 
-use chrono::{NaiveDate, NaiveDateTime};
 use common::json_field_reader::str_field;
+use jiff::civil;
 use serde_json::Value;
 
 use crate::book_metadata::Book;
 
 /// `datetime.fromisoformat`이 받는 흔한 꼴(날짜만, 'T' 또는 공백 구분, 소수 초).
-pub fn parse_iso(text: &str) -> Option<NaiveDateTime> {
+pub fn parse_iso(text: &str) -> Option<civil::DateTime> {
     for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"] {
-        if let Ok(parsed) = NaiveDateTime::parse_from_str(text, fmt) {
+        if let Ok(parsed) = civil::DateTime::strptime(fmt, text) {
             return Some(parsed);
         }
     }
-    NaiveDate::parse_from_str(text, "%Y-%m-%d").ok().and_then(|d| d.and_hms_opt(0, 0, 0))
+    civil::Date::strptime("%Y-%m-%d", text).ok().map(|d| d.to_datetime(civil::Time::midnight()))
 }
 
 fn int_of(info: &Value, key: &str) -> i64 {
     info.get(key).and_then(Value::as_i64).unwrap_or(0)
 }
 
+/// 시각을 읽지 못한 문서의 대체값. chrono 시절 기본값(1970-01-01T00:00:00)을 그대로 쓴다.
+pub const UNIX_EPOCH_DATETIME: civil::DateTime = civil::date(1970, 1, 1).at(0, 0, 0, 0);
+
 /// ES 문서에서 `Book`을 만든다. `Book::new`와 달리 이 매니저의 책 루트를 쓰고, 빠진 필드는 기본값으로 채운다
 /// (문서 하나가 목록 전체를 막지 않게 한다).
 pub fn book_from_doc(path_prefix: &Path, book_id: i64, info: &Value, score: f64) -> Book {
     let updated_text = str_field(info, "updated_time").to_string();
     let created_text = info.get("created_time").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| updated_text.clone());
-    let epoch = NaiveDateTime::default();
+    let epoch = UNIX_EPOCH_DATETIME;
     Book {
         book_id,
         category: str_field(info, "category").to_string(),
@@ -66,11 +69,20 @@ mod tests {
 
     #[test]
     fn parse_iso_accepts_iso_8601_variants() {
-        for text in ["2024-01-02T03:04:05.123456", "2024-01-02 03:04:05", "2024-01-02T03:04", "2024-01-02 03:04", "2024-01-02"] {
-            assert!(parse_iso(text).is_some(), "{text}");
+        for (text, expected) in [
+            ("2024-01-02T03:04:05.123456", "2024-01-02T03:04:05.123456"),
+            ("2024-01-02T03:04:05.5", "2024-01-02T03:04:05.500000"),
+            ("2024-01-02 03:04:05", "2024-01-02T03:04:05.000000"),
+            ("2024-01-02T03:04", "2024-01-02T03:04:00.000000"),
+            ("2024-01-02 03:04", "2024-01-02T03:04:00.000000"),
+            ("2024-01-02", "2024-01-02T00:00:00.000000"),
+        ] {
+            assert_eq!(parse_iso(text).map(|t| crate::book_metadata::iso_micros(&t)).as_deref(), Some(expected), "{text}");
         }
-        assert_eq!(crate::book_metadata::iso_micros(&parse_iso("2024-01-02").unwrap()), "2024-01-02T00:00:00.000000");
-        assert_eq!(parse_iso("02/01/2024"), None);
+        // 오프셋이 붙은 꼴은 받지 않는다.
+        for text in ["02/01/2024", "2024-01-02T03:04:05+09:00", "2024-01-02T03:04:05Z"] {
+            assert_eq!(parse_iso(text), None, "{text}");
+        }
     }
 
     #[test]
@@ -81,7 +93,7 @@ mod tests {
         assert_eq!(book.file_path, Path::new("/lib/A/t.epub"));
         assert_eq!(book.created_time, book.updated_time, "created_time이 없으면 updated_time을 쓴다");
         let broken = book_from_doc(Path::new("/lib"), 1, &json!({"updated_time": "nope"}), 0.0);
-        assert_eq!(broken.updated_time, NaiveDateTime::default());
+        assert_eq!(crate::book_metadata::iso_micros(&broken.updated_time), "1970-01-01T00:00:00.000000");
     }
 
     #[test]

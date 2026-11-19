@@ -16,7 +16,7 @@ container_parser = { path = "../container_parser" }
 doc_reader = { path = "../doc_reader" }
 common = { path = "../common", default-features = false, features = ["xml_parser", "zip_reader"] }
 encoding_rs = "0.8.42"
-epubveri = "0.33.0"
+epubveri = "0.45.0"
 flate2 = "1"
 htmlkit = { path = "../htmlkit" }
 lopdf.workspace = true

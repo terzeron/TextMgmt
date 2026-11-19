@@ -4,8 +4,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime};
 use common::json_field_reader::str_field;
+use jiff::civil;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -60,8 +60,8 @@ pub struct Book {
     pub page_count: i64,
     pub isbn: String,
     pub summary: String,
-    pub created_time: NaiveDateTime,
-    pub updated_time: NaiveDateTime,
+    pub created_time: civil::DateTime,
+    pub updated_time: civil::DateTime,
     pub score: f64,
 }
 
@@ -85,8 +85,8 @@ pub struct BookView {
 }
 
 /// `2020-01-02T03:04:05.123456` 모양.
-pub fn iso_micros(time: &NaiveDateTime) -> String {
-    time.format("%Y-%m-%dT%H:%M:%S.%6f").to_string()
+pub fn iso_micros(time: &civil::DateTime) -> String {
+    time.strftime("%Y-%m-%dT%H:%M:%S.%6f").to_string()
 }
 
 fn required_str(info: &Value, key: &str) -> String {
@@ -98,7 +98,7 @@ fn optional_int(info: &Value, key: &str) -> i64 {
 }
 
 /// `datetime.fromisoformat`이 받는 흔한 꼴(날짜만, 'T' 또는 공백 구분, 소수 초)을 읽는다.
-fn parse_iso(text: &str) -> NaiveDateTime {
+fn parse_iso(text: &str) -> civil::DateTime {
     // 소수 초 구분자로 쉼표도 허용한다.
     let normalized;
     let text = if text.contains(',') {
@@ -107,21 +107,27 @@ fn parse_iso(text: &str) -> NaiveDateTime {
     } else {
         text
     };
-    if let Ok(parsed) = DateTime::parse_from_rfc3339(text) {
-        return parsed.naive_local();
-    }
-    for fmt in ["%Y-%m-%dT%H:%M:%S%.f%z", "%Y-%m-%d %H:%M:%S%.f%z", "%Y-%m-%dT%H:%M:%S%.f%:z", "%Y-%m-%d %H:%M:%S%.f%:z"] {
-        if let Ok(parsed) = DateTime::<FixedOffset>::parse_from_str(text, fmt) {
-            return parsed.naive_local();
-        }
-    }
-    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"] {
-        if let Ok(parsed) = NaiveDateTime::parse_from_str(text, fmt) {
+    // RFC 3339는 구분자 `t`와 UTC 표시 `z`를 소문자로도 쓴다. 유효한 꼴에는 다른 글자가 없으니 대문자로 맞춘다.
+    let upper = text.to_ascii_uppercase();
+    // 오프셋이 붙은 꼴은 오프셋을 버리고 적힌 시각을 쓴다.
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.fZ",
+        "%Y-%m-%d %H:%M:%S%.fZ",
+        "%Y-%m-%dT%H:%M:%S%.f%z",
+        "%Y-%m-%d %H:%M:%S%.f%z",
+        "%Y-%m-%dT%H:%M:%S%.f%:z",
+        "%Y-%m-%d %H:%M:%S%.f%:z",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M",
+    ] {
+        if let Ok(parsed) = civil::DateTime::strptime(fmt, &upper) {
             return parsed;
         }
     }
-    match NaiveDate::parse_from_str(text, "%Y-%m-%d") {
-        Ok(date) => date.and_hms_opt(0, 0, 0).expect("자정"),
+    match civil::Date::strptime("%Y-%m-%d", &upper) {
+        Ok(date) => date.to_datetime(civil::Time::midnight()),
         Err(_) => panic!("ISO 형식이 아닌 시각: {text}"),
     }
 }

@@ -250,7 +250,7 @@ impl BookManager {
         };
         // 최신 책 목록은 updated_time 순이다. 표지 저장은 EPUB의 mtime을 되돌리므로(캐시·재적재 판정 보존) 색인에 직접 반영한다.
         // loader는 파일 mtime이 저장된 updated_time 이하이면 이 값을 유지하므로 재적재해도 되돌아가지 않는다.
-        let updated_time = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.6f").to_string();
+        let updated_time = jiff::ZonedDateTime::now().strftime("%Y-%m-%dT%H:%M:%S%.6f").to_string();
         let fields = json!({"file_size": result.file_size, "updated_time": updated_time});
         let es = self.es.clone();
         let updated = tokio::task::spawn_blocking(move || es.update(book_id, &fields)).await;

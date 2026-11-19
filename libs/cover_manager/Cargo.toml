@@ -10,7 +10,7 @@ autotests = false
 pdf_engine = { path = "../pdf_engine" }
 base64 = "0.23.1"
 bookstore = { path = "../bookstore" }
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+jiff.workspace = true
 common = { path = "../common" }
 db = { path = "../db" }
 book_model = { path = "../book_model" }

@@ -9,8 +9,8 @@ autotests = false
 [dependencies]
 classifier = { path = "../../libs/classifier" }
 search_manager = { path = "../../libs/search_manager" }
-rand = "0.9"
-rand_chacha = "0.9"
+rand = "0.10"
+rand_chacha = "0.10"
 serde_json = { workspace = true }
 
 [[test]]
