@@ -515,7 +515,7 @@ mod tests {
     }
 
     fn test_book(category: &str) -> Book {
-        let timestamp = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let timestamp = jiff::civil::date(2026, 1, 1).at(0, 0, 0, 0);
         Book {
             book_id: 1,
             category: category.into(),

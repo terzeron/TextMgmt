@@ -7,7 +7,7 @@ publish.workspace = true
 autotests = false
 
 [dependencies]
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+jiff.workspace = true
 common = { path = "../common", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }

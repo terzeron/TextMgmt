@@ -9,7 +9,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Local, NaiveDateTime, Timelike};
+use jiff::Timestamp;
+use jiff::civil;
+use jiff::tz::TimeZone;
 
 pub const CREATED_TIME_SOURCE_STATX_BTIME: &str = "statx_btime";
 pub const CREATED_TIME_SOURCE_ST_BIRTHTIME: &str = "st_birthtime";
@@ -35,18 +37,19 @@ impl StatResult {
     }
 }
 
-fn local_naive(sec: i64, micro: u32) -> NaiveDateTime {
-    let utc = DateTime::from_timestamp(sec, micro * 1000).unwrap_or_default();
-    utc.with_timezone(&Local).naive_local()
+fn local_naive(sec: i64, micro: u32) -> civil::DateTime {
+    // 범위를 벗어난 시각은 유닉스 기점으로 둔다(chrono 시절과 같다).
+    let utc = Timestamp::new(sec, (micro * 1000) as i32).unwrap_or(Timestamp::UNIX_EPOCH);
+    TimeZone::system().to_datetime(utc)
 }
 
 /// 초와 나노초를 `f64`로 합친 뒤 로컬 시각으로 바꾼다.
-pub fn datetime_from_parts(sec: i64, nsec: u32) -> NaiveDateTime {
+pub fn datetime_from_parts(sec: i64, nsec: u32) -> civil::DateTime {
     datetime_from_float(sec as f64 + nsec as f64 / 1e9)
 }
 
 /// 유닉스 시각(초, 소수부는 마이크로초까지)을 시간대 없는 로컬 시각으로 바꾼다.
-pub fn datetime_from_float(ts: f64) -> NaiveDateTime {
+pub fn datetime_from_float(ts: f64) -> civil::DateTime {
     let whole = ts.trunc();
     let mut sec = whole as i64;
     let mut micro = ((ts - whole) * 1e6).round_ties_even() as i64;
@@ -61,7 +64,7 @@ pub fn datetime_from_float(ts: f64) -> NaiveDateTime {
 }
 
 /// Linux btime. `fetch`가 시각을 못 주면(미지원 파일시스템, 호출 실패) `None`이다.
-pub fn linux_btime_with(path: &Path, is_linux: bool, fetch: &dyn Fn(&Path) -> io::Result<SystemTime>) -> Option<NaiveDateTime> {
+pub fn linux_btime_with(path: &Path, is_linux: bool, fetch: &dyn Fn(&Path) -> io::Result<SystemTime>) -> Option<civil::DateTime> {
     if !is_linux {
         return None;
     }
@@ -76,11 +79,11 @@ pub fn linux_btime_with(path: &Path, is_linux: bool, fetch: &dyn Fn(&Path) -> io
     Some(datetime_from_parts(seconds, nanos))
 }
 
-pub fn linux_statx_btime(path: &Path) -> Option<NaiveDateTime> {
+pub fn linux_statx_btime(path: &Path) -> Option<civil::DateTime> {
     linux_btime_with(path, cfg!(target_os = "linux"), &|p| std::fs::metadata(p)?.created())
 }
 
-pub fn stat_created_time_with_source(st: &StatResult) -> (NaiveDateTime, &'static str) {
+pub fn stat_created_time_with_source(st: &StatResult) -> (civil::DateTime, &'static str) {
     if let Some(ns) = st.birthtime_ns {
         return (datetime_from_float(ns as f64 / 1e9), CREATED_TIME_SOURCE_ST_BIRTHTIME);
     }
@@ -90,19 +93,19 @@ pub fn stat_created_time_with_source(st: &StatResult) -> (NaiveDateTime, &'stati
     (datetime_from_float(st.ctime), CREATED_TIME_SOURCE_ST_CTIME)
 }
 
-pub fn stat_created_time(st: &StatResult) -> NaiveDateTime {
+pub fn stat_created_time(st: &StatResult) -> civil::DateTime {
     stat_created_time_with_source(st).0
 }
 
 /// ISO 8601 문자열. 소수부는 0이어도 항상 마이크로초 6자리로 쓴다.
-pub fn iso(dt: NaiveDateTime) -> String {
-    dt.format("%Y-%m-%dT%H:%M:%S%.6f").to_string()
+pub fn iso(dt: civil::DateTime) -> String {
+    dt.strftime("%Y-%m-%dT%H:%M:%S%.6f").to_string()
 }
 
 /// [`iso`]의 짧은 형태. 마이크로초가 0이면 소수부를 생략한다. loader가 만드는 색인 레코드(`record_builder`)가 쓴다.
-pub fn iso_short(dt: NaiveDateTime) -> String {
-    let base = dt.format("%Y-%m-%dT%H:%M:%S").to_string();
-    match dt.nanosecond() / 1000 {
+pub fn iso_short(dt: civil::DateTime) -> String {
+    let base = dt.strftime("%Y-%m-%dT%H:%M:%S").to_string();
+    match dt.subsec_nanosecond() / 1000 {
         0 => base,
         micro => format!("{base}.{micro:06}"),
     }
@@ -113,7 +116,7 @@ pub fn stat_created_time_iso(st: &StatResult) -> String {
 }
 
 /// btime 조회 방법을 바꿔 끼울 수 있는 본체. `stat`이 없으면 경로를 stat한다.
-pub fn path_created_time_with(path: &Path, stat: Option<&StatResult>, btime: &dyn Fn(&Path) -> Option<NaiveDateTime>) -> io::Result<(NaiveDateTime, &'static str)> {
+pub fn path_created_time_with(path: &Path, stat: Option<&StatResult>, btime: &dyn Fn(&Path) -> Option<civil::DateTime>) -> io::Result<(civil::DateTime, &'static str)> {
     if let Some(t) = btime(path) {
         return Ok((t, CREATED_TIME_SOURCE_STATX_BTIME));
     }
@@ -123,15 +126,15 @@ pub fn path_created_time_with(path: &Path, stat: Option<&StatResult>, btime: &dy
     }
 }
 
-pub fn path_created_time_with_source(path: &Path, stat: Option<&StatResult>) -> io::Result<(NaiveDateTime, &'static str)> {
+pub fn path_created_time_with_source(path: &Path, stat: Option<&StatResult>) -> io::Result<(civil::DateTime, &'static str)> {
     path_created_time_with(path, stat, &linux_statx_btime)
 }
 
-pub fn path_created_time(path: &Path, stat: Option<&StatResult>) -> io::Result<NaiveDateTime> {
+pub fn path_created_time(path: &Path, stat: Option<&StatResult>) -> io::Result<civil::DateTime> {
     Ok(path_created_time_with_source(path, stat)?.0)
 }
 
-pub fn path_created_time_iso_with(path: &Path, stat: Option<&StatResult>, btime: &dyn Fn(&Path) -> Option<NaiveDateTime>) -> io::Result<String> {
+pub fn path_created_time_iso_with(path: &Path, stat: Option<&StatResult>, btime: &dyn Fn(&Path) -> Option<civil::DateTime>) -> io::Result<String> {
     Ok(iso_short(path_created_time_with(path, stat, btime)?.0))
 }
 

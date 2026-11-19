@@ -12,7 +12,7 @@ path = "src/bin/index_worker.rs"
 
 [dependencies]
 common = { path = "../common", default-features = false, features = ["zip_reader"] }
-chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+jiff.workspace = true
 doc_reader = { path = "../doc_reader" }
 isbn_extractor = { path = "../isbn_extractor" }
 lopdf.workspace = true

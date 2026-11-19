@@ -438,8 +438,7 @@ pub fn detach_publisher_cover<R: Read + Seek>(archive: &mut ZipArchive<R>, opf_p
 }
 
 fn now_zip_time() -> DateTime {
-    use chrono::{Datelike, Timelike};
-    let now = chrono::Local::now();
+    let now = jiff::ZonedDateTime::now();
     DateTime::from_date_and_time(now.year().clamp(1980, 2107) as u16, now.month() as u8, now.day() as u8, now.hour() as u8, now.minute() as u8, now.second().min(59) as u8).unwrap_or_default()
 }
 

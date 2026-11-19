@@ -59,10 +59,15 @@ fn suffix_with_dot(path: &Path) -> String {
 
 /// 이미 색인된 문서의 `updated_time`(로컬 시각 ISO)을 유닉스 시각으로 바꾼다.
 fn iso_to_timestamp(text: &str) -> Option<f64> {
-    use chrono::{Local, NaiveDateTime, TimeZone};
-    let naive = NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f").ok()?;
-    let local = Local.from_local_datetime(&naive).earliest()?;
-    Some(local.timestamp() as f64 + f64::from(local.timestamp_subsec_nanos()) / 1e9)
+    use jiff::tz::{AmbiguousOffset, TimeZone};
+    let naive = jiff::civil::DateTime::strptime("%Y-%m-%dT%H:%M:%S%.f", text).ok()?;
+    let local = TimeZone::system().to_ambiguous_timestamp(naive);
+    // 서머타임으로 건너뛴 시각은 없는 시각이라 읽지 않는다. 겹친 시각은 앞쪽을 쓴다.
+    if matches!(local.offset(), AmbiguousOffset::Gap { .. }) {
+        return None;
+    }
+    let local = local.earlier().ok()?;
+    Some(local.as_second() as f64 + f64::from(local.subsec_nanosecond()) / 1e9)
 }
 
 /// `--reencode` 설정. 색인하기 전에 UTF-8이 아닌 TXT를 제자리에서 UTF-8로 바꾼다.

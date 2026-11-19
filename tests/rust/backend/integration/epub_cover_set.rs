@@ -45,12 +45,12 @@ fn entries(members: &Members) -> Vec<(String, Vec<u8>)> {
 }
 
 /// `datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%f")`: 소수부가 없거나 6자리를 넘으면 실패한다.
-fn parse_updated_time(value: &str) -> chrono::NaiveDateTime {
+fn parse_updated_time(value: &str) -> jiff::civil::DateTime {
     let (head, fraction) = value.split_once('.').unwrap_or_else(|| panic!("updated_time 형식 오류: {value}"));
     assert!((1..=6).contains(&fraction.len()) && fraction.bytes().all(|b| b.is_ascii_digit()), "updated_time 소수부 오류: {value}");
-    let stamp = chrono::NaiveDateTime::parse_from_str(head, "%Y-%m-%dT%H:%M:%S").unwrap_or_else(|e| panic!("updated_time 형식 오류: {value}: {e}"));
+    let stamp = jiff::civil::DateTime::strptime("%Y-%m-%dT%H:%M:%S", head).unwrap_or_else(|e| panic!("updated_time 형식 오류: {value}: {e}"));
     let micros: u32 = format!("{fraction:0<6}").parse().unwrap();
-    stamp + chrono::Duration::microseconds(micros as i64)
+    stamp + jiff::SignedDuration::from_micros(micros as i64)
 }
 
 fn ncx_doc(nav_map: &str, extra: &str) -> String {
@@ -83,7 +83,7 @@ async fn test_adds_a_cover_to_an_epub_without_one() {
     assert!(*doc_id == 1 && kwargs["file_size"].as_u64() == Some(env.size()));
     // 최신 책 목록(updated_time 순)에 오르도록 방금 시각을 색인한다. 만화 인덱스의 strptime 형식과도 맞아야 한다.
     let stamp = parse_updated_time(kwargs["updated_time"].as_str().unwrap());
-    assert!((chrono::Local::now().naive_local() - stamp).num_milliseconds().abs() < 60_000);
+    assert!(stamp.duration_until(jiff::ZonedDateTime::now().datetime()).as_millis().abs() < 60_000);
     assert!(result.warning.is_none());
 }
 

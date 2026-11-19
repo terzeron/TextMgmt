@@ -321,7 +321,7 @@ fn build_epub_data(bm: &BookManager, epub_path: &Path) -> Value {
     let meta = fs::metadata(epub_path).unwrap();
     let inode = meta.ino();
     let rel_path = epub_path.strip_prefix(bm.path_prefix()).unwrap();
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.6f").to_string();
+    let now = jiff::ZonedDateTime::now().strftime("%Y-%m-%dT%H:%M:%S%.6f").to_string();
     let mut data = serde_json::Map::new();
     data.insert(
         inode.to_string(),
@@ -1845,7 +1845,7 @@ async fn test_validate_unsupported_type() {
     use std::os::unix::fs::MetadataExt;
     let meta = fs::metadata(&txt_path).unwrap();
     let rel_path = txt_path.strip_prefix(setup.bm.path_prefix()).unwrap();
-    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.6f").to_string();
+    let now = jiff::ZonedDateTime::now().strftime("%Y-%m-%dT%H:%M:%S%.6f").to_string();
     let mut data = serde_json::Map::new();
     data.insert(
         meta.ino().to_string(),

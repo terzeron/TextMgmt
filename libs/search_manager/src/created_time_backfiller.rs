@@ -32,15 +32,13 @@ impl ESManager {
     fn created_time_with_source(&self, path: &Path) -> io::Result<(String, &'static str)> {
         let metadata = self.fs.metadata(path)?;
         let (time, source) = match metadata.created() {
-            Ok(created) => (DateTime::<Local>::from(created), "statx_btime"),
-            Err(_) => {
-                (DateTime::from_timestamp(metadata.ctime(), metadata.ctime_nsec() as u32).map(|utc| utc.with_timezone(&Local)).ok_or_else(|| io::Error::other("ctime을 해석할 수 없다"))?, "st_ctime")
-            }
+            Ok(created) => (Timestamp::try_from(created).map_err(|e| io::Error::other(format!("btime을 해석할 수 없다: {e}")))?, "statx_btime"),
+            Err(_) => (Timestamp::new(metadata.ctime(), metadata.ctime_nsec() as i32).map_err(|_| io::Error::other("ctime을 해석할 수 없다"))?, "st_ctime"),
         };
-        let local = time.naive_local();
+        let local = TimeZone::system().to_datetime(time);
         // ISO 8601: 마이크로초가 0이면 소수부를 생략한다.
-        let micros = local.and_utc().timestamp_subsec_micros();
-        let iso = if micros == 0 { local.format("%Y-%m-%dT%H:%M:%S").to_string() } else { local.format("%Y-%m-%dT%H:%M:%S%.6f").to_string() };
+        let micros = local.subsec_nanosecond() / 1_000;
+        let iso = if micros == 0 { local.strftime("%Y-%m-%dT%H:%M:%S").to_string() } else { local.strftime("%Y-%m-%dT%H:%M:%S%.6f").to_string() };
         Ok((iso, source))
     }
 

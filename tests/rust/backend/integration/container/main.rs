@@ -1269,8 +1269,8 @@ fn dummy_book(book_id: i64, category: &str, title: &str, file_path: &str, file_t
         line_count: 0,
         page_count: 0,
         isbn: String::new(),
-        created_time: chrono::NaiveDateTime::parse_from_str(created_time.unwrap_or(NOW_ISO), "%Y-%m-%dT%H:%M:%S%.f").unwrap(),
-        updated_time: chrono::NaiveDateTime::parse_from_str(NOW_ISO, "%Y-%m-%dT%H:%M:%S%.f").unwrap(),
+        created_time: jiff::civil::DateTime::strptime("%Y-%m-%dT%H:%M:%S%.f", created_time.unwrap_or(NOW_ISO)).unwrap(),
+        updated_time: jiff::civil::DateTime::strptime("%Y-%m-%dT%H:%M:%S%.f", NOW_ISO).unwrap(),
         score,
         summary: String::new(),
     }

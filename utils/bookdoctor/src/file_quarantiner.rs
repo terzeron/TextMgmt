@@ -174,7 +174,7 @@ pub fn apply_moves_with(moves: &[Rec], manifest_path: &Path, log: Log, mover: Mo
         }
     }
 
-    let mut manifest = Manifest { created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string(), moved: done.clone(), failed };
+    let mut manifest = Manifest { created_at: jiff::Timestamp::now().strftime("%Y-%m-%dT%H:%M:%S+00:00").to_string(), moved: done.clone(), failed };
     if !done.is_empty() {
         // 기존 매니페스트가 있으면 합쳐서 누적한다. 나눠 옮겨도 unquarantine이 전부를 되돌린다.
         if manifest_path.exists() {

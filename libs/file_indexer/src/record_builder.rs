@@ -86,7 +86,7 @@ pub fn detect_file_type_with(path: &Path, declared: &str, inspect: Option<&FileI
 
 /// ISO 8601 문자열. 마이크로초가 0이면 소수부를 생략한다.
 pub fn now_iso() -> String {
-    iso_short(chrono::Local::now().naive_local())
+    iso_short(jiff::ZonedDateTime::now().datetime())
 }
 
 fn page_count_by_lopdf(path: &Path, messages: &mut Vec<String>) -> usize {
