@@ -81,7 +81,7 @@ async fn bulk_rename_files(_: RequireAdmin, State(deps): State<Arc<AppDeps>>, Or
             }
         }
     }
-    books.sort_by(|a, b| a.file_path.to_string_lossy().to_lowercase().cmp(&b.file_path.to_string_lossy().to_lowercase()));
+    books.sort_by_key(|book| book.file_path.to_string_lossy().to_lowercase());
     let mut plans = Vec::new();
     for book in books {
         let name = book.file_path.file_name().unwrap_or_default().to_string_lossy();

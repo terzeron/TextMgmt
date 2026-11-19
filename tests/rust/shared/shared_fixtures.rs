@@ -44,7 +44,8 @@ macro_rules! call_args {
         CallArgs::new(vec![$(json!($a)),*], json!({$($k: $v),*}))
     };
 }
-// `router_fixtures`도 쓰도록 경로로 내보낸다.
+// `router_fixtures`도 쓰도록 경로로 내보낸다. 이 파일을 함께 쓰는 다른 crate의 테스트에서는 쓰지 않는다.
+#[allow(unused_imports)]
 pub(crate) use call_args;
 
 pub fn allowed_set(paths: &[&str]) -> BTreeSet<String> {

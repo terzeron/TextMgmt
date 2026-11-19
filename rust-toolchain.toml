@@ -1,0 +1,4 @@
+# 로컬·CI·Docker가 같은 Rust를 쓴다. 바꿀 때는 backend-ci.yml의 rust-toolchain action과 backend/Dockerfile도 함께 바꾼다.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

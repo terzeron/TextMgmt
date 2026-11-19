@@ -1,6 +1,6 @@
 # PDF engine
 
-Rust 1.91을 유지한다. MuPDF Rust crate 0.8.0(C core 1.27.2)로 쪽수, 텍스트와 cover 이미지를 처리한다. 편집은 기존 lopdf 0.46을 유지한다. Poppler 실행 파일은 운영에 필요하지 않다.
+Rust 버전은 저장소 루트 `rust-toolchain.toml`을 따른다. MuPDF Rust crate 0.8.0(C core 1.27.2)로 쪽수, 텍스트와 cover 이미지를 처리한다. 편집은 기존 lopdf 0.46을 유지한다. Poppler 실행 파일은 운영에 필요하지 않다.
 
 ## 실행과 제한
 
