@@ -226,3 +226,94 @@ fn summary_counts_each_outcome_per_store() {
     assert_eq!(summary["yes24"]["found"], 1);
     assert_eq!(summary["yes24"]["cache_hit"], 1);
 }
+
+#[test]
+fn isbn_miss_falls_back_to_title_search_and_caches_the_miss_by_isbn() {
+    let cache = Arc::new(MemCache::default());
+    let (s, calls) = store(vec![], vec!["SF > 한국SF"], false);
+
+    let outcome = fetcher(s, &cache).lookup(7, &query(Some(ISBN), "홍길동", "제목"));
+
+    assert_eq!(outcome.results[0].status, LookupStatus::Found);
+    assert_eq!(calls.lock().unwrap().len(), 2, "ISBN 검색 뒤 이름 검색");
+    assert_eq!(cache.get_by_isbn(ISBN, "yes24", 0).unwrap().unwrap().status, "not_found");
+    assert_eq!(cache.get_by_inode(7, "yes24", 0).unwrap().unwrap().method, "title_author");
+}
+
+#[test]
+fn isbn_cached_as_not_found_skips_isbn_search() {
+    let cache = Arc::new(MemCache::default());
+    cache.put_isbn(ISBN, "yes24", &CachedLookup { status: "not_found".to_string(), rows_json: "[]".to_string(), ..cached("isbn", ISBN, Some(ISBN), "") }).unwrap();
+    let (s, calls) = store(vec!["안 불려야 함"], vec!["SF > 한국SF"], false);
+
+    let outcome = fetcher(s, &cache).lookup(7, &query(Some(ISBN), "홍길동", "제목"));
+
+    assert_eq!(calls.lock().unwrap().as_slice(), &[(String::new(), "제목".to_string(), "홍길동".to_string())]);
+    assert_eq!(outcome.results[0].rows[0].category, "SF > 한국SF");
+}
+
+#[test]
+fn no_isbn_and_no_title_is_not_found_without_network() {
+    let cache = Arc::new(MemCache::default());
+    let (s, calls) = store(vec!["x"], vec!["x"], false);
+    let f = fetcher(s, &cache);
+
+    let outcome = f.lookup(7, &query(None, "홍길동", ""));
+
+    assert!(calls.lock().unwrap().is_empty());
+    assert_eq!(outcome.results[0].status, LookupStatus::NotFound);
+    assert!(!outcome.network_used);
+    assert_eq!(f.summary().unwrap()["yes24"]["not_found"], 1);
+}
+
+/// 모든 호출이 실패하는 캐시.
+struct BrokenCache;
+
+impl CacheStore for BrokenCache {
+    fn get_by_inode(&self, _: i64, _: &str, _: i64) -> Result<Option<CachedLookup>, DbError> {
+        Err(DbError::Other("down".to_string()))
+    }
+    fn get_by_isbn(&self, _: &str, _: &str, _: i64) -> Result<Option<CachedLookup>, DbError> {
+        Err(DbError::Other("down".to_string()))
+    }
+    fn put_inode(&self, _: i64, _: &str, _: &CachedLookup) -> Result<(), DbError> {
+        Err(DbError::Other("down".to_string()))
+    }
+    fn put_isbn(&self, _: &str, _: &str, _: &CachedLookup) -> Result<(), DbError> {
+        Err(DbError::Other("down".to_string()))
+    }
+}
+
+#[test]
+fn cache_errors_do_not_block_the_store_search() {
+    let (s, calls) = store(vec!["SF > 한국SF"], vec![], false);
+    let f = BookstoreResultFetcher::new(vec![("yes24".to_string(), s)], Some(Arc::new(BrokenCache) as Arc<dyn CacheStore>), Arc::new(FixedClock));
+
+    let outcome = f.lookup(7, &query(Some(ISBN), "", "제목"));
+
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    assert_eq!(outcome.results[0].status, LookupStatus::Found);
+}
+
+/// 검색 중 panic하는 서점.
+struct PanickingStore;
+
+impl BookstoreSearch for PanickingStore {
+    fn search(&self, _: &str, _: &str, _: &str) -> (Vec<SearchRow>, String, String) {
+        panic!("서점 클라이언트 결함");
+    }
+    fn blocked(&self) -> bool {
+        false
+    }
+}
+
+#[test]
+fn a_panicking_store_thread_becomes_an_error_result() {
+    let f = BookstoreResultFetcher::new(vec![("yes24".to_string(), Box::new(PanickingStore))], None, Arc::new(FixedClock));
+
+    let outcome = f.lookup(7, &query(None, "", "제목"));
+
+    assert_eq!(outcome.results[0].status, LookupStatus::Error);
+    assert!(!outcome.network_used);
+    assert_eq!(f.summary().unwrap()["yes24"]["error"], 1);
+}

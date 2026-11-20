@@ -80,3 +80,18 @@ fn all_abstaining_stores_give_no_evidence() {
     assert_eq!(bookstore_scores(&[vote(None), vote(None), vote(None)]), None);
     assert_eq!(bookstore_scores(&[]), None);
 }
+
+#[test]
+fn bookstore_lookup_summary_defaults_to_none() {
+    use book_manager::bookstore_evidence::{BookstoreLookup, LookupOutcome};
+    use book_manager::bookstore_query_builder::BookQuery;
+
+    struct NoSummary;
+    impl BookstoreLookup for NoSummary {
+        fn lookup(&self, _: i64, _: &BookQuery) -> LookupOutcome {
+            LookupOutcome { results: Vec::new(), network_used: false }
+        }
+    }
+
+    assert!(NoSummary.summary().is_none());
+}

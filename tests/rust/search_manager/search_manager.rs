@@ -1772,3 +1772,15 @@ fn search_by_isbn_sends_term_query_with_limit() {
 fn search_by_isbn_default_is_unsupported() {
     assert_eq!(Bare.search_by_isbn("1", 10).unwrap_err(), EsError::Unsupported);
 }
+
+#[test]
+fn search_by_isbn_through_the_trait_delegates_to_es_manager() {
+    let es = new_es();
+    es.on("search", |_| Ok(json!({"hits": {"hits": [{"_id": "7", "_source": {"file_path": "A/x.epub"}}]}})));
+    let manager = make_manager(&es);
+
+    let rows = EsManagerApi::search_by_isbn(&manager, "9788937460449", 3).unwrap();
+
+    assert_eq!(rows, vec![(7, "A/x.epub".to_string())]);
+    assert_eq!(es.calls_of("search")[0]["size"], json!(3));
+}

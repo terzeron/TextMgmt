@@ -76,3 +76,27 @@ async fn unauthenticated_and_viewer_requests_are_rejected() {
     assert_eq!(viewer.post_json(PATH, &body()).await.status, 403);
     assert!(mapping.content_types.lock().unwrap().is_empty());
 }
+
+/// 키워드 매핑 조회가 늘 실패하는 저장소.
+struct BrokenMapping;
+
+impl CategoryMappingApi for BrokenMapping {
+    fn get_all_mappings(&self, _: &str) -> Result<BTreeMap<String, Vec<String>>, MappingError> {
+        Err(MappingError::Other("db down".to_string()))
+    }
+}
+
+#[tokio::test]
+async fn mapping_failure_falls_back_to_directory_names_with_default_top_n() {
+    let app = app_with(AppDeps::new(AuthMode::Fixed(Claims::with_role("admin"))).with_refresh_token_store(common::session::store()).with_category_mapping(Arc::new(BrokenMapping)));
+    let client = TestClient::with_app(app);
+    let categories: Vec<String> = (1..=7).map(|i| format!("{i}_분류{i}")).collect();
+    let request = json!({"suggested": {"yes24_0_0": "SF 한국SF"}, "categories": categories});
+
+    let response = client.post_json(PATH, &request).await;
+
+    assert_eq!(response.status, 200, "{}", response.text());
+    let json: Value = serde_json::from_str(&response.text()).unwrap();
+    let suggested = vec![("yes24_0_0".to_string(), "SF 한국SF".to_string())];
+    assert_eq!(json["result"]["top"], json!(top_similar_categories(&suggested, &categories, &BTreeMap::new(), 5)));
+}

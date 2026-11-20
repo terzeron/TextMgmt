@@ -92,3 +92,22 @@ fn similarity_debug_matches_js() {
         assert_same(&actual, &case["result"], &case["suggested"].to_string());
     }
 }
+
+#[test]
+fn empty_inputs_yield_no_scores_or_debug() {
+    let categories = vec!["3_SF".to_string()];
+    let none = BTreeMap::new();
+    assert!(category_scores("", &categories, &none).is_empty());
+    assert!(top_similar_categories(&[], &categories, &none, 5).is_empty());
+    assert!(similarity_debug(&[("yes24_0_0".to_string(), "SF".to_string())], &[], &none, 5).is_none());
+}
+
+#[test]
+fn an_empty_store_category_is_skipped_but_others_still_count() {
+    let categories = vec!["3_SF".to_string(), "5_음악".to_string()];
+    let none = BTreeMap::new();
+    let with_blank = vec![("yes24_0_0".to_string(), String::new()), ("aladin_0_0".to_string(), "SF 한국SF".to_string())];
+    let without = vec![("aladin_0_0".to_string(), "SF 한국SF".to_string())];
+    assert_eq!(top_similar_categories(&with_blank, &categories, &none, 5), top_similar_categories(&without, &categories, &none, 5));
+    assert!(!top_similar_categories(&without, &categories, &none, 5).is_empty());
+}

@@ -121,3 +121,17 @@ fn classify_document_reads_es_source() {
     assert_eq!(prediction.ranked.len(), 2);
     assert_eq!(prediction.ranked[0].0, "b");
 }
+
+#[test]
+fn load_rejects_count_arrays_that_do_not_match_categories() {
+    let path = temp_dir("count_mismatch").join("model.bin");
+    model(&["a", "b"], &[1], &[1, 1], 4).save_atomic(&path).unwrap();
+    assert_eq!(SoftmaxModel::load(&path).unwrap_err(), "카테고리 수와 권수 배열 길이가 다르다");
+}
+
+#[test]
+fn load_rejects_hash_bits_out_of_range() {
+    let path = temp_dir("hash_bits").join("model.bin");
+    model(&["a"], &[1], &[1], 0).save_atomic(&path).unwrap();
+    assert_eq!(SoftmaxModel::load(&path).unwrap_err(), "hash_bits가 범위 밖이다: 0");
+}
