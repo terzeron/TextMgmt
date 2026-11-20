@@ -12,3 +12,8 @@ fn datetimes_become_space_separated_strings_in_json() {
     assert_eq!(Value::from(&DbValue::DateTime(at(500_000))), json!("2026-01-02 03:04:05.500"));
     assert_eq!(Value::from(&DbValue::DateTime(at(42))), json!("2026-01-02 03:04:05.000042"));
 }
+
+#[test]
+fn sub_microsecond_fractions_use_nine_digits() {
+    assert_eq!(db::time_text(civil::time(3, 4, 5, 7)), "03:04:05.000000007");
+}

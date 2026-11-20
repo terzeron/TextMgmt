@@ -5,6 +5,10 @@ use std::process::Command;
 fn search() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_search"));
     command.env_clear();
+    // 커버리지 측정 중이면 자식 프로세스도 프로파일을 남기게 한다.
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
     command
 }
 

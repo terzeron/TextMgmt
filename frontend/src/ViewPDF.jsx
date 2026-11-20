@@ -938,6 +938,9 @@ export default function ViewPDF({
 
         // IntersectionObserver: 근접 영역(near-zone) 진입 시 큐에 투입, 이탈 시 취소.
         // 아래쪽 margin을 크게 둬 순방향 스크롤에서 다음 페이지들을 미리 준비한다.
+        // root 는 쪽이 실제로 스크롤되는 .pdf-container 여야 한다. root 를 비우면 브라우저가 쪽을
+        // 컨테이너 경계에서 잘라 rootMargin 이 효과가 없다(Chromium 실측: 보이는 1쪽만 감지).
+        // margin 은 컨테이너 높이 비율이다. 아래 3화면이면 대략 3~4쪽을 미리 그린다.
         // (선렌더 루프 제거: rootMargin 자체가 prefetch 역할을 하고, 그 페이지들은
         //  여전히 intersecting 상태라 즉시 취소되지 않는다.)
         const observer = new IntersectionObserver(
@@ -960,7 +963,7 @@ export default function ViewPDF({
               }
             }
           },
-          { rootMargin: "300px 0px 1200px 0px" },
+          { root: containerRef.current, rootMargin: "50% 0px 300% 0px" },
         );
 
         observerRef.current = observer;

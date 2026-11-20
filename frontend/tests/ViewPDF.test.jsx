@@ -1409,6 +1409,46 @@ describe("ViewPDF", () => {
     }
   });
 
+  // 쪽은 .pdf-container 안에서 스크롤된다. root 가 없으면 브라우저가 쪽을 컨테이너 경계에서 잘라
+  // rootMargin 이 효과가 없다(Chromium 실측: 보이는 1쪽만 감지). 컨테이너를 root 로 줘야 미리 그린다.
+  it("근접 영역 관찰자는 스크롤 컨테이너를 root 로 쓴다", async () => {
+    setupGetDocument(() => {
+      const pdf = {
+        numPages: 1,
+        getPage: () =>
+          Promise.resolve({
+            getViewport: () => ({ width: 800, height: 600 }),
+            render: () => ({ promise: Promise.resolve() }),
+          }),
+      };
+      pdf.loadingTask = { promise: Promise.resolve(pdf), destroy: vi.fn() };
+      return pdf;
+    });
+    globalThis.fetch = createMockFetch(3);
+
+    const observers = [];
+    const RealIO = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      constructor(cb, options) {
+        this.cb = cb;
+        this.options = options;
+        observers.push(this);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+
+    try {
+      const view = render(<ViewPDF bookId={1} />);
+      await waitFor(() => expect(observers.length).toBeGreaterThan(0));
+      const scroller = view.container.querySelector(".pdf-container");
+      expect(observers[observers.length - 1].options.root).toBe(scroller);
+    } finally {
+      globalThis.IntersectionObserver = RealIO;
+    }
+  });
+
   // 메모리 절약: near zone 을 벗어난 페이지는 가까운 6쪽만 남기고 canvas 비트맵과 청크 pdfDoc 을 해제한다.
   it("멀어진 페이지의 canvas 와 청크 pdfDoc 을 해제하고 다시 보이면 새로 그린다", async () => {
     const TOTAL = 21;
