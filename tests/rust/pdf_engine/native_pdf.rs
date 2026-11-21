@@ -131,6 +131,9 @@ fn a_large_pdf_is_extracted_with_mupdf_and_is_not_a_jpeg_candidate() {
     assert_eq!(out.get_pages().len(), 1);
     assert_eq!(worker(&["extract", p(&f), "1", "3"]).unwrap_err(), "invalid PDF page range");
     assert!(worker(&["jpeg", p(&f)]).unwrap().is_empty());
+    // 큰 파일도 쪽 하나만 떼어 판정한다. 글자 쪽은 이미지가 아니고, RASTER=1이면 그림으로 그린다.
+    assert!(worker(&["page-image", p(&f), "2", "0"]).unwrap().is_empty());
+    assert!(worker(&["page-image", p(&f), "2", "1"]).unwrap().starts_with(PNG_SIGNATURE));
 }
 
 // ---- extract: 무손실 이미지를 JPEG로 줄인다 ----
@@ -370,6 +373,95 @@ fn a_page_without_pages_or_with_a_nameless_draw_is_handled() {
         doc.objects.insert(pages, Object::Dictionary(dictionary! {"Type" => "Pages", "Kids" => Vec::<Object>::new(), "Count" => 0}));
     });
     assert!(worker(&["jpeg", p(&empty)]).unwrap().is_empty());
+}
+
+// ---- page-image: 뷰어가 <img>로 보일 쪽 이미지 원본 ----
+
+const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+/// PNG를 풀어 화소(행마다 여백 없이)를 돌려준다.
+fn png_pixels(png: &[u8]) -> (u32, u32, Vec<u8>) {
+    let image = mupdf::Image::from_bytes(png).unwrap();
+    let pix = image.to_pixmap().unwrap();
+    let row = pix.width() as usize * pix.n() as usize;
+    let stride = pix.stride() as usize;
+    let pixels = pix.samples().chunks(stride).flat_map(|r| r[..row].to_vec()).collect();
+    (pix.width(), pix.height(), pixels)
+}
+
+#[test]
+fn page_image_returns_a_full_page_jpeg_byte_for_byte() {
+    let d = tempfile::tempdir().unwrap();
+    let f = jpeg_pdf(d.path(), "ok.pdf", FULL_PAGE, |_, _, _| {});
+    assert_eq!(worker(&["page-image", p(&f), "1", "0"]).unwrap(), JPEG);
+    // 필터를 한 칸 배열로 적어도 같다.
+    let f = jpeg_pdf(d.path(), "array.pdf", FULL_PAGE, |doc, _, image| {
+        doc.get_object_mut(image).unwrap().as_stream_mut().unwrap().dict.set("Filter", vec![Object::Name(b"DCTDecode".to_vec())]);
+    });
+    assert_eq!(worker(&["page-image", p(&f), "1", "0"]).unwrap(), JPEG);
+}
+
+#[test]
+fn page_image_turns_lossless_rgb_and_gray_into_pixel_identical_png() {
+    let d = tempfile::tempdir().unwrap();
+    let rgb = smooth_pixels(40, 30, 3);
+    let gray = binary_noise_pixels(40, 30);
+    let mut doc = image_doc(vec![flate_image(40, 30, "DeviceRGB", rgb.clone(), |_| {}), flate_image(40, 30, "DeviceGray", gray.clone(), |_| {})]);
+    let f = save(&mut doc, d.path(), "flate.pdf");
+    for (page, expected) in [("1", rgb), ("2", gray)] {
+        let png = worker(&["page-image", p(&f), page, "0"]).unwrap();
+        assert!(png.starts_with(PNG_SIGNATURE), "page {page}");
+        assert_eq!(png_pixels(&png), (40, 30, expected), "page {page}");
+    }
+}
+
+#[test]
+fn page_image_leaves_out_images_it_cannot_send_unchanged() {
+    type Tweak = Box<dyn FnOnce(&mut lopdf::Dictionary)>;
+    let set = |key: &'static str, value: Object| -> Tweak { Box::new(move |dict: &mut lopdf::Dictionary| dict.set(key, value)) };
+    let cases: Vec<(&str, Tweak)> = vec![
+        ("decode array", set("Decode", vec![1.into(), 0.into(), 1.into(), 0.into(), 1.into(), 0.into()].into())),
+        ("image mask", set("ImageMask", true.into())),
+        ("too many pixels", set("Height", 2_000_000.into())),
+        ("zero width", set("Width", 0.into())),
+        ("16-bit", set("BitsPerComponent", 16.into())),
+        ("indexed colors", set("ColorSpace", vec![Object::Name(b"Indexed".to_vec())].into())),
+        ("cmyk", set("ColorSpace", Object::Name(b"DeviceCMYK".to_vec()))),
+        ("two filters", set("Filter", vec![Object::Name(b"FlateDecode".to_vec()), Object::Name(b"FlateDecode".to_vec())].into())),
+        ("other filter", set("Filter", Object::Name(b"RunLengthDecode".to_vec()))),
+        ("short data", set("Width", 41.into())),
+    ];
+    let d = tempfile::tempdir().unwrap();
+    for (i, (label, tweak)) in cases.into_iter().enumerate() {
+        let mut doc = image_doc(vec![flate_image(40, 30, "DeviceRGB", smooth_pixels(40, 30, 3), tweak)]);
+        let f = save(&mut doc, d.path(), &format!("{i}.pdf"));
+        assert!(worker(&["page-image", p(&f), "1", "0"]).unwrap().is_empty(), "{label}");
+    }
+    // 크기가 실제 JPEG와 다른 JPEG도 그대로 보내지 않는다.
+    let f = jpeg_pdf(d.path(), "mismatch.pdf", FULL_PAGE, |doc, _, image| {
+        doc.get_object_mut(image).unwrap().as_stream_mut().unwrap().dict.set("Width", 17);
+    });
+    assert!(worker(&["page-image", p(&f), "1", "0"]).unwrap().is_empty());
+}
+
+#[test]
+fn page_image_draws_other_pages_only_when_asked_and_rejects_bad_requests() {
+    let d = tempfile::tempdir().unwrap();
+    let f = save(&mut text_doc(2), d.path(), "text.pdf");
+    assert!(worker(&["page-image", p(&f), "2", "0"]).unwrap().is_empty());
+    let (w, h, _) = png_pixels(&worker(&["page-image", p(&f), "2", "1"]).unwrap());
+    // 200×100pt 쪽을 폭 2400px로 그린다.
+    assert_eq!((w, h), (2400, 1200));
+    let empty = jpeg_pdf(d.path(), "empty.pdf", FULL_PAGE, |doc, _, _| {
+        let pages = doc.catalog().unwrap().get(b"Pages").unwrap().as_reference().unwrap();
+        doc.objects.insert(pages, Object::Dictionary(dictionary! {"Type" => "Pages", "Kids" => Vec::<Object>::new(), "Count" => 0}));
+    });
+    assert_eq!(worker(&["page-image", p(&empty), "1", "0"]).unwrap_err(), "invalid PDF page range");
+    for args in [["0", "0"], ["1", "2"]] {
+        assert_eq!(worker(&["page-image", p(&f), args[0], args[1]]).unwrap_err(), "invalid PDF page image request");
+    }
+    assert_eq!(worker(&["page-image", p(&f), "3", "0"]).unwrap_err(), "invalid PDF page range");
+    assert!(worker(&["page-image", p(&f), "1"]).is_err());
 }
 
 // ---- CJK 글꼴: 임베드하지 않은 CID 글꼴은 Noto Serif CJK로 대신한다 ----

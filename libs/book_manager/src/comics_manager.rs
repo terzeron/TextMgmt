@@ -265,6 +265,10 @@ impl BookManagerApi for ComicsManager {
         BookManagerApi::get_pdf_pages(&self.inner, id, start, end).await
     }
 
+    async fn get_pdf_page_image(&self, id: i64, page: i64, raster: bool) -> BookResponse {
+        BookManagerApi::get_pdf_page_image(&self.inner, id, page, raster).await
+    }
+
     async fn get_html_resource(&self, book_id: i64, resource_path: &str) -> BookResponse {
         BookManagerApi::get_html_resource(&self.inner, book_id, resource_path).await
     }

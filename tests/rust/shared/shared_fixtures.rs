@@ -809,6 +809,10 @@ impl BookManagerApi for Mock {
         to_response(self.invoke("get_pdf_pages", call_args!([], {"book_id": id, "start": start, "end": end})).await)
     }
 
+    async fn get_pdf_page_image(&self, id: i64, page: i64, raster: bool) -> BookResponse {
+        to_response(self.invoke("get_pdf_page_image", call_args!([], {"book_id": id, "page": page, "raster": raster})).await)
+    }
+
     async fn get_html_resource(&self, book_id: i64, resource_path: &str) -> BookResponse {
         to_response(self.invoke("get_html_resource", call_args!([], {"book_id": book_id, "resource_path": resource_path})).await)
     }

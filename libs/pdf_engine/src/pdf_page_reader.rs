@@ -59,6 +59,12 @@ pub trait PdfPageOps: Send + Sync {
         Ok(PdfReaderHandle::new(path.to_path_buf(), self.page_count(path)?))
     }
 
+    /// `page`쪽(1부터)의 이미지 파일(`pdf_worker_client::page_image` 참고). 대역은 지원하지 않는다.
+    fn page_image(&self, path: &Path, page: usize, raster: bool) -> Result<Vec<u8>, PdfError> {
+        let _ = (path, page, raster);
+        Err(PdfError::new("ReadError", "PDF page images are not supported"))
+    }
+
     /// 열린 reader에서 쪽을 추출한다. 기본 구현은 경로 기반 추출로 하위 호환한다.
     fn extract_pages_from_reader(&self, reader: &PdfReaderHandle, start: usize, end: usize) -> Result<Vec<u8>, PdfError> {
         self.extract_pages(&reader.path, start, end)
@@ -152,6 +158,10 @@ impl PdfPageOps for LopdfPageOps {
         }
         std::fs::metadata(path).map_err(|e| PdfError::new("OSError", e.to_string()))?;
         crate::pdf_worker_client::extract_pages(&sysdeps::SystemRunner, path, start + 1, end).map_err(|e| PdfError::new("ReadError", e))
+    }
+    fn page_image(&self, path: &Path, page: usize, raster: bool) -> Result<Vec<u8>, PdfError> {
+        std::fs::metadata(path).map_err(|e| PdfError::new("OSError", e.to_string()))?;
+        crate::pdf_worker_client::page_image(&sysdeps::SystemRunner, path, page, raster).map_err(|e| PdfError::new("ReadError", e))
     }
 }
 

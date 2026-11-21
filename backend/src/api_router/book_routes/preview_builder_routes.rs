@@ -23,7 +23,11 @@ use super::*;
 mod html_previewer_routes;
 
 pub(super) fn routes() -> Routes {
-    let mut routes = Routes::new().get("/pdf-pages/{book_id}", &["require_auth"], book_pages).get("/comics/pdf-pages/{book_id}", &["require_auth"], comic_pages);
+    let mut routes = Routes::new()
+        .get("/pdf-pages/{book_id}", &["require_auth"], book_pages)
+        .get("/comics/pdf-pages/{book_id}", &["require_auth"], comic_pages)
+        .get("/pdf-page-image/{book_id}", &["require_auth"], page_image)
+        .get("/comics/pdf-page-image/{book_id}", &["require_auth"], page_image);
     for prefix in ["", "/comics"] {
         routes = routes.get(&format!("{prefix}/preview/{{book_id}}"), &["require_auth"], preview);
     }
@@ -62,6 +66,27 @@ async fn book_pages(RequireAuth(payload): RequireAuth, State(deps): State<Arc<Ap
 
 async fn comic_pages(RequireAuth(payload): RequireAuth, State(deps): State<Arc<AppDeps>>, Path(book_id): Path<String>, ApiQuery(query): ApiQuery<PagesQuery>) -> ApiResult<Response> {
     pages(&deps, &payload, &book_id, query, true).await
+}
+
+#[derive(Deserialize)]
+struct PageImageQuery {
+    page: Option<i64>,
+    raster: Option<i64>,
+}
+
+/// 쪽 하나의 이미지 파일(`BookManager::get_pdf_page_image`). `raster=1`이면 이미지 한 장이 아닌 쪽도 그려 보낸다.
+async fn page_image(
+    RequireAuth(payload): RequireAuth,
+    State(deps): State<Arc<AppDeps>>,
+    Path(raw_id): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    ApiQuery(query): ApiQuery<PageImageQuery>,
+) -> ApiResult<Response> {
+    let book_id = parse_book_id(&raw_id)?;
+    let comics = uri.path().starts_with("/comics/");
+    let manager = checked_manager(&deps, &payload, book_id, comics).await?;
+    let (page, raster) = (query.page.unwrap_or(1), query.raster == Some(1));
+    book_response(run_blocking(async move { manager.get_pdf_page_image(book_id, page, raster).await }).await?)
 }
 
 async fn pages(deps: &AppDeps, payload: &Claims, book_id: &str, query: PagesQuery, comics: bool) -> ApiResult<Response> {
