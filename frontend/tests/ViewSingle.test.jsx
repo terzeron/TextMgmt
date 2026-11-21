@@ -280,6 +280,50 @@ describe("ViewSingle", () => {
     expect(window.location.href).toContain("102");
   });
 
+  it("standalone 모드에서 이전·다음 책 버튼 사이에 현재 책 제목을 보인다", async () => {
+    mockUseParams.mockReturnValue({ entryId: "101", fileType: "pdf" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=1_fiction/a.pdf&category=1_fiction"),
+    ]);
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) =>
+      resolve([
+        { book_id: 100, title: "Book 0", file_type: "pdf", file_path: "1_fiction/0.pdf" },
+        { book_id: 101, title: "Book 1", file_type: "pdf", file_path: "1_fiction/a.pdf" },
+        { book_id: 102, title: "Book 2", file_type: "pdf", file_path: "1_fiction/b.pdf" },
+      ]),
+    );
+
+    render(<ViewSingle />);
+
+    await waitFor(() => {
+      expect(document.querySelector(".standalone-nav-title")?.textContent).toBe("Book 1");
+    });
+    const nav = document.querySelector(".standalone-nav");
+    const [prev, title, next] = nav.children;
+    expect(prev.textContent).toMatch(/이전 책으로/);
+    expect(title.getAttribute("title")).toBe("Book 1");
+    expect(next.textContent).toMatch(/다음 책으로/);
+  });
+
+  it("목록의 제목이 비어 있으면 파일 이름(확장자 제외)을 제목으로 보인다", async () => {
+    mockUseParams.mockReturnValue({ entryId: "101", fileType: "pdf" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=1_fiction/12화.pdf&category=1_fiction"),
+    ]);
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) =>
+      resolve([
+        { book_id: 100, title: "", file_type: "pdf", file_path: "1_fiction/0.pdf" },
+        { book_id: 101, title: "", file_type: "pdf", file_path: "1_fiction/12화.pdf" },
+      ]),
+    );
+
+    render(<ViewSingle />);
+
+    await waitFor(() => {
+      expect(document.querySelector(".standalone-nav-title")?.textContent).toBe("12화");
+    });
+  });
+
   // ── standalone 네비게이션 경계 ──
 
   const BOOKS = [

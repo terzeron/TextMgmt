@@ -36,6 +36,8 @@ export default function ViewSingle(props) {
   const [pageCount, setPageCount] = useState(0);
   const [prevBook, setPrevBook] = useState(null);
   const [nextBook, setNextBook] = useState(null);
+  // standalone 모드: 이전·다음 책 버튼 사이에 보일 현재 책 제목(카테고리 목록의 title)
+  const [currentTitle, setCurrentTitle] = useState("");
 
   useEffect(() => {
     if (entryId && paramFileType && paramFilePath) {
@@ -106,6 +108,7 @@ export default function ViewSingle(props) {
       const currentIndex = sortedBooks.findIndex(
         (b) => b?.book_id === Number(entryId),
       );
+      setCurrentTitle(sortedBooks[currentIndex]?.title || "");
       setPrevBook(currentIndex > 0 ? sortedBooks[currentIndex - 1] : null);
       setNextBook(
         currentIndex >= 0 && currentIndex < sortedBooks.length - 1
@@ -133,6 +136,13 @@ export default function ViewSingle(props) {
   );
 
   const preview = props.preview || false;
+  // 목록이 오기 전이나 목록에 없으면 파일 이름(확장자 제외)을 제목으로 쓴다.
+  const navTitle =
+    currentTitle ||
+    paramFilePath
+      .split("/")
+      .pop()
+      .replace(/\.[^.]+$/, "");
 
   // 이전/다음 책 네비게이션 (미리보기/전체보기 공통)
   const showBookNav = standalone
@@ -271,6 +281,9 @@ export default function ViewSingle(props) {
             >
               ◀ 이전 책으로
             </button>
+            <span className="standalone-nav-title" title={navTitle}>
+              {navTitle}
+            </span>
             <button
               className="standalone-nav-btn"
               onClick={navNextClick}

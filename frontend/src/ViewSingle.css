@@ -41,6 +41,29 @@
     z-index: 100;
 }
 
+.standalone-nav {
+    align-items: center;
+    gap: 12px;
+}
+
+/* 이전·다음 책 버튼 사이의 현재 책 제목. 좁은 화면에서는 버튼 자리를 위해 숨긴다. */
+.standalone-nav-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+    font-size: 0.8rem;
+    color: #495057;
+}
+
+@media (max-width: 767.98px) {
+    .standalone-nav-title {
+        display: none;
+    }
+}
+
 .book-viewer-header {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
