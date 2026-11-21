@@ -57,7 +57,10 @@ const FALLBACK_NATIVE_CSS_WIDTH = 900;
 // 이 경우 자리표시 canvas 는 작게 둔다. 실제 크기는 렌더할 때 화면 폭에 맞춰 정해진다.
 const FALLBACK_PLACEHOLDER_PIXEL_WIDTH = 90;
 
+// 청크 배치: 1쪽 | 2~3쪽 | 4~13쪽 | 14~23쪽 … 바로 다음 쪽을 담는 청크는 작게 둬 일찍 그린다.
+// 웹툰은 쪽당 약 3MB라 2~11쪽을 한 청크로 받으면 2쪽이 약 4초를 기다렸다.
 const CHUNK_SIZE = 10;
+const SECOND_CHUNK_END = 3;
 // 동시에 실행할 최대 렌더 개수. 워커 과부하를 막아 보이는 페이지에 자원을 집중시킨다.
 const MAX_CONCURRENT_RENDERS = 3;
 // 보이는 영역(near zone) 밖에서 그려진 채로 남겨 두는 페이지 수. 가까운 순으로 이만큼만 남기고
@@ -401,7 +404,9 @@ export default function ViewPDF({
         chunkDocsRef.current.set(key, pdfDoc);
         trace(`chunk ${key}`);
 
-        // 청크 로드 완료 → 큐에 대기 중이던 페이지들을 다시 펌프 (렌더 가능해짐)
+        // 청크 로드 완료 → 큐에 대기 중이던 페이지들을 다시 펌프 (렌더 가능해짐).
+        // 받는 중 표시를 먼저 지워야 펌프가 다음 미리 받기를 시작한다.
+        fetchingRef.current.delete(key);
         pumpQueue();
       } catch (err) {
         /* v8 ignore next 3 -- chunk fetch errors after unmount are intentionally silent. */
@@ -416,13 +421,23 @@ export default function ViewPDF({
     [bookId],
   );
 
-  // 글로벌 페이지 번호가 속하는 청크의 start를 계산
-  const getChunkStart = useCallback((globalPageNum) => {
-    // 첫 페이지는 항상 단독 청크
-    /* v8 ignore next -- startup fetch handles page 1 before scroll scheduling. */
-    if (globalPageNum === 1) return 1;
-    // 2부터 시작해서 CHUNK_SIZE 단위
-    return 2 + Math.floor((globalPageNum - 2) / CHUNK_SIZE) * CHUNK_SIZE;
+  // 글로벌 페이지 번호가 속하는 청크의 [start, end]를 계산한다(배치는 CHUNK_SIZE 주석 참고).
+  const getChunkRange = useCallback((globalPageNum) => {
+    let start;
+    let end;
+    /* v8 ignore next 3 -- startup fetch handles page 1 before scroll scheduling. */
+    if (globalPageNum === 1) {
+      [start, end] = [1, 1];
+    } else if (globalPageNum <= SECOND_CHUNK_END) {
+      [start, end] = [2, SECOND_CHUNK_END];
+    } else {
+      start =
+        SECOND_CHUNK_END +
+        1 +
+        Math.floor((globalPageNum - SECOND_CHUNK_END - 1) / CHUNK_SIZE) * CHUNK_SIZE;
+      end = start + CHUNK_SIZE - 1;
+    }
+    return [start, Math.min(end, totalPagesRef.current)];
   }, []);
 
   // 그려 둔 페이지의 canvas 비트맵을 해제한다. 1x1 로 줄이되 aspect-ratio 로 레이아웃 높이는 유지해
@@ -660,25 +675,28 @@ export default function ViewPDF({
   // 페이지는 실제로 렌더 실행될 때까지 큐에 남으므로, 청크 로드 후 재호출되면
   // 누락 없이 재시도된다 (one-shot drain이 없어 race가 발생하지 않는다).
   const pumpQueue = useCallback(() => {
+    // 받는 중인 범위가 이 쪽을 덮으면 다시 요청하지 않는다(미리보기는 2~10쪽을 한 번에 받는다).
+    const fetchingPage = (globalPageNum) =>
+      [...fetchingRef.current].some((key) => {
+        const [s, e] = key.split("-").map(Number);
+        return globalPageNum >= s && globalPageNum <= e;
+      });
     const fetchChunkFor = (globalPageNum) => {
-      if (findChunkForPage(globalPageNum)) return;
-      const chunkStart = getChunkStart(globalPageNum);
-      const chunkEnd = Math.min(
-        /* v8 ignore next -- page 1 is loaded by the initial single-page chunk. */
-        chunkStart === 1 ? 1 : chunkStart + CHUNK_SIZE - 1,
-        totalPagesRef.current,
-      );
-      fetchChunk(chunkStart, chunkEnd);
+      if (findChunkForPage(globalPageNum) || fetchingPage(globalPageNum)) return;
+      fetchChunk(...getChunkRange(globalPageNum));
     };
-    // 큐에 있는 미로드 페이지들의 청크 페칭 트리거 (fetchChunk가 중복 제거)
+    // 큐에 있는 미로드 페이지들의 청크 페칭 트리거. 화면에 필요한 쪽이라 바로 요청한다.
     for (const pageNum of renderQueueRef.current) fetchChunkFor(unitPage(pageNum));
     // 근접 영역 앞쪽 PREFETCH_AHEAD_PAGES 쪽의 청크도 미리 받는다. 렌더는 근접 영역에 들어올 때 한다.
-    // 근접 영역이 비었으면(첫 로드 직후) 시작 흐름이 2~11쪽을 따로 받으므로 건너뛴다.
+    // 받는 중인 청크가 있으면 기다린다. 요청이 대역폭을 나눠 쓰면 가까운 쪽이 늦게 온다.
+    // 근접 영역이 비었으면(첫 로드 직후) 시작 흐름이 2쪽 청크를 따로 받으므로 건너뛴다.
     let farthest = 0;
     for (const key of nearPagesRef.current) farthest = Math.max(farthest, unitPage(key));
-    if (farthest > 0) {
+    if (farthest > 0 && fetchingRef.current.size === 0) {
       const prefetchEnd = Math.min(farthest + PREFETCH_AHEAD_PAGES, totalPagesRef.current);
-      for (let n = farthest + 1; n <= prefetchEnd; n++) fetchChunkFor(n);
+      for (let n = farthest + 1; n <= prefetchEnd && fetchingRef.current.size === 0; n++) {
+        fetchChunkFor(n);
+      }
     }
     // 렌더 가능한 페이지부터 실행
     while (activeRenderTasksRef.current.size < MAX_CONCURRENT_RENDERS) {
@@ -697,7 +715,7 @@ export default function ViewPDF({
   }, [
     pickRenderablePage,
     findChunkForPage,
-    getChunkStart,
+    getChunkRange,
     fetchChunk,
     executeRender,
     releaseTilePage,
@@ -1001,9 +1019,8 @@ export default function ViewPDF({
             // 미리보기: 나머지 2~pagesToRender 한 번에 페칭
             fetchChunk(2, pagesToRender);
           } else {
-            // 전체보기: 2~11페이지 즉시 페칭
-            const firstBatchEnd = Math.min(1 + CHUNK_SIZE, pagesToRender);
-            fetchChunk(2, firstBatchEnd);
+            // 전체보기: 2쪽 청크 즉시 페칭. 그 뒤 청크는 미리 받기가 하나씩 요청한다.
+            fetchChunk(...getChunkRange(2));
           }
 
           setDownloadProgress(100);
@@ -1094,6 +1111,7 @@ export default function ViewPDF({
     enqueueRender,
     cancelRender,
     fetchChunk,
+    getChunkRange,
   ]);
 
   // 캔버스 ref 설정 함수
