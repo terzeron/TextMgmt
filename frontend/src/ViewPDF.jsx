@@ -96,6 +96,10 @@ export default function ViewPDF({
   const imageModeRef = useRef(false);
   // 쪽 → 받아 둔 이미지의 object URL. 쪽을 놓을 때 해제한다(다시 보면 브라우저 HTTP 캐시에서 읽는다).
   const imageUrlsRef = useRef(new Map());
+  // 지금 미리 받는 쪽 이미지 { page, promise }. 한 번에 하나만 받는다.
+  const imagePrefetchRef = useRef(null);
+  // 미리 받기를 시도한 쪽. 실패한 쪽을 계속 다시 요청하지 않게 한다(실패한 쪽은 보일 때 렌더가 받는다).
+  const imagePrefetchTriedRef = useRef(new Set());
   const ZOOM_STEPS = [
     25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400,
     500,
@@ -547,6 +551,12 @@ export default function ViewPDF({
       });
       try {
         let url = imageUrlsRef.current.get(pageNum);
+        // 미리 받는 중인 쪽이면 같은 요청을 기다린다. 따로 받으면 같은 이미지를 두 번 내려받는다.
+        const prefetching = imagePrefetchRef.current;
+        if (!url && prefetching?.page === pageNum) {
+          await prefetching.promise;
+          url = imageUrlsRef.current.get(pageNum);
+        }
         if (!url) {
           trace(`image-start p${pageNum}`);
           const response = await authFetch(
@@ -777,6 +787,37 @@ export default function ViewPDF({
         fetchChunkFor(n);
       }
     }
+    // 이미지 모드도 근접 영역 앞쪽 PREFETCH_AHEAD_PAGES 쪽의 이미지를 하나씩 미리 받는다.
+    // 웹툰은 쪽 하나가 화면 열 개를 넘어 근접 영역(아래 3화면)에 들 때 받으면 늦다.
+    if (!chunked && farthest > 0 && !imagePrefetchRef.current) {
+      const prefetchEnd = Math.min(farthest + PREFETCH_AHEAD_PAGES, totalPagesRef.current);
+      for (let n = farthest + 1; n <= prefetchEnd; n++) {
+        if (
+          imageUrlsRef.current.has(n) ||
+          renderedPagesRef.current.has(n) ||
+          imagePrefetchTriedRef.current.has(n)
+        )
+          continue;
+        imagePrefetchTriedRef.current.add(n);
+        // 책을 바꾸면 새 Map 이 생긴다. 이전 책의 늦은 응답이 새 책에 섞이지 않게 처음 Map 에만 넣는다.
+        const urls = imageUrlsRef.current;
+        const promise = authFetch(pageImageUrl(n, true), { credentials: "include" }, "ViewPDF")
+          .then((response) => (response.ok ? response.blob() : null))
+          .then((blob) => {
+            if (blob && imageUrlsRef.current === urls && !urls.has(n)) {
+              urls.set(n, URL.createObjectURL(blob));
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            if (imagePrefetchRef.current?.promise === promise) imagePrefetchRef.current = null;
+            if (!cancelledRef.current) pumpQueue();
+          });
+        imagePrefetchRef.current = { page: n, promise };
+        trace(`image-prefetch p${n}`);
+        break;
+      }
+    }
     // 렌더 가능한 페이지부터 실행
     while (activeRenderTasksRef.current.size < MAX_CONCURRENT_RENDERS) {
       const pageNum = pickRenderablePage();
@@ -798,6 +839,8 @@ export default function ViewPDF({
     fetchChunk,
     executeRender,
     releaseTilePage,
+    pageImageUrl,
+    trace,
   ]);
 
   // 페이지를 렌더 큐에 넣는다 (이미 렌더됐거나 실행 중이면 무시)
@@ -990,6 +1033,8 @@ export default function ViewPDF({
       setImageMode(false);
       for (const url of imageUrlsRef.current.values()) URL.revokeObjectURL(url);
       imageUrlsRef.current = new Map();
+      imagePrefetchRef.current = null;
+      imagePrefetchTriedRef.current = new Set();
 
       try {
         // 1쪽이 원본 이미지로 오는지 첫 청크와 함께 묻는다. 편집 화면은 쪽 표시·자르기가 canvas 를 쓰므로 묻지 않는다.
@@ -1159,6 +1204,8 @@ export default function ViewPDF({
                 cancelRender(pageNum);
               }
             }
+            // 이미지 모드의 미리 받기는 근접 영역 끝을 기준으로 한다. 이미 그린 쪽만 들어와도 다시 계산한다.
+            if (imageModeRef.current) pumpQueue();
           },
           { root: containerRef.current, rootMargin: "50% 0px 300% 0px" },
         );
@@ -1219,6 +1266,7 @@ export default function ViewPDF({
     cancelRender,
     fetchChunk,
     getChunkRange,
+    pumpQueue,
   ]);
 
   // 캔버스 ref 설정 함수
