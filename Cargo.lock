@@ -2820,6 +2820,7 @@ dependencies = [
 name = "pdf_engine"
 version = "0.1.0"
 dependencies = [
+ "jpeg-encoder",
  "lopdf",
  "mupdf",
  "sysdeps",

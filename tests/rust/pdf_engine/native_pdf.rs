@@ -133,6 +133,143 @@ fn a_large_pdf_is_extracted_with_mupdf_and_is_not_a_jpeg_candidate() {
     assert!(worker(&["jpeg", p(&f)]).unwrap().is_empty());
 }
 
+// ---- extract: 무손실 이미지를 JPEG로 줄인다 ----
+
+/// 결정적인 의사 난수(LCG). 테스트 이미지의 잡음에 쓴다.
+fn noise(seed: &mut u32) -> u8 {
+    *seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+    (*seed >> 16) as u8
+}
+
+/// 대각선 그러데이션에 작은 잡음을 섞은 화소. Flate로는 덜 줄고 JPEG로는 크게 준다.
+fn smooth_pixels(width: usize, height: usize, components: usize) -> Vec<u8> {
+    let mut seed = 1;
+    (0..width * height * components).map(|i| (((i / components % width + i / components / width) / 4) as u8).wrapping_add(noise(&mut seed) % 8)).collect()
+}
+
+/// 0과 255만 있는 흑백 잡음. Flate는 잘 줄이고 JPEG는 오히려 커진다.
+fn binary_noise_pixels(width: usize, height: usize) -> Vec<u8> {
+    let mut seed = 7;
+    (0..width * height).map(|_| if noise(&mut seed) & 1 == 1 { 255 } else { 0 }).collect()
+}
+
+/// Flate로 압축한 이미지 스트림. `tweak`이 사전을 바꾼다.
+fn flate_image(width: i64, height: i64, color: &str, pixels: Vec<u8>, tweak: impl FnOnce(&mut lopdf::Dictionary)) -> Stream {
+    let mut image = Stream::new(dictionary! {"Type" => "XObject", "Subtype" => "Image", "Width" => width, "Height" => height, "ColorSpace" => color, "BitsPerComponent" => 8}, pixels);
+    image.compress().unwrap();
+    tweak(&mut image.dict);
+    image
+}
+
+/// 쪽마다 이미지 하나를 그리는 PDF.
+fn image_doc(images: Vec<Stream>) -> Document {
+    let mut doc = Document::with_version("1.5");
+    let pages_id = doc.new_object_id();
+    let kids: Vec<Object> = images
+        .into_iter()
+        .map(|image| {
+            let image = doc.add_object(image);
+            let content = doc.add_object(Stream::new(dictionary! {}, b"q 10 0 0 10 0 0 cm /Im0 Do Q".to_vec()));
+            Object::Reference(doc.add_object(dictionary! {
+                "Type" => "Page", "Parent" => pages_id, "Contents" => content,
+                "MediaBox" => vec![0.into(), 0.into(), 10.into(), 10.into()],
+                "Resources" => dictionary! {"XObject" => dictionary! {"Im0" => image}},
+            }))
+        })
+        .collect();
+    let count = kids.len() as i64;
+    doc.objects.insert(pages_id, Object::Dictionary(dictionary! {"Type" => "Pages", "Kids" => kids, "Count" => count}));
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages_id});
+    doc.trailer.set("Root", catalog);
+    doc
+}
+
+/// 추출 결과에서 쪽마다 그리는 이미지 스트림.
+fn page_images(out: &Document) -> Vec<Stream> {
+    out.get_pages()
+        .values()
+        .map(|page| {
+            let resources = out.get_dictionary(*page).unwrap().get(b"Resources").unwrap().as_dict().unwrap();
+            let image = resources.get(b"XObject").unwrap().as_dict().unwrap().get(b"Im0").unwrap().as_reference().unwrap();
+            out.get_object(image).unwrap().as_stream().unwrap().clone()
+        })
+        .collect()
+}
+
+#[test]
+fn extract_turns_large_lossless_rgb_and_gray_images_into_jpeg() {
+    let d = tempfile::tempdir().unwrap();
+    let rgb = flate_image(400, 400, "DeviceRGB", smooth_pixels(400, 400, 3), |_| {});
+    let gray = flate_image(700, 700, "DeviceGray", smooth_pixels(700, 700, 1), |_| {});
+    // 필터를 하나짜리 배열로 쓰고 빈 DecodeParms를 둔 이미지도 바꾼다. DecodeParms는 함께 지운다.
+    let listed = flate_image(400, 400, "DeviceRGB", smooth_pixels(400, 400, 3), |dict| {
+        dict.set("Filter", vec![Object::Name(b"FlateDecode".to_vec())]);
+        dict.set("DecodeParms", dictionary! {});
+    });
+    let before: Vec<usize> = [&rgb, &gray, &listed].iter().map(|image| image.content.len()).collect();
+    assert!(before.iter().all(|len| *len >= 256 * 1024), "{before:?}");
+    let f = save(&mut image_doc(vec![rgb, gray, listed]), d.path(), "images.pdf");
+
+    let out = Document::load_mem(&worker(&["extract", p(&f), "1", "3"]).unwrap()).unwrap();
+    for (image, before) in page_images(&out).iter().zip(before) {
+        assert_eq!(image.dict.get(b"Filter").unwrap().as_name().unwrap(), b"DCTDecode");
+        assert!(!image.dict.has(b"DecodeParms"));
+        assert!(image.content.starts_with(&[0xFF, 0xD8]), "JPEG SOI");
+        assert_eq!(image.dict.get(b"Length").unwrap().as_i64().unwrap(), image.content.len() as i64);
+        assert!(image.content.len() * 2 <= before, "{} vs {before}", image.content.len());
+    }
+    // 바꾼 JPEG는 원래 크기 그대로 풀린다.
+    let decoded = mupdf::Image::from_bytes(&page_images(&out)[1].content).unwrap();
+    assert_eq!((decoded.width(), decoded.height()), (700, 700));
+}
+
+#[test]
+fn extract_keeps_images_it_cannot_or_need_not_shrink() {
+    let d = tempfile::tempdir().unwrap();
+    let smooth = || smooth_pixels(400, 400, 3);
+    let rgb = |tweak: fn(&mut lopdf::Dictionary)| flate_image(400, 400, "DeviceRGB", smooth(), tweak);
+    let images = vec![
+        // JPEG가 Flate의 절반보다 크면 그대로 둔다
+        flate_image(1500, 1500, "DeviceGray", binary_noise_pixels(1500, 1500), |_| {}),
+        // 작은 이미지
+        flate_image(40, 40, "DeviceRGB", smooth_pixels(40, 40, 3), |_| {}),
+        // 투명도·마스크·디코드 배열이 있는 이미지
+        rgb(|dict| dict.set("SMask", 1)),
+        rgb(|dict| dict.set("Mask", 1)),
+        rgb(|dict| dict.set("Decode", vec![0.into(), 1.into()])),
+        // JPEG로 옮길 수 없는 색공간·비트 깊이
+        rgb(|dict| dict.set("ColorSpace", "DeviceCMYK")),
+        rgb(|dict| dict.set("ColorSpace", vec![Object::Name(b"ICCBased".to_vec()), 1.into()])),
+        rgb(|dict| dict.set("BitsPerComponent", 16)),
+        // 이미지가 아니거나 Flate 하나가 아닌 필터
+        rgb(|dict| dict.set("Subtype", "Form")),
+        rgb(|dict| dict.set("Filter", "DCTDecode")),
+        rgb(|dict| dict.set("Filter", vec![Object::Name(b"FlateDecode".to_vec()), Object::Name(b"FlateDecode".to_vec())])),
+        rgb(|dict| dict.set("Filter", 1)),
+        rgb(|dict| {
+            dict.remove(b"Filter");
+        }),
+        // 크기가 화소 수와 맞지 않거나 JPEG 한도(65535)·화소 상한을 넘는 이미지
+        rgb(|dict| dict.set("Width", 300)),
+        rgb(|dict| dict.set("Width", 0)),
+        rgb(|dict| dict.set("Height", 70_000)),
+        rgb(|dict| {
+            dict.set("Width", 65_535);
+            dict.set("Height", 700);
+        }),
+    ];
+    let before: Vec<Vec<u8>> = images.iter().map(|image| image.content.clone()).collect();
+    let f = save(&mut image_doc(images), d.path(), "keep.pdf");
+
+    let count = before.len().to_string();
+    let out = Document::load_mem(&worker(&["extract", p(&f), "1", &count]).unwrap()).unwrap();
+    let after: Vec<Vec<u8>> = page_images(&out).into_iter().map(|image| image.content).collect();
+    assert_eq!(after.len(), before.len());
+    for (index, (after, before)) in after.iter().zip(&before).enumerate() {
+        assert!(after == before, "{}번째 이미지가 바뀌었다", index + 1);
+    }
+}
+
 // ---- 암호화 ----
 
 fn encrypted(dir: &Path, name: &str, user_password: &str) -> PathBuf {
