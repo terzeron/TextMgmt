@@ -546,7 +546,7 @@ describe("ViewPDF", () => {
     });
   });
 
-  it("전체보기에서 첫 페이지 후 2~11페이지 청크를 즉시 페칭한다", async () => {
+  it("전체보기에서 첫 페이지 후 2~3쪽 청크를 즉시 페칭한다", async () => {
     globalThis.fetch = createMockFetch(20);
     setupGetDocument(() => createMockPdf(1));
 
@@ -558,7 +558,7 @@ describe("ViewPDF", () => {
         expect.objectContaining({ credentials: "include" }),
       );
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        "http://localhost:8000/pdf-pages/1?start=2&end=11",
+        "http://localhost:8000/pdf-pages/1?start=2&end=3",
         expect.objectContaining({ credentials: "include" }),
       );
     });
@@ -1179,7 +1179,7 @@ describe("ViewPDF", () => {
   it("청크 doc 로드 도중 취소되면 loadingTask.destroy로 정리한다", async () => {
     // 첫 페이지는 정상 로드되어 청크 페칭이 트리거되고, 청크 getDocument().promise가
     // unmount 이후 resolve되는 타이밍 → fetchChunk의 cancelled 분기 (ViewPDF.jsx:79-80)
-    globalThis.fetch = createMockFetch(11);
+    globalThis.fetch = createMockFetch(3);
     const firstPdf = createMockPdf(1);
     firstPdf.loadingTask = {
       promise: Promise.resolve(firstPdf),
@@ -1450,7 +1450,7 @@ describe("ViewPDF", () => {
   });
 
   // 청크 응답에 수 초가 걸리므로 근접 영역의 가장 먼 쪽에서 5쪽 앞까지 청크를 미리 받는다.
-  it("근접 영역 앞 5쪽이 다음 청크에 걸리면 그 청크를 미리 받는다", async () => {
+  it("근접 영역 앞 5쪽이 다음 청크에 걸리면 받는 중인 청크가 끝난 뒤 그 청크를 미리 받는다", async () => {
     setupGetDocument(() => createMockPdf(10));
     globalThis.fetch = createMockFetch(30);
     const observers = [];
@@ -1465,7 +1465,7 @@ describe("ViewPDF", () => {
       disconnect() {}
     };
     const fetchedNextChunk = () =>
-      globalThis.fetch.mock.calls.some(([url]) => url.includes("start=12&end=21"));
+      globalThis.fetch.mock.calls.some(([url]) => url.includes("start=14&end=23"));
 
     try {
       render(<ViewPDF bookId={1} />);
@@ -1477,11 +1477,16 @@ describe("ViewPDF", () => {
           obs.cb([{ isIntersecting: true, target: canvases[pageNum - 1] }], obs);
         });
 
-      // 6쪽 + 5쪽 = 11쪽: 아직 2~11쪽 청크 안이다
-      await fire(6);
+      // 8쪽 + 5쪽 = 13쪽: 아직 4~13쪽 청크 안이다
+      await fire(8);
+      await waitFor(() =>
+        expect(
+          globalThis.fetch.mock.calls.some(([url]) => url.includes("start=4&end=13")),
+        ).toBe(true),
+      );
       expect(fetchedNextChunk()).toBe(false);
-      // 7쪽 + 5쪽 = 12쪽: 12쪽이 근접 영역에 들기 전에 12~21쪽 청크를 받는다
-      await fire(7);
+      // 9쪽 + 5쪽 = 14쪽: 14쪽이 근접 영역에 들기 전에 14~23쪽 청크를 받는다
+      await fire(9);
       await waitFor(() => expect(fetchedNextChunk()).toBe(true));
     } finally {
       globalThis.IntersectionObserver = RealIO;
@@ -1617,9 +1622,12 @@ describe("ViewPDF", () => {
       expect(canvases[14].style.aspectRatio).toBe("");
       expect(canvases[TOTAL - 1].width).toBe(800);
 
-      // 2~11쪽 청크는 쓰는 쪽이 없어 해제되고, 12~21쪽 청크는 남는다 (docs[0]=1쪽, [1]=2~11, [2]=12~21)
+      // 2~3쪽·4~13쪽 청크는 쓰는 쪽이 없어 해제되고, 14~21쪽 청크는 남는다
+      // (docs[0]=1쪽, [1]=2~3, [2]=4~13, [3]=14~21)
+      expect(docs).toHaveLength(4);
       expect(docs[1].loadingTask.destroy).toHaveBeenCalled();
-      expect(docs[2].loadingTask.destroy).not.toHaveBeenCalled();
+      expect(docs[2].loadingTask.destroy).toHaveBeenCalled();
+      expect(docs[3].loadingTask.destroy).not.toHaveBeenCalled();
       expect(cleanupSpy).toHaveBeenCalled();
 
       // 해제된 1쪽이 다시 보이면 새로 그리고 aspect-ratio 잠금을 푼다
