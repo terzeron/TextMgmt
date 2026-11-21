@@ -63,6 +63,9 @@ const MAX_CONCURRENT_RENDERS = 3;
 // 보이는 영역(near zone) 밖에서 그려진 채로 남겨 두는 페이지 수. 가까운 순으로 이만큼만 남기고
 // 나머지는 canvas 비트맵과 청크 pdfDoc 을 해제해 긴 PDF 를 넘겨도 메모리가 쌓이지 않게 한다.
 const RETAIN_PAGES_OUTSIDE_VIEW = 6;
+// 근접 영역의 가장 먼 쪽에서 이만큼 앞 쪽까지 청크를 미리 받는다. 청크(10쪽) 응답에 수 초가 걸려
+// (웹툰 실측 약 4초), 쪽이 근접 영역에 들어올 때 받기 시작하면 청크 경계마다 빈 화면이 남는다.
+const PREFETCH_AHEAD_PAGES = 5;
 
 // 렌더 단위 키. 일반 쪽은 쪽 번호(숫자), 긴 쪽의 타일은 "쪽:타일번호"(문자열)다.
 // 렌더 큐·실행 중·그려진·근접 집합이 모두 이 키를 쓴다. 타일 하나도 일반 쪽처럼 따로 그리고 해제한다.
@@ -80,7 +83,8 @@ export default function ViewPDF({
 }) {
   const [error, setError] = useState(null);
   const [totalPages, setTotalPages] = useState(0);
-  const [loadedPages, setLoadedPages] = useState(0);
+  // 좌상단 표시: 현재 쪽 위치와, 현재 쪽부터 끊기지 않고 그려 둔 마지막 쪽 위치(없으면 0). 위치는 보이는 순서의 1-based 번호다.
+  const [viewStatus, setViewStatus] = useState({ current: 1, ahead: 0 });
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [isFirstPageReady, setIsFirstPageReady] = useState(false);
   const ZOOM_STEPS = [
@@ -265,7 +269,8 @@ export default function ViewPDF({
   const containerRef = useRef(null);
   const canvasRefs = useRef({});
   const renderedPagesRef = useRef(new Set());
-  const everRenderedRef = useRef(new Set()); // 한 번이라도 그려진 페이지 (진행률 표시용, 해제해도 유지)
+  const paintedRef = useRef(new Set()); // 지금 비트맵이 그려져 있는 렌더 단위 (좌상단 표시용)
+  const displayOrderRef = useRef([]); // 보이는 순서의 쪽 번호 (좌상단 표시용)
   const nearPagesRef = useRef(new Set()); // 지금 near zone 에 있는 페이지 (해제 대상에서 제외)
   // 타일로 그리는 긴 쪽: 쪽 번호 → computeTilePlan 결과. ref 는 스케줄러가, state 는 화면이 쓴다.
   const tilePlansRef = useRef(new Map());
@@ -314,6 +319,39 @@ export default function ViewPDF({
       mode: traceModeRef.current,
       ...(heap ? { heapMB: Math.round(heap / 1048576) } : {}),
     });
+  }, []);
+
+  // 좌상단 표시를 갱신한다. 현재 쪽은 툴바 바로 아래 선에 걸친 쪽(없으면 쪽 윗변이 그 선에 가장 가까운 쪽)이다.
+  // 미리 그린 쪽은 현재 쪽부터 끊기지 않고 비트맵이 있는 마지막 쪽이다. 타일 쪽은 타일이 하나라도 그려지면 센다.
+  const refreshStatus = useCallback(() => {
+    const order = displayOrderRef.current;
+    const container = containerRef.current;
+    let current = 0;
+    if (container) {
+      const line = container.getBoundingClientRect().top + PDF_TOOLBAR_HEIGHT;
+      let bestDist = Infinity;
+      for (let i = 0; i < order.length; i++) {
+        const el = canvasRefs.current[order[i]];
+        if (!el) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.top <= line && line < rect.bottom) {
+          current = i;
+          break;
+        }
+        const dist = Math.abs(rect.top - line);
+        if (dist < bestDist) {
+          bestDist = dist;
+          current = i;
+        }
+      }
+    }
+    const paintedPages = new Set([...paintedRef.current].map(unitPage));
+    let ahead = current;
+    while (ahead < order.length && paintedPages.has(order[ahead])) ahead += 1;
+    const next = { current: current + 1, ahead: ahead > current ? ahead : 0 };
+    setViewStatus((prev) =>
+      prev.current === next.current && prev.ahead === next.ahead ? prev : next,
+    );
   }, []);
 
   // 청크 키에서 해당 페이지를 포함하는 청크의 pdfDoc과 로컬 페이지 번호를 반환
@@ -391,6 +429,7 @@ export default function ViewPDF({
   // 스크롤 위치가 밀리지 않게 한다. 다시 보이면 executeRender 가 aspect-ratio 를 풀고 새로 그린다.
   const evictPage = useCallback((pageNum) => {
     renderedPagesRef.current.delete(pageNum);
+    paintedRef.current.delete(pageNum);
     const canvas = canvasRefs.current[pageNum];
     if (!canvas || !canvas.width || !canvas.height) return;
     canvas.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
@@ -450,8 +489,9 @@ export default function ViewPDF({
     const evicted = far.slice(RETAIN_PAGES_OUTSIDE_VIEW).map((f) => f.pageNum);
     for (const pageNum of evicted) evictPage(pageNum);
     releaseIdleChunks(evicted);
+    refreshStatus();
     trace(`trim -${evicted.length}`);
-  }, [evictPage, releaseIdleChunks, trace]);
+  }, [evictPage, releaseIdleChunks, refreshStatus, trace]);
 
   // 실제 렌더 실행. 스케줄러가 "청크 로드된" 페이지에 대해서만 호출한다. 취소 가능.
   const executeRender = useCallback(
@@ -551,8 +591,8 @@ export default function ViewPDF({
         if (isTile) tilePagesRef.current.set(pageNum, page);
         else page.cleanup?.();
 
-        everRenderedRef.current.add(pageNum);
-        setLoadedPages(everRenderedRef.current.size);
+        paintedRef.current.add(globalPageNum);
+        refreshStatus();
         trace(`render-done p${globalPageNum}`);
 
         if (pageNum === 1) {
@@ -571,7 +611,7 @@ export default function ViewPDF({
         }
       }
     },
-    [findChunkForPage, trimFarPages, evictPage, trace],
+    [findChunkForPage, trimFarPages, evictPage, refreshStatus, trace],
   );
 
   // 큐에서 청크가 로드되어 즉시 렌더 가능한 페이지 중 뷰포트에 가장 가까운 것을 고른다
@@ -620,16 +660,25 @@ export default function ViewPDF({
   // 페이지는 실제로 렌더 실행될 때까지 큐에 남으므로, 청크 로드 후 재호출되면
   // 누락 없이 재시도된다 (one-shot drain이 없어 race가 발생하지 않는다).
   const pumpQueue = useCallback(() => {
-    // 큐에 있는 미로드 페이지들의 청크 페칭 트리거 (fetchChunk가 중복 제거)
-    for (const pageNum of renderQueueRef.current) {
-      if (findChunkForPage(pageNum)) continue;
-      const chunkStart = getChunkStart(unitPage(pageNum));
+    const fetchChunkFor = (globalPageNum) => {
+      if (findChunkForPage(globalPageNum)) return;
+      const chunkStart = getChunkStart(globalPageNum);
       const chunkEnd = Math.min(
         /* v8 ignore next -- page 1 is loaded by the initial single-page chunk. */
         chunkStart === 1 ? 1 : chunkStart + CHUNK_SIZE - 1,
         totalPagesRef.current,
       );
       fetchChunk(chunkStart, chunkEnd);
+    };
+    // 큐에 있는 미로드 페이지들의 청크 페칭 트리거 (fetchChunk가 중복 제거)
+    for (const pageNum of renderQueueRef.current) fetchChunkFor(unitPage(pageNum));
+    // 근접 영역 앞쪽 PREFETCH_AHEAD_PAGES 쪽의 청크도 미리 받는다. 렌더는 근접 영역에 들어올 때 한다.
+    // 근접 영역이 비었으면(첫 로드 직후) 시작 흐름이 2~11쪽을 따로 받으므로 건너뛴다.
+    let farthest = 0;
+    for (const key of nearPagesRef.current) farthest = Math.max(farthest, unitPage(key));
+    if (farthest > 0) {
+      const prefetchEnd = Math.min(farthest + PREFETCH_AHEAD_PAGES, totalPagesRef.current);
+      for (let n = farthest + 1; n <= prefetchEnd; n++) fetchChunkFor(n);
     }
     // 렌더 가능한 페이지부터 실행
     while (activeRenderTasksRef.current.size < MAX_CONCURRENT_RENDERS) {
@@ -675,6 +724,32 @@ export default function ViewPDF({
     /* v8 ignore next -- cancellation is called only for active RenderTask objects. */
     if (task && typeof task.cancel === "function") task.cancel();
   }, []);
+
+  // 좌상단 표시가 쓰는 보이는 순서를 맞춰 둔다. 순서를 바꾸면 현재 쪽 위치도 달라진다.
+  useEffect(() => {
+    displayOrderRef.current =
+      pageOrder ?? Array.from({ length: totalPages }, (_, i) => i + 1);
+    refreshStatus();
+  }, [pageOrder, totalPages, refreshStatus]);
+
+  // 스크롤하면 현재 쪽이 바뀐다. 한 프레임에 한 번만 다시 계산한다.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || totalPages === 0) return undefined;
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        refreshStatus();
+      });
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [totalPages, refreshStatus]);
 
   // 1장씩 보기: 뷰어 위의 카드 헤더·nav가 차지하는 높이만큼 viewport가 줄어든다.
   // 컨테이너를 viewport 맨 위에 맞춘 뒤 실제로 보이는 높이를 CSS 변수로 넘기면,
@@ -798,12 +873,12 @@ export default function ViewPDF({
       clearInsertions();
       setInsertDialog(null);
       setTotalPages(0);
-      setLoadedPages(0);
+      setViewStatus({ current: 1, ahead: 0 });
       setDownloadProgress(0);
       setIsFirstPageReady(false);
       canvasRefs.current = {};
       renderedPagesRef.current = new Set();
-      everRenderedRef.current = new Set();
+      paintedRef.current = new Set();
       nearPagesRef.current = new Set();
       tilePlansRef.current = new Map();
       tilePagesRef.current = new Map();
@@ -1125,9 +1200,9 @@ export default function ViewPDF({
     >
       <div className="pdf-toolbar">
         <div className="pdf-info">
-          {loadedPages < totalPages
-            ? `${loadedPages}/${totalPages} 렌더링 중`
-            : `총 ${totalPages}쪽 표시`}
+          <span title="현재 쪽 / 미리 그린 마지막 쪽 / 전체 쪽">
+            {`${viewStatus.current} / ${viewStatus.ahead || "-"} / ${totalPages}`}
+          </span>
           {editable &&
             markedPages.size + insertions.size > 0 &&
             ` · 변경 표시 ${new Set([...markedPages.keys(), ...insertions.keys()]).size}쪽`}
