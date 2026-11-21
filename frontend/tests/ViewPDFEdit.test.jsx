@@ -95,7 +95,7 @@ const okResponse = {
 
 async function renderEditable(props = {}) {
   render(<ViewPDF bookId={1} pageCount={10} preview editable {...props} />);
-  await waitFor(() => expect(screen.getByText(/총 3쪽 표시/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("1 / 3 / 3")).toBeTruthy());
 }
 
 describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
@@ -126,7 +126,7 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
   it("editable 이 아니면 휴지통 버튼이 없다", async () => {
     globalThis.fetch = createFetch(okResponse);
     render(<ViewPDF bookId={1} pageCount={10} preview />);
-    await waitFor(() => expect(screen.getByText("총 3쪽 표시")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("1 / 3 / 3")).toBeTruthy());
     expect(screen.queryByLabelText(/삭제 표시/)).toBeNull();
   });
 
@@ -915,7 +915,7 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
       const { unmount } = render(
         <ViewPDF bookId={1} pageCount={10} preview editable />,
       );
-      await waitFor(() => expect(screen.getByText(/총 3쪽 표시/)).toBeTruthy());
+      await waitFor(() => expect(screen.getByText("1 / 3 / 3")).toBeTruthy());
       await stage(2, "https://img.example.com/a.png");
 
       unmount();
@@ -952,7 +952,7 @@ describe("ViewPDF 편집 모드: 쪽 삭제 표시", () => {
     it("editable 이 아니면 순서 버튼이 없다", async () => {
       globalThis.fetch = createFetch(okResponse);
       render(<ViewPDF bookId={1} pageCount={10} preview />);
-      await waitFor(() => expect(screen.getByText("총 3쪽 표시")).toBeTruthy());
+      await waitFor(() => expect(screen.getByText("1 / 3 / 3")).toBeTruthy());
       expect(screen.queryByLabelText(/옮기기/)).toBeNull();
     });
 
@@ -1139,7 +1139,7 @@ describe("ViewPDF 편집 모드: 경계 분기", () => {
   it("PDF 를 다시 불러오면(다른 책) 남은 삽입 미리보기의 blob URL 을 해제한다", async () => {
     globalThis.fetch = createFetch(okResponse);
     const { rerender } = render(<ViewPDF bookId={1} pageCount={10} preview editable />);
-    await waitFor(() => expect(screen.getByText(/총 3쪽 표시/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("1 / 3 / 3")).toBeTruthy());
     fireEvent.click(screen.getByLabelText("1쪽 앞에 이미지 삽입"));
     fireEvent.change(screen.getByLabelText("이미지 URL"), {
       target: { value: "https://img.example.com/a.png" },

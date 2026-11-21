@@ -192,7 +192,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 3쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 3 / 3")).toBeTruthy();
     });
   });
 
@@ -222,14 +222,14 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
     });
 
     const canvases = document.querySelectorAll("canvas");
     expect(canvases.length).toBe(2);
   });
 
-  it('렌더링 진행 중 "X/Y 렌더링 중" 상태를 표시한다', async () => {
+  it('현재 쪽을 아직 못 그렸으면 미리 그린 쪽을 "-"로 표시한다', async () => {
     // fetch 성공하지만 pdfjs.getDocument의 render가 영원히 pending
     globalThis.fetch = createMockFetch(2);
     const mockPdf = {
@@ -246,7 +246,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(screen.getByText("0/2 렌더링 중")).toBeTruthy();
+      expect(screen.getByText("1 / - / 2")).toBeTruthy();
     });
   });
 
@@ -257,7 +257,7 @@ describe("ViewPDF", () => {
     const { unmount } = render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/총 3쪽 표시/)).toBeTruthy();
+      expect(screen.getByText("1 / 3 / 3")).toBeTruthy();
     });
     const workers = mockGetDocument.mock.calls.map(([params]) => params.worker);
     // 첫 쪽 청크와 2~3쪽 청크: 둘 다 같은 worker 를 써야 Worker/wasm 이 청크 수만큼 늘지 않는다
@@ -277,7 +277,7 @@ describe("ViewPDF", () => {
     const { unmount } = render(<ViewPDF bookId={5} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+      expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
     });
     const running = JSON.parse(localStorage.getItem("tm.pdfTrace"));
     expect(running.clean).toBe(false);
@@ -296,7 +296,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={5} preview />);
 
     await waitFor(() => {
-      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+      expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
     });
     expect(localStorage.getItem("tm.pdfTrace")).toBeNull();
   });
@@ -310,7 +310,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} pageCount={3} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 3쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 3 / 3")).toBeTruthy();
     });
   });
 
@@ -321,7 +321,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} pageCount={100} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
     });
   });
 
@@ -332,7 +332,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} pageCount={0} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 5쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 5 / 5")).toBeTruthy();
     });
   });
 
@@ -418,7 +418,7 @@ describe("ViewPDF", () => {
     const { unmount } = render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 1 / 1")).toBeTruthy();
     });
 
     unmount();
@@ -440,7 +440,7 @@ describe("ViewPDF", () => {
     const { rerender } = render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 1 / 1")).toBeTruthy();
     });
 
     rerender(<ViewPDF bookId={2} />);
@@ -478,7 +478,7 @@ describe("ViewPDF", () => {
     rerender(<ViewPDF bookId={2} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 1 / 1")).toBeTruthy();
     });
 
     // 에러 메시지가 없어야 함
@@ -495,7 +495,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} preview={true} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 10쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 10 / 10")).toBeTruthy();
     });
   });
 
@@ -506,7 +506,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} preview={true} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 5쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 5 / 5")).toBeTruthy();
     });
   });
 
@@ -517,7 +517,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} preview={true} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 5쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 5 / 5")).toBeTruthy();
     });
 
     // 첫 페이지 + 나머지 (2~5) 요청
@@ -605,7 +605,7 @@ describe("ViewPDF", () => {
     setupGetDocument(() => createMockPdf(1));
 
     const first = render(<ViewPDF bookId={1} />);
-    await waitFor(() => screen.getByText("총 2쪽 표시"));
+    await waitFor(() => screen.getByText("1 / 2 / 2"));
     fireEvent.click(screen.getByRole("button", { name: "맞춤" }));
     fireEvent.click(screen.getByRole("button", { name: "1장씩" }));
     fireEvent.click(screen.getByRole("button", { name: /좌←우/ }));
@@ -615,7 +615,7 @@ describe("ViewPDF", () => {
     first.unmount();
 
     const second = render(<ViewPDF bookId={1} />);
-    await waitFor(() => screen.getByText("총 2쪽 표시"));
+    await waitFor(() => screen.getByText("1 / 2 / 2"));
     expect(screen.getByRole("button", { name: "1장씩" }).classList.contains("active")).toBe(true);
     expect(screen.getByRole("button", { name: "맞춤" }).classList.contains("active")).toBe(false);
     expect(screen.getByRole("button", { name: /좌←우/ }).getAttribute("aria-pressed")).toBe("true");
@@ -623,7 +623,7 @@ describe("ViewPDF", () => {
 
     // 미리보기는 전체보기 값의 영향을 받지 않는다
     render(<ViewPDF bookId={1} preview />);
-    await waitFor(() => screen.getByText(/표시|렌더링/));
+    await waitFor(() => screen.getByTitle("현재 쪽 / 미리 그린 마지막 쪽 / 전체 쪽"));
     expect(screen.getByRole("button", { name: "1장씩" }).classList.contains("active")).toBe(false);
   });
 
@@ -634,7 +634,7 @@ describe("ViewPDF", () => {
     const { container } = render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
     });
 
     const root = container.querySelector(".pdf-container");
@@ -664,7 +664,7 @@ describe("ViewPDF", () => {
     globalThis.fetch = createMockFetch(2);
     setupGetDocument(() => createMockPdf(1));
     const { container } = render(<ViewPDF bookId={1} editable={editable} />);
-    await waitFor(() => expect(screen.getByText("총 2쪽 표시")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("1 / 2 / 2")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "맞춤" }));
     fireEvent.click(screen.getByRole("button", { name: "+" }));
     const page = container.querySelector(editable ? ".pdf-page-wrap" : "canvas.pdf-page");
@@ -703,7 +703,7 @@ describe("ViewPDF", () => {
       setupGetDocument(() => createMockPdf(1));
       const view = render(<ViewPDF bookId={1} />);
       await waitFor(() => {
-        expect(screen.getByText("총 3쪽 표시")).toBeTruthy();
+        expect(screen.getByText("1 / 3 / 3")).toBeTruthy();
       });
       const root = view.container.querySelector(".pdf-container");
       if (single) {
@@ -970,7 +970,7 @@ describe("ViewPDF", () => {
       setupGetDocument(() => createMockPdf(1));
       const view = render(<ViewPDF bookId={1} />);
       await waitFor(() => {
-        expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+        expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
       });
       const root = view.container.querySelector(".pdf-container");
       root.getBoundingClientRect = () => ({ top: containerTop });
@@ -1051,7 +1051,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
     });
 
     const fitButton = screen.getByRole("button", { name: /맞춤/ });
@@ -1134,7 +1134,7 @@ describe("ViewPDF", () => {
     const { rerender } = render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 1 / 1")).toBeTruthy();
     });
 
     rerender(<ViewPDF bookId={2} />);
@@ -1290,7 +1290,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 3쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 3 / 3")).toBeTruthy();
     });
 
     // start=2&end=3 요청이 한 번만 발생
@@ -1310,7 +1310,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} preview={false} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
     });
 
     const canvases = document.querySelectorAll("canvas");
@@ -1329,7 +1329,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} preview={true} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 1 / 1")).toBeTruthy();
     });
 
     const canvas = document.querySelector("canvas");
@@ -1445,6 +1445,108 @@ describe("ViewPDF", () => {
       const scroller = view.container.querySelector(".pdf-container");
       expect(observers[observers.length - 1].options.root).toBe(scroller);
     } finally {
+      globalThis.IntersectionObserver = RealIO;
+    }
+  });
+
+  // 청크 응답에 수 초가 걸리므로 근접 영역의 가장 먼 쪽에서 5쪽 앞까지 청크를 미리 받는다.
+  it("근접 영역 앞 5쪽이 다음 청크에 걸리면 그 청크를 미리 받는다", async () => {
+    setupGetDocument(() => createMockPdf(10));
+    globalThis.fetch = createMockFetch(30);
+    const observers = [];
+    const RealIO = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        observers.push(this);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    const fetchedNextChunk = () =>
+      globalThis.fetch.mock.calls.some(([url]) => url.includes("start=12&end=21"));
+
+    try {
+      render(<ViewPDF bookId={1} />);
+      await waitFor(() => expect(observers.length).toBeGreaterThan(0));
+      const canvases = [...document.querySelectorAll("canvas.pdf-page")];
+      const obs = observers[observers.length - 1];
+      const fire = (pageNum) =>
+        act(() => {
+          obs.cb([{ isIntersecting: true, target: canvases[pageNum - 1] }], obs);
+        });
+
+      // 6쪽 + 5쪽 = 11쪽: 아직 2~11쪽 청크 안이다
+      await fire(6);
+      expect(fetchedNextChunk()).toBe(false);
+      // 7쪽 + 5쪽 = 12쪽: 12쪽이 근접 영역에 들기 전에 12~21쪽 청크를 받는다
+      await fire(7);
+      await waitFor(() => expect(fetchedNextChunk()).toBe(true));
+    } finally {
+      globalThis.IntersectionObserver = RealIO;
+    }
+  });
+
+  it("좌상단에 현재 쪽 / 끊기지 않고 미리 그린 마지막 쪽 / 전체 쪽을 표시한다", async () => {
+    setupGetDocument(() => createMockPdf(10));
+    globalThis.fetch = createMockFetch(3);
+    const observers = [];
+    const RealIO = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        observers.push(this);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    const frames = [];
+    const rafSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb) => frames.push(cb));
+    const cafSpy = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+
+    try {
+      const view = render(<ViewPDF bookId={1} />);
+      await waitFor(() => expect(observers.length).toBeGreaterThan(0));
+      const status = () =>
+        screen.getByTitle("현재 쪽 / 미리 그린 마지막 쪽 / 전체 쪽").textContent;
+      // 1쪽은 열자마자 그린다
+      await waitFor(() => expect(status()).toBe("1 / 1 / 3"));
+      const canvases = [...document.querySelectorAll("canvas.pdf-page")];
+      const obs = observers[observers.length - 1];
+      const fire = (pageNum) =>
+        act(() => {
+          obs.cb([{ isIntersecting: true, target: canvases[pageNum - 1] }], obs);
+        });
+
+      // 3쪽을 그려도 2쪽이 비어 있으면 1쪽에서 끊긴다
+      await fire(3);
+      await waitFor(() => expect(canvases[2].width).toBe(800));
+      expect(status()).toBe("1 / 1 / 3");
+      await fire(2);
+      await waitFor(() => expect(status()).toBe("1 / 3 / 3"));
+
+      // 스크롤해서 2쪽이 툴바 아래 선(22px)에 걸치면 현재 쪽이 2가 된다. 한 프레임에 한 번만 계산한다.
+      canvases.forEach((canvas, i) => {
+        canvas.getBoundingClientRect = () => ({ top: i * 1000 - 990, bottom: (i + 1) * 1000 - 990 });
+      });
+      const scroller = view.container.querySelector(".pdf-container");
+      fireEvent.scroll(scroller);
+      fireEvent.scroll(scroller);
+      expect(frames).toHaveLength(1);
+      act(() => frames.shift()());
+      expect(status()).toBe("2 / 3 / 3");
+
+      // 계산을 기다리는 프레임은 닫을 때 취소한다
+      fireEvent.scroll(scroller);
+      view.unmount();
+      expect(cafSpy).toHaveBeenCalled();
+    } finally {
+      rafSpy.mockRestore();
+      cafSpy.mockRestore();
       globalThis.IntersectionObserver = RealIO;
     }
   });
@@ -1603,7 +1705,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} preview={true} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 1 / 1")).toBeTruthy();
     });
 
     const zoomUpButton = screen.getByRole("button", { name: "+" });
@@ -1629,7 +1731,7 @@ describe("ViewPDF", () => {
     render(<ViewPDF bookId={1} preview={true} />);
 
     await waitFor(() => {
-      expect(screen.getByText("총 1쪽 표시")).toBeTruthy();
+      expect(screen.getByText("1 / 1 / 1")).toBeTruthy();
     });
 
     const zoomDownButton = screen.getByRole("button", { name: "−" });
@@ -1668,7 +1770,7 @@ describe("ViewPDF", () => {
       render(<ViewPDF bookId={1} />);
 
       await waitFor(() => {
-        expect(screen.getByText("총 2쪽 표시")).toBeTruthy();
+        expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
       });
       // fallback이 적용되어 에러 없이 canvas가 생성됨
       expect(document.querySelectorAll("canvas").length).toBe(2);
@@ -1717,7 +1819,7 @@ describe("ViewPDF", () => {
       render(<ViewPDF bookId={1} />);
 
       await waitFor(() => {
-        expect(screen.getByText("총 3쪽 표시")).toBeTruthy();
+        expect(screen.getByText("1 / 3 / 3")).toBeTruthy();
       });
       // 페이지 2가 한 번은 렌더되도록 대기
       await waitFor(() => {
@@ -1930,8 +2032,8 @@ describe("ViewPDF", () => {
 
     // 취소되어 canvas(페이지 placeholder)가 생성되지 않음
     expect(document.querySelectorAll("canvas").length).toBe(0);
-    // totalPages 미설정 → "총 N쪽 표시" 없음
-    expect(screen.queryByText(/쪽 표시/)).toBeNull();
+    // totalPages 미설정 → 쪽 표시 툴바 없음
+    expect(document.querySelector(".pdf-info")).toBeNull();
   });
 
   it("로드 중 취소된 뒤 에러가 발생해도 에러 메시지를 표시하지 않는다 (catch cancelledRef 분기)", async () => {
@@ -2201,7 +2303,7 @@ describe("ViewPDF: 쪽 크기가 비정상적으로 작은 PDF", () => {
     const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
 
     await waitFor(() => {
-      expect(screen.getByText(/총 3쪽 표시/)).toBeTruthy();
+      expect(screen.getByText("1 / 3 / 3")).toBeTruthy();
     });
     const canvases = container.querySelectorAll("canvas");
     expect(canvases).toHaveLength(3);
@@ -2222,7 +2324,7 @@ describe("ViewPDF: 쪽 크기가 비정상적으로 작은 PDF", () => {
     const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
 
     await waitFor(() => {
-      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+      expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
     });
     // createMockPdf 는 scale 과 무관하게 800x600 을 돌려준다
     expect(container.querySelector("canvas").style.width).toBe("800px");
@@ -2237,7 +2339,7 @@ describe("ViewPDF: 쪽 크기가 비정상적으로 작은 PDF", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+      expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
     });
     expect(container.querySelector(".pdf-page-wrap").style.width).toBe("900px");
   });
@@ -2287,7 +2389,7 @@ describe("ViewPDF: 원래 크기(100%)는 브라우저 PDF viewer 와 같다", (
     const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
 
     await waitFor(() => {
-      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+      expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
     });
     expect(container.querySelector("canvas").style.width).toBe("540px");
   });
@@ -2341,7 +2443,7 @@ describe("ViewPDF: 원래 크기(100%)는 브라우저 PDF viewer 와 같다", (
     const { container } = render(<ViewPDF bookId={1} pageCount={10} preview />);
 
     await waitFor(() => {
-      expect(screen.getByText(/총 2쪽 표시/)).toBeTruthy();
+      expect(screen.getByText("1 / 2 / 2")).toBeTruthy();
     });
     expect(container.querySelector("canvas").style.maxWidth).toBe("100%");
     fireEvent.click(screen.getByRole("button", { name: "+" }));
