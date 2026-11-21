@@ -1,4 +1,4 @@
-use lopdf::{Document, Object, ObjectId, dictionary};
+use lopdf::{Document, Object, ObjectId, Stream, dictionary};
 use mupdf::pdf::{PdfDocument, PdfWriteOptions};
 use mupdf::{CjkFontOrdering, Colorspace, Font, FontLoader, ImageFormat, Matrix, TextPageFlags};
 use std::collections::BTreeSet;
@@ -7,6 +7,13 @@ use std::path::Path;
 use std::sync::OnceLock;
 const MAX_LOPDF_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_JPEG_BYTES: usize = 16 * 1024 * 1024;
+// 뷰어로 보내는 쪽 묶음의 무손실 이미지를 JPEG로 바꾼다. 웹툰 PDF는 720px 폭 한 쪽이 Flate로 4~5MB인데
+// JPEG q85면 약 1/9이 된다(전생자 184화 실측). 원본 파일은 건드리지 않는다.
+const VIEW_JPEG_QUALITY: u8 = 85;
+// 이보다 작은 이미지 스트림은 줄여도 이득이 작아 그대로 둔다.
+const MIN_RECOMPRESS_STREAM_BYTES: usize = 256 * 1024;
+// 풀어 놓은 화소 상한. worker 주소 공간 상한(512MB) 안에서 원본·화소·JPEG를 함께 들고 있을 수 있게 한다.
+const MAX_RECOMPRESS_PIXELS: usize = 40_000_000;
 struct NotoCjk;
 impl FontLoader for NotoCjk {
     fn load_cjk_font(&self, name: &str, ordering: CjkFontOrdering, _serif: bool) -> Option<Font> {
@@ -102,6 +109,58 @@ fn extract_large(path: &Path, first: usize, last: usize) -> Result<Vec<u8>, Stri
     let mut bytes = vec![];
     dest.write_to_with_options(&mut bytes, options).map_err(|e| e.to_string())?;
     Ok(bytes)
+}
+/// Flate 무손실 8비트 RGB·Gray 이미지를 JPEG로 바꾼 바이트. 대상이 아니거나 절반 아래로 줄지 않으면 `None`.
+fn lossless_image_as_jpeg(stream: &Stream) -> Option<Vec<u8>> {
+    let dict = &stream.dict;
+    let flate = match dict.get(b"Filter").ok()? {
+        Object::Name(name) => name == b"FlateDecode",
+        Object::Array(filters) => filters.len() == 1 && filters[0].as_name().ok() == Some(b"FlateDecode".as_slice()),
+        _ => false,
+    };
+    if dict.get(b"Subtype").and_then(Object::as_name).ok() != Some(b"Image".as_slice())
+        || !flate
+        || dict.get(b"BitsPerComponent").and_then(Object::as_i64).ok() != Some(8)
+        || ["SMask", "Mask", "Decode", "ImageMask", "SMaskInData"].iter().any(|key| dict.has(key.as_bytes()))
+        || stream.content.len() < MIN_RECOMPRESS_STREAM_BYTES
+    {
+        return None;
+    }
+    let (color, components) = match dict.get(b"ColorSpace").and_then(Object::as_name).ok()? {
+        b"DeviceRGB" => (jpeg_encoder::ColorType::Rgb, 3),
+        b"DeviceGray" => (jpeg_encoder::ColorType::Luma, 1),
+        _ => return None,
+    };
+    let width = u16::try_from(dict.get(b"Width").and_then(Object::as_i64).ok()?).ok().filter(|w| *w > 0)?;
+    let height = u16::try_from(dict.get(b"Height").and_then(Object::as_i64).ok()?).ok().filter(|h| *h > 0)?;
+    let pixels = usize::from(width) * usize::from(height);
+    if pixels > MAX_RECOMPRESS_PIXELS {
+        return None;
+    }
+    let expected = pixels * components;
+    let plain = stream.decompressed_content_with_limit(expected).ok().filter(|plain| plain.len() == expected)?;
+    let mut jpeg = Vec::new();
+    jpeg_encoder::Encoder::new(&mut jpeg, VIEW_JPEG_QUALITY).encode(&plain, width, height, color).ok()?;
+    (jpeg.len() * 2 <= stream.content.len()).then_some(jpeg)
+}
+/// 쪽 묶음 PDF의 무손실 이미지를 JPEG로 바꾼다. 바꿀 것이 없거나 다시 쓰지 못하면 원본을 그대로 돌려준다.
+fn shrink_lossless_images(pdf: Vec<u8>) -> Vec<u8> {
+    let Ok(mut doc) = Document::load_mem(&pdf) else { return pdf };
+    let mut changed = false;
+    for object in doc.objects.values_mut() {
+        let Object::Stream(stream) = object else { continue };
+        if let Some(jpeg) = lossless_image_as_jpeg(stream) {
+            stream.dict.remove(b"DecodeParms");
+            stream.dict.set("Filter", "DCTDecode");
+            stream.set_content(jpeg);
+            changed = true;
+        }
+    }
+    let mut out = Vec::new();
+    if !changed || doc.save_to(&mut out).is_err() {
+        return pdf;
+    }
+    out
 }
 fn jpeg(path: &Path) -> Result<Option<Vec<u8>>, String> {
     if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > MAX_LOPDF_BYTES {
@@ -206,6 +265,7 @@ pub(crate) fn run(args: &[String], mut out: &mut dyn Write) -> Result<(), String
             let (first, last) = (num(0)?, num(1)?);
             let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
             let bytes = if size > MAX_LOPDF_BYTES { extract_large(path, first, last)? } else { extract_small(path, first, last)? };
+            let bytes = shrink_lossless_images(bytes);
             out.write_all(&bytes).map_err(|e| e.to_string())?;
         }
         "jpeg" => {

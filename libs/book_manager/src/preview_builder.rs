@@ -103,8 +103,9 @@ impl From<ZipError> for PreviewFailure {
 pub const MAX_PDF_PAGE_RANGE: i64 = 50;
 
 impl BookManager {
-    /// CJK CMap과 서버 글꼴을 보완하기 전에 생성한 PDF를 재사용하지 않는다.
-    pub const PDF_PREVIEW_CACHE_VERSION: u32 = 3;
+    /// CJK CMap과 서버 글꼴을 보완하기 전(v3 미만), 무손실 이미지를 JPEG로 줄이기 전(v4 미만)에
+    /// 생성한 PDF를 재사용하지 않는다.
+    pub const PDF_PREVIEW_CACHE_VERSION: u32 = 4;
 
     fn mtime_of(&self, path: &Path) -> Option<SystemTime> {
         self.fs.metadata(path).ok().and_then(|m| m.modified().ok())
