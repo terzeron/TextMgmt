@@ -344,6 +344,13 @@
   ],
   [
     "GET",
+    "/comics/pdf-page-image/{book_id}",
+    [
+      "require_auth"
+    ]
+  ],
+  [
+    "GET",
     "/comics/preview/{book_id}",
     [
       "require_auth"
@@ -422,6 +429,13 @@
   [
     "GET",
     "/pdf-pages/{book_id}",
+    [
+      "require_auth"
+    ]
+  ],
+  [
+    "GET",
+    "/pdf-page-image/{book_id}",
     [
       "require_auth"
     ]

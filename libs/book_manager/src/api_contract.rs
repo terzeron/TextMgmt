@@ -153,6 +153,10 @@ pub trait BookManagerApi: Send + Sync {
         BookResponse { status_code: 501, ..BookResponse::default() }
     }
 
+    async fn get_pdf_page_image(&self, _id: i64, _page: i64, _raster: bool) -> BookResponse {
+        BookResponse { status_code: 501, ..BookResponse::default() }
+    }
+
     async fn delete_pdf_pages(
         &self,
         _id: i64,
@@ -306,6 +310,7 @@ mod tests {
         assert_eq!(manager.get_book_preview(1, None, None).await.status_code, 501);
         assert_eq!(manager.get_book_preview_with_pages(1, Some(2), None, None).await.status_code, 501);
         assert_eq!(manager.get_pdf_pages(1, 0, 1).await.status_code, 501);
+        assert_eq!(manager.get_pdf_page_image(1, 1, false).await.status_code, 501);
         assert!(manager.delete_pdf_pages(1, &[], None, None, None, None).await.is_err());
         assert!(manager.preview_insert_image("https://example.test/a.png").await.is_err());
         assert!(manager.preview_insert_upload(&[]).await.is_err());

@@ -174,7 +174,7 @@ async fn test_hwp_preview_empty_returns_message() {
 
 mod get_pdf_pages {
     use super::common;
-    use crate::common::pdf_env::{ResponseExt, build, env, make_doc};
+    use crate::common::pdf_env::{Env, ResponseExt, build, env, make_doc};
     use crate::common::shared_fixtures::create_test_pdf;
     use book_manager::BookManager;
     use common::faulty_fs::FaultyFs;
@@ -213,6 +213,79 @@ mod get_pdf_pages {
             self.cached_extracts.fetch_add(1, Ordering::SeqCst);
             Ok(b"cached PDF pages".to_vec())
         }
+    }
+
+    /// 쪽 이미지 대역. `page_image`가 돌려줄 바이트를 정하고 호출 횟수와 마지막 인자를 센다.
+    /// `page_image`에 넘어온 (쪽, raster) 기록.
+    type ImageCalls = Arc<std::sync::Mutex<Vec<(usize, bool)>>>;
+
+    struct ImagePdfPages {
+        bytes: Result<Vec<u8>, PdfError>,
+        calls: ImageCalls,
+    }
+
+    impl PdfPageOps for ImagePdfPages {
+        fn page_count(&self, _path: &Path) -> Result<usize, PdfError> {
+            Ok(5)
+        }
+
+        fn extract_pages(&self, _path: &Path, _start: usize, _end: usize) -> Result<Vec<u8>, PdfError> {
+            panic!("page images do not extract page ranges")
+        }
+
+        fn page_image(&self, _path: &Path, page: usize, raster: bool) -> Result<Vec<u8>, PdfError> {
+            self.calls.lock().unwrap().push((page, raster));
+            self.bytes.clone()
+        }
+    }
+
+    fn image_env(bytes: Result<Vec<u8>, PdfError>) -> (Env, ImageCalls) {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pages = Arc::new(ImagePdfPages { bytes, calls: calls.clone() });
+        (build(|_, deps| deps.with_pdf_pages(pages)), calls)
+    }
+
+    #[tokio::test]
+    async fn page_image_sends_jpeg_and_png_with_browser_caching_and_caches_on_disk() {
+        for (bytes, media) in [(b"\xFF\xD8\xFFjpeg".to_vec(), "image/jpeg"), (b"\x89PNG\r\n\x1a\npng".to_vec(), "image/png")] {
+            let (e, calls) = image_env(Ok(bytes.clone()));
+            let response = e.bm.get_pdf_page_image(1, 3, false).await;
+            assert_eq!(response.status_code, 200);
+            assert_eq!(response.media_type.as_deref(), Some(media));
+            assert_eq!(response.body, bytes);
+            assert_eq!(response.header("X-Total-Pages"), Some("5"));
+            assert_eq!(response.header("Cache-Control"), Some("private, max-age=3600, no-transform"));
+            assert_eq!(e.bm.get_pdf_page_image(1, 3, false).await.body, bytes);
+            assert_eq!(*calls.lock().unwrap(), vec![(3, false)], "second request reads the disk cache");
+        }
+    }
+
+    #[tokio::test]
+    async fn page_image_reports_a_page_that_is_not_one_image_and_remembers_it_per_raster_flag() {
+        let (e, calls) = image_env(Ok(Vec::new()));
+        assert_eq!(e.bm.get_pdf_page_image(1, 2, false).await.status_code, 415);
+        assert_eq!(e.bm.get_pdf_page_image(1, 2, false).await.status_code, 415);
+        // RASTER는 다른 캐시를 쓴다. 대역이 빈 바이트를 주므로 역시 415다.
+        assert_eq!(e.bm.get_pdf_page_image(1, 2, true).await.status_code, 415);
+        assert_eq!(*calls.lock().unwrap(), vec![(2, false), (2, true)]);
+    }
+
+    #[tokio::test]
+    async fn page_image_rejects_pages_outside_the_book_and_reports_worker_failures() {
+        let (e, calls) = image_env(Err(PdfError::new("ReadError", "boom")));
+        for page in [0, 6] {
+            assert_eq!(e.bm.get_pdf_page_image(1, page, false).await.status_code, 400, "page {page}");
+        }
+        assert!(calls.lock().unwrap().is_empty());
+        let response = e.bm.get_pdf_page_image(1, 1, false).await;
+        assert_eq!(response.status_code, 500);
+        assert!(body_contains(&response.body, "boom"));
+    }
+
+    #[test]
+    fn page_ops_without_page_images_say_so() {
+        let ops = CountingPdfPages { opens: Arc::default(), cached_extracts: Arc::default() };
+        assert_eq!(ops.page_image(Path::new("x.pdf"), 1, false).unwrap_err().message, "PDF page images are not supported");
     }
 
     fn body_contains(body: &[u8], needle: &str) -> bool {
@@ -1294,6 +1367,36 @@ mod get_book_preview {
         let resp = block_on(manager.get_pdf_pages(1, 1, 1));
         assert_eq!(resp.status_code, 503);
         assert!(resp.body_text().starts_with("Storage access error"), "{}", resp.body_text());
+    }
+
+    #[test]
+    fn test_get_pdf_page_image_reports_missing_books_and_storage_errors() {
+        let tmp = tmp_dir();
+        let es = FakeEsManager::new();
+        es.set_doc(None);
+        assert_eq!(block_on(make_manager(tmp.path(), &es).get_pdf_page_image(1, 1, false)).status_code, 404);
+        let pdf = pdf_book(tmp.path(), &es);
+        // 쪽 수를 읽지 못하는 파일
+        let manager = make_manager(tmp.path(), &es);
+        fs::write(&pdf, b"not a pdf").unwrap();
+        assert_ne!(block_on(manager.get_pdf_page_image(1, 1, false)).status_code, 200);
+        let pdf = pdf_book(tmp.path(), &es);
+        // 캐시 디렉터리를 만들 수 없다
+        fs::write(tmp.path().join(".preview_cache"), b"not a directory").unwrap();
+        assert_eq!(block_on(make_manager(tmp.path(), &es).get_pdf_page_image(1, 1, false)).status_code, 503);
+        fs::remove_file(tmp.path().join(".preview_cache")).unwrap();
+        // 캐시를 쓸 수 없다
+        let faulty = FaultyFs::new();
+        faulty.set_write(|_p| Some(io::Error::from_raw_os_error(28)));
+        let manager = BookManager::with_deps(deps(tmp.path(), &es).with_fs(faulty));
+        assert_eq!(block_on(manager.get_pdf_page_image(1, 1, false)).status_code, 503);
+        // 원본 mtime을 읽을 수 없다
+        // 첫 metadata는 쪽 수 캐시 키, 두 번째가 원본 mtime이다.
+        let faulty = FaultyFs::new();
+        faulty.set_metadata(common::faulty_fs::fail_on_nth_path(2, "stat failed"));
+        let manager = BookManager::with_deps(deps(tmp.path(), &es).with_fs(faulty));
+        assert_eq!(block_on(manager.get_pdf_page_image(1, 1, false)).status_code, 503);
+        drop(pdf);
     }
 
     #[test]

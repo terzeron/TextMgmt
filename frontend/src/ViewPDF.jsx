@@ -90,6 +90,16 @@ export default function ViewPDF({
   const [viewStatus, setViewStatus] = useState({ current: 1, ahead: 0 });
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [isFirstPageReady, setIsFirstPageReady] = useState(false);
+  // 이미지 모드: 서버가 1쪽을 원본 이미지로 주는 책(만화·웹툰)은 쪽을 canvas 대신 <img>로 보인다.
+  // 디코딩·합성을 브라우저가 맡아 스크롤이 가볍고, canvas 면적 상한이 없어 원본 해상도까지 보인다.
+  const [imageMode, setImageMode] = useState(false);
+  const imageModeRef = useRef(false);
+  // 쪽 → 받아 둔 이미지의 object URL. 쪽을 놓을 때 해제한다(다시 보면 브라우저 HTTP 캐시에서 읽는다).
+  const imageUrlsRef = useRef(new Map());
+  // 지금 미리 받는 쪽 이미지 { page, promise }. 한 번에 하나만 받는다.
+  const imagePrefetchRef = useRef(null);
+  // 미리 받기를 시도한 쪽. 실패한 쪽을 계속 다시 요청하지 않게 한다(실패한 쪽은 보일 때 렌더가 받는다).
+  const imagePrefetchTriedRef = useRef(new Set());
   const ZOOM_STEPS = [
     25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400,
     500,
@@ -304,9 +314,12 @@ export default function ViewPDF({
     let live = 0;
     let pixels = 0;
     for (const canvas of Object.values(canvasRefs.current)) {
-      if (canvas && canvas.width > 1) {
+      // <img> 는 width 가 표시 폭이다. 메모리를 잡는 것은 디코딩한 원본 화소다.
+      const image = canvas?.tagName === "IMG";
+      const width = image ? (canvas.getAttribute("src") ? canvas.naturalWidth : 0) : canvas?.width;
+      if (canvas && width > 1) {
         live += 1;
-        pixels += canvas.width * canvas.height;
+        pixels += width * (image ? canvas.naturalHeight : canvas.height);
       }
     }
     const near = [...nearPagesRef.current].sort((a, b) => a - b);
@@ -446,6 +459,14 @@ export default function ViewPDF({
     renderedPagesRef.current.delete(pageNum);
     paintedRef.current.delete(pageNum);
     const canvas = canvasRefs.current[pageNum];
+    // <img> 는 src 와 object URL 을 놓는다. 자리 높이는 aspect-ratio 가 지킨다.
+    if (canvas?.tagName === "IMG") {
+      const url = imageUrlsRef.current.get(pageNum);
+      if (url) URL.revokeObjectURL(url);
+      imageUrlsRef.current.delete(pageNum);
+      canvas.removeAttribute("src");
+      return;
+    }
     if (!canvas || !canvas.width || !canvas.height) return;
     canvas.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
     canvas.width = 1;
@@ -508,11 +529,76 @@ export default function ViewPDF({
     trace(`trim -${evicted.length}`);
   }, [evictPage, releaseIdleChunks, refreshStatus, trace]);
 
+  const pageImageUrl = useCallback(
+    (pageNum, raster) =>
+      getApiUrlPrefix() +
+      apiPrefix +
+      `/pdf-page-image/${bookId}?page=${pageNum}${raster ? "&raster=1" : ""}`,
+    [apiPrefix, bookId],
+  );
+
+  // 이미지 모드의 렌더: 쪽 이미지를 받아 <img> 에 넣고 디코딩을 기다린다. 이미지 한 장이 아닌 쪽은 서버가 그려 준다.
+  // 취소하면 받기를 멈춘다. 화면을 지나간 쪽의 요청이 대역폭을 잡지 않게 한다.
+  const renderPageImage = useCallback(
+    async (pageNum) => {
+      const img = canvasRefs.current[pageNum];
+      /* v8 ignore next -- image pages are rendered only after their <img> is attached. */
+      if (!img) return;
+      renderedPagesRef.current.add(pageNum);
+      const controller = new AbortController();
+      activeRenderTasksRef.current.set(pageNum, {
+        cancel: () => controller.abort(),
+      });
+      try {
+        let url = imageUrlsRef.current.get(pageNum);
+        // 미리 받는 중인 쪽이면 같은 요청을 기다린다. 따로 받으면 같은 이미지를 두 번 내려받는다.
+        const prefetching = imagePrefetchRef.current;
+        if (!url && prefetching?.page === pageNum) {
+          await prefetching.promise;
+          url = imageUrlsRef.current.get(pageNum);
+        }
+        if (!url) {
+          trace(`image-start p${pageNum}`);
+          const response = await authFetch(
+            pageImageUrl(pageNum, true),
+            { credentials: "include", signal: controller.signal },
+            "ViewPDF",
+          );
+          if (!response.ok) throw new Error(await describeHttpError(response));
+          const blob = await response.blob();
+          if (cancelledRef.current || controller.signal.aborted) return;
+          url = URL.createObjectURL(blob);
+          imageUrlsRef.current.set(pageNum, url);
+        }
+        img.src = url;
+        // decode() 는 브라우저가 메인 스레드 밖에서 디코딩을 마칠 때까지 기다린다. 실패해도 그림이 있으면 쓴다.
+        await img.decode().catch(() => {});
+        if (!img.naturalWidth) throw new Error("image decode failed");
+        img.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`;
+        paintedRef.current.add(pageNum);
+        refreshStatus();
+        trace(`image-done p${pageNum}`);
+        if (pageNum === 1) setIsFirstPageReady(true);
+        trimFarPages();
+      } catch (err) {
+        evictPage(pageNum);
+        if (err?.name !== "AbortError") {
+          console.error(`페이지 ${pageNum} 이미지 표시 실패:`, err);
+        }
+      }
+    },
+    [pageImageUrl, evictPage, refreshStatus, trimFarPages, trace],
+  );
+
   // 실제 렌더 실행. 스케줄러가 "청크 로드된" 페이지에 대해서만 호출한다. 취소 가능.
   const executeRender = useCallback(
     async (globalPageNum) => {
       /* v8 ignore next -- scheduler filters already-rendered pages before execution. */
       if (renderedPagesRef.current.has(globalPageNum)) return;
+      if (imageModeRef.current) {
+        await renderPageImage(globalPageNum);
+        return;
+      }
 
       const chunkInfo = findChunkForPage(globalPageNum);
       /* v8 ignore next 5 -- pumpQueue calls executeRender only after a chunk is available. */
@@ -626,7 +712,7 @@ export default function ViewPDF({
         }
       }
     },
-    [findChunkForPage, trimFarPages, evictPage, refreshStatus, trace],
+    [findChunkForPage, trimFarPages, evictPage, refreshStatus, trace, renderPageImage],
   );
 
   // 큐에서 청크가 로드되어 즉시 렌더 가능한 페이지 중 뷰포트에 가장 가까운 것을 고른다
@@ -638,7 +724,8 @@ export default function ViewPDF({
     let best = null;
     let bestDist = Infinity;
     for (const pageNum of renderQueueRef.current) {
-      if (!findChunkForPage(pageNum)) continue; // 청크 미로드 → 아직 렌더 불가
+      // 청크 미로드 → 아직 렌더 불가. 이미지 모드는 청크 없이 쪽 이미지를 받는다.
+      if (!imageModeRef.current && !findChunkForPage(pageNum)) continue;
       const canvas = canvasRefs.current[pageNum];
       // 타일은 쪽 컨테이너 안에 절대 위치로 놓이므로 offsetTop 이 쪽 기준이다. 쪽 위치를 더한다.
       const parentTop =
@@ -686,16 +773,49 @@ export default function ViewPDF({
       fetchChunk(...getChunkRange(globalPageNum));
     };
     // 큐에 있는 미로드 페이지들의 청크 페칭 트리거. 화면에 필요한 쪽이라 바로 요청한다.
-    for (const pageNum of renderQueueRef.current) fetchChunkFor(unitPage(pageNum));
+    // 이미지 모드는 청크를 받지 않는다(쪽 이미지는 렌더가 직접 받는다).
+    const chunked = !imageModeRef.current;
+    if (chunked) for (const pageNum of renderQueueRef.current) fetchChunkFor(unitPage(pageNum));
     // 근접 영역 앞쪽 PREFETCH_AHEAD_PAGES 쪽의 청크도 미리 받는다. 렌더는 근접 영역에 들어올 때 한다.
     // 받는 중인 청크가 있으면 기다린다. 요청이 대역폭을 나눠 쓰면 가까운 쪽이 늦게 온다.
     // 근접 영역이 비었으면(첫 로드 직후) 시작 흐름이 2쪽 청크를 따로 받으므로 건너뛴다.
     let farthest = 0;
     for (const key of nearPagesRef.current) farthest = Math.max(farthest, unitPage(key));
-    if (farthest > 0 && fetchingRef.current.size === 0) {
+    if (chunked && farthest > 0 && fetchingRef.current.size === 0) {
       const prefetchEnd = Math.min(farthest + PREFETCH_AHEAD_PAGES, totalPagesRef.current);
       for (let n = farthest + 1; n <= prefetchEnd && fetchingRef.current.size === 0; n++) {
         fetchChunkFor(n);
+      }
+    }
+    // 이미지 모드도 근접 영역 앞쪽 PREFETCH_AHEAD_PAGES 쪽의 이미지를 하나씩 미리 받는다.
+    // 웹툰은 쪽 하나가 화면 열 개를 넘어 근접 영역(아래 3화면)에 들 때 받으면 늦다.
+    if (!chunked && farthest > 0 && !imagePrefetchRef.current) {
+      const prefetchEnd = Math.min(farthest + PREFETCH_AHEAD_PAGES, totalPagesRef.current);
+      for (let n = farthest + 1; n <= prefetchEnd; n++) {
+        if (
+          imageUrlsRef.current.has(n) ||
+          renderedPagesRef.current.has(n) ||
+          imagePrefetchTriedRef.current.has(n)
+        )
+          continue;
+        imagePrefetchTriedRef.current.add(n);
+        // 책을 바꾸면 새 Map 이 생긴다. 이전 책의 늦은 응답이 새 책에 섞이지 않게 처음 Map 에만 넣는다.
+        const urls = imageUrlsRef.current;
+        const promise = authFetch(pageImageUrl(n, true), { credentials: "include" }, "ViewPDF")
+          .then((response) => (response.ok ? response.blob() : null))
+          .then((blob) => {
+            if (blob && imageUrlsRef.current === urls && !urls.has(n)) {
+              urls.set(n, URL.createObjectURL(blob));
+            }
+          })
+          .catch(() => {})
+          .finally(() => {
+            if (imagePrefetchRef.current?.promise === promise) imagePrefetchRef.current = null;
+            if (!cancelledRef.current) pumpQueue();
+          });
+        imagePrefetchRef.current = { page: n, promise };
+        trace(`image-prefetch p${n}`);
+        break;
       }
     }
     // 렌더 가능한 페이지부터 실행
@@ -719,6 +839,8 @@ export default function ViewPDF({
     fetchChunk,
     executeRender,
     releaseTilePage,
+    pageImageUrl,
+    trace,
   ]);
 
   // 페이지를 렌더 큐에 넣는다 (이미 렌더됐거나 실행 중이면 무시)
@@ -907,8 +1029,24 @@ export default function ViewPDF({
       chunkDocsRef.current = new Map();
       fetchingRef.current = new Set();
       totalPagesRef.current = 0;
+      imageModeRef.current = false;
+      setImageMode(false);
+      for (const url of imageUrlsRef.current.values()) URL.revokeObjectURL(url);
+      imageUrlsRef.current = new Map();
+      imagePrefetchRef.current = null;
+      imagePrefetchTriedRef.current = new Set();
 
       try {
+        // 1쪽이 원본 이미지로 오는지 첫 청크와 함께 묻는다. 편집 화면은 쪽 표시·자르기가 canvas 를 쓰므로 묻지 않는다.
+        const firstImage = editable
+          ? Promise.resolve(null)
+          : authFetch(
+              getApiUrlPrefix() + apiPrefix + `/pdf-page-image/${bookId}?page=1`,
+              { credentials: "include" },
+              "ViewPDF",
+            )
+              .then((response) => (response.ok ? response.blob() : null))
+              .catch(() => null);
         // 1단계: 첫 페이지만 페칭하여 총 페이지 수 확인 및 빠른 렌더링
         setDownloadProgress(10);
         const firstUrl =
@@ -980,8 +1118,17 @@ export default function ViewPDF({
 
         if (cancelledRef.current) return;
 
+        // 1쪽이 이미지면 모든 쪽을 <img> 로 보인다. 받은 1쪽 이미지는 그대로 쓴다.
+        const firstImageBlob = await firstImage;
+        if (cancelledRef.current) return;
+        if (firstImageBlob) {
+          imageModeRef.current = true;
+          imageUrlsRef.current.set(1, URL.createObjectURL(firstImageBlob));
+        }
+
         // flushSync로 상태 업데이트를 동기화하여 canvas가 DOM에 생성된 후 렌더링
         flushSync(() => {
+          setImageMode(Boolean(firstImageBlob));
           setTotalPages(pagesToRender);
         });
 
@@ -999,8 +1146,11 @@ export default function ViewPDF({
           /* v8 ignore next 5 -- flushSync creates all page canvases before sizing. */
           if (canvas) {
             canvas.style.aspectRatio = `${placeholderWidth} / ${placeholderHeight}`;
-            canvas.width = 1;
-            canvas.height = 1;
+            // <img> 의 width·height 속성은 표시 크기라 건드리지 않는다.
+            if (!imageModeRef.current) {
+              canvas.width = 1;
+              canvas.height = 1;
+            }
           }
         }
 
@@ -1013,8 +1163,8 @@ export default function ViewPDF({
         /* v8 ignore next -- cancellation here requires unmount in the same async gap. */
         if (cancelledRef.current) return;
 
-        // 2단계: 나머지 페이지 로딩
-        if (pagesToRender > 1) {
+        // 2단계: 나머지 페이지 로딩. 이미지 모드는 쪽마다 이미지를 받으므로 청크가 필요 없다.
+        if (pagesToRender > 1 && !imageModeRef.current) {
           if (preview) {
             // 미리보기: 나머지 2~pagesToRender 한 번에 페칭
             fetchChunk(2, pagesToRender);
@@ -1054,6 +1204,8 @@ export default function ViewPDF({
                 cancelRender(pageNum);
               }
             }
+            // 이미지 모드의 미리 받기는 근접 영역 끝을 기준으로 한다. 이미 그린 쪽만 들어와도 다시 계산한다.
+            if (imageModeRef.current) pumpQueue();
           },
           { root: containerRef.current, rootMargin: "50% 0px 300% 0px" },
         );
@@ -1093,6 +1245,8 @@ export default function ViewPDF({
       }
       activeRenderTasksRef.current.clear();
       renderQueueRef.current.clear();
+      for (const url of imageUrlsRef.current.values()) URL.revokeObjectURL(url);
+      imageUrlsRef.current = new Map();
       // 모든 청크 pdfDoc 정리 (pdfjs 6.x: PDFDocumentProxy 대신 loadingTask로 정리)
       for (const pdfDoc of chunkDocsRef.current.values()) {
         pdfDoc.loadingTask.destroy();
@@ -1112,6 +1266,7 @@ export default function ViewPDF({
     cancelRender,
     fetchChunk,
     getChunkRange,
+    pumpQueue,
   ]);
 
   // 캔버스 ref 설정 함수
@@ -1320,6 +1475,15 @@ export default function ViewPDF({
               <div key={pageNum} className="pdf-page-slot">
                 {plan ? (
                   renderTiles(pageNum, plan, "pdf-page", canvasStyle)
+                ) : imageMode ? (
+                  <img
+                    ref={setCanvasRef(pageNum)}
+                    className="pdf-page pdf-page-image"
+                    style={canvasStyle}
+                    alt=""
+                    decoding="async"
+                    draggable={false}
+                  />
                 ) : (
                   <canvas
                     ref={setCanvasRef(pageNum)}

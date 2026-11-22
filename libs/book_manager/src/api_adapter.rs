@@ -135,6 +135,10 @@ impl BookManagerApi for BookManager {
         BookManager::get_pdf_pages(self, id, start, end).await
     }
 
+    async fn get_pdf_page_image(&self, id: i64, page: i64, raster: bool) -> BookResponse {
+        BookManager::get_pdf_page_image(self, id, page, raster).await
+    }
+
     async fn get_html_resource(&self, book_id: i64, resource_path: &str) -> BookResponse {
         BookManager::get_html_resource(self, book_id, resource_path).await
     }

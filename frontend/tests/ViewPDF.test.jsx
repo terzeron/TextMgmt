@@ -453,11 +453,13 @@ describe("ViewPDF", () => {
   it("bookId 변경 시 이전 로딩의 에러가 표시되지 않는다", async () => {
     // 첫 번째 bookId → fetch 영원히 pending
     // 두 번째 bookId → fetch 성공
-    let callNum = 0;
-    globalThis.fetch = vi.fn((_url) => {
-      callNum++;
-      if (callNum === 1) {
-        // 첫 번째 요청: 영원히 pending (이후 cancelled)
+    // 쪽 이미지 요청은 이미지가 아니라고 답해 canvas 경로를 탄다.
+    globalThis.fetch = vi.fn((url) => {
+      if (String(url).includes("/pdf-page-image/")) {
+        return Promise.resolve({ ok: false, status: 415 });
+      }
+      if (String(url).includes("/pdf-pages/1?")) {
+        // 첫 번째 책의 요청: 영원히 pending (이후 cancelled)
         return new Promise(() => {});
       }
       return Promise.resolve({
@@ -472,7 +474,10 @@ describe("ViewPDF", () => {
     const { rerender } = render(<ViewPDF bookId={1} />);
 
     await waitFor(() => {
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/pdf-pages/1?"),
+        expect.anything(),
+      );
     });
 
     rerender(<ViewPDF bookId={2} />);
@@ -2665,5 +2670,255 @@ describe("ViewPDF 긴 쪽 타일", () => {
     const obs = observers[observers.length - 1];
     unmount();
     expect(obs.unobserved).toEqual(expect.arrayContaining(tiles));
+  });
+});
+
+// 서버가 1쪽을 원본 이미지로 주면 쪽을 canvas 대신 <img> 로 보인다.
+describe("ViewPDF 이미지 모드", () => {
+  let originalFetch;
+  const realIO = globalThis.IntersectionObserver;
+  let observers;
+  let urls;
+
+  // jsdom 은 이미지를 디코딩하지 않는다. decode 와 원본 크기를 흉내 낸다.
+  const decodeSpy = vi.fn(() => Promise.resolve());
+  beforeEach(() => {
+    localStorage.clear();
+    mockGetDocument.mockReset();
+    originalFetch = globalThis.fetch;
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({}));
+    HTMLImageElement.prototype.decode = decodeSpy;
+    Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", {
+      configurable: true,
+      get() {
+        return this.getAttribute("src") ? 1000 : 0;
+      },
+    });
+    Object.defineProperty(HTMLImageElement.prototype, "naturalHeight", {
+      configurable: true,
+      get() {
+        return this.getAttribute("src") ? 1500 : 0;
+      },
+    });
+    urls = 0;
+    URL.createObjectURL = vi.fn(() => `blob:page-${++urls}`);
+    URL.revokeObjectURL = vi.fn();
+    observers = [];
+    globalThis.IntersectionObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        observers.push(this);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    setupGetDocument(() => createMockPdf(1));
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    globalThis.IntersectionObserver = realIO;
+    delete HTMLImageElement.prototype.naturalWidth;
+    delete HTMLImageElement.prototype.naturalHeight;
+    vi.restoreAllMocks();
+  });
+
+  // 쪽 이미지 요청은 imageResponse(url) 로, 나머지는 PDF 청크로 답한다.
+  function mockFetch(total, imageResponse) {
+    globalThis.fetch = vi.fn((url, options) => {
+      if (String(url).includes("/pdf-page-image/")) return imageResponse(url, options);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "X-Total-Pages": String(total) }),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(10)),
+      });
+    });
+  }
+  const imageOk = () =>
+    Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve(new Blob(["img"])) });
+  const fire = (pageNum, isIntersecting) =>
+    act(() => {
+      const obs = observers[observers.length - 1];
+      const target = document.querySelectorAll("img.pdf-page")[pageNum - 1];
+      obs.cb([{ isIntersecting, target }], obs);
+    });
+
+  it("1쪽이 이미지면 모든 쪽을 <img> 로 보이고 보이는 쪽만 그린다", async () => {
+    mockFetch(3, imageOk);
+    render(<ViewPDF bookId={7} />);
+    await waitFor(() => expect(document.querySelectorAll("img.pdf-page")).toHaveLength(3));
+    expect(document.querySelectorAll("canvas.pdf-page")).toHaveLength(0);
+    const imgs = [...document.querySelectorAll("img.pdf-page")];
+
+    // 1쪽은 처음 물어볼 때 받은 이미지를 그대로 쓴다. 청크는 1쪽만 받는다.
+    await fire(1, true);
+    await waitFor(() => expect(imgs[0].getAttribute("src")).toBe("blob:page-1"));
+    expect(imgs[0].style.aspectRatio).toBe("1000 / 1500");
+    const urlsOf = () => globalThis.fetch.mock.calls.map(([url]) => String(url));
+    expect(urlsOf().filter((u) => u.includes("/pdf-pages/"))).toEqual([
+      "http://localhost:8000/pdf-pages/7?start=1&end=1",
+    ]);
+
+    // 2쪽은 그 쪽 이미지를 받는다. 이미지 한 장이 아닌 쪽도 보이게 raster=1 로 묻는다.
+    await fire(2, true);
+    await waitFor(() => expect(imgs[1].getAttribute("src")).toBe("blob:page-2"));
+    expect(urlsOf()).toContain("http://localhost:8000/pdf-page-image/7?page=2&raster=1");
+    expect(imgs[2].getAttribute("src")).toBeNull();
+    expect(screen.getByTitle("현재 쪽 / 미리 그린 마지막 쪽 / 전체 쪽").textContent).toBe("1 / 2 / 3");
+  });
+
+  it("1쪽이 이미지가 아니면 canvas 로 그리고, 편집 화면은 묻지도 않는다", async () => {
+    mockFetch(2, () => Promise.resolve({ ok: false, status: 415 }));
+    const { unmount } = render(<ViewPDF bookId={7} />);
+    await waitFor(() => expect(document.querySelectorAll("canvas.pdf-page")).toHaveLength(2));
+    expect(document.querySelectorAll("img.pdf-page")).toHaveLength(0);
+    unmount();
+
+    mockFetch(2, imageOk);
+    render(<ViewPDF bookId={7} editable />);
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    await waitFor(() => expect(document.querySelectorAll("canvas.pdf-page-canvas")).toHaveLength(2));
+    expect(globalThis.fetch.mock.calls.some(([url]) => String(url).includes("/pdf-page-image/"))).toBe(false);
+  });
+
+  it("받다가 근접 영역을 벗어나면 요청을 멈추고, 받기에 실패한 쪽은 비워 둔다", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const signals = [];
+    mockFetch(3, (url, options) => {
+      if (String(url).includes("page=1")) return imageOk();
+      if (String(url).includes("page=3")) return Promise.resolve({ ok: false, status: 500, text: () => Promise.resolve("boom") });
+      signals.push(options.signal);
+      return new Promise((_resolve, reject) =>
+        options.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))),
+      );
+    });
+    render(<ViewPDF bookId={7} />);
+    await waitFor(() => expect(document.querySelectorAll("img.pdf-page")).toHaveLength(3));
+    const imgs = [...document.querySelectorAll("img.pdf-page")];
+
+    await fire(2, true);
+    await waitFor(() => expect(signals).toHaveLength(1));
+    await fire(2, false);
+    await waitFor(() => expect(signals[0].aborted).toBe(true));
+    expect(imgs[1].getAttribute("src")).toBeNull();
+
+    await fire(3, true);
+    await waitFor(() => expect(errors).toHaveBeenCalledWith("페이지 3 이미지 표시 실패:", expect.any(Error)));
+    expect(imgs[2].getAttribute("src")).toBeNull();
+    // 취소는 실패로 기록하지 않는다
+    expect(errors).toHaveBeenCalledTimes(1);
+  });
+
+  it("디코딩한 그림이 없으면 실패로 보고 비워 둔다", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    decodeSpy.mockImplementationOnce(() => Promise.reject(new Error("bad image")));
+    Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", { configurable: true, get: () => 0 });
+    mockFetch(1, imageOk);
+    render(<ViewPDF bookId={7} />);
+    await waitFor(() => expect(document.querySelectorAll("img.pdf-page")).toHaveLength(1));
+    await fire(1, true);
+    await waitFor(() => expect(errors).toHaveBeenCalledWith("페이지 1 이미지 표시 실패:", expect.any(Error)));
+    // 놓은 쪽의 object URL 은 해제한다
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:page-1");
+    expect(document.querySelector("img.pdf-page").getAttribute("src")).toBeNull();
+  });
+
+  it("앞쪽 이미지를 한 번에 하나씩 미리 받고, 그 쪽이 보이면 받은 것을 쓴다", async () => {
+    // 쪽마다 응답을 테스트가 직접 끝낸다
+    const pending = new Map();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mockFetch(8, (url) => {
+      const page = Number(new URL(url).searchParams.get("page"));
+      if (page === 1) return imageOk();
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      return new Promise((resolve) => {
+        pending.set(page, (response) => {
+          inFlight -= 1;
+          resolve(response);
+        });
+      });
+    });
+    const imageRequests = () =>
+      globalThis.fetch.mock.calls
+        .map(([url]) => String(url))
+        .filter((u) => u.includes("raster=1"))
+        .map((u) => Number(new URL(u).searchParams.get("page")));
+    render(<ViewPDF bookId={7} />);
+    await waitFor(() => expect(document.querySelectorAll("img.pdf-page")).toHaveLength(8));
+    const imgs = [...document.querySelectorAll("img.pdf-page")];
+
+    await fire(1, true);
+    await waitFor(() => expect(imageRequests()).toEqual([2]));
+    // 2쪽: 실패하면 다시 미리 받지 않고 다음 쪽으로 간다
+    await act(async () => pending.get(2)({ ok: false, status: 500 }));
+    await waitFor(() => expect(imageRequests()).toEqual([2, 3]));
+    // 3쪽을 받는 중에 3쪽이 보이면 같은 요청을 기다린다
+    await fire(3, true);
+    await act(async () => pending.get(3)(await imageOk()));
+    await waitFor(() => expect(imgs[2].getAttribute("src")).toBeTruthy());
+    expect(imageRequests().filter((p) => p === 3)).toHaveLength(1);
+    // 앞쪽 PREFETCH_AHEAD_PAGES(5)쪽까지만 받는다: 3쪽 기준 4~8쪽
+    for (const page of [4, 5, 6, 7, 8]) {
+      await waitFor(() => expect(pending.has(page)).toBe(true));
+      await act(async () => pending.get(page)(await imageOk()));
+    }
+    // 미리 받은 4쪽이 보이면 다시 받지 않는다
+    await fire(4, true);
+    await waitFor(() => expect(imgs[3].getAttribute("src")).toBeTruthy());
+    expect(imageRequests().filter((p) => p === 4)).toHaveLength(1);
+    expect(maxInFlight).toBe(1);
+  });
+
+  it("책을 바꾼 뒤 도착한 이전 책의 미리 받기 응답은 버린다", async () => {
+    let finish;
+    mockFetch(3, (url) =>
+      String(url).includes("page=2")
+        ? new Promise((resolve) => {
+            finish = resolve;
+          })
+        : imageOk(),
+    );
+    const { rerender } = render(<ViewPDF bookId={7} />);
+    await waitFor(() => expect(document.querySelectorAll("img.pdf-page")).toHaveLength(3));
+    await fire(1, true);
+    await waitFor(() => expect(finish).toBeTypeOf("function"));
+    const stale = finish;
+    finish = undefined;
+    rerender(<ViewPDF bookId={8} />);
+    await waitFor(() =>
+      expect(globalThis.fetch.mock.calls.some(([u]) => String(u).includes("/pdf-pages/8?"))).toBe(true),
+    );
+    const created = URL.createObjectURL.mock.calls.length;
+    await act(async () => stale(await imageOk()));
+    expect(URL.createObjectURL.mock.calls.length).toBe(created);
+  });
+
+  it("멀어진 쪽의 이미지를 놓고 다시 보이면 새로 받는다", async () => {
+    const TOTAL = 10;
+    mockFetch(TOTAL, imageOk);
+    render(<ViewPDF bookId={7} />);
+    await waitFor(() => expect(document.querySelectorAll("img.pdf-page")).toHaveLength(TOTAL));
+    const imgs = [...document.querySelectorAll("img.pdf-page")];
+    await fire(1, true);
+    await waitFor(() => expect(imgs[0].getAttribute("src")).toBeTruthy());
+    for (let p = 2; p <= TOTAL; p++) {
+      await fire(p, true);
+      await fire(p - 1, false);
+      await waitFor(() => expect(imgs[p - 1].getAttribute("src")).toBeTruthy());
+    }
+    // 가장 먼 쪽은 비우고 aspect-ratio 로 높이를 지킨다
+    expect(imgs[0].getAttribute("src")).toBeNull();
+    expect(imgs[0].style.aspectRatio).toBe("1000 / 1500");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:page-1");
+    const before = globalThis.fetch.mock.calls.length;
+    await fire(1, true);
+    await waitFor(() => expect(imgs[0].getAttribute("src")).toBeTruthy());
+    expect(globalThis.fetch.mock.calls.slice(before).map(([u]) => String(u))).toContain(
+      "http://localhost:8000/pdf-page-image/7?page=1&raster=1",
+    );
   });
 });

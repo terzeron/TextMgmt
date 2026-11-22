@@ -499,6 +499,30 @@ mod test_pdf_pages {
     }
 }
 
+// ── /pdf-page-image/{book_id} ────────────────────────────────────────────────
+
+mod test_pdf_page_image {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_passes_page_and_raster() {
+        let fx = Fx::new();
+        fx.bm.returns("get_pdf_page_image", raw_response("JPEG", Some("image/jpeg")));
+        assert_eq!(fx.get("/pdf-page-image/1?page=3&raster=1").await.status, 200);
+        fx.bm.assert_called_once_with("get_pdf_page_image", json!([]), json!({"book_id": 1, "page": 3, "raster": true}));
+    }
+
+    #[tokio::test]
+    async fn test_default_params_and_comics_prefix() {
+        let fx = Fx::new();
+        // /comics 접두사는 만화 관리자로 간다.
+        fx.cm.returns("get_pdf_page_image", raw_response("PNG", Some("image/png")));
+        assert_eq!(fx.get("/comics/pdf-page-image/1").await.status, 200);
+        fx.cm.assert_called_once_with("get_pdf_page_image", json!([]), json!({"book_id": 1, "page": 1, "raster": false}));
+        assert_eq!(fx.bm.call_count("get_pdf_page_image"), 0);
+    }
+}
+
 // ── /category-mismatches admin endpoints ─────────────────────────────────────
 
 /// 분류 제안 대역.

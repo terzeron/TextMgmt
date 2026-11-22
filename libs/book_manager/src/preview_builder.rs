@@ -7,7 +7,7 @@
 use doc_reader::office::{ConvertFailure, convert_with_libreoffice_using, extract_text_from_hwp3, find_libreoffice_with, is_hwp3};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
@@ -106,6 +106,8 @@ impl BookManager {
     /// CJK CMap과 서버 글꼴을 보완하기 전(v3 미만), 무손실 이미지를 JPEG로 줄이기 전(v4 미만)에
     /// 생성한 PDF를 재사용하지 않는다.
     pub const PDF_PREVIEW_CACHE_VERSION: u32 = 4;
+    /// 쪽 이미지 캐시 형식. 판정이나 출력 형식을 바꾸면 올린다.
+    pub const PDF_PAGE_IMAGE_CACHE_VERSION: u32 = 1;
 
     fn mtime_of(&self, path: &Path) -> Option<SystemTime> {
         self.fs.metadata(path).ok().and_then(|m| m.modified().ok())
@@ -652,35 +654,44 @@ impl BookManager {
         BookResponse::text(500, format!("PDF pages extraction failed ({}): {}", e.kind, e.message))
     }
 
-    /// PDF에서 `start`~`end`쪽(1부터, 양끝 포함)만 추출해 돌려준다. 한 번에 `MAX_PDF_PAGE_RANGE`쪽까지다.
-    pub async fn get_pdf_pages(&self, book_id: i64, start: i64, end: i64) -> BookResponse {
-        log::debug!("# get_pdf_pages(book_id={book_id}, start={start}, end={end})");
+    /// 쪽 조회 대상 PDF 파일 경로. 책이 없거나, 파일에 접근할 수 없거나, PDF가 아니면 그 응답을 돌려준다.
+    fn pdf_book_path(&self, book_id: i64) -> Result<PathBuf, BookResponse> {
         let doc = match self.find_doc(book_id) {
             Ok(Some(doc)) => doc,
-            Ok(None) => return BookResponse::text(404, format!("Book not found: {book_id}")),
-            Err(e) => return BookResponse::text(500, format!("PDF pages extraction failed (ReadError): {e}")),
+            Ok(None) => return Err(BookResponse::text(404, format!("Book not found: {book_id}"))),
+            Err(e) => return Err(BookResponse::text(500, format!("PDF pages extraction failed (ReadError): {e}"))),
         };
         let book = match self.try_make_book(book_id, &doc, 0.0) {
             Ok(book) => book,
-            Err(e) => return BookResponse::text(500, format!("Book conversion failed: {e}")),
+            Err(e) => return Err(BookResponse::text(500, format!("Book conversion failed: {e}"))),
         };
         // stat() 자체가 실패할 수 있다(예: 스토리지 마운트가 끊겨 EIO). 잡지 않으면 CORS 헤더 없는 500이 나가 브라우저에는 "Failed to fetch"로만 보인다.
         match self.fs.is_file(&book.file_path) {
             Err(e) => {
                 log::error!("PDF file access failed for book_id={book_id} ({}): {e}", book.file_path.display());
-                return BookResponse::text(503, format!("Storage access error ({}): {}", super::strerror(&e), book.file_path.display()));
+                return Err(BookResponse::text(503, format!("Storage access error ({}): {}", super::strerror(&e), book.file_path.display())));
             }
-            Ok(false) => return BookResponse::text(404, format!("File not found: {}", book.file_path.display())),
+            Ok(false) => return Err(BookResponse::text(404, format!("File not found: {}", book.file_path.display()))),
             Ok(true) => {}
         }
         if book.file_path.extension().map(|e| e.to_string_lossy().to_lowercase()) != Some("pdf".to_string()) {
-            return BookResponse::text(400, format!("Not a PDF file: {}", book.file_path.display()));
+            return Err(BookResponse::text(400, format!("Not a PDF file: {}", book.file_path.display())));
         }
+        Ok(book.file_path)
+    }
+
+    /// PDF에서 `start`~`end`쪽(1부터, 양끝 포함)만 추출해 돌려준다. 한 번에 `MAX_PDF_PAGE_RANGE`쪽까지다.
+    pub async fn get_pdf_pages(&self, book_id: i64, start: i64, end: i64) -> BookResponse {
+        log::debug!("# get_pdf_pages(book_id={book_id}, start={start}, end={end})");
+        let file_path = match self.pdf_book_path(book_id) {
+            Ok(path) => path,
+            Err(response) => return response,
+        };
 
         // 페이지 수만 먼저 구한다. 디스크 캐시 히트면 페이지 추출이 필요 없으므로 리더를 만들 필요가 없다.
-        let (total_pages, reader) = match self.try_get_cached_page_count(&book.file_path) {
+        let (total_pages, reader) = match self.try_get_cached_page_count(&file_path) {
             Ok(result) => result,
-            Err(e) => return self.pdf_pages_failure(book_id, &book.file_path, &e),
+            Err(e) => return self.pdf_pages_failure(book_id, &file_path, &e),
         };
         // 범위 검증
         let start = start.max(1);
@@ -697,12 +708,12 @@ impl BookManager {
         }
 
         let cache_dir = self.path_prefix.join(".preview_cache");
-        let storage_error = |e: &std::io::Error| BookResponse::text(503, format!("Storage access error ({}): {}", super::strerror(e), book.file_path.display()));
+        let storage_error = |e: &std::io::Error| BookResponse::text(503, format!("Storage access error ({}): {}", super::strerror(e), file_path.display()));
         if let Err(e) = std::fs::create_dir_all(&cache_dir) {
             return storage_error(&e);
         }
         let cache_file = cache_dir.join(format!("{book_id}_p{start}-{end}_v{}.pdf", Self::PDF_PREVIEW_CACHE_VERSION));
-        let original_mtime = match self.fs.metadata(&book.file_path).and_then(|m| m.modified()) {
+        let original_mtime = match self.fs.metadata(&file_path).and_then(|m| m.modified()) {
             Ok(t) => t,
             Err(e) => return storage_error(&e),
         };
@@ -720,22 +731,80 @@ impl BookManager {
         // 쪽 추출: 1부터 세는 [start, end] 구간.
         let reader = match reader {
             Some(reader) => reader,
-            None => match self.try_get_cached_pdf_reader(&book.file_path) {
+            None => match self.try_get_cached_pdf_reader(&file_path) {
                 Ok((reader, _)) => reader,
-                Err(e) => return self.pdf_pages_failure(book_id, &book.file_path, &e),
+                Err(e) => return self.pdf_pages_failure(book_id, &file_path, &e),
             },
         };
         let pdf_bytes = match self.pdf_pages.extract_pages_from_reader(&reader, (start - 1) as usize, end.max(0) as usize) {
             Ok(bytes) => bytes,
-            Err(e) => return self.pdf_pages_failure(book_id, &book.file_path, &e),
+            Err(e) => return self.pdf_pages_failure(book_id, &file_path, &e),
         };
         if let Err(e) = self.write_cache(&cache_file, &pdf_bytes) {
-            log::error!("PDF pages extraction failed for book_id={book_id} ({}): {e}", book.file_path.display());
+            log::error!("PDF pages extraction failed for book_id={book_id} ({}): {e}", file_path.display());
             return storage_error(&e);
         }
         epub_package::evict_old_cache_with(&*self.fs, &cache_dir);
         log::debug!("PDF pages extracted for book_id={book_id} (p{start}-{end}, total={total_pages})");
         pdf_response(pdf_bytes)
+    }
+
+    /// `page`쪽(1부터)의 이미지 파일. 뷰어가 canvas 대신 `<img>`로 보인다.
+    /// 전면 이미지 한 장인 쪽은 원본(JPEG 바이트 그대로, 무손실은 PNG)을 보낸다.
+    /// 그렇지 않은 쪽은 `raster`이면 그린 PNG를 보내고, 아니면 415로 "이미지 쪽이 아님"을 알린다.
+    pub async fn get_pdf_page_image(&self, book_id: i64, page: i64, raster: bool) -> BookResponse {
+        log::debug!("# get_pdf_page_image(book_id={book_id}, page={page}, raster={raster})");
+        let file_path = match self.pdf_book_path(book_id) {
+            Ok(path) => path,
+            Err(response) => return response,
+        };
+        let total_pages = match self.try_get_cached_page_count(&file_path) {
+            Ok((total, _)) => total,
+            Err(e) => return self.pdf_pages_failure(book_id, &file_path, &e),
+        };
+        if page < 1 || page > total_pages {
+            return BookResponse::text(400, format!("Page {page} is outside 1..={total_pages}"));
+        }
+        let storage_error = |e: &std::io::Error| BookResponse::text(503, format!("Storage access error ({}): {}", super::strerror(e), file_path.display()));
+        let cache_dir = self.path_prefix.join(".preview_cache");
+        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+            return storage_error(&e);
+        }
+        let cache_file = cache_dir.join(format!("{book_id}_img{page}{}_v{}.bin", if raster { "r" } else { "" }, Self::PDF_PAGE_IMAGE_CACHE_VERSION));
+        let original_mtime = match self.fs.metadata(&file_path).and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(e) => return storage_error(&e),
+        };
+        let bytes = match self.cache_is_fresh(&cache_file, original_mtime).then(|| std::fs::read(&cache_file).ok()).flatten() {
+            Some(bytes) => bytes,
+            None => {
+                let bytes = match self.pdf_pages.page_image(&file_path, page as usize, raster) {
+                    Ok(bytes) => bytes,
+                    Err(e) => return self.pdf_pages_failure(book_id, &file_path, &e),
+                };
+                // "이미지 쪽이 아님"(빈 바이트)도 캐시한다. 다음 요청이 쪽을 다시 떼어 보지 않게 한다.
+                if let Err(e) = self.write_cache(&cache_file, &bytes) {
+                    log::error!("PDF page image cache write failed for book_id={book_id} ({}): {e}", file_path.display());
+                    return storage_error(&e);
+                }
+                epub_package::evict_old_cache_with(&*self.fs, &cache_dir);
+                bytes
+            }
+        };
+        let media_type = if bytes.starts_with(b"\xFF\xD8") {
+            "image/jpeg"
+        } else if bytes.starts_with(b"\x89PNG") {
+            "image/png"
+        } else {
+            return BookResponse::text(415, format!("Page {page} is not a single image"));
+        };
+        let headers = vec![
+            ("Content-Encoding".to_string(), "identity".to_string()),
+            // 먼 쪽의 이미지를 놓았다가 다시 볼 때 브라우저 캐시에서 읽게 한다. 원본이 바뀌면 캐시 파일도 다시 만든다.
+            ("Cache-Control".to_string(), "private, max-age=3600, no-transform".to_string()),
+            ("X-Total-Pages".to_string(), total_pages.to_string()),
+        ];
+        BookResponse { status_code: 200, media_type: Some(media_type.to_string()), headers, body: bytes }
     }
 }
 

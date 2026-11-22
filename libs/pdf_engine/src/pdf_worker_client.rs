@@ -60,6 +60,14 @@ pub fn extract_pages(runner: &dyn CommandRunner, path: &Path, first: usize, last
     }
     run(runner, "extract", path, &[first.to_string(), last.to_string()])
 }
+/// `page`쪽(1부터)의 이미지 파일. 전면 이미지 한 장인 쪽은 원본(JPEG 바이트 그대로, 무손실은 PNG)이다.
+/// 그렇지 않은 쪽은 `raster`이면 그린 PNG, 아니면 빈 바이트다.
+pub fn page_image(runner: &dyn CommandRunner, path: &Path, page: usize, raster: bool) -> Result<Vec<u8>, String> {
+    if page == 0 {
+        return Err("invalid PDF page".into());
+    }
+    run(runner, "page-image", path, &[page.to_string(), u8::from(raster).to_string()])
+}
 pub fn first_page_jpeg(runner: &dyn CommandRunner, path: &Path) -> Result<Vec<u8>, String> {
     run(runner, "jpeg", path, &[])
 }

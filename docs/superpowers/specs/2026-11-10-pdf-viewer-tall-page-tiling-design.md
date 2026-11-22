@@ -3,6 +3,7 @@
 - 작성일: 2026-11-10
 - 상태: 승인(2026-11-10), 구현 완료
 - 대상: `frontend/src/ViewPDF.jsx`, `frontend/src/pdfRenderScale.js`
+- 후속(2026-11-22): 쪽이 이미지 한 장인 책은 canvas 대신 `<img>`로 보인다. 이 타일 렌더는 canvas 경로에만 적용한다. `docs/decisions/ADR-002-pdf-viewer-page-image.md`를 본다.
 
 ## 1. 문제
 
