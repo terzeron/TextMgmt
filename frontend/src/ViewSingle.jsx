@@ -38,6 +38,9 @@ export default function ViewSingle(props) {
   const [nextBook, setNextBook] = useState(null);
   // standalone 모드: 이전·다음 책 버튼 사이에 보일 현재 책 제목(카테고리 목록의 title)
   const [currentTitle, setCurrentTitle] = useState("");
+  // URL에 category가 없으면(기록·북마크로 연 옛 링크) 책 정보의 category를 쓴다.
+  const [bookCategory, setBookCategory] = useState("");
+  const category = paramCategory || bookCategory;
 
   useEffect(() => {
     if (entryId && paramFileType && paramFilePath) {
@@ -93,13 +96,20 @@ export default function ViewSingle(props) {
     };
   }, [standalone]);
 
+  useEffect(() => {
+    if (!standalone || paramCategory) return;
+    jsonGetReq(paramApiPrefix + "/books/" + entryId, null, (book) => {
+      setBookCategory(book?.category || "");
+    });
+  }, [standalone, paramCategory, paramApiPrefix, entryId]);
+
   // standalone 모드: 카테고리 내 이전/다음 책 결정
   useEffect(() => {
-    if (!standalone || !paramCategory || paramCategory === "_root") return;
+    if (!standalone || !category || category === "_root") return;
     const apiUrl =
       paramApiPrefix +
       "/categories/" +
-      paramCategory.split("/").map(encodeURIComponent).join("/");
+      category.split("/").map(encodeURIComponent).join("/");
     jsonGetReq(apiUrl, null, (books) => {
       if (!Array.isArray(books)) return;
       const sortedBooks = [...books].sort((a, b) =>
@@ -116,7 +126,7 @@ export default function ViewSingle(props) {
           : null,
       );
     });
-  }, [standalone, paramCategory, paramApiPrefix, entryId]);
+  }, [standalone, category, paramApiPrefix, entryId]);
 
   const navigateToBook = useCallback(
     (book) => {
@@ -129,10 +139,10 @@ export default function ViewSingle(props) {
         encodeURIComponent(book.file_path || "") +
         (paramApiPrefix ? "&api=" + encodeURIComponent(paramApiPrefix) : "") +
         "&category=" +
-        encodeURIComponent(paramCategory);
+        encodeURIComponent(category);
       window.location.href = url;
     },
-    [paramApiPrefix, paramCategory],
+    [paramApiPrefix, category],
   );
 
   const preview = props.preview || false;

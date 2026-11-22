@@ -322,7 +322,7 @@ describe("SearchResult", () => {
     const viewAllButtons = screen.getAllByText("전체보기");
     fireEvent.click(viewAllButtons[0]);
     expect(mockOpen).toHaveBeenCalledWith(
-      `/viewer/epub/1?path=${encodeURIComponent("/books/novel1.epub")}`,
+      `/viewer/epub/1?path=${encodeURIComponent("/books/novel1.epub")}&category=${encodeURIComponent("소설")}`,
       "_blank",
       "noopener",
     );

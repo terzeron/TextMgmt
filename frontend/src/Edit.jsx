@@ -268,7 +268,9 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
               "?path=" +
               encodeURIComponent(book["file_path"]) +
               /* v8 ignore next -- comic prefix is covered through direct-load path. */
-              (apiPrefix ? "&api=" + encodeURIComponent(apiPrefix) : ""),
+              (apiPrefix ? "&api=" + encodeURIComponent(apiPrefix) : "") +
+              "&category=" +
+              encodeURIComponent(realCategory),
           );
           setDownloadUrl(getApiUrlPrefix() + apiPrefix + "/download/" + bookId);
           setOtherCategoryList(
@@ -357,7 +359,9 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
               "?path=" +
               encodeURIComponent(book["file_path"]) +
               /* v8 ignore next -- comic prefix is covered through direct-load path. */
-              (apiPrefix ? "&api=" + encodeURIComponent(apiPrefix) : ""),
+              (apiPrefix ? "&api=" + encodeURIComponent(apiPrefix) : "") +
+              "&category=" +
+              encodeURIComponent(book["category"] || "_root"),
           );
         setDownloadUrl(getApiUrlPrefix() + apiPrefix + "/download/" + bookId);
         const otherCategoryList = getOtherTopLevelCategories(
@@ -409,7 +413,9 @@ export default function Edit({ basePath = "/book-edit", apiPrefix = "" }) {
                 "?path=" +
                 encodeURIComponent(book["file_path"]) +
                 /* v8 ignore next -- comic prefix is covered through direct-load path. */
-                (apiPrefix ? "&api=" + encodeURIComponent(apiPrefix) : ""),
+                (apiPrefix ? "&api=" + encodeURIComponent(apiPrefix) : "") +
+                "&category=" +
+                encodeURIComponent(category),
             );
             setDownloadUrl(
               getApiUrlPrefix() + apiPrefix + "/download/" + bookId,

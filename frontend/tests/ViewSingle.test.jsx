@@ -385,6 +385,51 @@ describe("ViewSingle", () => {
     );
   });
 
+  it("URL에 category가 없으면 책 정보의 category로 이전·다음 책을 정한다", async () => {
+    mockUseParams.mockReturnValue({ entryId: "101", fileType: "pdf" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=1_fiction/a.pdf&api=/comics"),
+    ]);
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) =>
+      resolve(url === "/comics/books/101" ? { category: "1_fiction" } : BOOKS),
+    );
+
+    render(<ViewSingle />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/다음 책으로/)).toBeTruthy();
+    });
+    expect(Common.jsonGetReq).toHaveBeenCalledWith(
+      "/comics/categories/1_fiction",
+      null,
+      expect.any(Function),
+    );
+    fireEvent.click(screen.getByText(/다음 책으로/));
+    expect(window.location.href).toContain("category=1_fiction");
+  });
+
+  it("URL에 category가 없고 책 정보에도 없으면 이전·다음 책을 받지 않는다", async () => {
+    mockUseParams.mockReturnValue({ entryId: "101", fileType: "pdf" });
+    mockUseSearchParams.mockReturnValue([
+      new URLSearchParams("path=a.pdf"),
+    ]);
+    Common.jsonGetReq.mockImplementation((url, payload, resolve) =>
+      resolve({}),
+    );
+
+    render(<ViewSingle />);
+
+    await waitFor(() => {
+      expect(Common.jsonGetReq).toHaveBeenCalledWith(
+        "/books/101",
+        null,
+        expect.any(Function),
+      );
+    });
+    expect(Common.jsonGetReq).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/다음 책으로/)).toBeNull();
+  });
+
   it("api 파라미터가 있으면 이전 책 이동 URL 에 api 를 포함한다", async () => {
     mockUseParams.mockReturnValue({ entryId: "101", fileType: "epub" });
     mockUseSearchParams.mockReturnValue([
