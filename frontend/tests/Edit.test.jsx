@@ -3196,6 +3196,9 @@ describe("Edit", () => {
       expect(screen.getByTestId("view-single")).toBeTruthy();
     });
     expect(screen.getByTestId("view-single").dataset.viewUrl).toContain("api=");
+    expect(screen.getByTestId("view-single").dataset.viewUrl).toContain(
+      "category=1_comic",
+    );
   });
 
   it("폴더를 접으면 접힌 Folder 를 렌더링한다", async () => {

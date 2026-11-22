@@ -108,7 +108,7 @@ export default function SearchResult({results, role, showEditButton, onLoadMore,
                                             variant="outline-secondary" size="sm"
                                             onClick={() => {
                                                 const apiParam = safeBasePath.startsWith('/comics') ? '&api=%2Fcomics' : '';
-                                                window.open(`/viewer/${fileType}/${book.book_id}?path=${filePathParam}${apiParam}`, '_blank', 'noopener');
+                                                window.open(`/viewer/${fileType}/${book.book_id}?path=${filePathParam}${apiParam}&category=${categoryParam}`, '_blank', 'noopener');
                                             }}
                                         >
                                             전체보기
