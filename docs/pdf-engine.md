@@ -12,6 +12,8 @@ Noto Serif CJK collection을 MuPDF FontLoader로 연결한다. KR face index는 
 
 cover는 단일 full-page JPEG인 경우에만 압축 이미지를 직접 추출한다. 마스크, 회전, crop, 추가 그리기 연산 또는 큰 이미지는 MuPDF 렌더링으로 처리한다. raster의 긴 변은 1200px 이하이며 기존 blank-first-page/둘째 쪽 fallback을 유지한다. cover queue와 replica 간 생성 슬롯 제한은 기존 구현을 사용한다.
 
+page-image는 뷰어가 쪽 하나를 원본 이미지로 받는 경로다(`docs/decisions/ADR-002-pdf-viewer-page-image.md`). 판정은 cover와 같은 단일 full-page 이미지 검사를 쓴다. JPEG는 압축 데이터를 그대로, 8-bit Flate RGB/Gray는 같은 화소의 PNG로 보낸다. 이미지는 40M px 이하만 받는다. 그 밖의 쪽은 `raster=1`일 때만 폭 2,400px(24M px 상한) PNG로 그리고, 아니면 빈 결과를 돌려준다.
+
 ## 개발과 Docker
 
 Debian/Ubuntu build packages: `build-essential cmake pkg-config libclang-dev libssl-dev libjpeg62-turbo-dev zlib1g-dev libfreetype6-dev libharfbuzz-dev libopenjp2-7-dev libfontconfig1-dev fonts-noto-cjk`.
