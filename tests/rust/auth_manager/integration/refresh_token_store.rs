@@ -658,6 +658,27 @@ fn test_lost_response_replacement_keeps_session_active_in_listing() {
 }
 
 #[test]
+fn test_lost_response_recovery_is_limited_to_one_hour_after_rotation() {
+    // 응답 유실 복구는 회전 뒤 1시간 안에서만 허용한다. 그 뒤의 옛 토큰은 재사용으로 본다.
+    let store = memory_mysql_store();
+    let now = now();
+    issue_from(&store, "token-1", "family-1", "admin@example.com", now - 7200, now + 7200, IP, UA);
+    assert_eq!(rot_from(&store, "token-1", "token-2", "family-1", "admin@example.com", now - 3601, now + 7200, IP, UA), "ok");
+
+    assert_eq!(rot_from(&store, "token-1", "token-3", "family-1", "admin@example.com", now, now + 7200, IP, UA), "reused");
+}
+
+#[test]
+fn test_lost_response_recovery_allows_up_to_one_hour_after_rotation() {
+    let store = memory_mysql_store();
+    let now = now();
+    issue_from(&store, "token-1", "family-1", "admin@example.com", now - 7200, now + 7200, IP, UA);
+    assert_eq!(rot_from(&store, "token-1", "token-2", "family-1", "admin@example.com", now - 3590, now + 7200, IP, UA), "ok");
+
+    assert_eq!(rot_from(&store, "token-1", "token-3", "family-1", "admin@example.com", now, now + 7200, IP, UA), "ok");
+}
+
+#[test]
 fn test_lost_response_recovery_rejects_different_client() {
     // 다른 IP 에서 온 옛 토큰은 응답 유실로 볼 수 없다. 재사용으로 보고 패밀리를 폐기한다.
     let store = memory_mysql_store();

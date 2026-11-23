@@ -619,6 +619,10 @@ enum Plan {
     ReplaceSuccessor(String),
 }
 
+/// 응답 유실 복구를 허용하는 최대 시간(초). 옛 토큰이 회전된 시각부터 잰다.
+/// IP·UA 는 위조 여지가 있어서, 탈취한 옛 토큰으로 복구를 노릴 수 있는 기간을 제한한다.
+pub const LOST_RESPONSE_RECOVERY_SECONDS: i64 = 3600;
+
 /// 회전 응답이 클라이언트에 닿지 못하면 쿠키에 옛 토큰이 남아 grace window 뒤에 다시 온다.
 /// 후속 토큰이 같은 family 이고 한 번도 쓰이지 않았으며 같은 기기(IP·UA)에서 발급되었으면 그 경우로 본다.
 fn is_lost_response(successor: Option<&TokenRow>, family_id: &str, client_ip: Option<&str>, user_agent: Option<&str>, now: i64) -> bool {
@@ -637,7 +641,8 @@ fn plan_rotation(row: Option<&TokenRow>, successor: Option<&TokenRow>, family_id
         if is_within_rotation_grace(row.revoke_reason.as_deref(), row.revoked_at, now) {
             return Plan::InsertOnly;
         }
-        if row.revoke_reason.as_deref() == Some("rotated") && is_lost_response(successor, family_id, client_ip, user_agent, now) {
+        let recoverable = row.revoke_reason.as_deref() == Some("rotated") && row.revoked_at.is_some_and(|at| now - at <= LOST_RESPONSE_RECOVERY_SECONDS);
+        if recoverable && is_lost_response(successor, family_id, client_ip, user_agent, now) {
             return Plan::ReplaceSuccessor(replaced_by.clone());
         }
         return Plan::RevokeFamily { reason: "reuse-detected", result: Rotation::Reused };
