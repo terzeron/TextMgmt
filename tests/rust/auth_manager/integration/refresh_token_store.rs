@@ -392,7 +392,7 @@ impl MemDb {
             .map(|((family_id, email), v)| {
                 let alive = |t: &&&Tok| t.revoked_at.is_none() && t.expires_at >= now;
                 let latest = v.iter().max_by_key(|t| (t.issued_at, t.jti.clone())).unwrap();
-                let terminal = v.iter().filter_map(|t| t.revoke_reason.clone()).filter(|r| r != "rotated").max();
+                let terminal = v.iter().filter_map(|t| t.revoke_reason.clone()).filter(|r| r != "rotated" && r != "lost-response-replaced").max();
                 row([
                     ("family_id", family_id.as_str().into()),
                     ("email", email.as_str().into()),
@@ -492,7 +492,7 @@ impl MemCursor {
             let family = p_text(p, 2).unwrap();
             for t in self.db.rows.lock().unwrap().iter_mut().filter(|t| t.family_id == family) {
                 t.revoked_at = t.revoked_at.or(Some(p_int(p, 0)));
-                if t.revoke_reason.as_deref().is_none_or(|r| r == "rotated") {
+                if t.revoke_reason.as_deref().is_none_or(|r| r == "rotated" || r == "lost-response-replaced") {
                     t.revoke_reason = p_text(p, 1);
                 }
             }
@@ -622,11 +622,39 @@ fn test_lost_response_recovery_reissues_when_successor_unused_from_same_client()
 
     assert_eq!(rot_from(&store, "token-1", "token-3", "family-1", "admin@example.com", now, now + 1002, IP, UA), "ok");
 
-    // 도달하지 못한 후속 토큰은 새 토큰으로 교체된 것으로 표시해 유효 토큰을 하나로 유지한다.
+    // 도달하지 못한 후속 토큰은 grace·복구 대상이 아닌 사유로 교체해 유효 토큰을 하나로 유지한다.
     let observed = store.get_token_observation("token-2").unwrap().unwrap();
     assert_eq!(observed["replaced_by_present"], json!(true));
-    assert_eq!(observed["revoke_reason"], json!("rotated"));
+    assert_eq!(observed["revoke_reason"], json!("lost-response-replaced"));
     assert_eq!(rot_from(&store, "token-3", "token-4", "family-1", "admin@example.com", now + 1, now + 1003, IP, UA), "ok");
+}
+
+#[test]
+fn test_lost_response_replaced_successor_is_never_reusable() {
+    // 클라이언트에 닿지 않았어야 할 후속 토큰이 나중에 쓰이면 grace window 안이어도, 같은 기기여도
+    // 탈취로 보고 패밀리를 폐기한다. 그렇지 않으면 후속 토큰으로 다시 복구해 패밀리가 갈라진다.
+    let store = memory_mysql_store();
+    let now = now();
+    issue_from(&store, "token-1", "family-1", "admin@example.com", now - 1000, now + 1000, IP, UA);
+    assert_eq!(rot_from(&store, "token-1", "token-2", "family-1", "admin@example.com", now - 500, now + 1001, IP, UA), "ok");
+    assert_eq!(rot_from(&store, "token-1", "token-3", "family-1", "admin@example.com", now, now + 1002, IP, UA), "ok");
+
+    assert_eq!(rot_from(&store, "token-2", "token-4", "family-1", "admin@example.com", now + 1, now + 1003, IP, UA), "reused");
+    assert_eq!(rot_from(&store, "token-3", "token-5", "family-1", "admin@example.com", now + 2, now + 1004, IP, UA), "revoked");
+}
+
+#[test]
+fn test_lost_response_replacement_keeps_session_active_in_listing() {
+    // 교체 사유는 종료 사유가 아니다. 살아 있는 동안 세션 목록에서 active 로 보인다.
+    let store = memory_mysql_store();
+    let now = now();
+    issue_from(&store, "token-1", "family-1", "admin@example.com", now - 1000, now + 1000, IP, UA);
+    assert_eq!(rot_from(&store, "token-1", "token-2", "family-1", "admin@example.com", now - 500, now + 1001, IP, UA), "ok");
+    assert_eq!(rot_from(&store, "token-1", "token-3", "family-1", "admin@example.com", now, now + 1002, IP, UA), "ok");
+
+    let page = listed(&store, &all());
+    assert_eq!(page["items"][0]["status"], "active");
+    assert_eq!(page["summary"]["revoked"], 0);
 }
 
 #[test]

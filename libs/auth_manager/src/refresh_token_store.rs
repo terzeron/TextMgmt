@@ -187,7 +187,7 @@ const SESSION_AGGREGATE_SQL: &str = "
            COUNT(*) AS token_count,
            SUM(CASE WHEN revoked_at IS NULL AND expires_at >= ? THEN 1 ELSE 0 END) AS valid_token_count,
            MAX(CASE WHEN revoked_at IS NULL AND expires_at >= ? THEN expires_at ELSE 0 END) AS active_expires_at,
-           MAX(CASE WHEN revoke_reason IS NOT NULL AND revoke_reason <> 'rotated' THEN revoke_reason END) AS terminal_reason,
+           MAX(CASE WHEN revoke_reason IS NOT NULL AND revoke_reason NOT IN ('rotated', 'lost-response-replaced') THEN revoke_reason END) AS terminal_reason,
            MAX(revoked_at) AS revoked_at,
            MAX(CASE WHEN recency_rank = 1 THEN client_ip END) AS client_ip,
            MAX(CASE WHEN recency_rank = 1 THEN user_agent END) AS user_agent
@@ -521,12 +521,16 @@ VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)";
 
 const SELECT_TOKEN_SQL: &str = "SELECT family_id, email, expires_at, replaced_by, revoked_at, revoke_reason, client_ip, user_agent FROM refresh_tokens WHERE jti = ?";
 
+/// 응답 유실 복구로 교체한 후속 토큰의 사유. 'rotated' 와 달리 grace·복구 대상이 아니라서
+/// 나중에 이 토큰이 쓰이면 곧바로 재사용으로 판정한다. 세션 상태에서는 종료 사유로 치지 않는다.
+const LOST_RESPONSE_REPLACED_REASON: &str = "lost-response-replaced";
+
 const MARK_ROTATED_SQL: &str = "UPDATE refresh_tokens SET replaced_by = ?, revoked_at = ?, revoke_reason = ? WHERE jti = ?";
 
 const REVOKE_FAMILY_SQL: &str = "UPDATE refresh_tokens
 SET revoked_at = COALESCE(revoked_at, ?),
     revoke_reason = CASE
-        WHEN revoke_reason IS NULL OR revoke_reason = 'rotated' THEN ?
+        WHEN revoke_reason IS NULL OR revoke_reason IN ('rotated', 'lost-response-replaced') THEN ?
         ELSE revoke_reason
     END
 WHERE family_id = ?";
@@ -907,7 +911,7 @@ impl RefreshTokenStoreApi for MySQLRefreshTokenStore {
                 Plan::ReplaceSuccessor(successor_id) => {
                     log::info!("Refresh rotation recovered event=refresh-lost-response-recovered");
                     conn.execute(INSERT_TOKEN_SQL, &insert_params)?;
-                    conn.execute(MARK_ROTATED_SQL, &[new_token_id.into(), issued_at.into(), "rotated".into(), successor_id.into()])?;
+                    conn.execute(MARK_ROTATED_SQL, &[new_token_id.into(), issued_at.into(), LOST_RESPONSE_REPLACED_REASON.into(), successor_id.into()])?;
                     conn.commit()?;
                     Ok(Rotation::Ok)
                 }
