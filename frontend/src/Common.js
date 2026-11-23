@@ -75,6 +75,8 @@ export async function authFetch(url, options, source, expiry) {
 
 let refreshPromise = null;
 let _refreshTimerId = null;
+// 이 탭이 아는 access token 만료 시각(ms). 0 이면 모른다.
+let _accessExpiresAt = 0;
 
 // 선제적 토큰 갱신: 만료 5분 전에 자동으로 refresh
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
@@ -104,6 +106,7 @@ const NOT_ACQUIRED = Symbol("refresh-lock-not-acquired");
 
 function _scheduleProactiveRefresh(expiresInSec) {
   if (_refreshTimerId) clearTimeout(_refreshTimerId);
+  _accessExpiresAt = Date.now() + expiresInSec * 1000;
   const delayMs = Math.max(expiresInSec * 1000 - REFRESH_BUFFER_MS, 10_000);
   _refreshTimerId = setTimeout(async () => {
     _refreshTimerId = null;
@@ -112,6 +115,7 @@ function _scheduleProactiveRefresh(expiresInSec) {
 }
 
 export function stopProactiveRefresh() {
+  _accessExpiresAt = 0;
   if (_refreshTimerId) {
     clearTimeout(_refreshTimerId);
     _refreshTimerId = null;
@@ -306,9 +310,15 @@ export async function tryRefreshToken() {
 let _lastVisibilityRefreshAt = 0;
 
 // 탭이 다시 보일 때 호출한다. 여러 탭이 한꺼번에 활성화되어도 짧은 창 안에서는
-// 한 번만 refresh 를 시도한다. 디바운스로 건너뛰면 null 이라서 실패(false)와 구분된다.
+// 한 번만 refresh 를 시도한다. 건너뛰면 null 이라서 실패(false)와 구분된다.
+// 회전 응답이 하나만 유실돼도 쿠키에 옛 토큰이 남아 세션이 풀리므로, access token 이
+// 선제 갱신 시점보다 넉넉히 남아 있으면 회전하지 않는다. 절전 복귀처럼 타이머가 밀린
+// 경우는 만료 시각으로 판단하므로 그대로 refresh 한다.
 export function refreshOnVisible() {
   const now = Date.now();
+  if (_accessExpiresAt - now > REFRESH_BUFFER_MS) {
+    return Promise.resolve(null);
+  }
   if (now - _lastVisibilityRefreshAt < VISIBILITY_REFRESH_DEBOUNCE_MS) {
     return Promise.resolve(null);
   }

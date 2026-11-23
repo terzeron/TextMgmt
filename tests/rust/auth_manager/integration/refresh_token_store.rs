@@ -73,6 +73,11 @@ fn rot(s: &dyn RefreshTokenStoreApi, current: &str, new: &str, family_id: &str, 
     s.rotate(current, new, family_id, email, issued_at, expires_at, None, None).unwrap().as_str()
 }
 
+#[allow(clippy::too_many_arguments)]
+fn rot_from(s: &dyn RefreshTokenStoreApi, current: &str, new: &str, family_id: &str, email: &str, issued_at: i64, expires_at: i64, client_ip: &str, user_agent: &str) -> &'static str {
+    s.rotate(current, new, family_id, email, issued_at, expires_at, Some(client_ip), Some(user_agent)).unwrap().as_str()
+}
+
 fn all() -> SessionQuery {
     SessionQuery { status: "all".to_string(), ..Default::default() }
 }
@@ -442,6 +447,8 @@ impl MemCursor {
                             ("replaced_by", opt_text(&t.replaced_by)),
                             ("revoked_at", t.revoked_at.into()),
                             ("revoke_reason", opt_text(&t.revoke_reason)),
+                            ("client_ip", opt_text(&t.client_ip)),
+                            ("user_agent", opt_text(&t.user_agent)),
                         ])
                     })
                     .collect(),
@@ -599,6 +606,71 @@ fn test_reuse_detection_revokes_family_after_grace() {
     assert_eq!(rot(&store, "token-1", "token-3", "family-1", "admin@example.com", now, now + 1002), "reused");
     // 패밀리가 폐기되어 정상 후속 토큰 token-2 도 차단됨
     assert_eq!(rot(&store, "token-2", "token-4", "family-1", "admin@example.com", now + 1, now + 1003), "revoked");
+}
+
+const IP: &str = "203.0.113.7";
+const UA: &str = "Mozilla/5.0 (Macintosh) Chrome/142.0";
+
+#[test]
+fn test_lost_response_recovery_reissues_when_successor_unused_from_same_client() {
+    // 회전 응답이 브라우저에 닿지 못하면 쿠키에 옛 토큰이 남는다. 후속 토큰이 한 번도 쓰이지 않았고
+    // 같은 기기(IP·UA)에서 옛 토큰이 오면 응답 유실로 보고 패밀리를 살린 채 새 토큰을 발급한다.
+    let store = memory_mysql_store();
+    let now = now();
+    issue_from(&store, "token-1", "family-1", "admin@example.com", now - 1000, now + 1000, IP, UA);
+    assert_eq!(rot_from(&store, "token-1", "token-2", "family-1", "admin@example.com", now - 500, now + 1001, IP, UA), "ok");
+
+    assert_eq!(rot_from(&store, "token-1", "token-3", "family-1", "admin@example.com", now, now + 1002, IP, UA), "ok");
+
+    // 도달하지 못한 후속 토큰은 새 토큰으로 교체된 것으로 표시해 유효 토큰을 하나로 유지한다.
+    let observed = store.get_token_observation("token-2").unwrap().unwrap();
+    assert_eq!(observed["replaced_by_present"], json!(true));
+    assert_eq!(observed["revoke_reason"], json!("rotated"));
+    assert_eq!(rot_from(&store, "token-3", "token-4", "family-1", "admin@example.com", now + 1, now + 1003, IP, UA), "ok");
+}
+
+#[test]
+fn test_lost_response_recovery_rejects_different_client() {
+    // 다른 IP 에서 온 옛 토큰은 응답 유실로 볼 수 없다. 재사용으로 보고 패밀리를 폐기한다.
+    let store = memory_mysql_store();
+    let now = now();
+    issue_from(&store, "token-1", "family-1", "admin@example.com", now - 1000, now + 1000, IP, UA);
+    assert_eq!(rot_from(&store, "token-1", "token-2", "family-1", "admin@example.com", now - 500, now + 1001, IP, UA), "ok");
+
+    assert_eq!(rot_from(&store, "token-1", "token-3", "family-1", "admin@example.com", now, now + 1002, "198.51.100.9", UA), "reused");
+    assert_eq!(rot_from(&store, "token-2", "token-4", "family-1", "admin@example.com", now + 1, now + 1003, IP, UA), "revoked");
+}
+
+#[test]
+fn test_lost_response_recovery_rejects_different_user_agent() {
+    let store = memory_mysql_store();
+    let now = now();
+    issue_from(&store, "token-1", "family-1", "admin@example.com", now - 1000, now + 1000, IP, UA);
+    assert_eq!(rot_from(&store, "token-1", "token-2", "family-1", "admin@example.com", now - 500, now + 1001, IP, UA), "ok");
+
+    assert_eq!(rot_from(&store, "token-1", "token-3", "family-1", "admin@example.com", now, now + 1002, IP, "curl/8.0"), "reused");
+}
+
+#[test]
+fn test_lost_response_recovery_rejects_when_successor_was_used() {
+    // 후속 토큰이 이미 쓰였다면 클라이언트는 응답을 받았다. 옛 토큰 재제출은 진짜 재사용이다.
+    let store = memory_mysql_store();
+    let now = now();
+    issue_from(&store, "token-1", "family-1", "admin@example.com", now - 1000, now + 1000, IP, UA);
+    assert_eq!(rot_from(&store, "token-1", "token-2", "family-1", "admin@example.com", now - 500, now + 1001, IP, UA), "ok");
+    assert_eq!(rot_from(&store, "token-2", "token-3", "family-1", "admin@example.com", now - 400, now + 1002, IP, UA), "ok");
+
+    assert_eq!(rot_from(&store, "token-1", "token-4", "family-1", "admin@example.com", now, now + 1003, IP, UA), "reused");
+}
+
+#[test]
+fn test_lost_response_recovery_rejects_expired_successor() {
+    let store = memory_mysql_store();
+    let now = now();
+    issue_from(&store, "token-1", "family-1", "admin@example.com", now - 1000, now + 1000, IP, UA);
+    assert_eq!(rot_from(&store, "token-1", "token-2", "family-1", "admin@example.com", now - 500, now - 1, IP, UA), "ok");
+
+    assert_eq!(rot_from(&store, "token-1", "token-3", "family-1", "admin@example.com", now, now + 1002, IP, UA), "reused");
 }
 
 #[test]

@@ -312,7 +312,8 @@ describe("refreshOnVisible 디바운스", () => {
 
   it("디바운스 창이 지나면 다시 refresh 한다", async () => {
     installWebLocksMock();
-    fetchMock.mockResolvedValue(okResponse());
+    // 만료가 임박한 토큰이어야 탭 복귀 refresh 가 실제로 나간다.
+    fetchMock.mockResolvedValue(okResponse(60));
     const tab = await openTab();
 
     expect(await tab.refreshOnVisible()).toBe(true);
@@ -326,6 +327,43 @@ describe("refreshOnVisible 디바운스", () => {
     }
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    tab.stopProactiveRefresh();
+  });
+
+  it("access token 이 넉넉히 남아 있으면 탭 복귀 refresh 를 건너뛴다", async () => {
+    // 탭 전환마다 회전하면 응답 하나만 유실돼도 세션이 풀린다. 만료가 멀면 회전하지 않는다.
+    installWebLocksMock();
+    const tab = await openTab();
+    tab.startProactiveRefresh(7200);
+
+    expect(await tab.refreshOnVisible()).toBeNull();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    tab.stopProactiveRefresh();
+  });
+
+  it("access token 만료가 임박하면 탭 복귀 때 refresh 한다", async () => {
+    installWebLocksMock();
+    fetchMock.mockResolvedValue(okResponse());
+    const tab = await openTab();
+    tab.startProactiveRefresh(200);
+
+    expect(await tab.refreshOnVisible()).toBe(true);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    tab.stopProactiveRefresh();
+  });
+
+  it("선제 갱신을 멈춘 뒤에는 만료 시각을 모르므로 refresh 한다", async () => {
+    installWebLocksMock();
+    fetchMock.mockResolvedValue(okResponse());
+    const tab = await openTab();
+    tab.startProactiveRefresh(7200);
+    tab.stopProactiveRefresh();
+
+    expect(await tab.refreshOnVisible()).toBe(true);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     tab.stopProactiveRefresh();
   });
 });

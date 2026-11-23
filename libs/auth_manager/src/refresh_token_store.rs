@@ -519,7 +519,7 @@ const INSERT_TOKEN_SQL: &str = "INSERT INTO refresh_tokens
     (jti, family_id, email, issued_at, expires_at, replaced_by, revoked_at, revoke_reason, client_ip, user_agent)
 VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)";
 
-const SELECT_TOKEN_SQL: &str = "SELECT family_id, email, expires_at, replaced_by, revoked_at, revoke_reason FROM refresh_tokens WHERE jti = ?";
+const SELECT_TOKEN_SQL: &str = "SELECT family_id, email, expires_at, replaced_by, revoked_at, revoke_reason, client_ip, user_agent FROM refresh_tokens WHERE jti = ?";
 
 const MARK_ROTATED_SQL: &str = "UPDATE refresh_tokens SET replaced_by = ?, revoked_at = ?, revoke_reason = ? WHERE jti = ?";
 
@@ -540,6 +540,8 @@ struct TokenRow {
     replaced_by: Option<String>,
     revoked_at: Option<i64>,
     revoke_reason: Option<String>,
+    client_ip: Option<String>,
+    user_agent: Option<String>,
 }
 
 impl TokenRow {
@@ -551,7 +553,19 @@ impl TokenRow {
             replaced_by: opt_text(cell(row, "replaced_by")),
             revoked_at: opt_int(cell(row, "revoked_at")),
             revoke_reason: opt_text(cell(row, "revoke_reason")),
+            client_ip: opt_text(cell(row, "client_ip")),
+            user_agent: opt_text(cell(row, "user_agent")),
         }
+    }
+
+    /// 한 번도 쓰이지 않은 살아 있는 토큰이다.
+    fn is_unused(&self, now: i64) -> bool {
+        self.replaced_by.is_none() && self.revoked_at.is_none() && self.expires_at >= now
+    }
+
+    /// 저장된 접속 정보가 요청과 같다. 어느 쪽이든 비어 있으면 같은 기기로 보지 않는다.
+    fn is_same_client(&self, client_ip: Option<&str>, user_agent: Option<&str>) -> bool {
+        client_ip.is_some() && user_agent.is_some() && self.client_ip.as_deref() == client_ip && self.user_agent.as_deref() == user_agent
     }
 }
 
@@ -597,9 +611,17 @@ enum Plan {
     RevokeFamily { reason: &'static str, result: Rotation },
     /// 새 토큰을 넣고 이전 토큰을 'rotated' 로 표시한다.
     Rotate,
+    /// 회전 응답 유실: 클라이언트에 닿지 못한 후속 토큰을 새 토큰으로 교체한다.
+    ReplaceSuccessor(String),
 }
 
-fn plan_rotation(row: Option<&TokenRow>, family_id: &str, email: &str, now: i64) -> Plan {
+/// 회전 응답이 클라이언트에 닿지 못하면 쿠키에 옛 토큰이 남아 grace window 뒤에 다시 온다.
+/// 후속 토큰이 같은 family 이고 한 번도 쓰이지 않았으며 같은 기기(IP·UA)에서 발급되었으면 그 경우로 본다.
+fn is_lost_response(successor: Option<&TokenRow>, family_id: &str, client_ip: Option<&str>, user_agent: Option<&str>, now: i64) -> bool {
+    successor.is_some_and(|s| s.family_id == family_id && s.is_unused(now) && s.is_same_client(client_ip, user_agent))
+}
+
+fn plan_rotation(row: Option<&TokenRow>, successor: Option<&TokenRow>, family_id: &str, email: &str, client_ip: Option<&str>, user_agent: Option<&str>, now: i64) -> Plan {
     let Some(row) = row else { return Plan::Reject(Rotation::Missing) };
     if row.family_id != family_id || row.email != email {
         return Plan::Reject(Rotation::Mismatch);
@@ -607,9 +629,12 @@ fn plan_rotation(row: Option<&TokenRow>, family_id: &str, email: &str, now: i64)
     if row.expires_at < now {
         return Plan::Reject(Rotation::Expired);
     }
-    if row.replaced_by.is_some() {
+    if let Some(replaced_by) = &row.replaced_by {
         if is_within_rotation_grace(row.revoke_reason.as_deref(), row.revoked_at, now) {
             return Plan::InsertOnly;
+        }
+        if row.revoke_reason.as_deref() == Some("rotated") && is_lost_response(successor, family_id, client_ip, user_agent, now) {
+            return Plan::ReplaceSuccessor(replaced_by.clone());
         }
         return Plan::RevokeFamily { reason: "reuse-detected", result: Rotation::Reused };
     }
@@ -838,19 +863,27 @@ impl RefreshTokenStoreApi for MySQLRefreshTokenStore {
         user_agent: Option<&str>,
     ) -> Result<Rotation, StoreError> {
         let now = self.now();
+        let client_ip = truncate(client_ip, MAX_CLIENT_IP_LENGTH);
+        let user_agent = truncate(user_agent, MAX_USER_AGENT_LENGTH);
         let insert_params: [DbValue; 7] = [
             new_token_id.into(),
             family_id.into(),
             email.into(),
             issued_at.into(),
             expires_at.into(),
-            truncate(client_ip, MAX_CLIENT_IP_LENGTH).into(),
-            truncate(user_agent, MAX_USER_AGENT_LENGTH).into(),
+            client_ip.clone().into(),
+            user_agent.clone().into(),
         ];
         // autocommit=0 연결이라 첫 문장(SELECT ... FOR UPDATE)이 트랜잭션을 연다.
         self.in_transaction(|conn| {
-            let row = conn.fetch_one(&format!("{SELECT_TOKEN_SQL} FOR UPDATE"), &[current_token_id.into()])?.map(|r| TokenRow::from_db_row(&r));
-            match plan_rotation(row.as_ref(), family_id, email, now) {
+            let select_sql = format!("{SELECT_TOKEN_SQL} FOR UPDATE");
+            let row = conn.fetch_one(&select_sql, &[current_token_id.into()])?.map(|r| TokenRow::from_db_row(&r));
+            // 이미 회전된 토큰이면 응답 유실 판정을 위해 후속 토큰도 잠근다.
+            let successor = match row.as_ref().and_then(|r| r.replaced_by.as_deref()) {
+                Some(next) => conn.fetch_one(&select_sql, &[next.into()])?.map(|r| TokenRow::from_db_row(&r)),
+                None => None,
+            };
+            match plan_rotation(row.as_ref(), successor.as_ref(), family_id, email, client_ip.as_deref(), user_agent.as_deref(), now) {
                 Plan::Reject(result) => {
                     conn.rollback()?;
                     Ok(result)
@@ -868,6 +901,13 @@ impl RefreshTokenStoreApi for MySQLRefreshTokenStore {
                 Plan::Rotate => {
                     conn.execute(INSERT_TOKEN_SQL, &insert_params)?;
                     conn.execute(MARK_ROTATED_SQL, &[new_token_id.into(), issued_at.into(), "rotated".into(), current_token_id.into()])?;
+                    conn.commit()?;
+                    Ok(Rotation::Ok)
+                }
+                Plan::ReplaceSuccessor(successor_id) => {
+                    log::info!("Refresh rotation recovered event=refresh-lost-response-recovered");
+                    conn.execute(INSERT_TOKEN_SQL, &insert_params)?;
+                    conn.execute(MARK_ROTATED_SQL, &[new_token_id.into(), issued_at.into(), "rotated".into(), successor_id.into()])?;
                     conn.commit()?;
                     Ok(Rotation::Ok)
                 }
