@@ -27,8 +27,13 @@ updates:
   # crate마다 PR이 따로 오지 않게 minor·patch는 한 PR로 묶는다. major는 따로 온다.
   - package-ecosystem: "cargo"
     directory: "/"
+    # url 같은 전이 의존성도 보안 경보를 기다리지 않고 일반 갱신 대상에 포함한다.
+    allow:
+      - dependency-type: "all"
     cooldown:
       default-days: 7
+      # patch는 대기 기간을 줄인다. 실제 갱신은 아래 주간 일정에 따른다.
+      semver-patch-days: 1
     schedule:
       interval: "weekly"
     target-branch: "develop"
