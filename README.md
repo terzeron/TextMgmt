@@ -22,5 +22,16 @@ This software is for management of text files. It is optimized and tested for te
 * `npm install`
 * `npm run build`
 
+# 배포 절차
+
+이 절차에서 development는 리뷰 전 임시배포, production은 리뷰·커밋 후 배포를 뜻한다.
+
+1. 사람이 눈으로 확인할 변경은 관련 검증 후 저장소 루트에서 `./build.sh`를 실행하여 development 버전을 임시배포한다.
+   rollout 결과와 배포 버전을 확인하고, 확인할 URL을 사용자에게 전달하여 리뷰를 받는다.
+2. 리뷰가 끝나고 변경을 커밋한 뒤에는 `deploy_and_build`를 실행하여 production 버전을 배포한다.
+   배포 후에도 rollout 결과와 배포 버전을 확인한다.
+
+`npm run build`는 로컬 빌드만 수행한다. 사람이 확인할 development 배포를 대신하지 않는다.
+
 # License
 [LICENSE](LICENSE)

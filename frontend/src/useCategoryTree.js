@@ -161,7 +161,7 @@ export function useCategoryTree({ apiPrefix, role, onError }) {
       const url =
         apiPrefix +
         "/categories/" +
-        category +
+        category.split("/").map(encodeURIComponent).join("/") +
         `?limit=${CATEGORY_PAGE_SIZE}` +
         (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
 
