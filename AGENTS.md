@@ -27,6 +27,13 @@
 - Title: Conventional Commits (`feat:`, `fix:`, `chore:`, etc.)
 - Body: `-` bullet points, imperative mood, max 72 chars per line
 
+## Deployment Workflow
+
+- 사람이 눈으로 확인할 변경은 관련 검증 후 저장소 루트에서 `./build.sh`로 development 버전을 임시배포한다.
+- 리뷰가 끝나고 변경을 커밋한 뒤에는 `deploy_and_build`로 production 버전을 배포한다.
+- `npm run build`는 로컬 빌드다. 배포 완료는 실제 rollout과 배포 버전을 확인한 뒤 보고한다.
+- 상세 절차는 [README의 배포 절차](README.md#배포-절차)를 따른다.
+
 ## Code Intelligence
 
 This project is indexed by GitNexus as **TextMgmt**. If GitNexus MCP tools are available:

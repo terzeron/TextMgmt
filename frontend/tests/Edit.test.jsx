@@ -331,7 +331,7 @@ function bridgeRawJsonGetReqToJsonGetReq() {
       });
       return;
     }
-    const bareUrl = url.split("?")[0];
+    const bareUrl = decodeURIComponent(url.split("?")[0]);
     mockJsonGetReq(
       bareUrl,
       null,

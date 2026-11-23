@@ -8,6 +8,8 @@ import {
   fireEvent,
   waitFor,
   cleanup,
+  renderHook,
+  act,
 } from "@testing-library/react";
 import { useCategoryTree } from "../src/useCategoryTree";
 
@@ -84,6 +86,50 @@ describe("useCategoryTree", () => {
   });
 
   afterEach(cleanup);
+
+  it.each(
+    ["", "/comics"].flatMap((apiPrefix) =>
+      [
+        "1_웹툰/상위 0.001%랭커의 귀환",
+        "소설/Ver.1.2",
+        "소설/100%25 완결",
+        "소설/제목?외전#1&2",
+      ].map((category) => ({ apiPrefix, category })),
+    ),
+  )("$apiPrefix 카테고리 $category URL 보존", ({ apiPrefix, category }) => {
+    mockJsonGetReq.mockImplementation((url, payload, resolve) => {
+      if (url === apiPrefix + "/categories") resolve({ [category]: 2 });
+    });
+    const book = { book_id: 410856556, title: "첫 권", file_type: "png" };
+    const cursor = "next+/=%?#";
+    mockRawJsonGetReq.mockImplementation((url, resolve) => {
+      const request = new URL(url, "https://example.test");
+      expect(decodeURIComponent(request.pathname)).toBe(
+        apiPrefix + "/categories/" + category,
+      );
+      expect(request.searchParams.get("limit")).toBe("5000");
+      expect(request.hash).toBe("");
+      resolve({
+        status: "success",
+        result: request.searchParams.has("cursor") ? [] : [book],
+        next_cursor: request.searchParams.has("cursor") ? "" : cursor,
+        total: 2,
+      });
+    });
+
+    const { result } = renderHook(() => useCategoryTree({ apiPrefix }));
+    act(() => result.current.loadCategoryPage(category));
+    act(() => result.current.loadCategoryPage(category));
+
+    expect(mockRawJsonGetReq).toHaveBeenCalledTimes(2);
+    const request = new URL(mockRawJsonGetReq.mock.calls[1][0], "https://example.test");
+    expect(request.searchParams.get("cursor")).toBe(cursor);
+    const folder = result.current.folderData
+      .flatMap((item) => [item, ...(item.children || [])])
+      .find((item) => item.id === category);
+    expect(folder.booksLoaded).toBe(true);
+    expect(folder.children.map((item) => item.id)).toEqual([`${category}/${book.book_id}`]);
+  });
 
   it("카테고리 로드 실패 시 onError가 없어도 예외 없이 종료한다", async () => {
     mockJsonGetReq.mockImplementation((url, payload, resolve, reject) => {

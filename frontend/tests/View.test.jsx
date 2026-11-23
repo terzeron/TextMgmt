@@ -40,7 +40,7 @@ vi.mock("../src/Common", () => ({
 function delegateRawToJsonGetReq() {
   mockRawJsonGetReq.mockImplementation((url, resolve, reject, final) => {
     mockJsonGetReq(
-      url.split("?")[0],
+      decodeURIComponent(url.split("?")[0]),
       null,
       (result) =>
         resolve &&
@@ -584,7 +584,7 @@ describe("View", () => {
       if (url === "/categories") resolve({ 소설: 3 });
     });
     mockRawJsonGetReq.mockImplementation((url, resolve) => {
-      if (url.startsWith("/categories/소설")) {
+      if (url.startsWith("/categories/" + encodeURIComponent("소설"))) {
         resolve({
           status: "success",
           result: [
@@ -612,7 +612,7 @@ describe("View", () => {
       expect(screen.getByTestId("folder-item-소설/1")).toBeTruthy();
     });
     const url = mockRawJsonGetReq.mock.calls.find((c) =>
-      c[0].startsWith("/categories/소설"),
+      c[0].startsWith("/categories/" + encodeURIComponent("소설")),
     )[0];
     expect(url).toContain("limit=5000");
     // 마지막 페이지이므로 '더 보기'는 없다
@@ -624,7 +624,7 @@ describe("View", () => {
       if (url === "/categories") resolve({ 소설: 2 });
     });
     mockRawJsonGetReq.mockImplementation((url, resolve) => {
-      if (!url.startsWith("/categories/소설")) return;
+      if (!url.startsWith("/categories/" + encodeURIComponent("소설"))) return;
       if (url.includes("cursor=")) {
         resolve({
           status: "success",
