@@ -1076,7 +1076,10 @@ describe("Navigation Component", () => {
     expect(wrapper.style.display).toBe("flex");
     expect(wrapper.style.justifyContent).toBe("center");
     expect(wrapper.style.alignItems).toBe("center");
-    expect(wrapper.style.minHeight).toBe("calc(100vh - 56px)");
+    // calc() 직렬화 형식은 jsdom 버전마다 달라 같은 값을 jsdom으로 정규화해 비교한다.
+    const expected = document.createElement("div").style;
+    expected.minHeight = "calc(100vh - 56px)";
+    expect(wrapper.style.minHeight).toBe(expected.minHeight);
   });
 
   it("centering wrapper is absent after successful Google login", async () => {
