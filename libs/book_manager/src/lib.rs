@@ -78,7 +78,7 @@ pub use category_reloader::{CategoryReload, MismatchReload, ReloadCounts, Reload
 pub use mismatch_reporter::{CategoryMismatch, DuplicateDoc, DuplicatePath, EsOnlyFile, FsOnlyFile, MismatchDetails, MismatchSummary};
 mod path_validator;
 mod pdf_edit;
-pub use pdf_edit::PdfEditResult;
+pub use pdf_edit::{PdfEditResult, edit_pdf_file};
 pub mod preview_builder;
 mod seam_accessors;
 

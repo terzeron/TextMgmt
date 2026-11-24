@@ -2570,7 +2570,9 @@ describe("ViewPDF 긴 쪽 타일", () => {
     expect(container.classList.contains("pdf-page")).toBe(true);
     expect(container.style.aspectRatio).toBe("1380 / 32766");
     const tiles = tileCanvases();
-    expect(tiles[1].style.top).toBe(`${(TILE_H / 32766) * 100}%`);
+    // jsdom 버전마다 백분율 유효숫자가 달라 수치로 비교한다.
+    expect(tiles[1].style.top).toMatch(/%$/);
+    expect(parseFloat(tiles[1].style.top)).toBeCloseTo((TILE_H / 32766) * 100, 4);
     // 붙은 타일은 관찰 대상이 되고, 그리기 전에는 1x1 이다.
     const obs = observers[observers.length - 1];
     expect(tiles.every((t) => obs.observed.has(t))).toBe(true);

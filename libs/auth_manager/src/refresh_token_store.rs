@@ -874,15 +874,7 @@ impl RefreshTokenStoreApi for MySQLRefreshTokenStore {
         let now = self.now();
         let client_ip = truncate(client_ip, MAX_CLIENT_IP_LENGTH);
         let user_agent = truncate(user_agent, MAX_USER_AGENT_LENGTH);
-        let insert_params: [DbValue; 7] = [
-            new_token_id.into(),
-            family_id.into(),
-            email.into(),
-            issued_at.into(),
-            expires_at.into(),
-            client_ip.clone().into(),
-            user_agent.clone().into(),
-        ];
+        let insert_params: [DbValue; 7] = [new_token_id.into(), family_id.into(), email.into(), issued_at.into(), expires_at.into(), client_ip.clone().into(), user_agent.clone().into()];
         // autocommit=0 연결이라 첫 문장(SELECT ... FOR UPDATE)이 트랜잭션을 연다.
         self.in_transaction(|conn| {
             let select_sql = format!("{SELECT_TOKEN_SQL} FOR UPDATE");
