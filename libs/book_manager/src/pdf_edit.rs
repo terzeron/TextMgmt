@@ -225,6 +225,13 @@ fn edit_file(fs: Arc<dyn FsOps>, path: &Path, trash: &Path, edits: &Edits, fetch
     })
 }
 
+/// 서버 밖 일괄 작업용. 색인과 캐시는 건드리지 않고 PDF 파일만 편집한다.
+/// 원본은 `trash`에 백업한다. 호출자가 ES의 `page_count`·`file_size`와 표지 캐시를 맞춘다.
+pub fn edit_pdf_file(path: &Path, trash: &Path, pages: &[i64], inserts: &[Value]) -> Result<PdfEditResult, String> {
+    let edits = Edits::parse(pages, None, None, Some(inserts), None)?;
+    edit_file(Arc::new(sysdeps::RealFs), path, trash, &edits, &image_processor::image_fetcher::RealImageFetcher, cover_manager::epub_cover::MAX_IMAGE_PIXELS)
+}
+
 /// 부모 Pages를 바꿀 때 상속 속성을 각 페이지에 고정한다.
 fn flatten_pages(pdf: &mut Document, selected: &[ObjectId]) -> lopdf::Result<()> {
     let root = pdf.catalog()?.get(b"Pages")?.as_reference()?;
