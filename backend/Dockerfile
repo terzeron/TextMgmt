@@ -14,12 +14,16 @@ COPY libs /app/libs
 COPY utils /app/utils
 # registry와 target을 cache mount에 둬 소스 변경 시 의존 crate 재컴파일을 피한다.
 # cache mount는 이미지 레이어에 남지 않으므로 바이너리를 /out으로 복사한다.
+# build.sh는 리얼 배포에 release, 개발 배포(--fast)에 image를 넘긴다. 기본값 image는 CI 빌드용이다.
+# 두 profile 모두 출력 디렉토리가 target/<profile>이다(dev는 target/debug라 쓰지 않는다).
+ARG CARGO_PROFILE=image
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    cargo build --locked --profile image -p backend -p loader -p pdf_engine -p doc_checker -p file_indexer && \
+    cargo build --locked --profile "$CARGO_PROFILE" -p backend -p loader -p pdf_engine -p doc_checker -p file_indexer && \
     mkdir -p /out && \
-    cp target/image/backend target/image/loader target/image/epubveri target/image/tm-pdf-worker target/image/tm-index-worker /out/
+    cd "target/$CARGO_PROFILE" && \
+    cp backend loader epubveri tm-pdf-worker tm-index-worker /out/
 
 # Runtime includes only the Rust server, its loader/PDF worker subprocesses and the
 # external tools still required for office conversion.
