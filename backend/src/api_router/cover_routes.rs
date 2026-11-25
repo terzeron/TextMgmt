@@ -3,6 +3,7 @@
 //! 서비스 호출은 `deps.task_runner()`로 블로킹 풀에 넘기고 응답이 끝나면 취소 표시를 켠다.
 //! 요청이 끊겨 핸들러가 버려져도(axum은 future를 버린다) 작업 스레드의 `check_cancelled`가 멈춘다.
 
+use std::any::Any;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -124,12 +125,21 @@ fn manager_and_hooks(deps: &AppDeps) -> Result<(Arc<dyn book_manager::BookManage
     Ok((manager, deps.cover_hooks()))
 }
 
+/// 결과 타입을 지운 작업. 실행 코드(`run_erased`)가 결과 타입마다 복제되지 않는다.
+type ErasedJob = Box<dyn FnOnce(&CoverManagement) -> Result<Box<dyn Any + Send>, CoverError> + Send>;
+
 /// 서비스 작업을 작업 스레드에서 돌리고 결과를 기다린다. `watch`면 연결이 끊겼는지 확인한다.
 async fn run<R, F>(deps: &Arc<AppDeps>, watch: bool, job: F) -> ApiResult<R>
 where
     R: Send + 'static,
     F: FnOnce(&CoverManagement) -> Result<R, CoverError> + Send + 'static,
 {
+    let value = run_erased(deps, watch, Box::new(move |service| job(service).map(|r| Box::new(r) as Box<dyn Any + Send>))).await?;
+    // run_erased는 job이 만든 값을 그대로 돌려주므로 항상 R이다.
+    Ok(*value.downcast::<R>().expect("cover job result has the requested type"))
+}
+
+async fn run_erased(deps: &Arc<AppDeps>, watch: bool, job: ErasedJob) -> ApiResult<Box<dyn Any + Send>> {
     let (manager, hooks) = manager_and_hooks(deps)?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let _guard = CancelOnDrop(cancelled.clone());

@@ -6,6 +6,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::extract::rejection::QueryRejection;
 use axum::extract::{ConnectInfo, FromRequest, FromRequestParts, Query, Request};
 use axum::http::HeaderMap;
 use axum::http::header;
@@ -124,21 +125,27 @@ pub struct ApiJson<T>(pub T);
 impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for ApiJson<T> {
     type Rejection = ApiError;
 
-    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        let is_json = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|ct| {
-            let ct = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
-            ct == "application/json" || ct.strip_prefix("application/").is_some_and(|subtype| subtype.len() > "+json".len() && subtype.ends_with("+json"))
-        });
-        if !is_json {
-            return Err(RequestValidationError::single(&["body"], "Input should be a valid JSON body", Value::Null).into());
-        }
-        let bytes = axum::body::Bytes::from_request(req, state).await.map_err(|e| RequestValidationError::single(&["body"], &e.to_string(), Value::Null))?;
-        let raw: Value = serde_json::from_slice(&bytes).map_err(|e| RequestValidationError::single(&["body"], &format!("JSON decode error: {e}"), Value::Null))?;
+    async fn from_request(req: Request, _state: &S) -> Result<Self, Self::Rejection> {
+        let raw = read_json_body(req).await?;
         match serde_json::from_value::<T>(raw.clone()) {
             Ok(v) => Ok(Self(v)),
             Err(e) => Err(RequestValidationError::single(&["body"], &e.to_string(), raw).into()),
         }
     }
+}
+
+/// 본문 형식 확인과 JSON 파싱. 본문 타입마다 복제되지 않도록 `ApiJson`에서 떼어 둔다.
+async fn read_json_body(req: Request) -> Result<Value, ApiError> {
+    let is_json = req.headers().get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|ct| {
+        let ct = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+        ct == "application/json" || ct.strip_prefix("application/").is_some_and(|subtype| subtype.len() > "+json".len() && subtype.ends_with("+json"))
+    });
+    if !is_json {
+        return Err(RequestValidationError::single(&["body"], "Input should be a valid JSON body", Value::Null).into());
+    }
+    // 본문 읽기는 state를 쓰지 않으므로 빈 state로 부른다.
+    let bytes = axum::body::Bytes::from_request(req, &()).await.map_err(|e| RequestValidationError::single(&["body"], &e.to_string(), Value::Null))?;
+    Ok(serde_json::from_slice(&bytes).map_err(|e| RequestValidationError::single(&["body"], &format!("JSON decode error: {e}"), Value::Null))?)
 }
 
 /// 쿼리 문자열. 형식이 틀리면 422다.
@@ -150,9 +157,14 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequestParts<S> for ApiQuery<T> {
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         match Query::<T>::from_request_parts(parts, state).await {
             Ok(Query(v)) => Ok(Self(v)),
-            Err(e) => Err(RequestValidationError::single(&["query"], &e.to_string(), Value::Null).into()),
+            Err(e) => Err(query_error(e)),
         }
     }
+}
+
+/// 쿼리 타입마다 복제되지 않도록 오류 변환을 떼어 둔다.
+fn query_error(e: QueryRejection) -> ApiError {
+    RequestValidationError::single(&["query"], &e.to_string(), Value::Null).into()
 }
 
 // ---- 요청한 클라이언트의 IP와 User-Agent. ----

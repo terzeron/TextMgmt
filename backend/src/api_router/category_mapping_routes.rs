@@ -63,13 +63,19 @@ fn success(result: impl serde::Serialize) -> Value {
 fn require_success(ok: bool, code: u16, message: &str) -> Result<(), MappingError> {
     if ok { Ok(()) } else { Err(MappingError::Http(code, message.into())) }
 }
-async fn run(
+type MappingAction = Box<dyn FnOnce(Arc<dyn CategoryMappingApi>) -> Result<Value, MappingError> + Send>;
+
+/// 작업을 상자에 담아 넘긴다. 실행 코드(`run_boxed`)가 라우트마다 복제되지 않는다.
+fn run(
     deps: Arc<AppDeps>,
     name: &'static str,
     detail: &'static str,
     preserve_http: bool,
     action: impl FnOnce(Arc<dyn CategoryMappingApi>) -> Result<Value, MappingError> + Send + 'static,
-) -> ApiResult<Json<Value>> {
+) -> impl Future<Output = ApiResult<Json<Value>>> {
+    run_boxed(deps, name, detail, preserve_http, Box::new(action))
+}
+async fn run_boxed(deps: Arc<AppDeps>, name: &'static str, detail: &'static str, preserve_http: bool, action: MappingAction) -> ApiResult<Json<Value>> {
     deps.task_runner().spawn_blocking_observed(name);
     let result = tokio::task::spawn_blocking(move || deps.category_mapping().map_err(MappingError::Other).and_then(action)).await;
     match result {
