@@ -18,9 +18,9 @@ TAG="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD)"
 [[ -z "$(git -C "$SCRIPT_DIR" status --porcelain)" ]] || TAG="${TAG}-dirty-$(date +%H%M)"
 
 # --pull: FROM을 로컬 캐시에 고정하지 않고 base image 갱신분을 받는다.
-# APT_REFRESH: Dockerfile의 apt-get upgrade 레이어 캐시 키(ISO 연-주). 이게 없으면
+# APT_REFRESH: Dockerfile의 apt-get upgrade 레이어 캐시 키(날짜). 이게 없으면
 #   이미지를 재빌드해도 apt 레이어가 캐시에서 재사용되어 보안 패치가 적용되지 않는다.
-BUILD_FLAGS=(--pull --build-arg "APT_REFRESH=$(date +%G%V)")
+BUILD_FLAGS=(--pull --build-arg "APT_REFRESH=${APT_REFRESH:-$(date +%Y%m%d)}")
 
 # push 후 repo digest만 표준출력으로 돌려준다(호출부가 명령 치환으로 받으므로
 # push 출력은 버린다). 배포는 태그가 아니라 이 digest로 한다.
