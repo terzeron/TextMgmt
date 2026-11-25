@@ -58,7 +58,8 @@ opt-level = 3
 [profile.dev.package.backend]
 opt-level = 1
 
-# 리얼 배포용. 증분 빌드 시간을 줄이려고 crate 사이 LTO를 끄고(crate 안 thin LTO만 남는다)
+# 개발 배포·리얼 배포·CI Docker 빌드가 모두 쓴다. QA한 실행 파일이 그대로 운영에 나간다.
+# 증분 빌드 시간을 줄이려고 crate 사이 LTO를 끄고(crate 안 thin LTO만 남는다)
 # codegen-units를 8로 나누고 증분 컴파일을 켠다. thin LTO + codegen-units 1일 때 backend 한 줄
 # 수정이 약 55~75초였다(그중 LTO 약 27초).
 [profile.release]
@@ -68,10 +69,3 @@ codegen-units = 8
 incremental = true
 panic = "unwind" # bookdoctor가 catch_unwind로 파서 panic을 격리한다
 strip = true
-
-# 개발 배포(`build.sh --fast`)와 CI Docker 빌드용. release 대비 LTO를 끄고 codegen-units를
-# 늘려 컴파일을 줄인다. 리얼 배포(인자 없는 `build.sh`)는 release를 쓴다.
-[profile.image]
-inherits = "release"
-lto = false
-codegen-units = 16

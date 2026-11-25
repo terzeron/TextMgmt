@@ -3,14 +3,6 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/.env"
 
-# 인자 없는 실행은 리얼 배포다(deploy_and_build가 인자 없이 부른다). 최적화가 가장 높은
-# release profile로 빌드한다. 개발 배포는 --fast로 더 가벼운 image profile을 쓴다.
-CARGO_PROFILE=release
-if [ "${1:-}" = "--fast" ]; then
-    CARGO_PROFILE=image
-    shift
-fi
-
 TARGET=${1:-all}
 
 REGISTRY=registry.terzeron.com/terzeron
@@ -60,8 +52,8 @@ deploy_image() {
 }
 
 build_backend() {
-    echo "=== Building backend ($TAG, profile $CARGO_PROFILE) ==="
-    docker build -q "${BUILD_FLAGS[@]}" -f backend/Dockerfile --build-arg TM_BACKEND_DEFAULT_PORT="${TM_BACKEND_PORT:-8020}" --build-arg "CARGO_PROFILE=$CARGO_PROFILE" -t "terzeron/tm_backend:$TAG" . > /dev/null && \
+    echo "=== Building backend ($TAG) ==="
+    docker build -q "${BUILD_FLAGS[@]}" -f backend/Dockerfile --build-arg TM_BACKEND_DEFAULT_PORT="${TM_BACKEND_PORT:-8020}" -t "terzeron/tm_backend:$TAG" . > /dev/null && \
     BACKEND_DIGEST="$(push_image tm_backend)"
 }
 
@@ -106,9 +98,7 @@ case "$TARGET" in
         rollout_backend && rollout_frontend
         ;;
     *)
-        echo "Usage: $0 [--fast] [backend|frontend]"
-        echo "  --fast   - Dev deploy: build backend with the faster image profile"
-        echo "             (default: release profile for production deploy)"
+        echo "Usage: $0 [backend|frontend]"
         echo "  backend  - Build and rollout backend only"
         echo "  frontend - Build and rollout frontend only"
         echo "  (no arg) - Build and rollout both"
