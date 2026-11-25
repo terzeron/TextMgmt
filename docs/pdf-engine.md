@@ -25,7 +25,7 @@ cargo test -p backend --test pdf_pages --test cover --test pdf_edit
 cargo test --workspace
 ```
 
-`cargo build --workspace`에는 worker가 포함된다. 개별 package만 빌드한 개발 환경은 worker를 먼저 빌드한다. adapter는 PATH와 현재 실행 파일 주변(target/debug 등)에서 worker를 찾는다. Docker는 image profile로 worker를 빌드해 `/usr/local/bin`에 넣으며 필요한 native runtime libraries와 fonts를 설치한다. `./build.sh`가 두 이미지를 빌드·배포한다.
+`cargo build --workspace`에는 worker가 포함된다. 개별 package만 빌드한 개발 환경은 worker를 먼저 빌드한다. adapter는 PATH와 현재 실행 파일 주변(target/debug 등)에서 worker를 찾는다. Docker는 release profile로 worker를 빌드해 `/usr/local/bin`에 넣으며 필요한 native runtime libraries와 fonts를 설치한다. `./build.sh`가 두 이미지를 빌드·배포한다.
 
 `Stage::Poppler`·`Stage::Pdfium`, 일부 bookdoctor 옵션/보고서 코드는 이전 호출자의 호환성을 위해 이름을 유지한다. 해당 운영 구현은 MuPDF worker를 사용하며 Poppler를 실행하지 않는다. pdftotext mock hook은 과거 포팅 테스트용이며 기본 실행 경로는 native PDF adapter다.
 

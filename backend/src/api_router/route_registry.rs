@@ -38,7 +38,7 @@ macro_rules! method_fn {
             T: 'static,
         {
             self.router = self.router.route(path, $verb(handler));
-            self.table.push(RouteInfo { path: path.to_string(), methods: vec![$label.to_string()], dependencies: dependencies.iter().map(|d| d.to_string()).collect() });
+            self.record(path, $label, dependencies);
             self
         }
     };
@@ -47,6 +47,11 @@ macro_rules! method_fn {
 impl Routes {
     pub fn new() -> Self {
         Self { router: Router::new(), table: Vec::new() }
+    }
+
+    /// 라우트 표 기록. handler 타입마다 복제되지 않도록 `method_fn!`에서 떼어 둔다.
+    fn record(&mut self, path: &str, method: &str, dependencies: &[&str]) {
+        self.table.push(RouteInfo { path: path.to_string(), methods: vec![method.to_string()], dependencies: dependencies.iter().map(|d| d.to_string()).collect() });
     }
 
     method_fn!(get, get, "GET");

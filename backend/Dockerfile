@@ -17,9 +17,10 @@ COPY utils /app/utils
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/app/target \
-    cargo build --locked --profile image -p backend -p loader -p pdf_engine -p doc_checker -p file_indexer && \
+    cargo build --locked --release -p backend -p loader -p pdf_engine -p doc_checker -p file_indexer && \
     mkdir -p /out && \
-    cp target/image/backend target/image/loader target/image/epubveri target/image/tm-pdf-worker target/image/tm-index-worker /out/
+    cd target/release && \
+    cp backend loader epubveri tm-pdf-worker tm-index-worker /out/
 
 # Runtime includes only the Rust server, its loader/PDF worker subprocesses and the
 # external tools still required for office conversion.
