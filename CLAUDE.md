@@ -56,3 +56,11 @@ MCP 서버(`codegraph serve --mcp`)가 파일 변경을 감지해 자동 동기�
 
 - 0건 결과를 "사용처 없음"의 증거로 삼지 않는다.
 - GitNexus 도구와 훅 출력을 근거로 삼지 않는다. 이 프로젝트는 GitNexus 인덱스를 쓰지 않는다.
+
+## 배포 보안 gate (2026-11-26)
+
+기존 build/publish 진입점에서 `~/k8s/security-gates`의 이미지 검사와 배포 후 검사를 실행한다.
+수정 가능한 High/Critical 또는 보안 설정 후퇴가 있으면 종료 코드를 실패로 반환한다.
+검사 실패를 무시하고 push하지 않는다. gate 경로 변경은 `SECURITY_GATE_DIR`로 지정한다.
+세부 기준과 수동 Helm upgrade wrapper는 `~/k8s/security-gates/README.md`를 따른다.
+develop의 build.sh에 반영했다. 다음 정상적인 리얼 버전 반영 때 운영 clone으로 전달한다.
