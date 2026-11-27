@@ -8,6 +8,10 @@ SECURITY_GATE_DIR="${SECURITY_GATE_DIR:-$HOME/k8s/security-gates}"
 for gate in image_gate.py manifest_image.py post_deploy.py; do
     [ -r "$SECURITY_GATE_DIR/$gate" ] || { echo "보안 gate가 없어 중단: $gate" >&2; exit 1; }
 done
+# gate는 시스템 Python 3와 PyYAML을 전제한다. PATH의 python3를 쓰면 활성화된 .venv(PyYAML 없음)가
+# 잡혀 image push 뒤 digest 조회에서 죽고 rollout만 빠진다. 빌드 전에 import로 미리 확인한다.
+GATE_PYTHON="${GATE_PYTHON:-/usr/bin/python3}"
+"$GATE_PYTHON" -I -c 'import yaml' 2>/dev/null || { echo "보안 gate용 $GATE_PYTHON에 PyYAML이 없어 중단" >&2; exit 1; }
 
 REGISTRY=registry.terzeron.com/terzeron
 NAMESPACE=textmanager
@@ -32,13 +36,13 @@ push_image() {
     local name=$1
     local profile
     case "$name" in tm_backend) profile=tm-backend ;; tm_frontend) profile=tm-frontend ;; *) return 1 ;; esac
-    python3 -I "$SECURITY_GATE_DIR/image_gate.py" --profile "$profile" --image "terzeron/$name:$TAG" || return "$?"
+    "$GATE_PYTHON" -I "$SECURITY_GATE_DIR/image_gate.py" --profile "$profile" --image "terzeron/$name:$TAG" || return "$?"
     docker tag "terzeron/$name:$TAG" "terzeron/$name:latest" && \
     docker tag "terzeron/$name:$TAG" "$REGISTRY/$name:$TAG" && \
     docker tag "terzeron/$name:$TAG" "$REGISTRY/$name:latest" && \
     docker push -q "$REGISTRY/$name:$TAG" >/dev/null && \
     docker push -q "$REGISTRY/$name:latest" >/dev/null && \
-    python3 -I "$SECURITY_GATE_DIR/manifest_image.py" resolve --image "$REGISTRY/$name:$TAG"
+    "$GATE_PYTHON" -I "$SECURITY_GATE_DIR/manifest_image.py" resolve --image "$REGISTRY/$name:$TAG"
 }
 
 # digest가 이미 배포된 것과 같으면 재시작하지 않는다(내용이 동일하다는 뜻).
@@ -73,13 +77,13 @@ build_frontend() {
 rollout_backend() {
     echo "=== Rolling out backend ==="
     deploy_image tm-backend tm-backend "$BACKEND_DIGEST" && \
-    python3 -I "$SECURITY_GATE_DIR/post_deploy.py" --profile tm-backend --expected-image "$BACKEND_DIGEST" --timeout 60
+    "$GATE_PYTHON" -I "$SECURITY_GATE_DIR/post_deploy.py" --profile tm-backend --expected-image "$BACKEND_DIGEST" --timeout 60
 }
 
 rollout_frontend() {
     echo "=== Rolling out frontend ==="
     deploy_image tm-frontend tm-frontend "$FRONTEND_DIGEST" && \
-    python3 -I "$SECURITY_GATE_DIR/post_deploy.py" --profile tm-frontend --expected-image "$FRONTEND_DIGEST" --timeout 60
+    "$GATE_PYTHON" -I "$SECURITY_GATE_DIR/post_deploy.py" --profile tm-frontend --expected-image "$FRONTEND_DIGEST" --timeout 60
 }
 
 case "$TARGET" in
