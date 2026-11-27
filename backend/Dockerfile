@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM rust:1.95.0-slim-bookworm AS builder
+FROM rust:1.95.0-slim-trixie AS builder
 ARG APT_REFRESH=0
 RUN : "apt refresh ${APT_REFRESH}" && \
     apt-get update && apt-get upgrade -y && \
@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Runtime includes only the Rust server, its loader/PDF worker subprocesses and the
 # external tools still required for office conversion.
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 ARG APT_REFRESH=0
 ARG USER_ID=1000
 ARG USER_NAME=terzeron
@@ -36,7 +36,7 @@ RUN : "apt refresh ${APT_REFRESH}" && \
         fonts-noto-cjk \
         libjpeg62-turbo zlib1g libfreetype6 libharfbuzz0b libopenjp2-7 libfontconfig1 \
         ca-certificates \
-        libssl3 && \
+        libssl3t64 && \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd --uid "$USER_ID" --create-home "$USER_NAME" && \

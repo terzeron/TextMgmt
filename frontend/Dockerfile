@@ -25,8 +25,14 @@ FROM ghcr.io/nginx/nginx-unprivileged:1.30.7
 ARG APT_REFRESH=0
 
 USER root
+# 기반 이미지의 동적 모듈 4종은 load_module 하지 않으므로 지운다.
+# libxml2·libxslt·libgd 등 46개 라이브러리가 함께 빠져 CVE 노출면이 준다
+# (2026-11 점검: libxml2 CVE-2026-6653은 trixie에 수정본이 없다).
 RUN : "apt refresh ${APT_REFRESH}" && \
-    apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+    apt-get update && apt-get upgrade -y && \
+    apt-get purge -y --auto-remove \
+        nginx-module-geoip nginx-module-image-filter nginx-module-njs nginx-module-xslt && \
+    rm -rf /var/lib/apt/lists/*
 USER 101
 
 COPY --from=build /app/dist /usr/share/nginx/html
