@@ -10,7 +10,8 @@
 eck-elasticsearch:
   enabled: true
   fullnameOverride: elasticsearch
-  version: &stack_version 9.5.6
+  version: &stack_version 9.5.7
+  image: registry.terzeron.com/security/elasticsearch@sha256:6d717d8d608f41509a9a4aff960424f702ad8cdec1828546e2e803634f134f9b
   # http.tls 기본값(자체서명 인증서로 TLS 활성) 사용. 전송 구간 평문 전송 방지.
   nodeSets:
     - name: default

@@ -4,6 +4,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/.env"
 
 TARGET=${1:-all}
+SECURITY_GATE_DIR="${SECURITY_GATE_DIR:-$HOME/k8s/security-gates}"
+for gate in image_gate.py manifest_image.py post_deploy.py; do
+    [ -r "$SECURITY_GATE_DIR/$gate" ] || { echo "보안 gate가 없어 중단: $gate" >&2; exit 1; }
+done
 
 REGISTRY=registry.terzeron.com/terzeron
 NAMESPACE=textmanager
@@ -18,20 +22,23 @@ TAG="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD)"
 [[ -z "$(git -C "$SCRIPT_DIR" status --porcelain)" ]] || TAG="${TAG}-dirty-$(date +%H%M)"
 
 # --pull: FROM을 로컬 캐시에 고정하지 않고 base image 갱신분을 받는다.
-# APT_REFRESH: Dockerfile의 apt-get upgrade 레이어 캐시 키(ISO 연-주). 이게 없으면
+# APT_REFRESH: Dockerfile의 apt-get upgrade 레이어 캐시 키(날짜). 이게 없으면
 #   이미지를 재빌드해도 apt 레이어가 캐시에서 재사용되어 보안 패치가 적용되지 않는다.
-BUILD_FLAGS=(--pull --build-arg "APT_REFRESH=$(date +%G%V)")
+BUILD_FLAGS=(--pull --build-arg "APT_REFRESH=${APT_REFRESH:-$(date +%Y%m%d)}")
 
 # push 후 repo digest만 표준출력으로 돌려준다(호출부가 명령 치환으로 받으므로
 # push 출력은 버린다). 배포는 태그가 아니라 이 digest로 한다.
 push_image() {
     local name=$1
+    local profile
+    case "$name" in tm_backend) profile=tm-backend ;; tm_frontend) profile=tm-frontend ;; *) return 1 ;; esac
+    python3 -I "$SECURITY_GATE_DIR/image_gate.py" --profile "$profile" --image "terzeron/$name:$TAG" || return "$?"
     docker tag "terzeron/$name:$TAG" "terzeron/$name:latest" && \
     docker tag "terzeron/$name:$TAG" "$REGISTRY/$name:$TAG" && \
     docker tag "terzeron/$name:$TAG" "$REGISTRY/$name:latest" && \
     docker push -q "$REGISTRY/$name:$TAG" >/dev/null && \
     docker push -q "$REGISTRY/$name:latest" >/dev/null && \
-    docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$REGISTRY/$name:$TAG" | grep "^$REGISTRY/$name@" | head -1
+    python3 -I "$SECURITY_GATE_DIR/manifest_image.py" resolve --image "$REGISTRY/$name:$TAG"
 }
 
 # digest가 이미 배포된 것과 같으면 재시작하지 않는다(내용이 동일하다는 뜻).
@@ -65,12 +72,14 @@ build_frontend() {
 
 rollout_backend() {
     echo "=== Rolling out backend ==="
-    deploy_image tm-backend tm-backend "$BACKEND_DIGEST"
+    deploy_image tm-backend tm-backend "$BACKEND_DIGEST" && \
+    python3 -I "$SECURITY_GATE_DIR/post_deploy.py" --profile tm-backend --expected-image "$BACKEND_DIGEST" --timeout 60
 }
 
 rollout_frontend() {
     echo "=== Rolling out frontend ==="
-    deploy_image tm-frontend tm-frontend "$FRONTEND_DIGEST"
+    deploy_image tm-frontend tm-frontend "$FRONTEND_DIGEST" && \
+    python3 -I "$SECURITY_GATE_DIR/post_deploy.py" --profile tm-frontend --expected-image "$FRONTEND_DIGEST" --timeout 60
 }
 
 case "$TARGET" in
@@ -104,7 +113,7 @@ case "$TARGET" in
         echo "  (no arg) - Build and rollout both"
         exit 1
         ;;
-esac
+esac || exit "$?"
 
 echo ""
 echo "Done! If this is a fresh install, run: ./k8s/k8s_init.sh"
